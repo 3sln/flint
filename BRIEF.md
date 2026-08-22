@@ -18,7 +18,15 @@ an artifact that runs identically wherever wasm runs.
 
 ```
 flint :src <the-src-dir> :fn the-namespace/the-fn
+      [:exclude [ns ...]] [:wasm-ld <dir> ...]
 ```
+
+`:exclude` drops namespaces, **built-in ones included** — and it is an ASSERTION
+rather than a suggestion: if excluded code is genuinely reachable that is a
+compile error naming the reference chain, never a module that ships and dies at
+runtime. `:wasm-ld` is a search path for **precompiled wasm namespace units**,
+resolved by namespace the same way `:src` resolves source, by directory
+hierarchy. `doc/decisions/0004-exclude-and-unit-path.md` is the decision.
 
 produces a wasm module. The module exports a `main` which is called with a
 **vararg list of strings**. The named `:fn` must accept **exactly one argument**:
