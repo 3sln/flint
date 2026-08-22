@@ -141,7 +141,7 @@ impl Rt {
             }
         } else if self.is_number(a) && self.is_number(b) {
             let (x, y) = (self.num_f64(a), self.num_f64(b));
-            Value::from_f64((x / y).trunc())
+            Value::from_f64(crate::fmath::trunc(x / y))
         } else {
             self.throw_not_a_number(a, b)
         }
@@ -155,7 +155,7 @@ impl Rt {
             self.integer(x.wrapping_rem(y))
         } else if self.is_number(a) && self.is_number(b) {
             let (x, y) = (self.num_f64(a), self.num_f64(b));
-            Value::from_f64(x - (x / y).trunc() * y)
+            Value::from_f64(x - crate::fmath::trunc(x / y) * y)
         } else {
             self.throw_not_a_number(a, b)
         }

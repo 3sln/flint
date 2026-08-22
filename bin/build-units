@@ -1,0 +1,35 @@
+#!/bin/sh
+# Compile each namespace unit to a relocatable wasm object, and emit its
+# manifest. No cargo on the compile path: `flint` only links these.
+set -e
+cd "$(dirname "$0")/.."
+TC="$HOME/.rustup/toolchains/nightly-aarch64-apple-darwin"
+RUSTC="$TC/bin/rustc"
+SYS="$TC/lib/rustlib/wasm32-unknown-unknown/lib"
+OUT=units/flint.rt
+mkdir -p "$OUT" out
+
+FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0 --crate-type rlib --crate-name flint_rt"
+
+echo "  flint.rt -> object"
+LIBM=$(ls target/wasm32-unknown-unknown/release/deps/liblibm-*.rlib 2>/dev/null | head -1)
+if [ -z "$LIBM" ]; then
+  echo "  (building libm for wasm32 via cargo, once)"
+  ./bin/cargo-wasm build --release --target wasm32-unknown-unknown -p flint-rt >/dev/null 2>&1 || true
+  LIBM=$(ls target/wasm32-unknown-unknown/release/deps/liblibm-*.rlib 2>/dev/null | head -1)
+fi
+
+$RUSTC $FLAGS --extern libm="$LIBM" --emit=obj runtime/src/lib.rs -o "$OUT/flint_rt.o"
+$RUSTC $FLAGS --extern libm="$LIBM" --emit=link runtime/src/lib.rs -o "$OUT/libflint_rt.rlib"
+
+echo "  flint.rt -> manifest"
+cargo run -q -p flint-rt --bin catalogue > "$OUT/unit.edn"
+
+# The sysroot pieces every unit links against, copied once so the link line is
+# stable and does not depend on the rustup layout at compile time.
+mkdir -p units/.sysroot
+cp "$SYS"/libcore-*.rlib "$SYS"/liballoc-*.rlib "$SYS"/libcompiler_builtins-*.rlib \
+   "$SYS"/librustc_std_workspace_core-*.rlib units/.sysroot/ 2>/dev/null || true
+cp "$LIBM" units/.sysroot/ 2>/dev/null || true
+
+ls -l "$OUT"

@@ -78,6 +78,9 @@
      x)
     (.toByteArray out)))
 
+(defn utf8-bytes [^String s]
+  #?(:clj (.getBytes s "UTF-8") :cljs (throw (ex-info "no utf8" {}))))
+
 (defn- vec-section [items]
   (concat (uleb (count items)) (apply concat items)))
 
@@ -243,6 +246,25 @@
                                 (let [[len i] (rd-uleb payload 0)]
                                   (contains? names (String. payload (int i) (int len) "UTF-8")))))
                          ss)))))
+
+(defn rename-export
+  "Rename an export. Needed because `wasm-ld` special-cases a symbol named
+  `main` and wraps it; we export `flint_main` and rename afterwards."
+  [m from to]
+  (let [{:keys [^bytes payload]} (section m 7)
+        [n i] (rd-uleb payload 0)]
+    (loop [i i k 0 out []]
+      (if (= k n)
+        (put-section m 7 (->bytes [(uleb n) out]))
+        (let [[len i2] (rd-uleb payload i)
+              nm (String. payload (int i2) (int len) "UTF-8")
+              i3 (+ i2 len)
+              kind (ub payload i3)
+              [idx i4] (rd-uleb payload (inc i3))
+              nm' (if (= nm from) to nm)
+              enc (utf8-bytes nm')]
+          (recur i4 (inc k)
+                 (conj out [(uleb (count enc)) enc kind (uleb idx)])))))))
 
 (defn func-index [m sym]
   (get-in (exports m) [sym :index]))

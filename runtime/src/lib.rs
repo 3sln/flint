@@ -13,10 +13,12 @@ extern crate alloc;
 #[cfg(not(target_arch = "wasm32"))]
 extern crate std;
 
+pub mod abi;
 pub mod builtins;
 pub mod coll;
 pub mod eq;
 pub mod err;
+pub mod fmath;
 pub mod gc;
 pub mod hash;
 pub mod mem;
@@ -36,4 +38,18 @@ pub mod value;
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
+}
+
+// rustc synthesises these in the allocator shim when IT drives the final link.
+// flint drives the link itself (doc/unit-format.md), so we provide them.
+#[cfg(target_arch = "wasm32")]
+mod alloc_shim {
+    #[no_mangle]
+    pub static __rust_no_alloc_shim_is_unstable: u8 = 0;
+    #[no_mangle]
+    pub static __rust_alloc_error_handler_should_panic: u8 = 0;
+    #[no_mangle]
+    pub extern "C" fn __rust_alloc_error_handler(_size: usize, _align: usize) -> ! {
+        core::arch::wasm32::unreachable()
+    }
 }
