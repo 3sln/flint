@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Summarise a `claude --output-format stream-json` log into readable events.
+
+The raw stream is tens of megabytes over a long run and mostly uninteresting.
+This keeps the three things worth watching: what it is DOING (tool calls), what
+it SAYS (assistant text), and anything that failed.
+
+  bin/agent-tail <log> [-n N]      the last N events (default 25)
+  bin/agent-tail <log> --say       only what it said
+  bin/agent-tail <log> --stats     counts, cost, and whether it is still going
+"""
+import json, sys, collections
+
+path = sys.argv[1]
+args = sys.argv[2:]
+want = int(args[args.index('-n') + 1]) if '-n' in args else 25
+
+events, says, tools = [], [], collections.Counter()
+result = None
+for line in open(path, errors='replace'):
+    line = line.strip()
+    if not line.startswith('{'):
+        continue
+    try:
+        e = json.loads(line)
+    except ValueError:
+        continue
+    t = e.get('type')
+    if t == 'assistant':
+        for block in e.get('message', {}).get('content', []):
+            if block.get('type') == 'text' and block.get('text', '').strip():
+                text = ' '.join(block['text'].split())
+                says.append(text)
+                events.append(('say', text[:220]))
+            elif block.get('type') == 'tool_use':
+                name = block.get('name', '?')
+                tools[name] += 1
+                inp = block.get('input', {})
+                # The one field worth showing per tool, rather than the whole blob.
+                hint = (inp.get('command') or inp.get('file_path')
+                        or inp.get('pattern') or inp.get('description') or '')
+                events.append((name, ' '.join(str(hint).split())[:160]))
+    elif t == 'result':
+        result = e
+
+if '--stats' in args:
+    print('tool calls:', ', '.join(f'{k}={v}' for k, v in tools.most_common()))
+    print('assistant messages:', len(says))
+    if result:
+        print('FINISHED —',
+              'error' if result.get('is_error') else 'ok',
+              '| turns:', result.get('num_turns'),
+              '| cost: $%.2f' % (result.get('total_cost_usd') or 0),
+              '| %.0fs' % ((result.get('duration_ms') or 0) / 1000))
+    else:
+        print('still running (no result event yet)')
+elif '--say' in args:
+    for s in says[-want:]:
+        print('•', s, '\n')
+else:
+    for name, hint in events[-want:]:
+        print(f'{name:>12}  {hint}')
