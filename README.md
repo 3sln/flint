@@ -62,6 +62,7 @@ module itself needs no host support at all.
 - [Library coverage](#library-coverage) — the per-namespace deficiency lists
 - [Where flint differs from Clojure](#where-flint-differs-from-clojure)
 - [Benchmarks](#benchmarks)
+- [What this means for construe](#what-this-means-for-construe) — the decision, not the runtime
 - [Limits](#limits) — what is slow, missing, or unfinished
 - [Building and testing](#building-and-testing)
 - [Decisions](#decisions)
@@ -91,6 +92,12 @@ Working, end to end, and tested:
   parks a green thread rather than suspending wasm — no JSPI, no Asyncify — and
   a program that never mentions them produces a module 54 bytes *smaller* than
   before they existed, asserted by symbol name in `test/threads.clj`.
+
+- **It is benchmarked against the incumbent it would replace.** construe's real
+  seed interpreter and real annotated contexts, compiled from one source by both
+  cherry and flint: 1.4× on parse, 15× faster to first answer than a V8 isolate,
+  and 275× slower on regex. All of it, including the losses, in
+  [What this means for construe](#what-this-means-for-construe).
 
 Not working, and named as such: no records or types (protocols exist, and
 dispatch on kind or metadata); no transducers; no sorted collections; no `eval`
@@ -1271,6 +1278,151 @@ clock on an allocation-heavy workload.
 
 ---
 
+## What this means for construe
+
+flint's first real customer is [construe](https://github.com/), which compiles
+model-written `.cljc` to JavaScript with cherry and runs it in a V8 isolate.
+So the question is not "is flint fast" — it is **for each place construe runs
+code, is flint better, worse, or irrelevant, and what does that do to the bill?**
+Two facts from construe's own spec make it sharp: **CPU is 96% of what a session
+costs**, and **cherry cannot compile inside the deployed Worker**, which is a
+live blocker on promoting a candidate.
+
+Method: construe's actual 258-line seed interpreter and four real annotated
+contexts from its own annotator, in `bench/construe/`. Both compilers are handed
+**one source file** and both are checked to compute the same answer before
+anything is timed. Apple M1 Pro, node v24.6.0; reproduce with
+`./bin/bench-construe`, full output in
+[`doc/construe-benchmarks.txt`](doc/construe-benchmarks.txt).
+
+### Parse latency — closer than expected
+
+| | per parse | vs cherry |
+|---|---:|---:|
+| cherry → JS in node (JIT) | 0.063 ms | 1.0× |
+| flint (wasm interpreter) | 0.085 ms | **1.4×** |
+
+I expected to lose this badly and did not. The reason is that only half the work
+is interpretation: the other half is persistent maps and vectors, and cherry's
+are JavaScript objects while flint's are Rust compiled to wasm. The interpreter
+loses; the data structures win; they very nearly cancel.
+
+Per *invocation* — which is the shape of construe's read path, one parse per
+request — flint is 0.381 ms against cherry's 0.248 ms, the difference being the
+module's top-level initialisers running again on every `main()`.
+
+### Cold start and footprint — where flint wins, and by a lot
+
+| | first answer | memory |
+|---|---:|---:|
+| flint: compile + instantiate + run | **1.00 ms** | 6.4 MB reserved, 170 KB live |
+| V8 isolate: create + load + run | 14.59 ms | 6.2 MB heap |
+
+**15× faster to first answer**, and it lines up with construe's own measurement
+of 23 ms cold on workerd. This is an argument about *sandboxing cost*, not
+throughput, and it is probably the strongest economic case: construe runs
+untrusted evolved artifacts, and a wasm module with its own collector and no
+host access is a stronger boundary than an isolate as well as a cheaper one.
+
+The memory column is **not** a flint win. 6.4 MB is reserved linear memory, most
+of it untouched — the live set is 170 KB — but a host that counts reservations
+rather than residency will not see a difference.
+
+### The suite run — 500 contexts through one warm module
+
+| | total | per case |
+|---|---:|---:|
+| flint | 42.53 ms | 0.085 ms |
+| cherry → JS | 31.66 ms | 0.063 ms |
+
+30 collections across five runs and a peak live set of 170 KB. **No major
+collection pause appears mid-suite**, which was the risk worth checking: an
+agent running the gates after every edit is how a round consumes a month of
+sandbox time, and a collector that stalled would show up here.
+
+### Compilation — against a compiler that does not work in production
+
+| | time | output |
+|---|---:|---:|
+| cherry → JS | 16.68 ms | 35 KB + its ~300 KB runtime |
+| flint → wasm, compiled by babashka | 935 ms | 290 KB, complete |
+| flint → wasm, **compiled by flint** | 3.71 s | 290 KB, complete |
+
+The sizes are not like for like: cherry emits a module that needs its runtime
+beside it, and the flint number is a whole module — runtime, collector, core
+library and bytecode.
+
+The last row is the one that matters. flint's compiler is `.cljc` and
+self-hosts, so it *can* run inside a deployed artifact, where cherry
+demonstrably cannot. **3.7 seconds does not fit a Worker's CPU budget**, so this
+unblocks nothing today. It is a different kind of number from the others: not
+"is it faster" but "does it fit", and the answer is not yet.
+
+### Prefix scan — construe's own unmeasured number
+
+| | per scan |
+|---|---:|
+| cherry → JS | 1.14 ms |
+| flint | 3.37 ms |
+
+construe's spec calls this "the most expensive unmeasured number": assumed at
+1 ms, suspected nearer 0.2 ms. On a 4000-term lexicon **neither runtime is
+anywhere near 0.2 ms** — cherry is at the assumed 1 ms and flint is three times
+that. This is a *representative* implementation rather than construe's annotator
+— the fixtures here are the interpreter and the contexts — so read it as the
+shape of the cost, not as construe's own figure. It is worth them measuring.
+
+### The workload in parts — and where flint loses badly
+
+| operation | flint | cherry | ratio |
+|---|---:|---:|---:|
+| deep nested map/vector build | 1 453 ns | 2 984 ns | **0.5×** |
+| keyword-keyed map access | 861 ns | 620 ns | 1.4× |
+| reduce over spans | 1 392 ns | 1 108 ns | 1.3× |
+| `into {}` over pairs | 1 190 ns | 519 ns | 2.3× |
+| merge two 5 000-key maps | 3 089 ns | 1 524 ns | 2.0× |
+| `clojure.string/split`, literal | 4 472 ns | 249 ns | **18×** |
+| `clojure.string/split`, regex | 164 425 ns | 598 ns | **275×** |
+
+flint is *faster* at building nested structure and within 2.3× on every map
+operation. Then string handling falls off a cliff. The regex engine is written
+in cljc so that it tree-shakes away when unused, and against a JIT running
+JavaScript's native `RegExp` it is 275× slower. An annotator built on regular
+expressions would be unusable on flint today.
+
+### So: the four questions, answered plainly
+
+**Can flint serve the read path?** Yes, on this evidence — 1.4× on parse is well
+inside the "few milliseconds of CPU" construe budgets, and 0.085 ms per parse
+leaves room. With one caveat that is not small: if the annotator is
+regex-shaped, no. That is the number to check before committing.
+
+**Is it a cheaper sandbox than an isolate?** Yes, and this is the strongest case.
+15× faster to first answer, a smaller live set, and a boundary that is stronger
+by construction — no host objects, no shared heap, no `eval`. If construe pays
+per-request isolate spin-up anywhere, that is where the money is.
+
+**Does it unblock compiling in production?** Not yet. flint's compiler self-hosts
+and *runs* where cherry's does not, which removes the architectural blocker — but
+3.7 seconds does not fit a Worker's CPU budget. It is a route rather than a fix,
+and closing it means making the self-hosted compiler several times faster.
+
+**Where would adopting flint cost more than it saves?**
+
+- **Anything regex-heavy.** 275× is not a gap you optimise around; it needs the
+  Rust regex unit that [Limits](#limits) already names as undone.
+- **String-shaped work generally** — even splitting on a literal is 18×.
+- **A read path that spins a fresh instance per request** would pay flint's
+  top-level initialisers each time. It is small here and grows with the number
+  of constants an artifact holds.
+- **Anywhere memory is charged by reservation** rather than by residency: flint
+  reserves 6.4 MB up front to hold a 170 KB live set.
+- **The library gap.** No records, no transducers, no sorted collections. Ported
+  code that leans on `defrecord` needs reshaping, and that is engineering time
+  that does not show up in any table here.
+
+---
+
 ## Limits
 
 The honest list. Nothing here is stubbed and reported as working.
@@ -1324,7 +1476,9 @@ The honest list. Nothing here is stubbed and reported as working.
 ### Slow, and by how much
 
 - **The regex engine is 86× slower than babashka's** on the word-frequency
-  benchmark. It is a backtracking matcher written in cljc — which is what makes
+  benchmark, and **275× slower than cherry-compiled JS** on the construe
+  workload — see [What this means for construe](#what-this-means-for-construe),
+  where it is the one result that would rule flint out of a job. It is a backtracking matcher written in cljc — which is what makes
   it tree-shake away when unused — using continuation closures, so it allocates
   per match step. A first-character skip cut a third off; the remaining cost is
   structural. [`doc/decisions/0002`](doc/decisions/0002-modularity.md) said to
@@ -1411,6 +1565,7 @@ $ ./bin/test            # everything: rust tests, reader, conformance both ways,
                         # and :wasm-path, threads and ports, the host ABI,
                         # manifest, self-hosting
 $ ./bin/bench           # the benchmark tables above
+$ ./bin/bench-construe  # the decision benchmark, against cherry and a V8 isolate
 $ ./bin/manifest        # regenerate doc/manifest.edn
 $ ./bin/build-test-unit # the toy unit test/options.clj puts on the :wasm-path path
 ```
@@ -1448,7 +1603,8 @@ src/flint/        the compiler, in portable cljc
 lib/              the library, in cljc: clojure.*, flint.regex, flint.data.*,
                   flint.thread, flint.port and its codecs
 host/             flint.mjs -- calling a module, and the pump a port needs
-bench/            benchmark programs and the wasm timing harness
+bench/            benchmark programs, the wasm timing harness, and construe's
+                  real fixtures for the decision benchmark
 test/             conformance, gc stress, modularity, options, threads, the
                   host ABI, manifest, self-hosting fixpoint, and fixtures
 doc/              decisions, unit format, generated manifest, benchmark output
@@ -1475,6 +1631,12 @@ Written down where somebody will find them, with the reasoning:
 - [`doc/decisions/0006-host-abi.md`](doc/decisions/0006-host-abi.md) — the host
   ABI: continuation tokens with generations, one event queue, where the cost
   really is, and the two lifetimes of a port's two ends.
+- [`doc/decisions/0007-construe-benchmarks.md`](doc/decisions/0007-construe-benchmarks.md)
+  — benchmark the decision, not the runtime: what the numbers have to answer
+  for somebody choosing whether to adopt this.
+- [`doc/decisions/0008-document-resource.md`](doc/decisions/0008-document-resource.md)
+  — documents: structure eagerly, content on demand, and the fetch planning
+  that follows from measuring latency against bandwidth.
 - [`doc/unit-format.md`](doc/unit-format.md) — what a unit is, and what would
   have to change to admit a user-compiled one.
 - [`PLAN.md`](PLAN.md) — the build order, and what was settled before any code

@@ -1,0 +1,62 @@
+construe benchmarks
+machine: Apple M1 Pro, Darwin 23.6.0, node v24.6.0
+fixtures: construe's own 258-line seed interpreter and four real
+          annotated contexts, compiled from ONE source by both
+          compilers, so this compares runtimes and not code.
+
+=== compilation ============================================
+                                    time            output
+cherry -> JS                        16.68 ms        35282 B
+flint -> wasm (whole module)        935.47 ms       289579 B
+flint -> wasm, compiled BY flint    3712.69 ms      289579 B
+  cherry emits a module that needs its runtime beside it; the flint
+  number is a COMPLETE module — runtime, collector, core library and
+  bytecode — so the two sizes are not like for like.
+  The last row is the one that matters for the blocked case: flint
+  compiling flint-compiled source, which is what running inside a
+  deployed artifact would be.
+
+=== parse latency (one interpret over 4 real contexts, warm) 
+                                    per call        vs cherry
+cherry -> JS in node (JIT)          0.063 ms        1.0x
+flint (wasm interpreter)            0.085 ms        1.4x
+  both computed 235 from the same source.
+
+                                    one invocation  of which
+flint: main() doing ONE parse       0.381 ms        0.340 ms parse
+cherry: run(1)                      0.248 ms        0.252 ms parse
+  the difference between the two flint columns is the module's
+  top-level initialisers, which run again on every `main()` and which
+  cherry does not pay at all. Small here, and it would matter more
+  for an artifact with more constants.
+
+=== cold start and footprint ===============================
+                                    first answer    memory
+flint: compile + instantiate + run  0.998 ms        6400 KB reserved
+                                                    170 KB live
+V8 isolate: create + load + run     14.59 ms        6192 KB
+  the isolate figure includes compiling cherry's runtime each
+  time; a V8 snapshot would cut it, and construe does not use
+  one today.
+
+=== the suite: 500 contexts through one warm module ========
+flint                               42.53 ms        0.085 ms/case
+cherry -> JS                        31.66 ms        0.063 ms/case
+  collections during 5 flint runs: 30, peak live 170 KB
+
+=== prefix scan over a 4000-term lexicon ===================
+    (a REPRESENTATIVE implementation, not construe's annotator:
+     the fixtures here are the seed interpreter and four contexts)
+flint                               3.37 ms         3x slower
+cherry -> JS                        1.14 ms         1.0x
+
+=== the workload in parts (per operation, warm) ============
+                                    flint           cherry          ratio
+deep nested map/vector build        1453 ns         2984 ns         0.5x
+keyword-keyed map access            861 ns          620 ns          1.4x
+reduce over spans                   1392 ns         1108 ns         1.3x
+into {} over pairs                  1190 ns         519 ns          2.3x
+merge two 5000-key maps             3089 ns         1524 ns         2.0x
+clojure.string/split, literal       4472 ns         249 ns          18.0x
+clojure.string/split, regex         164425 ns       598 ns          274.9x
+

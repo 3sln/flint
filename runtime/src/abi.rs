@@ -135,6 +135,16 @@ pub extern "C" fn flint_main() -> i32 {
         let argv = rt.vec_from_roots(base, n);
         rt.pop_to(base);
 
+        // Consume the arguments: `main` may be called more than once on the
+        // same instance, and leaving them here made the second call see the
+        // first call's arguments followed by its own.
+        {
+            let a = &mut *core::ptr::addr_of_mut!(ARGS);
+            a.clear();
+            let b = &mut *core::ptr::addr_of_mut!(BUFS);
+            b.clear();
+        }
+
         let result = rt.run_program(argv);
         finish_run(rt, result)
     }

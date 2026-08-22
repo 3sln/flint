@@ -1,0 +1,15 @@
+#!/bin/sh
+# The DECISION benchmark: construe's real fixtures against the incumbent it
+# would replace (doc/decisions/0007). Separate from `bin/bench` because it
+# answers a different question -- not "is flint fast" but "is flint better,
+# worse or irrelevant here, and what does that do to the bill".
+#
+# Needs construe's node_modules for cherry and isolated-vm; it says so and
+# stops if they are missing rather than quietly reporting half a comparison.
+set -e
+cd "$(dirname "$0")/.."
+if [ ! -d "$HOME/Projects/@3sln/construe/node_modules/cherry-cljs" ]; then
+  echo "bench-construe: needs construe's node_modules (cherry-cljs, isolated-vm)"
+  exit 1
+fi
+exec node bench/construe.mjs
