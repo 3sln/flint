@@ -309,7 +309,9 @@
     (let [c (next-ch! st)]
       (cond
         (nil? c) (err st "unterminated regex")
-        (= c "\"") {:flint/regex (flint.rt/str-join acc)}
+        ;; Built by call, not as a literal: a literal here is indistinguishable
+        ;; from a regex literal to the analyzer, which would rewrite it.
+        (= c "\"") (flint.rt/array-map [:flint/regex (flint.rt/str-join acc)])
         (= c "\\") (let [d (next-ch! st)] (recur (conj acc c d)))
         :else (recur (conj acc c))))))
 

@@ -5,6 +5,7 @@
   divergence as `count` on a string. The regex-taking arities of `replace` and
   `split` live here too but are only present when `flint.regex` is reachable --
   they call it, so a program that never uses them does not carry a regex engine."
+  (:require [flint.regex])
   (:refer-clojure :exclude [replace reverse]))
 
 (defn blank? [s]
@@ -52,7 +53,17 @@
        (flint.rt/str-join acc)))))
 
 (defn split
-  "Splits on a literal string separator. The regex arity is in `flint.regex`."
+  "Splits on a string separator or a pattern."
+  ([s sep]
+   (if (flint.regex/pattern? sep)
+     (flint.regex/split sep s)
+     (split-literal s sep)))
+  ([s sep limit]
+   (if (flint.regex/pattern? sep)
+     (flint.regex/split sep s limit)
+     (split-literal s sep limit))))
+
+(defn split-literal
   ([s sep]
    (loop [acc [] from 0]
      (let [i (flint.rt/str-index-of s sep from)]
@@ -68,7 +79,7 @@
            (conj acc (subs s from))
            (recur (conj acc (subs s from i)) (+ i (count sep)) (inc n))))))))
 
-(defn split-lines [s] (split s "\n"))
+(defn split-lines [s] (split-literal s "\n"))
 
 (defn- ws? [c] (or (= c " ") (= c "\t") (= c "\n") (= c "\r")))
 
@@ -87,18 +98,23 @@
       (subs s 0 i))))
 
 (defn replace-first
-  "Replaces the first occurrence of the literal `match`."
+  "Replaces the first occurrence. `match` may be a string or a pattern."
   [s match replacement]
-  (let [i (flint.rt/str-index-of s match 0)]
-    (if (nil? i)
-      s
-      (flint.rt/str-join [(subs s 0 i) replacement (subs s (+ i (count match)))]))))
+  (if (flint.regex/pattern? match)
+    (flint.regex/replace-first match s replacement)
+    (let [i (flint.rt/str-index-of s match 0)]
+      (if (nil? i)
+        s
+        (flint.rt/str-join [(subs s 0 i) replacement (subs s (+ i (count match)))])))))
 
 (defn replace
-  "Replaces every occurrence of the literal `match`."
+  "Replaces every occurrence. `match` may be a string or a pattern; with a
+  pattern, `replacement` may be a function of the match."
   [s match replacement]
-  (if (= "" match)
-    s
+  (cond
+    (flint.regex/pattern? match) (flint.regex/replace-all match s replacement)
+    (= "" match) s
+    :else
     (loop [acc [] from 0]
       (let [i (flint.rt/str-index-of s match from)]
         (if (nil? i)

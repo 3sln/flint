@@ -5,7 +5,8 @@
   doc/decisions/0002: a cljc function tree-shakes per var, so a program that
   never calls `partition-by` does not carry it. A var whose whole body is one
   `flint.rt/x` call is detected by the compiler and called directly, so the
-  wrapper layer costs nothing at the call site.")
+  wrapper layer costs nothing at the call site."
+  (:require [flint.regex]))
 
 ;; ---------------------------------------------------------------- primitives
 
@@ -1015,6 +1016,19 @@
     :else "#<unprintable>"))
 
 (defn prn-str [x] (flint.rt/str2 (pr-str x) "\n"))
+
+;; ------------------------------------------------------------------- regexes
+;;
+;; These forward to `flint.regex`, which is cljc and therefore only linked into
+;; a program that actually reaches one of them.
+
+(defn re-pattern [s] (if (flint.regex/pattern? s) s (flint.regex/pattern s)))
+(defn re-find
+  ([re s] (flint.regex/re-find (re-pattern re) s))
+  ([re s from] (flint.regex/re-find (re-pattern re) s from)))
+(defn re-matches [re s] (flint.regex/re-matches (re-pattern re) s))
+(defn re-seq [re s] (flint.regex/re-seq (re-pattern re) s))
+(defn re-quote-replacement [s] s)
 
 ;; ---------------------------------------------------------------- volatiles
 ;;

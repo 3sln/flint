@@ -73,8 +73,17 @@
         nsdef (get-in cc [:namespaces nsname])]
     (if-let [ns-part (namespace sym)]
       (let [alias (symbol ns-part)
-            target (get (:aliases nsdef) alias alias)]
-        (symbol (str target) (name sym)))
+            target (get (:aliases nsdef) alias alias)
+            q (symbol (str target) (name sym))]
+        ;; Refuse to invent a var. Without this a missing :require produces a
+        ;; dangling reference that only fails much later, at emission.
+        (when-not (or (get-in cc [:vars q]) (get-in cc [:declared q]))
+          (err (str "unable to resolve " sym
+                    (if (= (str target) ns-part)
+                      (str " -- is " target " required?")
+                      (str " -- alias " alias " means " target)))
+               {:sym sym :ns nsname}))
+        q)
       (or (get (:refers nsdef) sym)
           (when (get-in cc [:vars (symbol (str nsname) (name sym))])
             (symbol (str nsname) (name sym)))
@@ -174,12 +183,23 @@
     (seq? form) (if (empty? form)
                   (const-node ())
                   (analyze-seq env form))
+    ;; A #"..." literal becomes a call to the memoised compiler, so the engine
+    ;; is reachable only from programs that actually use one.
+    ;;
+    ;; The `string?` test is not cosmetic. Without it this rewrites the READER's
+    ;; own construction of the marker -- `{:flint/regex (str-join acc)}` in
+    ;; read-regex -- into a call to the regex compiler, so a flint-hosted reader
+    ;; returns compiled patterns where a host-hosted one returns markers. That
+    ;; showed up only as a self-hosting divergence, which is exactly what the
+    ;; fixpoint test is for.
+    (and (map? form) (string? (:flint/regex form)))
+    (analyze env (list 'flint.regex/pattern (:flint/regex form)))
+
     (vector? form) {:op :vector :items (mapv #(analyze env %) form)}
     ;; Source order: the reader preserves it (see `flint.rt/array-map`), and
     ;; Clojure evaluates map literal values in source order too.
     (map? form) {:op :map :pairs (mapv (fn [e] [(analyze env (key e)) (analyze env (val e))]) form)}
     (set? form) {:op :set :items (mapv #(analyze env %) (canon/sorted-elements form))}
-    (and (map? form) (:flint/regex form)) (const-node form)
     :else (const-node form)))
 
 (defn analyze-body [env forms]

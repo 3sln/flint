@@ -9,7 +9,8 @@
 ;; (B == C).
 (babashka.classpath/add-classpath "src")
 (require '[flint.compiler :as compiler] '[flint.image :as img] '[flint.link :as link]
-         '[flint.reader :as reader] '[clojure.java.io :as io] '[clojure.string :as str]
+         '[flint.reader :as reader] '[flint.imgread :as imgread]
+         '[clojure.java.io :as io] '[clojure.string :as str]
          '[babashka.fs :as fs])
 
 (def root ".")
@@ -115,26 +116,31 @@
 (defn report-diff [a bimg]
   (let [n (min (count a) (count bimg))
         d (first (filter #(not= (nth a %) (nth bimg %)) (range n)))
-        ndiff (count (filter #(not= (nth a %) (nth bimg %)) (range n)))
-        hex (fn [img] (->> (subvec (vec img) (max 0 (- d 20)) (min n (+ d 20)))
-                           (map #(format "%02x" %)) (str/join " ")))]
+        ndiff (count (filter #(not= (nth a %) (nth bimg %)) (range n)))]
     (println "  FAIL  bb and flint disagree:" (count a) "vs" (count bimg) "bytes")
     (println "        first difference at byte" d "of" ndiff "differing")
-    (println "        bb    " (hex a))
-    (println "        flint " (hex bimg))
-    (let [r (compiler/compile-image spec)
-          bb @(:builder r)
-          bytes (vec (img/emit (:builder r) {}))
-          cs (code-start bytes bb)]
-      (when cs
-        (let [off (- d cs)]
-          (println "        code offset" off "of" (count (:code bb)))
-          (doseq [pair (map-indexed vector (:fns bb))]
-            (let [i (first pair) f (second pair)]
-              (doseq [ar (:arities f)]
-                (when (and (>= off (:off ar)) (< off (+ (:off ar) (:len ar))))
-                  (println "        in fn" i (get-in bb [:consts (:name f) 1])
-                           "at +" (- off (:off ar)) "nupvals" (:nupvals f)))))))))))
+    (let [dif (imgread/diff a bimg)
+          f (get-in dif [:fns :first])]
+      (println "        consts differ:" (some? (:first-differing dif))
+               (pr-str (:first-differing dif)))
+      (println "        fns:" (get-in dif [:fns :count-a]) "vs" (get-in dif [:fns :count-b]))
+      (when f
+        (println "        first differing fn:" (:name-a f))
+        (println "          bb   " (pr-str (:a f)))
+        (println "          flint" (pr-str (:b f)))
+        (require '[flint.disasm :as dis])
+        (let [pa (imgread/parse a)
+              pb (imgread/parse bimg)
+              fa (imgread/parse-fns a (:consts-end pa))
+              fb (imgread/parse-fns bimg (:consts-end pb))
+              code-a (imgread/code-bytes a (:fns-end fa))
+              code-b (imgread/code-bytes bimg (:fns-end fb))
+              ar (first (:arities (:a f)))
+              br (first (:arities (:b f)))]
+          (println "        --- bb ---")
+          (println ((resolve 'flint.disasm/disasm) code-a (:off ar) (:len ar)))
+          (println "        --- flint ---")
+          (println ((resolve 'flint.disasm/disasm) code-b (:off br) (:len br))))))))
 
 (println "self-hosting fixpoint")
 (let [t0 (System/nanoTime)
