@@ -419,6 +419,298 @@ impl Rt {
     }
 }
 
+// --- transient vector ------------------------------------------------------
+//
+// TY_TVEC [cnt, shift, root, tail, edit]
+//
+// `edit` is a freshly allocated object used purely for its identity. A node
+// whose slot 0 is that same object is owned by this transient and is mutated in
+// place; any other node is copied once and thereafter owned. `persistent!`
+// clears `edit`, so a stale handle fails loudly instead of corrupting a value
+// somebody else is holding.
+
+pub const T_CNT: u32 = 0;
+pub const T_SHIFT: u32 = 1;
+pub const T_ROOT: u32 = 2;
+pub const T_TAIL: u32 = 3;
+pub const T_EDIT: u32 = 4;
+
+impl Rt {
+    /// A fresh identity for a transient's ownership token.
+    pub fn new_edit_token(&mut self) -> Value {
+        let a = self.alloc(TY_VOLATILE, 1);
+        if a == 0 { return NIL; }
+        Value::heap(a)
+    }
+
+    pub fn is_transient_vector(&self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_TVEC
+    }
+
+    #[inline]
+    pub fn tvec_count(&self, t: Value) -> u32 {
+        slot(&self.gc.sp, t.as_heap(), T_CNT).as_fixnum() as u32
+    }
+    #[inline]
+    fn tvec_shift(&self, t: Value) -> u32 {
+        slot(&self.gc.sp, t.as_heap(), T_SHIFT).as_fixnum() as u32
+    }
+    #[inline]
+    fn tvec_tail_off(&self, t: Value) -> u32 {
+        let c = self.tvec_count(t);
+        if c < WIDTH { 0 } else { ((c - 1) >> BITS) << BITS }
+    }
+    #[inline]
+    pub fn tvec_alive(&self, t: Value) -> bool {
+        !slot(&self.gc.sp, t.as_heap(), T_EDIT).is_nil()
+    }
+
+    /// `transient`: O(1). Nothing is copied until the first write that reaches
+    /// a node this transient does not already own.
+    pub fn vec_transient(&mut self, v: Value) -> Value {
+        let base = self.mark();
+        let vi = self.push(v);
+        let edit = self.new_edit_token();
+        let ei = self.push(edit);
+        // The tail is widened to a full 32 up front so conj! can write in place.
+        let oldtail = self.vec_tail(self.r(vi));
+        let otl = self.node_len(oldtail);
+        let tail = self.node_clone(oldtail, WIDTH, self.r(ei));
+        let _ = otl;
+        let ti = self.push(tail);
+        let root = self.vec_root(self.r(vi));
+        let ri = self.push(root);
+        let a = self.alloc(TY_TVEC, 5);
+        if a == 0 { self.pop_to(base); return NIL; }
+        let v = self.r(vi);
+        let cnt = self.vec_count(v);
+        let shift = self.vec_shift(v);
+        let (root, tail, edit) = (self.r(ri), self.r(ti), self.r(ei));
+        self.pop_to(base);
+        self.gc.set_slot(a, T_CNT, Value::fixnum(cnt as i64));
+        self.gc.set_slot(a, T_SHIFT, Value::fixnum(shift as i64));
+        self.gc.set_slot(a, T_ROOT, root);
+        self.gc.set_slot(a, T_TAIL, tail);
+        self.gc.set_slot(a, T_EDIT, edit);
+        Value::heap(a)
+    }
+
+    /// Return `node` if this transient already owns it, else an owned copy.
+    fn ensure_editable(&mut self, node: Value, edit: Value) -> Value {
+        if self.node_edit(node) == edit {
+            node
+        } else {
+            self.node_clone(node, WIDTH, edit)
+        }
+    }
+
+    fn t_push_tail(&mut self, cnt: u32, level: u32, parent: Value, tailnode: Value, edit: Value) -> Value {
+        let base = self.mark();
+        let e = self.push(edit);
+        let t = self.push(tailnode);
+        let p = self.push(parent);
+        let ret = self.ensure_editable(self.r(p), self.r(e));
+        let r = self.push(ret);
+        let subidx = ((cnt - 1) >> level) & MASK;
+        let to_insert = if level == BITS {
+            self.r(t)
+        } else {
+            let child = self.node_get(self.r(r), subidx);
+            if child.is_nil() {
+                self.new_path(level - BITS, self.r(t), self.r(e))
+            } else {
+                self.t_push_tail(cnt, level - BITS, child, self.r(t), self.r(e))
+            }
+        };
+        self.node_set(self.r(r), subidx, to_insert);
+        let out = self.r(r);
+        self.pop_to(base);
+        out
+    }
+
+    pub fn tvec_conj(&mut self, t: Value, x: Value) -> Value {
+        debug_assert!(self.tvec_alive(t));
+        let base = self.mark();
+        let ti = self.push(t);
+        let xi = self.push(x);
+        let cnt = self.tvec_count(t);
+        if cnt - self.tvec_tail_off(t) < WIDTH {
+            let tail = slot(&self.gc.sp, t.as_heap(), T_TAIL);
+            let x = self.r(xi);
+            self.node_set(tail, cnt & MASK, x);
+            self.gc.set_slot(t.as_heap(), T_CNT, Value::fixnum(cnt as i64 + 1));
+            self.pop_to(base);
+            let _ = ti;
+            return t; // nothing allocated on this path, so `t` cannot have moved
+        }
+        // Tail full: fold it into the trie and start a fresh one.
+        let edit = slot(&self.gc.sp, t.as_heap(), T_EDIT);
+        let ei = self.push(edit);
+        let tailnode = slot(&self.gc.sp, self.r(ti).as_heap(), T_TAIL);
+        let tn = self.push(tailnode);
+        let newtail = self.new_node(WIDTH, self.r(ei));
+        let nt = self.push(newtail);
+        let x = self.r(xi);
+        self.node_set(self.r(nt), 0, x);
+        let tv = self.r(ti);
+        let shift = self.tvec_shift(tv);
+        let overflow = (cnt >> BITS) > (1u32 << shift);
+        let (newroot, newshift) = if overflow {
+            let nr = self.new_node(WIDTH, self.r(ei));
+            let nri = self.push(nr);
+            let oldroot = slot(&self.gc.sp, self.r(ti).as_heap(), T_ROOT);
+            self.node_set(self.r(nri), 0, oldroot);
+            let path = self.new_path(shift, self.r(tn), self.r(ei));
+            self.node_set(self.r(nri), 1, path);
+            (self.r(nri), shift + BITS)
+        } else {
+            let root = slot(&self.gc.sp, self.r(ti).as_heap(), T_ROOT);
+            (self.t_push_tail(cnt, shift, root, self.r(tn), self.r(ei)), shift)
+        };
+        let (tv, newtail) = (self.r(ti), self.r(nt));
+        let a = tv.as_heap();
+        self.gc.set_slot(a, T_ROOT, newroot);
+        self.gc.set_slot(a, T_SHIFT, Value::fixnum(newshift as i64));
+        self.gc.set_slot(a, T_TAIL, newtail);
+        self.gc.set_slot(a, T_CNT, Value::fixnum(cnt as i64 + 1));
+        self.pop_to(base);
+        tv
+    }
+
+    fn t_array_for(&self, t: Value, i: u32) -> Value {
+        if i >= self.tvec_tail_off(t) {
+            return slot(&self.gc.sp, t.as_heap(), T_TAIL);
+        }
+        let mut node = slot(&self.gc.sp, t.as_heap(), T_ROOT);
+        let mut level = self.tvec_shift(t);
+        while level > 0 {
+            node = self.node_get(node, (i >> level) & MASK);
+            level -= BITS;
+        }
+        node
+    }
+
+    pub fn tvec_nth(&self, t: Value, i: u32) -> Option<Value> {
+        if i >= self.tvec_count(t) { return None; }
+        let arr = self.t_array_for(t, i);
+        Some(self.node_get(arr, i & MASK))
+    }
+
+    fn t_do_assoc(&mut self, level: u32, node: Value, i: u32, val: Value, edit: Value) -> Value {
+        let base = self.mark();
+        let e = self.push(edit);
+        let v = self.push(val);
+        let n = self.push(node);
+        let ret = self.ensure_editable(self.r(n), self.r(e));
+        let r = self.push(ret);
+        if level == 0 {
+            let val = self.r(v);
+            self.node_set(self.r(r), i & MASK, val);
+        } else {
+            let subidx = (i >> level) & MASK;
+            let child = self.node_get(self.r(r), subidx);
+            let nc = self.t_do_assoc(level - BITS, child, i, self.r(v), self.r(e));
+            self.node_set(self.r(r), subidx, nc);
+        }
+        let out = self.r(r);
+        self.pop_to(base);
+        out
+    }
+
+    pub fn tvec_assoc(&mut self, t: Value, i: u32, x: Value) -> Value {
+        let cnt = self.tvec_count(t);
+        if i == cnt { return self.tvec_conj(t, x); }
+        debug_assert!(i < cnt);
+        let base = self.mark();
+        let ti = self.push(t);
+        let xi = self.push(x);
+        if i >= self.tvec_tail_off(t) {
+            let tail = slot(&self.gc.sp, t.as_heap(), T_TAIL);
+            let x = self.r(xi);
+            self.node_set(tail, i & MASK, x);
+        } else {
+            let edit = slot(&self.gc.sp, t.as_heap(), T_EDIT);
+            let root = slot(&self.gc.sp, t.as_heap(), T_ROOT);
+            let shift = self.tvec_shift(t);
+            let nr = self.t_do_assoc(shift, root, i, self.r(xi), edit);
+            let tv = self.r(ti);
+            self.gc.set_slot(tv.as_heap(), T_ROOT, nr);
+        }
+        let out = self.r(ti);
+        self.pop_to(base);
+        out
+    }
+
+    pub fn tvec_pop(&mut self, t: Value) -> Value {
+        let cnt = self.tvec_count(t);
+        debug_assert!(cnt > 0);
+        let a = t.as_heap();
+        if cnt == 1 {
+            self.gc.set_slot(a, T_CNT, Value::fixnum(0));
+            return t;
+        }
+        if (cnt - 1) & MASK > 0 {
+            self.gc.set_slot(a, T_CNT, Value::fixnum(cnt as i64 - 1));
+            return t;
+        }
+        // The tail is emptying: pull the previous leaf back out of the trie.
+        let base = self.mark();
+        let ti = self.push(t);
+        let newtail = self.t_array_for(t, cnt - 2);
+        let nt = self.push(newtail);
+        let tv = self.r(ti);
+        let shift = self.tvec_shift(tv);
+        let root = slot(&self.gc.sp, tv.as_heap(), T_ROOT);
+        let mut newroot = self.pop_tail(shift, root, cnt);
+        let mut newshift = shift;
+        if newroot.is_nil() {
+            let edit = slot(&self.gc.sp, self.r(ti).as_heap(), T_EDIT);
+            newroot = self.new_node(WIDTH, edit);
+        }
+        let nri = self.push(newroot);
+        if newshift > BITS {
+            let second = self.node_get(self.r(nri), 1);
+            if second.is_nil() {
+                let first = self.node_get(self.r(nri), 0);
+                self.set_r(nri, first);
+                newshift -= BITS;
+            }
+        }
+        let tv = self.r(ti);
+        let a = tv.as_heap();
+        let (nr, ntv) = (self.r(nri), self.r(nt));
+        self.gc.set_slot(a, T_ROOT, nr);
+        self.gc.set_slot(a, T_TAIL, ntv);
+        self.gc.set_slot(a, T_SHIFT, Value::fixnum(newshift as i64));
+        self.gc.set_slot(a, T_CNT, Value::fixnum(cnt as i64 - 1));
+        self.pop_to(base);
+        tv
+    }
+
+    pub fn tvec_persistent(&mut self, t: Value) -> Value {
+        debug_assert!(self.tvec_alive(t));
+        let base = self.mark();
+        let ti = self.push(t);
+        let cnt = self.tvec_count(t);
+        let shift = self.tvec_shift(t);
+        let tail_off = self.tvec_tail_off(t);
+        let tail = slot(&self.gc.sp, t.as_heap(), T_TAIL);
+        // Trim the 32-wide working tail down to what is actually used.
+        let trimmed = self.node_clone(tail, cnt - tail_off, NIL);
+        let tr = self.push(trimmed);
+        let tv = self.r(ti);
+        let root = slot(&self.gc.sp, tv.as_heap(), T_ROOT);
+        let ri = self.push(root);
+        // Invalidate the handle: using it afterwards is a bug, not a silent
+        // mutation of a value somebody else now owns.
+        self.gc.set_slot(tv.as_heap(), T_EDIT, NIL);
+        let (root, trimmed) = (self.r(ri), self.r(tr));
+        let out = self.new_vec(cnt, shift, root, trimmed, NIL);
+        self.pop_to(base);
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,5 +858,150 @@ mod tests {
             let mut b2 = crate::rt::sbuf();
             let _ = &mut b2;
         }
+    }
+}
+
+#[cfg(test)]
+mod transient_tests {
+    use super::*;
+    use alloc::vec::Vec as StdVec;
+
+    fn tv_to_vec(rt: &Rt, t: Value) -> StdVec<i64> {
+        (0..rt.tvec_count(t)).map(|i| rt.tvec_nth(t, i).unwrap().as_fixnum()).collect()
+    }
+    fn to_vec(rt: &Rt, v: Value) -> StdVec<i64> {
+        (0..rt.vec_count(v)).map(|i| rt.vec_nth(v, i).unwrap().as_fixnum()).collect()
+    }
+
+    #[test]
+    fn transient_conj_then_persistent_round_trips() {
+        let mut rt = Rt::new();
+        for n in [0u32, 1, 31, 32, 33, 1024, 1025, 5000] {
+            let e = rt.empty_vec();
+            let t = rt.vec_transient(e);
+            let ti = rt.push(t);
+            for i in 0..n {
+                let nt = rt.tvec_conj(rt.r(ti), Value::fixnum(i as i64));
+                rt.set_r(ti, nt);
+            }
+            assert_eq!(rt.tvec_count(rt.r(ti)), n);
+            let v = rt.tvec_persistent(rt.r(ti));
+            assert_eq!(rt.vec_count(v), n, "n={n}");
+            assert_eq!(to_vec(&rt, v), (0..n as i64).collect::<StdVec<_>>(), "n={n}");
+            rt.pop_to(ti);
+        }
+    }
+
+    #[test]
+    fn transient_does_not_disturb_the_source_vector() {
+        let mut rt = Rt::new();
+        let mut v = rt.empty_vec();
+        let vi = rt.push(v);
+        for i in 0..100 {
+            let nv = rt.vec_conj(rt.r(vi), Value::fixnum(i));
+            rt.set_r(vi, nv);
+        }
+        let t = rt.vec_transient(rt.r(vi));
+        let ti = rt.push(t);
+        for i in 0..100 {
+            let nt = rt.tvec_conj(rt.r(ti), Value::fixnum(1000 + i));
+            rt.set_r(ti, nt);
+        }
+        let nt = rt.tvec_assoc(rt.r(ti), 0, Value::fixnum(-5));
+        rt.set_r(ti, nt);
+        v = rt.r(vi);
+        assert_eq!(rt.vec_count(v), 100, "source count unchanged");
+        assert_eq!(to_vec(&rt, v), (0..100i64).collect::<StdVec<_>>(), "source contents unchanged");
+        let out = rt.tvec_persistent(rt.r(ti));
+        assert_eq!(rt.vec_count(out), 200);
+        assert_eq!(rt.vec_nth(out, 0).unwrap().as_fixnum(), -5);
+        assert_eq!(rt.vec_nth(out, 199).unwrap().as_fixnum(), 1099);
+    }
+
+    #[test]
+    fn transient_assoc_and_pop() {
+        let mut rt = Rt::new();
+        let e = rt.empty_vec();
+        let t = rt.vec_transient(e);
+        let ti = rt.push(t);
+        for i in 0..2000 {
+            let nt = rt.tvec_conj(rt.r(ti), Value::fixnum(i));
+            rt.set_r(ti, nt);
+        }
+        for i in (0..2000).step_by(37) {
+            let nt = rt.tvec_assoc(rt.r(ti), i as u32, Value::fixnum(-i));
+            rt.set_r(ti, nt);
+        }
+        for i in (0..2000).step_by(37) {
+            assert_eq!(rt.tvec_nth(rt.r(ti), i as u32).unwrap().as_fixnum(), -i);
+        }
+        for _ in 0..500 {
+            let nt = rt.tvec_pop(rt.r(ti));
+            rt.set_r(ti, nt);
+        }
+        assert_eq!(rt.tvec_count(rt.r(ti)), 1500);
+        let v = rt.tvec_persistent(rt.r(ti));
+        assert_eq!(rt.vec_count(v), 1500);
+        assert_eq!(rt.vec_nth(v, 1499).unwrap().as_fixnum(), 1499);
+        assert_eq!(rt.vec_nth(v, 37).unwrap().as_fixnum(), -37);
+    }
+
+    #[test]
+    fn persistent_invalidates_the_handle() {
+        let mut rt = Rt::new();
+        let e = rt.empty_vec();
+        let t = rt.vec_transient(e);
+        let ti = rt.push(t);
+        let nt = rt.tvec_conj(rt.r(ti), Value::fixnum(1));
+        rt.set_r(ti, nt);
+        assert!(rt.tvec_alive(rt.r(ti)));
+        let _ = rt.tvec_persistent(rt.r(ti));
+        assert!(!rt.tvec_alive(rt.r(ti)), "a used-up transient must be detectably dead");
+    }
+
+    #[test]
+    fn persistent_result_is_independent_of_further_transient_use() {
+        // The classic transient bug: `persistent!` hands back a value that a
+        // still-live handle can mutate. It must not.
+        let mut rt = Rt::new();
+        let e = rt.empty_vec();
+        let t = rt.vec_transient(e);
+        let ti = rt.push(t);
+        for i in 0..40 {
+            let nt = rt.tvec_conj(rt.r(ti), Value::fixnum(i));
+            rt.set_r(ti, nt);
+        }
+        let v = rt.tvec_persistent(rt.r(ti));
+        let vi = rt.push(v);
+        // Re-transient the *result* and keep going; the first result must not move.
+        let t2 = rt.vec_transient(rt.r(vi));
+        let t2i = rt.push(t2);
+        for i in 0..40 {
+            let nt = rt.tvec_conj(rt.r(t2i), Value::fixnum(100 + i));
+            rt.set_r(t2i, nt);
+        }
+        let nt = rt.tvec_assoc(rt.r(t2i), 0, Value::fixnum(-99));
+        rt.set_r(t2i, nt);
+        let _ = rt.tvec_persistent(rt.r(t2i));
+        assert_eq!(to_vec(&rt, rt.r(vi)), (0..40i64).collect::<StdVec<_>>(),
+                   "the earlier persistent result was mutated through a later transient");
+    }
+
+    #[test]
+    fn transients_survive_collection_at_every_allocation() {
+        let mut rt = Rt::new();
+        rt.gc.stress = true;
+        let e = rt.empty_vec();
+        let t = rt.vec_transient(e);
+        let ti = rt.push(t);
+        for i in 0..300 {
+            let nt = rt.tvec_conj(rt.r(ti), Value::fixnum(i));
+            rt.set_r(ti, nt);
+        }
+        assert_eq!(tv_to_vec(&rt, rt.r(ti)), (0..300i64).collect::<StdVec<_>>());
+        let v = rt.tvec_persistent(rt.r(ti));
+        let vi = rt.push(v);
+        rt.collect();
+        assert_eq!(to_vec(&rt, rt.r(vi)), (0..300i64).collect::<StdVec<_>>());
     }
 }
