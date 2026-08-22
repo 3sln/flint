@@ -1,5 +1,5 @@
 [workspace]
-members = ["runtime"]
+members = ["runtime", "units-src/flint-data-json", "units-src/flint-data-xml", "units-src/flint-data-html"]
 resolver = "2"
 
 [profile.release]

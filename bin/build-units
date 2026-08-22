@@ -6,30 +6,70 @@ cd "$(dirname "$0")/.."
 TC="$HOME/.rustup/toolchains/nightly-aarch64-apple-darwin"
 RUSTC="$TC/bin/rustc"
 SYS="$TC/lib/rustlib/wasm32-unknown-unknown/lib"
+DEPS=target/wasm32-unknown-unknown/release/deps
+FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0"
+mkdir -p out units/.sysroot
+
+# cargo builds the DEPENDENCY rlibs once (serde_json, xmlparser, htmlparser and
+# their transitive deps). Unit objects themselves are emitted by rustc below, so
+# a `flint` invocation never runs cargo.
+echo "  dependencies (cargo, once)"
+PATH="$TC/bin:$PATH" cargo build --release --target wasm32-unknown-unknown >/dev/null 2>&1
+
+rlib() { ls "$DEPS"/lib$1-*.rlib 2>/dev/null | head -1; }
+
+echo "  flint.rt"
 OUT=units/flint.rt
-mkdir -p "$OUT" out
+mkdir -p "$OUT"
+LIBM=$(rlib libm)
+$RUSTC $FLAGS --crate-type rlib --crate-name flint_rt --extern libm="$LIBM" \
+  --emit=obj runtime/src/lib.rs -o "$OUT/flint_rt.o"
+$RUSTC $FLAGS --crate-type rlib --crate-name flint_rt --extern libm="$LIBM" \
+  --emit=link runtime/src/lib.rs -o "$OUT/libflint_rt.rlib"
+cargo run -q -p flint-rt --features host-tools --bin catalogue > "$OUT/unit.edn"
 
-FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0 --crate-type rlib --crate-name flint_rt"
+# One parser unit per namespace. Each is its own object AND carries its own
+# dependency rlibs, so linking a program that never mentions XML never puts
+# xmlparser on the link line at all.
+build_parser() {          # name crate_dir crate_name symbol clj_name deps...
+  name=$1; dir=$2; crate=$3; sym=$4; provides=$5; shift 5
+  echo "  $name"
+  OUT="units/$name"
+  mkdir -p "$OUT/lib"
+  rm -f "$OUT/lib"/*.rlib
+  EXTERNS="--extern flint_rt=units/flint.rt/libflint_rt.rlib -L $DEPS"
+  for d in "$@"; do
+    r=$(rlib "$d")
+    if [ -n "$r" ]; then EXTERNS="$EXTERNS --extern $d=$r"; fi
+  done
+  # Every rlib the unit or its dependencies need goes into the unit's own lib
+  # directory, so the link line for a program that never mentions this namespace
+  # never sees them.
+  for d in "$@" serde serde_core memchr itoa zmij num_traits htmlparser xmlparser; do
+    r=$(rlib "$d"); if [ -n "$r" ]; then cp "$r" "$OUT/lib/" 2>/dev/null || true; fi
+  done
+  $RUSTC $FLAGS --crate-type rlib --crate-name "$crate" $EXTERNS \
+    --emit=obj "$dir/src/lib.rs" -o "$OUT/$crate.o"
+  cat > "$OUT/unit.edn" <<UNIT
+{:flint/unit 1
+ :name $name
+ :kind :wasm-object
+ :artifact "$crate.o"
+ :requires [flint.rt]
+ :abi {:runtime 1 :value 1 :image 1}
+ :provides {"$provides" {:symbol "$sym"}}}
+UNIT
+}
 
-echo "  flint.rt -> object"
-LIBM=$(ls target/wasm32-unknown-unknown/release/deps/liblibm-*.rlib 2>/dev/null | head -1)
-if [ -z "$LIBM" ]; then
-  echo "  (building libm for wasm32 via cargo, once)"
-  ./bin/cargo-wasm build --release --target wasm32-unknown-unknown -p flint-rt >/dev/null 2>&1 || true
-  LIBM=$(ls target/wasm32-unknown-unknown/release/deps/liblibm-*.rlib 2>/dev/null | head -1)
-fi
+build_parser flint.data.json units-src/flint-data-json flint_data_json \
+  flint_b_json_parse "flint/json-parse" serde serde_json
+build_parser flint.data.xml units-src/flint-data-xml flint_data_xml \
+  flint_b_xml_parse "flint/xml-parse" xmlparser
+build_parser flint.data.html units-src/flint-data-html flint_data_html \
+  flint_b_html_parse "flint/html-parse" htmlparser
 
-$RUSTC $FLAGS --extern libm="$LIBM" --emit=obj runtime/src/lib.rs -o "$OUT/flint_rt.o"
-$RUSTC $FLAGS --extern libm="$LIBM" --emit=link runtime/src/lib.rs -o "$OUT/libflint_rt.rlib"
-
-echo "  flint.rt -> manifest"
-cargo run -q -p flint-rt --bin catalogue > "$OUT/unit.edn"
-
-# The sysroot pieces every unit links against, copied once so the link line is
-# stable and does not depend on the rustup layout at compile time.
-mkdir -p units/.sysroot
 cp "$SYS"/libcore-*.rlib "$SYS"/liballoc-*.rlib "$SYS"/libcompiler_builtins-*.rlib \
    "$SYS"/librustc_std_workspace_core-*.rlib units/.sysroot/ 2>/dev/null || true
 cp "$LIBM" units/.sysroot/ 2>/dev/null || true
 
-ls -l "$OUT"
+du -sh units/* 2>/dev/null | sed 's/^/  /'

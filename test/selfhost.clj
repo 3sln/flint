@@ -53,7 +53,12 @@
                                (vec (remove (set ready) pending))))))))))
 
 (defn builtin-names []
-  (set (keys (:provides (read-string (slurp "units/flint.rt/unit.edn"))))))
+  (into #{} (for [d (.listFiles (io/file "units"))
+                  :when (.isDirectory d)
+                  :let [f (io/file d "unit.edn")]
+                  :when (.exists f)
+                  k (keys (:provides (read-string (slurp f))))]
+              k)))
 
 (def dirs ["src" "lib"])
 (def entry 'flint.selfhost/main)

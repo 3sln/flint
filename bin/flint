@@ -79,9 +79,16 @@
   ;; whatever the require graph says.
   (cons 'clojure.core (remove #{'clojure.core} order)))
 
-(defn builtin-names [units-dir]
-  (let [u (read-string (slurp (io/file units-dir "flint.rt" "unit.edn")))]
-    (set (keys (:provides u)))))
+(defn builtin-names
+  "Every builtin any unit provides. The compiler needs the union so it can tell
+  a typo from a builtin in a namespace this program has not reached yet."
+  [units-dir]
+  (into #{} (for [d (.listFiles (io/file units-dir))
+                  :when (.isDirectory d)
+                  :let [f (io/file d "unit.edn")]
+                  :when (.exists f)
+                  k (keys (:provides (read-string (slurp f))))]
+              k)))
 
 (let [{:keys [src fn out stats keep-names explain disasm const]} (parse-args *command-line-args*)]
   (when-not fn

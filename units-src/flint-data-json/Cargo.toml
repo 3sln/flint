@@ -1,0 +1,15 @@
+[package]
+name = "flint-data-json"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+flint-rt = { path = "../../runtime" }
+# serde_json with default-features off and only `alloc`: no std, no libc.
+# `float_roundtrip` makes doubles parse to the nearest f64 rather than a fast
+# approximation, which matters because we hand the value straight to Clojure.
+serde = { version = "1", default-features = false, features = ["alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc", "float_roundtrip"] }

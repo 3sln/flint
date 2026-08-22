@@ -1,0 +1,7 @@
+{:flint/unit 1
+ :name flint.data.json
+ :kind :wasm-object
+ :artifact "flint_data_json.o"
+ :requires [flint.rt]
+ :abi {:runtime 1 :value 1 :image 1}
+ :provides {"flint/json-parse" {:symbol "flint_b_json_parse"}}}

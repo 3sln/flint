@@ -1,0 +1,13 @@
+[package]
+name = "flint-data-xml"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+flint-rt = { path = "../../runtime" }
+# A pull tokenizer that is already no_std + alloc. We consume its token stream
+# and build flint element maps directly; there is no document type to convert.
+xmlparser = { version = "0.13", default-features = false }

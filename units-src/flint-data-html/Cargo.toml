@@ -1,0 +1,15 @@
+[package]
+name = "flint-data-html"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+flint-rt = { path = "../../runtime" }
+# htmlparser is xmlparser's HTML-tolerant sibling: same no_std tokenizer design,
+# but it accepts unquoted attributes, bare ampersands, mismatched case and the
+# other things real markup does. It is a TOKENIZER, not an HTML5 tree builder --
+# see the README for exactly where that stops being enough.
+htmlparser = { version = "0.2", default-features = false }

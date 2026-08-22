@@ -5,7 +5,19 @@ edition = "2021"
 description = "flint runtime: NaN-boxed values, generational GC, persistent data structures, EDN reader and bytecode VM, for wasm32-unknown-unknown"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+# rlib only: flint drives the final link itself (doc/unit-format.md), so there
+# is no cdylib target -- and having one would duplicate the allocator shim
+# symbols this crate defines by hand.
+crate-type = ["rlib"]
+
+[features]
+# The catalogue generator is host-only: it links std, which would collide with
+# the runtime's own panic handler under wasm32.
+host-tools = []
+
+[[bin]]
+name = "catalogue"
+required-features = ["host-tools"]
 
 [dependencies]
 # Pure-Rust no_std libm. The only dependency: it is what makes clojure.math

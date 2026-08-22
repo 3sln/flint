@@ -77,8 +77,18 @@
   "Run the linker. Returns the module bytes."
   [{:keys [units exports]} sysroot out-path & [keep-names]]
   (let [objs (for [u units] (str (:dir u) "/" (:artifact u)))
-        rlibs (filter #(str/ends-with? % ".rlib")
-                      (map str (.listFiles (io/file sysroot))))
+        ;; Each unit carries its own dependency rlibs. A program that never
+        ;; mentions XML never puts xmlparser on the link line at all, so
+        ;; "not linked" is stronger than "linked and then gc-sectioned".
+        unit-libs (for [u units
+                        :let [d (io/file (:dir u) "lib")]
+                        :when (.isDirectory d)
+                        f (.listFiles d)
+                        :when (str/ends-with? (str f) ".rlib")]
+                    (str f))
+        rlibs (concat unit-libs
+                      (filter #(str/ends-with? % ".rlib")
+                              (map str (.listFiles (io/file sysroot)))))
         args (concat [(lld-path) "-flavor" "wasm" "--no-entry" "--gc-sections"
                       "--export-table"
                       "--export=__heap_base" "--export=FLINT_IMAGE_DESC"]
