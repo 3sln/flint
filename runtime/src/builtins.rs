@@ -134,6 +134,25 @@ builtins! {
         TRUE
     };
 
+    // --- bit operations -------------------------------------------------------
+    "bit-and", flint_b_bitand, b_bitand, |rt, a, n| { bitop(rt, a, n, 0) };
+    "bit-or", flint_b_bitor, b_bitor, |rt, a, n| { bitop(rt, a, n, 1) };
+    "bit-xor", flint_b_bitxor, b_bitxor, |rt, a, n| { bitop(rt, a, n, 2) };
+    "bit-not", flint_b_bitnot, b_bitnot, |rt, a, n| {
+        let _ = n;
+        match rt.as_i64(arg(rt, a, 0)) { Some(x) => rt.integer(!x), None => rt.throw_not_a_number(NIL, NIL) }
+    };
+    "bit-shift-left", flint_b_shl, b_shl, |rt, a, n| { shiftop(rt, a, n, 0) };
+    "bit-shift-right", flint_b_shr, b_shr, |rt, a, n| { shiftop(rt, a, n, 1) };
+    "unsigned-bit-shift-right", flint_b_ushr, b_ushr, |rt, a, n| { shiftop(rt, a, n, 2) };
+    "bit-test", flint_b_bittest, b_bittest, |rt, a, n| {
+        let _ = n;
+        match (rt.as_i64(arg(rt, a, 0)), rt.as_i64(arg(rt, a, 1))) {
+            (Some(x), Some(i)) => Value::boolean((x >> (i & 63)) & 1 == 1),
+            _ => rt.throw_not_a_number(NIL, NIL),
+        }
+    };
+
     // --- predicates ---------------------------------------------------------
     "nil?", flint_b_nilp, b_nilp, |rt, a, n| { let _ = n; Value::boolean(arg(rt, a, 0).is_nil()) };
     "number?", flint_b_numberp, b_numberp, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); Value::boolean(rt.is_number(v)) };
@@ -279,6 +298,38 @@ builtins! {
         }
     };
 
+    "flint/str-join", flint_b_strjoin, b_strjoin, |rt, a, n| {
+        let _ = n;
+        let coll = arg(rt, a, 0);
+        rt.join_strings(coll)
+    };
+    "flint/str-index-of", flint_b_strindexof, b_strindexof, |rt, a, n| {
+        let (h, needle) = (arg(rt, a, 0), arg(rt, a, 1));
+        let from = if n > 2 { rt.as_i64(arg(rt, a, 2)).unwrap_or(0) } else { 0 };
+        rt.str_index_of(h, needle, from)
+    };
+    "flint/str-bytes", flint_b_strbytes, b_strbytes, |rt, a, n| {
+        let _ = n;
+        let s = arg(rt, a, 0);
+        rt.string_bytes_vector(s)
+    };
+    "flint/double-bits", flint_b_doublebits, b_doublebits, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        if v.is_double() { rt.integer(v.as_f64().to_bits() as i64) }
+        else { rt.throw_str("ClassCastException", "not a double") }
+    };
+    "flint/volatile", flint_b_volatile, b_volatile, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        rt.new_volatile(v)
+    };
+    "flint/volatile?", flint_b_volatilep, b_volatilep, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        Value::boolean(v.is_heap() && crate::obj::ty(&rt.gc.sp, v.as_heap()) == crate::obj::TY_VOLATILE)
+    };
+
     // --- errors --------------------------------------------------------------
     "ex-info", flint_b_exinfo, b_exinfo, |rt, a, n| {
         let msg = arg(rt, a, 0);
@@ -348,6 +399,36 @@ builtins! {
         let _ = (a, n);
         rt.gc_stats_map()
     };
+}
+
+fn bitop(rt: &mut Rt, a: usize, n: usize, which: u8) -> Value {
+    let mut acc = match rt.as_i64(arg(rt, a, 0)) {
+        Some(x) => x,
+        None => return rt.throw_not_a_number(NIL, NIL),
+    };
+    for i in 1..n {
+        match rt.as_i64(arg(rt, a, i)) {
+            Some(x) => acc = match which { 0 => acc & x, 1 => acc | x, _ => acc ^ x },
+            None => return rt.throw_not_a_number(NIL, NIL),
+        }
+    }
+    rt.integer(acc)
+}
+
+fn shiftop(rt: &mut Rt, a: usize, n: usize, which: u8) -> Value {
+    let _ = n;
+    match (rt.as_i64(arg(rt, a, 0)), rt.as_i64(arg(rt, a, 1))) {
+        (Some(x), Some(k)) => {
+            let k = (k & 63) as u32;
+            let r = match which {
+                0 => x.wrapping_shl(k),
+                1 => x.wrapping_shr(k),
+                _ => ((x as u64) >> k) as i64,
+            };
+            rt.integer(r)
+        }
+        _ => rt.throw_not_a_number(NIL, NIL),
+    }
 }
 
 fn cmp_chain(rt: &mut Rt, a: usize, n: usize, want: i32, or_eq: bool) -> Value {

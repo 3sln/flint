@@ -3,11 +3,13 @@
 //!
 //! ```text
 //!   "FLINTIMG" u32 version
+//!   u32 nnatives   ; (name-const, table-slot) pairs. FIRST, and fixed width, so
+//!                  ; the slots can be patched at a known offset after linking
+//!                  ; without re-serialising -- which is what lets a flint-hosted
+//!                  ; compiler emit an image it cannot yet assign slots for.
 //!   u32 nconsts    ; tagged constant entries, in dependency order
 //!   u32 nfns       ; function table
 //!   u32 nvars      ; var name constant indices
-//!   u32 nnatives   ; (name-const, table-slot) pairs -- the slot is written by
-//!                  ; `flint` after the link, from the module's export section
 //!   u32 codelen    ; bytecode
 //!   u32 entry      ; fn index called with the argument vector
 //!   u32 ninit      ; fn indices to run first, in order
@@ -99,6 +101,13 @@ impl Rt {
         let mut r = Rd { b: bytes, i: 8 };
         if r.u32() != VERSION {
             return false;
+        }
+
+        let nnat = r.u32() as usize;
+        let mut natives = Vec::with_capacity(nnat);
+        for _ in 0..nnat {
+            let _name = r.u32();
+            natives.push(r.u32());
         }
 
         let nconsts = r.u32() as usize;
@@ -230,13 +239,6 @@ impl Rt {
         self.roots.globals.clear();
         self.roots.globals.resize(nvars, NIL);
 
-        let nnat = r.u32() as usize;
-        let mut natives = Vec::with_capacity(nnat);
-        for _ in 0..nnat {
-            let _name = r.u32();
-            natives.push(r.u32());
-        }
-
         let codelen = r.u32() as usize;
         let code = r.bytes(codelen).to_vec();
         let entry = r.u32();
@@ -358,6 +360,11 @@ impl ImageWriter {
         let mut o = Vec::new();
         o.extend_from_slice(MAGIC);
         o.extend_from_slice(&VERSION.to_le_bytes());
+        o.extend_from_slice(&(self.natives.len() as u32).to_le_bytes());
+        for (n, s) in &self.natives {
+            o.extend_from_slice(&n.to_le_bytes());
+            o.extend_from_slice(&s.to_le_bytes());
+        }
         o.extend_from_slice(&(self.consts.len() as u32).to_le_bytes());
         for c in &self.consts {
             o.extend_from_slice(c);
@@ -369,11 +376,6 @@ impl ImageWriter {
         o.extend_from_slice(&(self.vars.len() as u32).to_le_bytes());
         for v in &self.vars {
             o.extend_from_slice(&v.to_le_bytes());
-        }
-        o.extend_from_slice(&(self.natives.len() as u32).to_le_bytes());
-        for (n, s) in &self.natives {
-            o.extend_from_slice(&n.to_le_bytes());
-            o.extend_from_slice(&s.to_le_bytes());
         }
         o.extend_from_slice(&(self.code.len() as u32).to_le_bytes());
         o.extend_from_slice(&self.code);

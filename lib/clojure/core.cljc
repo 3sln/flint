@@ -286,6 +286,20 @@
   ([a b & more] (reduce max (max a b) more)))
 (defn abs [n] (if (flint.rt/lt n 0) (flint.rt/sub 0 n) n))
 
+;; ---------------------------------------------------------------- bit fiddling
+
+(defn bit-and ([a b] (flint.rt/bit-and a b)) ([a b & more] (reduce flint.rt/bit-and (flint.rt/bit-and a b) more)))
+(defn bit-or ([a b] (flint.rt/bit-or a b)) ([a b & more] (reduce flint.rt/bit-or (flint.rt/bit-or a b) more)))
+(defn bit-xor ([a b] (flint.rt/bit-xor a b)) ([a b & more] (reduce flint.rt/bit-xor (flint.rt/bit-xor a b) more)))
+(defn bit-not [a] (flint.rt/bit-not a))
+(defn bit-shift-left [a n] (flint.rt/bit-shift-left a n))
+(defn bit-shift-right [a n] (flint.rt/bit-shift-right a n))
+(defn unsigned-bit-shift-right [a n] (flint.rt/unsigned-bit-shift-right a n))
+(defn bit-test [a n] (flint.rt/bit-test a n))
+(defn bit-set [a n] (flint.rt/bit-or a (flint.rt/bit-shift-left 1 n)))
+(defn bit-clear [a n] (flint.rt/bit-and a (flint.rt/bit-not (flint.rt/bit-shift-left 1 n))))
+(defn bit-flip [a n] (flint.rt/bit-xor a (flint.rt/bit-shift-left 1 n)))
+
 ;; -------------------------------------------------------------------- strings
 
 (defn- kw-or-sym-str [x]
@@ -724,4 +738,46 @@
     :else "#<unprintable>"))
 
 (defn prn-str [x] (flint.rt/str2 (pr-str x) "\n"))
+
+;; ---------------------------------------------------------------- volatiles
+;;
+;; A volatile is an atom without the ceremony; flint is single threaded, so the
+;; distinction is only about intent. The compiler leans on them heavily.
+
+(defn volatile! [x] (flint.rt/volatile x))
+(defn vreset! [v x] (flint.rt/reset! v x))
+(defn volatile? [x] (flint.rt/volatile? x))
+(defn vswap!
+  ([v f] (flint.rt/reset! v (f (flint.rt/deref v))))
+  ([v f a] (flint.rt/reset! v (f (flint.rt/deref v) a)))
+  ([v f a b] (flint.rt/reset! v (f (flint.rt/deref v) a b)))
+  ([v f a b & more] (flint.rt/reset! v (apply2 f (cons (flint.rt/deref v) (cons a (cons b more)))))))
+
+;; -------------------------------------------------------------------- gensym
+;;
+;; Deterministic: the counter starts at 1 in every process. That is not just
+;; tidiness -- the self-hosting fixpoint test compares compiler output byte for
+;; byte, and a gensym that leaked into a constant would make two identical
+;; compilations differ.
+
+(def ^:private gensym-counter (atom 0))
+
+(defn gensym
+  ([] (gensym "G__"))
+  ([prefix] (reset! gensym-counter (inc @gensym-counter))
+            (symbol (flint.rt/str2 (str prefix) (flint.rt/num->str @gensym-counter)))))
+
+;; ------------------------------------------------------------------- strings
+
+(defn str-join [xs] (flint.rt/str-join xs))
+(defn str-bytes [s] (flint.rt/str-bytes s))
+
+;; ---------------------------------------------------------------- interop-free
+;;
+;; `read-string` and `eval` do not exist: a flint module carries no compiler.
+;; `clojure.edn/read-string` is the way to turn text into data.
+
+(defn ->str-builder [] (volatile! []))
+(defn sb-append! [sb s] (vswap! sb conj s) sb)
+(defn sb-str [sb] (flint.rt/str-join @sb))
 (defn println-str [& xs] (flint.rt/str2 (join-with " " xs) "\n"))

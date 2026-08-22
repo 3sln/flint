@@ -631,6 +631,98 @@ impl Rt {
         }
     }
 
+    /// Concatenate a collection of strings in one pass. Without this, building
+    /// a string by repeated `str` is quadratic, which shows up immediately in
+    /// the reader when the compiler compiles itself.
+    pub fn join_strings(&mut self, coll: Value) -> Value {
+        let base = self.mark();
+        let s = self.seq(coll);
+        let si = self.push(s);
+        let mut out = alloc::string::String::new();
+        while !self.r(si).is_nil() {
+            let x = self.first(self.r(si));
+            let mut b = crate::rt::sbuf();
+            match self.as_str(x, &mut b) {
+                Some(t) => out.push_str(t),
+                None => {
+                    self.pop_to(base);
+                    return self.throw_str("ClassCastException", "str-join wants strings");
+                }
+            }
+            let nx = self.next(self.r(si));
+            self.set_r(si, nx);
+        }
+        self.pop_to(base);
+        self.string(&out)
+    }
+
+    /// Byte offset -> code-point index search. Returns nil when absent.
+    pub fn str_index_of(&mut self, haystack: Value, needle: Value, from: i64) -> Value {
+        let mut bh = crate::rt::sbuf();
+        let mut bn = crate::rt::sbuf();
+        let found = {
+            let h: &str = if haystack.is_inline_str() {
+                core::str::from_utf8(haystack.inline_bytes(&mut bh)).unwrap_or("")
+            } else if haystack.is_heap() && ty(&self.gc.sp, haystack.as_heap()) == TY_STR {
+                core::str::from_utf8(str_bytes(&self.gc.sp, haystack.as_heap())).unwrap_or("")
+            } else {
+                return self.throw_str("ClassCastException", "not a string");
+            };
+            let nd: &str = if needle.is_inline_str() {
+                core::str::from_utf8(needle.inline_bytes(&mut bn)).unwrap_or("")
+            } else if needle.is_heap() && ty(&self.gc.sp, needle.as_heap()) == TY_STR {
+                core::str::from_utf8(str_bytes(&self.gc.sp, needle.as_heap())).unwrap_or("")
+            } else {
+                return self.throw_str("ClassCastException", "not a string");
+            };
+            // `from` is a code-point index, and so is the answer.
+            let skip = from.max(0) as usize;
+            let start_byte = h.char_indices().nth(skip).map(|(i, _)| i).unwrap_or(h.len());
+            h[start_byte..].find(nd).map(|b| h[..start_byte + b].chars().count())
+        };
+        match found {
+            Some(i) => Value::fixnum(i as i64),
+            None => NIL,
+        }
+    }
+
+    /// The UTF-8 bytes of a string, as a vector of integers. The image writer
+    /// needs this when the compiler is hosted on flint.
+    pub fn string_bytes_vector(&mut self, s: Value) -> Value {
+        let mut buf = crate::rt::sbuf();
+        let owned: alloc::vec::Vec<u8> = {
+            let b: &[u8] = if s.is_inline_str() {
+                s.inline_bytes(&mut buf)
+            } else if s.is_heap() && ty(&self.gc.sp, s.as_heap()) == TY_STR {
+                str_bytes(&self.gc.sp, s.as_heap())
+            } else {
+                return self.throw_str("ClassCastException", "not a string");
+            };
+            b.to_vec()
+        };
+        let base = self.mark();
+        let mut v = self.empty_vec();
+        let vi = self.push(v);
+        for byte in owned {
+            let nv = self.vec_conj(self.r(vi), Value::fixnum(byte as i64));
+            self.set_r(vi, nv);
+        }
+        v = self.r(vi);
+        self.pop_to(base);
+        v
+    }
+
+    pub fn new_volatile(&mut self, v: Value) -> Value {
+        let base = self.mark();
+        let vi = self.push(v);
+        let a = self.alloc(TY_VOLATILE, 1);
+        if a == 0 { self.pop_to(base); return NIL; }
+        let v = self.r(vi);
+        self.pop_to(base);
+        self.gc.set_slot(a, 0, v);
+        Value::heap(a)
+    }
+
     // --- diagnostics ------------------------------------------------------------
 
     pub fn gc_stats_map(&mut self) -> Value {

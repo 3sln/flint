@@ -20,6 +20,14 @@
   "flint/gt" {:symbol "flint_b_gt"}
   "flint/ge" {:symbol "flint_b_ge"}
   "flint/num-eq" {:symbol "flint_b_numeq"}
+  "bit-and" {:symbol "flint_b_bitand"}
+  "bit-or" {:symbol "flint_b_bitor"}
+  "bit-xor" {:symbol "flint_b_bitxor"}
+  "bit-not" {:symbol "flint_b_bitnot"}
+  "bit-shift-left" {:symbol "flint_b_shl"}
+  "bit-shift-right" {:symbol "flint_b_shr"}
+  "unsigned-bit-shift-right" {:symbol "flint_b_ushr"}
+  "bit-test" {:symbol "flint_b_bittest"}
   "nil?" {:symbol "flint_b_nilp"}
   "number?" {:symbol "flint_b_numberp"}
   "int?" {:symbol "flint_b_intp"}
@@ -65,6 +73,12 @@
   "flint/str->num" {:symbol "flint_b_str2num"}
   "flint/code-point-at" {:symbol "flint_b_cpat"}
   "flint/from-code-point" {:symbol "flint_b_fromcp"}
+  "flint/str-join" {:symbol "flint_b_strjoin"}
+  "flint/str-index-of" {:symbol "flint_b_strindexof"}
+  "flint/str-bytes" {:symbol "flint_b_strbytes"}
+  "flint/double-bits" {:symbol "flint_b_doublebits"}
+  "flint/volatile" {:symbol "flint_b_volatile"}
+  "flint/volatile?" {:symbol "flint_b_volatilep"}
   "ex-info" {:symbol "flint_b_exinfo"}
   "ex-message" {:symbol "flint_b_exmessage"}
   "ex-data" {:symbol "flint_b_exdata"}

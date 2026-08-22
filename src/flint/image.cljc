@@ -158,16 +158,38 @@
   (let [{:keys [consts fns vars natives code entry init]} @b]
     (w/->bytes
      [MAGIC (u32 VERSION)
-      (u32 (count consts)) (map emit-const consts)
-      (u32 (count fns)) (map emit-fn fns)
-      (u32 (count vars)) (map u32 vars)
+      ;; Natives first, and fixed width: `patch-native-slots` can rewrite them at
+      ;; a known offset, so a flint-hosted compiler can emit an image before
+      ;; anyone knows which wasm table slot each builtin will land in.
       (u32 (count natives))
       (for [n natives]
         ;; the name is kept for diagnostics; the runtime reads only the slot
         [(u32 (:name-const n)) (u32 (get native-slots (:name n) 0))])
+      (u32 (count consts)) (map emit-const consts)
+      (u32 (count fns)) (map emit-fn fns)
+      (u32 (count vars)) (map u32 vars)
       (u32 (count code)) code
       (u32 entry)
       (u32 (count init)) (map u32 init)])))
+
+(def NATIVES-OFFSET
+  "Byte offset of the natives count: magic(8) + version(4)."
+  12)
+
+(defn patch-native-slots
+  "Rewrite the table slots in already-emitted image bytes. `names` is the
+  native-import order, `slots` maps name -> wasm table slot."
+  [bytes names slots]
+  (reduce (fn [bs [i nm]]
+            (let [at (+ NATIVES-OFFSET 4 (* i 8) 4)
+                  s (get slots nm 0)]
+              (-> bs
+                  (assoc at (bit-and s 0xff))
+                  (assoc (+ at 1) (bit-and (bit-shift-right s 8) 0xff))
+                  (assoc (+ at 2) (bit-and (bit-shift-right s 16) 0xff))
+                  (assoc (+ at 3) (bit-and (bit-shift-right s 24) 0xff)))))
+          (vec bytes)
+          (map-indexed vector names)))
 
 (defn set-entry! [b i] (vswap! b assoc :entry i))
 (defn add-init! [b i] (vswap! b update :init conj i))
