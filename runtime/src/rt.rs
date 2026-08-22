@@ -60,8 +60,7 @@ impl Rt {
     fn init_singletons(&mut self) {
         let a = self.alloc(TY_EMPTY_LIST, 1);
         self.roots.singletons[SING_EMPTY_LIST] = Value::heap(a);
-        // The rest are filled in by the collection modules, which know their
-        // own layouts; see `vector::init` and `map::init`.
+        self.init_vector();
     }
 
     // --- shadow roots ------------------------------------------------------

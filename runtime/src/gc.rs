@@ -352,8 +352,10 @@ impl Gc {
 
     // --- allocation ------------------------------------------------------
 
-    /// Allocate an object. Slots (or the string's hash word) are zeroed, so a
-    /// half-initialised object is always safe to trace.
+    /// Allocate an object. Value slots are initialised to `nil`, so a
+    /// half-built object is both safe to trace and semantically sane -- an
+    /// unset trie slot reads as `nil`, not as the double `0.0`, which is what
+    /// zero bits would have meant.
     pub fn alloc(&mut self, roots: &mut Roots, ty: u8, len_: u32) -> u32 {
         let size = size_for(ty, len_);
         self.stats.bytes_allocated += size as u64;
@@ -395,7 +397,12 @@ impl Gc {
     #[inline]
     fn zero_body(&self, a: u32, ty: u8, len_: u32) {
         match layout_of(ty) {
-            Layout::Vals => self.sp.zero(a + HDR, len_ * 8),
+            Layout::Vals => {
+                let dst = self.sp.bytes_mut(a + HDR, len_ * 8);
+                for c in dst.chunks_exact_mut(8) {
+                    c.copy_from_slice(&Value::NIL_.0.to_le_bytes());
+                }
+            }
             Layout::Str => self.sp.write_u32(a + HDR, 0),
             Layout::Raw => {}
         }
@@ -772,9 +779,10 @@ mod tests {
         assert_eq!(b - a, HDR + 4 * 8);
         assert_eq!(ty(&h.gc.sp, a), TY_CONS);
         assert_eq!(len(&h.gc.sp, a), 4);
-        // Slots are zeroed, so a half-built object is safe to trace.
+        // Slots start as nil, so a half-built object is both safe to trace and
+        // reads sanely: an unset slot is `nil`, not the double 0.0.
         for i in 0..4 {
-            assert_eq!(slot(&h.gc.sp, a, i), Value(0));
+            assert_eq!(slot(&h.gc.sp, a, i), Value::NIL_);
             assert!(!slot(&h.gc.sp, a, i).is_heap());
         }
     }
