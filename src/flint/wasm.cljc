@@ -222,10 +222,13 @@
     [m base]))
 
 (defn append-data
-  "Append an active data segment writing `bytes` at linear-memory address `addr`.
-  Grows the memory minimum to cover it."
-  [m addr ^bytes data]
-  (let [[n body] (count-and-body m 11)
+  "Append an active data segment writing `data` at linear-memory address `addr`.
+  Grows the memory minimum to cover it. `data` may be a byte array or a seq of
+  byte values -- the image writer produces the latter, because it has to run on
+  flint where there are no host arrays."
+  [m addr data]
+  (let [^bytes data (if (bytes? data) data (->bytes data))
+        [n body] (count-and-body m 11)
         seg (->bytes [0x00 0x41 (sleb addr) 0x0b (uleb (alength data)) data])
         m (put-section m 11 (->bytes [(uleb (inc n)) body seg]))
         m (if-let [{:keys [^bytes payload]} (section m 12)]

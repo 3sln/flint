@@ -140,7 +140,14 @@ pub struct Frame {
     pub fp: usize,
     pub ip: u32,
     pub end: u32,
-    pub closure: Value,
+    /// Stack slot holding the callee. `stack[ret_to]` IS this frame's closure
+    /// until the frame returns, and the return value overwrites it.
+    ///
+    /// The frame deliberately does **not** cache the closure. It used to, and
+    /// that copy was a root the collector could not see: after a collection
+    /// moved the closure, `UPVAL` and `SELF` read a stale address. Deriving it
+    /// from the stack keeps the invariant the whole GC design rests on -- every
+    /// live reference is in the value stack -- true with no second mechanism.
     pub ret_to: usize,
     pub handlers: usize,
 }
@@ -301,7 +308,12 @@ impl Rt {
                 return self.apply_keyword(callee_at, argc);
             }
             self.roots.stack_top = callee_at;
-            return self.throw_str("ClassCastException", "value is not a function");
+            let w = self.where_am_i();
+            let msg = alloc::format!(
+                "value is not a function ({:?}, {argc} args) in {w}",
+                callee
+            );
+            return self.throw_str("ClassCastException", &msg);
         }
         match ty(&self.gc.sp, callee.as_heap()) {
             TY_NATIVEFN => {
@@ -357,8 +369,15 @@ impl Rt {
                 r
             }
             _ => {
+                // Say WHAT was called: "value is not a function" with no subject
+                // is the least useful message in the runtime.
+                let t = ty(&self.gc.sp, callee.as_heap());
                 self.roots.stack_top = callee_at;
-                self.throw_str("ClassCastException", "value is not a function")
+                let w = self.where_am_i();
+                let msg = alloc::format!(
+                    "value is not a function (object type {t}, {argc} args) in {w}"
+                );
+                self.throw_str("ClassCastException", &msg)
             }
         }
     }
@@ -397,8 +416,14 @@ impl Rt {
                     a.argc as usize,
                 ),
                 None => {
+                    let namec = def.name as usize;
+                    let name = self.roots.consts.get(namec).copied().unwrap_or(NIL);
                     self.roots.stack_top = callee_at;
-                    self.throw_str("ArityException", "wrong number of arguments");
+                    let mut b = crate::rt::sbuf();
+                    let n: alloc::string::String =
+                        self.as_str(name, &mut b).unwrap_or("fn").into();
+                    let msg = alloc::format!("wrong number of arguments ({argc}) to {n}");
+                    self.throw_str("ArityException", &msg);
                     return false;
                 }
             }
@@ -435,14 +460,8 @@ impl Rt {
             self.roots.stack[fp + i] = NIL;
         }
         self.roots.stack_top = fp + nlocals;
-        self.frames.push(Frame {
-            fp,
-            ip: code,
-            end,
-            closure,
-            ret_to: callee_at,
-            handlers: self.handlers.len(),
-        });
+        debug_assert_eq!(self.roots.stack[callee_at], closure, "stack[ret_to] must be the callee");
+        self.frames.push(Frame { fp, ip: code, end, ret_to: callee_at, handlers: self.handlers.len() });
         true
     }
 
@@ -456,6 +475,18 @@ impl Rt {
                 let f = self.frames.last().unwrap();
                 (f.ip, f.fp)
             };
+            if self.step_limit != 0 {
+                self.steps += 1;
+                if self.steps > self.step_limit {
+                    self.steps = 0;
+                    let t = self.frame_trace();
+                    self.throw_str("StepLimitExceeded", &t);
+                    if !self.unwind() {
+                        return NIL;
+                    }
+                    continue;
+                }
+            }
             let opcode = self.u8_at(ip);
             ip += 1;
 
@@ -506,13 +537,13 @@ impl Rt {
                     self.roots.stack[fp + i] = v;
                 }
                 op::SELF => {
-                    let c = self.frames.last().unwrap().closure;
+                    let c = self.cur_closure();
                     self.vpush(c);
                 }
                 op::UPVAL => {
                     let i = self.u8_at(ip) as u32;
                     ip += 1;
-                    let c = self.frames.last().unwrap().closure;
+                    let c = self.cur_closure();
                     let v = self.slot(c, 1 + i);
                     self.vpush(v);
                 }
@@ -839,6 +870,65 @@ impl Rt {
             }
             commit!();
         }
+    }
+
+    /// Names of the active frames, innermost first. Costs nothing until asked
+    /// for, and turns "it hangs" into "it hangs in read-form".
+    /// This frame's closure, read from the stack rather than cached.
+    #[inline]
+    fn cur_closure(&self) -> Value {
+        self.roots.stack[self.frames.last().unwrap().ret_to]
+    }
+
+    fn frame_closure(&self, i: usize) -> Value {
+        self.roots.stack[self.frames[i].ret_to]
+    }
+
+    /// Just the frame names, for attaching to a runtime error.
+    pub fn where_am_i(&mut self) -> alloc::string::String {
+        let mut out = alloc::string::String::new();
+        let n = self.frames.len();
+        for i in (0..n).rev().take(12) {
+            let fnidx = {
+                let c = self.frame_closure(i);
+                if c.is_heap() { self.slot(c, 0).as_fixnum() as usize } else { usize::MAX }
+            };
+            let name = if fnidx < self.image.fns.len() {
+                let namec = self.image.fns[fnidx].name as usize;
+                let v = self.roots.consts.get(namec).copied().unwrap_or(NIL);
+                let mut b = crate::rt::sbuf();
+                let s: alloc::string::String = self.as_str(v, &mut b).unwrap_or("?").into();
+                s
+            } else { "?".into() };
+            if !out.is_empty() { out.push_str(" <- "); }
+            out.push_str(&name);
+        }
+        out
+    }
+
+    pub fn frame_trace(&mut self) -> alloc::string::String {
+        let mut out = alloc::string::String::new();
+        let n = self.frames.len();
+        for i in (0..n).rev().take(24) {
+            let fnidx = {
+                let c = self.frame_closure(i);
+                if c.is_heap() { self.slot(c, 0).as_fixnum() as usize } else { usize::MAX }
+            };
+            let name = if fnidx < self.image.fns.len() {
+                let namec = self.image.fns[fnidx].name as usize;
+                let v = self.roots.consts.get(namec).copied().unwrap_or(NIL);
+                let mut b = crate::rt::sbuf();
+                let s: alloc::string::String = self.as_str(v, &mut b).unwrap_or("?").into();
+                s
+            } else {
+                "?".into()
+            };
+            if !out.is_empty() {
+                out.push_str(" <- ");
+            }
+            out.push_str(&name);
+        }
+        alloc::format!("step limit exceeded; frames ({}): {}", n, out)
     }
 
     fn oom_unwind(&mut self) {

@@ -4,9 +4,10 @@
 
   The format is described in `runtime/src/image.rs`; this namespace and that one
   are the two halves of it, and `test/image_roundtrip.clj` pins them together."
-  (:require [flint.wasm :as w]))
+  (:require [flint.rt]
+            [flint.canon :as canon]))
 
-(def MAGIC (mapv int "FLINTIMG"))
+(def MAGIC [70 76 73 78 84 73 77 71])                        ; "FLINTIMG"
 (def VERSION 1)
 
 (def K-NIL 0) (def K-TRUE 1) (def K-FALSE 2) (def K-INT 3) (def K-DOUBLE 4)
@@ -25,16 +26,11 @@
     [(bit-and n 0xff) (bit-and (bit-shift-right n 8) 0xff)]))
 
 (defn i64->bytes [n]
-  (let [n (long n)]
-    (mapv #(bit-and (unsigned-bit-shift-right n (* 8 %)) 0xff) (range 8))))
+  (mapv (fn [i] (bit-and (unsigned-bit-shift-right n (* 8 i)) 0xff)) (range 8)))
 
-(defn f64->bytes [d]
-  (i64->bytes #?(:clj (Double/doubleToRawLongBits (double d))
-                 :cljs (throw (ex-info "no f64 bits" {})))))
+(defn f64->bytes [d] (i64->bytes (flint.rt/double-bits (+ 0.0 d))))
 
-(defn utf8 [^String s]
-  #?(:clj (vec (map #(bit-and (int %) 0xff) (.getBytes s "UTF-8")))
-     :cljs (throw (ex-info "no utf8" {}))))
+(defn utf8 [s] (flint.rt/str-bytes s))
 
 ;; ---------------------------------------------------------------- constants
 ;;
@@ -71,8 +67,9 @@
                       nmc (const b (name v))]
                   (intern-const b [:symbol nsc nmc]))
     (vector? v) (intern-const b (into [:vector] (mapv #(const b %) v)))
-    (set? v) (intern-const b (into [:set] (mapv #(const b %) v)))
-    (map? v) (intern-const b (into [:map] (mapcat (fn [[k x]] [(const b k) (const b x)]) v)))
+    (set? v) (intern-const b (into [:set] (mapv #(const b %) (canon/sorted-elements v))))
+    (map? v) (intern-const b (into [:map] (mapcat (fn [e] [(const b (first e)) (const b (second e))])
+                                                 (canon/sorted-entries v))))
     (seq? v) (intern-const b (into [:list] (mapv #(const b %) v)))
     :else (throw (ex-info "not a constant" {:v v :type (type v)}))))
 
@@ -151,12 +148,26 @@
 
 ;; ------------------------------------------------------------------ output
 
+(defn flatten-bytes
+  "Flatten a nested structure of byte values into one vector. The image writer
+  has to run on flint, so this cannot reach for a host ByteArrayOutputStream."
+  [x]
+  (let [out (volatile! [])]
+    ((fn walk [v]
+       (cond
+         (nil? v) nil
+         (number? v) (vswap! out conj (bit-and v 0xff))
+         (sequential? v) (doseq [e v] (walk e))
+         :else (throw (ex-info "not byte-able" {:v v}))))
+     x)
+    @out))
+
 (defn emit
   "Serialise the image. `native-slots` maps builtin name -> wasm table slot;
   unresolved names get slot 0, which traps if ever called."
   [b native-slots]
   (let [{:keys [consts fns vars natives code entry init]} @b]
-    (w/->bytes
+    (flatten-bytes
      [MAGIC (u32 VERSION)
       ;; Natives first, and fixed width: `patch-native-slots` can rewrite them at
       ;; a known offset, so a flint-hosted compiler can emit an image before

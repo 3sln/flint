@@ -10,7 +10,8 @@
   It also means the bootstrap needs no second compiler. `doc/decisions` warned
   that a seed pass in Rust would be the implementation that drifts; this is how
   we avoid needing one."
-  (:require [flint.hostfns :as hostfns]))
+  (:require [flint.hostfns :as hostfns]
+            [flint.rt]))
 
 (def ^:private RECUR ::recur)
 
@@ -31,15 +32,20 @@
                       (throw (ex-info "wrong number of arguments to a macro function"
                                       {:given n :type :compile})))
             slots (:slots arity)
-            locals (object-array (max 8 (inc (apply max 0 slots)) (:max-locals arity 0)))
-            fixed (:argc arity)]
-        (dotimes [i fixed] (aset locals (nth slots i) (nth (vec args) i)))
+            size (max 8 (inc (reduce max 0 slots)) (or (:max-locals arity) 0))
+            ;; A volatile holding a vector, not a host array: the evaluator has
+            ;; to run on flint too, where there are no Java arrays.
+            locals (volatile! (vec (repeat size nil)))
+            fixed (:argc arity)
+            argv (vec args)]
+        (dotimes [i fixed] (vswap! locals assoc (nth slots i) (nth argv i)))
         (when (:variadic? arity)
-          (aset locals (nth slots fixed) (seq (drop fixed args))))
+          (vswap! locals assoc (nth slots fixed) (seq (drop fixed args))))
         (loop []
           (let [r (ev ctx locals upvals-vals (:body arity))]
             (if (and (map? r) (= RECUR (:flint.eval/tag r)))
-              (do (doseq [[s v] (map vector (:slots r) (:vals r))] (aset locals s v))
+              (do (doseq [pair (map vector (:slots r) (:vals r))]
+                    (vswap! locals assoc (first pair) (second pair)))
                   (recur))
               r)))))]
     (vreset! selfref f)
@@ -50,7 +56,7 @@
   [ctx locals upvals node]
   (case (:op node)
     :const (:val node)
-    :local (aget ^objects locals (:idx node))
+    :local (nth @locals (:idx node))
     :upval (nth upvals (:idx node))
     :self @(:self-ref ctx)
     :var (let [v (get @(:vars ctx) (:sym node) ::missing)]
@@ -66,22 +72,22 @@
           (ev ctx locals upvals (:then node))
           (ev ctx locals upvals (:else node)))
     :do (ev-body ctx locals upvals (:body node))
-    :let (do (doseq [{:keys [idx init]} (:bindings node)]
-               (aset ^objects locals idx (ev ctx locals upvals init)))
+    :let (do (doseq [b (:bindings node)]
+               (vswap! locals assoc (:idx b) (ev ctx locals upvals (:init b))))
              (ev ctx locals upvals (:body node)))
-    :loop (do (doseq [{:keys [idx init]} (:bindings node)]
-                (aset ^objects locals idx (ev ctx locals upvals init)))
+    :loop (do (doseq [b (:bindings node)]
+                (vswap! locals assoc (:idx b) (ev ctx locals upvals (:init b))))
               (loop []
                 (let [r (ev ctx locals upvals (:body node))]
                   (if (and (map? r) (= RECUR (:flint.eval/tag r)) (= (:id r) (:id node)))
-                    (do (doseq [[s v] (map vector (:slots r) (:vals r))]
-                          (aset ^objects locals s v))
+                    (do (doseq [pair (map vector (:slots r) (:vals r))]
+                          (vswap! locals assoc (first pair) (second pair)))
                         (recur))
                     r))))
     :recur {:flint.eval/tag RECUR :id (:id node) :slots (:slots node)
             :vals (mapv #(ev ctx locals upvals %) (:args node))}
     :fn (let [captured (mapv (fn [u] (case (:kind u)
-                                       :local (aget ^objects locals (:idx u))
+                                       :local (nth @locals (:idx u))
                                        :upval (nth upvals (:idx u))
                                        :self @(:self-ref ctx)))
                              (:upvals node))]
@@ -93,15 +99,12 @@
     :native (let [f (hostfns/lookup (:name node))
                   args (mapv #(ev ctx locals upvals %) (:args node))]
               (apply f args))
-    :throw (throw (let [v (ev ctx locals upvals (:expr node))]
-                    (if (instance? Throwable v)
-                      v
-                      (ex-info "thrown" {:value v}))))
+    :throw (throw (ev ctx locals upvals (:expr node)))
     :try (try
            (ev ctx locals upvals (:body node))
-           (catch Exception e
+           (catch Throwable e
              (if-let [c (first (:catches node))]
-               (do (aset ^objects locals (:idx c) e)
+               (do (vswap! locals assoc (:idx c) e)
                    (ev ctx locals upvals (:body c)))
                (throw e)))
            (finally (when (:finally node) (ev ctx locals upvals (:finally node)))))
@@ -114,4 +117,4 @@
 (defn eval-top
   "Evaluate a top-level AST node in `ctx` ({:vars atom})."
   [ctx node]
-  (ev ctx (object-array 64) [] node))
+  (ev ctx (volatile! (vec (repeat 64 nil))) [] node))

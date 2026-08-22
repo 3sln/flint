@@ -712,6 +712,44 @@ impl Rt {
         v
     }
 
+    /// An array-map built from a flat k,v collection, preserving order and not
+    /// promoting whatever its size.
+    pub fn ordered_map(&mut self, kvs: Value) -> Value {
+        let base = self.mark();
+        let s = self.seq(kvs);
+        let si = self.push(s);
+        let mut flat: alloc::vec::Vec<Value> = alloc::vec::Vec::new();
+        while !self.r(si).is_nil() {
+            let x = self.first(self.r(si));
+            flat.push(x);
+            let nx = self.next(self.r(si));
+            self.set_r(si, nx);
+        }
+        if flat.len() % 2 != 0 {
+            self.pop_to(base);
+            return self.throw_str("IllegalArgumentException", "array-map needs an even number of forms");
+        }
+        for v in &flat {
+            self.push(*v);
+        }
+        let vals_at = self.mark() - flat.len();
+        let n = (flat.len() / 2) as u32;
+        let a = self.alloc(TY_ARRAYMAP, crate::map::AM_BASE + 2 * n);
+        if a == 0 {
+            self.pop_to(base);
+            return NIL;
+        }
+        let m = Value::heap(a);
+        self.gc.set_slot(a, crate::map::AM_META, NIL);
+        self.gc.set_slot(a, crate::map::AM_HASH, NIL);
+        for i in 0..(2 * n) as usize {
+            let v = self.r(vals_at + i);
+            self.gc.set_slot(a, crate::map::AM_BASE + i as u32, v);
+        }
+        self.pop_to(base);
+        m
+    }
+
     pub fn new_volatile(&mut self, v: Value) -> Value {
         let base = self.mark();
         let vi = self.push(v);

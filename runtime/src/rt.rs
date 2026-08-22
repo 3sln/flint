@@ -42,6 +42,11 @@ pub struct Rt {
     /// a program never calls; a static table here would keep them all alive.
     #[cfg(not(target_arch = "wasm32"))]
     pub host_natives: alloc::vec::Vec<crate::vm::NativeFn>,
+    /// Optional instruction budget. 0 means unlimited. When it runs out the VM
+    /// throws with a frame trace, which is the only way to see where an
+    /// interpreted infinite loop actually is.
+    pub step_limit: u64,
+    pub steps: u64,
     /// Out-parameter for CHAMP insert/remove: did the entry count change?
     /// A scratch field rather than a tuple return, because every one of those
     /// returns would otherwise have to be threaded through the rooting dance.
@@ -76,6 +81,8 @@ impl Rt {
             handlers: alloc::vec::Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             host_natives: alloc::vec::Vec::new(),
+            step_limit: 0,
+            steps: 0,
             champ_added: false,
         };
         rt.roots.singletons = alloc::vec![NIL; SING_COUNT];

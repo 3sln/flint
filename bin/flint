@@ -16,6 +16,9 @@
         (= k ":o") (recur (drop 2 a) (assoc m :out (second a)))
         (= k "--stats") (recur (rest a) (assoc m :stats true))
         (= k "--keep-names") (recur (rest a) (assoc m :keep-names true))
+        (= k "--explain") (recur (drop 2 a) (assoc m :explain (symbol (second a))))
+        (= k "--disasm") (recur (drop 2 a) (assoc m :disasm (second a)))
+        (= k "--const") (recur (drop 2 a) (assoc m :const (parse-long (second a))))
         :else (do (println "unknown argument:" k) (System/exit 2)))
       m)))
 
@@ -80,7 +83,7 @@
   (let [u (read-string (slurp (io/file units-dir "flint.rt" "unit.edn")))]
     (set (keys (:provides u)))))
 
-(let [{:keys [src fn out stats keep-names]} (parse-args *command-line-args*)]
+(let [{:keys [src fn out stats keep-names explain disasm const]} (parse-args *command-line-args*)]
   (when-not fn
     (println "usage: flint :src <dir> :fn <ns/fn> [:out <file.wasm>]")
     (System/exit 2))
@@ -90,6 +93,32 @@
         order (core-first (topo-order sources))
         out (or out "out.wasm")
         t0 (System/nanoTime)
+        compiled (compiler/compile-image
+                  {:sources sources :order order :entry fn
+                   :builtins (builtin-names (str root "/units"))})
+        _ (when explain
+            (println "explain" explain)
+            (println "  in roots:" (contains? (:roots compiled) explain))
+            (println "  kept:" (boolean (some #{explain} (:kept-syms compiled))))
+            (println "  items with that sym:"
+                     (count (filter #(= explain (:sym %)) (:items compiled))))
+            (doseq [it (filter #(= explain (:sym %)) (:items compiled))]
+              (println "    ns" (:ns it) "kind" (:kind it) "macro?" (:macro? it))))
+        _ (when disasm
+            (require '[flint.disasm :as dis])
+            (let [b (:builder compiled)
+                  st @b]
+              (doseq [[i f] (map-indexed vector (:fns st))
+                      :let [nm (get-in st [:consts (:name f) 1])]
+                      :when (or (= nm disasm) (= (str i) disasm))]
+                (println "fn" i nm)
+                (doseq [a (:arities f)]
+                  (println " arity argc" (:argc a) "variadic" (:variadic? a) "nlocals" (:nlocals a))
+                  (println ((resolve 'flint.disasm/disasm) (:code st) (:off a) (:len a)))))))
+        _ (when const
+            (let [b @(:builder compiled)]
+              (doseq [i (range (max 0 (- const 3)) (min (count (:consts b)) (+ const 4)))]
+                (println "const" i (pr-str (nth (:consts b) i))))))
         {:keys [builder stats*]} (let [r (compiler/compile-image
                                           {:sources sources :order order :entry fn
                                            :builtins (builtin-names (str root "/units"))})]

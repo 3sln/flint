@@ -34,6 +34,7 @@
 (check "deref" (reads "@x") '(clojure.core/deref x))
 (check "var quote" (reads "#'x") '(var x))
 (check "comment skipped" (r/read-all "; hi\n1 ; there\n2") [1 2])
+(check "the eof sentinel cannot be forged from source" (r/read-all "::flint.reader/eof :x") [:flint.reader/eof :x])
 (check "discard" (r/read-all "#_1 2") [2])
 (check "discard in coll" (reads "[1 #_2 3]") [1 3])
 (check "commas are whitespace" (reads "[1,2,3]") [1 2 3])

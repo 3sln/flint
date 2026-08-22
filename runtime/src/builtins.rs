@@ -319,6 +319,16 @@ builtins! {
         if v.is_double() { rt.integer(v.as_f64().to_bits() as i64) }
         else { rt.throw_str("ClassCastException", "not a double") }
     };
+    // Build an insertion-ordered array-map of any size, without promoting to a
+    // hash map. The reader uses this for map literals so that source order
+    // survives -- the compiler's own map literals have side effects in their
+    // values, and two hosts iterating them differently is enough to break the
+    // self-hosting fixpoint.
+    "flint/array-map", flint_b_arraymap, b_arraymap, |rt, a, n| {
+        let _ = n;
+        let kvs = arg(rt, a, 0);
+        rt.ordered_map(kvs)
+    };
     "flint/volatile", flint_b_volatile, b_volatile, |rt, a, n| {
         let _ = n;
         let v = arg(rt, a, 0);

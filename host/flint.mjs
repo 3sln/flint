@@ -16,6 +16,10 @@ export function instantiate(module) {
   const dec = new TextDecoder();
 
   function main(...args) {
+    if (process.env.FLINT_STEP_LIMIT && e.set_step_limit) {
+      const n = Number(process.env.FLINT_STEP_LIMIT);
+      e.set_step_limit(Math.floor(n / 2 ** 32), n >>> 0);
+    }
     for (const a of args) {
       const b = enc.encode(String(a));
       const p = e.arg_alloc(b.length);
@@ -38,7 +42,9 @@ export async function run(path, args) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const [, , path, ...args] = process.argv;
   const r = await run(path, args);
+  // Not process.exit: it does not flush an async pipe write, and output past
+  // the pipe buffer would be lost.
+  process.exitCode = r.code;
   process.stdout.write(r.out);
   if (r.out.length && !r.out.endsWith('\n')) process.stdout.write('\n');
-  process.exit(r.code);
 }

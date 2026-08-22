@@ -19,8 +19,22 @@
 (defn boolean? [x] (flint.rt/boolean? x))
 (defn boolean [x] (if x true false))
 
-(defn = [a b] (flint.rt/= a b))
-(defn not= [a b] (not (flint.rt/= a b)))
+(defn =
+  ([a] true)
+  ([a b] (flint.rt/= a b))
+  ([a b & more] (if (flint.rt/= a b)
+                  (loop [prev b s (flint.rt/seq more)]
+                    (if s
+                      (if (flint.rt/= prev (flint.rt/first s))
+                        (recur (flint.rt/first s) (flint.rt/next s))
+                        false)
+                      true))
+                  false)))
+(defn not=
+  ([a] false)
+  ([a b] (not (flint.rt/= a b)))
+  ([a b & more] (not (apply2 = (cons a (cons b more))))))
+(defn distinct? ([a] true) ([a b] (not (flint.rt/= a b))))
 (defn identical? [a b] (flint.rt/identical? a b))
 (defn hash [x] (flint.rt/hash x))
 (defn compare [a b] (flint.rt/compare a b))
@@ -37,6 +51,7 @@
 (defn map? [x] (flint.rt/map? x))
 (defn set? [x] (flint.rt/set? x))
 (defn seq? [x] (flint.rt/seq? x))
+(defn list? [x] (flint.rt/seq? x))
 (defn fn? [x] (flint.rt/fn? x))
 (defn ifn? [x] (if (flint.rt/fn? x) true (if (flint.rt/keyword? x) true
                                             (if (flint.rt/map? x) true
@@ -67,6 +82,11 @@
 (defn namespace [x] (flint.rt/namespace x))
 (defn meta [x] (flint.rt/meta x))
 (defn with-meta [x m] (flint.rt/with-meta x m))
+(defn vary-meta
+  ([x f] (flint.rt/with-meta x (f (flint.rt/meta x))))
+  ([x f a] (flint.rt/with-meta x (f (flint.rt/meta x) a)))
+  ([x f a b] (flint.rt/with-meta x (f (flint.rt/meta x) a b)))
+  ([x f a b c] (flint.rt/with-meta x (f (flint.rt/meta x) a b c))))
 (defn atom [x] (flint.rt/atom x))
 (defn deref [x] (flint.rt/deref x))
 (defn reset! [a v] (flint.rt/reset! a v))
@@ -274,11 +294,11 @@
       (if s (if (f prev (first s)) (recur (first s) (next s)) false) true))
     false))
 
-(defn < ([a b] (flint.rt/lt a b)) ([a b & more] (cmp-chain flint.rt/lt a b more)))
-(defn <= ([a b] (flint.rt/le a b)) ([a b & more] (cmp-chain flint.rt/le a b more)))
-(defn > ([a b] (flint.rt/gt a b)) ([a b & more] (cmp-chain flint.rt/gt a b more)))
-(defn >= ([a b] (flint.rt/ge a b)) ([a b & more] (cmp-chain flint.rt/ge a b more)))
-(defn == ([a b] (flint.rt/num-eq a b)) ([a b & more] (cmp-chain flint.rt/num-eq a b more)))
+(defn < ([a] true) ([a b] (flint.rt/lt a b)) ([a b & more] (cmp-chain flint.rt/lt a b more)))
+(defn <= ([a] true) ([a b] (flint.rt/le a b)) ([a b & more] (cmp-chain flint.rt/le a b more)))
+(defn > ([a] true) ([a b] (flint.rt/gt a b)) ([a b & more] (cmp-chain flint.rt/gt a b more)))
+(defn >= ([a] true) ([a b] (flint.rt/ge a b)) ([a b & more] (cmp-chain flint.rt/ge a b more)))
+(defn == ([a] true) ([a b] (flint.rt/num-eq a b)) ([a b & more] (cmp-chain flint.rt/num-eq a b more)))
 
 (defn min ([a] a) ([a b] (if (flint.rt/lt a b) a b))
   ([a b & more] (reduce min (min a b) more)))
@@ -370,8 +390,66 @@
                            (interleave2 (repeat2 (count forms) nm) forms)))
         nm))
 
+(defmacro cond-> [expr & clauses]
+  (let [g (gensym "ct")
+        pairs (partition 2 clauses)]
+    (list 'clojure.core/let
+          (vec (concat [g expr]
+                       (mapcat (fn [p]
+                                 (let [test (first p) step (second p)]
+                                   [g (list 'if test
+                                            (if (seq? step)
+                                              (cons (first step) (cons g (rest step)))
+                                              (list step g))
+                                            g)]))
+                               pairs)))
+          g)))
+
+(defmacro cond->> [expr & clauses]
+  (let [g (gensym "ct")
+        pairs (partition 2 clauses)]
+    (list 'clojure.core/let
+          (vec (concat [g expr]
+                       (mapcat (fn [p]
+                                 (let [test (first p) step (second p)]
+                                   [g (list 'if test
+                                            (if (seq? step) (concat step (list g)) (list step g))
+                                            g)]))
+                               pairs)))
+          g)))
+
+(defmacro some->> [expr & forms]
+  (let [g (gensym "st")]
+    (list 'clojure.core/let [g expr]
+          (loop [acc g fs forms]
+            (if fs
+              (let [form (first fs)
+                    step (if (seq? form) (concat form (list acc)) (list form acc))]
+                (recur (list 'if (list 'clojure.core/nil? acc) nil step) (next fs)))
+              acc)))))
+
+(defmacro letfn
+  "Mutually recursive local functions. flint closures capture by value, so each
+  name is bound to a stub that dispatches through a volatile; the real functions
+  are installed afterwards. That indirection is the price of by-value capture,
+  and by-value capture is what keeps dead closure slots from retaining objects."
+  [fnspecs & body]
+  (let [names (map first fnspecs)
+        boxes (map (fn [n] (gensym (str (name n) "-box"))) names)
+        argsym (gensym "letfn-args")
+        box-binds (mapcat (fn [b] [b (list 'clojure.core/volatile! nil)]) boxes)
+        stub-binds (mapcat (fn [n b]
+                             [n (list 'clojure.core/fn ['& argsym]
+                                      (list 'clojure.core/apply (list 'clojure.core/deref b) argsym))])
+                           names boxes)
+        sets (map (fn [spec b]
+                    (list 'clojure.core/vreset! b (cons 'clojure.core/fn (rest spec))))
+                  fnspecs boxes)]
+    (list 'clojure.core/let (vec (concat box-binds stub-binds))
+          (cons 'do (concat sets body)))))
+
 (defmacro some-> [expr & forms]
-  (let [g 'some__g]
+  (let [g (gensym "some")]
     (list 'let* [g expr]
           (loop [acc g fs forms]
             (if fs
@@ -383,9 +461,11 @@
 (defmacro if-let
   ([bindings then] (list 'clojure.core/if-let bindings then nil))
   ([bindings then else]
-   (let [b (first bindings) v (second bindings) g 'iflet__g]
+   (let [b (first bindings) v (second bindings) g (gensym "iflet")]
+     ;; `clojure.core/let`, not `let*`: the binding form may be a destructuring
+     ;; pattern, and only the macro layer knows how to take one apart.
      (list 'let* [g v]
-           (list 'if g (list 'let* [b g] then) else)))))
+           (list 'if g (list 'clojure.core/let [b g] then) else)))))
 
 (defmacro when-let [bindings & body]
   (list 'clojure.core/if-let bindings (cons 'do body) nil))
@@ -393,26 +473,39 @@
 (defmacro if-some
   ([bindings then] (list 'clojure.core/if-some bindings then nil))
   ([bindings then else]
-   (let [b (first bindings) v (second bindings) g 'ifsome__g]
+   (let [b (first bindings) v (second bindings) g (gensym "ifsome")]
      (list 'let* [g v]
-           (list 'if (list 'clojure.core/nil? g) else (list 'let* [b g] then))))))
+           (list 'if (list 'clojure.core/nil? g) else (list 'clojure.core/let [b g] then))))))
 
 (defmacro when-some [bindings & body]
   (list 'clojure.core/if-some bindings (cons 'do body) nil))
 
 (defmacro when-first [bindings & body]
-  (let [b (first bindings) v (second bindings)]
-    (list 'clojure.core/when-let ['when__s (list 'clojure.core/seq v)]
-          (list 'let* [b (list 'clojure.core/first 'when__s)] (cons 'do body)))))
+  (let [b (first bindings) v (second bindings) g (gensym "wf")]
+    (list 'clojure.core/when-let [g (list 'clojure.core/seq v)]
+          (list 'clojure.core/let [b (list 'clojure.core/first g)] (cons 'do body)))))
 
 (defmacro doto [x & forms]
-  (list 'let* ['doto__g x]
-        (cons 'do (map2 (fn [f]
-                          (if (seq? f)
-                            (cons (first f) (cons 'doto__g (rest f)))
-                            (list f 'doto__g)))
-                        forms))
-        'doto__g))
+  (let [g (gensym "doto")]
+    (list 'let* [g x]
+          (cons 'do (map2 (fn [f]
+                            (if (seq? f)
+                              (cons (first f) (cons g (rest f)))
+                              (list f g)))
+                          forms))
+          g)))
+
+(defmacro condp [pred expr & clauses]
+  (let [g (gensym "condp")]
+    (list 'clojure.core/let [g expr]
+          (loop [cs (reverse (partition-all 2 clauses)) acc nil]
+            (if (nil? (seq cs))
+              acc
+              (let [c (first cs)]
+                (if (= 1 (count c))
+                  (recur (next cs) (first c))
+                  (recur (next cs)
+                         (list 'if (list pred (first c) g) (second c) acc)))))))))
 
 (defmacro case [e & clauses]
   ;; flint has no jump-table opcode yet; `case` is a chain of `=` tests. Keys
@@ -439,10 +532,10 @@
         (recur (next ps) (list 'if cnd result acc))))))
 
 (defmacro dotimes [bindings & body]
-  (let [i (first bindings) n (second bindings)]
-    (list 'let* ['dotimes__n n]
+  (let [i (first bindings) n (second bindings) g (gensym "n")]
+    (list 'let* [g n]
           (list 'loop* [i 0]
-                (list 'if (list 'clojure.core/< i 'dotimes__n)
+                (list 'if (list 'clojure.core/< i g)
                       (cons 'do (concat body (list (list 'recur (list 'clojure.core/inc i)))))
                       nil)))))
 
@@ -461,23 +554,38 @@
 
 (defmacro time [expr] expr)
 
+(defn- seq-binding-form [pairs inner leaf]
+  ;; Shared shape for `doseq` and `for`: fold the binding pairs right to left,
+  ;; so later bindings nest inside earlier ones and :let/:when/:while apply from
+  ;; the point they appear, as in Clojure.
+  (reduce (fn [acc pair]
+            (let [b (first pair) v (second pair)]
+              (cond
+                (= b :let) (list 'clojure.core/let v acc)
+                (= b :when) (list 'if v acc nil)
+                (= b :while) (list 'if v acc nil)
+                :else (inner b v acc))))
+          leaf
+          (reverse pairs)))
+
 (defmacro doseq [bindings & body]
-  (let [b (first bindings) v (second bindings)]
-    (list 'loop* ['doseq__s (list 'clojure.core/seq v)]
-          (list 'if 'doseq__s
-                (cons 'do
-                      (concat (list (list 'let* [b (list 'clojure.core/first 'doseq__s)]
-                                          (cons 'do body)))
-                              (list (list 'recur (list 'clojure.core/next 'doseq__s)))))
-                nil))))
+  (seq-binding-form
+   (partition 2 bindings)
+   (fn [b v acc]
+     (let [g (gensym "doseq")]
+       (list 'loop* [g (list 'clojure.core/seq v)]
+             (list 'if g
+                   (list 'do
+                         (list 'clojure.core/let [b (list 'clojure.core/first g)] acc)
+                         (list 'recur (list 'clojure.core/next g)))
+                   nil))))
+   (cons 'do body)))
 
 (defmacro for [bindings body]
-  ;; A single binding pair with optional :when/:while, which is what most `for`
-  ;; uses look like. The general nested form is listed as missing in the README.
-  (let [b (first bindings) v (second bindings) opts (apply hash-map (nnext bindings))]
-    (list 'clojure.core/keep2
-          (list 'fn* [b] (if (:when opts) (list 'if (:when opts) body nil) body))
-          v)))
+  (seq-binding-form
+   (partition 2 bindings)
+   (fn [b v acc] (list 'clojure.core/mapcat (list 'clojure.core/fn [b] acc) v))
+   (list 'clojure.core/list body)))
 
 ;; ---------------------------------------------------------- higher order fns
 
@@ -487,6 +595,8 @@
                          (when (and s1 s2)
                            (cons (f (first s1) (first s2))
                                  (map f (rest s1) (rest s2))))))))
+
+(defn mapcat2 [f coll] (apply2 concat (map2 f coll)))
 
 (defn keep2 [f coll]
   (lazy-seq (let [s (seq coll)]
@@ -547,7 +657,9 @@
 (defn interpose [sep coll]
   (drop 1 (mapcat (fn [x] (list sep x)) coll)))
 
-(defn mapcat [f coll] (apply2 concat (map2 f coll)))
+(defn mapcat
+  ([f coll] (apply2 concat (map2 f coll)))
+  ([f c1 c2] (apply2 concat (map f c1 c2))))
 
 (defn every? [pred coll]
   (loop [s (seq coll)] (if s (if (pred (first s)) (recur (next s)) false) true)))
@@ -562,18 +674,25 @@
   ([] identity)
   ([f] f)
   ([f g] (fn [& args] (f (apply2 g args))))
-  ([f g h] (fn [& args] (f (g (apply2 h args))))))
+  ([f g h] (fn [& args] (f (g (apply2 h args)))))
+  ([f g h & more] (reduce (fn [a b] (comp a b)) (comp f g h) more)))
 
 (defn partial
+  ([f] f)
   ([f a] (fn [& args] (apply2 f (cons a args))))
-  ([f a b] (fn [& args] (apply2 f (cons a (cons b args))))))
+  ([f a b] (fn [& args] (apply2 f (cons a (cons b args)))))
+  ([f a b c] (fn [& args] (apply2 f (cons a (cons b (cons c args))))))
+  ([f a b c & more] (fn [& args] (apply2 f (concat (cons a (cons b (cons c more))) args)))))
 
 (defn constantly [x] (fn [& _] x))
 (defn complement [f] (fn [& args] (not (apply2 f args))))
 
 (defn juxt
+  ([f] (fn [& args] [(apply2 f args)]))
   ([f g] (fn [& args] [(apply2 f args) (apply2 g args)]))
-  ([f g h] (fn [& args] [(apply2 f args) (apply2 g args) (apply2 h args)])))
+  ([f g h] (fn [& args] [(apply2 f args) (apply2 g args) (apply2 h args)]))
+  ([f g h & more] (let [fs (cons f (cons g (cons h more)))]
+                    (fn [& args] (mapv (fn [x] (apply2 x args)) fs)))))
 
 (defn swap!
   ([a f] (reset! a (f (deref a))))
@@ -601,15 +720,30 @@
 (defn update
   ([m k f] (assoc m k (f (get m k))))
   ([m k f a] (assoc m k (f (get m k) a)))
-  ([m k f a b] (assoc m k (f (get m k) a b))))
+  ([m k f a b] (assoc m k (f (get m k) a b)))
+  ([m k f a b & more] (assoc m k (apply2 f (cons (get m k) (cons a (cons b more)))))))
 
-(defn get-in [m ks] (reduce (fn [acc k] (if (nil? acc) nil (get acc k))) m ks))
+(defn get-in
+  ([m ks] (reduce (fn [acc k] (if (nil? acc) nil (get acc k))) m ks))
+  ([m ks not-found]
+   (loop [acc m s (seq ks)]
+     (if s
+       (if (and (associative? acc) (contains? acc (first s)))
+         (recur (get acc (first s)) (next s))
+         (if (and (set? acc) (contains? acc (first s)))
+           (recur (get acc (first s)) (next s))
+           not-found))
+       acc))))
 (defn assoc-in [m ks v]
   (let [k (first ks)]
     (if (next ks)
       (assoc m k (assoc-in (get m k) (next ks) v))
       (assoc m k v))))
-(defn update-in [m ks f] (assoc-in m ks (f (get-in m ks))))
+(defn update-in
+  ([m ks f] (assoc-in m ks (f (get-in m ks))))
+  ([m ks f a] (assoc-in m ks (f (get-in m ks) a)))
+  ([m ks f a b] (assoc-in m ks (f (get-in m ks) a b)))
+  ([m ks f a b & more] (assoc-in m ks (apply2 f (cons (get-in m ks) (cons a (cons b more)))))))
 
 (defn frequencies [coll]
   (persistent! (reduce (fn [m x] (assoc! m x (inc (get m x 0)))) (transient {}) coll)))
@@ -684,7 +818,147 @@
   (loop [m {} ks (seq ks) vs (seq vs)]
     (if (and ks vs) (recur (assoc m (first ks) (first vs)) (next ks) (next vs)) m)))
 
+(defn mapv
+  ([f coll] (persistent! (reduce (fn [acc x] (conj! acc (f x))) (transient []) coll)))
+  ([f c1 c2] (vec (map f c1 c2))))
+(defn filterv [pred coll]
+  (persistent! (reduce (fn [acc x] (if (pred x) (conj! acc x) acc)) (transient []) coll)))
+
+(defn map-indexed [f coll]
+  (loop [acc [] i 0 s (seq coll)]
+    (if s (recur (conj acc (f i (first s))) (inc i) (next s)) (seq acc))))
+
+(defn keep-indexed [f coll]
+  (loop [acc [] i 0 s (seq coll)]
+    (if s
+      (let [v (f i (first s))]
+        (recur (if (nil? v) acc (conj acc v)) (inc i) (next s)))
+      (seq acc))))
+
+(defn reduce-kv [f init m]
+  (reduce (fn [acc e] (f acc (key e) (val e))) init m))
+
+(defn fnil
+  ([f d] (fn [x & args] (apply2 f (cons (if (nil? x) d x) args))))
+  ([f d1 d2] (fn [x y & args] (apply2 f (cons (if (nil? x) d1 x)
+                                              (cons (if (nil? y) d2 y) args))))))
+
+(defn run! [f coll] (reduce (fn [_ x] (f x) nil) nil coll) nil)
+(defn doall [coll] (do (count coll) coll))
+(defn dorun [coll] (do (count coll) nil))
+(defn sequence [coll] (seq coll))
+
+(defn list*
+  ([args] (seq args))
+  ([a args] (cons a (seq args)))
+  ([a b args] (cons a (cons b (seq args))))
+  ([a b c args] (cons a (cons b (cons c (seq args))))))
+
+(defn not-empty [coll] (if (seq coll) coll nil))
+(defn find [m k] (if (contains? m k) [k (get m k)] nil))
+
+(defn split-at [n coll] [(vec (take n coll)) (drop n coll)])
+(defn split-with [pred coll] [(vec (take-while pred coll)) (drop-while pred coll)])
+
+(defn take-last [n coll] (let [c (count coll)] (drop (max 0 (- c n)) coll)))
+(defn drop-last
+  ([coll] (drop-last 1 coll))
+  ([n coll] (take (max 0 (- (count coll) n)) coll)))
+
+(defn take-nth [n coll]
+  (keep-indexed (fn [i x] (if (zero? (rem i n)) x nil)) coll))
+
+(defn dedupe [coll]
+  (loop [acc [] prev ::none s (seq coll)]
+    (if s
+      (let [x (first s)]
+        (recur (if (= x prev) acc (conj acc x)) x (next s)))
+      (seq acc))))
+
+(defn partition-by [f coll]
+  (loop [acc [] cur [] k ::none s (seq coll)]
+    (if s
+      (let [x (first s) nk (f x)]
+        (if (or (= k ::none) (= nk k))
+          (recur acc (conj cur x) nk (next s))
+          (recur (conj acc (seq cur)) [x] nk (next s))))
+      (seq (if (empty? cur) acc (conj acc (seq cur)))))))
+
+(defn flatten [x]
+  (filter (fn [e] (not (sequential? e)))
+          (rest (tree-seq sequential? seq x))))
+
+(defn tree-seq [branch? children root]
+  (let [walk (fn walk [node]
+               (lazy-seq
+                (cons node (when (branch? node) (mapcat walk (children node))))))]
+    (walk root)))
+
+(defn max-key
+  ([k x] x)
+  ([k x y] (if (> (k x) (k y)) x y))
+  ([k x y & more] (reduce (fn [a b] (if (> (k a) (k b)) a b)) (max-key k x y) more)))
+(defn min-key
+  ([k x] x)
+  ([k x y] (if (< (k x) (k y)) x y))
+  ([k x y & more] (reduce (fn [a b] (if (< (k a) (k b)) a b)) (min-key k x y) more)))
+
+(defn merge-with [f & maps]
+  (reduce (fn [a b]
+            (if (nil? b)
+              a
+              (reduce (fn [m e]
+                        (let [k (key e) v (val e)]
+                          (if (contains? m k) (assoc m k (f (get m k) v)) (assoc m k v))))
+                      a b)))
+          (first maps) (rest maps)))
+
+(defn update-vals [m f] (reduce-kv (fn [acc k v] (assoc acc k (f v))) {} m))
+(defn update-keys [m f] (reduce-kv (fn [acc k v] (assoc acc (f k) v)) {} m))
+
+(defn array-map [& kvs] (apply2 hash-map kvs))
+
+(defn memoize [f]
+  (let [cache (atom {})]
+    (fn [& args]
+      (let [k (vec args)]
+        (if (contains? @cache k)
+          (get @cache k)
+          (let [v (apply2 f args)]
+            (reset! cache (assoc @cache k v))
+            v))))))
+
+(defn trampoline
+  ([f] (loop [r (f)] (if (fn? r) (recur (r)) r)))
+  ([f & args] (trampoline (fn [] (apply2 f args)))))
+
+(defn cycle [coll] (lazy-seq (concat coll (cycle coll))))
+
+(defn every-pred
+  ([p] (fn [& args] (every? (fn [x] (p x)) args)))
+  ([p q] (fn [& args] (and (every? (fn [x] (p x)) args) (every? (fn [x] (q x)) args)))))
+(defn some-fn
+  ([p] (fn [& args] (some (fn [x] (p x)) args)))
+  ([p q] (fn [& args] (or (some (fn [x] (p x)) args) (some (fn [x] (q x)) args)))))
+
 (defn count-matching [pred coll] (reduce (fn [n x] (if (pred x) (inc n) n)) 0 coll))
+
+(defn ratio? [x] false)
+(defn bigdec? [x] false)
+(defn decimal? [x] false)
+(defn rational? [x] (int? x))
+(defn nat-int? [x] (and (int? x) (>= x 0)))
+(defn pos-int? [x] (and (int? x) (> x 0)))
+(defn neg-int? [x] (and (int? x) (< x 0)))
+(defn indexed? [x] (vector? x))
+(defn counted? [x] (or (vector? x) (map? x) (set? x) (string? x)))
+(defn seqable? [x] (or (nil? x) (coll? x) (string? x)))
+
+(defn type [x]
+  (cond (nil? x) nil (string? x) :string (keyword? x) :keyword (symbol? x) :symbol
+        (int? x) :int (float? x) :double (boolean? x) :boolean
+        (vector? x) :vector (map? x) :map (set? x) :set (seq? x) :seq (fn? x) :fn
+        :else :unknown))
 
 (defn nil-or [x d] (if (nil? x) d x))
 

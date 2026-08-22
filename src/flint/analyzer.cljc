@@ -14,6 +14,7 @@
   needs boxing -- and a captured value that is never re-read cannot keep an
   object alive, which matters given the collector."
   (:require [clojure.string :as str]
+            [flint.canon :as canon]
             [flint.macros :as macros]))
 
 (def specials
@@ -174,8 +175,10 @@
                   (const-node ())
                   (analyze-seq env form))
     (vector? form) {:op :vector :items (mapv #(analyze env %) form)}
-    (map? form) {:op :map :pairs (mapv (fn [[k v]] [(analyze env k) (analyze env v)]) form)}
-    (set? form) {:op :set :items (mapv #(analyze env %) form)}
+    ;; Source order: the reader preserves it (see `flint.rt/array-map`), and
+    ;; Clojure evaluates map literal values in source order too.
+    (map? form) {:op :map :pairs (mapv (fn [e] [(analyze env (key e)) (analyze env (val e))]) form)}
+    (set? form) {:op :set :items (mapv #(analyze env %) (canon/sorted-elements form))}
     (and (map? form) (:flint/regex form)) (const-node form)
     :else (const-node form)))
 
@@ -237,14 +240,22 @@
 
     fn* (analyze-fn env form)
 
-    def (let [[_ name init] form
-              _ (when-not (symbol? name) (err "def needs a symbol" {:form form}))
-              q (symbol (str (current-ns env)) (clojure.core/name name))
-              has-init? (> (count form) 2)]
+    ;; (def n), (def n init) and (def n "doc" init) are all legal. Taking the
+    ;; third element as the init silently binds the DOCSTRING as the value,
+    ;; which is a bug that shows up a long way from its cause.
+    def (let [nm (second form)
+              _ (when-not (symbol? nm) (err "def needs a symbol" {:form form}))
+              n (count form)
+              _ (when (> n 4) (err "too many arguments to def" {:form form}))
+              q (symbol (str (current-ns env)) (clojure.core/name nm))
+              init-form (when (>= n 3) (nth (vec form) (dec n)))
+              doc (when (= n 4) (nth (vec form) 2))]
+          (when (and (= n 4) (not (string? doc)))
+            (err "the third argument to a 3-argument def must be a docstring" {:form form}))
           (vswap! (:cc env) assoc-in [:declared q] true)
-          {:op :def :sym q :meta (meta name)
-           :init (when has-init?
-                   (analyze (assoc env :current-var q) init))})
+          {:op :def :sym q :meta (merge (meta nm) (when doc {:doc doc}))
+           :init (when (>= n 3)
+                   (analyze (assoc env :current-var q) init-form))})
 
     var (let [q (qualify env (second form))]
           (when-not q (err (str "unable to resolve var: " (second form)) {:form form}))

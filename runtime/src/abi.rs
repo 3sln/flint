@@ -177,6 +177,17 @@ pub extern "C" fn out_len() -> u32 {
     unsafe { (*core::ptr::addr_of!(OUT)).len() as u32 }
 }
 
+/// Set an instruction budget. 0 disables it. Used by the test harness to turn a
+/// hang into a frame trace.
+#[no_mangle]
+pub extern "C" fn set_step_limit(hi: u32, lo: u32) {
+    unsafe {
+        let rt = ensure_rt();
+        rt.step_limit = ((hi as u64) << 32) | lo as u64;
+        rt.steps = 0;
+    }
+}
+
 /// Diagnostics for the benchmarks: bytes the collector has handed out.
 #[no_mangle]
 pub extern "C" fn stat_bytes_allocated() -> u64 {

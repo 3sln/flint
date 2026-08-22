@@ -10,7 +10,8 @@
 
   `destructure` is here because `let`, `fn` and `loop` all need it and it is
   pure form-to-form work."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [flint.canon :as canon]))
 
 (defn- gsym [prefix] (gensym (str prefix "__")))
 
@@ -82,7 +83,10 @@
                         acc bk (if (and (symbol? bk) (contains? defaults bk))
                                  (list 'clojure.core/get gmap bv (get defaults bk))
                                  (list 'clojure.core/get gmap bv)))))]
-    (reduce (fn [acc [bk bv]] (expand-key acc bk bv)) bvec b)))
+    ;; Canonical order, not map order: the sequence of generated bindings fixes
+    ;; local slot numbers, and slot numbers reach the output bytes. Two hosts
+    ;; iterating this map differently is enough to break the fixpoint test.
+    (reduce (fn [acc p] (expand-key acc (first p) (second p))) bvec (canon/sorted-entries b))))
 
 (defn destructure-binding
   "Append bindings for pattern `b` bound to expression `val`."
@@ -165,8 +169,10 @@
             outer (vec (mapcat (fn [g [_ v]] [g v]) gs pairs))
             inner (vec (mapcat (fn [g [b _]] [b g]) gs pairs))]
         (list 'let* outer
-              (list* 'loop* (vec (mapcat (fn [g [_ _]] [g g]) gs pairs))
-                     (list* 'let* (destructure inner) body)))))))
+              ;; `list`, not `list*`: the body here is ONE form, and list* would
+              ;; splice its elements into the loop body.
+              (list 'loop* (vec (mapcat (fn [g _] [g g]) gs pairs))
+                    (list* 'let* (destructure inner) body)))))))
 
 (defn- m-fn [form _] (normalise-fn form))
 

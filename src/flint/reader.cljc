@@ -10,6 +10,7 @@
   Returns ordinary Clojure data, with `:line`/`:column`/`:file` metadata on
   every form that can carry it."
   (:require [clojure.string :as str]
+            [flint.canon :as canon]
             [flint.rt]))
 
 ;; Characters are one-character strings throughout: flint has no char type, and
@@ -65,7 +66,7 @@
                       (recur))
         :else nil))))
 
-(declare read-form read-form* macros)
+(declare read-form read-form*)
 
 (defn meta-able?
   "Which values can carry metadata. Numbers, strings and keywords cannot, here
@@ -74,7 +75,19 @@
   (or (symbol? v) (vector? v) (map? v) (set? v) (seq? v) (list? v)))
 
 
-(def ^:private EOF ::eof)
+;; The end-of-input sentinel must be a value that CANNOT appear in source.
+;; It used to be the keyword `::eof`, which worked until the reader read its own
+;; source -- where `::eof` appears as a literal, and `read-delimited` silently
+;; dropped it as "no form here". The symptom was a mis-shaped `if` a long way
+;; downstream. A fresh volatile has identity nothing can forge, and `identical?`
+;; is the only comparison used against it.
+(def EOF (flint.rt/volatile "flint.reader/eof"))
+(defn eof? [v] (identical? v EOF))
+
+;; Same reasoning for the "this reader conditional matched nothing" marker.
+(def SPLICE-NONE (flint.rt/volatile "flint.reader/splice-none"))
+
+(defn peek-ch* [st] (peek-ch st))
 
 (defn- read-token [st]
   (loop [acc []]
@@ -192,7 +205,7 @@
         (nil? c) (err st (str "unterminated, expecting " closer))
         (= c closer) (do (next-ch! st) acc)
         :else (let [v (read-form* st)]
-                (if (= v EOF) (recur acc) (recur (conj acc v))))))))
+                (if (eof? v) (recur acc) (recur (conj acc v))))))))
 
 ;; ------------------------------------------------------------- syntax quote
 
@@ -223,51 +236,56 @@
       resolve (or (resolve sym) (symbol (str (or ns "user")) n))
       :else (symbol (str (or ns "user")) n))))
 
-(defn- syntax-quote [st form]
-  (letfn [(sq [form]
-            (cond
-              (unquote? form) (second form)
+(declare sq-form sq-expand-seq)
 
-              (symbol? form)
-              (let [n (name form)]
-                (if (str/ends-with? n "#")
-                  (let [base (subs n 0 (dec (count n)))
-                        g (:gensyms @st)]
-                    (if-let [s (get @g form)]
-                      (list 'quote s)
-                      (let [s (gensym (str base "__"))]
-                        (vswap! g assoc form s)
-                        (list 'quote s))))
-                  (list 'quote (resolve-sym st form))))
+(defn- sq-gensym [st sym]
+  (let [n (name sym)
+        base (subs n 0 (dec (count n)))
+        g (:gensyms @st)]
+    (if-let [s (get @g sym)]
+      (list 'quote s)
+      (let [s (gensym (str base "__"))]
+        (vswap! g assoc sym s)
+        (list 'quote s)))))
 
-              (seq? form)
-              (if (empty? form)
-                (list 'clojure.core/list)
-                (list 'clojure.core/seq (cons 'clojure.core/concat (expand-seq form))))
+(defn- sq-form [st form]
+  (cond
+    (unquote? form) (second form)
 
-              (vector? form)
-              (list 'clojure.core/vec (cons 'clojure.core/concat (expand-seq form)))
+    (symbol? form)
+    (if (str/ends-with? (name form) "#")
+      (sq-gensym st form)
+      (list 'quote (resolve-sym st form)))
 
-              (map? form)
-              (list 'clojure.core/apply 'clojure.core/hash-map
-                    (cons 'clojure.core/concat (expand-seq (apply concat form))))
+    (seq? form)
+    (if (empty? form)
+      (list 'clojure.core/list)
+      (list 'clojure.core/seq (cons 'clojure.core/concat (sq-expand-seq st form))))
 
-              (set? form)
-              (list 'clojure.core/set (cons 'clojure.core/concat (expand-seq form)))
+    (vector? form)
+    (list 'clojure.core/vec (cons 'clojure.core/concat (sq-expand-seq st form)))
 
-              (or (keyword? form) (number? form) (string? form) (nil? form)
-                  (true? form) (false? form) (char? form))
-              form
+    (map? form)
+    ;; Canonical entry order, for the same reason as everywhere else: a
+    ;; syntax-quoted map literal must expand identically on every host.
+    (list 'clojure.core/apply 'clojure.core/hash-map
+          (cons 'clojure.core/concat
+                (sq-expand-seq st (apply concat (canon/sorted-entries form)))))
 
-              :else (list 'quote form)))
-          (expand-seq [s]
-            (mapv (fn [item]
-                    (cond
-                      (unquote? item) (list 'clojure.core/list (second item))
-                      (unquote-splicing? item) (second item)
-                      :else (list 'clojure.core/list (sq item))))
-                  s))]
-    (sq form)))
+    (set? form)
+    (list 'clojure.core/set (cons 'clojure.core/concat (sq-expand-seq st form)))
+
+    :else form))
+
+(defn- sq-expand-seq [st s]
+  (mapv (fn [item]
+          (cond
+            (unquote? item) (list 'clojure.core/list (second item))
+            (unquote-splicing? item) (second item)
+            :else (list 'clojure.core/list (sq-form st item))))
+        s))
+
+(defn- syntax-quote [st form] (sq-form st form))
 
 ;; --------------------------------------------------------- reader dispatch
 
@@ -323,7 +341,12 @@
                  (seq? f) (apply list (map walk f))
                  (vector? f) (mapv walk f)
                  (set? f) (into #{} (map walk f))
-                 (map? f) (into {} (map (fn [[k v]] [(walk k) (walk v)]) f))
+                 ;; `flint.rt/array-map`, not `into {}`: `into` goes through a
+                 ;; transient, and a transient map does not preserve insertion
+                 ;; order. A map literal inside #() would come out reordered,
+                 ;; and its values may have side effects.
+                 (map? f) (flint.rt/array-map
+                           (apply concat (map (fn [e] [(walk (key e)) (walk (val e))]) f)))
                  :else f))
         body (walk (apply list body))
         params (into (mapv #(symbol (str "p" % "__flint#")) (range 1 (inc @maxn)))
@@ -341,7 +364,7 @@
         features (:features @st)]
     (loop [[k v & more] clauses]
       (cond
-        (nil? k) (if splicing? ::splice-none EOF)
+        (nil? k) (if splicing? SPLICE-NONE EOF)
         (or (features k) (= k :default))
         (if splicing? {::splice v} v)
         :else (recur more)))))
@@ -421,10 +444,13 @@
       (let [v (cond
                 (= c "(") (with-pos st line col (apply list (read-delimited st ")")))
                 (= c "[") (read-delimited st "]")
+                ;; An ORDERED map: the compiler's own map literals have side
+                ;; effects in their values (each one analyses a sub-form), so
+                ;; source order has to survive the reader on every host.
                 (= c "{") (let [kvs (read-delimited st "}")]
                             (when (odd? (count kvs))
                               (err st "map literal needs an even number of forms"))
-                            (apply hash-map kvs))
+                            (flint.rt/array-map kvs))
                 (= c ")") (err st "unexpected )")
                 (= c "]") (err st "unexpected ]")
                 (= c "}") (err st "unexpected }")
@@ -446,17 +472,18 @@
                                 (list 'clojure.core/unquote (read-form* st))))
                 (= c "#") (read-dispatch st)
                 :else (read-symbolic st))]
-        (if (and (seq? v) (not= v EOF))
+        (if (and (seq? v) (not (eof? v)))
           (with-pos st line col v)
           v)))))
 
 (defn read-form
-  "Read one form, or `:flint.reader/eof`."
+  "Read one form, or the `EOF` sentinel. Use `eof?` to test the result: the
+  sentinel is deliberately not a value any source text can produce."
   [st]
   (loop []
     (let [v (read-form* st)]
       (cond
-        (= v EOF) (if (nil? (peek-ch st)) ::eof (recur))
+        (eof? v) (if (nil? (peek-ch st)) EOF (recur))
         (and (map? v) (contains? v ::splice)) (err st "#?@ outside a collection")
         :else v))))
 
@@ -480,6 +507,6 @@
    (let [st (reader src opts)]
      (loop [acc []]
        (let [v (read-form st)]
-         (if (= v ::eof) acc (recur (conj acc v))))))))
+         (if (eof? v) acc (recur (conj acc v))))))))
 
 (defn read-one [src] (first (read-all src)))

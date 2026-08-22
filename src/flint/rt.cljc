@@ -133,5 +133,6 @@
 
 (defn lazy-seq [f] (clojure.core/lazy-seq (f)))
 (defn apply [f args] (clojure.core/apply f args))
+(defn array-map [kvs] (clojure.core/apply clojure.core/array-map kvs))
 (defn range3 [s e st] (if e (clojure.core/range s e st) (clojure.core/iterate #(clojure.core/+ % st) s)))
 (defn gc-stats [] {})

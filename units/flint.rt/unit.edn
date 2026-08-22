@@ -77,6 +77,7 @@
   "flint/str-index-of" {:symbol "flint_b_strindexof"}
   "flint/str-bytes" {:symbol "flint_b_strbytes"}
   "flint/double-bits" {:symbol "flint_b_doublebits"}
+  "flint/array-map" {:symbol "flint_b_arraymap"}
   "flint/volatile" {:symbol "flint_b_volatile"}
   "flint/volatile?" {:symbol "flint_b_volatilep"}
   "ex-info" {:symbol "flint_b_exinfo"}

@@ -87,6 +87,19 @@
 (defn- base-env [cc nsname]
   {:cc cc :ns nsname :locals {} :outer nil :scope (ana/new-fn-scope nil) :loop nil})
 
+(defn flatten-top-level
+  "Top-level `(do ...)` and `(declare ...)` become separate items, as they do in
+  Clojure. Otherwise one item defines several vars, and tree shaking -- which is
+  per var -- has nothing to hang them on."
+  [forms]
+  (vec (mapcat (fn [f]
+                 (cond
+                   (and (seq? f) (= 'do (first f))) (flatten-top-level (rest f))
+                   (and (seq? f) (= 'declare (first f)))
+                   (map (fn [n] (list 'def n)) (rest f))
+                   :else [f]))
+               forms)))
+
 (defn read-namespace!
   "Read one namespace and register every name it defines, so that forward
   references -- within a namespace and between namespaces -- resolve without
@@ -112,14 +125,15 @@
         _ (vswap! cc assoc-in [:namespaces nsname] (get-in @cc [:namespaces nsname] {}))
         forms (loop [acc []]
                 (let [f (reader/read-form st)]
-                  (if (= f :flint.reader/eof)
+                  (if (reader/eof? f)
                     acc
                     (do (when (ns-form? f)
                           (reader/set-ns! st (second f) (ns-aliases f)))
                         (recur (conj acc f))))))]
-    (doseq [f forms, n (def-form-names f)]
-      (vswap! cc assoc-in [:declared (symbol (str nsname) (name n))] true))
-    forms))
+    (let [forms (flatten-top-level forms)]
+      (doseq [f forms, n (def-form-names f)]
+        (vswap! cc assoc-in [:declared (symbol (str nsname) (name n))] true))
+      forms)))
 
 (defn analyze-namespace!
   "Analyze one namespace's already-read forms, appending to `:items` in order."
@@ -134,6 +148,7 @@
         (nil? f) nil
 
         :else
+        (try
         (let [names (def-form-names f)
               sym (when (= 1 (count names)) (symbol (str nsname) (name (first names))))
               env (assoc (base-env cc nsname) :current-var sym)
@@ -164,14 +179,22 @@
                   (let [ctx {:vars (:eval-vars @cc)}
                         f0 (ev/eval-top ctx ast)]
                     (f0))
-                  (catch #?(:clj Exception :cljs :default) e
+                  (catch Throwable e
                     (vswap! cc update :uncompiled-at-compile-time
                             (fnil conj []) [sym (ex-message e)]))))))
           (when sym
             (let [defnode (-> ast :arities first :body)]
               (when (= :def (:op defnode))
                 (register-native-aliases! cc sym (:init defnode))))
-            (vswap! cc assoc-in [:vars sym] true)))))))
+            (vswap! cc assoc-in [:vars sym] true)))
+        (catch Throwable e
+          ;; Say WHERE. A bare "unable to resolve symbol" halfway through
+          ;; clojure.core is close to useless without the enclosing form.
+          (throw (ex-info (str (ex-message e)
+                               "\n  in " nsname
+                               (when-let [n (first (def-form-names f))] (str "/" n))
+                               (when-let [l (:line (meta f))] (str " (line " l ")")))
+                          (merge (ex-data e) {:ns nsname :form-name (first (def-form-names f))})))))))))
 
 ;; ------------------------------------------------------------------ pass 3
 
@@ -233,7 +256,18 @@
           (img/add-init! b fn-index)))
       ;; The entry itself: a 1-arg closure over the shim var.
       (let [main-idx (get var-slots entry-var)]
-        (when-not main-idx (err "entry shim was not emitted" {:entry entry}))
+        (when-not main-idx
+          (err (str "entry shim was not emitted"
+                    "\n  entry-var " entry-var
+                    "\n  kept " (count kept) " of " (count items)
+                    "\n  roots contains it: " (contains? roots entry-var)
+                    "\n  var-slots keys: " (pr-str (vec (take 8 (keys var-slots))))
+                    "\n  kept syms tail: " (pr-str (vec (take-last 6 (filter some? (map :sym kept)))))
+                    "\n  sources: " (count sources) " order: " (count order)
+                    "\n  order is: " (pr-str (vec order))
+                    "\n  first source key: " (pr-str (first (keys sources)))
+                    "\n  items in cc: " (count (:items @cc)))
+               {:entry entry}))
         (let [buf (emit/new-buf)]
           (emit/emit ctx buf {:op :var :sym entry-var} false)
           (emit/emit ctx buf {:op :local :idx 0} false)
@@ -244,6 +278,9 @@
                                        :code (conj (vec (emit/finish buf))
                                                    (get emit/op :tail-call) 1)}]}))))
       {:builder b
+       :kept-syms (vec (filter some? (map :sym kept)))
+       :roots roots
+       :items items
        :stats {:vars (count var-slots)
                :items-total (count items)
                :items-kept (count kept)

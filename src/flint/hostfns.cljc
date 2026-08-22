@@ -1,95 +1,106 @@
 (ns flint.hostfns
-  "Host implementations of the Rust builtins, for compile-time evaluation.
+  "Builtin implementations for compile-time evaluation.
 
-  When `flint.eval` runs a macro function it hits `:native` nodes -- the macro
-  called `conj`, or `str`, or `=`. Those cannot dispatch into wasm at compile
-  time, so they dispatch here instead, onto whatever Clojure is hosting the
-  compiler. Because macros manipulate *forms*, and forms are ordinary Clojure
-  data on every host, this is exactly the right semantics rather than a
-  shortcut: `conj` on babashka and `conj` on flint agree on what conj means.
+  When `flint.eval` runs a macro body it hits `:native` nodes -- the macro called
+  `conj`, or `str`, or `=`. Those cannot dispatch into the wasm table at compile
+  time, so they dispatch here.
 
-  Anything missing here simply cannot be called from a macro body, and says so."
-  (:require [clojure.string :as str]))
-
-(defn- nyi [name]
-  (fn [& _] (throw (ex-info (str "builtin `" name "` is not available at compile time")
-                            {:builtin name :type :compile}))))
+  Every entry goes through `flint.rt`, which is the one place a builtin has both
+  a host implementation and a wasm one. That keeps this table from becoming a
+  third implementation that drifts from the other two: on babashka these are the
+  host shims, and on flint the analyzer turns each into a native function value."
+  (:require [flint.rt]))
 
 (def table
-  {"=" =
-   "identical?" identical?
-   "hash" hash
-   "compare" compare
-   "flint/add" +
-   "flint/sub" -
-   "flint/mul" *
-   "flint/div" (fn [& xs] (let [r (apply / xs)] (if (ratio? r) (double r) r)))
-   "quot" quot
-   "rem" rem
-   "flint/lt" <
-   "flint/le" <=
-   "flint/gt" >
-   "flint/ge" >=
-   "flint/num-eq" ==
-   "nil?" nil?
-   "number?" number?
-   "int?" int?
-   "float?" float?
-   "string?" string?
-   "keyword?" keyword?
-   "symbol?" symbol?
-   "vector?" vector?
-   "map?" map?
-   "set?" set?
-   "seq?" seq?
-   "fn?" fn?
-   "boolean?" boolean?
-   "sequential?" sequential?
-   "count" count
-   "first" first
-   "rest" rest
-   "next" next
-   "seq" seq
-   "cons" cons
-   "conj" conj
-   "get" get
-   "assoc" assoc
-   "dissoc" dissoc
-   "disj" disj
-   "contains?" contains?
-   "nth" nth
-   "pop" pop
-   "peek" peek
-   "empty" empty
-   "transient" transient
-   "persistent!" persistent!
-   "conj!" conj!
-   "assoc!" assoc!
-   "dissoc!" dissoc!
-   "flint/str2" (fn [a b] (str a b))
-   "name" name
-   "namespace" namespace
-   "flint/keyword2" (fn ([n] (keyword n)) ([ns n] (keyword ns n)))
-   "flint/symbol2" (fn ([n] (symbol n)) ([ns n] (symbol ns n)))
-   "flint/subs" (fn ([s a] (subs s a)) ([s a b] (subs s a b)))
-   "flint/num->str" (fn [n] (str n))
-   "flint/str->num" (fn [s] (try (or (parse-long (str/trim s)) (parse-double (str/trim s)))
-                                 (catch Exception _ nil)))
-   "flint/code-point-at" (fn [s i] (int (nth s i)))
-   "flint/from-code-point" (fn [c] (str (char c)))
-   "ex-info" (fn ([m] (ex-info m {})) ([m d] (ex-info m (or d {}))) ([m d c] (ex-info m (or d {}) c)))
-   "ex-message" ex-message
-   "ex-data" ex-data
-   "flint/ex-kind" (fn [e] (if (instance? clojure.lang.ExceptionInfo e) "ExceptionInfo" "Throwable"))
-   "atom" atom
-   "deref" deref
-   "reset!" reset!
-   "meta" meta
-   "with-meta" with-meta
-   "flint/apply" (fn [f args] (apply f args))
-   "flint/lazy-seq" (fn [f] (lazy-seq (f)))
-   "flint/range3" (fn [s e st] (if e (range s e st) (iterate #(+ % st) s)))
-   "flint/gc-stats" (nyi "flint/gc-stats")})
+  {"=" flint.rt/=
+   "identical?" flint.rt/identical?
+   "hash" flint.rt/hash
+   "compare" flint.rt/compare
+   "flint/add" flint.rt/add
+   "flint/sub" flint.rt/sub
+   "flint/mul" flint.rt/mul
+   "flint/div" flint.rt/div
+   "quot" flint.rt/quot
+   "rem" flint.rt/rem
+   "flint/lt" flint.rt/lt
+   "flint/le" flint.rt/le
+   "flint/gt" flint.rt/gt
+   "flint/ge" flint.rt/ge
+   "flint/num-eq" flint.rt/num-eq
+   "bit-and" flint.rt/bit-and
+   "bit-or" flint.rt/bit-or
+   "bit-xor" flint.rt/bit-xor
+   "bit-not" flint.rt/bit-not
+   "bit-shift-left" flint.rt/bit-shift-left
+   "bit-shift-right" flint.rt/bit-shift-right
+   "unsigned-bit-shift-right" flint.rt/unsigned-bit-shift-right
+   "bit-test" flint.rt/bit-test
+   "nil?" flint.rt/nil?
+   "number?" flint.rt/number?
+   "int?" flint.rt/int?
+   "float?" flint.rt/float?
+   "string?" flint.rt/string?
+   "keyword?" flint.rt/keyword?
+   "symbol?" flint.rt/symbol?
+   "vector?" flint.rt/vector?
+   "map?" flint.rt/map?
+   "set?" flint.rt/set?
+   "seq?" flint.rt/seq?
+   "fn?" flint.rt/fn?
+   "boolean?" flint.rt/boolean?
+   "sequential?" flint.rt/sequential?
+   "count" flint.rt/count
+   "first" flint.rt/first
+   "rest" flint.rt/rest
+   "next" flint.rt/next
+   "seq" flint.rt/seq
+   "cons" flint.rt/cons
+   "conj" flint.rt/conj
+   "get" flint.rt/get
+   "assoc" flint.rt/assoc
+   "dissoc" flint.rt/dissoc
+   "disj" flint.rt/disj
+   "contains?" flint.rt/contains?
+   "nth" flint.rt/nth
+   "pop" flint.rt/pop
+   "peek" flint.rt/peek
+   "empty" flint.rt/empty
+   "transient" flint.rt/transient
+   "persistent!" flint.rt/persistent!
+   "conj!" flint.rt/conj!
+   "assoc!" flint.rt/assoc!
+   "dissoc!" flint.rt/dissoc!
+   "flint/str2" flint.rt/str2
+   "name" flint.rt/name
+   "namespace" flint.rt/namespace
+   "flint/keyword2" flint.rt/keyword2
+   "flint/symbol2" flint.rt/symbol2
+   "flint/subs" flint.rt/subs
+   "flint/num->str" flint.rt/num->str
+   "flint/str->num" flint.rt/str->num
+   "flint/code-point-at" flint.rt/code-point-at
+   "flint/from-code-point" flint.rt/from-code-point
+   "flint/str-join" flint.rt/str-join
+   "flint/str-index-of" flint.rt/str-index-of
+   "flint/str-bytes" flint.rt/str-bytes
+   "flint/double-bits" flint.rt/double-bits
+   "ex-info" flint.rt/ex-info
+   "ex-message" flint.rt/ex-message
+   "ex-data" flint.rt/ex-data
+   "flint/ex-kind" flint.rt/ex-kind
+   "atom" flint.rt/atom
+   "deref" flint.rt/deref
+   "reset!" flint.rt/reset!
+   "flint/volatile" flint.rt/volatile
+   "flint/volatile?" flint.rt/volatile?
+   "meta" flint.rt/meta
+   "with-meta" flint.rt/with-meta
+   "flint/lazy-seq" flint.rt/lazy-seq
+   "flint/apply" flint.rt/apply
+   "flint/range3" flint.rt/range3
+   "flint/array-map" flint.rt/array-map})
 
 (defn lookup [name]
-  (or (get table name) (nyi name)))
+  (or (get table name)
+      (throw (ex-info (str "builtin `" name "` is not available at compile time")
+                      {:builtin name :type :compile}))))

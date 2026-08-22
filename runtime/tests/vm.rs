@@ -584,3 +584,87 @@ fn the_interpreter_survives_collection_at_every_allocation() {
     assert_eq!(rt.vec_nth(v, 0).unwrap().as_fixnum(), 300);
     assert_eq!(rt.vec_nth(v, 299).unwrap().as_fixnum(), 1);
 }
+
+/// Regression: a frame used to cache its closure, and that copy was a root the
+/// collector could not see. After a collection moved the closure, `UPVAL` read
+/// a stale address. The symptom was arbitrary -- a number in function position,
+/// a nonsense frame trace -- and it only showed up once programs were big
+/// enough to collect mid-call.
+#[test]
+fn upvalues_survive_a_collection_taken_mid_call() {
+    let mut w = ImageWriter::new();
+    let conj = {
+        let c = w.k_string("conj");
+        w.add_native(c, nat("conj"))
+    };
+    let sub = {
+        let c = w.k_string("flint/sub");
+        w.add_native(c, nat("flint/sub"))
+    };
+    let numeq = {
+        let c = w.k_string("flint/num-eq");
+        w.add_native(c, nat("flint/num-eq"))
+    };
+    // (fn [captured] (fn [n acc] (if (= n 0) captured (recur (dec n) (conj acc captured)))))
+    // The inner fn allocates on every iteration, so a collection is certain to
+    // land while its frame is live, and its only reference to `captured` is the
+    // upvalue.
+    let inner_name = w.k_string("inner");
+    let inner_body = {
+        let mut a = Asm::new();
+        a.label("top");
+        a.local(0).int(0).native(numeq as u16, 2);
+        a.jump(op::JUMP_IF_FALSE, "rec");
+        a.op(op::UPVAL).u8v(0).op(op::RETURN);
+        a.label("rec");
+        // acc = (conj acc upval)
+        a.local(1).op(op::UPVAL).u8v(0).native(conj as u16, 2);
+        a.op(op::SET_LOCAL).u8v(1);
+        // n = (dec n)
+        a.local(0).int(1).native(sub as u16, 2);
+        a.op(op::SET_LOCAL).u8v(0);
+        a.jump(op::JUMP, "top");
+        a.done()
+    };
+    let inner = w.add_fn(inner_name, 2, false, 2, &inner_body);
+    w.fns[inner as usize][4] = 1; // one upvalue
+
+    let outer_name = w.k_string("outer");
+    let outer_body = {
+        let mut a = Asm::new();
+        a.local(0);
+        a.op(op::CLOSURE).u16v(inner as u16).u8v(1);
+        a.op(op::RETURN);
+        a.done()
+    };
+    let outer = w.add_fn(outer_name, 1, false, 1, &outer_body);
+
+    let marker = w.k_string("a captured string long enough to be a heap object");
+    let main_name = w.k_string("main");
+    let body = {
+        let mut a = Asm::new();
+        a.op(op::CLOSURE).u16v(outer as u16).u8v(0);
+        a.konst(marker);
+        a.call(1); // -> the inner closure
+        a.int(2000).op(op::VECTOR).u16v(0);
+        a.call(2);
+        a.op(op::RETURN);
+        a.done()
+    };
+    w.entry = w.add_fn(main_name, 1, false, 1, &body);
+
+    let bytes = w.finish();
+    // A small nursery guarantees collections during the loop.
+    let mut rt = Rt::with_heap(64 * 1024, 64 * 1024 * 1024);
+    rt.install_host_natives();
+    assert!(rt.load_image(&bytes));
+    let empty = rt.empty_vec();
+    let v = rt.run_program(empty);
+    assert!(rt.thrown.is_nil(), "threw: {:?}", rt.ex_message(rt.thrown));
+    let mut b = sbuf();
+    assert_eq!(
+        rt.as_str(v, &mut b),
+        Some("a captured string long enough to be a heap object"),
+        "the upvalue was read through a stale pointer"
+    );
+}
