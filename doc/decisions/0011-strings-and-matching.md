@@ -32,6 +32,47 @@ than it sounds, because indexing by code point was never O(1) anyway.
 first operation that needs contiguous bytes flattens once and the node remembers
 it. That is what V8 does, and it is what makes the next section work.
 
+### Three tiers, not two: inline, flat, rope
+
+A rope is the answer for big strings and the wrong answer for `"ok"`. Tree
+metadata would dwarf the content, and most strings in a real program are short.
+
+- **Inline** — in the value word itself, no allocation at all. Every char is
+  inline by construction, which is why there is no separate char type.
+- **Flat** — a contiguous byte array with its counts. No tree, no size tables.
+  This is the tier that must not be skipped: between "fits in a word" and "big
+  enough to want a tree" is most of the strings a program touches.
+- **Rope** — the balanced B-tree, for large or heavily concatenated strings.
+
+Write the thresholds down and defend them, rather than letting them emerge.
+
+### The transitions, which are also the retention fix
+
+- tiny ⊕ tiny → **inline** if it still fits, otherwise flat.
+- flat ⊕ flat → **flat** while under the rope threshold, otherwise rope.
+- **a small `subs` of a large rope COPIES into flat or inline**, it does not
+  make a slice node.
+
+That last rule is the same mechanism as the leak I flagged below: `(subs big 0 3)`
+must not retain `big`. Tiering and retention are one problem, and copying small
+slices solves both.
+
+Going the other way matters too: a rope whittled down by slicing should collapse
+back to flat rather than staying a tree with three bytes in it.
+
+### One interface over all three, and `kind` must not leak
+
+Every operation — `count`, `nth`, `subs`, `=`, `hash`, `str`, and the matcher's
+cursor — works over all three tiers with no caller branching on representation.
+The cursor is what unifies them for matching: inline, flat and rope all present
+`next-character` and nothing else is required.
+
+**`(kind s)` is `:string` for all three.** That is not cosmetic — `0005` made
+`kind` the closed set protocol dispatch runs on, so a representation leaking into
+it would make `extend-protocol :string` work for some strings and not others,
+depending on how they were built. That is a bug nobody would guess from the
+symptom.
+
 ### It must be BALANCED, and that is not a refinement
 
 A naive cons-rope degenerates immediately. `(reduce str "" xs)` builds a
@@ -83,7 +124,10 @@ a benchmark suite that measures the wrong one.
 
 ### Two correctness requirements that are easy to miss
 
-**Equality and hash must be independent of shape.** `(str "ab" "c")` and
+**Equality and hash must be independent of REPRESENTATION as well as shape.**
+Not merely two rope shapes: `"abc"` inline, `"abc"` flat and `"abc"` as a rope
+are one string. They must be `=`, hash identically, and a map keyed by one must
+be found by any other. `(str "ab" "c")` and
 `(str "a" "bc")` are different trees and the same string: they must be `=`, and
 they must hash the same. Get this wrong and maps behave differently depending on
 how a key was built — which is exactly the kind of bug that survives every small
@@ -174,6 +218,21 @@ ported program that uses them, to solve a problem the engine swap already solves
 
 Offer both. Do not make people learn a new notation to split on a comma.
 
+### On other hosts, inlining is a representation choice, not a semantic one
+
+Packing a string into the value word is a NaN-boxing trick, and the JVM and CLR
+cannot do it the same way — a reference there is managed and not ours to encode.
+
+They approximate instead: a tagged-long immediate scheme, an interned compact
+object, a `char` primitive for the length-one case. Which they choose is their
+business.
+
+**What must be identical is the behaviour, not the layout.** `count`, `subs`,
+equality, hashing and dispatch answer the same on every host; how a short string
+is stored is a port's own optimisation. This is `0010`'s rule again: the
+conformance suite is the specification, and representation is exactly the kind of
+thing it must not be able to see.
+
 ## 5. So: do we write a performant engine for every runtime? No — we write none.
 
 The honest answer to "can we feasibly build a performant regex for each target"
@@ -227,8 +286,13 @@ to drift.
 
 ## What must be true if this is built
 
-- `=` and `hash` agree across differently-shaped ropes with the same content,
-  tested with adversarially different shapes.
+- `=` and `hash` agree across all three TIERS and across differently-shaped
+  ropes: build the same string inline, flat and as a rope, assert equality, equal
+  hashes, and that a map keyed by one is found by the others.
+- `(kind s)` is `:string` whatever the tier, and a protocol extended to `:string`
+  dispatches for all of them.
+- A small `subs` of a large rope copies, and the large one becomes collectable —
+  measured by the live set, not read from the code.
 - A small slice of a large string does not retain the large one, tested by
   measuring the live set.
 - Flattening happens once and is cached, shown by counting flattens across
