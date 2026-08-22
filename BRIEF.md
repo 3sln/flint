@@ -84,45 +84,42 @@ functions — and half-implementing those is worse than leaving them out.
 
 ### And our own data readers: `flint.data.json`, `flint.data.html`, `flint.data.xml`
 
-Ours, not `clojure.data.*`. We are not bound to those APIs — but do not differ
-gratuitously either: a Clojure programmer should be able to guess the shape.
-`read-str` / `write-str` and a `:key-fn` are what people reach for, and there is
-no prize for renaming them.
+Ours, not `clojure.data.*`. We owe those APIs nothing — but do not differ
+gratuitously: a Clojure programmer should be able to guess the shape.
 
-They belong here for the same reason EDN does: they are how data gets into a
-script, and they are pure.
+**Adapt existing Rust crates rather than writing parsers.** Two constraints on
+the choice: we are `no_std`-ish with our own allocator, so prefer crates that
+work with `alloc` and no `std`; and **use the streaming/event API to build flint
+values directly** rather than materialising the crate's own document tree and
+converting it — that is two allocations of everything and drags in the parts of
+the crate we least want.
 
-Two warnings. JSON numbers make no integer/decimal distinction, so decide what an
-integer reads as versus a decimal and write it down. And **HTML is not XML** —
-a spec-complete HTML5 parser is weeks of error recovery and implied tags. Build a
-sane, documented subset that handles real-world markup, and say plainly in the
-README where it gives up. That is worth far more than a half-finished attempt at
-the full spec.
+HTML is the one to be careful about. Spec-complete HTML5 parsing is weeks of
+error recovery and implied-tag rules; take a crate that already did that work, or
+document the subset honestly. Do not half-write one.
 
-### Only what is needed goes into the build
+### Only REACHABLE code ships — built-ins included
 
-**Do not glue the whole runtime together.** A module compiled from a program that
-never mentions XML must not carry an XML parser. Keep it modular, and let the
-entry point's reachable set decide what ships.
+A module compiled from a program that never mentions XML must not carry an XML
+parser. Not "should mostly not": must not, and there should be a **test that
+asserts it** rather than a claim in prose.
 
-This cuts against the "build the runtime `.wasm` once, splice the program image
-in" plan, and the tension is worth resolving deliberately rather than discovering:
+This is harder than it sounds and it cuts against the "build the runtime once,
+splice the image in" plan. Because the program is INTERPRETED, every builtin is
+reached through a dispatch table, so no linker or `wasm-opt` can prove one dead —
+they are all live by construction. `doc/decisions/0002-modularity.md` works
+through the two ways out; read it before you commit to either.
 
-- **Anything written in cljc tree-shakes for free.** Compile only the namespaces
-  reachable from `:fn` and the problem solves itself.
-- **Anything written in Rust is in the prebuilt runtime whether used or not** —
-  unless the runtime is rebuilt per compile, or you keep feature-gated variants.
+The short version: either rebuild the runtime per compile with cargo features, or
+keep the single prebuilt runtime and make the **builtin registry the only thing
+that references an optional function**, so the patcher can drop unused table
+entries and let a DCE pass remove the bodies. The second keeps compiles fast, and
+depends on a discipline that is cheap to keep now and impossible to retrofit once
+something calls a parser directly.
 
-So the default should be: **write library namespaces in cljc**, and reserve Rust
-for primitives that genuinely cannot be expressed in the language — allocation,
-hashing, arithmetic, UTF-8, the collection internals. JSON, HTML, XML and much of
-`clojure.string` are pure text-to-data work: they are exactly what this language
-is FOR, and putting them in cljc dogfoods the compiler as a bonus.
-
-Where something must be Rust-side and optional, say so and design for it — a
-feature-gated runtime build, or a documented floor of what every module carries.
 **Report module size in the benchmarks for a trivial program and a realistic
-one**, so "modular" is a number rather than a claim.
+one**, so "modular" is a number rather than a claim, and name the unavoidable
+floor in the README honestly.
 
 ### Say what is missing, per namespace
 
