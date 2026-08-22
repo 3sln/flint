@@ -75,12 +75,22 @@
            "             (try-send jp #{1})\n"
            "             (try-send tp {:a #{1 2} :b [:x] [1 2] :k})])))"))
 
+(src! "query"
+      (str "(ns query (:require [flint.port :as p]))\n"
+           "(defn main [_]\n"
+           "  (let [a (p/open \"sink\")\n"
+           "        b (p/open \"sink\")]\n"
+           "    (p/close a)\n"
+           "    (p/send b \"still open\")\n"
+           "    \"done\"))"))
+
 (doseq [[n out] [["echo" "out/ha-echo.wasm"]
                  ["batch1" "out/ha-batch1.wasm"]
                  ["batch1000" "out/ha-batch1000.wasm"]
                  ["drop" "out/ha-drop.wasm"]
                  ["exit" "out/ha-exit.wasm"]
-                 ["formats" "out/ha-formats.wasm"]]]
+                 ["formats" "out/ha-formats.wasm"]
+                 ["query" "out/ha-query.wasm"]]]
   (build! n out))
 
 (let [r (sh "node" "test/host_abi.mjs")]

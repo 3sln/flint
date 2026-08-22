@@ -103,10 +103,31 @@
   (flint.rt/port-host? p))
 
 (defn state
-  "`:pending` (an `open` the host has not answered), `:open`, `:closed` or
-  `:refused`."
+  "What this end is doing:
+
+  | | |
+  |---|---|
+  | `:pending` | an `open` the host has not answered |
+  | `:open` | both ends live |
+  | `:half-closed` | the peer closed cleanly; drain what is buffered, then end of stream |
+  | `:closed` | this end is closed |
+  | `:orphaned` | the peer went away *without* closing; receiving errors |
+  | `:refused` | the host would not lend this capability |
+
+  A channel is only finished when **both** ends are, which is why half-closed is
+  a state you can see rather than a race you cannot."
   [p]
   (flint.rt/port-state p))
+
+(defn closed?
+  "Can nothing new ever arrive here? True once this end is closed, the peer has
+  closed (`:half-closed` — anything already buffered is still readable), or the
+  peer is gone.
+
+  Asking is always available; waiting to be told is not always enough."
+  [p]
+  (let [s (state p)]
+    (or (= s :closed) (= s :half-closed) (= s :orphaned) (= s :refused))))
 
 (defn label [p] (flint.rt/port-label p))
 (defn format-of [p] (flint.rt/port-format p))

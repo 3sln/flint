@@ -131,6 +131,15 @@ pub const P_PENDING: i64 = 0;
 pub const P_OPEN: i64 = 1;
 pub const P_CLOSED: i64 = 2;
 pub const P_REFUSED: i64 = 3;
+/// The peer closed cleanly; this end may still drain what is already buffered
+/// and then reads end-of-stream. A channel is freed only when BOTH ends are
+/// done, so this is a real, describable state rather than a race
+/// (`doc/decisions/0006`).
+pub const P_HALF: i64 = 4;
+/// The peer went away without closing -- collected, or a host that hung up.
+/// Unlike `P_HALF` nobody said goodbye, so a receive here **errors** rather than
+/// reading as a tidy end of stream.
+pub const P_ORPHANED: i64 = 5;
 
 /// Messages, for a channel end.
 pub const DEFAULT_CAP: i64 = 16;
@@ -1246,12 +1255,20 @@ impl Rt {
         if !self.need_port(p, "send") {
             return NIL;
         }
+        // Never park against a peer that is gone: a script blocking forever on a
+        // host that has hung up is the same failure as a host leaking a handle,
+        // seen from the other side.
         let st = fx(self.slot(p, PT_STATE));
-        if st == P_CLOSED {
-            return self.throw_str("IllegalStateException", "send on a closed port");
-        }
         if st != P_OPEN {
-            return self.throw_str("IllegalStateException", "send on a port that is not open yet");
+            let why = match st {
+                P_CLOSED => "this end is closed",
+                P_HALF => "the other end has closed, so nothing can receive this",
+                P_ORPHANED => "the other end is gone, so nothing can ever receive this",
+                P_REFUSED => "the host refused this capability",
+                _ => "this port is not open yet",
+            };
+            let msg = alloc::format!("send: {why}");
+            return self.throw_str("IllegalStateException", &msg);
         }
         if let Err(e) = self.check_sendable(v) {
             return self.throw_str("IllegalArgumentException", &e);
@@ -1351,18 +1368,36 @@ impl Rt {
             return out;
         }
         let st = fx(self.slot(self.r(pi), PT_STATE));
-        if st == P_CLOSED {
+        // Drained and finished cleanly: end of stream, a normal answer.
+        if st == P_CLOSED || st == P_HALF {
             self.pop_to(base);
             return NIL;
         }
-        let kind = fx(self.slot(self.r(pi), PT_KIND));
-        if kind != K_FLINT {
-            let peer = self.peer_of(self.r(pi));
-            if peer.is_nil() || fx(self.slot(peer, PT_STATE)) == P_CLOSED {
-                // End of stream rather than a hang: nothing can ever arrive.
-                self.pop_to(base);
-                return NIL;
-            }
+        // Drained and the peer vanished: nobody said goodbye, so say so rather
+        // than pretending the stream ended tidily -- and never park, because a
+        // script blocked forever on a host that hung up is the same failure as
+        // a host leaking a handle, seen from the other side.
+        if st == P_ORPHANED {
+            self.pop_to(base);
+            return self.throw_str(
+                "IllegalStateException",
+                "receive: the other end of this port is gone, so this can never complete",
+            );
+        }
+        let peer = self.peer_of(self.r(pi));
+        if peer.is_nil() {
+            self.set(self.r(pi), PT_STATE, Value::fixnum(P_ORPHANED));
+            self.pop_to(base);
+            return self.throw_str(
+                "IllegalStateException",
+                "receive: the other end of this port is gone, so this can never complete",
+            );
+        }
+        let pst = fx(self.slot(peer, PT_STATE));
+        if pst == P_CLOSED || pst == P_HALF || pst == P_ORPHANED {
+            self.set(self.r(pi), PT_STATE, Value::fixnum(P_HALF));
+            self.pop_to(base);
+            return NIL;
         }
         let target = self.r(pi);
         self.pop_to(base);
@@ -1477,12 +1512,12 @@ impl Rt {
         }
         let target = self.r(pi);
         self.wake_on(target);
-        // A pair is one conduit: closing either end closes it. Leaving the peer
-        // "open" while nothing can ever arrive on it would be a lie that only
-        // shows up as a hang.
+        // The peer becomes HALF-closed rather than closed: it may still drain
+        // what is already in its buffer, and only then reads end-of-stream. The
+        // channel is not freed until both ends are done.
         let peer = self.peer_of(self.r(pi));
-        if !peer.is_nil() {
-            self.set(peer, PT_STATE, Value::fixnum(P_CLOSED));
+        if !peer.is_nil() && fx(self.slot(peer, PT_STATE)) == P_OPEN {
+            self.set(peer, PT_STATE, Value::fixnum(P_HALF));
             self.wake_on(peer);
         }
         self.pop_to(base);
@@ -1579,7 +1614,11 @@ impl Rt {
         let flint = self.peer_of(self.r(hi));
         if !flint.is_nil() {
             let fi = self.push(flint);
-            self.set(self.r(fi), PT_STATE, Value::fixnum(P_CLOSED));
+            // Half-closed: whatever the host already delivered is still there to
+            // be read, and only then does it read as end of stream.
+            if fx(self.slot(self.r(fi), PT_STATE)) == P_OPEN {
+                self.set(self.r(fi), PT_STATE, Value::fixnum(P_HALF));
+            }
             let target = self.r(fi);
             self.wake_on(target);
             self.pop_to(fi);
@@ -1587,6 +1626,29 @@ impl Rt {
         let hv = self.r(hi);
         self.unroot_port(hv);
         self.pop_to(base);
+    }
+
+    /// **The query, not the notification.** What state is the *runtime* end of
+    /// this port in, asked by host id?
+    ///
+    /// If an event were the only way to learn that a port had closed, then an
+    /// event dropped, missed or not yet drained would be an unrecoverable leak:
+    /// a host handle to a port nobody will ever mention again. This makes the
+    /// pushed `:closed` an optimisation over polling rather than the sole
+    /// carrier of the truth. 255 means the runtime knows nothing about this id,
+    /// which a host should also treat as "done".
+    pub fn host_port_state(&mut self, host_port_id: i64) -> i64 {
+        let host = self.port_by_id(host_port_id);
+        if host.is_nil() {
+            return 255;
+        }
+        let flint = self.peer_of(host);
+        if flint.is_nil() {
+            // The runtime end has been collected: as good as closed, and this is
+            // exactly the case a missed event would have lost.
+            return P_CLOSED;
+        }
+        fx(self.slot(flint, PT_STATE))
     }
 
     /// Serialise every pending event into one contiguous buffer and hand it
@@ -1696,8 +1758,11 @@ impl Rt {
             }
             let pi = self.push(peer);
             let pkind = fx(self.slot(self.r(pi), PT_KIND));
-            if fx(self.slot(self.r(pi), PT_STATE)) != P_CLOSED {
-                self.set(self.r(pi), PT_STATE, Value::fixnum(P_CLOSED));
+            let pst = fx(self.slot(self.r(pi), PT_STATE));
+            if pst != P_CLOSED && pst != P_ORPHANED {
+                // Its peer vanished without closing, which is not the same as a
+                // tidy close and should not read like one.
+                self.set(self.r(pi), PT_STATE, Value::fixnum(P_ORPHANED));
                 if pkind == K_HOST {
                     let hid = fx(self.slot(self.r(pi), PT_ID));
                     self.push_event(EV_CLOSED, hid, 0, NIL);

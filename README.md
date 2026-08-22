@@ -721,6 +721,20 @@ peer link would keep a dropped end alive forever, and would also defeat the
 liveness check below. Ids resolve through a weak table — the same machinery the
 string interner already uses.
 
+A channel is finished only when **both** ends are, which is what makes
+`:half-closed` a state you can see rather than a race you cannot:
+
+| state | meaning |
+|---|---|
+| `:open` | both ends live |
+| `:half-closed` | the peer closed cleanly — drain what is buffered, then end of stream |
+| `:closed` | this end is closed |
+| `:orphaned` | the peer went away *without* closing; receiving **errors** |
+| `:refused` | the host would not lend this capability |
+
+`:orphaned` and `:half-closed` are deliberately different. One is a tidy goodbye
+and reads as end of stream; the other is a hang-up and says so.
+
 **`with-open` is the good path**, and the collector is the net. Collection is
 deterministic but it is not *prompt*, and a host holding a socket open until a
 collection happens is a real cost.
@@ -776,6 +790,21 @@ implementation would run the scheduler on top of itself.
 **The runtime creates the port pair**, keeps the flint end, and tells the host
 the id of the end it holds. The host never holds two ends and never hands one
 back.
+
+**The event is a notification; the state is the truth.** `flint_port_state(id)`
+answers *what is the runtime end of this port doing?* at any time. That is not a
+convenience: if an event were the only way to learn a durable fact, then an event
+dropped, missed, or simply not drained yet would be an **unrecoverable leak** — a
+host handle to a port nobody will ever mention again. The pushed `:closed` is an
+optimisation over polling, not the sole carrier of the fact, and
+`test/host_abi.mjs` proves it by throwing every `:closed` away and asking
+instead. The principle generalises: never let a transient notification be the
+only record of a durable state.
+
+It is symmetric. A script can ask its own end (`closed?`), and a send or receive
+against a port whose peer is gone **errors rather than parking** — a script
+blocked forever on a host that hung up is the same failure as a leaked handle,
+seen from the other side.
 
 ### Where the cost is, and therefore what is batched
 
@@ -962,7 +991,7 @@ claim fails the build.
 | `flint.data.html` | 12 | 0 | n/a | n/a |
 | `flint.data.json` | 3 | 0 | n/a | n/a |
 | `flint.data.xml` | 9 | 0 | n/a | n/a |
-| `flint.port` | 12 | 1 | n/a | n/a |
+| `flint.port` | 13 | 1 | n/a | n/a |
 | `flint.port.edn` | 3 | 0 | n/a | n/a |
 | `flint.port.json` | 3 | 0 | n/a | n/a |
 | `flint.regex` | 10 | 0 | n/a | n/a |

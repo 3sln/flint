@@ -153,6 +153,38 @@ console.log('host abi');
   eq('  ... and the host is told about every one of them', closes.length, 3);
 }
 
+// --- the event is a notification; the state is the truth --------------------
+//
+// A host that throws every `:closed` away must still be able to find out. If a
+// notification were the only carrier of a durable fact, one dropped or not yet
+// drained would leak a handle for ever.
+{
+  const inst = await fresh('out/ha-query.wasm');
+  const h = raw(inst);
+  const held = new Set();
+  let ignored = 0;
+  let code = h.e.main();
+  let guard = 0;
+  while (code === 2 && guard++ < 100) {
+    for (const ev of h.drain()) {
+      if (ev.kind === 1) { held.add(ev.b); h.e.flint_continue(ev.a, 1); }
+      else if (ev.kind === 3) ignored++;   // deliberately thrown away
+    }
+    // ... and instead, ASK.
+    for (const port of [...held]) {
+      const st = h.e.flint_port_state(port);
+      if (st === 2 || st === 4 || st === 5 || st === 255) {
+        held.delete(port);
+        h.e.flint_close(port);
+      }
+    }
+    code = h.e.flint_resume();
+  }
+  eq('the program finishes even though every :closed event was discarded', code, 0);
+  ok('  ... and there were events to discard', ignored > 0, `ignored ${ignored}`);
+  eq('a host that only ever ASKS still releases every handle', held.size, 0);
+}
+
 // --- formats ---------------------------------------------------------------
 {
   const inst = await fresh('out/ha-formats.wasm');

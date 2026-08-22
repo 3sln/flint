@@ -78,9 +78,31 @@
            "(defn main [_]\n"
            "  (let [[a b] (p/channel 2)]\n"
            "    (p/send a 1) (p/close a)\n"
-           "    (pr-str [(p/receive b) (p/receive b) (p/state b)])))"))
-(check "a closed port drains and then reads as end of stream"
-       (run! (build! "closed")) "[1 nil :closed]")
+           "    (pr-str [(p/receive b) (p/state b) (p/receive b) (p/state b)\n"
+           "             (p/closed? b) (try (p/send b 2) (catch Throwable e (ex-message e)))])))"))
+(def closed-out (run! (build! "closed")))
+(check-that "a half-closed port still drains what was already buffered"
+            (str/starts-with? closed-out "[1 :half-closed nil"))
+(check-that "  ... and then reads as end of stream, which closed? agrees with"
+            (str/includes? closed-out "nil :half-closed true"))
+(check-that "sending into a port whose peer has closed errors rather than parking"
+            (str/includes? closed-out "the other end has closed"))
+
+(src! "orphan"
+      (str "(ns orphan (:require [flint.thread :as t] [flint.port :as p]))\n"
+           "(defn only-b [] (let [[a b] (p/channel 1)] b))\n"
+           "(defn main [_]\n"
+           "  (let [b (only-b)]\n"
+           "    (dotimes [i 400000] (str \"gc-padding-\" i))\n"
+           "    (pr-str [(p/state b)\n"
+           "             (try (p/receive b) (catch Throwable e (ex-message e)))\n"
+           "             (try (p/send b 1) (catch Throwable e (ex-message e)))])))"))
+(def orphan-out (run! (build! "orphan")))
+(check-that "a port whose peer was collected reports :orphaned, not :closed"
+            (str/includes? orphan-out ":orphaned"))
+(check-that "  ... and receiving on it errors rather than reading as end of stream"
+            (str/includes? orphan-out "receive: the other end of this port is gone"))
+(check-that "  ... and so does sending" (str/includes? orphan-out "send: the other end is gone"))
 
 ;; ---------------------------------------------------------------- what crosses
 

@@ -177,6 +177,8 @@ builtin!(flint_b_port_state, b_port_state, |rt, a, n| {
         conc::P_PENDING => "pending",
         conc::P_OPEN => "open",
         conc::P_CLOSED => "closed",
+        conc::P_HALF => "half-closed",
+        conc::P_ORPHANED => "orphaned",
         _ => "refused",
     };
     rt.keyword(None, name)
@@ -362,6 +364,19 @@ mod host {
     #[no_mangle]
     pub extern "C" fn flint_close(port: u32) {
         rt().host_close_port(port as i64);
+    }
+
+    /// **Ask** what state the runtime end of a port is in, rather than waiting
+    /// to be told: 0 pending, 1 open, 2 closed, 3 refused, 4 half-closed,
+    /// 5 orphaned, 255 unknown.
+    ///
+    /// A `:closed` event is a notification and notifications can be dropped,
+    /// missed, or simply not drained yet. If one were the only way to learn a
+    /// durable fact, missing it would leak a handle for ever. So the state is
+    /// queryable and the event is an optimisation over polling.
+    #[no_mangle]
+    pub extern "C" fn flint_port_state(port: u32) -> u32 {
+        rt().host_port_state(port as i64) as u32
     }
 
     /// Run the scheduler until it needs the host again or the program is done.

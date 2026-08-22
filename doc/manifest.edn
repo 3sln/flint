@@ -902,6 +902,7 @@
   :present
   #{channel
     close
+    closed?
     format-of
     host?
     label
@@ -913,7 +914,7 @@
     state
     with-open},
   :macros #{with-open},
-  :count 12},
+  :count 13},
  flint.port.edn
  {:file "lib/flint/port/edn.cljc",
   :present #{codec decode encode},

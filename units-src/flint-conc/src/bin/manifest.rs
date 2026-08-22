@@ -12,7 +12,8 @@ fn main() {
     // which is what keeps a pure module's outside edge exactly as it was.
     println!(
         " :exports [\"flint_drain\" \"flint_events_ptr\" \"flint_continue\" \
-\"flint_in_alloc\" \"flint_deliver\" \"flint_close\" \"flint_resume\"]"
+\"flint_in_alloc\" \"flint_deliver\" \"flint_close\" \"flint_port_state\" \
+\"flint_resume\"]"
     );
     println!(" :provides {{");
     for (name, symbol) in flint_conc::CATALOGUE {
