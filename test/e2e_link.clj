@@ -47,7 +47,7 @@
 (defn build! [which out]
   (let [b (build-image which)
         needed (img/natives b)]
-    (link/compose {:units-dir "units"
+    (link/compose {:unit-path ["units"]
                    :sysroot "units/.sysroot"
                    :needed-builtins needed
                    :emit-image (fn [slots] (img/emit b slots))
@@ -102,7 +102,7 @@
 
 (defn build-named! [which out]
   (let [b (build-image which)]
-    (link/compose {:units-dir "units" :sysroot "units/.sysroot"
+    (link/compose {:unit-path ["units"] :sysroot "units/.sysroot"
                    :needed-builtins (img/natives b)
                    :emit-image (fn [slots] (img/emit b slots))
                    :out out :keep-names true})))

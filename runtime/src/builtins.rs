@@ -70,8 +70,11 @@ builtins! {
     // --- equality, hashing, identity ---------------------------------------
     "=", flint_b_eq, b_eq, |rt, a, n| {
         if n < 2 { return TRUE; }
-        let first = arg(rt, a, 0);
         for i in 1..n {
+            // Both operands are re-read from the value stack every time round:
+            // `=` on a compound value allocates, and the stack is a root the
+            // collector updates, so this is the address that stays correct.
+            let first = arg(rt, a, 0);
             let x = arg(rt, a, i);
             if !rt.eq(first, x) { return FALSE; }
         }

@@ -35,6 +35,17 @@ impl Rt {
         self.category(v) == CAT_SEQUENTIAL
     }
 
+    /// Can `=` or `hash` on this value allocate?
+    ///
+    /// Only compound values: comparing or hashing a vector, list, map or set
+    /// walks it through `seq`/`first`/`next`, which allocates, which can run a
+    /// collection in the middle of a map lookup. Scalars -- numbers, strings,
+    /// keywords, symbols -- never do, and the lookup paths take a version with
+    /// no rooting at all when the key is one, because `get` is hot.
+    pub fn eq_may_alloc(&self, v: Value) -> bool {
+        v.is_heap() && self.category(v) != CAT_SCALAR
+    }
+
     pub fn eq(&mut self, a: Value, b: Value) -> bool {
         // Doubles first: bit equality would wrongly make NaN equal to itself,
         // and would wrongly separate 0.0 from -0.0.
@@ -99,22 +110,28 @@ impl Rt {
         if self.is_vector(a) && self.is_vector(b) && self.vec_count(a) != self.vec_count(b) {
             return false;
         }
+        // Everything here is rooted, because seq/first/next allocate: `=` on a
+        // compound value is one of the few places a collection can run in the
+        // middle of a comparison, and a raw address held across it is stale.
         let base = self.mark();
-        let sa = self.seq(a);
+        let ai = self.push(a);
+        let bi = self.push(b);
+        let sa = self.seq(self.r(ai));
         let ia = self.push(sa);
-        let sb = self.seq(b);
+        let sb = self.seq(self.r(bi));
         let ib = self.push(sb);
         let result = loop {
             let (x, y) = (self.r(ia), self.r(ib));
             if x.is_nil() || y.is_nil() {
                 break x.is_nil() && y.is_nil();
             }
-            let fa = self.first(x);
+            let fa = self.first(self.r(ia));
             let fi = self.push(fa);
             let fb = self.first(self.r(ib));
-            let fa = self.r(fi);
+            let fbi = self.push(fb);
+            let same = self.eq(self.r(fi), self.r(fbi));
             self.pop_to(fi);
-            if !self.eq(fa, fb) {
+            if !same {
                 break false;
             }
             let na = self.next(self.r(ia));
@@ -176,24 +193,31 @@ impl Rt {
                 return cached.as_fixnum() as i32 as u32;
             }
         }
+        // `v` is rooted for the whole walk: seq/first/next allocate, and the
+        // cache write at the end would otherwise land on a stale address --
+        // which is not a wrong hash, it is a corrupted heap.
         let base = self.mark();
-        let s = self.seq(v);
+        let vi = self.push(v);
+        let s = self.seq(self.r(vi));
         let si = self.push(s);
         let mut acc = 1u32;
         let mut n = 0u32;
         while !self.r(si).is_nil() {
             let f = self.first(self.r(si));
-            let h = self.hash_value(f);
+            let fi = self.push(f);
+            let h = self.hash_value(self.r(fi));
+            self.pop_to(fi);
             acc = hash::ordered_step(acc, h);
             n += 1;
             let nx = self.next(self.r(si));
             self.set_r(si, nx);
         }
-        self.pop_to(base);
         let h = hash::mix_coll_hash(acc, n);
-        if self.is_vector(v) {
-            self.set(v, crate::vector::V_HASH, Value::fixnum(h as i32 as i64));
+        if self.is_vector(self.r(vi)) {
+            let vv = self.r(vi);
+            self.set(vv, crate::vector::V_HASH, Value::fixnum(h as i32 as i64));
         }
+        self.pop_to(base);
         h
     }
 
@@ -265,10 +289,13 @@ impl Rt {
     }
 
     fn cmp_sequential(&mut self, a: Value, b: Value) -> i32 {
+        // Same rooting discipline as `seq_eq`: seq/first/next allocate.
         let base = self.mark();
-        let sa = self.seq(a);
+        let ai = self.push(a);
+        let bi = self.push(b);
+        let sa = self.seq(self.r(ai));
         let ia = self.push(sa);
-        let sb = self.seq(b);
+        let sb = self.seq(self.r(bi));
         let ib = self.push(sb);
         let r = loop {
             let (x, y) = (self.r(ia), self.r(ib));
@@ -278,12 +305,12 @@ impl Rt {
                 (false, true) => break 1,
                 _ => {}
             }
-            let fa = self.first(x);
+            let fa = self.first(self.r(ia));
             let fi = self.push(fa);
             let fb = self.first(self.r(ib));
-            let fa = self.r(fi);
+            let fbi = self.push(fb);
+            let c = self.compare(self.r(fi), self.r(fbi));
             self.pop_to(fi);
-            let c = self.compare(fa, fb);
             if c != 0 {
                 break c;
             }

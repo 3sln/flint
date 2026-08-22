@@ -130,7 +130,8 @@
   (if-let [b (resolve-local env sym)]
     (assoc b :op (case (:kind b) :local :local :upval :upval :self :self) :name sym)
     (if-let [nn (and (namespace sym) (native-name env sym))]
-      {:op :native-value :name nn}
+      (do (record-dep! env (symbol "flint.native" nn))
+          {:op :native-value :name nn})
       (if-let [q (qualify env sym)]
       (do (record-dep! env q)
           {:op :var :sym q})
@@ -153,8 +154,12 @@
       ;; it is why an unused builtin can be dropped by the linker.
       (and (symbol? head) (namespace head) (not (resolve-local env head))
            (native-name env head))
-      {:op :native :name (native-name env head)
-       :args (mapv #(analyze env %) (rest form))}
+      (let [n (native-name env head)]
+        ;; Record the builtin as a dependency too, under a namespace no source
+        ;; can define. `:exclude` needs a reference chain for builtins exactly
+        ;; as it does for vars, and this makes one fall out of the same edges.
+        (record-dep! env (symbol "flint.native" n))
+        {:op :native :name n :args (mapv #(analyze env %) (rest form))})
 
       ;; Bootstrap macros answer to both `fn` and `clojure.core/fn`: syntax
       ;; quote qualifies them, and they have to keep working after it does.

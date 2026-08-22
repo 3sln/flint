@@ -8,7 +8,7 @@ fn main() {
     println!("{{:flint/unit 1");
     println!(" :name flint.rt");
     println!(" :kind :wasm-object");
-    println!(" :artifact \"flint_rt.o\"");
+    println!(" :artifact \"rt.o\"");
     println!(" :requires []");
     println!(" :abi {{:runtime 1 :value 1 :image 1}}");
     println!(" :provides {{");

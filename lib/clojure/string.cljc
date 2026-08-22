@@ -2,11 +2,35 @@
   "clojure.string, in cljc.
 
   Indices are **code points**, not UTF-16 code units, which is the same
-  divergence as `count` on a string. The regex-taking arities of `replace` and
-  `split` live here too but are only present when `flint.regex` is reachable --
-  they call it, so a program that never uses them does not carry a regex engine."
-  (:require [flint.regex])
+  divergence as `count` on a string.
+
+  `split`, `replace` and `replace-first` take a string or a pattern, and this
+  namespace **does not name `flint.regex`**. It cannot: reachability is per var,
+  so a static call to `flint.regex/split` inside `split` would be live for every
+  program that splits on a comma, and would drag ~27 KB of regex engine in with
+  it. Instead `flint.regex` registers its operations here when it is part of the
+  build (see `regex-ops`), and a pattern is recognised structurally. So
+  `(str/split s \",\")` carries no engine, and `flint.regex` can be named in
+  `:exclude` to prove it."
   (:refer-clojure :exclude [replace reverse]))
+
+(def ^:private regex-ops
+  "Set by `flint.regex` at load time; nil in a build that has no regex engine.
+  You can only obtain a pattern from `re-pattern` or a `#\"...\"` literal, both
+  of which reach `flint.regex/pattern`, which makes that namespace part of the
+  build, which is what keeps this filled in exactly when it is needed."
+  (atom nil))
+
+(defn register-regex-ops! [m] (reset! regex-ops m))
+
+(defn- pattern?
+  "Structural, so that recognising a pattern does not reference the engine."
+  [x]
+  (and (map? x) (contains? x :flint/pattern)))
+
+(defn- rop [k]
+  (or (get @regex-ops k)
+      (throw (ex-info "no regex engine in this build" {:op k}))))
 
 (defn blank? [s]
   (if (nil? s)
@@ -55,12 +79,12 @@
 (defn split
   "Splits on a string separator or a pattern."
   ([s sep]
-   (if (flint.regex/pattern? sep)
-     (flint.regex/split sep s)
+   (if (pattern? sep)
+     ((rop :split) sep s)
      (split-literal s sep)))
   ([s sep limit]
-   (if (flint.regex/pattern? sep)
-     (flint.regex/split sep s limit)
+   (if (pattern? sep)
+     ((rop :split) sep s limit)
      (split-literal s sep limit))))
 
 (defn split-literal
@@ -100,8 +124,8 @@
 (defn replace-first
   "Replaces the first occurrence. `match` may be a string or a pattern."
   [s match replacement]
-  (if (flint.regex/pattern? match)
-    (flint.regex/replace-first match s replacement)
+  (if (pattern? match)
+    ((rop :replace-first) match s replacement)
     (let [i (flint.rt/str-index-of s match 0)]
       (if (nil? i)
         s
@@ -112,7 +136,7 @@
   pattern, `replacement` may be a function of the match."
   [s match replacement]
   (cond
-    (flint.regex/pattern? match) (flint.regex/replace-all match s replacement)
+    (pattern? match) ((rop :replace-all) match s replacement)
     (= "" match) s
     :else
     (loop [acc [] from 0]

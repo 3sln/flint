@@ -918,12 +918,30 @@ impl Rt {
     }
 
     pub fn tmap_get(&mut self, t: Value, k: Value, dflt: Value) -> Value {
-        let root = self.slot(t, 1);
-        if root.is_nil() {
-            return dflt;
+        if !self.eq_may_alloc(k) {
+            let root = self.slot(t, 1);
+            if root.is_nil() {
+                return dflt;
+            }
+            let h = self.hash_value(k);
+            let r = self.champ_find(root, h, k);
+            return if r == NOT_FOUND { dflt } else { r };
         }
-        let h = self.hash_value(k);
-        let r = self.champ_find(root, h, k);
+        let base = self.mark();
+        let ti = self.push(t);
+        let ki = self.push(k);
+        let di = self.push(dflt);
+        // Hash before reading the root: hashing a compound key allocates.
+        let h = self.hash_value(self.r(ki));
+        let root = self.slot(self.r(ti), 1);
+        if root.is_nil() {
+            let d = self.r(di);
+            self.pop_to(base);
+            return d;
+        }
+        let r = self.champ_find(root, h, self.r(ki));
+        let dflt = self.r(di);
+        self.pop_to(base);
         if r == NOT_FOUND {
             dflt
         } else {
@@ -941,10 +959,11 @@ impl Rt {
         let ki = self.push(k);
         let vi = self.push(v);
         let ei = self.push(edit);
-        let root = self.slot(t, 1);
         let h = self.hash_value(self.r(ki));
+        let root = self.slot(self.r(ti), 1);
+        let ri = self.push(root);
         self.champ_added = false;
-        let nr = self.champ_assoc(root, h, self.r(ki), self.r(vi), self.r(ei));
+        let nr = self.champ_assoc(self.r(ri), h, self.r(ki), self.r(vi), self.r(ei));
         let added = self.champ_added;
         let t = self.r(ti);
         self.set(t, 1, nr);
@@ -965,10 +984,11 @@ impl Rt {
         let ti = self.push(t);
         let ki = self.push(k);
         let ei = self.push(edit);
-        let root = self.slot(t, 1);
         let h = self.hash_value(self.r(ki));
+        let root = self.slot(self.r(ti), 1);
+        let ri = self.push(root);
         self.champ_added = false;
-        let nr = self.champ_dissoc(root, h, self.r(ki), self.r(ei));
+        let nr = self.champ_dissoc(self.r(ri), h, self.r(ki), self.r(ei));
         let removed = self.champ_added;
         let t = self.r(ti);
         self.set(t, 1, nr);

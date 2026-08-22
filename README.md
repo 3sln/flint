@@ -4,6 +4,8 @@
 
 ```
 flint :src examples/ :fn demo/main   ->   out.wasm
+       [:exclude [ns ...]]      assert these namespaces are NOT reachable
+       [:wasm-ld <dir> ...]     where to find precompiled namespace units
 ```
 
 The module carries its own heap, its own garbage collector, its own copy of the
@@ -19,7 +21,7 @@ $ cat examples/demo.cljc
   (str "hello, " (if (seq args) (first args) "world")))
 
 $ ./bin/flint :src examples :fn demo/main :out out/demo.wasm
-wrote out/demo.wasm (175415 bytes)
+wrote out/demo.wasm (179592 bytes)
 
 $ node host/flint.mjs out/demo.wasm flint
 hello, flint
@@ -52,7 +54,7 @@ module itself needs no host support at all.
 - [The collector](#the-collector) — and the rooting decision everything rests on
 - [Data structures](#data-structures) — CHAMP, and why not Clojure's HAMT
 - [The interpreter](#the-interpreter) — and why an interpreter at all
-- [Modularity](#modularity) — only reachable code ships
+- [Modularity](#modularity) — only reachable code ships, and the two options that make it checkable
 - [The compiler and its bootstrap](#the-compiler-and-its-bootstrap)
 - [Library coverage](#library-coverage) — the per-namespace deficiency lists
 - [Where flint differs from Clojure](#where-flint-differs-from-clojure)
@@ -83,8 +85,8 @@ Working, end to end, and tested:
   referencing every var it claims, runs it, and expands every macro it claims.
 
 Not working, and named as such: no protocols, records or types; no transducers;
-no sorted collections; no `eval` at runtime; the regex engine is 84× slower than
-Java's. All of this is in [Limits](#limits).
+no sorted collections; no `eval` at runtime; the regex engine is 86× slower than
+babashka's. All of this is in [Limits](#limits).
 
 ---
 
@@ -198,6 +200,20 @@ moved the closure, `UPVAL` read a stale address. The fix was to delete the copy 
 no second mechanism. There is a regression test that forces a collection while an
 upvalue-using frame is live.
 
+**And once more, in a place that was much easier to get wrong.** `=` and `hash`
+on a *compound* value allocate: comparing two vectors walks both through
+`seq`/`first`/`next`, and each of those is an allocation. So a collection can run
+in the middle of a map lookup or insert — and the CHAMP code was holding raw
+addresses across exactly those calls. The symptoms were a key silently missing
+from a map whose `count` said it was there, a hash cached into a moved object,
+and eventually an out-of-bounds trap. Scalar keys never showed any of it, because
+hashing a fixnum allocates nothing; it took the self-hosting fixpoint test
+failing (the compiler interns its constants in a map keyed by vectors) to expose
+it. Every path that calls `=` or `hash` now roots what it is holding, and
+`test/gcstress.cljc` builds 30 000-entry maps and sets with vector, list, map and
+set keys and asserts every one is findable afterwards. Lookups with a scalar key
+take a version with no rooting at all, so `get` keeps its old cost.
+
 ### Generations
 
 - **young**: two equal semispaces, allocation is a bump pointer, collection is a
@@ -219,12 +235,12 @@ Measured, building a 400 000-element vector (Apple M1 Pro):
 
 | | count | median | p95 | max |
 |---|---:|---:|---:|---:|
-| minor collections | 84 | 12.8 µs | 14.1 µs | 26.6 µs |
-| major collections | 6 | 168.1 µs | 259.6 µs | 305.2 µs |
+| minor collections | 84 | 12.8 µs | 14.2 µs | 22.8 µs |
+| major collections | 6 | 155.2 µs | 253.6 µs | 297.4 µs |
 
-6.7% of wall clock, with 3.4 MiB promoted out of 89 MiB allocated. A major
-collection scales with the live set: 10.5 µs at 10 000 live objects, 72.7 µs at
-100 000, 304.7 µs at 400 000.
+6.6% of wall clock, with 3.4 MiB promoted out of 89 MiB allocated. A major
+collection scales with the live set: 10.5 µs at 10 000 live objects, 81.4 µs at
+100 000, 312.6 µs at 400 000.
 
 ---
 
@@ -375,17 +391,17 @@ Measured, with `test/modularity.clj` asserting each by symbol name:
 
 | program | bytes | over the floor |
 |---|---:|---:|
-| no parsers | 175 073 | — |
-| JSON only | 256 923 | +81 850 |
-| XML only | 259 392 | +84 319 |
-| HTML only | 225 962 | +50 889 |
+| no parsers | 179 250 | — |
+| JSON only | 261 772 | +82 522 |
+| XML only | 252 054 | +72 804 |
+| HTML only | 230 138 | +50 888 |
 
 ### The floor, honestly
 
 Every module carries, whatever it does: the allocator and the generational
 collector, the value encoding, hashing and equality, the number tower, UTF-8 and
 string interning, the persistent collection internals with their transients, and
-the interpreter. That is **~175 KB** stripped. It is all genuine runtime code —
+the interpreter. That is **~179 KB** stripped. It is all genuine runtime code —
 the largest single function is the interpreter loop at 15 KB, then the CHAMP
 insert path at 11 KB — with no surprise dependency: `libm` is the only crate the
 core links, and it is what makes `clojure.math` possible at all in a bare wasm
@@ -397,14 +413,26 @@ the table above:
 
 | what you reach | module | over the floor |
 |---|---:|---:|
-| nothing (a string literal) | 175 072 | — |
-| `pr-str` of a nested structure | 175 131 | +59 |
-| `clojure.math` (6 functions) | 192 636 | +17 564 |
-| one `#"…"` regex | 228 164 | +53 092 |
-| `clojure.edn/read-string` | 250 066 | +74 994 |
-| `flint.data.json` | 256 923 | +81 850 |
-| `flint.data.xml` | 259 392 | +84 319 |
-| `flint.data.html` | 225 962 | +50 889 |
+| nothing (a string literal) | 179 250 | — |
+| `pr-str` of a nested structure | 179 304 | +54 |
+| `clojure.string/split` on a literal | 204 015 | +24 765 |
+| `clojure.math` (6 functions) | 197 990 | +18 740 |
+| one `#"…"` regex | 235 173 | +55 923 |
+| `clojure.edn/read-string` | 254 914 | +75 664 |
+| `flint.data.json` | 261 772 | +82 522 |
+| `flint.data.xml` | 252 054 | +72 804 |
+| `flint.data.html` | 230 138 | +50 888 |
+
+The `split` row is there because it used to be the regex row. `clojure.string`
+takes a string *or* a pattern, and the obvious way to write that — call
+`flint.regex/pattern?` and branch — makes the reference to the regex engine live
+for every program that splits on a comma, because shaking is per var and the
+call is right there in `split`. `clojure.string` therefore does not name
+`flint.regex` at all: it recognises a pattern structurally, and `flint.regex`
+registers its operations into `clojure.string/regex-ops` at load time, which
+happens exactly when something reaches `flint.regex/pattern` — and the only ways
+to reach that are `re-pattern` and a `#"…"` literal. Splitting on a literal is
+**31 KB smaller** as a result, and `:exclude [flint.regex]` will prove it.
 
 ### Dependencies, and what each one bought
 
@@ -412,14 +440,115 @@ Four crates, all `no_std` + `alloc`, each earning its place:
 
 | crate | where | what it gave | what it cost |
 |---|---|---|---|
-| `libm` | the floor | `sqrt`, `pow`, the trigs — pure Rust, no libc. Without it `clojure.math` cannot exist in a bare wasm build at all. | +17.6 KB, and only for programs that call it |
-| `serde_json` + `serde` | `flint.data.json` | a correct JSON parser with `float_roundtrip`, driven through `DeserializeSeed`/`Visitor` so no `serde_json::Value` is ever built | +81.9 KB |
-| `xmlparser` | `flint.data.xml` | a streaming XML tokenizer that is already `no_std` | +84.3 KB |
+| `libm` | the floor | `sqrt`, `pow`, the trigs — pure Rust, no libc. Without it `clojure.math` cannot exist in a bare wasm build at all. | +18.7 KB, and only for programs that call it |
+| `serde_json` + `serde` | `flint.data.json` | a correct JSON parser with `float_roundtrip`, driven through `DeserializeSeed`/`Visitor` so no `serde_json::Value` is ever built | +82.5 KB |
+| `xmlparser` | `flint.data.xml` | a streaming XML tokenizer that is already `no_std` | +72.8 KB |
 | `htmlparser` | `flint.data.html` | the same, tolerant of real markup — unquoted attributes, bare `&`, mixed case | +50.9 KB |
 
 Nothing else. No `hashbrown`, no `regex`, no `dlmalloc`: the hash tables, the
 regex engine and the allocator are flint's own, because the first two are what
 this language is *for* and the third has to know about the collector.
+
+### `:exclude` — an assertion, not a pruning
+
+```
+flint :src src :fn app/main :exclude [flint.regex flint.data.xml]
+```
+
+`:exclude` names namespaces — **including built-in ones** — that the build must
+not contain. The important word is *must*: it is a claim the compiler checks,
+not an instruction to leave something out.
+
+The difference matters. "Leave these out" has a failure mode where the module
+compiles, links, ships, and then dies at run time on the one path nobody tested.
+So if excluded code turns out to be reachable, that is a **compile error**, and
+no module is written:
+
+```console
+$ flint :src src :fn splitpat/main :exclude [flint.regex]
+namespace flint.regex is excluded, but it is reachable.
+
+  flint.regex/pattern is reached by:
+       flint.main/-main
+    -> splitpat/main
+    -> tokenize/tokens
+    -> flint.regex/pattern
+
+  also reachable in flint.regex: flint.regex/apply-lazy, flint.regex/cache, …
+
+Either stop reaching it, or drop it from :exclude.
+$ echo $?
+1
+```
+
+The **chain** is the whole point. "`flint.regex` is reachable" sends somebody
+grepping; naming `tokenize/tokens` in the middle tells them what to change. It
+falls out of the reachability pass that already exists: while computing the
+transitive closure from `:fn`, flint keeps the edge that first reached each var,
+and walking those predecessors backwards is the chain. Where several excluded
+vars are reachable it prints the one whose chain runs all the way from the entry
+point, and prefers a real var over the synthetic id a bare top-level form gets.
+
+Built-ins get a chain from the same edges: a Rust builtin is recorded as a
+reference to `flint.native/<name>`, so `:exclude [flint.data.json]` on a program
+that calls `json/read-str` names ``the builtin `flint/json-parse` `` too.
+
+What it is for:
+
+- **Guaranteeing an absence.** "This module must not contain an XML parser"
+  becomes something the build enforces rather than something a reviewer eyeballs.
+- **Finding out what drags something in.** Exclude it and read the chain. That
+  is exactly how the `clojure.string` → `flint.regex` edge above was found.
+- **Keeping a module small on purpose**, with a build failure if a refactor
+  quietly reintroduces the dependency.
+
+One honest caveat, because [`doc/decisions/0004`](doc/decisions/0004-exclude-and-unit-path.md)
+asks for "excluding something unreachable makes the module smaller" and that is
+not quite true here. flint already shakes **per var**, so a namespace nothing
+reaches was never in the module and excluding it removes nothing: the flag's
+value is the assertion, not the pruning. The size drop is on the other side of
+the check — the same program written so the exclusion *holds* is smaller, and
+`test/options.clj` asserts that difference (31 KB for `flint.regex`) rather than
+a difference that does not exist.
+
+### `:wasm-ld` — precompiled units on a search path
+
+```
+flint :src src :fn app/main :wasm-ld vendor/units
+```
+
+A search path for **precompiled wasm namespace units**, resolved by namespace
+exactly the way `:src` resolves source: `demo.shout` →
+`<dir>/demo/shout.unit.edn`, by directory hierarchy. A unit is a manifest, a
+relocatable object, and optionally the rlibs it needs; the format is described in
+[`doc/unit-format.md`](doc/unit-format.md).
+
+**flint's own units are the last entry on that path**, not a special case. Every
+compile you run already exercises the mechanism a user-supplied unit uses, and
+`units/` can be shadowed like anything else. Three things this had to settle:
+
+- **Precedence.** A unit and a `.cljc` file for the same namespace are not
+  alternatives — a unit is the namespace's *native* half and the source its
+  Clojure half, and `flint.data.json` ships as both. What can genuinely conflict
+  is two of a kind, and both resolve the same way: **earlier on the path wins**,
+  and the loser is reported rather than silently dropped. Source is searched
+  `:src` dirs first, then `:wasm-ld` dirs, then flint's own `lib/` — your code
+  beats a copy vendored beside a unit, which beats flint's.
+- **Compatibility.** Every unit on the path declares `:flint/unit` and an `:abi`
+  map, and one flint cannot link is **refused by name and version** before the
+  compile starts, rather than linked and left to trap:
+  `refusing unit demo.shout at vendor/units/demo/shout.unit.edn: runtime 2 (need 1)`.
+- **Reporting.** `--stats` prints which manifest each linked unit came from.
+
+```console
+$ flint :src app :fn app/main :wasm-ld test/fixtures/wasm-ld --stats
+units linked demo.shout <- test/fixtures/wasm-ld/demo/shout.unit.edn, flint.rt <- units/flint/rt.unit.edn
+compile (on bb) 185ms  link 134ms  module 195356 bytes  image 4485 bytes  vars 31/404  builtins 24
+```
+
+`test/options.clj` builds a toy unit (`units-src/flint-demo-shout`, one builtin),
+puts it on the path, links it, runs the module, and checks the answer — and then
+does the same with a deliberately incompatible copy and checks the refusal.
 
 ---
 
@@ -524,7 +653,7 @@ claim fails the build.
 | `clojure.edn` | 2 | 0 | 1 | 1 |
 | `clojure.math` | 32 | 0 | 14 | 1 |
 | `clojure.set` | 12 | 0 | 0 | 0 |
-| `clojure.string` | 22 | 0 | 0 | 1 |
+| `clojure.string` | 23 | 0 | 0 | 2 |
 | `clojure.walk` | 7 | 0 | 3 | 0 |
 | `flint.data.html` | 12 | 0 | n/a | n/a |
 | `flint.data.json` | 3 | 0 | n/a | n/a |
@@ -576,7 +705,7 @@ flint has no stream type. `read-string` is the whole surface, plus `read-all` wh
 
 #### `clojure.string`
 
-*Added by flint:* `split-literal`
+*Added by flint:* `register-regex-ops!` `split-literal`
 
 #### `clojure.walk`
 
@@ -651,12 +780,12 @@ instance. Full output, including the native runs, in
 
 | program | bytes | compile | cold | warm |
 |---|---:|---:|---:|---:|
-| hello (trivial) | 175 416 | 0.05 ms | 0.11 ms | 0.01 ms |
-| tight loop, 10⁶ iterations | 199 733 | 0.08 ms | 168.42 ms | 168.28 ms |
-| transient map, 10⁵ inserts | 213 690 | 0.09 ms | 46.64 ms | 45.81 ms |
-| word frequency (string split) | 254 365 | 0.09 ms | 63.02 ms | 62.02 ms |
-| word frequency (regex split) | 261 251 | 0.09 ms | 112.68 ms | 112.22 ms |
-| JSON round trip, 2000 records | 283 877 | 0.10 ms | 101.95 ms | 100.86 ms |
+| hello (trivial) | 179 593 | 0.05 ms | 0.11 ms | 0.01 ms |
+| tight loop, 10⁶ iterations | 203 910 | 0.11 ms | 168.49 ms | 168.16 ms |
+| transient map, 10⁵ inserts | 218 539 | 0.06 ms | 47.13 ms | 46.33 ms |
+| word frequency (string split) | 250 610 | 0.09 ms | 63.22 ms | 62.36 ms |
+| word frequency (regex split) | 268 904 | 0.10 ms | 114.27 ms | 113.04 ms |
+| JSON round trip, 2000 records | 288 726 | 0.09 ms | 102.72 ms | 102.10 ms |
 
 Cold start is dominated by the work itself: the module's own startup — reserving
 the heap, loading the image, running every top-level initialiser — is the 0.10 ms
@@ -669,9 +798,9 @@ source, same input. It is **not** a claim about JVM Clojure.
 
 | program | flint | babashka | ratio |
 |---|---:|---:|---:|
-| tight loop, 10⁶ iterations | 168.28 ms | 76.43 ms | 2.20× |
-| transient map, 10⁵ inserts | 45.81 ms | 17.78 ms | 2.58× |
-| word frequency (regex split) | 112.22 ms | 1.34 ms | **84×** |
+| tight loop, 10⁶ iterations | 168.16 ms | 76.40 ms | 2.20× |
+| transient map, 10⁵ inserts | 46.33 ms | 19.42 ms | 2.39× |
+| word frequency (regex split) | 113.04 ms | 1.31 ms | **86×** |
 
 Two and a half times slower than babashka on interpreter-bound and
 data-structure-bound work is a fair place to be for a self-contained module with
@@ -681,10 +810,10 @@ its own collector. The regex number is not; see [Limits](#limits).
 
 | program | instructions | warm | ns / instruction |
 |---|---:|---:|---:|
-| tight loop, 10⁶ iterations | 27 000 226 | 168.28 ms | 6.2 |
-| JSON round trip | 12 066 852 | 100.86 ms | 8.4 |
-| transient map, 10⁵ inserts | 3 000 323 | 45.81 ms | 15.3 |
-| word frequency (string split) | 3 258 076 | 62.02 ms | 19.0 |
+| tight loop, 10⁶ iterations | 27 000 226 | 168.16 ms | 6.2 |
+| JSON round trip | 12 066 852 | 102.10 ms | 8.5 |
+| transient map, 10⁵ inserts | 3 000 323 | 46.33 ms | 15.4 |
+| word frequency (string split) | 3 257 997 | 62.36 ms | 19.1 |
 
 Read down the column: 6.2 ns is what a dispatched instruction costs when it does
 almost nothing, and the rising numbers are the same dispatch diluted by real
@@ -695,11 +824,11 @@ less on anything that touches the heap.
 
 | operation | persistent | transient | speedup |
 |---|---:|---:|---:|
-| vector `conj`, 10⁵ | 44.6 ns/op | 4.4 ns/op | **10.1×** |
-| map `assoc`, 10⁵ | 417.9 ns/op | 188.7 ns/op | 2.2× |
-| map `assoc`, 10³ | 150.4 ns/op | 78.6 ns/op | 1.9× |
-| map `assoc`, 64 | 86.6 ns/op | 58.6 ns/op | 1.5× |
-| map `assoc`, 8 | 31.2 ns/op | 67.8 ns/op | 0.5× |
+| vector `conj`, 10⁵ | 45.5 ns/op | 4.4 ns/op | **10.3×** |
+| map `assoc`, 10⁵ | 422.7 ns/op | 190.7 ns/op | 2.2× |
+| map `assoc`, 10³ | 156.9 ns/op | 90.1 ns/op | 1.7× |
+| map `assoc`, 64 | 99.6 ns/op | 67.7 ns/op | 1.5× |
+| map `assoc`, 8 | 46.9 ns/op | 88.5 ns/op | 0.5× |
 
 Transients are genuinely fast, which matters because the compiler is written in
 cljc and compiles itself — transient performance is on flint's own critical
@@ -711,18 +840,18 @@ the promotion costs more than it saves.
 
 | operation | 8 | 64 | 10³ | 10⁵ |
 |---|---:|---:|---:|---:|
-| map `assoc` | 31.2 ns | 86.6 ns | 150.4 ns | 417.9 ns |
-| map `get` | 15.6 ns | 11.1 ns | 20.0 ns | 24.6 ns |
+| map `assoc` | 46.9 ns | 99.6 ns | 156.9 ns | 422.7 ns |
+| map `get` | 26.0 ns | 13.0 ns | 20.8 ns | 26.8 ns |
 | vector `nth` | | | | 1.9 ns |
-| vector `conj` | | | | 44.6 ns |
-| set `conj` | | | | 433.1 ns |
+| vector `conj` | | | | 45.5 ns |
+| set `conj` | | | | 440.2 ns |
 | keyword intern lookup | | | | 10.2 ns |
 
 `get` staying flat from 64 to 100 000 entries is the trie doing its job.
 
 ### Collector
 
-Given above: median minor pause 12.8 µs, median major pause 168 µs, 6.7% of wall
+Given above: median minor pause 12.8 µs, median major pause 155 µs, 6.6% of wall
 clock on an allocation-heavy workload.
 
 ---
@@ -761,14 +890,17 @@ The honest list. Nothing here is stubbed and reported as working.
 
 ### Slow, and by how much
 
-- **The regex engine is 84× slower than Java's** on the word-frequency
+- **The regex engine is 86× slower than babashka's** on the word-frequency
   benchmark. It is a backtracking matcher written in cljc — which is what makes
   it tree-shake away when unused — using continuation closures, so it allocates
   per match step. A first-character skip cut a third off; the remaining cost is
   structural. [`doc/decisions/0002`](doc/decisions/0002-modularity.md) said to
   measure before moving something to Rust, and this is the measurement that
   would justify it: a Rust regex unit would cost nothing for programs that do
-  not use one, because the unit mechanism already exists.
+  not use one, because the unit mechanism already exists — and now that
+  `clojure.string` no longer drags the engine in, `:exclude [flint.regex]` is a
+  one-line way to prove a build does not depend on it either way. Not done: the
+  two options in [Modularity](#modularity) came first, as the brief asked.
 - **Everything else is ~2.5× babashka**, which is a reasonable place for an
   interpreter that brings its own collector.
 - **`case` is O(n)**, a chain of `=`. Keys are usually keywords or short
@@ -803,8 +935,6 @@ The honest list. Nothing here is stubbed and reported as working.
 - **The linker driver is host-side only.** The compiler self-hosts; `flint.wasm`
   and `flint.link` run next to `rust-lld` and are not part of that requirement
   (a flint module has no processes to spawn).
-- **Unit compatibility checking is an assert, not a message.** The `:abi` field
-  exists and is documented; rejecting an incompatible unit politely is not done.
 - **The self-hosted compiler is slower than the bootstrap one**, which is
   expected: `--self` takes 2.5 s where babashka takes 0.17 s for the same
   program, most of it node startup plus flint being ~2.5× babashka. Both produce
@@ -836,10 +966,15 @@ $ ./bin/flint :src examples :fn demo/main :out out/demo.wasm --self
                         # the two modules are byte identical
 
 $ ./bin/test            # everything: rust tests, reader, conformance both ways,
-                        # end-to-end linking, modularity, manifest, self-hosting
+                        # end-to-end linking, gc stress, modularity, :exclude
+                        # and :wasm-ld, manifest, self-hosting
 $ ./bin/bench           # the benchmark tables above
 $ ./bin/manifest        # regenerate doc/manifest.edn
+$ ./bin/build-test-unit # the toy unit test/options.clj puts on the :wasm-ld path
 ```
+
+`units/` and `test/fixtures/` are build output and are not tracked; both scripts
+above regenerate them.
 
 Useful flags: `--stats` (compile/link timings and tree-shaking counts),
 `--disasm <fn>` (bytecode), `--explain <var>` (why a var was or was not kept),
@@ -864,13 +999,14 @@ runner (turn a hang into a frame trace).
 
 ```
 runtime/          the Rust core: mem, value, obj, gc, hash, collections, vm, abi
-units-src/        the three parser units (adapted crates)
+units-src/        the parser units (adapted crates), plus a toy unit for tests
 units/            built units: wasm objects + manifests  (bin/build-units)
 src/flint/        the compiler, in portable cljc
 lib/              the library, in cljc: clojure.*, flint.regex, flint.data.*
 host/             flint.mjs -- 40 lines of JS to call a module
 bench/            benchmark programs and the wasm timing harness
-test/             conformance, modularity, manifest, self-hosting fixpoint
+test/             conformance, gc stress, modularity, options, manifest,
+                  self-hosting fixpoint, and the :wasm-ld fixtures
 doc/              decisions, unit format, generated manifest, benchmark output
 ```
 
@@ -886,6 +1022,9 @@ Written down where somebody will find them, with the reasoning:
   reachable code ships, builtins included.
 - [`doc/decisions/0003-namespace-units.md`](doc/decisions/0003-namespace-units.md)
   — a namespace is a compilation unit, and linking composes them.
+- [`doc/decisions/0004-exclude-and-unit-path.md`](doc/decisions/0004-exclude-and-unit-path.md)
+  — `:exclude` as an assertion with a reference chain, and `:wasm-ld` as a
+  namespace-resolved search path with `units/` as its last entry.
 - [`doc/unit-format.md`](doc/unit-format.md) — what a unit is, and what would
   have to change to admit a user-compiled one.
 - [`PLAN.md`](PLAN.md) — the build order, and what was settled before any code

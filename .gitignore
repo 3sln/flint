@@ -3,3 +3,9 @@ target/
 out/
 *.wasm.tmp
 Cargo.lock
+
+# Built by bin/build-units and bin/build-test-unit; regenerate rather than track.
+units/
+test/fixtures/wasm-ld/demo/shout.o
+test/fixtures/wasm-ld/demo/shout.unit.edn
+test/fixtures/wasm-ld-bad/

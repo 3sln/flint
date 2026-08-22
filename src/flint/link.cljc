@@ -26,21 +26,84 @@
       (throw (ex-info (str "command failed: " (first args)) {:code code :err err :out out})))
     {:out out :err err}))
 
-(defn read-unit
-  "Load a unit manifest from `dir`."
-  [dir]
-  (let [f (io/file dir "unit.edn")]
-    (when (.exists f)
-      (assoc (read-string (slurp f)) :dir (str dir)))))
+(def current-abi
+  "What this build of flint can link. A unit declaring anything else is refused
+  by name and version rather than linked and left to crash at run time.
+
+  :runtime  the builtin calling convention (extern C, (rt, base, argc) -> u64)
+  :value    the NaN-boxing layout
+  :image    the program image format"
+  {:runtime 1 :value 1 :image 1})
+
+(defn abi-problem
+  "Why `u` cannot be linked, or nil."
+  [u]
+  (cond
+    (not= 1 (:flint/unit u))
+    (str "unit format version " (pr-str (:flint/unit u)) ", expected 1")
+    :else
+    (let [bad (for [[k want] current-abi
+                    :let [got (get (:abi u) k)]
+                    :when (not= got want)]
+                (str (name k) " " (pr-str got) " (need " want ")"))]
+      (when (seq bad) (str/join ", " bad)))))
+
+(defn read-unit-file
+  "Load one `<ns-path>.unit.edn`. Artifact and libs are relative to it."
+  [f]
+  (when (.exists f)
+    (let [u (read-string (slurp f))]
+      (assoc u :dir (str (.getParent f)) :manifest (str f)))))
+
+(defn ns->path
+  "flint.data.json -> flint/data/json, the same shape :src uses for source."
+  [n]
+  (-> (str n) (str/replace "-" "_") (str/replace "." "/")))
+
+(defn resolve-unit
+  "Find the unit providing namespace `n` on `path`. Earlier directories win, so
+  a user-supplied unit shadows a built-in of the same name."
+  [path n]
+  (some (fn [d] (read-unit-file (io/file d (str (ns->path n) ".unit.edn")))) path))
+
+(defn- unit-files [d]
+  (when (.isDirectory (io/file d))
+    (filter #(str/ends-with? (str %) ".unit.edn") (file-seq (io/file d)))))
 
 (defn discover-units
-  "All units under `root`, by name."
-  [root]
-  (into {} (for [d (.listFiles (io/file root))
-                 :when (.isDirectory d)
-                 :let [u (read-unit d)]
-                 :when u]
-             [(:name u) u])))
+  "Every unit on the search path, by name. Earlier directories win, which is
+  what makes `units/` merely the default entry rather than a special case."
+  [path]
+  (reduce (fn [acc d]
+            (reduce (fn [m f]
+                      (let [u (read-unit-file f)]
+                        (if (or (nil? u) (contains? m (:name u))) m (assoc m (:name u) u))))
+                    acc (unit-files d)))
+          {} path))
+
+(defn check-abi!
+  "Every unit on the path must be linkable by this flint. A directory named with
+  `:wasm-ld` is an assertion that its units are for this runtime, so a stale one
+  is refused by name and version here rather than linked and left to crash."
+  [units]
+  (doseq [[n u] (sort-by key units)]
+    (when-let [why (abi-problem u)]
+      (throw (ex-info (str "refusing unit " n " at " (:manifest u) ": " why)
+                      {:unit n :manifest (:manifest u) :reason why})))))
+
+(defn shadowed-units
+  "Units on the path that lost to an earlier one of the same name. Reported
+  rather than silently dropped, because a stale copy that never links is the
+  kind of thing somebody spends an afternoon on."
+  [path]
+  (let [winners (volatile! {})]
+    (vec (for [d path
+               f (unit-files d)
+               :let [u (read-unit-file f)]
+               :when u
+               :let [w (get @winners (:name u))]
+               :when (do (when-not w (vswap! winners assoc (:name u) (:manifest u))) w)]
+           (assoc u :by w)))))
 
 (defn plan
   "Which units to link, and which of their symbols to export, given the builtin
@@ -82,7 +145,7 @@
         ;; mentions XML never puts xmlparser on the link line at all, so
         ;; "not linked" is stronger than "linked and then gc-sectioned".
         unit-libs (for [u units
-                        :let [d (io/file (:dir u) "lib")]
+                        :let [d (io/file (:dir u) (or (:libs u) "no-libs"))]
                         :when (.isDirectory d)
                         f (.listFiles d)
                         :when (str/ends-with? (str f) ".rlib")]
@@ -108,8 +171,9 @@
   "Link, bind the reached builtins into the wasm table, splice the image in.
   `emit-image` is called with the resolved {builtin-name -> table-slot} map and
   must return the image bytes."
-  [{:keys [units-dir sysroot needed-builtins emit-image out tmp keep-names]}]
-  (let [units (discover-units units-dir)
+  [{:keys [unit-path sysroot needed-builtins emit-image out tmp keep-names]}]
+  (let [units (discover-units unit-path)
+        _ (check-abi! units)
         p (plan units needed-builtins)
         raw (link-objects p sysroot (or tmp (str out ".tmp")) keep-names)
         m (w/parse raw)
@@ -147,6 +211,6 @@
     (io/copy bytes (io/file out))
     {:bytes (count bytes)
      :image-bytes (count image)
-     :units (mapv :name units)
+     :units (mapv (fn [u] {:name (:name u) :manifest (:manifest u)}) (:units p))
      :builtins (count ordered)
      :table-base base}))

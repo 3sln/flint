@@ -53,11 +53,8 @@
                                (vec (remove (set ready) pending))))))))))
 
 (defn builtin-names []
-  (into #{} (for [d (.listFiles (io/file "units"))
-                  :when (.isDirectory d)
-                  :let [f (io/file d "unit.edn")]
-                  :when (.exists f)
-                  k (keys (:provides (read-string (slurp f))))]
+  (into #{} (for [[_ u] (link/discover-units ["units"])
+                  k (keys (:provides u))]
               k)))
 
 (def dirs ["src" "lib"])
@@ -74,7 +71,7 @@
 
 (defn build-module! [image natives out]
   ;; Link with the natives this image needs, then patch the slots in.
-  (link/compose {:units-dir "units" :sysroot "units/.sysroot"
+  (link/compose {:unit-path ["units"] :sysroot "units/.sysroot"
                  :needed-builtins natives
                  :emit-image (fn [slots] (img/patch-native-slots image natives slots))
                  :out out}))

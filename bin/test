@@ -1,6 +1,9 @@
 #!/bin/sh
 # Everything. Fails loudly; skips nothing.
 set -e
+# A pipeline reports the exit status of its LAST command, so `bb x | tail -1`
+# would hide a failing test behind a successful `tail`. Every `bb` step below
+# therefore checks its own result.
 cd "$(dirname "$0")/.."
 fail() { echo; echo "FAILED: $1"; exit 1; }
 
@@ -15,7 +18,8 @@ echo "  ok"
 
 echo
 echo "== reader"
-bb --classpath src test/reader_test.clj | tail -1
+bb --classpath src test/reader_test.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/reader_test.clj"; }
+tail -1 /tmp/flint-test.out
 
 echo
 echo "== conformance: 130 Clojure expressions, on flint"
@@ -25,23 +29,39 @@ grep -q '^PASS' /tmp/conform.out || fail "conformance"
 
 echo
 echo "== conformance: the same expressions, under real Clojure"
-bb test/conform_vs_clojure.clj | tail -2
+bb test/conform_vs_clojure.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/conform_vs_clojure.clj"; }
+tail -2 /tmp/flint-test.out
 
 echo
 echo "== end to end: hand-assembled images, linked and run"
-bb --classpath src test/e2e_link.clj | tail -1
+bb --classpath src test/e2e_link.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/e2e_link.clj"; }
+tail -1 /tmp/flint-test.out
+
+echo
+echo "== gc: compound keys survive collection"
+bb test/gc_stress.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/gc_stress.clj"; }
+tail -1 /tmp/flint-test.out
 
 echo
 echo "== modularity: only reachable code ships"
-bb test/modularity.clj | tail -1
+bb test/modularity.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/modularity.clj"; }
+tail -1 /tmp/flint-test.out
+
+echo
+echo "== options: :exclude is an assertion, :wasm-ld is a search path"
+./bin/build-test-unit >/dev/null 2>&1 || fail "build-test-unit"
+bb test/options.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/options.clj"; }
+tail -1 /tmp/flint-test.out
 
 echo
 echo "== manifest: the deficiency lists are true"
-bb test/manifest.clj | tail -1
+bb test/manifest.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/manifest.clj"; }
+tail -1 /tmp/flint-test.out
 
 echo
 echo "== self-hosting fixpoint"
-bb test/selfhost.clj | tail -1
+bb test/selfhost.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/selfhost.clj"; }
+tail -1 /tmp/flint-test.out
 
 echo
 echo "all green"

@@ -477,3 +477,42 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod intern_stress {
+    use super::*;
+    use alloc::format;
+    use alloc::vec::Vec;
+
+    /// `eq` takes `len <= INTERN_MAX && !bit-equal => not equal` as a fast path.
+    /// That is only sound if every such string really is interned and stays
+    /// interned, so this asserts the invariant across collections: re-creating a
+    /// string that is still reachable must give back the same object.
+    #[test]
+    fn interned_strings_stay_canonical_across_collections() {
+        let mut rt = Rt::new();
+        let names: Vec<alloc::string::String> =
+            (0..1500).map(|i| format!("flint/name-{:05}", i)).collect();
+        for n in &names {
+            let v = rt.string(n);
+            rt.roots.globals.push(v);
+        }
+        // Garbage of the same shape, so the weak table is churned and the
+        // collector has real work to do.
+        for round in 0..6 {
+            for i in 0..1500 {
+                let _ = rt.string(&format!("garbage-{}-{:05}", round, i));
+            }
+            rt.collect();
+        }
+        for (i, n) in names.iter().enumerate() {
+            let again = rt.string(n);
+            assert_eq!(
+                again,
+                rt.roots.globals[i],
+                "re-interning {} produced a second object",
+                n
+            );
+        }
+    }
+}

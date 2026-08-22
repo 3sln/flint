@@ -20,7 +20,7 @@
   possessive quantifiers, unicode property classes. A pattern using any of them
   throws when compiled rather than matching something subtly different.
   `.` matches any character INCLUDING newline, where Java's default does not."
-  (:require [flint.rt]))
+  (:require [flint.rt] [clojure.string]))
 
 ;; ------------------------------------------------------------------- parsing
 
@@ -366,3 +366,11 @@
              (if (= end start)
                (conj acc (subs s i))
                (recur end (inc n) (conj acc (subs s i start)))))))))))
+
+;; Registration, not a call: `clojure.string/split` must not name this namespace
+;; statically or every program that splits on a comma would carry the engine.
+;; This is a bare top-level form, so it ships exactly when this namespace is part
+;; of the build -- which happens when something reaches `pattern`, which is the
+;; only way to get a pattern in the first place.
+(clojure.string/register-regex-ops!
+ {:split split :replace-first replace-first :replace-all replace-all})

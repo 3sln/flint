@@ -133,9 +133,11 @@ impl Rt {
             return false;
         }
         let base = self.mark();
+        let ai = self.push(a);
         let bi = self.push(b);
         let mut st = (bi, true);
-        self.set_for_each(a, &mut st, &mut |rt, k, st| {
+        let av = self.r(ai);
+        self.set_for_each(av, &mut st, &mut |rt, k, st| {
             if st.1 && rt.set_get(rt.r(st.0), k, NOT_FOUND) == NOT_FOUND {
                 st.1 = false;
             }
@@ -149,14 +151,22 @@ impl Rt {
         if cached.is_fixnum() {
             return cached.as_fixnum() as i32 as u32;
         }
+        let base = self.mark();
+        let si = self.push(s);
         let mut st = (0u32, 0u32);
-        self.set_for_each(s, &mut st, &mut |rt, k, st| {
-            let h = rt.hash_value(k);
+        let sv = self.r(si);
+        self.set_for_each(sv, &mut st, &mut |rt, k, st| {
+            let mk = rt.mark();
+            let ki = rt.push(k);
+            let h = rt.hash_value(rt.r(ki));
+            rt.pop_to(mk);
             st.0 = hash::unordered_step(st.0, h);
             st.1 += 1;
         });
         let h = hash::mix_coll_hash(st.0, st.1);
-        self.set(s, S_HASH, Value::fixnum(h as i32 as i64));
+        let sv = self.r(si);
+        self.set(sv, S_HASH, Value::fixnum(h as i32 as i64));
+        self.pop_to(base);
         h
     }
 

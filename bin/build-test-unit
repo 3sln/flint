@@ -1,0 +1,33 @@
+#!/bin/sh
+# The toy unit `test/unitpath.clj` puts on the :wasm-ld search path. Kept out of
+# `units/` deliberately: the point of the test is that a unit flint did not ship
+# links exactly like one it did.
+set -e
+cd "$(dirname "$0")/.."
+TC="$HOME/.rustup/toolchains/nightly-aarch64-apple-darwin"
+RUSTC="$TC/bin/rustc"
+FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0"
+DEPS=target/wasm32-unknown-unknown/release/deps
+OUT=test/fixtures/wasm-ld/demo
+[ -f units/flint/libflint_rt.rlib ] || { echo "run bin/build-units first"; exit 1; }
+mkdir -p "$OUT"
+$RUSTC $FLAGS --crate-type rlib --crate-name flint_demo_shout \
+  --extern flint_rt=units/flint/libflint_rt.rlib -L $DEPS \
+  --emit=obj units-src/flint-demo-shout/src/lib.rs -o "$OUT/shout.o"
+cat > "$OUT/shout.unit.edn" <<'UNIT'
+{:flint/unit 1
+ :name demo.shout
+ :kind :wasm-object
+ :artifact "shout.o"
+ :requires [flint.rt]
+ :abi {:runtime 1 :value 1 :image 1}
+ :provides {"demo-shout" {:symbol "flint_b_demo_shout"}}}
+UNIT
+# The same unit with an ABI flint cannot link, for the refusal test.
+mkdir -p test/fixtures/wasm-ld-bad/demo
+cp "$OUT/shout.o" test/fixtures/wasm-ld-bad/demo/shout.o
+sed 's/:abi {:runtime 1/:abi {:runtime 2/' "$OUT/shout.unit.edn" \
+  > test/fixtures/wasm-ld-bad/demo/shout.unit.edn
+cp "$OUT/shout.cljc" test/fixtures/wasm-ld-bad/demo/shout.cljc
+echo "  $OUT/shout.unit.edn"
+echo "  test/fixtures/wasm-ld-bad/demo/shout.unit.edn (abi :runtime 2, refused)"

@@ -185,7 +185,9 @@ impl Rt {
 
     // --- lookup ------------------------------------------------------------
 
-    fn node_find(&mut self, n: Value, shift: u32, h: u32, key: Value) -> Value {
+    /// Lookup for a key whose `=` cannot allocate. No rooting, because nothing
+    /// here can move: this is the shape `get` almost always has.
+    fn node_find_scalar(&mut self, n: Value, shift: u32, h: u32, key: Value) -> Value {
         let mut node = n;
         let mut shift = shift;
         loop {
@@ -216,6 +218,58 @@ impl Rt {
             node = self.bn_node(node, index_of(nm, bit));
             shift += HASH_BITS;
         }
+    }
+
+    fn node_find(&mut self, n: Value, shift: u32, h: u32, key: Value) -> Value {
+        if !self.eq_may_alloc(key) {
+            return self.node_find_scalar(n, shift, h, key);
+        }
+        // The node being walked and the key are rooted: `eq` on a compound key
+        // allocates (it seqs both sides), so a collection can happen in the
+        // middle of a lookup and move everything this walk is holding.
+        let base = self.mark();
+        let ni = self.push(n);
+        let ki = self.push(key);
+        let mut shift = shift;
+        let out = loop {
+            if !self.is_bmnode(self.r(ni)) {
+                if self.slot(self.r(ni), CN_HASH).as_fixnum() as u32 != h {
+                    break NOT_FOUND;
+                }
+                let cnt = self.cn_count(self.r(ni));
+                let mut found = NOT_FOUND;
+                for i in 0..cnt {
+                    let k = self.cn_key(self.r(ni), i);
+                    let kk = self.push(k);
+                    let same = self.eq(self.r(kk), self.r(ki));
+                    self.pop_to(kk);
+                    if same {
+                        found = self.cn_val(self.r(ni), i);
+                        break;
+                    }
+                }
+                break found;
+            }
+            let bit = bitpos(h, shift);
+            let dm = self.bn_datamap(self.r(ni));
+            if dm & bit != 0 {
+                let i = index_of(dm, bit);
+                let k = self.bn_key(self.r(ni), i);
+                let kk = self.push(k);
+                let same = self.eq(self.r(kk), self.r(ki));
+                self.pop_to(kk);
+                break if same { self.bn_val(self.r(ni), i) } else { NOT_FOUND };
+            }
+            let nm = self.bn_nodemap(self.r(ni));
+            if nm & bit == 0 {
+                break NOT_FOUND;
+            }
+            let sub = self.bn_node(self.r(ni), index_of(nm, bit));
+            self.set_r(ni, sub);
+            shift += HASH_BITS;
+        };
+        self.pop_to(base);
+        out
     }
 
     // --- construction of a two-entry subtree --------------------------------
@@ -538,7 +592,8 @@ impl Rt {
         let out = if dm & bit != 0 {
             let at = index_of(dm, bit);
             let k0 = self.bn_key(self.r(ni), at);
-            if self.eq(k0, self.r(ki)) {
+            let k0i = self.push(k0);
+            if self.eq(self.r(k0i), self.r(ki)) {
                 self.champ_added = false;
                 let v0 = self.bn_val(self.r(ni), at);
                 if v0 == self.r(vi) {
@@ -548,7 +603,6 @@ impl Rt {
                 }
             } else {
                 self.champ_added = true;
-                let k0i = self.push(k0);
                 let v0 = self.bn_val(self.r(ni), at);
                 let v0i = self.push(v0);
                 let h0 = self.hash_value(self.r(k0i));
@@ -569,8 +623,15 @@ impl Rt {
         } else if nm & bit != 0 {
             let at = index_of(nm, bit);
             let sub = self.bn_node(self.r(ni), at);
-            let newsub = self.node_assoc(sub, shift + HASH_BITS, h, self.r(ki), self.r(vi), self.r(ei));
-            if newsub == sub {
+            // Rooted, because the comparison below is what decides whether this
+            // node changed. `node_assoc` allocates, a collection can move `sub`,
+            // and a stale address that happens to match the new one would drop
+            // the whole subtree's update on the floor -- a key silently missing
+            // from a map whose count says it is there.
+            let subi = self.push(sub);
+            let newsub =
+                self.node_assoc(self.r(subi), shift + HASH_BITS, h, self.r(ki), self.r(vi), self.r(ei));
+            if newsub == self.r(subi) {
                 self.r(ni)
             } else {
                 self.bn_copy_set_node(self.r(ni), at, newsub, self.r(ei))
@@ -601,19 +662,32 @@ impl Rt {
             self.pop_to(base);
             return out;
         }
-        let cnt = self.cn_count(n);
+        let scan = self.mark();
+        let sni = self.push(n);
+        let ski = self.push(key);
+        let cnt = self.cn_count(self.r(sni));
+        let mut hit = None;
         for i in 0..cnt {
-            let k = self.cn_key(n, i);
-            if self.eq(k, key) {
-                self.champ_added = false;
-                let base = self.mark();
-                let ni = self.push(n);
-                let vi = self.push(val);
-                let ei = self.push(edit);
-                let out = self.cn_copy_set_val(self.r(ni), i, self.r(vi), self.r(ei));
-                self.pop_to(base);
-                return out;
+            let k = self.cn_key(self.r(sni), i);
+            let kk = self.push(k);
+            let same = self.eq(self.r(kk), self.r(ski));
+            self.pop_to(kk);
+            if same {
+                hit = Some(i);
+                break;
             }
+        }
+        let (n, key) = (self.r(sni), self.r(ski));
+        self.pop_to(scan);
+        if let Some(i) = hit {
+            self.champ_added = false;
+            let base = self.mark();
+            let ni = self.push(n);
+            let vi = self.push(val);
+            let ei = self.push(edit);
+            let out = self.cn_copy_set_val(self.r(ni), i, self.r(vi), self.r(ei));
+            self.pop_to(base);
+            return out;
         }
         self.champ_added = true;
         let base = self.mark();
@@ -683,7 +757,10 @@ impl Rt {
         let out = if dm & bit != 0 {
             let at = index_of(dm, bit);
             let k0 = self.bn_key(self.r(ni), at);
-            if !self.eq(k0, self.r(ki)) {
+            let k0i = self.push(k0);
+            let same0 = self.eq(self.r(k0i), self.r(ki));
+            self.pop_to(k0i);
+            if !same0 {
                 self.champ_added = false;
                 self.r(ni)
             } else {
@@ -711,8 +788,10 @@ impl Rt {
         } else if nm & bit != 0 {
             let at = index_of(nm, bit);
             let sub = self.bn_node(self.r(ni), at);
-            let newsub = self.node_dissoc(sub, shift + HASH_BITS, h, self.r(ki), self.r(ei));
-            if newsub == sub {
+            let subi = self.push(sub);
+            let newsub =
+                self.node_dissoc(self.r(subi), shift + HASH_BITS, h, self.r(ki), self.r(ei));
+            if newsub == self.r(subi) {
                 self.r(ni)
             } else if self.node_size_class(newsub) == 1 {
                 let si = self.push(newsub);
@@ -738,15 +817,23 @@ impl Rt {
     }
 
     fn coll_dissoc(&mut self, n: Value, key: Value, edit: Value) -> Value {
-        let cnt = self.cn_count(n);
+        let scan = self.mark();
+        let sni = self.push(n);
+        let ski = self.push(key);
+        let cnt = self.cn_count(self.r(sni));
         let mut found = u32::MAX;
         for i in 0..cnt {
-            let k = self.cn_key(n, i);
-            if self.eq(k, key) {
+            let k = self.cn_key(self.r(sni), i);
+            let kk = self.push(k);
+            let same = self.eq(self.r(kk), self.r(ski));
+            self.pop_to(kk);
+            if same {
                 found = i;
                 break;
             }
         }
+        let n = self.r(sni);
+        self.pop_to(scan);
         if found == u32::MAX {
             self.champ_added = false;
             return n;
@@ -856,40 +943,90 @@ impl Rt {
     }
 
     fn am_index_of(&mut self, m: Value, k: Value) -> Option<u32> {
-        let n = self.map_count(m);
+        if !self.eq_may_alloc(k) {
+            let n = self.map_count(m);
+            for i in 0..n {
+                let kk = self.am_key(m, i);
+                if self.eq(kk, k) {
+                    return Some(i);
+                }
+            }
+            return None;
+        }
+        let base = self.mark();
+        let mi = self.push(m);
+        let ki = self.push(k);
+        let n = self.map_count(self.r(mi));
+        let mut out = None;
         for i in 0..n {
-            let kk = self.am_key(m, i);
-            if self.eq(kk, k) {
-                return Some(i);
+            let kk = self.am_key(self.r(mi), i);
+            let kki = self.push(kk);
+            let same = self.eq(self.r(kki), self.r(ki));
+            self.pop_to(kki);
+            if same {
+                out = Some(i);
+                break;
             }
         }
-        None
+        self.pop_to(base);
+        out
     }
 
     pub fn map_get(&mut self, m: Value, k: Value, not_found: Value) -> Value {
         if !m.is_heap() {
             return not_found;
         }
-        match ty(&self.gc.sp, m.as_heap()) {
-            TY_ARRAYMAP => match self.am_index_of(m, k) {
-                Some(i) => self.am_val(m, i),
-                None => not_found,
+        if !self.eq_may_alloc(k) {
+            return match ty(&self.gc.sp, m.as_heap()) {
+                TY_ARRAYMAP => match self.am_index_of(m, k) {
+                    Some(i) => self.am_val(m, i),
+                    None => not_found,
+                },
+                TY_HASHMAP => {
+                    let root = self.slot(m, HM_ROOT);
+                    if root.is_nil() {
+                        return not_found;
+                    }
+                    let h = self.hash_value(k);
+                    let r = self.node_find_scalar(root, 0, h, k);
+                    if r == NOT_FOUND {
+                        not_found
+                    } else {
+                        r
+                    }
+                }
+                _ => not_found,
+            };
+        }
+        let base = self.mark();
+        let mi = self.push(m);
+        let ki = self.push(k);
+        let nfi = self.push(not_found);
+        let out = match ty(&self.gc.sp, m.as_heap()) {
+            TY_ARRAYMAP => match self.am_index_of(self.r(mi), self.r(ki)) {
+                Some(i) => self.am_val(self.r(mi), i),
+                None => self.r(nfi),
             },
             TY_HASHMAP => {
-                let root = self.slot(m, HM_ROOT);
+                // Hash first, then read the root: hashing a compound key walks
+                // it, which allocates, which can move the map.
+                let h = self.hash_value(self.r(ki));
+                let root = self.slot(self.r(mi), HM_ROOT);
                 if root.is_nil() {
-                    return not_found;
-                }
-                let h = self.hash_value(k);
-                let r = self.node_find(root, 0, h, k);
-                if r == NOT_FOUND {
-                    not_found
+                    self.r(nfi)
                 } else {
-                    r
+                    let r = self.node_find(root, 0, h, self.r(ki));
+                    if r == NOT_FOUND {
+                        self.r(nfi)
+                    } else {
+                        r
+                    }
                 }
             }
-            _ => not_found,
-        }
+            _ => self.r(nfi),
+        };
+        self.pop_to(base);
+        out
     }
 
     pub fn map_contains(&mut self, m: Value, k: Value) -> bool {
@@ -977,11 +1114,14 @@ impl Rt {
             }
             TY_HASHMAP => {
                 let cnt = self.map_count(m);
-                let root = self.slot(m, HM_ROOT);
+                // Hash first, then read the root: hashing a compound key can
+                // allocate, and an address read before that would be stale.
                 let h = self.hash_value(self.r(ki));
+                let root = self.slot(self.r(mi), HM_ROOT);
+                let ri = self.push(root);
                 self.champ_added = false;
-                let nr = self.node_assoc(root, 0, h, self.r(ki), self.r(vi), NIL);
-                if nr == root {
+                let nr = self.node_assoc(self.r(ri), 0, h, self.r(ki), self.r(vi), NIL);
+                if nr == self.r(ri) {
                     self.r(mi)
                 } else {
                     let nri = self.push(nr);
@@ -1024,11 +1164,12 @@ impl Rt {
                 }
             },
             TY_HASHMAP => {
-                let root = self.slot(m, HM_ROOT);
                 let h = self.hash_value(self.r(ki));
+                let root = self.slot(self.r(mi), HM_ROOT);
+                let ri = self.push(root);
                 self.champ_added = false;
-                let nr = self.node_dissoc(root, 0, h, self.r(ki), NIL);
-                if !self.champ_added || nr == root {
+                let nr = self.node_dissoc(self.r(ri), 0, h, self.r(ki), NIL);
+                if !self.champ_added || nr == self.r(ri) {
                     self.r(mi)
                 } else {
                     let cnt = self.map_count(self.r(mi)) - 1;
@@ -1139,14 +1280,24 @@ impl Rt {
             return false;
         }
         let base = self.mark();
+        let ai = self.push(a);
         let bi = self.push(b);
         let mut st = (bi, true);
-        self.map_for_each(a, &mut st, &mut |rt, k, v, st| {
+        let av = self.r(ai);
+        self.map_for_each(av, &mut st, &mut |rt, k, v, st| {
             if !st.1 {
                 return;
             }
-            let other = rt.map_get(rt.r(st.0), k, NOT_FOUND);
-            if other == NOT_FOUND || !rt.eq(v, other) {
+            // `map_get` allocates, so the value handed to this callback has to
+            // be rooted before the lookup, not read across it.
+            let m = rt.mark();
+            let ki = rt.push(k);
+            let vi = rt.push(v);
+            let other = rt.map_get(rt.r(st.0), rt.r(ki), NOT_FOUND);
+            let oi = rt.push(other);
+            let same = other != NOT_FOUND && rt.eq(rt.r(vi), rt.r(oi));
+            rt.pop_to(m);
+            if !same {
                 st.1 = false;
             }
         });
@@ -1160,10 +1311,17 @@ impl Rt {
         if cached.is_fixnum() {
             return cached.as_fixnum() as i32 as u32;
         }
+        let base = self.mark();
+        let mi = self.push(m);
         let mut st = (0u32, 0u32);
-        self.map_for_each(m, &mut st, &mut |rt, k, v, st| {
-            let hk = rt.hash_value(k);
-            let hv = rt.hash_value(v);
+        let mv = self.r(mi);
+        self.map_for_each(mv, &mut st, &mut |rt, k, v, st| {
+            let mk = rt.mark();
+            let ki = rt.push(k);
+            let vi = rt.push(v);
+            let hk = rt.hash_value(rt.r(ki));
+            let hv = rt.hash_value(rt.r(vi));
+            rt.pop_to(mk);
             let e = hash::mix_coll_hash(
                 hash::ordered_step(hash::ordered_step(1, hk), hv),
                 2,
@@ -1172,7 +1330,9 @@ impl Rt {
             st.1 += 1;
         });
         let h = hash::mix_coll_hash(st.0, st.1);
-        self.set(m, slot_idx, Value::fixnum(h as i32 as i64));
+        let mv = self.r(mi);
+        self.set(mv, slot_idx, Value::fixnum(h as i32 as i64));
+        self.pop_to(base);
         h
     }
 

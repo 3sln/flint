@@ -28,6 +28,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "flint-demo-shout"
+version = "0.1.0"
+dependencies = [
+ "flint-rt",
+]
+
+[[package]]
 name = "flint-rt"
 version = "0.1.0"
 dependencies = [

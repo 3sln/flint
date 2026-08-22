@@ -820,6 +820,7 @@
     last-index-of
     lower-case
     re-quote-replacement
+    register-regex-ops!
     replace
     replace-first
     reverse
@@ -833,9 +834,9 @@
     trimr
     upper-case},
   :macros #{},
-  :count 22,
+  :count 23,
   :absent #{},
-  :extra #{split-literal},
+  :extra #{register-regex-ops! split-literal},
   :compared-with clojure.string},
  clojure.walk
  {:file "lib/clojure/walk.cljc",

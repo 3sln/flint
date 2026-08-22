@@ -8,28 +8,62 @@ artifact, exports, dependencies, compatibility — not by who shipped it. Compil
 a user namespace ahead of time produces the same shape; that is deliberate
 (`doc/decisions/0003-namespace-units.md`).
 
+## Where a unit lives
+
+Units are laid out **by namespace**, exactly the way `:src` lays out source, and
+found on a search path given by `:wasm-ld`:
+
+```
+flint.data.xml   ->  <dir>/flint/data/xml.unit.edn   the manifest
+                     <dir>/flint/data/xml.o          the artifact
+                     <dir>/flint/data/xml.libs/*.rlib  its dependency rlibs
+```
+
+flint's own `units/` directory is simply the **last entry** on that path, so a
+`:wasm-ld` directory can shadow a built-in unit and every compile exercises the
+same mechanism a user-supplied unit uses. Earlier directories win; a unit that
+loses is reported rather than silently dropped.
+
+A `.cljc` file may sit beside a unit, and often does: a unit is a namespace's
+*native* half and the source its Clojure half — `flint.data.json` ships as both.
+They compose rather than compete. Source resolution searches `:src` directories
+first, then `:wasm-ld` directories, then flint's own `lib/`.
+
 ## Manifest
 
 ```edn
-;; units/<name>/unit.edn
+;; <dir>/flint/data/xml.unit.edn
 {:flint/unit 1                       ; unit-format version
  :name       flint.data.xml
  :kind       :wasm-object            ; or :bytecode
- :artifact   "flint_data_xml.o"      ; relative to the unit directory
+ :artifact   "xml.o"                 ; relative to the manifest
+ :libs       "xml.libs"              ; optional: directory of rlibs it needs
  :requires   [flint.rt]              ; other units, by name
- :provides   {read-str {:symbol "flint_b_xml_read_str" :arity #{1 2}}
-              write-str {:symbol "flint_b_xml_write_str" :arity #{1}}}
+ :provides   {"flint/xml-parse" {:symbol "flint_b_xml_parse"}}
  :abi        {:runtime 1 :value 1 :image 1}}
 ```
+
+`:provides` maps a **builtin name** — what `flint.rt/xml-parse` resolves to — to
+the exported C symbol implementing it.
 
 * `:kind :wasm-object` — a relocatable wasm object. `:provides` values name the
   exported C symbol that implements each var.
 * `:kind :bytecode` — a precompiled bytecode fragment. `:provides` values carry
   the fragment-local var index.
 
-`:abi` is checked before a unit is admitted: `:runtime` is the builtin calling
-convention, `:value` the NaN-boxing layout, `:image` the bytecode image format.
-A unit compiled against a different value layout is rejected rather than linked.
+`:abi` is checked before the compile starts, for **every** unit on the path:
+`:runtime` is the builtin calling convention `(rt, base, argc) -> u64`, `:value`
+the NaN-boxing layout, `:image` the bytecode image format. A unit this flint
+cannot link is refused by name and version rather than linked and left to trap:
+
+```
+refusing unit demo.shout at vendor/units/demo/shout.unit.edn: runtime 2 (need 1)
+```
+
+Naming a directory with `:wasm-ld` is an assertion that its units are for this
+flint, so the check is over the whole path rather than only the units that end up
+linked — a stale copy that would have been shadowed is still worth hearing about
+before it becomes a puzzle.
 
 ## How a build is composed
 
@@ -87,15 +121,21 @@ Three namespace objects, a core object, `--gc-sections`, sysroot `core`/`alloc`/
 Indirect dispatch through the spliced element segment and the spliced data
 segment were both verified running under node.
 
-## What would have to change to admit a user-compiled namespace
+## Admitting a user-compiled namespace
 
-Very little, which is the point:
+Two of the three things this document used to list as missing are done: there is
+a search path (`:wasm-ld`) rather than a fixed directory, and `:abi` mismatch is
+a message naming the unit and the version rather than an assert.
+`test/options.clj` builds `units-src/flint-demo-shout` into
+`test/fixtures/wasm-ld/demo/shout.{o,unit.edn}` with a `shout.cljc` beside it,
+puts it on the path, links it, and runs the module.
 
-* the compiler must be able to emit a `:bytecode` unit for a user namespace
-  (it already emits fragments for the built-in cljc namespaces);
-* `flint` needs a unit search path rather than a fixed `units/` directory;
-* `:abi` checking must become a real error message rather than an assert.
+What is still missing:
 
-Emitting `:wasm-object` units from user code would additionally need a stable,
-documented builtin calling convention — which exists, but is not promised stable
-yet.
+* the compiler cannot yet emit a `:bytecode` unit for a user namespace — cljc
+  namespaces are recompiled from source on every build. The format describes
+  them, and the composition step above handles them; nothing produces one.
+* the builtin calling convention is documented and versioned (`:abi :runtime 1`)
+  but is not *promised* stable, so a `:wasm-object` unit built today may need
+  rebuilding against a later flint. The refusal above is what makes that safe
+  rather than mysterious.

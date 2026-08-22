@@ -215,21 +215,111 @@
 
 ;; ------------------------------------------------------------------ pass 3
 
+(defn reachable*
+  "Transitive closure of `roots` over the reference graph, keeping the edge that
+  first reached each node.
+
+  The predecessor map is the whole point: `:exclude` has to be able to say
+  `my.app/handler -> clojure.string/split -> flint.regex/pattern?` and not just
+  \"flint.regex is reachable\". Recording it costs one map entry per var and is
+  the difference between a message somebody can act on and one that sends them
+  grepping.
+
+  `via` may carry predecessors from an earlier pass; the reachability fixpoint
+  runs several, and a node keeps the edge that reached it first."
+  [cc roots via]
+  (let [deps (:deps @cc)]
+    (loop [seen #{} via via todo (vec roots)]
+      (if-let [s (peek todo)]
+        (if (seen s)
+          (recur seen via (pop todo))
+          (recur (conj seen s)
+                 (reduce (fn [m d] (if (contains? m d) m (assoc m d s)))
+                         via (get deps s))
+                 (into (pop todo) (get deps s))))
+        {:seen seen :via via}))))
+
 (defn reachable
   "Transitive closure of `roots` over the reference graph."
   [cc roots]
-  (let [deps (:deps @cc)]
-    (loop [seen #{} todo (vec roots)]
-      (if-let [s (peek todo)]
-        (if (seen s)
-          (recur seen (pop todo))
-          (recur (conj seen s) (into (pop todo) (get deps s))))
-        seen))))
+  (:seen (reachable* cc roots {})))
+
+(defn chain-to
+  "The reference chain from a seed to `target`, as a vector of vars, following
+  the predecessor edges back and then reversing."
+  [via target]
+  (loop [at target acc (list target) guard 0]
+    (let [prev (get via at)]
+      (if (or (nil? prev) (> guard 256))
+        (vec acc)
+        (recur prev (conj acc prev) (inc guard))))))
+
+(defn describe-ref
+  "How to name one step of a reference chain. Synthetic ids -- the ones bare
+  top-level forms get -- read as what they are rather than as a var nobody
+  wrote."
+  [sym]
+  (let [n (name sym)]
+    (cond
+      (= "flint.native" (namespace sym)) (str "the builtin `" n "`")
+      (str/starts-with? n "__top-") (str "a top-level form in " (namespace sym))
+      :else (str sym))))
+
+(defn- synthetic? [sym] (str/starts-with? (name sym) "__top-"))
+
+(defn best-chain
+  "Of the excluded things that are reachable, the one whose chain explains the
+  most. A chain that runs from the entry point is worth more than one that
+  starts mid-graph, and a named var is worth more than the synthetic id a bare
+  top-level form gets -- those are true but unactionable on their own."
+  [via entry hits]
+  (let [scored (for [h hits
+                     :let [c (chain-to via h)]]
+                 {:sym h :chain c
+                  :score [(if (= entry (first c)) 2 (if (next c) 1 0))
+                          (if (synthetic? h) 0 1)
+                          (- (count c))]})]
+    (first (sort-by :score (fn [a b] (compare b a)) scored))))
+
+(defn exclusion-error
+  "Message for an exclusion that turned out to be false. Prints the chain,
+  because the whole value of the flag is telling somebody what to change."
+  [ns-sym best others]
+  (str "namespace " ns-sym " is excluded, but it is reachable.\n\n"
+       "  " (describe-ref (:sym best)) " is reached by:\n"
+       (str/join "\n" (map-indexed (fn [i s]
+                                     (str "    " (if (zero? i) "   " "-> ") (describe-ref s)))
+                                   (:chain best)))
+       (when (seq others)
+         (str "\n\n  also reachable in " ns-sym ": "
+              (str/join ", " (map describe-ref (take 6 (sort others))))
+              (when (> (count others) 6) (str " and " (- (count others) 6) " more"))))
+       "\n\nEither stop reaching it, or drop it from :exclude."))
+
+(defn check-exclusions!
+  "`:exclude` is an ASSERTION, not a pruning: if excluded code is genuinely
+  reachable that is a compile error here, rather than a module that links,
+  ships and dies at runtime on a path nobody tested."
+  [excluded roots via entry excluded-builtins]
+  (doseq [ns-sym (sort excluded)]
+    (let [prefix (str ns-sym)
+          in-ns (filter (fn [s] (and (namespace s) (= prefix (namespace s)))) roots)
+          ;; A builtin belongs to the unit that provides it, not to a namespace,
+          ;; so those are matched separately and reported the same way.
+          bnames (get excluded-builtins ns-sym #{})
+          in-builtins (filter (fn [s] (and (= "flint.native" (namespace s))
+                                           (contains? bnames (name s))))
+                              roots)
+          hits (concat in-builtins in-ns)]
+      (when (seq hits)
+        (let [best (best-chain via entry hits)
+              others (remove #(or (= % (:sym best)) (synthetic? %)) hits)]
+          (err (exclusion-error ns-sym best others) {:excluded ns-sym}))))))
 
 (defn compile-image
   "Compile `sources` ({ns-symbol {:src s :file f}}) with entry var `entry-sym`.
   Returns {:builder b :stats {...}}."
-  [{:keys [sources order entry builtins]}]
+  [{:keys [sources order entry builtins exclude excluded-builtins]}]
   (let [cc (new-context {:builtins builtins})]
     (let [read-forms (into {} (for [nsname order]
                                 (let [{:keys [src file]} (get sources nsname)]
@@ -255,8 +345,9 @@
           ;; an item that defines several vars (`defmulti` defines the function
           ;; AND its method table) records its own references under a synthetic
           ;; id that has to be seeded once the item is known to be kept.
-          state (loop [rs (conj (reachable cc [entry-var]) entry-var)]
-                  (let [reached (fn [it] (some (fn [d] (contains? rs d)) (:defines it)))
+          state (loop [r0 (reachable* cc [entry-var] {})]
+                  (let [rs (conj (:seen r0) entry-var)
+                        reached (fn [it] (some (fn [d] (contains? rs d)) (:defines it)))
                         inc-ns (conj (into #{} (map :ns (filter reached items))) 'flint.main)
                         keeping (filter (fn [it]
                                           (and (not (:macro? it))
@@ -268,12 +359,18 @@
                         ;; records its init's references under its own name, so
                         ;; keeping an item because ONE of its vars was reached
                         ;; makes the others' references live too.
-                        rs' (reachable cc (into (vec rs)
-                                                (mapcat (fn [it] (cons (:id it) (:defines it)))
-                                                        keeping)))]
-                    (if (= rs' rs) {:roots rs :included inc-ns} (recur rs'))))
+                        r1 (reachable* cc
+                                       (into (vec rs)
+                                             (mapcat (fn [it] (cons (:id it) (:defines it)))
+                                                     keeping))
+                                       (:via r0))]
+                    (if (= (:seen r1) (:seen r0))
+                      {:roots rs :included inc-ns :via (:via r1)}
+                      (recur r1))))
           roots (:roots state)
           included-ns (:included state)
+          via (:via state)
+          _ (check-exclusions! (or exclude #{}) roots via entry-var (or excluded-builtins {}))
           reached? (fn [it] (some (fn [d] (contains? roots d)) (:defines it)))
           keep? (fn [it]
                   (cond
@@ -319,6 +416,8 @@
                                        :code (conj (vec (emit/finish buf))
                                                    (get emit/op :tail-call) 1)}]}))))
       {:builder b
+       :via via
+       :roots-set roots
        :kept-syms (vec (filter some? (map :sym kept)))
        :roots roots
        :items items
