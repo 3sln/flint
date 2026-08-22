@@ -334,3 +334,187 @@ impl Rt {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rt::Rt;
+    use crate::value::{FALSE, NIL, TRUE};
+
+    fn vec_of(rt: &mut Rt, xs: &[i64]) -> Value {
+        let mut v = rt.empty_vec();
+        let vi = rt.push(v);
+        for x in xs {
+            let nv = rt.vec_conj(rt.r(vi), Value::fixnum(*x));
+            rt.set_r(vi, nv);
+        }
+        v = rt.r(vi);
+        rt.pop_to(vi);
+        v
+    }
+
+    fn list_of(rt: &mut Rt, xs: &[i64]) -> Value {
+        let base = rt.mark();
+        for x in xs {
+            rt.push(Value::fixnum(*x));
+        }
+        let l = rt.list_from_roots(base, xs.len());
+        rt.pop_to(base);
+        l
+    }
+
+    #[test]
+    fn scalars() {
+        let mut rt = Rt::new();
+        assert!(rt.eq(NIL, NIL));
+        assert!(!rt.eq(NIL, FALSE), "nil is not false");
+        assert!(rt.eq(TRUE, TRUE));
+        assert!(rt.eq(Value::fixnum(1), Value::fixnum(1)));
+        assert!(!rt.eq(Value::fixnum(1), Value::from_f64(1.0)), "(= 1 1.0) is false");
+        assert!(rt.eq(Value::from_f64(1.0), Value::from_f64(1.0)));
+        let nan = Value::from_f64(f64::NAN);
+        assert!(!rt.eq(nan, nan), "NaN is not equal to itself");
+        assert!(rt.eq(Value::from_f64(0.0), Value::from_f64(-0.0)), "0.0 == -0.0");
+    }
+
+    #[test]
+    fn boxed_integers_compare_by_value() {
+        let mut rt = Rt::new();
+        let a = rt.integer(1 << 50);
+        let b = rt.integer(1 << 50);
+        assert_ne!(a, b, "two distinct boxes");
+        assert!(rt.eq(a, b), "but equal");
+        let c = rt.integer((1 << 50) + 1);
+        assert!(!rt.eq(a, c));
+    }
+
+    #[test]
+    fn strings_and_named_things() {
+        let mut rt = Rt::new();
+        let short = rt.string("abc");
+        let again = rt.string("abc");
+        assert!(rt.eq(short, again));
+        let long_a = rt.string(&"x".repeat(100));
+        let long_b = rt.string(&"x".repeat(100));
+        assert_ne!(long_a, long_b, "beyond the intern limit these are distinct objects");
+        assert!(rt.eq(long_a, long_b), "and still equal, by bytes");
+        let long_c = rt.string(&("x".repeat(99) + "y"));
+        assert!(!rt.eq(long_a, long_c));
+
+        let k = rt.keyword(None, "a");
+        let k2 = rt.keyword(None, "a");
+        assert!(rt.eq(k, k2));
+        let sa = rt.string("a");
+        assert!(!rt.eq(k, sa), "a keyword is not its name");
+        let s = rt.symbol(Some("ns"), "n");
+        let s2a = rt.symbol(Some("ns"), "n");
+        assert!(rt.eq(s, s2a));
+        let s3 = rt.symbol(None, "n");
+        assert!(!rt.eq(s, s3));
+        // with-meta makes a distinct object that is still =
+        let m = rt.empty_map();
+        let s2 = rt.with_meta(s, m);
+        assert_ne!(s, s2);
+        assert!(rt.eq(s, s2), "metadata is not part of equality");
+    }
+
+    #[test]
+    fn sequential_equality_crosses_collection_types() {
+        let mut rt = Rt::new();
+        let v = vec_of(&mut rt, &[1, 2, 3]);
+        let vi = rt.push(v);
+        let l = list_of(&mut rt, &[1, 2, 3]);
+        let li = rt.push(l);
+        let (a0, b0) = (rt.r(vi), rt.r(li));
+        assert!(rt.eq(a0, b0), "a vector equals a list of the same items");
+        let shorter = vec_of(&mut rt, &[1, 2]);
+        let a0 = rt.r(vi);
+        assert!(!rt.eq(a0, shorter));
+        let different = vec_of(&mut rt, &[1, 2, 4]);
+        let a0 = rt.r(vi);
+        assert!(!rt.eq(a0, different));
+        // ...but a set is a different partition
+        let mut s = rt.empty_set();
+        let si = rt.push(s);
+        for i in 1..4i64 {
+            let ns = rt.set_conj(rt.r(si), Value::fixnum(i));
+            rt.set_r(si, ns);
+        }
+        s = rt.r(si);
+        let a0 = rt.r(vi);
+        assert!(!rt.eq(a0, s), "a vector is not a set");
+        let m = rt.empty_map();
+        let ev = rt.empty_vec();
+        assert!(!rt.eq(m, ev), "an empty map is not an empty vector");
+    }
+
+    #[test]
+    fn nested_structures() {
+        let mut rt = Rt::new();
+        let build = |rt: &mut Rt| {
+            let inner = vec_of(rt, &[1, 2]);
+            let ii = rt.push(inner);
+            let k = rt.keyword(None, "a");
+            let ki = rt.push(k);
+            let m = rt.empty_map();
+            let inner = rt.r(ii);
+            let k = rt.r(ki);
+            let out = rt.map_assoc(m, k, inner);
+            rt.pop_to(ii);
+            out
+        };
+        let a = build(&mut rt);
+        let ai = rt.push(a);
+        let b = build(&mut rt);
+        let a0 = rt.r(ai);
+        assert!(rt.eq(a0, b));
+        let a0 = rt.r(ai);
+        let (ha, hb) = (rt.hash_value(a0), rt.hash_value(b));
+        assert_eq!(ha, hb, "equal implies equal hash");
+    }
+
+    #[test]
+    fn hash_agrees_with_equality_across_types() {
+        let mut rt = Rt::new();
+        let v = vec_of(&mut rt, &[1, 2, 3]);
+        let vi = rt.push(v);
+        let l = list_of(&mut rt, &[1, 2, 3]);
+        let a0 = rt.r(vi);
+        assert!(rt.eq(a0, l));
+        let a0 = rt.r(vi);
+        let hv = rt.hash_value(a0);
+        let hl = rt.hash_value(l);
+        assert_eq!(hv, hl, "a vector and an equal list must hash the same");
+        assert_eq!(hv as i32, 736442005, "and match JVM Clojure");
+    }
+
+    #[test]
+    fn compare_orders_within_a_type() {
+        let mut rt = Rt::new();
+        assert_eq!(rt.compare(Value::fixnum(1), Value::fixnum(2)), -1);
+        assert_eq!(rt.compare(Value::fixnum(2), Value::fixnum(2)), 0);
+        assert_eq!(rt.compare(Value::from_f64(2.5), Value::fixnum(2)), 1);
+        assert_eq!(rt.compare(NIL, Value::fixnum(1)), -1, "nil sorts first");
+        assert_eq!(rt.compare(Value::fixnum(1), NIL), 1);
+        let a = rt.string("a");
+        let b = rt.string("b");
+        assert_eq!(rt.compare(a, b), -1);
+        assert!(rt.compare(b, a) > 0);
+        let ka = rt.keyword(None, "a");
+        let kb = rt.keyword(Some("z"), "a");
+        assert_eq!(rt.compare(ka, kb), -1, "an unqualified keyword sorts first");
+        let v1 = vec_of(&mut rt, &[1]);
+        let vi = rt.push(v1);
+        let v2 = vec_of(&mut rt, &[1, 2]);
+        let a0 = rt.r(vi);
+        assert_eq!(rt.compare(a0, v2), -1, "shorter sorts first when a prefix");
+    }
+
+    #[test]
+    fn comparing_unrelated_types_throws_rather_than_guessing() {
+        let mut rt = Rt::new();
+        let s = rt.string("a");
+        let _ = rt.compare(s, Value::fixnum(1));
+        assert!(!rt.thrown.is_nil(), "no total order across unrelated types");
+    }
+}
