@@ -12,13 +12,3 @@ crate-type = ["cdylib", "rlib"]
 # possible in a bare wasm build (no libc, no JVM Math).
 libm = { version = "0.2", default-features = false }
 
-[profile.release]
-opt-level = 3
-lto = true
-panic = "abort"
-codegen-units = 1
-strip = true
-
-[profile.release-small]
-inherits = "release"
-opt-level = "z"
