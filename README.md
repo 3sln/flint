@@ -991,10 +991,13 @@ claim fails the build.
 | `flint.data.html` | 12 | 0 | n/a | n/a |
 | `flint.data.json` | 3 | 0 | n/a | n/a |
 | `flint.data.xml` | 9 | 0 | n/a | n/a |
+| `flint.doc` | 11 | 0 | n/a | n/a |
 | `flint.port` | 13 | 1 | n/a | n/a |
 | `flint.port.edn` | 3 | 0 | n/a | n/a |
 | `flint.port.json` | 3 | 0 | n/a | n/a |
+| `flint.port.transit` | 3 | 0 | n/a | n/a |
 | `flint.regex` | 10 | 0 | n/a | n/a |
+| `flint.rpc` | 6 | 0 | n/a | n/a |
 | `flint.thread` | 8 | 0 | n/a | n/a |
 
 Full lists, machine readable, in [`doc/manifest.edn`](doc/manifest.edn).

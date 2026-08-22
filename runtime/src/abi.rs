@@ -226,6 +226,21 @@ pub extern "C" fn stat_steps() -> u64 {
 pub extern "C" fn stat_bytes_allocated() -> u64 {
     unsafe { ensure_rt().gc.stats.bytes_allocated }
 }
+/// High-water mark of *live* bytes, sampled at each collection. The number a
+/// memory claim is made against: "peak memory is proportional to the content a
+/// script actually kept", not to how much it allocated on the way.
+#[no_mangle]
+pub extern "C" fn stat_peak_live() -> u64 {
+    unsafe { ensure_rt().gc.stats.peak_live }
+}
+
+/// Force a collection, so a measurement can be taken at a defined point rather
+/// than wherever the allocator happened to trip.
+#[no_mangle]
+pub extern "C" fn collect_now() {
+    unsafe { ensure_rt().collect() }
+}
+
 #[no_mangle]
 pub extern "C" fn stat_collections() -> u64 {
     unsafe {

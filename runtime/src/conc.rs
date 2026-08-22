@@ -1017,13 +1017,19 @@ fn pick(rt: &mut Rt) -> Option<u32> {
     None
 }
 
-fn needs_host(rt: &mut Rt) -> bool {
+/// Anything the host has not taken yet.
+fn pending_events(rt: &mut Rt) -> bool {
     let s = rt.sched();
     let evs = rt.slot(s, SC_EVENTS);
     let head = fx(rt.slot(s, SC_EHEAD)) as u32;
-    if rt.vec_count(evs) > head {
+    rt.vec_count(evs) > head
+}
+
+fn needs_host(rt: &mut Rt) -> bool {
+    if pending_events(rt) {
         return true;
     }
+    let s = rt.sched();
     let ts = rt.slot(s, SC_THREADS);
     let n = rt.vec_count(ts);
     for i in 0..n {
@@ -1087,21 +1093,25 @@ fn run_one(rt: &mut Rt, i: u32) {
     settle(rt, v);
 }
 
-fn all_finished(rt: &mut Rt) -> bool {
+/// Is the program over?
+///
+/// **When the entry function has returned and nothing else can run, it is.** Its
+/// value *is* the answer, so there is nothing left to compute; any thread still
+/// parked at that point is waiting for something that is never coming --
+/// typically a service thread parked on a port whose work is done. Threads that
+/// are still runnable get to finish first, because `pick` is tried before this.
+///
+/// Defining completion any other way means a driver that leaves a reader parked
+/// keeps the whole program alive for ever, which is the bug this replaced.
+fn main_finished(rt: &mut Rt) -> bool {
     let s = rt.sched();
     let ts = rt.slot(s, SC_THREADS);
-    let n = rt.vec_count(ts);
-    for i in 0..n {
-        let th = rt.vec_nth(ts, i).unwrap_or(NIL);
-        if th.is_nil() {
-            continue;
-        }
-        let st = fx(rt.slot(th, TH_STATUS));
-        if st != ST_DONE && st != ST_FAILED {
-            return false;
-        }
+    let th = rt.vec_nth(ts, 0).unwrap_or(NIL);
+    if th.is_nil() {
+        return true;
     }
-    true
+    let st = fx(rt.slot(th, TH_STATUS));
+    st == ST_DONE || st == ST_FAILED
 }
 
 /// The main loop, also re-entered from the host's `resume`.
@@ -1114,22 +1124,29 @@ pub fn drive(rt: &mut Rt) -> Value {
         match pick(rt) {
             Some(i) => run_one(rt, i),
             None => {
+                // The entry function's value IS the answer, so once it has
+                // returned and nothing else can run, the program is over --
+                // whatever a service thread may still be parked on. Asking
+                // "does anything need the host?" first would keep a driver's
+                // reader thread alive for ever.
+                if main_finished(rt) {
+                    // Exit closes every flint end and leaves the events for one
+                    // last drain, so a host never has to guess whether more is
+                    // coming.
+                    rt.close_all_flint_ends();
+                    if pending_events(rt) {
+                        rt.status = 2;
+                        return NIL;
+                    }
+                    rt.status = 0;
+                    return main_result(rt);
+                }
                 if needs_host(rt) {
                     rt.status = 2;
                     return NIL;
                 }
                 rt.status = 0;
-                if all_finished(rt) {
-                    // Exit closes every flint end and leaves the events for one
-                    // last drain, so a host never has to guess whether more is
-                    // coming.
-                    rt.close_all_flint_ends();
-                    if needs_host(rt) {
-                        rt.status = 2;
-                        return NIL;
-                    }
-                }
-                if !all_finished(rt) {
+                {
                     // Nothing runnable, nothing the host can help with: the
                     // remaining threads are waiting on each other.
                     let s = rt.sched();
@@ -1176,9 +1193,8 @@ pub fn drive(rt: &mut Rt) -> Value {
                         "deadlock: {stuck} green thread(s) are parked and nothing can wake them{detail}"
                     );
                     rt.throw_str("IllegalStateException", &msg);
-                    return NIL;
                 }
-                return main_result(rt);
+                return NIL;
             }
         }
     }
@@ -1360,6 +1376,17 @@ impl Rt {
             let target = self.r(pi);
             let v = self.port_dequeue(target);
             let vi = self.push(v);
+            if fx(self.slot(self.r(pi), PT_KIND)) == K_FLINT {
+                // Room again for the host to deliver the next wave.
+                let n = if self.is_vector(self.r(vi)) {
+                    self.vec_count(self.r(vi)) as i64
+                } else {
+                    self.str_len(self.r(vi)) as i64
+                };
+                let queued = fx(self.slot(self.r(pi), PT_BYTES));
+                let left = if queued > n { queued - n } else { 0 };
+                self.set(self.r(pi), PT_BYTES, Value::fixnum(left));
+            }
             // Space freed: whoever was blocked sending here can try again.
             let target = self.r(pi);
             self.wake_on(target);
@@ -1567,6 +1594,14 @@ impl Rt {
 
     /// Put bytes into the flint end of a host port. Wakes a parked receiver;
     /// it does not run anything.
+    /// Put bytes into the flint end of a host port.
+    ///
+    /// Returns **false when the guest's buffer is full**, and the host must hold
+    /// the message and offer it again after the next pump. Without that, a
+    /// server answering "in waves" would simply push every wave at once and the
+    /// whole answer would be resident in the guest heap -- which is precisely
+    /// what waves exist to prevent. Inbound needs the same back-pressure as
+    /// outbound; it is the same buffer bound, seen from the other side.
     pub fn host_deliver(&mut self, host_port_id: i64, bytes: &[u8]) -> bool {
         let host = self.port_by_id(host_port_id);
         if host.is_nil() {
@@ -1580,6 +1615,13 @@ impl Rt {
             return false;
         }
         let pi = self.push(flint);
+        let queued = fx(self.slot(self.r(pi), PT_BYTES));
+        let cap = fx(self.slot(self.r(pi), PT_CAP));
+        if queued > 0 && queued + bytes.len() as i64 > cap {
+            self.pop_to(base);
+            return false;
+        }
+        self.set(self.r(pi), PT_BYTES, Value::fixnum(queued + bytes.len() as i64));
         let v = if fx(self.slot(self.r(pi), PT_BINARY)) == 1 {
             let mark = self.mark();
             for b in bytes {

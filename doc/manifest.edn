@@ -897,6 +897,22 @@
     text},
   :macros #{},
   :count 9},
+ flint.doc
+ {:file "lib/flint/doc.cljc",
+  :present
+  #{children
+    close
+    content
+    content-each
+    descendants
+    node
+    node-count
+    open
+    root
+    select
+    text},
+  :macros #{},
+  :count 11},
  flint.port
  {:file "lib/flint/port.cljc",
   :present
@@ -925,6 +941,11 @@
   :present #{codec decode encode},
   :macros #{},
   :count 3},
+ flint.port.transit
+ {:file "lib/flint/port/transit.cljc",
+  :present #{codec decode encode},
+  :macros #{},
+  :count 3},
  flint.regex
  {:file "lib/flint/regex.cljc",
   :present
@@ -940,6 +961,11 @@
     split},
   :macros #{},
   :count 10},
+ flint.rpc
+ {:file "lib/flint/rpc.cljc",
+  :present #{call call-each call-seq cancel client close},
+  :macros #{},
+  :count 6},
  flint.thread
  {:file "lib/flint/thread.cljc",
   :present #{join result self spawn state thread-id thread? yield},

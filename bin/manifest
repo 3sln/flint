@@ -22,6 +22,9 @@
     flint.port        "lib/flint/port.cljc"
     flint.port.edn    "lib/flint/port/edn.cljc"
     flint.port.json   "lib/flint/port/json.cljc"
+    flint.port.transit "lib/flint/port/transit.cljc"
+    flint.rpc         "lib/flint/rpc.cljc"
+    flint.doc         "lib/flint/doc.cljc"
     flint.data.json   "lib/flint/data/json.cljc"
     flint.data.xml    "lib/flint/data/xml.cljc"
     flint.data.html   "lib/flint/data/html.cljc"})

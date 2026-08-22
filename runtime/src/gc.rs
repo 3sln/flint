@@ -192,6 +192,12 @@ pub struct GcStats {
     pub bytes_promoted: u64,
     pub old_live: u32,
     pub old_capacity: u32,
+    /// High-water mark of live bytes -- old survivors plus whatever is in the
+    /// nursery -- sampled at every collection. This is the number a memory
+    /// claim has to be made against: "peak memory is proportional to content
+    /// actually fetched" is a statement about *this*, not about how much has
+    /// been allocated over a run (`doc/decisions/0008`).
+    pub peak_live: u64,
 }
 
 pub struct Gc {
@@ -258,6 +264,15 @@ impl Gc {
 
     pub fn young_used(&self) -> u32 {
         self.bump - self.from
+    }
+
+    /// Sample the high-water mark. Called after each collection, when the
+    /// numbers mean something: mid-cycle the nursery is full of garbage.
+    fn note_peak(&mut self) {
+        let live = self.old_live as u64 + self.young_used() as u64;
+        if live > self.stats.peak_live {
+            self.stats.peak_live = live;
+        }
     }
     pub fn old_capacity(&self) -> u32 {
         self.old_capacity
@@ -592,6 +607,7 @@ impl Gc {
         core::mem::swap(&mut self.from, &mut self.to);
         self.bump = self.to_bump;
         self.from_end = self.from + self.half;
+        self.note_peak();
     }
 
     // --- major collection ------------------------------------------------
@@ -653,6 +669,7 @@ impl Gc {
         }
 
         self.sweep_old();
+        self.note_peak();
 
         // Clear marks on the (live) nursery.
         let mut a = self.from;

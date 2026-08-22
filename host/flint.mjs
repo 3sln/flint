@@ -43,6 +43,10 @@ export function instantiate(module) {
     while (code === 2) {
       if (++guard > 1e6) throw new Error('flint: the host pump made no progress');
       for (const ev of drain()) handle(ev);
+      // Anything the guest refused for want of buffer space, and anything a
+      // capability still has to say. A server answering in waves offers the
+      // next one here, once the script has taken the last.
+      flush();
       code = e.flint_resume();
     }
     const out = new Uint8Array(e.memory.buffer, e.out_ptr(), e.out_len());
@@ -75,11 +79,46 @@ export function instantiate(module) {
 
   /// Send bytes back. A string is encoded as UTF-8; a Uint8Array goes as it is,
   /// which is what a binary format needs.
-  function deliver(port, payload) {
+  ///
+  /// **Returns false when the guest's buffer is full.** `deliver` below queues
+  /// on our side and retries, so a caller does not have to think about it, but
+  /// the distinction is the whole of flow control: without it a server that
+  /// answers in waves just pushes every wave at once and the guest holds the
+  /// entire answer, which is what waves exist to avoid.
+  function tryDeliver(port, payload) {
     const b = typeof payload === 'string' ? enc.encode(payload) : payload;
     const p = e.flint_in_alloc(b.length);
     new Uint8Array(e.memory.buffer).set(b, p);
     return e.flint_deliver(port, b.length) !== 0;
+  }
+
+  // Per port: what we have not managed to hand over yet.
+  const outbox = new Map();
+
+  function deliver(port, payload) {
+    const q = outbox.get(port) ?? [];
+    q.push(payload);
+    outbox.set(port, q);
+    return flushPort(port);
+  }
+
+  function flushPort(port) {
+    const q = outbox.get(port);
+    if (!q) return true;
+    while (q.length) {
+      if (!tryDeliver(port, q[0])) return false;
+      q.shift();
+    }
+    outbox.delete(port);
+    return true;
+  }
+
+  /// Retry everything held back, then let each capability offer more.
+  function flush() {
+    for (const port of [...outbox.keys()]) flushPort(port);
+    for (const [port, cap] of openPorts) {
+      if (cap && cap.poll && !(outbox.get(port) || []).length) cap.poll(port, api);
+    }
   }
 
   // What the host is willing to lend. `capabilities` maps a name to a handler
@@ -107,13 +146,22 @@ export function instantiate(module) {
     }
   }
 
-  const api = { deliver, close: (p) => e.flint_close(p), text: (d) => dec.decode(d) };
+  const api = {
+    deliver,
+    tryDeliver,
+    close: (p) => e.flint_close(p),
+    text: (d) => dec.decode(d),
+    /// How much the guest will still accept on this port right now. A capability
+    /// that wants to be a good citizen can ask instead of being refused.
+    state: (p) => e.flint_port_state(p),
+  };
 
   return {
     main,
     exports: e,
     drain,
     deliver,
+    flush,
     pump,
     grant: (name, handler) => { capabilities[name] = handler; },
     capabilities: (m) => { capabilities = m; },
