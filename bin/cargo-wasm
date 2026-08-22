@@ -1,0 +1,4 @@
+#!/bin/sh
+# rustup's toolchain has the wasm32 target; Homebrew's rustc (first on PATH) does not.
+export PATH="$HOME/.rustup/toolchains/nightly-aarch64-apple-darwin/bin:$PATH"
+exec cargo "$@"

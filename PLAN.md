@@ -44,3 +44,8 @@ Layers, each testable before the next:
   second segment overwrites an exported descriptor slot with (ptr,len). Verified
   that `rustc` exports `__heap_base` and named statics as wasm globals, so the
   patcher needs no symbol table.
+
+## Decisions
+
+- `doc/decisions/0001-dispatch.md` — interpreter vs AOT, and stack vs register.
+  Read before building layer 9.

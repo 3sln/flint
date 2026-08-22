@@ -1,0 +1,24 @@
+[package]
+name = "flint-rt"
+version = "0.1.0"
+edition = "2021"
+description = "flint runtime: NaN-boxed values, generational GC, persistent data structures, EDN reader and bytecode VM, for wasm32-unknown-unknown"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Pure-Rust no_std libm. The only dependency: it is what makes clojure.math
+# possible in a bare wasm build (no libc, no JVM Math).
+libm = { version = "0.2", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+strip = true
+
+[profile.release-small]
+inherits = "release"
+opt-level = "z"
