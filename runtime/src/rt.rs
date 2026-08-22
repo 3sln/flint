@@ -30,6 +30,10 @@ pub struct Rt {
     /// The in-flight thrown value, or `nil`. Native builtins signal failure by
     /// setting this and returning `nil`; the VM checks it after every call.
     pub thrown: Value,
+    /// Out-parameter for CHAMP insert/remove: did the entry count change?
+    /// A scratch field rather than a tuple return, because every one of those
+    /// returns would otherwise have to be threaded through the rooting dance.
+    pub champ_added: bool,
 }
 
 /// Root `$v` for the duration of `$body`, rebinding the name to the (possibly
@@ -51,7 +55,8 @@ impl Rt {
     }
 
     pub fn with_heap(nursery: u32, max: u32) -> Rt {
-        let mut rt = Rt { gc: Gc::new(nursery, max), roots: Roots::new(), thrown: NIL };
+        let mut rt =
+            Rt { gc: Gc::new(nursery, max), roots: Roots::new(), thrown: NIL, champ_added: false };
         rt.roots.singletons = alloc::vec![NIL; SING_COUNT];
         rt.init_singletons();
         rt
@@ -61,6 +66,8 @@ impl Rt {
         let a = self.alloc(TY_EMPTY_LIST, 1);
         self.roots.singletons[SING_EMPTY_LIST] = Value::heap(a);
         self.init_vector();
+        self.init_map();
+        self.init_set();
     }
 
     // --- shadow roots ------------------------------------------------------

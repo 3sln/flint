@@ -80,6 +80,8 @@ pub const V_SHIFT: u32 = 1;
 pub const V_ROOT: u32 = 2;
 pub const V_TAIL: u32 = 3;
 pub const V_META: u32 = 4;
+/// Cached `hash`, `nil` until first asked for.
+pub const V_HASH: u32 = 5;
 
 impl Rt {
     pub(crate) fn init_vector(&mut self) {
@@ -87,7 +89,7 @@ impl Rt {
         let r = self.push(root);
         let tail = self.new_node(0, NIL);
         let t = self.push(tail);
-        let a = self.alloc(TY_VEC, 5);
+        let a = self.alloc(TY_VEC, 6);
         let (root, tail) = (self.r(r), self.r(t));
         self.pop_to(r);
         self.gc.set_slot(a, V_CNT, Value::fixnum(0));
@@ -95,6 +97,7 @@ impl Rt {
         self.gc.set_slot(a, V_ROOT, root);
         self.gc.set_slot(a, V_TAIL, tail);
         self.gc.set_slot(a, V_META, NIL);
+        self.gc.set_slot(a, V_HASH, NIL);
         self.roots.singletons[crate::rt::SING_EMPTY_VEC] = Value::heap(a);
     }
 
@@ -132,7 +135,7 @@ impl Rt {
         let r = self.push(root);
         let t = self.push(tail);
         let m = self.push(meta);
-        let a = self.alloc(TY_VEC, 5);
+        let a = self.alloc(TY_VEC, 6);
         if a == 0 {
             self.pop_to(base);
             return NIL;
@@ -144,6 +147,7 @@ impl Rt {
         self.gc.set_slot(a, V_ROOT, root);
         self.gc.set_slot(a, V_TAIL, tail);
         self.gc.set_slot(a, V_META, meta);
+        self.gc.set_slot(a, V_HASH, NIL);
         Value::heap(a)
     }
 
@@ -734,7 +738,7 @@ mod tests {
 
     #[test]
     fn empty_vector_is_a_shared_singleton() {
-        let mut rt = Rt::new();
+        let rt = Rt::new();
         assert_eq!(rt.vec_count(rt.empty_vec()), 0);
         assert!(rt.is_vector(rt.empty_vec()));
         assert_eq!(rt.vec_nth(rt.empty_vec(), 0), None);

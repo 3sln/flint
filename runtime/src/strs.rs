@@ -426,7 +426,7 @@ mod tests {
             assert_eq!(rt.str_len(v), c.len_utf8() as u32);
             let s = rt.as_str(v, &mut b).unwrap();
             assert_eq!(s.chars().next(), Some(c));
-            let mut b2 = sbuf();
+            let b2 = sbuf();
             let _ = b2;
         }
         // ... and are `=` to the equivalent one-character string.
