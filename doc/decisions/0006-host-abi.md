@@ -141,6 +141,37 @@ So provide the scoped form, and say in the README that it is the good path:
 Program exit closes every flint end and drains the queue, so a host never has to
 guess whether more is coming.
 
+### The event is a NOTIFICATION; the port's state is the TRUTH
+
+The host learns a runtime end has closed two ways, and it needs both:
+
+- **Pushed** — `{:kind :closed :port p}` in the drained queue, so a host can react
+  promptly and let go of whatever the port stood for.
+- **Pulled** — a query it can make in its own loop: *is this port's runtime end
+  closed?*
+
+The second is not a convenience. **If an event is the only way to learn a durable
+fact, then an event dropped, missed, or not yet drained is an unrecoverable
+leak** — a host handle to a port nobody will ever mention again. Making the state
+queryable turns the event into an optimisation over polling rather than the sole
+carrier of the truth.
+
+That principle generalises and is worth applying to anything else this ABI
+notifies about: never let a transient notification be the only record of a
+durable state.
+
+**And it is symmetric.** The script can ask the same question of its end
+(`closed?`), and — more importantly — a send or receive against a port whose peer
+is gone must **error rather than park**. A script blocking forever on a host that
+has hung up is the same failure as a host leaking a handle, seen from the other
+side.
+
+### When the channel is actually freed
+
+When **both** ends are done: the flint end closed or unreachable, and the host
+end closed. Neither alone releases it, which is what makes a half-closed port a
+real and describable state rather than a race.
+
 ### And the same mechanism buys deadlock detection
 
 A pair created by `channel` has no host end at all. If both ends become
@@ -168,5 +199,12 @@ collected — only its peer can vanish, which is exactly the case worth catching
 - A thread parked on a port whose peer became unreachable is **woken with an
   error rather than hanging**.
 - Program exit closes every flint end and drains the queue.
+- The host can **query** a port's runtime-end state, not only receive the event —
+  and a test proves a host that ignores every event can still discover a closed
+  port and release it.
+- A send or receive against a port whose peer is gone **errors rather than
+  parking**.
+- The channel is freed only when BOTH ends are done, and half-closed is a
+  described state.
 - The three formats round-trip what they claim to, and the README says exactly
   what JSON cannot carry.
