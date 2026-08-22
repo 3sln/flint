@@ -32,6 +32,55 @@ than it sounds, because indexing by code point was never O(1) anyway.
 first operation that needs contiguous bytes flattens once and the node remembers
 it. That is what V8 does, and it is what makes the next section work.
 
+### It must be BALANCED, and that is not a refinement
+
+A naive cons-rope degenerates immediately. `(reduce str "" xs)` builds a
+right-leaning spine of depth n, and `subs`/`nth` on it is **O(n)** — worse than
+the flat string it replaced, at the operation ropes are supposed to make cheap.
+Balance is what makes the structure work at all, not a later optimisation.
+
+Two options, and the second suits this codebase:
+
+- **Boehm-style rebalancing** — the classic: hold the invariant that a rope of
+  depth *d* has length at least `Fib(d+2)`, and rebuild when it slips. Binary,
+  so depth is `log2 n` and access is a lot of pointer chasing.
+- **A B-tree rope with size tables** — wide nodes, shallow tree. At a fanout of
+  16–32 a megabyte string is two or three levels deep, which is *near* random
+  access in practice rather than merely logarithmic. This is what Ropey and Xi
+  do, and it is the same technique as the RRB vectors already in this codebase,
+  so it is a sibling rather than a new idea.
+
+Take the B-tree. Three parameters worth writing down and defending:
+
+- **Fanout 16–32.** Depth is what random access pays for.
+- **Leaves of ~512–1024 bytes**, not per-fragment. Tiny leaves make the tree deep
+  and the metadata dominate the content.
+- **Merge adjacent small leaves on concat**, or a thousand two-character appends
+  produce a thousand leaves and the invariant is lost by increments.
+
+### Each node carries a code-point count, not just a byte length
+
+We store UTF-8 and index by code point. Without a per-node **count of code
+points** alongside the byte length, indexing by code point means scanning — so
+`nth` is O(n) again and `count` is too, on a structure specifically built to make
+them cheap.
+
+Carrying both is what makes `count` O(1) and `subs` genuinely logarithmic. It is
+also the thing that makes the same operations agree across hosts, since a JVM
+port storing bytes computes the same counts.
+
+### The cursor cares less than you would think
+
+Worth separating the two access patterns, because they have different costs:
+
+- **`subs` and `nth` are random** and pay for depth. This is what balance buys.
+- **The Pike VM's cursor is sequential** — it walks leaves in order, so its cost
+  is a byte read plus an occasional leaf advance, near-flat whatever the depth.
+
+So an unbalanced rope would not obviously hurt matching, and would quietly
+destroy substring access. That asymmetry is exactly how this kind of bug survives
+a benchmark suite that measures the wrong one.
+
 ### Two correctness requirements that are easy to miss
 
 **Equality and hash must be independent of shape.** `(str "ab" "c")` and
@@ -184,6 +233,12 @@ to drift.
   measuring the live set.
 - Flattening happens once and is cached, shown by counting flattens across
   repeated matches.
+- **Depth stays bounded under adversarial construction.** Build the same string
+  a thousand ways — repeated right-concat, repeated left-concat, alternating,
+  slice-then-concat — and assert depth and access time do not degrade. Repeated
+  right-concat is the degenerate case and belongs in the suite by name.
+- `count` is O(1) and `nth` is logarithmic on a rope built by many small appends,
+  measured rather than assumed.
 - A pattern that is catastrophic under backtracking — `(a+)+b` against a long
   non-matching input — completes in linear time.
 - The regex conformance battery passes identically on the cljc engine and on any
