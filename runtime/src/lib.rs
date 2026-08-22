@@ -14,6 +14,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod gc;
+pub mod hash;
 pub mod mem;
 pub mod obj;
 pub mod value;
