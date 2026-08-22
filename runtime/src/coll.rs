@@ -45,6 +45,9 @@ impl Rt {
     /// Clojure counts UTF-16, so an astral character counts 2 there and 1 here.
     /// This is a deliberate divergence, recorded in the README.
     pub fn char_count(&self, v: Value) -> u32 {
+        if !v.is_inline_str() && str_is_ascii(&self.gc.sp, v.as_heap()) {
+            return len(&self.gc.sp, v.as_heap());
+        }
         let mut buf = crate::rt::sbuf();
         let bytes: &[u8] = if v.is_inline_str() {
             v.inline_bytes(&mut buf)
@@ -52,6 +55,19 @@ impl Rt {
             str_bytes(&self.gc.sp, v.as_heap())
         };
         bytes.iter().filter(|b| (**b & 0xC0) != 0x80).count() as u32
+    }
+
+    /// True when a code-point index into `s` is also a byte index.
+    #[inline]
+    fn str_indexable(&self, s: Value) -> bool {
+        if s.is_inline_str() {
+            let mut b = crate::rt::sbuf();
+            s.inline_bytes(&mut b).is_ascii()
+        } else {
+            s.is_heap()
+                && ty(&self.gc.sp, s.as_heap()) == TY_STR
+                && str_is_ascii(&self.gc.sp, s.as_heap())
+        }
     }
 
     // --- conj / assoc / get -------------------------------------------------
@@ -469,6 +485,20 @@ impl Rt {
 
     /// The one-character string at code-point index `i`.
     pub fn char_at(&mut self, s: Value, i: u32) -> Option<Value> {
+        // ASCII fast path: byte index == code-point index, so this is O(1).
+        if self.str_indexable(s) {
+            let n = self.str_len(s);
+            if i >= n {
+                return None;
+            }
+            let b = if s.is_inline_str() {
+                let mut t = crate::rt::sbuf();
+                s.inline_bytes(&mut t)[i as usize]
+            } else {
+                self.gc.sp.read_u8(s.as_heap() + STR_DATA + i)
+            };
+            return Some(Value::inline_str(&[b]));
+        }
         let mut buf = crate::rt::sbuf();
         let owned: alloc::string::String = {
             let b: &[u8] = if s.is_inline_str() {
@@ -493,6 +523,18 @@ impl Rt {
             Some(n) if n >= 0 => n as usize,
             _ => return self.throw_str("IndexOutOfBoundsException", "bad index"),
         };
+        if self.str_indexable(s) {
+            if (idx as u32) >= self.str_len(s) {
+                return self.throw_str("IndexOutOfBoundsException", "string index out of range");
+            }
+            let b = if s.is_inline_str() {
+                let mut t = crate::rt::sbuf();
+                s.inline_bytes(&mut t)[idx]
+            } else {
+                self.gc.sp.read_u8(s.as_heap() + STR_DATA + idx as u32)
+            };
+            return Value::fixnum(b as i64);
+        }
         let mut buf = crate::rt::sbuf();
         let cp = {
             let b: &[u8] = if s.is_inline_str() {
@@ -510,6 +552,23 @@ impl Rt {
 
     /// `subs`, in code points.
     pub fn substring(&mut self, s: Value, start: i64, end: Option<i64>) -> Value {
+        if self.str_indexable(s) {
+            let n = self.str_len(s) as i64;
+            let e = end.unwrap_or(n);
+            if start < 0 || e > n || start > e {
+                return self.throw_str("StringIndexOutOfBoundsException", "bad substring range");
+            }
+            let owned: alloc::string::String = {
+                let mut t = crate::rt::sbuf();
+                let bytes: &[u8] = if s.is_inline_str() {
+                    s.inline_bytes(&mut t)
+                } else {
+                    str_bytes(&self.gc.sp, s.as_heap())
+                };
+                core::str::from_utf8(&bytes[start as usize..e as usize]).unwrap_or("").into()
+            };
+            return self.string(&owned);
+        }
         let mut buf = crate::rt::sbuf();
         let owned = {
             let b: &[u8] = if s.is_inline_str() {
@@ -675,10 +734,20 @@ impl Rt {
             } else {
                 return self.throw_str("ClassCastException", "not a string");
             };
-            // `from` is a code-point index, and so is the answer.
+            // `from` is a code-point index, and so is the answer. For ASCII
+            // those are byte offsets, and the whole search is O(n) instead of
+            // O(n) per character position.
             let skip = from.max(0) as usize;
-            let start_byte = h.char_indices().nth(skip).map(|(i, _)| i).unwrap_or(h.len());
-            h[start_byte..].find(nd).map(|b| h[..start_byte + b].chars().count())
+            if h.is_ascii() {
+                if skip > h.len() {
+                    None
+                } else {
+                    h[skip..].find(nd).map(|b| skip + b)
+                }
+            } else {
+                let start_byte = h.char_indices().nth(skip).map(|(i, _)| i).unwrap_or(h.len());
+                h[start_byte..].find(nd).map(|b| h[..start_byte + b].chars().count())
+            }
         };
         match found {
             Some(i) => Value::fixnum(i as i64),

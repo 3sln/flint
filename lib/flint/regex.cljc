@@ -225,6 +225,21 @@
 
 ;; -------------------------------------------------------------------- the API
 
+(defn- first-node
+  "The node that must match at the start, if the pattern has one. Used to skip
+  positions cheaply: without it, `find-from` builds a continuation closure at
+  every index of the subject, which is where all the time went."
+  [ast]
+  (let [tag (first ast)]
+    (cond
+      (= tag :seq) (let [ns (second ast)] (when (seq ns) (first-node (first ns))))
+      (= tag :group) (first-node (nth ast 2))
+      (= tag :rep) (when (>= (nth ast 2) 1) (first-node (nth ast 1)))
+      (= tag :char) ast
+      (= tag :class) ast
+      (= tag :bol) :bol
+      :else nil)))
+
 (def ^:private cache (atom {}))
 
 (defn pattern
@@ -236,7 +251,8 @@
       (let [ngroups (volatile! 0)
             r (parse-alt src 0 src ngroups)]
         (when (< (second r) (count src)) (perr "unexpected )" src (second r)))
-        (let [p {:flint/pattern src :ast (first r) :ngroups @ngroups}]
+        (let [ast (first r)
+              p {:flint/pattern src :ast ast :ngroups @ngroups :first (first-node ast)}]
           (reset! cache (assoc @cache src p))
           p)))))
 
@@ -252,12 +268,44 @@
 (defn match-at [p s i]
   (m (:ast p) s i {} (fn [e gs] [e gs])))
 
-(defn find-from [p s from]
-  (loop [i from]
-    (if (> i (count s))
-      nil
-      (let [r (match-at p s i)]
-        (if r [i (first r) (second r)] (recur (inc i)))))))
+(defn find-from
+  "First match at or after `from`. Skips positions the pattern's first node
+  cannot possibly match, which turns a scan over a large subject from one
+  closure allocation per position into a character test per position -- and,
+  for a literal first character, into a single native substring search."
+  [p s from]
+  (let [fnode (:first p)
+        n (count s)]
+    (cond
+      ;; Anchored at the start: there is exactly one position to try.
+      (= fnode :bol)
+      (when (<= from 0) (let [r (match-at p s 0)] (when r [0 (first r) (second r)])))
+
+      (and (vector? fnode) (= :char (first fnode)))
+      (let [c (second fnode)]
+        (loop [i from]
+          (let [j (flint.rt/str-index-of s c i)]
+            (when j
+              (let [r (match-at p s j)]
+                (if r [j (first r) (second r)] (recur (inc j))))))))
+
+      (and (vector? fnode) (= :class (first fnode)))
+      (let [neg? (second fnode) items (nth fnode 2)]
+        (loop [i from]
+          (when (< i n)
+            (let [c (flint.rt/nth s i)
+                  hit (class-match? items c)]
+              (if (if neg? (not hit) hit)
+                (let [r (match-at p s i)]
+                  (if r [i (first r) (second r)] (recur (inc i))))
+                (recur (inc i)))))))
+
+      :else
+      (loop [i from]
+        (if (> i n)
+          nil
+          (let [r (match-at p s i)]
+            (if r [i (first r) (second r)] (recur (inc i)))))))))
 
 (defn re-find
   ([p s] (re-find p s 0))

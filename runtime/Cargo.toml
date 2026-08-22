@@ -19,6 +19,10 @@ host-tools = []
 name = "catalogue"
 required-features = ["host-tools"]
 
+[[bin]]
+name = "bench"
+required-features = ["host-tools"]
+
 [dependencies]
 # Pure-Rust no_std libm. The only dependency: it is what makes clojure.math
 # possible in a bare wasm build (no libc, no JVM Math).

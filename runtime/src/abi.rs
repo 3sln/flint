@@ -188,6 +188,15 @@ pub extern "C" fn set_step_limit(hi: u32, lo: u32) {
     }
 }
 
+/// Instructions dispatched so far. Only counted while a step limit is set, so
+/// the counter costs nothing in a normal run -- which is also what makes the
+/// dispatch measurement honest: time it with counting off, count it with
+/// counting on, divide.
+#[no_mangle]
+pub extern "C" fn stat_steps() -> u64 {
+    unsafe { ensure_rt().steps }
+}
+
 /// Diagnostics for the benchmarks: bytes the collector has handed out.
 #[no_mangle]
 pub extern "C" fn stat_bytes_allocated() -> u64 {

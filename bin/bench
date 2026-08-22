@@ -1,0 +1,95 @@
+#!/usr/bin/env bb
+;; Runs every benchmark and prints the tables that go in the README.
+;;
+;; Honest comparison: the same Clojure source also runs under babashka, which is
+;; the fairest available baseline -- another non-JIT Clojure, on the same
+;; machine, on the same input. It is NOT a claim about JVM Clojure.
+(require '[clojure.string :as str] '[babashka.fs :as fs] '[clojure.java.io :as io])
+
+(defn sh [& args]
+  (let [p (.start (ProcessBuilder. (into-array String (map str args))))
+        out (slurp (.getInputStream p)) err (slurp (.getErrorStream p))]
+    (.waitFor p)
+    {:out out :err err :code (.exitValue p)}))
+
+(defn machine []
+  (str (str/trim (:out (sh "sysctl" "-n" "machdep.cpu.brand_string")))
+       ", " (str/trim (:out (sh "uname" "-sr")))
+       ", node " (str/trim (:out (sh "node" "--version")))))
+
+(def progs
+  [{:ns "hello" :args [] :label "hello (trivial)"}
+   {:ns "tight" :args ["1000000"] :label "tight loop, 1e6 iterations"}
+   {:ns "maps"  :args ["100000"]  :label "transient map, 1e5 inserts"}
+   {:ns "wordsstr" :args ["200"] :label "word frequency (string split)"}
+   {:ns "words" :args ["200"]     :label "word frequency (regex split)"}
+   {:ns "json"  :args ["2000"]    :label "JSON round trip, 2000 records"}])
+
+(defn build! [p]
+  (let [out (str "out/bench-" (:ns p) ".wasm")
+        r (sh "./bin/flint" ":src" "bench/progs" ":fn" (str (:ns p) "/main") ":out" out)]
+    (when-not (zero? (:code r))
+      (println "build failed for" (:ns p) "\n" (:out r) (:err r)) (System/exit 1))
+    (assoc p :wasm out :bytes (fs/size out))))
+
+(defn measure! [p]
+  (let [r (sh "node" "bench/wasm.mjs" (:wasm p) (first (:args p)))]
+    (when-not (zero? (:code r)) (println "run failed:" (:err r)) (System/exit 1))
+    (merge p (into {} (map (fn [[k v]] [(keyword (name k)) v])
+                           (read-string (str/replace (str/trim (:out r)) #"\"([a-z]+)\":" ":$1 ")))))))
+
+(defn bb-time [p]
+  ;; The same source under babashka. Loads the file, calls main, times only the call.
+  (let [f (str "/tmp/bb-bench-" (:ns p) ".clj")
+        _ (spit f (str "(load-file \"bench/progs/" (:ns p) ".cljc\")\n"
+                       "(in-ns '" (:ns p) ")\n"
+                       "(clojure.core/refer 'clojure.core)\n"
+                       "(let [args [" (str/join " " (map pr-str (:args p))) "]]\n"
+                       "  (main args)\n"
+                       "  (let [t (System/nanoTime) r (main args) el (- (System/nanoTime) t)]\n"
+                       "    (clojure.core/println (/ el 1e6))))\n"))
+        r (sh "bb" f)]
+    (if (zero? (:code r))
+      (Double/parseDouble (str/trim (:out r)))
+      nil)))
+
+(println "flint benchmarks")
+(println "machine:" (machine))
+(println "method:  best of 5 runs per measurement, one node process per program.")
+(println "         `cold` is compile + instantiate + first main(); `warm` is a")
+(println "         second main() on the same instance.")
+(println)
+
+(def results (mapv (comp measure! build!) progs))
+
+(println "module size and cold start")
+(println (format "%-32s %10s %10s %10s %10s" "program" "bytes" "compile" "cold" "warm"))
+(doseq [r results]
+  (println (format "%-32s %10d %8.2f ms %8.2f ms %8.2f ms"
+                   (:label r) (:bytes r) (:compile r) (:start r) (:run r))))
+(println)
+
+(println "against babashka (same source, same machine)")
+(println (format "%-32s %12s %12s %8s" "program" "flint warm" "babashka" "ratio"))
+(doseq [r results]
+  (let [b (bb-time r)]
+    (println (format "%-32s %10.2f ms %10s %8s"
+                     (:label r) (:run r)
+                     (if b (format "%.2f ms" b) "n/a")
+                     (if b (format "%.2fx" (/ (:run r) b)) "-")))))
+(println)
+
+(println "interpreter dispatch, measured separately from data-structure cost")
+(println "  (steps are dispatched instructions; counted in a second pass with the")
+(println "   step counter on, timed in a first pass with it off)")
+(println (format "%-32s %14s %12s %14s" "program" "instructions" "warm" "ns/instruction"))
+(doseq [r results]
+  (println (format "%-32s %14d %10.2f ms %12.1f"
+                   (:label r) (:steps r) (:run r)
+                   (if (pos? (:steps r)) (/ (* (:run r) 1e6) (:steps r)) 0.0))))
+(println)
+
+(println "allocation and collection per warm run")
+(println (format "%-32s %14s %12s" "program" "bytes alloc" "collections"))
+(doseq [r results]
+  (println (format "%-32s %14d %12d" (:label r) (:allocated r) (:collections r))))

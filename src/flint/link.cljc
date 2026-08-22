@@ -71,7 +71,8 @@
 (def abi-exports
   ;; The module's outside edge, and the roots --gc-sections keeps.
   ["flint_main" "arg_alloc" "arg_push" "out_ptr" "out_len"
-   "stat_bytes_allocated" "stat_collections" "image_desc_addr" "set_step_limit"])
+   "stat_bytes_allocated" "stat_collections" "image_desc_addr" "set_step_limit"
+   "stat_steps"])
 
 (defn link-objects
   "Run the linker. Returns the module bytes."

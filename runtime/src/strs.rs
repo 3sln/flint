@@ -41,6 +41,7 @@ impl Rt {
         }
         self.gc.sp.bytes_mut(a + STR_DATA, n).copy_from_slice(s.as_bytes());
         set_str_hash(&self.gc.sp, a, 0);
+        set_str_ascii(&self.gc.sp, a, s.is_ascii());
         Value::heap(a)
     }
 
@@ -259,11 +260,14 @@ impl Rt {
             return NIL;
         }
         let mut off = 0u32;
+        let mut ascii = true;
         for p in parts {
             self.gc.sp.bytes_mut(a + STR_DATA + off, p.len() as u32).copy_from_slice(p.as_bytes());
             off += p.len() as u32;
+            ascii &= p.is_ascii();
         }
         set_str_hash(&self.gc.sp, a, 0);
+        set_str_ascii(&self.gc.sp, a, ascii);
         Value::heap(a)
     }
 }

@@ -148,6 +148,20 @@ pub fn set_marked(sp: &Space, a: u32, m: bool) {
     let w = sp.read_u32(a);
     sp.write_u32(a, if m { w | (1 << 20) } else { w & !(1 << 20) });
 }
+/// Strings record whether they are pure ASCII, because if they are, a code
+/// point index IS a byte index. Without this, `subs` and `nth` are O(n) and
+/// splitting a string is quadratic -- which is exactly what the `words`
+/// benchmark showed.
+#[inline(always)]
+pub fn str_is_ascii(sp: &Space, a: u32) -> bool {
+    sp.read_u32(a) & (1 << 18) != 0
+}
+#[inline(always)]
+pub fn set_str_ascii(sp: &Space, a: u32, v: bool) {
+    let w = sp.read_u32(a);
+    sp.write_u32(a, if v { w | (1 << 18) } else { w & !(1 << 18) });
+}
+
 #[inline(always)]
 pub fn in_remset(sp: &Space, a: u32) -> bool {
     sp.read_u32(a) & (1 << 19) != 0
