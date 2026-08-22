@@ -75,6 +75,9 @@ pub mod op {
     pub const JUMP_IF_TRUE_KEEP: u8 = 0x20; // i16
     pub const POP_N: u8 = 0x21; // u8
     pub const SET_LOCAL_KEEP: u8 = 0x22; // u8, leaves the value
+    /// Push this frame's own closure, so a named `fn` can call itself without
+    /// capturing itself (which it could not: it does not exist yet).
+    pub const SELF: u8 = 0x23;
     /// Everything from here is reserved for fused superinstructions.
     pub const SUPER_BASE: u8 = 0x80;
 }
@@ -501,6 +504,10 @@ impl Rt {
                     ip += 1;
                     let v = self.vpeek(0);
                     self.roots.stack[fp + i] = v;
+                }
+                op::SELF => {
+                    let c = self.frames.last().unwrap().closure;
+                    self.vpush(c);
                 }
                 op::UPVAL => {
                     let i = self.u8_at(ip) as u32;

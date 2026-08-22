@@ -21,7 +21,7 @@
    :try 0x17 :pop-handler 0x18 :rethrow 0x19
    :vector 0x1A :map 0x1B :set 0x1C :list 0x1D :apply 0x1E
    :jump-if-false-keep 0x1F :jump-if-true-keep 0x20
-   :pop-n 0x21 :set-local-keep 0x22})
+   :pop-n 0x21 :set-local-keep 0x22 :self 0x23})
 
 (defn new-buf [] (volatile! {:bytes [] :fixups [] :labels {}}))
 
@@ -56,6 +56,12 @@
 
 (declare emit emit-fn-object)
 
+(defn- var-slot! [ctx sym]
+  (or (get-in ctx [:var-slots sym])
+      (throw (ex-info (str "no slot for var " sym
+                           " -- it was reached but not emitted")
+                      {:sym sym :type :compile}))))
+
 (defn- emit-const [ctx buf v]
   (cond
     (nil? v) (put! buf (op :nil))
@@ -78,9 +84,10 @@
 (defn- emit-fn [ctx buf {:keys [name upvals arities] :as node}]
   (let [fidx (:fn-index (emit-fn-object ctx node))]
     (doseq [u upvals]
-      (if (= :local (:kind u))
-        (put! buf (op :local) (:idx u))
-        (put! buf (op :upval) (:idx u))))
+      (case (:kind u)
+        :local (put! buf (op :local) (:idx u))
+        :upval (put! buf (op :upval) (:idx u))
+        :self (put! buf (op :self))))
     (put! buf (op :closure) (img/u16 fidx) (count upvals))))
 
 (defn emit-fn-object
@@ -196,12 +203,13 @@
              (put! buf (op :local) (:idx node))
              (put! buf (op :local-w) (img/u16 (:idx node))))
     :upval (put! buf (op :upval) (:idx node))
-    :var (put! buf (op :var) (img/u16 (get-in ctx [:var-slots (:sym node)])))
-    :the-var (put! buf (op :var) (img/u16 (get-in ctx [:var-slots (:sym node)])))
+    :self (put! buf (op :self))
+    :var (put! buf (op :var) (img/u16 (var-slot! ctx (:sym node))))
+    :the-var (put! buf (op :var) (img/u16 (var-slot! ctx (:sym node))))
     :def (do (if (:init node)
                (emit ctx buf (:init node) false)
                (put! buf (op :nil)))
-             (put! buf (op :set-var) (img/u16 (get-in ctx [:var-slots (:sym node)])))
+             (put! buf (op :set-var) (img/u16 (var-slot! ctx (:sym node))))
              (put! buf (op :nil)))
     :if (emit-if ctx buf node tail?)
     :do (let [b (:body node)]

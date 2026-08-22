@@ -112,9 +112,12 @@
         (= c \\) (recur (.append acc (read-escape st)))
         :else (recur (.append acc c))))))
 
+;; flint has no char type: a char is a one-character string (see the value
+;; encoding in the README -- every character of Unicode fits inline in a Value).
+;; So the reader produces strings here, and `\a` really is `"a"`.
 (def ^:private named-chars
-  {"newline" \newline "space" \space "tab" \tab "return" \return
-   "formfeed" \formfeed "backspace" \backspace})
+  {"newline" "\n" "space" " " "tab" "\t" "return" "\r"
+   "formfeed" "\f" "backspace" "\b"})
 
 (defn- read-char* [st]
   (next-ch! st)                                              ; backslash
@@ -123,12 +126,12 @@
     (let [rest-tok (if (or (whitespace c) (terminating c)) "" (read-token st))
           tok (str c rest-tok)]
       (cond
-        (= 1 (count tok)) (first tok)
+        (= 1 (count tok)) tok
         (named-chars tok) (named-chars tok)
-        (str/starts-with? tok "u") (char #?(:clj (Integer/parseInt (subs tok 1) 16)
-                                            :cljs (js/parseInt (subs tok 1) 16)))
-        (str/starts-with? tok "o") (char #?(:clj (Integer/parseInt (subs tok 1) 8)
-                                            :cljs (js/parseInt (subs tok 1) 8)))
+        (str/starts-with? tok "u") (str (char #?(:clj (Integer/parseInt (subs tok 1) 16)
+                                                 :cljs (js/parseInt (subs tok 1) 16))))
+        (str/starts-with? tok "o") (str (char #?(:clj (Integer/parseInt (subs tok 1) 8)
+                                                 :cljs (js/parseInt (subs tok 1) 8))))
         :else (err st (str "unknown character literal \\" tok))))))
 
 ;; --------------------------------------------------------------- collections
@@ -149,18 +152,28 @@
 (defn- unquote? [f] (and (seq? f) (= 'clojure.core/unquote (first f))))
 (defn- unquote-splicing? [f] (and (seq? f) (= 'clojure.core/unquote-splicing (first f))))
 
+(def special-forms
+  "Kept unqualified by syntax quote, exactly as Clojure does."
+  '#{if do let* loop* recur fn* quote var throw try catch finally def
+     new set! . & monitor-enter monitor-exit deftype* reify* case* letfn* ns})
+
 (defn- resolve-sym
-  "Resolve a symbol for syntax quote. Unqualified names that are not locals get
-  the current namespace, matching Clojure; an alias is expanded to the namespace
-  it names."
+  "Resolve a symbol for syntax quote. An alias expands to the namespace it
+  names; an unqualified name goes through the caller's `:resolve` hook, which is
+  how `` `(fn [] x) `` becomes `clojure.core/fn` rather than `this.ns/fn`.
+  Without that hook a macro defined outside clojure.core would emit calls to
+  vars in its own namespace that do not exist -- the failure is confusing and
+  arrives late, so the hook is not optional."
   [st sym]
-  (let [{:keys [ns aliases]} @st
+  (let [{:keys [ns aliases resolve]} @st
         n (name sym)]
     (cond
       (str/ends-with? n "#") sym                             ; handled by gensym
       (namespace sym) (let [a (symbol (namespace sym))]
                         (symbol (str (get aliases a (namespace sym))) n))
       (str/starts-with? n ".") sym
+      (contains? special-forms sym) sym
+      resolve (or (resolve sym) (symbol (str (or ns "user")) n))
       :else (symbol (str (or ns "user")) n))))
 
 (defn- syntax-quote [st form]
@@ -401,7 +414,7 @@
   ([src] (reader src {}))
   ([src opts]
    (let [st (make-state src (:file opts "<string>"))]
-     (vswap! st merge (select-keys opts [:ns :aliases :features]))
+     (vswap! st merge (select-keys opts [:ns :aliases :features :resolve]))
      (when (:features opts) (vswap! st assoc :features (:features opts)))
      st)))
 

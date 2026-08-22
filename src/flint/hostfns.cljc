@@ -86,6 +86,7 @@
    "reset!" reset!
    "meta" meta
    "with-meta" with-meta
+   "flint/apply" (fn [f args] (apply f args))
    "flint/lazy-seq" (fn [f] (lazy-seq (f)))
    "flint/range3" (fn [s e st] (if e (range s e st) (iterate #(+ % st) s)))
    "flint/gc-stats" (nyi "flint/gc-stats")})

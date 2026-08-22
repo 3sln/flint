@@ -118,7 +118,7 @@
 
 (defn- analyze-symbol [env sym]
   (if-let [b (resolve-local env sym)]
-    (assoc b :op (if (= :local (:kind b)) :local :upval) :name sym)
+    (assoc b :op (case (:kind b) :local :local :upval :upval :self :self) :name sym)
     (if-let [nn (and (namespace sym) (native-name env sym))]
       {:op :native-value :name nn}
       (if-let [q (qualify env sym)]
@@ -126,6 +126,12 @@
           {:op :var :sym q})
       (err (str "unable to resolve symbol: " sym)
            {:sym sym :ns (current-ns env) :line (:line (meta sym))})))))
+
+(defn bootstrap-key [sym]
+  (cond
+    (nil? (namespace sym)) sym
+    (= "clojure.core" (namespace sym)) (symbol (name sym))
+    :else nil))
 
 (defn- analyze-seq [env form]
   (let [head (first form)]
@@ -140,8 +146,11 @@
       {:op :native :name (native-name env head)
        :args (mapv #(analyze env %) (rest form))}
 
-      (and (symbol? head) (contains? macros/bootstrap head) (not (resolve-local env head)))
-      (analyze env ((get macros/bootstrap head) form env))
+      ;; Bootstrap macros answer to both `fn` and `clojure.core/fn`: syntax
+      ;; quote qualifies them, and they have to keep working after it does.
+      (and (symbol? head) (not (resolve-local env head))
+           (get macros/bootstrap (bootstrap-key head)))
+      (analyze env ((get macros/bootstrap (bootstrap-key head)) form env))
 
       (and (symbol? head) (not (resolve-local env head)) (macro-fn env head))
       (let [f (macro-fn env head)
@@ -302,7 +311,10 @@
                                        (assoc-in e [:locals p] {:kind :local :idx idx})))
                                    base-env
                                    all)
-                      env' (if fname (assoc-in env' [:self] fname) env')
+                      ;; A named fn can call itself. It cannot capture itself --
+                      ;; the closure does not exist while its body is compiled --
+                      ;; so the name resolves to the frame's own closure.
+                      env' (if fname (assoc-in env' [:locals fname] {:kind :self}) env')
                       slots (mapv #(get-in env' [:locals % :idx]) all)
                       env' (assoc env' :loop {:id (gensym "fnloop") :slots slots :n (count all)})
                       body-ast (analyze-body env' body)]

@@ -612,9 +612,17 @@
           (recur (conj acc x) (conj seen x) (next s))))
       (seq acc))))
 
+(defn- as-comparator
+  "Clojure lets a predicate stand in for a comparator: (sort > xs) works because
+  a boolean-returning fn is read as `less-than`."
+  [f]
+  (fn [a b]
+    (let [r (f a b)]
+      (if (number? r) r (if r -1 (if (f b a) 1 0))))))
+
 (defn sort
-  ([coll] (sort compare coll))
-  ([cmp coll] (merge-sort cmp (vec coll))))
+  ([coll] (merge-sort compare (vec coll)))
+  ([cmp coll] (merge-sort (as-comparator cmp) (vec coll))))
 
 (defn- merge-sort [cmp v]
   (let [n (count v)]
@@ -637,8 +645,9 @@
   ([v start end] (subvec2 v start end)))
 
 (defn sort-by
-  ([kf coll] (sort (fn [a b] (compare (kf a) (kf b))) coll))
-  ([kf cmp coll] (sort (fn [a b] (cmp (kf a) (kf b))) coll)))
+  ([kf coll] (merge-sort (fn [a b] (compare (kf a) (kf b))) (vec coll)))
+  ([kf cmp coll] (let [c (as-comparator cmp)]
+                   (merge-sort (fn [a b] (c (kf a) (kf b))) (vec coll)))))
 
 (defn partition
   ([n coll] (partition n n coll))

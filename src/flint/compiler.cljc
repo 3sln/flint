@@ -93,7 +93,18 @@
   `declare`. Clojure needs `declare` for the intra-namespace case; reading
   everything before analysing anything makes it unnecessary."
   [cc nsname src file]
-  (let [st (reader/reader src {:file file :features #{:clj :flint}})
+  (let [resolve-hook
+        (fn [sym]
+          (let [nsdef (get-in @cc [:namespaces nsname])
+                n (name sym)]
+            (or (get (:refers nsdef) sym)
+                (when (get-in @cc [:declared (symbol (str nsname) n)])
+                  (symbol (str nsname) n))
+                (when (get-in @cc [:declared (symbol "clojure.core" n)])
+                  (symbol "clojure.core" n))
+                (when (contains? macros/bootstrap (symbol n))
+                  (symbol "clojure.core" n)))))
+        st (reader/reader src {:file file :features #{:clj :flint} :resolve resolve-hook})
         _ (vswap! cc assoc-in [:namespaces nsname] (get-in @cc [:namespaces nsname] {}))
         forms (loop [acc []]
                 (let [f (reader/read-form st)]

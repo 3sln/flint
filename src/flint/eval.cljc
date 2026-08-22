@@ -21,8 +21,10 @@
     (if (nil? x) r (recur more (ev ctx locals upvals x)))))
 
 (defn- make-fn [ctx upvals-vals node]
-  (let [arities (:arities node)]
-    (fn [& args]
+  (let [arities (:arities node)
+        selfref (volatile! nil)
+        ctx (assoc ctx :self-ref selfref)
+        f (fn [& args]
       (let [n (count args)
             arity (or (first (filter #(and (not (:variadic? %)) (= n (:argc %))) arities))
                       (first (filter #(and (:variadic? %) (>= n (:argc %))) arities))
@@ -39,7 +41,9 @@
             (if (and (map? r) (= RECUR (:flint.eval/tag r)))
               (do (doseq [[s v] (map vector (:slots r) (:vals r))] (aset locals s v))
                   (recur))
-              r)))))))
+              r)))))]
+    (vreset! selfref f)
+    f))
 
 (defn ev
   "Evaluate `node`. `locals` is a mutable object array indexed by slot."
@@ -48,6 +52,7 @@
     :const (:val node)
     :local (aget ^objects locals (:idx node))
     :upval (nth upvals (:idx node))
+    :self @(:self-ref ctx)
     :var (let [v (get @(:vars ctx) (:sym node) ::missing)]
            (if (= ::missing v)
              (throw (ex-info (str "var not defined at compile time: " (:sym node))
@@ -75,9 +80,10 @@
                     r))))
     :recur {:flint.eval/tag RECUR :id (:id node) :slots (:slots node)
             :vals (mapv #(ev ctx locals upvals %) (:args node))}
-    :fn (let [captured (mapv (fn [u] (if (= :local (:kind u))
-                                       (aget ^objects locals (:idx u))
-                                       (nth upvals (:idx u))))
+    :fn (let [captured (mapv (fn [u] (case (:kind u)
+                                       :local (aget ^objects locals (:idx u))
+                                       :upval (nth upvals (:idx u))
+                                       :self @(:self-ref ctx)))
                              (:upvals node))]
           (make-fn ctx captured node))
     :invoke (let [f (ev ctx locals upvals (:fn node))
