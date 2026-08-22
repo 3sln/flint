@@ -194,6 +194,10 @@ impl Value {
         &buf[..n]
     }
 
+    /// Convenience alias so test code can say `Value::NIL_` without importing
+    /// the free constant.
+    pub const NIL_: Value = NIL;
+
     /// A character: a one-character string, always inline.
     #[inline]
     pub fn char_value(c: char) -> Value {

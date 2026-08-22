@@ -689,3 +689,411 @@ impl Gc {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tiny harness: a heap plus roots, with cons-cell helpers. Deliberately
+    /// does *not* use the higher layers, so a failure here is a GC failure.
+    struct H {
+        gc: Gc,
+        r: Roots,
+    }
+
+    impl H {
+        fn new() -> H {
+            H { gc: Gc::new(64 * 1024, 64 * 1024 * 1024), r: Roots::new() }
+        }
+        /// Push a value on the shadow root stack and return its index.
+        fn root(&mut self, v: Value) -> usize {
+            self.r.shadow.push(v);
+            self.r.shadow.len() - 1
+        }
+        fn get(&self, i: usize) -> Value {
+            self.r.shadow[i]
+        }
+        fn cons(&mut self, car: Value, cdr: Value) -> Value {
+            // car/cdr must survive the allocation, so root them first.
+            let a = self.root(car);
+            let b = self.root(cdr);
+            let addr = self.gc.alloc(&mut self.r, TY_CONS, 4);
+            assert_ne!(addr, 0, "out of memory");
+            let (car, cdr) = (self.get(a), self.get(b));
+            self.gc.init_slot(addr, 0, car);
+            self.gc.init_slot(addr, 1, cdr);
+            self.r.shadow.truncate(a);
+            Value::heap(addr)
+        }
+        fn car(&self, v: Value) -> Value {
+            slot(&self.gc.sp, v.as_heap(), 0)
+        }
+        fn cdr(&self, v: Value) -> Value {
+            slot(&self.gc.sp, v.as_heap(), 1)
+        }
+        fn string(&mut self, s: &str) -> Value {
+            let addr = self.gc.alloc(&mut self.r, TY_STR, s.len() as u32);
+            assert_ne!(addr, 0);
+            self.gc.sp.bytes_mut(addr + STR_DATA, s.len() as u32).copy_from_slice(s.as_bytes());
+            Value::heap(addr)
+        }
+        fn str_of(&self, v: Value) -> &str {
+            core::str::from_utf8(str_bytes(&self.gc.sp, v.as_heap())).unwrap()
+        }
+        /// Build the list (n-1 n-2 ... 0), rooted at shadow index `slot`.
+        fn list(&mut self, n: i64) -> Value {
+            let head = self.root(Value(0));
+            for i in 0..n {
+                let prev = self.get(head);
+                let c = self.cons(Value::fixnum(i), prev);
+                self.r.shadow[head] = c;
+            }
+            let v = self.get(head);
+            self.r.shadow.truncate(head);
+            v
+        }
+        fn list_len(&self, mut v: Value) -> i64 {
+            let mut n = 0;
+            while v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_CONS {
+                n += 1;
+                v = self.cdr(v);
+            }
+            n
+        }
+    }
+
+    #[test]
+    fn allocation_is_bump_and_headers_are_right() {
+        let mut h = H::new();
+        let a = h.gc.alloc(&mut h.r, TY_CONS, 4);
+        let b = h.gc.alloc(&mut h.r, TY_CONS, 4);
+        assert_eq!(b - a, HDR + 4 * 8);
+        assert_eq!(ty(&h.gc.sp, a), TY_CONS);
+        assert_eq!(len(&h.gc.sp, a), 4);
+        // Slots are zeroed, so a half-built object is safe to trace.
+        for i in 0..4 {
+            assert_eq!(slot(&h.gc.sp, a, i), Value(0));
+            assert!(!slot(&h.gc.sp, a, i).is_heap());
+        }
+    }
+
+    #[test]
+    fn minor_keeps_reachable_and_drops_garbage() {
+        let mut h = H::new();
+        let keep = h.list(100);
+        let k = h.root(keep);
+        // A pile of unreachable conses.
+        for _ in 0..2000 {
+            let _ = h.cons(Value::fixnum(1), Value::fixnum(2));
+        }
+        let before = h.gc.young_used();
+        h.gc.minor(&mut h.r);
+        let after = h.gc.young_used();
+        assert!(after < before / 2, "garbage should be gone: {before} -> {after}");
+        let keep = h.get(k);
+        assert_eq!(h.list_len(keep), 100);
+        let mut v = keep;
+        for i in (0..100).rev() {
+            assert_eq!(h.car(v), Value::fixnum(i));
+            v = h.cdr(v);
+        }
+    }
+
+    #[test]
+    fn roots_are_updated_to_the_new_addresses() {
+        let mut h = H::new();
+        let s = h.string("hello, flint");
+        let i = h.root(s);
+        let before = h.get(i);
+        h.gc.minor(&mut h.r);
+        let after = h.get(i);
+        assert_ne!(before, after, "the object must have moved");
+        assert_eq!(h.str_of(after), "hello, flint");
+    }
+
+    #[test]
+    fn sharing_is_preserved_not_duplicated() {
+        let mut h = H::new();
+        let shared = h.string("shared");
+        let s = h.root(shared);
+        let a = h.cons(h.get(s), Value::fixnum(1));
+        let ai = h.root(a);
+        let b = h.cons(h.get(s), Value::fixnum(2));
+        let bi = h.root(b);
+        h.gc.minor(&mut h.r);
+        let (a, b) = (h.get(ai), h.get(bi));
+        assert_eq!(h.car(a), h.car(b), "one object, not two copies");
+        assert_eq!(h.str_of(h.car(a)), "shared");
+    }
+
+    #[test]
+    fn cycles_do_not_hang_and_survive() {
+        let mut h = H::new();
+        let c = h.cons(Value::fixnum(7), Value::NIL_);
+        let ci = h.root(c);
+        let addr = c.as_heap();
+        h.gc.set_slot(addr, 1, c); // c.cdr = c
+        h.gc.minor(&mut h.r);
+        let c = h.get(ci);
+        assert_eq!(h.car(c), Value::fixnum(7));
+        assert_eq!(h.cdr(c), c, "self-reference survives as a self-reference");
+        h.gc.minor(&mut h.r);
+        let c = h.get(ci);
+        assert_eq!(h.cdr(c), c);
+    }
+
+    #[test]
+    fn survivors_are_promoted_after_promote_age() {
+        let mut h = H::new();
+        let v = h.string("long lived");
+        let i = h.root(v);
+        for _ in 0..PROMOTE_AGE - 1 {
+            h.gc.minor(&mut h.r);
+            assert!(h.gc.is_young(h.get(i).as_heap()), "too eager");
+        }
+        h.gc.minor(&mut h.r);
+        let a = h.get(i).as_heap();
+        assert!(!h.gc.is_young(a), "should have been promoted to the old generation");
+        assert_eq!(h.str_of(h.get(i)), "long lived");
+        // And it stays put from now on: old objects never move.
+        h.gc.minor(&mut h.r);
+        assert_eq!(h.get(i).as_heap(), a);
+    }
+
+    #[test]
+    fn write_barrier_keeps_an_old_to_young_pointer_alive() {
+        let mut h = H::new();
+        // Age a cons into the old generation.
+        let holder = h.cons(Value::fixnum(0), Value::fixnum(0));
+        let hi = h.root(holder);
+        for _ in 0..=PROMOTE_AGE {
+            h.gc.minor(&mut h.r);
+        }
+        let old_addr = h.get(hi).as_heap();
+        assert!(!h.gc.is_young(old_addr));
+
+        // Now point it at a brand new young object.
+        let young = h.string("young");
+        assert!(h.gc.is_young(young.as_heap()));
+        h.gc.set_slot(old_addr, 0, young);
+
+        // The young object is reachable ONLY through the old object.
+        for _ in 0..3 {
+            h.gc.minor(&mut h.r);
+        }
+        let holder = h.get(hi);
+        assert_eq!(holder.as_heap(), old_addr, "old object stayed put");
+        let s = h.car(holder);
+        assert_ne!(s, young, "the pointer should have been rewritten as it was evacuated");
+        assert_eq!(h.str_of(s), "young", "write barrier lost the reference");
+    }
+
+    #[test]
+    fn without_the_barrier_the_reference_would_be_lost() {
+        // Guards the test above from silently passing for the wrong reason:
+        // a raw store that skips the barrier really does lose the object.
+        let mut h = H::new();
+        let holder = h.cons(Value::fixnum(0), Value::fixnum(0));
+        let hi = h.root(holder);
+        for _ in 0..=PROMOTE_AGE {
+            h.gc.minor(&mut h.r);
+        }
+        let old_addr = h.get(hi).as_heap();
+        let young = h.string("young");
+        set_slot_raw(&h.gc.sp, old_addr, 0, young); // deliberately unbarriered
+        h.gc.minor(&mut h.r);
+        let s = h.car(h.get(hi));
+        // The collector never saw the edge, so the object was not evacuated and
+        // the slot still holds the *stale* address into the dead semispace --
+        // exactly the dangling pointer the barrier exists to prevent. Contrast
+        // with the barriered case above, where the pointer was rewritten.
+        assert_eq!(s, young, "unbarriered slot should still hold the stale address");
+        assert_ne!(ty(&h.gc.sp, young.as_heap()), TY_FWD, "it was never evacuated");
+        assert!(!h.gc.is_young(old_addr));
+    }
+
+    #[test]
+    fn major_sweeps_the_old_generation() {
+        let mut h = H::new();
+        // Promote a lot of garbage.
+        for _ in 0..4000 {
+            let s = h.string("dead");
+            let i = h.root(s);
+            let _ = i;
+        }
+        // Everything above is rooted; drop it all and age the survivors out.
+        h.r.shadow.clear();
+        let keeper = h.string("keeper");
+        let ki = h.root(keeper);
+        for _ in 0..4 {
+            h.gc.minor(&mut h.r);
+        }
+        // Force garbage into the old generation, then collect it.
+        for _ in 0..4000 {
+            let s = h.string("garbage that gets promoted");
+            let i = h.root(s);
+            for _ in 0..=PROMOTE_AGE {
+                h.gc.minor(&mut h.r);
+            }
+            h.r.shadow.truncate(i);
+        }
+        let live_before = h.gc.old_live();
+        h.gc.major(&mut h.r);
+        let live_after = h.gc.old_live();
+        assert!(live_after < live_before / 2, "old space not reclaimed: {live_before} -> {live_after}");
+        assert_eq!(h.str_of(h.get(ki)), "keeper");
+    }
+
+    #[test]
+    fn old_space_stays_parseable_and_reusable_across_many_cycles() {
+        let mut h = H::new();
+        let mut peak = 0;
+        for round in 0..40 {
+            let s = h.string("recycle me, repeatedly, at a size that splits blocks");
+            let i = h.root(s);
+            for _ in 0..=PROMOTE_AGE {
+                h.gc.minor(&mut h.r);
+            }
+            assert!(!h.gc.is_young(h.get(i).as_heap()));
+            h.r.shadow.truncate(i);
+            h.gc.major(&mut h.r);
+            peak = peak.max(h.gc.old_capacity());
+            assert!(h.gc.old_live() < 64 * 1024, "round {round}: old space is growing without bound");
+        }
+        assert!(peak <= 8 * 1024 * 1024, "old space ballooned to {peak}");
+    }
+
+    #[test]
+    fn large_objects_are_born_old_and_never_move() {
+        let mut h = H::new();
+        let big = alloc::vec![b'x'; (LARGE_OBJECT + 64) as usize];
+        let s = h.string(core::str::from_utf8(&big).unwrap());
+        let i = h.root(s);
+        let a = s.as_heap();
+        assert!(!h.gc.is_young(a), "a large object should skip the nursery");
+        h.gc.minor(&mut h.r);
+        h.gc.major(&mut h.r);
+        assert_eq!(h.get(i).as_heap(), a);
+        assert_eq!(h.str_of(h.get(i)).len(), big.len());
+    }
+
+    #[test]
+    fn stress_mode_collects_at_every_allocation() {
+        let mut h = H::new();
+        h.gc.stress = true;
+        let l = h.list(500);
+        let i = h.root(l);
+        assert_eq!(h.list_len(h.get(i)), 500);
+        // Every cons above was allocated under a full collection; the list is
+        // still intact and its elements are still in order.
+        let mut v = h.get(i);
+        for n in (0..500).rev() {
+            assert_eq!(h.car(v), Value::fixnum(n));
+            v = h.cdr(v);
+        }
+        assert!(h.gc.stats.minor >= 500);
+    }
+
+    #[test]
+    fn deep_structure_survives_collection_under_pressure() {
+        let mut h = H::new();
+        // A chain far deeper than any plausible recursion limit, to make sure
+        // tracing is iterative and not recursive.
+        let l = h.list(200_000);
+        let i = h.root(l);
+        h.gc.minor(&mut h.r);
+        h.gc.major(&mut h.r);
+        assert_eq!(h.list_len(h.get(i)), 200_000);
+    }
+
+    #[test]
+    fn stale_stack_slots_are_not_traced() {
+        let mut h = H::new();
+        let s = h.string("popped");
+        h.r.stack[0] = s;
+        h.r.stack_top = 1;
+        h.gc.minor(&mut h.r);
+        assert_eq!(h.str_of(h.r.stack[0]), "popped");
+        // Pop it: the slot still holds the old bits, but stack_top says dead.
+        h.r.stack_top = 0;
+        let before = h.r.stack[0];
+        h.gc.minor(&mut h.r);
+        assert_eq!(h.r.stack[0], before, "a popped slot must not be rewritten");
+    }
+
+    #[test]
+    fn weak_interns_drop_dead_entries_and_forward_live_ones() {
+        let mut h = H::new();
+        let live = h.string("live");
+        let li = h.root(live);
+        let dead = h.string("dead");
+        h.r.interns[INTERN_STR].insert_at(
+            h.r.interns[INTERN_STR].lookup(1, |_| false).unwrap_err(),
+            1,
+            live,
+        );
+        h.r.interns[INTERN_STR].insert_at(
+            h.r.interns[INTERN_STR].lookup(2, |_| false).unwrap_err(),
+            2,
+            dead,
+        );
+        assert_eq!(h.r.interns[INTERN_STR].count, 2);
+        h.gc.minor(&mut h.r);
+        assert_eq!(h.r.interns[INTERN_STR].count, 1, "the unreachable entry should be gone");
+        let found = h.r.interns[INTERN_STR].lookup(1, |_| true).unwrap();
+        assert_eq!(found, h.get(li), "the surviving entry was forwarded");
+        assert_eq!(h.str_of(found), "live");
+    }
+
+    #[test]
+    fn intern_table_grows_without_losing_entries() {
+        let mut t = InternTable::new(8);
+        for i in 1..100u32 {
+            if t.needs_grow() {
+                t.grow();
+            }
+            let idx = t.lookup(i, |_| false).unwrap_err();
+            t.insert_at(idx, i, Value::fixnum(i as i64));
+        }
+        assert_eq!(t.count, 99);
+        for i in 1..100u32 {
+            assert_eq!(t.lookup(i, |v| v == Value::fixnum(i as i64)).unwrap(), Value::fixnum(i as i64));
+        }
+    }
+
+    #[test]
+    fn exhaustion_is_reported_not_crashed() {
+        let mut h = H { gc: Gc::new(64 * 1024, 4 * 1024 * 1024), r: Roots::new() };
+        // Retain everything so nothing can be collected.
+        let mut n = 0u64;
+        loop {
+            let a = h.gc.alloc(&mut h.r, TY_STR, 4096);
+            if a == 0 {
+                break;
+            }
+            h.r.shadow.push(Value::heap(a));
+            n += 1;
+            assert!(n < 100_000, "should have run out long before this");
+        }
+        assert!(h.gc.oom, "OOM must be visible to the caller, not a panic");
+        assert!(n > 100, "should have fitted a reasonable number first: {n}");
+    }
+
+    #[test]
+    fn stats_are_accounted() {
+        let mut h = H::new();
+        let l = h.list(5000);
+        let _ = h.root(l);
+        let minors = h.gc.stats.minor;
+        h.gc.minor(&mut h.r);
+        h.gc.minor(&mut h.r);
+        h.gc.minor(&mut h.r);
+        // 5000 conses of 40 bytes each, plus whatever the harness used.
+        assert!(h.gc.stats.bytes_allocated >= 5000 * (HDR as u64 + 32));
+        assert!(h.gc.stats.bytes_copied > 0, "survivors were copied");
+        assert!(h.gc.stats.bytes_promoted > 0, "survivors were promoted");
+        assert_eq!(h.gc.stats.minor, minors + 3);
+    }
+}
