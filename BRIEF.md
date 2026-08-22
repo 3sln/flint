@@ -104,18 +104,26 @@ A module compiled from a program that never mentions XML must not carry an XML
 parser. Not "should mostly not": must not, and there should be a **test that
 asserts it** rather than a claim in prose.
 
-This is harder than it sounds and it cuts against the "build the runtime once,
-splice the image in" plan. Because the program is INTERPRETED, every builtin is
-reached through a dispatch table, so no linker or `wasm-opt` can prove one dead —
-they are all live by construction. `doc/decisions/0002-modularity.md` works
-through the two ways out; read it before you commit to either.
+**A namespace is a compilation unit.** Each one is precompiled — Rust namespaces
+to a relocatable wasm object, cljc namespaces to a bytecode image fragment — and
+`flint` links only the reachable set into one module with `wasm-ld
+--gc-sections`. No `rustc` on the compile path, true reachability rather than a
+discipline nothing enforces, and a single module out.
 
-The short version: either rebuild the runtime per compile with cargo features, or
-keep the single prebuilt runtime and make the **builtin registry the only thing
-that references an optional function**, so the patcher can drop unused table
-entries and let a DCE pass remove the bodies. The second keeps compiles fast, and
-depends on a discipline that is cheap to keep now and impossible to retrofit once
-something calls a parser directly.
+`doc/decisions/0003-namespace-units.md` is the decision, and **the crux is that
+the builtin registry must be assembled BY THE LINKER**: if the runtime holds a
+static table naming every builtin, that table is itself the reference keeping
+them all live and `--gc-sections` removes nothing. Each namespace object
+contributes its entries to a section the runtime walks at startup.
+
+That is a property of how the runtime finds its builtins at all, so settle it
+long before the parsers arrive.
+
+**And this is a composition system, not a tree-shaking trick** — the built-ins
+are its first customer. Keep "built-in" out of the unit format and independently
+compiled user namespaces, incremental builds and distributable pre-compiled
+libraries all become the same feature later rather than a rewrite. You are not
+asked to build that now, only not to make it impossible.
 
 **Report module size in the benchmarks for a trivial program and a realistic
 one**, so "modular" is a number rather than a claim, and name the unavoidable
