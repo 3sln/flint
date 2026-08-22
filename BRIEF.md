@@ -24,9 +24,30 @@ flint :src <the-src-dir> :fn the-namespace/the-fn
 `:exclude` drops namespaces, **built-in ones included** — and it is an ASSERTION
 rather than a suggestion: if excluded code is genuinely reachable that is a
 compile error naming the reference chain, never a module that ships and dies at
-runtime. `:wasm-ld` is a search path for **precompiled wasm namespace units**,
+runtime. `:wasm-path` is a search path for **precompiled wasm namespace units**,
 resolved by namespace the same way `:src` resolves source, by directory
 hierarchy. `doc/decisions/0004-exclude-and-unit-path.md` is the decision.
+
+## Green threads, ports, and protocols
+
+A later phase, specified in `doc/decisions/0005-threads-and-ports.md`. The short
+version, because one point governs the rest:
+
+**`open` must not block wasm — it parks a green thread.** A synchronous wasm
+export cannot be suspended, and the usual escapes (JSPI, Asyncify) cost either
+portability or size on every function forever. We need neither, because flint is
+an INTERPRETER: a green thread is a VM state, the scheduler picks runnable ones,
+and "blocking" means "not runnable yet". Nothing suspends a wasm frame.
+
+Ports carry data and other ports, by value, with back-pressure. Within one
+runtime, passing by reference is a sound optimisation **because flint values are
+immutable** — which is the property that makes this cheap here.
+
+Protocols are the basis for all polymorphism, and since flint has no types,
+**metadata dispatch is the main road rather than a corner feature**.
+
+And none of it may grow a pure module: threads and ports are namespace units like
+any other, absent unless reached.
 
 produces a wasm module. The module exports a `main` which is called with a
 **vararg list of strings**. The named `:fn` must accept **exactly one argument**:
