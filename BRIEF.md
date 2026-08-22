@@ -82,23 +82,47 @@ genuinely awkward without the JVM's guarantees — exact rounding modes,
 `ulp`, `nextAfter`, `IEEEremainder`, the `*Exact` overflow-checking integer
 functions — and half-implementing those is worse than leaving them out.
 
-### And `clojure.data.json`, under that exact namespace
+### And our own data readers: `flint.data.json`, `flint.data.html`, `flint.data.xml`
 
-A JSON reader and writer **compatible with `clojure.data.json`**, published under
-that namespace so that `(require '[clojure.data.json :as json])` works and code
-written against the real library ports without edits.
+Ours, not `clojure.data.*`. We are not bound to those APIs — but do not differ
+gratuitously either: a Clojure programmer should be able to guess the shape.
+`read-str` / `write-str` and a `:key-fn` are what people reach for, and there is
+no prize for renaming them.
 
-That means the actual surface, not a lookalike: `read-str`, `write-str`, `read`,
-`write`, and the options people really use — `:key-fn` and `:value-fn` on both
-sides, `:bigdec`, `:escape-unicode`, `:escape-slash`. `(json/read-str s :key-fn
-keyword)` is the single most common call in the wild; it must work.
+They belong here for the same reason EDN does: they are how data gets into a
+script, and they are pure.
 
-It belongs here for the same reason EDN does: it is how data gets into a script,
-and it is pure. Two details worth getting right rather than discovering later —
-JSON numbers have no integer/decimal type distinction, so match data.json's
-choice of what an integer reads as against what a decimal reads as; and writing
-must escape correctly, including the unicode and slash options, because the
-output is somebody else's input.
+Two warnings. JSON numbers make no integer/decimal distinction, so decide what an
+integer reads as versus a decimal and write it down. And **HTML is not XML** —
+a spec-complete HTML5 parser is weeks of error recovery and implied tags. Build a
+sane, documented subset that handles real-world markup, and say plainly in the
+README where it gives up. That is worth far more than a half-finished attempt at
+the full spec.
+
+### Only what is needed goes into the build
+
+**Do not glue the whole runtime together.** A module compiled from a program that
+never mentions XML must not carry an XML parser. Keep it modular, and let the
+entry point's reachable set decide what ships.
+
+This cuts against the "build the runtime `.wasm` once, splice the program image
+in" plan, and the tension is worth resolving deliberately rather than discovering:
+
+- **Anything written in cljc tree-shakes for free.** Compile only the namespaces
+  reachable from `:fn` and the problem solves itself.
+- **Anything written in Rust is in the prebuilt runtime whether used or not** —
+  unless the runtime is rebuilt per compile, or you keep feature-gated variants.
+
+So the default should be: **write library namespaces in cljc**, and reserve Rust
+for primitives that genuinely cannot be expressed in the language — allocation,
+hashing, arithmetic, UTF-8, the collection internals. JSON, HTML, XML and much of
+`clojure.string` are pure text-to-data work: they are exactly what this language
+is FOR, and putting them in cljc dogfoods the compiler as a bonus.
+
+Where something must be Rust-side and optional, say so and design for it — a
+feature-gated runtime build, or a documented floor of what every module carries.
+**Report module size in the benchmarks for a trivial program and a realistic
+one**, so "modular" is a number rather than a claim.
 
 ### Say what is missing, per namespace
 
@@ -166,6 +190,7 @@ itself byte for byte.
 4. **A comprehensive README** describing what it is, the value encoding, the GC
    design and its rooting strategy, the data structures and where they came from,
    the core library's coverage **including the per-namespace deficiency lists**,
+   what every module carries as its floor and how much a program adds,
    the EDN reader, the compiler and its bootstrap,
    the benchmarks, and — importantly — **the limits**: what it does not support,
    what is slow, what is unfinished, where it differs from Clojure.
