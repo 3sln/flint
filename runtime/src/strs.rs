@@ -72,7 +72,7 @@ impl Rt {
         }
     }
 
-    fn intern_into(&mut self, table: usize, h: u32, v: Value) {
+    pub(crate) fn intern_into(&mut self, table: usize, h: u32, v: Value) {
         if self.roots.interns[table].needs_grow() {
             self.roots.interns[table].grow();
         }

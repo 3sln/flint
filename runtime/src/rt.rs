@@ -22,7 +22,21 @@ pub const SING_EMPTY_LIST: usize = 0;
 pub const SING_EMPTY_VEC: usize = 1;
 pub const SING_EMPTY_MAP: usize = 2;
 pub const SING_EMPTY_SET: usize = 3;
-pub const SING_COUNT: usize = 4;
+/// The scheduler state (`conc::Sched`), or nil in a program that never spawns a
+/// thread or opens a port. It lives in `singletons` -- which the collector
+/// already traces -- so that N thread stacks become roots with **no new code in
+/// the collector at all**: a thread is a heap object whose slots hold its saved
+/// value stack, and tracing it is the ordinary Vals walk.
+pub const SING_SCHED: usize = 4;
+/// The current dynamic bindings, as a map of var-symbol -> value.
+///
+/// It lives here rather than on the thread so that `binding` costs a
+/// single-threaded program nothing at all: the scheduler *saves and restores
+/// this slot* when it switches threads, which is what makes the discipline
+/// per green thread without dragging the scheduler into every program that
+/// rebinds a var (`doc/decisions/0005`, section 4).
+pub const SING_BINDINGS: usize = 5;
+pub const SING_COUNT: usize = 6;
 
 pub struct Rt {
     pub gc: Gc,
@@ -51,6 +65,18 @@ pub struct Rt {
     /// A scratch field rather than a tuple return, because every one of those
     /// returns would otherwise have to be threaded through the rooting dance.
     pub champ_added: bool,
+    /// What the current green thread is parked on, or nil. Set by a parking
+    /// builtin together with `thrown = PARK`; the VM's existing post-native
+    /// check picks it up, so the fast path costs nothing.
+    pub park_on: Value,
+    /// Set by the concurrency unit the first time a program spawns a thread or
+    /// opens a port. `run_program` calls it instead of returning directly.
+    /// `None` in every module that never mentions those, which is what keeps
+    /// the scheduler out of a pure build.
+    pub sched_hook: Option<fn(&mut Rt, Value) -> Value>,
+    /// Non-zero when `main` should report something other than "here is your
+    /// answer" -- 2 means "I need the host" (`doc/decisions/0005`, section 1).
+    pub status: i32,
 }
 
 /// Root `$v` for the duration of `$body`, rebinding the name to the (possibly
@@ -84,6 +110,9 @@ impl Rt {
             step_limit: 0,
             steps: 0,
             champ_added: false,
+            park_on: NIL,
+            sched_hook: None,
+            status: 0,
         };
         rt.roots.singletons = alloc::vec![NIL; SING_COUNT];
         rt.init_singletons();

@@ -1200,6 +1200,7 @@
 
 (defn str-join [xs] (flint.rt/str-join xs))
 (defn str-bytes [s] (flint.rt/str-bytes s))
+(defn bytes->str [bs] (flint.rt/bytes->str bs))
 
 ;; ---------------------------------------------------------------- interop-free
 ;;
@@ -1210,3 +1211,134 @@
 (defn sb-append! [sb s] (vswap! sb conj s) sb)
 (defn sb-str [sb] (flint.rt/str-join @sb))
 (defn println-str [& xs] (flint.rt/str2 (join-with " " xs) "\n"))
+
+;; --------------------------------------------------------------- protocols
+;;
+;; Protocols are the basis for polymorphism here, and they work differently from
+;; Clojure's for a reason that is not a shortcut: **flint has no types.** There
+;; is no deftype, no defrecord, no class. So "which type is this?" has no general
+;; answer, and dispatch has two roads:
+;;
+;; * **built-in kinds** -- a small closed set (`kind` below) covering nil,
+;;   booleans, numbers, strings, keywords, symbols, vectors, maps, sets, lists,
+;;   functions and ports;
+;; * **metadata** -- for everything a user defines, because there is nothing else
+;;   a user-defined abstraction can *be*. Clojure has this as
+;;   `extend-via-metadata`, opt-in and slightly out of the way. **Here it is the
+;;   main road**, and it is the one to reach for.
+;;
+;; A method attached by metadata is keyed by the method's fully-qualified
+;; keyword, exactly as Clojure's `extend-via-metadata` keys it:
+;;
+;;     (with-meta {:w 3 :h 4} {:shapes/area (fn [s] (* (:w s) (:h s)))})
+;;
+;; Not everything can carry metadata: see `meta`'s note. Inline values -- short
+;; strings, keywords and chars, which live in the value word itself -- have
+;; nowhere to hang a map, and neither do numbers or functions. Those dispatch by
+;; kind, which is what kinds are for.
+
+(defn kind
+  "The dispatch kind of `x`: one of `:nil :boolean :number :string :keyword
+  :symbol :vector :map :set :list :fn :port :thread :atom :var :regex
+  :exception :other`. A closed set, because flint has no types."
+  [x]
+  (flint.rt/kind x))
+
+(defn- protocol-miss [pname mname x]
+  (throw (ex-info (flint.rt/str-join
+                   ["no implementation of " (str mname) " (protocol " (str pname)
+                    ") for a value of kind " (str (kind x))
+                    ". Extend the protocol to that kind, or attach "
+                    (str (keyword (namespace mname) (name mname)))
+                    " as metadata on the value."])
+                  {:protocol pname :method mname :kind (kind x) :value x})))
+
+(defn find-protocol-method
+  "The implementation of `mkey` (a fully-qualified keyword) for `x`: metadata
+  first, then the protocol's table for `x`'s kind. `nil` when there is none."
+  [impls mkey x]
+  (or (get (meta x) mkey)
+      (get (get (deref impls) (flint.rt/kind x)) mkey)))
+
+(defn extend
+  "Give `kind` (a keyword from `kind`) implementations of a protocol's methods.
+  `mmap` maps a method's fully-qualified keyword to a function."
+  [protocol kind mmap]
+  (swap! (:impls protocol) update kind merge mmap)
+  nil)
+
+(defn satisfies?
+  "Does `x` have an implementation of every method of `protocol`, by metadata or
+  by kind?"
+  [protocol x]
+  (let [m (meta x)
+        bykind (get (deref (:impls protocol)) (flint.rt/kind x))]
+    (every? (fn [k] (or (contains? m k) (contains? bykind k))) (:method-keys protocol))))
+
+(defmacro defprotocol
+  "Define a protocol and its methods.
+
+      (defprotocol Shape
+        \"docs\"
+        (area [s] \"docs\")
+        (scale [s k]))
+
+  Each method becomes a function that dispatches on `s`: metadata first, then
+  the value's built-in kind. A value with no implementation fails with a message
+  naming the protocol and the kind."
+  [pname & sigs]
+  (let [nsname (str (:ns &env))
+        sigs (remove string? sigs)
+        methods (map (fn [sig]
+                       (let [mname (first sig)
+                             arglists (take-while vector? (rest sig))]
+                         {:name mname
+                          :key (keyword nsname (name mname))
+                          :arglists (if (seq arglists) arglists (list (second sig)))}))
+                     sigs)
+        impls-sym (symbol (str (name pname) "__impls"))
+        qual (symbol nsname (name pname))]
+    (list* 'do
+           (list 'def impls-sym (list 'clojure.core/atom {}))
+           (list 'def pname
+                 (list 'clojure.core/hash-map
+                       :flint/protocol (list 'quote qual)
+                       :impls impls-sym
+                       :method-keys (vec (map :key methods))))
+           (map (fn [m]
+                  (list* 'defn (:name m)
+                         (map (fn [args]
+                                (list args
+                                      (list 'clojure.core/let
+                                            ['f (list 'clojure.core/find-protocol-method
+                                                      impls-sym (:key m) (first args))]
+                                            (list 'if 'f
+                                                  (list* 'f args)
+                                                  (list 'clojure.core/protocol-miss
+                                                        (list 'quote qual)
+                                                        (list 'quote (symbol nsname (name (:name m))))
+                                                        (first args))))))
+                              (:arglists m))))
+                methods))))
+
+(defmacro extend-protocol
+  "Extend a protocol to one or more built-in kinds.
+
+      (extend-protocol Shape
+        :vector (area [s] (* (nth s 0) (nth s 1)))
+        :map    (area [s] (* (:w s) (:h s))))"
+  [pname & body]
+  (let [nsname (str (:ns &env))
+        groups (loop [xs body k nil acc []]
+                 (if (empty? xs)
+                   acc
+                   (if (keyword? (first xs))
+                     (recur (rest xs) (first xs) acc)
+                     (recur (rest xs) k (conj acc [k (first xs)])))))]
+    (list* 'do
+           (map (fn [[k mform]]
+                  (list 'clojure.core/extend pname k
+                        (list 'clojure.core/hash-map
+                              (keyword nsname (name (first mform)))
+                              (list* 'clojure.core/fn (rest mform)))))
+                groups))))

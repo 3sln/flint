@@ -113,7 +113,13 @@
     defn- (defn- probe-defn2 [] 1)
     defmacro (defmacro probe-macro [] 1)
     defmulti (defmulti probe-multi identity)
-    defmethod (defmethod probe-multi :x [_] 1)})
+    defmethod (defmethod probe-multi :x [_] 1)
+    ;; Top-level forms, like defmulti/defmethod: they define vars rather than
+    ;; producing a value, so they cannot sit inside a probe fn.
+    defprotocol (defprotocol ProbeShape (probe-area [s]))
+    extend-protocol (extend-protocol ProbeShape :vector (probe-area [s] (count s)))})
+
+(def top-level-macros '#{defmulti defmethod defprotocol extend-protocol})
 
 (println "manifest: every claimed macro expands")
 (let [claimed (:macros (get manifest 'clojure.core))
@@ -122,9 +128,11 @@
          (str "untested: " (pr-str (vec untested))))
   (let [body (str "(ns probe)\n"
                   "(defmulti probe-multi identity)\n"
+                  "(defprotocol ProbeShape (probe-area [s]))\n"
+                  "(extend-protocol ProbeShape :vector (probe-area [s] (count s)))\n"
                   (str/join "\n" (for [m claimed
                                        :when (and (macro-uses m)
-                                                  (not (#{'defmulti 'defmethod} m)))]
+                                                  (not (top-level-macros m)))]
                                    (str "(defn probe-" (str/replace (str m) #"[^a-zA-Z0-9-]" "_")
                                         " [] " (pr-str (macro-uses m)) ")")))
                   "\n(defmethod probe-multi :x [_] 1)\n"

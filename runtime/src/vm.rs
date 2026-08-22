@@ -294,7 +294,11 @@ impl Rt {
             self.vpush(*a);
         }
         let r = self.call_value(args.len());
-        self.roots.stack_top = save;
+        // Not when the thread parked: its stack is the continuation, and
+        // truncating here would throw the continuation away.
+        if self.park_on.is_nil() {
+            self.roots.stack_top = save;
+        }
         r
     }
 
@@ -402,7 +406,7 @@ impl Rt {
     }
 
     /// Push a frame for `closure`. The callee sits at `callee_at`, args follow.
-    fn enter(&mut self, closure: Value, callee_at: usize, argc: usize) -> bool {
+    pub(crate) fn enter(&mut self, closure: Value, callee_at: usize, argc: usize) -> bool {
         let fn_idx = self.slot(closure, 0).as_fixnum() as usize;
         let (arity, nlocals, code, end, variadic, fixed) = {
             let def = &self.image.fns[fn_idx];
@@ -478,13 +482,27 @@ impl Rt {
             if self.step_limit != 0 {
                 self.steps += 1;
                 if self.steps > self.step_limit {
-                    self.steps = 0;
-                    let t = self.frame_trace();
-                    self.throw_str("StepLimitExceeded", &t);
-                    if !self.unwind() {
-                        return NIL;
+                    // In a threaded program this same budget is the scheduler's
+                    // time slice, so running out means "your turn is over", not
+                    // "you have hung". Reusing the check the interpreter already
+                    // makes is what lets preemption cost the hot path nothing.
+                    if self.sched_hook.is_some() {
+                        if base_depth == 0 {
+                            self.park_on = crate::conc::PARK_YIELD;
+                            return NIL;
+                        }
+                        // Rust frames underneath: there is nothing to save, so
+                        // let this call finish and preempt at the next chance.
+                        self.step_limit = self.steps + crate::conc::SLICE;
+                    } else {
+                        self.steps = 0;
+                        let t = self.frame_trace();
+                        self.throw_str("StepLimitExceeded", &t);
+                        if !self.unwind() {
+                            return NIL;
+                        }
+                        continue;
                     }
-                    continue;
                 }
             }
             let opcode = self.u8_at(ip);
@@ -709,6 +727,7 @@ impl Rt {
                     self.vpush(Value::heap(a));
                 }
                 op::NATIVE => {
+                    let opcode_at = ip - 1;
                     let idx = self.u16_at(ip) as u32;
                     let argc = self.u8_at(ip + 2) as usize;
                     ip += 3;
@@ -717,6 +736,45 @@ impl Rt {
                     let r = self.call_native(idx, base, argc);
                     self.roots.stack_top = base;
                     if self.failed() {
+                        // A park travels as a distinguished `thrown` value, so
+                        // that this branch -- which already exists -- is the
+                        // whole cost of green threads to the interpreter's hot
+                        // path. See doc/decisions/0005.
+                        if self.thrown.bits() == crate::value::PARK.bits() {
+                            if base_depth != 0 {
+                                // Rust frames are live underneath: a lazy-seq
+                                // force, a comparator, `map`. There is no
+                                // continuation to save, so say so plainly
+                                // rather than corrupting the stack.
+                                self.thrown = NIL;
+                                self.park_on = NIL;
+                                self.throw_str(
+                                    "IllegalStateException",
+                                    "cannot park here: this call is nested inside native code \
+                                     (map, sort, reduce, a lazy seq). Park from a green thread's \
+                                     own code instead.",
+                                );
+                                if !self.unwind() {
+                                    return NIL;
+                                }
+                                continue;
+                            }
+                            self.thrown = NIL;
+                            if self.park_on.bits() == crate::conc::PARK_YIELD.bits() {
+                                // A courtesy yield: the call itself is finished,
+                                // so let it finish. Rewinding would re-execute
+                                // `yield`, which would yield again, for ever.
+                                self.vpush(r);
+                                return NIL;
+                            }
+                            // Otherwise rewind to the instruction itself and
+                            // leave the arguments in place: resuming re-executes
+                            // the call, which is why a parking builtin must
+                            // decide to park before it changes anything.
+                            self.frames.last_mut().unwrap().ip = opcode_at;
+                            self.roots.stack_top = base + argc;
+                            return NIL;
+                        }
                         if !self.unwind() {
                             return NIL;
                         }
@@ -937,6 +995,13 @@ impl Rt {
 
     /// Find a handler for `self.thrown`. Returns false when the exception
     /// escapes past `base_depth`, in which case the caller returns.
+    /// Unwind into a handler for a thread that is being resumed with an error
+    /// the scheduler handed it. Same machinery as a throw; the only difference
+    /// is who set `thrown`.
+    pub fn unwind_from_resume(&mut self) -> bool {
+        self.unwind()
+    }
+
     fn unwind(&mut self) -> bool {
         while let Some(h) = self.handlers.pop() {
             if h.frame >= self.frames.len() {
@@ -963,6 +1028,14 @@ impl Rt {
         self.host_natives = crate::builtins::host_registry().iter().map(|(_, f)| *f).collect();
     }
 
+    /// Host-only: register one more builtin -- a unit's, which is not in this
+    /// crate's registry -- and return the slot to put in an image.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn add_host_native(&mut self, f: NativeFn) -> u32 {
+        self.host_natives.push(f);
+        (self.host_natives.len() - 1) as u32
+    }
+
     /// Host-only: the registry index for a builtin, as an image `natives` slot.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn host_native_slot(name: &str) -> Option<u32> {
@@ -981,6 +1054,14 @@ impl Rt {
         }
         let entry = self.image.entry;
         let c = self.make_closure(entry, &[]);
-        self.invoke(c, &[args])
+        // `invoke` enters with the frame stack empty, so `run`'s `base_depth`
+        // is 0 and the entry *can* park. Anything deeper -- a comparator, a
+        // lazy-seq force -- re-enters with Rust frames underneath and cannot.
+        let r = self.invoke(c, &[args]);
+        match self.sched_hook {
+            // Only ever `Some` in a module that reached the concurrency unit.
+            Some(f) => f(self, r),
+            None => r,
+        }
     }
 }

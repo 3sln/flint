@@ -1,5 +1,9 @@
 # 0004 — `:exclude` and `:wasm-ld`
 
+> **Superseded in one detail:** `:wasm-ld` is now spelled **`:wasm-path`**
+> (`doc/decisions/0005`, section 7). The old name is accepted as a deprecated
+> alias for one release. Everything else below stands.
+
 Two options on the CLI. Both are the composition system of 0003 becoming
 user-facing, which is what that decision said to leave room for.
 

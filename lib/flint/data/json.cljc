@@ -101,19 +101,31 @@
                  (next xs) false)
           (conj acc nl (pad depth) close))))))
 
+(defn- unrepresentable [x what]
+  (throw (ex-info (str "JSON cannot represent " what ": " (pr-str x)
+                       ". JSON has no keywords, symbols, sets or non-string map keys, and"
+                       " converting silently is how a :a comes back a \"a\". Encode it"
+                       " yourself, or use an :edn port.")
+                  {:value x :reason what})))
+
 (defn- write-value [x opts depth acc]
-  (let [{:keys [key-fn value-fn escape-unicode escape-slash indent]} opts]
+  (let [{:keys [key-fn value-fn escape-unicode escape-slash indent strict]} opts]
     (cond
       (nil? x) (conj acc "null")
       (true? x) (conj acc "true")
       (false? x) (conj acc "false")
       (string? x) (conj acc (escape x escape-unicode escape-slash))
       (number? x) (conj acc (flint.rt/num->str x))
+      (and strict (set? x)) (unrepresentable x "a set")
+      (and strict (keyword? x)) (unrepresentable x "a keyword")
+      (and strict (symbol? x)) (unrepresentable x "a symbol")
       (or (keyword? x) (symbol? x)) (conj acc (escape (key->str x) escape-unicode escape-slash))
       (map? x)
       (let [parts (reduce-kv
                    (fn [ps k v]
-                     (let [k' (if key-fn (key-fn k) k)
+                     (let [_ (when (and strict (not key-fn) (not (string? k)))
+                               (unrepresentable k "a map key that is not a string"))
+                           k' (if key-fn (key-fn k) k)
                            v' (if value-fn (value-fn k' v) v)]
                        (if (= v' omit)
                          ps
@@ -126,10 +138,19 @@
       (or (vector? x) (sequential? x) (set? x))
       (let [parts (mapv (fn [e] (flint.rt/str-join (write-value e opts (inc depth) []))) x)]
         (write-coll "[" "]" parts indent depth acc))
-      :else (conj acc (escape (str x) escape-unicode escape-slash)))))
+      :else (if strict
+              (unrepresentable x "a value of this kind")
+              (conj acc (escape (str x) escape-unicode escape-slash))))))
 
 (defn write-str
-  "Render `x` as JSON. `(write-str x :key-fn name :escape-unicode true)`."
+  "Render `x` as JSON. `(write-str x :key-fn name :escape-unicode true)`.
+
+  With `:strict true`, anything JSON cannot represent -- a keyword, a symbol, a
+  set, a map key that is not a string -- **throws, naming the value**, rather
+  than being coerced. That is the mode a `:json` port uses by default: a
+  keyword that comes back a string does not round-trip, and finding that out at
+  the other end is much worse than finding it out at the send
+  (`doc/decisions/0006`)."
   [x & opts]
   (let [o (apply hash-map opts)]
     (flint.rt/str-join (write-value x o 0 []))))

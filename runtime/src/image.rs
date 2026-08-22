@@ -356,6 +356,23 @@ impl ImageWriter {
         (self.fns.len() - 1) as u32
     }
 
+    /// Same, but the function takes `nupvals` upvalues -- what `CLOSURE` fills
+    /// in. Used by the concurrency tests, where a worker has to close over the
+    /// port it talks to.
+    pub fn add_fn_upvals(
+        &mut self,
+        name_const: u32,
+        argc: u8,
+        variadic: bool,
+        nlocals: u16,
+        body: &[u8],
+        nupvals: u8,
+    ) -> u32 {
+        let idx = self.add_fn(name_const, argc, variadic, nlocals, body);
+        self.fns[idx as usize][4] = nupvals;
+        idx
+    }
+
     pub fn finish(&self) -> Vec<u8> {
         let mut o = Vec::new();
         o.extend_from_slice(MAGIC);

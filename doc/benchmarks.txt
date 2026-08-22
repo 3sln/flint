@@ -6,32 +6,32 @@ method:  best of 5 runs per measurement, one node process per program.
 
 module size and cold start
 program                               bytes    compile       cold       warm
-hello (trivial)                      179593     0.05 ms     0.11 ms     0.01 ms
-tight loop, 1e6 iterations           203910     0.11 ms   168.49 ms   168.16 ms
-transient map, 1e5 inserts           218539     0.06 ms    47.13 ms    46.33 ms
-word frequency (string split)        250610     0.09 ms    63.22 ms    62.36 ms
-word frequency (regex split)         268904     0.10 ms   114.27 ms   113.04 ms
-JSON round trip, 2000 records        288726     0.09 ms   102.72 ms   102.10 ms
+hello (trivial)                      179539     0.05 ms     0.11 ms     0.01 ms
+tight loop, 1e6 iterations           203861     0.11 ms   169.71 ms   169.37 ms
+transient map, 1e5 inserts           218531     0.10 ms    47.33 ms    46.76 ms
+word frequency (string split)        250689     0.10 ms    63.17 ms    62.44 ms
+word frequency (regex split)         269013     0.08 ms   113.36 ms   113.15 ms
+JSON round trip, 2000 records        290398     0.10 ms   104.36 ms   103.50 ms
 
 against babashka (same source, same machine)
 program                            flint warm     babashka    ratio
-hello (trivial)                        0.01 ms    0.01 ms    0.49x
-tight loop, 1e6 iterations           168.16 ms   76.40 ms    2.20x
-transient map, 1e5 inserts            46.33 ms   19.42 ms    2.39x
-word frequency (string split)         62.36 ms        n/a        -
-word frequency (regex split)         113.04 ms    1.31 ms   86.02x
-JSON round trip, 2000 records        102.10 ms        n/a        -
+hello (trivial)                        0.01 ms    0.01 ms    0.70x
+tight loop, 1e6 iterations           169.37 ms   76.58 ms    2.21x
+transient map, 1e5 inserts            46.76 ms   18.32 ms    2.55x
+word frequency (string split)         62.44 ms        n/a        -
+word frequency (regex split)         113.15 ms    1.32 ms   85.60x
+JSON round trip, 2000 records        103.50 ms        n/a        -
 
 interpreter dispatch, measured separately from data-structure cost
   (steps are dispatched instructions; counted in a second pass with the
    step counter on, timed in a first pass with it off)
 program                            instructions         warm ns/instruction
-hello (trivial)                             188       0.01 ms         37.9
-tight loop, 1e6 iterations             27000226     168.16 ms          6.2
-transient map, 1e5 inserts              3000323      46.33 ms         15.4
-word frequency (string split)           3257997      62.36 ms         19.1
-word frequency (regex split)           15181358     113.04 ms          7.4
-JSON round trip, 2000 records          12066852     102.10 ms          8.5
+hello (trivial)                             188       0.01 ms         52.3
+tight loop, 1e6 iterations             27000226     169.37 ms          6.3
+transient map, 1e5 inserts              3000323      46.76 ms         15.6
+word frequency (string split)           3257997      62.44 ms         19.2
+word frequency (regex split)           15181358     113.15 ms          7.5
+JSON round trip, 2000 records          12330891     103.50 ms          8.4
 
 allocation and collection per warm run
 program                             bytes alloc  collections
@@ -40,35 +40,35 @@ tight loop, 1e6 iterations                 5888            0
 transient map, 1e5 inserts             42156824           38
 word frequency (string split)          22085592           12
 word frequency (regex split)           59019040           30
-JSON round trip, 2000 records          77489056           45
+JSON round trip, 2000 records          77521528           45
 flint runtime benchmarks (native, aarch64 )
 method: best wall-clock of N repetitions, one process, no warmup discarding
 
-vector: conj x100k (persistent)                 4547.8 us       45.5 ns/op   (n=100000, best of 7, checksum 44640)
-vector: conj! x100k (transient)                  440.9 us        4.4 ns/op   (n=100000, best of 7, checksum 44640)
-vector: nth x100k                                186.0 us        1.9 ns/op   (n=100000, best of 7, checksum 18128)
-map: assoc x8 (persistent)                         0.4 us       46.9 ns/op   (n=8, best of 7, checksum 56)
-map: assoc! x8 (transient)                         0.7 us       88.5 ns/op   (n=8, best of 7, checksum 56)
-map: get x8                                        0.2 us       26.0 ns/op   (n=8, best of 7, checksum 196)
-map: assoc x64 (persistent)                        6.4 us       99.6 ns/op   (n=64, best of 7, checksum 448)
-map: assoc! x64 (transient)                        4.3 us       67.7 ns/op   (n=64, best of 7, checksum 448)
-map: get x64                                       0.8 us       13.0 ns/op   (n=64, best of 7, checksum 14112)
-map: assoc x1000 (persistent)                    156.9 us      156.9 ns/op   (n=1000, best of 7, checksum 7000)
-map: assoc! x1000 (transient)                     90.1 us       90.1 ns/op   (n=1000, best of 7, checksum 7000)
-map: get x1000                                    20.8 us       20.8 ns/op   (n=1000, best of 7, checksum 23092)
-map: assoc x100000 (persistent)                42273.8 us      422.7 ns/op   (n=100000, best of 7, checksum 44640)
-map: assoc! x100000 (transient)                19071.1 us      190.7 ns/op   (n=100000, best of 7, checksum 44640)
-map: get x100000                                2679.6 us       26.8 ns/op   (n=100000, best of 7, checksum 18128)
-set: conj x100k                                44015.2 us      440.2 ns/op   (n=100000, best of 7, checksum 44640)
-keyword: intern lookup x100k                    1019.1 us       10.2 ns/op   (n=100000, best of 7, checksum 56624)
+vector: conj x100k (persistent)                 4463.7 us       44.6 ns/op   (n=100000, best of 7, checksum 44640)
+vector: conj! x100k (transient)                  439.5 us        4.4 ns/op   (n=100000, best of 7, checksum 44640)
+vector: nth x100k                                185.9 us        1.9 ns/op   (n=100000, best of 7, checksum 18128)
+map: assoc x8 (persistent)                         0.3 us       41.6 ns/op   (n=8, best of 7, checksum 56)
+map: assoc! x8 (transient)                         0.5 us       57.4 ns/op   (n=8, best of 7, checksum 56)
+map: get x8                                        0.2 us       20.8 ns/op   (n=8, best of 7, checksum 196)
+map: assoc x64 (persistent)                        5.6 us       87.2 ns/op   (n=64, best of 7, checksum 448)
+map: assoc! x64 (transient)                        4.1 us       63.8 ns/op   (n=64, best of 7, checksum 448)
+map: get x64                                       0.8 us       12.4 ns/op   (n=64, best of 7, checksum 14112)
+map: assoc x1000 (persistent)                    154.5 us      154.5 ns/op   (n=1000, best of 7, checksum 7000)
+map: assoc! x1000 (transient)                     81.2 us       81.2 ns/op   (n=1000, best of 7, checksum 7000)
+map: get x1000                                    21.4 us       21.4 ns/op   (n=1000, best of 7, checksum 23092)
+map: assoc x100000 (persistent)                42248.8 us      422.5 ns/op   (n=100000, best of 7, checksum 44640)
+map: assoc! x100000 (transient)                18918.9 us      189.2 ns/op   (n=100000, best of 7, checksum 44640)
+map: get x100000                                2675.8 us       26.8 ns/op   (n=100000, best of 7, checksum 18128)
+set: conj x100k                                43746.5 us      437.5 ns/op   (n=100000, best of 7, checksum 44640)
+keyword: intern lookup x100k                    1019.0 us       10.2 ns/op   (n=100000, best of 7, checksum 56624)
 
 collector: pause distribution while building a 400k-element vector
-  built 400000 elements in 33211 us
-  minor collections: 84     median    12.8 us  p95    14.2 us  max    22.8 us
-  major collections: 6      median   155.2 us  p95   253.6 us  max   297.4 us
-  collector share of wall clock: 6.6%   promoted 3380 KiB of 89367 KiB allocated
+  built 400000 elements in 33051 us
+  minor collections: 84     median    12.9 us  p95    14.2 us  max    24.1 us
+  major collections: 6      median   165.2 us  p95   257.2 us  max   305.0 us
+  collector share of wall clock: 6.7%   promoted 3380 KiB of 89367 KiB allocated
 
 collector: cost of a major collection against live-set size
-  live   10000 elements (    86 KiB old)   major collection     10.5 us
-  live  100000 elements (   857 KiB old)   major collection     81.4 us
-  live  400000 elements (  3428 KiB old)   major collection    312.6 us
+  live   10000 elements (    86 KiB old)   major collection     10.4 us
+  live  100000 elements (   857 KiB old)   major collection     82.2 us
+  live  400000 elements (  3428 KiB old)   major collection    316.8 us

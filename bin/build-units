@@ -19,7 +19,7 @@ PATH="$TC/bin:$PATH" cargo build --release --target wasm32-unknown-unknown >/dev
 rlib() { ls "$DEPS"/lib$1-*.rlib 2>/dev/null | head -1; }
 
 # Units are laid out by NAMESPACE, the way :src lays out source, so that
-# `units/` is just the default entry on the :wasm-ld search path rather than a
+# `units/` is just the default entry on the :wasm-path search path rather than a
 # second mechanism:  flint.data.json -> <dir>/flint/data/json.{unit.edn,o,libs/}
 echo "  flint.rt"
 mkdir -p units/flint
@@ -62,6 +62,16 @@ build_parser() {          # name path crate_dir crate_name symbol clj_name deps.
  :provides {"$provides" {:symbol "$sym"}}}
 UNIT
 }
+
+# The concurrency unit: green threads, ports, the scheduler, and the host-facing
+# exports that let a host answer a parked thread. A unit like any other, so a
+# program that never spawns or opens never links it (doc/decisions/0005).
+echo "  flint.conc"
+mkdir -p units/flint
+$RUSTC $FLAGS --crate-type rlib --crate-name flint_conc \
+  --extern flint_rt=units/flint/libflint_rt.rlib -L $DEPS \
+  --emit=obj units-src/flint-conc/src/lib.rs -o units/flint/conc.o
+cargo run -q -p flint-conc --features host-tools --bin manifest > units/flint/conc.unit.edn
 
 build_parser flint.data.json flint/data/json units-src/flint-data-json flint_data_json \
   flint_b_json_parse "flint/json-parse" serde serde_json

@@ -137,6 +137,13 @@
    "stat_bytes_allocated" "stat_collections" "image_desc_addr" "set_step_limit"
    "stat_steps"])
 
+(defn unit-exports
+  "Extra wasm exports a linked unit asks for. This is how a unit can widen the
+  module's outside edge -- the concurrency unit's host-callback surface is the
+  only user so far -- without every module paying for the wider edge."
+  [units]
+  (vec (mapcat :exports units)))
+
 (defn link-objects
   "Run the linker. Returns the module bytes."
   [{:keys [units exports]} sysroot out-path & [keep-names]]
@@ -157,6 +164,7 @@
                       "--export-table"
                       "--export=__heap_base" "--export=FLINT_IMAGE_DESC"]
                      (map #(str "--export=" %) abi-exports)
+                     (map #(str "--export=" %) (unit-exports units))
                      (map #(str "--export=" %) (vals exports))
                      (when keep-names ["--strip-debug"])
                      (when-not keep-names ["--strip-all"])

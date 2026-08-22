@@ -1,6 +1,6 @@
 [workspace]
 members = ["runtime", "units-src/flint-data-json", "units-src/flint-data-xml",
-           "units-src/flint-data-html", "units-src/flint-demo-shout"]
+           "units-src/flint-data-html", "units-src/flint-demo-shout", "units-src/flint-conc"]
 resolver = "2"
 
 [profile.release]

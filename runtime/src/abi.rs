@@ -136,8 +136,24 @@ pub extern "C" fn flint_main() -> i32 {
         rt.pop_to(base);
 
         let result = rt.run_program(argv);
+        finish_run(rt, result)
+    }
+}
+
+/// Render the outcome of a run into `OUT` and give `main`'s status code.
+///
+/// `2` means **"I need the host"**: some green thread is parked on a port whose
+/// other end the host holds. Nothing is suspended -- the interpreter simply has
+/// nothing runnable -- so the host services the pending events and calls
+/// `flint_resume`. A program with no ports never reaches that branch, and the
+/// concurrency unit that produces it is not in the module at all.
+pub fn finish_run(rt: &mut Rt, result: Value) -> i32 {
+    unsafe {
         let out = &mut *core::ptr::addr_of_mut!(OUT);
         out.clear();
+        if rt.status != 0 {
+            return rt.status;
+        }
         if rt.failed() {
             let e = rt.clear_error();
             let mut b = crate::rt::sbuf();
@@ -175,6 +191,14 @@ pub extern "C" fn out_ptr() -> u32 {
 #[no_mangle]
 pub extern "C" fn out_len() -> u32 {
     unsafe { (*core::ptr::addr_of!(OUT)).len() as u32 }
+}
+
+/// The runtime instance, for a unit that adds host-facing exports of its own --
+/// the concurrency unit's resume entry is the only one so far. Unreferenced,
+/// and therefore absent, unless such a unit is linked.
+#[no_mangle]
+pub extern "C" fn flint_rt_ptr() -> u32 {
+    unsafe { ensure_rt() as *mut Rt as u32 }
 }
 
 /// Set an instruction budget. 0 disables it. Used by the test harness to turn a

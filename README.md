@@ -5,7 +5,7 @@
 ```
 flint :src examples/ :fn demo/main   ->   out.wasm
        [:exclude [ns ...]]      assert these namespaces are NOT reachable
-       [:wasm-ld <dir> ...]     where to find precompiled namespace units
+       [:wasm-path <dir> ...]     where to find precompiled namespace units
 ```
 
 The module carries its own heap, its own garbage collector, its own copy of the
@@ -21,7 +21,7 @@ $ cat examples/demo.cljc
   (str "hello, " (if (seq args) (first args) "world")))
 
 $ ./bin/flint :src examples :fn demo/main :out out/demo.wasm
-wrote out/demo.wasm (179592 bytes)
+wrote out/demo.wasm (179538 bytes)
 
 $ node host/flint.mjs out/demo.wasm flint
 hello, flint
@@ -55,6 +55,9 @@ module itself needs no host support at all.
 - [Data structures](#data-structures) — CHAMP, and why not Clojure's HAMT
 - [The interpreter](#the-interpreter) — and why an interpreter at all
 - [Modularity](#modularity) — only reachable code ships, and the two options that make it checkable
+- [Green threads](#green-threads-and-why-nothing-suspends) — and why nothing suspends
+- [Ports](#ports) — capabilities, back-pressure, two lifetimes, the host ABI
+- [Protocols](#protocols-and-metadata-dispatch-as-the-main-road) — metadata dispatch as the main road
 - [The compiler and its bootstrap](#the-compiler-and-its-bootstrap)
 - [Library coverage](#library-coverage) — the per-namespace deficiency lists
 - [Where flint differs from Clojure](#where-flint-differs-from-clojure)
@@ -84,9 +87,15 @@ Working, end to end, and tested:
   generated from the source; a test regenerates it, compiles a program
   referencing every var it claims, runs it, and expands every macro it claims.
 
-Not working, and named as such: no protocols, records or types; no transducers;
-no sorted collections; no `eval` at runtime; the regex engine is 86× slower than
-babashka's. All of this is in [Limits](#limits).
+- **Green threads and ports work, and cost a pure program nothing.** `open`
+  parks a green thread rather than suspending wasm — no JSPI, no Asyncify — and
+  a program that never mentions them produces a module 54 bytes *smaller* than
+  before they existed, asserted by symbol name in `test/threads.clj`.
+
+Not working, and named as such: no records or types (protocols exist, and
+dispatch on kind or metadata); no transducers; no sorted collections; no `eval`
+at runtime; a capability cannot be delegated at run time; the regex engine is
+86× slower than babashka's. All of this is in [Limits](#limits).
 
 ---
 
@@ -235,12 +244,12 @@ Measured, building a 400 000-element vector (Apple M1 Pro):
 
 | | count | median | p95 | max |
 |---|---:|---:|---:|---:|
-| minor collections | 84 | 12.8 µs | 14.2 µs | 22.8 µs |
-| major collections | 6 | 155.2 µs | 253.6 µs | 297.4 µs |
+| minor collections | 84 | 12.9 µs | 14.2 µs | 24.1 µs |
+| major collections | 6 | 165.2 µs | 257.2 µs | 305.0 µs |
 
-6.6% of wall clock, with 3.4 MiB promoted out of 89 MiB allocated. A major
-collection scales with the live set: 10.5 µs at 10 000 live objects, 81.4 µs at
-100 000, 312.6 µs at 400 000.
+6.7% of wall clock, with 3.4 MiB promoted out of 89 MiB allocated. A major
+collection scales with the live set: 10.4 µs at 10 000 live objects, 82.2 µs at
+100 000, 316.8 µs at 400 000.
 
 ---
 
@@ -391,10 +400,10 @@ Measured, with `test/modularity.clj` asserting each by symbol name:
 
 | program | bytes | over the floor |
 |---|---:|---:|
-| no parsers | 179 250 | — |
-| JSON only | 261 772 | +82 522 |
-| XML only | 252 054 | +72 804 |
-| HTML only | 230 138 | +50 888 |
+| no parsers | 179 196 | — |
+| JSON only | 263 422 | +84 226 |
+| XML only | 252 093 | +72 897 |
+| HTML only | 230 119 | +50 923 |
 
 ### The floor, honestly
 
@@ -413,15 +422,27 @@ the table above:
 
 | what you reach | module | over the floor |
 |---|---:|---:|
-| nothing (a string literal) | 179 250 | — |
-| `pr-str` of a nested structure | 179 304 | +54 |
-| `clojure.string/split` on a literal | 204 015 | +24 765 |
-| `clojure.math` (6 functions) | 197 990 | +18 740 |
-| one `#"…"` regex | 235 173 | +55 923 |
-| `clojure.edn/read-string` | 254 914 | +75 664 |
-| `flint.data.json` | 261 772 | +82 522 |
-| `flint.data.xml` | 252 054 | +72 804 |
-| `flint.data.html` | 230 138 | +50 888 |
+| nothing (a string literal) | 179 196 | — |
+| `pr-str` of a nested structure | 179 250 | +54 |
+| a `binding` of a dynamic var | 183 428 | +4 232 |
+| a protocol with one implementation | 195 604 | +16 408 |
+| `clojure.math` (6 functions) | 197 971 | +18 775 |
+| `clojure.string/split` on a literal | 204 003 | +24 807 |
+| green threads (`spawn`/`join`) | 226 207 | +47 011 |
+| a `channel` as well | 239 074 | +59 878 |
+| one `#"…"` regex | 235 242 | +56 046 |
+| `clojure.edn/read-string` | 254 990 | +75 794 |
+| a host port, Transit+msgpack | 321 434 | +142 238 |
+| a host port, EDN | 322 026 | +142 830 |
+| a host port, JSON | 338 596 | +159 400 |
+| `flint.data.json` | 263 422 | +84 226 |
+| `flint.data.xml` | 252 093 | +72 897 |
+| `flint.data.html` | 230 119 | +50 923 |
+
+A host port costs what its **codec** costs, which is why the codec is a value
+you pass rather than a format you name: EDN brings the reader *and* the printer,
+JSON brings `flint.data.json`, Transit brings a msgpack reader and writer. A
+program that only sends never links the decoder half of any of them.
 
 The `split` row is there because it used to be the regex row. `clojure.string`
 takes a string *or* a pattern, and the obvious way to write that — call
@@ -511,10 +532,10 @@ the check — the same program written so the exclusion *holds* is smaller, and
 `test/options.clj` asserts that difference (31 KB for `flint.regex`) rather than
 a difference that does not exist.
 
-### `:wasm-ld` — precompiled units on a search path
+### `:wasm-path` — precompiled units on a search path
 
 ```
-flint :src src :fn app/main :wasm-ld vendor/units
+flint :src src :fn app/main :wasm-path vendor/units
 ```
 
 A search path for **precompiled wasm namespace units**, resolved by namespace
@@ -532,7 +553,7 @@ compile you run already exercises the mechanism a user-supplied unit uses, and
   Clojure half, and `flint.data.json` ships as both. What can genuinely conflict
   is two of a kind, and both resolve the same way: **earlier on the path wins**,
   and the loser is reported rather than silently dropped. Source is searched
-  `:src` dirs first, then `:wasm-ld` dirs, then flint's own `lib/` — your code
+  `:src` dirs first, then `:wasm-path` dirs, then flint's own `lib/` — your code
   beats a copy vendored beside a unit, which beats flint's.
 - **Compatibility.** Every unit on the path declares `:flint/unit` and an `:abi`
   map, and one flint cannot link is **refused by name and version** before the
@@ -541,14 +562,297 @@ compile you run already exercises the mechanism a user-supplied unit uses, and
 - **Reporting.** `--stats` prints which manifest each linked unit came from.
 
 ```console
-$ flint :src app :fn app/main :wasm-ld test/fixtures/wasm-ld --stats
-units linked demo.shout <- test/fixtures/wasm-ld/demo/shout.unit.edn, flint.rt <- units/flint/rt.unit.edn
+$ flint :src app :fn app/main :wasm-path test/fixtures/wasm-path --stats
+units linked demo.shout <- test/fixtures/wasm-path/demo/shout.unit.edn, flint.rt <- units/flint/rt.unit.edn
 compile (on bb) 185ms  link 134ms  module 195356 bytes  image 4485 bytes  vars 31/404  builtins 24
 ```
 
 `test/options.clj` builds a toy unit (`units-src/flint-demo-shout`, one builtin),
 puts it on the path, links it, runs the module, and checks the answer — and then
 does the same with a deliberately incompatible copy and checks the refusal.
+
+---
+
+## Green threads, and why nothing suspends
+
+> A blocking `open` looks like it needs JSPI or Asyncify. It needs neither.
+
+A synchronous wasm export **cannot be suspended** mid-execution to wait for a
+host answer. The two usual escapes both cost something this project is not
+willing to spend: **JSPI** is JavaScript-hosts-only, and portability of logic is
+the entire point; **Asyncify** rewrites every function so the stack can be
+unwound and rewound, and charges size and speed forever, on every program,
+including the ones with no ports at all.
+
+flint needs neither, because **it is an interpreter**. A green thread is a VM
+state — its own value stack and frame stack. The scheduler is a loop *inside*
+the interpreter that picks a runnable thread and runs it for a fixed slice.
+"Blocked" means "not runnable yet", which an interpreter can simply say.
+**Nothing suspends a wasm frame and nothing blocks the host**, because the
+interpreter never left its own loop. This is the leverage the dispatch decision
+in [`doc/decisions/0001`](doc/decisions/0001-dispatch.md) was already paying for.
+
+```clojure
+(require '[flint.thread :as t] '[flint.port :as p])
+
+(let [[a b] (p/channel 1)                     ; a one-slot buffer
+      w (t/spawn (fn [] (dotimes [i 5] (p/send a i)) :sent))]
+  [(repeatedly 5 #(p/receive b)) (t/join w)])
+;; => [(0 1 2 3 4) :sent]
+```
+
+Both directions park there: the sender on a full buffer, the receiver on an
+empty one, five times each, and the whole thing is one `main()` call.
+
+**Parking costs the interpreter's hot path nothing.** A park travels as a
+distinguished value in `Rt::thrown`, so the check the VM already makes after
+every native call is the whole mechanism. On resume the interpreter rewinds to
+the call instruction and re-executes it — which is why a parking builtin must
+decide to park *before* it changes anything.
+
+**A thread cannot park inside native code.** `map`, `sort`, a comparator and a
+lazy-seq force all re-enter the interpreter with Rust frames underneath, and
+those frames are not a continuation anybody can save. Trying says so:
+`cannot park here: this call is nested inside native code`.
+
+### The scheduler is deterministic
+
+Round-robin from the thread that just ran, with a fixed instruction slice, no
+randomness and no clock. The same program with the same host answers in the same
+order gives the same result, every time — `test/threads.clj` runs one five times
+and asserts a single answer. A pure logic executor whose answer depends on
+scheduling order would not be worth the name.
+
+Preemption reuses the interpreter's existing step budget, so it costs no new
+check: when a thread's slice runs out the VM yields instead of throwing. (In a
+threaded program that budget belongs to the scheduler, so `set_step_limit` is not
+available as a debugging aid there.)
+
+### `binding` is per green thread
+
+Dynamic vars work, and they are per green thread rather than per host thread:
+
+```clojure
+(def ^:dynamic *level* :info)
+
+(binding [*level* :debug] (log "..."))       ; :debug in this thread only
+(binding [*level* :trace] (t/spawn f))       ; f sees :trace
+```
+
+**A spawned thread inherits a snapshot of its spawner's bindings**, which is what
+Clojure conveys to `future` and to agents. A *snapshot*: rebinding in the spawner
+afterwards does not reach the child, and rebinding in one thread is never visible
+in another. The scheduler saves and restores the whole binding map when it
+switches, which is what makes it per-thread — and why `binding` costs a
+single-threaded program nothing but the map.
+
+Rebinding a var that was not defined `^:dynamic` is a compile error naming the
+fix, not a silent set.
+
+---
+
+## Ports
+
+A port is the unit of impurity. flint is a pure logic executor; a port is how a
+host *lends* it a capability, and how two green threads talk.
+
+```clojure
+(let [[a b] (p/channel "label")]  (p/send a :hello) (p/receive b))   ; => :hello
+
+(p/with-open [r (p/open "the-thing" {:codec edn/codec})]
+  (p/send r :now)
+  (p/receive r))
+```
+
+`open` signals the host, which **allows or refuses**. A refusal is a normal,
+expected outcome and arrives as a catchable `SecurityException` — not a crash,
+and not something a program has to guess at.
+
+### What may cross, and why by reference is sound
+
+**Data only.** A function is refused *by name* at the send —
+`helper is a function, and a closure's meaning is its environment — which does
+not travel` — and the check is deep, so a function nested inside a map is caught
+too.
+
+**Ports are not transferable and cannot be sent through a port.** That is a
+deliberate simplification: no ownership transfer to reason about, no capability
+leaking through a message, and a wire format that never has to represent a port.
+The cost is real and named in [Limits](#limits): a capability cannot be delegated
+at run time. Transfer can be added later; it could not be removed.
+
+Transfer is **by value**. Inside one runtime the value is passed **by reference**
+as an optimisation — and that is sound *precisely because flint values are
+immutable*. There is no way for the sender to observe a later change, because
+there are no later changes; sender and receiver cannot disagree about what was
+sent. A mutable-object language could not take this shortcut, and would have to
+copy or freeze. It is worth saying plainly because it is the property that makes
+message passing cheap here rather than merely possible.
+
+### Back-pressure
+
+Every port has a bounded buffer and a send to a full one **parks the sender** —
+the same parking mechanism as `open`, not a second one. A channel is bounded in
+*messages*; a host port is bounded in **bytes**, because the point of
+back-pressure is to bound memory and one 4 MB message is not one message's worth
+of memory.
+
+### Two ends, two lifetimes
+
+This is the part that took two goes to get right, and the first answer was wrong
+in an instructive way. Making the host end a root is necessary — without it every
+handle the host is holding is a use-after-free waiting for a collection — but on
+its own it leaves **explicit `close` as the only way a script can say it is
+finished**, which is the `free()` problem. The common case is not a script that
+forgets; it is a script that throws, or returns having simply dropped its last
+reference.
+
+So the two ends have **separate lifetimes**:
+
+- **The host end is a strong root.** The port cannot be collected while the host
+  holds a handle.
+- **The flint end is ordinary reachable memory.** When the collector finds it
+  unreachable, that is semantically identical to `close`, so the runtime raises
+  `{:kind :closed}` on the script's behalf and the port lives on, half-closed,
+  until the host lets go.
+
+Which is why the two ends hold each other's *id* rather than each other: a strong
+peer link would keep a dropped end alive forever, and would also defeat the
+liveness check below. Ids resolve through a weak table — the same machinery the
+string interner already uses.
+
+**`with-open` is the good path**, and the collector is the net. Collection is
+deterministic but it is not *prompt*, and a host holding a socket open until a
+collection happens is a real cost.
+
+Two things fall out of the same reachability, free:
+
+- **A thread parked on a port whose peer has become unreachable is woken with an
+  error** rather than hanging. That receive can never succeed, and the collector
+  has already worked out that it cannot. (A parked thread is a root, so the port
+  it is parked *on* is never collected; only its peer can vanish, which is
+  exactly the case worth catching.)
+- **Program exit closes every flint end and leaves the events for one last
+  drain**, so a host never has to guess whether more is coming.
+
+### The host interface
+
+A module with no ports is exactly what it was: `main()` returns 0 or 1 and there
+is no pump. When there *are* ports, `main` may return **2 — "I need the host"**.
+Nothing is suspended; the interpreter simply has nothing runnable.
+
+```js
+let code = main();
+while (code === 2) {
+  for (const ev of drain()) handle(ev);   // one call, everything pending
+  code = flint_resume();
+}
+```
+
+One outbound queue, drained in one call, in a deterministic order:
+
+| event | carries |
+|---|---|
+| `open-request` | a **token** to answer with, the port id you will hold, the capability name |
+| `message` | the port id and the bytes |
+| `closed` | the port id — the flint end has gone |
+
+Three kinds through one export rather than three exports: one call per pump, one
+ordering rule, and no chance of forgetting one.
+
+**The token is a continuation, not an id.** It is `(generation << 16) | slot`,
+and the generation is bumped when the slot is freed, so a late or duplicated
+reply is *rejected* rather than resuming whatever thread now occupies that slot —
+a wrong thread woken with a stranger's value is the kind of bug that is never
+found in production. `flint_continue` returns 0 when it refuses a token, and
+`test/host_abi.mjs` asserts every way of getting it wrong. Token 0 is never
+valid.
+
+**`flint_continue` enqueues; it never re-enters.** It records the answer and
+marks the thread runnable, and the scheduler runs at the next pump. A host may
+well call it from inside a host function that wasm invoked, and a naive
+implementation would run the scheduler on top of itself.
+
+**The runtime creates the port pair**, keeps the flint end, and tells the host
+the id of the end it holds. The host never holds two ends and never hands one
+back.
+
+### Where the cost is, and therefore what is batched
+
+A wasm↔host call is tens of nanoseconds. The expensive part is **marshalling**.
+So a message is serialised into linear memory **at send time**, the host reads
+byte ranges, and one drain hands over everything pending. Measured, on the
+machine named under [Benchmarks](#benchmarks):
+
+| batch size | per message |
+|---:|---:|
+| 1 | 11 833 ns |
+| 1000 | 1 483 ns |
+
+Eager serialisation does cost work when the host never reads. That is the trade:
+it is what makes the drain cheap and the byte budget mean anything.
+
+### Formats, and the conversion that is allowed to fail
+
+A host port carries bytes, so a value has to be encoded. The codec is a **value
+you pass**:
+
+```clojure
+(:require [flint.port :as p] [flint.port.edn :as edn])
+(p/open "thing" {:codec edn/codec})
+```
+
+| codec | carries | notes |
+|---|---|---|
+| `flint.port.edn` | everything | flint's own notation; nothing is lost |
+| `flint.port.json` | JSON's data model | **strict**: see below |
+| `flint.port.transit` | everything | Transit over msgpack, binary |
+| *(none)* | raw bytes | `send` takes a string; driving a resource raw has to work |
+
+Passing the codec rather than naming a format is deliberate twice over. A `cond`
+over every format inside `flint.port` would make all of them reachable from any
+program that opens any port, so a JSON program would carry an EDN reader it never
+uses. And a registry filled by requiring a namespace for its side effect is a
+load-order trap.
+
+**JSON cannot represent EDN**, and that is not a detail to paper over. Keywords,
+symbols, sets and non-string map keys have no JSON form. "The runtime will try to
+convert" hides exactly the failures that bite later: a keyword that comes back a
+string, a set that comes back an array, `{:a 1}` that becomes `{"a": 1}` and
+never comes home. So a value JSON cannot carry is **an error at the send, naming
+the value**:
+
+```
+JSON cannot represent a keyword: :nope. JSON has no keywords, symbols, sets or
+non-string map keys, and converting silently is how a :a comes back a "a".
+```
+
+Where the coercion genuinely is wanted, ask for it, the way `clojure.data.json`
+makes `:key-fn` the caller's decision: `(p/open "x" {:codec json/codec :key-fn name})`.
+
+**Transit rather than a fourth format**, because it exists for this, it is
+self-describing, and it already has the extension mechanism tagged values need.
+This implementation leaves out Transit's *caching* — an optimisation, not part of
+the data model — so messages are larger than a caching writer's would be, and
+says so in the namespace docstring rather than leaving it to be discovered.
+
+### None of it is in a pure module
+
+Threads and ports are namespace units like any other
+([`doc/decisions/0003`](doc/decisions/0003-namespace-units.md)), so a program
+that never mentions `spawn`, `channel` or `open` carries **no scheduler, no port
+machinery and no host-callback surface**. `test/threads.clj` asserts that by
+symbol name and reports the number:
+
+| | bytes |
+|---|---:|
+| pure module before this phase | 179 250 |
+| pure module now | **179 196** |
+
+Fifty-four bytes *smaller*, which is noise in the right direction: the hooks the
+scheduler needs cost a few hundred bytes and removing a redundant entry path paid
+for them. The requirement was that a pure program not be made worse, and it was
+not.
 
 ---
 
@@ -649,7 +953,7 @@ claim fails the build.
 <!-- BEGIN GENERATED COVERAGE -->
 | namespace | vars | macros | missing vs Clojure | flint-only |
 |---|---:|---:|---:|---:|
-| `clojure.core` | 334 | 43 | 314 | 24 |
+| `clojure.core` | 341 | 45 | 310 | 27 |
 | `clojure.edn` | 2 | 0 | 1 | 1 |
 | `clojure.math` | 32 | 0 | 14 | 1 |
 | `clojure.set` | 12 | 0 | 0 | 0 |
@@ -658,7 +962,11 @@ claim fails the build.
 | `flint.data.html` | 12 | 0 | n/a | n/a |
 | `flint.data.json` | 3 | 0 | n/a | n/a |
 | `flint.data.xml` | 9 | 0 | n/a | n/a |
+| `flint.port` | 12 | 1 | n/a | n/a |
+| `flint.port.edn` | 3 | 0 | n/a | n/a |
+| `flint.port.json` | 3 | 0 | n/a | n/a |
 | `flint.regex` | 10 | 0 | n/a | n/a |
+| `flint.thread` | 8 | 0 | n/a | n/a |
 
 Full lists, machine readable, in [`doc/manifest.edn`](doc/manifest.edn).
 `test/manifest.clj` regenerates that file and fails if it differs, compiles a
@@ -680,9 +988,9 @@ hierarchies (`derive`, `isa?`, `parents`, `prefer-method`);
 transducers (`transduce`, `eduction`, `cat`, `completing`, `halt-when`, and the 1-arity transducer forms of `map`/`filter`/`take`/...);
 and sorted collections (`sorted-map`, `sorted-set`, `subseq`, `rsubseq`).
 
-*Added by flint:* `->str-builder` `apply2` `bigdec?` `cond-chain` `count-matching` `int-of-char` `interleave-all` `interleave2` `keep2` `map2` `mapcat2` `methods-of` `nil-or` `println-str` `re-quote-replacement` `repeat-forever` `repeat2` `sb-append!` `sb-str` `spread` `str-bytes` `str-join` `subvec2` `volatile?`
+*Added by flint:* `->str-builder` `apply2` `bigdec?` `bytes->str` `cond-chain` `count-matching` `find-protocol-method` `int-of-char` `interleave-all` `interleave2` `keep2` `kind` `map2` `mapcat2` `methods-of` `nil-or` `println-str` `re-quote-replacement` `repeat-forever` `repeat2` `sb-append!` `sb-str` `spread` `str-bytes` `str-join` `subvec2` `volatile?`
 
-*Absent:* 314 names -- see `doc/manifest.edn` for all of them.
+*Absent:* 310 names -- see `doc/manifest.edn` for all of them.
 
 #### `clojure.edn`
 
@@ -717,6 +1025,67 @@ flint has no stream type. `read-string` is the whole surface, plus `read-all` wh
 
 ---
 
+## Protocols, and metadata dispatch as the main road
+
+All polymorphism is built on protocols. They work differently from Clojure's for
+a reason that is not a shortcut: **flint has no types.** No `deftype`, no
+`defrecord`, no classes. So "which type is this?" has no general answer, and
+dispatch has two roads:
+
+```clojure
+(defprotocol Shape
+  (area [s])
+  (describe [s prefix]))
+
+;; 1. built-in kinds -- a small closed set
+(extend-protocol Shape
+  :vector (area [s] (* (nth s 0) (nth s 1)))
+  :number (area [s] (* s s)))
+
+;; 2. metadata -- for everything a user defines
+(def circle (with-meta {:r 2} {:shapes/area (fn [s] (* 3 (:r s) (:r s)))}))
+
+(area [3 4])   ; => 12   by kind
+(area circle)  ; => 12   by metadata
+```
+
+The kinds are `:nil :boolean :number :string :keyword :symbol :vector :map :set
+:list :fn :port :thread :atom :var :regex :exception :other`, and `(kind x)`
+returns one. It is a closed set because it can be: those are all the things a
+flint value *is*.
+
+**Metadata is the primary mechanism here**, not the corner it is in Clojure,
+where `extend-via-metadata` is opt-in and slightly out of the way. There is
+nothing else a user-defined abstraction can be, so this is the road to reach for
+rather than the fallback. A method attached by metadata is keyed by the method's
+fully-qualified keyword, exactly as Clojure keys `extend-via-metadata`.
+
+A value with no implementation fails with a message naming the protocol, the
+kind, and what to do:
+
+```
+no implementation of shapes/area (protocol shapes/Shape) for a value of kind
+:string. Extend the protocol to that kind, or attach :shapes/area as metadata
+on the value.
+```
+
+### What can carry metadata, and what cannot
+
+Since metadata is load-bearing, it matters which values have anywhere to put it.
+This falls out of the value encoding rather than being a policy:
+
+| carries metadata | does not |
+|---|---|
+| vectors, maps, sets, lists and seqs, symbols, atoms | **inline values** — strings of ≤5 bytes, unqualified keywords, and chars, which live *in the value word itself* |
+| | numbers, booleans, `nil` — likewise immediate |
+| | heap strings and keywords, which are **interned**: metadata would break the invariant that makes `=` on them a single compare |
+| | functions and ports |
+
+Those dispatch by kind, which is what kinds are for. `with-meta` on a value that
+cannot carry it returns the value unchanged rather than pretending.
+
+---
+
 ## Where flint differs from Clojure
 
 These are behaviour differences, not absences — code that compiles but does
@@ -736,12 +1105,18 @@ cannot go stale.
 | map literal value order | source order | source order (but see below) |
 | `(into {} …)` on ≤8 entries | insertion-ordered array-map | hash map, unordered |
 | `clojure.string/split` | regex only | regex **or** a literal string |
+| protocol dispatch | on type, with `extend-via-metadata` as an opt-in corner | on **kind** or **metadata** — there are no types, so metadata is the main road |
+| `binding` | per host thread | per **green** thread; a spawn inherits a snapshot |
+| a port | — | not transferable, and cannot be sent through a port |
 
-Two of those need more than a row:
+Three of those need more than a row:
 
 **`(/ 1 2)` is `0.5`.** flint has no `Ratio`, so inexact integer division yields
 a double. `(* 3 (/ 1 3))` is `1.0` here and `1` in Clojure. `quot` and `rem` are
 exact and behave as Clojure's. This is the most visible numeric divergence.
+
+**Protocols dispatch on kind or metadata.** flint has no types, so there is
+nothing for `extend-type` to name. See [Protocols](#protocols-and-metadata-dispatch-as-the-main-road).
 
 **Small-map ordering.** flint preserves the source order of a map *literal* (the
 reader builds an insertion-ordered array-map, which is what lets the compiler
@@ -761,7 +1136,9 @@ Also worth knowing:
   JVM, so a `:clj` branch would be host interop it cannot compile. Ported code
   needs a `:flint` or `:default` branch.
 - `(var x)` / `#'x` yields the *value*, not a Var object. There are no Var
-  objects, so no `alter-var-root`, `binding` or `with-redefs`.
+  objects, so no `alter-var-root` and no `with-redefs`. `binding` **does** work,
+  on vars defined `^:dynamic`; it is a stack discipline per green thread rather
+  than anything to do with Var objects.
 - A bare top-level expression (not a `def`) is compiled if its namespace is
   reached at all, because there is nothing to reach it *by*. `defmethod` relies
   on this.
@@ -780,12 +1157,18 @@ instance. Full output, including the native runs, in
 
 | program | bytes | compile | cold | warm |
 |---|---:|---:|---:|---:|
-| hello (trivial) | 179 593 | 0.05 ms | 0.11 ms | 0.01 ms |
-| tight loop, 10⁶ iterations | 203 910 | 0.11 ms | 168.49 ms | 168.16 ms |
-| transient map, 10⁵ inserts | 218 539 | 0.06 ms | 47.13 ms | 46.33 ms |
-| word frequency (string split) | 250 610 | 0.09 ms | 63.22 ms | 62.36 ms |
-| word frequency (regex split) | 268 904 | 0.10 ms | 114.27 ms | 113.04 ms |
-| JSON round trip, 2000 records | 288 726 | 0.09 ms | 102.72 ms | 102.10 ms |
+| hello (trivial) | 179 539 | 0.05 ms | 0.11 ms | 0.01 ms |
+| tight loop, 10⁶ iterations | 203 861 | 0.11 ms | 169.71 ms | 169.37 ms |
+| transient map, 10⁵ inserts | 218 531 | 0.10 ms | 47.33 ms | 46.76 ms |
+| word frequency (string split) | 250 689 | 0.10 ms | 63.17 ms | 62.44 ms |
+| word frequency (regex split) | 269 013 | 0.08 ms | 113.36 ms | 113.15 ms |
+| JSON round trip, 2000 records | 290 398 | 0.10 ms | 104.36 ms | 103.50 ms |
+
+And the cost of the host boundary, from `test/host_abi.mjs` on the same machine:
+a message drained one at a time costs **11 833 ns**; a thousand drained in one
+call cost **1 483 ns each**. The boundary crossing is nothing; the marshalling
+is everything, which is why messages are serialised at send time and the queue
+is drained whole.
 
 Cold start is dominated by the work itself: the module's own startup — reserving
 the heap, loading the image, running every top-level initialiser — is the 0.10 ms
@@ -798,9 +1181,9 @@ source, same input. It is **not** a claim about JVM Clojure.
 
 | program | flint | babashka | ratio |
 |---|---:|---:|---:|
-| tight loop, 10⁶ iterations | 168.16 ms | 76.40 ms | 2.20× |
-| transient map, 10⁵ inserts | 46.33 ms | 19.42 ms | 2.39× |
-| word frequency (regex split) | 113.04 ms | 1.31 ms | **86×** |
+| tight loop, 10⁶ iterations | 169.37 ms | 76.58 ms | 2.21× |
+| transient map, 10⁵ inserts | 46.76 ms | 18.32 ms | 2.55× |
+| word frequency (regex split) | 113.15 ms | 1.32 ms | **86×** |
 
 Two and a half times slower than babashka on interpreter-bound and
 data-structure-bound work is a fair place to be for a self-contained module with
@@ -810,10 +1193,10 @@ its own collector. The regex number is not; see [Limits](#limits).
 
 | program | instructions | warm | ns / instruction |
 |---|---:|---:|---:|
-| tight loop, 10⁶ iterations | 27 000 226 | 168.16 ms | 6.2 |
-| JSON round trip | 12 066 852 | 102.10 ms | 8.5 |
-| transient map, 10⁵ inserts | 3 000 323 | 46.33 ms | 15.4 |
-| word frequency (string split) | 3 257 997 | 62.36 ms | 19.1 |
+| tight loop, 10⁶ iterations | 27 000 226 | 169.37 ms | 6.3 |
+| JSON round trip | 12 330 891 | 103.50 ms | 8.4 |
+| transient map, 10⁵ inserts | 3 000 323 | 46.76 ms | 15.6 |
+| word frequency (string split) | 3 257 997 | 62.44 ms | 19.2 |
 
 Read down the column: 6.2 ns is what a dispatched instruction costs when it does
 almost nothing, and the rising numbers are the same dispatch diluted by real
@@ -824,11 +1207,11 @@ less on anything that touches the heap.
 
 | operation | persistent | transient | speedup |
 |---|---:|---:|---:|
-| vector `conj`, 10⁵ | 45.5 ns/op | 4.4 ns/op | **10.3×** |
-| map `assoc`, 10⁵ | 422.7 ns/op | 190.7 ns/op | 2.2× |
-| map `assoc`, 10³ | 156.9 ns/op | 90.1 ns/op | 1.7× |
-| map `assoc`, 64 | 99.6 ns/op | 67.7 ns/op | 1.5× |
-| map `assoc`, 8 | 46.9 ns/op | 88.5 ns/op | 0.5× |
+| vector `conj`, 10⁵ | 44.6 ns/op | 4.4 ns/op | **10.1×** |
+| map `assoc`, 10⁵ | 422.5 ns/op | 189.2 ns/op | 2.2× |
+| map `assoc`, 10³ | 154.5 ns/op | 81.2 ns/op | 1.9× |
+| map `assoc`, 64 | 87.2 ns/op | 63.8 ns/op | 1.4× |
+| map `assoc`, 8 | 41.6 ns/op | 57.4 ns/op | 0.7× |
 
 Transients are genuinely fast, which matters because the compiler is written in
 cljc and compiles itself — transient performance is on flint's own critical
@@ -840,18 +1223,18 @@ the promotion costs more than it saves.
 
 | operation | 8 | 64 | 10³ | 10⁵ |
 |---|---:|---:|---:|---:|
-| map `assoc` | 46.9 ns | 99.6 ns | 156.9 ns | 422.7 ns |
-| map `get` | 26.0 ns | 13.0 ns | 20.8 ns | 26.8 ns |
+| map `assoc` | 41.6 ns | 87.2 ns | 154.5 ns | 422.5 ns |
+| map `get` | 20.8 ns | 12.4 ns | 21.4 ns | 26.8 ns |
 | vector `nth` | | | | 1.9 ns |
-| vector `conj` | | | | 45.5 ns |
-| set `conj` | | | | 440.2 ns |
+| vector `conj` | | | | 44.6 ns |
+| set `conj` | | | | 437.5 ns |
 | keyword intern lookup | | | | 10.2 ns |
 
 `get` staying flat from 64 to 100 000 entries is the trie doing its job.
 
 ### Collector
 
-Given above: median minor pause 12.8 µs, median major pause 155 µs, 6.6% of wall
+Given above: median minor pause 12.9 µs, median major pause 165 µs, 6.7% of wall
 clock on an allocation-heavy workload.
 
 ---
@@ -862,10 +1245,12 @@ The honest list. Nothing here is stubbed and reported as working.
 
 ### Not implemented
 
-- **Protocols, records and types.** No `defprotocol`, `deftype`, `defrecord`,
-  `reify`, `extend-type`, `satisfies?`. This is the largest single gap and the
-  one most likely to block a port. Multimethods are the substitute flint does
-  have.
+- **Records and types.** No `deftype`, `defrecord`, `reify`, `extend-type`.
+  `defprotocol`, `extend-protocol`, `extend` and `satisfies?` **do** exist and
+  dispatch on kind or metadata — see
+  [Protocols](#protocols-and-metadata-dispatch-as-the-main-road) — but there is
+  no way to make a new *type*, so a port of code that leans on `defrecord` still
+  needs reshaping into maps with metadata.
 - **Transducers.** No `transduce`, `eduction`, `cat`, `completing`,
   `halt-when`, and no 1-arity transducer forms of `map`/`filter`/`take`/…. The
   eager and lazy forms all work.
@@ -875,18 +1260,34 @@ The honest list. Nothing here is stubbed and reported as working.
   `:default` as the fallback. No `derive`, `isa?`, `parents`, `prefer-method`.
 - **`eval` and `read-string`.** A flint module carries no compiler. `clojure.edn`
   is how text becomes data.
-- **Var objects.** `#'x` is the value. No `binding`, `with-redefs`,
-  `alter-var-root`, `set!`, dynamic vars.
+- **Var objects.** `#'x` is the value. No `with-redefs`, `alter-var-root` or
+  `set!`. Dynamic vars and `binding` do exist, per green thread.
 - **`letfn` is a macro over volatiles**, not a compiler feature, so mutually
   recursive local functions pay one indirection per call.
 - **The numeric tower stops at i64 and f64.** No `BigInt`, `Ratio`, `BigDecimal`;
   no `+'`/`-'`/`*'`. Overflow throws, as Clojure's checked operators do.
-- **Metadata on functions.** A closure has nowhere to put it, so `with-meta` on
-  a function returns it unchanged. (This is why `defmulti` keeps its method table
-  in a second var.)
-- **No I/O, threads, agents, refs or host interop**, by design — that is what
-  "pure logic" means here. Atoms and volatiles exist because they are neither
-  I/O nor coordination, and a compiler needs them.
+- **Metadata on functions, numbers and inline values.** A closure, a number and
+  a short string have nowhere to put it, so `with-meta` returns them unchanged.
+  This matters more than it used to, because metadata is how protocols dispatch
+  on user-defined abstractions: see the table under
+  [Protocols](#what-can-carry-metadata-and-what-cannot). (It is also why
+  `defmulti` keeps its method table in a second var.)
+- **No host threads, agents, refs or host interop**, by design. Green threads
+  and ports exist and are cooperative and deterministic; nothing here is
+  parallel, and nothing preempts across a native call.
+- **A capability cannot be delegated at run time.** Ports are not transferable
+  and cannot be sent through a port, so a program cannot hand a resource it was
+  lent to another part of itself over a channel — it has to pass the port by
+  ordinary reference, within the runtime. That buys no ownership transfer to
+  reason about, no capability leaking through a message, and a wire format that
+  never has to represent a port. Transfer can be added later; it could not be
+  removed. (`doc/decisions/0006`.)
+- **A parked thread cannot be inside native code.** `map`, `sort`, a comparator
+  and a lazy-seq force re-enter the interpreter with Rust frames underneath, and
+  those are not a continuation anybody can save. Parking there is a clean error,
+  not a corruption.
+- **No I/O without a host.** A module still imports nothing; a port is the host
+  *lending* a capability, and a host that grants nothing runs a pure program.
 
 ### Slow, and by how much
 
@@ -935,6 +1336,14 @@ The honest list. Nothing here is stubbed and reported as working.
 - **The linker driver is host-side only.** The compiler self-hosts; `flint.wasm`
   and `flint.link` run next to `rust-lld` and are not part of that requirement
   (a flint module has no processes to spawn).
+- **Transit's caching is not implemented.** The writer never emits cache codes,
+  so a message with many repeated keys is larger than a caching writer's would
+  be. It is an optimisation rather than part of the data model, and a reader
+  that ignores it still reads correct data.
+- **A binary port's payload is a vector of byte-sized integers** on the flint
+  side, because flint has no byte-array type. That is correct and it is slow:
+  one boxed fixnum per byte through the codec. A `bytes` value type is the
+  obvious fix and is not done.
 - **The self-hosted compiler is slower than the bootstrap one**, which is
   expected: `--self` takes 2.5 s where babashka takes 0.17 s for the same
   program, most of it node startup plus flint being ~2.5× babashka. Both produce
@@ -967,10 +1376,11 @@ $ ./bin/flint :src examples :fn demo/main :out out/demo.wasm --self
 
 $ ./bin/test            # everything: rust tests, reader, conformance both ways,
                         # end-to-end linking, gc stress, modularity, :exclude
-                        # and :wasm-ld, manifest, self-hosting
+                        # and :wasm-path, threads and ports, the host ABI,
+                        # manifest, self-hosting
 $ ./bin/bench           # the benchmark tables above
 $ ./bin/manifest        # regenerate doc/manifest.edn
-$ ./bin/build-test-unit # the toy unit test/options.clj puts on the :wasm-ld path
+$ ./bin/build-test-unit # the toy unit test/options.clj puts on the :wasm-path path
 ```
 
 `units/` and `test/fixtures/` are build output and are not tracked; both scripts
@@ -999,14 +1409,16 @@ runner (turn a hang into a frame trace).
 
 ```
 runtime/          the Rust core: mem, value, obj, gc, hash, collections, vm, abi
-units-src/        the parser units (adapted crates), plus a toy unit for tests
+units-src/        the parser units (adapted crates), the concurrency unit, and a
+                  toy unit for tests
 units/            built units: wasm objects + manifests  (bin/build-units)
 src/flint/        the compiler, in portable cljc
-lib/              the library, in cljc: clojure.*, flint.regex, flint.data.*
-host/             flint.mjs -- 40 lines of JS to call a module
+lib/              the library, in cljc: clojure.*, flint.regex, flint.data.*,
+                  flint.thread, flint.port and its codecs
+host/             flint.mjs -- calling a module, and the pump a port needs
 bench/            benchmark programs and the wasm timing harness
-test/             conformance, gc stress, modularity, options, manifest,
-                  self-hosting fixpoint, and the :wasm-ld fixtures
+test/             conformance, gc stress, modularity, options, threads, the
+                  host ABI, manifest, self-hosting fixpoint, and fixtures
 doc/              decisions, unit format, generated manifest, benchmark output
 ```
 
@@ -1023,8 +1435,14 @@ Written down where somebody will find them, with the reasoning:
 - [`doc/decisions/0003-namespace-units.md`](doc/decisions/0003-namespace-units.md)
   — a namespace is a compilation unit, and linking composes them.
 - [`doc/decisions/0004-exclude-and-unit-path.md`](doc/decisions/0004-exclude-and-unit-path.md)
-  — `:exclude` as an assertion with a reference chain, and `:wasm-ld` as a
+  — `:exclude` as an assertion with a reference chain, and `:wasm-path` as a
   namespace-resolved search path with `units/` as its last entry.
+- [`doc/decisions/0005-threads-and-ports.md`](doc/decisions/0005-threads-and-ports.md)
+  — green threads, ports and protocols, and the point that governs them: `open`
+  parks a thread, it does not suspend wasm.
+- [`doc/decisions/0006-host-abi.md`](doc/decisions/0006-host-abi.md) — the host
+  ABI: continuation tokens with generations, one event queue, where the cost
+  really is, and the two lifetimes of a port's two ends.
 - [`doc/unit-format.md`](doc/unit-format.md) — what a unit is, and what would
   have to change to admit a user-compiled one.
 - [`PLAN.md`](PLAN.md) — the build order, and what was settled before any code

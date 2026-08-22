@@ -18,7 +18,7 @@ an artifact that runs identically wherever wasm runs.
 
 ```
 flint :src <the-src-dir> :fn the-namespace/the-fn
-      [:exclude [ns ...]] [:wasm-ld <dir> ...]
+      [:exclude [ns ...]] [:wasm-path <dir> ...]
 ```
 
 `:exclude` drops namespaces, **built-in ones included** — and it is an ASSERTION

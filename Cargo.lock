@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "flint-conc"
+version = "0.1.0"
+dependencies = [
+ "flint-rt",
+]
+
+[[package]]
 name = "flint-data-html"
 version = "0.1.0"
 dependencies = [

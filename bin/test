@@ -12,6 +12,11 @@ cargo test -p flint-rt 2>&1 | grep -E "^(test result|error)" || fail "cargo test
 cargo test -p flint-rt 2>&1 | grep -q "FAILED" && fail "cargo test" || true
 
 echo
+echo "== rust: green threads, ports, and a parked thread under collection"
+cargo test -p flint-conc 2>&1 | grep -E "^(test result|error)" || fail "cargo test -p flint-conc"
+cargo test -p flint-conc 2>&1 | grep -q "FAILED" && fail "cargo test -p flint-conc" || true
+
+echo
 echo "== units: rebuild the wasm objects"
 ./bin/build-units >/dev/null 2>&1 || fail "build-units"
 echo "  ok"
@@ -48,9 +53,21 @@ bb test/modularity.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; 
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== options: :exclude is an assertion, :wasm-ld is a search path"
+echo "== options: :exclude is an assertion, :wasm-path is a search path"
 ./bin/build-test-unit >/dev/null 2>&1 || fail "build-test-unit"
 bb test/options.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/options.clj"; }
+tail -1 /tmp/flint-test.out
+
+echo
+echo "== threads: green threads, ports, protocols, dynamic vars"
+bb test/threads.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/threads.clj"; }
+grep -E "^    " /tmp/flint-test.out || true
+tail -1 /tmp/flint-test.out
+
+echo
+echo "== host abi: tokens, one event queue, two lifetimes"
+bb test/host_abi.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/host_abi.clj"; }
+grep -E "^    " /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
 echo

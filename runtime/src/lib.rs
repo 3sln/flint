@@ -16,6 +16,7 @@ extern crate std;
 pub mod abi;
 pub mod builtins;
 pub mod coll;
+pub mod conc;
 pub mod eq;
 pub mod err;
 pub mod fmath;

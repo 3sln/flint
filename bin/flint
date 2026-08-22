@@ -31,8 +31,14 @@
         (= k ":fn") (recur (drop 2 a) (assoc m :fn (symbol (second a))))
         (= k ":exclude") (let [[vs rest-a] (take-list (rest a))]
                            (recur rest-a (update m :exclude (fnil into #{}) (map symbol vs))))
+        ;; `:wasm-ld` shipped once under that name and reads like "flags for the
+        ;; linker"; `:wasm-path` says what it is. The old spelling stays as a
+        ;; deprecated alias for one release (doc/decisions/0005, section 7).
+        (= k ":wasm-path") (let [[vs rest-a] (take-list (rest a))]
+                             (recur rest-a (update m :wasm-path (fnil into []) vs)))
         (= k ":wasm-ld") (let [[vs rest-a] (take-list (rest a))]
-                           (recur rest-a (update m :wasm-ld (fnil into []) vs)))
+                           (println "note: :wasm-ld is deprecated; it is now :wasm-path")
+                           (recur rest-a (update m :wasm-path (fnil into []) vs)))
         (= k ":out") (recur (drop 2 a) (assoc m :out (second a)))
         (= k ":o") (recur (drop 2 a) (assoc m :out (second a)))
         (= k "--stats") (recur (rest a) (assoc m :stats true))
@@ -58,7 +64,7 @@
     (str f)))
 
 (defn find-source
-  "First hit wins. The path is `:src` dirs, then `:wasm-ld` dirs, then flint's
+  "First hit wins. The path is `:src` dirs, then `:wasm-path` dirs, then flint's
   own `lib/`: your source beats source a unit vendored beside itself, which
   beats flint's."
   [dirs n]
@@ -171,19 +177,19 @@
   (binding [*out* *err*] (println (ex-message e)))
   (System/exit 1))
 
-(let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-ld]}
+(let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path]}
       (parse-args *command-line-args*)]
   (when-not fn
     (println "usage: flint :src <dir> :fn <ns/fn> [:out <file.wasm>]")
     (println "                 [:exclude [ns ...]]   assert these are unreachable")
-    (println "                 [:wasm-ld <dir> ...]  search path for precompiled units")
+    (println "                 [:wasm-path <dir> ...] search path for precompiled units")
     (println "                 [--self] [--stats] [--keep-names]")
     (System/exit 2))
   (try
    (let [;; `units/` is the LAST entry on the unit search path, not a special
-        ;; case: a :wasm-ld directory shadows a built-in of the same name, and
+        ;; case: a :wasm-path directory shadows a built-in of the same name, and
         ;; every compile exercises the same mechanism a user unit uses.
-        unit-path (concat (or wasm-ld []) [(str root "/units")])
+        unit-path (concat (or wasm-path []) [(str root "/units")])
         ;; Source resolution: your :src first, then source shipped beside a unit
         ;; (a unit is a namespace's native half; the .cljc beside it is its
         ;; Clojure half), then flint's own lib. Stated in the README.

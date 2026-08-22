@@ -18,7 +18,7 @@
             [flint.macros :as macros]))
 
 (def specials
-  '#{def if do let* loop* recur fn* quote var throw try catch finally
+  '#{def if do let* loop* recur fn* quote var throw try catch finally binding
      new set! . monitor-enter monitor-exit deftype* reify* case* letfn* ns})
 
 (defn- err [msg data]
@@ -134,7 +134,14 @@
           {:op :native-value :name nn})
       (if-let [q (qualify env sym)]
       (do (record-dep! env q)
-          {:op :var :sym q})
+          (if (get-in @(:cc env) [:dynamic q])
+            ;; A dynamic var reads through the current thread's binding map,
+            ;; falling back to the root value. `binding` is per GREEN thread
+            ;; (doc/decisions/0005, section 4).
+            (do (record-dep! env (symbol "flint.native" "flint/dyn-get"))
+                {:op :native :name "flint/dyn-get"
+                 :args [(const-node q) {:op :var :sym q}]})
+            {:op :var :sym q}))
       (err (str "unable to resolve symbol: " sym)
            {:sym sym :ns (current-ns env) :line (:line (meta sym))})))))
 
@@ -169,7 +176,11 @@
 
       (and (symbol? head) (not (resolve-local env head)) (macro-fn env head))
       (let [f (macro-fn env head)
-            expanded (apply f form nil (rest form))]
+            ;; `&env` is deliberately tiny: the namespace being compiled, and
+            ;; nothing else. `defprotocol` needs it to build the fully-qualified
+            ;; method keyword that metadata dispatch looks for; handing macros
+            ;; the whole analyzer environment would make it API.
+            expanded (apply f form {:ns (current-ns env)} (rest form))]
         (analyze env expanded))
 
       :else
@@ -278,9 +289,37 @@
           (when (and (= n 4) (not (string? doc)))
             (err "the third argument to a 3-argument def must be a docstring" {:form form}))
           (vswap! (:cc env) assoc-in [:declared q] true)
+          (when (:dynamic (meta nm))
+            (vswap! (:cc env) assoc-in [:dynamic q] true))
           {:op :def :sym q :meta (merge (meta nm) (when doc {:doc doc}))
            :init (when (>= n 3)
                    (analyze (assoc env :current-var q) init-form))})
+
+    ;; `binding` is a special form rather than a macro because it has to resolve
+    ;; each name to the var it means, which is analysis, not expansion. It
+    ;; rewrites to ordinary forms, so the emitter learns nothing new.
+    binding
+    (let [bs (vec (second form))
+          _ (when (odd? (count bs)) (err "binding needs an even binding vector" {:form form}))
+          body (drop 2 form)
+          pairs (partition 2 bs)
+          outer 'flint-binding-outer
+          qs (mapv (fn [p]
+                     (let [q (qualify env (first p))]
+                       (when-not q (err (str "unable to resolve " (first p)) {:form form}))
+                       (when-not (get-in @(:cc env) [:dynamic q])
+                         (err (str q " is not dynamic, so it cannot be rebound."
+                                   " Define it with (def ^:dynamic " (clojure.core/name q) " ...)")
+                              {:sym q}))
+                       q))
+                   pairs)
+          assoc-form (concat (list 'clojure.core/assoc outer)
+                             (mapcat (fn [q p] [(list 'quote q) (second p)]) qs pairs))
+          rewritten (list 'let* (vector outer (list 'flint.rt/dyn-bindings))
+                          (list 'try
+                                (cons 'do (cons (list 'flint.rt/dyn-set-bindings assoc-form) body))
+                                (list 'finally (list 'flint.rt/dyn-set-bindings outer))))]
+      (analyze env rewritten))
 
     var (let [q (qualify env (second form))]
           (when-not q (err (str "unable to resolve var: " (second form)) {:form form}))

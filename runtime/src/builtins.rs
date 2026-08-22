@@ -328,6 +328,31 @@ builtins! {
         let s = arg(rt, a, 0);
         rt.string_bytes_vector(s)
     };
+    "flint/bytes->str", flint_b_bytesstr, b_bytesstr, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        if !rt.is_vector(v) {
+            return rt.throw_str("ClassCastException", "bytes->str wants a vector of bytes");
+        }
+        let count = rt.vec_count(v);
+        let mut bytes = alloc::vec::Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let b = rt.vec_nth(v, i).unwrap_or(NIL);
+            bytes.push(b.as_fixnum() as u8);
+        }
+        match core::str::from_utf8(&bytes) {
+            Ok(t) => { let owned: alloc::string::String = t.into(); rt.string(&owned) }
+            Err(_) => rt.throw_str("IllegalArgumentException", "those bytes are not UTF-8"),
+        }
+    };
+    "flint/bits->double", flint_b_bitsdouble, b_bitsdouble, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        match rt.as_i64(v) {
+            Some(b) => Value::from_f64(f64::from_bits(b as u64)),
+            None => rt.throw_str("ClassCastException", "bits->double wants an integer"),
+        }
+    };
     "flint/double-bits", flint_b_doublebits, b_doublebits, |rt, a, n| {
         let _ = n;
         let v = arg(rt, a, 0);
@@ -416,6 +441,80 @@ builtins! {
     "deref", flint_b_deref, b_deref, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); rt.deref(v) };
     "reset!", flint_b_reset, b_reset, |rt, a, n| {
         let _ = n; let (at, v) = (arg(rt, a, 0), arg(rt, a, 1)); rt.reset_atom(at, v)
+    };
+
+    // --- kinds ---------------------------------------------------------------
+    // The closed set protocols dispatch on. flint has no types, so "which type
+    // is this?" has no general answer -- but the *built-in* kinds are a small
+    // fixed list, and everything else dispatches on metadata
+    // (doc/decisions/0005, section 6). This lives in the runtime rather than in
+    // cljc so that naming `:port` costs nothing: the type tag is here whether or
+    // not the concurrency unit is linked.
+    "flint/kind", flint_b_kind, b_kind, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        let name = if v.is_nil() {
+            "nil"
+        } else if v.is_bool() {
+            "boolean"
+        } else if v.is_double() || v.is_fixnum() {
+            "number"
+        } else if v.is_inline_str() {
+            "string"
+        } else if v.is_inline_kw() {
+            "keyword"
+        } else if !v.is_heap() {
+            "other"
+        } else {
+            match crate::obj::ty(&rt.gc.sp, v.as_heap()) {
+                crate::obj::TY_STR => "string",
+                crate::obj::TY_KW => "keyword",
+                crate::obj::TY_SYM => "symbol",
+                crate::obj::TY_BIGINT => "number",
+                crate::obj::TY_VEC | crate::obj::TY_MAPENTRY => "vector",
+                crate::obj::TY_ARRAYMAP | crate::obj::TY_HASHMAP => "map",
+                crate::obj::TY_SET => "set",
+                crate::obj::TY_CONS
+                | crate::obj::TY_EMPTY_LIST
+                | crate::obj::TY_LAZYSEQ
+                | crate::obj::TY_VECSEQ
+                | crate::obj::TY_STRSEQ
+                | crate::obj::TY_RANGE
+                | crate::obj::TY_ITERSEQ
+                | crate::obj::TY_CHUNKSEQ => "list",
+                crate::obj::TY_CLOSURE | crate::obj::TY_NATIVEFN | crate::obj::TY_MULTIFN => "fn",
+                crate::obj::TY_PORT => "port",
+                crate::obj::TY_THREAD => "thread",
+                crate::obj::TY_ATOM => "atom",
+                crate::obj::TY_VAR => "var",
+                crate::obj::TY_REGEX => "regex",
+                crate::obj::TY_EXINFO => "exception",
+                _ => "other",
+            }
+        };
+        rt.keyword(None, name)
+    };
+
+    // --- dynamic bindings ----------------------------------------------------
+    // Per GREEN thread: the scheduler saves and restores the whole map on a
+    // switch, and a spawned thread starts from a snapshot of its spawner's.
+    "flint/dyn-get", flint_b_dynget, b_dynget, |rt, a, n| {
+        let _ = n;
+        let (sym, root) = (arg(rt, a, 0), arg(rt, a, 1));
+        let binds = rt.roots.singletons[crate::rt::SING_BINDINGS];
+        if binds.is_nil() { return root; }
+        rt.map_get(binds, sym, root)
+    };
+    "flint/dyn-bindings", flint_b_dynbinds, b_dynbinds, |rt, a, n| {
+        let _ = (a, n);
+        let b = rt.roots.singletons[crate::rt::SING_BINDINGS];
+        if b.is_nil() { rt.empty_map() } else { b }
+    };
+    "flint/dyn-set-bindings", flint_b_dynset, b_dynset, |rt, a, n| {
+        let _ = n;
+        let m = arg(rt, a, 0);
+        rt.roots.singletons[crate::rt::SING_BINDINGS] = m;
+        m
     };
 
     // --- metadata ------------------------------------------------------------

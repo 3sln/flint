@@ -1,8 +1,8 @@
 //! `demo.shout` — a toy namespace unit, used by `test/unitpath.clj`.
 //!
-//! It exists to prove that a unit found on the `:wasm-ld` search path is not a
+//! It exists to prove that a unit found on the `:wasm-path` search path is not a
 //! special case of the built-in ones: same manifest format, same ABI, same
-//! linker path. It is not part of a flint build unless a `:wasm-ld` directory
+//! linker path. It is not part of a flint build unless a `:wasm-path` directory
 //! puts it there, which is why it lives under `test/fixtures/` and not `units/`.
 
 #![no_std]

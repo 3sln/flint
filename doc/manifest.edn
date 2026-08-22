@@ -48,6 +48,7 @@
     boolean?
     bounded-count
     butlast
+    bytes->str
     case
     char
     char?
@@ -82,6 +83,7 @@
     defn
     defn-
     defonce
+    defprotocol
     delay
     delay?
     deref
@@ -110,11 +112,14 @@
     ex-data
     ex-info
     ex-message
+    extend
+    extend-protocol
     false?
     ffirst
     filter
     filterv
     find
+    find-protocol-method
     first
     flatten
     float?
@@ -163,6 +168,7 @@
     keys
     keyword
     keyword?
+    kind
     last
     lazy-cat
     lazy-seq
@@ -263,6 +269,7 @@
     reversible?
     rseq
     run!
+    satisfies?
     sb-append!
     sb-str
     second
@@ -359,10 +366,12 @@
     defn
     defn-
     defonce
+    defprotocol
     delay
     doseq
     dotimes
     doto
+    extend-protocol
     fn
     for
     if-let
@@ -383,7 +392,7 @@
     when-not
     when-some
     while},
-  :count 334,
+  :count 341,
   :absent
   #{*'
     *1
@@ -491,7 +500,6 @@
     create-ns
     dec'
     default-data-readers
-    defprotocol
     defrecord
     deftype
     deliver
@@ -508,8 +516,6 @@
     error-mode
     eval
     ex-cause
-    extend
-    extend-protocol
     extend-type
     extends?
     file-seq
@@ -629,7 +635,6 @@
     resolve
     restart-agent
     rsubseq
-    satisfies?
     send
     send-off
     send-via
@@ -703,12 +708,15 @@
   #{->str-builder
     apply2
     bigdec?
+    bytes->str
     cond-chain
     count-matching
+    find-protocol-method
     int-of-char
     interleave-all
     interleave2
     keep2
+    kind
     map2
     mapcat2
     methods-of
@@ -889,6 +897,33 @@
     text},
   :macros #{},
   :count 9},
+ flint.port
+ {:file "lib/flint/port.cljc",
+  :present
+  #{channel
+    close
+    format-of
+    host?
+    label
+    open
+    port-id
+    port?
+    receive
+    send
+    state
+    with-open},
+  :macros #{with-open},
+  :count 12},
+ flint.port.edn
+ {:file "lib/flint/port/edn.cljc",
+  :present #{codec decode encode},
+  :macros #{},
+  :count 3},
+ flint.port.json
+ {:file "lib/flint/port/json.cljc",
+  :present #{codec decode encode},
+  :macros #{},
+  :count 3},
  flint.regex
  {:file "lib/flint/regex.cljc",
   :present
@@ -903,4 +938,9 @@
     replace-first
     split},
   :macros #{},
-  :count 10}}
+  :count 10},
+ flint.thread
+ {:file "lib/flint/thread.cljc",
+  :present #{join result self spawn state thread-id thread? yield},
+  :macros #{},
+  :count 8}}

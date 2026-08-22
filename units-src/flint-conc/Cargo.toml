@@ -1,0 +1,18 @@
+[package]
+name = "flint-conc"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+# The manifest generator is host-only: it links std.
+host-tools = []
+
+[[bin]]
+name = "manifest"
+required-features = ["host-tools"]
+
+[dependencies]
+flint-rt = { path = "../../runtime" }

@@ -1,4 +1,4 @@
-;; `:exclude` and `:wasm-ld` (doc/decisions/0004).
+;; `:exclude` and `:wasm-path` (doc/decisions/0004).
 ;;
 ;; The point of `:exclude` is that it is an ASSERTION: it must FAIL, at compile
 ;; time, when the thing it names is reachable, and the failure must name the
@@ -35,7 +35,7 @@
 (spit (str d "/jsonly.cljc")
       "(ns jsonly (:require [flint.data.json :as json]))\n(defn main [_] (str (json/read-str \"[1,2]\")))")
 
-(println "options: :exclude and :wasm-ld")
+(println "options: :exclude and :wasm-path")
 
 ;; ---------------------------------------------------------------- :exclude
 
@@ -77,9 +77,9 @@
 (check "  ... and names the builtin"
        (str/includes? (:all bi) "the builtin `flint/json-parse`") true)
 
-;; ---------------------------------------------------------------- :wasm-ld
+;; -------------------------------------------------------------- :wasm-path
 
-(when-not (fs/exists? "test/fixtures/wasm-ld/demo/shout.unit.edn")
+(when-not (fs/exists? "test/fixtures/wasm-path/demo/shout.unit.edn")
   (println "  building the fixture unit")
   (let [p (.start (ProcessBuilder. (into-array String ["./bin/build-test-unit"])))]
     (slurp (.getInputStream p)) (slurp (.getErrorStream p)) (.waitFor p)))
@@ -87,27 +87,33 @@
 (spit (str d "/app.cljc") "(ns app (:require [demo.shout :as s]))\n(defn main [_] (s/shout \"hello\"))")
 
 (def missing (flint ":src" d ":fn" "app/main" ":out" "out/opt-wl.wasm"))
-(check "without :wasm-ld the namespace cannot be found" (:exit missing) 1)
+(check "without :wasm-path the namespace cannot be found" (:exit missing) 1)
 
-(def wl (flint ":src" d ":fn" "app/main" ":wasm-ld" "test/fixtures/wasm-ld"
+(def wl (flint ":src" d ":fn" "app/main" ":wasm-path" "test/fixtures/wasm-path"
                ":out" "out/opt-wl.wasm" "--stats"))
-(check "a unit found on the :wasm-ld path links" (:exit wl) 0)
+(check "a unit found on the :wasm-path path links" (:exit wl) 0)
 (check "  ... and --stats says which manifest was used"
-       (str/includes? (:all wl) "demo.shout <- test/fixtures/wasm-ld/demo/shout.unit.edn") true)
+       (str/includes? (:all wl) "demo.shout <- test/fixtures/wasm-path/demo/shout.unit.edn") true)
 (check "  ... and the module RUNS, calling into the unit" (run "out/opt-wl.wasm") "HELLO!")
 
-(def refused (flint ":src" d ":fn" "app/main" ":wasm-ld" "test/fixtures/wasm-ld-bad"
+(def refused (flint ":src" d ":fn" "app/main" ":wasm-path" "test/fixtures/wasm-path-bad"
                     ":out" "out/opt-wlbad.wasm"))
 (check "an incompatible unit is refused" (:exit refused) 1)
 (check "  ... by name and version, with a reason"
        (boolean (re-find #"refusing unit demo\.shout .*runtime 2 \(need 1\)" (:all refused))) true)
 
+(def old-name (flint ":src" d ":fn" "app/main" ":wasm-ld" "test/fixtures/wasm-path"
+                    ":out" "out/opt-wl3.wasm"))
+(check "the deprecated :wasm-ld spelling still works" (:exit old-name) 0)
+(check "  ... and says it is deprecated"
+       (str/includes? (:all old-name) ":wasm-ld is deprecated") true)
+
 (def shadow (flint ":src" d ":fn" "app/main"
-                   ":wasm-ld" "test/fixtures/wasm-ld" "test/fixtures/wasm-ld-bad"
+                   ":wasm-path" "test/fixtures/wasm-path" "test/fixtures/wasm-path-bad"
                    ":out" "out/opt-wl2.wasm"))
 (check "an earlier directory wins, and the loser is reported" (:exit shadow) 0)
 (check "  ... naming both manifests"
-       (str/includes? (:all shadow) "is shadowed by test/fixtures/wasm-ld/demo/shout.unit.edn") true)
+       (str/includes? (:all shadow) "is shadowed by test/fixtures/wasm-path/demo/shout.unit.edn") true)
 
 (if (zero? @fails)
   (println "options: ok")

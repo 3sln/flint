@@ -64,7 +64,39 @@ pub const TY_RAW: u8 = 35; // opaque bytes
 pub const TY_ITERSEQ: u8 = 36; // [coll, cursor-state..., meta] generic
 pub const TY_CHUNKSEQ: u8 = 37; // [node(array), off, rest, meta]
 pub const TY_TYPE: u8 = 38; // [name, basis, protocols(map)]  runtime type object
-pub const TY_MAX: u8 = 39;
+// --- concurrency (runtime/src/conc.rs). Vals layout like everything else, so
+// --- the collector traces a parked thread's saved stack with no new code.
+pub const TY_THREAD: u8 = 39; // see conc::TH_*
+pub const TY_PORT: u8 = 40; // see conc::PT_*
+pub const TY_SCHED: u8 = 41; // see conc::SC_*
+pub const TY_MAX: u8 = 42;
+
+/// Every type tag must be distinct. This list exists because they were not:
+/// `TY_THREAD`/`TY_PORT`/`TY_SCHED` were first numbered 33..35, which silently
+/// aliased `TY_DELAY`/`TY_VOLATILE`/`TY_RAW` -- so the scheduler object was laid
+/// out as *raw bytes*, `size_of` said 16 instead of 56, and the next allocation
+/// landed inside it. Nothing failed loudly; the scheduler simply read garbage.
+const _: () = {
+    let tags = [
+        TY_FREE, TY_FWD, TY_STR, TY_BIGINT, TY_SYM, TY_KW, TY_CONS, TY_EMPTY_LIST,
+        TY_LAZYSEQ, TY_VEC, TY_NODE, TY_VECSEQ, TY_STRSEQ, TY_RANGE, TY_ARRAYMAP,
+        TY_HASHMAP, TY_BMNODE, TY_ARRAYNODE, TY_COLLNODE, TY_SET, TY_MAPENTRY,
+        TY_CLOSURE, TY_NATIVEFN, TY_VAR, TY_ATOM, TY_TVEC, TY_TMAP, TY_TSET,
+        TY_RECORD, TY_REGEX, TY_REDUCED, TY_EXINFO, TY_MULTIFN, TY_DELAY,
+        TY_VOLATILE, TY_RAW, TY_ITERSEQ, TY_CHUNKSEQ, TY_TYPE, TY_THREAD, TY_PORT,
+        TY_SCHED,
+    ];
+    let mut i = 0;
+    while i < tags.len() {
+        assert!(tags[i] < TY_MAX, "a type tag is >= TY_MAX");
+        let mut j = i + 1;
+        while j < tags.len() {
+            assert!(tags[i] != tags[j], "two object types share a tag");
+            j += 1;
+        }
+        i += 1;
+    }
+};
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Layout {

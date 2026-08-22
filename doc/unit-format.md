@@ -11,7 +11,7 @@ a user namespace ahead of time produces the same shape; that is deliberate
 ## Where a unit lives
 
 Units are laid out **by namespace**, exactly the way `:src` lays out source, and
-found on a search path given by `:wasm-ld`:
+found on a search path given by `:wasm-path`:
 
 ```
 flint.data.xml   ->  <dir>/flint/data/xml.unit.edn   the manifest
@@ -20,14 +20,14 @@ flint.data.xml   ->  <dir>/flint/data/xml.unit.edn   the manifest
 ```
 
 flint's own `units/` directory is simply the **last entry** on that path, so a
-`:wasm-ld` directory can shadow a built-in unit and every compile exercises the
+`:wasm-path` directory can shadow a built-in unit and every compile exercises the
 same mechanism a user-supplied unit uses. Earlier directories win; a unit that
 loses is reported rather than silently dropped.
 
 A `.cljc` file may sit beside a unit, and often does: a unit is a namespace's
 *native* half and the source its Clojure half — `flint.data.json` ships as both.
 They compose rather than compete. Source resolution searches `:src` directories
-first, then `:wasm-ld` directories, then flint's own `lib/`.
+first, then `:wasm-path` directories, then flint's own `lib/`.
 
 ## Manifest
 
@@ -40,11 +40,20 @@ first, then `:wasm-ld` directories, then flint's own `lib/`.
  :libs       "xml.libs"              ; optional: directory of rlibs it needs
  :requires   [flint.rt]              ; other units, by name
  :provides   {"flint/xml-parse" {:symbol "flint_b_xml_parse"}}
+ :exports    ["flint_resume"]        ; optional: wasm exports to add
  :abi        {:runtime 1 :value 1 :image 1}}
 ```
 
 `:provides` maps a **builtin name** — what `flint.rt/xml-parse` resolves to — to
 the exported C symbol implementing it.
+
+`:exports` widens the *module's* outside edge. A unit that a host must talk to
+directly needs its own wasm exports, and putting them here rather than in
+`flint`'s fixed ABI list means only a module that links that unit pays for them.
+The concurrency unit (`flint.conc`) is the only user so far: it exports the
+event-queue drain, the continuation callback and the resume entry, which is why
+a program with no ports has an outside edge identical to the one it had before
+green threads existed.
 
 * `:kind :wasm-object` — a relocatable wasm object. `:provides` values name the
   exported C symbol that implements each var.
@@ -60,7 +69,7 @@ cannot link is refused by name and version rather than linked and left to trap:
 refusing unit demo.shout at vendor/units/demo/shout.unit.edn: runtime 2 (need 1)
 ```
 
-Naming a directory with `:wasm-ld` is an assertion that its units are for this
+Naming a directory with `:wasm-path` is an assertion that its units are for this
 flint, so the check is over the whole path rather than only the units that end up
 linked — a stale copy that would have been shadowed is still worth hearing about
 before it becomes a puzzle.
@@ -124,10 +133,10 @@ segment were both verified running under node.
 ## Admitting a user-compiled namespace
 
 Two of the three things this document used to list as missing are done: there is
-a search path (`:wasm-ld`) rather than a fixed directory, and `:abi` mismatch is
+a search path (`:wasm-path`) rather than a fixed directory, and `:abi` mismatch is
 a message naming the unit and the version rather than an assert.
 `test/options.clj` builds `units-src/flint-demo-shout` into
-`test/fixtures/wasm-ld/demo/shout.{o,unit.edn}` with a `shout.cljc` beside it,
+`test/fixtures/wasm-path/demo/shout.{o,unit.edn}` with a `shout.cljc` beside it,
 puts it on the path, links it, and runs the module.
 
 What is still missing:

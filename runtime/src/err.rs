@@ -45,15 +45,22 @@ impl Rt {
         v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_EXINFO
     }
 
-    /// Set the pending exception and return `nil`, which is what a failing
-    /// builtin returns.
-    pub fn throw_str(&mut self, kind: &str, msg: &str) -> Value {
+    /// Build an exception value without throwing it. The scheduler needs this:
+    /// it hands an error to a *parked* thread, to be raised when that thread is
+    /// next resumed rather than in whatever thread noticed the problem.
+    pub fn make_error(&mut self, kind: &str, msg: &str) -> Value {
         let k = self.string(kind);
         let ki = self.push(k);
         let m = self.string(msg);
         let k = self.r(ki);
         self.pop_to(ki);
-        let e = self.ex_info(k, m, NIL, NIL);
+        self.ex_info(k, m, NIL, NIL)
+    }
+
+    /// Set the pending exception and return `nil`, which is what a failing
+    /// builtin returns.
+    pub fn throw_str(&mut self, kind: &str, msg: &str) -> Value {
+        let e = self.make_error(kind, msg);
         self.thrown = e;
         NIL
     }

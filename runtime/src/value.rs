@@ -47,11 +47,16 @@ const SPECIAL_FALSE: u64 = 1;
 const SPECIAL_TRUE: u64 = 2;
 /// Returned by lookups that must distinguish "absent" from "present and nil".
 const SPECIAL_NOT_FOUND: u64 = 3;
+/// A green thread asked to park. It travels in `Rt::thrown` so that the check
+/// the VM already makes after every native call catches it -- parking costs the
+/// interpreter's fast path nothing at all (`doc/decisions/0005`).
+const SPECIAL_PARK: u64 = 4;
 
 pub const NIL: Value = Value((TAG_SPECIAL << 48) | SPECIAL_NIL);
 pub const FALSE: Value = Value((TAG_SPECIAL << 48) | SPECIAL_FALSE);
 pub const TRUE: Value = Value((TAG_SPECIAL << 48) | SPECIAL_TRUE);
 pub const NOT_FOUND: Value = Value((TAG_SPECIAL << 48) | SPECIAL_NOT_FOUND);
+pub const PARK: Value = Value((TAG_SPECIAL << 48) | SPECIAL_PARK);
 
 pub const FIXNUM_MAX: i64 = (1 << 47) - 1;
 pub const FIXNUM_MIN: i64 = -(1 << 47);

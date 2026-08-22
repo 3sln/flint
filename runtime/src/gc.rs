@@ -127,7 +127,7 @@ pub struct Roots {
     pub globals: Vec<Value>,
     pub consts: Vec<Value>,
     /// Weak tables (strings, keywords, symbols).
-    pub interns: [InternTable; 3],
+    pub interns: [InternTable; 4],
     /// Long-lived singletons: empty list/vector/map/set, cached results, ...
     pub singletons: Vec<Value>,
 }
@@ -135,6 +135,12 @@ pub struct Roots {
 pub const INTERN_STR: usize = 0;
 pub const INTERN_KW: usize = 1;
 pub const INTERN_SYM: usize = 2;
+/// Ports, keyed by id. **Weak on purpose** (`doc/decisions/0006`): the flint end
+/// of a port is ordinary reachable memory, and when the collector finds it
+/// unreachable that *means* the script is finished with it -- the scheduler
+/// notices the entry has gone and raises `:closed` on the script's behalf. A
+/// host end is additionally a strong root, so it survives regardless.
+pub const INTERN_PORT: usize = 3;
 
 impl Roots {
     pub fn new() -> Roots {
@@ -144,7 +150,14 @@ impl Roots {
             shadow: Vec::with_capacity(64),
             globals: Vec::new(),
             consts: Vec::new(),
-            interns: [InternTable::new(1024), InternTable::new(1024), InternTable::new(512)],
+            interns: [
+                InternTable::new(1024),
+                InternTable::new(1024),
+                InternTable::new(512),
+                // Four slots: a program with no ports never grows it, and one
+                // with ports pays for what it uses.
+                InternTable::new(4),
+            ],
             singletons: Vec::new(),
         }
     }
