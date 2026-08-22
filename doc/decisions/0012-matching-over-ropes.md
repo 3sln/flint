@@ -1,5 +1,9 @@
 # 0012 — The matcher has to consume a rope, which decides the design
 
+> **NOT BUILT YET — this is a plan, not a description.** Nothing in this file
+> exists in the tree. Do not read it as documentation of shipped behaviour, and
+> do not treat statements in the README as stale on account of it.
+
 Supersedes the delegation half of `0011 §5`. The objection that forced it:
 
 > It won't work over our rope strings though, the stock regex engines for

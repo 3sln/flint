@@ -1,5 +1,9 @@
 # 0011 — Rope strings, and what to do about regex
 
+> **NOT BUILT YET — this is a plan, not a description.** Nothing in this file
+> exists in the tree. Do not read it as documentation of shipped behaviour, and
+> do not treat statements in the README as stale on account of it.
+
 ## 1. UTF-8 on the JVM and CLR is not the problem
 
 Conceded — a byte array with code-point semantics on top is straightforward on

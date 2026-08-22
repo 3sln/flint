@@ -1,5 +1,9 @@
 # 0010 — SDKs, and other host targets
 
+> **NOT BUILT YET — this is a plan, not a description.** Nothing in this file
+> exists in the tree. Do not read it as documentation of shipped behaviour, and
+> do not treat statements in the README as stale on account of it.
+
 Roadmap, not current work. Written now because the answer changes what should be
 frozen today.
 
