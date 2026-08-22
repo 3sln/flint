@@ -82,6 +82,24 @@ genuinely awkward without the JVM's guarantees — exact rounding modes,
 `ulp`, `nextAfter`, `IEEEremainder`, the `*Exact` overflow-checking integer
 functions — and half-implementing those is worse than leaving them out.
 
+### And `clojure.data.json`, under that exact namespace
+
+A JSON reader and writer **compatible with `clojure.data.json`**, published under
+that namespace so that `(require '[clojure.data.json :as json])` works and code
+written against the real library ports without edits.
+
+That means the actual surface, not a lookalike: `read-str`, `write-str`, `read`,
+`write`, and the options people really use — `:key-fn` and `:value-fn` on both
+sides, `:bigdec`, `:escape-unicode`, `:escape-slash`. `(json/read-str s :key-fn
+keyword)` is the single most common call in the wild; it must work.
+
+It belongs here for the same reason EDN does: it is how data gets into a script,
+and it is pure. Two details worth getting right rather than discovering later —
+JSON numbers have no integer/decimal type distinction, so match data.json's
+choice of what an integer reads as against what a decimal reads as; and writing
+must escape correctly, including the unicode and slash options, because the
+output is somebody else's input.
+
 ### Say what is missing, per namespace
 
 Every standard namespace you ship must come with a **stated deficiency list** in
