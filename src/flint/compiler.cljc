@@ -100,6 +100,18 @@
                    :else [f]))
                forms)))
 
+(defn ast-defs
+  "Every var an analyzed item defines. Walks the AST rather than the surface
+  form, because a macro may expand to several defs -- `defmulti` produces both
+  the function and its method table -- and the surface form does not say so."
+  [node]
+  (cond
+    (map? node)
+    (concat (when (= :def (:op node)) [(:sym node)])
+            (mapcat ast-defs (vals node)))
+    (sequential? node) (mapcat ast-defs node)
+    :else nil))
+
 (defn read-namespace!
   "Read one namespace and register every name it defines, so that forward
   references -- within a namespace and between namespaces -- resolve without
@@ -151,13 +163,18 @@
         (try
         (let [names (def-form-names f)
               sym (when (= 1 (count names)) (symbol (str nsname) (name (first names))))
-              env (assoc (base-env cc nsname) :current-var sym)
+              ;; Every item gets an id, including bare top-level expressions:
+              ;; without one their references go unrecorded, and a var reached
+              ;; only from an expression looks unreachable.
+              id (or sym (symbol (str nsname) (str "__top-" (count (:items @cc)))))
+              env (assoc (base-env cc nsname) :current-var id)
               wrapped (list 'fn* [] f)
               ast (ana/analyze env wrapped)
               macro? (boolean (some-> (first names) meta :macro))
               defform (when (seq? f) (first f))]
           (vswap! cc update :items conj
-                  {:ns nsname :sym sym :ast ast
+                  {:ns nsname :sym sym :id id :ast ast
+                   :defines (vec (distinct (ast-defs ast)))
                    :kind (if sym :def :expr)
                    :macro? (or macro? (= 'defmacro defform))})
           ;; A macro must exist before the next form that uses it, so evaluate
@@ -232,21 +249,45 @@
       (analyze-namespace! cc shim-ns (read-namespace! cc shim-ns shim-src "<entry-shim>")))
 
     (let [entry-var 'flint.main/-main
-          roots (conj (reachable cc [entry-var]) entry-var)
           items (:items @cc)
-          included-ns (into #{} (map :ns (filter #(and (:sym %) (roots (:sym %))) items)))
-          included-ns (conj included-ns 'flint.main)
+          ;; Reachability is a fixpoint, not one pass. Two things make it so:
+          ;; including a namespace brings in its bare top-level expressions, and
+          ;; an item that defines several vars (`defmulti` defines the function
+          ;; AND its method table) records its own references under a synthetic
+          ;; id that has to be seeded once the item is known to be kept.
+          state (loop [rs (conj (reachable cc [entry-var]) entry-var)]
+                  (let [reached (fn [it] (some (fn [d] (contains? rs d)) (:defines it)))
+                        inc-ns (conj (into #{} (map :ns (filter reached items))) 'flint.main)
+                        keeping (filter (fn [it]
+                                          (and (not (:macro? it))
+                                               (if (seq (:defines it))
+                                                 (reached it)
+                                                 (inc-ns (:ns it)))))
+                                        items)
+                        ;; Seed the item's id AND every var it defines: `def`
+                        ;; records its init's references under its own name, so
+                        ;; keeping an item because ONE of its vars was reached
+                        ;; makes the others' references live too.
+                        rs' (reachable cc (into (vec rs)
+                                                (mapcat (fn [it] (cons (:id it) (:defines it)))
+                                                        keeping)))]
+                    (if (= rs' rs) {:roots rs :included inc-ns} (recur rs'))))
+          roots (:roots state)
+          included-ns (:included state)
+          reached? (fn [it] (some (fn [d] (contains? roots d)) (:defines it)))
           keep? (fn [it]
                   (cond
                     (:macro? it) false
-                    (:sym it) (contains? roots (:sym it))
+                    (seq (:defines it)) (boolean (reached? it))
                     ;; A bare top-level expression rides on its namespace: it can
                     ;; have side effects nothing references, so there is nothing
                     ;; to reach it by. Documented in the README.
                     :else (contains? included-ns (:ns it))))
           kept (filterv keep? items)
           b (img/new-builder)
-          var-slots (into {} (for [s (sort (filter symbol? (map :sym kept)))]
+          ;; Slots for every var any kept item defines, not just its headline
+          ;; name: one item can define several.
+          var-slots (into {} (for [s (sort (distinct (mapcat :defines kept)))]
                                [s (img/var-slot b s)]))
           ;; Vars that are referenced but never defined would be a silent nil.
           missing (remove var-slots (filter #(get-in @cc [:vars %]) roots))

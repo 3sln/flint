@@ -161,7 +161,19 @@ builtins! {
     "string?", flint_b_stringp, b_stringp, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); Value::boolean(rt.is_string(v)) };
     "keyword?", flint_b_keywordp, b_keywordp, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); Value::boolean(rt.is_keyword(v)) };
     "symbol?", flint_b_symbolp, b_symbolp, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); Value::boolean(rt.is_symbol(v)) };
-    "vector?", flint_b_vectorp, b_vectorp, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); Value::boolean(rt.is_vector(v)) };
+    // A map entry answers `vector?` (as Clojure's MapEntry does, being an
+    // IPersistentVector) but has its own predicate.
+    "vector?", flint_b_vectorp, b_vectorp, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        Value::boolean(rt.is_vector(v)
+            || (v.is_heap() && crate::obj::ty(&rt.gc.sp, v.as_heap()) == crate::obj::TY_MAPENTRY))
+    };
+    "flint/map-entry?", flint_b_mapentryp, b_mapentryp, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        Value::boolean(v.is_heap() && crate::obj::ty(&rt.gc.sp, v.as_heap()) == crate::obj::TY_MAPENTRY)
+    };
     "map?", flint_b_mapp, b_mapp, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); Value::boolean(rt.is_map(v)) };
     "set?", flint_b_setp, b_setp, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); Value::boolean(rt.is_set(v)) };
     "seq?", flint_b_seqp, b_seqp, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); Value::boolean(rt.is_seq(v)) };
@@ -328,6 +340,45 @@ builtins! {
         let _ = n;
         let kvs = arg(rt, a, 0);
         rt.ordered_map(kvs)
+    };
+    "flint/delay", flint_b_delay, b_delay, |rt, a, n| {
+        let _ = n;
+        let f = arg(rt, a, 0);
+        let base = rt.mark();
+        let fi = rt.push(f);
+        let addr = rt.alloc(crate::obj::TY_DELAY, 2);
+        if addr == 0 { rt.pop_to(base); return NIL; }
+        let f = rt.r(fi);
+        rt.pop_to(base);
+        rt.gc.set_slot(addr, 0, f);
+        rt.gc.set_slot(addr, 1, NIL);
+        Value::heap(addr)
+    };
+    "flint/realized?", flint_b_realized, b_realized, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        if v.is_heap() {
+            match crate::obj::ty(&rt.gc.sp, v.as_heap()) {
+                crate::obj::TY_DELAY => return Value::boolean(rt.slot(v, 0).is_nil()),
+                crate::obj::TY_LAZYSEQ => return Value::boolean(rt.slot(v, 0).is_nil()),
+                _ => {}
+            }
+        }
+        TRUE
+    };
+    "flint/delay?", flint_b_delayp, b_delayp, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        Value::boolean(v.is_heap() && crate::obj::ty(&rt.gc.sp, v.as_heap()) == crate::obj::TY_DELAY)
+    };
+    "flint/unchecked-add", flint_b_uadd, b_uadd, |rt, a, n| {
+        let _ = n; unchecked2(rt, a, 0)
+    };
+    "flint/unchecked-sub", flint_b_usub, b_usub, |rt, a, n| {
+        let _ = n; unchecked2(rt, a, 1)
+    };
+    "flint/unchecked-mul", flint_b_umul, b_umul, |rt, a, n| {
+        let _ = n; unchecked2(rt, a, 2)
     };
     "flint/volatile", flint_b_volatile, b_volatile, |rt, a, n| {
         let _ = n;
@@ -562,6 +613,28 @@ builtins! {
         let _ = (a, n);
         rt.gc_stats_map()
     };
+}
+
+fn unchecked2(rt: &mut Rt, a: usize, which: u8) -> Value {
+    match (rt.as_i64(arg(rt, a, 0)), rt.as_i64(arg(rt, a, 1))) {
+        (Some(x), Some(y)) => {
+            let r = match which {
+                0 => x.wrapping_add(y),
+                1 => x.wrapping_sub(y),
+                _ => x.wrapping_mul(y),
+            };
+            rt.integer(r)
+        }
+        _ => {
+            let (x, y) = (arg(rt, a, 0), arg(rt, a, 1));
+            if rt.is_number(x) && rt.is_number(y) {
+                let (p, q) = (rt.num_f64(x), rt.num_f64(y));
+                Value::from_f64(match which { 0 => p + q, 1 => p - q, _ => p * q })
+            } else {
+                rt.throw_not_a_number(x, y)
+            }
+        }
+    }
 }
 
 fn bitop(rt: &mut Rt, a: usize, n: usize, which: u8) -> Value {

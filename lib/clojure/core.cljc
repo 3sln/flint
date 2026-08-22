@@ -1030,6 +1030,144 @@
 (defn re-seq [re s] (flint.regex/re-seq (re-pattern re) s))
 (defn re-quote-replacement [s] s)
 
+;; ------------------------------------------------------------------- delays
+
+(defmacro delay [& body] (list 'flint.rt/delay (cons 'fn* (cons [] body))))
+(defn force [x] (if (flint.rt/delay? x) (flint.rt/deref x) x))
+(defn delay? [x] (flint.rt/delay? x))
+(defn realized? [x] (flint.rt/realized? x))
+
+;; ------------------------------------------------------------- multimethods
+;;
+;; No hierarchies: dispatch is `=` on the dispatch value, with `:default` as the
+;; fallback. `derive`/`isa?`/`prefer-method` are absent and listed as such.
+;;
+;; The method table is a separate var rather than metadata on the function,
+;; because a flint closure has nowhere to put metadata.
+
+(defmacro defmulti [name dispatch-fn & _opts]
+  (let [tbl (if (namespace name)
+              (symbol (namespace name) (str (clojure.core/name name) "__methods"))
+              (symbol (str (clojure.core/name name) "__methods")))]
+    (list 'do
+          (list 'def tbl (list 'clojure.core/atom {}))
+          (list 'def name
+                (list 'clojure.core/let ['dfn dispatch-fn]
+                      (list 'clojure.core/fn ['& 'args]
+                            (list 'clojure.core/let
+                                  ['dv (list 'clojure.core/apply 'dfn 'args)]
+                                  (list 'clojure.core/let
+                                        ['f (list 'clojure.core/or
+                                                  (list 'clojure.core/get
+                                                        (list 'clojure.core/deref tbl) 'dv)
+                                                  (list 'clojure.core/get
+                                                        (list 'clojure.core/deref tbl) :default))]
+                                        (list 'if 'f
+                                              (list 'clojure.core/apply 'f 'args)
+                                              (list 'throw
+                                                    (list 'clojure.core/ex-info
+                                                          "no method for dispatch value"
+                                                          (list 'clojure.core/hash-map
+                                                                :multi (list 'quote name)
+                                                                :dispatch-value 'dv))))))))))))
+
+(defmacro defmethod [name dispatch-val & fn-tail]
+  (let [tbl (if (namespace name)
+              (symbol (namespace name) (str (clojure.core/name name) "__methods"))
+              (symbol (str (clojure.core/name name) "__methods")))]
+    (list 'clojure.core/reset! tbl
+          (list 'clojure.core/assoc (list 'clojure.core/deref tbl) dispatch-val
+                (cons 'clojure.core/fn fn-tail)))))
+
+(defn methods-of [tbl] @tbl)
+
+;; ---------------------------------------------------------- unchecked & misc
+
+(defn unchecked-add [a b] (flint.rt/unchecked-add a b))
+(defn unchecked-subtract [a b] (flint.rt/unchecked-sub a b))
+(defn unchecked-multiply [a b] (flint.rt/unchecked-mul a b))
+(defn unchecked-inc [a] (flint.rt/unchecked-add a 1))
+(defn unchecked-dec [a] (flint.rt/unchecked-sub a 1))
+(defn unchecked-negate [a] (flint.rt/unchecked-sub 0 a))
+(defn bit-and-not [a b] (flint.rt/bit-and a (flint.rt/bit-not b)))
+
+(defn any? [_] true)
+(defn NaN? [x] (and (float? x) (not (flint.rt/num-eq x x))))
+(defn infinite? [x] (and (float? x) (not (NaN? x)) (or (> x 1.7976931348623157E308)
+                                                       (< x -1.7976931348623157E308))))
+(defn parse-boolean [s] (cond (= s "true") true (= s "false") false :else nil))
+(defn map-entry? [x] (flint.rt/map-entry? x))
+(defn simple-ident? [x] (and (ident? x) (nil? (namespace x))))
+(defn qualified-ident? [x] (and (ident? x) (some? (namespace x))))
+(defn bounded-count [n coll] (if (counted? coll) (count coll) (count (take n coll))))
+(defn unreduced [x] (if (reduced? x) (deref x) x))
+(defn ensure-reduced [x] (if (reduced? x) x (reduced x)))
+(defn chunked-seq? [_] false)
+(defn record? [_] false)
+(defn reversible? [x] (vector? x))
+(defn rseq [v] (when (seq v) (map (fn [i] (nth v i)) (range (dec (count v)) -1 -1))))
+
+(defn repeatedly
+  ([f] (lazy-seq (cons (f) (repeatedly f))))
+  ([n f] (take n (repeatedly f))))
+
+(defn reductions
+  ([f coll] (let [s (seq coll)] (if s (reductions f (first s) (rest s)) (list (f)))))
+  ([f init coll]
+   (cons init (lazy-seq (let [s (seq coll)]
+                          (when s (reductions f (f init (first s)) (rest s))))))))
+
+(defn replace [smap coll]
+  (if (vector? coll)
+    (mapv (fn [x] (if (contains? smap x) (get smap x) x)) coll)
+    (map (fn [x] (if (contains? smap x) (get smap x) x)) coll)))
+
+(defmacro lazy-cat [& colls]
+  (cons 'clojure.core/concat (map2 (fn [c] (list 'clojure.core/lazy-seq c)) colls)))
+
+(defn swap-vals!
+  ([a f] (let [old @a] [old (reset! a (f old))]))
+  ([a f x] (let [old @a] [old (reset! a (f old x))])))
+(defn reset-vals! [a v] (let [old @a] [old (reset! a v)]))
+
+(defn pop! [t] (flint.rt/pop t))
+(defn disj! [t x] (flint.rt/dissoc! t x))
+
+(defn hash-ordered-coll [coll] (hash (vec coll)))
+(defn hash-unordered-coll [coll] (hash (set coll)))
+
+(defn print-str [& xs] (join-with " " xs))
+
+(defn- fixed6
+  "A double with exactly six decimal places, which is what %f means."
+  [x]
+  (let [neg? (< x 0)
+        v (if neg? (- x) x)
+        scaled (flint.rt/to-long (flint.rt/floor (flint.rt/add (flint.rt/mul v 1000000.0) 0.5)))
+        whole (quot scaled 1000000)
+        frac (rem scaled 1000000)
+        fs (flint.rt/num->str frac)
+        pad (subs "000000" 0 (- 6 (count fs)))]
+    (str (if neg? "-" "") (flint.rt/num->str whole) "." pad fs)))
+
+(defn format
+  "A small subset of `format`: %s, %d, %f and %% only. Anything else is left
+  alone rather than guessed at. %f prints six decimal places, as Java's does;
+  very large magnitudes lose precision, which Java's does not."
+  [fmt & args]
+  (loop [acc [] i 0 as (seq args)]
+    (if (>= i (count fmt))
+      (flint.rt/str-join acc)
+      (let [c (nth fmt i)]
+        (if (and (= c "%") (< (inc i) (count fmt)))
+          (let [d (nth fmt (inc i))]
+            (cond
+              (= d "%") (recur (conj acc "%") (+ i 2) as)
+              (or (= d "s") (= d "d")) (recur (conj acc (str (first as))) (+ i 2) (next as))
+              (= d "f") (recur (conj acc (fixed6 (double (first as)))) (+ i 2) (next as))
+              :else (recur (conj acc c) (inc i) as)))
+          (recur (conj acc c) (inc i) as))))))
+
 ;; ---------------------------------------------------------------- volatiles
 ;;
 ;; A volatile is an atom without the ceremony; flint is single threaded, so the

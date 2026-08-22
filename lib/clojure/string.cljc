@@ -148,6 +148,8 @@
   (flint.rt/str-join (loop [acc [] i (count s)]
                        (if (> i 0) (recur (conj acc (nth s (dec i))) (dec i)) acc))))
 
+(defn re-quote-replacement [s] s)
+
 (defn escape [s cmap]
   (flint.rt/str-join
    (loop [acc [] i 0]

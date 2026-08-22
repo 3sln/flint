@@ -124,6 +124,13 @@
    "flint/hypot" flint.rt/hypot
    "flint/signum" flint.rt/signum
    "flint/to-long" flint.rt/to-long
+   "flint/map-entry?" flint.rt/map-entry?
+   "flint/delay" flint.rt/delay
+   "flint/realized?" flint.rt/realized?
+   "flint/delay?" flint.rt/delay?
+   "flint/unchecked-add" flint.rt/unchecked-add
+   "flint/unchecked-sub" flint.rt/unchecked-sub
+   "flint/unchecked-mul" flint.rt/unchecked-mul
    "flint/fabs" flint.rt/fabs
    "flint/copy-sign" flint.rt/copy-sign})
 

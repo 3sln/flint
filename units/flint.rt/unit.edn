@@ -36,6 +36,7 @@
   "keyword?" {:symbol "flint_b_keywordp"}
   "symbol?" {:symbol "flint_b_symbolp"}
   "vector?" {:symbol "flint_b_vectorp"}
+  "flint/map-entry?" {:symbol "flint_b_mapentryp"}
   "map?" {:symbol "flint_b_mapp"}
   "set?" {:symbol "flint_b_setp"}
   "seq?" {:symbol "flint_b_seqp"}
@@ -78,6 +79,12 @@
   "flint/str-bytes" {:symbol "flint_b_strbytes"}
   "flint/double-bits" {:symbol "flint_b_doublebits"}
   "flint/array-map" {:symbol "flint_b_arraymap"}
+  "flint/delay" {:symbol "flint_b_delay"}
+  "flint/realized?" {:symbol "flint_b_realized"}
+  "flint/delay?" {:symbol "flint_b_delayp"}
+  "flint/unchecked-add" {:symbol "flint_b_uadd"}
+  "flint/unchecked-sub" {:symbol "flint_b_usub"}
+  "flint/unchecked-mul" {:symbol "flint_b_umul"}
   "flint/volatile" {:symbol "flint_b_volatile"}
   "flint/volatile?" {:symbol "flint_b_volatilep"}
   "ex-info" {:symbol "flint_b_exinfo"}
