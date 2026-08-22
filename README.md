@@ -25,6 +25,17 @@ $ node host/flint.mjs out/demo.wasm flint
 hello, flint
 ```
 
+There is a slightly bigger one in [`examples/wordcount.cljc`](examples/wordcount.cljc)
+— EDN configuration in, word frequencies out, in ordinary portable Clojure:
+
+```console
+$ ./bin/flint :src examples :fn wordcount/main :out out/wc.wasm
+$ node host/flint.mjs out/wc.wasm '{:top 3 :min-length 3}' 'the cat sat on the mat and the cat sat again'
+{:words 10, :distinct 6, :top [["the" 3] ["cat" 2] ["sat" 2]]}
+```
+
+(That is character-for-character what Clojure prints for the same program.)
+
 The module exports `main`, which takes a vararg list of strings, wraps them in a
 vector, and calls the function you named. That function takes exactly one
 argument — a vector of strings — and returns a value, which comes back as text.
@@ -364,17 +375,17 @@ Measured, with `test/modularity.clj` asserting each by symbol name:
 
 | program | bytes | over the floor |
 |---|---:|---:|
-| no parsers | 174 079 | — |
-| JSON only | 255 642 | +81 563 |
-| XML only | 256 608 | +82 529 |
-| HTML only | 224 968 | +50 889 |
+| no parsers | 175 073 | — |
+| JSON only | 256 923 | +81 850 |
+| XML only | 259 392 | +84 319 |
+| HTML only | 225 962 | +50 889 |
 
 ### The floor, honestly
 
 Every module carries, whatever it does: the allocator and the generational
 collector, the value encoding, hashing and equality, the number tower, UTF-8 and
 string interning, the persistent collection internals with their transients, and
-the interpreter. That is **~174 KB** stripped. It is all genuine runtime code —
+the interpreter. That is **~175 KB** stripped. It is all genuine runtime code —
 the largest single function is the interpreter loop at 15 KB, then the CHAMP
 insert path at 11 KB — with no surprise dependency: `libm` is the only crate the
 core links, and it is what makes `clojure.math` possible at all in a bare wasm
@@ -391,9 +402,9 @@ the table above:
 | `clojure.math` (6 functions) | 192 636 | +17 564 |
 | one `#"…"` regex | 228 164 | +53 092 |
 | `clojure.edn/read-string` | 250 066 | +74 994 |
-| `flint.data.json` | 255 642 | +81 563 |
-| `flint.data.xml` | 256 608 | +82 529 |
-| `flint.data.html` | 224 968 | +50 889 |
+| `flint.data.json` | 256 923 | +81 850 |
+| `flint.data.xml` | 259 392 | +84 319 |
+| `flint.data.html` | 225 962 | +50 889 |
 
 ### Dependencies, and what each one bought
 
@@ -402,8 +413,8 @@ Four crates, all `no_std` + `alloc`, each earning its place:
 | crate | where | what it gave | what it cost |
 |---|---|---|---|
 | `libm` | the floor | `sqrt`, `pow`, the trigs — pure Rust, no libc. Without it `clojure.math` cannot exist in a bare wasm build at all. | +17.6 KB, and only for programs that call it |
-| `serde_json` + `serde` | `flint.data.json` | a correct JSON parser with `float_roundtrip`, driven through `DeserializeSeed`/`Visitor` so no `serde_json::Value` is ever built | +81.6 KB |
-| `xmlparser` | `flint.data.xml` | a streaming XML tokenizer that is already `no_std` | +82.5 KB |
+| `serde_json` + `serde` | `flint.data.json` | a correct JSON parser with `float_roundtrip`, driven through `DeserializeSeed`/`Visitor` so no `serde_json::Value` is ever built | +81.9 KB |
+| `xmlparser` | `flint.data.xml` | a streaming XML tokenizer that is already `no_std` | +84.3 KB |
 | `htmlparser` | `flint.data.html` | the same, tolerant of real markup — unquoted attributes, bare `&`, mixed case | +50.9 KB |
 
 Nothing else. No `hashbrown`, no `regex`, no `dlmalloc`: the hash tables, the
@@ -641,11 +652,11 @@ instance. Full output, including the native runs, in
 | program | bytes | compile | cold | warm |
 |---|---:|---:|---:|---:|
 | hello (trivial) | 175 416 | 0.05 ms | 0.11 ms | 0.01 ms |
-| tight loop, 10⁶ iterations | 199 733 | 0.09 ms | 168.19 ms | 167.93 ms |
-| transient map, 10⁵ inserts | 213 690 | 0.08 ms | 46.60 ms | 45.78 ms |
-| word frequency (string split) | 254 365 | 0.09 ms | 62.89 ms | 62.04 ms |
-| word frequency (regex split) | 261 251 | 0.08 ms | 113.04 ms | 112.99 ms |
-| JSON round trip, 2000 records | 283 877 | 0.11 ms | 102.06 ms | 101.01 ms |
+| tight loop, 10⁶ iterations | 199 733 | 0.08 ms | 168.42 ms | 168.28 ms |
+| transient map, 10⁵ inserts | 213 690 | 0.09 ms | 46.64 ms | 45.81 ms |
+| word frequency (string split) | 254 365 | 0.09 ms | 63.02 ms | 62.02 ms |
+| word frequency (regex split) | 261 251 | 0.09 ms | 112.68 ms | 112.22 ms |
+| JSON round trip, 2000 records | 283 877 | 0.10 ms | 101.95 ms | 100.86 ms |
 
 Cold start is dominated by the work itself: the module's own startup — reserving
 the heap, loading the image, running every top-level initialiser — is the 0.10 ms
@@ -658,9 +669,9 @@ source, same input. It is **not** a claim about JVM Clojure.
 
 | program | flint | babashka | ratio |
 |---|---:|---:|---:|
-| tight loop, 10⁶ iterations | 167.93 ms | 76.66 ms | 2.19× |
-| transient map, 10⁵ inserts | 45.78 ms | 17.74 ms | 2.58× |
-| word frequency (regex split) | 112.99 ms | 1.34 ms | **84×** |
+| tight loop, 10⁶ iterations | 168.28 ms | 76.43 ms | 2.20× |
+| transient map, 10⁵ inserts | 45.81 ms | 17.78 ms | 2.58× |
+| word frequency (regex split) | 112.22 ms | 1.34 ms | **84×** |
 
 Two and a half times slower than babashka on interpreter-bound and
 data-structure-bound work is a fair place to be for a self-contained module with
@@ -670,10 +681,10 @@ its own collector. The regex number is not; see [Limits](#limits).
 
 | program | instructions | warm | ns / instruction |
 |---|---:|---:|---:|
-| tight loop, 10⁶ iterations | 27 000 226 | 167.93 ms | 6.2 |
-| JSON round trip | 12 066 852 | 101.01 ms | 8.4 |
-| transient map, 10⁵ inserts | 3 000 323 | 45.78 ms | 15.3 |
-| word frequency (string split) | 3 258 076 | 62.04 ms | 19.0 |
+| tight loop, 10⁶ iterations | 27 000 226 | 168.28 ms | 6.2 |
+| JSON round trip | 12 066 852 | 100.86 ms | 8.4 |
+| transient map, 10⁵ inserts | 3 000 323 | 45.81 ms | 15.3 |
+| word frequency (string split) | 3 258 076 | 62.02 ms | 19.0 |
 
 Read down the column: 6.2 ns is what a dispatched instruction costs when it does
 almost nothing, and the rising numbers are the same dispatch diluted by real
