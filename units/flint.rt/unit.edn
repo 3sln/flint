@@ -89,6 +89,33 @@
   "reset!" {:symbol "flint_b_reset"}
   "meta" {:symbol "flint_b_meta"}
   "with-meta" {:symbol "flint_b_withmeta"}
+  "flint/sqrt" {:symbol "flint_b_m_sqrt"}
+  "flint/cbrt" {:symbol "flint_b_m_cbrt"}
+  "flint/exp" {:symbol "flint_b_m_exp"}
+  "flint/expm1" {:symbol "flint_b_m_expm1"}
+  "flint/log" {:symbol "flint_b_m_log"}
+  "flint/log10" {:symbol "flint_b_m_log10"}
+  "flint/log1p" {:symbol "flint_b_m_log1p"}
+  "flint/sin" {:symbol "flint_b_m_sin"}
+  "flint/cos" {:symbol "flint_b_m_cos"}
+  "flint/tan" {:symbol "flint_b_m_tan"}
+  "flint/asin" {:symbol "flint_b_m_asin"}
+  "flint/acos" {:symbol "flint_b_m_acos"}
+  "flint/atan" {:symbol "flint_b_m_atan"}
+  "flint/sinh" {:symbol "flint_b_m_sinh"}
+  "flint/cosh" {:symbol "flint_b_m_cosh"}
+  "flint/tanh" {:symbol "flint_b_m_tanh"}
+  "flint/floor" {:symbol "flint_b_m_floor"}
+  "flint/ceil" {:symbol "flint_b_m_ceil"}
+  "flint/rint" {:symbol "flint_b_m_rint"}
+  "flint/trunc" {:symbol "flint_b_m_trunc"}
+  "flint/pow" {:symbol "flint_b_m_pow"}
+  "flint/atan2" {:symbol "flint_b_m_atan2"}
+  "flint/hypot" {:symbol "flint_b_m_hypot"}
+  "flint/to-long" {:symbol "flint_b_tolong"}
+  "flint/signum" {:symbol "flint_b_m_signum"}
+  "flint/fabs" {:symbol "flint_b_m_fabs"}
+  "flint/copy-sign" {:symbol "flint_b_m_copysign"}
   "flint/apply" {:symbol "flint_b_apply"}
   "flint/lazy-seq" {:symbol "flint_b_lazyseq"}
   "flint/range3" {:symbol "flint_b_range3"}

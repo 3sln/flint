@@ -98,7 +98,34 @@
    "flint/lazy-seq" flint.rt/lazy-seq
    "flint/apply" flint.rt/apply
    "flint/range3" flint.rt/range3
-   "flint/array-map" flint.rt/array-map})
+   "flint/array-map" flint.rt/array-map
+   "flint/sqrt" flint.rt/sqrt
+   "flint/cbrt" flint.rt/cbrt
+   "flint/exp" flint.rt/exp
+   "flint/expm1" flint.rt/expm1
+   "flint/log" flint.rt/log
+   "flint/log10" flint.rt/log10
+   "flint/log1p" flint.rt/log1p
+   "flint/sin" flint.rt/sin
+   "flint/cos" flint.rt/cos
+   "flint/tan" flint.rt/tan
+   "flint/asin" flint.rt/asin
+   "flint/acos" flint.rt/acos
+   "flint/atan" flint.rt/atan
+   "flint/sinh" flint.rt/sinh
+   "flint/cosh" flint.rt/cosh
+   "flint/tanh" flint.rt/tanh
+   "flint/floor" flint.rt/floor
+   "flint/ceil" flint.rt/ceil
+   "flint/rint" flint.rt/rint
+   "flint/trunc" flint.rt/trunc
+   "flint/pow" flint.rt/pow
+   "flint/atan2" flint.rt/atan2
+   "flint/hypot" flint.rt/hypot
+   "flint/signum" flint.rt/signum
+   "flint/to-long" flint.rt/to-long
+   "flint/fabs" flint.rt/fabs
+   "flint/copy-sign" flint.rt/copy-sign})
 
 (defn lookup [name]
   (or (get table name)

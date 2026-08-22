@@ -354,9 +354,12 @@
 (defn parse-long [s] (let [v (flint.rt/str->num s)] (if (int? v) v nil)))
 (defn parse-double [s] (let [v (flint.rt/str->num s)] (if (number? v) (flint.rt/add v 0.0) nil)))
 
-(defn int [x] (if (int? x) x (flint.rt/quot x 1)))
+(defn long
+  "Truncate toward zero to a 64-bit integer, as Clojure's `long` does."
+  [x] (flint.rt/to-long x))
+(defn int [x] (flint.rt/to-long x))
 (defn double [x] (flint.rt/add x 0.0))
-(defn long [x] (int x))
+(defn num [x] x)
 
 (defn char [n] (flint.rt/from-code-point n))
 (defn int-of-char [c] (flint.rt/code-point-at c 0))

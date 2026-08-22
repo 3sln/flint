@@ -370,6 +370,159 @@ builtins! {
         let _ = n; let (v, m) = (arg(rt, a, 0), arg(rt, a, 1)); rt.with_meta(v, m)
     };
 
+    // --- clojure.math, over libm ---------------------------------------------
+    "flint/sqrt", flint_b_m_sqrt, b_m_sqrt, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::sqrt(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/cbrt", flint_b_m_cbrt, b_m_cbrt, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::cbrt(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/exp", flint_b_m_exp, b_m_exp, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::exp(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/expm1", flint_b_m_expm1, b_m_expm1, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::expm1(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/log", flint_b_m_log, b_m_log, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::log(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/log10", flint_b_m_log10, b_m_log10, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::log10(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/log1p", flint_b_m_log1p, b_m_log1p, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::log1p(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/sin", flint_b_m_sin, b_m_sin, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::sin(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/cos", flint_b_m_cos, b_m_cos, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::cos(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/tan", flint_b_m_tan, b_m_tan, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::tan(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/asin", flint_b_m_asin, b_m_asin, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::asin(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/acos", flint_b_m_acos, b_m_acos, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::acos(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/atan", flint_b_m_atan, b_m_atan, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::atan(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/sinh", flint_b_m_sinh, b_m_sinh, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::sinh(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/cosh", flint_b_m_cosh, b_m_cosh, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::cosh(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/tanh", flint_b_m_tanh, b_m_tanh, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::tanh(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/floor", flint_b_m_floor, b_m_floor, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::floor(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/ceil", flint_b_m_ceil, b_m_ceil, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::ceil(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/rint", flint_b_m_rint, b_m_rint, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::rint(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/trunc", flint_b_m_trunc, b_m_trunc, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::trunc(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/pow", flint_b_m_pow, b_m_pow, |rt, a, n| {
+        let _ = n; let (x, y) = (arg(rt, a, 0), arg(rt, a, 1));
+        if rt.is_number(x) && rt.is_number(y) {
+            Value::from_f64(crate::fmath::pow(rt.num_f64(x), rt.num_f64(y)))
+        } else { rt.throw_not_a_number(x, y) }
+    };
+    "flint/atan2", flint_b_m_atan2, b_m_atan2, |rt, a, n| {
+        let _ = n; let (x, y) = (arg(rt, a, 0), arg(rt, a, 1));
+        if rt.is_number(x) && rt.is_number(y) {
+            Value::from_f64(crate::fmath::atan2(rt.num_f64(x), rt.num_f64(y)))
+        } else { rt.throw_not_a_number(x, y) }
+    };
+    "flint/hypot", flint_b_m_hypot, b_m_hypot, |rt, a, n| {
+        let _ = n; let (x, y) = (arg(rt, a, 0), arg(rt, a, 1));
+        if rt.is_number(x) && rt.is_number(y) {
+            Value::from_f64(crate::fmath::hypot(rt.num_f64(x), rt.num_f64(y)))
+        } else { rt.throw_not_a_number(x, y) }
+    };
+    "flint/to-long", flint_b_tolong, b_tolong, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        match rt.as_i64(v) {
+            Some(x) => rt.integer(x),
+            None if v.is_double() => {
+                let d = crate::fmath::trunc(v.as_f64());
+                if d.is_finite() && d >= -9.223372036854776e18 && d <= 9.223372036854776e18 {
+                    rt.integer(d as i64)
+                } else {
+                    rt.throw_str("IllegalArgumentException", "value out of long range")
+                }
+            }
+            None => rt.throw_not_a_number(v, v),
+        }
+    };
+    "flint/signum", flint_b_m_signum, b_m_signum, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::signum(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/fabs", flint_b_m_fabs, b_m_fabs, |rt, a, n| {
+        let _ = n; let v = arg(rt, a, 0);
+        if rt.is_number(v) { Value::from_f64(crate::fmath::abs(rt.num_f64(v))) }
+        else { rt.throw_not_a_number(v, v) }
+    };
+    "flint/copy-sign", flint_b_m_copysign, b_m_copysign, |rt, a, n| {
+        let _ = n; let (x, y) = (arg(rt, a, 0), arg(rt, a, 1));
+        if rt.is_number(x) && rt.is_number(y) {
+            let (m, s) = (crate::fmath::abs(rt.num_f64(x)), rt.num_f64(y));
+            Value::from_f64(if s.is_sign_negative() { -m } else { m })
+        } else { rt.throw_not_a_number(x, y) }
+    };
+
     // --- calling back into the interpreter ------------------------------------
     "flint/apply", flint_b_apply, b_apply, |rt, a, n| {
         let _ = n;
