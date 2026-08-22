@@ -1,0 +1,89 @@
+#!/usr/bin/env bb
+;; Renders the per-namespace coverage tables that go in README.md, between the
+;; markers. test/manifest.clj regenerates and compares, so the README cannot
+;; drift from what flint actually ships.
+(require '[clojure.string :as str] '[babashka.fs :as fs] '[clojure.java.io :as io])
+(def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
+(def m (into (sorted-map) (read-string (slurp (io/file root "doc/manifest.edn")))))
+
+(def notes
+  "Why a namespace's absences are what they are. One line each, and only where
+  the list alone would not explain itself."
+  '{clojure.core
+    "Absent for a reason, by group: I/O (`print`, `slurp`, `read-line`, `*out*`);
+     concurrency (`future`, `agent`, `ref`, `promise`, `send`, `locking`, `deliver`);
+     mutable references beyond atoms (`ref`, `var-set`, `alter-var-root`, `binding`,
+     `with-redefs`); host interop (`class`, `instance?`, `proxy`, `bean`, `aget`,
+     `make-array`, every `*-array`); reflection and namespace surgery (`ns-publics`,
+     `resolve`, `intern`, `find-var`, `the-ns`); a compiler at runtime (`eval`,
+     `read-string`, `load-string`, `macroexpand`); nondeterminism (`rand`, `shuffle`,
+     `random-uuid`, `random-sample`); the numeric tower flint does not have
+     (`bigint`, `bigdec`, `ratio`, `numerator`, `+'`, `-'`, `*'`); protocols and
+     types (`defprotocol`, `deftype`, `defrecord`, `reify`, `extend`, `satisfies?`);
+     hierarchies (`derive`, `isa?`, `parents`, `prefer-method`); transducers
+     (`transduce`, `eduction`, `cat`, `completing`, `halt-when`, and the 1-arity
+     transducer forms of `map`/`filter`/`take`/...); and sorted collections
+     (`sorted-map`, `sorted-set`, `subseq`, `rsubseq`)."
+    clojure.math
+    "`ulp`, `nextAfter`, `nextUp`, `nextDown`, `IEEEremainder`, `getExponent`,
+     `scalb` and the `*Exact` integer functions are absent deliberately: they need
+     rounding-mode and exponent guarantees flint does not have, and the brief is
+     right that half-implementing them is worse than leaving them out. `random` is
+     absent because it is not pure."
+    clojure.edn
+    "`read` takes a stream; flint has no stream type. `read-string` is the whole
+     surface, plus `read-all` which flint adds for the same reason."
+    clojure.walk
+    "`macroexpand-all` needs a compiler at runtime, and a flint module carries
+     none. `postwalk-demo`/`prewalk-demo` print."})
+
+(defn fmt-names [names]
+  (if (empty? names) "--" (str "`" (str/join "` `" (sort names)) "`")))
+
+(def out (StringBuilder.))
+(defn emit [& xs] (.append out (str (apply str xs) "\n")))
+
+(emit "| namespace | vars | macros | missing vs Clojure | flint-only |")
+(emit "|---|---:|---:|---:|---:|")
+(doseq [[ns v] m]
+  (emit (format "| `%s` | %d | %d | %s | %s |"
+                ns (:count v) (count (:macros v))
+                (if (:compared-with v) (str (count (:absent v))) "n/a")
+                (if (:compared-with v) (str (count (:extra v))) "n/a"))))
+(emit "")
+(emit "Full lists, machine readable, in [`doc/manifest.edn`](doc/manifest.edn).")
+(emit "`test/manifest.clj` regenerates that file and fails if it differs, compiles a")
+(emit "program referencing every var it claims present, runs it, and expands every")
+(emit "macro it claims present. A false claim fails the build.")
+(emit "")
+
+(doseq [[ns v] m
+        :when (:compared-with v)]
+  (emit (format "#### `%s`" ns))
+  (emit "")
+  (when-let [n (notes ns)]
+    (emit (str/replace (str/trim (str/replace n #"\s+" " ")) #"; " ";\n") "")
+    (emit ""))
+  (when (and (seq (:absent v)) (not= 'clojure.core ns))
+    (emit "*Absent:* " (fmt-names (:absent v)))
+    (emit ""))
+  (when (seq (:extra v))
+    (emit "*Added by flint:* " (fmt-names (:extra v)))
+    (emit ""))
+  (when (= 'clojure.core ns)
+    (emit "*Absent:* " (count (:absent v)) " names -- see `doc/manifest.edn` for all of them.")
+    (emit "")))
+
+(def path (io/file root "README.md"))
+(def marker-start "<!-- BEGIN GENERATED COVERAGE -->")
+(def marker-end "<!-- END GENERATED COVERAGE -->")
+(def block (str marker-start "\n" (str out) marker-end))
+
+(if (and (.exists path) (str/includes? (slurp path) marker-start))
+  (let [src (slurp path)
+        before (subs src 0 (str/index-of src marker-start))
+        after (subs src (+ (str/index-of src marker-end) (count marker-end)))]
+    (spit path (str before block after))
+    (println "updated README.md coverage tables"))
+  (do (spit (io/file root "doc/coverage.md") block)
+      (println "README has no markers yet; wrote doc/coverage.md")))

@@ -1,0 +1,47 @@
+#!/bin/sh
+# Everything. Fails loudly; skips nothing.
+set -e
+cd "$(dirname "$0")/.."
+fail() { echo; echo "FAILED: $1"; exit 1; }
+
+echo "== rust: runtime unit tests and VM integration tests"
+cargo test -p flint-rt 2>&1 | grep -E "^(test result|error)" || fail "cargo test"
+cargo test -p flint-rt 2>&1 | grep -q "FAILED" && fail "cargo test" || true
+
+echo
+echo "== units: rebuild the wasm objects"
+./bin/build-units >/dev/null 2>&1 || fail "build-units"
+echo "  ok"
+
+echo
+echo "== reader"
+bb --classpath src test/reader_test.clj | tail -1
+
+echo
+echo "== conformance: 130 Clojure expressions, on flint"
+./bin/flint :src test :fn conform.runner/main :out out/conform.wasm >/dev/null
+node host/flint.mjs out/conform.wasm | tee /tmp/conform.out
+grep -q '^PASS' /tmp/conform.out || fail "conformance"
+
+echo
+echo "== conformance: the same expressions, under real Clojure"
+bb test/conform_vs_clojure.clj | tail -2
+
+echo
+echo "== end to end: hand-assembled images, linked and run"
+bb --classpath src test/e2e_link.clj | tail -1
+
+echo
+echo "== modularity: only reachable code ships"
+bb test/modularity.clj | tail -1
+
+echo
+echo "== manifest: the deficiency lists are true"
+bb test/manifest.clj | tail -1
+
+echo
+echo "== self-hosting fixpoint"
+bb test/selfhost.clj | tail -1
+
+echo
+echo "all green"

@@ -23,6 +23,14 @@
 
 (def manifest (read-string after))
 
+;; The README's coverage tables are generated from the same manifest, so they
+;; cannot drift either.
+(def readme-before (slurp "README.md"))
+(let [p (.start (ProcessBuilder. (into-array String ["./bin/readme-tables"])))]
+  (slurp (.getInputStream p)) (slurp (.getErrorStream p)) (.waitFor p))
+(check "README coverage tables are up to date" (= readme-before (slurp "README.md"))
+       "run bin/readme-tables and commit the result")
+
 ;; --- every claimed var is really there --------------------------------------
 
 (def tmpdir (fs/create-temp-dir))
