@@ -86,21 +86,29 @@ that matters is "does it fit in a Worker's CPU budget", not "is it faster".
 Report module size per compiled artifact too: construe stores one per workflow
 per version, content-addressed, so size is storage that accumulates.
 
-### 5. Heavy documents through a port — what the port design is FOR
+### 5. Heavy documents — memory, not throughput (see 0008)
 
-Construe's extraction kind takes a document: pages, potentially many MB. Construe
-intends to **expose the document as an external resource** rather than pass it as
-one value.
+Construe's extraction kind takes a document of potentially many MB, and
+**memory is the bottleneck**. 0008 replaces the paging idea: structure is loaded
+once into flint memory, content is fetched only when something asks for it.
 
-Measure both, because the comparison is the justification:
+So the number that matters is **peak resident memory as a function of document
+size and of the fraction actually read** — not bytes per second.
 
-- the whole document passed as one argument — peak memory, time to first output;
-- the document pulled page by page through a port — per-page cost, bytes/sec,
-  peak memory.
+Measure, across documents of very different sizes with the same access pattern:
 
-And vary the batch size on the drain, since 0006 asserts that batching amortises
-marshalling. **Report per-message cost at batch 1 and batch 1000.** If the curve
-is flat, the batching claim is wrong and should be withdrawn.
+- peak memory when a script reads the structure and touches 1% of the content —
+  it should be roughly flat as documents grow, and if it is not, something is
+  retaining;
+- the same for 100%, which is the honest worst case and the upper bound on the
+  claim;
+- **port traffic during a pure structure walk, which must be zero**;
+- a batched fetch of N nodes against N single fetches, since 0008 says locality
+  is what makes batching possible and this is the number that proves it.
+
+Also report per-message cost at batch 1 and batch 1000, which is 0006's claim
+that batching amortises marshalling. **If that curve is flat, withdraw the
+claim.**
 
 ### 6. Suggest / prefix scan — construe's own unmeasured number
 
