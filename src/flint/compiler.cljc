@@ -104,7 +104,11 @@
                   (symbol "clojure.core" n))
                 (when (contains? macros/bootstrap (symbol n))
                   (symbol "clojure.core" n)))))
-        st (reader/reader src {:file file :features #{:clj :flint} :resolve resolve-hook})
+        st (reader/reader src {:file file                                ;; Not #{:clj}: flint is not the JVM, and a
+                               ;; :clj branch here would be host interop we
+                               ;; cannot compile. Ported code needs a :flint or
+                               ;; :default branch -- said plainly in the README.
+                               :features #{:flint} :resolve resolve-hook})
         _ (vswap! cc assoc-in [:namespaces nsname] (get-in @cc [:namespaces nsname] {}))
         forms (loop [acc []]
                 (let [f (reader/read-form st)]

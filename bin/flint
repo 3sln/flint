@@ -30,15 +30,21 @@
                 [".cljc" ".clj"]))
         dirs))
 
+(def virtual-namespaces
+  ;; flint.rt is not a namespace you can load: the analyzer turns flint.rt/x into
+  ;; a direct call into the wasm table. src/flint/rt.cljc exists only so the same
+  ;; source runs on a host.
+  '#{flint.rt})
+
 (defn collect
   "Read namespaces from `entry-ns` outwards, returning [{ns {:src :file}} order]."
   [dirs roots]
   (loop [todo (vec roots) sources {} order []]
     (if-let [n (first todo)]
-      (if (contains? sources n)
+      (if (or (contains? sources n) (contains? virtual-namespaces n))
         (recur (rest todo) sources order)
         (if-let [s (find-source dirs n)]
-          (let [forms (try (reader/read-all (:src s) {:file (:file s) :features #{:clj :flint}})
+          (let [forms (try (reader/read-all (:src s) {:file (:file s) :features #{:flint}})
                            (catch Exception e
                              (println "read error in" (:file s) ":" (ex-message e))
                              (System/exit 1)))
@@ -55,7 +61,7 @@
 (defn topo-order [sources]
   ;; Dependencies before dependents; clojure.core always first.
   (let [deps (into {} (for [[n {:keys [src file]}] sources]
-                        [n (let [forms (reader/read-all src {:file file :features #{:clj :flint}})
+                        [n (let [forms (reader/read-all src {:file file :features #{:flint}})
                                  nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
                              (set (when nsform (compiler/ns-requires nsform))))]))]
     (loop [done [] seen #{} pending (vec (keys deps))]

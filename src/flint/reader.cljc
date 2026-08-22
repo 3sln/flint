@@ -9,26 +9,36 @@
 
   Returns ordinary Clojure data, with `:line`/`:column`/`:file` metadata on
   every form that can carry it."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [flint.rt]))
 
-(defn- make-state [^String s file]
+;; Characters are one-character strings throughout: flint has no char type, and
+;; using strings here is what lets the reader read itself.
+(def NL "\n")
+
+(defn ch
+  "The one-character string at index `i`. Goes through `flint.rt/nth` rather than
+  `nth` on purpose: on a host `nth` of a string yields a Character, and every
+  comparison against a one-character string below would silently be false."
+  [s i]
+  (flint.rt/nth s i))
+
+(defn- make-state [s file]
   (volatile! {:s s :i 0 :n (count s) :line 1 :col 1 :file file
-              :gensyms nil :features #{:clj :flint} :ns nil :aliases {}}))
+              :gensyms nil :features #{:flint} :ns nil :aliases {}}))
 
 (defn- peek-ch [st]
-  (let [{:keys [^String s i n]} @st]
-    (when (< i n) (.charAt s i))))
+  (let [m @st] (when (< (:i m) (:n m)) (ch (:s m) (:i m)))))
 
 (defn- peek2 [st]
-  (let [{:keys [^String s i n]} @st]
-    (when (< (inc i) n) (.charAt s (inc i)))))
+  (let [m @st] (when (< (inc (:i m)) (:n m)) (ch (:s m) (inc (:i m))))))
 
 (defn- next-ch! [st]
-  (let [{:keys [^String s i n]} @st]
-    (when (< i n)
-      (let [c (.charAt s i)]
+  (let [m @st i (:i m)]
+    (when (< i (:n m))
+      (let [c (ch (:s m) i)]
         (vswap! st (fn [m]
-                     (if (= c \newline)
+                     (if (= c NL)
                        (assoc m :i (inc i) :line (inc (:line m)) :col 1)
                        (assoc m :i (inc i) :col (inc (:col m))))))
         c))))
@@ -39,10 +49,10 @@
                   (merge {:type :reader :line (:line @st) :column (:col @st)
                           :file (:file @st)} data))))
 
-(def ^:private whitespace #{\space \tab \newline \return \formfeed \,})
+(def ^:private whitespace #{" " "\t" "\n" "\r" "\f" ","})
 ;; Clojure's `isTerminatingMacro` excludes #, ' and %, which is why `acc'` and
 ;; `x#` and `%1` are single tokens.
-(def ^:private terminating #{\" \; \@ \^ \` \~ \( \) \[ \] \{ \} \\})
+(def ^:private terminating #{"\"" ";" "@" "^" "`" "~" "(" ")" "[" "]" "{" "}" "\\"})
 
 (defn- skip-ws! [st]
   (loop []
@@ -50,67 +60,106 @@
       (cond
         (nil? c) nil
         (whitespace c) (do (next-ch! st) (recur))
-        (= c \;) (do (loop [] (let [c (next-ch! st)]
-                                (when (and c (not= c \newline)) (recur))))
-                     (recur))
+        (= c ";") (do (loop [] (let [c (next-ch! st)]
+                                 (when (and c (not= c NL)) (recur))))
+                      (recur))
         :else nil))))
 
 (declare read-form read-form* macros)
 
+(defn meta-able?
+  "Which values can carry metadata. Numbers, strings and keywords cannot, here
+  or in Clojure."
+  [v]
+  (or (symbol? v) (vector? v) (map? v) (set? v) (seq? v) (list? v)))
+
+
 (def ^:private EOF ::eof)
 
 (defn- read-token [st]
-  (loop [acc (StringBuilder.)]
+  (loop [acc []]
     (let [c (peek-ch st)]
       (if (or (nil? c) (whitespace c) (terminating c))
-        (str acc)
-        (do (next-ch! st) (recur (.append acc c)))))))
+        (flint.rt/str-join acc)
+        (do (next-ch! st) (recur (conj acc c)))))))
 
 ;; ------------------------------------------------------------------ numbers
 
-(def ^:private int-re #"^([-+]?)(?:(0)|([1-9][0-9]*)|0[xX]([0-9A-Fa-f]+)|0([0-7]+)|([1-9][0-9]?)[rR]([0-9A-Za-z]+))$")
-(def ^:private float-re #"^([-+]?[0-9]+(\.[0-9]*)?([eE][-+]?[0-9]+)?)(M)?$")
+;; Numbers are recognised by hand rather than by regex. The reader has to work
+;; before `flint.regex` does -- the regex engine is itself compiled by this
+;; reader -- and a digit scan is clearer than the pattern it replaces.
 
-(defn- parse-number [^String t]
-  (cond
-    (re-matches #"^[-+]?[0-9]+$" t) (parse-long t)
-    (re-matches #"^[-+]?0[xX][0-9A-Fa-f]+$" t)
-    (let [neg? (str/starts-with? t "-")
-          body (subs t (if (or neg? (str/starts-with? t "+")) 3 2))
-          v #?(:clj (Long/parseLong body 16) :cljs (js/parseInt body 16))]
-      (if neg? (- v) v))
-    (re-matches #"^[-+]?[0-9]+N$" t) (parse-long (subs t 0 (dec (count t))))
-    (re-matches #"^[-+]?[0-9]+(\.[0-9]*)?([eE][-+]?[0-9]+)?M?$" t)
-    (parse-double (str/replace t #"M$" ""))
-    (re-matches #"^[-+]?\.[0-9]+([eE][-+]?[0-9]+)?M?$" t)
-    (parse-double (str/replace t #"M$" ""))
-    :else nil))
+(defn- digit? [c] (and (some? c) (<= 48 (flint.rt/code-point-at c 0) 57)))
+(defn- hex-digit-value [c]
+  (let [v (flint.rt/code-point-at c 0)]
+    (cond (and (>= v 48) (<= v 57)) (- v 48)
+          (and (>= v 97) (<= v 102)) (- v 87)
+          (and (>= v 65) (<= v 70)) (- v 55)
+          :else nil)))
+
+(defn parse-int-radix [s radix]
+  (loop [i 0 acc 0]
+    (if (>= i (count s))
+      (when (> (count s) 0) acc)
+      (let [d (hex-digit-value (ch s i))]
+        (when (and (some? d) (< d radix))
+          (recur (inc i) (+ (* acc radix) d)))))))
+
+(defn- parse-number [t]
+  (let [n (count t)]
+    (when (> n 0)
+      (let [c0 (ch t 0)
+            signed? (or (= c0 "-") (= c0 "+"))
+            neg? (= c0 "-")
+            body (if signed? (subs t 1) t)
+            bn (count body)]
+        (when (and (> bn 0) (digit? (ch body 0)))
+          (cond
+            ;; hex
+            (and (> bn 2) (= "0" (ch body 0))
+                 (or (= "x" (ch body 1)) (= "X" (ch body 1))))
+            (when-let [v (parse-int-radix (subs body 2) 16)]
+              (if neg? (- v) v))
+
+            :else
+            (let [body (if (and (> bn 0) (= "N" (ch body (dec bn)))) (subs body 0 (dec bn)) body)
+                  body (if (and (> (count body) 0) (= "M" (ch body (dec (count body)))))
+                         (subs body 0 (dec (count body))) body)
+                  ;; integer if every character is a digit
+                  int? (loop [i 0] (cond (>= i (count body)) true
+                                         (digit? (ch body i)) (recur (inc i))
+                                         :else false))]
+              (if int?
+                (let [v (parse-int-radix body 10)] (if neg? (- v) v))
+                (let [v (flint.rt/str->num (if neg? (flint.rt/str2 "-" body) body))]
+                  (when (number? v) (+ 0.0 v)))))))))))
 
 ;; ------------------------------------------------------------------ strings
 
 (defn- read-escape [st]
   (let [c (next-ch! st)]
-    (case c
-      \t \tab \r \return \n \newline \\ \\ \" \" \b \backspace \f \formfeed
-      \u (let [hex (str (next-ch! st) (next-ch! st) (next-ch! st) (next-ch! st))]
-           (char #?(:clj (Integer/parseInt hex 16) :cljs (js/parseInt hex 16))))
-      (if (and c (<= (int \0) (int c) (int \7)))
-        (loop [acc (str c) k 1]
-          (let [p (peek-ch st)]
-            (if (and (< k 3) p (<= (int \0) (int p) (int \7)))
-              (do (next-ch! st) (recur (str acc p) (inc k)))
-              (char #?(:clj (Integer/parseInt acc 8) :cljs (js/parseInt acc 8))))))
-        (err st (str "unsupported escape \\" c))))))
+    (cond
+      (= c "t") "\t" (= c "r") "\r" (= c "n") "\n"
+      (= c "\\") "\\" (= c "\"") "\"" (= c "b") "\b" (= c "f") "\f"
+      (= c "u") (let [hex (flint.rt/str-join [(next-ch! st) (next-ch! st) (next-ch! st) (next-ch! st)])]
+                  (flint.rt/from-code-point (parse-int-radix hex 16)))
+      (and (some? c) (<= 48 (flint.rt/code-point-at c 0) 55))
+      (loop [acc c k 1]
+        (let [p (peek-ch st)]
+          (if (and (< k 3) (some? p) (<= 48 (flint.rt/code-point-at p 0) 55))
+            (do (next-ch! st) (recur (flint.rt/str2 acc p) (inc k)))
+            (flint.rt/from-code-point (parse-int-radix acc 8)))))
+      :else (err st (str "unsupported escape \\" c)))))
 
 (defn- read-string* [st]
   (next-ch! st)                                              ; opening quote
-  (loop [acc (StringBuilder.)]
+  (loop [acc []]
     (let [c (next-ch! st)]
       (cond
         (nil? c) (err st "unterminated string")
-        (= c \") (str acc)
-        (= c \\) (recur (.append acc (read-escape st)))
-        :else (recur (.append acc c))))))
+        (= c "\"") (flint.rt/str-join acc)
+        (= c "\\") (recur (conj acc (read-escape st)))
+        :else (recur (conj acc c))))))
 
 ;; flint has no char type: a char is a one-character string (see the value
 ;; encoding in the README -- every character of Unicode fits inline in a Value).
@@ -128,10 +177,8 @@
       (cond
         (= 1 (count tok)) tok
         (named-chars tok) (named-chars tok)
-        (str/starts-with? tok "u") (str (char #?(:clj (Integer/parseInt (subs tok 1) 16)
-                                                 :cljs (js/parseInt (subs tok 1) 16))))
-        (str/starts-with? tok "o") (str (char #?(:clj (Integer/parseInt (subs tok 1) 8)
-                                                 :cljs (js/parseInt (subs tok 1) 8))))
+        (str/starts-with? tok "u") (flint.rt/from-code-point (parse-int-radix (subs tok 1) 16))
+        (str/starts-with? tok "o") (flint.rt/from-code-point (parse-int-radix (subs tok 1) 8))
         :else (err st (str "unknown character literal \\" tok))))))
 
 ;; --------------------------------------------------------------- collections
@@ -236,25 +283,29 @@
             :else (err st "metadata must be a symbol, keyword, string or map"))
         _ (skip-ws! st)
         target (read-form* st)]
-    (if #?(:clj (instance? clojure.lang.IObj target) :cljs (satisfies? IWithMeta target))
-      (vary-meta target merge m)
-      target)))
+    (if (meta-able? target) (with-meta target (merge (meta target) m)) target)))
 
 (defn- read-regex [st]
   (next-ch! st)                                              ; opening quote
-  (loop [acc (StringBuilder.)]
+  (loop [acc []]
     (let [c (next-ch! st)]
       (cond
         (nil? c) (err st "unterminated regex")
-        (= c \") {:flint/regex (str acc)}
-        (= c \\) (let [d (next-ch! st)] (recur (.append (.append acc c) d)))
-        :else (recur (.append acc c))))))
+        (= c "\"") {:flint/regex (flint.rt/str-join acc)}
+        (= c "\\") (let [d (next-ch! st)] (recur (conj acc c d)))
+        :else (recur (conj acc c))))))
+
+(defn- all-digits? [s]
+  (and (> (count s) 0)
+       (loop [i 0] (cond (>= i (count s)) true
+                         (digit? (ch s i)) (recur (inc i))
+                         :else false))))
 
 (defn- read-arg-fn
   "#(...) -- rewritten to (fn* [p1 p2 ...] body) with the arity implied by the
   highest %n used."
   [st]
-  (let [body (read-delimited st \))
+  (let [body (read-delimited st ")")
         maxn (volatile! 0)
         rest? (volatile! false)
         walk (fn walk [f]
@@ -264,7 +315,7 @@
                    (cond
                      (= n "%") (do (vswap! maxn max 1) (symbol "p1__flint#"))
                      (= n "%&") (do (vreset! rest? true) (symbol "prest__flint#"))
-                     (and (str/starts-with? n "%") (re-matches #"%[0-9]+" n))
+                     (and (str/starts-with? n "%") (all-digits? (subs n 1)))
                      (let [k (parse-long (subs n 1))]
                        (vswap! maxn max k)
                        (symbol (str "p" k "__flint#")))
@@ -285,8 +336,8 @@
   (next-ch! st)                                              ; ?
   (when splicing? (next-ch! st))                             ; @
   (skip-ws! st)
-  (when-not (= \( (peek-ch st)) (err st "reader conditional wants a list"))
-  (let [clauses (read-delimited st \))
+  (when-not (= "(" (peek-ch st)) (err st "reader conditional wants a list"))
+  (let [clauses (read-delimited st ")")
         features (:features @st)]
     (loop [[k v & more] clauses]
       (cond
@@ -298,30 +349,30 @@
 (defn- read-dispatch [st]
   (next-ch! st)                                              ; #
   (let [c (peek-ch st)]
-    (case c
-      \{ (set (read-delimited st \}))
-      \( (read-arg-fn st)
-      \" (read-regex st)
-      \' (do (next-ch! st) (list 'var (read-form* st)))
-      \_ (do (next-ch! st) (read-form* st) EOF)
-      \? (read-cond st (= \@ (peek2 st)))
-      \# (do (next-ch! st)
-             (let [t (read-token st)]
-               (case t
-                 "Inf" ##Inf "-Inf" ##-Inf "NaN" ##NaN
-                 (err st (str "unknown ## literal: " t)))))
-      \: (do (next-ch! st)
-             (let [m (read-form* st)]
-               (if (map? m) m (err st "#: wants a map"))))
-      (if (or (nil? c) (whitespace c))
-        (err st "unexpected #")
-        ;; tagged literal
-        (let [tag (read-form* st)
-              _ (skip-ws! st)
-              v (read-form* st)]
-          (if (symbol? tag)
-            {:flint/tagged tag :flint/value v}
-            (err st "reader tag must be a symbol")))))))
+    (cond
+      (= c "{") (set (read-delimited st "}"))
+      (= c "(") (read-arg-fn st)
+      (= c "\"") (read-regex st)
+      (= c "'") (do (next-ch! st) (list 'var (read-form* st)))
+      (= c "_") (do (next-ch! st) (read-form* st) EOF)
+      (= c "?") (read-cond st (= "@" (peek2 st)))
+      (= c "#") (do (next-ch! st)
+                    (let [t (read-token st)]
+                      (cond (= t "Inf") ##Inf
+                            (= t "-Inf") ##-Inf
+                            (= t "NaN") ##NaN
+                            :else (err st (str "unknown ## literal: " t)))))
+      (= c ":") (do (next-ch! st)
+                    (let [m (read-form* st)]
+                      (if (map? m) m (err st "#: wants a map"))))
+      (or (nil? c) (whitespace c)) (err st "unexpected #")
+      :else
+      (let [tag (read-form* st)
+            _ (skip-ws! st)
+            v (read-form* st)]
+        (if (symbol? tag)
+          {:flint/tagged tag :flint/value v}
+          (err st "reader tag must be a symbol"))))))
 
 (defn- read-symbolic [st]
   (let [tok (read-token st)]
@@ -357,8 +408,8 @@
               (symbol tok)))))))
 
 (defn- with-pos [st line col v]
-  (if #?(:clj (instance? clojure.lang.IObj v) :cljs (satisfies? IWithMeta v))
-    (vary-meta v merge {:line line :column col :file (:file @st)})
+  (if (meta-able? v)
+    (with-meta v (merge (meta v) {:line line :column col :file (:file @st)}))
     v))
 
 (defn- read-form* [st]
@@ -367,33 +418,34 @@
         c (peek-ch st)]
     (if (nil? c)
       EOF
-      (let [v (case c
-                \( (with-pos st line col (apply list (read-delimited st \))))
-                \[ (read-delimited st \])
-                \{ (let [kvs (read-delimited st \})]
-                     (when (odd? (count kvs)) (err st "map literal needs an even number of forms"))
-                     (apply array-map kvs))
-                \) (err st "unexpected )")
-                \] (err st "unexpected ]")
-                \} (err st "unexpected }")
-                \" (read-string* st)
-                \\ (read-char* st)
-                \' (do (next-ch! st) (list 'quote (read-form* st)))
-                \@ (do (next-ch! st) (list 'clojure.core/deref (read-form* st)))
-                \^ (read-meta st)
-                \` (do (next-ch! st)
-                       (vswap! st assoc :gensyms (volatile! {}))
-                       (let [f (read-form* st)
-                             r (syntax-quote st f)]
-                         (vswap! st assoc :gensyms nil)
-                         r))
-                \~ (do (next-ch! st)
-                       (if (= \@ (peek-ch st))
-                         (do (next-ch! st)
-                             (list 'clojure.core/unquote-splicing (read-form* st)))
-                         (list 'clojure.core/unquote (read-form* st))))
-                \# (read-dispatch st)
-                (read-symbolic st))]
+      (let [v (cond
+                (= c "(") (with-pos st line col (apply list (read-delimited st ")")))
+                (= c "[") (read-delimited st "]")
+                (= c "{") (let [kvs (read-delimited st "}")]
+                            (when (odd? (count kvs))
+                              (err st "map literal needs an even number of forms"))
+                            (apply hash-map kvs))
+                (= c ")") (err st "unexpected )")
+                (= c "]") (err st "unexpected ]")
+                (= c "}") (err st "unexpected }")
+                (= c "\"") (read-string* st)
+                (= c "\\") (read-char* st)
+                (= c "'") (do (next-ch! st) (list 'quote (read-form* st)))
+                (= c "@") (do (next-ch! st) (list 'clojure.core/deref (read-form* st)))
+                (= c "^") (read-meta st)
+                (= c "`") (do (next-ch! st)
+                              (vswap! st assoc :gensyms (volatile! {}))
+                              (let [f (read-form* st)
+                                    r (syntax-quote st f)]
+                                (vswap! st assoc :gensyms nil)
+                                r))
+                (= c "~") (do (next-ch! st)
+                              (if (= "@" (peek-ch st))
+                                (do (next-ch! st)
+                                    (list 'clojure.core/unquote-splicing (read-form* st)))
+                                (list 'clojure.core/unquote (read-form* st))))
+                (= c "#") (read-dispatch st)
+                :else (read-symbolic st))]
         (if (and (seq? v) (not= v EOF))
           (with-pos st line col v)
           v)))))
