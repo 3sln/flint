@@ -1179,6 +1179,27 @@ impl Rt {
     pub fn hash_map(&mut self, m: Value) -> u32 {
         self.hash_map_hash(m)
     }
+
+    // --- the trie, exposed for transients ----------------------------------
+
+    pub fn champ_find(&mut self, root: Value, h: u32, key: Value) -> Value {
+        self.node_find(root, 0, h, key)
+    }
+    pub fn champ_assoc(&mut self, root: Value, h: u32, k: Value, v: Value, edit: Value) -> Value {
+        self.node_assoc(root, 0, h, k, v, edit)
+    }
+    pub fn champ_dissoc(&mut self, root: Value, h: u32, k: Value, edit: Value) -> Value {
+        self.node_dissoc(root, 0, h, k, edit)
+    }
+    pub fn champ_wrap(&mut self, cnt: u32, root: Value) -> Value {
+        self.new_hash_map(cnt, root, NIL)
+    }
+    pub fn array_map_to_hash(&mut self, m: Value) -> Value {
+        self.promote(m)
+    }
+    pub fn champ_empty_root(&mut self) -> Value {
+        self.bn_new(0, 0, NIL)
+    }
 }
 
 #[cfg(test)]

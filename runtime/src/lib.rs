@@ -13,11 +13,14 @@ extern crate alloc;
 #[cfg(not(target_arch = "wasm32"))]
 extern crate std;
 
+pub mod builtins;
+pub mod coll;
 pub mod eq;
 pub mod err;
 pub mod gc;
 pub mod hash;
 pub mod mem;
+pub mod image;
 pub mod map;
 pub mod num;
 pub mod obj;

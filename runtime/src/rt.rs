@@ -30,6 +30,18 @@ pub struct Rt {
     /// The in-flight thrown value, or `nil`. Native builtins signal failure by
     /// setting this and returning `nil`; the VM checks it after every call.
     pub thrown: Value,
+    /// The loaded program: bytecode, function table, native imports.
+    pub image: crate::vm::Image,
+    /// Interpreter frames. Clojure recursion uses this, not the Rust stack, so
+    /// deep recursion fails with a catchable StackOverflowError instead of
+    /// smashing the wasm stack.
+    pub frames: alloc::vec::Vec<crate::vm::Frame>,
+    pub handlers: alloc::vec::Vec<crate::vm::Handler>,
+    /// Host-only builtin registry. On wasm the builtins are reached solely
+    /// through the wasm table, which is what lets `--gc-sections` drop the ones
+    /// a program never calls; a static table here would keep them all alive.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub host_natives: alloc::vec::Vec<crate::vm::NativeFn>,
     /// Out-parameter for CHAMP insert/remove: did the entry count change?
     /// A scratch field rather than a tuple return, because every one of those
     /// returns would otherwise have to be threaded through the rooting dance.
@@ -55,8 +67,17 @@ impl Rt {
     }
 
     pub fn with_heap(nursery: u32, max: u32) -> Rt {
-        let mut rt =
-            Rt { gc: Gc::new(nursery, max), roots: Roots::new(), thrown: NIL, champ_added: false };
+        let mut rt = Rt {
+            gc: Gc::new(nursery, max),
+            roots: Roots::new(),
+            thrown: NIL,
+            image: Default::default(),
+            frames: alloc::vec::Vec::new(),
+            handlers: alloc::vec::Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            host_natives: alloc::vec::Vec::new(),
+            champ_added: false,
+        };
         rt.roots.singletons = alloc::vec![NIL; SING_COUNT];
         rt.init_singletons();
         rt
