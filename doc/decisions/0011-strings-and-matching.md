@@ -71,9 +71,34 @@ lookahead, lookbehind, backreferences and named groups. That is roughly RE2's
 subset, and it is the subset that can be matched without backtracking at all.
 
 **But the implementation is a backtracker**, and that is the actual hazard: even
-with no backreferences, `(a+)+b` is exponential in a backtracking engine. So the
-275× measurement and the ReDoS exposure both come from the *engine*, not from the
-syntax.
+with no backreferences, `(a+)+b` is exponential in a backtracking engine.
+
+### Correcting myself: the 275× is NOT one problem, it is two
+
+I first wrote that the 275× and the ReDoS exposure both come from the engine.
+That was too quick. Decomposing it against the measured numbers:
+
+| | flint | JS | ratio |
+|---|---:|---:|---:|
+| `split` on a **literal** | 4 472 ns | 249 ns | **18×** |
+| `split` on a **regex** | 164 425 ns | 598 ns | **275×** |
+
+The literal case has no regex in it at all, so **18× is the interpretation tax** —
+what any cljc code pays running as bytecode. If the engine were as efficient
+per character as a native one, the regex case would cost about `598 × 18 ≈
+10 700 ns`. It costs 164 425.
+
+So the 275× is roughly **18× interpretation × 15× engine inefficiency**, and they
+are separate problems with separate fixes:
+
+- the **15×** is recoverable in cljc — it is per-character overhead in this
+  engine, and a better one claws it back;
+- the **18×** is not. It is the cost of being interpreted, and only native code
+  removes it.
+
+Which means a Pike VM in cljc fixes ReDoS and buys maybe an order of magnitude —
+landing somewhere near 25–30× rather than 275×. **It does not make regex fast.**
+Only a native unit does that.
 
 **So: keep the syntax, replace the engine with a Pike VM / Thompson NFA.** Linear
 time by construction, no catastrophic backtracking possible, and:
@@ -100,7 +125,51 @@ ported program that uses them, to solve a problem the engine swap already solves
 
 Offer both. Do not make people learn a new notation to split on a comma.
 
-## 5. The rule that keeps hosts honest
+## 5. So: do we write a performant engine for every runtime? No — we write none.
+
+The honest answer to "can we feasibly build a performant regex for each target"
+is that we should not try. Three tiers, and only one of them is new code:
+
+**wasm — adopt Rust's `regex` crate as an optional unit.** Days of work, not
+weeks: it is already a Thompson NFA over exactly our subset, so it is linear
+time, ReDoS-proof, and fast. This is where flint's regex problem actually is, and
+it is the cheapest fix available.
+
+**JVM, CLR, JS — translate the pattern to the host engine.** Our subset (no
+backreferences, no lookaround) is a *subset* of what `Pattern`, `Regex` and
+`RegExp` all accept, so a flint pattern is already a valid pattern for each of
+them. What is needed is not an engine but a **normalisation pass**, because the
+common syntax is where they quietly disagree:
+
+- `\w` `\d` `\s` — ASCII-only in JS, Unicode by default in .NET, configurable
+  in Java. **Expand them ourselves into explicit character classes** and the
+  divergence disappears at the source.
+- `$` before a trailing newline, `.` versus newline, Unicode case folding — pin
+  each, or reject the construct.
+
+That is a few hundred lines shared across every delegating host, against
+thousands per hand-written engine.
+
+**Everywhere — keep the cljc engine as the reference.** It does not need to be
+fast. It needs to be *right*, to define what the suite asserts, and to be
+available on a host with no acceptable native engine.
+
+### The trade this creates, which must be documented not hidden
+
+Java, .NET and JS regex engines **backtrack**. So delegating buys speed and gives
+back the bound: on those hosts a pathological pattern is unbounded again, and the
+gas accounting in `0009` cannot see inside a host `Regex` call.
+
+That is a real trade, not a detail:
+
+- **`:regex/engine :native`** — fast, and unbounded on backtracking hosts.
+- **`:regex/engine :reference`** — the cljc Pike VM: slow, identical everywhere,
+  and bounded by the gas counter.
+
+**Default to bounded wherever untrusted code runs.** For construe that is the
+gates, and the gates are on the wasm host where Rust's engine gives both.
+
+## 6. The rule that keeps hosts honest
 
 Semantics are defined by **the cljc reference implementation plus the conformance
 suite**. A host may substitute a native implementation *only if it passes*. That
