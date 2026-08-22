@@ -101,24 +101,59 @@ coercion is genuinely wanted — keyword map keys to strings is the common one �
 make it an explicit option on the port, off by default, exactly the way
 `clojure.data.json` makes `:key-fn` the caller's decision.
 
-## Lifetime: a host-held port is ROOTED by the host
+## Lifetime: two ends, two lifetimes, and a safety net
 
-The request was for the runtime to signal when a port is collected or closed.
-Collection is the part to design away rather than signal.
+The request was for the runtime to signal when a port is collected or closed. My
+first answer was that a host-held port is rooted by the host end and lives until
+the host closes it — which the owner correctly called too optimistic, because it
+left **explicit `close` as the only way a script can say it is finished**. That is
+the `free()` problem: the common case is not a script that forgets, it is a script
+that throws, or returns having simply dropped its last reference.
 
-**A port with a host end is reachable from outside the runtime.** If the
-collector may take it because no flint value refers to it any more, every host
-handle becomes a potential use-after-free across the boundary. So the host end is
-a root: the port survives until the host closes it, full stop.
+**The two ends have separate lifetimes.**
 
-That leaves one honest event, which the queue already carries: **the flint end
-closed** (`{:kind :closed :port p}`). The host learns its peer is gone, and
-closes its own end when ready. No collection race, and nothing to signal about
-the collector at all.
+- **The host end is a strong root.** The port object cannot be collected while the
+  host holds a handle to it. This is the part that must not change: without it,
+  every host handle is a use-after-free waiting for a collection.
+- **The flint end is ordinary reachable memory.** When the collector finds it
+  unreachable, that is semantically identical to the script having called
+  `close` — so the runtime emits `{:kind :closed :port p}` on the script's
+  behalf. The port object survives, half-closed, until the host closes its end.
 
-Closing from the flint side must also wake anything parked on that port, with a
-clean error rather than a hang.
+The machinery already exists: the collector tracks weak references today
+(`weak_interns_drop_dead_entries_and_forward_live_ones`). This is that, applied
+to the flint end of a port.
 
+### Explicit close stays the good path
+
+Collection-triggered close is a **safety net, not the mechanism**. It is
+deterministic — the same program with the same inputs allocates the same way and
+collects at the same points — but it is not *prompt*, and a host holding a socket
+open because a script has not been collected yet is a real cost.
+
+So provide the scoped form, and say in the README that it is the good path:
+
+```clojure
+(with-open [p (open "the-thing")]
+  ...)                                ; closes on the way out, including on throw
+```
+
+Program exit closes every flint end and drains the queue, so a host never has to
+guess whether more is coming.
+
+### And the same mechanism buys deadlock detection
+
+A pair created by `channel` has no host end at all. If both ends become
+unreachable the whole thing collects normally and nobody needs telling.
+
+But consider a thread parked on a receive whose **peer end has become
+unreachable**. That receive can never succeed. Today that is a hang; with the
+collector already computing reachability, it is detectable — **wake the thread
+with an error rather than leaving it parked forever.**
+
+That is a genuine liveness property and it falls out of work already being done.
+A parked thread is a root, so a port a thread is parked ON is never itself
+collected — only its peer can vanish, which is exactly the case worth catching.
 ## What must be true at the end
 
 - A stale or duplicated continue is **rejected by generation**, tested.
@@ -126,7 +161,12 @@ clean error rather than a hang.
 - One pump drains many messages; a benchmark reports per-message cost at a batch
   size of 1 and of 1000, so "batched" is a number.
 - Sending an unrepresentable value to a JSON port **fails, naming the value**.
-- A host-held port is never collected; the flint end closing raises `:closed`
-  and wakes anything parked on it.
+- A host-held port is never collected while the host holds it.
+- **Dropping the last flint reference raises `:closed` without an explicit
+  `close`** — the case the first version of this decision got wrong.
+- `with-open` closes on the normal path and on a throw.
+- A thread parked on a port whose peer became unreachable is **woken with an
+  error rather than hanging**.
+- Program exit closes every flint end and drains the queue.
 - The three formats round-trip what they claim to, and the README says exactly
   what JSON cannot carry.
