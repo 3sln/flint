@@ -74,6 +74,7 @@
   "reset!" {:symbol "flint_b_reset"}
   "meta" {:symbol "flint_b_meta"}
   "with-meta" {:symbol "flint_b_withmeta"}
+  "flint/apply" {:symbol "flint_b_apply"}
   "flint/lazy-seq" {:symbol "flint_b_lazyseq"}
   "flint/range3" {:symbol "flint_b_range3"}
   "flint/gc-stats" {:symbol "flint_b_gcstats"}

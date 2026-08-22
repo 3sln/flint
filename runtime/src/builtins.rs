@@ -309,6 +309,30 @@ builtins! {
         let _ = n; let (v, m) = (arg(rt, a, 0), arg(rt, a, 1)); rt.with_meta(v, m)
     };
 
+    // --- calling back into the interpreter ------------------------------------
+    "flint/apply", flint_b_apply, b_apply, |rt, a, n| {
+        let _ = n;
+        let (f, args) = (arg(rt, a, 0), arg(rt, a, 1));
+        let base = rt.mark();
+        let fi = rt.push(f);
+        let si = rt.push(args);
+        let mut cur = rt.seq(rt.r(si));
+        rt.set_r(si, cur);
+        let mut count = 0usize;
+        while !rt.r(si).is_nil() {
+            let x = rt.first(rt.r(si));
+            rt.push(x);
+            count += 1;
+            cur = rt.next(rt.r(si));
+            rt.set_r(si, cur);
+        }
+        let argv: alloc::vec::Vec<Value> = (0..count).map(|i| rt.r(si + 1 + i)).collect();
+        let f = rt.r(fi);
+        let out = rt.invoke(f, &argv);
+        rt.pop_to(base);
+        out
+    };
+
     // --- lazy sequences -------------------------------------------------------
     "flint/lazy-seq", flint_b_lazyseq, b_lazyseq, |rt, a, n| {
         let _ = n; let f = arg(rt, a, 0); rt.lazy_seq(f)

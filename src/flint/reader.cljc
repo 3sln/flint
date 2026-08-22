@@ -40,7 +40,9 @@
                           :file (:file @st)} data))))
 
 (def ^:private whitespace #{\space \tab \newline \return \formfeed \,})
-(def ^:private terminating #{\" \; \' \@ \^ \` \~ \( \) \[ \] \{ \} \\})
+;; Clojure's `isTerminatingMacro` excludes #, ' and %, which is why `acc'` and
+;; `x#` and `%1` are single tokens.
+(def ^:private terminating #{\" \; \@ \^ \` \~ \( \) \[ \] \{ \} \\})
 
 (defn- skip-ws! [st]
   (loop []

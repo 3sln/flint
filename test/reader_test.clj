@@ -49,6 +49,11 @@
 (check "anon fn %2" (reads "#(+ %1 %2)") '(fn* [p1__flint# p2__flint#] (+ p1__flint# p2__flint#)))
 (check "line metadata" (:line (meta (r/read-one "\n\n(foo)"))) 3)
 
+(check "quote is not terminating inside a token" (reads "acc'") (symbol "acc'"))
+(check "hash is not terminating inside a token" (reads "x#") (symbol "x#"))
+(check "percent is not terminating" (reads "%1") (symbol "%1"))
+(check "quote still works at the start" (reads "'acc") '(quote acc))
+
 (println "reader: syntax quote")
 (let [st (r/reader "`(a ~b ~@c)" {:ns 'my.ns})]
   (check "syntax quote" (r/read-form st)

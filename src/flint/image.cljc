@@ -11,7 +11,7 @@
 
 (def K-NIL 0) (def K-TRUE 1) (def K-FALSE 2) (def K-INT 3) (def K-DOUBLE 4)
 (def K-STRING 5) (def K-KEYWORD 6) (def K-SYMBOL 7) (def K-VECTOR 8)
-(def K-LIST 9) (def K-MAP 10) (def K-SET 11) (def K-FN 12)
+(def K-LIST 9) (def K-MAP 10) (def K-SET 11) (def K-FN 12) (def K-NATIVE 13)
 
 (def NO-CONST 0xFFFFFFFF)
 
@@ -91,7 +91,8 @@
       :list [K-LIST (u32 (count args)) (map u32 args)]
       :set [K-SET (u32 (count args)) (map u32 args)]
       :map [K-MAP (u32 (quot (count args) 2)) (map u32 args)]
-      :fn [K-FN (u32 (first args))])))
+      :fn [K-FN (u32 (first args))]
+      :native [K-NATIVE (u32 (first args)) (u32 (second args))])))
 
 ;; ------------------------------------------------------------ vars, natives
 
@@ -119,6 +120,13 @@
       i)))
 
 ;; ------------------------------------------------------------------- fns
+
+(defn native-const
+  "A builtin as a first-class value, for `(map flint.rt/inc xs)` and friends."
+  [b name]
+  (let [idx (native-slot b name)
+        namec (const b name)]
+    (intern-const b [:native idx namec])))
 
 (defn add-fn
   "Append a function. `arities` is a seq of

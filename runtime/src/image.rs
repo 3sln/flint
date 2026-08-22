@@ -38,6 +38,9 @@ pub const K_LIST: u8 = 9;
 pub const K_MAP: u8 = 10;
 pub const K_SET: u8 = 11;
 pub const K_FN: u8 = 12;
+/// A builtin as a first-class value; payload is the native *import* index, so
+/// this does not depend on the natives table having been read yet.
+pub const K_NATIVE: u8 = 13;
 
 pub const NO_CONST: u32 = 0xFFFF_FFFF;
 
@@ -189,6 +192,12 @@ impl Rt {
                 K_FN => {
                     let f = r.u32();
                     self.make_closure(f, &[])
+                }
+                K_NATIVE => {
+                    let idx = r.u32();
+                    let namec = r.u32();
+                    let name = self.roots.consts[namec as usize];
+                    self.make_native(idx, name)
                 }
                 _ => return false,
             };
