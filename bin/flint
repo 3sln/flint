@@ -18,6 +18,7 @@
         (= k "--keep-names") (recur (rest a) (assoc m :keep-names true))
         (= k "--explain") (recur (drop 2 a) (assoc m :explain (symbol (second a))))
         (= k "--disasm") (recur (drop 2 a) (assoc m :disasm (second a)))
+        (= k "--self") (recur (rest a) (assoc m :self true))
         (= k "--const") (recur (drop 2 a) (assoc m :const (parse-long (second a))))
         :else (do (println "unknown argument:" k) (System/exit 2)))
       m)))
@@ -79,6 +80,44 @@
   ;; whatever the require graph says.
   (cons 'clojure.core (remove #{'clojure.core} order)))
 
+(defn b64-decode [s]
+  (vec (map #(bit-and (int %) 0xff)
+            (.decode (java.util.Base64/getDecoder) ^String (str/trim s)))))
+
+(def selfc (str root "/out/flintc.wasm"))
+
+(defn ensure-self-compiler!
+  "The self-hosted compiler, built by babashka once. After this, flint compiles
+  flint -- which is the whole point of the bootstrap, so it is worth being able
+  to use it and not only to test it."
+  []
+  (when-not (.exists (io/file selfc))
+    (println "building the self-hosted compiler (once) ...")
+    (let [p (.start (ProcessBuilder.
+                     (into-array String [(str root "/bin/flint") ":src" (str root "/src")
+                                         ":fn" "flint.selfhost/main" ":out" selfc])))]
+      (slurp (.getInputStream p)) (slurp (.getErrorStream p)) (.waitFor p)
+      (when-not (zero? (.exitValue p))
+        (println "could not build the self-hosted compiler") (System/exit 1))))
+  selfc)
+
+(defn compile-with-flint
+  "Run the compiler ON flint. Returns {:image bytes :natives [names]}."
+  [spec]
+  (let [module (ensure-self-compiler!)
+        tmp (fs/create-temp-file {:suffix ".edn"})
+        _ (spit (str tmp) (pr-str spec))
+        p (.start (ProcessBuilder.
+                   (into-array String ["node" (str root "/host/flint-file.mjs") module (str tmp)])))
+        out (slurp (.getInputStream p))
+        err (slurp (.getErrorStream p))]
+    (.waitFor p)
+    (when-not (zero? (.exitValue p))
+      (println "self-hosted compile failed:" (str/trim out) err) (System/exit 1))
+    (let [lines (str/split-lines out)]
+      {:image (b64-decode (first lines))
+       :natives (vec (remove str/blank? (rest lines)))})))
+
 (defn builtin-names
   "Every builtin any unit provides. The compiler needs the union so it can tell
   a typo from a builtin in a namespace this program has not reached yet."
@@ -90,7 +129,7 @@
                   k (keys (:provides (read-string (slurp f))))]
               k)))
 
-(let [{:keys [src fn out stats keep-names explain disasm const]} (parse-args *command-line-args*)]
+(let [{:keys [src fn out stats keep-names explain disasm const self]} (parse-args *command-line-args*)]
   (when-not fn
     (println "usage: flint :src <dir> :fn <ns/fn> [:out <file.wasm>]")
     (System/exit 2))
@@ -100,10 +139,11 @@
         order (core-first (topo-order sources))
         out (or out "out.wasm")
         t0 (System/nanoTime)
-        compiled (compiler/compile-image
-                  {:sources sources :order order :entry fn
-                   :builtins (builtin-names (str root "/units"))})
-        _ (when explain
+        spec {:sources sources :order order :entry fn
+              :builtins (builtin-names (str root "/units"))}
+        selfres (when self (compile-with-flint spec))
+        compiled (when-not self (compiler/compile-image spec))
+        _ (when (and explain (not self))
             (println "explain" explain)
             (println "  in roots:" (contains? (:roots compiled) explain))
             (println "  kept:" (boolean (some #{explain} (:kept-syms compiled))))
@@ -111,7 +151,7 @@
                      (count (filter #(= explain (:sym %)) (:items compiled))))
             (doseq [it (filter #(= explain (:sym %)) (:items compiled))]
               (println "    ns" (:ns it) "kind" (:kind it) "macro?" (:macro? it))))
-        _ (when disasm
+        _ (when (and disasm (not self))
             (require '[flint.disasm :as dis])
             (let [b (:builder compiled)
                   st @b]
@@ -126,22 +166,25 @@
             (let [b @(:builder compiled)]
               (doseq [i (range (max 0 (- const 3)) (min (count (:consts b)) (+ const 4)))]
                 (println "const" i (pr-str (nth (:consts b) i))))))
-        {:keys [builder stats*]} (let [r (compiler/compile-image
-                                          {:sources sources :order order :entry fn
-                                           :builtins (builtin-names (str root "/units"))})]
-                                   {:builder (:builder r) :stats* (:stats r)})
+        builder (when compiled (:builder compiled))
+        stats* (when compiled (:stats compiled))
         t1 (System/nanoTime)
+        needed (if self (:natives selfres) (img/natives builder))
         result (link/compose {:units-dir (str root "/units")
                               :sysroot (str root "/units/.sysroot")
-                              :needed-builtins (img/natives builder)
-                              :emit-image (clojure.core/fn [slots] (img/emit builder slots))
+                              :needed-builtins needed
+                              :emit-image (clojure.core/fn [slots]
+                                            (if self
+                                              (img/patch-native-slots (:image selfres) needed slots)
+                                              (img/emit builder slots)))
                               :out out
                               :keep-names keep-names})
         t2 (System/nanoTime)]
     (when stats
-      (println (format "compile %.0fms  link %.0fms  module %d bytes  image %d bytes  vars %d/%d  builtins %d"
+      (println (format "%s %.0fms  link %.0fms  module %d bytes  image %d bytes  %sbuiltins %d"
+                       (if self "compile (on flint)" "compile (on bb)")
                        (/ (- t1 t0) 1e6) (/ (- t2 t1) 1e6)
                        (:bytes result) (:image-bytes result)
-                       (:items-kept stats*) (:items-total stats*)
+                       (if stats* (format "vars %d/%d  " (:items-kept stats*) (:items-total stats*)) "")
                        (:builtins result))))
     (println "wrote" out (str "(" (:bytes result) " bytes)"))))

@@ -19,7 +19,7 @@ $ cat examples/demo.cljc
   (str "hello, " (if (seq args) (first args) "world")))
 
 $ ./bin/flint :src examples :fn demo/main :out out/demo.wasm
-wrote out/demo.wasm (167266 bytes)
+wrote out/demo.wasm (175415 bytes)
 
 $ node host/flint.mjs out/demo.wasm flint
 hello, flint
@@ -381,7 +381,34 @@ core links, and it is what makes `clojure.math` possible at all in a bare wasm
 build.
 
 On top of the floor, each cljc namespace you reach adds its bytecode, and each
-Rust parser you reach adds its object and its crate.
+Rust parser you reach adds its object and its crate. Measured, same method as
+the table above:
+
+| what you reach | module | over the floor |
+|---|---:|---:|
+| nothing (a string literal) | 175 072 | — |
+| `pr-str` of a nested structure | 175 131 | +59 |
+| `clojure.math` (6 functions) | 192 636 | +17 564 |
+| one `#"…"` regex | 228 164 | +53 092 |
+| `clojure.edn/read-string` | 250 066 | +74 994 |
+| `flint.data.json` | 255 642 | +81 563 |
+| `flint.data.xml` | 256 608 | +82 529 |
+| `flint.data.html` | 224 968 | +50 889 |
+
+### Dependencies, and what each one bought
+
+Four crates, all `no_std` + `alloc`, each earning its place:
+
+| crate | where | what it gave | what it cost |
+|---|---|---|---|
+| `libm` | the floor | `sqrt`, `pow`, the trigs — pure Rust, no libc. Without it `clojure.math` cannot exist in a bare wasm build at all. | +17.6 KB, and only for programs that call it |
+| `serde_json` + `serde` | `flint.data.json` | a correct JSON parser with `float_roundtrip`, driven through `DeserializeSeed`/`Visitor` so no `serde_json::Value` is ever built | +81.6 KB |
+| `xmlparser` | `flint.data.xml` | a streaming XML tokenizer that is already `no_std` | +82.5 KB |
+| `htmlparser` | `flint.data.html` | the same, tolerant of real markup — unquoted attributes, bare `&`, mixed case | +50.9 KB |
+
+Nothing else. No `hashbrown`, no `regex`, no `dlmalloc`: the hash tables, the
+regex engine and the allocator are flint's own, because the first two are what
+this language is *for* and the third has to know about the collector.
 
 ---
 
@@ -767,9 +794,10 @@ The honest list. Nothing here is stubbed and reported as working.
   (a flint module has no processes to spawn).
 - **Unit compatibility checking is an assert, not a message.** The `:abi` field
   exists and is documented; rejecting an incompatible unit politely is not done.
-- **`bin/flint` compiles with babashka by default.** The self-hosted compiler is
-  built and exercised by `test/selfhost.clj`, but the CLI does not yet have a
-  `--self` switch to use it in place of bb.
+- **The self-hosted compiler is slower than the bootstrap one**, which is
+  expected: `--self` takes 2.5 s where babashka takes 0.17 s for the same
+  program, most of it node startup plus flint being ~2.5× babashka. Both produce
+  byte-identical modules. babashka remains the default for that reason.
 
 ### Where the brief turned out to be wrong
 
@@ -791,6 +819,10 @@ Prerequisites, all already present on the machine this was built for:
 $ ./bin/build-units     # compile the Rust units to wasm objects (once)
 $ ./bin/flint :src examples :fn demo/main :out out/demo.wasm
 $ node host/flint.mjs out/demo.wasm
+
+$ ./bin/flint :src examples :fn demo/main :out out/demo.wasm --self
+                        # the same, compiled BY flint instead of by babashka;
+                        # the two modules are byte identical
 
 $ ./bin/test            # everything: rust tests, reader, conformance both ways,
                         # end-to-end linking, modularity, manifest, self-hosting
