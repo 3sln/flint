@@ -53,6 +53,69 @@ nodes* — and the driver should gather what a pass needs before asking. A drive
 that requests one node at a time is the failure mode this design exists to avoid,
 and it is the easy thing to write, so say so in the README.
 
+## Fetch planning: coalescing, and where the break-even really is
+
+The layout gives the fetcher its leverage: **a top-level node owns a contiguous
+chunk, subdivided among its children**. So a wanted set of nodes is a set of
+INTERVALS, and planning a fetch is interval merging.
+
+State that as a requirement on the layout rather than an assumption about
+documents: *a node's content is one contiguous range, or a small set of them.*
+Reading order and logical structure diverge sometimes — a table across a page
+break, a footnote — so allow a set and let the merger handle it, instead of
+over-constraining the writer and discovering the exception later.
+
+### The API states intent; the HOST plans
+
+The caller asks for **the pieces it wants**. It does not ask for byte ranges, and
+it does not decide how many requests to make.
+
+That division is deliberate: only the host knows the storage's cost
+characteristics and the memory budget, so only the host can plan. The same script
+then runs efficiently against R2, a local disk or an in-memory fixture, without
+knowing which it is talking to.
+
+### The cost model, and the surprising number
+
+Merge two intervals across a gap when fetching the gap is cheaper than making a
+second request:
+
+```
+gap_bytes / bandwidth  <  request_latency
+```
+
+Put real numbers in and the answer is startling. Against R2 at, say, **20 ms per
+request and 100 MB/s**, one round trip costs about **2 MB of bandwidth**. So the
+break-even gap is measured in megabytes, and the right policy is far more
+aggressive coalescing than instinct suggests: fetching `a` through `c` and
+discarding `b` is correct for very large `b`.
+
+**Measure the two constants rather than trusting mine** — they decide the whole
+policy, and they differ by an order of magnitude between R2 and a local file.
+
+### Memory is the constraint that caps it
+
+Bandwidth says merge everything; memory says stop. The budget is the binding
+constraint and it produces two requirements the naive version misses:
+
+- **Discarded bytes must never enter the guest heap.** If `a`–`c` is fetched to
+  get `a` and `c`, the `b` in the middle is dropped at the boundary. Otherwise
+  over-fetching costs memory as well as bandwidth, and the whole policy inverts.
+- **A wanted set larger than the budget cannot be satisfied at once.** So the
+  batch call must be able to answer **in waves** — the caller processes and
+  releases, and the next wave arrives. That is a multi-response request, which
+  the request/response layer below has to support deliberately rather than by
+  accident.
+
+Refusing an oversized ask would also be honest, but it pushes the chunking into
+every caller and they will each get it wrong differently.
+
+### Delivery order is defined, not incidental
+
+Results arrive in the order they were asked for, whatever order the fetch planner
+chose. A script whose behaviour depends on how the planner happened to coalesce
+is not deterministic, and 0005 spent real design effort on determinism.
+
 ## The driver must not cache by default
 
 If a script keeps every fetched run, memory is O(document) again and the whole
@@ -87,5 +150,12 @@ Cancellation and timeout belong there too, or every driver invents those twice.
   pattern.
 - A batched fetch of N nodes costs materially less than N single fetches, with
   the number reported. If it does not, the locality work is missing.
+- **The coalescer's two constants are measured**, not assumed, and the chosen
+  gap threshold follows from them.
+- An ask larger than the memory budget is answered **in waves**, and peak memory
+  stays under the budget throughout — tested with an ask several times the
+  budget.
+- Bytes fetched but not wanted never reach the guest heap, asserted by measuring
+  resident memory rather than by reading the code.
 - The request/response layer exists as its own namespace, is used by the document
   driver, and parks rather than spins while waiting.
