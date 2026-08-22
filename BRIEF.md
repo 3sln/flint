@@ -70,6 +70,33 @@ nothing.
 simple pure-data namespaces. Nothing with I/O, threads, agents, refs, or host
 interop. If a function cannot be pure, it does not exist here.
 
+**Also `clojure.math`, as much of it as comes easily.** It is a thin layer over
+`java.lang.Math` and almost all of it is pure numeric work — `sqrt`, `pow`,
+`sin`/`cos`/`tan`, `log`, `exp`, `floor`, `ceil`, `round`, `abs`, `atan2`,
+`hypot`, the constants. In a bare wasm build the `libm` crate is the obvious way
+to get these: pure Rust, `no_std`, no libc. That is exactly the kind of leaf
+dependency the brief means by "the bare minimum needed to get some help".
+
+Take the easy majority and stop where it stops being easy. Some of it is
+genuinely awkward without the JVM's guarantees — exact rounding modes,
+`ulp`, `nextAfter`, `IEEEremainder`, the `*Exact` overflow-checking integer
+functions — and half-implementing those is worse than leaving them out.
+
+### Say what is missing, per namespace
+
+Every standard namespace you ship must come with a **stated deficiency list** in
+the README: which functions are present, which are absent, and — where it
+matters — which are present but differ from Clojure's behaviour and how.
+
+This is not paperwork. Somebody porting pure logic to flint needs to know what
+will fail before they try it, and "we implemented most of `clojure.string`" is
+not something they can act on. A table per namespace, or a machine-checkable
+manifest, is better than prose.
+
+Prefer to make it CHECKABLE rather than written by hand: a test that reads the
+list of what you claim to implement and asserts the runtime really exposes
+exactly that will not drift, where a hand-maintained table in a README will.
+
 ## Getting data in: EDN
 
 An **EDN reader with reader-tag support**, in the runtime. This is the primary
@@ -120,7 +147,8 @@ itself byte for byte.
    where you can.
 4. **A comprehensive README** describing what it is, the value encoding, the GC
    design and its rooting strategy, the data structures and where they came from,
-   the core library's coverage, the EDN reader, the compiler and its bootstrap,
+   the core library's coverage **including the per-namespace deficiency lists**,
+   the EDN reader, the compiler and its bootstrap,
    the benchmarks, and — importantly — **the limits**: what it does not support,
    what is slow, what is unfinished, where it differs from Clojure.
 
