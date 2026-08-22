@@ -356,7 +356,7 @@ user-compiled namespaces without change.)
 
 Tier 2 shakes the same way, per **var**: start from `:fn`, take the transitive
 closure over the reference graph, emit only those. This is what makes writing
-`clojure.core` in cljc affordable — a hello-world keeps 31 of 216 top-level
+`clojure.core` in cljc affordable — a hello-world keeps 31 of 375 top-level
 items. A core function whose whole body is one `flint.rt/…` call is detected and
 called directly at the call site, so the wrapper layer costs nothing.
 

@@ -1,3 +1,7 @@
 .agent.log
 target/
 *.wasm.tmp
+
+# Build outputs, all regenerable: `bin/build-units` then `bin/flint`.
+out/
+units/
