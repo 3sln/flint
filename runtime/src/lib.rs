@@ -17,6 +17,8 @@ pub mod gc;
 pub mod hash;
 pub mod mem;
 pub mod obj;
+pub mod rt;
+pub mod strs;
 pub mod value;
 
 #[cfg(all(target_arch = "wasm32", not(test)))]
