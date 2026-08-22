@@ -1,5 +1,10 @@
 # 0002 — Only reachable code ships, builtins included
 
+> **The requirement below stands. The MECHANISM is superseded by
+> `0003-namespace-units.md`** — per-namespace relocatable wasm objects linked
+> with `wasm-ld --gc-sections`. Both routes proposed here were rejected there,
+> with reasons. Read 0003.
+
 **Supersedes the first version of this note**, which concluded "write the library
 namespaces in cljc so they tree-shake for free". The owner's requirement is
 stronger than that resolution assumed:
