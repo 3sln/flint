@@ -820,6 +820,41 @@ that was saved and restored in between.
 **That is a small, bounded question with a named function, which is where this
 investigation has been trying to get for a dozen sessions.**
 
+## The park path is eliminated — by measurement, with coverage
+
+The live-half predicate, applied at the resume boundary to the stack as
+restored. No new instrument: the same check that broke this open, reused where
+the question is, which also means it was already validated against a known-bad
+case.
+
+    resumes checked: 100 921
+    values examined: 4 780 342
+    STALE values in a restored stack: 0
+
+Coverage stated first, because zero from a check that never ran is not a result.
+A hundred thousand resumes over nearly five million values, and not one restored
+argument points into a half that is neither from- nor to-space. **The save and
+restore path is a scanned root and it is correct.**
+
+So a parking native re-reading its arguments on resume is not how the stale value
+arrives, and `document.clj` spends most of its time on that path — the bounded
+channel is in back-pressure for most of the 64 waves — so this is a strong
+negative rather than an untested corner.
+
+### Which leaves the interpreter loop
+
+Everything between `port_send` and the allocation is rooted; the argument arrives
+stale; the value stack is a scanned root; and the restore path is clean. The
+remaining way a stale value reaches a value-stack slot is an instruction that
+caches an operand in a Rust local across an allocating step and writes it back
+afterwards — the same shape as `run_program`'s argument vector, one layer down.
+
+The second holder supports it: it was allocated by **the interpreter itself, with
+no native running**. The opcodes to look at are the ones that allocate while
+holding operands — `VECTOR`, `MAP`, `SET`, `LIST`, `CLOSURE`, `APPLY` — and the
+origin stamp can name which, since it already distinguishes "the interpreter
+itself" from any builtin.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.

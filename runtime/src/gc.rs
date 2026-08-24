@@ -374,6 +374,24 @@ pub struct Gc {
     pub orig_from: u64,
     #[cfg(feature = "diagnostics")]
     pub orig_until: u64,
+    /// Values restored into the value stack at a resume that point into a half
+    /// which is neither from- nor to-space.
+    ///
+    /// A parking native re-executes on resume and re-reads its arguments from a
+    /// stack that was saved and restored in between. If the save area is not a
+    /// scanned root, an argument comes back pointing at where its object used to
+    /// be -- and `is_young` cannot tell, because it spans both halves. This is
+    /// the same predicate the live-half check uses, applied at that boundary.
+    #[cfg(feature = "diagnostics")]
+    pub restore_stale: u32,
+    #[cfg(feature = "diagnostics")]
+    pub restore_bad: [[u32; 4]; 8],
+    /// Coverage: how many resumes were checked, and how many values across
+    /// them. Zero violations from a check that never ran is not a result.
+    #[cfg(feature = "diagnostics")]
+    pub restores_checked: u32,
+    #[cfg(feature = "diagnostics")]
+    pub restore_values: u32,
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
     #[cfg(feature = "diagnostics")]
@@ -453,6 +471,14 @@ impl Gc {
             orig_from: u64::MAX,
             #[cfg(feature = "diagnostics")]
             orig_until: 0,
+            #[cfg(feature = "diagnostics")]
+            restore_stale: 0,
+            #[cfg(feature = "diagnostics")]
+            restore_bad: [[0; 4]; 8],
+            #[cfg(feature = "diagnostics")]
+            restores_checked: 0,
+            #[cfg(feature = "diagnostics")]
+            restore_values: 0,
             #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };

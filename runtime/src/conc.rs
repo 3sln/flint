@@ -364,6 +364,30 @@ impl Rt {
                 self.roots.stack[i as usize] = v;
             }
             self.roots.stack_top = n as usize;
+            // The restored stack, checked with the predicate that broke this
+            // open: a young-range pointer must be in the LIVE half. A parking
+            // native re-reads its arguments from here on resume.
+            #[cfg(feature = "diagnostics")]
+            {
+                self.gc.restores_checked += 1;
+                self.gc.restore_values += n;
+            }
+            #[cfg(feature = "diagnostics")]
+            for i in 0..(n as usize) {
+                let v = self.roots.stack[i];
+                if v.is_heap()
+                    && self.gc.is_young(v.as_heap())
+                    && !self.gc.in_live_half(v.as_heap())
+                {
+                    let k = self.gc.restore_stale as usize;
+                    if k < 8 {
+                        let t = crate::obj::ty(&self.gc.sp, v.as_heap()) as u32;
+                        self.gc.restore_bad[k] =
+                            [i as u32, v.as_heap(), t, self.gc.stats.minor as u32];
+                    }
+                    self.gc.restore_stale += 1;
+                }
+            }
         }
         let fb = self.slot(th, TH_FRAMES);
         if !fb.is_nil() {

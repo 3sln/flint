@@ -349,6 +349,19 @@ pub extern "C" fn stat_limbo(i: u32, f: u32) -> u32 {
 
 /// Capture `bump` at the end of collection `c`, before anything allocated after
 /// it. `stat_end_bump(0)` is the bump, `(1)` the from base.
+/// Stale values seen in a restored stack: `(slot, address, type, collection)`.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_restore_stale(i: u32, f: u32) -> u32 {
+    unsafe {
+        let g = &ensure_rt().gc;
+        if i == 99 { return g.restore_stale; }
+        if i == 98 { return g.restores_checked; }
+        if i == 97 { return g.restore_values; }
+        if (i as usize) < 8 && (f as usize) < 4 { g.restore_bad[i as usize][f as usize] } else { 0 }
+    }
+}
+
 /// Record allocation origins only for collections in `[from, until)`.
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
