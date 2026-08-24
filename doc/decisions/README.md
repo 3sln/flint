@@ -21,6 +21,7 @@ for the first.
 | [0012](0012-matching-over-ropes.md) | The matcher must consume a rope → Pike VM | **Roadmap — next work after the open bugs** |
 | [0013](0013-emit-wasm-instead-of-dispatch.md) | AOT regions instead of dispatching | **Deferred**, pending one cheap measurement |
 | [0014](0014-debug-runner.md) | DAP, nREPL, and `(break)` | **Roadmap, not next.** Cheap because a breakpoint is a park |
+| [0015](0015-snapshots.md) | VM snapshots: instant, exportable, inspectable | **Roadmap.** The answer to instruments that lie; shares its reader with 0014 |
 
 ## What is actually next
 
