@@ -629,6 +629,32 @@ impl Rt {
     }
 
     fn port_dequeue(&mut self, p: Value) -> Value {
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            // The failing dequeue: record the chain so the invariant walk can be
+            // told which object it MUST reach, and so the message's own
+            // generation is a fact rather than an inference.
+            if crate::gc::CHAIN[0] == 0 {
+                let ib = crate::obj::slot(&self.gc.sp, p.as_heap(), PT_INBOX);
+                if ib.is_heap() {
+                    let head = fx(self.slot(p, PT_HEAD)) as u32;
+                    let v = self.vec_nth(ib, head).unwrap_or(NIL);
+                    if v.is_heap() && crate::obj::ty(&self.gc.sp, v.as_heap()) == crate::obj::TY_FWD {
+                        let tail = crate::obj::slot(&self.gc.sp, ib.as_heap(), 3);
+                        crate::gc::CHAIN = [
+                            p.as_heap(),
+                            ib.as_heap(),
+                            if tail.is_heap() { tail.as_heap() } else { 0 },
+                            v.as_heap(),
+                            self.gc.is_young(p.as_heap()) as u32,
+                            self.gc.is_young(ib.as_heap()) as u32,
+                            if tail.is_heap() { self.gc.is_young(tail.as_heap()) as u32 } else { 9 },
+                            self.gc.is_young(v.as_heap()) as u32,
+                        ];
+                    }
+                }
+            }
+        }
         let head = fx(self.slot(p, PT_HEAD)) as u32;
         let ib = self.slot(p, PT_INBOX);
         let v = self.vec_nth(ib, head).unwrap_or(NIL);

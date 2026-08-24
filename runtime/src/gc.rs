@@ -59,6 +59,8 @@ pub static mut TRACE_N: usize = 0;
 #[cfg(feature = "diagnostics")]
 pub static mut TRACING: bool = false;
 #[cfg(feature = "diagnostics")]
+pub static mut CHAIN: [u32; 8] = [0; 8];
+#[cfg(feature = "diagnostics")]
 #[inline]
 pub fn note(addr: u32, kind: u32) {
     unsafe {
@@ -301,6 +303,18 @@ pub struct Gc {
     /// The first few, as (object, its type, slot, young target, target type).
     #[cfg(feature = "diagnostics")]
     pub remset_bad: [[u32; 5]; 8],
+    /// Coverage, not just result. "Zero violations" and "walked nothing
+    /// relevant" produce identical output, and this codebase has already shipped
+    /// one walker that reported success while covering part of the heap.
+    #[cfg(feature = "diagnostics")]
+    pub remset_walked: u32,
+    #[cfg(feature = "diagnostics")]
+    pub remset_walk_errors: u32,
+    /// An address the walk must reach, or the zero above means nothing.
+    #[cfg(feature = "diagnostics")]
+    pub remset_watch: u32,
+    #[cfg(feature = "diagnostics")]
+    pub remset_watch_seen: u32,
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
     #[cfg(feature = "diagnostics")]
@@ -354,6 +368,14 @@ impl Gc {
             remset_end_violations: 0,
             #[cfg(feature = "diagnostics")]
             remset_bad: [[0; 5]; 8],
+            #[cfg(feature = "diagnostics")]
+            remset_walked: 0,
+            #[cfg(feature = "diagnostics")]
+            remset_walk_errors: 0,
+            #[cfg(feature = "diagnostics")]
+            remset_watch: 0,
+            #[cfg(feature = "diagnostics")]
+            remset_watch_seen: 0,
             #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };
@@ -750,7 +772,15 @@ impl Gc {
             while a < end {
                 let size = size_of(&self.sp, a);
                 if size < 8 || a + size > end {
-                    break; // a parse error; the walk cannot continue past it
+                    // A parse error. The walk cannot continue, and every object
+                    // after this point is unvisited -- so it must be REPORTED,
+                    // not silently truncated into a clean zero.
+                    self.remset_walk_errors += 1;
+                    break;
+                }
+                self.remset_walked += 1;
+                if self.remset_watch != 0 && a == self.remset_watch {
+                    self.remset_watch_seen += 1;
                 }
                 let t = ty(&self.sp, a);
                 if t != TY_FREE && t != TY_FWD && layout_of(t) == Layout::Vals {
@@ -774,6 +804,9 @@ impl Gc {
                     }
                 }
                 a += size;
+            }
+            if a != end {
+                self.remset_walk_errors += 1;
             }
         }
     }

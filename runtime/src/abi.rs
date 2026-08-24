@@ -307,6 +307,29 @@ pub extern "C" fn stat_remset_violations() -> u32 {
     unsafe { ensure_rt().gc.remset_violations }
 }
 
+/// Coverage of the invariant walk: objects visited, spans it could not finish,
+/// and whether it reached the address it was told to watch.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_remset_cover(i: u32) -> u32 {
+    unsafe {
+        let g = &ensure_rt().gc;
+        match i { 0 => g.remset_walked, 1 => g.remset_walk_errors, _ => g.remset_watch_seen }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_chain2(i: u32) -> u32 {
+    unsafe { if (i as usize) < 8 { crate::gc::CHAIN[i as usize] } else { 0 } }
+}
+
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn set_gc_remset_watch(a: u32) {
+    unsafe { ensure_rt().gc.remset_watch = a }
+}
+
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_remset_end_violations() -> u32 {

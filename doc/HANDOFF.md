@@ -498,6 +498,48 @@ only reference to it. The traversal log for #692 already records every scanned
 and forwarded address, so the message's fate at that collection can be read off
 directly rather than inferred.
 
+## Coverage proved, and the message is YOUNG
+
+The zero was checked before being trusted, because a walker that covers nothing
+and a walker that finds nothing print the same thing — and this codebase has
+already shipped one walker that reported success while missing an old chunk at
+22.8 MB.
+
+    invariant violations: 0 (end 0)
+    walk coverage: 6 673 120 objects visited, 0 spans it could not finish
+    the failing port specifically: visited 1433 times across 748 collections
+
+Twice per collection, start and end, for the exact port that fails. **The zero is
+real.**
+
+One instrument lesson from the first attempt: the walk was told to watch the
+*inbox*, and reported "visited 0 times" — because the inbox is YOUNG and the walk
+covers old space. A watch has to target the space the walker actually visits, or
+its silence means nothing. Aimed at the old port instead, it visits 1433 times.
+
+### The either/or is answered: the message is young
+
+    port    @5090424   young = 0   (old)
+    inbox   @2566040   young = 1
+    tail    @2566016   young = 1
+    MESSAGE @2555336   young = 1   <- the TY_FWD one
+
+So this is **not** "who wrote a `TY_FWD` header into an old object". The message
+is young, it was legitimately evacuated, and the stale pointer to it is the
+problem. And there IS an old-to-young edge at the dequeue — port to inbox — which
+the invariant never once flagged across 748 collections.
+
+Both of those can only be true together if, at every collection boundary, the
+port either had no young inbox or was correctly remembered. So the chain that is
+stale at the dequeue was not stale at any boundary.
+
+That points somewhere new and narrow: the message was forwarded, and what is
+stale is a *copy* of the pointer to it that the collector did not update — a
+reader holding the pre-collection inbox rather than the port's updated
+`PT_INBOX`. The next read to do, from the #692 traversal log which already has
+every scanned and forwarded address: was `2555336` forwarded during #692, and was
+the vector holding it scanned in the same collection or only its replacement.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.
