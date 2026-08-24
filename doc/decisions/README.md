@@ -23,6 +23,7 @@ for the first.
 | [0014](0014-debug-runner.md) | DAP, nREPL, and `(break)` | **Roadmap, not next.** Cheap because a breakpoint is a park |
 | [0015](0015-snapshots.md) | VM snapshots: instant, exportable, inspectable | **Roadmap.** The answer to instruments that lie; shares its reader with 0014 |
 | [0016](0016-two-builds.md) | A stripped production VM; diagnostics optional | **Roadmap.** Cross-cutting; supersedes the per-feature clauses in 0009/0014/0015 |
+| [0018](0018-cross-runtime-benchmarks.md) | Benchmark across wasm runtimes | **Roadmap.** Every current number is V8; decides 0013 per engine and 0010's SDK-vs-port |
 | [0017](0017-profiler.md) | Profiler: named blocks, CPU vs waiting | **Roadmap, not next.** Deterministic because instruction counts are; gives 0013 its measurement |
 
 ## What is actually next
