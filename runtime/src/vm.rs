@@ -165,6 +165,25 @@ pub const MAX_FRAMES: usize = 8192;
 /// A zero-sized type with an inlined method rather than a field test, so that
 /// the free loop really is free: `NoBudget::tick` returns a constant `false` and
 /// nothing to do with budgets survives into the generated code.
+
+/// What a parking native means for the instruction that called it.
+///
+/// This exists as one function rather than two copies because when it *was*
+/// two copies, only one of them existed: the `NATIVE` opcode handled a park
+/// correctly, and the dynamic-dispatch path in `call_value` did not -- it
+/// dropped the callee and every argument out of the root set while the thread
+/// was parked and about to resume, and then handed the park to `unwind` as
+/// though it were a thrown error. A third call site must not be able to appear
+/// without this.
+enum Parked {
+    /// The continuation is saved; the call re-executes on resume.
+    Saved,
+    /// A courtesy yield: the call itself finished, so its result stands.
+    Yielded,
+    /// `thrown` now holds a real error to unwind.
+    Failed,
+}
+
 pub trait BudgetPolicy {
     fn tick(rt: &mut Rt) -> bool;
 }
@@ -328,6 +347,56 @@ impl Rt {
         r
     }
 
+
+    /// A native set `thrown = PARK`. `keep_top` is where the value stack must
+    /// be left so the call's operands are still rooted AND still in place for
+    /// re-execution; `opcode_at` is the instruction to rewind to.
+    fn parked(
+        &mut self,
+        opcode_at: u32,
+        keep_top: usize,
+        base_depth: usize,
+        reexecutable: bool,
+    ) -> Parked {
+        if base_depth != 0 {
+            // Rust frames are live underneath: a lazy-seq force, a comparator,
+            // `map`. There is no continuation to save, so say so plainly rather
+            // than corrupting the stack.
+            self.thrown = NIL;
+            self.park_on = NIL;
+            self.throw_str(
+                "IllegalStateException",
+                "cannot park here: this call is nested inside native code \
+                 (map, sort, reduce, a lazy seq). Park from a green thread's \
+                 own code instead.",
+            );
+            return Parked::Failed;
+        }
+        self.thrown = NIL;
+        if self.park_on.bits() == crate::conc::PARK_YIELD.bits() {
+            // A courtesy yield: the call itself is finished, so let it finish.
+            // Rewinding would re-execute `yield`, which would yield again, for
+            // ever.
+            return Parked::Yielded;
+        }
+        if !reexecutable {
+            self.park_on = NIL;
+            self.throw_str(
+                "IllegalStateException",
+                "cannot park here: this native was reached through `apply`, and \
+                 `apply` has already spread its arguments onto the stack, so the \
+                 call cannot be re-executed on resume. Call it directly instead.",
+            );
+            return Parked::Failed;
+        }
+        // Rewind to the instruction itself and leave the operands in place:
+        // resuming re-executes the call, which is why a parking builtin must
+        // decide to park before it changes anything.
+        self.frames.last_mut().unwrap().ip = opcode_at;
+        self.roots.stack_top = keep_top;
+        Parked::Saved
+    }
+
     /// The callee and `argc` args are on top of the value stack. Returns the
     /// result, having consumed them.
     fn call_value(&mut self, argc: usize) -> Value {
@@ -349,7 +418,12 @@ impl Rt {
             TY_NATIVEFN => {
                 let idx = self.slot(callee, 0).as_fixnum() as u32;
                 let r = self.call_native(idx, callee_at + 1, argc);
-                self.roots.stack_top = callee_at;
+                if self.thrown.bits() != crate::value::PARK.bits() {
+                    self.roots.stack_top = callee_at;
+                }
+                // On a park the operands stay where they are: they are roots,
+                // and the caller re-executes this call on resume. Dropping them
+                // here is what made a park through a value corrupt the stack.
                 r
             }
             TY_CLOSURE => {
@@ -519,6 +593,15 @@ impl Rt {
                 (f.ip, f.fp)
             };
             if B::tick(self) {
+                // `ip` is a local for speed and is written back to the frame
+                // only by `commit!`, which is declared further down and so is
+                // not even in scope here. Everything below can return or
+                // unwind, and a frame carrying a stale `ip` resumes PART WAY
+                // BACK through instructions it already ran. Write it back
+                // first.
+                if let Some(f) = self.frames.last_mut() {
+                    f.ip = ip;
+                }
                 // One comparison covers both budgets; which one fired is a cold
                 // path. In a threaded program the slice is doing double duty as
                 // preemption -- running out means "your turn is over" rather
@@ -680,6 +763,7 @@ impl Rt {
                     }
                 }
                 op::CALL => {
+                    let opcode_at = ip - 1;
                     let argc = self.u8_at(ip) as usize;
                     ip += 1;
                     commit!();
@@ -695,6 +779,24 @@ impl Rt {
                         }
                     } else {
                         let r = self.call_value(argc);
+                        // The same park handling as the NATIVE opcode: a native
+                        // reached through a VALUE parks exactly as one reached
+                        // through the opcode does.
+                        if self.thrown.bits() == crate::value::PARK.bits() {
+                            match self.parked(opcode_at, callee_at + 1 + argc, base_depth, true) {
+                                Parked::Saved => return NIL,
+                                Parked::Yielded => {
+                                    self.vpush(r);
+                                    return NIL;
+                                }
+                                Parked::Failed => {
+                                    if !self.unwind() {
+                                        return NIL;
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
                         if self.failed() {
                             if !self.unwind() {
                                 return NIL;
@@ -706,6 +808,7 @@ impl Rt {
                     continue;
                 }
                 op::TAIL_CALL => {
+                    let opcode_at = ip - 1;
                     let argc = self.u8_at(ip) as usize;
                     ip += 1;
                     commit!();
@@ -728,6 +831,21 @@ impl Rt {
                         }
                     } else {
                         let r = self.call_value(argc);
+                        if self.thrown.bits() == crate::value::PARK.bits() {
+                            match self.parked(opcode_at, callee_at + 1 + argc, base_depth, true) {
+                                Parked::Saved => return NIL,
+                                Parked::Yielded => {
+                                    self.vpush(r);
+                                    return NIL;
+                                }
+                                Parked::Failed => {
+                                    if !self.unwind() {
+                                        return NIL;
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
                         if self.failed() {
                             if !self.unwind() {
                                 return NIL;
@@ -793,39 +911,19 @@ impl Rt {
                         // whole cost of green threads to the interpreter's hot
                         // path. See doc/decisions/0005.
                         if self.thrown.bits() == crate::value::PARK.bits() {
-                            if base_depth != 0 {
-                                // Rust frames are live underneath: a lazy-seq
-                                // force, a comparator, `map`. There is no
-                                // continuation to save, so say so plainly
-                                // rather than corrupting the stack.
-                                self.thrown = NIL;
-                                self.park_on = NIL;
-                                self.throw_str(
-                                    "IllegalStateException",
-                                    "cannot park here: this call is nested inside native code \
-                                     (map, sort, reduce, a lazy seq). Park from a green thread's \
-                                     own code instead.",
-                                );
-                                if !self.unwind() {
+                            match self.parked(opcode_at, base + argc, base_depth, true) {
+                                Parked::Saved => return NIL,
+                                Parked::Yielded => {
+                                    self.vpush(r);
                                     return NIL;
                                 }
-                                continue;
+                                Parked::Failed => {
+                                    if !self.unwind() {
+                                        return NIL;
+                                    }
+                                    continue;
+                                }
                             }
-                            self.thrown = NIL;
-                            if self.park_on.bits() == crate::conc::PARK_YIELD.bits() {
-                                // A courtesy yield: the call itself is finished,
-                                // so let it finish. Rewinding would re-execute
-                                // `yield`, which would yield again, for ever.
-                                self.vpush(r);
-                                return NIL;
-                            }
-                            // Otherwise rewind to the instruction itself and
-                            // leave the arguments in place: resuming re-executes
-                            // the call, which is why a parking builtin must
-                            // decide to park before it changes anything.
-                            self.frames.last_mut().unwrap().ip = opcode_at;
-                            self.roots.stack_top = base + argc;
-                            return NIL;
                         }
                         if !self.unwind() {
                             return NIL;
@@ -960,6 +1058,30 @@ impl Rt {
                     self.pop_to(si);
                     let total = argc - 1 + spread;
                     let r = self.call_value(total);
+                    if self.thrown.bits() == crate::value::PARK.bits() {
+                        // `apply` has already spread the seq onto the stack, so
+                        // there is no instruction that would re-execute this
+                        // call. Refusing is the honest outcome; silently losing
+                        // the operands is not.
+                        match self.parked(ip, 0, base_depth, false) {
+                            Parked::Yielded => {
+                                self.vpush(r);
+                                return NIL;
+                            }
+                            _ => {
+                                if !self.unwind() {
+                                    return NIL;
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    if !self.park_on.is_nil() {
+                        // A closure called through `apply` parked further in.
+                        // Its continuation is already saved, frames and all, so
+                        // this must not push a result on top of it.
+                        return NIL;
+                    }
                     if self.failed() {
                         if !self.unwind() {
                             return NIL;

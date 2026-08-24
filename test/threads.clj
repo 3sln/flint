@@ -127,6 +127,34 @@
 (check-that "a function nested inside a value is refused too"
             (str/includes? crossing "helper is a function"))
 
+;; ------------------------------------------------- parking through a value
+;;
+;; There are two ways into a native: the CALL_NATIVE opcode, and dynamic
+;; dispatch through a value (a higher-order position, `apply`, a var). Only the
+;; first handled parking, so a parking native reached the second way had its
+;; arguments dropped out of the root set while the thread was parked -- and the
+;; park was then handed to the unwinder as though it were a thrown error.
+(src! "indirect"
+      (str "(ns indirect (:require [flint.thread :as t] [flint.port :as p]))\n"
+           "(defn main [_]\n"
+           "  (let [[tx rx] (p/channel 1 \"probe\")\n"
+           "        recv flint.rt/port-receive\n"
+           "        _ (t/spawn (fn [] (flint.rt/port-send tx :hello) :sent))\n"
+           "        direct (do (t/spawn (fn [] (flint.rt/port-send tx :a) nil)) (flint.rt/port-receive rx))\n"
+           "        _ (t/spawn (fn [] (flint.rt/port-send tx :b) nil))\n"
+           "        hof (recv rx)\n"
+           "        _ (t/spawn (fn [] (flint.rt/port-send tx :c) nil))\n"
+           "        applied (apply flint.rt/port-receive [rx])]\n"
+           "    (pr-str [(flint.rt/port-receive rx) direct hof applied])))"))
+(def indirect (run! (build! "indirect")))
+(check-that "a parking native reached through a value returns its value"
+            (not (str/includes? indirect "unprintable")))
+(check "  ... the same as one reached through the opcode"
+       ;; Bindings run in order, so each receive takes what the previous spawn
+       ;; sent; the body's receive takes the last. The point is that all four
+       ;; are the values sent, whichever path reached the native.
+       indirect "[:c :hello :a :b]")
+
 ;; ---------------------------------------------------------------- determinism
 
 (src! "sched"
