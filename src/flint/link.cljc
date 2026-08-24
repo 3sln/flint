@@ -23,7 +23,11 @@
         err (slurp (.getErrorStream p))
         code (.waitFor p)]
     (when-not (zero? code)
-      (throw (ex-info (str "command failed: " (first args)) {:code code :err err :out out})))
+      ;; With the message, not just the name. A linker failure that prints only
+      ;; the path of the linker is a bad welcome, and this file says so about a
+      ;; smaller thing three lines up.
+      (throw (ex-info (str "command failed: " (first args) "\n" err out)
+                      {:code code :err err :out out})))
     {:out out :err err}))
 
 (def current-abi

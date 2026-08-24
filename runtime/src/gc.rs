@@ -45,22 +45,6 @@ const MIN_CHUNK: u32 = 1024 * 1024;
 
 /// Weak, hash-keyed interning table. Stores `(hash, value-bits)`; the hash is
 /// stored so that rehashing after a collection never has to look at the heap.
-// --- one-collection traversal log ------------------------------------------
-// Static, not heap: this must allocate nothing, or it becomes the observer
-// effect it exists to escape.
-#[cfg(feature = "diagnostics")]
-pub const TRACE_CAP: usize = 40000;
-#[cfg(feature = "diagnostics")]
-pub static mut TRACE_ADDR: [u32; TRACE_CAP] = [0; TRACE_CAP];
-#[cfg(feature = "diagnostics")]
-pub static mut TRACE_KIND: [u32; TRACE_CAP] = [0; TRACE_CAP];
-#[cfg(feature = "diagnostics")]
-pub static mut TRACE_N: usize = 0;
-#[cfg(feature = "diagnostics")]
-pub static mut TRACING: bool = false;
-#[cfg(feature = "diagnostics")]
-pub static mut CHAIN: [u32; 16] = [0; 16];
-
 // --- allocation origin ------------------------------------------------------
 // Which native was running when an object was allocated. A stale pointer can
 // only come from somewhere the collector does not walk -- a Rust local -- so
@@ -81,32 +65,9 @@ pub static mut ORIG_WHO: [u32; ORIG_CAP] = [0; ORIG_CAP];
 /// made `flint/pow` briefly look like an answer.
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_SEQ: [u32; ORIG_CAP] = [0; ORIG_CAP];
-/// `[checked, unrooted, first-unrooted-address, first-unrooted-type]`
-#[cfg(feature = "diagnostics")]
-pub static mut PARK_ROOTED: [u32; 4] = [0; 4];
-/// The value whose rootedness is asserted at every allocation while armed.
-#[cfg(feature = "diagnostics")]
-pub static mut WATCH_MSG: u32 = 0;
-#[cfg(feature = "diagnostics")]
-pub static mut WATCH_ARMED: bool = false;
-/// `[allocations checked, unrooted, first type allocated, first serial]`
-#[cfg(feature = "diagnostics")]
-pub static mut WATCH_HIT: [u32; 4] = [0; 4];
-/// Where the watched frame's allocations start, and the collection count when
-/// that was set -- a collection moves them, so the span has to be re-based.
-#[cfg(feature = "diagnostics")]
-pub static mut FRAME_START: u32 = 0;
-#[cfg(feature = "diagnostics")]
-pub static mut FRAME_MINOR: u64 = 0;
-/// `[checks, hits, holder, slot, target, holder type]`
-#[cfg(feature = "diagnostics")]
-pub static mut STALE_WRITE: [u32; 10] = [0; 10];
-/// `[watched message at the hit, its type, was it in a root then]`
-#[cfg(feature = "diagnostics")]
-pub static mut STALE_CMP: [u32; 6] = [0; 6];
-
 /// A stale value caught at the instant it is written, rather than found later
 /// in a scan. [count, obj, slot, value, obj-type, native, collection]
+#[cfg(feature = "diagnostics")]
 pub static mut STALE_SET: [u32; 10] = [0; 10];
 
 /// Roots that are still stale after a collection has finished.
@@ -124,18 +85,6 @@ pub static mut STALE_SHADOW: [u32; 65] = [0; 65];
 pub static mut STALE_PUSH: [u32; 4] = [0; 4];
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_N: usize = 0;
-#[cfg(feature = "diagnostics")]
-#[inline]
-pub fn note(addr: u32, kind: u32) {
-    unsafe {
-        if TRACING && TRACE_N < TRACE_CAP {
-            TRACE_ADDR[TRACE_N] = addr;
-            TRACE_KIND[TRACE_N] = kind;
-            TRACE_N += 1;
-        }
-    }
-}
-
 pub struct InternTable {
     pub slots: Vec<(u32, u64)>,
     pub count: usize,
@@ -364,7 +313,6 @@ pub struct Gc {
     /// nothing and perturbs nothing -- the reason a hop-by-hop log was
     /// unaffordable before is that it would have run for all 748.
     #[cfg(feature = "diagnostics")]
-    pub trace_cycle: u64,
     /// Check the generational invariant at the start of every collection.
     ///
     /// **Every old object pointing at a young one must be in the remembered
@@ -507,7 +455,6 @@ impl Gc {
             #[cfg(feature = "diagnostics")]
             upgrade_until: 0,
             #[cfg(feature = "diagnostics")]
-            trace_cycle: u64::MAX,
             #[cfg(feature = "diagnostics")]
             verify_remset: false,
             #[cfg(feature = "diagnostics")]
@@ -751,113 +698,6 @@ impl Gc {
             return a;
         }
         #[cfg(feature = "diagnostics")]
-        unsafe {
-            if WATCH_ARMED && WATCH_MSG != 0 {
-                // Follow forwarding first: if the watched object moved in an
-                // earlier collection, the roots hold its NEW address and
-                // comparing the old one would report a false absence.
-                if crate::obj::ty(&self.sp, WATCH_MSG) == crate::obj::TY_FWD {
-                    WATCH_MSG = crate::obj::len(&self.sp, WATCH_MSG);
-                }
-                WATCH_HIT[0] += 1;
-                if !roots.holds(WATCH_MSG) {
-                    if WATCH_HIT[1] == 0 {
-                        WATCH_HIT[2] = ty as u32;
-                        WATCH_HIT[3] = self.alloc_seq as u32;
-                    }
-                    WATCH_HIT[1] += 1;
-                }
-                // The question the failure mode actually poses: has a stale
-                // ADDRESS been written anywhere, while the live object stays
-                // properly rooted? The live-half predicate is used rather than a
-                // TY_FWD header test, because a forwarding header survives only
-                // until that half is reused and the check would then go quiet.
-                if self.stats.minor != FRAME_MINOR {
-                    FRAME_START = self.from; // a collection moved them; re-base
-                    FRAME_MINOR = self.stats.minor;
-                }
-                STALE_WRITE[0] += 1;
-                if STALE_WRITE[1] == 0 {
-                    // Objects born inside this frame: the origin stamp says the
-                    // holder was allocated here, so the write is into one of
-                    // them. Bounded by the frame, not by reachability.
-                    let mut a = FRAME_START;
-                    'outer: while a < self.bump {
-                        let size = size_of(&self.sp, a);
-                        if size < 8 || a + size > self.bump {
-                            break;
-                        }
-                        let t = crate::obj::ty(&self.sp, a);
-                        if t != TY_FREE && t != TY_FWD && layout_of(t) == Layout::Vals {
-                            let n = len(&self.sp, a);
-                            for i in 0..n {
-                                let v = slot(&self.sp, a, i);
-                                // REACHABLE only. Young space is never swept, so
-                                // a linear walk of it sees discarded
-                                // intermediates too -- and a dead node holding a
-                                // pre-collection address is not a bug, it is
-                                // garbage. Walking too much is the same failure
-                                // as walking too little.
-                                let is_bad = v.is_heap()
-                                    && self.is_young(v.as_heap())
-                                    && !self.in_live_half(v.as_heap());
-                                if is_bad && self.reachable(roots, a) {
-                                    STALE_WRITE[1] += 1;
-                                    STALE_WRITE[2] = a;
-                                    STALE_WRITE[3] = i;
-                                    STALE_WRITE[4] = v.as_heap();
-                                    STALE_WRITE[5] = t as u32;
-                                    // Which allocation inside this frame caught
-                                    // it, and what was being allocated then --
-                                    // enough to name the call rather than the
-                                    // function.
-                                    STALE_WRITE[6] = WATCH_HIT[0];
-                                    STALE_WRITE[7] = ty as u32;
-                                    // Does anything OUTSIDE this frame already
-                                    // hold the same stale address? If so the
-                                    // source predates the frame and this holder
-                                    // is a carrier; if not, the introduction is
-                                    // here. Do not assume -- this bug has made
-                                    // a carrier look like a cause twice.
-                                    let target = v.as_heap();
-                                    STALE_CMP[0] = WATCH_MSG;
-                                    STALE_CMP[1] = crate::obj::ty(&self.sp, WATCH_MSG) as u32;
-                                    STALE_CMP[2] = roots.holds(WATCH_MSG) as u32;
-                                    STALE_CMP[3] = len(&self.sp, a);
-                                    STALE_CMP[4] = crate::obj::ty(&self.sp, target) as u32;
-                                    STALE_CMP[5] = crate::obj::len(&self.sp, target);
-                                    let mut b = self.from;
-                                    while b < FRAME_START {
-                                        let bs = size_of(&self.sp, b);
-                                        if bs < 8 || b + bs > FRAME_START { break; }
-                                        let bt = crate::obj::ty(&self.sp, b);
-                                        if bt != TY_FREE && bt != TY_FWD
-                                            && layout_of(bt) == Layout::Vals
-                                        {
-                                            let bn = len(&self.sp, b);
-                                            for j in 0..bn {
-                                                if slot(&self.sp, b, j).is_heap()
-                                                    && slot(&self.sp, b, j).as_heap() == target
-                                                {
-                                                    STALE_WRITE[8] = b;
-                                                    STALE_WRITE[9] = bt as u32;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        if STALE_WRITE[8] != 0 { break; }
-                                        b += bs;
-                                    }
-                                    break 'outer;
-                                }
-                            }
-                        }
-                        a += size;
-                    }
-                }
-            }
-        }
-        #[cfg(feature = "diagnostics")]
         {
             self.alloc_seq += 1;
             if self.stress
@@ -1062,16 +902,12 @@ impl Gc {
             self.stats.bytes_copied += size as u64;
             d
         };
-        #[cfg(feature = "diagnostics")]
-        note(a, 2 | ((ty(&self.sp, a) as u32) << 8));
         write_header(&self.sp, a, TY_FWD, dest);
         self.work.push(dest);
         Value::heap(dest)
     }
 
     fn scan_object(&mut self, a: u32) {
-        #[cfg(feature = "diagnostics")]
-        note(a, 1 | ((ty(&self.sp, a) as u32) << 8));
         let t = ty(&self.sp, a);
         if layout_of(t) != Layout::Vals {
             return;
@@ -1194,54 +1030,7 @@ impl Gc {
         }
     }
 
-    /// Is `target` reachable from the roots right now? Read-only; uses the mark
-    /// bits and clears them again.
-    ///
-    /// Young space is never swept, so a linear walk of it sees discarded
-    /// intermediates as well as live objects -- and a dead node holding a
-    /// pre-collection address is garbage, not a bug. Walking too much is the
-    /// same failure as walking too little.
-    #[cfg(feature = "diagnostics")]
-    pub fn reachable(&mut self, roots: &mut Roots, target: u32) -> bool {
-        let mut work: Vec<u32> = Vec::new();
-        let mut seen: Vec<u32> = Vec::new();
-        roots.for_each(|v| {
-            if v.is_heap() {
-                work.push(v.as_heap());
-            }
-        });
-        let mut found = false;
-        while let Some(a) = work.pop() {
-            if a == target {
-                found = true;
-                break;
-            }
-            if marked(&self.sp, a) {
-                continue;
-            }
-            set_marked(&self.sp, a, true);
-            seen.push(a);
-            if layout_of(crate::obj::ty(&self.sp, a)) == Layout::Vals {
-                let n = len(&self.sp, a);
-                for i in 0..n {
-                    let v = slot(&self.sp, a, i);
-                    if v.is_heap() {
-                        work.push(v.as_heap());
-                    }
-                }
-            }
-        }
-        for a in seen {
-            set_marked(&self.sp, a, false);
-        }
-        found
-    }
-
     pub fn minor(&mut self, roots: &mut Roots) {
-        #[cfg(feature = "diagnostics")]
-        unsafe {
-            TRACING = self.stats.minor + 1 == self.trace_cycle;
-        }
         #[cfg(feature = "diagnostics")]
         let was_collecting = core::mem::replace(&mut self.in_collect, true);
         #[cfg(feature = "diagnostics")]
@@ -1262,29 +1051,6 @@ impl Gc {
                 pending.push(*v);
             }
         });
-        #[cfg(feature = "diagnostics")]
-        unsafe {
-            if TRACING {
-                for v in &pending {
-                    let a = v.as_heap();
-                    note(a, 4 | ((ty(&self.sp, a) as u32) << 8));
-                    // The invariant that must hold for an OLD object reachable
-                    // from the roots: if it points at a young object it must be
-                    // in the remembered set, because `forward` returns early for
-                    // anything outside from-space and a minor descends into an
-                    // old object ONLY via that set.
-                    if ty(&self.sp, a) == crate::obj::TY_PORT && !self.is_young(a) {
-                        let ib = slot(&self.sp, a, 3); // PT_INBOX
-                        let young_box = ib.is_heap() && self.is_young(ib.as_heap());
-                        let remembered = in_remset(&self.sp, a);
-                        note(
-                            a,
-                            5 | ((young_box as u32) << 8) | ((remembered as u32) << 9),
-                        );
-                    }
-                }
-            }
-        }
         let mut fwd: Vec<Value> = Vec::with_capacity(pending.len());
         for v in &pending {
             fwd.push(self.forward(*v));
@@ -1299,15 +1065,6 @@ impl Gc {
 
         // 2. remembered set (old -> young edges)
         let old_rem = core::mem::take(&mut self.remembered);
-        #[cfg(feature = "diagnostics")]
-        unsafe {
-            if TRACING {
-                // 3 = an entry of the taken remembered list, with its type.
-                for a in &old_rem {
-                    note(*a, 3 | ((ty(&self.sp, *a) as u32) << 8));
-                }
-            }
-        }
         for a in &old_rem {
             set_in_remset(&self.sp, *a, false);
         }
@@ -1353,7 +1110,7 @@ impl Gc {
             let (from, bump) = (self.from, self.bump);
             let (yb, span) = (self.young_base, self.half * 2);
             STALE_ROOT[5] += 1;
-            let mut check = |v: &Value, which: u32, idx: u32| {
+            let check = |v: &Value, which: u32, idx: u32| {
                 STALE_ROOT[6] += 1;
                 if v.is_heap() {
                     let a = v.as_heap();

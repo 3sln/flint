@@ -653,43 +653,6 @@ impl Rt {
     }
 
     fn port_dequeue(&mut self, p: Value) -> Value {
-        #[cfg(feature = "diagnostics")]
-        unsafe {
-            // The failing dequeue: record the chain so the invariant walk can be
-            // told which object it MUST reach, and so the message's own
-            // generation is a fact rather than an inference.
-            if crate::gc::CHAIN[0] == 0 {
-                let ib = crate::obj::slot(&self.gc.sp, p.as_heap(), PT_INBOX);
-                if ib.is_heap() {
-                    let head = fx(self.slot(p, PT_HEAD)) as u32;
-                    let v = self.vec_nth(ib, head).unwrap_or(NIL);
-                    if v.is_heap() && crate::obj::ty(&self.gc.sp, v.as_heap()) == crate::obj::TY_FWD {
-                        let tail = crate::obj::slot(&self.gc.sp, ib.as_heap(), 3);
-                        crate::gc::CHAIN = [
-                            p.as_heap(),
-                            ib.as_heap(),
-                            if tail.is_heap() { tail.as_heap() } else { 0 },
-                            v.as_heap(),
-                            self.gc.is_young(p.as_heap()) as u32,
-                            self.gc.is_young(ib.as_heap()) as u32,
-                            if tail.is_heap() { self.gc.is_young(tail.as_heap()) as u32 } else { 9 },
-                            self.gc.is_young(v.as_heap()) as u32,
-                            // "looks young" and "is in the live half" are
-                            // different questions, and only the second one
-                            // distinguishes a live pointer from a pre-flip one.
-                            self.gc.in_live_half(p.as_heap()) as u32,
-                            self.gc.in_live_half(ib.as_heap()) as u32,
-                            if tail.is_heap() { self.gc.in_live_half(tail.as_heap()) as u32 } else { 9 },
-                            self.gc.in_live_half(v.as_heap()) as u32,
-                            self.gc.from_now(),
-                            self.gc.bump_now(),
-                            self.gc.to_now(),
-                            self.gc.half_now(),
-                        ];
-                    }
-                }
-            }
-        }
         let head = fx(self.slot(p, PT_HEAD)) as u32;
         let ib = self.slot(p, PT_INBOX);
         let v = self.vec_nth(ib, head).unwrap_or(NIL);
@@ -1330,30 +1293,7 @@ impl Rt {
         self.pop_to(base);
     }
 
-    /// Arm the presence check for every allocation reached while this call is
-    /// live, rather than at one hand-chosen allocation. Choosing which
-    /// allocation to watch is choosing by plausibility, and the four functions
-    /// audited by reading were the four that came to mind.
     pub fn port_send(&mut self, p: Value, v: Value) -> Value {
-        #[cfg(feature = "diagnostics")]
-        let saved = unsafe { (crate::gc::WATCH_MSG, crate::gc::WATCH_ARMED) };
-        #[cfg(feature = "diagnostics")]
-        unsafe {
-            crate::gc::WATCH_MSG = if v.is_heap() { v.as_heap() } else { 0 };
-            crate::gc::WATCH_ARMED = crate::gc::WATCH_MSG != 0;
-            crate::gc::FRAME_START = self.gc.bump_now();
-            crate::gc::FRAME_MINOR = self.gc.stats.minor;
-        }
-        let out = self.port_send_inner(p, v);
-        #[cfg(feature = "diagnostics")]
-        unsafe {
-            crate::gc::WATCH_MSG = saved.0;
-            crate::gc::WATCH_ARMED = saved.1;
-        }
-        out
-    }
-
-    fn port_send_inner(&mut self, p: Value, v: Value) -> Value {
         if !self.need_port(p, "send") {
             return NIL;
         }
@@ -1420,25 +1360,7 @@ impl Rt {
             let queued = fx(self.slot(self.r(hi), PT_BYTES));
             if queued > 0 && queued + len > cap {
                 let target = self.r(hi);
-                #[cfg(feature = "diagnostics")]
-                let msg = self.r(vi);
                 self.pop_to(base);
-                // Same presence question on the host-port park, which is the
-                // branch a back-pressured document run actually takes.
-                #[cfg(feature = "diagnostics")]
-                if msg.is_heap() {
-                    unsafe { crate::gc::PARK_ROOTED[0] += 1; }
-                    if !self.roots.holds(msg.as_heap()) {
-                        unsafe {
-                            if crate::gc::PARK_ROOTED[1] == 0 {
-                                crate::gc::PARK_ROOTED[2] = msg.as_heap();
-                                crate::gc::PARK_ROOTED[3] =
-                                    crate::obj::ty(&self.gc.sp, msg.as_heap()) as u32;
-                            }
-                            crate::gc::PARK_ROOTED[1] += 1;
-                        }
-                    }
-                }
                 return self.park_on_port(WK_SEND, target);
             }
             self.set(self.r(hi), PT_BYTES, Value::fixnum(queued + len));
@@ -1466,26 +1388,7 @@ impl Rt {
         let cap = fx(self.slot(self.r(pei), PT_CAP));
         if self.inbox_count(self.r(pei)) as i64 >= cap {
             let target = self.r(pei);
-            #[cfg(feature = "diagnostics")]
-            let msg = self.r(vi);
             self.pop_to(base);
-            // `pop_to` has just unrooted the message. It is believed to survive
-            // on the value stack, which is traced -- but that is a rooting
-            // argument, and `park_on_port` allocates. Ask instead.
-            #[cfg(feature = "diagnostics")]
-            if msg.is_heap() {
-                unsafe { crate::gc::PARK_ROOTED[0] += 1; }
-                if !self.roots.holds(msg.as_heap()) {
-                    unsafe {
-                        if crate::gc::PARK_ROOTED[1] == 0 {
-                            crate::gc::PARK_ROOTED[2] = msg.as_heap();
-                            crate::gc::PARK_ROOTED[3] =
-                                crate::obj::ty(&self.gc.sp, msg.as_heap()) as u32;
-                        }
-                        crate::gc::PARK_ROOTED[1] += 1;
-                    }
-                }
-            }
             return self.park_on_port(WK_SEND, target);
         }
         let val = self.r(vi);

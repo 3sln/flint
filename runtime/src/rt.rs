@@ -159,23 +159,53 @@ impl Rt {
         // into a Rust local, allocated, and then pushed it lands here -- one
         // step before the write that eventually makes it visible, and while the
         // frame that owns the mistake is still on the stack.
+        //
+        // The test is two comparisons; everything else is out of line. `push` is
+        // inlined at some hundreds of call sites, and carrying the reporting
+        // inline cost 51 KB of diagnostics module the first time it was written
+        // that way.
         #[cfg(feature = "diagnostics")]
-        unsafe {
-            crate::gc::STALE_PUSH[3] += 1;
-            if v.is_heap()
-                && self.gc.is_young(v.as_heap())
-                && !self.gc.in_live_half(v.as_heap())
-            {
-                crate::gc::STALE_PUSH[0] += 1;
-                if crate::gc::STALE_PUSH[1] == 0 {
-                    crate::gc::STALE_PUSH[1] = v.as_heap();
-                    crate::gc::STALE_PUSH[2] = self.gc.stats.minor as u32;
-                }
-            }
-        }
+        self.check_push(v);
         self.roots.shadow.push(v);
         self.roots.shadow.len() - 1
     }
+    #[cfg(feature = "diagnostics")]
+    #[inline(never)]
+    fn check_push(&mut self, v: Value) {
+        unsafe { crate::gc::STALE_PUSH[3] += 1 };
+        if v.is_heap() && !self.gc.in_live_half(v.as_heap()) && self.gc.is_young(v.as_heap()) {
+            self.note_stale_push(v.as_heap());
+        }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[inline(never)]
+    #[cold]
+    fn note_stale_push(&mut self, a: u32) {
+        unsafe {
+            crate::gc::STALE_PUSH[0] += 1;
+            if crate::gc::STALE_PUSH[1] != 0 {
+                return;
+            }
+            crate::gc::STALE_PUSH[1] = a;
+            crate::gc::STALE_PUSH[2] = self.gc.stats.minor as u32;
+            // And the whole shadow stack with it, so the frame that owns the
+            // mistake is READ OFF rather than inferred. Inferring it from the
+            // one bad address is what cost this investigation most of its wrong
+            // turns.
+            crate::gc::STALE_SHADOW[0] = self.roots.shadow.len() as u32;
+            for (k, x) in self.roots.shadow.iter().take(32).enumerate() {
+                let addr = if x.is_heap() { x.as_heap() } else { 0 };
+                crate::gc::STALE_SHADOW[k * 2 + 1] = addr;
+                crate::gc::STALE_SHADOW[k * 2 + 2] = if addr != 0 {
+                    crate::obj::ty(&self.gc.sp, addr) as u32
+                } else {
+                    255
+                };
+            }
+        }
+    }
+
     #[inline]
     pub fn r(&self, i: usize) -> Value {
         self.roots.shadow[i]

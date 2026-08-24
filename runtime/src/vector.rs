@@ -44,39 +44,6 @@ impl Rt {
     }
     #[inline]
     pub fn node_set(&mut self, n: Value, i: u32, v: Value) {
-        // The write that carries a pre-flip address into a live node. `set_slot`
-        // can see that the value is stale but not where it came from; only here
-        // are the roots in reach, and "is the stale address itself in a root?"
-        // is the question that separates a bad read from a missed update.
-        #[cfg(feature = "diagnostics")]
-        unsafe {
-            if v.is_heap()
-                && self.gc.is_young(v.as_heap())
-                && !self.gc.in_live_half(v.as_heap())
-                && crate::gc::STALE_SET[7] == 0
-            {
-                crate::gc::STALE_SET[7] = 1 + self.roots.holds(v.as_heap()) as u32;
-                crate::gc::STALE_SET[8] =
-                    self.roots.shadow.iter().filter(|x| x.is_heap()).count() as u32;
-                crate::gc::STALE_SHADOW[0] = self.roots.shadow.len() as u32;
-                for (k, x) in self.roots.shadow.iter().take(32).enumerate() {
-                    let a = if x.is_heap() { x.as_heap() } else { 0 };
-                    crate::gc::STALE_SHADOW[k * 2 + 1] = a;
-                    crate::gc::STALE_SHADOW[k * 2 + 2] = if a != 0 {
-                        crate::obj::ty(&self.gc.sp, a) as u32
-                    } else {
-                        255
-                    };
-                }
-                crate::gc::STALE_SET[9] = self
-                    .roots
-                    .shadow
-                    .iter()
-                    .position(|x| x.is_heap() && x.as_heap() == v.as_heap())
-                    .map(|k| 1 + k as u32)
-                    .unwrap_or(0);
-            }
-        }
         self.gc.set_slot(n.as_heap(), i + 1, v);
     }
     #[inline]

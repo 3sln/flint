@@ -10,11 +10,11 @@ import sys
 EXPORTS = [
     "stat_bytes_allocated", "stat_collections", "stat_peak_live", "stat_heap_used",
     "collect_now", "set_gc_stress", "set_gc_stress_window", "stat_allocs",
-    "set_gc_upgrade_window", "set_gc_trace_cycle", "stat_trace_n", "stat_trace_addr",
-    "stat_trace_kind", "set_gc_verify_remset", "stat_remset_violations",
+    "set_gc_upgrade_window",
+    "set_gc_verify_remset", "stat_remset_violations",
     "stat_remset_bad", "stat_remset_end_violations", "stat_remset_cover",
-    "set_gc_remset_watch", "stat_chain2", "stat_dead_half", "stat_limbo",
-    "set_gc_watch_end", "stat_end_bump", "stat_origin", "stat_origin_seq", "stat_park_rooted", "stat_watch_hit", "stat_stale_write", "stat_stale_cmp", "stat_stale_set", "stat_stale_root", "stat_stale_shadow", "stat_stale_push", "stat_restore_stale", "set_gc_origin_window", "stat_native_slot", "stat_native_name",
+    "set_gc_remset_watch", "stat_dead_half", "stat_limbo",
+    "set_gc_watch_end", "stat_end_bump", "stat_origin", "stat_origin_seq", "stat_stale_set", "stat_stale_root", "stat_stale_shadow", "stat_stale_push", "stat_restore_stale", "set_gc_origin_window", "stat_native_slot", "stat_native_name",
 ]
 
 path = sys.argv[1]

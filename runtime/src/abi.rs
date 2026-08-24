@@ -318,12 +318,6 @@ pub extern "C" fn stat_remset_cover(i: u32) -> u32 {
     }
 }
 
-#[cfg(feature = "diagnostics")]
-#[no_mangle]
-pub extern "C" fn stat_chain2(i: u32) -> u32 {
-    unsafe { if (i as usize) < 16 { crate::gc::CHAIN[i as usize] } else { 0 } }
-}
-
 /// Pointers into the DEAD half found by the invariant walk: `(object, its type,
 /// slot, target, the collection it was seen at)`.
 #[cfg(feature = "diagnostics")]
@@ -390,36 +384,6 @@ pub extern "C" fn stat_origin(addr: u32) -> u32 {
         }
         0
     }
-}
-
-/// `[the watched message at the hit, its type, whether a root held it]`
-#[cfg(feature = "diagnostics")]
-#[no_mangle]
-pub extern "C" fn stat_stale_cmp(i: u32) -> u32 {
-    unsafe { if (i as usize) < 6 { crate::gc::STALE_CMP[i as usize] } else { 0 } }
-}
-
-/// `[checks, hits, holder, slot, target, holder type]` for a stale ADDRESS found
-/// written into an object born inside the watched frame.
-#[cfg(feature = "diagnostics")]
-#[no_mangle]
-pub extern "C" fn stat_stale_write(i: u32) -> u32 {
-    unsafe { if (i as usize) < 10 { crate::gc::STALE_WRITE[i as usize] } else { 0 } }
-}
-
-/// `[allocations checked inside port-send, message unrooted at one, the type
-/// being allocated there, its allocation serial]`
-#[cfg(feature = "diagnostics")]
-#[no_mangle]
-pub extern "C" fn stat_watch_hit(i: u32) -> u32 {
-    unsafe { if (i as usize) < 4 { crate::gc::WATCH_HIT[i as usize] } else { 0 } }
-}
-
-/// `[parks checked, message NOT in any traced root, first such address, its type]`
-#[cfg(feature = "diagnostics")]
-#[no_mangle]
-pub extern "C" fn stat_park_rooted(i: u32) -> u32 {
-    unsafe { if (i as usize) < 4 { crate::gc::PARK_ROOTED[i as usize] } else { 0 } }
 }
 
 /// The allocation serial of the object at `addr`, so several carriers of one
@@ -503,31 +467,6 @@ pub extern "C" fn stat_remset_bad(i: u32, f: u32) -> u32 {
         let g = &ensure_rt().gc;
         if (i as usize) < 8 && (f as usize) < 5 { g.remset_bad[i as usize][f as usize] } else { 0 }
     }
-}
-
-/// Log the traversal of exactly this collection, and nothing else.
-#[cfg(feature = "diagnostics")]
-#[no_mangle]
-pub extern "C" fn set_gc_trace_cycle(lo: u32, hi: u32) {
-    unsafe { ensure_rt().gc.trace_cycle = ((hi as u64) << 32) | lo as u64 }
-}
-
-#[cfg(feature = "diagnostics")]
-#[no_mangle]
-pub extern "C" fn stat_trace_n() -> u32 {
-    unsafe { crate::gc::TRACE_N as u32 }
-}
-
-#[cfg(feature = "diagnostics")]
-#[no_mangle]
-pub extern "C" fn stat_trace_addr(i: u32) -> u32 {
-    unsafe { if (i as usize) < crate::gc::TRACE_N { crate::gc::TRACE_ADDR[i as usize] } else { 0 } }
-}
-
-#[cfg(feature = "diagnostics")]
-#[no_mangle]
-pub extern "C" fn stat_trace_kind(i: u32) -> u32 {
-    unsafe { if (i as usize) < crate::gc::TRACE_N { crate::gc::TRACE_KIND[i as usize] } else { 0 } }
 }
 
 #[cfg(feature = "diagnostics")]
