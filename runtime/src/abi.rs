@@ -392,6 +392,14 @@ pub extern "C" fn stat_origin(addr: u32) -> u32 {
     }
 }
 
+/// `[allocations checked inside port-send, message unrooted at one, the type
+/// being allocated there, its allocation serial]`
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_watch_hit(i: u32) -> u32 {
+    unsafe { if (i as usize) < 4 { crate::gc::WATCH_HIT[i as usize] } else { 0 } }
+}
+
 /// `[parks checked, message NOT in any traced root, first such address, its type]`
 #[cfg(feature = "diagnostics")]
 #[no_mangle]

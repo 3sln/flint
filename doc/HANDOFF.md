@@ -934,6 +934,53 @@ measurement puts the introduction inside them. When the line is found, the
 question worth answering is not which one was wrong but *what made the wrong
 reading look right* — because that is what will make the next one look right.
 
+## The widened check: 9 803 allocations, zero unrooted — and what it cannot see
+
+Armed at EVERY allocation reached while `flint/port-send` is live, rather than at
+one hand-chosen one, so no choice between `push_event` and `port_enqueue` was
+needed and paths neither of us named are covered too. It follows forwarding
+first, so an object that moved in an earlier collection is compared by its new
+address rather than reported as a false absence.
+
+    allocations inside flint/port-send, checked: 9 803
+    of those, the message was in NO traced root:     0
+
+**Do not read that as "so the staleness arrives before entry".** The check asks
+whether the *live object* is present in some root. This bug's failure mode is a
+**stale copy of an address written into a node while the live object stays
+properly rooted elsewhere** — and presence of the live object cannot see that.
+The instrument answers a different question from the one the bug poses.
+
+What it does establish, with coverage: the message never becomes unrooted during
+`port_send`, so it is not dying there. That eliminates one whole family. It does
+not eliminate the other.
+
+The check that WOULD see it asks the opposite question, and it already exists in
+another form: at every allocation inside `port_send`, assert that no traced root
+and no reachable object holds an address whose object is `TY_FWD` — the live-half
+predicate applied continuously rather than at collection boundaries. That is
+expensive, but `port_send` runs 9 803 allocations in this test, not 18 million,
+so it is affordable exactly here.
+
+### The premise, and then the rules
+
+**A more careful reading of a rooting argument is still a rooting argument.**
+That is why the list below exists rather than being a peer to it.
+
+1. A lookup against the wrong table returns something, and it looks like a
+   finding.
+2. A check means nothing about a space it does not walk — and a coverage zero
+   and a clean zero are the same output with opposite meanings, so count.
+3. Measure presence directly, not through the thing presence causes.
+4. A watch address is only valid if the object cannot move.
+5. An unscoped ring is a *silently* weaker instrument.
+6. Order by allocation to turn an attribution into a cause.
+
+To which this run adds the sharpest form of the general problem: **an instrument
+that answers a different question from the one the bug poses will answer it
+cleanly.** Rule 3 is the special case; state the question the failure mode poses
+before trusting a zero.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.

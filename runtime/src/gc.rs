@@ -84,6 +84,14 @@ pub static mut ORIG_SEQ: [u32; ORIG_CAP] = [0; ORIG_CAP];
 /// `[checked, unrooted, first-unrooted-address, first-unrooted-type]`
 #[cfg(feature = "diagnostics")]
 pub static mut PARK_ROOTED: [u32; 4] = [0; 4];
+/// The value whose rootedness is asserted at every allocation while armed.
+#[cfg(feature = "diagnostics")]
+pub static mut WATCH_MSG: u32 = 0;
+#[cfg(feature = "diagnostics")]
+pub static mut WATCH_ARMED: bool = false;
+/// `[allocations checked, unrooted, first type allocated, first serial]`
+#[cfg(feature = "diagnostics")]
+pub static mut WATCH_HIT: [u32; 4] = [0; 4];
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_N: usize = 0;
 #[cfg(feature = "diagnostics")]
@@ -705,6 +713,25 @@ impl Gc {
                 self.remember(a);
             }
             return a;
+        }
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            if WATCH_ARMED && WATCH_MSG != 0 {
+                // Follow forwarding first: if the watched object moved in an
+                // earlier collection, the roots hold its NEW address and
+                // comparing the old one would report a false absence.
+                if crate::obj::ty(&self.sp, WATCH_MSG) == crate::obj::TY_FWD {
+                    WATCH_MSG = crate::obj::len(&self.sp, WATCH_MSG);
+                }
+                WATCH_HIT[0] += 1;
+                if !roots.holds(WATCH_MSG) {
+                    if WATCH_HIT[1] == 0 {
+                        WATCH_HIT[2] = ty as u32;
+                        WATCH_HIT[3] = self.alloc_seq as u32;
+                    }
+                    WATCH_HIT[1] += 1;
+                }
+            }
         }
         #[cfg(feature = "diagnostics")]
         {

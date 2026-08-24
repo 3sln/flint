@@ -1330,7 +1330,28 @@ impl Rt {
         self.pop_to(base);
     }
 
+    /// Arm the presence check for every allocation reached while this call is
+    /// live, rather than at one hand-chosen allocation. Choosing which
+    /// allocation to watch is choosing by plausibility, and the four functions
+    /// audited by reading were the four that came to mind.
     pub fn port_send(&mut self, p: Value, v: Value) -> Value {
+        #[cfg(feature = "diagnostics")]
+        let saved = unsafe { (crate::gc::WATCH_MSG, crate::gc::WATCH_ARMED) };
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            crate::gc::WATCH_MSG = if v.is_heap() { v.as_heap() } else { 0 };
+            crate::gc::WATCH_ARMED = crate::gc::WATCH_MSG != 0;
+        }
+        let out = self.port_send_inner(p, v);
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            crate::gc::WATCH_MSG = saved.0;
+            crate::gc::WATCH_ARMED = saved.1;
+        }
+        out
+    }
+
+    fn port_send_inner(&mut self, p: Value, v: Value) -> Value {
         if !self.need_port(p, "send") {
             return NIL;
         }
