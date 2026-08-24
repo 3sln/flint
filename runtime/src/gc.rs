@@ -73,6 +73,14 @@ pub const ORIG_CAP: usize = 1 << 16;
 pub static mut ORIG_ADDR: [u32; ORIG_CAP] = [0; ORIG_CAP];
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_WHO: [u32; ORIG_CAP] = [0; ORIG_CAP];
+/// A monotonic allocation serial. This bug propagates a stale pointer verbatim
+/// into every clone, so several live nodes carry it and each was allocated by
+/// somebody -- the stamp names a CARRIER, not necessarily the introducer.
+/// Ordering the carriers and taking the earliest is what distinguishes them,
+/// and picking between attributions by plausibility instead is the move that
+/// made `flint/pow` briefly look like an answer.
+#[cfg(feature = "diagnostics")]
+pub static mut ORIG_SEQ: [u32; ORIG_CAP] = [0; ORIG_CAP];
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_N: usize = 0;
 #[cfg(feature = "diagnostics")]
@@ -712,6 +720,7 @@ impl Gc {
                 let i = ORIG_N & (ORIG_CAP - 1);
                 ORIG_ADDR[i] = a;
                 ORIG_WHO[i] = CUR_NATIVE;
+                ORIG_SEQ[i] = ORIG_N as u32;
                 ORIG_N += 1;
             }
         }

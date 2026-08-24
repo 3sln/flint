@@ -855,6 +855,41 @@ holding operands — `VECTOR`, `MAP`, `SET`, `LIST`, `CLOSURE`, `APPLY` — and 
 origin stamp can name which, since it already distinguishes "the interpreter
 itself" from any builtin.
 
+## The serial separates the introducer from the carriers
+
+The stale pointer propagates verbatim into every clone, so several live nodes
+carry it and each was allocated by somebody. The origin stamp names a CARRIER,
+not necessarily the introducer — and two attributions, `flint/port-send` and
+"the interpreter itself", are not two bugs. Ordering them settles which is which:
+
+    holder@3352448 slot  1 -> 3341768   flint/port-send            serial 33
+    holder@3353040 slot 20 -> 3341768   the interpreter itself     serial 46
+    holder@1245768 slot 20 -> 3341768   (allocated later, outside the window)
+
+**`flint/port-send` is the earliest. It is the introducer; the interpreter holder
+is a copy made thirteen allocations later.**
+
+So `VECTOR`, `MAP`, `SET`, `LIST`, `CLOSURE` and `APPLY` are **not in this
+story**, and reading them would have been a session spent on a copy. Picking
+between two attributions by plausibility is the same move that made `flint/pow`
+briefly look like an answer; the serial removes the judgement call.
+
+### Which means the earlier audit missed something
+
+`port_send`, `port_enqueue`, `vec_conj` and `push_event` were all audited and
+found correctly rooted. The serial says the introduction is inside that call
+tree anyway, so one of those readings is wrong. That is a bounded re-read with a
+named entry point rather than an open search — and it should be done with the
+same standard applied to the rest of this investigation: not "this looks rooted"
+but "this value cannot be stale across this allocation, and here is why".
+
+The park branch of the channel path is worth reading first: it calls
+`self.pop_to(base)` — unrooting both the port and the message — and only then
+enters `park_on_port`, which allocates. The message survives on the value stack,
+which is traced, so the reasoning holds; but it is the one place in that tree
+where a value is deliberately unrooted before an allocation, and "it survives by
+another route" is exactly the kind of argument this bug has punished five times.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.

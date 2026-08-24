@@ -392,6 +392,25 @@ pub extern "C" fn stat_origin(addr: u32) -> u32 {
     }
 }
 
+/// The allocation serial of the object at `addr`, so several carriers of one
+/// stale pointer can be ordered and the EARLIEST -- the introducer -- picked out.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_origin_seq(addr: u32) -> u32 {
+    unsafe {
+        let n = crate::gc::ORIG_N;
+        let cap = crate::gc::ORIG_CAP;
+        let seen = if n < cap { n } else { cap };
+        for k in 1..=seen {
+            let i = (n - k) & (cap - 1);
+            if crate::gc::ORIG_ADDR[i] == addr {
+                return crate::gc::ORIG_SEQ[i] + 1; // +1 so 0 means "not found"
+            }
+        }
+        0
+    }
+}
+
 /// The `i`-th byte of native import `idx`'s NAME, read from the image's own
 /// table. This is the right table: a slot resolved through the host registry
 /// answers from a different index space and returns something plausible.
