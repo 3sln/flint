@@ -225,6 +225,17 @@ pub struct Gc {
     /// Set by tests/benchmarks to force a collection at every allocation.
     #[cfg(feature = "diagnostics")]
     pub stress: bool,
+    /// Collect only for allocations in `[stress_from, stress_until)`. Bisecting
+    /// this narrows a timing-dependent fault to the single allocation whose
+    /// collection causes it -- at which point the question stops being "where in
+    /// the collector" and becomes "what is live across THIS allocation and not
+    /// rooted", which is small and answerable.
+    #[cfg(feature = "diagnostics")]
+    pub alloc_seq: u64,
+    #[cfg(feature = "diagnostics")]
+    pub stress_from: u64,
+    #[cfg(feature = "diagnostics")]
+    pub stress_until: u64,
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
     #[cfg(feature = "diagnostics")]
@@ -258,6 +269,12 @@ impl Gc {
             collecting: false,
             #[cfg(feature = "diagnostics")]
             stress: false,
+            #[cfg(feature = "diagnostics")]
+            alloc_seq: 0,
+            #[cfg(feature = "diagnostics")]
+            stress_from: u64::MAX,
+            #[cfg(feature = "diagnostics")]
+            stress_until: 0,
             #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };
@@ -438,9 +455,14 @@ impl Gc {
             return a;
         }
         #[cfg(feature = "diagnostics")]
-        if self.stress {
-            self.minor(roots);
-            self.maybe_major(roots);
+        {
+            self.alloc_seq += 1;
+            if self.stress
+                || (self.alloc_seq >= self.stress_from && self.alloc_seq < self.stress_until)
+            {
+                self.minor(roots);
+                self.maybe_major(roots);
+            }
         }
         if self.bump + size > self.from_end {
             self.minor(roots);

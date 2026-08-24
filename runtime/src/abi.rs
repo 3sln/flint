@@ -267,6 +267,25 @@ pub extern "C" fn stat_peak_live() -> u64 {
 /// tested to the standard the rest of the collector is held to: a thread that
 /// parks holds live references in a saved stack, and only stress mode makes
 /// every one of those saves and restores race a collection.
+/// Collect only for allocations in `[from, until)`. Bisect it to find the single
+/// allocation whose collection causes a timing-dependent fault. The predicate is
+/// NOT monotone, so any window a bisection lands on must be re-run to confirm.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn set_gc_stress_window(from_lo: u32, from_hi: u32, until_lo: u32, until_hi: u32) {
+    unsafe {
+        let rt = ensure_rt();
+        rt.gc.stress_from = ((from_hi as u64) << 32) | from_lo as u64;
+        rt.gc.stress_until = ((until_hi as u64) << 32) | until_lo as u64;
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_allocs() -> u64 {
+    unsafe { ensure_rt().gc.alloc_seq }
+}
+
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn set_gc_stress(on: u32) {

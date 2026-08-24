@@ -337,6 +337,39 @@ the buffer to the maximum heap once, before the run, and have `capture_into`
 never grow it. Then a snapshot costs a memcpy and no allocation, and the diff
 across the minor that moves the message becomes available.
 
+## The bisection is impractical at this scale — measured, not assumed
+
+The stress window is back, now as diagnostics-feature machinery rather than
+throwaway scaffolding (`set_gc_stress_window`, `stat_allocs`). Bisecting it found
+the answer in the 222-allocation repro. It does **not** scale to this one:
+
+    the document run: 18 583 324 allocations, 748 natural collections
+    forcing collections for just the first 200 000 allocations: >10 minutes
+
+A prefix probe costs O(window) collections, so a probe near the top end would run
+for something like fifteen hours. Binary search over 18.5 million allocations is
+not available.
+
+**But 748 is a small space, and that is the reframing.** The next attempt should
+bisect over the natural collection points, not over allocations. What it needs is
+an instrument that can *suppress or shift* a chosen natural collection, because
+the one thing already known is that **adding** a collection anywhere fixes the
+bug — so forcing cannot discriminate between the 748.
+
+Also confirmed while setting this up: the bug reproduces in the diagnostics
+build (63 waves), so the instrumented configuration is a valid place to hunt it.
+`test/document.clj` now runs in the diagnostics phase of `bin/test`, because it
+uses `collect_now` and the heap statistics, which a production module no longer
+carries.
+
+### The count of perturbations that fix it is now nine
+
+A forced major at any cadence, two minors, the weak refresh alone, the sweep
+alone, an extra loop variable in the guest, a `throw` in the guest, `reap_ports`
+off, taking a snapshot, and linking the snapshot unit at all. Every one changes
+when a collection happens relative to allocations, and nothing that leaves
+allocation timing alone has ever fixed it.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.
