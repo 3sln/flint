@@ -253,3 +253,105 @@ fn without_the_thread_table_as_a_root_a_parked_stack_would_be_lost() {
          parked thread's 7 KB string (copied {rooted} bytes rooted vs {unrooted} unrooted)"
     );
 }
+
+/// The case `0005` actually asked for and the suite did not have: a thread that
+/// parks **on a waiter** -- a send into a full buffer, a receive on an empty one
+/// -- across a collection, repeatedly, so that waiter slots are recycled.
+///
+/// The existing stress test above parks with `yield`, which registers no waiter
+/// at all. That is the untested COMBINATION, and it is where the bug lived: the
+/// compound-keys bug taught the same lesson, since stress mode was already
+/// running on the map tests and still missed it because scalar keys never
+/// allocate in `=`.
+///
+/// Three sends through a one-slot channel force the sender to park twice and the
+/// receiver to park at least once, so a waiter is allocated, freed and reused
+/// while every allocation is collecting.
+#[test]
+fn a_waiter_park_survives_collection_at_every_allocation() {
+    let (got, collections) = ping_pong_under_stress(true);
+    assert_eq!(
+        got,
+        Some(6),
+        "the three values sent through a one-slot channel all arrived"
+    );
+    assert!(collections > 20, "stress mode should have collected many times");
+}
+
+/// The negative control, in the shape `without_the_barrier_the_reference_would_
+/// be_lost` set: the same program with stress off must pass, so a failure above
+/// is about collection and not about the program being wrong.
+#[test]
+fn the_same_ping_pong_is_correct_without_stress() {
+    let (got, _) = ping_pong_under_stress(false);
+    assert_eq!(got, Some(6));
+}
+
+/// `(let [[a b] (channel 1)]
+///    (spawn (fn [] (send a 1) (send a 2) (send a 3)))
+///    (+ (recv b) (recv b) (recv b)))`
+///
+/// Unrolled rather than looped so the bytecode stays readable; the point is the
+/// parking, not the counting.
+fn ping_pong_under_stress(stress: bool) -> (Option<i64>, u64) {
+    let mut b = Build::new();
+    let spawn = b.conc("flint/spawn", spawn_);
+    let channel = b.conc("flint/channel", channel_);
+    let send = b.conc("flint/port-send", send_);
+    let recv = b.conc("flint/port-receive", recv_);
+    let join = b.conc("flint/thread-join", join_);
+    let nth = b.rt_native("nth");
+    let plus = b.rt_native("flint/add");
+
+    let worker = {
+        let body = {
+            let mut a = Asm::new();
+            for v in 1..=3i16 {
+                a.op(op::UPVAL).u8v(0);
+                a.int(v);
+                a.native(send, 2).op(op::POP);
+            }
+            a.op(op::NIL).op(op::RETURN);
+            a.done()
+        };
+        let n = b.w.k_string("worker");
+        b.w.add_fn_upvals(n, 0, false, 2, &body, 1)
+    };
+    // main: [pair 0] [a 1] [b 2] [w 3]
+    let body = {
+        let mut a = Asm::new();
+        a.int(1).op(op::NIL).native(channel, 2).op(op::SET_LOCAL).u8v(0);
+        a.op(op::LOCAL).u8v(0).int(0).native(nth, 2).op(op::SET_LOCAL).u8v(1);
+        a.op(op::LOCAL).u8v(0).int(1).native(nth, 2).op(op::SET_LOCAL).u8v(2);
+        a.op(op::LOCAL).u8v(1).op(op::CLOSURE).u16v(worker as u16).u8v(1);
+        a.native(spawn, 1).op(op::SET_LOCAL).u8v(3);
+        // (+ (recv b) (recv b) (recv b)) -- each may park on an empty buffer
+        a.op(op::LOCAL).u8v(2).native(recv, 1);
+        a.op(op::LOCAL).u8v(2).native(recv, 1);
+        a.native(plus, 2);
+        a.op(op::LOCAL).u8v(2).native(recv, 1);
+        a.native(plus, 2);
+        a.op(op::SET_LOCAL).u8v(4);
+        a.op(op::LOCAL).u8v(3).native(join, 1).op(op::POP);
+        a.op(op::LOCAL).u8v(4).op(op::RETURN);
+        a.done()
+    };
+    let n = b.w.k_string("main");
+    b.w.entry = b.w.add_fn(n, 1, false, 6, &body);
+
+    let bytes = b.w.finish();
+    let mut rt = b.rt;
+    assert!(rt.load_image(&bytes));
+    rt.gc.stress = stress;
+    let argv = rt.empty_vec();
+    let v = rt.run_program(argv);
+    if rt.failed() {
+        let e = rt.clear_error();
+        let m = rt.ex_message(e);
+        let mut buf = flint_rt::rt::sbuf();
+        let ms: String = rt.as_str(m, &mut buf).unwrap_or("?").into();
+        panic!("threw under stress={stress}: {ms}");
+    }
+    let n = rt.as_i64(v);
+    (n, rt.gc.stats.minor + rt.gc.stats.major)
+}
