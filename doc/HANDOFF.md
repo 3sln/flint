@@ -457,6 +457,47 @@ points at a young object. The invariant check that matters is the general one --
 the whole heap at that one collection, not just to ports. Three entries says it
 will not be expensive.
 
+## The generational invariant HOLDS — the missed-edge family is dead
+
+Built as a standing assertion rather than a probe, because it is not a question
+about this bug: **every old object pointing at a young one must be in the
+remembered set** is the invariant a generational collector rests on. It walks
+every old object at the start of every collection and again at the end, names
+every violator, is read-only, and allocates nothing — so unlike a snapshot it
+cannot perturb what it inspects. `set_gc_verify_remset`, diagnostics-only.
+
+Run over the failing document run, with the failure still present (63 waves):
+
+    generational invariant violations: 0
+    of which at the END of a collection: 0
+
+Zero at both boundaries. So the barrier is right, the remembered set is right,
+promotion re-remembers correctly, and **the message still dies**. That kills the
+whole missed-old-to-young-edge family, including the reading from the previous
+session that pointed at the inbox vector or its tail node.
+
+There is no barrier gap to fix, so the sibling audit that would have followed is
+moot for now — it should be run against whatever the real cause turns out to be.
+
+### Where that leaves the wave loss
+
+Everything checked and cleared, by measurement: the write barrier and every site
+that writes a slot; the remembered set at the start and end of every collection;
+the weak `INTERN_PORT` table; reachability of the whole chain at the dequeue;
+trie/node granularity; a stale port copy; copy-without-scan; remset-processed-too
+-late; the old-space walk; and now the generational invariant over the whole
+heap.
+
+What remains true and unexplained: at collection #692 a message inside a port's
+inbox goes stale, and reading it later yields a `TY_FWD` object. The port is old
+and its inbox is old at that collection, so there is no old-to-young edge for the
+invariant to catch — which means the young thing that dies is reached through
+something the invariant does not model. The next question is therefore what the
+message actually IS at #692: young or old, and if old, which object holds the
+only reference to it. The traversal log for #692 already records every scanned
+and forwarded address, so the message's fate at that collection can be read off
+directly rather than inferred.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.

@@ -293,6 +293,36 @@ pub extern "C" fn set_gc_upgrade_window(from_lo: u32, from_hi: u32, until_lo: u3
     }
 }
 
+/// Check the generational invariant at the start of every collection: every old
+/// object pointing at a young one must be in the remembered set.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn set_gc_verify_remset(on: u32) {
+    unsafe { ensure_rt().gc.verify_remset = on != 0 }
+}
+
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_remset_violations() -> u32 {
+    unsafe { ensure_rt().gc.remset_violations }
+}
+
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_remset_end_violations() -> u32 {
+    unsafe { ensure_rt().gc.remset_end_violations }
+}
+
+/// `(object, its type, slot, young target, target type)` for the first eight.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_remset_bad(i: u32, f: u32) -> u32 {
+    unsafe {
+        let g = &ensure_rt().gc;
+        if (i as usize) < 8 && (f as usize) < 5 { g.remset_bad[i as usize][f as usize] } else { 0 }
+    }
+}
+
 /// Log the traversal of exactly this collection, and nothing else.
 #[cfg(feature = "diagnostics")]
 #[no_mangle]

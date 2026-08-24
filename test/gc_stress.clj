@@ -28,3 +28,31 @@
     (if (zero? @fails)
       (println "gc stress: ok")
       (do (println "gc stress:" @fails "FAILURES") (System/exit 1)))))
+
+;; --- the generational invariant, as a standing assertion --------------------
+;;
+;; **Every old object pointing at a young one must be in the remembered set.**
+;; That is not a question about any particular bug; it is the invariant a
+;; generational collector rests on. Violating it means a young object is never
+;; traced, dies, and leaves a stale pointer in something still live -- silent,
+;; and it surfaces somewhere else entirely. A dozen sessions of one such bug is
+;; what this assertion exists to prevent a repeat of.
+;;
+;; It is read-only and allocates nothing, so unlike a snapshot it cannot perturb
+;; the run it is checking. Production carries none of it (doc/decisions/0016).
+(println "gc: the generational invariant holds")
+(let [r (sh "node" "-e"
+            (str "import('./host/flint.mjs').then(async (m) => {"
+                 "const {module} = await m.load('out/gcstress.wasm');"
+                 "const i = m.instantiate(module);"
+                 "i.exports.set_gc_verify_remset(1);"
+                 "i.main();"
+                 "console.log(JSON.stringify({start: i.exports.stat_remset_violations(),"
+                 " end: i.exports.stat_remset_end_violations(),"
+                 " collections: Number(i.exports.stat_collections())}));})"))
+      out (str/trim (str (:out r) (:err r)))
+      ]
+  (println (str "    " out))
+  (if (and (str/includes? out "\"start\":0") (str/includes? out "\"end\":0"))
+    (println "  ok   no old object points at a young one without being remembered")
+    (do (println "  FAIL the generational invariant was violated") (System/exit 1))))

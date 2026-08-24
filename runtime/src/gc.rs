@@ -279,6 +279,28 @@ pub struct Gc {
     /// unaffordable before is that it would have run for all 748.
     #[cfg(feature = "diagnostics")]
     pub trace_cycle: u64,
+    /// Check the generational invariant at the start of every collection.
+    ///
+    /// **Every old object pointing at a young one must be in the remembered
+    /// set.** That is not a question about any particular bug -- it is THE
+    /// invariant a generational collector rests on, and violating it means a
+    /// young object is never traced, dies, and leaves a stale pointer behind in
+    /// something that is still live. Silent, and it surfaces somewhere else
+    /// entirely.
+    ///
+    /// It is read-only and allocates nothing, so unlike a snapshot it cannot
+    /// perturb the run it is inspecting. Under `0016` a production build carries
+    /// none of it; within a diagnostics build it is a flag because the walk is
+    /// O(old heap) per collection.
+    #[cfg(feature = "diagnostics")]
+    pub verify_remset: bool,
+    #[cfg(feature = "diagnostics")]
+    pub remset_violations: u32,
+    #[cfg(feature = "diagnostics")]
+    pub remset_end_violations: u32,
+    /// The first few, as (object, its type, slot, young target, target type).
+    #[cfg(feature = "diagnostics")]
+    pub remset_bad: [[u32; 5]; 8],
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
     #[cfg(feature = "diagnostics")]
@@ -324,6 +346,14 @@ impl Gc {
             upgrade_until: 0,
             #[cfg(feature = "diagnostics")]
             trace_cycle: u64::MAX,
+            #[cfg(feature = "diagnostics")]
+            verify_remset: false,
+            #[cfg(feature = "diagnostics")]
+            remset_violations: 0,
+            #[cfg(feature = "diagnostics")]
+            remset_end_violations: 0,
+            #[cfg(feature = "diagnostics")]
+            remset_bad: [[0; 5]; 8],
             #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };
@@ -710,10 +740,52 @@ impl Gc {
         self.maybe_major(roots);
     }
 
+    /// Walk every old object and check the generational invariant. Read-only.
+    #[cfg(feature = "diagnostics")]
+    pub fn check_remset(&mut self) {
+        let chunks = self.old_chunks.clone();
+        for c in &chunks {
+            let mut a = c.addr;
+            let end = c.addr + c.len;
+            while a < end {
+                let size = size_of(&self.sp, a);
+                if size < 8 || a + size > end {
+                    break; // a parse error; the walk cannot continue past it
+                }
+                let t = ty(&self.sp, a);
+                if t != TY_FREE && t != TY_FWD && layout_of(t) == Layout::Vals {
+                    let n = len(&self.sp, a);
+                    for i in 0..n {
+                        let v = slot(&self.sp, a, i);
+                        if v.is_heap() && self.is_young(v.as_heap()) && !in_remset(&self.sp, a) {
+                            let k = self.remset_violations as usize;
+                            if k < 8 {
+                                self.remset_bad[k] = [
+                                    a,
+                                    t as u32,
+                                    i,
+                                    v.as_heap(),
+                                    ty(&self.sp, v.as_heap()) as u32,
+                                ];
+                            }
+                            self.remset_violations += 1;
+                            break; // one report per object is enough
+                        }
+                    }
+                }
+                a += size;
+            }
+        }
+    }
+
     pub fn minor(&mut self, roots: &mut Roots) {
         #[cfg(feature = "diagnostics")]
         unsafe {
             TRACING = self.stats.minor + 1 == self.trace_cycle;
+        }
+        #[cfg(feature = "diagnostics")]
+        if self.verify_remset {
+            self.check_remset();
         }
         #[cfg(debug_assertions)]
         self.sp.in_gc.set(true);
@@ -810,6 +882,17 @@ impl Gc {
         self.bump = self.to_bump;
         self.from_end = self.from + self.half;
         self.note_peak();
+        // And at the END: a promotion during this collection can create a fresh
+        // old-to-young edge, and if `scan_object` did not re-remember it the
+        // next collection will never trace it.
+        #[cfg(feature = "diagnostics")]
+        if self.verify_remset {
+            let before = self.remset_violations;
+            self.check_remset();
+            if self.remset_violations > before {
+                self.remset_end_violations += self.remset_violations - before;
+            }
+        }
         #[cfg(debug_assertions)]
         self.sp.in_gc.set(false);
     }
