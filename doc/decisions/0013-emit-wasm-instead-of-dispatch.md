@@ -82,10 +82,89 @@ and calls to Clojure closures end a region. That matters, because it is the
 difference between regions being a handful of ops and being most of a function
 body.
 
+## Colouring, revisited — the objection is answered
+
+I rejected function colouring because it spreads: anything transitively reaching
+a parking operation is coloured, and in a language of higher-order functions
+`map` takes a function that might park, so nearly everything ends up coloured.
+
+The owner's design answers that directly:
+
+> We color our native/built-in functions like +/-/break/etc. And then we
+> propagate the blocking attribute outward, so any function that calls a blocking
+> function becomes blocking. For closures, I don't think we should always
+> automatically exclude them, most closures will be non-blocking. We can include
+> closure calls with some kind of instruction with a runtime check.
+
+**The spread was caused entirely by dynamic calls, and a runtime check removes
+it.** Static colouring cannot know what a closure does, so instead of
+pessimistically colouring the caller, carry the bit ON THE CLOSURE and test it at
+the call site. `map` stays compilable; only a call that turns out to be blocking
+leaves the region.
+
+### The bit is static per function, tested per call
+
+Blocking-ness is a property of the function a closure closes over, which is known
+at compile time. So the closure object carries one bit, and a higher-order call
+site emits: *call it here if the bit is clear, otherwise leave the region*. One
+bit test and a well-predicted branch, at dynamic call sites only.
+
+### Leaving the region is nearly free, BECAUSE of the GC constraint
+
+This is the part that makes the design work rather than merely sound plausible.
+
+A deoptimisation exit is normally expensive: the compiled code holds values in
+machine registers and locals, and bailing out means reconstructing an interpreter
+frame from them. **flint has nothing to reconstruct.** The reason `0001` chose an
+interpreter is that wasm locals are not scannable, so an AOT region keeps every
+value in the linear-memory stack anyway. The region has no private state.
+
+So "leave the region" is: set `ip`, return to the interpreter. The constraint that
+forced the interpreter is the same constraint that makes escaping compiled code
+cheap.
+
+### Three colours, not two
+
+- **definitely non-blocking** — no blocking natives, no dynamic calls. Compiles
+  whole, no checks.
+- **conditionally blocking** — contains dynamic calls. Compiles, with a check at
+  each one.
+- **definitely blocking** — statically reaches a parking native. Its *regions*
+  between those calls still compile (`0013`'s original unit), it just cannot be
+  one region end to end.
+
+Colouring and regions compose rather than competing: colour says where a boundary
+is FORCED, regions say what to do between boundaries.
+
+### The analysis must be conservative, and there is a check for it
+
+A function wrongly marked non-blocking parks inside a wasm region with no way to
+suspend — corruption or a hang. So any uncertainty colours blocking, and
+recursion is a fixpoint starting from non-blocking and propagating until stable.
+
+**And it is checkable**: assert, in a diagnostics build (`0016`), that a park
+never occurs while inside an AOT region. That is the negative control for the
+entire analysis, and it costs production nothing.
+
+### A refinement worth taking at the same time
+
+A native like `port-send` blocks only when the buffer is full, so colouring it
+blocking ends a region at every send even though the common case does not block.
+The same runtime-check trick applies: emit *send if there is room, otherwise leave
+the region*. The fast path stays inside.
+
 ## And it is an empirical question, so measure before building
 
 The whole thing turns on a distribution nobody has looked at: **how long are the
-regions in real code, and what does entering one cost?** If the average region
+regions in real code, and what does entering one cost?**
+
+**And colouring changes that distribution substantially**, so the measurement has
+to model it. Without colouring a region ends at EVERY call, which in idiomatic
+Clojure is every few instructions. With it, a region runs through every
+non-blocking call — arithmetic, `conj`, `assoc`, and any closure whose bit is
+clear — and ends only at a genuine parking point. Regions get much longer and the
+payoff much larger, so a histogram computed on the old model would understate it
+badly. If the average region
 is three ops, the call into it eats the saving; if it is thirty, this is a large
 win.
 
