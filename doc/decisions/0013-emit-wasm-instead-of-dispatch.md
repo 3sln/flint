@@ -45,18 +45,69 @@ The escapes:
   a port operation is coloured, which in a language of higher-order functions is
   nearly everything (`map` takes a fn that might park).
 
-## The shape that would work, if this is ever wanted
+## The shape that would work — regions, not functions
 
-**Selective compilation, decided by an analysis already available.** The compiler
-knows the call graph. A function that cannot transitively reach a parking
-operation is compiled to wasm and registered as though it were a builtin; the
-interpreter calls it directly. Everything else stays bytecode.
+My first answer here was selective compilation at FUNCTION granularity, gated on
+a call-graph analysis of what can park. The owner's refinement is better and
+removes the analysis entirely:
 
-That confines the change to a leaf optimisation with no new suspension
-semantics — and the functions it covers are exactly the arithmetic- and
-collection-heavy ones where dispatch dominates. Threads, `eval` and the module
-carrying its own compiler all keep working, because the interpreter is still
-there.
+> we wouldn't actually need to aot everything, or color the functions. We could
+> just aot the contiguous non-blocking chunks into their own native functions
+> that take a pointer to our thread
+
+**Compile contiguous non-parking REGIONS**, each a wasm function taking a pointer
+to the thread struct, operating on the same linear-memory value stack. Cut the
+region wherever a park could happen and return to the interpreter there.
+
+Why that is the better cut:
+
+- **No colouring, because the cut point defines the property.** A region contains
+  no parking operation by construction, so nothing needs to be proven about
+  transitive reachability — which was the part that spread until nearly
+  everything was coloured.
+- **It applies everywhere**, not only to leaf functions. Function-level selection
+  misses the arithmetic inside a function that also does one send.
+- **Rooting is untouched.** Values stay in the linear-memory stack; the region
+  gets a pointer to the thread and manipulates it exactly as the interpreter
+  does. This is the property that makes the whole idea admissible.
+- **Gas fits.** Increment once per region by its known static length, plus the
+  usual charge inside any native it calls. Cheaper than per-instruction counting
+  and equally deterministic, since the length is a compile-time constant.
+- **It is incremental.** Compile the hottest regions only; everything else stays
+  bytecode and nothing else changes.
+
+Note what a region may contain: calls to natives that cannot park — `+`, `conj`,
+`assoc`, `nth` — are ordinary calls, not cut points. Only the parking primitives
+and calls to Clojure closures end a region. That matters, because it is the
+difference between regions being a handful of ops and being most of a function
+body.
+
+## And it is an empirical question, so measure before building
+
+The whole thing turns on a distribution nobody has looked at: **how long are the
+regions in real code, and what does entering one cost?** If the average region
+is three ops, the call into it eats the saving; if it is thirty, this is a large
+win.
+
+That can be answered **without building the compiler**, for a fraction of the
+effort:
+
+1. Instrument the interpreter to record, per dispatch, whether a region boundary
+   was crossed — a call to a Clojure closure, a parking primitive, a back-edge.
+2. Run construe's real fixtures and the benchmark suite; emit a **histogram of
+   region lengths**, weighted by execution count rather than by static
+   occurrence.
+3. Measure the cost of a wasm call taking a pointer, on this host, as the
+   boundary constant.
+4. The estimated saving per region is then `(length − 1) × dispatch_cost −
+   boundary_cost`, summed over the weighted histogram.
+
+If that number is small, the answer is no and it cost a day. If it is large, the
+histogram also says *which* regions to compile first, so the work starts
+data-directed instead of speculative.
+
+**Do this measurement before any of the implementation.** It is the cheapest
+thing in this document and it decides everything else in it.
 
 ## The other costs, which apply to any version
 
@@ -82,3 +133,7 @@ cheap fixes.
 **Revisit when** dispatch is the top item in a profile — plausibly after the
 regex and string work lands, and after superinstructions (`0001`) have been tried,
 since those are the cheap half of the same win.
+
+**And the region histogram is worth having even if the answer is no**, because it
+is the same data superinstructions need: the hottest fusable sequences fall out of
+it directly. One measurement, two decisions.
