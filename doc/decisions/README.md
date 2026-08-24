@@ -26,6 +26,7 @@ for the first.
 | [0019](0019-thread-pool.md) | A thread pool: shared heap vs heap-per-worker | **Roadmap.** Model B is close; Model A is a collector rewrite and spends determinism |
 | [0018](0018-cross-runtime-benchmarks.md) | Benchmark across wasm runtimes | **Roadmap.** Every current number is V8; decides 0013 per engine and 0010's SDK-vs-port |
 | [0017](0017-profiler.md) | Profiler: named blocks, CPU vs waiting | **Roadmap, not next.** Deterministic because instruction counts are; gives 0013 its measurement |
+| [0020](0020-module-metadata-and-shards.md) | A module declares its build; shards as library modules | **Roadmap.** Custom section for runners; a shard is a third `:kind` |
 
 ## What is actually next
 
@@ -47,6 +48,13 @@ The user's stated ordering, after the open bugs close.
 6. **Thread pool** (`0019`) — expected to be taken up, strictly opt-in and free
    when declined; gas drawn in per-thread blocks; snapshots halt the whole app
    at a safe point.
+
+Unscheduled but specified: **`0020`** — build metadata in a wasm custom section
+so a runner can inspect a pre-built module, and **shards**: an entry namespace
+compiled as a loadable library module with no runtime of its own. Its
+compatibility key must be drawn so that `0016`'s two builds stay
+shard-compatible, and its hard problem is that *self-contained* conflicts with
+protocol identity.
 
 ## How to read this directory
 
