@@ -302,11 +302,20 @@ fn ping_pong_under_stress(stress: bool) -> (Option<i64>, u64) {
     let join = b.conc("flint/thread-join", join_);
     let nth = b.rt_native("nth");
     let plus = b.rt_native("flint/add");
+    let str_join = b.rt_native("flint/str-join");
+    let k0 = b.w.k_string("abcdefgh");
+    let k1 = b.w.k_string("ijklmnop");
 
     let worker = {
         let body = {
             let mut a = Asm::new();
             for v in 1..=3i16 {
+                // Allocate between parks, so a collection lands between the
+                // save and the resume rather than only at the boundaries.
+                a.op(op::CONST).u16v(k0 as u16);
+                a.op(op::CONST).u16v(k1 as u16);
+                a.op(op::VECTOR).u16v(2);
+                a.native(str_join, 1).op(op::POP);
                 a.op(op::UPVAL).u8v(0);
                 a.int(v);
                 a.native(send, 2).op(op::POP);
