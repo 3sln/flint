@@ -265,6 +265,15 @@ pub extern "C" fn stat_peak_live() -> u64 {
 /// parks holds live references in a saved stack, and only stress mode makes
 /// every one of those saves and restores race a collection.
 #[no_mangle]
+pub extern "C" fn set_slice(lo: u32, hi: u32) { unsafe { crate::conc::SLICE_OVERRIDE = ((hi as u64) << 32) | lo as u64 } }
+
+#[no_mangle]
+pub extern "C" fn stat_bad(i: u32) -> i64 { unsafe { if i < 6 { crate::gc::BAD[i as usize] } else if i == 6 { crate::gc::BAD_TOP } else { crate::gc::BAD_V1 } } }
+
+#[no_mangle]
+pub extern "C" fn stat_reaped(i: u32) -> i64 { unsafe { if i == 99 { crate::gc::REAPED_N as i64 } else if i == 98 { crate::gc::ORPHANED_N as i64 } else if i < 32 { crate::gc::REAPED[i as usize] } else { crate::gc::ORPHANED[(i - 32) as usize] } } }
+
+#[no_mangle]
 pub extern "C" fn set_gc_stress(on: u32) {
     unsafe { ensure_rt().gc.stress = on != 0 }
 }

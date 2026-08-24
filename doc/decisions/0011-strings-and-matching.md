@@ -239,6 +239,17 @@ thing it must not be able to see.
 
 ## 5. So: do we write a performant engine for every runtime? No — we write none.
 
+> **CONCLUSION SUPERSEDED BY `0012`.** This section decides to delegate to host
+> regex engines with a shared normalisation pass, and offers a `:regex/engine`
+> fast-vs-bounded policy choice. Both are dead: stock engines cannot consume a
+> rope (`.NET` wants a span, JS a string, Rust a `&str`), so we own the matcher,
+> there is nothing to delegate to and nothing to normalise, and one engine that
+> is bounded everywhere removes the policy choice.
+>
+> **The ANALYSIS below is still good** — the survey of which hosts accept an
+> abstraction, and the 275× decomposition above it — which is why it is kept
+> rather than deleted. Read the conclusions in `0012`.
+
 The honest answer to "can we feasibly build a performant regex for each target"
 is that we should not try. Three tiers, and only one of them is new code:
 

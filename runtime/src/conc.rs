@@ -193,7 +193,10 @@ pub const EV_CLOSED: i64 = 3;
 /// Instructions a thread runs before the scheduler takes it off. Fixed, because
 /// a deterministic answer is most of what this project is for: the same program
 /// and the same order of host events must give the same result every time.
-pub const SLICE: u64 = 4096;
+pub const SLICE_DEFAULT: u64 = 4096;
+pub static mut SLICE_OVERRIDE: u64 = 0;
+#[inline]
+pub fn slice() -> u64 { unsafe { if SLICE_OVERRIDE != 0 { SLICE_OVERRIDE } else { SLICE_DEFAULT } } }
 
 fn fx(v: Value) -> i64 {
     v.as_fixnum()
@@ -271,7 +274,7 @@ impl Rt {
         self.roots.singletons[SING_SCHED] = out;
         self.pop_to(base);
         self.sched_hook = Some(scheduler);
-        let at = self.steps + SLICE;
+        let at = self.steps + slice();
         self.set_slice_end(at);
         out
     }
@@ -300,6 +303,7 @@ impl Rt {
     }
 
     fn save_current_state(&mut self, th: Value) {
+        unsafe { crate::gc::PHASE = 5; }
         let base = self.mark();
         let ti = self.push(th);
         let n = self.roots.stack_top as u32;
@@ -350,6 +354,7 @@ impl Rt {
     }
 
     fn restore_state(&mut self, th: Value) {
+        unsafe { crate::gc::PHASE = 2; }
         let sv = self.slot(th, TH_STACK);
         self.frames.clear();
         self.handlers.clear();
@@ -617,6 +622,7 @@ impl Rt {
     }
 
     fn port_enqueue(&mut self, p: Value, v: Value) {
+
         let base = self.mark();
         let pi = self.push(p);
         let vi = self.push(v);
@@ -629,6 +635,7 @@ impl Rt {
     }
 
     fn port_dequeue(&mut self, p: Value) -> Value {
+
         let head = fx(self.slot(p, PT_HEAD)) as u32;
         let ib = self.slot(p, PT_INBOX);
         let v = self.vec_nth(ib, head).unwrap_or(NIL);
@@ -944,6 +951,7 @@ fn scheduler(rt: &mut Rt, first: Value) -> Value {
 
 /// Record the outcome of the thread that was running, and take it off.
 fn settle(rt: &mut Rt, result: Value) {
+    unsafe { crate::gc::PHASE = 1; }
     let th = rt.current_thread();
     if th.is_nil() {
         return;
@@ -1049,6 +1057,7 @@ fn needs_host(rt: &mut Rt) -> bool {
 }
 
 fn run_one(rt: &mut Rt, i: u32) {
+    unsafe { crate::gc::PHASE = 4; }
     let s = rt.sched();
     rt.set(s, SC_CURRENT, Value::fixnum(i as i64));
     let ts = rt.slot(s, SC_THREADS);
@@ -1061,7 +1070,7 @@ fn run_one(rt: &mut Rt, i: u32) {
     let st = fx(rt.slot(rt.r(ti), TH_STATUS));
     let binds = rt.slot(rt.r(ti), TH_BINDINGS);
     rt.roots.singletons[crate::rt::SING_BINDINGS] = binds;
-    let at = rt.steps + SLICE;
+    let at = rt.steps + slice();
     rt.set_slice_end(at);
     let v = if st == ST_NEW {
         rt.frames.clear();
@@ -1796,6 +1805,7 @@ impl Rt {
     /// than left hanging. Both facts are ones the collector has already worked
     /// out; this only reads them.
     pub fn reap_ports(&mut self) {
+        unsafe { crate::gc::PHASE = 3; }
         let s = self.sched();
         if s.is_nil() {
             return;
@@ -1816,6 +1826,7 @@ impl Rt {
                 continue;
             }
             // This end has been collected. Tell whoever is affected.
+            unsafe { if crate::gc::REAPED_N < 32 { crate::gc::REAPED[crate::gc::REAPED_N] = id; crate::gc::REAPED_N += 1; } }
             let peer_id = self.peer_id_of_dead(id);
             let peer = self.port_by_id(peer_id);
             if peer.is_nil() {
@@ -1827,6 +1838,7 @@ impl Rt {
             if pst != P_CLOSED && pst != P_ORPHANED {
                 // Its peer vanished without closing, which is not the same as a
                 // tidy close and should not read like one.
+                unsafe { if crate::gc::ORPHANED_N < 32 { crate::gc::ORPHANED[crate::gc::ORPHANED_N] = fx(self.slot(self.r(pi), PT_ID)); crate::gc::ORPHANED_N += 1; } }
                 self.set(self.r(pi), PT_STATE, Value::fixnum(P_ORPHANED));
                 if pkind == K_HOST {
                     let hid = fx(self.slot(self.r(pi), PT_ID));

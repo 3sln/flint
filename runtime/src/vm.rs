@@ -585,6 +585,7 @@ impl Rt {
 
     fn run_with<B: BudgetPolicy>(&mut self, base_depth: usize) -> Value {
         loop {
+            unsafe { crate::gc::PHASE = 6; }
             if self.frames.len() <= base_depth {
                 return self.vpop();
             }
@@ -633,10 +634,10 @@ impl Rt {
                     }
                     // Rust frames underneath: there is nothing to save, so let
                     // this call finish and preempt at the next chance.
-                    let at = self.steps + crate::conc::SLICE;
+                    let at = self.steps + crate::conc::slice();
                     self.set_slice_end(at);
                 } else {
-                    let at = self.steps + crate::conc::SLICE;
+                    let at = self.steps + crate::conc::slice();
                     self.set_slice_end(at);
                 }
             }

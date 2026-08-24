@@ -136,7 +136,7 @@
   ["flint_main" "arg_alloc" "arg_push" "out_ptr" "out_len"
    "stat_bytes_allocated" "stat_collections" "image_desc_addr" "set_step_limit"
    "stat_steps" "stat_peak_live" "collect_now" "set_memory_limit" "stat_heap_used"
-   "set_gc_stress"])
+   "set_gc_stress" "set_slice" "stat_reaped" "stat_bad"])
 
 (defn unit-exports
   "Extra wasm exports a linked unit asks for. This is how a unit can widen the
