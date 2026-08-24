@@ -30,7 +30,7 @@ const afterBytes = grab();
 
 const a = snap.read(beforeBytes);
 const b = snap.read(afterBytes);
-console.log(`    snapshot ${beforeBytes.length} bytes; heap ${a.heapHi - a.heapLo}, ` +
+console.log(`    snapshot ${beforeBytes.length} bytes; ${a.regions.length} region(s), ` +
             `${a.oldChunks.length} old chunk(s), ${a.remembered.length} remembered`);
 
 ok('a snapshot carries the Rust-side state, not just the heap',

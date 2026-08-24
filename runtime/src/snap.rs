@@ -81,9 +81,26 @@ impl<'a> R<'a> {
     }
 }
 
-/// The whole VM state as bytes.
-pub fn capture(rt: &Rt) -> Vec<u8> {
-    let mut w = W { b: Vec::new() };
+/// How much linear memory exists, which is the only bound a restore needs.
+#[cfg(target_arch = "wasm32")]
+fn memory_bytes() -> u64 {
+    (core::arch::wasm32::memory_size(0) as u64) * 65536
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn memory_bytes() -> u64 {
+    u64::MAX
+}
+
+/// The whole VM state as bytes, reusing `out`'s capacity.
+///
+/// Reuse is not an optimisation. A capture that allocates grows linear memory,
+/// and growing memory shifts every subsequent allocation -- so an allocating
+/// capture perturbs the very timing a collector bug depends on, and the run you
+/// snapshot stops being the run you wanted to look at. Warm the buffer once and
+/// later captures cost nothing.
+pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
+    out.clear();
+    let mut w = W { b: core::mem::take(out) };
     w.u32(MAGIC);
     w.u32(VERSION);
 
@@ -170,13 +187,32 @@ pub fn capture(rt: &Rt) -> Vec<u8> {
     w.u32(rt.status as u32);
     w.u32(rt.champ_added as u32);
 
-    // --- the heap itself, verbatim. No interpretation.
-    let lo = g.young_base;
-    let hi = g.sp.in_use;
-    w.u32(lo);
-    w.u32(hi);
-    w.b.extend_from_slice(g.sp.bytes(lo, hi - lo));
-    w.b
+    // --- the heap itself, verbatim, REGION BY REGION. No interpretation.
+    //
+    // Not one contiguous range: on wasm `Space::take` grows linear memory via
+    // `sbrk`, so an old chunk can sit far above `in_use` and a capture that
+    // assumed contiguity silently missed it. That is exactly the "answers some
+    // questions confidently wrong" failure this design exists to prevent, and
+    // the inspector's walk-completeness check is what caught it.
+    let mut regions: Vec<(u32, u32)> = Vec::new();
+    regions.push((g.young_base, g.half * 2));
+    for c in &g.old_chunks {
+        regions.push((c.addr, c.len));
+    }
+    w.usz(regions.len());
+    for (addr, len) in &regions {
+        w.u32(*addr);
+        w.u32(*len);
+        w.b.extend_from_slice(g.sp.bytes(*addr, *len));
+    }
+    *out = w.b;
+}
+
+/// The whole VM state as bytes.
+pub fn capture(rt: &Rt) -> Vec<u8> {
+    let mut out = Vec::new();
+    capture_into(rt, &mut out);
+    out
 }
 
 /// Restore a snapshot over this runtime. Returns false if it is not one, or is
@@ -278,20 +314,35 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     let status = r.u32() as i32;
     let champ_added = r.u32() != 0;
 
-    let lo = r.u32();
-    let hi = r.u32();
-    let n = (hi - lo) as usize;
-    if r.i + n > bytes.len() {
-        return false;
+    // Regions, blitted back to the SAME addresses. Relocating would mean
+    // rewriting every pointer, which is a traversal, which is what this avoids.
+    let nreg = r.usz();
+    let mut plan: Vec<(u32, u32, usize)> = Vec::new();
+    for _ in 0..nreg {
+        let addr = r.u32();
+        let len = r.u32();
+        if r.i + len as usize > bytes.len() {
+            return false;
+        }
+        plan.push((addr, len, r.i));
+        r.i += len as usize;
     }
-    // Grow this space to cover the same addresses, then blit. Restoring to the
-    // SAME offsets is what lets the heap be copied rather than relocated.
-    if rt.gc.sp.in_use < hi {
-        let want = hi - rt.gc.sp.in_use;
-        rt.gc.sp.take(want);
+    // Refuse rather than write garbage: if this runtime's memory does not
+    // already cover a region, its addresses mean something else here. Read the
+    // bound from linear memory rather than tracking a high-water mark, because
+    // a field on `Space` costs 1 412 bytes on every module -- `take` is on the
+    // allocation path and the extra branch is not free.
+    for (addr, len, _) in &plan {
+        if (*addr as u64) + (*len as u64) > memory_bytes() {
+            return false;
+        }
     }
     rt.gc.sp.in_use = in_use;
-    rt.gc.sp.bytes_mut(lo, n as u32).copy_from_slice(&bytes[r.i..r.i + n]);
+    for (addr, len, off) in plan {
+        rt.gc.sp
+            .bytes_mut(addr, len)
+            .copy_from_slice(&bytes[off..off + len as usize]);
+    }
 
     let rr = &mut rt.roots;
     if rr.stack.len() < stack.len() + 8 {

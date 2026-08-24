@@ -37,10 +37,11 @@ mod host {
     #[no_mangle]
     pub extern "C" fn flint_snapshot_capture() -> u32 {
         let rt = rt();
-        let b = flint_rt::snap::capture(rt);
-        let out = b.len() as u32;
-        *buf() = b;
-        out
+        // Into the existing buffer: a capture that allocated would grow linear
+        // memory and shift every allocation after it, which perturbs exactly
+        // the timing a collector bug depends on.
+        flint_rt::snap::capture_into(rt, buf());
+        buf().len() as u32
     }
 
     #[no_mangle]
@@ -81,10 +82,8 @@ macro_rules! builtin {
 }
 
 builtin!(flint_b_snapshot, |rt| {
-    let b = flint_rt::snap::capture(rt);
-    let n = b.len();
-    *buf() = b;
-    Value::fixnum(n as i64)
+    flint_rt::snap::capture_into(rt, buf());
+    Value::fixnum(buf().len() as i64)
 });
 
 builtin!(flint_b_snapshot_size, |_rt| Value::fixnum(buf().len() as i64));

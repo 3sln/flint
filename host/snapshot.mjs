@@ -73,15 +73,34 @@ export function read(bytes) {
   s.thrown = r.u64(); s.parkOn = r.u64();
   s.steps = r.u64(); s.gasLimit = r.u64(); s.sliceEnd = r.u64(); s.checkpoint = r.u64();
   s.gasTrips = r.u32(); s.memTrips = r.u32(); s.status = r.u32() | 0; s.champAdded = !!r.u32();
-  s.heapLo = r.u32(); s.heapHi = r.u32();
-  s.heap = bytes.subarray(r.i, r.i + (s.heapHi - s.heapLo));
-  s.hv = new DataView(s.heap.buffer, s.heap.byteOffset, s.heap.byteLength);
+  // Regions, not one contiguous range: on wasm an old chunk can sit far above
+  // `in_use`, and a reader that assumed contiguity would read zeros for it.
+  const nreg = r.u32();
+  s.regions = [];
+  for (let k = 0; k < nreg; k++) {
+    const addr = r.u32(), len = r.u32();
+    s.regions.push({ addr, len, bytes: bytes.subarray(r.i, r.i + len) });
+    r.i += len;
+  }
+  for (const g of s.regions) g.view = new DataView(g.bytes.buffer, g.bytes.byteOffset, g.bytes.byteLength);
+  s.walkErrors = [];
   return s;
 }
 
-const at = (s, addr) => addr - s.heapLo;
-export const readU32 = (s, addr) => s.hv.getUint32(at(s, addr), true);
-export const readU64 = (s, addr) => s.hv.getBigUint64(at(s, addr), true);
+function regionOf(s, addr) {
+  for (const g of s.regions) if (addr >= g.addr && addr < g.addr + g.len) return g;
+  return null;
+}
+export const readU32 = (s, addr) => {
+  const g = regionOf(s, addr);
+  if (!g) throw new Error(`address ${addr} is in no captured region`);
+  return g.view.getUint32(addr - g.addr, true);
+};
+export const readU64 = (s, addr) => {
+  const g = regionOf(s, addr);
+  if (!g) throw new Error(`address ${addr} is in no captured region`);
+  return g.view.getBigUint64(addr - g.addr, true);
+};
 
 export const tyOf = (s, addr) => readU32(s, addr) >>> 24;
 export const lenOf = (s, addr) => readU32(s, addr + 4);
@@ -107,12 +126,24 @@ export function* objects(s) {
   const spans = [[s.from, s.bump], ...s.oldChunks.map((c) => [c.addr, c.addr + c.len])];
   for (const [lo, hi] of spans) {
     let a = lo;
-    while (a < hi && a >= s.heapLo && a + 8 <= s.heapHi) {
+    while (a < hi) {
       const size = sizeOf(s, a);
-      if (size < 8 || a + size > hi) break; // a parse error, reported by validate
+      if (size < 8 || a + size > hi) {
+        // The walk cannot continue past a bad header. Record it rather than
+        // silently truncating: a truncated walk makes every later object look
+        // absent, which would turn one real problem into hundreds of false
+        // ones -- the exact failure this tool exists to avoid.
+        if (s.walkErrors) s.walkErrors.push({ span: [lo, hi], at: a, size });
+        break;
+      }
       yield { addr: a, ty: tyOf(s, a), tyName: TY[tyOf(s, a)] ?? `ty${tyOf(s, a)}`, len: lenOf(s, a), size, old: lo !== s.from };
       a += size;
     }
+    // A linear walk must land exactly on the end of its span. Landing short or
+    // long means the object sizes disagree with the layout, and every object
+    // after the divergence is missing -- which would be reported as hundreds of
+    // interior pointers rather than as the one parse error it is.
+    if (a !== hi && s.walkErrors) s.walkErrors.push({ span: [lo, hi], endedAt: a, short: hi - a });
   }
 }
 
@@ -151,7 +182,14 @@ export function validate(s) {
   const live = new Set();
   const problems = [];
   let walked = 0;
+  s.walkErrors = [];
   for (const o of objects(s)) { live.add(o.addr); walked++; }
+  // If the linear walk could not finish a span, every object after that point
+  // is missing from `live` and would be reported as an interior pointer. Say
+  // so instead of reporting hundreds of consequences of one cause.
+  if (s.walkErrors.length) {
+    return { walked, truncated: s.walkErrors, problems: [] };
+  }
   const inSpace = (a) =>
     (a >= s.from && a < s.bump) || s.oldChunks.some((c) => a >= c.addr && a < c.addr + c.len);
   const check = (bits, where) => {
