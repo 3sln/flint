@@ -20,7 +20,7 @@ for the first.
 | [0011](0011-strings-and-matching.md) | Rope strings; what to do about regex | **Roadmap.** §1–2 current; §5's conclusion superseded by 0012 |
 | [0012](0012-matching-over-ropes.md) | The matcher must consume a rope → Pike VM | **Roadmap — next work after the open bugs** |
 | [0013](0013-emit-wasm-instead-of-dispatch.md) | AOT regions instead of dispatching | **Deferred**, pending one cheap measurement |
-| [0014](0014-debug-runner.md) | DAP, nREPL, and `(break)` | **Roadmap, not next** |
+| [0014](0014-debug-runner.md) | DAP, nREPL, and `(break)` | **Roadmap, not next.** Cheap because a breakpoint is a park |
 
 ## What is actually next
 
