@@ -67,12 +67,45 @@ out of release, so a desynchronised old-space walk would be silent. **This was
 tried**: the check was made real and the repro run, and it reports **zero parse
 errors**. So the old-space walk is consistent and this suspect is out too.
 
-That leaves the verifier's own report as the thing to question first. Before
-hunting further, confirm that `stack[1]` at that moment is genuinely a live slot
-rather than a stale one below `stack_top` — i.e. print the frame layout
-(`frames.last().ret_to`, `fp`, `nlocals`) alongside it. Every mechanism that
-would explain a *live* root pointing at freed memory has now been checked and
-cleared, which makes "it is not actually live" the remaining possibility.
+### What write-attribution added
+
+Making the stack name its own writer (a shadow array recording, per slot, the
+opcode and ip that last changed it, plus a ring of the last instructions) moved
+this on. It is committed and reverted at `732a375`/`857b257`.
+
+The corruption is first *seen* at a `NATIVE` call, `ip = 1446`, `stack_top = 16`,
+at minor collection 80, with this leading up to it:
+
+    LOCAL  ip=1442 top=14
+    LOCAL  ip=1444 top=15
+    NATIVE ip=1446 top=16      <- collection here, stack[1] already bad
+
+`stack[1]` belongs to an outer frame, not the one being called.
+
+**The address is probably not a swept old block.** The pre-sweep check found no
+root pointing at an unmarked old object, and the bad address (`0x20018`) sits
+below where old chunks were allocated. `ty = 0` is therefore most likely
+`read_u32` on memory that is not an object at all — a **stale nursery address
+from before a semispace flip** rather than a freed old-space block. If so the
+question is not "who freed it" but "why was it not forwarded", and the answer to
+that is that it was outside `[0, stack_top)` when some minor collection ran.
+
+`MIN_TOP` instrumentation says the shallowest `stack_top` at any minor collection
+is **0**. That is normal between threads, so it is not proof on its own — but a
+collection with `stack_top = 0` traces nothing on the value stack, and every
+heap value in a frame that is still live at that moment goes stale. Finding the
+window where that is true *while a frame is genuinely live* is the next step.
+Instrument `frames.len()` at the collection itself rather than at the last
+dispatched instruction, which is what made the current reading ambiguous.
+
+### Attribution pitfalls, so the tooling is not trusted blindly
+
+* `LAST_OP` is global. It is not reset between green threads or across
+  `restore_state`, so a restored stack is attributed to whatever the previous
+  thread last ran. It named `RETURN` when the writer was `restore_state`. Mark
+  the non-VM writers.
+* The first bad value seen is during module top-level initialisation and is
+  noise. Arm the detector from `run_one`.
 
 Ruled out with evidence: `sched`, `spawn_thread`, `new_waiter`, `free_waiter`,
 `park_on_port`, `port_send`, `port_enqueue`, `save_current_state`,
