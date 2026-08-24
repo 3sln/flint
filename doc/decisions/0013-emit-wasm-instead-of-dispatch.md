@@ -613,3 +613,87 @@ Ruled out by measurement, not by reading:
 works, and the bisection handles used to get this far are still there:
 `FLINT_AOT_LIMIT`, `FLINT_AOT_FROM`, `FLINT_AOT_ONLY`, `FLINT_AOT_PICK`,
 `FLINT_AOT_SKIP_FROM`/`_TO`, `FLINT_AOT_DUMP`, `FLINT_AOT_FN`.
+
+---
+
+# "Are you giving the JIT a chance?" — measured
+
+A fair challenge to the 1.21×, and three specific mechanisms by which the engine
+might be getting none. All three are now measured rather than argued.
+Reproduce with `bb bench/ceiling.clj && node bench/ceiling.mjs`, and the tiering
+check with `node --no-liftoff` / `--liftoff-only` over `bench/aot.mjs`.
+
+## 1. Is this even TurboFan? Yes.
+
+| | default tiering | `--no-liftoff` | `--liftoff-only` |
+| --- | --- | --- | --- |
+| tight | 1.20× | 1.26× | 1.10× |
+| maps | 1.08× | 1.08× | 1.04× |
+| json | 1.19× | 1.21× | 1.11× |
+| words | 1.22× | 1.23× | 1.13× |
+
+Default tiering matches forced TurboFan, so the benchmarks are measuring
+optimised code and nothing is being reframed. The interesting row is the last
+one: under Liftoff only, everything is ~1.7× slower in absolute terms AND the
+compiled advantage collapses to 1.10×. **TurboFan does more for the compiled
+code than for the interpreter** — the engine is not merely present, it is the
+reason there is a win at all.
+
+## 2 and 3. Operands in memory, and the `br_table` shape — worth 1%.
+
+`out/ceiling.wasm` runs tight's loop three ways in the same engine on the same
+NaN-boxed arithmetic:
+
+| | ns/iteration |
+| --- | --- |
+| C1 operands in wasm LOCALS, a real `loop`, arithmetic inlined | 1.9 |
+| C2 the same, arithmetic through `call_indirect` | 4.8 |
+| C3 operands on a memory stack, `loop` + `br_table` — **what we emit** | 6.4 |
+| flint, compiled | 136.9 |
+
+**C2 → C3 is 1.33×, and 1.6 ns of 136.9.** That is the whole of hypotheses 2 and
+3 together: keeping operands in wasm locals between safepoints and emitting hot
+back-edges as real nested loops would buy about **one percent**. The idea is
+sound — 0001 does make it legal, and guard-only chunking does make the spans
+long — but the measurement says it is not where the time is, and building
+register allocation between safepoints on this evidence would be work spent on
+1.6 ns.
+
+## Where the time actually is: the call protocol
+
+The same loop with the builtins called DIRECTLY, so it makes no Clojure calls at
+all:
+
+| | interpreted | compiled | |
+| --- | --- | --- | --- |
+| `tight` — 3 closure calls per iteration | 165.1 ns | 136.9 ns | 1.21× |
+| the same loop — **no closure calls** | 89.2 ns | 51.2 ns | **1.74×** |
+
+So:
+
+* **One Clojure call costs 25.3 ns interpreted and 28.6 ns compiled.** Compiled
+  code makes calls slightly WORSE — it pays `aot_call`, `enter`, the reserve,
+  the resync and `call_aot` where the interpreter pays only `enter`.
+* **Everything else is 38.0 ns/iteration cheaper compiled**, which is the
+  dispatch removal working exactly as intended.
+
+**The speedup is therefore a function of call density, and the construe numbers
+confirm it without being fitted to it**: `suggest` is 6.9% calls and runs 1.25×;
+`parse` is 10.3% calls and runs 1.07×. More calls, less win.
+
+## What this means for the decision, and for the next piece of work
+
+The 1.21× is a **floor set by the call protocol, not by the emitter**. The
+headroom is 28.6 ns per Clojure call, against 1.6 ns for everything the emitter's
+shape costs. The candidates are all in the protocol and none of them is a
+rewrite:
+
+* `refresh()` writes seven fields on every crossing, and only the stack base and
+  top can actually have changed on most of them;
+* `enter` re-selects the arity on every call, and the call site is monomorphic
+  almost always;
+* a compiled-to-compiled call still crosses into Rust twice, to do a frame push
+  the emitter has the information to do itself.
+
+Measure those before building any of them — that is the rule this whole document
+now runs on.
