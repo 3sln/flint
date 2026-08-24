@@ -151,6 +151,57 @@ than incidental.
    against the reference by the conformance battery.
 4. Other hosts get their simulator when they get their port (`0010`).
 
+## The compiled program is a cached value, and it must be collectable
+
+A pattern compiles once and is reused; that is what makes the shared compiler
+affordable, since it runs per pattern rather than per match. But a cache that
+never releases is a leak, and patterns are not all literals — `(re-pattern (str
+"^" prefix))` in a loop generates a fresh source string every iteration.
+
+**The compiled program IS the pattern value.** A `TY_REGEX` heap object holding
+the NFA, interned on `(source, flags)` in a **weak** table, exactly as strings
+and keywords already are (`weak_interns_drop_dead_entries_and_forward_live_ones`
+is the existing test for that machinery). Two `(re-pattern "abc")` share one
+object; when no live value refers to it, the collector takes it and the entry
+drops.
+
+Two things follow that are worth stating rather than discovering:
+
+- **A `#"…"` literal lives as long as the module, and that is correct.** It is a
+  constant in the const pool, `roots.consts` is traced, so it is strongly held by
+  construction. That is not the leak; the leak is dynamic patterns.
+- **Thrash is bounded by ordinary liveness.** A pattern used inside a loop is
+  held by the local or the constant that names it, so it is not collected between
+  iterations. Only a pattern whose last reference dies is recompiled if asked
+  for again — which is the behaviour you want and needs no LRU on top.
+
+### The trap: caching must not make gas non-deterministic
+
+`0009` made the instruction budget deterministic — the same program reports the
+same count on every machine, which is the property construe's gates rest on. A
+cache threatens that in a way that is easy to miss: **whether a compile happens
+depends on whether a collection ran**, and a collection depends on allocation
+history.
+
+So if compiling charges gas, the same program can report two different counts.
+That is exactly the flakiness the gas counter was built to replace.
+
+**Charge the gas at every `re-pattern`, cache hit or not**, priced on the
+compiled program's size. Then the cache saves wall-clock and never moves the
+count. It also closes the hole `0009` names in its own terms: a native whose cost
+is not O(1) must charge for what it did, and compiling a pattern is real work
+that would otherwise be free.
+
+### And bound the compiled size
+
+Counted repetition expands: `(a{100}){100}` is a small pattern and an enormous
+NFA. That is a memory-exhaustion path with a friendly-looking source, and it is
+the same hazard as ReDoS arriving through the compiler instead of the matcher.
+
+Bound the program size, refuse a pattern that exceeds it **naming the limit**,
+and charge gas in proportion to what was built. The `0009` memory cap catches it
+eventually; a specific refusal is a better answer than an out-of-memory error.
+
 ## What must be true if this is built
 
 - The simulator consumes a rope cursor and **never** materialises the input:
