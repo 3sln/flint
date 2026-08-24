@@ -6,6 +6,38 @@
 The ask: green threads picked up by any worker in a pool, atoms genuinely atomic,
 volatiles real.
 
+## The constraints the user has since given
+
+Three, and they narrow the design usefully:
+
+**Opt-in, and free when declined.** A program that does not want a thread pool
+must pay nothing for it — no atomic instructions on the single-threaded path, no
+extra branch in the interpreter loop. This is the same discipline `0009` applies
+to gas and `0015` to diagnostics, and it is the reason those two are already
+monomorphised rather than flagged at runtime: the build selects the loop.
+Applied here it means the shared-heap machinery is a *build configuration*, not a
+runtime mode, and single-threaded flint keeps the instruction loop it has today.
+
+**Gas is allocated in blocks, per thread.** A shared gas counter would be
+contended on every instruction — the worst possible place for an atomic. Instead
+each thread draws a block from the global budget and spends it locally, drawing
+again when it runs out. Contention drops by the block size, and the local spend
+stays a plain non-atomic decrement, so the hot path is unchanged from today's.
+It also keeps a single thread's count deterministic even when the interleaving is
+not — which preserves more of `0009` than the determinism section below assumed.
+
+**Snapshots are an app-wide halt.** Every thread runs to a safe point, the world
+stops, and the snapshot is taken of the whole system. This is the only coherent
+answer — a snapshot of one thread while others mutate shared state is not a state
+the program was ever in — and it means `0015` needs a barrier rather than a
+redesign. `0009`'s slice check is again the natural safe point, so the halt
+protocol and the collection safepoint of Model A are the same mechanism serving
+two callers.
+
+These three fit together: block-allocated gas and a stop-the-world snapshot both
+assume threads reach safe points at a bounded interval, which the slice check
+already guarantees.
+
 ## First, the deployment constraint, because it may decide it
 
 wasm multi-threading needs **shared linear memory** and the atomics proposal.
@@ -101,8 +133,9 @@ properties flint has that a JIT-based runtime does not.
   host capability the primary deployment may not have, and it spends the
   determinism that `0009` and `0015` are built on.
 
-**Recommendation: neither until the port bug is closed and ropes are in.** When it
-is taken up, do Model B first — it is most of the throughput at a fraction of the
+**Recommendation: after AOT, ropes and regex, benchmarks and the profiler** —
+the user's stated ordering, with the pool last and expected to be taken up. When
+it is taken up, do Model B first — it is most of the throughput at a fraction of the
 risk, and it is the model the existing design already implies.
 
 ## What must be true if either is built

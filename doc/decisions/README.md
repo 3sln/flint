@@ -18,8 +18,8 @@ for the first.
 | [0009](0009-resource-limits.md) | Hard limits; the loop that does not count | **Shipped** |
 | [0010](0010-other-hosts.md) | SDKs, and JVM/CLR ports | **Roadmap** |
 | [0011](0011-strings-and-matching.md) | Rope strings; what to do about regex | **Roadmap.** §1–2 current; §5's conclusion superseded by 0012 |
-| [0012](0012-matching-over-ropes.md) | The matcher must consume a rope → Pike VM | **Roadmap — next work after the open bugs** |
-| [0013](0013-emit-wasm-instead-of-dispatch.md) | AOT regions instead of dispatching | **Deferred**, pending one cheap measurement |
+| [0012](0012-matching-over-ropes.md) | The matcher must consume a rope → Pike VM | **Roadmap.** After AOT; ropes first, since the matcher runs over a rope cursor |
+| [0013](0013-emit-wasm-instead-of-dispatch.md) | AOT regions instead of dispatching | **Next after the open bugs.** Guard-only per 0016, so chunks can be large |
 | [0014](0014-debug-runner.md) | DAP, nREPL, and `(break)` | **Roadmap, not next.** Cheap because a breakpoint is a park |
 | [0015](0015-snapshots.md) | VM snapshots: instant, exportable, inspectable | **Roadmap.** The answer to instruments that lie; shares its reader with 0014 |
 | [0016](0016-two-builds.md) | A stripped production VM; diagnostics optional | **Roadmap.** Cross-cutting; supersedes the per-feature clauses in 0009/0014/0015 |
@@ -29,13 +29,24 @@ for the first.
 
 ## What is actually next
 
+The user's stated ordering, after the open bugs close.
+
 1. **Close the open runtime bugs** — the dangling `stack[1]` root and
    `document.clj`'s two wave assertions. `../HANDOFF.md` is the live state.
-2. **Ropes** (`0011` §1–2), then **the Pike VM** (`0012`): shared cljc pattern
+2. **AOT** (`0013`), on the guard-only design in `0016` — a closure call that
+   checks a blocked flag and branches out, rather than colouring functions by
+   whether they block. That is what allows large chunks; chain them so the wasm
+   engine can still optimise across them while keeping granular re-entry points.
+3. **Ropes** (`0011` §1–2), then **the Pike VM** (`0012`): shared cljc pattern
    compiler, a cljc reference simulator, and the native wasm simulator — the
    native one is what makes the route feasible, not a later optimisation. No
-   Rust regex crate and no delegation to host engines.
-3. Everything else is unscheduled.
+   Rust regex crate and no delegation to host engines. Ropes first because the
+   matcher runs over a rope cursor.
+4. **Thorough benchmarks and testing**, including `0018` across wasm runtimes.
+5. **Profiler** (`0017`).
+6. **Thread pool** (`0019`) — expected to be taken up, strictly opt-in and free
+   when declined; gas drawn in per-thread blocks; snapshots halt the whole app
+   at a safe point.
 
 ## How to read this directory
 
