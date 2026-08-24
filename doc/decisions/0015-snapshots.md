@@ -97,6 +97,56 @@ platform running model-written code, "here is the exact state when the gate
 failed" is worth more than a stack trace; and **snapshot plus the host event log
 is a complete replay**, because the scheduler is deterministic.
 
+## Snapshots from inside the program: `(break :snap "name")`
+
+`0014`'s `break` form gains an option. Bare `(break)` parks for a debugger;
+`(break :snap "the-snapshot")` **captures a named snapshot and carries on**.
+
+Capture-and-continue rather than capture-and-park is the useful default, because
+a form that parked would need a debugger attached to resume — useless in an
+ordinary dev run, which is exactly where dropping snapshots through a program is
+worth most. Somebody who wants both writes `(break :snap "x")` and then
+`(break)`.
+
+### It MUST NOT ALLOCATE, and that is not a performance note
+
+This is the lesson that cost a session. Taking a snapshot hid the port bug
+outright: capture grew a buffer, that changed allocation timing, and the bug is
+sensitive to precisely that. A snapshot that perturbs the thing it is
+investigating is the observer effect the whole tool was meant to escape.
+
+So `(break :snap)` allocates nothing in the flint heap. Reserve the capture
+buffer at first use, sized to the maximum heap, outside anything being measured —
+and **assert it**: a test that captures inside a loop and shows the allocation
+count unchanged. Without that assertion this feature quietly stops being usable
+for the one class of bug it exists for.
+
+### Naming, and what happens on the five-hundredth hit
+
+A named break inside a loop fires repeatedly. Keeping every capture exhausts
+memory; keeping the first is almost never what somebody wants.
+
+**Last write wins, and the snapshot records how many times that name was hit.**
+Then "this is capture 500 of 500" is on the artifact rather than being something
+to wonder about. Storage is a bounded ring per name, and the host is notified
+through the event queue so it can export and drop rather than accumulate.
+
+### In a production build it is elided, and the count is reported
+
+Under `0016` there is no snapshot machinery in production, so `(break …)` must
+compile to nothing — zero bytes, not a no-op call.
+
+But silently eliding it is how debug code ships unnoticed, so **the compiler
+reports how many break forms it elided**, and a flag makes their presence an
+error for anybody who wants that guarantee. Same spirit as `:exclude` being an
+assertion rather than a pruning (`0004`).
+
+**One consequence to write down: instruction counts are comparable within a build
+configuration, not across one.** A program with breaks compiled for diagnostics
+executes more instructions than the same source compiled for production. Both are
+deterministic; they are not the same number, and a gate comparing them would be
+comparing two programs.
+
 ## Cost, and where it must not land
 
 It must not grow a pure module (`0005`). Capture and restore are small, but the
@@ -114,3 +164,7 @@ debug-gated, with the module-size test proving it.
 - Diffing two snapshots across a collection names what moved and what did not.
 - A pure module's size is unchanged, asserted.
 - A snapshot from a different runtime version is refused by name.
+- `(break :snap "x")` in a loop **allocates nothing** — asserted by allocation
+  count, not by inspection.
+- A repeated name keeps the latest and reports the hit count.
+- A production build contains no break forms and reports how many it elided.
