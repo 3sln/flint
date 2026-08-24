@@ -1,132 +1,110 @@
 # Handoff — the parked-thread collector bug
 
-> **Update after the run of 2026-08-24**, which ended on a transient
-> `403 Unable to verify organization membership` — an auth failure, not a
-> diagnosis dead end. ~187 lines of instrumentation and attempted fix are
-> uncommitted in `vm.rs`, `conc.rs`, `gc.rs`, `abi.rs`, `rpc.cljc` and
-> `link.cljc`. The tree builds.
->
-> **The finding that moves this: DISABLING THE TIME SLICE FIXES IT.** So the
-> fault is on the PREEMPTION path, not the parking path — a different suspension
-> mechanism, and the one with no test behind it.
->
-> Two facts already established, both worth not re-deriving:
->
-> * the slice-expiry branch (`vm.rs`, `if base_depth == 0 { park_on =
->   PARK_YIELD; return NIL; }`) **returns without committing `ip`**, and
->   `commit!` is not even in scope there;
-> * **committing `ip` alone did not fix it**, so something else is stale across
->   a preemption too. The obvious candidates are anything else the dispatch loop
->   caches in a Rust local — the frame pointer, the cached stack top — and the
->   consistency between the resumed `ip` and the value-stack depth left behind
->   by a half-evaluated expression.
->
-> The parking path rewinds deliberately (`frames.last_mut().ip = opcode_at`) so
-> the call re-executes. Preemption cannot do that — the thread must resume where
-> it stopped, with the stack exactly as it was. That asymmetry is where to look.
->
-> My `call_value` observation (no PARK handling on the dynamic-dispatch path) is
-> still worth closing, but it is probably not this bug. The shared `Parked` enum
-> that now exists is the right shape for both.
+Two of `test/document.clj`'s assertions are red. Everything else in `bin/test`
+is green. The bug is **pre-existing** — verified by stashing all uncommitted
+work, rebuilding from `a56cba2`, and reproducing.
 
-`0009` is done and committed (`ebd9a0e`, `884ac66`). The suite is green except
-**two assertions in `test/document.clj`**, which are the bug below.
+## Fixed on the way, and not the same bug
 
-## It is pre-existing, and that is measured rather than assumed
+`f74ad1b` fixed a genuine, reachable, wrong-answer bug that the search turned
+up: there are two paths into `call_native`, and only the CALL_NATIVE opcode
+handled parking. A parking native reached through a *value* had its arguments
+dropped out of the root set and its park handed to `unwind` as a thrown error.
 
-Verified by stashing *all* uncommitted work, rebuilding the runtime from
-`a56cba2` with only a two-line `set_gc_stress` export added, and reproducing.
-It is a `0005`/`0006` green-threads bug, not a regression from limits.
+    (let [recv flint.rt/port-receive] (recv rx))   =>  #<unprintable>
 
-## The reproduction, which is now small and deterministic
+It is fixed, tested, and it is **not** the bug below: a counter on that path
+shows zero hits in either failing case.
+
+## What the failure looks like
+
+`test/document.clj`: the host sends 64 waves, the guest sees 63, and
+4194304 − 4128768 = 65536 is exactly one budget. Runtime counters show
+**65 messages enqueued and 65 dequeued on both hops** — the host port and the
+rpc channel — so every message crossed every port. The loss is above the ports:
+one message reaches `drain-each` and is neither counted nor passed to `f`.
+
+## Three things that look like the cause and are not
+
+Each of these makes it go away, and each is only moving *when a collection
+lands*. Do not re-chase them:
+
+1. **The time slice.** Disabling preemption fixes it. But the failure is **not
+   monotone in slice size** — 1024 and 2048 pass, 4096 loses one wave, 65536
+   loses nearly everything. Non-monotone means "where a preemption lands",
+   not "how often".
+2. **`reap_ports`.** Disabling it fixes it at every slice. But logging shows the
+   *same* ports reaped and orphaned (`reaped=[5,4] orphaned=[4]`, the structure
+   call's dead channel) in both the passing and the failing run, and the worst
+   failure (slice 65536) reaps nothing at all. Disabling it removes its
+   allocations, nothing more.
+3. **Code shape.** Adding a loop variable to `drain-each`, or a `throw` branch
+   to the rpc reader, fixes it. Capturing a fixnum upvalue and doing arithmetic
+   on it breaks it while capturing a string does not. All of this shifts
+   allocation counts and therefore collection timing.
+
+## What is actually established
+
+Under `set_gc_stress(1)` a two-thread channel program with **no host port**
+deadlocks. A root verifier run after every collection reports:
+
+    dangling root: stack[1] ty=0 phase=run loop stack_top=16 at minor 80
+
+* `ty = 0` is `TY_FREE` — the value points at a **swept old-space block**.
+* `stack_top` was **16 at collection time**, so `stack[1]` was inside the traced
+  range and *was* traced.
+* A check inserted in `major` immediately before `sweep_old` found **no root
+  pointing at an unmarked old-space object**. So marking did not miss it.
+
+That combination is the whole puzzle: the root is traced, it is marked, and it
+still ends up pointing at a `TY_FREE` block. The next suspect is therefore the
+route by which memory becomes `TY_FREE` *other than* sweeping — `push_free`,
+called from `split` in `take_free`. If a free-list entry is ever stale, or a
+block's recorded length disagrees with the heap walk, `take_free` hands out a
+live object's address and `split` stamps a `TY_FREE` header into the middle of
+something live. `sweep_old`'s parse check is a `debug_assert!` and is compiled
+out of release, so a desynchronised old-space walk is currently silent. **Make
+that check real and run the repro** — that is the next move.
+
+Ruled out with evidence: `sched`, `spawn_thread`, `new_waiter`, `free_waiter`,
+`park_on_port`, `port_send`, `port_enqueue`, `save_current_state`,
+`restore_state`, `link_peers`, `peer_id_of_dead`, the weak intern tables (the
+key is compared before the predicate, so ports cannot collide), `roots.consts`
+(traced), and `alloc_old` not zeroing its body (tried; no effect).
+
+## Reproductions
+
+Fast, deterministic, no host port — build with `bin/flint` and call
+`set_gc_stress(1)` before `main`:
 
 ```clojure
 (ns k (:require [flint.thread :as t] [flint.port :as p]))
 (defn main [args]
-  (let [n  (flint.rt/str->num (first args))
+  (let [n (flint.rt/str->num (first args))
         [tx rx] (p/channel 1 "probe")
-        w  (t/spawn (fn [] (inc n) (p/send tx :end) :sent))
+        w (t/spawn (fn [] (inc n) (p/send tx :end) :sent))
         got (p/receive rx)]
     (t/join w)
     (pr-str {:got got})))
 ```
 
-Run it with `inst.exports.set_gc_stress(1)`. Without stress it answers
-`{:got :end}`; with stress it deadlocks. **No host port is involved**, so it is
-not the host ABI.
+The slow one is `bb test/document.clj`, whose wave assertions fail without any
+stress at all.
 
-The trigger is narrow and worth knowing, because it is what makes it look like a
-compiler bug when it is not:
+## Tooling
 
-* capturing a **fixnum** upvalue and doing arithmetic on it (`(inc n)`, `(< 0 n)`)
-  fails; capturing a string or a port, or merely mentioning the fixnum, does not;
-* that is a red herring. The worker's body changes the module's constants and
-  code, which changes how many allocations run before the channel is made, which
-  changes *when* a collection lands. The bug is allocation-timing-dependent, not
-  shape-dependent.
+`a996441` holds the diagnostic scaffolding and `f64e137` reverts it; `git revert
+f64e137` brings it back. It is out of the tree because it adds ~4 KB to every
+module and breaks the pure-module budget, which is the assertion working. It
+contains the runtime slice override, the stress *window* (collect only for
+allocations in a range — bisect it to find the single allocation that matters,
+but re-run any window it lands on, because the predicate is not monotone), the
+root verifier with phase markers, and the reap log.
 
-## What is actually wrong
+## The test that is still owed
 
-A **root in the VM value stack is left dangling across a collection**. A root
-verifier that walks `stack`/`shadow`/`globals`/`consts`/`singletons` after every
-collection and rejects any heap value that is forwarded, outside both spaces, or
-of an impossible type, reports the first bad root as `stack[1]`.
-
-Downstream, that surfaces as:
-
-* `SC_NEXTID` reads `0x1000000`, so the first port is given id **16777216**
-  instead of 1 and the ids run on from there;
-* a `wake_on(port)` then fails to match the parked thread's waiter, the wakeup is
-  lost, and the program deadlocks with one thread parked.
-
-`16777216` is `1 << 24`, and object headers are `(ty << 24) | …` — so the value
-read out of that slot has the shape of a **header**, i.e. something is reading or
-writing through a pointer that no longer owns that memory. There were **no
-out-of-bounds slot writes** and no overlapping allocations, so it is a stale
-pointer rather than a size or layout error.
-
-## Where the search had got to
-
-* `sched()`, `spawn_thread`, `new_waiter`, `free_waiter`, `park_on_port`,
-  `port_send`, `port_enqueue`, `save_current_state`, `restore_state`, the weak
-  intern tables and `intern_into` were all read and are all correctly rooted.
-  `empty_vec`/`empty_map` are singletons and do not allocate.
-* `roots.consts` **is** traced, so the image loader's constants are safe.
-* The remaining strong suspect is the shape the VM uses around native calls:
-
-  ```rust
-  let base = self.roots.stack_top - argc;
-  let r = self.call_native(idx, base, argc);
-  self.roots.stack_top = base;          // args leave the root set here
-  …
-  self.roots.stack_top = base + argc;   // and come back on the park path
-  ```
-
-  plus any native that copies an argument into a Rust local and then allocates.
-  `arg(rt, a, 0)` followed by an allocating call is the pattern to grep for.
-
-## Tools
-
-`set_gc_stress(on)` is committed (40 bytes on a pure module). Two throwaway
-tools were **not** committed, because they cost ~2 KB on every shipped module
-and `0005` says a pure module must not grow. They are cheap to rebuild and were
-what actually cracked it:
-
-1. **A stress window.** `stress_from`/`stress_until` on `Gc`, collecting only for
-   allocations in `[from, until)`. Bisecting the window narrows the failure to a
-   single allocation. Do not assume monotonicity when bisecting — the predicate
-   is not monotone, so verify any window you land on by re-running it.
-2. **The root verifier** described above, run after each collection, recording
-   which root array and index first dangles.
-
-## Test that is still owed
-
-`units-src/flint-conc/tests/threads.rs` now covers a **waiter** park across
-collection (`a_waiter_park_survives_collection_at_every_allocation`), which the
-suite lacked — the old stress test parks with `yield`, which registers no waiter.
-It passes, so it does *not* yet reproduce this. The untested combination is
-where these live, exactly as the compound-keys bug taught: stress mode was
-already running on the map tests and still missed that one, because scalar keys
-never allocate in `=`. When the bug is found, the regression test needs the
-negative control `without_the_barrier_the_reference_would_be_lost` set — it must
-fail if the fix is removed.
+`units-src/flint-conc/tests/threads.rs` covers a **waiter** park across
+collection, with allocation between parks and a no-stress negative control. It
+passes, so it does not reproduce this — a known gap rather than assumed
+coverage. When the fix lands the regression test must **park and preempt**, not
+just yield, and must fail if the fix is removed.
