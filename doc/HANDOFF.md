@@ -119,6 +119,47 @@ port at enqueue and check, at the next collection, whether tracing reaches it.
 `:waiting` map, so if it is genuinely unreachable, one of those two roots is not
 what it appears to be.
 
+## The decisive test: a forced major fixes it, at any cadence
+
+`collect_now()` is a full major and is already exported, so this needed no
+runtime change — the host calls it from the document capability's `poll`, which
+runs once per pump.
+
+    major every pump   -> 64 waves, 4194304 bytes   (correct)
+    major every 2      -> correct
+    major every 4      -> correct
+    major every 8      -> correct
+    major every 16     -> correct
+    no forced major    -> 63 waves, 4128768 bytes   (the bug)
+
+**This is monotone**, and that matters. The slice and `reap_ports` results were
+not: some values passed and some failed, which is the signature of a timing
+perturbation. Here *every* cadence fixes it and only the absence fails. That
+points at something a major does structurally.
+
+It does **not** confirm the weak-table lead, and it is honest to say so: forcing
+majors *prevents* the failure rather than probing the port's reachability while
+it is in the bad state. The sweep test as posed cannot be run this way.
+
+What a major does that a minor does not, in the order to check them:
+
+1. **Weak tables are refreshed by MARK rather than by forwarding.** `minor`
+   keeps every entry outside from-space unconditionally, so an unreachable OLD
+   port survives minors indefinitely; `major` drops it. This is the lead.
+2. It sweeps old space, so an unreachable old object's memory is actually
+   reclaimed rather than lingering intact.
+3. It runs an additional minor.
+
+The next step is the reachability walk rather than another forced-collection
+experiment: after a minor, mark from the roots and ask directly whether the port
+being dequeued from is in the reachable set. Do it only for ports in `SC_PORTS`
+and only every Nth collection, so the cost is bounded. That answers the question
+the sweep test could not.
+
+One caution carried from earlier in this file: a check like that MUST exclude
+the collector's own reads, and any flag it uses must live on `Space` rather than
+in a global, or parallel `cargo test` silences it across Rts.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.
