@@ -786,6 +786,13 @@ impl Rt {
                             match self.parked(opcode_at, callee_at + 1 + argc, base_depth, true) {
                                 Parked::Saved => return NIL,
                                 Parked::Yielded => {
+                                    // The call finished after all. `call_value`
+                                    // left the callee and arguments in place
+                                    // for a re-execution that is not going to
+                                    // happen, so drop them before pushing the
+                                    // result -- otherwise the stack grows by
+                                    // the whole call frame every yield.
+                                    self.roots.stack_top = callee_at;
                                     self.vpush(r);
                                     return NIL;
                                 }
@@ -835,6 +842,13 @@ impl Rt {
                             match self.parked(opcode_at, callee_at + 1 + argc, base_depth, true) {
                                 Parked::Saved => return NIL,
                                 Parked::Yielded => {
+                                    // The call finished after all. `call_value`
+                                    // left the callee and arguments in place
+                                    // for a re-execution that is not going to
+                                    // happen, so drop them before pushing the
+                                    // result -- otherwise the stack grows by
+                                    // the whole call frame every yield.
+                                    self.roots.stack_top = callee_at;
                                     self.vpush(r);
                                     return NIL;
                                 }
@@ -1057,6 +1071,7 @@ impl Rt {
                     }
                     self.pop_to(si);
                     let total = argc - 1 + spread;
+                    let apply_callee_at = self.roots.stack_top - total - 1;
                     let r = self.call_value(total);
                     if self.thrown.bits() == crate::value::PARK.bits() {
                         // `apply` has already spread the seq onto the stack, so
@@ -1065,6 +1080,7 @@ impl Rt {
                         // the operands is not.
                         match self.parked(ip, 0, base_depth, false) {
                             Parked::Yielded => {
+                                self.roots.stack_top = apply_callee_at;
                                 self.vpush(r);
                                 return NIL;
                             }
