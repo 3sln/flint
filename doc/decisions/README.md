@@ -27,6 +27,7 @@ for the first.
 | [0018](0018-cross-runtime-benchmarks.md) | Benchmark across wasm runtimes | **Roadmap.** Every current number is V8; decides 0013 per engine and 0010's SDK-vs-port |
 | [0017](0017-profiler.md) | Profiler: named blocks, CPU vs waiting | **Roadmap, not next.** Deterministic because instruction counts are; gives 0013 its measurement |
 | [0020](0020-module-metadata-and-shards.md) | A module declares its build; shards as library modules | **Roadmap.** Custom section for runners; a shard is a third `:kind` |
+| [0021](0021-cli.md) | A native CLI: cross compiler, interpreter, capabilities | **Roadmap.** After AOT and ropes/regex. Removes the babashka dependency |
 
 ## What is actually next
 
@@ -45,7 +46,12 @@ The user's stated ordering, after the open bugs close.
    matcher runs over a rope cursor.
 4. **Thorough benchmarks and testing**, including `0018` across wasm runtimes.
 5. **Profiler** (`0017`).
-6. **Thread pool** (`0019`) — expected to be taken up, strictly opt-in and free
+6. **The CLI** (`0021`) — a native binary with the compiler and the interpreter,
+   cross compiling to every supported target, with capability injection and
+   `deps.edn`. The user placed it after AOT and the string work; it is listed
+   here because it is the piece that makes flint installable by someone who does
+   not already have a Clojure toolchain.
+7. **Thread pool** (`0019`) — expected to be taken up, strictly opt-in and free
    when declined; gas drawn in per-thread blocks; snapshots halt the whole app
    at a safe point.
 
