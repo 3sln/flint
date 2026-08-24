@@ -49,10 +49,18 @@
                  "i.main();"
                  "console.log(JSON.stringify({start: i.exports.stat_remset_violations(),"
                  " end: i.exports.stat_remset_end_violations(),"
+                 " dead: i.exports.stat_dead_half(99,0),"
                  " collections: Number(i.exports.stat_collections())}));})"))
       out (str/trim (str (:out r) (:err r)))
       ]
   (println (str "    " out))
   (if (and (str/includes? out "\"start\":0") (str/includes? out "\"end\":0"))
     (println "  ok   no old object points at a young one without being remembered")
-    (do (println "  FAIL the generational invariant was violated") (System/exit 1))))
+    (do (println "  FAIL the generational invariant was violated") (System/exit 1)))
+  ;; The second half of the same idea, and the one that took a dozen sessions to
+  ;; need: `is_young` spans BOTH semispaces, so a pointer left from before a flip
+  ;; still tests young. Nothing that only asks `is_young` -- not the write
+  ;; barrier, not the check above -- can tell it from a live one.
+  (if (str/includes? out "\"dead\":0")
+    (println "  ok   and no live object points into the DEAD half")
+    (do (println "  FAIL a live object holds a pre-flip pointer") (System/exit 1))))

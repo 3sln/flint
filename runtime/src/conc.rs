@@ -650,6 +650,17 @@ impl Rt {
                             self.gc.is_young(ib.as_heap()) as u32,
                             if tail.is_heap() { self.gc.is_young(tail.as_heap()) as u32 } else { 9 },
                             self.gc.is_young(v.as_heap()) as u32,
+                            // "looks young" and "is in the live half" are
+                            // different questions, and only the second one
+                            // distinguishes a live pointer from a pre-flip one.
+                            self.gc.in_live_half(p.as_heap()) as u32,
+                            self.gc.in_live_half(ib.as_heap()) as u32,
+                            if tail.is_heap() { self.gc.in_live_half(tail.as_heap()) as u32 } else { 9 },
+                            self.gc.in_live_half(v.as_heap()) as u32,
+                            self.gc.from_now(),
+                            self.gc.bump_now(),
+                            self.gc.to_now(),
+                            self.gc.half_now(),
                         ];
                     }
                 }

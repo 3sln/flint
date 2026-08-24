@@ -321,7 +321,19 @@ pub extern "C" fn stat_remset_cover(i: u32) -> u32 {
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_chain2(i: u32) -> u32 {
-    unsafe { if (i as usize) < 8 { crate::gc::CHAIN[i as usize] } else { 0 } }
+    unsafe { if (i as usize) < 16 { crate::gc::CHAIN[i as usize] } else { 0 } }
+}
+
+/// Pointers into the DEAD half found by the invariant walk: `(object, its type,
+/// slot, target, the collection it was seen at)`.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_dead_half(i: u32, f: u32) -> u32 {
+    unsafe {
+        let g = &ensure_rt().gc;
+        if i == 99 { return g.dead_half_refs; }
+        if (i as usize) < 8 && (f as usize) < 5 { g.dead_half_bad[i as usize][f as usize] } else { 0 }
+    }
 }
 
 #[cfg(feature = "diagnostics")]

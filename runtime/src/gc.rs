@@ -59,7 +59,7 @@ pub static mut TRACE_N: usize = 0;
 #[cfg(feature = "diagnostics")]
 pub static mut TRACING: bool = false;
 #[cfg(feature = "diagnostics")]
-pub static mut CHAIN: [u32; 8] = [0; 8];
+pub static mut CHAIN: [u32; 16] = [0; 16];
 #[cfg(feature = "diagnostics")]
 #[inline]
 pub fn note(addr: u32, kind: u32) {
@@ -315,6 +315,18 @@ pub struct Gc {
     pub remset_watch: u32,
     #[cfg(feature = "diagnostics")]
     pub remset_watch_seen: u32,
+    /// A young pointer must be in the LIVE half, not merely inside the young
+    /// address range.
+    ///
+    /// `is_young` spans BOTH semispaces, so a pointer left over from before a
+    /// flip still tests young -- which makes a stale pointer indistinguishable
+    /// from a live one to the write barrier and to the generational invariant
+    /// alike. Asking the second question is what separates them, and it is
+    /// cheap: two comparisons per slot.
+    #[cfg(feature = "diagnostics")]
+    pub dead_half_refs: u32,
+    #[cfg(feature = "diagnostics")]
+    pub dead_half_bad: [[u32; 5]; 8],
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
     #[cfg(feature = "diagnostics")]
@@ -377,12 +389,37 @@ impl Gc {
             #[cfg(feature = "diagnostics")]
             remset_watch_seen: 0,
             #[cfg(feature = "diagnostics")]
+            dead_half_refs: 0,
+            #[cfg(feature = "diagnostics")]
+            dead_half_bad: [[0; 5]; 8],
+            #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };
         gc.add_chunk(MIN_CHUNK);
         gc
     }
 
+    #[cfg(feature = "diagnostics")]
+    pub fn from_now(&self) -> u32 { self.from }
+    #[cfg(feature = "diagnostics")]
+    pub fn bump_now(&self) -> u32 { self.bump }
+    #[cfg(feature = "diagnostics")]
+    pub fn to_now(&self) -> u32 { self.to }
+    #[cfg(feature = "diagnostics")]
+    pub fn half_now(&self) -> u32 { self.half }
+
+    /// Is `addr` in the LIVE half -- an actually allocated young object -- as
+    /// opposed to merely inside the young address range?
+    ///
+    /// `is_young` spans BOTH semispaces, so a pointer left over from before a
+    /// flip still tests young. That makes a stale pointer indistinguishable from
+    /// a live one to anything that only asks `is_young`, including the write
+    /// barrier and the generational invariant check.
+    #[cfg(feature = "diagnostics")]
+    #[inline(always)]
+    pub fn in_live_half(&self, addr: u32) -> bool {
+        addr >= self.from && addr < self.bump
+    }
     #[inline(always)]
     pub fn is_young(&self, addr: u32) -> bool {
         addr.wrapping_sub(self.young_base) < self.half * 2
@@ -765,10 +802,16 @@ impl Gc {
     /// Walk every old object and check the generational invariant. Read-only.
     #[cfg(feature = "diagnostics")]
     pub fn check_remset(&mut self) {
-        let chunks = self.old_chunks.clone();
-        for c in &chunks {
-            let mut a = c.addr;
-            let end = c.addr + c.len;
+        // Old chunks AND the live half. The dead-half check below only means
+        // something for the space it actually walks, and the first version of
+        // this covered old space alone -- so a stale pointer sitting in a young
+        // object was invisible to it and it reported a clean zero.
+        let mut spans: Vec<(u32, u32)> =
+            self.old_chunks.iter().map(|c| (c.addr, c.addr + c.len)).collect();
+        spans.push((self.from, self.bump));
+        for c in &spans {
+            let mut a = c.0;
+            let end = c.1;
             while a < end {
                 let size = size_of(&self.sp, a);
                 if size < 8 || a + size > end {
@@ -787,7 +830,19 @@ impl Gc {
                     let n = len(&self.sp, a);
                     for i in 0..n {
                         let v = slot(&self.sp, a, i);
-                        if v.is_heap() && self.is_young(v.as_heap()) && !in_remset(&self.sp, a) {
+                        if v.is_heap() && self.is_young(v.as_heap()) && !self.in_live_half(v.as_heap()) {
+                            // Points into the dead half: stale, and nothing that
+                            // only asks `is_young` can tell.
+                            let k = self.dead_half_refs as usize;
+                            if k < 8 {
+                                self.dead_half_bad[k] =
+                                    [a, t as u32, i, v.as_heap(), self.stats.minor as u32];
+                            }
+                            self.dead_half_refs += 1;
+                        }
+                        if v.is_heap() && self.is_young(v.as_heap()) && !in_remset(&self.sp, a)
+                            && !self.is_young(a)
+                        {
                             let k = self.remset_violations as usize;
                             if k < 8 {
                                 self.remset_bad[k] = [

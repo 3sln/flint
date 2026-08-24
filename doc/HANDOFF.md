@@ -540,6 +540,65 @@ reader holding the pre-collection inbox rather than the port's updated
 every scanned and forwarded address: was `2555336` forwarded during #692, and was
 the vector holding it scanned in the same collection or only its replacement.
 
+## THE STALE POINTER IS NAMED
+
+`is_young` spans BOTH semispaces, so a pointer left over from before a flip
+still tests young. Nothing that only asks `is_young` — not the write barrier, not
+the generational invariant check — can tell it from a live one. That is how zero
+violations and a stale chain were true at the same time.
+
+Asking the second question, "is it in the LIVE half", at the failing dequeue:
+
+    spaces: from=2555904 bump=2566608 to=458752 half=2097152
+      live half = [2555904, 2566608)   dead half = [458752, 2555904)
+
+    port    @5090424   old space
+    inbox   @2566040   LIVE half        <- fresh, post-collection
+    tail    @2566016   LIVE half        <- fresh
+    MESSAGE @2555336   DEAD HALF        <- pre-flip, stale
+
+So it is the **trace** branch, not the write branch: `PT_INBOX` is the current
+post-collection vector and the tail is fresh; only element 0 is stale.
+
+Made a standing check — every heap slot must point into the live half or old
+space, never the dead half — it names the fault in one run:
+
+    NODE@2566016 slot  1 -> 2555336   at collection 721
+    NODE@2566608 slot 20 -> 2555336   at collection 721
+    NODE@459336  slot 20 -> 2555336   at collection 722
+
+`NODE@2566016` is the tail node from the failing chain, and slot 1 is element 0
+(slot 0 is the transient edit field). **The same message is referenced from three
+different nodes**, one as a tail element and two as element 19 of larger trie
+nodes — so it is shared between vectors, and after a flip every one of those
+references points into the dead half.
+
+Note the collection number: 721, not the 692 the upgrade bisection found.
+Compatible — upgrading #692 stops the situation arising, while 721 is where the
+stale pointer first becomes observable — but do not conflate them.
+
+Both checks are permanent in `test/gc_stress.clj`, and both are worth having
+whatever they say about this bug:
+
+    {"start":0,"end":0,"dead":0,"collections":198}
+
+### One more instrument lesson, the same one twice
+
+The dead-half check reported a clean zero on its first run because it walked only
+OLD space, and the stale pointer sits in a YOUNG object. Exactly the mistake made
+minutes earlier by watching the young inbox with an old-space walker. **A check
+means nothing about a space it does not walk** — state the space, then verify the
+walk covers it.
+
+### What is left
+
+One concrete question: why does a node in the live half hold an element pointing
+into the dead half at collection 721. The node is fresh, so either it was copied
+from a node whose slot was already stale, or it was built by `node_clone` /
+`vec_conj` from a source that was. `node_clone` copies slots verbatim, so a stale
+element propagates into every clone — which would explain three nodes sharing one
+stale target.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.
