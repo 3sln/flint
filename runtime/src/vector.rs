@@ -828,6 +828,7 @@ mod tests {
         assert_eq!(rt.vec_count(b), 99);
     }
 
+    #[cfg(feature = "diagnostics")]
     #[test]
     fn survives_collection_at_every_allocation() {
         let mut rt = Rt::new();
@@ -991,6 +992,7 @@ mod transient_tests {
                    "the earlier persistent result was mutated through a later transient");
     }
 
+    #[cfg(feature = "diagnostics")]
     #[test]
     fn transients_survive_collection_at_every_allocation() {
         let mut rt = Rt::new();

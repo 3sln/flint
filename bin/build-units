@@ -8,6 +8,17 @@ RUSTC="$TC/bin/rustc"
 SYS="$TC/lib/rustlib/wasm32-unknown-unknown/lib"
 DEPS=target/wasm32-unknown-unknown/release/deps
 FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0"
+
+# Two builds (doc/decisions/0016). A production module carries NO diagnostic
+# machinery -- absent, not disabled -- so it is a cargo feature rather than a
+# runtime flag. `--diagnostics` builds the instrumented runtime and the units
+# that need it.
+DIAG=""
+if [ "$1" = "--diagnostics" ]; then
+  DIAG=1
+  FLAGS="$FLAGS --cfg feature=\"diagnostics\""
+  echo "  (diagnostics build)"
+fi
 mkdir -p out units/.sysroot
 
 # cargo builds the DEPENDENCY rlibs once (serde_json, xmlparser, htmlparser and
@@ -29,6 +40,18 @@ $RUSTC $FLAGS --crate-type rlib --crate-name flint_rt --extern libm="$LIBM" \
 $RUSTC $FLAGS --crate-type rlib --crate-name flint_rt --extern libm="$LIBM" \
   --emit=link runtime/src/lib.rs -o units/flint/libflint_rt.rlib
 cargo run -q -p flint-rt --features host-tools --bin catalogue > units/flint/rt.unit.edn
+# The diagnostic edge lives on the runtime unit, so only this build declares it
+# and `flint` needs no flag of its own.
+if [ -n "$DIAG" ]; then
+  python3 - <<'EDN'
+import re
+p = "units/flint/rt.unit.edn"
+s = open(p).read().rstrip()
+extra = ' :exports ["stat_bytes_allocated" "stat_collections" "stat_peak_live" "stat_heap_used" "collect_now" "set_gc_stress"]'
+s = s[:s.rfind("}")] + extra + "}\n"
+open(p, "w").write(s)
+EDN
+fi
 
 # One parser unit per namespace. Each is its own object AND carries its own
 # dependency rlibs, so linking a program that never mentions XML never puts
@@ -76,6 +99,7 @@ cargo run -q -p flint-conc --features host-tools --bin manifest > units/flint/co
 # The snapshot unit (doc/decisions/0015). Capture and restore live in the
 # runtime; this carries the host-facing surface, so a program that never asks
 # for a snapshot never links one and the pure-module floor is untouched.
+if [ -n "$DIAG" ]; then
 echo "  flint.snapshot"
 $RUSTC $FLAGS --crate-type rlib --crate-name flint_snap \
   --extern flint_rt=units/flint/libflint_rt.rlib -L $DEPS \
@@ -92,6 +116,11 @@ cat > units/flint/snapshot.unit.edn <<'UNIT'
             "flint/snapshot-size" {:symbol "flint_b_snapshot_size"}
             "flint/snapshot-restore" {:symbol "flint_b_snapshot_restore"}}}
 UNIT
+else
+  # A production build must not leave a linkable snapshot unit behind: absent is
+  # a different guarantee from disabled (doc/decisions/0016).
+  rm -f units/flint/snapshot.o units/flint/snapshot.unit.edn
+fi
 
 build_parser flint.data.json flint/data/json units-src/flint-data-json flint_data_json \
   flint_b_json_parse "flint/json-parse" serde serde_json

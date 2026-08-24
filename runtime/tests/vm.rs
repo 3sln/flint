@@ -519,6 +519,7 @@ fn keywords_and_maps_are_callable() {
     assert_eq!(rt.as_i64(v), Some(7));
 }
 
+#[cfg(feature = "diagnostics")]
 #[test]
 fn the_interpreter_survives_collection_at_every_allocation() {
     let mut w = ImageWriter::new();
@@ -681,6 +682,7 @@ fn upvalues_survive_a_collection_taken_mid_call() {
 /// during initialisation the test would pass vacuously, so it checks that it
 /// DID move. With the fix removed, that same movement is what makes the
 /// argument stale.
+#[cfg(feature = "diagnostics")]
 #[test]
 fn arguments_survive_the_module_initialisers() {
     let mut w = ImageWriter::new();
@@ -754,6 +756,7 @@ fn arguments_survive_the_module_initialisers() {
 
 /// Round trip must be byte-identical. Anything that differs is state the format
 /// is dropping, and a format that drops state is the next instrument that lies.
+#[cfg(feature = "diagnostics")]
 #[test]
 fn a_snapshot_round_trips_byte_for_byte() {
     let mut w = ImageWriter::new();
@@ -780,6 +783,7 @@ fn a_snapshot_round_trips_byte_for_byte() {
 
 /// A snapshot from another layout version is refused BY NAME rather than read
 /// as a plausible-looking heap that means something else.
+#[cfg(feature = "diagnostics")]
 #[test]
 fn a_snapshot_from_another_version_is_refused() {
     let mut w = ImageWriter::new();
@@ -804,6 +808,7 @@ fn a_snapshot_from_another_version_is_refused() {
 /// count** as one that never stopped. 0009's gas is deterministic, so this is an
 /// equality rather than a hope -- and any state the format drops shows up as a
 /// different answer or a different count.
+#[cfg(feature = "diagnostics")]
 #[test]
 fn a_snapshot_resumes_with_the_same_answer_and_the_same_instruction_count() {
     static mut SNAP: Option<Vec<u8>> = None;

@@ -264,6 +264,7 @@ mod tests {
         assert_eq!(got, (0..300i64).collect::<StdVec<_>>());
     }
 
+    #[cfg(feature = "diagnostics")]
     #[test]
     fn survives_collection() {
         let mut rt = Rt::new();

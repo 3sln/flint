@@ -9,6 +9,9 @@ crate-type = ["rlib"]
 [features]
 # The manifest generator is host-only: it links std.
 host-tools = []
+# Forwarded so `cargo test -p flint-conc --features diagnostics` exercises the
+# instrumented runtime (doc/decisions/0016).
+diagnostics = ["flint-rt/diagnostics"]
 
 [[bin]]
 name = "manifest"

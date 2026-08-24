@@ -244,6 +244,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "diagnostics")]
     #[test]
     fn boxed_integers_survive_collection() {
         let mut rt = Rt::new();

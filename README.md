@@ -891,9 +891,39 @@ scheduler needs cost a few hundred bytes and removing a redundant entry path pai
 for them. The requirement was that a pure program not be made worse, and it was
 not.
 
-That floor has since moved to **201 311 bytes**, and deliberately — see
+That floor has since moved, and deliberately — see
 [Resource limits](#resource-limits), which reports what bought the difference.
 Threads and ports are still not in it.
+
+### Two builds
+
+A production module carries **no diagnostic machinery** — absent, not disabled
+(`doc/decisions/0016`). Not a runtime flag: a flag leaves the code linked, still
+costing bytes and still branching somewhere hot. It is a cargo feature, so the
+code is not there at all.
+
+| | bytes |
+|---|---:|
+| production module | **203 360** |
+| the same with `--diagnostics` | 203 884 |
+| what turning diagnostics on costs | **+524** |
+
+Absent from production: snapshots and their export format, the inspector, GC
+stress mode, the `forward()` plausibility check, the `slot()` forwarded-pointer
+assertion, and the heap statistics exports. `test/twobuilds.clj` asserts each by
+name.
+
+Present in production, and also asserted, because these are the ones most likely
+to be cut by mistake: **gas, the memory cap and the deterministic scheduler**.
+They are resource control, not instrumentation, and construe's gates depend on a
+reproducible instruction count — the test does not merely check the symbol is
+exported, it runs a program under a limit and checks the count is non-zero and
+the limit still fires.
+
+It is a security argument as much as a size one. flint's strongest measured case
+is sandboxing code somebody else wrote, and a module that ships snapshot export
+is a module that can be asked to dump its heap. *Absent* is a different
+guarantee from *disabled*.
 
 ---
 

@@ -133,10 +133,16 @@
 
 (def abi-exports
   ;; The module's outside edge, and the roots --gc-sections keeps.
+  ;;
+  ;; PRODUCTION ONLY (doc/decisions/0016). Gas and the memory cap are here
+  ;; because they are resource control rather than instrumentation, and
+  ;; construe's gates depend on a deterministic instruction count -- `stat_steps`
+  ;; is how a host reads it, so it survives stripping with them. Everything
+  ;; diagnostic (`collect_now`, `set_gc_stress`, the heap statistics) is carried
+  ;; by the runtime unit's own `:exports`, and only the diagnostics build of the
+  ;; runtime declares them.
   ["flint_main" "arg_alloc" "arg_push" "out_ptr" "out_len"
-   "stat_bytes_allocated" "stat_collections" "image_desc_addr" "set_step_limit"
-   "stat_steps" "stat_peak_live" "collect_now" "set_memory_limit" "stat_heap_used"
-   "set_gc_stress"])
+   "image_desc_addr" "set_step_limit" "stat_steps" "set_memory_limit"])
 
 (defn unit-exports
   "Extra wasm exports a linked unit asks for. This is how a unit can widen the

@@ -461,6 +461,7 @@ mod tests {
         assert_eq!(rt.as_str(v, &mut b3).map(|s| s.len()), Some(105));
     }
 
+    #[cfg(feature = "diagnostics")]
     #[test]
     fn allocation_during_construction_does_not_lose_parts() {
         // keyword() allocates the ns string, then the name string, then the

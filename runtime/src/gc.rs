@@ -223,9 +223,11 @@ pub struct Gc {
     /// it is the thing that ran out of room.
     pub(crate) collecting: bool,
     /// Set by tests/benchmarks to force a collection at every allocation.
+    #[cfg(feature = "diagnostics")]
     pub stress: bool,
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
+    #[cfg(feature = "diagnostics")]
     pub bad_forward: u32,
 }
 
@@ -254,7 +256,9 @@ impl Gc {
             stats: GcStats::default(),
             oom: false,
             collecting: false,
+            #[cfg(feature = "diagnostics")]
             stress: false,
+            #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };
         gc.add_chunk(MIN_CHUNK);
@@ -433,6 +437,7 @@ impl Gc {
             }
             return a;
         }
+        #[cfg(feature = "diagnostics")]
         if self.stress {
             self.minor(roots);
             self.maybe_major(roots);
@@ -518,6 +523,7 @@ impl Gc {
     /// object, and the damage surfaced much later and somewhere else entirely
     /// (`doc/HANDOFF.md`). This turns that into something catchable where it
     /// happens.
+    #[cfg(feature = "diagnostics")]
     fn plausible_from_object(&self, a: u32) -> bool {
         // Live from-space runs from `from` to the allocation top, which `bump`
         // still holds until the flip at the end of the collection.
@@ -542,13 +548,13 @@ impl Gc {
         if !self.in_from(a) {
             return v;
         }
-        // Free in release: `cfg!` is a constant, so this collapses to the
-        // `stress` test, which is how the wasm build gets it on demand.
-        if cfg!(debug_assertions) || self.stress {
-            if ty(&self.sp, a) != TY_FWD && !self.plausible_from_object(a) && self.bad_forward == 0 {
-                self.bad_forward = a;
-                debug_assert!(false, "forward: {a} is not the start of a from-space object");
-            }
+        // A FEATURE, not a runtime flag (doc/decisions/0016): a flag would leave
+        // this linked and branched on in production, and it is 357 bytes. The
+        // capability survives for dev and staging; production does not pay.
+        #[cfg(feature = "diagnostics")]
+        if ty(&self.sp, a) != TY_FWD && !self.plausible_from_object(a) && self.bad_forward == 0 {
+            self.bad_forward = a;
+            debug_assert!(false, "forward: {a} is not the start of a from-space object");
         }
         if ty(&self.sp, a) == TY_FWD {
             return Value::heap(len(&self.sp, a));
@@ -1094,6 +1100,7 @@ mod tests {
         assert_eq!(h.str_of(h.get(i)).len(), big.len());
     }
 
+    #[cfg(feature = "diagnostics")]
     #[test]
     fn stress_mode_collects_at_every_allocation() {
         let mut h = H::new();

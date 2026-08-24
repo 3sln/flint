@@ -240,12 +240,14 @@ pub extern "C" fn set_memory_limit(bytes: u32) {
 }
 
 /// Bytes of heap currently reserved, against the cap.
+#[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_heap_used() -> u32 {
     unsafe { ensure_rt().gc.heap_used() }
 }
 
 /// Diagnostics for the benchmarks: bytes the collector has handed out.
+#[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_bytes_allocated() -> u64 {
     unsafe { ensure_rt().gc.stats.bytes_allocated }
@@ -253,6 +255,7 @@ pub extern "C" fn stat_bytes_allocated() -> u64 {
 /// High-water mark of *live* bytes, sampled at each collection. The number a
 /// memory claim is made against: "peak memory is proportional to the content a
 /// script actually kept", not to how much it allocated on the way.
+#[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_peak_live() -> u64 {
     unsafe { ensure_rt().gc.stats.peak_live }
@@ -264,17 +267,20 @@ pub extern "C" fn stat_peak_live() -> u64 {
 /// tested to the standard the rest of the collector is held to: a thread that
 /// parks holds live references in a saved stack, and only stress mode makes
 /// every one of those saves and restores race a collection.
+#[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn set_gc_stress(on: u32) {
     unsafe { ensure_rt().gc.stress = on != 0 }
 }
 
 
+#[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn collect_now() {
     unsafe { ensure_rt().collect() }
 }
 
+#[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_collections() -> u64 {
     unsafe {

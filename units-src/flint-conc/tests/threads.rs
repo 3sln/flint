@@ -133,6 +133,7 @@ extern "C" fn yield_(rt: *mut Rt, b: u32, n: u32) -> u64 {
 /// only then sends it. With `stress` on, every allocation collects -- so if a
 /// parked thread's saved stack were not a root, the string would be gone by the
 /// time it is sent.
+#[cfg(feature = "diagnostics")]
 #[test]
 fn parked_threads_survive_collection_with_their_values_intact() {
     let mut b = Build::new();
@@ -267,6 +268,7 @@ fn without_the_thread_table_as_a_root_a_parked_stack_would_be_lost() {
 /// Three sends through a one-slot channel force the sender to park twice and the
 /// receiver to park at least once, so a waiter is allocated, freed and reused
 /// while every allocation is collecting.
+#[cfg(feature = "diagnostics")]
 #[test]
 fn a_waiter_park_survives_collection_at_every_allocation() {
     let (got, collections) = ping_pong_under_stress(true);
@@ -281,6 +283,7 @@ fn a_waiter_park_survives_collection_at_every_allocation() {
 /// The negative control, in the shape `without_the_barrier_the_reference_would_
 /// be_lost` set: the same program with stress off must pass, so a failure above
 /// is about collection and not about the program being wrong.
+#[cfg(feature = "diagnostics")]
 #[test]
 fn the_same_ping_pong_is_correct_without_stress() {
     let (got, _) = ping_pong_under_stress(false);
@@ -293,6 +296,7 @@ fn the_same_ping_pong_is_correct_without_stress() {
 ///
 /// Unrolled rather than looped so the bytecode stays readable; the point is the
 /// parking, not the counting.
+#[cfg(feature = "diagnostics")]
 fn ping_pong_under_stress(stress: bool) -> (Option<i64>, u64) {
     let mut b = Build::new();
     let spawn = b.conc("flint/spawn", spawn_);

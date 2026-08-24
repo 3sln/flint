@@ -15,6 +15,13 @@ crate-type = ["rlib"]
 # the runtime's own panic handler under wasm32.
 host-tools = []
 
+# Diagnostic machinery (doc/decisions/0016). ABSENT by default, not disabled:
+# a runtime flag leaves the code linked and branched on, and "absent" is a
+# different guarantee from "off" -- which matters most for a VM whose strongest
+# case is sandboxing code somebody else wrote. Gas, the memory cap and the
+# deterministic scheduler are NOT here: they are production features.
+diagnostics = []
+
 [[bin]]
 name = "catalogue"
 required-features = ["host-tools"]

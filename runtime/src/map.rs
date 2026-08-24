@@ -1701,6 +1701,7 @@ mod tests {
         assert!(!rt.eq(rt.r(pi), q3), "differing counts are not equal");
     }
 
+    #[cfg(feature = "diagnostics")]
     #[test]
     fn survives_collection_at_every_allocation() {
         let mut rt = Rt::new();

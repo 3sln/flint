@@ -30,6 +30,9 @@ pub mod obj;
 pub mod rt;
 pub mod seqs;
 pub mod set;
+// Snapshots are diagnostic machinery (doc/decisions/0016): absent from a
+// production build, not merely disabled.
+#[cfg(feature = "diagnostics")]
 pub mod snap;
 pub mod strs;
 pub mod vector;
