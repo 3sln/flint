@@ -599,6 +599,57 @@ from a node whose slot was already stale, or it was built by `node_clone` /
 element propagates into every clone — which would explain three nodes sharing one
 stale target.
 
+## All three holders are live, and 691 ties to 721
+
+**Correction to the previous reading, and to the suggestion that only one of the
+three nodes was live.** The bounds printed at the failing dequeue do not classify
+anything at collection 721 or 722: a half boundary moves at every flip. Recording
+the bounds *at the moment of each finding* shows all three holders were in the
+live half then:
+
+    NODE@2566016 slot  1 -> 2555336  at 721   live half THEN [2555904, 4653048)  holder live: yes
+    NODE@2566608 slot 20 -> 2555336  at 721   live half THEN [2555904, 4653048)  holder live: yes
+    NODE@459336  slot 20 -> 2555336  at 722   live half THEN  [458752,  483408)  holder live: yes
+
+So the sharing story stands: three live nodes, one stale target. And note the
+third is at collection **722**, in the *next* live half — the stale pointer is
+being carried forward across flips.
+
+That is a mechanism, not a coincidence. After a flip the dead half is neither
+from-space nor to-space, so `forward` sees a dead-half pointer, finds it is not
+`in_from`, and **returns it unchanged**. A stale pointer is therefore preserved
+verbatim through every subsequent collection and copied into every node cloned
+from its holder. One of them propagates indefinitely.
+
+### 691, not 692
+
+Running the live-half check with an upgrade applied ties the numbers together:
+
+    no upgrade         63 waves   dead-half refs: 3 (first at collection 721)
+    upgrade ONLY #692  63 waves   dead-half refs: 3 (first at collection 721)
+    upgrade ONLY #691  64 waves   dead-half refs: 0
+    upgrade ONLY #720  63 waves   dead-half refs: 3 (first at collection 721)
+
+Upgrading #691 removes the stale pointer entirely *and* the wave loss. Upgrading
+#692 changes neither. So **#691 is the collection where the situation arises**,
+and 721 is merely where the walk first sees it — the earlier phrasing
+"collection #692 loses the message" was the wrong way round and should be read as
+"#691 is the last collection whose upgrade still prevents it".
+
+### Ruled out by the owner, do not re-run
+
+Uninitialised slots from a grow-clone: `gc.rs` zeroes on the bump path
+(`write_header` then `zero_body`, every `Vals` slot set to NIL), and `node_clone`
+is properly rooted, re-reading source and destination through `self.r()` each
+iteration. Both out.
+
+### The question now
+
+What happens at collection #691 that leaves a live node holding a pointer to an
+object in the half that flip is about to abandon. The dead-half check is armed
+and permanent, so pointing it at #691 specifically — rather than waiting for 721
+— is the next read.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.

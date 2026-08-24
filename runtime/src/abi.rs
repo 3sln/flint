@@ -332,7 +332,7 @@ pub extern "C" fn stat_dead_half(i: u32, f: u32) -> u32 {
     unsafe {
         let g = &ensure_rt().gc;
         if i == 99 { return g.dead_half_refs; }
-        if (i as usize) < 8 && (f as usize) < 5 { g.dead_half_bad[i as usize][f as usize] } else { 0 }
+        if (i as usize) < 8 && (f as usize) < 7 { g.dead_half_bad[i as usize][f as usize] } else { 0 }
     }
 }
 

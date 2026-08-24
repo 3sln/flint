@@ -326,7 +326,7 @@ pub struct Gc {
     #[cfg(feature = "diagnostics")]
     pub dead_half_refs: u32,
     #[cfg(feature = "diagnostics")]
-    pub dead_half_bad: [[u32; 5]; 8],
+    pub dead_half_bad: [[u32; 7]; 8],
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
     #[cfg(feature = "diagnostics")]
@@ -391,7 +391,7 @@ impl Gc {
             #[cfg(feature = "diagnostics")]
             dead_half_refs: 0,
             #[cfg(feature = "diagnostics")]
-            dead_half_bad: [[0; 5]; 8],
+            dead_half_bad: [[0; 7]; 8],
             #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };
@@ -835,8 +835,19 @@ impl Gc {
                             // only asks `is_young` can tell.
                             let k = self.dead_half_refs as usize;
                             if k < 8 {
-                                self.dead_half_bad[k] =
-                                    [a, t as u32, i, v.as_heap(), self.stats.minor as u32];
+                                // The space bounds AS THEY STAND NOW, not as
+                                // they stand when someone reads this later: a
+                                // half boundary moves at every flip, so bounds
+                                // from another moment classify nothing.
+                                self.dead_half_bad[k] = [
+                                    a,
+                                    t as u32,
+                                    i,
+                                    v.as_heap(),
+                                    self.stats.minor as u32,
+                                    self.from,
+                                    self.bump,
+                                ];
                             }
                             self.dead_half_refs += 1;
                         }
