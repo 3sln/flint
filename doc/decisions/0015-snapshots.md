@@ -97,16 +97,19 @@ platform running model-written code, "here is the exact state when the gate
 failed" is worth more than a stack trace; and **snapshot plus the host event log
 is a complete replay**, because the scheduler is deterministic.
 
-## Snapshots from inside the program: `(break :snap "name")`
+## Snapshots from inside the program: `(snap "name")`
 
-`0014`'s `break` form gains an option. Bare `(break)` parks for a debugger;
-`(break :snap "the-snapshot")` **captures a named snapshot and carries on**.
+**Its own form, not an option on `break`.** This was first written as
+`(break :snap "name")`, and the owner's correction is right: a form that does not
+break should not be called `break`. Two forms, each doing one thing:
 
-Capture-and-continue rather than capture-and-park is the useful default, because
-a form that parked would need a debugger attached to resume — useless in an
-ordinary dev run, which is exactly where dropping snapshots through a program is
-worth most. Somebody who wants both writes `(break :snap "x")` and then
-`(break)`.
+- `(break)` — parks for a debugger (`0014`).
+- `(snap "the-snapshot")` — **captures a named snapshot and carries on.**
+
+Capture-and-continue is what makes `snap` useful without a debugger attached,
+which is the ordinary dev run and where dropping snapshots through a program is
+worth most. Somebody who wants both writes `(snap "x")` then `(break)`, and the
+reading is obvious rather than depending on a keyword.
 
 ### It MUST NOT ALLOCATE, and that is not a performance note
 
@@ -133,12 +136,12 @@ through the event queue so it can export and drop rather than accumulate.
 
 ### In a production build it is elided, and the count is reported
 
-Under `0016` there is no snapshot machinery in production, so `(break …)` must
-compile to nothing — zero bytes, not a no-op call.
+Under `0016` there is no snapshot machinery in production, so `(snap …)` must
+compile to nothing — zero bytes, not a no-op call. The same goes for `(break)`.
 
-But silently eliding it is how debug code ships unnoticed, so **the compiler
-reports how many break forms it elided**, and a flag makes their presence an
-error for anybody who wants that guarantee. Same spirit as `:exclude` being an
+But silently eliding is how debug code ships unnoticed, so **the compiler reports
+how many of each it elided**, and a flag makes their presence an error for
+anybody who wants that guarantee. Same spirit as `:exclude` being an
 assertion rather than a pruning (`0004`).
 
 **One consequence to write down: instruction counts are comparable within a build
@@ -164,7 +167,8 @@ debug-gated, with the module-size test proving it.
 - Diffing two snapshots across a collection names what moved and what did not.
 - A pure module's size is unchanged, asserted.
 - A snapshot from a different runtime version is refused by name.
-- `(break :snap "x")` in a loop **allocates nothing** — asserted by allocation
+- `(snap "x")` in a loop **allocates nothing** — asserted by allocation
   count, not by inspection.
 - A repeated name keeps the latest and reports the hit count.
-- A production build contains no break forms and reports how many it elided.
+- A production build contains no `snap` or `break` forms and reports how many of
+  each it elided.

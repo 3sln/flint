@@ -178,6 +178,35 @@ That is a much better place for it: the correctness story needs no analysis, no
 fixpoint, and no closure bit, and the analysis can be added later purely to make
 it faster.
 
+### Which makes the compilable unit a WHOLE FUNCTION, not a straight line
+
+Worth stating plainly, because it changes the size of the prize. The original
+framing was "compile contiguous non-parking chunks", where a region ended at
+every call — and in idiomatic Clojure that is every few instructions.
+
+With the guard, a call does not end a region. A region ends only where the guard
+actually fires, which at runtime is rare. **So the static unit becomes the whole
+function body**, and the guard is ordinary error propagation rather than a
+boundary.
+
+That is a much better position than the one I was arguing from: it is close to
+what a real AOT compiler does, and the payoff scales with function size rather
+than with the distance between calls.
+
+### Two consequences of the larger unit
+
+**A bail from a nested call unwinds several wasm frames**, each one checking and
+returning — which is fine, and it means EVERY compiled function must propagate,
+not just the outermost. The interpreter's own frames have to stay in step so the
+unwind lands somewhere valid, which is an argument for compiled functions
+maintaining exactly the frame discipline the interpreter does rather than an
+optimised variant of it.
+
+**Deopt metadata grows with call sites**, since each needs a mapping back to a
+bytecode `ip`. That is bytes in the module, and `0003`'s modularity story is
+measured in bytes — so count it in the histogram alongside the saving, rather
+than discovering it after the fact.
+
 ### Two things to get right if the guard is the whole mechanism
 
 **Not every call site is re-executable, and the code already knows it.** `vm.rs`
