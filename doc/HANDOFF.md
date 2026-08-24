@@ -282,6 +282,33 @@ to be true, but whether the traversal from the remembered port through
 `PT_INBOX` to `V_TAIL` to element 0 actually happens. Watch by object identity
 using an address that cannot move, and log each hop.
 
+## The differential: all three fix it, which is itself the answer
+
+Running a major's phases in isolation from the host, once per pump:
+
+    mode 0  nothing extra                          -> 63 waves  (the bug)
+    mode 1  two minors back to back, nothing else  -> 64 waves
+    mode 2  minor + mark + weak refresh, NO sweep  -> 64 waves
+    mode 3  minor + mark + sweep, NO weak refresh  -> 64 waves
+
+**Every one of them fixes it, including two plain minors.** So the differential
+does *not* isolate the weak-table refresh or the old-space sweep — the thing they
+share is simply *an additional traversal*, and that is what repairs the state.
+
+This weakens the earlier "monotone therefore structural" reading rather than
+supporting it. An extra collection per pump also ages objects faster and promotes
+more of them, and promoted objects do not move — so "any extra collection fixes
+it" is consistent with a mechanism that merely reduces the number of chances for
+a young object to move while something still points at it. Monotone across
+cadences, but the knob is still moving *when* things happen.
+
+The live question is now the one that follows from mode 1: **what does a second
+minor traverse that the first did not**, given the remembered set is provably
+correct at both boundaries. A single minor descends into old objects ONLY via the
+remembered set; a mark phase descends into everything reachable. That asymmetry
+is the thing to look at, and it is the same asymmetry noted earlier — reachable
+and traced are different questions for an old object.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.
