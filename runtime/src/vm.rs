@@ -1262,16 +1262,27 @@ impl Rt {
 
     /// Run the image's top-level initialisers, then call `entry` with `args`.
     pub fn run_program(&mut self, args: Value) -> Value {
+        // `args` is a freshly allocated vector that its caller has already
+        // unrooted, and every initialiser below allocates. Held only in this
+        // Rust local it is a stale pointer by the time the entry function is
+        // invoked -- and a stale pointer whose address is later reused by an
+        // unrelated object turns into silent corruption of THAT object, not a
+        // wrong argument. See `doc/HANDOFF.md`.
+        let base = self.mark();
+        let ai = self.push(args);
         for i in 0..self.image.init.len() {
             let f = self.image.init[i];
             let c = self.make_closure(f, &[]);
             let _ = self.invoke(c, &[]);
             if self.failed() {
+                self.pop_to(base);
                 return NIL;
             }
         }
         let entry = self.image.entry;
         let c = self.make_closure(entry, &[]);
+        let args = self.r(ai);
+        self.pop_to(base);
         // `invoke` enters with the frame stack empty, so `run`'s `base_depth`
         // is 0 and the entry *can* park. Anything deeper -- a comparator, a
         // lazy-seq force -- re-enters with Rust frames underneath and cannot.

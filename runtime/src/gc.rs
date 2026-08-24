@@ -224,6 +224,9 @@ pub struct Gc {
     collecting: bool,
     /// Set by tests/benchmarks to force a collection at every allocation.
     pub stress: bool,
+    /// First from-space address `forward` was asked to treat as an object and
+    /// could not believe. `0` means none seen. See `plausible_from_object`.
+    pub bad_forward: u32,
 }
 
 impl Gc {
@@ -252,6 +255,7 @@ impl Gc {
             oom: false,
             collecting: false,
             stress: false,
+            bad_forward: 0,
         };
         gc.add_chunk(MIN_CHUNK);
         gc
@@ -505,6 +509,31 @@ impl Gc {
 
     // --- minor collection ------------------------------------------------
 
+    /// Could `a` be the start of a live from-space object?
+    ///
+    /// `forward` used to take *any* from-space value as an object start. One
+    /// stale pointer -- to an address that had been an object in an earlier
+    /// nursery cycle and was now the middle of an unrelated live one -- was
+    /// therefore enough to stamp a `TY_FWD` header into the middle of that
+    /// object, and the damage surfaced much later and somewhere else entirely
+    /// (`doc/HANDOFF.md`). This turns that into something catchable where it
+    /// happens.
+    fn plausible_from_object(&self, a: u32) -> bool {
+        // Live from-space runs from `from` to the allocation top, which `bump`
+        // still holds until the flip at the end of the collection.
+        if a < self.from || a >= self.bump {
+            return false;
+        }
+        let t = ty(&self.sp, a);
+        // Nothing in the nursery is a free block, and a type tag out of range
+        // is not a header at all.
+        if t == TY_FREE || t >= TY_MAX {
+            return false;
+        }
+        let size = size_of(&self.sp, a);
+        size >= 8 && a.saturating_add(size) <= self.bump
+    }
+
     fn forward(&mut self, v: Value) -> Value {
         if !v.is_heap() {
             return v;
@@ -512,6 +541,14 @@ impl Gc {
         let a = v.as_heap();
         if !self.in_from(a) {
             return v;
+        }
+        // Free in release: `cfg!` is a constant, so this collapses to the
+        // `stress` test, which is how the wasm build gets it on demand.
+        if cfg!(debug_assertions) || self.stress {
+            if ty(&self.sp, a) != TY_FWD && !self.plausible_from_object(a) && self.bad_forward == 0 {
+                self.bad_forward = a;
+                debug_assert!(false, "forward: {a} is not the start of a from-space object");
+            }
         }
         if ty(&self.sp, a) == TY_FWD {
             return Value::heap(len(&self.sp, a));

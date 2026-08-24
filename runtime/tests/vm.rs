@@ -668,3 +668,84 @@ fn upvalues_survive_a_collection_taken_mid_call() {
         "the upvalue was read through a stale pointer"
     );
 }
+
+/// `run_program` used to hold the argument vector in a Rust local across every
+/// module initialiser. Initialisers allocate, so the vector moved and the local
+/// became stale -- and a stale pointer is far worse than a wrong argument: when
+/// its address is later reused by an unrelated object, the collector treats it
+/// as an object start and stamps a forwarding header into the middle of that
+/// object. That is how one unrooted local corrupted the *scheduler* and
+/// deadlocked a program with no apparent connection to it (`doc/HANDOFF.md`).
+///
+/// The negative control is the address assertion: if the vector did not move
+/// during initialisation the test would pass vacuously, so it checks that it
+/// DID move. With the fix removed, that same movement is what makes the
+/// argument stale.
+#[test]
+fn arguments_survive_the_module_initialisers() {
+    let mut w = ImageWriter::new();
+    let k = w.k_string("padding-so-the-initialiser-allocates");
+
+    // An initialiser that allocates: it builds a vector of fresh strings and
+    // drops it, which is enough to move anything younger under stress.
+    let init_fn = {
+        let mut a = Asm::new();
+        for _ in 0..8 {
+            a.op(op::CONST).u16v(k as u16);
+        }
+        a.op(op::VECTOR).u16v(8);
+        a.op(op::RETURN);
+        let body = a.done();
+        let n = w.k_string("init");
+        w.add_fn(n, 0, false, 2, &body)
+    };
+    w.init.push(init_fn);
+
+    // The entry function simply hands its argument vector back.
+    let body = {
+        let mut a = Asm::new();
+        a.op(op::LOCAL).u8v(0).op(op::RETURN);
+        a.done()
+    };
+    let n = w.k_string("main");
+    w.entry = w.add_fn(n, 1, false, 2, &body);
+
+    let bytes = w.finish();
+    let mut rt = Rt::new();
+    rt.install_host_natives();
+    assert!(rt.load_image(&bytes), "image did not load");
+    rt.gc.stress = true; // collect at every allocation
+
+    let base = rt.mark();
+    let s = rt.string("the-one-argument");
+    rt.push(s);
+    let argv = rt.vec_from_roots(base, 1);
+    rt.pop_to(base); // exactly what the ABI does: the caller does NOT keep it rooted
+    let before = argv.as_heap();
+
+    let r = rt.run_program(argv);
+    assert!(!rt.failed(), "threw while running");
+
+    // It came back intact rather than as whatever now occupies its old address.
+    let first = rt.vec_nth(r, 0).expect("argument vector should have one element");
+    let mut b = sbuf();
+    assert_eq!(rt.as_str(first, &mut b), Some("the-one-argument"));
+
+    // No stale pointer was followed anywhere. This fails AT the collection
+    // rather than wherever the corruption happens to surface.
+    assert_eq!(
+        rt.gc.bad_forward, 0,
+        "forward() was asked to treat a non-object as an object start"
+    );
+
+    // The control. Under stress every allocation collects, so a vector that
+    // survived initialisation MUST have moved. Getting the original address
+    // back means a stale pointer was carried through -- which is exactly what
+    // removing the rooting in `run_program` does.
+    assert_ne!(
+        before,
+        r.as_heap(),
+        "the entry function was handed the argument vector at its ORIGINAL \
+         address, so it was given a stale pointer"
+    );
+}
