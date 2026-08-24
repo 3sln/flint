@@ -86,6 +86,32 @@ police.
   that want maximum speed and are willing to flatten. Same subset, same
   semantics, so it is a drop-in rather than a second dialect.
 
+### Which comes first, and the trap in answering "the crate"
+
+Both appear in these notes and they are not alternatives, they are **ordered** —
+worth stating because "adopt the Rust crate" is the tempting answer and is only
+right under a condition that is about to stop holding.
+
+**Today, strings are flat.** The crate is a drop-in that takes 275× to about 1×
+for a few days of work, which is the cheapest large win available.
+
+**Once ropes land it cannot consume the input**, because its API takes `&str`.
+Then it means flattening before every match, which hands back the rope at the one
+operation touching the most text — the exact thing `0012` exists to prevent. So
+the crate is a **stepping stone, not the endpoint**, and it becomes the optional
+flatten-and-go-fast unit above rather than the default matcher.
+
+**The endpoint is one design**: a shared cljc pattern compiler emitting an NFA
+program, and a native Pike VM simulator per host reading through a cursor. That
+is what consumes ropes, what makes gas exact, and what keeps every host executing
+the same compiled NFA.
+
+So the sequencing question is only ever: *are ropes close enough that the crate
+would be built and then superseded?* If ropes are the next substantial piece of
+work, go straight to the native simulator and skip the adapter. If regex is
+hurting now and ropes are further off, take the crate and keep it afterwards as
+the fast path for flat strings.
+
 ## What must be true if this is built
 
 - The simulator consumes a rope cursor and **never** materialises the input:
