@@ -650,6 +650,61 @@ object in the half that flip is about to abandon. The dead-half check is armed
 and permanent, so pointing it at #691 specifically — rather than waiting for 721
 — is the next read.
 
+## CORRECTION to the collection numbers, and the mechanism in one line
+
+**The findings labelled 721 and 722 were the same event.** `check_remset` ran at
+the start of a minor, *before* `stats.minor += 1`, while the trace cycle used
+`stats.minor + 1` — so the two halves of one collection were labelled with
+different numbers. Fixed by passing the cycle in. Corrected:
+
+    NODE@2566016 slot  1 -> 2555336   at collection 722  (start-of-minor walk)
+    NODE@2566608 slot 20 -> 2555336   at collection 722  (start-of-minor walk)
+    NODE@459336  slot 20 -> 2555336   at collection 722  (end-of-minor walk)
+    forward() saw 2555336 in limbo    at collection 722
+
+One event, not two. Treat any collection number in this file from before this
+correction as suspect unless it came from `set_gc_trace_cycle`, which was always
+consistent.
+
+### What the trace says happened
+
+Tracing collections 690, 691, 692, 720 and 721 for the holder and the target:
+
+    collection 721: target@2555336 appears as a ROOT four times, and is FORWARDED
+                    holder@2566016 is NOT TOUCHED at any of them
+
+So at 721 the message is reachable from the roots and is moved. The node holding
+it is never scanned, so its slot keeps the pre-move address — and at the flip
+ending 721 that address falls into the abandoned half. By the start of 722 it is
+stale, `forward` sees it is not `in_from` and returns it **unchanged**, and it is
+copied verbatim into the next half.
+
+**The mechanism, in one line: the message is forwarded, the node holding it is
+never scanned, so the node keeps the old address.** Upgrading collection #691
+prevents the whole sequence.
+
+### The fifth standing check
+
+`forward()` now asserts that a young-range pointer is either in from-space or an
+already-copied to-space address; anything else points into an abandoned half at
+nothing. Diagnostics-only, beside the other four. It fires once here, on the same
+address, at the same collection — later than the dead-half walker in this
+instance, but it catches the class at the point of tracing rather than whenever
+somebody next walks the heap.
+
+### Ruled out by the owner, do not re-run
+
+`vec_conj`'s tail path holding `root`/`meta` across `new_vec`'s allocation:
+`new_vec` pushes root, tail and meta onto the shadow stack before its alloc and
+re-reads all three through `self.r()` afterwards. Correctly rooted.
+
+### The question now
+
+Why is `NODE@2566016` not scanned at collection 721 when it is live and holds a
+reference to an object that IS reachable from the roots. Either it is unreachable
+at that moment and later resurrected, or it is reachable by a path the tracer
+does not follow.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.

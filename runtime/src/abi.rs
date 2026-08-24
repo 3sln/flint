@@ -336,6 +336,17 @@ pub extern "C" fn stat_dead_half(i: u32, f: u32) -> u32 {
     }
 }
 
+/// Pointers into limbo seen by `forward`: `(target, collection, to, to_bump)`.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_limbo(i: u32, f: u32) -> u32 {
+    unsafe {
+        let g = &ensure_rt().gc;
+        if i == 99 { return g.limbo_refs; }
+        if (i as usize) < 8 && (f as usize) < 4 { g.limbo_bad[i as usize][f as usize] } else { 0 }
+    }
+}
+
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn set_gc_remset_watch(a: u32) {

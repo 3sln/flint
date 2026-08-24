@@ -327,6 +327,21 @@ pub struct Gc {
     pub dead_half_refs: u32,
     #[cfg(feature = "diagnostics")]
     pub dead_half_bad: [[u32; 7]; 8],
+    /// A young-range pointer handed to `forward` that is in NEITHER a live
+    /// from-space object nor an already-copied to-space one.
+    ///
+    /// `forward` validates a from-space address, but says nothing about a
+    /// pointer that is in the young range and in neither place -- and that case
+    /// is never legitimate, because after a flip the abandoned half is neither
+    /// from-space nor to-space, so `forward` finds such a pointer is not
+    /// `in_from` and returns it UNCHANGED. One stale pointer is then preserved
+    /// verbatim through every later collection and copied into every clone of
+    /// its holder. Catching it here fires at the first collection AFTER it is
+    /// created, rather than whenever somebody next walks the heap.
+    #[cfg(feature = "diagnostics")]
+    pub limbo_refs: u32,
+    #[cfg(feature = "diagnostics")]
+    pub limbo_bad: [[u32; 4]; 8],
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
     #[cfg(feature = "diagnostics")]
@@ -392,6 +407,10 @@ impl Gc {
             dead_half_refs: 0,
             #[cfg(feature = "diagnostics")]
             dead_half_bad: [[0; 7]; 8],
+            #[cfg(feature = "diagnostics")]
+            limbo_refs: 0,
+            #[cfg(feature = "diagnostics")]
+            limbo_bad: [[0; 4]; 8],
             #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };
@@ -704,6 +723,18 @@ impl Gc {
         }
         let a = v.as_heap();
         if !self.in_from(a) {
+            // In the young range but not in from-space: it can only legitimately
+            // be a to-space address already copied this cycle. Anything else
+            // points into the half this collection abandoned, at nothing.
+            #[cfg(feature = "diagnostics")]
+            if self.is_young(a) && !(a >= self.to && a < self.to_bump) && self.limbo_refs < u32::MAX
+            {
+                let k = self.limbo_refs as usize;
+                if k < 8 {
+                    self.limbo_bad[k] = [a, self.stats.minor as u32, self.to, self.to_bump];
+                }
+                self.limbo_refs += 1;
+            }
             return v;
         }
         // A FEATURE, not a runtime flag (doc/decisions/0016): a flag would leave
@@ -801,7 +832,11 @@ impl Gc {
 
     /// Walk every old object and check the generational invariant. Read-only.
     #[cfg(feature = "diagnostics")]
-    pub fn check_remset(&mut self) {
+    /// `cycle` is the collection this walk belongs to. It must be passed in:
+    /// the start-of-minor call runs BEFORE `stats.minor` is incremented and the
+    /// end-of-minor call runs after, so reading the counter directly labels the
+    /// two halves of the same collection with different numbers.
+    pub fn check_remset(&mut self, cycle: u64) {
         // Old chunks AND the live half. The dead-half check below only means
         // something for the space it actually walks, and the first version of
         // this covered old space alone -- so a stale pointer sitting in a young
@@ -844,7 +879,7 @@ impl Gc {
                                     t as u32,
                                     i,
                                     v.as_heap(),
-                                    self.stats.minor as u32,
+                                    cycle as u32,
                                     self.from,
                                     self.bump,
                                 ];
@@ -884,7 +919,8 @@ impl Gc {
         }
         #[cfg(feature = "diagnostics")]
         if self.verify_remset {
-            self.check_remset();
+            let c = self.stats.minor + 1;
+            self.check_remset(c);
         }
         #[cfg(debug_assertions)]
         self.sp.in_gc.set(true);
@@ -987,7 +1023,8 @@ impl Gc {
         #[cfg(feature = "diagnostics")]
         if self.verify_remset {
             let before = self.remset_violations;
-            self.check_remset();
+            let c = self.stats.minor;
+            self.check_remset(c);
             if self.remset_violations > before {
                 self.remset_end_violations += self.remset_violations - before;
             }
