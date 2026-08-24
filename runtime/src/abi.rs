@@ -347,6 +347,23 @@ pub extern "C" fn stat_limbo(i: u32, f: u32) -> u32 {
     }
 }
 
+/// Capture `bump` at the end of collection `c`, before anything allocated after
+/// it. `stat_end_bump(0)` is the bump, `(1)` the from base.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn set_gc_watch_end(c: u32) {
+    unsafe { ensure_rt().gc.watch_end_cycle = c as u64 }
+}
+
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_end_bump(i: u32) -> u32 {
+    unsafe {
+        let g = &ensure_rt().gc;
+        if i == 0 { g.watch_end_bump } else { g.watch_end_from }
+    }
+}
+
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn set_gc_remset_watch(a: u32) {

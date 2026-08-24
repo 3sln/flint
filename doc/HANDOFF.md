@@ -705,6 +705,52 @@ reference to an object that IS reachable from the roots. Either it is unreachabl
 at that moment and later resurrected, or it is reachable by a path the tracer
 does not follow.
 
+## THE THIRD OPTION IS RIGHT: the node did not exist at 721
+
+The discriminator needed `bump` at the END of collection 721, before anything
+allocated afterwards — the value at the next collection's walk cannot answer it,
+because it has already grown. Captured at that exact point:
+
+    at the END of collection 721: from=2555904  bump=2564960
+      holder@2566016  -> ABOVE bump: ALLOCATED AFTERWARDS
+      target@2555336  -> below from: in the half 721 abandoned
+
+So the holder was **not skipped** — it did not exist. It was built after
+collection 721 and written with the message's **pre-721 address**, which is
+read-call-write-back for the sixth time in this codebase. Neither resurrection
+nor an untraced path is required.
+
+### The whole sequence, now closed end to end
+
+1. At collection 721 the message is reachable from the roots (it appears as a
+   root four times), is forwarded to a new address, and a `TY_FWD` header is left
+   behind at `2555336`.
+2. After 721, a node is allocated and written with `2555336` — the address as it
+   was *before* the collection, held in a Rust local across it.
+3. At the flip ending 721 that address falls into the abandoned half, so
+   `forward` finds it is not `in_from` and returns it unchanged for ever after,
+   copying it into every clone of the holder.
+4. The dequeue reads that slot and gets a `TY_FWD` object. One wave lost.
+
+### Construction sites audited and CLEARED
+
+All push to the shadow stack before allocating and re-read through `self.r()`
+afterwards: `node_clone`, `new_vec`, `new_path`, `vec_conj` (both the tail and
+the overflow path), `vec_from_roots`, `port_enqueue`, `t_push_tail`, and
+`tvec_conj`. The transient path was the most promising — transients mutate nodes
+**in place**, which is the shape that would do it — and it is correctly rooted:
+`t_push_tail` pushes `parent` before `ensure_editable` allocates, and the value
+written by `node_set` is always either read from the shadow stack or freshly
+returned from the call that allocated.
+
+### What is left
+
+The site that builds a node holding a message value after collection 721, and it
+is not in `vector.rs`. The message is an element of a body vector decoded from
+EDN, so the guest-side construction path — the EDN reader, `conj`, `into`, or
+whatever `content-each` uses to accumulate a wave — is where to look next. The
+runtime-side vector machinery is now cleared by audit rather than by assumption.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.

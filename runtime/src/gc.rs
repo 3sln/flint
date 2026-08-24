@@ -342,6 +342,16 @@ pub struct Gc {
     pub limbo_refs: u32,
     #[cfg(feature = "diagnostics")]
     pub limbo_bad: [[u32; 4]; 8],
+    /// `bump` at the END of a chosen collection, before any allocation that
+    /// follows it. Comparing an object's address against THIS says whether it
+    /// existed then or was created afterwards -- and the value at the next
+    /// collection's walk cannot answer that, because it has already grown.
+    #[cfg(feature = "diagnostics")]
+    pub watch_end_cycle: u64,
+    #[cfg(feature = "diagnostics")]
+    pub watch_end_bump: u32,
+    #[cfg(feature = "diagnostics")]
+    pub watch_end_from: u32,
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
     #[cfg(feature = "diagnostics")]
@@ -411,6 +421,12 @@ impl Gc {
             limbo_refs: 0,
             #[cfg(feature = "diagnostics")]
             limbo_bad: [[0; 4]; 8],
+            #[cfg(feature = "diagnostics")]
+            watch_end_cycle: u64::MAX,
+            #[cfg(feature = "diagnostics")]
+            watch_end_bump: 0,
+            #[cfg(feature = "diagnostics")]
+            watch_end_from: 0,
             #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };
@@ -1017,6 +1033,11 @@ impl Gc {
         self.bump = self.to_bump;
         self.from_end = self.from + self.half;
         self.note_peak();
+        #[cfg(feature = "diagnostics")]
+        if self.stats.minor == self.watch_end_cycle {
+            self.watch_end_bump = self.bump;
+            self.watch_end_from = self.from;
+        }
         // And at the END: a promotion during this collection can create a fresh
         // old-to-young edge, and if `scan_object` did not re-remember it the
         // next collection will never trace it.
