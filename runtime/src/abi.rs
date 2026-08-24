@@ -591,3 +591,11 @@ pub extern "C" fn stat_stale_root(i: u32) -> u32 {
 pub extern "C" fn stat_stale_shadow(i: u32) -> u32 {
     unsafe { *crate::gc::STALE_SHADOW.get(i as usize).unwrap_or(&0) }
 }
+
+/// Stale values caught as they were rooted. 0 count, 1 address, 2 collection,
+/// 3 pushes checked -- the coverage the zero has to be read against.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_stale_push(i: u32) -> u32 {
+    unsafe { *crate::gc::STALE_PUSH.get(i as usize).unwrap_or(&0) }
+}

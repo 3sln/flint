@@ -181,9 +181,11 @@ console.log('documents');
   // here, where it failed, and it asserts its own coverage before its zero.
   const g = r.exports;
   ok('  ... and not one stale pointer was written in the whole run',
-     g.stat_stale_set(0) === 0 && g.stat_stale_root(0) === 0 && g.stat_stale_root(5) > 0,
+     g.stat_stale_set(0) === 0 && g.stat_stale_root(0) === 0 && g.stat_stale_push(0) === 0 &&
+     g.stat_stale_root(5) > 0 && g.stat_stale_push(3) > 0,
      `stale writes ${g.stat_stale_set(0)}, stale roots ${g.stat_stale_root(0)}, ` +
-     `after ${g.stat_stale_root(5)} collections walked`);
+     `stale pushes ${g.stat_stale_push(0)}, after ${g.stat_stale_root(5)} collections ` +
+     `walked and ${g.stat_stale_push(3)} pushes checked`);
 }
 
 // --- peak memory follows what is KEPT, not the document size ----------------

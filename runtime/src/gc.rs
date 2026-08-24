@@ -116,6 +116,12 @@ pub static mut STALE_ROOT: [u32; 7] = [0; 7];
 /// The whole shadow stack at the instant of the stale write, so the frame that
 /// owns the bad slot is read off rather than inferred. [len, then addresses]
 pub static mut STALE_SHADOW: [u32; 65] = [0; 65];
+
+/// A stale value ROOTED -- pushed onto the shadow stack. This is the exact
+/// signature of a Rust local held across an allocation, caught one step earlier
+/// than the write that finally makes it visible, and it costs one comparison.
+/// [count, first address, collection, pushes checked]
+pub static mut STALE_PUSH: [u32; 4] = [0; 4];
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_N: usize = 0;
 #[cfg(feature = "diagnostics")]

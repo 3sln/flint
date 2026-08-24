@@ -155,6 +155,24 @@ impl Rt {
 
     #[inline]
     pub fn push(&mut self, v: Value) -> usize {
+        // Rooting a value that is already stale. A caller that read a `Value`
+        // into a Rust local, allocated, and then pushed it lands here -- one
+        // step before the write that eventually makes it visible, and while the
+        // frame that owns the mistake is still on the stack.
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            crate::gc::STALE_PUSH[3] += 1;
+            if v.is_heap()
+                && self.gc.is_young(v.as_heap())
+                && !self.gc.in_live_half(v.as_heap())
+            {
+                crate::gc::STALE_PUSH[0] += 1;
+                if crate::gc::STALE_PUSH[1] == 0 {
+                    crate::gc::STALE_PUSH[1] = v.as_heap();
+                    crate::gc::STALE_PUSH[2] = self.gc.stats.minor as u32;
+                }
+            }
+        }
         self.roots.shadow.push(v);
         self.roots.shadow.len() - 1
     }

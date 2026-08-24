@@ -51,6 +51,8 @@
                  " end: i.exports.stat_remset_end_violations(),"
                  " dead: i.exports.stat_dead_half(99,0),"
                  " staleWrite: i.exports.stat_stale_set(0),"
+                 " stalePush: i.exports.stat_stale_push(0),"
+                 " pushes: i.exports.stat_stale_push(3),"
                  " staleRoot: i.exports.stat_stale_root(0),"
                  " rootWalks: i.exports.stat_stale_root(5),"
                  " rootSlots: i.exports.stat_stale_root(6),"
@@ -75,6 +77,18 @@
   (if (str/includes? out "\"staleWrite\":0")
     (println "  ok   and no stale pointer is ever WRITTEN into an object")
     (do (println "  FAIL a stale pointer was written into a live object") (System/exit 1)))
+  ;; And one step earlier than the write: rooting a stale value is the exact
+  ;; signature of a Rust local carried across an allocation, which is the bug
+  ;; this whole family came from.
+  (let [pushes (some-> (re-find #"\"pushes\":(\d+)" out) second parse-long)]
+    (cond
+      (or (nil? pushes) (zero? pushes))
+      (do (println "  FAIL no push was ever checked, so its zero means nothing") (System/exit 1))
+      (str/includes? out "\"stalePush\":0")
+      (println (str "  ok   and no stale value is ever ROOTED (" pushes " pushes checked)"))
+      :else
+      (do (println "  FAIL a Rust local was carried across an allocation and then rooted")
+          (System/exit 1))))
   ;; And the other end of the same question: a collection must leave no root
   ;; pointing into the half it just abandoned. Coverage is asserted before the
   ;; zero is believed -- a walk that never ran also reports zero.
