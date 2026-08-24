@@ -86,9 +86,9 @@ police.
   that want maximum speed and are willing to flatten. Same subset, same
   semantics, so it is a drop-in rather than a second dialect.
 
-### Settled: the Pike route only, and in cljc first
+### Settled: the Pike route, WITH its native simulator
 
-Two narrowings from the owner, in order. First:
+Two narrowings from the owner. First, no interim:
 
 > we don't need the rust crate stepping stone; ropes for strings should be our
 > next work as soon as the gc/threading/ports bugs are resolved
@@ -99,39 +99,57 @@ Then:
 > route, simplicity; we can add the alternative flattening path later if actually
 > needed/wanted
 
-So there is **no native regex work at all** in the first pass. One
-implementation, in cljc, running on every host. The native simulator that `0012`
-describes and the Rust crate as a flatten-and-go-fast unit are both **later, and
-only if a measurement asks for them.**
+**I read "native regex" as including the native Pike simulator and wrote this
+section down to a cljc-only first pass. That was wrong.** "Native regex" means
+the HOST engines — `Pattern`, `Regex`, `RegExp` — and the Rust crate; the
+"alternative flattening path" is exactly those, since they are what require a
+flat buffer. The owner's correction:
 
-**What that costs, stated honestly.** From the decomposition in `0011`, the
-current 275× is roughly 18× interpretation times 15× engine inefficiency. A Pike
-VM in cljc recovers the engine half and not the interpretation half, so regex
-lands around **25–30× slower than JS** rather than at parity. Annotator-shaped
-work stays unattractive on flint until something native happens.
+> why no native simulator in the first pass for Pike VM? That seems like the
+> whole thing that makes the pike vm route feasible for this job.
 
-**What it buys, which is why it is still right:**
+Which is right, and the arithmetic says so. A cljc simulator is interpreted, so
+it pays the 18× interpretation tax from `0011`: it recovers the 15× engine
+inefficiency and lands near **25–30× slower than JS**. Better than 275×, and
+still too slow for annotator-shaped work — so a cljc-only pass would have bought
+correctness and boundedness while leaving the number that disqualifies flint
+roughly intact.
 
-- **Correctness and boundedness now.** Linear time by construction, so ReDoS is
-  gone rather than mitigated, and `0009`'s gas can count matcher steps exactly.
-- **It consumes ropes**, which no host engine and no Rust crate can.
-- **One implementation to get right**, rather than a reference plus per-host
-  natives that must be proven to agree. Every host is correct on day one.
-- **The native simulator stays a drop-in.** The compiled NFA program is the
-  shared artifact, so adding a native simulator later changes no semantics and
-  needs no new conformance work — which is precisely why it is safe to defer.
+**The native simulator is the point.** It is what gets to parity AND consumes a
+rope, which is the combination nothing else offers: host engines and the Rust
+crate are fast and need a flat buffer; a cljc simulator reads a rope and is slow.
 
-The performance ceiling is a known, measured, deferred cost rather than an
-unknown. That is the right shape for a thing to defer.
+### So the first pass is all three parts
+
+1. **The pattern compiler, in cljc, shared.** Parse, build the NFA, emit a
+   program. Once per pattern and cached, so it is not hot and does not need to be
+   fast. Being shared is what stops the dialects drifting.
+2. **A reference simulator, in cljc.** Not for speed — it is the conformance
+   oracle, it lets the compiler be tested before any native exists, and it is
+   what a new host runs on day one before it has its own.
+3. **The native simulator, in Rust, for wasm.** The hot loop: two thread arrays,
+   a sparse set for dedup, capture slots, and a loop over the NFA ops. A few
+   hundred lines, and the fiddly part is captures and leftmost-first semantics.
+
+What the owner's "simplicity" does rule out is a **third** implementation: no
+Rust `regex` crate adapter, and no delegation to host engines. Two
+implementations of one shared NFA program, one of which exists to check the
+other.
+
+**A consequence worth noting: the rope must be Rust-side.** The native simulator
+reads through a rope cursor, so the rope lives in the runtime beside it — which
+is where `0011` already puts it (`strs.rs`), and it is now load-bearing rather
+than incidental.
 
 ### Order of work, once the runtime bugs are closed
 
 1. **Ropes** — three tiers, balanced B-tree, code-point counts per node, the
    adversarial depth tests (`0011`).
-2. **The Pike VM in cljc**, replacing the backtracker's engine while keeping its
-   syntax and its refusals, reading through a rope cursor.
-3. Stop. Measure. Only then consider a native simulator, and only where a
-   benchmark says it earns its place.
+2. **The shared NFA compiler**, plus the cljc reference simulator, replacing the
+   backtracker's engine while keeping its syntax and refusals.
+3. **The native simulator for wasm**, reading through a rope cursor, checked
+   against the reference by the conformance battery.
+4. Other hosts get their simulator when they get their port (`0010`).
 
 ## What must be true if this is built
 

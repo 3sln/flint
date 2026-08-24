@@ -26,8 +26,10 @@ for the first.
 
 1. **Close the open runtime bugs** — the dangling `stack[1]` root and
    `document.clj`'s two wave assertions. `../HANDOFF.md` is the live state.
-2. **Ropes** (`0011` §1–2), then **the Pike VM in cljc** (`0012`). Owner's
-   direction: no Rust regex crate, no native simulator in the first pass.
+2. **Ropes** (`0011` §1–2), then **the Pike VM** (`0012`): shared cljc pattern
+   compiler, a cljc reference simulator, and the native wasm simulator — the
+   native one is what makes the route feasible, not a later optimisation. No
+   Rust regex crate and no delegation to host engines.
 3. Everything else is unscheduled.
 
 ## How to read this directory
