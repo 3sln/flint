@@ -51,12 +51,18 @@ const SPECIAL_NOT_FOUND: u64 = 3;
 /// the VM already makes after every native call catches it -- parking costs the
 /// interpreter's fast path nothing at all (`doc/decisions/0005`).
 const SPECIAL_PARK: u64 = 4;
+/// An allocation failed. Travels in `Rt::thrown` for the same reason `PARK`
+/// does: the check the VM already makes finds it, and the *cold* path turns it
+/// into a real error. Building the error where the allocation failed would make
+/// the error builder reachable from `alloc`, which every program pays for.
+const SPECIAL_OOM: u64 = 5;
 
 pub const NIL: Value = Value((TAG_SPECIAL << 48) | SPECIAL_NIL);
 pub const FALSE: Value = Value((TAG_SPECIAL << 48) | SPECIAL_FALSE);
 pub const TRUE: Value = Value((TAG_SPECIAL << 48) | SPECIAL_TRUE);
 pub const NOT_FOUND: Value = Value((TAG_SPECIAL << 48) | SPECIAL_NOT_FOUND);
 pub const PARK: Value = Value((TAG_SPECIAL << 48) | SPECIAL_PARK);
+pub const OOM: Value = Value((TAG_SPECIAL << 48) | SPECIAL_OOM);
 
 pub const FIXNUM_MAX: i64 = (1 << 47) - 1;
 pub const FIXNUM_MIN: i64 = -(1 << 47);

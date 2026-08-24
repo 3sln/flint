@@ -160,6 +160,32 @@ pub type NativeFn = extern "C" fn(*mut Rt, u32, u32) -> u64;
 
 pub const MAX_FRAMES: usize = 8192;
 
+/// Whether this instantiation of the interpreter counts.
+///
+/// A zero-sized type with an inlined method rather than a field test, so that
+/// the free loop really is free: `NoBudget::tick` returns a constant `false` and
+/// nothing to do with budgets survives into the generated code.
+pub trait BudgetPolicy {
+    fn tick(rt: &mut Rt) -> bool;
+}
+
+pub struct NoBudget;
+impl BudgetPolicy for NoBudget {
+    #[inline(always)]
+    fn tick(_: &mut Rt) -> bool {
+        false
+    }
+}
+
+pub struct Counting;
+impl BudgetPolicy for Counting {
+    #[inline(always)]
+    fn tick(rt: &mut Rt) -> bool {
+        rt.steps += 1;
+        rt.steps >= rt.checkpoint
+    }
+}
+
 impl Rt {
     // --- value stack -------------------------------------------------------
 
@@ -470,7 +496,20 @@ impl Rt {
     }
 
     /// Run until the frame stack drops back to `base_depth`.
+    ///
+    /// Two instantiations, chosen **once at entry** rather than branched on per
+    /// instruction (`doc/decisions/0009`). With no gas limit and no scheduler
+    /// slice, `NoBudget::tick` is a `false` the optimiser deletes along with the
+    /// counter, and the loop has no budget machinery in it at all.
     pub fn run(&mut self, base_depth: usize) -> Value {
+        if self.counting() {
+            self.run_with::<Counting>(base_depth)
+        } else {
+            self.run_with::<NoBudget>(base_depth)
+        }
+    }
+
+    fn run_with<B: BudgetPolicy>(&mut self, base_depth: usize) -> Value {
         loop {
             if self.frames.len() <= base_depth {
                 return self.vpop();
@@ -479,30 +518,43 @@ impl Rt {
                 let f = self.frames.last().unwrap();
                 (f.ip, f.fp)
             };
-            if self.step_limit != 0 {
-                self.steps += 1;
-                if self.steps > self.step_limit {
-                    // In a threaded program this same budget is the scheduler's
-                    // time slice, so running out means "your turn is over", not
-                    // "you have hung". Reusing the check the interpreter already
-                    // makes is what lets preemption cost the hot path nothing.
-                    if self.sched_hook.is_some() {
-                        if base_depth == 0 {
-                            self.park_on = crate::conc::PARK_YIELD;
-                            return NIL;
-                        }
-                        // Rust frames underneath: there is nothing to save, so
-                        // let this call finish and preempt at the next chance.
-                        self.step_limit = self.steps + crate::conc::SLICE;
-                    } else {
-                        self.steps = 0;
-                        let t = self.frame_trace();
-                        self.throw_str("StepLimitExceeded", &t);
-                        if !self.unwind() {
-                            return NIL;
-                        }
-                        continue;
+            if B::tick(self) {
+                // One comparison covers both budgets; which one fired is a cold
+                // path. In a threaded program the slice is doing double duty as
+                // preemption -- running out means "your turn is over" rather
+                // than "you have hung" -- so gas costs nothing extra exactly
+                // where concurrency already made the counter necessary.
+                if self.gas_limit != 0 && self.steps >= self.gas_limit {
+                    let t = self.frame_trace();
+                    let e = self.gas_error(&alloc::format!("\n{t}"));
+                    self.thrown = e;
+                    self.gas_trips += 1;
+                    if self.gas_trips > 1 {
+                        // It was caught once and the program carried on. A gate
+                        // that a candidate can catch its way out of is not a
+                        // gate, so this one escapes every handler.
+                        return NIL;
                     }
+                    // Grace, once, so a `finally` can put things back.
+                    self.gas_limit = self.steps + Rt::GAS_GRACE;
+                    self.refresh_checkpoint();
+                    if !self.unwind() {
+                        return NIL;
+                    }
+                    continue;
+                }
+                if self.sched_hook.is_some() {
+                    if base_depth == 0 {
+                        self.park_on = crate::conc::PARK_YIELD;
+                        return NIL;
+                    }
+                    // Rust frames underneath: there is nothing to save, so let
+                    // this call finish and preempt at the next chance.
+                    let at = self.steps + crate::conc::SLICE;
+                    self.set_slice_end(at);
+                } else {
+                    let at = self.steps + crate::conc::SLICE;
+                    self.set_slice_end(at);
                 }
             }
             let opcode = self.u8_at(ip);
@@ -989,8 +1041,45 @@ impl Rt {
         alloc::format!("step limit exceeded; frames ({}): {}", n, out)
     }
 
+    /// The heap cap was reached, and a collection has already been tried. A
+    /// **catchable error** carrying what was held against what was allowed, not
+    /// a trap: a host has to be able to tell "the program is wrong" from "the
+    /// limit was too small".
     fn oom_unwind(&mut self) {
-        self.throw_str("OutOfMemoryError", "flint heap exhausted");
+        // One extra megabyte, granted once, purely so the error describing the
+        // exhaustion can be built. A cap enforced to the last byte cannot
+        // report itself; better to say so than to fail silently.
+        let limit = self.gc.heap_limit();
+        if self.mem_trips == 0 {
+            self.mem_trips = 1;
+            self.gc.set_heap_limit(limit.saturating_add(1024 * 1024));
+        }
+        let used = self.gc.heap_used();
+        let msg = alloc::format!(
+            "memory limit exceeded: {used} bytes of {limit} in use after a collection"
+        );
+        let base = self.mark();
+        let k = self.string("ResourceExhausted");
+        let ki = self.push(k);
+        let m = self.string(&msg);
+        let mi = self.push(m);
+        let d = self.empty_map();
+        let di = self.push(d);
+        for (key, val) in [("used", used as i64), ("limit", limit as i64)] {
+            let kw = self.keyword(None, key);
+            let kwi = self.push(kw);
+            let dv = self.r(di);
+            let kv = self.r(kwi);
+            let nd = self.map_assoc(dv, kv, Value::fixnum(val));
+            self.set_r(di, nd);
+            self.pop_to(kwi);
+        }
+        let (kk, mm, dd) = (self.r(ki), self.r(mi), self.r(di));
+        let e = self.ex_info(kk, mm, dd, NIL);
+        self.pop_to(base);
+        if !e.is_nil() {
+            self.thrown = e;
+        }
     }
 
     /// Find a handler for `self.thrown`. Returns false when the exception
@@ -1003,6 +1092,13 @@ impl Rt {
     }
 
     fn unwind(&mut self) -> bool {
+        // Every failure comes through here, so this is the one place that has
+        // to turn the allocator's cheap sentinel into an error somebody can
+        // read. Cold path: an ordinary throw pays one comparison.
+        if self.thrown.bits() == crate::value::OOM.bits() {
+            self.thrown = NIL;
+            self.oom_unwind();
+        }
         while let Some(h) = self.handlers.pop() {
             if h.frame >= self.frames.len() {
                 continue; // the frame that installed it is already gone

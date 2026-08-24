@@ -121,6 +121,10 @@ impl Rt {
         let sb = self.seq(self.r(bi));
         let ib = self.push(sb);
         let result = loop {
+            // Charged per element: `=` on two big vectors is ONE bytecode
+            // instruction and O(n) work, and a budget that does not see that
+            // does not bound the thing worth bounding (doc/decisions/0009).
+            self.charge_work(1);
             let (x, y) = (self.r(ia), self.r(ib));
             if x.is_nil() || y.is_nil() {
                 break x.is_nil() && y.is_nil();
@@ -203,6 +207,7 @@ impl Rt {
         let mut acc = 1u32;
         let mut n = 0u32;
         while !self.r(si).is_nil() {
+            self.charge_work(1);
             let f = self.first(self.r(si));
             let fi = self.push(f);
             let h = self.hash_value(self.r(fi));
@@ -298,6 +303,7 @@ impl Rt {
         let sb = self.seq(self.r(bi));
         let ib = self.push(sb);
         let r = loop {
+            self.charge_work(1);
             let (x, y) = (self.r(ia), self.r(ib));
             match (x.is_nil(), y.is_nil()) {
                 (true, true) => break 0,

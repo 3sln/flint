@@ -459,6 +459,9 @@ impl Rt {
     // --- strings ---------------------------------------------------------------
 
     pub fn str_concat2(&mut self, x: Value, y: Value) -> Value {
+        let n = (if self.is_string(x) { self.str_len(x) } else { 0 })
+            + (if self.is_string(y) { self.str_len(y) } else { 0 });
+        self.charge_bytes(n);
         let mut bx = crate::rt::sbuf();
         let mut by = crate::rt::sbuf();
         // Both borrows are immutable, so they can coexist; the allocation below
@@ -552,6 +555,8 @@ impl Rt {
 
     /// `subs`, in code points.
     pub fn substring(&mut self, s: Value, start: i64, end: Option<i64>) -> Value {
+        let n = if self.is_string(s) { self.str_len(s) } else { 0 };
+        self.charge_bytes(n);
         if self.str_indexable(s) {
             let n = self.str_len(s) as i64;
             let e = end.unwrap_or(n);
@@ -717,6 +722,10 @@ impl Rt {
 
     /// Byte offset -> code-point index search. Returns nil when absent.
     pub fn str_index_of(&mut self, haystack: Value, needle: Value, from: i64) -> Value {
+        // A naive search is O(haystack x needle); charging the haystack keeps a
+        // long scan from being free.
+        let hn = if self.is_string(haystack) { self.str_len(haystack) } else { 0 };
+        self.charge_bytes(hn);
         let mut bh = crate::rt::sbuf();
         let mut bn = crate::rt::sbuf();
         let found = {
@@ -758,6 +767,8 @@ impl Rt {
     /// The UTF-8 bytes of a string, as a vector of integers. The image writer
     /// needs this when the compiler is hosted on flint.
     pub fn string_bytes_vector(&mut self, s: Value) -> Value {
+        let n = if self.is_string(s) { self.str_len(s) } else { 0 };
+        self.charge_work(n as u64);
         let mut buf = crate::rt::sbuf();
         let owned: alloc::vec::Vec<u8> = {
             let b: &[u8] = if s.is_inline_str() {

@@ -81,29 +81,55 @@ export class DocStore {
     const wanted = ids.map((id) => this.byId.get(id)).filter((n) => n && n.len > 0);
     const plan = coalesce(wanted.map((n) => [n.off, n.off + n.len]), this.gapThreshold);
     const dec = new TextDecoder();
-    let planIdx = 0;
     let queue = [];            // resolved [id text] awaiting a wave
     let i = 0;                 // position in `wanted`
     let done = false;
+    const fetched = new Set(); // plan entries already pulled from storage
 
-    // Resolve enough of the plan to cover `wanted[i]`.
-    const resolveUpTo = (n) => {
-      while (planIdx < plan.length) {
-        const [s, e] = plan[planIdx];
-        if (n.off >= s && n.off + n.len <= e) {
-          const buf = store.fetchRange(s, e);
-          for (const w of wanted) {
-            if (w.off >= s && w.off + w.len <= e) {
-              // Only the wanted sub-range is kept. The gap between is dropped
-              // HERE, at the boundary -- otherwise over-fetching would cost
-              // memory as well as bandwidth and the whole policy would invert.
-              queue.push([w.id, dec.decode(buf.subarray(w.off - s, w.off + w.len - s))]);
-            }
-          }
-          planIdx += 1;
-          return;
+    // Which planned range covers this node. Every wanted interval is contained
+    // in exactly ONE coalesced entry by construction, since coalesce only ever
+    // merges or extends -- so -1 means the planner is wrong, not that the node
+    // is unwanted.
+    //
+    // This used to be a cursor that advanced through the plan as it scanned. A
+    // cursor is only correct if the caller asks in ascending offset order, and
+    // nothing makes them: `wanted` is in the order ASKED, `plan` is sorted by
+    // offset. Once the cursor passed an entry, every node still needing it
+    // became unreachable.
+    const entryFor = (n) => {
+      let lo = 0;
+      let hi = plan.length - 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const [s, e] = plan[mid];
+        if (n.off < s) hi = mid - 1;
+        else if (n.off + n.len > e) lo = mid + 1;
+        else return mid;
+      }
+      return -1;
+    };
+
+    const resolve = (n) => {
+      const k = entryFor(n);
+      if (k < 0) {
+        // A node the planner did not fully cover. Raising is the whole point:
+        // the alternative is to skip it, which delivers a short answer and
+        // reports success -- a wrong answer instead of an error.
+        throw new Error(
+          `docstore: node ${n.id} spanning ${n.off}..${n.off + n.len} is not covered ` +
+          `by any planned range (${JSON.stringify(plan)})`);
+      }
+      if (fetched.has(k)) return;
+      fetched.add(k);
+      const [s, e] = plan[k];
+      const buf = store.fetchRange(s, e);
+      for (const w of wanted) {
+        if (w.off >= s && w.off + w.len <= e) {
+          // Only the wanted sub-range is kept. The gap between is dropped
+          // HERE, at the boundary -- otherwise over-fetching would cost
+          // memory as well as bandwidth and the whole policy would invert.
+          queue.push([w.id, dec.decode(buf.subarray(w.off - s, w.off + w.len - s))]);
         }
-        planIdx += 1;
       }
     };
 
@@ -114,9 +140,14 @@ export class DocStore {
         let bytes = 0;
         while (i < wanted.length) {
           const n = wanted[i];
-          if (!queue.some(([id]) => id === n.id)) resolveUpTo(n);
+          if (!queue.some(([id]) => id === n.id)) resolve(n);
           const at = queue.findIndex(([id]) => id === n.id);
-          if (at < 0) { i += 1; continue; }
+          if (at < 0) {
+            // Unreachable unless resolve() is wrong. It must never become
+            // `i += 1; continue`, which would advance as though the node had
+            // been delivered and lose a wave of content in silence.
+            throw new Error(`docstore: node ${n.id} was planned but not resolved`);
+          }
           if (bytes > 0 && bytes + n.len > store.budgetBytes) break;
           const [, text] = queue[at];
           queue.splice(at, 1);
@@ -170,7 +201,9 @@ export class DocStore {
     };
     for (const n of wanted) {
       const text = resolved.get(n.id);
-      if (text === undefined) continue;
+      if (text === undefined) {
+        throw new Error(`docstore: node ${n.id} was planned but not resolved`);
+      }
       if (waveBytes > 0 && waveBytes + n.len > this.budgetBytes) flush(false);
       wave.push([n.id, text]);
       waveBytes += n.len;

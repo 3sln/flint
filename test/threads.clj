@@ -55,8 +55,13 @@
 (doseq [sym ["flint_resume" "flint_drain" "flint_continue" "flint_b_spawn"
              "flint_b_port_send" "flint_b_channel"]]
   (check (str "a pure module has no " sym) (str/includes? pure-bytes sym) false))
-(check-that "a pure module is no bigger than the floor this phase started from"
-            (< pure-size 180000))
+;; The floor moved in 0009, deliberately and by a known amount: the interpreter
+;; loop is instantiated twice so that a run with no budget has no counter in it,
+;; and the biggest function in the module is therefore in it twice. The point of
+;; the bound here is that it is a BUDGET somebody chose, not a number that
+;; drifts.
+(check-that "the floor is within the budget 0009 traded for the free loop"
+            (< pure-size 205000))
 
 ;; ---------------------------------------------------------------- channels
 

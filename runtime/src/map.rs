@@ -1202,6 +1202,7 @@ impl Rt {
                 let base = self.mark();
                 let mi = self.push(m);
                 let n = self.map_count(m);
+                self.charge_work(n as u64);
                 for i in 0..n {
                     let (k, v) = (self.am_key(self.r(mi), i), self.am_val(self.r(mi), i));
                     f(self, k, v, state);
@@ -1226,6 +1227,10 @@ impl Rt {
             let ne = self.bn_datamap(n).count_ones();
             let nn = self.bn_nodemap(n).count_ones();
             for i in 0..ne {
+                // Every bulk walk over a map or set comes through here --
+                // equality, hashing, `seq`, `reduce` -- so charging once is
+                // enough to make all of them proportional.
+                self.charge_work(1);
                 let (k, v) = (self.bn_key(self.r(ni), i), self.bn_val(self.r(ni), i));
                 f(self, k, v, state);
             }
@@ -1236,6 +1241,7 @@ impl Rt {
         } else {
             let cnt = self.cn_count(n);
             for i in 0..cnt {
+                self.charge_work(1);
                 let (k, v) = (self.cn_key(self.r(ni), i), self.cn_val(self.r(ni), i));
                 f(self, k, v, state);
             }

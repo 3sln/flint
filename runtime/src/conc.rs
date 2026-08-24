@@ -271,7 +271,8 @@ impl Rt {
         self.roots.singletons[SING_SCHED] = out;
         self.pop_to(base);
         self.sched_hook = Some(scheduler);
-        self.step_limit = self.steps + SLICE;
+        let at = self.steps + SLICE;
+        self.set_slice_end(at);
         out
     }
 
@@ -1060,7 +1061,8 @@ fn run_one(rt: &mut Rt, i: u32) {
     let st = fx(rt.slot(rt.r(ti), TH_STATUS));
     let binds = rt.slot(rt.r(ti), TH_BINDINGS);
     rt.roots.singletons[crate::rt::SING_BINDINGS] = binds;
-    rt.step_limit = rt.steps + SLICE;
+    let at = rt.steps + SLICE;
+    rt.set_slice_end(at);
     let v = if st == ST_NEW {
         rt.frames.clear();
         rt.handlers.clear();
@@ -1670,6 +1672,27 @@ impl Rt {
         self.pop_to(base);
     }
 
+    /// This end's state, resolved rather than remembered.
+    ///
+    /// A port whose peer has been collected is orphaned whether or not the
+    /// scheduler has got round to noticing, and a query that answered `:open`
+    /// until then would be a notification wearing a query's clothes.
+    pub fn port_state_now(&mut self, p: Value) -> i64 {
+        let st = fx(self.slot(p, PT_STATE));
+        if st != P_OPEN {
+            return st;
+        }
+        let peer_id = fx(self.slot(p, PT_PEER));
+        if peer_id < 0 {
+            return st;
+        }
+        if self.port_by_id(peer_id).is_nil() {
+            self.set(p, PT_STATE, Value::fixnum(P_ORPHANED));
+            return P_ORPHANED;
+        }
+        st
+    }
+
     /// **The query, not the notification.** What state is the *runtime* end of
     /// this port in, asked by host id?
     ///
@@ -1690,7 +1713,7 @@ impl Rt {
             // exactly the case a missed event would have lost.
             return P_CLOSED;
         }
-        fx(self.slot(flint, PT_STATE))
+        self.port_state_now(flint)
     }
 
     /// Serialise every pending event into one contiguous buffer and hand it

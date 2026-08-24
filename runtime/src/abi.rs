@@ -217,8 +217,9 @@ pub extern "C" fn flint_rt_ptr() -> u32 {
 pub extern "C" fn set_step_limit(hi: u32, lo: u32) {
     unsafe {
         let rt = ensure_rt();
-        rt.step_limit = ((hi as u64) << 32) | lo as u64;
+        rt.set_gas_limit(((hi as u64) << 32) | lo as u64);
         rt.steps = 0;
+        rt.refresh_checkpoint();
     }
 }
 
@@ -229,6 +230,19 @@ pub extern "C" fn set_step_limit(hi: u32, lo: u32) {
 #[no_mangle]
 pub extern "C" fn stat_steps() -> u64 {
     unsafe { ensure_rt().steps }
+}
+
+/// Cap the heap, in bytes. Exceeding it raises a catchable error **after** a
+/// collection, so the cap does not depend on when the collector last ran.
+#[no_mangle]
+pub extern "C" fn set_memory_limit(bytes: u32) {
+    unsafe { ensure_rt().gc.set_heap_limit(bytes) }
+}
+
+/// Bytes of heap currently reserved, against the cap.
+#[no_mangle]
+pub extern "C" fn stat_heap_used() -> u32 {
+    unsafe { ensure_rt().gc.heap_used() }
 }
 
 /// Diagnostics for the benchmarks: bytes the collector has handed out.
@@ -246,6 +260,16 @@ pub extern "C" fn stat_peak_live() -> u64 {
 
 /// Force a collection, so a measurement can be taken at a defined point rather
 /// than wherever the allocator happened to trip.
+/// Collect at every single allocation. This is how the parked-thread cases get
+/// tested to the standard the rest of the collector is held to: a thread that
+/// parks holds live references in a saved stack, and only stress mode makes
+/// every one of those saves and restores race a collection.
+#[no_mangle]
+pub extern "C" fn set_gc_stress(on: u32) {
+    unsafe { ensure_rt().gc.stress = on != 0 }
+}
+
+
 #[no_mangle]
 pub extern "C" fn collect_now() {
     unsafe { ensure_rt().collect() }

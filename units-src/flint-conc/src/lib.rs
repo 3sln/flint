@@ -172,7 +172,9 @@ builtin!(flint_b_port_state, b_port_state, |rt, a, n| {
     if !rt.is_port(p) {
         return rt.throw_str("ClassCastException", "port-state wants a port");
     }
-    let s = rt.slot(p, conc::PT_STATE).as_fixnum();
+    // The query is the truth (doc/decisions/0006), so it resolves the peer
+    // rather than reporting a state that reaping has not caught up with yet.
+    let s = rt.port_state_now(p);
     let name = match s {
         conc::P_PENDING => "pending",
         conc::P_OPEN => "open",

@@ -219,6 +219,9 @@ pub struct Gc {
     max_heap: u32,
     pub stats: GcStats,
     pub oom: bool,
+    /// Guards the retry below: a collection must not try to collect again when
+    /// it is the thing that ran out of room.
+    collecting: bool,
     /// Set by tests/benchmarks to force a collection at every allocation.
     pub stress: bool,
 }
@@ -247,6 +250,7 @@ impl Gc {
             max_heap,
             stats: GcStats::default(),
             oom: false,
+            collecting: false,
             stress: false,
         };
         gc.add_chunk(MIN_CHUNK);
@@ -279,6 +283,16 @@ impl Gc {
     }
     pub fn old_live(&self) -> u32 {
         self.old_live
+    }
+    /// Bytes of heap this program is permitted, and how much it holds now.
+    pub fn heap_limit(&self) -> u32 {
+        self.max_heap
+    }
+    pub fn set_heap_limit(&mut self, bytes: u32) {
+        self.max_heap = bytes;
+    }
+    pub fn heap_used(&self) -> u32 {
+        self.old_capacity.saturating_add(self.half * 2)
     }
 
     // --- old space -------------------------------------------------------
@@ -359,6 +373,24 @@ impl Gc {
         }
     }
 
+    /// Allocate in the old generation, **collecting before giving up**.
+    ///
+    /// Failing while there is still garbage to reclaim would make the memory cap
+    /// depend on when the collector last ran, which is exactly the kind of
+    /// timing dependence a deterministic limit exists to avoid
+    /// (`doc/decisions/0009`).
+    fn alloc_old_collecting(&mut self, roots: &mut Roots, ty: u8, len_: u32) -> u32 {
+        let a = self.alloc_old(ty, len_);
+        if a != 0 || self.collecting {
+            return a;
+        }
+        self.oom = false;
+        self.collecting = true;
+        self.major(roots);
+        self.collecting = false;
+        self.alloc_old(ty, len_)
+    }
+
     fn alloc_old(&mut self, ty: u8, len_: u32) -> u32 {
         let size = size_for(ty, len_);
         let mut a = self.take_free(size);
@@ -388,7 +420,7 @@ impl Gc {
         let size = size_for(ty, len_);
         self.stats.bytes_allocated += size as u64;
         if size >= LARGE_OBJECT {
-            let a = self.alloc_old(ty, len_);
+            let a = self.alloc_old_collecting(roots, ty, len_);
             if a != 0 {
                 self.zero_body(a, ty, len_);
                 // A fresh old object may be given young pointers, and we do not
@@ -407,7 +439,7 @@ impl Gc {
             if self.bump + size > self.from_end {
                 // Nursery cannot hold it even when empty (should not happen
                 // below LARGE_OBJECT, but be safe).
-                let a = self.alloc_old(ty, len_);
+                let a = self.alloc_old_collecting(roots, ty, len_);
                 if a != 0 {
                     self.zero_body(a, ty, len_);
                     self.remember(a);

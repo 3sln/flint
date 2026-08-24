@@ -236,6 +236,9 @@ impl Rt {
     /// flint heap. Used by `str`, `subs`, and the printer.
     pub fn string_from_parts(&mut self, parts: &[&str]) -> Value {
         let total: usize = parts.iter().map(|p| p.len()).sum();
+        // `str-join` over a big sequence is one bytecode instruction and work
+        // proportional to the bytes, so it pays for them.
+        self.charge_bytes(total as u32);
         if total <= INLINE_MAX {
             let mut b = [0u8; INLINE_MAX];
             let mut i = 0;

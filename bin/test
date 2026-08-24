@@ -71,6 +71,12 @@ grep -E "^    " /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
 echo
+echo "== limits: deterministic gas, charged natives, a catchable memory cap"
+bb test/limits.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/limits.clj"; }
+grep -E "^    " /tmp/flint-test.out || true
+tail -1 /tmp/flint-test.out
+
+echo
 echo "== documents: structure once, content on demand, memory measured"
 bb test/document.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/document.clj"; }
 grep -E "^    " /tmp/flint-test.out || true

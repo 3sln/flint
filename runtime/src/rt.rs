@@ -56,11 +56,31 @@ pub struct Rt {
     /// a program never calls; a static table here would keep them all alive.
     #[cfg(not(target_arch = "wasm32"))]
     pub host_natives: alloc::vec::Vec<crate::vm::NativeFn>,
-    /// Optional instruction budget. 0 means unlimited. When it runs out the VM
-    /// throws with a frame trace, which is the only way to see where an
-    /// interpreted infinite loop actually is.
-    pub step_limit: u64,
+    /// Work done: one per dispatched bytecode instruction, plus what natives
+    /// charge for work that is not O(1) (`doc/decisions/0009`).
+    ///
+    /// This is **gas**, and the point of it is that it is deterministic. A
+    /// wall-clock timeout bounds *time* and varies with machine load; this
+    /// bounds *work* and does not, so "did this candidate hang?" becomes a
+    /// reproducible fact rather than a flaky one.
     pub steps: u64,
+    /// Hard budget. 0 means unlimited. Exceeding it is a **catchable error**
+    /// carrying what was spent against what was allowed, not a trap.
+    pub gas_limit: u64,
+    /// Soft budget: the scheduler's time slice. Reaching it means "your turn is
+    /// over", not "you have hung". 0 when nothing is preempting.
+    pub slice_end: u64,
+    /// How many times the gas limit has already fired. The first is a catchable
+    /// error with a small grace budget so a `finally` can clean up; a second
+    /// means the program caught it and carried on regardless, and that one
+    /// escapes every handler -- otherwise a candidate could catch its own
+    /// runaway and defeat the gate that exists to catch it.
+    pub gas_trips: u32,
+    /// Whether the one-off memory grace has been spent.
+    pub mem_trips: u32,
+    /// `min` of whichever of the two are set, so the hot loop makes **one**
+    /// comparison rather than two. Recomputed whenever either changes.
+    pub checkpoint: u64,
     /// Out-parameter for CHAMP insert/remove: did the entry count change?
     /// A scratch field rather than a tuple return, because every one of those
     /// returns would otherwise have to be threaded through the rooting dance.
@@ -107,8 +127,12 @@ impl Rt {
             handlers: alloc::vec::Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             host_natives: alloc::vec::Vec::new(),
-            step_limit: 0,
             steps: 0,
+            gas_limit: 0,
+            slice_end: 0,
+            gas_trips: 0,
+            mem_trips: 0,
+            checkpoint: u64::MAX,
             champ_added: false,
             park_on: NIL,
             sched_hook: None,
@@ -153,10 +177,30 @@ impl Rt {
 
     // --- allocation --------------------------------------------------------
 
+    /// Allocate, and **raise if it fails**.
+    ///
+    /// Every constructor in the runtime answers a failed allocation with `nil`.
+    /// If nothing turned that into an error the program would carry on with a
+    /// `nil` where a value should be and produce a quietly wrong answer, which
+    /// is worse than any crash. So the error is set here, once, and the check
+    /// the VM already makes after every call finds it.
+    /// Allocate, and **flag a failure** -- never let one pass silently.
+    ///
+    /// Every constructor in the runtime answers a failed allocation with `nil`.
+    /// If nothing turned that into an error the program would carry on with a
+    /// `nil` where a value should be and produce a quietly wrong answer, which
+    /// is worse than any crash. So a sentinel goes into `thrown` here -- three
+    /// instructions, and nothing else pulled in -- and the interpreter's cold
+    /// path turns it into a real error with numbers in it.
     #[inline]
     pub fn alloc(&mut self, ty: u8, len: u32) -> u32 {
         let a = self.gc.alloc(&mut self.roots, ty, len);
-        debug_assert!(a != 0 || self.gc.oom);
+        if a == 0 && self.thrown.is_nil() {
+            // A failed allocation must not read as `nil` to the program. It
+            // used to, and a capped run then carried on and reported a WRONG
+            // ANSWER rather than an error (doc/decisions/0009).
+            self.thrown = crate::value::OOM;
+        }
         a
     }
 
@@ -199,6 +243,112 @@ impl Rt {
 
     pub fn collect(&mut self) {
         self.gc.major(&mut self.roots);
+    }
+
+    // --- gas ---------------------------------------------------------------
+
+    /// Recompute the single value the interpreter's hot loop compares against.
+    #[inline]
+    pub fn refresh_checkpoint(&mut self) {
+        let a = if self.gas_limit == 0 { u64::MAX } else { self.gas_limit };
+        let b = if self.slice_end == 0 { u64::MAX } else { self.slice_end };
+        self.checkpoint = if a < b { a } else { b };
+    }
+
+    pub fn set_gas_limit(&mut self, limit: u64) {
+        self.gas_limit = limit;
+        self.gas_trips = 0;
+        self.refresh_checkpoint();
+    }
+
+    /// Room for a handler to unwind after the budget blew. Small, and granted
+    /// once.
+    pub const GAS_GRACE: u64 = 64 * 1024;
+
+    pub fn set_slice_end(&mut self, at: u64) {
+        self.slice_end = at;
+        self.refresh_checkpoint();
+    }
+
+    /// Is anything counting? When nothing is, the interpreter runs a loop with
+    /// no counter in it at all.
+    #[inline]
+    pub fn counting(&self) -> bool {
+        self.checkpoint != u64::MAX
+    }
+
+    /// Charge `n` units of work for something a single bytecode instruction did.
+    ///
+    /// **This is the half that would quietly not work without it.** Instruction
+    /// counting bounds *bytecode*, and a call into a native builtin is one
+    /// instruction whatever it does -- one `sort` of a huge vector, one deep
+    /// `=`, one big `merge`. A budget that does not bound those does not bound
+    /// the thing most worth bounding, and a limit that a single call escapes is
+    /// worse than no limit, because somebody will trust it.
+    ///
+    /// Returns true when the budget is now exhausted, so a native that can stop
+    /// part-way may.
+    #[inline]
+    pub fn charge(&mut self, n: u64) -> bool {
+        self.steps = self.steps.saturating_add(n);
+        self.counting() && self.steps >= self.checkpoint
+    }
+
+    /// Charge for work that cannot stop part-way. Same counter, no return value
+    /// to check: the limit trips at the next instruction instead.
+    #[inline]
+    pub fn charge_work(&mut self, n: u64) {
+        self.steps = self.steps.saturating_add(n);
+    }
+
+    /// Charge for `n` bytes of string work. Scaled so that a byte is not an
+    /// instruction -- copying is much cheaper than dispatching -- while keeping
+    /// a megabyte of concatenation from costing 1.
+    #[inline]
+    pub fn charge_bytes(&mut self, n: u32) {
+        self.charge_work((n as u64 / 8) + 1);
+    }
+
+    /// The error a blown gas budget raises: catchable, and carrying what was
+    /// spent against what was allowed, because a host has to be able to tell
+    /// "the program is wrong" from "the budget was too small".
+    pub fn gas_error(&mut self, where_: &str) -> Value {
+        let (spent, limit) = (self.steps, self.gas_limit);
+        let thread = {
+            let cur = self.current_thread();
+            if cur.is_nil() {
+                0
+            } else {
+                self.slot(cur, crate::conc::TH_ID).as_fixnum()
+            }
+        };
+        let msg = alloc::format!(
+            "gas limit exceeded: spent {spent} of {limit} (thread {thread}){where_}"
+        );
+        let base = self.mark();
+        let k = self.string("ResourceExhausted");
+        let ki = self.push(k);
+        let m = self.string(&msg);
+        let mi = self.push(m);
+        let data = self.empty_map();
+        let di = self.push(data);
+        for (key, val) in [
+            ("spent", spent as i64),
+            ("limit", limit as i64),
+            ("thread", thread),
+        ] {
+            let kw = self.keyword(None, key);
+            let kwi = self.push(kw);
+            let d = self.r(di);
+            let kv = self.r(kwi);
+            let nd = self.map_assoc(d, kv, Value::fixnum(val));
+            self.set_r(di, nd);
+            self.pop_to(kwi);
+        }
+        let (kk, mm, dd) = (self.r(ki), self.r(mi), self.r(di));
+        let e = self.ex_info(kk, mm, dd, NIL);
+        self.pop_to(base);
+        e
     }
 
     /// A borrowed view of any string value. The `buf` argument exists because an
