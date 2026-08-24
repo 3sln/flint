@@ -146,6 +146,65 @@ recursion is a fixpoint starting from non-blocking and propagating until stable.
 never occurs while inside an AOT region. That is the negative control for the
 entire analysis, and it costs production nothing.
 
+### And then colouring turns out not to be REQUIRED at all
+
+The owner's follow-up, which I checked against the source rather than reasoned
+about:
+
+> we probably don't need coloring at all? Basically the instruction calls the
+> closure, and captures blocks. If a block occured it jumps out of that compiled
+> chunk... It just needs a compiled guard to check some 'blocked?' type thread
+> variable?
+
+**It checks out, and it is simpler than colouring.** Three facts make it work,
+all of them already true:
+
+1. **One flag covers everything abnormal.** `failed()` is `!thrown.is_nil()`, and
+   a park travels as a distinguished value in that same `thrown` slot. So a
+   region emits ONE load-test-branch after each call — *did anything abnormal
+   happen* — and bails to the interpreter if so. Park, throw, gas exhaustion, all
+   one check. **The region never needs to know what parking is.**
+2. **A parking call is re-executable by construction.** The existing rule is that
+   a parking builtin decides to park before it changes anything, and the resume
+   path rewinds `ip` and re-runs the call. So "bail and let the interpreter do it
+   properly" is always valid.
+3. **Bailing is nearly free**, for the reason in the section above: every value
+   is already in the linear-memory stack, so there is nothing to spill. Set `ip`,
+   return.
+
+So the guard is the mechanism and colouring is **an optimisation over it** — it
+removes checks where they are provably unnecessary — rather than a prerequisite.
+That is a much better place for it: the correctness story needs no analysis, no
+fixpoint, and no closure bit, and the analysis can be added later purely to make
+it faster.
+
+### Two things to get right if the guard is the whole mechanism
+
+**Not every call site is re-executable, and the code already knows it.** `vm.rs`
+carries a `reexecutable: bool` through the park path precisely because `apply` has
+already spread its operands and has no instruction to rewind to. Those sites must
+keep raising rather than deopting — a region that assumed universal
+re-executability would silently corrupt exactly the case that is already
+documented as special.
+
+**Without colouring, EVERY call site is load-bearing.** A missed guard in a
+definitely-non-blocking function is harmless; a missed guard in the
+guard-everything model is a park inside a wasm region with no way to suspend.
+That is an argument for generating the guards mechanically from one emitter path
+rather than by hand, and for the `0016` diagnostics assertion that a park never
+occurs inside a region.
+
+### Which also shrinks what colouring would buy
+
+Worth being honest about, since I argued for colouring a message ago: the hot
+case for AOT is arithmetic and small collection operations, and those natives
+want **inlining** rather than calling. An inlined native has no call site, so it
+has no guard either way. Colouring's saving is therefore concentrated on real
+calls to non-blocking closures — narrower than it first looked.
+
+Measure it as part of the region histogram rather than assuming: guards per
+region, and how many a colouring pass would remove.
+
 ### A refinement worth taking at the same time
 
 A native like `port-send` blocks only when the buffer is full, so colouring it
