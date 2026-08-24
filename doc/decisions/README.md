@@ -28,6 +28,7 @@ for the first.
 | [0017](0017-profiler.md) | Profiler: named blocks, CPU vs waiting | **Roadmap, not next.** Deterministic because instruction counts are; gives 0013 its measurement |
 | [0020](0020-module-metadata-and-shards.md) | A module declares its build; shards as library modules | **Roadmap.** Custom section for runners; a shard is a third `:kind` |
 | [0021](0021-cli.md) | A native CLI: cross compiler, interpreter, capabilities | **Roadmap.** After AOT and ropes/regex. Removes the babashka dependency |
+| [0022](0022-opaque-values.md) | Opaque values: identity without structure | **Roadmap.** flint has no `(Object.)`; 0021's capabilities are one use |
 
 ## What is actually next
 
