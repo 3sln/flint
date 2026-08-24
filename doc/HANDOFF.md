@@ -47,12 +47,22 @@ edge is *into* that vector. Two candidates, in order:
   been promoted, and that the remembered set survives the collection that
   promotes it.
 
-**Worth doing regardless:** the `forward()` plausibility check added in
-`34d0092` did not catch this, because nothing ever asked `forward` about the
-stale pointer — it was dereferenced by `port_dequeue`. The same idea applied at
-the port boundary (reject a dequeued value whose type is `TY_FWD`, `TY_FREE` or
-an internal node) would have named this in one run instead of a session, and is
-a handful of bytes.
+**Narrowed further, with the `obj::slot` assertion forced on in a wasm build:**
+the forwarded pointer is read from **slot 1 of a `TY_NODE`** — a vector internal
+node holding a stale element. So the untraced edge is into a node of the inbox
+vector, not into the port itself.
+
+That measurement needs one caution, learned the hard way: the collector reads
+forwarded pointers constantly while updating them, so any such check MUST
+exclude it. Without that exclusion the first hit was `TY_PORT` slot 3, which was
+just the collector scanning a port, and it sent this diagnosis down the wrong
+road for a while.
+
+Also ruled out by direct audit: nothing bypasses the write barrier. The only
+three uses of `set_slot_raw` are inside `gc.rs` itself (the barrier, the
+collector's own update, and one test that is deliberately unbarriered), and
+`init_slot` forwards to `set_slot`. `port_enqueue` stores the new inbox through
+`Rt::set` -> `Gc::set_slot`, so the port -> inbox edge is barriered.
 
 ## Reproduction
 
