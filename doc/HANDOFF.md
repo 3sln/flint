@@ -1,55 +1,103 @@
-# Handoff — where the last run stopped
+# Handoff — the parked-thread collector bug
 
-The run of 2026-08-22 was cut off mid-diagnosis by a weekly usage limit, not by a
-failure. 54 turns, ~24 minutes. Nothing was committed; **everything is on disk,
-uncommitted**, and the tree is mid-flight.
+`0009` is done and committed (`ebd9a0e`, `884ac66`). The suite is green except
+**two assertions in `test/document.clj`**, which are the bug below.
 
-## The bug it was chasing, and how far it got
+## It is pre-existing, and that is measured rather than assumed
 
-A waiter token is appearing **in a port's id slot**. The corrupted value it
-observed was `16777217` — which is exactly `gen 256 << 16 | idx 0 + 1`, a waiter
-token by construction rather than by coincidence.
+Verified by stashing *all* uncommitted work, rebuilding the runtime from
+`a56cba2` with only a two-line `set_gc_stress` export added, and reproducing.
+It is a `0005`/`0006` green-threads bug, not a regression from limits.
 
-Its trail, in order:
+## The reproduction, which is now small and deterministic
 
-1. it reproduces with **two threads and a channel and no host port at all**, so
-   it is not the host ABI;
-2. it needed several **waiter reuses** to appear, so it is about slot recycling;
-3. at the deadlock, **two ids had been corrupted to ~2²⁴** and the wake then
-   fails to match;
-4. its last stated step: *check the weak port table's behaviour across a
-   collection.*
+```clojure
+(ns k (:require [flint.thread :as t] [flint.port :as p]))
+(defn main [args]
+  (let [n  (flint.rt/str->num (first args))
+        [tx rx] (p/channel 1 "probe")
+        w  (t/spawn (fn [] (inc n) (p/send tx :end) :sent))
+        got (p/receive rx)]
+    (t/join w)
+    (pr-str {:got got})))
+```
 
-That last line is the lead. The generational token from `0006` exists precisely
-so a stale reply cannot wake the wrong thread — so a token landing in an id slot
-means something is writing through a slot it no longer owns, and a collection
-moving or clearing a weakly-held port is the obvious suspect.
+Run it with `inst.exports.set_gc_stress(1)`. Without stress it answers
+`{:got :end}`; with stress it deadlocks. **No host port is involved**, so it is
+not the host ABI.
 
-Note this sits exactly where `0005` warned the collector would bite: the root set
-stopped being one value stack and became N, including parked threads. The stress
-test `0005` asked for — spawn, park, collect at every allocation, resume with
-values intact — is the thing that would have caught this, and the agent was
-checking whether it exists when the limit hit.
+The trigger is narrow and worth knowing, because it is what makes it look like a
+compiler bug when it is not:
 
-## Also outstanding
+* capturing a **fixnum** upvalue and doing arithmetic on it (`(inc n)`, `(< 0 n)`)
+  fails; capturing a string or a port, or merely mentioning the fixnum, does not;
+* that is a red herring. The worker's body changes the module's constants and
+  code, which changes how many allocations run before the channel is made, which
+  changes *when* a collection lands. The bug is allocation-timing-dependent, not
+  shape-dependent.
 
-- **`host/docstore.mjs` drops one node.** Diagnosed in the previous handoff and
-  still unfixed: `next()` does `if (at < 0) { i += 1; continue; }`, which turns
-  "could not resolve this node" into "pretend it was delivered". `resolveUpTo`
-  advances `planIdx` unconditionally, so a node straddling two plan entries is
-  never pushed and becomes unreachable. Test showed 64 waves host-side, 63
-  guest-side, 65 536 bytes missing — one whole budget.
-- **`0009` resource limits** are written and untested-in-tree: gas measured
-  deterministic at 16 693 instructions over five runs, catchable with
-  spent/limit/thread, and an error that escapes a handler which catches and
-  loops. Plus a real find of its own: **a failed allocation returned `nil` and
-  the program carried on with wrong data** — a capped run reporting `:total
-  3932160` instead of `13107200`.
-- `test/limits.clj` and `test/limits.mjs` are new and uncommitted.
+## What is actually wrong
 
-## Ground truth, so it is not re-litigated
+A **root in the VM value stack is left dangling across a collection**. A root
+verifier that walks `stack`/`shadow`/`globals`/`consts`/`singletons` after every
+collection and rejects any heap value that is forwarded, outside both spaces, or
+of an impossible type, reports the first bad root as `stack[1]`.
 
-`doc/decisions/0010`, `0011` and `0012` are **roadmap, not description**. There
-is no rope and no PEG matcher in this tree; `flint.regex` is still the
-backtracking engine. All three carry a NOT BUILT YET banner now. The README's
-regex and ReDoS claims are current and need no re-deriving.
+Downstream, that surfaces as:
+
+* `SC_NEXTID` reads `0x1000000`, so the first port is given id **16777216**
+  instead of 1 and the ids run on from there;
+* a `wake_on(port)` then fails to match the parked thread's waiter, the wakeup is
+  lost, and the program deadlocks with one thread parked.
+
+`16777216` is `1 << 24`, and object headers are `(ty << 24) | …` — so the value
+read out of that slot has the shape of a **header**, i.e. something is reading or
+writing through a pointer that no longer owns that memory. There were **no
+out-of-bounds slot writes** and no overlapping allocations, so it is a stale
+pointer rather than a size or layout error.
+
+## Where the search had got to
+
+* `sched()`, `spawn_thread`, `new_waiter`, `free_waiter`, `park_on_port`,
+  `port_send`, `port_enqueue`, `save_current_state`, `restore_state`, the weak
+  intern tables and `intern_into` were all read and are all correctly rooted.
+  `empty_vec`/`empty_map` are singletons and do not allocate.
+* `roots.consts` **is** traced, so the image loader's constants are safe.
+* The remaining strong suspect is the shape the VM uses around native calls:
+
+  ```rust
+  let base = self.roots.stack_top - argc;
+  let r = self.call_native(idx, base, argc);
+  self.roots.stack_top = base;          // args leave the root set here
+  …
+  self.roots.stack_top = base + argc;   // and come back on the park path
+  ```
+
+  plus any native that copies an argument into a Rust local and then allocates.
+  `arg(rt, a, 0)` followed by an allocating call is the pattern to grep for.
+
+## Tools
+
+`set_gc_stress(on)` is committed (40 bytes on a pure module). Two throwaway
+tools were **not** committed, because they cost ~2 KB on every shipped module
+and `0005` says a pure module must not grow. They are cheap to rebuild and were
+what actually cracked it:
+
+1. **A stress window.** `stress_from`/`stress_until` on `Gc`, collecting only for
+   allocations in `[from, until)`. Bisecting the window narrows the failure to a
+   single allocation. Do not assume monotonicity when bisecting — the predicate
+   is not monotone, so verify any window you land on by re-running it.
+2. **The root verifier** described above, run after each collection, recording
+   which root array and index first dangles.
+
+## Test that is still owed
+
+`units-src/flint-conc/tests/threads.rs` now covers a **waiter** park across
+collection (`a_waiter_park_survives_collection_at_every_allocation`), which the
+suite lacked — the old stress test parks with `yield`, which registers no waiter.
+It passes, so it does *not* yet reproduce this. The untested combination is
+where these live, exactly as the compound-keys bug taught: stress mode was
+already running on the map tests and still missed that one, because scalar keys
+never allocate in `=`. When the bug is found, the regression test needs the
+negative control `without_the_barrier_the_reference_would_be_lost` set — it must
+fail if the fix is removed.
