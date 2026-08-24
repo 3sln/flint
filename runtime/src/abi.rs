@@ -280,6 +280,19 @@ pub extern "C" fn set_gc_stress_window(from_lo: u32, from_hi: u32, until_lo: u32
     }
 }
 
+/// Run collections `[from, until)` as majors rather than minors, changing no
+/// allocation timing. Bisect it to find the collection at which something is
+/// lost.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn set_gc_upgrade_window(from_lo: u32, from_hi: u32, until_lo: u32, until_hi: u32) {
+    unsafe {
+        let rt = ensure_rt();
+        rt.gc.upgrade_from = ((from_hi as u64) << 32) | from_lo as u64;
+        rt.gc.upgrade_until = ((until_hi as u64) << 32) | until_lo as u64;
+    }
+}
+
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_allocs() -> u64 {

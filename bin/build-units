@@ -47,7 +47,7 @@ if [ -n "$DIAG" ]; then
 import re
 p = "units/flint/rt.unit.edn"
 s = open(p).read().rstrip()
-extra = ' :exports ["stat_bytes_allocated" "stat_collections" "stat_peak_live" "stat_heap_used" "collect_now" "set_gc_stress" "set_gc_stress_window" "stat_allocs"]'
+extra = ' :exports ["stat_bytes_allocated" "stat_collections" "stat_peak_live" "stat_heap_used" "collect_now" "set_gc_stress" "set_gc_stress_window" "stat_allocs" "set_gc_upgrade_window"]'
 s = s[:s.rfind("}")] + extra + "}\n"
 open(p, "w").write(s)
 EDN

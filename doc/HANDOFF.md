@@ -370,6 +370,52 @@ off, taking a snapshot, and linking the snapshot unit at all. Every one changes
 when a collection happens relative to allocations, and nothing that leaves
 allocation timing alone has ever fixed it.
 
+## THE COLLECTION IS NAMED: #692
+
+Upgrading a chosen collection from a minor to a **major** is the first
+perturbation in this investigation that leaves allocation timing alone. The same
+number of collections happen at the same allocation indices, and a major performs
+no `Gc::alloc`, so nothing downstream shifts. `set_gc_upgrade_window(from, until)`
+does it, under the diagnostics feature.
+
+It discriminates, where forcing did not:
+
+    upgrade ONLY collection #1     -> 63 waves   (does not fix)
+    upgrade ONLY collection #5     -> 63 waves
+    upgrade ONLY collection #20    -> 64 waves   (fixes)
+    upgrade ONLY collection #100   -> 64 waves
+    upgrade ONLY collection #400   -> 64 waves
+    upgrade ONLY collection #600   -> 64 waves
+    upgrade ONLY collection #740   -> 63 waves
+    upgrade ONLY collection #747   -> 63 waves
+
+Early ones are before the content stream starts; late ones are after the damage
+is done. Bisecting the upper edge, and re-running both sides to confirm:
+
+    upgrading collection #691 -> 64 waves, 4 194 304 bytes   (saves it)
+    upgrading collection #692 -> 63 waves, 4 128 768 bytes   (too late)
+
+**Collection #692 is the one that loses the message.** A major at #691 prevents
+the loss; at #692 it cannot recover it, and a major begins with a minor, so the
+damage is done in that minor's tracing.
+
+### A warning about the prefix bisection
+
+Bisecting a prefix `[0, k)` converged neatly on "collection #300", and that was
+**wrong**. Upgrading a prefix changes enough state that the failure point moves,
+so the bisection located an artifact. Single-collection upgrades are what
+discriminate. The tell was that upgrading any single collection near 300 fixed
+it, while `[0, 300)` did not -- two results that cannot both be locating the same
+thing. Prefer the narrowest perturbation that still answers the question.
+
+### What to do with it
+
+The question is now small: **what does collection #692 trace differently.** It is
+one collection, reproducible, and both the snapshot inspector and the root
+verifier can be pointed at exactly it rather than at every pump -- which is what
+made them perturb the run before. Capture at the end of #691 and the end of #692
+and diff; or run the `forward()` plausibility check for that collection alone.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.

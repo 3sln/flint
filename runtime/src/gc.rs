@@ -236,6 +236,19 @@ pub struct Gc {
     pub stress_from: u64,
     #[cfg(feature = "diagnostics")]
     pub stress_until: u64,
+    /// Run collections `[upgrade_from, upgrade_until)` as MAJORS instead of
+    /// minors.
+    ///
+    /// This is the one perturbation that leaves allocation timing alone: the
+    /// same number of collections happen at the same allocation indices, and a
+    /// major performs no `Gc::alloc`, so nothing downstream shifts. Every other
+    /// knob tried on the wave loss -- forcing a collection, a slice size, a
+    /// guest code change -- moves *when* a collection happens, which is exactly
+    /// what that bug is sensitive to. Upgrading discriminates instead.
+    #[cfg(feature = "diagnostics")]
+    pub upgrade_from: u64,
+    #[cfg(feature = "diagnostics")]
+    pub upgrade_until: u64,
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
     #[cfg(feature = "diagnostics")]
@@ -275,6 +288,10 @@ impl Gc {
             stress_from: u64::MAX,
             #[cfg(feature = "diagnostics")]
             stress_until: 0,
+            #[cfg(feature = "diagnostics")]
+            upgrade_from: u64::MAX,
+            #[cfg(feature = "diagnostics")]
+            upgrade_until: 0,
             #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };
@@ -460,13 +477,11 @@ impl Gc {
             if self.stress
                 || (self.alloc_seq >= self.stress_from && self.alloc_seq < self.stress_until)
             {
-                self.minor(roots);
-                self.maybe_major(roots);
+                self.collect_cycle(roots);
             }
         }
         if self.bump + size > self.from_end {
-            self.minor(roots);
-            self.maybe_major(roots);
+            self.collect_cycle(roots);
             if self.bump + size > self.from_end {
                 // Nursery cannot hold it even when empty (should not happen
                 // below LARGE_OBJECT, but be safe).
@@ -641,6 +656,22 @@ impl Gc {
         if old && points_young {
             self.remember(a);
         }
+    }
+
+    /// One collection cycle. Normally a minor plus whatever `maybe_major`
+    /// decides; under an upgrade window, a major instead.
+    fn collect_cycle(&mut self, roots: &mut Roots) {
+        #[cfg(feature = "diagnostics")]
+        {
+            // The index this cycle is about to take.
+            let n = self.stats.minor + 1;
+            if n >= self.upgrade_from && n < self.upgrade_until {
+                self.major(roots);
+                return;
+            }
+        }
+        self.minor(roots);
+        self.maybe_major(roots);
     }
 
     pub fn minor(&mut self, roots: &mut Roots) {
