@@ -63,8 +63,16 @@ called from `split` in `take_free`. If a free-list entry is ever stale, or a
 block's recorded length disagrees with the heap walk, `take_free` hands out a
 live object's address and `split` stamps a `TY_FREE` header into the middle of
 something live. `sweep_old`'s parse check is a `debug_assert!` and is compiled
-out of release, so a desynchronised old-space walk is currently silent. **Make
-that check real and run the repro** — that is the next move.
+out of release, so a desynchronised old-space walk would be silent. **This was
+tried**: the check was made real and the repro run, and it reports **zero parse
+errors**. So the old-space walk is consistent and this suspect is out too.
+
+That leaves the verifier's own report as the thing to question first. Before
+hunting further, confirm that `stack[1]` at that moment is genuinely a live slot
+rather than a stale one below `stack_top` — i.e. print the frame layout
+(`frames.last().ret_to`, `fp`, `nlocals`) alongside it. Every mechanism that
+would explain a *live* root pointing at freed memory has now been checked and
+cleared, which makes "it is not actually live" the remaining possibility.
 
 Ruled out with evidence: `sched`, `spawn_thread`, `new_waiter`, `free_waiter`,
 `park_on_port`, `port_send`, `port_enqueue`, `save_current_state`,
