@@ -160,6 +160,66 @@ One caution carried from earlier in this file: a check like that MUST exclude
 the collector's own reads, and any flag it uses must live on `Space` rather than
 in a global, or parallel `cargo test` silences it across Rts.
 
+## Technique: monotonicity separates a cause from a timing perturbation
+
+Worth keeping as a general test, because it is what finally sorted signal from
+noise on this bug. Several things "fixed" the wave loss:
+
+| knob | behaviour | verdict |
+|---|---|---|
+| scheduler slice size | 1024 ok, 2048 ok, **4096 fails**, 8192 ok, 65536 much worse | **non-monotone** |
+| `reap_ports` on/off | off fixes it, but the same ports are reaped in passing and failing runs | non-monotone / no differential |
+| guest code shape | an extra loop variable or a `throw` fixes it | non-monotone |
+| **forced major GC** | every cadence from every-pump to every-16 fixes it; only absence fails | **monotone** |
+
+A knob that fixes a bug at some values and not others is moving *when* something
+happens — it is a timing perturbation, not a cause, and chasing it wastes runs.
+A knob that fixes it at every setting is doing something structural. Apply this
+before investing in any "X makes it go away" result.
+
+## The weak-table lead is dead, by direct measurement
+
+The reachability walk was triggered from the moment the stale pointer is read —
+not sampled — so it is guaranteed to observe the bad state. At that instant:
+
+    port      REACHABLE   young = 0 (old)
+    inbox vec REACHABLE   young = 1 (young)
+    tail node REACHABLE
+    port in_remset FLAG = 1   and in the remembered LIST = 1
+
+So the chain is reachable, the port is old with a young inbox — the classic
+old-to-young edge — and it is properly recorded in the remembered set by **both**
+the header flag and the list, which can disagree and here do not. Nothing is
+being resurrected by `INTERN_PORT`. The lead dies cleanly.
+
+Note the one thing this does *not* establish: the walk observes the state at the
+**dequeue**, not at the collection that actually moved the message. Reachable and
+remembered now does not prove reachable and remembered then.
+
+Relevant while reading the collector: `forward()` returns immediately for any
+address outside from-space, so an **old object is never scanned by virtue of
+being reachable from the roots** — only via the remembered set. Reachability and
+traced-ness are different questions for old objects, and this bug lives exactly
+in that gap.
+
+## The agreed next step, and it is the only one
+
+No more hypotheses until this output exists: **the collector's own trace of the
+inbox object at the collection that moves the message** — what it visited, what
+it forwarded, what it skipped.
+
+The way in: the port is OLD, and old objects do not move, so its address is
+stable for the whole run and can be watched. Instrument `scan_object` and
+`forward` to log visits to that address, then compare against the number of
+minor collections. A first attempt at this watched the wrong port — it took the
+first old channel port enqueued into, which is not the one that fails — so
+**identify the failing port first** (it is a `K_FLINT` channel, `cap = 1`,
+inbox length 1) and watch that specific one.
+
+An early reading from the wrong port, for whatever it is worth: it was scanned
+63 times across 706 minor collections. If that ratio holds for the failing port
+it is worth explaining, but it proves nothing yet.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.
