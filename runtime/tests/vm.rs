@@ -749,3 +749,151 @@ fn arguments_survive_the_module_initialisers() {
          address, so it was given a stale pointer"
     );
 }
+
+// --- snapshots (doc/decisions/0015) ----------------------------------------
+
+/// Round trip must be byte-identical. Anything that differs is state the format
+/// is dropping, and a format that drops state is the next instrument that lies.
+#[test]
+fn a_snapshot_round_trips_byte_for_byte() {
+    let mut w = ImageWriter::new();
+    let k = w.k_string("something to allocate");
+    let body = {
+        let mut a = Asm::new();
+        for _ in 0..40 {
+            a.op(op::CONST).u16v(k as u16);
+        }
+        a.op(op::VECTOR).u16v(40);
+        a.op(op::RETURN);
+        a.done()
+    };
+    let n = w.k_string("main");
+    w.entry = w.add_fn(n, 1, false, 2, &body);
+    let (mut rt, _v) = run(&mut w, vec!["x"]);
+
+    let first = flint_rt::snap::capture(&rt);
+    assert!(flint_rt::snap::restore(&mut rt, &first), "restore refused its own snapshot");
+    let second = flint_rt::snap::capture(&rt);
+    assert_eq!(first.len(), second.len(), "snapshot length changed across a round trip");
+    assert!(first == second, "snapshot bytes changed across a round trip");
+}
+
+/// A snapshot from another layout version is refused BY NAME rather than read
+/// as a plausible-looking heap that means something else.
+#[test]
+fn a_snapshot_from_another_version_is_refused() {
+    let mut w = ImageWriter::new();
+    let body = {
+        let mut a = Asm::new();
+        a.op(op::NIL).op(op::RETURN);
+        a.done()
+    };
+    let n = w.k_string("main");
+    w.entry = w.add_fn(n, 1, false, 2, &body);
+    let (mut rt, _v) = run(&mut w, vec![]);
+
+    let mut snap = flint_rt::snap::capture(&rt);
+    snap[4] ^= 0xFF; // corrupt the version word
+    assert!(!flint_rt::snap::restore(&mut rt, &snap), "a foreign version was accepted");
+    assert!(!flint_rt::snap::restore(&mut rt, &[1, 2, 3]), "garbage was accepted");
+}
+
+/// The test the decision calls the strongest available proof that the format is
+/// complete: a program snapshotted mid-run, exported, imported into a FRESH
+/// runtime and resumed must give the same answer **and the same instruction
+/// count** as one that never stopped. 0009's gas is deterministic, so this is an
+/// equality rather than a hope -- and any state the format drops shows up as a
+/// different answer or a different count.
+#[test]
+fn a_snapshot_resumes_with_the_same_answer_and_the_same_instruction_count() {
+    static mut SNAP: Option<Vec<u8>> = None;
+
+    extern "C" fn take_snapshot(rt: *mut Rt, _b: u32, _n: u32) -> u64 {
+        unsafe {
+            if SNAP.is_none() {
+                SNAP = Some(flint_rt::snap::capture(&*rt));
+            }
+        }
+        flint_rt::value::NIL.bits()
+    }
+
+    // (do (loop building a vector) (snap!) (more work) answer)
+    let build = |w: &mut ImageWriter, snap_slot: u32| {
+        let k = w.k_string("payload");
+        let ci = w.k_string("conj");
+        let conj_i = w.add_native(ci, nat("conj"));
+        let cc = w.k_string("count");
+        let count_i = w.add_native(cc, nat("count"));
+        let mut a = Asm::new();
+        for _ in 0..24 {
+            a.op(op::CONST).u16v(k as u16);
+        }
+        a.op(op::VECTOR).u16v(24).op(op::SET_LOCAL).u8v(0);
+        a.native(snap_slot as u16, 0).op(op::POP);
+        for _ in 0..24 {
+            a.op(op::CONST).u16v(k as u16);
+        }
+        a.op(op::VECTOR).u16v(24).op(op::SET_LOCAL).u8v(1);
+        a.op(op::LOCAL).u8v(0).op(op::LOCAL).u8v(1);
+        a.native(conj_i as u16, 2);
+        a.native(count_i as u16, 1).op(op::RETURN);
+        a.done()
+    };
+
+    // 1. straight through, for the reference answer and count.
+    let (through, through_steps) = {
+        let mut w = ImageWriter::new();
+        let mut rt = Rt::new();
+        rt.install_host_natives();
+        let slot = rt.add_host_native(take_snapshot);
+        let c = w.k_string("snap!");
+        let idx = w.add_native(c, slot);
+        let body = build(&mut w, idx);
+        let n = w.k_string("main");
+        w.entry = w.add_fn(n, 1, false, 4, &body);
+        let bytes = w.finish();
+        assert!(rt.load_image(&bytes));
+        let argv = rt.empty_vec();
+        let v = rt.run_program(argv);
+        (rt.as_i64(v), rt.steps)
+    };
+    unsafe {
+        SNAP = None;
+    }
+
+    // 2. the same program, snapshotted mid-run.
+    let mut w = ImageWriter::new();
+    let mut rt = Rt::new();
+    rt.install_host_natives();
+    let slot = rt.add_host_native(take_snapshot);
+    let c = w.k_string("snap!");
+    let idx = w.add_native(c, slot);
+    let body = build(&mut w, idx);
+    let n = w.k_string("main");
+    w.entry = w.add_fn(n, 1, false, 4, &body);
+    let bytes = w.finish();
+    assert!(rt.load_image(&bytes));
+    let argv = rt.empty_vec();
+    let _ = rt.run_program(argv);
+    let snap = unsafe { SNAP.take().expect("the snapshot native never ran") };
+
+    // 3. import into a FRESH runtime and resume.
+    let mut fresh = Rt::new();
+    fresh.install_host_natives();
+    let _ = fresh.add_host_native(take_snapshot);
+    assert!(fresh.load_image(&bytes), "image did not load into the fresh runtime");
+    assert!(flint_rt::snap::restore(&mut fresh, &snap), "restore refused the snapshot");
+
+    // The capture happened inside a native, before the VM pushed its result, so
+    // stand that push in -- exactly what the dispatch loop does next.
+    let top = fresh.roots.stack_top;
+    if fresh.roots.stack.len() <= top {
+        fresh.roots.stack.resize(top + 8, flint_rt::value::NIL);
+    }
+    fresh.roots.stack[top] = flint_rt::value::NIL;
+    fresh.roots.stack_top = top + 1;
+
+    let resumed = fresh.run(0);
+    assert_eq!(fresh.as_i64(resumed), through, "resumed to a different answer");
+    assert_eq!(fresh.steps, through_steps, "resumed to a different instruction count");
+}

@@ -166,11 +166,11 @@ pub struct Region {
 }
 
 pub struct Space {
-    base: *mut u8,
+    pub(crate) base: *mut u8,
     /// wasm: the arena is global, so nothing here is owned.
     #[allow(dead_code)]
     owned_len: usize,
-    free_runs: Vec<Region>,
+    pub(crate) free_runs: Vec<Region>,
     pub reserved: u32,
     pub in_use: u32,
     #[cfg(debug_assertions)]

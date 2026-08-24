@@ -202,26 +202,26 @@ pub struct GcStats {
 
 pub struct Gc {
     pub sp: Space,
-    young_base: u32,
-    half: u32,
-    from: u32,
-    to: u32,
+    pub(crate) young_base: u32,
+    pub(crate) half: u32,
+    pub(crate) from: u32,
+    pub(crate) to: u32,
     /// Bump pointer into the destination semispace; live only during `minor`.
-    to_bump: u32,
-    bump: u32,
-    from_end: u32,
-    old_chunks: Vec<Region>,
-    free_lists: [u32; NCLASS],
-    old_capacity: u32,
-    old_live: u32,
-    remembered: Vec<u32>,
+    pub(crate) to_bump: u32,
+    pub(crate) bump: u32,
+    pub(crate) from_end: u32,
+    pub(crate) old_chunks: Vec<Region>,
+    pub(crate) free_lists: [u32; NCLASS],
+    pub(crate) old_capacity: u32,
+    pub(crate) old_live: u32,
+    pub(crate) remembered: Vec<u32>,
     work: Vec<u32>,
-    max_heap: u32,
+    pub(crate) max_heap: u32,
     pub stats: GcStats,
     pub oom: bool,
     /// Guards the retry below: a collection must not try to collect again when
     /// it is the thing that ran out of room.
-    collecting: bool,
+    pub(crate) collecting: bool,
     /// Set by tests/benchmarks to force a collection at every allocation.
     pub stress: bool,
     /// First from-space address `forward` was asked to treat as an object and

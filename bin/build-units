@@ -73,6 +73,26 @@ $RUSTC $FLAGS --crate-type rlib --crate-name flint_conc \
   --emit=obj units-src/flint-conc/src/lib.rs -o units/flint/conc.o
 cargo run -q -p flint-conc --features host-tools --bin manifest > units/flint/conc.unit.edn
 
+# The snapshot unit (doc/decisions/0015). Capture and restore live in the
+# runtime; this carries the host-facing surface, so a program that never asks
+# for a snapshot never links one and the pure-module floor is untouched.
+echo "  flint.snapshot"
+$RUSTC $FLAGS --crate-type rlib --crate-name flint_snap \
+  --extern flint_rt=units/flint/libflint_rt.rlib -L $DEPS \
+  --emit=obj units-src/flint-snap/src/lib.rs -o units/flint/snapshot.o
+cat > units/flint/snapshot.unit.edn <<'UNIT'
+{:flint/unit 1
+ :name flint.snapshot
+ :kind :wasm-object
+ :artifact "snapshot.o"
+ :requires [flint.rt]
+ :abi {:runtime 1 :value 1 :image 1}
+ :exports ["flint_snapshot_capture" "flint_snapshot_ptr" "flint_snapshot_alloc" "flint_snapshot_restore"]
+ :provides {"flint/snapshot" {:symbol "flint_b_snapshot"}
+            "flint/snapshot-size" {:symbol "flint_b_snapshot_size"}
+            "flint/snapshot-restore" {:symbol "flint_b_snapshot_restore"}}}
+UNIT
+
 build_parser flint.data.json flint/data/json units-src/flint-data-json flint_data_json \
   flint_b_json_parse "flint/json-parse" serde serde_json
 build_parser flint.data.xml flint/data/xml units-src/flint-data-xml flint_data_xml \

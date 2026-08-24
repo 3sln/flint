@@ -30,6 +30,7 @@ pub mod obj;
 pub mod rt;
 pub mod seqs;
 pub mod set;
+pub mod snap;
 pub mod strs;
 pub mod vector;
 pub mod vm;

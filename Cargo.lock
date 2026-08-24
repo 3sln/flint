@@ -49,6 +49,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "flint-snap"
+version = "0.1.0"
+dependencies = [
+ "flint-rt",
+]
+
+[[package]]
 name = "htmlparser"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
