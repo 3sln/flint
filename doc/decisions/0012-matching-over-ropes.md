@@ -86,43 +86,52 @@ police.
   that want maximum speed and are willing to flatten. Same subset, same
   semantics, so it is a drop-in rather than a second dialect.
 
-### Settled: no stepping stone
+### Settled: the Pike route only, and in cljc first
 
-I framed the Rust `regex` crate as a cheap interim and left the sequencing open.
-The owner has closed it:
+Two narrowings from the owner, in order. First:
 
 > we don't need the rust crate stepping stone; ropes for strings should be our
 > next work as soon as the gc/threading/ports bugs are resolved
 
-So **ropes are the next substantial piece of work**, which makes the crate a
-thing that would be adopted and superseded within one cycle. Its API takes
-`&str`, so the moment ropes land it means flattening before every match — handing
-back the rope at the operation that touches the most text.
+Then:
 
-**Go straight to the endpoint**: shared cljc pattern compiler emitting an NFA
-program, native Pike VM simulator per host reading through a rope cursor.
+> forget about the rust crate or native regex for now and focus only on the pike
+> route, simplicity; we can add the alternative flattening path later if actually
+> needed/wanted
 
-Two things this buys beyond avoiding throwaway work:
+So there is **no native regex work at all** in the first pass. One
+implementation, in cljc, running on every host. The native simulator that `0012`
+describes and the Rust crate as a flatten-and-go-fast unit are both **later, and
+only if a measurement asks for them.**
 
-- **The rope and the matcher are designed together.** The cursor is the interface
-  between them, and building the matcher against a real rope rather than against
-  `&str` means the cursor is shaped by its actual consumer instead of retrofitted.
-- **The regex work stops being a detour.** It is not "fix a slow engine", it is
-  part of building the string layer, which is where the 18× on splitting a
-  literal lives too.
+**What that costs, stated honestly.** From the decomposition in `0011`, the
+current 275× is roughly 18× interpretation times 15× engine inefficiency. A Pike
+VM in cljc recovers the engine half and not the interpretation half, so regex
+lands around **25–30× slower than JS** rather than at parity. Annotator-shaped
+work stays unattractive on flint until something native happens.
 
-The crate keeps the one role `0012` already gave it: an optional wasm unit for a
-program that wants maximum speed on flat strings and will pay a flatten. Not the
-default matcher, and not on the path to one.
+**What it buys, which is why it is still right:**
+
+- **Correctness and boundedness now.** Linear time by construction, so ReDoS is
+  gone rather than mitigated, and `0009`'s gas can count matcher steps exactly.
+- **It consumes ropes**, which no host engine and no Rust crate can.
+- **One implementation to get right**, rather than a reference plus per-host
+  natives that must be proven to agree. Every host is correct on day one.
+- **The native simulator stays a drop-in.** The compiled NFA program is the
+  shared artifact, so adding a native simulator later changes no semantics and
+  needs no new conformance work — which is precisely why it is safe to defer.
+
+The performance ceiling is a known, measured, deferred cost rather than an
+unknown. That is the right shape for a thing to defer.
 
 ### Order of work, once the runtime bugs are closed
 
 1. **Ropes** — three tiers, balanced B-tree, code-point counts per node, the
    adversarial depth tests (`0011`).
-2. **The shared NFA compiler in cljc**, replacing the backtracker's engine while
-   keeping its syntax and its refusals.
-3. **The native simulator**, wasm first, ~300–400 lines over the shared compiler.
-4. Only then the string natives for the remaining `clojure.string` gap.
+2. **The Pike VM in cljc**, replacing the backtracker's engine while keeping its
+   syntax and its refusals, reading through a rope cursor.
+3. Stop. Measure. Only then consider a native simulator, and only where a
+   benchmark says it earns its place.
 
 ## What must be true if this is built
 
