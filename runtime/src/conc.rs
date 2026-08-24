@@ -303,7 +303,7 @@ impl Rt {
     }
 
     fn save_current_state(&mut self, th: Value) {
-        unsafe { crate::gc::PHASE = 5; crate::gc::LAST_OP = 902; crate::gc::LAST_IP = 0; } crate::gc::ring(902, 0, self.roots.stack_top as u32);
+        unsafe { crate::gc::PHASE = 5; }
         let base = self.mark();
         let ti = self.push(th);
         let n = self.roots.stack_top as u32;
@@ -354,7 +354,7 @@ impl Rt {
     }
 
     fn restore_state(&mut self, th: Value) {
-        unsafe { crate::gc::PHASE = 2; crate::gc::LAST_OP = 900; crate::gc::LAST_IP = 0; } crate::gc::ring(900, 0, self.roots.stack_top as u32);
+        unsafe { crate::gc::PHASE = 2; }
         let sv = self.slot(th, TH_STACK);
         self.frames.clear();
         self.handlers.clear();
@@ -1057,7 +1057,7 @@ fn needs_host(rt: &mut Rt) -> bool {
 }
 
 fn run_one(rt: &mut Rt, i: u32) {
-    unsafe { crate::gc::ARMED = true; crate::gc::PHASE = 4; crate::gc::LAST_OP = 901; crate::gc::LAST_IP = 0; }
+    unsafe { crate::gc::PHASE = 4; }
     let s = rt.sched();
     rt.set(s, SC_CURRENT, Value::fixnum(i as i64));
     let ts = rt.slot(s, SC_THREADS);

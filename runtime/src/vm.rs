@@ -586,35 +586,6 @@ impl Rt {
     fn run_with<B: BudgetPolicy>(&mut self, base_depth: usize) -> Value {
         loop {
             unsafe { crate::gc::PHASE = 6; }
-            // Attribute every change since the last instruction to that
-            // instruction. Expensive; this is throwaway scaffolding.
-            unsafe {
-                let top = if self.roots.stack_top < 256 { self.roots.stack_top } else { 256 };
-                for i in 0..top {
-                    let vv = self.roots.stack[i];
-                    let v = vv.0;
-                    if crate::gc::SH_VAL[i] != v {
-                        crate::gc::SH_VAL[i] = v;
-                        crate::gc::SH_OP[i] = crate::gc::LAST_OP;
-                        crate::gc::SH_IP[i] = crate::gc::LAST_IP;
-                        // Catch the FIRST instruction to put a dead value on
-                        // the stack, rather than the last slot to hold it.
-                        if crate::gc::ARMED && crate::gc::BAD_OP < 0 && vv.is_heap() {
-                            let t = ty(&self.gc.sp, vv.as_heap());
-                            if t == crate::obj::TY_FREE || t == crate::obj::TY_FWD
-                                || t >= crate::obj::TY_MAX
-                            {
-                                crate::gc::BAD_OP = crate::gc::LAST_OP as i64;
-                                crate::gc::BAD_IP = crate::gc::LAST_IP as i64;
-                                crate::gc::BAD[2] = t as i64;
-                                crate::gc::BAD[1] = i as i64;
-                                crate::gc::BAD[0] = 0;
-                                crate::gc::RING_FROZEN = true;
-                            }
-                        }
-                    }
-                }
-            }
             if self.frames.len() <= base_depth {
                 return self.vpop();
             }
@@ -672,9 +643,6 @@ impl Rt {
             }
             let opcode = self.u8_at(ip);
             ip += 1;
-            unsafe { crate::gc::LAST_OP = opcode as u32; crate::gc::LAST_IP = ip - 1; }
-            crate::gc::ring(opcode as u32, ip - 1, self.roots.stack_top as u32);
-            unsafe { crate::gc::FRAMES_NOW = self.frames.len() as i64; }
 
             macro_rules! commit {
                 () => {
@@ -899,22 +867,6 @@ impl Rt {
                 }
                 op::RETURN => {
                     let v = self.vpop();
-                    unsafe {
-                        if crate::gc::BAD2[0] < 0 && v.is_heap() {
-                            let t = ty(&self.gc.sp, v.as_heap());
-                            if t == crate::obj::TY_FREE || t == crate::obj::TY_FWD
-                                || t >= crate::obj::TY_MAX
-                            {
-                                // Where it was popped from, against the stack
-                                // depth the last collection actually traced.
-                                crate::gc::BAD2[0] = self.roots.stack_top as i64;
-                                crate::gc::BAD2[1] = crate::gc::TRACE_TOP as i64;
-                                crate::gc::BAD2[2] = t as i64;
-                                crate::gc::BAD2[3] = self.frames.last().map(|f| f.ret_to as i64).unwrap_or(-1);
-                                crate::gc::BAD2[4] = self.frames.len() as i64;
-                            }
-                        }
-                    }
                     let f = self.frames.pop().unwrap();
                     self.handlers.truncate(f.handlers);
                     self.roots.stack_top = f.ret_to;
