@@ -981,6 +981,47 @@ that answers a different question from the one the bug poses will answer it
 cleanly.** Rule 3 is the special case; state the question the failure mode poses
 before trusting a zero.
 
+## THE WRITE IS CAUGHT, INSIDE `port_send`
+
+The live-half predicate applied continuously — at every allocation while
+`flint/port-send` is live, over the roots plus the objects born in that frame
+(bounded by the frame, re-based after a collection since one moves them). The
+predicate rather than a `TY_FWD` header test, because a forwarding header stops
+being evidence once its half is reused.
+
+    frame scans: 9 803   hits: 1
+      NODE@3352448 slot 1 -> 3341768
+      caught while allocating a VEC
+
+**So the stale address IS written inside `port_send`, into a node born in that
+frame.** The origin stamp was pointing at the write, not merely at the node's
+birthplace — which is worth stating, because this bug has punished the opposite
+assumption before.
+
+`vec_conj`'s tail path allocates in the order: clone the tail node, write the
+element into it with `node_set`, then allocate the new `VEC`. The hit is caught
+**while allocating the VEC**, i.e. immediately after the node was populated. That
+is `port_enqueue` -> `vec_conj`, tail path, and the write is the `node_set`.
+
+Two possibilities remain, and they are distinguishable:
+
+* the value written is stale — but the presence check says the live object is
+  rooted at every allocation in the frame, so `x` should be current;
+* **`node_clone` copied a stale slot out of the SOURCE tail**, since it copies
+  verbatim and the source is the previous inbox vector's tail.
+
+The second fits everything, including why the presence check came back clean:
+nothing is unrooted, an old stale *copy* is simply propagated. It would also make
+this holder a carrier after all — so re-check the serial against the source
+node's, rather than assuming.
+
+### Caveat on the number
+
+`allocation #9753` is the **cumulative** count of armed allocations across all
+`port_send` calls, not an index within one frame. It does not localise the call;
+the `VEC` being allocated does. Fixing that counter to be frame-relative is a
+one-line change and would name the call outright.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.

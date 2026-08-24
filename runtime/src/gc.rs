@@ -92,6 +92,15 @@ pub static mut WATCH_ARMED: bool = false;
 /// `[allocations checked, unrooted, first type allocated, first serial]`
 #[cfg(feature = "diagnostics")]
 pub static mut WATCH_HIT: [u32; 4] = [0; 4];
+/// Where the watched frame's allocations start, and the collection count when
+/// that was set -- a collection moves them, so the span has to be re-based.
+#[cfg(feature = "diagnostics")]
+pub static mut FRAME_START: u32 = 0;
+#[cfg(feature = "diagnostics")]
+pub static mut FRAME_MINOR: u64 = 0;
+/// `[checks, hits, holder, slot, target, holder type]`
+#[cfg(feature = "diagnostics")]
+pub static mut STALE_WRITE: [u32; 8] = [0; 8];
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_N: usize = 0;
 #[cfg(feature = "diagnostics")]
@@ -730,6 +739,53 @@ impl Gc {
                         WATCH_HIT[3] = self.alloc_seq as u32;
                     }
                     WATCH_HIT[1] += 1;
+                }
+                // The question the failure mode actually poses: has a stale
+                // ADDRESS been written anywhere, while the live object stays
+                // properly rooted? The live-half predicate is used rather than a
+                // TY_FWD header test, because a forwarding header survives only
+                // until that half is reused and the check would then go quiet.
+                if self.stats.minor != FRAME_MINOR {
+                    FRAME_START = self.from; // a collection moved them; re-base
+                    FRAME_MINOR = self.stats.minor;
+                }
+                STALE_WRITE[0] += 1;
+                if STALE_WRITE[1] == 0 {
+                    let bad = |g: &Gc, v: Value| {
+                        v.is_heap() && g.is_young(v.as_heap()) && !g.in_live_half(v.as_heap())
+                    };
+                    // Objects born inside this frame: the origin stamp says the
+                    // holder was allocated here, so the write is into one of
+                    // them. Bounded by the frame, not by reachability.
+                    let mut a = FRAME_START;
+                    'outer: while a < self.bump {
+                        let size = size_of(&self.sp, a);
+                        if size < 8 || a + size > self.bump {
+                            break;
+                        }
+                        let t = crate::obj::ty(&self.sp, a);
+                        if t != TY_FREE && t != TY_FWD && layout_of(t) == Layout::Vals {
+                            let n = len(&self.sp, a);
+                            for i in 0..n {
+                                let v = slot(&self.sp, a, i);
+                                if bad(self, v) {
+                                    STALE_WRITE[1] += 1;
+                                    STALE_WRITE[2] = a;
+                                    STALE_WRITE[3] = i;
+                                    STALE_WRITE[4] = v.as_heap();
+                                    STALE_WRITE[5] = t as u32;
+                                    // Which allocation inside this frame caught
+                                    // it, and what was being allocated then --
+                                    // enough to name the call rather than the
+                                    // function.
+                                    STALE_WRITE[6] = WATCH_HIT[0];
+                                    STALE_WRITE[7] = ty as u32;
+                                    break 'outer;
+                                }
+                            }
+                        }
+                        a += size;
+                    }
                 }
             }
         }

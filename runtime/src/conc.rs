@@ -1341,6 +1341,8 @@ impl Rt {
         unsafe {
             crate::gc::WATCH_MSG = if v.is_heap() { v.as_heap() } else { 0 };
             crate::gc::WATCH_ARMED = crate::gc::WATCH_MSG != 0;
+            crate::gc::FRAME_START = self.gc.bump_now();
+            crate::gc::FRAME_MINOR = self.gc.stats.minor;
         }
         let out = self.port_send_inner(p, v);
         #[cfg(feature = "diagnostics")]

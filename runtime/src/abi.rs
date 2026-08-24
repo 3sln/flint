@@ -392,6 +392,14 @@ pub extern "C" fn stat_origin(addr: u32) -> u32 {
     }
 }
 
+/// `[checks, hits, holder, slot, target, holder type]` for a stale ADDRESS found
+/// written into an object born inside the watched frame.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_stale_write(i: u32) -> u32 {
+    unsafe { if (i as usize) < 8 { crate::gc::STALE_WRITE[i as usize] } else { 0 } }
+}
+
 /// `[allocations checked inside port-send, message unrooted at one, the type
 /// being allocated there, its allocation serial]`
 #[cfg(feature = "diagnostics")]
