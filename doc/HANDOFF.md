@@ -220,51 +220,67 @@ An early reading from the wrong port, for whatever it is worth: it was scanned
 63 times across 706 minor collections. If that ratio holds for the failing port
 it is worth explaining, but it proves nothing yet.
 
-## THE TRACE, AND THE ANSWER
+## THE TRACE — AND A CORRECTION TO IT
 
-The narrow question — at the collection that moved the message, was the port in
-the **taken** remembered list — is answered. Instrumented in `minor`, right after
-`core::mem::take(&mut self.remembered)`, checking each watched channel port for
-presence in that list *and* whether its inbox was non-empty at the time:
+**Retracted:** an earlier run of this trace reported "one untraced old-to-young
+edge, one lost wave" and it was an **instrument artifact**. It registered watch
+addresses for ports at enqueue time *without checking their generation*. A young
+port's address goes stale the moment it is promoted, so the later reads were of
+arbitrary memory. Watching only OLD ports — whose addresses do not move — the
+same measurement reports **zero**.
 
-    ports watched: 2                       minors: 731
-    non-empty inbox, port PRESENT in the taken list:      2
-    non-empty inbox, port ABSENT from it:                14
-      ... of which the inbox was YOUNG:                    1
-    at that moment: in_remset FLAG = 0, age = 0
+With a sound watch, the remembered set is clean on every axis:
 
-**One untraced old-to-young edge, and one lost wave.** The thirteen other
-absences had an OLD inbox, where there is no edge to miss. The one that matters
-is an OLD port holding a YOUNG inbox during a minor, with no remembered-set
-record of it at all.
+    enqueues creating an old-port -> young-inbox edge:            129
+      of which the port was NOT flagged in_remset after the write:  0
+      of which the port was NOT in the remembered list after it:    0
+    START-of-minor: old port, young inbox, absent from taken list:  0
+    END-of-minor  invariant violations:                             0
+    END-of-major  invariant violations:                             0
 
-And the flag was **clear**, not set — so this is *not* the flag/list divergence
-that would make `remember()` short-circuit. That was checked because it is the
-classic failure here, and it is out. The edge was **never recorded**, not lost.
+So: the barrier records every edge, and the invariant "an old object pointing at
+a young one is in the remembered set" holds at the start of every minor, the end
+of every minor, and the end of every major. **The remembered set is not the
+bug**, and neither is the barrier.
 
-Note also `age = 0` on an old-space port, which is worth explaining while
-looking: promotion sets the age explicitly, so age 0 at an old address suggests
-the port did not arrive there by the promotion path.
+That leaves the original observation unexplained: a `TY_FWD` value is read out of
+the inbox vector's tail node while the port, the vector and the node are all
+reachable, and the port is correctly remembered.
 
-One instrument flaw worth not repeating: the first version counted moves by
-hooking `forward()` and asking whether the port was present. It reported zero
-moves out of 64 messages, which looked like a result and was not — a message
-whose edge is never traced is never forwarded, so that counter could not fire.
-Measure presence directly, not through the thing presence causes.
+## Two instrument rules this bug has now taught, both the hard way
+
+Keep these beside the monotonicity table; all three are about instruments that
+cannot answer the question asked of them.
+
+1. **Measure presence directly, not through the thing presence causes.** Counting
+   moves by hooking `forward()` reported zero out of 64 messages and looked like
+   a clean result. It was structurally incapable of being anything else: a
+   message whose edge is never traced is never forwarded.
+2. **A watch address is only valid if the object cannot move.** Old objects do
+   not move and are safe to watch; young ones are not. Registering a watch
+   without checking the generation produced a confident, wrong "the bug is
+   located" result.
+
+Every check must also exclude the collector's own reads, and any flag it uses
+belongs on `Space` rather than in a global — see above.
 
 ## Where that leaves it
 
-The barrier in `Gc::set_slot` is correct and `port_enqueue` goes through it, so
-the write that created this edge either happened while the port was still YOUNG
-(no barrier needed then, none recorded), and the port was afterwards moved to old
-space without the edge being re-recorded. `forward()` pushes every copy onto
-`self.work` and `minor` drains it last, so `scan_object` does run on a promoted
-object and does `remember` it when it points young — which is why `age = 0` is
-the loose thread: it suggests this port reached old space some other way.
+Ruled out by measurement, not argument: the write barrier, the remembered set at
+every phase boundary, the weak `INTERN_PORT` table, reachability of the whole
+chain, trie/node granularity (the inbox is a one-element vector), a stale port
+copy, copy-without-scan, and remset-processed-too-late.
 
-Next: find how a port gets an old-space address with age 0, and whether that path
-records the edge. `alloc_old` is reached both by promotion and by the
-LARGE_OBJECT path in `alloc`, and only one of those goes through `forward`.
+What remains unexplained is narrow and precise: **a `TY_FWD` value is read from
+the inbox vector's tail node, while the port is old, reachable and correctly
+remembered, the inbox is young and reachable, and the tail node is reachable.**
+
+The next thing to measure is the one not yet instrumented: whether `scan_object`
+is actually reached for that specific inbox vector and tail node during the minor
+that moves the message — not whether the port is remembered, which is now known
+to be true, but whether the traversal from the remembered port through
+`PT_INBOX` to `V_TAIL` to element 0 actually happens. Watch by object identity
+using an address that cannot move, and log each hop.
 
 ## Reproduction
 
