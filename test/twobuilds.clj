@@ -35,6 +35,11 @@
   (when-not (zero? (:exit r)) (println "build failed:" (:all r)) (System/exit 1)))
 (def prod (String. (fs/read-all-bytes "out/tb-prod.wasm") "ISO-8859-1"))
 (println (format "    production module %d bytes" (fs/size "out/tb-prod.wasm")))
+;; The floor from 0005, measured against the build it is a claim about. It used
+;; to live in `test/snapshot.clj`, which runs under `--diagnostics` -- so it was
+;; really measuring the size of the instrumentation, and it moved the day the
+;; instrumentation grew.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-prod.wasm") 205000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

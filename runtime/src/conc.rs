@@ -947,7 +947,7 @@ impl Rt {
                 if self.is_map(self.r(vi)) {
                     let mut items: Vec<Value> = Vec::new();
                     let mut st = &mut items;
-                    self.map_for_each(v, &mut st, &mut |_rt, k, val, st| {
+                    self.map_for_each(self.r(vi), &mut st, &mut |_rt, k, val, st| {
                         st.push(k);
                         st.push(val);
                     });
@@ -962,7 +962,7 @@ impl Rt {
                 } else if self.is_set(self.r(vi)) {
                     let mut items: Vec<Value> = Vec::new();
                     let mut st = &mut items;
-                    self.set_for_each(v, &mut st, &mut |_rt, k, st| st.push(k));
+                    self.set_for_each(self.r(vi), &mut st, &mut |_rt, k, st| st.push(k));
                     for it in items {
                         let ii = self.push(it);
                         out = self.check_sendable_at(self.r(ii), depth + 1);
@@ -1372,12 +1372,20 @@ impl Rt {
             let msg = alloc::format!("send: {why}");
             return self.throw_str("IllegalStateException", &msg);
         }
-        if let Err(e) = self.check_sendable(v) {
-            return self.throw_str("IllegalArgumentException", &e);
-        }
+        // Root FIRST, check second. `check_sendable` walks the value, and
+        // walking a sequential value allocates -- so it can collect, and an
+        // unrooted `p`/`v` comes back pointing into the abandoned semispace.
+        // Nothing downstream can tell that from a live pointer: `is_young`
+        // spans both halves, so the write barrier and the generational
+        // invariant both pass, and the stale address is copied faithfully into
+        // the inbox and every clone of it thereafter.
         let base = self.mark();
         let pi = self.push(p);
         let vi = self.push(v);
+        if let Err(e) = self.check_sendable(self.r(vi)) {
+            self.pop_to(base);
+            return self.throw_str("IllegalArgumentException", &e);
+        }
         let kind = fx(self.slot(self.r(pi), PT_KIND));
         if kind == K_FLINT {
             // Bound the host's queue in BYTES: back-pressure exists to bound

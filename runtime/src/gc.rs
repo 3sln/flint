@@ -100,7 +100,22 @@ pub static mut FRAME_START: u32 = 0;
 pub static mut FRAME_MINOR: u64 = 0;
 /// `[checks, hits, holder, slot, target, holder type]`
 #[cfg(feature = "diagnostics")]
-pub static mut STALE_WRITE: [u32; 8] = [0; 8];
+pub static mut STALE_WRITE: [u32; 10] = [0; 10];
+/// `[watched message at the hit, its type, was it in a root then]`
+#[cfg(feature = "diagnostics")]
+pub static mut STALE_CMP: [u32; 6] = [0; 6];
+
+/// A stale value caught at the instant it is written, rather than found later
+/// in a scan. [count, obj, slot, value, obj-type, native, collection]
+pub static mut STALE_SET: [u32; 10] = [0; 10];
+
+/// Roots that are still stale after a collection has finished.
+/// [count, first address, collection, which array, index]
+pub static mut STALE_ROOT: [u32; 7] = [0; 7];
+
+/// The whole shadow stack at the instant of the stale write, so the frame that
+/// owns the bad slot is read off rather than inferred. [len, then addresses]
+pub static mut STALE_SHADOW: [u32; 65] = [0; 65];
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_N: usize = 0;
 #[cfg(feature = "diagnostics")]
@@ -308,6 +323,10 @@ pub struct Gc {
     /// Guards the retry below: a collection must not try to collect again when
     /// it is the thing that ran out of room.
     pub(crate) collecting: bool,
+    /// Inside a collection. A collector writes leftover addresses on purpose;
+    /// only mutator writes are suspect.
+    #[cfg(feature = "diagnostics")]
+    pub(crate) in_collect: bool,
     /// Set by tests/benchmarks to force a collection at every allocation.
     #[cfg(feature = "diagnostics")]
     pub stress: bool,
@@ -467,6 +486,8 @@ impl Gc {
             stats: GcStats::default(),
             oom: false,
             collecting: false,
+            #[cfg(feature = "diagnostics")]
+            in_collect: false,
             #[cfg(feature = "diagnostics")]
             stress: false,
             #[cfg(feature = "diagnostics")]
@@ -751,9 +772,6 @@ impl Gc {
                 }
                 STALE_WRITE[0] += 1;
                 if STALE_WRITE[1] == 0 {
-                    let bad = |g: &Gc, v: Value| {
-                        v.is_heap() && g.is_young(v.as_heap()) && !g.in_live_half(v.as_heap())
-                    };
                     // Objects born inside this frame: the origin stamp says the
                     // holder was allocated here, so the write is into one of
                     // them. Bounded by the frame, not by reachability.
@@ -768,7 +786,16 @@ impl Gc {
                             let n = len(&self.sp, a);
                             for i in 0..n {
                                 let v = slot(&self.sp, a, i);
-                                if bad(self, v) {
+                                // REACHABLE only. Young space is never swept, so
+                                // a linear walk of it sees discarded
+                                // intermediates too -- and a dead node holding a
+                                // pre-collection address is not a bug, it is
+                                // garbage. Walking too much is the same failure
+                                // as walking too little.
+                                let is_bad = v.is_heap()
+                                    && self.is_young(v.as_heap())
+                                    && !self.in_live_half(v.as_heap());
+                                if is_bad && self.reachable(roots, a) {
                                     STALE_WRITE[1] += 1;
                                     STALE_WRITE[2] = a;
                                     STALE_WRITE[3] = i;
@@ -780,6 +807,41 @@ impl Gc {
                                     // function.
                                     STALE_WRITE[6] = WATCH_HIT[0];
                                     STALE_WRITE[7] = ty as u32;
+                                    // Does anything OUTSIDE this frame already
+                                    // hold the same stale address? If so the
+                                    // source predates the frame and this holder
+                                    // is a carrier; if not, the introduction is
+                                    // here. Do not assume -- this bug has made
+                                    // a carrier look like a cause twice.
+                                    let target = v.as_heap();
+                                    STALE_CMP[0] = WATCH_MSG;
+                                    STALE_CMP[1] = crate::obj::ty(&self.sp, WATCH_MSG) as u32;
+                                    STALE_CMP[2] = roots.holds(WATCH_MSG) as u32;
+                                    STALE_CMP[3] = len(&self.sp, a);
+                                    STALE_CMP[4] = crate::obj::ty(&self.sp, target) as u32;
+                                    STALE_CMP[5] = crate::obj::len(&self.sp, target);
+                                    let mut b = self.from;
+                                    while b < FRAME_START {
+                                        let bs = size_of(&self.sp, b);
+                                        if bs < 8 || b + bs > FRAME_START { break; }
+                                        let bt = crate::obj::ty(&self.sp, b);
+                                        if bt != TY_FREE && bt != TY_FWD
+                                            && layout_of(bt) == Layout::Vals
+                                        {
+                                            let bn = len(&self.sp, b);
+                                            for j in 0..bn {
+                                                if slot(&self.sp, b, j).is_heap()
+                                                    && slot(&self.sp, b, j).as_heap() == target
+                                                {
+                                                    STALE_WRITE[8] = b;
+                                                    STALE_WRITE[9] = bt as u32;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if STALE_WRITE[8] != 0 { break; }
+                                        b += bs;
+                                    }
                                     break 'outer;
                                 }
                             }
@@ -866,6 +928,29 @@ impl Gc {
     /// Store a value into a slot, running the generational write barrier.
     #[inline]
     pub fn set_slot(&mut self, obj: u32, i: u32, v: Value) {
+        // A young pointer that is not in the LIVE half is a leftover from
+        // before a flip. `is_young` spans both semispaces, so no barrier and no
+        // generational check can tell one from the other -- only this can, and
+        // only at the moment of the write, which is the only moment that names
+        // the culprit.
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            if !self.in_collect
+                && v.is_heap()
+                && self.is_young(v.as_heap())
+                && !self.in_live_half(v.as_heap())
+            {
+                STALE_SET[0] += 1;
+                if STALE_SET[1] == 0 {
+                    STALE_SET[1] = obj;
+                    STALE_SET[2] = i;
+                    STALE_SET[3] = v.as_heap();
+                    STALE_SET[4] = crate::obj::ty(&self.sp, obj) as u32;
+                    STALE_SET[5] = CUR_NATIVE;
+                    STALE_SET[6] = self.stats.minor as u32;
+                }
+            }
+        }
         set_slot_raw(&self.sp, obj, i, v);
         if v.is_heap() && self.is_young(v.as_heap()) && !self.is_young(obj) {
             self.remember(obj);
@@ -1103,11 +1188,56 @@ impl Gc {
         }
     }
 
+    /// Is `target` reachable from the roots right now? Read-only; uses the mark
+    /// bits and clears them again.
+    ///
+    /// Young space is never swept, so a linear walk of it sees discarded
+    /// intermediates as well as live objects -- and a dead node holding a
+    /// pre-collection address is garbage, not a bug. Walking too much is the
+    /// same failure as walking too little.
+    #[cfg(feature = "diagnostics")]
+    pub fn reachable(&mut self, roots: &mut Roots, target: u32) -> bool {
+        let mut work: Vec<u32> = Vec::new();
+        let mut seen: Vec<u32> = Vec::new();
+        roots.for_each(|v| {
+            if v.is_heap() {
+                work.push(v.as_heap());
+            }
+        });
+        let mut found = false;
+        while let Some(a) = work.pop() {
+            if a == target {
+                found = true;
+                break;
+            }
+            if marked(&self.sp, a) {
+                continue;
+            }
+            set_marked(&self.sp, a, true);
+            seen.push(a);
+            if layout_of(crate::obj::ty(&self.sp, a)) == Layout::Vals {
+                let n = len(&self.sp, a);
+                for i in 0..n {
+                    let v = slot(&self.sp, a, i);
+                    if v.is_heap() {
+                        work.push(v.as_heap());
+                    }
+                }
+            }
+        }
+        for a in seen {
+            set_marked(&self.sp, a, false);
+        }
+        found
+    }
+
     pub fn minor(&mut self, roots: &mut Roots) {
         #[cfg(feature = "diagnostics")]
         unsafe {
             TRACING = self.stats.minor + 1 == self.trace_cycle;
         }
+        #[cfg(feature = "diagnostics")]
+        let was_collecting = core::mem::replace(&mut self.in_collect, true);
         #[cfg(feature = "diagnostics")]
         if self.verify_remset {
             let c = self.stats.minor + 1;
@@ -1208,6 +1338,46 @@ impl Gc {
         self.bump = self.to_bump;
         self.from_end = self.from + self.half;
         self.note_peak();
+        // A root that still points into the abandoned half once the flip is
+        // done. Nothing downstream can distinguish this from a live pointer --
+        // `is_young` spans both semispaces -- so it has to be caught here or
+        // not at all.
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            let (from, bump) = (self.from, self.bump);
+            let (yb, span) = (self.young_base, self.half * 2);
+            STALE_ROOT[5] += 1;
+            let mut check = |v: &Value, which: u32, idx: u32| {
+                STALE_ROOT[6] += 1;
+                if v.is_heap() {
+                    let a = v.as_heap();
+                    if a.wrapping_sub(yb) < span && !(a >= from && a < bump) {
+                        STALE_ROOT[0] += 1;
+                        if STALE_ROOT[1] == 0 {
+                            STALE_ROOT[1] = a;
+                            STALE_ROOT[2] = self.stats.minor as u32 + 1;
+                            STALE_ROOT[3] = which;
+                            STALE_ROOT[4] = idx;
+                        }
+                    }
+                }
+            };
+            for (k, v) in roots.stack[..roots.stack_top].iter().enumerate() {
+                check(v, 0, k as u32);
+            }
+            for (k, v) in roots.shadow.iter().enumerate() {
+                check(v, 1, k as u32);
+            }
+            for (k, v) in roots.globals.iter().enumerate() {
+                check(v, 2, k as u32);
+            }
+            for (k, v) in roots.consts.iter().enumerate() {
+                check(v, 3, k as u32);
+            }
+            for (k, v) in roots.singletons.iter().enumerate() {
+                check(v, 4, k as u32);
+            }
+        }
         #[cfg(feature = "diagnostics")]
         if self.stats.minor == self.watch_end_cycle {
             self.watch_end_bump = self.bump;
@@ -1224,6 +1394,10 @@ impl Gc {
             if self.remset_violations > before {
                 self.remset_end_violations += self.remset_violations - before;
             }
+        }
+        #[cfg(feature = "diagnostics")]
+        {
+            self.in_collect = was_collecting;
         }
         #[cfg(debug_assertions)]
         self.sp.in_gc.set(false);
@@ -1245,6 +1419,8 @@ impl Gc {
 
     pub fn major(&mut self, roots: &mut Roots) {
         self.minor(roots);
+        #[cfg(feature = "diagnostics")]
+        let was_collecting = core::mem::replace(&mut self.in_collect, true);
         #[cfg(debug_assertions)]
         self.sp.in_gc.set(true);
         self.stats.major += 1;
@@ -1308,6 +1484,10 @@ impl Gc {
         }
         self.stats.old_live = self.old_live;
         self.stats.old_capacity = self.old_capacity;
+        #[cfg(feature = "diagnostics")]
+        {
+            self.in_collect = was_collecting;
+        }
     }
 
     fn sweep_old(&mut self) {

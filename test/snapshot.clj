@@ -43,7 +43,15 @@
 (def pure-bytes (String. (fs/read-all-bytes "out/sn-pure.wasm") "ISO-8859-1"))
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_b_snapshot"]]
   (check (str "a pure module has no " sym) (str/includes? pure-bytes sym) false))
-(check-that "the floor is unchanged by 0015" (< pure-size 205000))
+
+;; The absolute floor belongs to `test/twobuilds.clj`, and only there: this file
+;; runs against a DIAGNOSTICS build, where the module carries every instrument
+;; in the runtime and its size measures how much instrumentation exists rather
+;; than what 0005 claims. What is measurable here is the claim itself -- that
+;; asking for snapshots is what costs, and not asking costs nothing -- which the
+;; symbol checks above settle exactly, and the delta below bounds.
+(check-that "the snapshot surface costs only the program that asks for it"
+            (< (- snap-size pure-size) 25000))
 
 ;; The program the inspector is pointed at: it allocates, snapshots, allocates
 ;; more, and snapshots again, so the two can be diffed across real work.

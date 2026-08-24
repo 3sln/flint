@@ -392,12 +392,19 @@ pub extern "C" fn stat_origin(addr: u32) -> u32 {
     }
 }
 
+/// `[the watched message at the hit, its type, whether a root held it]`
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_stale_cmp(i: u32) -> u32 {
+    unsafe { if (i as usize) < 6 { crate::gc::STALE_CMP[i as usize] } else { 0 } }
+}
+
 /// `[checks, hits, holder, slot, target, holder type]` for a stale ADDRESS found
 /// written into an object born inside the watched frame.
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_stale_write(i: u32) -> u32 {
-    unsafe { if (i as usize) < 8 { crate::gc::STALE_WRITE[i as usize] } else { 0 } }
+    unsafe { if (i as usize) < 10 { crate::gc::STALE_WRITE[i as usize] } else { 0 } }
 }
 
 /// `[allocations checked inside port-send, message unrooted at one, the type
@@ -561,3 +568,26 @@ const _: () = {
     let _ = NIL.bits();
     let _: Option<Value> = None;
 };
+
+/// The stale write caught at the instant it happened.
+/// 0 count, 1 object, 2 slot, 3 value, 4 object type, 5 native, 6 collection.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_stale_set(i: u32) -> u32 {
+    unsafe { *crate::gc::STALE_SET.get(i as usize).unwrap_or(&0) }
+}
+
+/// Roots left stale by a collection. 0 count, 1 address, 2 collection,
+/// 3 which array (0 stack, 1 shadow, 2 globals, 3 consts, 4 singletons), 4 index.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_stale_root(i: u32) -> u32 {
+    unsafe { *crate::gc::STALE_ROOT.get(i as usize).unwrap_or(&0) }
+}
+
+/// The shadow stack at the stale write. 0 is the length, 1.. the addresses.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_stale_shadow(i: u32) -> u32 {
+    unsafe { *crate::gc::STALE_SHADOW.get(i as usize).unwrap_or(&0) }
+}

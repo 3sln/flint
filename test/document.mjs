@@ -174,6 +174,16 @@ console.log('documents');
   ok('  ... and read every byte', r.out.includes(`:bytes ${total}`), r.out);
   ok('  ... while peak memory stayed a fraction of the ask',
      r.peakLive < total / 3, `peak live ${r.peakLive} against ${total} total`);
+  // This run is the reproducer for the stale-pointer bug: `port_send` used to
+  // hand its unrooted Rust argument to `check_sendable`, which allocates, and
+  // pushed the result of that stale local as a root. One wave in sixty-four
+  // went missing and everything else read as success -- so the guard lives
+  // here, where it failed, and it asserts its own coverage before its zero.
+  const g = r.exports;
+  ok('  ... and not one stale pointer was written in the whole run',
+     g.stat_stale_set(0) === 0 && g.stat_stale_root(0) === 0 && g.stat_stale_root(5) > 0,
+     `stale writes ${g.stat_stale_set(0)}, stale roots ${g.stat_stale_root(0)}, ` +
+     `after ${g.stat_stale_root(5)} collections walked`);
 }
 
 // --- peak memory follows what is KEPT, not the document size ----------------

@@ -50,6 +50,10 @@
                  "console.log(JSON.stringify({start: i.exports.stat_remset_violations(),"
                  " end: i.exports.stat_remset_end_violations(),"
                  " dead: i.exports.stat_dead_half(99,0),"
+                 " staleWrite: i.exports.stat_stale_set(0),"
+                 " staleRoot: i.exports.stat_stale_root(0),"
+                 " rootWalks: i.exports.stat_stale_root(5),"
+                 " rootSlots: i.exports.stat_stale_root(6),"
                  " collections: Number(i.exports.stat_collections())}));})"))
       out (str/trim (str (:out r) (:err r)))
       ]
@@ -63,4 +67,25 @@
   ;; barrier, not the check above -- can tell it from a live one.
   (if (str/includes? out "\"dead\":0")
     (println "  ok   and no live object points into the DEAD half")
-    (do (println "  FAIL a live object holds a pre-flip pointer") (System/exit 1))))
+    (do (println "  FAIL a live object holds a pre-flip pointer") (System/exit 1)))
+  ;; A scan finds a stale pointer somewhere; only a check AT THE WRITE names the
+  ;; code that put it there. This one caught `port_send` calling `check_sendable`
+  ;; -- which allocates -- with an unrooted Rust local, and then pushing the
+  ;; result of that stale local as a root.
+  (if (str/includes? out "\"staleWrite\":0")
+    (println "  ok   and no stale pointer is ever WRITTEN into an object")
+    (do (println "  FAIL a stale pointer was written into a live object") (System/exit 1)))
+  ;; And the other end of the same question: a collection must leave no root
+  ;; pointing into the half it just abandoned. Coverage is asserted before the
+  ;; zero is believed -- a walk that never ran also reports zero.
+  (let [walks (some-> (re-find #"\"rootWalks\":(\d+)" out) second parse-long)
+        slots (some-> (re-find #"\"rootSlots\":(\d+)" out) second parse-long)]
+    (cond
+      (or (nil? walks) (zero? walks) (nil? slots) (zero? slots))
+      (do (println "  FAIL the root walk never ran, so its zero means nothing") (System/exit 1))
+      (str/includes? out "\"staleRoot\":0")
+      (println (str "  ok   and no collection leaves a root in the dead half"
+                    " (" walks " collections, " slots " root slots)"))
+      :else
+      (do (println "  FAIL a collection left a root pointing into the dead half")
+          (System/exit 1)))))
