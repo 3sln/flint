@@ -47,6 +47,35 @@ const MIN_CHUNK: u32 = 1024 * 1024;
 /// stored so that rehashing after a collection never has to look at the heap.
 
 pub static mut PHASE: u32 = 0;
+// Who last wrote each value-stack slot. A slot that is traced, marked, on a
+// consistent heap and STILL points at freed memory cannot have been corrupted
+// at collection time -- it must have been written afterwards with a value read
+// beforehand. This names the instruction that wrote it.
+pub static mut SH_VAL: [u64; 256] = [0; 256];
+pub static mut SH_OP: [u32; 256] = [0; 256];
+pub static mut SH_IP: [u32; 256] = [0; 256];
+pub static mut LAST_OP: u32 = 999;
+pub static mut FRAMES_NOW: i64 = 0;
+pub static mut LAST_IP: u32 = 0;
+pub static mut BAD_OP: i64 = -1;
+pub static mut BAD_IP: i64 = -1;
+pub static mut BAD2: [i64; 6] = [-1; 6];
+pub static mut RING: [u32; 96] = [0; 96];
+pub static mut RING_N: usize = 0;
+pub static mut RING_FROZEN: bool = false;
+pub static mut ARMED: bool = false;
+pub static mut MIN_TOP: i64 = 1 << 40;
+pub static mut MIN_TOP_FRAMES: i64 = -1;
+pub static mut MIN_TOP_OP: i64 = -1;
+#[inline]
+pub fn ring(op: u32, ip: u32, top: u32) {
+    unsafe {
+        if RING_FROZEN { return; }
+        let i = (RING_N % 32) * 3;
+        RING[i] = op; RING[i + 1] = ip; RING[i + 2] = top;
+        RING_N += 1;
+    }
+}
 pub static mut TRACE_TOP: usize = 0;
 pub static mut TRACE_V1: u64 = 0;
 pub static mut BAD: [i64; 6] = [-1; 6];
@@ -473,6 +502,8 @@ impl Gc {
                         BAD[0] = w as i64; BAD[1] = i as i64; BAD[2] = t as i64;
                         BAD[3] = PHASE as i64; BAD[4] = roots.stack_top as i64;
                         BAD[5] = self.stats.minor as i64;
+                        if w == 0 && i < 256 { BAD_OP = SH_OP[i] as i64; BAD_IP = SH_IP[i] as i64; }
+                        RING_FROZEN = true;
                         BAD_TOP = TRACE_TOP as i64;
                         BAD_V1 = TRACE_V1 as i64;
                     }
@@ -625,6 +656,7 @@ impl Gc {
     }
 
     pub fn minor(&mut self, roots: &mut Roots) {
+        unsafe { if FRAMES_NOW > 0 && (roots.stack_top as i64) < MIN_TOP { MIN_TOP = roots.stack_top as i64; MIN_TOP_FRAMES = FRAMES_NOW; MIN_TOP_OP = LAST_OP as i64; } }
         unsafe { TRACE_TOP = roots.stack_top; TRACE_V1 = if roots.stack.len() > 1 { roots.stack[1].0 } else { 0 }; }
         self.stats.minor += 1;
         self.to_bump = self.to;

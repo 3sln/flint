@@ -268,7 +268,10 @@ pub extern "C" fn stat_peak_live() -> u64 {
 pub extern "C" fn set_slice(lo: u32, hi: u32) { unsafe { crate::conc::SLICE_OVERRIDE = ((hi as u64) << 32) | lo as u64 } }
 
 #[no_mangle]
-pub extern "C" fn stat_bad(i: u32) -> i64 { unsafe { if i < 6 { crate::gc::BAD[i as usize] } else if i == 6 { crate::gc::BAD_TOP } else { crate::gc::BAD_V1 } } }
+pub extern "C" fn stat_ring(i: u32) -> u32 { unsafe { if i == 99 { crate::gc::RING_N as u32 } else if i < 96 { crate::gc::RING[i as usize] } else { 0 } } }
+
+#[no_mangle]
+pub extern "C" fn stat_bad(i: u32) -> i64 { unsafe { match i { 0..=5 => crate::gc::BAD[i as usize], 6 => crate::gc::BAD_TOP, 7 => crate::gc::BAD_V1, 8 => crate::gc::BAD_OP, 9 => crate::gc::BAD_IP, 16 => crate::gc::MIN_TOP, 17 => crate::gc::MIN_TOP_FRAMES, 18 => crate::gc::MIN_TOP_OP, _ => crate::gc::BAD2[(i - 10) as usize] } } }
 
 #[no_mangle]
 pub extern "C" fn stat_reaped(i: u32) -> i64 { unsafe { if i == 99 { crate::gc::REAPED_N as i64 } else if i == 98 { crate::gc::ORPHANED_N as i64 } else if i < 32 { crate::gc::REAPED[i as usize] } else { crate::gc::ORPHANED[(i - 32) as usize] } } }
