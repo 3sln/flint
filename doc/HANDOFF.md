@@ -751,6 +751,41 @@ EDN, so the guest-side construction path — the EDN reader, `conj`, `into`, or
 whatever `content-each` uses to accumulate a wave — is where to look next. The
 runtime-side vector machinery is now cleared by audit rather than by assumption.
 
+## Allocation-origin stamping: it works, and it names an index
+
+Rather than auditing a fresh space by reading — which is how six hypotheses were
+spent — allocations are now stamped with the native that was running when they
+happened. A diagnostics-only global set around `call_native` on both entry paths,
+and a fixed ring recording `(address, native)` at the bump.
+
+    holder@3090304 slot 1 -> 3079624   at collection 722
+        holder allocated by: native import #63
+        the second holder: the interpreter itself (no native running)
+
+**So the node holding the stale pointer was built by a native, in the gap right
+after collection 721** — which confirms the third option and rules out the guest
+side by measurement rather than by the (correct) argument that guest values live
+in the precisely-scanned value stack.
+
+Two things about the instrument, both learned by getting them wrong:
+
+* **The ring must be scoped to a window.** Unscoped, 18 million allocations
+  overwrite the interesting entry long before anything asks; the first run
+  reported "not in the origin ring" for every holder. `set_gc_origin_window`
+  narrows it to the gap between two collections, which is about 25 000
+  allocations and fits.
+* **The index cannot be resolved to a name from inside wasm.** `image.natives`
+  keeps the runtime SLOT, not the name constant, and on wasm a slot is a wasm
+  table index rather than a position in `builtins::host_registry` — which is
+  host-only anyway. Mapping slot 117 through the host registry printed
+  `flint/pow`, which is obviously wrong, and is a good example of a lookup that
+  produces a plausible answer from the wrong table.
+
+**Next, and it is small:** retain the name constant in `Image::natives` when the
+image is loaded, so a diagnostics build can report "import #63" as a name. The
+loader already reads that constant and discards it. Then re-run the above and
+the site names itself.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.

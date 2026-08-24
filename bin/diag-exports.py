@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""Add the diagnostic edge to the runtime unit's manifest.
+
+Only the `--diagnostics` build declares these, which is what keeps a production
+module free of them without `flint` needing a flag of its own
+(doc/decisions/0016).
+"""
+import sys
+
+EXPORTS = [
+    "stat_bytes_allocated", "stat_collections", "stat_peak_live", "stat_heap_used",
+    "collect_now", "set_gc_stress", "set_gc_stress_window", "stat_allocs",
+    "set_gc_upgrade_window", "set_gc_trace_cycle", "stat_trace_n", "stat_trace_addr",
+    "stat_trace_kind", "set_gc_verify_remset", "stat_remset_violations",
+    "stat_remset_bad", "stat_remset_end_violations", "stat_remset_cover",
+    "set_gc_remset_watch", "stat_chain2", "stat_dead_half", "stat_limbo",
+    "set_gc_watch_end", "stat_end_bump", "stat_origin", "set_gc_origin_window", "stat_native_slot",
+]
+
+path = sys.argv[1]
+s = open(path).read().rstrip()
+cut = s.rfind("}")
+if cut < 0:
+    sys.exit(f"{path}: not a unit manifest")
+s = s[:cut] + " :exports [" + " ".join(f'"{e}"' for e in EXPORTS) + "]}\n"
+open(path, "w").write(s)

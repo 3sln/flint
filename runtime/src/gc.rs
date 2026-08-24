@@ -60,6 +60,21 @@ pub static mut TRACE_N: usize = 0;
 pub static mut TRACING: bool = false;
 #[cfg(feature = "diagnostics")]
 pub static mut CHAIN: [u32; 16] = [0; 16];
+
+// --- allocation origin ------------------------------------------------------
+// Which native was running when an object was allocated. A stale pointer can
+// only come from somewhere the collector does not walk -- a Rust local -- so
+// "who built this node" is answerable directly rather than by reading files.
+#[cfg(feature = "diagnostics")]
+pub static mut CUR_NATIVE: u32 = 0;
+#[cfg(feature = "diagnostics")]
+pub const ORIG_CAP: usize = 1 << 16;
+#[cfg(feature = "diagnostics")]
+pub static mut ORIG_ADDR: [u32; ORIG_CAP] = [0; ORIG_CAP];
+#[cfg(feature = "diagnostics")]
+pub static mut ORIG_WHO: [u32; ORIG_CAP] = [0; ORIG_CAP];
+#[cfg(feature = "diagnostics")]
+pub static mut ORIG_N: usize = 0;
 #[cfg(feature = "diagnostics")]
 #[inline]
 pub fn note(addr: u32, kind: u32) {
@@ -352,6 +367,13 @@ pub struct Gc {
     pub watch_end_bump: u32,
     #[cfg(feature = "diagnostics")]
     pub watch_end_from: u32,
+    /// Record allocation origins only for collections in `[from, until)`. The
+    /// ring is a fixed size, so recording every allocation in an 18-million
+    /// allocation run overwrites the interesting one long before anything asks.
+    #[cfg(feature = "diagnostics")]
+    pub orig_from: u64,
+    #[cfg(feature = "diagnostics")]
+    pub orig_until: u64,
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
     #[cfg(feature = "diagnostics")]
@@ -427,6 +449,10 @@ impl Gc {
             watch_end_bump: 0,
             #[cfg(feature = "diagnostics")]
             watch_end_from: 0,
+            #[cfg(feature = "diagnostics")]
+            orig_from: u64::MAX,
+            #[cfg(feature = "diagnostics")]
+            orig_until: 0,
             #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };
@@ -651,6 +677,18 @@ impl Gc {
         }
         let a = self.bump;
         self.bump += size;
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            // A ring, so it costs a constant and cannot grow the heap it is
+            // observing -- and scoped to a window, so the entry that matters is
+            // still there when something asks.
+            if self.stats.minor >= self.orig_from && self.stats.minor < self.orig_until {
+                let i = ORIG_N & (ORIG_CAP - 1);
+                ORIG_ADDR[i] = a;
+                ORIG_WHO[i] = CUR_NATIVE;
+                ORIG_N += 1;
+            }
+        }
         write_header(&self.sp, a, ty, len_);
         self.zero_body(a, ty, len_);
         a

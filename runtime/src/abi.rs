@@ -349,6 +349,45 @@ pub extern "C" fn stat_limbo(i: u32, f: u32) -> u32 {
 
 /// Capture `bump` at the end of collection `c`, before anything allocated after
 /// it. `stat_end_bump(0)` is the bump, `(1)` the from base.
+/// Record allocation origins only for collections in `[from, until)`.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn set_gc_origin_window(from: u32, until: u32) {
+    unsafe {
+        let rt = ensure_rt();
+        rt.gc.orig_from = from as u64;
+        rt.gc.orig_until = until as u64;
+    }
+}
+
+/// Who allocated the object at `addr`: the native import index + 1, or 0 for the
+/// interpreter itself. Searches the origin ring newest-first.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_origin(addr: u32) -> u32 {
+    unsafe {
+        let n = crate::gc::ORIG_N;
+        let cap = crate::gc::ORIG_CAP;
+        let seen = if n < cap { n } else { cap };
+        for k in 1..=seen {
+            let i = (n - k) & (cap - 1);
+            if crate::gc::ORIG_ADDR[i] == addr {
+                return crate::gc::ORIG_WHO[i] + 1; // +1 so 0 means "not found"
+            }
+        }
+        0
+    }
+}
+
+/// The builtin table slot behind native import `idx`. The loaded image keeps
+/// slots rather than names, so this is the identity a host can compare against
+/// `Rt::host_native_slot` for a known builtin.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_native_slot(idx: u32) -> u32 {
+    unsafe { ensure_rt().image.natives.get(idx as usize).copied().unwrap_or(u32::MAX) }
+}
+
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn set_gc_watch_end(c: u32) {

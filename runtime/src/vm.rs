@@ -417,7 +417,17 @@ impl Rt {
         match ty(&self.gc.sp, callee.as_heap()) {
             TY_NATIVEFN => {
                 let idx = self.slot(callee, 0).as_fixnum() as u32;
+                #[cfg(feature = "diagnostics")]
+                let saved_native = unsafe { crate::gc::CUR_NATIVE };
+                #[cfg(feature = "diagnostics")]
+                unsafe {
+                    crate::gc::CUR_NATIVE = idx + 1;
+                }
                 let r = self.call_native(idx, callee_at + 1, argc);
+                #[cfg(feature = "diagnostics")]
+                unsafe {
+                    crate::gc::CUR_NATIVE = saved_native;
+                }
                 if self.thrown.bits() != crate::value::PARK.bits() {
                     self.roots.stack_top = callee_at;
                 }
@@ -917,7 +927,17 @@ impl Rt {
                     ip += 3;
                     commit!();
                     let base = self.roots.stack_top - argc;
+                    #[cfg(feature = "diagnostics")]
+                    let saved_native = unsafe { crate::gc::CUR_NATIVE };
+                    #[cfg(feature = "diagnostics")]
+                    unsafe {
+                        crate::gc::CUR_NATIVE = idx + 1;
+                    }
                     let r = self.call_native(idx, base, argc);
+                    #[cfg(feature = "diagnostics")]
+                    unsafe {
+                        crate::gc::CUR_NATIVE = saved_native;
+                    }
                     self.roots.stack_top = base;
                     if self.failed() {
                         // A park travels as a distinguished `thrown` value, so

@@ -43,14 +43,7 @@ cargo run -q -p flint-rt --features host-tools --bin catalogue > units/flint/rt.
 # The diagnostic edge lives on the runtime unit, so only this build declares it
 # and `flint` needs no flag of its own.
 if [ -n "$DIAG" ]; then
-  python3 - <<'EDN'
-import re
-p = "units/flint/rt.unit.edn"
-s = open(p).read().rstrip()
-extra = ' :exports ["stat_bytes_allocated" "stat_collections" "stat_peak_live" "stat_heap_used" "collect_now" "set_gc_stress" "set_gc_stress_window" "stat_allocs" "set_gc_upgrade_window" "set_gc_trace_cycle" "stat_trace_n" "stat_trace_addr" "stat_trace_kind" "set_gc_verify_remset" "stat_remset_violations" "stat_remset_bad" "stat_remset_end_violations" "stat_remset_cover" "set_gc_remset_watch" "stat_chain2" "stat_dead_half" "stat_limbo" "set_gc_watch_end" "stat_end_bump"]'
-s = s[:s.rfind("}")] + extra + "}\n"
-open(p, "w").write(s)
-EDN
+  python3 bin/diag-exports.py units/flint/rt.unit.edn
 fi
 
 # One parser unit per namespace. Each is its own object AND carries its own
