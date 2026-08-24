@@ -220,6 +220,52 @@ An early reading from the wrong port, for whatever it is worth: it was scanned
 63 times across 706 minor collections. If that ratio holds for the failing port
 it is worth explaining, but it proves nothing yet.
 
+## THE TRACE, AND THE ANSWER
+
+The narrow question — at the collection that moved the message, was the port in
+the **taken** remembered list — is answered. Instrumented in `minor`, right after
+`core::mem::take(&mut self.remembered)`, checking each watched channel port for
+presence in that list *and* whether its inbox was non-empty at the time:
+
+    ports watched: 2                       minors: 731
+    non-empty inbox, port PRESENT in the taken list:      2
+    non-empty inbox, port ABSENT from it:                14
+      ... of which the inbox was YOUNG:                    1
+    at that moment: in_remset FLAG = 0, age = 0
+
+**One untraced old-to-young edge, and one lost wave.** The thirteen other
+absences had an OLD inbox, where there is no edge to miss. The one that matters
+is an OLD port holding a YOUNG inbox during a minor, with no remembered-set
+record of it at all.
+
+And the flag was **clear**, not set — so this is *not* the flag/list divergence
+that would make `remember()` short-circuit. That was checked because it is the
+classic failure here, and it is out. The edge was **never recorded**, not lost.
+
+Note also `age = 0` on an old-space port, which is worth explaining while
+looking: promotion sets the age explicitly, so age 0 at an old address suggests
+the port did not arrive there by the promotion path.
+
+One instrument flaw worth not repeating: the first version counted moves by
+hooking `forward()` and asking whether the port was present. It reported zero
+moves out of 64 messages, which looked like a result and was not — a message
+whose edge is never traced is never forwarded, so that counter could not fire.
+Measure presence directly, not through the thing presence causes.
+
+## Where that leaves it
+
+The barrier in `Gc::set_slot` is correct and `port_enqueue` goes through it, so
+the write that created this edge either happened while the port was still YOUNG
+(no barrier needed then, none recorded), and the port was afterwards moved to old
+space without the edge being re-recorded. `forward()` pushes every copy onto
+`self.work` and `minor` drains it last, so `scan_object` does run on a promoted
+object and does `remember` it when it points young — which is why `age = 0` is
+the loose thread: it suggests this port reached old space some other way.
+
+Next: find how a port gets an old-space address with age 0, and whether that path
+records the edge. `alloc_old` is reached both by promotion and by the
+LARGE_OBJECT path in `alloc`, and only one of those goes through `forward`.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.
