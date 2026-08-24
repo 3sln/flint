@@ -64,6 +64,61 @@ collector's own update, and one test that is deliberately unbarriered), and
 `init_slot` forwards to `set_slot`. `port_enqueue` stores the new inbox through
 `Rt::set` -> `Gc::set_slot`, so the port -> inbox edge is barriered.
 
+## The trie / barrier-granularity hypothesis is disproved
+
+Worth stating flatly so it is not tried again. The idea was that
+`port_enqueue` mutates a slot inside a vector *internal node* while the barrier
+records the vector, so the node is never descended into — and that this would
+explain why it takes many waves, since a vector under ~32 elements has no
+internal node at all.
+
+Measured at the failing dequeue:
+
+    kind = 0 (a flint channel, not the host port)
+    port id = 7, cap = 1, inbox length = 1, head = 0
+
+**A one-element vector lives entirely in its tail. There is no internal node to
+miss.** The `TY_NODE` the assertion named is the vector's tail node, and slot 1
+is element 0 of it, because `node_set` writes `i + 1` (slot 0 is the transient
+edit field). The prediction that the failure needs ~32 in-flight messages is
+contradicted by the same measurement: there is exactly one.
+
+The audit backs that up independently: `vec_conj` is fully persistent —
+`node_clone` for the tail, `push_tail` clones the path, and every write goes
+through `node_set` -> `Gc::set_slot`, which is barriered. No old node is ever
+mutated in place.
+
+## And the port is not a stale copy
+
+The other discriminator was run too. At the failing dequeue, `port_by_id(id)`
+returns **the same address** as the port being dequeued from, so this is the
+live port, not a copy left in unreused from-space.
+
+So the whole chain — port, inbox vector, tail node — is live and well formed,
+and the tail's element 0 is a forwarded pointer.
+
+## What that leaves
+
+The message was evacuated and this one slot was not updated, while everything
+above it was. Since the chain is barriered and persistent, the remaining
+explanation is that the chain **was not traced at the collection that moved the
+message** — the port was unreachable then, and became reachable again after.
+
+There is a mechanism that would let exactly that happen without being noticed:
+`INTERN_PORT` is weak, and `minor`'s refresh only drops entries whose objects
+live in from-space. An **old** port is kept unconditionally:
+
+    if v.as_heap().wrapping_sub(from) < half { ...forward or drop... }
+    else { Some(v) }                    // old: kept, reachable or not
+
+So an old, unreachable port stays in the table and `port_by_id` keeps handing it
+back — which is consistent with "looks live, was never traced". The next step is
+to establish whether the port really is unreachable at that collection: mark the
+port at enqueue and check, at the next collection, whether tracing reaches it.
+`rx` should be on the parked caller's saved stack and `tx` in the client's
+`:waiting` map, so if it is genuinely unreachable, one of those two roots is not
+what it appears to be.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.
