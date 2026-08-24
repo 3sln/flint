@@ -156,6 +156,16 @@ pub struct Frame {
     /// live reference is in the value stack -- true with no second mechanism.
     pub ret_to: usize,
     pub handlers: usize,
+    /// Instructions executed in THIS invocation, excluding nested frames. The
+    /// run length under 0013's guard-only model.
+    #[cfg(feature = "diagnostics")]
+    pub instrs: u32,
+    /// Restored from a thread save, i.e. this frame has parked and come back.
+    /// 0013's pathological case is a loop that parks per iteration; without
+    /// re-entry points every instruction executed in a resumed frame is an
+    /// instruction the compiled body never gets to run.
+    #[cfg(feature = "diagnostics")]
+    pub resumed: bool,
 }
 
 /// A native builtin. `base` indexes the value stack; `argc` values start there.
@@ -251,15 +261,15 @@ impl Rt {
     // --- code reading ------------------------------------------------------
 
     #[inline]
-    fn u8_at(&self, ip: u32) -> u8 {
+    pub(crate) fn u8_at(&self, ip: u32) -> u8 {
         self.image.code[ip as usize]
     }
     #[inline]
-    fn u16_at(&self, ip: u32) -> u16 {
+    pub(crate) fn u16_at(&self, ip: u32) -> u16 {
         u16::from_le_bytes([self.image.code[ip as usize], self.image.code[ip as usize + 1]])
     }
     #[inline]
-    fn i16_at(&self, ip: u32) -> i16 {
+    pub(crate) fn i16_at(&self, ip: u32) -> i16 {
         self.u16_at(ip) as i16
     }
 
@@ -581,7 +591,17 @@ impl Rt {
         }
         self.roots.stack_top = fp + nlocals;
         debug_assert_eq!(self.roots.stack[callee_at], closure, "stack[ret_to] must be the callee");
-        self.frames.push(Frame { fp, ip: code, end, ret_to: callee_at, handlers: self.handlers.len() });
+        self.frames.push(Frame {
+            fp,
+            ip: code,
+            end,
+            ret_to: callee_at,
+            handlers: self.handlers.len(),
+            #[cfg(feature = "diagnostics")]
+            instrs: 0,
+            #[cfg(feature = "diagnostics")]
+            resumed: false,
+        });
         true
     }
 
@@ -600,6 +620,12 @@ impl Rt {
     }
 
     fn run_with<B: BudgetPolicy>(&mut self, base_depth: usize) -> Value {
+        // doc/decisions/0013's region histogram. `run` is Model A -- the
+        // distance from one call to the next. `last_ip`/`last_depth` detect a
+        // TAKEN backward jump without knowing anything about which opcodes jump,
+        // which matters because "was it taken" is not readable from the opcode.
+        #[cfg(feature = "diagnostics")]
+        let (mut run, mut last_ip, mut last_depth) = (0u32, u32::MAX, usize::MAX);
         loop {
             if self.frames.len() <= base_depth {
                 return self.vpop();
@@ -657,6 +683,44 @@ impl Rt {
                 }
             }
             let opcode = self.u8_at(ip);
+            #[cfg(feature = "diagnostics")]
+            unsafe {
+                use crate::aotstat::*;
+                let depth = self.frames.len();
+                if depth == last_depth && ip < last_ip {
+                    COUNTS[C_BACKEDGES] += 1;
+                }
+                (last_ip, last_depth) = (ip, depth);
+                COUNTS[C_INSTRS] += 1;
+                run += 1;
+                if let Some(f) = self.frames.last_mut() {
+                    f.instrs += 1;
+                    if f.resumed {
+                        COUNTS[C_RESUMED_INSTRS] += 1;
+                    }
+                }
+                match opcode {
+                    op::CALL | op::TAIL_CALL | op::APPLY | op::NATIVE => {
+                        // One guard per call site reached. In the guard-only
+                        // design this is what a compiled body pays: a load, a
+                        // test, a branch.
+                        COUNTS[C_GUARDS] += 1;
+                        COUNTS[match opcode {
+                            op::CALL => C_CALLS,
+                            op::TAIL_CALL => C_TAILCALLS,
+                            op::APPLY => C_APPLIES,
+                            _ => C_NATIVES,
+                        }] += 1;
+                        note_run(run);
+                        run = 0;
+                    }
+                    op::RETURN | op::THROW | op::RETHROW => {
+                        note_run(run);
+                        run = 0;
+                    }
+                    _ => {}
+                }
+            }
             ip += 1;
 
             macro_rules! commit {
@@ -841,6 +905,8 @@ impl Rt {
                         // Drop this frame first: that is what makes a tail call
                         // constant-space.
                         let f = self.frames.pop().unwrap();
+                        #[cfg(feature = "diagnostics")]
+                        crate::aotstat::note_frame(f.instrs, f.resumed);
                         self.handlers.truncate(f.handlers);
                         let dest = f.ret_to;
                         for i in 0..=argc {
@@ -883,6 +949,8 @@ impl Rt {
                         } else {
                             self.vpush(r);
                             let f = self.frames.pop().unwrap();
+                            #[cfg(feature = "diagnostics")]
+                            crate::aotstat::note_frame(f.instrs, f.resumed);
                             self.handlers.truncate(f.handlers);
                             let v = self.vpop();
                             self.roots.stack_top = f.ret_to;
@@ -897,6 +965,8 @@ impl Rt {
                 op::RETURN => {
                     let v = self.vpop();
                     let f = self.frames.pop().unwrap();
+                    #[cfg(feature = "diagnostics")]
+                    crate::aotstat::note_frame(f.instrs, f.resumed);
                     self.handlers.truncate(f.handlers);
                     self.roots.stack_top = f.ret_to;
                     self.vpush(v);
@@ -945,6 +1015,10 @@ impl Rt {
                         crate::gc::CUR_NATIVE = saved_native;
                     }
                     self.roots.stack_top = base;
+                    #[cfg(feature = "diagnostics")]
+                    if self.failed() {
+                        unsafe { crate::aotstat::COUNTS[crate::aotstat::C_GUARD_HITS] += 1 };
+                    }
                     if self.failed() {
                         // A park travels as a distinguished `thrown` value, so
                         // that this branch -- which already exists -- is the
@@ -1266,6 +1340,10 @@ impl Rt {
         while let Some(h) = self.handlers.pop() {
             if h.frame >= self.frames.len() {
                 continue; // the frame that installed it is already gone
+            }
+            #[cfg(feature = "diagnostics")]
+            for f in &self.frames[h.frame + 1..] {
+                crate::aotstat::note_frame(f.instrs, f.resumed);
             }
             self.frames.truncate(h.frame + 1);
             self.roots.stack_top = h.stack_top;

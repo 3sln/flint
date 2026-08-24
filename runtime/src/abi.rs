@@ -538,3 +538,23 @@ pub extern "C" fn stat_stale_shadow(i: u32) -> u32 {
 pub extern "C" fn stat_stale_push(i: u32) -> u32 {
     unsafe { *crate::gc::STALE_PUSH.get(i as usize).unwrap_or(&0) }
 }
+
+/// The region histogram of `doc/decisions/0013`. One export rather than one per
+/// array: `i < 20` is the per-frame histogram, `20..40` the per-run one,
+/// `40..60` the resumed-frame one, `60..` the counters.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_region(i: u32) -> u64 {
+    crate::aotstat::read(i)
+}
+
+/// The static half of 0013's measurement: what a compiled module would carry as
+/// metadata. Runs the scan on the first call.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_static(i: u32) -> u64 {
+    if i == 0 {
+        crate::aotstat::scan(unsafe { ensure_rt() });
+    }
+    crate::aotstat::read_static(i)
+}

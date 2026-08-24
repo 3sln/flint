@@ -34,6 +34,10 @@ pub mod set;
 // production build, not merely disabled.
 #[cfg(feature = "diagnostics")]
 pub mod snap;
+/// The region histogram `doc/decisions/0013` is gated on. Diagnostic by the same
+/// rule: it exists to decide whether to build the AOT compiler, not to run.
+#[cfg(feature = "diagnostics")]
+pub mod aotstat;
 pub mod strs;
 pub mod vector;
 pub mod vm;

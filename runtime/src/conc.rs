@@ -344,6 +344,22 @@ impl Rt {
         self.set(self.r(ti), TH_HANDLERS, hb);
         self.pop_to(base);
 
+        // Every frame here is interrupted mid-body, not finished. Record each
+        // as a SEGMENT -- otherwise the per-frame histogram silently loses every
+        // invocation that ever parks, which is exactly the population the
+        // re-entry question is about.
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            use crate::aotstat::*;
+            for f in &self.frames {
+                note_segment(f.instrs, f.resumed);
+            }
+            COUNTS[if self.park_on.bits() == PARK_YIELD.bits() {
+                C_SAVES_YIELD
+            } else {
+                C_SAVES_PARK
+            }] += 1;
+        }
         self.frames.clear();
         self.handlers.clear();
         self.roots.stack_top = 0;
@@ -389,6 +405,10 @@ impl Rt {
                 }
             }
         }
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            crate::aotstat::COUNTS[crate::aotstat::C_RESTORES] += 1;
+        }
         let fb = self.slot(th, TH_FRAMES);
         if !fb.is_nil() {
             let n = self.olen(fb) as usize / 20;
@@ -404,6 +424,14 @@ impl Rt {
                     end: g(o + 8),
                     ret_to: g(o + 12) as usize,
                     handlers: g(o + 16) as usize,
+                    // The instruction count does not survive the save, so this
+                    // invocation is measured from the resume. That is the right
+                    // cut: what re-entry buys is exactly the instructions run
+                    // AFTER coming back.
+                    #[cfg(feature = "diagnostics")]
+                    instrs: 0,
+                    #[cfg(feature = "diagnostics")]
+                    resumed: true,
                 });
             }
         }

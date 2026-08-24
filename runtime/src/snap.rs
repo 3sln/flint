@@ -292,7 +292,7 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
         let end = r.u32();
         let ret_to = r.usz();
         let handlers = r.usz();
-        frames.push(Frame { fp, ip, end, ret_to, handlers });
+        frames.push(Frame { fp, ip, end, ret_to, handlers, instrs: 0, resumed: false });
     }
     let nh = r.usz();
     let mut handlers = Vec::with_capacity(nh);

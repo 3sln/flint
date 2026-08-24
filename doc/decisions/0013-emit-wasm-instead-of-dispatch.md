@@ -1,7 +1,9 @@
 # 0013 — Emitting wasm instead of dispatching, and what it costs
 
-> **NOT BUILT — analysis of a fork, recorded so it is not re-argued from
-> scratch.** The conclusion is *not now*, with a condition for revisiting.
+> **The measurement this document gated itself on has been taken.** It is in
+> "The measurement, taken" below, and it says yes. Everything above that section
+> is the argument as it stood before the numbers; the numbers did not overturn
+> it, they sized it.
 
 ## The proposal
 
@@ -366,3 +368,118 @@ since those are the cheap half of the same win.
 **And the region histogram is worth having even if the answer is no**, because it
 is the same data superinstructions need: the hottest fusable sequences fall out of
 it directly. One measurement, two decisions.
+
+
+---
+
+# The measurement, taken
+
+`bench/regions.mjs`, against construe's real fixtures and against the wave run.
+Weighted by execution, not by static occurrence. Reproduce with
+`./bin/build-units --diagnostics && node bench/regions.mjs`.
+
+## The boundary constant
+
+**2.02 ns** for one `call_indirect` taking a pointer, on this host — measured,
+not assumed, through the same table shape the natives already use. A direct
+`call` would have been inlined by the engine and would have measured nothing.
+
+Against the README's measured **6.2 ns/instruction** of dispatch, the break-even
+region length is
+
+    1 + 2.02 / 6.2 = 1.33 instructions
+
+**Any region of two instructions or more already pays for itself.** That single
+number is the surprise in this measurement, and it changes the shape of the
+answer: the question was never whether regions are long enough, and the
+"if the average region is three ops, the call into it eats the saving" worry
+above is wrong by a factor of two.
+
+## The two models
+
+| workload | Model A: ends at every call | Model B: guard-only, one frame |
+| --- | --- | --- |
+| construe parse | mean 3.3 instructions | mean 11.3 |
+| construe parse ×20 | 3.2 | 11.4 |
+| construe suggest | 3.2 | 15.0 |
+| waves (parks per iteration) | — | 11.4 per segment |
+
+Priced with the measured constants, as a share of the dispatch cost recovered:
+
+| workload | Model A | Model B |
+| --- | --- | --- |
+| parse | 60.2% | 88.3% |
+| parse ×20 | 59.1% | 88.3% |
+| suggest | 58.3% | 91.1% |
+
+So the guard is worth roughly **30 points of dispatch** over the
+region-ends-at-every-call model — which is the argument in "Which makes the
+compilable unit a WHOLE FUNCTION" above, now with a number on it. But note the
+other half: even Model A recovers 58%. The guard is a large improvement on an
+option that was already worth taking.
+
+## The guard costs nothing, and this is measured rather than argued
+
+| workload | guards executed | of instructions | fired |
+| --- | --- | --- | --- |
+| parse ×20 | 188,605 | 23.4% | 0 |
+| suggest | 507,401 | 25.1% | 0 |
+| waves | 106,565,262 | 25.8% | **131** (0.0001%) |
+
+A guard on one instruction in four, firing once in 800,000. That is a perfectly
+predicted branch, which is what "the guard is ordinary error propagation rather
+than a boundary" needs to be true.
+
+**And read the zeros correctly.** Construe's fixtures report `guards fired: 0`
+and `resumed frames: 0` — that is a COVERAGE zero, not a result. They never open
+a port, so they never park, and the entire risk of this design is what happens
+after a park. The wave run is in the table for exactly that reason.
+
+## Re-entry: the pathological case is real, and it is 26% of the work
+
+0013 names the shape that would make function-granular entry catastrophic: *"a
+loop that parks per iteration bails on the first iteration and then interprets
+every remaining iteration, for ever."* Measured on the wave run:
+
+* 100,921 state saves, **all** of them port parks, none a courtesy yield;
+* **25.8% of every instruction executed** runs in a frame that has already been
+  resumed;
+* and 97.4% of that work is in segments of **1024–2047 instructions** — one
+  frame, parking and resuming ~94,000 times, running ~1,500 instructions between
+  parks.
+
+Without re-entry points, a quarter of this workload is interpreted for ever
+after the first wave. **Re-entry points are not an optimisation here, they are
+the difference between the design working and not working on the programs ports
+exist to serve.**
+
+## What sizes the chunks
+
+Chained chunks inside one wasm function cost **nothing at run time** — a chunk
+boundary is a fallthrough, and the engine optimises across it. What they cost is
+module bytes. So the static side, over the construe program:
+
+* 370 functions, 419 arities, 18,522 bytes of bytecode, 7,400 instructions
+* mean **17.7 instructions per arity**, largest 1,026
+* **1,213 call sites** and **35 distinct backward-jump targets**
+* a re-entry point at every one of those is **1,248 points, one per 5.9
+  instructions**
+* at back-edges only: 35 points, one per 211
+
+Zero arities are a single instruction, so nothing in this program is too small
+to compile.
+
+**The decision, which the measurement makes rather than justifies:** a re-entry
+point after **every call site and at every backward-jump target**. The runtime
+cost is a `br_table` arm; the byte cost is ~4 bytes each, against a compiled body
+of roughly 20 bytes per instruction — call it 3% of the emitted code. Restricting
+to back-edges would save 1,213 arms and roughly 5 KB, and would lose the resumed
+segments above, which are 26% of the work in the one workload that parks. That
+is not a trade worth making, and the number is why.
+
+## What is still owed
+
+* **Module size and cold start** are the two costs in "The other costs" above and
+  neither is measured yet, because neither can be until an emitter exists. They
+  are the ones that could still make this a bad trade, and they get measured
+  against the same construe payloads.
