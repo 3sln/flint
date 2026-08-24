@@ -1,0 +1,59 @@
+name: Test
+
+# Runs the full suite on pull requests only.
+#
+# Deliberately not on every push to main: `bin/test` builds both configurations
+# of the runtime (doc/decisions/0016), compiles the units with rustc, and runs
+# the self-hosting fixpoint — several minutes of work. The gate belongs on the
+# proposal, not on every commit that lands after it has already passed.
+#
+# This is the same `./bin/test` as locally. It fails loudly and skips nothing.
+
+on:
+  pull_request:
+  # For running the suite against main by hand, e.g. before cutting a release.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer commit on the same branch makes an in-flight run pointless.
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Nightly, because the unit objects are emitted by rustc directly against
+      # the wasm32 sysroot rather than through cargo (see bin/build-units).
+      - name: Set up Rust nightly with the wasm32 target
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-nightly
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # flint is written in portable cljc and bootstraps on babashka; the
+      # compiler, the test harness and the differential Clojure check all run
+      # under `bb`.
+      - name: Set up babashka
+        uses: DeLaGuardo/setup-clojure@13
+        with:
+          bb: latest
+
+      - name: Test
+        run: ./bin/test

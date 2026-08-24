@@ -4,7 +4,23 @@
 # links exactly like one it did.
 set -e
 cd "$(dirname "$0")/.."
-TC="$HOME/.rustup/toolchains/nightly-aarch64-apple-darwin"
+# rustup's nightly carries the wasm32 target and the sysroot these objects link
+# against. Resolve it through rustup rather than naming a host triple: the same
+# script has to run on a developer's macOS box and on a Linux CI runner.
+RUSTC="$(rustup which --toolchain nightly rustc 2>/dev/null)" || RUSTC=""
+if [ -z "$RUSTC" ]; then
+  echo "no nightly rustc: install it with"
+  echo "  rustup toolchain install nightly"
+  echo "  rustup target add wasm32-unknown-unknown --toolchain nightly"
+  exit 1
+fi
+TC="$(dirname "$(dirname "$RUSTC")")"
+SYS="$TC/lib/rustlib/wasm32-unknown-unknown/lib"
+if [ ! -d "$SYS" ]; then
+  echo "nightly has no wasm32-unknown-unknown std at $SYS"
+  echo "  rustup target add wasm32-unknown-unknown --toolchain nightly"
+  exit 1
+fi
 RUSTC="$TC/bin/rustc"
 FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=abort -C debuginfo=0"
 DEPS=target/wasm32-unknown-unknown/release/deps

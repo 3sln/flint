@@ -9,3 +9,8 @@ units/
 test/fixtures/wasm-path/demo/shout.o
 test/fixtures/wasm-path/demo/shout.unit.edn
 test/fixtures/wasm-path-bad/
+
+# The deck: node_modules and the generated static site.
+deck/node_modules/
+deck/out/
+deck/bun.lock

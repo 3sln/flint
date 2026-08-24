@@ -1,0 +1,102 @@
+name: Publish to npm
+
+# Publishing a release (draft or otherwise) creates its tag and publishes the
+# package. The suite runs first, so a red build cannot reach the registry.
+#
+# Requires an `NPM_TOKEN` repository secret — an npm automation token with
+# publish rights on the @3sln scope.
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+  # Required for npm provenance. Drop this, and the --provenance flag below,
+  # if the repository is ever made private: provenance only works for packages
+  # published from a public repository.
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout the released tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Set up Rust nightly with the wasm32 target
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-nightly
+
+      - name: Set up babashka
+        uses: DeLaGuardo/setup-clojure@13
+        with:
+          bb: latest
+
+      - name: Check the tag matches package.json
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Release tag $TAG does not match package.json version $version."
+            echo 'Publishing would ship something other than what the release names.'
+            exit 1
+          fi
+          echo "$TAG matches package.json."
+
+      # The suite leaves the tree in the PRODUCTION configuration on its way
+      # out (doc/decisions/0016), which is the one that must ship. Running it
+      # here is both the gate and the build: `units/` is generated, not
+      # tracked, and the published tarball needs it.
+      - name: Test, and build the units that ship
+        run: ./bin/test
+
+      - name: Check the production units are present and diagnostics-free
+        run: |
+          set -euo pipefail
+          test -f units/flint/rt.unit.edn || { echo '::error::units/ was not built'; exit 1; }
+          # bin/diag-exports.py appends the diagnostic edge to the runtime
+          # manifest, and ONLY the --diagnostics build runs it. Verified both
+          # ways: present in that build, absent in this one.
+          if grep -q 'stat_bytes_allocated' units/flint/rt.unit.edn; then
+            echo '::error::units/ carries the diagnostics build; publish must ship the stripped one.'
+            exit 1
+          fi
+          echo "units/ is the production build."
+
+      - name: Show what will be published
+        run: npm pack --dry-run
+
+      - name: Publish
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Summarise
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          echo "Published @3sln/flint@$version from $TAG." >> "$GITHUB_STEP_SUMMARY"

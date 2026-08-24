@@ -1,4 +1,11 @@
 #!/bin/sh
-# rustup's toolchain has the wasm32 target; Homebrew's rustc (first on PATH) does not.
-export PATH="$HOME/.rustup/toolchains/nightly-aarch64-apple-darwin/bin:$PATH"
+# rustup's nightly has the wasm32 target; a system rustc (often first on PATH)
+# does not. Resolve the toolchain rather than naming a host triple.
+set -e
+RUSTC="$(rustup which --toolchain nightly rustc 2>/dev/null)" || RUSTC=""
+if [ -z "$RUSTC" ]; then
+  echo "no nightly rustc: rustup toolchain install nightly" >&2
+  exit 1
+fi
+export PATH="$(dirname "$RUSTC"):$PATH"
 exec cargo "$@"

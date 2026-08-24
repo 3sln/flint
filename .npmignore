@@ -1,0 +1,7 @@
+# Deliberately near-empty. Without an .npmignore, npm falls back to .gitignore —
+# which excludes `units/`, and `units/` is exactly what a published flint needs:
+# the precompiled namespace objects are built during `publish.yml` and must end
+# up in the tarball. The `files` list in package.json is the real whitelist.
+target/
+out/
+*.wasm.tmp

@@ -1,0 +1,20 @@
+{
+  "name": "flint-deck",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "deck-dev",
+    "build": "deck-build"
+  },
+  "dependencies": {
+    "@3sln/deck": "0.0.17"
+  },
+  "@3sln/deck": {
+    "title": "flint",
+    "url": "https://flint.3sln.com",
+    "pinned": [
+      "/introduction.md"
+    ]
+  }
+}

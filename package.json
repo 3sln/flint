@@ -1,0 +1,49 @@
+{
+  "name": "@3sln/flint",
+  "version": "0.1.0",
+  "description": "Pure Clojure logic, compiled to a self-contained WebAssembly module.",
+  "type": "module",
+  "author": "Ray Stubbs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/3sln/flint.git"
+  },
+  "homepage": "https://flint.3sln.com",
+  "keywords": [
+    "clojure",
+    "cljc",
+    "wasm",
+    "webassembly",
+    "compiler",
+    "interpreter",
+    "garbage-collector",
+    "green-threads",
+    "sandbox"
+  ],
+  "bin": {
+    "flint": "bin/flint-cli.mjs"
+  },
+  "exports": {
+    "./host": "./host/flint.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "lib/",
+    "host/",
+    "units/",
+    "doc/",
+    "examples/",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "./bin/test",
+    "bench": "./bin/bench"
+  }
+}
