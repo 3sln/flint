@@ -1,5 +1,34 @@
 # Handoff — the parked-thread collector bug
 
+> **Update after the run of 2026-08-24**, which ended on a transient
+> `403 Unable to verify organization membership` — an auth failure, not a
+> diagnosis dead end. ~187 lines of instrumentation and attempted fix are
+> uncommitted in `vm.rs`, `conc.rs`, `gc.rs`, `abi.rs`, `rpc.cljc` and
+> `link.cljc`. The tree builds.
+>
+> **The finding that moves this: DISABLING THE TIME SLICE FIXES IT.** So the
+> fault is on the PREEMPTION path, not the parking path — a different suspension
+> mechanism, and the one with no test behind it.
+>
+> Two facts already established, both worth not re-deriving:
+>
+> * the slice-expiry branch (`vm.rs`, `if base_depth == 0 { park_on =
+>   PARK_YIELD; return NIL; }`) **returns without committing `ip`**, and
+>   `commit!` is not even in scope there;
+> * **committing `ip` alone did not fix it**, so something else is stale across
+>   a preemption too. The obvious candidates are anything else the dispatch loop
+>   caches in a Rust local — the frame pointer, the cached stack top — and the
+>   consistency between the resumed `ip` and the value-stack depth left behind
+>   by a half-evaluated expression.
+>
+> The parking path rewinds deliberately (`frames.last_mut().ip = opcode_at`) so
+> the call re-executes. Preemption cannot do that — the thread must resume where
+> it stopped, with the stack exactly as it was. That asymmetry is where to look.
+>
+> My `call_value` observation (no PARK handling on the dynamic-dispatch path) is
+> still worth closing, but it is probably not this bug. The shared `Parked` enum
+> that now exists is the right shape for both.
+
 `0009` is done and committed (`ebd9a0e`, `884ac66`). The suite is green except
 **two assertions in `test/document.clj`**, which are the bug below.
 
