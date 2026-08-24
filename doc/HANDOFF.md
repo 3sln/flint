@@ -67,6 +67,52 @@ out of release, so a desynchronised old-space walk would be silent. **This was
 tried**: the check was made real and the repro run, and it reports **zero parse
 errors**. So the old-space walk is consistent and this suspect is out too.
 
+### The causal chain, established
+
+This is the sequence, and every step is measured rather than inferred:
+
+1. A **stale root points at nursery address 131 096** (`0x20018`) — a pointer to
+   an object that lived there in an *earlier* nursery cycle.
+2. After a flip, the **scheduler is allocated at 131 072**, spanning
+   `[131 072, 131 152)`. The bump advance is correct (80 bytes, len 9) — the
+   allocation is not the bug. But that span now **covers 131 096**.
+3. The next minor collection calls `forward()` on the stale root. `131 096` is
+   in from-space, so `forward` treats it as an **object start**, copies from it,
+   and writes a `TY_FWD` header there.
+4. `131 096` is `scheduler + 24`, which is **slot 2 = `SC_NEXTID`**. It becomes
+   `0x00220000_01000000` — low word `0x01000000` is `TY_FWD << 24`, high word
+   `0x00220000` is the forwarding address, which is exactly the base of the
+   other semispace. Measured directly at the moment `sched()` returns:
+
+       no stress: SC_NEXTID = 0xfffa0000_00000001   (fixnum 1, correct)
+       stress:    SC_NEXTID = 0x00220000_01000000   (a forwarding header)
+
+5. Port and thread ids are then handed out from `0x1000000`, `wake_on` cannot
+   match the waiter, and the program deadlocks.
+
+So the root cause is **a stale value in the root set**, and everything else —
+the corrupted ids, the lost wakeup, the lost document wave — is downstream of it.
+
+**Where the stale root comes from is the remaining question.** The window
+bisection puts it early: a single collection at allocation #81, during
+`self.string("flint/str->num")` in the image loader's constant pool, is enough
+to cause it. Arming the root verifier from `run_one` finds **nothing**, which is
+consistent — by the time threads run the damage is already done. `make_native`
+and `make_closure` were read and are correctly rooted.
+
+**Worth doing regardless of the cause:** `forward()` has no defence against a
+stale or interior pointer. It takes any heap Value in from-space as an object
+start. A cheap check that the address is a plausible object start would turn
+this class of silent corruption into a detectable event, and would have made
+this a one-run diagnosis instead of a multi-session one.
+
+Ruled out this session, with evidence, so none of it is re-chased: no frame ever
+sits above the traced `stack_top` (sampled in `Rt::alloc`, at the collection
+itself); no to-space overflow (the `debug_assert` was made real); no old-space
+parse error; no root pointing at an unmarked old object before the sweep; and
+`is_young`/`in_from` cannot claim an old-space address, since `half` and
+`young_base` are fixed at construction.
+
 ### What write-attribution added
 
 Making the stack name its own writer (a shadow array recording, per slot, the
