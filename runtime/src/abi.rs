@@ -379,6 +379,24 @@ pub extern "C" fn stat_origin(addr: u32) -> u32 {
     }
 }
 
+/// The `i`-th byte of native import `idx`'s NAME, read from the image's own
+/// table. This is the right table: a slot resolved through the host registry
+/// answers from a different index space and returns something plausible.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_native_name(idx: u32, i: u32) -> u32 {
+    unsafe {
+        let rt = ensure_rt();
+        let Some(&namec) = rt.image.native_names.get(idx as usize) else { return 0 };
+        let Some(&v) = rt.roots.consts.get(namec as usize) else { return 0 };
+        let mut b = crate::rt::sbuf();
+        match rt.as_str(v, &mut b) {
+            Some(s) => s.as_bytes().get(i as usize).copied().unwrap_or(0) as u32,
+            None => 0,
+        }
+    }
+}
+
 /// The builtin table slot behind native import `idx`. The loaded image keeps
 /// slots rather than names, so this is the identity a host can compare against
 /// `Rt::host_native_slot` for a known builtin.

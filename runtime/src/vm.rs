@@ -124,6 +124,12 @@ pub struct Image {
     pub fns: Vec<FnDef>,
     /// Table slot (wasm) or host-registry index for each native import.
     pub natives: Vec<u32>,
+    /// Constant index of each native import's NAME. The loader used to read this
+    /// and discard it, which meant a diagnostic could report "import #63" and
+    /// nothing better -- and a slot resolved through the host registry instead
+    /// gives a plausible answer from the wrong table.
+    #[cfg(feature = "diagnostics")]
+    pub native_names: Vec<u32>,
     pub var_names: Vec<u32>,
     pub entry: u32,
     pub init: Vec<u32>,

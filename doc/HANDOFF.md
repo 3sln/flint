@@ -786,6 +786,40 @@ image is loaded, so a diagnostics build can report "import #63" as a name. The
 loader already reads that constant and discards it. Then re-run the above and
 the site names itself.
 
+## THE SITE NAMES ITSELF: flint/port-send
+
+Retaining the name constant in `Image::natives` at load — one line the loader
+used to read and discard — turns "import #63" into a name:
+
+    holder@3090304 slot 1 -> 3079624   at collection 722
+        holder allocated by: flint/port-send  (import 63)
+        the other holder:    the interpreter itself
+
+`slot 1` is element 0 (slot 0 is the transient edit field), and a one-element
+vector whose tail node holds the message at element 0 is exactly what
+`port_enqueue`'s `vec_conj` builds onto an empty inbox. So the holder is the
+inbox tail node, created inside `port_send`, holding the message — and the
+message address it holds is the pre-collection one.
+
+That is the end of the search for WHERE. What remains is WHY the value reaching
+`port_enqueue` is already stale, because the code between is rooted correctly:
+
+* `port_send` reads `payload`/`val` from the shadow stack immediately before the
+  call that pushes them, with no allocation in between;
+* `port_enqueue` pushes `p` and `v` before touching anything;
+* `vec_conj` pushes `x` at its start;
+* `push_event` pushes `payload` first.
+
+All four audited and clean. So the staleness arrives with `v`, before
+`port_send` is entered — and `v` comes off the value stack, which is the traced
+root set. The next question is what `port_send` does that could make its own
+argument stale: the obvious candidate is the PARK path, since a full buffer parks
+and the native re-executes on resume, and the argument is re-read from a stack
+that was saved and restored in between.
+
+**That is a small, bounded question with a named function, which is where this
+investigation has been trying to get for a dozen sessions.**
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.

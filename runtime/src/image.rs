@@ -105,8 +105,14 @@ impl Rt {
 
         let nnat = r.u32() as usize;
         let mut natives = Vec::with_capacity(nnat);
+        #[cfg(feature = "diagnostics")]
+        let mut native_names = Vec::with_capacity(nnat);
         for _ in 0..nnat {
-            let _name = r.u32();
+            let name = r.u32();
+            #[cfg(feature = "diagnostics")]
+            native_names.push(name);
+            #[cfg(not(feature = "diagnostics"))]
+            let _ = name;
             natives.push(r.u32());
         }
 
@@ -248,7 +254,16 @@ impl Rt {
             init.push(r.u32());
         }
 
-        self.image = Image { code, fns, natives, var_names, entry, init };
+        self.image = Image {
+            code,
+            fns,
+            natives,
+            #[cfg(feature = "diagnostics")]
+            native_names,
+            var_names,
+            entry,
+            init,
+        };
         true
     }
 }
