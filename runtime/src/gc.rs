@@ -616,6 +616,8 @@ impl Gc {
     }
 
     pub fn minor(&mut self, roots: &mut Roots) {
+        #[cfg(debug_assertions)]
+        self.sp.in_gc.set(true);
         self.stats.minor += 1;
         self.to_bump = self.to;
         self.work.clear();
@@ -677,6 +679,8 @@ impl Gc {
         self.bump = self.to_bump;
         self.from_end = self.from + self.half;
         self.note_peak();
+        #[cfg(debug_assertions)]
+        self.sp.in_gc.set(false);
     }
 
     // --- major collection ------------------------------------------------
@@ -695,6 +699,8 @@ impl Gc {
 
     pub fn major(&mut self, roots: &mut Roots) {
         self.minor(roots);
+        #[cfg(debug_assertions)]
+        self.sp.in_gc.set(true);
         self.stats.major += 1;
         self.work.clear();
 
@@ -738,6 +744,8 @@ impl Gc {
         }
 
         self.sweep_old();
+        #[cfg(debug_assertions)]
+        self.sp.in_gc.set(false);
         self.note_peak();
 
         // Clear marks on the (live) nursery.

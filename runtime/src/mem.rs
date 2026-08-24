@@ -173,6 +173,13 @@ pub struct Space {
     free_runs: Vec<Region>,
     pub reserved: u32,
     pub in_use: u32,
+    #[cfg(debug_assertions)]
+    /// True while a collection is running over this space. The collector reads
+    /// forwarded pointers as a matter of course -- that is how it updates them
+    /// -- so `obj::slot`'s assertion has to exclude it. It lives here, per
+    /// space, rather than in a global: the test harness runs Rts in parallel
+    /// threads and a global made one Rt's collection silence another's check.
+    pub in_gc: core::cell::Cell<bool>,
 }
 
 impl Space {
@@ -188,6 +195,8 @@ impl Space {
                 free_runs: Vec::new(),
                 reserved: u32::MAX,
                 in_use: 0,
+                #[cfg(debug_assertions)]
+                in_gc: core::cell::Cell::new(false),
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -202,6 +211,8 @@ impl Space {
                 free_runs: Vec::new(),
                 reserved: len as u32,
                 in_use: PAGE, // address 0 is never a valid object
+                #[cfg(debug_assertions)]
+                in_gc: core::cell::Cell::new(false),
             }
         }
     }

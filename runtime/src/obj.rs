@@ -212,7 +212,24 @@ pub fn slot_addr(a: u32, i: u32) -> u32 {
 }
 #[inline(always)]
 pub fn slot(sp: &Space, a: u32, i: u32) -> Value {
-    Value(sp.read_u64(slot_addr(a, i)))
+    let out = Value(sp.read_u64(slot_addr(a, i)));
+    // Reading a forwarded pointer outside the collector means the edge INTO
+    // this object was never traced: the collector moved the target and nothing
+    // updated this slot. Asserting it *here*, in the universal accessor, costs
+    // one check in debug builds and catches the whole class -- rather than
+    // needing a new check at each place a stale pointer happens to surface.
+    // The collector itself reads forwarded pointers as a matter of course,
+    // which is how it updates them, so it is excluded.
+    #[cfg(debug_assertions)]
+    {
+        debug_assert!(
+            sp.in_gc.get() || !(out.is_heap() && ty(sp, out.as_heap()) == TY_FWD),
+            "a forwarded pointer was read from slot {} of a type-{} object",
+            i,
+            ty(sp, a)
+        );
+    }
+    out
 }
 /// Raw slot store. Callers that may be writing into an *old* object must go
 /// through `Gc::set_slot` so the write barrier runs.
