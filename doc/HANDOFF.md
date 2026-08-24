@@ -416,6 +416,47 @@ verifier can be pointed at exactly it rather than at every pump -- which is what
 made them perturb the run before. Capture at the end of #691 and the end of #692
 and diff; or run the `forward()` plausibility check for that collection alone.
 
+## The traversal of collection #692, logged
+
+Scoped to one collection the log is free and perturbs nothing — the failure is
+still present in the traced run (63 waves), which is the first thing to check
+before trusting any of it.
+
+    collection #692: {:waves 63, :bytes 4128768}
+    632 events | roots(heap) 438 | remembered entries 3 | scanned 97 | forwarded 94
+    remembered by type: THREAD 1, SCHED 1, VOLATILE 1
+    roots by type: STR 245, CLOSURE 129, KW 17, ARRAYMAP 10, VEC 10, PORT 3, ...
+    PORTS scanned or forwarded: NONE
+
+Three facts, in order of how much they narrow things:
+
+1. **No port is scanned or forwarded.** Three ports are in the ROOTS, but for an
+   OLD object that does nothing: `forward` returns early for anything outside
+   from-space, so a minor descends into an old object only via the remembered
+   set. Reachable and traced remain different questions, and this collection is
+   where it bites.
+2. **But the ports are not the violation.** Checked at that exact collection: all
+   three old root ports have a NON-young inbox and are correctly absent from the
+   remembered set. There is no old-port-to-young-inbox edge to miss here.
+3. **The remembered set has three entries — THREAD, SCHED, VOLATILE.** For a
+   collection forwarding 94 objects, with 64 KB messages moving through
+   containers that have been promoted, three is a very small number.
+
+So the message dies inside an OLD container whose old-to-young edge is not
+recorded, and that container is not the port. The candidates are the inbox
+vector and its tail node, both of which can be promoted while the message inside
+them stays young. `vec_conj` builds a young vector and the barrier remembers the
+PORT; nothing in that path remembers the vector or the node when THEY are the old
+side of the edge.
+
+**Next: log which object owns the young message at #692.** The traversal log
+already carries every scanned and forwarded address; extend it to record, for
+each old object in the remembered set and each old object reached, whether it
+points at a young object. The invariant check that matters is the general one --
+"every old object pointing at a young one is in the remembered set" -- applied to
+the whole heap at that one collection, not just to ports. Three entries says it
+will not be expensive.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.

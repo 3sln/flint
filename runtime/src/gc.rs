@@ -45,6 +45,31 @@ const MIN_CHUNK: u32 = 1024 * 1024;
 
 /// Weak, hash-keyed interning table. Stores `(hash, value-bits)`; the hash is
 /// stored so that rehashing after a collection never has to look at the heap.
+// --- one-collection traversal log ------------------------------------------
+// Static, not heap: this must allocate nothing, or it becomes the observer
+// effect it exists to escape.
+#[cfg(feature = "diagnostics")]
+pub const TRACE_CAP: usize = 40000;
+#[cfg(feature = "diagnostics")]
+pub static mut TRACE_ADDR: [u32; TRACE_CAP] = [0; TRACE_CAP];
+#[cfg(feature = "diagnostics")]
+pub static mut TRACE_KIND: [u32; TRACE_CAP] = [0; TRACE_CAP];
+#[cfg(feature = "diagnostics")]
+pub static mut TRACE_N: usize = 0;
+#[cfg(feature = "diagnostics")]
+pub static mut TRACING: bool = false;
+#[cfg(feature = "diagnostics")]
+#[inline]
+pub fn note(addr: u32, kind: u32) {
+    unsafe {
+        if TRACING && TRACE_N < TRACE_CAP {
+            TRACE_ADDR[TRACE_N] = addr;
+            TRACE_KIND[TRACE_N] = kind;
+            TRACE_N += 1;
+        }
+    }
+}
+
 pub struct InternTable {
     pub slots: Vec<(u32, u64)>,
     pub count: usize,
@@ -249,6 +274,11 @@ pub struct Gc {
     pub upgrade_from: u64,
     #[cfg(feature = "diagnostics")]
     pub upgrade_until: u64,
+    /// Log the traversal of exactly one collection. Scoped to one, this costs
+    /// nothing and perturbs nothing -- the reason a hop-by-hop log was
+    /// unaffordable before is that it would have run for all 748.
+    #[cfg(feature = "diagnostics")]
+    pub trace_cycle: u64,
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
     #[cfg(feature = "diagnostics")]
@@ -292,6 +322,8 @@ impl Gc {
             upgrade_from: u64::MAX,
             #[cfg(feature = "diagnostics")]
             upgrade_until: 0,
+            #[cfg(feature = "diagnostics")]
+            trace_cycle: u64::MAX,
             #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };
@@ -628,12 +660,16 @@ impl Gc {
             self.stats.bytes_copied += size as u64;
             d
         };
+        #[cfg(feature = "diagnostics")]
+        note(a, 2 | ((ty(&self.sp, a) as u32) << 8));
         write_header(&self.sp, a, TY_FWD, dest);
         self.work.push(dest);
         Value::heap(dest)
     }
 
     fn scan_object(&mut self, a: u32) {
+        #[cfg(feature = "diagnostics")]
+        note(a, 1 | ((ty(&self.sp, a) as u32) << 8));
         let t = ty(&self.sp, a);
         if layout_of(t) != Layout::Vals {
             return;
@@ -675,6 +711,10 @@ impl Gc {
     }
 
     pub fn minor(&mut self, roots: &mut Roots) {
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            TRACING = self.stats.minor + 1 == self.trace_cycle;
+        }
         #[cfg(debug_assertions)]
         self.sp.in_gc.set(true);
         self.stats.minor += 1;
@@ -688,6 +728,29 @@ impl Gc {
                 pending.push(*v);
             }
         });
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            if TRACING {
+                for v in &pending {
+                    let a = v.as_heap();
+                    note(a, 4 | ((ty(&self.sp, a) as u32) << 8));
+                    // The invariant that must hold for an OLD object reachable
+                    // from the roots: if it points at a young object it must be
+                    // in the remembered set, because `forward` returns early for
+                    // anything outside from-space and a minor descends into an
+                    // old object ONLY via that set.
+                    if ty(&self.sp, a) == crate::obj::TY_PORT && !self.is_young(a) {
+                        let ib = slot(&self.sp, a, 3); // PT_INBOX
+                        let young_box = ib.is_heap() && self.is_young(ib.as_heap());
+                        let remembered = in_remset(&self.sp, a);
+                        note(
+                            a,
+                            5 | ((young_box as u32) << 8) | ((remembered as u32) << 9),
+                        );
+                    }
+                }
+            }
+        }
         let mut fwd: Vec<Value> = Vec::with_capacity(pending.len());
         for v in &pending {
             fwd.push(self.forward(*v));
@@ -702,6 +765,15 @@ impl Gc {
 
         // 2. remembered set (old -> young edges)
         let old_rem = core::mem::take(&mut self.remembered);
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            if TRACING {
+                // 3 = an entry of the taken remembered list, with its type.
+                for a in &old_rem {
+                    note(*a, 3 | ((ty(&self.sp, *a) as u32) << 8));
+                }
+            }
+        }
         for a in &old_rem {
             set_in_remset(&self.sp, *a, false);
         }

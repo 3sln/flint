@@ -293,6 +293,31 @@ pub extern "C" fn set_gc_upgrade_window(from_lo: u32, from_hi: u32, until_lo: u3
     }
 }
 
+/// Log the traversal of exactly this collection, and nothing else.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn set_gc_trace_cycle(lo: u32, hi: u32) {
+    unsafe { ensure_rt().gc.trace_cycle = ((hi as u64) << 32) | lo as u64 }
+}
+
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_trace_n() -> u32 {
+    unsafe { crate::gc::TRACE_N as u32 }
+}
+
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_trace_addr(i: u32) -> u32 {
+    unsafe { if (i as usize) < crate::gc::TRACE_N { crate::gc::TRACE_ADDR[i as usize] } else { 0 } }
+}
+
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_trace_kind(i: u32) -> u32 {
+    unsafe { if (i as usize) < crate::gc::TRACE_N { crate::gc::TRACE_KIND[i as usize] } else { 0 } }
+}
+
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_allocs() -> u64 {
