@@ -45,18 +45,6 @@ const MIN_CHUNK: u32 = 1024 * 1024;
 
 /// Weak, hash-keyed interning table. Stores `(hash, value-bits)`; the hash is
 /// stored so that rehashing after a collection never has to look at the heap.
-
-pub static mut PHASE: u32 = 0;
-pub static mut TRACE_TOP: usize = 0;
-pub static mut TRACE_V1: u64 = 0;
-pub static mut BAD: [i64; 6] = [-1; 6];
-pub static mut BAD_TOP: i64 = -1;
-pub static mut BAD_V1: i64 = 0;
-pub static mut REAPED: [i64; 32] = [0; 32];
-pub static mut REAPED_N: usize = 0;
-pub static mut ORPHANED: [i64; 32] = [0; 32];
-pub static mut ORPHANED_N: usize = 0;
-
 pub struct InternTable {
     pub slots: Vec<(u32, u64)>,
     pub count: usize,
@@ -172,14 +160,6 @@ impl Roots {
             ],
             singletons: Vec::new(),
         }
-    }
-
-    pub fn for_each_tagged<F: FnMut(u32, usize, Value)>(&mut self, mut f: F) {
-        for (i, v) in self.stack[..self.stack_top].iter().enumerate() { f(0, i, *v); }
-        for (i, v) in self.shadow.iter().enumerate() { f(1, i, *v); }
-        for (i, v) in self.globals.iter().enumerate() { f(2, i, *v); }
-        for (i, v) in self.consts.iter().enumerate() { f(3, i, *v); }
-        for (i, v) in self.singletons.iter().enumerate() { f(4, i, *v); }
     }
 
     fn for_each<F: FnMut(&mut Value)>(&mut self, mut f: F) {
@@ -452,32 +432,6 @@ impl Gc {
         if self.stress {
             self.minor(roots);
             self.maybe_major(roots);
-            unsafe {
-                if BAD[0] < 0 {
-                    let lo = self.from;
-                    let bump = self.bump;
-                    let olds = self.old_chunks.clone();
-                    let spc = &self.sp;
-                    let mut hit: Option<(u32, usize, u8)> = None;
-                    roots.for_each_tagged(|which, i, v| {
-                        if hit.is_some() || !v.is_heap() { return; }
-                        let a = v.as_heap();
-                        let young = a >= lo && a < bump;
-                        let old = olds.iter().any(|c| a >= c.addr && a < c.addr + c.len);
-                        let t = crate::obj::ty(spc, a);
-                        if (!young && !old) || t >= crate::obj::TY_MAX || t == crate::obj::TY_FWD {
-                            hit = Some((which, i, t));
-                        }
-                    });
-                    if let Some((w, i, t)) = hit {
-                        BAD[0] = w as i64; BAD[1] = i as i64; BAD[2] = t as i64;
-                        BAD[3] = PHASE as i64; BAD[4] = roots.stack_top as i64;
-                        BAD[5] = self.stats.minor as i64;
-                        BAD_TOP = TRACE_TOP as i64;
-                        BAD_V1 = TRACE_V1 as i64;
-                    }
-                }
-            }
         }
         if self.bump + size > self.from_end {
             self.minor(roots);
@@ -625,7 +579,6 @@ impl Gc {
     }
 
     pub fn minor(&mut self, roots: &mut Roots) {
-        unsafe { TRACE_TOP = roots.stack_top; TRACE_V1 = if roots.stack.len() > 1 { roots.stack[1].0 } else { 0 }; }
         self.stats.minor += 1;
         self.to_bump = self.to;
         self.work.clear();
@@ -737,25 +690,6 @@ impl Gc {
             }
         }
 
-        unsafe {
-            if BAD[0] < 0 {
-                let olds = self.old_chunks.clone();
-                let spc = &self.sp;
-                let mut hit: Option<(u32, usize)> = None;
-                roots.for_each_tagged(|which, i, v| {
-                    if hit.is_some() || !v.is_heap() { return; }
-                    let a = v.as_heap();
-                    if olds.iter().any(|c| a >= c.addr && a < c.addr + c.len) && !marked(spc, a) {
-                        hit = Some((which, i));
-                    }
-                });
-                if let Some((w, i)) = hit {
-                    BAD[0] = 100 + w as i64; BAD[1] = i as i64; BAD[2] = -1;
-                    BAD[3] = PHASE as i64; BAD[4] = roots.stack_top as i64;
-                    BAD[5] = self.stats.major as i64;
-                }
-            }
-        }
         // The remembered set may name objects we are about to free.
         let rem = core::mem::take(&mut self.remembered);
         for a in rem {
