@@ -81,6 +81,9 @@ pub static mut ORIG_WHO: [u32; ORIG_CAP] = [0; ORIG_CAP];
 /// made `flint/pow` briefly look like an answer.
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_SEQ: [u32; ORIG_CAP] = [0; ORIG_CAP];
+/// `[checked, unrooted, first-unrooted-address, first-unrooted-type]`
+#[cfg(feature = "diagnostics")]
+pub static mut PARK_ROOTED: [u32; 4] = [0; 4];
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_N: usize = 0;
 #[cfg(feature = "diagnostics")]
@@ -210,6 +213,22 @@ impl Roots {
             ],
             singletons: Vec::new(),
         }
+    }
+
+    /// Does any TRACED root hold this address right now?
+    ///
+    /// A presence question, answered directly rather than through the thing
+    /// presence causes. "It is reachable because it is on the value stack" is a
+    /// rooting ARGUMENT, and a more careful reading of a rooting argument is
+    /// still a rooting argument.
+    #[cfg(feature = "diagnostics")]
+    pub fn holds(&self, addr: u32) -> bool {
+        let hit = |v: &Value| v.is_heap() && v.as_heap() == addr;
+        self.stack[..self.stack_top].iter().any(hit)
+            || self.shadow.iter().any(hit)
+            || self.globals.iter().any(hit)
+            || self.consts.iter().any(hit)
+            || self.singletons.iter().any(hit)
     }
 
     fn for_each<F: FnMut(&mut Value)>(&mut self, mut f: F) {

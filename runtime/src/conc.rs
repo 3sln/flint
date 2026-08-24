@@ -1389,7 +1389,25 @@ impl Rt {
             let queued = fx(self.slot(self.r(hi), PT_BYTES));
             if queued > 0 && queued + len > cap {
                 let target = self.r(hi);
+                #[cfg(feature = "diagnostics")]
+                let msg = self.r(vi);
                 self.pop_to(base);
+                // Same presence question on the host-port park, which is the
+                // branch a back-pressured document run actually takes.
+                #[cfg(feature = "diagnostics")]
+                if msg.is_heap() {
+                    unsafe { crate::gc::PARK_ROOTED[0] += 1; }
+                    if !self.roots.holds(msg.as_heap()) {
+                        unsafe {
+                            if crate::gc::PARK_ROOTED[1] == 0 {
+                                crate::gc::PARK_ROOTED[2] = msg.as_heap();
+                                crate::gc::PARK_ROOTED[3] =
+                                    crate::obj::ty(&self.gc.sp, msg.as_heap()) as u32;
+                            }
+                            crate::gc::PARK_ROOTED[1] += 1;
+                        }
+                    }
+                }
                 return self.park_on_port(WK_SEND, target);
             }
             self.set(self.r(hi), PT_BYTES, Value::fixnum(queued + len));
@@ -1417,7 +1435,26 @@ impl Rt {
         let cap = fx(self.slot(self.r(pei), PT_CAP));
         if self.inbox_count(self.r(pei)) as i64 >= cap {
             let target = self.r(pei);
+            #[cfg(feature = "diagnostics")]
+            let msg = self.r(vi);
             self.pop_to(base);
+            // `pop_to` has just unrooted the message. It is believed to survive
+            // on the value stack, which is traced -- but that is a rooting
+            // argument, and `park_on_port` allocates. Ask instead.
+            #[cfg(feature = "diagnostics")]
+            if msg.is_heap() {
+                unsafe { crate::gc::PARK_ROOTED[0] += 1; }
+                if !self.roots.holds(msg.as_heap()) {
+                    unsafe {
+                        if crate::gc::PARK_ROOTED[1] == 0 {
+                            crate::gc::PARK_ROOTED[2] = msg.as_heap();
+                            crate::gc::PARK_ROOTED[3] =
+                                crate::obj::ty(&self.gc.sp, msg.as_heap()) as u32;
+                        }
+                        crate::gc::PARK_ROOTED[1] += 1;
+                    }
+                }
+            }
             return self.park_on_port(WK_SEND, target);
         }
         let val = self.r(vi);

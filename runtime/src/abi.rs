@@ -392,6 +392,13 @@ pub extern "C" fn stat_origin(addr: u32) -> u32 {
     }
 }
 
+/// `[parks checked, message NOT in any traced root, first such address, its type]`
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_park_rooted(i: u32) -> u32 {
+    unsafe { if (i as usize) < 4 { crate::gc::PARK_ROOTED[i as usize] } else { 0 } }
+}
+
 /// The allocation serial of the object at `addr`, so several carriers of one
 /// stale pointer can be ordered and the EARLIEST -- the introducer -- picked out.
 #[cfg(feature = "diagnostics")]

@@ -890,6 +890,50 @@ which is traced, so the reasoning holds; but it is the one place in that tree
 where a value is deliberately unrooted before an allocation, and "it survives by
 another route" is exactly the kind of argument this bug has punished five times.
 
+## Both park branches of `port_send` are eliminated — by coverage
+
+Asked rather than read: at the allocation the park path performs, walk the traced
+roots and ask whether the message's address is present. Not whether it looks
+rooted — whether it is there.
+
+    parks on a full channel checked: 0
+    parks on a full host port checked: 0
+    of those, message in NO traced root: 0
+
+**Neither park branch executes in the failing run.** The concern that
+`pop_to(base)` unroots the message before `park_on_port` allocates was moot: the
+code never runs, so the "it survives on the value stack" argument was never even
+exercised. A zero here is a coverage fact, not a clean result — and it is the
+strongest kind of elimination, because it does not depend on the check being
+right.
+
+So the introduction inside `flint/port-send` is on a **non-parking** path: either
+the host branch's `push_event`, or the channel branch's `port_enqueue`. Both were
+read as correctly rooted; the serial says one of those readings is wrong.
+
+## The rules this investigation produced
+
+Six, in the order they cost the most:
+
+1. **A lookup against the wrong table returns something, and it looks like a
+   finding.** Structural, not a habit of scepticism: `flint/pow` was
+   disbelievable, and a plausible wrong answer would not have been.
+2. **A check means nothing about a space it does not walk.** State the space,
+   then verify the walk covers it.
+3. **Measure presence directly, not through the thing presence causes.** A
+   counter on `forward()` could not fire for a value that is never traced.
+4. **A watch address is only valid if the object cannot move.**
+5. **An unscoped ring is a *silently* weaker instrument** — "not in the ring"
+   reads exactly like a negative result and is not one.
+6. **Order by allocation to turn an attribution into a cause.** Any propagating
+   corruption has carriers, and any per-object attribution names one of them.
+
+And one about arguments: **a more careful reading of a rooting argument is still
+a rooting argument.** Four functions were read as correctly rooted and the
+measurement puts the introduction inside them. When the line is found, the
+question worth answering is not which one was wrong but *what made the wrong
+reading look right* — because that is what will make the next one look right.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.
