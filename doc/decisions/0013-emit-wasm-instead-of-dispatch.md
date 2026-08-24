@@ -483,3 +483,133 @@ is not a trade worth making, and the number is why.
   neither is measured yet, because neither can be until an emitter exists. They
   are the ones that could still make this a bad trade, and they get measured
   against the same construe payloads.
+
+---
+
+# Built, measured, and where it stands
+
+`--aot` on `bin/flint`, against units built with `bin/build-units --aot`. **Off
+by default and EXPERIMENTAL**: there is an open correctness bug, recorded below
+in full rather than left for somebody to rediscover.
+
+## The shape that got built
+
+`src/flint/aot.cljc` emits one wasm function per arity, laid out as a chain of
+blocks that fall through in order inside a `loop` with a `br_table` at the top.
+Three properties fall out of that layout and all three were asked for:
+
+* the engine optimises across the join, because adjacent chunks are
+  straight-line fallthrough;
+* a forward jump is one `br`, because later chunks enclose earlier ones — only a
+  BACKWARD jump pays the dispatcher, and back-edges are 2.4% of instructions;
+* **re-entry is possible at every chunk**, which is the part wasm forces. You
+  cannot branch INTO structured control flow, so reconstructing `if`/`else`
+  nesting would have allowed entry only at the top — and the measurement above
+  says a quarter of the work in a program that parks happens in a frame that has
+  already been resumed.
+
+A chunk boundary is: every jump target, every call, every native, every opcode
+the emitter does not inline, every backward jump, and the instruction after each
+of those. Free at run time; ~4 bytes of `br_table` each.
+
+**Twelve opcodes are 98.7% of executed instructions** and all of them are
+emitted inline. Everything else hands one instruction back to the interpreter
+and resumes at the next chunk — which is what lets the emitter be COMPLETE from
+the first version rather than refusing a function over one rare opcode.
+
+## One correction to the design above, and it is not optional
+
+0013 assumed compiled functions call each other and that a bail unwinds several
+wasm frames. Half of that is right and half is not:
+
+* A call to a closure DOES run on the wasm stack, and it has to — handing every
+  Clojure call back costs four boundary crossings plus an interpreter dispatch,
+  which in a numeric loop is three of those per iteration and more than the
+  dispatch it saves. Measured: without it, `tight` was **1.18× SLOWER** than the
+  interpreter.
+* But it is **bounded at 48 frames deep**. The wasm stack cannot be suspended
+  and cannot be grown; past the cap compiled code hands back and the interpreter
+  carries on, so deep recursion still fails with a catchable
+  `StackOverflowError` at `MAX_FRAMES` rather than trapping. Parking works at
+  any depth because the frames the scheduler saves are the interpreter's, not
+  wasm's — a park leaves through each level in turn and nothing about the
+  continuation lives on the stack being unwound.
+
+## Gas is exact, not approximate
+
+Charged inline per chunk by the chunk's static instruction count, into a wasm
+local, flushed on every exit. Exact because a chunk has no internal branch — and
+making that true is why a jump ends a chunk. `test/aot.clj` asserts the
+instruction count is **identical** with and without compilation on five programs,
+not merely close; 0016 makes gas a production feature and construe's gates depend
+on it. The first version of this was wrong in both directions at once and every
+answer still matched, which is precisely why the count is asserted.
+
+## The numbers
+
+Against the interpreter, same host, same payloads:
+
+| workload | interpreter | compiled | |
+| --- | --- | --- | --- |
+| `tight` (dispatch-bound loop) | 164.79 ms | 136.54 ms | **1.21× faster** |
+| `words` | 110.91 ms | 90.62 ms | **1.22× faster** |
+| `json` | 102.15 ms | 86.21 ms | **1.18× faster** |
+| `maps` (allocation-bound) | 47.02 ms | 43.68 ms | 1.08× faster |
+| construe `parse` ×20 | 7.47 ms | 7.01 ms | 1.07× faster |
+| construe `suggest` | 17.00 ms | 13.63 ms | **1.25× faster** |
+
+And the costs, which are the reason this is not on by default:
+
+* **Module: +98%** on the construe payload (315 KB → 624 KB).
+* **Cold start: 0.965 ms → 1.08 ms**, a 12% regression on flint's largest
+  measured win.
+* **Production is unaffected**: 203 757 bytes, against 203 360 before any of
+  this. The machinery is a cargo feature (`aot`), absent by default, for the
+  same reason diagnostics are — it measured 7 002 bytes of production module
+  when it was merely unused rather than absent, and 0009 had already spent a
+  chosen budget on instantiating the loop twice.
+
+**The prize is smaller than the estimate said.** The estimate priced dispatch at
+6.2 ns/instruction and predicted 88–91% of it recovered. The measured win is
+8–25%. The gap is the estimate's, not the implementation's: 6.2 ns is the cost
+of an entire tight-loop iteration for the simplest instruction, and a compiled
+instruction still does the same loads and stores — only the branch and the
+operand decode go away.
+
+## The open bug
+
+**A program that combines green threads with a HOST port produces wrong answers
+under `--aot`.** Everything else measured — every `bench/progs` program, both
+construe payloads, all five programs in `test/aot.clj`, and `test/threads.clj`
+end to end — gives identical answers and identical instruction counts.
+
+Reproducer, ~15 lines: open the `doc` capability with the EDN codec, send
+`{:op :structure}`, receive. Interpreted it answers; compiled it raises
+`edn: map needs an even number of forms` from the reader.
+
+Delta-minimised to five arities that must ALL be compiled for it to appear:
+`conj`, and `pk` / `nx!` / `skip!` / `token` from `clojure.edn`. No single one of
+them does it, and no pair — so it is an interaction, not a bad instruction.
+
+Ruled out by measurement, not by reading:
+
+* **Not the GC.** The standing checks report zero over the failing run — but
+  read that correctly: `stat_stale_root` reports *"over 0 collections"*. No
+  collection ran at all. That is a coverage zero AND an elimination, and only
+  because the coverage was printed beside it.
+* **Not the nested wasm-stack call.** Setting `AOT_MAX_DEPTH` to 0 does not fix
+  it.
+* **Not chunk-internal gas accounting.** Fixing that changed the symptom (from
+  `not a number` to `map needs an even number of forms`) without fixing it,
+  which is itself the finding: the failure is sensitive to chunk layout.
+* **Not the EDN reader alone.** Round-tripping the same payloads through
+  `clojure.edn` under `--aot`, without a port, is correct.
+* **Not a prefix.** Prefix bisection pointed at `read-symbolic`, then at
+  `read-str`, then at `-`; every one of them was wrong on its own. Adding an
+  arity shifts what else runs compiled, so a prefix names nothing. Same trap as
+  collection #300 in the GC hunt, and the same answer: minimise a SET.
+
+`bin/flint --aot` prints the warning, `test/aot.clj` guards everything that
+works, and the bisection handles used to get this far are still there:
+`FLINT_AOT_LIMIT`, `FLINT_AOT_FROM`, `FLINT_AOT_ONLY`, `FLINT_AOT_PICK`,
+`FLINT_AOT_SKIP_FROM`/`_TO`, `FLINT_AOT_DUMP`, `FLINT_AOT_FN`.

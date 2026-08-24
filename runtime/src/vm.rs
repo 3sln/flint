@@ -91,6 +91,9 @@ pub struct Arity {
     pub nlocals: u16,
     pub code: u32,
     pub len: u32,
+    /// Index into `Image::aot`, or `AOT_NONE`.
+    #[cfg(feature = "aot")]
+    pub aot: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -133,6 +136,11 @@ pub struct Image {
     pub var_names: Vec<u32>,
     pub entry: u32,
     pub init: Vec<u32>,
+    /// One entry per compiled arity (`doc/decisions/0013`). Empty in a module
+    /// built without AOT, which is what lets the interpreter's own loop be
+    /// monomorphised free of the re-entry check.
+    #[cfg(feature = "aot")]
+    pub aot: Vec<crate::aot::AotFn>,
 }
 
 pub struct Handler {
@@ -156,6 +164,19 @@ pub struct Frame {
     /// live reference is in the value stack -- true with no second mechanism.
     pub ret_to: usize,
     pub handlers: usize,
+    /// Index into `image.aot`, or `AOT_NONE`. Set by `enter` from the arity it
+    /// selected, so the whole AOT question is one field on the frame rather
+    /// than a lookup keyed on something the frame does not carry.
+    #[cfg(feature = "aot")]
+    pub aot_idx: u32,
+    /// Re-enter compiled code when `ip` reaches this, at `aot_block`. Every
+    /// re-entry point in the design funnels through this one comparison: frame
+    /// entry, the instruction after a call, a resumed park, a caught throw, and
+    /// the instruction after an opcode the emitter does not inline.
+    #[cfg(feature = "aot")]
+    pub aot_ip: u32,
+    #[cfg(feature = "aot")]
+    pub aot_block: u32,
     /// Instructions executed in THIS invocation, excluding nested frames. The
     /// run length under 0013's guard-only model.
     #[cfg(feature = "diagnostics")]
@@ -175,6 +196,15 @@ pub struct Frame {
 pub type NativeFn = extern "C" fn(*mut Rt, u32, u32) -> u64;
 
 pub const MAX_FRAMES: usize = 8192;
+
+/// This arity has no compiled code.
+pub const AOT_NONE: u32 = u32::MAX;
+/// Re-enter nowhere: `aot_ip` never equals a real `ip`, because `ip` 0 is the
+/// image header rather than any function's first instruction.
+pub const AOT_NEVER: u32 = u32::MAX;
+/// The block is not known yet and must be looked up -- an unwind into a handler
+/// is the only path that arrives without one.
+pub const AOT_LOOKUP: u32 = u32::MAX;
 
 /// Whether this instantiation of the interpreter counts.
 ///
@@ -331,6 +361,30 @@ impl Rt {
     /// directly, ever.
     #[inline]
     fn call_native(&mut self, idx: u32, base: usize, argc: usize) -> Value {
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            if let Some(c) = crate::aotstat::NATIVE_CALLS.get_mut(idx as usize) {
+                *c += 1;
+            }
+            if crate::aotstat::NATIVE_TRACE_N < crate::aotstat::TRACE_CAP {
+                let k = crate::aotstat::NATIVE_TRACE_N;
+                crate::aotstat::NATIVE_TRACE[k] = idx as u16;
+                // The FUNCTION, not the ip: compiled code only commits `ip`
+                // when it leaves, so an ip recorded here is stale and the two
+                // builds cannot be compared on it. `stack[ret_to]` is the
+                // frame's own closure and its first slot is the function index.
+                crate::aotstat::NATIVE_TRACE_IP[k] = self
+                    .frames
+                    .last()
+                    .map(|f| f.ret_to)
+                    .and_then(|rt| self.roots.stack.get(rt).copied())
+                    .filter(|c| c.is_heap())
+                    .filter(|c| ty(&self.gc.sp, c.as_heap()) == TY_CLOSURE)
+                    .map(|c| slot(&self.gc.sp, c.as_heap(), 0).as_fixnum() as u32)
+                    .unwrap_or(u32::MAX);
+                crate::aotstat::NATIVE_TRACE_N += 1;
+            }
+        }
         let slot = self.image.natives[idx as usize];
         #[cfg(target_arch = "wasm32")]
         let f: NativeFn = unsafe { core::mem::transmute(slot as usize) };
@@ -534,17 +588,25 @@ impl Rt {
     /// Push a frame for `closure`. The callee sits at `callee_at`, args follow.
     pub(crate) fn enter(&mut self, closure: Value, callee_at: usize, argc: usize) -> bool {
         let fn_idx = self.slot(closure, 0).as_fixnum() as usize;
+        #[cfg(feature = "aot")]
+        let mut aot_idx = AOT_NONE;
         let (arity, nlocals, code, end, variadic, fixed) = {
             let def = &self.image.fns[fn_idx];
             match def.select(argc) {
-                Some(a) => (
-                    *a,
-                    a.nlocals as usize,
-                    a.code,
-                    a.code + a.len,
-                    a.variadic,
-                    a.argc as usize,
-                ),
+                Some(a) => {
+                    #[cfg(feature = "aot")]
+                    {
+                        aot_idx = a.aot;
+                    }
+                    (
+                        *a,
+                        a.nlocals as usize,
+                        a.code,
+                        a.code + a.len,
+                        a.variadic,
+                        a.argc as usize,
+                    )
+                }
                 None => {
                     let namec = def.name as usize;
                     let name = self.roots.consts.get(namec).copied().unwrap_or(NIL);
@@ -597,6 +659,14 @@ impl Rt {
             end,
             ret_to: callee_at,
             handlers: self.handlers.len(),
+            #[cfg(feature = "aot")]
+            aot_idx,
+            // Entry at the top is just the first re-entry point, so nothing
+            // about starting a frame is special-cased.
+            #[cfg(feature = "aot")]
+            aot_ip: if aot_idx == AOT_NONE { AOT_NEVER } else { code },
+            #[cfg(feature = "aot")]
+            aot_block: 0,
             #[cfg(feature = "diagnostics")]
             instrs: 0,
             #[cfg(feature = "diagnostics")]
@@ -612,6 +682,11 @@ impl Rt {
     /// slice, `NoBudget::tick` is a `false` the optimiser deletes along with the
     /// counter, and the loop has no budget machinery in it at all.
     pub fn run(&mut self, base_depth: usize) -> Value {
+        // Two instantiations, not four. Monomorphising the AOT check as well
+        // would double the biggest function in the module a second time, and
+        // 0009 traded a known budget for the free loop -- spending it again on
+        // a feature most modules do not use is exactly what that budget exists
+        // to stop. One predictable comparison instead.
         if self.counting() {
             self.run_with::<Counting>(base_depth)
         } else {
@@ -620,6 +695,21 @@ impl Rt {
     }
 
     fn run_with<B: BudgetPolicy>(&mut self, base_depth: usize) -> Value {
+        // Saved and restored: `run` re-enters for a lazy-seq force, a
+        // comparator, `map`.
+        #[cfg(feature = "aot")]
+        let outer_base = core::mem::replace(&mut self.run_base, base_depth);
+        let out = self.run_inner::<B>(base_depth);
+        #[cfg(feature = "aot")]
+        {
+            self.run_base = outer_base;
+        }
+        out
+    }
+
+    fn run_inner<B: BudgetPolicy>(&mut self, base_depth: usize) -> Value {
+        #[cfg(feature = "aot")]
+        let aot_on = !self.image.aot.is_empty();
         // doc/decisions/0013's region histogram. `run` is Model A -- the
         // distance from one call to the next. `last_ip`/`last_depth` detect a
         // TAKEN backward jump without knowing anything about which opcodes jump,
@@ -634,6 +724,18 @@ impl Rt {
                 let f = self.frames.last().unwrap();
                 (f.ip, f.fp)
             };
+            // The one comparison every re-entry point in the design funnels
+            // through: frame entry, the instruction after a call, a resumed
+            // park, a caught throw, and the instruction after an opcode the
+            // emitter does not inline. It is a constant `false` in a module
+            // with nothing compiled.
+            #[cfg(feature = "aot")]
+            if aot_on && self.frames.last().unwrap().aot_ip == ip {
+                if self.aot_enter(ip) {
+                    return NIL;
+                }
+                continue;
+            }
             if B::tick(self) {
                 // `ip` is a local for speed and is written back to the frame
                 // only by `commit!`, which is declared further down and so is
@@ -692,6 +794,7 @@ impl Rt {
                 }
                 (last_ip, last_depth) = (ip, depth);
                 COUNTS[C_INSTRS] += 1;
+                OPS[opcode as usize] += 1;
                 run += 1;
                 if let Some(f) = self.frames.last_mut() {
                     f.instrs += 1;
@@ -1330,6 +1433,10 @@ impl Rt {
     }
 
     fn unwind(&mut self) -> bool {
+        #[cfg(feature = "aot")]
+        {
+            self.unwinds += 1;
+        }
         // Every failure comes through here, so this is the one place that has
         // to turn the allocator's cheap sentinel into an error somebody can
         // read. Cold path: an ordinary throw pays one comparison.
@@ -1350,7 +1457,16 @@ impl Rt {
             self.roots.shadow.truncate(h.shadow);
             let exc = self.clear_error();
             self.vpush(exc);
-            self.frames.last_mut().unwrap().ip = h.target;
+            let f = self.frames.last_mut().unwrap();
+            f.ip = h.target;
+            // A handler target is a jump target, so it is a chunk start -- but
+            // only the compiled arity knows which chunk, and an unwind is the
+            // one path that arrives without having been told.
+            #[cfg(feature = "aot")]
+            if f.aot_idx != AOT_NONE {
+                f.aot_ip = h.target;
+                f.aot_block = AOT_LOOKUP;
+            }
             return true;
         }
         false
@@ -1412,5 +1528,272 @@ impl Rt {
             Some(f) => f(self, r),
             None => r,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The runtime half of the emitted code (`doc/decisions/0013`).
+//
+// A separate `impl` behind its own feature, so that a module which never asks
+// for compiled arities carries none of this. That is 0016's rule applied to an
+// optimisation rather than a diagnostic: measured at 7 002 bytes of production
+// module, against a budget 0009 had already spent once on instantiating the
+// loop twice.
+#[cfg(feature = "aot")]
+impl Rt {
+    /// Call a compiled arity through the wasm table. The signature is fixed by
+    /// the emitter: `(rt, fp, ret_to, block)`, no result -- everything it needs
+    /// to say it says through the frame and the sync block.
+    fn call_aot(&mut self, slot: u32, fp: u32, ret_to: u32, block: u32, sync: u32) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let f: crate::aot::AotEntry = unsafe { core::mem::transmute(slot as usize) };
+            let p = self as *mut Rt;
+            f(p, fp, ret_to, block, sync);
+        }
+        // On a host there is no wasm table and nothing is compiled, so this is
+        // unreachable rather than emulated -- pretending otherwise would give
+        // `cargo test` a path the shipped module does not have.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = (slot, fp, ret_to, block, sync);
+            unreachable!("compiled arities exist only in a wasm module");
+        }
+    }
+
+
+    /// How deep compiled code may call compiled code on the wasm stack. Past
+    /// this it hands back, so the wasm stack is bounded no matter how deep the
+    /// Clojure recursion goes.
+    const AOT_MAX_DEPTH: u32 = 48;
+
+    /// Reserve the whole body's operand stack in one go, so that every push the
+    /// emitter produces is an unchecked store rather than a bounds test.
+    pub(crate) fn aot_reserve(&mut self, n: usize) {
+        self.vreserve(n);
+    }
+
+    /// `NATIVE`, run from compiled code. A native is a Rust call either way, so
+    /// there is nothing to gain by leaving -- and at 18% of executed
+    /// instructions this is the single biggest thing worth keeping inside.
+    pub(crate) fn aot_native_at(
+        &mut self,
+        idx: u32,
+        argc: usize,
+        ip: u32,
+        block: u32,
+        next_ip: u32,
+        next_block: u32,
+    ) -> u32 {
+        let keep_top = self.roots.stack_top;
+        let base = keep_top - argc;
+        let r = self.call_native(idx, base, argc);
+        self.roots.stack_top = base;
+        if self.failed() {
+            return self.aot_failed(ip, block, next_ip, next_block, keep_top, keep_top - argc, r);
+        }
+        self.vpush(r);
+        0
+    }
+
+    /// A call from compiled code failed. Three outcomes, and conflating any two
+    /// of them is a bug this already had:
+    ///
+    /// * **A park** is handled HERE rather than handed back. Handing it back
+    ///   looks tidier -- all the park logic in one place -- but it makes the
+    ///   interpreter dispatch the same call a second time, and a parking builtin
+    ///   is only re-executable across a RESUME, not twice in a row before the
+    ///   host has answered. `open` registered its request twice.
+    /// * **A courtesy yield** has already made the call, so the frame must come
+    ///   back AFTER it, and the callee and arguments have to come off first --
+    ///   a different top from the one a re-execution needs.
+    /// * **A throw must not re-execute.** It already happened. Unwind here,
+    ///   exactly as the interpreter's arm would.
+    #[allow(clippy::too_many_arguments)]
+    fn aot_failed(
+        &mut self,
+        ip: u32,
+        block: u32,
+        next_ip: u32,
+        next_block: u32,
+        keep_top: usize,
+        yield_top: usize,
+        r: Value,
+    ) -> u32 {
+        if self.thrown.bits() == crate::value::PARK.bits() {
+            if let Some(f) = self.frames.last_mut() {
+                f.aot_block = block;
+            }
+            let base = self.run_base;
+            match self.parked(ip, keep_top, base, true) {
+                Parked::Saved => {
+                    self.aot_unwound_out = true;
+                }
+                Parked::Yielded => {
+                    self.roots.stack_top = yield_top;
+                    self.vpush(r);
+                    if let Some(f) = self.frames.last_mut() {
+                        f.ip = next_ip;
+                        f.aot_ip = next_ip;
+                        f.aot_block = next_block;
+                    }
+                    self.aot_unwound_out = true;
+                }
+                Parked::Failed => {
+                    if !self.unwind() {
+                        self.aot_unwound_out = true;
+                    }
+                }
+            }
+            return 1;
+        }
+        if !self.unwind() {
+            self.aot_unwound_out = true;
+        }
+        1
+    }
+
+    /// `CALL`, run from compiled code.
+    ///
+    /// A callee that is not a closure -- a builtin held in a var, a keyword used
+    /// as a function, a map looked up -- completes right here and compiled code
+    /// carries on.
+    ///
+    /// A callee that IS a closure gets its frame pushed here, and then runs on
+    /// the wasm stack to a BOUNDED depth. 0013 assumed that and it is right for
+    /// the common case: a Clojure call otherwise costs four boundary crossings
+    /// and an interpreter dispatch, which in a numeric loop is three of those
+    /// per iteration and more than the dispatch it saves. Bounded, because the
+    /// wasm stack cannot be suspended and cannot be grown -- past the cap this
+    /// hands back, so deep recursion still fails with a catchable
+    /// `StackOverflowError` at `MAX_FRAMES` rather than trapping.
+    ///
+    /// Parking still works at any depth: a park leaves through every level in
+    /// turn, each one seeing its callee's frame still present and returning too.
+    /// The frames the scheduler saves are OURS, not wasm's, so nothing about the
+    /// continuation lives on the stack being unwound.
+    pub(crate) fn aot_call_at(
+        &mut self,
+        argc: usize,
+        ip: u32,
+        block: u32,
+        next_ip: u32,
+        next_block: u32,
+    ) -> u32 {
+        let keep_top = self.roots.stack_top;
+        let callee_at = keep_top - argc - 1;
+        let callee = self.vat(callee_at);
+        if callee.is_heap() && ty(&self.gc.sp, callee.as_heap()) == TY_CLOSURE {
+            // `next_ip`, NOT `ip`. This function performs the `enter` itself, so
+            // an `ip` still pointing at the CALL would have the interpreter
+            // dispatch it a second time when the callee returned.
+            if let Some(f) = self.frames.last_mut() {
+                f.ip = next_ip;
+                f.aot_ip = next_ip;
+                f.aot_block = next_block;
+            }
+            let (before, unwinds) = (self.frames.len(), self.unwinds);
+            if !self.enter(callee, callee_at, argc) {
+                if !self.unwind() {
+                    self.aot_unwound_out = true;
+                }
+                return 1;
+            }
+            let f = self.frames.last().unwrap();
+            let (idx, cfp, cret) = (f.aot_idx, f.fp, f.ret_to);
+            if idx != AOT_NONE && self.aot_depth < Self::AOT_MAX_DEPTH {
+                let (slot, depth) = {
+                    let a = &self.image.aot[idx as usize];
+                    (a.slot, a.depth)
+                };
+                self.aot_reserve(depth as usize);
+                self.frames.last_mut().unwrap().aot_ip = AOT_NEVER;
+                crate::aot::resync(self);
+                let sync = crate::aot::aot_prologue();
+                self.aot_depth += 1;
+                self.call_aot(slot, cfp as u32, cret as u32, 0, sync);
+                self.aot_depth -= 1;
+                // NOT the frame count on its own: an unwind to a handler in this
+                // very frame truncates back to exactly the depth the call
+                // started at, and compiled code then carried on past the handler
+                // with an unwound stack.
+                if self.frames.len() == before
+                    && self.unwinds == unwinds
+                    && !self.aot_unwound_out
+                {
+                    return 0;
+                }
+            }
+            return 1;
+        }
+        let r = self.call_value(argc);
+        if self.failed() {
+            return self.aot_failed(
+                ip,
+                block,
+                next_ip,
+                next_block,
+                keep_top,
+                keep_top - argc - 1,
+                r,
+            );
+        }
+        self.vpush(r);
+        0
+    }
+
+    /// `RETURN`, run from compiled code.
+    pub(crate) fn aot_return_here(&mut self) {
+        let v = self.vpop();
+        let f = self.frames.pop().unwrap();
+        #[cfg(feature = "diagnostics")]
+        crate::aotstat::note_frame(f.instrs, f.resumed);
+        self.handlers.truncate(f.handlers);
+        self.roots.stack_top = f.ret_to;
+        self.vpush(v);
+    }
+
+    /// Run compiled code for the top frame, if it is asking to be entered.
+    /// Returns true if the interpreter should return from `run` -- an uncaught
+    /// throw inside compiled code unwound past every handler.
+    #[inline]
+    pub(crate) fn aot_enter(&mut self, ip: u32) -> bool {
+        let (idx, fp, ret_to, mut block) = {
+            let f = self.frames.last().unwrap();
+            (f.aot_idx, f.fp, f.ret_to, f.aot_block)
+        };
+        if idx == AOT_NONE {
+            self.frames.last_mut().unwrap().aot_ip = AOT_NEVER;
+            return false;
+        }
+        if block == AOT_LOOKUP {
+            // The one path that arrives without a block: an unwind picked the
+            // handler's target, and only the compiled arity knows which of its
+            // blocks that is.
+            match self.image.aot[idx as usize].block_at(ip) {
+                Some(b) => block = b,
+                None => {
+                    self.frames.last_mut().unwrap().aot_ip = AOT_NEVER;
+                    return false;
+                }
+            }
+        }
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            crate::aotstat::COUNTS[crate::aotstat::C_AOT_ENTRIES] += 1;
+        }
+        let (slot, depth) = {
+            let a = &self.image.aot[idx as usize];
+            (a.slot, a.depth)
+        };
+        // Reserved here rather than by a prologue call, so a compiled body makes
+        // no call at all on the way in -- and it is entered once per frame AND
+        // once per return-from-call, so a call on that path is not cheap.
+        self.aot_reserve(depth as usize);
+        self.frames.last_mut().unwrap().aot_ip = AOT_NEVER;
+        crate::aot::resync(self);
+        let sync = crate::aot::aot_prologue();
+        self.call_aot(slot, fp as u32, ret_to as u32, block, sync);
+        core::mem::take(&mut self.aot_unwound_out)
     }
 }

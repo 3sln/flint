@@ -46,6 +46,10 @@ pub const TH_STACK: u32 = 3;
 /// closure of a frame is `stack[ret_to]`, never a copy -- so there is nothing
 /// in here for the collector to find, and a raw blob is the honest encoding.
 pub const TH_FRAMES: u32 = 4;
+/// Bytes per saved frame. Five interpreter words plus the two the AOT entry
+/// needs (`doc/decisions/0013`): which compiled arity, and which block to come
+/// back at.
+pub const FRAME_REC: usize = 28;
 pub const TH_HANDLERS: u32 = 5;
 /// Dynamic bindings: a map of var -> value, per green thread (section 4).
 pub const TH_BINDINGS: u32 = 6;
@@ -314,17 +318,28 @@ impl Rt {
         }
         self.set(self.r(ti), TH_STACK, sv);
 
-        let fb = self.new_obj(TY_RAW, (self.frames.len() * 20) as u32);
+        let fb = self.new_obj(TY_RAW, (self.frames.len() * FRAME_REC) as u32);
         if !fb.is_nil() {
             let addr = fb.as_heap();
-            let bytes = self.gc.sp.bytes_mut(addr + HDR, (self.frames.len() * 20) as u32);
+            let bytes = self.gc.sp.bytes_mut(addr + HDR, (self.frames.len() * FRAME_REC) as u32);
             for (k, f) in self.frames.iter().enumerate() {
-                let o = k * 20;
+                let o = k * FRAME_REC;
                 bytes[o..o + 4].copy_from_slice(&(f.fp as u32).to_le_bytes());
                 bytes[o + 4..o + 8].copy_from_slice(&f.ip.to_le_bytes());
                 bytes[o + 8..o + 12].copy_from_slice(&f.end.to_le_bytes());
                 bytes[o + 12..o + 16].copy_from_slice(&(f.ret_to as u32).to_le_bytes());
                 bytes[o + 16..o + 20].copy_from_slice(&(f.handlers as u32).to_le_bytes());
+                // The record is the same width in both builds, so a snapshot
+                // and a thread save are interchangeable between them.
+                #[cfg(feature = "aot")]
+                {
+                    bytes[o + 20..o + 24].copy_from_slice(&f.aot_idx.to_le_bytes());
+                    bytes[o + 24..o + 28].copy_from_slice(&f.aot_block.to_le_bytes());
+                }
+                #[cfg(not(feature = "aot"))]
+                {
+                    bytes[o + 20..o + 28].fill(0xFF);
+                }
             }
         }
         self.set(self.r(ti), TH_FRAMES, fb);
@@ -411,10 +426,10 @@ impl Rt {
         }
         let fb = self.slot(th, TH_FRAMES);
         if !fb.is_nil() {
-            let n = self.olen(fb) as usize / 20;
+            let n = self.olen(fb) as usize / FRAME_REC;
             let bytes: Vec<u8> = raw_bytes(&self.gc.sp, fb.as_heap()).to_vec();
             for k in 0..n {
-                let o = k * 20;
+                let o = k * FRAME_REC;
                 let g = |i: usize| {
                     u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]])
                 };
@@ -424,6 +439,24 @@ impl Rt {
                     end: g(o + 8),
                     ret_to: g(o + 12) as usize,
                     handlers: g(o + 16) as usize,
+                    // A thread comes back at the instruction it parked ON, and
+                    // a parking native is always a chunk start -- so the block
+                    // saved with the frame is the one to come back to.
+                    //
+                    // Only for a frame that HAS compiled code. Setting this
+                    // unconditionally asked the interpreter to enter compiled
+                    // code for every restored frame, and the first uncompiled
+                    // one indexed the empty side of the table and trapped.
+                    #[cfg(feature = "aot")]
+                    aot_idx: g(o + 20),
+                    #[cfg(feature = "aot")]
+                    aot_ip: if g(o + 20) == crate::vm::AOT_NONE {
+                        crate::vm::AOT_NEVER
+                    } else {
+                        g(o + 4)
+                    },
+                    #[cfg(feature = "aot")]
+                    aot_block: g(o + 24),
                     // The instruction count does not survive the save, so this
                     // invocation is measured from the resume. That is the right
                     // cut: what re-entry buys is exactly the instructions run

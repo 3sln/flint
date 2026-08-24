@@ -15,6 +15,12 @@ crate-type = ["rlib"]
 # the runtime's own panic handler under wasm32.
 host-tools = []
 
+# Compiled arities (doc/decisions/0013). ABSENT by default, for the same reason
+# diagnostics are: it costs 7 002 bytes of production module, and 0009 already
+# spent a chosen budget on instantiating the loop twice. A module that never asks
+# for compiled code should not carry the machinery that runs it.
+aot = []
+
 # Diagnostic machinery (doc/decisions/0016). ABSENT by default, not disabled:
 # a runtime flag leaves the code linked and branched on, and "absent" is a
 # different guarantee from "off" -- which matters most for a VM whose strongest

@@ -169,6 +169,30 @@ const S = { FNS: 0, ARITIES: 1, BYTES: 2, INSTRS: 3, CALLSITES: 4,
   console.log();
 }
 
+const OPNAME = ['NOP','CONST','NIL','TRUE','FALSE','INT','LOCAL','LOCAL_W','SET_LOCAL',
+  'UPVAL','VAR','SET_VAR','POP','DUP','JUMP','JUMP_IF_FALSE','JUMP_IF_TRUE','CALL',
+  'TAIL_CALL','RETURN','CLOSURE','NATIVE','THROW','TRY','POP_HANDLER','RETHROW','VECTOR',
+  'MAP','SET','LIST','APPLY','JUMP_IF_FALSE_KEEP','JUMP_IF_TRUE_KEEP','POP_N',
+  'SET_LOCAL_KEEP','SELF'];
+
+/// Which opcodes an emitter must handle inline is a distribution too, and
+/// guessing it is the same mistake as guessing the region length.
+function showOps(e, total) {
+  const ops = [];
+  for (let i = 0; i < 256; i++) {
+    const n = Number(e.stat_region(NB * 4 + 24 + i));
+    if (n) ops.push([OPNAME[i] ?? `0x${i.toString(16)}`, n]);
+  }
+  ops.sort((a, b) => b[1] - a[1]);
+  let acc = 0;
+  console.log('  opcode mix (cumulative share of executed instructions)');
+  for (const [name, n] of ops) {
+    acc += n;
+    console.log(`    ${name.padEnd(20)} ${String(num(n)).padStart(13)}  ` +
+                `${pct(n, total).padStart(7)}  cum ${pct(acc, total)}`);
+  }
+}
+
 const rows = [];
 for (const [name, args, desc] of WORKLOADS) {
   const { module } = await load(wasm);
@@ -195,6 +219,7 @@ for (const [name, args, desc] of WORKLOADS) {
   console.log(`  resumed frames ${num(counts.RESUMED_FRAMES)}, instructions in them ` +
               `${num(counts.RESUMED_INSTRS)} (${pct(counts.RESUMED_INSTRS, counts.INSTRS)}); ` +
               `state saves ${num(counts.SAVES_PARK)} park / ${num(counts.SAVES_YIELD)} yield`);
+  if (name === 'suggest') showOps(inst.exports, counts.INSTRS);
   rows.push({ name, counts, meanRun, meanFrame });
   console.log();
 }

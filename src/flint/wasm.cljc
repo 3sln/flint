@@ -271,3 +271,82 @@
 
 (defn func-index [m sym]
   (get-in (exports m) [sym :index]))
+
+;; ------------------------------------------------------- appending functions
+;;
+;; Everything above reads or patches what the linker produced. This adds code
+;; that never went through the linker at all, which is what `doc/decisions/0013`
+;; needs: compiled arities are emitted after the link, because only then are the
+;; helper functions' indices known.
+
+(defn imported-funcs
+  "How many functions the import section declares. Function indices count
+  imports first, so an appended body that got this wrong would call the wrong
+  function and be very hard to see."
+  [m]
+  (if-let [{:keys [^bytes payload]} (section m 2)]
+    (let [[n i] (rd-uleb payload 0)]
+      (loop [i i k 0 acc 0]
+        (if (= k n)
+          acc
+          (let [[l1 i] (rd-uleb payload i)
+                i (+ i l1)
+                [l2 i] (rd-uleb payload i)
+                i (+ i l2)
+                kind (ub payload i)
+                ;; func: typeidx. table: reftype+limits. mem: limits.
+                ;; global: valtype+mut.
+                i (inc i)
+                i (case kind
+                    0 (second (rd-uleb payload i))
+                    1 (let [i (inc i)] (:end (read-limits payload i)))
+                    2 (:end (read-limits payload i))
+                    3 (+ i 2)
+                    (throw (ex-info "unknown import kind" {:kind kind})))]
+            (recur i (inc k) (if (= kind 0) (inc acc) acc))))))
+    0))
+
+(defn- defined-funcs [m]
+  (if-let [{:keys [^bytes payload]} (section m 3)]
+    (first (rd-uleb payload 0))
+    0))
+
+(defn add-type
+  "Append a function type, returning [module type-index]. Types are compared by
+  bytes so a repeated signature does not add a second entry."
+  [m params results]
+  (let [enc (->bytes [0x60 (uleb (count params)) params
+                      (uleb (count results)) results])
+        [n body] (count-and-body m 1)
+        existing (loop [i 0 k 0 acc []]
+                   (if (= k n)
+                     acc
+                     ;; each type is 0x60 nparams params nresults results
+                     (let [start i
+                           [np i2] (rd-uleb body (inc i))
+                           i3 (+ i2 np)
+                           [nr i4] (rd-uleb body i3)
+                           i5 (+ i4 nr)]
+                       (recur i5 (inc k)
+                              (conj acc (java.util.Arrays/copyOfRange body (int start) (int i5)))))))
+        hit (first (keep-indexed (fn [k b] (when (java.util.Arrays/equals ^bytes b ^bytes enc) k))
+                                 existing))]
+    (if hit
+      [m hit]
+      [(put-section m 1 (->bytes [(uleb (inc n)) body enc])) n])))
+
+(defn append-funcs
+  "Append function bodies of type `type-idx`. `bodies` are already-encoded code
+  entries (locals declaration followed by the instruction bytes, without the
+  size prefix). Returns [module first-function-index]."
+  [m type-idx bodies]
+  (let [[nf fbody] (count-and-body m 3)
+        [nc cbody] (count-and-body m 10)
+        _ (assert (= nf nc) "function and code sections disagree")
+        first-idx (+ (imported-funcs m) nf)
+        m (put-section m 3 (->bytes [(uleb (+ nf (count bodies))) fbody
+                                     (repeat (count bodies) (uleb type-idx))]))
+        m (put-section m 10 (->bytes [(uleb (+ nc (count bodies))) cbody
+                                      (for [^bytes b bodies]
+                                        [(uleb (alength b)) b])]))]
+    [m first-idx]))

@@ -46,6 +46,11 @@
         (= k "--explain") (recur (drop 2 a) (assoc m :explain (symbol (second a))))
         (= k "--disasm") (recur (drop 2 a) (assoc m :disasm (second a)))
         (= k "--self") (recur (rest a) (assoc m :self true))
+        ;; doc/decisions/0013. A flag rather than a default until the
+        ;; benchmarks say which way round the numbers fall. `FLINT_AOT=1` turns
+        ;; it on for every build, which is how the whole existing suite gets run
+        ;; against compiled code without a single test knowing about it.
+        (= k "--aot") (recur (rest a) (assoc m :aot true))
         (= k "--const") (recur (drop 2 a) (assoc m :const (parse-long (second a))))
         :else (do (println "unknown argument:" k) (System/exit 2)))
       m)))
@@ -177,7 +182,7 @@
   (binding [*out* *err*] (println (ex-message e)))
   (System/exit 1))
 
-(let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path]}
+(let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path aot]}
       (parse-args *command-line-args*)]
   (when-not fn
     (println "usage: flint :src <dir> :fn <ns/fn> [:out <file.wasm>]")
@@ -255,6 +260,9 @@
                                               (img/patch-native-slots (:image selfres) needed slots)
                                               (img/emit builder slots)))
                               :out out
+                              :builder builder
+                              :aot? (and (or aot (= "1" (System/getenv "FLINT_AOT")))
+                                         (not self))
                               :keep-names keep-names})
         t2 (System/nanoTime)]
     (when stats

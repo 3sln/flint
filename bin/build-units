@@ -28,11 +28,22 @@ FLAGS="--target wasm32-unknown-unknown --edition 2021 -C opt-level=3 -C panic=ab
 # runtime flag. `--diagnostics` builds the instrumented runtime and the units
 # that need it.
 DIAG=""
-if [ "$1" = "--diagnostics" ]; then
-  DIAG=1
-  FLAGS="$FLAGS --cfg feature=\"diagnostics\""
-  echo "  (diagnostics build)"
-fi
+AOT=""
+for arg in "$@"; do
+  case "$arg" in
+    --diagnostics)
+      DIAG=1
+      FLAGS="$FLAGS --cfg feature=\"diagnostics\""
+      echo "  (diagnostics build)" ;;
+    # Compiled arities (doc/decisions/0013). Absent by default for the same
+    # reason diagnostics are: measured at 7 002 bytes of production module, for
+    # machinery a module without compiled code never runs.
+    --aot)
+      AOT=1
+      FLAGS="$FLAGS --cfg feature=\"aot\""
+      echo "  (aot build)" ;;
+  esac
+done
 mkdir -p out units/.sysroot
 
 # cargo builds the DEPENDENCY rlibs once (serde_json, xmlparser, htmlparser and
@@ -58,6 +69,9 @@ cargo run -q -p flint-rt --features host-tools --bin catalogue > units/flint/rt.
 # and `flint` needs no flag of its own.
 if [ -n "$DIAG" ]; then
   python3 bin/diag-exports.py units/flint/rt.unit.edn
+fi
+if [ -n "$AOT" ]; then
+  python3 bin/aot-exports.py units/flint/rt.unit.edn
 fi
 
 # One parser unit per namespace. Each is its own object AND carries its own

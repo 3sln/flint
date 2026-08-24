@@ -8,7 +8,7 @@
             [flint.canon :as canon]))
 
 (def MAGIC [70 76 73 78 84 73 77 71])                        ; "FLINTIMG"
-(def VERSION 1)
+(def VERSION 2)
 
 (def K-NIL 0) (def K-TRUE 1) (def K-FALSE 2) (def K-INT 3) (def K-DOUBLE 4)
 (def K-STRING 5) (def K-KEYWORD 6) (def K-SYMBOL 7) (def K-VECTOR 8)
@@ -46,7 +46,7 @@
 
 (defn new-builder []
   (volatile! {:consts [] :index {} :fns [] :vars [] :var-index {}
-              :natives [] :native-index {} :code [] :entry 0 :init []}))
+              :natives [] :native-index {} :code [] :entry 0 :init [] :aot []}))
 
 (declare const)
 
@@ -144,7 +144,12 @@
 (defn- emit-fn [{:keys [name nupvals arities]}]
   [(u32 name) nupvals (count arities)
    (for [a arities]
-     [(:argc a) (if (:variadic? a) 1 0) (u16 (:nlocals a)) (u32 (:off a)) (u32 (:len a))])])
+     ;; `:aot` is an index into the compiled-arity table, or 0xFFFFFFFF. It is
+     ;; assigned after the bytecode exists and before the link, so it is written
+     ;; here rather than patched -- unlike the native slots two functions down,
+     ;; which cannot be known until the linker has run.
+     [(:argc a) (if (:variadic? a) 1 0) (u16 (:nlocals a)) (u32 (:off a)) (u32 (:len a))
+      (u32 (or (:aot a) 0xFFFFFFFF))])])
 
 ;; ------------------------------------------------------------------ output
 
@@ -166,7 +171,8 @@
   "Serialise the image. `native-slots` maps builtin name -> wasm table slot;
   unresolved names get slot 0, which traps if ever called."
   [b native-slots]
-  (let [{:keys [consts fns vars natives code entry init]} @b]
+  (let [{:keys [consts fns vars natives code entry init aot]} @b
+        aot (or aot [])]
     (flatten-bytes
      [MAGIC (u32 VERSION)
       ;; Natives first, and fixed width: `patch-native-slots` can rewrite them at
@@ -181,7 +187,14 @@
       (u32 (count vars)) (map u32 vars)
       (u32 (count code)) code
       (u32 entry)
-      (u32 (count init)) (map u32 init)])))
+      (u32 (count init)) (map u32 init)
+      ;; Compiled arities (doc/decisions/0013). A module built without AOT
+      ;; writes a zero here and nothing else, and an empty table is what lets the
+      ;; interpreter monomorphise the re-entry check away entirely.
+      (u32 (count aot))
+      (for [a aot]
+        [(u32 (:slot a)) (u32 (:depth a)) (u32 (count (:points a)))
+         (for [[ip block] (:points a)] [(u32 ip) (u32 block)])])])))
 
 (def NATIVES-OFFSET
   "Byte offset of the natives count: magic(8) + version(4)."

@@ -68,8 +68,37 @@ pub const C_SAVES_PARK: usize = 17;
 pub const C_SAVES_YIELD: usize = 18;
 pub const C_SEG_SUM: usize = 19;
 pub const C_SEG_N: usize = 20;
+/// Entries into compiled code, and the calls back out of it. Before "AOT is
+/// slower" can mean anything, these have to say it ran.
+pub const C_AOT_ENTRIES: usize = 21;
+pub const C_AOT_NATIVES: usize = 22;
+pub const C_AOT_BAILS: usize = 23;
+/// Back-edge ticks, and the ones that actually preempted. A tick that never
+/// trips cannot be the cause of anything, and saying so takes one counter.
+pub const C_AOT_TICKS: usize = 24;
+pub const C_AOT_TICK_TRIPS: usize = 25;
 
-pub static mut COUNTS: [u64; 24] = [0; 24];
+pub static mut COUNTS: [u64; 28] = [0; 28];
+
+/// Executed instructions by opcode. Which opcodes an emitter must handle inline
+/// is a distribution too, and guessing it is the same mistake as guessing the
+/// region length.
+pub static mut OPS: [u64; 256] = [0; 256];
+
+/// Calls to each native import. Comparing this census between a compiled and an
+/// interpreted run of the same program names the first thing that diverges,
+/// which beats reasoning about which opcode is wrong.
+pub static mut NATIVE_CALLS: [u64; 512] = [0; 512];
+
+/// The first few thousand native calls IN ORDER. Totals cannot show a first
+/// divergence -- a run that dies early is smaller everywhere -- and the first
+/// divergence is the only part of the trace that means anything.
+pub const TRACE_CAP: usize = 8192;
+pub static mut NATIVE_TRACE: [u16; TRACE_CAP] = [0; TRACE_CAP];
+pub static mut NATIVE_TRACE_N: usize = 0;
+/// The bytecode offset each traced call was made from, so a divergence names
+/// the FUNCTION and not just the builtin.
+pub static mut NATIVE_TRACE_IP: [u32; TRACE_CAP] = [0; TRACE_CAP];
 
 #[inline]
 pub fn bucket(n: u32) -> usize {
@@ -134,6 +163,10 @@ pub fn read(i: u32) -> u64 {
             SEG_HIST[i - NBUCKET * 3]
         } else if i < NBUCKET * 4 + COUNTS.len() {
             COUNTS[i - NBUCKET * 4]
+        } else if i < NBUCKET * 4 + COUNTS.len() + 256 {
+            OPS[i - NBUCKET * 4 - COUNTS.len()]
+        } else if i < NBUCKET * 4 + COUNTS.len() + 256 + 512 {
+            NATIVE_CALLS[i - NBUCKET * 4 - COUNTS.len() - 256]
         } else {
             0
         }
@@ -237,6 +270,20 @@ pub fn scan(rt: &mut crate::rt::Rt) {
                     STATIC[S_TINY] += 1;
                 }
             }
+        }
+    }
+}
+
+pub fn read_trace(i: u32) -> u32 {
+    unsafe {
+        if i == u32::MAX {
+            NATIVE_TRACE_N as u32
+        } else if i >= 0x4000_0000 {
+            *NATIVE_TRACE_IP
+                .get((i - 0x4000_0000) as usize)
+                .unwrap_or(&0)
+        } else {
+            *NATIVE_TRACE.get(i as usize).unwrap_or(&0) as u32
         }
     }
 }

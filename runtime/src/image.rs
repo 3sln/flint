@@ -25,7 +25,7 @@ use crate::value::{Value, FALSE, NIL, TRUE};
 use crate::vm::{Arity, FnDef, Image};
 
 pub const MAGIC: &[u8; 8] = b"FLINTIMG";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 pub const K_NIL: u8 = 0;
 pub const K_TRUE: u8 = 1;
@@ -232,7 +232,18 @@ impl Rt {
                 let nlocals = r.u16();
                 let code = r.u32();
                 let len = r.u32();
-                arities.push(Arity { argc, variadic: flags & 1 != 0, nlocals, code, len });
+                let aot = r.u32();
+                arities.push(Arity {
+                    argc,
+                    variadic: flags & 1 != 0,
+                    nlocals,
+                    code,
+                    len,
+                    #[cfg(feature = "aot")]
+                    aot,
+                });
+                #[cfg(not(feature = "aot"))]
+                let _ = aot;
             }
             fns.push(FnDef { name, arities, nupvals });
         }
@@ -254,6 +265,36 @@ impl Rt {
             init.push(r.u32());
         }
 
+        // Compiled arities (`doc/decisions/0013`). A module built without AOT
+        // writes a zero here and carries nothing else -- and an empty table is
+        // what lets the interpreter loop monomorphise the re-entry check away.
+        // Read in BOTH builds: the image format does not fork, so a module
+        // compiled with `--aot` still loads in a runtime that cannot run its
+        // compiled arities -- it interprets them, which is exactly what the
+        // bytecode is still there for.
+        let naot = r.u32() as usize;
+        #[cfg(feature = "aot")]
+        let mut aot = Vec::with_capacity(naot);
+        for _ in 0..naot {
+            let slot = r.u32();
+            let depth = r.u32();
+            let np = r.u32() as usize;
+            #[cfg(feature = "aot")]
+            let mut points = Vec::with_capacity(np);
+            for _ in 0..np {
+                let ip = r.u32();
+                let block = r.u32();
+                #[cfg(feature = "aot")]
+                points.push((ip, block));
+                #[cfg(not(feature = "aot"))]
+                let _ = (ip, block);
+            }
+            #[cfg(feature = "aot")]
+            aot.push(crate::aot::AotFn { slot, depth, points });
+            #[cfg(not(feature = "aot"))]
+            let _ = (slot, depth);
+        }
+
         self.image = Image {
             code,
             fns,
@@ -263,6 +304,8 @@ impl Rt {
             var_names,
             entry,
             init,
+            #[cfg(feature = "aot")]
+            aot,
         };
         true
     }
@@ -367,6 +410,7 @@ impl ImageWriter {
         e.extend_from_slice(&nlocals.to_le_bytes());
         e.extend_from_slice(&off.to_le_bytes());
         e.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        e.extend_from_slice(&crate::vm::AOT_NONE.to_le_bytes());
         self.fns.push(e);
         (self.fns.len() - 1) as u32
     }
@@ -416,6 +460,9 @@ impl ImageWriter {
         for i in &self.init {
             o.extend_from_slice(&i.to_le_bytes());
         }
+        // No compiled arities: this writer exists for the Rust tests, and they
+        // exercise the interpreter.
+        o.extend_from_slice(&0u32.to_le_bytes());
         o
     }
 }

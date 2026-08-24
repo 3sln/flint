@@ -292,7 +292,21 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
         let end = r.u32();
         let ret_to = r.usz();
         let handlers = r.usz();
-        frames.push(Frame { fp, ip, end, ret_to, handlers, instrs: 0, resumed: false });
+        frames.push(Frame {
+            fp,
+            ip,
+            end,
+            ret_to,
+            handlers,
+            #[cfg(feature = "aot")]
+            aot_idx: crate::vm::AOT_NONE,
+            #[cfg(feature = "aot")]
+            aot_ip: crate::vm::AOT_NEVER,
+            #[cfg(feature = "aot")]
+            aot_block: 0,
+            instrs: 0,
+            resumed: false,
+        });
     }
     let nh = r.usz();
     let mut handlers = Vec::with_capacity(nh);

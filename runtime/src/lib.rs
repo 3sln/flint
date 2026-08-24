@@ -27,6 +27,11 @@ pub mod image;
 pub mod map;
 pub mod num;
 pub mod obj;
+/// Emitted-wasm support (`doc/decisions/0013`). Optional by the same rule as
+/// diagnostics (`doc/decisions/0016`): a module with nothing compiled should
+/// not carry the machinery that would run it.
+#[cfg(feature = "aot")]
+pub mod aot;
 pub mod rt;
 pub mod seqs;
 pub mod set;

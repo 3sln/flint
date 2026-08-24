@@ -277,6 +277,13 @@ impl Space {
         unsafe { core::ptr::write_unaligned(self.ptr(addr) as *mut u32, v) }
     }
     #[inline(always)]
+    /// Where object addresses are measured from. Compiled code needs it to read
+    /// a slot without a call back into Rust (`doc/decisions/0013`).
+    #[inline(always)]
+    pub fn base_addr(&self) -> u32 {
+        self.base as u32
+    }
+    #[inline(always)]
     pub fn read_u64(&self, addr: u32) -> u64 {
         unsafe { core::ptr::read_unaligned(self.ptr(addr) as *const u64) }
     }

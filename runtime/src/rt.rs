@@ -63,6 +63,26 @@ pub struct Rt {
     /// wall-clock timeout bounds *time* and varies with machine load; this
     /// bounds *work* and does not, so "did this candidate hang?" becomes a
     /// reproducible fact rather than a flaky one.
+    /// An uncaught throw unwound out of compiled code. The interpreter's own
+    /// arms answer this by returning from `run`; compiled code cannot, so it
+    /// says so here (`doc/decisions/0013`).
+    #[cfg(feature = "aot")]
+    pub aot_unwound_out: bool,
+    /// How many compiled frames are live on the WASM stack right now.
+    #[cfg(feature = "aot")]
+    pub aot_depth: u32,
+    /// Bumped by every unwind. A nested compiled call cannot use the frame
+    /// COUNT to tell "the callee returned" from "a throw was caught": an unwind
+    /// to a handler in the caller's own frame truncates back to exactly the
+    /// depth the call started at, and compiled code then carried on past the
+    /// handler with an unwound stack.
+    #[cfg(feature = "aot")]
+    pub unwinds: u64,
+    /// The `base_depth` the innermost `run` was called with. `parked` needs it
+    /// -- a park is illegal when Rust frames are live underneath -- and compiled
+    /// code cannot be passed it, so the loop leaves it here.
+    #[cfg(feature = "aot")]
+    pub run_base: usize,
     pub steps: u64,
     /// Hard budget. 0 means unlimited. Exceeding it is a **catchable error**
     /// carrying what was spent against what was allowed, not a trap.
@@ -127,6 +147,14 @@ impl Rt {
             handlers: alloc::vec::Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             host_natives: alloc::vec::Vec::new(),
+            #[cfg(feature = "aot")]
+            aot_unwound_out: false,
+            #[cfg(feature = "aot")]
+            aot_depth: 0,
+            #[cfg(feature = "aot")]
+            unwinds: 0,
+            #[cfg(feature = "aot")]
+            run_base: 0,
             steps: 0,
             gas_limit: 0,
             slice_end: 0,

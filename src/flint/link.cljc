@@ -9,7 +9,8 @@
   segment -- which is why nothing in the runtime holds a table of builtins."
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
-            [flint.wasm :as w]))
+            [flint.wasm :as w]
+            [flint.aot :as aot]))
 
 (def ^:private toolchain
   (str (System/getProperty "user.home") "/.rustup/toolchains/nightly-aarch64-apple-darwin"))
@@ -186,11 +187,112 @@
     (with-open [in (io/input-stream out-path)]
       (.readAllBytes in))))
 
+(def ^:private AOT-HELPERS
+  {:native "aot_native" :return "aot_return" :bail "aot_bail" :tick "aot_tick"
+   :call "aot_call"})
+
+(defn compile-aot
+  "Emit a wasm function for every arity the emitter can take, put them in the
+  table, and record the mapping in the image builder.
+
+  What refuses compilation is reported rather than swallowed: an emitter that
+  quietly skips half a program looks exactly like one that is not helping."
+  [m b exp]
+  (let [helpers (reduce-kv (fn [acc k nm]
+                             (assoc acc k
+                                    (or (get-in exp [nm :index])
+                                        (throw (ex-info
+                                                (str "this runtime cannot run compiled "
+                                                     "arities: build the units with "
+                                                     "`bin/build-units --aot`")
+                                                {:helper nm})))))
+                           {} AOT-HELPERS)
+        code (vec (:code @b))
+        ;; (fn-index, arity-index) in a fixed order, so the table this writes and
+        ;; the indices it stores into the arities cannot drift apart.
+        slots-of (for [[fi f] (map-indexed vector (:fns @b))
+                       [ai a] (map-indexed vector (:arities f))]
+                   [fi ai a])
+        ;; A bisection handle. Compiling a PREFIX of the arities is what turns
+        ;; "the module is wrong" into "arity N is wrong" -- the same
+        ;; discriminator that closed the GC hunt, and for the same reason: a
+        ;; whole-module symptom names nothing.
+        limit (some-> (System/getenv "FLINT_AOT_LIMIT") parse-long)
+        only (some-> (System/getenv "FLINT_AOT_ONLY") parse-long)
+        from (or (some-> (System/getenv "FLINT_AOT_FROM") parse-long) 0)
+        ;; An explicit SET, because a prefix bisection lies here: adding one more
+        ;; arity shifts what else runs compiled, so "the prefix breaks at N" does
+        ;; not mean "N is at fault" -- and it did not. Same trap the GC hunt hit
+        ;; with collection #300.
+        ;; Excluding a range is the more robust half of the bisection: the rest
+        ;; of the program stays compiled, so what is being tested is "is this
+        ;; range necessary" rather than "is this range sufficient".
+        skip-from (some-> (System/getenv "FLINT_AOT_SKIP_FROM") parse-long)
+        skip-to (some-> (System/getenv "FLINT_AOT_SKIP_TO") parse-long)
+        pick (some->> (System/getenv "FLINT_AOT_PICK")
+                      (#(clojure.string/split % #","))
+                      (map parse-long) set)
+        results (mapv (fn [k [fi ai a]]
+                        [fi ai (when (and (or (nil? limit) (< k limit))
+                                          (>= k from)
+                                          (or (nil? pick) (pick k))
+                                          (not (and skip-from skip-to
+                                                    (>= k skip-from) (< k skip-to)))
+                                          (or (nil? only) (= k only)))
+                                 (aot/compile-arity code (:off a) (:len a) helpers))])
+                      (range) slots-of)
+        ok (filterv (fn [[_ _ r]] (some? r)) results)
+        [m type-idx] (w/add-type m [0x7F 0x7F 0x7F 0x7F 0x7F] [])
+        [m first-fn] (w/append-funcs m type-idx (mapv (fn [[_ _ r]] (:body r)) ok))
+        tbase (or (w/table-min m) 1)
+        [m _] (w/append-elem m tbase (vec (range first-fn (+ first-fn (count ok)))))
+        table (mapv (fn [k [_ _ r]] {:slot (+ tbase k) :depth (:depth r) :points (:points r)})
+                    (range) ok)
+        index (into {} (map-indexed (fn [k [fi ai _]] [[fi ai] k])) ok)]
+    ;; Stamp each compiled arity with its index into the table above.
+    (vswap! b update :fns
+            (fn [fns]
+              (vec (map-indexed
+                    (fn [fi f]
+                      (update f :arities
+                              (fn [as]
+                                (vec (map-indexed
+                                      (fn [ai a] (assoc a :aot (get index [fi ai] 0xFFFFFFFF)))
+                                      as)))))
+                    fns))))
+    (vswap! b assoc :aot table)
+    (when-let [want (some-> (System/getenv "FLINT_AOT_FN") parse-long)]
+      (doseq [[fi f] (map-indexed vector (:fns @b))
+              :when (= fi want)
+              [ai a] (map-indexed vector (:arities f))]
+        (println (format "  fn %d arity %d %s off %d len %d argc %d nlocals %d"
+                         fi ai (pr-str (nth (:consts @b) (:name f) nil))
+                         (:off a) (:len a) (:argc a) (:nlocals a)))
+        (println (str "    " (pr-str (mapv (fn [x] (format "%02X" x))
+                                           (subvec (vec code) (:off a) (+ (:off a) (:len a)))))))))
+    (when (System/getenv "FLINT_AOT_DUMP")
+      (doseq [[k [fi ai r]] (map-indexed vector ok)]
+        (let [a (nth (:arities (nth (:fns @b) fi)) ai)]
+          (println (format "  aot[%d] fn %d arity %d  off %d len %d  chunks %d depth %d  argc %d nlocals %d%s"
+                           k fi ai (:off a) (:len a) (:chunks r) (:depth r)
+                           (:argc a) (:nlocals a) (if (:variadic? a) " VARIADIC" "")))
+          (println (str "        fn name const " (:name (nth (:fns @b) fi))
+                        " = " (pr-str (nth (:consts @b) (:name (nth (:fns @b) fi)) nil))
+                        "  natives " (pr-str (mapv :name (take 3 (:natives @b))))))
+          (println (str "        " (pr-str (mapv (fn [x] (format "%02X" x))
+                                                 (subvec (vec code) (:off a) (+ (:off a) (:len a))))))))))
+    {:module m
+     :compiled (count ok)
+     :arities (count results)
+     :refused (- (count results) (count ok))
+     :chunks (reduce + 0 (map (fn [[_ _ r]] (:chunks r)) ok))
+     :bytes (reduce + 0 (map (fn [[_ _ r]] (count (:body r))) ok))}))
+
 (defn compose
   "Link, bind the reached builtins into the wasm table, splice the image in.
   `emit-image` is called with the resolved {builtin-name -> table-slot} map and
   must return the image bytes."
-  [{:keys [unit-path sysroot needed-builtins emit-image out tmp keep-names]}]
+  [{:keys [unit-path sysroot needed-builtins emit-image out tmp keep-names builder aot?]}]
   (let [units (discover-units unit-path)
         _ (check-abi! units)
         p (plan units needed-builtins)
@@ -209,6 +311,12 @@
                                            {:builtin b :symbol sym})))))
                    ordered)
         [m _] (w/append-elem m base fidx)
+        ;; Compiled arities go in AFTER the link, because only now are the
+        ;; helper functions' indices known (doc/decisions/0013). The builder is
+        ;; mutated before `emit-image` runs, so the table it writes is the one
+        ;; these slots came from.
+        aot-res (when (and aot? builder) (compile-aot m builder exp))
+        m (or (:module aot-res) m)
         image (emit-image slots)
         heap-base (let [g (get exp "__heap_base")]
                     (or (w/global-i32-init m (:index g))
@@ -230,6 +338,7 @@
     (io/copy bytes (io/file out))
     {:bytes (count bytes)
      :image-bytes (count image)
+     :aot (dissoc aot-res :module)
      :units (mapv (fn [u] {:name (:name u) :manifest (:manifest u)}) (:units p))
      :builtins (count ordered)
      :table-base base}))

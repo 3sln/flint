@@ -558,3 +558,10 @@ pub extern "C" fn stat_static(i: u32) -> u64 {
     }
     crate::aotstat::read_static(i)
 }
+
+/// The native-call trace, in order. `u32::MAX` asks for its length.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_native_trace(i: u32) -> u32 {
+    crate::aotstat::read_trace(i)
+}
