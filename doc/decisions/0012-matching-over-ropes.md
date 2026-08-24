@@ -86,31 +86,43 @@ police.
   that want maximum speed and are willing to flatten. Same subset, same
   semantics, so it is a drop-in rather than a second dialect.
 
-### Which comes first, and the trap in answering "the crate"
+### Settled: no stepping stone
 
-Both appear in these notes and they are not alternatives, they are **ordered** —
-worth stating because "adopt the Rust crate" is the tempting answer and is only
-right under a condition that is about to stop holding.
+I framed the Rust `regex` crate as a cheap interim and left the sequencing open.
+The owner has closed it:
 
-**Today, strings are flat.** The crate is a drop-in that takes 275× to about 1×
-for a few days of work, which is the cheapest large win available.
+> we don't need the rust crate stepping stone; ropes for strings should be our
+> next work as soon as the gc/threading/ports bugs are resolved
 
-**Once ropes land it cannot consume the input**, because its API takes `&str`.
-Then it means flattening before every match, which hands back the rope at the one
-operation touching the most text — the exact thing `0012` exists to prevent. So
-the crate is a **stepping stone, not the endpoint**, and it becomes the optional
-flatten-and-go-fast unit above rather than the default matcher.
+So **ropes are the next substantial piece of work**, which makes the crate a
+thing that would be adopted and superseded within one cycle. Its API takes
+`&str`, so the moment ropes land it means flattening before every match — handing
+back the rope at the operation that touches the most text.
 
-**The endpoint is one design**: a shared cljc pattern compiler emitting an NFA
-program, and a native Pike VM simulator per host reading through a cursor. That
-is what consumes ropes, what makes gas exact, and what keeps every host executing
-the same compiled NFA.
+**Go straight to the endpoint**: shared cljc pattern compiler emitting an NFA
+program, native Pike VM simulator per host reading through a rope cursor.
 
-So the sequencing question is only ever: *are ropes close enough that the crate
-would be built and then superseded?* If ropes are the next substantial piece of
-work, go straight to the native simulator and skip the adapter. If regex is
-hurting now and ropes are further off, take the crate and keep it afterwards as
-the fast path for flat strings.
+Two things this buys beyond avoiding throwaway work:
+
+- **The rope and the matcher are designed together.** The cursor is the interface
+  between them, and building the matcher against a real rope rather than against
+  `&str` means the cursor is shaped by its actual consumer instead of retrofitted.
+- **The regex work stops being a detour.** It is not "fix a slow engine", it is
+  part of building the string layer, which is where the 18× on splitting a
+  literal lives too.
+
+The crate keeps the one role `0012` already gave it: an optional wasm unit for a
+program that wants maximum speed on flat strings and will pay a flatten. Not the
+default matcher, and not on the path to one.
+
+### Order of work, once the runtime bugs are closed
+
+1. **Ropes** — three tiers, balanced B-tree, code-point counts per node, the
+   adversarial depth tests (`0011`).
+2. **The shared NFA compiler in cljc**, replacing the backtracker's engine while
+   keeping its syntax and its refusals.
+3. **The native simulator**, wasm first, ~300–400 lines over the shared compiler.
+4. Only then the string natives for the remaining `clojure.string` gap.
 
 ## What must be true if this is built
 
