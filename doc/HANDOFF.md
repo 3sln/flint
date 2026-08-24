@@ -309,6 +309,34 @@ remembered set; a mark phase descends into everything reachable. That asymmetry
 is the thing to look at, and it is the same asymmetry noted earlier — reachable
 and traced are different questions for an old object.
 
+## Snapshots are built (0015), and what they say about this bug
+
+`594d13d` and the commit after it: capture, export/import, and an inspector with
+reverse pointer lookup, whole-heap validation in one pass, and a two-snapshot
+diff. A pure module is unchanged at 203 917 bytes, asserted.
+
+Two things it found immediately, both in itself:
+
+* the capture was **incomplete on wasm** -- one contiguous range missed an old
+  chunk sitting at 22.8 MB, because `Space::take` grows memory via `sbrk`;
+* the reader's linear walk **turned one parse error into 106 false findings**,
+  by continuing past a header it could not parse so that every later object
+  looked absent.
+
+Both are fixed, and both were caught by the walk-completeness check rather than
+by reasoning. That is the tool working as intended.
+
+**The limit that matters for this bug: taking a snapshot makes the failing run
+pass.** Every window tried -- every pump, a two-pump window, early, late, with
+the buffer pre-warmed so the capture does not allocate -- gives the correct 64
+waves. A snapshot cannot lie about state it did not interpret, but *taking* one
+is not free of observer effect, and this bug is sensitive to exactly that.
+
+So the next move on the wave loss is a capture that allocates **nothing**: size
+the buffer to the maximum heap once, before the run, and have `capture_into`
+never grow it. Then a snapshot costs a memcpy and no allocation, and the diff
+across the minor that moves the message becomes available.
+
 ## Reproduction
 
 `bb test/document.clj`. No stress mode needed; it fails identically every run.
