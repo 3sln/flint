@@ -193,6 +193,68 @@ That is a much better position than the one I was arguing from: it is close to
 what a real AOT compiler does, and the payoff scales with function size rather
 than with the distance between calls.
 
+### Re-entry, and why the answer is a few points rather than many chunks
+
+The owner's follow-up is the right question:
+
+> granular chunks let us hop back from interpretter mode to aot mode more
+> granularly, at the end of every chunk, instead of just per function
+
+That names a real problem. If compiled code can only be ENTERED at a function's
+start, then after any bail the rest of that invocation is interpreted. The
+compiled body is not wrong, it is simply unreachable until the function is called
+again.
+
+**Usually that costs almost nothing**, because a bail is rare: most functions
+never park, and the AOT benefit lives in the invocations that never bail.
+
+**One shape makes it catastrophic, and it is exactly our shape.** A loop that
+parks per iteration — `drain-each` receiving in a loop, any I/O-driven consumer —
+bails on the first iteration and then interprets *every remaining iteration*, for
+ever. One park permanently de-optimises the whole loop. That is the case worth
+designing for, and it is common in precisely the programs ports exist to serve.
+
+### But the fix is re-entry POINTS, not many chunks
+
+The set of places worth re-entering is small and known statically:
+
+- **loop back-edges**, which is the case above;
+- **the instruction after a call that could bail**, so a resumed park continues
+  compiled.
+
+That is a handful of `ip` values per function, not a chunk per basic block. So
+compile the whole function and give it an **entry dispatch** — a parameter naming
+which resumable point to start at, and a branch to that block — rather than
+splitting the body into separately-called pieces.
+
+**And this is cheap here for the same reason deopt is.** Re-entering compiled
+code mid-function is normally on-stack replacement, and hard, because machine
+state has to be reconstructed at an arbitrary point. Every flint value is already
+in the linear-memory stack, so there is nothing to reconstruct: the dispatch
+jumps to the block and the block reads the stack. The GC constraint pays for a
+third thing.
+
+### Why not the chained-chunks version
+
+It would work, and the owner is right that the boundaries cost less here than
+they would elsewhere — there are no registers to spill, because everything
+round-trips through memory anyway.
+
+But the JIT's real wins inside a compiled body are local: keeping a stack pointer
+in a register, folding adjacent stack traffic, holding a temporary. Those are
+what chunk boundaries interrupt, and they are the whole reason to compile at all.
+Paying that at every chunk to buy re-entry at every chunk is paying everywhere
+for something needed in a few places.
+
+Compile whole, re-enter at the few points that matter.
+
+### Which the measurement should now answer
+
+Add to the histogram: **instructions executed after a bail before the function
+returns**, and how many of those are inside a loop. That is the number that says
+what re-entry is worth, and it separates the ordinary case (a bail near the end,
+costing nothing) from the pathological one (a bail on iteration 1 of 10 000).
+
 ### Two consequences of the larger unit
 
 **A bail from a nested call unwinds several wasm frames**, each one checking and
