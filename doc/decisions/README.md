@@ -19,7 +19,7 @@ for the first.
 | [0010](0010-other-hosts.md) | SDKs, and JVM/CLR ports | **Roadmap** |
 | [0011](0011-strings-and-matching.md) | Rope strings; what to do about regex | **Roadmap.** §1–2 current; §5's conclusion superseded by 0012 |
 | [0012](0012-matching-over-ropes.md) | The matcher must consume a rope → Pike VM | **Roadmap.** After AOT; ropes first, since the matcher runs over a rope cursor |
-| [0013](0013-emit-wasm-instead-of-dispatch.md) | AOT regions instead of dispatching | **Next after the open bugs.** Guard-only per 0016, so chunks can be large |
+| [0013](0013-emit-wasm-instead-of-dispatch.md) | AOT regions instead of dispatching | **SHELVED.** Built and measured at 1.07–1.25×; parked for strings/regex. Why it lost is recorded |
 | [0014](0014-debug-runner.md) | DAP, nREPL, and `(break)` | **Roadmap, not next.** Cheap because a breakpoint is a park |
 | [0015](0015-snapshots.md) | VM snapshots: instant, exportable, inspectable | **Roadmap.** The answer to instruments that lie; shares its reader with 0014 |
 | [0016](0016-two-builds.md) | A stripped production VM; diagnostics optional | **Roadmap.** Cross-cutting; supersedes the per-feature clauses in 0009/0014/0015 |
@@ -36,10 +36,11 @@ The user's stated ordering, after the open bugs close.
 
 1. **Close the open runtime bugs** — the dangling `stack[1]` root and
    `document.clj`'s two wave assertions. `../HANDOFF.md` is the live state.
-2. **AOT** (`0013`), on the guard-only design in `0016` — a closure call that
-   checks a blocked flag and branches out, rather than colouring functions by
-   whether they block. That is what allows large chunks; chain them so the wasm
-   engine can still optimise across them while keeping granular re-entry points.
+2. ~~**AOT** (`0013`)~~ — **built, measured, shelved.** 1.07–1.25×, for +98%
+   module and +12% cold start. The lever turned out to be elsewhere: extending
+   `register-native-aliases!` per-arity made the **interpreter** 1.85× faster
+   and cost nothing. `0013` records why AOT under-delivered and what would make
+   it win, which is a compiler — specialisation, unboxed locals, inlining.
 3. **Ropes** (`0011` §1–2), then **the Pike VM** (`0012`): shared cljc pattern
    compiler, a cljc reference simulator, and the native wasm simulator — the
    native one is what makes the route feasible, not a later optimisation. No

@@ -1,5 +1,13 @@
 # 0013 — Emitting wasm instead of dispatching, and what it costs
 
+> **SHELVED — 2026-08-24.** Built, measured, and parked by the user's decision:
+> *"drop aot for now, focus on strings and regex."* `--aot` stays in the tree,
+> off by default, behind a cargo feature, with an open correctness bug on the
+> threads + host-port path documented below. The production module carries none
+> of it. Nothing here is deleted, because the measurements are worth more than
+> the emitter and **the reason it under-delivered is now understood** — see
+> "Why it lost, and what would make it win" at the end.
+>
 > **The measurement this document gated itself on has been taken.** It is in
 > "The measurement, taken" below, and it says yes. Everything above that section
 > is the argument as it stood before the numbers; the numbers did not overturn
@@ -792,3 +800,71 @@ short-circuiting `reduce` raised `ClassCastException: cannot deref this value`.
 `(nth acc' 0)` fixes it, `test/aot.clj` pins it against Clojure's own answers,
 and it is worth recording how it was found: not by a test, but by a compiler pass
 that happened to use the feature. Nothing in the suite had ever taken that branch.
+
+---
+
+# Why it lost, and what would make it win
+
+Written after the fact, because "AOT was only 1.07–1.25×" is useless to whoever
+picks this up and "here is the mechanism" is not.
+
+## It transliterated the interpreter; it did not compile the program
+
+The ceiling was measured by hand-emitting `tight`'s loop three ways in the same
+engine on the same NaN-boxed arithmetic:
+
+| | ns/iteration |
+|---|---:|
+| operands in wasm **locals**, real `loop`, arithmetic inlined | 1.9 |
+| same, arithmetic through `call_indirect` | 4.8 |
+| memory operand stack + `loop`/`br_table` — **what this emitter produces** | 6.4 |
+| flint, compiled | 136.9 (50.9 after the aliasing fix) |
+
+**The entire emission shape accounts for 6.4 ns.** Everything else was never
+dispatch. A compiled `add` does exactly what the interpreter's `add` arm does:
+load two i64s from the value stack in linear memory, check tags, unbox, add,
+check overflow, box, store back. AOT deleted the branch and the operand
+decode — about 6.2 ns — from a per-instruction cost far larger than that.
+
+It kept the interpreter's **data representation** and its **calling convention**
+and removed only its `switch`. That is why it wins where dispatch dominates
+(`tight`, 1.78×) and barely moves where calls do (`parse`, 1.15×), and the model
+predicts rather than fits: `suggest` is 6.9% calls and runs 1.29×, `parse` is
+10.3% and runs 1.15×.
+
+## The three things a compiler does that this does not
+
+- **Type specialisation.** Knowing both operands are fixnums removes the tag
+  checks and the boxing entirely. That is exactly the 1.9-vs-6.4 gap, and it is
+  the largest single item on this list.
+- **Unboxed values in wasm locals** across spans with no call and no allocation.
+  Legal by `0001` — wasm locals are not scannable, so a value may live only in a
+  local exactly as long as nothing can collect or park, and guard-only chunking
+  makes those spans long. Worth ~1% *on its own*, because boxing is still there;
+  it is what makes specialisation pay.
+- **Inlining.** And the evidence is direct: the largest win of the whole
+  exercise was `register-native-aliases!` extended per-arity, which is
+  hand-inlining `+`, `<` and `inc` at one specific shape. It beat every call
+  protocol tweak combined — and it made the **interpreter** 1.85× faster, which
+  is the sharpest possible statement that the win was never AOT-specific.
+
+## So the ceiling is genuinely higher, and the work is a compiler
+
+You cannot specialise an interpreter, so AOT's ceiling really is above the
+interpreter's. It has not been reached because what was built removes dispatch
+and nothing else. Anyone resuming this should start from specialisation and
+inlining, not from the emitter's shape — the shape is worth 1.6 ns and has
+already been measured.
+
+## What was eliminated on the way, so it is not re-proposed
+
+- **Not a tiering problem.** Forced TurboFan matches default tiering (`tight`
+  1.20× vs 1.26×); under `--liftoff-only` the compiled advantage collapses to
+  1.10×, so the optimiser is engaging and helps compiled code *more* than the
+  interpreter.
+- **Not an inline-cache problem.** Call sites are not monomorphic enough:
+  **24.7%** of construe `parse`'s real `CALL` sites and 8.9% of `suggest`'s would
+  miss, against a `select` that already returns on its first iteration.
+- **Not the sync protocol.** `refresh()` did write seven fields where five are
+  write-once — proven, not assumed, by re-deriving all five on every crossing:
+  **8,302 crossings, 0 drifted.** Fixing it was worth 1.21× → 1.24×.
