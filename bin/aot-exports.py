@@ -13,6 +13,11 @@ import sys
 
 EXPORTS = ["aot_prologue", "aot_native", "aot_return", "aot_bail", "aot_tick",
            "aot_call"]
+# Only meaningful when both features are on; harmless to ask for otherwise
+# because the linker is told about it only by the diagnostics build.
+DIAG_ONLY = ["stat_sync_drift"]
+if "stat_stale_push" in open(sys.argv[1]).read():
+    EXPORTS = EXPORTS + DIAG_ONLY
 
 path = sys.argv[1]
 s = open(path).read()

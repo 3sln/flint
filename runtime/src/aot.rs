@@ -99,16 +99,58 @@ impl AotFn {
     }
 }
 
+/// Have the write-once fields been filled?
+static mut SYNC_FIXED: bool = false;
+
+/// Fill the five fields that can only ever be written once, and prove it.
+///
+/// `consts` and `globals` are `Vec`s that stop growing when the image finishes
+/// loading; `heap` is the arena base, which `sbrk` extends but never moves; and
+/// the last two are the addresses of two `Rt` fields, and the `Rt` lives in a
+/// static it is moved into exactly once. None of that is obvious from the call
+/// site, which is why the diagnostics build re-derives all five on every
+/// crossing and asserts they have not changed rather than taking the argument on
+/// trust. `test/aot.clj` reads the counter, so the zero comes with its coverage.
+#[cfg(feature = "diagnostics")]
+pub static mut SYNC_DRIFT: [u64; 2] = [0; 2];
+
 #[inline]
 fn refresh(rt: &mut Rt) {
     unsafe {
+        // The only two that a crossing can change: a push can reallocate the
+        // value stack, and the top moves constantly. Writing the other five as
+        // well cost seven stores on every one of five call sites, three of them
+        // per Clojure call.
         SYNC.stack = rt.roots.stack.as_ptr() as u32;
         SYNC.top = rt.roots.stack_top as u32;
-        SYNC.consts = rt.roots.consts.as_ptr() as u32;
-        SYNC.globals = rt.roots.globals.as_ptr() as u32;
-        SYNC.heap = rt.gc.sp.base_addr();
-        SYNC.steps = core::ptr::addr_of!(rt.steps) as u32;
-        SYNC.checkpoint = core::ptr::addr_of!(rt.checkpoint) as u32;
+        if !SYNC_FIXED {
+            SYNC_FIXED = true;
+            SYNC.consts = rt.roots.consts.as_ptr() as u32;
+            SYNC.globals = rt.roots.globals.as_ptr() as u32;
+            SYNC.heap = rt.gc.sp.base_addr();
+            SYNC.steps = core::ptr::addr_of!(rt.steps) as u32;
+            SYNC.checkpoint = core::ptr::addr_of!(rt.checkpoint) as u32;
+        }
+        #[cfg(feature = "diagnostics")]
+        {
+            SYNC_DRIFT[0] += 1;
+            if SYNC.consts != rt.roots.consts.as_ptr() as u32
+                || SYNC.globals != rt.roots.globals.as_ptr() as u32
+                || SYNC.heap != rt.gc.sp.base_addr()
+                || SYNC.steps != core::ptr::addr_of!(rt.steps) as u32
+                || SYNC.checkpoint != core::ptr::addr_of!(rt.checkpoint) as u32
+            {
+                SYNC_DRIFT[1] += 1;
+            }
+        }
+    }
+}
+
+/// Reset for a fresh instantiation. The statics outlive an `Rt` on the host, and
+/// a second `Rt` would otherwise inherit the first one's addresses.
+pub fn forget_fixed() {
+    unsafe {
+        SYNC_FIXED = false;
     }
 }
 

@@ -77,6 +77,11 @@ pub const C_AOT_BAILS: usize = 23;
 /// trips cannot be the cause of anything, and saying so takes one counter.
 pub const C_AOT_TICKS: usize = 24;
 pub const C_AOT_TICK_TRIPS: usize = 25;
+/// Call sites, and how many of them ever saw a second callee. An inline cache
+/// is only worth building if the answer is "almost none", and that is a
+/// measurement rather than a folk belief about Clojure.
+pub const C_SITES_SEEN: usize = 26;
+pub const C_SITES_POLY: usize = 27;
 
 pub static mut COUNTS: [u64; 28] = [0; 28];
 
@@ -99,6 +104,12 @@ pub static mut NATIVE_TRACE_N: usize = 0;
 /// The bytecode offset each traced call was made from, so a divergence names
 /// the FUNCTION and not just the builtin.
 pub static mut NATIVE_TRACE_IP: [u32; TRACE_CAP] = [0; TRACE_CAP];
+
+/// Direct-mapped, one entry per call-site byte offset modulo the size. A
+/// collision reads as polymorphic, so this can only OVERSTATE polymorphism --
+/// which is the safe direction for a measurement that would justify a cache.
+pub const SITE_CAP: usize = 1 << 14;
+pub static mut SITE_FN: [u32; SITE_CAP] = [u32::MAX; SITE_CAP];
 
 #[inline]
 pub fn bucket(n: u32) -> usize {

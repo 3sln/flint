@@ -65,7 +65,6 @@
               :items []
               :builtins (:builtins opts #{})
               :native-alias {}
-              :native-arity {}
               :eval-vars (atom {})}))
 
 (defn- register-native-aliases!
@@ -73,14 +72,29 @@
   arguments is recorded, so call sites go straight to the builtin. This is what
   makes writing `clojure.core` in cljc cost nothing at the call site."
   [cc sym ast]
-  (when (and (= :fn (:op ast)) (= 1 (count (:arities ast))))
-    (let [{:keys [argc variadic? body slots]} (first (:arities ast))]
-      (when (and (not variadic?) (= :native (:op body))
-                 (= argc (count (:args body)))
-                 (every? true? (map (fn [a s] (and (= :local (:op a)) (= (:idx a) s)))
-                                    (:args body) slots)))
-        (vswap! cc assoc-in [:native-alias sym] (:name body))
-        (vswap! cc assoc-in [:native-arity sym] argc)))))
+  (when (= :fn (:op ast))
+    (doseq [{:keys [argc variadic? body slots]} (:arities ast)]
+      (when (and (not variadic?) (= :native (:op body)))
+        ;; The body's arguments must be the parameters IN ORDER, with constants
+        ;; allowed among them. Order is the whole of the safety argument:
+        ;; substituting the call site's expressions into those positions
+        ;; evaluates them in the sequence the wrapper would have, and a constant
+        ;; needs no evaluating at all.
+        ;;
+        ;; Allowing constants is what catches `inc`, `dec`, `pos?`, `neg?` and
+        ;; `zero?`, every one of which is `(flint.rt/x n <literal>)`.
+        (let [tmpl (loop [as (:args body) taken 0 out []]
+                     (cond
+                       (empty? as) (when (= taken argc) out)
+                       (and (= :local (:op (first as))) (< taken argc)
+                            (= (:idx (first as)) (nth slots taken)))
+                       (recur (rest as) (inc taken) (conj out [:arg taken]))
+                       (= :const (:op (first as)))
+                       (recur (rest as) taken (conj out [:lit (first as)]))
+                       :else nil))]
+          (when tmpl
+            (vswap! cc assoc-in [:native-alias sym argc]
+                    {:name (:name body) :tmpl tmpl})))))))
 
 ;; ------------------------------------------------------------------ pass 1/2
 

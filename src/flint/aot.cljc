@@ -236,12 +236,18 @@
 (defn- reload
   "Everything compiled code caches that a call back into Rust can invalidate.
   The value stack is a `Vec` and a push can reallocate it, so the base cannot be
-  held across a call -- which is why the sync block exists at all."
-  []
+  held across a call -- which is why the sync block exists at all.
+
+  `need` is what the BODY actually reads. A callee like `+` is four instructions
+  long and touches none of the closure, so reloading its address on every entry
+  and after every native was pure overhead measured against a body that small."
+  [need]
   [(lget SYNC) (i32ld S-STACK) (lset SP)
    (lget SYNC) (i32ld S-TOP) (i32c 3) (op :i32-shl) (lget SP) (op :i32-add) (lset TOPB)
-   (lget SP) (lget FP) (i32c 3) (op :i32-shl) (op :i32-add) (lset FPB)
-   (lget SP) (lget RET-TO) (i32c 3) (op :i32-shl) (op :i32-add) (lset RETB)])
+   (when (:fpb need)
+     [(lget SP) (lget FP) (i32c 3) (op :i32-shl) (op :i32-add) (lset FPB)])
+   (when (:retb need)
+     [(lget SP) (lget RET-TO) (i32c 3) (op :i32-shl) (op :i32-add) (lset RETB)])])
 
 (defn- top-index
   "The value stack top as an index, which is what the helpers take."
@@ -412,7 +418,7 @@
                (call-fn helpers :call)
                (op :if) (op :void) (op :return) (op :end)
                (i32c 0) (lset GAS)
-               (reload)])
+               (reload (:need ctx))])
       :native (let [nx (+ ip len) j (chunk-of nx)]
                 [(lget RT) (i32c (u16 b)) (i32c (nth b 2)) (top-index)
                  (i32c ip) (i32c (:i ctx))
@@ -420,7 +426,7 @@
                  (call-fn helpers :native)
                  (op :if) (op :void) (op :return) (op :end)
                  (i32c 0) (lset GAS)
-                 (reload)])
+                 (reload (:need ctx))])
       ;; Everything else goes back to the interpreter for exactly one
       ;; instruction. That is what lets this emitter be COMPLETE from the first
       ;; version instead of refusing a whole function over one rare opcode, and
@@ -452,6 +458,18 @@
   (into [(w/uleb (count LOCAL-DECLS))]
         (mapcat (fn [[n t]] [(w/uleb n) t]) LOCAL-DECLS)))
 
+(defn needs
+  "Which of the cached bases this body actually reads. A prologue that loads all
+  of them regardless is measured overhead on a small callee, and most callees in
+  idiomatic Clojure are small."
+  [instrs]
+  (let [ops (into #{} (map :op) instrs)]
+    {:fpb (some ops [:local :local-w :set-local :set-local-keep])
+     :retb (some ops [:self :upval])
+     :consts (some ops [:const])
+     :globals (some ops [:var :set-var])
+     :heap (some ops [:upval])}))
+
 (defn compile-arity
   "One arity to a wasm function body. Returns `{:body :points :depth :chunks}`,
   or nil if it cannot be compiled -- an unknown opcode or an unbounded operand
@@ -472,17 +490,18 @@
             cks (chunks instrs bounds)
             n (count cks)
             chunk-of (zipmap bounds (range))
-            ctx {:n n :chunk-of chunk-of :helpers helpers :extra 0}]
+            need (needs instrs)
+            ctx {:n n :chunk-of chunk-of :helpers helpers :extra 0 :need need}]
         {:points (mapv (fn [c] [(:ip c) (:idx c)]) cks)
          :depth depth
          :chunks n
          :body
          (w/->bytes
           [(locals-decl)
-           (lget SYNC) (i32ld S-CONSTS) (lset CONSTS)
-           (lget SYNC) (i32ld S-GLOBALS) (lset GLOBALS)
-           (lget SYNC) (i32ld S-HEAP) (lset HEAP)
-           (reload)
+           (when (:consts need) [(lget SYNC) (i32ld S-CONSTS) (lset CONSTS)])
+           (when (:globals need) [(lget SYNC) (i32ld S-GLOBALS) (lset GLOBALS)])
+           (when (:heap need) [(lget SYNC) (i32ld S-HEAP) (lset HEAP)])
+           (reload need)
            (lget ENTRY) (lset PC)
            (op :loop) (op :void)
            (repeat (inc n) [(op :block) (op :void)])

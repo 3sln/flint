@@ -54,8 +54,11 @@ if (t.ta && t.na && t.ti && t.ni) {
               `  = ${((t.c3 - t.c2) * 1e6 / Nn).toFixed(1)} ns/iteration`);
   console.log(`  compiled speedup WITH closure calls           ${(t.ti / t.ta).toFixed(2)}x`);
   console.log(`  compiled speedup WITHOUT them                 ${(t.ni / t.na).toFixed(2)}x`);
-  const ic = (t.ti - t.ni) * 1e6 / Nn / 3, ac = (t.ta - t.na) * 1e6 / Nn / 3;
-  console.log(`  one Clojure call costs  ${ic.toFixed(1)} ns interpreted, ` +
-              `${ac.toFixed(1)} ns compiled`);
+  // Per ITERATION, not per call: how many closure calls tight's loop still
+  // makes depends on how much of the arithmetic the native-alias pass has taken
+  // over, and dividing by a number that is no longer three would be a lie.
+  console.log(`  what the remaining closure calls cost per iteration  ` +
+              `${((t.ti - t.ni) * 1e6 / Nn).toFixed(1)} ns interpreted, ` +
+              `${((t.ta - t.na) * 1e6 / Nn).toFixed(1)} ns compiled`);
   console.log(`  everything else is ${((t.ni - t.na) * 1e6 / Nn).toFixed(1)} ns/iteration cheaper compiled`);
 }

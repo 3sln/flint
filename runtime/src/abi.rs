@@ -565,3 +565,11 @@ pub extern "C" fn stat_static(i: u32) -> u64 {
 pub extern "C" fn stat_native_trace(i: u32) -> u32 {
     crate::aotstat::read_trace(i)
 }
+
+/// Did any write-once field of the AOT sync block ever change? 0 is how many
+/// crossings were checked, 1 is how many disagreed.
+#[cfg(all(feature = "diagnostics", feature = "aot"))]
+#[no_mangle]
+pub extern "C" fn stat_sync_drift(i: u32) -> u64 {
+    unsafe { *crate::aot::SYNC_DRIFT.get(i as usize).unwrap_or(&0) }
+}

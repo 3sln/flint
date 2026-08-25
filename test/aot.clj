@@ -96,5 +96,24 @@
   (check-that "compiling costs module bytes, and only when asked for"
               (> compiled plain)))
 
+
+;; `reduced` short-circuiting a `reduce`. It was broken for the whole life of
+;; the runtime -- `reduced` is a one-element vector with a marker in its
+;; metadata, and `reduce` unwrapped it with `deref`, which knows about atoms,
+;; volatiles and delays and nothing else. Found by accident while optimising the
+;; call path, which is the only reason it was found at all.
+(src! "reduced" (str "(ns reduced)\n"
+                     "(defn main [_]\n"
+                     "  (pr-str [(reduce (fn [a x] (if (> x 2) (reduced a) (+ a x))) 0 [1 2 3 4])\n"
+                     "           (reduce (fn [a x] (+ a x)) 0 [1 2 3 4])\n"
+                     "           (unreduced (reduced 7))\n"
+                     "           (reduce (fn [a x] (if (= x :stop) (reduced a) (conj a x)))\n"
+                     "                   [] [:a :b :stop :c])]))"))
+(let [i (run! (build! "reduced" false))
+      a (run! (build! "reduced" true))]
+  (check "reduced short-circuits a reduce, as Clojure does" (:out i)
+         (pr-str [3 10 7 [:a :b]]))
+  (check "  ... and identically in compiled code" (:out a) (:out i)))
+
 (println (if (zero? @fails) "aot: ok" (str "aot: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))

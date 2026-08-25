@@ -207,7 +207,12 @@
    (loop [acc init s (seq coll)]
      (if s
        (let [acc' (f acc (first s))]
-         (if (reduced? acc') (deref acc') (recur acc' (next s))))
+         ;; `nth`, not `deref`. A `reduced` is a one-element vector carrying a
+         ;; marker in its metadata, and `deref` knows about atoms, volatiles and
+         ;; delays -- so every short-circuiting `reduce` raised
+         ;; `cannot deref this value`, and nothing in the suite had ever taken
+         ;; that branch.
+         (if (reduced? acc') (nth acc' 0) (recur acc' (next s))))
        acc))))
 
 (defn reduced [x] (flint.rt/with-meta [x] {:flint/reduced true}))
@@ -1100,7 +1105,7 @@
 (defn simple-ident? [x] (and (ident? x) (nil? (namespace x))))
 (defn qualified-ident? [x] (and (ident? x) (some? (namespace x))))
 (defn bounded-count [n coll] (if (counted? coll) (count coll) (count (take n coll))))
-(defn unreduced [x] (if (reduced? x) (deref x) x))
+(defn unreduced [x] (if (reduced? x) (nth x 0) x))
 (defn ensure-reduced [x] (if (reduced? x) x (reduced x)))
 (defn chunked-seq? [_] false)
 (defn record? [_] false)

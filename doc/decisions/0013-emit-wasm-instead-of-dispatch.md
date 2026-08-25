@@ -697,3 +697,98 @@ rewrite:
 
 Measure those before building any of them — that is the rule this whole document
 now runs on.
+
+---
+
+# Optimising it: what the numbers said to do, and what they said not to
+
+The instruction was to make the compiled code faster, with the ceiling
+measurement in hand and three named candidates. Two of the three are now
+eliminated **by measurement**, one paid a little, and the biggest win was
+somewhere none of us had proposed.
+
+## The three candidates, measured
+
+**`refresh()` writing seven fields per crossing.** Five of the seven can only be
+written once — `consts` and `globals` stop growing when the image finishes
+loading, `heap` is an arena base that `sbrk` extends but never moves, and the
+last two are addresses of `Rt` fields in a static the `Rt` is moved into exactly
+once. None of that is obvious from the call site, so the diagnostics build
+re-derives all five on every crossing and asserts they have not moved:
+**8 302 crossings checked, 0 drifted.** Writing two instead of seven: 1.21× →
+1.24×, one call 28.6 → 28.0 ns. Real, small.
+
+**An inline cache on `enter`'s arity selection.** The premise is that the call
+site is monomorphic, and that is a measurable claim. Measured at real `CALL`
+sites in construe: **24.7% of `parse`'s and 8.9% of `suggest`'s would MISS.**
+Against a `select` that already returns on its first iteration for an exact
+match, a cache that misses a quarter of the time is not worth its miss path.
+**Not built.**
+
+**A conditional prologue** — emit only the bases the body actually reads, since
+a callee like `+` is four instructions long and touches neither the closure nor
+the constants. 1.24× → 1.25×. Real, small.
+
+**Removing a boundary from compiled-to-compiled calls** was the one I was told to
+start with, and it is the right instinct — but by the time the others were
+measured it was clear the boundary is not what a call costs. A Clojure call is
+25.4 ns **in the interpreter too**; compiled code adds ~2 ns to it. Removing two
+of the crossings could recover about 4 ns of 28. It is still worth doing and it
+is not done.
+
+## The lever that was not on the list
+
+The measurement kept saying the same thing: the speedup is a function of **call
+density**, and `tight` spends three closure calls per iteration on `<`, `inc` and
+`+`. Those are not user code. They are four-instruction wrappers in
+`clojure.core` around a single builtin.
+
+`register-native-aliases!` already existed to make exactly that free — *"a core
+var whose body is exactly one `flint.rt/x` call with the same arguments is
+recorded, so call sites go straight to the builtin"*. It required the var to have
+**exactly one arity**, which excluded `+`, `-`, `*`, `/`, `<`, `<=`, `>`, `>=`,
+`=`, `==`, `conj`, `assoc`, `dissoc`, `disj`, `get`, `nth`, `subs`, `ex-info` and
+the rest — every one of which is written as a two-argument arity beside a
+variadic tail. **The most common call in the language was paying for a full
+Clojure call.**
+
+Registering per ARITY, and allowing constants among the parameters so that
+`(inc i)` becomes `add(i, 1)`:
+
+| | before | after | |
+| --- | --- | --- | --- |
+| `tight`, interpreted | 164.8 ms | **90.5 ms** | 1.82× |
+| `tight`, compiled | 136.5 ms | **50.9 ms** | 2.68× |
+| construe `suggest`, compiled | 13.6 ms | **12.1 ms** | |
+| construe `parse`, compiled | 7.0 ms | **5.6 ms** | |
+
+And because it removes calls rather than making them cheaper, **the compiled
+advantage went up as well**:
+
+| | before | after |
+| --- | --- | --- |
+| tight | 1.21× | **1.78×** |
+| words | 1.22× | **1.40×** |
+| json | 1.18× | **1.30×** |
+| suggest | 1.25× | **1.29×** |
+| maps | 1.08× | **1.16×** |
+| parse | 1.07× | **1.15×** |
+
+`tight` compiled is now 50.9 ns/iteration against 49.7 for the hand-written
+version that makes no closure calls at all — it has become that program, which
+is the confirmation that the mechanism is understood and not merely correlated.
+
+The interpreter gets the same win, which is the part worth noticing: this was
+never an AOT optimisation.
+
+## A live bug, found by accident
+
+Extending the alias needed a template scan, the first draft used `reduce` with
+`reduced`, and self-hosting broke. `reduced` has **never worked in flint**: it is
+a one-element vector carrying a marker in its metadata, and `reduce` unwrapped it
+with `deref`, which knows about atoms, volatiles and delays and nothing else. Any
+short-circuiting `reduce` raised `ClassCastException: cannot deref this value`.
+
+`(nth acc' 0)` fixes it, `test/aot.clj` pins it against Clojure's own answers,
+and it is worth recording how it was found: not by a test, but by a compiler pass
+that happened to use the feature. Nothing in the suite had ever taken that branch.

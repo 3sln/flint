@@ -186,11 +186,17 @@
       :else
       (let [f (analyze env head)
             args (mapv #(analyze env %) (rest form))]
-        (if (and (= :var (:op f)) (get-in @(:cc env) [:native-alias (:sym f)])
-                 (= (count args) (get-in @(:cc env) [:native-arity (:sym f)])))
-          ;; A core var whose whole body is one native call: go straight to the
-          ;; builtin. This is what keeps the cljc wrapper layer free.
-          {:op :native :name (get-in @(:cc env) [:native-alias (:sym f)]) :args args}
+        (if-let [nat (and (= :var (:op f))
+                          (get-in @(:cc env) [:native-alias (:sym f) (count args)]))]
+          ;; A core var ARITY whose whole body is one native call: go straight to
+          ;; the builtin. Keyed on the argument count, because `+` and friends
+          ;; are written as a two-argument arity beside a variadic one.
+          ;; The template puts this call's argument expressions where the
+          ;; wrapper's parameters were, keeping any constants the wrapper
+          ;; supplied -- which is how `(inc i)` becomes `add(i, 1)`.
+          {:op :native :name (:name nat)
+           :args (mapv (fn [t] (if (= :arg (first t)) (nth args (second t)) (second t)))
+                       (:tmpl nat))}
           {:op :invoke :fn f :args args})))))
 
 (defn analyze [env form]

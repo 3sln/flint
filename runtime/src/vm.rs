@@ -588,9 +588,30 @@ impl Rt {
     /// Push a frame for `closure`. The callee sits at `callee_at`, args follow.
     pub(crate) fn enter(&mut self, closure: Value, callee_at: usize, argc: usize) -> bool {
         let fn_idx = self.slot(closure, 0).as_fixnum() as usize;
+        // Is this call site monomorphic? Keyed on the CALLER's committed ip,
+        // which is exact in the interpreter -- the build this is measured on.
+        #[cfg(feature = "diagnostics")]
+        unsafe {
+            use crate::aotstat::*;
+            let ip = self.frames.last().map(|f| f.ip).unwrap_or(0);
+            // Only a real CALL site. `enter` is also reached through
+            // `call_value` and `invoke`, whose committed ip is not a call site
+            // at all, and counting those keyed the table on noise.
+            if ip >= 2 && self.u8_at(ip - 2) == op::CALL {
+                let site = ip as usize % SITE_CAP;
+                COUNTS[C_SITES_SEEN] += 1;
+                let prev = SITE_FN[site];
+                if prev == u32::MAX {
+                    SITE_FN[site] = fn_idx as u32;
+                } else if prev != fn_idx as u32 {
+                    COUNTS[C_SITES_POLY] += 1;
+                    SITE_FN[site] = fn_idx as u32;
+                }
+            }
+        }
         #[cfg(feature = "aot")]
         let mut aot_idx = AOT_NONE;
-        let (arity, nlocals, code, end, variadic, fixed) = {
+        let (nlocals, code, end, variadic, fixed) = {
             let def = &self.image.fns[fn_idx];
             match def.select(argc) {
                 Some(a) => {
@@ -599,7 +620,6 @@ impl Rt {
                         aot_idx = a.aot;
                     }
                     (
-                        *a,
                         a.nlocals as usize,
                         a.code,
                         a.code + a.len,
@@ -620,7 +640,6 @@ impl Rt {
                 }
             }
         };
-        let _ = arity;
         if self.frames.len() >= MAX_FRAMES {
             self.roots.stack_top = callee_at;
             self.throw_str("StackOverflowError", "call depth exceeded");
