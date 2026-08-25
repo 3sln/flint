@@ -35,6 +35,7 @@
              "  flint deps               what deps.edn asks for, and what this build honours"
              "  flint paths              the source roots"
              "  flint targets            what this build can cross compile for"
+             "  flint inspect <file>     what a built module says about itself (0020)"
              "  flint version"
              ""
              "  and, from the host side, `flint run <file>` runs a MODULE or a"

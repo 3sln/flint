@@ -259,6 +259,71 @@
                                   (contains? names (String. payload (int i) (int len) "UTF-8")))))
                          ss)))))
 
+(defn imports
+  "Every import, as `{:module :name :kind}`. A flint program imports nothing;
+  this exists because `0020`'s capability descriptor is precisely `how to spin
+  up the glue`, and a descriptor derived from the module cannot drift from it."
+  [m]
+  (if-let [{:keys [^bytes payload]} (section m 2)]
+    (let [[n i] (rd-uleb payload 0)]
+      (loop [i i k 0 out []]
+        (if (= k n)
+          out
+          (let [[mlen i2] (rd-uleb payload i)
+                mod (String. payload (int i2) (int mlen) "UTF-8")
+                i3 (+ i2 mlen)
+                [nlen i4] (rd-uleb payload i3)
+                nm (String. payload (int i4) (int nlen) "UTF-8")
+                i5 (+ i4 nlen)
+                kind (ub payload i5)
+                ;; The descriptor after the kind byte varies; every form starts
+                ;; with at least one uleb, and a memory or table adds a limits
+                ;; block. Only the names are wanted here, so skip precisely.
+                i6 (inc i5)
+                i7 (case kind
+                     0 (second (rd-uleb payload i6))
+                     3 (+ i6 2)
+                     (let [[flags j] (rd-uleb payload (inc i6))
+                           [_ j2] (rd-uleb payload j)]
+                       (if (zero? flags) j2 (second (rd-uleb payload j2)))))]
+            (recur i7 (inc k) (conj out {:module mod :name nm :kind kind}))))))
+    []))
+
+(defn add-custom
+  "Add a custom section named `nm` carrying `payload`, placed EARLY.
+
+  Early matters (`doc/decisions/0020`): a runner deciding whether it can load a
+  module at all, and how to build its glue, should not have to stream past a
+  megabyte of code section first. It goes before the code section (id 10) and
+  after the type section, which is the earliest point that keeps the canonical
+  ordering readable.
+
+  Any existing section with the same name is replaced, so re-running a link does
+  not accumulate copies."
+  [m nm payload]
+  (let [b (utf8-bytes nm)
+        body (->bytes [(uleb (alength b)) b payload])
+        m (strip-custom m #{nm})
+        ss (:sections m)
+        ;; Before the first section that is not a type/import section, which in
+        ;; practice puts it near the front and always before code.
+        at (or (first (keep-indexed (fn [i {:keys [id]}] (when (>= id 3) i)) ss))
+               (count ss))]
+    (assoc m :sections (vec (concat (subvec ss 0 at)
+                                    [{:id 0 :payload body}]
+                                    (subvec ss at))))))
+
+(defn custom-section
+  "The payload of the custom section named `nm`, or nil. Parsing only -- this is
+  what a runner does, and it must work without instantiating anything."
+  [m nm]
+  (some (fn [{:keys [id ^bytes payload]}]
+          (when (= 0 id)
+            (let [[len i] (rd-uleb payload 0)]
+              (when (= nm (String. payload (int i) (int len) "UTF-8"))
+                (java.util.Arrays/copyOfRange payload (int (+ i len)) (int (alength payload)))))))
+        (:sections m)))
+
 (defn rename-export
   "Rename an export. Needed because `wasm-ld` special-cases a symbol named
   `main` and wraps it; we export `flint_main` and rename afterwards."

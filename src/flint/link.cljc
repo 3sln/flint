@@ -15,6 +15,7 @@
             ;; require it first. Anything else that reaches for the linker got a
             ;; resolution error from a file it did not touch.
             [flint.image]
+            [flint.modmeta :as modmeta]
             [flint.aot :as aot]))
 
 (def ^:private toolchain
@@ -311,7 +312,7 @@
   `emit-image` is called with the resolved {builtin-name -> table-slot} map and
   must return the image bytes."
   [{:keys [unit-path sysroot needed-builtins emit-image out tmp keep-names builder aot?
-           loader?]}]
+           loader? entry-sym flint-version]}]
   (let [units (discover-units unit-path)
         _ (check-abi! units)
         p (plan units needed-builtins)
@@ -371,6 +372,37 @@
         m (w/rename-export m "flint_main" "main")
         m (w/strip-custom m (if keep-names #{"producers" "target_features"}
                                 #{"producers" "target_features" "name"}))
+        ;; What the module says about itself (`doc/decisions/0020`). Written
+        ;; LAST, so it describes the module as it actually is -- exports and all
+        ;; -- rather than what the link intended, and placed early in the byte
+        ;; stream so a runner can read it without downloading the code section.
+        ;; The ABI surface a runner drives, not every symbol the linker kept.
+        ;; `flint_b_*` are builtin implementations reached through the table --
+        ;; internal linkage detail, hundreds of them, and nothing a runner can
+        ;; do with the names. They are counted rather than listed.
+        all-exported (vec (keys (w/exports m)))
+        builtin? (fn [n] (str/starts-with? n "flint_b_"))
+        exported (vec (remove builtin? all-exported))
+        meta (modmeta/describe
+              {:abi (:abi (first (vals units)) {:runtime 1 :value 1 :image 1})
+               :memory :unshared
+               :gas-in-aot (boolean aot?)
+               :version flint-version
+               :entry (str entry-sym)
+               :exports exported
+               :imports (vec (sort (map (fn [i] (str (:module i) "/" (:name i)))
+                                        (w/imports m))))
+               :units (mapv (fn [u] {:name (str (:name u)) :abi (:abi u)}) (:units p))
+               ;; Derived from the ARTIFACT, not from the build flags: a
+               ;; descriptor that says what was asked for rather than what
+               ;; arrived is the kind that goes quietly wrong.
+               :builtins (count (filter builtin? all-exported))
+               :features {:diagnostics (contains? (set exported) "collect_now")
+                          :snapshots (contains? (set exported) "flint_snapshot_capture")
+                          :loader (contains? (set exported) "flint_load_image")
+                          :capabilities (contains? (set exported) "flint_grant")
+                          :aot (boolean aot?)}})
+        m (w/add-custom m modmeta/section-name (w/utf8-bytes (pr-str meta)))
         bytes (w/emit m)]
     (io/copy bytes (io/file out))
     ;; The linker's raw output is scratch -- it is parsed, rewritten and

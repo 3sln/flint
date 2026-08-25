@@ -1,8 +1,14 @@
 # 0020 — What a module says about itself, and shards
 
-> **NOT BUILT YET.** Two requests that arrived together and turn out to be one
-> mechanism: a module should declare what was built into it, and it should be
-> possible to build a namespace as a loadable library rather than a program.
+> **PART 1 IS BUILT.** Every module carries a `flint` custom section, readable
+> from the bytes without instantiating, and `flint inspect <file.wasm>` prints
+> it. Part 2 — shards — is not built; the classification work it names (which
+> namespaces may be privately bundled and which must be imported) is still the
+> real cost.
+>
+> The trap this document names is checked rather than argued: `test/modmeta.clj`
+> builds the production and diagnostics runtimes and asserts they share a
+> compatibility key.
 
 The ask, in the user's terms:
 

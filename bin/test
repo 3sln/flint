@@ -128,6 +128,11 @@ bb test/manifest.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fa
 tail -1 /tmp/flint-test.out
 
 echo
+echo "== modmeta: what a module says about itself, without instantiating (0020)"
+bb test/modmeta.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/modmeta.clj"; }
+grep -E "^    |FAIL" /tmp/flint-test.out || true
+tail -1 /tmp/flint-test.out
+
 echo "== two builds: a production module carries no diagnostics (0016)"
 bb test/twobuilds.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/twobuilds.clj"; }
 grep -E "^    " /tmp/flint-test.out || true

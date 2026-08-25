@@ -8,7 +8,8 @@
          ;; The project surface -- `tasks`, `task`, `build`, `fetch`, ... -- is
          ;; flint code, in `lib/`, because 0021's argument is that it has to
          ;; survive losing babashka. What is in this file is the host half.
-         '[flint.cli :as cli] '[flint.deps :as deps])
+         '[flint.cli :as cli] '[flint.deps :as deps]
+         '[flint.wasm :as w] '[flint.modmeta :as modmeta])
 
 (defn- option? [s] (or (str/starts-with? s ":") (str/starts-with? s "-")))
 
@@ -243,6 +244,42 @@
     (.start (Thread. (clojure.core/fn [] (io/copy (.getInputStream p) System/out))))
     (.start (Thread. (clojure.core/fn [] (io/copy (.getErrorStream p) System/err))))
     (System/exit (.waitFor p))))
+
+;; `flint inspect <file.wasm>` -- what a module says about itself
+;; (doc/decisions/0020). Read from the BYTES, with no instantiation: a runner
+;; has to decide whether to instantiate at all, and on what glue, and that
+;; decision cannot depend on having already done it.
+(when (= "inspect" (first *command-line-args*))
+  (let [file (second *command-line-args*)
+        _ (when-not file
+            (binding [*out* *err*] (println "usage: flint inspect <file.wasm>"))
+            (System/exit 2))
+        bytes (java.nio.file.Files/readAllBytes (.toPath (io/file file)))
+        m (try (reader/read-one (String. ^bytes (w/custom-section (w/parse bytes) modmeta/section-name)
+                                         "UTF-8"))
+               (catch Exception _ nil))]
+    (if (nil? m)
+      (do (binding [*out* *err*]
+            (println (str file " carries no flint metadata section."))
+            (println "Either it is not a flint module, or it was built before 0020."))
+          (System/exit 1))
+      (do
+        (println (str "flint " (:version m) "   entry " (:entry m)))
+        (println (str "compatibility key " (get-in m [:compat :key])
+                      "   abi " (pr-str (get-in m [:compat :abi]))
+                      "   " (name (get-in m [:compat :memory]))
+                      (when (get-in m [:compat :gas-in-aot]) "   gas-in-aot")))
+        (println (str "present: "
+                      (str/join ", " (map (clojure.core/fn [e] (name (key e)))
+                                          (filter val (:features m))))))
+        (println (str "absent:  "
+                      (str/join ", " (map (clojure.core/fn [e] (name (key e)))
+                                          (remove val (:features m))))))
+        (println (str "units:   " (str/join ", " (map :name (:units m)))))
+        (println (str "exports: " (str/join " " (:exports m))
+                      "   (+" (:builtins m) " builtins)"))
+        (println (str "imports: " (if (seq (:imports m)) (str/join " " (:imports m)) "none")))
+        (System/exit 0)))))
 
 ;; The project commands -- `tasks`, `task`, `deps`, `paths`, `targets`,
 ;; `version`, `help`. The LOGIC for all of them is `lib/flint/cli.cljc`, a flint
@@ -536,6 +573,8 @@
                               :aot? (and (or aot (= "1" (System/getenv "FLINT_AOT")))
                                          (not self))
                               :loader? loader
+                              :entry-sym fn
+                              :flint-version (or (System/getenv "FLINT_VERSION") "0.1.0")
                               :keep-names keep-names})
         t2 (System/nanoTime)]
     (when stats
