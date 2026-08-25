@@ -94,6 +94,64 @@ impl<'a> Rd<'a> {
 impl Rt {
     /// Parse and install a program image. Returns false if the bytes are not a
     /// compatible image.
+    /// Re-point every native import at THIS module's table, by name.
+    ///
+    /// An image records `(name, slot)` for each builtin it imports, and the slot
+    /// is whatever the module that compiled it happened to assign. Loading an
+    /// image at run time means the slots are meaningless and the names are not,
+    /// so they are looked up in the registry the linker embedded.
+    ///
+    /// Returns the name of the first builtin this module does not carry, which
+    /// is the only useful thing to say about that failure.
+    pub fn resolve_natives(&mut self, registry: &[u8]) -> Result<(), alloc::string::String> {
+        if self.image.natives.is_empty() {
+            return Ok(());
+        }
+        if registry.is_empty() {
+            return Err("<this module has no builtin registry: link it with --loader>".into());
+        }
+        for i in 0..self.image.natives.len() {
+            let namec = self.image.native_names[i] as usize;
+            let nv = self.roots.consts.get(namec).copied().unwrap_or(NIL);
+            let mut b = crate::rt::sbuf();
+            let want: alloc::string::String = self.as_str(nv, &mut b).unwrap_or("").into();
+            let mut at = 0usize;
+            let mut found: Option<u32> = None;
+            while at + 8 <= registry.len() {
+                // Bounds first: a malformed registry must say so, not trap. The
+                // first attempt at this trapped, and "unreachable" is the least
+                // informative thing a loader can say about a module it cannot
+                // load.
+                let slot = u32::from_le_bytes([
+                    registry[at],
+                    registry[at + 1],
+                    registry[at + 2],
+                    registry[at + 3],
+                ]);
+                let n = u32::from_le_bytes([
+                    registry[at + 4],
+                    registry[at + 5],
+                    registry[at + 6],
+                    registry[at + 7],
+                ]) as usize;
+                if at + 8 + n > registry.len() {
+                    return Err("<the builtin registry in this module is malformed>".into());
+                }
+                let name = core::str::from_utf8(&registry[at + 8..at + 8 + n]).unwrap_or("");
+                if name == want {
+                    found = Some(slot);
+                    break;
+                }
+                at += 8 + n;
+            }
+            match found {
+                Some(s) => self.image.natives[i] = s,
+                None => return Err(want),
+            }
+        }
+        Ok(())
+    }
+
     pub fn load_image(&mut self, bytes: &[u8]) -> bool {
         if bytes.len() < 12 || &bytes[..8] != MAGIC {
             return false;
@@ -105,14 +163,14 @@ impl Rt {
 
         let nnat = r.u32() as usize;
         let mut natives = Vec::with_capacity(nnat);
-        #[cfg(feature = "diagnostics")]
+        // Kept in EVERY build, not just the instrumented one. It was diagnostic
+        // when the only reader was an error message; it is load-bearing now,
+        // because an image loaded at RUN time carries slot numbers from the
+        // module it was compiled against and has to be re-resolved by NAME
+        // (`doc/decisions/0023`).
         let mut native_names = Vec::with_capacity(nnat);
         for _ in 0..nnat {
-            let name = r.u32();
-            #[cfg(feature = "diagnostics")]
-            native_names.push(name);
-            #[cfg(not(feature = "diagnostics"))]
-            let _ = name;
+            native_names.push(r.u32());
             natives.push(r.u32());
         }
 
@@ -299,7 +357,6 @@ impl Rt {
             code,
             fns,
             natives,
-            #[cfg(feature = "diagnostics")]
             native_names,
             var_names,
             entry,

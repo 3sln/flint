@@ -10,6 +10,11 @@
   (:require [clojure.string :as str]
             [clojure.java.io :as io]
             [flint.wasm :as w]
+            ;; Required rather than assumed: `flint.image/u32` is used below and
+            ;; this namespace only ever loaded because `bin/flint` happened to
+            ;; require it first. Anything else that reaches for the linker got a
+            ;; resolution error from a file it did not touch.
+            [flint.image]
             [flint.aot :as aot]))
 
 (def ^:private toolchain
@@ -149,6 +154,12 @@
   ["flint_main" "arg_alloc" "arg_push" "out_ptr" "out_len"
    "image_desc_addr" "set_step_limit" "stat_steps" "set_memory_limit"])
 
+(def loader-exports
+  "A module built with `--loader` can be handed an image at run time. That needs
+  the registry's address (so the linker can write it) and the entry point that
+  reads it (`doc/decisions/0023`)."
+  ["FLINT_BUILTIN_REGISTRY" "builtin_registry_addr" "flint_load_image"])
+
 (defn unit-exports
   "Extra wasm exports a linked unit asks for. This is how a unit can widen the
   module's outside edge -- the concurrency unit's host-callback surface is the
@@ -158,7 +169,7 @@
 
 (defn link-objects
   "Run the linker. Returns the module bytes."
-  [{:keys [units exports]} sysroot out-path & [keep-names]]
+  [{:keys [units exports] :as p} sysroot out-path & [keep-names]]
   (let [objs (for [u units] (str (:dir u) "/" (:artifact u)))
         ;; Each unit carries its own dependency rlibs. A program that never
         ;; mentions XML never puts xmlparser on the link line at all, so
@@ -176,6 +187,7 @@
                       "--export-table"
                       "--export=__heap_base" "--export=FLINT_IMAGE_DESC"]
                      (map #(str "--export=" %) abi-exports)
+                     (map #(str "--export=" %) (if (:loader? p) loader-exports []))
                      (map #(str "--export=" %) (unit-exports units))
                      (map #(str "--export=" %) (vals exports))
                      (when keep-names ["--strip-debug"])
@@ -292,11 +304,13 @@
   "Link, bind the reached builtins into the wasm table, splice the image in.
   `emit-image` is called with the resolved {builtin-name -> table-slot} map and
   must return the image bytes."
-  [{:keys [unit-path sysroot needed-builtins emit-image out tmp keep-names builder aot?]}]
+  [{:keys [unit-path sysroot needed-builtins emit-image out tmp keep-names builder aot?
+           loader?]}]
   (let [units (discover-units unit-path)
         _ (check-abi! units)
         p (plan units needed-builtins)
-        raw (link-objects p sysroot (or tmp (str out ".tmp")) keep-names)
+        raw (link-objects (assoc p :loader? loader?) sysroot (or tmp (str out ".tmp"))
+                          keep-names)
         m (w/parse raw)
         exp (w/exports m)
         base (or (w/table-min m) 1)
@@ -328,6 +342,23 @@
         m (w/append-data m img-addr image)
         ;; A second data segment overwrites the descriptor in place; later
         ;; segments win, so no byte surgery inside the linker's own data.
+        ;; The builtin registry: `(slot, name-length, name)` for every builtin
+        ;; this module carries, so an image compiled elsewhere can be re-pointed
+        ;; at THIS module's table by name.
+        m (if-not loader?
+            m
+            (let [g (get exp "FLINT_BUILTIN_REGISTRY")
+                  addr (or (w/global-i32-init m (:index g))
+                           (throw (ex-info "no FLINT_BUILTIN_REGISTRY" {})))
+                  blob (w/->bytes
+                        (for [[nm slot] (sort-by key slots)]
+                          (let [b (w/utf8-bytes nm)]
+                            [(flint.image/u32 slot) (flint.image/u32 (alength b)) b])))
+                  at (bit-and (+ img-addr (count image) 15) (bit-not 15))]
+              (-> m
+                  (w/append-data at blob)
+                  (w/append-data addr (w/->bytes [(flint.image/u32 at)
+                                                  (flint.image/u32 (alength blob))])))))
         m (w/append-data m desc-addr
                          (w/->bytes [(flint.image/u32 img-addr)
                                      (flint.image/u32 (count image))]))

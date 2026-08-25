@@ -57,6 +57,11 @@ echo
 echo "== threads: green threads, ports, protocols, dynamic vars"
 bb test/threads.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/threads.clj"; }
 
+echo "== loader: an image runs in a module that never linked it (0023)"
+bb test/loader.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/loader.clj"; }
+grep -E "^    |FAIL" /tmp/flint-test.out || true
+tail -1 /tmp/flint-test.out
+
 echo "== scaling: doubling the input must not square the work"
 bb test/scaling.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/scaling.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true

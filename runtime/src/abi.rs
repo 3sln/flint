@@ -36,6 +36,19 @@ use crate::value::{Value, NIL};
 #[no_mangle]
 pub static mut FLINT_IMAGE_DESC: [u32; 2] = [0, 0];
 
+/// `(pointer, length)` of the builtin registry, written by the linker in the
+/// same way as the image descriptor above.
+///
+/// The blob is a sequence of records: a `u32` slot, a `u32` name length, then
+/// the name's bytes. It exists so that a module can load an image it was NOT
+/// linked against: the slots in an image belong to whichever module compiled it,
+/// and the only durable identifier a builtin has is its name
+/// (`doc/decisions/0023`).
+///
+/// Absent unless the module was built with `--loader`, so nothing pays for it.
+#[no_mangle]
+pub static mut FLINT_BUILTIN_REGISTRY: [u32; 2] = [0, 0];
+
 static mut RT: Option<Rt> = None;
 static mut ARGS: Vec<(u32, u32)> = Vec::new();
 /// One owned buffer per argument. A single growing buffer would be simpler and
@@ -49,16 +62,22 @@ fn heap_start() -> u32 {
     extern "C" {
         static __heap_base: u8;
     }
-    let base = core::ptr::addr_of!(__heap_base) as u32;
-    let (p, l) = unsafe {
-        let d = core::ptr::addr_of!(FLINT_IMAGE_DESC);
-        ((*d)[0], (*d)[1])
-    };
-    if p == 0 {
-        base
-    } else {
-        core::cmp::max(base, (p + l + 15) & !15)
+    // Past EVERY spliced data segment, not just the image. The comment on
+    // `ensure_arena` warns that an arena starting too low overwrites the data
+    // segments; a third segment was added for the builtin registry and the
+    // arena promptly ate it, which read back as "the registry is malformed"
+    // because by then it was.
+    let mut top = core::ptr::addr_of!(__heap_base) as u32;
+    for d in [
+        core::ptr::addr_of!(FLINT_IMAGE_DESC),
+        core::ptr::addr_of!(FLINT_BUILTIN_REGISTRY),
+    ] {
+        let (p, l) = unsafe { ((*d)[0], (*d)[1]) };
+        if p != 0 {
+            top = core::cmp::max(top, (p + l + 15) & !15);
+        }
     }
+    top
 }
 
 fn image_bytes() -> &'static [u8] {
@@ -503,6 +522,62 @@ pub extern "C" fn stat_collections() -> u64 {
 }
 
 /// Keep the linker from dropping the descriptor: the patcher must find it.
+#[no_mangle]
+pub extern "C" fn builtin_registry_addr() -> u32 {
+    core::ptr::addr_of!(FLINT_BUILTIN_REGISTRY) as u32
+}
+
+/// Load an image produced at RUN time and make it this instance's program.
+///
+/// This is what `doc/decisions/0023` asks about: emitting a `.wasm` needs
+/// `rust-lld`, which will not run in a Worker, but the compiler's output is a
+/// bytecode image -- so a resident module that can load one lets a Worker
+/// compile a candidate and run it with no linking step anywhere.
+///
+/// Returns 0 on success, 1 if the bytes are not an image, 2 if the image needs
+/// a builtin this module does not carry -- and in that case `out_ptr`/`out_len`
+/// name it, because "wrong builtin set" is otherwise indistinguishable from a
+/// corrupt image.
+#[no_mangle]
+pub extern "C" fn flint_load_image(ptr: u32, len: u32) -> i32 {
+    unsafe {
+        let bytes = core::slice::from_raw_parts(ptr as *const u8, len as usize);
+        let rt = ensure_rt();
+        // A second image must not inherit the first one's frames. `load_image`
+        // already clears the constants and the globals.
+        rt.frames.clear();
+        rt.handlers.clear();
+        rt.roots.stack_top = 0;
+        rt.thrown = crate::value::NIL;
+        if !rt.load_image(bytes) {
+            return 1;
+        }
+        let (p, l) = {
+            let d = core::ptr::addr_of!(FLINT_BUILTIN_REGISTRY);
+            ((*d)[0], (*d)[1])
+        };
+        let reg: &[u8] = if p == 0 {
+            &[]
+        } else {
+            core::slice::from_raw_parts(p as *const u8, l as usize)
+        };
+        match rt.resolve_natives(reg) {
+            Ok(()) => 0,
+            Err(name) => {
+                let msg = alloc::format!(
+                    "this module does not carry the builtin `{name}`, which the \
+                     image needs. A loader module has to be linked with every \
+                     builtin an image it loads might import."
+                );
+                let o = &mut *core::ptr::addr_of_mut!(OUT);
+                o.clear();
+                o.extend_from_slice(msg.as_bytes());
+                2
+            }
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn image_desc_addr() -> u32 {
     core::ptr::addr_of!(FLINT_IMAGE_DESC) as u32

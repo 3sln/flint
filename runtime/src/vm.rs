@@ -131,7 +131,10 @@ pub struct Image {
     /// and discard it, which meant a diagnostic could report "import #63" and
     /// nothing better -- and a slot resolved through the host registry instead
     /// gives a plausible answer from the wrong table.
-    #[cfg(feature = "diagnostics")]
+    ///
+    /// It is also what makes an image PORTABLE between modules: the slots in an
+    /// image belong to the module it was linked against, and a resident loader
+    /// re-resolves them by name.
     pub native_names: Vec<u32>,
     pub var_names: Vec<u32>,
     pub entry: u32,

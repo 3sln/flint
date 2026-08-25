@@ -63,19 +63,48 @@ That settles the easier half: **a flint program runs in the deployed runtime**,
 with no polyfill, no WASI, and no host functions — which follows from the module
 importing nothing, but is worth having measured rather than argued.
 
-**The harder half is still open**: running `out/flintc-gen0.wasm` — the compiler
-as a flint program, 429 KB, EDN spec in and a base64 image out — inside workerd,
-so that a candidate is compiled *in* the Worker. That is the actual cherry
-blocker. The pieces exist and the ABI is already string-in/string-out, so this is
-an experiment rather than a build.
+**Both halves are now demonstrated, and the answer to the module question is
+no.**
 
-One thing that experiment should settle along the way: **whether construe needs
-to produce a module at all.** Emitting a `.wasm` needs `rust-lld`, which is not
-going to run in a Worker. But the compiler's output is a bytecode *image*, and a
-resident flint module that can load an image would let a Worker compile a
-candidate and run it with no linking step anywhere. If that works it is a better
-fit than module production, and it changes what "compiles in the Worker" has to
-mean.
+`out/flintc-gen0.wasm` — the compiler as a flint program — runs in workerd,
+compiles a candidate from an EDN spec, and a second resident module loads the
+resulting image and runs it. No linker anywhere:
+
+```json
+{"ok":true,"out":"item0:0,item1:1,...","image_bytes":8243,
+ "compiler_instantiate_ms":0,"compile_ms":1178,
+ "runner_instantiate_ms":0,"load_ms":2,"run_ms":2}
+```
+
+**So a Worker does not have to produce a module**, and should not try. The
+mechanism is that an image records each builtin it imports by NAME as well as by
+slot: the slots belong to whichever module compiled it and are meaningless
+anywhere else, the names are not. `bin/flint --loader` builds a module carrying
+every builtin on the path and exporting `flint_load_image`, which re-resolves an
+image's imports against its own table and refuses — naming the builtin — if it
+carries one the image needs.
+
+What that buys, and the shape it implies for construe:
+
+- **Compile once, run many.** The loader is instantiated once and images are
+  swapped into it; `test/loader.clj` asserts that a second image replaces the
+  first cleanly, in either order, any number of times, because a warm isolate
+  will do exactly that across requests.
+- **Compilation is a promotion-time cost, not a request-time one.** 1 178 ms in
+  workerd for a 22-namespace program, of which the library is nearly all. Fine
+  for promoting a candidate; not something to do per frame.
+- **Loading is not.** 2 ms to load an 8 KB image and 2 ms to run it, against
+  1.1 ms to instantiate the loader module.
+- **The trade is module size.** A loader carries every builtin rather than the
+  ones its own program reached, so it is 555 KB against 214 KB. That is the
+  price of running code it has not seen, and it is the same trade `0003`'s
+  tree-shaking makes in the other direction.
+
+One thing found on the way, worth recording because it will recur: the arena
+started immediately after the image, so the third spliced data segment was
+overwritten by the first allocation and read back as a malformed registry. The
+comment on `ensure_arena` already warned about exactly this for the image; it now
+accounts for every segment rather than the one that existed when it was written.
 
 ### 3. Gas is exact, and survives being useful
 
@@ -93,11 +122,18 @@ core features can be absent without any test noticing.
 
 ### 5. Strings and regex are not the bottleneck
 
-Currently the largest known gap. A parser is text processing, and
-`word frequency (regex split)` sits at **56× babashka**, of which the regex
-engine is only 27% — the rest is `lower-case`, `split`, `frequencies` and
-`sort-by` on flat strings. `0011` and `0012` are the work; this is the number
-that says whether they finished.
+Was the largest known gap and is now much smaller. `word frequency (regex
+split)` sat at **56× babashka**; `0011` (ropes) and `0012` (the Pike VM) are
+built, and it is **11.6×**. The same workload without the regex is 7.3 ms
+against 54.5 ms before.
+
+The decomposition that got there is worth keeping, because the first reading of
+that 56× was wrong: the regex engine was only 27% of it, and the rest was two
+quadratic scans inside `str_index_of` and a per-character `lower-case`. Fixing
+those made the engine 88% of what remained, which is what justified the Pike VM
+rather than more string work. `test/scaling.clj` now asserts that eighteen
+operations stay linear, because all three quadratics produced correct answers
+and were found by accident.
 
 ### 6. Memory per parse is bounded and known
 

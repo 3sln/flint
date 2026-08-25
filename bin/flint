@@ -51,6 +51,16 @@
         ;; it on for every build, which is how the whole existing suite gets run
         ;; against compiled code without a single test knowing about it.
         (= k "--aot") (recur (rest a) (assoc m :aot true))
+        ;; doc/decisions/0023: a module that can be handed an IMAGE at run time,
+        ;; so a Worker can compile a candidate and run it without linking.
+        (= k "--loader") (recur (rest a) (assoc m :loader true))
+        ;; Emit the bytecode IMAGE and stop -- no linker, no module. This is the
+        ;; half of the toolchain that can run somewhere `rust-lld` cannot.
+        (= k "--emit-image") (recur (rest a) (assoc m :emit-image true))
+        ;; The compiler's INPUT, written out. `out/flintc-gen0.wasm` takes this
+        ;; and nothing else, so it is what a Worker has to be handed
+        ;; (doc/decisions/0023).
+        (= k "--emit-spec") (recur (rest a) (assoc m :emit-spec true))
         (= k "--const") (recur (drop 2 a) (assoc m :const (parse-long (second a))))
         :else (do (println "unknown argument:" k) (System/exit 2)))
       m)))
@@ -182,7 +192,7 @@
   (binding [*out* *err*] (println (ex-message e)))
   (System/exit 1))
 
-(let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path aot]}
+(let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path aot loader emit-image emit-spec]}
       (parse-args *command-line-args*)]
   (when-not fn
     (println "usage: flint :src <dir> :fn <ns/fn> [:out <file.wasm>]")
@@ -223,6 +233,10 @@
               :exclude exclude
               :excluded-builtins (select-keys (builtins-by-unit unit-path) (vec (or exclude [])))
               :builtins (builtin-names unit-path)}
+        _ (when emit-spec
+            (spit out (pr-str spec))
+            (println "wrote" out (str "(" (count (pr-str spec)) " bytes, spec only)"))
+            (System/exit 0))
         selfres (when self (compile-with-flint spec))
         compiled (when-not self (compiler/compile-image spec))
         _ (when (and explain (not self))
@@ -252,6 +266,20 @@
         stats* (when compiled (:stats compiled))
         t1 (System/nanoTime)
         needed (if self (:natives selfres) (img/natives builder))
+        ;; A loader module runs images it has never seen, so it has to carry
+        ;; every builtin one of them might import. That is the whole trade: a
+        ;; bigger module, and no linker at run time (doc/decisions/0023).
+        needed (if loader (vec (sort (builtin-names unit-path))) needed)
+        _ (when emit-image
+            ;; Slots are left at zero on purpose: they belong to whichever module
+            ;; links the builtins, and a loader re-resolves every one of them by
+            ;; NAME. Writing a slot here would be writing a number that is only
+            ;; meaningful somewhere this file has never been.
+            (let [bytes (if self (:image selfres) (img/emit builder {}))]
+              (with-open [o (java.io.FileOutputStream. (str out))]
+                (.write o (byte-array (map unchecked-byte bytes))))
+              (println "wrote" out (str "(" (count bytes) " bytes, image only)"))
+              (System/exit 0)))
         result (link/compose {:unit-path unit-path
                               :sysroot (str root "/units/.sysroot")
                               :needed-builtins needed
@@ -263,6 +291,7 @@
                               :builder builder
                               :aot? (and (or aot (= "1" (System/getenv "FLINT_AOT")))
                                          (not self))
+                              :loader? loader
                               :keep-names keep-names})
         t2 (System/nanoTime)]
     (when stats
