@@ -137,35 +137,52 @@
 
 ;; ------------------------------------------------------------------ matching
 
-(defn- word-char? [c]
-  (let [v (cp c)]
-    (or (and (>= v 48) (<= v 57)) (and (>= v 65) (<= v 90))
-        (and (>= v 97) (<= v 122)) (= v 95))))
+(defn- word-cp? [v]
+  (or (and (>= v 48) (<= v 57)) (and (>= v 65) (<= v 90))
+      (and (>= v 97) (<= v 122)) (= v 95)))
 
-(defn- space-char? [c]
-  (let [v (cp c)] (or (= v 32) (= v 9) (= v 10) (= v 13) (= v 12) (= v 11))))
+(defn- space-cp? [v]
+  (or (= v 32) (= v 9) (= v 10) (= v 13) (= v 12) (= v 11)))
 
-(defn- pred-match? [kind c]
+(defn- word-char? [c] (word-cp? (cp c)))
+(defn- space-char? [c] (space-cp? (cp c)))
+
+;; Every predicate here is a test on a CODE POINT, and every caller used to hand
+;; it a one-character string that it immediately converted back. The scan in
+;; `find-from` does that once per position of the subject, which on a 32 799
+;; character corpus was 36.65 ms -- 64% of the whole regex cost of
+;; `bench/progs/words.cljc`, and more than the rest of the engine put together.
+(defn- pred-match-cp? [kind v]
   (cond
-    (= kind "d") (let [v (cp c)] (and (>= v 48) (<= v 57)))
-    (= kind "D") (let [v (cp c)] (not (and (>= v 48) (<= v 57))))
-    (= kind "w") (word-char? c)
-    (= kind "W") (not (word-char? c))
-    (= kind "s") (space-char? c)
-    (= kind "S") (not (space-char? c))
+    (= kind "d") (and (>= v 48) (<= v 57))
+    (= kind "D") (not (and (>= v 48) (<= v 57)))
+    (= kind "w") (word-cp? v)
+    (= kind "W") (not (word-cp? v))
+    (= kind "s") (space-cp? v)
+    (= kind "S") (not (space-cp? v))
     :else false))
 
-(defn- class-match? [items c]
-  (loop [xs (seq items)]
-    (if xs
-      (let [it (first xs)]
-        (cond
-          (= :one (first it)) (if (= c (second it)) true (recur (next xs)))
-          (= :range (first it)) (if (and (>= (cp c) (cp (second it)))
-                                         (<= (cp c) (cp (nth it 2))))
-                                  true (recur (next xs)))
-          :else (if (pred-match? (second it) c) true (recur (next xs)))))
-      false)))
+(defn- pred-match? [kind c] (pred-match-cp? kind (cp c)))
+
+(defn- class-match-cp?
+  "By INDEX, not by `seq`. `items` is a vector, and `seq`/`next` over a vector
+  allocates a sequence cell per step -- once per item per POSITION of the
+  subject, which for a one-item class was 7.5 ms of a 15.7 ms scan."
+  [items v]
+  (let [n (count items)]
+    (loop [k 0]
+      (if (< k n)
+        (let [it (nth items k)
+              t (nth it 0)]
+          (if (cond
+                (= :one t) (= v (cp (nth it 1)))
+                (= :range t) (and (>= v (cp (nth it 1))) (<= v (cp (nth it 2))))
+                :else (pred-match-cp? (nth it 1) v))
+            true
+            (recur (inc k))))
+        false))))
+
+(defn- class-match? [items c] (class-match-cp? items (cp c)))
 
 (declare m match-seq)
 
@@ -293,8 +310,10 @@
       (let [neg? (second fnode) items (nth fnode 2)]
         (loop [i from]
           (when (< i n)
-            (let [c (flint.rt/nth s i)
-                  hit (class-match? items c)]
+            ;; The code point, not a one-character string: this is the scan, and
+            ;; it runs once per position of the subject.
+            (let [c (flint.rt/code-point-at s i)
+                  hit (class-match-cp? items c)]
               (if (if neg? (not hit) hit)
                 (let [r (match-at p s i)]
                   (if r [i (first r) (second r)] (recur (inc i))))
