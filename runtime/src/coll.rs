@@ -11,6 +11,27 @@ use crate::set::{S_MAP, S_META};
 use crate::value::{Value, INLINE_MAX, NIL, NOT_FOUND};
 use crate::vector::V_META;
 
+/// Substring search over bytes. Naive, which is what the gas charge above is
+/// priced for, and enough for the one-character separators that dominate.
+fn find_bytes(h: &[u8], n: &[u8]) -> Option<usize> {
+    if n.is_empty() {
+        return Some(0);
+    }
+    if n.len() > h.len() {
+        return None;
+    }
+    let first = n[0];
+    let last = h.len() - n.len();
+    let mut i = 0;
+    while i <= last {
+        if h[i] == first && &h[i..i + n.len()] == n {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 impl Rt {
     // --- count -------------------------------------------------------------
 
@@ -725,35 +746,55 @@ impl Rt {
         // A naive search is O(haystack x needle); charging the haystack keeps a
         // long scan from being free.
         let hn = if self.is_string(haystack) { self.str_len(haystack) } else { 0 };
-        self.charge_bytes(hn);
+        // Charge the region that can actually be scanned, not the whole
+        // haystack. Charging `hn` per call made the GAS quadratic for a scan
+        // that is linear overall -- the counter said `str/split` did n^2 work
+        // because the charge, not the search, was quadratic.
+        self.charge_bytes(hn.saturating_sub(from.max(0) as u32));
+        // The header already carries this bit (`str_is_ascii`), set once when
+        // the string was built. Asking `&str::is_ascii()` instead rescanned the
+        // WHOLE haystack on every call, which made `str/split` quadratic: 6 800
+        // calls over a 32 799-character corpus is 223 million byte checks, and
+        // it was 37 ms of a 55 ms benchmark. The comment four lines down
+        // claimed the search was O(n) rather than O(n) per position; this is
+        // what made that true.
+        let ascii = self.str_indexable(haystack);
         let mut bh = crate::rt::sbuf();
         let mut bn = crate::rt::sbuf();
         let found = {
-            let h: &str = if haystack.is_inline_str() {
-                core::str::from_utf8(haystack.inline_bytes(&mut bh)).unwrap_or("")
+            let hb: &[u8] = if haystack.is_inline_str() {
+                haystack.inline_bytes(&mut bh)
             } else if haystack.is_heap() && ty(&self.gc.sp, haystack.as_heap()) == TY_STR {
-                core::str::from_utf8(str_bytes(&self.gc.sp, haystack.as_heap())).unwrap_or("")
+                str_bytes(&self.gc.sp, haystack.as_heap())
             } else {
                 return self.throw_str("ClassCastException", "not a string");
             };
-            let nd: &str = if needle.is_inline_str() {
-                core::str::from_utf8(needle.inline_bytes(&mut bn)).unwrap_or("")
+            let nb: &[u8] = if needle.is_inline_str() {
+                needle.inline_bytes(&mut bn)
             } else if needle.is_heap() && ty(&self.gc.sp, needle.as_heap()) == TY_STR {
-                core::str::from_utf8(str_bytes(&self.gc.sp, needle.as_heap())).unwrap_or("")
+                str_bytes(&self.gc.sp, needle.as_heap())
             } else {
                 return self.throw_str("ClassCastException", "not a string");
             };
             // `from` is a code-point index, and so is the answer. For ASCII
-            // those are byte offsets, and the whole search is O(n) instead of
-            // O(n) per character position.
+            // those are byte offsets, so the search is over BYTES and never
+            // needs a `&str` -- which matters because `from_utf8` validates the
+            // whole haystack, and doing that per call made `str/split`
+            // quadratic a second time after the `is_ascii` rescan was removed.
+            // 6 800 calls over a 32 799-byte corpus is 223 million bytes
+            // validated to find 6 800 spaces.
             let skip = from.max(0) as usize;
-            if h.is_ascii() {
-                if skip > h.len() {
+            if ascii {
+                if skip > hb.len() {
                     None
                 } else {
-                    h[skip..].find(nd).map(|b| skip + b)
+                    find_bytes(&hb[skip..], nb).map(|b| skip + b)
                 }
             } else {
+                // Only here is a `&str` needed at all, because only here do
+                // byte offsets and code-point indices differ.
+                let h = core::str::from_utf8(hb).unwrap_or("");
+                let nd = core::str::from_utf8(nb).unwrap_or("");
                 let start_byte = h.char_indices().nth(skip).map(|(i, _)| i).unwrap_or(h.len());
                 h[start_byte..].find(nd).map(|b| h[..start_byte + b].chars().count())
             }

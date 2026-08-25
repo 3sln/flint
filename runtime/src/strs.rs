@@ -45,6 +45,49 @@ impl Rt {
         Value::heap(a)
     }
 
+    /// ASCII case folding, as one pass over the bytes.
+    ///
+    /// It was a per-CHARACTER loop in `clojure.string`: `nth`, `code-point-at`,
+    /// two comparisons, `from-code-point` and a `conj` into a vector for every
+    /// character, then `str-join`. Measured at 11.4 ms for a 32 799-character
+    /// corpus -- 346 ns per character -- which was 21% of the whole
+    /// word-frequency benchmark and more than the regex engine it was being
+    /// blamed on.
+    ///
+    /// Non-ASCII is left alone rather than half-done: Unicode case folding is
+    /// not a byte operation, and pretending otherwise would be worse than
+    /// saying so. `clojure.string` keeps its own loop for that case.
+    pub fn change_case(&mut self, s: Value, upper: bool) -> Value {
+        if !self.is_string(s) {
+            return self.throw_str("ClassCastException", "not a string");
+        }
+        let n = self.str_len(s);
+        self.charge_bytes(n);
+        let mut buf = crate::rt::sbuf();
+        let mut out: alloc::vec::Vec<u8> = {
+            let b: &[u8] = if s.is_inline_str() {
+                s.inline_bytes(&mut buf)
+            } else {
+                str_bytes(&self.gc.sp, s.as_heap())
+            };
+            if !b.is_ascii() {
+                return NIL;
+            }
+            b.to_vec()
+        };
+        for c in out.iter_mut() {
+            if upper {
+                if (*c).is_ascii_lowercase() {
+                    *c -= 32;
+                }
+            } else if (*c).is_ascii_uppercase() {
+                *c += 32;
+            }
+        }
+        let owned = core::str::from_utf8(&out).unwrap_or("");
+        self.string(owned)
+    }
+
     /// The canonical `Value` for a string.
     pub fn string(&mut self, s: &str) -> Value {
         if s.len() <= INLINE_MAX {

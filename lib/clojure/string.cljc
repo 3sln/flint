@@ -32,15 +32,20 @@
   (or (get @regex-ops k)
       (throw (ex-info "no regex engine in this build" {:op k}))))
 
+(defn- ws-cp?
+  "Whitespace, by CODE POINT. `nth` on a string builds a one-character string
+  per position and then compares strings; `code-point-at` gives an integer and
+  compares integers. Same loop, and the common case -- a character above space
+  -- settles in one comparison instead of four."
+  [c]
+  (if (> c 32) false (or (= c 32) (= c 9) (= c 10) (= c 13))))
+
 (defn blank? [s]
   (if (nil? s)
     true
     (loop [i 0]
       (if (< i (count s))
-        (let [c (nth s i)]
-          (if (or (= c " ") (= c "\t") (= c "\n") (= c "\r"))
-            (recur (inc i))
-            false))
+        (if (ws-cp? (flint.rt/code-point-at s i)) (recur (inc i)) false)
         true))))
 
 (defn starts-with? [s prefix]
@@ -108,10 +113,16 @@
 (defn- ws? [c] (or (= c " ") (= c "\t") (= c "\n") (= c "\r")))
 
 (defn triml [s]
-  (loop [i 0] (if (and (< i (count s)) (ws? (nth s i))) (recur (inc i)) (subs s i))))
+  (loop [i 0]
+    (if (and (< i (count s)) (ws-cp? (flint.rt/code-point-at s i)))
+      (recur (inc i))
+      (subs s i))))
 
 (defn trimr [s]
-  (loop [i (count s)] (if (and (> i 0) (ws? (nth s (dec i)))) (recur (dec i)) (subs s 0 i))))
+  (loop [i (count s)]
+    (if (and (> i 0) (ws-cp? (flint.rt/code-point-at s (dec i))))
+      (recur (dec i))
+      (subs s 0 i))))
 
 (defn trim [s] (triml (trimr s)))
 
@@ -146,22 +157,30 @@
           (recur (conj acc (subs s from i) replacement) (+ i (count match))))))))
 
 (defn upper-case [s]
-  (flint.rt/str-join
-   (loop [acc [] i 0]
-     (if (< i (count s))
-       (let [c (nth s i) cp (flint.rt/code-point-at c 0)]
-         (recur (conj acc (if (and (>= cp 97) (<= cp 122)) (flint.rt/from-code-point (- cp 32)) c))
-                (inc i)))
-       acc))))
+  ;; One pass over the bytes when the string is ASCII, which is nearly always.
+  ;; The loop below is the Unicode case, and it used to be the ONLY case: at
+  ;; 346 ns per character it was 21% of `bench/progs/words.cljc`, more than the
+  ;; regex engine that benchmark was being used to indict.
+  (or (flint.rt/upper-case s)
+      (flint.rt/str-join
+       (loop [acc [] i 0]
+         (if (< i (count s))
+           (let [c (nth s i) cp (flint.rt/code-point-at c 0)]
+             (recur (conj acc (if (and (>= cp 97) (<= cp 122))
+                                (flint.rt/from-code-point (- cp 32)) c))
+                    (inc i)))
+           acc)))))
 
 (defn lower-case [s]
-  (flint.rt/str-join
-   (loop [acc [] i 0]
-     (if (< i (count s))
-       (let [c (nth s i) cp (flint.rt/code-point-at c 0)]
-         (recur (conj acc (if (and (>= cp 65) (<= cp 90)) (flint.rt/from-code-point (+ cp 32)) c))
-                (inc i)))
-       acc))))
+  (or (flint.rt/lower-case s)
+      (flint.rt/str-join
+       (loop [acc [] i 0]
+         (if (< i (count s))
+           (let [c (nth s i) cp (flint.rt/code-point-at c 0)]
+             (recur (conj acc (if (and (>= cp 65) (<= cp 90))
+                                (flint.rt/from-code-point (+ cp 32)) c))
+                    (inc i)))
+           acc)))))
 
 (defn capitalize [s]
   (if (= 0 (count s))

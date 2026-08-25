@@ -313,6 +313,16 @@ builtins! {
         }
     };
 
+    "flint/lower-case", flint_b_lowercase, b_lowercase, |rt, a, n| {
+        let _ = n;
+        let s = arg(rt, a, 0);
+        rt.change_case(s, false)
+    };
+    "flint/upper-case", flint_b_uppercase, b_uppercase, |rt, a, n| {
+        let _ = n;
+        let s = arg(rt, a, 0);
+        rt.change_case(s, true)
+    };
     "flint/str-join", flint_b_strjoin, b_strjoin, |rt, a, n| {
         let _ = n;
         let coll = arg(rt, a, 0);
