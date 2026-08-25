@@ -206,6 +206,31 @@ report asserts this rather than assuming it.
 The resident loader also gets the warm number (8.7 ns on node against 11.0 from
 a fresh process), because it stays tiered up across calls.
 
+### The tail, which is what a per-request CPU budget actually buys
+
+A Worker is billed and bounded per request, so the mean is the wrong statistic.
+flint brings its own collector inside the wasm heap, so a pause is flint's
+rather than the engine's:
+
+| engine / image | p50 | p90 | p99 | max | p99/p50 |
+|---|---:|---:|---:|---:|---:|
+| node, load + initialise only | 79.6 µs | 82.8 µs | 96.3 µs | 313 µs | 1.21 |
+| bun, load + initialise only | 73.3 µs | 76.5 µs | 92.0 µs | 131 µs | 1.26 |
+| node, +25 interpret iterations | 7.20 ms | 7.43 ms | 7.61 ms | 7.65 ms | **1.06** |
+| bun, +25 interpret iterations | 6.71 ms | 6.90 ms | 7.12 ms | 7.22 ms | **1.06** |
+
+**The tail is tighter under allocation-heavy load than at idle**, which is the
+opposite of the usual worry about a garbage-collected runtime. The nursery
+collects little and often rather than rarely and at length, so there is no pause
+big enough to show up at p99 — 3,000 image loads produce a p99 within 21% of the
+median, and 400 allocation-heavy calls within 6%.
+
+deno is excluded from this table rather than given a row: its
+`performance.now()` is clamped to whole milliseconds, so it reports p50 = 0 and
+p99 = 2000 for calls that take 80 µs. The harness detects that and says the
+timer cannot resolve a call, because a timer that cannot resolve the thing being
+timed does not produce a small number, it produces a meaningless one.
+
 ## Report per engine, never averaged
 
 An average across engines describes no deployment anybody has. A table with an
