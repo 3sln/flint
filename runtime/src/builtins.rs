@@ -477,7 +477,11 @@ builtins! {
             "other"
         } else {
             match crate::obj::ty(&rt.gc.sp, v.as_heap()) {
-                crate::obj::TY_STR => "string",
+                // A rope IS a string. `kind` is the closed set protocol
+                // dispatch runs on (doc/decisions/0005), so a tier leaking into
+                // it would make `extend-protocol :string` work for some strings
+                // and not others depending on how they were built.
+                crate::obj::TY_STR | crate::obj::TY_ROPE => "string",
                 crate::obj::TY_KW => "keyword",
                 crate::obj::TY_SYM => "symbol",
                 crate::obj::TY_BIGINT => "number",

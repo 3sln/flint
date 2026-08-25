@@ -66,6 +66,9 @@ impl Rt {
     /// Clojure counts UTF-16, so an astral character counts 2 there and 1 here.
     /// This is a deliberate divergence, recorded in the README.
     pub fn char_count(&self, v: Value) -> u32 {
+        if self.is_rope(v) {
+            return self.s_count(v);
+        }
         if !v.is_inline_str() && str_is_ascii(&self.gc.sp, v.as_heap()) {
             return len(&self.gc.sp, v.as_heap());
         }
@@ -81,6 +84,11 @@ impl Rt {
     /// True when a code-point index into `s` is also a byte index.
     #[inline]
     fn str_indexable(&self, s: Value) -> bool {
+        if self.is_rope(s) {
+            // A rope is never indexed directly -- every caller flattens first --
+            // so this answers about the tier it will become.
+            return self.s_ascii(s);
+        }
         if s.is_inline_str() {
             let mut b = crate::rt::sbuf();
             s.inline_bytes(&mut b).is_ascii()
@@ -480,35 +488,21 @@ impl Rt {
     // --- strings ---------------------------------------------------------------
 
     pub fn str_concat2(&mut self, x: Value, y: Value) -> Value {
-        let n = (if self.is_string(x) { self.str_len(x) } else { 0 })
-            + (if self.is_string(y) { self.str_len(y) } else { 0 });
-        self.charge_bytes(n);
-        let mut bx = crate::rt::sbuf();
-        let mut by = crate::rt::sbuf();
-        // Both borrows are immutable, so they can coexist; the allocation below
-        // happens after they are turned into owned bytes.
-        let sx: &str = if x.is_inline_str() {
-            core::str::from_utf8(x.inline_bytes(&mut bx)).unwrap_or("")
-        } else if x.is_heap() && ty(&self.gc.sp, x.as_heap()) == TY_STR {
-            core::str::from_utf8(str_bytes(&self.gc.sp, x.as_heap())).unwrap_or("")
-        } else {
+        if !self.is_string(x) || !self.is_string(y) {
             return self.throw_str("ClassCastException", "not a string");
-        };
-        let sy: &str = if y.is_inline_str() {
-            core::str::from_utf8(y.inline_bytes(&mut by)).unwrap_or("")
-        } else if y.is_heap() && ty(&self.gc.sp, y.as_heap()) == TY_STR {
-            core::str::from_utf8(str_bytes(&self.gc.sp, y.as_heap())).unwrap_or("")
-        } else {
-            return self.throw_str("ClassCastException", "not a string");
-        };
-        let mut owned = alloc::string::String::with_capacity(sx.len() + sy.len());
-        owned.push_str(sx);
-        owned.push_str(sy);
-        self.string(&owned)
+        }
+        // A tree join, not a copy (`doc/decisions/0011`). Small results still
+        // copy into a flat string -- `s_concat` decides -- because below the
+        // threshold the metadata costs more than the copy it saves.
+        //
+        // Gas is charged for the bytes only when they are actually moved, which
+        // is what makes repeated concatenation linear in gas as well as in time.
+        self.s_concat(x, y)
     }
 
     /// The one-character string at code-point index `i`.
     pub fn char_at(&mut self, s: Value, i: u32) -> Option<Value> {
+        let s = self.string_arg(s);
         // ASCII fast path: byte index == code-point index, so this is O(1).
         if self.str_indexable(s) {
             let n = self.str_len(s);
@@ -543,6 +537,7 @@ impl Rt {
     }
 
     pub fn code_point_at(&mut self, s: Value, i: Value) -> Value {
+        let s = self.string_arg(s);
         let idx = match self.as_i64(i) {
             Some(n) if n >= 0 => n as usize,
             _ => return self.throw_str("IndexOutOfBoundsException", "bad index"),
@@ -576,6 +571,7 @@ impl Rt {
 
     /// `subs`, in code points.
     pub fn substring(&mut self, s: Value, start: i64, end: Option<i64>) -> Value {
+        let s = self.string_arg(s);
         let n = if self.is_string(s) { self.str_len(s) } else { 0 };
         self.charge_bytes(n);
         if self.str_indexable(s) {
@@ -743,6 +739,8 @@ impl Rt {
 
     /// Byte offset -> code-point index search. Returns nil when absent.
     pub fn str_index_of(&mut self, haystack: Value, needle: Value, from: i64) -> Value {
+        let haystack = self.string_arg(haystack);
+        let needle = self.string_arg(needle);
         // A naive search is O(haystack x needle); charging the haystack keeps a
         // long scan from being free.
         let hn = if self.is_string(haystack) { self.str_len(haystack) } else { 0 };
@@ -808,6 +806,7 @@ impl Rt {
     /// The UTF-8 bytes of a string, as a vector of integers. The image writer
     /// needs this when the compiler is hosted on flint.
     pub fn string_bytes_vector(&mut self, s: Value) -> Value {
+        let s = self.string_arg(s);
         let n = if self.is_string(s) { self.str_len(s) } else { 0 };
         self.charge_work(n as u64);
         let mut buf = crate::rt::sbuf();

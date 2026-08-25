@@ -578,3 +578,13 @@ pub extern "C" fn stat_native_trace(i: u32) -> u32 {
 pub extern "C" fn stat_sync_drift(i: u32) -> u64 {
     unsafe { *crate::aot::SYNC_DRIFT.get(i as usize).unwrap_or(&0) }
 }
+
+/// How often a rope has been materialised. 0 calls, 1 actually materialised,
+/// 2 bytes copied. `doc/decisions/0011`: a rope that flattens on every operation
+/// passes every correctness test and is slower than the flat string it replaced,
+/// and only a counter tells the difference.
+#[cfg(feature = "diagnostics")]
+#[no_mangle]
+pub extern "C" fn stat_flattens(i: u32) -> u64 {
+    unsafe { *crate::rope::FLATTENS.get(i as usize).unwrap_or(&0) }
+}

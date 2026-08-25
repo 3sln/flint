@@ -57,6 +57,11 @@ echo
 echo "== threads: green threads, ports, protocols, dynamic vars"
 bb test/threads.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/threads.clj"; }
 
+echo "== ropes: three tiers, one string, and the flattens counted (0011)"
+bb test/ropes.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; ./bin/build-units > /dev/null; fail "test/ropes.clj"; }
+grep -E "^    |FAIL" /tmp/flint-test.out || true
+tail -1 /tmp/flint-test.out
+
 echo "== aot: the emitter, validated one arity at a time (0013)"
 bb test/aot_emit.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/aot_emit.clj"; }
 tail -3 /tmp/flint-test.out

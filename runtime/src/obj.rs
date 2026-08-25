@@ -69,7 +69,13 @@ pub const TY_TYPE: u8 = 38; // [name, basis, protocols(map)]  runtime type objec
 pub const TY_THREAD: u8 = 39; // see conc::TH_*
 pub const TY_PORT: u8 = 40; // see conc::PT_*
 pub const TY_SCHED: u8 = 41; // see conc::SC_*
-pub const TY_MAX: u8 = 42;
+/// A rope node (`doc/decisions/0011`): [bytes, cp<<1|ascii, flat-cache, ...kids]
+/// where every child is itself a string of any tier. The aggregates are stored
+/// rather than derived, and they are RELATIVE -- a node knows the size of its own
+/// subtree and never where it sits, because the same leaf appears at different
+/// offsets in `(str a b)` and `(str b a)` and sharing is the point.
+pub const TY_ROPE: u8 = 42;
+pub const TY_MAX: u8 = 43;
 
 /// Every type tag must be distinct. This list exists because they were not:
 /// `TY_THREAD`/`TY_PORT`/`TY_SCHED` were first numbered 33..35, which silently
@@ -84,7 +90,7 @@ const _: () = {
         TY_CLOSURE, TY_NATIVEFN, TY_VAR, TY_ATOM, TY_TVEC, TY_TMAP, TY_TSET,
         TY_RECORD, TY_REGEX, TY_REDUCED, TY_EXINFO, TY_MULTIFN, TY_DELAY,
         TY_VOLATILE, TY_RAW, TY_ITERSEQ, TY_CHUNKSEQ, TY_TYPE, TY_THREAD, TY_PORT,
-        TY_SCHED,
+        TY_SCHED, TY_ROPE,
     ];
     let mut i = 0;
     while i < tags.len() {
@@ -184,6 +190,17 @@ pub fn set_marked(sp: &Space, a: u32, m: bool) {
 /// point index IS a byte index. Without this, `subs` and `nth` are O(n) and
 /// splitting a string is quadratic -- which is exactly what the `words`
 /// benchmark showed.
+/// Rope slots. A node is `[byte-len, (code-points << 1) | ascii, flat, kids..]`.
+pub const RP_BYTES: u32 = 0;
+pub const RP_CPS: u32 = 1;
+/// The flattened form, once something has asked for contiguous bytes. `nil`
+/// until then. This is the cache `doc/decisions/0011` calls the important part
+/// of the design -- and the thing whose hit rate has to be COUNTED, because a
+/// rope that flattens on every operation passes every correctness test and is
+/// slower than the flat string it replaced.
+pub const RP_FLAT: u32 = 2;
+pub const RP_KIDS: u32 = 3;
+
 #[inline(always)]
 pub fn str_is_ascii(sp: &Space, a: u32) -> bool {
     sp.read_u32(a) & (1 << 18) != 0
@@ -240,6 +257,11 @@ pub fn set_slot_raw(sp: &Space, a: u32, i: u32, v: Value) {
 
 #[inline]
 pub fn str_bytes<'a>(sp: &'a Space, a: u32) -> &'a [u8] {
+    // A rope's `len` is its SLOT COUNT and its body is Values, so reading it
+    // here returns the slots as bytes -- garbage that looks like a string. Two
+    // callers did exactly that (`char_count` and `str_indexable`) and `count`
+    // came back as the number of children.
+    debug_assert!(ty(sp, a) == TY_STR, "str_bytes on a non-flat string");
     sp.bytes(a + STR_DATA, len(sp, a))
 }
 #[inline]

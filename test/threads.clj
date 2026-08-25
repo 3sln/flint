@@ -60,8 +60,14 @@
 ;; and the biggest function in the module is therefore in it twice. The point of
 ;; the bound here is that it is a BUDGET somebody chose, not a number that
 ;; drifts.
-(check-that "the floor is within the budget 0009 traded for the free loop"
-            (< pure-size 205000))
+;;
+;; It moved again for ropes (`doc/decisions/0011`), by 6 310 bytes, and that is
+;; also a budget rather than drift: repeated concatenation -- the case 0011
+;; names as quadratic with flat strings -- went from 57.17 ms to 2.31 ms on
+;; `bench/progs/concat.cljc`, which is 24.7x, and from 3.1x slower than babashka
+;; to 7.9x faster. A tree join is not free in bytes and it is worth these ones.
+(check-that "the floor is within the budget 0009 and 0011 chose"
+            (< pure-size 215000))
 
 ;; ---------------------------------------------------------------- channels
 

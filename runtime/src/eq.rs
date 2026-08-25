@@ -46,6 +46,20 @@ impl Rt {
         v.is_heap() && self.category(v) != CAT_SCALAR
     }
 
+    /// Byte-for-byte equality across tiers, without materialising either side
+    /// into the flint heap. Lengths are O(1) on all three, and unequal lengths
+    /// are the common case, so the walk is reached rarely.
+    fn string_eq(&self, a: Value, b: Value) -> bool {
+        if self.str_len(a) != self.str_len(b) {
+            return false;
+        }
+        let mut xa: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        let mut xb: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        self.append_bytes(a, &mut xa);
+        self.append_bytes(b, &mut xb);
+        xa == xb
+    }
+
     pub fn eq(&mut self, a: Value, b: Value) -> bool {
         // Doubles first: bit equality would wrongly make NaN equal to itself,
         // and would wrongly separate 0.0 from -0.0.
@@ -78,6 +92,14 @@ impl Rt {
             CAT_SET => self.set_eq(a, b),
             _ => {
                 let (ta, tb) = (ty(&self.gc.sp, a.as_heap()), ty(&self.gc.sp, b.as_heap()));
+                // A string is a string whatever tier it is in: `(str a b)` and a
+                // flat string of the same bytes must be `=` and must hash the
+                // same, or a map keyed by one is not found by the other
+                // (doc/decisions/0011). This is BEFORE the tag comparison,
+                // because the tags differ and the values do not.
+                if ta == crate::obj::TY_ROPE || tb == crate::obj::TY_ROPE {
+                    return self.is_string(a) && self.is_string(b) && self.string_eq(a, b);
+                }
                 if ta != tb {
                     return false;
                 }
@@ -176,6 +198,12 @@ impl Rt {
         }
         match ty(&self.gc.sp, v.as_heap()) {
             TY_STR => self.string_hash(v),
+            // Hash the CONTENT, so `"abc"` inline, flat and as a rope are one
+            // key. Flattening caches, so a rope used as a map key pays once.
+            crate::obj::TY_ROPE => {
+                let f = self.flatten(v);
+                self.hash_value(f)
+            }
             TY_KW => self.keyword_hash(v),
             TY_SYM => self.symbol_hash(v),
             TY_BIGINT => hash::hash_long(self.as_i64(v).unwrap_or(0)),

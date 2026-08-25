@@ -23,7 +23,8 @@
    {:ns "maps"  :args ["100000"]  :label "transient map, 1e5 inserts"}
    {:ns "wordsstr" :args ["200"] :label "word frequency (string split)"}
    {:ns "words" :args ["200"]     :label "word frequency (regex split)"}
-   {:ns "json"  :args ["2000"]    :label "JSON round trip, 2000 records"}])
+   {:ns "json"  :args ["2000"]    :label "JSON round trip, 2000 records"}
+   {:ns "concat" :args ["4000"]   :label "repeated concatenation, 4000 x 16B"}])
 
 (defn build! [p]
   (let [out (str "out/bench-" (:ns p) ".wasm")

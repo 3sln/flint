@@ -434,24 +434,57 @@ impl Rt {
     /// The returned `&str` borrows `self`, so the borrow checker will reject any
     /// attempt to hold it across an allocation -- which is exactly the bug it
     /// would otherwise be.
+    /// A string argument, guaranteed contiguous. Every builtin that reaches for
+    /// bytes goes through this, so a rope reaching an operation that has not
+    /// been taught about ropes gets flattened rather than misread.
+    pub fn string_arg(&mut self, v: Value) -> Value {
+        if self.is_rope(v) {
+            self.flatten(v)
+        } else {
+            v
+        }
+    }
+
     pub fn as_str<'a>(&'a self, v: Value, buf: &'a mut [u8; INLINE_MAX]) -> Option<&'a str> {
         if v.is_inline_str() {
             core::str::from_utf8(v.inline_bytes(buf)).ok()
         } else if v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_STR {
             core::str::from_utf8(str_bytes(&self.gc.sp, v.as_heap())).ok()
+        } else if v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_ROPE {
+            // Only if something has already materialised it. This borrows, so it
+            // cannot flatten; a caller that needs the bytes calls `flatten`
+            // first, and `string_arg` is the one-liner that does.
+            let f = self.slot(v, crate::obj::RP_FLAT);
+            if f.is_nil() {
+                #[cfg(feature = "diagnostics")]
+                unsafe {
+                    crate::rope::FLATTENS[crate::rope::F_UNFLAT_ASSTR] += 1;
+                }
+                None
+            } else {
+                self.as_str(f, buf)
+            }
         } else {
             None
         }
     }
 
     pub fn is_string(&self, v: Value) -> bool {
-        v.is_inline_str() || (v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_STR)
+        v.is_inline_str()
+            || (v.is_heap()
+                && matches!(ty(&self.gc.sp, v.as_heap()), TY_STR | crate::obj::TY_ROPE))
     }
 
-    /// Byte length of a string value.
+    /// Byte length of a string value, all three tiers.
+    ///
+    /// A rope's `len` header field is its SLOT COUNT, not its byte length, so
+    /// reading it as one would be silently wrong -- which is why this is the
+    /// only place that knows the difference.
     pub fn str_len(&self, v: Value) -> u32 {
         if v.is_inline_str() {
             v.inline_len() as u32
+        } else if ty(&self.gc.sp, v.as_heap()) == crate::obj::TY_ROPE {
+            self.slot(v, crate::obj::RP_BYTES).as_fixnum() as u32
         } else {
             len(&self.gc.sp, v.as_heap())
         }

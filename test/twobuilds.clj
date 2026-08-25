@@ -39,7 +39,13 @@
 ;; to live in `test/snapshot.clj`, which runs under `--diagnostics` -- so it was
 ;; really measuring the size of the instrumentation, and it moved the day the
 ;; instrumentation grew.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-prod.wasm") 205000))
+;;
+;; Raised by 6 310 bytes for ropes (`doc/decisions/0011`). Deliberately, and with
+;; the number that bought it: repeated concatenation went from 57.17 ms to
+;; 2.31 ms, which is 24.7x and takes flint from 3.1x slower than babashka to
+;; 7.9x faster. `test/threads.clj` carries the same note; both floors move
+;; together or one of them is drifting unnoticed.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-prod.wasm") 215000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

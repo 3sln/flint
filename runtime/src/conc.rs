@@ -963,7 +963,7 @@ impl Rt {
             TY_PORT => Err("a port cannot be sent through a port: only data crosses. \
                             A capability cannot be delegated at run time."
                 .into()),
-            TY_STR | TY_SYM | TY_KW | TY_BIGINT | TY_REGEX => Ok(()),
+            TY_STR | crate::obj::TY_ROPE | TY_SYM | TY_KW | TY_BIGINT | TY_REGEX => Ok(()),
             _ => {
                 let base = self.mark();
                 let vi = self.push(v);
@@ -1405,6 +1405,14 @@ impl Rt {
                      raw send of something that is not already encoded (a string, or a vector \
                      of 0..255 on a binary port)",
                 );
+            }
+            // The host reads contiguous bytes, so the rope stops here. This is
+            // the boundary `doc/decisions/0011` means by "flatten before
+            // matching": the tree is an internal representation and nothing
+            // outside the module has to know about it.
+            if !binary {
+                let flat = self.string_arg(self.r(vi));
+                self.set_r(vi, flat);
             }
             let host = self.peer_of(self.r(pi));
             if host.is_nil() {
