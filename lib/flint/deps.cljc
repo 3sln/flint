@@ -14,8 +14,7 @@
   the manifest style the README already uses for library coverage: a dependency
   source states what it does not support."
   (:require [clojure.edn :as edn]
-            [clojure.string :as str]
-            [flint.fs :as fs]))
+            [clojure.string :as str]))
 
 (def supported-dep-kinds
   "Coordinate kinds this build can fetch. Nothing yet -- `:paths` and tasks come
@@ -33,11 +32,16 @@
     :else :unknown))
 
 (defn read-deps
-  "Read `deps.edn` from the project root, or an empty project if absent."
-  [h]
-  (if (fs/exists? h "deps.edn")
-    (edn/read-string (fs/read-file h "deps.edn"))
-    {}))
+  "Read `deps.edn` through `slurp*`, a function from a project-relative path to
+  its text or nil. An absent `deps.edn` is an empty project.
+
+  A function rather than an fs handle: what this namespace needs is *can I read
+  a project file*, not the shape of the `:fs` capability. That seam is what lets
+  the same code run under the bootstrap host and inside a compiled module,
+  which is the whole reason the logic is here and not in `bin/flint`."
+  [slurp*]
+  (let [t (slurp* "deps.edn")]
+    (if (nil? t) {} (edn/read-string t))))
 
 (defn paths
   "Source roots, defaulting to `src` as `deps.edn` does."

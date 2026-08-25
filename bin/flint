@@ -2,7 +2,7 @@
 ;; flint :src <dir> :fn <ns/fn> [:out <file.wasm>]
 (require '[clojure.string :as str] '[clojure.java.io :as io] '[babashka.fs :as fs])
 (def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
-(babashka.classpath/add-classpath (str root "/src"))
+(babashka.classpath/add-classpath (str root "/src:" root "/lib"))
 (require '[flint.compiler :as compiler] '[flint.image :as img] '[flint.link :as link]
          '[flint.reader :as reader])
 
@@ -211,6 +211,57 @@
     (.start (Thread. (clojure.core/fn [] (io/copy (.getInputStream p) System/out))))
     (.start (Thread. (clojure.core/fn [] (io/copy (.getErrorStream p) System/err))))
     (System/exit (.waitFor p))))
+
+;; The project commands -- `tasks`, `task`, `deps`, `paths`, `targets`,
+;; `version`, `help`. The LOGIC for all of them is `lib/flint/cli.cljc`, a flint
+;; program, because 0021's argument is that this surface has to survive losing
+;; babashka. What is here is the host half: read a file, and run what the guest
+;; says to run.
+;;
+;; Under bb the project reader is `slurp`; inside a compiled module it is the
+;; `:fs` capability. `flint.cli` never learns which, which is the point of it
+;; taking a function.
+(when (contains? #{"tasks" "task" "deps" "paths" "targets" "version" "help"}
+                 (first *command-line-args*))
+  (require '[flint.cli :as cli])
+  (let [slurp* (clojure.core/fn [p]
+                 (let [f (io/file p)] (when (.exists f) (slurp f))))
+        r ((resolve 'flint.cli/run) (vec *command-line-args*) slurp*)]
+    (if-let [x (:exec r)]
+      ;; A task is a program: write it, compile it, run it. Two processes rather
+      ;; than one because `flint_load_image` clears the caller's frames -- a
+      ;; guest cannot run a task from inside itself (see `lib/flint/cli.cljc`).
+      (let [dir (str (fs/create-temp-dir))
+            wasm (str dir "/task.wasm")]
+        (fs/create-dirs (str dir "/flint"))
+        (spit (str dir "/flint/task.cljc") (:src x))
+        (let [;; The project's own `:paths` come along, so a task can require a
+              ;; namespace from the project it is a task of. Absolute, because
+              ;; the compile runs with its own working directory.
+              roots (cons dir (mapv (clojure.core/fn [p] (str (fs/absolutize p))) (:paths x)))
+              args (concat ["bb" (str root "/bin/flint") ":fn" (:entry x) ":out" wasm]
+                           (mapcat (clojure.core/fn [p] [":src" p]) roots))
+              b (.start (ProcessBuilder. (into-array String args)))
+              ;; Drained BEFORE `waitFor`: a compile that says a lot would fill
+              ;; the pipe and deadlock a wait that has not read it.
+              bout (slurp (.getInputStream b))
+              berr (slurp (.getErrorStream b))]
+          (.waitFor b)
+          (when-not (zero? (.exitValue b))
+            (binding [*out* *err*]
+              (println "the task did not compile:")
+              (println bout) (println berr)
+              (println "---- the program flint built for it ----")
+              (println (:src x)))
+            (System/exit 1))
+          (let [p (.start (ProcessBuilder.
+                           (into-array String (concat [(str root "/bin/flint") "run" wasm]
+                                                      (map str (:args x))))))]
+            (.start (Thread. (clojure.core/fn [] (io/copy (.getInputStream p) System/out))))
+            (.start (Thread. (clojure.core/fn [] (io/copy (.getErrorStream p) System/err))))
+            (System/exit (.waitFor p)))))
+      (do (when (seq (:out r)) (println (:out r)))
+          (System/exit (or (:code r) 0))))))
 
 (let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path aot loader emit-image emit-spec]}
       (parse-args *command-line-args*)]

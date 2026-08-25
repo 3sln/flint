@@ -987,38 +987,50 @@
                (inc i)))
       (flint.rt/str2 acc "\""))))
 
-(defn- join-with [sep xs]
+;; Two printers, one traversal. `pr` is READABLE -- a string comes back with its
+;; quotes -- and `print` is not. They differ in exactly one leaf case and are
+;; otherwise the same walk, so `readable?` rides along rather than the cond
+;; being written twice.
+;;
+;; It used to be one printer, with `print-str` and `println-str` calling the
+;; readable one. That is wrong at every level, not just the top: Clojure's
+;; `(print-str ["x" 1])` is `[x 1]`, and flint's was `["x" 1]`.
+
+(defn- join-with* [sep xs readable?]
   (loop [acc "" s (seq xs) first? true]
     (if s
-      (recur (flint.rt/str2 (if first? acc (flint.rt/str2 acc sep)) (pr-str (first s)))
+      (recur (flint.rt/str2 (if first? acc (flint.rt/str2 acc sep))
+                            (pr-str* (first s) readable?))
              (next s) false)
       acc)))
 
-(defn- join-entries [m]
+(defn- join-entries* [m readable?]
   (loop [acc "" s (seq m) first? true]
     (if s
       (let [e (first s)]
         (recur (flint.rt/str2 (if first? acc (flint.rt/str2 acc ", "))
-                              (flint.rt/str2 (pr-str (key e))
-                                             (flint.rt/str2 " " (pr-str (val e)))))
+                              (flint.rt/str2 (pr-str* (key e) readable?)
+                                             (flint.rt/str2 " " (pr-str* (val e) readable?))))
                (next s) false))
       acc)))
 
-(defn pr-str [x]
+(defn- pr-str* [x readable?]
   (cond
     (nil? x) "nil"
     (true? x) "true"
     (false? x) "false"
-    (string? x) (escape-string x)
+    (string? x) (if readable? (escape-string x) x)
     (number? x) (flint.rt/num->str x)
     (keyword? x) (flint.rt/str2 ":" (kw-or-sym-str x))
     (symbol? x) (kw-or-sym-str x)
-    (vector? x) (flint.rt/str2 "[" (flint.rt/str2 (join-with " " x) "]"))
-    (set? x) (flint.rt/str2 "#{" (flint.rt/str2 (join-with " " x) "}"))
-    (map? x) (flint.rt/str2 "{" (flint.rt/str2 (join-entries x) "}"))
-    (seq? x) (flint.rt/str2 "(" (flint.rt/str2 (join-with " " x) ")"))
-    (sequential? x) (flint.rt/str2 "(" (flint.rt/str2 (join-with " " x) ")"))
+    (vector? x) (flint.rt/str2 "[" (flint.rt/str2 (join-with* " " x readable?) "]"))
+    (set? x) (flint.rt/str2 "#{" (flint.rt/str2 (join-with* " " x readable?) "}"))
+    (map? x) (flint.rt/str2 "{" (flint.rt/str2 (join-entries* x readable?) "}"))
+    (seq? x) (flint.rt/str2 "(" (flint.rt/str2 (join-with* " " x readable?) ")"))
+    (sequential? x) (flint.rt/str2 "(" (flint.rt/str2 (join-with* " " x readable?) ")"))
     :else "#<unprintable>"))
+
+(defn pr-str [x] (pr-str* x true))
 
 (defn prn-str [x] (flint.rt/str2 (pr-str x) "\n"))
 
@@ -1141,7 +1153,7 @@
 (defn hash-ordered-coll [coll] (hash (vec coll)))
 (defn hash-unordered-coll [coll] (hash (set coll)))
 
-(defn print-str [& xs] (join-with " " xs))
+(defn print-str [& xs] (join-with* " " xs false))
 
 (defn- fixed6
   "A double with exactly six decimal places, which is what %f means."
@@ -1215,7 +1227,7 @@
 (defn ->str-builder [] (volatile! []))
 (defn sb-append! [sb s] (vswap! sb conj s) sb)
 (defn sb-str [sb] (flint.rt/str-join @sb))
-(defn println-str [& xs] (flint.rt/str2 (join-with " " xs) "\n"))
+(defn println-str [& xs] (flint.rt/str2 (join-with* " " xs false) "\n"))
 
 ;; --------------------------------------------------------------- protocols
 ;;

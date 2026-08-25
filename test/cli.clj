@@ -7,7 +7,7 @@
 ;; is this logic; the rest is a host wrapper.
 ;;
 ;; So the test runs the CLI as a compiled flint program, not as a script.
-(require '[clojure.string :as str] '[babashka.fs :as fs])
+(require '[clojure.string :as str] '[babashka.fs :as fs] '[clojure.java.io :as io])
 
 (def fails (atom 0))
 (defn check [label actual expected]
@@ -35,9 +35,21 @@
            "        some/jar {:mvn/version \"1\"}}\n"
            " :flint/tasks\n"
            " {greet {:doc \"say hello to $1\" :task (println \"hello\" \"$1\")}\n"
-           "  bare (println \"no doc\")}}\n"))
+           "  bare (println \"no doc\")\n"
+           "  ten (str \"$10\" \"$1\")\n"
+           "  sum {:doc \"add\" :task (+ (parse-long \"$1\") (parse-long \"$2\"))}\n"
+           "  joined {:requires [[clojure.string :as str]]\n"
+           "          :task (str/join \"-\" [\"$1\" \"$2\"])}}}\n"))
 (spit (str d "/entry.cljc")
-      "(ns entry (:require [flint.cli :as cli] [flint.fs :as fs]))\n(defn main [args] (cli/run (vec args) (fn [] (fs/open))))\n")
+      ;; The entry namespace is the only place the `:fs` capability appears:
+      ;; it turns "read a project file" into an fs read. `cli/run` never sees a
+      ;; handle, which is what lets `bin/flint` run the same code under bb.
+      (str "(ns entry (:require [flint.cli :as cli] [flint.fs :as fs]))\n"
+           "(defn- slurp* [p]\n"
+           "  (let [h (fs/open)] (when (fs/exists? h p) (fs/read-file h p))))\n"
+           "(defn main [args]\n"
+           "  (let [r (cli/run (vec args) slurp*)]\n"
+           "    (if (:exec r) (pr-str (:exec r)) (:out r))))\n"))
 
 (println "cli: the command surface, as a flint program")
 (let [r (sh "./bin/flint" ":src" d ":fn" "entry/main" ":out" "out/cli.wasm")]
@@ -61,8 +73,19 @@
 (check-that "tasks are listed with their docs"
             (and (str/includes? (cli true "tasks") "greet  -- say hello to $1")
                  (str/includes? (cli true "tasks") "bare")))
-(check "a task's arguments are bound, in babashka's shape"
-       (cli true "task" "greet" "world") "(println \"hello\" \"world\")")
+;; A task RUNS, so what comes back from the guest is a PROGRAM to compile, not a
+;; printed form. The guest decides what to run; the host runs it, because
+;; `flint_load_image` clears the caller's frames and a guest cannot run a task
+;; from inside itself.
+(check-that "a task becomes a compilable program, with its arguments bound"
+            (let [x (read-string (cli true "task" "greet" "world"))]
+              (and (str/includes? (:src x) "(println \"hello\" \"world\")")
+                   (= (:entry x) "flint.task/main")
+                   (= (:args x) ["world"]))))
+(check "  ... and $10 is not eaten by $1"
+       (-> (cli true "task" "ten" "a" "b" "c" "d" "e" "f" "g" "h" "i" "J")
+           read-string :src (str/includes? "(str \"J\" \"a\")") boolean)
+       true)
 (check-that "an unknown task lists the real ones"
             (str/includes? (cli true "task" "nope") "available: bare, greet"))
 ;; A dependency source states what it does NOT support, in the manifest style
@@ -100,6 +123,29 @@
       out (slurp (.getInputStream pr))]
   (.waitFor pr)
   (check "flint run executes a bytecode IMAGE, with no linker" (str/trim out) "hi there"))
+
+;; And end to end, through `bin/flint`: a task that PRINTS, a task that returns
+;; a value, and a task with a `:requires`. flint has no ambient stdout -- a
+;; program granted nothing runs pure -- so `println` cannot exist in core. The
+;; task's namespace defines its own, appending to a value its `main` returns,
+;; which is what flint's model says output is.
+(defn task [& args]
+  (str/trim (:all (apply sh (concat ["./bin/flint" "task"] args)))))
+(let [cwd (System/getProperty "user.dir")]
+  (try
+    (System/setProperty "user.dir" proj)
+    (let [run-in (fn [& args]
+                   (let [pb (ProcessBuilder. (into-array String (concat [(str cwd "/bin/flint") "task"] args)))]
+                     (.directory pb (io/file proj))
+                     (let [p (.start pb) o (slurp (.getInputStream p)) e (slurp (.getErrorStream p))]
+                       (.waitFor p) (str/trim (str o e)))))]
+      (check "a task that prints, prints -- with no ambient stdout anywhere"
+             (run-in "greet" "world") "hello world")
+      (check "a task's VALUE is its output when it returns one"
+             (run-in "sum" "2" "40") "42")
+      (check "a task's :requires is honoured, in babashka's shape"
+             (run-in "joined" "a" "b") "a-b"))
+    (finally (System/setProperty "user.dir" cwd))))
 
 (println (if (zero? @fails) "cli: ok" (str "cli: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))

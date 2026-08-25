@@ -186,6 +186,14 @@
    (c "reduced keeps the accumulator"
       (reduce (fn [a x] (if (= x :stop) (reduced a) (conj a x))) [] [:a :b :stop :c]) [:a :b])
 
+   ;; `print-str` is NOT `pr-str` with spaces. Clojure's print semantics drop
+   ;; the quotes at EVERY level, not just the top -- flint's shared one printer
+   ;; with `pr-str`, so `(print-str ["x" 1])` came back `["x" 1]`.
+   (c "print-str is unreadable printing" (print-str "a" 1 :k) "a 1 :k")
+   (c "  ... recursively, inside collections" (print-str ["x" 1] {:a "b"}) "[x 1] {:a b}")
+   (c "  ... while pr-str stays readable" (pr-str ["x" 1]) "[\"x\" 1]")
+   (c "  ... and nil still prints as nil" (print-str nil "x") "nil x")
+
    ;; `#:ns{...}`: standard EDN since 1.9, and the form `pr-str` produces for
    ;; ANY map with qualified keys -- so a `deps.edn` written by a Clojure tool
    ;; round-tripped into something flint could not read.
