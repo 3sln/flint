@@ -1,0 +1,58 @@
+#!/bin/sh
+# flint on Chicory -- a wasm interpreter written in Java (doc/decisions/0018).
+#
+# 0018 says this row DECIDES something: flint on Chicory is an interpreter
+# running inside an interpreter, and if it is unusably slow then `0010`'s tier 1
+# -- an SDK over the wasm module -- is not the answer for the JVM, and porting
+# the VM becomes the route rather than a later luxury.
+#
+# Both of Chicory's modes are measured. Reporting only the interpreter would be
+# an unfair reading of what the JVM can do with a flint module.
+set -e
+cd "$(dirname "$0")/.."
+# A WORKING java, not just one on PATH: macOS ships a `/usr/bin/java` stub that
+# exists, is executable, and exits telling you to visit java.com.
+find_java() {
+  for c in "$JAVA" /opt/homebrew/opt/openjdk@21/bin/java /opt/homebrew/opt/openjdk/bin/java "$(command -v java 2>/dev/null)"; do
+    [ -n "$c" ] && [ -x "$c" ] && "$c" -version >/dev/null 2>&1 && { echo "$c"; return; }
+  done
+}
+JAVA="$(find_java)"
+if [ -z "$JAVA" ]; then
+  echo "bench-chicory: needs a JVM. brew install openjdk@21, or set JAVA."
+  exit 1
+fi
+JAVAC="${JAVAC:-$(dirname "$JAVA")/javac}"
+CHICORY_VERSION="${CHICORY_VERSION:-1.7.5}"
+ASM_VERSION="${ASM_VERSION:-9.9.1}"
+LIB=out/chicory
+mkdir -p "$LIB"
+fetch() {
+  [ -f "$LIB/$2" ] || curl -sSfL -o "$LIB/$2" "$1"
+}
+for a in runtime wasm compiler; do
+  fetch "https://repo1.maven.org/maven2/com/dylibso/chicory/$a/$CHICORY_VERSION/$a-$CHICORY_VERSION.jar" \
+        "$a-$CHICORY_VERSION.jar"
+done
+# The compiler shades classes through ASM and fails with `NoSuchMethodError:
+# Remapper.<init>(int)` against an older one, so the version is pinned to what
+# Chicory's own pom declares rather than to whatever is lying around.
+for a in asm asm-commons asm-util asm-tree asm-analysis; do
+  fetch "https://repo1.maven.org/maven2/org/ow2/asm/$a/$ASM_VERSION/$a-$ASM_VERSION.jar" "$a-$ASM_VERSION.jar"
+done
+CP=$(ls "$LIB"/*.jar | tr '\n' ':')
+"$JAVAC" -cp "$CP" -d "$LIB" bench/chicory/*.java
+echo "chicory $CHICORY_VERSION on $("$JAVA" -version 2>&1 | head -1)"
+echo
+printf '%-14s %-6s %14s %14s\n' mode n parse+compile 'best run'
+for n in 0 25 50; do
+  ./bin/flint :src bench/xrt :src bench/construe/gen \
+    :fn "construe.bench.xrt$n/main" :out "out/xrt-$n.wasm" >/dev/null
+  printf '%-14s %-6s ' interpreted "$n"
+  "$JAVA" -cp "$CP$LIB" FlintOnChicory "out/xrt-$n.wasm" 3
+  printf '%-14s %-6s ' compiled "$n"
+  "$JAVA" -cp "$CP$LIB" FlintOnChicoryCompiled "out/xrt-$n.wasm" 5
+done
+echo
+echo "  33233 flint instructions per iteration. The slope between n=25 and n=50"
+echo "  divided by that is ns/instruction, comparable with bin/bench-xruntime."

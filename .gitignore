@@ -16,3 +16,4 @@ deck/out/
 deck/bun.lock
 bench/workerd/*.wasm
 bench/workerd/*.image
+out/chicory/

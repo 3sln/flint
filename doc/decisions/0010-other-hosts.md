@@ -21,8 +21,21 @@ and *that* is what makes an SDK a few hundred lines rather than a project. **So
 the ABI is the thing to freeze and document properly**, because every future SDK
 is a bet on its stability. Do this first; it is where the coverage is.
 
+> **Measured, for the JVM, and it changes the ordering there.** `0018` benchmarks
+> flint on Chicory: **500× V8 interpreted, 39× compiled to JVM bytecode**, plus
+> 440 ms of parse-and-compile per process. An SDK over the wasm module is
+> therefore not a viable Clojure implementation on a platform where Clojure
+> already runs natively, and tier 1 is out **for the JVM specifically**. It
+> remains the right first move everywhere the embedded engine is fast — wasmtime
+> is 0.89× V8 — so what the measurement narrows is one row of "every language",
+> not the tier.
+
 **Tier 2 — port the VM to the JVM and the CLR.** For hosts that will not embed
 wasm, or that want native interop and the host collector.
+
+> **For the JVM this is now the route rather than a later luxury**, on `0018`'s
+> numbers above. It was much cheaper to learn from a benchmark than from a
+> finished SDK, which is exactly what 0018 said the Chicory row was for.
 
 The thing that makes this tractable: **the bytecode is the portable artifact.**
 The reader, analyzer, macro expander and the whole cljc core library are already

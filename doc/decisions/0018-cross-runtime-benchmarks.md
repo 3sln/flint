@@ -2,7 +2,8 @@
 
 > **BUILT**, for five engines: node, deno, bun, workerd and wasmtime, plus wasm3
 > as the small-embedder case. `bin/bench-xruntime` and `bin/bench-image`.
-> SpiderMonkey and Chicory are still missing; Chicory needs a JVM.
+> SpiderMonkey is still missing. **Chicory is measured, and it decides `0010`'s
+> JVM tier against tier 1** — see below.
 >
 > **One of this document's central predictions is wrong, and the measurement is
 > below.** It says AOT regions matter most on an engine with no tier-up. They
@@ -118,6 +119,35 @@ iterations, runs of seconds) rather than left to the fit.
 1.22× on node (8.68 → 7.10 ns/instruction) and 1.27× on bun (8.04 → 6.31). The
 1.41–1.52× above includes tier-up. That cuts in AOT's favour for the deployment
 that matters: a Worker request is short, and short is where AOT helps most.
+
+### Chicory, and the decision it makes
+
+This document says the Chicory row decides something: flint on Chicory is an
+interpreter running inside an interpreter, and *"if that is unusably slow, then
+`0010`'s tier 1 (an SDK over the wasm module) is not the answer for the JVM, and
+tier 2 (porting the VM) becomes the route rather than a later luxury."*
+
+flint **runs** on Chicory — the same module bytes, no host code, correct answer.
+`bin/bench-chicory`, Chicory 1.7.5 on OpenJDK 21:
+
+| mode | per iteration | ns/instr | vs V8 | module setup |
+|---|---:|---:|---:|---:|
+| interpreted | 182.8 ms | 5499 | 500× | 150 ms parse + 9 ms instantiate |
+| compiled to JVM bytecode | 14.2 ms | 426 | 39× | 150 ms parse + 290 ms compile |
+
+**Both modes are measured**, because reporting only the interpreter would be an
+unfair reading of what the JVM can do with a flint module — Chicory's compiler
+mode is 12.9× faster than its interpreter and is the number that matters.
+
+**It still decides the question the way the document expected.** 39× V8 in the
+best mode, plus 440 ms of parse-and-compile per process, is not a viable Clojure
+implementation on a platform where Clojure already runs natively. Tier 1 is out
+for the JVM; **`0010`'s tier 2 — porting the VM — is the route**, and this was
+much cheaper to learn than writing the SDK first.
+
+Worth noting against the AOT finding above: Chicory-compiled is 39× and wasm3 is
+15.6×, so *"wasm engine written in Java, compiling to JVM bytecode"* is slower
+than *"wasm interpreter written in C"*. The JVM's own JIT does not rescue it.
 
 ### Resident memory, which is the binding constraint in a Worker
 
