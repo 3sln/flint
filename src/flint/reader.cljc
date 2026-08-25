@@ -371,6 +371,44 @@
         (if splicing? {::splice v} v)
         :else (recur more)))))
 
+(defn- qualify-keys
+  "Give every unqualified keyword or symbol key the map's namespace, which is
+  what `#:ns{...}` means. A key that already carries one keeps it."
+  [ns m]
+  (reduce (fn [acc e]
+            (let [k (key e)]
+              (assoc acc
+                     (cond
+                       (and (keyword? k) (nil? (namespace k))) (keyword ns (name k))
+                       (and (symbol? k) (nil? (namespace k))) (symbol ns (name k))
+                       :else k)
+                     (val e))))
+          {} m))
+
+(defn- read-ns-map
+  "`#:ns{...}`, `#::{...}`, `#::alias{...}` -- a namespaced map.
+
+  This used to read the map and return it with its keys UNQUALIFIED, which is
+  a silently wrong answer rather than a loud one. `pr-str` emits this form for
+  any map with qualified keys, so every `deps.edn` a Clojure tool writes lands
+  here."
+  [st]
+  (let [tok (read-token st)                                  ; ":ns" / "::" / "::alias"
+        ns (cond
+             (str/starts-with? tok "::")
+             (let [a (subs tok 2)]
+               (if (= a "")
+                 (str (or (:ns @st) "user"))
+                 (str (get (:aliases @st) (symbol a) a))))
+             (str/starts-with? tok ":") (subs tok 1)
+             :else "")
+        _ (skip-ws! st)
+        m (read-form* st)]
+    (cond
+      (= ns "") (err st "#: wants a namespace")
+      (not (map? m)) (err st "#: wants a map")
+      :else (qualify-keys ns m))))
+
 (defn- read-dispatch [st]
   (next-ch! st)                                              ; #
   (let [c (peek-ch st)]
@@ -387,9 +425,7 @@
                             (= t "-Inf") ##-Inf
                             (= t "NaN") ##NaN
                             :else (err st (str "unknown ## literal: " t)))))
-      (= c ":") (do (next-ch! st)
-                    (let [m (read-form* st)]
-                      (if (map? m) m (err st "#: wants a map"))))
+      (= c ":") (read-ns-map st)
       (or (nil? c) (whitespace c)) (err st "unexpected #")
       :else
       (let [tag (read-form* st)

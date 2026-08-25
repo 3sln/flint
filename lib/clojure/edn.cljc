@@ -131,6 +131,20 @@
       (contains? opts :default) ((get opts :default) tag value)
       :else (err "no reader for tag" {:tag tag}))))
 
+(defn- qualify
+  "Give every unqualified keyword or symbol key the map's namespace, which is
+  what `#:ns{...}` means. A key that already carries one keeps it."
+  [ns m]
+  (reduce (fn [acc e]
+            (let [k (key e)]
+              (assoc acc
+                     (cond
+                       (and (keyword? k) (nil? (namespace k))) (keyword ns (name k))
+                       (and (symbol? k) (nil? (namespace k))) (symbol ns (name k))
+                       :else k)
+                     (val e))))
+          {} m))
+
 (defn- read-dispatch [v opts]
   (nx! v)
   (let [c (pk v)]
@@ -138,6 +152,21 @@
       (= c "{") (set (read-delim v "}" opts))
       (= c "_") (do (nx! v) (read-form v opts) ::skip)
       (nil? c) (err "unexpected end of input after #" {})
+      ;; `#:ns{...}` -- a namespaced map. Standard EDN since Clojure 1.9, and
+      ;; the form `pr-str` produces for ANY map with qualified keys, so a
+      ;; `deps.edn` written by a Clojure tool round-trips into it. Reading one
+      ;; back failed with "reader tag must be a symbol", which is true and
+      ;; unhelpful.
+      (= c ":")
+      (let [kw (read-form v opts)
+            _ (skip! v)
+            m (read-form v opts)]
+        (cond
+          (not (keyword? kw)) (err "expected a namespace after #:" {:got kw})
+          (namespace kw) (err "#::alias{...} needs an alias resolver, which EDN has no notion of"
+                              {:got kw})
+          (not (map? m)) (err "#:ns must be followed by a map" {:got m})
+          :else (qualify (name kw) m)))
       :else (let [tag (read-form v opts)
                   _ (skip! v)
                   value (read-form v opts)]

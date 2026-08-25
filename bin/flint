@@ -192,6 +192,26 @@
   (binding [*out* *err*] (println (ex-message e)))
   (System/exit 1))
 
+;; `flint run <file> [args]` -- a module or a bytecode IMAGE. The image path is
+;; what construe's sandbox binding settled on and needs no linker anywhere
+;; (doc/decisions/0021, 0023); it is here rather than in `lib/flint/cli.cljc`
+;; because running an image means instantiating a SECOND module, which is the
+;; host's job and not the guest's.
+(when (= "run" (first *command-line-args*))
+  (let [[_ file & rest] *command-line-args*
+        loader (or (System/getenv "FLINT_LOADER") "out/flint-loader.wasm")
+        script (str "import('" root "/host/run.mjs').then(async (m) => {"
+                    "  const r = await m.run(process.argv[1], process.argv.slice(3),"
+                    "                        {loaderPath: process.argv[2]});"
+                    "  process.stdout.write(r.out); process.exitCode = r.code;"
+                    "}).catch((e) => { console.error(String(e.message ?? e)); process.exit(2); })")
+        p (.start (ProcessBuilder.
+                   (into-array String (concat ["node" "-e" script "--" (str file) loader]
+                                              (map str rest)))))]
+    (.start (Thread. (clojure.core/fn [] (io/copy (.getInputStream p) System/out))))
+    (.start (Thread. (clojure.core/fn [] (io/copy (.getErrorStream p) System/err))))
+    (System/exit (.waitFor p))))
+
 (let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path aot loader emit-image emit-spec]}
       (parse-args *command-line-args*)]
   (when-not fn

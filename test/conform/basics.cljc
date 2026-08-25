@@ -186,6 +186,13 @@
    (c "reduced keeps the accumulator"
       (reduce (fn [a x] (if (= x :stop) (reduced a) (conj a x))) [] [:a :b :stop :c]) [:a :b])
 
+   ;; `#:ns{...}`: standard EDN since 1.9, and the form `pr-str` produces for
+   ;; ANY map with qualified keys -- so a `deps.edn` written by a Clojure tool
+   ;; round-tripped into something flint could not read.
+   (c "namespaced map literal" #:git{:url "u" :sha "s"} {:git/url "u" :git/sha "s"})
+   (c "  ... and a qualified key inside one keeps its own namespace"
+      #:a{:b 1 :c/d 2} {:a/b 1 :c/d 2})
+
    (c "atom" (let [a (atom 1)] (swap! a inc) (swap! a + 10) @a) 12)
    (c "meta" (let [v (with-meta [1] {:a 1})] [(meta v) v]) [{:a 1} [1]])
    (c "meta not in =" (= (with-meta [1] {:a 1}) [1]) true)
