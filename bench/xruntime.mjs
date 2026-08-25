@@ -74,6 +74,15 @@ export function cliEngines() {
   });
 }
 
+/// The engine's own version string. 0018 requires it recorded, because engine
+/// performance moves fast and a table without versions ages into a claim about
+/// nothing in particular.
+export function versionOf(bin, args = ['--version']) {
+  try {
+    return execFileSync(bin, args, { encoding: 'utf8' }).trim().split('\n')[0];
+  } catch { return 'unknown'; }
+}
+
 export function best(reps, f) {
   let b = Infinity;
   for (let i = 0; i < reps; i++) {
@@ -102,7 +111,10 @@ export function fit(points) {
   return { slope, intercept, r2: ssTot === 0 ? 1 : 1 - ssRes / ssTot };
 }
 
+const pad0 = (s, w) => String(s).padEnd(w);
+
 if (import.meta.url === `file://${process.argv[1]}`) {
+  const pad = pad0;
   for (const n of COUNTS) {
     if (!existsSync(mod(n))) {
       console.error(`missing ${mod(n)} -- run bin/bench-xruntime`);
@@ -119,6 +131,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   console.log();
 
   const REPS = Number(process.env.XRT_REPS || 5);
+  console.log('engines, as found on this machine:');
+  for (const e of cliEngines()) {
+    const [bin] = e.cmd(mod(0, false));
+    console.log('  ' + pad0(e.name, 24) + versionOf(bin));
+  }
+  console.log('  ' + pad0('flint', 24) + execFileSync('git', ['rev-parse', '--short', 'HEAD'],
+                                                      { encoding: 'utf8' }).trim());
+  console.log();
   // `0018` says the AOT ratio is the number that varies most between engines,
   // and names the reason: on V8 TurboFan optimises the dispatch loop hard, so
   // eliminating dispatch looked marginal -- while on an engine with no tier-up
@@ -143,7 +163,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     } catch (err) { rows.push({ eng, failed: String(err.message).split('\n')[0] }); }
   }
 
-  const pad = (s, w) => String(s).padEnd(w);
   const rpad = (s, w) => String(s).padStart(w);
   console.log(pad('engine', 24) + rpad('per iter', 11) +
               rpad('ns/instr', 10) + rpad('vs V8', 8) +

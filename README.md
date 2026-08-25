@@ -343,9 +343,16 @@ unpredictable. Two things outweighed it:
   argument, not just an engineering one.
 
 **And the measurement, rather than the opinion.** Dispatch costs **6.2 ns per
-instruction** on a tight arithmetic loop. On workloads that touch data
+instruction on V8** on a tight arithmetic loop. On workloads that touch data
 structures it is 7–19 ns per instruction, which is the same dispatch cost
-diluted by real work. So dispatch is roughly a third of the time on
+diluted by real work.
+
+> **Every figure in this section is V8** (node), which is one engine out of
+> several flint runs on. Across five, the same construe workload costs 9.8
+> ns/instruction on wasmtime, 10.8 on JavaScriptCore, 11.0 on V8 and **170.5 on
+> wasm3**, a pure interpreter. The spread between JIT engines is about 1.4× and
+> the interpreter is 15.6× slower. `bin/bench-xruntime`, and
+> `doc/decisions/0018` for the tables and what they decide. So dispatch is roughly a third of the time on
 allocation-light code and much less elsewhere: superinstructions would help the
 tight-loop case and little else. The number comes from timing a workload with
 the step counter off and counting it with the counter on — the counter is gated
@@ -1381,9 +1388,9 @@ its own collector. The regex number is not; see [Limits](#limits).
 | transient map, 10⁵ inserts | 3 000 323 | 46.76 ms | 15.6 |
 | word frequency (string split) | 3 257 997 | 62.44 ms | 19.2 |
 
-Read down the column: 6.2 ns is what a dispatched instruction costs when it does
-almost nothing, and the rising numbers are the same dispatch diluted by real
-work. Dispatch is about a third of the time on allocation-light code and much
+Read down the column: 6.2 ns is what a dispatched instruction costs **on V8**
+when it does almost nothing, and the rising numbers are the same dispatch
+diluted by real work. Dispatch is about a third of the time on allocation-light code and much
 less on anything that touches the heap.
 
 ### Transients versus persistents (native, no interpreter)
@@ -1461,6 +1468,13 @@ module's top-level initialisers running again on every `main()`.
 |---|---:|---:|
 | flint: compile + instantiate + run | **1.00 ms** | 6.4 MB reserved, 170 KB live |
 | V8 isolate: create + load + run | 14.59 ms | 6.2 MB heap |
+
+Both rows are **V8**, and the size of this win is the least portable number
+here: it is 6.4 ms of fixed cost on wasmtime and 4.3 ms on wasm3, against 32 ms
+for a node process. What *is* portable is the resident cost — flint adds 0.5 MB
+on an engine that interprets its module and 20–27 MB on ones that compile it,
+because it is the compiled code and not the 6.4 MB reservation that gets paid
+for (`doc/decisions/0018`).
 
 **15× faster to first answer**, and it lines up with construe's own measurement
 of 23 ms cold on workerd. This is an argument about *sandboxing cost*, not
