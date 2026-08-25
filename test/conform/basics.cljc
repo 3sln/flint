@@ -156,6 +156,36 @@
    (c "catch nested" (try (try (throw (ex-info "x" {})) (catch Throwable e (throw (ex-info "y" {}))))
                           (catch Throwable e (ex-message e))) "y")
 
+   ;; Every catch case above uses `Throwable`, which is why nobody noticed that
+   ;; `(catch Exception e ...)` -- the commonest form in real Clojure -- matched
+   ;; NOTHING. flint has no class hierarchy, so a catch compared the exception's
+   ;; kind string for equality, and no kind flint raises is spelled `Exception`.
+   ;; A ported program's error handling silently did not run.
+   (c "catch Exception catches ex-info"
+      (try (throw (ex-info "boom" {})) (catch Exception e (ex-message e))) "boom")
+   (c "catch Exception catches a runtime failure"
+      (try (/ 1 0) (catch Exception e :caught)) :caught)
+   (c "catch RuntimeException too"
+      (try (throw (ex-info "b" {})) (catch RuntimeException e :caught)) :caught)
+   (c "a more specific clause is tried first"
+      (try (throw (ex-info "b" {}))
+           (catch ArithmeticException e :wrong)
+           (catch Exception e :right)) :right)
+   ;; `(catch ExceptionInfo e ...)` also works in flint, but the bare name does
+   ;; not resolve in real Clojure -- it is `clojure.lang.ExceptionInfo` there --
+   ;; and this file has to LOAD under both. flint accepting the short name is a
+   ;; spelling convenience, not a behavioural difference, so it is exercised in
+   ;; `test/catch.clj` where only flint reads it.
+
+   ;; `reduced` never worked either: it is a one-element vector with a marker in
+   ;; its metadata, and `reduce` unwrapped it with `deref`, which knows about
+   ;; atoms and volatiles and delays. Every short-circuiting reduce raised.
+   (c "reduced short-circuits"
+      (reduce (fn [a x] (if (> x 2) (reduced a) (+ a x))) 0 [1 2 3 4]) 3)
+   (c "unreduced" (unreduced (reduced 7)) 7)
+   (c "reduced keeps the accumulator"
+      (reduce (fn [a x] (if (= x :stop) (reduced a) (conj a x))) [] [:a :b :stop :c]) [:a :b])
+
    (c "atom" (let [a (atom 1)] (swap! a inc) (swap! a + 10) @a) 12)
    (c "meta" (let [v (with-meta [1] {:a 1})] [(meta v) v]) [{:a 1} [1]])
    (c "meta not in =" (= (with-meta [1] {:a 1}) [1]) true)

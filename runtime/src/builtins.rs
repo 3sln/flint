@@ -469,6 +469,11 @@ builtins! {
     "ex-message", flint_b_exmessage, b_exmessage, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); rt.ex_message(v) };
     "ex-data", flint_b_exdata, b_exdata, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); rt.ex_data(v) };
     "flint/ex-kind", flint_b_exkind, b_exkind, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); rt.ex_kind(v) };
+    "flint/ex-matches?", flint_b_exmatches, b_exmatches, |rt, a, n| {
+        let _ = n;
+        let (e, name) = (arg(rt, a, 0), arg(rt, a, 1));
+        rt.ex_matches(e, name)
+    };
 
     // --- state (single threaded, and pure enough: no I/O, no coordination) ---
     "atom", flint_b_atom, b_atom, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); rt.new_atom(v) };

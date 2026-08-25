@@ -41,6 +41,42 @@ impl Rt {
         Value::heap(a)
     }
 
+    /// Does an exception match a `catch` clause's name?
+    ///
+    /// flint has no class hierarchy -- an exception carries a KIND STRING -- so
+    /// a `catch` used to compare that string for equality. Which meant
+    /// `(catch Exception e ...)`, the single most common form in real Clojure,
+    /// matched nothing at all: every kind flint raises is `ExceptionInfo`,
+    /// `ClassCastException`, `ArithmeticException` and so on, and none of them
+    /// is spelled `Exception`. A ported program's error handling silently did
+    /// not run. The emitter's own comment said "`Throwable`/`Exception` match
+    /// anything", so the intent was recorded and the code did not do it.
+    ///
+    /// The rules are Java's, over flat names rather than classes:
+    ///
+    /// * `Throwable` matches everything;
+    /// * `Exception` and `RuntimeException` match everything that is not an
+    ///   `…Error`, which is the distinction Java draws and the one a program
+    ///   catching broadly still wants -- a stack overflow should not be
+    ///   swallowed by a `catch Exception` around a parser;
+    /// * `Error` matches the `…Error`s;
+    /// * anything else is an exact match, as before.
+    pub fn ex_matches(&mut self, e: Value, name: Value) -> Value {
+        let kind = self.ex_kind(e);
+        let mut kb = crate::rt::sbuf();
+        let mut nb = crate::rt::sbuf();
+        let k: alloc::string::String = self.as_str(kind, &mut kb).unwrap_or("").into();
+        let n: alloc::string::String = self.as_str(name, &mut nb).unwrap_or("").into();
+        let is_error = k.ends_with("Error");
+        let hit = match n.as_str() {
+            "Throwable" => true,
+            "Exception" | "RuntimeException" => !is_error,
+            "Error" => is_error,
+            other => k == other,
+        };
+        Value::boolean(hit)
+    }
+
     pub fn is_exception(&self, v: Value) -> bool {
         v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_EXINFO
     }

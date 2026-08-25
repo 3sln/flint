@@ -161,9 +161,12 @@
           (put! buf (op :pop-handler))
           (jump! buf :jump l-end)
           (label! buf l-catch)
-          ;; The thrown value is on the stack. Catch clauses are tried in order;
-          ;; flint has no class hierarchy, so a clause matches on the exception
-          ;; kind string, and `Throwable`/`Exception` match anything.
+          ;; The thrown value is on the stack. Catch clauses are tried in
+          ;; order. flint has no class hierarchy, so a clause matches on the
+          ;; exception's KIND STRING -- but `Exception` and `Error` still have
+          ;; to mean what they mean in Clojure, and that rule lives in one
+          ;; place: `flint/ex-matches?`. It used to be a string equality here,
+          ;; which made `(catch Exception e ...)` match nothing at all.
           (loop [cs catches]
             (if-let [{:keys [kind idx body]} (first cs)]
               (let [l-next (gensym "cnext")]
@@ -171,9 +174,9 @@
                   (do (put! buf (op :set-local) idx)
                       (emit ctx buf body false))
                   (do (put! buf (op :dup))
-                      (put! buf (op :native) (img/u16 (img/native-slot (:b ctx) "flint/ex-kind")) 1)
                       (emit-const ctx buf (str kind))
-                      (put! buf (op :native) (img/u16 (img/native-slot (:b ctx) "=")) 2)
+                      (put! buf (op :native)
+                            (img/u16 (img/native-slot (:b ctx) "flint/ex-matches?")) 2)
                       (jump! buf :jump-if-false l-next)
                       (put! buf (op :set-local) idx)
                       (emit ctx buf body false)
