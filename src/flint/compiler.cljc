@@ -357,9 +357,26 @@
     ;; is reachable only because this shim uses it -- not because the runtime
     ;; carries one.
     (let [shim-ns 'flint.main
+          ;; `0021`: capabilities arrive as a SECOND argument to the entry
+          ;; function -- `(the-fn argv {:fs <cap>})` -- so that a program holds
+          ;; them because it was handed them, not because it can ask. They are
+          ;; passed only when the entry has a 2-arity, because every entry
+          ;; written before this one has 1 and a shim that always passed two
+          ;; would break all of them.
+          entry-arities (->> (:items @cc)
+                             (filter (fn [it] (= (:sym it) entry)))
+                             (mapcat (fn [it] (or (-> it :ast :arities first :body :init :arities) [])))
+                             (map (fn [a] [(:argc a) (:variadic? a)]))
+                             set)
+          takes-caps? (boolean (some (fn [[argc variadic?]]
+                                       (or (= argc 2) (and variadic? (<= argc 2))))
+                                     entry-arities))
+          call (if takes-caps?
+                 (str "(" entry " args (flint.rt/capabilities))")
+                 (str "(" entry " args)"))
           shim-src (str "(ns flint.main (:require [" (namespace entry) "]))\n"
                         "(defn -main [args]\n"
-                        "  (let [r (" entry " args)]\n"
+                        "  (let [r " call "]\n"
                         "    (if (string? r) r (pr-str r))))\n")]
       (analyze-namespace! cc shim-ns (read-namespace! cc shim-ns shim-src "<entry-shim>")))
 

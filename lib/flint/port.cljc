@@ -83,13 +83,19 @@
 
   A refusal is a normal outcome and arrives as a catchable `SecurityException`.
 
-  `opts` may carry `:codec` (none means raw bytes) and whatever options that
-  codec understands — `:key-fn` for JSON, for instance. The codec's format name
-  is what the host is told the bytes are."
+  `opts` may carry `:codec` (none means raw bytes), `:capability` (the object
+  the host issued for this name), and whatever options that codec understands —
+  `:key-fn` for JSON, for instance. The codec's format name is what the host is
+  told the bytes are."
   ([name] (open name nil))
   ([name opts]
    (let [codec (:codec opts)
-         p (flint.rt/open name (or (:format opts) (:format codec) :bytes))]
+         ;; `:capability` is the object the host issued (`doc/decisions/0022`).
+         ;; The host checks it against its own GRANT TABLE -- never against the
+         ;; type, because guest code can mint opaque values freely and "is it
+         ;; opaque" would therefore be no check at all.
+         p (flint.rt/open name (or (:format opts) (:format codec) :bytes)
+                          (:capability opts))]
      (flint.rt/set-port-opts p (assoc (dissoc (or opts {}) :codec) :flint/codec codec))
      (flint.rt/set-port-binary p (boolean (:binary codec)))
      p)))

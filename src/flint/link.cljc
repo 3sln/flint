@@ -151,8 +151,14 @@
   ;; diagnostic (`collect_now`, `set_gc_stress`, the heap statistics) is carried
   ;; by the runtime unit's own `:exports`, and only the diagnostics build of the
   ;; runtime declares them.
+  ;; `flint_grant` and `flint_opaque_host_id` are the capability edge
+  ;; (doc/decisions/0021, 0022): the host declares what it will lend before
+  ;; entering, and asks of a value that comes back whether it is one it issued.
+  ;; Both are production, not diagnostics -- a capability model that only works
+  ;; in a debug build is not a capability model.
   ["flint_main" "arg_alloc" "arg_push" "out_ptr" "out_len"
-   "image_desc_addr" "set_step_limit" "stat_steps" "set_memory_limit"])
+   "image_desc_addr" "set_step_limit" "stat_steps" "set_memory_limit"
+   "flint_grant" "flint_opaque_host_id" "flint_presented_capability"])
 
 (def loader-exports
   "A module built with `--loader` can be handed an image at run time. That needs

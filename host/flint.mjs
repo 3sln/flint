@@ -20,6 +20,18 @@ export function instantiate(module) {
       const n = Number(process.env.FLINT_STEP_LIMIT);
       e.set_step_limit(Math.floor(n / 2 ** 32), n >>> 0);
     }
+    // Declare the grants before entering, so the entry function can be handed
+    // `{:fs <cap>}` as its second argument (doc/decisions/0021, 0022). Each is
+    // a host-minted opaque value whose id only this host knows -- a program
+    // holds one because it was given it, not because it asked.
+    if (e.flint_grant) {
+      for (const name of Object.keys(capabilities)) {
+        const b = enc.encode(name);
+        const p = e.arg_alloc(b.length);
+        new Uint8Array(e.memory.buffer).set(b, p);
+        e.flint_grant(p, b.length, grantId(name));
+      }
+    }
     for (const a of args) {
       const b = enc.encode(String(a));
       const p = e.arg_alloc(b.length);
@@ -128,10 +140,48 @@ export function instantiate(module) {
   let capabilities = {};
   const openPorts = new Map();
 
+  // The GRANT TABLE. `0022` is explicit that a capability check can never be
+  // "is it opaque" -- guest code can mint as many opaque values as it likes --
+  // so authority is this host recognising an id it issued, for a name it
+  // granted. Ids start at 1 because 0 means "guest-minted".
+  const grantIds = new Map();
+  let nextGrantId = 1;
+  function grantId(name) {
+    if (!grantIds.has(name)) grantIds.set(name, nextGrantId++);
+    return grantIds.get(name);
+  }
+  /// Which capability, if any, this value IS. Takes a 64-bit flint value as
+  /// [lo, hi]; answers the name, or null for anything this host did not mint.
+  function capabilityOf(lo, hi) {
+    if (!e.flint_opaque_host_id) return null;
+    const id = e.flint_opaque_host_id(lo >>> 0, hi >>> 0);
+    if (!id) return null;
+    for (const [name, gid] of grantIds) if (gid === id) return name;
+    return null;
+  }
+
   function handle(ev) {
     if (ev.kind === 'open-request') {
       const cap = capabilities[ev.name];
       if (!cap) { e.flint_continue(ev.token, 0); return; }
+      // If the guest PRESENTED a capability, it has to be one this host issued
+      // for this name. `0022`: the check is the grant table, never the type --
+      // guest code can mint opaque values freely, so "is it opaque" would be no
+      // check at all. Presenting nothing is still allowed, which is what every
+      // program written before capabilities existed does.
+      if (e.flint_presented_capability) {
+        const presented = e.flint_presented_capability(ev.port);
+        // 0 means nothing was offered, which stays allowed -- every program
+        // written before capabilities existed opens by name alone. Anything
+        // else has to match the id this host issued for this name; 0xFFFFFFFF
+        // is "the guest offered something we never minted", and it is a
+        // REFUSAL rather than an absence. Treating those two the same accepted
+        // a forged `(opaque "fs")`.
+        if (presented !== 0 && grantIds.get(ev.name) !== presented) {
+          e.flint_continue(ev.token, 0);
+          return;
+        }
+      }
       openPorts.set(ev.port, cap);
       e.flint_continue(ev.token, 1);
       if (cap.open) cap.open(ev.port, api);
@@ -165,6 +215,8 @@ export function instantiate(module) {
     pump,
     grant: (name, handler) => { capabilities[name] = handler; },
     capabilities: (m) => { capabilities = m; },
+    capabilityOf,
+    grantId,
   };
 }
 

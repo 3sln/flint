@@ -134,6 +134,9 @@
 (defrecord ^:private Opaque [id label])
 (def ^:private opaque-counter (atom 0))
 (defn opaque [label] (->Opaque (swap! opaque-counter inc) label))
+;; The bootstrap host grants nothing: a macro running at compile time has no
+;; business holding a capability.
+(defn capabilities [] {})
 (defn opaque? [x] (instance? Opaque x))
 (defn opaque-label [x] (when (opaque? x) (:label x)))
 

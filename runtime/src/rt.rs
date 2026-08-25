@@ -136,6 +136,63 @@ macro_rules! rooted {
     }};
 }
 
+/// Capabilities the host is willing to grant this run, as `(name, host-id)`.
+///
+/// Declared before `flint_main` and turned into a map of host-minted opaque
+/// values handed to the entry function as its second argument
+/// (`doc/decisions/0021`, `0022`). The host id is the host's own handle for the
+/// grant; guest code cannot read it, and possessing an opaque value is never
+/// authority -- only the host recognising THIS one is.
+///
+/// It lives here rather than in `abi` because `abi` is only compiled for the
+/// wasm build and the builtin that reads it is compiled for both.
+static mut GRANTS: alloc::vec::Vec<(alloc::string::String, u64)> = alloc::vec::Vec::new();
+
+pub fn add_grant(name: alloc::string::String, host_id: u64) {
+    unsafe {
+        let g = &mut *core::ptr::addr_of_mut!(GRANTS);
+        g.push((name, host_id));
+    }
+}
+
+impl Rt {
+    /// `{:name <host-minted opaque>}` for every grant the host declared.
+    ///
+    /// Minted fresh rather than stored, so the values only exist once a program
+    /// asks -- and so a second call yields values the host will NOT recognise,
+    /// because their ids are new. That is deliberate: the entry shim calls this
+    /// once and hands the map on, and there is no way to re-derive a capability
+    /// you were not given.
+    pub fn grants_map(&mut self) -> Value {
+        let n = unsafe { (*core::ptr::addr_of!(GRANTS)).len() };
+        let base = self.mark();
+        // Rooted across every step: `keyword`, `string`, `new_opaque` and
+        // `assoc` all allocate, so any one of them can collect, and a raw
+        // `Value` held across a collection is a stale pointer.
+        let empty = self.empty_map();
+        let mi = self.push(empty);
+        for i in 0..n {
+            let (name, id) = unsafe {
+                let g = &*core::ptr::addr_of!(GRANTS);
+                (g[i].0.clone(), g[i].1)
+            };
+            let k = self.keyword(None, &name);
+            let ki = self.push(k);
+            let label = self.string(&name);
+            let li = self.push(label);
+            let lv = self.r(li);
+            let o = self.new_opaque(lv, id);
+            let oi = self.push(o);
+            let (m, kv, ov) = (self.r(mi), self.r(ki), self.r(oi));
+            let m = self.assoc(m, kv, ov);
+            self.set_r(mi, m);
+        }
+        let m = self.r(mi);
+        self.pop_to(base);
+        m
+    }
+}
+
 impl Rt {
     pub fn new() -> Rt {
         Rt::with_heap(2 * 1024 * 1024, 512 * 1024 * 1024)

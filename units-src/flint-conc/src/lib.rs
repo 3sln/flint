@@ -142,7 +142,11 @@ builtin!(flint_b_open, b_open, |rt, a, n| {
     if !rt.is_string(name) {
         return rt.throw_str("ClassCastException", "open wants a capability name (a string)");
     }
-    rt.port_open(name, format)
+    // A third argument is the CAPABILITY the caller presents (0022). The
+    // runtime records it and carries it to the host; it does not judge it,
+    // because only the host has a grant table.
+    let cap = if n > 2 { arg(rt, a, 2) } else { NIL };
+    rt.port_open_with(name, format, cap)
 });
 
 builtin!(flint_b_port_send, b_port_send, |rt, a, n| {

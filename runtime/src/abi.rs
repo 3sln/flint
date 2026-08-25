@@ -130,6 +130,40 @@ pub extern "C" fn arg_alloc(len: u32) -> u32 {
 }
 
 #[no_mangle]
+pub extern "C" fn flint_grant(ptr: u32, len: u32, host_id: u32) {
+    unsafe {
+        ensure_arena();
+        let bytes = core::slice::from_raw_parts(ptr as *const u8, len as usize);
+        let name: alloc::string::String = core::str::from_utf8(bytes).unwrap_or("").into();
+        crate::rt::add_grant(name, host_id as u64);
+    }
+}
+
+/// The host id of an opaque value, or 0 if it is not one or was guest-minted.
+///
+/// This is how a host answers "is this a capability I issued" -- by looking the
+/// id up in its OWN grant table. 0022 is explicit that the check can never be
+/// "is it opaque": guest code can mint as many opaque values as it likes.
+#[no_mangle]
+pub extern "C" fn flint_opaque_host_id(lo: u32, hi: u32) -> u32 {
+    unsafe {
+        let rt = ensure_rt();
+        let v = crate::value::Value(((hi as u64) << 32) | lo as u64);
+        rt.opaque_host_id(v) as u32
+    }
+}
+
+/// The host id of the capability presented at `open` on the port `port_id`, or
+/// 0 if none was. The host looks this up in its own grant table.
+#[no_mangle]
+pub extern "C" fn flint_presented_capability(port_id: u32) -> u32 {
+    unsafe {
+        let rt = ensure_rt();
+        rt.presented_capability(port_id) as u32
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn arg_push(ptr: u32, len: u32) {
     unsafe {
         ensure_arena();

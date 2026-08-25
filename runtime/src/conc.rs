@@ -122,7 +122,21 @@ pub const PT_OPTS: u32 = 11;
 /// formats happen to be UTF-8, but a binary one (Transit-msgpack) is not, so
 /// its payloads travel as vectors of 0..255 rather than as strings.
 pub const PT_BINARY: u32 = 12;
-pub const PT_LEN: u32 = 13;
+/// The host id of the capability the opener PRESENTED, or 0 (`0022`).
+///
+/// Recorded rather than checked here: the runtime has no grant table and no
+/// business having one. It carries the claim across to the host, which is the
+/// only party that can say whether it issued this id. That is why the check is
+/// never "is it opaque" -- guest code can mint those all day.
+pub const PT_PRESENTED: u32 = 13;
+/// Nothing was presented at `open`.
+pub const PRESENTED_NONE: i64 = 0;
+/// Something was presented that this runtime did not receive from the host --
+/// a guest-minted opaque value, or any other value entirely. Distinct from
+/// `PRESENTED_NONE`, because a host that cannot tell them apart will accept a
+/// forgery by treating it as an absence.
+pub const PRESENTED_UNKNOWN: i64 = 0xFFFF_FFFF;
+pub const PT_LEN: u32 = 14;
 
 /// One end of a `channel` pair: no host involvement at all.
 pub const K_CHANNEL: i64 = 0;
@@ -1548,6 +1562,25 @@ impl Rt {
     /// never hands one back. It is told the token to answer with and the id of
     /// the end it will hold.
     pub fn port_open(&mut self, name: Value, format: Value) -> Value {
+        self.port_open_with(name, format, NIL)
+    }
+
+    pub fn port_open_with(&mut self, name: Value, format: Value, cap: Value) -> Value {
+        // Read the presented id FIRST, before anything allocates. It is a
+        // fixnum from then on, so it needs no rooting -- which is cheaper and
+        // safer than carrying `cap` through the shadow stack for one field.
+        //
+        // Three cases, and collapsing the last two is a security hole rather
+        // than a simplification: presenting NOTHING is not the same as
+        // presenting something the host never issued. The first version
+        // reported both as 0, so a guest-minted `(opaque "fs")` was accepted --
+        // the host saw "no capability offered" and fell back to allowing it.
+        let presented = if cap.is_nil() {
+            PRESENTED_NONE
+        } else {
+            let id = self.opaque_host_id(cap);
+            if id == 0 { PRESENTED_UNKNOWN } else { id as i64 }
+        };
         self.ensure_sched();
         let base = self.mark();
         let ni = self.push(name);
@@ -1585,6 +1618,10 @@ impl Rt {
         let t = self.r(ti);
         self.set(t, TH_TOKEN, Value::fixnum(token));
         let host_id = fx(self.slot(self.r(hi), PT_ID));
+        // The presented capability's host id travels with the port, for the
+        // host to look up in its own grant table when it sees the open-request.
+        let hv = self.r(hi);
+        self.set(hv, PT_PRESENTED, Value::fixnum(presented));
         let nm = self.r(ni);
         self.push_event(EV_OPEN, token, host_id, nm);
         let target = self.r(ei);
@@ -1810,6 +1847,19 @@ impl Rt {
     /// pushed `:closed` an optimisation over polling rather than the sole
     /// carrier of the truth. 255 means the runtime knows nothing about this id,
     /// which a host should also treat as "done".
+    /// The host id of the capability presented when this port was opened, or 0.
+    ///
+    /// The runtime records the claim and answers questions about it; it never
+    /// judges it. Only the host holds a grant table (`doc/decisions/0022`).
+    pub fn presented_capability(&mut self, host_port_id: u32) -> i64 {
+        let p = self.port_by_id(host_port_id as i64);
+        if p.is_nil() {
+            return 0;
+        }
+        let v = self.slot(p, PT_PRESENTED);
+        if v.is_fixnum() { v.as_fixnum() } else { 0 }
+    }
+
     pub fn host_port_state(&mut self, host_port_id: i64) -> i64 {
         let host = self.port_by_id(host_port_id);
         if host.is_nil() {
