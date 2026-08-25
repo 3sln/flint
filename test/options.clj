@@ -12,6 +12,8 @@
     (println "  ok  " label)
     (do (swap! fails inc) (println "  FAIL" label "expected" expected "got" actual))))
 
+(defn check-that [label ok] (check label (boolean ok) true))
+
 (defn flint [& args]
   (let [p (.start (ProcessBuilder. (into-array String (cons "./bin/flint" (map str args)))))
         out (slurp (.getInputStream p))
@@ -114,6 +116,49 @@
 (check "an earlier directory wins, and the loser is reported" (:exit shadow) 0)
 (check "  ... naming both manifests"
        (str/includes? (:all shadow) "is shadowed by test/fixtures/wasm-path/demo/shout.unit.edn") true)
+
+;; ------------------------------------------------- :features, and elisions
+;;
+;; A reader conditional matching nothing DELETES the form it stood in. That is
+;; how a library compiles with functions missing, and how a `:require` becomes
+;; invisible -- so the compile says which ones, and `:features` is what changes
+;; the answer.
+(def fd (str (fs/create-temp-dir)))
+(spit (str fd "/f.cljc")
+      (str "(ns f)\n"
+           "(def platform #?(:clj \"jvm\" :cljs \"js\"))\n"
+           "(def known #?(:cljs 1 :default 9))\n"
+           "(defn main [_] (str platform \" \" known))\n"))
+
+(def elided (flint ":src" fd ":fn" "f/main" ":out" "out/opt-elide.wasm"))
+(check "an elided conditional is reported, with its file and line" (:exit elided) 0)
+(check-that "  ... naming the count, the features tried, and what it offered"
+            (and (str/includes? (:all elided) "matched none of :flint")
+                 (str/includes? (:all elided) "was DELETED")
+                 (str/includes? (:all elided) "offering :clj/:cljs")))
+(check-that "  ... but a :default branch is not reported"
+            (not (str/includes? (:all elided) "lines 2, 3")))
+
+(def picked (flint ":src" fd ":fn" "f/main" ":features" "[flint cljs]"
+                   ":out" "out/opt-feat.wasm"))
+(check ":features selects a branch instead" (:exit picked) 0)
+(check-that "  ... and then there is nothing to report"
+            (not (str/includes? (:all picked) "was DELETED")))
+(check "  ... and the branch it selected is the one that runs"
+       (str/trim (run "out/opt-feat.wasm")) "js 1")
+
+;; The crash this replaced said `Don't know how to create ISeq from:
+;; clojure.lang.Symbol`, which names nothing a reader can act on. It is reached
+;; by elision rather than by typo: rewrite-clj writes the argument vector itself
+;; inside a conditional.
+(spit (str fd "/g.cljc")
+      (str "(ns g)\n(defn- broken #?(:clj [x]) (inc x))\n(defn main [_] \"ok\")\n"))
+(def novec (flint ":src" fd ":fn" "g/main" ":out" "out/opt-novec.wasm"))
+(check "a fn with no argument vector is diagnosed, not crashed on" (:exit novec) 1)
+(check-that "  ... naming the function, the line, and what it found"
+            (and (str/includes? (:all novec) "a fn arity needs an argument vector")
+                 (str/includes? (:all novec) "g/broken")
+                 (not (str/includes? (:all novec) "ISeq"))))
 
 (if (zero? @fails)
   (println "options: ok")

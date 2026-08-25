@@ -142,6 +142,21 @@
         arities (if (vector? (first more)) (list more) more)
         arities (map (fn [a]
                        (let [[params & body] a
+                             ;; Checked, because the thing that gets here
+                             ;; malformed is not usually a typo. A reader
+                             ;; conditional selecting nothing DELETES the form
+                             ;; it stood in, and rewrite-clj writes
+                             ;; `(defn- f #?(:clj ^String [node] :cljs ...) ..)`
+                             ;; -- so the argument vector itself vanishes and
+                             ;; `(defn- f (let [..] ..))` reaches here. Without
+                             ;; this the host threw `Don't know how to create
+                             ;; ISeq from: clojure.lang.Symbol`, which names
+                             ;; nothing a reader can act on.
+                             _ (when-not (vector? params)
+                                 (throw (ex-info
+                                         (str "a fn arity needs an argument vector, got "
+                                              (if (nil? params) "nothing" (pr-str params)))
+                                         {:type :compile :form form :got params})))
                              [fixed restp] (split-variadic params)
                              all (if restp (conj fixed '& restp) fixed)
                              [p2 & b2] (expand-fn-arity (cons (vec (remove #{'&} all)) body))
