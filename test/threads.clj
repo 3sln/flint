@@ -124,7 +124,13 @@
            "  (let [[a b] (p/channel 2)]\n"
            "    (pr-str [(try (p/send a helper) (catch Throwable e (ex-message e)))\n"
            "             (try (p/send a b) (catch Throwable e (ex-message e)))\n"
-           "             (try (p/send a [1 {:k helper}]) (catch Throwable e (ex-message e)))])))"))
+           "             (try (p/send a [1 {:k helper}]) (catch Throwable e (ex-message e)))\n"
+           ;; An opaque value is identity and nothing else (0022). Anything a
+           ;; codec could write down, a receiver could write down too -- and
+           ;; then it is mintable, which is the whole property gone. Same
+           ;; rejection as a port, for the same reason.
+           "             (try (p/send a (opaque \"fs\")) (catch Throwable e (ex-message e)))\n"
+           "             (try (p/send a {:cap (opaque)}) (catch Throwable e (ex-message e)))])))"))
 (def crossing (run! (build! "crossing")))
 (check-that "a function is refused at the send, by name"
             (str/includes? crossing "helper is a function"))
@@ -132,6 +138,10 @@
             (str/includes? crossing "a port cannot be sent through a port"))
 (check-that "a function nested inside a value is refused too"
             (str/includes? crossing "helper is a function"))
+(check-that "an opaque value cannot be sent through a port"
+            (str/includes? crossing "an opaque value cannot be sent through a port"))
+(check-that "  ... nor nested inside one, which is how a capability would leak"
+            (= 2 (count (re-seq #"an opaque value cannot be sent" crossing))))
 
 ;; ------------------------------------------------- parking through a value
 ;;

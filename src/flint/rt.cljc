@@ -128,6 +128,15 @@
 (defn volatile [x] (clojure.core/volatile! x))
 (defn volatile? [x] (instance? clojure.lang.Volatile x))
 
+;; Opaque values (doc/decisions/0022), for the bootstrap host. On the JVM the
+;; thing flint is reproducing already exists, so a label carried alongside an
+;; `(Object.)` is the whole implementation.
+(defrecord ^:private Opaque [id label])
+(def ^:private opaque-counter (atom 0))
+(defn opaque [label] (->Opaque (swap! opaque-counter inc) label))
+(defn opaque? [x] (instance? Opaque x))
+(defn opaque-label [x] (when (opaque? x) (:label x)))
+
 (def meta clojure.core/meta)
 (def with-meta clojure.core/with-meta)
 

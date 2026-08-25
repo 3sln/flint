@@ -447,6 +447,27 @@ builtins! {
         let v = arg(rt, a, 0);
         rt.new_volatile(v)
     };
+    // Opaque values (doc/decisions/0022): flint's replacement for Clojure's
+    // `(Object.)`, which it cannot have because it has no host classes.
+    "flint/opaque", flint_b_opaque, b_opaque, |rt, a, n| {
+        // The label is for PRINTING and plays no part in identity: two opaque
+        // values with the same label are still distinct, and that is the point.
+        let label = if n > 0 { arg(rt, a, 0) } else { NIL };
+        rt.new_opaque(label, 0)
+    };
+    "flint/opaque?", flint_b_opaquep, b_opaquep, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        Value::boolean(rt.is_opaque(v))
+    };
+    // The LABEL is readable; the host id is not, and there is deliberately no
+    // builtin that returns it. Reading provenance from guest code would invite
+    // exactly the check 0022 forbids.
+    "flint/opaque-label", flint_b_opaquelabel, b_opaquelabel, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        rt.opaque_label(v)
+    };
     "flint/volatile?", flint_b_volatilep, b_volatilep, |rt, a, n| {
         let _ = n;
         let v = arg(rt, a, 0);

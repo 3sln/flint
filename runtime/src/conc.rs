@@ -963,6 +963,13 @@ impl Rt {
             TY_PORT => Err("a port cannot be sent through a port: only data crosses. \
                             A capability cannot be delegated at run time."
                 .into()),
+            // An opaque value is identity and nothing else (doc/decisions/0022),
+            // so there is nothing to serialise that would still BE it. Anything
+            // a codec could write down is something the receiver could write
+            // down too, and then it is mintable -- which is the entire property
+            // gone. Same rejection as a port, for the same reason.
+            crate::obj::TY_OPAQUE => Err("an opaque value cannot be sent through a port:                                           it is identity, and identity does not serialise."
+                .into()),
             TY_STR | crate::obj::TY_ROPE | TY_SYM | TY_KW | TY_BIGINT | TY_REGEX => Ok(()),
             _ => {
                 let base = self.mark();

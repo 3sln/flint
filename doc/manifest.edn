@@ -218,6 +218,9 @@
     num
     number?
     odd?
+    opaque
+    opaque-label
+    opaque?
     or
     parse-boolean
     parse-double
@@ -392,7 +395,7 @@
     when-not
     when-some
     while},
-  :count 341,
+  :count 344,
   :absent
   #{*'
     *1
@@ -721,6 +724,9 @@
     mapcat2
     methods-of
     nil-or
+    opaque
+    opaque-label
+    opaque?
     println-str
     re-quote-replacement
     repeat-forever

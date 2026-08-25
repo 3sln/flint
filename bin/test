@@ -67,6 +67,11 @@ bb test/loader.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail
 grep -E "^    |FAIL" /tmp/flint-test.out || true
 tail -1 /tmp/flint-test.out
 
+echo "== opaque: identity without structure, across a moving collector (0022)"
+bb test/opaque.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/opaque.clj"; }
+grep -E "^    |FAIL" /tmp/flint-test.out || true
+tail -1 /tmp/flint-test.out
+
 echo "== cli: the command surface, tasks, and running an image directly (0021)"
 bb test/cli.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/cli.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true

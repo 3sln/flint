@@ -92,6 +92,9 @@
    "deref" flint.rt/deref
    "reset!" flint.rt/reset!
    "flint/volatile" flint.rt/volatile
+   "flint/opaque" flint.rt/opaque
+   "flint/opaque?" flint.rt/opaque?
+   "flint/opaque-label" flint.rt/opaque-label
    "flint/volatile?" flint.rt/volatile?
    "meta" flint.rt/meta
    "with-meta" flint.rt/with-meta

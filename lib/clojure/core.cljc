@@ -1026,6 +1026,10 @@
     (vector? x) (flint.rt/str2 "[" (flint.rt/str2 (join-with* " " x readable?) "]"))
     (set? x) (flint.rt/str2 "#{" (flint.rt/str2 (join-with* " " x readable?) "}"))
     (map? x) (flint.rt/str2 "{" (flint.rt/str2 (join-entries* x readable?) "}"))
+    ;; No read syntax, deliberately: a value whose printed form can be read
+    ;; back is forgeable by construction (0022).
+    (opaque? x) (let [l (opaque-label x)]
+                  (if (nil? l) "#<opaque>" (flint.rt/str2 "#<opaque " (flint.rt/str2 (pr-str* l false) ">"))))
     (seq? x) (flint.rt/str2 "(" (flint.rt/str2 (join-with* " " x readable?) ")"))
     (sequential? x) (flint.rt/str2 "(" (flint.rt/str2 (join-with* " " x readable?) ")"))
     :else "#<unprintable>"))
@@ -1193,6 +1197,31 @@
 (defn volatile! [x] (flint.rt/volatile x))
 (defn vreset! [v x] (flint.rt/reset! v x))
 (defn volatile? [x] (flint.rt/volatile? x))
+
+;; --------------------------------------------------------- opaque values
+;;
+;; `doc/decisions/0022`. Clojure's unique-sentinel idiom is `(Object.)` --
+;; how you tell ABSENT from present-and-nil, how a library gets a key nobody
+;; can collide with, how a protocol keeps a private marker. flint has no host
+;; classes, so it had no way to say it.
+
+(defn opaque
+  "A value equal only to itself. `(opaque)` twice gives two different values.
+
+  The optional label is for PRINTING and plays no part in identity: two opaque
+  values with the same label are still distinct, which is the point.
+
+  Minting one grants nothing -- see 0022. Anyone can, so possession of *an*
+  opaque value is never authority; only the host recognising a specific one is."
+  ([] (flint.rt/opaque nil))
+  ([label] (flint.rt/opaque label)))
+
+(defn opaque? [x] (flint.rt/opaque? x))
+
+(defn opaque-label
+  "The label an opaque value was given, or nil. Printing only."
+  [x]
+  (flint.rt/opaque-label x))
 (defn vswap!
   ([v f] (flint.rt/reset! v (f (flint.rt/deref v))))
   ([v f a] (flint.rt/reset! v (f (flint.rt/deref v) a)))

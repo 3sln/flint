@@ -78,6 +78,10 @@ pub struct Rt {
     /// handler with an unwound stack.
     #[cfg(feature = "aot")]
     pub unwinds: u64,
+    /// The next identity for an opaque value (`doc/decisions/0022`). A counter
+    /// rather than the address, because the nursery moves objects and an
+    /// identity hash that changes under collection makes a map key unfindable.
+    pub next_opaque: u64,
     /// The `base_depth` the innermost `run` was called with. `parked` needs it
     /// -- a park is illegal when Rust frames are live underneath -- and compiled
     /// code cannot be passed it, so the loop leaves it here.
@@ -153,6 +157,9 @@ impl Rt {
             aot_depth: 0,
             #[cfg(feature = "aot")]
             unwinds: 0,
+            // From 1: a `host-id` of 0 means "guest-minted", so identities and
+            // host ids never share the sentinel.
+            next_opaque: 1,
             #[cfg(feature = "aot")]
             run_base: 0,
             steps: 0,

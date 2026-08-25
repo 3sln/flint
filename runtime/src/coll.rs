@@ -895,6 +895,55 @@ impl Rt {
         Value::heap(a)
     }
 
+    // --- opaque values (doc/decisions/0022) -------------------------------------
+
+    /// Mint an opaque value: identity without structure.
+    ///
+    /// `host_id` is 0 for anything guest code asked for. A non-zero one marks a
+    /// value only the host could have made -- but that is a RECORD of
+    /// provenance, not a permission. 0022 is explicit about the hazard the
+    /// guest-minted kind introduces: because a program can mint its own,
+    /// authority can never be "is it opaque", only the host recognising this
+    /// specific object in its own grant table.
+    pub fn new_opaque(&mut self, label: Value, host_id: u64) -> Value {
+        let base = self.mark();
+        let li = self.push(label);
+        let a = self.alloc(TY_OPAQUE, 3);
+        if a == 0 {
+            self.pop_to(base);
+            return NIL;
+        }
+        let label = self.r(li);
+        self.pop_to(base);
+        let id = self.next_opaque;
+        self.next_opaque = self.next_opaque.wrapping_add(1);
+        self.gc.set_slot(a, 0, label);
+        // STORED, not derived from `a`: the nursery is a copying collector, so
+        // an address-derived hash would change under collection and a value in
+        // a map would stop being findable by the key that put it there.
+        self.gc.set_slot(a, 1, Value::fixnum(id as i64));
+        self.gc.set_slot(a, 2, Value::fixnum(host_id as i64));
+        Value::heap(a)
+    }
+
+    pub fn is_opaque(&self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_OPAQUE
+    }
+
+    /// The host id, or 0 for a guest-minted value. Not reachable from guest
+    /// code -- there is no builtin that returns it.
+    pub fn opaque_host_id(&self, v: Value) -> u64 {
+        if !self.is_opaque(v) {
+            return 0;
+        }
+        let s = slot(&self.gc.sp, v.as_heap(), 2);
+        if s.is_fixnum() { s.as_fixnum() as u64 } else { 0 }
+    }
+
+    pub fn opaque_label(&self, v: Value) -> Value {
+        if self.is_opaque(v) { slot(&self.gc.sp, v.as_heap(), 0) } else { NIL }
+    }
+
     // --- diagnostics ------------------------------------------------------------
 
     pub fn gc_stats_map(&mut self) -> Value {

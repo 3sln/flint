@@ -211,6 +211,15 @@ impl Rt {
             | TY_RANGE => self.hash_ordered(v),
             TY_ARRAYMAP | TY_HASHMAP => self.hash_map(v),
             TY_SET => self.hash_set(v),
+            // An opaque value carries its own identity, assigned at creation
+            // and STORED (`doc/decisions/0022`). The per-type constant below
+            // would be correct -- equality is identity, so collisions only cost
+            // time -- but it would put every opaque value in one bucket, and
+            // the whole point of the type is to be a distinct key.
+            crate::obj::TY_OPAQUE => {
+                let id = crate::obj::slot(&self.gc.sp, v.as_heap(), 1);
+                hash::hash_long(if id.is_fixnum() { id.as_fixnum() } else { 0 })
+            }
             // Functions, atoms, vars and the like are only ever `=` to
             // themselves, so a per-type constant is a correct (if unhelpful)
             // hash. A moving collector rules out using the address.

@@ -75,7 +75,22 @@ pub const TY_SCHED: u8 = 41; // see conc::SC_*
 /// subtree and never where it sits, because the same leaf appears at different
 /// offsets in `(str a b)` and `(str b a)` and sharing is the point.
 pub const TY_ROPE: u8 = 42;
-pub const TY_MAX: u8 = 43;
+/// An opaque value (`doc/decisions/0022`): `[label, hash, host-id]`.
+///
+/// Identity without structure -- flint's replacement for Clojure's `(Object.)`,
+/// which it cannot have because it has no host classes. Two of them are `=`
+/// only when they are the same object.
+///
+/// The hash is STORED rather than derived from the address, because the nursery
+/// is a copying collector and objects move: an address-derived identity hash
+/// would change under collection and a value used as a map key would become
+/// unfindable by the key that put it there.
+///
+/// `host-id` is 0 for anything guest code minted and non-zero only for a value
+/// the host made. Guest code cannot read it, and -- see 0022 -- authority is
+/// never the type test but always the host recognising THIS object.
+pub const TY_OPAQUE: u8 = 43;
+pub const TY_MAX: u8 = 44;
 
 /// Every type tag must be distinct. This list exists because they were not:
 /// `TY_THREAD`/`TY_PORT`/`TY_SCHED` were first numbered 33..35, which silently
@@ -90,7 +105,7 @@ const _: () = {
         TY_CLOSURE, TY_NATIVEFN, TY_VAR, TY_ATOM, TY_TVEC, TY_TMAP, TY_TSET,
         TY_RECORD, TY_REGEX, TY_REDUCED, TY_EXINFO, TY_MULTIFN, TY_DELAY,
         TY_VOLATILE, TY_RAW, TY_ITERSEQ, TY_CHUNKSEQ, TY_TYPE, TY_THREAD, TY_PORT,
-        TY_SCHED, TY_ROPE,
+        TY_SCHED, TY_ROPE, TY_OPAQUE,
     ];
     let mut i = 0;
     while i < tags.len() {
