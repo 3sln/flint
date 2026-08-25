@@ -572,8 +572,16 @@ impl Rt {
     /// `subs`, in code points.
     pub fn substring(&mut self, s: Value, start: i64, end: Option<i64>) -> Value {
         let s = self.string_arg(s);
+        // The slice, not the source. Charging the whole string per call made
+        // the COUNTER quadratic for splitting -- n slices of an n-byte string is
+        // n^2 gas for n bytes of copying -- which is the same defect as
+        // `str_index_of`'s charge, in the same shape, one function along.
+        // `test/scaling.clj` found it on its first run.
         let n = if self.is_string(s) { self.str_len(s) } else { 0 };
-        self.charge_bytes(n);
+        let took = end
+            .map(|e| (e - start).max(0) as u32)
+            .unwrap_or_else(|| n.saturating_sub(start.max(0) as u32));
+        self.charge_bytes(took.min(n));
         if self.str_indexable(s) {
             let n = self.str_len(s) as i64;
             let e = end.unwrap_or(n);
@@ -744,11 +752,11 @@ impl Rt {
         // A naive search is O(haystack x needle); charging the haystack keeps a
         // long scan from being free.
         let hn = if self.is_string(haystack) { self.str_len(haystack) } else { 0 };
-        // Charge the region that can actually be scanned, not the whole
-        // haystack. Charging `hn` per call made the GAS quadratic for a scan
-        // that is linear overall -- the counter said `str/split` did n^2 work
-        // because the charge, not the search, was quadratic.
-        self.charge_bytes(hn.saturating_sub(from.max(0) as u32));
+        // Charged AFTER the search, for the distance actually scanned -- see
+        // below. Charging the whole haystack made the counter quadratic;
+        // charging what remained after `from` still did, because a scan that
+        // stops at the first match walks a few bytes and was billed for the
+        // rest of the string. Same defect, third variation, same session.
         // The header already carries this bit (`str_is_ascii`), set once when
         // the string was built. Asking `&str::is_ascii()` instead rescanned the
         // WHOLE haystack on every call, which made `str/split` quadratic: 6 800
@@ -797,6 +805,12 @@ impl Rt {
                 h[start_byte..].find(nd).map(|b| h[..start_byte + b].chars().count())
             }
         };
+        let skip = from.max(0) as u32;
+        let scanned = match found {
+            Some(i) => (i as u32).saturating_sub(skip) + 1,
+            None => hn.saturating_sub(skip),
+        };
+        self.charge_bytes(scanned);
         match found {
             Some(i) => Value::fixnum(i as i64),
             None => NIL,

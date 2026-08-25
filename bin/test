@@ -57,6 +57,11 @@ echo
 echo "== threads: green threads, ports, protocols, dynamic vars"
 bb test/threads.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/threads.clj"; }
 
+echo "== scaling: doubling the input must not square the work"
+bb test/scaling.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/scaling.clj"; }
+grep -E "^    |FAIL" /tmp/flint-test.out || true
+tail -1 /tmp/flint-test.out
+
 echo "== ropes: three tiers, one string, and the flattens counted (0011)"
 bb test/ropes.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; ./bin/build-units > /dev/null; fail "test/ropes.clj"; }
 grep -E "^    |FAIL" /tmp/flint-test.out || true
