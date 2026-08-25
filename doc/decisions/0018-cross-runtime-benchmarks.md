@@ -1,9 +1,10 @@
 # 0018 — Benchmark across wasm runtimes, because every number so far is V8
 
-> **BUILT**, for five engines: node, deno, bun, workerd and wasmtime, plus wasm3
-> as the small-embedder case. `bin/bench-xruntime` and `bin/bench-image`.
-> SpiderMonkey is still missing. **Chicory is measured, and it decides `0010`'s
-> JVM tier against tier 1** — see below.
+> **BUILT**, for eight engines: node, deno, bun, workerd, wasmtime, SpiderMonkey,
+> wasm3 and Chicory. `bin/bench-xruntime`, `bin/bench-image`,
+> `bin/bench-chicory`.
+> **Chicory is measured, and it decides `0010`'s JVM tier against tier 1** — see
+> below.
 >
 > **One of this document's central predictions is wrong, and the measurement is
 > below.** It says AOT regions matter most on an engine with no tier-up. They
@@ -70,22 +71,26 @@ legitimate: 33,233 per iteration, verified linear to the instruction.
 
 | engine | per iter | ns/instr | vs V8 | fixed cost | R² | AOT |
 |---|---:|---:|---:|---:|---:|---:|
-| node (V8) | 0.364 ms | 11.0 | 1.00× | 32.13 ms | 0.9980 | 1.41× |
-| bun (JavaScriptCore) | 0.358 ms | 10.8 | 0.98× | 27.66 ms | 0.9583 | 1.14× |
-| deno (V8) | 0.512 ms | 15.4 | 1.40× | 24.56 ms | 0.9961 | 1.52× |
-| wasmtime (Cranelift) | 0.325 ms | 9.8 | 0.89× | 6.41 ms | 0.9999 | 1.15× |
-| wasm3 (interpreter) | 5.665 ms | 170.5 | 15.55× | 4.27 ms | 0.9999 | 1.16× |
+| node (V8) | 0.366 ms | 11.0 | 1.00× | 31.64 ms | 0.9976 | 1.44× |
+| bun (JavaScriptCore) | 0.359 ms | 10.8 | 0.98× | 27.51 ms | 0.9626 | 1.15× |
+| deno (V8) | 0.529 ms | 15.9 | 1.44× | 26.11 ms | 0.9971 | 1.64× |
+| wasmtime (Cranelift) | 0.322 ms | 9.7 | 0.88× | 6.74 ms | 0.9999 | 1.18× |
+| spidermonkey | 0.523 ms | 15.7 | 1.43× | 18.63 ms | 0.9982 | 1.44× |
+| wasm3 (interpreter) | 5.482 ms | 165.0 | 15.02× | 11.87 ms | 0.9998 | 1.07× |
 
-**The spread between JIT engines is small — about 1.4× at worst — and the
-interpreter is 15.6× slower.** That is the deployment fact: anywhere with a
-JIT, flint costs about the same; on a small embedder it costs fifteen times
-more. wasm3's fixed cost is the lowest of all, so its trade is fast to start and
-slow to run.
+**The spread between JIT engines is small — about 1.5× at worst — and the
+interpreter is 15× slower.** That is the deployment fact: anywhere with a JIT,
+flint costs about the same; on a small embedder it costs fifteen times more.
 
-bun's R² of 0.958 is below the bar and its row is left saying so. R² is reported
-because the first version of this table fitted counts 0..8 against a 20–35 ms
-process start and confidently reported node at 5.1 ns/instruction and deno at
-26.9 — both V8.
+**The browser story is the good news**: V8 11.0, JavaScriptCore 10.8,
+SpiderMonkey 15.7. A page gets within 1.5× wherever it runs.
+
+bun's R² sits at ~0.96 however many repetitions it is given, so its cost is not
+linear in the work — but its in-process figure from `bin/bench-image` (8.1
+ns/instruction) corroborates the slope, so the row is kept with the caveat
+rather than dropped or trusted. R² is reported at all because the first version
+of this table fitted counts 0..8 against a 20–35 ms process start and
+confidently reported node at 5.1 ns/instruction and deno at 26.9 — both V8.
 
 ### The AOT prediction was backwards
 
@@ -99,10 +104,12 @@ either way, so it is the same work and not less of it:
 
 | | AOT speedup |
 |---|---:|
-| deno (V8) | 1.52× |
-| node (V8) | 1.41× |
-| wasm3 (interpreter) | 1.16× |
-| wasmtime (Cranelift) | 1.15× |
+| deno (V8) | 1.64× |
+| node (V8) | 1.44× |
+| spidermonkey | 1.44× |
+| wasmtime (Cranelift) | 1.18× |
+| bun (JavaScriptCore) | 1.15× |
+| wasm3 (interpreter) | 1.07× |
 
 **The JIT engines gain most and the interpreter gains least.** The reason is
 visible once stated: on wasm3 the wasm blocks AOT emits are themselves

@@ -348,11 +348,12 @@ structures it is 7–19 ns per instruction, which is the same dispatch cost
 diluted by real work.
 
 > **Every figure in this section is V8** (node), which is one engine out of
-> several flint runs on. Across five, the same construe workload costs 9.8
-> ns/instruction on wasmtime, 10.8 on JavaScriptCore, 11.0 on V8 and **170.5 on
-> wasm3**, a pure interpreter. The spread between JIT engines is about 1.4× and
-> the interpreter is 15.6× slower. `bin/bench-xruntime`, and
-> `doc/decisions/0018` for the tables and what they decide. So dispatch is roughly a third of the time on
+> eight flint runs on. The same construe workload costs 9.7 ns/instruction on
+> wasmtime, 10.8 on JavaScriptCore, 11.0 on V8, 15.7 on SpiderMonkey, **165 on
+> wasm3** (a pure interpreter) and **426 on Chicory** (a wasm engine written in
+> Java). The spread between JIT engines is about 1.5×, so a browser gets within
+> 1.5× wherever it runs; an embedded interpreter costs 15×. `bin/bench-xruntime`,
+> and `doc/decisions/0018` for the tables and what they decide. So dispatch is roughly a third of the time on
 allocation-light code and much less elsewhere: superinstructions would help the
 tight-loop case and little else. The number comes from timing a workload with
 the step counter off and counting it with the counter on — the counter is gated

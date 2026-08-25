@@ -61,17 +61,30 @@ export function cliEngines() {
       cmd: (m) => ['deno', ['run', '--allow-read', 'bench/xrt-run.mjs', m]] },
     { name: 'wasmtime (Cranelift)', kind: 'jit',
       cmd: (m) => [wasmtime, ['--invoke', 'main', m]] },
+    // The SpiderMonkey shell has no ESM and no `process`, so it gets a `.js`
+    // sibling that does the identical work.
+    { name: 'spidermonkey', kind: 'jit',
+      cmd: (m) => ['js', ['bench/xrt-run.js', m]] },
     { name: 'wasm3 (interpreter)', kind: 'interp',
       cmd: (m) => ['wasm3', ['--func', 'main', m]] },
   ];
-  return list.filter((e) => {
+  const present = [], absent = [];
+  for (const e of list) {
     const [bin] = e.cmd(mod(0, false));
-    if (bin.startsWith('/')) return existsSync(bin);
-    // `which`, not `command -v` through a shell: the shell form concatenates
-    // rather than escapes its arguments, and node deprecates it for that.
-    try { execFileSync('which', [bin], { stdio: 'ignore' }); return true; }
-    catch { return false; }
-  });
+    let ok;
+    if (bin.startsWith('/')) ok = existsSync(bin);
+    else {
+      // `which`, not `command -v` through a shell: the shell form concatenates
+      // rather than escapes its arguments, and node deprecates it for that.
+      try { execFileSync('which', [bin], { stdio: 'ignore' }); ok = true; }
+      catch { ok = false; }
+    }
+    (ok ? present : absent).push(e);
+  }
+  // 0018: an engine flint cannot be run on is LISTED as such rather than
+  // omitted, so a short table is visibly short rather than quietly complete.
+  cliEngines.absent = absent;
+  return present;
 }
 
 /// The engine's own version string. 0018 requires it recorded, because engine
@@ -138,6 +151,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   console.log('  ' + pad0('flint', 24) + execFileSync('git', ['rev-parse', '--short', 'HEAD'],
                                                       { encoding: 'utf8' }).trim());
+  for (const e of cliEngines.absent || []) {
+    console.log('  ' + pad0(e.name, 24) + 'NOT INSTALLED -- no row below');
+  }
+  console.log('  ' + pad0('chicory (JVM)', 24) + 'measured separately: bin/bench-chicory');
   console.log();
   // `0018` says the AOT ratio is the number that varies most between engines,
   // and names the reason: on V8 TurboFan optimises the dispatch loop hard, so
@@ -188,6 +205,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   console.log('  fixed cost   the fitted intercept: process start + compile + instantiate.');
   console.log('  R2           fit quality. Anything below ~0.99 is a slope through noise');
   console.log('               and the ns/instruction beside it should not be believed.');
+  console.log('               bun sits at ~0.96 however many repetitions it is given, so');
+  console.log('               its cost is not linear in the work -- but its in-process');
+  console.log('               figure from bin/bench-image (8.1 ns) corroborates the slope,');
+  console.log('               so the row is kept with the caveat rather than either way.');
   console.log();
   if (haveAot) {
     console.log('  AOT          speedup from compiling bytecode to wasm blocks (0013), same');
