@@ -82,6 +82,10 @@ pub struct Rt {
     /// rather than the address, because the nursery moves objects and an
     /// identity hash that changes under collection makes a map key unfindable.
     pub next_opaque: u64,
+    /// How many host-minted opaque values the last `restore` invalidated. A
+    /// counter so a test can assert the sweep SAW them -- a snapshot that
+    /// carried no capabilities proves nothing about one that did.
+    pub restored_capabilities: u32,
     /// The `base_depth` the innermost `run` was called with. `parked` needs it
     /// -- a park is illegal when Rust frames are live underneath -- and compiled
     /// code cannot be passed it, so the loop leaves it here.
@@ -217,6 +221,7 @@ impl Rt {
             // From 1: a `host-id` of 0 means "guest-minted", so identities and
             // host ids never share the sentinel.
             next_opaque: 1,
+            restored_capabilities: 0,
             #[cfg(feature = "aot")]
             run_base: 0,
             steps: 0,

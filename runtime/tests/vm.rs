@@ -781,6 +781,58 @@ fn a_snapshot_round_trips_byte_for_byte() {
     assert!(first == second, "snapshot bytes changed across a round trip");
 }
 
+/// An imported snapshot grants NOTHING (`doc/decisions/0022`).
+///
+/// A capture is a memcpy, so a host-minted capability comes back byte for byte
+/// -- host id and all -- and a snapshot taken from a run that held `:fs` would
+/// hand `:fs` to whoever imported it. That is the one asymmetry between the two
+/// kinds of opaque value: a restored run is entitled to the IDENTITIES it had,
+/// and to none of the authority.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn an_imported_snapshot_grants_nothing() {
+    let mut w = ImageWriter::new();
+    let body = {
+        let mut a = Asm::new();
+        a.op(op::RETURN);
+        a.done()
+    };
+    let n = w.k_string("main");
+    w.entry = w.add_fn(n, 1, false, 2, &body);
+    let (mut rt, _v) = run(&mut w, vec!["x"]);
+
+    // One host-minted, one guest-minted, both rooted so neither is collected.
+    let label = rt.string("fs");
+    let li = rt.push(label);
+    let lv = rt.r(li);
+    let cap = rt.new_opaque(lv, 7);
+    let ci = rt.push(cap);
+    let own = rt.new_opaque(crate_nil(), 0);
+    let oi = rt.push(own);
+
+    assert_eq!(rt.opaque_host_id(rt.r(ci)), 7, "the host-minted value should carry its id");
+    assert_eq!(rt.opaque_host_id(rt.r(oi)), 0, "a guest-minted value has no id");
+    let id_before = rt.hash_value(rt.r(ci));
+
+    let bytes = flint_rt::snap::capture(&rt);
+    assert!(flint_rt::snap::restore(&mut rt, &bytes), "restore refused its own snapshot");
+
+    // COVERAGE: a sweep that found nothing would pass the assertion below for
+    // the wrong reason.
+    assert!(rt.restored_capabilities >= 2, "the sweep did not see the opaque values");
+    assert_eq!(
+        rt.opaque_host_id(rt.r(ci)),
+        0,
+        "an imported snapshot restored live authority"
+    );
+    // Identity survives; only authority does not.
+    assert_eq!(rt.hash_value(rt.r(ci)), id_before, "the identity hash changed on import");
+}
+
+fn crate_nil() -> flint_rt::value::Value {
+    flint_rt::value::NIL
+}
+
 /// A snapshot from another layout version is refused BY NAME rather than read
 /// as a plausible-looking heap that means something else.
 #[cfg(feature = "diagnostics")]

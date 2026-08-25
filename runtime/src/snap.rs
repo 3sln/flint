@@ -218,6 +218,53 @@ pub fn capture(rt: &Rt) -> Vec<u8> {
 /// Restore a snapshot over this runtime. Returns false if it is not one, or is
 /// from a different layout version -- refused by name rather than read as a
 /// plausible-looking heap that means something else.
+/// Strip host-minted authority out of a restored heap (`doc/decisions/0022`).
+///
+/// A capture is a memcpy, so a capability comes back byte-for-byte -- host id
+/// and all -- and importing a snapshot taken from a run that held `:fs` would
+/// GRANT `:fs`. That is the one asymmetry 0022 records between the two kinds of
+/// opaque value: guest-minted ones are identity and nothing else, and a
+/// restored run is entitled to the identities it had, but host-minted ones are
+/// never restored as live authority.
+///
+/// Invalidation rather than re-binding: zeroing the host id turns a capability
+/// into an ordinary opaque value, which the grant-table check refuses like any
+/// other forgery. A host that wants to re-grant can mint fresh ones; a host
+/// that does nothing grants nothing, which is the right default.
+fn invalidate_host_opaques(rt: &mut Rt) -> u32 {
+    use crate::obj::{size_of, ty, TY_FREE, TY_OPAQUE};
+    let mut n = 0u32;
+    let mut clear = |sp: &crate::mem::Space, a: u32| {
+        if ty(sp, a) == TY_OPAQUE {
+            crate::obj::set_slot_raw(sp, a, 2, Value::fixnum(0));
+            n += 1;
+        }
+    };
+    let (from, bump) = (rt.gc.from, rt.gc.bump);
+    let mut a = from;
+    while a < bump {
+        clear(&rt.gc.sp, a);
+        a += size_of(&rt.gc.sp, a);
+    }
+    let chunks = core::mem::take(&mut rt.gc.old_chunks);
+    for ch in &chunks {
+        let end = ch.addr + ch.len;
+        let mut a = ch.addr;
+        while a < end {
+            let size = size_of(&rt.gc.sp, a);
+            if size < 8 || a + size > end {
+                break;
+            }
+            if ty(&rt.gc.sp, a) != TY_FREE {
+                clear(&rt.gc.sp, a);
+            }
+            a += size;
+        }
+    }
+    rt.gc.old_chunks = chunks;
+    n
+}
+
 pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     if bytes.len() < 8 {
         return false;
@@ -387,5 +434,7 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     rt.mem_trips = mem_trips;
     rt.status = status;
     rt.champ_added = champ_added;
+    // LAST, after the heap is in place: an imported snapshot grants nothing.
+    rt.restored_capabilities = invalidate_host_opaques(rt);
     true
 }

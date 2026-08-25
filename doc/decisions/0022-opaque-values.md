@@ -1,7 +1,16 @@
 # 0022 — Opaque values: identity without structure
 
-> **NOT BUILT YET.** A value-model primitive. `0021`'s capabilities are one use
-> of it, and the reason it surfaced, but it is not the only one.
+> **BUILT.** `(opaque)` and `(opaque "label")` in `clojure.core`; `TY_OPAQUE` in
+> the runtime; host-minted values reaching the entry function as its second
+> argument; `p/open`'s `:capability`; not sendable; invalidated on snapshot
+> import. Metadata and protocol extension are still deliberately absent.
+>
+> Two things the tests found that reading would not have. A guest-minted
+> `(opaque "fs")` opened the filesystem, because "nothing was presented" and
+> "something the host never issued" both arrived as 0 and the host read a
+> forgery as an absence. And the first snapshot test asserted a clean import on
+> a heap that contained no capabilities; the counter now proves the sweep saw
+> them.
 
 The generalisation, in the user's terms: rather than a capability type, *"the
 idea of an opaque (sentinel) value in general, which can't be minted/created,
