@@ -4,7 +4,11 @@
 (def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
 (babashka.classpath/add-classpath (str root "/src:" root "/lib"))
 (require '[flint.compiler :as compiler] '[flint.image :as img] '[flint.link :as link]
-         '[flint.reader :as reader])
+         '[flint.reader :as reader]
+         ;; The project surface -- `tasks`, `task`, `build`, `fetch`, ... -- is
+         ;; flint code, in `lib/`, because 0021's argument is that it has to
+         ;; survive losing babashka. What is in this file is the host half.
+         '[flint.cli :as cli] '[flint.deps :as deps])
 
 (defn- option? [s] (or (str/starts-with? s ":") (str/starts-with? s "-")))
 
@@ -221,12 +225,69 @@
 ;; Under bb the project reader is `slurp`; inside a compiled module it is the
 ;; `:fs` capability. `flint.cli` never learns which, which is the point of it
 ;; taking a function.
-(when (contains? #{"tasks" "task" "deps" "paths" "targets" "version" "help"}
+(when (contains? #{"tasks" "task" "build" "fetch" "deps" "paths" "targets" "version" "help"}
                  (first *command-line-args*))
-  (require '[flint.cli :as cli])
   (let [slurp* (clojure.core/fn [p]
-                 (let [f (io/file p)] (when (.exists f) (slurp f))))
-        r ((resolve 'flint.cli/run) (vec *command-line-args*) slurp*)]
+                 ;; `.isFile`, not `.exists`: a probe for a directory must
+                 ;; answer nil rather than throw, and `fetch-plan` probes for a
+                 ;; stamp inside one that may not be there.
+                 (let [f (io/file p)] (when (.isFile f) (slurp f))))
+        git! (clojure.core/fn [x]
+               ;; A shallow fetch of ONE sha rather than a clone: it is the
+               ;; cheap shape, and it cannot silently give you a different
+               ;; commit later, which a branch clone can.
+               (let [dir (:dir x)]
+                 (println (str "fetching " (:dep x) "  " (:url x) " @ " (subs (str (:sha x)) 0 (min 8 (count (str (:sha x)))))))
+                 (fs/create-dirs dir)
+                 (doseq [args [["git" "init" "-q"]
+                               ["git" "remote" "add" "origin" (:url x)]
+                               ["git" "fetch" "-q" "--depth" "1" "origin" (:sha x)]
+                               ["git" "checkout" "-q" "FETCH_HEAD"]]]
+                   (let [pb (doto (ProcessBuilder. (into-array String args)) (.directory (io/file dir)))
+                         p (.start pb)
+                         o (slurp (.getInputStream p)) e (slurp (.getErrorStream p))]
+                     (.waitFor p)
+                     (when (and (not (zero? (.exitValue p)))
+                                ;; `remote add` on a re-fetch is not a failure.
+                                (not (str/includes? (str e) "already exists")))
+                       (binding [*out* *err*]
+                         (println (str "could not fetch " (:dep x) ":"))
+                         (println (str "  " (str/join " " args)))
+                         (println (str "  " (str/trim (str o e)))))
+                       (System/exit 1))))
+                 ;; The stamp goes on LAST, so a fetch that died halfway is not
+                 ;; mistaken for one that finished.
+                 (spit (io/file dir deps/stamp) (str (:url x) " " (:sha x) "\n"))))
+        r (loop [argv (vec *command-line-args*) guard 0]
+            (let [r (cli/run argv slurp*)]
+              (if-let [f (:fetch r)]
+                (do
+                  (when (> guard 32)
+                    (binding [*out* *err*] (println "dependency resolution did not settle"))
+                    (System/exit 1))
+                  ;; `fetch-plan` is transitive and a fetched dep can name more,
+                  ;; so this is a fixpoint the host drives: fetch what is
+                  ;; pending, then ask again.
+                  (doseq [x f]
+                    (if (= (:kind x) :local)
+                      (binding [*out* *err*]
+                        (println (str "no such :local/root for " (:dep x) ": " (:dir x)))
+                        (System/exit 1))
+                      (git! x)))
+                  (recur (vec (:then r)) (inc guard)))
+                r)))]
+    (when-let [b (:build r)]
+      ;; `flint build` is `flint :src ... :fn ...` with the project filled in --
+      ;; the roots come from `deps.edn`, so a build inside a project needs no
+      ;; `:src`. Re-entering this same script rather than reaching into the
+      ;; compiler keeps one code path for compiling.
+      (let [args (concat ["bb" (str root "/bin/flint") ":fn" (:entry b) ":out" (:out b)]
+                         (mapcat (clojure.core/fn [p] [":src" (str (fs/absolutize p))]) (:paths b))
+                         (when (:image? b) ["--emit-image"]))
+            p (.start (ProcessBuilder. (into-array String args)))]
+        (.start (Thread. (clojure.core/fn [] (io/copy (.getInputStream p) System/out))))
+        (.start (Thread. (clojure.core/fn [] (io/copy (.getErrorStream p) System/err))))
+        (System/exit (.waitFor p))))
     (if-let [x (:exec r)]
       ;; A task is a program: write it, compile it, run it. Two processes rather
       ;; than one because `flint_load_image` clears the caller's frames -- a
@@ -300,6 +361,11 @@
         _ (doseq [u (link/shadowed-units unit-path)]
             (println (str "note: unit " (:name u) " at " (:manifest u)
                           " is shadowed by " (:by u))))
+        ;; The output directory is CREATED, not assumed. `flint build` puts its
+        ;; artifact under `out/` by default and a fresh project has no `out/`;
+        ;; what came back was `rust-lld: cannot open output file`, which names
+        ;; the linker for something that is not the linker's doing.
+        _ (when-let [d (fs/parent (fs/absolutize out))] (fs/create-dirs d))
         spec {:sources sources :order order :entry fn
               :exclude exclude
               :excluded-builtins (select-keys (builtins-by-unit unit-path) (vec (or exclude [])))

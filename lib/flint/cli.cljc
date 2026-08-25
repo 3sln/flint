@@ -29,6 +29,9 @@
              ""
              "  flint tasks              list the tasks in deps.edn"
              "  flint task <name> [...]  run a task"
+             "  flint build [:target t] [:fn ns/fn] [:out f] [--image]"
+             "                           compile the project; :paths come from deps.edn"
+             "  flint fetch              fetch the dependencies flint can fetch"
              "  flint deps               what deps.edn asks for, and what this build honours"
              "  flint paths              the source roots"
              "  flint targets            what this build can cross compile for"
@@ -56,6 +59,11 @@
     :note "needs the JVM backend -- doc/decisions/0010"}
    {:target "clr" :ok false
     :note "needs the CLR backend -- doc/decisions/0010"}])
+
+(defn target-named
+  "The target entry for `nm`, or nil."
+  [nm]
+  (first (filter (fn [t] (= (:target t) nm)) targets)))
 
 (defn- describe-targets []
   (str/join "\n"
@@ -139,6 +147,23 @@
 
 ;; ----------------------------------------------------------------------- run
 
+(defn- namespace*
+  "The namespace half of an `ns/fn` string."
+  [entry]
+  (subs entry 0 (str/index-of entry "/")))
+
+(defn- parse-opts
+  "`:key value` and `--flag`, in the shape `bin/flint` already accepts. Returns
+  a map of string to string; a flag's value is the flag."
+  [argv]
+  (loop [a (seq argv) m {}]
+    (if-let [k (first a)]
+      (cond
+        (str/starts-with? k "--") (recur (next a) (assoc m (subs k 2) (subs k 2)))
+        (str/starts-with? k ":") (recur (next (next a)) (assoc m (subs k 1) (second a)))
+        :else (recur (next a) m))
+      m)))
+
 (defn- text [s] {:out s})
 (defn- oops [s] {:out s :code 1})
 
@@ -156,15 +181,47 @@
   the host should compile and run."
   [argv slurp*]
   (let [cmd (first argv)
-        rest-args (vec (rest argv))]
+        rest-args (vec (rest argv))
+        cache ".flint"]
     (cond
       (or (nil? cmd) (= cmd "help") (= cmd "--help")) (text (usage))
       (= cmd "version") (text version)
       (= cmd "targets") (text (describe-targets))
       :else
-      (let [d (deps/read-deps slurp*)]
+      (let [d (deps/read-deps slurp*)
+            plan (deps/fetch-plan d cache slurp*)
+            pending (filterv (fn [x] (not (:fetched? x))) plan)
+            ;; The project's own roots FIRST. A dependency must not be able to
+            ;; shadow the namespace of the project that depends on it.
+            all-paths (vec (concat (deps/paths d) (deps/dep-paths plan)))]
         (cond
-          (= cmd "paths") (text (str/join "\n" (deps/paths d)))
+          ;; A dependency flint would fetch but cannot as written stops the
+          ;; build HERE, naming itself. Letting it through produced `cannot find
+          ;; source for namespace greeter.core`, which is true and names the
+          ;; wrong thing: the namespace is missing because a coordinate was
+          ;; unusable, and that is what the reader needs told.
+          (and (seq (deps/incomplete d))
+               (contains? #{"build" "task"} cmd))
+          (oops (str/join "\n"
+                          (concat ["this project depends on something flint cannot fetch as written:"]
+                                  (mapv (fn [x] (str "  " (:dep x) "  -- " (:why x)))
+                                        (deps/incomplete d)))))
+
+          ;; Anything that needs a source root needs the dependencies on disk
+          ;; first, and the host is what fetches. `fetch-plan` is transitive, so
+          ;; this is a fixpoint the host drives rather than one pass.
+          (and (seq pending)
+               (contains? #{"build" "task" "paths"} cmd))
+          {:fetch pending :then argv}
+
+          (= cmd "fetch")
+          (if (seq pending)
+            {:fetch pending :then ["deps"]}
+            (text (if (empty? plan)
+                    "nothing to fetch"
+                    (str "all " (count plan) " dependencies are present"))))
+
+          (= cmd "paths") (text (str/join "\n" all-paths))
           (= cmd "deps") (text (deps/describe d))
           (= cmd "tasks")
           (let [t (deps/tasks d)]
@@ -175,6 +232,30 @@
                                       (let [v (get t k)]
                                         (str "  " k (when (:doc v) (str "  -- " (:doc v))))))
                                     (sort (keys t)))))))
+          ;; `flint build` -- the front end 0021 asks for. What it adds over
+          ;; `flint :src ... :fn ...` is the project: `:paths` come from
+          ;; `deps.edn`, so a build in a project needs no `:src` at all.
+          (= cmd "build")
+          (let [opts (parse-opts rest-args)
+                tname (get opts "target" "wasm")
+                t (target-named tname)
+                entry (or (get opts "fn") (some-> (:flint/main d) str))]
+            (cond
+              (nil? t) (oops (str "no such target: " tname "\n\n" (describe-targets)))
+              (not (:ok t)) (oops (str "flint cannot emit for " tname " yet: " (:note t)
+                                       "\n\nEmission is codegen and codegen is pure, so what is"
+                                       "\nmissing is a backend and not a machine to run it on."))
+              (nil? entry) (oops (str "which entry point? `flint build :fn my.ns/main`,"
+                                      "\nor put `:flint/main my.ns/main` in deps.edn"))
+              (not (str/includes? entry "/")) (oops (str "an entry point is `ns/fn`, not " entry))
+              :else {:build {:target tname
+                             :entry entry
+                             :paths all-paths
+                             :out (or (get opts "out")
+                                      (str "out/" (str/replace (namespace* entry) "." "-")
+                                           (if (contains? opts "image") ".image" ".wasm")))
+                             :image? (contains? opts "image")}}))
+
           (= cmd "task")
           (let [nm (first rest-args)
                 t (get (deps/tasks d) nm)]
@@ -184,7 +265,7 @@
                                   "\navailable: " (str/join ", " (sort (keys (deps/tasks d))))))
               :else {:exec {:src (task-source t (vec (rest rest-args)))
                             :entry "flint.task/main"
-                            :paths (deps/paths d)
+                            :paths all-paths
                             :args (vec (rest rest-args))}}))
           :else (oops (str "no such command: " cmd "\n\n" (usage))))))))
 
@@ -195,4 +276,4 @@
   (let [r (run argv slurp*)]
     (or (:out r)
         (str "this command runs a program; the host must execute it: "
-             (-> r :exec :entry)))))
+             (or (-> r :exec :entry) (-> r :build :entry))))))
