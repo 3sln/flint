@@ -527,7 +527,7 @@
 
 (defn reader
   "A reader state over `src`. `opts` may set `:file`, `:ns`, `:aliases` and
-  `:features` (default #{:clj :flint})."
+  `:features` (default #{:flint})."
   ([src] (reader src {}))
   ([src opts]
    (let [st (make-state src (:file opts "<string>"))]

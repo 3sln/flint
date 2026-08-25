@@ -79,7 +79,16 @@
     (.toByteArray out)))
 
 (defn utf8-bytes [^String s]
-  #?(:clj (.getBytes s "UTF-8") :cljs (throw (ex-info "no utf8" {}))))
+  ;; The `:flint` branch is not decoration. This file is read with
+  ;; `#{:flint}`, so a conditional with only `:clj` and `:cljs` selects
+  ;; NOTHING -- and a `defn` whose body vanishes is still a `defn`, so what you
+  ;; get is `(defn utf8-bytes [s])`, returning nil, with no diagnostic
+  ;; anywhere. It has been unreachable rather than harmless: the self-hosted
+  ;; compiler does not link, so `flint.wasm` never shipped. It will the moment
+  ;; the CLI links for itself. `test/reader_test.clj` now asserts the shape.
+  #?(:clj (.getBytes s "UTF-8")
+     :flint (flint.rt/str-bytes s)
+     :cljs (throw (ex-info "no utf8" {}))))
 
 (defn- vec-section [items]
   (concat (uleb (count items)) (apply concat items)))

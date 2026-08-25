@@ -36,9 +36,10 @@
       ;; the printer. That flint reads the namespaced form is checked in the
       ;; conformance suite, where it belongs.
       (str "{:paths [\"src\" \"resources\"]\n"
-           ;; Maven -- the one kind flint does not fetch. git and npm are
-           ;; exercised against a real repository and a real tarball below.
-           " :deps {some/jar {:mvn/version \"1\"}}\n"
+           ;; A coordinate flint does not recognise at all. The kinds it DOES
+           ;; fetch are exercised below, against a real repository, a real
+           ;; tarball and a real jar.
+           " :deps {some/thing {:weird/coord \"x\"}}\n"
            " :flint/tasks\n"
            " {greet {:doc \"say hello to $1\" :task (println \"hello\" \"$1\")}\n"
            "  bare (println \"no doc\")\n"
@@ -99,7 +100,7 @@
 ;; at the first missing var.
 (check-that "deps it cannot fetch are named, with the reason"
             (let [o (cli true "deps")]
-              (and (str/includes? o "some/jar  (maven)")
+              (and (str/includes? o "some/thing  (unknown)")
                    (str/includes? o "portable cljc"))))
 
 ;; The CLI has no ambient authority either. This is the property that makes the
@@ -341,6 +342,62 @@
                   (and (str/includes? (:out r) "portable-cljc")
                        (str/includes? (:out r) "is a range")))
       (check "  ... and exits nonzero" (:exit r) 1))))
+
+;; -------------------------------------------------------------- maven deps
+;;
+;; 0021's third source, in its CHEAP half only. An exact coordinate is a derived
+;; URL exactly like npm, and that part costs nothing. What 0021 prices as
+;; expensive -- POM parsing, the transitive graph, version conflict resolution
+;; -- is deliberately not built, and `flint deps` says so where a reader will
+;; meet it rather than in a document they have not opened.
+(check "a maven jar URL is derived from the coordinate"
+       (fdeps/maven-jar "https://repo.clojars.org" 'metosin/malli "0.16.4")
+       "https://repo.clojars.org/metosin/malli/0.16.4/malli-0.16.4.jar")
+
+;; The GROUP's dots become path separators and the ARTIFACT's do not. Checked
+;; against a real fetch from Central, not against what looks symmetrical.
+(check "  ... with the group's dots as separators, and the artifact's left alone"
+       (fdeps/maven-jar "https://repo1.maven.org/maven2" 'org.clojure/core.match "1.1.0")
+       "https://repo1.maven.org/maven2/org/clojure/core.match/1.1.0/core.match-1.1.0.jar")
+
+(let [cwd (System/getProperty "user.dir")
+      repo (str (fs/create-temp-dir))
+      stage (str (fs/create-temp-dir))
+      mp (str (fs/create-temp-dir))
+      flint-in (fn [dir & args]
+                 (let [pb (ProcessBuilder. (into-array String (cons (str cwd "/bin/flint") args)))]
+                   (.directory pb (io/file dir))
+                   (let [p (.start pb) o (slurp (.getInputStream p)) e (slurp (.getErrorStream p))]
+                     {:exit (do (.waitFor p) (.exitValue p)) :out (str/trim (str o e))})))]
+  ;; A jar is a zip with Clojure source at its ROOT, so the extracted directory
+  ;; is the source root -- as with npm, and unlike a git checkout.
+  (fs/create-dirs (str stage "/portable"))
+  (spit (str stage "/portable/maths.cljc")
+        "(ns portable.maths)\n(defn triple [n] (* 3 n))\n")
+  (fs/create-dirs (str repo "/com/example/portable/3.1.0"))
+  (let [pb (ProcessBuilder. (into-array String
+                                        ["zip" "-qr" (str repo "/com/example/portable/3.1.0/portable-3.1.0.jar") "portable"]))]
+    (.directory pb (io/file stage))
+    (.waitFor (.start pb)))
+
+  (fs/create-dirs (str mp "/src"))
+  (spit (str mp "/src/app.cljc")
+        "(ns app (:require [portable.maths :as m]))\n(defn main [args] (str (m/triple 14)))\n")
+  (spit (str mp "/deps.edn")
+        (str "{:paths [\"src\"] :flint/main app/main\n"
+             " :flint/maven-repos [\"file://" repo "\"]\n"
+             " :deps {com.example/portable {:mvn/version \"3.1.0\"}}}\n"))
+  (check "a maven jar is fetched and unpacked on the way to a build"
+         (:exit (flint-in mp "build")) 0)
+  (check "  ... and the project compiles against the source in it"
+         (:out (flint-in mp "run" "out/app.wasm")) "42")
+  (check-that "  ... with the jar ROOT as the source root"
+              (str/includes? (:out (flint-in mp "paths")) ".flint/mvn/"))
+  ;; The limitation is stated next to the dependency, not buried.
+  (check-that "  ... and deps says the transitive graph is NOT resolved"
+              (let [o (:out (flint-in mp "deps"))]
+                (and (str/includes? o "does NOT resolve the transitive graph")
+                     (str/includes? o "no host interop")))))
 
 (println (if (zero? @fails) "cli: ok" (str "cli: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))

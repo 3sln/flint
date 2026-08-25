@@ -19,13 +19,38 @@
 (def supported-dep-kinds
   "Coordinate kinds this build can fetch.
 
-  `git`, `npm` and `local`. 0021's order is git, npm, maven -- the cost order,
-  and also the order of how likely the fetched code is to compile. Nothing about
-  that order is arbitrary: a git coordinate is a clone and a path, and an npm
-  one an exact tarball, whereas maven is POM parsing, a transitive graph and
-  version conflict resolution, for source that mostly will not build here
-  anyway."
-  #{:git :npm :local})
+  `git`, `npm`, `maven` and `local`. 0021's order is git, npm, maven -- the cost
+  order, and also the order of how likely the fetched code is to compile.
+
+  Maven is here in its CHEAP half only. An exact coordinate is a derived URL,
+  exactly like npm, and that part costs nothing. What 0021 prices as expensive
+  is the rest -- POM parsing, the transitive graph, version conflict resolution
+  -- and its caution is that resolving a coordinate gets you SOURCE, not
+  something that compiles. So flint fetches one jar at one version and does not
+  pretend to resolve a graph; see `flint.deps/maven-note`."
+  #{:git :npm :maven :local})
+
+(def default-maven-repos
+  "Where a jar is looked for, in order. Clojars first because that is where
+  Clojure libraries live; Central because `org.clojure` itself does not."
+  ["https://repo.clojars.org" "https://repo1.maven.org/maven2"])
+
+(def maven-note
+  "What flint's maven support does NOT do, stated where a reader will meet it."
+  (str "flint fetches a maven jar at an exact version and takes the source in it.\n"
+       "It does NOT resolve the transitive graph: a jar's own dependencies are not\n"
+       "fetched, so name them yourself. 0021 prices that work and states the reason\n"
+       "it is not obviously worth it -- resolving a coordinate gets you source, not\n"
+       "something that compiles, and flint has no host interop."))
+
+(defn maven-jar
+  "The jar URL for an exact `group/artifact` and version."
+  [repo dep version]
+  (let [i (str/index-of (str dep) "/")
+        group (if i (subs (str dep) 0 i) (str dep))
+        artifact (if i (subs (str dep) (inc i)) (str dep))]
+    (str repo "/" (str/replace group "." "/") "/" artifact "/" version
+         "/" artifact "-" version ".jar")))
 
 (def default-npm-registry "https://registry.npmjs.org")
 
@@ -122,6 +147,10 @@
                      (str cache "/npm/"
                           (str/replace (str/replace (str nm) "@" "") "/" "-")
                           "-" v "/package")))
+      (= k :maven) (let [v (:mvn/version c)]
+                     (when (exact-version? v)
+                       (str cache "/mvn/"
+                            (str/replace (str/replace (str nm) "/" "-") ":" "-") "-" v)))
       (= k :local) (when-not (str/blank? (str (:local/root c))) (:local/root c))
       :else nil)))
 
@@ -143,7 +172,8 @@
   `slurp*` is the project reader; `cache` is the root the host keeps checkouts
   under."
   [d cache slurp*]
-  (let [registry (or (:flint/npm-registry d) default-npm-registry)]
+  (let [registry (or (:flint/npm-registry d) default-npm-registry)
+        repos (if (seq (:flint/maven-repos d)) (:flint/maven-repos d) default-maven-repos)]
    (loop [todo (vec (or (:deps d) {})) seen #{} out []]
     (if (empty? todo)
       out
@@ -161,11 +191,18 @@
                 fetched? (some? (slurp* (str dir "/.flint-fetched")))
                 sub (when inner (edn/read-string inner))
                 entry {:dep nm :kind (dep-kind c) :dir dir :root root
-                       :url (if (= (dep-kind c) :npm)
+                       :url (cond
+                              (= (dep-kind c) :npm)
                               (npm-tarball (or (:npm/registry c) registry)
                                            (or (:npm/name c) nm)
                                            (or (:npm/version c) (:mvn/version c)))
-                              (:git/url c))
+                              ;; Several, tried in order: a jar is on Clojars or
+                              ;; on Central and the coordinate does not say
+                              ;; which.
+                              (= (dep-kind c) :maven)
+                              (mapv (fn [r] (maven-jar r nm (:mvn/version c)))
+                                    (or (:mvn/repos c) repos))
+                              :else (:git/url c))
                        :sha (or (:git/sha c) (:sha c))
                        :fetched? (boolean fetched?)
                        :paths (when fetched?
@@ -177,7 +214,9 @@
                                   ;; package that ships cljc puts it wherever
                                   ;; `package.json` points, and the root is the
                                   ;; only thing that is always right.
-                                  (if (= (dep-kind c) :npm) [root] [(str root "/src")])))}]
+                                  (if (contains? #{:npm :maven} (dep-kind c))
+                                    [root]
+                                    [(str root "/src")])))}]
             (recur (vec (concat (rest todo) (or (:deps sub) {})))
                    (conj seen nm)
                    (conj out entry)))))))))
@@ -199,6 +238,10 @@
               (cond
                 (and (= k :git) (str/blank? (str (or (:git/sha c) (:sha c)))))
                 (conj acc {:dep nm :why "no :git/sha -- flint will not resolve a branch to whatever it points at today"})
+                (and (= k :maven) (not (exact-version? (:mvn/version c))))
+                (conj acc {:dep nm :why (str ":mvn/version " (pr-str (:mvn/version c))
+                                             " is not one exact version -- flint does not resolve"
+                                             " a range or a graph")})
                 (and (= k :npm) (str/blank? (str (or (:npm/version c) (:mvn/version c)))))
                 (conj acc {:dep nm :why "no :npm/version"})
                 (and (= k :npm) (not (exact-version? (or (:npm/version c) (:mvn/version c)))))
@@ -239,6 +282,12 @@
                         []
                         (concat ["dependencies that are supported but unusable as written:"]
                                 (mapv (fn [x] (str "  " (:dep x) "  -- " (:why x))) bad)))
+                      ;; The maven caveat goes where a reader will meet it --
+                      ;; next to their own maven dependency -- rather than in a
+                      ;; document they have not opened.
+                      (if (some (fn [e] (= :maven (dep-kind (val e)))) (or (:deps d) {}))
+                        (concat [""] (str/split-lines maven-note))
+                        [])
                       (if (empty? u)
                         []
                         (concat ["dependencies this build cannot fetch:"]

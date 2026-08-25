@@ -290,6 +290,34 @@
                        (System/exit 1))))
                  (fs/delete-if-exists tgz)
                  (spit (io/file (:dir x) deps/stamp) (str (:url x) "\n"))))
+        sh! (clojure.core/fn [args]
+              (let [p (.start (ProcessBuilder. (into-array String args)))
+                    o (slurp (.getInputStream p)) e (slurp (.getErrorStream p))]
+                (.waitFor p) {:exit (.exitValue p) :out (str/trim (str o e))}))
+        mvn! (clojure.core/fn [x]
+               ;; A jar is a zip, and Clojure source sits at its root -- so the
+               ;; extracted directory IS the source root, as with npm.
+               ;;
+               ;; `:url` is a LIST here: a coordinate does not say whether it is
+               ;; on Clojars or on Central, so both are tried in order.
+               (let [dir (:dir x) jar (str dir "/artifact.jar")]
+                 (fs/create-dirs dir)
+                 (let [hit (some (clojure.core/fn [u]
+                                   (println (str "fetching " (:dep x) "  " u))
+                                   (when (zero? (:exit (sh! ["curl" "-sSfL" u "-o" jar]))) u))
+                                 (:url x))]
+                   (when-not hit
+                     (binding [*out* *err*]
+                       (println (str "could not fetch " (:dep x) " from any repository:"))
+                       (doseq [u (:url x)] (println (str "  " u))))
+                     (System/exit 1))
+                   (let [r (sh! ["unzip" "-qo" jar "-d" dir])]
+                     (when-not (zero? (:exit r))
+                       (binding [*out* *err*]
+                         (println (str "could not unpack " (:dep x) ": " (:out r))))
+                       (System/exit 1)))
+                   (fs/delete-if-exists jar)
+                   (spit (io/file dir deps/stamp) (str hit "\n")))))
         r (loop [argv (vec *command-line-args*) guard 0]
             (let [r (cli/run argv slurp*)]
               (if-let [f (:fetch r)]
@@ -307,6 +335,7 @@
                         (println (str "no such :local/root for " (:dep x) ": " (:dir x)))
                         (System/exit 1))
                       (= (:kind x) :npm) (npm! x)
+                      (= (:kind x) :maven) (mvn! x)
                       :else (git! x)))
                   (recur (vec (:then r)) (inc guard)))
                 r)))]

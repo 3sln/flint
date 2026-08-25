@@ -94,6 +94,40 @@
 (check "unbalanced throws"
        (try (reads "(1 2") :no-throw (catch Exception e (:type (ex-data e)))) :reader)
 
+;; A STANDING CHECK, not three fixes.
+;;
+;; flint's own sources are read with `#{:flint}`. A conditional that offers only
+;; `:clj` and `:cljs` therefore selects NOTHING -- and a `defn` whose body
+;; vanishes is still a `defn`, so `(defn f [x] #?(:clj ...))` becomes
+;; `(defn f [x])`: a function returning nil, with no diagnostic anywhere.
+;;
+;; `flint.wasm/utf8-bytes` was exactly that, and got away with it only because
+;; the self-hosted compiler does not link, so the namespace never shipped. It
+;; will the moment the CLI links for itself. This asserts the shape rather than
+;; waiting for the next one.
+(println "reader: every conditional in flint's own sources selects something")
+(let [srcs (->> (concat (file-seq (clojure.java.io/file "src"))
+                        (file-seq (clojure.java.io/file "lib")))
+                (filter #(.isFile %))
+                (filter #(clojure.string/ends-with? (.getName %) ".cljc")))
+      empties (for [f srcs
+                    :let [forms (try (r/read-all (slurp f) {:features #{:flint}})
+                                     (catch Exception _ nil))]
+                    form forms
+                    :when (and (seq? form)
+                               (contains? '#{defn defn- defmacro} (first form)))
+                    ;; `(defn f [args])` with nothing after the vector -- the
+                    ;; only way a body disappears without a syntax error.
+                    :when (let [tail (drop-while (complement vector?) form)]
+                            (and (seq tail) (= 1 (count tail))))]
+                (str (.getPath f) " " (second form)))]
+  (check "no defn in src/ or lib/ has an empty body" (vec empties) []))
+(check "  ... and the check can see one when it is there"
+       (let [form (first (r/read-all "(defn f [x] #?(:clj 1))" {:features #{:flint}}))
+             tail (drop-while (complement vector?) form)]
+         (and (seq tail) (= 1 (count tail))))
+       true)
+
 (if (zero? @fails)
   (println "reader: ok")
   (do (println "reader:" @fails "FAILURES") (System/exit 1)))
