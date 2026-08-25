@@ -46,7 +46,7 @@ export const COUNTS = [0, 25, 50, 100, 200];
 export const STEPS_PER_ITER = 33233;
 export const BASE_STEPS = 1419;
 
-const mod = (n) => `out/xrt-${n}.wasm`;
+const mod = (n, aot) => (aot ? `out/aot-${n}.wasm` : `out/xrt-${n}.wasm`);
 
 /// Engines that take a module and an export name on the command line. Each
 /// entry is what a *user* would run, not something built for this benchmark.
@@ -65,7 +65,7 @@ export function cliEngines() {
       cmd: (m) => ['wasm3', ['--func', 'main', m]] },
   ];
   return list.filter((e) => {
-    const [bin] = e.cmd(mod(0));
+    const [bin] = e.cmd(mod(0, false));
     if (bin.startsWith('/')) return existsSync(bin);
     // `which`, not `command -v` through a shell: the shell form concatenates
     // rather than escapes its arguments, and node deprecates it for that.
@@ -119,28 +119,37 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   console.log();
 
   const REPS = Number(process.env.XRT_REPS || 5);
+  // `0018` says the AOT ratio is the number that varies most between engines,
+  // and names the reason: on V8 TurboFan optimises the dispatch loop hard, so
+  // eliminating dispatch looked marginal -- while on an engine with no tier-up
+  // dispatch could dominate completely. It is measured here rather than argued,
+  // and only when the AOT family has been built.
+  const haveAot = COUNTS.every((n) => existsSync(mod(n, true)));
+  const measure = (eng, aot) => {
+    const pts = [];
+    for (const n of COUNTS) {
+      const [bin, args] = eng.cmd(mod(n, aot));
+      const ms = best(REPS, () => execFileSync(bin, args, { stdio: 'ignore' }));
+      pts.push([n, ms]);
+    }
+    return { ...fit(pts), pts };
+  };
   const rows = [];
   for (const eng of cliEngines()) {
-    const pts = [];
-    let failed = null;
-    for (const n of COUNTS) {
-      const [bin, args] = eng.cmd(mod(n));
-      try {
-        const ms = best(REPS, () => execFileSync(bin, args, { stdio: 'ignore' }));
-        pts.push([n, ms]);
-      } catch (err) { failed = String(err.message).split('\n')[0]; break; }
-    }
-    if (failed) { rows.push({ eng, failed }); continue; }
-    const { slope, intercept, r2 } = fit(pts);
-    rows.push({ eng, slope, intercept, r2, pts });
+    try {
+      const base = measure(eng, false);
+      const aot = haveAot ? measure(eng, true) : null;
+      rows.push({ eng, ...base, aot });
+    } catch (err) { rows.push({ eng, failed: String(err.message).split('\n')[0] }); }
   }
 
   const pad = (s, w) => String(s).padEnd(w);
   const rpad = (s, w) => String(s).padStart(w);
   console.log(pad('engine', 24) + rpad('per iter', 11) +
               rpad('ns/instr', 10) + rpad('vs V8', 8) +
-              rpad('fixed cost', 12) + rpad('R2', 8));
-  console.log('-'.repeat(73));
+              rpad('fixed cost', 12) + rpad('R2', 8) +
+              (haveAot ? rpad('AOT', 9) : ''));
+  console.log('-'.repeat(haveAot ? 82 : 73));
   for (const r of rows) {
     if (r.failed) { console.log(pad(r.eng.name, 24) + '  FAILED: ' + r.failed); continue; }
     const nsPer = (r.slope * 1e6) / STEPS_PER_ITER;
@@ -151,7 +160,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
                 rpad(nsPer.toFixed(1), 10) +
                 rpad((nsPer / baseNs).toFixed(2) + 'x', 8) +
                 rpad(r.intercept.toFixed(2) + ' ms', 12) +
-                rpad(r.r2.toFixed(4), 8));
+                rpad(r.r2.toFixed(4), 8) +
+                (r.aot ? rpad((r.slope / r.aot.slope).toFixed(2) + 'x', 9) : ''));
   }
   console.log();
   console.log('  per iter     the fitted slope: cost of the work once running.');
@@ -160,6 +170,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   console.log('  R2           fit quality. Anything below ~0.99 is a slope through noise');
   console.log('               and the ns/instruction beside it should not be believed.');
   console.log();
+  if (haveAot) {
+    console.log('  AOT          speedup from compiling bytecode to wasm blocks (0013), same');
+    console.log('               module family built with `--aot`. Gas is IDENTICAL between');
+    console.log('               the two -- 6,648,019 instructions either way -- so this is');
+    console.log('               the same work, not less of it.');
+  }
   console.log('  Fixed cost is not comparable across the two groups: the JS engines are');
   console.log('  starting a JS runtime and reading a file from JS, wasmtime and wasm3 are');
   console.log('  invoked directly. The SLOPE is comparable, which is why ns/instruction');
