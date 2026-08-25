@@ -114,6 +114,73 @@ Carrying both is what makes `count` O(1) and `subs` genuinely logarithmic. It is
 also the thing that makes the same operations agree across hosts, since a JVM
 port storing bytes computes the same counts.
 
+### So is the ASCII flag still needed? Per tier, and the answer differs
+
+`str_is_ascii` (bit 18 of the string header) exists for one reason: if every byte
+is under 0x80, a code-point index **is** a byte index, so `nth`, `subs` and
+`count` are O(1) instead of O(n). It has nothing to do with the encoding —
+strings are UTF-8 always — and nothing to do with regex. It is a cached property
+*of* those bytes.
+
+With per-node code-point counts, its justification changes tier by tier:
+
+- **Rope: not needed for indexing.** Descending the tree locates code point *k*
+  in O(log n) whatever the bytes look like. The asymptotic argument for the flag
+  is gone here.
+- **Flat: still needed.** A flat string carries one total count, which does not
+  locate code point *k*. Without the flag, `nth` and `subs` on a flat string are
+  O(n) and splitting one is quadratic — which is exactly the `words` benchmark.
+  §"Three tiers" keeps flat deliberately, so the flag keeps earning its place.
+- **Inside a rope leaf: a constant, not an asymptote.** Finding the byte offset
+  of a code point *within* a leaf is still a scan, bounded by the leaf size
+  (512–1024 bytes). The flag makes that step O(1), which is worth having and is
+  no longer worth much.
+
+So the two mechanisms are **complementary rather than redundant**: per-node
+counts give indexing across the tree, the flag gives it within a flat run. Keep
+both, and be clear which is doing what — a later reader who deletes the flag
+because "the rope has counts" will make flat strings quadratic and the rope
+benchmarks will not notice.
+
+**And it is a cached derived property, so it can be wrong.** A `TY_STR`
+allocated without `set_str_ascii` yields a string marked ASCII that is not, and
+then `nth` and `subs` use byte offsets as code-point offsets and return **wrong
+answers**, silently. The diagnostics build should re-derive the bit from the
+bytes on every read and assert it agrees — the same shape that proved
+`refresh()`'s write-once fields (8,302 crossings, 0 drifted). Cheap, and the
+alternative is a correctness bug that looks like a text-handling quirk.
+
+### String operations must exploit the tree, and that must be measured
+
+The point of a rope is that operations use its structure. The failure mode is an
+operation that quietly calls "flatten on demand" and thereby becomes O(n) — at
+which point the tree costs memory and buys nothing.
+
+**This is not hypothetical; it is the shape of the bug just fixed.**
+`str_index_of` called `&str::is_ascii()` and `from_utf8` per call, each scanning
+the whole 32 799-byte haystack, turning a linear scan into 223 million byte
+checks and 37 ms of a 55 ms benchmark. A builtin that looks native and therefore
+free, doing O(n) hidden work per call, is exactly what a flatten-on-demand rope
+invites — and there will be more places to hide it, not fewer.
+
+What must use the structure rather than flatten:
+
+- **`str` / concat** — a tree join, O(1) or O(log n). Never a copy.
+- **`count`** — O(1) from the stored counts, both tiers.
+- **`nth` / `subs`** — descend; a large `subs` shares subtrees, and only a small
+  slice of a large rope copies down into flat (§"Three tiers" already says so).
+- **`index-of`, `split`, `replace`, comparison** — walk leaves through the
+  cursor. None of them needs contiguous bytes, and `split` in particular is the
+  one that made this benchmark quadratic twice.
+- **`starts-with?` / `ends-with?`** — one leaf at each end, not a flatten.
+
+**The discipline: count the flattens, do not hope about them.** A diagnostics
+counter incremented every time an operation materialises a rope, and a benchmark
+assertion that the count is what it should be for that workload. A rope that
+flattens on every `index-of` passes every correctness test and is slower than the
+flat string it replaced. Only a counter tells the difference, and by now this
+project knows what happens to properties nobody counted.
+
 ### The cursor cares less than you would think
 
 Worth separating the two access patterns, because they have different costs:
