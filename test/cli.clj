@@ -197,6 +197,13 @@
          (vec (sort (map fs/file-name (fs/list-dir (str bp "/out")))))
          ["app.image" "app.wasm" "flint-loader.wasm"])
   (fs/delete (str bp "/out/flint-loader.wasm"))
+  ;; 0020: the metadata is READ, not merely carried. A module used where a
+  ;; loader belongs is named from its bytes, before compiling half a megabyte of
+  ;; wasm to find out.
+  (check-that "  ... and a MODULE used as a loader is refused by name"
+              (let [o (:out (run-in bp "run" "out/app.image" "ok"))]
+                (or (str/includes? o "not built with --loader")
+                    (str/includes? o "no loader at"))))
   (check-that "  ... while a missing loader says what would produce one"
               (let [o (:out (run-in bp "run" "out/app.image" "ok"))]
                 (and (str/includes? o "flint build --image")
