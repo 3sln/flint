@@ -105,6 +105,25 @@
 ;; the self-hosted compiler does not link, so the namespace never shipped. It
 ;; will the moment the CLI links for itself. This asserts the shape rather than
 ;; waiting for the next one.
+(println "reader: a conditional that matches nothing is recorded, not just dropped")
+;; The form the conditional stood in VANISHES -- a function body becomes nil, a
+;; :require becomes a dependency the compiler never learns about. Across 20 real
+;; libraries, 16 of the 28 namespaces that compiled had been cut this way.
+(let [st (r/reader "(defn f [x] #?(:clj (inc x)))" {:features #{:flint}})]
+  (dorun (take-while (complement r/eof?) (repeatedly #(r/read-form st))))
+  (check "an unmatched conditional is recorded with its line and what it offered"
+         (mapv (juxt :line :offered) (r/elided st)) [[1 [:clj]]]))
+(let [st (r/reader "#?(:cljs 1 :default 9)" {:features #{:flint}})]
+  (dorun (take-while (complement r/eof?) (repeatedly #(r/read-form st))))
+  (check "  ... and a :default branch is NOT an elision" (r/elided st) []))
+(let [st (r/reader "#?(:flint 1 :clj 2)" {:features #{:flint}})]
+  (dorun (take-while (complement r/eof?) (repeatedly #(r/read-form st))))
+  (check "  ... nor is one that matches" (r/elided st) []))
+(let [st (r/reader "(ns a #?@(:clj [(:require [x])]))" {:features #{:flint}})]
+  (dorun (take-while (complement r/eof?) (repeatedly #(r/read-form st))))
+  (check "  ... and the splicing form counts too, which is how a :require disappears"
+         (count (r/elided st)) 1))
+
 (println "reader: every conditional in flint's own sources selects something")
 (let [srcs (->> (concat (file-seq (clojure.java.io/file "src"))
                         (file-seq (clojure.java.io/file "lib")))

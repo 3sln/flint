@@ -98,6 +98,10 @@
   ;; source runs on a host.
   '#{flint.rt})
 
+(def elisions
+  "Reader conditionals that matched no feature, gathered across every source."
+  (volatile! []))
+
 (defn collect
   "Read namespaces from `entry-ns` outwards, returning [{ns {:src :file}} order].
 
@@ -109,10 +113,19 @@
       (if (or (contains? sources n) (contains? virtual-namespaces n))
         (recur (rest todo) sources order)
         (if-let [s (find-source dirs n)]
-          (let [forms (try (reader/read-all (:src s) {:file (:file s) :features features})
+          (let [st (reader/reader (:src s) {:file (:file s) :features features})
+                forms (try (loop [acc []]
+                             (let [v (reader/read-form st)]
+                               (if (reader/eof? v) acc (recur (conj acc v)))))
                            (catch Exception e
                              (println "read error in" (:file s) ":" (ex-message e))
                              (System/exit 1)))
+                ;; A conditional that matched nothing DELETED the form it stood
+                ;; in -- a function body, or a `:require` this loop is here to
+                ;; find. Silently compiling a mutilated library is the failure
+                ;; this note exists to prevent; it is a note rather than an
+                ;; error because whether it matters is the reader's call.
+                _ (vswap! elisions into (reader/elided st))
                 nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))
                 reqs (if nsform (compiler/ns-requires nsform) [])]
             (recur (into (vec (rest todo)) reqs)
@@ -439,6 +452,21 @@
         _ (doseq [u (link/shadowed-units unit-path)]
             (println (str "note: unit " (:name u) " at " (:manifest u)
                           " is shadowed by " (:by u))))
+        ;; Grouped by file, and capped, because a library can have dozens and
+        ;; the point is to be told, not to be buried.
+        _ (let [by-file (group-by :file @elisions)]
+            (when (seq by-file)
+              (println (str "note: " (count @elisions) " reader conditional(s) in "
+                            (count by-file) " file(s) matched none of "
+                            (str/join ", " (sort (map str features)))
+                            " -- the form each stood in was DELETED"))
+              (doseq [[f xs] (take 6 (sort-by key by-file))]
+                (println (str "  " f " (" (count xs) ") lines "
+                              (str/join ", " (take 8 (map :line xs)))
+                              "  offering " (str/join "/" (sort (distinct (map str (mapcat :offered xs))))))))
+              (when (> (count by-file) 6)
+                (println (str "  ... and " (- (count by-file) 6) " more file(s)")))
+              (println "  a :flint or :default branch, or :features, decides which one is taken")))
         ;; The output directory is CREATED, not assumed. `flint build` puts its
         ;; artifact under `out/` by default and a fresh project has no `out/`;
         ;; what came back was `rust-lld: cannot open output file`, which names
