@@ -186,6 +186,11 @@
    (c "reduced keeps the accumulator"
       (reduce (fn [a x] (if (= x :stop) (reduced a) (conj a x))) [] [:a :b :stop :c]) [:a :b])
 
+   ;; `#?@` splices into the surrounding collection. flint reads its own sources
+   ;; with #{:flint}, so this is the branch that must both splice and vanish.
+   (c "#?@ splices" [:a #?@(:flint [1 2]) :z] [:a 1 2 :z])
+   (c "  ... and vanishes when no branch matches" [:a #?@(:cljs [1 2]) :z] [:a :z])
+
    ;; `print-str` is NOT `pr-str` with spaces. Clojure's print semantics drop
    ;; the quotes at EVERY level, not just the top -- flint's shared one printer
    ;; with `pr-str`, so `(print-str ["x" 1])` came back `["x" 1]`.

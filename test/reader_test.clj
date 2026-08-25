@@ -82,6 +82,25 @@
 (check "default branch" (r/read-all "#?(:cljs 1 :default 9)" {:features #{:flint}}) [9])
 (check "no branch matches" (r/read-all "#?(:cljs 1)" {:features #{:flint}}) [])
 
+;; `#?@` SPLICES into the surrounding collection -- that is the whole difference
+;; from `#?`, and it was not happening anywhere. A matched splice left the
+;; marker map sitting in the collection and an unmatched one left a sentinel
+;; Volatile, so `(ns s (:require [a] #?@(:cljs [[b]])))` asked for a namespace
+;; literally called `[:flint.reader/splice [[b]]]`. Conditionally adding a
+;; `:require` is how real `.cljc` is written, so this is on the common path.
+(check "#?@ splices its elements in"
+       (r/read-all "[:a #?@(:flint [1 2]) :z]" {:features #{:flint}}) [[:a 1 2 :z]])
+(check "  ... and leaves nothing behind when no branch matches"
+       (r/read-all "[:a #?@(:cljs [1 2]) :z]" {:features #{:flint}}) [[:a :z]])
+(check "  ... in a list too"
+       (r/read-all "(:a #?@(:flint [1 2]))" {:features #{:flint}}) ['(:a 1 2)])
+(check "  ... which is how an ns form conditionally requires"
+       (r/read-all "(ns s (:require [a] #?@(:flint [[b] [c]])))" {:features #{:flint}})
+       ['(ns s (:require [a] [b] [c]))])
+(check "  ... and how it conditionally does not"
+       (r/read-all "(ns s (:require [a] #?@(:cljs [[b]])))" {:features #{:flint}})
+       ['(ns s (:require [a]))])
+
 (println "reader: auto-resolved keywords")
 (let [st (r/reader "::foo" {:ns 'my.ns})]
   (check "::foo" (r/read-form st) :my.ns/foo))

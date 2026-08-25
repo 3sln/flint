@@ -87,6 +87,16 @@
 ;; Same reasoning for the "this reader conditional matched nothing" marker.
 (def SPLICE-NONE (flint.rt/volatile "flint.reader/splice-none"))
 
+;; And the same reasoning again for a MATCHED `#?@`, which has to carry a value
+;; out to the enclosing collection. It was a map, `{::splice v}` -- and this
+;; file contains that map as a literal, so reading flint's own reader spliced
+;; it. A marker that source can spell is a marker source can forge; the tag is
+;; a fresh volatile, and `identical?` is the only comparison made against it.
+(def SPLICE-TAG (flint.rt/volatile "flint.reader/splice"))
+(defn- splice [v] [SPLICE-TAG v])
+(defn- spliced? [x]
+  (and (vector? x) (= 2 (count x)) (identical? (nth x 0) SPLICE-TAG)))
+
 (defn peek-ch* [st] (peek-ch st))
 
 (defn- read-token [st]
@@ -205,7 +215,23 @@
         (nil? c) (err st (str "unterminated, expecting " closer))
         (= c closer) (do (next-ch! st) acc)
         :else (let [v (read-form* st)]
-                (if (eof? v) (recur acc) (recur (conj acc v))))))))
+                (cond
+                  (eof? v) (recur acc)
+                  ;; `#?@(:cljs [a b])` splices its elements into the
+                  ;; surrounding collection; that is the whole difference from
+                  ;; `#?`, and it was not happening ANYWHERE. A matched splice
+                  ;; left the `::splice` marker map sitting in the collection,
+                  ;; and an unmatched one left the `SPLICE-NONE` sentinel -- so
+                  ;; `(ns s (:require [a] #?@(:cljs [[b]])))` asked for a
+                  ;; namespace literally called
+                  ;; `[:flint.reader/splice [[b]]]`, and the unmatched case
+                  ;; reached the compiler as a Volatile.
+                  ;;
+                  ;; This is how a library conditionally adds a `:require`, so
+                  ;; it is on the path of most real `.cljc`.
+                  (identical? v SPLICE-NONE) (recur acc)
+                  (spliced? v) (recur (into acc (nth v 1)))
+                  :else (recur (conj acc v))))))))
 
 ;; ------------------------------------------------------------- syntax quote
 
@@ -382,7 +408,7 @@
                        :offered (vec (take-nth 2 clauses))})
               (if splicing? SPLICE-NONE EOF))
           (or (features k) (= k :default))
-          (if splicing? {::splice v} v)
+          (if splicing? (splice v) v)
           :else (recur more))))))
 
 (defn- qualify-keys
@@ -536,7 +562,7 @@
     (let [v (read-form* st)]
       (cond
         (eof? v) (if (nil? (peek-ch st)) EOF (recur))
-        (and (map? v) (contains? v ::splice)) (err st "#?@ outside a collection")
+        (spliced? v) (err st "#?@ outside a collection")
         :else v))))
 
 (def default-features
