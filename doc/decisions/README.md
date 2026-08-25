@@ -29,6 +29,7 @@ for the first.
 | [0020](0020-module-metadata-and-shards.md) | A module declares its build; shards as library modules | **Roadmap.** Custom section for runners; a shard is a third `:kind` |
 | [0021](0021-cli.md) | A native CLI: cross compiler, interpreter, capabilities | **Roadmap.** After AOT and ropes/regex. Removes the babashka dependency |
 | [0022](0022-opaque-values.md) | Opaque values: identity without structure | **Roadmap.** flint has no `(Object.)`; 0021's capabilities are one use |
+| [0023](0023-construe-integration-bar.md) | What "ready for construe" means, concretely | **Live.** The milestone the current work is aimed at |
 
 ## What is actually next
 
