@@ -180,8 +180,23 @@
   (check "build takes its source roots and entry point from deps.edn"
          (:exit (run-in bp "build")) 0)
   (check "  ... and the artifact runs" (:out (run-in bp "run" "out/app.wasm" "ok")) "built ok")
+  ;; The image path is the shape flint's first real consumer uses: a resident
+  ;; loader instantiated once, an image loaded per call. So `--image` has to
+  ;; produce something RUNNABLE, which means the loader too -- an image on its
+  ;; own gave `ENOENT: out/flint-loader.wasm`, naming a path nobody chose.
   (check "  ... --image emits an image instead"
          (boolean (str/includes? (:out (run-in bp "build" "--image")) "out/app.image")) true)
+  (check "  ... and the loader beside it, because an image cannot run alone"
+         (boolean (fs/exists? (str bp "/out/flint-loader.wasm"))) true)
+  (check "  ... so the image runs" (:out (run-in bp "run" "out/app.image" "ok")) "built ok")
+  (check "  ... and a build leaves no scratch file next to the artifact"
+         (vec (sort (map fs/file-name (fs/list-dir (str bp "/out")))))
+         ["app.image" "app.wasm" "flint-loader.wasm"])
+  (fs/delete (str bp "/out/flint-loader.wasm"))
+  (check-that "  ... while a missing loader says what would produce one"
+              (let [o (:out (run-in bp "run" "out/app.image" "ok"))]
+                (and (str/includes? o "flint build --image")
+                     (not (str/includes? o "ENOENT")))))
   (check "  ... and an unbuilt target exits nonzero"
          (:exit (run-in bp "build" ":target" "jvm")) 1))
 

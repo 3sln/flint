@@ -367,6 +367,12 @@
                                 #{"producers" "target_features" "name"}))
         bytes (w/emit m)]
     (io/copy bytes (io/file out))
+    ;; The linker's raw output is scratch -- it is parsed, rewritten and
+    ;; re-emitted above. Leaving it behind put a stray half-megabyte next to
+    ;; every artifact, which was tolerable when `out/` was flint's own build
+    ;; directory and is not now that `flint build` creates one for a user.
+    ;; Only the default name is removed: a caller who NAMED a `tmp` asked for it.
+    (when-not tmp (io/delete-file (io/file (str out ".tmp")) true))
     {:bytes (count bytes)
      :image-bytes (count image)
      :aot (dissoc aot-res :module)

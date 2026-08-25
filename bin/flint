@@ -204,6 +204,16 @@
 (when (= "run" (first *command-line-args*))
   (let [[_ file & rest] *command-line-args*
         loader (or (System/getenv "FLINT_LOADER") "out/flint-loader.wasm")
+        ;; An image is not a module: it has to be instantiated INTO a loader.
+        ;; Saying so beats `ENOENT: out/flint-loader.wasm`, which names a path
+        ;; the reader never chose and does not say what would produce it.
+        _ (when (and (str/ends-with? (str file) ".image") (not (fs/exists? loader)))
+            (binding [*out* *err*]
+              (println (str "no loader at " loader))
+              (println "an image is instantiated into a loader module rather than run on its own")
+              (println "  flint build --image      builds both")
+              (println "  FLINT_LOADER=<path>      points at one you already have"))
+            (System/exit 1))
         script (str "import('" root "/host/run.mjs').then(async (m) => {"
                     "  const r = await m.run(process.argv[1], process.argv.slice(3),"
                     "                        {loaderPath: process.argv[2]});"
@@ -281,13 +291,22 @@
       ;; the roots come from `deps.edn`, so a build inside a project needs no
       ;; `:src`. Re-entering this same script rather than reaching into the
       ;; compiler keeps one code path for compiling.
-      (let [args (concat ["bb" (str root "/bin/flint") ":fn" (:entry b) ":out" (:out b)]
-                         (mapcat (clojure.core/fn [p] [":src" (str (fs/absolutize p))]) (:paths b))
-                         (when (:image? b) ["--emit-image"]))
-            p (.start (ProcessBuilder. (into-array String args)))]
-        (.start (Thread. (clojure.core/fn [] (io/copy (.getInputStream p) System/out))))
-        (.start (Thread. (clojure.core/fn [] (io/copy (.getErrorStream p) System/err))))
-        (System/exit (.waitFor p))))
+      (let [srcs (mapcat (clojure.core/fn [p] [":src" (str (fs/absolutize p))]) (:paths b))
+            run! (clojure.core/fn [args]
+                   (let [p (.start (ProcessBuilder. (into-array String args)))]
+                     (.start (Thread. (clojure.core/fn [] (io/copy (.getInputStream p) System/out))))
+                     (.start (Thread. (clojure.core/fn [] (io/copy (.getErrorStream p) System/err))))
+                     (.waitFor p)))
+            code (run! (concat ["bb" (str root "/bin/flint") ":fn" (:entry b) ":out" (:out b)]
+                               srcs (when (:image? b) ["--emit-image"])))]
+        ;; An image needs a loader to be instantiated into, so building one
+        ;; builds the other. One loader serves every image (0023), so it is
+        ;; built once and left alone after that.
+        (when (and (zero? code) (:loader b) (not (fs/exists? (:loader b))))
+          (run! (concat ["bb" (str root "/bin/flint") ":fn" (:entry b)
+                         ":out" (:loader b) "--loader"]
+                        srcs)))
+        (System/exit code)))
     (if-let [x (:exec r)]
       ;; A task is a program: write it, compile it, run it. Two processes rather
       ;; than one because `flint_load_image` clears the caller's frames -- a

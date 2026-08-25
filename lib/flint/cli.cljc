@@ -182,7 +182,8 @@
   [argv slurp*]
   (let [cmd (first argv)
         rest-args (vec (rest argv))
-        cache ".flint"]
+        cache ".flint"
+        loader-path "out/flint-loader.wasm"]
     (cond
       (or (nil? cmd) (= cmd "help") (= cmd "--help")) (text (usage))
       (= cmd "version") (text version)
@@ -248,13 +249,26 @@
               (nil? entry) (oops (str "which entry point? `flint build :fn my.ns/main`,"
                                       "\nor put `:flint/main my.ns/main` in deps.edn"))
               (not (str/includes? entry "/")) (oops (str "an entry point is `ns/fn`, not " entry))
-              :else {:build {:target tname
-                             :entry entry
-                             :paths all-paths
-                             :out (or (get opts "out")
-                                      (str "out/" (str/replace (namespace* entry) "." "-")
-                                           (if (contains? opts "image") ".image" ".wasm")))
-                             :image? (contains? opts "image")}}))
+              :else
+              (let [image? (contains? opts "image")
+                    out (or (get opts "out")
+                            (str "out/" (str/replace (namespace* entry) "." "-")
+                                 (if image? ".image" ".wasm")))]
+                {:build {:target tname
+                         :entry entry
+                         :paths all-paths
+                         :out out
+                         :image? image?
+                         ;; An image is not runnable on its own -- it needs a
+                         ;; loader module to be instantiated into. So building
+                         ;; one builds the other, rather than leaving the user
+                         ;; with an artifact and `ENOENT: out/flint-loader.wasm`
+                         ;; naming a path they never chose.
+                         ;;
+                         ;; One loader serves every image: it carries all the
+                         ;; builtins and an image re-resolves them by NAME
+                         ;; (0023), so this is not per-program.
+                         :loader (when image? loader-path)}})))
 
           (= cmd "task")
           (let [nm (first rest-args)
