@@ -51,6 +51,32 @@ demonstrated, the headline argument for flint at construe is untested.
 `0018` (cross-runtime benchmarks) should start with workerd for this reason,
 ahead of wasmtime and wasmer.
 
+**Half of this is now demonstrated.** A flint module was run under workerd
+(`wrangler dev --local`, compatibility date 2026-06-01) by importing the `.wasm`
+as a `CompiledWasm` module and instantiating it with no imports:
+
+```json
+{"ok":true,"code":0,"out":"hello, construe","instantiate_ms":0,"run_ms":3,"exports":36}
+```
+
+That settles the easier half: **a flint program runs in the deployed runtime**,
+with no polyfill, no WASI, and no host functions — which follows from the module
+importing nothing, but is worth having measured rather than argued.
+
+**The harder half is still open**: running `out/flintc-gen0.wasm` — the compiler
+as a flint program, 429 KB, EDN spec in and a base64 image out — inside workerd,
+so that a candidate is compiled *in* the Worker. That is the actual cherry
+blocker. The pieces exist and the ABI is already string-in/string-out, so this is
+an experiment rather than a build.
+
+One thing that experiment should settle along the way: **whether construe needs
+to produce a module at all.** Emitting a `.wasm` needs `rust-lld`, which is not
+going to run in a Worker. But the compiler's output is a bytecode *image*, and a
+resident flint module that can load an image would let a Worker compile a
+candidate and run it with no linking step anywhere. If that works it is a better
+fit than module production, and it changes what "compiles in the Worker" has to
+mean.
+
 ### 3. Gas is exact, and survives being useful
 
 `0009` is shipped and asserted. What is not yet demonstrated is that two
