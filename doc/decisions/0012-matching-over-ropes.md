@@ -4,6 +4,16 @@
 > exists in the tree. Do not read it as documentation of shipped behaviour, and
 > do not treat statements in the README as stale on account of it.
 
+> **PREREQUISITE, and it is hard: ropes exist first.** Every experiment,
+> benchmark and tuning decision in this document must be run against the string
+> representation that will actually ship — the three tiers of `0011`, cursor and
+> all — not against flat strings. A matcher tuned on flat bytes is tuned on a
+> configuration flint will not have: the cursor's cost model changes (a byte read
+> plus an occasional leaf advance instead of a contiguous index), the prefilter's
+> `str-index-of` fast path changes shape, and any per-position number measured on
+> flat is measuring something else. Build `0011` §1–2 first, then this, and take
+> every number here on the rope.
+
 Supersedes the delegation half of `0011 §5`. The objection that forced it:
 
 > It won't work over our rope strings though, the stock regex engines for
