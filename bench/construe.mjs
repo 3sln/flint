@@ -144,12 +144,24 @@ const coldFlint = await bestAsync(7, async () => {
   const inst = instantiate(mod);
   inst.main('parse', '1');
 });
+// `collect_now` and `stat_peak_live` are diagnostic exports and a production
+// module does not carry them (doc/decisions/0016). This used to call them
+// unconditionally and crash with `collect_now is not a function`, taking the
+// cold-start and footprint section -- flint's largest measured win -- with it.
+const DIAG = !!(flintInst.exports.collect_now && flintInst.exports.stat_peak_live
+                && flintInst.exports.stat_collections);
+const needsDiag = (what) =>
+  console.log(`  ${what}: NOT MEASURED -- needs \`./bin/build-units --diagnostics\``);
+
 const flintMem = flintInst.exports.memory.buffer.byteLength;
-flintInst.exports.collect_now();
-const flintLive = Number(flintInst.exports.stat_peak_live());
 console.log(row(['flint: compile + instantiate + run', ms(coldFlint) + ' ms',
                  kb(flintMem) + ' reserved']));
-console.log(row(['', '', kb(flintLive) + ' live']));
+if (DIAG) {
+  flintInst.exports.collect_now();
+  console.log(row(['', '', kb(Number(flintInst.exports.stat_peak_live())) + ' live']));
+} else {
+  needsDiag('live heap after a forced collection');
+}
 
 let ivm = null;
 try { ivm = (await import(`${CONSTRUE}/isolated-vm/isolated-vm.js`)).default; } catch (_) {
@@ -202,14 +214,18 @@ console.log();
 // ---------------------------------------------------------------------------
 console.log('=== the suite: 500 contexts through one warm module ========');
 const CASES = 125;   // x4 contexts = 500 parses
-const beforeColl = Number(flintInst.exports.stat_collections());
+const beforeColl = DIAG ? Number(flintInst.exports.stat_collections()) : null;
 const suiteMs = best(5, () => flintInst.main('parse', String(CASES)));
-const afterColl = Number(flintInst.exports.stat_collections());
+const afterColl = DIAG ? Number(flintInst.exports.stat_collections()) : null;
 const cherrySuite = best(5, () => cherryParse.run(CASES));
 console.log(row(['flint', ms(suiteMs) + ' ms', ms(suiteMs / 500) + ' ms/case']));
 console.log(row(['cherry -> JS', ms(cherrySuite) + ' ms', ms(cherrySuite / 500) + ' ms/case']));
-console.log(`  collections during 5 flint runs: ${afterColl - beforeColl}` +
-            `, peak live ${kb(Number(flintInst.exports.stat_peak_live()))}`);
+if (DIAG) {
+  console.log(`  collections during 5 flint runs: ${afterColl - beforeColl}` +
+              `, peak live ${kb(Number(flintInst.exports.stat_peak_live()))}`);
+} else {
+  needsDiag('collections and peak live during the suite');
+}
 console.log();
 
 // ---------------------------------------------------------------------------

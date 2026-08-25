@@ -217,7 +217,12 @@ pub extern "C" fn flint_rt_ptr() -> u32 {
 pub extern "C" fn set_step_limit(hi: u32, lo: u32) {
     unsafe {
         let rt = ensure_rt();
-        rt.set_gas_limit(((hi as u64) << 32) | lo as u64);
+        // `u64::MAX` is the sentinel for "no checkpoint", so asking for the
+        // largest possible limit switched counting OFF -- which is what
+        // `bench/wasm.mjs` did, and it then reported a tight loop as dispatching
+        // zero instructions. An explicit limit now always counts.
+        let want = ((hi as u64) << 32) | lo as u64;
+        rt.set_gas_limit(if want == u64::MAX { u64::MAX - 1 } else { want });
         rt.steps = 0;
         rt.refresh_checkpoint();
     }

@@ -79,17 +79,36 @@
                      (if b (format "%.2fx" (/ (:run r) b)) "-")))))
 (println)
 
+(defn- measured
+  "A number the harness actually took, or nil. `bench/wasm.mjs` reports an absent
+  export as JSON `null`, which reads here as a symbol -- and printing that as a
+  zero is how this table came to say a tight loop dispatches no instructions."
+  [x]
+  (when (number? x) x))
+
 (println "interpreter dispatch, measured separately from data-structure cost")
 (println "  (steps are dispatched instructions; counted in a second pass with the")
 (println "   step counter on, timed in a first pass with it off)")
-(println (format "%-32s %14s %12s %14s" "program" "instructions" "warm" "ns/instruction"))
-(doseq [r results]
-  (println (format "%-32s %14d %10.2f ms %12.1f"
-                   (:label r) (:steps r) (:run r)
-                   (if (pos? (:steps r)) (/ (* (:run r) 1e6) (:steps r)) 0.0))))
+(if (every? #(nil? (measured (:steps %))) results)
+  (println "  NOT MEASURED: the step counter did not engage. Re-run against a")
+  (do
+    (println (format "%-32s %14s %12s %14s" "program" "instructions" "warm" "ns/instruction"))
+    (doseq [r results]
+      (if-let [n (measured (:steps r))]
+        (println (format "%-32s %14d %10.2f ms %12.1f"
+                         (:label r) n (:run r) (/ (* (:run r) 1e6) n)))
+        (println (format "%-32s %14s %10.2f ms %12s"
+                         (:label r) "not measured" (:run r) "-"))))))
 (println)
 
 (println "allocation and collection per warm run")
-(println (format "%-32s %14s %12s" "program" "bytes alloc" "collections"))
-(doseq [r results]
-  (println (format "%-32s %14d %12d" (:label r) (:allocated r) (:collections r))))
+(if (every? #(nil? (measured (:allocated %))) results)
+  (println "  NOT MEASURED: `stat_bytes_allocated` and `stat_collections` are\n"
+           " diagnostic exports and a production module does not carry them\n"
+           " (doc/decisions/0016). Re-run after `./bin/build-units --diagnostics`.")
+  (do
+    (println (format "%-32s %14s %12s" "program" "bytes alloc" "collections"))
+    (doseq [r results]
+      (println (format "%-32s %14s %12s" (:label r)
+                       (or (some-> (measured (:allocated r)) str) "not measured")
+                       (or (some-> (measured (:collections r)) str) "not measured"))))))

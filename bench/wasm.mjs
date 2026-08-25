@@ -14,7 +14,7 @@ const args = rest;
 function now() { return Number(process.hrtime.bigint()) / 1e6; }
 
 let best = { read: Infinity, compile: Infinity, start: Infinity, run: Infinity };
-let out = '', steps = 0, allocated = 0, collections = 0;
+let out = '', steps = null, allocated = null, collections = null;
 
 for (let r = 0; r < reps; r++) {
   let t = now();
@@ -37,8 +37,11 @@ for (let r = 0; r < reps; r++) {
   const run = now() - t;
 
   out = res2.out;
-  if (exports.stat_bytes_allocated) allocated = Number(exports.stat_bytes_allocated());
-  if (exports.stat_collections) collections = Number(exports.stat_collections());
+  // `null`, not zero. These live only in a diagnostics build, and a harness
+  // that reads absent as zero prints "0 bytes allocated" for a program that
+  // allocated megabytes.
+  allocated = exports.stat_bytes_allocated ? Number(exports.stat_bytes_allocated()) : null;
+  collections = exports.stat_collections ? Number(exports.stat_collections()) : null;
   if (res.code !== 0) { console.error('module failed:', res.out); process.exit(1); }
 
   best = {
@@ -54,12 +57,19 @@ for (let r = 0; r < reps; r++) {
   const bytes = readFileSync(path);
   const module = new WebAssembly.Module(bytes);
   const { main, exports } = instantiate(module);
-  if (exports.set_step_limit) {
-    exports.set_step_limit(0xffffffff, 0xffffffff);
+  if (exports.set_step_limit && exports.stat_steps) {
+    // NOT 0xffffffff/0xffffffff: that is exactly `u64::MAX`, which the runtime
+    // reads as "no checkpoint" -- so the largest possible limit turned the
+    // counter off and the answer came back zero.
+    exports.set_step_limit(0x7fffffff, 0xffffffff);
     main(...args);
     const before = Number(exports.stat_steps());
     main(...args);
-    steps = Number(exports.stat_steps()) - before;
+    const n = Number(exports.stat_steps()) - before;
+    // A program that produced an answer dispatched instructions. Zero here means
+    // the counter did not engage, and reporting it as a measurement is how this
+    // harness came to claim a tight loop runs no instructions.
+    steps = n > 0 ? n : null;
   }
 }
 
