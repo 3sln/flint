@@ -114,6 +114,64 @@ Carrying both is what makes `count` O(1) and `subs` genuinely logarithmic. It is
 also the thing that makes the same operations agree across hosts, since a JVM
 port storing bytes computes the same counts.
 
+### What a leaf carries, so composing a node never rescans
+
+Composing an internal node must not rescan its children's bytes. It does not
+have to, because **both aggregates compose in O(fanout)**:
+
+- **ASCII is an AND.** A concatenation is all-ASCII exactly when every part is.
+- **The code-point count is a SUM.**
+
+So a leaf carries, beside its bytes: the **byte length**, the **code-point
+count**, and the **ASCII bit**. An internal node carries the same two aggregates
+over its subtree, computed from its children at construction — a handful of adds
+and ands at fanout 16–32, never a byte scan.
+
+**The scan happens once, at leaf construction, bounded by the leaf size** (512–
+1024 bytes). Every composition above that is arithmetic. That is the property
+that keeps `str` O(1)-ish rather than O(n).
+
+There is already room for this: the `TY_STR` header has **four unused bytes
+between the hash and the data**, which is exactly a code-point count, and bit 18
+is already the ASCII flag.
+
+### But the counts must be RELATIVE, never absolute offsets
+
+This is the one that would be expensive to unwind, so it is worth being explicit:
+a node stores **the size of its own subtree**, not its start index in the whole
+string.
+
+The reason is structure sharing, which §"A tree of string pieces" makes the point
+of the design. The same leaf can appear in two different ropes at two different
+offsets — `(str a b)` and `(str b a)` share `b`, sitting at offset `(count a)` in
+one and offset 0 in the other. A node that recorded its absolute start would be
+correct in at most one of them, and sharing is what makes concatenation cheap in
+the first place.
+
+**So the absolute position is computed during descent**, accumulating child
+counts on the way down, and no node ever knows where it is. That is the standard
+B-tree-with-size-tables arrangement and it is forced here rather than chosen.
+
+### Slicing: inherit the flag when you can, scan a bounded range when you cannot
+
+A `subs` that cuts into the middle of a leaf produces a new leaf over a byte
+range, and it needs both aggregates for it:
+
+- **If the source leaf is ASCII, the slice is ASCII** — inherit it, and the
+  code-point count is the byte length. O(1), no scan.
+- **If the source is not ASCII**, the slice still might be, so either scan the
+  range or mark it conservatively non-ASCII. Prefer the scan: it is bounded by
+  the leaf size and marking conservatively is sticky — a rope whittled down to
+  pure-ASCII content would keep paying for a multi-byte character it no longer
+  contains.
+
+Finding the cut's byte offset inside a non-ASCII leaf is a bounded scan for the
+same reason, so the cost is the same order either way.
+
+**And the flag is always derived from the bytes, never taken from a caller.**
+Every construction path sets it by looking, or the diagnostics check that
+re-derives it will find out — see the note on cached derived properties below.
+
 ### So is the ASCII flag still needed? Per tier, and the answer differs
 
 `str_is_ascii` (bit 18 of the string header) exists for one reason: if every byte
