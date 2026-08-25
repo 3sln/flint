@@ -64,6 +64,9 @@
               :deps {}
               :items []
               :builtins (:builtins opts #{})
+              ;; Which reader-conditional branches are selected. `#{:flint}` by
+              ;; default; a project compiling third-party `.cljc` may need more.
+              :features (or (:features opts) #{:flint})
               :native-alias {}
               :eval-vars (atom {})}))
 
@@ -132,7 +135,8 @@
   `declare`. Clojure needs `declare` for the intra-namespace case; reading
   everything before analysing anything makes it unnecessary."
   [cc nsname src file]
-  (let [resolve-hook
+  (let [spec {:features (:features @cc)}
+        resolve-hook
         (fn [sym]
           (let [nsdef (get-in @cc [:namespaces nsname])
                 n (name sym)]
@@ -143,11 +147,18 @@
                   (symbol "clojure.core" n))
                 (when (contains? macros/bootstrap (symbol n))
                   (symbol "clojure.core" n)))))
-        st (reader/reader src {:file file                                ;; Not #{:clj}: flint is not the JVM, and a
-                               ;; :clj branch here would be host interop we
-                               ;; cannot compile. Ported code needs a :flint or
-                               ;; :default branch -- said plainly in the README.
-                               :features #{:flint} :resolve resolve-hook})
+        ;; Not #{:clj}: flint is not the JVM, and a :clj branch here would be
+        ;; host interop we cannot compile. Ported code needs a :flint or
+        ;; :default branch -- said plainly in the README.
+        ;;
+        ;; It is overridable because third-party `.cljc` written before flint
+        ;; existed offers neither. Such a library's `#?(:clj .. :cljs ..)`
+        ;; selects NOTHING here, and inside a map literal that leaves an odd
+        ;; number of forms -- so the file does not even READ. Which set actually
+        ;; helps is a measurement, not a preference; see `flint build :features`.
+        st (reader/reader src {:file file
+                               :features (or (:features spec) #{:flint})
+                               :resolve resolve-hook})
         _ (vswap! cc assoc-in [:namespaces nsname] (get-in @cc [:namespaces nsname] {}))
         forms (loop [acc []]
                 (let [f (reader/read-form st)]
@@ -333,8 +344,8 @@
 (defn compile-image
   "Compile `sources` ({ns-symbol {:src s :file f}}) with entry var `entry-sym`.
   Returns {:builder b :stats {...}}."
-  [{:keys [sources order entry builtins exclude excluded-builtins]}]
-  (let [cc (new-context {:builtins builtins})]
+  [{:keys [sources order entry builtins exclude excluded-builtins features]}]
+  (let [cc (new-context {:builtins builtins :features features})]
     (let [read-forms (into {} (for [nsname order]
                                 (let [{:keys [src file]} (get sources nsname)]
                                   (when-not src (err (str "no source for namespace " nsname) {:ns nsname}))

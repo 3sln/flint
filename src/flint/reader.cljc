@@ -525,14 +525,27 @@
         (and (map? v) (contains? v ::splice)) (err st "#?@ outside a collection")
         :else v))))
 
+(def default-features
+  "Which reader-conditional branches are selected, unless a caller says
+  otherwise.
+
+  Not `#{:clj}`: flint is not the JVM, and a `:clj` branch is host interop we
+  cannot compile. Ported code needs a `:flint` or `:default` branch.
+
+  It lives here, once, because it did not: `bin/flint` read every source twice
+  more -- to find its requires and to order them -- each with its own literal
+  `#{:flint}`, so overriding the compiler's set changed nothing. That is the
+  same shape as the two EDN readers that both had to learn `#:ns{...}`."
+  #{:flint})
+
 (defn reader
   "A reader state over `src`. `opts` may set `:file`, `:ns`, `:aliases` and
-  `:features` (default #{:flint})."
+  `:features` (default `default-features`)."
   ([src] (reader src {}))
   ([src opts]
    (let [st (make-state src (:file opts "<string>"))]
      (vswap! st merge (select-keys opts [:ns :aliases :features :resolve]))
-     (when (:features opts) (vswap! st assoc :features (:features opts)))
+     (vswap! st assoc :features (or (:features opts) default-features))
      st)))
 
 (defn set-ns! [st ns aliases]

@@ -38,6 +38,8 @@
         ;; `:wasm-ld` shipped once under that name and reads like "flags for the
         ;; linker"; `:wasm-path` says what it is. The old spelling stays as a
         ;; deprecated alias for one release (doc/decisions/0005, section 7).
+        (= k ":features") (let [[vs rest-a] (take-list (rest a))]
+                            (recur rest-a (assoc m :features (into #{} (map keyword vs)))))
         (= k ":wasm-path") (let [[vs rest-a] (take-list (rest a))]
                              (recur rest-a (update m :wasm-path (fnil into []) vs)))
         (= k ":wasm-ld") (let [[vs rest-a] (take-list (rest a))]
@@ -97,14 +99,17 @@
   '#{flint.rt})
 
 (defn collect
-  "Read namespaces from `entry-ns` outwards, returning [{ns {:src :file}} order]."
-  [dirs roots]
+  "Read namespaces from `entry-ns` outwards, returning [{ns {:src :file}} order].
+
+  `features` has to be threaded here, not defaulted: this read decides which
+  `:require`s exist, and a reader conditional can wrap one."
+  [dirs roots features]
   (loop [todo (vec roots) sources {} order []]
     (if-let [n (first todo)]
       (if (or (contains? sources n) (contains? virtual-namespaces n))
         (recur (rest todo) sources order)
         (if-let [s (find-source dirs n)]
-          (let [forms (try (reader/read-all (:src s) {:file (:file s) :features #{:flint}})
+          (let [forms (try (reader/read-all (:src s) {:file (:file s) :features features})
                            (catch Exception e
                              (println "read error in" (:file s) ":" (ex-message e))
                              (System/exit 1)))
@@ -118,10 +123,10 @@
               (System/exit 1))))
       [sources order])))
 
-(defn topo-order [sources]
+(defn topo-order [sources features]
   ;; Dependencies before dependents; clojure.core always first.
   (let [deps (into {} (for [[n {:keys [src file]}] sources]
-                        [n (let [forms (reader/read-all src {:file file :features #{:flint}})
+                        [n (let [forms (reader/read-all src {:file file :features features})
                                  nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
                              (set (when nsform (compiler/ns-requires nsform))))]))]
     (loop [done [] seen #{} pending (vec (keys deps))]
@@ -396,7 +401,7 @@
       (do (when (seq (:out r)) (println (:out r)))
           (System/exit (or (:code r) 0))))))
 
-(let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path aot loader emit-image emit-spec]}
+(let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path aot loader emit-image emit-spec features]}
       (parse-args *command-line-args*)]
   (when-not fn
     (println "usage: flint :src <dir> :fn <ns/fn> [:out <file.wasm>]")
@@ -414,8 +419,9 @@
         ;; Clojure half), then flint's own lib. Stated in the README.
         dirs (concat (or src []) unit-path [(str root "/lib")])
         entry-ns (symbol (namespace fn))
-        [sources order] (collect dirs (cons entry-ns ['clojure.core]))
-        order (core-first (topo-order sources))
+        features (or features reader/default-features)
+        [sources order] (collect dirs (cons entry-ns ['clojure.core]) features)
+        order (core-first (topo-order sources features))
         out (or out "out.wasm")
         t0 (System/nanoTime)
         units (link/discover-units unit-path)
@@ -439,6 +445,7 @@
         ;; the linker for something that is not the linker's doing.
         _ (when-let [d (fs/parent (fs/absolutize out))] (fs/create-dirs d))
         spec {:sources sources :order order :entry fn
+              :features features
               :exclude exclude
               :excluded-builtins (select-keys (builtins-by-unit unit-path) (vec (or exclude [])))
               :builtins (builtin-names unit-path)}
