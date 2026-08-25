@@ -8,6 +8,11 @@
 ;;
 ;; So the test runs the CLI as a compiled flint program, not as a script.
 (require '[clojure.string :as str] '[babashka.fs :as fs] '[clojure.java.io :as io])
+;; The URL derivation is pure, so it is checked directly rather than through a
+;; build -- and against the same code the compiled CLI runs, not a copy.
+(babashka.classpath/add-classpath "lib")
+(require '[flint.deps :as fdeps])
+(def deps-ns-npm-tarball fdeps/npm-tarball)
 
 (def fails (atom 0))
 (defn check [label actual expected]
@@ -31,10 +36,9 @@
       ;; the printer. That flint reads the namespaced form is checked in the
       ;; conformance suite, where it belongs.
       (str "{:paths [\"src\" \"resources\"]\n"
-           ;; Kinds flint CANNOT fetch. The kinds it can are exercised
-           ;; against a real repository further down.
-           " :deps {some/jar {:mvn/version \"1\"}\n"
-           "        some/tarball {:npm/name \"x\"}}\n"
+           ;; Maven -- the one kind flint does not fetch. git and npm are
+           ;; exercised against a real repository and a real tarball below.
+           " :deps {some/jar {:mvn/version \"1\"}}\n"
            " :flint/tasks\n"
            " {greet {:doc \"say hello to $1\" :task (println \"hello\" \"$1\")}\n"
            "  bare (println \"no doc\")\n"
@@ -96,7 +100,6 @@
 (check-that "deps it cannot fetch are named, with the reason"
             (let [o (cli true "deps")]
               (and (str/includes? o "some/jar  (maven)")
-                   (str/includes? o "some/tarball  (npm)")
                    (str/includes? o "portable cljc"))))
 
 ;; The CLI has no ambient authority either. This is the property that makes the
@@ -279,6 +282,65 @@
       (check-that "  ... rather than failing later as a missing namespace"
                   (not (str/includes? (:out r) "cannot find source"))))
     (spit (str gproj "/deps.edn") good)))
+
+;; ---------------------------------------------------------------- npm deps
+;;
+;; 0021's second source, and the reason it needs no registry metadata: an EXACT
+;; version determines the tarball path. A range would need metadata and would
+;; also resolve to something different next week, which is the objection flint
+;; already raises to a git branch.
+;;
+;; Tested against a `file://` registry, so the suite does not need the network.
+;; The URL shape is checked against the real one separately, below.
+(check "an npm tarball URL is derived from the coordinate"
+       (deps-ns-npm-tarball "https://registry.npmjs.org" "squint-cljs" "0.14.208")
+       "https://registry.npmjs.org/squint-cljs/-/squint-cljs-0.14.208.tgz")
+(check "  ... and a scoped package drops the scope from the filename"
+       (deps-ns-npm-tarball "https://registry.npmjs.org" "@scope/pkg" "1.2.3")
+       "https://registry.npmjs.org/@scope/pkg/-/pkg-1.2.3.tgz")
+
+(let [cwd (System/getProperty "user.dir")
+      reg (str (fs/create-temp-dir))
+      stage (str (fs/create-temp-dir))
+      np (str (fs/create-temp-dir))
+      flint-in (fn [dir & args]
+                 (let [pb (ProcessBuilder. (into-array String (cons (str cwd "/bin/flint") args)))]
+                   (.directory pb (io/file dir))
+                   (let [p (.start pb) o (slurp (.getInputStream p)) e (slurp (.getErrorStream p))]
+                     {:exit (do (.waitFor p) (.exitValue p)) :out (str/trim (str o e))})))]
+  ;; An npm tarball unpacks into `package/`, and a package that ships cljc puts
+  ;; it wherever `package.json` points -- so the package ROOT is the source
+  ;; root, not `src`. A git repo of Clojure is `src` by convention; this is not.
+  (fs/create-dirs (str stage "/package/util"))
+  (spit (str stage "/package/package.json") "{\"name\":\"portable-cljc\",\"version\":\"2.0.1\"}")
+  (spit (str stage "/package/util/text.cljc")
+        "(ns util.text)\n(defn shout [s] (str (clojure.string/upper-case s) \"!\"))\n")
+  (fs/create-dirs (str reg "/portable-cljc/-"))
+  (let [pb (ProcessBuilder. (into-array String
+                                        ["tar" "-czf" (str reg "/portable-cljc/-/portable-cljc-2.0.1.tgz") "package"]))]
+    (.directory pb (io/file stage))
+    (.waitFor (.start pb)))
+
+  (fs/create-dirs (str np "/src"))
+  (spit (str np "/src/app.cljc")
+        "(ns app (:require [util.text :as t]))\n(defn main [args] (t/shout (first args)))\n")
+  (let [ok (str "{:paths [\"src\"] :flint/main app/main\n"
+                " :flint/npm-registry \"file://" reg "\"\n"
+                " :deps {portable-cljc {:npm/version \"2.0.1\"}}}\n")]
+    (spit (str np "/deps.edn") ok)
+    (check "an npm dep is fetched and unpacked on the way to a build"
+           (:exit (flint-in np "build")) 0)
+    (check "  ... and the project compiles against the cljc in it"
+           (:out (flint-in np "run" "out/app.wasm" "hello")) "HELLO!")
+    (check-that "  ... with the package ROOT as the source root, not src"
+                (str/includes? (:out (flint-in np "paths")) "/package"))
+
+    (spit (str np "/deps.edn") (str/replace ok "\"2.0.1\"" "\"^2.0.0\""))
+    (let [r (flint-in np "build")]
+      (check-that "an npm version RANGE is refused, with the reason"
+                  (and (str/includes? (:out r) "portable-cljc")
+                       (str/includes? (:out r) "is a range")))
+      (check "  ... and exits nonzero" (:exit r) 1))))
 
 (println (if (zero? @fails) "cli: ok" (str "cli: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))

@@ -19,12 +19,41 @@
 (def supported-dep-kinds
   "Coordinate kinds this build can fetch.
 
-  `git` and `local` only. 0021's order is git, npm, maven -- the cost order, and
-  also the order of how likely the fetched code is to compile. Nothing about
-  that order is arbitrary: a git coordinate is a clone and a path, whereas maven
-  is POM parsing, a transitive graph and version conflict resolution, for source
-  that mostly will not build here anyway."
-  #{:git :local})
+  `git`, `npm` and `local`. 0021's order is git, npm, maven -- the cost order,
+  and also the order of how likely the fetched code is to compile. Nothing about
+  that order is arbitrary: a git coordinate is a clone and a path, and an npm
+  one an exact tarball, whereas maven is POM parsing, a transitive graph and
+  version conflict resolution, for source that mostly will not build here
+  anyway."
+  #{:git :npm :local})
+
+(def default-npm-registry "https://registry.npmjs.org")
+
+(defn exact-version?
+  "Whether `v` is one version rather than a RANGE.
+
+  npm's tarball path is derived from an exact version, so `^1.2.0` would build a
+  URL for a package that does not exist. Refusing is also the same stance flint
+  takes on a git branch: a range resolves to something different next week, and
+  a build that changes underneath you is not a build."
+  [v]
+  (let [v (str v)]
+    (and (not (str/blank? v))
+         (not (some (fn [c] (str/includes? v c))
+                    ["^" "~" ">" "<" "*" "|" " " "=" "X" "x"]))
+         (some (fn [d] (str/starts-with? v d))
+               ["0" "1" "2" "3" "4" "5" "6" "7" "8" "9"]))))
+
+(defn npm-tarball
+  "The tarball URL for an EXACT name and version.
+
+  Exact, which is why no registry metadata is needed: npm's tarball path is
+  derived from the coordinate. A range would need metadata AND would resolve to
+  a different package next week, which is the same objection flint raises to a
+  git branch."
+  [registry nm version]
+  (let [base (if (str/starts-with? nm "@") (last (str/split nm #"/")) nm)]
+    (str registry "/" nm "/-/" base "-" version ".tgz")))
 
 (defn dep-kind
   "Which sort of coordinate this is, by the key that identifies it."
@@ -33,6 +62,7 @@
     (:git/url coord) :git
     (:local/root coord) :local
     (:npm/name coord) :npm
+    (:npm/version coord) :npm
     (:mvn/version coord) :maven
     :else :unknown))
 
@@ -78,12 +108,20 @@
 (defn- coord-dir
   "Where a coordinate's source lives once fetched, or nil if flint cannot fetch
   it at all."
-  [c cache]
+  [nm c cache]
   (let [k (dep-kind c)]
     (cond
       (= k :git) (let [sha (or (:git/sha c) (:sha c))]
                    (when-not (str/blank? (str sha))
                      (str cache "/git/" (git-name (:git/url c) sha))))
+      (= k :npm) (let [v (or (:npm/version c) (:mvn/version c))]
+                   (when (exact-version? v)
+                     ;; `/package`, because that is what an npm tarball unpacks
+                     ;; into, and a source root has to be the directory the
+                     ;; namespaces are relative to.
+                     (str cache "/npm/"
+                          (str/replace (str/replace (str nm) "@" "") "/" "-")
+                          "-" v "/package")))
       (= k :local) (when-not (str/blank? (str (:local/root c))) (:local/root c))
       :else nil)))
 
@@ -105,12 +143,13 @@
   `slurp*` is the project reader; `cache` is the root the host keeps checkouts
   under."
   [d cache slurp*]
-  (loop [todo (vec (or (:deps d) {})) seen #{} out []]
+  (let [registry (or (:flint/npm-registry d) default-npm-registry)]
+   (loop [todo (vec (or (:deps d) {})) seen #{} out []]
     (if (empty? todo)
       out
       (let [e (first todo)
             nm (str (key e)) c (val e)
-            dir (coord-dir c cache)
+            dir (coord-dir (or (:npm/name c) nm) c cache)
             root (if (str/blank? (str (:deps/root c))) dir (str dir "/" (:deps/root c)))]
         (if (or (nil? dir) (contains? seen nm))
           (recur (vec (rest todo)) (conj seen nm) out)
@@ -122,14 +161,26 @@
                 fetched? (some? (slurp* (str dir "/.flint-fetched")))
                 sub (when inner (edn/read-string inner))
                 entry {:dep nm :kind (dep-kind c) :dir dir :root root
-                       :url (:git/url c) :sha (or (:git/sha c) (:sha c))
+                       :url (if (= (dep-kind c) :npm)
+                              (npm-tarball (or (:npm/registry c) registry)
+                                           (or (:npm/name c) nm)
+                                           (or (:npm/version c) (:mvn/version c)))
+                              (:git/url c))
+                       :sha (or (:git/sha c) (:sha c))
                        :fetched? (boolean fetched?)
                        :paths (when fetched?
-                                (mapv (fn [p] (str root "/" p))
-                                      (if (seq (:paths sub)) (:paths sub) ["src"])))}]
+                                (if (seq (:paths sub))
+                                  (mapv (fn [p] (str root "/" p)) (:paths sub))
+                                  ;; No `deps.edn` of its own, so a default per
+                                  ;; kind. A git repo of Clojure is `src` by
+                                  ;; convention; an npm tarball is not -- a
+                                  ;; package that ships cljc puts it wherever
+                                  ;; `package.json` points, and the root is the
+                                  ;; only thing that is always right.
+                                  (if (= (dep-kind c) :npm) [root] [(str root "/src")])))}]
             (recur (vec (concat (rest todo) (or (:deps sub) {})))
                    (conj seen nm)
-                   (conj out entry))))))))
+                   (conj out entry)))))))))
 
 (defn dep-paths
   "Every fetched dependency's source roots, in the order they were resolved."
@@ -148,6 +199,12 @@
               (cond
                 (and (= k :git) (str/blank? (str (or (:git/sha c) (:sha c)))))
                 (conj acc {:dep nm :why "no :git/sha -- flint will not resolve a branch to whatever it points at today"})
+                (and (= k :npm) (str/blank? (str (or (:npm/version c) (:mvn/version c)))))
+                (conj acc {:dep nm :why "no :npm/version"})
+                (and (= k :npm) (not (exact-version? (or (:npm/version c) (:mvn/version c)))))
+                (conj acc {:dep nm :why (str ":npm/version " (pr-str (or (:npm/version c) (:mvn/version c)))
+                                             " is a range -- flint takes an exact version, for the same"
+                                             " reason it takes a git sha and not a branch")})
                 (and (= k :local) (str/blank? (str (:local/root c))))
                 (conj acc {:dep nm :why "no :local/root"})
                 :else acc)))
@@ -186,7 +243,7 @@
                         []
                         (concat ["dependencies this build cannot fetch:"]
                                 (mapv (fn [x] (str "  " (:dep x) "  (" (name (:kind x)) ")")) u)
-                                ["  flint fetches git and :local/root. 0021's order is git, npm,"
-                                 "  maven -- cost order, and also the order of how likely the code"
-                                 "  is to compile: flint has no host interop, so a library has to"
-                                 "  be portable cljc."]))))))
+                                ["  flint fetches git, npm and :local/root. 0021's order is git,"
+                                 "  npm, maven -- cost order, and also the order of how likely the"
+                                 "  code is to compile: flint has no host interop, so a library has"
+                                 "  to be portable cljc, which most of a registry is not."]))))))

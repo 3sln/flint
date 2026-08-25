@@ -268,6 +268,28 @@
                  ;; The stamp goes on LAST, so a fetch that died halfway is not
                  ;; mistaken for one that finished.
                  (spit (io/file dir deps/stamp) (str (:url x) " " (:sha x) "\n"))))
+        npm! (clojure.core/fn [x]
+               ;; An npm tarball unpacks into `package/`, which is why the
+               ;; coordinate's directory ends there: a source root has to be the
+               ;; directory the namespaces are relative to.
+               (let [pkg (io/file (:dir x))
+                     into-dir (str (fs/parent pkg))
+                     tgz (str into-dir "/package.tgz")]
+                 (println (str "fetching " (:dep x) "  " (:url x)))
+                 (fs/create-dirs into-dir)
+                 (doseq [args [["curl" "-sSfL" (:url x) "-o" tgz]
+                               ["tar" "-xzf" tgz "-C" into-dir]]]
+                   (let [p (.start (ProcessBuilder. (into-array String args)))
+                         o (slurp (.getInputStream p)) e (slurp (.getErrorStream p))]
+                     (.waitFor p)
+                     (when-not (zero? (.exitValue p))
+                       (binding [*out* *err*]
+                         (println (str "could not fetch " (:dep x) ":"))
+                         (println (str "  " (str/join " " args)))
+                         (println (str "  " (str/trim (str o e)))))
+                       (System/exit 1))))
+                 (fs/delete-if-exists tgz)
+                 (spit (io/file (:dir x) deps/stamp) (str (:url x) "\n"))))
         r (loop [argv (vec *command-line-args*) guard 0]
             (let [r (cli/run argv slurp*)]
               (if-let [f (:fetch r)]
@@ -279,11 +301,13 @@
                   ;; so this is a fixpoint the host drives: fetch what is
                   ;; pending, then ask again.
                   (doseq [x f]
-                    (if (= (:kind x) :local)
+                    (cond
+                      (= (:kind x) :local)
                       (binding [*out* *err*]
                         (println (str "no such :local/root for " (:dep x) ": " (:dir x)))
                         (System/exit 1))
-                      (git! x)))
+                      (= (:kind x) :npm) (npm! x)
+                      :else (git! x)))
                   (recur (vec (:then r)) (inc guard)))
                 r)))]
     (when-let [b (:build r)]
