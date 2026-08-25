@@ -119,6 +119,32 @@ iterations, runs of seconds) rather than left to the fit.
 1.41–1.52× above includes tier-up. That cuts in AOT's favour for the deployment
 that matters: a Worker request is short, and short is where AOT helps most.
 
+### Resident memory, which is the binding constraint in a Worker
+
+`bin/bench-xruntime` reports this too. Best of five: the first sample of a
+memory high-water mark said wasmtime used 45.6 MB for a *trivial* module and
+13.7 MB for a large one, which is backwards, and repeating gives 10.7 and 13.5
+every time.
+
+| engine | trivial module | with flint | flint costs |
+|---|---:|---:|---:|
+| node (V8) | 42.1 MB | 62.3 MB | +20.2 MB |
+| bun (JavaScriptCore) | 38.7 MB | 62.0 MB | +23.4 MB |
+| deno (V8) | 37.2 MB | 64.4 MB | +27.2 MB |
+| wasmtime (Cranelift) | 10.7 MB | 13.5 MB | +2.8 MB |
+| wasm3 (interpreter) | 8.5 MB | 9.1 MB | +0.5 MB |
+
+0018 asked whether a 6.3 MB reservation is committed. **It is not the
+reservation that costs — it is the compiled code.** flint adds 0.5 MB on the
+engine that interprets the module and 20–27 MB on the ones that compile it, for
+the same 257 KB of wasm and the same 6.3 MB linear memory.
+
+Under a 128 MiB isolate ceiling that leaves about 66 MB of headroom on V8, and
+it is the *engine plus JIT*, not flint's heap, that consumes the rest. Which
+also means module size buys latency and memory together on a JIT, and neither on
+an interpreter — the mirror of what this document expected about compilation
+time.
+
 ## The image-per-call shape, which is what is actually deployed
 
 `bin/bench-image`. A resident loader instantiated once per isolate, a bytecode
