@@ -1,0 +1,21 @@
+#!/bin/sh
+# The image-per-call shape across engines (doc/decisions/0018, 0021, 0023).
+#
+# A resident loader instantiated once, an image loaded per call. This is what
+# flint's first real consumer deploys, and under a Worker isolate's 128 MiB
+# ceiling the numbers that matter are instantiation cost and peak memory rather
+# than steady-state throughput.
+#
+# workerd is used if present. Set WORKERD to point at a binary; the default is
+# where `npm install workerd` puts one.
+set -e
+cd "$(dirname "$0")/.."
+echo "building the loader and two images"
+./bin/flint :src bench/xrt :src bench/construe/gen \
+  :fn construe.bench.xrt25/main :out out/xrt-loader.wasm --loader >/dev/null
+./bin/flint :src bench/xrt :src bench/construe/gen \
+  :fn construe.bench.xrt25/main :out out/xrt.image --emit-image >/dev/null
+./bin/flint :src bench/xrt :src bench/construe/gen \
+  :fn construe.bench.xrt0/main :out out/xrt0.image --emit-image >/dev/null
+cp out/xrt-loader.wasm out/xrt.image out/xrt0.image bench/workerd/
+exec node bench/ximage.mjs "$@"

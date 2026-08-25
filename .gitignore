@@ -14,3 +14,5 @@ test/fixtures/wasm-path-bad/
 deck/node_modules/
 deck/out/
 deck/bun.lock
+bench/workerd/*.wasm
+bench/workerd/*.image
