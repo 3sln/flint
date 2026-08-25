@@ -1147,7 +1147,7 @@ claim fails the build.
 | `flint.port.edn` | 3 | 0 | n/a | n/a |
 | `flint.port.json` | 3 | 0 | n/a | n/a |
 | `flint.port.transit` | 3 | 0 | n/a | n/a |
-| `flint.regex` | 10 | 0 | n/a | n/a |
+| `flint.regex` | 11 | 0 | n/a | n/a |
 | `flint.rpc` | 6 | 0 | n/a | n/a |
 | `flint.thread` | 8 | 0 | n/a | n/a |
 

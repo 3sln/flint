@@ -950,6 +950,7 @@
  {:file "lib/flint/regex.cljc",
   :present
   #{find-from
+    find-from-old
     match-at
     pattern
     pattern?
@@ -960,7 +961,7 @@
     replace-first
     split},
   :macros #{},
-  :count 10},
+  :count 11},
  flint.rpc
  {:file "lib/flint/rpc.cljc",
   :present #{call call-each call-seq cancel client close},

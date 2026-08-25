@@ -95,16 +95,27 @@ console.log('limits');
 }
 
 // --- and the one that matters most: catastrophic backtracking --------------
+//
+// This assertion USED to be that the gas limit stops `(a+)+$`, and that was the
+// right answer for a backtracking engine: the bound was exact rather than
+// heuristic because the backtracking was itself bytecode.
+//
+// It is the wrong answer now. `doc/decisions/0012` replaced the backtracker with
+// a Pike VM, which never rewinds and deduplicates threads by program counter --
+// so the pattern is LINEAR and there is nothing for the limit to stop. The
+// hazard is gone rather than mitigated, and the test should say which.
 {
   const inst = fresh();
   gas(inst, 3_000_000);
   const r = inst.main('redos');
-  eq('a known catastrophic regex is stopped by the gas limit', r.code, 1);
-  ok('  ... by the budget, naming what it spent',
-     r.out.includes('gas limit exceeded'), r.out.slice(0, 160));
-  console.log('    flint\'s regex engine is cljc, so its backtracking IS bytecode');
-  console.log('    and every step is already counted — the ReDoS bound is exact');
-  console.log('    rather than heuristic.');
+  eq('a known catastrophic regex now COMPLETES, in a budget that used to stop it',
+     r.code, 0);
+  ok('  ... with the right answer', r.out.trim() === '0', r.out.slice(0, 160));
+  const spent = Number(inst.exports.stat_steps());
+  console.log(`    (a+)+$ over 32 a's: ${spent.toLocaleString()} instructions, ` +
+              `linear by construction`);
+  ok('  ... and well inside a budget that a backtracker exhausted',
+     spent < 3_000_000, String(spent));
 }
 
 // --- memory: collect first, then a catchable error --------------------------

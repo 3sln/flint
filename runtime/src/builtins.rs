@@ -323,6 +323,30 @@ builtins! {
         let s = arg(rt, a, 0);
         rt.change_case(s, true)
     };
+    "flint/re-compile", flint_b_recompile, b_recompile, |rt, a, n| {
+        let _ = n;
+        let (src, words) = (arg(rt, a, 0), arg(rt, a, 1));
+        rt.re_compile(src, words)
+    };
+    "flint/re-run", flint_b_rerun, b_rerun, |rt, a, n| {
+        let re = arg(rt, a, 0);
+        let s = arg(rt, a, 1);
+        let from = if n > 2 { rt.as_i64(arg(rt, a, 2)).unwrap_or(0) } else { 0 };
+        // 0 searches from `from`; 3 matches exactly at it. Both are entry points
+        // into ONE program (`flint.nfa`), so there is no second program to keep
+        // in step with the first.
+        let entry = if n > 3 { rt.as_i64(arg(rt, a, 3)).unwrap_or(0) as u32 } else { 0 };
+        // The fifth argument asks for a match that reaches the END, which is
+        // `re-matches` and cannot be had by checking the span afterwards.
+        let full = n > 4 && rt.as_i64(arg(rt, a, 4)).unwrap_or(0) != 0;
+        rt.re_run(re, s, from, entry, full)
+    };
+    "flint/re-find-all", flint_b_refindall, b_refindall, |rt, a, n| {
+        let re = arg(rt, a, 0);
+        let s = arg(rt, a, 1);
+        let limit = if n > 2 { rt.as_i64(arg(rt, a, 2)).unwrap_or(0) } else { 0 };
+        rt.re_find_all(re, s, limit)
+    };
     "flint/str-join", flint_b_strjoin, b_strjoin, |rt, a, n| {
         let _ = n;
         let coll = arg(rt, a, 0);

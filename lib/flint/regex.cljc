@@ -1,5 +1,15 @@
 (ns flint.regex
-  "A backtracking regular-expression engine, in cljc.
+  "Regular expressions: a shared NFA compiler and a Pike VM
+  (`doc/decisions/0012`).
+
+  The parser and the NFA compiler are cljc and shared, so every host executes
+  the same compiled program and there is no per-host dialect to drift. The
+  simulator is native, makes ONE left-to-right pass and never rewinds -- which is
+  what lets the subject be a rope (`doc/decisions/0011`) and what makes
+  `(a+)+b` linear rather than exponential.
+
+  `flint.pike` is the same simulator in cljc: the conformance oracle, and what a
+  new host runs before it has its own.
 
   It is here rather than in Rust for the reason in doc/decisions/0002: written
   in the language it tree-shakes per var, so a program with no regex literal
@@ -20,7 +30,7 @@
   possessive quantifiers, unicode property classes. A pattern using any of them
   throws when compiled rather than matching something subtly different.
   `.` matches any character INCLUDING newline, where Java's default does not."
-  (:require [flint.rt] [clojure.string]))
+  (:require [flint.rt] [clojure.string] [flint.nfa :as nfa]))
 
 ;; ------------------------------------------------------------------- parsing
 
@@ -260,7 +270,13 @@
 (def ^:private cache (atom {}))
 
 (defn pattern
-  "Compile `src`. Memoised, so a #\"...\" literal costs one map lookup per use."
+  "Compile `src`. Memoised, so a #\"...\" literal costs one map lookup per use.
+
+  The AST is parsed here and handed to `flint.nfa`, which is SHARED across
+  hosts -- the point of `doc/decisions/0012` being that every host executes the
+  same compiled program, so there is no per-host pattern parser to disagree
+  about `\\w`. The program then goes to the native simulator, which reads a rope
+  through a cursor and never materialises it."
   [src]
   (let [hit (get @cache src)]
     (if hit
@@ -269,7 +285,14 @@
             r (parse-alt src 0 src ngroups)]
         (when (< (second r) (count src)) (perr "unexpected )" src (second r)))
         (let [ast (first r)
-              p {:flint/pattern src :ast ast :ngroups @ngroups :first (first-node ast)}]
+              prog (nfa/compile-ast ast)
+              words (reduce conj
+                            (reduce conj
+                                    [(:ninstrs prog) (count (:classes prog)) @ngroups]
+                                    (:code prog))
+                            (:classes prog))
+              p {:flint/pattern src :ast ast :ngroups @ngroups :first (first-node ast)
+                 :re (flint.rt/re-compile src words)}]
           (reset! cache (assoc @cache src p))
           p)))))
 
@@ -282,14 +305,36 @@
           (map (fn [n] (let [g (get groups n)] (when g (subs s (first g) (second g)))))
                (range 1 (inc ngroups))))))
 
-(defn match-at [p s i]
-  (m (:ast p) s i {} (fn [e gs] [e gs])))
+(defn- slots->groups
+  "The native simulator returns a flat slot vector; the rest of this file speaks
+  in `{group [start end]}`."
+  [r ngroups]
+  (loop [g 1 acc {}]
+    (if (> g ngroups)
+      acc
+      (let [a (nth r (* 2 g)) b (nth r (inc (* 2 g)))]
+        (recur (inc g) (if (neg? a) acc (assoc acc g [a b])))))))
+
+(defn match-at
+  "Match anchored at `i`. One left-to-right pass, no rewinding -- which is what
+  lets the subject be a rope."
+  [p s i]
+  (let [r (flint.rt/re-run (:re p) s i nfa/ENTRY-ANCHORED)]
+    (when r [(nth r 1) (slots->groups r (:ngroups p))])))
 
 (defn find-from
-  "First match at or after `from`. Skips positions the pattern's first node
-  cannot possibly match, which turns a scan over a large subject from one
-  closure allocation per position into a character test per position -- and,
-  for a literal first character, into a single native substring search."
+  "First match at or after `from`.
+
+  ONE pass: the compiled program carries a lazy `.*?` prefix, so the simulator
+  finds the leftmost match itself rather than being restarted at every position.
+  The prefilter this used to need -- a character test per position, in cljc --
+  was measured at 33.6 ms of a 61 ms benchmark, and it is gone."
+  [p s from]
+  (let [r (flint.rt/re-run (:re p) s from nfa/ENTRY-UNANCHORED)]
+    (when r [(nth r 0) (nth r 1) (slots->groups r (:ngroups p))])))
+
+(defn find-from-old
+  "The backtracker's scan, kept only as the thing the new one is checked against."
   [p s from]
   (let [fnode (:first p)
         n (count s)]
@@ -332,36 +377,64 @@
    (let [r (find-from p s from)]
      (when r (groups->result s (first r) (second r) (nth r 2) (:ngroups p))))))
 
-(defn re-matches [p s]
-  (let [r (m (:ast p) s 0 {} (fn [e gs] (when (= e (count s)) [e gs])))]
-    (when r (groups->result s 0 (first r) (second r) (:ngroups p)))))
+(defn re-matches
+  "The whole string, or nil.
+
+  NOT `match-at` plus an end check: leftmost-first would return the first match
+  anchored at zero and give up, so the pattern a-or-ab against the subject ab
+  would be nil where Java finds ab. The simulator is told to accept only a match
+  that
+  reaches the end, which lets the lower-priority alternative win -- the same
+  answer a backtracker gets by backtracking against the anchor, without
+  backtracking."
+  [p s]
+  (let [r (flint.rt/re-run (:re p) s 0 nfa/ENTRY-ANCHORED 1)]
+    (when r (groups->result s (nth r 0) (nth r 1) (slots->groups r (:ngroups p))
+                            (:ngroups p)))))
+
+(defn- all-matches
+  "Every match, from ONE pass of the simulator.
+
+  `re-seq`, `split` and `replace` used to call `find-from` in a loop, and the
+  simulator decodes the subject when it starts -- so splitting a 32 799
+  character corpus into 6 601 pieces decoded it 6 601 times and the Pike VM came
+  out four times SLOWER than the backtracker it replaced. A matcher that never
+  rewinds can find every match in one traversal, and this is where that is spent."
+  [p s limit]
+  (let [w (flint.rt/re-find-all (:re p) s limit)
+        ng (:ngroups p)
+        k (* 2 (inc ng))
+        n (quot (count w) k)]
+    (mapv (fn [mi]
+            (let [b (* mi k)]
+              [(nth w b) (nth w (inc b))
+               (loop [g 1 acc {}]
+                 (if (> g ng)
+                   acc
+                   (let [a (nth w (+ b (* 2 g)))
+                         e (nth w (+ b (inc (* 2 g))))]
+                     (recur (inc g) (if (neg? a) acc (assoc acc g [a e]))))))]))
+          (range n))))
 
 (defn re-seq [p s]
-  (loop [i 0 acc []]
-    (if (> i (count s))
-      (seq acc)
-      (let [r (find-from p s i)]
-        (if (nil? r)
-          (seq acc)
-          (let [start (first r) end (second r)]
-            (recur (if (= end start) (inc end) end)
-                   (conj acc (groups->result s start end (nth r 2) (:ngroups p))))))))))
+  (let [ng (:ngroups p)]
+    (seq (mapv (fn [m] (groups->result s (nth m 0) (nth m 1) (nth m 2) ng))
+               (all-matches p s 0)))))
 
 (defn replace-all [p s f]
-  (loop [i 0 out []]
-    (if (> i (count s))
-      (flint.rt/str-join out)
-      (let [r (find-from p s i)]
-        (if (nil? r)
-          (flint.rt/str-join (conj out (subs s i)))
-          (let [start (first r) end (second r)
-                mres (groups->result s start end (nth r 2) (:ngroups p))
-                rep (if (string? f) f (f mres))]
-            (if (= end start)
-              (if (>= start (count s))
-                (flint.rt/str-join (conj out (subs s i) rep))
-                (recur (inc start) (conj out (subs s i start) rep (subs s start (inc start)))))
-              (recur end (conj out (subs s i start) rep)))))))))
+  (let [ng (:ngroups p)]
+    (loop [i 0 ms (seq (all-matches p s 0)) out []]
+      (if (nil? ms)
+        (flint.rt/str-join (conj out (subs s i)))
+        (let [m (first ms) start (nth m 0) end (nth m 1)
+              mres (groups->result s start end (nth m 2) ng)
+              rep (if (string? f) f (f mres))]
+          (if (= end start)
+            (if (>= start (count s))
+              (flint.rt/str-join (conj out (subs s i) rep))
+              (recur (inc start) (next ms)
+                     (conj out (subs s i start) rep (subs s start (inc start)))))
+            (recur end (next ms) (conj out (subs s i start) rep))))))))
 
 (defn replace-first [p s f]
   (let [r (find-from p s 0)]
@@ -375,16 +448,25 @@
 (defn split
   ([p s] (split p s 0))
   ([p s limit]
-   (loop [i 0 n 1 acc []]
-     (if (and (> limit 0) (>= n limit))
-       (conj acc (subs s i))
-       (let [r (find-from p s i)]
-         (if (nil? r)
-           (conj acc (subs s i))
-           (let [start (first r) end (second r)]
-             (if (= end start)
-               (conj acc (subs s i))
-               (recur end (inc n) (conj acc (subs s i start)))))))))))
+   ;; Java's rules, which this never implemented and which the new battery
+   ;; exposed: a zero-width match AT THE START produces no leading empty piece,
+   ;; a zero-width match elsewhere still splits, and with no limit the trailing
+   ;; empty pieces are dropped. Splitting abc on the empty pattern gives three
+   ;; one-character pieces, not one three-character piece.
+   (let [pieces (loop [i 0 ms (seq (all-matches p s (if (> limit 0) (dec limit) 0)))
+                       acc []]
+                  (if (nil? ms)
+                    (conj acc (subs s i))
+                    (let [m (first ms) start (nth m 0) end (nth m 1)]
+                      (if (and (= end start) (= start 0))
+                        (recur i (next ms) acc)
+                        (recur end (next ms) (conj acc (subs s i start)))))))]
+     (if (> limit 0)
+       pieces
+       ;; ALL of them, down to an empty vector: splitting abc on a-or-ab-then-c
+       ;; is the empty vector in Clojure, not a vector holding one empty string.
+       (loop [v pieces]
+         (if (and (pos? (count v)) (= "" (peek v))) (recur (pop v)) v))))))
 
 ;; Registration, not a call: `clojure.string/split` must not name this namespace
 ;; statically or every program that splits on a comma would carry the engine.
