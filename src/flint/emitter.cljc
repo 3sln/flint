@@ -21,7 +21,27 @@
    :try 0x17 :pop-handler 0x18 :rethrow 0x19
    :vector 0x1A :map 0x1B :set 0x1C :list 0x1D :apply 0x1E
    :jump-if-false-keep 0x1F :jump-if-true-keep 0x20
-   :pop-n 0x21 :set-local-keep 0x22 :self 0x23})
+   :pop-n 0x21 :set-local-keep 0x22 :self 0x23
+   ;; --- specialised on type ------------------------------------------------
+   ;;
+   ;; Emitted where the analyzer PROVED both operands are integers -- from an
+   ;; annotation, from a guard, or from arithmetic on something already known.
+   ;; Each replaces a NATIVE call: no argc, no builtin table lookup, no cross
+   ;; into a Rust function, and in compiled code no boundary at all.
+   ;;
+   ;; `^int` means integer, not fixnum: a value past the fixnum range is a
+   ;; boxed bigint and still answers `int?`. So every one of these still tests
+   ;; for fixnum and falls back. What is removed is the CALL, not the check.
+   :add-int 0x24 :sub-int 0x25 :mul-int 0x26
+   :lt-int 0x27 :le-int 0x28 :gt-int 0x29 :ge-int 0x2A :eq-int 0x2B})
+
+(def int-specialised
+  "Builtin name to the opcode that replaces it when both operands are known
+  integers. Two operands exactly: the variadic arities go through the generic
+  path, and a one-argument `-` is negation, not subtraction."
+  {"flint/add" :add-int "flint/sub" :sub-int "flint/mul" :mul-int
+   "flint/lt" :lt-int "flint/le" :le-int "flint/gt" :gt-int
+   "flint/ge" :ge-int "flint/num-eq" :eq-int})
 
 (defn new-buf [] (volatile! {:bytes [] :fixups [] :labels {}}))
 
@@ -226,10 +246,17 @@
     :fn (emit-fn ctx buf node)
     :invoke (emit-invoke ctx buf node tail?)
     :native-value (put! buf (op :const) (img/u16 (img/native-const (:b ctx) (:name node))))
-    :native (do (doseq [a (:args node)] (emit ctx buf a false))
+    :native (let [args (:args node)
+                  spec (when (= 2 (count args))
+                         (let [o (get int-specialised (:name node))]
+                           (when (and o (every? (fn [a] (= :int (:tag a))) args))
+                             o)))]
+              (doseq [a args] (emit ctx buf a false))
+              (if spec
+                (put! buf (op spec))
                 (put! buf (op :native)
                       (img/u16 (img/native-slot (:b ctx) (:name node)))
-                      (count (:args node))))
+                      (count args))))
     :throw (do (emit ctx buf (:expr node) false) (put! buf (op :throw)))
     :try (emit-try ctx buf node tail?)
     :vector (do (doseq [x (:items node)] (emit ctx buf x false))

@@ -145,6 +145,12 @@ grep -E "^    [a-z]" /tmp/flint-test.out | awk '{printf "%s=%s ", $1, $2} END {p
 ./bin/build-units > /dev/null 2>&1 || fail "build-units"
 
 echo
+echo "== specialisation: the same instructions, and what one costs"
+./bin/flint :src bench/progs :fn spec/main :out out/spec.wasm > /dev/null 2>&1 || fail "build spec.wasm"
+node bench/specialised.mjs > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "bench/specialised.mjs"; }
+grep -E "^  (generic|specialised|[0-9])" /tmp/flint-test.out | sed 's/^/  /'
+
+echo
 echo "== check: what was written for flint and does nothing"
 # The fixture carries one of each kind, so it must FAIL -- a checker that
 # cannot fail is not checking. The two host hints must NOT be what fails it.

@@ -45,7 +45,14 @@
 ;; 2.31 ms, which is 24.7x and takes flint from 3.1x slower than babashka to
 ;; 7.9x faster. `test/threads.clj` carries the same note; both floors move
 ;; together or one of them is drifting unnoticed.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-prod.wasm") 215000))
+;; Raised again by 5 172 bytes for type specialisation: eight opcodes the
+;; compiler emits where it PROVED both operands are integers, paid for twice
+;; because the interpreter loop is instantiated twice. Measured by building the
+;; same module without them (213 243) and with them (218 415), not attributed.
+;; What it buys is 1.90x on arithmetic at an IDENTICAL instruction count --
+;; `bench/progs/spec.cljc`, 22.4 ns per operation, which is what reaching a
+;; builtin through the table and re-reading its arguments costs.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-prod.wasm") 220000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

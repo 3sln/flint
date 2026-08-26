@@ -78,6 +78,25 @@ pub mod op {
     /// Push this frame's own closure, so a named `fn` can call itself without
     /// capturing itself (which it could not: it does not exist yet).
     pub const SELF: u8 = 0x23;
+    // --- specialised on type ------------------------------------------------
+    //
+    // Emitted where the COMPILER proved both operands are integers. Each one
+    // replaces a NATIVE call: no argc byte, no builtin table lookup, no call
+    // through `__indirect_function_table` into a Rust function that re-reads
+    // its arguments off the value stack.
+    //
+    // `^int` means integer, not fixnum -- a value past the fixnum range is a
+    // boxed bigint and still answers `int?` -- so each still tests for fixnum
+    // and falls back to the same number-tower routine the builtin would have
+    // called. What is removed is the CALL, not the check.
+    pub const ADD_INT: u8 = 0x24;
+    pub const SUB_INT: u8 = 0x25;
+    pub const MUL_INT: u8 = 0x26;
+    pub const LT_INT: u8 = 0x27;
+    pub const LE_INT: u8 = 0x28;
+    pub const GT_INT: u8 = 0x29;
+    pub const GE_INT: u8 = 0x2A;
+    pub const EQ_INT: u8 = 0x2B;
     /// Everything from here is reserved for fused superinstructions.
     pub const SUPER_BASE: u8 = 0x80;
 }
@@ -362,6 +381,34 @@ impl Rt {
     /// anywhere in the module, so a builtin the program never reaches is not
     /// exported, and `--gc-sections` deletes it. Nothing may call a builtin
     /// directly, ever.
+    /// The half of a specialised integer operation that is not the common
+    /// case: a bigint operand, a result past the fixnum range, an overflow, or
+    /// -- if a type tag were ever wrong -- something that is not a number at
+    /// all. Out of line because the interpreter loop is emitted twice and this
+    /// is never the hot path. It answers exactly as the builtin it replaced
+    /// would, including the refusal.
+    #[inline(never)]
+    fn int_binop_slow(&mut self, opcode: u8, x: Value, y: Value) -> Value {
+        match opcode {
+            op::ADD_INT => self.num_add(x, y),
+            op::SUB_INT => self.num_sub(x, y),
+            op::MUL_INT => self.num_mul(x, y),
+            _ => {
+                if !self.is_number(x) || !self.is_number(y) {
+                    return self.throw_not_a_number(x, y);
+                }
+                let c = self.num_cmp(x, y);
+                Value::boolean(match opcode {
+                    op::LT_INT => c < 0,
+                    op::LE_INT => c <= 0,
+                    op::GT_INT => c > 0,
+                    op::GE_INT => c >= 0,
+                    _ => c == 0,
+                })
+            }
+        }
+    }
+
     #[inline]
     fn call_native(&mut self, idx: u32, base: usize, argc: usize) -> Value {
         #[cfg(feature = "diagnostics")]
@@ -1130,6 +1177,50 @@ impl Rt {
                     }
                     self.roots.stack_top = base;
                     self.vpush(Value::heap(a));
+                }
+                // The specialised integer operations. Both operands are
+                // already on the value stack, so the fast path touches no
+                // heap, commits nothing, and roots nothing.
+                //
+                // The fast path is INLINE and the rest is a call. The whole
+                // arm inline costs 6,483 module bytes -- the interpreter loop
+                // is instantiated twice (0009: a run with no budget has no
+                // counter in it), so everything here is paid for twice. The
+                // slow path is a bigint, an overflow, or a wrong tag, and none
+                // of those is worth inlining twice.
+                op::ADD_INT | op::SUB_INT | op::MUL_INT | op::LT_INT | op::LE_INT
+                | op::GT_INT | op::GE_INT | op::EQ_INT => {
+                    let y = self.vpop();
+                    let x = self.vpop();
+                    let fast = if x.is_fixnum() && y.is_fixnum() {
+                        let (p, q) = (x.as_fixnum(), y.as_fixnum());
+                        match opcode {
+                            op::ADD_INT => p.checked_add(q).filter(|v| Value::fits_fixnum(*v)).map(Value::fixnum),
+                            op::SUB_INT => p.checked_sub(q).filter(|v| Value::fits_fixnum(*v)).map(Value::fixnum),
+                            op::MUL_INT => p.checked_mul(q).filter(|v| Value::fits_fixnum(*v)).map(Value::fixnum),
+                            op::LT_INT => Some(Value::boolean(p < q)),
+                            op::LE_INT => Some(Value::boolean(p <= q)),
+                            op::GT_INT => Some(Value::boolean(p > q)),
+                            op::GE_INT => Some(Value::boolean(p >= q)),
+                            _ => Some(Value::boolean(p == q)),
+                        }
+                    } else {
+                        None
+                    };
+                    match fast {
+                        Some(v) => self.vpush(v),
+                        None => {
+                            commit!();
+                            let r = self.int_binop_slow(opcode, x, y);
+                            if self.failed() {
+                                if !self.unwind() {
+                                    return NIL;
+                                }
+                                continue;
+                            }
+                            self.vpush(r);
+                        }
+                    }
                 }
                 op::NATIVE => {
                     let opcode_at = ip - 1;

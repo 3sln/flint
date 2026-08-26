@@ -438,7 +438,13 @@
   (let [want (form-tag form)
         where (if (symbol? form) form "a value")
         form (if want (vary-meta form dissoc :tag) form)
-        node (analyze-untagged env form)]
+        node (analyze-untagged env form)
+        ;; STAMP what is known onto the node. `node-tag` computes it from the
+        ;; node's shape, and stamping makes that computation O(1) for every
+        ;; node above -- but the reason to do it is that the emitter and every
+        ;; backend after it read the AST, not the analyzer. A type that only
+        ;; exists inside `node-tag` cannot specialise anything.
+        node (if-let [t (node-tag node)] (assoc node :tag t) node)]
     (if want (checked env node want where) node)))
 
 (defn analyze-untagged [env form]

@@ -68,7 +68,16 @@
    0x14 [:closure 3]  0x15 [:native 3]  0x16 [:throw 0]    0x17 [:try 2]
    0x18 [:pop-handler 0] 0x19 [:rethrow 0] 0x1A [:vector 2] 0x1B [:map 2]
    0x1C [:set 2]      0x1D [:list 2]    0x1E [:apply 1]    0x1F [:jump-if-false-keep 2]
-   0x20 [:jump-if-true-keep 2] 0x21 [:pop-n 1] 0x22 [:set-local-keep 1] 0x23 [:self 0]})
+   0x20 [:jump-if-true-keep 2] 0x21 [:pop-n 1] 0x22 [:set-local-keep 1] 0x23 [:self 0]
+   ;; The type-specialised operations. Registered here BEFORE the emitter
+   ;; inlines them, so a walk strides correctly over code that contains them
+   ;; and each one bails to the interpreter for its single instruction. That is
+   ;; the safe order: an opcode the walk does not know refuses the whole arity,
+   ;; and refusing every arity that does arithmetic would have silently
+   ;; un-compiled most of the program.
+   0x24 [:add-int 0]  0x25 [:sub-int 0] 0x26 [:mul-int 0]
+   0x27 [:lt-int 0]   0x28 [:le-int 0]  0x29 [:gt-int 0]
+   0x2A [:ge-int 0]   0x2B [:eq-int 0]})
 
 (def JUMPS #{:jump :jump-if-false :jump-if-true :jump-if-false-keep :jump-if-true-keep})
 
@@ -271,6 +280,8 @@
     :call [(- (nth b 0)) (- (nth b 0))]
     :apply [(- (nth b 0)) (- (nth b 0))]
     :native [(- 1 (nth b 2)) (- 1 (nth b 2))]
+    ;; Two operands in, one result out.
+    (:add-int :sub-int :mul-int :lt-int :le-int :gt-int :ge-int :eq-int) [-1 -1]
     :closure [(- 1 (nth b 2)) (- 1 (nth b 2))]
     (:vector :set :list) [(- 1 (u16 b)) (- 1 (u16 b))]
     :map [(- 1 (* 2 (u16 b))) (- 1 (* 2 (u16 b)))]

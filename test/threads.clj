@@ -66,8 +66,20 @@
 ;; names as quadratic with flat strings -- went from 57.17 ms to 2.31 ms on
 ;; `bench/progs/concat.cljc`, which is 24.7x, and from 3.1x slower than babashka
 ;; to 7.9x faster. A tree join is not free in bytes and it is worth these ones.
-(check-that "the floor is within the budget 0009 and 0011 chose"
-            (< pure-size 215000))
+;; And again for type specialisation, by 5 172 bytes -- MEASURED, by building
+;; the same module with the eight arms removed and with them in (213 243 vs
+;; 218 415), not attributed. The interpreter loop is instantiated twice, so
+;; everything in it is paid for twice, which is why the slow half of each
+;; operation is `#[inline(never)]`: moving it out of line gave back 1 311 of
+;; those bytes and cost nothing measurable.
+;;
+;; What it buys, on `bench/progs/spec.cljc`: the same loop, the same answer and
+;; THE SAME INSTRUCTION COUNT runs 1.90x faster when the compiler could prove
+;; the operands were integers -- 22.4 ns per arithmetic operation, which is the
+;; cost of reaching a builtin through the table and having it re-read its
+;; arguments off the value stack.
+(check-that "the floor is within the budget 0009, 0011 and specialisation chose"
+            (< pure-size 220000))
 
 ;; ---------------------------------------------------------------- channels
 
