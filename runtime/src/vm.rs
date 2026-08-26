@@ -97,6 +97,12 @@ pub mod op {
     pub const GT_INT: u8 = 0x29;
     pub const GE_INT: u8 = 0x2A;
     pub const EQ_INT: u8 = 0x2B;
+    /// Every type predicate, with the `flint.types/code` as its operand. These
+    /// need no type information to EMIT -- `(nil? x)` is a tag test whatever
+    /// `x` is -- so they fire on code nobody annotated, which is where the
+    /// census says the time actually is: 28% of the native calls in a real
+    /// workload are a tag test reached through a call that costs 22.7 ns.
+    pub const TYPE_P: u8 = 0x2C; // u8 type code
     /// Everything from here is reserved for fused superinstructions.
     pub const SUPER_BASE: u8 = 0x80;
 }
@@ -381,6 +387,35 @@ impl Rt {
     /// anywhere in the module, so a builtin the program never reaches is not
     /// exported, and `--gc-sections` deletes it. Nothing may call a builtin
     /// directly, ever.
+    /// Every type predicate, on the same codes `flint/check-tag` dispatches on
+    /// -- `test/types.clj` asserts that table agrees with the cljc one, and
+    /// this shares it, so a predicate and its annotation can never disagree
+    /// about what a type is.
+    ///
+    /// Allocates nothing, can fail at nothing, and cannot re-enter the VM.
+    /// That is what lets compiled code call it without the bail protocol: the
+    /// value stack cannot move underneath it, so none of the cached bases need
+    /// reloading afterwards.
+    #[inline]
+    pub(crate) fn type_p(&self, code: u8, v: Value) -> bool {
+        match code {
+            1 => self.is_int(v),
+            2 => self.is_float(v),
+            3 => self.is_number(v),
+            4 => self.is_string(v),
+            5 => self.is_keyword(v),
+            6 => self.is_symbol(v),
+            7 => v.is_bool(),
+            8 => self.is_vector(v),
+            9 => self.is_map(v),
+            10 => self.is_set(v),
+            11 => self.is_seq(v),
+            12 => self.is_fn(v),
+            13 => v.is_nil(),
+            _ => self.is_sequential(v),
+        }
+    }
+
     /// The half of a specialised integer operation that is not the common
     /// case: a bigint operand, a result past the fixnum range, an overflow, or
     /// -- if a type tag were ever wrong -- something that is not a number at
@@ -1221,6 +1256,13 @@ impl Rt {
                             self.vpush(r);
                         }
                     }
+                }
+                op::TYPE_P => {
+                    let code = self.u8_at(ip);
+                    ip += 1;
+                    let v = self.vpop();
+                    let r = self.type_p(code, v);
+                    self.vpush(Value::boolean(r));
                 }
                 op::NATIVE => {
                     let opcode_at = ip - 1;

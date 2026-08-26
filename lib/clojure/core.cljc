@@ -207,7 +207,30 @@
   ([f coll] (let [s (seq coll)]
               (if s (reduce f (first s) (rest s)) (f))))
   ([f init coll]
-   (loop [acc init s (seq coll)]
+   ;; A vector is walked BY INDEX. The general road is `seq`/`first`/`next`,
+   ;; and it allocates a seq step PER ELEMENT -- measured at 1.0 allocations
+   ;; per element on `bench/progs/colls.cljc`, for a walk that produces no
+   ;; value anyone keeps. Wall-clock barely sees it in a run that collects
+   ;; twice; a nursery does, and so does a 128 MiB isolate.
+   ;;
+   ;; This is not one function getting faster: `mapv`, `filterv`, `into`,
+   ;; `run!`, `some`, `every?`, `frequencies` and `group-by` all go through
+   ;; here. The annotations are free -- `count` declares itself an integer and
+   ;; the counter starts at a literal, so both are PROVEN and no check is
+   ;; emitted, while the comparison and the increment become inline opcodes.
+   (if (vector? coll)
+     (let [^int n (count coll)]
+       (loop [acc init ^int i 0]
+         (if (flint.rt/lt i n)
+           (let [acc' (f acc (flint.rt/nth coll i))]
+             (if (reduced? acc') (nth acc' 0) (recur acc' (flint.rt/add i 1))))
+           acc)))
+     (reduce-seq f init coll))))
+
+(defn- reduce-seq
+  "`reduce` over anything that is not indexed."
+  [f init coll]
+  (loop [acc init s (seq coll)]
      (if s
        (let [acc' (f acc (first s))]
          ;; `nth`, not `deref`. A `reduced` is a one-element vector carrying a
@@ -215,8 +238,8 @@
          ;; delays -- so every short-circuiting `reduce` raised
          ;; `cannot deref this value`, and nothing in the suite had ever taken
          ;; that branch.
-         (if (reduced? acc') (nth acc' 0) (recur acc' (next s))))
-       acc))))
+        (if (reduced? acc') (nth acc' 0) (recur acc' (next s))))
+      acc)))
 
 (defn reduced [x] (flint.rt/with-meta [x] {:flint/reduced true}))
 (defn reduced? [x] (if (vector? x) (boolean (:flint/reduced (meta x))) false))
@@ -723,11 +746,23 @@
 (defn val [e] (flint.rt/nth e 1))
 
 (defn merge [& maps]
-  (reduce (fn [a b] (if (nil? b) a (reduce (fn [m e] (assoc m (key e) (val e))) a b)))
-          (first maps) (rest maps)))
+  ;; ONE transient across every source, not one per source. A transient made
+  ;; from an existing map inherits that map's nodes, so the first write to each
+  ;; path still copies it -- which is why merging two maps measured exactly the
+  ;; same either way. The saving is on nodes the session itself created, so it
+  ;; appears from the second source map onward, and only if the transient
+  ;; survives that long.
+  (let [ms (remove nil? maps)]
+    (if (nil? (seq ms))
+      nil
+      (persistent!
+       (reduce (fn [m b] (reduce (fn [m e] (assoc! m (key e) (val e))) m b))
+               (transient (first ms)) (rest ms))))))
 
 (defn select-keys [m ks]
-  (reduce (fn [acc k] (if (contains? m k) (assoc acc k (get m k)) acc)) {} ks))
+  (persistent!
+   (reduce (fn [acc k] (if (contains? m k) (assoc! acc k (get m k)) acc))
+           (transient {}) ks)))
 
 (defn update
   ([m k f] (assoc m k (f (get m k))))
@@ -761,16 +796,20 @@
   (persistent! (reduce (fn [m x] (assoc! m x (inc (get m x 0)))) (transient {}) coll)))
 
 (defn group-by [f coll]
-  (reduce (fn [m x] (let [k (f x)] (assoc m k (conj (get m k []) x)))) {} coll))
+  ;; The outer map is transient; the per-key vectors stay persistent because
+  ;; they are read back on the next element that lands in the same group.
+  (persistent!
+   (reduce (fn [m x] (let [k (f x)] (assoc! m k (conj (get m k []) x))))
+           (transient {}) coll)))
 
 (defn distinct [coll]
-  (loop [acc [] seen #{} s (seq coll)]
+  (loop [acc (transient []) seen (transient #{}) s (seq coll)]
     (if s
       (let [x (first s)]
         (if (contains? seen x)
           (recur acc seen (next s))
-          (recur (conj acc x) (conj seen x) (next s))))
-      (seq acc))))
+          (recur (conj! acc x) (conj! seen x) (next s))))
+      (seq (persistent! acc)))))
 
 (defn- as-comparator
   "Clojure lets a predicate stand in for a comparator: (sort > xs) works because
@@ -827,8 +866,10 @@
 (defn iterate [f x] (lazy-seq (cons x (iterate f (f x)))))
 
 (defn zipmap [ks vs]
-  (loop [m {} ks (seq ks) vs (seq vs)]
-    (if (and ks vs) (recur (assoc m (first ks) (first vs)) (next ks) (next vs)) m)))
+  (loop [m (transient {}) ks (seq ks) vs (seq vs)]
+    (if (and ks vs)
+      (recur (assoc! m (first ks) (first vs)) (next ks) (next vs))
+      (persistent! m))))
 
 (defn mapv
   ([f coll] (persistent! (reduce (fn [acc x] (conj! acc (f x))) (transient []) coll)))
@@ -881,11 +922,11 @@
   (keep-indexed (fn [i x] (if (zero? (rem i n)) x nil)) coll))
 
 (defn dedupe [coll]
-  (loop [acc [] prev ::none s (seq coll)]
+  (loop [acc (transient []) prev ::none s (seq coll)]
     (if s
       (let [x (first s)]
-        (recur (if (= x prev) acc (conj acc x)) x (next s)))
-      (seq acc))))
+        (recur (if (= x prev) acc (conj! acc x)) x (next s)))
+      (seq (persistent! acc)))))
 
 (defn partition-by [f coll]
   (loop [acc [] cur [] k ::none s (seq coll)]
@@ -916,14 +957,18 @@
   ([k x y & more] (reduce (fn [a b] (if (< (k a) (k b)) a b)) (min-key k x y) more)))
 
 (defn merge-with [f & maps]
-  (reduce (fn [a b]
-            (if (nil? b)
-              a
-              (reduce (fn [m e]
-                        (let [k (key e) v (val e)]
-                          (if (contains? m k) (assoc m k (f (get m k) v)) (assoc m k v))))
-                      a b)))
-          (first maps) (rest maps)))
+  (let [ms (remove nil? maps)]
+    (if (nil? (seq ms))
+      nil
+      (persistent!
+       (reduce (fn [m b]
+                 (reduce (fn [m e]
+                           (let [k (key e) v (val e)]
+                             (if (contains? m k)
+                               (assoc! m k (f (get m k) v))
+                               (assoc! m k v))))
+                         m b))
+               (transient (first ms)) (rest ms))))))
 
 (defn update-vals [m f] (reduce-kv (fn [acc k v] (assoc acc k (f v))) {} m))
 (defn update-keys [m f] (reduce-kv (fn [acc k v] (assoc acc (f k) v)) {} m))

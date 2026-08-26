@@ -211,6 +211,20 @@ pub extern "C" fn aot_int_binop(
     out
 }
 
+/// A type predicate from compiled code. Reads the top of the value stack and
+/// returns the boxed answer; the caller stores it back over the argument.
+///
+/// No bail protocol, no `refresh`, and no gas flush: this allocates nothing and
+/// cannot fail, so nothing the caller has cached can move underneath it. That
+/// is the whole reason it is worth having -- what a predicate costs is being
+/// REACHED, and this is the cheapest possible way to reach one.
+#[no_mangle]
+pub extern "C" fn aot_type_p(rt: *mut Rt, code: u32, top: u32) -> u64 {
+    let rt = unsafe { &mut *rt };
+    let v = rt.roots.stack[top as usize - 1];
+    Value::boolean(rt.type_p(code as u8, v)).0
+}
+
 /// `RETURN`. Pops the frame and pushes the result where the caller expects it,
 /// exactly as the interpreter's own arm does. The caller then resumes AT THE
 /// BLOCK AFTER ITS CALL, because that frame's `aot_ip` was set when it bailed.

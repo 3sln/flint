@@ -77,7 +77,10 @@
    ;; un-compiled most of the program.
    0x24 [:add-int 0]  0x25 [:sub-int 0] 0x26 [:mul-int 0]
    0x27 [:lt-int 0]   0x28 [:le-int 0]  0x29 [:gt-int 0]
-   0x2A [:ge-int 0]   0x2B [:eq-int 0]})
+   0x2A [:ge-int 0]   0x2B [:eq-int 0]
+   ;; One operand: the type code. Needs no type information to emit, so unlike
+   ;; the arithmetic above it fires on code nobody annotated.
+   0x2C [:type-p 1]})
 
 (def JUMPS #{:jump :jump-if-false :jump-if-true :jump-if-false-keep :jump-if-true-keep})
 
@@ -93,7 +96,8 @@
   #{:nop :const :nil :true :false :int :local :local-w :set-local :set-local-keep
     :pop :pop-n :dup :var :set-var :self :upval :jump :jump-if-false :jump-if-true
     :jump-if-false-keep :jump-if-true-keep :return :native
-    :add-int :sub-int :mul-int :lt-int :le-int :gt-int :ge-int :eq-int})
+    :add-int :sub-int :mul-int :lt-int :le-int :gt-int :ge-int :eq-int
+    :type-p})
 
 ;; ------------------------------------------------------------------- values
 
@@ -288,6 +292,8 @@
     :native [(- 1 (nth b 2)) (- 1 (nth b 2))]
     ;; Two operands in, one result out.
     (:add-int :sub-int :mul-int :lt-int :le-int :gt-int :ge-int :eq-int) [-1 -1]
+    ;; One in, one out.
+    :type-p [0 0]
     :closure [(- 1 (nth b 2)) (- 1 (nth b 2))]
     (:vector :set :list) [(- 1 (u16 b)) (- 1 (u16 b))]
     :map [(- 1 (* 2 (u16 b))) (- 1 (* 2 (u16 b)))]
@@ -538,6 +544,15 @@
                (op :if) (op :void) (op :return) (op :end)
                (i32c 0) (lset GAS)
                (reload (:need ctx))])
+      ;; A type predicate. No bail protocol and no reload: the helper cannot
+      ;; allocate, cannot fail, and cannot re-enter, so nothing this function
+      ;; has cached can move underneath it. The answer is stored back over the
+      ;; argument, so the stack top does not change either.
+      :type-p [(lget TOPB) (i32c 8) (op :i32-sub)
+               (lget RT) (i32c (nth b 0)) (top-index)
+               (call-fn helpers :type-p)
+               (i64st 0)]
+
       ;; `k`, not `op`: `op` is the byte emitter, and this function
       ;; deliberately does not destructure the instruction's `:op` under that
       ;; name -- see the note on the argument list.

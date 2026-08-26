@@ -151,6 +151,21 @@ node bench/specialised.mjs > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.o
 grep -E "^  (generic|specialised|[0-9])" /tmp/flint-test.out | sed 's/^/  /'
 
 echo
+echo "== collections: transients, and what a seq walk costs in memory"
+./bin/build-units --diagnostics > /dev/null 2>&1 || fail "build-units --diagnostics"
+./bin/flint :src bench/progs :fn colls/main :out out/colls-diag.wasm > /dev/null 2>&1 || fail "build colls"
+node bench/colls.mjs 20000 conj conj! assoc assoc! reduce group-by zipmap select-keys \
+  > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "bench/colls.mjs"; }
+grep -E "^  [a-z]" /tmp/flint-test.out | sed 's/^/  /'
+# The claim this section exists to defend: a transient allocates less than the
+# persistent it replaces. If that stops being true, something regressed in the
+# collections and no wall-clock check would notice.
+awk '/^  conj  /{p=$4} /^  conj! /{t=$4} END{gsub(",","",p); gsub(",","",t);
+  if (t+0 >= p+0) { print "  FAIL conj! allocates " t " against conj " p; exit 1 }
+  else print "  ok   conj! allocates " t " where conj allocates " p }' /tmp/flint-test.out || fail "transients stopped helping"
+./bin/build-units > /dev/null 2>&1 || fail "build-units"
+
+echo
 echo "== check: what was written for flint and does nothing"
 # The fixture carries one of each kind, so it must FAIL -- a checker that
 # cannot fail is not checking. The two host hints must NOT be what fails it.

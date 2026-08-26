@@ -9,7 +9,8 @@
   Tail positions become `TAIL_CALL`, which drops the caller's frame before the
   callee's is pushed, so mutual recursion in tail position runs in constant
   space even though Clojure's `recur` only handles self-recursion."
-  (:require [flint.image :as img]))
+  (:require [flint.image :as img]
+            [flint.types :as ty]))
 
 (def op
   {:nop 0x00 :const 0x01 :nil 0x02 :true 0x03 :false 0x04 :int 0x05
@@ -33,7 +34,22 @@
    ;; boxed bigint and still answers `int?`. So every one of these still tests
    ;; for fixnum and falls back. What is removed is the CALL, not the check.
    :add-int 0x24 :sub-int 0x25 :mul-int 0x26
-   :lt-int 0x27 :le-int 0x28 :gt-int 0x29 :ge-int 0x2A :eq-int 0x2B})
+   :lt-int 0x27 :le-int 0x28 :gt-int 0x29 :ge-int 0x2A :eq-int 0x2B
+   ;; One opcode for every type predicate, with the type as its operand. These
+   ;; need NO type information to emit -- `(nil? x)` is a tag test whatever `x`
+   ;; is -- so unlike the arithmetic above they fire on code nobody annotated.
+   ;; The census says they are 28% of the native calls in a real workload, and
+   ;; a native call costs 22.7 ns to REACH, against a body that is one
+   ;; comparison.
+   :type-p 0x2C})
+
+(def type-predicates
+  "Builtin name to the `flint.types/code` its test corresponds to. One
+  argument exactly."
+  {"nil?" :nil "string?" :string "keyword?" :keyword "symbol?" :symbol
+   "number?" :number "int?" :int "float?" :float "boolean?" :boolean
+   "vector?" :vector "map?" :map "set?" :set "seq?" :seq "fn?" :fn
+   "sequential?" :sequential})
 
 (def int-specialised
   "Builtin name to the opcode that replaces it when both operands are known
@@ -250,10 +266,14 @@
                   spec (when (= 2 (count args))
                          (let [o (get int-specialised (:name node))]
                            (when (and o (every? (fn [a] (= :int (:tag a))) args))
-                             o)))]
+                             o)))
+                  pred (when (= 1 (count args))
+                         (get ty/code (get type-predicates (:name node))))]
               (doseq [a args] (emit ctx buf a false))
-              (if spec
-                (put! buf (op spec))
+              (cond
+                spec (put! buf (op spec))
+                pred (put! buf (op :type-p) pred)
+                :else
                 (put! buf (op :native)
                       (img/u16 (img/native-slot (:b ctx) (:name node)))
                       (count args))))
