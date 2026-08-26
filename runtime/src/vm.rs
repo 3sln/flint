@@ -369,6 +369,16 @@ impl Rt {
             if let Some(c) = crate::aotstat::NATIVE_CALLS.get_mut(idx as usize) {
                 *c += 1;
             }
+            // Would a fixnum specialisation have applied here? Read off the
+            // real operands rather than inferred from the source, because the
+            // question a specialising compiler faces is what actually arrives.
+            // A zero-arg call is vacuously all-fixnum and would specialise to
+            // nothing, so it does not count.
+            if argc > 0 && (0..argc).all(|k| self.vat(base + k).is_fixnum()) {
+                if let Some(c) = crate::aotstat::NATIVE_FIX.get_mut(idx as usize) {
+                    *c += 1;
+                }
+            }
             if crate::aotstat::NATIVE_TRACE_N < crate::aotstat::TRACE_CAP {
                 let k = crate::aotstat::NATIVE_TRACE_N;
                 crate::aotstat::NATIVE_TRACE[k] = idx as u16;

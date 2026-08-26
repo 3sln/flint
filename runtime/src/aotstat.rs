@@ -95,6 +95,14 @@ pub static mut OPS: [u64; 256] = [0; 256];
 /// which beats reasoning about which opcode is wrong.
 pub static mut NATIVE_CALLS: [u64; 512] = [0; 512];
 
+/// Per native import, the calls whose every argument was a fixnum. Type
+/// specialisation is only worth emitting where this is close to
+/// `NATIVE_CALLS`: a site that is fixnum 60% of the time pays for a guard and
+/// a slow path on the other 40%, and the arithmetic it replaces is four
+/// instructions. Counted beside the total so the RATIO is read rather than the
+/// count -- a builtin called twice with fixnums is not evidence of anything.
+pub static mut NATIVE_FIX: [u64; 512] = [0; 512];
+
 /// The first few thousand native calls IN ORDER. Totals cannot show a first
 /// divergence -- a run that dies early is smaller everywhere -- and the first
 /// divergence is the only part of the trace that means anything.
@@ -178,6 +186,8 @@ pub fn read(i: u32) -> u64 {
             OPS[i - NBUCKET * 4 - COUNTS.len()]
         } else if i < NBUCKET * 4 + COUNTS.len() + 256 + 512 {
             NATIVE_CALLS[i - NBUCKET * 4 - COUNTS.len() - 256]
+        } else if i < NBUCKET * 4 + COUNTS.len() + 256 + 1024 {
+            NATIVE_FIX[i - NBUCKET * 4 - COUNTS.len() - 256 - 512]
         } else {
             0
         }
