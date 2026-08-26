@@ -1,5 +1,8 @@
 # 0009 — Hard limits, and the loop that does not count
 
+> **BUILT** — deterministic gas, charged natives, and a catchable memory cap.
+> The determinism is what makes every cross-engine number in `0018` comparable.
+
 The interpreter costs speed against JIT'd native code. This is a large part of
 what it buys back, and it is worth treating as a headline feature rather than a
 knob.

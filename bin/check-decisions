@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Every decision doc carries a status banner; the index carries a status row.
+# This asserts the two agree. The failure this catches is not cosmetic: the
+# index has already been wrong in both directions, and the direction that
+# UNDERSTATES what exists is the one that gets something rebuilt.
+exec python3 "$(dirname "$0")/check_decisions.py" "$@"

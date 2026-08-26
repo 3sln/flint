@@ -1,7 +1,9 @@
 # 0015 — VM snapshots: instant, exportable, inspectable
 
-> **NOT BUILT — specified after a dozen sessions of ad-hoc instruments, two of
-> which lied and each cost a run.**
+> **BUILT** — capture, export/import, and an inspector that reads the format,
+> all three. Opt-in under `0016`: +18 569 bytes when enabled, absent otherwise.
+> `test/snapshots.clj` is the standing check. Specified after a dozen sessions
+> of ad-hoc instruments, two of which lied and each cost a run.
 
 Three pieces:
 

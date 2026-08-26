@@ -1,5 +1,7 @@
 # 0006 — The host ABI: tokens, one event queue, and where the cost really is
 
+> **BUILT** — tokens, one event queue, two lifetimes.
+
 Refines 0005 §5. The owner designed most of this; the notes below are the places
 it needs sharpening, and the reasoning for each.
 

@@ -1,5 +1,8 @@
 # 0001 — Interpreter vs AOT, and stack vs register
 
+> **BUILT.** The stack machine shipped; dispatch is measured at 6.2 ns per
+> instruction. The AOT half of the question is `0013`, which is shelved.
+
 Raised while the runtime was at `mem`/`value`/`obj`, before layer 9 exists. The
 plan settles "stack machine" in one line; that is probably right and it is not
 yet ARGUED. Both forks below want a recorded decision in the README.

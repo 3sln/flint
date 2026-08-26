@@ -1,8 +1,10 @@
 # 0012 — The matcher has to consume a rope, which decides the design
 
-> **NOT BUILT YET — this is a plan, not a description.** Nothing in this file
-> exists in the tree. Do not read it as documentation of shipped behaviour, and
-> do not treat statements in the README as stale on account of it.
+> **BUILT** — `runtime/src/pike.rs`, one shared NFA with two simulators (the
+> cljc reference and the native one) over a rope cursor. `re-pattern`,
+> `re-find`, `re-matches` and `re-seq` are in `clojure.core`; `test/pike.clj`
+> is the standing check, and it asserts the catastrophic case stays linear
+> (`(a+)+$` over 24 and 48 a's: 37 ms and 38 ms).
 
 > **PREREQUISITE, and it is hard: ropes exist first.** Every experiment,
 > benchmark and tuning decision in this document must be run against the string

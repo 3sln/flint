@@ -1,8 +1,11 @@
 # 0011 — Rope strings, and what to do about regex
 
-> **NOT BUILT YET — this is a plan, not a description.** Nothing in this file
-> exists in the tree. Do not read it as documentation of shipped behaviour, and
-> do not treat statements in the README as stale on account of it.
+> **BUILT** — `runtime/src/rope.rs`, three tiers behind one string type, with
+> the flattens counted rather than assumed. `test/ropes.clj` is the standing
+> check; it asserts a 64 000-character build materialises nothing.
+> Sections below are the reasoning that produced that design; where a section
+> weighs an option that was not taken, it is kept for the reasoning, not as a
+> description of the tree.
 
 ## 1. UTF-8 on the JVM and CLR is not the problem
 

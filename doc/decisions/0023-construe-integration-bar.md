@@ -1,6 +1,6 @@
 # 0023 — What "ready for construe" means, concretely
 
-> **A milestone definition, not a design.** It exists so the handoff is judged
+> **LIVE — a milestone definition, not a design.** It exists so the handoff is judged
 > against a list rather than a feeling, and so the work between here and there is
 > the work that actually matters to the first customer.
 

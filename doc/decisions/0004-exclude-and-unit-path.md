@@ -1,5 +1,8 @@
 # 0004 — `:exclude` and `:wasm-ld`
 
+> **BUILT.** `:exclude` is an assertion and `:wasm-path` is a search path; both
+> are covered by the options section of the suite.
+
 > **Superseded in one detail:** `:wasm-ld` is now spelled **`:wasm-path`**
 > (`doc/decisions/0005`, section 7). The old name is accepted as a deprecated
 > alias for one release. Everything else below stands.

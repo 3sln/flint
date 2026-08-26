@@ -1,5 +1,8 @@
 # 0007 — Benchmark the DECISION, not the runtime
 
+> **DONE.** The results are in the README, and `0018` later re-ran the whole set
+> across eight engines, so every figure now says which engine produced it.
+
 The final phase. Numbers only matter if they answer a question somebody is
 actually deciding, so this names the question first.
 

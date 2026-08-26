@@ -1,5 +1,9 @@
 # 0005 — Green threads, ports, and protocols
 
+> **BUILT** — green threads, ports, protocols and dynamic vars. The port bug
+> that ran through this phase is closed; `../HANDOFF.md` is its post-mortem and
+> the source of the five standards the work is now held to.
+
 A large phase. Read it all before starting: the first section decides the shape
 of everything after it.
 

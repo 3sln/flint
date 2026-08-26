@@ -1,7 +1,8 @@
 # 0002 — Only reachable code ships, builtins included
 
-> **The requirement below stands. The MECHANISM is superseded by
-> `0003-namespace-units.md`** — per-namespace relocatable wasm objects linked
+> **SUPERSEDED in mechanism. The requirement below stands, and is met by
+> `0003`'s route.** The mechanism proposed here is superseded by
+> `0003-namespace-units.md` — per-namespace relocatable wasm objects linked
 > with `wasm-ld --gc-sections`. Both routes proposed here were rejected there,
 > with reasons. Read 0003.
 

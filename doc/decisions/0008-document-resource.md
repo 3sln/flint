@@ -1,5 +1,7 @@
 # 0008 — Documents: structure eagerly, content on demand
 
+> **BUILT.** Both wave assertions pass: 64 waves, 4 194 304 bytes.
+
 Replaces the paging idea in 0007 §5. Paging assumed extraction is a linear scan.
 It is not: you read the structure, find the table, and read *that* table's cells.
 Most of a fifty-page scan is irrelevant to `{merchant, total, lines}`, and paging

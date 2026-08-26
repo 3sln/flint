@@ -1,5 +1,8 @@
 # 0016 — Two builds: a stripped production VM, and everything else optional
 
+> **BUILT.** Both builds are compiled and tested on every suite run, and `0020`'s
+> compatibility key is drawn so the two stay shard-compatible.
+
 A cross-cutting rule that supersedes the per-feature clauses in `0009`, `0014`
 and `0015`. Those each said "keep it out of the pure module"; this says what that
 means and how it is enforced, once, for all of them.

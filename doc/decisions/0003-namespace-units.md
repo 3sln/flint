@@ -1,5 +1,7 @@
 # 0003 — A namespace is a compilation unit, and linking composes them
 
+> **BUILT.** A namespace is a compilation unit and `flint link` composes them.
+
 **Supersedes the mechanism half of 0002.** The requirement there stands — only
 reachable code ships, built-ins included — but both routes it proposed are worse
 than this one, which came from the owner:
