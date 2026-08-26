@@ -30,6 +30,7 @@ for the first.
 | [0021](0021-cli.md) | A native CLI: cross compiler, interpreter, capabilities | **Partly shipped.** The command surface and `deps.edn` work; the native binary and capability injection do not |
 | [0022](0022-opaque-values.md) | Opaque values: identity without structure | **Shipped.** `(opaque)`, host-minted capabilities, invalidated on snapshot import |
 | [0023](0023-construe-integration-bar.md) | What "ready for construe" means, concretely | **Live.** The milestone the current work is aimed at |
+| [0024](0024-no-runtime-linking.md) | No linking at compile time; byte strings and transient ropes | **Roadmap.** `wasm-ld` runs once when flint is built, never per program |
 
 ## What is actually next
 
@@ -38,25 +39,31 @@ what remains, and what each thing is waiting on.
 
 **Open, in the order the last measurement left them:**
 
-1. **Shards** (`0020` part 2) — the format is in place; the cost is the
+1. **No compile-time linking** (`0024`) — `wasm-ld` once when flint is built,
+   a prebuilt runtime embedded in the compiler, and `flint compile wasm` /
+   `wasm-aot` splicing into it. Blocked on one thing: `flint.wasm` is built on
+   Java byte arrays, so it does not compile under flint. Which needs **byte
+   strings** -- the rope treatment for bytes -- and a **transient** for them,
+   measured at 9.7x on the shape that wants it.
+2. **Shards** (`0020` part 2) — the format is in place; the cost is the
    classification. A shard may privately bundle pure code, but must *import*
    anything carrying identity or mutable state, because a second copy is a
    second identity. Protocols are the hard case, and deciding which namespaces
    fall on which side is the work.
-2. **The JVM, tier 2** (`0010`) — the route is **decided** and not built.
+3. **The JVM, tier 2** (`0010`) — the route is **decided** and not built.
    Chicory measured 39× V8 at its best, which rules tier 1 out; tier 2 is
    porting the VM. `0018` is what settled it.
-3. **`clojure.zip`, `clojure.data`, `clojure.datafy`** — the Clojars survey
+4. **`clojure.zip`, `clojure.data`, `clojure.datafy`** — the Clojars survey
    said implementing these unblocks more third-party code than maven's
    transitive resolution would have, which is why that half of `0021` is
    cancelled.
-4. **The rest of `0021`** — the native binary itself (wasmer `create-exe` or a
+5. **The rest of `0021`** — the native binary itself (wasmer `create-exe` or a
    small Rust host), cross-compilation backends, nREPL, and capability
    injection on the command line.
-5. **Thread pool** (`0019`) — strictly opt-in and free when declined; gas drawn
+6. **Thread pool** (`0019`) — strictly opt-in and free when declined; gas drawn
    in per-thread blocks; snapshots halt the whole app at a safe point.
-6. **Profiler** (`0017`) — deterministic, because instruction counts are.
-7. **Debug runner** (`0014`) — cheap because a breakpoint is a park, and it
+7. **Profiler** (`0017`) — deterministic, because instruction counts are.
+8. **Debug runner** (`0014`) — cheap because a breakpoint is a park, and it
    shares its reader with `0015`, which is now built.
 
 **Closed, with the result rather than the plan:**
