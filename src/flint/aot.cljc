@@ -92,7 +92,8 @@
   instructions, and the rest go back to the interpreter one at a time."
   #{:nop :const :nil :true :false :int :local :local-w :set-local :set-local-keep
     :pop :pop-n :dup :var :set-var :self :upval :jump :jump-if-false :jump-if-true
-    :jump-if-false-keep :jump-if-true-keep :return :native})
+    :jump-if-false-keep :jump-if-true-keep :return :native
+    :add-int :sub-int :mul-int :lt-int :le-int :gt-int :ge-int :eq-int})
 
 ;; ------------------------------------------------------------------- values
 
@@ -205,9 +206,12 @@
    :i32-load 0x28 :i64-load 0x29 :i32-store 0x36 :i64-store 0x37
    :i32-const 0x41 :i64-const 0x42
    :i32-eqz 0x45 :i32-eq 0x46 :i32-ne 0x47
-   :i64-eq 0x51 :i64-ne 0x52 :i64-ge-u 0x5A
+   :i64-eqz 0x50 :i64-eq 0x51 :i64-ne 0x52
+   :i64-lt-s 0x53 :i64-gt-s 0x55 :i64-le-s 0x57 :i64-ge-s 0x59 :i64-ge-u 0x5A
+   :select 0x1B :i32-and 0x71
    :i32-add 0x6A :i32-sub 0x6B :i32-shl 0x74 :i32-or 0x72 :i32-shr-u 0x76
-   :i64-add 0x7C
+   :i64-add 0x7C :i64-sub 0x7D :i64-mul 0x7E
+   :i64-and 0x83 :i64-or 0x84 :i64-shl 0x86 :i64-shr-s 0x87 :i64-shr-u 0x88
    :i32-wrap-i64 0xA7 :void 0x40})
 
 (defn- op [k] (B k))
@@ -223,6 +227,8 @@
 ;; Locals. The four parameters come first and are fixed by the ABI in
 ;; `runtime/src/aot.rs`; everything after is this emitter's own.
 (def RT 0) (def FP 1) (def RET-TO 2) (def ENTRY 3) (def SYNC 4)
+;; Two i64 scratches, used only by the specialised integer operations.
+(def IX 15) (def IY 16)
 (def SP 5) (def TOPB 6) (def CONSTS 7) (def GLOBALS 8) (def HEAP 9)
 (def PC 10) (def GAS 11) (def T 12) (def FPB 13) (def RETB 14)
 
@@ -323,7 +329,13 @@
 
 (def AOT-NEVER -1)   ;; u32::MAX as an sleb i32
 
-(defn- call-fn [helpers k] [(op :call) (w/uleb (get helpers k))])
+(defn- call-fn [helpers k]
+  ;; Named, because the failure without it is `(long nil)` inside the LEB
+  ;; encoder -- a NullPointerException four layers down that says nothing about
+  ;; which helper is missing or which opcode wanted it.
+  [(op :call) (w/uleb (or (get helpers k)
+                          (throw (ex-info (str "no AOT helper for " k)
+                                          {:want k :have (vec (keys helpers))}))))])
 
 (defn- tick
   "A back-edge: flush the gas accumulated since the last exit, and ask whether
@@ -369,6 +381,102 @@
   [(lget RT) (top-index) (i32c ip) (i32c resume-ip) (i32c resume-block) (lget GAS)
    (call-fn helpers :bail)
    (op :return)])
+
+;; ------------------------------------- the specialised integer operations
+;;
+;; The compiler emits these only where it PROVED both operands are integers, so
+;; the fast path below is the path taken. `^int` means integer and not fixnum --
+;; a value past the fixnum range is a boxed bigint and still answers `int?` --
+;; so the tags are still tested, and everything else goes to a helper.
+;;
+;; A helper rather than a bail, deliberately. A bail needs a re-entry point,
+;; which means a chunk boundary after every arithmetic instruction, and 0013
+;; measured that shape -- "a region ends at every call" -- against this one and
+;; chose this one. The slow path is a bigint or an overflow; it does not
+;; deserve a boundary in the module for every `+` in the program.
+
+(def ^:private FIXNUM-BITS 0x0000FFFFFFFFFFFF)
+
+(defn- is-fixnum
+  "Leaves i32 1 if the i64 on the wasm stack is tagged fixnum."
+  []
+  [(i64c 48) (op :i64-shr-u) (i64c TAG-FIXNUM) (op :i64-eq)])
+
+(defn- unbox
+  "Sign-extend the low 48 bits of the i64 on the wasm stack."
+  []
+  [(i64c 16) (op :i64-shl) (i64c 16) (op :i64-shr-s)])
+
+(defn- box-fixnum []
+  [(i64c FIXNUM-BITS) (op :i64-and)
+   (i64c (bit-shift-left TAG-FIXNUM 48)) (op :i64-or)])
+
+(defn- fits-fixnum
+  "Leaves i32 1 if the i64 in local IX survives a round trip through 48 bits.
+  This is `Value::fits_fixnum` written as the operation that would LOSE the
+  information, which cannot disagree with the boxing below the way a pair of
+  range constants could."
+  []
+  [(lget IX) (unbox) (lget IX) (op :i64-eq)])
+
+(defn- int-slow
+  "Hand the whole operation to Rust, both operands still on the value stack."
+  [{:keys [helpers i need]} opcode ip nx j]
+  [(lget RT) (i32c opcode) (top-index) (i32c ip) (i32c i)
+   (i32c (if j nx AOT-NEVER)) (i32c (or j 0)) (lget GAS)
+   (call-fn helpers :int-binop)
+   (op :if) (op :void) (op :return) (op :end)
+   (i32c 0) (lset GAS)
+   (reload need)])
+
+(def ^:private INT-CMP
+  {:lt-int :i64-lt-s :le-int :i64-le-s :gt-int :i64-gt-s
+   :ge-int :i64-ge-s :eq-int :i64-eq})
+
+(def ^:private INT-ARITH
+  {:add-int :i64-add :sub-int :i64-sub :mul-int :i64-mul})
+
+(defn- emit-int-op
+  "One specialised integer operation, fast path inline."
+  [ctx instr opcode ip nx j]
+  (let [o (:op instr)
+        ;; The value stack is untouched until the result is stored, so the slow
+        ;; path finds both operands exactly where the interpreter would.
+        load-x [(lget TOPB) (i32c 16) (op :i32-sub) (i64ld 0)]
+        load-y [(lget TOPB) (i32c 8) (op :i32-sub) (i64ld 0)]
+        store-at [(lget TOPB) (i32c 16) (op :i32-sub)]
+        drop-one [(lget TOPB) (i32c 8) (op :i32-sub) (lset TOPB)]
+        ;; A 64-bit multiply of two 47-bit values can WRAP, and a wrapped
+        ;; product can look like it fits. So multiplication additionally
+        ;; requires both operands inside 24 bits, where the product cannot
+        ;; reach 48. Conservative on purpose: the alternative is a division on
+        ;; the hot path, and what this misses goes to the helper, which is
+        ;; correct and only slower.
+        in-24 (fn [l] [(lget l) (i64c 40) (op :i64-shl) (i64c 40) (op :i64-shr-s)
+                       (lget l) (op :i64-eq)])
+        slow (int-slow ctx opcode ip nx j)]
+    [load-x (is-fixnum) load-y (is-fixnum) (op :i32-and)
+     (op :if) (op :void)
+     load-x (unbox) (lset IX)
+     load-y (unbox) (lset IY)
+     (if (INT-CMP o)
+       ;; Branchless: both answers are constants, so `select` beats a branch.
+       [store-at
+        (i64c V-TRUE) (i64c V-FALSE)
+        (lget IX) (lget IY) (op (INT-CMP o)) (op :select)
+        (i64st 0)
+        drop-one]
+       [(when (= :mul-int o)
+          [(in-24 IX) (in-24 IY) (op :i32-and) (op :if) (op :void)])
+        (lget IX) (lget IY) (op (INT-ARITH o)) (lset IX)
+        (fits-fixnum)
+        (op :if) (op :void)
+        store-at (lget IX) (box-fixnum) (i64st 0) drop-one
+        (op :else) slow (op :end)
+        (when (= :mul-int o) [(op :else) slow (op :end)])])
+     (op :else)
+     slow
+     (op :end)]))
 
 (defn- falsy
   "`t` is nil or false -- Clojure's `not truthy`, which is what a
@@ -430,6 +538,16 @@
                (op :if) (op :void) (op :return) (op :end)
                (i32c 0) (lset GAS)
                (reload (:need ctx))])
+      ;; `k`, not `op`: `op` is the byte emitter, and this function
+      ;; deliberately does not destructure the instruction's `:op` under that
+      ;; name -- see the note on the argument list.
+      (:add-int :sub-int :mul-int :lt-int :le-int :gt-int :ge-int :eq-int)
+      (let [nx (+ ip len) j (chunk-of nx)
+            code (first (keep (fn [e] (when (= (first (val e)) k) (key e))) OPS))
+            _ (when-not code
+                (throw (ex-info (str "no opcode byte for " k) {:op k})))]
+        (emit-int-op ctx ins code ip nx j))
+
       :native (let [nx (+ ip len) j (chunk-of nx)]
                 [(lget RT) (i32c (u16 b)) (i32c (nth b 2)) (top-index)
                  (i32c ip) (i32c (:i ctx))
@@ -462,8 +580,9 @@
 
 (def ^:private LOCAL-DECLS
   "Groups must follow the index order the `def`s above fix: locals 5..11 are
-  i32, 12 is the i64 scratch, 13 and 14 are i32."
-  [[7 0x7F] [1 0x7E] [2 0x7F]])
+  i32, 12 is the i64 scratch, 13 and 14 are i32, 15 and 16 are the i64
+  scratches the specialised integer operations unbox into."
+  [[7 0x7F] [1 0x7E] [2 0x7F] [2 0x7E]])
 
 (defn locals-decl []
   (into [(w/uleb (count LOCAL-DECLS))]

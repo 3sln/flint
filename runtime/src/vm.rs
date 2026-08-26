@@ -388,7 +388,7 @@ impl Rt {
     /// is never the hot path. It answers exactly as the builtin it replaced
     /// would, including the refusal.
     #[inline(never)]
-    fn int_binop_slow(&mut self, opcode: u8, x: Value, y: Value) -> Value {
+    pub(crate) fn int_binop_slow(&mut self, opcode: u8, x: Value, y: Value) -> Value {
         match opcode {
             op::ADD_INT => self.num_add(x, y),
             op::SUB_INT => self.num_sub(x, y),
@@ -1699,6 +1699,34 @@ impl Rt {
     /// `NATIVE`, run from compiled code. A native is a Rust call either way, so
     /// there is nothing to gain by leaving -- and at 18% of executed
     /// instructions this is the single biggest thing worth keeping inside.
+    /// The out-of-line half of a specialised integer operation, reached from
+    /// COMPILED code. Same protocol as `aot_native_at`: the fast path is
+    /// emitted inline as wasm, and this is where a bigint operand, a result
+    /// past the fixnum range, or an overflow ends up. It is a helper rather
+    /// than a bail so that no chunk boundary is needed after arithmetic --
+    /// a boundary per arithmetic instruction is the shape 0013 measured and
+    /// rejected.
+    pub(crate) fn aot_int_binop_at(
+        &mut self,
+        opcode: u32,
+        ip: u32,
+        block: u32,
+        next_ip: u32,
+        next_block: u32,
+    ) -> u32 {
+        let keep_top = self.roots.stack_top;
+        let base = keep_top - 2;
+        let y = self.roots.stack[base + 1];
+        let x = self.roots.stack[base];
+        let r = self.int_binop_slow(opcode as u8, x, y);
+        self.roots.stack_top = base;
+        if self.failed() {
+            return self.aot_failed(ip, block, next_ip, next_block, keep_top, base, r);
+        }
+        self.vpush(r);
+        0
+    }
+
     pub(crate) fn aot_native_at(
         &mut self,
         idx: u32,

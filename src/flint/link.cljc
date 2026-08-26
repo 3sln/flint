@@ -208,7 +208,7 @@
 
 (def ^:private AOT-HELPERS
   {:native "aot_native" :return "aot_return" :bail "aot_bail" :tick "aot_tick"
-   :call "aot_call"})
+   :call "aot_call" :int-binop "aot_int_binop"})
 
 (defn compile-aot
   "Emit a wasm function for every arity the emitter can take, put them in the

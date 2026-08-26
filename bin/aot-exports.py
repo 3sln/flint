@@ -12,7 +12,7 @@ link, when the helpers' function indices are finally knowable.
 import sys
 
 EXPORTS = ["aot_prologue", "aot_native", "aot_return", "aot_bail", "aot_tick",
-           "aot_call"]
+           "aot_call", "aot_int_binop"]
 # Only meaningful when both features are on; harmless to ask for otherwise
 # because the linker is told about it only by the diagnostics build.
 DIAG_ONLY = ["stat_sync_drift"]

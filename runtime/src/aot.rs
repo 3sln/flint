@@ -188,6 +188,29 @@ pub extern "C" fn aot_native(
     out
 }
 
+/// The specialised integer operations, when the fast path did not apply. The
+/// common case never reaches here: compiled code tests both tags and does the
+/// arithmetic itself. This is a bigint, an overflow, or a result past the
+/// fixnum range. Returns 1 if the caller must bail.
+#[no_mangle]
+pub extern "C" fn aot_int_binop(
+    rt: *mut Rt,
+    opcode: u32,
+    top: u32,
+    ip: u32,
+    block: u32,
+    next_ip: u32,
+    next_block: u32,
+    gas: u32,
+) -> u32 {
+    let rt = unsafe { &mut *rt };
+    rt.steps += gas as u64;
+    rt.roots.stack_top = top as usize;
+    let out = rt.aot_int_binop_at(opcode, ip, block, next_ip, next_block);
+    refresh(rt);
+    out
+}
+
 /// `RETURN`. Pops the frame and pushes the result where the caller expects it,
 /// exactly as the interpreter's own arm does. The caller then resumes AT THE
 /// BLOCK AFTER ITS CALL, because that frame's `aot_ip` was set when it bailed.
