@@ -31,7 +31,7 @@ bb -e '
         (str "[\n" (str/join ",\n" (map (fn [n] (str "  \"" n "\"")) names)) "\n]\n"))
   (println "   " (count names) "builtins"))'
 
-echo "==> the universal loader"
+echo "==> the runtime module, and the slot map that points an image at it"
 # A loader built from one program carries only the builtins that program
 # reached -- `--gc-sections` deletes the rest, which is the whole modularity
 # story and exactly wrong for a distributable. So generate a source that names
@@ -54,7 +54,9 @@ fs.writeFileSync("dist/src/loader.cljc", `(ns loader
   ;; this image entirely. It exists so the module has an entry point.
   (str (count all)))
 `);'
-./bin/flint :src dist/src :fn loader/main :out dist/flint-loader.wasm --loader | sed 's/^/    /'
+FLINT_SLOTS_OUT=dist/slots.json \
+  ./bin/flint :src dist/src :fn loader/main :out dist/flint-loader.wasm --loader | sed 's/^/    /'
+cp dist/flint-loader.wasm dist/flint-runtime.wasm
 
 echo "==> the compiler"
 ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.wasm | sed 's/^/    /'

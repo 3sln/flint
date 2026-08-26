@@ -60,6 +60,19 @@
             (flint.rt/= op "dedupe")
             (let [v (mapv (fn [x] (flint.rt/quot x 3)) (ints n))]
               (if base? (count v) (count (dedupe v))))
+            ;; Building a string by repeated `str`. A rope makes each join
+            ;; O(1) instead of a copy, but it still allocates a NODE per join
+            ;; and leaves a right-leaning tree. This is the case a transient
+            ;; byte/char string would coalesce into a tail buffer.
+            (flint.rt/= op "str-build")
+            (let [v (mapv (fn [i] (flint.rt/num->str i)) (ints n))]
+              (if base? (count v)
+                  (count (reduce (fn [acc x] (flint.rt/str2 acc x)) "" v))))
+            ;; The same thing through a vector and one join at the end, which
+            ;; is what a transient would approximate.
+            (flint.rt/= op "str-join")
+            (let [v (mapv (fn [i] (flint.rt/num->str i)) (ints n))]
+              (if base? (count v) (count (flint.rt/str-join v))))
             (flint.rt/= op "reduce") (let [v (ints n)]
                                        (if base? (count v)
                                            (reduce (fn [a x] (flint.rt/add a x)) 0 v)))

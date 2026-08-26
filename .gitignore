@@ -23,3 +23,5 @@ out/chicory/
 # release workflow builds it from the tag it is publishing.
 dist/flintc.wasm
 dist/flint-loader.wasm
+dist/flint-runtime.wasm
+dist/slots.json

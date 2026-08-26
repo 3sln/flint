@@ -332,6 +332,17 @@
                                            {:builtin b :symbol sym})))))
                    ordered)
         [m _] (w/append-elem m base fidx)
+        ;; The slot map, for anyone who has to point an image at THIS module's
+        ;; table without linking. `bin/build-dist` writes it beside the module
+        ;; it ships: a distributable compiler splices an image into a prebuilt
+        ;; module rather than linking one, and the image's native slots have to
+        ;; come from somewhere.
+        _ (when-let [out (System/getenv "FLINT_SLOTS_OUT")]
+            (spit out (str "{\n"
+                           (str/join ",\n"
+                                     (map (fn [e] (str "  \"" (key e) "\": " (val e)))
+                                          (sort-by key slots)))
+                           "\n}\n")))
         ;; Compiled arities go in AFTER the link, because only now are the
         ;; helper functions' indices known (doc/decisions/0013). The builder is
         ;; mutated before `emit-image` runs, so the table it writes is the one
