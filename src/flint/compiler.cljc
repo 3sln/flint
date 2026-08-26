@@ -16,6 +16,7 @@
             [flint.analyzer :as ana]
             [flint.emitter :as emit]
             [flint.eval :as ev]
+            [flint.types :as ty]
             [flint.image :as img]
             [flint.macros :as macros]))
 
@@ -163,37 +164,79 @@
   an optimisation hint is indistinguishable from working."
   [cc sym m ast]
   (when-let [spec (:result-projected-meta m)]
-    (when-not (map? spec)
-      (throw (ex-info (str ":result-projected-meta for " sym " must be a map of "
-                           "result to {parameter metadata}, got " (pr-str spec))
-                      {:type :compile :sym sym})))
-    (doseq [{:keys [argc params]} (:arities ast)]
-      (let [by-index
-            (reduce-kv
-             (fn [out truth by-name]
-               (when-not (map? by-name)
-                 (throw (ex-info (str ":result-projected-meta for " sym " maps "
-                                      (pr-str truth) " to " (pr-str by-name)
-                                      ", which is not a map of parameter to metadata")
-                                 {:type :compile :sym sym})))
-               (assoc out truth
-                      (reduce-kv
-                       (fn [m2 psym mm]
-                         (let [i (first (keep-indexed
-                                         #(when (= %2 psym) %1) params))]
-                           (when-not i
-                             (throw (ex-info
-                                     (str ":result-projected-meta for " sym
-                                          " mentions " psym ", which is not a "
-                                          "parameter of its " argc "-argument "
-                                          "arity " (pr-str params))
-                                     {:type :compile :sym sym})))
-                           (assoc m2 i mm)))
-                       {}
-                       by-name)))
-             {}
-             spec)]
-        (vswap! cc assoc-in [:projections sym argc] by-index)))))
+    (let [bad (fn [msg] (throw (ex-info (str ":result-projected-meta for " sym
+                                             " " msg)
+                                        {:type :compile :sym sym})))]
+      (when-not (map? spec)
+        (bad (str "must be a map of result to {parameter metadata}, got "
+                  (pr-str spec))))
+      (when (empty? spec) (bad "is empty, so it declares nothing"))
+      (doseq [{:keys [argc params]} (:arities ast)]
+        (let [by-index
+              (reduce-kv
+               (fn [out truth by-name]
+                 ;; ONLY `true` and `false`. The analyzer asks what a test on
+                 ;; this call proved, and a test has two outcomes -- so any
+                 ;; other key is a declaration that would be stored and never
+                 ;; consulted. Refused rather than warned, because an
+                 ;; optimisation hint that silently does nothing is
+                 ;; indistinguishable from one that works.
+                 (when-not (boolean? truth)
+                   (bad (str "is keyed by " (pr-str truth) ", and only true and "
+                             "false are supported. The key is the TRUTHINESS of "
+                             "the result, not its value: a predicate returning "
+                             "any truthy value matches true. Narrowing on a "
+                             "specific returned value is not implemented.")))
+                 (when-not (map? by-name)
+                   (bad (str "maps " (pr-str truth) " to " (pr-str by-name)
+                             ", which is not a map of parameter to metadata")))
+                 (when (empty? by-name)
+                   (bad (str "maps " (pr-str truth) " to an empty map")))
+                 (assoc out truth
+                        (reduce-kv
+                         (fn [m2 psym mm]
+                           (when-not (symbol? psym)
+                             (bad (str "names " (pr-str psym) " as a parameter, "
+                                       "and a parameter is a symbol")))
+                           (let [i (first (keep-indexed
+                                           #(when (= %2 psym) %1) params))]
+                             (when-not i
+                               (bad (str "mentions " psym ", which is not a "
+                                         "parameter of its " argc "-argument "
+                                         "arity " (pr-str params))))
+                             (when-not (map? mm)
+                               (bad (str "projects " (pr-str mm) " onto " psym
+                                         ", and a projection is a METADATA MAP -- "
+                                         "write {:tag int}, not " (pr-str mm))))
+                             ;; A metadata map the analyzer understands nothing
+                             ;; in is the same silent no-op as a bad key.
+                             (when-not (contains? mm :tag)
+                               (bad (str "projects " (pr-str mm) " onto " psym
+                                         ", and the only key consumed today is "
+                                         ":tag. The map shape is deliberate so "
+                                         "other keys can be added, but one that "
+                                         "means nothing yet would do nothing "
+                                         "quietly.")))
+                             (when-not (ty/tag (:tag mm))
+                               (bad (str "projects ^" (pr-str (:tag mm)) " onto "
+                                         psym ", which is not a type flint knows. "
+                                         "Known: " (str/join " " ty/tag-names))))
+                             ;; `Object` and `any` are accepted on a BINDING,
+                             ;; where they mean "a hint from Clojure, no claim
+                             ;; here". As a projection they would be a
+                             ;; declaration whose whole content is that it
+                             ;; declares nothing.
+                             (when-not (ty/projected-tag mm)
+                               (bad (str "projects ^" (pr-str (:tag mm)) " onto "
+                                         psym ", which is not a claim about "
+                                         "anything -- it is the spelling for "
+                                         "'no type stated'")))
+                             (assoc m2 i mm)))
+                         {}
+                         by-name)))
+               {}
+               spec)]
+          (vswap! cc assoc-in [:projections sym argc] by-index))))))
 
 (defn- register-inversion!
   "Record that `sym`'s result is the NEGATION of an argument's truthiness.
@@ -207,6 +250,10 @@
   and a user's own `blank?` wrapper would get nothing."
   [cc sym m ast]
   (when-let [p (:result-inverts m)]
+    (when-not (symbol? p)
+      (throw (ex-info (str ":result-inverts for " sym " is " (pr-str p)
+                           ", and it names a PARAMETER, so it is a symbol")
+                      {:type :compile :sym sym})))
     (doseq [{:keys [argc params]} (:arities ast)]
       (let [i (first (keep-indexed #(when (= %2 p) %1) params))]
         (when-not i

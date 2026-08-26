@@ -116,6 +116,28 @@
 (check-that "`or` over DISAGREEING arms proves nothing, so the check stays"
             (str/includes? (str (:or-disagrees-str r)) "declared ^int"))
 
+(println "types: what a malformed declaration gets told")
+
+;; Every case here compiles fine if the compiler does not check, and then does
+;; NOTHING -- the declaration is stored under a key nothing ever reads. That is
+;; the worst outcome for an optimisation hint, because it is indistinguishable
+;; from one that works: the program is still correct, only slower.
+(defn refuses [fixture fragment]
+  (let [x (sh "./bin/flint" ":src" "test/fixtures" ":fn" (str fixture "/main")
+              ":out" "/tmp/flint-fixture.wasm")
+        msg (str (:out x) (:err x))]
+    (check-that (str fixture " is refused")
+                (and (not (zero? (:exit x))) (str/includes? msg fragment)))))
+
+(refuses "proj-key"     "only true and false are supported")
+(refuses "proj-val"     "a projection is a METADATA MAP")
+(refuses "proj-notag"   "the only key consumed today is :tag")
+(refuses "proj-badtag"  "not a type flint knows")
+(refuses "proj-any"     "no type stated")
+(refuses "proj-noparam" "not a parameter of its 1-argument arity")
+(refuses "proj-empty"   "is empty, so it declares nothing")
+(refuses "inv-notsym"   "it names a PARAMETER, so it is a symbol")
+
 (if (pos? @fails)
   (do (println "types:" @fails "failed") (System/exit 1))
   (println "types: ok"))

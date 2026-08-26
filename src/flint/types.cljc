@@ -139,6 +139,35 @@
 ;; value is a metadata map, merged into what is known about the binding, so the
 ;; mechanism generalises past `:tag` without changing shape.
 
+;; ## The contract, stated once
+;;
+;; `:result-projected-meta` is `{truthiness {parameter metadata}}`.
+;;
+;; * The OUTER key is `true` or `false`, and nothing else. It is the
+;;   TRUTHINESS of the result, not its value -- a predicate returning any
+;;   truthy thing matches `true`. Narrowing on a specific returned value
+;;   (`{:int {..} :string {..}}`) is NOT implemented: it would need the
+;;   analyzer to know which value came back at the branch, which only a `case`
+;;   or an `=` could tell it. A non-boolean key is refused at compile time
+;;   rather than stored and never read.
+;;
+;; * The middle key is a parameter SYMBOL of the arity being declared. One that
+;;   names no parameter is refused; it is the typo that would otherwise leave
+;;   the whole declaration doing nothing.
+;;
+;; * The VALUE is a metadata map, and the only key consumed today is `:tag`.
+;;   The map shape is deliberate -- a later `{:non-nil true}` needs no change
+;;   to any of this -- but a map with nothing understood in it is refused,
+;;   because "does nothing yet" and "works" look identical from outside.
+;;   `^Object` and `^any` are refused here too: they are the spelling for "no
+;;   type stated", which is a valid thing to write on a binding and a
+;;   contradiction in a projection.
+;;
+;; `:result-inverts` names a parameter symbol. Everything known from that
+;; argument being truthy applies to the other branch of a test on the result.
+;;
+;; All of it is compile-time only. Nothing here reaches the module.
+
 (def native-projections
   {"int?"        {true {0 {:tag :int}}}
    "float?"      {true {0 {:tag :float}}}
@@ -154,6 +183,12 @@
    "fn?"         {true {0 {:tag :fn}}}
    "sequential?" {true {0 {:tag :sequential}}}
    "nil?"        {true {0 {:tag :nil}}}})
+
+(def tag-names
+  "Every spelling a tag may be written as, for error messages. `Object` and
+  `any` are accepted and mean NO claim -- they exist so a hint carried over
+  from Clojure compiles rather than being refused."
+  (vec (sort (map str (keys aliases)))))
 
 (defn projected-tag
   "The tag a projection metadata map claims, or nil. Written as `{:tag int}` by
