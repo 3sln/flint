@@ -2,9 +2,9 @@
 
 > **PARTLY BUILT.** `flint.bundle` splices an image into a prebuilt module, and
 > `flint.shake` + `flint.wasmshake` cut that module down to what the image
-> needs — both without a linker, both measured. What is NOT built is the byte
-> strings, the transient, the `flint.wasm` port they exist for, and the
-> embedded runtimes.
+> needs — both without a linker, both measured. **Byte strings are built.**
+> What is NOT built is the transient, the `flint.wasm` port they exist for, and
+> the embedded runtimes.
 
 ## The decision
 
@@ -172,9 +172,10 @@ is what fails.
 
 0. ~~Tree shaking as a pass over a finished module.~~ **Done**, 57-79% of the
    linker's result, and the mark phase is shared with the other targets.
-1. `TY_BYTES` and the byte rope, with `bytes?`, `count`, `nth`, concat and
-   slice. Measured against the vector-of-ints it replaces, on bytes held per
-   byte.
+1. ~~`TY_BYTES` and the byte rope.~~ **Done.** Two tiers, and the tier is
+   invisible: a flat and a tree holding the same bytes are equal, hash alike
+   and are one map key. Against the vector of integers it replaces, on 200,000
+   bytes: **43.5 MB and 28 collections, against 0.2 MB and none** -- 217x.
 2. The transient byte string, measured on the table above's shape.
 3. Port `flint.wasm` onto it. The suite exercises it on every build, so the
    port has a standing check from the first commit.

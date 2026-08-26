@@ -73,6 +73,15 @@
             (flint.rt/= op "str-join")
             (let [v (mapv (fn [i] (flint.rt/num->str i)) (ints n))]
               (if base? (count v) (count (flint.rt/str-join v))))
+            ;; The reason byte strings exist: the same bytes, held as a vector
+            ;; of integers and as a byte string. A flint vector holds NaN-boxed
+            ;; 64-bit values, so a byte costs eight bytes plus trie overhead.
+            (flint.rt/= op "bytes-as-vec")
+            (let [s (flint.rt/str-join (mapv (fn [i] "0123456789abcdef") (range (flint.rt/quot n 16))))]
+              (if base? (flint.rt/count s) (count (flint.rt/str-bytes s))))
+            (flint.rt/= op "bytes-as-bytes")
+            (let [s (flint.rt/str-join (mapv (fn [i] "0123456789abcdef") (range (flint.rt/quot n 16))))]
+              (if base? (flint.rt/count s) (flint.rt/b-count (flint.rt/str->b s))))
             (flint.rt/= op "reduce") (let [v (ints n)]
                                        (if base? (count v)
                                            (reduce (fn [a x] (flint.rt/add a x)) 0 v)))

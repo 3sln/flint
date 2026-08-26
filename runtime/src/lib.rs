@@ -34,6 +34,7 @@ pub mod obj;
 pub mod aot;
 pub mod pike;
 pub mod rope;
+pub mod bytes;
 pub mod rt;
 pub mod seqs;
 pub mod set;

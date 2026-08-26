@@ -90,7 +90,15 @@ pub const TY_ROPE: u8 = 42;
 /// the host made. Guest code cannot read it, and -- see 0022 -- authority is
 /// never the type test but always the host recognising THIS object.
 pub const TY_OPAQUE: u8 = 43;
-pub const TY_MAX: u8 = 44;
+/// A flat byte string: `Layout::Raw`, the bytes immediately after the header.
+/// Like `TY_STR` and deliberately not it -- a byte string carries no UTF-8
+/// semantics, so it has no code-point count and cannot be indexed by character.
+pub const TY_BYTES: u8 = 44;
+/// A byte rope: `[BB_BYTES, BB_FLAT, kids...]`. The same shallow B-tree as
+/// `TY_ROPE` and simpler, because a node needs only its subtree's byte length
+/// -- there is no code-point count to sum and no ASCII bit to AND.
+pub const TY_BROPE: u8 = 45;
+pub const TY_MAX: u8 = 46;
 
 /// Every type tag must be distinct. This list exists because they were not:
 /// `TY_THREAD`/`TY_PORT`/`TY_SCHED` were first numbered 33..35, which silently
@@ -105,7 +113,7 @@ const _: () = {
         TY_CLOSURE, TY_NATIVEFN, TY_VAR, TY_ATOM, TY_TVEC, TY_TMAP, TY_TSET,
         TY_RECORD, TY_REGEX, TY_REDUCED, TY_EXINFO, TY_MULTIFN, TY_DELAY,
         TY_VOLATILE, TY_RAW, TY_ITERSEQ, TY_CHUNKSEQ, TY_TYPE, TY_THREAD, TY_PORT,
-        TY_SCHED, TY_ROPE, TY_OPAQUE,
+        TY_SCHED, TY_ROPE, TY_OPAQUE, TY_BYTES, TY_BROPE,
     ];
     let mut i = 0;
     while i < tags.len() {
@@ -130,7 +138,7 @@ pub enum Layout {
 pub fn layout_of(ty: u8) -> Layout {
     match ty {
         TY_STR => Layout::Str,
-        TY_BIGINT | TY_RAW | TY_FREE | TY_FWD => Layout::Raw,
+        TY_BIGINT | TY_RAW | TY_BYTES | TY_FREE | TY_FWD => Layout::Raw,
         _ => Layout::Vals,
     }
 }

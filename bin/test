@@ -173,6 +173,18 @@ echo "== distributable: the compiler and loader, driven by the SDK alone"
 grep -E "^  (ok|FAIL)" /tmp/flint-test.out | sed 's/^/  /'
 
 echo
+echo "== bytes: a string of bytes, in two tiers (0024)"
+bb test/bytes.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/bytes.clj"; }
+grep -cE "^  ok" /tmp/flint-test.out | sed 's/^/    /;s/$/ checks/'
+# The number the type exists for: the same bytes, two representations.
+./bin/build-units --diagnostics > /dev/null 2>&1 || fail "build-units --diagnostics"
+./bin/flint :src bench/progs :fn colls/main :out out/colls-diag.wasm > /dev/null 2>&1 || fail "build colls"
+node bench/colls.mjs 200000 bytes-as-vec bytes-as-bytes > /tmp/flint-test.out 2>&1 \
+  || { cat /tmp/flint-test.out; fail "bench/colls.mjs bytes"; }
+grep -E "^  bytes-as" /tmp/flint-test.out | sed 's/^/  /'
+./bin/build-units > /dev/null 2>&1 || fail "build-units"
+
+echo
 echo "== shake: cutting a prebuilt module down, with no linker (0024)"
 bb test/shake.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/shake.clj"; }
 grep -E "^    " /tmp/flint-test.out

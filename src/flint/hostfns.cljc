@@ -132,6 +132,15 @@
    "flint/delay" flint.rt/delay
    "flint/realized?" flint.rt/realized?
    "flint/delay?" flint.rt/delay?
+   "bytes?" flint.rt/bytes?
+   "flint/b-count" flint.rt/b-count
+   "flint/b-at" flint.rt/b-at
+   "flint/b-concat" flint.rt/b-concat
+   "flint/b-slice" flint.rt/b-slice
+   "flint/str->b" flint.rt/str->b
+   "flint/b->str" flint.rt/b->str
+   "flint/vec->b" flint.rt/vec->b
+   "flint/b->vec" flint.rt/b->vec
    "flint/unchecked-add" flint.rt/unchecked-add
    "flint/unchecked-sub" flint.rt/unchecked-sub
    "flint/unchecked-mul" flint.rt/unchecked-mul

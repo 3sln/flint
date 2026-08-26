@@ -97,6 +97,14 @@ impl Rt {
                 // same, or a map keyed by one is not found by the other
                 // (doc/decisions/0011). This is BEFORE the tag comparison,
                 // because the tags differ and the values do not.
+                // Byte strings compare by content across both tiers, exactly
+                // as text ropes do: a flat and a tree holding the same bytes
+                // are the same value.
+                if (ta == crate::obj::TY_BYTES || ta == crate::obj::TY_BROPE)
+                    && (tb == crate::obj::TY_BYTES || tb == crate::obj::TY_BROPE)
+                {
+                    return self.b_eq(a, b);
+                }
                 if ta == crate::obj::TY_ROPE || tb == crate::obj::TY_ROPE {
                     return self.is_string(a) && self.is_string(b) && self.string_eq(a, b);
                 }
@@ -202,6 +210,20 @@ impl Rt {
             // key. Flattening caches, so a rope used as a map key pays once.
             crate::obj::TY_ROPE => {
                 let f = self.flatten(v);
+                self.hash_value(f)
+            }
+            // Same rule for bytes: the content decides, so a flat and a tree
+            // holding the same bytes hash alike and are one key.
+            crate::obj::TY_BYTES => {
+                let bs = raw_bytes(&self.gc.sp, v.as_heap());
+                let mut h: u32 = 0;
+                for b in bs {
+                    h = h.wrapping_mul(31).wrapping_add(*b as u32);
+                }
+                h
+            }
+            crate::obj::TY_BROPE => {
+                let f = self.b_flatten(v);
                 self.hash_value(f)
             }
             TY_KW => self.keyword_hash(v),

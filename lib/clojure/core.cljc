@@ -97,6 +97,11 @@
 (defn ex-message [e] (flint.rt/ex-message e))
 (defn ex-data [e] (flint.rt/ex-data e))
 
+;; A byte string answers `bytes?`, as it does in Clojure. Everything else about
+;; them lives in `flint.bytes`: `byte-cat` and `str->bytes` are flint's, not
+;; Clojure's, and `clojure.core` is a namespace people expect to match.
+(defn bytes? [x] (flint.rt/bytes? x))
+
 (defn transient [c] (flint.rt/transient c))
 (defn persistent! [c] (flint.rt/persistent! c))
 (defn conj! [c x] (flint.rt/conj! c x))

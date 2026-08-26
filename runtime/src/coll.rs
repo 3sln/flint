@@ -51,6 +51,7 @@ impl Rt {
             TY_MAPENTRY => 2,
             TY_ARRAYMAP | TY_HASHMAP => self.map_count(v),
             TY_SET => self.set_count(v),
+            TY_BYTES | TY_BROPE => self.b_count(v),
             TY_TVEC => self.tvec_count(v),
             TY_TMAP => self.slot(v, 0).as_fixnum() as u32,
             TY_TSET => {
@@ -183,6 +184,13 @@ impl Rt {
                 Some(1) => self.slot(coll, 1),
                 _ => dflt,
             },
+            TY_BYTES | TY_BROPE => match self.as_i64(k) {
+                Some(i) if i >= 0 => match self.b_at(coll, i as u32) {
+                    Some(b) => Value::fixnum(b as i64),
+                    None => dflt,
+                },
+                _ => dflt,
+            },
             TY_TVEC => match self.as_i64(k) {
                 Some(i) if i >= 0 => self.tvec_nth(coll, i as u32).unwrap_or(dflt),
                 _ => dflt,
@@ -232,6 +240,20 @@ impl Rt {
                 None => match dflt {
                     Some(d) => d,
                     None => self.throw_str("IndexOutOfBoundsException", "string index out of range"),
+                },
+            };
+        }
+        // A byte string indexes like a vector of small integers, which is
+        // what it is. `count` and `get` learned this above; `nth` is a
+        // separate path and forgetting it here read back as
+        // `IndexOutOfBoundsException` on a byte string that was plainly long
+        // enough.
+        if self.is_bytes(coll) {
+            return match self.b_at(coll, i) {
+                Some(b) => Value::fixnum(b as i64),
+                None => match dflt {
+                    Some(d) => d,
+                    None => self.throw_str("IndexOutOfBoundsException", "byte index out of range"),
                 },
             };
         }

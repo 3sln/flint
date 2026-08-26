@@ -111,6 +111,27 @@
 (defn str-index-of
   ([s v] (cstr/index-of s v))
   ([s v from] (cstr/index-of s v from)))
+;; --- byte strings (doc/decisions/0024) --------------------------------------
+;;
+;; On the host a byte string is a Java byte array: this half exists so a MACRO
+;; can call these while a program is being compiled, and nothing here ships.
+;; The guest's is a two-tier rope; the only thing both have to agree on is the
+;; answers.
+(defn bytes? [x] (clojure.core/bytes? x))
+(defn b-count [b] (clojure.core/alength ^bytes b))
+(defn b-at [b i] (clojure.core/bit-and (clojure.core/aget ^bytes b (int i)) 0xff))
+(defn b-concat [a b]
+  (let [out (clojure.core/byte-array (+ (clojure.core/alength ^bytes a)
+                                        (clojure.core/alength ^bytes b)))]
+    (System/arraycopy a 0 out 0 (clojure.core/alength ^bytes a))
+    (System/arraycopy b 0 out (clojure.core/alength ^bytes a) (clojure.core/alength ^bytes b))
+    out))
+(defn b-slice [b from to] (java.util.Arrays/copyOfRange ^bytes b (int from) (int to)))
+(defn str->b [s] (.getBytes ^String s "UTF-8"))
+(defn b->str [b] (String. ^bytes b "UTF-8"))
+(defn vec->b [v] (clojure.core/byte-array (clojure.core/mapv clojure.core/unchecked-byte v)))
+(defn b->vec [b] (clojure.core/mapv #(clojure.core/bit-and (clojure.core/int %) 0xff) b))
+
 (defn str-bytes [s] (mapv #(clojure.core/bit-and (clojure.core/int %) 0xff) (.getBytes ^String s "UTF-8")))
 (defn double-bits [d] (Double/doubleToRawLongBits (double d)))
 

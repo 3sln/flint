@@ -52,7 +52,10 @@
 ;; What it buys is 1.90x on arithmetic at an IDENTICAL instruction count --
 ;; `bench/progs/spec.cljc`, 22.4 ns per operation, which is what reaching a
 ;; builtin through the table and re-reading its arguments costs.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-prod.wasm") 220000))
+;; Raised 2 360 bytes for byte strings (`doc/decisions/0024`): pinned by the
+;; generic collection surface, and worth 217x the memory on the bytes they
+;; exist to hold.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-prod.wasm") 225000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

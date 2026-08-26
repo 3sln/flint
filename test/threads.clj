@@ -78,8 +78,14 @@
 ;; the operands were integers -- 22.4 ns per arithmetic operation, which is the
 ;; cost of reaching a builtin through the table and having it re-read its
 ;; arguments off the value stack.
-(check-that "the floor is within the budget 0009, 0011 and specialisation chose"
-            (< pure-size 220000))
+;; And 2 360 bytes for byte strings (`doc/decisions/0024`), which a program
+;; using none of them still pays: `count`, `nth`, `=` and `hash` all reference
+;; the byte paths, so the type is pinned by the generic collection surface
+;; rather than by anyone calling it. What it buys, on 200 000 bytes: 43.5 MB
+;; and 28 collections held as a vector of integers, against 0.2 MB and none
+;; held as a byte string.
+(check-that "the floor is within the budget 0009, 0011, specialisation and bytes chose"
+            (< pure-size 225000))
 
 ;; ---------------------------------------------------------------- channels
 

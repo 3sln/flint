@@ -1141,7 +1141,7 @@ claim fails the build.
 <!-- BEGIN GENERATED COVERAGE -->
 | namespace | vars | macros | missing vs Clojure | flint-only |
 |---|---:|---:|---:|---:|
-| `clojure.core` | 344 | 45 | 310 | 30 |
+| `clojure.core` | 345 | 45 | 309 | 30 |
 | `clojure.edn` | 2 | 0 | 1 | 1 |
 | `clojure.math` | 32 | 0 | 14 | 1 |
 | `clojure.set` | 12 | 0 | 0 | 0 |
@@ -1181,7 +1181,7 @@ and sorted collections (`sorted-map`, `sorted-set`, `subseq`, `rsubseq`).
 
 *Added by flint:* `->str-builder` `apply2` `bigdec?` `bytes->str` `cond-chain` `count-matching` `find-protocol-method` `int-of-char` `interleave-all` `interleave2` `keep2` `kind` `map2` `mapcat2` `methods-of` `nil-or` `opaque` `opaque-label` `opaque?` `println-str` `re-quote-replacement` `repeat-forever` `repeat2` `sb-append!` `sb-str` `spread` `str-bytes` `str-join` `subvec2` `volatile?`
 
-*Absent:* 310 names -- see `doc/manifest.edn` for all of them.
+*Absent:* 309 names -- see `doc/manifest.edn` for all of them.
 
 #### `clojure.edn`
 

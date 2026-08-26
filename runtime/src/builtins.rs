@@ -184,6 +184,106 @@ builtins! {
     "boolean?", flint_b_boolp, b_boolp, |rt, a, n| { let _ = n; Value::boolean(arg(rt, a, 0).is_bool()) };
     "sequential?", flint_b_sequentialp, b_sequentialp, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); Value::boolean(rt.is_sequential(v)) };
 
+    // --- byte strings (doc/decisions/0024) ----------------------------------
+    //
+    // The same two tiers as text: flat below `FLAT_MAX`, a shallow B-tree above
+    // it. Named `flint/b-*` rather than overloading the string builtins because
+    // a byte string carries no UTF-8 semantics -- it cannot be indexed by
+    // character and `count` on it is bytes, not code points.
+    "bytes?", flint_b_bytesp, b_bytesp, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        Value::boolean(rt.is_bytes(v))
+    };
+    "flint/b-count", flint_b_bcount, b_bcount, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        Value::fixnum(rt.b_count(v) as i64)
+    };
+    "flint/b-at", flint_b_bat, b_bat, |rt, a, n| {
+        let _ = n;
+        let (v, i) = (arg(rt, a, 0), arg(rt, a, 1));
+        match rt.as_i64(i).and_then(|i| if i < 0 { None } else { rt.b_at(v, i as u32) }) {
+            Some(b) => Value::fixnum(b as i64),
+            None => rt.throw_str("IndexOutOfBoundsException", "byte index out of range"),
+        }
+    };
+    "flint/b-concat", flint_b_bconcat, b_bconcat, |rt, a, n| {
+        let _ = n;
+        let (x, y) = (arg(rt, a, 0), arg(rt, a, 1));
+        rt.b_concat(x, y)
+    };
+    "flint/b-slice", flint_b_bslice, b_bslice, |rt, a, n| {
+        let _ = n;
+        let (v, f, t) = (arg(rt, a, 0), arg(rt, a, 1), arg(rt, a, 2));
+        match (rt.as_i64(f), rt.as_i64(t)) {
+            (Some(f), Some(t)) if f >= 0 && t >= 0 => rt.b_slice(v, f as u32, t as u32),
+            _ => rt.throw_str("IllegalArgumentException", "b-slice wants two integers"),
+        }
+    };
+    // A string's UTF-8 as a byte string. The counterpart of `flint/str-bytes`,
+    // which answers with a VECTOR and costs eight bytes per byte.
+    "flint/str->b", flint_b_strtob, b_strtob, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        let mut buf = crate::rt::sbuf();
+        match rt.as_str(v, &mut buf) {
+            Some(s) => {
+                let owned: alloc::vec::Vec<u8> = s.as_bytes().to_vec();
+                rt.new_bytes(&owned)
+            }
+            None => rt.throw_str("ClassCastException", "str->b wants a string"),
+        }
+    };
+    "flint/b->str", flint_b_btostr, b_btostr, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        if !rt.is_bytes(v) {
+            return rt.throw_str("ClassCastException", "b->str wants a byte string");
+        }
+        let bs = rt.b_to_vec(v);
+        match core::str::from_utf8(&bs) {
+            Ok(s) => rt.string(s),
+            Err(_) => rt.throw_str("IllegalArgumentException", "those bytes are not UTF-8"),
+        }
+    };
+    // From a vector of integers, for building one a byte at a time before the
+    // transient exists, and for tests.
+    "flint/vec->b", flint_b_vectob, b_vectob, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        if !rt.is_vector(v) {
+            return rt.throw_str("ClassCastException", "vec->b wants a vector");
+        }
+        let n = rt.vec_count(v);
+        let mut out = alloc::vec::Vec::with_capacity(n as usize);
+        for i in 0..n {
+            match rt.vec_nth(v, i).and_then(|x| rt.as_i64(x)) {
+                Some(b) => out.push((b & 0xff) as u8),
+                None => return rt.throw_str("ClassCastException", "vec->b wants integers"),
+            }
+        }
+        rt.new_bytes(&out)
+    };
+    "flint/b->vec", flint_b_btovec, b_btovec, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        if !rt.is_bytes(v) {
+            return rt.throw_str("ClassCastException", "b->vec wants a byte string");
+        }
+        let bs = rt.b_to_vec(v);
+        let base = rt.mark();
+        rt.push(rt.roots.singletons[crate::rt::SING_EMPTY_VEC]);
+        for b in bs {
+            let cur = rt.r(base);
+            let next = rt.vec_conj(cur, Value::fixnum(b as i64));
+            rt.set_r(base, next);
+        }
+        let out = rt.r(base);
+        rt.pop_to(base);
+        out
+    };
+
     // --- the type-annotation barrier ---------------------------------------
     //
     // `(let [^int x e] ...)` compiles to a bind of `check-tag(e, INT, where)`.

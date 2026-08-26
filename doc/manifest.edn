@@ -49,6 +49,7 @@
     bounded-count
     butlast
     bytes->str
+    bytes?
     case
     char
     char?
@@ -395,7 +396,7 @@
     when-not
     when-some
     while},
-  :count 344,
+  :count 345,
   :absent
   #{*'
     *1
@@ -480,7 +481,6 @@
     byte
     byte-array
     bytes
-    bytes?
     cat
     char-array
     char-escape-string
