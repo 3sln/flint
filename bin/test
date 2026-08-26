@@ -166,6 +166,13 @@ awk '/^  conj  /{p=$4} /^  conj! /{t=$4} END{gsub(",","",p); gsub(",","",t);
 ./bin/build-units > /dev/null 2>&1 || fail "build-units"
 
 echo
+echo "== distributable: the compiler and loader, driven by the SDK alone"
+# Rebuilt every run, because the artifacts are generated and a stale one that
+# still passes is the failure this section exists to catch.
+./bin/build-dist > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "bin/build-dist"; }
+grep -E "^  (ok|FAIL)" /tmp/flint-test.out | sed 's/^/  /'
+
+echo
 echo "== check: what was written for flint and does nothing"
 # The fixture carries one of each kind, so it must FAIL -- a checker that
 # cannot fail is not checking. The two host hints must NOT be what fails it.

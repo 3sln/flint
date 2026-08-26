@@ -25,7 +25,11 @@
     "flint": "bin/flint-cli.mjs"
   },
   "exports": {
+    ".": "./sdk/flint.mjs",
+    "./sdk": "./sdk/flint.mjs",
     "./host": "./host/flint.mjs",
+    "./flintc.wasm": "./dist/flintc.wasm",
+    "./flint-loader.wasm": "./dist/flint-loader.wasm",
     "./package.json": "./package.json"
   },
   "files": [
@@ -33,7 +37,9 @@
     "src/",
     "lib/",
     "host/",
+    "sdk/",
     "units/",
+    "dist/",
     "doc/",
     "examples/",
     "README.md",
@@ -44,6 +50,8 @@
   },
   "scripts": {
     "test": "./bin/test",
-    "bench": "./bin/bench"
+    "bench": "./bin/bench",
+    "build:dist": "./bin/build-dist",
+    "test:dist": "node sdk/selftest.mjs"
   }
 }

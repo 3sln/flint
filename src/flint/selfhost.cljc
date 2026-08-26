@@ -12,6 +12,7 @@
   (:require [flint.compiler :as compiler]
             [flint.image :as img]
             [flint.reader :as reader]
+            [flint.project :as project]
             [flint.rt]))
 
 (def ^:private b64-alphabet
@@ -46,11 +47,67 @@
      :natives (img/natives builder)
      :stats (:stats result)}))
 
+(defn compile-project
+  "Compile from an ENTRY and a map of source files, resolving `:require`s here.
+
+  `spec` is EDN:
+
+      {:files {\"clojure/core.cljc\" \"(ns clojure.core) ..\" ..}
+       :entry my.app/main
+       :builtins #{..}
+       :features #{:flint}}
+
+  The difference from `compile-to-base64` is that the caller does not have to
+  know what the program requires. That resolution is most of what a compiler
+  does before it compiles anything, and a host driving this module through
+  WebAssembly has no way to do it -- it would have to parse `ns` forms, which
+  means it would need a Clojure reader, which is what it is calling.
+
+  A namespace with no source is named, all of them at once. Reporting the first
+  and stopping makes fixing a dependency list an n-round conversation."
+  [spec-edn]
+  (let [spec (reader/read-one spec-edn)
+        files (:files spec)
+        features (or (:features spec) #{:flint})
+        entry (:entry spec)
+        entry-ns (symbol (namespace entry))
+        find-source (fn [n]
+                      (let [base (project/ns->path n)]
+                        (or (when-let [src (get files (str base ".cljc"))]
+                              {:src src :file (str base ".cljc")})
+                            (when-let [src (get files (str base ".clj"))]
+                              {:src src :file (str base ".clj")}))))
+        {:keys [sources order missing]} (project/resolve-project find-source entry-ns features)]
+    (if (seq missing)
+      {:missing (vec missing)}
+      (let [result (compiler/compile-image
+                    {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e))
+                                                              :file (:file (val e))}])
+                                            sources))
+                     :order (vec (filter (fn [n] (contains? sources n)) order))
+                     :entry entry
+                     :builtins (or (:builtins spec) #{})
+                     :features features})
+            builder (:builder result)]
+        {:image (base64 (img/emit builder {}))
+         :natives (img/natives builder)}))))
+
 (defn main [args]
-  (let [spec-edn (first args)
-        r (compile-to-base64 spec-edn)]
-    ;; One string out, so the shape is: base64 image, newline, then the native
-    ;; import order (one per line) that the host needs in order to assign slots.
-    (flint.rt/str-join
-     (concat [(:image r) "\n"]
-             (interpose "\n" (:natives r))))))
+  ;; Two entries, chosen by the first argument. `spec` is the original: the
+  ;; caller resolved every namespace and handed over a finished map, which is
+  ;; what the bootstrap does because babashka is already reading files.
+  ;; `project` is the one a host with no Clojure reader can use.
+  (let [mode (first args)
+        [mode spec-edn] (if (= mode "project") [mode (second args)] ["spec" mode])
+        r (if (= mode "project")
+            (compile-project spec-edn)
+            (compile-to-base64 spec-edn))]
+    (cond
+      (:missing r)
+      (flint.rt/str-join (concat ["!missing\n"] (interpose "\n" (map str (:missing r)))))
+      :else
+      ;; One string out: base64 image, newline, then the native import order,
+      ;; one per line, which is what the host needs to assign slots.
+      (flint.rt/str-join
+       (concat [(:image r) "\n"]
+               (interpose "\n" (:natives r)))))))

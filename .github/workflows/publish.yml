@@ -12,7 +12,9 @@ on:
       - published
 
 permissions:
-  contents: read
+  # `contents: write` so the built artifacts can be attached to the release
+  # being published.
+  contents: write
   # Required for npm provenance. Drop this, and the --provenance flag below,
   # if the repository is ever made private: provenance only works for packages
   # published from a public repository.
@@ -85,6 +87,42 @@ jobs:
             exit 1
           fi
           echo "units/ is the production build."
+
+      # The wasm distributable: the compiler and the loader, built from the
+      # tag being published. These are what let a consumer compile and run
+      # Clojure with no babashka, no JVM, no Rust and no linker, so they have
+      # to be built here rather than committed -- a tracked binary is a binary
+      # nobody checks against the source beside it.
+      - name: Build the wasm distributable
+        run: ./bin/build-dist
+
+      - name: Check the distributable is what it claims
+        run: |
+          set -euo pipefail
+          for f in dist/flintc.wasm dist/flint-loader.wasm dist/builtins.json; do
+            test -s "$f" || { echo "::error::$f is missing or empty"; exit 1; }
+          done
+          # `bin/build-dist` ends by running the SDK self-test against dist/
+          # and nothing else, so reaching here means it passed. Say what it is.
+          {
+            echo "### Distributable"
+            echo
+            echo '| artifact | bytes |'
+            echo '| --- | ---: |'
+            for f in dist/flintc.wasm dist/flint-loader.wasm; do
+              echo "| \`$f\` | $(wc -c < "$f" | tr -d ' ') |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attach the distributable to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" \
+            dist/flintc.wasm dist/flint-loader.wasm dist/builtins.json \
+            --clobber
 
       - name: Show what will be published
         run: npm pack --dry-run
