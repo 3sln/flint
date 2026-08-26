@@ -72,6 +72,9 @@
               ;; flint carries no var metadata at run time, so nothing here
               ;; reaches the module.
               :inlines {}
+              ;; What a call's result tells you about its arguments, by var and
+              ;; arity. `:result-projected-meta`, resolved to argument indices.
+              :projections {}
               :eval-vars (atom {})}))
 
 (defn- register-native-aliases!
@@ -137,6 +140,58 @@
                              " must be a set or a predicate, got " (pr-str arities))
                         {:type :compile :sym sym})))
       (vswap! cc assoc-in [:inlines sym] {:f f :arities arities}))))
+
+(defn- register-projections!
+  "Record what `sym`'s RESULT says about its arguments.
+
+  Written on the function as
+
+      :result-projected-meta {true {x {:tag int}}}
+
+  meaning: when this returns logical true, the argument bound to `x` has that
+  metadata. The analyzer merges it into what is known about the binding in that
+  branch -- so `(if (my-int? v) ...)` compiles the then-branch knowing `v`, the
+  same way `(int? v)` does, and a user predicate is as good as a builtin one.
+
+  Metadata rather than a bare tag because the mechanism should outlive `:tag`:
+  a later `{:non-nil true}` or `{:count 2}` needs no change here.
+
+  A parameter name that is not in the arity is an ERROR. It is the exact typo
+  that would otherwise leave the declaration silently doing nothing, which for
+  an optimisation hint is indistinguishable from working."
+  [cc sym m ast]
+  (when-let [spec (:result-projected-meta m)]
+    (when-not (map? spec)
+      (throw (ex-info (str ":result-projected-meta for " sym " must be a map of "
+                           "result to {parameter metadata}, got " (pr-str spec))
+                      {:type :compile :sym sym})))
+    (doseq [{:keys [argc params]} (:arities ast)]
+      (let [by-index
+            (reduce-kv
+             (fn [out truth by-name]
+               (when-not (map? by-name)
+                 (throw (ex-info (str ":result-projected-meta for " sym " maps "
+                                      (pr-str truth) " to " (pr-str by-name)
+                                      ", which is not a map of parameter to metadata")
+                                 {:type :compile :sym sym})))
+               (assoc out truth
+                      (reduce-kv
+                       (fn [m2 psym mm]
+                         (let [i (first (keep-indexed
+                                         #(when (= %2 psym) %1) params))]
+                           (when-not i
+                             (throw (ex-info
+                                     (str ":result-projected-meta for " sym
+                                          " mentions " psym ", which is not a "
+                                          "parameter of its " argc "-argument "
+                                          "arity " (pr-str params))
+                                     {:type :compile :sym sym})))
+                           (assoc m2 i mm)))
+                       {}
+                       by-name)))
+             {}
+             spec)]
+        (vswap! cc assoc-in [:projections sym argc] by-index)))))
 
 ;; ------------------------------------------------------------------ pass 1/2
 
@@ -269,7 +324,8 @@
                 (register-native-aliases! cc sym (:init defnode))
                 ;; After the alias, so an explicit `:inline` beats the one
                 ;; inferred from a one-native body. The author said which.
-                (register-inline! cc env sym (:meta defnode))))
+                (register-inline! cc env sym (:meta defnode))
+                (register-projections! cc sym (:meta defnode) (:init defnode))))
             (vswap! cc assoc-in [:vars sym] true)))
         (catch Throwable e
           ;; Say WHERE. A bare "unable to resolve symbol" halfway through

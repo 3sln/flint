@@ -121,3 +121,42 @@
           (every? #(= :int %) arg-tags) :int
           (every? #(contains? #{:int :float :number} %) arg-tags) :number
           :else nil))))
+
+;; --------------------------------------------------------------- projections
+;;
+;; What a call's RESULT tells you about its arguments. `(int? x)` returning
+;; true means `x` is an int, and code in that branch can be compiled knowing
+;; it -- which is occurrence narrowing, and it is what makes a hand-written
+;; `(if (string? s) ...)` as good as an annotation without anyone writing one.
+;;
+;; The general form is a declaration on the function, `:result-projected-meta`,
+;; read by `flint.compiler`. The table below is the same thing for BUILTINS,
+;; which carry no metadata -- and it is where the core predicates get theirs,
+;; because `(int? x)` in user code is rewritten to the builtin by
+;; `register-native-aliases!` before anything else sees it.
+;;
+;; Keyed by argument INDEX, because that is what survives the rewrite. The
+;; value is a metadata map, merged into what is known about the binding, so the
+;; mechanism generalises past `:tag` without changing shape.
+
+(def native-projections
+  {"int?"        {true {0 {:tag :int}}}
+   "float?"      {true {0 {:tag :float}}}
+   "number?"     {true {0 {:tag :number}}}
+   "string?"     {true {0 {:tag :string}}}
+   "keyword?"    {true {0 {:tag :keyword}}}
+   "symbol?"     {true {0 {:tag :symbol}}}
+   "boolean?"    {true {0 {:tag :boolean}}}
+   "vector?"     {true {0 {:tag :vector}}}
+   "map?"        {true {0 {:tag :map}}}
+   "set?"        {true {0 {:tag :set}}}
+   "seq?"        {true {0 {:tag :seq}}}
+   "fn?"         {true {0 {:tag :fn}}}
+   "sequential?" {true {0 {:tag :sequential}}}
+   "nil?"        {true {0 {:tag :nil}}}})
+
+(defn projected-tag
+  "The tag a projection metadata map claims, or nil. Written as `{:tag int}` by
+  hand and `{:tag :int}` in the table above; both mean the same thing."
+  [m]
+  (when (map? m) (let [t (tag (:tag m))] (when-not (= :any t) t))))

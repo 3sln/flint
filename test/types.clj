@@ -93,6 +93,29 @@
 (check-that "a use-site error names the argument that was wrong"
             (str/starts-with? (:use-site-bad r) "!y is declared"))
 
+(println "types: occurrence narrowing -- the test IS the annotation")
+
+(check "a builtin predicate narrows its argument"     (:user-narrowed r) 42)
+(check "... and refuses when the guard fails"         (:user-refuses r) :nope)
+(check "`and` narrows through the let it expands to"  (:and-narrowed r) 5)
+(check "... and the second conjunct is really tested" (:and-refuses r) :nope)
+(check "a user :result-projected-meta works the same" (:user-narrowed r) 42)
+
+;; Soundness. Narrowing that leaked into the else branch would add 1 to a
+;; string, silently, which is the only way this feature can be dangerous.
+(check "narrowing reaches the then branch"      (:narrow-else-yes r) :yes)
+(check-that "and NOT the else branch, which still checks"
+            (str/includes? (str (:narrow-else-throws r)) "declared ^int"))
+;; A projection recorded on a loop binding would be a claim about a value that
+;; `recur` has already replaced.
+(check "a projection does not survive a recur"  (:narrow-rebound-1 r) :not-int)
+(check "and the un-recurred case still narrows" (:narrow-rebound-0 r) 2)
+
+(check "`or` narrows when both arms agree"      (:or-agrees r) 42)
+(check "`or` over an int still works"           (:or-disagrees-int r) 2)
+(check-that "`or` over DISAGREEING arms proves nothing, so the check stays"
+            (str/includes? (str (:or-disagrees-str r)) "declared ^int"))
+
 (if (pos? @fails)
   (do (println "types:" @fails "failed") (System/exit 1))
   (println "types: ok"))

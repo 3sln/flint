@@ -55,4 +55,37 @@ console.log(`    the unproven loop pays ` +
             `per iteration for its one check; the proven one pays ` +
             `${((proven.steps - bare.steps) / ITERS).toFixed(1)}`);
 
+// --- occurrence narrowing ---------------------------------------------------
+//
+// The same program twice: once guarded by a real `int?`, once by a test the
+// analyzer cannot read anything from. The annotation inside the guard is free
+// in the first and a real check in the second, and the difference is what
+// narrowing is worth on code that was never annotated at all.
+const narrowed = loopCost('narrowed', ITERS);
+const unnarrowed = loopCost('unnarrowed', ITERS);
+
+ok('an annotation inside an int? guard costs exactly nothing',
+   narrowed.steps === unnarrowed.steps,
+   `annotated ${n(narrowed)}, unannotated ${n(unnarrowed)} -- a difference ` +
+   `means the guard taught the analyzer nothing and the check is still there`);
+ok('the two narrowing loops agree', narrowed.out === unnarrowed.out,
+   `${narrowed.out} vs ${unnarrowed.out}`);
+
+console.log(`    inside an int? guard: annotated ${n(narrowed)}, ` +
+            `unannotated ${n(unnarrowed)} ` +
+            `(${((narrowed.steps - unnarrowed.steps) / ITERS).toFixed(1)} ` +
+            `per iteration); the same annotation with nothing known costs ` +
+            `${((opaque.steps - bare.steps) / ITERS).toFixed(1)}`);
+
+// The same claim for `and`, which reaches the branch through the let it expands
+// to. Without that propagation every answer in the suite is still right and
+// this is the only thing that notices.
+const andA = loopCost('and-narrowed', ITERS), andB = loopCost('and-plain', ITERS);
+ok('an annotation inside an `and` guard costs exactly nothing',
+   andA.steps === andB.steps,
+   `annotated ${n(andA)}, unannotated ${n(andB)} -- a difference means the ` +
+   `projection did not survive the let that \`and\` expands to`);
+ok('the two `and` loops agree', andA.out === andB.out, `${andA.out} vs ${andB.out}`);
+console.log(`    inside an \`and\` guard: annotated ${n(andA)}, unannotated ${n(andB)}`);
+
 process.exit(fails ? 1 : 0);

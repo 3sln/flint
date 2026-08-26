@@ -175,6 +175,93 @@
     (= "clojure.core" (namespace sym)) (symbol (name sym))
     :else nil))
 
+(defn- resolve-projections
+  "Turn a by-index projection spec into `{truthiness {local-sym tag}}`.
+
+  Only LOCALS are narrowed. A var's value can change between the test and the
+  use, and a narrowing that assumed otherwise would be unsound in exactly the
+  way this whole feature exists to avoid; a local cannot be rebound except by
+  `recur`, which carries its own barrier."
+  [env spec arg-forms]
+  (when spec
+    (let [args (vec arg-forms)]
+      (reduce-kv
+       (fn [out truth by-index]
+         (let [narrowed (reduce-kv
+                         (fn [m i meta-map]
+                           (let [a (get args i)
+                                 t (ty/projected-tag meta-map)]
+                             (if (and t (symbol? a) (= :local (:kind (resolve-local env a))))
+                               (assoc m a t)
+                               m)))
+                         {}
+                         by-index)]
+           (cond-> out (seq narrowed) (assoc truth narrowed))))
+       {}
+       spec))))
+
+(defn- with-projections
+  "`node`, carrying what its result would tell us about `arg-forms`."
+  [env node spec arg-forms]
+  (let [p (resolve-projections env spec arg-forms)]
+    (cond-> node (seq p) (assoc :projects p))))
+
+(defn- intersect-narrowings
+  "Only what BOTH branches agree on. `(or (int? x) (string? x))` proves nothing
+  about `x`, and this is the rule that says so."
+  [a b]
+  (reduce-kv (fn [m sym t] (if (= t (get b sym)) (assoc m sym t) m)) {} (or a {})))
+
+(defn- falsy-in-else?
+  "Is the else branch of `(if C A B)` known falsy when it is taken? Two shapes:
+  a literal nil/false, and B being the very local that C tested -- which is
+  what `and` expands to, and the reason its projections may pass straight
+  through."
+  [test-node else-node]
+  (or (and (= :const (:op else-node)) (not (:val else-node)))
+      (and (= :local (:op test-node)) (= :local (:op else-node))
+           (= (:idx test-node) (:idx else-node)))))
+
+(declare branch-projects)
+
+(defn- projects-true
+  "What `node` being TRUTHY implies about locals, seen THROUGH the forms `and`
+  and `or` expand to. Without this, `(and (int? a) (int? b))` narrows nothing:
+  the outer `if` sees a `let`, not a predicate call."
+  [node]
+  (case (:op node)
+    :let (let [bound (set (map :name (:bindings node)))]
+           ;; A symbol this let binds is a DIFFERENT binding outside it, so a
+           ;; projection naming one must not escape.
+           (apply dissoc (projects-true (:body node)) bound))
+    :do (projects-true (last (:body node)))
+    :if (let [{:keys [test then else]} node
+              from-test (get (:projects test) true)
+              when-then (merge from-test (projects-true then))]
+          (if (falsy-in-else? test else)
+            when-then
+            (intersect-narrowings when-then (projects-true else))))
+    (get (:projects node) true)))
+
+(defn- branch-projects
+  "`{true {...} false {...}}` for a test node."
+  [node]
+  (cond-> {}
+    (seq (projects-true node)) (assoc true (projects-true node))
+    (get (:projects node) false) (assoc false (get (:projects node) false))))
+
+(defn- narrow
+  "`env` with each local in `narrowed` known to have the tag it maps to. A
+  narrowing never widens: if the local is already known to be something the
+  projection proves, the existing tag is kept."
+  [env narrowed]
+  (reduce-kv (fn [e sym t]
+               (if (ty/proves? (get-in e [:locals sym :tag]) t)
+                 e
+                 (assoc-in e [:locals sym :tag] t)))
+             env
+             narrowed))
+
 (defn- analyze-seq [env form]
   (let [head (first form)]
     (cond
@@ -190,7 +277,9 @@
         ;; can define. `:exclude` needs a reference chain for builtins exactly
         ;; as it does for vars, and this makes one fall out of the same edges.
         (record-dep! env (symbol "flint.native" n))
-        {:op :native :name n :args (mapv #(analyze env %) (rest form))})
+        (with-projections env
+          {:op :native :name n :args (mapv #(analyze env %) (rest form))}
+          (get ty/native-projections n) (rest form)))
 
       ;; Bootstrap macros answer to both `fn` and `clojure.core/fn`: syntax
       ;; quote qualifies them, and they have to keep working after it does.
@@ -241,10 +330,26 @@
           ;; The template puts this call's argument expressions where the
           ;; wrapper's parameters were, keeping any constants the wrapper
           ;; supplied -- which is how `(inc i)` becomes `add(i, 1)`.
-          {:op :native :name (:name nat)
-           :args (mapv (fn [t] (if (= :arg (first t)) (nth args (second t)) (second t)))
-                       (:tmpl nat))}
-          {:op :invoke :fn f :args args})))))
+          ;; The builtin's argument positions are not the call's: the template
+          ;; may drop or add constants. `(inc i)` becomes `add(i, 1)`, and a
+          ;; projection about the builtin's argument 0 is about the call's `i`.
+          ;; So the forms are mapped through the same template the values are.
+          (let [thru (mapv (fn [t] (if (= :arg (first t))
+                                     (nth (vec (rest form)) (second t))
+                                     ::literal))
+                           (:tmpl nat))]
+            (with-projections env
+              {:op :native :name (:name nat)
+               :args (mapv (fn [t] (if (= :arg (first t)) (nth args (second t)) (second t)))
+                           (:tmpl nat))}
+              (get ty/native-projections (:name nat)) thru))
+          ;; A user function's own declaration. `:result-projected-meta` is
+          ;; recorded by argument INDEX at definition, so it reads the same way
+          ;; the builtin table does.
+          (with-projections env {:op :invoke :fn f :args args}
+            (when (= :var (:op f))
+              (get-in @(:cc env) [:projections (:sym f) (count args)]))
+            (rest form)))))))
 
 ;; ------------------------------------------------------- type annotations
 ;;
@@ -365,7 +470,17 @@
                   ;; the barrier above is the only way into the slot.
                   tag (if rebound? want (or want (node-tag init-ast)))]
               [(assoc-in e [:locals sym]
-                         (cond-> {:kind :local :idx idx} tag (assoc :tag tag)))
+                         (cond-> {:kind :local :idx idx}
+                           tag (assoc :tag tag)
+                           ;; What testing THIS local would tell us, inherited
+                           ;; from whatever it was bound to. `and` and `or`
+                           ;; expand to a let of the test followed by an `if` on
+                           ;; the local, so the projection has to survive one
+                           ;; binding or it is lost exactly where it is wanted.
+                           ;; Never for a rebound slot: `recur` can put a
+                           ;; different value in it.
+                           (and (not rebound?) (:projects init-ast))
+                           (assoc :projects (:projects init-ast))))
                (conj acc {:idx idx :init init-ast :name sym :tag tag})]))
           [env []]
           pairs))
@@ -374,11 +489,24 @@
   (case head
     quote (const-node (second form))
 
+    ;; Occurrence narrowing. `(if (int? x) A B)` compiles A knowing `x` is an
+    ;; int, because that is what the test having succeeded MEANS. Nobody has to
+    ;; write an annotation for it, and it applies to code written years before
+    ;; flint existed -- which is most of what the census says real programs
+    ;; spend their time in.
     if (let [[_ test then else] form]
          (when (< (count form) 3) (err "if needs at least a test and a then" {:form form}))
-         {:op :if :test (analyze env test)
-          :then (analyze env then)
-          :else (if (> (count form) 3) (analyze env else) (const-node nil))})
+         (let [test-ast (analyze env test)
+               ;; Seen through whatever the test is made of: a predicate call, a
+               ;; local bound to one, or the `let`+`if` that `and` and `or`
+               ;; expand to. A local node carries the projections of whatever it
+               ;; was bound to, which is what makes the first two the same case.
+               p (branch-projects test-ast)]
+           {:op :if :test test-ast
+            :then (analyze (narrow env (get p true)) then)
+            :else (if (> (count form) 3)
+                    (analyze (narrow env (get p false)) else)
+                    (const-node nil))}))
 
     do (analyze-body env (rest form))
 
@@ -560,6 +688,9 @@
                                  {:op :do :body (conj pchecks body-ast)}
                                  body-ast)]
                   {:argc (count fixed) :variadic? variadic?
+                   ;; The parameter NAMES, kept so a declaration written about
+                   ;; `x` can be resolved to an argument position.
+                   :params (vec all)
                    :loop-id (get-in env' [:loop :id])
                    :slots slots
                    :body body-ast}))
