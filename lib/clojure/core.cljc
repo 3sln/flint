@@ -11,7 +11,10 @@
 ;; ---------------------------------------------------------------- primitives
 
 (defn identity [x] x)
-(defn not [x] (if x false true))
+;; `:result-inverts` tells the analyzer that everything known from `x` being
+;; truthy applies to the OTHER branch of a test on `(not x)`, so occurrence
+;; narrowing crosses a negation intact.
+(defn ^{:result-inverts x} not [x] (if x false true))
 
 (defn nil? [x] (flint.rt/nil? x))
 (defn some? [x] (if (flint.rt/nil? x) false true))

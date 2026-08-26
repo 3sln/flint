@@ -75,6 +75,8 @@
               ;; What a call's result tells you about its arguments, by var and
               ;; arity. `:result-projected-meta`, resolved to argument indices.
               :projections {}
+              ;; Vars whose result inverts an argument's truthiness.
+              :inversions {}
               :eval-vars (atom {})}))
 
 (defn- register-native-aliases!
@@ -192,6 +194,27 @@
              {}
              spec)]
         (vswap! cc assoc-in [:projections sym argc] by-index)))))
+
+(defn- register-inversion!
+  "Record that `sym`'s result is the NEGATION of an argument's truthiness.
+
+      (defn ^{:result-inverts x} not [x] (if x false true))
+
+  Everything narrowing knows about `x` then applies to the other branch of a
+  test on `(not x)`. It is declared for the same reason projections are: `not`
+  is written in cljc and its call site is an ordinary invoke, so without a
+  declaration the analyzer would have to recognise one specific function body,
+  and a user's own `blank?` wrapper would get nothing."
+  [cc sym m ast]
+  (when-let [p (:result-inverts m)]
+    (doseq [{:keys [argc params]} (:arities ast)]
+      (let [i (first (keep-indexed #(when (= %2 p) %1) params))]
+        (when-not i
+          (throw (ex-info (str ":result-inverts for " sym " names " p
+                               ", which is not a parameter of its " argc
+                               "-argument arity " (pr-str params))
+                          {:type :compile :sym sym})))
+        (vswap! cc assoc-in [:inversions sym argc] i)))))
 
 ;; ------------------------------------------------------------------ pass 1/2
 
@@ -325,7 +348,8 @@
                 ;; After the alias, so an explicit `:inline` beats the one
                 ;; inferred from a one-native body. The author said which.
                 (register-inline! cc env sym (:meta defnode))
-                (register-projections! cc sym (:meta defnode) (:init defnode))))
+                (register-projections! cc sym (:meta defnode) (:init defnode))
+                (register-inversion! cc sym (:meta defnode) (:init defnode))))
             (vswap! cc assoc-in [:vars sym] true)))
         (catch Throwable e
           ;; Say WHERE. A bare "unable to resolve symbol" halfway through

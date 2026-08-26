@@ -207,48 +207,60 @@
     (cond-> node (seq p) (assoc :projects p))))
 
 (defn- intersect-narrowings
-  "Only what BOTH branches agree on. `(or (int? x) (string? x))` proves nothing
-  about `x`, and this is the rule that says so."
+  "Only what BOTH ways of reaching this outcome agree on. `(or (int? x)
+  (string? x))` proves nothing about `x`, and this is the rule that says so."
   [a b]
   (reduce-kv (fn [m sym t] (if (= t (get b sym)) (assoc m sym t) m)) {} (or a {})))
 
-(defn- falsy-in-else?
-  "Is the else branch of `(if C A B)` known falsy when it is taken? Two shapes:
-  a literal nil/false, and B being the very local that C tested -- which is
-  what `and` expands to, and the reason its projections may pass straight
-  through."
-  [test-node else-node]
-  (or (and (= :const (:op else-node)) (not (:val else-node)))
-      (and (= :local (:op test-node)) (= :local (:op else-node))
-           (= (:idx test-node) (:idx else-node)))))
+(defn- same-local? [a b]
+  (and (= :local (:op a)) (= :local (:op b)) (= (:idx a) (:idx b))))
 
-(declare branch-projects)
+(declare projects)
 
-(defn- projects-true
-  "What `node` being TRUTHY implies about locals, seen THROUGH the forms `and`
-  and `or` expand to. Without this, `(and (int? a) (int? b))` narrows nothing:
-  the outer `if` sees a `let`, not a predicate call."
-  [node]
+(defn- can-be?
+  "Can `node` come out with truthiness `truth`, given that `test` was taken the
+  way that leads here? Two things make the answer no, and between them they are
+  what `and` and `or` are built out of: a literal of the wrong truthiness, and
+  the branch BEING the test -- `(if t rest t)` cannot yield truthy through its
+  else, because `t` is false there."
+  [node truth test test-truth]
+  (cond
+    (= :const (:op node)) (= truth (boolean (:val node)))
+    (same-local? test node) (= truth test-truth)
+    :else true))
+
+(defn- projects
+  "What `node` coming out with truthiness `truth` implies about locals.
+
+  Written as one function over both polarities because `and`, `or`, `when-not`
+  and `if-not` all reduce to `if`, and each of them needs a different corner of
+  the same rule. An `if` can reach an outcome two ways; what is proven is what
+  BOTH ways prove, unless one of them cannot happen."
+  [node truth]
   (case (:op node)
     :let (let [bound (set (map :name (:bindings node)))]
-           ;; A symbol this let binds is a DIFFERENT binding outside it, so a
+           ;; A symbol this let binds is a different binding outside it, so a
            ;; projection naming one must not escape.
-           (apply dissoc (projects-true (:body node)) bound))
-    :do (projects-true (last (:body node)))
+           (apply dissoc (projects (:body node) truth) bound))
+    :do (projects (last (:body node)) truth)
     :if (let [{:keys [test then else]} node
-              from-test (get (:projects test) true)
-              when-then (merge from-test (projects-true then))]
-          (if (falsy-in-else? test else)
-            when-then
-            (intersect-narrowings when-then (projects-true else))))
-    (get (:projects node) true)))
+              via-then (when (can-be? then truth test true)
+                         (merge (projects test true) (projects then truth)))
+              via-else (when (can-be? else truth test false)
+                         (merge (projects test false) (projects else truth)))]
+          (cond
+            (and via-then via-else) (intersect-narrowings via-then via-else)
+            via-then via-then
+            via-else via-else
+            :else {}))
+    (get (:projects node) truth)))
 
 (defn- branch-projects
-  "`{true {...} false {...}}` for a test node."
+  "`{true {...} false {...}}` for a test node, empty entries dropped."
   [node]
   (cond-> {}
-    (seq (projects-true node)) (assoc true (projects-true node))
-    (get (:projects node) false) (assoc false (get (:projects node) false))))
+    (seq (projects node true)) (assoc true (projects node true))
+    (seq (projects node false)) (assoc false (projects node false))))
 
 (defn- narrow
   "`env` with each local in `narrowed` known to have the tag it maps to. A
@@ -346,10 +358,21 @@
           ;; A user function's own declaration. `:result-projected-meta` is
           ;; recorded by argument INDEX at definition, so it reads the same way
           ;; the builtin table does.
-          (with-projections env {:op :invoke :fn f :args args}
-            (when (= :var (:op f))
-              (get-in @(:cc env) [:projections (:sym f) (count args)]))
-            (rest form)))))))
+          (let [node (with-projections env {:op :invoke :fn f :args args}
+                       (when (= :var (:op f))
+                         (get-in @(:cc env) [:projections (:sym f) (count args)]))
+                       (rest form))
+                inv (when (= :var (:op f))
+                      (get-in @(:cc env) [:inversions (:sym f) (count args)]))]
+            ;; `(not e)` proves on the false side whatever `e` proves on the
+            ;; true side, and the other way round. Everything narrowing knows
+            ;; crosses a negation intact.
+            (if-let [a (and inv (nth args inv nil))]
+              (let [flipped (cond-> {}
+                              (seq (projects a false)) (assoc true (projects a false))
+                              (seq (projects a true)) (assoc false (projects a true)))]
+                (cond-> node (seq flipped) (assoc :projects flipped)))
+              node)))))))
 
 ;; ------------------------------------------------------- type annotations
 ;;
@@ -479,8 +502,12 @@
                            ;; binding or it is lost exactly where it is wanted.
                            ;; Never for a rebound slot: `recur` can put a
                            ;; different value in it.
-                           (and (not rebound?) (:projects init-ast))
-                           (assoc :projects (:projects init-ast))))
+                           ;; Through whatever the initialiser is made of. A
+                           ;; nested `and` is a `:let` node with no `:projects`
+                           ;; of its own, so reading the key rather than
+                           ;; computing it lost every nested case.
+                           (and (not rebound?) (seq (branch-projects init-ast)))
+                           (assoc :projects (branch-projects init-ast))))
                (conj acc {:idx idx :init init-ast :name sym :tag tag})]))
           [env []]
           pairs))
