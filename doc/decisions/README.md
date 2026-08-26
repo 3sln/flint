@@ -30,7 +30,7 @@ for the first.
 | [0021](0021-cli.md) | A native CLI: cross compiler, interpreter, capabilities | **Partly shipped.** The command surface and `deps.edn` work; the native binary and capability injection do not |
 | [0022](0022-opaque-values.md) | Opaque values: identity without structure | **Shipped.** `(opaque)`, host-minted capabilities, invalidated on snapshot import |
 | [0023](0023-construe-integration-bar.md) | What "ready for construe" means, concretely | **Live.** The milestone the current work is aimed at |
-| [0024](0024-no-runtime-linking.md) | No linking at compile time; byte strings and transient ropes | **Roadmap.** `wasm-ld` runs once when flint is built, never per program |
+| [0024](0024-no-runtime-linking.md) | No linking at compile time; byte strings and transient ropes | **Partly shipped.** The splice and the tree shaker work with no linker; the byte strings do not exist |
 
 ## What is actually next
 

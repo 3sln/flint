@@ -1,8 +1,10 @@
 # 0024 — No linking at compile time, and byte strings
 
-> **NOT BUILT — this is a plan.** `flint.bundle` exists and works (`0023`'s
-> splice, proven end to end); everything below about byte strings, embedded
-> runtimes and per-target compilers does not.
+> **PARTLY BUILT.** `flint.bundle` splices an image into a prebuilt module, and
+> `flint.shake` + `flint.wasmshake` cut that module down to what the image
+> needs — both without a linker, both measured. What is NOT built is the byte
+> strings, the transient, the `flint.wasm` port they exist for, and the
+> embedded runtimes.
 
 ## The decision
 
@@ -116,8 +118,60 @@ That is the answer to *"will it benefit flint's tree-structured strings?"* —
 yes, and the reason is specific to trees with a flat threshold, which is why
 Clojure never needed it.
 
+## Tree shaking, and why it does not need a linker either
+
+Losing `--gc-sections` looked like the price of the decision above. It is not.
+Shaking is a mark from a set of roots over a call graph, followed by removing
+what was not marked, and none of that needs `wasm-ld` -- it is a pass over a
+module that already exists.
+
+**The mark is target-independent**, which is the reason it is worth building
+here rather than three times: a call graph is a call graph whether it came out
+of a wasm code section, a JVM constant pool or a CLR metadata table. A target
+supplies two things, edge extraction and removal.
+
+It can also be MORE precise than the linker. `--gc-sections` is handed a
+conservative export list before anything is known about the program; by the
+time this runs the image exists, and the exact set of builtins it imports is a
+fact.
+
+Two decisions in the wasm half, both of which look like corners cut:
+
+* **The scan is conservative.** Finding every `call` immediate exactly means
+  decoding the whole instruction stream. Scanning for the `call` opcode byte
+  instead can invent an edge, because that byte can occur inside somebody
+  else's immediate -- and that direction is safe: an invented edge keeps a
+  function that could have gone, and a real call is always found. It can only
+  remove too little.
+* **Dead functions are STUBBED, not deleted.** A wasm function index is
+  positional, so deleting one renumbers every call, table entry and export
+  after it. An `unreachable` body keeps every index valid and still drops the
+  bytes, which are nearly all of the prize: the code section is 89% of the
+  module and the tables that would also shrink are under 1%.
+
+Built and measured. On a program using `clojure.string`, `reduce` and
+`filterv`:
+
+| | bytes |
+| --- | ---: |
+| prebuilt runtime | 573,959 |
+| shaken, no linker | 384,074 |
+| linked by `lld` | 240,351 |
+
+371 of 777 functions kept, 38.9% of the code section gone, **57% of what the
+linker removes** -- and on a trivial program, 79%. The gap is the two
+conservatisms above, and closing it is a real instruction decoder and index
+renumbering, in that order.
+
+The test runs the shaken module, because the failure that matters is the
+quiet one: a shake that cuts something reachable makes a SMALLER module that
+traps. Verified by disabling the call edges -- 98.1% removed, and the run check
+is what fails.
+
 ## The order to build it in
 
+0. ~~Tree shaking as a pass over a finished module.~~ **Done**, 57-79% of the
+   linker's result, and the mark phase is shared with the other targets.
 1. `TY_BYTES` and the byte rope, with `bytes?`, `count`, `nth`, concat and
    slice. Measured against the vector-of-ints it replaces, on bytes held per
    byte.
