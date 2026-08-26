@@ -15,7 +15,8 @@
   object alive, which matters given the collector."
   (:require [clojure.string :as str]
             [flint.canon :as canon]
-            [flint.macros :as macros]))
+            [flint.macros :as macros]
+            [flint.types :as ty]))
 
 (def specials
   '#{def if do let* loop* recur fn* quote var throw try catch finally binding
@@ -141,7 +142,7 @@
 
 ;; ------------------------------------------------------------------ analysis
 
-(declare analyze analyze-body analyze-fn analyze-special analyze-ns)
+(declare analyze analyze-untagged analyze-body analyze-fn analyze-special analyze-ns)
 
 (defn- const-node [v] {:op :const :val v})
 
@@ -245,7 +246,74 @@
                        (:tmpl nat))}
           {:op :invoke :fn f :args args})))))
 
+;; ------------------------------------------------------- type annotations
+;;
+;; A tag on a BINDING is a checked claim, and the check goes at the write. That
+;; is the whole design: `(let [^int x e] ...)` tests once, and every read of `x`
+;; afterwards is known without testing, so the code that follows can be
+;; specialised on it. A tag on a use site -- `(+ ^int x ^int y)` -- is the same
+;; barrier at a different place, and it errors at the annotation rather than
+;; wherever the wrong value eventually causes trouble.
+;;
+;; The check is ELIDED when the value is already known to satisfy it, which is
+;; what keeps annotating cheap: annotating a value that came from an annotated
+;; binding costs nothing at all.
+
+(defn- node-tag
+  "What `node` is known to evaluate to, or nil. Never a guess: an unsound
+  answer here elides a check that was load-bearing, and the annotation silently
+  becomes the hint it is supposed not to be."
+  [node]
+  (or (:tag node)
+      (case (:op node)
+        :const (ty/const-tag (:val node))
+        :native (ty/native-return (:name node) (mapv node-tag (:args node)))
+        :vector :vector
+        :map :map
+        :set :set
+        :fn :fn
+        ;; Both arms, or nothing. `(if p 1 :k)` is not an int.
+        :if (let [a (node-tag (:then node)) b (node-tag (:else node))]
+              (when (and a (= a b)) a))
+        :do (node-tag (last (:body node)))
+        :let (node-tag (:body node))
+        nil)))
+
+(defn- check-node
+  "The barrier itself, always emitted."
+  [env node want where]
+  (record-dep! env (symbol "flint.native" "flint/check-tag"))
+  {:op :native :name "flint/check-tag" :tag want
+   :args [node (const-node (get ty/code want)) (const-node (str where))]})
+
+(defn- checked
+  "`node`, guaranteed to satisfy `want`. Emits nothing when it already does --
+  which is what makes annotating cheap, and what makes annotating a value that
+  came from an annotated binding entirely free."
+  [env node want where]
+  (cond
+    (nil? want) node
+    (ty/proves? (node-tag node) want) (assoc node :tag want)
+    :else (check-node env node want where)))
+
+(defn- form-tag
+  "The tag written on a form, where the form can carry metadata at all."
+  [form]
+  (when (or (symbol? form) (seq? form) (vector? form) (map? form) (set? form))
+    (ty/known form)))
+
 (defn analyze [env form]
+  ;; A tag at a USE site is the same barrier as one at a binding, placed where
+  ;; the author wants the error: `(+ ^int x ^int y)` fails at the annotation
+  ;; naming `x`, not four frames deeper inside the number tower. The tag is
+  ;; stripped before the form is analyzed, or this would not terminate.
+  (let [want (form-tag form)
+        where (if (symbol? form) form "a value")
+        form (if want (vary-meta form dissoc :tag) form)
+        node (analyze-untagged env form)]
+    (if want (checked env node want where) node)))
+
+(defn analyze-untagged [env form]
   (cond
     (symbol? form) (analyze-symbol env form)
     (seq? form) (if (empty? form)
@@ -279,14 +347,26 @@
 ;; --------------------------------------------------------------- specials
 
 (defn- bind-locals
-  "Bind `pairs` ([sym init-form] ...) sequentially, returning [env bindings]."
-  [env pairs]
+  "Bind `pairs` ([sym init-form] ...) sequentially, returning [env bindings].
+
+  `rebound?` says whether `recur` can write these slots again. It changes what
+  may be believed about them: a `let` binding is written once, so a tag INFERRED
+  from the initialiser holds for the whole scope, while a `loop` binding is
+  written again by every `recur` and only a DECLARED tag survives -- because a
+  declared one is checked at each recur, and an inferred one would be a claim
+  about the first iteration presented as a claim about all of them."
+  [env pairs rebound?]
   (reduce (fn [[e acc] [sym init]]
             (when-not (symbol? sym) (err "binding name must be a symbol" {:sym sym}))
-            (let [init-ast (analyze e init)
-                  idx (alloc-local! (:scope e))]
-              [(assoc-in e [:locals sym] {:kind :local :idx idx})
-               (conj acc {:idx idx :init init-ast :name sym})]))
+            (let [want (ty/known sym)
+                  init-ast (checked e (analyze e init) want sym)
+                  idx (alloc-local! (:scope e))
+                  ;; What every later READ of this local reports. Sound because
+                  ;; the barrier above is the only way into the slot.
+                  tag (if rebound? want (or want (node-tag init-ast)))]
+              [(assoc-in e [:locals sym]
+                         (cond-> {:kind :local :idx idx} tag (assoc :tag tag)))
+               (conj acc {:idx idx :init init-ast :name sym :tag tag})]))
           [env []]
           pairs))
 
@@ -305,16 +385,17 @@
     let* (let [[_ bindings & body] form
                _ (when (odd? (count bindings)) (err "let needs an even binding vector" {:form form}))
                n0 (:nlocals @(:scope env))
-               [env' bs] (bind-locals env (partition 2 bindings))
+               [env' bs] (bind-locals env (partition 2 bindings) false)
                body-ast (analyze-body env' body)]
            (release-locals! (:scope env) n0)
            {:op :let :bindings bs :body body-ast})
 
     loop* (let [[_ bindings & body] form
                 n0 (:nlocals @(:scope env))
-                [env' bs] (bind-locals env (partition 2 bindings))
+                [env' bs] (bind-locals env (partition 2 bindings) true)
                 loop-id (gensym "loop")
-                env' (assoc env' :loop {:id loop-id :slots (mapv :idx bs) :n (count bs)})
+                env' (assoc env' :loop {:id loop-id :slots (mapv :idx bs) :n (count bs)
+                                        :tags (mapv :tag bs) :names (mapv :name bs)})
                 body-ast (analyze-body env' body)]
             (release-locals! (:scope env) n0)
             {:op :loop :id loop-id :bindings bs :body body-ast})
@@ -324,7 +405,17 @@
             (let [args (mapv #(analyze env %) (rest form))]
               (when (not= (count args) (:n l))
                 (err (str "recur expects " (:n l) " arguments, got " (count args)) {:form form}))
-              {:op :recur :id (:id l) :slots (:slots l) :args args}))
+              ;; The barrier again, at the OTHER way into these slots. Without
+              ;; this a declared loop tag would hold on the first iteration and
+              ;; be a lie on the second, and every specialisation downstream of
+              ;; it would be unsound -- which is the worst shape of bug this
+              ;; feature can have, because the first iteration passes.
+              {:op :recur :id (:id l) :slots (:slots l)
+               :args (vec (map-indexed
+                           (fn [i a]
+                             (checked env a (nth (:tags l) i nil)
+                                      (or (nth (:names l) i nil) "a recur argument")))
+                           args))}))
 
     fn* (analyze-fn env form)
 
@@ -434,8 +525,11 @@
                 (let [{:keys [fixed variadic? rest all]} (arity-info params)
                       _ (release-locals! scope 0)
                       env' (reduce (fn [e p]
-                                     (let [idx (alloc-local! scope)]
-                                       (assoc-in e [:locals p] {:kind :local :idx idx})))
+                                     (let [idx (alloc-local! scope)
+                                           t (ty/known p)]
+                                       (assoc-in e [:locals p]
+                                                 (cond-> {:kind :local :idx idx}
+                                                   t (assoc :tag t)))))
                                    base-env
                                    all)
                       ;; A named fn can call itself. It cannot capture itself --
@@ -443,8 +537,28 @@
                       ;; so the name resolves to the frame's own closure.
                       env' (if fname (assoc-in env' [:locals fname] {:kind :self}) env')
                       slots (mapv #(get-in env' [:locals % :idx]) all)
-                      env' (assoc env' :loop {:id (gensym "fnloop") :slots slots :n (count all)})
-                      body-ast (analyze-body env' body)]
+                      env' (assoc env' :loop {:id (gensym "fnloop") :slots slots
+                                              :n (count all)
+                                              :tags (mapv ty/known all) :names (vec all)})
+                      ;; A parameter's tag is checked ON ENTRY, once, and every
+                      ;; read of it in the body is then known without a test.
+                      ;; The checks are statements: `check-tag` returns the
+                      ;; value, and the slot already holds it.
+                      pchecks (vec (keep (fn [p]
+                                           (when-let [t (ty/known p)]
+                                             (check-node env'
+                                                         {:op :local :name p
+                                                          :idx (get-in env' [:locals p :idx])}
+                                                         t p)))
+                                         all))
+                      body-ast (analyze-body env' body)
+                      ;; The declared return type, checked at the return site.
+                      ret (ty/known params)
+                      body-ast (checked env' body-ast ret
+                                        (str (or fname "this fn") "'s return"))
+                      body-ast (if (seq pchecks)
+                                 {:op :do :body (conj pchecks body-ast)}
+                                 body-ast)]
                   {:argc (count fixed) :variadic? variadic?
                    :loop-id (get-in env' [:loop :id])
                    :slots slots

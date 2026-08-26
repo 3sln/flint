@@ -196,7 +196,25 @@
         [attrs more] (if (and (map? (first more)) (next more)) [(first more) (next more)] [nil more])
         m (cond-> (or attrs {}) doc (assoc :doc doc))
         m (merge m (meta name))
-        fform (normalise-fn (list* 'fn name more))]
+        fform (normalise-fn (list* 'fn name more))
+        ;; `(defn ^int f ...)` is a claim about every arity's RETURN, and the
+        ;; analyzer reads return tags off the argument vector -- so the tag is
+        ;; pushed down here, once, rather than threaded through analysis. An
+        ;; arity that states its own tag keeps it: `(defn ^number f (^int [x] ..)
+        ;; (^float [x y] ..))` is two different, more precise claims.
+        fform (if-let [t (:tag m)]
+                (let [[hd & arities] fform
+                      [nm arities] (if (symbol? (first arities))
+                                     [[(first arities)] (rest arities)]
+                                     [[] arities])]
+                  (concat [hd] nm
+                          (map (fn [[params & body]]
+                                 (cons (if (:tag (meta params))
+                                         params
+                                         (vary-meta params assoc :tag t))
+                                       body))
+                               arities)))
+                fform)]
     (list 'def (with-meta name m) fform)))
 
 (defn- m-defn- [[_ name & more] env]

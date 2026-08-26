@@ -83,8 +83,8 @@
 (defn main [args]
   (let [mode (first args)]
   (cond
-    (= mode "inlined") (pr-str (inlined-loop 2000))
-    (= mode "plain")   (pr-str (plain-loop 2000))
+    (= mode "inlined") (pr-str (inlined-loop (flint.rt/str->num (second args))))
+    (= mode "plain")   (pr-str (plain-loop (flint.rt/str->num (second args))))
     :else
     (let [n (volatile! 0)]
       (pr-str

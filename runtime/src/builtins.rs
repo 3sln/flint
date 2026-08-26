@@ -184,6 +184,66 @@ builtins! {
     "boolean?", flint_b_boolp, b_boolp, |rt, a, n| { let _ = n; Value::boolean(arg(rt, a, 0).is_bool()) };
     "sequential?", flint_b_sequentialp, b_sequentialp, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); Value::boolean(rt.is_sequential(v)) };
 
+    // --- the type-annotation barrier ---------------------------------------
+    //
+    // `(let [^int x e] ...)` compiles to a bind of `check-tag(e, INT, where)`.
+    // The check is what makes the annotation SOUND rather than a hint: every
+    // read of `x` after it is known to be an int, so the reads can be
+    // specialised, and the cost is one test at the write instead of one test
+    // at each read. An annotation that is already proven emits no call at all
+    // -- the analyzer elides it -- so this runs only where something was
+    // genuinely unknown.
+    //
+    // The codes are `flint.types/code`, and `test/types.clj` asserts the two
+    // tables agree. They are integers rather than keywords because this is on
+    // the write path of every annotated binding.
+    "flint/check-tag", flint_b_check_tag, b_check_tag, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        let code = arg(rt, a, 1).as_fixnum();
+        let ok = match code {
+            1 => rt.is_int(v),
+            2 => rt.is_float(v),
+            3 => rt.is_number(v),
+            4 => rt.is_string(v),
+            5 => rt.is_keyword(v),
+            6 => rt.is_symbol(v),
+            7 => v.is_bool(),
+            8 => rt.is_vector(v),
+            9 => rt.is_map(v),
+            10 => rt.is_set(v),
+            11 => rt.is_seq(v),
+            12 => rt.is_fn(v),
+            13 => v.is_nil(),
+            14 => rt.is_sequential(v),
+            // An unknown code is a compiler that has drifted from this table.
+            // Failing loudly beats passing everything: a silent `true` here
+            // would make every annotation vacuous and every specialisation
+            // built on one unsound.
+            _ => {
+                return rt.throw_str("IllegalArgumentException",
+                                    "check-tag: unknown type code");
+            }
+        };
+        if ok {
+            v
+        } else {
+            let mut b = crate::rt::sbuf();
+            let name = match code {
+                1 => "int", 2 => "float", 3 => "number", 4 => "string",
+                5 => "keyword", 6 => "symbol", 7 => "boolean", 8 => "vector",
+                9 => "map", 10 => "set", 11 => "seq", 12 => "fn", 13 => "nil",
+                _ => "sequential",
+            };
+            let site = arg(rt, a, 2);
+            let msg = match rt.as_str(site, &mut b) {
+                Some(w) => alloc::format!("{w} is declared ^{name}, and it is not"),
+                None => alloc::format!("a value declared ^{name} is not one"),
+            };
+            rt.throw_str("ClassCastException", &msg)
+        }
+    };
+
     // --- collections --------------------------------------------------------
     "count", flint_b_count, b_count, |rt, a, n| {
         let _ = n;
