@@ -35,6 +35,7 @@
              "  flint deps               what deps.edn asks for, and what this build honours"
              "  flint paths              the source roots"
              "  flint targets            what this build can cross compile for"
+             "  flint check [:src d]     what was written for flint and does nothing"
              "  flint inspect <file>     what a built module says about itself (0020)"
              "  flint version"
              ""

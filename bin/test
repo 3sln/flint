@@ -145,6 +145,21 @@ grep -E "^    [a-z]" /tmp/flint-test.out | awk '{printf "%s=%s ", $1, $2} END {p
 ./bin/build-units > /dev/null 2>&1 || fail "build-units"
 
 echo
+echo "== check: what was written for flint and does nothing"
+# The fixture carries one of each kind, so it must FAIL -- a checker that
+# cannot fail is not checking. The two host hints must NOT be what fails it.
+if ./bin/flint check :src test/fixtures > /tmp/flint-test.out 2>&1; then
+  cat /tmp/flint-test.out; fail "flint check passed a file with a bare flint key"
+fi
+grep -q "bare-key" /tmp/flint-test.out || fail "check missed the bare key"
+grep -q "unknown-flint-key" /tmp/flint-test.out || fail "check missed a typo'd flint key"
+grep -q "^2 finding" /tmp/flint-test.out || fail "check counted the host hints as findings"
+grep -E "^    \^" /tmp/flint-test.out | sed 's/^/  /'
+# And it must PASS flint's own source, which carries host hints and no mistakes.
+./bin/flint check :src src :src lib > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "flint check flags flint own source"; }
+grep -E "annotation" /tmp/flint-test.out | sed 's/^ */    /' 
+
+echo
 echo "== decisions: the index agrees with what is in the tree"
 ./bin/check-decisions || fail "bin/check-decisions"
 

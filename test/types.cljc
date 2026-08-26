@@ -131,7 +131,7 @@
   (if (and (int? a) (int? b)) (flint.rt/add ^int a ^int b) :nope))
 
 ;; A user-declared projection: as good as a builtin predicate.
-(defn ^{:result-projected-meta {true {v {:tag int}}}}
+(defn ^{:flint/result-projected-meta {true {v {:tag int}}}}
   my-int? [v] (int? v))
 
 (defn user-narrowed [x]

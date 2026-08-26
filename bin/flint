@@ -1,10 +1,11 @@
 #!/usr/bin/env bb
 ;; flint :src <dir> :fn <ns/fn> [:out <file.wasm>]
-(require '[clojure.string :as str] '[clojure.java.io :as io] '[babashka.fs :as fs])
+(require '[clojure.string :as str] '[clojure.java.io :as io] '[babashka.fs :as fs]
+         '[clojure.edn :as edn])
 (def root (str (fs/parent (fs/parent (fs/real-path *file*)))))
 (babashka.classpath/add-classpath (str root "/src:" root "/lib"))
 (require '[flint.compiler :as compiler] '[flint.image :as img] '[flint.link :as link]
-         '[flint.reader :as reader]
+         '[flint.reader :as reader] '[flint.lint :as lint]
          ;; The project surface -- `tasks`, `task`, `build`, `fetch`, ... -- is
          ;; flint code, in `lib/`, because 0021's argument is that it has to
          ;; survive losing babashka. What is in this file is the host half.
@@ -280,6 +281,64 @@
                       "   (+" (:builtins m) " builtins)"))
         (println (str "imports: " (if (seq (:imports m)) (str/join " " (:imports m)) "none")))
         (System/exit 0)))))
+
+;; `flint check` -- what was written for flint and does nothing.
+;;
+;; Separate from `build` on purpose. Metadata is an open map, so the compiler
+;; reads the keys it owns and is silent about the rest -- which is right, and
+;; leaves a declaration aimed at flint and spelled slightly wrong carried,
+;; never read, and never complained about. This is the opt-in half. It is
+;; allowed to be wrong about intent, which a compiler is not.
+(when (= "check" (first *command-line-args*))
+  (let [opts (parse-args (rest *command-line-args*))
+        dirs (or (seq (:src opts))
+                 (let [d (try (edn/read-string (slurp "deps.edn")) (catch Exception _ nil))]
+                   (seq (:paths d)))
+                 ["src"])
+        files (->> dirs
+                   (mapcat (clojure.core/fn [d]
+                             (when (.isDirectory (io/file d)) (file-seq (io/file d)))))
+                   (filter (clojure.core/fn [f]
+                             (and (.isFile ^java.io.File f)
+                                  (or (str/ends-with? (.getName ^java.io.File f) ".cljc")
+                                      (str/ends-with? (.getName ^java.io.File f) ".clj")))))
+                   (map (clojure.core/fn [f] (.getPath ^java.io.File f)))
+                   sort)
+        findings (mapcat (clojure.core/fn [f]
+                           (try (lint/check (reader/read-all (slurp f)) f)
+                                (catch Exception e
+                                  [{:kind :unreadable :what (ex-message e)
+                                    :why "this file could not be read"
+                                    :at {:file f}}])))
+                         files)]
+    (println (str "checked " (count files) " file(s) under "
+                  (str/join " " dirs)))
+    (doseq [g (filter lint/finding? findings)]
+      (println)
+      (println (str "  " (:file (:at g))
+                    (when-let [l (:line (:at g))] (str ":" l))
+                    "   " (name (:kind g)) "   " (:what g)))
+      (println (str "    " (:why g))))
+    ;; Notes are summarised, never listed. Twenty-nine lines of `^bytes` is a
+    ;; wall that hides the two lines that matter.
+    (let [notes (remove lint/finding? findings)
+          real (filter lint/finding? findings)]
+      (when (seq notes)
+        (println)
+        (println (str "  " (count notes) " annotation(s) flint ignores. That is "
+                      "correct if they are hints for another host:"))
+        (doseq [[what n] (sort-by val > (frequencies (map :what notes)))]
+          (let [a (:at (first (filter (clojure.core/fn [x] (= what (:what x))) notes)))]
+            (println (str "    " what "  x" n "   first at " (:file a)
+                          (when (:line a) (str ":" (:line a))))))))
+      (println)
+      (if (seq real)
+        (do (println (str (count real) " finding(s). None of this is an error: "
+                          "metadata is an open map and these keys may belong to "
+                          "something else."))
+            (System/exit 1))
+        (do (println "nothing that names flint is being ignored.")
+            (System/exit 0))))))
 
 ;; The project commands -- `tasks`, `task`, `deps`, `paths`, `targets`,
 ;; `version`, `help`. The LOGIC for all of them is `lib/flint/cli.cljc`, a flint

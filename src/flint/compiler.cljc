@@ -163,8 +163,8 @@
   that would otherwise leave the declaration silently doing nothing, which for
   an optimisation hint is indistinguishable from working."
   [cc sym m ast]
-  (when-let [spec (:result-projected-meta m)]
-    (let [bad (fn [msg] (throw (ex-info (str ":result-projected-meta for " sym
+  (when-let [spec (:flint/result-projected-meta m)]
+    (let [bad (fn [msg] (throw (ex-info (str ":flint/result-projected-meta for " sym
                                              " " msg)
                                         {:type :compile :sym sym})))]
       (when-not (map? spec)
@@ -249,15 +249,15 @@
   declaration the analyzer would have to recognise one specific function body,
   and a user's own `blank?` wrapper would get nothing."
   [cc sym m ast]
-  (when-let [p (:result-inverts m)]
+  (when-let [p (:flint/result-inverts m)]
     (when-not (symbol? p)
-      (throw (ex-info (str ":result-inverts for " sym " is " (pr-str p)
+      (throw (ex-info (str ":flint/result-inverts for " sym " is " (pr-str p)
                            ", and it names a PARAMETER, so it is a symbol")
                       {:type :compile :sym sym})))
     (doseq [{:keys [argc params]} (:arities ast)]
       (let [i (first (keep-indexed #(when (= %2 p) %1) params))]
         (when-not i
-          (throw (ex-info (str ":result-inverts for " sym " names " p
+          (throw (ex-info (str ":flint/result-inverts for " sym " names " p
                                ", which is not a parameter of its " argc
                                "-argument arity " (pr-str params))
                           {:type :compile :sym sym})))

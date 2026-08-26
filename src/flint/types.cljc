@@ -30,7 +30,11 @@
    'symbol :symbol 'Symbol :symbol
    'boolean :boolean 'Boolean :boolean
    'vector :vector 'map :map 'set :set 'seq :seq
-   'fn :fn 'ifn :fn 'nil :nil 'sequential :sequential
+   'fn :fn 'ifn :fn 'sequential :sequential
+   ;; No `nil` entry: `'nil` is the VALUE nil, not a symbol, so `^nil` is not
+   ;; expressible as metadata in the first place. `:nil` is still a real tag --
+   ;; `nil?` projects it -- and reachable as `{:tag :nil}`, which is how the
+   ;; projection table writes it.
    ;; Written by anyone hinting for Clojure's benefit, and meaningless here.
    ;; Accepted as "no claim" rather than refused, so a portable file compiles.
    'Object :any 'any :any})
@@ -129,7 +133,7 @@
 ;; it -- which is occurrence narrowing, and it is what makes a hand-written
 ;; `(if (string? s) ...)` as good as an annotation without anyone writing one.
 ;;
-;; The general form is a declaration on the function, `:result-projected-meta`,
+;; The general form is a declaration on the function, `:flint/result-projected-meta`,
 ;; read by `flint.compiler`. The table below is the same thing for BUILTINS,
 ;; which carry no metadata -- and it is where the core predicates get theirs,
 ;; because `(int? x)` in user code is rewritten to the builtin by
@@ -141,7 +145,9 @@
 
 ;; ## The contract, stated once
 ;;
-;; `:result-projected-meta` is `{truthiness {parameter metadata}}`.
+;; `:flint/result-projected-meta` is `{truthiness {parameter metadata}}`.
+;; Namespaced because it is flint's own, not Clojure's: a `.cljc` file shared
+;; with another project must not collide with it. The bare spelling is refused.
 ;;
 ;; * The OUTER key is `true` or `false`, and nothing else. It is the
 ;;   TRUTHINESS of the result, not its value -- a predicate returning any
@@ -163,7 +169,7 @@
 ;;   type stated", which is a valid thing to write on a binding and a
 ;;   contradiction in a projection.
 ;;
-;; `:result-inverts` names a parameter symbol. Everything known from that
+;; `:flint/result-inverts` names a parameter symbol. Everything known from that
 ;; argument being truthy applies to the other branch of a test on the result.
 ;;
 ;; All of it is compile-time only. Nothing here reaches the module.

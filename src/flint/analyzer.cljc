@@ -355,7 +355,7 @@
                :args (mapv (fn [t] (if (= :arg (first t)) (nth args (second t)) (second t)))
                            (:tmpl nat))}
               (get ty/native-projections (:name nat)) thru))
-          ;; A user function's own declaration. `:result-projected-meta` is
+          ;; A user function's own declaration. `:flint/result-projected-meta` is
           ;; recorded by argument INDEX at definition, so it reads the same way
           ;; the builtin table does.
           (let [node (with-projections env {:op :invoke :fn f :args args}
