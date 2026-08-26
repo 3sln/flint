@@ -116,6 +116,29 @@
   (when-let [q (qualify env sym)]
     (get-in @(:cc env) [:macros q])))
 
+;; How many `:inline` expansions may nest before the analyzer calls it a loop.
+;; An inline whose body calls the function it is inlining -- which is how a
+;; fallback gets written, and easy to write by accident -- would otherwise
+;; expand until the host stack goes, and a StackOverflowError names nothing a
+;; reader can act on. Source nesting never approaches this; runaway expansion
+;; reaches it immediately.
+(def ^:private inline-depth-limit 200)
+
+(defn- inline-fn
+  "The `:inline` expander for `sym` at `argc` arguments, or nil.
+
+  `:inline` is Clojure's, and it is a compile-time-only property: flint carries
+  no var metadata at run time, so an inline that is never applied costs nothing
+  and leaves no trace in the module. `:inline-arities` gates it -- a set or a
+  predicate, tested on the argument count -- because the common shape is a
+  two-argument inline beside a variadic definition, and inlining the variadic
+  call with the two-argument body would be silently wrong."
+  [env sym argc]
+  (when-let [q (qualify env sym)]
+    (when-let [{:keys [f arities]} (get-in @(:cc env) [:inlines q])]
+      (when (or (nil? arities) (arities argc))
+        f))))
+
 ;; ------------------------------------------------------------------ analysis
 
 (declare analyze analyze-body analyze-fn analyze-special analyze-ns)
@@ -173,6 +196,29 @@
       (and (symbol? head) (not (resolve-local env head))
            (get macros/bootstrap (bootstrap-key head)))
       (analyze env ((get macros/bootstrap (bootstrap-key head)) form env))
+
+      ;; `:inline`, and it goes BEFORE the generic call because the expander
+      ;; takes the argument FORMS, not their analysis -- that is the whole
+      ;; point of it. Depth is counted rather than the var being blocked: the
+      ;; nested call in `(f (f x) y)` is a different call and must still
+      ;; inline, while an inline that re-emits its own name must stop.
+      (and (symbol? head) (not (resolve-local env head))
+           (not (macro-fn env head))
+           (inline-fn env head (count (rest form))))
+      (let [q (qualify env head)
+            d (inc (:inline-depth env 0))
+            _ (when (> d inline-depth-limit)
+                (err (str "the :inline for " q " does not terminate: "
+                          inline-depth-limit " nested expansions. An :inline "
+                          "body that calls the function it inlines expands "
+                          "forever -- call the underlying operation instead.")
+                     {:form form :sym q}))
+            f (inline-fn env head (count (rest form)))
+            expanded (try (apply f (rest form))
+                          (catch Throwable e
+                            (err (str "the :inline for " q " threw: " (ex-message e))
+                                 {:form form :sym q})))]
+        (analyze (assoc env :inline-depth d) expanded))
 
       (and (symbol? head) (not (resolve-local env head)) (macro-fn env head))
       (let [f (macro-fn env head)

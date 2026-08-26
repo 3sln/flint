@@ -68,6 +68,10 @@
               ;; default; a project compiling third-party `.cljc` may need more.
               :features (or (:features opts) #{:flint})
               :native-alias {}
+              ;; `:inline` expanders, keyed by qualified var. Compile-time only:
+              ;; flint carries no var metadata at run time, so nothing here
+              ;; reaches the module.
+              :inlines {}
               :eval-vars (atom {})}))
 
 (defn- register-native-aliases!
@@ -98,6 +102,41 @@
           (when tmpl
             (vswap! cc assoc-in [:native-alias sym argc]
                     {:name (:name body) :tmpl tmpl})))))))
+
+(defn- register-inline!
+  "Record the `:inline` expander a `defn` declared, evaluated on this host.
+
+  The value in the metadata is a FORM, because metadata is data -- so it is
+  analyzed and evaluated exactly the way a `defmacro` body is, through flint's
+  own AST interpreter, which is what keeps this working when flint compiles
+  itself. Failure is an error rather than a silent skip: an `:inline` that does
+  not evaluate would otherwise turn into a call that is merely slower, and the
+  author would never learn that the thing they wrote does nothing.
+
+  `:inline-arities` may be a set, a predicate, or absent. Absent means every
+  arity, which is right for the single-arity case and wrong the moment a
+  variadic tail exists -- hence the check in the analyzer rather than here."
+  [cc env sym m]
+  (when-let [form (:inline m)]
+    (let [ctx {:vars (:eval-vars @cc)}
+          ev1 (fn [what f]
+                (try (let [thunk (ev/eval-top ctx (ana/analyze env (list 'fn* [] f)))]
+                       (thunk))
+                     (catch Throwable e
+                       (throw (ex-info (str "the " what " for " sym
+                                            " could not be evaluated at compile "
+                                            "time: " (ex-message e))
+                                       {:type :compile :sym sym :form f})))))
+          f (ev1 ":inline" form)
+          arities (when-let [a (:inline-arities m)] (ev1 ":inline-arities" a))]
+      (when-not (fn? f)
+        (throw (ex-info (str ":inline for " sym " is not a function: " (pr-str form))
+                        {:type :compile :sym sym})))
+      (when (and arities (not (or (fn? arities) (set? arities))))
+        (throw (ex-info (str ":inline-arities for " sym
+                             " must be a set or a predicate, got " (pr-str arities))
+                        {:type :compile :sym sym})))
+      (vswap! cc assoc-in [:inlines sym] {:f f :arities arities}))))
 
 ;; ------------------------------------------------------------------ pass 1/2
 
@@ -227,7 +266,10 @@
           (when sym
             (let [defnode (-> ast :arities first :body)]
               (when (= :def (:op defnode))
-                (register-native-aliases! cc sym (:init defnode))))
+                (register-native-aliases! cc sym (:init defnode))
+                ;; After the alias, so an explicit `:inline` beats the one
+                ;; inferred from a one-native body. The author said which.
+                (register-inline! cc env sym (:meta defnode))))
             (vswap! cc assoc-in [:vars sym] true)))
         (catch Throwable e
           ;; Say WHERE. A bare "unable to resolve symbol" halfway through
