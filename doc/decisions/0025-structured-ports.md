@@ -324,12 +324,40 @@ A program written for the CLI therefore looks like:
 and one called through the SDK looks like whatever its author wanted. The CLI
 is a caller with a house style, and the house style is not in the runtime.
 
-`:to` names a TARGET rather than a file: `:wasm` today, and `0010`'s `:jvm`,
-`:clr` and native later. A file name is an output detail; the target is the
-decision.
+`:to` names a TARGET rather than a file: `:wasm` today, `:llvm` for the native
+runtime, and `0010`'s `:jvm` and `:clr` later. A file name is an output detail;
+the target is the decision.
+
+`:aot` is a **flag, not a target**, because AOT is a property of the BYTECODE
+and not of the backend: `:aot true :to :wasm` compiles each arity to wasm,
+`:aot true :to :llvm` compiles each arity to native code. The analysis is the
+same in both (`flint.aot`); only the emission differs, which is why it was
+wrong to put it in the same axis as the target.
 
 `:path` rather than `:src`, because it is a search path — several roots, first
 hit wins — and `:src` reads like "the source".
+
+### The compiler takes a resolver, not a filesystem
+
+The SDK hands the compiler a **namespace-to-bytes resolver**, not a directory:
+
+```js
+compile({ resolve: (ns) => sourceFor(ns), fn: 'my.ns/handler' })
+```
+
+There is no filesystem in a browser, in a Worker, or inside another sandbox,
+and a compiler that insists on one cannot run there. A resolver also lets
+sources come from a database, a bundle, a network cache or a map already in
+memory, which is most of the real cases.
+
+flint's standard library is resolved the same way, from a resolver the SDK
+provides and a caller may wrap or replace. Reading a directory is then one
+resolver among several rather than the built-in assumption -- the CLI's, and
+the CLI is where a filesystem actually exists.
+
+**The same shape in every SDK.** Rust takes a `Fn(&str) -> Option<Vec<u8>>`, C
+takes a function pointer and a void context, and the reason is the same in each
+-- the compiler should not know where source lives.
 
 ### An image carries arbitrary metadata
 

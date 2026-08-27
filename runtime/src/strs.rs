@@ -166,22 +166,29 @@ impl Rt {
         if let Ok(v) = existing {
             return v;
         }
+        // Both strings rooted across the `alloc`, and released only after the
+        // last slot is written -- see `symbol` below for what this cost when
+        // it was not. The two functions had the same four lines and the same
+        // bug; a keyword is rarer to intern under memory pressure, which is
+        // the only reason `symbol` surfaced first.
+        let base = self.mark();
         let nsv = match ns {
             Some(s) => self.string(s),
             None => NIL,
         };
-        let n = self.push(nsv);
+        self.push(nsv);
         let namev = self.string(name);
-        let nsv = self.r(n);
-        self.pop_to(n);
+        self.push(namev);
         let a = self.alloc(TY_KW, 3);
         if a == 0 {
+            self.pop_to(base);
             return NIL;
         }
         let v = Value::heap(a);
-        self.gc.set_slot(a, 0, nsv);
-        self.gc.set_slot(a, 1, namev);
+        self.gc.set_slot(a, 0, self.r(base));
+        self.gc.set_slot(a, 1, self.r(base + 1));
         self.gc.set_slot(a, 2, Value::fixnum(h as i32 as i64));
+        self.pop_to(base);
         self.intern_into(INTERN_KW, h, v);
         v
     }
@@ -203,23 +210,41 @@ impl Rt {
         if let Ok(v) = existing {
             return v;
         }
+        // BOTH strings stay rooted across the `alloc` below, and the roots are
+        // released only after the last slot is written.
+        //
+        // They were not. `nsv` was pushed, `namev` was left in a Rust local,
+        // and `pop_to` dropped the root BEFORE `alloc` -- so a collection
+        // triggered by allocating the symbol moved both strings and the two
+        // `set_slot` calls wrote pre-flip addresses into it. The interned
+        // symbol then held two dangling pointers, and because interning is a
+        // WEAK table that survives collections, the damage outlived the
+        // collection that caused it.
+        //
+        // It surfaced far away and much later: `arena::alloc` trapping while
+        // rendering the answer, with the diagnostics counters reading as four
+        // gigabytes. `stat_stale_set` named it -- stale AS IT IS WRITTEN --
+        // and the native build's `debug_assert` in `obj::slot` caught the same
+        // thing as a forwarded pointer being read back out.
+        let base = self.mark();
         let nsv = match ns {
             Some(s) => self.string(s),
             None => NIL,
         };
-        let n = self.push(nsv);
+        self.push(nsv);
         let namev = self.string(name);
-        let nsv = self.r(n);
-        self.pop_to(n);
+        self.push(namev);
         let a = self.alloc(TY_SYM, 4);
         if a == 0 {
+            self.pop_to(base);
             return NIL;
         }
         let v = Value::heap(a);
-        self.gc.set_slot(a, 0, nsv);
-        self.gc.set_slot(a, 1, namev);
+        self.gc.set_slot(a, 0, self.r(base));
+        self.gc.set_slot(a, 1, self.r(base + 1));
         self.gc.set_slot(a, 2, NIL); // meta
         self.gc.set_slot(a, 3, Value::fixnum(h as i32 as i64));
+        self.pop_to(base);
         self.intern_into(INTERN_SYM, h, v);
         v
     }
@@ -560,6 +585,65 @@ mod intern_stress {
                 "re-interning {} produced a second object",
                 n
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod intern_tests {
+    use super::*;
+
+    /// Interning under GC stress, which is what caught this.
+    ///
+    /// `symbol` and `keyword` each allocate two strings and then the object
+    /// that holds them. Under stress every allocation collects, so the
+    /// symbol's own `alloc` moves both strings -- and if either was in a Rust
+    /// local rather than on the root stack, the address written into the
+    /// symbol is the one it had before the flip.
+    ///
+    /// It is a WEAK table, so the damage outlives the collection that caused
+    /// it and surfaces somewhere else entirely: the first report was
+    /// `arena::alloc` trapping while rendering an answer, with the diagnostics
+    /// counters reading four gigabytes.
+    #[test]
+    #[cfg(feature = "diagnostics")]
+    fn interning_under_gc_stress_keeps_its_strings() {
+        let mut rt = Rt::new();
+        rt.gc.stress = true;
+        for i in 0..200u32 {
+            let ns = alloc::format!("some.namespace.{i}");
+            let name = alloc::format!("a-name-{i}");
+            let base = rt.mark();
+
+            let sym = rt.symbol(Some(&ns), &name);
+            rt.push(sym);
+            let kw = rt.keyword(Some(&ns), &name);
+            rt.push(kw);
+
+            // Read the parts BACK. A stale slot is a forwarded pointer, and
+            // reading one is what the native build asserts on.
+            let s = rt.r(base);
+            let mut b = crate::rt::sbuf();
+            let got_ns: alloc::string::String = {
+                let v = crate::obj::slot(&rt.gc.sp, s.as_heap(), 0);
+                rt.as_str(v, &mut b).unwrap_or("").into()
+            };
+            assert_eq!(got_ns, ns, "symbol namespace after {i} rounds");
+            let mut b2 = crate::rt::sbuf();
+            let got_name: alloc::string::String = {
+                let v = crate::obj::slot(&rt.gc.sp, s.as_heap(), 1);
+                rt.as_str(v, &mut b2).unwrap_or("").into()
+            };
+            assert_eq!(got_name, name, "symbol name after {i} rounds");
+
+            let k = rt.r(base + 1);
+            let mut b3 = crate::rt::sbuf();
+            let kw_name: alloc::string::String = {
+                let v = crate::obj::slot(&rt.gc.sp, k.as_heap(), 1);
+                rt.as_str(v, &mut b3).unwrap_or("").into()
+            };
+            assert_eq!(kw_name, name, "keyword name after {i} rounds");
+            rt.pop_to(base);
         }
     }
 }
