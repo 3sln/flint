@@ -46,21 +46,21 @@ described by what it is"* — is what makes the extension clean: a shard should 
 a **third `:kind`** alongside `:wasm-object` and `:bytecode`, not a parallel
 mechanism with its own vocabulary.
 
-## Declared capabilities (`0025`)
+## Arbitrary metadata (`0025`)
 
-A module records the capabilities it will ask for, because `0025` moves
-`:with` to compile time while arguments stay at run time -- so what a program
-needs has to survive in the artifact.
+The section gains a **free-form map** the compiler writes and a host reads
+back, alongside the fields this document already fixes.
 
-It belongs here rather than anywhere else for the reason this whole section
-exists: it is read from the BYTES, without instantiating, and *what authority
-does this want* is the question most worth answering before running something.
+The runtime does not interpret it. That is the point: what a key means is
+between whoever wrote it and whoever reads it, and a runtime that knew what
+`:capabilities` meant would have taken a decision belonging to its caller.
 
-It is a REQUEST and not a grant, and the distinction is `0022`'s: the host
-still decides, authority is still the host recognising a value in its own
-grant table, and a program that declares `:fs` and is refused gets the same
-catchable error as one that declared nothing. What the declaration buys is that
-the refusal can happen before the program starts rather than part-way through.
+`flint compile :with [:fs]` writes `{:capabilities [:fs]}` there, and
+`flint run` reads it back and grants what was asked for. Both are the CLI's
+convention (`0021`), not a rule. What makes it worth having here rather than
+in a sidecar file is what makes this whole section worth having: it is read
+from the BYTES, without instantiating, so a caller can see what an image wants
+before deciding to run it.
 
 ## Part 1 — the metadata
 

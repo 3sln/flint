@@ -14,10 +14,10 @@
 Four things, and they are one change wearing four hats.
 
 1. **One wire codec** for every flint value crossing the host boundary.
-2. **A called function takes a map** — `(defn f [{:keys [args capabilities]}] …)`
-   rather than `[argv]` or `[argv caps]` — delivered in that codec. Any
-   function, not one entry point.
-3. **`args` is data, not strings**, the way `clj -X` takes `:key value`.
+2. **The host calls any function by name**, with a positional argument list,
+   rather than one entry point taking an argv. What an argument MEANS is the
+   caller's business.
+3. **Arguments are data, not strings**, the way `clj -X` takes `:key value`.
 4. **A port carries values** rather than text through a per-port codec, and
    **a port can be sent through a port**, so a capability can be delegated.
 5. **One system port carries everything** between the sandbox and the host,
@@ -201,16 +201,24 @@ run` calls when you do not say which.
 wants — instantiate once, call per request — and it is the shape `0023`
 described for construe without being able to express it.
 
-**Capabilities belong to the SANDBOX, not the call.** The sandbox is the trust
-boundary; granting per call would mean revoking between them, which is a
-different and much harder property. A called function still RECEIVES its
-capabilities as values rather than reaching for them — `0022` is unchanged, and
-ambient authority is still not a thing here — so every called function takes
-one map:
+### A call is a function and an argument list, and nothing else
+
+`args` is a **list**, positional, the way any Clojure call is. The runtime does
+not know what an argument means, and a called function has whatever signature
+its author gave it:
 
 ```clojure
-(defn handler [{:keys [args capabilities]}] …)
+(defn handler [req opts] …)     ;; called as {what: 'call', fn: '…/handler',
+                                ;;            args: [req, opts]}
 ```
+
+There is no built-in notion of an entry map, and no built-in notion of a
+capability argument. Those are **conventions of the CLI**, below, and a caller
+using the SDK directly owes them nothing.
+
+That split is worth being strict about: the SDK is a mechanism and the CLI is a
+policy over it. A mechanism that knows what `:capabilities` means has taken a
+decision that belongs to whoever is calling.
 
 Whether a host may grant more authority to a live sandbox — a `grant` message
 on the system port — is left open. It is not needed for anything yet, and
@@ -282,10 +290,10 @@ call back, because what unblocks it is the host TAKING from that port and
 freeing a slot. So the runtime re-checks on entry rather than waiting to be
 told, and `put` on a full buffer drives the sandbox for the same reason.
 
-## The process exposes what the build measures
+## The sandbox exposes what the build measures
 
 When a program is compiled with diagnostics, what the runtime counts is
-readable **on the process, after each step** — gas used, collections, peak
+readable **on the sandbox, after each step** — gas used, collections, peak
 live, the rest. Not printed and not a side channel: a field on the thing being
 stepped.
 
@@ -302,9 +310,19 @@ flint run     :with [...capabilities] :path [...paths] :fn ns/my-fn :args [...]
 flint compile :with [...capabilities] :path [...paths] :fn ns/my-fn :to :wasm
 ```
 
-`run` builds `{:args … :capabilities …}` and calls the entry with it. `compile`
-takes the same `:with`, but `:args` arrive when the artifact is executed rather
-than now — which has a consequence worth stating on its own.
+Both are **conventions over the SDK**, not features of it. `run` calls the
+named function with one argument, the map `{:args … :capabilities …}`, and
+`compile` records `{:capabilities …}` in the image's metadata because `:args`
+arrive when the artifact is executed rather than now.
+
+A program written for the CLI therefore looks like:
+
+```clojure
+(defn main [{:keys [args capabilities]}] …)
+```
+
+and one called through the SDK looks like whatever its author wanted. The CLI
+is a caller with a house style, and the house style is not in the runtime.
 
 `:to` names a TARGET rather than a file: `:wasm` today, and `0010`'s `:jvm`,
 `:clr` and native later. A file name is an output detail; the target is the
@@ -313,34 +331,37 @@ decision.
 `:path` rather than `:src`, because it is a search path — several roots, first
 hit wins — and `:src` reads like "the source".
 
-### A compiled artifact declares the authority it needs
+### An image carries arbitrary metadata
 
-If `:with` is given at compile time and the arguments arrive at run time, then
-what the program requires has to survive in the artifact. So the declared
-capabilities go into the module's metadata section (`0020`), and three things
-follow:
+`0020` gives a module a section describing itself, read from the bytes without
+instantiating. It gains one thing: **a free-form map the compiler puts there
+and the SDK hands back**, `image.metadata`.
 
-* **A host can read what a program needs before instantiating it.** That is
-  exactly what `0020`'s section is for -- it is read from the bytes without
-  running anything -- and "what authority does this want" is the question most
-  worth answering before you run something.
-* **The runtime provisions them.** A module that declares `:fs` and is given
-  nothing fails at the grant rather than deep inside a call, and says which.
-* **The SDK exposes them on the IMAGE**, beside everything else the artifact
-  says about itself: `image.capabilities` is the list, `image.metadata` the
-  rest. A caller can read what an image wants before making a sandbox for it,
-  which is the point of putting it in the bytes.
+The runtime does not interpret it. It does not know what a capability
+declaration is, and should not: what a key means is between whoever wrote it
+and whoever reads it.
 
-This does NOT weaken `0022`. A declaration is a REQUEST, not a grant: it says
-what the program will ask for, and the host still decides. Authority remains
-the host recognising a value in its own grant table, and a program that
-declares `:fs` and is refused gets a catchable error exactly as one that
-declared nothing does.
+**The CLI's convention**, then, and only the CLI's:
+
+* `flint compile :with [:fs :http]` writes `{:capabilities [:fs :http]}` into
+  that map.
+* `flint run` on such an image reads it back and grants what it was asked for,
+  refusing with a message that names what is missing rather than failing deep
+  inside a call.
+* A host using the SDK can read the same key, or ignore it, or use its own.
+
+The property that made this worth doing survives: **a caller can see what an
+image wants before making a sandbox for it**, because the metadata is in the
+bytes. What changes is that the runtime is not the one who decided what
+"wants" means.
 
 ## What this costs
 
-**Every program's entry changes.** `(defn main [args])` becomes
-`(defn main [{:keys [args]}])` — every test, example and benchmark in the tree.
+**Every program run through the CLI changes.** `(defn main [args])` becomes
+`(defn main [{:keys [args capabilities]}])` — every test, example and
+benchmark in the tree, because they all go through `flint run`. A program
+called through the SDK is unaffected, because the SDK never had an opinion.
+
 And `main` stops being special: it is the function `flint run` calls by
 default, and nothing else.
 Affordable exactly once, before anything is published, and this is that moment.
@@ -371,6 +392,7 @@ changes rather than being deleted.
    want handlers back.
 6. Ports and sentinels crossing, and the yield that backpressure needs. With
    the test that a guest cannot turn an integer into either.
-7. Diagnostics on the process, after each step.
-8. `:with` in the CLI, the declaration in `0020`'s metadata section, and
-   `program.capabilities` in the SDK.
+7. Diagnostics on the sandbox, after each step.
+8. Arbitrary metadata in `0020`'s section and `image.metadata` in the SDK.
+   Then `:with` and the `{:args :capabilities}` map as CLI conventions over
+   both, with nothing about either in the runtime.
