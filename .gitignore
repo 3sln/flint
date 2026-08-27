@@ -30,3 +30,8 @@ dist/slots-aot.json
 
 # The single binary is built, not tracked.
 target/
+
+# SDK build output and its generated inputs.
+sdks/*/dist/
+sdks/esm/gen/
+sdks/*/node_modules/

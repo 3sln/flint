@@ -1,7 +1,7 @@
 {
-  "name": "@3sln/flint",
+  "name": "flint-repo",
   "version": "0.0.1",
-  "description": "Pure Clojure logic, compiled to a self-contained WebAssembly module.",
+  "description": "flint: a compiler and runtime turning pure Clojure into a self-contained wasm module. The npm package is sdks/esm.",
   "type": "module",
   "author": "Ray Stubbs",
   "license": "MIT",
@@ -21,39 +21,11 @@
     "green-threads",
     "sandbox"
   ],
-  "bin": {
-    "flint": "bin/flint-cli.mjs"
-  },
-  "exports": {
-    ".": "./sdk/flint.mjs",
-    "./sdk": "./sdk/flint.mjs",
-    "./host": "./host/flint.mjs",
-    "./flintc.wasm": "./dist/flintc.wasm",
-    "./flint-loader.wasm": "./dist/flint-loader.wasm",
-    "./package.json": "./package.json",
-    "./flint-runtime.wasm": "./dist/flint-runtime.wasm",
-    "./flint-runtime-aot.wasm": "./dist/flint-runtime-aot.wasm"
-  },
-  "files": [
-    "bin/",
-    "src/",
-    "lib/",
-    "host/",
-    "sdk/",
-    "units/",
-    "dist/",
-    "doc/",
-    "examples/",
-    "README.md",
-    "LICENSE"
-  ],
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "test": "./bin/test",
     "bench": "./bin/bench",
     "build:dist": "./bin/build-dist",
-    "test:dist": "node sdk/selftest.mjs"
-  }
+    "build:sdk": "./sdks/esm/build"
+  },
+  "private": true
 }

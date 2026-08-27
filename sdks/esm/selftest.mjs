@@ -3,7 +3,10 @@
 // The point of this file is the negative: it uses `dist/` and `sdk/` only. If
 // it passes, someone with node and the npm package can compile and run Clojure
 // with no babashka, no JVM, no Rust and no linker -- which is the whole claim.
-import { Compiler, Runtime, loaderBuiltins, standardLibrary } from './flint.mjs';
+// The DISTRIBUTABLE, not the source: what is tested is what ships. It is one
+// portable ESM with everything inside it, so this import is the only thing a
+// consumer does.
+import { Compiler, Runtime, loaderBuiltins, standardLibrary } from './dist/flint.js';
 
 let fails = 0;
 const ok = (label, cond, detail) => {
@@ -59,7 +62,8 @@ try {
 // `.wasm` the caller can instantiate, produced by splicing that image into a
 // prebuilt runtime -- with no linker anywhere, because the runtime was linked
 // once when flint was built.
-import { readFileSync as read } from 'node:fs';
+// node only for the harness -- writing the module out and running it through
+// the standalone host. The SDK itself imports nothing.
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -75,11 +79,14 @@ ok(`a standalone module is emitted (${wasm.length.toLocaleString()} bytes, ` +
 // It has to RUN, and nothing else here would notice if it did not.
 const dir = mkdtempSync(`${tmpdir()}/flint-`);
 writeFileSync(`${dir}/m.wasm`, wasm);
-const out = execFileSync('node', ['host/flint.mjs', `${dir}/m.wasm`], { encoding: 'utf8' }).trim();
+const root = new URL('../../', import.meta.url).pathname;
+const out = execFileSync('node', [`${root}host/flint.mjs`, `${dir}/m.wasm`],
+                         { encoding: 'utf8' }).trim();
 ok('and it runs on its own, with no loader and no image', out === 'module 45', out);
 
 // And it says what it is (doc/decisions/0020), read from its bytes.
-const meta = execFileSync('./bin/flint', ['inspect', `${dir}/m.wasm`], { encoding: 'utf8' });
+const meta = execFileSync(`${root}bin/flint`, ['inspect', `${dir}/m.wasm`],
+                          { encoding: 'utf8', cwd: root });
 ok('and it describes itself', /entry app\/main/.test(meta), meta.split('\n')[0]);
 
 process.exit(fails ? 1 : 0);

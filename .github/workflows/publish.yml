@@ -60,9 +60,9 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          version="$(node -p "require('./package.json').version")"
+          version="$(node -p "require('./sdks/esm/package.json').version")"
           if [ "$TAG" != "v$version" ]; then
-            echo "::error::Release tag $TAG does not match package.json version $version."
+            echo "::error::Release tag $TAG does not match sdks/esm/package.json version $version."
             echo 'Publishing would ship something other than what the release names.'
             exit 1
           fi
@@ -128,11 +128,22 @@ jobs:
             dist/builtins.json dist/slots.json dist/slots-aot.json \
             --clobber
 
+      # The SDK is its own package with its own build (`sdks/`), and what is
+      # published is the DISTRIBUTABLE: one portable ESM with the compiler, the
+      # runtimes and the standard library inside it. No `node:` import, no
+      # filesystem, no fetch -- so it works the same in a browser, in node, in
+      # a Worker and in Deno.
+      - name: Build the JavaScript SDK
+        run: ./sdks/esm/build
+
+      - name: Test it, as the thing that ships
+        run: cd sdks/esm && node selftest.mjs
+
       - name: Show what will be published
-        run: npm pack --dry-run
+        run: cd sdks/esm && npm pack --dry-run
 
       - name: Publish
-        run: npm publish --access public --provenance
+        run: cd sdks/esm && npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -140,5 +151,6 @@ jobs:
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          version="$(node -p "require('./package.json').version")"
+          version="$(node -p "require('./sdks/esm/package.json').version")"
+          version="$(node -p "require('./sdks/esm/package.json').version")"
           echo "Published @3sln/flint@$version from $TAG." >> "$GITHUB_STEP_SUMMARY"

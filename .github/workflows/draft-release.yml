@@ -9,7 +9,7 @@ on:
     branches:
       - main
     paths:
-      - package.json
+      - sdks/esm/package.json
   # For drafting a release without touching package.json, e.g. after a version
   # bump that landed before this workflow existed.
   workflow_dispatch:
@@ -36,7 +36,7 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          version="$(node -p "require('./package.json').version")"
+          version="$(node -p "require('./sdks/esm/package.json').version")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
 

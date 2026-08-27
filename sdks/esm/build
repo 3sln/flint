@@ -1,0 +1,57 @@
+#!/bin/sh
+# Build the JavaScript distributable.
+#
+# One ESM file with everything inside it: the compiler, both runtime modules,
+# their slot maps and flint's standard library. No filesystem, no `node:`
+# import and no fetch, so the same file works in a browser, in node, in a
+# Worker and in Deno -- and a consumer's bundler has nothing to resolve.
+#
+# The artifacts are GENERATED (`bin/build-dist`), so this builds them first: a
+# distributable can only ever carry artifacts built from the source beside it.
+set -e
+cd "$(dirname "$0")"
+root=../..
+
+echo "==> the wasm artifacts"
+(cd "$root" && ./bin/build-dist) | sed 's/^/    /'
+
+echo "==> the standard library, as data"
+# Embedded as JSON rather than as files: there is no filesystem to read them
+# from at run time.
+node -e '
+const fs = require("fs"), path = require("path");
+const lib = path.join("'"$root"'", "lib");
+const out = {};
+(function walk(dir, prefix) {
+  for (const name of fs.readdirSync(dir).sort()) {
+    const full = path.join(dir, name);
+    const rel = prefix ? prefix + "/" + name : name;
+    if (fs.statSync(full).isDirectory()) walk(full, rel);
+    else if (rel.endsWith(".cljc") || rel.endsWith(".clj"))
+      out[rel] = fs.readFileSync(full, "utf8");
+  }
+})(lib, "");
+fs.mkdirSync("gen", {recursive: true});
+fs.writeFileSync("gen/stdlib.json", JSON.stringify(out));
+console.log("    " + Object.keys(out).length + " files, " +
+            (JSON.stringify(out).length / 1024).toFixed(0) + " KB");
+'
+
+echo "==> bundling"
+npx --yes esbuild src/flint.js \
+  --bundle --format=esm --platform=neutral --target=es2020 \
+  --outfile=dist/flint.js
+ls -l dist/flint.js | awk '{printf "    dist/flint.js %.1f MB\n", $5/1048576}'
+
+echo "==> checking it works, and that it depends on nothing"
+node selftest.mjs | sed 's/^/    /'
+
+node -e '
+const fs = require("fs");
+const src = fs.readFileSync("dist/flint.js", "utf8");
+const bad = [/require\(/, /from\s*"node:/, /from\s*.node:/, /process\./, /__dirname/];
+for (const re of bad) {
+  if (re.test(src)) { console.error("    FAIL: the bundle references " + re); process.exit(1); }
+}
+console.log("    no node imports, no process, no filesystem");
+'

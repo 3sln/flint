@@ -69,5 +69,6 @@ FLINT_SLOTS_OUT=dist/slots-aot.json \
 echo "==> the compiler"
 ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.wasm | sed 's/^/    /'
 
-echo "==> checking the artifacts work together, with nothing else"
-node sdk/selftest.mjs
+# The SDK is a separate package with its own build (`sdks/`), and it is what
+# exercises these artifacts end to end. This produces them; `sdks/esm/build`
+# calls it and then tests the result.

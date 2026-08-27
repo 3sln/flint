@@ -1,77 +1,62 @@
-// The flint SDK: compile Clojure and run it, with no toolchain.
+// The flint SDK: compile Clojure and run it, in any JavaScript runtime.
 //
-// Two wasm artifacts do all of it.
+// Two wasm artifacts do all of it, and both are EMBEDDED -- there is no
+// filesystem here, no `node:` import and no fetch. It is one ESM module that
+// works the same in a browser, in node, in a Worker and in Deno.
 //
-//   flintc.wasm        the compiler. Source in, a bytecode IMAGE out.
-//   flint-loader.wasm  the runtime. An image in, its answer out.
+//   flintc.wasm        the compiler. Source in, an image or a MODULE out.
+//   flint-runtime.wasm the runtime a compiled module is spliced into.
 //
-// Neither needs babashka, a JVM, a Rust toolchain or a linker, which is the
-// point: `bin/flint` needs all of those and cannot run anywhere but a
-// developer machine. What it can do that this cannot is emit a standalone
-// single-file `.wasm` module -- that requires LINKING, and linking requires
-// `wasm-ld`. See `aotAvailable` below for what that costs.
+// Neither needs babashka, a JVM, a Rust toolchain or a linker: the runtime was
+// linked once, when flint was built, and compiling splices into it
+// (`doc/decisions/0024`).
 //
-// The loader resolves an image's builtins BY NAME when it loads it, so nothing
-// here has to patch table slots or know anything about the image format.
+// The artifacts are imported with `with { type: 'bytes' }`, which esbuild
+// turns into an inline `Uint8Array` -- so the published package is one file
+// and a consumer's bundler has nothing to resolve.
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
+import COMPILER from '../../../dist/flintc.wasm' with { type: 'bytes' };
+import RUNTIME from '../../../dist/flint-runtime.wasm' with { type: 'bytes' };
+import RUNTIME_AOT from '../../../dist/flint-runtime-aot.wasm' with { type: 'bytes' };
+import SLOTS_JSON from '../../../dist/slots.json' with { type: 'bytes' };
+import SLOTS_AOT_JSON from '../../../dist/slots-aot.json' with { type: 'bytes' };
+import STDLIB_JSON from '../gen/stdlib.json' with { type: 'bytes' };
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(here, '..');
+const utf8 = (bytes) => new TextDecoder().decode(bytes);
+const parse = (bytes) => JSON.parse(utf8(bytes));
 
-export const DEFAULT_COMPILER = path.join(root, 'dist', 'flintc.wasm');
-export const DEFAULT_LOADER = path.join(root, 'dist', 'flint-loader.wasm');
-export const DEFAULT_RUNTIME = path.join(root, 'dist', 'flint-runtime.wasm');
-const SLOT_MANIFEST = path.join(root, 'dist', 'slots.json');
-const BUILTIN_MANIFEST = path.join(root, 'dist', 'builtins.json');
-
-let cachedBuiltins = null;
-/// Every builtin the shipped loader carries. The compiler needs this to tell a
-/// `flint.rt/add` that exists from one that does not -- and with an EMPTY set
-/// it assumes every name is real, which resolves `flint.rt/add` to the
-/// unprefixed `add` and fails much later with "builtin `add` is not available
-/// at compile time". Generated beside the loader, because it is a property of
-/// that artifact and not of this file.
-export function loaderBuiltins() {
-  if (!cachedBuiltins) {
-    try {
-      cachedBuiltins = JSON.parse(readFileSync(BUILTIN_MANIFEST, 'utf8'));
-    } catch {
-      throw new Error(
-        `flint: ${BUILTIN_MANIFEST} is missing. It is generated beside the ` +
-        'loader and lists the builtins that loader carries; without it the ' +
-        'compiler cannot resolve `flint.rt/...` calls.');
-    }
-  }
-  return cachedBuiltins;
-}
-
-/// Every `.cljc` under `dir`, keyed by its path relative to `dir` -- which is
-/// exactly how a namespace maps to a file, so the compiler can find them.
-export function readSourceDir(dir, into = {}) {
-  const walk = (d, prefix) => {
-    for (const name of readdirSync(d)) {
-      const full = path.join(d, name);
-      const rel = prefix ? `${prefix}/${name}` : name;
-      if (statSync(full).isDirectory()) walk(full, rel);
-      else if (name.endsWith('.cljc') || name.endsWith('.clj')) {
-        into[rel] = readFileSync(full, 'utf8');
-      }
-    }
-  };
-  walk(dir, '');
-  return into;
-}
-
+/// flint's own `clojure.core` and everything it requires. Every program needs
+/// them and a caller should not have to know that.
 let cachedLib = null;
-/// flint's own `clojure.core` and friends. Every program needs them, and a
-/// caller should not have to know that.
 export function standardLibrary() {
-  if (!cachedLib) cachedLib = readSourceDir(path.join(root, 'lib'));
+  if (!cachedLib) cachedLib = parse(STDLIB_JSON);
   return cachedLib;
 }
+
+/// Which table slot each builtin sits in, for the shipped runtime. An image
+/// spliced into that module has to name ITS table, and a slot is a property of
+/// the artifact rather than of the compiler.
+let cachedSlots = null;
+export function runtimeSlots() {
+  if (!cachedSlots) cachedSlots = parse(SLOTS_JSON);
+  return cachedSlots;
+}
+
+let cachedSlotsAot = null;
+export function aotRuntimeSlots() {
+  if (!cachedSlotsAot) cachedSlotsAot = parse(SLOTS_AOT_JSON);
+  return cachedSlotsAot;
+}
+
+/// Every builtin the shipped runtime carries. The compiler needs it to tell a
+/// real `flint.rt/add` from a typo -- with an EMPTY set it assumes every name
+/// is real, and the failure surfaces much later and much less clearly.
+export function loaderBuiltins() {
+  return Object.keys(runtimeSlots());
+}
+
+/// The raw artifacts, for a caller that wants to splice or instantiate by hand.
+export const artifacts = { compiler: COMPILER, runtime: RUNTIME, runtimeAot: RUNTIME_AOT };
 
 // --- the module ABI --------------------------------------------------------
 //
@@ -113,17 +98,13 @@ function bind(instance) {
 
 async function moduleFrom(source) {
   if (source instanceof WebAssembly.Module) return source;
-  const bytes = source instanceof Uint8Array ? source : readFileSync(source);
-  return WebAssembly.compile(bytes);
-}
-
-let cachedSlots = null;
-/// Which table slot each builtin sits in, for the shipped runtime module. An
-/// image spliced into that module has to name ITS table, and a slot is a
-/// property of the artifact rather than of the compiler.
-export function runtimeSlots() {
-  if (!cachedSlots) cachedSlots = JSON.parse(readFileSync(SLOT_MANIFEST, 'utf8'));
-  return cachedSlots;
+  if (source instanceof Uint8Array || source instanceof ArrayBuffer) {
+    return WebAssembly.compile(source);
+  }
+  throw new TypeError(
+    'pass wasm bytes or a WebAssembly.Module. There is no filesystem here: ' +
+    'the artifacts are embedded, so `Compiler.load()` with no argument is ' +
+    'the usual call.');
 }
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -171,7 +152,7 @@ const kw = (s) => ({ sym: `:${s}` });
 export class Compiler {
   constructor(module) { this.module = module; }
 
-  static async load(source = DEFAULT_COMPILER) {
+  static async load(source = COMPILER) {
     return new Compiler(await moduleFrom(source));
   }
 
@@ -220,8 +201,8 @@ export class Compiler {
                   memoryLimit = 3_000_000_000,
                   builtins, features, standardLibrary: withLib = true }) {
     if (!entry) throw new Error('compileToWasm needs an entry, e.g. "my.app/main"');
-    const base = runtime instanceof Uint8Array ? runtime : readFileSync(runtime ?? DEFAULT_RUNTIME);
-    const table = slots ?? runtimeSlots();
+    const base = runtime ?? (aot ? RUNTIME_AOT : RUNTIME);
+    const table = slots ?? (aot ? aotRuntimeSlots() : runtimeSlots());
     const all = withLib ? { ...standardLibrary(), ...files } : { ...files };
     const spec = `{:files ${edn(all)} :entry ${entry}` +
                  ` :builtins ${edn(new Set(builtins ?? Object.keys(table)))}` +
@@ -254,7 +235,7 @@ export class Compiler {
 export class Runtime {
   constructor(module) { this.module = module; }
 
-  static async load(source = DEFAULT_LOADER) {
+  static async load(source = RUNTIME) {
     return new Runtime(await moduleFrom(source));
   }
 

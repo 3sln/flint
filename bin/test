@@ -170,7 +170,10 @@ echo "== distributable: the compiler and loader, driven by the SDK alone"
 # Rebuilt every run, because the artifacts are generated and a stale one that
 # still passes is the failure this section exists to catch.
 ./bin/build-dist > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "bin/build-dist"; }
-grep -E "^  (ok|FAIL)" /tmp/flint-test.out | sed 's/^/  /'
+# The SDK is a separate package with its own build (`sdks/`), and what is
+# tested is the DISTRIBUTABLE: one portable ESM with the artifacts inside it.
+./sdks/esm/build > /tmp/flint-test.out 2>&1 || { tail -25 /tmp/flint-test.out; fail "sdks/esm/build"; }
+grep -E "^    (ok|FAIL|dist/|no node)" /tmp/flint-test.out | sed 's/^  /  /'
 
 echo
 echo "== bytes: a string of bytes, in two tiers (0024)"
