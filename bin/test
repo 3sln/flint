@@ -222,7 +222,56 @@ echo "    compiled a module, and ran the same source NATIVELY: $got"
 # the format is deliberately not one.
 [ -z "$(ls /tmp/flint-smoke | grep -v 'smoke.cljc\|out.wasm')" ] \
   || { ls /tmp/flint-smoke; fail "run left an artifact behind"; }
+
+# The surface `doc/decisions/0021` describes: `:path`, `:with`, `:args`, `:to`
+# and `:optimize`. A list may be bracketed or the key repeated -- and the
+# bracketed form is QUOTED here on purpose, because in zsh an unquoted `[a b]`
+# is a glob and never reaches flint at all.
+got="$(./target/release/flint run :path '[/tmp/flint-smoke]' :fn smoke/main)"
+[ "$got" = "OK 45" ] || { echo "    got '$got'"; fail ":path as a quoted list"; }
+got="$(./target/release/flint run :path /tmp/flint-smoke :fn smoke/main)"
+[ "$got" = "OK 45" ] || { echo "    got '$got'"; fail ":path as a repeated key"; }
+
+# `:optimize` is an ORDERED PREFERENCE, and this measures it rather than
+# trusting it: `[perf]` compiles every arity into the module, so it is bigger.
+# An unrecognised token is IGNORED, which is what lets a script written for a
+# newer flint still run here.
+./target/release/flint compile :path /tmp/flint-smoke :fn smoke/main \
+  :to :wasm :out /tmp/flint-smoke/size.wasm :optimize '[size]' \
+  :meta 'capabilities=fs' >/dev/null 2>&1 || fail "compile :optimize [size]"
+./target/release/flint compile :path /tmp/flint-smoke :fn smoke/main \
+  :to :wasm :out /tmp/flint-smoke/perf.wasm :optimize '[no-such-token perf]' \
+  >/dev/null 2>&1 || fail "compile :optimize [perf]"
+small=$(wc -c < /tmp/flint-smoke/size.wasm)
+fast=$(wc -c < /tmp/flint-smoke/perf.wasm)
+[ "$fast" -gt "$small" ] \
+  || fail ":optimize [perf] did not compile arities ($fast against $small)"
+echo "    :optimize [perf] $fast bytes against [size] $small, unknown token skipped"
+
+# Metadata reaches the ARTIFACT, not just the process that made it. flint never
+# reads it; the declared capabilities of a program live there by convention.
+./bin/flint inspect /tmp/flint-smoke/size.wasm 2>/dev/null | grep -q 'capabilities "fs"' \
+  || { ./bin/flint inspect /tmp/flint-smoke/size.wasm; fail ":meta did not reach the artifact"; }
+
+# `:to :llvm` is not built. It must say so rather than quietly emitting wasm --
+# a target that silently means a different target is worse than an absent one.
+if ./target/release/flint compile :path /tmp/flint-smoke :fn smoke/main \
+     :to :llvm :out /tmp/flint-smoke/no.wasm >/dev/null 2>&1; then
+  fail ":to :llvm claimed to work"
+fi
+[ ! -f /tmp/flint-smoke/no.wasm ] || fail ":to :llvm wrote a file anyway"
+
 ls -l target/release/flint | awk '{printf "    binary %.1f MB\n", $5/1048576}'
+
+echo
+echo "== sdks: the same four nouns in three languages (0025)"
+# Release, because each of these embeds the compiler and runs flint compiling
+# itself; a debug build of that is minutes rather than seconds.
+cargo test -p flint --release --test sdk > /tmp/flint-test.out 2>&1 \
+  || { tail -25 /tmp/flint-test.out; fail "the Rust SDK"; }
+grep -E "^test result" /tmp/flint-test.out | sed 's/^/    rust:  /'
+./sdks/c/build > /tmp/flint-test.out 2>&1 || { tail -30 /tmp/flint-test.out; fail "the C SDK"; }
+grep -c "  ok  " /tmp/flint-test.out | awk '{printf "    c/c++: %d checks passed\n", $1}'
 
 echo
 echo "== check: what was written for flint and does nothing"

@@ -304,8 +304,11 @@ fn usage() -> ! {
       into this binary, so a program can be run without producing an artifact.
 
   flint compile :path <dir> :fn <ns/fn> :to :wasm [:out <file>]
-                [:optimize [perf]] [:meta k=v]
-      Compile to a standalone module, for any host with a wasm engine.
+                [:with [cap...]] [:optimize [perf]] [:meta k=v]
+      Compile to a standalone module, for any host with a wasm engine. Here
+      `:with` DECLARES rather than grants: it is recorded in the artifact's
+      metadata, because the arguments arrive later and what a program needs
+      has to survive until then.
 
   flint version
 
@@ -322,8 +325,11 @@ the DECLARED CAPABILITIES of a program are metadata by this convention, and it
 is the host that decides what to make of them.
 
 A value may be a bracketed list -- `:path [src lib]` -- or the key may simply
-be repeated. Everything is embedded, so there is nothing to install: no
-babashka, no JVM, no linker."
+be repeated; the two mean the same thing. In zsh an unquoted bracket is a glob,
+so quote it there: `:path '[src lib]'`.
+
+Everything is embedded, so there is nothing to install: no babashka, no JVM,
+no linker."
     );
     std::process::exit(2)
 }
@@ -352,6 +358,14 @@ fn values(key: &str, args: &[String], at: usize) -> Result<(Vec<String>, usize)>
     let first = args.get(at + 1).with_context(|| format!("{key} needs a value"))?;
     if !first.starts_with('[') {
         return Ok((vec![first.clone()], at + 2));
+    }
+    // A whole list in ONE argument, which is what a quoted `'[a b]'` is. It has
+    // to work, because in zsh an unquoted `[a b]` is a GLOB: `:path [src]`
+    // fails with "no matches found" before flint sees it at all. sh and bash
+    // pass it through, so both spellings are real and both are handled here.
+    if let Some(inner) = first.strip_suffix(']') {
+        let inner = inner.strip_prefix('[').unwrap_or(inner);
+        return Ok((inner.split_whitespace().map(str::to_string).collect(), at + 2));
     }
     let mut out = Vec::new();
     let mut i = at + 1;
@@ -462,7 +476,16 @@ fn main() -> Result<()> {
             }
             let out = a.out.unwrap_or_else(|| "out.wasm".to_string());
             let to = a.to.clone().unwrap_or_else(|| "wasm".to_string());
-            compile(&a.srcs, &entry, Path::new(&out), &a.optimize, &to, &a.meta)
+            // `:with` on `compile` DECLARES rather than grants: the arguments
+            // arrive later, so what a program needs has to survive until then,
+            // and metadata is where it survives. flint does not read it -- this
+            // is the CLI writing down its own convention where the next tool
+            // can find it (`doc/decisions/0021`).
+            let mut meta = a.meta.clone();
+            if !a.grants.is_empty() {
+                meta.push(("capabilities".to_string(), a.grants.join(" ")));
+            }
+            compile(&a.srcs, &entry, Path::new(&out), &a.optimize, &to, &meta)
         }
         "run" => {
             let a = parse(&argv[1..])?;

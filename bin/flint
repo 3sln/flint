@@ -280,6 +280,14 @@
         (println (str "exports: " (str/join " " (:exports m))
                       "   (+" (:builtins m) " builtins)"))
         (println (str "imports: " (if (seq (:imports m)) (str/join " " (:imports m)) "none")))
+        ;; Last, and only when there is any. flint carries this and never reads
+        ;; it (`doc/decisions/0025`), which is exactly why it has to be VISIBLE:
+        ;; the declared capabilities of a program live here by convention, and a
+        ;; convention nobody can read from the artifact is not one.
+        (when (seq (:meta m))
+          (println "metadata (carried, not interpreted):")
+          (doseq [e (sort-by (clojure.core/fn [e] (str (key e))) (:meta m))]
+            (println (str "  " (key e) " " (pr-str (val e))))))
         (System/exit 0)))))
 
 ;; `flint check` -- what was written for flint and does nothing.
