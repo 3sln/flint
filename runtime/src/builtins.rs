@@ -273,7 +273,7 @@ builtins! {
         }
         let bs = rt.b_to_vec(v);
         let base = rt.mark();
-        rt.push(rt.roots.singletons[crate::rt::SING_EMPTY_VEC]);
+        rt.push(rt.roots.shared.singletons[crate::rt::SING_EMPTY_VEC]);
         for b in bs {
             let cur = rt.r(base);
             let next = rt.vec_conj(cur, Value::fixnum(b as i64));
@@ -781,19 +781,19 @@ builtins! {
     "flint/dyn-get", flint_b_dynget, b_dynget, |rt, a, n| {
         let _ = n;
         let (sym, root) = (arg(rt, a, 0), arg(rt, a, 1));
-        let binds = rt.roots.singletons[crate::rt::SING_BINDINGS];
+        let binds = rt.roots.shared.singletons[crate::rt::SING_BINDINGS];
         if binds.is_nil() { return root; }
         rt.map_get(binds, sym, root)
     };
     "flint/dyn-bindings", flint_b_dynbinds, b_dynbinds, |rt, a, n| {
         let _ = (a, n);
-        let b = rt.roots.singletons[crate::rt::SING_BINDINGS];
+        let b = rt.roots.shared.singletons[crate::rt::SING_BINDINGS];
         if b.is_nil() { rt.empty_map() } else { b }
     };
     "flint/dyn-set-bindings", flint_b_dynset, b_dynset, |rt, a, n| {
         let _ = n;
         let m = arg(rt, a, 0);
-        rt.roots.singletons[crate::rt::SING_BINDINGS] = m;
+        rt.roots.shared.singletons[crate::rt::SING_BINDINGS] = m;
         m
     };
 

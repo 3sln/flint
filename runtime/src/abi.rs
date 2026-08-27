@@ -277,7 +277,7 @@ pub extern "C" fn flint_call(ptr: u32, len: u32) -> i32 {
 fn encode_error(rt: &mut Rt, kind: &str, message: &str) -> i32 {
     unsafe {
         let base = rt.mark();
-        let empty = rt.roots.singletons[crate::rt::SING_EMPTY_MAP];
+        let empty = rt.roots.shared.singletons[crate::rt::SING_EMPTY_MAP];
         let acc = rt.push(empty);
         let k = rt.keyword(None, "error");
         rt.push(k);
@@ -572,7 +572,7 @@ pub extern "C" fn stat_native_name(idx: u32, i: u32) -> u32 {
     unsafe {
         let rt = ensure_rt();
         let Some(&namec) = rt.image.native_names.get(idx as usize) else { return 0 };
-        let Some(&v) = rt.roots.consts.get(namec as usize) else { return 0 };
+        let Some(&v) = rt.roots.shared.consts.get(namec as usize) else { return 0 };
         let mut b = crate::rt::sbuf();
         match rt.as_str(v, &mut b) {
             Some(s) => s.as_bytes().get(i as usize).copied().unwrap_or(0) as u32,

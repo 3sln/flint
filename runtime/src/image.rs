@@ -112,7 +112,7 @@ impl Rt {
         }
         for i in 0..self.image.natives.len() {
             let namec = self.image.native_names[i] as usize;
-            let nv = self.roots.consts.get(namec).copied().unwrap_or(NIL);
+            let nv = self.roots.shared.consts.get(namec).copied().unwrap_or(NIL);
             let mut b = crate::rt::sbuf();
             let want: alloc::string::String = self.as_str(nv, &mut b).unwrap_or("").into();
             let mut at = 0usize;
@@ -175,8 +175,8 @@ impl Rt {
         }
 
         let nconsts = r.u32() as usize;
-        self.roots.consts.clear();
-        self.roots.consts.reserve(nconsts);
+        self.roots.shared.consts.clear();
+        self.roots.shared.consts.reserve(nconsts);
         for _ in 0..nconsts {
             let tag = r.u8();
             let v = match tag {
@@ -202,12 +202,12 @@ impl Rt {
                     let ns_owned: Option<alloc::string::String> = if nsc == NO_CONST {
                         None
                     } else {
-                        let v = self.roots.consts[nsc as usize];
+                        let v = self.roots.shared.consts[nsc as usize];
                         Some(self.as_str(v, &mut b1).unwrap_or("").into())
                     };
                     let mut b2 = crate::rt::sbuf();
                     let nm_owned: alloc::string::String = {
-                        let v = self.roots.consts[nmc as usize];
+                        let v = self.roots.shared.consts[nmc as usize];
                         self.as_str(v, &mut b2).unwrap_or("").into()
                     };
                     if tag == K_KEYWORD {
@@ -221,7 +221,7 @@ impl Rt {
                     let base = self.mark();
                     for _ in 0..n {
                         let idx = r.u32() as usize;
-                        let v = self.roots.consts[idx];
+                        let v = self.roots.shared.consts[idx];
                         self.push(v);
                     }
                     let out = match tag {
@@ -247,7 +247,7 @@ impl Rt {
                     let base = self.mark();
                     for _ in 0..2 * n {
                         let idx = r.u32() as usize;
-                        let v = self.roots.consts[idx];
+                        let v = self.roots.shared.consts[idx];
                         self.push(v);
                     }
                     let mut m = self.empty_map();
@@ -269,12 +269,12 @@ impl Rt {
                 K_NATIVE => {
                     let idx = r.u32();
                     let namec = r.u32();
-                    let name = self.roots.consts[namec as usize];
+                    let name = self.roots.shared.consts[namec as usize];
                     self.make_native(idx, name)
                 }
                 _ => return false,
             };
-            self.roots.consts.push(v);
+            self.roots.shared.consts.push(v);
         }
 
         let nfns = r.u32() as usize;
@@ -311,8 +311,8 @@ impl Rt {
         for _ in 0..nvars {
             var_names.push(r.u32());
         }
-        self.roots.globals.clear();
-        self.roots.globals.resize(nvars, NIL);
+        self.roots.shared.globals.clear();
+        self.roots.shared.globals.resize(nvars, NIL);
 
         let codelen = r.u32() as usize;
         let code = r.bytes(codelen).to_vec();

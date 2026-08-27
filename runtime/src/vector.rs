@@ -98,7 +98,7 @@ impl Rt {
         self.gc.set_slot(a, V_TAIL, tail);
         self.gc.set_slot(a, V_META, NIL);
         self.gc.set_slot(a, V_HASH, NIL);
-        self.roots.singletons[crate::rt::SING_EMPTY_VEC] = Value::heap(a);
+        self.roots.shared.singletons[crate::rt::SING_EMPTY_VEC] = Value::heap(a);
     }
 
     pub fn is_vector(&self, v: Value) -> bool {

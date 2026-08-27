@@ -724,7 +724,7 @@ impl Rt {
                 }
                 None => {
                     let namec = def.name as usize;
-                    let name = self.roots.consts.get(namec).copied().unwrap_or(NIL);
+                    let name = self.roots.shared.consts.get(namec).copied().unwrap_or(NIL);
                     self.roots.stack_top = callee_at;
                     let mut b = crate::rt::sbuf();
                     let n: alloc::string::String =
@@ -951,7 +951,7 @@ impl Rt {
                 op::CONST => {
                     let k = self.u16_at(ip) as usize;
                     ip += 2;
-                    let v = self.roots.consts[k];
+                    let v = self.roots.shared.consts[k];
                     self.vpush(v);
                 }
                 op::NIL => self.vpush(NIL),
@@ -1000,14 +1000,14 @@ impl Rt {
                 op::VAR => {
                     let k = self.u16_at(ip) as usize;
                     ip += 2;
-                    let v = self.roots.globals[k];
+                    let v = self.roots.shared.globals[k];
                     self.vpush(v);
                 }
                 op::SET_VAR => {
                     let k = self.u16_at(ip) as usize;
                     ip += 2;
                     let v = self.vpop();
-                    self.roots.globals[k] = v;
+                    self.roots.shared.globals[k] = v;
                 }
                 op::POP => {
                     self.roots.stack_top -= 1;
@@ -1511,7 +1511,7 @@ impl Rt {
             };
             let name = if fnidx < self.image.fns.len() {
                 let namec = self.image.fns[fnidx].name as usize;
-                let v = self.roots.consts.get(namec).copied().unwrap_or(NIL);
+                let v = self.roots.shared.consts.get(namec).copied().unwrap_or(NIL);
                 let mut b = crate::rt::sbuf();
                 let s: alloc::string::String = self.as_str(v, &mut b).unwrap_or("?").into();
                 s
@@ -1532,7 +1532,7 @@ impl Rt {
             };
             let name = if fnidx < self.image.fns.len() {
                 let namec = self.image.fns[fnidx].name as usize;
-                let v = self.roots.consts.get(namec).copied().unwrap_or(NIL);
+                let v = self.roots.shared.consts.get(namec).copied().unwrap_or(NIL);
                 let mut b = crate::rt::sbuf();
                 let s: alloc::string::String = self.as_str(v, &mut b).unwrap_or("?").into();
                 s
@@ -1722,7 +1722,7 @@ impl Rt {
     pub fn var_named(&mut self, want: &str) -> Option<u32> {
         for i in 0..self.image.var_names.len() {
             let namec = self.image.var_names[i] as usize;
-            let nv = self.roots.consts.get(namec).copied().unwrap_or(NIL);
+            let nv = self.roots.shared.consts.get(namec).copied().unwrap_or(NIL);
             let mut b = crate::rt::sbuf();
             if self.as_str(nv, &mut b) == Some(want) {
                 return Some(i as u32);
@@ -1742,7 +1742,7 @@ impl Rt {
         let idx = self
             .var_named(name)
             .ok_or_else(|| alloc::format!("this image has no `{name}`"))?;
-        let f = self.roots.globals.get(idx as usize).copied().unwrap_or(NIL);
+        let f = self.roots.shared.globals.get(idx as usize).copied().unwrap_or(NIL);
         if f.is_nil() {
             return Err(alloc::format!("`{name}` is not a function"));
         }

@@ -27,7 +27,7 @@ impl Rt {
         self.gc.set_slot(a, S_MAP, m);
         self.gc.set_slot(a, S_META, NIL);
         self.gc.set_slot(a, S_HASH, NIL);
-        self.roots.singletons[crate::rt::SING_EMPTY_SET] = Value::heap(a);
+        self.roots.shared.singletons[crate::rt::SING_EMPTY_SET] = Value::heap(a);
     }
 
     pub fn is_set(&self, v: Value) -> bool {

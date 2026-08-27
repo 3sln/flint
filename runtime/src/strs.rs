@@ -98,7 +98,7 @@ impl Rt {
         }
         let h = hash::hash_string(s);
         let sp = &self.gc.sp;
-        let found = self.roots.interns[INTERN_STR].lookup(h, |v| {
+        let found = self.roots.shared.interns[INTERN_STR].lookup(h, |v| {
             v.is_heap() && ty(sp, v.as_heap()) == TY_STR && str_bytes(sp, v.as_heap()) == s.as_bytes()
         });
         match found {
@@ -116,13 +116,13 @@ impl Rt {
     }
 
     pub(crate) fn intern_into(&mut self, table: usize, h: u32, v: Value) {
-        if self.roots.interns[table].needs_grow() {
-            self.roots.interns[table].grow();
+        if self.roots.shared.interns[table].needs_grow() {
+            self.roots.shared.interns[table].grow();
         }
         // Re-probe: `grow` invalidates any index we might have had, and an
         // allocation may have run a collection that rehashed the table.
-        if let Err(idx) = self.roots.interns[table].lookup(h, |_| false) {
-            self.roots.interns[table].insert_at(idx, h, v);
+        if let Err(idx) = self.roots.shared.interns[table].lookup(h, |_| false) {
+            self.roots.shared.interns[table].insert_at(idx, h, v);
         }
     }
 
@@ -156,7 +156,7 @@ impl Rt {
         let h = hash::hash_keyword(ns, name);
         let existing = {
             let sp = &self.gc.sp;
-            self.roots.interns[INTERN_KW].lookup(h, |v| {
+            self.roots.shared.interns[INTERN_KW].lookup(h, |v| {
                 v.is_heap()
                     && ty(sp, v.as_heap()) == TY_KW
                     && str_eq_at(sp, slot(sp, v.as_heap(), 0), ns)
@@ -185,8 +185,13 @@ impl Rt {
             return NIL;
         }
         let v = Value::heap(a);
-        self.gc.set_slot(a, 0, self.r(base));
-        self.gc.set_slot(a, 1, self.r(base + 1));
+        // Read both roots BEFORE touching `gc`. Two-phase borrows covered this
+        // while `gc` was a plain field; through `DerefMut` it is a method call,
+        // and the compiler is right that the old spelling read `self` while
+        // `self` was mutably borrowed.
+        let (ns, name) = (self.r(base), self.r(base + 1));
+        self.gc.set_slot(a, 0, ns);
+        self.gc.set_slot(a, 1, name);
         self.gc.set_slot(a, 2, Value::fixnum(h as i32 as i64));
         self.pop_to(base);
         self.intern_into(INTERN_KW, h, v);
@@ -199,7 +204,7 @@ impl Rt {
         let h = hash::hash_symbol(ns, name);
         let existing = {
             let sp = &self.gc.sp;
-            self.roots.interns[INTERN_SYM].lookup(h, |v| {
+            self.roots.shared.interns[INTERN_SYM].lookup(h, |v| {
                 v.is_heap()
                     && ty(sp, v.as_heap()) == TY_SYM
                     && slot(sp, v.as_heap(), 2).is_nil() // no metadata
@@ -240,8 +245,13 @@ impl Rt {
             return NIL;
         }
         let v = Value::heap(a);
-        self.gc.set_slot(a, 0, self.r(base));
-        self.gc.set_slot(a, 1, self.r(base + 1));
+        // Read both roots BEFORE touching `gc`. Two-phase borrows covered this
+        // while `gc` was a plain field; through `DerefMut` it is a method call,
+        // and the compiler is right that the old spelling read `self` while
+        // `self` was mutably borrowed.
+        let (ns, name) = (self.r(base), self.r(base + 1));
+        self.gc.set_slot(a, 0, ns);
+        self.gc.set_slot(a, 1, name);
         self.gc.set_slot(a, 2, NIL); // meta
         self.gc.set_slot(a, 3, Value::fixnum(h as i32 as i64));
         self.pop_to(base);
@@ -429,7 +439,7 @@ mod tests {
             let _ = rt.string(&alloc::format!("transient string {i}"));
         }
         rt.collect();
-        let n = rt.roots.interns[INTERN_STR].count;
+        let n = rt.roots.shared.interns[INTERN_STR].count;
         assert!(n < 2000, "weak interning should have dropped dead entries, got {n}");
     }
 
@@ -567,7 +577,7 @@ mod intern_stress {
             (0..1500).map(|i| format!("flint/name-{:05}", i)).collect();
         for n in &names {
             let v = rt.string(n);
-            rt.roots.globals.push(v);
+            rt.roots.shared.globals.push(v);
         }
         // Garbage of the same shape, so the weak table is churned and the
         // collector has real work to do.
@@ -581,7 +591,7 @@ mod intern_stress {
             let again = rt.string(n);
             assert_eq!(
                 again,
-                rt.roots.globals[i],
+                rt.roots.shared.globals[i],
                 "re-interning {} produced a second object",
                 n
             );

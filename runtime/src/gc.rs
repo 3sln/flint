@@ -213,11 +213,12 @@ pub struct ParkedRoots(pub *mut ExecRoots);
 #[cfg(feature = "parallel")]
 unsafe impl Send for ParkedRoots {}
 
-pub struct Roots {
-    /// The executor running on THIS thread, inline and under its own field
-    /// names so that the interpreter's two thousand `roots.stack` sites are
-    /// unaffected by any of this.
-    pub own: ExecRoots,
+/// The roots there is ONE of per sandbox, however many executors it has.
+///
+/// Globals, constants, the intern tables and the singletons belong to the
+/// program, not to whichever thread is running it, so several executors share
+/// exactly this (`doc/decisions/0028`).
+pub struct SharedRoots {
     /// Every OTHER executor in this sandbox, stopped at a safepoint.
     ///
     /// Raw, and sound only for the instant they are used: a collection happens
@@ -235,6 +236,38 @@ pub struct Roots {
     pub interns: [InternTable; 4],
     /// Long-lived singletons: empty list/vector/map/set, cached results, ...
     pub singletons: Vec<Value>,
+}
+
+/// The shared roots, by address.
+///
+/// A pointer rather than ownership because every executor in a sandbox reaches
+/// the same one. It DEREFS, which is the point: `roots.shared.globals` reads
+/// like a field because it was one.
+pub struct SharedPtr(pub core::ptr::NonNull<SharedRoots>);
+
+impl core::ops::Deref for SharedPtr {
+    type Target = SharedRoots;
+    fn deref(&self) -> &SharedRoots {
+        unsafe { self.0.as_ref() }
+    }
+}
+impl core::ops::DerefMut for SharedPtr {
+    fn deref_mut(&mut self) -> &mut SharedRoots {
+        unsafe { self.0.as_mut() }
+    }
+}
+/// Sound for the same reason `ParkedRoots` is: a sandbox moves between threads
+/// as one thing, and simultaneous access is the safepoint's problem rather
+/// than this impl's.
+unsafe impl Send for SharedPtr {}
+
+pub struct Roots {
+    /// The executor running on THIS thread, inline and under its own field
+    /// names so that the interpreter's two thousand `roots.stack` sites are
+    /// unaffected by any of this.
+    pub own: ExecRoots,
+    /// What every executor in this sandbox shares.
+    pub shared: SharedPtr,
 }
 
 impl core::ops::Deref for Roots {
@@ -260,10 +293,9 @@ pub const INTERN_SYM: usize = 2;
 /// host end is additionally a strong root, so it survives regardless.
 pub const INTERN_PORT: usize = 3;
 
-impl Roots {
-    pub fn new() -> Roots {
-        Roots {
-            own: ExecRoots::new(),
+impl SharedRoots {
+    pub fn new() -> SharedRoots {
+        SharedRoots {
             #[cfg(feature = "parallel")]
             others: Vec::new(),
             globals: Vec::new(),
@@ -279,6 +311,58 @@ impl Roots {
             singletons: Vec::new(),
         }
     }
+}
+
+impl Default for SharedRoots {
+    fn default() -> SharedRoots {
+        SharedRoots::new()
+    }
+}
+
+/// Everything one sandbox's executors share: the heap and the roots that
+/// belong to the program rather than to a thread.
+///
+/// Owned by whoever made the sandbox and pointed at by every `Rt` in it. It is
+/// its own struct so that `gc` and `shared` stay SEPARATE FIELDS -- the
+/// collector allocates as `gc.alloc(&mut shared, ...)`, and two fields can be
+/// borrowed disjointly where two calls through one accessor cannot.
+pub struct Heap {
+    pub gc: Gc,
+    pub shared: SharedRoots,
+}
+
+impl Heap {
+    pub fn new(nursery: u32, max: u32) -> Heap {
+        Heap { gc: Gc::new(nursery, max), shared: SharedRoots::new() }
+    }
+}
+
+/// The heap, by address.
+///
+/// Derefs to `Gc`, which is the whole point: the four hundred `self.gc.…`
+/// sites in the interpreter do not know or care that the heap stopped being
+/// something an `Rt` owns and became something several of them share.
+pub struct GcPtr(pub core::ptr::NonNull<Gc>);
+
+impl core::ops::Deref for GcPtr {
+    type Target = Gc;
+    fn deref(&self) -> &Gc {
+        unsafe { self.0.as_ref() }
+    }
+}
+impl core::ops::DerefMut for GcPtr {
+    fn deref_mut(&mut self) -> &mut Gc {
+        unsafe { self.0.as_mut() }
+    }
+}
+/// Sound for the same reason `SharedPtr` is: exclusivity while a collection
+/// runs is the safepoint's job (`doc/decisions/0028`), not this impl's.
+unsafe impl Send for GcPtr {}
+
+impl Roots {
+    pub fn new(shared: SharedPtr) -> Roots {
+        Roots { own: ExecRoots::new(), shared }
+    }
 
     /// Does any TRACED root hold this address right now?
     ///
@@ -289,11 +373,30 @@ impl Roots {
     #[cfg(feature = "diagnostics")]
     pub fn holds(&self, addr: u32) -> bool {
         let hit = |v: &Value| v.is_heap() && v.as_heap() == addr;
-        self.stack[..self.stack_top].iter().any(hit)
-            || self.shadow.iter().any(hit)
-            || self.globals.iter().any(hit)
-            || self.consts.iter().any(hit)
-            || self.singletons.iter().any(hit)
+        let top = self.own.stack_top;
+        self.own.stack[..top].iter().any(hit)
+            || self.own.shadow.iter().any(hit)
+            // Every other executor too: "is this address rooted anywhere in
+            // the sandbox" has to mean anywhere, or the answer is a rooting
+            // argument rather than a fact.
+            || self.parked_hold(addr)
+            || self.shared.globals.iter().any(hit)
+            || self.shared.consts.iter().any(hit)
+            || self.shared.singletons.iter().any(hit)
+    }
+
+    #[cfg(all(feature = "diagnostics", feature = "parallel"))]
+    fn parked_hold(&self, addr: u32) -> bool {
+        let hit = |v: &Value| v.is_heap() && v.as_heap() == addr;
+        self.shared.others.iter().any(|e| {
+            let e = unsafe { &*e.0 };
+            e.stack[..e.stack_top].iter().any(hit) || e.shadow.iter().any(hit)
+        })
+    }
+
+    #[cfg(all(feature = "diagnostics", not(feature = "parallel")))]
+    fn parked_hold(&self, _addr: u32) -> bool {
+        false
     }
 
     fn for_each<F: FnMut(&mut Value)>(&mut self, mut f: F) {
@@ -316,7 +419,7 @@ impl Roots {
         // later, as a corrupted value in code that did nothing wrong -- which
         // is why this is one loop in one place rather than a rule to remember.
         #[cfg(feature = "parallel")]
-        for e in self.others.iter().copied() {
+        for e in self.shared.others.iter().copied() {
             let e = unsafe { &mut *e.0 };
             let top = e.stack_top;
             for v in &mut e.stack[..top] {
@@ -326,13 +429,13 @@ impl Roots {
                 f(v);
             }
         }
-        for v in &mut self.globals {
+        for v in &mut self.shared.globals {
             f(v);
         }
-        for v in &mut self.consts {
+        for v in &mut self.shared.consts {
             f(v);
         }
-        for v in &mut self.singletons {
+        for v in &mut self.shared.singletons {
             f(v);
         }
     }
@@ -1182,7 +1285,7 @@ impl Gc {
         let from = self.from;
         let half = self.half;
         let spc = &self.sp;
-        for t in roots.interns.iter_mut() {
+        for t in roots.shared.interns.iter_mut() {
             t.refresh(|v| {
                 if v.is_heap() && v.as_heap().wrapping_sub(from) < half {
                     let a = v.as_heap();
@@ -1232,13 +1335,13 @@ impl Gc {
             for (k, v) in roots.shadow.iter().enumerate() {
                 check(v, 1, k as u32);
             }
-            for (k, v) in roots.globals.iter().enumerate() {
+            for (k, v) in roots.shared.globals.iter().enumerate() {
                 check(v, 2, k as u32);
             }
-            for (k, v) in roots.consts.iter().enumerate() {
+            for (k, v) in roots.shared.consts.iter().enumerate() {
                 check(v, 3, k as u32);
             }
-            for (k, v) in roots.singletons.iter().enumerate() {
+            for (k, v) in roots.shared.singletons.iter().enumerate() {
                 check(v, 4, k as u32);
             }
         }
@@ -1314,7 +1417,7 @@ impl Gc {
         // Weak tables: anything unmarked is unreachable.
         {
             let spc = &self.sp;
-            for t in roots.interns.iter_mut() {
+            for t in roots.shared.interns.iter_mut() {
                 t.refresh(|v| if !v.is_heap() || marked(spc, v.as_heap()) { Some(v) } else { None });
             }
         }
@@ -1403,13 +1506,21 @@ mod tests {
     /// A tiny harness: a heap plus roots, with cons-cell helpers. Deliberately
     /// does *not* use the higher layers, so a failure here is a GC failure.
     struct H {
+        /// Boxed and kept alive for the whole of `H`, because `r` points into
+        /// it. The real runtime does the same thing for the same reason.
+        heap: alloc::boxed::Box<SharedRoots>,
         gc: Gc,
         r: Roots,
     }
 
     impl H {
         fn new() -> H {
-            H { gc: Gc::new(64 * 1024, 64 * 1024 * 1024), r: Roots::new() }
+            H::with(64 * 1024, 64 * 1024 * 1024)
+        }
+        fn with(nursery: u32, max: u32) -> H {
+            let mut heap = alloc::boxed::Box::new(SharedRoots::new());
+            let shared = SharedPtr(core::ptr::NonNull::from(&mut *heap));
+            H { heap, gc: Gc::new(nursery, max), r: Roots::new(shared) }
         }
         /// Push a value on the shadow root stack and return its index.
         fn root(&mut self, v: Value) -> usize {
@@ -1735,20 +1846,16 @@ mod tests {
         let live = h.string("live");
         let li = h.root(live);
         let dead = h.string("dead");
-        h.r.interns[INTERN_STR].insert_at(
-            h.r.interns[INTERN_STR].lookup(1, |_| false).unwrap_err(),
-            1,
-            live,
-        );
-        h.r.interns[INTERN_STR].insert_at(
-            h.r.interns[INTERN_STR].lookup(2, |_| false).unwrap_err(),
-            2,
-            dead,
-        );
-        assert_eq!(h.r.interns[INTERN_STR].count, 2);
+        // The slot is looked up BEFORE the insert borrows the table, because
+        // both now reach it through one `DerefMut` rather than two fields.
+        let slot = h.r.shared.interns[INTERN_STR].lookup(1, |_| false).unwrap_err();
+        h.r.shared.interns[INTERN_STR].insert_at(slot, 1, live);
+        let slot = h.r.shared.interns[INTERN_STR].lookup(2, |_| false).unwrap_err();
+        h.r.shared.interns[INTERN_STR].insert_at(slot, 2, dead);
+        assert_eq!(h.r.shared.interns[INTERN_STR].count, 2);
         h.gc.minor(&mut h.r);
-        assert_eq!(h.r.interns[INTERN_STR].count, 1, "the unreachable entry should be gone");
-        let found = h.r.interns[INTERN_STR].lookup(1, |_| true).unwrap();
+        assert_eq!(h.r.shared.interns[INTERN_STR].count, 1, "the unreachable entry should be gone");
+        let found = h.r.shared.interns[INTERN_STR].lookup(1, |_| true).unwrap();
         assert_eq!(found, h.get(li), "the surviving entry was forwarded");
         assert_eq!(h.str_of(found), "live");
     }
@@ -1771,7 +1878,7 @@ mod tests {
 
     #[test]
     fn exhaustion_is_reported_not_crashed() {
-        let mut h = H { gc: Gc::new(64 * 1024, 4 * 1024 * 1024), r: Roots::new() };
+        let mut h = H::with(64 * 1024, 4 * 1024 * 1024);
         // Retain everything so nothing can be collected.
         let mut n = 0u64;
         loop {

@@ -110,7 +110,7 @@ pub const PT_BYTES: u32 = 5;
 pub const PT_PEER: u32 = 6;
 pub const PT_LABEL: u32 = 7;
 pub const PT_KIND: u32 = 8;
-/// Where this end sits in `roots.singletons` when it is a host end, so closing
+/// Where this end sits in `roots.shared.singletons` when it is a host end, so closing
 /// can let go of the strong root. -1 otherwise.
 pub const PT_ROOT: u32 = 9;
 /// Format the creating side asked for, as a keyword; nil for a channel.
@@ -238,7 +238,7 @@ impl Rt {
     // --- scheduler state ---------------------------------------------------
 
     pub fn sched(&self) -> Value {
-        self.roots.singletons[SING_SCHED]
+        self.roots.shared.singletons[SING_SCHED]
     }
 
     /// Create the scheduler on first use, enrolling whatever is running now as
@@ -286,7 +286,7 @@ impl Rt {
         let ts = self.vec_conj(self.r(tsi), t);
         self.set(self.r(si), SC_THREADS, ts);
         let out = self.r(si);
-        self.roots.singletons[SING_SCHED] = out;
+        self.roots.shared.singletons[SING_SCHED] = out;
         self.pop_to(base);
         self.sched_hook = Some(scheduler);
         let at = self.steps + SLICE;
@@ -542,7 +542,7 @@ impl Rt {
         // Inherit a SNAPSHOT of the spawner's dynamic bindings, as Clojure
         // conveys them to `future` and agents. A snapshot: rebinding in the
         // spawner afterwards does not reach the child.
-        let binds = self.roots.singletons[crate::rt::SING_BINDINGS];
+        let binds = self.roots.shared.singletons[crate::rt::SING_BINDINGS];
         let binds = if binds.is_nil() { self.empty_map() } else { binds };
         self.set(self.r(ti), TH_BINDINGS, binds);
         let ts = self.slot(self.r(si), SC_THREADS);
@@ -564,7 +564,7 @@ impl Rt {
             return NIL;
         }
         let sp = &self.gc.sp;
-        match self.roots.interns[INTERN_PORT].lookup(id as u32, |v| {
+        match self.roots.shared.interns[INTERN_PORT].lookup(id as u32, |v| {
             v.is_heap() && ty(sp, v.as_heap()) == TY_PORT
         }) {
             Ok(v) => v,
@@ -592,20 +592,20 @@ impl Rt {
     /// A host end must outlive every flint reference to it, so it goes in
     /// `singletons`, which the collector already traces. Returns the slot.
     fn root_port(&mut self, p: Value) -> i64 {
-        for i in crate::rt::SING_COUNT..self.roots.singletons.len() {
-            if self.roots.singletons[i].is_nil() {
-                self.roots.singletons[i] = p;
+        for i in crate::rt::SING_COUNT..self.roots.shared.singletons.len() {
+            if self.roots.shared.singletons[i].is_nil() {
+                self.roots.shared.singletons[i] = p;
                 return i as i64;
             }
         }
-        self.roots.singletons.push(p);
-        (self.roots.singletons.len() - 1) as i64
+        self.roots.shared.singletons.push(p);
+        (self.roots.shared.singletons.len() - 1) as i64
     }
 
     fn unroot_port(&mut self, p: Value) {
         let slot = fx(self.slot(p, PT_ROOT));
-        if slot >= 0 && (slot as usize) < self.roots.singletons.len() {
-            self.roots.singletons[slot as usize] = NIL;
+        if slot >= 0 && (slot as usize) < self.roots.shared.singletons.len() {
+            self.roots.shared.singletons[slot as usize] = NIL;
             self.set(p, PT_ROOT, Value::fixnum(-1));
         }
     }
@@ -939,7 +939,7 @@ impl Rt {
             TY_CLOSURE => {
                 let idx = self.slot(v, 0).as_fixnum() as usize;
                 let namec = self.image.fns.get(idx).map(|d| d.name as usize).unwrap_or(usize::MAX);
-                self.roots.consts.get(namec).copied().unwrap_or(NIL)
+                self.roots.shared.consts.get(namec).copied().unwrap_or(NIL)
             }
             TY_NATIVEFN => self.slot(v, 1),
             _ => NIL,
@@ -1057,7 +1057,7 @@ fn settle(rt: &mut Rt, result: Value) {
     let base = rt.mark();
     let ti = rt.push(th);
     // Dynamic bindings travel with the thread.
-    let binds = rt.roots.singletons[crate::rt::SING_BINDINGS];
+    let binds = rt.roots.shared.singletons[crate::rt::SING_BINDINGS];
     rt.set(rt.r(ti), TH_BINDINGS, binds);
     if !rt.park_on.is_nil() {
         let on = rt.park_on;
@@ -1166,7 +1166,7 @@ fn run_one(rt: &mut Rt, i: u32) {
     let ti = rt.push(th);
     let st = fx(rt.slot(rt.r(ti), TH_STATUS));
     let binds = rt.slot(rt.r(ti), TH_BINDINGS);
-    rt.roots.singletons[crate::rt::SING_BINDINGS] = binds;
+    rt.roots.shared.singletons[crate::rt::SING_BINDINGS] = binds;
     let at = rt.steps + SLICE;
     rt.set_slice_end(at);
     let v = if st == ST_NEW {

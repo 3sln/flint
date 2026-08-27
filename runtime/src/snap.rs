@@ -147,11 +147,11 @@ pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
     w.usz(r.stack_top);
     w.vals(&r.stack[..r.stack_top]);
     w.vals(&r.shadow);
-    w.vals(&r.globals);
-    w.vals(&r.consts);
-    w.vals(&r.singletons);
-    w.usz(r.interns.len());
-    for t in r.interns.iter() {
+    w.vals(&r.shared.globals);
+    w.vals(&r.shared.consts);
+    w.vals(&r.shared.singletons);
+    w.usz(r.shared.interns.len());
+    for t in r.shared.interns.iter() {
         w.usz(t.slots.len());
         w.usz(t.count);
         for (h, v) in t.slots.iter() {
@@ -414,12 +414,12 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     }
     rr.stack_top = stack_top;
     rr.shadow = shadow;
-    rr.globals = globals;
-    rr.consts = consts;
-    rr.singletons = singletons;
+    rr.shared.globals = globals;
+    rr.shared.consts = consts;
+    rr.shared.singletons = singletons;
     for (i, t) in interns.into_iter().enumerate() {
-        if i < rr.interns.len() {
-            rr.interns[i] = t;
+        if i < rr.shared.interns.len() {
+            rr.shared.interns[i] = t;
         }
     }
     rt.frames = frames;

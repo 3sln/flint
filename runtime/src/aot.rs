@@ -48,9 +48,9 @@ pub struct AotSync {
     pub stack: u32,
     /// `roots.stack_top`, as an index.
     pub top: u32,
-    /// Byte address of `roots.consts[0]`.
+    /// Byte address of `roots.shared.consts[0]`.
     pub consts: u32,
-    /// Byte address of `roots.globals[0]`.
+    /// Byte address of `roots.shared.globals[0]`.
     pub globals: u32,
     /// Base of the object heap, which object addresses are relative to.
     pub heap: u32,
@@ -125,8 +125,8 @@ fn refresh(rt: &mut Rt) {
         SYNC.top = rt.roots.stack_top as u32;
         if !SYNC_FIXED {
             SYNC_FIXED = true;
-            SYNC.consts = rt.roots.consts.as_ptr() as u32;
-            SYNC.globals = rt.roots.globals.as_ptr() as u32;
+            SYNC.consts = rt.roots.shared.consts.as_ptr() as u32;
+            SYNC.globals = rt.roots.shared.globals.as_ptr() as u32;
             SYNC.heap = rt.gc.sp.base_addr();
             SYNC.steps = core::ptr::addr_of!(rt.steps) as u32;
             SYNC.checkpoint = core::ptr::addr_of!(rt.checkpoint) as u32;
@@ -134,8 +134,8 @@ fn refresh(rt: &mut Rt) {
         #[cfg(feature = "diagnostics")]
         {
             SYNC_DRIFT[0] += 1;
-            if SYNC.consts != rt.roots.consts.as_ptr() as u32
-                || SYNC.globals != rt.roots.globals.as_ptr() as u32
+            if SYNC.consts != rt.roots.shared.consts.as_ptr() as u32
+                || SYNC.globals != rt.roots.shared.globals.as_ptr() as u32
                 || SYNC.heap != rt.gc.sp.base_addr()
                 || SYNC.steps != core::ptr::addr_of!(rt.steps) as u32
                 || SYNC.checkpoint != core::ptr::addr_of!(rt.checkpoint) as u32

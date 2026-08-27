@@ -343,7 +343,7 @@ impl Rt {
                         // No `set_from_roots`, so it is built by conj -- and
                         // the accumulator lives on the ROOT STACK, because
                         // `set_conj` allocates.
-                        let empty = self.roots.singletons[crate::rt::SING_EMPTY_SET];
+                        let empty = self.roots.shared.singletons[crate::rt::SING_EMPTY_SET];
                         let acc = self.push(empty);
                         for k in 0..n {
                             let item = self.r(base + k);
@@ -363,7 +363,7 @@ impl Rt {
                     let v = self.decode_at(r, live, depth + 1)?;
                     self.push(v);
                 }
-                let empty = self.roots.singletons[crate::rt::SING_EMPTY_MAP];
+                let empty = self.roots.shared.singletons[crate::rt::SING_EMPTY_MAP];
                 let acc = self.push(empty);
                 for k in 0..n {
                     let key = self.r(base + k * 2);
@@ -457,7 +457,7 @@ mod tests {
         assert!(rt.eq(want, out));
 
         // A map, whose keys are keywords -- the case the host cares about.
-        let empty = rt.roots.singletons[crate::rt::SING_EMPTY_MAP];
+        let empty = rt.roots.shared.singletons[crate::rt::SING_EMPTY_MAP];
         let m = rt.push(empty);
         let kk = rt.keyword(None, "a");
         let next = rt.map_assoc(rt.r(m), kk, Value::fixnum(1));

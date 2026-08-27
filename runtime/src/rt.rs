@@ -39,7 +39,14 @@ pub const SING_BINDINGS: usize = 5;
 pub const SING_COUNT: usize = 6;
 
 pub struct Rt {
-    pub gc: Gc,
+    /// The heap, when this `Rt` is the one that made it.
+    ///
+    /// A sandbox has ONE heap and may have several executors on it
+    /// (`doc/decisions/0028`). The first `Rt` owns it; the rest point at it and
+    /// hold `None`, so the heap outlives every executor by construction rather
+    /// than by anyone remembering an order.
+    owned_heap: Option<alloc::boxed::Box<crate::gc::Heap>>,
+    pub gc: crate::gc::GcPtr,
     pub roots: Roots,
     /// The in-flight thrown value, or `nil`. Native builtins signal failure by
     /// setting this and returning `nil`; the VM checks it after every call.
@@ -213,9 +220,16 @@ impl Rt {
     }
 
     pub fn with_heap(nursery: u32, max: u32) -> Rt {
+        // Boxed so the two pointers below stay valid when this `Rt` is
+        // returned by value. A `Box`'s CONTENTS do not move when the box does,
+        // which is the whole reason it is a box.
+        let mut heap = alloc::boxed::Box::new(crate::gc::Heap::new(nursery, max));
+        let gc = crate::gc::GcPtr(core::ptr::NonNull::from(&mut heap.gc));
+        let shared = crate::gc::SharedPtr(core::ptr::NonNull::from(&mut heap.shared));
         let mut rt = Rt {
-            gc: Gc::new(nursery, max),
-            roots: Roots::new(),
+            owned_heap: Some(heap),
+            gc,
+            roots: Roots::new(shared),
             thrown: NIL,
             image: Default::default(),
             frames: alloc::vec::Vec::new(),
@@ -247,14 +261,14 @@ impl Rt {
             status: 0,
             grants: alloc::vec::Vec::new(),
         };
-        rt.roots.singletons = alloc::vec![NIL; SING_COUNT];
+        rt.roots.shared.singletons = alloc::vec![NIL; SING_COUNT];
         rt.init_singletons();
         rt
     }
 
     fn init_singletons(&mut self) {
         let a = self.alloc(TY_EMPTY_LIST, 1);
-        self.roots.singletons[SING_EMPTY_LIST] = Value::heap(a);
+        self.roots.shared.singletons[SING_EMPTY_LIST] = Value::heap(a);
         self.init_vector();
         self.init_map();
         self.init_set();
@@ -383,19 +397,19 @@ impl Rt {
     }
 
     pub fn singleton(&self, i: usize) -> Value {
-        self.roots.singletons[i]
+        self.roots.shared.singletons[i]
     }
     pub fn empty_list(&self) -> Value {
-        self.roots.singletons[SING_EMPTY_LIST]
+        self.roots.shared.singletons[SING_EMPTY_LIST]
     }
     pub fn empty_vec(&self) -> Value {
-        self.roots.singletons[SING_EMPTY_VEC]
+        self.roots.shared.singletons[SING_EMPTY_VEC]
     }
     pub fn empty_map(&self) -> Value {
-        self.roots.singletons[SING_EMPTY_MAP]
+        self.roots.shared.singletons[SING_EMPTY_MAP]
     }
     pub fn empty_set(&self) -> Value {
-        self.roots.singletons[SING_EMPTY_SET]
+        self.roots.shared.singletons[SING_EMPTY_SET]
     }
 
     pub fn collect(&mut self) {

@@ -887,7 +887,7 @@ impl Rt {
         let a = self.alloc(TY_ARRAYMAP, AM_BASE);
         self.gc.set_slot(a, AM_META, NIL);
         self.gc.set_slot(a, AM_HASH, NIL);
-        self.roots.singletons[crate::rt::SING_EMPTY_MAP] = Value::heap(a);
+        self.roots.shared.singletons[crate::rt::SING_EMPTY_MAP] = Value::heap(a);
     }
 
     pub fn is_map(&self, v: Value) -> bool {
