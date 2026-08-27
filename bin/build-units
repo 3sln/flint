@@ -50,7 +50,10 @@ mkdir -p out units/.sysroot
 # their transitive deps). Unit objects themselves are emitted by rustc below, so
 # a `flint` invocation never runs cargo.
 echo "  dependencies (cargo, once)"
-PATH="$TC/bin:$PATH" cargo build --release --target wasm32-unknown-unknown >/dev/null 2>&1
+# `--workspace --exclude flint-cli`: the CLI is a HOST binary that embeds
+# wasmtime, so building it for wasm32 fails, and a workspace-wide build tries.
+PATH="$TC/bin:$PATH" cargo build --release --target wasm32-unknown-unknown \
+  --workspace --exclude flint-cli >/dev/null 2>&1
 
 rlib() { ls "$DEPS"/lib$1-*.rlib 2>/dev/null | head -1; }
 

@@ -1,0 +1,120 @@
+name: Binaries
+
+# The single binary, for every platform we claim to support.
+#
+# `flint` embeds the compiler, both runtime modules and the standard library,
+# and drives them through wasmtime IN-PROCESS. So there is nothing to install
+# alongside it -- no babashka, no JVM, no linker -- and cargo cross-compiles it
+# with no extra toolchain, which is why this is a plain matrix rather than a
+# `wasmer create-exe` step.
+#
+# The wasm artifacts it embeds are GENERATED, not tracked, so every job builds
+# them first with `bin/build-dist`.
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: binaries-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: flint-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            name: flint-linux-aarch64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            name: flint-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: flint-macos-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: flint-windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+
+      - name: Set up Rust nightly with the wasm32 target
+        shell: bash
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup target add wasm32-unknown-unknown --toolchain nightly
+          rustup target add ${{ matrix.target }} --toolchain nightly
+          rustup component add rust-src --toolchain nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - uses: DeLaGuardo/setup-clojure@13
+        with:
+          bb: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The embedded artifacts. This is also the honest test that the release
+      # can be built from a clean checkout on this platform.
+      - name: Build the wasm distributable
+        shell: bash
+        run: ./bin/build-dist
+
+      - name: Build the binary
+        shell: bash
+        run: cargo +nightly build -p flint-cli --release --target ${{ matrix.target }}
+
+      # A binary that builds and cannot compile a program is not a release
+      # artifact. Every platform proves it for itself.
+      - name: Compile and run a program with it
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/flint"
+          [ -f "$bin" ] || bin="$bin.exe"
+          mkdir -p /tmp/smoke
+          printf '(ns smoke)\n(defn main [args] (str "ok " (reduce + 0 (range 10))))\n' > /tmp/smoke/smoke.cljc
+          "$bin" version
+          "$bin" compile /tmp/smoke --entry smoke/main -o /tmp/smoke/out.wasm
+          got="$("$bin" run /tmp/smoke/out.wasm)"
+          echo "got: $got"
+          [ "$got" = "ok 45" ] || { echo "::error::the binary produced '$got', not 'ok 45'"; exit 1; }
+
+      - name: Name it for the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="target/${{ matrix.target }}/release/flint"
+          [ -f "$src" ] || src="$src.exe"
+          cp "$src" "${{ matrix.name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+
+      - name: Attach it to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: gh release upload "$TAG" "${{ matrix.name }}" --clobber

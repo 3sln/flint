@@ -7,9 +7,11 @@ is publishing and attaches them there.
 
 | file | what it is |
 | --- | --- |
-| `flintc.wasm` | the compiler. Clojure source in, a bytecode **image** out. |
+| `flintc.wasm` | the compiler. Clojure in, an **image** or a **module** out. |
 | `flint-loader.wasm` | the runtime. Any image loads into it and runs. |
-| `builtins.json` | every builtin the loader carries. |
+| `flint-runtime.wasm` | what a compiled module is spliced into. |
+| `flint-runtime-aot.wasm` | the same, carrying the compiled-arity helpers. |
+| `builtins.json`, `slots.json`, `slots-aot.json` | what those runtimes carry, and where. |
 | `src/loader.cljc` | generated: names every builtin so the linker keeps it. |
 
 ## What it can do
@@ -35,21 +37,30 @@ runtime.run(image, ['there']);   // => { code: 0, out: 'hi there' }
 The loader resolves an image's builtins **by name** when it loads it, so
 nothing on the host patches table slots or knows the image format.
 
+It also emits a **standalone module**, which is what a compiler is expected to
+produce — the image above is internal machinery:
+
+```js
+const wasm = compiler.compileToWasm({ files, entry: 'app/main' });        // 600 KB
+const fast = compiler.compileToWasm({ files, entry: 'app/main',           // 638 KB
+                                      aot: true, runtime, slots });
+```
+
+No linker in either path. The runtime module was linked once, when flint was
+built; splicing an image into it and appending compiled arities is byte
+manipulation on a finished module (`doc/decisions/0024`). `--aot` is **7×
+faster** on arithmetic — 11.2 ms against 1.6 ms — for 38 KB more.
+
 ## What it cannot do, and why
 
-**It cannot emit a standalone single-file `.wasm` module.** That is *linking*,
-and linking relocatable wasm objects means running `wasm-ld`, which is a native
-tool. `bin/flint` does that; this ships the two artifacts it produced.
+**It cannot produce the RUNTIME module itself.** That is a link over
+relocatable objects and needs `wasm-ld`. It happens when flint is built, and
+the result ships here.
 
-**So `--aot` is not available here either**, because AOT emits wasm functions
-that are appended to a module at link time, and there is no per-program module
-on this path. Use `flint build --aot` for that.
-
-Building the compiler itself with `--aot` was measured and rejected: **8138 ms
-against 8036 ms**, a 1.3% saving for a module three times the size (479 KB →
-1.47 MB). The reason it does nothing is that compiling is not
-dispatch-dominated — nearly all of the time below is reading and analysing the
-183 KB standard library, which happens on every compile.
+**Tree shaking is off by default.** It works, and it works in the diagnostics
+build of the compiler, and it traps in the production build once the rebuild
+covers 815 function bodies instead of three. `doc/decisions/0024` carries the
+bisection. It costs size and not capability: 600 KB against 369 KB.
 
 ## What it costs
 

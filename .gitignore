@@ -27,3 +27,6 @@ dist/flint-runtime.wasm
 dist/flint-runtime-aot.wasm
 dist/slots.json
 dist/slots-aot.json
+
+# The single binary is built, not tracked.
+target/

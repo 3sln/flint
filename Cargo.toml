@@ -1,5 +1,5 @@
 [workspace]
-members = ["runtime", "units-src/flint-data-json", "units-src/flint-data-xml",
+members = ["runtime", "cli", "units-src/flint-data-json", "units-src/flint-data-xml",
            "units-src/flint-data-html", "units-src/flint-demo-shout", "units-src/flint-conc",
   "units-src/flint-snap"]
 resolver = "2"

@@ -1,0 +1,23 @@
+[package]
+name = "flint-cli"
+version = "0.1.0"
+edition = "2021"
+description = "The flint compiler as a single binary: no babashka, no JVM, no linker."
+
+[[bin]]
+name = "flint"
+path = "src/main.rs"
+
+[dependencies]
+# wasmtime rather than wasmer, and it is a library rather than `create-exe`.
+# The artifacts are embedded with `include_bytes!` and driven in-process, so
+# there is one binary and cargo cross-compiles it for every target with no
+# extra toolchain -- which is the whole point of shipping a single file.
+wasmtime = { version = "39", default-features = false, features = ["cranelift", "runtime", "std", "gc", "gc-drc"] }
+anyhow = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
