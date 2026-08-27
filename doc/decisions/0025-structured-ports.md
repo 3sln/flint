@@ -82,37 +82,61 @@ A stream duplicates a subtree that appears twice, where a pool would share it.
 That is an optimisation and a pool variant can be added; a value crossing a
 boundary is a tree in practice.
 
-New tags: **`K_PORT`** and **`K_SENTINEL`**, both indices into the transfer
-table below. Byte strings (`0024`) mean binary crosses without base64. `0026`'s
+New tags: **`K_PORT`** and **`K_SENTINEL`**, both carrying their identity
+inline — see below for why that is safe. Byte strings (`0024`) mean binary crosses without base64. `0026`'s
 tables will want one too, and a tag is cheaper to add before this ships than
 after.
 
-## Sending a port safely, which is the whole difficulty
+## Sending a port: identities go inline, and the invariant is the sandbox's
 
-`0006` forbade this partly to keep the wire format simple and partly so a
-capability could not leak through a message. The second is the real one, and it
-is not solved by letting ports be encoded — it is solved by deciding **what a
-reference means**.
+The first draft of this document put a **transfer table** in every encoded
+value — the live things it carried, referenced from the body by index — on the
+grounds that a raw port id would let a guest write `K_PORT 7` and name a port
+it does not hold.
 
-**A raw global port id would be a security hole.** A guest that writes
-`K_PORT 7` names port 7 whether or not it holds it. Every capability in the
-system would be forgeable by counting.
+**That was the wrong answer, and the reason it is wrong is worth keeping.** The
+forgery it defends against needs the guest to construct an ENCODING. It cannot.
+When a program does `(p/send port v)` it hands over a *value*, and the runtime
+does the encoding; for `K_PORT` to appear in the bytes, the guest has to have
+had a port value, which means it legitimately held one. `7` encodes as
+`K_INT 7` and arrives as an integer.
 
-So an encoded value carries a **transfer table**: the live things it is
-carrying, in order, and the body refers to them by index. The sender can only
-put something it HOLDS, because it has to pass the value; the receiver gets
-handles minted for it. No global id crosses and nothing is trusted. That is the
-answer CapTP and Cap'n Proto reach, for the same reason.
+So identities go **inline**: `K_PORT <id>`, `K_SENTINEL <host-id> <label>`. No
+table, no index indirection, no per-value bookkeeping — and the concern that
+motivated a *unified* table, that each new live kind would otherwise want its
+own buffer, dissolves rather than needing an answer.
 
-**One table, not one per kind.** Ports, sentinels, and whatever becomes live
-next all share it — `postMessage`'s transferables, and for the same reason: a
-table per kind means a new table, and a format change, every time something new
-becomes transferable.
+### The invariant, stated where it actually lives
 
-The safety rule is the table's, so it holds for everything in it. A sentinel
-arriving from the GUEST carries no host id, because `0022` says authority is
-the host recognising a value in its own grant table and an id that came from
-the guest must never be believed.
+> **flint is given no way to turn an integer into a port or a sentinel.**
+
+The protection is not from the host. The host has free rein by definition: it
+holds the memory, it can call any export, and if it is compromised there is
+nothing left to protect. The protection is on the SANDBOX end, and it is a
+property of what the guest is handed rather than of the format.
+
+It already holds today, in the one place it has to:
+`(opaque "label")` reaches `new_opaque(label, 0)` — the host id is hard-coded
+to zero on the guest path, so a guest-minted sentinel encodes as
+`K_SENTINEL 0 "label"` and the host correctly reads it as *not one of mine*
+(`0022`). There is no builtin that sets a host id, and there must not be.
+
+The rule this puts on the codec is therefore small and precise:
+
+* The runtime ENCODES ports and sentinels from real values only, which it does
+  by construction.
+* If a guest-callable **decoder** is ever added — bytes to a value — it must
+  refuse `K_PORT` and `K_SENTINEL`, or it hands the guest exactly the integer
+  conversion this invariant forbids. That is the one line of this design that
+  can be undone by accident later, so it belongs in a test rather than a
+  comment.
+
+### What that leaves
+
+A sentinel the guest received and sends BACK carries its real host id, which is
+what makes delegation work: the host looks it up in its own grant table and
+finds the grant it issued. A sentinel the guest minted carries zero and is
+recognised as guest-minted. Both are correct, and neither needs a table.
 
 ## `take()` is async, and the runtime has to yield
 
@@ -168,6 +192,6 @@ changes rather than being deleted.
 2. The host API — explicit builders, introspection, `from`/`toJS`.
 3. The entry map, which is the breaking change; do it in one commit.
 4. Ports carrying encoded values instead of codec bytes.
-5. The transfer table: ports and sentinels crossing, and the yield that
-   backpressure needs.
+5. Ports and sentinels crossing, and the yield that backpressure needs. With
+   the test that a guest cannot turn an integer into either.
 6. Diagnostics on the process, after each step.
