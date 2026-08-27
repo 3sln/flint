@@ -35,6 +35,7 @@ pub mod aot;
 pub mod pike;
 pub mod rope;
 pub mod bytes;
+pub mod codec;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 pub mod rt;
