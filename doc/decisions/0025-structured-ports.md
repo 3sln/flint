@@ -14,8 +14,9 @@
 Four things, and they are one change wearing four hats.
 
 1. **One wire codec** for every flint value crossing the host boundary.
-2. **The entry takes a map** — `(defn main [{:keys [args capabilities]}] …)`
-   rather than `[argv]` or `[argv caps]` — delivered in that codec.
+2. **A called function takes a map** — `(defn f [{:keys [args capabilities]}] …)`
+   rather than `[argv]` or `[argv caps]` — delivered in that codec. Any
+   function, not one entry point.
 3. **`args` is data, not strings**, the way `clj -X` takes `:key value`.
 4. **A port carries values** rather than text through a per-port codec, and
    **a port can be sent through a port**, so a capability can be delegated.
@@ -38,9 +39,8 @@ const v = codec.map([[codec.kw('name'), codec.str('ada')],
 // or, when guessing is fine
 const v2 = codec.from({ name: 'ada', n: 42 }, { keywordizeKeys: true });
 
-program.exec({ args: v2 });     // the entry map
-port.put(v);                    // or a message
-const back = await port.take();
+sandbox.port.put(v);            // a call, or any message
+const back = await sandbox.port.take();
 back.tag();        // 'map'
 back.get('name');  // an encoded value
 back.toJS();       // { name: 'ada', n: 42 }
@@ -151,23 +151,71 @@ recognised as guest-minted. Both are correct, and neither needs a table.
 The host side does not need an `open` handler, a `message` handler, a `closed`
 handler, a continuation-token call and a resume call. It needs **one port**.
 
-Every process has a **system port** — not visible to the guest — carrying all
-traffic between the sandbox and the host. `open` is a message on it with a
-transaction id; the answer comes back the same way. So does a send, a close,
-and termination.
+Every sandbox has a **system port** — not visible to the guest — carrying all
+traffic between it and the host. `open` is a message on it with a transaction
+id; the answer comes back the same way. So does a send, a close, and
+termination.
+
+### `call`, not `init`, and what that makes the nouns
+
+There is no special message for starting the program, because there is no
+special *the program*. There is a **`call`**: a function to run, its arguments,
+and a `tx`. Which means an artifact is not a program with an entry point — it
+is a set of callable functions, and the host chooses.
+
+That changes what the two things are called, and the names now say what they
+are:
+
+| | |
+| --- | --- |
+| **Image** | the artifact. Compiled, inert, holds functions. |
+| **Sandbox** | an image instantiated. Holds state, has a system port, serves calls. |
+
+The Docker analogy is exact and worth taking: an image is a thing you
+instantiate, and a container is a running one. `Vm` and `Env` were the other
+candidates; **`Sandbox`** wins because it names the property that is the point
+of the whole project, and a reader who knows nothing else knows what is
+guaranteed.
 
 ```js
-const port = program.execute();
-await port.put(codec.from({ what: 'init', capabilities: {…}, args: […] }));
+const image   = await compile({ path: […], … });      // Image
+const sandbox = image.sandbox({ capabilities: {…} }); // Sandbox
+
+await sandbox.port.put(codec.from({
+  what: 'call', tx: 1, fn: 'my.ns/handler', args: { … },
+}));
 
 for (;;) {
-  const msg = (await port.take()).toJS();
-  if (msg.what === 'term') break;
+  const msg = (await sandbox.port.take()).toJS();
+  if (msg.what === 'return' && msg.tx === 1) break;
   if (msg.what === 'open') {
-    await port.put(codec.from({ what: 'response', tx: msg.tx, payload: … }));
+    await sandbox.port.put(codec.from({ what: 'response', tx: msg.tx, payload: … }));
   }
 }
 ```
+
+`main` stops being a mechanism and becomes a convention: the function `flint
+run` calls when you do not say which.
+
+**A sandbox serves many calls**, which is the shape a per-request binding
+wants — instantiate once, call per request — and it is the shape `0023`
+described for construe without being able to express it.
+
+**Capabilities belong to the SANDBOX, not the call.** The sandbox is the trust
+boundary; granting per call would mean revoking between them, which is a
+different and much harder property. A called function still RECEIVES its
+capabilities as values rather than reaching for them — `0022` is unchanged, and
+ambient authority is still not a thing here — so every called function takes
+one map:
+
+```clojure
+(defn handler [{:keys [args capabilities]}] …)
+```
+
+Whether a host may grant more authority to a live sandbox — a `grant` message
+on the system port — is left open. It is not needed for anything yet, and
+"authority only ever narrows after instantiation" is a property worth keeping
+until something wants otherwise.
 
 ### What it replaces
 
@@ -278,9 +326,10 @@ follow:
   worth answering before you run something.
 * **The runtime provisions them.** A module that declares `:fs` and is given
   nothing fails at the grant rather than deep inside a call, and says which.
-* **The SDK exposes them on the program**, beside everything else the artifact
-  says about itself. `program.capabilities` is the list; `program.metadata` is
-  the rest.
+* **The SDK exposes them on the IMAGE**, beside everything else the artifact
+  says about itself: `image.capabilities` is the list, `image.metadata` the
+  rest. A caller can read what an image wants before making a sandbox for it,
+  which is the point of putting it in the bytes.
 
 This does NOT weaken `0022`. A declaration is a REQUEST, not a grant: it says
 what the program will ask for, and the host still decides. Authority remains
@@ -292,6 +341,8 @@ declared nothing does.
 
 **Every program's entry changes.** `(defn main [args])` becomes
 `(defn main [{:keys [args]}])` — every test, example and benchmark in the tree.
+And `main` stops being special: it is the function `flint run` calls by
+default, and nothing else.
 Affordable exactly once, before anything is published, and this is that moment.
 
 **`0006` §6's host ABI goes**, though its concepts survive: the continuation
@@ -312,11 +363,12 @@ changes rather than being deleted.
 
 1. The codec and its native encoder/decoder, with tests both ways.
 2. The host API — explicit builders, introspection, `from`/`toJS`.
-3. The entry map, which is the breaking change; do it in one commit.
+3. The call map, which is the breaking change; do it in one commit.
 4. Ports carrying encoded values instead of codec bytes.
-5. The system port: `open`, `send`, `close` and `term` as messages with a `tx`,
-   replacing eight ABI exports and the five-`u32` record format. A helper over
-   the loop for callers who want handlers back.
+5. The system port: `call`, `return`, `open`, `send` and `close` as messages
+   with a `tx`, replacing eight ABI exports and the five-`u32` record format.
+   Image and Sandbox as the two nouns. A helper over the loop for callers who
+   want handlers back.
 6. Ports and sentinels crossing, and the yield that backpressure needs. With
    the test that a guest cannot turn an integer into either.
 7. Diagnostics on the process, after each step.
