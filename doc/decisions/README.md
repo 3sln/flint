@@ -33,6 +33,7 @@ for the first.
 | [0025](0025-structured-ports.md) | A wire codec, and structured ports | **Roadmap.** Reverses 0006's no-transfer rule, which left the door open |
 | [0026](0026-tables.md) | Tables: columnar storage that is a value | **Queued.** A vector of maps outside, a columnar B-tree inside |
 | [0027](0027-ports-are-the-hosts.md) | Ports belong to the host, not to a sandbox | **Queued.** Local ports stay by-reference; global ones encode, and the encode is the GC boundary |
+| [0028](0028-drivers.md) | A driver: ports are the only way to drive a sandbox | **Queued.** K threads over ONE sandbox is the destination; `call` becomes asynchronous before anything is published |
 | [0024](0024-no-runtime-linking.md) | No linking at compile time; byte strings and transient ropes | **Partly shipped.** The splice and the tree shaker work with no linker; the byte strings do not exist |
 
 ## What is actually next
@@ -81,7 +82,14 @@ what remains, and what each thing is waiting on.
 11. **Tables** (`0026`) — a vector of maps outside, a columnar B-tree inside.
     Queued; its codec tag wants adding while `0025`'s format is still open.
 
-12. **Ports belong to the host** (`0027`) — a global port's registry moves out
+12. **A driver** (`0028`) — the host stops advancing a sandbox directly, so a
+    pool can, and the destination is K threads over ONE sandbox. Debouncing
+    and concurrency live in one seam, `call` becomes asynchronous, and `Rt`
+    splits into a shared sandbox and per-executor contexts while that is still
+    a no-op refactor. Wanted BEFORE the SDKs are published, because `call`
+    cannot stop being synchronous afterwards.
+
+13. **Ports belong to the host** (`0027`) — a global port's registry moves out
     of the sandbox, the system channel is passed IN, and creating one becomes a
     dispatch. Local ports are untouched and still pass by reference. Needed
     before `0025`'s system port is built, because building it sandbox-local
