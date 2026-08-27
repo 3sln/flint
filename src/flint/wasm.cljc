@@ -427,14 +427,18 @@
                            i5 (+ i4 nr)]
                        (recur i5 (inc k)
                               (conj acc (flint.rt/b-slice body start i5))))))
-        ;; Compared as VECTORS rather than as byte strings. `=` already
-        ;; compares byte strings by content in a module -- but on the bootstrap
-        ;; host one is a Java array, where `=` is identity and every freshly
-        ;; encoded signature would look new. A signature is a handful of bytes
-        ;; and this runs once per distinct type, so the conversion is free and
-        ;; it needs no primitive of its own.
-        hit (first (keep-indexed (fn [k b] (when (= (bytes->vec b) (bytes->vec enc)) k))
-                                 existing))]
+        ;; One host difference, at the one site that has it, which is what a
+        ;; reader conditional is for. `=` compares byte strings by content in a
+        ;; module; on the bootstrap host a byte string is a Java array, where
+        ;; `=` is identity and every freshly encoded signature would look new.
+        ;;
+        ;; Both branches are present deliberately: this file is read with
+        ;; `#{:flint}` when it compiles for flint and with `:clj` on the
+        ;; bootstrap host, and a conditional that matches NEITHER deletes the
+        ;; form it stood in. `test/reader_test.clj` asserts that shape.
+        same? (fn [b] #?(:clj (java.util.Arrays/equals ^bytes b ^bytes enc)
+                         :flint (= b enc)))
+        hit (first (keep-indexed (fn [k b] (when (same? b) k)) existing))]
     (if hit
       [m hit]
       [(put-section m 1 (->bytes [(uleb (inc n)) body enc])) n])))
