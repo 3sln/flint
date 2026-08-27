@@ -135,7 +135,7 @@ pub extern "C" fn flint_grant(ptr: u32, len: u32, host_id: u32) {
         ensure_arena();
         let bytes = core::slice::from_raw_parts(ptr as *const u8, len as usize);
         let name: alloc::string::String = core::str::from_utf8(bytes).unwrap_or("").into();
-        crate::rt::add_grant(name, host_id as u64);
+        ensure_rt().add_grant(name, host_id as u64);
     }
 }
 

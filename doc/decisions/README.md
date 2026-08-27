@@ -33,7 +33,7 @@ for the first.
 | [0025](0025-structured-ports.md) | A wire codec, and structured ports | **Roadmap.** Reverses 0006's no-transfer rule, which left the door open |
 | [0026](0026-tables.md) | Tables: columnar storage that is a value | **Queued.** A vector of maps outside, a columnar B-tree inside |
 | [0027](0027-ports-are-the-hosts.md) | Ports belong to the host, not to a sandbox | **Queued.** Local ports stay by-reference; global ones encode, and the encode is the GC boundary |
-| [0028](0028-drivers.md) | A driver: ports are the only way to drive a sandbox | **Queued.** K threads over ONE sandbox is the destination; `call` becomes asynchronous before anything is published |
+| [0028](0028-drivers.md) | A driver: ports are the only way to drive a sandbox | **Partly shipped.** Rust has `Driver`/`ThreadPool`/async `call`, 200 requests coalesced into 1 dispatch; the parallel collector does not exist |
 | [0024](0024-no-runtime-linking.md) | No linking at compile time; byte strings and transient ropes | **Partly shipped.** The splice and the tree shaker work with no linker; the byte strings do not exist |
 
 ## What is actually next

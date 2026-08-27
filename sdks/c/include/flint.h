@@ -108,7 +108,7 @@ FlintSandbox *flint_sandbox_from_wasm(const uint8_t *wasm, size_t len, char **er
  * Authority is never a type test (doc/decisions/0022): a program holds a
  * capability because the host gave it one. Granting nothing -- the default --
  * means the program can reach nothing. */
-void flint_sandbox_grant(FlintSandbox *s, const char *name);
+void flint_sandbox_grant(const FlintSandbox *s, const char *name);
 
 /* Stop a call after n instructions, and turn COUNTING ON.
  *
@@ -116,7 +116,7 @@ void flint_sandbox_grant(FlintSandbox *s, const char *name);
  * place on every engine and every machine. Without a limit the interpreter
  * carries no counter at all, which is why flint_sandbox_gas reads 0 until this
  * is called. */
-void flint_sandbox_set_step_limit(FlintSandbox *s, uint64_t n);
+void flint_sandbox_set_step_limit(const FlintSandbox *s, uint64_t n);
 
 /* Instructions executed so far -- only while a step limit is set; 0 otherwise.
  * See flint_sandbox_set_step_limit. */
@@ -127,7 +127,11 @@ uint64_t flint_sandbox_gas(const FlintSandbox *s);
  * The SDK takes a name and positional arguments and nothing more: an argument
  * map, capabilities-as-arguments and the rest are a CLI's conventions
  * (doc/decisions/0025), not this layer's. */
-FlintValue *flint_call(FlintSandbox *s, const char *name,
+/* Blocking: it queues the request with the sandbox's driver and waits.
+ * Under the default inline driver that is the same thread and the same
+ * instant. C gets no promise back because inventing one would be inventing an
+ * async runtime for C; a driver-aware C surface is separate work. */
+FlintValue *flint_call(const FlintSandbox *s, const char *name,
                        const FlintValue *const *args, size_t nargs, char **err);
 
 void flint_sandbox_free(FlintSandbox *s);

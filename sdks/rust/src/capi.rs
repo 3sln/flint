@@ -271,8 +271,8 @@ pub unsafe extern "C" fn flint_sandbox_from_wasm(
 /// # Safety
 /// `s` must be a sandbox from this library, not already freed.
 #[no_mangle]
-pub unsafe extern "C" fn flint_sandbox_grant(s: *mut Sandbox, name: *const c_char) {
-    if let (Some(s), Some(n)) = (unsafe { s.as_mut() }, unsafe { borrowed(name) }) {
+pub unsafe extern "C" fn flint_sandbox_grant(s: *const Sandbox, name: *const c_char) {
+    if let (Some(s), Some(n)) = (unsafe { s.as_ref() }, unsafe { borrowed(name) }) {
         s.grant(n);
     }
 }
@@ -284,8 +284,8 @@ pub unsafe extern "C" fn flint_sandbox_grant(s: *mut Sandbox, name: *const c_cha
 /// # Safety
 /// `s` must be a sandbox from this library, not already freed.
 #[no_mangle]
-pub unsafe extern "C" fn flint_sandbox_set_step_limit(s: *mut Sandbox, n: u64) {
-    if let Some(s) = unsafe { s.as_mut() } {
+pub unsafe extern "C" fn flint_sandbox_set_step_limit(s: *const Sandbox, n: u64) {
+    if let Some(s) = unsafe { s.as_ref() } {
         s.set_step_limit(n);
     }
 }
@@ -311,13 +311,13 @@ pub unsafe extern "C" fn flint_sandbox_gas(s: *const Sandbox) -> u64 {
 /// values, each of which must be a value from this library.
 #[no_mangle]
 pub unsafe extern "C" fn flint_call(
-    s: *mut Sandbox,
+    s: *const Sandbox,
     name: *const c_char,
     args: *const *const Value,
     nargs: usize,
     err: *mut *mut c_char,
 ) -> *mut Value {
-    let Some(s) = (unsafe { s.as_mut() }) else {
+    let Some(s) = (unsafe { s.as_ref() }) else {
         return fail(err, "flint_call needs a sandbox");
     };
     let Some(name) = (unsafe { borrowed(name) }) else {
@@ -330,7 +330,11 @@ pub unsafe extern "C" fn flint_call(
             _ => return fail(err, "flint_call was given a null argument"),
         }
     }
-    match s.call(name, &vs) {
+    // Blocking, because C has no promise to hand back and inventing one here
+    // would be inventing an async runtime for C. A driver-aware C API is a
+    // separate surface (`doc/decisions/0028`); this is the one that works with
+    // the inline driver, which is what a C caller gets by default.
+    match s.call_blocking(name, &vs) {
         Ok(v) => Box::into_raw(Box::new(v)),
         Err(e) => fail(err, &e.to_string()),
     }

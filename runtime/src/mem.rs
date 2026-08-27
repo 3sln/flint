@@ -165,6 +165,28 @@ pub struct Region {
     pub len: u32,
 }
 
+
+/// A `Space` may be MOVED to another thread, but not shared with one.
+///
+/// `base` is a raw pointer, so Rust assumes neither. On a host build the
+/// pointer is to memory this `Space` allocated and solely owns -- nothing else
+/// aliases it, and it carries no thread affinity -- so moving it is sound.
+///
+/// `Sync` is deliberately NOT claimed, and that is the whole safety argument.
+/// Two threads inside one heap at the same time would race the collector: the
+/// nursery moves objects, so a read on one thread can observe a pointer the
+/// other is in the middle of forwarding. What makes several threads driving
+/// one sandbox safe TODAY is that the driver holds the program behind a lock
+/// (`doc/decisions/0028`), so exactly one is ever inside. Lifting that needs
+/// per-thread allocation buffers, safepoints and per-executor root sets -- at
+/// which point this comment is what has to change first.
+///
+/// Not claimed on wasm at all: there `base` points into the module's single
+/// global arena, which is shared rather than owned, so the argument above does
+/// not hold.
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl Send for Space {}
+
 pub struct Space {
     pub(crate) base: *mut u8,
     /// wasm: the arena is global, so nothing here is owned.

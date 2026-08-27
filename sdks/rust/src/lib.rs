@@ -40,10 +40,14 @@ use flint_rt::native::Program;
 use std::collections::BTreeMap;
 
 mod value;
+pub use driver::{Driver, Inline, ThreadPool};
+pub use sandbox::{Core, Pending, Sandbox};
 pub use value::Value;
 
 #[cfg(feature = "capi")]
 pub mod capi;
+pub mod driver;
+pub mod sandbox;
 
 /// What went wrong, in the terms the thing that failed uses.
 #[derive(Debug, Clone)]
@@ -244,7 +248,14 @@ impl Image {
     /// wasm engine -- which is why `wasm` above is the artifact and this is not
     /// the only way to use it.
     pub fn sandbox(&self) -> Result<Sandbox> {
-        Sandbox::from_wasm(&self.wasm)
+        self.sandbox_with(std::sync::Arc::new(crate::driver::Inline))
+    }
+
+    /// Instantiate under a driver of your choosing -- a pool, for instance.
+    /// The driver decides the thread, and eventually the threads
+    /// (`doc/decisions/0028`).
+    pub fn sandbox_with(&self, driver: std::sync::Arc<dyn Driver>) -> Result<Sandbox> {
+        Sandbox::from_wasm_with(&self.wasm, driver)
     }
 }
 
@@ -253,79 +264,6 @@ impl Image {
 /// A sandbox serves MANY calls, and they share the state the image set up when
 /// it loaded -- initialisers run once, not per call, which is what makes
 /// instantiate-once-call-per-request work.
-pub struct Sandbox {
-    program: Program,
-}
-
-impl Sandbox {
-    /// From a compiled `.wasm` artifact: its bytecode is extracted and run
-    /// natively.
-    pub fn from_wasm(wasm: &[u8]) -> Result<Sandbox> {
-        let bytecode = flint_rt::native::bytecode_of(wasm)
-            .map_err(|e| Error::Load(e))?;
-        Sandbox::from_bytecode(&bytecode)
-    }
-
-    /// From flint's own bytecode. An implementation detail, exposed because
-    /// the CLI has one to hand and going back through wasm would be silly.
-    pub fn from_bytecode(bytecode: &[u8]) -> Result<Sandbox> {
-        let program = Program::load(bytecode, 2_000_000_000).map_err(Error::Load)?;
-        Ok(Sandbox { program })
-    }
-
-    /// Lend a capability by name. Authority is never a type test
-    /// (`doc/decisions/0022`): a program holds one because the host gave it
-    /// one, under an id only the host knows.
-    pub fn grant(&mut self, name: &str) {
-        self.program.grant(name);
-    }
-
-    /// A bound on WORK, in instructions. Deterministic (`doc/decisions/0009`),
-    /// so the same program stops at the same instruction on every machine.
-    pub fn set_step_limit(&mut self, n: u64) {
-        self.program.set_step_limit(n);
-    }
-
-    /// Call a function by name with positional arguments.
-    ///
-    /// What an argument MEANS is the caller's business: there is no entry map
-    /// here and no capability argument. Those are the CLI's convention.
-    pub fn call(&mut self, name: &str, args: &[Value]) -> Result<Value> {
-        let mut call = vec![Value::str(name)];
-        call.extend_from_slice(args);
-        let encoded = Value::Vector(call).encode();
-        match self.program.call(&encoded) {
-            Ok(bytes) => Value::decode(&bytes).map_err(Error::Encoding),
-            Err(e) => {
-                let (kind, message) = match e.split_once(": ") {
-                    Some((k, m)) => (k.to_string(), m.to_string()),
-                    None => ("Error".to_string(), e),
-                };
-                Err(Error::Call { kind, message })
-            }
-        }
-    }
-
-    /// Instructions executed so far -- **only while a step limit is set**.
-    ///
-    /// This reads 0 on a sandbox with no limit, and that is not a bug to route
-    /// around. Counting every instruction would put an increment and a compare
-    /// in the interpreter's inner loop for every program, including the ones
-    /// that never ask; instead the unbudgeted loop has no counter at all and
-    /// the optimiser deletes the check (`doc/decisions/0009`).
-    ///
-    /// So `set_step_limit` is what turns counting on. It is said here rather
-    /// than left to be discovered, because a counter that silently reads zero
-    /// is worse than one that is absent.
-    ///
-    /// What it is NOT is instrumentation: gas is resource control, it is in
-    /// every build including production, and it is deterministic -- the same
-    /// call spends the same gas on every engine and every machine.
-    pub fn gas(&self) -> u64 {
-        self.program.steps()
-    }
-}
-
 // --- the spec, and the two encodings the boundary needs ---------------------
 
 fn edn_string(s: &str) -> String {

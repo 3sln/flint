@@ -128,6 +128,9 @@ pub struct Rt {
     /// Non-zero when `main` should report something other than "here is your
     /// answer" -- 2 means "I need the host" (`doc/decisions/0005`, section 1).
     pub status: i32,
+    /// What the host lent THIS sandbox, as `(name, host-id)`. Per-`Rt` because
+    /// a capability belongs to a run: see `add_grant`.
+    pub grants: alloc::vec::Vec<(alloc::string::String, u64)>,
 }
 
 /// Root `$v` for the duration of `$body`, rebinding the name to the (possibly
@@ -151,15 +154,18 @@ macro_rules! rooted {
 /// grant; guest code cannot read it, and possessing an opaque value is never
 /// authority -- only the host recognising THIS one is.
 ///
-/// It lives here rather than in `abi` because `abi` is only compiled for the
-/// wasm build and the builtin that reads it is compiled for both.
-static mut GRANTS: alloc::vec::Vec<(alloc::string::String, u64)> = alloc::vec::Vec::new();
-
-pub fn add_grant(name: alloc::string::String, host_id: u64) {
-    unsafe {
-        let g = &mut *core::ptr::addr_of_mut!(GRANTS);
-        g.push((name, host_id));
-    }
+/// **This was a `static mut` and that was a hole.** On wasm each module
+/// instance has its own statics, so a process-global table was per-sandbox by
+/// accident and correct by accident. Natively one process hosts MANY sandboxes
+/// (`doc/decisions/0010`), and they all read the same table: granting `:fs` to
+/// one sandbox granted it to every sandbox in the process, including ones
+/// created before or after. A capability nobody lent is exactly what `0022`
+/// exists to make impossible, so it lives on the `Rt` now -- where "this run"
+/// actually means this run.
+pub fn add_grant(_name: alloc::string::String, _host_id: u64) {
+    // Kept as a no-op shim only long enough for out-of-tree callers to move to
+    // `Rt::add_grant`; nothing in this repository calls it.
+    debug_assert!(false, "grants belong to an Rt: use Rt::add_grant");
 }
 
 impl Rt {
@@ -170,8 +176,12 @@ impl Rt {
     /// because their ids are new. That is deliberate: the entry shim calls this
     /// once and hands the map on, and there is no way to re-derive a capability
     /// you were not given.
+    pub fn add_grant(&mut self, name: alloc::string::String, host_id: u64) {
+        self.grants.push((name, host_id));
+    }
+
     pub fn grants_map(&mut self) -> Value {
-        let n = unsafe { (*core::ptr::addr_of!(GRANTS)).len() };
+        let n = self.grants.len();
         let base = self.mark();
         // Rooted across every step: `keyword`, `string`, `new_opaque` and
         // `assoc` all allocate, so any one of them can collect, and a raw
@@ -179,10 +189,7 @@ impl Rt {
         let empty = self.empty_map();
         let mi = self.push(empty);
         for i in 0..n {
-            let (name, id) = unsafe {
-                let g = &*core::ptr::addr_of!(GRANTS);
-                (g[i].0.clone(), g[i].1)
-            };
+            let (name, id) = (self.grants[i].0.clone(), self.grants[i].1);
             let k = self.keyword(None, &name);
             let ki = self.push(k);
             let label = self.string(&name);
@@ -238,6 +245,7 @@ impl Rt {
             park_on: NIL,
             sched_hook: None,
             status: 0,
+            grants: alloc::vec::Vec::new(),
         };
         rt.roots.singletons = alloc::vec![NIL; SING_COUNT];
         rt.init_singletons();

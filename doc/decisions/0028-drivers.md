@@ -1,9 +1,11 @@
 # 0028 — A driver: ports are the only way to drive a sandbox
 
-> **QUEUED.** Nothing in this file exists yet. It is the piece `0027` needs
-> before ports can be the only way in, and it changes the SDK surface built in
-> `0025` — which is why it is written down before that surface is published
-> rather than after.
+> **PARTLY BUILT.** The Rust SDK has it: `Driver`, `Inline`, `ThreadPool`,
+> an asynchronous `call` returning `Pending`, and coalesced dispatch — 200
+> requests into 1 crossing, measured. Several OS threads really do drive one
+> sandbox; the sandbox serialises them, so K > 1 is CORRECT but not yet
+> FASTER. Not built: the parallel collector that removes that lock, the `Rt`
+> split it needs, and the mirror of this shape in the JS and C SDKs.
 
 `Sandbox::call` runs the program ON THE CALLING THREAD. That works, it is what
 the three SDKs do today, and it forecloses thread pools: a sandbox that only
@@ -12,6 +14,20 @@ pool's whole job is to decide *when* and *on which thread* work runs.
 
 So the host stops driving directly. **Ports become the only way to drive a
 sandbox**, and between the ports and the sandbox sits a **driver**.
+
+## What is built, and what the lock is still doing
+
+`sdks/rust` has the whole shape. `ThreadPool::new(4)` gives four OS threads
+that genuinely contend for one sandbox — 100 calls fired from four threads
+through one `(swap! seen inc)` come back as exactly 1..=100, so the state is
+one state and the threads really are sharing it.
+
+**What they are not yet doing is running at the same time.** The program sits
+behind a lock, so the parallelism is in the dispatch and not in the
+interpreter. That is the honest state, and it is a useful one: the interface
+is exercised with K > 1 from the first version, which is the only way to find
+out whether it is the right interface. Removing the lock changes no signature
+here — it changes `runtime/src`.
 
 ## What a driver owns
 

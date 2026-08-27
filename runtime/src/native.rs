@@ -331,7 +331,8 @@ impl Program {
     /// by an id only the host knows. Granting nothing means the program can
     /// reach nothing, which is the default.
     pub fn grant(&mut self, name: &str) {
-        crate::rt::add_grant(String::from(name), self.next_grant());
+        let id = self.next_grant();
+        self.rt.add_grant(String::from(name), id);
         self.grants += 1;
     }
 
