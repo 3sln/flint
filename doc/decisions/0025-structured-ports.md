@@ -125,11 +125,16 @@ The rule this puts on the codec is therefore small and precise:
 
 * The runtime ENCODES ports and sentinels from real values only, which it does
   by construction.
+* If guest-callable **encoding** is ever added, the live thing itself has to be
+  supplied. `(encode {:port p})` is fine, because holding `p` is the proof;
+  anything that would take an id or an index and produce a port is the integer
+  conversion this invariant forbids, and there must be no such call.
 * If a guest-callable **decoder** is ever added — bytes to a value — it must
-  refuse `K_PORT` and `K_SENTINEL`, or it hands the guest exactly the integer
-  conversion this invariant forbids. That is the one line of this design that
-  can be undone by accident later, so it belongs in a test rather than a
-  comment.
+  refuse `K_PORT` and `K_SENTINEL` for the same reason, since a decoder is an
+  encoder read backwards and bytes are integers a guest can write.
+
+Those two are the whole of it, and they are the lines that can be undone by
+accident later, so they belong in a test rather than a comment.
 
 ### What that leaves
 
@@ -170,6 +175,47 @@ appears only when the module carries it, and the process says WHICH — an absen
 counter has to read as absent rather than as zero, which is the distinction
 `../HANDOFF.md` was written about.
 
+## What the CLI comes out as
+
+```
+flint run     :with [...capabilities] :path [...paths] :fn ns/my-fn :args [...]
+flint compile :with [...capabilities] :path [...paths] :fn ns/my-fn :to :wasm
+```
+
+`run` builds `{:args … :capabilities …}` and calls the entry with it. `compile`
+takes the same `:with`, but `:args` arrive when the artifact is executed rather
+than now — which has a consequence worth stating on its own.
+
+`:to` names a TARGET rather than a file: `:wasm` today, and `0010`'s `:jvm`,
+`:clr` and native later. A file name is an output detail; the target is the
+decision.
+
+`:path` rather than `:src`, because it is a search path — several roots, first
+hit wins — and `:src` reads like "the source".
+
+### A compiled artifact declares the authority it needs
+
+If `:with` is given at compile time and the arguments arrive at run time, then
+what the program requires has to survive in the artifact. So the declared
+capabilities go into the module's metadata section (`0020`), and three things
+follow:
+
+* **A host can read what a program needs before instantiating it.** That is
+  exactly what `0020`'s section is for -- it is read from the bytes without
+  running anything -- and "what authority does this want" is the question most
+  worth answering before you run something.
+* **The runtime provisions them.** A module that declares `:fs` and is given
+  nothing fails at the grant rather than deep inside a call, and says which.
+* **The SDK exposes them on the program**, beside everything else the artifact
+  says about itself. `program.capabilities` is the list; `program.metadata` is
+  the rest.
+
+This does NOT weaken `0022`. A declaration is a REQUEST, not a grant: it says
+what the program will ask for, and the host still decides. Authority remains
+the host recognising a value in its own grant table, and a program that
+declares `:fs` and is refused gets a catchable error exactly as one that
+declared nothing does.
+
 ## What this costs
 
 **Every program's entry changes.** `(defn main [args])` becomes
@@ -195,3 +241,5 @@ changes rather than being deleted.
 5. Ports and sentinels crossing, and the yield that backpressure needs. With
    the test that a guest cannot turn an integer into either.
 6. Diagnostics on the process, after each step.
+7. `:with` in the CLI, the declaration in `0020`'s metadata section, and
+   `program.capabilities` in the SDK.

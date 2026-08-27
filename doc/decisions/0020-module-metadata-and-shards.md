@@ -46,6 +46,22 @@ described by what it is"* — is what makes the extension clean: a shard should 
 a **third `:kind`** alongside `:wasm-object` and `:bytecode`, not a parallel
 mechanism with its own vocabulary.
 
+## Declared capabilities (`0025`)
+
+A module records the capabilities it will ask for, because `0025` moves
+`:with` to compile time while arguments stay at run time -- so what a program
+needs has to survive in the artifact.
+
+It belongs here rather than anywhere else for the reason this whole section
+exists: it is read from the BYTES, without instantiating, and *what authority
+does this want* is the question most worth answering before running something.
+
+It is a REQUEST and not a grant, and the distinction is `0022`'s: the host
+still decides, authority is still the host recognising a value in its own
+grant table, and a program that declares `:fs` and is refused gets the same
+catchable error as one that declared nothing. What the declaration buys is that
+the refusal can happen before the program starts rather than part-way through.
+
 ## Part 1 — the metadata
 
 ### It goes in a custom section, and it must be readable without instantiating
