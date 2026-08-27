@@ -77,6 +77,21 @@
 (check-that "bytes that are not UTF-8 are refused as a string"
             (str/includes? (str (:not-utf8 r)) "not UTF-8"))
 
+(println "bytes: what they were built for")
+
+;; `flint.wasm` is the wasm binary reader and writer, and it used to be Java
+;; byte arrays -- `aget`, `alength`, `ByteArrayOutputStream` -- which is why
+;; the compiler compiled to wasm could emit a bytecode image and not a module.
+;; It runs on byte strings now, so it compiles for flint too. This asserts
+;; that, because it is the whole reason the type exists.
+(let [x (sh "./bin/flint" ":src" "src" ":fn" "flint.wasm/parse" ":out" "/tmp/wasmport.wasm")]
+  (check-that "flint.wasm compiles FOR flint, not just on the host"
+              (zero? (:exit x))))
+(check-that "and no host interop is left in it"
+            (empty? (filter (fn [l] (re-find #"aget|alength|byte-array|Arrays/|String\.|ByteArrayOutput" l))
+                            (remove (fn [l] (re-find #"^\s*;" l))
+                                    (str/split-lines (slurp "src/flint/wasm.cljc"))))))
+
 (if (pos? @fails)
   (do (println "bytes:" @fails "failed") (System/exit 1))
   (println "bytes: ok"))

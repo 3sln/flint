@@ -141,6 +141,7 @@
    "flint/b->str" flint.rt/b->str
    "flint/vec->b" flint.rt/vec->b
    "flint/b->vec" flint.rt/b->vec
+   "flint/b-eq?" flint.rt/b-eq?
    "flint/b-depth" flint.rt/b-depth
    "flint/b-transient" flint.rt/b-transient
    "flint/b-conj!" flint.rt/b-conj!

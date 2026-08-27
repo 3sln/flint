@@ -3,8 +3,9 @@
 > **PARTLY BUILT.** `flint.bundle` splices an image into a prebuilt module, and
 > `flint.shake` + `flint.wasmshake` cut that module down to what the image
 > needs — both without a linker, both measured. **Byte strings and their
-> transient are built.** What is NOT built is the `flint.wasm` port they exist
-> for, and the embedded runtimes.
+> transient are built, and so is the `flint.wasm` port they exist for.** What
+> is NOT built is emitting a module from `flintc.wasm`, and the embedded
+> runtimes.
 
 ## The decision
 
@@ -180,8 +181,12 @@ is what fails.
    million bytes: 6,719,472 allocations, 818 MB of churn and 411 collections
    persistently, against **3,637 allocations, 1.2 MB and none** through a
    transient.
-3. Port `flint.wasm` onto it. The suite exercises it on every build, so the
-   port has a standing check from the first commit.
+3. ~~Port `flint.wasm` onto it.~~ **Done.** Every byte array gone -- `aget`,
+   `alength`, `ByteArrayOutputStream`, `Arrays/copyOfRange`, `String.` -- and
+   `flint.rt/b-*` is implemented twice, once per host, so the file itself no
+   longer knows which it is running on. `utf8-bytes` stopped being a reader
+   conditional at all. It compiles FOR flint now, which `test/bytes.clj`
+   asserts, along with there being no host interop left.
 4. Embed a runtime module as data; `flint compile wasm` emits a module.
 5. `flint compile wasm-aot`, which is step 4 plus `bundle/compile-arities`.
 6. The transient rope for text, if step 2's numbers say it carries.

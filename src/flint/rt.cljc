@@ -134,6 +134,7 @@
 
 ;; The host's transient is a mutable wrapper around a growing byte vector. Only
 ;; the ANSWERS have to match the guest's; the representation does not.
+(defn b-eq? [a b] (java.util.Arrays/equals ^bytes a ^bytes b))
 (defn b-depth [b] 0)
 (defn b-transient [b] (clojure.core/atom (clojure.core/vec b)))
 (defn b-conj! [t x] (clojure.core/swap! t clojure.core/conj (clojure.core/unchecked-byte x)) t)
