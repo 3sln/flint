@@ -19,6 +19,9 @@ Four things, and they are one change wearing four hats.
 3. **`args` is data, not strings**, the way `clj -X` takes `:key value`.
 4. **A port carries values** rather than text through a per-port codec, and
    **a port can be sent through a port**, so a capability can be delegated.
+5. **One system port carries everything** between the sandbox and the host,
+   which replaces eight ABI exports, a bespoke record format and three
+   handler kinds with a loop over one channel.
 
 ## It is a codec, not a message format
 
@@ -143,24 +146,93 @@ what makes delegation work: the host looks it up in its own grant table and
 finds the grant it issued. A sentinel the guest minted carries zero and is
 recognised as guest-minted. Both are correct, and neither needs a table.
 
-## `take()` is async, and the runtime has to yield
+## One system port, and the loop that drives it
 
-On the host `take()` returns a promise, because that is the interface a host
-wants whatever the runtime does underneath. The SDK drives those promises on
-each **step** rather than on every send: a boundary crossing per message would
-cost more than the messages do.
+The host side does not need an `open` handler, a `message` handler, a `closed`
+handler, a continuation-token call and a resume call. It needs **one port**.
 
-Which means the runtime must yield — give the host a chance to flush and
-service ports — and one case makes that necessary rather than merely nice.
+Every process has a **system port** — not visible to the guest — carrying all
+traffic between the sandbox and the host. `open` is a message on it with a
+transaction id; the answer comes back the same way. So does a send, a close,
+and termination.
 
-**A thread blocked on a full buffer has no continuation token.** Every other
-park hands the host a token and is resumed by callback (`0006`). A `send` into
-a full port is different: nobody will call back, because what unblocks it is
-the host TAKING from that port and freeing a slot. So the runtime re-checks on
-entry rather than waiting to be told.
+```js
+const port = program.execute();
+await port.put(codec.from({ what: 'init', capabilities: {…}, args: […] }));
 
-That is the one park that polls, and it is worth naming because it is the only
-thing that does not fit `0006`'s *everything that parks parks the same way*.
+for (;;) {
+  const msg = (await port.take()).toJS();
+  if (msg.what === 'term') break;
+  if (msg.what === 'open') {
+    await port.put(codec.from({ what: 'response', tx: msg.tx, payload: … }));
+  }
+}
+```
+
+### What it replaces
+
+`units/flint/conc.unit.edn` exports eight functions for this today —
+`flint_drain`, `flint_events_ptr`, `flint_continue`, `flint_resume`,
+`flint_deliver`, `flint_close`, `flint_port_state`, `flint_in_alloc` — plus a
+bespoke record format of five little-endian `u32`s and a payload at an offset.
+All of it becomes: a port, and the codec that has to exist anyway.
+
+This is a **unification, not a new mechanism**. The event queue already
+multiplexes every port over one channel; what changes is that the channel
+becomes a port with the ordinary encoding, and the reply becomes a `put` rather
+than a separate ABI call.
+
+`0006`'s continuation token does not disappear — it becomes the `tx` field. Its
+own description still holds: *it is not an id, it is a continuation.* What
+changes is that it travels in a message rather than as an argument to
+`flint_continue`.
+
+**The guest does not change.** `p/open`, `p/send`, `p/receive` are what a
+program writes, before and after. Only what is underneath them, and what the
+host sees, is different.
+
+### One open must not block the others
+
+The loop takes whatever is next and never waits for a PARTICULAR message. When
+a thread opens, the runtime writes the request and parks THAT THREAD; every
+other thread keeps running, and the host answers when it likes, in any order,
+because `tx` says which request an answer belongs to.
+
+A host that instead waited for the answer to one open would serialise the
+program to its own latency. The loop above cannot: it dispatches on what
+arrives.
+
+### `take` drives the sandbox; `put` usually does not
+
+This is the question the shape raises, and the answer falls out of what each
+one means.
+
+**`take` runs the sandbox** until it produces a message or terminates. That is
+where the boundary crossing happens, and it happens once per batch rather than
+once per message.
+
+**`put` enqueues**, and does not cross. It returns a promise so backpressure
+has somewhere to live, and in the common case that promise is already resolved.
+
+**Except when the buffer is full**, where `put` must drive the sandbox, because
+what makes room is the guest consuming. That is the same polling park as below,
+seen from the other side: nobody is going to call back, so somebody has to run
+the thing that drains it.
+
+So there is no `flush()` and no debounce to tune. The two operations already
+say when work has to happen: you cannot take without running, and you cannot
+fill a full buffer without draining it.
+
+## The one park that polls
+
+Every park in `0006` hands the host a token and is resumed by callback. One is
+different, and it is worth naming because it does not fit *everything that
+parks parks the same way*.
+
+**A thread blocked on a full buffer has no continuation token.** Nobody will
+call back, because what unblocks it is the host TAKING from that port and
+freeing a slot. So the runtime re-checks on entry rather than waiting to be
+told, and `put` on a full buffer drives the sandbox for the same reason.
 
 ## The process exposes what the build measures
 
@@ -222,6 +294,10 @@ declared nothing does.
 `(defn main [{:keys [args]}])` — every test, example and benchmark in the tree.
 Affordable exactly once, before anything is published, and this is that moment.
 
+**`0006` §6's host ABI goes**, though its concepts survive: the continuation
+token becomes a `tx` field, and the event queue becomes the system port. Eight
+exports and a five-`u32` record format are replaced by a port and the codec.
+
 **`0006` §5's per-port codecs go.** `flint.port.edn`, `flint.port.json` and
 `flint.port.transit` stop being how a port talks. They may stay as
 value-to-bytes utilities, which is a different job, and a port that wants to
@@ -238,8 +314,11 @@ changes rather than being deleted.
 2. The host API — explicit builders, introspection, `from`/`toJS`.
 3. The entry map, which is the breaking change; do it in one commit.
 4. Ports carrying encoded values instead of codec bytes.
-5. Ports and sentinels crossing, and the yield that backpressure needs. With
+5. The system port: `open`, `send`, `close` and `term` as messages with a `tx`,
+   replacing eight ABI exports and the five-`u32` record format. A helper over
+   the loop for callers who want handlers back.
+6. Ports and sentinels crossing, and the yield that backpressure needs. With
    the test that a guest cannot turn an integer into either.
-6. Diagnostics on the process, after each step.
-7. `:with` in the CLI, the declaration in `0020`'s metadata section, and
+7. Diagnostics on the process, after each step.
+8. `:with` in the CLI, the declaration in `0020`'s metadata section, and
    `program.capabilities` in the SDK.
