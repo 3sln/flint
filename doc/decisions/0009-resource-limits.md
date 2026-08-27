@@ -14,6 +14,48 @@ on *work*, so it varies with machine load, with what else is running, and with
 the weather. A gate built on one is flaky by construction: the same candidate
 passes on a quiet machine and fails on a busy one.
 
+## What several threads in one sandbox do to this
+
+**Gas stays deterministic per EXECUTOR. The total does not, and cannot.**
+Two threads interleaving in one sandbox produce a total that depends on how
+they interleaved, so "the same input produces the same count" holds at K = 1
+and is not recoverable at K > 1. That is a property of parallelism, not of this
+design, and it is written here so it is not discovered as a regression.
+
+Everything `0018` compares across engines is K = 1, so those numbers stay
+comparable.
+
+**The limit becomes approximate, deliberately.** A shared counter incremented
+once per instruction would put an atomic RMW on the hottest line in the
+interpreter and have every thread fighting over one cache line -- which costs
+more than the work being counted. So:
+
+* each executor counts into a **local, unshared `u64`** -- a plain increment,
+  no contention, exactly what it costs today;
+* when its local checkpoint fires it **adds its batch to a shared atomic** and
+  reads the total back;
+* if the total is past the limit, it stops.
+
+The guarantee weakens from "stops AT the limit" to **"stops as soon as it can
+after the limit"**, and the overrun is bounded by the batch size times the
+number of executors. That is the right trade: the point of a limit is that a
+runaway program is stopped, and stopping a few thousand instructions late stops
+it just as dead.
+
+### The safepoint rides on the same mechanism
+
+A moving collector needs every thread to reach a stopping place before it
+starts (`doc/decisions/0028`), which means every thread has to poll something.
+The checkpoint is already that poll -- so it carries both, and the safepoint
+costs nothing the gas batch was not already paying.
+
+This is what resolves an apparent conflict with the rule below that the
+unbudgeted loop has no counter at all. It stays true where it matters: the
+dispatch policy is chosen at run time, so a sandbox with ONE executor and no
+limit still runs `NoBudget`, whose `tick` is a constant the optimiser deletes.
+A poll is compiled in only when there is something to poll FOR -- a limit, or
+another thread.
+
 **An instruction count is deterministic.** The same input produces the same count
 on every machine, every run. That turns "did this candidate hang?" from a flaky
 timeout into a reproducible fact — which matters enormously to construe, whose

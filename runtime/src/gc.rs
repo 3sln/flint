@@ -157,19 +157,97 @@ impl InternTable {
 
 // ---------------------------------------------------------------------------
 
-pub struct Roots {
+/// One EXECUTOR's roots.
+///
+/// A sandbox may have several threads inside it (`doc/decisions/0028`), and
+/// each has its own value stack and its own shadow stack. These are the roots
+/// that come in Ks; everything in `Roots` beside them is one per sandbox.
+///
+/// The collector has to scan every one of them, not just the one belonging to
+/// whichever thread happened to trigger the collection. A thread whose roots
+/// were skipped is a thread whose live objects are collected out from under
+/// it, and it will not fail where it was skipped.
+pub struct ExecRoots {
     /// The interpreter's value stack. Only `[0, stack_top)` is live; slots
     /// above it are stale and must never be traced.
     pub stack: Vec<Value>,
     pub stack_top: usize,
     /// Explicit roots for native code holding values across an allocation.
     pub shadow: Vec<Value>,
+}
+
+impl ExecRoots {
+    pub fn new() -> ExecRoots {
+        ExecRoots {
+            stack: alloc::vec![Value(0); 1024],
+            stack_top: 0,
+            shadow: Vec::with_capacity(64),
+        }
+    }
+}
+
+impl Default for ExecRoots {
+    fn default() -> ExecRoots {
+        ExecRoots::new()
+    }
+}
+
+/// A parked executor's roots, by address.
+///
+/// A newtype rather than a bare `*mut`, so that the `Send` claim lands on this
+/// and carries its argument with it instead of leaking onto everything that
+/// happens to contain a `Roots`.
+///
+/// Sound because of WHEN it is read, not because of what it points at. A
+/// collection runs with every other executor stopped at a safepoint
+/// (`doc/decisions/0028`), so for the instant the collector walks these,
+/// nothing else is touching them. Outside a safepoint the list is empty.
+#[cfg(feature = "parallel")]
+#[derive(Clone, Copy)]
+pub struct ParkedRoots(pub *mut ExecRoots);
+
+/// The pointer is to another executor's roots inside the SAME sandbox, and a
+/// sandbox moves between threads as one thing. What must never happen is two
+/// executors reading it at once outside a safepoint, and that is the
+/// safepoint's job rather than this impl's.
+#[cfg(feature = "parallel")]
+unsafe impl Send for ParkedRoots {}
+
+pub struct Roots {
+    /// The executor running on THIS thread, inline and under its own field
+    /// names so that the interpreter's two thousand `roots.stack` sites are
+    /// unaffected by any of this.
+    pub own: ExecRoots,
+    /// Every OTHER executor in this sandbox, stopped at a safepoint.
+    ///
+    /// Raw, and sound only for the instant they are used: a collection happens
+    /// with every other executor parked, so nothing else is touching these
+    /// while the collector walks them. Outside a safepoint this is empty.
+    ///
+    /// Absent without the `parallel` feature rather than empty, because a
+    /// module that can only ever have one executor should not carry the loop
+    /// that walks the others -- 1 056 bytes, measured (`doc/decisions/0016`).
+    #[cfg(feature = "parallel")]
+    pub others: Vec<ParkedRoots>,
     pub globals: Vec<Value>,
     pub consts: Vec<Value>,
     /// Weak tables (strings, keywords, symbols).
     pub interns: [InternTable; 4],
     /// Long-lived singletons: empty list/vector/map/set, cached results, ...
     pub singletons: Vec<Value>,
+}
+
+impl core::ops::Deref for Roots {
+    type Target = ExecRoots;
+    fn deref(&self) -> &ExecRoots {
+        &self.own
+    }
+}
+
+impl core::ops::DerefMut for Roots {
+    fn deref_mut(&mut self) -> &mut ExecRoots {
+        &mut self.own
+    }
 }
 
 pub const INTERN_STR: usize = 0;
@@ -185,9 +263,9 @@ pub const INTERN_PORT: usize = 3;
 impl Roots {
     pub fn new() -> Roots {
         Roots {
-            stack: alloc::vec![Value(0); 1024],
-            stack_top: 0,
-            shadow: Vec::with_capacity(64),
+            own: ExecRoots::new(),
+            #[cfg(feature = "parallel")]
+            others: Vec::new(),
             globals: Vec::new(),
             consts: Vec::new(),
             interns: [
@@ -219,11 +297,34 @@ impl Roots {
     }
 
     fn for_each<F: FnMut(&mut Value)>(&mut self, mut f: F) {
-        for v in &mut self.stack[..self.stack_top] {
+        // Read through the deref ONCE. `self.stack[..self.stack_top]` cannot
+        // split its borrows the way two real fields could, because both go
+        // through `DerefMut`.
+        let top = self.own.stack_top;
+        for v in &mut self.own.stack[..top] {
             f(v);
         }
-        for v in &mut self.shadow {
+        for v in &mut self.own.shadow {
             f(v);
+        }
+        // Every OTHER executor in this sandbox. A collection happens with all
+        // of them parked at a safepoint (`doc/decisions/0028`), so nothing is
+        // mutating these while they are walked.
+        //
+        // Skipping one would not fail here. It would collect that thread's
+        // live objects out from under it, and it would fail somewhere else,
+        // later, as a corrupted value in code that did nothing wrong -- which
+        // is why this is one loop in one place rather than a rule to remember.
+        #[cfg(feature = "parallel")]
+        for e in self.others.iter().copied() {
+            let e = unsafe { &mut *e.0 };
+            let top = e.stack_top;
+            for v in &mut e.stack[..top] {
+                f(v);
+            }
+            for v in &mut e.shadow {
+                f(v);
+            }
         }
         for v in &mut self.globals {
             f(v);

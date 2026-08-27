@@ -93,6 +93,19 @@
 ;; than a program with one way in: a sandbox serves many calls, and a host
 ;; chooses which. That is the whole of 0025's Image/Sandbox split, and it does
 ;; not work without a way in that takes a name.
+;;
+;; It went DOWN by 2 580 bytes when the grant table stopped being a `static mut`
+;; and moved onto the `Rt` (`doc/decisions/0022`). That change was made because
+;; the static leaked capabilities between native sandboxes; it being smaller
+;; too is a bonus and not the reason.
+;;
+;; Several executors in one sandbox (`doc/decisions/0028`) costs 1 056 bytes of
+;; root-scanning loop, MEASURED by building this module with it and without
+;; (245 901 against 244 845). It is behind the `parallel` feature and so is
+;; ABSENT here rather than disabled (`doc/decisions/0016`): wasm cannot have a
+;; second executor until it has the threads proposal and a shared memory, and a
+;; module that can only ever have one should not carry the loop that walks the
+;; others.
 (check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
             (< pure-size 245000))
 

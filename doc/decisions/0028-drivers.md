@@ -170,14 +170,25 @@ discovered as a surprise:
 * **`swap!` becomes a real CAS**, and the green-thread run queue becomes a
   concurrent one.
 
-**The safepoint has a hook already, and it conflicts with `0009`.** The
-interpreter already polls a checkpoint every instruction — `B::tick` — which is
-exactly where a safepoint poll belongs. But `0009` makes that poll ABSENT when
-nothing is counting: `NoBudget::tick` is a constant `false` the optimiser
-deletes, and that is the point of it. A sandbox with several threads cannot
-have a thread that never polls. So either counting stops being optional under
-K > 1, or the safepoint gets its own cheaper poll. Worth settling before it is
-load-bearing, not after.
+**The safepoint rides on the gas checkpoint, and that resolves the apparent
+conflict with `0009`.** The interpreter already polls a checkpoint every
+instruction, and `0009` makes that poll ABSENT when nothing is counting --
+`NoBudget::tick` is a constant the optimiser deletes, which is the point of it.
+A sandbox with several threads cannot have a thread that never polls.
+
+The resolution is that the dispatch policy is already chosen at RUN TIME. A
+sandbox with one executor and no limit keeps `NoBudget` and stays exactly as
+free as it is today; a sandbox with more than one gets a polling policy. A poll
+is compiled in only when there is something to poll FOR.
+
+And gas itself stops being a shared counter. Each executor counts into a local
+`u64` -- a plain increment, no contention -- and flushes to a shared atomic
+when its checkpoint fires. The limit weakens from "stops AT the limit" to
+"stops as soon as it can after it", with the overrun bounded by batch size
+times executors. That is the right trade: the point of a limit is that a
+runaway is stopped, and stopping a few thousand instructions late stops it just
+as dead. The total also stops being deterministic at K > 1, which is a property
+of parallelism rather than of this design (`doc/decisions/0009`).
 
 ## Parallelism is a property of the TARGET, not of the SDK
 

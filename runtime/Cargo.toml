@@ -15,6 +15,14 @@ crate-type = ["rlib"]
 # the runtime's own panic handler under wasm32.
 host-tools = []
 
+# Several executors inside one sandbox (doc/decisions/0028). ABSENT by default,
+# on the same rule as `aot` and `diagnostics`: it costs 1 056 bytes of module,
+# MEASURED by building the pure module with the multi-executor root scan and
+# without it (245 901 against 244 845), and wasm cannot use it at all until it
+# has the threads proposal and a shared memory. A module that can only ever
+# have one executor should not carry the loop that walks the others.
+parallel = []
+
 # Compiled arities (doc/decisions/0013). ABSENT by default, for the same reason
 # diagnostics are: it costs 7 002 bytes of production module, and 0009 already
 # spent a chosen budget on instantiating the loop twice. A module that never asks
