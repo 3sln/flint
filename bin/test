@@ -179,9 +179,15 @@ grep -cE "^  ok" /tmp/flint-test.out | sed 's/^/    /;s/$/ checks/'
 # The number the type exists for: the same bytes, two representations.
 ./bin/build-units --diagnostics > /dev/null 2>&1 || fail "build-units --diagnostics"
 ./bin/flint :src bench/progs :fn colls/main :out out/colls-diag.wasm > /dev/null 2>&1 || fail "build colls"
-node bench/colls.mjs 200000 bytes-as-vec bytes-as-bytes > /tmp/flint-test.out 2>&1 \
+node bench/colls.mjs 200000 bytes-as-vec bytes-as-bytes byte-cat byte-trans > /tmp/flint-test.out 2>&1 \
   || { cat /tmp/flint-test.out; fail "bench/colls.mjs bytes"; }
-grep -E "^  bytes-as" /tmp/flint-test.out | sed 's/^/  /'
+grep -E "^  (bytes-as|byte-)" /tmp/flint-test.out | sed 's/^/  /'
+# The claim the transient exists for: building a byte at a time allocates
+# essentially nothing. If that stops being true nothing else here notices.
+awk '/^  byte-cat /{c=$4} /^  byte-trans /{t=$4} END{gsub(",","",c); gsub(",","",t);
+  if (t+0 >= c/100) { print "  FAIL byte-trans allocated " t " against byte-cat " c; exit 1 }
+  else print "  ok   byte-trans allocates " t " where byte-cat allocates " c }' \
+  /tmp/flint-test.out || fail "the transient stopped helping"
 ./bin/build-units > /dev/null 2>&1 || fail "build-units"
 
 echo

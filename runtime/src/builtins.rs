@@ -284,6 +284,53 @@ builtins! {
         out
     };
 
+    // The subtree depth, which is a TEST hook: a byte rope that degenerates
+    // into a spine still answers every question correctly and gets slower and
+    // then traps, so the shape has to be observable.
+    "flint/b-depth", flint_b_bdepth, b_bdepth, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        Value::fixnum(rt.b_depth(v) as i64)
+    };
+
+    // A transient byte string. `conj!` takes a BYTE, `append!` takes a whole
+    // byte string -- both, because appending a kilobyte one byte at a time is
+    // exactly what this type exists to stop doing.
+    "flint/b-transient", flint_b_btransient, b_btransient, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        if !rt.is_bytes(v) {
+            return rt.throw_str("ClassCastException", "b-transient wants a byte string");
+        }
+        rt.b_transient(v)
+    };
+    "flint/b-conj!", flint_b_bconjbang, b_bconjbang, |rt, a, n| {
+        let _ = n;
+        let (t, x) = (arg(rt, a, 0), arg(rt, a, 1));
+        match rt.as_i64(x) {
+            Some(b) => rt.b_conj(t, (b & 0xff) as u8),
+            None => rt.throw_str("ClassCastException", "b-conj! wants an integer"),
+        }
+    };
+    "flint/b-append!", flint_b_bappendbang, b_bappendbang, |rt, a, n| {
+        let _ = n;
+        let (t, v) = (arg(rt, a, 0), arg(rt, a, 1));
+        if !rt.is_bytes(v) {
+            return rt.throw_str("ClassCastException", "b-append! wants a byte string");
+        }
+        rt.b_append_bytes(t, v)
+    };
+    "flint/b-persistent!", flint_b_bpersistbang, b_bpersistbang, |rt, a, n| {
+        let _ = n;
+        let t = arg(rt, a, 0);
+        rt.b_persistent(t)
+    };
+    "flint/b-tcount", flint_b_btcount, b_btcount, |rt, a, n| {
+        let _ = n;
+        let t = arg(rt, a, 0);
+        Value::fixnum(rt.b_tcount(t) as i64)
+    };
+
     // --- the type-annotation barrier ---------------------------------------
     //
     // `(let [^int x e] ...)` compiles to a bind of `check-tag(e, INT, where)`.

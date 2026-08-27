@@ -33,6 +33,13 @@
 (defn to-vector [b] (flint.rt/b->vec b))
 
 (defn size [b] (flint.rt/b-count b))
+
+(defn depth
+  "How deep the tree is. 0 for a flat byte string. A test hook: a rope that
+  degenerates into a spine answers every question correctly and only gets
+  slower, so the shape has to be observable."
+  [b]
+  (flint.rt/b-depth b))
 (defn at [b i] (flint.rt/b-at b i))
 
 (defn cat
@@ -50,3 +57,41 @@
   (flint.rt/b-slice b from to))
 
 (defn empty-bytes [] (flint.rt/str->b ""))
+
+;; --- building one ----------------------------------------------------------
+;;
+;; A concatenation below the flat threshold COPIES, which is what keeps small
+;; byte strings cheap and what makes building one piece by piece quadratic. A
+;; transient owns a tail buffer and writes into it, so appending amortises to
+;; O(1) and the copy happens once per full tail rather than once per append.
+
+(defn transient-bytes
+  "A transient starting from `b` (use `(empty-bytes)` to start from nothing)."
+  [b]
+  (flint.rt/b-transient b))
+
+(defn conj-byte!
+  "Append one byte."
+  [t x]
+  (flint.rt/b-conj! t x))
+
+(defn append!
+  "Append a whole byte string."
+  [t b]
+  (flint.rt/b-append! t b))
+
+(defn size!
+  "How many bytes are in the transient so far."
+  [t]
+  (flint.rt/b-tcount t))
+
+(defn persist!
+  "Freeze it. The transient cannot be used afterwards, and says so rather than
+  writing into a buffer somebody else can now see."
+  [t]
+  (flint.rt/b-persistent! t))
+
+(defn build
+  "The common shape: run `f` over a fresh transient and freeze the result."
+  [f]
+  (persist! (f (transient-bytes (empty-bytes)))))

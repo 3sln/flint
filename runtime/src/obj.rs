@@ -98,7 +98,11 @@ pub const TY_BYTES: u8 = 44;
 /// `TY_ROPE` and simpler, because a node needs only its subtree's byte length
 /// -- there is no code-point count to sum and no ASCII bit to AND.
 pub const TY_BROPE: u8 = 45;
-pub const TY_MAX: u8 = 46;
+/// A transient byte string: `[TB_TREE, TB_TAIL, TB_FILL, TB_LIVE]`. The tail
+/// is a `TY_BYTES` the transient owns and writes into, which is what makes
+/// appending amortise to O(1) instead of copying the whole thing each time.
+pub const TY_TBYTES: u8 = 46;
+pub const TY_MAX: u8 = 47;
 
 /// Every type tag must be distinct. This list exists because they were not:
 /// `TY_THREAD`/`TY_PORT`/`TY_SCHED` were first numbered 33..35, which silently
@@ -113,7 +117,7 @@ const _: () = {
         TY_CLOSURE, TY_NATIVEFN, TY_VAR, TY_ATOM, TY_TVEC, TY_TMAP, TY_TSET,
         TY_RECORD, TY_REGEX, TY_REDUCED, TY_EXINFO, TY_MULTIFN, TY_DELAY,
         TY_VOLATILE, TY_RAW, TY_ITERSEQ, TY_CHUNKSEQ, TY_TYPE, TY_THREAD, TY_PORT,
-        TY_SCHED, TY_ROPE, TY_OPAQUE, TY_BYTES, TY_BROPE,
+        TY_SCHED, TY_ROPE, TY_OPAQUE, TY_BYTES, TY_BROPE, TY_TBYTES,
     ];
     let mut i = 0;
     while i < tags.len() {
@@ -154,12 +158,43 @@ pub fn size_of(sp: &Space, addr: u32) -> u32 {
     let w0 = sp.read_u32(addr);
     let ty = (w0 >> 24) as u8;
     let len = sp.read_u32(addr + 4);
+    // Two special cases, then `size_for`. This used to carry its own copy of
+    // the layout match, and a type added to `layout_of` but not to that copy
+    // was sized as `HDR + len * 8` -- a 513-byte `TY_BYTES` measured as 4 112.
+    // The collector then walked from-space with the wrong stride, and the
+    // symptom was `forward: N is not the start of a from-space object` about
+    // an object that was plainly fine. Deriving it removes the second table.
     match ty {
         TY_FREE => len,
         TY_FWD => HDR,
-        TY_STR => align8(STR_DATA + len),
-        TY_BIGINT | TY_RAW => align8(HDR + len),
-        _ => HDR + len * 8,
+        _ => size_for(ty, len),
+    }
+}
+
+/// `size_of` and `size_for` must agree for every type, since one measures a
+/// live object and the other reserves room for a new one. They are the same
+/// function now, and this asserts the layouts they share are total.
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn every_type_has_a_layout_and_one_size() {
+        for t in 0..TY_MAX {
+            if t == TY_FREE || t == TY_FWD {
+                continue;
+            }
+            for len in [0u32, 1, 7, 8, 9, 513, 1024] {
+                let s = size_for(t, len);
+                assert!(s >= HDR, "type {t} len {len} sized {s}");
+                assert_eq!(s % 8, 0, "type {t} len {len} sized {s}, not 8-aligned");
+                match layout_of(t) {
+                    Layout::Raw => assert_eq!(s, align8(HDR + len), "raw type {t}"),
+                    Layout::Str => assert_eq!(s, align8(STR_DATA + len), "str type {t}"),
+                    Layout::Vals => assert_eq!(s, HDR + len * 8, "vals type {t}"),
+                }
+            }
+        }
     }
 }
 

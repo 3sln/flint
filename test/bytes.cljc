@@ -52,6 +52,37 @@
       :roundtrip     (b/to-vector (b/of-string "hi"))
       :vec->bytes    (b/to-string (b/of-vector [104 105]))
       :utf8          (b/size (b/of-string "é"))
+      ;; --- the transient --------------------------------------------------
+      ;;
+      ;; Three ways to build the same bytes: by concatenation, through a
+      ;; transient a piece at a time, and through one a BYTE at a time. All
+      ;; three must agree, because the transient is only worth having if it is
+      ;; indistinguishable from the slow way.
+      :built-agree   (let [pieces (mapv (fn [_] (b/of-string piece)) (range 40))
+                           by-cat (reduce b/cat (b/empty-bytes) pieces)
+                           by-trans (b/persist!
+                                     (reduce b/append!
+                                             (b/transient-bytes (b/empty-bytes)) pieces))
+                           by-byte (b/persist!
+                                    (reduce b/conj-byte!
+                                            (b/transient-bytes (b/empty-bytes))
+                                            (b/to-vector by-cat)))]
+                       [(= by-cat by-trans) (= by-cat by-byte) (b/size by-trans)])
+      :trans-grows   [(b/size! (b/transient-bytes (b/of-string piece)))
+                      (b/size! (b/conj-byte! (b/transient-bytes (b/of-string piece)) 65))]
+      :trans-seed    (b/to-string (b/persist! (b/transient-bytes (b/of-string "seed"))))
+      ;; A transient is dead after `persist!`, and says so rather than writing
+      ;; into a buffer somebody else can now see.
+      :trans-dead    (let [t (b/transient-bytes (b/empty-bytes))]
+                       (b/persist! t)
+                       (caught (fn [] (b/conj-byte! t 1))))
+      ;; The tree stays shallow. Without the right-spine descent it grew one
+      ;; level every sixteen joins and the walk ran off the shadow stack.
+      :depth-bounded (flint.rt/le (b/depth (reduce b/cat (b/empty-bytes)
+                                                   (mapv (fn [_] (b/of-string piece))
+                                                         (range 400))))
+                                  4)
+
       ;; --- refusals -------------------------------------------------------
       :past-end      (caught (fn [] (b/at a 99)))
       :not-utf8      (caught (fn [] (b/to-string (b/of-vector [255 254]))))})))

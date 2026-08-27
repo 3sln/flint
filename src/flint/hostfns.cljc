@@ -141,6 +141,12 @@
    "flint/b->str" flint.rt/b->str
    "flint/vec->b" flint.rt/vec->b
    "flint/b->vec" flint.rt/b->vec
+   "flint/b-depth" flint.rt/b-depth
+   "flint/b-transient" flint.rt/b-transient
+   "flint/b-conj!" flint.rt/b-conj!
+   "flint/b-append!" flint.rt/b-append!
+   "flint/b-tcount" flint.rt/b-tcount
+   "flint/b-persistent!" flint.rt/b-persistent!
    "flint/unchecked-add" flint.rt/unchecked-add
    "flint/unchecked-sub" flint.rt/unchecked-sub
    "flint/unchecked-mul" flint.rt/unchecked-mul

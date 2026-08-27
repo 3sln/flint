@@ -59,6 +59,19 @@
 (check "built from a vector"   (:vec->bytes r) "hi")
 (check "a string's UTF-8, in bytes not characters" (:utf8 r) 2)
 
+(println "bytes: the transient")
+
+(check "all three ways of building agree, and on the size"
+       (:built-agree r) [true true 640])
+(check "a transient reports what it holds"  (:trans-grows r) [16 17])
+(check "and can start from an existing one" (:trans-seed r) "seed")
+(check-that "a dead transient refuses, rather than writing into a shared buffer"
+            (str/includes? (str (:trans-dead r)) "no longer usable"))
+;; The tree shape is not observable from the answers, so it is asserted
+;; separately: without the right-spine descent it grew a level every sixteen
+;; joins, and the recursive walk ran off the shadow stack.
+(check "the tree stays shallow under repeated concatenation" (:depth-bounded r) true)
+
 (check-that "an index past the end is refused"
             (str/includes? (str (:past-end r)) "out of range"))
 (check-that "bytes that are not UTF-8 are refused as a string"

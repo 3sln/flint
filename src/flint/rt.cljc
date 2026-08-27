@@ -132,6 +132,15 @@
 (defn vec->b [v] (clojure.core/byte-array (clojure.core/mapv clojure.core/unchecked-byte v)))
 (defn b->vec [b] (clojure.core/mapv #(clojure.core/bit-and (clojure.core/int %) 0xff) b))
 
+;; The host's transient is a mutable wrapper around a growing byte vector. Only
+;; the ANSWERS have to match the guest's; the representation does not.
+(defn b-depth [b] 0)
+(defn b-transient [b] (clojure.core/atom (clojure.core/vec b)))
+(defn b-conj! [t x] (clojure.core/swap! t clojure.core/conj (clojure.core/unchecked-byte x)) t)
+(defn b-append! [t b] (clojure.core/swap! t clojure.core/into (clojure.core/vec b)) t)
+(defn b-tcount [t] (clojure.core/count (clojure.core/deref t)))
+(defn b-persistent! [t] (clojure.core/byte-array (clojure.core/deref t)))
+
 (defn str-bytes [s] (mapv #(clojure.core/bit-and (clojure.core/int %) 0xff) (.getBytes ^String s "UTF-8")))
 (defn double-bits [d] (Double/doubleToRawLongBits (double d)))
 

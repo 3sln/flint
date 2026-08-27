@@ -2,9 +2,9 @@
 
 > **PARTLY BUILT.** `flint.bundle` splices an image into a prebuilt module, and
 > `flint.shake` + `flint.wasmshake` cut that module down to what the image
-> needs — both without a linker, both measured. **Byte strings are built.**
-> What is NOT built is the transient, the `flint.wasm` port they exist for, and
-> the embedded runtimes.
+> needs — both without a linker, both measured. **Byte strings and their
+> transient are built.** What is NOT built is the `flint.wasm` port they exist
+> for, and the embedded runtimes.
 
 ## The decision
 
@@ -176,7 +176,10 @@ is what fails.
    invisible: a flat and a tree holding the same bytes are equal, hash alike
    and are one map key. Against the vector of integers it replaces, on 200,000
    bytes: **43.5 MB and 28 collections, against 0.2 MB and none** -- 217x.
-2. The transient byte string, measured on the table above's shape.
+2. ~~The transient byte string.~~ **Done.** Appending a byte at a time to a
+   million bytes: 6,719,472 allocations, 818 MB of churn and 411 collections
+   persistently, against **3,637 allocations, 1.2 MB and none** through a
+   transient.
 3. Port `flint.wasm` onto it. The suite exercises it on every build, so the
    port has a standing check from the first commit.
 4. Embed a runtime module as data; `flint compile wasm` emits a module.

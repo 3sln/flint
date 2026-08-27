@@ -82,6 +82,25 @@
             (flint.rt/= op "bytes-as-bytes")
             (let [s (flint.rt/str-join (mapv (fn [i] "0123456789abcdef") (range (flint.rt/quot n 16))))]
               (if base? (flint.rt/count s) (flint.rt/b-count (flint.rt/str->b s))))
+            ;; Appending a byte at a time, persistently and through a
+            ;; transient. This is what an output builder does, and the case
+            ;; where every join is under the flat threshold so every one copies.
+            (flint.rt/= op "byte-cat")
+            (if base? n
+                (flint.rt/b-count
+                 (loop [i 0 acc (flint.rt/str->b "")]
+                   (if (flint.rt/lt i n)
+                     (recur (flint.rt/add i 1)
+                            (flint.rt/b-concat acc (flint.rt/vec->b [(flint.rt/rem i 256)])))
+                     acc))))
+            (flint.rt/= op "byte-trans")
+            (if base? n
+                (flint.rt/b-count
+                 (flint.rt/b-persistent!
+                  (loop [i 0 t (flint.rt/b-transient (flint.rt/str->b ""))]
+                    (if (flint.rt/lt i n)
+                      (recur (flint.rt/add i 1) (flint.rt/b-conj! t (flint.rt/rem i 256)))
+                      t)))))
             (flint.rt/= op "reduce") (let [v (ints n)]
                                        (if base? (count v)
                                            (reduce (fn [a x] (flint.rt/add a x)) 0 v)))
