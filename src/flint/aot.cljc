@@ -143,7 +143,19 @@
 (defn boundaries
   "Byte offsets that begin a chunk. Every one is a re-entry point."
   [instrs]
-  (let [targets (into #{} (keep jump-target) instrs)
+  ;; Sequence forms rather than transducers throughout. This file compiles into
+  ;; the wasm compiler now, and flint implements `map`, `filter` and `keep` at
+  ;; two arguments -- the one-argument transducer form raised
+  ;; `ArityException: wrong number of arguments (1) to map` at run time, in the
+  ;; guest, long after everything type-checked on the host.
+  (let [targets (into #{} (keep jump-target instrs))
+        boundary-after? (fn [i] (or (CALLS (:op i))
+                                    (= :native (:op i))
+                                    (JUMPS (:op i))
+                                    (not (INLINED (:op i)))))
+        boundary-at? (fn [i] (or (CALLS (:op i))
+                                 (= :native (:op i))
+                                 (not (INLINED (:op i)))))
         ;; A NATIVE needs a re-entry point on BOTH sides. Before it, because a
         ;; park resumes by re-executing it. After it, because a COURTESY YIELD
         ;; is a park whose call already finished, so it must not run again.
@@ -154,42 +166,40 @@
         ;; one leaves without running the rest, and the count charged for them
         ;; anyway. `test/aot.clj` caught it: the answers all matched and the
         ;; instruction counts did not.
-        after (into #{} (comp (filter (fn [i] (or (CALLS (:op i))
-                                                  (= :native (:op i))
-                                                  (JUMPS (:op i))
-                                                  (not (INLINED (:op i))))))
-                              (map (fn [i] (+ (:ip i) (:len i)))))
-                    instrs)
-        ;; A NATIVE starts a chunk even though it runs INSIDE compiled code,
-        ;; because it can park -- and a parked thread resumes at the chunk
-        ;; containing it, so anything earlier in that chunk would run a second
-        ;; time. Which natives park is not knowable here, and a chunk boundary
-        ;; is free at run time, so every one of them gets a boundary.
+        after (into #{} (map (fn [i] (+ (:ip i) (:len i)))
+                             (filter boundary-after? instrs)))
         ;; A BACKWARD jump starts a chunk as well as ending one. It is the one
         ;; preemption point in compiled code, and a thread preempted there
         ;; resumes at the chunk the emitter named -- so if the jump is not that
         ;; chunk's first instruction, everything before it in the chunk runs a
         ;; SECOND time. The EDN reader accumulated a token twice and produced a
         ;; map with an odd number of forms.
-        back (into #{} (comp (filter (fn [i] (when-let [t (jump-target i)] (< t (:ip i)))))
-                             (map :ip))
-                   instrs)
-        at (into #{} (comp (filter (fn [i] (or (CALLS (:op i))
-                                               (= :native (:op i))
-                                               (not (INLINED (:op i))))))
-                           (map :ip))
-                 instrs)
-        valid (into #{} (map :ip) instrs)]
-    (->> (concat [(:ip (first instrs))] targets after at back)
-         (filter valid)
-         (into (sorted-set)))))
+        back (into #{} (map (fn [i] (:ip i))
+                            (filter (fn [i] (when-let [t (jump-target i)] (< t (:ip i))))
+                                    instrs)))
+        ;; A NATIVE starts a chunk even though it runs INSIDE compiled code,
+        ;; because it can park -- and a parked thread resumes at the chunk
+        ;; containing it, so anything earlier in that chunk would run a second
+        ;; time. Which natives park is not knowable here, and a chunk boundary
+        ;; is free at run time, so every one of them gets a boundary.
+        at (into #{} (map (fn [i] (:ip i)) (filter boundary-at? instrs)))
+        valid (into #{} (map (fn [i] (:ip i)) instrs))]
+    ;; Distinct and ASCENDING -- the chunk indices and the `br_table` both
+    ;; depend on the order. A plain set sorted, rather than `sorted-set`, which
+    ;; flint does not have.
+    (vec (sort (into #{} (filter valid
+                                 (concat [(:ip (first instrs))] targets after at back)))))))
 
 (defn chunks
   "Split into chunks at the boundaries. Each is `{:idx :ip :instrs :charge}`."
   [instrs bounds]
-  (let [idx (zipmap bounds (range))]
+  ;; `bounds` is an ordered VECTOR, so membership is a set lookup and not a
+  ;; call: `(bounds ip)` on a vector is an INDEX, which type-checks and splits
+  ;; the chunks in the wrong places.
+  (let [idx (zipmap bounds (range))
+        bound-set (set bounds)]
     (->> (reduce (fn [acc i]
-                   (if (and (seq acc) (not (bounds (:ip i))))
+                   (if (and (seq acc) (not (bound-set (:ip i))))
                      (update acc (dec (count acc)) conj i)
                      (conj acc [i])))
                  [] instrs)
@@ -308,8 +318,8 @@
   Returns nil if any instruction has no known effect -- refusing to compile is
   the only safe answer to a depth this cannot bound."
   [instrs]
-  (let [by-ip (into {} (map (juxt :ip identity)) instrs)
-        nxt (into {} (map (fn [i] [(:ip i) (+ (:ip i) (:len i))])) instrs)]
+  (let [by-ip (into {} (map (fn [i] [(:ip i) i]) instrs))
+        nxt (into {} (map (fn [i] [(:ip i) (+ (:ip i) (:len i))]) instrs))]
     (loop [work [[(:ip (first instrs)) 0]] seen {} best 0 guard 0]
       (cond
         (> guard 200000) nil
@@ -608,7 +618,7 @@
   of them regardless is measured overhead on a small callee, and most callees in
   idiomatic Clojure are small."
   [instrs]
-  (let [ops (into #{} (map :op) instrs)]
+  (let [ops (into #{} (map (fn [i] (:op i)) instrs))]
     {:fpb (some ops [:local :local-w :set-local :set-local-keep])
      :retb (some ops [:self :upval])
      :consts (some ops [:const])
@@ -623,7 +633,7 @@
   [code start len helpers]
   (when-let [instrs (seq (decode code start len))]
     (when-let [depth (max-depth instrs)]
-      (let [starts (into #{} (map :ip) instrs)
+      (let [starts (into #{} (map (fn [i] (:ip i)) instrs))
             ;; A jump into the middle of an instruction. Nothing the compiler
             ;; emits does this, which is exactly why it must be checked here
             ;; rather than assumed: the failure would be a branch to a chunk

@@ -396,8 +396,54 @@ impl Rt {
         flat
     }
 
-    /// `[from, to)`. Copies below `SLICE_MIN` so a small slice cannot retain a
-    /// large parent -- a retention rule, not a speed one.
+    /// Append only `[from, to)` of `v` to `out`, descending rather than
+    /// materialising. A subtree entirely outside the range is skipped whole,
+    /// which is what makes a slice cost the size of the SLICE.
+    fn b_append_range(&self, v: Value, from: u32, to: u32, out: &mut alloc::vec::Vec<u8>) {
+        if !v.is_heap() || from >= to {
+            return;
+        }
+        match ty(&self.gc.sp, v.as_heap()) {
+            TY_BYTES => {
+                let bs = raw_bytes(&self.gc.sp, v.as_heap());
+                let hi = (to as usize).min(bs.len());
+                let lo = (from as usize).min(hi);
+                out.extend_from_slice(&bs[lo..hi]);
+            }
+            TY_BROPE => {
+                let flat = self.slot(v, BB_FLAT);
+                if !flat.is_nil() {
+                    self.b_append_range(flat, from, to, out);
+                    return;
+                }
+                let n = len(&self.gc.sp, v.as_heap()) - BB_KIDS;
+                let mut pos = 0u32;
+                for i in 0..n {
+                    if pos >= to {
+                        break;
+                    }
+                    let k = self.slot(v, BB_KIDS + i);
+                    let kn = self.b_count(k);
+                    let end = pos + kn;
+                    if end > from {
+                        self.b_append_range(k, from.saturating_sub(pos),
+                                            (to - pos).min(kn), out);
+                    }
+                    pos = end;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `[from, to)`.
+    ///
+    /// Descends to the range rather than flattening first. The flattening
+    /// version was correct and quadratic in the caller: tree-shaking a module
+    /// slices a thousand function bodies out of one 509 KB code section, and
+    /// materialising the whole section per slice is half a gigabyte of copying.
+    /// It ran the compiler out of memory, which read as `memory access out of
+    /// bounds` and named nothing.
     pub fn b_slice(&mut self, v: Value, from: u32, to: u32) -> Value {
         let n = self.b_count(v);
         let from = from.min(n);
@@ -405,9 +451,10 @@ impl Rt {
         if from == 0 && to == n {
             return v;
         }
-        let out = self.b_to_vec(v);
+        let mut out = alloc::vec::Vec::with_capacity((to - from) as usize);
+        self.b_append_range(v, from, to, &mut out);
         let _ = SLICE_MIN;
-        self.new_bytes(&out[from as usize..to as usize])
+        self.new_bytes(&out)
     }
 
     pub fn b_eq(&self, a: Value, b: Value) -> bool {

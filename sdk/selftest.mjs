@@ -53,4 +53,33 @@ try {
   ok('a missing namespace is named', /no\.such\.ns/.test(e.message), e.message);
 }
 
+// --- a MODULE, which is what a compiler is expected to emit ----------------
+//
+// The image above is internal machinery. This is the artifact: a standalone
+// `.wasm` the caller can instantiate, produced by splicing that image into a
+// prebuilt runtime -- with no linker anywhere, because the runtime was linked
+// once when flint was built.
+import { readFileSync as read } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+
+const modT0 = Date.now();
+const wasm = compiler.compileToWasm({
+  files: { 'app.cljc': '(ns app)\n(defn main [args] (str "module " (reduce + 0 (range 10))))' },
+  entry: 'app/main',
+});
+ok(`a standalone module is emitted (${wasm.length.toLocaleString()} bytes, ` +
+   `${((Date.now() - modT0) / 1000).toFixed(1)} s)`, wasm.length > 100_000);
+
+// It has to RUN, and nothing else here would notice if it did not.
+const dir = mkdtempSync(`${tmpdir()}/flint-`);
+writeFileSync(`${dir}/m.wasm`, wasm);
+const out = execFileSync('node', ['host/flint.mjs', `${dir}/m.wasm`], { encoding: 'utf8' }).trim();
+ok('and it runs on its own, with no loader and no image', out === 'module 45', out);
+
+// And it says what it is (doc/decisions/0020), read from its bytes.
+const meta = execFileSync('./bin/flint', ['inspect', `${dir}/m.wasm`], { encoding: 'utf8' });
+ok('and it describes itself', /entry app\/main/.test(meta), meta.split('\n')[0]);
+
 process.exit(fails ? 1 : 0);

@@ -21,11 +21,15 @@
   code section is 89% of flint's runtime module and the tables that would also
   shrink are under 1%."
   (:require [flint.wasm :as w]
-            [flint.shake :as shake]))
+            [flint.shake :as shake]
+            [flint.rt]))
 
 (def ^:private CALL 0x10)
 
-(defn- ub [b i] (bit-and (int (aget ^bytes b (int i))) 0xff))
+;; Byte strings, so this compiles for flint as well as for the bootstrap host
+;; (`doc/decisions/0024`). Shaking belongs on the compile path, and the compile
+;; path is a wasm module.
+(defn- ub [b i] (flint.rt/b-at b i))
 
 (defn- uleb-at
   "[value next-index], LEB128 unsigned."
@@ -126,14 +130,35 @@
   Valid for any signature, because `unreachable` is polymorphic."
   [0x00 0x00 0x0b])
 
+(defn scan-calls
+  "The functions body `b` calls, scanned on demand. Conservative, as above."
+  [payload nfuncs {:keys [start end]}]
+  (loop [i start out #{}]
+    (if (>= i end)
+      out
+      (if (= CALL (ub payload i))
+        (let [[t j] (uleb-at payload (inc i))]
+          (recur j (if (< t nfuncs) (conj out t) out)))
+        (recur (inc i) out)))))
+
 (defn stub-dead
   "Replace the body of every function not reachable from `roots` with
-  `unreachable`. Returns `[module report]`."
+  `unreachable`. Returns `[module report]`.
+
+  Edges are extracted ON DEMAND rather than up front. Building the whole call
+  graph first scans every byte of every body and builds a set per function --
+  826 of them for flint's runtime -- and doing that inside the wasm compiler,
+  after `compile-arities` has already run, exhausted its heap. Marking from the
+  roots scans only what it reaches, which here is 310 of 826."
   [m root-set]
   (let [{:keys [payload]} (w/section m 10)
         bs (bodies m)
-        edges (call-edges m)
-        live (shake/reachable root-set (fn [n] (get edges n #{})))
+        by-index (into {} (map (fn [b] [(:index b) b]) bs))
+        nfuncs (+ (w/imported-funcs m) (count bs))
+        live (shake/reachable root-set
+                              (fn [n] (if-let [b (get by-index n)]
+                                        (scan-calls payload nfuncs b)
+                                        #{})))
         [nfn i0] (uleb-at payload 0)
         kept (count (filter (fn [b] (contains? live (:index b))) bs))
         rebuilt (w/->bytes
@@ -141,9 +166,8 @@
                   (for [{:keys [index start end]} bs]
                     (if (contains? live index)
                       (let [n (- end start)]
-                        [(w/uleb n) (java.util.Arrays/copyOfRange
-                                     ^bytes payload (int start) (int end))])
+                        [(w/uleb n) (flint.rt/b-slice payload start end)])
                       [(w/uleb (count STUB)) STUB]))])
         m' (w/put-section m 10 rebuilt)]
     [m' (shake/report {:total (count bs) :kept kept
-                       :before (count payload) :after (count rebuilt)})]))
+                       :before (flint.rt/b-count payload) :after (flint.rt/b-count rebuilt)})]))

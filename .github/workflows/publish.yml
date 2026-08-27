@@ -99,7 +99,9 @@ jobs:
       - name: Check the distributable is what it claims
         run: |
           set -euo pipefail
-          for f in dist/flintc.wasm dist/flint-loader.wasm dist/builtins.json; do
+          for f in dist/flintc.wasm dist/flint-loader.wasm dist/flint-runtime.wasm \
+                   dist/flint-runtime-aot.wasm dist/builtins.json dist/slots.json \
+                   dist/slots-aot.json; do
             test -s "$f" || { echo "::error::$f is missing or empty"; exit 1; }
           done
           # `bin/build-dist` ends by running the SDK self-test against dist/
@@ -109,7 +111,7 @@ jobs:
             echo
             echo '| artifact | bytes |'
             echo '| --- | ---: |'
-            for f in dist/flintc.wasm dist/flint-loader.wasm; do
+            for f in dist/flintc.wasm dist/flint-runtime.wasm dist/flint-runtime-aot.wasm; do
               echo "| \`$f\` | $(wc -c < "$f" | tr -d ' ') |"
             done
           } >> "$GITHUB_STEP_SUMMARY"
@@ -121,7 +123,9 @@ jobs:
         run: |
           set -euo pipefail
           gh release upload "$TAG" \
-            dist/flintc.wasm dist/flint-loader.wasm dist/builtins.json \
+            dist/flintc.wasm dist/flint-loader.wasm \
+            dist/flint-runtime.wasm dist/flint-runtime-aot.wasm \
+            dist/builtins.json dist/slots.json dist/slots-aot.json \
             --clobber
 
       - name: Show what will be published

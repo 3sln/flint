@@ -30,7 +30,9 @@
     "./host": "./host/flint.mjs",
     "./flintc.wasm": "./dist/flintc.wasm",
     "./flint-loader.wasm": "./dist/flint-loader.wasm",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./flint-runtime.wasm": "./dist/flint-runtime.wasm",
+    "./flint-runtime-aot.wasm": "./dist/flint-runtime-aot.wasm"
   },
   "files": [
     "bin/",

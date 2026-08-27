@@ -24,4 +24,6 @@ out/chicory/
 dist/flintc.wasm
 dist/flint-loader.wasm
 dist/flint-runtime.wasm
+dist/flint-runtime-aot.wasm
 dist/slots.json
+dist/slots-aot.json

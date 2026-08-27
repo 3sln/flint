@@ -169,6 +169,31 @@ quiet one: a shake that cuts something reachable makes a SMALLER module that
 traps. Verified by disabling the call edges -- 98.1% removed, and the run check
 is what fails.
 
+## Open: tree shaking traps in the production compiler at scale
+
+Shaking works on the bootstrap host -- `test/shake.clj` runs it every build and
+the shaken module RUNS. It does not work inside the compiler compiled to wasm,
+and the bisection is precise enough to be worth writing down rather than
+rediscovering:
+
+* rebuilding the code section from **three** function bodies works;
+* rebuilding it from all **815** traps with
+  `null function or function signature mismatch`;
+* it is not memory -- the same failure at a 512 MB, 2 GB and 3.8 GB heap cap;
+* it is not a dropped builtin -- the production and diagnostics modules export
+  the same 55 `flint_b_*`;
+* and it does not happen in the DIAGNOSTICS build of the compiler at all, which
+  completes the same work in 15 collections with `stat_stale_push`,
+  `stat_stale_set`, `stat_stale_root` and `stat_remset_violations` all zero.
+
+The last two together are the useful part: a failure that is present in the
+production build and absent in the diagnostics one, with every stale-root
+instrument reading zero.
+
+`compileToWasm` therefore defaults to `shake: false`. What it costs is size and
+not capability: 600 KB unshaken against 369 KB shaken, for a module that runs
+either way.
+
 ## The order to build it in
 
 0. ~~Tree shaking as a pass over a finished module.~~ **Done**, 57-79% of the
@@ -187,8 +212,12 @@ is what fails.
    longer knows which it is running on. `utf8-bytes` stopped being a reader
    conditional at all. It compiles FOR flint now, which `test/bytes.clj`
    asserts, along with there being no host interop left.
-4. Embed a runtime module as data; `flint compile wasm` emits a module.
-5. `flint compile wasm-aot`, which is step 4 plus `bundle/compile-arities`.
+4. ~~`flint compile wasm` emits a module.~~ **Done.** The compiler carries
+   `flint.wasm`, `flint.bundle` and `flint.wasmshake`, takes a prebuilt runtime
+   as an argument, and splices. 600 KB out, runs.
+5. ~~`flint compile wasm-aot`.~~ **Done.** Same path plus
+   `bundle/compile-arities`: 638 KB out and **7x faster** -- 11.2 ms against
+   1.6 ms on an arithmetic loop, same answer.
 6. The transient rope for text, if step 2's numbers say it carries.
 7. JVM and CLR runtimes as further embedded targets (`0010`).
 

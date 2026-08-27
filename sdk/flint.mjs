@@ -23,6 +23,8 @@ const root = path.resolve(here, '..');
 
 export const DEFAULT_COMPILER = path.join(root, 'dist', 'flintc.wasm');
 export const DEFAULT_LOADER = path.join(root, 'dist', 'flint-loader.wasm');
+export const DEFAULT_RUNTIME = path.join(root, 'dist', 'flint-runtime.wasm');
+const SLOT_MANIFEST = path.join(root, 'dist', 'slots.json');
 const BUILTIN_MANIFEST = path.join(root, 'dist', 'builtins.json');
 
 let cachedBuiltins = null;
@@ -115,7 +117,28 @@ async function moduleFrom(source) {
   return WebAssembly.compile(bytes);
 }
 
+let cachedSlots = null;
+/// Which table slot each builtin sits in, for the shipped runtime module. An
+/// image spliced into that module has to name ITS table, and a slot is a
+/// property of the artifact rather than of the compiler.
+export function runtimeSlots() {
+  if (!cachedSlots) cachedSlots = JSON.parse(readFileSync(SLOT_MANIFEST, 'utf8'));
+  return cachedSlots;
+}
+
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+function base64Encode(bytes) {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i], b1 = bytes[i + 1] ?? 0, b2 = bytes[i + 2] ?? 0;
+    const t = (b0 << 16) | (b1 << 8) | b2;
+    out += B64[(t >> 18) & 63] + B64[(t >> 12) & 63] +
+           (i + 1 < bytes.length ? B64[(t >> 6) & 63] : '=') +
+           (i + 2 < bytes.length ? B64[t & 63] : '=');
+  }
+  return out;
+}
+
 function base64Decode(s) {
   const clean = s.replace(/[^A-Za-z0-9+/]/g, '');
   const out = new Uint8Array((clean.length * 3) >> 2);
@@ -180,6 +203,53 @@ export class Compiler {
     const nl = r.out.indexOf('\n');
     return base64Decode(nl < 0 ? r.out : r.out.slice(0, nl));
   }
+
+  /// Compile a program to a standalone `.wasm` MODULE.
+  ///
+  /// The image `compile` returns is internal machinery; this is the artifact.
+  /// It is produced by splicing that image into a prebuilt runtime module --
+  /// no linker anywhere, because the runtime was linked once when flint was
+  /// built (`doc/decisions/0024`).
+  ///
+  /// `aot: true` appends compiled arities as well, which is the same
+  /// operation: wasm cannot add a function to a module that already exists, so
+  /// they go in at build time, and appending needs no `wasm-ld`.
+  /// `shake` is OFF by default: see the note in `doc/decisions/0024`. It
+  /// works, and it works in the diagnostics build of the compiler, and it
+  /// traps in the production build at scale for a reason not yet found.
+  compileToWasm({ files, entry, aot = false, shake = false, runtime, slots,
+                  memoryLimit = 3_000_000_000,
+                  builtins, features, standardLibrary: withLib = true }) {
+    if (!entry) throw new Error('compileToWasm needs an entry, e.g. "my.app/main"');
+    const base = runtime instanceof Uint8Array ? runtime : readFileSync(runtime ?? DEFAULT_RUNTIME);
+    const table = slots ?? runtimeSlots();
+    const all = withLib ? { ...standardLibrary(), ...files } : { ...files };
+    const spec = `{:files ${edn(all)} :entry ${entry}` +
+                 ` :builtins ${edn(new Set(builtins ?? Object.keys(table)))}` +
+                 ` :slots ${edn(table)}` +
+                 (aot ? ' :aot true' : '') +
+                 (shake ? ' :shake true' : '') +
+                 (features ? ` :features ${edn(new Set(features.map((f) => sym(`:${f}`))))}` : '') +
+                 '}';
+    const inst = bind(new WebAssembly.Instance(this.module, {}));
+    // Compiling a whole program, appending its compiled arities and then tree
+    // shaking the result is the most memory this ever does, and the default
+    // cap is 512 MB. Past it an allocation answers NIL, the NIL reaches the
+    // tree, and the failure surfaces as `memory access out of bounds` with
+    // nothing pointing at the cap.
+    if (inst.exports.set_memory_limit) inst.exports.set_memory_limit(memoryLimit);
+    // The module goes as its own ARGUMENT, not inside the spec: three-quarters
+    // of a megabyte of base64 in an EDN string is three-quarters of a megabyte
+    // for flint's reader to scan a character at a time, and that alone was 198
+    // seconds of a 199-second compile.
+    const r = inst.main('wasm', spec, base64Encode(base));
+    if (r.code !== 0) throw new Error(`flint: ${r.out.trim()}`);
+    if (r.out.startsWith('!missing')) {
+      const missing = r.out.split('\n').slice(1).filter(Boolean);
+      throw new Error(`flint: no source for ${missing.join(', ')}.`);
+    }
+    return base64Decode(r.out.trim());
+  }
 }
 
 export class Runtime {
@@ -229,11 +299,16 @@ export async function evaluate({ files, entry, args = [], compiler, loader, ...o
 /// it. It cannot, and saying so beats a caller discovering it: linking a module
 /// means running `wasm-ld` over relocatable objects, which is a native tool.
 /// `bin/flint` does that; this ships the two artifacts it produced.
-export const aotAvailable = false;
+export const aotAvailable = true;
 export const capabilities = {
   compile: true,
   run: true,
-  linkModule: false,
-  aot: false,
-  why: 'linking a standalone module needs wasm-ld; use `flint build --aot` for that.',
+  /// A standalone module, without a linker: the image is spliced into a
+  /// prebuilt runtime that was linked once, when flint was built.
+  emitModule: true,
+  aot: true,
+  /// What is still not here: producing the RUNTIME module itself. That is a
+  /// link over relocatable objects and needs `wasm-ld`; it happens when flint
+  /// is built, and the result ships in `dist/`.
+  linkRuntime: false,
 };

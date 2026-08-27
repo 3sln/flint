@@ -58,6 +58,14 @@ FLINT_SLOTS_OUT=dist/slots.json \
   ./bin/flint :src dist/src :fn loader/main :out dist/flint-loader.wasm --loader | sed 's/^/    /'
 cp dist/flint-loader.wasm dist/flint-runtime.wasm
 
+echo "==> the AOT runtime module, for `flint compile wasm-aot`"
+# A second runtime, built from units that carry the compiled-arity helpers. A
+# module that does not export them cannot run a compiled arity, and says so.
+./bin/build-units --aot > /dev/null
+FLINT_SLOTS_OUT=dist/slots-aot.json \
+  ./bin/flint :src dist/src :fn loader/main :out dist/flint-runtime-aot.wasm --loader | sed 's/^/    /'
+./bin/build-units > /dev/null
+
 echo "==> the compiler"
 ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.wasm | sed 's/^/    /'
 

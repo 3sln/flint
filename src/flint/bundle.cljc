@@ -81,7 +81,14 @@
                                       as)))))
                     fns))))
     (vswap! b assoc :aot table)
-    {:module m :compiled (count ok) :total (count slots-of)}))
+    ;; The appended functions' indices come back, because a tree shaker cannot
+    ;; find them: a compiled arity is reached ONLY through the element segment
+    ;; added just above, so a shake that roots the builtins the image imports
+    ;; stubs every one of them. The module then calls a stub and traps with
+    ;; `memory access out of bounds`, at run time, in an artifact that looked
+    ;; fine and was 38% smaller.
+    {:module m :compiled (count ok) :total (count slots-of)
+     :funcs (vec (range first-fn (+ first-fn (count ok))))}))
 
 (defn- global-addr [m exp name]
   (let [g (get exp name)]
