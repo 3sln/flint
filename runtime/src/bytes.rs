@@ -715,6 +715,54 @@ mod tests {
         rt.pop_to(base);
     }
 
+    /// The shape a wasm output builder actually has: hundreds of pieces of
+    /// VARYING size, some larger than the tail, appended through a transient
+    /// until the result is a few hundred kilobytes. The guest failed somewhere
+    /// between 550 and 600 of them, and a Rust panic in wasm is just
+    /// `unreachable` -- natively it says what it was.
+    #[test]
+    fn many_pieces_of_mixed_size_through_a_transient() {
+        let mut rt = Rt::new();
+        let base = rt.mark();
+        let empty = rt.new_bytes(&[]);
+        let t = rt.b_transient(empty);
+        rt.push(t);
+        let mut expect = 0u32;
+        for i in 0..900u32 {
+            // 1 byte to ~4 KB, so pieces straddle FLAT_MAX and TAIL_CAP.
+            let n = 1 + (i * 37) % 4096;
+            let piece: alloc::vec::Vec<u8> = (0..n).map(|k| (k % 256) as u8).collect();
+            // A length prefix by BYTE and then the payload in bulk, which is
+            // exactly what the wasm writer does for every section and body.
+            let tv = rt.r(base);
+            let out = rt.b_conj(tv, (n & 0xff) as u8);
+            rt.set_r(base, out);
+            let p = rt.new_bytes(&piece);
+            rt.push(p);
+            let (tv, pv) = (rt.r(base), rt.r(base + 1));
+            let out = rt.b_append_bytes(tv, pv);
+            rt.set_r(base, out);
+            rt.pop_to(base + 1);
+            expect += n + 1;
+            assert_eq!(rt.b_tcount(rt.r(base)), expect, "after {i} pieces");
+        }
+        let done = rt.b_persistent(rt.r(base));
+        rt.set_r(base, done);
+        let acc = rt.r(base);
+        assert_eq!(rt.b_count(acc), expect);
+        // Every byte read back, against what was written. A count that is
+        // right while the CONTENT is wrong is the failure a size check misses.
+        let mut pos = 0u32;
+        for i in 0..900u32 {
+            let n = 1 + (i * 37) % 4096;
+            assert_eq!(rt.b_at(acc, pos), Some((n & 0xff) as u8), "prefix of piece {i}");
+            assert_eq!(rt.b_at(acc, pos + 1), Some(0), "first byte of piece {i}");
+            assert_eq!(rt.b_at(acc, pos + n), Some(((n - 1) % 256) as u8), "last byte of piece {i}");
+            pos += n + 1;
+        }
+        rt.pop_to(base);
+    }
+
     #[test]
     fn big_pieces_build_a_tree_and_read_back() {
         let mut rt = Rt::new();

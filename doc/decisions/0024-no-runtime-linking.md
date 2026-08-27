@@ -169,30 +169,51 @@ quiet one: a shake that cuts something reachable makes a SMALLER module that
 traps. Verified by disabling the call edges -- 98.1% removed, and the run check
 is what fails.
 
-## Open: tree shaking traps in the production compiler at scale
+## The tree-shaking bug was `for`, and `for` was `apply`
 
-Shaking works on the bootstrap host -- `test/shake.clj` runs it every build and
-the shaken module RUNS. It does not work inside the compiler compiled to wasm,
-and the bisection is precise enough to be worth writing down rather than
-rediscovering:
+Shaking traps inside the compiler at scale, and the hunt is worth keeping
+because the answer was nowhere near the shaker.
 
-* rebuilding the code section from **three** function bodies works;
-* rebuilding it from all **815** traps with
-  `null function or function signature mismatch`;
-* it is not memory -- the same failure at a 512 MB, 2 GB and 3.8 GB heap cap;
-* it is not a dropped builtin -- the production and diagnostics modules export
-  the same 55 `flint_b_*`;
-* and it does not happen in the DIAGNOSTICS build of the compiler at all, which
-  completes the same work in 15 collections with `stat_stale_push`,
-  `stat_stale_set`, `stat_stale_root` and `stat_remset_violations` all zero.
+The bisection said: three function bodies fine, 815 trapped; not memory (same
+failure at 512 MB, 2 GB and 3.8 GB); not a dropped builtin (both modules export
+the same 55); and it did not happen in the DIAGNOSTICS build at all, which did
+the same work under 47,000 stressed collections with every stale-root
+instrument at zero.
 
-The last two together are the useful part: a failure that is present in the
-production build and absent in the diagnostics one, with every stale-root
-instrument reading zero.
+What settled it was a named backtrace -- `bin/flint --keep-names` puts the name
+section back, so the trace reads Rust symbols instead of function indices:
 
-`compileToWasm` therefore defaults to `shake: false`. What it costs is size and
-not capability: 600 KB unshaken against 369 KB shaken, for a module that runs
-either way.
+    panic_bounds_check
+    flint_rt::vm::Rt::enter
+    flint_rt::vm::Rt::call_value
+    flint_rt::vm::Rt::invoke
+    flint_rt::builtins::b_apply
+
+`enter` bounds-checking `image.fns[fn_idx]`, reached through `apply`. And
+`apply` was there because:
+
+    for  ->  mapcat  ->  (apply2 concat (map2 f coll))
+
+`for` over N items applied `concat` to N ARGUMENTS, and `concat`'s variadic
+arity was `(concat x (concat y (apply2 concat more)))` -- one recursive `apply`
+per argument, before any of it is realised. Six hundred items is six hundred
+nested frames.
+
+So `mapcat2` is the ordinary lazy definition now, one element at a time, and
+`concat`'s variadic FOLDS instead of nesting. That is a defect in
+`clojure.core` that had nothing to do with wasm, and every `for` over a large
+collection was paying it.
+
+Shaking is on by default:
+
+| | bytes |
+| --- | ---: |
+| plain | 602,750 |
+| shaken | 378,160 |
+| aot | 656,205 |
+| aot + shaken | 431,721 |
+
+All four run and answer the same; AOT is 1.6 ms against 11.2 ms.
 
 ## The order to build it in
 

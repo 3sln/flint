@@ -186,7 +186,9 @@
   ([x y] (lazy-seq
           (let [s (seq x)]
             (if s (cons (first s) (concat (rest s) y)) (seq y)))))
-  ([x y & more] (concat x (concat y (apply2 concat more)))))
+  ;; FOLDED, not nested. `(concat y (apply concat more))` recurses once per
+  ;; argument before any of it is realised, which is a frame per argument.
+  ([x y & more] (reduce (fn [a b] (concat a b)) (concat x y) more)))
 
 (defn apply
   ([f args] (flint.rt/apply f args))
@@ -636,7 +638,19 @@
                            (cons (f (first s1) (first s2))
                                  (map f (rest s1) (rest s2))))))))
 
-(defn mapcat2 [f coll] (apply2 concat (map2 f coll)))
+(defn mapcat2
+  "Lazily, one element at a time.
+
+  Not `(apply concat (map f coll))`, which is what this was. That applies
+  `concat` to as many arguments as there are elements, and `concat`'s variadic
+  arity recurses once per argument -- so `for` over six hundred items built six
+  hundred nested frames and came apart inside `apply`, with a bounds check in
+  `enter` on a function index that had been walked over. Three items worked."
+  [f coll]
+  (lazy-seq
+   (let [s (seq coll)]
+     (when s
+       (concat (f (first s)) (mapcat2 f (rest s)))))))
 
 (defn keep2 [f coll]
   (lazy-seq (let [s (seq coll)]
@@ -698,8 +712,10 @@
   (drop 1 (mapcat (fn [x] (list sep x)) coll)))
 
 (defn mapcat
-  ([f coll] (apply2 concat (map2 f coll)))
-  ([f c1 c2] (apply2 concat (map f c1 c2))))
+  ([f coll] (mapcat2 f coll))
+  ([f c1 c2] (lazy-seq
+              (let [s (seq (map f c1 c2))]
+                (when s (concat (first s) (mapcat (fn [x] x) (rest s)))))))) 
 
 (defn every? [pred coll]
   (loop [s (seq coll)] (if s (if (pred (first s)) (recur (next s)) false) true)))

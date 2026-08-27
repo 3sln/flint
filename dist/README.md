@@ -57,10 +57,9 @@ faster** on arithmetic — 11.2 ms against 1.6 ms — for 38 KB more.
 relocatable objects and needs `wasm-ld`. It happens when flint is built, and
 the result ships here.
 
-**Tree shaking is off by default.** It works, and it works in the diagnostics
-build of the compiler, and it traps in the production build once the rebuild
-covers 815 function bodies instead of three. `doc/decisions/0024` carries the
-bisection. It costs size and not capability: 600 KB against 369 KB.
+Tree shaking is **on** by default and cuts the runtime down to what the
+program reaches: 602 KB plain against 378 KB shaken, 656 KB against 431 KB with
+`--aot`.
 
 ## What it costs
 
