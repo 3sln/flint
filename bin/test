@@ -264,6 +264,17 @@ fi
 ls -l target/release/flint | awk '{printf "    binary %.1f MB\n", $5/1048576}'
 
 echo
+echo "== parallel: two executors on one heap (0028)"
+# The `parallel` feature is the native SDK's, so it is tested where it is used.
+# What this asserts is that a collection staged by one executor walks the
+# other's roots: a run in which nothing collected would prove nothing, so the
+# test counts them.
+cargo test -p flint-rt --features parallel --test parallel --release -- --nocapture \
+  > /tmp/flint-test.out 2>&1 || { tail -25 /tmp/flint-test.out; fail "two executors on one heap"; }
+grep -E "collections with two executors" /tmp/flint-test.out | sed 's/^ */    /'
+grep -E "^test result" /tmp/flint-test.out | sed 's/^/    /'
+
+echo
 echo "== sdks: the same four nouns in three languages (0025)"
 # Release, because each of these embeds the compiler and runs flint compiling
 # itself; a debug build of that is minutes rather than seconds.

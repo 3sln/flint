@@ -1,11 +1,13 @@
 # 0028 — A driver: ports are the only way to drive a sandbox
 
-> **PARTLY BUILT.** The Rust SDK has it: `Driver`, `Inline`, `ThreadPool`,
-> an asynchronous `call` returning `Pending`, and coalesced dispatch — 200
-> requests into 1 crossing, measured. Several OS threads really do drive one
-> sandbox; the sandbox serialises them, so K > 1 is CORRECT but not yet
-> FASTER. Not built: the parallel collector that removes that lock, the `Rt`
-> split it needs, and the mirror of this shape in the JS and C SDKs.
+> **PARTLY BUILT.** The SDK shape is done in Rust: `Driver`, `Inline`,
+> `ThreadPool`, an asynchronous `call`, coalesced dispatch (200 requests into
+> 1, measured). Underneath, the heap has left `Rt`, and TWO EXECUTORS NOW
+> SHARE ONE HEAP THROUGH COLLECTIONS — 50 collections, roots fixed up across
+> both threads, verified by value. Not yet safe, and recorded as an ignored
+> test rather than a comment: the intern tables, the remembered set and
+> `globals`. Until those are protected the driver still serialises, so K > 1
+> is correct and not yet faster.
 
 `Sandbox::call` runs the program ON THE CALLING THREAD. That works, it is what
 the three SDKs do today, and it forecloses thread pools: a sandbox that only
@@ -14,6 +16,25 @@ pool's whole job is to decide *when* and *on which thread* work runs.
 
 So the host stops driving directly. **Ports become the only way to drive a
 sandbox**, and between the ports and the sandbox sits a **driver**.
+
+## Where a thread may stop, and why it matters more than it reads
+
+A collection MOVES objects, so a thread that stops while holding a `Value` in a
+Rust local resumes holding a stale pointer. Under one executor that rule only
+applied around your OWN allocations; under several it applies around everyone's.
+
+So the only safepoint is the interpreter's checkpoint — between two bytecode
+instructions, `ip` written back, every live value on the value stack by
+construction. A thread inside a native does not poll and cannot stop, and the
+collector waits for it. That is a latency cost, not a correctness one.
+
+**And a collector must wait only for threads that can actually stop.** The
+first version of this deadlocked, and the reason is worth keeping: it waited
+for every REGISTERED executor, including one that had already finished its
+work. An executor that is not running guest code polls nothing, so waiting for
+it is waiting forever — while its roots still have to be scanned, because they
+are still roots. Registered and running are two different questions, which is
+the same split a JVM makes between a thread "in Java" and one "in native".
 
 ## What is built, and what the lock is still doing
 

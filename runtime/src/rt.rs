@@ -46,6 +46,15 @@ pub struct Rt {
     /// hold `None`, so the heap outlives every executor by construction rather
     /// than by anyone remembering an order.
     owned_heap: Option<alloc::boxed::Box<crate::gc::Heap>>,
+    /// The heap, by address, however it is owned.
+    heap: core::ptr::NonNull<crate::gc::Heap>,
+    /// This executor's slot in the sandbox, once it has one.
+    ///
+    /// `None` means "the only executor", which is the whole of the wasm build
+    /// and the default everywhere: it takes no lock and stages no safepoint,
+    /// so a single-threaded sandbox pays nothing for any of this.
+    #[cfg(feature = "parallel")]
+    exec_id: Option<usize>,
     pub gc: crate::gc::GcPtr,
     pub roots: Roots,
     /// The in-flight thrown value, or `nil`. Native builtins signal failure by
@@ -175,6 +184,19 @@ pub fn add_grant(_name: alloc::string::String, _host_id: u64) {
     debug_assert!(false, "grants belong to an Rt: use Rt::add_grant");
 }
 
+/// An `Rt` is ONE executor and may be moved to the thread that will run it.
+///
+/// Not `Sync`, deliberately: two threads sharing one executor would share its
+/// value stack and its frames, which is nonsense. What they share is the HEAP,
+/// and that sharing is mediated by the allocation lock and the safepoint
+/// (`doc/decisions/0028`) rather than by this impl.
+///
+/// The raw pointers inside are to the heap and to the shared roots, which
+/// outlive every executor by construction: the primary owns the heap in a box
+/// and secondaries hold `None`.
+#[cfg(feature = "parallel")]
+unsafe impl Send for Rt {}
+
 impl Rt {
     /// `{:name <host-minted opaque>}` for every grant the host declared.
     ///
@@ -226,8 +248,30 @@ impl Rt {
         let mut heap = alloc::boxed::Box::new(crate::gc::Heap::new(nursery, max));
         let gc = crate::gc::GcPtr(core::ptr::NonNull::from(&mut heap.gc));
         let shared = crate::gc::SharedPtr(core::ptr::NonNull::from(&mut heap.shared));
-        let mut rt = Rt {
-            owned_heap: Some(heap),
+        let heap_ptr = core::ptr::NonNull::from(&mut *heap);
+        let mut rt = Rt::on_heap(Some(heap), heap_ptr, gc, shared);
+        rt.roots.shared.singletons = alloc::vec![NIL; SING_COUNT];
+        rt.init_singletons();
+        rt
+    }
+
+    /// An `Rt` on a heap that already exists.
+    ///
+    /// Shared by `with_heap`, which makes the heap, and `executor`, which
+    /// joins one. Everything here beside the four arguments is PER-EXECUTOR
+    /// and therefore fresh: the frames, the gas, the thrown slot and the
+    /// scheduler's park slot belong to a thread, not to a sandbox.
+    fn on_heap(
+        owned_heap: Option<alloc::boxed::Box<crate::gc::Heap>>,
+        heap: core::ptr::NonNull<crate::gc::Heap>,
+        gc: crate::gc::GcPtr,
+        shared: crate::gc::SharedPtr,
+    ) -> Rt {
+        Rt {
+            owned_heap,
+            heap,
+            #[cfg(feature = "parallel")]
+            exec_id: None,
             gc,
             roots: Roots::new(shared),
             thrown: NIL,
@@ -260,10 +304,7 @@ impl Rt {
             sched_hook: None,
             status: 0,
             grants: alloc::vec::Vec::new(),
-        };
-        rt.roots.shared.singletons = alloc::vec![NIL; SING_COUNT];
-        rt.init_singletons();
-        rt
+        }
     }
 
     fn init_singletons(&mut self) {
@@ -365,11 +406,152 @@ impl Rt {
     /// path turns it into a real error with numbers in it.
     #[inline]
     pub fn alloc(&mut self, ty: u8, len: u32) -> u32 {
+        #[cfg(feature = "parallel")]
+        if self.exec_id.is_some() {
+            return self.alloc_shared(ty, len);
+        }
         let a = self.gc.alloc(&mut self.roots, ty, len);
         if a == 0 && self.thrown.is_nil() {
             // A failed allocation must not read as `nil` to the program. It
             // used to, and a capped run then carried on and reported a WRONG
             // ANSWER rather than an error (doc/decisions/0009).
+            self.thrown = crate::value::OOM;
+        }
+        a
+    }
+
+    /// Bracket a run of guest code.
+    ///
+    /// Between these, this executor polls and a collector may wait for it.
+    /// Outside them it polls nothing and nothing waits for it -- its roots are
+    /// still scanned, because they are still roots.
+    #[cfg(feature = "parallel")]
+    pub fn enter_running(&mut self) {
+        if self.exec_id.is_some() {
+            unsafe { (*self.heap.as_ptr()).par.enter() };
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    pub fn leave_running(&mut self) {
+        if self.exec_id.is_some() {
+            unsafe { (*self.heap.as_ptr()).par.leave() };
+        }
+    }
+
+    /// Stop here if another executor is staging a collection.
+    ///
+    /// Called ONLY from the interpreter's checkpoint, where `ip` is written
+    /// back and every live value is on the value stack. A thread that stopped
+    /// anywhere else would resume holding a stale pointer, because the
+    /// collector it stopped for moves objects (`doc/decisions/0028`).
+    #[cfg(feature = "parallel")]
+    #[inline]
+    pub fn safepoint(&mut self) {
+        if self.exec_id.is_none() {
+            return;
+        }
+        let par: &crate::par::Parallel = unsafe { &(*self.heap.as_ptr()).par };
+        if par.stop_requested() {
+            par.park();
+        }
+    }
+
+    /// Register this `Rt` as an executor on its heap.
+    ///
+    /// Must be called once the `Rt` is at its final address -- a box, or a
+    /// local that will not move -- because what gets registered is the address
+    /// of its root stack, and the collector reads it while this thread is
+    /// parked. Registering an `Rt` that then moves would hand the collector a
+    /// dangling root set, which is the one mistake here that does not announce
+    /// itself.
+    ///
+    /// # Safety
+    /// `self` must not move for as long as it stays registered.
+    #[cfg(feature = "parallel")]
+    pub unsafe fn join_sandbox(&mut self) -> bool {
+        if self.exec_id.is_some() {
+            return true;
+        }
+        let par: &crate::par::Parallel = unsafe { &(*self.heap.as_ptr()).par };
+        let roots: *mut crate::gc::ExecRoots = &mut self.roots.own;
+        match par.register(roots) {
+            Some(id) => {
+                self.exec_id = Some(id);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A second executor on the SAME heap.
+    ///
+    /// It shares the heap, the globals, the constants, the intern tables and
+    /// the singletons, and gets its own value stack, frames and gas -- which
+    /// is the split `doc/decisions/0028` is about.
+    ///
+    /// Boxed because it registers its own root stack with the collector, and
+    /// that address has to stay put.
+    ///
+    /// # Safety
+    /// The returned executor borrows this one's heap and must be dropped
+    /// before it.
+    #[cfg(feature = "parallel")]
+    pub unsafe fn executor(&mut self) -> Option<alloc::boxed::Box<Rt>> {
+        // The primary has to be registered too, or a collection it stages
+        // would wait for a count that includes it and never reach it.
+        unsafe { self.join_sandbox() };
+
+        let mut rt = alloc::boxed::Box::new(Rt::on_heap(
+            None,
+            self.heap,
+            crate::gc::GcPtr(self.gc.0),
+            crate::gc::SharedPtr(self.roots.shared.0),
+        ));
+        rt.sched_hook = self.sched_hook;
+        if !unsafe { rt.join_sandbox() } {
+            return None;
+        }
+        Some(rt)
+    }
+
+    /// Allocate with other executors on this heap.
+    ///
+    /// The allocation lock keeps two threads out of the collector's
+    /// bookkeeping. The safepoint is staged only when this allocation would
+    /// actually collect, because staging one every time would be a
+    /// stop-the-world per allocation rather than per collection.
+    #[cfg(feature = "parallel")]
+    fn alloc_shared(&mut self, ty: u8, len: u32) -> u32 {
+        // Taken as a shared reference straight from the pointer, so it does
+        // not borrow `self` and the disjoint `self.gc` / `self.roots` borrow
+        // below still works. `Parallel` is all atomics, so `&` is enough.
+        let par: &crate::par::Parallel = unsafe { &(*self.heap.as_ptr()).par };
+        let mine = self.exec_id.unwrap_or(usize::MAX);
+
+        par.lock_alloc();
+        let staged = self.gc.would_collect(ty, len);
+        if staged {
+            par.stage_stop();
+            // Every other executor is stopped now, so their roots can be given
+            // to the collector. Built here and dropped after, because a list
+            // that outlived the stop would be pointers into threads that have
+            // started running again.
+            self.roots.shared.others.clear();
+            for p in par.parked_roots(mine) {
+                self.roots.shared.others.push(crate::gc::ParkedRoots(p));
+            }
+        }
+
+        let a = self.gc.alloc(&mut self.roots, ty, len);
+
+        if staged {
+            self.roots.shared.others.clear();
+            par.release_stop();
+        }
+        par.unlock_alloc();
+
+        if a == 0 && self.thrown.is_nil() {
             self.thrown = crate::value::OOM;
         }
         a

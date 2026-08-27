@@ -860,6 +860,13 @@ impl Rt {
                 if let Some(f) = self.frames.last_mut() {
                     f.ip = ip;
                 }
+                // The safepoint, and it is HERE for the reason above rather
+                // than by coincidence: `ip` is written back and every live
+                // value is on the value stack, so a thread stopped at this
+                // point can have its roots walked and its objects moved. Two
+                // instructions earlier that would not be true.
+                #[cfg(feature = "parallel")]
+                self.safepoint();
                 // One comparison covers both budgets; which one fired is a cold
                 // path. In a threaded program the slice is doing double duty as
                 // preemption -- running out means "your turn is over" rather

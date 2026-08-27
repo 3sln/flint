@@ -329,11 +329,20 @@ impl Default for SharedRoots {
 pub struct Heap {
     pub gc: Gc,
     pub shared: SharedRoots,
+    /// The safepoint, the allocation lock and the shared gas counter. One per
+    /// sandbox because they coordinate its executors with each other.
+    #[cfg(feature = "parallel")]
+    pub par: crate::par::Parallel,
 }
 
 impl Heap {
     pub fn new(nursery: u32, max: u32) -> Heap {
-        Heap { gc: Gc::new(nursery, max), shared: SharedRoots::new() }
+        Heap {
+            gc: Gc::new(nursery, max),
+            shared: SharedRoots::new(),
+            #[cfg(feature = "parallel")]
+            par: crate::par::Parallel::new(),
+        }
     }
 }
 
@@ -740,6 +749,19 @@ impl Gc {
 
     pub fn young_used(&self) -> u32 {
         self.bump - self.from
+    }
+
+    /// Would allocating `size` bytes collect?
+    ///
+    /// Asked BEFORE allocating, because under several executors a collection
+    /// has to be staged -- everyone stopped -- and staging one around every
+    /// allocation would be a stop-the-world per allocation. Conservative on
+    /// purpose: a false yes costs one needless safepoint, a false no would let
+    /// the collector move objects while another thread was running.
+    #[cfg(feature = "parallel")]
+    pub fn would_collect(&self, ty: u8, len_: u32) -> bool {
+        let size = size_for(ty, len_);
+        size >= LARGE_OBJECT || self.bump.saturating_add(size) > self.from.saturating_add(self.half)
     }
 
     /// Sample the high-water mark. Called after each collection, when the

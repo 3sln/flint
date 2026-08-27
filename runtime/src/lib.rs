@@ -32,6 +32,8 @@ pub mod obj;
 /// not carry the machinery that would run it.
 #[cfg(feature = "aot")]
 pub mod aot;
+#[cfg(feature = "parallel")]
+pub mod par;
 pub mod pike;
 pub mod rope;
 pub mod bytes;
