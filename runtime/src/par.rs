@@ -77,6 +77,15 @@ pub struct Parallel {
     /// roots do not move -- it lives in a box for exactly this reason -- and a
     /// list built once cannot race with a list being built.
     slots: [AtomicPtr<ExecRoots>; MAX_EXECUTORS],
+    /// One lock per intern table (strings, keywords, symbols, ports).
+    ///
+    /// One EACH rather than one for all four because it costs nothing, and not
+    /// SHARDED because sharding would optimise something that is not
+    /// happening: on the most string-heavy workload we have -- flint compiling
+    /// construe -- the tables are probed 18 247 times across 4.25 seconds, a
+    /// duty cycle of about 0.04%. 26% of `Rt::string` calls reach a table, but
+    /// `string` itself is not hot enough for that to matter.
+    interns: [AtomicU32; 4],
     /// Gas, flushed from per-executor batches.
     spent: AtomicU64,
     limit: AtomicU64,
@@ -96,6 +105,12 @@ impl Parallel {
             parked: AtomicU32::new(0),
             active: AtomicU32::new(0),
             alloc: AtomicU32::new(0),
+            interns: [
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+                AtomicU32::new(0),
+            ],
             slots: [const { AtomicPtr::new(core::ptr::null_mut()) }; MAX_EXECUTORS],
             spent: AtomicU64::new(0),
             limit: AtomicU64::new(0),
@@ -203,11 +218,55 @@ impl Parallel {
         self.alloc.store(0, Ordering::Release);
     }
 
+    /// Take an intern table's lock, stopping at safepoints while waiting.
+    ///
+    /// **The caller must have every live value rooted**, because this can
+    /// park. That is not a burden in practice: the only two places it is taken
+    /// are a bare probe, where nothing is live, and a re-probe after a fresh
+    /// object has been pushed on the root stack.
+    ///
+    /// The invariant that makes the collector's life simple: this lock is only
+    /// ever held across a hash probe, which does not allocate and so cannot
+    /// reach a safepoint. **A parked thread therefore never holds an intern
+    /// lock**, and the collector can walk and rewrite the tables during a stop
+    /// without taking anything.
+    pub fn lock_intern(&self, table: usize) {
+        loop {
+            if self.interns[table]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+            {
+                return;
+            }
+            if self.stop_requested() {
+                self.park();
+            }
+            core::hint::spin_loop();
+        }
+    }
+
+    pub fn unlock_intern(&self, table: usize) {
+        self.interns[table].store(0, Ordering::Release);
+    }
+
     /// Ask every other executor to stop, and wait until they have.
     ///
     /// The caller holds the allocation lock, so no one else can be staging a
     /// collection at the same time.
     pub fn stage_stop(&self) {
+        // FIRST, wait for the previous stop's parkers to finish leaving.
+        //
+        // Without this, a `parked` count left over from the last stop is
+        // mistaken for this one's and the collector starts while a thread is
+        // still running. The window is small and entirely real: `park` exits
+        // its spin when `stop` clears and only THEN decrements, so a thread
+        // that has been released but has not yet decremented still reads as
+        // parked. Staging again in that instant sees a count it did not earn.
+        //
+        // Nothing can park while `stop` is 0, so this loop terminates.
+        while self.parked.load(Ordering::Acquire) != 0 {
+            core::hint::spin_loop();
+        }
         self.stop.store(1, Ordering::Release);
         // Re-read the target every time round rather than once. An executor
         // that finishes while this waits lowers the count, and a target

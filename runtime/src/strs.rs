@@ -97,33 +97,119 @@ impl Rt {
             return self.raw_string(s);
         }
         let h = hash::hash_string(s);
-        let sp = &self.gc.sp;
-        let found = self.roots.shared.interns[INTERN_STR].lookup(h, |v| {
-            v.is_heap() && ty(sp, v.as_heap()) == TY_STR && str_bytes(sp, v.as_heap()) == s.as_bytes()
-        });
-        match found {
-            Ok(v) => v,
-            Err(_) => {
-                let v = self.raw_string(s);
-                if v.is_nil() {
-                    return v;
-                }
-                set_str_hash(&self.gc.sp, v.as_heap(), if h == 0 { 1 } else { h });
-                self.intern_into(INTERN_STR, h, v);
-                v
-            }
+        let want = s.as_bytes().to_vec();
+        let matches = move |sp: &crate::mem::Space, v: Value| {
+            v.is_heap() && ty(sp, v.as_heap()) == TY_STR && str_bytes(sp, v.as_heap()) == &want[..]
+        };
+        if let Some(v) = self.intern_probe(INTERN_STR, h, &matches) {
+            return v;
         }
+
+        // Allocated OUTSIDE the lock, which is what keeps the lock off every
+        // allocation path and so keeps a parked thread from ever holding one.
+        let v = self.raw_string(s);
+        if v.is_nil() {
+            return v;
+        }
+        set_str_hash(&self.gc.sp, v.as_heap(), if h == 0 { 1 } else { h });
+
+        let base = self.mark();
+        self.push(v);
+        let out = self.intern_publish(INTERN_STR, h, base, &matches);
+        self.pop_to(base);
+        out
     }
 
+    /// Probe an intern table under its lock.
+    ///
+    /// Nothing needs rooting here: no allocation happens, and the lock can only
+    /// park before anything is live.
+    pub(crate) fn intern_probe(
+        &mut self,
+        table: usize,
+        h: u32,
+        matches: impl Fn(&crate::mem::Space, Value) -> bool,
+    ) -> Option<Value> {
+        self.lock_intern(table);
+        let found = {
+            let sp = &self.gc.sp;
+            self.roots.shared.interns[table].lookup(h, |v| matches(sp, v))
+        };
+        self.unlock_intern(table);
+        found.ok()
+    }
+
+    /// Publish a freshly built value into an intern table, or take the one
+    /// another executor published while this one was building it.
+    ///
+    /// `rooted` is the root-stack index of the new value, and it MUST be
+    /// rooted: taking the lock can park, and a `Value` in a Rust local does not
+    /// survive a safepoint.
+    ///
+    /// The re-probe is not an optimisation. Two interned copies of one string
+    /// is a correctness bug rather than a wasted allocation: `eq` reads "both
+    /// interned and not bit-equal" as NOT EQUAL, so the copies would compare
+    /// unequal while reading identically -- and symbol equality is slot
+    /// equality on those same strings, so it would spread.
+    ///
+    /// This exists once rather than three times on purpose. `string`, `keyword`
+    /// and `symbol` have had the same four lines and the same rooting bug
+    /// before (see `symbol`); a protocol with three copies is a protocol with
+    /// three chances to diverge.
+    pub(crate) fn intern_publish(
+        &mut self,
+        table: usize,
+        h: u32,
+        rooted: usize,
+        matches: impl Fn(&crate::mem::Space, Value) -> bool,
+    ) -> Value {
+        self.lock_intern(table);
+        let again = {
+            let sp = &self.gc.sp;
+            self.roots.shared.interns[table].lookup(h, |v| matches(sp, v))
+        };
+        let out = match again {
+            // Someone got there first. Theirs is the interned one; ours is
+            // nursery garbage and costs a collection nothing.
+            Ok(existing) => existing,
+            Err(idx) => {
+                let mine = self.r(rooted);
+                if self.roots.shared.interns[table].needs_grow() {
+                    self.roots.shared.interns[table].grow();
+                    // `grow` invalidates the index, so re-probe for a slot.
+                    if let Err(i2) = self.roots.shared.interns[table].lookup(h, |_| false) {
+                        self.roots.shared.interns[table].insert_at(i2, h, mine);
+                    }
+                } else {
+                    self.roots.shared.interns[table].insert_at(idx, h, mine);
+                }
+                mine
+            }
+        };
+        self.unlock_intern(table);
+        out
+    }
+
+    /// Insert without re-checking for an equal entry.
+    ///
+    /// Only for tables keyed by an identity that cannot collide -- ports are
+    /// keyed by their own id -- where "someone else already made this" cannot
+    /// happen. Everything content-keyed must use `intern_publish`.
     pub(crate) fn intern_into(&mut self, table: usize, h: u32, v: Value) {
+        let base = self.mark();
+        self.push(v);
+        self.lock_intern(table);
         if self.roots.shared.interns[table].needs_grow() {
             self.roots.shared.interns[table].grow();
         }
         // Re-probe: `grow` invalidates any index we might have had, and an
         // allocation may have run a collection that rehashed the table.
         if let Err(idx) = self.roots.shared.interns[table].lookup(h, |_| false) {
-            self.roots.shared.interns[table].insert_at(idx, h, v);
+            let mine = self.r(base);
+            self.roots.shared.interns[table].insert_at(idx, h, mine);
         }
+        self.unlock_intern(table);
+        self.pop_to(base);
     }
 
     /// Hash of a string value, cached in the object for heap strings.
@@ -154,16 +240,14 @@ impl Rt {
             return Value::inline_kw(name.as_bytes());
         }
         let h = hash::hash_keyword(ns, name);
-        let existing = {
-            let sp = &self.gc.sp;
-            self.roots.shared.interns[INTERN_KW].lookup(h, |v| {
-                v.is_heap()
-                    && ty(sp, v.as_heap()) == TY_KW
-                    && str_eq_at(sp, slot(sp, v.as_heap(), 0), ns)
-                    && str_eq_at(sp, slot(sp, v.as_heap(), 1), Some(name))
-            })
+        let (wns, wname) = (ns.map(alloc::string::String::from), alloc::string::String::from(name));
+        let matches = move |sp: &crate::mem::Space, v: Value| {
+            v.is_heap()
+                && ty(sp, v.as_heap()) == TY_KW
+                && str_eq_at(sp, slot(sp, v.as_heap(), 0), wns.as_deref())
+                && str_eq_at(sp, slot(sp, v.as_heap(), 1), Some(wname.as_str()))
         };
-        if let Ok(v) = existing {
+        if let Some(v) = self.intern_probe(INTERN_KW, h, &matches) {
             return v;
         }
         // Both strings rooted across the `alloc`, and released only after the
@@ -189,30 +273,29 @@ impl Rt {
         // while `gc` was a plain field; through `DerefMut` it is a method call,
         // and the compiler is right that the old spelling read `self` while
         // `self` was mutably borrowed.
-        let (ns, name) = (self.r(base), self.r(base + 1));
-        self.gc.set_slot(a, 0, ns);
-        self.gc.set_slot(a, 1, name);
+        let (nsr, namer) = (self.r(base), self.r(base + 1));
+        self.gc.set_slot(a, 0, nsr);
+        self.gc.set_slot(a, 1, namer);
         self.gc.set_slot(a, 2, Value::fixnum(h as i32 as i64));
+        let mine = self.push(v);
+        let out = self.intern_publish(INTERN_KW, h, mine, &matches);
         self.pop_to(base);
-        self.intern_into(INTERN_KW, h, v);
-        v
+        out
     }
 
     // --- symbols -----------------------------------------------------------
 
     pub fn symbol(&mut self, ns: Option<&str>, name: &str) -> Value {
         let h = hash::hash_symbol(ns, name);
-        let existing = {
-            let sp = &self.gc.sp;
-            self.roots.shared.interns[INTERN_SYM].lookup(h, |v| {
-                v.is_heap()
-                    && ty(sp, v.as_heap()) == TY_SYM
-                    && slot(sp, v.as_heap(), 2).is_nil() // no metadata
-                    && str_eq_at(sp, slot(sp, v.as_heap(), 0), ns)
-                    && str_eq_at(sp, slot(sp, v.as_heap(), 1), Some(name))
-            })
+        let (wns, wname) = (ns.map(alloc::string::String::from), alloc::string::String::from(name));
+        let matches = move |sp: &crate::mem::Space, v: Value| {
+            v.is_heap()
+                && ty(sp, v.as_heap()) == TY_SYM
+                && slot(sp, v.as_heap(), 2).is_nil() // no metadata
+                && str_eq_at(sp, slot(sp, v.as_heap(), 0), wns.as_deref())
+                && str_eq_at(sp, slot(sp, v.as_heap(), 1), Some(wname.as_str()))
         };
-        if let Ok(v) = existing {
+        if let Some(v) = self.intern_probe(INTERN_SYM, h, &matches) {
             return v;
         }
         // BOTH strings stay rooted across the `alloc` below, and the roots are
@@ -249,14 +332,15 @@ impl Rt {
         // while `gc` was a plain field; through `DerefMut` it is a method call,
         // and the compiler is right that the old spelling read `self` while
         // `self` was mutably borrowed.
-        let (ns, name) = (self.r(base), self.r(base + 1));
-        self.gc.set_slot(a, 0, ns);
-        self.gc.set_slot(a, 1, name);
+        let (nsr, namer) = (self.r(base), self.r(base + 1));
+        self.gc.set_slot(a, 0, nsr);
+        self.gc.set_slot(a, 1, namer);
         self.gc.set_slot(a, 2, NIL); // meta
         self.gc.set_slot(a, 3, Value::fixnum(h as i32 as i64));
+        let mine = self.push(v);
+        let out = self.intern_publish(INTERN_SYM, h, mine, &matches);
         self.pop_to(base);
-        self.intern_into(INTERN_SYM, h, v);
-        v
+        out
     }
 
     // --- predicates and accessors -----------------------------------------

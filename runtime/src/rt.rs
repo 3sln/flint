@@ -420,6 +420,35 @@ impl Rt {
         a
     }
 
+    /// Take an intern table's lock. A no-op when this is the only executor.
+    ///
+    /// # Safety of the call site, not of the call
+    /// Everything live must be rooted: this can park at a safepoint, and a
+    /// `Value` in a Rust local does not survive one.
+    #[cfg(feature = "parallel")]
+    #[inline]
+    pub(crate) fn lock_intern(&mut self, table: usize) {
+        if self.exec_id.is_some() {
+            unsafe { (*self.heap.as_ptr()).par.lock_intern(table) };
+        }
+    }
+
+    #[cfg(feature = "parallel")]
+    #[inline]
+    pub(crate) fn unlock_intern(&mut self, table: usize) {
+        if self.exec_id.is_some() {
+            unsafe { (*self.heap.as_ptr()).par.unlock_intern(table) };
+        }
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    #[inline(always)]
+    pub(crate) fn lock_intern(&mut self, _table: usize) {}
+
+    #[cfg(not(feature = "parallel"))]
+    #[inline(always)]
+    pub(crate) fn unlock_intern(&mut self, _table: usize) {}
+
     /// Bracket a run of guest code.
     ///
     /// Between these, this executor polls and a collector may wait for it.

@@ -82,30 +82,36 @@ fn a_lone_executor_is_unregistered_and_pays_nothing() {
     assert_eq!(churn(&mut rt, 7, 500), 500);
 }
 
-/// What is NOT protected yet, recorded as something runnable rather than as a
-/// comment someone has to believe.
+/// A name in the band that is ACTUALLY interned.
 ///
-/// The allocation lock covers the collector's bookkeeping and the safepoint
-/// covers moving objects. Neither covers the other SHARED MUTABLE structures a
-/// running program touches:
+/// Below `INLINE_MAX` (5) a string is NaN-boxed into the value and never
+/// reaches a table; above `INTERN_MAX` (32) it is allocated raw and not
+/// interned either. Only 6..=32 bytes exercises the tables -- and getting this
+/// wrong is how an earlier version of this test "failed": it read inline
+/// strings as if they were heap objects and reported the runtime broken.
+fn interned_name(tag: &str, i: usize) -> String {
+    format!("{tag}-{i:016}")
+}
+
+/// Interning from two executors at once.
 ///
-///   * the intern tables — `Rt::string`, `keyword` and `symbol` all look up
-///     and insert into weak tables that every executor shares;
-///   * the remembered set, which the write barrier pushes to whenever an old
-///     object is given a young pointer;
-///   * `globals`, which `def` writes.
+/// This is the test that used to be ignored, and it failed for a reason worth
+/// keeping: two threads interning concurrently produced TWO interned copies of
+/// one string, and `eq` reads "both interned and not bit-equal" as NOT EQUAL.
+/// So equal strings compared unequal while reading identically -- and symbol
+/// equality is slot equality on those same strings, so it spread.
 ///
-/// So this fails, and it should: two threads interning concurrently corrupt
-/// the table and values come back as the wrong string. Running it is how you
-/// see that, and `#[ignore]` is how the suite stays green while it is true.
+/// The fix is a lock per table held only across a hash PROBE, never across an
+/// allocation, plus a re-probe after building the value so that a loser in the
+/// race takes the winner's copy instead of publishing a second one.
 ///
-/// Un-ignore it when those three are protected. It is the next piece of
-/// `doc/decisions/0028`, and it is what stands between "two executors can
-/// allocate and collect" — which the test above proves — and "two executors
-/// can run a program".
+/// Not sharded, and that is measured rather than assumed: on the most
+/// string-heavy workload we have -- flint compiling construe -- the tables are
+/// probed 18 247 times across 4.25 seconds. 26% of `Rt::string` calls reach a
+/// table, but the duty cycle is about 0.04%, and sharding would optimise
+/// something that is not happening.
 #[test]
-#[ignore = "interning is not thread-safe yet; this is the next piece of 0028"]
-fn interning_from_two_executors_is_not_safe_yet() {
+fn interning_from_two_executors_agrees_on_one_copy() {
     let mut primary = Rt::with_heap(64 * 1024, 256 * 1024 * 1024);
     let mut secondary = unsafe { primary.executor() }.expect("a second executor");
 
@@ -113,14 +119,32 @@ fn interning_from_two_executors_is_not_safe_yet() {
         rt.enter_running();
         let base = rt.mark();
         for i in 0..n {
-            let s = rt.string(&format!("{tag}-{i}"));
+            let s = rt.string(&interned_name(tag, i));
             rt.push(s);
         }
+        let mut wrong = 0usize;
+        let mut first = None;
         for i in 0..n {
             let v = rt.r(base + i);
-            let bytes = flint_rt::obj::str_bytes(&rt.gc.sp, v.as_heap());
-            let text = core::str::from_utf8(bytes).expect("still a string");
-            assert_eq!(text, format!("{tag}-{i}"), "{tag}: slot {i} came back wrong");
+            let want = interned_name(tag, i);
+            let ok = v.is_heap()
+                && flint_rt::obj::ty(&rt.gc.sp, v.as_heap()) == flint_rt::obj::TY_STR
+                && flint_rt::obj::str_bytes(&rt.gc.sp, v.as_heap()) == want.as_bytes();
+            if !ok {
+                wrong += 1;
+                if first.is_none() {
+                    let t = if v.is_heap() {
+                        flint_rt::obj::ty(&rt.gc.sp, v.as_heap())
+                    } else {
+                        255
+                    };
+                    first = Some((i, v.0, t));
+                }
+            }
+        }
+        if wrong > 0 {
+            let (i, bits, t) = first.unwrap();
+            panic!("{tag}: {wrong}/{n} wrong; first slot {i} bits {bits:#x} ty {t}");
         }
         rt.pop_to(base);
         rt.leave_running();
@@ -131,5 +155,94 @@ fn interning_from_two_executors_is_not_safe_yet() {
         scope.spawn(move || intern_churn(second, "b", 4000));
         intern_churn(&mut primary, "a", 4000);
     });
+    drop(secondary);
+}
+
+/// The same interning work on ONE executor. If this fails, the problem is the
+/// intern refactor and not concurrency at all -- worth separating before
+/// chasing a race that may not exist.
+#[test]
+fn interning_on_one_executor_still_works() {
+    let mut rt = Rt::with_heap(64 * 1024, 256 * 1024 * 1024);
+    rt.enter_running();
+    let base = rt.mark();
+    for i in 0..4000 {
+        let s = rt.string(&interned_name("solo", i));
+        rt.push(s);
+    }
+    for i in 0..4000 {
+        let v = rt.r(base + i);
+        let bytes = flint_rt::obj::str_bytes(&rt.gc.sp, v.as_heap());
+        let text = core::str::from_utf8(bytes).expect("still a string");
+        assert_eq!(text, interned_name("solo", i), "slot {i} came back wrong");
+    }
+    rt.pop_to(base);
+    rt.leave_running();
+}
+
+/// The interning invariant itself: one text, one interned object.
+///
+/// **Measured both ways.** Without the intern locks this fails 40 times out of
+/// 40, with 10 to 17 of 3 000 texts interning to two objects. With them, 0 out
+/// of 40. The disjoint-names test above fails 0 out of 60 either way, which is
+/// why it could not be the evidence for anything.
+///
+/// Both executors intern the SAME names, so they race for the same probe
+/// sequences -- which the disjoint-names test above never does, and is why it
+/// could not demonstrate the race it was written to demonstrate.
+///
+/// What breaks without a lock is not a crash. Two threads both miss, both
+/// allocate, and both publish, leaving TWO interned objects with the same
+/// text. `eq` reads "both interned and not bit-equal" as NOT EQUAL, so those
+/// two strings compare unequal while printing identically -- and symbol
+/// equality is slot equality on exactly these strings, so it spreads to
+/// symbols and to anything keyed by one.
+///
+/// So the assertion is bit-equality, not text-equality: text-equality is what
+/// still passes when this is broken.
+#[test]
+fn one_text_interns_to_one_object_across_executors() {
+    const N: usize = 3000;
+    let mut primary = Rt::with_heap(1024 * 1024, 256 * 1024 * 1024);
+    let mut secondary = unsafe { primary.executor() }.expect("a second executor");
+
+    fn intern_all(rt: &mut Rt, tag: i64) -> Vec<u64> {
+        rt.enter_running();
+        let base = rt.mark();
+        let mut out = Vec::with_capacity(N);
+        for i in 0..N {
+            // The SAME text from both threads, and no tag in it.
+            let s = rt.string(&interned_name("shared", i));
+            rt.push(s);
+        }
+        for i in 0..N {
+            out.push(rt.r(base + i).0);
+        }
+        rt.pop_to(base);
+        rt.leave_running();
+        let _ = tag;
+        out
+    }
+
+    let mut theirs = Vec::new();
+    let mine = std::thread::scope(|scope| {
+        let second = &mut secondary;
+        let h = scope.spawn(move || intern_all(second, 2));
+        let mine = intern_all(&mut primary, 1);
+        theirs = h.join().expect("the second executor finished");
+        mine
+    });
+
+    let mut differ = 0usize;
+    for i in 0..N {
+        if mine[i] != theirs[i] {
+            differ += 1;
+        }
+    }
+    assert_eq!(
+        differ, 0,
+        "{differ}/{N} texts interned to two different objects; \
+         those compare UNEQUAL despite reading identically"
+    );
     drop(secondary);
 }

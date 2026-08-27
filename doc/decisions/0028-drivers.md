@@ -211,6 +211,38 @@ runaway is stopped, and stopping a few thousand instructions late stops it just
 as dead. The total also stops being deterministic at K > 1, which is a property
 of parallelism rather than of this design (`doc/decisions/0009`).
 
+## Locking the intern tables: one lock each, not sharded
+
+`Rt::string`, `keyword` and `symbol` all probe and insert into weak tables that
+every executor shares. Unsynchronised that is a data race, and it is one that
+MANIFESTS: with both executors interning the same 3 000 texts, 10 to 17 of them
+end up as two distinct interned objects, on 40 runs out of 40.
+
+Two copies is not a wasted allocation, it is a correctness bug. `eq` reads
+"both interned and not bit-equal" as NOT EQUAL, so the two compare unequal
+while printing identically -- and symbol equality is slot equality on exactly
+these strings, so it spreads to symbols and to anything keyed by one. That is
+also why the test asserts BIT-equality: text-equality is what still passes when
+this is broken.
+
+**One lock per table, and not sharded**, which is measured rather than assumed.
+On the most string-heavy workload we have -- flint compiling construe -- the
+tables are probed 18 247 times across 4.25 seconds. 26% of `Rt::string` calls
+reach a table, but a probe is tens of nanoseconds and the duty cycle is about
+0.04%. Sharding would optimise something that is not happening.
+
+**The lock is only ever held across a probe, never across an allocation.** The
+value is built outside it, then a re-probe under the lock either publishes it
+or takes the copy another executor published first. That ordering is what
+gives the collector a free hand: a thread only parks while WAITING for an
+intern lock, never while holding one, so a parked thread never holds one and
+the collector can walk and rewrite the tables during a stop without taking
+anything.
+
+It also means the protocol exists once rather than three times. `string`,
+`keyword` and `symbol` have historically had the same four lines and the same
+rooting bug; three copies of a lock protocol would be three chances to diverge.
+
 ## Parallelism is a property of the TARGET, not of the SDK
 
 The SDKs mirror each other (`0025`), and that has to survive a world where
