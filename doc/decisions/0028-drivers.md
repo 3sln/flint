@@ -163,6 +163,46 @@ have a thread that never polls. So either counting stops being optional under
 K > 1, or the safepoint gets its own cheaper poll. Worth settling before it is
 load-bearing, not after.
 
+## Parallelism is a property of the TARGET, not of the SDK
+
+The SDKs mirror each other (`0025`), and that has to survive a world where
+some targets can run several threads in a sandbox and some cannot. So the
+vocabulary is identical everywhere and the ANSWER differs:
+
+* **Native (LLVM)** — real threads on a real shared heap, no wasm constraints
+  at all. This is where K > 1 gets built first.
+* **JVM and CLR** — the same, once those ports exist. Neither is started.
+* **wasm, in a browser or anywhere else** — K = 1 for now. It needs the threads
+  proposal, `+atomics`, a shared-memory build and cross-origin isolation from
+  the embedder. The door stays open; nothing walks through it yet.
+
+**Doing native first is not a detour, because the runtime is one codebase.**
+`runtime/src` compiles to wasm32 and to the host from the same source — the
+same collector, the same interpreter, the same builtins (`0010`). Per-thread
+allocation buffers, safepoints, per-executor root stacks and a concurrent run
+queue are written once and are then present in the wasm module too; what wasm
+additionally needs is a build with atomics and a memory it is allowed to
+share, not a second implementation.
+
+What that does require is that the concurrency primitives — spawn, park,
+atomics — sit behind a small platform layer, so that on a target without
+threads it degenerates to K = 1 rather than failing to compile.
+
+### Asking for threads is a preference, and the answer is readable
+
+Every SDK exposes the same drivers, including on targets that cannot honour
+them. A `ThreadPool(4)` on single-threaded wasm gives back a driver whose
+parallelism reads **1**.
+
+Not a refusal, because portable code then cannot be written; and not a silent
+substitution either, because a driver that quietly gives one thread when asked
+for four is a performance mystery with no evidence in it. Ask for what you
+want, get this build's best effort, and be able to READ what you actually got.
+
+That is deliberately the same rule as `:optimize` (`0021`): an ordered
+preference, unrecognised or unavailable tokens ignored rather than refused, and
+the outcome observable from outside. One rule twice beats two rules.
+
 ## What this costs elsewhere
 
 `gas()` and the diagnostics currently read straight out of the instance. Once

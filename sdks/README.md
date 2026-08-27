@@ -26,6 +26,14 @@ Every SDK is the same four nouns (`doc/decisions/0025`):
 * an **Image** — the artifact, plus what the compiler was told to record.
 * a **Sandbox** — `call(fn, args)`, `grant`, a step limit, and gas.
 
+A fifth is coming and will be in every SDK by the same names: a **Driver**,
+which owns how many threads a sandbox gets and when a runnable one runs
+(`doc/decisions/0028`). Targets differ in what they can honour — native gets
+several threads in one sandbox first, wasm stays at one for now — so a
+`ThreadPool(4)` on a single-threaded target hands back a driver whose
+parallelism reads 1. Ask for what you want, read what you got. Same rule as
+`:optimize`.
+
 `call` takes a function name and positional arguments and nothing more. An
 argument map, capabilities-as-arguments and `--` are a CLI's conventions, not
 the SDK's.
