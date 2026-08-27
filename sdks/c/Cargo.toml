@@ -1,0 +1,18 @@
+[package]
+name = "flint-c"
+version = "0.0.1"
+edition = "2021"
+description = "flint's C ABI: the shared and static libraries C, C++ and every other FFI links against."
+license = "MIT"
+
+# A crate of its own, and only because cargo cannot make `crate-type`
+# conditional on a feature. Putting `cdylib` on the Rust SDK would build a
+# shared library for every Rust user who wanted none, so the C ABI lives in
+# `flint::capi` and this crate is the thing that EMITS it.
+[lib]
+name = "flint"
+crate-type = ["cdylib", "staticlib"]
+path = "src/lib.rs"
+
+[dependencies]
+flint = { path = "../rust", features = ["capi"] }

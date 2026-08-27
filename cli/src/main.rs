@@ -146,7 +146,7 @@ fn read_sources(dir: &Path, prefix: &str, out: &mut BTreeMap<String, String>) ->
 /// The EDN the compiler takes: the sources, the entry, and what the runtime
 /// carries. Shared by `compile` and `run` so the two cannot drift.
 fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
-              aot: bool, shake: bool) -> Result<String> {
+              aot: bool, shake: bool, meta: &[(String, String)]) -> Result<String> {
     let mut files: BTreeMap<String, String> = BTreeMap::new();
     for (p, body) in STDLIB {
         files.insert((*p).to_string(), (*body).to_string());
@@ -185,14 +185,60 @@ fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     if shake {
         out.push_str(" :shake true");
     }
+    if !meta.is_empty() {
+        // Arbitrary, and never read: flint carries what the host put there
+        // (`doc/decisions/0025`). Declared capabilities live here by
+        // convention, and the convention belongs to whoever reads them.
+        out.push_str(" :meta {");
+        for (k, v) in meta {
+            out.push_str(&edn_string(k));
+            out.push(' ');
+            out.push_str(&edn_string(v));
+            out.push(' ');
+        }
+        out.push('}');
+    }
     out.push('}');
     Ok(out)
 }
 
-fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, aot: bool) -> Result<()> {
+/// What to optimise for. An ORDERED PREFERENCE, not a switch.
+///
+/// `:optimize [:perf]` compiles every arity ahead of time; `:optimize [:size]`
+/// is a pure interpreter. It is a list because there will be more axes than
+/// two and a boolean cannot grow into them, and it is ordered because the
+/// tokens are preferences: the first one this build understands decides, and
+/// the rest are what the caller would have wanted otherwise.
+///
+/// **Unrecognised tokens are ignored.** That is what makes the list safe to
+/// write against a newer flint than the one reading it -- asking for something
+/// this build has never heard of gets you its best effort, not a refusal.
+fn wants_aot(optimize: &[String]) -> bool {
+    optimize
+        .iter()
+        .find_map(|t| match t.trim_start_matches(':') {
+            "perf" => Some(true),
+            "size" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
+           to: &str, meta: &[(String, String)]) -> Result<()> {
+    match to.trim_start_matches(':') {
+        "wasm" => {}
+        "llvm" | "native" => bail!(
+            "`:to :llvm` is not built yet: emitting a native artifact needs a linker,\n\
+             and this binary carries none. The native runtime itself IS built -- it is\n\
+             what `flint run` uses -- so the way to run natively today is `flint run`."
+        ),
+        other => bail!("no such target `{other}` (`:to :wasm`)"),
+    }
+    let aot = wants_aot(optimize);
     let slots = parse_slots(if aot { SLOTS_AOT } else { SLOTS })?;
     let base = if aot { RUNTIME_AOT } else { RUNTIME };
-    let spec = build_spec(srcs, entry, &slots, aot, true)?;
+    let spec = build_spec(srcs, entry, &slots, aot, true, meta)?;
 
     let mut p = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
@@ -222,7 +268,7 @@ fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, aot: bool) -> Result<
 /// which is what having the runtime compiled in is for. The bytecode format
 /// is an implementation detail and never leaves this process.
 fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String]) -> Result<i32> {
-    let spec = build_spec(srcs, entry, &parse_slots(SLOTS)?, false, false)?;
+    let spec = build_spec(srcs, entry, &parse_slots(SLOTS)?, false, false, &[])?;
     let mut c = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
     let r = c.run(&["project", &spec]);
@@ -253,50 +299,139 @@ fn usage() -> ! {
     eprintln!(
         "flint {VERSION} -- the compiler, as one binary
 
-  flint compile :src <dir> :fn <ns/fn> :out <file.wasm> [--aot]
-      Compile to a standalone wasm module, for any wasm host. `--aot`
-      compiles each arity to wasm as well: bigger, and much faster on
-      arithmetic.
-
-  flint run :src <dir> :fn <ns/fn> [:grant <name>] [-- args...]
+  flint run :path <dir> :fn <ns/fn> [:with [cap...]] [:args [arg...]]
       Compile and run, here. Nothing is written: flint's runtime is compiled
       into this binary, so a program can be run without producing an artifact.
 
+  flint compile :path <dir> :fn <ns/fn> :to :wasm [:out <file>]
+                [:optimize [perf]] [:meta k=v]
+      Compile to a standalone module, for any host with a wasm engine.
+
   flint version
 
-`:src` may be given more than once. Everything is embedded -- the compiler,
-the runtime and the standard library -- so there is nothing to install: no
+`:with` lends capabilities; a program granted none can reach nothing. `:args`
+is what the entry function is called with. Both are conventions of THIS CLI --
+the SDKs take a function name and an argument list and nothing more.
+
+`:optimize` is an ordered preference: `[perf]` compiles every arity as well
+(bigger, much faster on arithmetic), `[size]` interprets. Unrecognised tokens
+are ignored, so a script written for a newer flint still runs here.
+
+`:meta k=v` records arbitrary metadata in the artifact. flint does not read it:
+the DECLARED CAPABILITIES of a program are metadata by this convention, and it
+is the host that decides what to make of them.
+
+A value may be a bracketed list -- `:path [src lib]` -- or the key may simply
+be repeated. Everything is embedded, so there is nothing to install: no
 babashka, no JVM, no linker."
     );
     std::process::exit(2)
 }
 
-/// `:src d :fn ns/f :out o --aot --` in the style `bin/flint` already uses.
-/// Anything after `--` is the program's own arguments.
+/// `:path [a b] :fn ns/f :to :wasm :out o`, in the style `0021` describes.
+///
+/// A value may be a bracketed list or a repeated key; both mean the same
+/// thing. Brackets are written the way they are read aloud, and a shell splits
+/// them into separate words, so `[a` .. `b]` is gathered back up here.
+#[derive(Default)]
 struct Args {
     srcs: Vec<PathBuf>,
     entry: Option<String>,
     out: Option<String>,
+    to: Option<String>,
     grants: Vec<String>,
-    aot: bool,
+    optimize: Vec<String>,
+    meta: Vec<(String, String)>,
+    args: Vec<String>,
     rest: Vec<String>,
 }
 
+/// One value, or a bracketed run of them. Returns the values and the index
+/// just past them.
+fn values(key: &str, args: &[String], at: usize) -> Result<(Vec<String>, usize)> {
+    let first = args.get(at + 1).with_context(|| format!("{key} needs a value"))?;
+    if !first.starts_with('[') {
+        return Ok((vec![first.clone()], at + 2));
+    }
+    let mut out = Vec::new();
+    let mut i = at + 1;
+    let mut open = false;
+    while i < args.len() {
+        let mut t = args[i].as_str();
+        if !open {
+            t = t.strip_prefix('[').unwrap_or(t);
+            open = true;
+        }
+        let last = t.ends_with(']');
+        if last {
+            t = t.strip_suffix(']').unwrap();
+        }
+        if !t.is_empty() {
+            out.push(t.to_string());
+        }
+        i += 1;
+        if last {
+            return Ok((out, i));
+        }
+    }
+    bail!("{key} opens a `[` that is never closed")
+}
+
 fn parse(args: &[String]) -> Result<Args> {
-    let mut a = Args { srcs: Vec::new(), entry: None, out: None,
-                       grants: Vec::new(), aot: false, rest: Vec::new() };
+    let mut a = Args::default();
     let mut i = 0;
     while i < args.len() {
-        let need = |k: &str, i: usize| -> Result<String> {
-            args.get(i + 1).cloned().with_context(|| format!("{k} needs a value"))
-        };
         match args[i].as_str() {
             "--" => { a.rest = args[i + 1..].to_vec(); break }
-            ":src" => { a.srcs.push(PathBuf::from(need(":src", i)?)); i += 2 }
-            ":fn" => { a.entry = Some(need(":fn", i)?); i += 2 }
-            ":out" | ":o" => { a.out = Some(need(":out", i)?); i += 2 }
-            ":grant" => { a.grants.push(need(":grant", i)?); i += 2 }
-            "--aot" => { a.aot = true; i += 1 }
+            ":path" | ":src" => {
+                let (v, n) = values(":path", args, i)?;
+                a.srcs.extend(v.into_iter().map(PathBuf::from));
+                i = n;
+            }
+            ":fn" => {
+                let (v, n) = values(":fn", args, i)?;
+                a.entry = v.into_iter().next();
+                i = n;
+            }
+            ":out" | ":o" => {
+                let (v, n) = values(":out", args, i)?;
+                a.out = v.into_iter().next();
+                i = n;
+            }
+            ":to" => {
+                let (v, n) = values(":to", args, i)?;
+                a.to = v.into_iter().next();
+                i = n;
+            }
+            ":with" | ":grant" => {
+                let (v, n) = values(":with", args, i)?;
+                a.grants.extend(v);
+                i = n;
+            }
+            ":optimize" => {
+                let (v, n) = values(":optimize", args, i)?;
+                a.optimize.extend(v);
+                i = n;
+            }
+            ":args" => {
+                let (v, n) = values(":args", args, i)?;
+                a.args.extend(v);
+                i = n;
+            }
+            ":meta" => {
+                let (v, n) = values(":meta", args, i)?;
+                for kv in v {
+                    let (k, val) = kv.split_once('=').with_context(|| {
+                        format!("`:meta {kv}` is not a pair; write it as `:meta key=value`")
+                    })?;
+                    a.meta.push((k.to_string(), val.to_string()));
+                }
+                i = n;
+            }
+            // `--aot` was the old spelling of `:optimize [perf]`. It still
+            // means that: a flag that grew into a list should not break the
+            // scripts that were written before it grew.
+            "--aot" => { a.optimize.push("perf".to_string()); i += 1 }
             other if other.starts_with(':') || other.starts_with('-') => {
                 bail!("no such option `{other}`")
             }
@@ -326,7 +461,8 @@ fn main() -> Result<()> {
                 bail!("compile needs at least one :src");
             }
             let out = a.out.unwrap_or_else(|| "out.wasm".to_string());
-            compile(&a.srcs, &entry, Path::new(&out), a.aot)
+            let to = a.to.clone().unwrap_or_else(|| "wasm".to_string());
+            compile(&a.srcs, &entry, Path::new(&out), &a.optimize, &to, &a.meta)
         }
         "run" => {
             let a = parse(&argv[1..])?;
@@ -334,11 +470,20 @@ fn main() -> Result<()> {
             if a.srcs.is_empty() {
                 bail!("run needs at least one :src");
             }
-            if a.aot {
-                bail!("--aot is a property of a compiled MODULE, and `run` produces none.\n\
-                       Use `flint compile --aot` for that.");
+            // `:optimize` is a PREFERENCE, so asking `run` for one it cannot
+            // give is not an error: compiled arities are a property of a
+            // module and `run` produces none, so it interprets and says so
+            // once, rather than refusing to do the thing that was asked.
+            if wants_aot(&a.optimize) {
+                eprintln!("flint: `run` produces no module, so there are no arities to \
+                           compile; interpreting.");
             }
-            std::process::exit(run_source(&a.srcs, &entry, &a.rest, &a.grants)?);
+            // `:args` is the CLI's convention for what the entry is called
+            // with; anything after `--` is the same thing, spelled the way a
+            // shell spells it.
+            let mut argv = a.args.clone();
+            argv.extend(a.rest.iter().cloned());
+            std::process::exit(run_source(&a.srcs, &entry, &argv, &a.grants)?);
         }
         other => {
             eprintln!("flint: no such command `{other}`");

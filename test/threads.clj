@@ -84,8 +84,17 @@
 ;; rather than by anyone calling it. What it buys, on 200 000 bytes: 43.5 MB
 ;; and 28 collections held as a vector of integers, against 0.2 MB and none
 ;; held as a byte string.
-(check-that "the floor is within the budget 0009, 0011, specialisation and bytes chose"
-            (< pure-size 225000))
+;; And 20 589 bytes for `flint_call` (`doc/decisions/0025`), MEASURED by
+;; building the same module with the export and without it (221 082 against
+;; 241 671). It is the wire codec and the map building an error reply needs,
+;; and every module carries it because every module can be called.
+;;
+;; What it buys is the reason an image is a set of callable functions rather
+;; than a program with one way in: a sandbox serves many calls, and a host
+;; chooses which. That is the whole of 0025's Image/Sandbox split, and it does
+;; not work without a way in that takes a name.
+(check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
+            (< pure-size 245000))
 
 ;; ---------------------------------------------------------------- channels
 

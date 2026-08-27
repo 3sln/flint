@@ -1,0 +1,18 @@
+[package]
+name = "flint"
+version = "0.0.1"
+edition = "2021"
+description = "Compile pure Clojure and run it in a sandbox, natively."
+license = "MIT"
+
+[dependencies]
+# The runtime, compiled NATIVELY. It is the same Rust the wasm module is built
+# from -- same collector, same interpreter, same builtins -- so a sandbox here
+# is not a wasm engine wrapped in Rust (`doc/decisions/0010`).
+flint-rt = { path = "../../runtime" }
+
+[features]
+default = []
+# The C ABI, for the C and C++ SDKs. A separate crate type would build a
+# dynamic library nobody wants when using this from Rust.
+capi = []

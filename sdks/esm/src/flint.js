@@ -115,6 +115,9 @@ const kw = (s) => ({ sym: `:${s}` });
 
 // --- the API ---------------------------------------------------------------
 
+export { codec } from './codec.js';
+import { codec } from './codec.js';
+
 export class Compiler {
   constructor(module) { this.module = module; }
 
@@ -122,26 +125,46 @@ export class Compiler {
     return new Compiler(await moduleFrom(source));
   }
 
-  /// Compile a program to a standalone `.wasm` module.
+  /// Compile to an Image.
+  ///
+  /// Source comes from a RESOLVER -- a namespace to its bytes -- rather than a
+  /// directory, because there is no filesystem in a browser, in a Worker or
+  /// inside another sandbox, and sources may come from a bundle, a database or
+  /// a map already in memory. `files` is the convenience for the common case
+  /// of having them all to hand.
   ///
   /// | | |
   /// | --- | --- |
-  /// | `files` | `{ 'path.cljc': source }`; flint's standard library is added |
-  /// | `entry` | `'my.app/main'` |
-  /// | `aot`   | compile each arity to wasm too: bigger, much faster on arithmetic |
-  /// | `shake` | cut the runtime to what the program reaches (on by default) |
-  ///
-  /// No linker is involved, which is what makes this possible at all: the
-  /// runtime module was linked once, when flint was built, and compiling
-  /// splices into it (`doc/decisions/0024`).
-  compile({ files, entry, aot = false, shake = true, runtime, slots,
-            memoryLimit = 3_000_000_000,
+  /// | `resolve` | `(namespace) => source \| null` |
+  /// | `files`   | `{ 'path.cljc': source }`, an alternative to `resolve` |
+  /// | `fn`      | the function a default `run` would call |
+  /// | `exports` | every other function that must stay callable |
+  /// | `optimize` | `['perf']` compiles each arity; `['size']` interprets |
+  /// | `shake`   | cut the runtime to what the program reaches (on by default) |
+  /// | `meta`    | arbitrary metadata to record in the artifact |
+  compile({ resolve, files, fn, entry, exports, optimize = [], shake = true,
+            runtime, slots, meta, memoryLimit = 3_000_000_000,
             builtins, features, standardLibrary: withLib = true }) {
-    if (!entry) throw new Error('compile needs an entry, e.g. "my.app/main"');
+    const target = fn ?? entry;
+    if (!target) throw new Error('compile needs `fn`, e.g. "my.app/main"');
+    // An ORDERED preference list. The first token this build understands
+    // decides; the rest are what the caller would have wanted otherwise, and
+    // anything unrecognised is ignored -- which is what makes a list written
+    // against a newer flint still get this one's best effort.
+    const known = { perf: true, size: false };
+    const aot = optimize.map((o) => String(o).replace(/^:/, ''))
+                        .map((o) => known[o]).find((v) => v !== undefined) ?? false;
     const base = runtime ?? (aot ? RUNTIME_AOT : RUNTIME);
     const table = slots ?? (aot ? aotRuntimeSlots() : runtimeSlots());
-    const all = withLib ? { ...standardLibrary(), ...files } : { ...files };
-    const spec = `{:files ${edn(all)} :entry ${entry}` +
+    const all = collectSources({ resolve, files, target, withLib });
+    // Everything that must stay CALLABLE. Only reachable code ships (`0002`),
+    // and a function nobody calls from the entry is exactly the one a host
+    // wants to call -- so a sandbox's callable set has to be declared. The
+    // default is every function in the entry's own namespace, because that is
+    // what a caller almost always means.
+    const keep = exports ?? [];
+    const spec = `{:files ${edn(all)} :entry ${target}` +
+                 (keep.length ? ` :exports [${keep.map((k) => String(k)).join(' ')}]` : '') +
                  // STRINGS, not symbols: the analyzer compares a builtin name
                  // as text, and `#{= nil?}` would match nothing while looking
                  // exactly like it should.
@@ -149,6 +172,10 @@ export class Compiler {
                  ` :slots ${edn(table)}` +
                  (aot ? ' :aot true' : '') +
                  (shake ? ' :shake true' : '') +
+                 // Recorded IN the artifact, not just kept beside it: an image
+                 // written to disk has to still say what it needs. flint never
+                 // reads it (`0025`).
+                 (meta ? ` :meta ${edn(meta)}` : '') +
                  (features ? ` :features ${edn(new Set(features.map((f) => sym(`:${f}`))))}` : '') +
                  '}';
     const inst = instantiate(this.module);
@@ -168,63 +195,138 @@ export class Compiler {
       const missing = r.out.split('\n').slice(1).filter(Boolean);
       throw new Error(
         `flint: no source for ${missing.join(', ')}. ` +
-        'Every namespace a program requires has to be in `files`.');
+        'Every namespace a program requires has to be resolvable.');
     }
-    return base64Decode(r.out.trim());
+    return new Image(base64Decode(r.out.trim()), meta);
   }
 }
 
-/// A compiled program: an opaque handle over the module, with the host side of
-/// the conversation attached.
+/// Every namespace the target reaches, from a resolver or a map.
 ///
-/// A handle rather than raw bytes because running one is not just calling a
-/// function. A program with green threads can PARK on a port the host holds --
-/// that is what a capability is -- and somebody has to service the request and
-/// resume it. `program.wasm` is the artifact, for writing to a file or handing
-/// to another host; everything else here is that conversation.
-export class Program {
-  constructor(module, wasm) {
-    this.module = module;
-    /// The `.wasm` bytes. This is the artifact.
+/// The compiler resolves `:require`s itself, so what it needs is every file it
+/// might ask for. With `files` that is the map; with `resolve` it is what the
+/// resolver answers, and the compiler names anything missing.
+function collectSources({ resolve, files, target, withLib }) {
+  const all = withLib ? { ...standardLibrary() } : {};
+  if (files) Object.assign(all, files);
+  if (resolve) {
+    // A resolver is asked by NAMESPACE and answers with source; the compiler
+    // wants them keyed by the path a namespace maps to.
+    const seen = new Set();
+    const want = [target.split('/')[0]];
+    while (want.length) {
+      const ns = want.pop();
+      if (seen.has(ns)) continue;
+      seen.add(ns);
+      const src = resolve(ns);
+      if (src == null) continue;
+      const path = ns.replace(/-/g, '_').replace(/\./g, '/') + '.cljc';
+      all[path] = src;
+      // Follow its requires, so a resolver is asked only for what is reached.
+      for (const m of String(src).matchAll(/\[([a-zA-Z0-9._-]+)\s/g)) want.push(m[1]);
+    }
+  }
+  return all;
+}
+
+/// A compiled artifact: inert, holds functions, says what it is.
+///
+/// `image.wasm` is the bytes -- write them to a file, hand them to another
+/// host. Everything else here is what the artifact says about itself, read
+/// without instantiating anything.
+export class Image {
+  constructor(wasm, meta) {
     this.wasm = wasm;
+    this._meta = meta ?? null;
+    this._module = null;
   }
 
-  static async load(wasm) {
-    return new Program(await moduleFrom(wasm), wasm);
-  }
+  /// Arbitrary metadata the compiler recorded. The runtime does not interpret
+  /// it -- what a key means is between whoever wrote it and whoever reads it.
+  /// `flint compile :with [:fs]` writes `{capabilities: ['fs']}` here, which
+  /// is the CLI's convention and nobody else's.
+  get metadata() { return this._meta ?? {}; }
 
-  /// Run it. Instantiating is the expensive part, and this does it per call on
-  /// purpose: a program's initialisers re-run on load, so two runs share
-  /// nothing, which is the property a per-request binding wants.
-  ///
-  /// | | |
-  /// | --- | --- |
-  /// | `capabilities` | `{ name: handler }` -- what this run may reach |
-  /// | `stepLimit` | a bound on WORK: deterministic, so the same everywhere |
-  ///
-  /// A capability is granted, never claimed: the guest asks by name, the host
-  /// decides, and authority is the host's grant table rather than any property
-  /// of the value (`doc/decisions/0022`).
-  run(args = [], { capabilities, stepLimit = 0 } = {}) {
-    const inst = instantiate(this.module, { stepLimit });
-    if (capabilities) inst.capabilities(capabilities);
-    return inst.main(...args);
-  }
+  /// What the CLI's convention says this image will ask for. A REQUEST, not a
+  /// grant: the host still decides (`doc/decisions/0022`).
+  get capabilities() { return this.metadata.capabilities ?? []; }
 
-  /// The instance itself, for a caller that wants to drive several calls
-  /// against one instantiation, or to reach the module's exports.
-  open({ capabilities, stepLimit = 0 } = {}) {
-    const inst = instantiate(this.module, { stepLimit });
-    if (capabilities) inst.capabilities(capabilities);
-    return inst;
+  /// Instantiate it. A sandbox holds state and serves many calls.
+  async sandbox(opts = {}) {
+    if (!this._module) this._module = await moduleFrom(this.wasm);
+    return new Sandbox(this._module, opts);
   }
 }
 
-/// Compile and run, for the case that just wants an answer.
-export async function evaluate({ files, entry, args = [], compiler, ...opts }) {
+/// An image instantiated: state, capabilities, and calls.
+///
+/// A sandbox serves MANY calls, and they share the state the image set up when
+/// it loaded -- initialisers run once, not per call, which is what makes
+/// instantiate-once-call-per-request work.
+export class Sandbox {
+  constructor(module, { capabilities, stepLimit = 0 } = {}) {
+    this.inst = instantiate(module, { stepLimit });
+    if (capabilities) this.inst.capabilities(capabilities);
+    this._caps = capabilities;
+  }
+
+  /// Call a function by name with positional arguments.
+  ///
+  /// Arguments and the answer both cross as encoded values, so anything the
+  /// codec can carry can be passed and returned. What an argument MEANS is the
+  /// caller's business -- there is no entry map here, and no capability
+  /// argument; those are the CLI's convention.
+  call(fn, args = [], opts = {}) {
+    const e = this.inst.exports;
+    if (!e.flint_call) {
+      throw new Error(
+        'this module predates `flint_call`: rebuild it with a current flint');
+    }
+    const encoded = codec.vec([codec.str(fn), ...args.map((a) => codec.from(a))]).encode();
+    const p = e.arg_alloc(encoded.length);
+    new Uint8Array(e.memory.buffer).set(encoded, p);
+    const code = e.flint_call(p, encoded.length);
+    const out = new Uint8Array(e.memory.buffer,
+                               e.out_ptr(), e.out_len()).slice();
+    const value = codec.decode(out, opts);
+    if (code !== 0) {
+      const err = new Error(`flint: ${value?.[':message'] ?? value?.message ?? 'the call failed'}`);
+      err.flint = value;
+      throw err;
+    }
+    return value;
+  }
+
+  /// What the build measures, read after a call rather than printed
+  /// (`doc/decisions/0025`). Gas is in every build because it is resource
+  /// control; the rest appears only when the module carries it, and an absent
+  /// counter reads as ABSENT rather than as zero.
+  get diagnostics() {
+    const e = this.inst.exports;
+    const out = { gas: e.stat_steps ? Number(e.stat_steps()) : undefined };
+    const opt = {
+      collections: 'stat_collections', allocations: 'stat_allocs',
+      bytesAllocated: 'stat_bytes_allocated', peakLive: 'stat_peak_live',
+      heapUsed: 'stat_heap_used',
+    };
+    for (const [k, f] of Object.entries(opt)) {
+      if (e[f]) out[k] = Number(e[f]());
+    }
+    return out;
+  }
+
+  /// The raw instance, for a caller that wants the module's own exports or the
+  /// legacy `main` entry.
+  get exports() { return this.inst.exports; }
+  main(...args) { return this.inst.main(...args); }
+}
+
+/// Compile and call, for the case that just wants an answer.
+export async function evaluate({ fn, args = [], compiler, ...opts }) {
   const c = compiler instanceof Compiler ? compiler : await Compiler.load(compiler);
-  const p = await Program.load(c.compile({ files, entry, ...opts }));
-  return p.run(args, opts);
+  const image = c.compile({ fn, ...opts });
+  const sandbox = await image.sandbox(opts);
+  return sandbox.call(fn, args);
 }
 
 export const capabilities = {

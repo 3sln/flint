@@ -142,6 +142,7 @@
                                             sources))
                      :order (vec (filter (fn [n] (contains? sources n)) order))
                      :entry entry
+                     :exports (or (:exports spec) [])
                      :builtins (or (:builtins spec) #{})
                      :features features})
             builder (:builder result)]
@@ -158,6 +159,9 @@
       :slots  {builtin-name table-slot} for that module
       :aot    true to append compiled arities as well
       :shake  true to cut the runtime down to what this program reaches
+      :meta   arbitrary metadata to record in the artifact, carried and never
+              read -- the declared capabilities of a program live here by the
+              CLI's convention, and the convention is the reader's, not ours
 
   The runtime module arrives as a SEPARATE argument rather than inside the
   spec, and that is not tidiness. Three-quarters of a megabyte of base64 inside
@@ -192,6 +196,7 @@
                                             sources))
                      :order (vec (filter (fn [n] (contains? sources n)) order))
                      :entry entry
+                     :exports (or (:exports spec) [])
                      :builtins (set (keys slots))
                      :features features})
             builder (:builder result)
@@ -247,7 +252,8 @@
             m (if shaken (first shaken) m)
             image (img/emit builder slots)]
         {:module (base64 (bundle/into-module (w/emit m) image
-                                             {:entry entry :aot? aot? :slots slots}))
+                                             {:entry entry :aot? aot? :slots slots
+                                              :meta (:meta spec)}))
          :compiled (when res (:compiled res))
          :arities (when res (:total res))
          :shaken (when shaken (second shaken))}))))

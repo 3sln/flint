@@ -157,7 +157,7 @@
   ;; entering, and asks of a value that comes back whether it is one it issued.
   ;; Both are production, not diagnostics -- a capability model that only works
   ;; in a debug build is not a capability model.
-  ["flint_main" "arg_alloc" "arg_push" "out_ptr" "out_len"
+  ["flint_main" "flint_call" "arg_alloc" "arg_push" "out_ptr" "out_len"
    "image_desc_addr" "set_step_limit" "stat_steps" "set_memory_limit"
    "flint_grant" "flint_opaque_host_id" "flint_presented_capability"])
 

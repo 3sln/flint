@@ -55,7 +55,10 @@
 ;; Raised 2 360 bytes for byte strings (`doc/decisions/0024`): pinned by the
 ;; generic collection surface, and worth 217x the memory on the bytes they
 ;; exist to hold.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-prod.wasm") 225000))
+;; Raised 20 589 bytes for `flint_call` (`doc/decisions/0025`): the wire codec
+;; and the map an error reply is built from, carried by every module because
+;; every module can be called by name.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-prod.wasm") 245000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

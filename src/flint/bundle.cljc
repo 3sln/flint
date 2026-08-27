@@ -163,6 +163,7 @@
                                         (w/imports m))))
                :units [{:name "flint.rt" :abi {:runtime 1 :value 1 :image 1}}]
                :builtins (count (filter builtin? all-exported))
+               :meta (or (:meta opts) {})
                :features {:diagnostics (contains? (set exported) "collect_now")
                           :snapshots (contains? (set exported) "snapshot_export")
                           :capabilities (contains? (set exported) "flint_grant")

@@ -1,0 +1,34 @@
+#!/bin/sh
+# Build the C ABI and run both selftests against it.
+#
+# The library is `flint-c`, whose whole content is `pub use flint::capi::*`;
+# the headers are `include/`. Release, because the compiler embedded in it is
+# flint compiling itself, and a debug build of that is minutes rather than
+# seconds.
+set -e
+cd "$(dirname "$0")/../.."
+
+echo "== building the C ABI"
+cargo build --release -p flint-c
+
+LIB=target/release
+OUT=target/c-selftest
+mkdir -p "$OUT"
+
+# Static, so the selftests do not need the library on a load path. The system
+# libraries beneath it are what a Rust staticlib always needs.
+case "$(uname -s)" in
+  Darwin) SYS="-framework CoreFoundation -framework Security -liconv" ;;
+  *)      SYS="-lpthread -ldl -lm" ;;
+esac
+
+echo "== C"
+cc -std=c11 -Wall -Wextra -Werror -Isdks/c/include \
+   sdks/c/selftest.c "$LIB/libflint.a" $SYS -o "$OUT/selftest-c"
+"$OUT/selftest-c"
+
+echo
+echo "== C++"
+c++ -std=c++17 -Wall -Wextra -Werror -Isdks/c/include \
+    sdks/c/selftest.cpp "$LIB/libflint.a" $SYS -o "$OUT/selftest-cpp"
+"$OUT/selftest-cpp"

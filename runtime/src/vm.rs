@@ -1694,6 +1694,72 @@ impl Rt {
             None => r,
         }
     }
+
+    /// Run the image's initialisers, once. A sandbox serves many calls
+    /// (`doc/decisions/0025`) and they must not re-run per call -- the state a
+    /// program sets up at load is the state every call after it sees.
+    pub fn ensure_started(&mut self) -> bool {
+        if self.started {
+            return true;
+        }
+        self.started = true;
+        for i in 0..self.image.init.len() {
+            let f = self.image.init[i];
+            let c = self.make_closure(f, &[]);
+            let _ = self.invoke(c, &[]);
+            if self.failed() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The var a qualified name refers to, or `None`.
+    ///
+    /// Names are compared as text because that is the only durable identifier
+    /// a var has across a compile: a slot index belongs to whichever image
+    /// produced it (the same argument `0023` makes for builtins).
+    pub fn var_named(&mut self, want: &str) -> Option<u32> {
+        for i in 0..self.image.var_names.len() {
+            let namec = self.image.var_names[i] as usize;
+            let nv = self.roots.consts.get(namec).copied().unwrap_or(NIL);
+            let mut b = crate::rt::sbuf();
+            if self.as_str(nv, &mut b) == Some(want) {
+                return Some(i as u32);
+            }
+        }
+        None
+    }
+
+    /// Call a named function with the arguments in `args`.
+    ///
+    /// This is what a sandbox does, and `run_program` is now one special case
+    /// of it: the function the CLI calls when it is not told which.
+    pub fn call_named(&mut self, name: &str, args: &[Value]) -> Result<Value, alloc::string::String> {
+        if !self.ensure_started() {
+            return Ok(NIL); // the error is in `self.thrown`, rendered by the caller
+        }
+        let idx = self
+            .var_named(name)
+            .ok_or_else(|| alloc::format!("this image has no `{name}`"))?;
+        let f = self.roots.globals.get(idx as usize).copied().unwrap_or(NIL);
+        if f.is_nil() {
+            return Err(alloc::format!("`{name}` is not a function"));
+        }
+        let base = self.mark();
+        self.push(f);
+        for a in args {
+            self.push(*a);
+        }
+        let held: alloc::vec::Vec<Value> = (1..=args.len()).map(|i| self.r(base + i)).collect();
+        let fv = self.r(base);
+        let r = self.invoke(fv, &held);
+        self.pop_to(base);
+        Ok(match self.sched_hook {
+            Some(hook) => hook(self, r),
+            None => r,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

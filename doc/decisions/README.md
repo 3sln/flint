@@ -32,6 +32,7 @@ for the first.
 | [0023](0023-construe-integration-bar.md) | What "ready for construe" means, concretely | **Live.** The milestone the current work is aimed at |
 | [0025](0025-structured-ports.md) | A wire codec, and structured ports | **Roadmap.** Reverses 0006's no-transfer rule, which left the door open |
 | [0026](0026-tables.md) | Tables: columnar storage that is a value | **Queued.** A vector of maps outside, a columnar B-tree inside |
+| [0027](0027-ports-are-the-hosts.md) | Ports belong to the host, not to a sandbox | **Queued.** Local ports stay by-reference; global ones encode, and the encode is the GC boundary |
 | [0024](0024-no-runtime-linking.md) | No linking at compile time; byte strings and transient ropes | **Partly shipped.** The splice and the tree shaker work with no linker; the byte strings do not exist |
 
 ## What is actually next
@@ -79,6 +80,12 @@ what remains, and what each thing is waiting on.
     shares its reader with `0015`, which is now built.
 11. **Tables** (`0026`) — a vector of maps outside, a columnar B-tree inside.
     Queued; its codec tag wants adding while `0025`'s format is still open.
+
+12. **Ports belong to the host** (`0027`) — a global port's registry moves out
+    of the sandbox, the system channel is passed IN, and creating one becomes a
+    dispatch. Local ports are untouched and still pass by reference. Needed
+    before `0025`'s system port is built, because building it sandbox-local
+    would be building the thing this replaces.
 
 **Closed, with the result rather than the plan:**
 

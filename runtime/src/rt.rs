@@ -92,6 +92,9 @@ pub struct Rt {
     #[cfg(feature = "aot")]
     pub run_base: usize,
     pub steps: u64,
+    /// Have the image's initialisers run? A sandbox serves many calls
+    /// (`doc/decisions/0025`) and they run once, not per call.
+    pub started: bool,
     /// Hard budget. 0 means unlimited. Exceeding it is a **catchable error**
     /// carrying what was spent against what was allowed, not a trap.
     pub gas_limit: u64,
@@ -225,6 +228,7 @@ impl Rt {
             #[cfg(feature = "aot")]
             run_base: 0,
             steps: 0,
+            started: false,
             gas_limit: 0,
             slice_end: 0,
             gas_trips: 0,

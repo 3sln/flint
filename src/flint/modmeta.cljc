@@ -72,7 +72,8 @@
 (defn describe
   "Build the metadata map. `compat` is the ABI-affecting subset; everything else
   is descriptive."
-  [{:keys [abi memory gas-in-aot version exports imports units features entry builtins]}]
+  [{:keys [abi memory gas-in-aot version exports imports units features entry builtins
+           meta]}]
   (let [compat {:abi abi
                 :memory (or memory :unshared)
                 :gas-in-aot (boolean gas-in-aot)}
@@ -86,7 +87,16 @@
            :builtins builtins
            :imports (vec (sort imports))
            :units (vec (sort-by :name units))
-           :features features}]
+           :features features
+           ;; Whatever the host put there, carried and NOT read. flint has no
+           ;; opinion about what belongs in it -- an open map is open
+           ;; (`doc/decisions/0025`) -- and the declared capabilities of a
+           ;; program live here by convention, which makes them the reader's
+           ;; business rather than the compiler's.
+           ;;
+           ;; It sits below the compatibility line on purpose: metadata a host
+           ;; invented cannot make two modules incompatible.
+           :meta (or meta {})}]
     (assoc-in m [:compat :key] (compat-key m))))
 
 (defn compatible?

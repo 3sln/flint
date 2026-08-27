@@ -328,11 +328,18 @@ is a caller with a house style, and the house style is not in the runtime.
 runtime, and `0010`'s `:jvm` and `:clr` later. A file name is an output detail;
 the target is the decision.
 
-`:aot` is a **flag, not a target**, because AOT is a property of the BYTECODE
-and not of the backend: `:aot true :to :wasm` compiles each arity to wasm,
-`:aot true :to :llvm` compiles each arity to native code. The analysis is the
-same in both (`flint.aot`); only the emission differs, which is why it was
-wrong to put it in the same axis as the target.
+`:optimize` is an ordered **preference list** rather than a flag:
+`[:perf]` compiles every arity ahead of time, `[:size]` is a pure interpreter.
+A list because there will be more axes than two, ordered because the tokens are
+preferences and the first one a build understands decides, and **unrecognised
+tokens are ignored** so a script written against a newer flint still gets the
+older one's best effort rather than a refusal.
+
+It is orthogonal to `:to`, because AOT is a property of the BYTECODE and not of
+the backend: `:optimize [:perf] :to :wasm` compiles each arity to wasm,
+`:optimize [:perf] :to :llvm` compiles each arity to native code. The analysis
+is the same (`flint.aot`) and only the emission differs, which is why it was
+wrong to put it on the same axis as the target.
 
 `:path` rather than `:src`, because it is a search path — several roots, first
 hit wins — and `:src` reads like "the source".

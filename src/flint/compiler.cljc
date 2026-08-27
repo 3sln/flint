@@ -513,7 +513,7 @@
 (defn compile-image
   "Compile `sources` ({ns-symbol {:src s :file f}}) with entry var `entry-sym`.
   Returns {:builder b :stats {...}}."
-  [{:keys [sources order entry builtins exclude excluded-builtins features]}]
+  [{:keys [sources order entry exports builtins exclude excluded-builtins features]}]
   (let [cc (new-context {:builtins builtins :features features})]
     (let [read-forms (into {} (for [nsname order]
                                 (let [{:keys [src file]} (get sources nsname)]
@@ -550,14 +550,22 @@
       (analyze-namespace! cc shim-ns (read-namespace! cc shim-ns shim-src "<entry-shim>")))
 
     (let [entry-var 'flint.main/-main
+          ;; Everything that must stay CALLABLE, not just the default entry.
+          ;;
+          ;; A sandbox serves many calls (`doc/decisions/0025`), so an image is
+          ;; a set of callable functions rather than a program with one way in.
+          ;; Reachability from a single entry is right for the second and wrong
+          ;; for the first: a function nobody calls from `main` is exactly the
+          ;; one a host wants to call, and it was being dropped as unreachable.
+          extra-roots (vec exports)
           items (:items @cc)
           ;; Reachability is a fixpoint, not one pass. Two things make it so:
           ;; including a namespace brings in its bare top-level expressions, and
           ;; an item that defines several vars (`defmulti` defines the function
           ;; AND its method table) records its own references under a synthetic
           ;; id that has to be seeded once the item is known to be kept.
-          state (loop [r0 (reachable* cc [entry-var] {})]
-                  (let [rs (conj (:seen r0) entry-var)
+          state (loop [r0 (reachable* cc (into [entry-var] extra-roots) {})]
+                  (let [rs (into (conj (:seen r0) entry-var) extra-roots)
                         reached (fn [it] (some (fn [d] (contains? rs d)) (:defines it)))
                         inc-ns (conj (into #{} (map :ns (filter reached items))) 'flint.main)
                         keeping (filter (fn [it]
