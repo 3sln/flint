@@ -5,87 +5,30 @@
 //! and nothing to find on disk -- no babashka, no JVM, no Rust toolchain and
 //! no linker (`doc/decisions/0024`).
 //!
-//! The compiler is a wasm module and this drives it in-process through
-//! wasmtime. Its ABI is small enough to state here: `arg_alloc` reserves room
-//! in the module's memory, `arg_push` records one argument, `main` runs, and
-//! the answer is the bytes between `out_ptr` and `out_len`.
+//! The compiler runs NATIVELY. flint's runtime is Rust, so it already compiles
+//! through LLVM for every target cargo does -- the collector, the interpreter
+//! and every builtin are the same code the wasm module is built from. So this
+//! binary carries the compiler as a bytecode IMAGE and runs it directly, with
+//! no wasm engine in the binary at all.
+//!
+//! It is worth 2.7 s against 15.6 s on the same compile (`doc/decisions/0010`).
+//! The output is still wasm: what changed is what the compiler runs ON.
 
 use anyhow::{bail, Context, Result};
+use flint_rt::native::Program;
 use std::{collections::BTreeMap, fs, path::{Path, PathBuf}};
-use wasmtime::{Engine, Instance, Linker, Module, Store, TypedFunc};
 
 include!(concat!(env!("OUT_DIR"), "/stdlib.rs"));
 
-static COMPILER: &[u8] = include_bytes!("../../dist/flintc.wasm");
+/// The compiler, as a bytecode image rather than a wasm module: this runs it
+/// natively, so the module would only be a wasm engine's worth of indirection.
+static COMPILER: &[u8] = include_bytes!("../../dist/flintc.image");
 static RUNTIME: &[u8] = include_bytes!("../../dist/flint-runtime.wasm");
 static RUNTIME_AOT: &[u8] = include_bytes!("../../dist/flint-runtime-aot.wasm");
 static SLOTS: &str = include_str!("../../dist/slots.json");
 static SLOTS_AOT: &str = include_str!("../../dist/slots-aot.json");
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// A flint module, instantiated and ready to be called.
-struct Guest {
-    store: Store<()>,
-    instance: Instance,
-}
-
-impl Guest {
-    fn new(engine: &Engine, bytes: &[u8]) -> Result<Self> {
-        let module = Module::new(engine, bytes).context("this is not a valid wasm module")?;
-        let mut store = Store::new(engine, ());
-        let linker: Linker<()> = Linker::new(engine);
-        let instance = linker.instantiate(&mut store, &module)?;
-        Ok(Guest { store, instance })
-    }
-
-    fn func<P: wasmtime::WasmParams, R: wasmtime::WasmResults>(
-        &mut self, name: &str,
-    ) -> Result<TypedFunc<P, R>> {
-        self.instance
-            .get_typed_func::<P, R>(&mut self.store, name)
-            .with_context(|| format!("the module does not export `{name}`"))
-    }
-
-    fn has(&mut self, name: &str) -> bool {
-        self.instance.get_export(&mut self.store, name).is_some()
-    }
-
-    fn set_memory_limit(&mut self, bytes: u32) -> Result<()> {
-        if self.has("set_memory_limit") {
-            let f: TypedFunc<u32, ()> = self.func("set_memory_limit")?;
-            f.call(&mut self.store, bytes)?;
-        }
-        Ok(())
-    }
-
-    /// Push one argument, copying it into the module's own memory.
-    fn push_arg(&mut self, s: &str) -> Result<()> {
-        let alloc: TypedFunc<u32, u32> = self.func("arg_alloc")?;
-        let p = alloc.call(&mut self.store, s.len() as u32)?;
-        let mem = self.instance.get_memory(&mut self.store, "memory")
-            .context("the module exports no memory")?;
-        mem.write(&mut self.store, p as usize, s.as_bytes())?;
-        let push: TypedFunc<(u32, u32), ()> = self.func("arg_push")?;
-        push.call(&mut self.store, (p, s.len() as u32))?;
-        Ok(())
-    }
-
-    fn run(&mut self, args: &[&str]) -> Result<(i32, Vec<u8>)> {
-        for a in args {
-            self.push_arg(a)?;
-        }
-        let main: TypedFunc<(), i32> = self.func("main")?;
-        let code = main.call(&mut self.store, ())?;
-        let ptr: TypedFunc<(), u32> = self.func("out_ptr")?;
-        let len: TypedFunc<(), u32> = self.func("out_len")?;
-        let (p, n) = (ptr.call(&mut self.store, ())?, len.call(&mut self.store, ())?);
-        let mem = self.instance.get_memory(&mut self.store, "memory").unwrap();
-        let mut out = vec![0u8; n as usize];
-        mem.read(&self.store, p as usize, &mut out)?;
-        Ok((code, out))
-    }
-}
 
 // --- EDN, written rather than depended on ----------------------------------
 //
@@ -196,7 +139,7 @@ fn read_sources(dir: &Path, prefix: &str, out: &mut BTreeMap<String, String>) ->
 
 // --- the commands ----------------------------------------------------------
 
-fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, aot: bool) -> Result<()> {
+fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, aot: bool, image: bool) -> Result<()> {
     let mut files: BTreeMap<String, String> = BTreeMap::new();
     for (p, body) in STDLIB {
         files.insert((*p).to_string(), (*body).to_string());
@@ -237,20 +180,39 @@ fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, aot: bool) -> Result<
         if aot {
             s.push_str(" :aot true");
         }
+        s.push_str(" :shake true");
         s.push('}');
         s
     };
 
-    let engine = Engine::default();
-    let mut g = Guest::new(&engine, COMPILER)?;
-    g.set_memory_limit(3_000_000_000)?;
+    let mut p = Program::load(COMPILER, 3_000_000_000)
+        .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
+
+    // An IMAGE is what this binary can run: it has flint's runtime compiled in
+    // and no wasm engine, so a module would need one. It is also far smaller --
+    // the runtime is not repeated in every artifact.
+    if image {
+        let r = p.run(&["project", &spec]);
+        if r.code != 0 {
+            bail!("{}", r.out.trim());
+        }
+        if let Some(rest) = r.out.strip_prefix("!missing") {
+            bail!("no source for{}", rest.replace('\n', " "));
+        }
+        let b64 = r.out.split('\n').next().unwrap_or("");
+        let bytes = base64_decode(b64)?;
+        fs::write(out_path, &bytes)?;
+        eprintln!("wrote {} ({} bytes, image)", out_path.display(), bytes.len());
+        return Ok(());
+    }
+
     // The runtime module goes as its own ARGUMENT, never inside the spec: it is
     // three-quarters of a megabyte of base64, and inside an EDN string it is
     // three-quarters of a megabyte for flint's reader to scan a character at a
     // time -- 198 seconds against 10.
-    let (code, out) = g.run(&["wasm", &spec, &base64(base)])?;
-    let text = String::from_utf8_lossy(&out).to_string();
-    if code != 0 {
+    let r = p.run(&["wasm", &spec, &base64(base)]);
+    let text = r.out;
+    if r.code != 0 {
         bail!("{}", text.trim());
     }
     if let Some(rest) = text.strip_prefix("!missing") {
@@ -264,26 +226,42 @@ fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, aot: bool) -> Result<
     Ok(())
 }
 
-fn run_module(path: &Path, args: &[String]) -> Result<i32> {
+/// Run a compiled artifact.
+///
+/// A `.wasm` MODULE is not runnable here: it is the artifact for a wasm host,
+/// and this binary has no wasm engine in it. An IMAGE is, and that is what the
+/// compiler emits for this path. Saying which is which beats a trap.
+fn run_program(path: &Path, args: &[String]) -> Result<i32> {
     let bytes = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
-    let engine = Engine::default();
-    let mut g = Guest::new(&engine, &bytes)?;
+    if bytes.starts_with(b"\0asm") {
+        bail!(
+            "{} is a wasm MODULE, and this binary has no wasm engine in it.\n\
+             Run it with a wasm host -- `node host/flint.mjs {}` -- or compile \n\
+             to an image with `--image` and run that here.",
+            path.display(), path.display()
+        );
+    }
+    let mut p = Program::load(&bytes, 2_000_000_000)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (code, out) = g.run(&refs)?;
-    print!("{}", String::from_utf8_lossy(&out));
-    Ok(code)
+    let r = p.run(&refs);
+    print!("{}", r.out);
+    Ok(r.code)
 }
 
 fn usage() -> ! {
     eprintln!(
         "flint {VERSION} -- the compiler, as one binary
 
-  flint compile <src>... --entry ns/fn -o <out.wasm> [--aot]
-      Compile to a standalone wasm module. `--aot` compiles each arity to
-      wasm as well: bigger, and much faster on arithmetic.
+  flint compile <src>... --entry ns/fn -o <out> [--aot] [--image]
+      Compile. By default a standalone `.wasm` module, for any wasm host.
+      `--aot` compiles each arity to wasm as well: bigger, much faster on
+      arithmetic. `--image` emits a bytecode image instead -- far smaller,
+      and what `flint run` takes, because this binary has flint's runtime
+      compiled in and no wasm engine.
 
-  flint run <module.wasm> [args...]
-      Run a module.
+  flint run <program.image> [args...]
+      Run an image, natively.
 
   flint version
 
@@ -306,26 +284,34 @@ fn main() -> Result<()> {
         "help" | "--help" | "-h" => usage(),
         "compile" => {
             let mut srcs = Vec::new();
-            let (mut entry, mut out, mut aot) = (None, None, false);
+            let (mut entry, mut out, mut aot, mut image) = (None, None, false, false);
             let mut i = 1;
             while i < args.len() {
                 match args[i].as_str() {
                     "--entry" | "-e" => { entry = args.get(i + 1).cloned(); i += 2 }
                     "-o" | "--out" => { out = args.get(i + 1).cloned(); i += 2 }
                     "--aot" => { aot = true; i += 1 }
+                    "--image" => { image = true; i += 1 }
                     other => { srcs.push(PathBuf::from(other)); i += 1 }
                 }
             }
             let Some(entry) = entry else { bail!("compile needs --entry ns/fn") };
-            let out = out.unwrap_or_else(|| "out.wasm".to_string());
+            let out = out.unwrap_or_else(|| {
+                if image { "out.image".to_string() } else { "out.wasm".to_string() }
+            });
             if srcs.is_empty() {
                 bail!("compile needs at least one source file or directory");
             }
-            compile(&srcs, &entry, Path::new(&out), aot)
+            if image && aot {
+                bail!("--image and --aot are different artifacts: compiled arities are \n\
+                       wasm functions appended to a module, and an image has no module \n\
+                       to append them to.");
+            }
+            compile(&srcs, &entry, Path::new(&out), aot, image)
         }
         "run" => {
             let Some(m) = args.get(1) else { bail!("run needs a module") };
-            let code = run_module(Path::new(m), &args[2..])?;
+            let code = run_program(Path::new(m), &args[2..])?;
             std::process::exit(code);
         }
         other => {

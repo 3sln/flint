@@ -16,7 +16,7 @@ for the first.
 | [0007](0007-construe-benchmarks.md) | Benchmark the decision, not the runtime | **Done**; results in the README |
 | [0008](0008-document-resource.md) | Structure eagerly, content on demand | **Shipped.** Both wave assertions pass: 64 waves, 4 194 304 bytes |
 | [0009](0009-resource-limits.md) | Hard limits; the loop that does not count | **Shipped** |
-| [0010](0010-other-hosts.md) | SDKs, and JVM/CLR ports | **Roadmap** |
+| [0010](0010-other-hosts.md) | SDKs, and JVM/CLR ports | **Partly shipped.** The native target runs images with no wasm engine; the CLI is built on it. JVM/CLR not started |
 | [0011](0011-strings-and-matching.md) | Rope strings; what to do about regex | **Shipped** (§1–2). §5's conclusion superseded by 0012 |
 | [0012](0012-matching-over-ropes.md) | The matcher must consume a rope → Pike VM | **Shipped.** `re-find`/`re-matches`/`re-seq`; linear on the catastrophic case |
 | [0013](0013-emit-wasm-instead-of-dispatch.md) | AOT regions instead of dispatching | **SHELVED.** Built and measured at 1.07–1.25×; parked for strings/regex. Why it lost is recorded |
@@ -50,20 +50,25 @@ what remains, and what each thing is waiting on.
    anything carrying identity or mutable state, because a second copy is a
    second identity. Protocols are the hard case, and deciding which namespaces
    fall on which side is the work.
-3. **The JVM, tier 2** (`0010`) — the route is **decided** and not built.
+3. **AOT for the native target** (`0010`) — the native interpreter is built and
+   the CLI runs on it (3.5 s against 15.6 s), but without AOT a native
+   interpreter gives up most of the benefit. The wasm AOT emitter's analysis
+   carries over; what differs is emission, and memory is `base + u32` rather
+   than a linear memory, which is one base register.
+4. **The JVM, tier 2** (`0010`) — the route is **decided** and not built.
    Chicory measured 39× V8 at its best, which rules tier 1 out; tier 2 is
    porting the VM. `0018` is what settled it.
-4. **`clojure.zip`, `clojure.data`, `clojure.datafy`** — the Clojars survey
+5. **`clojure.zip`, `clojure.data`, `clojure.datafy`** — the Clojars survey
    said implementing these unblocks more third-party code than maven's
    transitive resolution would have, which is why that half of `0021` is
    cancelled.
-5. **The rest of `0021`** — the native binary itself (wasmer `create-exe` or a
+6. **The rest of `0021`** — the native binary itself (wasmer `create-exe` or a
    small Rust host), cross-compilation backends, nREPL, and capability
    injection on the command line.
-6. **Thread pool** (`0019`) — strictly opt-in and free when declined; gas drawn
+7. **Thread pool** (`0019`) — strictly opt-in and free when declined; gas drawn
    in per-thread blocks; snapshots halt the whole app at a safe point.
-7. **Profiler** (`0017`) — deterministic, because instruction counts are.
-8. **Debug runner** (`0014`) — cheap because a breakpoint is a park, and it
+8. **Profiler** (`0017`) — deterministic, because instruction counts are.
+9. **Debug runner** (`0014`) — cheap because a breakpoint is a park, and it
    shares its reader with `0015`, which is now built.
 
 **Closed, with the result rather than the plan:**

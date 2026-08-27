@@ -9,11 +9,11 @@ name = "flint"
 path = "src/main.rs"
 
 [dependencies]
-# wasmtime rather than wasmer, and it is a library rather than `create-exe`.
-# The artifacts are embedded with `include_bytes!` and driven in-process, so
-# there is one binary and cargo cross-compiles it for every target with no
-# extra toolchain -- which is the whole point of shipping a single file.
-wasmtime = { version = "39", default-features = false, features = ["cranelift", "runtime", "std", "gc", "gc-drc"] }
+# flint's own runtime, compiled NATIVELY. It is the same Rust the wasm module
+# is built from -- the same collector, the same interpreter, the same builtins
+# -- so running the compiler here is 2.7 s against 15.6 s through a wasm
+# engine (`doc/decisions/0010`). There is no wasm runtime in this binary.
+flint-rt = { path = "../runtime" }
 anyhow = "1"
 
 [profile.release]

@@ -66,7 +66,13 @@ FLINT_SLOTS_OUT=dist/slots-aot.json \
   ./bin/flint :src dist/src :fn loader/main :out dist/flint-runtime-aot.wasm --loader | sed 's/^/    /'
 ./bin/build-units > /dev/null
 
-echo "==> the compiler"
+echo "==> the compiler, as a module and as an image"
+# Two forms of the same compiler. The MODULE is for a wasm host -- the SDK and
+# anything else that already has an engine. The IMAGE is for a host that has
+# flint's runtime compiled natively, which is the CLI: running the compiler as
+# native code is 2.7 s against 15.6 s through a wasm engine.
+./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.image --emit-image | sed 's/^/    /'
+
 ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.wasm | sed 's/^/    /'
 
 # The SDK is a separate package with its own build (`sdks/`), and it is what

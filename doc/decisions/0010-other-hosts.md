@@ -1,8 +1,15 @@
 # 0010 — SDKs, and other host targets
 
-> **NOT BUILT YET — this is a plan, not a description.** Nothing in this file
-> exists in the tree. Do not read it as documentation of shipped behaviour, and
-> do not treat statements in the README as stale on account of it.
+> **PARTLY BUILT.** The NATIVE target works: flint's runtime is Rust, so it
+> already compiles through LLVM for every target cargo does, and
+> `flint_rt::native::Program` loads an image and runs it with no wasm engine
+> anywhere. `bin/flint` (the single binary) is built on it — the compiler runs
+> as native code, which is **3.5 s against 15.6 s** on the same compile, in a
+> 2.1 MB binary rather than 7.1 MB.
+>
+> What is NOT built: **AOT for the native target**, which is what this is
+> waiting on — a native interpreter without it gives up most of the benefit.
+> And the JVM and CLR ports, which are the rest of this document.
 
 Roadmap, not current work. Written now because the answer changes what should be
 frozen today.
