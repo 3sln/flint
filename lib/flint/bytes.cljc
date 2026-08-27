@@ -42,13 +42,6 @@
   (flint.rt/b-depth b))
 (defn at [b i] (flint.rt/b-at b i))
 
-(defn eq?
-  "Content equality. `=` answers this too, but code that also runs on the
-  bootstrap host cannot use it there: a host byte string is a Java array, and
-  `=` on two arrays is identity."
-  [a b]
-  (flint.rt/b-eq? a b))
-
 (defn cat
   "Concatenate. O(1) once the pieces are big enough for a node to be worth more
   than the copy; below that it copies, which is what makes building one a byte

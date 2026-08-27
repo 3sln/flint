@@ -427,7 +427,13 @@
                            i5 (+ i4 nr)]
                        (recur i5 (inc k)
                               (conj acc (flint.rt/b-slice body start i5))))))
-        hit (first (keep-indexed (fn [k b] (when (flint.rt/b-eq? b enc) k))
+        ;; Compared as VECTORS rather than as byte strings. `=` already
+        ;; compares byte strings by content in a module -- but on the bootstrap
+        ;; host one is a Java array, where `=` is identity and every freshly
+        ;; encoded signature would look new. A signature is a handful of bytes
+        ;; and this runs once per distinct type, so the conversion is free and
+        ;; it needs no primitive of its own.
+        hit (first (keep-indexed (fn [k b] (when (= (bytes->vec b) (bytes->vec enc)) k))
                                  existing))]
     (if hit
       [m hit]

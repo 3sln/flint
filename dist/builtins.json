@@ -42,7 +42,6 @@
   "flint/b-conj!",
   "flint/b-count",
   "flint/b-depth",
-  "flint/b-eq?",
   "flint/b-persistent!",
   "flint/b-slice",
   "flint/b-tcount",

@@ -284,15 +284,6 @@ builtins! {
         out
     };
 
-    // Content equality. `=` already answers this for byte strings, but a
-    // caller that has to work on the bootstrap host too cannot use it: there a
-    // byte string is a Java array, and `=` on two arrays is identity.
-    "flint/b-eq?", flint_b_beq, b_beq, |rt, a, n| {
-        let _ = n;
-        let (x, y) = (arg(rt, a, 0), arg(rt, a, 1));
-        Value::boolean(rt.is_bytes(x) && rt.is_bytes(y) && rt.b_eq(x, y))
-    };
-
     // The subtree depth, which is a TEST hook: a byte rope that degenerates
     // into a spine still answers every question correctly and gets slower and
     // then traps, so the shape has to be observable.
