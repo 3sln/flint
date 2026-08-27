@@ -14,11 +14,14 @@ const wasm = compiler.compileToWasm({
   entry: 'app/main',
 });
 
-// Or a bytecode image, run in a resident loader -- the shape for a
-// per-request binding, where the loader is instantiated once.
-const image = compiler.compile({ files, entry: 'app/main' });
+// Or compile for the resident runtime -- the shape for a per-request binding,
+// where the runtime is instantiated once and each program loads into it. What
+// `compile` returns is an OPAQUE handle, not an artifact: flint's bytecode
+// format is an implementation detail, and `compileToWasm` is what produces
+// something to keep.
+const program = compiler.compile({ files, entry: 'app/main' });
 const runtime = await Runtime.load();
-runtime.run(image, ['there']);        // => { code: 0, out: 'hi there' }
+runtime.run(program, ['there']);      // => { code: 0, out: 'hi there' }
 ```
 
 ## One file, no dependencies

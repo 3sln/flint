@@ -4,7 +4,7 @@
 // filesystem here, no `node:` import and no fetch. It is one ESM module that
 // works the same in a browser, in node, in a Worker and in Deno.
 //
-//   flintc.wasm        the compiler. Source in, an image or a MODULE out.
+//   flintc.wasm        the compiler. Source in, a wasm MODULE out.
 //   flint-runtime.wasm the runtime a compiled module is spliced into.
 //
 // Neither needs babashka, a JVM, a Rust toolchain or a linker: the runtime was
@@ -22,6 +22,10 @@ import SLOTS_JSON from '../../../dist/slots.json' with { type: 'bytes' };
 import SLOTS_AOT_JSON from '../../../dist/slots-aot.json' with { type: 'bytes' };
 import STDLIB_JSON from '../gen/stdlib.json' with { type: 'bytes' };
 
+// Arguments, the pump, capabilities. Shared with `host/flint.mjs`, which is a
+// node wrapper over the same file.
+import { instantiate } from './guest.js';
+
 const utf8 = (bytes) => new TextDecoder().decode(bytes);
 const parse = (bytes) => JSON.parse(utf8(bytes));
 
@@ -33,7 +37,7 @@ export function standardLibrary() {
   return cachedLib;
 }
 
-/// Which table slot each builtin sits in, for the shipped runtime. An image
+/// Which table slot each builtin sits in, for the shipped runtime. A program
 /// spliced into that module has to name ITS table, and a slot is a property of
 /// the artifact rather than of the compiler.
 let cachedSlots = null;
@@ -57,44 +61,6 @@ export function loaderBuiltins() {
 
 /// The raw artifacts, for a caller that wants to splice or instantiate by hand.
 export const artifacts = { compiler: COMPILER, runtime: RUNTIME, runtimeAot: RUNTIME_AOT };
-
-// --- the module ABI --------------------------------------------------------
-//
-// A flint module takes a vector of strings and returns a string. Kept here
-// rather than imported from `host/flint.mjs` so the SDK is one file with one
-// dependency -- the wasm artifacts -- and can be vendored.
-
-function bind(instance) {
-  const e = instance.exports;
-  const enc = new TextEncoder();
-  const dec = new TextDecoder();
-  const push = (s) => {
-    const b = enc.encode(String(s));
-    const p = e.arg_alloc(b.length);
-    new Uint8Array(e.memory.buffer).set(b, p);
-    e.arg_push(p, b.length);
-  };
-  return {
-    exports: e,
-    main(...args) {
-      for (const a of args) push(a);
-      const code = e.main();
-      const out = dec.decode(
-        new Uint8Array(e.memory.buffer).subarray(e.out_ptr(), e.out_ptr() + e.out_len()));
-      // Status 2 is a green thread parked on a port the HOST holds the other
-      // end of, and servicing that is a whole event loop (`host/flint.mjs`).
-      // This SDK is the compile-and-answer shape; say so rather than returning
-      // a half-finished result.
-      if (code === 2) {
-        throw new Error(
-          'this program parked on a host port. The SDK runs programs that ' +
-          'return an answer; one that talks to the host needs the full host ' +
-          'loop in `host/flint.mjs`.');
-      }
-      return { code, out };
-    },
-  };
-}
 
 async function moduleFrom(source) {
   if (source instanceof WebAssembly.Module) return source;
@@ -156,24 +122,47 @@ export class Compiler {
     return new Compiler(await moduleFrom(source));
   }
 
-  /// Compile a program to a bytecode image.
+  /// Compile a program to a standalone `.wasm` module.
   ///
-  /// `files` maps a source path -- `"my/app.cljc"` -- to its text. flint's own
-  /// standard library is added unless `standardLibrary: false`. `entry` is the
-  /// function to run, as `"my.app/main"`.
-  compile({ files, entry, builtins, features, standardLibrary: withLib = true }) {
+  /// | | |
+  /// | --- | --- |
+  /// | `files` | `{ 'path.cljc': source }`; flint's standard library is added |
+  /// | `entry` | `'my.app/main'` |
+  /// | `aot`   | compile each arity to wasm too: bigger, much faster on arithmetic |
+  /// | `shake` | cut the runtime to what the program reaches (on by default) |
+  ///
+  /// No linker is involved, which is what makes this possible at all: the
+  /// runtime module was linked once, when flint was built, and compiling
+  /// splices into it (`doc/decisions/0024`).
+  compile({ files, entry, aot = false, shake = true, runtime, slots,
+            memoryLimit = 3_000_000_000,
+            builtins, features, standardLibrary: withLib = true }) {
     if (!entry) throw new Error('compile needs an entry, e.g. "my.app/main"');
+    const base = runtime ?? (aot ? RUNTIME_AOT : RUNTIME);
+    const table = slots ?? (aot ? aotRuntimeSlots() : runtimeSlots());
     const all = withLib ? { ...standardLibrary(), ...files } : { ...files };
-    const bs = builtins ?? loaderBuiltins();
     const spec = `{:files ${edn(all)} :entry ${entry}` +
                  // STRINGS, not symbols: the analyzer compares a builtin name
                  // as text, and `#{= nil?}` would match nothing while looking
                  // exactly like it should.
-                 ` :builtins ${edn(new Set(bs))}` +
+                 ` :builtins ${edn(new Set(builtins ?? Object.keys(table)))}` +
+                 ` :slots ${edn(table)}` +
+                 (aot ? ' :aot true' : '') +
+                 (shake ? ' :shake true' : '') +
                  (features ? ` :features ${edn(new Set(features.map((f) => sym(`:${f}`))))}` : '') +
                  '}';
-    const inst = bind(new WebAssembly.Instance(this.module, {}));
-    const r = inst.main('project', spec);
+    const inst = instantiate(this.module);
+    // Compiling a whole program, appending its compiled arities and then tree
+    // shaking the result is the most memory this ever does, and the default
+    // cap is 512 MB. Past it an allocation answers NIL, the NIL reaches the
+    // tree, and the failure surfaces as `memory access out of bounds` with
+    // nothing pointing at the cap.
+    if (inst.exports.set_memory_limit) inst.exports.set_memory_limit(memoryLimit);
+    // The runtime module goes as its own ARGUMENT, not inside the spec: three
+    // quarters of a megabyte of base64 in an EDN string is three quarters of a
+    // megabyte for flint's reader to scan a character at a time, and that alone
+    // was 198 seconds of a 199-second compile.
+    const r = inst.main('wasm', spec, base64Encode(base));
     if (r.code !== 0) throw new Error(`flint: ${r.out.trim()}`);
     if (r.out.startsWith('!missing')) {
       const missing = r.out.split('\n').slice(1).filter(Boolean);
@@ -181,114 +170,69 @@ export class Compiler {
         `flint: no source for ${missing.join(', ')}. ` +
         'Every namespace a program requires has to be in `files`.');
     }
-    const nl = r.out.indexOf('\n');
-    return base64Decode(nl < 0 ? r.out : r.out.slice(0, nl));
-  }
-
-  /// Compile a program to a standalone `.wasm` MODULE.
-  ///
-  /// The image `compile` returns is internal machinery; this is the artifact.
-  /// It is produced by splicing that image into a prebuilt runtime module --
-  /// no linker anywhere, because the runtime was linked once when flint was
-  /// built (`doc/decisions/0024`).
-  ///
-  /// `aot: true` appends compiled arities as well, which is the same
-  /// operation: wasm cannot add a function to a module that already exists, so
-  /// they go in at build time, and appending needs no `wasm-ld`.
-  /// `shake` cuts the runtime down to what this program reaches: about 40%
-  /// off, for a module that runs the same.
-  compileToWasm({ files, entry, aot = false, shake = true, runtime, slots,
-                  memoryLimit = 3_000_000_000,
-                  builtins, features, standardLibrary: withLib = true }) {
-    if (!entry) throw new Error('compileToWasm needs an entry, e.g. "my.app/main"');
-    const base = runtime ?? (aot ? RUNTIME_AOT : RUNTIME);
-    const table = slots ?? (aot ? aotRuntimeSlots() : runtimeSlots());
-    const all = withLib ? { ...standardLibrary(), ...files } : { ...files };
-    const spec = `{:files ${edn(all)} :entry ${entry}` +
-                 ` :builtins ${edn(new Set(builtins ?? Object.keys(table)))}` +
-                 ` :slots ${edn(table)}` +
-                 (aot ? ' :aot true' : '') +
-                 (shake ? ' :shake true' : '') +
-                 (features ? ` :features ${edn(new Set(features.map((f) => sym(`:${f}`))))}` : '') +
-                 '}';
-    const inst = bind(new WebAssembly.Instance(this.module, {}));
-    // Compiling a whole program, appending its compiled arities and then tree
-    // shaking the result is the most memory this ever does, and the default
-    // cap is 512 MB. Past it an allocation answers NIL, the NIL reaches the
-    // tree, and the failure surfaces as `memory access out of bounds` with
-    // nothing pointing at the cap.
-    if (inst.exports.set_memory_limit) inst.exports.set_memory_limit(memoryLimit);
-    // The module goes as its own ARGUMENT, not inside the spec: three-quarters
-    // of a megabyte of base64 in an EDN string is three-quarters of a megabyte
-    // for flint's reader to scan a character at a time, and that alone was 198
-    // seconds of a 199-second compile.
-    const r = inst.main('wasm', spec, base64Encode(base));
-    if (r.code !== 0) throw new Error(`flint: ${r.out.trim()}`);
-    if (r.out.startsWith('!missing')) {
-      const missing = r.out.split('\n').slice(1).filter(Boolean);
-      throw new Error(`flint: no source for ${missing.join(', ')}.`);
-    }
     return base64Decode(r.out.trim());
   }
 }
 
-export class Runtime {
-  constructor(module) { this.module = module; }
-
-  static async load(source = RUNTIME) {
-    return new Runtime(await moduleFrom(source));
+/// A compiled program: an opaque handle over the module, with the host side of
+/// the conversation attached.
+///
+/// A handle rather than raw bytes because running one is not just calling a
+/// function. A program with green threads can PARK on a port the host holds --
+/// that is what a capability is -- and somebody has to service the request and
+/// resume it. `program.wasm` is the artifact, for writing to a file or handing
+/// to another host; everything else here is that conversation.
+export class Program {
+  constructor(module, wasm) {
+    this.module = module;
+    /// The `.wasm` bytes. This is the artifact.
+    this.wasm = wasm;
   }
 
-  /// Run an image. A fresh instance every time: an image's initialisers run on
-  /// load, so two runs share nothing, which is the property a per-request
-  /// binding wants.
-  run(image, args = [], { capabilities } = {}) {
-    const inst = bind(new WebAssembly.Instance(this.module, {}));
-    const e = inst.exports;
-    if (!e.flint_load_image) {
-      throw new Error('this module was not built with --loader: it cannot load an image');
-    }
-    if (capabilities && e.flint_grant) {
-      for (const name of capabilities) {
-        const b = new TextEncoder().encode(name);
-        const p = e.arg_alloc(b.length);
-        new Uint8Array(e.memory.buffer).set(b, p);
-        e.flint_grant(p, b.length);
-      }
-    }
-    const p = e.arg_alloc(image.length);
-    new Uint8Array(e.memory.buffer).set(image, p);
-    const rc = e.flint_load_image(p, image.length);
-    if (rc !== 0) {
-      const why = new TextDecoder().decode(
-        new Uint8Array(e.memory.buffer).subarray(e.out_ptr(), e.out_ptr() + e.out_len()));
-      throw new Error(`could not load the image (${rc}): ${why}`);
-    }
+  static async load(wasm) {
+    return new Program(await moduleFrom(wasm), wasm);
+  }
+
+  /// Run it. Instantiating is the expensive part, and this does it per call on
+  /// purpose: a program's initialisers re-run on load, so two runs share
+  /// nothing, which is the property a per-request binding wants.
+  ///
+  /// | | |
+  /// | --- | --- |
+  /// | `capabilities` | `{ name: handler }` -- what this run may reach |
+  /// | `stepLimit` | a bound on WORK: deterministic, so the same everywhere |
+  ///
+  /// A capability is granted, never claimed: the guest asks by name, the host
+  /// decides, and authority is the host's grant table rather than any property
+  /// of the value (`doc/decisions/0022`).
+  run(args = [], { capabilities, stepLimit = 0 } = {}) {
+    const inst = instantiate(this.module, { stepLimit });
+    if (capabilities) inst.capabilities(capabilities);
     return inst.main(...args);
   }
+
+  /// The instance itself, for a caller that wants to drive several calls
+  /// against one instantiation, or to reach the module's exports.
+  open({ capabilities, stepLimit = 0 } = {}) {
+    const inst = instantiate(this.module, { stepLimit });
+    if (capabilities) inst.capabilities(capabilities);
+    return inst;
+  }
 }
 
-/// The whole thing, for the case that just wants an answer.
-export async function evaluate({ files, entry, args = [], compiler, loader, ...opts }) {
+/// Compile and run, for the case that just wants an answer.
+export async function evaluate({ files, entry, args = [], compiler, ...opts }) {
   const c = compiler instanceof Compiler ? compiler : await Compiler.load(compiler);
-  const r = loader instanceof Runtime ? loader : await Runtime.load(loader);
-  return r.run(c.compile({ files, entry, ...opts }), args);
+  const p = await Program.load(c.compile({ files, entry, ...opts }));
+  return p.run(args, opts);
 }
 
-/// Whether this SDK can produce a standalone `.wasm` module, and AOT-compile
-/// it. It cannot, and saying so beats a caller discovering it: linking a module
-/// means running `wasm-ld` over relocatable objects, which is a native tool.
-/// `bin/flint` does that; this ships the two artifacts it produced.
-export const aotAvailable = true;
 export const capabilities = {
   compile: true,
   run: true,
-  /// A standalone module, without a linker: the image is spliced into a
-  /// prebuilt runtime that was linked once, when flint was built.
-  emitModule: true,
   aot: true,
-  /// What is still not here: producing the RUNTIME module itself. That is a
-  /// link over relocatable objects and needs `wasm-ld`; it happens when flint
-  /// is built, and the result ships in `dist/`.
+  /// What is NOT here: producing the runtime module itself. That is a link
+  /// over relocatable objects and needs `wasm-ld`; it happens when flint is
+  /// built, and the result is embedded above.
   linkRuntime: false,
 };

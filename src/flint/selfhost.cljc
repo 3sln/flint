@@ -207,24 +207,47 @@
             ;; uses plus exactly the table slots this image imports -- which is
             ;; precision the linker could not have had, because it was handed an
             ;; export list before the program existed.
-            used (set (img/natives builder))
             shaken (when (:shake spec)
                      (let [exp (w/exports m)
                            table (wshake/table-entries m)
                            abi (remove (fn [n] (str/starts-with? n "flint_b_")) (keys exp))
+                           ;; The table holds two different things, and they
+                           ;; need different treatment.
+                           ;;
+                           ;; Below `slots` are the LINKER's own function
+                           ;; pointers -- Rust compiles a closure or a trait
+                           ;; object to `call_indirect` -- and nothing here can
+                           ;; tell which of them is reachable, so all of them
+                           ;; are roots. Rooting only the builtins the image
+                           ;; imports looked like precision the linker could
+                           ;; not have; it stubbed the scheduler's own
+                           ;; callbacks, and every program using ports trapped
+                           ;; inside `conc::scheduler` while small ones worked.
+                           ;;
+                           ;; At and above them are flint's BUILTINS, which are
+                           ;; reached only through the NATIVE opcode with an
+                           ;; index the image carries (`doc/decisions/0003`).
+                           ;; Those the image does not name, nothing can call.
+                           builtin-slots (set (vals slots))
+                           used (set (img/natives builder))
+                           linker-fns (keep (fn [e] (when-not (contains? builtin-slots (key e))
+                                                      (val e)))
+                                            table)
+                           mine (keep (fn [n] (get table (get slots n))) used)
                            roots (into (into (into #{} (keep (fn [n] (:index (get exp n))) abi))
-                                             (keep (fn [n] (get table n))
-                                                   (keep (fn [n] (get slots n)) used)))
-                                       ;; The compiled arities, which nothing
-                                       ;; else can reach: they live only in the
-                                       ;; element segment `compile-arities`
-                                       ;; appended.
-                                       (or (:funcs res) []))]
+                                             linker-fns)
+                                       (concat mine
+                                               ;; The compiled arities, which
+                                               ;; nothing else can reach: they
+                                               ;; live only in the element
+                                               ;; segment `compile-arities`
+                                               ;; appended.
+                                               (or (:funcs res) [])))]
                        (wshake/stub-dead m roots)))
             m (if shaken (first shaken) m)
             image (img/emit builder slots)]
         {:module (base64 (bundle/into-module (w/emit m) image
-                                             {:entry entry :aot? aot?}))
+                                             {:entry entry :aot? aot? :slots slots}))
          :compiled (when res (:compiled res))
          :arities (when res (:total res))
          :shaken (when shaken (second shaken))}))))

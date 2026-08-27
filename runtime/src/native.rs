@@ -28,6 +28,7 @@ use alloc::vec::Vec;
 /// A loaded program, ready to run.
 pub struct Program {
     rt: Rt,
+    grants: u32,
 }
 
 /// What a run produced: `code` is 0 for success, and `out` is the answer or the
@@ -66,7 +67,7 @@ impl Program {
                 "this runtime does not carry the builtin `{missing}`, which the image needs"
             )
         })?;
-        Ok(Program { rt })
+        Ok(Program { rt, grants: 0 })
     }
 
     /// Run `main` with string arguments, as the wasm entry does.
@@ -85,6 +86,23 @@ impl Program {
         let code = status_of(rt, result);
         let out = rendered(rt, result);
         Outcome { code, out }
+    }
+
+    /// Lend a capability by name.
+    ///
+    /// Authority is never a type test (`doc/decisions/0022`): a program holds
+    /// a capability because the host gave it one, and the host recognises it
+    /// by an id only the host knows. Granting nothing means the program can
+    /// reach nothing, which is the default.
+    pub fn grant(&mut self, name: &str) {
+        crate::rt::add_grant(String::from(name), self.next_grant());
+        self.grants += 1;
+    }
+
+    fn next_grant(&self) -> u64 {
+        // Ids start at 1: zero is "nothing presented", and a capability whose
+        // id was zero would be indistinguishable from an absent one.
+        self.grants as u64 + 1
     }
 
     /// The instruction count, which is deterministic (`doc/decisions/0009`) and

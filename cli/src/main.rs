@@ -20,9 +20,13 @@ use std::{collections::BTreeMap, fs, path::{Path, PathBuf}};
 
 include!(concat!(env!("OUT_DIR"), "/stdlib.rs"));
 
-/// The compiler, as a bytecode image rather than a wasm module: this runs it
-/// natively, so the module would only be a wasm engine's worth of indirection.
-static COMPILER: &[u8] = include_bytes!("../../dist/flintc.image");
+/// The compiler, as bytecode rather than as a wasm module: this binary runs it
+/// natively, so a module would only be a wasm engine worth of indirection.
+///
+/// The format is an implementation detail. It is embedded here and never
+/// written out --  emits wasm, and  keeps this
+/// entirely inside the process.
+static COMPILER: &[u8] = include_bytes!("../../dist/flintc.bytecode");
 static RUNTIME: &[u8] = include_bytes!("../../dist/flint-runtime.wasm");
 static RUNTIME_AOT: &[u8] = include_bytes!("../../dist/flint-runtime-aot.wasm");
 static SLOTS: &str = include_str!("../../dist/slots.json");
@@ -139,7 +143,10 @@ fn read_sources(dir: &Path, prefix: &str, out: &mut BTreeMap<String, String>) ->
 
 // --- the commands ----------------------------------------------------------
 
-fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, aot: bool, image: bool) -> Result<()> {
+/// The EDN the compiler takes: the sources, the entry, and what the runtime
+/// carries. Shared by `compile` and `run` so the two cannot drift.
+fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
+              aot: bool, shake: bool) -> Result<String> {
     let mut files: BTreeMap<String, String> = BTreeMap::new();
     for (p, body) in STDLIB {
         files.insert((*p).to_string(), (*body).to_string());
@@ -152,167 +159,186 @@ fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, aot: bool, image: boo
             files.insert(name, fs::read_to_string(s)?);
         }
     }
+    let mut out = String::from("{:files {");
+    for (k, v) in &files {
+        out.push_str(&edn_string(k));
+        out.push(' ');
+        out.push_str(&edn_string(v));
+        out.push(' ');
+    }
+    out.push_str("} :entry ");
+    out.push_str(entry);
+    out.push_str(" :builtins #{");
+    for k in slots.keys() {
+        out.push_str(&edn_string(k));
+        out.push(' ');
+    }
+    out.push_str("} :slots {");
+    for (k, v) in slots {
+        out.push_str(&edn_string(k));
+        out.push_str(&format!(" {v} "));
+    }
+    out.push('}');
+    if aot {
+        out.push_str(" :aot true");
+    }
+    if shake {
+        out.push_str(" :shake true");
+    }
+    out.push('}');
+    Ok(out)
+}
 
+fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, aot: bool) -> Result<()> {
     let slots = parse_slots(if aot { SLOTS_AOT } else { SLOTS })?;
     let base = if aot { RUNTIME_AOT } else { RUNTIME };
-
-    let spec = {
-        let mut s = String::from("{:files {");
-        for (k, v) in &files {
-            s.push_str(&edn_string(k));
-            s.push(' ');
-            s.push_str(&edn_string(v));
-            s.push(' ');
-        }
-        s.push_str("} :entry ");
-        s.push_str(entry);
-        s.push_str(" :builtins #{");
-        for k in slots.keys() {
-            s.push_str(&edn_string(k));
-            s.push(' ');
-        }
-        s.push_str("} :slots {");
-        for (k, v) in &slots {
-            s.push_str(&edn_string(k));
-            s.push_str(&format!(" {v} "));
-        }
-        s.push('}');
-        if aot {
-            s.push_str(" :aot true");
-        }
-        s.push_str(" :shake true");
-        s.push('}');
-        s
-    };
+    let spec = build_spec(srcs, entry, &slots, aot, true)?;
 
     let mut p = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
-
-    // An IMAGE is what this binary can run: it has flint's runtime compiled in
-    // and no wasm engine, so a module would need one. It is also far smaller --
-    // the runtime is not repeated in every artifact.
-    if image {
-        let r = p.run(&["project", &spec]);
-        if r.code != 0 {
-            bail!("{}", r.out.trim());
-        }
-        if let Some(rest) = r.out.strip_prefix("!missing") {
-            bail!("no source for{}", rest.replace('\n', " "));
-        }
-        let b64 = r.out.split('\n').next().unwrap_or("");
-        let bytes = base64_decode(b64)?;
-        fs::write(out_path, &bytes)?;
-        eprintln!("wrote {} ({} bytes, image)", out_path.display(), bytes.len());
-        return Ok(());
-    }
-
     // The runtime module goes as its own ARGUMENT, never inside the spec: it is
     // three-quarters of a megabyte of base64, and inside an EDN string it is
     // three-quarters of a megabyte for flint's reader to scan a character at a
     // time -- 198 seconds against 10.
     let r = p.run(&["wasm", &spec, &base64(base)]);
-    let text = r.out;
     if r.code != 0 {
-        bail!("{}", text.trim());
+        bail!("{}", r.out.trim());
     }
-    if let Some(rest) = text.strip_prefix("!missing") {
+    if let Some(rest) = r.out.strip_prefix("!missing") {
         bail!("no source for{}\nevery namespace a program requires has to be on the source path",
               rest.replace('\n', " "));
     }
-    let module = base64_decode(text.trim())?;
+    let module = base64_decode(r.out.trim())?;
     fs::write(out_path, &module)?;
     eprintln!("wrote {} ({} bytes{})", out_path.display(), module.len(),
               if aot { ", compiled arities" } else { "" });
     Ok(())
 }
 
-/// Run a compiled artifact.
+/// Compile and run, in one step.
 ///
-/// A `.wasm` MODULE is not runnable here: it is the artifact for a wasm host,
-/// and this binary has no wasm engine in it. An IMAGE is, and that is what the
-/// compiler emits for this path. Saying which is which beats a trap.
-fn run_program(path: &Path, args: &[String]) -> Result<i32> {
-    let bytes = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
-    if bytes.starts_with(b"\0asm") {
-        bail!(
-            "{} is a wasm MODULE, and this binary has no wasm engine in it.\n\
-             Run it with a wasm host -- `node host/flint.mjs {}` -- or compile \n\
-             to an image with `--image` and run that here.",
-            path.display(), path.display()
-        );
+/// Source in, the answer out. There is no artifact in the middle and no file
+/// written: `run` compiles to flint's internal bytecode and runs it here,
+/// which is what having the runtime compiled in is for. The bytecode format
+/// is an implementation detail and never leaves this process.
+fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String]) -> Result<i32> {
+    let spec = build_spec(srcs, entry, &parse_slots(SLOTS)?, false, false)?;
+    let mut c = Program::load(COMPILER, 3_000_000_000)
+        .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
+    let r = c.run(&["project", &spec]);
+    if r.code != 0 {
+        bail!("{}", r.out.trim());
     }
+    if let Some(rest) = r.out.strip_prefix("!missing") {
+        bail!("no source for{}\nevery namespace a program requires has to be on the source path",
+              rest.replace('\n', " "));
+    }
+    let bytes = base64_decode(r.out.split('\n').next().unwrap_or(""))?;
+
     let mut p = Program::load(&bytes, 2_000_000_000)
-        .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        .map_err(|e| anyhow::anyhow!("the compiled program did not load: {e}"))?;
+    // Capabilities are the host's to grant, and a program holds one because it
+    // was GIVEN it (`doc/decisions/0022`). Naming one here is what lends it;
+    // a program granted nothing can reach nothing.
+    for name in caps {
+        p.grant(name);
+    }
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let r = p.run(&refs);
-    print!("{}", r.out);
-    Ok(r.code)
+    let out = p.run(&refs);
+    print!("{}", out.out);
+    Ok(out.code)
 }
 
 fn usage() -> ! {
     eprintln!(
         "flint {VERSION} -- the compiler, as one binary
 
-  flint compile <src>... --entry ns/fn -o <out> [--aot] [--image]
-      Compile. By default a standalone `.wasm` module, for any wasm host.
-      `--aot` compiles each arity to wasm as well: bigger, much faster on
-      arithmetic. `--image` emits a bytecode image instead -- far smaller,
-      and what `flint run` takes, because this binary has flint's runtime
-      compiled in and no wasm engine.
+  flint compile :src <dir> :fn <ns/fn> :out <file.wasm> [--aot]
+      Compile to a standalone wasm module, for any wasm host. `--aot`
+      compiles each arity to wasm as well: bigger, and much faster on
+      arithmetic.
 
-  flint run <program.image> [args...]
-      Run an image, natively.
+  flint run :src <dir> :fn <ns/fn> [:grant <name>] [-- args...]
+      Compile and run, here. Nothing is written: flint's runtime is compiled
+      into this binary, so a program can be run without producing an artifact.
 
   flint version
 
-Everything is embedded -- the compiler, the runtime and the standard library.
-There is nothing to install: no babashka, no JVM, no linker."
+`:src` may be given more than once. Everything is embedded -- the compiler,
+the runtime and the standard library -- so there is nothing to install: no
+babashka, no JVM, no linker."
     );
     std::process::exit(2)
 }
 
+/// `:src d :fn ns/f :out o --aot --` in the style `bin/flint` already uses.
+/// Anything after `--` is the program's own arguments.
+struct Args {
+    srcs: Vec<PathBuf>,
+    entry: Option<String>,
+    out: Option<String>,
+    grants: Vec<String>,
+    aot: bool,
+    rest: Vec<String>,
+}
+
+fn parse(args: &[String]) -> Result<Args> {
+    let mut a = Args { srcs: Vec::new(), entry: None, out: None,
+                       grants: Vec::new(), aot: false, rest: Vec::new() };
+    let mut i = 0;
+    while i < args.len() {
+        let need = |k: &str, i: usize| -> Result<String> {
+            args.get(i + 1).cloned().with_context(|| format!("{k} needs a value"))
+        };
+        match args[i].as_str() {
+            "--" => { a.rest = args[i + 1..].to_vec(); break }
+            ":src" => { a.srcs.push(PathBuf::from(need(":src", i)?)); i += 2 }
+            ":fn" => { a.entry = Some(need(":fn", i)?); i += 2 }
+            ":out" | ":o" => { a.out = Some(need(":out", i)?); i += 2 }
+            ":grant" => { a.grants.push(need(":grant", i)?); i += 2 }
+            "--aot" => { a.aot = true; i += 1 }
+            other if other.starts_with(':') || other.starts_with('-') => {
+                bail!("no such option `{other}`")
+            }
+            // A bare path is a source, so `flint run src :fn app/main` reads
+            // the way anyone would write it.
+            other => { a.srcs.push(PathBuf::from(other)); i += 1 }
+        }
+    }
+    Ok(a)
+}
+
 fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.is_empty() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.is_empty() {
         usage();
     }
-    match args[0].as_str() {
+    match argv[0].as_str() {
         "version" | "--version" | "-v" => {
             println!("flint {VERSION}");
             Ok(())
         }
         "help" | "--help" | "-h" => usage(),
         "compile" => {
-            let mut srcs = Vec::new();
-            let (mut entry, mut out, mut aot, mut image) = (None, None, false, false);
-            let mut i = 1;
-            while i < args.len() {
-                match args[i].as_str() {
-                    "--entry" | "-e" => { entry = args.get(i + 1).cloned(); i += 2 }
-                    "-o" | "--out" => { out = args.get(i + 1).cloned(); i += 2 }
-                    "--aot" => { aot = true; i += 1 }
-                    "--image" => { image = true; i += 1 }
-                    other => { srcs.push(PathBuf::from(other)); i += 1 }
-                }
+            let a = parse(&argv[1..])?;
+            let Some(entry) = a.entry else { bail!("compile needs :fn ns/fn") };
+            if a.srcs.is_empty() {
+                bail!("compile needs at least one :src");
             }
-            let Some(entry) = entry else { bail!("compile needs --entry ns/fn") };
-            let out = out.unwrap_or_else(|| {
-                if image { "out.image".to_string() } else { "out.wasm".to_string() }
-            });
-            if srcs.is_empty() {
-                bail!("compile needs at least one source file or directory");
-            }
-            if image && aot {
-                bail!("--image and --aot are different artifacts: compiled arities are \n\
-                       wasm functions appended to a module, and an image has no module \n\
-                       to append them to.");
-            }
-            compile(&srcs, &entry, Path::new(&out), aot, image)
+            let out = a.out.unwrap_or_else(|| "out.wasm".to_string());
+            compile(&a.srcs, &entry, Path::new(&out), a.aot)
         }
         "run" => {
-            let Some(m) = args.get(1) else { bail!("run needs a module") };
-            let code = run_program(Path::new(m), &args[2..])?;
-            std::process::exit(code);
+            let a = parse(&argv[1..])?;
+            let Some(entry) = a.entry else { bail!("run needs :fn ns/fn") };
+            if a.srcs.is_empty() {
+                bail!("run needs at least one :src");
+            }
+            if a.aot {
+                bail!("--aot is a property of a compiled MODULE, and `run` produces none.\n\
+                       Use `flint compile --aot` for that.");
+            }
+            std::process::exit(run_source(&a.srcs, &entry, &a.rest, &a.grants)?);
         }
         other => {
             eprintln!("flint: no such command `{other}`");

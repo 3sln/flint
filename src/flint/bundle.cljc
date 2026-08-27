@@ -19,6 +19,7 @@
   (:require [flint.wasm :as w]
             [flint.image :as img]
             [flint.aot :as aot]
+            [flint.rt]
             [flint.modmeta :as modmeta]
             [clojure.string :as str]))
 
@@ -90,6 +91,8 @@
     {:module m :compiled (count ok) :total (count slots-of)
      :funcs (vec (range first-fn (+ first-fn (count ok))))}))
 
+(defn- b-count [x] (if (flint.rt/bytes? x) (flint.rt/b-count x) (count x)))
+
 (defn- global-addr [m exp name]
   (let [g (get exp name)]
     (or (and g (w/global-i32-init m (:index g)))
@@ -101,8 +104,18 @@
   "`base` is a prebuilt flint runtime module (bytes), `image` the program image
   (bytes). Returns the bytes of a module that runs it.
 
-  `opts` may carry `:entry`, `:version` and `:aot?`, which only affect the
-  metadata section (`doc/decisions/0020`)."
+  `opts` may carry `:entry`, `:version` and `:aot?` -- which only affect the
+  metadata section (`doc/decisions/0020`) -- and `:slots`, the builtin table
+  the base module carries.
+
+  `:slots` is not optional in practice, and the reason is a bug worth
+  recording. The base module was built with `--loader`, so it already has a
+  builtin registry sitting just past its OWN image. Splicing a new image at the
+  same address overruns that registry whenever the new image is larger, and the
+  module then traps on the first builtin an image resolves by name. It ran fine
+  for small programs and failed for anything using ports, which is exactly the
+  shape that hides. So the splice writes the registry too, and the whole layout
+  is determined here rather than half inherited."
   [base image opts]
   (let [m (w/parse base)
         exp (w/exports m)
@@ -113,10 +126,24 @@
         img-addr (bit-and (+ heap-base 15) (bit-not 15))
         desc-addr (global-addr m exp "FLINT_IMAGE_DESC")
         m (w/append-data m img-addr image)
-        ;; A later segment wins, so the descriptor is overwritten in place
-        ;; rather than surgically edited inside the linker's data.
+        ;; A later segment wins, so a descriptor is overwritten in place rather
+        ;; than surgically edited inside the linker's own data.
         m (w/append-data m desc-addr
-                         (w/->bytes [(img/u32 img-addr) (img/u32 (count image))]))
+                         (w/->bytes [(img/u32 img-addr) (img/u32 (b-count image))]))
+        ;; The builtin registry, rewritten PAST the new image. `(slot, name
+        ;; length, name)` per builtin, which is how an image compiled elsewhere
+        ;; is re-pointed at this module's table by name (`doc/decisions/0023`).
+        m (if-let [slots (:slots opts)]
+            (let [addr (global-addr m exp "FLINT_BUILTIN_REGISTRY")
+                  blob (w/->bytes
+                        (for [k (sort (keys slots))]
+                          (let [b (w/utf8-bytes k)]
+                            [(img/u32 (get slots k)) (img/u32 (b-count b)) b])))
+                  at (bit-and (+ img-addr (b-count image) 15) (bit-not 15))]
+              (-> m
+                  (w/append-data at blob)
+                  (w/append-data addr (w/->bytes [(img/u32 at) (img/u32 (b-count blob))]))))
+            m)
         ;; The runtime module was built as a LOADER, so it carries a builtin
         ;; registry and `flint_load_image`. Neither is wrong in the output --
         ;; the module simply also happens to be able to load another image --

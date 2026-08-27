@@ -8,9 +8,10 @@ use std::{env, fs, path::Path};
 fn main() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
     let dist = root.join("dist");
-    // `flintc.image` rather than `flintc.wasm`: this binary runs the compiler
-    // natively and has no wasm engine to run a module in.
-    for f in ["flintc.image", "flint-runtime.wasm", "flint-runtime-aot.wasm",
+    // The compiler as BYTECODE rather than as a module: this binary runs it
+    // natively and has no wasm engine to run a module in. The format is an
+    // implementation detail, embedded and never written out.
+    for f in ["flintc.bytecode", "flint-runtime.wasm", "flint-runtime-aot.wasm",
               "slots.json", "slots-aot.json"] {
         if !dist.join(f).exists() {
             panic!("dist/{f} is missing. It is generated: run `bin/build-dist` first.");

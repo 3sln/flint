@@ -63,6 +63,9 @@
 (def order (topo sources))
 (def spec {:sources sources :order order :entry entry :builtins (builtin-names)})
 
+(when (System/getenv "FLINT_DUMP_SPEC")
+  (spit (System/getenv "FLINT_DUMP_SPEC") (pr-str spec)))
+
 (defn compile-on-bb []
   (let [r (compiler/compile-image spec)]
     {:image (vec (img/emit (:builder r) {}))

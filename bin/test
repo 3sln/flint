@@ -208,22 +208,20 @@ cargo build -p flint-cli --release > /tmp/flint-test.out 2>&1 \
 rm -rf /tmp/flint-smoke && mkdir -p /tmp/flint-smoke
 printf '(ns smoke (:require [clojure.string :as s]))\n(defn main [args] (s/upper-case (str "ok " (reduce + 0 (range 10)))))\n' \
   > /tmp/flint-smoke/smoke.cljc
-# Both artifacts: a wasm module for a wasm host, and an image this binary runs
-# itself -- it has flint's runtime compiled in and no wasm engine.
-./target/release/flint compile /tmp/flint-smoke --entry smoke/main -o /tmp/flint-smoke/out.wasm 2>&1 \
+# `compile` emits a wasm module, which is the artifact. `run` takes SOURCE and
+# produces nothing -- flint's bytecode is an implementation detail and never
+# leaves the process.
+./target/release/flint compile :src /tmp/flint-smoke :fn smoke/main :out /tmp/flint-smoke/out.wasm 2>&1 \
   | sed 's/^/    /' || fail "flint compile"
 node host/flint.mjs /tmp/flint-smoke/out.wasm > /tmp/flint-test.out 2>&1 || fail "the module does not run"
 [ "$(cat /tmp/flint-test.out)" = "OK 45" ] || { cat /tmp/flint-test.out; fail "the module answered wrongly"; }
-./target/release/flint compile /tmp/flint-smoke --entry smoke/main -o /tmp/flint-smoke/out.image --image 2>&1 \
-  | sed 's/^/    /' || fail "flint compile --image"
-got="$(./target/release/flint run /tmp/flint-smoke/out.image)"
-[ "$got" = "OK 45" ] || { echo "    got '$got'"; fail "the binary did not run its own image"; }
-echo "    the binary compiled a program and ran it NATIVELY: $got"
-# A module is not runnable here, and the refusal has to name why rather than
-# trapping: this binary has no wasm engine in it.
-./target/release/flint run /tmp/flint-smoke/out.wasm > /tmp/flint-test.out 2>&1 && \
-  fail "the binary claimed to run a wasm module"
-grep -q "no wasm engine" /tmp/flint-test.out || { cat /tmp/flint-test.out; fail "the refusal does not say why"; }
+got="$(./target/release/flint run :src /tmp/flint-smoke :fn smoke/main)"
+[ "$got" = "OK 45" ] || { echo "    got '$got'"; fail "the binary did not run source"; }
+echo "    compiled a module, and ran the same source NATIVELY: $got"
+# `run` writes nothing. A bytecode file left behind would be an artifact, and
+# the format is deliberately not one.
+[ -z "$(ls /tmp/flint-smoke | grep -v 'smoke.cljc\|out.wasm')" ] \
+  || { ls /tmp/flint-smoke; fail "run left an artifact behind"; }
 ls -l target/release/flint | awk '{printf "    binary %.1f MB\n", $5/1048576}'
 
 echo
