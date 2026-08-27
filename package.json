@@ -1,6 +1,6 @@
 {
   "name": "@3sln/flint",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Pure Clojure logic, compiled to a self-contained WebAssembly module.",
   "type": "module",
   "author": "Ray Stubbs",

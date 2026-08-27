@@ -1,6 +1,6 @@
 [package]
 name = "flint-cli"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 description = "The flint compiler as a single binary: no babashka, no JVM, no linker."
 
