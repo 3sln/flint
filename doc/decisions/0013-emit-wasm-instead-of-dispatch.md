@@ -1,9 +1,12 @@
 # 0013 — Emitting wasm instead of dispatching, and what it costs
 
-> **SHELVED — 2026-08-24.** Built, measured, and parked by the user's decision:
-> *"drop aot for now, focus on strings and regex."* `--aot` stays in the tree,
-> off by default, behind a cargo feature, with an open correctness bug on the
-> threads + host-port path documented below. The production module carries none
+> **SHELVED — 2026-08-24, and the shelving is due a review.** Built, measured,
+> and parked by the user's decision: *"drop aot for now, focus on strings and
+> regex."* `--aot` stays in the tree, off by default, behind a cargo feature,
+> with an open correctness bug on the threads + host-port path documented below
+> — **re-tested 2026-08-28: still broken, not caused by the compiler work since,
+> and now minimised to ONE arity.** The performance half of the rationale has
+> also moved; see "Re-measured 2026-08-28". The production module carries none
 > of it. Nothing here is deleted, because the measurements are worth more than
 > the emitter and **the reason it under-delivered is now understood** — see
 > "Why it lost, and what would make it win" at the end.
@@ -672,6 +675,43 @@ Reproducer, ~15 lines: open the `doc` capability with the EDN codec, send
 Delta-minimised to five arities that must ALL be compiled for it to appear:
 `conj`, and `pk` / `nx!` / `skip!` / `token` from `clojure.edn`. No single one of
 them does it, and no pair — so it is an interaction, not a bad instruction.
+
+### Re-tested 2026-08-28, and three of the sentences above are now wrong
+
+Reproduced from scratch: `doc/open` through a host port with the EDN codec,
+built with and without `--aot`, answers compared. Still broken. What changed:
+
+* **The symptom is a DEADLOCK now**, not a bad read:
+  `deadlock: 1 green thread(s) are parked and nothing can wake them / thread 0
+  waiting on port 5 "rpc"`. That is a better symptom -- it points at the
+  park/resume path rather than at corrupted data.
+* **There are at least TWO failures, not one.** Excluding the arity below still
+  deadlocks; that arity alone fails differently.
+* **A SINGLE arity is now sufficient**, which the paragraph above says is
+  impossible. `FLINT_AOT_ONLY=106` -- `clojure.core/reduce`, the three-argument
+  arity, compiled with everything else interpreted -- fails with
+  `ClassCastException: not a transient`. `doc/descendants` reaches it through
+  `(into (pop stack) (reverse (:children n)))`, so `into` runs `reduce` over a
+  TRANSIENT accumulator and a SEQ, which is `reduce`'s non-vector branch and a
+  tail call out of compiled code.
+
+`reduce` being the one is not a coincidence worth ignoring: its 3-arity is the
+only function in the core library that carried `^int` annotations BEFORE loop
+counters started specialising, so it was the only place the specialised opcodes
+and the AOT emitter met.
+
+**Not caused by this week's compiler work.** The same reproducer, built from the
+tree at `ac58229~1` -- before loop-type hypothesis, before whole-integer-
+expression emission -- deadlocks identically. Checked rather than assumed,
+because "the compiler changed and now AOT is broken" is the obvious story and it
+is the wrong one.
+
+**Still not minimal.** A standalone program doing `into` over a seq into a
+transient, and `reduce` over a vector into one, compiles and runs correctly
+under `--aot`. So the interaction is real; it just needs fewer pieces than five.
+
+`FLINT_AOT_NAME=<k>` prints which function a bisection index is, which is what
+turned "arity 106" into "`reduce`".
 
 Ruled out by measurement, not by reading:
 
