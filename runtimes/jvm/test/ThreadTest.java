@@ -65,10 +65,8 @@ public class ThreadTest {
         // runtime the moment two threads are inside one sandbox.
         //
         // The retry loop that fixes it is written and works interpreted. It is
-        // off because it does not survive AOT: compiled code holds `old`
-        // across the allocating call to `f`, the collector cannot see a wasm
-        // local (`doc/decisions/0001`), and the identity compare then fails
-        // forever. `doc/decisions/0013` carries the repro.
+        // off because turning it on makes an AOT compile abort, for a reason
+        // that is not yet understood -- see `doc/decisions/0013`.
         //
         // Asserting the CURRENT behaviour rather than the wanted one, so that
         // fixing the AOT rooting shows up here as a test to update rather than

@@ -13,43 +13,43 @@
 > is the argument as it stood before the numbers; the numbers did not overturn
 > it, they sized it.
 
-## A second correctness bug: a value held across an allocation
+## `swap!` cannot be made atomic yet, and the reason is NOT understood
 
-Found while making `swap!` atomic, and it is `doc/decisions/0001`'s hazard
-arriving in practice rather than in theory.
+`swap!` is `(reset! a (f (deref a)))` -- a read-modify-write, so it loses
+updates once two threads are inside one sandbox (`doc/decisions/0028`). The fix
+is Clojure's: a retry loop over `compare-and-set!`, which is now a builtin and
+which works when the runtime is interpreted.
 
-```clojure
-(def c (atom ""))
-(defn f [n]
-  (loop [i 0]
-    (if (< i n)
-      (let [old (deref c) nv (str old)]
-        (if (compare-and-set! c old nv) (recur (+ i 1)) (recur i)))
-      :done)))
-```
+Turning it on breaks the AOT path. With `dist` rebuilt so that the compiler
+itself carries the retry loop, `flint compile :optimize [perf]` on an unrelated
+two-line program aborts with **`to-space overflow`** from `gc.rs` -- an object
+copied twice during a minor collection, which means a root the collector did
+not know had moved. Other builds of the same change hang instead.
 
-Interpreted this answers `:done`. Under `:optimize [perf]` it **never
-terminates**: `compare-and-set!` fails every time, forever.
+**The mechanism has not been found, and three plausible explanations have
+already been wrong**, which is why this section says less than the earlier
+drafts of it did:
 
-The reason is the one that made flint an interpreter in the first place.
-`old` is held across the call to `str`, which allocates and can collect. In the
-interpreter `old` lives on the value stack, which the collector scans and
-rewrites. In compiled code it lives in a **wasm local, and wasm locals are not
-scannable** — so the collector moves the string, updates the atom's slot, and
-`old` keeps the address the object used to have. The identity compare then
-never matches again.
+* *A shifted builtin slot.* Adding `compare-and-set!` mid-catalogue moves every
+  slot after it. Appending instead did not fix it.
+* *A shadowed special form.* The retry loop bound a local named `new`, which is
+  in `flint.analyzer`'s special set. Renaming it did not fix it either, and
+  `(let [new 1] new)` compiles and runs correctly.
+* *A value held in a wasm local across an allocation* -- `0001`'s hazard. This
+  one is simply not what the AOT emitter does: `flint.aot` keeps values on the
+  runtime's own value stack, which the collector scans, and `reload` refreshes
+  every cached pointer after each native call.
 
-It is only visible through an IDENTITY comparison. Ordinary code holding a
-stale pointer reads corrupted memory and fails somewhere else, later, which is
-how the same defect showed up first: `swap!`-as-a-retry-loop made an unrelated
-AOT compile abort with `to-space overflow`, an object copied twice from a root
-the collector did not know had moved.
+What is reproducible is the pairing: the retry loop in `lib/clojure/core.cljc`
+plus an AOT compile fails, and reverting the loop makes it pass. Everything
+narrower has come back clean, including the loop shape on its own, an atom with
+a CAS across an allocating call, and the same program interpreted.
 
-**So `swap!` is not atomic**, and cannot be until this is fixed. The retry loop
-is written and correct and lives in this file's history; `compare-and-set!` is
-built and works. What is missing is that compiled code must spill live
-references somewhere the collector can see — a shadow stack per compiled frame,
-which is the cost `0001` predicted and this tier has to pay.
+So `swap!` stays a read-modify-write, the loss is asserted rather than wished
+away by the JVM thread test, and the next person to look at this should start
+from a debug build -- it named `to-space overflow` in one line, where three
+readings of the source had produced three wrong answers.
+
 
 
 ## The proposal

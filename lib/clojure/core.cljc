@@ -762,14 +762,11 @@
   simply smaller than it should be. That was unreachable while one thread ran a
   sandbox and became reachable the day two could (`doc/decisions/0028`).
 
-  It should be a retry loop over `compare-and-set!`, and that is written and
-  works INTERPRETED. It cannot be turned on yet because it does not survive
-  AOT: compiled code holds `old` across the allocating call to `f`, the
-  collector cannot see a wasm local (`doc/decisions/0001`), and the identity
-  compare then fails forever -- so `swap!` never terminates under
-  `:optimize [perf]`. `doc/decisions/0013` carries the repro.
-
-  Fixing that is fixing the AOT rooting, not this function."
+  It should be a retry loop over `compare-and-set!`, which is built and works
+  interpreted. Turning it on makes an AOT compile abort with `to-space
+  overflow`, and the mechanism is NOT understood -- three plausible
+  explanations have already been wrong. `doc/decisions/0013` records what is
+  reproducible and what is not."
   ([a f] (reset! a (f (deref a))))
   ([a f x] (reset! a (f (deref a) x)))
   ([a f x y] (reset! a (f (deref a) x y)))
