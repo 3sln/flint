@@ -1,11 +1,12 @@
 # 0029 — The JVM runtime
 
 > **PARTLY BUILT.** The image loader, the interpreter over all 46 opcodes and
-> fifty-odd builtins run real flint programs on the JVM, and all five
+> every builtin but three run real flint programs on the JVM, and all eight
 > conformance cases agree with the native runtime byte for byte -- including
-> hashes and forty-key CHAMP ordering -- several threads run one program on it,
-> and AOT emits real bytecode (1.67x on a compute loop, every case agreeing
-> with the interpreter). Not built: most of the remaining builtins.
+> hashes, forty-key CHAMP ordering, infinite lazy sequences and mutual tail
+> recursion 300 000 deep -- several threads run one program on it, and AOT emits
+> real bytecode (12x on a counting loop, every case agreeing with the
+> interpreter). Not built: the three regex builtins, and self-hosting.
 
 `0010` chose tier 2 for the JVM on measurement rather than taste: Chicory runs
 flint at **500× V8 interpreted and 39× compiled**, so embedding a wasm engine
@@ -84,10 +85,39 @@ function, `transient` on a set, `deref` on a volatile, and a vector holding
 `nil`. The corpus is a good gate and the compiler is a better one, because it
 is the only flint program large enough to use the whole language.
 
-It does not self-host yet. It stops at `unable to resolve symbol: string?` --
-a genuine compile error from the compiler, cause not yet found, with the
-error's own `:ns` reading `flint.main`, which is not the namespace being
-compiled. Both of those are open.
+It does not self-host yet, and running it has kept paying. Four more bugs, none
+of them a missing builtin either:
+
+* **A tail call was only a tail call to ITSELF.** Both ports optimised
+  self-recursion and took a host frame for anything else, so MUTUAL tail
+  recursion grew a frame per hop -- constant stack in flint's own VM, unbounded
+  here. The compiler tail-calls between three of its own functions, so it ran
+  for minutes and died in a trace of 11.6 million identical frames.
+* **`seq?` was `seqable?`.** True for a vector, a map, a set and a string. It is
+  invisible until something dispatches on it, and the analyzer does: it tests
+  `seq?` before `vector?`, so an argument vector `[& clauses]` was analyzed as a
+  CALL and the analyzer descended into its own head forever.
+* **`seq` returned its argument**, so `(seq? (seq [1 2]))` was false.
+* **`sequential?` used `Collection`**, which covers Set, so `#{1}` was
+  sequential.
+
+Two lessons about MEASURING this, both learned the hard way:
+
+**The depth is the diagnosis.** "Deep but finite" and "unbounded" look identical
+in a stack trace and want opposite fixes. Counting the frames -- 11.6 million --
+is what separated them, and 2 GB of stack is not evidence of anything on its
+own.
+
+**A call log is not a stack trace.** The ring buffer that names the functions
+records the last calls MADE, so calls that already returned are in it, and a
+`reduce` loop reads as a repeating cycle. Read that way it said the failure was
+in `flint.eval/ev`; it is not. `flint.eval` now has a depth backstop that throws
+a flint error naming the node, self-hosting overflows without it firing, and
+that RULES the evaluator OUT -- by a check rather than a reading. Where the
+recursion actually is remains open, and is not worth a guess.
+
+The earlier `unable to resolve symbol: string?` is gone, along with its
+`:ns flint.main`; that was the `array-map` arity bug.
 
 The interesting remaining parts are the two that are not mechanical:
 

@@ -1,10 +1,10 @@
 # 0030 — The CLR runtime
 
 > **PARTLY BUILT.** The image loader, the interpreter over all 46 opcodes and
-> sixty-odd builtins run real flint programs on .NET, agreeing with the native
-> runtime on every conformance case, several threads run one program on it, and
-> AOT emits real IL (1.53x on a compute loop, every case agreeing with the
-> interpreter). Not built: most of the remaining builtins.
+> every builtin but three run real flint programs on .NET, agreeing with the
+> native runtime on all eight conformance cases, several threads run one program
+> on it, and AOT emits real IL (1.8x on a counting loop, every case agreeing with
+> the interpreter). Not built: the three regex builtins, and self-hosting.
 
 Tier 2, the same as `0029`: port the VM and lean on the host's collector. A
 flint value is a .NET object, the CLR owns lifetime, and the generational
@@ -57,10 +57,41 @@ that arity is called. Two things follow, both recorded in `0029` and true here:
 
 ## What is missing
 
-Most of the 143 builtins the flint compiler itself imports, and AOT — which on
-the CLR means emitting IL, where `0010` notes the constraint that forced an
-interpreter on wasm is absent.
+**Three builtins**, down from 74: `re-compile`, `re-run` and `re-find-all`. The
+JVM is missing the same three. They need flint's Pike VM ported rather than a
+host regex engine bolted on, because a host's engine has different semantics
+and a conformance run compares answers.
 
 Missing builtins are **absent, not stubbed**: reaching one names it, because a
 stub returning nil would let a program answer wrongly here and rightly
 elsewhere.
+
+Porting the other 71 was mechanical; getting them RIGHT was not, and
+`runtimes/conform/hosted.cljc` exercises them rather than counting them. Each
+is a place the CLR's own library is close to what flint means and not the same:
+
+* `Math.Round` defaults to half-to-even, which is what `rint` means -- but only
+  said explicitly does it stay that way. 2.5 → 2.0 beside 3.5 → 4.0 is the case
+  that pins it.
+* `IndexOf` finds "a" inside "A" under some cultures. Ordinal, or the answer
+  depends on where the program runs.
+* The CLR counts UTF-16 units and flint counts code points, so `subs` on
+  "héllo" is what separates them.
+* `hypot` is not `sqrt(x*x + y*y)`: that overflows for large operands and
+  underflows for small ones.
+
+Dynamic bindings are per OS **thread** here, where flint's are per green thread.
+A spawned thread starts empty rather than inheriting a snapshot: threads on this
+port are made by the host, so there is no spawn site to take one at.
+
+## What running the compiler found
+
+The same two the JVM did, because they were the same code twice: a tail call
+that was only a tail call to ITSELF, so mutual tail recursion grew a frame per
+hop; and `seq?` answering `seqable?`, true for a vector, a map, a set and a
+string. `runtimes/conform/control.cljc` pins both -- mutual recursion 300 000
+deep, which no host survives one frame per hop, and `seq?` against the answers
+Clojure gives.
+
+Neither port self-hosts yet. `0029` records what is known and, more usefully,
+what has been ruled out by measurement rather than by reading.
