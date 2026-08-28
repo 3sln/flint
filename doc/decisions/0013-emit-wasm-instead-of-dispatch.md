@@ -617,6 +617,47 @@ of an entire tight-loop iteration for the simplest instruction, and a compiled
 instruction still does the same loads and stores — only the branch and the
 operand decode go away.
 
+## Re-measured 2026-08-28, after loop counters started specialising
+
+The shelving rested on 1.07-1.25x. Half of that is now stale, and the half that
+moved is exactly the half this document predicted would move.
+
+`0013`'s own diagnosis is that the emitter "transliterated the interpreter; it
+did not compile the program", and it names **type specialisation** as "the
+largest single item on this list" -- knowing both operands are fixnums removes
+the tag checks and the boxing, which is the 1.9-vs-6.4 ns gap it measured by
+hand.
+
+That is now partly true, without touching this emitter at all. A `loop` binding
+takes its initialiser's type as a hypothesis and keeps it if every `recur`
+proves it, so an ordinary counting loop emits the specialised integer opcodes --
+which `aot.cljc` already compiles to `i64.add` and friends. Nobody annotates a
+loop counter, and before that change not one specialised opcode was emitted in a
+whole benchmark of integer arithmetic.
+
+| | when shelved | 2026-08-28 |
+|---|---:|---:|
+| `tight` (arithmetic in a loop) | 1.21x | **2.97x** |
+| construe `parse` x20 | 1.07x | 1.10x |
+| construe `suggest` | 1.25x | 1.27x |
+
+**Construe did not move, and that is the finding, not a disappointment.** The
+coverage note in `bench/aot-construe.mjs` says why: construe's arithmetic
+operands come from untyped PARAMETERS, not from loop counters, so almost none of
+it reaches the specialised path. The change fixed counters. What construe
+measures is dispatch removal, which is what this emitter always had.
+
+So the shelving rationale stands for parser-shaped code and does not stand for
+arithmetic-shaped code. Whoever picks this up should read that as a sharpening
+of the same conclusion: the remaining wins are the other two items on the list --
+unboxed values in wasm locals, and inlining -- and they are worth what this
+document estimated, not less.
+
+The same three items were built on the JVM and CLR backends and behaved as
+predicted there: specialisation plus keeping an integer expression unboxed took
+the JVM's AOT from 5.9x to 12x over its own interpreter (`0029`). That is
+independent evidence for the mechanism, on a backend where it was cheap to try.
+
 ## The open bug
 
 **A program that combines green threads with a HOST port produces wrong answers
