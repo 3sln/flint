@@ -281,6 +281,13 @@ grep -E "collections with two executors" /tmp/flint-test.out | sed 's/^ */    /'
 grep -E "^test result" /tmp/flint-test.out | sed 's/^/    /'
 
 echo
+echo "== hosts: every builtin is carried by every port"
+# Counted, not assumed. The count was wrong twice -- once by matching only
+# `flint/`-prefixed names, once by mispairing quotes around an escaped one --
+# and both times it reported a number that looked fine.
+./bin/check-builtins | sed 's/^/  /' || fail "check-builtins"
+
+echo
 echo "== hosts: one program, three runtimes, diffed (0010, 0029, 0030)"
 # The JVM port's gate. Skips itself when there is no JDK, because the rest of
 # the suite must not depend on one being installed.

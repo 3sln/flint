@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Which builtins each port is missing, against the native runtime's catalogue.
+
+Counting this WRONG cost a session. Two traps, both live here:
+
+* Matching only names beginning `flint/` hides every unprefixed one -- the bit
+  operations, `count`, `assoc`, all fourteen type predicates. It reported the
+  CLR as three short when it was twenty-seven short.
+* Matching `"([^"]+)"` against Java or C# source pairs quotes wrongly from the
+  first ESCAPED quote onward, so everything after it is garbage. It reported
+  the JVM missing 153 of 155 builtins, `count` among them. An absurd number is
+  a lucky failure; a plausible one gets believed.
+
+Run from the repo root. Exit 1 if anything is missing.
+"""
+import re
+import sys
+
+RUNTIME = re.compile(r'^\s*"([^"]+)",\s*flint_b_\w+', re.M)
+# A string literal WITH escapes, so an embedded quote does not shift the rest.
+STR = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+def main():
+    names = set(RUNTIME.findall(open("runtime/src/builtins.rs").read()))
+    if not names:
+        print("no builtins found in runtime/src/builtins.rs -- has the shape changed?")
+        return 1
+    print(f"builtins: the native runtime carries {len(names)}")
+    bad = 0
+    for host, path in [("jvm", "runtimes/jvm/src/com/flint/Builtins.java"),
+                       ("clr", "runtimes/clr/src/Builtins.cs")]:
+        have = set(STR.findall(open(path).read()))
+        missing = sorted(names - have)
+        if missing:
+            bad = 1
+            print(f"  FAIL {host} is missing {len(missing)}: {' '.join(missing)}")
+        else:
+            print(f"  ok   {host} carries all {len(names)}")
+    return bad
+
+sys.exit(main())

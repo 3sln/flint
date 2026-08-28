@@ -845,6 +845,29 @@ public static class Builtins {
         // statistics exist for a host with its own GC.
         Def("flint/capabilities", (vm, a) => FlintMap.Empty);
         Def("flint/gc-stats", (vm, a) => FlintMap.Empty);
+
+        // --- regular expressions (`doc/decisions/0012`) --------------------
+        //
+        // The PATTERN is parsed by `flint.nfa`, in cljc, which already runs
+        // here. Only the Pike VM is ported -- see `Pike.cs` for why a host
+        // engine is not an option.
+        Def("flint/re-compile", (vm, a) => Pike.Compile(Str(Arg(a, 0)), Iterate(Arg(a, 1))));
+        Def("flint/re-run", (vm, a) => {
+            if (Arg(a, 0) is not Pike.Regex re) throw new FlintThrow("not a compiled pattern");
+            // 0 searches from `from`; another entry point matches exactly at it.
+            // Both are entries into ONE program, so there is no second program
+            // to keep in step with the first.
+            int from = a.Length > 2 ? (int) Vm.Num(a[2]) : 0;
+            int entry = a.Length > 3 ? (int) Vm.Num(a[3]) : 0;
+            // The fifth argument asks for a match reaching the END, which is
+            // `re-matches` and cannot be had by checking the span afterwards.
+            bool full = a.Length > 4 && Vm.Num(a[4]) != 0;
+            return Pike.Run(re, Str(Arg(a, 1)), from, entry, full);
+        });
+        Def("flint/re-find-all", (vm, a) => {
+            if (Arg(a, 0) is not Pike.Regex re) throw new FlintThrow("not a compiled pattern");
+            return Pike.FindAll(re, Str(Arg(a, 1)), a.Length > 2 ? Vm.Num(a[2]) : 0);
+        });
     }
 
     /// The dynamic bindings in force on THIS thread. See `flint/dyn-get`.
@@ -880,6 +903,7 @@ public static class Builtins {
         Seq or Cons or LazySeq => "list",
         Vm.Closure or Fn or Img.NativeRef => "fn",
         Atom => "atom",
+        Pike.Regex => "regex",
         _ => "other",
     };
 

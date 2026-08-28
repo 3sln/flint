@@ -118,7 +118,7 @@ echo "  $agree/$total agree"
 # reason `doc/decisions/0010` gives -- `pr-str` of a map is how an answer is
 # compared, and content-addressed artifacts would otherwise hash differently
 # per host.
-FLOOR="${FLINT_CONFORM_FLOOR:-8}"
+FLOOR="${FLINT_CONFORM_FLOOR:-9}"
 if [ "$agree" -lt "$FLOOR" ]; then
   echo "  a case that used to agree no longer does ($agree < $FLOOR)"
   exit 1

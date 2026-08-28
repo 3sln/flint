@@ -55,6 +55,7 @@ public final class Builtins {
         if (v instanceof Seq || v instanceof Cons || v instanceof LazySeq) return "list";
         if (v instanceof Vm.Closure || v instanceof Img.NativeRef) return "fn";
         if (v instanceof Atom) return "atom";
+        if (v instanceof Pike.Regex) return "regex";
         return "other";
     }
 
@@ -740,6 +741,31 @@ public final class Builtins {
         });
         // No collector statistics exist for a host with its own GC.
         def("flint/gc-stats", (vm, a) -> FlintMap.empty());
+
+        // --- regular expressions (`doc/decisions/0012`) ----------------------
+        //
+        // The PATTERN is parsed by `flint.nfa`, in cljc, which already runs
+        // here. Only the Pike VM is ported. Handing the pattern to
+        // `java.util.regex` instead would be less code and a different
+        // language: `.` and newline, empty-match advancement and group
+        // numbering all differ, and a conformance run compares answers.
+        def("flint/re-compile", (vm, a) -> Pike.compile(str(arg(a, 0)), iterate(arg(a, 1))));
+        def("flint/re-run", (vm, a) -> {
+            if (!(arg(a, 0) instanceof Pike.Regex re)) throw Vm.err("not a compiled pattern");
+            // 0 searches from `from`; another entry point matches exactly at it.
+            // Both are entries into ONE program, so there is no second program
+            // to keep in step with the first.
+            int from = a.length > 2 ? (int) Vm.num(a[2]) : 0;
+            int entry = a.length > 3 ? (int) Vm.num(a[3]) : 0;
+            // The fifth argument asks for a match reaching the END, which is
+            // `re-matches` and cannot be had by checking the span afterwards.
+            boolean full = a.length > 4 && Vm.num(a[4]) != 0;
+            return Pike.run(re, str(arg(a, 1)), from, entry, full);
+        });
+        def("flint/re-find-all", (vm, a) -> {
+            if (!(arg(a, 0) instanceof Pike.Regex re)) throw Vm.err("not a compiled pattern");
+            return Pike.findAll(re, str(arg(a, 1)), a.length > 2 ? Vm.num(a[2]) : 0);
+        });
 
         // --- dynamic bindings ------------------------------------------------
         //

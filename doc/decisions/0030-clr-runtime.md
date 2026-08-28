@@ -1,11 +1,11 @@
 # 0030 — The CLR runtime
 
 > **PARTLY BUILT.** The image loader, the interpreter over all 46 opcodes and
-> every builtin but three run real flint programs on .NET, agreeing with the
-> native runtime on all eight conformance cases, several threads run one program
+> all 155 builtins run real flint programs on .NET, agreeing with the
+> native runtime on all nine conformance cases, several threads run one program
 > on it, and AOT emits real IL (1.8x on a counting loop, every case agreeing with
 > the interpreter). **The flint compiler runs on it and emits the same image the
-> native compiler does, byte for byte.** Not built: the three regex builtins.
+> native compiler does, byte for byte.**
 
 Tier 2, the same as `0029`: port the VM and lean on the host's collector. A
 flint value is a .NET object, the CLR owns lifetime, and the generational
@@ -60,14 +60,26 @@ that arity is called. Two things follow, both recorded in `0029` and true here:
 
 ## What is missing
 
-**Three builtins**, down from 74: `re-compile`, `re-run` and `re-find-all`. The
-JVM is missing the same three. They need flint's Pike VM ported rather than a
-host regex engine bolted on, because a host's engine has different semantics
-and a conformance run compares answers.
+**Nothing, of the 155 builtins the native runtime carries.** Both ports carry
+all of them, and `bin/check-builtins` counts it in the suite rather than
+letting it be assumed.
 
-Missing builtins are **absent, not stubbed**: reaching one names it, because a
-stub returning nil would let a program answer wrongly here and rightly
-elsewhere.
+The last three were the regex builtins, and they were the only ones that were
+not mechanical. What is ported is the **Pike VM**, not a pattern parser:
+`flint.nfa` parses the pattern in cljc, which already runs on every host, and
+hands the matcher a finished program as a vector of integers. So one engine's
+semantics reach every host instead of each host bolting on its own.
+
+Handing the pattern to `System.Text.RegularExpressions` would have been a
+tenth of the code and a different language. `runtimes/conform/regex.cljc` is
+chosen at the places they differ: `.` against a newline, leftmost-FIRST rather
+than leftmost-longest, an empty match still advancing, a non-participating
+group answering nil rather than "", and spans in code points rather than UTF-16
+units. All of it agrees with Clojure's own answers.
+
+Should a builtin ever go missing again, it is **absent, not stubbed**: reaching
+one names it, because a stub returning nil would let a program answer wrongly
+here and rightly elsewhere.
 
 Porting the other 71 was mechanical; getting them RIGHT was not, and
 `runtimes/conform/hosted.cljc` exercises them rather than counting them. Each

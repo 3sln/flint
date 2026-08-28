@@ -1,13 +1,13 @@
 # 0029 — The JVM runtime
 
 > **PARTLY BUILT.** The image loader, the interpreter over all 46 opcodes and
-> every builtin but three run real flint programs on the JVM, and all eight
+> all 155 builtins run real flint programs on the JVM, and all nine
 > conformance cases agree with the native runtime byte for byte -- including
 > hashes, forty-key CHAMP ordering, infinite lazy sequences and mutual tail
 > recursion 300 000 deep -- several threads run one program on it, and AOT emits
 > real bytecode (12x on a counting loop, every case agreeing with the
 > interpreter). **The flint compiler runs on it and emits the same image the
-> native compiler does, byte for byte.** Not built: the three regex builtins.
+> native compiler does, byte for byte.**
 
 `0010` chose tier 2 for the JVM on measurement rather than taste: Chicory runs
 flint at **500× V8 interpreted and 39× compiled**, so embedding a wasm engine
