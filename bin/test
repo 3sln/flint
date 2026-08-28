@@ -199,6 +199,12 @@ bb test/shake.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail 
 grep -E "^    " /tmp/flint-test.out
 
 echo
+echo "== dist: built from this source tree, not a previous one"
+# Runs BEFORE the binary section, because the CLI embeds `dist/` and a stale
+# slot table does not fail where it is stale -- it segfaults somewhere else.
+./bin/check-dist || fail "check-dist"
+
+echo
 echo "== binary: the single-file CLI, compiling and running with nothing installed"
 # Built against dist/, which the section above just rebuilt. This is the
 # release artifact, so what is asserted is what a user does with it: compile a

@@ -13,42 +13,36 @@
 > is the argument as it stood before the numbers; the numbers did not overturn
 > it, they sized it.
 
-## `swap!` cannot be made atomic yet, and the reason is NOT understood
+## `swap!` is atomic, and the AOT failure was a stale build
 
-`swap!` is `(reset! a (f (deref a)))` -- a read-modify-write, so it loses
-updates once two threads are inside one sandbox (`doc/decisions/0028`). The fix
-is Clojure's: a retry loop over `compare-and-set!`, which is now a builtin and
-which works when the runtime is interpreted.
+`swap!` was `(reset! a (f (deref a)))` -- a read-modify-write, so it lost
+updates once two threads were inside one sandbox (`doc/decisions/0028`). It is
+now Clojure's: a retry loop over `compare-and-set!`, which is a builtin.
 
-Turning it on breaks the AOT path. With `dist` rebuilt so that the compiler
-itself carries the retry loop, `flint compile :optimize [perf]` on an unrelated
-two-line program aborts with **`to-space overflow`** from `gc.rs` -- an object
-copied twice during a minor collection, which means a root the collector did
-not know had moved. Other builds of the same change hang instead.
+Turning it on used to make `flint compile :optimize [perf]` abort with
+`to-space overflow` on an unrelated two-line program. **It does not reproduce.**
+The same change, on a tree where `units/`, `dist/` and the CLI were all rebuilt
+from one source, compiles cleanly 17 times out of 17 and passes the whole
+suite.
 
-**The mechanism has not been found, and three plausible explanations have
-already been wrong**, which is why this section says less than the earlier
-drafts of it did:
+So the cause was almost certainly what the other two symptoms in that
+investigation were: an **inconsistent build**. Adding a builtin shifts the table
+slot of everything after it, and rebuilding only some of `units/`, `dist/` and
+the CLI leaves artifacts that disagree about where a builtin lives. That does
+not fail where it is stale. It segfaults somewhere else, in a program that
+never mentioned the builtin, sensitive to a five-byte change in its source --
+which is exactly the shape that sent me looking for a GC bug three times.
 
-* *A shifted builtin slot.* Adding `compare-and-set!` mid-catalogue moves every
-  slot after it. Appending instead did not fix it.
-* *A shadowed special form.* The retry loop bound a local named `new`, which is
-  in `flint.analyzer`'s special set. Renaming it did not fix it either, and
-  `(let [new 1] new)` compiles and runs correctly.
-* *A value held in a wasm local across an allocation* -- `0001`'s hazard. This
-  one is simply not what the AOT emitter does: `flint.aot` keeps values on the
-  runtime's own value stack, which the collector scans, and `reload` refreshes
-  every cached pointer after each native call.
+`bin/check-dist` now answers that question in one line: it reads the builtin
+names straight out of `runtime/src/builtins.rs` and asserts `dist/slots.json`
+and `dist/slots-aot.json` know every one of them. It runs in the suite BEFORE
+the CLI is exercised, and it fails with a message naming the missing builtin
+instead of a crash somewhere downstream.
 
-What is reproducible is the pairing: the retry loop in `lib/clojure/core.cljc`
-plus an AOT compile fails, and reverting the loop makes it pass. Everything
-narrower has come back clean, including the loop shape on its own, an atom with
-a CAS across an allocating call, and the same program interpreted.
+Three wrong explanations came out of reading the source -- a shifted slot, a
+shadowed special form, a value held in an unscannable local. The thing that
+settled it was making the build state checkable.
 
-So `swap!` stays a read-modify-write, the loss is asserted rather than wished
-away by the JVM thread test, and the next person to look at this should start
-from a debug build -- it named `to-space overflow` in one line, where three
-readings of the source had produced three wrong answers.
 
 
 

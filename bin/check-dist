@@ -1,0 +1,39 @@
+#!/usr/bin/env bb
+;; Does `dist/` describe the builtins this source tree actually has?
+;;
+;; This exists because three separate debugging sessions were lost to it. Adding
+;; a builtin and rebuilding only SOME of `units/`, `dist/` and the CLI produces
+;; artifacts that disagree about which slot a builtin lives in -- and the
+;; symptom is not a message, it is a SEGFAULT in an unrelated program, sensitive
+;; to a five-byte change in that program's source.
+;;
+;; Every wrong explanation I reached for -- a shifted slot, a shadowed special
+;; form, a value held across an allocation -- was a reading of the source. This
+;; is the check that would have answered it in one line instead.
+(require '[clojure.string :as str] '[babashka.fs :as fs] '[cheshire.core :as json])
+
+(def catalogue
+  "Builtin names, from the one place they are declared."
+  (->> (slurp "runtime/src/builtins.rs")
+       (re-seq #"(?m)^    \"([^\"]+)\", flint_b_")
+       (map second)
+       set))
+
+(defn check [path]
+  (if-not (fs/exists? path)
+    (do (println (str "  " path " is missing; run bin/build-dist")) false)
+    (let [slots (set (keys (json/parse-string (slurp path))))
+          missing (sort (remove slots catalogue))]
+      (if (seq missing)
+        (do (println (str "  " path " does not know: " (str/join ", " (take 8 missing))
+                          (when (> (count missing) 8) (str " (+" (- (count missing) 8) " more)"))))
+            false)
+        (do (println (str "  ok   " path " covers all " (count catalogue) " builtins")) true)))))
+
+(println "dist: built from this source tree?")
+(let [ok (doall (map check ["dist/slots.json" "dist/slots-aot.json"]))]
+  (when-not (every? true? ok)
+    (println "\n  dist/ is STALE against runtime/src/builtins.rs.")
+    (println "  Rebuild it with `bin/build-dist`. A stale slot table does not")
+    (println "  fail here -- it segfaults somewhere else, later.")
+    (System/exit 1)))

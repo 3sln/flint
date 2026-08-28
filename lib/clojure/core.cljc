@@ -755,22 +755,30 @@
                     (fn [& args] (mapv (fn [x] (apply2 x args)) fs)))))
 
 (defn swap!
-  "Apply `f` to the atom's value and store the result.
+  "Apply `f` to the atom's value and store the result, retrying if someone else
+  got there first.
 
-  **Not atomic.** This is `(reset! a (f (deref a)))` -- a read-modify-write --
-  so two threads inside it at once lose updates, silently: the counter is
-  simply smaller than it should be. That was unreachable while one thread ran a
-  sandbox and became reachable the day two could (`doc/decisions/0028`).
+  A RETRY LOOP over `compare-and-set!`, not `(reset! a (f (deref a)))`. A
+  read-modify-write loses updates the moment two threads are inside it at once,
+  and loses them silently -- the counter is simply smaller than it should be.
+  That was unreachable while one thread ran a sandbox and became reachable the
+  day two could (`doc/decisions/0028`).
 
-  It should be a retry loop over `compare-and-set!`, which is built and works
-  interpreted. Turning it on makes an AOT compile abort with `to-space
-  overflow`, and the mechanism is NOT understood -- three plausible
-  explanations have already been wrong. `doc/decisions/0013` records what is
-  reproducible and what is not."
-  ([a f] (reset! a (f (deref a))))
-  ([a f x] (reset! a (f (deref a) x)))
-  ([a f x y] (reset! a (f (deref a) x y)))
-  ([a f x y & more] (reset! a (apply2 f (cons (deref a) (cons x (cons y more)))))))
+  `f` may therefore run more than once, which is the same contract Clojure
+  gives and the reason it wants a pure function."
+  ([a f]
+   (loop [] (let [old (deref a) nv (f old)]
+              (if (compare-and-set! a old nv) nv (recur)))))
+  ([a f x]
+   (loop [] (let [old (deref a) nv (f old x)]
+              (if (compare-and-set! a old nv) nv (recur)))))
+  ([a f x y]
+   (loop [] (let [old (deref a) nv (f old x y)]
+              (if (compare-and-set! a old nv) nv (recur)))))
+  ([a f x y & more]
+   (loop [] (let [old (deref a)
+                  nv (apply2 f (cons old (cons x (cons y more))))]
+              (if (compare-and-set! a old nv) nv (recur))))))
 
 (defn ex-info
   ([msg] (flint.rt/ex-info msg nil))

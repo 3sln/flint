@@ -59,18 +59,10 @@ public class ThreadTest {
 
         // An ATOM from many threads.
         //
-        // `swap!` is `(reset! a (f (deref a)))` in `lib/clojure/core.cljc` --
-        // a read-modify-write with no atomicity -- so this LOSES updates, and
-        // that is what it asserts. Not a JVM problem: the same holds on every
-        // runtime the moment two threads are inside one sandbox.
-        //
-        // The retry loop that fixes it is written and works interpreted. It is
-        // off because turning it on makes an AOT compile abort, for a reason
-        // that is not yet understood -- see `doc/decisions/0013`.
-        //
-        // Asserting the CURRENT behaviour rather than the wanted one, so that
-        // fixing the AOT rooting shows up here as a test to update rather than
-        // as nothing at all.
+        // `swap!` is a CAS retry loop in `lib/clojure/core.cljc`, so 8 x 200
+        // increments must be exactly 1600 and not one fewer. A lost update
+        // shows up as a smaller number and nothing else -- no crash, no
+        // exception -- which is why this counts rather than samples.
         List<Future<?>> bumps = new ArrayList<>();
         for (int t = 0; t < THREADS; t++) {
             final int fn = fnTally;
@@ -84,15 +76,10 @@ public class ThreadTest {
         pool.shutdown();
 
         Object total = vm.call(new Vm.Closure(fnTally, new Object[0]), new Object[0]);
-        long ideal = (long) THREADS * PER + 1;
+        long expected = (long) THREADS * PER + 1;
         long got = (Long) total;
-        ok(got >= 1 && got <= ideal,
-           "swap! is a read-modify-write, so " + THREADS + "x" + PER
-           + " increments land somewhere in 1.." + ideal + " (got " + got + ")");
-        if (got < ideal) {
-            System.out.println("       (lost " + (ideal - got)
-                + " updates -- see doc/decisions/0013)");
-        }
+        ok(got == expected, THREADS + " threads x " + PER
+           + " increments lose none (got " + got + ", want " + expected + ")");
 
         System.out.println(failures == 0 ? "\nall checks passed" : "\nFAILED");
         if (failures != 0) System.exit(1);

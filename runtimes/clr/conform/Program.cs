@@ -108,18 +108,17 @@ public static class Program {
         });
         Ok(sameEvery, $"eight threads computing the same thing agree ({Builtins.Str(want)})");
 
-        // `swap!` is `(reset! a (f (deref a)))` -- a read-modify-write with no
-        // atomicity -- so this LOSES updates, and that is what it asserts.
-        // Not a CLR problem: the same holds on every runtime the moment two
-        // threads are inside one sandbox. See `doc/decisions/0013`.
+        // `swap!` is a CAS retry loop in `lib/clojure/core.cljc`, so these
+        // increments must all land. A lost update shows up as a smaller number
+        // and nothing else, which is why this counts rather than samples.
         Parallel.For(0, Threads, _ => {
             for (int i = 0; i < Per; i++)
                 vm.Call(new Vm.Closure(fnTally, Array.Empty<object>()), Array.Empty<object>());
         });
         long got2 = (long) vm.Call(new Vm.Closure(fnTally, Array.Empty<object>()), Array.Empty<object>());
-        long ideal = (long) Threads * Per + 1;
-        Ok(got2 >= 1 && got2 <= ideal,
-           $"swap! is a read-modify-write, so {Threads}x{Per} increments land somewhere in 1..{ideal} (got {got2})");
+        long want2 = (long) Threads * Per + 1;
+        Ok(got2 == want2,
+           $"{Threads} threads x {Per} increments lose none (got {got2}, want {want2})");
 
         Console.WriteLine(failures == 0 ? "\nall checks passed" : "\nFAILED");
         return failures == 0 ? 0 : 1;
