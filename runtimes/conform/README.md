@@ -19,12 +19,18 @@ in the wrong shape**, which no crash would have revealed.
   compared — so every test that printed a seq disagreed, silently, with the
   right elements in it.
 
-* **Map iteration order**, which is still open. flint's maps are a CHAMP and
-  iterate in hash order; this port uses insertion order. `0010` singles this
-  one out as not cosmetic: `pr-str` of a map is how an answer is compared, and
-  content-addressed artifacts would hash differently per host. Closing it means
-  porting flint's hash and the CHAMP's ordering, not choosing a different Java
-  map.
+* **Map iteration order.** flint's maps are an array-map up to eight entries
+  and a CHAMP past that, so a large map iterates in HASH order. The port used
+  insertion order, so a nine-key map printed the right pairs in the wrong
+  sequence. Closed by porting the hash bit-for-bit — it is pinned against the
+  same vectors `runtime/src/hash.rs` asserts, which were solved against real
+  JVM Clojure, so all three agree — and by walking a CHAMP the way `map.rs`
+  does: inline entries in bit order, then sub-nodes.
+
+* **`(keyword "key0")` produced `:key0/`.** `flint/keyword2` means the NAME
+  with one argument and `(ns, name)` with two; reading argument 0 as the
+  namespace regardless gave a keyword with an empty name. It printed almost
+  right and matched nothing, so every lookup keyed by one silently missed.
 
 ## The floor
 

@@ -1,10 +1,10 @@
 # 0029 — The JVM runtime
 
 > **PARTLY BUILT.** The image loader, the interpreter over all 46 opcodes and
-> 40-odd builtins run real flint programs on the JVM, checked against the
-> native runtime by `bin/conform-hosts`. Not built: most of the remaining
-> builtins (118 of the 143 the compiler itself needs), map iteration order,
-> AOT, and multi-threading.
+> fifty-odd builtins run real flint programs on the JVM, and all five
+> conformance cases agree with the native runtime byte for byte -- including
+> hashes and forty-key CHAMP ordering. Not built: most of the remaining
+> builtins, AOT, and multi-threading.
 
 `0010` chose tier 2 for the JVM on measurement rather than taste: Chicory runs
 flint at **500× V8 interpreted and 39× compiled**, so embedding a wasm engine
@@ -44,9 +44,15 @@ shape.** Not one would have crashed:
 * One list type for both seqs and vectors made `(rest [1 2 3])` print as
   `[2 3]`. They are `=` to each other and they print differently, and `pr-str`
   is how an answer is compared.
-* Map iteration order, still open. flint's maps are a CHAMP and iterate in hash
-  order; this port uses insertion order. `0010` singles this one out as not
-  cosmetic — content-addressed artifacts would hash differently per host.
+* Map iteration order. flint's maps are an array-map up to eight entries and a
+  CHAMP past that, so a nine-key map printed the right pairs in the wrong
+  sequence. `0010` singles this one out as not cosmetic — content-addressed
+  artifacts would hash differently per host. Closed by porting the hash
+  bit-for-bit and walking the CHAMP as `map.rs` does.
+* `(keyword "key0")` produced `:key0/`. `flint/keyword2` means the NAME with
+  one argument and `(ns, name)` with two; taking argument 0 as the namespace
+  regardless gave a keyword with an empty name, which printed almost right and
+  matched nothing.
 
 The harness holds a FLOOR rather than demanding every case, because the port is
 unfinished and a known divergence is better visible than deleted. What must not
@@ -60,13 +66,19 @@ Measured by loading real images and asking which builtins are missing:
 | --- | ---: | ---: |
 | a two-function program | 17 | 0 |
 | collections, laziness, transients | 28 | 0 |
-| **the flint compiler itself** | 143 | 118 |
+| the conformance corpus | 40 | 0 |
+| **the flint compiler itself** | 143 | ~100 |
 
 So the remaining work is mostly mechanical — bit operations, the maths library,
-byte strings, regex — and the interesting parts are the three that are not:
-**map ordering** (port the hash and the CHAMP), **AOT** (tier 3: emit JVM
-bytecode, where `0010` notes the constraint that forced an interpreter on wasm
-is absent), and **multi-threading**, which on the JVM means the opposite problem
-to `0028`'s: there is no safepoint to build because there is no collector of
-ours to stop, and what needs care instead is that flint's own data structures
-are shared safely.
+byte strings, regex — and the interesting parts are the two that are not:
+
+**AOT** is tier 3: emit JVM bytecode rather than interpret. `0010` notes the
+constraint that forced an interpreter on wasm — locals not being scannable — is
+simply absent here, so this is a legitimate backend rather than a fight.
+
+**Multi-threading** is the opposite problem to `0028`'s. There is no safepoint
+to build, because there is no collector of ours to stop; the JVM's handles it.
+What needs care instead is that flint's own structures are shared safely, and
+most of them already are: values are immutable, and `Kw`/`Sym` intern through a
+`ConcurrentHashMap`, which gives for free the "one text, one object" property
+the native runtime spends a lock on.

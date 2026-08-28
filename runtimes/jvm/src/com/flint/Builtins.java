@@ -267,9 +267,10 @@ public final class Builtins {
             throw new Vm.Thrown("cannot conj onto " + prStr(coll));
         });
         def("assoc", (vm, a) -> {
-            Map<Object, Object> out = new LinkedHashMap<>();
-            if (arg(a, 0) instanceof Map<?, ?> m) out.putAll(m);
-            for (int i = 1; i + 1 < a.length; i += 2) out.put(a[i], a[i + 1]);
+            FlintMap out = arg(a, 0) instanceof FlintMap fm ? fm
+                : arg(a, 0) instanceof Map<?, ?> m ? FlintMap.of(m)
+                : FlintMap.empty();
+            for (int i = 1; i + 1 < a.length; i += 2) out = out.assoc(a[i], a[i + 1]);
             return out;
         });
         def("seq", (vm, a) -> {
@@ -401,15 +402,81 @@ public final class Builtins {
 
         // Errors are DATA: `ex-info` builds a value and `throw` carries it, so
         // `catch` binds what was thrown rather than a rendering of it.
-        def("ex-info", (vm, a) -> {
-            Map<Object, Object> m = new LinkedHashMap<>();
-            m.put(Kw.of(null, "message"), arg(a, 0));
-            m.put(Kw.of(null, "data"), arg(a, 1) == null ? new LinkedHashMap<>() : arg(a, 1));
-            return m;
-        });
+        def("ex-info", (vm, a) -> FlintMap.empty()
+            .assoc(Kw.of(null, "message"), arg(a, 0))
+            .assoc(Kw.of(null, "data"), arg(a, 1) == null ? FlintMap.empty() : arg(a, 1)));
         def("ex-message", (vm, a) -> get(arg(a, 0), Kw.of(null, "message"), null));
         def("ex-data", (vm, a) -> get(arg(a, 0), Kw.of(null, "data"), null));
         def("flint/ex-kind", (vm, a) -> get(arg(a, 0), Kw.of(null, "kind"), null));
+
+        def("hash", (vm, a) -> (long) Hash.of(arg(a, 0)));
+        // The ARITY decides which argument is which: one is the name, two are
+        // (ns, name). Reading argument 0 as the namespace regardless made
+        // `(keyword "key0")` produce `:key0/` -- a keyword with an empty name,
+        // which printed almost right and matched nothing.
+        def("flint/keyword2", (vm, a) -> a.length == 1
+            ? Kw.of(null, str(a[0]))
+            : Kw.of(arg(a, 0) == null ? null : str(arg(a, 0)), str(arg(a, 1))));
+        def("flint/symbol2", (vm, a) -> a.length == 1
+            ? Sym.of(null, str(a[0]))
+            : Sym.of(arg(a, 0) == null ? null : str(arg(a, 0)), str(arg(a, 1))));
+        def("contains?", (vm, a) -> {
+            Object c = arg(a, 0), k = arg(a, 1);
+            if (c == null) return Boolean.FALSE;
+            if (c instanceof Map<?, ?> m) {
+                if (m instanceof FlintMap fm) return fm.containsKey(k);
+                for (Object existing : m.keySet()) if (eq(existing, k)) return true;
+                return Boolean.FALSE;
+            }
+            if (c instanceof java.util.Set<?> st) return containsValue(st, k);
+            if (c instanceof List<?> l && k instanceof Long i) return i >= 0 && i < l.size();
+            return Boolean.FALSE;
+        });
+        def("dissoc", (vm, a) -> {
+            FlintMap out = FlintMap.empty();
+            if (arg(a, 0) instanceof Map<?, ?> m) {
+                outer:
+                for (var e : m.entrySet()) {
+                    for (int i = 1; i < a.length; i++) if (eq(e.getKey(), a[i])) continue outer;
+                    out = out.assoc(e.getKey(), e.getValue());
+                }
+            }
+            return out;
+        });
+        def("disj", (vm, a) -> {
+            LinkedHashSet<Object> out = new LinkedHashSet<>();
+            if (arg(a, 0) instanceof java.util.Set<?> s) {
+                outer:
+                for (Object o : s) {
+                    for (int i = 1; i < a.length; i++) if (eq(o, a[i])) continue outer;
+                    out.add(o);
+                }
+            }
+            return out;
+        });
+        def("empty", (vm, a) -> {
+            Object c = arg(a, 0);
+            if (c instanceof Map) return FlintMap.empty();
+            if (c instanceof java.util.Set) return new LinkedHashSet<>();
+            if (c instanceof Seq) return Seq.of(new ArrayList<>());
+            return new ArrayList<>();
+        });
+        def("peek", (vm, a) -> {
+            Object c = arg(a, 0);
+            if (c instanceof Seq q) return q.isEmpty() ? null : q.get(0);
+            if (c instanceof List<?> l) return l.isEmpty() ? null : l.get(l.size() - 1);
+            return null;
+        });
+        def("pop", (vm, a) -> {
+            Object c = arg(a, 0);
+            if (c instanceof Seq q) return Seq.of(tail(q));
+            if (c instanceof List<?> l) {
+                if (l.isEmpty()) throw new Vm.Thrown("cannot pop an empty vector");
+                return new ArrayList<Object>(l.subList(0, l.size() - 1));
+            }
+            throw new Vm.Thrown("cannot pop " + prStr(c));
+        });
+        def("compare", (vm, a) -> (long) compareValues(arg(a, 0), arg(a, 1)));
 
         def("flint/lazy-seq", (vm, a) -> new LazySeq(vm, arg(a, 0)));
         def("flint/range3", (vm, a) -> {
@@ -452,6 +519,23 @@ public final class Builtins {
     private static double toD(Object o) {
         if (o instanceof Double d) return d;
         return Vm.num(o);
+    }
+
+    /// Total order over the shapes flint compares. Numbers by value, strings
+    /// and identifiers by text, and `nil` before everything.
+    static int compareValues(Object x, Object y) {
+        if (x == null && y == null) return 0;
+        if (x == null) return -1;
+        if (y == null) return 1;
+        if ((x instanceof Long || x instanceof Double)
+            && (y instanceof Long || y instanceof Double)) {
+            return Double.compare(toD(x), toD(y));
+        }
+        if (x instanceof String a && y instanceof String b) return a.compareTo(b);
+        if (x instanceof Boolean a && y instanceof Boolean b) return Boolean.compare(a, b);
+        if (x instanceof Kw a && y instanceof Kw b) return a.toString().compareTo(b.toString());
+        if (x instanceof Sym a && y instanceof Sym b) return a.toString().compareTo(b.toString());
+        throw new Vm.Thrown("cannot compare " + prStr(x) + " with " + prStr(y));
     }
 
     private static Object compare(Object[] a, char op) {

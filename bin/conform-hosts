@@ -48,17 +48,17 @@ done
 agree=$((total - fails))
 echo "  $agree/$total agree"
 
-# A FLOOR rather than "all must pass", because the JVM port is not finished and
-# a known divergence is worth keeping visible instead of deleted. What must not
-# happen is the number going DOWN.
+# A FLOOR rather than "all must pass", because the port is unfinished and a case
+# it cannot yet run should be visible rather than deleted. What must not happen
+# is the number going DOWN.
 #
-# The one that does not agree is map ITERATION ORDER: flint's maps are a CHAMP
-# and iterate in hash order, and this port uses insertion order. The values are
-# identical and only the printing differs -- which is exactly why it matters.
-# `doc/decisions/0010` singles this one out as not cosmetic: `pr-str` of a map
-# is how an answer is compared, and content-addressed artifacts would hash
-# differently per host.
-FLOOR="${FLINT_CONFORM_FLOOR:-3}"
+# Map iteration order used to be the divergence here, and it is closed: flint's
+# hash is ported bit-for-bit and the CHAMP walks in the same order, so a
+# forty-key map prints identically on both. That was worth the trouble for the
+# reason `doc/decisions/0010` gives -- `pr-str` of a map is how an answer is
+# compared, and content-addressed artifacts would otherwise hash differently
+# per host.
+FLOOR="${FLINT_CONFORM_FLOOR:-5}"
 if [ "$agree" -lt "$FLOOR" ]; then
   echo "  a case that used to agree no longer does ($agree < $FLOOR)"
   exit 1

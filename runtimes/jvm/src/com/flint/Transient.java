@@ -35,7 +35,7 @@ public final class Transient {
     }
 
     public Object persistent() {
-        return list != null ? List.copyOf(nonNull(list)) : Map.copyOf(map);
+        return list != null ? List.copyOf(nonNull(list)) : FlintMap.of(map);
     }
 
     /// `List.copyOf` rejects nulls and `nil` is a perfectly good element, so a

@@ -186,10 +186,10 @@ public final class Img {
             }
             case K_MAP: {
                 int n = (int) r.u32();
-                Map<Object, Object> m = new LinkedHashMap<>();
+                FlintMap m = FlintMap.empty();
                 for (int i = 0; i < n; i++) {
                     Object k = built[(int) r.u32()];
-                    m.put(k, built[(int) r.u32()]);
+                    m = m.assoc(k, built[(int) r.u32()]);
                 }
                 return m;
             }

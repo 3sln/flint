@@ -267,9 +267,9 @@ public final class Vm {
                     }
                     case MAP: {
                         int n = u16(ip); ip += 2;
-                        Map<Object, Object> m = new LinkedHashMap<>();
+                        FlintMap m = FlintMap.empty();
                         for (int i = 0; i < n; i++) {
-                            m.put(stack[sp - 2 * n + 2 * i], stack[sp - 2 * n + 2 * i + 1]);
+                            m = m.assoc(stack[sp - 2 * n + 2 * i], stack[sp - 2 * n + 2 * i + 1]);
                         }
                         sp -= 2 * n;
                         stack[sp++] = m;
