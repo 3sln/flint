@@ -343,10 +343,10 @@ impl Rt {
             self.pop_to(base);
             return NIL;
         }
-        self.gc.set_slot(a, 0, Value::fixnum(fn_idx as i64));
+        self.set_slot(a, 0, Value::fixnum(fn_idx as i64));
         for i in 0..upvals.len() {
             let v = self.r(base + i);
-            self.gc.set_slot(a, 1 + i as u32, v);
+            self.set_slot(a, 1 + i as u32, v);
         }
         self.pop_to(base);
         Value::heap(a)
@@ -362,8 +362,8 @@ impl Rt {
         }
         let name = self.r(n);
         self.pop_to(base);
-        self.gc.set_slot(a, 0, Value::fixnum(native_idx as i64));
-        self.gc.set_slot(a, 1, name);
+        self.set_slot(a, 0, Value::fixnum(native_idx as i64));
+        self.set_slot(a, 1, name);
         Value::heap(a)
     }
 
@@ -1007,14 +1007,14 @@ impl Rt {
                 op::VAR => {
                     let k = self.u16_at(ip) as usize;
                     ip += 2;
-                    let v = self.roots.shared.globals[k];
+                    let v = self.roots.shared.globals[k].get();
                     self.vpush(v);
                 }
                 op::SET_VAR => {
                     let k = self.u16_at(ip) as usize;
                     ip += 2;
                     let v = self.vpop();
-                    self.roots.shared.globals[k] = v;
+                    self.roots.shared.globals[k].set(v);
                 }
                 op::POP => {
                     self.roots.stack_top -= 1;
@@ -1212,10 +1212,10 @@ impl Rt {
                         }
                         continue;
                     }
-                    self.gc.set_slot(a, 0, Value::fixnum(fn_idx as i64));
+                    self.set_slot(a, 0, Value::fixnum(fn_idx as i64));
                     for i in 0..n {
                         let v = self.roots.stack[base + i];
-                        self.gc.set_slot(a, 1 + i as u32, v);
+                        self.set_slot(a, 1 + i as u32, v);
                     }
                     self.roots.stack_top = base;
                     self.vpush(Value::heap(a));
@@ -1749,7 +1749,7 @@ impl Rt {
         let idx = self
             .var_named(name)
             .ok_or_else(|| alloc::format!("this image has no `{name}`"))?;
-        let f = self.roots.shared.globals.get(idx as usize).copied().unwrap_or(NIL);
+        let f = self.roots.shared.globals.get(idx as usize).map_or(NIL, |g| g.get());
         if f.is_nil() {
             return Err(alloc::format!("`{name}` is not a function"));
         }

@@ -400,9 +400,9 @@ impl Rt {
         }
         let (src, blob) = (self.r(si), self.r(bi));
         self.pop_to(base);
-        self.gc.set_slot(a, RX_SOURCE, src);
-        self.gc.set_slot(a, RX_PROG, blob);
-        self.gc.set_slot(a, RX_NGROUPS, Value::fixnum(raw[2] as i64));
+        self.set_slot(a, RX_SOURCE, src);
+        self.set_slot(a, RX_PROG, blob);
+        self.set_slot(a, RX_NGROUPS, Value::fixnum(raw[2] as i64));
         Value::heap(a)
     }
 

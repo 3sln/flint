@@ -93,9 +93,9 @@ impl Rt {
         if a == 0 {
             return NIL;
         }
-        self.gc.set_slot(a, BN_EDIT, edit);
-        self.gc.set_slot(a, BN_DATAMAP, Value::fixnum(datamap as i64));
-        self.gc.set_slot(a, BN_NODEMAP, Value::fixnum(nodemap as i64));
+        self.set_slot(a, BN_EDIT, edit);
+        self.set_slot(a, BN_DATAMAP, Value::fixnum(datamap as i64));
+        self.set_slot(a, BN_NODEMAP, Value::fixnum(nodemap as i64));
         Value::heap(a)
     }
 
@@ -143,8 +143,8 @@ impl Rt {
         if a == 0 {
             return NIL;
         }
-        self.gc.set_slot(a, CN_EDIT, edit);
-        self.gc.set_slot(a, CN_HASH, Value::fixnum(h as i64));
+        self.set_slot(a, CN_EDIT, edit);
+        self.set_slot(a, CN_HASH, Value::fixnum(h as i64));
         Value::heap(a)
     }
     #[inline]
@@ -885,8 +885,8 @@ impl Rt {
 
     pub(crate) fn init_map(&mut self) {
         let a = self.alloc(TY_ARRAYMAP, AM_BASE);
-        self.gc.set_slot(a, AM_META, NIL);
-        self.gc.set_slot(a, AM_HASH, NIL);
+        self.set_slot(a, AM_META, NIL);
+        self.set_slot(a, AM_HASH, NIL);
         self.roots.shared.singletons[crate::rt::SING_EMPTY_MAP] = Value::heap(a);
     }
 
@@ -910,8 +910,8 @@ impl Rt {
         if a == 0 {
             return NIL;
         }
-        self.gc.set_slot(a, AM_META, NIL);
-        self.gc.set_slot(a, AM_HASH, NIL);
+        self.set_slot(a, AM_META, NIL);
+        self.set_slot(a, AM_HASH, NIL);
         Value::heap(a)
     }
 
@@ -926,10 +926,10 @@ impl Rt {
         }
         let (root, meta) = (self.r(ri), self.r(mi));
         self.pop_to(base);
-        self.gc.set_slot(a, HM_CNT, Value::fixnum(cnt as i64));
-        self.gc.set_slot(a, HM_ROOT, root);
-        self.gc.set_slot(a, HM_META, meta);
-        self.gc.set_slot(a, HM_HASH, NIL);
+        self.set_slot(a, HM_CNT, Value::fixnum(cnt as i64));
+        self.set_slot(a, HM_ROOT, root);
+        self.set_slot(a, HM_META, meta);
+        self.set_slot(a, HM_HASH, NIL);
         Value::heap(a)
     }
 
@@ -1260,8 +1260,8 @@ impl Rt {
         }
         let (k, v) = (self.r(ki), self.r(vi));
         self.pop_to(base);
-        self.gc.set_slot(a, 0, k);
-        self.gc.set_slot(a, 1, v);
+        self.set_slot(a, 0, k);
+        self.set_slot(a, 1, v);
         Value::heap(a)
     }
 

@@ -58,7 +58,12 @@
 ;; Raised 20 589 bytes for `flint_call` (`doc/decisions/0025`): the wire codec
 ;; and the map an error reply is built from, carried by every module because
 ;; every module can be called by name.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-prod.wasm") 245000))
+;; Raised 5 040 bytes for the write barrier carrying its remembered set
+;; (`doc/decisions/0028`), MEASURED at 249 490 against 244 450. Per-executor is
+;; what makes the barrier safe with several threads on one heap; the
+;; alternative was a second copy of a twenty-five line function, and
+;; `flint.strs` records what two copies of a subtle function cost.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-prod.wasm") 252000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

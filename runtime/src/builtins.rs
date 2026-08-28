@@ -619,8 +619,8 @@ builtins! {
         if addr == 0 { rt.pop_to(base); return NIL; }
         let f = rt.r(fi);
         rt.pop_to(base);
-        rt.gc.set_slot(addr, 0, f);
-        rt.gc.set_slot(addr, 1, NIL);
+        rt.set_slot(addr, 0, f);
+        rt.set_slot(addr, 1, NIL);
         Value::heap(addr)
     };
     "flint/realized?", flint_b_realized, b_realized, |rt, a, n| {

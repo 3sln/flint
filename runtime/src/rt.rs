@@ -14,7 +14,7 @@
 
 use alloc::vec::Vec;
 
-use crate::gc::{Gc, Roots};
+use crate::gc::Roots;
 use crate::obj::*;
 use crate::value::{Value, INLINE_MAX, NIL};
 
@@ -586,13 +586,25 @@ impl Rt {
         a
     }
 
+    /// Write a slot, running the generational write barrier.
+    ///
+    /// This exists so the 131 call sites do not each have to name the
+    /// remembered set. The barrier appends to THIS executor's list, which is
+    /// what makes it safe to run from several threads at once: the heap write
+    /// needs only `&Gc`, and two `&mut Gc` at the same time would be aliasing
+    /// UB even where the writes never touched.
+    #[inline]
+    pub fn set_slot(&mut self, obj: u32, i: u32, v: Value) {
+        self.gc.set_slot(obj, i, v, &mut self.roots.own.remembered);
+    }
+
     #[inline]
     pub fn slot(&self, v: Value, i: u32) -> Value {
         slot(&self.gc.sp, v.as_heap(), i)
     }
     #[inline]
     pub fn set(&mut self, v: Value, i: u32, x: Value) {
-        self.gc.set_slot(v.as_heap(), i, x);
+        self.set_slot(v.as_heap(), i, x);
     }
     #[inline]
     pub fn ty(&self, v: Value) -> u8 {

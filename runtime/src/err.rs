@@ -34,10 +34,10 @@ impl Rt {
         }
         let (kind, msg, data, cause) = (self.r(k), self.r(m), self.r(d), self.r(c));
         self.pop_to(base);
-        self.gc.set_slot(a, EX_KIND, kind);
-        self.gc.set_slot(a, EX_MSG, msg);
-        self.gc.set_slot(a, EX_DATA, data);
-        self.gc.set_slot(a, EX_CAUSE, cause);
+        self.set_slot(a, EX_KIND, kind);
+        self.set_slot(a, EX_MSG, msg);
+        self.set_slot(a, EX_DATA, data);
+        self.set_slot(a, EX_CAUSE, cause);
         Value::heap(a)
     }
 

@@ -416,8 +416,8 @@ impl Rt {
         }
         let v = self.r(vi);
         self.pop_to(base);
-        self.gc.set_slot(a, 0, v);
-        self.gc.set_slot(a, 1, NIL);
+        self.set_slot(a, 0, v);
+        self.set_slot(a, 1, NIL);
         Value::heap(a)
     }
 
@@ -500,9 +500,9 @@ impl Rt {
         let (v, m) = (self.r(vi), self.r(mi));
         for i in 0..n {
             let s = self.slot(v, i);
-            self.gc.set_slot(a, i, s);
+            self.set_slot(a, i, s);
         }
-        self.gc.set_slot(a, idx, m);
+        self.set_slot(a, idx, m);
         self.pop_to(base);
         Value::heap(a)
     }
@@ -896,11 +896,11 @@ impl Rt {
             return NIL;
         }
         let m = Value::heap(a);
-        self.gc.set_slot(a, crate::map::AM_META, NIL);
-        self.gc.set_slot(a, crate::map::AM_HASH, NIL);
+        self.set_slot(a, crate::map::AM_META, NIL);
+        self.set_slot(a, crate::map::AM_HASH, NIL);
         for i in 0..(2 * n) as usize {
             let v = self.r(vals_at + i);
-            self.gc.set_slot(a, crate::map::AM_BASE + i as u32, v);
+            self.set_slot(a, crate::map::AM_BASE + i as u32, v);
         }
         self.pop_to(base);
         m
@@ -913,7 +913,7 @@ impl Rt {
         if a == 0 { self.pop_to(base); return NIL; }
         let v = self.r(vi);
         self.pop_to(base);
-        self.gc.set_slot(a, 0, v);
+        self.set_slot(a, 0, v);
         Value::heap(a)
     }
 
@@ -939,12 +939,12 @@ impl Rt {
         self.pop_to(base);
         let id = self.next_opaque;
         self.next_opaque = self.next_opaque.wrapping_add(1);
-        self.gc.set_slot(a, 0, label);
+        self.set_slot(a, 0, label);
         // STORED, not derived from `a`: the nursery is a copying collector, so
         // an address-derived hash would change under collection and a value in
         // a map would stop being findable by the key that put it there.
-        self.gc.set_slot(a, 1, Value::fixnum(id as i64));
-        self.gc.set_slot(a, 2, Value::fixnum(host_id as i64));
+        self.set_slot(a, 1, Value::fixnum(id as i64));
+        self.set_slot(a, 2, Value::fixnum(host_id as i64));
         Value::heap(a)
     }
 
@@ -1047,9 +1047,9 @@ impl Rt {
         let edit = self.r(ei);
         self.pop_to(base);
         let _ = mi;
-        self.gc.set_slot(a, 0, Value::fixnum(cnt as i64));
-        self.gc.set_slot(a, 1, root);
-        self.gc.set_slot(a, 2, edit);
+        self.set_slot(a, 0, Value::fixnum(cnt as i64));
+        self.set_slot(a, 1, root);
+        self.set_slot(a, 2, edit);
         Value::heap(a)
     }
 
@@ -1163,8 +1163,8 @@ impl Rt {
         let tm = self.r(ti);
         let edit = self.slot(tm, 2);
         self.pop_to(base);
-        self.gc.set_slot(a, 0, tm);
-        self.gc.set_slot(a, 1, edit);
+        self.set_slot(a, 0, tm);
+        self.set_slot(a, 1, edit);
         Value::heap(a)
     }
 

@@ -24,9 +24,9 @@ impl Rt {
         let a = self.alloc(TY_SET, 3);
         let m = self.r(mi);
         self.pop_to(mi);
-        self.gc.set_slot(a, S_MAP, m);
-        self.gc.set_slot(a, S_META, NIL);
-        self.gc.set_slot(a, S_HASH, NIL);
+        self.set_slot(a, S_MAP, m);
+        self.set_slot(a, S_META, NIL);
+        self.set_slot(a, S_HASH, NIL);
         self.roots.shared.singletons[crate::rt::SING_EMPTY_SET] = Value::heap(a);
     }
 
@@ -45,9 +45,9 @@ impl Rt {
         }
         let (m, meta) = (self.r(mi), self.r(mt));
         self.pop_to(base);
-        self.gc.set_slot(a, S_MAP, m);
-        self.gc.set_slot(a, S_META, meta);
-        self.gc.set_slot(a, S_HASH, NIL);
+        self.set_slot(a, S_MAP, m);
+        self.set_slot(a, S_META, meta);
+        self.set_slot(a, S_HASH, NIL);
         Value::heap(a)
     }
 

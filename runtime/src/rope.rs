@@ -128,13 +128,12 @@ impl Rt {
             self.pop_to(base);
             return NIL;
         }
-        self.gc.set_slot(a, RP_BYTES, Value::fixnum(bytes as i64));
-        self.gc
-            .set_slot(a, RP_CPS, Value::fixnum(((cps as i64) << 1) | ascii as i64));
-        self.gc.set_slot(a, RP_FLAT, NIL);
+        self.set_slot(a, RP_BYTES, Value::fixnum(bytes as i64));
+        self.set_slot(a, RP_CPS, Value::fixnum(((cps as i64) << 1) | ascii as i64));
+        self.set_slot(a, RP_FLAT, NIL);
         for (i, _) in kids.iter().enumerate() {
             let v = self.r(base + i);
-            self.gc.set_slot(a, RP_KIDS + i as u32, v);
+            self.set_slot(a, RP_KIDS + i as u32, v);
         }
         self.pop_to(base);
         Value::heap(a)
@@ -260,7 +259,7 @@ impl Rt {
         let v = self.r(vi);
         self.pop_to(base);
         if v.is_heap() && !flat.is_nil() {
-            self.gc.set_slot(v.as_heap(), RP_FLAT, flat);
+            self.set_slot(v.as_heap(), RP_FLAT, flat);
         }
         flat
     }

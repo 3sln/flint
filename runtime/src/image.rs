@@ -312,7 +312,7 @@ impl Rt {
             var_names.push(r.u32());
         }
         self.roots.shared.globals.clear();
-        self.roots.shared.globals.resize(nvars, NIL);
+        self.roots.shared.globals.resize_with(nvars, || crate::gc::GlobalSlot::new(NIL));
 
         let codelen = r.u32() as usize;
         let code = r.bytes(codelen).to_vec();

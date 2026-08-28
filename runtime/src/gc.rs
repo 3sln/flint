@@ -174,6 +174,16 @@ pub struct ExecRoots {
     pub stack_top: usize,
     /// Explicit roots for native code holding values across an allocation.
     pub shadow: Vec<Value>,
+    /// Old objects this executor gave a young pointer to.
+    ///
+    /// PER-EXECUTOR, and that is the whole reason the write barrier is safe
+    /// with several threads running. A shared `Vec` pushed to from the barrier
+    /// would reallocate under another thread's push, and the barrier is far
+    /// hotter than allocation -- locking it would cost more than it protects.
+    ///
+    /// The collector drains every executor's at a safepoint, which is the only
+    /// time anything reads them.
+    pub remembered: Vec<u32>,
 }
 
 impl ExecRoots {
@@ -182,6 +192,7 @@ impl ExecRoots {
             stack: alloc::vec![Value(0); 1024],
             stack_top: 0,
             shadow: Vec::with_capacity(64),
+            remembered: Vec::new(),
         }
     }
 }
@@ -218,6 +229,58 @@ unsafe impl Send for ParkedRoots {}
 /// Globals, constants, the intern tables and the singletons belong to the
 /// program, not to whichever thread is running it, so several executors share
 /// exactly this (`doc/decisions/0028`).
+/// One var slot.
+///
+/// A newtype so the atomic access is in one place and the ordering argument is
+/// written next to it, rather than at fourteen call sites.
+/// Atomic only where there can be a second executor.
+///
+/// With one executor there is no one to race, and the atomic costs 7 277 bytes
+/// of module -- MEASURED (249 542 against 242 265 on the pure module). Same
+/// rule as the multi-executor root scan: absent rather than disabled
+/// (`doc/decisions/0016`), because wasm cannot have a second executor at all.
+///
+/// Both spellings are `#[repr(transparent)]` over eight bytes, which is not
+/// cosmetic: compiled code reads this array through a raw base pointer
+/// (`flint.aot`), so the representation is part of an ABI.
+#[cfg(feature = "parallel")]
+#[repr(transparent)]
+pub struct GlobalSlot(core::sync::atomic::AtomicU64);
+
+#[cfg(feature = "parallel")]
+impl GlobalSlot {
+    pub fn new(v: Value) -> GlobalSlot {
+        GlobalSlot(core::sync::atomic::AtomicU64::new(v.0))
+    }
+    #[inline(always)]
+    pub fn get(&self) -> Value {
+        Value(self.0.load(core::sync::atomic::Ordering::Relaxed))
+    }
+    #[inline(always)]
+    pub fn set(&self, v: Value) {
+        self.0.store(v.0, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[cfg(not(feature = "parallel"))]
+#[repr(transparent)]
+pub struct GlobalSlot(core::cell::Cell<Value>);
+
+#[cfg(not(feature = "parallel"))]
+impl GlobalSlot {
+    pub fn new(v: Value) -> GlobalSlot {
+        GlobalSlot(core::cell::Cell::new(v))
+    }
+    #[inline(always)]
+    pub fn get(&self) -> Value {
+        self.0.get()
+    }
+    #[inline(always)]
+    pub fn set(&self, v: Value) {
+        self.0.set(v);
+    }
+}
+
 pub struct SharedRoots {
     /// Every OTHER executor in this sandbox, stopped at a safepoint.
     ///
@@ -230,7 +293,18 @@ pub struct SharedRoots {
     /// that walks the others -- 1 056 bytes, measured (`doc/decisions/0016`).
     #[cfg(feature = "parallel")]
     pub others: Vec<ParkedRoots>,
-    pub globals: Vec<Value>,
+    /// Var slots, read by `GET_VAR` and written by `SET_VAR`.
+    ///
+    /// Atomic because several executors read them while one may be writing.
+    /// `AtomicU64` has the same layout as the `u64` a `Value` is, which matters
+    /// beyond tidiness: compiled code reads this array through a raw base
+    /// pointer (`flint.aot`), so the representation is part of an ABI.
+    ///
+    /// Relaxed ordering throughout. A var slot carries no happens-before for
+    /// anything else -- the heap object it names is published by the
+    /// allocation lock and the safepoint -- so this only has to be a read that
+    /// sees a whole value rather than half of one.
+    pub globals: Vec<GlobalSlot>,
     pub consts: Vec<Value>,
     /// Weak tables (strings, keywords, symbols).
     pub interns: [InternTable; 4],
@@ -389,7 +463,7 @@ impl Roots {
             // the sandbox" has to mean anywhere, or the answer is a rooting
             // argument rather than a fact.
             || self.parked_hold(addr)
-            || self.shared.globals.iter().any(hit)
+            || self.shared.globals.iter().any(|g| hit(&g.get()))
             || self.shared.consts.iter().any(hit)
             || self.shared.singletons.iter().any(hit)
     }
@@ -406,6 +480,22 @@ impl Roots {
     #[cfg(all(feature = "diagnostics", not(feature = "parallel")))]
     fn parked_hold(&self, _addr: u32) -> bool {
         false
+    }
+
+    /// Every executor's remembered set, drained into one list.
+    ///
+    /// Only correct during a collection, which is the only time every other
+    /// executor is stopped. Draining one executor's list and not the rest would
+    /// lose old-to-young edges that another thread recorded, and a lost edge is
+    /// a young object collected while an old one still points at it.
+    fn drain_remembered(&mut self) -> Vec<u32> {
+        let mut out = core::mem::take(&mut self.own.remembered);
+        #[cfg(feature = "parallel")]
+        for e in self.shared.others.iter().copied() {
+            let e = unsafe { &mut *e.0 };
+            out.append(&mut e.remembered);
+        }
+        out
     }
 
     fn for_each<F: FnMut(&mut Value)>(&mut self, mut f: F) {
@@ -438,8 +528,12 @@ impl Roots {
                 f(v);
             }
         }
-        for v in &mut self.shared.globals {
-            f(v);
+        for g in &self.shared.globals {
+            // Read, let the collector rewrite it, write back. Safe unlocked
+            // because this only runs with every executor stopped.
+            let mut v = g.get();
+            f(&mut v);
+            g.set(v);
         }
         for v in &mut self.shared.consts {
             f(v);
@@ -483,7 +577,11 @@ pub struct Gc {
     pub(crate) free_lists: [u32; NCLASS],
     pub(crate) old_capacity: u32,
     pub(crate) old_live: u32,
-    pub(crate) remembered: Vec<u32>,
+    /// What the COLLECTOR re-enrols while rebuilding the set.
+    ///
+    /// The mutators' lists are per-executor (`ExecRoots::remembered`); this one
+    /// belongs to the collection itself, which runs with everything stopped.
+    pub(crate) remembered_during_collect: Vec<u32>,
     work: Vec<u32>,
     pub(crate) max_heap: u32,
     pub stats: GcStats,
@@ -647,7 +745,7 @@ impl Gc {
             free_lists: [0; NCLASS],
             old_capacity: 0,
             old_live: 0,
-            remembered: Vec::new(),
+            remembered_during_collect: Vec::new(),
             work: Vec::new(),
             max_heap,
             stats: GcStats::default(),
@@ -919,7 +1017,7 @@ impl Gc {
                 self.zero_body(a, ty, len_);
                 // A fresh old object may be given young pointers, and we do not
                 // know yet, so enrol it in the remembered set up front.
-                self.remember(a);
+                self.remember(a, &mut roots.own.remembered);
             }
             return a;
         }
@@ -940,7 +1038,7 @@ impl Gc {
                 let a = self.alloc_old_collecting(roots, ty, len_);
                 if a != 0 {
                     self.zero_body(a, ty, len_);
-                    self.remember(a);
+                    self.remember(a, &mut roots.own.remembered);
                 }
                 return a;
             }
@@ -990,16 +1088,28 @@ impl Gc {
     // --- write barrier ---------------------------------------------------
 
     #[inline]
-    fn remember(&mut self, obj: u32) {
+    /// Enrol an old object in the remembered set.
+    ///
+    /// `&self`, not `&mut self`: the only thing this mutates in the heap is a
+    /// flag bit in the object's own header, and the list it appends to belongs
+    /// to the CALLING executor. That is what lets several threads run the write
+    /// barrier at once without two of them holding `&mut Gc`, which would be
+    /// aliasing UB whether or not the writes conflicted.
+    ///
+    /// Two executors can both set the flag on one object. They write the same
+    /// bit, and the worst case is the object appearing in two executors'
+    /// lists -- a second scan, not a wrong answer.
+    #[inline]
+    pub(crate) fn remember(&self, obj: u32, rem: &mut Vec<u32>) {
         if !in_remset(&self.sp, obj) {
             set_in_remset(&self.sp, obj, true);
-            self.remembered.push(obj);
+            rem.push(obj);
         }
     }
 
     /// Store a value into a slot, running the generational write barrier.
     #[inline]
-    pub fn set_slot(&mut self, obj: u32, i: u32, v: Value) {
+    pub fn set_slot(&self, obj: u32, i: u32, v: Value, rem: &mut Vec<u32>) {
         // A young pointer that is not in the LIVE half is a leftover from
         // before a flip. `is_young` spans both semispaces, so no barrier and no
         // generational check can tell one from the other -- only this can, and
@@ -1025,7 +1135,7 @@ impl Gc {
         }
         set_slot_raw(&self.sp, obj, i, v);
         if v.is_heap() && self.is_young(v.as_heap()) && !self.is_young(obj) {
-            self.remember(obj);
+            self.remember(obj, rem);
         }
     }
 
@@ -1033,8 +1143,9 @@ impl Gc {
     /// separate for readability only: making it skip the barrier was tried and
     /// is a footgun, because a large object is born in the *old* generation.
     #[inline]
-    pub fn init_slot(&mut self, obj: u32, i: u32, v: Value) {
-        self.set_slot(obj, i, v)
+    #[inline]
+    pub fn init_slot(&self, obj: u32, i: u32, v: Value, rem: &mut Vec<u32>) {
+        self.set_slot(obj, i, v, rem)
     }
 
     // --- minor collection ------------------------------------------------
@@ -1154,7 +1265,12 @@ impl Gc {
             }
         }
         if old && points_young {
-            self.remember(a);
+            // Inside a collection, so nothing else is running and this goes
+            // straight back into the set being rebuilt.
+            if !in_remset(&self.sp, a) {
+                set_in_remset(&self.sp, a, true);
+                self.remembered_during_collect.push(a);
+            }
         }
     }
 
@@ -1289,8 +1405,8 @@ impl Gc {
             }
         });
 
-        // 2. remembered set (old -> young edges)
-        let old_rem = core::mem::take(&mut self.remembered);
+        // 2. remembered set (old -> young edges), from EVERY executor
+        let old_rem = roots.drain_remembered();
         for a in &old_rem {
             set_in_remset(&self.sp, *a, false);
         }
@@ -1357,8 +1473,8 @@ impl Gc {
             for (k, v) in roots.shadow.iter().enumerate() {
                 check(v, 1, k as u32);
             }
-            for (k, v) in roots.shared.globals.iter().enumerate() {
-                check(v, 2, k as u32);
+            for (k, g) in roots.shared.globals.iter().enumerate() {
+                check(&g.get(), 2, k as u32);
             }
             for (k, v) in roots.shared.consts.iter().enumerate() {
                 check(v, 3, k as u32);
@@ -1384,6 +1500,15 @@ impl Gc {
                 self.remset_end_violations += self.remset_violations - before;
             }
         }
+        // Hand the rebuilt set back to a mutator's list.
+        //
+        // `scan_object` re-enrols every old object that STILL points young.
+        // Leaving those in the collector's own list drops them from the
+        // remembered set entirely, and the next minor collection then frees
+        // young objects an old one is still holding -- which reads back as a
+        // slot that lost its value, one collection later and nowhere near the
+        // cause.
+        roots.own.remembered.append(&mut self.remembered_during_collect);
         #[cfg(feature = "diagnostics")]
         {
             self.in_collect = was_collecting;
@@ -1445,10 +1570,10 @@ impl Gc {
         }
 
         // The remembered set may name objects we are about to free.
-        let rem = core::mem::take(&mut self.remembered);
+        let rem = roots.drain_remembered();
         for a in rem {
             if marked(&self.sp, a) {
-                self.remembered.push(a);
+                self.remembered_during_collect.push(a);
             } else {
                 set_in_remset(&self.sp, a, false);
             }
@@ -1473,6 +1598,8 @@ impl Gc {
         }
         self.stats.old_live = self.old_live;
         self.stats.old_capacity = self.old_capacity;
+        // Same as `minor`: the survivors go back to a mutator's list.
+        roots.own.remembered.append(&mut self.remembered_during_collect);
         #[cfg(feature = "diagnostics")]
         {
             self.in_collect = was_collecting;
@@ -1545,6 +1672,14 @@ mod tests {
             H { heap, gc: Gc::new(nursery, max), r: Roots::new(shared) }
         }
         /// Push a value on the shadow root stack and return its index.
+        /// Write a slot through the barrier, the way an `Rt` does: the list
+        /// the barrier appends to is this harness's own executor roots.
+        fn set_slot(&mut self, obj: u32, i: u32, v: Value) {
+            self.gc.set_slot(obj, i, v, &mut self.r.own.remembered);
+        }
+        fn init_slot(&mut self, obj: u32, i: u32, v: Value) {
+            self.gc.init_slot(obj, i, v, &mut self.r.own.remembered);
+        }
         fn root(&mut self, v: Value) -> usize {
             self.r.shadow.push(v);
             self.r.shadow.len() - 1
@@ -1559,8 +1694,8 @@ mod tests {
             let addr = self.gc.alloc(&mut self.r, TY_CONS, 4);
             assert_ne!(addr, 0, "out of memory");
             let (car, cdr) = (self.get(a), self.get(b));
-            self.gc.init_slot(addr, 0, car);
-            self.gc.init_slot(addr, 1, cdr);
+            self.init_slot(addr, 0, car);
+            self.init_slot(addr, 1, cdr);
             self.r.shadow.truncate(a);
             Value::heap(addr)
         }
@@ -1672,7 +1807,7 @@ mod tests {
         let c = h.cons(Value::fixnum(7), Value::NIL_);
         let ci = h.root(c);
         let addr = c.as_heap();
-        h.gc.set_slot(addr, 1, c); // c.cdr = c
+        h.set_slot(addr, 1, c); // c.cdr = c
         h.gc.minor(&mut h.r);
         let c = h.get(ci);
         assert_eq!(h.car(c), Value::fixnum(7));
@@ -1715,7 +1850,7 @@ mod tests {
         // Now point it at a brand new young object.
         let young = h.string("young");
         assert!(h.gc.is_young(young.as_heap()));
-        h.gc.set_slot(old_addr, 0, young);
+        h.set_slot(old_addr, 0, young);
 
         // The young object is reachable ONLY through the old object.
         for _ in 0..3 {

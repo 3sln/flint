@@ -253,6 +253,30 @@ impl Parallel {
     ///
     /// The caller holds the allocation lock, so no one else can be staging a
     /// collection at the same time.
+    /// Spin until `f` is true, or panic saying what everyone was doing.
+    ///
+    /// A deadlock here used to be a hang, and a hang tells you nothing: you
+    /// cannot tell "waiting for a thread that will never park" from "slow".
+    /// The bound is enormous -- far longer than any real safepoint -- so it
+    /// only fires on a genuine one, and then it names the state.
+    fn spin_until(&self, what: &str, mut f: impl FnMut() -> bool) {
+        let mut spins: u64 = 0;
+        while !f() {
+            spins += 1;
+            if spins > 2_000_000_000 {
+                panic!(
+                    "flint: safepoint deadlock in {what}: \
+                     stop={} live={} active={} parked={}",
+                    self.stop.load(Ordering::Relaxed),
+                    self.live.load(Ordering::Relaxed),
+                    self.active.load(Ordering::Relaxed),
+                    self.parked.load(Ordering::Relaxed),
+                );
+            }
+            core::hint::spin_loop();
+        }
+    }
+
     pub fn stage_stop(&self) {
         // FIRST, wait for the previous stop's parkers to finish leaving.
         //
@@ -264,20 +288,17 @@ impl Parallel {
         // parked. Staging again in that instant sees a count it did not earn.
         //
         // Nothing can park while `stop` is 0, so this loop terminates.
-        while self.parked.load(Ordering::Acquire) != 0 {
-            core::hint::spin_loop();
-        }
+        self.spin_until("draining a previous stop", || {
+            self.parked.load(Ordering::Acquire) == 0
+        });
         self.stop.store(1, Ordering::Release);
         // Re-read the target every time round rather than once. An executor
         // that finishes while this waits lowers the count, and a target
         // captured before it left would never be reached.
-        loop {
+        self.spin_until("waiting for executors to park", || {
             let want = self.active.load(Ordering::Acquire).saturating_sub(1);
-            if self.parked.load(Ordering::Acquire) >= want {
-                return;
-            }
-            core::hint::spin_loop();
-        }
+            self.parked.load(Ordering::Acquire) >= want
+        });
     }
 
     pub fn release_stop(&self) {

@@ -243,6 +243,67 @@ It also means the protocol exists once rather than three times. `string`,
 `keyword` and `symbol` have historically had the same four lines and the same
 rooting bug; three copies of a lock protocol would be three chances to diverge.
 
+## The write barrier: per-executor, not locked
+
+An old object holding a young pointer is only found by a minor collection
+because the barrier recorded it. That list is the hottest shared thing in the
+runtime -- far hotter than allocation -- so locking it would cost more than it
+protects, and a shared `Vec` pushed to from two threads reallocates under the
+other's push.
+
+So the list is **per-executor**, and a collection drains every one of them.
+Draining only the collecting executor's fails 12 runs out of 12: the young
+objects another thread had just stored into old ones are freed while still
+referenced, and it reads back as a slot that lost its value.
+
+Two things fell out of building it:
+
+**`set_slot` takes `&Gc`, not `&mut Gc`.** Two executors holding `&mut` to one
+shared heap is aliasing UB whether or not the writes ever touch, and the
+barrier is exactly where two of them would. The only thing it mutates is a flag
+bit in the object's own header and a list belonging to the calling executor,
+so `&self` is enough. Two executors setting that flag on one object write the
+same bit; the worst case is the object appearing in two lists, which is a
+second scan rather than a wrong answer.
+
+**The collector has to hand the rebuilt set back.** `scan_object` re-enrols
+every old object that still points young, and leaving those in the collector's
+own list drops them from the remembered set entirely -- so the NEXT collection
+frees young objects an old one is still holding. That surfaced one collection
+later and nowhere near the cause, which is the shape this whole area fails in.
+
+It costs 5 040 bytes of module and is NOT behind the `parallel` feature, which
+is the opposite call to the root scan. The barrier is not machinery for a
+feature a wasm module cannot use -- every module runs it. What is
+parallel-specific is only which list it appends to, and a compile-time fork
+there means two copies of a twenty-five line function. `flint.strs` records
+what two copies of a subtle function cost.
+
+## Var slots are atomic, and only where they need to be
+
+`GET_VAR` reads a var slot and `SET_VAR` writes one, so several executors read
+while one may write. The slots are `AtomicU64` under `parallel` and a `Cell`
+without it -- 7 277 bytes of difference, measured -- both
+`#[repr(transparent)]` over eight bytes, which is not cosmetic: compiled code
+reads the array through a raw base pointer (`flint.aot`), so the representation
+is part of an ABI.
+
+Relaxed ordering throughout. A var slot carries no happens-before for anything
+else: the heap object it names is published by the allocation lock and the
+safepoint, so this only has to be a read that sees a whole value rather than
+half of one.
+
+## Where a native may not stop
+
+A thread that has said `enter_running` is one the collector WAITS for. A native
+that walks heap data for a long time without allocating never reaches a
+safepoint, and the collector waits forever -- which showed up exactly as
+`waiting for executors to park: stop=1 active=2 parked=0`.
+
+So a long non-allocating native loop over heap data has to poll. And the spin
+loops report rather than hang: a deadlock that prints what everyone was doing
+is diagnosable, and a hang is indistinguishable from slow.
+
 ## Parallelism is a property of the TARGET, not of the SDK
 
 The SDKs mirror each other (`0025`), and that has to survive a world where

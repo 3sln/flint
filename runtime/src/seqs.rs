@@ -45,10 +45,10 @@ impl Rt {
             Some(n) => Value::fixnum(n as i64 + 1),
             None => NIL,
         };
-        self.gc.set_slot(a, C_FIRST, head);
-        self.gc.set_slot(a, C_REST, tail);
-        self.gc.set_slot(a, C_META, NIL);
-        self.gc.set_slot(a, C_COUNT, cnt);
+        self.set_slot(a, C_FIRST, head);
+        self.set_slot(a, C_REST, tail);
+        self.set_slot(a, C_META, NIL);
+        self.set_slot(a, C_COUNT, cnt);
         Value::heap(a)
     }
 
@@ -114,9 +114,9 @@ impl Rt {
         }
         let v = self.r(vi);
         self.pop_to(base);
-        self.gc.set_slot(a, 0, v);
-        self.gc.set_slot(a, 1, Value::fixnum(i as i64));
-        self.gc.set_slot(a, 2, NIL);
+        self.set_slot(a, 0, v);
+        self.set_slot(a, 1, Value::fixnum(i as i64));
+        self.set_slot(a, 2, NIL);
         Value::heap(a)
     }
 
@@ -130,9 +130,9 @@ impl Rt {
         }
         let s = self.r(si);
         self.pop_to(base);
-        self.gc.set_slot(a, 0, s);
-        self.gc.set_slot(a, 1, Value::fixnum(i as i64));
-        self.gc.set_slot(a, 2, NIL);
+        self.set_slot(a, 0, s);
+        self.set_slot(a, 1, Value::fixnum(i as i64));
+        self.set_slot(a, 2, NIL);
         Value::heap(a)
     }
 
@@ -148,10 +148,10 @@ impl Rt {
         }
         let (start, end, step) = (self.r(s), self.r(e), self.r(st));
         self.pop_to(base);
-        self.gc.set_slot(a, 0, start);
-        self.gc.set_slot(a, 1, end);
-        self.gc.set_slot(a, 2, step);
-        self.gc.set_slot(a, 3, NIL);
+        self.set_slot(a, 0, start);
+        self.set_slot(a, 1, end);
+        self.set_slot(a, 2, step);
+        self.set_slot(a, 3, NIL);
         Value::heap(a)
     }
 
@@ -325,8 +325,8 @@ impl Rt {
         }
         let ls = self.r(li);
         self.pop_to(base);
-        self.gc.set_slot(ls.as_heap(), LS_THUNK, NIL);
-        self.gc.set_slot(ls.as_heap(), LS_SEQ, cur);
+        self.set_slot(ls.as_heap(), LS_THUNK, NIL);
+        self.set_slot(ls.as_heap(), LS_SEQ, cur);
         cur
     }
 
@@ -340,9 +340,9 @@ impl Rt {
         }
         let thunk = self.r(t);
         self.pop_to(base);
-        self.gc.set_slot(a, LS_THUNK, thunk);
-        self.gc.set_slot(a, LS_SEQ, NIL);
-        self.gc.set_slot(a, 2, NIL);
+        self.set_slot(a, LS_THUNK, thunk);
+        self.set_slot(a, LS_SEQ, NIL);
+        self.set_slot(a, 2, NIL);
         Value::heap(a)
     }
 

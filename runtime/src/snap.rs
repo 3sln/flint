@@ -134,7 +134,11 @@ pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
     // The remembered set as a LIST. The per-object FLAGS travel in the heap
     // bytes below, in each object's header. This investigation turned on those
     // two being able to disagree, so both are captured and neither is derived.
-    w.u32s(&g.remembered);
+    //
+    // It is PER-EXECUTOR now (`doc/decisions/0028`), so what is captured is
+    // this executor's plus whatever the last collection handed back. A
+    // snapshot is taken from one executor and describes what it can see.
+    w.u32s(&rt.roots.own.remembered);
     w.u64(g.stats.minor);
     w.u64(g.stats.major);
     w.u64(g.stats.bytes_allocated);
@@ -147,7 +151,11 @@ pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
     w.usz(r.stack_top);
     w.vals(&r.stack[..r.stack_top]);
     w.vals(&r.shadow);
-    w.vals(&r.shared.globals);
+    {
+        // Var slots are atomic now; snapshot their values.
+        let globals: Vec<Value> = r.shared.globals.iter().map(|g| g.get()).collect();
+        w.vals(&globals);
+    }
     w.vals(&r.shared.consts);
     w.vals(&r.shared.singletons);
     w.usz(r.shared.interns.len());
@@ -303,7 +311,8 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
             g.free_lists[i] = *v;
         }
     }
-    g.remembered = r.u32s();
+    // Restored into THIS executor's list; see the note where it is written.
+    let remembered = r.u32s();
     g.stats.minor = r.u64();
     g.stats.major = r.u64();
     g.stats.bytes_allocated = r.u64();
@@ -414,7 +423,10 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     }
     rr.stack_top = stack_top;
     rr.shadow = shadow;
-    rr.shared.globals = globals;
+    // Back into THIS executor's list. A snapshot is taken and restored by one
+    // executor, so that is where the set it captured belongs.
+    rr.own.remembered = remembered;
+    rr.shared.globals = globals.into_iter().map(crate::gc::GlobalSlot::new).collect();
     rr.shared.consts = consts;
     rr.shared.singletons = singletons;
     for (i, t) in interns.into_iter().enumerate() {

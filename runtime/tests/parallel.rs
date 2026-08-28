@@ -246,3 +246,120 @@ fn one_text_interns_to_one_object_across_executors() {
     );
     drop(secondary);
 }
+
+/// A keyword and a string with the same text already SHARE that text.
+///
+/// This is here because merging the three intern tables into one looks like it
+/// would buy this, and it would not: it is already true, by a different
+/// mechanism. `keyword` builds its name slot with `Rt::string`, so a heap
+/// keyword's name IS the interned string; and a short unqualified keyword is
+/// NaN-boxed into the value, so `name` on it is a tag flip with no table
+/// involved at all.
+///
+/// Merging would also cost something. `hash_string`, `hash_keyword` and
+/// `hash_symbol` differ on purpose -- a keyword and a string with equal text
+/// are not `=` and must not collide as map keys -- so one table would have to
+/// key on (kind, text): the same distinctions, more entries, more collisions.
+#[test]
+fn a_keywords_name_is_the_same_object_as_the_equal_string() {
+    let mut rt = Rt::with_heap(1024 * 1024, 64 * 1024 * 1024);
+
+    // Heap keyword: long enough not to be inline.
+    let text = "a-keyword-long-enough-to-be-heap";
+    let kw = rt.keyword(None, text);
+    let s = rt.string(text);
+    assert_eq!(rt.name_of(kw).0, s.0, "a heap keyword's name should BE the interned string");
+
+    // Inline keyword: no table, no allocation, just a tag flip.
+    let kw = rt.keyword(None, "abc");
+    let s = rt.string("abc");
+    assert_eq!(rt.name_of(kw).0, s.0, "an inline keyword's name should be the inline string");
+
+    // And the reverse direction reuses it rather than allocating a second one.
+    let sym = rt.symbol(None, text);
+    let interned = rt.string(text);
+    assert_eq!(rt.name_of(sym).0, interned.0, "a symbol's name too");
+}
+
+/// The write barrier, across executors.
+///
+/// An old object pointing at a young one is only found by a minor collection
+/// because the WRITE BARRIER recorded it. Those records are per-executor, so a
+/// collection staged by one thread has to drain every thread's list -- and if
+/// it drained only its own, the young objects another thread had just stored
+/// into old ones would be collected while still referenced.
+///
+/// That failure does not crash. It reads back as the wrong number, later,
+/// which is why this checks values rather than liveness.
+#[test]
+fn old_to_young_edges_survive_a_collection_staged_elsewhere() {
+    // An object of at least LARGE_OBJECT (16 KB) is born in the OLD
+    // generation, which is the only way to get an old-to-young edge without
+    // waiting for a promotion.
+    const SLOTS: u32 = 4096; // 4096 * 8 bytes, comfortably over the threshold
+    let mut primary = Rt::with_heap(64 * 1024, 256 * 1024 * 1024);
+    let mut secondary = unsafe { primary.executor() }.expect("a second executor");
+
+    fn barrier_churn(rt: &mut Rt, tag: i64) {
+        rt.enter_running();
+        let base = rt.mark();
+        let a = rt.alloc(flint_rt::obj::TY_VEC, SLOTS);
+        assert_ne!(a, 0, "the old-generation object should allocate");
+        let holder = rt.push(Value::heap(a));
+
+        // Each slot gets a freshly allocated YOUNG object. Every one of these
+        // is an old-to-young edge and fires the barrier.
+        for i in 0..SLOTS {
+            let cell = rt.cons(Value::fixnum(tag * 1_000_000 + i as i64), NIL);
+            // Re-read AFTER the allocation: `cons` can collect, and while a
+            // large object does not move in a minor collection, reading its
+            // address before an allocation is the habit that breaks the day it
+            // is promoted or compacted.
+            let at = rt.r(holder).as_heap();
+            rt.set_slot(at, i, cell);
+        }
+
+        // Now allocate hard, so collections happen -- staged by whichever
+        // executor fills the nursery first, which is the point.
+        for _ in 0..20_000 {
+            let junk = rt.cons(Value::fixnum(0), NIL);
+            rt.push(junk);
+            rt.pop_to(rt.mark() - 1);
+        }
+
+        for i in 0..SLOTS {
+            // This loop READS the heap and never allocates, so nothing else
+            // would make it reach a safepoint -- and a thread that is
+            // `enter_running` is one the collector waits for. Without this the
+            // other executor waits forever, which is exactly what it did:
+            // "waiting for executors to park: stop=1 active=2 parked=0".
+            //
+            // The rule it makes concrete: a native that walks heap data for a
+            // long time without allocating has to poll.
+            rt.safepoint();
+            let at = rt.r(holder).as_heap();
+            let cell = flint_rt::obj::slot(&rt.gc.sp, at, i);
+            let got = rt.first(cell).as_fixnum();
+            assert_eq!(
+                got,
+                tag * 1_000_000 + i as i64,
+                "thread {tag}: slot {i} lost its young object"
+            );
+        }
+        rt.pop_to(base);
+        rt.leave_running();
+    }
+
+    // ONE executor first. If this fails, the problem is the test or the
+    // barrier itself, not anything to do with two threads -- worth separating
+    // before chasing a race.
+    barrier_churn(&mut primary, 9);
+
+    std::thread::scope(|scope| {
+        let second = &mut secondary;
+        scope.spawn(move || barrier_churn(second, 2));
+        barrier_churn(&mut primary, 1);
+    });
+    assert!(primary.gc.stats.minor > 0, "no collection ran, so nothing was proved");
+    drop(secondary);
+}

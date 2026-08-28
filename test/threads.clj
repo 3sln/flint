@@ -106,8 +106,20 @@
 ;; second executor until it has the threads proposal and a shared memory, and a
 ;; module that can only ever have one should not carry the loop that walks the
 ;; others.
+;;
+;; And 5 040 bytes for the WRITE BARRIER carrying its remembered set, MEASURED
+;; the same way (249 490 against 244 450). This one is NOT behind the feature,
+;; and the reason is worth stating because it is the opposite call to the one
+;; above.
+;;
+;; The barrier is not machinery for a feature this module cannot use -- every
+;; module runs it. What is parallel-specific is only WHICH list it appends to,
+;; and making that a compile-time fork means two copies of a twenty-five line
+;; function. `flint.strs` records what that costs: `symbol` and `keyword` had
+;; the same four lines and the same rooting bug, and only one of them surfaced.
+;; Two copies of the write barrier is a worse trade than 5 040 bytes.
 (check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
-            (< pure-size 245000))
+            (< pure-size 252000))
 
 ;; ---------------------------------------------------------------- channels
 

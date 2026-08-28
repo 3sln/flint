@@ -31,7 +31,7 @@ impl Rt {
         if a == 0 {
             return NIL;
         }
-        self.gc.set_slot(a, 0, edit);
+        self.set_slot(a, 0, edit);
         Value::heap(a)
     }
     #[inline]
@@ -44,7 +44,7 @@ impl Rt {
     }
     #[inline]
     pub fn node_set(&mut self, n: Value, i: u32, v: Value) {
-        self.gc.set_slot(n.as_heap(), i + 1, v);
+        self.set_slot(n.as_heap(), i + 1, v);
     }
     #[inline]
     pub fn node_edit(&self, n: Value) -> Value {
@@ -92,12 +92,12 @@ impl Rt {
         let a = self.alloc(TY_VEC, 6);
         let (root, tail) = (self.r(r), self.r(t));
         self.pop_to(r);
-        self.gc.set_slot(a, V_CNT, Value::fixnum(0));
-        self.gc.set_slot(a, V_SHIFT, Value::fixnum(BITS as i64));
-        self.gc.set_slot(a, V_ROOT, root);
-        self.gc.set_slot(a, V_TAIL, tail);
-        self.gc.set_slot(a, V_META, NIL);
-        self.gc.set_slot(a, V_HASH, NIL);
+        self.set_slot(a, V_CNT, Value::fixnum(0));
+        self.set_slot(a, V_SHIFT, Value::fixnum(BITS as i64));
+        self.set_slot(a, V_ROOT, root);
+        self.set_slot(a, V_TAIL, tail);
+        self.set_slot(a, V_META, NIL);
+        self.set_slot(a, V_HASH, NIL);
         self.roots.shared.singletons[crate::rt::SING_EMPTY_VEC] = Value::heap(a);
     }
 
@@ -142,12 +142,12 @@ impl Rt {
         }
         let (root, tail, meta) = (self.r(r), self.r(t), self.r(m));
         self.pop_to(base);
-        self.gc.set_slot(a, V_CNT, Value::fixnum(cnt as i64));
-        self.gc.set_slot(a, V_SHIFT, Value::fixnum(shift as i64));
-        self.gc.set_slot(a, V_ROOT, root);
-        self.gc.set_slot(a, V_TAIL, tail);
-        self.gc.set_slot(a, V_META, meta);
-        self.gc.set_slot(a, V_HASH, NIL);
+        self.set_slot(a, V_CNT, Value::fixnum(cnt as i64));
+        self.set_slot(a, V_SHIFT, Value::fixnum(shift as i64));
+        self.set_slot(a, V_ROOT, root);
+        self.set_slot(a, V_TAIL, tail);
+        self.set_slot(a, V_META, meta);
+        self.set_slot(a, V_HASH, NIL);
         Value::heap(a)
     }
 
@@ -491,11 +491,11 @@ impl Rt {
         let shift = self.vec_shift(v);
         let (root, tail, edit) = (self.r(ri), self.r(ti), self.r(ei));
         self.pop_to(base);
-        self.gc.set_slot(a, T_CNT, Value::fixnum(cnt as i64));
-        self.gc.set_slot(a, T_SHIFT, Value::fixnum(shift as i64));
-        self.gc.set_slot(a, T_ROOT, root);
-        self.gc.set_slot(a, T_TAIL, tail);
-        self.gc.set_slot(a, T_EDIT, edit);
+        self.set_slot(a, T_CNT, Value::fixnum(cnt as i64));
+        self.set_slot(a, T_SHIFT, Value::fixnum(shift as i64));
+        self.set_slot(a, T_ROOT, root);
+        self.set_slot(a, T_TAIL, tail);
+        self.set_slot(a, T_EDIT, edit);
         Value::heap(a)
     }
 
@@ -542,7 +542,7 @@ impl Rt {
             let tail = slot(&self.gc.sp, t.as_heap(), T_TAIL);
             let x = self.r(xi);
             self.node_set(tail, cnt & MASK, x);
-            self.gc.set_slot(t.as_heap(), T_CNT, Value::fixnum(cnt as i64 + 1));
+            self.set_slot(t.as_heap(), T_CNT, Value::fixnum(cnt as i64 + 1));
             self.pop_to(base);
             let _ = ti;
             return t; // nothing allocated on this path, so `t` cannot have moved
@@ -573,10 +573,10 @@ impl Rt {
         };
         let (tv, newtail) = (self.r(ti), self.r(nt));
         let a = tv.as_heap();
-        self.gc.set_slot(a, T_ROOT, newroot);
-        self.gc.set_slot(a, T_SHIFT, Value::fixnum(newshift as i64));
-        self.gc.set_slot(a, T_TAIL, newtail);
-        self.gc.set_slot(a, T_CNT, Value::fixnum(cnt as i64 + 1));
+        self.set_slot(a, T_ROOT, newroot);
+        self.set_slot(a, T_SHIFT, Value::fixnum(newshift as i64));
+        self.set_slot(a, T_TAIL, newtail);
+        self.set_slot(a, T_CNT, Value::fixnum(cnt as i64 + 1));
         self.pop_to(base);
         tv
     }
@@ -638,7 +638,7 @@ impl Rt {
             let shift = self.tvec_shift(t);
             let nr = self.t_do_assoc(shift, root, i, self.r(xi), edit);
             let tv = self.r(ti);
-            self.gc.set_slot(tv.as_heap(), T_ROOT, nr);
+            self.set_slot(tv.as_heap(), T_ROOT, nr);
         }
         let out = self.r(ti);
         self.pop_to(base);
@@ -650,11 +650,11 @@ impl Rt {
         debug_assert!(cnt > 0);
         let a = t.as_heap();
         if cnt == 1 {
-            self.gc.set_slot(a, T_CNT, Value::fixnum(0));
+            self.set_slot(a, T_CNT, Value::fixnum(0));
             return t;
         }
         if (cnt - 1) & MASK > 0 {
-            self.gc.set_slot(a, T_CNT, Value::fixnum(cnt as i64 - 1));
+            self.set_slot(a, T_CNT, Value::fixnum(cnt as i64 - 1));
             return t;
         }
         // The tail is emptying: pull the previous leaf back out of the trie.
@@ -683,10 +683,10 @@ impl Rt {
         let tv = self.r(ti);
         let a = tv.as_heap();
         let (nr, ntv) = (self.r(nri), self.r(nt));
-        self.gc.set_slot(a, T_ROOT, nr);
-        self.gc.set_slot(a, T_TAIL, ntv);
-        self.gc.set_slot(a, T_SHIFT, Value::fixnum(newshift as i64));
-        self.gc.set_slot(a, T_CNT, Value::fixnum(cnt as i64 - 1));
+        self.set_slot(a, T_ROOT, nr);
+        self.set_slot(a, T_TAIL, ntv);
+        self.set_slot(a, T_SHIFT, Value::fixnum(newshift as i64));
+        self.set_slot(a, T_CNT, Value::fixnum(cnt as i64 - 1));
         self.pop_to(base);
         tv
     }
@@ -707,7 +707,7 @@ impl Rt {
         let ri = self.push(root);
         // Invalidate the handle: using it afterwards is a bug, not a silent
         // mutation of a value somebody else now owns.
-        self.gc.set_slot(tv.as_heap(), T_EDIT, NIL);
+        self.set_slot(tv.as_heap(), T_EDIT, NIL);
         let (root, trimmed) = (self.r(ri), self.r(tr));
         let out = self.new_vec(cnt, shift, root, trimmed, NIL);
         self.pop_to(base);

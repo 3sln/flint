@@ -328,7 +328,7 @@ impl Rt {
         }
         for i in 0..n {
             let v = self.roots.stack[i as usize];
-            self.gc.set_slot(sv.as_heap(), i, v);
+            self.set_slot(sv.as_heap(), i, v);
         }
         self.set(self.r(ti), TH_STACK, sv);
 

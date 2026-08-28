@@ -274,9 +274,9 @@ impl Rt {
         // and the compiler is right that the old spelling read `self` while
         // `self` was mutably borrowed.
         let (nsr, namer) = (self.r(base), self.r(base + 1));
-        self.gc.set_slot(a, 0, nsr);
-        self.gc.set_slot(a, 1, namer);
-        self.gc.set_slot(a, 2, Value::fixnum(h as i32 as i64));
+        self.set_slot(a, 0, nsr);
+        self.set_slot(a, 1, namer);
+        self.set_slot(a, 2, Value::fixnum(h as i32 as i64));
         let mine = self.push(v);
         let out = self.intern_publish(INTERN_KW, h, mine, &matches);
         self.pop_to(base);
@@ -333,10 +333,10 @@ impl Rt {
         // and the compiler is right that the old spelling read `self` while
         // `self` was mutably borrowed.
         let (nsr, namer) = (self.r(base), self.r(base + 1));
-        self.gc.set_slot(a, 0, nsr);
-        self.gc.set_slot(a, 1, namer);
-        self.gc.set_slot(a, 2, NIL); // meta
-        self.gc.set_slot(a, 3, Value::fixnum(h as i32 as i64));
+        self.set_slot(a, 0, nsr);
+        self.set_slot(a, 1, namer);
+        self.set_slot(a, 2, NIL); // meta
+        self.set_slot(a, 3, Value::fixnum(h as i32 as i64));
         let mine = self.push(v);
         let out = self.intern_publish(INTERN_SYM, h, mine, &matches);
         self.pop_to(base);
@@ -661,7 +661,7 @@ mod intern_stress {
             (0..1500).map(|i| format!("flint/name-{:05}", i)).collect();
         for n in &names {
             let v = rt.string(n);
-            rt.roots.shared.globals.push(v);
+            rt.roots.shared.globals.push(crate::gc::GlobalSlot::new(v));
         }
         // Garbage of the same shape, so the weak table is churned and the
         // collector has real work to do.
@@ -675,7 +675,7 @@ mod intern_stress {
             let again = rt.string(n);
             assert_eq!(
                 again,
-                rt.roots.shared.globals[i],
+                rt.roots.shared.globals[i].get(),
                 "re-interning {} produced a second object",
                 n
             );

@@ -185,16 +185,16 @@ impl Rt {
             self.pop_to(base);
             return NIL;
         }
-        self.gc.set_slot(a, BB_BYTES, Value::fixnum(total as i64));
-        self.gc.set_slot(a, BB_FLAT, NIL);
+        self.set_slot(a, BB_BYTES, Value::fixnum(total as i64));
+        self.set_slot(a, BB_FLAT, NIL);
         let d = {
             let k0 = self.r(base);
             self.b_depth(k0) + 1
         };
-        self.gc.set_slot(a, BB_DEPTH, Value::fixnum(d as i64));
+        self.set_slot(a, BB_DEPTH, Value::fixnum(d as i64));
         for (i, _) in kids.iter().enumerate() {
             let v = self.r(base + i);
-            self.gc.set_slot(a, BB_KIDS + i as u32, v);
+            self.set_slot(a, BB_KIDS + i as u32, v);
         }
         self.pop_to(base);
         Value::heap(a)
@@ -390,7 +390,7 @@ impl Rt {
         let flat = self.new_bytes(&out);
         let v = self.r(base);
         if flat.is_heap() {
-            self.gc.set_slot(v.as_heap(), BB_FLAT, flat);
+            self.set_slot(v.as_heap(), BB_FLAT, flat);
         }
         self.pop_to(base);
         flat
@@ -519,10 +519,10 @@ impl Rt {
             return NIL;
         }
         let (v, tail) = (self.r(base), self.r(base + 1));
-        self.gc.set_slot(a, TB_TREE, v);
-        self.gc.set_slot(a, TB_TAIL, tail);
-        self.gc.set_slot(a, TB_FILL, Value::fixnum(0));
-        self.gc.set_slot(a, TB_LIVE, crate::value::TRUE);
+        self.set_slot(a, TB_TREE, v);
+        self.set_slot(a, TB_TAIL, tail);
+        self.set_slot(a, TB_FILL, Value::fixnum(0));
+        self.set_slot(a, TB_LIVE, crate::value::TRUE);
         self.pop_to(base);
         Value::heap(a)
     }
@@ -557,9 +557,9 @@ impl Rt {
         }
         let t = self.r(base);
         let joined = self.r(base + 4);
-        self.gc.set_slot(t.as_heap(), TB_TREE, joined);
-        self.gc.set_slot(t.as_heap(), TB_TAIL, Value::heap(fresh));
-        self.gc.set_slot(t.as_heap(), TB_FILL, Value::fixnum(0));
+        self.set_slot(t.as_heap(), TB_TREE, joined);
+        self.set_slot(t.as_heap(), TB_TAIL, Value::heap(fresh));
+        self.set_slot(t.as_heap(), TB_FILL, Value::fixnum(0));
         self.pop_to(base);
         true
     }
@@ -592,7 +592,7 @@ impl Rt {
         }
         let tail = self.slot(t, TB_TAIL);
         self.gc.sp.bytes_mut(tail.as_heap() + HDR, TAIL_CAP)[fill as usize] = byte;
-        self.gc.set_slot(t.as_heap(), TB_FILL, Value::fixnum(fill as i64 + 1));
+        self.set_slot(t.as_heap(), TB_FILL, Value::fixnum(fill as i64 + 1));
         t
     }
 
@@ -627,7 +627,7 @@ impl Rt {
             self.gc.sp.bytes_mut(tail.as_heap() + HDR, TAIL_CAP)
                 [fill as usize..fill as usize + n]
                 .copy_from_slice(&src[i..i + n]);
-            self.gc.set_slot(t.as_heap(), TB_FILL, Value::fixnum(fill as i64 + n as i64));
+            self.set_slot(t.as_heap(), TB_FILL, Value::fixnum(fill as i64 + n as i64));
             i += n;
         }
         let out = self.r(base);
@@ -655,7 +655,7 @@ impl Rt {
             return NIL;
         }
         let t = self.r(base);
-        self.gc.set_slot(t.as_heap(), TB_LIVE, crate::value::FALSE);
+        self.set_slot(t.as_heap(), TB_LIVE, crate::value::FALSE);
         let out = self.slot(t, TB_TREE);
         self.pop_to(base);
         if out.is_nil() {
