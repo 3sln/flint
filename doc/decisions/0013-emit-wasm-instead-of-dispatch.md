@@ -1,16 +1,20 @@
 # 0013 — Emitting wasm instead of dispatching, and what it costs
 
-> **SHELVED — 2026-08-24, and the shelving is due a review.** Built, measured,
-> and parked by the user's decision: *"drop aot for now, focus on strings and
-> regex."* `--aot` stays in the tree, off by default, behind a cargo feature,
-> with an open correctness bug on the threads + host-port path documented below
-> — **re-tested 2026-08-28: it was TWO bugs. One is fixed (a tail call named a
-> resume point); the other is minimised from "five arities, an interaction" to a
-> single arity, and six explanations are ruled out by measurement.** The performance half of the rationale has
-> also moved; see "Re-measured 2026-08-28". The production module carries none
-> of it. Nothing here is deleted, because the measurements are worth more than
-> the emitter and **the reason it under-delivered is now understood** — see
-> "Why it lost, and what would make it win" at the end.
+> **SHELVED — 2026-08-24, by the user's decision (*"drop aot for now, focus on
+> strings and regex"*). The correctness bug that shelving named is FIXED —
+> 2026-08-28.** It was two faults, not one, and both were the same mistake about
+> resume points; see "The bug that was open for four days". The document
+> capability under `--aot`, which is where it was first seen, now agrees with the
+> interpreter on every one of its checks, and `test/aot.clj` carries the
+> ten-line reproducer.
+>
+> `--aot` remains off by default and behind a cargo feature, so the production
+> module carries none of it — that is a decision about what a default should
+> cost, not a hedge about correctness. The performance half of the rationale has
+> also moved; see "Re-measured 2026-08-28". Nothing here is deleted, because the
+> measurements are worth more than the emitter and **the reason it
+> under-delivered is now understood** — see "Why it lost, and what would make it
+> win" at the end.
 >
 > **The measurement this document gated itself on has been taken.** It is in
 > "The measurement, taken" below, and it says yes. Everything above that section
@@ -662,44 +666,80 @@ predicted there: specialisation plus keeping an integer expression unboxed took
 the JVM's AOT from 5.9x to 12x over its own interpreter (`0029`). That is
 independent evidence for the mechanism, on a backend where it was cheap to try.
 
-## The open bug
+## The bug that was open for four days, and what it was
 
-**A program that combines green threads with a HOST port produces wrong answers
-under `--aot`.** Everything else measured — every `bench/progs` program, both
-construe payloads, all five programs in `test/aot.clj`, and `test/threads.clj`
-end to end — gives identical answers and identical instruction counts.
+**A program that combined green threads with a HOST port produced wrong answers
+under `--aot`.** It is fixed. It was TWO faults, found five days apart, and both
+were in the same place: what a frame is told about where compiled code takes
+over again.
 
-Reproducer, ~15 lines: open the `doc` capability with the EDN codec, send
-`{:op :structure}`, receive. Interpreted it answers; compiled it raises
-`edn: map needs an even number of forms` from the reader.
+### One: a tail call named a resume point
 
-Delta-minimised to five arities that must ALL be compiled for it to appear:
-`conj`, and `pk` / `nx!` / `skip!` / `token` from `clojure.edn`. No single one of
-them does it, and no pair — so it is an interaction, not a bad instruction.
-
-### Half of it is FIXED, and the other half is down to one arity
-
-**Fixed: a tail call named a resume point.** A `TAIL_CALL` replaces the frame --
-the interpreter pops it and enters the callee in its place -- so there is no
-next instruction of that arity left to run. The emitter handed every
-non-inlined opcode back with "resume at `ip + len`", and after a tail call that
-is the RETURN which follows it, so the resume point said "return whatever is on
-top of the stack", registered against a frame that no longer existed.
+A `TAIL_CALL` replaces the frame -- the interpreter pops it and enters the
+callee in its place -- so there is no next instruction of that arity left to
+run. The emitter handed every non-inlined opcode back with "resume at
+`ip + len`", and after a tail call that is the `RETURN` which follows it, so the
+resume point said "return whatever is on top of the stack", registered against
+a frame that no longer existed.
 
 `reduce` ends `(reduce-seq f init coll)`. Compiled, it answered `coll` instead
 of `init`, so `into` handed `persistent!` the empty list it had been reducing
 over: `ClassCastException: not a transient`, several frames and one tail call
-away from the cause. `aot/resume-after` is the rule, `test/aot_emit.clj` asserts
-it, and toggling the one line flips the reproducer.
+away from the cause. `aot/resume-after` is the rule and `test/aot_emit.clj`
+asserts it.
 
-**Open, but no longer a deadlock and no longer about ports.** The deadlock was a
-SYMPTOM. `flint.rpc` spawns a reader thread that routes replies by `:id`; the
-decode threw, the reader died, nothing routed, and the caller parked for ever.
-Talking to the capability without `rpc` shows the real error, and it is 0013's
-original one: **`edn: map needs an even number of forms`**.
+### Two: the restore paired a block with the wrong ip
 
-From there it shrank a long way. The reproducer is now
-`test/fixtures/aot-park-repro.cljc`, ten lines, no host capability, no reader:
+A thread save records each frame's `ip` and its `aot_block`. **`aot_ip` is not
+saved at all** -- the restore substituted `ip` for it and kept the saved block.
+
+For a frame that PARKED those two offsets are the same and the pairing is right,
+which is why it held for as long as it did. For a frame that BAILED they differ
+by exactly one instruction: a bail leaves `ip` on the instruction being handed
+back and `aot_block` on the chunk AFTER it. Restore them as a pair and the frame
+re-enters compiled code **one chunk early**, skipping the handed-back
+instruction entirely.
+
+`vec` is `(if (vector? coll) coll (into [] coll))`. It was mid-bail on the
+`(vector 0)` that pushes the empty vector when its slice ended. It came back at
+the chunk after that push, never made the empty vector, and the `tail-call 2`
+then read the operand stack one slot low -- finding `coll` where `into` should
+have been:
+
+```text
+ClassCastException: value is not a function (object type 13, 2 args)
+  in vec <- fn <- fn <- reduce-seq <- mapv <- go <- main
+```
+
+Object type 13 is `TY_RANGE`. Six frames from the cause, and in a function whose
+source has no range in it.
+
+**The fix is one field.** The restore no longer reads the saved block; it asks
+the compiled arity which block that `ip` names. `AotFn::points` already held
+every re-entry point -- the field's own doc comment said a thread restored from
+a save was one of its two users, and it was not. So the fix is also the check
+the pair never had: `None` means "not a re-entry point", and the frame simply
+carries on interpreting.
+
+Measured before it was believed. A diagnostics build compared, for every
+restored compiled frame, the saved block against the block its `ip` really maps
+to: **one mismatch out of eleven restores**, and it named itself --
+
+```text
+bad: aot-idx 68  ip 964  saved block 4  real block 3
+aot arity 68 = fn 65 arity 0 [:string "vec"] (off 949 len 23 argc 1)
+```
+
+### The reproducer, and why it took four days
+
+The failure the investigation started from was a deadlock in a document store.
+That was a SYMPTOM: `flint.rpc` spawns a reader thread that routes replies by
+`:id`; the decode threw, the reader died, nothing routed, and the caller parked
+for ever. Talking to the capability without `rpc` gave the real error, and it
+was this document's original one: `edn: map needs an even number of forms`.
+
+From there it shrank to ten lines with no capability, no reader and no EDN.
+It is now `test/aot.clj`'s `park` program:
 
 ```clojure
 (defn- go [] (count (mapv (fn [i] {:id i :kids (vec (range (rem i 4)))}) (range 33))))
@@ -710,118 +750,60 @@ From there it shrank a long way. The reproducer is now
     (pr-str (go))))
 ```
 
-Compiled it answers `ClassCastException: value is not a function (object type
-13, 2 args)` -- a RANGE where a function should be. Every part is load-bearing,
-each checked by removing it:
+Every part is load-bearing, checked one at a time: without the `p/receive` there
+is no save; at 32 elements rather than 33 the slice ends somewhere else; and
+removing either the map literal or the nested `(vec (range ...))` changes which
+arities are compiled. Delta-debugging over SETS -- not prefixes -- took it to
+four arities that must all be compiled: `reduce-seq`, `vec`, and two lambdas.
 
-* **The PARK.** Without the `p/receive`, compiled and interpreted agree.
-* **The SIZE, exactly.** 32 passes, 33 fails. That is flint's vector tail: at 33
-  the tail spills into the trie.
-* **The map literal and the nested `(vec (range ...))`.** Removing either passes.
+It is in the suite as three checks: the same answer, and the same instruction
+count. Without the fix it fails by 99 instructions -- the chunk that was skipped.
 
-Delta-debugged to FOUR arities that must all be compiled -- `reduce-seq`, `vec`,
-and two lambdas -- so it is an interaction, as the paragraph above says, but of
-four things and not five, and none of them in the reader.
-
-`vec` is `(if (vector? coll) coll (into [] coll))` and rewriting its tail call
-as `(let [r (into [] coll)] r)` makes it pass -- so a tail call is implicated
-again, as it was in the half that is fixed. But it is NOT the same fault: the
-resume-point fix is in, and a diagnostics-build check now asserts that every
-bail hands back an operand stack whose callee really is a function. It reports
-**0 bad out of 68**, so the shape is right at every hand-back and the corruption
-is somewhere after it.
-
-**Open: minimised to ONE arity in the original reproducer.** `FLINT_AOT_ONLY=268` --
-`clojure.edn/read-form` compiled and everything else interpreted -- and a green
-thread parks with nothing to wake it. Delta-debugged from the full 322 arities
-down to that one, which is what the "minimise a SET" note above asks for and
-what a prefix could not do.
-
-It is SIZE-dependent, sharply: a document of four leaves passes and six
-deadlocks. And the host sees identical traffic either way -- one message, two
-polls -- so the request was sent, the reply was delivered, and the thread then
-waited for a reply it already had. That points at the decode answering
-something `flint.rpc` does not recognise, rather than at anything being lost.
-
-Ruled out by measurement, each one a check that did not fire:
+What made it expensive is that almost every discriminating measurement came back
+NEGATIVE, and each one was worth taking anyway. Ruled out, each by a check that
+did not fire:
 
 * **Not a missing chunk boundary.** `chunk-all?` makes every instruction a
-  boundary; the failure survives it. That is the discriminator that found the
-  tail-call bug, and here it says the fault is not in boundary placement.
-* **Not the collector.** Zero collections over the failing run, so nothing
-  moved and no root went stale.
+  boundary and the failure survives it. That same discriminator is what FOUND
+  the tail-call fault, so it earns its keep in both directions.
+* **Not the collector.** Zero collections over the failing run -- and read that
+  correctly: `stat_stale_root` reports *"over 0 collections"*, so the coverage
+  was printed beside the zero. Nothing moved and no root went stale.
+* **Not SYNC drift.** The write-once fields were re-derived on every crossing:
+  0 disagreements over 2 127 crossings.
 * **Not a lost message.** Identical host traffic, passing and failing.
-* **Not a resume point after a park.** Forcing every frame to interpret after a
-  park changes nothing.
 * **Not back-edge preemption.** The theory fitted the size-dependence exactly;
-  the counter says `TICK TRIPS = 0` in both runs. A good story beaten by a
-  measurement.
-* **Not the reader, and not the rope.** `edn/read-string` over the same shape,
-  and over a 75-node payload built by concatenation so it is a rope rather than
-  a literal, is correct compiled -- with `read-form` alone and with everything
-  compiled.
+  the counter said `TICK TRIPS = 0`. A good story beaten by a measurement, and
+  the unverified change it motivated was reverted.
+* **Not the shape at the hand-back.** A check asserted that every bail hands the
+  interpreter an operand stack whose callee really is a function: **0 bad out of
+  68**. That was the finding that mattered, and it was read wrongly at first --
+  it says the corruption is not at the bail, so look at what happens *after*
+  one. The restore is what happens after one.
+* **Not a prefix.** Prefix bisection pointed at `read-symbolic`, then `read-str`,
+  then `-`; every one wrong on its own, because adding an arity shifts what else
+  runs compiled. Same trap as collection #300 in the GC hunt, same answer:
+  minimise a SET.
+* **Not this week's compiler work.** The same reproducer built from `ac58229~1`
+  -- before loop-type hypothesis and whole-integer-expression emission --
+  failed identically. "The compiler changed and now AOT is broken" is the
+  obvious story and it was the wrong one.
 
-So it needs the PORT, and something about a payload above roughly eight nodes.
+The bisection handles that got there are still in the tree: `FLINT_AOT_LIMIT`,
+`FLINT_AOT_FROM`, `FLINT_AOT_ONLY`, `FLINT_AOT_PICK`, `FLINT_AOT_SKIP_FROM`/
+`_TO`, `FLINT_AOT_DUMP`, `FLINT_AOT_FN`, `FLINT_AOT_CHUNK_ALL`, and
+`FLINT_AOT_NAME`/`FLINT_AOT_NAMES`, which is what turned "arity 68" into "`vec`".
 
-### Re-tested 2026-08-28, and three of the sentences above are now wrong
+### What the two faults have in common
 
-Reproduced from scratch: `doc/open` through a host port with the EDN codec,
-built with and without `--aot`, answers compared. Still broken. What changed:
+Both are the same mistake in two places: a resume point is a PAIR -- a bytecode
+offset and the block that offset names -- and both faults came from carrying one
+half of the pair and inferring the other. The emitter inferred the offset from
+the instruction (`ip + len`, wrong after a tail call). The restore inferred the
+offset from the frame (`ip`, wrong after a bail).
 
-* **The symptom is a DEADLOCK now**, not a bad read:
-  `deadlock: 1 green thread(s) are parked and nothing can wake them / thread 0
-  waiting on port 5 "rpc"`. That is a better symptom -- it points at the
-  park/resume path rather than at corrupted data.
-* **There are at least TWO failures, not one.** Excluding the arity below still
-  deadlocks; that arity alone fails differently.
-* **A SINGLE arity is now sufficient**, which the paragraph above says is
-  impossible. `FLINT_AOT_ONLY=106` -- `clojure.core/reduce`, the three-argument
-  arity, compiled with everything else interpreted -- fails with
-  `ClassCastException: not a transient`. `doc/descendants` reaches it through
-  `(into (pop stack) (reverse (:children n)))`, so `into` runs `reduce` over a
-  TRANSIENT accumulator and a SEQ, which is `reduce`'s non-vector branch and a
-  tail call out of compiled code.
-
-`reduce` being the one is not a coincidence worth ignoring: its 3-arity is the
-only function in the core library that carried `^int` annotations BEFORE loop
-counters started specialising, so it was the only place the specialised opcodes
-and the AOT emitter met.
-
-**Not caused by this week's compiler work.** The same reproducer, built from the
-tree at `ac58229~1` -- before loop-type hypothesis, before whole-integer-
-expression emission -- deadlocks identically. Checked rather than assumed,
-because "the compiler changed and now AOT is broken" is the obvious story and it
-is the wrong one.
-
-**Still not minimal.** A standalone program doing `into` over a seq into a
-transient, and `reduce` over a vector into one, compiles and runs correctly
-under `--aot`. So the interaction is real; it just needs fewer pieces than five.
-
-`FLINT_AOT_NAME=<k>` prints which function a bisection index is, which is what
-turned "arity 106" into "`reduce`".
-
-Ruled out by measurement, not by reading:
-
-* **Not the GC.** The standing checks report zero over the failing run — but
-  read that correctly: `stat_stale_root` reports *"over 0 collections"*. No
-  collection ran at all. That is a coverage zero AND an elimination, and only
-  because the coverage was printed beside it.
-* **Not the nested wasm-stack call.** Setting `AOT_MAX_DEPTH` to 0 does not fix
-  it.
-* **Not chunk-internal gas accounting.** Fixing that changed the symptom (from
-  `not a number` to `map needs an even number of forms`) without fixing it,
-  which is itself the finding: the failure is sensitive to chunk layout.
-* **Not the EDN reader alone.** Round-tripping the same payloads through
-  `clojure.edn` under `--aot`, without a port, is correct.
-* **Not a prefix.** Prefix bisection pointed at `read-symbolic`, then at
-  `read-str`, then at `-`; every one of them was wrong on its own. Adding an
-  arity shifts what else runs compiled, so a prefix names nothing. Same trap as
-  collection #300 in the GC hunt, and the same answer: minimise a SET.
-
-`bin/flint --aot` prints the warning, `test/aot.clj` guards everything that
-works, and the bisection handles used to get this far are still there:
-`FLINT_AOT_LIMIT`, `FLINT_AOT_FROM`, `FLINT_AOT_ONLY`, `FLINT_AOT_PICK`,
-`FLINT_AOT_SKIP_FROM`/`_TO`, `FLINT_AOT_DUMP`, `FLINT_AOT_FN`.
+The block is derivable from the offset and always was; nothing needed to infer
+anything. Both fixes are the same fix: ask.
 
 ---
 

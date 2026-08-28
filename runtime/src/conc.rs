@@ -453,9 +453,8 @@ impl Rt {
                     end: g(o + 8),
                     ret_to: g(o + 12) as usize,
                     handlers: g(o + 16) as usize,
-                    // A thread comes back at the instruction it parked ON, and
-                    // a parking native is always a chunk start -- so the block
-                    // saved with the frame is the one to come back to.
+                    // A thread comes back at the instruction it parked ON, so
+                    // that is where compiled code may take over again.
                     //
                     // Only for a frame that HAS compiled code. Setting this
                     // unconditionally asked the interpreter to enter compiled
@@ -469,8 +468,27 @@ impl Rt {
                     } else {
                         g(o + 4)
                     },
+                    // LOOKED UP, not taken from the save. `aot_block` is the
+                    // block to resume at `aot_ip`, and `aot_ip` is NOT saved --
+                    // the restore substitutes `ip` for it. Those are the same
+                    // offset for a frame that parked, and different for a frame
+                    // that BAILED: a bail leaves `ip` on the instruction handed
+                    // back and `aot_block` on the chunk AFTER it. Pairing that
+                    // block with that ip re-entered compiled code one chunk
+                    // early, skipping the handed-back instruction entirely --
+                    // in `vec`, the `(vector 0)` of `(into [] coll)`, so the
+                    // tail call found `coll` where `into` should have been and
+                    // raised "value is not a function (object type 13)".
+                    //
+                    // The block a re-entry point maps to is knowable from the
+                    // ip alone, and `None` means "not a re-entry point" -- so
+                    // this is both the fix and the check the pair never had.
                     #[cfg(feature = "aot")]
-                    aot_block: g(o + 24),
+                    aot_block: if g(o + 20) == crate::vm::AOT_NONE {
+                        0
+                    } else {
+                        crate::vm::AOT_LOOKUP
+                    },
                     // The instruction count does not survive the save, so this
                     // invocation is measured from the resume. That is the right
                     // cut: what re-entry buys is exactly the instructions run

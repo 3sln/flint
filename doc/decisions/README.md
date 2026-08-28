@@ -19,7 +19,7 @@ for the first.
 | [0010](0010-other-hosts.md) | SDKs, and JVM/CLR ports | **Partly shipped.** The native target runs images with no wasm engine; the CLI is built on it. JVM/CLR not started |
 | [0011](0011-strings-and-matching.md) | Rope strings; what to do about regex | **Shipped** (§1–2). §5's conclusion superseded by 0012 |
 | [0012](0012-matching-over-ropes.md) | The matcher must consume a rope → Pike VM | **Shipped.** `re-find`/`re-matches`/`re-seq`; linear on the catastrophic case |
-| [0013](0013-emit-wasm-instead-of-dispatch.md) | AOT regions instead of dispatching | **SHELVED.** Built and measured at 1.07–1.25×; parked for strings/regex. Why it lost is recorded |
+| [0013](0013-emit-wasm-instead-of-dispatch.md) | AOT regions instead of dispatching | **SHELVED, and now CORRECT.** Built and measured; parked for strings/regex. The two resume-point bugs that shelving named are fixed and tested. Why it lost is recorded |
 | [0014](0014-debug-runner.md) | DAP, nREPL, and `(break)` | **Roadmap, not next.** Cheap because a breakpoint is a park |
 | [0015](0015-snapshots.md) | VM snapshots: instant, exportable, inspectable | **Shipped.** Capture, import, inspector; opt-in, +18 569 bytes |
 | [0016](0016-two-builds.md) | A stripped production VM; diagnostics optional | **Shipped.** Both builds tested every run; supersedes the clauses in 0009/0014/0015 |
@@ -99,11 +99,14 @@ what remains, and what each thing is waiting on.
 
 **Closed, with the result rather than the plan:**
 
-- ~~**AOT** (`0013`)~~ — **built, measured, shelved.** 1.07–1.25×, for +98%
-  module and +12% cold start. The lever turned out to be elsewhere: extending
-  `register-native-aliases!` per-arity made the **interpreter** 1.85× faster
-  and cost nothing. `0018` later found AOT *helps a JIT and does nothing for an
-  interpreter* — you trade interpreted dispatch for interpreted execution.
+- ~~**AOT** (`0013`)~~ — **built, measured, shelved; correct as of 2026-08-28.**
+  1.07–1.25×, for +98% module and +12% cold start. The lever turned out to be
+  elsewhere: extending `register-native-aliases!` per-arity made the
+  **interpreter** 1.85× faster and cost nothing. `0018` later found AOT *helps a
+  JIT and does nothing for an interpreter* — you trade interpreted dispatch for
+  interpreted execution. The correctness bug the shelving carried was two
+  faults, both the same mistake about resume points; both are fixed, and
+  `test/aot.clj` holds the ten-line reproducer.
 - ~~**Ropes and the Pike VM**~~ (`0011` §1–2, `0012`) — both shipped, matcher
   over a rope cursor, no Rust regex crate and no delegation to host engines.
 - ~~**Cross-runtime benchmarks**~~ (`0018`) — eight engines.

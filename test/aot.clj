@@ -115,5 +115,39 @@
          (pr-str [3 10 7 [:a :b]]))
   (check "  ... and identically in compiled code" (:out a) (:out i)))
 
+
+;; A PARKED thread coming back into compiled code. This is the whole of the open
+;; bug 0013 carried for four days, at the size it finally reduced to.
+;;
+;; A thread save records each frame's `ip` and its `aot_block`, and the restore
+;; paired them -- but `aot_block` is the block to resume at `aot_ip`, which is
+;; NOT saved. For a frame that parked those two offsets are the same and the
+;; pairing is right. For a frame that BAILED they differ by one instruction: the
+;; bail leaves `ip` on the instruction handed back and `aot_block` on the chunk
+;; after it. `vec` was mid-bail on the `(vector 0)` of `(into [] coll)` when the
+;; slice ended, so it came back one chunk late, never pushed the empty vector,
+;; and the tail call read `coll` where `into` should have been --
+;; `value is not a function (object type 13, 2 args)`, six frames away.
+;;
+;; Every part is load-bearing, checked one at a time: without the `p/receive`
+;; there is no save; at 32 elements rather than 33 the slice ends elsewhere; and
+;; removing either the map literal or the nested `(vec (range ...))` changes
+;; which arities are compiled. So this is written at exactly the size that fails
+;; and not one element smaller. `test/fixtures/aot-park-repro.cljc` is the same
+;; program with the investigation written on it.
+(src! "park" (str "(ns park (:require [flint.thread :as t] [flint.port :as p]))\n"
+                  "(defn- go [] (count (mapv (fn [i] {:id i :kids (vec (range (rem i 4)))})\n"
+                  "                          (range 33))))\n"
+                  "(defn main [_]\n"
+                  "  (let [[tx rx] (p/channel 1 \"test\")]\n"
+                  "    (t/spawn (fn [] (p/send tx :go)))\n"
+                  "    (p/receive rx)\n"
+                  "    (pr-str (go))))"))
+(let [i (run! (build! "park" false))
+      a (run! (build! "park" true))]
+  (check "a thread that parks mid-bail comes back to the chunk its ip names" (:out i) "33")
+  (check "  ... and compiled code agrees" (:out a) (:out i))
+  (check "  ... on the same instruction count" (:steps a) (:steps i)))
+
 (println (if (zero? @fails) "aot: ok" (str "aot: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))
