@@ -152,10 +152,13 @@ public final class Vm {
                            System.getenv("FLINT_MAX_DEPTH") == null ? 0
                            : Integer.parseInt(System.getenv("FLINT_MAX_DEPTH")));
     private int depth = 0;
-    /// Every recorded call in ORDER, tail calls included. The ring is indexed
-    /// by its own counter rather than by depth: a tail call does not change the
-    /// depth, so indexing by depth hides exactly the calls that turn a cycle
-    /// into a loop.
+    /// The last 128 calls in the order they were MADE, tail calls included.
+    ///
+    /// A call LOG, not a stack trace: a call that has already returned is still
+    /// in it, so an ordinary `reduce` loop reads as a repeating cycle and looks
+    /// exactly like runaway recursion. `depth` is the number that distinguishes
+    /// them -- it is incremented and decremented, so it really is the stack.
+    /// Read the two together or the log will tell you a story.
     private int ringN = 0;
     private final String[] ring = new String[128];
     void ringPut(String name) { ring[ringN++ & 127] = name; }
@@ -167,7 +170,10 @@ public final class Vm {
             if (MAX_DEPTH > 0) {
                 ringPut(def.name == null ? ("fn#" + c.fnIndex()) : def.name);
                 if (++depth > MAX_DEPTH) {
-                    StringBuilder b = new StringBuilder("recursion past " + MAX_DEPTH + ", innermost last:");
+                    StringBuilder b = new StringBuilder(
+                        "stack depth past " + MAX_DEPTH + ". The last " + ring.length
+                        + " calls MADE, oldest first -- a log, not a stack, so"
+                        + " returned calls are in it too:");
                     for (int i = 0; i < 128; i++) b.append("\n    ").append(ring[(ringN + i) & 127]);
                     depth = 0;
                     // PRINTED, not just thrown: the compiler catches and

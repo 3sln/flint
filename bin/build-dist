@@ -15,6 +15,20 @@
 # native tool. `bin/flint` does it; this cannot, and `--aot` is downstream of
 # it, so AOT is not available from the distributable either. See the README.
 set -e
+
+# `cmd | sed` reports SED's status, and sed always succeeds. Every indented
+# step below was therefore invisible to `set -e`: a compile error printed its
+# stack trace, this script exited 0, and `dist/` kept the artifacts from the
+# PREVIOUS build looking current. That is the same class of lie `bin/check-dist`
+# exists to catch, one step earlier.
+#
+# `indent` runs the command and indents its output without a pipeline, so the
+# command's own status is what survives.
+indent() {
+  out=$("$@" 2>&1) && st=0 || st=$?
+  printf '%s\n' "$out" | sed 's/^/    /'
+  return $st
+}
 cd "$(dirname "$0")/.."
 mkdir -p dist/src
 
@@ -54,16 +68,18 @@ fs.writeFileSync("dist/src/loader.cljc", `(ns loader
   ;; this image entirely. It exists so the module has an entry point.
   (str (count all)))
 `);'
-FLINT_SLOTS_OUT=dist/slots.json \
-  ./bin/flint :src dist/src :fn loader/main :out dist/flint-loader.wasm --loader | sed 's/^/    /'
+# `VAR=x fn` in front of a shell FUNCTION does not reliably reach the commands
+# the function runs, so the export is explicit and scoped to a subshell.
+( export FLINT_SLOTS_OUT=dist/slots.json
+  indent ./bin/flint :src dist/src :fn loader/main :out dist/flint-loader.wasm --loader )
 cp dist/flint-loader.wasm dist/flint-runtime.wasm
 
 echo "==> the AOT runtime module, for `flint compile wasm-aot`"
 # A second runtime, built from units that carry the compiled-arity helpers. A
 # module that does not export them cannot run a compiled arity, and says so.
 ./bin/build-units --aot > /dev/null
-FLINT_SLOTS_OUT=dist/slots-aot.json \
-  ./bin/flint :src dist/src :fn loader/main :out dist/flint-runtime-aot.wasm --loader | sed 's/^/    /'
+( export FLINT_SLOTS_OUT=dist/slots-aot.json
+  indent ./bin/flint :src dist/src :fn loader/main :out dist/flint-runtime-aot.wasm --loader )
 ./bin/build-units > /dev/null
 
 echo "==> the compiler, as a module and as bytecode"
@@ -73,9 +89,9 @@ echo "==> the compiler, as a module and as bytecode"
 # so the CLI can embed it and run the compiler as native code, which is 2.7 s
 # against 15.6 s through a wasm engine. It is not published and not attached to
 # a release.
-./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.bytecode --emit-image | sed 's/^/    /'
+indent ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.bytecode --emit-image
 
-./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.wasm | sed 's/^/    /'
+indent ./bin/flint :src src :fn flint.selfhost/main :out dist/flintc.wasm
 
 # The SDK is a separate package with its own build (`sdks/`), and it is what
 # exercises these artifacts end to end. This produces them; `sdks/esm/build`

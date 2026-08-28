@@ -15,7 +15,18 @@
 
 (def ^:private RECUR ::recur)
 
-(declare ev)
+;; A macro body is evaluated by descending this AST, so a runaway descent hits
+;; the HOST's stack -- a `StackOverflowError` on the JVM, a hard abort on the
+;; CLR, neither of which names a form or a macro. This turns it into a flint
+;; error that does.
+;;
+;; 2 500 is far past any real macro -- the deepest in flint's own core library
+;; is under 100 -- and low enough to be REACHED. A limit above what the host
+;; stack survives never fires, which is the same as not having one: at 10 000
+;; babashka overflowed first and the error arrived with no message at all.
+(def ^:private ev-depth-limit 2500)
+
+(declare ev ev*)
 
 (defn- ev-body [ctx locals upvals body]
   (loop [[x & more] body r nil]
@@ -54,6 +65,23 @@
 (defn ev
   "Evaluate `node`. `locals` is a mutable object array indexed by slot."
   [ctx locals upvals node]
+  (if-let [dv (:depth ctx)]
+    (let [d (inc (long @dv))]
+      (when (> d ev-depth-limit)
+        (throw (ex-info (str "evaluating a macro body descended past "
+                             ev-depth-limit " nested expressions, which is not "
+                             "a depth real code reaches. The innermost node "
+                             "was " (pr-str (:op node)) ".")
+                        {:op (:op node) :type :compile})))
+      (vreset! dv d)
+      ;; `finally`, because `:try` CATCHES and carries on: without restoring
+      ;; the depth on the way out of a caught throw the counter would only
+      ;; ever climb, and the limit would fire on a macro that did nothing wrong.
+      (try (ev* ctx locals upvals node)
+           (finally (vreset! dv (dec d)))))
+    (ev* ctx locals upvals node)))
+
+(defn- ev* [ctx locals upvals node]
   (case (:op node)
     :const (:val node)
     :local (nth @locals (:idx node))
@@ -117,4 +145,5 @@
 (defn eval-top
   "Evaluate a top-level AST node in `ctx` ({:vars atom})."
   [ctx node]
-  (ev ctx (volatile! (vec (repeat 64 nil))) [] node))
+  (ev (assoc ctx :depth (volatile! 0))
+      (volatile! (vec (repeat 64 nil))) [] node))
