@@ -92,6 +92,21 @@ int main() {
     idle.call("app/echo", {flint::Value::integer(1)});
     ok(idle.gas() > 0, "a budgeted one does");
 
+    // --- drivers (`doc/decisions/0028`) ---------------------------------
+    ok(flint::Driver::inline_().parallelism() == 1, "an inline driver is one thread");
+    ok(flint::Driver::pool(4).parallelism() == 4, "a pool of four is four here");
+
+    auto pooled = img.sandbox(flint::Driver::pool(4));
+    ok(pooled.parallelism() == 4, "a sandbox reads its parallelism back");
+    bool distinct = true;
+    std::vector<bool> seen(101, false);
+    for (int i = 0; i < 100; i++) {
+      long long n = pooled.call("app/tally").asInt();
+      if (n < 1 || n > 100 || seen[n]) distinct = false;
+      else seen[n] = true;
+    }
+    ok(distinct, "100 calls through a pool are 100 distinct increments");
+
     std::vector<uint8_t> artifact = img.wasm();
     flint::Sandbox loaded = flint::Sandbox::fromWasm(artifact.data(), artifact.size());
     ok(loaded.call("app/greet", {flint::Value::string("world")}).asString() == "HELLO WORLD",

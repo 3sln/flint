@@ -204,6 +204,44 @@ int main(void) {
     }
   }
 
+  /* --- drivers (doc/decisions/0028) --------------------------------------
+   *
+   * The same fifth noun as the Rust and JavaScript SDKs, by the same names.
+   * Here the answer is real: this target runs guest code on several executors
+   * over one heap. */
+  {
+    FlintDriver *inl = flint_driver_inline();
+    ok(flint_driver_parallelism(inl) == 1, "an inline driver is one thread");
+    flint_driver_free(inl);
+
+    FlintDriver *pool = flint_driver_pool(4);
+    ok(flint_driver_parallelism(pool) == 4, "a pool of four is four here");
+
+    char *perr = NULL;
+    FlintSandbox *ps = flint_sandbox_new_with(img, pool, &perr);
+    ok(ps != NULL, "an image instantiates under a driver");
+    if (ps) {
+      ok(flint_sandbox_parallelism(ps) == 4, "and reads its parallelism back");
+      /* 100 calls through one (swap! seen inc): every answer distinct, and
+       * 1..=100 between them, or two threads read one state. */
+      int seen[101];
+      memset(seen, 0, sizeof seen);
+      int dupes = 0, out_of_range = 0;
+      for (int i = 0; i < 100; i++) {
+        FlintValue *v = flint_call(ps, "app/tally", NULL, 0, &perr);
+        if (!v) { out_of_range++; continue; }
+        long long n = flint_as_int(v);
+        if (n < 1 || n > 100) out_of_range++;
+        else if (seen[n]++) dupes++;
+        flint_value_free(v);
+      }
+      ok(dupes == 0 && out_of_range == 0,
+         "100 calls through a pool are 100 distinct increments");
+      flint_sandbox_free(ps);
+    }
+    flint_driver_free(pool);
+  }
+
   flint_value_free(caps);
   flint_value_free(capsVec);
   flint_sandbox_free(s);

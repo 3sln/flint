@@ -1148,7 +1148,6 @@ impl Gc {
     /// Two executors can both set the flag on one object. They write the same
     /// bit, and the worst case is the object appearing in two executors'
     /// lists -- a second scan, not a wrong answer.
-    #[inline]
     pub(crate) fn remember(&self, obj: u32, rem: &mut Vec<u32>) {
         if !in_remset(&self.sp, obj) {
             set_in_remset(&self.sp, obj, true);
@@ -1191,7 +1190,6 @@ impl Gc {
     /// Alias for `set_slot`, used where the object was just allocated. Kept
     /// separate for readability only: making it skip the barrier was tried and
     /// is a footgun, because a large object is born in the *old* generation.
-    #[inline]
     #[inline]
     pub fn init_slot(&self, obj: u32, i: u32, v: Value, rem: &mut Vec<u32>) {
         self.set_slot(obj, i, v, rem)

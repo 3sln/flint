@@ -263,20 +263,141 @@ export class Image {
 /// A sandbox serves MANY calls, and they share the state the image set up when
 /// it loaded -- initialisers run once, not per call, which is what makes
 /// instantiate-once-call-per-request work.
+/// Who advances a sandbox, and when (`doc/decisions/0028`).
+///
+/// A sandbox does not run because someone called into it. It runs because it
+/// has work and a driver decided to give it a thread. The indirection is the
+/// point: a host that calls straight into a sandbox has decided forever that
+/// the sandbox runs on the caller's thread, which forecloses a pool.
+///
+/// The vocabulary is identical in every SDK and only the ANSWER differs. On
+/// wasm that answer is 1: several executors in one sandbox needs the threads
+/// proposal, atomics, a shared-memory build and cross-origin isolation, none
+/// of which exists yet. So `new ThreadPool(4)` here reports a parallelism of
+/// 1 -- not a refusal, because portable code could not then be written, and
+/// not silence either, because a driver that quietly gives one thread when
+/// asked for four is a performance mystery with no evidence in it.
+export class Driver {
+  /// How many threads may be inside one sandbox at once. READ IT rather than
+  /// assume it.
+  get parallelism() { return 1; }
+
+  /// There is work for this sandbox. Cheap to call redundantly: N wakes
+  /// between two runs must cost ONE dispatch, not N.
+  wake(core) { core.schedule() && core.advance(); }
+}
+
+/// Runs the sandbox on whichever thread woke it. The default.
+export class Inline extends Driver {}
+
+/// K threads, where the target can give them. On wasm it cannot, so this is
+/// `Inline` with `requested` recorded and `parallelism` still 1.
+export class ThreadPool extends Driver {
+  constructor(threads = 4, { debounceMs = 0 } = {}) {
+    super();
+    this.requested = threads;
+    this.debounceMs = debounceMs;
+  }
+  /// What you actually got. See the note on `Driver`.
+  get parallelism() { return 1; }
+
+  wake(core) {
+    if (!core.schedule()) return;
+    if (this.debounceMs > 0) {
+      // Bounded, always. Coalescing without a bound is a deadlock with a
+      // plausible explanation: a runnable sandbox has to eventually run.
+      setTimeout(() => core.advance(), this.debounceMs);
+    } else {
+      // A microtask, so a burst of synchronous calls lands in ONE dispatch.
+      queueMicrotask(() => core.advance());
+    }
+  }
+}
+
 export class Sandbox {
-  constructor(module, { capabilities, stepLimit = 0 } = {}) {
+  constructor(module, { capabilities, stepLimit = 0, driver } = {}) {
     this.inst = instantiate(module, { stepLimit });
     if (capabilities) this.inst.capabilities(capabilities);
     this._caps = capabilities;
+    this._driver = driver ?? new Inline();
+    // The inbox is what makes coalescing safe: a wake that is folded into
+    // another loses no work, because the work was never in the wake.
+    this._inbox = [];
+    this._scheduled = false;
+    this._dispatches = 0;
+    this._served = 0;
+  }
+
+  /// How many threads may be inside this sandbox at once. On wasm, 1.
+  get parallelism() { return this._driver.parallelism; }
+
+  /// Claim the right to queue this sandbox. True exactly once per dispatch --
+  /// THE coalescing flag.
+  schedule() {
+    if (this._scheduled) return false;
+    this._scheduled = true;
+    return true;
+  }
+
+  /// Run whatever is in the inbox, then whatever arrived while doing so.
+  /// Called by a driver, never by a caller.
+  advance() {
+    for (;;) {
+      const batch = this._inbox;
+      if (batch.length === 0) {
+        // Clear and re-check, in that order and both: a request can land
+        // between the drain and the clear, and clearing without looking again
+        // leaves it queued behind a flag that says a dispatch is coming.
+        this._scheduled = false;
+        if (this._inbox.length === 0) return;
+        if (!this.schedule()) return;
+        continue;
+      }
+      this._inbox = [];
+      this._dispatches += 1;
+      this._served += batch.length;
+      for (const { fn, args, opts, resolve, reject } of batch) {
+        try {
+          resolve(this.callSync(fn, args, opts));
+        } catch (e) {
+          reject(e);
+        }
+      }
+    }
+  }
+
+  /// How many times a dispatch crossed into this sandbox, against how many
+  /// requests were served. The second over the first is what debouncing
+  /// bought, and a host seeing them equal under load is getting none.
+  get dispatchCounts() {
+    return { dispatches: this._dispatches, requests: this._served };
   }
 
   /// Call a function by name with positional arguments.
   ///
-  /// Arguments and the answer both cross as encoded values, so anything the
-  /// codec can carry can be passed and returned. What an argument MEANS is the
-  /// caller's business -- there is no entry map here, and no capability
-  /// argument; those are the CLI's convention.
+  /// **Asynchronous**, and it queues rather than runs: it hands the request to
+  /// the driver, which decides when a runnable sandbox runs. The inline driver
+  /// may finish before the returned promise is awaited, but the TYPE is
+  /// asynchronous either way, because a synchronous API cannot be made
+  /// asynchronous later without breaking every caller (`doc/decisions/0028`).
+  ///
+  /// What an argument MEANS is the caller's business -- no entry map, no
+  /// capability argument; those are the CLI's convention.
   call(fn, args = [], opts = {}) {
+    return new Promise((resolve, reject) => {
+      // Queued BEFORE the wake, always: a wake that arrives before the work it
+      // announces can be answered by a dispatch that finds an empty inbox.
+      this._inbox.push({ fn, args, opts, resolve, reject });
+      this._driver.wake(this);
+    });
+  }
+
+  /// The same call, run here and now.
+  ///
+  /// Kept because a wasm sandbox genuinely is synchronous underneath, and a
+  /// caller with nothing else to do should not have to await a promise that is
+  /// already resolved. Never reachable from inside a sandbox.
+  callSync(fn, args = [], opts = {}) {
     const e = this.inst.exports;
     if (!e.flint_call) {
       throw new Error(

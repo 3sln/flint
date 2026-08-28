@@ -64,33 +64,33 @@ eq('and the CLI convention reads back', image.capabilities, ['fs']);
 
 // --- calling ----------------------------------------------------------------
 const sandbox = await image.sandbox();
-eq('a function is called by name', sandbox.call('app/greet', ['flint']), 'HELLO FLINT');
-eq('any function, not one entry point', sandbox.call('app.util/shout', ['x']), 'X');
+eq('a function is called by name', await sandbox.call('app/greet', ['flint']), 'HELLO FLINT');
+eq('any function, not one entry point', await sandbox.call('app.util/shout', ['x']), 'X');
 
 // State is the SANDBOX's: initialisers run once, not per call, which is what
 // makes instantiate-once-call-per-request work at all.
-sandbox.call('app/tally');
-eq('a sandbox keeps its state across calls', sandbox.call('app/tally'), 2);
+await sandbox.call('app/tally');
+eq('a sandbox keeps its state across calls', await sandbox.call('app/tally'), 2);
 const fresh = await image.sandbox();
-eq('and a fresh sandbox shares none of it', fresh.call('app/tally'), 1);
+eq('and a fresh sandbox shares none of it', await fresh.call('app/tally'), 1);
 
 // --- what can cross ---------------------------------------------------------
 eq('a map round-trips through a call',
-   sandbox.call('app/echo', [{ a: 1, b: [1, 2] }]), { a: 1, b: [1, 2] });
-eq('a keyword survives', sandbox.call('app/echo', [':a']), ':a');
-ok('a set survives', sandbox.call('app/echo', [new Set([1, 2])]) instanceof Set);
-eq('nil survives', sandbox.call('app/echo', [null]), null);
+   await sandbox.call('app/echo', [{ a: 1, b: [1, 2] }]), { a: 1, b: [1, 2] });
+eq('a keyword survives', await sandbox.call('app/echo', [':a']), ':a');
+ok('a set survives', await sandbox.call('app/echo', [new Set([1, 2])]) instanceof Set);
+eq('nil survives', await sandbox.call('app/echo', [null]), null);
 
 // --- failure is data --------------------------------------------------------
 try {
-  sandbox.call('app/boom');
+  await sandbox.call('app/boom');
   ok('a thrown error reaches the caller', false, 'it returned');
 } catch (e) {
   ok('a thrown error reaches the caller', /deliberate/.test(JSON.stringify(e.flint)),
      JSON.stringify(e.flint));
 }
 try {
-  sandbox.call('app/nope');
+  await sandbox.call('app/nope');
   ok('an unknown function is named', false, 'it returned');
 } catch (e) {
   ok('an unknown function is named', /app\/nope/.test(JSON.stringify(e.flint)),
@@ -100,6 +100,40 @@ try {
 // --- diagnostics ------------------------------------------------------------
 ok('gas is readable after a call, in every build', sandbox.diagnostics.gas > 0,
    JSON.stringify(sandbox.diagnostics));
+
+// --- drivers (`doc/decisions/0028`) -----------------------------------------
+//
+// The same four nouns and the same fifth as the Rust SDK, by the same names.
+// What differs is the ANSWER: wasm cannot put two executors in one sandbox
+// until it has the threads proposal, atomics and a shared-memory build, so a
+// pool of four reports a parallelism of ONE. Not a refusal -- portable code
+// could not then be written -- and not silence either.
+import { Driver, Inline, ThreadPool } from './dist/flint.js';
+eq('an inline driver is one thread', new Inline().parallelism, 1);
+eq('and a pool on wasm says so rather than pretending',
+   new ThreadPool(4).parallelism, 1);
+eq('while recording what was asked for', new ThreadPool(4).requested, 4);
+ok('a driver is a Driver', new ThreadPool(4) instanceof Driver);
+
+const pooled = await image.sandbox({ driver: new ThreadPool(4) });
+eq('a sandbox reads its parallelism back', pooled.parallelism, 1);
+
+// Coalescing: a burst of calls has to cost ONE dispatch, not one each. That is
+// the claim debouncing exists to make, and it is measured rather than assumed.
+const burst = await Promise.all(
+  Array.from({ length: 50 }, () => pooled.call('app/tally')));
+eq('every request in a burst is served', burst.length, 50);
+const { dispatches, requests } = pooled.dispatchCounts;
+eq('and none is served twice', requests, 50);
+ok('a burst costs fewer dispatches than calls', dispatches < requests,
+   `${dispatches} dispatches for ${requests} requests`);
+console.log(`      coalesced ${requests} requests into ${dispatches} dispatches`);
+
+// `call` is asynchronous even under the inline driver. `callSync` stays for a
+// caller with nothing else to do -- a wasm sandbox really is synchronous
+// underneath -- but the async type is what the other SDKs mirror.
+ok('call returns a promise', sandbox.call('app/echo', [1]) instanceof Promise);
+eq('callSync answers here and now', sandbox.callSync('app/echo', [7]), 7);
 
 // --- optimize is an ordered preference, not a switch -------------------------
 //

@@ -9,6 +9,12 @@ they have in common is small and what differs is everything else.
 | [`esm/`](esm/) | JavaScript, any runtime | wasm engine | **built** — `sdks/esm/build` |
 | [`rust/`](rust/) | Rust | native | **built** — `cargo test -p flint --release` |
 | [`c/`](c/) | C and C++ | native | **built** — `sdks/c/build` |
+
+All three carry the same five nouns and the same names. What differs is what a
+target can honour: `ThreadPool(4)` really is four threads inside one sandbox on
+the native SDKs, and reads back as **1** on wasm, which cannot put two
+executors in one heap until it has the threads proposal, atomics and a
+shared-memory build.
 | `csharp/` | | CLR port | not started |
 | `java/` | | JVM port | not started |
 
@@ -26,8 +32,7 @@ Every SDK is the same four nouns (`doc/decisions/0025`):
 * an **Image** — the artifact, plus what the compiler was told to record.
 * a **Sandbox** — `call(fn, args)`, `grant`, a step limit, and gas.
 
-A fifth exists in `rust/` and is coming to the others by the same names: a
-**Driver**,
+A fifth is in all three by the same names: a **Driver**,
 which owns how many threads a sandbox gets and when a runnable one runs
 (`doc/decisions/0028`). Targets differ in what they can honour — native gets
 several threads in one sandbox first, wasm stays at one for now — so a

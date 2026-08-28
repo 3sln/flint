@@ -92,11 +92,46 @@ FlintImage *flint_compile(const FlintCompiler *c, const FlintCompileOpts *opts, 
 const uint8_t *flint_image_wasm(const FlintImage *img, size_t *len);
 void flint_image_free(FlintImage *img);
 
+/* --- drivers (doc/decisions/0028) ---------------------------------------- */
+
+/* Who advances a sandbox, and when.
+ *
+ * A sandbox does not run because someone called into it; it runs because a
+ * driver gave it a thread. The inline driver runs on the calling thread; a
+ * pool gives a sandbox several executors on ONE heap, so threads run guest
+ * code alongside each other.
+ *
+ * The vocabulary is the same in every flint SDK and only the ANSWER differs.
+ * Ask for what you want and read back what you got with
+ * flint_driver_parallelism: a target that cannot give you four threads says
+ * 1 rather than pretending, because a driver that quietly gives one when
+ * asked for four is a performance mystery with no evidence in it. */
+typedef struct FlintDriver FlintDriver;
+
+FlintDriver *flint_driver_inline(void);
+FlintDriver *flint_driver_pool(size_t threads);
+/* What you actually got, which may be less than you asked for. */
+size_t flint_driver_parallelism(const FlintDriver *d);
+void flint_driver_free(FlintDriver *d);
+
 /* --- the sandbox -------------------------------------------------------- */
 
 /* A running instance of an image. Independent of every other: state a call
  * leaves behind is this sandbox's and no one else's. */
 FlintSandbox *flint_sandbox_new(const FlintImage *img, char **err);
+
+/* Instantiate under a driver of your choosing -- a pool, for instance. */
+FlintSandbox *flint_sandbox_new_with(const FlintImage *img, const FlintDriver *driver,
+                                     char **err);
+
+/* How many threads may be inside this sandbox at once. */
+size_t flint_sandbox_parallelism(const FlintSandbox *s);
+
+/* How many dispatches ran on a SECONDARY executor -- genuinely alongside
+ * another thread rather than behind the program lock. Readable because a
+ * parallel pool cannot otherwise be told from one that quietly fell back to
+ * serialising, and the two pass identical tests. */
+uint64_t flint_sandbox_parallel_dispatches(const FlintSandbox *s);
 
 /* A sandbox from a .wasm artifact somebody else compiled -- no compiler
  * needed. The module carries its program inside it, and this runs it natively

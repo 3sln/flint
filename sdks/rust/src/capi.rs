@@ -220,7 +220,51 @@ pub unsafe extern "C" fn flint_image_free(img: *mut Image) {
     }
 }
 
+// --- drivers (`doc/decisions/0028`) ----------------------------------------
+
+/// Who advances a sandbox, and when.
+///
+/// A sandbox does not run because someone called into it; it runs because a
+/// driver gave it a thread. `flint_driver_inline` runs on the calling thread;
+/// `flint_driver_pool` gives a sandbox several executors on ONE heap, so
+/// threads run guest code alongside each other.
+pub struct FlintDriver(std::sync::Arc<dyn crate::Driver>);
+
+/// The default: runs the sandbox on whichever thread woke it.
+#[no_mangle]
+pub extern "C" fn flint_driver_inline() -> *mut FlintDriver {
+    Box::into_raw(Box::new(FlintDriver(std::sync::Arc::new(crate::Inline))))
+}
+
+/// A pool of `threads`, which on this target really do run guest code at the
+/// same time on one sandbox. Read back what you got with
+/// `flint_driver_parallelism`: asking is a preference, and a target that
+/// cannot honour it answers honestly rather than pretending.
+#[no_mangle]
+pub extern "C" fn flint_driver_pool(threads: usize) -> *mut FlintDriver {
+    Box::into_raw(Box::new(FlintDriver(std::sync::Arc::new(
+        crate::ThreadPool::new(threads),
+    ))))
+}
+
+/// # Safety
+/// `d` must be a driver from this library, not already freed.
+#[no_mangle]
+pub unsafe extern "C" fn flint_driver_parallelism(d: *const FlintDriver) -> usize {
+    unsafe { d.as_ref() }.map_or(1, |d| d.0.parallelism())
+}
+
+/// # Safety
+/// `d` must be null or a driver from this library, not already freed.
+#[no_mangle]
+pub unsafe extern "C" fn flint_driver_free(d: *mut FlintDriver) {
+    if !d.is_null() {
+        drop(unsafe { Box::from_raw(d) });
+    }
+}
+
 // --- the sandbox -----------------------------------------------------------
+
 
 /// A running instance of an Image. Independent of every other: state a call
 /// leaves behind is this sandbox's and no one else's.
@@ -239,6 +283,50 @@ pub unsafe extern "C" fn flint_sandbox_new(
         Ok(s) => Box::into_raw(Box::new(s)),
         Err(e) => fail(err, &e.to_string()),
     }
+}
+
+/// Instantiate under a driver of your choosing -- a pool, for instance.
+///
+/// # Safety
+/// `img` and `driver` must be from this library and not already freed.
+#[no_mangle]
+pub unsafe extern "C" fn flint_sandbox_new_with(
+    img: *const Image,
+    driver: *const FlintDriver,
+    err: *mut *mut c_char,
+) -> *mut Sandbox {
+    let Some(img) = (unsafe { img.as_ref() }) else {
+        return fail(err, "flint_sandbox_new_with needs an image");
+    };
+    let Some(d) = (unsafe { driver.as_ref() }) else {
+        return fail(err, "flint_sandbox_new_with needs a driver");
+    };
+    match img.sandbox_with(std::sync::Arc::clone(&d.0)) {
+        Ok(s) => Box::into_raw(Box::new(s)),
+        Err(e) => fail(err, &e.to_string()),
+    }
+}
+
+/// How many threads may be inside this sandbox at once.
+///
+/// # Safety
+/// `s` must be a sandbox from this library, not already freed.
+#[no_mangle]
+pub unsafe extern "C" fn flint_sandbox_parallelism(s: *const Sandbox) -> usize {
+    unsafe { s.as_ref() }.map_or(1, crate::Sandbox::parallelism)
+}
+
+/// How many dispatches ran on a SECONDARY executor -- genuinely alongside
+/// another thread rather than behind the program lock.
+///
+/// Readable because otherwise a parallel pool cannot be told from one that
+/// quietly fell back to serialising, and the two pass identical tests.
+///
+/// # Safety
+/// `s` must be a sandbox from this library, not already freed.
+#[no_mangle]
+pub unsafe extern "C" fn flint_sandbox_parallel_dispatches(s: *const Sandbox) -> u64 {
+    unsafe { s.as_ref() }.map_or(0, crate::Sandbox::parallel_dispatches)
 }
 
 /// A sandbox from a `.wasm` artifact somebody else compiled -- no compiler

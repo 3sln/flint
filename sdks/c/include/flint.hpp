@@ -155,6 +155,27 @@ private:
   FlintValue *v_ = nullptr;
 };
 
+/// Who advances a sandbox, and when (`doc/decisions/0028`).
+///
+/// `Driver::inline_()` runs on the calling thread; `Driver::pool(n)` gives a
+/// sandbox several executors on one heap. Ask for what you want and read
+/// `parallelism()` for what you got -- a target that cannot honour the request
+/// answers honestly rather than pretending.
+class Driver {
+public:
+  static Driver inline_() { return Driver(flint_driver_inline()); }
+  static Driver pool(std::size_t threads) { return Driver(flint_driver_pool(threads)); }
+
+  std::size_t parallelism() const { return flint_driver_parallelism(d_.get()); }
+  const FlintDriver *get() const { return d_.get(); }
+
+private:
+  explicit Driver(FlintDriver *raw) : d_(raw, flint_driver_free) {
+    if (!d_) throw Error("flint returned no driver");
+  }
+  std::shared_ptr<FlintDriver> d_;
+};
+
 /// A running instance of an image. Independent of every other.
 class Sandbox {
 public:
@@ -179,6 +200,14 @@ public:
 
   /// Instructions so far -- only while a step limit is set; 0 otherwise.
   uint64_t gas() const { return flint_sandbox_gas(s_.get()); }
+
+  /// How many threads may be inside this sandbox at once.
+  std::size_t parallelism() const { return flint_sandbox_parallelism(s_.get()); }
+
+  /// Dispatches that ran on a secondary executor. See the C header.
+  uint64_t parallelDispatches() const {
+    return flint_sandbox_parallel_dispatches(s_.get());
+  }
 
   Value call(const std::string &name, const std::vector<Value> &args = {}) {
     std::vector<const FlintValue *> raw;
@@ -212,6 +241,14 @@ public:
   Sandbox sandbox() const {
     char *err = nullptr;
     FlintSandbox *s = flint_sandbox_new(img_.get(), &err);
+    if (!s) detail::fail(err, "the image did not instantiate");
+    return Sandbox(s);
+  }
+
+  /// Instantiate under a driver of your choosing.
+  Sandbox sandbox(const Driver &driver) const {
+    char *err = nullptr;
+    FlintSandbox *s = flint_sandbox_new_with(img_.get(), driver.get(), &err);
     if (!s) detail::fail(err, "the image did not instantiate");
     return Sandbox(s);
   }
