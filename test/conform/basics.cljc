@@ -17,6 +17,17 @@
   `{:label ~label :thunk (fn [] ~expr) :expected ~flint-expected
     :clojure ~clojure-expected :divergence true})
 
+(defmacro r
+  "A case where the two READERS see different source, and both are right. `#?@`
+  is the only one: this file is read with `#{:flint}` by flint and with
+  `#{:clj :bb}` by babashka, so a `:flint` branch splices on one side and
+  vanishes on the other. That is the reader conditional working, not a
+  divergence -- so it is NOT recorded as one, and stays out of the README's
+  divergence list."
+  [label expr flint-expected clojure-expected]
+  `{:label ~label :thunk (fn [] ~expr) :expected ~flint-expected
+    :clojure ~clojure-expected :two-readers true})
+
 (defn cases []
   [(c "arith +" (+ 1 2 3) 6)
    (c "arith -" (- 10 3 2) 5)
@@ -188,7 +199,7 @@
 
    ;; `#?@` splices into the surrounding collection. flint reads its own sources
    ;; with #{:flint}, so this is the branch that must both splice and vanish.
-   (c "#?@ splices" [:a #?@(:flint [1 2]) :z] [:a 1 2 :z])
+   (r "#?@ splices" [:a #?@(:flint [1 2]) :z] [:a 1 2 :z] [:a :z])
    (c "  ... and vanishes when no branch matches" [:a #?@(:cljs [1 2]) :z] [:a :z])
 
    ;; `print-str` is NOT `pr-str` with spaces. Clojure's print semantics drop

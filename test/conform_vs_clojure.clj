@@ -9,7 +9,14 @@
                      (let [actual (try ((:thunk x))
                                        (catch Throwable e (str "threw " (ex-message e))))]
                        (assoc x :actual actual
-                              :ok (= actual (if (:divergence x) (:clojure x) (:expected x))))))
+                              ;; `:two-readers` as well as `:divergence`: the
+                              ;; `#?@` case is not a divergence, it is this file
+                              ;; being READ differently on the two sides. Both
+                              ;; carry a Clojure answer; only one is a claim
+                              ;; about flint's semantics.
+                              :ok (= actual (if (or (:divergence x) (:two-readers x))
+                                              (:clojure x)
+                                              (:expected x))))))
                    (cases))
       failures (remove :ok results)]
   (doseq [f failures]
