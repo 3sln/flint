@@ -63,6 +63,19 @@
            "    (pr-str {:n (count m) :snap (pos? (snap/snapshot!))})))"))
 (build! "work" "out/sn-work.wasm")
 
+;; A DIFFERENT program, carrying the same snapshot surface. It exists so the
+;; test can try to restore one program's state into another -- which is not an
+;; exotic mistake once snapshots are files that outlive a process, and which
+;; used to succeed silently. Every frame ip, constant index and var slot in a
+;; snapshot is an index into an IMAGE, so the wrong image does not fail, it
+;; means something else.
+(src! "other"
+      (str "(ns other (:require [flint.snapshot :as snap]))\n"
+           "(defn tally [n] (reduce + 0 (map (fn [i] (* i i)) (range n))))\n"
+           "(defn main [_]\n"
+           "  (pr-str {:n (tally 300) :snap (pos? (snap/snapshot!))}))"))
+(build! "other" "out/sn-other.wasm")
+
 (let [r (sh "node" "test/snapshot.mjs")]
   (print (:all r)) (flush)
   (when-not (zero? (:exit r)) (swap! fails inc)))

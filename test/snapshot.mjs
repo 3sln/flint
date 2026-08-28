@@ -96,5 +96,30 @@ let refusedByName = false;
 try { snap.read(bad); } catch (err) { refusedByName = /layout version/.test(err.message); }
 ok('  ... and the reader says so by name', refusedByName);
 
+// --- a snapshot from a different PROGRAM -------------------------------------
+//
+// The layout check above catches a snapshot from another BUILD. This catches
+// one from another program of the same build, which is the likelier mistake
+// the moment snapshots are files: the header parses, the geometry is
+// plausible, and every frame ip in it indexes a different image.
+const { module: otherModule } = await load('out/sn-other.wasm');
+const other = instantiate(otherModule);
+const oe = other.exports;
+other.main();
+ok('two programs have different image fingerprints',
+   oe.flint_image_fingerprint() !== e.flint_image_fingerprint(),
+   `${oe.flint_image_fingerprint()} vs ${e.flint_image_fingerprint()}`);
+const op = oe.flint_snapshot_alloc(beforeBytes.length);
+new Uint8Array(oe.memory.buffer, op, beforeBytes.length).set(beforeBytes);
+ok("  ... so one program's snapshot is refused by the other",
+   oe.flint_snapshot_restore(beforeBytes.length) === 0);
+ok('  ... naming the image, not the layout, as the reason',
+   oe.flint_snapshot_refused() === 2, `refused=${oe.flint_snapshot_refused()}`);
+// And the control: the refusal is not simply "restore never works".
+const sp = e.flint_snapshot_alloc(beforeBytes.length);
+new Uint8Array(e.memory.buffer, sp, beforeBytes.length).set(beforeBytes);
+ok('  ... while its own program still accepts it',
+   e.flint_snapshot_restore(beforeBytes.length) === 1 && e.flint_snapshot_refused() === 0);
+
 console.log(fails === 0 ? 'snapshots: ok' : `snapshots: ${fails} FAILURES`);
 process.exitCode = fails === 0 ? 0 : 1;

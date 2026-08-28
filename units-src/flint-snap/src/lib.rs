@@ -59,13 +59,27 @@ mod host {
     }
 
     /// Restore whatever is in the buffer. 0 on refusal -- a snapshot from another
-    /// layout version is rejected rather than read as a plausible heap that means
-    /// something else.
+    /// layout version, or one belonging to a different PROGRAM, is rejected
+    /// rather than read as a plausible heap that means something else.
     #[no_mangle]
     pub extern "C" fn flint_snapshot_restore(len: u32) -> u32 {
         let rt = rt();
         let bytes = buf()[..len as usize].to_vec();
         flint_rt::snap::restore(rt, &bytes) as u32
+    }
+
+    /// Why the last restore was refused: 0 nothing, 1 layout version, 2 a
+    /// different image. A bool cannot say which, and "no" is not a diagnosis.
+    #[no_mangle]
+    pub extern "C" fn flint_snapshot_refused() -> u32 {
+        unsafe { flint_rt::snap::REFUSED }
+    }
+
+    /// This module's image fingerprint, so a host can tell whether a snapshot it
+    /// holds belongs here BEFORE trying to restore it.
+    #[no_mangle]
+    pub extern "C" fn flint_image_fingerprint() -> u64 {
+        rt().image.fingerprint
     }
 }
 

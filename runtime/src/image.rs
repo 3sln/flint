@@ -167,6 +167,18 @@ impl Rt {
         if bytes.len() < 12 || &bytes[..8] != MAGIC {
             return false;
         }
+        // Over the WHOLE image, before anything is interpreted. FNV-1a: a
+        // snapshot only has to detect a different program, not resist one, and
+        // an incremental pass over a few hundred KB costs nothing next to the
+        // load it precedes.
+        let fingerprint = {
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in bytes {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x1000_0000_01b3);
+            }
+            h
+        };
         let mut r = Rd { b: bytes, i: 8 };
         if r.u32() != VERSION {
             return false;
@@ -378,6 +390,7 @@ impl Rt {
             entry,
             init,
             flags,
+            fingerprint,
             #[cfg(feature = "aot")]
             aot,
         };

@@ -12,7 +12,7 @@
 //     reference is reported together rather than one per run.
 
 const MAGIC = 0x464c534e;
-const VERSION = 1;
+const VERSION = 2;
 
 export const TY = {
   0: 'FREE', 1: 'FWD', 2: 'STR', 3: 'BIGINT', 4: 'SYM', 5: 'KW', 6: 'CONS',
@@ -48,6 +48,10 @@ export function read(bytes) {
     throw new Error(`snapshot is layout version ${version}, this reader speaks ${VERSION}`);
   }
   const s = { version };
+  // The image this state belongs to. A snapshot carries no code, so every
+  // frame ip, constant index and var slot in it only means something against
+  // the image it was taken from.
+  s.fingerprint = r.u64();
   s.inUse = r.u32(); s.reserved = r.u32();
   s.youngBase = r.u32(); s.half = r.u32(); s.from = r.u32(); s.to = r.u32();
   s.toBump = r.u32(); s.bump = r.u32(); s.fromEnd = r.u32();

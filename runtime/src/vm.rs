@@ -164,6 +164,15 @@ pub struct Image {
     pub var_names: Vec<u32>,
     pub entry: u32,
     pub init: Vec<u32>,
+    /// A fingerprint of the image bytes this was loaded from.
+    ///
+    /// A snapshot carries the heap and the VM state and NOT the code
+    /// (`doc/decisions/0015`), which is what keeps it small and is the whole
+    /// reason it can be moved. But every frame's `ip`, every constant index and
+    /// every var slot in one is an index INTO an image -- so restoring a
+    /// snapshot against a different program does not fail, it means something
+    /// else. This is what makes that refusable.
+    pub fingerprint: u64,
     /// What the compiler decided, as bits. `image::FLAG_PERF` is
     /// `:optimize [perf]`: a runtime that can compile arities at load time
     /// reads this and does, which is how one config means the same thing on

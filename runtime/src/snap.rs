@@ -15,7 +15,15 @@ use alloc::vec::Vec;
 
 /// "FLSN". Bumped whenever the layout below changes.
 pub const MAGIC: u32 = 0x464C_534E;
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
+
+/// Why a restore was refused. `restore` answers a bool because that is what the
+/// host ABI can carry; this says which of the two checks failed, so the message
+/// names a cause instead of "no".
+pub const REFUSE_NONE: u32 = 0;
+pub const REFUSE_LAYOUT: u32 = 1;
+pub const REFUSE_IMAGE: u32 = 2;
+pub static mut REFUSED: u32 = REFUSE_NONE;
 
 struct W {
     b: Vec<u8>,
@@ -103,6 +111,13 @@ pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
     let mut w = W { b: core::mem::take(out) };
     w.u32(MAGIC);
     w.u32(VERSION);
+    // The image this state belongs to. NOT the image itself: a snapshot carries
+    // the heap and the VM state and no code, which is what keeps it small and is
+    // the whole reason it can be moved. But every frame's `ip`, every constant
+    // index and every var slot in it is an index INTO an image, so restoring one
+    // against a different program does not fail -- it quietly means something
+    // else. Carrying the fingerprint is what makes that refusable.
+    w.u64(rt.image.fingerprint);
 
     // --- allocation geometry, so import can restore to the SAME addresses.
     // Every pointer in the heap is an absolute offset; restoring elsewhere
@@ -278,7 +293,17 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
         return false;
     }
     let mut r = R { b: bytes, i: 0 };
+    unsafe { REFUSED = REFUSE_NONE };
     if r.u32() != MAGIC || r.u32() != VERSION {
+        unsafe { REFUSED = REFUSE_LAYOUT };
+        return false;
+    }
+    if bytes.len() < 16 {
+        unsafe { REFUSED = REFUSE_LAYOUT };
+        return false;
+    }
+    if r.u64() != rt.image.fingerprint {
+        unsafe { REFUSED = REFUSE_IMAGE };
         return false;
     }
     let in_use = r.u32();
