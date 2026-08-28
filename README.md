@@ -49,6 +49,7 @@ module itself needs no host support at all.
 ## Contents
 
 - [Status](#status) — what works, what does not
+- [CHANGELOG](CHANGELOG.md) — what changed, with the measurement rather than the intent
 - [How it fits together](#how-it-fits-together)
 - [The value encoding](#the-value-encoding)
 - [The collector](#the-collector) — and the rooting decision everything rests on
@@ -99,6 +100,22 @@ Working, end to end, and tested:
   cherry and flint: 1.4× on parse, 15× faster to first answer than a V8 isolate,
   and 275× slower on regex. All of it, including the losses, in
   [What this means for construe](#what-this-means-for-construe).
+
+- **It runs on three runtimes, and they agree.** The same bytecode runs on the
+  native/wasm runtime, on the JVM ([`0029`](doc/decisions/0029-jvm-runtime.md))
+  and on the CLR ([`0030`](doc/decisions/0030-clr-runtime.md)). All three carry
+  the same 155 builtins, all nine conformance programs give the same answers on
+  all three — interpreted *and* compiled — and **both ports run the flint
+  compiler and emit byte-identical images**. That is the difference between
+  "runs programs" and "self-hosts": the compiler is the largest flint program
+  there is, and running it is what found `assoc`-on-a-vector returning a map,
+  `seq?` answering `seqable?`, and `str-bytes` answering a count.
+
+- **`:optimize [perf]` means the same thing on all three.** It compiles arities
+  ahead of time rather than dispatching them
+  ([`0013`](doc/decisions/0013-emit-wasm-instead-of-dispatch.md)): 2.97× over the
+  wasm interpreter, 12× over the JVM's, 1.8× over the CLR's. It is a preference
+  rather than a switch — ask for what you want, read what you got.
 
 Not working, and named as such: no records or types (protocols exist, and
 dispatch on kind or metadata); no transducers; no sorted collections; no `eval`
