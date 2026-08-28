@@ -100,5 +100,32 @@
     (print out) (print err)
     (when-not (zero? (.exitValue p)) (swap! fails inc))))
 
+;; --- where compiled code takes over again -----------------------------------
+;;
+;; A TAIL CALL replaces the frame, so this arity has no next instruction to
+;; resume at. Naming one registered a re-entry point against a frame that no
+;; longer existed, and `(+ ip len)` after a tail call is the RETURN that follows
+;; it -- so the resume point said "return whatever is on top of the stack".
+;;
+;; `reduce` ends `(reduce-seq f init coll)`, and under `--aot` it answered
+;; `coll` instead of `init`: `into` then handed `persistent!` the empty list it
+;; had been reducing over. `doc/decisions/0013`.
+;;
+;; Asserted on the RULE rather than on the emitted bytes: the bug was a decision,
+;; and a test that reads bytes would pass again the moment the encoding changed.
+(println "aot: a tail call names no resume point")
+(let [chunk-of (constantly 7)]
+  (check "a tail call resumes NOWHERE"
+         (= [aot/AOT-NEVER 0] (aot/resume-after :tail-call 103 2 chunk-of)))
+  (check "  ... whatever follows it starts a chunk"
+         (= [aot/AOT-NEVER 0] (aot/resume-after :tail-call 103 2 (constantly 3))))
+  (check "an ordinary hand-back resumes at the next instruction"
+         (= [97 7] (aot/resume-after :var 94 3 chunk-of)))
+  (check "  ... and nowhere when the next instruction starts no chunk"
+         (= [aot/AOT-NEVER 0] (aot/resume-after :var 94 3 (constantly nil))))
+  ;; `apply` and `call` DO come back: the frame is still theirs.
+  (check "a call resumes at the next instruction"
+         (= [96 7] (aot/resume-after :call 94 2 chunk-of))))
+
 (println (if (zero? @fails) "aot emitter: ok" (str "aot emitter: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))

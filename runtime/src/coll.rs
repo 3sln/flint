@@ -349,21 +349,48 @@ impl Rt {
         }
     }
 
+    /// Refuse a non-transient, NAMING it. "not a transient" says what was
+    /// wanted and nothing about what arrived, and what arrived is the half that
+    /// locates the bug -- a wrong TYPE is a mixed-up value, while a fixnum or
+    /// nil is a stack slot read at the wrong depth.
+    pub fn not_a_transient(&mut self, op: &str, v: Value) -> Value {
+        // The TAG, not the printed value: printing allocates, and this is on a
+        // path where the value is already suspect.
+        let what: alloc::string::String = if v.is_nil() {
+            "nil".into()
+        } else if v.is_bool() {
+            "a boolean".into()
+        } else if v.is_fixnum() {
+            alloc::format!("the integer {}", v.as_fixnum())
+        } else if v.is_double() {
+            "a float".into()
+        } else if v.is_inline_str() || v.is_inline_kw() {
+            "an inline string or keyword".into()
+        } else if v.is_heap() {
+            alloc::format!("a heap object with type tag {}", ty(&self.gc.sp, v.as_heap()))
+        } else {
+            alloc::format!("a non-heap value with bits {:#x}", v.bits())
+        };
+        let w = self.where_am_i();
+        let msg = alloc::format!("{op} wants a transient, got {what} in {w}");
+        self.throw_str("ClassCastException", &msg)
+    }
+
     pub fn to_persistent(&mut self, v: Value) -> Value {
         if !v.is_heap() {
-            return self.throw_str("ClassCastException", "not a transient");
+            return self.not_a_transient("persistent!", v);
         }
         match ty(&self.gc.sp, v.as_heap()) {
             TY_TVEC => self.tvec_persistent(v),
             TY_TMAP => self.tmap_persistent(v),
             TY_TSET => self.tset_persistent(v),
-            _ => self.throw_str("ClassCastException", "not a transient"),
+            _ => self.not_a_transient("persistent!", v),
         }
     }
 
     pub fn transient_conj(&mut self, t: Value, x: Value) -> Value {
         if !t.is_heap() {
-            return self.throw_str("ClassCastException", "not a transient");
+            return self.not_a_transient("conj!", t);
         }
         match ty(&self.gc.sp, t.as_heap()) {
             TY_TVEC => self.tvec_conj(t, x),
@@ -376,13 +403,13 @@ impl Rt {
                     self.throw_str("IllegalArgumentException", "conj! on a map wants a map entry")
                 }
             }
-            _ => self.throw_str("ClassCastException", "not a transient"),
+            _ => self.not_a_transient("conj!", t),
         }
     }
 
     pub fn transient_assoc(&mut self, t: Value, k: Value, v: Value) -> Value {
         if !t.is_heap() {
-            return self.throw_str("ClassCastException", "not a transient");
+            return self.not_a_transient("assoc!", t);
         }
         match ty(&self.gc.sp, t.as_heap()) {
             TY_TMAP => self.tmap_assoc(t, k, v),

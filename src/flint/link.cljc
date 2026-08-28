@@ -256,6 +256,15 @@
         ;; index is a position in this flattened list -- it is not derivable
         ;; from anything the module carries afterwards.
         name-k (some-> (System/getenv "FLINT_AOT_NAME") parse-long)
+        ;; `FLINT_AOT_NAMES=reduce` lists every index whose function name
+        ;; contains that text, which is how a bisection gets STARTED -- the
+        ;; index of the arity you already suspect is otherwise unfindable.
+        _ (when-let [pat (System/getenv "FLINT_AOT_NAMES")]
+            (doseq [[k [fi ai a]] (map-indexed vector slots-of)
+                    :let [nm (str (nth (:consts @b) (:name (nth (:fns @b) fi)) nil))]
+                    :when (clojure.string/includes? nm pat)]
+              (println (format "  aot arity %d = fn %d arity %d %s (argc %d)"
+                               k fi ai nm (:argc a)))))
         _ (when name-k
             (doseq [[k [fi ai a]] (map-indexed vector slots-of)
                     :when (= k name-k)]
@@ -270,7 +279,8 @@
                                           (not (and skip-from skip-to
                                                     (>= k skip-from) (< k skip-to)))
                                           (or (nil? only) (= k only)))
-                                 (aot/compile-arity code (:off a) (:len a) helpers))])
+                                 (aot/compile-arity code (:off a) (:len a) helpers
+                                                    (some? (System/getenv "FLINT_AOT_CHUNK_ALL"))))])
                       (range) slots-of)
         ok (filterv (fn [[_ _ r]] (some? r)) results)
         [m type-idx] (w/add-type m [0x7F 0x7F 0x7F 0x7F 0x7F] [])

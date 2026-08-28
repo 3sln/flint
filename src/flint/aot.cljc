@@ -99,6 +99,7 @@
     :add-int :sub-int :mul-int :lt-int :le-int :gt-int :ge-int :eq-int
     :type-p})
 
+
 ;; ------------------------------------------------------------------- values
 
 (def TAG-SPECIAL 0xFFFB)
@@ -142,7 +143,7 @@
 
 (defn boundaries
   "Byte offsets that begin a chunk. Every one is a re-entry point."
-  [instrs]
+  [instrs chunk-all?]
   ;; Sequence forms rather than transducers throughout. This file compiles into
   ;; the wasm compiler now, and flint implements `map`, `filter` and `keep` at
   ;; two arguments -- the one-argument transducer form raised
@@ -187,8 +188,17 @@
     ;; Distinct and ASCENDING -- the chunk indices and the `br_table` both
     ;; depend on the order. A plain set sorted, rather than `sorted-set`, which
     ;; flint does not have.
+    ;;
+    ;; `chunk-all?` makes EVERY instruction a boundary. It is a bisection
+    ;; handle, not a mode: if a failure survives maximal chunking then no
+    ;; boundary was missing and the fault is in how an opcode is EMITTED, which
+    ;; are the two halves this emitter can be wrong in and they want opposite
+    ;; fixes. It is a parameter rather than an environment read because this
+    ;; namespace is compiled BY flint, which has no host interop.
     (vec (sort (into #{} (filter valid
-                                 (concat [(:ip (first instrs))] targets after at back)))))))
+                                 (if chunk-all?
+                                   (map :ip instrs)
+                                   (concat [(:ip (first instrs))] targets after at back))))))))
 
 (defn chunks
   "Split into chunks at the boundaries. Each is `{:idx :ip :instrs :charge}`."
@@ -383,6 +393,29 @@
      (tick (assoc ctx :extra (inc extra)) ip)
      (i32c j) (lset PC) (op :br) (w/uleb (+ (- n i) extra 1))
      (op :end)]))
+
+(defn resume-after
+  "Where compiled code takes over again after handing `op` at `ip` back, as
+  `[resume-ip block]`.
+
+  Normally the next instruction, if that starts a chunk.
+
+  A TAIL CALL is the exception, and it is not a detail: it REPLACES this frame.
+  The interpreter pops the frame and enters the callee in its place, so there
+  is no next instruction of THIS arity left to run, and naming one registers a
+  re-entry point against a frame that no longer exists. `(+ ip len)` after a
+  tail call is the RETURN that follows it in every arity ending with one, so
+  the resume point said \"return whatever is on top of the stack\".
+
+  What that cost: `reduce`'s `(reduce-seq f init coll)` answered `coll` instead
+  of `init`, so `into` handed `persistent!` the empty list it had been reducing
+  over -- `ClassCastException: not a transient`, several frames and one tail
+  call away from the emitter that caused it. `doc/decisions/0013`."
+  [op ip len chunk-of]
+  (if (= op :tail-call)
+    [AOT-NEVER 0]
+    (let [nx (+ ip len) j (chunk-of nx)]
+      (if j [nx j] [AOT-NEVER 0]))))
 
 (defn- bail
   "Hand control back at `ip`, and say where compiled code takes over again.
@@ -585,8 +618,8 @@
       ;; instruction. That is what lets this emitter be COMPLETE from the first
       ;; version instead of refusing a whole function over one rare opcode, and
       ;; it is cheap for the same reason re-entry is.
-      (let [nx (+ ip len) j (chunk-of nx)]
-        (if j (bail helpers ip nx j) (bail helpers ip AOT-NEVER 0))))))
+      (let [[r-ip r-block] (resume-after op ip len chunk-of)]
+        (bail helpers ip r-ip r-block)))))
 
 (defn- emit-chunk
   [{:keys [helpers] :as ctx} {:keys [instrs charge ip]}]
@@ -630,7 +663,8 @@
   or nil if it cannot be compiled -- an unknown opcode or an unbounded operand
   stack, both of which mean this emitter does not understand the code well
   enough to be trusted with it."
-  [code start len helpers]
+  ([code start len helpers] (compile-arity code start len helpers false))
+  ([code start len helpers chunk-all?]
   (when-let [instrs (seq (decode code start len))]
     (when-let [depth (max-depth instrs)]
       (let [starts (into #{} (map (fn [i] (:ip i)) instrs))
@@ -641,7 +675,7 @@
             _ (when-not (every? starts (keep jump-target instrs))
                 (throw (ex-info "jump into the middle of an instruction"
                                 {:offsets (remove starts (keep jump-target instrs))})))
-            bounds (boundaries instrs)
+            bounds (boundaries instrs chunk-all?)
             cks (chunks instrs bounds)
             n (count cks)
             chunk-of (zipmap bounds (range))
@@ -665,4 +699,4 @@
            (map-indexed (fn [i c] [(op :end) (emit-chunk (assoc ctx :i i) c)]) cks)
            (op :end)                                        ; $EXIT
            (op :end)                                        ; the dispatcher loop
-           (op :end)])}))))                                 ; the function
+           (op :end)])})))))                                ; the function
