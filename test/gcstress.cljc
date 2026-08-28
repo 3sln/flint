@@ -24,6 +24,32 @@
                          (if (< i n) (recur (inc i) (assoc! t (kf i) i)) t)))]
     [(count m) (count (filter (fn [i] (not= i (get m (kf i)))) (range n)))]))
 
+;; `flint.rt/array-map` over a LAZY seq, big enough to span a collection.
+;;
+;; This is the shape that hid a stale-value bug for the life of the runtime.
+;; `ordered_map` gathered its values into a Rust `Vec<Value>` -- which the
+;; collector does not scan -- and both calls in its walk can collect: `first`
+;; forces a lazy seq and `next` forces the tail, which runs arbitrary flint
+;; code. Everything gathered before the first collection went stale, and was
+;; then written into the map.
+;;
+;; It needs THREE things at once and that is why nothing caught it: a lazy
+;; input, so the walk allocates; enough pairs to span a collection; and a
+;; runtime that notices, which is `stat_stale_set`/`stat_stale_push` in
+;; `test/gc_stress.clj`. A literal map, or a short one, or a realised seq is
+;; correct either way.
+(defn probe-ordered [n]
+  (let [kvs (mapcat (fn [i] [(str "k" i) [:v i]]) (range n))
+        m (flint.rt/array-map kvs)]
+    [(count m) (count (filter (fn [i] (not= [:v i] (get m (str "k" i)))) (range n)))]))
+
+;; The codec has the SAME walk on the other side of the boundary and had the
+;; same fault, but `encode` is internal to the port boundary rather than a
+;; builtin, so it cannot be reached from here. `test/threads.clj` and
+;; `test/capability.clj` send collections through ports; what neither does is
+;; send a LAZY one under collection pressure, which is the combination that
+;; matters. Named here so the gap is on the record.
+
 (defn main [_]
   (let [n 30000
         vec-key (fn [i] [:sym i])
@@ -38,4 +64,5 @@
              ;; = with three compound arguments: the first was read once and
              ;; then compared repeatedly across allocations.
              :eq3        (= [1 [2 3]] [1 [2 3]] [1 [2 3]])
-             :sorted     (= [[1 2] [1 3] [2 0]] (sort (list [2 0] [1 3] [1 2])))})))
+             :sorted     (= [[1 2] [1 3] [2 0]] (sort (list [2 0] [1 3] [1 2])))
+             :ordered    (probe-ordered 4000)})))

@@ -926,22 +926,34 @@ impl Rt {
         let base = self.mark();
         let s = self.seq(kvs);
         let si = self.push(s);
-        let mut flat: alloc::vec::Vec<Value> = alloc::vec::Vec::new();
+        // Rooted AS THEY ARE TAKEN, not accumulated first.
+        //
+        // These used to go into a Rust `Vec<Value>` and get pushed afterwards.
+        // The collector does not scan Rust vectors, and BOTH calls in this loop
+        // can collect: `first` forces a lazy seq, and `next` forces the tail,
+        // which runs arbitrary flint code. So every value already gathered went
+        // stale at the first collection inside the loop, and the stale ones were
+        // then rooted and written into the map -- a map whose contents are
+        // addresses in a space that has been reused.
+        //
+        // It needed a map big enough to span a collection, which is why it
+        // survived: the reader builds map literals with this (source order has
+        // to survive, or the self-hosting fixpoint breaks), and the compiler's
+        // own literals are the big ones. `doc/decisions/0031` has the hunt.
+        let vals_at = self.mark();
+        let mut count = 0usize;
         while !self.r(si).is_nil() {
             let x = self.first(self.r(si));
-            flat.push(x);
+            self.push(x);
+            count += 1;
             let nx = self.next(self.r(si));
             self.set_r(si, nx);
         }
-        if flat.len() % 2 != 0 {
+        if count % 2 != 0 {
             self.pop_to(base);
             return self.throw_str("IllegalArgumentException", "array-map needs an even number of forms");
         }
-        for v in &flat {
-            self.push(*v);
-        }
-        let vals_at = self.mark() - flat.len();
-        let n = (flat.len() / 2) as u32;
+        let n = (count / 2) as u32;
         let a = self.alloc(TY_ARRAYMAP, crate::map::AM_BASE + 2 * n);
         if a == 0 {
             self.pop_to(base);

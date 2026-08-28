@@ -34,6 +34,7 @@
 ;; `Img.java`'s `FLAG_PERF`, `Img.cs`'s `FlagPerf`.
 ;;
 ;;   bit 0 -- FLAG-PERF: `:optimize [perf]`
+(def FLAG-PERF 1)
 
 (def K-NIL 0) (def K-TRUE 1) (def K-FALSE 2) (def K-INT 3) (def K-DOUBLE 4)
 (def K-STRING 5) (def K-KEYWORD 6) (def K-SYMBOL 7) (def K-VECTOR 8)
@@ -231,7 +232,7 @@
       ;; arities has both this bit and a non-empty table; an image for a PORT
       ;; has the bit and an empty table, which is exactly the case that could
       ;; not be expressed before.
-      (u32 (if perf? 1 0))])))
+      (u32 (if perf? FLAG-PERF 0))])))
 
 (def NATIVES-OFFSET
   "Byte offset of the natives count: magic(8) + version(4)."

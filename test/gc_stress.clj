@@ -19,7 +19,7 @@
         fails (atom 0)
         check (fn [label ok] (if ok (println "  ok  " label)
                                  (do (swap! fails inc) (println "  FAIL" label))))]
-    (doseq [k [:vec :mixed :deep :list :set :transient]]
+    (doseq [k [:vec :mixed :deep :list :set :transient :ordered]]
       (let [[cnt missing] (get res k)]
         (check (format "%-10s %d entries, none unfindable" (name k) cnt)
                (and (pos? cnt) (zero? missing)))))

@@ -204,28 +204,33 @@ impl Rt {
                 ty(&self.gc.sp, v.as_heap())
             ));
         };
-        // Walked into a Vec first, for the reason above: encoding allocates.
-        let mut items: Vec<Value> = Vec::new();
-        {
-            let base = self.mark();
-            self.push(v);
-            let mut cur = self.seq(self.r(base));
+        // Walked into the SHADOW STACK, not a Rust Vec, for two reasons and it
+        // used to be only the second one.
+        //
+        // Encoding allocates, so the items have to be rooted before the encode
+        // loop. That was already true and was already done. What was NOT true is
+        // that the WALK is allocation-free: `next` on a lazy seq forces the
+        // tail, which runs arbitrary flint code and can collect -- so every item
+        // gathered so far went stale, in a `Vec` the collector does not scan.
+        // Same fault as `Rt::ordered_map`, same shape, found by the same hunt
+        // (`doc/decisions/0031`).
+        let base = self.mark();
+        self.push(v);
+        let mut cur = self.seq(self.r(base));
+        self.set_r(base, cur);
+        let items_at = self.mark();
+        let mut count = 0usize;
+        while !cur.is_nil() {
+            let x = self.first(cur);
+            self.push(x);
+            count += 1;
+            cur = self.next(self.r(base));
             self.set_r(base, cur);
-            while !cur.is_nil() {
-                items.push(self.first(cur));
-                cur = self.next(self.r(base));
-                self.set_r(base, cur);
-            }
-            self.pop_to(base);
         }
         out.push(tag);
-        put_u32(out, items.len() as u32);
-        let base = self.mark();
-        for it in &items {
-            self.push(*it);
-        }
-        for i in 0..items.len() {
-            let it = self.r(base + i);
+        put_u32(out, count as u32);
+        for i in 0..count {
+            let it = self.r(items_at + i);
             self.encode_into(it, out, depth + 1)?;
         }
         self.pop_to(base);
