@@ -275,6 +275,13 @@ grep -E "collections with two executors" /tmp/flint-test.out | sed 's/^ */    /'
 grep -E "^test result" /tmp/flint-test.out | sed 's/^/    /'
 
 echo
+echo "== hosts: one program, two runtimes, diffed (0010, 0029)"
+# The JVM port's gate. Skips itself when there is no JDK, because the rest of
+# the suite must not depend on one being installed.
+./bin/conform-hosts > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "conform-hosts"; }
+grep -E "^  (ok|FAIL|[0-9]+/|\()" /tmp/flint-test.out | sed 's/^/  /'
+
+echo
 echo "== sdks: the same four nouns in three languages (0025)"
 # Release, because each of these embeds the compiler and runs flint compiling
 # itself; a debug build of that is minutes rather than seconds.

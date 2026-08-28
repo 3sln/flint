@@ -1,0 +1,65 @@
+#!/bin/sh
+# Differential conformance: the SAME program on two runtimes, diffed.
+#
+# `doc/decisions/0010` is explicit that the bytecode makes a port cheap and
+# does nothing to make two ports AGREE. This is the agreement: one source,
+# compiled once, run on the native runtime and on the JVM, and the answers
+# compared byte for byte.
+#
+# A port that runs is not a port that is correct. This is what tells them apart.
+set -e
+cd "$(dirname "$0")/.."
+
+JDK="${FLINT_JDK:-/opt/homebrew/opt/openjdk@21}"
+if [ ! -x "$JDK/bin/javac" ]; then
+  echo "  (no JDK at $JDK; set FLINT_JDK to run the JVM rows)"
+  exit 0
+fi
+
+mkdir -p out/conform
+"$JDK/bin/javac" -d runtimes/jvm/classes runtimes/jvm/src/com/flint/*.java \
+  runtimes/jvm/test/*.java 2>&1 | head -20
+
+fails=0
+total=0
+for src in runtimes/conform/*.cljc; do
+  ns="$(basename "$src" .cljc)"
+  total=$((total + 1))
+  ./bin/flint :src runtimes/conform :fn "$ns/main" --emit-image \
+    :out "out/conform/$ns.img" >/dev/null 2>&1 \
+    || { echo "  FAIL $ns (did not compile)"; fails=$((fails + 1)); continue; }
+
+  # `|| true` on both: a runtime that FAILS is a result to report, not a
+  # reason to stop the run. `set -e` would otherwise end the suite at the
+  # first divergence and hide every case after it.
+  native="$(./target/release/flint run :path runtimes/conform :fn "$ns/main" 2>&1 || true)"
+  jvm="$("$JDK/bin/java" -cp runtimes/jvm/classes Conform "out/conform/$ns.img" 2>&1 || true)"
+
+  if [ "$native" = "$jvm" ]; then
+    echo "  ok   $ns"
+  else
+    fails=$((fails + 1))
+    echo "  FAIL $ns"
+    echo "        native $native"
+    echo "        jvm    $jvm"
+  fi
+done
+
+agree=$((total - fails))
+echo "  $agree/$total agree"
+
+# A FLOOR rather than "all must pass", because the JVM port is not finished and
+# a known divergence is worth keeping visible instead of deleted. What must not
+# happen is the number going DOWN.
+#
+# The one that does not agree is map ITERATION ORDER: flint's maps are a CHAMP
+# and iterate in hash order, and this port uses insertion order. The values are
+# identical and only the printing differs -- which is exactly why it matters.
+# `doc/decisions/0010` singles this one out as not cosmetic: `pr-str` of a map
+# is how an answer is compared, and content-addressed artifacts would hash
+# differently per host.
+FLOOR="${FLINT_CONFORM_FLOOR:-3}"
+if [ "$agree" -lt "$FLOOR" ]; then
+  echo "  a case that used to agree no longer does ($agree < $FLOOR)"
+  exit 1
+fi
