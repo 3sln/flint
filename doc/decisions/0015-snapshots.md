@@ -1,9 +1,16 @@
 # 0015 — VM snapshots: instant, exportable, inspectable
 
 > **BUILT** — capture, export/import, and an inspector that reads the format,
-> all three. Opt-in under `0016`: +18 569 bytes when enabled, absent otherwise.
-> `test/snapshots.clj` is the standing check. Specified after a dozen sessions
+> all three. Opt-in under `0016`: +41 431 bytes when enabled, absent otherwise.
+> `test/snapshot.clj` is the standing check. Specified after a dozen sessions
 > of ad-hoc instruments, two of which lied and each cost a run.
+>
+> **Amended 2026-08-28: there are now TWO capture formats, because there are two
+> jobs.** The memcpy below is for post-mortems and is unchanged. A second format
+> carries only what survives a collection, for shelving a running sandbox — see
+> "Two formats, and why the memcpy is not enough" at the end. A snapshot in either format now
+> carries the fingerprint of the image it belongs to, and a mismatch is refused
+> by name.
 
 Three pieces:
 
@@ -174,3 +181,99 @@ debug-gated, with the module-size test proving it.
 - A repeated name keeps the latest and reports the hit count.
 - A production build contains no `snap` or `break` forms and reports how many of
   each it elided.
+
+
+---
+
+## Two formats, and why the memcpy is not enough
+
+Everything above argues for a memcpy over a traversal, and the argument is
+sound **for the job it was written about**. It is not sound for shelving, and
+the difference is worth stating rather than quietly picking one.
+
+### What the memcpy cannot do
+
+* **It copies what is not there.** The semispaces are copied whole, dead objects
+  and unused reserve included. A small program's capture is **5 275 808 bytes**,
+  of which the inspector reports 1.6 MB live and 141 objects after a collection.
+* **It pins the restore to identical addresses.** The design says so in its own
+  words — rewriting pointers "would mean a traversal, which is the thing this
+  design exists to avoid" — so a capture cannot be restored into a different
+  instance, let alone a different process. Shelving is exactly that.
+* **It is wasm-only in principle, not just in practice.** The JVM and CLR ports
+  hold flint values as host objects on a host collector's heap. There is no byte
+  range to copy. A memcpy format can never reach them.
+
+### Why a traversal is admissible after all
+
+The objection above is that a traversal which misses an edge yields a snapshot
+missing an object, and then the capture is what needs debugging rather than the
+bug. That is fatal to a **bespoke** traversal.
+
+It is not fatal to this one, because **the collector decides what is live and
+the exporter only enumerates what survived**. `export_live` runs a major
+collection and then walks the heap linearly: the nursery is contiguous after a
+copying minor, and old space is swept, so everything that is not `TY_FREE` is
+live. There is no second opinion about reachability to get wrong. A missed edge
+here would be a collector bug that loses objects in ordinary running — which
+`test/gc_stress.clj` already checks for from several directions.
+
+That also makes the cost honest: it **is** a major collection, which is what the
+owner said it should be.
+
+### What it buys, measured
+
+| | verbatim | live set |
+| --- | ---: | ---: |
+| the same program's state | 5 275 808 B | **38 524 B** (0.7%) |
+| restores into another instance | no | **yes** |
+| carries dead objects | yes | no |
+| can capture a corrupt heap | **yes** | no |
+
+The last row is why both are kept. A capture that walks cannot capture a heap
+whose pointers are already wrong — it would follow the bad one or refuse — and
+that is precisely the situation the memcpy was built for. Two operations, two
+jobs: **traverse to move a sandbox, memcpy to debug one.**
+
+### The fingerprint, and the failure it prevents
+
+A snapshot carries the heap and the VM state and **no code**. That is what keeps
+it small and is the whole reason it can be moved — but every frame's `ip`, every
+constant index and every var slot in one is an index *into an image*. Restoring
+against a different program does not fail. The header parses, the geometry is
+plausible, and all of those indices quietly mean something else.
+
+So both formats carry a fingerprint of the image bytes, taken at load before
+anything is interpreted, and both refuse a mismatch. `flint_snapshot_refused`
+says which check failed — layout or image — because a bool cannot, and "no" is
+not a diagnosis. `flint_image_fingerprint` lets a host ask before it tries.
+
+Tested with a second program rather than by construction, and with the control
+that makes the rest mean anything: two programs really do fingerprint
+differently, each refuses the other's snapshot, the reason given is the image
+rather than the layout, **and each still accepts its own**.
+
+### Export and stop
+
+`flint_snapshot_export_and_stop` captures and then leaves the sandbox with
+nothing runnable. Not a flag the interpreter consults: the frame stack **is** the
+continuation, so dropping it is what "stopped" means and no loop needs a new
+condition in it.
+
+The two halves are one call because "capture, then stop" being atomic is the
+property a caller relies on, and it should not have to know that a builtin runs
+between two bytecode instructions and that the scheduler is cooperative.
+
+The heap is deliberately left alone: it has just been exported, and a caller who
+wants the memory back drops the instance, while one who wants to inspect what
+they shelved still can.
+
+### What is not done
+
+* **The ports have neither format.** The traversal is what makes one possible
+  there — a host-object graph can be walked and cannot be memcpy'd — but it is
+  not written.
+* **The live-set format is not versioned across a runtime change** beyond its
+  own `VERSION_LIVE`. A snapshot outliving a flint upgrade is refused by
+  fingerprint anyway, since the image changes, but that is a side effect rather
+  than a designed guarantee.

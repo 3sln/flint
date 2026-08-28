@@ -50,8 +50,17 @@ mod host {
     }
 
     /// Room for the host to write a snapshot it holds, before restoring it.
+    ///
+    /// `rt()` first, and not for the runtime: it is what creates the ARENA the
+    /// Rust allocator draws from. Importing into a FRESH instance is the whole
+    /// point of the live-set format -- the host instantiates a module, writes a
+    /// snapshot into it and imports, without ever running the program -- and
+    /// without this that first `resize` is an allocation before there is
+    /// anything to allocate from. It failed as `unreachable` out of
+    /// `__rust_alloc_error_handler`, several frames from anything recognisable.
     #[no_mangle]
     pub extern "C" fn flint_snapshot_alloc(len: u32) -> u32 {
+        let _ = rt();
         let b = buf();
         b.clear();
         b.resize(len as usize, 0);
@@ -80,6 +89,64 @@ mod host {
     #[no_mangle]
     pub extern "C" fn flint_image_fingerprint() -> u64 {
         rt().image.fingerprint
+    }
+
+    /// Export the LIVE SET: a relocatable snapshot with no dead objects in it.
+    /// Returns the byte length; the bytes are at `flint_snapshot_ptr`. 0 means
+    /// the walk and the collector disagreed, which is a bug rather than a
+    /// condition -- see `flint_rt::snap::export_live`.
+    ///
+    /// This is the one to SHELVE with. `flint_snapshot_capture` copies the heap
+    /// verbatim, which is the right instrument for a post-mortem and the wrong
+    /// one for moving a sandbox: it carries dead objects and unused reserve, and
+    /// it can only be restored to identical addresses.
+    #[no_mangle]
+    pub extern "C" fn flint_snapshot_export() -> u32 {
+        let rt = rt();
+        if flint_rt::snap::export_live(rt, buf()) {
+            buf().len() as u32
+        } else {
+            0
+        }
+    }
+
+    /// Import a live-set export. 0 on refusal; `flint_snapshot_refused` says
+    /// which check failed.
+    #[no_mangle]
+    pub extern "C" fn flint_snapshot_import(len: u32) -> u32 {
+        let rt = rt();
+        let bytes = buf()[..len as usize].to_vec();
+        flint_rt::snap::import_live(rt, &bytes) as u32
+    }
+
+    /// Is this sandbox shelved? 1 when `export_and_stop` has run and nothing
+    /// has restarted it: no frames, and the status says so.
+    ///
+    /// Exported because otherwise the test for `export_and_stop` has nothing to
+    /// look at, and a check that cannot fail is not a check.
+    #[no_mangle]
+    pub extern "C" fn flint_snapshot_stopped() -> u32 {
+        let rt = rt();
+        (rt.frames.is_empty() && rt.status == flint_rt::snap::STATUS_SHELVED) as u32
+    }
+
+    /// Export, and then STOP: the sandbox is left with nothing runnable, so the
+    /// state in the caller's hands is the only copy that can advance.
+    ///
+    /// Two calls would be a race in any runtime where something else can run in
+    /// between. Nothing else can here -- a builtin runs between two bytecode
+    /// instructions and the scheduler is cooperative -- but the pair exists as
+    /// one call anyway, because "capture, then stop" being atomic is the whole
+    /// property a caller is relying on and it should not depend on knowing that.
+    #[no_mangle]
+    pub extern "C" fn flint_snapshot_export_and_stop() -> u32 {
+        let rt = rt();
+        if !flint_rt::snap::export_live(rt, buf()) {
+            return 0;
+        }
+        let n = buf().len() as u32;
+        flint_rt::snap::halt(rt);
+        n
     }
 }
 

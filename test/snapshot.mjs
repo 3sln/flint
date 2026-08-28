@@ -121,5 +121,74 @@ new Uint8Array(e.memory.buffer, sp, beforeBytes.length).set(beforeBytes);
 ok('  ... while its own program still accepts it',
    e.flint_snapshot_restore(beforeBytes.length) === 1 && e.flint_snapshot_refused() === 0);
 
+// --- the LIVE-SET export: relocatable, and no dead objects in it -------------
+//
+// `flint_snapshot_capture` copies the heap verbatim, which carries dead objects
+// and unused reserve and can only be restored to identical addresses. That is
+// the right instrument for a post-mortem and the wrong one for SHELVING a
+// sandbox. `flint_snapshot_export` walks the live set instead -- and the walk is
+// the COLLECTOR's, not a second one written here, which is what keeps
+// `doc/decisions/0015`'s objection to traversals from applying.
+const { module: liveModule } = await load('out/sn-work.wasm');
+const live = instantiate(liveModule);
+const le = live.exports;
+const answer = live.main();
+const exportBytes = (() => {
+  const n = le.flint_snapshot_export();
+  return new Uint8Array(le.memory.buffer, le.flint_snapshot_ptr(), n).slice();
+})();
+const verbatim = (() => {
+  const n = le.flint_snapshot_capture();
+  return new Uint8Array(le.memory.buffer, le.flint_snapshot_ptr(), n).slice();
+})();
+ok('the live set exports at all', exportBytes.length > 0);
+console.log(`    live set ${exportBytes.length} bytes against ${verbatim.length} verbatim ` +
+            `(${(100 * exportBytes.length / verbatim.length).toFixed(1)}%)`);
+ok('  ... and is far smaller than a copy of the heap',
+   exportBytes.length * 4 < verbatim.length,
+   `${exportBytes.length} vs ${verbatim.length}`);
+
+// Into a SEPARATE instance, which is the point: the verbatim format restores to
+// identical addresses and cannot cross an instance at all.
+const { module: freshModule } = await load('out/sn-work.wasm');
+const fresh = instantiate(freshModule);
+const fe = fresh.exports;
+const ip = fe.flint_snapshot_alloc(exportBytes.length);
+new Uint8Array(fe.memory.buffer, ip, exportBytes.length).set(exportBytes);
+ok('a live set imports into a DIFFERENT instance',
+   fe.flint_snapshot_import(exportBytes.length) === 1,
+   `refused=${fe.flint_snapshot_refused()}`);
+
+// The state really came across: re-exporting the imported state gives the same
+// bytes. Address order is the walk order, so this is only true if every object
+// and every pointer arrived.
+const reExport = (() => {
+  const n = fe.flint_snapshot_export();
+  return new Uint8Array(fe.memory.buffer, fe.flint_snapshot_ptr(), n).slice();
+})();
+ok('  ... and re-exporting the imported state gives the same bytes',
+   reExport.length === exportBytes.length && reExport.every((x, i) => x === exportBytes[i]),
+   `${reExport.length} vs ${exportBytes.length}`);
+
+// And a live set from another program is refused, exactly as a verbatim one is.
+const op2 = oe.flint_snapshot_alloc(exportBytes.length);
+new Uint8Array(oe.memory.buffer, op2, exportBytes.length).set(exportBytes);
+ok('  ... and another program refuses it, naming the image',
+   oe.flint_snapshot_import(exportBytes.length) === 0 && oe.flint_snapshot_refused() === 2);
+
+// --- export and stop --------------------------------------------------------
+const { module: shelfModule } = await load('out/sn-work.wasm');
+const shelf = instantiate(shelfModule);
+const se = shelf.exports;
+shelf.main();
+const shelved = se.flint_snapshot_export_and_stop();
+ok('export-and-stop returns a snapshot', shelved > 0);
+// The control first: a plain export must NOT stop anything, or the assertion
+// below would pass for a reason that has nothing to do with stopping.
+ok('  ... and a plain export leaves the sandbox running',
+   le.flint_snapshot_stopped() === 0);
+ok('  ... while export-and-stop leaves it with nothing runnable',
+   se.flint_snapshot_stopped() === 1);
+
 console.log(fails === 0 ? 'snapshots: ok' : `snapshots: ${fails} FAILURES`);
 process.exitCode = fails === 0 ? 0 : 1;

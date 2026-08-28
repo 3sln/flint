@@ -9,7 +9,7 @@
 
 use crate::mem::Region;
 use crate::rt::Rt;
-use crate::value::Value;
+use crate::value::{Value, NIL};
 use crate::vm::{Frame, Handler};
 use alloc::vec::Vec;
 
@@ -60,6 +60,11 @@ impl<'a> R<'a> {
     fn u32(&mut self) -> u32 {
         let v = u32::from_le_bytes([self.b[self.i], self.b[self.i + 1], self.b[self.i + 2], self.b[self.i + 3]]);
         self.i += 4;
+        v
+    }
+    fn u8(&mut self) -> u8 {
+        let v = self.b[self.i];
+        self.i += 1;
         v
     }
     fn u64(&mut self) -> u64 {
@@ -474,4 +479,500 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     // LAST, after the heap is in place: an imported snapshot grants nothing.
     rt.restored_capabilities = invalidate_host_opaques(rt);
     true
+}
+
+// ---------------------------------------------------------------------------
+// The LIVE-SET export: relocatable, and no dead objects in it.
+//
+// `capture`/`restore` above copy the heap verbatim. That is the right
+// instrument for a POST-MORTEM -- it can capture a heap that is already
+// corrupt, which is the one case a walk cannot -- and the wrong one for
+// SHELVING, for two reasons the memcpy design cannot fix:
+//
+//   * it copies whatever is in the semispaces, dead objects and unused reserve
+//     included. A trivial program's snapshot is 5.2 MB of which 1.6 MB is live;
+//   * it pins the restore to identical addresses, because rewriting pointers
+//     "would mean a traversal, which is the thing this design exists to avoid".
+//     Shelving needs the opposite: rehydrate in another process, another heap.
+//
+// So this one traverses. `doc/decisions/0015`'s objection to a traversal is
+// that one which misses an edge yields a snapshot missing an object, and then
+// the capture is what needs debugging. That objection is fatal to a BESPOKE
+// traversal and not to this one, because **the collector decides what is live
+// and this only enumerates what survived**. A missed edge here would be a
+// collector bug that loses objects in ordinary running, which is a thing the
+// suite already checks for from several directions.
+//
+// It costs a major collection, which is also what it buys: the live set is
+// dense, so the export is the size of the data rather than the size of the
+// heap.
+
+/// "FLSX". A different format from `MAGIC`, deliberately: the two are not
+/// interchangeable and a reader should not have to guess.
+pub const MAGIC_LIVE: u32 = 0x464C_5358;
+pub const VERSION_LIVE: u32 = 1;
+
+/// How a `Value` is written when it may point at the heap. One byte, so the
+/// encoding is unambiguous rather than clever: a NaN-boxed value uses the bits
+/// a tag would want.
+const V_LITERAL: u8 = 0;
+const V_REF: u8 = 1;
+
+/// Every live object, in address order after a collection.
+///
+/// Address order rather than discovery order because it is derived from the
+/// heap rather than from a walk this file wrote -- one less thing that can be
+/// subtly wrong and still look plausible.
+fn live_objects(rt: &Rt) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::new();
+    let sp = &rt.gc.sp;
+    // The nursery is contiguous: a copying minor leaves exactly the survivors
+    // between `from` and `bump`.
+    let mut a = rt.gc.from;
+    while a < rt.gc.bump {
+        let size = crate::obj::size_of(sp, a);
+        if size == 0 {
+            break;
+        }
+        out.push(a);
+        a += size;
+    }
+    // Old space is swept, so the holes are `TY_FREE` and everything else is
+    // live.
+    for ch in &rt.gc.old_chunks {
+        let mut a = ch.addr;
+        let end = ch.addr + ch.len;
+        while a < end {
+            let size = crate::obj::size_of(sp, a);
+            if size == 0 {
+                break;
+            }
+            let t = crate::obj::ty(sp, a);
+            if t != crate::obj::TY_FREE {
+                out.push(a);
+            }
+            a += size;
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+struct Index {
+    addrs: Vec<u32>,
+}
+
+impl Index {
+    fn of(&self, addr: u32) -> Option<u32> {
+        self.addrs.binary_search(&addr).ok().map(|i| i as u32)
+    }
+}
+
+fn write_value(w: &mut W, v: Value, ix: &Index) -> bool {
+    if v.is_heap() {
+        match ix.of(v.as_heap()) {
+            Some(i) => {
+                w.b.push(V_REF);
+                w.u32(i);
+                true
+            }
+            // A heap pointer to something the collector did not keep. That is
+            // not a snapshot problem to paper over -- it means the walk and the
+            // collector disagree, which is exactly the failure this design is
+            // supposed to make impossible. Refuse, loudly, rather than write a
+            // snapshot with a hole in it.
+            None => false,
+        }
+    } else {
+        w.b.push(V_LITERAL);
+        w.u64(v.bits());
+        true
+    }
+}
+
+/// Export the live set. Returns false if the walk and the collector disagreed.
+pub fn export_live(rt: &mut Rt, out: &mut Vec<u8>) -> bool {
+    // The collector decides what is live. Everything below only enumerates.
+    rt.gc.major(&mut rt.roots);
+
+    let addrs = live_objects(rt);
+    let ix = Index { addrs };
+    out.clear();
+    let mut w = W { b: core::mem::take(out) };
+    w.u32(MAGIC_LIVE);
+    w.u32(VERSION_LIVE);
+    w.u64(rt.image.fingerprint);
+
+    // --- objects: type, len, then the body.
+    w.usz(ix.addrs.len());
+    let mut ok = true;
+    for &a in &ix.addrs {
+        let t = crate::obj::ty(&rt.gc.sp, a);
+        let n = crate::obj::len(&rt.gc.sp, a);
+        w.b.push(t);
+        w.u32(n);
+        match crate::obj::layout_of(t) {
+            crate::obj::Layout::Vals => {
+                for i in 0..n {
+                    let v = crate::obj::slot(&rt.gc.sp, a, i);
+                    ok &= write_value(&mut w, v, &ix);
+                }
+            }
+            // Everything past the standard header, verbatim. A string keeps
+            // eight bytes of its own header before its bytes and the collector
+            // does not scan them, so copying them raw is what preserves them.
+            _ => {
+                let size = crate::obj::size_of(&rt.gc.sp, a);
+                let body = size - crate::obj::HDR;
+                w.u32(body);
+                let bytes: Vec<u8> = rt.gc.sp.bytes(a + crate::obj::HDR, body).to_vec();
+                w.b.extend_from_slice(&bytes);
+            }
+        }
+    }
+
+    // --- roots, the same set `capture_into` writes and for the same reasons.
+    let vals = |w: &mut W, xs: &[Value], ix: &Index, ok: &mut bool| {
+        w.usz(xs.len());
+        for v in xs {
+            *ok &= write_value(w, *v, ix);
+        }
+    };
+    w.usz(rt.roots.stack_top);
+    let stack: Vec<Value> = rt.roots.stack[..rt.roots.stack_top].to_vec();
+    vals(&mut w, &stack, &ix, &mut ok);
+    let shadow: Vec<Value> = rt.roots.shadow.clone();
+    vals(&mut w, &shadow, &ix, &mut ok);
+    let globals: Vec<Value> = rt.roots.shared.globals.iter().map(|g| g.get()).collect();
+    vals(&mut w, &globals, &ix, &mut ok);
+    let consts: Vec<Value> = rt.roots.shared.consts.clone();
+    vals(&mut w, &consts, &ix, &mut ok);
+    let singletons: Vec<Value> = rt.roots.shared.singletons.clone();
+    vals(&mut w, &singletons, &ix, &mut ok);
+
+    // Intern tables are WEAK: an entry whose value did not survive is CLEARED
+    // rather than written as a dangling index.
+    //
+    // Cleared IN PLACE, not compacted. These are open-addressed, so a slot's
+    // position is part of the data structure -- dropping an entry from the
+    // middle moves every later one out from under its probe sequence, and the
+    // symptom would be a symbol that exists and cannot be found.
+    w.usz(rt.roots.shared.interns.len());
+    let tables: Vec<Vec<(u32, u64)>> =
+        rt.roots.shared.interns.iter().map(|t| t.slots.clone()).collect();
+    for slots in &tables {
+        w.usz(slots.len());
+        let mut count = 0usize;
+        let mut kept: Vec<(u32, Value)> = Vec::with_capacity(slots.len());
+        for (h, v) in slots {
+            let v = Value(*v);
+            let live = !v.is_heap() || ix.of(v.as_heap()).is_some();
+            if live && !(*h == 0 && v.bits() == 0) {
+                count += 1;
+                kept.push((*h, v));
+            } else {
+                kept.push((0, Value(0)));
+            }
+        }
+        w.usz(count);
+        for (h, v) in &kept {
+            w.u32(*h);
+            ok &= write_value(&mut w, *v, &ix);
+        }
+    }
+
+    // --- interpreter state, byte for byte as the verbatim format writes it.
+    w.usz(rt.frames.len());
+    for f in &rt.frames {
+        w.usz(f.fp);
+        w.u32(f.ip);
+        w.u32(f.end);
+        w.usz(f.ret_to);
+        w.usz(f.handlers);
+    }
+    w.usz(rt.handlers.len());
+    for h in &rt.handlers {
+        w.usz(h.frame);
+        w.usz(h.stack_top);
+        w.u32(h.target);
+        w.usz(h.shadow);
+    }
+    ok &= write_value(&mut w, rt.thrown, &ix);
+    ok &= write_value(&mut w, rt.park_on, &ix);
+    w.u64(rt.steps);
+    w.u64(rt.gas_limit);
+    w.u64(rt.slice_end);
+    w.u64(rt.checkpoint);
+    w.u32(rt.gas_trips);
+    w.u32(rt.mem_trips);
+    w.u32(rt.status as u32);
+    w.u32(rt.champ_added as u32);
+    *out = w.b;
+    ok
+}
+
+/// Read a value written by `write_value`. `map` turns a snapshot index into the
+/// address it was rebuilt at.
+fn read_value(r: &mut R, map: &[u32]) -> Value {
+    match r.u8() {
+        V_REF => {
+            let i = r.u32() as usize;
+            Value::heap(map[i])
+        }
+        _ => Value(r.u64()),
+    }
+}
+
+/// Import a live-set export. Refuses a different layout or a different program,
+/// exactly as `restore` does, and for the same reason: every index in it means
+/// something only against the image it came from.
+pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
+    if bytes.len() < 16 {
+        unsafe { REFUSED = REFUSE_LAYOUT };
+        return false;
+    }
+    let mut r = R { b: bytes, i: 0 };
+    unsafe { REFUSED = REFUSE_NONE };
+    if r.u32() != MAGIC_LIVE || r.u32() != VERSION_LIVE {
+        unsafe { REFUSED = REFUSE_LAYOUT };
+        return false;
+    }
+    if r.u64() != rt.image.fingerprint {
+        unsafe { REFUSED = REFUSE_IMAGE };
+        return false;
+    }
+
+    // Nothing of the old state may be reachable while the new objects are
+    // being built, or a collection in the middle would try to keep both.
+    rt.frames.clear();
+    rt.handlers.clear();
+    rt.roots.stack_top = 0;
+    rt.roots.shadow.clear();
+    for g in rt.roots.shared.globals.iter() {
+        g.set(NIL);
+    }
+
+    // Pass one: allocate every object, empty.
+    //
+    // The addresses are held on the SHADOW STACK rather than in a Rust vector,
+    // because allocating can collect and a collection moves what it has already
+    // built. That is not a hypothetical: it is `doc/decisions/0031`, one file
+    // over, and the shadow stack is what makes it a non-question here.
+    let n = r.usz();
+    let base = rt.mark();
+    let mut bodies: Vec<(u8, u32, usize)> = Vec::with_capacity(n);
+    let mut at = r.i;
+    for _ in 0..n {
+        let t = r.u8();
+        let len = r.u32();
+        let a = rt.alloc(t, len);
+        if a == 0 {
+            rt.pop_to(base);
+            unsafe { REFUSED = REFUSE_LAYOUT };
+            return false;
+        }
+        rt.push(Value::heap(a));
+        // Skip the body; pass two comes back for it once every address exists.
+        match crate::obj::layout_of(t) {
+            crate::obj::Layout::Vals => {
+                for _ in 0..len {
+                    if r.u8() == V_REF {
+                        r.u32();
+                    } else {
+                        r.u64();
+                    }
+                }
+            }
+            _ => {
+                let body = r.u32() as usize;
+                r.i += body;
+            }
+        }
+        bodies.push((t, len, at));
+        at = r.i;
+    }
+
+    // Every address, now that they all exist and nothing more will move them:
+    // the objects are all rooted, so the map is taken AFTER the last allocation.
+    let map: Vec<u32> = (0..n).map(|i| rt.r(base + i).as_heap()).collect();
+
+    // Pass two: fill the bodies.
+    for (i, (t, len, off)) in bodies.iter().enumerate() {
+        let a = map[i];
+        let mut rr = R { b: bytes, i: *off };
+        // The type and length again -- `off` points at the record, not past it.
+        rr.u8();
+        rr.u32();
+        match crate::obj::layout_of(*t) {
+            crate::obj::Layout::Vals => {
+                for k in 0..*len {
+                    let v = read_value(&mut rr, &map);
+                    crate::obj::set_slot_raw(&rt.gc.sp, a, k, v);
+                }
+            }
+            _ => {
+                let body = rr.u32();
+                let src: Vec<u8> = bytes[rr.i..rr.i + body as usize].to_vec();
+                rt.gc.sp.bytes_mut(a + crate::obj::HDR, body).copy_from_slice(&src);
+            }
+        }
+    }
+    // An old object may now point at a young one, and the write barrier was
+    // bypassed on purpose above -- `set_slot_raw` is what makes pass two a fill
+    // rather than N barrier calls. Enrol every old object once, here.
+    for &a in &map {
+        if !rt.gc.is_young(a) {
+            rt.gc.remember(a, &mut rt.roots.own.remembered);
+        }
+    }
+
+    // --- roots
+    let mut r = R { b: bytes, i: at };
+    let stack_top = r.usz();
+    let ns = r.usz();
+    let mut stack = Vec::with_capacity(ns);
+    for _ in 0..ns {
+        stack.push(read_value(&mut r, &map));
+    }
+    let nsh = r.usz();
+    let mut shadow = Vec::with_capacity(nsh);
+    for _ in 0..nsh {
+        shadow.push(read_value(&mut r, &map));
+    }
+    let ng = r.usz();
+    let mut globals = Vec::with_capacity(ng);
+    for _ in 0..ng {
+        globals.push(read_value(&mut r, &map));
+    }
+    let nc = r.usz();
+    let mut consts = Vec::with_capacity(nc);
+    for _ in 0..nc {
+        consts.push(read_value(&mut r, &map));
+    }
+    let nsg = r.usz();
+    let mut singletons = Vec::with_capacity(nsg);
+    for _ in 0..nsg {
+        singletons.push(read_value(&mut r, &map));
+    }
+    let nt = r.usz();
+    let mut interns = Vec::with_capacity(nt);
+    for _ in 0..nt {
+        let cap = r.usz();
+        let count = r.usz();
+        let mut slots = Vec::with_capacity(cap);
+        for _ in 0..cap {
+            let h = r.u32();
+            let v = read_value(&mut r, &map);
+            slots.push((h, v.bits()));
+        }
+        interns.push(crate::gc::InternTable { slots, count });
+    }
+
+    // --- interpreter state
+    let nf = r.usz();
+    let mut frames = Vec::with_capacity(nf);
+    for _ in 0..nf {
+        let fp = r.usz();
+        let ip = r.u32();
+        let end = r.u32();
+        let ret_to = r.usz();
+        let handlers = r.usz();
+        frames.push(Frame {
+            fp,
+            ip,
+            end,
+            ret_to,
+            handlers,
+            #[cfg(feature = "aot")]
+            aot_idx: crate::vm::AOT_NONE,
+            #[cfg(feature = "aot")]
+            aot_ip: crate::vm::AOT_NEVER,
+            #[cfg(feature = "aot")]
+            aot_block: 0,
+            #[cfg(feature = "diagnostics")]
+            instrs: 0,
+            #[cfg(feature = "diagnostics")]
+            resumed: true,
+        });
+    }
+    let nh = r.usz();
+    let mut handlers = Vec::with_capacity(nh);
+    for _ in 0..nh {
+        handlers.push(Handler {
+            frame: r.usz(),
+            stack_top: r.usz(),
+            target: r.u32(),
+            shadow: r.usz(),
+        });
+    }
+    let thrown = read_value(&mut r, &map);
+    let park_on = read_value(&mut r, &map);
+    let steps = r.u64();
+    let gas_limit = r.u64();
+    let slice_end = r.u64();
+    let checkpoint = r.u64();
+    let gas_trips = r.u32();
+    let mem_trips = r.u32();
+    let status = r.u32();
+    let champ_added = r.u32() != 0;
+
+    rt.pop_to(base);
+    rt.roots.stack.clear();
+    rt.roots.stack.extend_from_slice(&stack);
+    rt.roots.stack.resize(stack.len().max(stack_top) + 64, NIL);
+    rt.roots.stack_top = stack_top;
+    rt.roots.shadow = shadow;
+    for (i, v) in globals.iter().enumerate() {
+        if i < rt.roots.shared.globals.len() {
+            rt.roots.shared.globals[i].set(*v);
+        }
+    }
+    rt.roots.shared.consts = consts;
+    rt.roots.shared.singletons = singletons;
+    for (i, t) in interns.into_iter().enumerate() {
+        if i < rt.roots.shared.interns.len() {
+            rt.roots.shared.interns[i] = t;
+        }
+    }
+    rt.frames = frames;
+    rt.handlers = handlers;
+    rt.thrown = thrown;
+    rt.park_on = park_on;
+    rt.steps = steps;
+    rt.gas_limit = gas_limit;
+    rt.slice_end = slice_end;
+    rt.checkpoint = checkpoint;
+    rt.gas_trips = gas_trips;
+    rt.mem_trips = mem_trips;
+    rt.status = status as i32;
+    rt.champ_added = champ_added;
+    // LAST, and for the same reason as `restore`: an imported snapshot grants
+    // nothing. A host that wants to re-grant mints fresh capabilities.
+    rt.restored_capabilities = invalidate_host_opaques(rt);
+    true
+}
+
+/// `main` should report "this sandbox was shelved", not "here is your answer".
+/// 0 is a normal return and 2 is "I need the host" (`doc/decisions/0005`), so
+/// this takes the next free code rather than overloading either.
+pub const STATUS_SHELVED: i32 = 3;
+
+/// Leave the sandbox with nothing runnable.
+///
+/// Not a flag the interpreter has to consult: there is simply nothing left to
+/// run. The frame stack IS the continuation here -- that is what makes green
+/// threads and snapshots cheap in the first place -- so dropping it is what
+/// "stopped" means, and no loop needs a new condition in it.
+///
+/// The heap is deliberately left alone. It has just been exported, and a caller
+/// that wants the memory back drops the whole instance; a caller that wants to
+/// look at what it shelved still can.
+pub fn halt(rt: &mut Rt) {
+    rt.frames.clear();
+    rt.handlers.clear();
+    rt.roots.stack_top = 0;
+    rt.roots.shadow.clear();
+    rt.park_on = NIL;
+    rt.thrown = NIL;
+    rt.status = STATUS_SHELVED;
 }

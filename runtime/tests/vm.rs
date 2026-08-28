@@ -954,3 +954,58 @@ fn a_snapshot_resumes_with_the_same_answer_and_the_same_instruction_count() {
     assert_eq!(fresh.as_i64(resumed), through, "resumed to a different answer");
     assert_eq!(fresh.steps, through_steps, "resumed to a different instruction count");
 }
+
+/// The LIVE-SET export round-trips, and into a DIFFERENT `Rt`.
+///
+/// That second half is the point of the format existing: the verbatim capture
+/// restores to identical addresses by design, so it cannot cross an instance at
+/// all. Shelving a sandbox means rehydrating somewhere else.
+#[test]
+fn a_live_set_exports_and_imports_into_another_rt() {
+    let mut w = ImageWriter::new();
+    let k = w.k_string("value");
+    let body = {
+        let mut a = Asm::new();
+        for _ in 0..40 {
+            a.op(op::CONST).u16v(k as u16);
+        }
+        a.op(op::VECTOR).u16v(40);
+        a.op(op::RETURN);
+        a.done()
+    };
+    let n = w.k_string("main");
+    w.entry = w.add_fn(n, 1, false, 2, &body);
+    let bytes = w.finish();
+
+    let mut rt = flint_rt::rt::Rt::new();
+    rt.install_host_natives();
+    assert!(rt.load_image(&bytes));
+    let argv = rt.empty_vec();
+    let _ = rt.run_program(argv);
+
+    let mut out = alloc_vec();
+    assert!(flint_rt::snap::export_live(&mut rt, &mut out), "the walk disagreed with the collector");
+    assert!(!out.is_empty());
+
+    // A SECOND runtime, same image, no shared state.
+    let mut fresh = flint_rt::rt::Rt::new();
+    fresh.install_host_natives();
+    assert!(fresh.load_image(&bytes));
+    assert!(
+        flint_rt::snap::import_live(&mut fresh, &out),
+        "import refused a live set from the same image (reason {})",
+        unsafe { flint_rt::snap::REFUSED }
+    );
+
+    // Re-exporting the imported state gives the same bytes: the export is in
+    // address order, so this only holds if every object and every pointer
+    // arrived.
+    let mut again = alloc_vec();
+    assert!(flint_rt::snap::export_live(&mut fresh, &mut again));
+    assert_eq!(out.len(), again.len(), "live set length changed across the trip");
+    assert!(out == again, "live set bytes changed across the trip");
+}
+
+fn alloc_vec() -> std::vec::Vec<u8> {
+    std::vec::Vec::new()
+}

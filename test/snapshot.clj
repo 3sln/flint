@@ -50,8 +50,17 @@
 ;; than what 0005 claims. What is measurable here is the claim itself -- that
 ;; asking for snapshots is what costs, and not asking costs nothing -- which the
 ;; symbol checks above settle exactly, and the delta below bounds.
+;; The bound moved from 25 000 to 45 000 when the LIVE-SET format landed, and
+;; the delta is the whole of what that format is: a serialiser and a
+;; deserialiser, against a `memcpy` and a `memcpy` back. Measured at 41 431
+;; bytes against 19 586 before.
+;;
+;; Worth it, and the number that says so is on the other side: the same program's
+;; state exports at 38 524 bytes as a live set against 5 275 808 verbatim. The
+;; module pays 22 KB once; every snapshot after that is 0.7% of the size, and can
+;; be imported into an instance that has never run.
 (check-that "the snapshot surface costs only the program that asks for it"
-            (< (- snap-size pure-size) 25000))
+            (< (- snap-size pure-size) 45000))
 
 ;; The program the inspector is pointed at: it allocates, snapshots, allocates
 ;; more, and snapshots again, so the two can be diffed across real work.

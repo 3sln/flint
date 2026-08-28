@@ -138,7 +138,7 @@ cat > units/flint/snapshot.unit.edn <<'UNIT'
  :artifact "snapshot.o"
  :requires [flint.rt]
  :abi {:runtime 1 :value 1 :image 1}
- :exports ["flint_snapshot_capture" "flint_snapshot_ptr" "flint_snapshot_alloc" "flint_snapshot_restore" "flint_snapshot_refused" "flint_image_fingerprint"]
+ :exports ["flint_snapshot_capture" "flint_snapshot_ptr" "flint_snapshot_alloc" "flint_snapshot_restore" "flint_snapshot_refused" "flint_image_fingerprint" "flint_snapshot_export" "flint_snapshot_import" "flint_snapshot_export_and_stop" "flint_snapshot_stopped"]
  :provides {"flint/snapshot" {:symbol "flint_b_snapshot"}
             "flint/snapshot-size" {:symbol "flint_b_snapshot_size"}
             "flint/snapshot-restore" {:symbol "flint_b_snapshot_restore"}}}
