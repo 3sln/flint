@@ -227,7 +227,7 @@ fn park_a_string_and_collect(unhook: bool) -> (u64, bool) {
     rt.pop_to(0);
 
     if unhook {
-        rt.roots.singletons[flint_rt::rt::SING_SCHED] = NIL;
+        rt.roots.shared.singletons[flint_rt::rt::SING_SCHED] = NIL;
     }
     let before = rt.gc.stats.bytes_copied;
     rt.collect();
