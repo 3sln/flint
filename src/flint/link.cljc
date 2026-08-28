@@ -251,6 +251,18 @@
         pick (some->> (System/getenv "FLINT_AOT_PICK")
                       (#(clojure.string/split % #","))
                       (map parse-long) set)
+        ;; Name the arity a bisection is pointing at. `FLINT_AOT_ONLY=106` says
+        ;; WHICH one is at fault only if something prints what 106 is, and the
+        ;; index is a position in this flattened list -- it is not derivable
+        ;; from anything the module carries afterwards.
+        name-k (some-> (System/getenv "FLINT_AOT_NAME") parse-long)
+        _ (when name-k
+            (doseq [[k [fi ai a]] (map-indexed vector slots-of)
+                    :when (= k name-k)]
+              (println (format "  aot arity %d = fn %d arity %d %s (off %d len %d argc %d)"
+                               k fi ai
+                               (pr-str (nth (:consts @b) (:name (nth (:fns @b) fi)) nil))
+                               (:off a) (:len a) (:argc a)))))
         results (mapv (fn [k [fi ai a]]
                         [fi ai (when (and (or (nil? limit) (< k limit))
                                           (>= k from)
