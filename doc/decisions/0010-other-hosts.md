@@ -68,6 +68,18 @@ Still a real backend: constant pools, `StackMapTable`, call sites. Clojure itsel
 proves the path exists. But it is the expensive tier and it buys speed rather
 than reach.
 
+> **BUILT for both, and NOT in flint** (`0029`, `0030`). The emitters are 358
+> lines of Java and 379 of C#, leaning on `java.lang.classfile` and
+> `Reflection.Emit`. That gives up the "keep the compilers in flint so cross
+> compilation is free" property this document argues for -- there is no way to
+> emit JVM bytecode or IL without that platform present -- and it was taken
+> deliberately, because writing a class-file and a PE/metadata encoder in flint
+> costs more than it buys today. `flint.aot` still keeps the wasm backend in
+> flint, so that target keeps the property.
+>
+> They also compile on FIRST CALL rather than at build time, so unlike the wasm
+> backend they produce nothing shippable. Measured at 1.67x and 1.53x.
+
 ## The hard part is not the VM. It is semantic drift.
 
 "Lean on their core libraries" is right for cost and dangerous for meaning. Every

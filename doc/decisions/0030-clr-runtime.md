@@ -40,6 +40,21 @@ There is no safepoint to build because there is no collector of ours to stop.
 read-modify-write in `lib/clojure/core.cljc`. The test asserts the loss rather
 than wishing otherwise; `doc/decisions/0013` records why the fix is not on.
 
+## The emitter lives on the platform, and compiles on first call
+
+`System.Reflection.Emit` builds a `DynamicMethod` per arity, the first time
+that arity is called. Two things follow, both recorded in `0029` and true here:
+
+* **No cross-compilation.** Emitting IL needs .NET present, so there is no
+  `flint compile :to :clr` producing a DLL from any host. That is the cost of
+  not writing the emitter in flint, and it was taken deliberately: a loadable
+  assembly means PE plus metadata tables, which is a much larger format than
+  the class file the JVM would need.
+* **It is not ahead of deployment.** The wasm backend splices compiled arities
+  into the artifact at build time; this one compiles into memory on first call.
+  Both are called AOT in the harness and only one produces something you can
+  ship.
+
 ## What is missing
 
 Most of the 143 builtins the flint compiler itself imports, and AOT — which on

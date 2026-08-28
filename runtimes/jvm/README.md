@@ -35,7 +35,22 @@ whichever module it was linked against.
 | image format | complete |
 | opcodes | all 46 |
 | builtins | ~40 of the 143 the compiler itself imports |
-| conformance | `bin/conform-hosts`, 3 of 4 cases agreeing |
+| conformance | `bin/conform-hosts`, every case agreeing |
+| threads | several threads on one program |
+| AOT | `java.lang.classfile`, on first call, 1.67x |
+
+## The emitter is Java, and compiles on first call
+
+Two things worth knowing before relying on it:
+
+**There is no cross-compilation.** Unlike the wasm backend -- which is
+`src/flint/aot.cljc`, written in flint -- this emitter is Java, so producing
+JVM bytecode needs a JVM present. Deliberate; see `doc/decisions/0029`.
+
+**It is not ahead of deployment.** Each arity is compiled the first time it is
+called, into a hidden class in memory. Nothing is written out. The wasm
+backend splices compiled arities into the artifact at build time; this does
+not.
 
 Missing builtins are **absent, not stubbed**. Reaching one names it. A stub
 returning `nil` would let a program get a wrong answer quietly here and the

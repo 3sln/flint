@@ -43,6 +43,12 @@ safepoint to build because there is no collector of ours to stop.
 `lib/clojure/core.cljc`, and the test says so rather than wishing otherwise.
 Not a CLR problem; see `doc/decisions/0013`.
 
+## The emitter is C#, and compiles on first call
+
+`Reflection.Emit` builds a `DynamicMethod` per arity, the first time it is
+called. So there is no cross-compilation -- emitting IL needs .NET present --
+and nothing shippable is produced. Deliberate; see `doc/decisions/0030`.
+
 ## What is missing
 
 Most of the 143 builtins the flint compiler itself imports, and AOT.
