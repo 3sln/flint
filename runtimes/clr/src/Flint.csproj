@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <AssemblyName>Flint</AssemblyName>
+    <RootNamespace>Flint</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The value stack is indexed constantly and every index is already
+         checked by the interpreter's own invariants. -->
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+</Project>

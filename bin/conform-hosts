@@ -16,6 +16,16 @@ if [ ! -x "$JDK/bin/javac" ]; then
   exit 0
 fi
 
+# The CLR rows are skipped rather than failed when there is no dotnet: the rest
+# of the suite must not need one installed.
+export DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}"
+CLR=""
+if command -v dotnet >/dev/null 2>&1; then
+  (cd runtimes/clr/conform && dotnet build -v q --nologo -c Release) >/dev/null 2>&1 \
+    && CLR="runtimes/clr/conform/bin/Release/net10.0/Conform"
+  [ -x "$CLR" ] || CLR=""
+fi
+
 mkdir -p out/conform
 "$JDK/bin/javac" -d runtimes/jvm/classes runtimes/jvm/src/com/flint/*.java \
   runtimes/jvm/test/*.java 2>&1 | head -20
@@ -27,11 +37,20 @@ if [ -f out/conform/threads.img ] || ./bin/flint :src runtimes/conform :fn threa
      --emit-image :out out/conform/threads.img >/dev/null 2>&1; then
   if "$JDK/bin/java" -cp runtimes/jvm/classes ThreadTest out/conform/threads.img \
        > /tmp/flint-jvm-threads.out 2>&1; then
-    grep -E "^  ok" /tmp/flint-jvm-threads.out | sed 's/$/ [jvm threads]/'
+    grep -E "^  ok" /tmp/flint-jvm-threads.out | sed 's/$/ [jvm]/'
   else
     cat /tmp/flint-jvm-threads.out
     echo "  FAIL jvm threads"
     exit 1
+  fi
+  if [ -n "$CLR" ]; then
+    if "$CLR" --threads out/conform/threads.img > /tmp/flint-clr-threads.out 2>&1; then
+      grep -E "^  ok" /tmp/flint-clr-threads.out | sed 's/$/ [clr]/'
+    else
+      cat /tmp/flint-clr-threads.out
+      echo "  FAIL clr threads"
+      exit 1
+    fi
   fi
 fi
 
@@ -49,14 +68,20 @@ for src in runtimes/conform/*.cljc; do
   # first divergence and hide every case after it.
   native="$(./target/release/flint run :path runtimes/conform :fn "$ns/main" 2>&1 || true)"
   jvm="$("$JDK/bin/java" -cp runtimes/jvm/classes Conform "out/conform/$ns.img" 2>&1 || true)"
+  clr=""
+  [ -n "$CLR" ] && clr="$("$CLR" "out/conform/$ns.img" 2>&1 || true)"
 
-  if [ "$native" = "$jvm" ]; then
+  bad=""
+  [ "$native" = "$jvm" ] || bad="jvm"
+  [ -n "$CLR" ] && [ "$native" != "$clr" ] && bad="${bad} clr"
+  if [ -z "$bad" ]; then
     echo "  ok   $ns"
   else
     fails=$((fails + 1))
-    echo "  FAIL $ns"
+    echo "  FAIL $ns ($bad)"
     echo "        native $native"
     echo "        jvm    $jvm"
+    [ -n "$CLR" ] && echo "        clr    $clr"
   fi
 done
 

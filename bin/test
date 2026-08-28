@@ -275,7 +275,7 @@ grep -E "collections with two executors" /tmp/flint-test.out | sed 's/^ */    /'
 grep -E "^test result" /tmp/flint-test.out | sed 's/^/    /'
 
 echo
-echo "== hosts: one program, two runtimes, diffed (0010, 0029)"
+echo "== hosts: one program, three runtimes, diffed (0010, 0029, 0030)"
 # The JVM port's gate. Skips itself when there is no JDK, because the rest of
 # the suite must not depend on one being installed.
 ./bin/conform-hosts > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "conform-hosts"; }

@@ -37,3 +37,5 @@ sdks/*/dist/
 sdks/esm/gen/
 sdks/*/node_modules/
 runtimes/jvm/classes/
+runtimes/clr/*/bin/
+runtimes/clr/*/obj/
