@@ -81,6 +81,7 @@ public sealed class Atom {
 public sealed class Transient {
     internal readonly List<object> List;
     internal readonly List<KeyValuePair<object, object>> Map;
+    internal bool IsSet;
     private Transient(List<object> list, List<KeyValuePair<object, object>> map) {
         List = list; Map = map;
     }
@@ -89,6 +90,11 @@ public sealed class Transient {
             case null: return new Transient(new List<object>(), null);
             case Vec v: return new Transient(new List<object>(v), null);
             case Seq q: return new Transient(new List<object>(q), null);
+            case FlintSet fs: {
+                var xs = new List<object>();
+                foreach (var o in fs) xs.Add(o);
+                return new Transient(xs, null) { IsSet = true };
+            }
             case FlintMap m: {
                 var pairs = new List<KeyValuePair<object, object>>();
                 foreach (var e in m) pairs.Add(e);
@@ -98,6 +104,7 @@ public sealed class Transient {
         }
     }
     public object Persistent() {
+        if (IsSet) return new FlintSet(List);
         if (List != null) return new Vec(List);
         var m = FlintMap.Empty;
         foreach (var e in Map) m = m.Assoc(e.Key, e.Value);
@@ -105,33 +112,49 @@ public sealed class Transient {
     }
 }
 
-/// A sequence that has not been produced yet. Forced ONCE and cached: a thunk
+/// A cons cell: a head and a tail that may not exist yet.
+///
+/// This is what makes laziness lazy. `cons` used to copy its tail into a flat
+/// list, so `(cons x (lazy-seq ...))` forced the whole sequence -- not merely
+/// slow but unbounded, because flint has INFINITE lazy sequences and walking
+/// one to build a list does not end.
+public sealed class Cons {
+    public readonly object Head;
+    /// A `Cons`, a `LazySeq`, a list, or null. Not touched until asked for.
+    public readonly object Tail;
+    public Cons(object head, object tail) { Head = head; Tail = tail; }
+    public override string ToString() => Builtins.PrStr(this);
+}
+
+/// A sequence that has not been produced yet. Stepped ONCE and cached: a thunk
 /// with a side effect that ran twice would make a program say something
 /// different here than on the wasm runtime.
-public sealed class LazySeq : IReadOnlyList<object> {
+public sealed class LazySeq {
     private object _thunk;
-    private List<object> _value;
+    private object _stepped;
     private readonly Vm _vm;
     private readonly object _lock = new();
 
     public LazySeq(Vm vm, object thunk) { _vm = vm; _thunk = thunk; }
 
-    public List<object> Force() {
+    /// ONE step: the thunk's own answer, cached. NOT the whole sequence --
+    /// materialising here is what a chain of lazy seqs turns into a stack
+    /// overflow, one frame per element.
+    public object Step() {
         lock (_lock) {
             if (_thunk != null) {
-                object outv = _vm.Call(_thunk, Array.Empty<object>());
-                var xs = new List<object>();
-                if (outv != null) foreach (var o in Builtins.Iterate(outv)) xs.Add(o);
-                _value = xs;
+                _stepped = _vm.Call(_thunk, Array.Empty<object>());
                 _thunk = null;
             }
-            return _value;
+            return _stepped;
         }
     }
-    public object this[int i] => Force()[i];
-    public int Count => Force().Count;
-    public IEnumerator<object> GetEnumerator() => Force().GetEnumerator();
-    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+    public List<object> Force() {
+        var outl = new List<object>();
+        foreach (var o in Builtins.Iterate(this)) outl.Add(o);
+        return outl;
+    }
     public override string ToString() => Builtins.PrStr(this);
 }
 

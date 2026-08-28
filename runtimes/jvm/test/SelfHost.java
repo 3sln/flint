@@ -10,11 +10,22 @@ import java.util.List;
 /// carries the whole language rather than the part the tests happened to use.
 public class SelfHost {
     public static void main(String[] args) throws Exception {
+        // A thread with a big stack. Each flint call is a JVM frame here, and
+        // the compiler is deeply recursive -- `-Xss` does not apply to the
+        // main thread on every JVM, but a thread's own stackSize always does.
+        Thread t = new Thread(null, () -> { try { run(args); } catch (Throwable e) {
+            e.printStackTrace(); System.exit(1); } }, "flint", 2L * 1024 * 1024 * 1024);
+        t.start();
+        t.join();
+    }
+
+    static void run(String[] args) throws Exception {
         byte[] image = Files.readAllBytes(Path.of("dist/flintc.bytecode"));
         String spec = Files.readString(Path.of(args[0]));
 
         Vm vm = new Vm(Img.read(image));
-        System.out.println("  .. running initialisers");
+        vm.aotEnabled = args.length > 1 && args[1].equals("--aot");
+        System.out.println("  .. running initialisers" + (vm.aotEnabled ? " (aot)" : ""));
         vm.ensureStarted();
         System.out.println("  .. initialisers done");
         // `flint.selfhost/main` is a VAR, not a named entry in the function
@@ -52,7 +63,8 @@ public class SelfHost {
             }
             throw t;
         }
-        System.out.println("  .. compiler returned");
+        System.out.println("  .. compiler returned"
+            + (vm.aotEnabled ? " (" + vm.compiledCount + " arities compiled)" : ""));
 
         String s = Builtins.str(out);
         if (s.startsWith("!missing")) {

@@ -32,6 +32,14 @@ in the wrong shape**, which no crash would have revealed.
   namespace regardless gave a keyword with an empty name. It printed almost
   right and matched nothing, so every lookup keyed by one silently missed.
 
+* **Laziness was not lazy.** `cons` copied its tail into a flat list, so
+  `(cons x (lazy-seq …))` forced the whole sequence. On a chain of lazy seqs
+  that was a stack overflow — one frame per element — and on an INFINITE one it
+  was an `OutOfMemoryError`. Both ports have a real cons cell now, and `first`,
+  `rest` and `seq` step at most one cell. `lazy.cljc` is the case that says so:
+  it takes prefixes of `iterate` and `repeat`, which cannot terminate against a
+  materialising implementation.
+
 ## The floor
 
 `bin/conform-hosts` asserts a minimum number of agreeing cases rather than

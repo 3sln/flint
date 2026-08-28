@@ -66,9 +66,21 @@ public static class Builtins {
     /// Everything flint can walk. `nil` is an empty sequence, which is
     /// Clojure's rule and one the core library leans on.
     public static IEnumerable<object> Iterate(object v) {
+        // Cons cells and lazy seqs are walked ITERATIVELY. Recursing here is
+        // what overflows the stack: a lazy chain is as deep as it is long.
+        if (v is Cons || v is LazySeq) {
+            var outl = new List<object>();
+            object cur = v;
+            while (true) {
+                if (cur == null) return outl;
+                if (cur is LazySeq l) { cur = l.Step(); continue; }
+                if (cur is Cons c) { outl.Add(c.Head); cur = c.Tail; continue; }
+                foreach (var o in Iterate(cur)) outl.Add(o);
+                return outl;
+            }
+        }
         switch (v) {
             case null: return Array.Empty<object>();
-            case LazySeq ls: return ls.Force();
             case FlintMap m: {
                 var outl = new List<object>();
                 foreach (var e in m) outl.Add(new Vec(new[] { e.Key, e.Value }));
@@ -133,7 +145,7 @@ public static class Builtins {
                 return b2.Append('}').ToString();
             }
             case FlintSet st: return Join(st, "#{", "}", readable);
-            case LazySeq ls: return Join(ls.Force(), "(", ")", readable);
+            case LazySeq: case Cons: return Join(Iterate(v), "(", ")", readable);
             case Seq q: return Join(q, "(", ")", readable);
             case Vec vv: return Join(vv, "[", "]", readable);
             default: return v.ToString();
@@ -166,11 +178,49 @@ public static class Builtins {
         8 => v is Vec,
         9 => v is FlintMap,
         10 => v is FlintSet,
-        11 => v is Seq or LazySeq or Vec or FlintSet or FlintMap or string,
+        11 => v is Seq or LazySeq or Cons or Vec or FlintSet or FlintMap or string,
         12 => v is Vm.Closure or Fn or Img.NativeRef,
         13 => v is null,
-        _ => v is Vec or Seq or LazySeq,
+        _ => v is Vec or Seq or LazySeq or Cons,
     };
+
+    /// The first element, without walking what follows.
+    internal static object FirstOf(object v) {
+        object cur = v;
+        while (true) {
+            if (cur == null) return null;
+            if (cur is LazySeq l) { cur = l.Step(); continue; }
+            if (cur is Cons c) return c.Head;
+            foreach (var o in Iterate(cur)) return o;
+            return null;
+        }
+    }
+
+    /// Everything after the first element, without forcing what follows.
+    internal static object RestOf(object v) {
+        object cur = v;
+        while (true) {
+            if (cur == null) return new Seq(new List<object>());
+            if (cur is LazySeq l) { cur = l.Step(); continue; }
+            if (cur is Cons c) return c.Tail ?? new Seq(new List<object>());
+            return new Seq(Tail(cur));
+        }
+    }
+
+    /// Is there a first element? Steps at most one lazy cell.
+    internal static bool IsEmptySeq(object v) {
+        object cur = v;
+        while (true) {
+            if (cur == null) return true;
+            if (cur is LazySeq l) { cur = l.Step(); continue; }
+            if (cur is Cons) return false;
+            if (cur is FlintMap m) return m.Count == 0;
+            if (cur is FlintSet st) return st.Count == 0;
+            if (cur is IReadOnlyList<object> lst) return lst.Count == 0;
+            if (cur is string s) return s.Length == 0;
+            return false;
+        }
+    }
 
     private static List<object> Tail(object v) {
         var xs = new List<object>();
@@ -292,6 +342,15 @@ public static class Builtins {
         });
         Def("conj", (vm, a) => {
             object coll = Arg(a, 0);
+            if (coll is FlintMap fm) {
+                for (int i = 1; i < a.Length; i++) {
+                    var pair = new List<object>(Iterate(a[i]));
+                    if (pair.Count != 2)
+                        throw new FlintThrow("conj onto a map wants a [k v] pair, got " + PrStr(a[i]));
+                    fm = fm.Assoc(pair[0], pair[1]);
+                }
+                return fm;
+            }
             if (coll is FlintSet s) { for (int i = 1; i < a.Length; i++) s = s.Conj(a[i]); return s; }
             var v = coll switch {
                 null => new Vec(), Vec vv => vv, Seq q => new Vec(q),
@@ -339,11 +398,15 @@ public static class Builtins {
                 default: throw new FlintThrow("cannot pop " + PrStr(Arg(a, 0)));
             }
         });
-        Def("seq", (vm, a) => { var xs = new List<object>(Iterate(Arg(a, 0))); return xs.Count == 0 ? null : new Seq(xs); });
-        Def("first", (vm, a) => { foreach (var o in Iterate(Arg(a, 0))) return o; return null; });
-        Def("rest", (vm, a) => new Seq(Tail(Arg(a, 0))));
-        Def("next", (vm, a) => { var xs = Tail(Arg(a, 0)); return xs.Count == 0 ? null : new Seq(xs); });
-        Def("cons", (vm, a) => { var xs = new List<object> { Arg(a, 0) }; xs.AddRange(Iterate(Arg(a, 1))); return new Seq(xs); });
+        // `seq` answers the SAME sequence or nil -- it does not realise it,
+        // because an infinite one cannot be realised.
+        Def("seq", (vm, a) => IsEmptySeq(Arg(a, 0)) ? null : Arg(a, 0));
+        Def("first", (vm, a) => FirstOf(Arg(a, 0)));
+        // The tail, UNFORCED.
+        Def("rest", (vm, a) => RestOf(Arg(a, 0)));
+        // `rest`, then ONE step to see whether anything is there.
+        Def("next", (vm, a) => { var r = RestOf(Arg(a, 0)); return IsEmptySeq(r) ? null : r; });
+        Def("cons", (vm, a) => new Cons(Arg(a, 0), Arg(a, 1)));
         Def("hash", (vm, a) => (long) Hash.Of(Arg(a, 0)));
         Def("compare", (vm, a) => (long) CompareValues(Arg(a, 0), Arg(a, 1)));
 
@@ -364,7 +427,11 @@ public static class Builtins {
             : Sym.Of(Arg(a, 0) == null ? null : Str(Arg(a, 0)), Str(Arg(a, 1))));
 
         Def("atom", (vm, a) => new Atom(Arg(a, 0)));
-        Def("deref", (vm, a) => Arg(a, 0) is Atom at ? at.Deref() : throw new FlintThrow("cannot deref " + PrStr(Arg(a, 0))));
+        Def("deref", (vm, a) => Arg(a, 0) switch {
+            Atom at => at.Deref(),
+            LazySeq ls => ls.Force(),
+            _ => throw new FlintThrow("cannot deref " + PrStr(Arg(a, 0))),
+        });
         Def("reset!", (vm, a) => Arg(a, 0) is Atom at ? at.Reset(Arg(a, 1)) : throw new FlintThrow("cannot reset! " + PrStr(Arg(a, 0))));
         Def("compare-and-set!", (vm, a) => Arg(a, 0) is Atom at
             ? at.CompareAndSet(Arg(a, 1), Arg(a, 2))
@@ -373,7 +440,18 @@ public static class Builtins {
         Def("transient", (vm, a) => Transient.Of(Arg(a, 0)));
         Def("persistent!", (vm, a) => Arg(a, 0) is Transient t ? t.Persistent() : throw new FlintThrow("persistent! wants a transient"));
         Def("conj!", (vm, a) => {
-            if (Arg(a, 0) is Transient t && t.List != null) { for (int i = 1; i < a.Length; i++) t.List.Add(a[i]); return t; }
+            if (Arg(a, 0) is Transient t) {
+                if (t.List != null) { for (int i = 1; i < a.Length; i++) t.List.Add(a[i]); return t; }
+                if (t.Map != null) {
+                    for (int i = 1; i < a.Length; i++) {
+                        var pair = new List<object>(Iterate(a[i]));
+                        if (pair.Count != 2)
+                            throw new FlintThrow("conj! onto a map wants a [k v] pair");
+                        t.Map.Add(new KeyValuePair<object, object>(pair[0], pair[1]));
+                    }
+                    return t;
+                }
+            }
             throw new FlintThrow("conj! wants a transient collection");
         });
         Def("assoc!", (vm, a) => {
@@ -385,6 +463,17 @@ public static class Builtins {
             throw new FlintThrow("assoc! wants a transient map");
         });
 
+        // ONE argument: a flat sequence of key, value, key, value. Reading it
+        // as varargs makes every map literal come back EMPTY.
+        Def("flint/array-map", (vm, a) => {
+            var m = FlintMap.Empty;
+            object k = null; bool haveKey = false;
+            foreach (var o in Iterate(Arg(a, 0))) {
+                if (haveKey) { m = m.Assoc(k, o); haveKey = false; }
+                else { k = o; haveKey = true; }
+            }
+            return m;
+        });
         Def("flint/lazy-seq", (vm, a) => new LazySeq(vm, Arg(a, 0)));
         Def("flint/range3", (vm, a) => {
             long start = Vm.Num(Arg(a, 0)), end = Vm.Num(Arg(a, 1)), step = Vm.Num(Arg(a, 2));

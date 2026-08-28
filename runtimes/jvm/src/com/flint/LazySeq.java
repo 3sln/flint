@@ -16,8 +16,8 @@ import java.util.List;
 /// something can still reach them -- which is the whole reason tier 2 is
 /// cheaper than the wasm runtime (`doc/decisions/0010`).
 public final class LazySeq implements Iterable<Object> {
-    private Object thunk;      // null once forced
-    private List<Object> value;
+    private Object thunk;      // null once stepped
+    private Object stepped;
     private final Vm vm;
 
     public LazySeq(Vm vm, Object thunk) {
@@ -25,18 +25,27 @@ public final class LazySeq implements Iterable<Object> {
         this.thunk = thunk;
     }
 
-    /// The realised sequence, or an empty list. Idempotent.
-    public synchronized List<Object> force() {
+    /// ONE step: the thunk's own answer, cached. NOT the whole sequence.
+    ///
+    /// Materialising here is what overflowed the stack: a chain of lazy seqs
+    /// forced one another all the way down, one JVM frame per element. The
+    /// caller walks the result iteratively instead.
+    public synchronized Object step() {
         if (thunk != null) {
-            Object out = vm.call(thunk, new Object[0]);
-            List<Object> xs = new ArrayList<>();
-            if (out != null) for (Object o : Builtins.iterate(out)) xs.add(o);
-            value = xs;
+            stepped = vm.call(thunk, new Object[0]);
             thunk = null;
         }
-        return value;
+        return stepped;
+    }
+
+    /// The whole sequence, walked iteratively. Only for callers that genuinely
+    /// need every element.
+    public List<Object> force() {
+        List<Object> out = new ArrayList<>();
+        for (Object o : Builtins.iterate(this)) out.add(o);
+        return out;
     }
 
     @Override public Iterator<Object> iterator() { return force().iterator(); }
-    @Override public String toString() { return Builtins.prStr(force()); }
+    @Override public String toString() { return Builtins.prStr(this); }
 }

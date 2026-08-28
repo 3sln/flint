@@ -156,7 +156,10 @@ public final class Vm {
             if (a.variadic) {
                 List<Object> rest = new ArrayList<>();
                 for (int i = n; i < args.length; i++) rest.add(args[i]);
-                locals[n] = rest.isEmpty() ? null : rest;
+                // A SEQ, not a vector. `clojure.core/list` is `[& xs] xs`, so
+                // a vector here makes `(list 1 2)` print as `[1 2]` -- the
+                // right elements in the wrong shape, again.
+                locals[n] = rest.isEmpty() ? null : Seq.of(rest);
             }
             Aot.Compiled compiledArity = compiledFor(c.fnIndex(), a);
             if (compiledArity != null) return compiledArity.run(this, c, locals);
@@ -280,7 +283,7 @@ public final class Vm {
                                 if (a.variadic) {
                                     List<Object> rest = new ArrayList<>();
                                     for (int i = a.argc; i < argc; i++) rest.add(args[i]);
-                                    locals[a.argc] = rest.isEmpty() ? null : rest;
+                                    locals[a.argc] = rest.isEmpty() ? null : Seq.of(rest);
                                 }
                                 ip = a.code;
                                 end = a.code + a.len;

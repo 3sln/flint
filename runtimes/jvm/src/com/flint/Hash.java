@@ -121,9 +121,7 @@ public final class Hash {
             int acc = 0, n = 0;
             for (var e : m.entrySet()) {
                 // An entry hashes as the two-element vector `[k v]`.
-                acc += hashOrdered(java.util.List.of(
-                    e.getKey() == null ? NIL : e.getKey(),
-                    e.getValue() == null ? NIL : e.getValue()));
+                acc += hashOrdered(java.util.Arrays.asList(e.getKey(), e.getValue()));
                 n++;
             }
             return mixCollHash(acc, n);
@@ -134,9 +132,4 @@ public final class Hash {
         return v.hashCode();
     }
 
-    /// A stand-in so `List.of` can hold a nil, which it will not.
-    private static final Object NIL = new Object() {
-        @Override public int hashCode() { return 0; }
-        @Override public String toString() { return "nil"; }
-    };
 }

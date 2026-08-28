@@ -41,6 +41,31 @@ public final class Builtins {
         throw Vm.err(prStr(v) + " is not a byte string");
     }
 
+    /// Everything after the first element, without forcing what follows.
+    static Object restOf(Object v) {
+        Object cur = v;
+        while (true) {
+            if (cur == null) return Seq.of(new ArrayList<>());
+            if (cur instanceof LazySeq ls) { cur = ls.step(); continue; }
+            if (cur instanceof Cons c) return c.tail == null ? Seq.of(new ArrayList<>()) : c.tail;
+            return Seq.of(tail(cur));
+        }
+    }
+
+    /// Is there a first element? Steps at most one lazy cell.
+    static boolean isEmptySeq(Object v) {
+        Object cur = v;
+        while (true) {
+            if (cur == null) return true;
+            if (cur instanceof LazySeq ls) { cur = ls.step(); continue; }
+            if (cur instanceof Cons) return false;
+            if (cur instanceof Collection<?> c) return c.isEmpty();
+            if (cur instanceof Map<?, ?> m) return m.isEmpty();
+            if (cur instanceof String s) return s.isEmpty();
+            return false;
+        }
+    }
+
     private static List<Object> tail(Object v) {
         List<Object> xs = new ArrayList<>();
         boolean skip = true;
@@ -93,8 +118,20 @@ public final class Builtins {
     /// Everything flint can walk, as a Java iterable. `nil` is an empty
     /// sequence, which is Clojure's rule and one the core library leans on.
     public static Iterable<Object> iterate(Object v) {
-        if (v == null) return List.of();
-        if (v instanceof LazySeq ls) return ls.force();
+        if (v == null) return new ArrayList<>();
+        // Cons cells and lazy seqs are walked ITERATIVELY. Recursing here is
+        // what overflowed the stack: a lazy chain is as deep as it is long.
+        if (v instanceof Cons || v instanceof LazySeq) {
+            List<Object> out = new ArrayList<>();
+            Object cur = v;
+            while (true) {
+                if (cur == null) return out;
+                if (cur instanceof LazySeq ls) { cur = ls.step(); continue; }
+                if (cur instanceof Cons c) { out.add(c.head); cur = c.tail; continue; }
+                for (Object o : iterate(cur)) out.add(o);
+                return out;
+            }
+        }
         if (v instanceof Collection<?> c) {
             List<Object> out = new ArrayList<>(c.size());
             for (Object o : c) out.add(o);
@@ -102,7 +139,13 @@ public final class Builtins {
         }
         if (v instanceof Map<?, ?> m) {
             List<Object> out = new ArrayList<>(m.size());
-            for (var e : m.entrySet()) out.add(List.of(e.getKey(), e.getValue()));
+            // `Arrays.asList`, not `List.of`: a map entry can hold a nil
+            // value, and `List.of` rejects nulls. This is the third place that
+            // has bitten -- flint values are nullable and the immutable-list
+            // factories are not.
+            for (var e : m.entrySet()) {
+                out.add(java.util.Arrays.asList(e.getKey(), e.getValue()));
+            }
             return out;
         }
         if (v instanceof String s) {
@@ -158,13 +201,15 @@ public final class Builtins {
         if (v instanceof Ex e) return e.toString();
         if (v instanceof Bytes b) return b.toString();
         if (v instanceof java.util.Set<?> s) return join(s, "#{", "}", readable);
-        if (v instanceof LazySeq ls) return join(ls.force(), "(", ")", readable);
+        if (v instanceof LazySeq || v instanceof Cons) {
+            return join(iterate(v), "(", ")", readable);
+        }
         if (v instanceof Seq q) return join(q, "(", ")", readable);
         if (v instanceof List<?> l) return join(l, "[", "]", readable);
         return v.toString();
     }
 
-    private static String join(Collection<?> c, String open, String close, boolean readable) {
+    private static String join(Iterable<?> c, String open, String close, boolean readable) {
         StringBuilder b = new StringBuilder(open);
         boolean first = true;
         for (Object o : c) {
@@ -199,11 +244,12 @@ public final class Builtins {
             case 8 -> v instanceof List && !(v instanceof Seq);             // vector
             case 9 -> v instanceof Map;                                    // map
             case 10 -> v instanceof java.util.Set;                         // set
-            case 11 -> v instanceof Seq || v instanceof LazySeq
+            case 11 -> v instanceof Seq || v instanceof LazySeq || v instanceof Cons
                        || v instanceof Collection || v instanceof String;   // seq
             case 12 -> v instanceof Vm.Closure || v instanceof Fn;         // fn
             case 13 -> v == null;                                          // nil
-            default -> v instanceof List || v instanceof Collection;       // sequential
+            default -> v instanceof List || v instanceof Collection
+                       || v instanceof Cons || v instanceof LazySeq;        // sequential
         };
     }
 
@@ -273,6 +319,18 @@ public final class Builtins {
         });
         def("conj", (vm, a) -> {
             Object coll = arg(a, 0);
+            if (coll instanceof FlintMap fm) {
+                // Onto a map, an entry is a two-element pair.
+                for (int i = 1; i < a.length; i++) {
+                    List<Object> pair = new ArrayList<>();
+                    for (Object o : iterate(a[i])) pair.add(o);
+                    if (pair.size() != 2) {
+                        throw Vm.err("conj onto a map wants a [k v] pair, got " + prStr(a[i]));
+                    }
+                    fm = fm.assoc(pair.get(0), pair.get(1));
+                }
+                return fm;
+            }
             if (coll == null || coll instanceof List<?>) {
                 List<Object> out = new ArrayList<>();
                 if (coll != null) out.addAll((List<?>) coll);
@@ -293,19 +351,30 @@ public final class Builtins {
             for (int i = 1; i + 1 < a.length; i += 2) out = out.assoc(a[i], a[i + 1]);
             return out;
         });
-        def("seq", (vm, a) -> {
-            List<Object> xs = new ArrayList<>();
-            for (Object o : iterate(arg(a, 0))) xs.add(o);
-            return xs.isEmpty() ? null : Seq.of(xs);
-        });
+        // `seq` answers the SAME sequence or nil -- it does not realise it.
+        // Returning a materialised copy makes an infinite sequence a hang.
+        def("seq", (vm, a) -> isEmptySeq(arg(a, 0)) ? null : arg(a, 0));
         def("first", (vm, a) -> {
-            for (Object o : iterate(arg(a, 0))) return o;
-            return null;
+            // Without walking the whole thing: a lazy sequence's first element
+            // must not force the rest of it.
+            Object cur = arg(a, 0);
+            while (true) {
+                if (cur == null) return null;
+                if (cur instanceof LazySeq ls) { cur = ls.step(); continue; }
+                if (cur instanceof Cons c) return c.head;
+                for (Object o : iterate(cur)) return o;
+                return null;
+            }
         });
-        def("rest", (vm, a) -> Seq.of(tail(arg(a, 0))));
+        // The tail, UNFORCED. Materialising here is not merely slow: flint
+        // has infinite lazy sequences, and walking one to build a list does
+        // not end. That is what `(rest (iterate f x))` did before this.
+        def("rest", (vm, a) -> restOf(arg(a, 0)));
+        // `next` is `rest`, then ONE step to see whether anything is there.
+        // One step, not the whole sequence.
         def("next", (vm, a) -> {
-            List<Object> xs = tail(arg(a, 0));
-            return xs.isEmpty() ? null : Seq.of(xs);
+            Object r = restOf(arg(a, 0));
+            return isEmptySeq(r) ? null : r;
         });
         def("apply", (vm, a) -> {
             List<Object> all = new ArrayList<>();
@@ -522,9 +591,18 @@ public final class Builtins {
 
         // --- the rest ---------------------------------------------------------
         def("with-meta", (vm, a) -> arg(a, 0));   // metadata is carried, not read
+        // ONE argument: a flat sequence of key, value, key, value. Not
+        // varargs -- reading it that way made every map literal come back
+        // EMPTY, so the reader parsed 97 KB of spec into `{}` and the compiler
+        // then failed to resolve the first symbol it saw.
         def("flint/array-map", (vm, a) -> {
             FlintMap m = FlintMap.empty();
-            for (int i = 0; i + 1 < a.length; i += 2) m = m.assoc(a[i], a[i + 1]);
+            Object k = null;
+            boolean haveKey = false;
+            for (Object o : iterate(arg(a, 0))) {
+                if (haveKey) { m = m.assoc(k, o); haveKey = false; }
+                else { k = o; haveKey = true; }
+            }
             return m;
         });
         def("dissoc!", (vm, a) -> {
@@ -543,12 +621,7 @@ public final class Builtins {
         def("flint/opaque", (vm, a) -> arg(a, 0));
 
 
-        def("cons", (vm, a) -> {
-            List<Object> out = new ArrayList<>();
-            out.add(arg(a, 0));
-            for (Object o : iterate(arg(a, 1))) out.add(o);
-            return Seq.of(out);
-        });
+        def("cons", (vm, a) -> new Cons(arg(a, 0), arg(a, 1)));
         def("rem", (vm, a) -> {
             long y = Vm.num(arg(a, 1));
             if (y == 0) throw Vm.err("divide by zero");
@@ -576,8 +649,22 @@ public final class Builtins {
             if (arg(a, 0) instanceof Transient t) {
                 if (t.list != null) { for (int i = 1; i < a.length; i++) t.list.add(a[i]); return t; }
                 if (t.set != null) { for (int i = 1; i < a.length; i++) t.set.add(a[i]); return t; }
+                if (t.map != null) {
+                    // Onto a MAP, an entry is a two-element pair, as in
+                    // Clojure. `(conj! m [k v])`.
+                    for (int i = 1; i < a.length; i++) {
+                        List<Object> pair = new ArrayList<>();
+                        for (Object o : iterate(a[i])) pair.add(o);
+                        if (pair.size() != 2) {
+                            throw Vm.err("conj! onto a map wants a [k v] pair, got "
+                                + prStr(a[i]));
+                        }
+                        t.map.put(pair.get(0), pair.get(1));
+                    }
+                    return t;
+                }
             }
-            throw Vm.err("conj! wants a transient collection");
+            throw Vm.err("conj! wants a transient collection, got " + prStr(arg(a, 0)));
         });
         def("disj!", (vm, a) -> {
             if (arg(a, 0) instanceof Transient t && t.set != null) {
