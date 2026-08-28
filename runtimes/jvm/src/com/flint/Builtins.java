@@ -19,6 +19,45 @@ import java.util.Map;
 /// right one elsewhere, which is exactly the drift `doc/decisions/0010` says
 /// the conformance suite exists to catch.
 public final class Builtins {
+    /// The dynamic bindings in force on THIS thread. See `flint/dyn-get`.
+    private static final ThreadLocal<Object> DYN = new ThreadLocal<>();
+
+    /// The name an `^int` annotation reports itself by. Copied from
+    /// `runtime/src/builtins.rs::b_check_tag`, so the two messages match word
+    /// for word -- a conformance run diffs the TEXT of an error, not its kind.
+    private static String typeName(long code) {
+        return switch ((int) code) {
+            case 1 -> "int";     case 2 -> "float";   case 3 -> "number";
+            case 4 -> "string";  case 5 -> "keyword"; case 6 -> "symbol";
+            case 7 -> "boolean"; case 8 -> "vector";  case 9 -> "map";
+            case 10 -> "set";    case 11 -> "seq";    case 12 -> "fn";
+            case 13 -> "nil";    default -> "sequential";
+        };
+    }
+
+    /// The closed set protocol dispatch runs on (`doc/decisions/0005`), copied
+    /// from `runtime/src/builtins.rs::b_kind`.
+    ///
+    /// Note "list", not "seq": a cons and a lazy seq answer `:list` while a
+    /// VECTOR answers `:vector`, even though both are sequential. And a byte
+    /// string is "other" here, as it is there -- `kind` names what a protocol
+    /// may be extended over, and inventing a name would extend that set.
+    private static String kindOf(Object v) {
+        if (v == null) return "nil";
+        if (v instanceof Boolean) return "boolean";
+        if (v instanceof Long || v instanceof Double) return "number";
+        if (v instanceof String) return "string";
+        if (v instanceof Kw) return "keyword";
+        if (v instanceof Sym) return "symbol";
+        if (v instanceof java.util.List) return "vector";
+        if (v instanceof FlintMap) return "map";
+        if (v instanceof java.util.Set) return "set";
+        if (v instanceof Seq || v instanceof Cons || v instanceof LazySeq) return "list";
+        if (v instanceof Vm.Closure || v instanceof Img.NativeRef) return "fn";
+        if (v instanceof Atom) return "atom";
+        return "other";
+    }
+
     private Builtins() {}
 
     @FunctionalInterface
@@ -619,6 +658,75 @@ public final class Builtins {
         def("flint/delay", (vm, a) -> new LazySeq(vm, arg(a, 0)));
         def("flint/capabilities", (vm, a) -> FlintMap.empty());
         def("flint/opaque", (vm, a) -> arg(a, 0));
+
+        // --- the type barrier ------------------------------------------------
+        //
+        // `check-tag` is what an `^int` annotation compiles to. It returns the
+        // value so it can be used as an expression, and throws naming what the
+        // author wrote, so the error lands at the annotation rather than
+        // several frames inside the number tower.
+        def("flint/check-tag", (vm, a) -> {
+            Object v = arg(a, 0);
+            long want = Vm.num(arg(a, 1));
+            if (!(Boolean) isType(v, (int) want)) {
+                String where = str(arg(a, 2));
+                throw Vm.err(where.isEmpty()
+                             ? "a value declared ^" + typeName(want) + " is not one"
+                             : where + " is declared ^" + typeName(want) + ", and it is not");
+            }
+            return v;
+        });
+        def("flint/kind", (vm, a) -> Kw.of(null, kindOf(arg(a, 0))));
+        def("flint/upper-case", (vm, a) -> str(arg(a, 0)).toUpperCase(java.util.Locale.ROOT));
+        def("flint/lower-case", (vm, a) -> str(arg(a, 0)).toLowerCase(java.util.Locale.ROOT));
+        def("flint/bits->double", (vm, a) -> Double.longBitsToDouble(Vm.num(arg(a, 0))));
+        def("flint/bytes->str", (vm, a) -> {
+            java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream();
+            for (Object o : iterate(arg(a, 0))) b.write((int) (Vm.num(o) & 0xFF));
+            return b.toString(java.nio.charset.StandardCharsets.UTF_8);
+        });
+        // No collector statistics exist for a host with its own GC.
+        def("flint/gc-stats", (vm, a) -> FlintMap.empty());
+
+        // --- dynamic bindings ------------------------------------------------
+        //
+        // Per THREAD. flint's are per green thread, saved and restored by its
+        // scheduler across a park; this port has no green threads, so a real OS
+        // thread is the unit and a ThreadLocal map is the whole mechanism.
+        // `binding` is a stack discipline either way -- compiled code reads the
+        // map, pushes a new one, and puts the old one back in a finally -- so
+        // the port only has to hold the current map.
+        //
+        // A spawned thread starts EMPTY rather than inheriting, which is where
+        // this differs from flint: there a spawn takes a snapshot. Threads on
+        // this port are created by the host, not by flint, so there is no spawn
+        // site at which to take one.
+        def("flint/dyn-get", (vm, a) -> {
+            Object b = DYN.get();
+            return b == null ? arg(a, 1) : get(b, arg(a, 0), arg(a, 1));
+        });
+        def("flint/dyn-bindings", (vm, a) -> {
+            Object b = DYN.get();
+            return b == null ? FlintMap.empty() : b;
+        });
+        def("flint/dyn-set-bindings", (vm, a) -> { DYN.set(arg(a, 0)); return arg(a, 0); });
+
+        // The class hierarchy flint reports without having one: `Throwable`
+        // catches everything, `Error` catches what is named `...Error`, and
+        // `Exception` catches the rest. Copied from
+        // `runtime/src/err.rs::ex_matches` -- guessing here would make a
+        // `(catch Exception ...)` silently swallow an Error, or not catch at all.
+        def("flint/ex-matches?", (vm, a) -> {
+            String k = str(get(arg(a, 0), Kw.of(null, "kind"), null));
+            String want = str(arg(a, 1));
+            boolean isError = k.endsWith("Error");
+            return switch (want) {
+                case "Throwable" -> Boolean.TRUE;
+                case "Exception", "RuntimeException" -> !isError;
+                case "Error" -> isError;
+                default -> k.equals(want);
+            };
+        });
 
 
         def("cons", (vm, a) -> new Cons(arg(a, 0), arg(a, 1)));

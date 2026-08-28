@@ -429,10 +429,17 @@ public static class Builtins {
         Def("atom", (vm, a) => new Atom(Arg(a, 0)));
         Def("deref", (vm, a) => Arg(a, 0) switch {
             Atom at => at.Deref(),
+            Volatile vo => vo.Deref(),
             LazySeq ls => ls.Force(),
             _ => throw new FlintThrow("cannot deref " + PrStr(Arg(a, 0))),
         });
-        Def("reset!", (vm, a) => Arg(a, 0) is Atom at ? at.Reset(Arg(a, 1)) : throw new FlintThrow("cannot reset! " + PrStr(Arg(a, 0))));
+        Def("reset!", (vm, a) => Arg(a, 0) switch {
+            Atom at => at.Reset(Arg(a, 1)),
+            // `vreset!` is `reset!` in core.cljc, not a builtin of its own, so
+            // this is the only place a volatile can be written.
+            Volatile vo => vo.Reset(Arg(a, 1)),
+            var v => throw new FlintThrow("cannot reset! " + PrStr(v)),
+        });
         Def("compare-and-set!", (vm, a) => Arg(a, 0) is Atom at
             ? at.CompareAndSet(Arg(a, 1), Arg(a, 2))
             : throw new FlintThrow("compare-and-set! wants an atom"));
@@ -502,11 +509,296 @@ public static class Builtins {
         Def("ex-data", (vm, a) => Get(Arg(a, 0), Kw.Of(null, "data"), null));
         Def("flint/ex-kind", (vm, a) => Get(Arg(a, 0), Kw.Of(null, "kind"), null));
 
+        // --- maths ------------------------------------------------------------
+        //
+        // Every one of these takes and returns a double, as flint's do. Passing
+        // an integer through `ToD` and back is what makes `(Math/sqrt 4)`
+        // answer 2.0 rather than 2, which is the answer Clojure gives.
+        Def("flint/sqrt",  (vm, a) => Math.Sqrt(ToD(Arg(a, 0))));
+        Def("flint/cbrt",  (vm, a) => Math.Cbrt(ToD(Arg(a, 0))));
+        Def("flint/exp",   (vm, a) => Math.Exp(ToD(Arg(a, 0))));
+        Def("flint/expm1", (vm, a) => Math.Exp(ToD(Arg(a, 0))) - 1.0);
+        Def("flint/log",   (vm, a) => Math.Log(ToD(Arg(a, 0))));
+        Def("flint/log10", (vm, a) => Math.Log10(ToD(Arg(a, 0))));
+        Def("flint/log1p", (vm, a) => Math.Log(1.0 + ToD(Arg(a, 0))));
+        Def("flint/sin",   (vm, a) => Math.Sin(ToD(Arg(a, 0))));
+        Def("flint/cos",   (vm, a) => Math.Cos(ToD(Arg(a, 0))));
+        Def("flint/tan",   (vm, a) => Math.Tan(ToD(Arg(a, 0))));
+        Def("flint/asin",  (vm, a) => Math.Asin(ToD(Arg(a, 0))));
+        Def("flint/acos",  (vm, a) => Math.Acos(ToD(Arg(a, 0))));
+        Def("flint/atan",  (vm, a) => Math.Atan(ToD(Arg(a, 0))));
+        Def("flint/sinh",  (vm, a) => Math.Sinh(ToD(Arg(a, 0))));
+        Def("flint/cosh",  (vm, a) => Math.Cosh(ToD(Arg(a, 0))));
+        Def("flint/tanh",  (vm, a) => Math.Tanh(ToD(Arg(a, 0))));
+        Def("flint/floor", (vm, a) => Math.Floor(ToD(Arg(a, 0))));
+        Def("flint/ceil",  (vm, a) => Math.Ceiling(ToD(Arg(a, 0))));
+        // Half-to-EVEN, which is what Java's `rint` and IEEE 754 both mean.
+        // `Math.Round`'s default is the same; saying so explicitly is what
+        // keeps it from drifting if the default ever is not.
+        Def("flint/rint",  (vm, a) => Math.Round(ToD(Arg(a, 0)), MidpointRounding.ToEven));
+        Def("flint/trunc", (vm, a) => (double) (long) ToD(Arg(a, 0)));
+        Def("flint/pow",   (vm, a) => Math.Pow(ToD(Arg(a, 0)), ToD(Arg(a, 1))));
+        Def("flint/atan2", (vm, a) => Math.Atan2(ToD(Arg(a, 0)), ToD(Arg(a, 1))));
+        Def("flint/hypot", (vm, a) => {
+            // Not `sqrt(x*x + y*y)`: that overflows for large operands and
+            // underflows for small ones, which is the whole reason `hypot`
+            // exists as its own function.
+            double x = Math.Abs(ToD(Arg(a, 0))), y = Math.Abs(ToD(Arg(a, 1)));
+            if (double.IsInfinity(x) || double.IsInfinity(y)) return double.PositiveInfinity;
+            double hi = Math.Max(x, y), lo = Math.Min(x, y);
+            if (hi == 0.0) return 0.0;
+            double r = lo / hi;
+            return hi * Math.Sqrt(1.0 + r * r);
+        });
+        Def("flint/signum", (vm, a) => {
+            double d = ToD(Arg(a, 0));
+            return double.IsNaN(d) ? double.NaN : (double) Math.Sign(d);
+        });
+        Def("flint/fabs", (vm, a) => Math.Abs(ToD(Arg(a, 0))));
+        Def("flint/copy-sign", (vm, a) => Math.CopySign(ToD(Arg(a, 0)), ToD(Arg(a, 1))));
+        Def("flint/double-bits", (vm, a) => BitConverter.DoubleToInt64Bits(ToD(Arg(a, 0))));
+        Def("flint/bits->double", (vm, a) => BitConverter.Int64BitsToDouble(Vm.Num(Arg(a, 0))));
+
+        // Wrapping rather than throwing, which is the whole point of them.
+        Def("flint/unchecked-add", (vm, a) => unchecked(Vm.Num(Arg(a, 0)) + Vm.Num(Arg(a, 1))));
+        Def("flint/unchecked-sub", (vm, a) => unchecked(Vm.Num(Arg(a, 0)) - Vm.Num(Arg(a, 1))));
+        Def("flint/unchecked-mul", (vm, a) => unchecked(Vm.Num(Arg(a, 0)) * Vm.Num(Arg(a, 1))));
+
+        // --- strings, by CODE POINT ---------------------------------------
+        //
+        // The CLR is UTF-16 and flint is UTF-8, so `subs` and indexing on
+        // anything past the BMP is exactly where two hosts silently disagree
+        // (`doc/decisions/0010`). Counting and slicing by code point is what
+        // makes them agree; counting by `string.Length` would not.
+        Def("flint/subs", (vm, a) => {
+            string s0 = Str(Arg(a, 0));
+            int n = CodePointCount(s0);
+            int from = (int) Vm.Num(Arg(a, 1));
+            int to = a.Length > 2 ? (int) Vm.Num(a[2]) : n;
+            if (from < 0 || to > n || from > to)
+                throw new FlintThrow($"substring [{from} {to}) out of {n}");
+            int bi = OffsetByCodePoints(s0, from), ei = OffsetByCodePoints(s0, to);
+            return s0.Substring(bi, ei - bi);
+        });
+        Def("flint/code-point-at", (vm, a) => {
+            string s0 = Str(Arg(a, 0));
+            int i = (int) Vm.Num(Arg(a, 1));
+            int n = CodePointCount(s0);
+            if (i < 0 || i >= n) throw new FlintThrow($"index {i} out of {n}");
+            return (long) char.ConvertToUtf32(s0, OffsetByCodePoints(s0, i));
+        });
+        Def("flint/from-code-point", (vm, a) => char.ConvertFromUtf32((int) Vm.Num(Arg(a, 0))));
+        Def("flint/str-join", (vm, a) => {
+            var b = new StringBuilder();
+            foreach (var o in Iterate(Arg(a, 0))) b.Append(Str(o));
+            return b.ToString();
+        });
+        Def("flint/str-index-of", (vm, a) => {
+            string s0 = Str(Arg(a, 0)), needle = Str(Arg(a, 1));
+            int from = a.Length > 2 ? (int) Vm.Num(a[2]) : 0;
+            int bi = from <= 0 ? 0 : OffsetByCodePoints(s0, Math.Min(from, CodePointCount(s0)));
+            // Ordinal: a linguistic comparison would find "a" inside "A" under
+            // some cultures, and flint's answer does not depend on a locale.
+            int at = s0.IndexOf(needle, bi, StringComparison.Ordinal);
+            return at < 0 ? null : (object) (long) CodePointCount(s0.Substring(0, at));
+        });
+        Def("flint/upper-case", (vm, a) => Str(Arg(a, 0)).ToUpperInvariant());
+        Def("flint/lower-case", (vm, a) => Str(Arg(a, 0)).ToLowerInvariant());
+        Def("flint/str->num", (vm, a) => {
+            string s0 = Str(Arg(a, 0)).Trim();
+            if (s0.Contains('.') || s0.Contains('e') || s0.Contains('E'))
+                return double.TryParse(s0, System.Globalization.NumberStyles.Float,
+                                       System.Globalization.CultureInfo.InvariantCulture,
+                                       out double d) ? d : null;
+            return long.TryParse(s0, System.Globalization.NumberStyles.Integer,
+                                 System.Globalization.CultureInfo.InvariantCulture,
+                                 out long l) ? l : (object) null;
+        });
+        Def("flint/to-long", (vm, a) => Arg(a, 0) switch {
+            long l => l,
+            double d => (long) d,
+            var v => throw new FlintThrow(PrStr(v) + " is not a number"),
+        });
+        Def("flint/str-bytes", (vm, a) => (long) new UTF8Encoding(false).GetByteCount(Str(Arg(a, 0))));
+        Def("flint/bytes->str", (vm, a) => {
+            var t = new List<byte>();
+            foreach (var o in Iterate(Arg(a, 0))) t.Add((byte) Vm.Num(o));
+            return new UTF8Encoding(false).GetString(t.ToArray());
+        });
+
+        // --- byte strings (`doc/decisions/0024`) ---------------------------
+        Def("flint/str->b", (vm, a) => Bytes.Of(Str(Arg(a, 0))));
+        Def("flint/b->str", (vm, a) => AsBytes(Arg(a, 0)).Text());
+        Def("flint/b-count", (vm, a) => (long) AsBytes(Arg(a, 0)).Count);
+        Def("flint/b-at", (vm, a) => AsBytes(Arg(a, 0)).At((int) Vm.Num(Arg(a, 1))));
+        Def("flint/b-concat", (vm, a) => AsBytes(Arg(a, 0)).Concat(AsBytes(Arg(a, 1))));
+        Def("flint/b-slice", (vm, a) =>
+            AsBytes(Arg(a, 0)).Slice((int) Vm.Num(Arg(a, 1)), (int) Vm.Num(Arg(a, 2))));
+        Def("flint/b->vec", (vm, a) => AsBytes(Arg(a, 0)).ToVec());
+        Def("flint/vec->b", (vm, a) => {
+            var t = new Bytes.T();
+            foreach (var o in Iterate(Arg(a, 0))) t.Conj(Vm.Num(o));
+            return t.Persistent();
+        });
+        // Always 0: this representation is flat, so it IS depth zero. The
+        // builtin exists to observe flint's rope shape, and answering
+        // something plausible instead would be inventing one.
+        Def("flint/b-depth", (vm, a) => 0L);
+        Def("flint/b-transient", (vm, a) => {
+            var t = new Bytes.T();
+            if (Arg(a, 0) != null) t.Append(AsBytes(Arg(a, 0)));
+            return t;
+        });
+        Def("flint/b-conj!", (vm, a) => Arg(a, 0) is Bytes.T t
+            ? Also(t, () => t.Conj(Vm.Num(Arg(a, 1))))
+            : throw new FlintThrow("b-conj! wants a byte transient"));
+        Def("flint/b-append!", (vm, a) => Arg(a, 0) is Bytes.T t
+            ? Also(t, () => t.Append(AsBytes(Arg(a, 1))))
+            : throw new FlintThrow("b-append! wants a byte transient"));
+        Def("flint/b-tcount", (vm, a) => Arg(a, 0) is Bytes.T t
+            ? (long) t.Count
+            : throw new FlintThrow("b-tcount wants a byte transient"));
+        Def("flint/b-persistent!", (vm, a) => Arg(a, 0) is Bytes.T t
+            ? t.Persistent()
+            : throw new FlintThrow("b-persistent! wants a byte transient"));
+
+        // --- volatiles and delays ------------------------------------------
+        Def("flint/volatile", (vm, a) => new Volatile(Arg(a, 0)));
+        Def("flint/volatile?", (vm, a) => Arg(a, 0) is Volatile);
+        // A delay IS a one-shot thunk, which is what LazySeq already is here.
+        Def("flint/delay", (vm, a) => new LazySeq(vm, Arg(a, 0)));
+        Def("flint/delay?", (vm, a) => Arg(a, 0) is LazySeq);
+        // TRUE, always: this port forces on deref rather than tracking the
+        // state, so the honest answer to "would deref block" is no.
+        Def("flint/realized?", (vm, a) => true);
+
+        // --- the type barrier ----------------------------------------------
+        //
+        // `check-tag` is what an `^int` annotation compiles to. It returns the
+        // value so it can be used as an expression, and throws with the name
+        // the author wrote so the error lands at the annotation rather than
+        // several frames inside the number tower.
+        Def("flint/check-tag", (vm, a) => {
+            object v = Arg(a, 0);
+            long want = Vm.Num(Arg(a, 1));
+            if (!(bool) IsType(v, (int) want)) {
+                throw new FlintThrow($"{Str(Arg(a, 2))} is not {TypeName(want)}: {PrStr(v)}");
+            }
+            return v;
+        });
+        Def("flint/kind", (vm, a) => Kw.Of(null, KindOf(Arg(a, 0))));
+
+        // --- dynamic bindings ----------------------------------------------
+        //
+        // Per THREAD. flint's are per green thread, saved and restored by its
+        // scheduler across a park; this port has no green threads, so a real
+        // OS thread is the unit and a [ThreadStatic] map is the whole
+        // mechanism. `binding` is a stack discipline either way -- the
+        // compiled code reads the map, pushes a new one, and puts the old one
+        // back in a finally -- so the port only has to hold the current map.
+        //
+        // A spawned thread starts EMPTY rather than inheriting, which is where
+        // this differs from flint: there a spawn takes a snapshot. Threads on
+        // this port are created by the host, not by flint, so there is no
+        // spawn site at which to take one.
+        Def("flint/dyn-get", (vm, a) =>
+            DynBindings == null ? Arg(a, 1) : Get(DynBindings, Arg(a, 0), Arg(a, 1)));
+        Def("flint/dyn-bindings", (vm, a) => DynBindings ?? (object) FlintMap.Empty);
+        Def("flint/dyn-set-bindings", (vm, a) => DynBindings = Arg(a, 0));
+
+        // The class hierarchy flint reports without having one: `Throwable`
+        // catches everything, `Error` catches what is named `...Error`, and
+        // `Exception` catches the rest. Copied from
+        // `runtime/src/err.rs::ex_matches` -- guessing here would make a
+        // `(catch Exception ...)` silently swallow an Error, or not catch at
+        // all.
+        Def("flint/ex-matches?", (vm, a) => {
+            string k = Str(Get(Arg(a, 0), Kw.Of(null, "kind"), null));
+            string want = Str(Arg(a, 1));
+            bool isError = k.EndsWith("Error", StringComparison.Ordinal);
+            return want switch {
+                "Throwable" => true,
+                "Exception" or "RuntimeException" => !isError,
+                "Error" => isError,
+                _ => k == want,
+            };
+        });
+
         // Carried, not interpreted. Returning something plausible would be
         // inventing semantics; these are the honest answers until they are
         // ported.
         Def("meta", (vm, a) => null);
+        Def("flint/opaque", (vm, a) => Arg(a, 0));
         Def("flint/opaque?", (vm, a) => false);
         Def("flint/opaque-label", (vm, a) => null);
+        Def("flint/map-entry?", (vm, a) => false);
+        // No capabilities are granted to a conformance run, and no collector
+        // statistics exist for a host with its own GC.
+        Def("flint/capabilities", (vm, a) => FlintMap.Empty);
+        Def("flint/gc-stats", (vm, a) => FlintMap.Empty);
+    }
+
+    /// The dynamic bindings in force on THIS thread. See `flint/dyn-get`.
+    [ThreadStatic] private static object DynBindings;
+
+    /// The name an `^int` annotation reports itself by. Copied from
+    /// `runtime/src/builtins.rs::b_check_tag`, so the two messages match word
+    /// for word -- a conformance run diffs the TEXT of an error, not its kind.
+    private static string TypeName(long code) => code switch {
+        1 => "int", 2 => "float", 3 => "number", 4 => "string",
+        5 => "keyword", 6 => "symbol", 7 => "boolean", 8 => "vector",
+        9 => "map", 10 => "set", 11 => "seq", 12 => "fn", 13 => "nil",
+        _ => "sequential",
+    };
+
+    /// The closed set protocol dispatch runs on (`doc/decisions/0005`), copied
+    /// from `runtime/src/builtins.rs::b_kind`.
+    ///
+    /// Note "list", not "seq": a cons and a lazy seq answer `:list` while a
+    /// VECTOR answers `:vector`, even though both are sequential. And a byte
+    /// string is "other" here, as it is there -- `kind` names what a protocol
+    /// may be extended over, and inventing a name would extend that set.
+    private static string KindOf(object v) => v switch {
+        null => "nil",
+        bool => "boolean",
+        long or double => "number",
+        string => "string",
+        Kw => "keyword",
+        Sym => "symbol",
+        Vec => "vector",
+        FlintMap => "map",
+        FlintSet => "set",
+        Seq or Cons or LazySeq => "list",
+        Vm.Closure or Fn or Img.NativeRef => "fn",
+        Atom => "atom",
+        _ => "other",
+    };
+
+    /// Run `f` for its effect and answer `v`. C# expression lambdas cannot hold
+    /// a statement, and a block lambda would need a type annotation at every
+    /// one of these sites.
+    private static object Also(object v, Action f) { f(); return v; }
+
+    private static Bytes AsBytes(object v) =>
+        v as Bytes ?? throw new FlintThrow(PrStr(v) + " is not a byte string");
+
+    /// Code points, not UTF-16 units. A surrogate pair is ONE.
+    private static int CodePointCount(string s) {
+        int n = 0;
+        for (int i = 0; i < s.Length; i++) {
+            if (char.IsHighSurrogate(s[i]) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1])) i++;
+            n++;
+        }
+        return n;
+    }
+
+    /// The UTF-16 index `n` code points into `s`.
+    private static int OffsetByCodePoints(string s, int n) {
+        int i = 0;
+        while (n > 0 && i < s.Length) {
+            if (char.IsHighSurrogate(s[i]) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1])) i++;
+            i++; n--;
+        }
+        return i;
     }
 }
