@@ -94,6 +94,10 @@
 (defn atom [x] (flint.rt/atom x))
 (defn deref [x] (flint.rt/deref x))
 (defn reset! [a v] (flint.rt/reset! a v))
+(defn compare-and-set!
+  "Set the atom to `new` only if it still holds `old`, by identity. True when
+  it did. The primitive `swap!` retries on."
+  [a old nv] (flint.rt/compare-and-set! a old nv))
 (defn ex-message [e] (flint.rt/ex-message e))
 (defn ex-data [e] (flint.rt/ex-data e))
 
@@ -751,6 +755,21 @@
                     (fn [& args] (mapv (fn [x] (apply2 x args)) fs)))))
 
 (defn swap!
+  "Apply `f` to the atom's value and store the result.
+
+  **Not atomic.** This is `(reset! a (f (deref a)))` -- a read-modify-write --
+  so two threads inside it at once lose updates, silently: the counter is
+  simply smaller than it should be. That was unreachable while one thread ran a
+  sandbox and became reachable the day two could (`doc/decisions/0028`).
+
+  It should be a retry loop over `compare-and-set!`, and that is written and
+  works INTERPRETED. It cannot be turned on yet because it does not survive
+  AOT: compiled code holds `old` across the allocating call to `f`, the
+  collector cannot see a wasm local (`doc/decisions/0001`), and the identity
+  compare then fails forever -- so `swap!` never terminates under
+  `:optimize [perf]`. `doc/decisions/0013` carries the repro.
+
+  Fixing that is fixing the AOT rooting, not this function."
   ([a f] (reset! a (f (deref a))))
   ([a f x] (reset! a (f (deref a) x)))
   ([a f x y] (reset! a (f (deref a) x y)))

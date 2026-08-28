@@ -58,6 +58,7 @@
     comment
     comp
     compare
+    compare-and-set!
     complement
     concat
     cond
@@ -396,7 +397,7 @@
     when-not
     when-some
     while},
-  :count 345,
+  :count 346,
   :absent
   #{*'
     *1
@@ -498,7 +499,6 @@
     clojure-version
     commute
     comparator
-    compare-and-set!
     completing
     create-ns
     dec'

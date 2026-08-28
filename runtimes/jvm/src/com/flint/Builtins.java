@@ -410,6 +410,26 @@ public final class Builtins {
         def("flint/ex-kind", (vm, a) -> get(arg(a, 0), Kw.of(null, "kind"), null));
 
         def("hash", (vm, a) -> (long) Hash.of(arg(a, 0)));
+
+        def("atom", (vm, a) -> new Atom(arg(a, 0)));
+        def("deref", (vm, a) -> {
+            if (arg(a, 0) instanceof Atom at) return at.deref();
+            throw new Vm.Thrown("cannot deref " + prStr(arg(a, 0)));
+        });
+        def("reset!", (vm, a) -> {
+            if (arg(a, 0) instanceof Atom at) return at.reset(arg(a, 1));
+            throw new Vm.Thrown("cannot reset! " + prStr(arg(a, 0)));
+        });
+        /// The primitive `swap!` is built from. `swap!` itself lives in
+        /// `lib/clojure/core.cljc` as a retry loop, so every host gets the same
+        /// semantics from the same source rather than from three
+        /// implementations that agree by inspection.
+        def("compare-and-set!", (vm, a) -> {
+            if (arg(a, 0) instanceof Atom at) {
+                return at.compareAndSet(arg(a, 1), arg(a, 2));
+            }
+            throw new Vm.Thrown("compare-and-set! wants an atom");
+        });
         // The ARITY decides which argument is which: one is the name, two are
         // (ns, name). Reading argument 0 as the namespace regardless made
         // `(keyword "key0")` produce `:key0/` -- a keyword with an empty name,

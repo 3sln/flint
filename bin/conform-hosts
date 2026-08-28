@@ -20,6 +20,21 @@ mkdir -p out/conform
 "$JDK/bin/javac" -d runtimes/jvm/classes runtimes/jvm/src/com/flint/*.java \
   runtimes/jvm/test/*.java 2>&1 | head -20
 
+# Multi-threading on the JVM, which is a different problem to the native
+# runtime's: there is no safepoint to build because there is no collector of
+# ours to stop. What has to be right is flint's own shared state.
+if [ -f out/conform/threads.img ] || ./bin/flint :src runtimes/conform :fn threads/main \
+     --emit-image :out out/conform/threads.img >/dev/null 2>&1; then
+  if "$JDK/bin/java" -cp runtimes/jvm/classes ThreadTest out/conform/threads.img \
+       > /tmp/flint-jvm-threads.out 2>&1; then
+    grep -E "^  ok" /tmp/flint-jvm-threads.out | sed 's/$/ [jvm threads]/'
+  else
+    cat /tmp/flint-jvm-threads.out
+    echo "  FAIL jvm threads"
+    exit 1
+  fi
+fi
+
 fails=0
 total=0
 for src in runtimes/conform/*.cljc; do
@@ -58,7 +73,7 @@ echo "  $agree/$total agree"
 # reason `doc/decisions/0010` gives -- `pr-str` of a map is how an answer is
 # compared, and content-addressed artifacts would otherwise hash differently
 # per host.
-FLOOR="${FLINT_CONFORM_FLOOR:-5}"
+FLOOR="${FLINT_CONFORM_FLOOR:-6}"
 if [ "$agree" -lt "$FLOOR" ]; then
   echo "  a case that used to agree no longer does ($agree < $FLOOR)"
   exit 1

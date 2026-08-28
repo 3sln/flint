@@ -34,11 +34,27 @@ public final class Vm {
 
     public final Img img;
     /// Var slots. `def` writes one; every read of a top-level name goes here.
-    public final Object[] vars;
+    ///
+    /// An `AtomicReferenceArray` rather than an `Object[]`, because several
+    /// threads may run this program at once and one of them may be writing.
+    /// The ordering it gives is what publishes the value SAFELY: a plain array
+    /// write is visible to another thread eventually or never, and "eventually"
+    /// is not a semantics.
+    ///
+    /// This is the whole of what multi-threading costs here, and the contrast
+    /// with `doc/decisions/0028` is the point of tier 2. There is no safepoint
+    /// to build because there is no collector of ours to stop; the JVM's owns
+    /// lifetime, values are immutable, and `Kw`/`Sym` intern through a
+    /// `ConcurrentHashMap` which gives for free the "one text, one object"
+    /// property the native runtime spends a lock on.
+    public final java.util.concurrent.atomic.AtomicReferenceArray<Object> vars;
     /// Native import index to the builtin it names. Resolved BY NAME, because
     /// an image's slots belong to whichever module it was linked against.
     private final Builtins.Fn[] natives;
-    private boolean started = false;
+    /// Have the initialisers run? Volatile and guarded, because two threads
+    /// calling into a fresh sandbox must not both run them.
+    private volatile boolean started = false;
+    private final Object startLock = new Object();
 
     /// A function value: which function, and what it closed over.
     public record Closure(int fnIndex, Object[] upvals) {}
@@ -56,7 +72,7 @@ public final class Vm {
 
     public Vm(Img img) {
         this.img = img;
-        this.vars = new Object[img.varNames.length];
+        this.vars = new java.util.concurrent.atomic.AtomicReferenceArray<>(img.varNames.length);
         this.natives = new Builtins.Fn[img.nativeNames.length];
         for (int i = 0; i < natives.length; i++) {
             String name = img.nativeNames[i];
@@ -75,8 +91,13 @@ public final class Vm {
     /// run once, not per call (`doc/decisions/0025`).
     public void ensureStarted() {
         if (started) return;
-        started = true;
-        for (int fn : img.init) call(new Closure(fn, new Object[0]), new Object[0]);
+        synchronized (startLock) {
+            if (started) return;
+            for (int fn : img.init) call(new Closure(fn, new Object[0]), new Object[0]);
+            // Set LAST: a thread that saw `started` before the initialisers
+            // finished would call into a half-built program.
+            started = true;
+        }
     }
 
     /// Call a function value with positional arguments.
@@ -152,8 +173,8 @@ public final class Vm {
                     case SET_LOCAL: locals[u8(ip)] = stack[--sp]; ip += 1; break;
                     case SET_LOCAL_KEEP: locals[u8(ip)] = stack[sp - 1]; ip += 1; break;
                     case UPVAL: stack[sp++] = self.upvals()[u8(ip)]; ip += 1; break;
-                    case VAR: stack[sp++] = vars[u16(ip)]; ip += 2; break;
-                    case SET_VAR: vars[u16(ip)] = stack[--sp]; ip += 2; break;
+                    case VAR: stack[sp++] = vars.get(u16(ip)); ip += 2; break;
+                    case SET_VAR: vars.set(u16(ip), stack[--sp]); ip += 2; break;
                     case POP: sp -= 1; break;
                     case POP_N: sp -= u8(ip); ip += 1; break;
                     case DUP: stack[sp] = stack[sp - 1]; sp += 1; break;

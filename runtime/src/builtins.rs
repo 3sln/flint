@@ -23,6 +23,7 @@
 //! `merge`, `clojure.string`, the printer, the readers — is cljc, so it
 //! tree-shakes per var. See `doc/decisions/0002-modularity.md`.
 
+
 use crate::rt::Rt;
 use crate::value::{Value, FALSE, NIL, TRUE};
 
@@ -553,6 +554,21 @@ builtins! {
         let s = arg(rt, a, 1);
         let limit = if n > 2 { rt.as_i64(arg(rt, a, 2)).unwrap_or(0) } else { 0 };
         rt.re_find_all(re, s, limit)
+    };
+
+    // The primitive `swap!` retries on (`lib/clojure/core.cljc`). It lives here
+    // rather than in core because a read-modify-write cannot be made atomic in
+    // the language it is written in.
+    //
+    // APPENDED rather than inserted, and that is a habit rather than a proven
+    // requirement: adding it in the middle of this catalogue, which shifts the
+    // table slot of every entry after it, coincided with an intermittent
+    // segfault compiling unrelated programs that has not been reproduced since
+    // and was never pinned to a cause. Appending costs nothing.
+    "compare-and-set!", flint_b_cas, b_cas, |rt, a, n| {
+        let _ = n;
+        let (at, old, new) = (arg(rt, a, 0), arg(rt, a, 1), arg(rt, a, 2));
+        rt.compare_and_set_atom(at, old, new)
     };
     "flint/str-join", flint_b_strjoin, b_strjoin, |rt, a, n| {
         let _ = n;

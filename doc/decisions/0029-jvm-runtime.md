@@ -3,8 +3,8 @@
 > **PARTLY BUILT.** The image loader, the interpreter over all 46 opcodes and
 > fifty-odd builtins run real flint programs on the JVM, and all five
 > conformance cases agree with the native runtime byte for byte -- including
-> hashes and forty-key CHAMP ordering. Not built: most of the remaining
-> builtins, AOT, and multi-threading.
+> hashes and forty-key CHAMP ordering -- and several threads run one program on
+> it. Not built: most of the remaining builtins, and AOT.
 
 `0010` chose tier 2 for the JVM on measurement rather than taste: Chicory runs
 flint at **500× V8 interpreted and 39× compiled**, so embedding a wasm engine
@@ -76,9 +76,16 @@ byte strings, regex — and the interesting parts are the two that are not:
 constraint that forced an interpreter on wasm — locals not being scannable — is
 simply absent here, so this is a legitimate backend rather than a fight.
 
-**Multi-threading** is the opposite problem to `0028`'s. There is no safepoint
-to build, because there is no collector of ours to stop; the JVM's handles it.
-What needs care instead is that flint's own structures are shared safely, and
-most of them already are: values are immutable, and `Kw`/`Sym` intern through a
+**Multi-threading works**, and it was the opposite problem to `0028`'s. There
+is no safepoint to build because there is no collector of ours to stop; the
+JVM's handles it. What needed care was flint's own shared state, and most of it
+was already fine: values are immutable, and `Kw`/`Sym` intern through a
 `ConcurrentHashMap`, which gives for free the "one text, one object" property
-the native runtime spends a lock on.
+the native runtime spends a lock on. What changed is the var slots, which
+became an `AtomicReferenceArray` -- a plain array write is visible to another
+thread eventually or never, and "eventually" is not a semantics.
+
+Eight threads computing the same thing agree, and eight threads through one
+atom do NOT lose nothing -- because `swap!` is a read-modify-write. That is not
+a JVM problem and the fix is written; it is off because it does not survive
+AOT (`doc/decisions/0013`).

@@ -13,6 +13,7 @@
   "boolean?",
   "bytes?",
   "compare",
+  "compare-and-set!",
   "conj",
   "conj!",
   "cons",

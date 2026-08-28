@@ -337,3 +337,44 @@ fn guest_code_survives_collections_staged_by_another_thread() {
         }
     }
 }
+
+/// `swap!` under real contention, on the native runtime.
+///
+/// The JVM port surfaced this: flint's `swap!` is `(reset! a (f (deref a)))`
+/// in `lib/clojure/core.cljc` -- a plain read-modify-write with no atomicity.
+/// It loses updates whenever two threads are inside it at once, and no part of
+/// that crashes: the counter is simply smaller than it should be.
+///
+/// The existing pool test did not catch it because only three of its dispatches
+/// ever ran on a secondary executor. This one contends on purpose.
+#[test]
+fn swap_under_contention_loses_nothing() {
+    let img = image();
+    let pool = std::sync::Arc::new(flint::ThreadPool::new(4));
+    let sandbox = img.sandbox_with(pool).unwrap();
+
+    const THREADS: usize = 4;
+    const PER: usize = 250;
+    let mut waiting = Vec::new();
+    for _ in 0..THREADS {
+        let s = sandbox.clone();
+        waiting.push(std::thread::spawn(move || {
+            let pending: Vec<_> = (0..PER).map(|_| s.call("app/tally", &[])).collect();
+            for p in pending {
+                p.wait().unwrap();
+            }
+        }));
+    }
+    for t in waiting {
+        t.join().unwrap();
+    }
+
+    let total = sandbox.call_blocking("app/tally", &[]).unwrap();
+    let want = (THREADS * PER) as i64 + 1;
+    assert_eq!(
+        total,
+        Value::Int(want),
+        "swap! lost {} increments; it is a read-modify-write, not a CAS",
+        want - total.as_i64().unwrap_or(0)
+    );
+}

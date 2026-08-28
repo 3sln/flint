@@ -91,6 +91,7 @@
    "atom" flint.rt/atom
    "deref" flint.rt/deref
    "reset!" flint.rt/reset!
+   "compare-and-set!" flint.rt/compare-and-set!
    "flint/volatile" flint.rt/volatile
    "flint/capabilities" flint.rt/capabilities
    "flint/opaque" flint.rt/opaque

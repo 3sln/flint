@@ -444,6 +444,31 @@ impl Rt {
         self.throw_str("ClassCastException", "cannot deref this value")
     }
 
+    /// Set the atom to `next` only if it still holds `expect`. True when it
+    /// did.
+    ///
+    /// The primitive `swap!` is built from. `swap!` used to be
+    /// `(reset! a (f (deref a)))` -- a read-modify-write with no atomicity,
+    /// which loses updates the moment two threads are inside it at once and
+    /// loses them SILENTLY: the counter is simply smaller than it should be.
+    /// That was invisible while one thread ran a sandbox and became reachable
+    /// the day two could (`doc/decisions/0028`).
+    ///
+    /// Compares by IDENTITY, as Clojure's does. A value-equal but distinct
+    /// object means someone else has been here, and the retry is cheaper than
+    /// a deep comparison on every attempt.
+    pub fn compare_and_set_atom(&mut self, at: Value, expect: Value, next: Value) -> Value {
+        if at.is_heap() && matches!(ty(&self.gc.sp, at.as_heap()), TY_ATOM | TY_VOLATILE) {
+            if self.slot(at, 0) == expect {
+                self.set(at, 0, next);
+                return crate::value::TRUE;
+            }
+            crate::value::FALSE
+        } else {
+            self.throw_str("ClassCastException", "not an atom")
+        }
+    }
+
     pub fn reset_atom(&mut self, at: Value, v: Value) -> Value {
         if at.is_heap() && matches!(ty(&self.gc.sp, at.as_heap()), TY_ATOM | TY_VOLATILE) {
             self.set(at, 0, v);

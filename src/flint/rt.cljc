@@ -11,6 +11,7 @@
   `test/builtin_parity.clj` asserts the two agree."
   (:refer-clojure :exclude [= conj get assoc dissoc disj count first rest next seq cons nth pop peek apply lazy-seq subs
                             empty contains? name namespace meta with-meta atom deref reset!
+                            compare-and-set!
                             transient persistent! conj! assoc! dissoc! hash compare quot rem
                             nil? number? int? float? string? keyword? symbol? vector? map? set?
                             seq? fn? boolean? sequential? identical? bit-and bit-or bit-xor bit-not
@@ -155,6 +156,7 @@
 (def atom clojure.core/atom)
 (def deref clojure.core/deref)
 (def reset! clojure.core/reset!)
+(def compare-and-set! clojure.core/compare-and-set!)
 (defn volatile [x] (clojure.core/volatile! x))
 (defn volatile? [x] (instance? clojure.lang.Volatile x))
 

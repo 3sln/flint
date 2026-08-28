@@ -13,6 +13,45 @@
 > is the argument as it stood before the numbers; the numbers did not overturn
 > it, they sized it.
 
+## A second correctness bug: a value held across an allocation
+
+Found while making `swap!` atomic, and it is `doc/decisions/0001`'s hazard
+arriving in practice rather than in theory.
+
+```clojure
+(def c (atom ""))
+(defn f [n]
+  (loop [i 0]
+    (if (< i n)
+      (let [old (deref c) nv (str old)]
+        (if (compare-and-set! c old nv) (recur (+ i 1)) (recur i)))
+      :done)))
+```
+
+Interpreted this answers `:done`. Under `:optimize [perf]` it **never
+terminates**: `compare-and-set!` fails every time, forever.
+
+The reason is the one that made flint an interpreter in the first place.
+`old` is held across the call to `str`, which allocates and can collect. In the
+interpreter `old` lives on the value stack, which the collector scans and
+rewrites. In compiled code it lives in a **wasm local, and wasm locals are not
+scannable** — so the collector moves the string, updates the atom's slot, and
+`old` keeps the address the object used to have. The identity compare then
+never matches again.
+
+It is only visible through an IDENTITY comparison. Ordinary code holding a
+stale pointer reads corrupted memory and fails somewhere else, later, which is
+how the same defect showed up first: `swap!`-as-a-retry-loop made an unrelated
+AOT compile abort with `to-space overflow`, an object copied twice from a root
+the collector did not know had moved.
+
+**So `swap!` is not atomic**, and cannot be until this is fixed. The retry loop
+is written and correct and lives in this file's history; `compare-and-set!` is
+built and works. What is missing is that compiled code must spill live
+references somewhere the collector can see — a shadow stack per compiled frame,
+which is the cost `0001` predicted and this tier has to pay.
+
+
 ## The proposal
 
 Rather than a dispatch loop over bytecode, emit wasm per Clojure function whose
