@@ -285,6 +285,25 @@ pub extern "C" fn aot_bail(
         crate::aotstat::COUNTS[crate::aotstat::C_AOT_BAILS] += 1;
     }
     rt.roots.stack_top = top as usize;
+    // Is the operand stack the shape the instruction being handed back expects?
+    // A bail publishes a top computed in compiled code, and the interpreter
+    // then reads its operands relative to it -- so a top that is wrong by one
+    // shows up as a callee that is not a function, several frames later.
+    #[cfg(feature = "diagnostics")]
+    unsafe {
+        if rt.u8_at(ip) == crate::vm::op::TAIL_CALL || rt.u8_at(ip) == crate::vm::op::CALL {
+            let argc = rt.u8_at(ip + 1) as usize;
+            crate::aotstat::COUNTS[crate::aotstat::C_BAIL_CALLS] += 1;
+            let at = (top as usize).wrapping_sub(argc + 1);
+            let ok = at < rt.roots.stack_top
+                && rt.roots.stack[at].is_heap()
+                && matches!(crate::obj::ty(&rt.gc.sp, rt.roots.stack[at].as_heap()),
+                            crate::obj::TY_CLOSURE | crate::obj::TY_NATIVEFN);
+            if !ok {
+                crate::aotstat::COUNTS[crate::aotstat::C_BAIL_BAD_CALLEE] += 1;
+            }
+        }
+    }
     if let Some(f) = rt.frames.last_mut() {
         f.ip = ip;
         f.aot_ip = resume_ip;

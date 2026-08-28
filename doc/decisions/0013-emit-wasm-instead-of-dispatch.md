@@ -692,7 +692,46 @@ over: `ClassCastException: not a transient`, several frames and one tail call
 away from the cause. `aot/resume-after` is the rule, `test/aot_emit.clj` asserts
 it, and toggling the one line flips the reproducer.
 
-**Open: a deadlock, minimised to ONE arity.** `FLINT_AOT_ONLY=268` --
+**Open, but no longer a deadlock and no longer about ports.** The deadlock was a
+SYMPTOM. `flint.rpc` spawns a reader thread that routes replies by `:id`; the
+decode threw, the reader died, nothing routed, and the caller parked for ever.
+Talking to the capability without `rpc` shows the real error, and it is 0013's
+original one: **`edn: map needs an even number of forms`**.
+
+From there it shrank a long way. The reproducer is now
+`test/fixtures/aot-park-repro.cljc`, ten lines, no host capability, no reader:
+
+```clojure
+(defn- go [] (count (mapv (fn [i] {:id i :kids (vec (range (rem i 4)))}) (range 33))))
+(defn main [_]
+  (let [[tx rx] (p/channel 1 "test")]
+    (t/spawn (fn [] (p/send tx :go)))
+    (p/receive rx)                       ; <- the park
+    (pr-str (go))))
+```
+
+Compiled it answers `ClassCastException: value is not a function (object type
+13, 2 args)` -- a RANGE where a function should be. Every part is load-bearing,
+each checked by removing it:
+
+* **The PARK.** Without the `p/receive`, compiled and interpreted agree.
+* **The SIZE, exactly.** 32 passes, 33 fails. That is flint's vector tail: at 33
+  the tail spills into the trie.
+* **The map literal and the nested `(vec (range ...))`.** Removing either passes.
+
+Delta-debugged to FOUR arities that must all be compiled -- `reduce-seq`, `vec`,
+and two lambdas -- so it is an interaction, as the paragraph above says, but of
+four things and not five, and none of them in the reader.
+
+`vec` is `(if (vector? coll) coll (into [] coll))` and rewriting its tail call
+as `(let [r (into [] coll)] r)` makes it pass -- so a tail call is implicated
+again, as it was in the half that is fixed. But it is NOT the same fault: the
+resume-point fix is in, and a diagnostics-build check now asserts that every
+bail hands back an operand stack whose callee really is a function. It reports
+**0 bad out of 68**, so the shape is right at every hand-back and the corruption
+is somewhere after it.
+
+**Open: minimised to ONE arity in the original reproducer.** `FLINT_AOT_ONLY=268` --
 `clojure.edn/read-form` compiled and everything else interpreted -- and a green
 thread parks with nothing to wake it. Delta-debugged from the full 322 arities
 down to that one, which is what the "minimise a SET" note above asks for and

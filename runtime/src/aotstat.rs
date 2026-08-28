@@ -77,6 +77,8 @@ pub const C_AOT_BAILS: usize = 23;
 /// trips cannot be the cause of anything, and saying so takes one counter.
 pub const C_AOT_TICKS: usize = 24;
 pub const C_AOT_TICK_TRIPS: usize = 25;
+pub const C_BAIL_CALLS: usize = 26;
+pub const C_BAIL_BAD_CALLEE: usize = 27;
 /// Call sites, and how many of them ever saw a second callee. An inline cache
 /// is only worth building if the answer is "almost none", and that is a
 /// measurement rather than a folk belief about Clojure.
