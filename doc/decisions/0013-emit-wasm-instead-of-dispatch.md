@@ -4,8 +4,9 @@
 > and parked by the user's decision: *"drop aot for now, focus on strings and
 > regex."* `--aot` stays in the tree, off by default, behind a cargo feature,
 > with an open correctness bug on the threads + host-port path documented below
-> — **re-tested 2026-08-28: still broken, not caused by the compiler work since,
-> and now minimised to ONE arity.** The performance half of the rationale has
+> — **re-tested 2026-08-28: it was TWO bugs. One is fixed (a tail call named a
+> resume point); the other is minimised from "five arities, an interaction" to a
+> single arity, and six explanations are ruled out by measurement.** The performance half of the rationale has
 > also moved; see "Re-measured 2026-08-28". The production module carries none
 > of it. Nothing here is deleted, because the measurements are worth more than
 > the emitter and **the reason it under-delivered is now understood** — see
@@ -675,6 +676,53 @@ Reproducer, ~15 lines: open the `doc` capability with the EDN codec, send
 Delta-minimised to five arities that must ALL be compiled for it to appear:
 `conj`, and `pk` / `nx!` / `skip!` / `token` from `clojure.edn`. No single one of
 them does it, and no pair — so it is an interaction, not a bad instruction.
+
+### Half of it is FIXED, and the other half is down to one arity
+
+**Fixed: a tail call named a resume point.** A `TAIL_CALL` replaces the frame --
+the interpreter pops it and enters the callee in its place -- so there is no
+next instruction of that arity left to run. The emitter handed every
+non-inlined opcode back with "resume at `ip + len`", and after a tail call that
+is the RETURN which follows it, so the resume point said "return whatever is on
+top of the stack", registered against a frame that no longer existed.
+
+`reduce` ends `(reduce-seq f init coll)`. Compiled, it answered `coll` instead
+of `init`, so `into` handed `persistent!` the empty list it had been reducing
+over: `ClassCastException: not a transient`, several frames and one tail call
+away from the cause. `aot/resume-after` is the rule, `test/aot_emit.clj` asserts
+it, and toggling the one line flips the reproducer.
+
+**Open: a deadlock, minimised to ONE arity.** `FLINT_AOT_ONLY=268` --
+`clojure.edn/read-form` compiled and everything else interpreted -- and a green
+thread parks with nothing to wake it. Delta-debugged from the full 322 arities
+down to that one, which is what the "minimise a SET" note above asks for and
+what a prefix could not do.
+
+It is SIZE-dependent, sharply: a document of four leaves passes and six
+deadlocks. And the host sees identical traffic either way -- one message, two
+polls -- so the request was sent, the reply was delivered, and the thread then
+waited for a reply it already had. That points at the decode answering
+something `flint.rpc` does not recognise, rather than at anything being lost.
+
+Ruled out by measurement, each one a check that did not fire:
+
+* **Not a missing chunk boundary.** `chunk-all?` makes every instruction a
+  boundary; the failure survives it. That is the discriminator that found the
+  tail-call bug, and here it says the fault is not in boundary placement.
+* **Not the collector.** Zero collections over the failing run, so nothing
+  moved and no root went stale.
+* **Not a lost message.** Identical host traffic, passing and failing.
+* **Not a resume point after a park.** Forcing every frame to interpret after a
+  park changes nothing.
+* **Not back-edge preemption.** The theory fitted the size-dependence exactly;
+  the counter says `TICK TRIPS = 0` in both runs. A good story beaten by a
+  measurement.
+* **Not the reader, and not the rope.** `edn/read-string` over the same shape,
+  and over a 75-node payload built by concatenation so it is a rope rather than
+  a literal, is correct compiled -- with `read-form` alone and with everything
+  compiled.
+
+So it needs the PORT, and something about a payload above roughly eight nodes.
 
 ### Re-tested 2026-08-28, and three of the sentences above are now wrong
 
