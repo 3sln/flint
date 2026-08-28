@@ -480,16 +480,38 @@
 
 ;; --------------------------------------------------------------- specials
 
+(defn- recur-proofs
+  "The `:proved` vector of every `recur` targeting `id`, anywhere below `node`.
+
+  Filtered by id because a nested `loop` or `fn` carries recurs of its own, and
+  believing one of those about THIS loop's slots would be exactly the unsound
+  step this verification exists to prevent."
+  [node id]
+  (let [out (volatile! [])]
+    (letfn [(walk [x]
+              (cond
+                (map? x) (do (when (and (= :recur (:op x)) (= id (:id x)))
+                               (vswap! out conj (:proved x)))
+                             (run! walk (vals x)))
+                (or (vector? x) (seq? x)) (run! walk x)
+                :else nil))]
+      (walk node))
+    @out))
+
 (defn- bind-locals
   "Bind `pairs` ([sym init-form] ...) sequentially, returning [env bindings].
 
   `rebound?` says whether `recur` can write these slots again. It changes what
   may be believed about them: a `let` binding is written once, so a tag INFERRED
   from the initialiser holds for the whole scope, while a `loop` binding is
-  written again by every `recur` and only a DECLARED tag survives -- because a
-  declared one is checked at each recur, and an inferred one would be a claim
-  about the first iteration presented as a claim about all of them."
-  [env pairs rebound?]
+  written again by every `recur`.
+
+  `infer?` lets a `loop` binding take its initialiser's tag ANYWAY, as a
+  hypothesis. That is only sound if it is then verified -- see `loop*`, which
+  assumes, analyzes, and throws the hypothesis away unless every `recur` proved
+  it. Without that verification an inferred loop tag is a claim about the first
+  iteration presented as a claim about all of them."
+  [env pairs rebound? infer?]
   (reduce (fn [[e acc] [sym init]]
             (when-not (symbol? sym) (err "binding name must be a symbol" {:sym sym}))
             (let [want (ty/known sym)
@@ -497,7 +519,7 @@
                   idx (alloc-local! (:scope e))
                   ;; What every later READ of this local reports. Sound because
                   ;; the barrier above is the only way into the slot.
-                  tag (if rebound? want (or want (node-tag init-ast)))]
+                  tag (if (and rebound? (not infer?)) want (or want (node-tag init-ast)))]
               [(assoc-in e [:locals sym]
                          (cond-> {:kind :local :idx idx}
                            tag (assoc :tag tag)
@@ -546,18 +568,53 @@
     let* (let [[_ bindings & body] form
                _ (when (odd? (count bindings)) (err "let needs an even binding vector" {:form form}))
                n0 (:nlocals @(:scope env))
-               [env' bs] (bind-locals env (partition 2 bindings) false)
+               [env' bs] (bind-locals env (partition 2 bindings) false false)
                body-ast (analyze-body env' body)]
            (release-locals! (:scope env) n0)
            {:op :let :bindings bs :body body-ast})
 
+    ;; A loop binding with no written annotation is HYPOTHESISED to keep its
+    ;; initialiser's type, the body is analyzed under that hypothesis, and the
+    ;; hypothesis is kept only if every `recur` proved it. That is induction:
+    ;; the initialiser is the base case, each recur the inductive step. It adds
+    ;; no runtime check and rejects no program -- a loop that recurs with a
+    ;; float into a slot that started as an int simply falls back, exactly as
+    ;; before.
+    ;;
+    ;; It has to be a hypothesis rather than a bottom-up inference because the
+    ;; two depend on each other: `(recur (+ i 1))` is an int only if `i` is one,
+    ;; which is the very thing being decided. Assuming it is the only way to ask
+    ;; the question.
+    ;;
+    ;; This is what turns the specialised integer opcodes on. Before it, an
+    ;; ordinary counting loop emitted not one of them: the census says loop
+    ;; counters are where the arithmetic is, and nobody annotates them.
     loop* (let [[_ bindings & body] form
+                pairs (partition 2 bindings)
                 n0 (:nlocals @(:scope env))
-                [env' bs] (bind-locals env (partition 2 bindings) true)
-                loop-id (gensym "loop")
-                env' (assoc env' :loop {:id loop-id :slots (mapv :idx bs) :n (count bs)
-                                        :tags (mapv :tag bs) :names (mapv :name bs)})
-                body-ast (analyze-body env' body)]
+                analyze-with
+                (fn [infer?]
+                  (let [[env' bs] (bind-locals env pairs true infer?)
+                        loop-id (gensym "loop")
+                        env' (assoc env' :loop
+                                    {:id loop-id :slots (mapv :idx bs) :n (count bs)
+                                     :tags (mapv :tag bs) :names (mapv :name bs)})]
+                    [bs loop-id (analyze-body env' body)]))
+                [bs loop-id body-ast] (analyze-with true)
+                ;; Which slots were hypothesised -- a WRITTEN tag is checked at
+                ;; each recur on purpose and is not up for revision.
+                guessed (set (keep-indexed (fn [i [sym _]]
+                                             (when (and (:tag (nth bs i))
+                                                        (not (ty/known sym)))
+                                               i))
+                                           pairs))
+                held? (or (empty? guessed)
+                          (every? (fn [pv] (every? #(nth pv % true) guessed))
+                                  (recur-proofs body-ast loop-id)))
+                [bs loop-id body-ast] (if held?
+                                        [bs loop-id body-ast]
+                                        (do (release-locals! (:scope env) n0)
+                                            (analyze-with false)))]
             (release-locals! (:scope env) n0)
             {:op :loop :id loop-id :bindings bs :body body-ast})
 
@@ -572,6 +629,16 @@
               ;; it would be unsound -- which is the worst shape of bug this
               ;; feature can have, because the first iteration passes.
               {:op :recur :id (:id l) :slots (:slots l)
+               ;; Per argument: did it PROVE the slot's tag, or did it need a
+               ;; barrier? A hypothesised loop tag survives only if every recur
+               ;; proved it, and reading that back off the emitted node would
+               ;; confuse a barrier the AUTHOR asked for with one the hypothesis
+               ;; forced. So record it here, where the difference is still known.
+               :proved (vec (map-indexed
+                             (fn [i a]
+                               (let [want (nth (:tags l) i nil)]
+                                 (or (nil? want) (ty/proves? (node-tag a) want))))
+                             args))
                :args (vec (map-indexed
                            (fn [i a]
                              (checked env a (nth (:tags l) i nil)
