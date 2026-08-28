@@ -1,0 +1,102 @@
+#!/bin/sh
+# flint against CANONICAL Clojure, on the same source.
+#
+# Every other benchmark here compares flint with babashka, and says plainly
+# that it is "not a claim about JVM Clojure". This is that claim, measured.
+#
+# THE METHOD, and why it is the one that flatters flint least:
+#
+#   * `main` with NO arguments, so each program uses its own default size, and
+#     the identical source runs on both. Nothing is rewritten per runtime.
+#   * Best of 9 WARM runs in one process, after 3 untimed ones. Warm is what
+#     the JVM's JIT needs; measuring cold would hand flint a win it has not
+#     earned in the steady state.
+#   * Startup EXCLUDED from the table, then measured separately at the bottom,
+#     because it is the axis flint wins by an order of magnitude and burying it
+#     inside a steady-state number would flatter the wrong one.
+#
+# Three programs, chosen as three different bottlenecks: integer arithmetic in
+# a loop, persistent data structures, and string building.
+#
+# Runtimes absent from the machine are SKIPPED BY NAME, never estimated.
+set -e
+cd "$(dirname "$0")/.."
+mkdir -p out/vsclj
+
+JDK="${FLINT_JDK:-/opt/homebrew/opt/openjdk}"
+export JAVA_HOME="$JDK"
+export PATH="$JDK/bin:$PATH"
+export DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}"
+CLR=runtimes/clr/conform/bin/Release/net10.0/Conform
+[ -x "$CLR" ] || CLR=""
+
+PROGS="tight maps concat"
+
+echo "flint against canonical Clojure"
+echo "machine: $(sysctl -n machdep.cpu.brand_string), $(uname -sr)"
+echo "method:  same source, main with no arguments, best of 9 warm runs."
+echo "         Startup excluded here and measured separately below."
+echo
+
+echo "==> building"
+for p in $PROGS; do
+  ./bin/flint :src bench/progs :fn "$p/main" --emit-image :out "out/vsclj/$p.img" >/dev/null
+  ./bin/flint :src bench/progs :fn "$p/main" :out "out/vsclj/$p.wasm" >/dev/null
+done
+# The AOT module family needs units built with the compiled-arity helpers, and
+# that is a GLOBAL switch -- so it is flipped once, used, and flipped back.
+./bin/build-units --aot >/dev/null 2>&1
+for p in $PROGS; do
+  ./bin/flint :src bench/progs :fn "$p/main" --aot :out "out/vsclj/$p-aot.wasm" >/dev/null
+done
+./bin/build-units >/dev/null 2>&1
+
+echo
+printf '%-9s %10s %10s %10s %10s %10s %10s %10s\n' \
+  program clojure wasm wasm-aot jvm jvm-aot clr clr-aot
+for p in $PROGS; do
+  clj=$(clojure -M bench/clj/run.clj "$p" 2>/dev/null | awk '{print $2}')
+  w=$(node bench/vsclj.mjs "out/vsclj/$p.wasm" | awk '{print $1}')
+  wa=$(node bench/vsclj.mjs "out/vsclj/$p-aot.wasm" | awk '{print $1}')
+  # `^ *interpreted` and not just `interpreted`: the line above it reads
+  # "compiled and interpreted agree", and matching that took the arity count
+  # for a millisecond figure.
+  jl=$("$JDK/bin/java" -cp runtimes/jvm/classes AotTest "out/vsclj/$p.img" 2>/dev/null \
+       | awk '/^ *interpreted/{print $2, $5}')
+  j=${jl% *}; ja=${jl#* }
+  if [ -n "$CLR" ]; then
+    cl=$("$CLR" --aot "out/vsclj/$p.img" 2>/dev/null | awk '/^ *interpreted/{print $2, $5}')
+    c=${cl% *}; ca=${cl#* }
+  else
+    c="skip"; ca="skip"
+  fi
+  printf '%-9s %10s %10s %10s %10s %10s %10s %10s\n' "$p" "$clj" "$w" "$wa" "$j" "$ja" "$c" "$ca"
+done
+
+echo
+echo "==> startup: whole process, one run of the tight loop"
+echo "    The other half of the answer. A steady-state number assumes the"
+echo "    process is already up, and for a CLI or a serverless invocation it"
+echo "    is not."
+cat > out/vsclj/one.clj <<'EOF'
+(load-file "bench/progs/tight.cljc")
+(print (tight/main []))
+EOF
+cat > out/vsclj/one.mjs <<'EOF'
+import { readFileSync } from 'node:fs';
+import { instantiate } from './../../host/flint.mjs';
+const { main } = instantiate(new WebAssembly.Module(readFileSync(process.argv[2])));
+process.stdout.write(String(main().out));
+EOF
+for r in "clojure|clojure -M out/vsclj/one.clj" \
+         "node + flint|node out/vsclj/one.mjs out/vsclj/tight-aot.wasm"; do
+  label=${r%%|*}; cmd=${r#*|}
+  best=999999
+  for _ in 1 2 3; do
+    s=$(python3 -c 'import time;print(int(time.time()*1000))')
+    sh -c "$cmd" >/dev/null 2>&1
+    e=$(python3 -c "import time;print(int(time.time()*1000)-$s)")
+    [ "$e" -lt "$best" ] && best=$e
+  done
+  printf '    %-14s %6s ms\n' "$label" "$best"
+done

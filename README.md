@@ -1388,6 +1388,50 @@ Twice babashka on data-structure-bound work is a fair place to be for a
 self-contained module with its own collector. The regex number is not; see
 [Limits](#limits).
 
+### Against canonical Clojure
+
+The babashka table above is deliberately not a claim about JVM Clojure. This
+one is. Same source, `main` with no arguments, best of 9 **warm** runs — warm
+because that is what the JVM's JIT needs, and measuring cold would hand flint a
+win it has not earned in the steady state. Clojure 1.12.1 on OpenJDK 25;
+reproduce with `bin/bench-vs-clojure`.
+
+| program | Clojure | wasm AOT | | JVM AOT | | CLR AOT | |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| tight loop, 10⁶ | 0.39 ms | 20.80 ms | 53× | 6.27 ms | 16× | 42.47 ms | 109× |
+| transient map, 10⁵ | 7.86 ms | 29.61 ms | 3.8× | 25.65 ms | 3.3× | 85.94 ms | 11× |
+| concat, 4000 × 16B | 12.55 ms | 1.48 ms | **0.1×** | 7.69 ms | **0.6×** | 24.01 ms | 1.9× |
+
+Read the three rows as three different answers, because they are:
+
+**Integer arithmetic in a loop is Clojure's, by a lot.** It compiles a primitive
+`loop`/`recur` to native code through the JIT and runs about one cycle per
+iteration. That is a different class of thing from a bytecode interpreter, and
+no amount of removing dispatch closes it — flint's own AOT is 12× its
+interpreter here and still 16× behind. (The 0.39 ms was checked rather than
+trusted: it scales linearly to 1.55 ms and 6.34 ms at 4× and 16× the work, so
+the loop is real and not folded away.)
+
+**Data-structure work is close.** 3.3–3.8× on the JVM and wasm, because the time
+goes into CHAMP inserts that both runtimes genuinely perform.
+
+**String building is flint's, by 8×.** Not a constant factor — an algorithm.
+`str` is a rope ([`0011`](doc/decisions/0011-strings-and-matching.md)), so
+repeated concatenation is not the O(n²) copy it is with flat strings. Same
+program, same answer, different asymptotics.
+
+And the axis the table excludes:
+
+| whole process, one run of the tight loop | |
+|---|---:|
+| `clojure -M` | 446 ms |
+| `node` + a flint module | 79 ms |
+
+flint is 53× slower in the steady state on that program and **5.6× faster end to
+end**, because Clojure pays ~310 ms of JVM and Clojure startup before it begins.
+Which number matters depends entirely on whether the process was already
+running — a long-lived service or a CLI invocation are not the same question.
+
 ### Dispatch, isolated from data-structure cost
 
 | program | instructions | warm | ns / instruction |
