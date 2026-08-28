@@ -36,9 +36,11 @@ through a `ConcurrentDictionary` — which gives free the "one text, one object"
 property the wasm runtime spends a lock on — and the var slots are guarded.
 There is no safepoint to build because there is no collector of ours to stop.
 
-`swap!` still loses updates under contention, on every runtime, because it is a
-read-modify-write in `lib/clojure/core.cljc`. The test asserts the loss rather
-than wishing otherwise; `doc/decisions/0013` records why the fix is not on.
+`swap!` loses nothing under contention here either: 8 threads x 200 increments
+gives 1601 of 1601. It is a retry loop over `compare-and-set!` in
+`lib/clojure/core.cljc`, so the property holds on every runtime that has real
+threads -- 4 x 250 through the Rust SDK, 8 x 200 on both ports -- and the
+compiled wasm path answers what the interpreter answers.
 
 ## The emitter lives on the platform, and compiles on first call
 

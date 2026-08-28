@@ -163,6 +163,17 @@ public final class Vm {
     private final String[] ring = new String[128];
     void ringPut(String name) { ring[ringN++ & 127] = name; }
 
+    /// The call log, oldest first, for a diagnostic. Empty unless
+    /// FLINT_MAX_DEPTH is set -- recording costs a store per call.
+    public String recentCalls() {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < ring.length; i++) {
+            String n = ring[(ringN + i) & 127];
+            if (n != null) b.append("\n    ").append(n);
+        }
+        return b.toString();
+    }
+
     /// Call a function value with positional arguments.
     public Object call(Object fn, Object[] args) {
         if (fn instanceof Closure c) {

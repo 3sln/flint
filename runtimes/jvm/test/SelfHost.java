@@ -68,6 +68,11 @@ public class SelfHost {
                 System.out.println("  kind: " + e.kind);
                 System.out.println("  data: " + Builtins.prStr(e.data));
             }
+            // The last calls MADE, when recording is on. Not a stack -- calls
+            // that already returned are in it -- but for an error that is not a
+            // runaway recursion, what ran just before it is the useful part.
+            String recent = vm.recentCalls();
+            if (!recent.isEmpty()) System.out.println("  last calls made:" + recent);
             throw t;
         }
         System.out.println("  .. compiler returned"

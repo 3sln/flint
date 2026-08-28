@@ -147,7 +147,7 @@
 
 ;; ------------------------------------------------------------------ analysis
 
-(declare analyze analyze-untagged analyze-body analyze-fn analyze-special analyze-ns)
+(declare analyze analyze* analyze-untagged analyze-body analyze-fn analyze-special analyze-ns)
 
 (defn- const-node [v] {:op :const :val v})
 
@@ -459,7 +459,54 @@
   (when (or (symbol? form) (seq? form) (vector? form) (map? form) (set? form))
     (ty/known form)))
 
+;; Analysis is a recursive descent, so a form that keeps producing itself
+;; descends without bound and takes the HOST's stack with it. On a port that is
+;; a `StackOverflowError` naming nothing -- a million identical interpreter
+;; frames with no flint form anywhere in them.
+;;
+;; A backstop, not a budget: 2 000 is far past any real nesting, and low enough
+;; to be reached before a host stack gives out. A limit above what the host
+;; survives never fires, which is the same as not having one.
+;;
+;; A volatile rather than a value threaded through `env` because every one of
+;; the fifty-odd recursive calls would have to pass it, and one that forgot
+;; would silently reset the count. A compile is single-threaded.
+(def ^:private analyze-depth-limit 2000)
+(def ^:private analyze-depth (volatile! 0))
+
+;; The last `trace-depth` forms by DEPTH, indexed by depth itself, so reading it
+;; back gives the innermost nesting rather than the most recent calls. That
+;; distinction matters: a log of recent calls includes ones that already
+;; returned, and reads as a cycle whether or not there is one.
+(def ^:private trace-depth 12)
+(def ^:private analyze-trace (volatile! (vec (repeat trace-depth nil))))
+
+(defn- brief [form]
+  (let [s (pr-str form)]
+    (if (> (count s) 140) (str (subs s 0 140) " ...") s)))
+
 (defn analyze [env form]
+  (let [d (inc (long @analyze-depth))]
+    (vswap! analyze-trace assoc (rem d trace-depth) form)
+    (when (> d analyze-depth-limit)
+      (vreset! analyze-depth 0)
+      (err (str "analysis descended past " analyze-depth-limit " nested forms, "
+                "which is not a depth real code reaches. Something is "
+                "producing itself. The innermost " trace-depth
+                " forms, outermost first:\n    "
+                (apply str
+                       (interpose "\n    "
+                                  (map (fn [i]
+                                         (brief (nth @analyze-trace
+                                                     (rem (+ d 1 i) trace-depth))))
+                                       (range trace-depth)))))
+           {:form form}))
+    (vreset! analyze-depth d))
+  (try
+    (analyze* env form)
+    (finally (vswap! analyze-depth dec))))
+
+(defn- analyze* [env form]
   ;; A tag at a USE site is the same barrier as one at a binding, placed where
   ;; the author wants the error: `(+ ^int x ^int y)` fails at the annotation
   ;; naming `x`, not four frames deeper inside the number tower. The tag is

@@ -27,6 +27,19 @@
 
     ;; And the same slot reached from two different recurs, only one of which
     ;; is an int. The hypothesis has to fail on the strength of the worse one.
+    ;; Bit operations, signed 64-bit. `>>` keeps the sign and `>>>` does not,
+    ;; which is the whole reason both exist -- and the case that separates them
+    ;; has to use a NEGATIVE operand or they agree.
+    :bits [(bit-and 12 10) (bit-or 12 10) (bit-xor 12 10) (bit-not 0)
+           (bit-shift-left 1 10) (bit-shift-right -16 2)
+           (unsigned-bit-shift-right -16 60) (bit-test 5 0) (bit-test 5 1)]
+
+    ;; The predicates as VALUES, not as direct calls: a direct `(int? x)`
+    ;; compiles to the `type-p` opcode, so passing one to `filter` is the only
+    ;; thing that needs the builtin to exist.
+    :preds-as-values [(filterv int? [1 :a 2.5 "s" 3])
+                      (mapv (fn [p] (p 1)) [int? float? number? string? nil?])]
+
     :branching [(loop [v 1 n 0]
                   (cond (>= n 4) v
                         (= 0 (rem n 2)) (recur (* v 2) (+ n 1))

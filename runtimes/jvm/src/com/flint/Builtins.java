@@ -394,9 +394,30 @@ public final class Builtins {
             }
             throw Vm.err("cannot conj onto " + prStr(coll));
         });
+        // On a VECTOR, `assoc` replaces the element at an index and answers a
+        // vector. Falling through to the map branch answered `{1 :B}` for
+        // `(assoc [:a :b :c] 1 :B)` -- the right value under the right key, and
+        // the wrong kind of collection, which then failed several calls later
+        // as "index out of bounds" on something that was no longer indexed.
+        //
+        // An index equal to the count APPENDS, which is Clojure's rule and what
+        // makes `(assoc v (count v) x)` a legal way to grow one.
         def("assoc", (vm, a) -> {
-            FlintMap out = arg(a, 0) instanceof FlintMap fm ? fm
-                : arg(a, 0) instanceof Map<?, ?> m ? FlintMap.of(m)
+            Object target = arg(a, 0);
+            if (target instanceof List<?> && !(target instanceof Seq)) {
+                List<Object> out = new ArrayList<>((List<Object>) target);
+                for (int i = 1; i + 1 < a.length; i += 2) {
+                    int idx = (int) Vm.num(a[i]);
+                    if (idx < 0 || idx > out.size()) {
+                        throw Vm.err("index " + idx + " out of bounds for a vector of "
+                                     + out.size());
+                    }
+                    if (idx == out.size()) out.add(a[i + 1]); else out.set(idx, a[i + 1]);
+                }
+                return out;
+            }
+            FlintMap out = target instanceof FlintMap fm ? fm
+                : target instanceof Map<?, ?> m ? FlintMap.of(m)
                 : FlintMap.empty();
             for (int i = 1; i + 1 < a.length; i += 2) out = out.assoc(a[i], a[i + 1]);
             return out;

@@ -367,7 +367,25 @@ public static class Builtins {
             for (int i = 1; i < a.Length; i++) v = v.Conj(a[i]);
             return v;
         });
+        // On a VECTOR, `assoc` replaces the element at an index and answers a
+        // vector. Falling through to the map branch answered `{1 :B}` for
+        // `(assoc [:a :b :c] 1 :B)` -- the right value under the right key, and
+        // the wrong kind of collection, which then failed several calls later
+        // on something that was no longer indexed.
+        //
+        // An index equal to the count APPENDS, which is Clojure's rule and what
+        // makes `(assoc v (count v) x)` a legal way to grow one.
         Def("assoc", (vm, a) => {
+            if (Arg(a, 0) is Vec v0) {
+                var xs = new List<object>(v0);
+                for (int i = 1; i + 1 < a.Length; i += 2) {
+                    int idx = (int) Vm.Num(a[i]);
+                    if (idx < 0 || idx > xs.Count)
+                        throw new FlintThrow($"index {idx} out of bounds for a vector of {xs.Count}");
+                    if (idx == xs.Count) xs.Add(a[i + 1]); else xs[idx] = a[i + 1];
+                }
+                return new Vec(xs);
+            }
             var m = Arg(a, 0) as FlintMap ?? FlintMap.Empty;
             for (int i = 1; i + 1 < a.Length; i += 2) m = m.Assoc(a[i], a[i + 1]);
             return m;
@@ -527,6 +545,56 @@ public static class Builtins {
         Def("ex-message", (vm, a) => Get(Arg(a, 0), Kw.Of(null, "message"), null));
         Def("ex-data", (vm, a) => Get(Arg(a, 0), Kw.Of(null, "data"), null));
         Def("flint/ex-kind", (vm, a) => Get(Arg(a, 0), Kw.Of(null, "kind"), null));
+
+        // --- type predicates, and the bit operations ------------------------
+        //
+        // The predicates exist as the `type-p` OPCODE too, which is what a
+        // direct `(int? x)` compiles to. They are needed as builtins as well
+        // for every use that is not a direct call -- `(filter int? xs)` passes
+        // the function itself, and the opcode cannot be passed.
+        Def("nil?",        (vm, a) => IsType(Arg(a, 0), 13));
+        Def("int?",        (vm, a) => IsType(Arg(a, 0), 1));
+        Def("float?",      (vm, a) => IsType(Arg(a, 0), 2));
+        Def("number?",     (vm, a) => IsType(Arg(a, 0), 3));
+        Def("string?",     (vm, a) => IsType(Arg(a, 0), 4));
+        Def("keyword?",    (vm, a) => IsType(Arg(a, 0), 5));
+        Def("symbol?",     (vm, a) => IsType(Arg(a, 0), 6));
+        Def("boolean?",    (vm, a) => IsType(Arg(a, 0), 7));
+        Def("vector?",     (vm, a) => IsType(Arg(a, 0), 8));
+        Def("map?",        (vm, a) => IsType(Arg(a, 0), 9));
+        Def("set?",        (vm, a) => IsType(Arg(a, 0), 10));
+        Def("seq?",        (vm, a) => IsType(Arg(a, 0), 11));
+        Def("fn?",         (vm, a) => IsType(Arg(a, 0), 12));
+        Def("sequential?", (vm, a) => IsType(Arg(a, 0), 14));
+        Def("bytes?",      (vm, a) => Arg(a, 0) is Bytes);
+
+        // Signed 64-bit throughout, as flint's are. `>>` on a negative number
+        // keeps the sign and `>>>` does not, which is the whole reason both
+        // exist.
+        Def("bit-and", (vm, a) => Vm.Num(Arg(a, 0)) & Vm.Num(Arg(a, 1)));
+        Def("bit-or",  (vm, a) => Vm.Num(Arg(a, 0)) | Vm.Num(Arg(a, 1)));
+        Def("bit-xor", (vm, a) => Vm.Num(Arg(a, 0)) ^ Vm.Num(Arg(a, 1)));
+        Def("bit-not", (vm, a) => ~Vm.Num(Arg(a, 0)));
+        Def("bit-shift-left",  (vm, a) => Vm.Num(Arg(a, 0)) << (int) Vm.Num(Arg(a, 1)));
+        Def("bit-shift-right", (vm, a) => Vm.Num(Arg(a, 0)) >> (int) Vm.Num(Arg(a, 1)));
+        Def("unsigned-bit-shift-right",
+            (vm, a) => (long) ((ulong) Vm.Num(Arg(a, 0)) >> (int) Vm.Num(Arg(a, 1))));
+        Def("bit-test", (vm, a) => ((Vm.Num(Arg(a, 0)) >> (int) Vm.Num(Arg(a, 1))) & 1) != 0);
+
+        // The transient map is a pair LIST, and `assoc!` appends -- the last
+        // entry for a key wins on `persistent!`. So `dissoc!` removes every
+        // entry for the key, not just the last: leaving an earlier one behind
+        // would resurrect a value that was overwritten before it was removed.
+        Def("dissoc!", (vm, a) => {
+            if (Arg(a, 0) is Transient t && t.Map != null) {
+                for (int i = 1; i < a.Length; i++) {
+                    object k = a[i];
+                    t.Map.RemoveAll(e => Eq(e.Key, k));
+                }
+                return t;
+            }
+            throw new FlintThrow("dissoc! wants a transient map");
+        });
 
         // --- maths ------------------------------------------------------------
         //

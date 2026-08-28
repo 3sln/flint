@@ -134,7 +134,8 @@ the native runtime spends a lock on. What changed is the var slots, which
 became an `AtomicReferenceArray` -- a plain array write is visible to another
 thread eventually or never, and "eventually" is not a semantics.
 
-Eight threads computing the same thing agree, and eight threads through one
-atom do NOT lose nothing -- because `swap!` is a read-modify-write. That is not
-a JVM problem and the fix is written; it is off because it does not survive
-AOT (`doc/decisions/0013`).
+Eight threads computing the same thing agree, and eight threads driving 200
+increments each through one atom lose **none** of them: 1601 wanted, 1601 got.
+`swap!` is a retry loop over `compare-and-set!` rather than a read-modify-write,
+which is what makes that true; `doc/decisions/0013` records why enabling it
+looked like an AOT failure for a while and was a stale build.
