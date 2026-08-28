@@ -23,7 +23,16 @@ import java.util.Map;
 /// compiler. The reader, the analyzer and the whole core library are already
 /// portable and compile to exactly this.
 public final class Img {
-    public static final int VERSION = 2;
+    public static final int VERSION = 3;
+
+    /// Image flags, a trailing u32. Bit 0 is `:optimize [perf]` -- what the
+    /// compiler DECIDED, not what it was asked.
+    ///
+    /// It has to be a flag and not "does the image carry compiled arities",
+    /// because on wasm the arity table IS the answer and here it never can be:
+    /// this port emits bytecode at LOAD time from the same image, so an image
+    /// meant for it carries the preference and an empty table.
+    public static final int FLAG_PERF = 1;
 
     // Constant tags, from `image.rs`.
     static final int K_NIL = 0, K_TRUE = 1, K_FALSE = 2, K_INT = 3, K_DOUBLE = 4,
@@ -41,6 +50,9 @@ public final class Img {
     /// name -- which is what makes an image portable between hosts at all.
     public final String[] nativeNames;
     public final String[] varNames;
+    /// What the compiler decided. `Vm` reads `FLAG_PERF` and turns its own
+    /// AOT on, so one `:optimize` reaches all three runtimes.
+    public final int flags;
 
     public static final class Arity {
         public final int argc, nlocals, code, len;
@@ -88,9 +100,10 @@ public final class Img {
     }
 
     private Img(Object[] consts, FnDef[] fns, byte[] code, int entry, int[] init,
-                String[] nativeNames, String[] varNames) {
+                String[] nativeNames, String[] varNames, int flags) {
         this.consts = consts; this.fns = fns; this.code = code; this.entry = entry;
         this.init = init; this.nativeNames = nativeNames; this.varNames = varNames;
+        this.flags = flags;
     }
 
     public static Img read(byte[] bytes) {
@@ -151,11 +164,23 @@ public final class Img {
         int[] init = new int[ninit];
         for (int i = 0; i < ninit; i++) init[i] = (int) r.u32();
 
+        // The compiled-arity table (`doc/decisions/0013`). This port emits its
+        // own bytecode and has no use for wasm table slots, so the table is
+        // SKIPPED rather than read -- but it has to be skipped exactly, because
+        // the flags word is behind it.
+        long naot = r.u32();
+        for (long k = 0; k < naot; k++) {
+            r.u32(); r.u32();                       // slot, depth
+            long np = r.u32();
+            for (long j = 0; j < np; j++) { r.u32(); r.u32(); }
+        }
+        int flags = (int) r.u32();
+
         String[] nativeNames = new String[nnatives];
         for (int i = 0; i < nnatives; i++) {
             nativeNames[i] = String.valueOf(consts[nativeNameConst[i]]);
         }
-        return new Img(consts, fns, code, entry, init, nativeNames, varNames);
+        return new Img(consts, fns, code, entry, init, nativeNames, varNames, flags);
     }
 
     private static Object readConst(R r, Object[] built) {

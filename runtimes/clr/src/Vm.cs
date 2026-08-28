@@ -41,6 +41,12 @@ public sealed class Vm {
 
     public Vm(Img img) {
         Img = img;
+        // What the compiler was told, honoured here. `:optimize [perf]` cannot
+        // be carried the same way on two of the three runtimes -- on wasm it
+        // changes the artifact, here the arities are emitted at load time from
+        // the same bytecode -- so the image carries the DECISION and this reads
+        // it.
+        AotEnabled = (img.Flags & Img.FlagPerf) != 0;
         _vars = new object[img.VarNames.Length];
         _natives = new Builtins.Fn[img.NativeNames.Length];
         for (int i = 0; i < _natives.Length; i++) _natives[i] = Builtins.ByName(img.NativeNames[i]);
@@ -67,6 +73,9 @@ public sealed class Vm {
     private readonly object _compileLock = new();
     /// Off unless asked for, exactly as on wasm: AOT is a preference, not a
     /// default (`doc/decisions/0021`).
+    /// Off unless asked for, exactly as on wasm: AOT is a preference, not a
+    /// default. Set from the image's `FlagPerf` when the Vm is built, and
+    /// settable by a host afterwards for an image that never asked.
     public bool AotEnabled { get; set; }
     public int CompiledCount { get; private set; }
 

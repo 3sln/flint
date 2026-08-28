@@ -9,7 +9,16 @@ namespace Flint;
 /// compiler. The reader, the analyzer and the whole core library are already
 /// portable and compile to exactly this.
 public sealed class Img {
-    public const int Version = 2;
+    public const int Version = 3;
+
+    /// Image flags, a trailing u32. Bit 0 is `:optimize [perf]` -- what the
+    /// compiler DECIDED, not what it was asked.
+    ///
+    /// A flag rather than "does the image carry compiled arities": on wasm the
+    /// arity table IS the answer, and here it never can be, because this port
+    /// emits its own IL at LOAD time from the same bytecode. An image meant for
+    /// it carries the preference and an empty table.
+    public const int FlagPerf = 1;
 
     private const int KNil = 0, KTrue = 1, KFalse = 2, KInt = 3, KDouble = 4,
         KString = 5, KKeyword = 6, KSymbol = 7, KVector = 8, KList = 9,
@@ -26,6 +35,9 @@ public sealed class Img {
     /// which is what makes an image portable between hosts at all.
     public readonly string[] NativeNames;
     public readonly string[] VarNames;
+    /// What the compiler decided. `Vm` reads `FlagPerf` and turns its own AOT
+    /// on, so one `:optimize` reaches all three runtimes.
+    public readonly int Flags;
 
     public sealed class Arity {
         public readonly int Argc, Nlocals, Code, Len;
@@ -67,9 +79,9 @@ public sealed class Img {
     }
 
     private Img(object[] consts, FnDef[] fns, byte[] code, int entry, int[] init,
-                string[] nativeNames, string[] varNames) {
+                string[] nativeNames, string[] varNames, int flags) {
         Consts = consts; Fns = fns; Code = code; Entry = entry; Init = init;
-        NativeNames = nativeNames; VarNames = varNames;
+        NativeNames = nativeNames; VarNames = varNames; Flags = flags;
     }
 
     public static Img Read(byte[] bytes) {
@@ -125,10 +137,21 @@ public sealed class Img {
         var init = new int[ninit];
         for (int i = 0; i < ninit; i++) init[i] = (int) r.U32();
 
+        // The compiled-arity table (`doc/decisions/0013`). This port emits its
+        // own IL and has no use for wasm table slots, so the table is SKIPPED
+        // rather than read -- exactly, because the flags word is behind it.
+        long naot = r.U32();
+        for (long k = 0; k < naot; k++) {
+            r.U32(); r.U32();                       // slot, depth
+            long np = r.U32();
+            for (long j = 0; j < np; j++) { r.U32(); r.U32(); }
+        }
+        int imageFlags = (int) r.U32();
+
         var nativeNames = new string[nnatives];
         for (int i = 0; i < nnatives; i++)
             nativeNames[i] = Convert.ToString(consts[nativeNameConst[i]]);
-        return new Img(consts, fns, code, entry, init, nativeNames, varNames);
+        return new Img(consts, fns, code, entry, init, nativeNames, varNames, imageFlags);
     }
 
     private static object ReadConst(R r, object[] built) {

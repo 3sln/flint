@@ -79,6 +79,13 @@ public final class Vm {
 
     public Vm(Img img) {
         this.img = img;
+        // What the compiler was told, honoured here. `:optimize [perf]` cannot
+        // be carried the same way on two of the three runtimes -- on wasm it
+        // changes the artifact, here the arities are emitted at load time from
+        // the same bytecode -- so the image carries the DECISION and this reads
+        // it. Still settable afterwards, because a host may want it on for an
+        // image that never asked.
+        this.aotEnabled = (img.flags & Img.FLAG_PERF) != 0;
         this.vars = new java.util.concurrent.atomic.AtomicReferenceArray<>(img.varNames.length);
         this.natives = new Builtins.Fn[img.nativeNames.length];
         for (int i = 0; i < natives.length; i++) {
@@ -109,8 +116,9 @@ public final class Vm {
     private final java.util.Map<Long, Aot.Compiled> compiled = new java.util.HashMap<>();
     private static final Aot.Compiled NOT_COMPILED = (vm, self, locals) -> null;
     /// Off unless asked for, exactly as on wasm: AOT is a preference, not a
-    /// default (`doc/decisions/0021`).
-    public boolean aotEnabled = false;
+    /// default (`doc/decisions/0021`). Set from the image's `FLAG_PERF` in the
+    /// constructor, and settable by a host afterwards.
+    public boolean aotEnabled;
     public int compiledCount = 0;
 
     private synchronized Aot.Compiled compiledFor(int fnIndex, Img.Arity a) {

@@ -47,6 +47,12 @@ if command -v dotnet >/dev/null 2>&1; then
 fi
 [ -n "$CLR" ] || missing "no dotnet, or the conform project did not build; CLR rows"
 
+# Cleared, not reused. Images used to be kept if present, which meant one from
+# an earlier build survived a change to the image FORMAT -- and the symptom was
+# `this image is version 2 and this runtime reads 3` from a test that had
+# nothing to do with the change. Compiling one costs under a second; a stale one
+# costs an afternoon.
+rm -rf out/conform
 mkdir -p out/conform
 # javac's exit status, not just its output. This used to be piped into `head`,
 # which discards the status: a JDK too old for `java.lang.classfile` failed to
@@ -71,7 +77,7 @@ fi
 # Multi-threading on the JVM, which is a different problem to the native
 # runtime's: there is no safepoint to build because there is no collector of
 # ours to stop. What has to be right is flint's own shared state.
-if [ -f out/conform/threads.img ] || ./bin/flint :src runtimes/conform :fn threads/main \
+if ./bin/flint :src runtimes/conform :fn threads/main \
      --emit-image :out out/conform/threads.img >/dev/null 2>&1; then
   if "$JDK/bin/java" -cp runtimes/jvm/classes ThreadTest out/conform/threads.img \
        > /tmp/flint-jvm-threads.out 2>&1; then
@@ -158,6 +164,40 @@ if [ "$agree" -lt "$FLOOR" ]; then
   echo "  a case that used to agree no longer does ($agree < $FLOOR)"
   exit 1
 fi
+
+# ONE CONFIG, THREE RUNTIMES. `:optimize [perf]` cannot be carried the same way
+# on any two of them: on wasm it changes the ARTIFACT -- a different runtime
+# binary, compiled arities emitted into the module -- while on the JVM and the
+# CLR the arities are emitted at LOAD time from the same bytecode, so the two
+# images are byte-identical apart from the flag. That is exactly why the flag
+# exists, and why "is the compiled-arity table non-empty" could not answer it.
+#
+# Checked on both ports rather than asserted in a comment: the same source
+# compiled twice, and each runtime asked what it decided to do about it.
+./bin/flint :src runtimes/conform :fn numbers/main :optimize '[perf]' \
+  --emit-image :out out/conform/perf.img >/dev/null 2>&1
+./bin/flint :src runtimes/conform :fn numbers/main :optimize '[size]' \
+  --emit-image :out out/conform/size.img >/dev/null 2>&1
+for want in "perf 1 true" "size 0 false"; do
+  set -- $want
+  nm=$1; wf=$2; wa=$3
+  got="$("$JDK/bin/java" -cp runtimes/jvm/classes Flags "out/conform/$nm.img")"
+  if [ "$got" = "flags=$wf aot=$wa" ]; then
+    echo "  ok   :optimize [$nm] reaches the runtime that has to act on it [jvm]"
+  else
+    echo "  FAIL :optimize [$nm] [jvm]: wanted 'flags=$wf aot=$wa', got '$got'"
+    exit 1
+  fi
+  if [ -n "$CLR" ]; then
+    got="$("$CLR" --flags "out/conform/$nm.img")"
+    if [ "$got" = "flags=$wf aot=$wa" ]; then
+      echo "  ok   :optimize [$nm] reaches the runtime that has to act on it [clr]"
+    else
+      echo "  FAIL :optimize [$nm] [clr]: wanted 'flags=$wf aot=$wa', got '$got'"
+      exit 1
+    fi
+  fi
+done
 
 # SELF-HOSTING: run the flint COMPILER on each port and compare what it emits,
 # byte for byte, with what the native compiler emits from the same input.

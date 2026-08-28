@@ -164,6 +164,11 @@ pub struct Image {
     pub var_names: Vec<u32>,
     pub entry: u32,
     pub init: Vec<u32>,
+    /// What the compiler decided, as bits. `image::FLAG_PERF` is
+    /// `:optimize [perf]`: a runtime that can compile arities at load time
+    /// reads this and does, which is how one config means the same thing on
+    /// three runtimes that cannot carry it the same way.
+    pub flags: u32,
     /// One entry per compiled arity (`doc/decisions/0013`). Empty in a module
     /// built without AOT, which is what lets the interpreter's own loop be
     /// monomorphised free of the re-entry check.

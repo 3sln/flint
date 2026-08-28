@@ -58,6 +58,14 @@
         ;; benchmarks say which way round the numbers fall. `FLINT_AOT=1` turns
         ;; it on for every build, which is how the whole existing suite gets run
         ;; against compiled code without a single test knowing about it.
+        ;; `:optimize` is the config `doc/decisions/0025` describes: an ORDERED
+        ;; PREFERENCE, not a switch. The first token this build understands
+        ;; decides and the rest are ignored, which is what lets a script written
+        ;; against a newer flint still get an older one's best effort.
+        (= k ":optimize") (let [[xs rest*] (take-list (rest a))]
+                            (recur rest* (assoc m :optimize (mapv str xs))))
+        ;; The older spelling, kept because it is in scripts and in the AOT
+        ;; bisection handles. `:optimize [perf]` is the one to write.
         (= k "--aot") (recur (rest a) (assoc m :aot true))
         ;; doc/decisions/0023: a module that can be handed an IMAGE at run time,
         ;; so a Worker can compile a candidate and run it without linking.
@@ -518,7 +526,7 @@
       (do (when (seq (:out r)) (println (:out r)))
           (System/exit (or (:code r) 0))))))
 
-(let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path aot loader emit-image emit-spec features]}
+(let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path aot optimize loader emit-image emit-spec features]}
       (parse-args *command-line-args*)]
   (when-not fn
     (println "usage: flint :src <dir> :fn <ns/fn> [:out <file.wasm>]")
@@ -610,7 +618,26 @@
             (let [b @(:builder compiled)]
               (doseq [i (range (max 0 (- const 3)) (min (count (:consts b)) (+ const 4)))]
                 (println "const" i (pr-str (nth (:consts b) i))))))
+        ;; The ordered preference, resolved to the one boolean an artifact can
+        ;; carry. The FIRST token this build understands decides; unrecognised
+        ;; ones are stepped over rather than refused, which is what lets a list
+        ;; written against a newer flint still get this one's best effort.
+        ;; With no recognised token at all, `--aot` and FLINT_AOT still answer.
+        ;; `(some known ...)` would be wrong here: `some` returns the first
+        ;; TRUTHY result, so a `size` token -- whose answer is `false` -- would
+        ;; be skipped and the default taken instead. Find the first RECOGNISED
+        ;; token, then read its answer.
+        perf? (let [known {"perf" true ":perf" true "size" false ":size" false}
+                    tok (first (filter known (or optimize [])))]
+                (if tok
+                  (known tok)
+                  (boolean (or aot (= "1" (System/getenv "FLINT_AOT"))))))
         builder (when compiled (:builder compiled))
+        ;; Recorded in the IMAGE, not only acted on here. On wasm this also
+        ;; selects a different runtime binary and emits compiled arities; on the
+        ;; JVM and the CLR the arities are emitted at load time, so the image
+        ;; has to carry the request for those ports to honour it.
+        _ (when builder (img/set-perf! builder perf?))
         stats* (when compiled (:stats compiled))
         t1 (System/nanoTime)
         needed (if self (:natives selfres) (img/natives builder))
@@ -637,8 +664,7 @@
                                               (img/emit builder slots)))
                               :out out
                               :builder builder
-                              :aot? (and (or aot (= "1" (System/getenv "FLINT_AOT")))
-                                         (not self))
+                              :aot? (and perf? (not self))
                               :loader? loader
                               :entry-sym fn
                               :flint-version (or (System/getenv "FLINT_VERSION") "0.1.0")

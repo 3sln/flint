@@ -25,7 +25,18 @@ use crate::value::{Value, FALSE, NIL, TRUE};
 use crate::vm::{Arity, FnDef, Image};
 
 pub const MAGIC: &[u8; 8] = b"FLINTIMG";
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
+
+/// Image flags, a trailing `u32`. Bit 0 is `:optimize [perf]` -- what the
+/// compiler DECIDED, not what it was asked (`:optimize` is an ordered
+/// preference and the answer to it is a boolean).
+///
+/// It is a flag rather than "is the compiled-arity table non-empty" because
+/// those are not the same question. On wasm the table IS the answer. On the JVM
+/// and the CLR the arities are emitted at load time from the same bytecode, so
+/// an image for a port carries the preference and an empty table -- the case
+/// that could not be expressed before.
+pub const FLAG_PERF: u32 = 1;
 
 pub const K_NIL: u8 = 0;
 pub const K_TRUE: u8 = 1;
@@ -353,6 +364,11 @@ impl Rt {
             let _ = (slot, depth);
         }
 
+        // Trailing, so every offset above is where it was. `patch_native_slots`
+        // writes at offsets derived from a fixed 12, which is why this is at the
+        // end rather than beside the version.
+        let flags = r.u32();
+
         *self.image = Image {
             code,
             fns,
@@ -361,6 +377,7 @@ impl Rt {
             var_names,
             entry,
             init,
+            flags,
             #[cfg(feature = "aot")]
             aot,
         };
@@ -519,6 +536,8 @@ impl ImageWriter {
         }
         // No compiled arities: this writer exists for the Rust tests, and they
         // exercise the interpreter.
+        o.extend_from_slice(&0u32.to_le_bytes());
+        // ... and no flags, for the same reason.
         o.extend_from_slice(&0u32.to_le_bytes());
         o
     }

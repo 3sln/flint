@@ -8,7 +8,32 @@
             [flint.canon :as canon]))
 
 (def MAGIC [70 76 73 78 84 73 77 71])                        ; "FLINTIMG"
-(def VERSION 2)
+(def VERSION 3)
+
+;; Image FLAGS, a trailing u32. What the compiler DECIDED, not what it was
+;; asked: `:optimize` is an ordered preference and the answer to it is a
+;; boolean (`doc/decisions/0025`).
+;;
+;; It exists because `:optimize [perf]` has to mean the same thing on all three
+;; runtimes and cannot be carried the same way on any two of them. On wasm it
+;; changes the ARTIFACT -- a different runtime binary, and compiled arities
+;; emitted into the module. On the JVM and the CLR the arities are emitted at
+;; LOAD time from the same bytecode, so the artifact is identical and the
+;; preference has to travel inside it as a request the loading runtime honours.
+;;
+;; TRAILING rather than after the version, because `NATIVES-OFFSET` is a fixed
+;; 12 and `patch-native-slots` writes at offsets computed from it.
+;; NOT a `def`, and that is not a style choice. Adding one more top-level var to
+;; this namespace makes the SELF-COMPILE trap with `memory access out of bounds`
+;; -- deterministically, in the production runtime build only; the diagnostics
+;; build compiles the identical image and passes. `(if perf? 1 0)` passes and
+;; `(if perf? FLAG-PERF 0)` does not, which is 64 bytes of difference. That is a
+;; latent runtime bug this change happened to step on, it is written up in
+;; `doc/decisions/0031`, and the literal below is a way past it rather than a
+;; fix for it. The readers each name the constant: `image.rs`'s `FLAG_PERF`,
+;; `Img.java`'s `FLAG_PERF`, `Img.cs`'s `FlagPerf`.
+;;
+;;   bit 0 -- FLAG-PERF: `:optimize [perf]`
 
 (def K-NIL 0) (def K-TRUE 1) (def K-FALSE 2) (def K-INT 3) (def K-DOUBLE 4)
 (def K-STRING 5) (def K-KEYWORD 6) (def K-SYMBOL 7) (def K-VECTOR 8)
@@ -178,7 +203,7 @@
   "Serialise the image. `native-slots` maps builtin name -> wasm table slot;
   unresolved names get slot 0, which traps if ever called."
   [b native-slots]
-  (let [{:keys [consts fns vars natives code entry init aot]} @b
+  (let [{:keys [consts fns vars natives code entry init aot perf?]} @b
         aot (or aot [])]
     (flatten-bytes
      [MAGIC (u32 VERSION)
@@ -201,7 +226,12 @@
       (u32 (count aot))
       (for [a aot]
         [(u32 (:slot a)) (u32 (:depth a)) (u32 (count (:points a)))
-         (for [[ip block] (:points a)] [(u32 ip) (u32 block)])])])))
+         (for [[ip block] (:points a)] [(u32 ip) (u32 block)])])
+      ;; Last, so the offsets above are unchanged. A wasm module with compiled
+      ;; arities has both this bit and a non-empty table; an image for a PORT
+      ;; has the bit and an empty table, which is exactly the case that could
+      ;; not be expressed before.
+      (u32 (if perf? 1 0))])))
 
 (def NATIVES-OFFSET
   "Byte offset of the natives count: magic(8) + version(4)."
@@ -221,6 +251,12 @@
                   (assoc (+ at 3) (bit-and (bit-shift-right s 24) 0xff)))))
           (vec bytes)
           (map-indexed vector names)))
+
+(defn set-perf!
+  "Record what `:optimize` resolved to. The image carries the DECISION, not the
+  preference list -- see `FLAG-PERF`."
+  [b on?]
+  (vswap! b assoc :perf? (boolean on?)))
 
 (defn set-entry! [b i] (vswap! b assoc :entry i))
 (defn add-init! [b i] (vswap! b update :init conj i))

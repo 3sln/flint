@@ -34,6 +34,7 @@ for the first.
 | [0026](0026-tables.md) | Tables: columnar storage that is a value | **Queued.** A vector of maps outside, a columnar B-tree inside |
 | [0027](0027-ports-are-the-hosts.md) | Ports belong to the host, not to a sandbox | **Queued.** Local ports stay by-reference; global ones encode, and the encode is the GC boundary |
 | [0030](0030-clr-runtime.md) | The CLR runtime | **Partly shipped.** Self-hosts byte for byte, all 155 builtins, threads, AOT to IL at 1.8x, all nine conformance cases |
+| [0031](0031-the-self-compile-cliff.md) | The self-compile cliff | **Roadmap** — an open fault, not a plan. One extra `def` in a compiler namespace traps the self-compile; production build only, diagnostics build passes. A release blocker, with the runs that narrow it |
 | [0029](0029-jvm-runtime.md) | The JVM runtime | **Partly shipped.** Self-hosts byte for byte, all 155 builtins, threads, AOT to bytecode at 12x, all nine conformance cases |
 | [0028](0028-drivers.md) | A driver: ports are the only way to drive a sandbox | **Partly shipped.** Rust has `Driver`/`ThreadPool`/async `call`, 200 requests coalesced into 1 dispatch; the parallel collector does not exist |
 | [0024](0024-no-runtime-linking.md) | No linking at compile time; byte strings and transient ropes | **Partly shipped.** The splice and the tree shaker work with no linker; the byte strings do not exist |

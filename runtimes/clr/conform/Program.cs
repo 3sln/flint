@@ -9,12 +9,27 @@ public static class Program {
     public static int Main(string[] args) {
         if (args.Length >= 2 && args[0] == "--threads") return Threads(args[1]);
         if (args.Length >= 2 && args[0] == "--aot") return Aot(args[1]);
+        if (args.Length >= 2 && args[0] == "--flags") return Flags(args[1]);
         if (args.Length >= 3 && args[0] == "--selfhost") return SelfHost(args[1], args[2]);
         var vm = new Vm(Img.Read(File.ReadAllBytes(args[0])));
         vm.EnsureStarted();
         object outv = vm.Call(new Vm.Closure(vm.Img.Entry, Array.Empty<object>()),
                               new object[] { new Vec() });
         Console.WriteLine(Builtins.Str(outv));
+        return 0;
+    }
+
+    /// What the compiler decided, and whether this runtime acted on it.
+    ///
+    /// `:optimize [perf]` has to mean the same thing on all three runtimes and
+    /// cannot be carried the same way on any two: on wasm it changes the
+    /// artifact, here the IL is emitted at load time from the same bytecode. So
+    /// the image carries the decision and the Vm reads it -- and this prints
+    /// both halves so the claim is checked rather than asserted in a comment.
+    private static int Flags(string path) {
+        var img = Img.Read(File.ReadAllBytes(path));
+        var vm = new Vm(img);
+        Console.WriteLine($"flags={img.Flags} aot={(vm.AotEnabled ? "true" : "false")}");
         return 0;
     }
 
