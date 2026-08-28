@@ -141,10 +141,42 @@ public final class Vm {
         }
     }
 
+    /// A runaway-recursion guard, off unless FLINT_MAX_DEPTH is set.
+    ///
+    /// A StackOverflowError says only that the stack ran out. It does not say
+    /// WHICH functions were calling each other, and the trace is 11 million
+    /// identical `Vm.run`/`Vm.call` pairs with no flint name anywhere in it.
+    /// This names the cycle instead, which is the thing worth knowing.
+    private static final int MAX_DEPTH =
+        Integer.getInteger("flint.maxDepth",
+                           System.getenv("FLINT_MAX_DEPTH") == null ? 0
+                           : Integer.parseInt(System.getenv("FLINT_MAX_DEPTH")));
+    private int depth = 0;
+    /// Every recorded call in ORDER, tail calls included. The ring is indexed
+    /// by its own counter rather than by depth: a tail call does not change the
+    /// depth, so indexing by depth hides exactly the calls that turn a cycle
+    /// into a loop.
+    private int ringN = 0;
+    private final String[] ring = new String[128];
+    void ringPut(String name) { ring[ringN++ & 127] = name; }
+
     /// Call a function value with positional arguments.
     public Object call(Object fn, Object[] args) {
         if (fn instanceof Closure c) {
             Img.FnDef def = img.fns[c.fnIndex()];
+            if (MAX_DEPTH > 0) {
+                ringPut(def.name == null ? ("fn#" + c.fnIndex()) : def.name);
+                if (++depth > MAX_DEPTH) {
+                    StringBuilder b = new StringBuilder("recursion past " + MAX_DEPTH + ", innermost last:");
+                    for (int i = 0; i < 128; i++) b.append("\n    ").append(ring[(ringN + i) & 127]);
+                    depth = 0;
+                    // PRINTED, not just thrown: the compiler catches and
+                    // rewraps, and its wrapper reads a message off a map, so a
+                    // thrown string arrives empty at the top.
+                    System.err.println(b);
+                    throw new Thrown(b.toString());
+                }
+            }
             Img.Arity a = def.select(args.length);
             if (a == null) {
                 throw new Thrown("wrong number of arguments ("
@@ -161,9 +193,11 @@ public final class Vm {
                 // right elements in the wrong shape, again.
                 locals[n] = rest.isEmpty() ? null : Seq.of(rest);
             }
-            Aot.Compiled compiledArity = compiledFor(c.fnIndex(), a);
-            if (compiledArity != null) return compiledArity.run(this, c, locals);
-            return run(c, a, locals);
+            try {
+                Aot.Compiled compiledArity = compiledFor(c.fnIndex(), a);
+                if (compiledArity != null) return compiledArity.run(this, c, locals);
+                return run(c, a, locals);
+            } finally { if (MAX_DEPTH > 0) depth--; }
         }
         if (fn instanceof Builtins.Fn f) return f.apply(this, args);
         if (fn instanceof Img.NativeRef nr) {
@@ -266,16 +300,37 @@ public final class Vm {
                     }
                     case TAIL_CALL: {
                         // A real tail call: no JVM frame is added, so a loop
-                        // written as self-recursion runs in constant stack --
-                        // which the JVM would not give us for free.
+                        // written as recursion runs in constant stack -- which
+                        // the JVM would not give us for free.
+                        //
+                        // For ANY closure, not just this one. Restricting it to
+                        // self-recursion is what stopped the flint compiler
+                        // running here: three of its functions tail-call each
+                        // other in a cycle, which is constant stack in flint's
+                        // own VM and grew a JVM frame per hop. It ran for
+                        // minutes and then overflowed a 2 GB stack, which is
+                        // what "unbounded rather than deep" looks like.
+                        //
+                        // Safe because a tail call is only EMITTED outside a
+                        // try (`emitter.cljc`, `:in-try?`), so there are never
+                        // handlers to discard here.
                         int argc = u8(ip); ip += 1;
                         Object[] args = new Object[argc];
                         System.arraycopy(stack, sp - argc, args, 0, argc);
                         sp -= argc + 1;
                         Object f = stack[sp];
-                        if (f instanceof Closure c && c.fnIndex() == self.fnIndex()) {
+                        if (f instanceof Closure c) {
                             Img.Arity a = img.fns[c.fnIndex()].select(argc);
-                            if (a != null) {
+                            // A COMPILED target has to be entered through its
+                            // compiled body, so it takes a frame. It cannot
+                            // tail-call back out -- the emitter refuses an
+                            // arity containing TAIL_CALL -- so that frame is
+                            // bounded.
+                            if (a != null && compiledFor(c.fnIndex(), a) == null) {
+                                if (MAX_DEPTH > 0) {
+                                    Img.FnDef d = img.fns[c.fnIndex()];
+                                    ringPut((d.name == null ? "fn#" + c.fnIndex() : d.name) + " (tail)");
+                                }
                                 self = c;
                                 arity = a;
                                 locals = new Object[Math.max(a.nlocals, a.argc + 1)];

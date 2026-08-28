@@ -178,7 +178,15 @@ public static class Builtins {
         8 => v is Vec,
         9 => v is FlintMap,
         10 => v is FlintSet,
-        11 => v is Seq or LazySeq or Cons or Vec or FlintSet or FlintMap or string,
+        // `seq?`, NOT `seqable?`. A vector, map, set and string are all seqABLE
+        // and none of them IS a seq -- `(seq? [1 2])` is false in Clojure and in
+        // `runtime/src/seqs.rs::is_seq`, which lists only cons, the empty list,
+        // lazy seqs, and the vector/string/range views. Conflating the two is
+        // what stopped the flint compiler running on these ports:
+        // `analyze-untagged` tests `seq?` before `vector?`, so an argument
+        // vector `[& clauses]` was analyzed as a CALL, and the analyzer
+        // descended into its own head forever.
+        11 => v is Seq or LazySeq or Cons,
         12 => v is Vm.Closure or Fn or Img.NativeRef,
         13 => v is null,
         _ => v is Vec or Seq or LazySeq or Cons,
@@ -400,7 +408,18 @@ public static class Builtins {
         });
         // `seq` answers the SAME sequence or nil -- it does not realise it,
         // because an infinite one cannot be realised.
-        Def("seq", (vm, a) => IsEmptySeq(Arg(a, 0)) ? null : Arg(a, 0));
+        // `seq` returns a SEQ, which is what `seq?` then answers true for.
+        // Handing back the vector itself reads correctly and prints correctly
+        // and is still wrong: `(seq? (seq [1 2]))` was false, and code that
+        // calls `seq` to get something it can test is the code that notices.
+        // A vector's seq is a VIEW of it, not a copy -- `Seq` wraps the list.
+        Def("seq", (vm, a) => {
+            object v = Arg(a, 0);
+            if (IsEmptySeq(v)) return null;
+            if (v is Seq or Cons or LazySeq) return v;
+            var xs = new List<object>(Iterate(v));
+            return xs.Count == 0 ? null : new Seq(xs);
+        });
         Def("first", (vm, a) => FirstOf(Arg(a, 0)));
         // The tail, UNFORCED.
         Def("rest", (vm, a) => RestOf(Arg(a, 0)));
@@ -728,6 +747,7 @@ public static class Builtins {
         // inventing semantics; these are the honest answers until they are
         // ported.
         Def("meta", (vm, a) => null);
+        Def("with-meta", (vm, a) => Arg(a, 0));
         Def("flint/opaque", (vm, a) => Arg(a, 0));
         Def("flint/opaque?", (vm, a) => false);
         Def("flint/opaque-label", (vm, a) => null);

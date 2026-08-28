@@ -13,7 +13,14 @@ public class SelfHost {
         // A thread with a big stack. Each flint call is a JVM frame here, and
         // the compiler is deeply recursive -- `-Xss` does not apply to the
         // main thread on every JVM, but a thread's own stackSize always does.
-        Thread t = new Thread(null, () -> { try { run(args); } catch (Throwable e) {
+        Thread t = new Thread(null, () -> { try { run(args); } catch (StackOverflowError e) {
+            // The DEPTH is the diagnosis. "Deep but finite" and "unbounded"
+            // look identical from a stack trace and want opposite fixes, so
+            // count the frames rather than reading them.
+            System.out.println("  StackOverflowError at depth " + e.getStackTrace().length
+                               + " (run -XX:MaxJavaStackTraceDepth=0 for the true depth)");
+            System.exit(1);
+        } catch (Throwable e) {
             e.printStackTrace(); System.exit(1); } }, "flint", 2L * 1024 * 1024 * 1024);
         t.start();
         t.join();

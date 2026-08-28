@@ -283,12 +283,23 @@ public final class Builtins {
             case 8 -> v instanceof List && !(v instanceof Seq);             // vector
             case 9 -> v instanceof Map;                                    // map
             case 10 -> v instanceof java.util.Set;                         // set
-            case 11 -> v instanceof Seq || v instanceof LazySeq || v instanceof Cons
-                       || v instanceof Collection || v instanceof String;   // seq
+            // `seq?`, NOT `seqable?`. A vector, map, set and string are all
+            // seqABLE and none of them IS a seq -- `(seq? [1 2])` is false in
+            // Clojure and in `runtime/src/seqs.rs::is_seq`, which lists only
+            // cons, the empty list, lazy seqs, and the vector/string/range
+            // views. Conflating the two is what stopped the flint compiler
+            // running here: `analyze-untagged` tests `seq?` before `vector?`,
+            // so an argument vector `[& clauses]` was analyzed as a CALL, and
+            // the analyzer descended into its own head forever.
+            case 11 -> v instanceof Seq || v instanceof LazySeq || v instanceof Cons; // seq
             case 12 -> v instanceof Vm.Closure || v instanceof Fn;         // fn
             case 13 -> v == null;                                          // nil
-            default -> v instanceof List || v instanceof Collection
-                       || v instanceof Cons || v instanceof LazySeq;        // sequential
+            // `sequential?`: vectors and seqs, NOT sets or maps. `Collection`
+            // covers Set, so the old test called `#{1}` sequential -- and
+            // Clojure says false, because a set has no order to be sequential
+            // in.
+            default -> v instanceof List || v instanceof Cons
+                       || v instanceof LazySeq;                             // sequential
         };
     }
 
@@ -392,7 +403,19 @@ public final class Builtins {
         });
         // `seq` answers the SAME sequence or nil -- it does not realise it.
         // Returning a materialised copy makes an infinite sequence a hang.
-        def("seq", (vm, a) -> isEmptySeq(arg(a, 0)) ? null : arg(a, 0));
+        // `seq` returns a SEQ, which is what `seq?` then answers true for.
+        // Handing back the vector itself reads correctly and prints correctly
+        // and is still wrong: `(seq? (seq [1 2]))` was false, and code that
+        // calls `seq` to get something it can test is the code that notices.
+        // A vector's seq is a VIEW of it, not a copy -- `Seq` wraps the list.
+        def("seq", (vm, a) -> {
+            Object v = arg(a, 0);
+            if (isEmptySeq(v)) return null;
+            if (v instanceof Seq || v instanceof Cons || v instanceof LazySeq) return v;
+            List<Object> xs = new ArrayList<>();
+            for (Object o : iterate(v)) xs.add(o);
+            return xs.isEmpty() ? null : Seq.of(xs);
+        });
         def("first", (vm, a) -> {
             // Without walking the whole thing: a lazy sequence's first element
             // must not force the rest of it.

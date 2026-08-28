@@ -125,6 +125,11 @@
 ;; reaches it immediately.
 (def ^:private inline-depth-limit 200)
 
+;; The same, for ordinary macros. Higher because legitimate nesting is deeper:
+;; a macro that expands into a macro that expands into a macro is ordinary,
+;; while an `:inline` that reaches 200 is already pathological.
+(def ^:private macro-depth-limit 500)
+
 (defn- inline-fn
   "The `:inline` expander for `sym` at `argc` arguments, or nil.
 
@@ -275,7 +280,19 @@
              narrowed))
 
 (defn- analyze-seq [env form]
-  (let [head (first form)]
+  (let [head (first form)
+        ;; The expansion counters measure a CHAIN: macro expands to macro
+        ;; expands to macro. A chain ENDS as soon as a form is analyzed that is
+        ;; not itself an expansion, so the counters are cleared here and put
+        ;; back only on the branches that expand.
+        ;;
+        ;; Carrying them into subforms instead adds up sibling expansions
+        ;; across a whole function body and reports a limit nobody reached --
+        ;; which is what the first version of this did, blaming `(cond)` for a
+        ;; count its ancestors had run up.
+        mdepth (:macro-depth env 0)
+        idepth (:inline-depth env 0)
+        env (dissoc env :macro-depth :inline-depth)]
     (cond
       (and (symbol? head) (contains? specials head))
       (analyze-special env head form)
@@ -308,7 +325,7 @@
            (not (macro-fn env head))
            (inline-fn env head (count (rest form))))
       (let [q (qualify env head)
-            d (inc (:inline-depth env 0))
+            d (inc idepth)
             _ (when (> d inline-depth-limit)
                 (err (str "the :inline for " q " does not terminate: "
                           inline-depth-limit " nested expansions. An :inline "
@@ -324,12 +341,24 @@
 
       (and (symbol? head) (not (resolve-local env head)) (macro-fn env head))
       (let [f (macro-fn env head)
+            ;; The same guard the `:inline` branch has, and for the same
+            ;; reason: expansion re-analyzes, so a macro that returns its own
+            ;; input never terminates. Without it the compiler simply runs out
+            ;; of stack, which names nothing -- 11 million identical frames
+            ;; with no form and no macro in them.
+            d (inc mdepth)
+            _ (when (> d macro-depth-limit)
+                (err (str "macro expansion of " (qualify env head) " does not "
+                          "terminate: " macro-depth-limit " nested expansions. "
+                          "A macro whose expansion still calls itself in head "
+                          "position expands forever.")
+                     {:form form :sym (qualify env head)}))
             ;; `&env` is deliberately tiny: the namespace being compiled, and
             ;; nothing else. `defprotocol` needs it to build the fully-qualified
             ;; method keyword that metadata dispatch looks for; handing macros
             ;; the whole analyzer environment would make it API.
             expanded (apply f form {:ns (current-ns env)} (rest form))]
-        (analyze env expanded))
+        (analyze (assoc env :macro-depth d) expanded))
 
       :else
       (let [f (analyze env head)

@@ -190,15 +190,30 @@ public sealed class Vm {
                     }
                     case TailCall: {
                         // A real tail call: no CLR frame is added, so a loop
-                        // written as self-recursion runs in constant stack.
+                        // written as recursion runs in constant stack.
+                        //
+                        // For ANY closure, not just this one. Restricted to
+                        // self-recursion, MUTUAL tail recursion grows a frame
+                        // per hop -- constant stack in flint's own VM, and an
+                        // overflow here. The flint compiler tail-calls between
+                        // three of its own functions, which is how this was
+                        // found.
+                        //
+                        // Safe because a tail call is only EMITTED outside a
+                        // try (`emitter.cljc`, `:in-try?`), so there are never
+                        // handlers to discard.
                         int argc = U8(ip); ip += 1;
                         var args = new object[argc];
                         Array.Copy(stack, sp - argc, args, 0, argc);
                         sp -= argc + 1;
                         object f = stack[sp];
-                        if (f is Closure c2 && c2.FnIndex == self.FnIndex) {
+                        if (f is Closure c2) {
                             var a2 = Img.Fns[c2.FnIndex].Select(argc);
-                            if (a2 != null) {
+                            // A COMPILED target is entered through its compiled
+                            // body, so it takes a frame. It cannot tail-call
+                            // back out -- the emitter refuses an arity holding
+                            // a tail call -- so that frame is bounded.
+                            if (a2 != null && CompiledFor(c2.FnIndex, a2) == null) {
                                 self = c2; arity = a2;
                                 locals = new object[Math.Max(a2.Nlocals, a2.Argc + 1)];
                                 Array.Copy(args, locals, Math.Min(a2.Argc, argc));
