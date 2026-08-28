@@ -87,6 +87,40 @@ public final class Vm {
         }
     }
 
+    /// Reached from compiled code, which is a different class.
+    public Object callNative(int idx, Object[] args) {
+        Builtins.Fn f = natives[idx];
+        if (f == null) {
+            throw new Thrown("this runtime does not carry the builtin `"
+                + img.nativeNames[idx] + "`");
+        }
+        return f.apply(this, args);
+    }
+
+    /// Compiled arities, by (function, arity). `NOT_COMPILED` marks one this
+    /// emitter refused, so a function it cannot handle is only tried once.
+    private final java.util.Map<Long, Aot.Compiled> compiled = new java.util.HashMap<>();
+    private static final Aot.Compiled NOT_COMPILED = (vm, self, locals) -> null;
+    /// Off unless asked for, exactly as on wasm: AOT is a preference, not a
+    /// default (`doc/decisions/0021`).
+    public boolean aotEnabled = false;
+    public int compiledCount = 0;
+
+    private synchronized Aot.Compiled compiledFor(int fnIndex, Img.Arity a) {
+        if (!aotEnabled) return null;
+        Img.FnDef def = img.fns[fnIndex];
+        int ai = 0;
+        for (int i = 0; i < def.arities.length; i++) if (def.arities[i] == a) ai = i;
+        long key = ((long) fnIndex << 8) | ai;
+        Aot.Compiled got = compiled.get(key);
+        if (got != null) return got == NOT_COMPILED ? null : got;
+        Aot.Compiled c = null;
+        try { c = Aot.tryCompile(img, a); } catch (Throwable t) { c = null; }
+        compiled.put(key, c == null ? NOT_COMPILED : c);
+        if (c != null) compiledCount++;
+        return c;
+    }
+
     /// Run the image's initialisers, once. A sandbox serves many calls and they
     /// run once, not per call (`doc/decisions/0025`).
     public void ensureStarted() {
@@ -117,6 +151,8 @@ public final class Vm {
                 for (int i = n; i < args.length; i++) rest.add(args[i]);
                 locals[n] = rest.isEmpty() ? null : rest;
             }
+            Aot.Compiled compiledArity = compiledFor(c.fnIndex(), a);
+            if (compiledArity != null) return compiledArity.run(this, c, locals);
             return run(c, a, locals);
         }
         if (fn instanceof Builtins.Fn f) return f.apply(this, args);

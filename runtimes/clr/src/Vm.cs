@@ -49,6 +49,42 @@ public sealed class Vm {
     private object GetVar(int i) { lock (_varLock) return _vars[i]; }
     private void SetVarSlot(int i, object v) { lock (_varLock) _vars[i] = v; }
 
+    // Reached from compiled code, which cannot see private members.
+    public object GetVarPublic(int i) => GetVar(i);
+    public void SetVarPublic(int i, object v) => SetVarSlot(i, v);
+    public object CallNative(int idx, object[] args) {
+        var f = _natives[idx];
+        if (f == null)
+            throw new FlintThrow($"this runtime does not carry the builtin `{Img.NativeNames[idx]}`");
+        return f(this, args);
+    }
+
+    /// Compiled arities, by (function, arity) -- null until asked for, and
+    /// `NotCompiled` once an attempt has failed, so a function this emitter
+    /// cannot handle is only tried once.
+    private readonly Dictionary<(int, int), Aot.Compiled> _compiled = new();
+    private static readonly Aot.Compiled NotCompiled = (_, _, _) => null;
+    private readonly object _compileLock = new();
+    /// Off unless asked for, exactly as on wasm: AOT is a preference, not a
+    /// default (`doc/decisions/0021`).
+    public bool AotEnabled { get; set; }
+    public int CompiledCount { get; private set; }
+
+    private Aot.Compiled CompiledFor(int fnIndex, Img.Arity a) {
+        if (!AotEnabled) return null;
+        int ai = Array.IndexOf(Img.Fns[fnIndex].Arities, a);
+        var key = (fnIndex, ai);
+        lock (_compileLock) {
+            if (_compiled.TryGetValue(key, out var got))
+                return ReferenceEquals(got, NotCompiled) ? null : got;
+            Aot.Compiled c = null;
+            try { c = Aot.TryCompile(Img, a); } catch (Exception) { c = null; }
+            _compiled[key] = c ?? NotCompiled;
+            if (c != null) CompiledCount++;
+            return c;
+        }
+    }
+
     /// Run the image's initialisers, once. A sandbox serves many calls and they
     /// run once, not per call (`doc/decisions/0025`).
     public void EnsureStarted() {
@@ -75,6 +111,8 @@ public sealed class Vm {
                 for (int i = a.Argc; i < args.Length; i++) rest.Add(args[i]);
                 locals[a.Argc] = rest.Count == 0 ? null : new Seq(rest);
             }
+            var compiled = CompiledFor(c.FnIndex, a);
+            if (compiled != null) return compiled(this, c, locals);
             return Run(c, a, locals);
         }
         if (fn is Builtins.Fn f) return f(this, args);

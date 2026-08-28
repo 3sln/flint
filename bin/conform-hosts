@@ -10,7 +10,10 @@
 set -e
 cd "$(dirname "$0")/.."
 
-JDK="${FLINT_JDK:-/opt/homebrew/opt/openjdk@21}"
+# JDK 24+ for `java.lang.classfile`, which the AOT emitter uses. Falls back to
+# 21 for the interpreter rows when a newer one is not there.
+JDK="${FLINT_JDK:-/opt/homebrew/opt/openjdk}"
+[ -x "$JDK/bin/javac" ] || JDK=/opt/homebrew/opt/openjdk@21
 if [ ! -x "$JDK/bin/javac" ]; then
   echo "  (no JDK at $JDK; set FLINT_JDK to run the JVM rows)"
   exit 0
@@ -70,6 +73,23 @@ for src in runtimes/conform/*.cljc; do
   jvm="$("$JDK/bin/java" -cp runtimes/jvm/classes Conform "out/conform/$ns.img" 2>&1 || true)"
   clr=""
   [ -n "$CLR" ] && clr="$("$CLR" "out/conform/$ns.img" 2>&1 || true)"
+
+  # AOT, on both hosts that have it: the same program compiled and interpreted,
+  # and the answers diffed. The only thing worth asserting about a backend is
+  # that it did not change the answer -- fast and wrong is worse than absent,
+  # and "it ran" does not tell them apart.
+  jaot="$("$JDK/bin/java" -cp runtimes/jvm/classes AotTest "out/conform/$ns.img" 2>&1 || true)"
+  case "$jaot" in
+    *"ok  "*) echo "  $(echo "$jaot" | head -1 | sed 's/^ *//') [jvm aot: '"$ns"']" ;;
+    *) echo "  FAIL jvm aot $ns"; echo "$jaot"; fails=$((fails + 1)) ;;
+  esac
+  if [ -n "$CLR" ]; then
+    aot="$("$CLR" --aot "out/conform/$ns.img" 2>&1 || true)"
+    case "$aot" in
+      *"ok  "*) echo "  $(echo "$aot" | head -1 | sed 's/^ *//') [clr aot: '"$ns"']" ;;
+      *) echo "  FAIL clr aot $ns"; echo "$aot"; fails=$((fails + 1)) ;;
+    esac
+  fi
 
   bad=""
   [ "$native" = "$jvm" ] || bad="jvm"

@@ -2,8 +2,9 @@
 
 > **PARTLY BUILT.** The image loader, the interpreter over all 46 opcodes and
 > sixty-odd builtins run real flint programs on .NET, agreeing with the native
-> runtime on every conformance case, and several threads run one program on it.
-> Not built: most of the remaining builtins, and AOT.
+> runtime on every conformance case, several threads run one program on it, and
+> AOT emits real IL (1.53x on a compute loop, every case agreeing with the
+> interpreter). Not built: most of the remaining builtins.
 
 Tier 2, the same as `0029`: port the VM and lean on the host's collector. A
 flint value is a .NET object, the CLR owns lifetime, and the generational

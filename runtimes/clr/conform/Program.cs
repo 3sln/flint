@@ -8,11 +8,60 @@ using Flint;
 public static class Program {
     public static int Main(string[] args) {
         if (args.Length >= 2 && args[0] == "--threads") return Threads(args[1]);
+        if (args.Length >= 2 && args[0] == "--aot") return Aot(args[1]);
         var vm = new Vm(Img.Read(File.ReadAllBytes(args[0])));
         vm.EnsureStarted();
         object outv = vm.Call(new Vm.Closure(vm.Img.Entry, Array.Empty<object>()),
                               new object[] { new Vec() });
         Console.WriteLine(Builtins.Str(outv));
+        return 0;
+    }
+
+    /// AOT: the same program interpreted and compiled, and the answers diffed.
+    ///
+    /// The only thing worth asserting about a compiler is that it did not
+    /// change the answer. A backend that is fast and wrong is worse than no
+    /// backend, and "it ran" does not tell them apart.
+    private static int Aot(string path) {
+        var img = Img.Read(File.ReadAllBytes(path));
+
+        var interp = new Vm(img);
+        interp.EnsureStarted();
+        object want = interp.Call(new Vm.Closure(img.Entry, Array.Empty<object>()),
+                                  new object[] { new Vec() });
+
+        var jit = new Vm(img) { AotEnabled = true };
+        jit.EnsureStarted();
+        object got = jit.Call(new Vm.Closure(img.Entry, Array.Empty<object>()),
+                              new object[] { new Vec() });
+
+        bool same = Builtins.Eq(want, got);
+        Console.WriteLine("  " + (same ? "ok  " : "FAIL")
+            + " compiled and interpreted agree (" + jit.CompiledCount + " arities compiled)");
+        if (!same) {
+            Console.WriteLine("        interpreted " + Builtins.Str(want));
+            Console.WriteLine("        compiled    " + Builtins.Str(got));
+            return 1;
+        }
+        if (jit.CompiledCount == 0) {
+            Console.WriteLine("  FAIL nothing was compiled, so nothing was tested");
+            return 1;
+        }
+
+        // What it is FOR. Best-of, because a single timing on a JIT host is
+        // mostly warm-up.
+        double Best(Vm vm, int runs) {
+            double best = double.MaxValue;
+            for (int i = 0; i < runs; i++) {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                vm.Call(new Vm.Closure(img.Entry, Array.Empty<object>()), new object[] { new Vec() });
+                sw.Stop();
+                best = Math.Min(best, sw.Elapsed.TotalMilliseconds);
+            }
+            return best;
+        }
+        double ti = Best(interp, 7), tc = Best(jit, 7);
+        Console.WriteLine($"       interpreted {ti:F2} ms, compiled {tc:F2} ms, {ti / tc:F2}x");
         return 0;
     }
 

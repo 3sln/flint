@@ -3,8 +3,9 @@
 > **PARTLY BUILT.** The image loader, the interpreter over all 46 opcodes and
 > fifty-odd builtins run real flint programs on the JVM, and all five
 > conformance cases agree with the native runtime byte for byte -- including
-> hashes and forty-key CHAMP ordering -- and several threads run one program on
-> it. Not built: most of the remaining builtins, and AOT.
+> hashes and forty-key CHAMP ordering -- several threads run one program on it,
+> and AOT emits real bytecode (1.67x on a compute loop, every case agreeing
+> with the interpreter). Not built: most of the remaining builtins.
 
 `0010` chose tier 2 for the JVM on measurement rather than taste: Chicory runs
 flint at **500× V8 interpreted and 39× compiled**, so embedding a wasm engine
