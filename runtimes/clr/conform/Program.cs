@@ -37,7 +37,10 @@ public static class Program {
 
         bool same = Builtins.Eq(want, got);
         Console.WriteLine("  " + (same ? "ok  " : "FAIL")
-            + " compiled and interpreted agree (" + jit.CompiledCount + " arities compiled, " + Flint.Aot.Fused + " compares fused, " + Flint.Aot.Runs + " int runs)");
+            + " compiled and interpreted agree (" + jit.CompiledCount + " arities compiled"
+            + (System.Environment.GetEnvironmentVariable("FLINT_AOT_HISTO") == "1"
+               ? ", " + Flint.Aot.Fused + " compares fused, " + Flint.Aot.Runs + " int runs" : "")
+            + ")");
         if (System.Environment.GetEnvironmentVariable("FLINT_AOT_HISTO") == "1") {
             var h = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<int,int>>(Flint.Aot.Histo);
             h.Sort((a, b) => b.Value.CompareTo(a.Value));

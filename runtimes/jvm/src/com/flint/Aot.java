@@ -202,6 +202,41 @@ public final class Aot {
         for (int t : targets) labels.put(t, xb.newLabel());
 
         for (int ip = start; ip < end; ) {
+            // An integer expression is emitted as ONE JVM expression, not an
+            // opcode at a time. `(+ acc (* i i))` boxed `i*i` so that the very
+            // next instruction could unbox it again, and the products in a
+            // counting loop run past the small-value box cache, so each of
+            // those was a real allocation. Held on the JVM operand stack the
+            // whole expression boxes once, at the end -- or not at all, when a
+            // comparison feeds a branch and becomes a single `if_icmp`.
+            //
+            // A run reads NOTHING from the value stack: its leaves are locals
+            // and constants, which push fresh values. That is what makes a run
+            // of any size exactly one push.
+            if (isIntLeaf(img, code, ip)) {
+                int[] ends = scanIntRun(img, code, ip, end, labels);
+                int end1 = ends[0], end2 = ends[1];
+                if (end2 >= 0 && end2 < end && isIntCmp(code[end2] & 0xFF)
+                        && !labels.containsKey(end2)) {
+                    emitIntRun(xb, img, code, ip, end2);
+                    int at = end2, nx = at + 1 < end ? code[at + 1] & 0xFF : NOP;
+                    if ((nx == JUMP_IF_FALSE || nx == JUMP_IF_TRUE) && !labels.containsKey(at + 1)) {
+                        int off = (short) ((code[at + 2] & 0xFF) | ((code[at + 3] & 0xFF) << 8));
+                        fusedCmp(xb, code[at] & 0xFF, nx == JUMP_IF_TRUE, labels.get(at + 4 + off));
+                        ip = at + 4;
+                    } else {
+                        valueCmp(xb, code[at] & 0xFF);
+                        ip = at + 1;
+                    }
+                    continue;
+                }
+                if (end1 >= 0) {
+                    emitIntRun(xb, img, code, ip, end1);
+                    boxLong(xb); push(xb);
+                    ip = end1;
+                    continue;
+                }
+            }
             Label here = labels.get(ip);
             if (here != null) xb.labelBinding(here);
             int op = code[ip] & 0xFF;
@@ -299,6 +334,98 @@ public final class Aot {
         peek(xb, 1); xb.areturn();
         xb.labelBinding(empty);
         xb.aconst_null(); xb.areturn();
+    }
+
+    private static boolean isIntCmp(int o) {
+        return o == LT_INT || o == LE_INT || o == GT_INT || o == GE_INT || o == EQ_INT;
+    }
+    private static boolean isIntArith(int o) {
+        return o == ADD_INT || o == SUB_INT || o == MUL_INT;
+    }
+    /// A leaf pushes one long without reading the value stack.
+    private static boolean isIntLeaf(Img img, byte[] code, int at) {
+        int o = code[at] & 0xFF;
+        if (o == INT || o == LOCAL || o == LOCAL_W) return true;
+        if (o == CONST) {
+            int k = (code[at + 1] & 0xFF) | ((code[at + 2] & 0xFF) << 8);
+            return k < img.consts.length && img.consts[k] instanceof Long;
+        }
+        return false;
+    }
+
+    /// How far a pure-integer expression starting at `from` gets: the exclusive
+    /// end at which it holds one value, and the one at which it holds two for a
+    /// comparison to consume. -1 for neither.
+    private static int[] scanIntRun(Img img, byte[] code, int from, int end,
+                                    Map<Integer, Label> labels) {
+        int end1 = -1, end2 = -1, d = 0, ops = 0;
+        for (int at = from; at < end; ) {
+            if (at != from && labels.containsKey(at)) break;
+            int o = code[at] & 0xFF;
+            if (isIntLeaf(img, code, at)) d++;
+            else if (isIntArith(o) && d >= 2) { d--; ops++; }
+            else break;
+            at += 1 + operandLen(o);
+            // Worth taking over the per-opcode path only once there is real
+            // arithmetic, or two operands for a comparison.
+            if (d == 1 && ops > 0) end1 = at;
+            if (d == 2) end2 = at;
+        }
+        return new int[] { end1, end2 };
+    }
+
+    /// Emit [from, to) with every intermediate held as a raw long.
+    private static void emitIntRun(CodeBuilder xb, Img img, byte[] code, int from, int to) {
+        for (int at = from; at < to; ) {
+            int o = code[at] & 0xFF;
+            switch (o) {
+                case INT -> xb.loadConstant((long) (short) ((code[at + 1] & 0xFF)
+                                                            | ((code[at + 2] & 0xFF) << 8)));
+                case CONST -> xb.loadConstant((Long) img.consts[(code[at + 1] & 0xFF)
+                                                                | ((code[at + 2] & 0xFF) << 8)]);
+                case LOCAL, LOCAL_W -> {
+                    xb.aload(S_LOCALS);
+                    xb.loadConstant(o == LOCAL ? code[at + 1] & 0xFF
+                                               : (code[at + 1] & 0xFF) | ((code[at + 2] & 0xFF) << 8));
+                    xb.aaload(); toLong(xb);
+                }
+                case ADD_INT -> xb.ladd();
+                case SUB_INT -> xb.lsub();
+                default -> xb.lmul();
+            }
+            at += 1 + operandLen(o);
+        }
+    }
+
+    /// Two longs on the stack, compared and branched on directly. Nothing boxed.
+    private static void fusedCmp(CodeBuilder xb, int cmp, boolean whenTrue, Label target) {
+        xb.lcmp();
+        switch (cmp) {
+            case LT_INT -> { if (whenTrue) xb.iflt(target); else xb.ifge(target); }
+            case LE_INT -> { if (whenTrue) xb.ifle(target); else xb.ifgt(target); }
+            case GT_INT -> { if (whenTrue) xb.ifgt(target); else xb.ifle(target); }
+            case GE_INT -> { if (whenTrue) xb.ifge(target); else xb.iflt(target); }
+            default     -> { if (whenTrue) xb.ifeq(target); else xb.ifne(target); }
+        }
+    }
+
+    /// The same comparison where the result is used as a value, not branched on.
+    private static void valueCmp(CodeBuilder xb, int cmp) {
+        xb.lcmp();
+        Label yes = xb.newLabel(), done = xb.newLabel();
+        switch (cmp) {
+            case LT_INT -> xb.iflt(yes);
+            case LE_INT -> xb.ifle(yes);
+            case GT_INT -> xb.ifgt(yes);
+            case GE_INT -> xb.ifge(yes);
+            default     -> xb.ifeq(yes);
+        }
+        xb.loadConstant(0);
+        xb.goto_(done);
+        xb.labelBinding(yes);
+        xb.loadConstant(1);
+        xb.labelBinding(done);
+        boxBool(xb); push(xb);
     }
 
     private static ClassDesc intD() { return ClassDesc.ofDescriptor("I"); }
