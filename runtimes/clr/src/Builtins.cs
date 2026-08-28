@@ -335,7 +335,18 @@ public static class Builtins {
                 case FlintMap m: return (long) m.Count;
                 case FlintSet st: return (long) st.Count;
                 case IReadOnlyList<object> l: return (long) l.Count;
-                default: throw new FlintThrow(PrStr(Arg(a, 0)) + " cannot be counted");
+                case Bytes b: return (long) b.Count;
+                // A cons cell or a lazy seq has no Count to read: it is WALKED,
+                // one cell at a time, which is also what makes counting an
+                // infinite sequence hang rather than answer -- as it does in
+                // Clojure. Refusing them instead is what stopped the compiler
+                // here: `emit-const` counts the rest of a destructured entry,
+                // and the rest of a one-element vector is an empty seq.
+                default: {
+                    long n = 0;
+                    foreach (var _ in Iterate(Arg(a, 0))) n++;
+                    return n;
+                }
             }
         });
         Def("get", (vm, a) => Get(Arg(a, 0), Arg(a, 1), Arg(a, 2)));
@@ -539,12 +550,14 @@ public static class Builtins {
             return vm.Call(a[0], all.ToArray());
         });
         Def("throw", (vm, a) => throw new FlintThrow(Arg(a, 0)));
-        Def("ex-info", (vm, a) => FlintMap.Empty
-            .Assoc(Kw.Of(null, "message"), Arg(a, 0))
-            .Assoc(Kw.Of(null, "data"), Arg(a, 1) ?? FlintMap.Empty));
-        Def("ex-message", (vm, a) => Get(Arg(a, 0), Kw.Of(null, "message"), null));
-        Def("ex-data", (vm, a) => Get(Arg(a, 0), Kw.Of(null, "data"), null));
-        Def("flint/ex-kind", (vm, a) => Get(Arg(a, 0), Kw.Of(null, "kind"), null));
+        // An `Ex`, not a map: `runtime/src/err.rs` makes an exception its own
+        // object, and a map answers true to `map?` and prints as one, so a
+        // program that tests what it caught would disagree across hosts.
+        Def("ex-info", (vm, a) => new Ex("ExceptionInfo", Arg(a, 0),
+                                         Arg(a, 1) ?? FlintMap.Empty));
+        Def("ex-message", (vm, a) => Arg(a, 0) is Ex e ? e.Message : null);
+        Def("ex-data", (vm, a) => Arg(a, 0) is Ex e ? e.Data : null);
+        Def("flint/ex-kind", (vm, a) => Arg(a, 0) is Ex e ? e.Kind : null);
 
         // --- type predicates, and the bit operations ------------------------
         //
@@ -706,7 +719,15 @@ public static class Builtins {
             double d => (long) d,
             var v => throw new FlintThrow(PrStr(v) + " is not a number"),
         });
-        Def("flint/str-bytes", (vm, a) => (long) new UTF8Encoding(false).GetByteCount(Str(Arg(a, 0))));
+        // The BYTES, as a vector, not how many there are. `flint.image/utf8` is
+        // `(flint.rt/str-bytes s)` and then counts the result, so returning the
+        // count made the compiler's own image writer count a number.
+        Def("flint/str-bytes", (vm, a) => {
+            var bs = new UTF8Encoding(false).GetBytes(Str(Arg(a, 0)));
+            var outv = new List<object>(bs.Length);
+            foreach (byte b in bs) outv.Add((long) b);
+            return new Vec(outv);
+        });
         Def("flint/bytes->str", (vm, a) => {
             var t = new List<byte>();
             foreach (var o in Iterate(Arg(a, 0))) t.Add((byte) Vm.Num(o));
@@ -800,7 +821,7 @@ public static class Builtins {
         // `(catch Exception ...)` silently swallow an Error, or not catch at
         // all.
         Def("flint/ex-matches?", (vm, a) => {
-            string k = Str(Get(Arg(a, 0), Kw.Of(null, "kind"), null));
+            string k = Arg(a, 0) is Ex e0 ? e0.Kind : "";
             string want = Str(Arg(a, 1));
             bool isError = k.EndsWith("Error", StringComparison.Ordinal);
             return want switch {

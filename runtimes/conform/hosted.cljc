@@ -39,6 +39,15 @@
     :join [(s/join ["a" "b" "c"]) (s/join [])]
     :parse [(parse-long "42") (parse-long "nope") (parse-double "1.5")]
 
+    ;; `str-bytes` answers the BYTES, not how many there are -- the compiler's
+    ;; own image writer counts the result, so returning a count made it count a
+    ;; number, and the error surfaced several frames away as "14 cannot be
+    ;; counted". A non-ASCII character is what makes the byte count differ from
+    ;; the character count, which is the whole point of asking.
+    :bytes [(flint.rt/str-bytes "abc") (flint.rt/str-bytes "")
+            (count (flint.rt/str-bytes "héllo"))
+            (flint.rt/bytes->str (flint.rt/str-bytes "héllo ✓"))]
+
     ;; A volatile is an atom without the atomicity, and `vreset!` answers the
     ;; NEW value rather than the old one.
     :volatile (let [v (volatile! 1)]

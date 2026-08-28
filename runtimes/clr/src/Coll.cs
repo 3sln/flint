@@ -160,7 +160,32 @@ public sealed class LazySeq {
 
 /// A flint `throw` on its way out, carrying the thrown VALUE rather than a
 /// message: `catch` binds what was thrown.
+/// A thrown error: kind, message, data.
+///
+/// A DISTINCT type, not a map, matching `runtime/src/err.rs` where an exception
+/// is its own object with kind, message and data slots. The JVM port has the
+/// same class for the same reason.
+///
+/// The difference is not cosmetic, and it cost a debugging session on each
+/// port. Builtins here threw a bare STRING, so `ex-message` on one answered
+/// nil -- and the flint compiler, which catches an error and re-throws it with
+/// the form it happened in, produced `"\n  in clojure.core/identity"`: a
+/// location with no message in front of it. The failure was real and the
+/// report said nothing, which is the worst combination.
+public sealed class Ex {
+    public readonly string Kind;
+    public readonly object Message;
+    public readonly object Data;
+    public Ex(string kind, object message, object data) { Kind = kind; Message = message; Data = data; }
+    public override string ToString() => Kind + ": " + Builtins.Str(Message);
+}
+
 public sealed class FlintThrow : Exception {
     public readonly object Value;
     public FlintThrow(object value) : base(Builtins.Str(value)) => Value = value;
+
+    /// A message thrown by a builtin. Wrapped, so `ex-message` can find it:
+    /// a bare string is a value with no message, and the compiler's own error
+    /// wrapper reads the message off what it caught.
+    public FlintThrow(string message) : this(new Ex("Error", message, null)) { }
 }

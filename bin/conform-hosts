@@ -123,3 +123,32 @@ if [ "$agree" -lt "$FLOOR" ]; then
   echo "  a case that used to agree no longer does ($agree < $FLOOR)"
   exit 1
 fi
+
+# SELF-HOSTING: run the flint COMPILER on each port and compare what it emits,
+# byte for byte, with what the native compiler emits from the same input.
+#
+# This is the difference between "runs programs" and "self-hosts": the compiler
+# is the largest flint program there is, so it reaches builtins a small program
+# never does. Every case above passed while `assoc` on a vector returned a map,
+# `seq?` answered `seqable?`, and `str-bytes` answered a count -- all three were
+# found by running this.
+#
+# OFF by default because of what it costs, measured: 179 s on the JVM and 704 s
+# on the CLR, against about a minute for everything above. Turn it on with
+# FLINT_SELFHOST=1, and CI should.
+if [ "${FLINT_SELFHOST:-0}" = "1" ]; then
+  echo "  .. self-hosting (this takes about 15 minutes)"
+  ./bin/flint :src bench/progs :fn hello/main --emit-spec :out out/conform/self.spec     >/dev/null 2>&1
+  # The reference: the same spec through the compiler running as wasm.
+  node host/flint-file.mjs dist/flintc.wasm out/conform/self.spec > out/conform/self.ref 2>/dev/null
+  if ! "$JDK/bin/java" -cp runtimes/jvm/classes SelfHost          out/conform/self.spec out/conform/self.ref; then
+    echo "  FAIL jvm self-host"
+    exit 1
+  fi
+  if [ -n "$CLR" ]; then
+    if ! "$CLR" --selfhost out/conform/self.spec out/conform/self.ref; then
+      echo "  FAIL clr self-host"
+      exit 1
+    fi
+  fi
+fi

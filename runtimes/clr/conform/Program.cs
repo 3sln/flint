@@ -9,12 +9,59 @@ public static class Program {
     public static int Main(string[] args) {
         if (args.Length >= 2 && args[0] == "--threads") return Threads(args[1]);
         if (args.Length >= 2 && args[0] == "--aot") return Aot(args[1]);
+        if (args.Length >= 3 && args[0] == "--selfhost") return SelfHost(args[1], args[2]);
         var vm = new Vm(Img.Read(File.ReadAllBytes(args[0])));
         vm.EnsureStarted();
         object outv = vm.Call(new Vm.Closure(vm.Img.Entry, Array.Empty<object>()),
                               new object[] { new Vec() });
         Console.WriteLine(Builtins.Str(outv));
         return 0;
+    }
+
+    /// Run the flint COMPILER on .NET, and compare what it emits with what the
+    /// native compiler emits from the same input -- byte for byte.
+    ///
+    /// This is the difference between "runs programs" and "self-hosts". The
+    /// compiler is the largest flint program there is, so it reaches builtins a
+    /// small program never does; and an image that DIFFERS is a compiler that
+    /// differs, whose difference will surface in a program no test here runs.
+    private static int SelfHost(string specPath, string refPath) {
+        var vm = new Vm(Img.Read(File.ReadAllBytes("dist/flintc.bytecode")));
+        vm.EnsureStarted();
+
+        // `flint.selfhost/main` is a VAR, not a named entry in the function
+        // table: the initialisers put its closure in a slot, which is why
+        // EnsureStarted has to have run.
+        int slot = -1;
+        for (int i = 0; i < vm.Img.VarNames.Length; i++) {
+            if (vm.Img.VarNames[i] == "flint.selfhost/main") slot = i;
+        }
+        if (slot < 0) { Console.WriteLine("  FAIL flint.selfhost/main is not in the var table"); return 1; }
+        object compiler = vm.GetVarPublic(slot);
+        if (compiler == null) { Console.WriteLine("  FAIL flint.selfhost/main is unbound"); return 1; }
+
+        // ONE argument: anything that is not "wasm" or "project" is the SPEC.
+        object outv = vm.Call(compiler, new object[] { new Vec(new object[] { File.ReadAllText(specPath) }) });
+        string first = Builtins.Str(outv).Split('\n')[0].Trim();
+        if (first.Length < 100) {
+            Console.WriteLine("  FAIL the compiler did not emit an image: "
+                              + first.Substring(0, Math.Min(200, first.Length)));
+            return 1;
+        }
+        Console.WriteLine($"  ok   the flint compiler ran on the CLR and emitted {first.Length} base64 chars");
+
+        byte[] got = Convert.FromBase64String(first);
+        byte[] want = Convert.FromBase64String(File.ReadAllText(refPath).Split('\n')[0].Trim());
+        if (got.Length == want.Length && got.AsSpan().SequenceEqual(want)) {
+            Console.WriteLine($"  ok   byte for byte the image the native compiler emits ({got.Length} bytes)");
+            return 0;
+        }
+        int at = -1;
+        for (int i = 0; i < Math.Min(got.Length, want.Length); i++) if (got[i] != want[i]) { at = i; break; }
+        Console.WriteLine($"  FAIL the image differs from the native compiler's: {got.Length} bytes"
+                          + $" against {want.Length}"
+                          + (at < 0 ? ", one a prefix of the other" : $", first differing byte at {at}"));
+        return 1;
     }
 
     /// AOT: the same program interpreted and compiled, and the answers diffed.

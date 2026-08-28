@@ -629,8 +629,17 @@ public final class Builtins {
             if (v instanceof Double d) return (long) (double) d;
             throw Vm.err(prStr(v) + " is not a number");
         });
-        def("flint/str-bytes", (vm, a) -> (long) str(arg(a, 0))
-            .getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+        // The BYTES, as a vector, not how many there are. `flint.image/utf8` is
+        // `(flint.rt/str-bytes s)` and then counts the result, so returning the
+        // count made the compiler's own image writer count a number -- and the
+        // error surfaced several frames away as "14 (Long) cannot be counted",
+        // 14 being the length of whatever string it was on.
+        def("flint/str-bytes", (vm, a) -> {
+            byte[] bs = str(arg(a, 0)).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            List<Object> out = new ArrayList<>(bs.length);
+            for (byte b : bs) out.add((long) (b & 0xFF));
+            return out;
+        });
 
         // --- byte strings (`doc/decisions/0024`) -----------------------------
         def("flint/str->b", (vm, a) -> Bytes.of(str(arg(a, 0))));

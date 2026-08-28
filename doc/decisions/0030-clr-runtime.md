@@ -4,7 +4,8 @@
 > every builtin but three run real flint programs on .NET, agreeing with the
 > native runtime on all eight conformance cases, several threads run one program
 > on it, and AOT emits real IL (1.8x on a counting loop, every case agreeing with
-> the interpreter). Not built: the three regex builtins, and self-hosting.
+> the interpreter). **The flint compiler runs on it and emits the same image the
+> native compiler does, byte for byte.** Not built: the three regex builtins.
 
 Tier 2, the same as `0029`: port the VM and lean on the host's collector. A
 flint value is a .NET object, the CLR owns lifetime, and the generational
@@ -95,5 +96,18 @@ string. `runtimes/conform/control.cljc` pins both -- mutual recursion 300 000
 deep, which no host survives one frame per hop, and `seq?` against the answers
 Clojure gives.
 
-Neither port self-hosts yet. `0029` records what is known and, more usefully,
-what has been ruled out by measurement rather than by reading.
+**Both ports self-host.** The flint compiler runs on .NET and emits an image
+byte for byte identical to the native compiler's -- the same 5 361 bytes the
+JVM produces. `0029` records the seven bugs that took, and the three lessons
+about how to measure a runaway recursion, all of which applied here too.
+
+Two were the CLR's alone. `count` refused a cons cell or a lazy seq, because
+neither has a `Count` to read: they are WALKED, which is also what makes
+counting an infinite sequence hang rather than answer, exactly as in Clojure.
+And an error was a bare STRING rather than a structured value, so `ex-message`
+on one answered nil -- and the compiler, which catches an error and re-throws
+it with the form it happened in, produced `"\n  in clojure.core/identity"`: a
+location with no message in front of it. There is an `Ex` type now, as on the
+JVM and as in `runtime/src/err.rs`. The failure was real and the report said
+nothing, which is the worst combination, and it is the second time this
+codebase has paid for it.

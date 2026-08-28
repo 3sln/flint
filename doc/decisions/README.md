@@ -33,8 +33,8 @@ for the first.
 | [0025](0025-structured-ports.md) | A wire codec, and structured ports | **Roadmap.** Reverses 0006's no-transfer rule, which left the door open |
 | [0026](0026-tables.md) | Tables: columnar storage that is a value | **Queued.** A vector of maps outside, a columnar B-tree inside |
 | [0027](0027-ports-are-the-hosts.md) | Ports belong to the host, not to a sandbox | **Queued.** Local ports stay by-reference; global ones encode, and the encode is the GC boundary |
-| [0030](0030-clr-runtime.md) | The CLR runtime | **Partly shipped.** Runs real images, threads, AOT to IL at 1.8x, all eight conformance cases. Three regex builtins and self-hosting remain |
-| [0029](0029-jvm-runtime.md) | The JVM runtime | **Partly shipped.** Runs real images, threads, AOT to bytecode at 12x, all eight conformance cases. Three regex builtins and self-hosting remain |
+| [0030](0030-clr-runtime.md) | The CLR runtime | **Partly shipped.** Self-hosts byte for byte, threads, AOT to IL at 1.8x, all eight conformance cases. Three regex builtins remain |
+| [0029](0029-jvm-runtime.md) | The JVM runtime | **Partly shipped.** Self-hosts byte for byte, threads, AOT to bytecode at 12x, all eight conformance cases. Three regex builtins remain |
 | [0028](0028-drivers.md) | A driver: ports are the only way to drive a sandbox | **Partly shipped.** Rust has `Driver`/`ThreadPool`/async `call`, 200 requests coalesced into 1 dispatch; the parallel collector does not exist |
 | [0024](0024-no-runtime-linking.md) | No linking at compile time; byte strings and transient ropes | **Partly shipped.** The splice and the tree shaker work with no linker; the byte strings do not exist |
 

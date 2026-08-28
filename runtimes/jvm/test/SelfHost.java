@@ -86,12 +86,41 @@ public class SelfHost {
         // The spec form answers base64 bytecode on the first line.
         String first = s.split("\n", 2)[0];
         boolean looksLikeAnImage = first.length() > 100 && first.matches("[A-Za-z0-9+/=]+");
-        System.out.println("  " + (looksLikeAnImage ? "ok  " : "FAIL")
-            + " the flint compiler ran on the JVM and emitted "
-            + first.length() + " base64 chars");
         if (!looksLikeAnImage) {
+            System.out.println("  FAIL the compiler did not emit an image");
             System.out.println("        got: " + s.substring(0, Math.min(300, s.length())));
             System.exit(1);
+        }
+        System.out.println("  ok   the flint compiler ran on the JVM and emitted "
+                           + first.length() + " base64 chars");
+
+        // "It emitted base64" is not the claim worth making. The claim is that
+        // the SAME source through the SAME compiler produces the SAME image
+        // whichever runtime the compiler itself ran on -- so the second
+        // argument is a reference produced by the native path, and the two are
+        // compared byte for byte.
+        //
+        // Byte for byte rather than "both run and agree", because an image that
+        // differs is a compiler that differs, and the difference will surface
+        // in a program neither of these tests happens to run.
+        if (args.length > 1 && !args[1].equals("--aot")) {
+            String want = Files.readString(Path.of(args[1])).split("\n", 2)[0].trim();
+            byte[] got = java.util.Base64.getDecoder().decode(first);
+            byte[] ref = java.util.Base64.getDecoder().decode(want);
+            if (java.util.Arrays.equals(got, ref)) {
+                System.out.println("  ok   byte for byte the image the native compiler emits ("
+                                   + got.length + " bytes)");
+            } else {
+                int at = -1;
+                for (int i = 0; i < Math.min(got.length, ref.length); i++) {
+                    if (got[i] != ref[i]) { at = i; break; }
+                }
+                System.out.println("  FAIL the image differs from the native compiler's: "
+                                   + got.length + " bytes against " + ref.length
+                                   + (at < 0 ? ", one a prefix of the other"
+                                             : ", first differing byte at " + at));
+                System.exit(1);
+            }
         }
     }
 }

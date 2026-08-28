@@ -74,6 +74,13 @@
     :else (throw (ex-info "not a constant" {:v v :type (type v)}))))
 
 (defn- emit-const [entry]
+  ;; Checked, because what reaches here malformed is a POOL that was corrupted
+  ;; somewhere earlier, and the failure without this is `count` complaining
+  ;; about a number several frames down with nothing naming the pool at all.
+  (when-not (and (vector? entry) (keyword? (first entry)))
+    (throw (ex-info (str "constant pool entry is not [tag & args]: "
+                         (pr-str entry))
+                    {:entry entry :type :compile})))
   (let [[tag & args] entry]
     (case tag
       :nil [K-NIL]

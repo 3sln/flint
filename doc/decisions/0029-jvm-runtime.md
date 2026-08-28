@@ -6,7 +6,8 @@
 > hashes, forty-key CHAMP ordering, infinite lazy sequences and mutual tail
 > recursion 300 000 deep -- several threads run one program on it, and AOT emits
 > real bytecode (12x on a counting loop, every case agreeing with the
-> interpreter). Not built: the three regex builtins, and self-hosting.
+> interpreter). **The flint compiler runs on it and emits the same image the
+> native compiler does, byte for byte.** Not built: the three regex builtins.
 
 `0010` chose tier 2 for the JVM on measurement rather than taste: Chicory runs
 flint at **500× V8 interpreted and 39× compiled**, so embedding a wasm engine
@@ -85,8 +86,14 @@ function, `transient` on a set, `deref` on a volatile, and a vector holding
 `nil`. The corpus is a good gate and the compiler is a better one, because it
 is the only flint program large enough to use the whole language.
 
-It does not self-host yet, and running it has kept paying. Four more bugs, none
-of them a missing builtin either:
+**It self-hosts.** The flint compiler runs on the JVM and emits an image that is
+byte for byte the one the native compiler emits from the same input -- 5 361
+bytes, identical. Byte for byte rather than "both run and agree", because an
+image that differs is a compiler that differs, and the difference would surface
+in a program no test here happens to run.
+
+Getting there cost seven bugs, none of them a missing builtin, and every one
+invisible to a conformance corpus that was passing 8/8 throughout:
 
 * **A tail call was only a tail call to ITSELF.** Both ports optimised
   self-recursion and took a host frame for anything else, so MUTUAL tail
@@ -100,8 +107,22 @@ of them a missing builtin either:
 * **`seq` returned its argument**, so `(seq? (seq [1 2]))` was false.
 * **`sequential?` used `Collection`**, which covers Set, so `#{1}` was
   sequential.
+* **`assoc` on a VECTOR made a map.** `(assoc [:a :b :c] 1 :B)` answered
+  `{1 :B}` -- the right value under the right key, in the wrong kind of
+  collection, which then failed several calls later on something that was no
+  longer indexed.
+* **`str-bytes` answered how many bytes, not which.** `flint.image/utf8` is
+  `(flint.rt/str-bytes s)` and the image writer counts the result, so the
+  compiler counted a number and the error surfaced frames away as
+  "14 (Long) cannot be counted", 14 being the length of whatever string it was
+  on.
+* **The CLR was 27 builtins short, not 3** -- all eight bit operations, all
+  fourteen type predicates and `dissoc!`. The predicates exist as the `type-p`
+  opcode, which is what a direct `(int? x)` compiles to, so they look present
+  until something passes one as a VALUE. `(filter int? xs)` is how the compiler
+  uses them.
 
-Two lessons about MEASURING this, both learned the hard way:
+Three lessons about MEASURING this, all learned the hard way:
 
 **The depth is the diagnosis.** "Deep but finite" and "unbounded" look identical
 in a stack trace and want opposite fixes. Counting the frames -- 11.6 million --
@@ -111,13 +132,30 @@ own.
 **A call log is not a stack trace.** The ring buffer that names the functions
 records the last calls MADE, so calls that already returned are in it, and a
 `reduce` loop reads as a repeating cycle. Read that way it said the failure was
-in `flint.eval/ev`; it is not. `flint.eval` now has a depth backstop that throws
-a flint error naming the node, self-hosting overflows without it firing, and
-that RULES the evaluator OUT -- by a check rather than a reading. Where the
-recursion actually is remains open, and is not worth a guess.
+in `flint.eval/ev`; it was not. It then said the failure was in `emit-const`;
+it was not there either -- a guard added inside `emit-const` never fired. Twice
+the log named a function that happened to be busy rather than one that was
+wrong.
+
+**What found each of them was a backstop that names a VALUE.** `flint.eval` and
+`flint.analyzer` both have a depth limit now, and each throws a flint error
+carrying the node or the form. The analyzer's prints the innermost twelve forms
+BY DEPTH -- indexed by the depth counter, so it really is the nesting -- and it
+printed `(if 2 [2 nil] (clojure.core/cond))`. `[2 nil]` is how a MAP ENTRY
+prints, and the trace vector holding it had turned into a map: that is how
+`assoc` was caught. A limit is only useful if it can be REACHED, too: the first
+one was 10 000 and babashka's stack gave out first, so the error arrived with no
+message at all.
+
+Both backstops earn their keep beyond this: a runaway macro used to exhaust the
+host stack, and now names itself.
 
 The earlier `unable to resolve symbol: string?` is gone, along with its
 `:ns flint.main`; that was the `array-map` arity bug.
+
+`bin/conform-hosts` gates on it under `FLINT_SELFHOST=1`, off by default for a
+measured reason: 179 s on the JVM and 704 s on the CLR, against about a minute
+for everything else. CI should turn it on.
 
 The interesting remaining parts are the two that are not mechanical:
 
