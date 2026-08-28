@@ -121,9 +121,15 @@ public sealed class Vm {
             if (g == null) throw new FlintThrow($"this runtime does not carry `{nr.Name}`");
             return g(this, args);
         }
-        // A keyword in call position looks itself up, which is Clojure's rule
-        // and one programs lean on constantly.
-        if (fn is Kw k && args.Length >= 1) return Builtins.Get(args[0], k, null);
+        // A keyword, map, set or vector in call position looks itself up.
+        // Clojure's rule, and one the reader itself leans on -- a set of
+        // whitespace characters called on a char is how whitespace is tested,
+        // and without this the compiler cannot read its own source.
+        if (args.Length >= 1) {
+            object dflt = args.Length > 1 ? args[1] : null;
+            if (fn is Kw k) return Builtins.Get(args[0], k, dflt);
+            if (fn is FlintSet or FlintMap or Vec or Seq) return Builtins.Get(fn, args[0], dflt);
+        }
         throw new FlintThrow(Builtins.PrStr(fn) + " is not a function");
     }
 

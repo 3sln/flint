@@ -62,6 +62,13 @@ public final class Vm {
     /// A flint `throw` on its way out, carrying the thrown VALUE rather than a
     /// message: `catch` binds what was thrown, so flattening it to a string
     /// here would lose the program's own data.
+    /// Throw a runtime error the way the runtime does: a structured value with
+    /// a kind and a message, not a bare string. `ex-message` has to be able to
+    /// read it, because the compiler catches errors and re-reports them.
+    public static Thrown err(String message) {
+        return new Thrown(new Ex("Error", message, null));
+    }
+
     public static final class Thrown extends RuntimeException {
         public final transient Object value;
         public Thrown(Object value) {
@@ -161,10 +168,19 @@ public final class Vm {
             if (f == null) throw new Thrown("this runtime does not carry `" + nr.name() + "`");
             return f.apply(this, args);
         }
-        // A keyword in call position looks itself up, which is Clojure's rule
-        // and one programs lean on constantly.
-        if (fn instanceof Kw k && args.length >= 1) return Builtins.get(args[0], k, null);
-        throw new Thrown(String.valueOf(fn) + " is not a function");
+        // A keyword, map, set or vector in call position looks itself up.
+        // Clojure's rule, and one the reader itself leans on -- `(#{\\space
+        // \\tab} c)` is how whitespace is tested, and without this the
+        // compiler cannot read its own source.
+        if (args.length >= 1) {
+            Object dflt = args.length > 1 ? args[1] : null;
+            if (fn instanceof Kw k) return Builtins.get(args[0], k, dflt);
+            if (fn instanceof java.util.Set<?> || fn instanceof Map<?, ?>
+                || fn instanceof List<?>) {
+                return Builtins.get(fn, args[0], dflt);
+            }
+        }
+        throw new Thrown(Builtins.prStr(fn) + " is not a function");
     }
 
     private int u8(int ip) { return img.code[ip] & 0xFF; }

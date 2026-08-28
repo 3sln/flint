@@ -68,10 +68,28 @@ Measured by loading real images and asking which builtins are missing:
 | a two-function program | 17 | 0 |
 | collections, laziness, transients | 28 | 0 |
 | the conformance corpus | 40 | 0 |
-| **the flint compiler itself** | 143 | ~100 |
+| **the flint compiler itself** | 144 | **3** (all regex) |
 
-So the remaining work is mostly mechanical — bit operations, the maths library,
-byte strings, regex — and the interesting parts are the two that are not:
+The mechanical bulk is done: predicates, bit operations, the maths library,
+string operations and byte strings. What is left is regex --
+`flint/re-compile`, `flint/re-run`, `flint/re-find-all` -- which needs flint's
+Pike VM ported rather than a host regex engine underneath it, because
+`doc/decisions/0011` pins the semantics to a defined subset every host honours
+and a best-effort translation is exactly what it rules out.
+
+Running the compiler is what found the last five bugs, and none of them was a
+missing builtin. Every one was a shape the conformance corpus never used: a
+bare string thrown where the runtime throws a structured error, a set used as a
+function, `transient` on a set, `deref` on a volatile, and a vector holding
+`nil`. The corpus is a good gate and the compiler is a better one, because it
+is the only flint program large enough to use the whole language.
+
+It does not self-host yet. It stops at `unable to resolve symbol: string?` --
+a genuine compile error from the compiler, cause not yet found, with the
+error's own `:ns` reading `flint.main`, which is not the namespace being
+compiled. Both of those are open.
+
+The interesting remaining parts are the two that are not mechanical:
 
 **AOT** is tier 3: emit JVM bytecode rather than interpret. `0010` notes the
 constraint that forced an interpreter on wasm — locals not being scannable — is

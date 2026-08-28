@@ -18,30 +18,37 @@ import java.util.Map;
 public final class Transient {
     final List<Object> list;
     final Map<Object, Object> map;
+    final java.util.LinkedHashSet<Object> set;
 
-    private Transient(List<Object> list, Map<Object, Object> map) {
+    private Transient(List<Object> list, Map<Object, Object> map,
+                      java.util.LinkedHashSet<Object> set) {
         this.list = list;
         this.map = map;
+        this.set = set;
     }
 
     public static Transient of(Object coll) {
         if (coll == null || coll instanceof List<?>) {
             List<Object> xs = new ArrayList<>();
             if (coll != null) xs.addAll((List<?>) coll);
-            return new Transient(xs, null);
+            return new Transient(xs, null, null);
         }
-        if (coll instanceof Map<?, ?> m) return new Transient(null, new LinkedHashMap<>(m));
-        throw new Vm.Thrown(Builtins.prStr(coll) + " has no transient form");
+        if (coll instanceof Map<?, ?> m) return new Transient(null, new LinkedHashMap<>(m), null);
+        if (coll instanceof java.util.Set<?> s) {
+            return new Transient(null, null, new java.util.LinkedHashSet<>(s));
+        }
+        throw Vm.err(Builtins.prStr(coll) + " has no transient form");
     }
 
     public Object persistent() {
-        return list != null ? List.copyOf(nonNull(list)) : FlintMap.of(map);
-    }
-
-    /// `List.copyOf` rejects nulls and `nil` is a perfectly good element, so a
-    /// list holding one stays the mutable list rather than losing the element.
-    private static List<Object> nonNull(List<Object> xs) {
-        for (Object x : xs) if (x == null) return new ArrayList<>(xs);
-        return xs;
+        if (set != null) return set;
+        if (map != null) return FlintMap.of(map);
+        // NOT `List.copyOf`: it rejects nulls, and `nil` is a perfectly good
+        // element of a flint vector. The guard that used to be here returned
+        // the same list on both branches, so it guarded nothing -- and the
+        // failure was a NullPointerException from inside the JDK, four frames
+        // below any flint code, while the compiler built a vector with a nil
+        // in it.
+        return java.util.Collections.unmodifiableList(new ArrayList<>(list));
     }
 }

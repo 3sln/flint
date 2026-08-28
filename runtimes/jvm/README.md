@@ -34,7 +34,7 @@ whichever module it was linked against.
 | --- | --- |
 | image format | complete |
 | opcodes | all 46 |
-| builtins | ~40 of the 143 the compiler itself imports |
+| builtins | 141 of the 144 the compiler imports; the 3 missing are regex |
 | conformance | `bin/conform-hosts`, every case agreeing |
 | threads | several threads on one program |
 | AOT | `java.lang.classfile`, on first call, 1.67x |
@@ -56,6 +56,36 @@ Missing builtins are **absent, not stubbed**. Reaching one names it. A stub
 returning `nil` would let a program get a wrong answer quietly here and the
 right one elsewhere, which is the drift the conformance harness exists to
 catch.
+
+## Self-hosting: close, not there
+
+The compiler is the largest flint program there is, so it reaches builtins a
+small program never does. Running it here went from 89 missing builtins to
+**3** -- `flint/re-compile`, `flint/re-run`, `flint/re-find-all`, which need
+flint's Pike VM ported.
+
+Getting that far found five real bugs, none of which any conformance case had
+touched:
+
+* **Builtins threw a bare string.** flint's runtime throws a structured error
+  with a kind, a message and data (`runtime/src/err.rs`), so `ex-message` on
+  one of mine answered nil -- and the compiler, which catches an error and
+  re-throws it with the form it happened in, produced `"\n  in
+  flint.main/-main"`: a location with no message in front of it. A real failure
+  reported as nothing.
+* **Sets, maps and vectors were not callable.** `(#{\space \tab} c)` is how
+  the reader tests whitespace, so the compiler could not read its own source.
+* **`transient` refused a set.**
+* **`deref` refused a volatile**, which the Rust runtime accepts alongside an
+  atom.
+* **A vector holding `nil` could not be made persistent.** `List.copyOf`
+  rejects nulls and the guard around it returned the same list on both
+  branches, so it guarded nothing.
+
+Where it stops now is a genuine compile error from the compiler itself --
+`unable to resolve symbol: string?` -- whose cause is not yet found. The
+error's `:ns` says `flint.main`, which is not in the program being compiled, so
+the compiler's error CONTEXT is stale as well. Both are open.
 
 ## Known divergence
 

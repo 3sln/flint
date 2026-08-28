@@ -182,7 +182,10 @@ public final class Img {
                 List<Object> xs = new ArrayList<>(n);
                 for (int i = 0; i < n; i++) xs.add(built[(int) r.u32()]);
                 if (tag == K_SET) return new LinkedHashSet<>(xs);
-                return tag == K_VECTOR ? List.copyOf(nullSafe(xs)) : xs;
+                // Unmodifiable rather than `List.copyOf`, which rejects nulls.
+                return tag == K_VECTOR
+                    ? java.util.Collections.unmodifiableList(xs)
+                    : Seq.of(xs);
             }
             case K_MAP: {
                 int n = (int) r.u32();
@@ -206,12 +209,6 @@ public final class Img {
             }
             default: throw new IllegalArgumentException("unknown constant tag " + tag);
         }
-    }
-
-    /// `List.copyOf` rejects nulls, and `nil` is a perfectly good element.
-    private static List<Object> nullSafe(List<Object> xs) {
-        for (Object x : xs) if (x == null) return xs;
-        return xs;
     }
 
     /// A function constant, by index into the function table.

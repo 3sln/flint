@@ -36,6 +36,11 @@ public final class Builtins {
     private static Object arg(Object[] a, int i) { return i < a.length ? a[i] : null; }
 
     /// Everything after the first element.
+    private static Bytes asBytes(Object v) {
+        if (v instanceof Bytes b) return b;
+        throw Vm.err(prStr(v) + " is not a byte string");
+    }
+
     private static List<Object> tail(Object v) {
         List<Object> xs = new ArrayList<>();
         boolean skip = true;
@@ -108,7 +113,7 @@ public final class Builtins {
             s.codePoints().forEach(cp -> out.add(new String(Character.toChars(cp))));
             return out;
         }
-        throw new Vm.Thrown(String.valueOf(v) + " is not seqable");
+        throw Vm.err(String.valueOf(v) + " is not seqable");
     }
 
     public static Object get(Object coll, Object key, Object dflt) {
@@ -150,6 +155,8 @@ public final class Builtins {
             }
             return b.append('}').toString();
         }
+        if (v instanceof Ex e) return e.toString();
+        if (v instanceof Bytes b) return b.toString();
         if (v instanceof java.util.Set<?> s) return join(s, "#{", "}", readable);
         if (v instanceof LazySeq ls) return join(ls.force(), "(", ")", readable);
         if (v instanceof Seq q) return join(q, "(", ")", readable);
@@ -238,7 +245,20 @@ public final class Builtins {
             if (v instanceof Collection<?> c) return (long) c.size();
             if (v instanceof Map<?, ?> m) return (long) m.size();
             if (v instanceof String s) return (long) s.codePointCount(0, s.length());
-            throw new Vm.Thrown(String.valueOf(v) + " cannot be counted");
+            if (v instanceof LazySeq ls) return (long) ls.force().size();
+            if (v instanceof Bytes b) return (long) b.count();
+            // Anything else walkable, so a shape this list has not learned
+            // about yet is counted rather than refused.
+            if (v instanceof Iterable<?> it) {
+                long n = 0;
+                for (Object ignored : it) n++;
+                return n;
+            }
+            // Naming the TYPE, not just the printed form: "[] cannot be
+            // counted" says nothing, and an empty something is exactly the
+            // case where the printed form is least informative.
+            throw Vm.err(prStr(v) + " (" + v.getClass().getSimpleName()
+                + ") cannot be counted");
         });
         def("get", (vm, a) -> get(arg(a, 0), arg(a, 1), arg(a, 2)));
         def("nth", (vm, a) -> {
@@ -247,7 +267,7 @@ public final class Builtins {
             int i = (int) Vm.num(arg(a, 1));
             if (i < 0 || i >= xs.size()) {
                 if (a.length > 2) return a[2];
-                throw new Vm.Thrown("index " + i + " out of bounds");
+                throw Vm.err("index " + i + " out of bounds");
             }
             return xs.get(i);
         });
@@ -264,7 +284,7 @@ public final class Builtins {
                 for (int i = 1; i < a.length; i++) out.add(a[i]);
                 return out;
             }
-            throw new Vm.Thrown("cannot conj onto " + prStr(coll));
+            throw Vm.err("cannot conj onto " + prStr(coll));
         });
         def("assoc", (vm, a) -> {
             FlintMap out = arg(a, 0) instanceof FlintMap fm ? fm
@@ -317,7 +337,7 @@ public final class Builtins {
             if (v instanceof Kw k) return k.name;
             if (v instanceof Sym s) return s.name;
             if (v instanceof String s) return s;
-            throw new Vm.Thrown("cannot take the name of " + prStr(v));
+            throw Vm.err("cannot take the name of " + prStr(v));
         });
         def("namespace", (vm, a) -> {
             Object v = arg(a, 0);
@@ -332,6 +352,196 @@ public final class Builtins {
         def("meta", (vm, a) -> null);
         def("flint/opaque?", (vm, a) -> Boolean.FALSE);
         def("flint/opaque-label", (vm, a) -> null);
+        // --- type predicates ------------------------------------------------
+        //
+        // Each is `isType` with its code from `flint.types/code`, so the
+        // predicate and the `TYPE_P` opcode cannot answer differently. Writing
+        // them out separately is how two spellings of one question drift.
+        def("nil?", (vm, a) -> isType(arg(a, 0), 13));
+        def("int?", (vm, a) -> isType(arg(a, 0), 1));
+        def("float?", (vm, a) -> isType(arg(a, 0), 2));
+        def("number?", (vm, a) -> isType(arg(a, 0), 3));
+        def("string?", (vm, a) -> isType(arg(a, 0), 4));
+        def("keyword?", (vm, a) -> isType(arg(a, 0), 5));
+        def("symbol?", (vm, a) -> isType(arg(a, 0), 6));
+        def("boolean?", (vm, a) -> isType(arg(a, 0), 7));
+        def("vector?", (vm, a) -> isType(arg(a, 0), 8));
+        def("map?", (vm, a) -> isType(arg(a, 0), 9));
+        def("set?", (vm, a) -> isType(arg(a, 0), 10));
+        def("seq?", (vm, a) -> isType(arg(a, 0), 11));
+        def("fn?", (vm, a) -> isType(arg(a, 0), 12));
+        def("sequential?", (vm, a) -> isType(arg(a, 0), 14));
+        def("flint/map-entry?", (vm, a) -> Boolean.FALSE);
+        def("bytes?", (vm, a) -> arg(a, 0) instanceof Bytes);
+        def("flint/volatile?", (vm, a) -> arg(a, 0) instanceof Volatile);
+        def("flint/delay?", (vm, a) -> arg(a, 0) instanceof LazySeq);
+        def("flint/realized?", (vm, a) -> Boolean.TRUE);
+
+        // --- bit operations -------------------------------------------------
+        //
+        // On i64, and NOT checked: bit operations are defined to wrap, which is
+        // the one place flint's arithmetic does.
+        def("bit-and", (vm, a) -> Vm.num(arg(a, 0)) & Vm.num(arg(a, 1)));
+        def("bit-or", (vm, a) -> Vm.num(arg(a, 0)) | Vm.num(arg(a, 1)));
+        def("bit-xor", (vm, a) -> Vm.num(arg(a, 0)) ^ Vm.num(arg(a, 1)));
+        def("bit-not", (vm, a) -> ~Vm.num(arg(a, 0)));
+        def("bit-shift-left", (vm, a) -> Vm.num(arg(a, 0)) << Vm.num(arg(a, 1)));
+        def("bit-shift-right", (vm, a) -> Vm.num(arg(a, 0)) >> Vm.num(arg(a, 1)));
+        def("unsigned-bit-shift-right", (vm, a) -> Vm.num(arg(a, 0)) >>> Vm.num(arg(a, 1)));
+        def("bit-test", (vm, a) -> ((Vm.num(arg(a, 0)) >> Vm.num(arg(a, 1))) & 1) != 0);
+        def("flint/unchecked-add", (vm, a) -> Vm.num(arg(a, 0)) + Vm.num(arg(a, 1)));
+        def("flint/unchecked-sub", (vm, a) -> Vm.num(arg(a, 0)) - Vm.num(arg(a, 1)));
+        def("flint/unchecked-mul", (vm, a) -> Vm.num(arg(a, 0)) * Vm.num(arg(a, 1)));
+
+        // --- maths ----------------------------------------------------------
+        //
+        // Straight onto `java.lang.Math`, which is IEEE 754 and so is flint's.
+        // `doc/decisions/0010` lists float printing as a silent divergence; the
+        // OPERATIONS are the part that is safe to lean on.
+        def("flint/sqrt", (vm, a) -> Math.sqrt(toD(arg(a, 0))));
+        def("flint/cbrt", (vm, a) -> Math.cbrt(toD(arg(a, 0))));
+        def("flint/exp", (vm, a) -> Math.exp(toD(arg(a, 0))));
+        def("flint/expm1", (vm, a) -> Math.expm1(toD(arg(a, 0))));
+        def("flint/log", (vm, a) -> Math.log(toD(arg(a, 0))));
+        def("flint/log10", (vm, a) -> Math.log10(toD(arg(a, 0))));
+        def("flint/log1p", (vm, a) -> Math.log1p(toD(arg(a, 0))));
+        def("flint/sin", (vm, a) -> Math.sin(toD(arg(a, 0))));
+        def("flint/cos", (vm, a) -> Math.cos(toD(arg(a, 0))));
+        def("flint/tan", (vm, a) -> Math.tan(toD(arg(a, 0))));
+        def("flint/asin", (vm, a) -> Math.asin(toD(arg(a, 0))));
+        def("flint/acos", (vm, a) -> Math.acos(toD(arg(a, 0))));
+        def("flint/atan", (vm, a) -> Math.atan(toD(arg(a, 0))));
+        def("flint/sinh", (vm, a) -> Math.sinh(toD(arg(a, 0))));
+        def("flint/cosh", (vm, a) -> Math.cosh(toD(arg(a, 0))));
+        def("flint/tanh", (vm, a) -> Math.tanh(toD(arg(a, 0))));
+        def("flint/floor", (vm, a) -> Math.floor(toD(arg(a, 0))));
+        def("flint/ceil", (vm, a) -> Math.ceil(toD(arg(a, 0))));
+        def("flint/rint", (vm, a) -> Math.rint(toD(arg(a, 0))));
+        def("flint/trunc", (vm, a) -> (double) (long) toD(arg(a, 0)));
+        def("flint/pow", (vm, a) -> Math.pow(toD(arg(a, 0)), toD(arg(a, 1))));
+        def("flint/atan2", (vm, a) -> Math.atan2(toD(arg(a, 0)), toD(arg(a, 1))));
+        def("flint/hypot", (vm, a) -> Math.hypot(toD(arg(a, 0)), toD(arg(a, 1))));
+        def("flint/signum", (vm, a) -> Math.signum(toD(arg(a, 0))));
+        def("flint/fabs", (vm, a) -> Math.abs(toD(arg(a, 0))));
+        def("flint/copy-sign", (vm, a) -> Math.copySign(toD(arg(a, 0)), toD(arg(a, 1))));
+        def("flint/double-bits", (vm, a) -> Double.doubleToRawLongBits(toD(arg(a, 0))));
+
+        // --- strings ----------------------------------------------------------
+        //
+        // By CODE POINT throughout. The JVM is UTF-16 and flint is UTF-8, and
+        // `subs` and indexing on anything past the BMP is exactly where two
+        // hosts silently disagree (`doc/decisions/0010`).
+        def("flint/subs", (vm, a) -> {
+            String s = str(arg(a, 0));
+            int n = s.codePointCount(0, s.length());
+            int from = (int) Vm.num(arg(a, 1));
+            int to = a.length > 2 ? (int) Vm.num(a[2]) : n;
+            if (from < 0 || to > n || from > to) {
+                throw Vm.err("substring [" + from + " " + to + ") out of " + n);
+            }
+            int bi = s.offsetByCodePoints(0, from);
+            int ei = s.offsetByCodePoints(0, to);
+            return s.substring(bi, ei);
+        });
+        def("flint/code-point-at", (vm, a) -> {
+            String s = str(arg(a, 0));
+            int i = (int) Vm.num(arg(a, 1));
+            int n = s.codePointCount(0, s.length());
+            if (i < 0 || i >= n) throw Vm.err("index " + i + " out of " + n);
+            return (long) s.codePointAt(s.offsetByCodePoints(0, i));
+        });
+        def("flint/from-code-point", (vm, a) ->
+            new String(Character.toChars((int) Vm.num(arg(a, 0)))));
+        def("flint/str-join", (vm, a) -> {
+            StringBuilder b = new StringBuilder();
+            for (Object o : iterate(arg(a, 0))) b.append(str(o));
+            return b.toString();
+        });
+        def("flint/str-index-of", (vm, a) -> {
+            String s = str(arg(a, 0)), needle = str(arg(a, 1));
+            int from = a.length > 2 ? (int) Vm.num(a[2]) : 0;
+            int bi = from <= 0 ? 0 : s.offsetByCodePoints(0, Math.min(from, s.codePointCount(0, s.length())));
+            int at = s.indexOf(needle, bi);
+            return at < 0 ? null : (long) s.codePointCount(0, at);
+        });
+        def("flint/str->num", (vm, a) -> {
+            String s = str(arg(a, 0)).trim();
+            try {
+                if (s.contains(".") || s.contains("e") || s.contains("E")) return Double.parseDouble(s);
+                return Long.parseLong(s);
+            } catch (NumberFormatException e) { return null; }
+        });
+        def("flint/to-long", (vm, a) -> {
+            Object v = arg(a, 0);
+            if (v instanceof Long l) return l;
+            if (v instanceof Double d) return (long) (double) d;
+            throw Vm.err(prStr(v) + " is not a number");
+        });
+        def("flint/str-bytes", (vm, a) -> (long) str(arg(a, 0))
+            .getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+
+        // --- byte strings (`doc/decisions/0024`) -----------------------------
+        def("flint/str->b", (vm, a) -> Bytes.of(str(arg(a, 0))));
+        def("flint/b->str", (vm, a) -> asBytes(arg(a, 0)).text());
+        def("flint/b-count", (vm, a) -> (long) asBytes(arg(a, 0)).count());
+        def("flint/b-at", (vm, a) -> asBytes(arg(a, 0)).at((int) Vm.num(arg(a, 1))));
+        def("flint/b-concat", (vm, a) -> asBytes(arg(a, 0)).concat(asBytes(arg(a, 1))));
+        def("flint/b-slice", (vm, a) ->
+            asBytes(arg(a, 0)).slice((int) Vm.num(arg(a, 1)), (int) Vm.num(arg(a, 2))));
+        def("flint/b->vec", (vm, a) -> asBytes(arg(a, 0)).toVec());
+        def("flint/vec->b", (vm, a) -> {
+            Bytes.T t = new Bytes.T();
+            for (Object o : iterate(arg(a, 0))) t.conj(Vm.num(o));
+            return t.persistent();
+        });
+        // Always 0: this representation is flat, so it IS depth zero. The
+        // builtin exists to observe flint's rope shape, and answering
+        // something plausible instead would be inventing one.
+        def("flint/b-depth", (vm, a) -> 0L);
+        def("flint/b-transient", (vm, a) -> {
+            Bytes.T t = new Bytes.T();
+            if (arg(a, 0) != null) t.append(asBytes(arg(a, 0)));
+            return t;
+        });
+        def("flint/b-conj!", (vm, a) -> {
+            if (arg(a, 0) instanceof Bytes.T t) { t.conj(Vm.num(arg(a, 1))); return t; }
+            throw Vm.err("b-conj! wants a byte transient");
+        });
+        def("flint/b-append!", (vm, a) -> {
+            if (arg(a, 0) instanceof Bytes.T t) { t.append(asBytes(arg(a, 1))); return t; }
+            throw Vm.err("b-append! wants a byte transient");
+        });
+        def("flint/b-tcount", (vm, a) -> {
+            if (arg(a, 0) instanceof Bytes.T t) return (long) t.count();
+            throw Vm.err("b-tcount wants a byte transient");
+        });
+        def("flint/b-persistent!", (vm, a) -> {
+            if (arg(a, 0) instanceof Bytes.T t) return t.persistent();
+            throw Vm.err("b-persistent! wants a byte transient");
+        });
+
+        // --- the rest ---------------------------------------------------------
+        def("with-meta", (vm, a) -> arg(a, 0));   // metadata is carried, not read
+        def("flint/array-map", (vm, a) -> {
+            FlintMap m = FlintMap.empty();
+            for (int i = 0; i + 1 < a.length; i += 2) m = m.assoc(a[i], a[i + 1]);
+            return m;
+        });
+        def("dissoc!", (vm, a) -> {
+            if (arg(a, 0) instanceof Transient t && t.map != null) {
+                for (int i = 1; i < a.length; i++) {
+                    Object k = a[i];
+                    t.map.keySet().removeIf(existing -> eq(existing, k));
+                }
+                return t;
+            }
+            throw Vm.err("dissoc! wants a transient map");
+        });
+        def("flint/volatile", (vm, a) -> new Volatile(arg(a, 0)));
+        def("flint/delay", (vm, a) -> new LazySeq(vm, arg(a, 0)));
+        def("flint/capabilities", (vm, a) -> FlintMap.empty());
+        def("flint/opaque", (vm, a) -> arg(a, 0));
+
 
         def("cons", (vm, a) -> {
             List<Object> out = new ArrayList<>();
@@ -341,12 +551,12 @@ public final class Builtins {
         });
         def("rem", (vm, a) -> {
             long y = Vm.num(arg(a, 1));
-            if (y == 0) throw new Vm.Thrown("divide by zero");
+            if (y == 0) throw Vm.err("divide by zero");
             return Vm.num(arg(a, 0)) % y;
         });
         def("quot", (vm, a) -> {
             long y = Vm.num(arg(a, 1));
-            if (y == 0) throw new Vm.Thrown("divide by zero");
+            if (y == 0) throw Vm.err("divide by zero");
             return Vm.num(arg(a, 0)) / y;
         });
         // `=` on numbers specifically. Separate from `=` because the compiler
@@ -360,21 +570,31 @@ public final class Builtins {
         def("transient", (vm, a) -> Transient.of(arg(a, 0)));
         def("persistent!", (vm, a) -> {
             if (arg(a, 0) instanceof Transient t) return t.persistent();
-            throw new Vm.Thrown("persistent! wants a transient");
+            throw Vm.err("persistent! wants a transient");
         });
         def("conj!", (vm, a) -> {
-            if (arg(a, 0) instanceof Transient t && t.list != null) {
-                for (int i = 1; i < a.length; i++) t.list.add(a[i]);
+            if (arg(a, 0) instanceof Transient t) {
+                if (t.list != null) { for (int i = 1; i < a.length; i++) t.list.add(a[i]); return t; }
+                if (t.set != null) { for (int i = 1; i < a.length; i++) t.set.add(a[i]); return t; }
+            }
+            throw Vm.err("conj! wants a transient collection");
+        });
+        def("disj!", (vm, a) -> {
+            if (arg(a, 0) instanceof Transient t && t.set != null) {
+                for (int i = 1; i < a.length; i++) {
+                    Object x = a[i];
+                    t.set.removeIf(y -> eq(x, y));
+                }
                 return t;
             }
-            throw new Vm.Thrown("conj! wants a transient collection");
+            throw Vm.err("disj! wants a transient set");
         });
         def("assoc!", (vm, a) -> {
             if (arg(a, 0) instanceof Transient t && t.map != null) {
                 for (int i = 1; i + 1 < a.length; i += 2) t.map.put(a[i], a[i + 1]);
                 return t;
             }
-            throw new Vm.Thrown("assoc! wants a transient map");
+            throw Vm.err("assoc! wants a transient map");
         });
 
         // `flint/apply` is the compiler's own: it knows the argument count, so
@@ -391,34 +611,39 @@ public final class Builtins {
             // in flint. Returning a truncated integer here would be a wrong
             // ANSWER on this host and a right one elsewhere.
             if (x instanceof Long i && y instanceof Long j) {
-                if (j == 0) throw new Vm.Thrown("divide by zero");
+                if (j == 0) throw Vm.err("divide by zero");
                 if (i % j == 0) return i / j;
                 return (double) i / (double) j;
             }
             double d = toD(y);
-            if (d == 0.0) throw new Vm.Thrown("divide by zero");
+            if (d == 0.0) throw Vm.err("divide by zero");
             return toD(x) / d;
         });
 
         // Errors are DATA: `ex-info` builds a value and `throw` carries it, so
         // `catch` binds what was thrown rather than a rendering of it.
-        def("ex-info", (vm, a) -> FlintMap.empty()
-            .assoc(Kw.of(null, "message"), arg(a, 0))
-            .assoc(Kw.of(null, "data"), arg(a, 1) == null ? FlintMap.empty() : arg(a, 1)));
-        def("ex-message", (vm, a) -> get(arg(a, 0), Kw.of(null, "message"), null));
-        def("ex-data", (vm, a) -> get(arg(a, 0), Kw.of(null, "data"), null));
-        def("flint/ex-kind", (vm, a) -> get(arg(a, 0), Kw.of(null, "kind"), null));
+        def("ex-info", (vm, a) -> new Ex("ExceptionInfo", arg(a, 0),
+            arg(a, 1) == null ? FlintMap.empty() : arg(a, 1)));
+        def("ex-message", (vm, a) -> arg(a, 0) instanceof Ex e ? e.message : null);
+        def("ex-data", (vm, a) -> arg(a, 0) instanceof Ex e ? e.data : null);
+        def("flint/ex-kind", (vm, a) -> arg(a, 0) instanceof Ex e ? e.kind : null);
 
         def("hash", (vm, a) -> (long) Hash.of(arg(a, 0)));
 
         def("atom", (vm, a) -> new Atom(arg(a, 0)));
+        // Atoms AND volatiles, as the Rust runtime does (`TY_ATOM |
+        // TY_VOLATILE`): a volatile is an atom without the atomicity, and the
+        // core library derefs both through the same builtin.
         def("deref", (vm, a) -> {
             if (arg(a, 0) instanceof Atom at) return at.deref();
-            throw new Vm.Thrown("cannot deref " + prStr(arg(a, 0)));
+            if (arg(a, 0) instanceof Volatile v) return v.deref();
+            if (arg(a, 0) instanceof LazySeq ls) return ls.force();
+            throw Vm.err("cannot deref " + prStr(arg(a, 0)));
         });
         def("reset!", (vm, a) -> {
             if (arg(a, 0) instanceof Atom at) return at.reset(arg(a, 1));
-            throw new Vm.Thrown("cannot reset! " + prStr(arg(a, 0)));
+            if (arg(a, 0) instanceof Volatile v) return v.reset(arg(a, 1));
+            throw Vm.err("cannot reset! " + prStr(arg(a, 0)));
         });
         /// The primitive `swap!` is built from. `swap!` itself lives in
         /// `lib/clojure/core.cljc` as a retry loop, so every host gets the same
@@ -428,7 +653,7 @@ public final class Builtins {
             if (arg(a, 0) instanceof Atom at) {
                 return at.compareAndSet(arg(a, 1), arg(a, 2));
             }
-            throw new Vm.Thrown("compare-and-set! wants an atom");
+            throw Vm.err("compare-and-set! wants an atom");
         });
         // The ARITY decides which argument is which: one is the name, two are
         // (ns, name). Reading argument 0 as the namespace regardless made
@@ -491,17 +716,17 @@ public final class Builtins {
             Object c = arg(a, 0);
             if (c instanceof Seq q) return Seq.of(tail(q));
             if (c instanceof List<?> l) {
-                if (l.isEmpty()) throw new Vm.Thrown("cannot pop an empty vector");
+                if (l.isEmpty()) throw Vm.err("cannot pop an empty vector");
                 return new ArrayList<Object>(l.subList(0, l.size() - 1));
             }
-            throw new Vm.Thrown("cannot pop " + prStr(c));
+            throw Vm.err("cannot pop " + prStr(c));
         });
         def("compare", (vm, a) -> (long) compareValues(arg(a, 0), arg(a, 1)));
 
         def("flint/lazy-seq", (vm, a) -> new LazySeq(vm, arg(a, 0)));
         def("flint/range3", (vm, a) -> {
             long start = Vm.num(arg(a, 0)), end = Vm.num(arg(a, 1)), step = Vm.num(arg(a, 2));
-            if (step == 0) throw new Vm.Thrown("range step of zero");
+            if (step == 0) throw Vm.err("range step of zero");
             List<Object> out = new ArrayList<>();
             for (long i = start; step > 0 ? i < end : i > end; i += step) out.add(i);
             return out;
@@ -555,7 +780,7 @@ public final class Builtins {
         if (x instanceof Boolean a && y instanceof Boolean b) return Boolean.compare(a, b);
         if (x instanceof Kw a && y instanceof Kw b) return a.toString().compareTo(b.toString());
         if (x instanceof Sym a && y instanceof Sym b) return a.toString().compareTo(b.toString());
-        throw new Vm.Thrown("cannot compare " + prStr(x) + " with " + prStr(y));
+        throw Vm.err("cannot compare " + prStr(x) + " with " + prStr(y));
     }
 
     private static Object compare(Object[] a, char op) {
