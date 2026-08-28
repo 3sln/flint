@@ -139,10 +139,25 @@ public static class Aot {
         }
     }
 
+    /// How many comparisons were fused with their branch, and how many integer
+    /// expressions were emitted whole, for measurement.
+    public static int Fused, Runs;
+
+    /// Static opcode counts across every arity offered, so a claim about where
+    /// the time goes can be checked rather than assumed. FLINT_AOT_HISTO=1.
+    public static readonly System.Collections.Generic.Dictionary<int,int> Histo = new();
+
     /// Compile one arity, or return null if it uses something this does not do.
     public static Compiled TryCompile(Img img, Img.Arity a) {
         byte[] code = img.Code;
         int start = a.Code, end = a.Code + a.Len;
+
+        if (System.Environment.GetEnvironmentVariable("FLINT_AOT_HISTO") == "1") {
+            for (int ip = start; ip < end; ) {
+                Histo[code[ip]] = Histo.TryGetValue(code[ip], out var c) ? c + 1 : 1;
+                ip += 1 + OperandLen(code[ip]);
+            }
+        }
 
         // One pass to reject, and to find every jump target so a label can be
         // defined for it before anything branches there.
@@ -209,10 +224,138 @@ public static class Aot {
             il.Emit(OpCodes.Ldloc, lhs); il.Emit(OpCodes.Ldloc, rhs);
         }
 
+        // The specialised comparisons, and the branch each one is fused with.
+        bool IsIntCmp(int o) => o is LtInt or LeInt or GtInt or GeInt or EqInt;
+
+        // ------------------------------------------------------------ int runs
+        //
+        // An integer expression is emitted as ONE IL expression, not as one
+        // instruction at a time. `(+ acc (* i i))` used to box `i*i` so that
+        // the very next instruction could unbox it again -- and the products
+        // here run past the box cache, so each of those was a real allocation.
+        // Kept on the IL evaluation stack the whole expression boxes once, at
+        // the end, or not at all when a comparison feeds a branch.
+        //
+        // A run reads NOTHING from the operand stack: its leaves are locals and
+        // constants, which push fresh values. That is what makes the depth
+        // bookkeeping trivial -- a run of any size is one push.
+
+        // A leaf pushes one long; 0 if this opcode is not one.
+        bool IsIntLeaf(int at) {
+            int o = code[at];
+            if (o == Int || o == Local || o == LocalW) return true;
+            if (o == Const) {
+                int k = code[at + 1] | (code[at + 2] << 8);
+                return k < img.Consts.Length && img.Consts[k] is long;
+            }
+            return false;
+        }
+        bool IsIntArith(int o) => o == AddInt || o == SubInt || o == MulInt;
+
+        // How far a pure-integer expression starting at `from` gets, and at
+        // what stack depth. Returns the exclusive end for depth 1 (a value) and
+        // for depth 2 (a comparison's two operands), or -1 for neither.
+        void ScanIntRun(int from, out int end1, out int end2) {
+            end1 = -1; end2 = -1;
+            int d = 0, ops = 0;
+            for (int at = from; at < end; ) {
+                if (at != from && labels.ContainsKey(at)) return;
+                int o = code[at];
+                if (IsIntLeaf(at)) d++;
+                else if (IsIntArith(o) && d >= 2) { d--; ops++; }
+                else return;
+                at += 1 + OperandLen(o);
+                // Only worth taking over the per-instruction path once there is
+                // real arithmetic, or two operands for a comparison to consume.
+                if (d == 1 && ops > 0) end1 = at;
+                if (d == 2) end2 = at;
+            }
+        }
+
+        // Emit [from, to) with every intermediate held as a raw long.
+        void EmitIntRun(int from, int to) {
+            for (int at = from; at < to; ) {
+                int o = code[at];
+                switch (o) {
+                    case Int:
+                        il.Emit(OpCodes.Ldc_I8, (long) (short) (code[at + 1] | (code[at + 2] << 8)));
+                        break;
+                    case Const:
+                        il.Emit(OpCodes.Ldc_I8, (long) img.Consts[code[at + 1] | (code[at + 2] << 8)]);
+                        break;
+                    case Local:
+                    case LocalW:
+                        il.Emit(OpCodes.Ldarg_2);
+                        il.Emit(OpCodes.Ldc_I4, o == Local ? code[at + 1]
+                                                          : code[at + 1] | (code[at + 2] << 8));
+                        il.Emit(OpCodes.Ldelem_Ref); il.Emit(OpCodes.Call, MNum);
+                        break;
+                    case AddInt: il.Emit(OpCodes.Add_Ovf); break;
+                    case SubInt: il.Emit(OpCodes.Sub_Ovf); break;
+                    default:     il.Emit(OpCodes.Mul_Ovf); break;
+                }
+                at += 1 + OperandLen(o);
+            }
+        }
+
+        // The branch half of a fused comparison, or the boxed bool when the
+        // comparison's result is used as a value rather than branched on.
+        void EmitCmp(int cmp, int at) {
+            int nxt = at + 1 < end ? code[at + 1] : Nop;
+            if ((nxt == JumpIfFalse || nxt == JumpIfTrue) && !labels.ContainsKey(at + 1)) {
+                var target = labels[at + 4 + (short) (code[at + 2] | (code[at + 3] << 8))];
+                bool t = nxt == JumpIfTrue;
+                switch (cmp) {
+                    case LtInt: il.Emit(t ? OpCodes.Blt : OpCodes.Bge, target); break;
+                    case LeInt: il.Emit(t ? OpCodes.Ble : OpCodes.Bgt, target); break;
+                    case GtInt: il.Emit(t ? OpCodes.Bgt : OpCodes.Ble, target); break;
+                    case GeInt: il.Emit(t ? OpCodes.Bge : OpCodes.Blt, target); break;
+                    default:    il.Emit(t ? OpCodes.Beq : OpCodes.Bne_Un, target); break;
+                }
+                Fused++;
+                return;
+            }
+            switch (cmp) {
+                case LtInt: il.Emit(OpCodes.Clt); break;
+                case GtInt: il.Emit(OpCodes.Cgt); break;
+                case LeInt: il.Emit(OpCodes.Cgt); il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Ceq); break;
+                case GeInt: il.Emit(OpCodes.Clt); il.Emit(OpCodes.Ldc_I4_0); il.Emit(OpCodes.Ceq); break;
+                default:    il.Emit(OpCodes.Ceq); break;
+            }
+            il.Emit(OpCodes.Call, MBoxBool); Push();
+        }
+
         for (int ip = start; ip < end; ) {
             if (labels.TryGetValue(ip, out var here)) il.MarkLabel(here);
             int op = code[ip];
             int len = OperandLen(op);
+
+            // An integer expression, taken whole. Two operands feeding a
+            // comparison first, because that is the case that boxes nothing at
+            // all; otherwise a value, boxed once.
+            if (IsIntLeaf(ip)) {
+                ScanIntRun(ip, out int end1, out int end2);
+                if (end2 >= 0 && end2 < end && IsIntCmp(code[end2])
+                    && !labels.ContainsKey(end2)) {
+                    EmitIntRun(ip, end2);
+                    int cmp = code[end2];
+                    int after = end2 + 1;
+                    EmitCmp(cmp, end2);
+                    // EmitCmp consumed the branch too when it fused with one.
+                    int nx = after < end ? code[after] : Nop;
+                    ip = ((nx == JumpIfFalse || nx == JumpIfTrue) && !labels.ContainsKey(after))
+                         ? after + 3 : after;
+                    Runs++;
+                    continue;
+                }
+                if (end1 >= 0) {
+                    EmitIntRun(ip, end1);
+                    il.Emit(OpCodes.Call, MBoxLong); Push();
+                    ip = end1;
+                    Runs++;
+                    continue;
+                }
+            }
             int b0 = ip + 1 < code.Length ? code[ip + 1] : 0;
             int u16 = ip + 2 < code.Length ? (code[ip + 1] | (code[ip + 2] << 8)) : 0;
             int i16 = (short) u16;
