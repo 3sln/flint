@@ -36,7 +36,38 @@ it is waiting forever — while its roots still have to be scanned, because they
 are still roots. Registered and running are two different questions, which is
 the same split a JVM makes between a thread "in Java" and one "in native".
 
-## What is built, and what the lock is still doing
+## What is built
+
+`sdks/rust` has the whole shape, and the pool is genuinely parallel: each
+driver thread claims its own executor on the SAME heap, so several are inside
+the interpreter at once. The program lock is the FALLBACK for a thread that
+finds no free executor, which is also what an inline driver always does.
+
+That "parallel or fell back?" question is unfalsifiable from outside -- falling
+back passes every correctness test while running exactly as serially as before
+-- so `Sandbox::parallel_dispatches` counts the dispatches that ran on a
+secondary, and the test asserts it is non-zero.
+
+Three bugs, all found by running it and all worth keeping:
+
+* **An `Rt` must not move once registered**, because what it registers is the
+  ADDRESS of its root stack. `Program` held its `Rt` inline and was then moved
+  into a `Mutex` and an `Arc`, so the collector walked freed memory -- a
+  `stack_top` of 14 728 600 375 357 765 408 against a `stack.len()` of 0. The
+  `Rt` is boxed inside `Program` now, which makes the invariant structural
+  rather than remembered. Dropping one also deregisters it.
+* **`stage_stop` has to know whether the stager is itself running.** The target
+  is "every running executor except me", and subtracting one unconditionally
+  assumes the caller is one of them. It is not: allocation happens outside
+  guest code too -- loading an image, running initialisers -- and there the
+  count was one too low, so the collector started with a peer still executing.
+* **More than one executor turns counting ON.** The safepoint poll lives in
+  the interpreter's checkpoint, and `0009` compiles that out when nothing is
+  counting. A sandbox with peers cannot have a thread that never polls, so
+  having a peer selects the counting policy exactly as a gas limit does. One
+  executor with no limit still runs the free loop.
+
+## What the program lock is still doing
 
 `sdks/rust` has the whole shape. `ThreadPool::new(4)` gives four OS threads
 that genuinely contend for one sandbox — 100 calls fired from four threads

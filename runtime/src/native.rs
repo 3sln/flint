@@ -263,7 +263,19 @@ fn uleb(b: &[u8], mut i: usize) -> Result<(u32, usize), String> {
 
 /// A loaded program, ready to run.
 pub struct Program {
-    rt: Rt,
+    /// BOXED, and that is structural rather than stylistic.
+    ///
+    /// An executor registers the address of its root stack with the collector,
+    /// and the collector reads that address while the executor is parked. So an
+    /// `Rt` must not move once registered -- and a `Program` moves all the
+    /// time: into a `Mutex`, into an `Arc`, out of a constructor. Boxing the
+    /// `Rt` makes the address stable no matter what happens to the `Program`.
+    ///
+    /// Without this the primary executor registered a stack address, the
+    /// `Program` was moved into its `Sandbox`, and the next collection walked
+    /// freed memory -- which surfaced as a `stack_top` of
+    /// 14 728 600 375 357 765 408 against a `stack.len()` of 0.
+    rt: alloc::boxed::Box<Rt>,
     grants: u32,
 }
 
@@ -303,7 +315,7 @@ impl Program {
                 "this runtime does not carry the builtin `{missing}`, which the image needs"
             )
         })?;
-        Ok(Program { rt, grants: 0 })
+        Ok(Program { rt: alloc::boxed::Box::new(rt), grants: 0 })
     }
 
     /// Run `main` with string arguments, as the wasm entry does.
@@ -347,8 +359,63 @@ impl Program {
     /// encoded value in, one encoded value out, and a failure is data --
     /// `{:error kind :message text}` -- rather than a second channel.
     pub fn call(&mut self, encoded_call: &[u8]) -> Result<Vec<u8>, String> {
-        let rt = &mut self.rt;
-        let call = rt.decode(encoded_call)?;
+        call_on(&mut self.rt, encoded_call)
+    }
+
+    /// A second executor on this program's heap (`doc/decisions/0028`).
+    ///
+    /// It shares the heap, the image, the globals, the intern tables and the
+    /// grants, and gets its own value stack, frames and gas. Run calls on it
+    /// with `call_on`.
+    ///
+    /// # Safety
+    /// The executor borrows this program's heap and must be dropped before the
+    /// program is.
+    #[cfg(feature = "parallel")]
+    pub unsafe fn executor(&mut self) -> Option<alloc::boxed::Box<Rt>> {
+        unsafe { self.rt.executor() }
+    }
+
+    /// What the image says about itself, if it says anything.
+    pub fn var_exists(&mut self, name: &str) -> bool {
+        self.rt.var_named(name).is_some()
+    }
+
+    /// The instruction count, which is deterministic (`doc/decisions/0009`) and
+    /// therefore the same here as under any wasm engine.
+    pub fn steps(&self) -> u64 {
+        self.rt.steps
+    }
+
+    /// The gas limit, in instructions. Zero disables it.
+    ///
+    /// Same sentinel handling as the wasm ABI: `u64::MAX` means "no
+    /// checkpoint", so asking for the largest possible limit would switch
+    /// counting off rather than set it very high.
+    pub fn set_step_limit(&mut self, n: u64) {
+        self.rt.set_gas_limit(if n == u64::MAX { u64::MAX - 1 } else { n });
+        self.rt.steps = 0;
+        self.rt.refresh_checkpoint();
+    }
+}
+
+/// Run an encoded call on a given executor.
+///
+/// Free rather than a method because a `Program` owns ONE executor and a
+/// sandbox may have several (`doc/decisions/0028`). Every executor runs a call
+/// the same way, and a second copy of this would be a second place for the
+/// call protocol to drift.
+pub fn call_on(rt: &mut Rt, encoded_call: &[u8]) -> Result<Vec<u8>, String> {
+    // From here this executor runs guest code, so the collector waits for it
+    // and it polls. Bracketing here rather than at each caller means both the
+    // primary and every secondary get it, and neither can forget.
+    #[cfg(feature = "parallel")]
+    rt.enter_running();
+    #[cfg(feature = "parallel")]
+    let _guard = LeaveOnDrop(rt as *mut Rt);
+
+
+                let call = rt.decode(encoded_call)?;
         if !rt.is_vector(call) || rt.vec_count(call) == 0 {
             return Err(String::from("a call is [name, args...]"));
         }
@@ -390,26 +457,19 @@ impl Program {
         rt.encode(v)
     }
 
-    /// What the image says about itself, if it says anything.
-    pub fn var_exists(&mut self, name: &str) -> bool {
-        self.rt.var_named(name).is_some()
-    }
+/// Leaves the running state however the call ends.
+///
+/// A `?` that returned early without this would leave the executor counted as
+/// running forever, and the next collection would wait for a thread that is no
+/// longer executing -- the deadlock this whole protocol exists to avoid, put
+/// back by an early return.
+#[cfg(feature = "parallel")]
+struct LeaveOnDrop(*mut Rt);
 
-    /// The instruction count, which is deterministic (`doc/decisions/0009`) and
-    /// therefore the same here as under any wasm engine.
-    pub fn steps(&self) -> u64 {
-        self.rt.steps
-    }
-
-    /// The gas limit, in instructions. Zero disables it.
-    ///
-    /// Same sentinel handling as the wasm ABI: `u64::MAX` means "no
-    /// checkpoint", so asking for the largest possible limit would switch
-    /// counting off rather than set it very high.
-    pub fn set_step_limit(&mut self, n: u64) {
-        self.rt.set_gas_limit(if n == u64::MAX { u64::MAX - 1 } else { n });
-        self.rt.steps = 0;
-        self.rt.refresh_checkpoint();
+#[cfg(feature = "parallel")]
+impl Drop for LeaveOnDrop {
+    fn drop(&mut self) {
+        unsafe { (*self.0).leave_running() };
     }
 }
 

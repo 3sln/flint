@@ -35,6 +35,21 @@ struct Request {
 /// (`doc/decisions/0028`); it does not need a different interface, which is
 /// why the interface is already written for K > 1.
 pub struct Core {
+    /// One executor per extra driver thread, each on the SAME heap.
+    ///
+    /// **Declared before `program` on purpose.** Struct fields drop in
+    /// declaration order, and every executor borrows the heap the program
+    /// owns, so dropping the program first would leave them pointing at freed
+    /// memory. The order of these two lines is load-bearing.
+    ///
+    /// Handed out one-per-thread and never shared, which is the invariant that
+    /// makes them safe: an executor is one thread's value stack, frames and
+    /// gas, and the heap underneath is what the safepoint and the allocation
+    /// lock coordinate (`doc/decisions/0028`).
+    ///
+    /// `Mutex<Option<Box<Rt>>>` per slot rather than one lock over all of them,
+    /// so two threads claiming different executors never meet.
+    executors: Vec<Mutex<Option<Box<flint_rt::rt::Rt>>>>,
     program: Mutex<Program>,
     inbox: Mutex<VecDeque<Request>>,
     /// True from the moment a wake is accepted until the dispatch that owns it
@@ -50,6 +65,11 @@ pub struct Core {
     /// no number behind it is a hope.
     dispatches: std::sync::atomic::AtomicU64,
     served: std::sync::atomic::AtomicU64,
+    /// Dispatches that ran on a SECONDARY executor rather than the program's
+    /// own. Counted because "the pool is parallel" is otherwise unfalsifiable
+    /// from outside: falling back to the primary passes every correctness test
+    /// while running exactly as serially as before.
+    on_executors: std::sync::atomic::AtomicU64,
 }
 
 impl Core {
@@ -90,23 +110,62 @@ impl Core {
 
             self.dispatches.fetch_add(1, Ordering::Relaxed);
             self.served.fetch_add(batch.len() as u64, Ordering::Relaxed);
-            let mut program = self.program.lock().unwrap();
-            for request in batch {
-                let answer = dispatch(&mut program, &request);
-                // A dropped receiver means the caller stopped waiting. That is
-                // allowed and is not an error: the work was still done, and its
-                // effect on the sandbox stands.
-                let _ = request.reply.send(answer);
+
+            // Take a spare executor if one is free. Several threads then run
+            // guest code on ONE heap at the same time, which is the whole
+            // point; the heap is kept consistent by the allocation lock and
+            // the safepoint rather than by a lock around execution.
+            //
+            // Falling back to the primary when none is free is not a
+            // compromise: with no spare executors -- an inline driver, or a
+            // pool of one -- this is exactly what it did before.
+            if let Some((slot, mut rt)) = self.claim_executor() {
+                self.on_executors.fetch_add(1, Ordering::Relaxed);
+                for request in batch {
+                    let answer = dispatch_on(&mut rt, &request);
+                    let _ = request.reply.send(answer);
+                }
+                *self.executors[slot].lock().unwrap() = Some(rt);
+            } else {
+                let mut program = self.program.lock().unwrap();
+                for request in batch {
+                    let answer = dispatch(&mut program, &request);
+                    // A dropped receiver means the caller stopped waiting.
+                    // That is allowed and is not an error: the work was still
+                    // done, and its effect on the sandbox stands.
+                    let _ = request.reply.send(answer);
+                }
             }
         }
     }
 }
 
-fn dispatch(program: &mut Program, request: &Request) -> Result<Value> {
+impl Core {
+    /// Take a free executor, or `None` if every one is busy.
+    ///
+    /// `try_lock` rather than `lock`: a busy slot means another driver thread
+    /// is inside that executor, and waiting for it would serialise exactly the
+    /// thing this exists to parallelise.
+    fn claim_executor(&self) -> Option<(usize, Box<flint_rt::rt::Rt>)> {
+        for (i, slot) in self.executors.iter().enumerate() {
+            if let Ok(mut held) = slot.try_lock() {
+                if let Some(rt) = held.take() {
+                    return Some((i, rt));
+                }
+            }
+        }
+        None
+    }
+}
+
+fn encode_call(request: &Request) -> Vec<u8> {
     let mut call = vec![Value::str(&request.name)];
     call.extend_from_slice(&request.args);
-    let encoded = Value::Vector(call).encode();
-    match program.call(&encoded) {
+    Value::Vector(call).encode()
+}
+
+fn answer(out: core::result::Result<Vec<u8>, String>) -> Result<Value> {
+    match out {
         Ok(bytes) => Value::decode(&bytes).map_err(Error::Encoding),
         Err(e) => {
             let (kind, message) = match e.split_once(": ") {
@@ -116,6 +175,16 @@ fn dispatch(program: &mut Program, request: &Request) -> Result<Value> {
             Err(Error::Call { kind, message })
         }
     }
+}
+
+fn dispatch(program: &mut Program, request: &Request) -> Result<Value> {
+    answer(program.call(&encode_call(request)))
+}
+
+/// The same call, on a secondary executor. One protocol, two entry points --
+/// `flint_rt::native::call_on` is the protocol, and both go through it.
+fn dispatch_on(rt: &mut flint_rt::rt::Rt, request: &Request) -> Result<Value> {
+    answer(flint_rt::native::call_on(rt, &encode_call(request)))
 }
 
 /// An answer that has not arrived yet.
@@ -184,14 +253,34 @@ impl Sandbox {
     }
 
     pub fn from_bytecode_with(bytecode: &[u8], driver: Arc<dyn Driver>) -> Result<Sandbox> {
-        let program = Program::load(bytecode, 2_000_000_000).map_err(Error::Load)?;
+        let mut program = Program::load(bytecode, 2_000_000_000).map_err(Error::Load)?;
+
+        // One spare executor per EXTRA driver thread. The thread that gets
+        // none falls back to the program's own, so a pool of N runs N-way and
+        // an inline driver allocates nothing.
+        //
+        // Made here rather than lazily because an executor registers the
+        // address of its root stack with the collector, and a slot handed out
+        // and put back is one address for the sandbox's life.
+        let mut executors = Vec::new();
+        for _ in 1..driver.parallelism() {
+            // SAFETY: every executor is dropped in `Core::drop`, before the
+            // program that owns the heap they share.
+            match unsafe { program.executor() } {
+                Some(rt) => executors.push(Mutex::new(Some(rt))),
+                None => break,
+            }
+        }
+
         Ok(Sandbox {
             core: Arc::new(Core {
+                executors,
                 program: Mutex::new(program),
                 inbox: Mutex::new(VecDeque::new()),
                 scheduled: AtomicBool::new(false),
                 dispatches: std::sync::atomic::AtomicU64::new(0),
                 served: std::sync::atomic::AtomicU64::new(0),
+                on_executors: std::sync::atomic::AtomicU64::new(0),
             }),
             driver,
         })
@@ -251,6 +340,17 @@ impl Sandbox {
             self.core.dispatches.load(Ordering::Relaxed),
             self.core.served.load(Ordering::Relaxed),
         )
+    }
+
+    /// How many dispatches ran on a secondary executor -- that is, genuinely
+    /// alongside another thread inside the interpreter rather than behind the
+    /// program lock.
+    ///
+    /// Readable because otherwise there is no way to tell a parallel pool from
+    /// one that quietly fell back to serialising, and the two pass identical
+    /// correctness tests.
+    pub fn parallel_dispatches(&self) -> u64 {
+        self.core.on_executors.load(Ordering::Relaxed)
     }
 
     /// Lend a capability by name. Authority is never a type test

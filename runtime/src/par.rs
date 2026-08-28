@@ -277,7 +277,16 @@ impl Parallel {
         }
     }
 
-    pub fn stage_stop(&self) {
+    /// Ask every other RUNNING executor to stop, and wait until they have.
+    ///
+    /// `i_am_running` is not a detail. The target is "every running executor
+    /// except me", and subtracting one unconditionally assumes the caller is
+    /// one of them. It is not always: an allocation can happen outside guest
+    /// code -- loading an image, running initialisers, a host call -- and there
+    /// the count is one too low, so the collector starts with a peer still
+    /// executing. That reads back as a root stack whose `stack_top` is past
+    /// its `stack.len()`, from an executor that was mid-push.
+    pub fn stage_stop(&self, i_am_running: bool) {
         // FIRST, wait for the previous stop's parkers to finish leaving.
         //
         // Without this, a `parked` count left over from the last stop is
@@ -295,8 +304,9 @@ impl Parallel {
         // Re-read the target every time round rather than once. An executor
         // that finishes while this waits lowers the count, and a target
         // captured before it left would never be reached.
+        let mine = if i_am_running { 1 } else { 0 };
         self.spin_until("waiting for executors to park", || {
-            let want = self.active.load(Ordering::Acquire).saturating_sub(1);
+            let want = self.active.load(Ordering::Acquire).saturating_sub(mine);
             self.parked.load(Ordering::Acquire) >= want
         });
     }

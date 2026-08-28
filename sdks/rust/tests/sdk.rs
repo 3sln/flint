@@ -14,6 +14,7 @@ const APP: &str = r#"
 (defn tally [] (swap! seen inc))
 (defn echo [x] x)
 (defn spin [] (loop [i 0] (if (< i 10000000) (recur (inc i)) i)))
+(defn churn [t] (+ t (reduce + 0 (map (fn [i] i) (range 2000)))))
 (defn caps [] (vec (sort (map name (keys (flint.rt/capabilities))))))
 (defn boom [] (throw (ex-info "deliberate" {:a 1})))
 (defn main [args] (str "main saw " (pr-str args)))
@@ -25,7 +26,7 @@ fn image() -> flint::Image {
         .compile(Compile {
             resolve: &|ns: &str| if ns == "app" { Some(APP.to_string()) } else { None },
             fn_name: "app/main",
-            exports: &["app/greet", "app/tally", "app/echo", "app/boom", "app/spin", "app/caps"],
+            exports: &["app/greet", "app/tally", "app/echo", "app/boom", "app/spin", "app/caps", "app/churn"],
             meta: vec![("capabilities".into(), Value::Vector(vec![Value::str("fs")]))],
             ..Default::default()
         })
@@ -263,4 +264,76 @@ fn inline_completes_before_the_call_returns() {
     let pending = sandbox.call("app/echo", &[Value::Int(7)]);
     assert_eq!(pending.try_take().expect("inline finished it")
                       .unwrap(), Value::Int(7));
+}
+
+/// Several driver threads running GUEST CODE on one sandbox at once.
+///
+/// The earlier pool test proved the dispatch was parallel while the program
+/// itself was serialised behind a lock. This one takes that lock off the path:
+/// each driver thread gets its own executor on the SAME heap, so two threads
+/// are inside the interpreter together.
+///
+/// Correctness first, and it is the same assertion as before because it is the
+/// same property: 100 calls through one `(swap! seen inc)` have to be exactly
+/// 1..=100. A missed increment means two threads read one state.
+#[test]
+fn a_pool_runs_guest_code_on_one_sandbox_in_parallel() {
+    let img = image();
+    let pool = std::sync::Arc::new(flint::ThreadPool::new(4));
+    let sandbox = img.sandbox_with(pool).unwrap();
+    assert_eq!(sandbox.parallelism(), 4);
+
+    let mut waiting = Vec::new();
+    for _ in 0..4 {
+        let s = sandbox.clone();
+        waiting.push(std::thread::spawn(move || {
+            (0..25).map(|_| s.call("app/tally", &[])).collect::<Vec<_>>()
+        }));
+    }
+    let mut seen: Vec<i64> = Vec::new();
+    for t in waiting {
+        for pending in t.join().unwrap() {
+            seen.push(pending.wait().unwrap().as_i64().expect("tally returns an int"));
+        }
+    }
+    seen.sort_unstable();
+    assert_eq!(seen, (1..=100).collect::<Vec<i64>>());
+
+    // And it really did run on the executors. Without this the test passes
+    // just as well when every dispatch falls back to the program lock, which
+    // is precisely the failure worth catching: correct, and not parallel.
+    let on_exec = sandbox.parallel_dispatches();
+    assert!(on_exec > 0, "no dispatch ran on a secondary executor");
+    println!("    {on_exec} dispatches ran on a secondary executor");
+}
+
+/// The same, but allocation-heavy, so collections happen WHILE other threads
+/// are inside the interpreter. That is the case the safepoint exists for.
+#[test]
+fn guest_code_survives_collections_staged_by_another_thread() {
+    let img = image();
+    let pool = std::sync::Arc::new(flint::ThreadPool::new(4));
+    let sandbox = img.sandbox_with(pool).unwrap();
+
+    let mut waiting = Vec::new();
+    for t in 0..4i64 {
+        let s = sandbox.clone();
+        waiting.push(std::thread::spawn(move || {
+            (0..12)
+                .map(|_| s.call("app/churn", &[Value::Int(t)]))
+                .collect::<Vec<_>>()
+        }));
+    }
+    for (t, h) in waiting.into_iter().enumerate() {
+        for pending in h.join().unwrap() {
+            // `churn` builds a list and sums it, so a value lost to a
+            // collection staged by another thread comes back as a wrong TOTAL
+            // rather than as a crash.
+            assert_eq!(
+                pending.wait().unwrap(),
+                Value::Int(2000 * 1999 / 2 + t as i64),
+                "thread {t} got a wrong sum"
+            );
+        }
+    }
 }

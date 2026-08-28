@@ -353,7 +353,7 @@ impl Rt {
             let _ = (slot, depth);
         }
 
-        self.image = Image {
+        *self.image = Image {
             code,
             fns,
             natives,

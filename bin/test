@@ -278,9 +278,10 @@ echo
 echo "== sdks: the same four nouns in three languages (0025)"
 # Release, because each of these embeds the compiler and runs flint compiling
 # itself; a debug build of that is minutes rather than seconds.
-cargo test -p flint --release --test sdk > /tmp/flint-test.out 2>&1 \
+cargo test -p flint --release --test sdk -- --nocapture > /tmp/flint-test.out 2>&1 \
   || { tail -25 /tmp/flint-test.out; fail "the Rust SDK"; }
 grep -E "^test result" /tmp/flint-test.out | sed 's/^/    rust:  /'
+grep -E "dispatches ran on a secondary executor" /tmp/flint-test.out | sed 's/^ */    /'
 ./sdks/c/build > /tmp/flint-test.out 2>&1 || { tail -30 /tmp/flint-test.out; fail "the C SDK"; }
 grep -c "  ok  " /tmp/flint-test.out | awk '{printf "    c/c++: %d checks passed\n", $1}'
 

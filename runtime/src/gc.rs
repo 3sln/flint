@@ -312,6 +312,28 @@ pub struct SharedRoots {
     pub singletons: Vec<Value>,
 }
 
+/// Anything the sandbox owns and its executors share, by address.
+///
+/// It DEREFS, which is the point: `self.image.code` reads like a field because
+/// it was one, and the twenty-six sites that read it do not know the image
+/// stopped belonging to an `Rt` and started belonging to the sandbox.
+pub struct SandboxRef<T>(pub core::ptr::NonNull<T>);
+
+impl<T> core::ops::Deref for SandboxRef<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { self.0.as_ref() }
+    }
+}
+impl<T> core::ops::DerefMut for SandboxRef<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { self.0.as_mut() }
+    }
+}
+/// Sound for the same reason `GcPtr` is: what these point at outlives every
+/// executor, and simultaneous access is the safepoint's problem.
+unsafe impl<T> Send for SandboxRef<T> {}
+
 /// The shared roots, by address.
 ///
 /// A pointer rather than ownership because every executor in a sandbox reaches
@@ -403,6 +425,19 @@ impl Default for SharedRoots {
 pub struct Heap {
     pub gc: Gc,
     pub shared: SharedRoots,
+    /// The program. One per sandbox: every executor runs the same code.
+    pub image: crate::vm::Image,
+    /// The host's native functions, by index. Host builds only: on wasm a
+    /// native is a table slot, not a function pointer.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub host_natives: Vec<crate::vm::NativeFn>,
+    /// What the host lent THIS SANDBOX. Per-sandbox, not per-executor: a
+    /// capability is lent to a sandbox, and its threads are not separate
+    /// tenants (`doc/decisions/0022`).
+    pub grants: Vec<(alloc::string::String, u64)>,
+    /// Have the image's initialisers run? Once per sandbox, not per executor
+    /// and not per call.
+    pub started: bool,
     /// The safepoint, the allocation lock and the shared gas counter. One per
     /// sandbox because they coordinate its executors with each other.
     #[cfg(feature = "parallel")]
@@ -414,6 +449,11 @@ impl Heap {
         Heap {
             gc: Gc::new(nursery, max),
             shared: SharedRoots::new(),
+            image: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            host_natives: Vec::new(),
+            grants: Vec::new(),
+            started: false,
             #[cfg(feature = "parallel")]
             par: crate::par::Parallel::new(),
         }
@@ -521,6 +561,15 @@ impl Roots {
         for e in self.shared.others.iter().copied() {
             let e = unsafe { &mut *e.0 };
             let top = e.stack_top;
+            // A parked executor's roots do not change. If they have, the
+            // collector is walking a thread that is still running -- say so
+            // here rather than as an index panic four frames down.
+            assert!(
+                top <= e.stack.len(),
+                "flint: scanning a RUNNING executor: stack_top {} past len {}",
+                top,
+                e.stack.len()
+            );
             for v in &mut e.stack[..top] {
                 f(v);
             }

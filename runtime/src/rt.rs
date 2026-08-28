@@ -55,13 +55,20 @@ pub struct Rt {
     /// so a single-threaded sandbox pays nothing for any of this.
     #[cfg(feature = "parallel")]
     exec_id: Option<usize>,
+    /// Is this executor inside guest code right now?
+    ///
+    /// The collector waits for running executors and not for idle ones, so
+    /// staging a stop has to know whether the stager is one of the threads it
+    /// is counting.
+    #[cfg(feature = "parallel")]
+    running: bool,
     pub gc: crate::gc::GcPtr,
     pub roots: Roots,
     /// The in-flight thrown value, or `nil`. Native builtins signal failure by
     /// setting this and returning `nil`; the VM checks it after every call.
     pub thrown: Value,
     /// The loaded program: bytecode, function table, native imports.
-    pub image: crate::vm::Image,
+    pub image: crate::gc::SandboxRef<crate::vm::Image>,
     /// Interpreter frames. Clojure recursion uses this, not the Rust stack, so
     /// deep recursion fails with a catchable StackOverflowError instead of
     /// smashing the wasm stack.
@@ -71,7 +78,7 @@ pub struct Rt {
     /// through the wasm table, which is what lets `--gc-sections` drop the ones
     /// a program never calls; a static table here would keep them all alive.
     #[cfg(not(target_arch = "wasm32"))]
-    pub host_natives: alloc::vec::Vec<crate::vm::NativeFn>,
+    pub host_natives: crate::gc::SandboxRef<alloc::vec::Vec<crate::vm::NativeFn>>,
     /// Work done: one per dispatched bytecode instruction, plus what natives
     /// charge for work that is not O(1) (`doc/decisions/0009`).
     ///
@@ -108,9 +115,6 @@ pub struct Rt {
     #[cfg(feature = "aot")]
     pub run_base: usize,
     pub steps: u64,
-    /// Have the image's initialisers run? A sandbox serves many calls
-    /// (`doc/decisions/0025`) and they run once, not per call.
-    pub started: bool,
     /// Hard budget. 0 means unlimited. Exceeding it is a **catchable error**
     /// carrying what was spent against what was allowed, not a trap.
     pub gas_limit: u64,
@@ -144,9 +148,13 @@ pub struct Rt {
     /// Non-zero when `main` should report something other than "here is your
     /// answer" -- 2 means "I need the host" (`doc/decisions/0005`, section 1).
     pub status: i32,
-    /// What the host lent THIS sandbox, as `(name, host-id)`. Per-`Rt` because
-    /// a capability belongs to a run: see `add_grant`.
-    pub grants: alloc::vec::Vec<(alloc::string::String, u64)>,
+    /// What the host lent this SANDBOX, as `(name, host-id)`.
+    ///
+    /// Per-sandbox rather than per-`Rt`: it stopped being a process-global
+    /// because a capability belongs to a run and not to a process, and it is
+    /// not per-executor for the same reason in the other direction -- a
+    /// sandbox's threads are not separate tenants.
+    pub grants: crate::gc::SandboxRef<alloc::vec::Vec<(alloc::string::String, u64)>>,
 }
 
 /// Root `$v` for the duration of `$body`, rebinding the name to the (possibly
@@ -196,6 +204,23 @@ pub fn add_grant(_name: alloc::string::String, _host_id: u64) {
 /// and secondaries hold `None`.
 #[cfg(feature = "parallel")]
 unsafe impl Send for Rt {}
+
+/// Leave the registry on the way out.
+///
+/// A registered executor is an address the collector will read. Dropping one
+/// without saying so leaves the collector walking freed memory, which is not a
+/// crash where it happens -- it is a garbage `stack_top` somewhere else.
+#[cfg(feature = "parallel")]
+impl Drop for Rt {
+    fn drop(&mut self) {
+        if let Some(id) = self.exec_id.take() {
+            if self.running {
+                unsafe { (*self.heap.as_ptr()).par.leave() };
+            }
+            unsafe { (*self.heap.as_ptr()).par.deregister(id) };
+        }
+    }
+}
 
 impl Rt {
     /// `{:name <host-minted opaque>}` for every grant the host declared.
@@ -267,19 +292,32 @@ impl Rt {
         gc: crate::gc::GcPtr,
         shared: crate::gc::SharedPtr,
     ) -> Rt {
+        let image = crate::gc::SandboxRef(core::ptr::NonNull::from(unsafe {
+            &mut (*heap.as_ptr()).image
+        }));
+        #[cfg(not(target_arch = "wasm32"))]
+        let host_natives = crate::gc::SandboxRef(core::ptr::NonNull::from(unsafe {
+            &mut (*heap.as_ptr()).host_natives
+        }));
+        let grants = crate::gc::SandboxRef(core::ptr::NonNull::from(unsafe {
+            &mut (*heap.as_ptr()).grants
+        }));
         Rt {
             owned_heap,
+            image,
+            #[cfg(not(target_arch = "wasm32"))]
+            host_natives,
+            grants,
             heap,
             #[cfg(feature = "parallel")]
             exec_id: None,
+            #[cfg(feature = "parallel")]
+            running: false,
             gc,
             roots: Roots::new(shared),
             thrown: NIL,
-            image: Default::default(),
             frames: alloc::vec::Vec::new(),
             handlers: alloc::vec::Vec::new(),
-            #[cfg(not(target_arch = "wasm32"))]
-            host_natives: alloc::vec::Vec::new(),
             #[cfg(feature = "aot")]
             aot_unwound_out: false,
             #[cfg(feature = "aot")]
@@ -293,7 +331,6 @@ impl Rt {
             #[cfg(feature = "aot")]
             run_base: 0,
             steps: 0,
-            started: false,
             gas_limit: 0,
             slice_end: 0,
             gas_trips: 0,
@@ -303,8 +340,18 @@ impl Rt {
             park_on: NIL,
             sched_hook: None,
             status: 0,
-            grants: alloc::vec::Vec::new(),
         }
+    }
+
+    /// Have this sandbox's initialisers run? One answer per sandbox, not per
+    /// executor and not per call.
+    #[inline]
+    pub fn started(&self) -> bool {
+        unsafe { (*self.heap.as_ptr()).started }
+    }
+    #[inline]
+    pub fn set_started(&mut self, v: bool) {
+        unsafe { (*self.heap.as_ptr()).started = v };
     }
 
     fn init_singletons(&mut self) {
@@ -449,6 +496,13 @@ impl Rt {
     #[inline(always)]
     pub(crate) fn unlock_intern(&mut self, _table: usize) {}
 
+    /// How many executors share this heap.
+    #[cfg(feature = "parallel")]
+    #[inline]
+    pub fn executor_count(&self) -> u32 {
+        unsafe { (*self.heap.as_ptr()).par.executors() }
+    }
+
     /// Bracket a run of guest code.
     ///
     /// Between these, this executor polls and a collector may wait for it.
@@ -456,15 +510,17 @@ impl Rt {
     /// still scanned, because they are still roots.
     #[cfg(feature = "parallel")]
     pub fn enter_running(&mut self) {
-        if self.exec_id.is_some() {
+        if self.exec_id.is_some() && !self.running {
             unsafe { (*self.heap.as_ptr()).par.enter() };
+            self.running = true;
         }
     }
 
     #[cfg(feature = "parallel")]
     pub fn leave_running(&mut self) {
-        if self.exec_id.is_some() {
+        if self.exec_id.is_some() && self.running {
             unsafe { (*self.heap.as_ptr()).par.leave() };
+            self.running = false;
         }
     }
 
@@ -561,7 +617,7 @@ impl Rt {
         par.lock_alloc();
         let staged = self.gc.would_collect(ty, len);
         if staged {
-            par.stage_stop();
+            par.stage_stop(self.running);
             // Every other executor is stopped now, so their roots can be given
             // to the collector. Built here and dropped after, because a list
             // that outlived the stop would be pointers into threads that have

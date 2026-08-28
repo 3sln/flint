@@ -801,11 +801,33 @@ impl Rt {
         // 0009 traded a known budget for the free loop -- spending it again on
         // a feature most modules do not use is exactly what that budget exists
         // to stop. One predictable comparison instead.
-        if self.counting() {
+        // A sandbox with more than one executor MUST poll, or a thread that
+        // never allocates never reaches a safepoint and the collector waits
+        // for it forever. `Counting` is the policy that polls, so having
+        // another executor turns counting on the same way a gas limit does.
+        //
+        // This is what keeps `doc/decisions/0009`'s free loop free where it
+        // matters: one executor with no limit still runs `NoBudget`, whose
+        // `tick` is a constant the optimiser deletes. The poll is compiled in
+        // only when there is something to poll FOR.
+        if self.counting() || self.has_peers() {
             self.run_with::<Counting>(base_depth)
         } else {
             self.run_with::<NoBudget>(base_depth)
         }
+    }
+
+    /// Is another executor sharing this heap?
+    #[cfg(feature = "parallel")]
+    #[inline]
+    fn has_peers(&self) -> bool {
+        self.executor_count() > 1
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    #[inline(always)]
+    fn has_peers(&self) -> bool {
+        false
     }
 
     fn run_with<B: BudgetPolicy>(&mut self, base_depth: usize) -> Value {
@@ -1651,7 +1673,7 @@ impl Rt {
     /// not exist -- a static registry here would pin every builtin.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn install_host_natives(&mut self) {
-        self.host_natives = crate::builtins::host_registry().iter().map(|(_, f)| *f).collect();
+        *self.host_natives = crate::builtins::host_registry().iter().map(|(_, f)| *f).collect();
     }
 
     /// Host-only: register one more builtin -- a unit's, which is not in this
@@ -1706,10 +1728,10 @@ impl Rt {
     /// (`doc/decisions/0025`) and they must not re-run per call -- the state a
     /// program sets up at load is the state every call after it sees.
     pub fn ensure_started(&mut self) -> bool {
-        if self.started {
+        if self.started() {
             return true;
         }
-        self.started = true;
+        self.set_started(true);
         for i in 0..self.image.init.len() {
             let f = self.image.init[i];
             let c = self.make_closure(f, &[]);
