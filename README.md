@@ -103,7 +103,7 @@ Working, end to end, and tested:
 Not working, and named as such: no records or types (protocols exist, and
 dispatch on kind or metadata); no transducers; no sorted collections; no `eval`
 at runtime; a capability cannot be delegated at run time; the regex engine is
-86× slower than babashka's. All of this is in [Limits](#limits).
+12× slower than babashka's. All of this is in [Limits](#limits).
 
 ---
 
@@ -1348,12 +1348,13 @@ instance. Full output, including the native runs, in
 
 | program | bytes | compile | cold | warm |
 |---|---:|---:|---:|---:|
-| hello (trivial) | 179 539 | 0.05 ms | 0.11 ms | 0.01 ms |
-| tight loop, 10⁶ iterations | 203 861 | 0.11 ms | 169.71 ms | 169.37 ms |
-| transient map, 10⁵ inserts | 218 531 | 0.10 ms | 47.33 ms | 46.76 ms |
-| word frequency (string split) | 250 689 | 0.10 ms | 63.17 ms | 62.44 ms |
-| word frequency (regex split) | 269 013 | 0.08 ms | 113.36 ms | 113.15 ms |
-| JSON round trip, 2000 records | 290 398 | 0.10 ms | 104.36 ms | 103.50 ms |
+| hello (trivial) | 247 869 | 0.07 ms | 0.12 ms | 0.01 ms |
+| tight loop, 10⁶ iterations | 271 615 | 0.08 ms | 62.20 ms | 61.84 ms |
+| transient map, 10⁵ inserts | 286 200 | 0.11 ms | 37.92 ms | 36.72 ms |
+| word frequency (string split) | 321 891 | 0.10 ms | 7.79 ms | 7.27 ms |
+| word frequency (regex split) | 358 039 | 0.09 ms | 17.19 ms | 16.13 ms |
+| JSON round trip, 2000 records | 358 891 | 0.11 ms | 82.28 ms | 82.12 ms |
+| repeated concatenation, 4000 × 16B | 275 108 | 0.07 ms | 2.11 ms | 2.00 ms |
 
 And the cost of the host boundary, from `test/host_abi.mjs` on the same machine:
 a message drained one at a time costs **11 833 ns**; a thousand drained in one
@@ -1372,25 +1373,32 @@ source, same input. It is **not** a claim about JVM Clojure.
 
 | program | flint | babashka | ratio |
 |---|---:|---:|---:|
-| tight loop, 10⁶ iterations | 169.37 ms | 76.58 ms | 2.21× |
-| transient map, 10⁵ inserts | 46.76 ms | 18.32 ms | 2.55× |
-| word frequency (regex split) | 113.15 ms | 1.32 ms | **86×** |
+| tight loop, 10⁶ iterations | 61.84 ms | 76.15 ms | **0.81×** |
+| transient map, 10⁵ inserts | 36.72 ms | 17.78 ms | 2.07× |
+| word frequency (regex split) | 16.13 ms | 1.32 ms | **12×** |
 
-Two and a half times slower than babashka on interpreter-bound and
-data-structure-bound work is a fair place to be for a self-contained module with
-its own collector. The regex number is not; see [Limits](#limits).
+The tight loop is now FASTER than babashka, which it was 2.21× slower than
+before loop counters started specialising: a loop binding takes its
+initialiser's type as a hypothesis and keeps it if every `recur` proves it, so
+the specialised integer opcodes finally apply to the loops that do the
+arithmetic. Same instruction count, 90.15 ms → 61.71 ms, measured with only the
+analyzer differing.
+
+Twice babashka on data-structure-bound work is a fair place to be for a
+self-contained module with its own collector. The regex number is not; see
+[Limits](#limits).
 
 ### Dispatch, isolated from data-structure cost
 
 | program | instructions | warm | ns / instruction |
 |---|---:|---:|---:|
-| tight loop, 10⁶ iterations | 27 000 226 | 169.37 ms | 6.3 |
-| JSON round trip | 12 330 891 | 103.50 ms | 8.4 |
-| transient map, 10⁵ inserts | 3 000 323 | 46.76 ms | 15.6 |
-| word frequency (string split) | 3 257 997 | 62.44 ms | 19.2 |
+| tight loop, 10⁶ iterations | 13 000 233 | 61.84 ms | 4.8 |
+| JSON round trip | 9 020 276 | 82.12 ms | 9.1 |
+| transient map, 10⁵ inserts | 1 600 328 | 36.72 ms | 22.9 |
+| word frequency (string split) | 833 615 | 7.27 ms | 8.7 |
 
-Read down the column: 6.2 ns is what a dispatched instruction costs **on V8**
-when it does almost nothing, and the rising numbers are the same dispatch
+Read down the column: under 5 ns is what a dispatched instruction costs **on
+V8** when it does almost nothing, and the rising numbers are the same dispatch
 diluted by real work. Dispatch is about a third of the time on allocation-light code and much
 less on anything that touches the heap.
 
@@ -1639,7 +1647,7 @@ The honest list. Nothing here is stubbed and reported as working.
 
 ### Slow, and by how much
 
-- **The regex engine is 86× slower than babashka's** on the word-frequency
+- **The regex engine is 12× slower than babashka's** on the word-frequency
   benchmark, and **275× slower than cherry-compiled JS** on the construe
   workload — see [What this means for construe](#what-this-means-for-construe),
   where it is the one result that would rule flint out of a job. It is a backtracking matcher written in cljc — which is what makes
