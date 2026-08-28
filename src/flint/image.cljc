@@ -23,17 +23,13 @@
 ;;
 ;; TRAILING rather than after the version, because `NATIVES-OFFSET` is a fixed
 ;; 12 and `patch-native-slots` writes at offsets computed from it.
-;; NOT a `def`, and that is not a style choice. Adding one more top-level var to
-;; this namespace makes the SELF-COMPILE trap with `memory access out of bounds`
-;; -- deterministically, in the production runtime build only; the diagnostics
-;; build compiles the identical image and passes. `(if perf? 1 0)` passes and
-;; `(if perf? FLAG-PERF 0)` does not, which is 64 bytes of difference. That is a
-;; latent runtime bug this change happened to step on, it is written up in
-;; `doc/decisions/0031`, and the literal below is a way past it rather than a
-;; fix for it. The readers each name the constant: `image.rs`'s `FLAG_PERF`,
-;; `Img.java`'s `FLAG_PERF`, `Img.cs`'s `FlagPerf`.
+;; Each reader names it too: `image.rs`'s `FLAG_PERF`, `Img.java`'s `FLAG_PERF`,
+;; `Img.cs`'s `FlagPerf`.
 ;;
-;;   bit 0 -- FLAG-PERF: `:optimize [perf]`
+;; This was briefly written as a bare literal, because adding this one `def`
+;; made the self-compile trap. That turned out to be a stale-pointer bug in
+;; `array-map` rather than anything about `def` -- `doc/decisions/0031` -- and
+;; the constant came back the moment it was fixed.
 (def FLAG-PERF 1)
 
 (def K-NIL 0) (def K-TRUE 1) (def K-FALSE 2) (def K-INT 3) (def K-DOUBLE 4)
