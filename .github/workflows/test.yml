@@ -25,7 +25,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 45 for the ordinary pull-request run; the by-hand release run also does
+    # self-hosting on both ports, which is about 15 minutes more.
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,5 +57,31 @@ jobs:
         with:
           bb: latest
 
+      # The JVM port. 25 rather than the minimum 24, because `java.lang.classfile`
+      # is what the AOT emitter uses and 24 is where it was finalised -- pinning
+      # to the floor would mean CI never exercises anything newer.
+      - name: Set up the JDK for the JVM port
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # The CLR port. `runtimes/clr/conform` targets net10.0.
+      - name: Set up .NET for the CLR port
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Test
+        env:
+          # Without this, `bin/conform-hosts` SKIPS the JVM and CLR rows when a
+          # toolchain is missing and the suite still exits 0 -- so a green run
+          # would prove nothing about either port. With it, a missing toolchain
+          # is a failure that says which one.
+          FLINT_REQUIRE_HOSTS: '1'
+          # Self-hosting on the ports is 179 s on the JVM and 704 s on the CLR
+          # against about a minute for everything else, so it is not a
+          # per-proposal gate. `workflow_dispatch` is the release check, and
+          # that is what the run-by-hand trigger at the top exists for.
+          FLINT_SELFHOST: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: ./bin/test

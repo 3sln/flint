@@ -10,12 +10,29 @@
 set -e
 cd "$(dirname "$0")/.."
 
+# Skipping is for a developer without a JDK installed; it is NOT for CI. A gate
+# that silently passes when it ran nothing is worse than no gate, so CI sets
+# FLINT_REQUIRE_HOSTS=1 and a missing toolchain is then a failure with a name.
+require_hosts="${FLINT_REQUIRE_HOSTS:-0}"
+missing() {
+  if [ "$require_hosts" = "1" ]; then
+    echo "  FAIL $1 (FLINT_REQUIRE_HOSTS=1, so this is not skippable)"
+    exit 1
+  fi
+  echo "  ($1; skipped)"
+}
+
 # JDK 24+ for `java.lang.classfile`, which the AOT emitter uses. Falls back to
 # 21 for the interpreter rows when a newer one is not there.
-JDK="${FLINT_JDK:-/opt/homebrew/opt/openjdk}"
+# FLINT_JDK first, then whatever the environment already points at -- CI and
+# most JDK managers set JAVA_HOME, and asking a second question when the answer
+# is already in the environment is how a gate ends up skipped on a machine that
+# could have run it.
+JDK="${FLINT_JDK:-${JAVA_HOME:-/opt/homebrew/opt/openjdk}}"
+[ -x "$JDK/bin/javac" ] || JDK=/opt/homebrew/opt/openjdk
 [ -x "$JDK/bin/javac" ] || JDK=/opt/homebrew/opt/openjdk@21
 if [ ! -x "$JDK/bin/javac" ]; then
-  echo "  (no JDK at $JDK; set FLINT_JDK to run the JVM rows)"
+  missing "no JDK at $JDK; set FLINT_JDK to run the JVM rows"
   exit 0
 fi
 
@@ -28,10 +45,28 @@ if command -v dotnet >/dev/null 2>&1; then
     && CLR="runtimes/clr/conform/bin/Release/net10.0/Conform"
   [ -x "$CLR" ] || CLR=""
 fi
+[ -n "$CLR" ] || missing "no dotnet, or the conform project did not build; CLR rows"
 
 mkdir -p out/conform
-"$JDK/bin/javac" -d runtimes/jvm/classes runtimes/jvm/src/com/flint/*.java \
-  runtimes/jvm/test/*.java 2>&1 | head -20
+# javac's exit status, not just its output. This used to be piped into `head`,
+# which discards the status: a JDK too old for `java.lang.classfile` failed to
+# compile `Aot.java`, the script carried on, and `java` then ran whatever class
+# files were left over from the last good build. The confusing symptom was an
+# UnsupportedClassVersionError from a test that had not been recompiled.
+#
+# Stale classes are removed first for the same reason: a compile that fails
+# must not leave a runnable tree behind.
+rm -rf runtimes/jvm/classes
+if ! "$JDK/bin/javac" -d runtimes/jvm/classes runtimes/jvm/src/com/flint/*.java \
+     runtimes/jvm/test/*.java > /tmp/flint-javac.out 2>&1; then
+  head -20 /tmp/flint-javac.out
+  if grep -q "java.lang.classfile" /tmp/flint-javac.out; then
+    echo "  (this JDK is older than 24, which is what java.lang.classfile needs;"
+    echo "   set FLINT_JDK to a 24+ install to run the JVM rows)"
+  fi
+  missing "javac failed at $JDK"
+  exit 0
+fi
 
 # Multi-threading on the JVM, which is a different problem to the native
 # runtime's: there is no safepoint to build because there is no collector of
