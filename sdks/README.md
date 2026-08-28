@@ -9,14 +9,21 @@ they have in common is small and what differs is everything else.
 | [`esm/`](esm/) | JavaScript, any runtime | wasm engine | **built** — `sdks/esm/build` |
 | [`rust/`](rust/) | Rust | native | **built** — `cargo test -p flint --release` |
 | [`c/`](c/) | C and C++ | native | **built** — `sdks/c/build` |
+| `java/` | Java | the JVM port | not started |
+| `csharp/` | C# | the CLR port | not started |
 
-All three carry the same five nouns and the same names. What differs is what a
-target can honour: `ThreadPool(4)` really is four threads inside one sandbox on
-the native SDKs, and reads back as **1** on wasm, which cannot put two
-executors in one heap until it has the threads proposal, atomics and a
+The three that exist carry the same five nouns and the same names. What differs
+is what a target can honour: `ThreadPool(4)` really is four threads inside one
+sandbox on the native SDKs, and reads back as **1** on wasm, which cannot put
+two executors in one heap until it has the threads proposal, atomics and a
 shared-memory build.
-| `csharp/` | | CLR port | not started |
-| `java/` | | JVM port | not started |
+
+The last two rows are SDKs, not runtimes, and the distinction matters: the
+runtimes they would wrap are built and self-hosting
+([`0029`](../doc/decisions/0029-jvm-runtime.md),
+[`0030`](../doc/decisions/0030-clr-runtime.md)). What is missing is the
+idiomatic host-facing layer over them -- the resolver, Compiler, Image, Sandbox
+and Driver nouns -- not the ability to run flint on those platforms.
 
 `c/` is one directory for both languages because it is one library: `flint.h`
 is the ABI, `flint.hpp` is a header over the same symbols adding RAII and
