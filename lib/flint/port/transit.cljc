@@ -39,7 +39,11 @@
 
 ;; ------------------------------------------------------------------ msgpack
 
-(defn- u8 [acc b] (conj acc (bit-and b 0xff)))
+;; The accumulator is a TRANSIENT BYTE STRING (`doc/decisions/0024`), not a
+;; vector. It used to be a vector, so every byte of every message was a boxed
+;; fixnum in a 32-way trie -- allocated, traced by the collector, and walked back
+;; out again at the boundary. The byte type did not exist when this was written.
+(defn- u8 [acc b] (flint.rt/b-conj! acc (bit-and b 0xff)))
 
 (defn- be [acc n width]
   (loop [acc acc i (dec width)]
@@ -59,14 +63,14 @@
     :else (be (u8 acc 0xd3) n 8)))
 
 (defn- pack-str [acc s]
-  (let [bs (vec (flint.rt/str-bytes s))
-        n (count bs)
+  (let [bs (flint.rt/str->b s)
+        n (flint.rt/b-count bs)
         acc (cond
               (< n 32) (u8 acc (+ 0xa0 n))
               (< n 256) (be (u8 acc 0xd9) n 1)
               (< n 65536) (be (u8 acc 0xda) n 2)
               :else (be (u8 acc 0xdb) n 4))]
-    (into acc bs)))
+    (flint.rt/b-append! acc bs)))
 
 (defn- pack-array-header [acc n]
   (cond
@@ -141,14 +145,14 @@
 (declare read-at)
 
 (defn- be-read [bs i width]
-  (loop [k 0 n 0] (if (= k width) n (recur (inc k) (+ (* n 256) (nth bs (+ i k)))))))
+  (loop [k 0 n 0] (if (= k width) n (recur (inc k) (+ (* n 256) (flint.rt/b-at bs (+ i k)))))))
 
 (defn- signed [n bits]
   (let [half (bit-shift-left 1 (dec bits))]
     (if (>= n half) (- n (bit-shift-left 1 bits)) n)))
 
 (defn- read-str [bs i n]
-  [(flint.rt/bytes->str (subvec bs i (+ i n))) (+ i n)])
+  [(flint.rt/b->str (flint.rt/b-slice bs i (+ i n))) (+ i n)])
 
 (defn- untag
   "Turn a Transit-tagged string back into the value it stands for."
@@ -191,7 +195,7 @@
               items))))
 
 (defn- read-at [bs i]
-  (let [b (nth bs i)]
+  (let [b (flint.rt/b-at bs i)]
     (cond
       (= b 0xc0) [nil (inc i)]
       (= b 0xc2) [false (inc i)]
@@ -199,7 +203,7 @@
       (< b 0x80) [b (inc i)]
       (>= b 0xe0) [(- b 256) (inc i)]
       (and (>= b 0xa0) (< b 0xc0)) (let [[s i'] (read-str bs (inc i) (- b 0xa0))] [(untag s) i'])
-      (= b 0xd9) (let [n (nth bs (inc i)) [s i'] (read-str bs (+ i 2) n)] [(untag s) i'])
+      (= b 0xd9) (let [n (flint.rt/b-at bs (inc i)) [s i'] (read-str bs (+ i 2) n)] [(untag s) i'])
       (= b 0xda) (let [n (be-read bs (inc i) 2) [s i'] (read-str bs (+ i 3) n)] [(untag s) i'])
       (= b 0xdb) (let [n (be-read bs (inc i) 4) [s i'] (read-str bs (+ i 5) n)] [(untag s) i'])
       (= b 0xcc) [(be-read bs (inc i) 1) (+ i 2)]
@@ -231,7 +235,14 @@
 
 ;; ------------------------------------------------------------------- codec
 
-(defn encode [v _opts] (write-any [] v))
-(defn decode [bs _opts] (first (read-at (vec bs) 0)))
+;; `build` rather than a bare vector: the writer threads a transient through and
+;; freezes it once at the end, which is what makes appending amortised O(1)
+;; instead of a copy per byte.
+(defn encode [v _opts]
+  (flint.rt/b-persistent! (write-any (flint.rt/b-transient (flint.rt/str->b "")) v)))
+;; `bs` arrives as a byte string from a binary port and is indexed as one. It
+;; used to be coerced with `(vec bs)`, which allocated a boxed fixnum per byte
+;; before reading a single one of them.
+(defn decode [bs _opts] (first (read-at bs 0)))
 
 (def codec {:format :transit+msgpack :binary true :encode encode :decode decode})

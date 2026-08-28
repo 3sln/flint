@@ -1432,7 +1432,11 @@ impl Rt {
             // memory, and one 4 MB message is not one message's worth of it.
             let binary = fx(self.slot(self.r(pi), PT_BINARY)) == 1;
             let encoded = if binary {
-                self.is_vector(self.r(vi))
+                // A byte string OR a vector of 0..255. `doc/decisions/0024` gave
+                // flint a byte type after this path was written, and a codec that
+                // produces one should not have to explode it into boxed fixnums
+                // to get it across.
+                self.is_bytes(self.r(vi)) || self.is_vector(self.r(vi))
             } else {
                 self.is_string(self.r(vi))
             };
@@ -1442,7 +1446,7 @@ impl Rt {
                     "IllegalArgumentException",
                     "a host port carries bytes; flint.port/send encodes for you, so this is a \
                      raw send of something that is not already encoded (a string, or a vector \
-                     of 0..255 on a binary port)",
+                     of 0..255, or a byte string, on a binary port)",
                 );
             }
             // The host reads contiguous bytes, so the rope stops here. This is
@@ -1460,7 +1464,11 @@ impl Rt {
             }
             let hi = self.push(host);
             let len = if binary {
-                self.vec_count(self.r(vi)) as i64
+                if self.is_bytes(self.r(vi)) {
+                    self.b_count(self.r(vi)) as i64
+                } else {
+                    self.vec_count(self.r(vi)) as i64
+                }
             } else {
                 self.str_len(self.r(vi)) as i64
             };
@@ -1520,7 +1528,9 @@ impl Rt {
             let vi = self.push(v);
             if fx(self.slot(self.r(pi), PT_KIND)) == K_FLINT {
                 // Room again for the host to deliver the next wave.
-                let n = if self.is_vector(self.r(vi)) {
+                let n = if self.is_bytes(self.r(vi)) {
+                    self.b_count(self.r(vi)) as i64
+                } else if self.is_vector(self.r(vi)) {
                     self.vec_count(self.r(vi)) as i64
                 } else {
                     self.str_len(self.r(vi)) as i64
@@ -1788,13 +1798,10 @@ impl Rt {
         }
         self.set(self.r(pi), PT_BYTES, Value::fixnum(queued + bytes.len() as i64));
         let v = if fx(self.slot(self.r(pi), PT_BINARY)) == 1 {
-            let mark = self.mark();
-            for b in bytes {
-                self.push(Value::fixnum(*b as i64));
-            }
-            let vv = self.vec_from_roots(mark, bytes.len());
-            self.pop_to(mark);
-            vv
+            // One object, not one boxed fixnum per byte. This used to build a
+            // vector, which cost a 32-way trie and an allocation per 32 bytes for
+            // data the codec immediately walked back into bytes.
+            self.new_bytes(bytes)
         } else {
             let s: alloc::string::String =
                 core::str::from_utf8(bytes).unwrap_or("").into();
@@ -1919,7 +1926,11 @@ impl Rt {
             let b = fx(self.vec_nth(e, 2).unwrap_or(NIL));
             let payload = self.vec_nth(e, 3).unwrap_or(NIL);
             let off = out.len() as u32;
-            let plen = if self.is_vector(payload) {
+            let plen = if self.is_bytes(payload) {
+                let n = self.b_count(payload);
+                self.b_append(payload, out);
+                n
+            } else if self.is_vector(payload) {
                 let n = self.vec_count(payload);
                 for k in 0..n {
                     let b = self.vec_nth(payload, k).unwrap_or(NIL);

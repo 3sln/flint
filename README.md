@@ -1759,10 +1759,14 @@ The honest list. Nothing here is stubbed and reported as working.
   so a message with many repeated keys is larger than a caching writer's would
   be. It is an optimisation rather than part of the data model, and a reader
   that ignores it still reads correct data.
-- **A binary port's payload is a vector of byte-sized integers** on the flint
-  side, because flint has no byte-array type. That is correct and it is slow:
-  one boxed fixnum per byte through the codec. A `bytes` value type is the
-  obvious fix and is not done.
+- **A binary port's payload used to be a vector of byte-sized integers**, one
+  boxed fixnum per byte through the codec, because flint had no byte type when
+  that path was written. [`0024`](doc/decisions/0024-no-runtime-linking.md) gave
+  it one, and Transit and the port boundary now use it: encoding and decoding
+  400 records went from 55.5 ms to 39.4 ms, 198 728 allocations to 104 951, and
+  11.2 MB allocated to 4.1 MB — for the same bytes on the wire. A vector of
+  0..255 is still accepted on a binary port, because a program that builds one
+  by hand should not break.
 - **The self-hosted compiler is slower than the bootstrap one**, which is
   expected: `--self` takes 2.5 s where babashka takes 0.17 s for the same
   program, most of it node startup plus flint being ~2.5× babashka. Both produce

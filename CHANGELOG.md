@@ -62,11 +62,20 @@ bytecode on the JVM and the CLR.
 - **A Pike VM for regex** ([`0012`](doc/decisions/0012-matching-over-ropes.md)), with
   catastrophic backtracking bounded exactly.
 - **Byte strings and their transient**
-  ([`0024`](doc/decisions/0024-no-runtime-linking.md)).
+  ([`0024`](doc/decisions/0024-no-runtime-linking.md)), carrying a binary port's
+  payload. Encoding and decoding 400 Transit records: 55.5 ms to 39.4 ms,
+  198 728 allocations to 104 951, 11.2 MB allocated to 4.1 MB, same bytes on the
+  wire.
 - **EDN, JSON, XML, HTML and Transit** codecs, each a namespace unit that only
   ships when reached.
-- **VM snapshots** ([`0015`](doc/decisions/0015-snapshots.md)): capture, export,
-  import, and an inspector that reads the format.
+- **VM snapshots** ([`0015`](doc/decisions/0015-snapshots.md)) in two formats,
+  because there are two jobs. A verbatim copy of the heap, for post-mortems —
+  the one capture that still works when the pointers are already wrong. And a
+  **live set**, walked rather than copied, for shelving a running sandbox: the
+  same state is 38 524 bytes against 5 275 808, and it imports into an instance
+  that has never run. Both carry the fingerprint of the image they belong to and
+  refuse a mismatch by name, because a snapshot holds no code and every index in
+  one means something only against the program it came from.
 
 ### Tooling
 
