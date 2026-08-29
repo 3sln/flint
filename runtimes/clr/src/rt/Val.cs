@@ -1,0 +1,57 @@
+namespace Flint.Rt;
+
+/// NaN-boxed values, ported verbatim from `runtime/src/value.rs`.
+///
+/// Static methods over `long` and not a struct with fields, for the reason the
+/// JVM's `Val.java` gives at length: the previous port used `object` for every
+/// value, so every integer was boxed, and that was the ceiling rather than a
+/// detail. A value IS a `long` and the JIT keeps it in a register.
+public static class Val {
+    public const long TagHeap = 0xFFF9L;
+    public const long TagFixnum = 0xFFFAL;
+    public const long TagSpecial = 0xFFFBL;
+    public const long TagStr = 0xFFFCL;
+    public const long TagKw = 0xFFFDL;
+    public const long TagMinBoxed = TagHeap;
+
+    public const long Payload = 0x0000_FFFF_FFFF_FFFFL;
+
+    const long SpecialNil = 0, SpecialFalse = 1, SpecialTrue = 2;
+    const long SpecialNotFound = 3, SpecialPark = 4, SpecialOom = 5;
+
+    public const long Nil = (TagSpecial << 48) | SpecialNil;
+    public const long False = (TagSpecial << 48) | SpecialFalse;
+    public const long True = (TagSpecial << 48) | SpecialTrue;
+    public const long NotFound = (TagSpecial << 48) | SpecialNotFound;
+    public const long Park = (TagSpecial << 48) | SpecialPark;
+    public const long Oom = (TagSpecial << 48) | SpecialOom;
+
+    /// Logical shift, not arithmetic: a signed shift sign-extends and every tag
+    /// on a boxed value comes back as -1.
+    public static long Tag(long v) => (long)((ulong)v >> 48);
+
+    public static bool IsDouble(long v) => Tag(v) < TagMinBoxed;
+    public static double AsDouble(long v) => System.BitConverter.Int64BitsToDouble(v);
+
+    public static long OfDouble(double d) {
+        long b = System.BitConverter.DoubleToInt64Bits(d);
+        return ((ulong)b >> 48) >= (ulong)TagMinBoxed
+            ? System.BitConverter.DoubleToInt64Bits(double.NaN) : b;
+    }
+
+    public static bool IsFixnum(long v) => Tag(v) == TagFixnum;
+    public static long Fixnum(long n) => (TagFixnum << 48) | (n & Payload);
+    /// Sign-extended from 48 bits; larger integers are `TY_BIGINT` on the heap.
+    public static long AsFixnum(long v) => (v << 16) >> 16;
+
+    public static bool IsHeap(long v) => Tag(v) == TagHeap;
+    public static long Heap(long addr) => (TagHeap << 48) | (addr & Payload);
+    /// MASK, not merely a cast: a 48-bit address would otherwise come back
+    /// carrying its tag.
+    public static long AsHeap(long v) => v & Payload;
+
+    public static bool IsNil(long v) => v == Nil;
+    /// Only `nil` and `false` are false.
+    public static bool Truthy(long v) => v != Nil && v != False;
+    public static long Bool(bool b) => b ? True : False;
+}

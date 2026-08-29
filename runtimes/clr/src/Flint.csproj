@@ -7,6 +7,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- The value stack is indexed constantly and every index is already
          checked by the interpreter's own invariants. -->
-    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 </Project>

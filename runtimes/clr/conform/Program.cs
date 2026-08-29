@@ -10,12 +10,82 @@ public static class Program {
         if (args.Length >= 2 && args[0] == "--threads") return Threads(args[1]);
         if (args.Length >= 2 && args[0] == "--aot") return Aot(args[1]);
         if (args.Length >= 2 && args[0] == "--flags") return Flags(args[1]);
+        if (args.Length >= 1 && args[0] == "--rt-foundation") return RtFoundation();
         if (args.Length >= 3 && args[0] == "--selfhost") return SelfHost(args[1], args[2]);
         var vm = new Vm(Img.Read(File.ReadAllBytes(args[0])));
         vm.EnsureStarted();
         object outv = vm.RunProgram(new Vm.Closure(vm.Img.Entry, Array.Empty<object>()),
                               new object[] { new Vec() });
         Console.WriteLine(Builtins.Str(outv));
+        return 0;
+    }
+
+    /// The ported runtime's foundation: values, memory and object layout.
+    ///
+    /// The SAME assertions as `runtimes/jvm/test/RtFoundation.java`, in the same
+    /// order, because the two are meant to be verbatim mirrors and the only way
+    /// to know that is to check rather than to intend it.
+    ///
+    /// The number at the end is the cost of the REPRESENTATION, with no
+    /// dispatch -- not an end-to-end speedup and not to be quoted as one. What
+    /// it settles is that boxing is no longer the ceiling.
+    private static int RtFoundation() {
+        foreach (long off in new long[]{8, 16, 0x1000, 0xFFFF_FFFFL, 0x1_0000_0000L,
+                                        0x0000_FFFF_FFFF_FFF8L}) {
+            long v = Flint.Rt.Val.Heap(off);
+            if (!Flint.Rt.Val.IsHeap(v) || Flint.Rt.Val.AsHeap(v) != off) {
+                Console.WriteLine($"  FAIL heap round trip at {off:x}");
+                return 1;
+            }
+        }
+        foreach (long n in new long[]{0, 1, -1, 1L << 40, -(1L << 40)}) {
+            if (Flint.Rt.Val.AsFixnum(Flint.Rt.Val.Fixnum(n)) != n) {
+                Console.WriteLine($"  FAIL fixnum round trip at {n}");
+                return 1;
+            }
+        }
+        Console.WriteLine("  ok   values round-trip across 48 bits");
+
+        using var sp = new Flint.Rt.Space(64L * 1024 * 1024);
+        long addr = sp.Take(1024);
+        Flint.Rt.Obj.WriteHeader(sp, addr, Flint.Rt.Obj.TyCons, 4);
+        if (Flint.Rt.Obj.Ty(sp, addr) != Flint.Rt.Obj.TyCons || Flint.Rt.Obj.Len(sp, addr) != 4) {
+            Console.WriteLine("  FAIL header round trip"); return 1;
+        }
+        Flint.Rt.Obj.SetSlotRaw(sp, addr, 0, Flint.Rt.Val.Fixnum(42));
+        if (Flint.Rt.Val.AsFixnum(Flint.Rt.Obj.Slot(sp, addr, 0)) != 42) {
+            Console.WriteLine("  FAIL slot round trip"); return 1;
+        }
+        Flint.Rt.Obj.SetMarked(sp, addr, true);
+        if (!Flint.Rt.Obj.Marked(sp, addr) || Flint.Rt.Obj.Ty(sp, addr) != Flint.Rt.Obj.TyCons) {
+            Console.WriteLine("  FAIL the mark bit disturbed the type"); return 1;
+        }
+        long far = 0x0000_FF00_1234_5678L;
+        Flint.Rt.Obj.SetForward(sp, addr, far);
+        if (Flint.Rt.Obj.ForwardTarget(sp, addr) != far) {
+            Console.WriteLine("  FAIL a 48-bit forward did not survive the header"); return 1;
+        }
+        Console.WriteLine("  ok   objects, mark bits and 48-bit forwarding");
+
+        long stack = sp.Take(1024);
+        long best = long.MaxValue;
+        var sw = new System.Diagnostics.Stopwatch();
+        for (int rep = 0; rep < 7; rep++) {
+            sp.WriteU64(stack, Flint.Rt.Val.Fixnum(0));
+            sp.WriteU64(stack + 8, Flint.Rt.Val.Fixnum(0));
+            sw.Restart();
+            for (int k = 0; k < 3_000_000; k++) {
+                long i = Flint.Rt.Val.AsFixnum(sp.ReadU64(stack));
+                long acc = Flint.Rt.Val.AsFixnum(sp.ReadU64(stack + 8));
+                sp.WriteU64(stack, Flint.Rt.Val.Fixnum(i + 1));
+                sp.WriteU64(stack + 8, Flint.Rt.Val.Fixnum(acc + i));
+            }
+            sw.Stop();
+            best = System.Math.Min(best, sw.Elapsed.Ticks * 100);
+        }
+        double ns = best / 3_000_000.0;
+        Console.WriteLine($"    3,000,000 iterations, best of 7: {ns:F2} ns/iteration");
+        Console.WriteLine($"    against 22 ns boxed on the current port -- {22.0 / ns:F0}x");
         return 0;
     }
 

@@ -64,7 +64,7 @@ mkdir -p out/conform
 # must not leave a runnable tree behind.
 rm -rf runtimes/jvm/classes
 if ! "$JDK/bin/javac" -d runtimes/jvm/classes runtimes/jvm/src/com/flint/*.java \
-     runtimes/jvm/test/*.java > /tmp/flint-javac.out 2>&1; then
+     runtimes/jvm/src/com/flint/rt/*.java runtimes/jvm/test/*.java > /tmp/flint-javac.out 2>&1; then
   head -20 /tmp/flint-javac.out
   if grep -q "java.lang.classfile" /tmp/flint-javac.out; then
     echo "  (this JDK is older than 24, which is what java.lang.classfile needs;"
@@ -163,6 +163,19 @@ FLOOR="${FLINT_CONFORM_FLOOR:-10}"
 if [ "$agree" -lt "$FLOOR" ]; then
   echo "  a case that used to agree no longer does ($agree < $FLOOR)"
   exit 1
+fi
+
+# THE PORTED RUNTIME'S FOUNDATION, on both hosts, with the same assertions in
+# the same order.
+#
+# `doc/decisions/0010` says the bytecode makes a port cheap and does nothing to
+# make two ports AGREE. These files are meant to be verbatim mirrors of the Rust
+# and of each other, and the only way to know that is to run the same checks on
+# both rather than to intend it.
+echo "  .. the ported runtime's foundation"
+"$JDK/bin/java" -cp runtimes/jvm/classes RtFoundation 2>&1 | sed 's/$/ [jvm]/'
+if [ -n "$CLR" ]; then
+  "$CLR" --rt-foundation 2>&1 | sed 's/$/ [clr]/'
 fi
 
 # ONE CONFIG, THREE RUNTIMES. `:optimize [perf]` cannot be carried the same way
