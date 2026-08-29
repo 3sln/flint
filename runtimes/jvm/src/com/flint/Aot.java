@@ -135,6 +135,24 @@ public final class Aot {
     private static int counter = 0;
 
     /// Compile one arity, or return null if it uses something this does not do.
+    /// Builtins that can PARK a green thread.
+    ///
+    /// A compiled arity is one Java method, so its continuation is the Java
+    /// stack — which is exactly what `doc/decisions/0005` needs not to be. A
+    /// thread that parked inside one could never be resumed, and the symptom is
+    /// not an error but a SPIN: the scheduler makes it runnable, re-enters the
+    /// compiled method from the top, and it parks again.
+    ///
+    /// So an arity that can park is not compiled. Named rather than inferred,
+    /// because "which natives park" is not derivable from the bytecode — the
+    /// wasm emitter faces the same question and answers it differently, by
+    /// putting a re-entry point before every native and chunking around it
+    /// (`doc/decisions/0013`). Chunking is the better answer and is not built
+    /// here; refusing is the honest one until it is.
+    private static final Set<String> PARKS = Set.of(
+        "flint/port-receive", "flint/port-send", "flint/thread-join",
+        "flint/yield", "flint/open");
+
     public static Compiled tryCompile(Img img, Img.Arity a) {
         byte[] code = img.code;
         int start = a.code, end = a.code + a.len;
@@ -143,6 +161,12 @@ public final class Aot {
         for (int ip = start; ip < end; ) {
             int op = code[ip] & 0xFF;
             if (unsupported(op)) return null;
+            if (op == NATIVE) {
+                int idx = (code[ip + 1] & 0xFF) | ((code[ip + 2] & 0xFF) << 8);
+                if (idx < img.nativeNames.length && PARKS.contains(img.nativeNames[idx])) {
+                    return null;
+                }
+            }
             int len = operandLen(op);
             if (op == JUMP || op == JUMP_IF_FALSE || op == JUMP_IF_TRUE
                 || op == JUMP_IF_FALSE_KEEP || op == JUMP_IF_TRUE_KEEP) {

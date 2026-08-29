@@ -71,7 +71,7 @@ public final class Builtins {
     public static Fn byName(String name) { return TABLE.get(name); }
     public static java.util.Set<String> names() { return TABLE.keySet(); }
 
-    private static void def(String name, Fn f) { TABLE.put(name, f); }
+    static void def(String name, Fn f) { TABLE.put(name, f); }
 
     private static Object arg(Object[] a, int i) { return i < a.length ? a[i] : null; }
 
@@ -305,6 +305,7 @@ public final class Builtins {
     }
 
     static {
+        Conc.install();
         def("=", (vm, a) -> {
             for (int i = 1; i < a.length; i++) if (!eq(a[0], a[i])) return Boolean.FALSE;
             return Boolean.TRUE;

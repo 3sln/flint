@@ -148,6 +148,12 @@ public static class Aot {
     public static readonly System.Collections.Generic.Dictionary<int,int> Histo = new();
 
     /// Compile one arity, or return null if it uses something this does not do.
+        /// Builtins that can park a green thread; see `TryCompile`.
+    private static readonly HashSet<string> Parks = new() {
+        "flint/port-receive", "flint/port-send", "flint/thread-join",
+        "flint/yield", "flint/open",
+    };
+
     public static Compiled TryCompile(Img img, Img.Arity a) {
         byte[] code = img.Code;
         int start = a.Code, end = a.Code + a.Len;
@@ -164,6 +170,17 @@ public static class Aot {
         var targets = new HashSet<int>();
         for (int ip = start; ip < end; ) {
             int op = code[ip];
+            // An arity that can PARK is not compiled. A compiled arity is one
+            // CLR method, so its continuation is the CLR stack -- exactly what
+            // `doc/decisions/0005` needs it not to be. A thread parking inside
+            // one could never resume, and the symptom is a SPIN rather than an
+            // error: the scheduler makes it runnable, re-enters the method from
+            // the top, and it parks again. Same rule and same list as the JVM's.
+            if (op == Native) {
+                int nidx = code[ip + 1] | (code[ip + 2] << 8);
+                if (nidx < img.NativeNames.Length && Parks.Contains(img.NativeNames[nidx]))
+                    return null;
+            }
             if (Unsupported(op)) return null;
             int len = OperandLen(op);
             if (op is Jump or JumpIfFalse or JumpIfTrue or JumpIfFalseKeep or JumpIfTrueKeep) {

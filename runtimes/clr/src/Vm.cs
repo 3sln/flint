@@ -46,7 +46,8 @@ public sealed class Vm {
         // changes the artifact, here the arities are emitted at load time from
         // the same bytecode -- so the image carries the DECISION and this reads
         // it.
-        AotEnabled = (img.Flags & Img.FlagPerf) != 0;
+        _canCompile = !UsesGreenThreads(img);
+        AotEnabled = (img.Flags & Img.FlagPerf) != 0 && _canCompile;
         _vars = new object[img.VarNames.Length];
         _natives = new Builtins.Fn[img.NativeNames.Length];
         for (int i = 0; i < _natives.Length; i++) _natives[i] = Builtins.ByName(img.NativeNames[i]);
@@ -77,10 +78,18 @@ public sealed class Vm {
     /// default. Set from the image's `FlagPerf` when the Vm is built, and
     /// settable by a host afterwards for an image that never asked.
     public bool AotEnabled { get; set; }
+    /// Whether compiling is possible AT ALL for this image, as opposed to
+    /// asked for. A host can set `AotEnabled`; it cannot make a threaded
+    /// program compilable, so this is checked separately and wins.
+    private readonly bool _canCompile;
+
+    /// Can this image be compiled at all? False for a program that uses green
+    /// threads, which is a limit rather than a preference.
+    public bool CanCompile => _canCompile;
     public int CompiledCount { get; private set; }
 
     private Aot.Compiled CompiledFor(int fnIndex, Img.Arity a) {
-        if (!AotEnabled) return null;
+        if (!AotEnabled || !_canCompile) return null;
         int ai = Array.IndexOf(Img.Fns[fnIndex].Arities, a);
         var key = (fnIndex, ai);
         lock (_compileLock) {
@@ -117,7 +126,7 @@ public sealed class Vm {
     /// those. .NET has no Loom equivalent and deliberately chose async/await
     /// instead, so there is nothing to borrow here: the continuation has to be
     /// ours.
-    internal sealed class Frame {
+    public sealed class Frame {
         public Closure Self;
         public Img.Arity Arity;
         public object[] Locals;
@@ -139,7 +148,126 @@ public sealed class Vm {
     /// It is also the shape green threads want -- a green thread IS one of
     /// these lists plus its saved state.
     [ThreadStatic] private static List<Frame> _frames;
-    internal static List<Frame> Frames => _frames ??= new List<Frame>();
+    public static List<Frame> Frames => _frames ??= new List<Frame>();
+
+    /// Does this image use green threads at all? If so, NOTHING is compiled.
+    ///
+    /// A compiled arity is one CLR method, so its continuation is the CLR
+    /// stack, and a thread parking inside one can never resume. The narrower
+    /// rule -- refuse only arities CONTAINING a parking builtin -- does not
+    /// work: an arity that merely CALLS one is equally unsafe, because the
+    /// compiled caller's frame is a host frame and is not in the continuation.
+    /// `doc/decisions/0013`'s chunking is the real answer and is not built
+    /// here; until it is, a threaded program interprets rather than deadlocks.
+    private static bool UsesGreenThreads(Img img) {
+        foreach (var n in img.NativeNames)
+            if (n == "flint/spawn" || n == "flint/channel" || n == "flint/open") return true;
+        return false;
+    }
+
+    /// flint's own concurrency. One per `Vm`.
+    public readonly Green.Sched Sched = new();
+
+    /// Run `entry` as green thread 0, then keep running whatever is runnable
+    /// until nothing is. Round-robin from `Current + 1`, which is what makes
+    /// the interleaving the same here as on the other two runtimes.
+    public object RunProgram(object entry, object[] args) {
+        var t0 = new Green.Thread(0, entry) { Args = args };
+        Sched.Threads.Add(t0);
+        Sched.Current = 0;
+        Drive();
+        if (t0.Status == Green.Failed) throw new FlintThrow(t0.Result);
+        return t0.Result;
+    }
+
+    private void Step(Green.Thread t) {
+        var saved = Frames;
+        _frames = t.Frames;
+        try {
+            object v;
+            if (t.Status == Green.New) {
+                t.Status = Green.Runnable;
+                v = Call(t.Entry, t.Args ?? System.Array.Empty<object>());
+            } else {
+                t.Status = Green.Runnable;
+                // Resume: the frames ARE the continuation, and the top one's
+                // `Ip` was rewound to the instruction that parked.
+                v = Run(0);
+            }
+            t.Status = Green.Done;
+            t.Result = v;
+            Wake(t);
+        } catch (Green.Park) {
+            // A YIELD is runnable again at once: it gave up its turn, it did
+            // not ask to wait for anything.
+            t.Status = t.Yielded ? Green.Runnable : Green.Parked;
+            t.Yielded = false;
+        } catch (FlintThrow th) {
+            t.Status = Green.Failed;
+            t.Result = th.Value;
+            t.Frames.Clear();
+            Wake(t);
+        } finally {
+            _frames = saved;
+        }
+    }
+
+    private void Wake(object o) {
+        foreach (var t in Sched.Threads) {
+            if (t.Status == Green.Parked && ReferenceEquals(t.ParkOn, o)) {
+                t.ParkOn = null;
+                t.Status = Green.Runnable;
+            }
+        }
+    }
+
+    /// Make every thread parked on `o` runnable again.
+    public void WakeOn(object o) => Wake(o);
+
+    /// Park the CURRENT green thread on `o`, and leave. Never returns.
+    public System.Exception ParkOn(object o) {
+        var t = Sched.Cur ?? throw new FlintThrow("nothing to park: no green thread is running");
+        t.ParkOn = o;
+        throw new Green.Park();
+    }
+
+    /// A COURTESY yield: the call already happened, so it must NOT be
+    /// re-executed on resume -- that would yield again, for ever.
+    public System.Exception YieldNow() {
+        var t = Sched.Cur ?? throw new FlintThrow("nothing to yield: no green thread is running");
+        t.ParkOn = null;
+        t.Yielded = true;
+        throw new Green.Park();
+    }
+
+    private void Drive() {
+        long guard = 0;
+        for (;;) {
+            Green.Thread next = null;
+            int n = Sched.Threads.Count;
+            for (int i = 1; i <= n; i++) {
+                var c = Sched.Threads[(Sched.Current + i) % n];
+                if (c.Status is Green.New or Green.Runnable) { next = c; break; }
+            }
+            if (next == null) {
+                foreach (var c in Sched.Threads) {
+                    if (c.Status == Green.Parked)
+                        throw new FlintThrow(
+                            $"deadlock: {ParkedCount()} green thread(s) are parked and nothing can wake them");
+                }
+                return;
+            }
+            Sched.Current = Sched.Threads.IndexOf(next);
+            Step(next);
+            if (++guard > 100_000_000) throw new FlintThrow("the scheduler made no progress");
+        }
+    }
+
+    private int ParkedCount() {
+        int n = 0;
+        foreach (var c in Sched.Threads) if (c.Status == Green.Parked) n++;
+        return n;
+    }
 
     /// Build a frame for `c` at `a` with `args` bound. Does not enter it.
     private static Frame FrameFor(Closure c, Img.Arity a, object[] args, int argc) {
@@ -272,6 +400,7 @@ public sealed class Vm {
                     case JumpIfFalseKeep: { int off = I16(ip); ip += 2; if (!Truthy(stack[sp - 1])) ip += off; else sp -= 1; break; }
                     case JumpIfTrueKeep: { int off = I16(ip); ip += 2; if (Truthy(stack[sp - 1])) ip += off; else sp -= 1; break; }
                     case CallOp: {
+                        int callAt = ip - 1;
                         int argc = U8(ip); ip += 1;
                         var args = new object[argc];
                         Array.Copy(stack, sp - argc, args, 0, argc);
@@ -297,7 +426,19 @@ public sealed class Vm {
                                 continue;
                             }
                         }
-                        stack[sp++] = Call(callee, args);
+                        try {
+                            object cv = Call(callee, args);
+                            stack[sp++] = cv;
+                        } catch (Green.Park) {
+                            var gt = Sched.Cur;
+                            if (gt != null && gt.Yielded) stack[sp++] = null;
+                            else { sp += argc + 1; ip = callAt; }
+                            f.Stack = stack; f.Sp = sp; f.Ip = ip; f.End = end;
+                            f.Locals = locals; f.Self = self; f.Arity = arity;
+                            f.HandlerIp = handlerIp; f.HandlerSp = handlerSp;
+                            f.Handlers = handlers;
+                            throw;
+                        }
                         break;
                     }
                     case TailCall: {
@@ -373,6 +514,7 @@ public sealed class Vm {
                         break;
                     }
                     case Native: {
+                        int opcodeAt = ip - 1;
                         int idx = U16(ip); ip += 2;
                         int argc = U8(ip); ip += 1;
                         var args = new object[argc];
@@ -381,7 +523,30 @@ public sealed class Vm {
                         var nf = _natives[idx];
                         if (nf == null)
                             throw new FlintThrow($"this runtime does not carry the builtin `{Img.NativeNames[idx]}`");
-                        stack[sp++] = nf(this, args);
+                        try {
+                            // A local FIRST. `stack[sp++] = nf(...)` evaluates
+                            // the index before the call, so `sp` has already
+                            // moved when a park unwinds through it -- and the
+                            // rewind below would put the operands back one slot
+                            // out. The JVM port had exactly this bug.
+                            object nv = nf(this, args);
+                            stack[sp++] = nv;
+                        } catch (Green.Park) {
+                            // A real PARK rewinds so the instruction re-runs
+                            // with its operands in place, which is why a
+                            // parking builtin must decide before it changes
+                            // anything. A courtesy YIELD must not: its call
+                            // already happened, and re-running it would yield
+                            // again, for ever.
+                            var gt = Sched.Cur;
+                            if (gt != null && gt.Yielded) stack[sp++] = null;
+                            else { sp += argc; ip = opcodeAt; }
+                            f.Stack = stack; f.Sp = sp; f.Ip = ip; f.End = end;
+                            f.Locals = locals; f.Self = self; f.Arity = arity;
+                            f.HandlerIp = handlerIp; f.HandlerSp = handlerSp;
+                            f.Handlers = handlers;
+                            throw;
+                        }
                         break;
                     }
                     case VectorOp: {

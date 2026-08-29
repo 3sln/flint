@@ -85,7 +85,8 @@ public final class Vm {
         // the same bytecode -- so the image carries the DECISION and this reads
         // it. Still settable afterwards, because a host may want it on for an
         // image that never asked.
-        this.aotEnabled = (img.flags & Img.FLAG_PERF) != 0;
+        this.canCompile = !usesGreenThreads(img);
+        this.aotEnabled = (img.flags & Img.FLAG_PERF) != 0 && canCompile;
         this.vars = new java.util.concurrent.atomic.AtomicReferenceArray<>(img.varNames.length);
         this.natives = new Builtins.Fn[img.nativeNames.length];
         for (int i = 0; i < natives.length; i++) {
@@ -119,10 +120,19 @@ public final class Vm {
     /// default (`doc/decisions/0021`). Set from the image's `FLAG_PERF` in the
     /// constructor, and settable by a host afterwards.
     public boolean aotEnabled;
+    /// Whether compiling is possible AT ALL for this image, as opposed to
+    /// asked for. A host can set `aotEnabled`; it cannot make a threaded
+    /// program compilable, so this is checked separately and wins.
+    private final boolean canCompile;
+
+    /// Can this image be compiled at all? False for a program that uses green
+    /// threads, which is a limit rather than a preference -- see
+    /// `usesGreenThreads`.
+    public boolean canCompile() { return canCompile; }
     public int compiledCount = 0;
 
     private synchronized Aot.Compiled compiledFor(int fnIndex, Img.Arity a) {
-        if (!aotEnabled) return null;
+        if (!aotEnabled || !canCompile) return null;
         Img.FnDef def = img.fns[fnIndex];
         int ai = 0;
         for (int i = 0; i < def.arities.length; i++) if (def.arities[i] == a) ai = i;
@@ -203,6 +213,169 @@ public final class Vm {
     /// these lists plus its saved state, and a scheduler swaps which one the
     /// executing thread is running.
     private final ThreadLocal<ArrayList<Frame>> FRAMES = ThreadLocal.withInitial(ArrayList::new);
+
+    /// Does this image use green threads at all?
+    ///
+    /// If it does, NOTHING is compiled, and the reason is worth stating because
+    /// the obvious narrower rule does not work. A compiled arity is one Java
+    /// method, so its continuation is the Java stack; a thread that parks
+    /// inside one can never resume. Refusing only the arities that CONTAIN a
+    /// parking builtin is not enough -- an arity that merely CALLS one is just
+    /// as unsafe, because the compiled caller's frame is a host frame and is
+    /// not in the continuation either. The transitive closure is every arity
+    /// that can reach a park, which in practice is most of them.
+    ///
+    /// `doc/decisions/0013` solves this properly on wasm by CHUNKING: a
+    /// re-entry point before every native, so compiled code can be left and
+    /// re-entered mid-body. That is the right answer here too and is not built.
+    /// Until it is, a threaded program interprets -- which is correct, slower,
+    /// and says so, rather than deadlocking.
+    private static boolean usesGreenThreads(Img img) {
+        for (String n : img.nativeNames) {
+            if (n != null && (n.equals("flint/spawn") || n.equals("flint/channel")
+                              || n.equals("flint/open"))) return true;
+        }
+        return false;
+    }
+
+    /// flint's own concurrency. One per `Vm`; real host threads are a separate
+    /// matter (`doc/decisions/0028`) and each gets its own frame list.
+    public final Green.Sched sched = new Green.Sched();
+
+    /// Point the executing thread's frame list at a green thread's own.
+    private void useFrames(ArrayList<Frame> fs) { FRAMES.set(fs); }
+
+    /// Run `entry` as green thread 0, then keep running whatever is runnable
+    /// until nothing is.
+    ///
+    /// This is the scheduler, and it is deliberately the same shape as the
+    /// wasm runtime's: pick the next RUNNABLE thread round-robin, run it until
+    /// it parks or finishes, repeat. Round-robin from `current + 1` rather
+    /// than from 0 is what makes the interleaving fair and, more importantly,
+    /// the SAME on every runtime -- `runtimes/conform/green.cljc` compares the
+    /// actual order across all three.
+    public Object runProgram(Object entry, Object[] args) {
+        Green.Thread t0 = new Green.Thread(0, entry, null);
+        t0.args = args;
+        sched.threads.add(t0);
+        sched.current = 0;
+        drive();
+        if (t0.status == Green.FAILED) throw new Thrown(t0.result);
+        return t0.result;
+    }
+
+    /// One green thread's turn. Returns when it parks, finishes, or fails.
+    private void step(Green.Thread t) {
+        ArrayList<Frame> saved = FRAMES.get();
+        useFrames(t.frames);
+        try {
+            Object v;
+            if (t.status == Green.NEW) {
+                t.status = Green.RUNNABLE;
+                v = call(t.entry, t.args == null ? new Object[0] : t.args);
+            } else {
+                t.status = Green.RUNNABLE;
+                // Resume: the frames ARE the continuation, and the top one's
+                // `ip` was rewound to the instruction that parked, so it
+                // re-executes with its operands still in place.
+                v = run(0);
+            }
+            t.status = Green.DONE;
+            t.result = v;
+            wake(t);
+        } catch (Green.Park p) {
+            // The frames stay exactly as they are; that is the continuation.
+            // A YIELD is runnable again at once -- it gave up its turn, it did
+            // not ask to wait for anything.
+            t.status = t.yielded ? Green.RUNNABLE : Green.PARKED;
+            t.yielded = false;
+        } catch (Thrown th) {
+            t.status = Green.FAILED;
+            t.result = th.value;
+            t.frames.clear();
+            wake(t);
+        } finally {
+            useFrames(saved);
+        }
+    }
+
+    /// Anything waiting on `t` finishing can run again.
+    private void wake(Green.Thread t) {
+        for (Green.Thread o : sched.threads) {
+            if (o.status == Green.PARKED && o.parkOn == t) {
+                o.parkOn = null;
+                o.status = Green.RUNNABLE;
+            }
+        }
+    }
+
+    /// Make every thread parked on `o` runnable again. Ports call this when a
+    /// message lands or a slot frees.
+    public void wakeOn(Object o) {
+        for (Green.Thread t : sched.threads) {
+            if (t.status == Green.PARKED && t.parkOn == o) {
+                t.parkOn = null;
+                t.status = Green.RUNNABLE;
+            }
+        }
+    }
+
+    /// A COURTESY yield: the call has already happened, so the instruction must
+    /// NOT be re-executed on resume. Parked on nothing and immediately
+    /// runnable again, so every other runnable thread gets a turn first.
+    ///
+    /// The distinction from `park` matters and the wasm runtime makes the same
+    /// one: rewinding a `yield` would re-execute it, which would yield again,
+    /// for ever.
+    public RuntimeException yieldNow() {
+        Green.Thread t = sched.cur();
+        if (t == null) throw new Thrown("nothing to yield: no green thread is running");
+        t.parkOn = null;
+        t.yielded = true;
+        throw new Green.Park();
+    }
+
+    /// Park the CURRENT green thread on `o`, and leave. Never returns.
+    public RuntimeException park(Object o) {
+        Green.Thread t = sched.cur();
+        if (t == null) throw new Thrown("nothing to park: no green thread is running");
+        t.parkOn = o;
+        throw new Green.Park();
+    }
+
+    private void drive() {
+        int guard = 0;
+        for (;;) {
+            Green.Thread next = null;
+            int n = sched.threads.size();
+            for (int i = 1; i <= n; i++) {
+                Green.Thread c = sched.threads.get((sched.current + i) % n);
+                if (c.status == Green.NEW || c.status == Green.RUNNABLE) { next = c; break; }
+            }
+            if (next == null) {
+                // Nothing runnable. Either everything finished, or the threads
+                // that remain are waiting for each other -- which is a deadlock
+                // and is reported rather than hung on, exactly as the wasm
+                // runtime reports it.
+                for (Green.Thread c : sched.threads) {
+                    if (c.status == Green.PARKED) {
+                        throw new Thrown("deadlock: " + parkedCount()
+                            + " green thread(s) are parked and nothing can wake them");
+                    }
+                }
+                return;
+            }
+            sched.current = sched.threads.indexOf(next);
+            step(next);
+            if (++guard > 100_000_000) throw new Thrown("the scheduler made no progress");
+        }
+    }
+
+    private int parkedCount() {
+        int n = 0;
+        for (Green.Thread c : sched.threads) if (c.status == Green.PARKED) n++;
+        return n;
+    }
 
     /// Build a frame for `c` at `a`, with `args` bound. Does not enter it.
     private Frame frameFor(Closure c, Img.Arity a, Object[] args, int argc) {
@@ -414,6 +587,7 @@ public final class Vm {
                         break;
                     }
                     case CALL: {
+                        int callAt = ip - 1;
                         int argc = u8(ip); ip += 1;
                         Object[] args = new Object[argc];
                         System.arraycopy(stack, sp - argc, args, 0, argc);
@@ -441,7 +615,26 @@ public final class Vm {
                         }
                         // Everything else -- a builtin, a keyword, a map, a
                         // compiled arity -- completes in place.
-                        stack[sp++] = call(callee, args);
+                        try {
+                            // A local first, for the reason NATIVE gives.
+                            Object cv = call(callee, args);
+                            stack[sp++] = cv;
+                        } catch (Green.Park p) {
+                            // Same rule as NATIVE: a park rewinds and a
+                            // courtesy yield does not.
+                            Green.Thread gt = sched.cur();
+                            if (gt != null && gt.yielded) {
+                                stack[sp++] = null;
+                            } else {
+                                sp += argc + 1;
+                                ip = callAt;
+                            }
+                            f.stack = stack; f.sp = sp; f.ip = ip; f.end = end;
+                            f.locals = locals; f.self = self; f.arity = arity;
+                            f.handlerIp = handlerIp; f.handlerSp = handlerSp;
+                            f.handlers = handlers;
+                            throw p;
+                        }
                         break;
                     }
                     case TAIL_CALL: {
@@ -528,6 +721,7 @@ public final class Vm {
                         break;
                     }
                     case NATIVE: {
+                        int opcodeAt = ip - 1;
                         int idx = u16(ip); ip += 2;
                         int argc = u8(ip); ip += 1;
                         Object[] args = new Object[argc];
@@ -538,7 +732,40 @@ public final class Vm {
                             throw new Thrown("this runtime does not carry the builtin `"
                                 + img.nativeNames[idx] + "`");
                         }
-                        stack[sp++] = nf.apply(this, args);
+                        try {
+                            // The result is computed into a LOCAL first.
+                            // `stack[sp++] = nf.apply(...)` evaluates the array
+                            // index BEFORE the call (JLS 15.26.1), so `sp` has
+                            // already moved when a park unwinds through it --
+                            // and the rewind below then put the operands back
+                            // one slot out.
+                            Object nv = nf.apply(this, args);
+                            stack[sp++] = nv;
+                        } catch (Green.Park p) {
+                            // A real PARK rewinds, so resuming re-executes this
+                            // instruction with its operands still on the stack.
+                            // That is why a parking builtin must decide to park
+                            // BEFORE it changes anything: it will run twice.
+                            //
+                            // A courtesy YIELD must not. Its call already
+                            // happened, so re-executing it would yield again,
+                            // for ever -- which is exactly what "the scheduler
+                            // made no progress" was. The wasm runtime draws the
+                            // same distinction and for the same reason.
+                            Green.Thread gt = sched.cur();
+                            boolean courtesy = gt != null && gt.yielded;
+                            if (courtesy) {
+                                stack[sp++] = null;
+                            } else {
+                                sp += argc;
+                                ip = opcodeAt;
+                            }
+                            f.stack = stack; f.sp = sp; f.ip = ip; f.end = end;
+                            f.locals = locals; f.self = self; f.arity = arity;
+                            f.handlerIp = handlerIp; f.handlerSp = handlerSp;
+                            f.handlers = handlers;
+                            throw p;
+                        }
                         break;
                     }
                     case VECTOR: {

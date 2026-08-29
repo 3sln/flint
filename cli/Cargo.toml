@@ -14,6 +14,11 @@ path = "src/main.rs"
 # -- so running the compiler here is 2.7 s against 15.6 s through a wasm
 # engine (`doc/decisions/0010`). There is no wasm runtime in this binary.
 flint-rt = { path = "../runtime" }
+# Green threads and ports are a namespace UNIT, not part of the runtime
+# (`doc/decisions/0003`). A wasm module links it when a program reaches it; a
+# natively-linked binary has to carry it, or `flint run` cannot execute a
+# program that spawns a thread.
+flint-conc = { path = "../units-src/flint-conc" }
 anyhow = "1"
 
 [profile.release]

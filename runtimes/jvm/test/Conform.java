@@ -11,7 +11,7 @@ public class Conform {
         byte[] bytes = java.nio.file.Files.readAllBytes(java.nio.file.Path.of(args[0]));
         Vm vm = new Vm(Img.read(bytes));
         vm.ensureStarted();
-        Object out = vm.call(new Vm.Closure(vm.img.entry, new Object[0]),
+        Object out = vm.runProgram(new Vm.Closure(vm.img.entry, new Object[0]),
                              new Object[]{ java.util.List.of() });
         System.out.println(Builtins.str(out));
     }

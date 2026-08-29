@@ -285,6 +285,7 @@ public static class Builtins {
     }
 
     static Builtins() {
+        Conc.Install(Def);
         Def("=", (vm, a) => { for (int i = 1; i < a.Length; i++) if (!Eq(a[0], a[i])) return false; return true; });
         Def("identical?", (vm, a) => Identical(Arg(a, 0), Arg(a, 1)));
         Def("not", (vm, a) => !Vm.Truthy(Arg(a, 0)));

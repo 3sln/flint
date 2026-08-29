@@ -281,7 +281,11 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String]) -
     }
     let bytes = base64_decode(r.out.split('\n').next().unwrap_or(""))?;
 
-    let mut p = Program::load(&bytes, 2_000_000_000)
+    // `load_with`, carrying the concurrency unit's builtins: green threads and
+    // ports are a namespace UNIT rather than part of the runtime, so a
+    // natively-linked binary has to hand them over by name. Without this
+    // `flint run` cannot execute a program that spawns a thread.
+    let mut p = Program::load_with(&bytes, 2_000_000_000, flint_conc::HOST_CATALOGUE)
         .map_err(|e| anyhow::anyhow!("the compiled program did not load: {e}"))?;
     // Capabilities are the host's to grant, and a program holds one because it
     // was GIVEN it (`doc/decisions/0022`). Naming one here is what lends it;

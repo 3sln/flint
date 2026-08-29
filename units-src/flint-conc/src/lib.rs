@@ -260,6 +260,46 @@ builtin!(flint_b_set_port_opts, b_set_port_opts, |rt, a, n| {
 });
 
 /// Names and symbols together, so the manifest cannot drift from the code.
+/// The same catalogue, as FUNCTION POINTERS rather than symbol names.
+///
+/// `CATALOGUE` above maps a builtin to a linker symbol, which is what a wasm
+/// module needs and what a natively-linked host cannot use. The native CLI
+/// links this crate directly (`doc/decisions/0021`), so it needs the functions
+/// themselves -- otherwise `flint run` cannot execute a program that spawns a
+/// thread, and the conformance gate has no native answer to compare the ports
+/// against.
+///
+/// Kept immediately beside `CATALOGUE` so the two are edited together; a
+/// builtin in one and not the other is a builtin that works on one kind of
+/// host and silently not the other.
+#[cfg(not(target_arch = "wasm32"))]
+pub const HOST_CATALOGUE: &[(&str, flint_rt::vm::NativeFn)] = &[
+    ("flint/spawn", flint_b_spawn),
+    ("flint/yield", flint_b_yield),
+    ("flint/self", flint_b_self),
+    ("flint/thread?", flint_b_thread_p),
+    ("flint/thread-state", flint_b_thread_state),
+    ("flint/thread-result", flint_b_thread_result),
+    ("flint/thread-id", flint_b_thread_id),
+    ("flint/thread-join", flint_b_thread_join),
+    ("flint/bindings", flint_b_binds),
+    ("flint/set-bindings", flint_b_set_binds),
+    ("flint/channel", flint_b_channel),
+    ("flint/open", flint_b_open),
+    ("flint/port-send", flint_b_port_send),
+    ("flint/port-receive", flint_b_port_receive),
+    ("flint/port-close", flint_b_port_close),
+    ("flint/port?", flint_b_port_p),
+    ("flint/port-state", flint_b_port_state),
+    ("flint/port-label", flint_b_port_label),
+    ("flint/port-host?", flint_b_port_host_p),
+    ("flint/port-id", flint_b_port_id),
+    ("flint/port-format", flint_b_port_format),
+    ("flint/port-opts", flint_b_port_opts),
+    ("flint/set-port-opts", flint_b_set_port_opts),
+    ("flint/set-port-binary", flint_b_set_port_binary),
+];
+
 pub const CATALOGUE: &[(&str, &str)] = &[
     ("flint/spawn", "flint_b_spawn"),
     ("flint/yield", "flint_b_yield"),

@@ -302,6 +302,22 @@ fn host_registry_blob() -> Vec<u8> {
 impl Program {
     /// Load a bytecode image. `heap` is the cap in bytes.
     pub fn load(image: &[u8], heap: u32) -> Result<Program, String> {
+        Program::load_with(image, heap, &[])
+    }
+
+    /// Load, and carry EXTRA builtins a unit provides.
+    ///
+    /// The registry in this crate is the runtime's own; a namespace unit like
+    /// `flint.conc` has its own, and a natively-linked host has to hand them
+    /// over because there is no wasm table to look them up in. Without this the
+    /// native CLI cannot run a program that spawns a green thread -- and then
+    /// the conformance gate has no native answer to compare the ports against,
+    /// which is how this was noticed.
+    pub fn load_with(
+        image: &[u8],
+        heap: u32,
+        extra: &[(&str, crate::vm::NativeFn)],
+    ) -> Result<Program, String> {
         let mut rt = Rt::with_heap(2 * 1024 * 1024, heap);
         rt.install_host_natives();
         if !rt.load_image(image) {
@@ -309,7 +325,16 @@ impl Program {
                 "this is not a flint image, or it was built for a different runtime",
             ));
         }
-        let reg = host_registry_blob();
+        // The unit's builtins go on the end of the registry, and into the blob
+        // under the same names, so `resolve_natives` finds them exactly as it
+        // finds the runtime's own.
+        let mut reg = host_registry_blob();
+        for (name, f) in extra {
+            let slot = rt.add_host_native(*f);
+            reg.extend_from_slice(&slot.to_le_bytes());
+            reg.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            reg.extend_from_slice(name.as_bytes());
+        }
         rt.resolve_natives(&reg).map_err(|missing| {
             alloc::format!(
                 "this runtime does not carry the builtin `{missing}`, which the image needs"
