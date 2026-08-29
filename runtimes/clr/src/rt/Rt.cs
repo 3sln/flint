@@ -37,6 +37,34 @@ public sealed class Rt : System.IDisposable {
 
     public long steps;
 
+    /// The rest of the interpreter's state, all of it snapshot-visible.
+    ///
+    /// Here rather than spread across the classes that use them, for the reason
+    /// `doc/decisions/0015` gives: a snapshot is a COPY of the VM, so anything
+    /// that survives a park has to be findable in one place. The Rust and the
+    /// JVM keep exactly this set in exactly this order, so all three write
+    /// byte-identical snapshots.
+    public long parkOn = Val.Nil;
+    public long gasLimit;
+    public long sliceEnd;
+    public long checkpoint;
+    public int gasTrips;
+    public int memTrips;
+    public int status;
+    public bool champAdded;
+
+    /// FNV-1a over the image bytes. A snapshot carries the heap and the VM
+    /// state and NO CODE, but every `ip`, constant index and var slot in it is
+    /// an index INTO an image -- so restoring against a different program does
+    /// not fail, it quietly means something else. This is what makes that
+    /// refusable.
+    public long fingerprint;
+
+    /// How many host-minted opaque values the last import brought back. A test
+    /// reads it to know the sweep saw anything at all: a zero would otherwise
+    /// pass every assertion for the wrong reason.
+    public int restoredCapabilities;
+
     public Rt(long nurseryBytes, long maxHeap) {
         this.gc = new Gc(nurseryBytes, maxHeap);
         roots.Consts = consts;

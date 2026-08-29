@@ -50,7 +50,36 @@ public static class Val {
     /// carrying its tag.
     public static long AsHeap(long v) => v & Payload;
 
+    /// Five, because the payload is 48 bits: 8 for the length and 40 for the
+    /// bytes. That covers most keywords and short strings -- so a keyword
+    /// comparison is a single 64-bit compare and allocates nothing, which is
+    /// what makes maps keyed by keywords cheap.
+    public const int InlineMax = 5;
+
+    static long InlineOf(long tag, byte[] bytes) {
+        long payload = 0;
+        for (int i = 0; i < bytes.Length; i++) payload |= (bytes[i] & 0xFFL) << (8 * i);
+        return (tag << 48) | ((long) bytes.Length << 40) | payload;
+    }
+
+    public static bool IsInlineStr(long v) => Tag(v) == TagStr;
+    public static bool IsInlineKw(long v) => Tag(v) == TagKw;
+
+    public static long InlineStr(byte[] b) => InlineOf(TagStr, b);
+    public static long InlineKw(byte[] b) => InlineOf(TagKw, b);
+
+    public static int InlineLen(long v) => (int) (((ulong)v >> 40) & 0xFF);
+
+    public static byte[] InlineBytes(long v) {
+        int n = InlineLen(v);
+        byte[] outb = new byte[n];
+        for (int i = 0; i < n; i++) outb[i] = (byte) (((ulong)v >> (8 * i)) & 0xFF);
+        return outb;
+    }
+
     public static bool IsNil(long v) => v == Nil;
+    public static bool IsTrue(long v) => v == True;
+    public static bool IsFalse(long v) => v == False;
     /// Only `nil` and `false` are false.
     public static bool Truthy(long v) => v != Nil && v != False;
     public static long Bool(bool b) => b ? True : False;

@@ -18,21 +18,38 @@ public static class Obj {
                      TyVec = 9, TyNode = 10, TyVecseq = 11, TyStrseq = 12,
                      TyRange = 13, TyArraymap = 14, TyHashmap = 15, TyBmnode = 16,
                      TyArraynode = 17, TyCollnode = 18, TySet = 19, TyMapentry = 20,
-                     TyClosure = 21, TyRaw = 35;
+                     TyClosure = 21, TyNativefn = 22, TyVar = 23, TyAtom = 24,
+                     TyTvec = 25, TyTmap = 26, TyTset = 27, TyRecord = 28,
+                     TyRegex = 29, TyReduced = 30, TyExinfo = 31, TyMultifn = 32,
+                     TyDelay = 33, TyVolatile = 34, TyRaw = 35, TyIterseq = 36,
+                     TyChunkseq = 37, TyType = 38, TyThread = 39, TyPort = 40,
+                     TySched = 41, TyRope = 42,
+                     /// A host-minted reference (`doc/decisions/0022`). Guest code
+                     /// can mint one only with id 0 and no builtin reads an id
+                     /// back, so an id is a thing the HOST wrote and only the host
+                     /// can read. That is what lets a snapshot preserve identities
+                     /// without granting any.
+                     TyOpaque = 43,
+                     TyBytes = 44, TyBrope = 45, TyTbytes = 46, TyMax = 47;
 
-    public const int Vals = 0, Str = 1, Raw = 2;
+    /// The three layout classes. Prefixed `L` where the JVM writes `VALS`,
+    /// `STR`, `RAW`: C#'s PascalCase would make the layout constant `Str`
+    /// collide with the `Str` CLASS, which Java's casing kept apart. The port
+    /// is a verbatim mirror of STRUCTURE, and this is one of the few places a
+    /// host's own naming rules force a different spelling.
+    public const int LVals = 0, LStr = 1, LRaw = 2;
 
     public static int LayoutOf(int ty) {
-        if (ty == TyStr) return Str;
-        if (ty == TyBigint || ty == TyRaw || ty == TyFree || ty == TyFwd) return Raw;
-        return Vals;
+        if (ty == TyStr) return LStr;
+        if (ty == TyBigint || ty == TyRaw || ty == TyBytes || ty == TyFree || ty == TyFwd) return LRaw;
+        return LVals;
     }
 
     public static long Align8(long n) => (n + 7) & ~7L;
 
     public static long SizeFor(int ty, int len) => LayoutOf(ty) switch {
-        Vals => Hdr + (long) len * 8,
-        Str => Align8(StrData + len),
+        LVals => Hdr + (long) len * 8,
+        LStr => Align8(StrData + len),
         _ => Align8(Hdr + len),
     };
 
@@ -76,6 +93,22 @@ public static class Obj {
         int w = sp.ReadU32(a);
         sp.WriteU32(a, m ? (w | (1 << 19)) : (w & ~(1 << 19)));
     }
+
+    /// The ASCII flag is not a micro-optimisation. flint indexes strings by
+    /// CODE POINT, so a byte index and a character index coincide only for
+    /// ASCII -- without it `subs` and `nth` walk, and splitting a string was
+    /// quadratic.
+    public static bool StrIsAscii(Space sp, long a) => (sp.ReadU32(a) & (1 << 18)) != 0;
+
+    public static void SetStrAscii(Space sp, long a, bool v) {
+        int w = sp.ReadU32(a);
+        sp.WriteU32(a, v ? (w | (1 << 18)) : (w & ~(1 << 18)));
+    }
+
+    /// Cached at +8, inside the object, so a string carries its own hash and a
+    /// map lookup does not walk the bytes twice.
+    public static int StrHash(Space sp, long a) => sp.ReadU32(a + Hdr);
+    public static void SetStrHash(Space sp, long a, int h) => sp.WriteU32(a + Hdr, h);
 
     public static long SlotAddr(long a, int i) => a + Hdr + (long) i * 8;
     public static long Slot(Space sp, long a, int i) => sp.ReadU64(SlotAddr(a, i));

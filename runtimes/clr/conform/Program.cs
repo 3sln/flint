@@ -11,6 +11,7 @@ public static class Program {
         if (args.Length >= 2 && args[0] == "--aot") return Aot(args[1]);
         if (args.Length >= 2 && args[0] == "--flags") return Flags(args[1]);
         if (args.Length >= 1 && args[0] == "--rt-foundation") return RtFoundation();
+        if (args.Length >= 1 && args[0] == "--rt-snapshot") return RtSnapshot();
         if (args.Length >= 3 && args[0] == "--selfhost") return SelfHost(args[1], args[2]);
         var vm = new Vm(Img.Read(File.ReadAllBytes(args[0])));
         vm.EnsureStarted();
@@ -29,6 +30,136 @@ public static class Program {
     /// The number at the end is the cost of the REPRESENTATION, with no
     /// dispatch -- not an end-to-end speedup and not to be quoted as one. What
     /// it settles is that boxing is no longer the ceiling.
+
+    // ------------------------------------------------------------------
+    // Snapshots on the ported runtime: both formats, and the properties that
+    // distinguish them.
+    //
+    // A LINE-FOR-LINE MIRROR of the JVM's `RtSnapshot.java`, down to the
+    // wording of every line it prints, because the gate `cmp`s the two
+    // outputs. Anything that differed between the ports would have to differ
+    // in a printed number for that check to catch it -- so the numbers printed
+    // are the ones that would move: byte counts, and whether an address
+    // changed.
+
+    static int snapFails;
+
+    private static void SnapOk(string what, bool cond) {
+        Console.WriteLine((cond ? "  ok   " : "  FAIL ") + what);
+        if (!cond) snapFails++;
+    }
+
+    /// A structure with enough shape to be wrong in a detectable way: a vector
+    /// of vectors, so the export has to get INTERIOR references right, plus a
+    /// string so a non-`Vals` layout is exercised.
+    private static long SnapBuild(Flint.Rt.Rt rt, int n) {
+        int bas = rt.Mark();
+        int vec = rt.Push(Flint.Rt.Vec.Empty(rt));
+        for (int i = 0; i < n; i++) {
+            int inner = rt.Push(Flint.Rt.Vec.Empty(rt));
+            rt.SetR(inner, Flint.Rt.Vec.Conj(rt, rt.R(inner), Flint.Rt.Val.Fixnum(i)));
+            rt.SetR(inner, Flint.Rt.Vec.Conj(rt, rt.R(inner), Flint.Rt.Str.Of(rt, "item-" + i)));
+            rt.SetR(vec, Flint.Rt.Vec.Conj(rt, rt.R(vec), rt.R(inner)));
+            rt.PopTo(inner);
+        }
+        long outv = rt.R(vec);
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    /// Read the structure back as a string, so one comparison covers every
+    /// element, its type, and its order.
+    private static string SnapRender(Flint.Rt.Rt rt, long v) {
+        var sb = new System.Text.StringBuilder();
+        int n = Flint.Rt.Vec.Count(rt, v);
+        for (int i = 0; i < n; i++) {
+            long inner = Flint.Rt.Vec.Nth(rt, v, i);
+            sb.Append(Flint.Rt.Val.AsFixnum(Flint.Rt.Vec.Nth(rt, inner, 0)));
+            sb.Append('=');
+            sb.Append(Flint.Rt.Str.Text(rt, Flint.Rt.Vec.Nth(rt, inner, 1)));
+            sb.Append(';');
+        }
+        return sb.ToString();
+    }
+
+    private static int RtSnapshot() {
+        const int N = 300;
+
+        // --- the verbatim format: a memcpy, restored at identical addresses.
+        var a = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
+        a.fingerprint = 0xABCDEF12345L;
+        long root = SnapBuild(a, N);
+        a.roots.Globals = new long[]{ root };
+        string before = SnapRender(a, root);
+        SnapOk("built a structure to snapshot: " + N + " entries", before.StartsWith("0=item-0;"));
+
+        byte[] verbatim = Flint.Rt.Snap.Capture(a);
+        SnapOk("capture produced bytes: " + verbatim.Length, verbatim.Length > 1024);
+
+        var b = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
+        b.fingerprint = a.fingerprint;
+        b.roots.Globals = new long[1];
+        SnapOk("restore accepts it", Flint.Rt.Snap.Restore(b, verbatim));
+        SnapOk("the restored heap reads back identically", SnapRender(b, b.roots.Globals[0]) == before);
+        SnapOk("and at the SAME address, which is what a memcpy means",
+               Flint.Rt.Val.AsHeap(b.roots.Globals[0]) == Flint.Rt.Val.AsHeap(root));
+
+        // A snapshot restored against a DIFFERENT program does not fail -- it
+        // quietly means something else. The fingerprint is what makes that
+        // refusable, so check that it actually refuses.
+        var wrong = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
+        wrong.fingerprint = 0x999L;
+        SnapOk("refuses a snapshot from another image", !Flint.Rt.Snap.Restore(wrong, verbatim));
+        SnapOk("and says WHICH check failed", Flint.Rt.Snap.Refused == Flint.Rt.Snap.RefuseImage);
+        byte[] corrupt = (byte[]) verbatim.Clone();
+        corrupt[4] = 0xFF;                       // the version word
+        SnapOk("refuses a layout it does not speak", !Flint.Rt.Snap.Restore(b, corrupt));
+        SnapOk("and distinguishes that from a wrong image",
+               Flint.Rt.Snap.Refused == Flint.Rt.Snap.RefuseLayout);
+
+        // --- the live format: a traversal, and it must RELOCATE.
+        var c = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
+        c.fingerprint = 0xABCDEF12345L;
+        long croot = SnapBuild(c, N);
+        c.roots.Globals = new long[]{ croot };
+        byte[] live = Flint.Rt.Snap.ExportLive(c);
+        SnapOk("exportLive agrees with the collector about what is live", live != null);
+        SnapOk("and is smaller than the memcpy, being the data rather than the heap: "
+               + live.Length + " < " + verbatim.Length, live.Length < verbatim.Length);
+
+        // A DIFFERENT nursery, so nothing can come back where it started by luck.
+        var d = new Flint.Rt.Rt(3 * 1024 * 1024, 64L * 1024 * 1024);
+        d.fingerprint = c.fingerprint;
+        // Sized as an image load would size it. The import fills var slots, it
+        // does not create them: the slots belong to the program, and a snapshot
+        // that could add them would be carrying code after all.
+        d.roots.Globals = new long[1];
+        SnapOk("importLive accepts it", Flint.Rt.Snap.ImportLive(d, live));
+        SnapOk("the rehydrated heap reads back identically", SnapRender(d, d.roots.Globals[0]) == before);
+        SnapOk("at a DIFFERENT address, which is what relocating means",
+               Flint.Rt.Val.AsHeap(d.roots.Globals[0]) != Flint.Rt.Val.AsHeap(croot));
+
+        // The rehydrated heap has to be a working heap, not just a readable
+        // one: keep allocating on it and collect, which is what would trip a
+        // bad remembered set or a missed write barrier from pass two.
+        long more = SnapBuild(d, 200);
+        d.roots.Globals = new long[]{ d.roots.Globals[0], more };
+        d.gc.Major(d.roots);
+        SnapOk("survives a major collection after import",
+               SnapRender(d, d.roots.Globals[0]) == before);
+        SnapOk("and the objects allocated after it are intact too",
+               SnapRender(d, d.roots.Globals[1]).StartsWith("0=item-0;"));
+
+        // --- shelving: the halt that leaves nothing runnable.
+        Flint.Rt.Snap.Halt(d);
+        SnapOk("halt leaves nothing to run", d.frames.Count == 0 && d.roots.StackTop == 0);
+        SnapOk("and says the sandbox was shelved rather than answered",
+               d.status == Flint.Rt.Snap.StatusShelved);
+
+        if (snapFails > 0) { Console.WriteLine("  " + snapFails + " failed"); return 1; }
+        return 0;
+    }
+
     private static int RtFoundation() {
         foreach (long off in new long[]{8, 16, 0x1000, 0xFFFF_FFFFL, 0x1_0000_0000L,
                                         0x0000_FFFF_FFFF_FFF8L}) {

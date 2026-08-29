@@ -227,9 +227,26 @@ rt_want="$(./target/release/flint run :path out/rt-probe :fn probe/main 2>&1 || 
 # different nursery and the test asserts the addresses moved as well as that
 # the data survived. Checking only "the data is still there" would pass for a
 # live import that had quietly kept the old addresses.
-"$JDK/bin/java" -cp runtimes/jvm/classes RtSnapshot 2>&1 | sed 's/$/ [jvm]/'
-"$JDK/bin/java" -cp runtimes/jvm/classes RtSnapshot >/dev/null 2>&1 \
-  || { echo "  FAIL snapshots on the ported runtime [jvm]"; exit 1; }
+"$JDK/bin/java" -cp runtimes/jvm/classes RtSnapshot > /tmp/flint-snap-jvm.out 2>&1 \
+  || { cat /tmp/flint-snap-jvm.out; echo "  FAIL snapshots on the ported runtime [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' /tmp/flint-snap-jvm.out
+if [ -n "$CLR" ]; then
+  "$CLR" --rt-snapshot > /tmp/flint-snap-clr.out 2>&1 \
+    || { cat /tmp/flint-snap-clr.out; echo "  FAIL snapshots on the ported runtime [clr]"; exit 1; }
+  sed 's/$/ [clr]/' /tmp/flint-snap-clr.out
+  # BYTE FOR BYTE, not merely "both passed". The two runtimes were written
+  # separately, so the strong evidence that they are mirrors is that they
+  # produce the SAME NUMBERS -- the snapshot sizes are printed precisely
+  # because they are what would move if a field were written at a different
+  # width or in a different order.
+  if cmp -s /tmp/flint-snap-jvm.out /tmp/flint-snap-clr.out; then
+    echo "  ok   the two ported runtimes snapshot identically, byte counts included"
+  else
+    diff /tmp/flint-snap-jvm.out /tmp/flint-snap-clr.out | head -20
+    echo "  FAIL the two ported runtimes disagree about snapshots"
+    exit 1
+  fi
+fi
 
 # And on a program the library is not ported far enough for yet, which reports
 # HOW FAR it gets. While that is true it is the useful answer; a silent pass

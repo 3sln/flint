@@ -25,11 +25,11 @@ public sealed class Gc : System.IDisposable {
 
     public readonly Space sp;
 
-    long youngBase, half, from, to, toBump, bump, fromEnd;
+    internal long youngBase, half, from, to, toBump, bump, fromEnd;
 
     /// Old-space chunks, and the free lists that carve them up.
-    readonly List<long[]> oldChunks = new();
-    readonly long[] freeLists = new long[NCLASS];
+    internal readonly List<long[]> oldChunks = new();
+    internal readonly long[] freeLists = new long[NCLASS];
     public long oldCapacity, oldLive, maxHeap;
 
     /// The work list for the transitive closure. An explicit stack, not
@@ -193,8 +193,8 @@ public sealed class Gc : System.IDisposable {
 
     void ZeroBody(long a, int ty, int len) {
         switch (LayoutOf(ty)) {
-            case Vals: for (int i = 0; i < len; i++) SetSlotRaw(sp, a, i, Val.Nil); break;
-            case Str: sp.WriteU32(a + 8, 0); break;
+            case LVals: for (int i = 0; i < len; i++) SetSlotRaw(sp, a, i, Val.Nil); break;
+            case LStr: sp.WriteU32(a + 8, 0); break;
         }
     }
 
@@ -258,7 +258,7 @@ public sealed class Gc : System.IDisposable {
 
     void ScanObject(long a) {
         int t = Ty(sp, a);
-        if (LayoutOf(t) != Vals) return;
+        if (LayoutOf(t) != LVals) return;
         int n = Len(sp, a);
         bool old = !IsYoung(a);
         bool pointsYoung = false;
@@ -323,7 +323,7 @@ public sealed class Gc : System.IDisposable {
         roots.ForEach(v => { MarkFrom(v); return v; });
         while (work.Count != 0) {
             long a = Pop(work);
-            if (LayoutOf(Ty(sp, a)) != Vals) continue;
+            if (LayoutOf(Ty(sp, a)) != LVals) continue;
             int n = Len(sp, a);
             for (int i = 0; i < n; i++) MarkFrom(Slot(sp, a, i));
         }
