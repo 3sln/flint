@@ -65,8 +65,62 @@ public class RtFoundation {
                 best = Math.min(best, System.nanoTime() - t0);
             }
             double ns = best / 3_000_000.0;
+            gcStress();
             System.out.printf("    3,000,000 iterations, best of 7: %.2f ns/iteration%n", ns);
             System.out.printf("    against 85 ns boxed on the current port -- %.0fx%n", 85.0 / ns);
         }
+    }
+
+    /// The collector, under pressure, with the invariant asserted rather than
+    /// hoped for.
+    ///
+    /// Builds a linked list far larger than the nursery, so it is collected
+    /// many times over and every survivor is copied, promoted, and pointed at
+    /// from the old generation. Then walks it. A collector that loses ONE
+    /// object, or forwards one pointer wrongly, produces a wrong sum -- and the
+    /// walk is what turns "it did not crash" into a result.
+    static void gcStress() {
+        Gc gc = new Gc(256 * 1024, 64L * 1024 * 1024);
+        Roots roots = new Roots();
+        final int N = 200_000;
+
+        // A cons list, held only through the shadow stack: the Java local goes
+        // stale at the first collection, which is the whole point of `push`/`r`.
+        int head = roots.push(Val.NIL);
+        for (int i = 0; i < N; i++) {
+            long cell = gc.alloc(roots, Obj.TY_CONS, 4);
+            if (cell == 0) throw new AssertionError("out of heap at " + i);
+            // The rest pointer is read back from the shadow stack AFTER the
+            // allocation that could have moved it.
+            gc.setSlot(cell, 0, Val.fixnum(i), roots);
+            gc.setSlot(cell, 1, roots.r(head), roots);
+            roots.setR(head, Val.heap(cell));
+        }
+
+        long want = (long) N * (N - 1) / 2;
+        long sum = 0;
+        int seen = 0;
+        long cur = roots.r(head);
+        while (!Val.isNil(cur)) {
+            long a = Val.asHeap(cur);
+            sum += Val.asFixnum(Obj.slot(gc.sp, a, 0));
+            seen++;
+            cur = Obj.slot(gc.sp, a, 1);
+        }
+        if (seen != N) throw new AssertionError("walked " + seen + " of " + N);
+        if (sum != want) throw new AssertionError("sum " + sum + " want " + want);
+        System.out.printf("  ok   %,d objects survive %,d minor and %,d major collections intact%n",
+                          N, gc.minors, gc.majors);
+
+        // Garbage really is reclaimed: drop the list and collect. If nothing is
+        // freed, the assertion above passed for the wrong reason -- a collector
+        // that keeps everything loses nothing.
+        long before = gc.heapUsed();
+        roots.setR(head, Val.NIL);
+        gc.major(roots);
+        if (gc.heapUsed() >= before)
+            throw new AssertionError("nothing was reclaimed: " + before + " -> " + gc.heapUsed());
+        System.out.printf("  ok     ... and dropping them reclaims %,d bytes%n",
+                          before - gc.heapUsed());
     }
 }

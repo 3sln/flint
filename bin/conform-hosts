@@ -173,9 +173,31 @@ fi
 # and of each other, and the only way to know that is to run the same checks on
 # both rather than to intend it.
 echo "  .. the ported runtime's foundation"
-"$JDK/bin/java" -cp runtimes/jvm/classes RtFoundation 2>&1 | sed 's/$/ [jvm]/'
+"$JDK/bin/java" -cp runtimes/jvm/classes RtFoundation > /tmp/flint-rt-jvm.out 2>&1 \
+  || { cat /tmp/flint-rt-jvm.out; echo "  FAIL the ported runtime [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' /tmp/flint-rt-jvm.out
 if [ -n "$CLR" ]; then
-  "$CLR" --rt-foundation 2>&1 | sed 's/$/ [clr]/'
+  "$CLR" --rt-foundation > /tmp/flint-rt-clr.out 2>&1 \
+    || { cat /tmp/flint-rt-clr.out; echo "  FAIL the ported runtime [clr]"; exit 1; }
+  sed 's/$/ [clr]/' /tmp/flint-rt-clr.out
+
+  # The two are meant to be VERBATIM MIRRORS, so the check is not that each
+  # passes -- it is that they make the same decisions. The collector lines
+  # carry the minor and major counts and the bytes reclaimed, and those being
+  # equal means the two collectors collected at the same points and freed the
+  # same things. Two collectors that merely both work would not.
+  #
+  # The timing line is excluded, and only that one: it is a measurement of the
+  # machine rather than of the port.
+  grep "^  ok" /tmp/flint-rt-jvm.out > /tmp/flint-rt-jvm.ok
+  grep "^  ok" /tmp/flint-rt-clr.out > /tmp/flint-rt-clr.ok
+  if cmp -s /tmp/flint-rt-jvm.ok /tmp/flint-rt-clr.ok; then
+    echo "  ok   the two ported runtimes agree line for line"
+  else
+    echo "  FAIL the ported runtimes DIVERGED:"
+    diff /tmp/flint-rt-jvm.ok /tmp/flint-rt-clr.ok | sed 's/^/        /'
+    exit 1
+  fi
 fi
 
 # ONE CONFIG, THREE RUNTIMES. `:optimize [perf]` cannot be carried the same way

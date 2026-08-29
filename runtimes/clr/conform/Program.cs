@@ -67,6 +67,8 @@ public static class Program {
         }
         Console.WriteLine("  ok   objects, mark bits and 48-bit forwarding");
 
+        GcStress();
+
         long stack = sp.Take(1024);
         long best = long.MaxValue;
         var sw = new System.Diagnostics.Stopwatch();
@@ -87,6 +89,54 @@ public static class Program {
         Console.WriteLine($"    3,000,000 iterations, best of 7: {ns:F2} ns/iteration");
         Console.WriteLine($"    against 22 ns boxed on the current port -- {22.0 / ns:F0}x");
         return 0;
+    }
+
+    /// The collector, under pressure, with the invariant asserted rather than
+    /// hoped for. The SAME test as `runtimes/jvm/test/RtFoundation.java`.
+    ///
+    /// Builds a linked list far larger than the nursery, so it is collected
+    /// many times over and every survivor is copied, promoted, and pointed at
+    /// from the old generation. Then walks it. A collector that loses ONE
+    /// object, or forwards one pointer wrongly, produces a wrong sum -- and the
+    /// walk is what turns "it did not crash" into a result.
+    private static void GcStress() {
+        using var gc = new Flint.Rt.Gc(256 * 1024, 64L * 1024 * 1024);
+        var roots = new Flint.Rt.Roots();
+        const int N = 200_000;
+
+        // Held only through the shadow stack: the CLR local goes stale at the
+        // first collection, which is the whole point of `Push`/`R`.
+        int head = roots.Push(Flint.Rt.Val.Nil);
+        for (int i = 0; i < N; i++) {
+            long cell = gc.Alloc(roots, Flint.Rt.Obj.TyCons, 4);
+            if (cell == 0) throw new System.Exception("out of heap at " + i);
+            gc.SetSlot(cell, 0, Flint.Rt.Val.Fixnum(i), roots);
+            gc.SetSlot(cell, 1, roots.R(head), roots);
+            roots.SetR(head, Flint.Rt.Val.Heap(cell));
+        }
+
+        long want = (long) N * (N - 1) / 2;
+        long sum = 0;
+        int seen = 0;
+        long cur = roots.R(head);
+        while (!Flint.Rt.Val.IsNil(cur)) {
+            long a = Flint.Rt.Val.AsHeap(cur);
+            sum += Flint.Rt.Val.AsFixnum(Flint.Rt.Obj.Slot(gc.sp, a, 0));
+            seen++;
+            cur = Flint.Rt.Obj.Slot(gc.sp, a, 1);
+        }
+        if (seen != N) throw new System.Exception($"walked {seen} of {N}");
+        if (sum != want) throw new System.Exception($"sum {sum} want {want}");
+        Console.WriteLine($"  ok   {N:N0} objects survive {gc.minors:N0} minor and {gc.majors:N0} major collections intact");
+
+        // Garbage really is reclaimed. Without this the assertion above passes
+        // for the wrong reason: a collector that keeps everything loses nothing.
+        long before = gc.HeapUsed();
+        roots.SetR(head, Flint.Rt.Val.Nil);
+        gc.Major(roots);
+        if (gc.HeapUsed() >= before)
+            throw new System.Exception($"nothing was reclaimed: {before} -> {gc.HeapUsed()}");
+        Console.WriteLine($"  ok     ... and dropping them reclaims {before - gc.HeapUsed():N0} bytes");
     }
 
     /// What the compiler decided, and whether this runtime acted on it.
