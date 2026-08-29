@@ -933,10 +933,12 @@
     port?
     receive
     send
+    set-codec
     state
+    system
     with-open},
   :macros #{with-open},
-  :count 13},
+  :count 15},
  flint.port.edn
  {:file "lib/flint/port/edn.cljc",
   :present #{codec decode encode},

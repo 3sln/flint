@@ -140,6 +140,22 @@ pub const PT_LEN: u32 = 14;
 
 /// One end of a `channel` pair: no host involvement at all.
 pub const K_CHANNEL: i64 = 0;
+/// A GLOBAL port (`doc/decisions/0027`): the host owns it, this is a handle.
+///
+/// The id is the HOST's, not this sandbox's. Everything queued on it lives in
+/// host memory as encoded bytes, so no collector ever holds a pointer it does
+/// not own, and nothing here is a cross-heap reference.
+pub const K_GLOBAL: i64 = 3;
+
+/// Does this kind carry BYTES across a boundary, rather than values inside one
+/// heap? True for a host port and for a global port, and the two paths are the
+/// same path -- a host port is just a global port whose far end is the host.
+/// One predicate rather than a widening `==` at each of six sites, because the
+/// last time this was a set of scattered comparisons one of them was missed.
+#[inline]
+pub fn crosses_a_heap(kind: i64) -> bool {
+    kind == K_FLINT || kind == K_GLOBAL
+}
 /// The end a script holds after `open`. Ordinary memory.
 pub const K_FLINT: i64 = 1;
 /// The end the host holds. A strong root until the host closes it.
@@ -201,7 +217,15 @@ pub const SC_PORTS: u32 = 5;
 pub const SC_PAIRS: u32 = 6;
 pub const SC_WAITERS: u32 = 7;
 pub const SC_WFREE: u32 = 8;
-pub const SC_LEN: u32 = 9;
+/// The SYSTEM port, if this sandbox was given one (`doc/decisions/0027`).
+///
+/// A sandbox no longer manufactures its own end and offers it up: the host owns
+/// the port, keeps one end, and passes the other in at construction. Absent is
+/// a normal state and not an error -- a sandbox without one runs logic and
+/// cannot ask the host for anything, which is the honest default for confined
+/// code rather than a degraded mode.
+pub const SC_SYSTEM: u32 = 9;
+pub const SC_LEN: u32 = 10;
 
 /// The one outbound queue. One export, one call per pump, one ordering rule.
 pub const EV_OPEN: i64 = 1;
@@ -669,6 +693,78 @@ impl Rt {
         let out = self.r(pi);
         self.pop_to(base);
         out
+    }
+
+    /// Install a GLOBAL port the host owns, and hand back the handle
+    /// (`doc/decisions/0027`).
+    ///
+    /// The inversion this file exists to make: a sandbox does not manufacture
+    /// an endpoint and offer it up, it is GIVEN one. `host_id` is the host's,
+    /// not this sandbox's -- it means the same thing on both sides, which is
+    /// what makes a handle sendable between two sandboxes at all.
+    ///
+    /// The object in this heap carries the id and nothing else that crosses:
+    /// no pointer into host memory, no pointer out of it. The collector traces
+    /// and moves it like any other object, with no special case.
+    pub fn install_global_port(&mut self, host_id: i64, label: Value, format: Value) -> Value {
+        self.ensure_sched();
+        let base = self.mark();
+        let li = self.push(label);
+        let fi = self.push(format);
+        let (l, f) = (self.r(li), self.r(fi));
+        let p = self.new_port(DEFAULT_HOST_CAP, l, K_GLOBAL, P_OPEN, f);
+        if p.is_nil() {
+            self.pop_to(base);
+            return NIL;
+        }
+        let pi = self.push(p);
+        // The HOST's id replaces the one `new_port` minted from this sandbox's
+        // counter. A sandbox-local id would mean something different in every
+        // other sandbox, which is the coupling `0027` removes.
+        self.set(self.r(pi), PT_ID, Value::fixnum(host_id));
+        // Rooted for as long as the host says it exists: the host holds the
+        // other end, so this one cannot be reclaimed just because the guest
+        // dropped its last reference. `0027`'s weak-table reclamation is what
+        // replaces this, and is not built yet.
+        let pv = self.r(pi);
+        let slot = self.root_port(pv);
+        self.set(self.r(pi), PT_ROOT, Value::fixnum(slot));
+        let pv = self.r(pi);
+        self.register_port(pv);
+        let out = self.r(pi);
+        self.pop_to(base);
+        out
+    }
+
+    /// Install the system port. The one a sandbox is given at construction, if
+    /// it is given one at all.
+    pub fn install_system_port(&mut self, host_id: i64, label: Value, format: Value) -> Value {
+        let p = self.install_global_port(host_id, label, format);
+        if p.is_nil() {
+            return NIL;
+        }
+        let base = self.mark();
+        let pi = self.push(p);
+        let s = self.sched();
+        let si = self.push(s);
+        let pv = self.r(pi);
+        self.set(self.r(si), SC_SYSTEM, pv);
+        let out = self.r(pi);
+        self.pop_to(base);
+        out
+    }
+
+    /// The system port, or nil when this sandbox was given none.
+    ///
+    /// Nil is a normal answer. A sandbox without a system port runs logic and
+    /// can ask the host for nothing -- which is what "confined" should mean by
+    /// default rather than something a host has to remember to arrange.
+    pub fn system_port(&mut self) -> Value {
+        let s = self.sched();
+        if s.is_nil() {
+            return NIL;
+        }
+        self.slot(s, SC_SYSTEM)
     }
 
     fn link_peers(&mut self, a: Value, b: Value) {
@@ -1164,7 +1260,7 @@ fn needs_host(rt: &mut Rt) -> bool {
         }
         if fx(rt.slot(th, TH_STATUS)) == ST_PARKED {
             let on = rt.slot(th, TH_PARK_ON);
-            if rt.is_port(on) && fx(rt.slot(on, PT_KIND)) == K_FLINT {
+            if rt.is_port(on) && crosses_a_heap(fx(rt.slot(on, PT_KIND))) {
                 return true;
             }
         }
@@ -1427,7 +1523,7 @@ impl Rt {
             return self.throw_str("IllegalArgumentException", &e);
         }
         let kind = fx(self.slot(self.r(pi), PT_KIND));
-        if kind == K_FLINT {
+        if crosses_a_heap(kind) {
             // Bound the host's queue in BYTES: back-pressure exists to bound
             // memory, and one 4 MB message is not one message's worth of it.
             let binary = fx(self.slot(self.r(pi), PT_BINARY)) == 1;
@@ -1457,12 +1553,24 @@ impl Rt {
                 let flat = self.string_arg(self.r(vi));
                 self.set_r(vi, flat);
             }
-            let host = self.peer_of(self.r(pi));
-            if host.is_nil() {
-                self.pop_to(base);
-                return self.throw_str("IllegalStateException", "the host has closed this port");
-            }
-            let hi = self.push(host);
+            // Whose bookkeeping the back-pressure lives on.
+            //
+            // A HOST port is a pair: two objects in this heap, and the far end
+            // carries the id the host knows and the byte count. A GLOBAL port is
+            // ONE object -- the far end is the host's registry and is not in any
+            // heap (`doc/decisions/0027`) -- so it is its own accounting.
+            let hi = if kind == K_GLOBAL {
+                let pv = self.r(pi);
+                self.push(pv)
+            } else {
+                let host = self.peer_of(self.r(pi));
+                if host.is_nil() {
+                    self.pop_to(base);
+                    return self
+                        .throw_str("IllegalStateException", "the host has closed this port");
+                }
+                self.push(host)
+            };
             let len = if binary {
                 if self.is_bytes(self.r(vi)) {
                     self.b_count(self.r(vi)) as i64
@@ -1526,7 +1634,7 @@ impl Rt {
             let target = self.r(pi);
             let v = self.port_dequeue(target);
             let vi = self.push(v);
-            if fx(self.slot(self.r(pi), PT_KIND)) == K_FLINT {
+            if crosses_a_heap(fx(self.slot(self.r(pi), PT_KIND))) {
                 // Room again for the host to deliver the next wave.
                 let n = if self.is_bytes(self.r(vi)) {
                     self.b_count(self.r(vi)) as i64
@@ -1563,20 +1671,27 @@ impl Rt {
                 "receive: the other end of this port is gone, so this can never complete",
             );
         }
-        let peer = self.peer_of(self.r(pi));
-        if peer.is_nil() {
-            self.set(self.r(pi), PT_STATE, Value::fixnum(P_ORPHANED));
-            self.pop_to(base);
-            return self.throw_str(
-                "IllegalStateException",
-                "receive: the other end of this port is gone, so this can never complete",
-            );
-        }
-        let pst = fx(self.slot(peer, PT_STATE));
-        if pst == P_CLOSED || pst == P_HALF || pst == P_ORPHANED {
-            self.set(self.r(pi), PT_STATE, Value::fixnum(P_HALF));
-            self.pop_to(base);
-            return NIL;
+        // A GLOBAL port has no peer OBJECT to ask about: the far end is the
+        // host's registry and is not in any heap (`doc/decisions/0027`). Its own
+        // state is the whole answer, and the states above have already covered
+        // every way that can say "no more" -- so an empty buffer here means
+        // "nothing yet", which is what parking is for.
+        if fx(self.slot(self.r(pi), PT_KIND)) != K_GLOBAL {
+            let peer = self.peer_of(self.r(pi));
+            if peer.is_nil() {
+                self.set(self.r(pi), PT_STATE, Value::fixnum(P_ORPHANED));
+                self.pop_to(base);
+                return self.throw_str(
+                    "IllegalStateException",
+                    "receive: the other end of this port is gone, so this can never complete",
+                );
+            }
+            let pst = fx(self.slot(peer, PT_STATE));
+            if pst == P_CLOSED || pst == P_HALF || pst == P_ORPHANED {
+                self.set(self.r(pi), PT_STATE, Value::fixnum(P_HALF));
+                self.pop_to(base);
+                return NIL;
+            }
         }
         let target = self.r(pi);
         self.pop_to(base);
@@ -1702,7 +1817,7 @@ impl Rt {
         let base = self.mark();
         let pi = self.push(p);
         let kind = fx(self.slot(self.r(pi), PT_KIND));
-        if kind == K_FLINT {
+        if crosses_a_heap(kind) {
             let host = self.peer_of(self.r(pi));
             if !host.is_nil() {
                 let hi = self.push(host);
@@ -1784,12 +1899,20 @@ impl Rt {
         }
         let base = self.mark();
         let hi = self.push(host);
-        let flint = self.peer_of(self.r(hi));
-        if flint.is_nil() {
-            self.pop_to(base);
-            return false;
-        }
-        let pi = self.push(flint);
+        // A GLOBAL port is ONE object and the id is its own, so the lookup has
+        // already found the end to deliver into. A HOST port is a pair, and the
+        // id belongs to the far end, so the delivery goes to its peer.
+        let pi = if fx(self.slot(self.r(hi), PT_KIND)) == K_GLOBAL {
+            let pv = self.r(hi);
+            self.push(pv)
+        } else {
+            let flint = self.peer_of(self.r(hi));
+            if flint.is_nil() {
+                self.pop_to(base);
+                return false;
+            }
+            self.push(flint)
+        };
         let queued = fx(self.slot(self.r(pi), PT_BYTES));
         let cap = fx(self.slot(self.r(pi), PT_CAP));
         if queued > 0 && queued + bytes.len() as i64 > cap {
@@ -2068,7 +2191,7 @@ impl Rt {
                 continue;
             }
             let pi = self.push(p);
-            if fx(self.slot(self.r(pi), PT_KIND)) == K_FLINT
+            if crosses_a_heap(fx(self.slot(self.r(pi), PT_KIND)))
                 && fx(self.slot(self.r(pi), PT_STATE)) != P_CLOSED
             {
                 self.set(self.r(pi), PT_STATE, Value::fixnum(P_CLOSED));

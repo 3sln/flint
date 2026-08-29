@@ -131,6 +131,7 @@
   "flint/sub",
   "flint/subs",
   "flint/symbol2",
+  "flint/system-port",
   "flint/tan",
   "flint/tanh",
   "flint/thread-id",

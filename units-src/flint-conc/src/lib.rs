@@ -205,7 +205,10 @@ builtin!(flint_b_port_host_p, b_port_host_p, |rt, a, n| {
     if !rt.is_port(p) {
         return rt.throw_str("ClassCastException", "port-host? wants a port");
     }
-    if rt.slot(p, conc::PT_KIND).as_fixnum() == conc::K_FLINT { TRUE } else { FALSE }
+    // Any port whose messages CROSS A HEAP, which is what the name is really
+    // asking: a host port and a global port both carry bytes and both need a
+    // codec, and `flint.port/send` branches on exactly that.
+    if conc::crosses_a_heap(rt.slot(p, conc::PT_KIND).as_fixnum()) { TRUE } else { FALSE }
 });
 
 builtin!(flint_b_port_format, b_port_format, |rt, a, n| {
@@ -215,6 +218,17 @@ builtin!(flint_b_port_format, b_port_format, |rt, a, n| {
         return rt.throw_str("ClassCastException", "port-format wants a port");
     }
     rt.slot(p, conc::PT_FORMAT)
+});
+
+/// The SYSTEM port, or nil (`doc/decisions/0027`).
+///
+/// Nil is a normal answer and the reason this is a builtin rather than a
+/// guaranteed value: a sandbox the host gave no system port to still runs, it
+/// just cannot ask for anything. Confined by construction rather than by the
+/// host remembering to withhold something.
+builtin!(flint_b_system_port, b_system_port, |rt, a, n| {
+    let _ = (a, n);
+    rt.system_port()
 });
 
 builtin!(flint_b_port_id, b_port_id, |rt, a, n| {
@@ -278,6 +292,7 @@ pub const CATALOGUE: &[(&str, &str)] = &[
     ("flint/port-label", "flint_b_port_label"),
     ("flint/port-host?", "flint_b_port_host_p"),
     ("flint/port-id", "flint_b_port_id"),
+    ("flint/system-port", "flint_b_system_port"),
     ("flint/port-format", "flint_b_port_format"),
     ("flint/port-opts", "flint_b_port_opts"),
     ("flint/set-port-opts", "flint_b_set_port_opts"),
@@ -342,9 +357,54 @@ mod host {
         rt().host_continue(token as i64, ok != 0) as u32
     }
 
+    /// Install a GLOBAL port the host owns (`doc/decisions/0027`), and say
+    /// whether it worked. The label and format are read out of the inbound
+    /// buffer as `label\0format`, so this needs no second buffer.
+    ///
+    /// `system` non-zero makes it the sandbox's SYSTEM port: the one it can ask
+    /// the host for things through. A sandbox given none runs logic and can ask
+    /// for nothing, which is the honest default rather than a degraded mode.
+    ///
+    /// The id is the HOST's. That is the whole inversion: a sandbox no longer
+    /// mints an endpoint and offers it up, and an id means the same thing in
+    /// every sandbox that holds it -- which is what lets a handle be passed
+    /// from one to another at all.
+    #[no_mangle]
+    pub extern "C" fn flint_install_port(id: u32, len: u32, system: u32) -> u32 {
+        let rt = rt();
+        let text: alloc::string::String = unsafe {
+            let b = &*core::ptr::addr_of!(IN);
+            alloc::string::String::from_utf8_lossy(&b[..len as usize]).into_owned()
+        };
+        let mut parts = text.splitn(2, '\0');
+        let label = parts.next().unwrap_or("");
+        let format = parts.next().unwrap_or("");
+        let base = rt.mark();
+        let l = rt.string(label);
+        let li = rt.push(l);
+        let f = if format.is_empty() { flint_rt::value::NIL } else { rt.string(format) };
+        let fi = rt.push(f);
+        let (l, f) = (rt.r(li), rt.r(fi));
+        let p = if system != 0 {
+            rt.install_system_port(id as i64, l, f)
+        } else {
+            rt.install_global_port(id as i64, l, f)
+        };
+        rt.pop_to(base);
+        (!p.is_nil()) as u32
+    }
+
     /// A buffer to write an inbound message into.
+    ///
+    /// `rt()` first, and not for the runtime: it is what creates the ARENA the
+    /// Rust allocator draws from. A host that installs a port BEFORE running
+    /// anything -- which is now the ordinary way to start a sandbox, since the
+    /// system port is passed in at construction -- would otherwise allocate
+    /// before there was anything to allocate from, and trap as `unreachable`
+    /// out of the alloc error handler with nothing naming the cause.
     #[no_mangle]
     pub extern "C" fn flint_in_alloc(len: u32) -> u32 {
+        let _ = rt();
         unsafe {
             let b = &mut *core::ptr::addr_of_mut!(IN);
             b.clear();
