@@ -68,6 +68,7 @@ public static class Program {
         Console.WriteLine("  ok   objects, mark bits and 48-bit forwarding");
 
         GcStress();
+        Interpreter();
 
         long stack = sp.Take(1024);
         long best = long.MaxValue;
@@ -89,6 +90,101 @@ public static class Program {
         Console.WriteLine($"    3,000,000 iterations, best of 7: {ns:F2} ns/iteration");
         Console.WriteLine($"    against 22 ns boxed on the current port -- {22.0 / ns:F0}x");
         return 0;
+    }
+
+    /// The interpreter, on hand-assembled bytecode. The SAME three checks as
+    /// `runtimes/jvm/test/RtFoundation.java`, in the same order.
+    ///
+    /// Hand-assembled rather than loaded from an image, so this tests the
+    /// dispatch loop and nothing else: the image loader and the builtins are
+    /// not ported yet, and a failure here would otherwise have three possible
+    /// causes instead of one.
+    private static void Interpreter() {
+        using var rt = new Flint.Rt.Rt(256 * 1024, 16L * 1024 * 1024);
+
+        var a = new Asm();
+        a.Op(Flint.Rt.Op.Int).I16(0).Op(Flint.Rt.Op.SetLocal).U8(1);
+        a.Op(Flint.Rt.Op.Int).I16(0).Op(Flint.Rt.Op.SetLocal).U8(2);
+        int top = a.At();
+        a.Op(Flint.Rt.Op.Local).U8(1).Op(Flint.Rt.Op.Local).U8(0).Op(Flint.Rt.Op.LtInt);
+        int exit = a.Op(Flint.Rt.Op.JumpIfFalse).Hole();
+        a.Op(Flint.Rt.Op.Local).U8(2).Op(Flint.Rt.Op.Local).U8(1).Op(Flint.Rt.Op.AddInt).Op(Flint.Rt.Op.SetLocal).U8(2);
+        a.Op(Flint.Rt.Op.Local).U8(1).Op(Flint.Rt.Op.Int).I16(1).Op(Flint.Rt.Op.AddInt).Op(Flint.Rt.Op.SetLocal).U8(1);
+        a.JumpTo(top);
+        a.Patch(exit);
+        a.Op(Flint.Rt.Op.Local).U8(2).Op(Flint.Rt.Op.Return);
+
+        rt.code = a.Done();
+        rt.fns = new[]{ new Flint.Rt.Rt.FnDef(
+            new[]{ new Flint.Rt.Rt.Arity(1, false, 3, 0, rt.code.Length) }, 0) };
+        long f = rt.MakeClosure(0, System.Array.Empty<long>());
+        long got = rt.Call(f, new[]{ Flint.Rt.Val.Fixnum(1000) });
+        long want = 1000L * 999 / 2;
+        if (Flint.Rt.Val.AsFixnum(got) != want)
+            throw new System.Exception($"loop gave {Flint.Rt.Val.AsFixnum(got)} want {want}");
+        Console.WriteLine($"  ok   the interpreter runs a counting loop ({Flint.Rt.Val.AsFixnum(got):N0} in {rt.steps:N0} steps)");
+
+        var b = new Asm();
+        b.Op(Flint.Rt.Op.Closure).U16(0).U8(0);
+        b.Op(Flint.Rt.Op.Local).U8(0);
+        b.Op(Flint.Rt.Op.Call).U8(1);
+        b.Op(Flint.Rt.Op.Int).I16(1).Op(Flint.Rt.Op.AddInt).Op(Flint.Rt.Op.Return);
+        byte[] second = b.Done();
+        int off = rt.code.Length;
+        var both = new byte[off + second.Length];
+        System.Array.Copy(rt.code, both, off);
+        System.Array.Copy(second, 0, both, off, second.Length);
+        rt.code = both;
+        rt.fns = new[]{
+            new Flint.Rt.Rt.FnDef(new[]{ new Flint.Rt.Rt.Arity(1, false, 3, 0, off) }, 0),
+            new Flint.Rt.Rt.FnDef(new[]{ new Flint.Rt.Rt.Arity(1, false, 2, off, second.Length) }, 0),
+        };
+        long g = rt.MakeClosure(1, System.Array.Empty<long>());
+        long got2 = rt.Call(g, new[]{ Flint.Rt.Val.Fixnum(100) });
+        if (Flint.Rt.Val.AsFixnum(got2) != 100L * 99 / 2 + 1)
+            throw new System.Exception($"nested call gave {Flint.Rt.Val.AsFixnum(got2)}");
+        Console.WriteLine("  ok     ... and a call and return across frames");
+
+        // The comparison is EXPLICIT: 0 is truthy in Clojure, so branching on
+        // `n` itself would never terminate.
+        var c = new Asm();
+        c.Op(Flint.Rt.Op.Local).U8(0).Op(Flint.Rt.Op.Int).I16(0).Op(Flint.Rt.Op.GtInt);
+        int done = c.Op(Flint.Rt.Op.JumpIfFalse).Hole();
+        c.Op(Flint.Rt.Op.Self);
+        c.Op(Flint.Rt.Op.Local).U8(0).Op(Flint.Rt.Op.Int).I16(1).Op(Flint.Rt.Op.SubInt);
+        c.Op(Flint.Rt.Op.TailCall).U8(1);
+        c.Patch(done);
+        c.Op(Flint.Rt.Op.Local).U8(0).Op(Flint.Rt.Op.Return);
+        rt.code = c.Done();
+        rt.fns = new[]{ new Flint.Rt.Rt.FnDef(
+            new[]{ new Flint.Rt.Rt.Arity(1, false, 2, 0, rt.code.Length) }, 0) };
+        long h = rt.MakeClosure(0, System.Array.Empty<long>());
+        int before = rt.frames.Count;
+        long got3 = rt.Call(h, new[]{ Flint.Rt.Val.Fixnum(200_000) });
+        if (Flint.Rt.Val.AsFixnum(got3) != 0)
+            throw new System.Exception($"tail recursion gave {Flint.Rt.Val.AsFixnum(got3)}");
+        if (rt.frames.Count != before)
+            throw new System.Exception($"frames leaked: {before} -> {rt.frames.Count}");
+        Console.WriteLine("  ok     ... and 200,000 tail calls in constant frame space");
+    }
+
+    /// A tiny assembler, the same shape as the Rust tests'.
+    private sealed class Asm {
+        private byte[] b = new byte[64];
+        private int n;
+        public int At() => n;
+        private void Put(int x) {
+            if (n == b.Length) System.Array.Resize(ref b, n * 2);
+            b[n++] = (byte) x;
+        }
+        public Asm Op(int o) { Put(o); return this; }
+        public Asm U8(int v) { Put(v); return this; }
+        public Asm U16(int v) { Put(v & 0xFF); Put((v >> 8) & 0xFF); return this; }
+        public Asm I16(int v) => U16(v & 0xFFFF);
+        public int Hole() { int h = n; Put(0); Put(0); return h; }
+        public void Patch(int h) { int o = n - (h + 2); b[h] = (byte)(o & 0xFF); b[h + 1] = (byte)((o >> 8) & 0xFF); }
+        public void JumpTo(int target) { Put(Flint.Rt.Op.Jump); int o = target - (n + 2); Put(o & 0xFF); Put((o >> 8) & 0xFF); }
+        public byte[] Done() { var outb = new byte[n]; System.Array.Copy(b, outb, n); return outb; }
     }
 
     /// The collector, under pressure, with the invariant asserted rather than

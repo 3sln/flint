@@ -66,9 +66,122 @@ public class RtFoundation {
             }
             double ns = best / 3_000_000.0;
             gcStress();
+            interpreter();
             System.out.printf("    3,000,000 iterations, best of 7: %.2f ns/iteration%n", ns);
             System.out.printf("    against 85 ns boxed on the current port -- %.0fx%n", 85.0 / ns);
         }
+    }
+
+    /// The interpreter, on hand-assembled bytecode.
+    ///
+    /// Hand-assembled rather than loaded from an image, so this tests the
+    /// DISPATCH LOOP and nothing else -- the image loader and the builtins are
+    /// not ported yet, and a failure here would otherwise have three possible
+    /// causes instead of one.
+    ///
+    /// The answers are the ones the Rust gives for the same bytes, which is the
+    /// point: `runtime/tests/vm.rs` assembles the same shapes.
+    static void interpreter() {
+        Rt rt = new Rt(256 * 1024, 16L * 1024 * 1024);
+
+        // fn 0: (fn [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (+ acc i)) acc)))
+        // as a self tail call, which is what `recur` compiles to.
+        //
+        //   locals: 0 = n, 1 = i, 2 = acc
+        Asm a = new Asm();
+        a.op(Op.INT).i16(0).op(Op.SET_LOCAL).u8(1);      // i = 0
+        a.op(Op.INT).i16(0).op(Op.SET_LOCAL).u8(2);      // acc = 0
+        int top = a.at();
+        a.op(Op.LOCAL).u8(1).op(Op.LOCAL).u8(0).op(Op.LT_INT);
+        int exit = a.op(Op.JUMP_IF_FALSE).hole();
+        a.op(Op.LOCAL).u8(2).op(Op.LOCAL).u8(1).op(Op.ADD_INT).op(Op.SET_LOCAL).u8(2);
+        a.op(Op.LOCAL).u8(1).op(Op.INT).i16(1).op(Op.ADD_INT).op(Op.SET_LOCAL).u8(1);
+        a.jumpTo(top);
+        a.patch(exit);
+        a.op(Op.LOCAL).u8(2).op(Op.RETURN);
+
+        rt.code = a.done();
+        rt.fns = new Rt.FnDef[]{
+            new Rt.FnDef(new Rt.Arity[]{ new Rt.Arity(1, false, 3, 0, rt.code.length) }, 0)
+        };
+        long f = rt.makeClosure(0, new long[0]);
+        long got = rt.call(f, new long[]{ Val.fixnum(1000) });
+        long want = 1000L * 999 / 2;
+        if (Val.asFixnum(got) != want)
+            throw new AssertionError("loop gave " + Val.asFixnum(got) + " want " + want);
+        System.out.printf("  ok   the interpreter runs a counting loop (%,d in %,d steps)%n",
+                          Val.asFixnum(got), rt.steps);
+
+        // A CALL and a RETURN across frames, so `fp`/`retTo` are exercised
+        // rather than assumed: fn 1 calls fn 0 and adds one.
+        Asm b = new Asm();
+        b.op(Op.CLOSURE).u16(0).u8(0);
+        b.op(Op.LOCAL).u8(0);
+        b.op(Op.CALL).u8(1);
+        b.op(Op.INT).i16(1).op(Op.ADD_INT).op(Op.RETURN);
+        byte[] second = b.done();
+        byte[] both = new byte[rt.code.length + second.length];
+        System.arraycopy(rt.code, 0, both, 0, rt.code.length);
+        System.arraycopy(second, 0, both, rt.code.length, second.length);
+        int off = rt.code.length;
+        rt.code = both;
+        rt.fns = new Rt.FnDef[]{
+            new Rt.FnDef(new Rt.Arity[]{ new Rt.Arity(1, false, 3, 0, off) }, 0),
+            new Rt.FnDef(new Rt.Arity[]{ new Rt.Arity(1, false, 2, off, second.length) }, 0),
+        };
+        long g = rt.makeClosure(1, new long[0]);
+        long got2 = rt.call(g, new long[]{ Val.fixnum(100) });
+        if (Val.asFixnum(got2) != 100L * 99 / 2 + 1)
+            throw new AssertionError("nested call gave " + Val.asFixnum(got2));
+        System.out.println("  ok     ... and a call and return across frames");
+
+        // A TAIL CALL runs in constant space. Without dropping the frame first
+        // this overflows; with it, the frame stack never exceeds two.
+        // `(fn rec [n] (if (> n 0) (rec (dec n)) n))`.
+        //
+        // The comparison is EXPLICIT: 0 is truthy in Clojure, so branching on
+        // `n` itself would never terminate. That is not a detail of this test --
+        // it is the rule the whole language rests on, and the first version of
+        // this bytecode got it wrong and span.
+        Asm c = new Asm();
+        c.op(Op.LOCAL).u8(0).op(Op.INT).i16(0).op(Op.GT_INT);
+        int done = c.op(Op.JUMP_IF_FALSE).hole();
+        c.op(Op.SELF);
+        c.op(Op.LOCAL).u8(0).op(Op.INT).i16(1).op(Op.SUB_INT);
+        c.op(Op.TAIL_CALL).u8(1);
+        c.patch(done);
+        c.op(Op.LOCAL).u8(0).op(Op.RETURN);
+        rt.code = c.done();
+        rt.fns = new Rt.FnDef[]{
+            new Rt.FnDef(new Rt.Arity[]{ new Rt.Arity(1, false, 2, 0, rt.code.length) }, 0)
+        };
+        long h = rt.makeClosure(0, new long[0]);
+        int before = rt.frames.size();
+        long got3 = rt.call(h, new long[]{ Val.fixnum(200_000) });
+        if (Val.asFixnum(got3) != 0)
+            throw new AssertionError("tail recursion gave " + Val.asFixnum(got3));
+        if (rt.frames.size() != before)
+            throw new AssertionError("frames leaked: " + before + " -> " + rt.frames.size());
+        System.out.println("  ok     ... and 200,000 tail calls in constant frame space");
+    }
+
+    /// A tiny assembler, the same shape as the Rust tests'.
+    static final class Asm {
+        private byte[] b = new byte[64];
+        private int n = 0;
+        int at() { return n; }
+        private void put(int x) {
+            if (n == b.length) { byte[] g = new byte[n * 2]; System.arraycopy(b, 0, g, 0, n); b = g; }
+            b[n++] = (byte) x;
+        }
+        Asm op(int o) { put(o); return this; }
+        Asm u8(int v) { put(v); return this; }
+        Asm u16(int v) { put(v & 0xFF); put((v >> 8) & 0xFF); return this; }
+        Asm i16(int v) { return u16(v & 0xFFFF); }
+        int hole() { int h = n; put(0); put(0); return h; }
+        void patch(int h) { int off = n - (h + 2); b[h] = (byte) (off & 0xFF); b[h + 1] = (byte) ((off >> 8) & 0xFF); }
+        void jumpTo(int target) { put(Op.JUMP); int off = target - (n + 2); put(off & 0xFF); put((off >> 8) & 0xFF); }
+        byte[] done() { byte[] out = new byte[n]; System.arraycopy(b, 0, out, 0, n); return out; }
     }
 
     /// The collector, under pressure, with the invariant asserted rather than
