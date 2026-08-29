@@ -204,9 +204,30 @@ fi
 # It reports how far it gets: the standard library is not ported yet, and
 # "loaded and then wanted `flint/num->str`" is the useful answer while that is
 # true. A silent pass would be the misleading one.
+mkdir -p out/rt-probe
+cat > out/rt-probe/probe.cljc <<'PROBE'
+(ns probe)
+(defn- add [a b] (+ a b))
+(defn- run [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (add acc i)) acc)))
+(defn main [_] (run 1000))
+PROBE
+./bin/flint :src out/rt-probe :fn probe/main --emit-image \
+  :out out/rt-probe/probe.img >/dev/null 2>&1
+# The NATIVE answer for the same program, so the check is agreement rather
+# than "it did not throw".
+rt_want="$(./target/release/flint run :path out/rt-probe :fn probe/main 2>&1 || true)"
+"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/rt-probe/probe.img "$rt_want" 2>&1 \
+  | sed 's/$/ [jvm]/'
+"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/rt-probe/probe.img "$rt_want" >/dev/null 2>&1 \
+  || { echo "  FAIL the ported runtime disagrees with the native one [jvm]"; exit 1; }
+
+# And on a program the library is not ported far enough for yet, which reports
+# HOW FAR it gets. While that is true it is the useful answer; a silent pass
+# would be the misleading one.
 ./bin/flint :src runtimes/conform :fn numbers/main --emit-image \
   :out out/conform/rt-probe.img >/dev/null 2>&1
-"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/conform/rt-probe.img 2>&1 | sed 's/$/ [jvm]/'
+"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/conform/rt-probe.img 2>&1 \
+  | grep -v "^  ok   loads" | sed 's/$/ [jvm]/'
 
 # ONE CONFIG, THREE RUNTIMES. `:optimize [perf]` cannot be carried the same way
 # on any two of them: on wasm it changes the ARTIFACT -- a different runtime

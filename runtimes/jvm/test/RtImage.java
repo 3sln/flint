@@ -15,6 +15,10 @@ import java.nio.file.*;
 /// pass here would be the misleading one.
 public class RtImage {
   public static void main(String[] a) throws Exception {
+    // `a[1]`, when given, is the answer the NATIVE runtime produced for this
+    // same image. That is the whole point: not that the port runs, but that it
+    // agrees. Without it this test can only report that nothing threw.
+    String want = a.length > 1 ? a[1] : null;
     Rt rt = new Rt(1024 * 1024, 64L * 1024 * 1024);
     Img.Loaded img = Img.load(rt, Files.readAllBytes(Path.of(a[0])));
     if (img == null) { System.out.println("  FAIL not a flint image, or a version this runtime does not speak"); System.exit(1); }
@@ -26,8 +30,18 @@ public class RtImage {
     long f = rt.makeClosure(img.entry, new long[0]);
     try {
       long v = rt.call(f, new long[]{ Val.NIL });
-      System.out.println("  ok   main -> " + (Val.isFixnum(v) ? String.valueOf(Val.asFixnum(v))
-                                                              : "0x" + Long.toHexString(v)));
+      String shown = Val.isFixnum(v) ? String.valueOf(Val.asFixnum(v))
+                   : Str.isString(rt, v) ? Str.text(rt, v)
+                   : Val.isNil(v) ? "nil"
+                   : "0x" + Long.toHexString(v);
+      if (want != null && !want.equals(shown)) {
+        System.out.println("  FAIL the ported runtime DISAGREES with the native one");
+        System.out.println("        native " + want);
+        System.out.println("        ported " + shown);
+        System.exit(1);
+      }
+      System.out.println("  ok   main -> " + shown
+                         + (want != null ? "  (the native runtime agrees)" : ""));
     } catch (UnsupportedOperationException e) {
       System.out.println("  .. as far as: " + e.getMessage());
     }
