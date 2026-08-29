@@ -37,6 +37,12 @@ public final class Rt {
 
     public long steps;
 
+    /// The builtins this image imports, resolved BY NAME. The slots in an image
+    /// belong to the module it was linked against and mean nothing here, which
+    /// is what makes an image portable between hosts at all.
+    public Builtins.Fn[] natives = new Builtins.Fn[0];
+    public String[] nativeNames = new String[0];
+
     public Rt(long nurseryBytes, long maxHeap) {
         this.gc = new Gc(nurseryBytes, maxHeap);
         roots.consts = consts;
@@ -174,6 +180,8 @@ public final class Rt {
                 case Op.SET_LOCAL -> { roots.stack[fp + u8(ip)] = vpop(); ip += 1; }
                 case Op.SET_LOCAL_KEEP -> { roots.stack[fp + u8(ip)] = roots.stack[roots.stackTop - 1]; ip += 1; }
                 case Op.SELF -> vpush(roots.stack[f.retTo]);
+                case Op.VAR -> { vpush(roots.globals[u16(ip)]); ip += 2; }
+                case Op.SET_VAR -> { roots.globals[u16(ip)] = vpop(); ip += 2; }
                 case Op.UPVAL -> { vpush(slot(roots.stack[f.retTo], 1 + u8(ip))); ip += 1; }
                 case Op.POP -> roots.stackTop -= 1;
                 case Op.POP_N -> { roots.stackTop -= u8(ip); ip += 1; }
@@ -238,11 +246,62 @@ public final class Rt {
                     if (frames.size() <= baseDepth) return vpop();
                     continue;
                 }
+                case Op.TYPE_P -> {
+                    int c = u8(ip); ip += 1;
+                    roots.stack[roots.stackTop - 1] = Val.bool(typeP(c, roots.stack[roots.stackTop - 1]));
+                }
+                case Op.NATIVE -> {
+                    int idx = u16(ip); int argc = u8(ip + 2); ip += 3;
+                    f.ip = ip;
+                    int at = roots.stackTop - argc;
+                    Builtins.Fn fn = natives[idx];
+                    if (fn == null) {
+                        throw new UnsupportedOperationException(
+                            "this runtime does not carry the builtin `" + nativeNames[idx] + "`");
+                    }
+                    long v = fn.apply(this, at, argc);
+                    roots.stackTop = at;
+                    vpush(v);
+                }
                 default -> throw new UnsupportedOperationException(
                     "opcode 0x" + Integer.toHexString(opcode) + " is not ported yet");
             }
             f.ip = ip;
         }
+    }
+
+    /// `flint.types/code`'s canonical table, from `vm.rs`. The numbers are the
+    /// contract between the compiler and every runtime, so they are written out
+    /// rather than derived: a port that renumbered one of these would compile
+    /// and answer wrongly.
+    boolean typeP(int code, long v) {
+        return switch (code) {
+            case 1 -> Val.isFixnum(v);
+            case 2 -> Val.isDouble(v);
+            case 3 -> Val.isFixnum(v) || Val.isDouble(v);
+            case 4 -> Str.isString(this, v);
+            case 5 -> Val.isInlineKw(v) || isHeapTy(v, TY_KW);
+            case 6 -> isHeapTy(v, TY_SYM);
+            case 7 -> v == Val.TRUE || v == Val.FALSE;
+            case 8 -> isHeapTy(v, TY_VEC);
+            case 9 -> isHeapTy(v, TY_ARRAYMAP) || isHeapTy(v, TY_HASHMAP);
+            case 10 -> isHeapTy(v, TY_SET);
+            case 11 -> isSeq(v);
+            case 12 -> isHeapTy(v, TY_CLOSURE) || isHeapTy(v, TY_NATIVEFN);
+            case 13 -> Val.isNil(v);
+            default -> isHeapTy(v, TY_VEC) || isSeq(v);
+        };
+    }
+
+    boolean isHeapTy(long v, int t) {
+        return Val.isHeap(v) && ty(gc.sp, Val.asHeap(v)) == t;
+    }
+
+    boolean isSeq(long v) {
+        if (!Val.isHeap(v)) return false;
+        int t = ty(gc.sp, Val.asHeap(v));
+        return t == TY_CONS || t == TY_EMPTY_LIST || t == TY_LAZYSEQ
+            || t == TY_VECSEQ || t == TY_STRSEQ || t == TY_RANGE;
     }
 
     /// Call `closure` with `args` from outside the interpreter.

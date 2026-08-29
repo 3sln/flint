@@ -200,6 +200,14 @@ if [ -n "$CLR" ]; then
   fi
 fi
 
+# The ported runtime on a REAL image, rather than on hand-assembled bytecode.
+# It reports how far it gets: the standard library is not ported yet, and
+# "loaded and then wanted `flint/num->str`" is the useful answer while that is
+# true. A silent pass would be the misleading one.
+./bin/flint :src runtimes/conform :fn numbers/main --emit-image \
+  :out out/conform/rt-probe.img >/dev/null 2>&1
+"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/conform/rt-probe.img 2>&1 | sed 's/$/ [jvm]/'
+
 # ONE CONFIG, THREE RUNTIMES. `:optimize [perf]` cannot be carried the same way
 # on any two of them: on wasm it changes the ARTIFACT -- a different runtime
 # binary, compiled arities emitted into the module -- while on the JVM and the

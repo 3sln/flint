@@ -77,6 +77,35 @@ public final class Val {
     /// come back as part of the answer.
     public static long asHeap(long v) { return v & PAYLOAD; }
 
+    /// A string of five bytes or fewer lives IN the value, not on the heap.
+    ///
+    /// Five, because the payload is 48 bits: 8 for the length and 40 for the
+    /// bytes. That covers most keywords and short strings, which is most of
+    /// them -- so a keyword comparison is a single 64-bit compare and allocates
+    /// nothing, which is what makes maps keyed by keywords cheap.
+    public static final int INLINE_MAX = 5;
+
+    static long inlineOf(long tag, byte[] bytes) {
+        long payload = 0;
+        for (int i = 0; i < bytes.length; i++) payload |= (bytes[i] & 0xFFL) << (8 * i);
+        return (tag << 48) | ((long) bytes.length << 40) | payload;
+    }
+
+    public static boolean isInlineStr(long v) { return tag(v) == TAG_STR; }
+    public static boolean isInlineKw(long v) { return tag(v) == TAG_KW; }
+
+    public static long inlineStr(byte[] b) { return inlineOf(TAG_STR, b); }
+    public static long inlineKw(byte[] b) { return inlineOf(TAG_KW, b); }
+
+    public static int inlineLen(long v) { return (int) ((v >>> 40) & 0xFF); }
+
+    public static byte[] inlineBytes(long v) {
+        int n = inlineLen(v);
+        byte[] out = new byte[n];
+        for (int i = 0; i < n; i++) out[i] = (byte) ((v >>> (8 * i)) & 0xFF);
+        return out;
+    }
+
     public static boolean isNil(long v) { return v == NIL; }
     public static boolean isTrue(long v) { return v == TRUE; }
     public static boolean isFalse(long v) { return v == FALSE; }

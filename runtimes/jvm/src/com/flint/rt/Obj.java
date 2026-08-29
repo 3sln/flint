@@ -46,6 +46,9 @@ public final class Obj {
     public static final int TY_SET = 19;
     public static final int TY_MAPENTRY = 20;
     public static final int TY_CLOSURE = 21;
+    public static final int TY_NATIVEFN = 22;   // [id, name]
+    public static final int TY_VAR = 23;
+    public static final int TY_ATOM = 24;
     public static final int TY_RAW = 35;
 
     public static final int VALS = 0, STR = 1, RAW = 2;
@@ -107,6 +110,18 @@ public final class Obj {
         int w = sp.readU32(a);
         sp.writeU32(a, m ? (w | (1 << 19)) : (w & ~(1 << 19)));
     }
+
+    /// Is every byte of this string ASCII? A byte index is then a code-point
+    /// index, which is what makes `subs` and `nth` O(1) instead of a walk.
+    public static boolean strIsAscii(Space sp, long a) { return (sp.readU32(a) & (1 << 18)) != 0; }
+
+    public static void setStrAscii(Space sp, long a, boolean v) {
+        int w = sp.readU32(a);
+        sp.writeU32(a, v ? (w | (1 << 18)) : (w & ~(1 << 18)));
+    }
+
+    public static int strHash(Space sp, long a) { return sp.readU32(a + HDR); }
+    public static void setStrHash(Space sp, long a, int h) { sp.writeU32(a + HDR, h); }
 
     public static long slotAddr(long a, int i) { return a + HDR + (long) i * 8; }
     public static long slot(Space sp, long a, int i) { return sp.readU64(slotAddr(a, i)); }
