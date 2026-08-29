@@ -12,6 +12,7 @@ public static class Program {
         if (args.Length >= 2 && args[0] == "--flags") return Flags(args[1]);
         if (args.Length >= 1 && args[0] == "--rt-foundation") return RtFoundation();
         if (args.Length >= 1 && args[0] == "--rt-snapshot") return RtSnapshot();
+        if (args.Length >= 1 && args[0] == "--rt-hash") return RtHash();
         if (args.Length >= 2 && args[0] == "--rt-image")
             return RtImage(args[1], args.Length > 2 ? args[2] : null);
         if (args.Length >= 3 && args[0] == "--selfhost") return SelfHost(args[1], args[2]);
@@ -202,6 +203,74 @@ public static class Program {
         } catch (NotSupportedException e) {
             Console.WriteLine("  .. as far as: " + e.Message);
         }
+        return 0;
+    }
+
+
+    // ------------------------------------------------------------------
+    // The ported hash, against the numbers a REAL CLOJURE produced.
+    //
+    // These are not this implementation's own output recorded as a baseline --
+    // they are the values in `runtime/src/hash.rs`'s tests, which came out of
+    // `bb` 1.3.190 using `clojure.lang.Murmur3`. A test written the other way
+    // round would pass for any consistent-but-wrong hash.
+    //
+    // A mirror of the JVM's `RtHash.java`, printing the same lines so the gate
+    // can compare them.
+
+    static int hashFails;
+
+    static byte[] HB(string s) => System.Text.Encoding.UTF8.GetBytes(s);
+
+    static void HEq(string what, int got, int want) {
+        if (got != want) {
+            Console.WriteLine("  FAIL " + what + ": got " + got + ", clojure says " + want);
+            hashFails++;
+        }
+    }
+
+    private static int RtHash() {
+        HEq("(hash 0)", Flint.Rt.Hash.HashLong(0), 0);
+        HEq("(hash 1)", Flint.Rt.Hash.HashLong(1), 1392991556);
+        HEq("(hash -1)", Flint.Rt.Hash.HashLong(-1), 1651860712);
+        HEq("(hash 42)", Flint.Rt.Hash.HashLong(42), 1871679806);
+        HEq("(hash 12345678901234)", Flint.Rt.Hash.HashLong(12345678901234L), -1096982217);
+        HEq("(hash Long/MAX_VALUE)", Flint.Rt.Hash.HashLong(long.MaxValue), -2106506049);
+        HEq("(hash Long/MIN_VALUE)", Flint.Rt.Hash.HashLong(long.MinValue), 1366273829);
+        Console.WriteLine("  ok   longs hash as Clojure hashes them");
+
+        HEq("(hash 0.0)", Flint.Rt.Hash.HashDouble(0.0), 0);
+        HEq("(hash -0.0)", Flint.Rt.Hash.HashDouble(-0.0), 0);
+        HEq("(hash 1.0)", Flint.Rt.Hash.HashDouble(1.0), 1072693248);
+        HEq("(hash 1.5)", Flint.Rt.Hash.HashDouble(1.5), 1073217536);
+        HEq("(hash -2.75)", Flint.Rt.Hash.HashDouble(-2.75), -1073348608);
+        Console.WriteLine("  ok   doubles too, and -0.0 hashes as 0.0");
+
+        HEq("(hash \"\")", Flint.Rt.Hash.HashString(HB("")), 0);
+        HEq("(hash \"a\")", Flint.Rt.Hash.HashString(HB("a")), 1455541201);
+        HEq("(hash \"abc\")", Flint.Rt.Hash.HashString(HB("abc")), 74834163);
+        HEq("(hash \"hello, world\")", Flint.Rt.Hash.HashString(HB("hello, world")), 136167191);
+        HEq("(hash \"日本語\")", Flint.Rt.Hash.HashString(HB("日本語")), 1333041691);
+        Console.WriteLine("  ok   strings, including non-ASCII over UTF-16 units");
+
+        HEq("(hash 'a)", Flint.Rt.Hash.HashSymbol(null, HB("a")), -482876059);
+        HEq("(hash 'abc)", Flint.Rt.Hash.HashSymbol(null, HB("abc")), 408495850);
+        HEq("(hash 'foo/bar)", Flint.Rt.Hash.HashSymbol(HB("foo"), HB("bar")), 254379989);
+        HEq("(hash :a)", Flint.Rt.Hash.HashKeyword(null, HB("a")), -2123407586);
+        HEq("(hash :abc)", Flint.Rt.Hash.HashKeyword(null, HB("abc")), -1232035677);
+        HEq("(hash :foo/bar)", Flint.Rt.Hash.HashKeyword(HB("foo"), HB("bar")), -1386151538);
+        Console.WriteLine("  ok   symbols and keywords, namespace asymmetry included");
+
+        // A surrogate pair must count as TWO units. If it counted as one the
+        // string hash would still be stable and still be wrong, which is
+        // exactly the failure this case exists to catch.
+        int[] u = Flint.Rt.Hash.Utf16Test(HB("\U0001F600"));
+        HEq("an emoji is two UTF-16 units", u.Length, 2);
+        HEq("  high surrogate", u[0], 0xD83D);
+        HEq("  low surrogate", u[1], 0xDE00);
+        Console.WriteLine("  ok   an astral-plane character is a surrogate PAIR");
+
+        if (hashFails > 0) { Console.WriteLine("  " + hashFails + " failed"); return 1; }
         return 0;
     }
 

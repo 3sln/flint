@@ -240,6 +240,22 @@ fi
 # different nursery and the test asserts the addresses moved as well as that
 # the data survived. Checking only "the data is still there" would pass for a
 # live import that had quietly kept the old addresses.
+# The HASH, against the numbers a real Clojure produced. Its values are
+# observable from Clojure code, so a program ported to flint should get the
+# numbers it got before -- which makes this a compatibility check rather than a
+# self-consistency one, and the reason the expected values came out of `bb`
+# rather than out of this implementation.
+"$JDK/bin/java" -cp runtimes/jvm/classes RtHash > /tmp/flint-hash-jvm.out 2>&1 \
+  || { cat /tmp/flint-hash-jvm.out; echo "  FAIL the ported hash disagrees with Clojure [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' /tmp/flint-hash-jvm.out
+if [ -n "$CLR" ]; then
+  "$CLR" --rt-hash > /tmp/flint-hash-clr.out 2>&1 \
+    || { cat /tmp/flint-hash-clr.out; echo "  FAIL the ported hash disagrees with Clojure [clr]"; exit 1; }
+  sed 's/$/ [clr]/' /tmp/flint-hash-clr.out
+  cmp -s /tmp/flint-hash-jvm.out /tmp/flint-hash-clr.out \
+    || { echo "  FAIL the two ports hash differently"; exit 1; }
+fi
+
 "$JDK/bin/java" -cp runtimes/jvm/classes RtSnapshot > /tmp/flint-snap-jvm.out 2>&1 \
   || { cat /tmp/flint-snap-jvm.out; echo "  FAIL snapshots on the ported runtime [jvm]"; exit 1; }
 sed 's/$/ [jvm]/' /tmp/flint-snap-jvm.out
