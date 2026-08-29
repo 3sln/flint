@@ -754,12 +754,15 @@ impl Rt {
         out
     }
 
-    /// The system port, or nil when this sandbox was given none.
+    /// The system port. **Not reachable from guest code, and that is the point.**
     ///
-    /// Nil is a normal answer. A sandbox without a system port runs logic and
-    /// can ask the host for nothing -- which is what "confined" should mean by
-    /// default rather than something a host has to remember to arrange.
-    pub fn system_port(&mut self) -> Value {
+    /// It is not a capability the sandbox holds, it is the TRANSPORT the sandbox
+    /// is driven over: calls in arrive on it, and requests out -- for a
+    /// capability, for another port -- leave on it. Handing it to guest code
+    /// would make it ambient authority inside the sandbox, which is the thing
+    /// `doc/decisions/0022` and `0027` both exist to prevent. There is no
+    /// builtin that answers it; only the runtime looks it up.
+    pub(crate) fn system_port(&mut self) -> Value {
         let s = self.sched();
         if s.is_nil() {
             return NIL;

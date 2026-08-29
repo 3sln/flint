@@ -935,10 +935,9 @@
     send
     set-codec
     state
-    system
     with-open},
   :macros #{with-open},
-  :count 15},
+  :count 14},
  flint.port.edn
  {:file "lib/flint/port/edn.cljc",
   :present #{codec decode encode},

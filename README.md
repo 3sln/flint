@@ -1168,7 +1168,7 @@ claim fails the build.
 | `flint.data.json` | 3 | 0 | n/a | n/a |
 | `flint.data.xml` | 9 | 0 | n/a | n/a |
 | `flint.doc` | 11 | 0 | n/a | n/a |
-| `flint.port` | 15 | 1 | n/a | n/a |
+| `flint.port` | 14 | 1 | n/a | n/a |
 | `flint.port.edn` | 3 | 0 | n/a | n/a |
 | `flint.port.json` | 3 | 0 | n/a | n/a |
 | `flint.port.transit` | 3 | 0 | n/a | n/a |

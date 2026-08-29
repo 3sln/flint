@@ -154,25 +154,6 @@
 (defn label [p] (flint.rt/port-label p))
 (defn format-of [p] (flint.rt/port-format p))
 
-(defn system
-  "The SYSTEM port, or `nil` if this sandbox was given none
-  (`doc/decisions/0027`).
-
-  A sandbox does not make this port and cannot ask for one: the host owns it,
-  keeps the other end, and passes this one in at construction. Everything the
-  sandbox can ask the world for goes through it.
-
-  **`nil` is a normal answer, not a failure.** A sandbox constructed without a
-  system port runs its logic and can ask for nothing — which is what confined
-  should mean by default, rather than something a host has to remember to
-  withhold. Code that needs one should say so:
-
-      (if-let [sys (p/system)]
-        (serve sys)
-        (throw (ex-info \"this program needs a system port\" {})))"
-  []
-  (flint.rt/system-port))
-
 (defn port-id
   "The number the host knows this port by."
   [p]

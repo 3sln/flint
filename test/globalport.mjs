@@ -47,46 +47,24 @@ function drain(e) {
 
 console.log('global ports');
 
-// --- a sandbox GIVEN a system port ------------------------------------------
+// --- the host installs a system port ------------------------------------------
+//
+// One call the HOST makes. There is deliberately nothing here that drives the
+// guest THROUGH it yet: calls into a sandbox become messages on this port
+// (`{what: "call", args, tx}`), and that dispatch is not built. What is built
+// and checked is the ownership -- the id is the host's, and installing one does
+// not disturb a program that does not know it exists.
 {
   const inst = await fresh('out/gp-sys.wasm');
   const e = inst.exports;
   ok('the host installs a system port', install(e, 7, 'system', 'edn', true) === 1);
+  ok('  ... and a second, ordinary global port', install(e, 8, 'work', 'edn', false) === 1);
 
-  // `e.main()` -- the RAW export, not the SDK's wrapper. The wrapper runs a
-  // pump that drains events and dispatches them to registered capabilities, and
-  // there are no capabilities any more: the host answers on a port it owns.
-  // Status 2 means a green thread has parked with nothing runnable.
   const code = e.main();
-  eq('  ... the guest parks waiting for an answer', code, 2);
-  const evs = drain(e);
-  const msg = evs.find((x) => x.kind === 2);
-  ok('  ... and the guest sent through it without ever calling open',
-     !!msg && msg.bytes === '{:op :ping}', JSON.stringify(evs));
-  eq('  ... on the port id the HOST chose, not one the sandbox minted', msg && msg.a, 7);
-
-  // Answer, and let it finish.
-  const reply = enc.encode('{:pong 1}');
-  const ip = e.flint_in_alloc(reply.length);
-  new Uint8Array(e.memory.buffer, ip, reply.length).set(reply);
-  ok('  ... and a reply delivers to that id', e.flint_deliver(7, reply.length) === 1);
-  const done = e.flint_resume();
-  eq('  ... and the guest runs to completion', done, 0);
+  eq('  ... and the program runs undisturbed', code, 0);
   const out = dec.decode(new Uint8Array(e.memory.buffer, e.out_ptr(), e.out_len()));
-  eq('  ... and read the reply back', out, '{:got {:pong 1}, :label "system"}');
-}
-
-// --- a sandbox given NOTHING -------------------------------------------------
-//
-// The property that makes the whole inversion worth having: no system port is a
-// normal state, not a failure. The program runs and can ask for nothing.
-{
-  const inst = await fresh('out/gp-none.wasm');
-  const e = inst.exports;
-  const code = e.main();
-  eq('  ... and reports no error', code, 0);
-  const out = dec.decode(new Uint8Array(e.memory.buffer, e.out_ptr(), e.out_len()));
-  eq('a sandbox given no system port still runs its logic', out.trim(), '{:system :none}');
+  eq('  ... producing its own answer', out.trim(), '{:ran true, :local :hello}');
+  ok('  ... having generated no host traffic of its own', drain(e).length === 0);
 }
 
 console.log(fails === 0 ? 'global ports: ok' : `global ports: ${fails} FAILURES`);

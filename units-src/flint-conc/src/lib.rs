@@ -220,17 +220,6 @@ builtin!(flint_b_port_format, b_port_format, |rt, a, n| {
     rt.slot(p, conc::PT_FORMAT)
 });
 
-/// The SYSTEM port, or nil (`doc/decisions/0027`).
-///
-/// Nil is a normal answer and the reason this is a builtin rather than a
-/// guaranteed value: a sandbox the host gave no system port to still runs, it
-/// just cannot ask for anything. Confined by construction rather than by the
-/// host remembering to withhold something.
-builtin!(flint_b_system_port, b_system_port, |rt, a, n| {
-    let _ = (a, n);
-    rt.system_port()
-});
-
 builtin!(flint_b_port_id, b_port_id, |rt, a, n| {
     let _ = n;
     let p = arg(rt, a, 0);
@@ -292,7 +281,6 @@ pub const CATALOGUE: &[(&str, &str)] = &[
     ("flint/port-label", "flint_b_port_label"),
     ("flint/port-host?", "flint_b_port_host_p"),
     ("flint/port-id", "flint_b_port_id"),
-    ("flint/system-port", "flint_b_system_port"),
     ("flint/port-format", "flint_b_port_format"),
     ("flint/port-opts", "flint_b_port_opts"),
     ("flint/set-port-opts", "flint_b_set_port_opts"),

@@ -20,18 +20,38 @@
 
 ;; Asks for the system port and uses it. Nothing here names a capability, and
 ;; nothing here calls `open`.
-(src! "sys"
-      (str "(ns sys (:require [flint.port :as p] [flint.port.edn :as edn]))\n"
-           "(defn main [_]\n"
-           "  (if-let [s (p/system)]\n"
-           "    (do (p/set-codec s edn/codec)\n"
-           "        (p/send s {:op :ping})\n"
-           "        (pr-str {:got (p/receive s) :label (p/label s)}))\n"
-           "    (pr-str {:system :none})))"))
-(build! "sys" "out/gp-sys.wasm")
+;; The system port is the TRANSPORT the sandbox is driven over, not a capability
+;; the sandbox holds. Guest code cannot name it, and this is the check: a
+;; program that tries must not compile.
+;;
+;; Asserted as a compile failure rather than by reading the source, because
+;; "there is no such function" is only true while nobody adds one back. It was
+;; briefly reachable as `flint.port/system`, and that was wrong for the reason
+;; `0022` gives about capabilities: authority is never something the confined
+;; thing can name for itself.
+(src! "reach"
+      (str "(ns reach (:require [flint.port :as p]))\n"
+           "(defn main [_] (pr-str (p/system)))"))
+(let [r (sh "./bin/flint" ":src" d ":fn" "reach/main" ":out" "out/gp-reach.wasm")]
+  (if (and (not (zero? (:exit r)))
+           (str/includes? (:all r) "unable to resolve"))
+    (println "  ok   guest code cannot name the system port")
+    (do (println "  FAIL guest code can still name the system port\n       " (:all r))
+        (System/exit 1))))
 
-;; The same program, and the host gives it nothing. It must still RUN.
-(build! "sys" "out/gp-none.wasm")
+;; A program that uses ports -- a LOCAL channel between two green threads, which
+;; is what a sandbox can still make for itself. It must be undisturbed by the
+;; host installing global ports it cannot see.
+;;
+;; It has to mention ports at all, or only-reachable-code-ships is right to
+;; leave the whole port ABI out and there is nothing for the host to call.
+(src! "sys"
+      (str "(ns sys (:require [flint.port :as p] [flint.thread :as t]))\n"
+           "(defn main [_]\n"
+           "  (let [[tx rx] (p/channel 1 \"local\")]\n"
+           "    (t/spawn (fn [] (p/send tx :hello)))\n"
+           "    (pr-str {:ran true :local (p/receive rx)})))"))
+(build! "sys" "out/gp-sys.wasm")
 
 (let [r (sh "node" "test/globalport.mjs")]
   (print (:all r)) (flush)
