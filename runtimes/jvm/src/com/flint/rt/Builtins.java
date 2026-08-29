@@ -114,6 +114,49 @@ public final class Builtins {
         def("flint/opaque-label", (rt, at, n) -> Val.NIL);
         def("meta", (rt, at, n) -> Val.NIL);
 
+        def("count", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (Val.isNil(v)) return Val.fixnum(0);
+            if (rt.isHeapTy(v, TY_VEC)) return Val.fixnum(Vec.count(rt, v));
+            if (Str.isString(rt, v)) return Val.fixnum(Str.byteLen(rt, v));
+            if (rt.isSeq(v)) return Val.fixnum(Seqs.count(rt, v));
+            throw new UnsupportedOperationException("count on this needs more of the data structures");
+        });
+        def("nth", (rt, at, n) -> {
+            long v = rt.vat(at);
+            int i = (int) Val.asFixnum(rt.vat(at + 1));
+            if (rt.isHeapTy(v, TY_VEC)) {
+                long got = Vec.nth(rt, v, i);
+                if (got != Val.NOT_FOUND) return got;
+                if (n > 2) return rt.vat(at + 2);
+                throw new IndexOutOfBoundsException("index " + i + " out of range");
+            }
+            throw new UnsupportedOperationException("nth on this needs more of the data structures");
+        });
+        def("conj", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (rt.isHeapTy(v, TY_VEC)) {
+                long acc = v;
+                for (int i = 1; i < n; i++) acc = Vec.conj(rt, acc, rt.vat(at + i));
+                return acc;
+            }
+            // `conj` on a SEQ prepends, where on a vector it appends. That
+            // asymmetry is Clojure's and is about where the collection is cheap
+            // to grow, not about consistency.
+            if (Val.isNil(v) || rt.isSeq(v)) {
+                long acc = Val.isNil(v) ? Seqs.emptyList(rt) : v;
+                for (int i = 1; i < n; i++) acc = Seqs.cons(rt, rt.vat(at + i), acc);
+                return acc;
+            }
+            throw new UnsupportedOperationException("conj on this needs more of the data structures");
+        });
+
+        def("seq", (rt, at, n) -> Seqs.seq(rt, rt.vat(at)));
+        def("first", (rt, at, n) -> Seqs.first(rt, rt.vat(at)));
+        def("next", (rt, at, n) -> Seqs.next(rt, rt.vat(at)));
+        def("rest", (rt, at, n) -> Seqs.rest(rt, rt.vat(at)));
+        def("cons", (rt, at, n) -> Seqs.cons(rt, rt.vat(at), rt.vat(at + 1)));
+
         def("=", (rt, at, n) -> {
             for (int i = 1; i < n; i++) if (!eq(rt, rt.vat(at), rt.vat(at + i))) return Val.FALSE;
             return Val.TRUE;
@@ -156,9 +199,17 @@ public final class Builtins {
             throw new UnsupportedOperationException(
                 "comparing a heap keyword needs the intern tables ported");
         }
+        if (rt.isHeapTy(a, TY_VEC) && rt.isHeapTy(b, TY_VEC)) {
+            int n = Vec.count(rt, a);
+            if (n != Vec.count(rt, b)) return false;
+            for (int i = 0; i < n; i++) {
+                if (!eq(rt, Vec.nth(rt, a, i), Vec.nth(rt, b, i))) return false;
+            }
+            return true;
+        }
         if (Val.isHeap(a) || Val.isHeap(b)) {
             throw new UnsupportedOperationException(
-                "= on collections needs the data structures ported");
+                "= on this collection needs more of the data structures ported");
         }
         return false;
     }

@@ -129,10 +129,23 @@ public final class Rt {
         }
         int fp = calleeAt + 1;
         if (a.variadic) {
-            // Fold the surplus into a list in the last fixed slot. Not built
-            // until `seqs.rs` is ported; refused loudly rather than silently
-            // producing the wrong shape.
-            throw new UnsupportedOperationException("variadic arities need seqs.rs ported");
+            // Fold the surplus into a list in the last fixed slot. A SEQ, not a
+            // vector: `clojure.core/list` is `[& xs] xs`, so a vector here makes
+            // `(list 1 2)` print as `[1 2]`.
+            int extra = argc - a.argc;
+            int mk = mark();
+            for (int i = 0; i < extra; i++) push(roots.stack[fp + a.argc + i]);
+            long restv = extra == 0 ? Val.NIL : Seqs.fromRoots(this, mk, extra);
+            popTo(mk);
+            vreserve(a.nlocals + 8);
+            roots.stack[fp + a.argc] = restv;
+            for (int i = a.argc + 1; i < a.nlocals; i++) roots.stack[fp + i] = Val.NIL;
+            roots.stackTop = fp + a.nlocals;
+            Frame vf = new Frame();
+            vf.fp = fp; vf.ip = a.code; vf.end = a.code + a.len;
+            vf.retTo = calleeAt; vf.handlers = handlers.size();
+            frames.add(vf);
+            return true;
         }
         vreserve(a.nlocals + 8);
         for (int i = argc; i < a.nlocals; i++) roots.stack[fp + i] = Val.NIL;
@@ -216,11 +229,15 @@ public final class Rt {
                     f.ip = ip;                       // committed BEFORE entering
                     int calleeAt = roots.stackTop - argc - 1;
                     long callee = roots.stack[calleeAt];
-                    if (!Val.isHeap(callee) || ty(gc.sp, Val.asHeap(callee)) != TY_CLOSURE) {
-                        throw new UnsupportedOperationException("only closures are callable until builtins are ported");
+                    if (Val.isHeap(callee) && ty(gc.sp, Val.asHeap(callee)) == TY_CLOSURE) {
+                        if (!enter(callee, calleeAt, argc)) return Val.NIL;
+                        continue;
                     }
-                    if (!enter(callee, calleeAt, argc)) return Val.NIL;
-                    continue;
+                    // Everything else completes IN PLACE: a builtin held in a
+                    // var, a keyword used as a function, a collection looked up.
+                    long cv = callValue(calleeAt, argc);
+                    roots.stackTop = calleeAt;
+                    vpush(cv);
                 }
                 case Op.TAIL_CALL -> {
                     int argc = u8(ip); ip += 1;
@@ -246,6 +263,18 @@ public final class Rt {
                     if (frames.size() <= baseDepth) return vpop();
                     continue;
                 }
+                case Op.VECTOR -> {
+                    int nv = u16(ip); ip += 2;
+                    // The elements are already on the VALUE stack; they are
+                    // moved to the shadow stack so they stay rooted across the
+                    // allocations `conj` makes.
+                    int base = mark();
+                    for (int i = 0; i < nv; i++) push(roots.stack[roots.stackTop - nv + i]);
+                    roots.stackTop -= nv;
+                    long v = Vec.fromRoots(this, base, nv);
+                    popTo(base);
+                    vpush(v);
+                }
                 case Op.TYPE_P -> {
                     int c = u8(ip); ip += 1;
                     roots.stack[roots.stackTop - 1] = Val.bool(typeP(c, roots.stack[roots.stackTop - 1]));
@@ -268,6 +297,47 @@ public final class Rt {
             }
             f.ip = ip;
         }
+    }
+
+    /// A call whose callee is not a closure.
+    ///
+    /// Clojure's rule, and one the reader itself leans on: `(#{\space \tab} c)`
+    /// is how whitespace is tested, so without collections-in-call-position the
+    /// compiler cannot read its own source.
+    long callValue(int calleeAt, int argc) {
+        long callee = roots.stack[calleeAt];
+        if (Val.isInlineKw(callee) || isHeapTy(callee, TY_KW)) {
+            // A keyword looks itself up in the collection it is given.
+            long coll = argc >= 1 ? roots.stack[calleeAt + 1] : Val.NIL;
+            long dflt = argc >= 2 ? roots.stack[calleeAt + 2] : Val.NIL;
+            return lookup(coll, callee, dflt);
+        }
+        if (isHeapTy(callee, TY_NATIVEFN)) {
+            int idx = (int) Val.asFixnum(slot(callee, 0));
+            Builtins.Fn fn = idx < natives.length ? natives[idx] : null;
+            if (fn == null) {
+                throw new UnsupportedOperationException(
+                    "this runtime does not carry the builtin `"
+                    + (idx < nativeNames.length ? nativeNames[idx] : "#" + idx) + "`");
+            }
+            return fn.apply(this, calleeAt + 1, argc);
+        }
+        if (isHeapTy(callee, TY_VEC)) {
+            if (argc < 1) throw new UnsupportedOperationException("a vector takes 1 argument");
+            long got = Vec.nth(this, callee, (int) Val.asFixnum(roots.stack[calleeAt + 1]));
+            return got == Val.NOT_FOUND ? Val.NIL : got;
+        }
+        throw new UnsupportedOperationException(
+            "value is not a function (object type "
+            + (Val.isHeap(callee) ? String.valueOf(ty(gc.sp, Val.asHeap(callee))) : "inline")
+            + ", " + argc + " args)");
+    }
+
+    /// `get`, for the collections that are ported.
+    long lookup(long coll, long k, long dflt) {
+        if (Val.isNil(coll)) return dflt;
+        throw new UnsupportedOperationException(
+            "lookup needs maps and sets ported");
     }
 
     /// `flint.types/code`'s canonical table, from `vm.rs`. The numbers are the
