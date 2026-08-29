@@ -216,10 +216,23 @@ PROBE
 # The NATIVE answer for the same program, so the check is agreement rather
 # than "it did not throw".
 rt_want="$(./target/release/flint run :path out/rt-probe :fn probe/main 2>&1 || true)"
-"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/rt-probe/probe.img "$rt_want" 2>&1 \
-  | sed 's/$/ [jvm]/'
-"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/rt-probe/probe.img "$rt_want" >/dev/null 2>&1 \
-  || { echo "  FAIL the ported runtime disagrees with the native one [jvm]"; exit 1; }
+"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/rt-probe/probe.img "$rt_want" \
+  > /tmp/flint-img-jvm.out 2>&1 \
+  || { cat /tmp/flint-img-jvm.out; echo "  FAIL the ported runtime disagrees with the native one [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' /tmp/flint-img-jvm.out
+if [ -n "$CLR" ]; then
+  "$CLR" --rt-image out/rt-probe/probe.img "$rt_want" > /tmp/flint-img-clr.out 2>&1 \
+    || { cat /tmp/flint-img-clr.out; echo "  FAIL the ported runtime disagrees with the native one [clr]"; exit 1; }
+  sed 's/$/ [clr]/' /tmp/flint-img-clr.out
+  # THREE runtimes on one program, and the two ports compared to each other as
+  # well as to the native one. Agreeing with the native answer is what makes
+  # each correct; agreeing line for line with each other -- constant counts,
+  # code size, native count -- is what makes them the same port.
+  cmp -s /tmp/flint-img-jvm.out /tmp/flint-img-clr.out \
+    && echo "  ok   the two ported runtimes read the image identically" \
+    || { diff /tmp/flint-img-jvm.out /tmp/flint-img-clr.out | head; \
+         echo "  FAIL the two ported runtimes read the image differently"; exit 1; }
+fi
 
 # SNAPSHOTS on the ported runtime: both formats. The verbatim one is a memcpy
 # that must come back at IDENTICAL addresses; the live one traverses and must
@@ -253,8 +266,20 @@ fi
 # would be the misleading one.
 ./bin/flint :src runtimes/conform :fn numbers/main --emit-image \
   :out out/conform/rt-probe.img >/dev/null 2>&1
-"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/conform/rt-probe.img 2>&1 \
-  | grep -v "^  ok   loads" | sed 's/$/ [jvm]/'
+"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/conform/rt-probe.img > /tmp/flint-far-jvm.out 2>&1
+grep -v "^  ok   loads" /tmp/flint-far-jvm.out | sed 's/$/ [jvm]/'
+if [ -n "$CLR" ]; then
+  "$CLR" --rt-image out/conform/rt-probe.img > /tmp/flint-far-clr.out 2>&1
+  grep -v "^  ok   loads" /tmp/flint-far-clr.out | sed 's/$/ [clr]/'
+  # The two ports must stop at the SAME PLACE. A port that got further would be
+  # the interesting news; a port that stopped earlier would be the bug. Either
+  # way it is a divergence, and comparing the reports is what makes it visible
+  # rather than something to notice by eye.
+  cmp -s /tmp/flint-far-jvm.out /tmp/flint-far-clr.out \
+    && echo "  ok   and both ports stop at exactly the same place" \
+    || { diff /tmp/flint-far-jvm.out /tmp/flint-far-clr.out | head; \
+         echo "  FAIL the two ports do not get equally far"; exit 1; }
+fi
 
 # ONE CONFIG, THREE RUNTIMES. `:optimize [perf]` cannot be carried the same way
 # on any two of them: on wasm it changes the ARTIFACT -- a different runtime

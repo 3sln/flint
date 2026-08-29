@@ -37,6 +37,12 @@ public sealed class Rt : System.IDisposable {
 
     public long steps;
 
+    /// The builtins this image imports, resolved BY NAME. The slots in an image
+    /// belong to the module it was linked against and mean nothing here, which
+    /// is what makes an image portable between hosts at all.
+    public Builtins.Fn[] natives = System.Array.Empty<Builtins.Fn>();
+    public string[] nativeNames = System.Array.Empty<string>();
+
     /// The rest of the interpreter's state, all of it snapshot-visible.
     ///
     /// Here rather than spread across the classes that use them, for the reason
@@ -151,10 +157,23 @@ public sealed class Rt : System.IDisposable {
         }
         int fp = calleeAt + 1;
         if (a.variadic) {
-            // Fold the surplus into a list in the last fixed slot. Not built
-            // until `seqs.rs` is ported; refused loudly rather than silently
-            // producing the wrong shape.
-            throw new System.NotSupportedException("variadic arities need seqs.rs ported");
+            // Fold the surplus into a list in the last fixed slot. A SEQ, not a
+            // vector: `clojure.core/list` is `[& xs] xs`, so a vector here makes
+            // `(list 1 2)` print as `[1 2]`.
+            int extra = argc - a.argc;
+            int mk = Mark();
+            for (int i = 0; i < extra; i++) Push(roots.Stack[fp + a.argc + i]);
+            long restv = extra == 0 ? Val.Nil : Seqs.FromRoots(this, mk, extra);
+            PopTo(mk);
+            VReserve(a.nlocals + 8);
+            roots.Stack[fp + a.argc] = restv;
+            for (int i = a.argc + 1; i < a.nlocals; i++) roots.Stack[fp + i] = Val.Nil;
+            roots.StackTop = fp + a.nlocals;
+            Frame vf = new Frame();
+            vf.Fp = fp; vf.Ip = a.code; vf.End = a.code + a.len;
+            vf.RetTo = calleeAt; vf.Handlers = handlers.Count;
+            frames.Add(vf);
+            return true;
         }
         VReserve(a.nlocals + 8);
         for (int i = argc; i < a.nlocals; i++) roots.Stack[fp + i] = Val.Nil;
@@ -202,6 +221,8 @@ public sealed class Rt : System.IDisposable {
                 case Op.SetLocal: { roots.Stack[fp + U8(ip)] = VPop(); ip += 1; } break;
                 case Op.SetLocalKeep: { roots.Stack[fp + U8(ip)] = roots.Stack[roots.StackTop - 1]; ip += 1; } break;
                 case Op.Self: VPush(roots.Stack[f.RetTo]); break;
+                case Op.Var: { VPush(roots.Globals[U16(ip)]); ip += 2; } break;
+                case Op.SetVar: { roots.Globals[U16(ip)] = VPop(); ip += 2; } break;
                 case Op.Upval: { VPush(Slot(roots.Stack[f.RetTo], 1 + U8(ip))); ip += 1; } break;
                 case Op.Pop: roots.StackTop -= 1; break;
                 case Op.PopN: { roots.StackTop -= U8(ip); ip += 1; } break;
@@ -239,12 +260,16 @@ public sealed class Rt : System.IDisposable {
                     f.Ip = ip;                       // committed BEFORE entering
                     int calleeAt = roots.StackTop - argc - 1;
                     long callee = roots.Stack[calleeAt];
-                    if (!Val.IsHeap(callee) || Ty(gc.sp, Val.AsHeap(callee)) != TyClosure) {
-                        throw new System.NotSupportedException("only closures are callable until builtins are ported");
+                    if (Val.IsHeap(callee) && Ty(gc.sp, Val.AsHeap(callee)) == TyClosure) {
+                        if (!Enter(callee, calleeAt, argc)) return Val.Nil;
+                        continue;
                     }
-                    if (!Enter(callee, calleeAt, argc)) return Val.Nil;
-                    continue;
-                }
+                    // Everything else completes IN PLACE: a builtin held in a
+                    // var, a keyword used as a function, a collection looked up.
+                    long cv = CallValue(calleeAt, argc);
+                    roots.StackTop = calleeAt;
+                    VPush(cv);
+                } break;
                 case Op.TailCall: {
                     int argc = U8(ip); ip += 1;
                     f.Ip = ip;
@@ -269,6 +294,35 @@ public sealed class Rt : System.IDisposable {
                     if (frames.Count <= baseDepth) return VPop();
                     continue;
                 }
+                case Op.Vector: {
+                    int nv = U16(ip); ip += 2;
+                    // The elements are already on the VALUE stack; they are
+                    // moved to the shadow stack so they stay rooted across the
+                    // allocations `Conj` makes.
+                    int bas = Mark();
+                    for (int i = 0; i < nv; i++) Push(roots.Stack[roots.StackTop - nv + i]);
+                    roots.StackTop -= nv;
+                    long v = Vec.FromRoots(this, bas, nv);
+                    PopTo(bas);
+                    VPush(v);
+                } break;
+                case Op.TypeP: {
+                    int c = U8(ip); ip += 1;
+                    roots.Stack[roots.StackTop - 1] = Val.Bool(TypeP(c, roots.Stack[roots.StackTop - 1]));
+                } break;
+                case Op.Native: {
+                    int idx = U16(ip); int argc = U8(ip + 2); ip += 3;
+                    f.Ip = ip;
+                    int at = roots.StackTop - argc;
+                    Builtins.Fn fn = natives[idx];
+                    if (fn == null) {
+                        throw new System.NotSupportedException(
+                            "this runtime does not carry the builtin `" + nativeNames[idx] + "`");
+                    }
+                    long v = fn(this, at, argc);
+                    roots.StackTop = at;
+                    VPush(v);
+                } break;
                 default: throw new System.NotSupportedException(
                     $"opcode 0x{opcode:x} is not ported yet");
             }
@@ -282,6 +336,78 @@ public sealed class Rt : System.IDisposable {
     static long AddExact(long a, long b) { checked { return a + b; } }
     static long SubExact(long a, long b) { checked { return a - b; } }
     static long MulExact(long a, long b) { checked { return a * b; } }
+
+    /// A call whose callee is not a closure.
+    ///
+    /// Clojure's rule, and one the reader itself leans on: `(#{\space \tab} c)`
+    /// is how whitespace is tested, so without collections-in-call-position the
+    /// compiler cannot read its own source.
+    long CallValue(int calleeAt, int argc) {
+        long callee = roots.Stack[calleeAt];
+        if (Val.IsInlineKw(callee) || IsHeapTy(callee, TyKw)) {
+            // A keyword looks itself up in the collection it is given.
+            long coll = argc >= 1 ? roots.Stack[calleeAt + 1] : Val.Nil;
+            long dflt = argc >= 2 ? roots.Stack[calleeAt + 2] : Val.Nil;
+            return Lookup(coll, callee, dflt);
+        }
+        if (IsHeapTy(callee, TyNativefn)) {
+            int idx = (int) Val.AsFixnum(Slot(callee, 0));
+            Builtins.Fn fn = idx < natives.Length ? natives[idx] : null;
+            if (fn == null) {
+                throw new System.NotSupportedException(
+                    "this runtime does not carry the builtin `"
+                    + (idx < nativeNames.Length ? nativeNames[idx] : "#" + idx) + "`");
+            }
+            return fn(this, calleeAt + 1, argc);
+        }
+        if (IsHeapTy(callee, TyVec)) {
+            if (argc < 1) throw new System.NotSupportedException("a vector takes 1 argument");
+            long got = Vec.Nth(this, callee, (int) Val.AsFixnum(roots.Stack[calleeAt + 1]));
+            return got == Val.NotFound ? Val.Nil : got;
+        }
+        throw new System.NotSupportedException(
+            "value is not a function (object type "
+            + (Val.IsHeap(callee) ? Ty(gc.sp, Val.AsHeap(callee)).ToString() : "inline")
+            + ", " + argc + " args)");
+    }
+
+    /// `get`, for the collections that are ported.
+    long Lookup(long coll, long k, long dflt) {
+        if (Val.IsNil(coll)) return dflt;
+        throw new System.NotSupportedException("lookup needs maps and sets ported");
+    }
+
+    /// `flint.types/code`'s canonical table, from `vm.rs`. The numbers are the
+    /// contract between the compiler and every runtime, so they are written out
+    /// rather than derived: a port that renumbered one of these would compile
+    /// and answer wrongly.
+    bool TypeP(int code, long v) {
+        switch (code) {
+            case 1: return Val.IsFixnum(v);
+            case 2: return Val.IsDouble(v);
+            case 3: return Val.IsFixnum(v) || Val.IsDouble(v);
+            case 4: return Str.IsString(this, v);
+            case 5: return Val.IsInlineKw(v) || IsHeapTy(v, TyKw);
+            case 6: return IsHeapTy(v, TySym);
+            case 7: return v == Val.True || v == Val.False;
+            case 8: return IsHeapTy(v, TyVec);
+            case 9: return IsHeapTy(v, TyArraymap) || IsHeapTy(v, TyHashmap);
+            case 10: return IsHeapTy(v, TySet);
+            case 11: return IsSeq(v);
+            case 12: return IsHeapTy(v, TyClosure) || IsHeapTy(v, TyNativefn);
+            case 13: return Val.IsNil(v);
+            default: return IsHeapTy(v, TyVec) || IsSeq(v);
+        }
+    }
+
+    internal bool IsHeapTy(long v, int t) => Val.IsHeap(v) && Ty(gc.sp, Val.AsHeap(v)) == t;
+
+    internal bool IsSeq(long v) {
+        if (!Val.IsHeap(v)) return false;
+        int t = Ty(gc.sp, Val.AsHeap(v));
+        return t == TyCons || t == TyEmptyList || t == TyLazyseq
+            || t == TyVecseq || t == TyStrseq || t == TyRange;
+    }
 
     public void Dispose() => gc.Dispose();
 

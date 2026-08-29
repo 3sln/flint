@@ -12,6 +12,8 @@ public static class Program {
         if (args.Length >= 2 && args[0] == "--flags") return Flags(args[1]);
         if (args.Length >= 1 && args[0] == "--rt-foundation") return RtFoundation();
         if (args.Length >= 1 && args[0] == "--rt-snapshot") return RtSnapshot();
+        if (args.Length >= 2 && args[0] == "--rt-image")
+            return RtImage(args[1], args.Length > 2 ? args[2] : null);
         if (args.Length >= 3 && args[0] == "--selfhost") return SelfHost(args[1], args[2]);
         var vm = new Vm(Img.Read(File.ReadAllBytes(args[0])));
         vm.EnsureStarted();
@@ -157,6 +159,49 @@ public static class Program {
                d.status == Flint.Rt.Snap.StatusShelved);
 
         if (snapFails > 0) { Console.WriteLine("  " + snapFails + " failed"); return 1; }
+        return 0;
+    }
+
+
+    /// The ported runtime, on a REAL compiled image. A mirror of the JVM's
+    /// `RtImage.java`, printing the same lines so the gate can compare them.
+    ///
+    /// It reports HOW FAR it gets rather than passing or failing outright,
+    /// because the standard library is not ported yet and "loaded 85 functions
+    /// and then wanted `transient`" is the useful answer while that is true. A
+    /// silent pass here would be the misleading one.
+    private static int RtImage(string path, string want) {
+        var rt = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
+        var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
+        if (img == null) {
+            Console.WriteLine("  FAIL not a flint image, or a version this runtime does not speak");
+            return 1;
+        }
+        Console.WriteLine("  ok   loads a real image: " + rt.fns.Length + " fns, " + rt.consts.Length
+            + " consts, " + rt.code.Length + " code bytes, entry=" + img.entry
+            + ", " + img.nativeNames.Length + " natives, " + img.init.Length + " initialisers");
+        // The initialisers first, in order: a program's top-level forms.
+        foreach (int fn in img.init)
+            rt.Call(rt.MakeClosure(fn, Array.Empty<long>()), Array.Empty<long>());
+        long f = rt.MakeClosure(img.entry, Array.Empty<long>());
+        try {
+            long v = rt.Call(f, new long[]{ Flint.Rt.Val.Nil });
+            string shown = Flint.Rt.Val.IsFixnum(v)
+                    ? Flint.Rt.Val.AsFixnum(v).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : Flint.Rt.Str.IsString(rt, v) ? Flint.Rt.Str.Text(rt, v)
+                : Flint.Rt.Val.IsNil(v) ? "nil"
+                : "0x" + Convert.ToString(v, 16);
+            if (want != null && want != shown) {
+                Console.WriteLine("  FAIL the ported runtime DISAGREES with the native one");
+                Console.WriteLine("        native " + want);
+                Console.WriteLine("        ported " + shown);
+                return 1;
+            }
+            Console.WriteLine("  ok   main -> " + shown
+                              + (want != null ? "  (the native runtime agrees)" : ""));
+        } catch (NotSupportedException e) {
+            Console.WriteLine("  .. as far as: " + e.Message);
+        }
         return 0;
     }
 
