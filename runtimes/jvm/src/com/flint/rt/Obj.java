@@ -49,13 +49,39 @@ public final class Obj {
     public static final int TY_NATIVEFN = 22;   // [id, name]
     public static final int TY_VAR = 23;
     public static final int TY_ATOM = 24;
-    public static final int TY_RAW = 35;
+    public static final int TY_TVEC = 25;       // [cnt, shift, root, tail, live]
+    public static final int TY_TMAP = 26;       // [cnt, root, hasNil, nilVal, live]
+    public static final int TY_TSET = 27;       // [tmap, live]
+    public static final int TY_RECORD = 28;     // [type, basis, ext, meta, ...fields]
+    public static final int TY_REGEX = 29;      // [source, prog(raw), ngroups]
+    public static final int TY_REDUCED = 30;    // [value]
+    public static final int TY_EXINFO = 31;     // [msg, data, cause]
+    public static final int TY_MULTIFN = 32;    // [name, dispatch, methods, default, prefers]
+    public static final int TY_DELAY = 33;      // [thunk, value]
+    public static final int TY_VOLATILE = 34;   // [value]
+    public static final int TY_RAW = 35;        // opaque bytes
+    public static final int TY_ITERSEQ = 36;
+    public static final int TY_CHUNKSEQ = 37;   // [node(array), off, rest, meta]
+    public static final int TY_TYPE = 38;       // [name, basis, protocols]
+    public static final int TY_THREAD = 39;
+    public static final int TY_PORT = 40;
+    public static final int TY_SCHED = 41;
+    public static final int TY_ROPE = 42;
+    /// A host-minted reference (`doc/decisions/0022`). Guest code can mint one
+    /// only with id 0 and there is deliberately no builtin that reads an id
+    /// back, so an id is a thing the HOST wrote and only the host can read.
+    /// That is what lets a snapshot preserve identities without granting any.
+    public static final int TY_OPAQUE = 43;
+    public static final int TY_BYTES = 44;
+    public static final int TY_BROPE = 45;
+    public static final int TY_TBYTES = 46;
+    public static final int TY_MAX = 47;
 
     public static final int VALS = 0, STR = 1, RAW = 2;
 
     public static int layoutOf(int ty) {
         if (ty == TY_STR) return STR;
-        if (ty == TY_BIGINT || ty == TY_RAW || ty == TY_FREE || ty == TY_FWD) return RAW;
+        if (ty == TY_BIGINT || ty == TY_RAW || ty == TY_BYTES || ty == TY_FREE || ty == TY_FWD) return RAW;
         return VALS;
     }
 

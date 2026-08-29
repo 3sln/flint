@@ -57,6 +57,16 @@ public final class Img {
         for (byte c : "FLINTIMG".getBytes(java.nio.charset.StandardCharsets.US_ASCII)) {
             if (r.u8() != (c & 0xFF)) return null;
         }
+        // Over the WHOLE image, before anything is interpreted. FNV-1a: a
+        // snapshot only has to DETECT a different program, not resist one, and
+        // an incremental pass over a few hundred KB costs nothing next to the
+        // load it precedes.
+        long h = 0xcbf29ce484222325L;
+        for (byte b : bytes) {
+            h ^= (b & 0xFFL);
+            h *= 0x100000001b3L;
+        }
+        rt.fingerprint = h;
         if (r.u32() != VERSION) return null;
 
         Loaded out = new Loaded();

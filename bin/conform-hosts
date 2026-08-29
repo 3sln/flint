@@ -221,6 +221,16 @@ rt_want="$(./target/release/flint run :path out/rt-probe :fn probe/main 2>&1 || 
 "$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/rt-probe/probe.img "$rt_want" >/dev/null 2>&1 \
   || { echo "  FAIL the ported runtime disagrees with the native one [jvm]"; exit 1; }
 
+# SNAPSHOTS on the ported runtime: both formats. The verbatim one is a memcpy
+# that must come back at IDENTICAL addresses; the live one traverses and must
+# come back correct at DIFFERENT ones, so it is imported into a heap with a
+# different nursery and the test asserts the addresses moved as well as that
+# the data survived. Checking only "the data is still there" would pass for a
+# live import that had quietly kept the old addresses.
+"$JDK/bin/java" -cp runtimes/jvm/classes RtSnapshot 2>&1 | sed 's/$/ [jvm]/'
+"$JDK/bin/java" -cp runtimes/jvm/classes RtSnapshot >/dev/null 2>&1 \
+  || { echo "  FAIL snapshots on the ported runtime [jvm]"; exit 1; }
+
 # And on a program the library is not ported far enough for yet, which reports
 # HOW FAR it gets. While that is true it is the useful answer; a silent pass
 # would be the misleading one.
