@@ -781,16 +781,23 @@ fn a_snapshot_round_trips_byte_for_byte() {
     assert!(first == second, "snapshot bytes changed across a round trip");
 }
 
-/// An imported snapshot grants NOTHING (`doc/decisions/0022`).
+/// An imported snapshot brings its IDENTITIES back intact.
 ///
-/// A capture is a memcpy, so a host-minted capability comes back byte for byte
-/// -- host id and all -- and a snapshot taken from a run that held `:fs` would
-/// hand `:fs` to whoever imported it. That is the one asymmetry between the two
-/// kinds of opaque value: a restored run is entitled to the IDENTITIES it had,
-/// and to none of the authority.
+/// This test used to assert the opposite -- that the host id was zeroed, so
+/// "an imported snapshot grants nothing". That enforced the rule in the wrong
+/// place and made shelving useless: a sandbox holding a file handle came back
+/// holding a handle to nothing, and no host could put it right, because the
+/// identity it would rehydrate against had been erased.
+///
+/// Possession was never the check (`doc/decisions/0022`); the GRANT TABLE is.
+/// A host that no longer honours id 7 refuses it exactly as it refuses a
+/// forgery, and a host that wants the shelved sandbox to carry on rebinds 7 to
+/// a live resource. The sandbox cannot exploit the preserved id either way,
+/// and that is a property of the surface rather than of the import: guest code
+/// can mint an opaque only with id 0, and no builtin reads an id back.
 #[cfg(feature = "diagnostics")]
 #[test]
-fn an_imported_snapshot_grants_nothing() {
+fn an_imported_snapshot_keeps_its_identities() {
     let mut w = ImageWriter::new();
     let body = {
         let mut a = Asm::new();
@@ -817,15 +824,19 @@ fn an_imported_snapshot_grants_nothing() {
     let bytes = flint_rt::snap::capture(&rt);
     assert!(flint_rt::snap::restore(&mut rt, &bytes), "restore refused its own snapshot");
 
-    // COVERAGE: a sweep that found nothing would pass the assertion below for
+    // COVERAGE: a sweep that found nothing would pass the assertions below for
     // the wrong reason.
     assert!(rt.restored_capabilities >= 2, "the sweep did not see the opaque values");
     assert_eq!(
         rt.opaque_host_id(rt.r(ci)),
-        0,
-        "an imported snapshot restored live authority"
+        7,
+        "the host id did not survive the round trip, so nothing can rehydrate against it"
     );
-    // Identity survives; only authority does not.
+    assert_eq!(
+        rt.opaque_host_id(rt.r(oi)),
+        0,
+        "a guest-minted value gained an id it never had"
+    );
     assert_eq!(rt.hash_value(rt.r(ci)), id_before, "the identity hash changed on import");
 }
 

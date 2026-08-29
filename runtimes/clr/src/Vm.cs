@@ -107,6 +107,56 @@ public sealed class Vm {
         }
     }
 
+    /// One flint call, as DATA rather than as a CLR frame
+    /// (`doc/decisions/0005`).
+    ///
+    /// This used to be the CLR stack: a `CallOp` called `Call`, which called
+    /// `Run`, which called `Call`. That is why this port has no green threads,
+    /// no ports and no snapshots -- a continuation living on the host stack
+    /// cannot be parked, saved or resumed, and all three need every one of
+    /// those. .NET has no Loom equivalent and deliberately chose async/await
+    /// instead, so there is nothing to borrow here: the continuation has to be
+    /// ours.
+    internal sealed class Frame {
+        public Closure Self;
+        public Img.Arity Arity;
+        public object[] Locals;
+        public object[] Stack = new object[64];
+        public int Sp;
+        public int Ip;
+        public int End;
+        public int[] HandlerIp = new int[8];
+        public int[] HandlerSp = new int[8];
+        public int Handlers;
+    }
+
+    /// The frame stack IS the continuation, and there is one PER EXECUTING
+    /// THREAD.
+    ///
+    /// Thread-static rather than a field: this port runs several real threads
+    /// through one `Vm`, and the old interpreter was implicitly safe because
+    /// every frame lived in a CLR local. Making frames data takes that away.
+    /// It is also the shape green threads want -- a green thread IS one of
+    /// these lists plus its saved state.
+    [ThreadStatic] private static List<Frame> _frames;
+    internal static List<Frame> Frames => _frames ??= new List<Frame>();
+
+    /// Build a frame for `c` at `a` with `args` bound. Does not enter it.
+    private static Frame FrameFor(Closure c, Img.Arity a, object[] args, int argc) {
+        var f = new Frame {
+            Self = c, Arity = a,
+            Locals = new object[Math.Max(a.Nlocals, a.Argc + 1)],
+            Ip = a.Code, End = a.Code + a.Len,
+        };
+        Array.Copy(args, f.Locals, Math.Min(a.Argc, argc));
+        if (a.Variadic) {
+            var rest = new List<object>();
+            for (int i = a.Argc; i < argc; i++) rest.Add(args[i]);
+            f.Locals[a.Argc] = rest.Count == 0 ? null : new Seq(rest);
+        }
+        return f;
+    }
+
     public object Call(object fn, object[] args) {
         if (fn is Closure c) {
             var def = Img.Fns[c.FnIndex];
@@ -122,7 +172,18 @@ public sealed class Vm {
             }
             var compiled = CompiledFor(c.FnIndex, a);
             if (compiled != null) return compiled(this, c, locals);
-            return Run(c, a, locals);
+            // Entering from OUTSIDE the interpreter -- a builtin calling back
+            // into flint, or the host calling an entry point. That still costs
+            // one CLR frame, exactly as the wasm runtime's `call_value` does;
+            // what no longer costs one is a `CallOp`, which is the case that
+            // recurses without bound.
+            var frames = Frames;
+            int baseDepth = frames.Count;
+            frames.Add(new Frame {
+                Self = c, Arity = a, Locals = locals,
+                Ip = a.Code, End = a.Code + a.Len,
+            });
+            return Run(baseDepth);
         }
         if (fn is Builtins.Fn f) return f(this, args);
         if (fn is Img.NativeRef nr) {
@@ -150,18 +211,40 @@ public sealed class Vm {
     /// vector are all true.
     public static bool Truthy(object v) => v != null && !(v is bool b && !b);
 
-    private object Run(Closure self, Img.Arity arity, object[] locals) {
-        var stack = new object[64];
-        int sp = 0;
-        int ip = arity.Code;
-        int end = arity.Code + arity.Len;
-        var handlerIp = new int[8];
-        var handlerSp = new int[8];
-        int handlers = 0;
+    /// Run until the frame stack is back down to `baseDepth`.
+    ///
+    /// The frame's fields live in LOCALS for the length of one frame and are
+    /// written back only at a boundary -- the same trade the wasm interpreter
+    /// makes with `ip`, and what keeps this a change to `CallOp`/`TailCall`/
+    /// `Return` rather than a rewrite of every opcode's stack arithmetic.
+    private object Run(int baseDepth) {
+        var frames = Frames;
+        var f = frames[frames.Count - 1];
+        var self = f.Self;
+        var arity = f.Arity;
+        var locals = f.Locals;
+        var stack = f.Stack;
+        int sp = f.Sp;
+        int ip = f.Ip;
+        int end = f.End;
+        var handlerIp = f.HandlerIp;
+        var handlerSp = f.HandlerSp;
+        int handlers = f.Handlers;
 
         for (;;) {
-            if (ip >= end) return sp > 0 ? stack[sp - 1] : null;
-            if (sp + 4 >= stack.Length) Array.Resize(ref stack, stack.Length * 2);
+            if (ip >= end) {
+                object v0 = sp > 0 ? stack[sp - 1] : null;
+                frames.RemoveAt(frames.Count - 1);
+                if (frames.Count <= baseDepth) return v0;
+                        f = frames[frames.Count - 1];
+                        self = f.Self; arity = f.Arity; locals = f.Locals;
+                        stack = f.Stack; sp = f.Sp; ip = f.Ip; end = f.End;
+                        handlerIp = f.HandlerIp; handlerSp = f.HandlerSp;
+                        handlers = f.Handlers;
+                stack[sp++] = v0;
+                continue;
+            }
+            if (sp + 4 >= stack.Length) { Array.Resize(ref stack, stack.Length * 2); f.Stack = stack; }
             int opcode = U8(ip);
             ip += 1;
             try {
@@ -193,8 +276,28 @@ public sealed class Vm {
                         var args = new object[argc];
                         Array.Copy(stack, sp - argc, args, 0, argc);
                         sp -= argc + 1;
-                        object f = stack[sp];
-                        stack[sp++] = Call(f, args);
+                        object callee = stack[sp];
+                        // A flint closure gets a FRAME, not a CLR call. This is
+                        // the whole point: Clojure recursion stops living on
+                        // the host stack, so a green thread can park at any
+                        // depth and a snapshot can capture where it was.
+                        if (callee is Closure cc) {
+                            var ca = Img.Fns[cc.FnIndex].Select(argc);
+                            if (ca != null && CompiledFor(cc.FnIndex, ca) == null) {
+                        f.Stack = stack; f.Sp = sp; f.Ip = ip; f.End = end;
+                        f.Locals = locals; f.Self = self; f.Arity = arity;
+                        f.HandlerIp = handlerIp; f.HandlerSp = handlerSp;
+                        f.Handlers = handlers;
+                                frames.Add(FrameFor(cc, ca, args, argc));
+                        f = frames[frames.Count - 1];
+                        self = f.Self; arity = f.Arity; locals = f.Locals;
+                        stack = f.Stack; sp = f.Sp; ip = f.Ip; end = f.End;
+                        handlerIp = f.HandlerIp; handlerSp = f.HandlerSp;
+                        handlers = f.Handlers;
+                                continue;
+                            }
+                        }
+                        stack[sp++] = Call(callee, args);
                         break;
                     }
                     case TailCall: {
@@ -215,8 +318,8 @@ public sealed class Vm {
                         var args = new object[argc];
                         Array.Copy(stack, sp - argc, args, 0, argc);
                         sp -= argc + 1;
-                        object f = stack[sp];
-                        if (f is Closure c2) {
+                        object callee = stack[sp];
+                        if (callee is Closure c2) {
                             var a2 = Img.Fns[c2.FnIndex].Select(argc);
                             // A COMPILED target is entered through its compiled
                             // body, so it takes a frame. It cannot tail-call
@@ -235,9 +338,32 @@ public sealed class Vm {
                                 continue;
                             }
                         }
-                        return Call(f, args);
+                        // Not a closure this port can enter: a builtin, or a
+                        // compiled arity. It completes in place and this frame
+                        // returns its answer.
+                        object tv = Call(callee, args);
+                        frames.RemoveAt(frames.Count - 1);
+                        if (frames.Count <= baseDepth) return tv;
+                        f = frames[frames.Count - 1];
+                        self = f.Self; arity = f.Arity; locals = f.Locals;
+                        stack = f.Stack; sp = f.Sp; ip = f.Ip; end = f.End;
+                        handlerIp = f.HandlerIp; handlerSp = f.HandlerSp;
+                        handlers = f.Handlers;
+                        stack[sp++] = tv;
+                        continue;
                     }
-                    case Return: return sp > 0 ? stack[--sp] : null;
+                    case Return: {
+                        object rv = sp > 0 ? stack[--sp] : null;
+                        frames.RemoveAt(frames.Count - 1);
+                        if (frames.Count <= baseDepth) return rv;
+                        f = frames[frames.Count - 1];
+                        self = f.Self; arity = f.Arity; locals = f.Locals;
+                        stack = f.Stack; sp = f.Sp; ip = f.Ip; end = f.End;
+                        handlerIp = f.HandlerIp; handlerSp = f.HandlerSp;
+                        handlers = f.Handlers;
+                        stack[sp++] = rv;
+                        continue;
+                    }
                     case ClosureOp: {
                         int fnIdx = U16(ip); ip += 2;
                         int nup = U8(ip); ip += 1;
@@ -252,10 +378,10 @@ public sealed class Vm {
                         var args = new object[argc];
                         Array.Copy(stack, sp - argc, args, 0, argc);
                         sp -= argc;
-                        var f = _natives[idx];
-                        if (f == null)
+                        var nf = _natives[idx];
+                        if (nf == null)
                             throw new FlintThrow($"this runtime does not carry the builtin `{Img.NativeNames[idx]}`");
-                        stack[sp++] = f(this, args);
+                        stack[sp++] = nf(this, args);
                         break;
                     }
                     case VectorOp: {
@@ -297,10 +423,10 @@ public sealed class Vm {
                         var fixedArgs = new object[argc - 1];
                         Array.Copy(stack, sp - (argc - 1), fixedArgs, 0, argc - 1);
                         sp -= argc - 1;
-                        object f = stack[--sp];
+                        object af = stack[--sp];
                         var all = new List<object>(fixedArgs);
                         foreach (var o in Builtins.Iterate(seq)) all.Add(o);
-                        stack[sp++] = Call(f, all.ToArray());
+                        stack[sp++] = Call(af, all.ToArray());
                         break;
                     }
                     case Throw: case Rethrow: throw new FlintThrow(stack[--sp]);
@@ -328,7 +454,25 @@ public sealed class Vm {
                     default: throw new FlintThrow($"unknown opcode 0x{opcode:x}");
                 }
             } catch (FlintThrow t) {
-                if (handlers == 0) throw;
+                // Unwind FRAMES, not the CLR stack.
+                //
+                // While a flint call was a CLR call, `throw` did this for us:
+                // the runtime popped host frames until one had a `catch`. The
+                // frames are ours now, so finding the handler is ours too --
+                // pop until a frame has one, and rethrow only when the region
+                // this `Run` owns has none.
+                //
+                // Getting this wrong would not fail loudly: a `try` in a CALLER
+                // would simply stop catching what a callee threw.
+                while (handlers == 0) {
+                    frames.RemoveAt(frames.Count - 1);
+                    if (frames.Count <= baseDepth) throw;
+                    f = frames[frames.Count - 1];
+                    self = f.Self; arity = f.Arity; locals = f.Locals;
+                    stack = f.Stack; sp = f.Sp; ip = f.Ip; end = f.End;
+                    handlerIp = f.HandlerIp; handlerSp = f.HandlerSp;
+                    handlers = f.Handlers;
+                }
                 handlers -= 1;
                 sp = handlerSp[handlers];
                 ip = handlerIp[handlers];

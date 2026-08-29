@@ -243,28 +243,34 @@ pub fn capture(rt: &Rt) -> Vec<u8> {
     out
 }
 
-/// Restore a snapshot over this runtime. Returns false if it is not one, or is
-/// from a different layout version -- refused by name rather than read as a
-/// plausible-looking heap that means something else.
-/// Strip host-minted authority out of a restored heap (`doc/decisions/0022`).
+/// Count the host-minted opaque values an import brought back, and leave every
+/// one of them ALONE.
 ///
-/// A capture is a memcpy, so a capability comes back byte-for-byte -- host id
-/// and all -- and importing a snapshot taken from a run that held `:fs` would
-/// GRANT `:fs`. That is the one asymmetry 0022 records between the two kinds of
-/// opaque value: guest-minted ones are identity and nothing else, and a
-/// restored run is entitled to the identities it had, but host-minted ones are
-/// never restored as live authority.
+/// This used to zero the host id, on the argument that "an imported snapshot
+/// grants nothing". That is the wrong place to enforce it, and it makes
+/// shelving useless: a sandbox holding a file handle comes back holding a
+/// handle to nothing, and no host can put it right because the identity it
+/// would rehydrate against has been erased.
 ///
-/// Invalidation rather than re-binding: zeroing the host id turns a capability
-/// into an ordinary opaque value, which the grant-table check refuses like any
-/// other forgery. A host that wants to re-grant can mint fresh ones; a host
-/// that does nothing grants nothing, which is the right default.
-fn invalidate_host_opaques(rt: &mut Rt) -> u32 {
+/// The check belongs where `doc/decisions/0022` always said it belongs -- the
+/// GRANT TABLE, not possession. A host that no longer honours id 7 refuses it
+/// exactly as it refuses a forgery, and a host that wants the shelved sandbox
+/// to carry on rebinds 7 to a live resource. Erasing the id took that choice
+/// away from the only party entitled to make it.
+///
+/// The sandbox cannot exploit a preserved id, and that is a property of the
+/// SURFACE rather than of this function: guest code can mint an opaque value
+/// only with id 0, and there is deliberately no builtin that reads an id back.
+/// So an id is a thing the host wrote and only the host can read.
+///
+/// The count is still taken, because `restored_capabilities` is what a test
+/// reads to know the sweep saw anything at all -- a zero here would otherwise
+/// pass every assertion for the wrong reason.
+fn count_host_opaques(rt: &mut Rt) -> u32 {
     use crate::obj::{size_of, ty, TY_FREE, TY_OPAQUE};
     let mut n = 0u32;
     let mut clear = |sp: &crate::mem::Space, a: u32| {
         if ty(sp, a) == TY_OPAQUE {
-            crate::obj::set_slot_raw(sp, a, 2, Value::fixnum(0));
             n += 1;
         }
     };
@@ -476,8 +482,9 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     rt.mem_trips = mem_trips;
     rt.status = status;
     rt.champ_added = champ_added;
-    // LAST, after the heap is in place: an imported snapshot grants nothing.
-    rt.restored_capabilities = invalidate_host_opaques(rt);
+    // LAST, after the heap is in place. Identities are PRESERVED; whether any
+    // of them still means anything is the host's grant table to answer.
+    rt.restored_capabilities = count_host_opaques(rt);
     true
 }
 
@@ -946,9 +953,9 @@ pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
     rt.mem_trips = mem_trips;
     rt.status = status as i32;
     rt.champ_added = champ_added;
-    // LAST, and for the same reason as `restore`: an imported snapshot grants
-    // nothing. A host that wants to re-grant mints fresh capabilities.
-    rt.restored_capabilities = invalidate_host_opaques(rt);
+    // LAST, and for the same reason as `restore`: the identities come back
+    // intact so a host can rehydrate against them.
+    rt.restored_capabilities = count_host_opaques(rt);
     true
 }
 

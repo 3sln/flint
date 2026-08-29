@@ -2,8 +2,9 @@
 
 > **BUILT.** `(opaque)` and `(opaque "label")` in `clojure.core`; `TY_OPAQUE` in
 > the runtime; host-minted values reaching the entry function as its second
-> argument; `p/open`'s `:capability`; not sendable; invalidated on snapshot
-> import. Metadata and protocol extension are still deliberately absent.
+> argument; `p/open`'s `:capability`; not sendable; **identities preserved
+> across a snapshot** (amended 2026-08-29 -- they used to be erased, and the
+> section below says why that was the wrong place to enforce it). Metadata and protocol extension are still deliberately absent.
 >
 > Two things the tests found that reading would not have. A guest-minted
 > `(opaque "fs")` opened the filesystem, because "nothing was presented" and
@@ -89,12 +90,30 @@ share behaviour, which is rarely what a sentinel wants.
 
 - **Guest-minted values restore normally.** They are identity and nothing else,
   and a restored run is entitled to the identities it had.
-- **Host-minted values must be re-bound or invalidated on import**, never
-  restored as live authority — otherwise importing a snapshot taken from a run
-  that held `:fs` grants `:fs`.
+- **Host-minted values restore normally too — the id is PRESERVED.**
 
-That is the one asymmetry between the two kinds, and it is a property of the
-importing host rather than of the value.
+This document originally said the opposite: that a host-minted id must be
+re-bound *or invalidated* on import, "otherwise importing a snapshot taken from
+a run that held `:fs` grants `:fs`". The conclusion was right and the mechanism
+was wrong, and erasing the id was the wrong half to build.
+
+**Possession was never the check. The grant table is** — that is this
+document's own central claim, three sections up, and it settles the import case
+without erasing anything. A host that no longer honours id 7 refuses it exactly
+as it refuses a forgery. A host that *wants* the shelved sandbox to carry on
+rebinds 7 to a live resource. Erasing the id took that decision away from the
+only party entitled to make it.
+
+Erasure also made shelving useless, which is how it was noticed: a sandbox
+holding a file handle comes back holding a handle to nothing, and there is no
+identity left to rehydrate against. `0015`'s live-set export exists to move a
+running sandbox, and a capability that cannot survive the move is a capability
+that cannot be shelved.
+
+**What keeps a preserved id safe is the SURFACE, not the import.** Guest code
+can mint an opaque value only with id 0, and there is deliberately no builtin
+that reads an id back. So an id is a thing the host wrote and only the host can
+read, whether it arrived by construction or by import.
 
 ## Cost
 
