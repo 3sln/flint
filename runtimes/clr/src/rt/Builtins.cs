@@ -155,6 +155,49 @@ public static class Builtins {
         Def("rest", (rt, at, n) => Seqs.Rest(rt, rt.VAt(at)));
         Def("cons", (rt, at, n) => Seqs.Cons(rt, rt.VAt(at), rt.VAt(at + 1)));
 
+        // Transients. A transient is a MUTABLE handle on a persistent value,
+        // and the whole contract is that the persistent one it came from is
+        // untouched -- so `persistent!` invalidates the handle rather than
+        // leaving two owners of the same nodes.
+        Def("transient", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (rt.IsHeapTy(v, Obj.TyVec)) return Vec.TransientOf(rt, v);
+            throw new System.NotSupportedException("transient on this needs maps and sets ported");
+        });
+        Def("persistent!", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (Vec.IsTransient(rt, v)) {
+                if (!Vec.Alive(rt, v))
+                    throw new System.InvalidOperationException("persistent! called twice on one transient");
+                return Vec.TPersistent(rt, v);
+            }
+            throw new System.NotSupportedException("persistent! on this needs maps and sets ported");
+        });
+        Def("conj!", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (Vec.IsTransient(rt, v)) {
+                if (!Vec.Alive(rt, v))
+                    throw new System.InvalidOperationException("conj! on a transient already made persistent");
+                long acc = v;
+                for (int i = 1; i < n; i++) acc = Vec.TConj(rt, acc, rt.VAt(at + i));
+                return acc;
+            }
+            throw new System.NotSupportedException("conj! on this needs maps and sets ported");
+        });
+        Def("assoc!", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (Vec.IsTransient(rt, v)) {
+                if (!Vec.Alive(rt, v))
+                    throw new System.InvalidOperationException("assoc! on a transient already made persistent");
+                long acc = v;
+                for (int i = 1; i + 1 < n; i += 2) {
+                    acc = Vec.TAssoc(rt, acc, (int) Val.AsFixnum(rt.VAt(at + i)), rt.VAt(at + i + 1));
+                }
+                return acc;
+            }
+            throw new System.NotSupportedException("assoc! on this needs maps and sets ported");
+        });
+
         Def("=", (rt, at, n) => {
             for (int i = 1; i < n; i++) if (!Eq(rt, rt.VAt(at), rt.VAt(at + i))) return Val.False;
             return Val.True;

@@ -157,6 +157,56 @@ public final class Builtins {
         def("rest", (rt, at, n) -> Seqs.rest(rt, rt.vat(at)));
         def("cons", (rt, at, n) -> Seqs.cons(rt, rt.vat(at), rt.vat(at + 1)));
 
+        // Transients. A transient is a MUTABLE handle on a persistent value,
+        // and the whole contract is that the persistent one it came from is
+        // untouched -- so `persistent!` invalidates the handle rather than
+        // leaving two owners of the same nodes.
+        def("transient", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (rt.isHeapTy(v, TY_VEC)) return Vec.transientOf(rt, v);
+            throw new UnsupportedOperationException(
+                "transient on this needs maps and sets ported");
+        });
+        def("persistent!", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (Vec.isTransient(rt, v)) {
+                if (!Vec.alive(rt, v)) {
+                    throw new IllegalStateException("persistent! called twice on one transient");
+                }
+                return Vec.tpersistent(rt, v);
+            }
+            throw new UnsupportedOperationException(
+                "persistent! on this needs maps and sets ported");
+        });
+        def("conj!", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (Vec.isTransient(rt, v)) {
+                if (!Vec.alive(rt, v)) {
+                    throw new IllegalStateException("conj! on a transient already made persistent");
+                }
+                long acc = v;
+                for (int i = 1; i < n; i++) acc = Vec.tconj(rt, acc, rt.vat(at + i));
+                return acc;
+            }
+            throw new UnsupportedOperationException(
+                "conj! on this needs maps and sets ported");
+        });
+        def("assoc!", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (Vec.isTransient(rt, v)) {
+                if (!Vec.alive(rt, v)) {
+                    throw new IllegalStateException("assoc! on a transient already made persistent");
+                }
+                long acc = v;
+                for (int i = 1; i + 1 < n; i += 2) {
+                    acc = Vec.tassoc(rt, acc, (int) Val.asFixnum(rt.vat(at + i)), rt.vat(at + i + 1));
+                }
+                return acc;
+            }
+            throw new UnsupportedOperationException(
+                "assoc! on this needs maps and sets ported");
+        });
+
         def("=", (rt, at, n) -> {
             for (int i = 1; i < n; i++) if (!eq(rt, rt.vat(at), rt.vat(at + i))) return Val.FALSE;
             return Val.TRUE;
