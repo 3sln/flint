@@ -392,24 +392,24 @@ impl Rt {
     #[cfg(feature = "diagnostics")]
     #[inline(never)]
     #[cold]
-    fn note_stale_push(&mut self, a: u32) {
+    fn note_stale_push(&mut self, a: crate::mem::Addr) {
         unsafe {
             crate::gc::STALE_PUSH[0] += 1;
             if crate::gc::STALE_PUSH[1] != 0 {
                 return;
             }
             crate::gc::STALE_PUSH[1] = a;
-            crate::gc::STALE_PUSH[2] = self.gc.stats.minor as u32;
+            crate::gc::STALE_PUSH[2] = self.gc.stats.minor as crate::mem::Addr;
             // And the whole shadow stack with it, so the frame that owns the
             // mistake is READ OFF rather than inferred. Inferring it from the
             // one bad address is what cost this investigation most of its wrong
             // turns.
-            crate::gc::STALE_SHADOW[0] = self.roots.shadow.len() as u32;
+            crate::gc::STALE_SHADOW[0] = self.roots.shadow.len() as crate::mem::Addr;
             for (k, x) in self.roots.shadow.iter().take(32).enumerate() {
                 let addr = if x.is_heap() { x.as_heap() } else { 0 };
                 crate::gc::STALE_SHADOW[k * 2 + 1] = addr;
                 crate::gc::STALE_SHADOW[k * 2 + 2] = if addr != 0 {
-                    crate::obj::ty(&self.gc.sp, addr) as u32
+                    crate::obj::ty(&self.gc.sp, addr) as crate::mem::Addr
                 } else {
                     255
                 };
@@ -452,7 +452,7 @@ impl Rt {
     /// instructions, and nothing else pulled in -- and the interpreter's cold
     /// path turns it into a real error with numbers in it.
     #[inline]
-    pub fn alloc(&mut self, ty: u8, len: u32) -> u32 {
+    pub fn alloc(&mut self, ty: u8, len: u32) -> crate::mem::Addr {
         #[cfg(feature = "parallel")]
         if self.exec_id.is_some() {
             return self.alloc_shared(ty, len);
@@ -607,7 +607,7 @@ impl Rt {
     /// actually collect, because staging one every time would be a
     /// stop-the-world per allocation rather than per collection.
     #[cfg(feature = "parallel")]
-    fn alloc_shared(&mut self, ty: u8, len: u32) -> u32 {
+    fn alloc_shared(&mut self, ty: u8, len: u32) -> crate::mem::Addr {
         // Taken as a shared reference straight from the pointer, so it does
         // not borrow `self` and the disjoint `self.gc` / `self.roots` borrow
         // below still works. `Parallel` is all atomics, so `&` is enough.
@@ -650,7 +650,7 @@ impl Rt {
     /// needs only `&Gc`, and two `&mut Gc` at the same time would be aliasing
     /// UB even where the writes never touched.
     #[inline]
-    pub fn set_slot(&mut self, obj: u32, i: u32, v: Value) {
+    pub fn set_slot(&mut self, obj: crate::mem::Addr, i: u32, v: Value) {
         self.gc.set_slot(obj, i, v, &mut self.roots.own.remembered);
     }
 

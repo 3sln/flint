@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 
 /// "FLSN". Bumped whenever the layout below changes.
 pub const MAGIC: u32 = 0x464C_534E;
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// Why a restore was refused. `restore` answers a bool because that is what the
 /// host ABI can carry; this says which of the two checks failed, so the message
@@ -38,10 +38,22 @@ impl W {
     fn usz(&mut self, v: usize) {
         self.u32(v as u32);
     }
+    /// An ADDRESS, at whatever width `Addr` is. Its own method so the format
+    /// has one place that decides, rather than a `u32` per field that has to be
+    /// found and changed together.
+    fn addr(&mut self, v: crate::mem::Addr) {
+        self.u64(v as u64);
+    }
     fn vals(&mut self, xs: &[Value]) {
         self.usz(xs.len());
         for v in xs {
             self.u64(v.bits());
+        }
+    }
+    fn addrs(&mut self, xs: &[crate::mem::Addr]) {
+        self.usz(xs.len());
+        for v in xs {
+            self.u64(*v as u64);
         }
     }
     fn u32s(&mut self, xs: &[u32]) {
@@ -67,6 +79,9 @@ impl<'a> R<'a> {
         self.i += 1;
         v
     }
+    fn addr(&mut self) -> crate::mem::Addr {
+        self.u64() as crate::mem::Addr
+    }
     fn u64(&mut self) -> u64 {
         let mut a = [0u8; 8];
         a.copy_from_slice(&self.b[self.i..self.i + 8]);
@@ -81,6 +96,14 @@ impl<'a> R<'a> {
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
             out.push(Value(self.u64()));
+        }
+        out
+    }
+    fn addrs(&mut self) -> Vec<crate::mem::Addr> {
+        let n = self.usz();
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            out.push(self.u64() as crate::mem::Addr);
         }
         out
     }
@@ -129,28 +152,28 @@ pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
     // would mean rewriting them, which is a traversal, which is the thing
     // this design exists to avoid.
     let g = &rt.gc;
-    w.u32(g.sp.in_use);
-    w.u32(g.sp.reserved);
-    w.u32(g.young_base);
-    w.u32(g.half);
-    w.u32(g.from);
-    w.u32(g.to);
-    w.u32(g.to_bump);
-    w.u32(g.bump);
-    w.u32(g.from_end);
-    w.u32(g.old_capacity);
-    w.u32(g.old_live);
-    w.u32(g.max_heap);
+    w.addr(g.sp.in_use);
+    w.addr(g.sp.reserved);
+    w.addr(g.young_base);
+    w.addr(g.half);
+    w.addr(g.from);
+    w.addr(g.to);
+    w.addr(g.to_bump);
+    w.addr(g.bump);
+    w.addr(g.from_end);
+    w.addr(g.old_capacity);
+    w.addr(g.old_live);
+    w.addr(g.max_heap);
     w.u32(g.collecting as u32);
     w.u32(g.oom as u32);
     w.u32(g.stress as u32);
-    w.u32(g.bad_forward);
+    w.addr(g.bad_forward);
     w.usz(g.old_chunks.len());
     for c in &g.old_chunks {
-        w.u32(c.addr);
-        w.u32(c.len);
+        w.addr(c.addr);
+        w.addr(c.len);
     }
-    w.u32s(&g.free_lists);
+    w.addrs(&g.free_lists);
     // The remembered set as a LIST. The per-object FLAGS travel in the heap
     // bytes below, in each object's header. This investigation turned on those
     // two being able to disagree, so both are captured and neither is derived.
@@ -158,7 +181,7 @@ pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
     // It is PER-EXECUTOR now (`doc/decisions/0028`), so what is captured is
     // this executor's plus whatever the last collection handed back. A
     // snapshot is taken from one executor and describes what it can see.
-    w.u32s(&rt.roots.own.remembered);
+    w.addrs(&rt.roots.own.remembered);
     w.u64(g.stats.minor);
     w.u64(g.stats.major);
     w.u64(g.stats.bytes_allocated);
@@ -222,16 +245,16 @@ pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
     // assumed contiguity silently missed it. That is exactly the "answers some
     // questions confidently wrong" failure this design exists to prevent, and
     // the inspector's walk-completeness check is what caught it.
-    let mut regions: Vec<(u32, u32)> = Vec::new();
+    let mut regions: Vec<(crate::mem::Addr, crate::mem::Addr)> = Vec::new();
     regions.push((g.young_base, g.half * 2));
     for c in &g.old_chunks {
         regions.push((c.addr, c.len));
     }
     w.usz(regions.len());
     for (addr, len) in &regions {
-        w.u32(*addr);
-        w.u32(*len);
-        w.b.extend_from_slice(g.sp.bytes(*addr, *len));
+        w.addr(*addr);
+        w.addr(*len);
+        w.b.extend_from_slice(g.sp.bytes(*addr, *len as u32));
     }
     *out = w.b;
 }
@@ -269,7 +292,7 @@ pub fn capture(rt: &Rt) -> Vec<u8> {
 fn count_host_opaques(rt: &mut Rt) -> u32 {
     use crate::obj::{size_of, ty, TY_FREE, TY_OPAQUE};
     let mut n = 0u32;
-    let mut clear = |sp: &crate::mem::Space, a: u32| {
+    let mut clear = |sp: &crate::mem::Space, a: crate::mem::Addr| {
         if ty(sp, a) == TY_OPAQUE {
             n += 1;
         }
@@ -317,38 +340,38 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
         unsafe { REFUSED = REFUSE_IMAGE };
         return false;
     }
-    let in_use = r.u32();
-    let _reserved = r.u32();
+    let in_use = r.addr();
+    let _reserved = r.addr();
     let g = &mut rt.gc;
-    g.young_base = r.u32();
-    g.half = r.u32();
-    g.from = r.u32();
-    g.to = r.u32();
-    g.to_bump = r.u32();
-    g.bump = r.u32();
-    g.from_end = r.u32();
-    g.old_capacity = r.u32();
-    g.old_live = r.u32();
-    g.max_heap = r.u32();
+    g.young_base = r.addr();
+    g.half = r.addr();
+    g.from = r.addr();
+    g.to = r.addr();
+    g.to_bump = r.addr();
+    g.bump = r.addr();
+    g.from_end = r.addr();
+    g.old_capacity = r.addr();
+    g.old_live = r.addr();
+    g.max_heap = r.addr();
     g.collecting = r.u32() != 0;
     g.oom = r.u32() != 0;
     g.stress = r.u32() != 0;
-    g.bad_forward = r.u32();
+    g.bad_forward = r.addr();
     let nch = r.usz();
     g.old_chunks.clear();
     for _ in 0..nch {
-        let addr = r.u32();
-        let len = r.u32();
+        let addr = r.addr();
+        let len = r.addr();
         g.old_chunks.push(Region { addr, len });
     }
-    let fl = r.u32s();
+    let fl = r.addrs();
     for (i, v) in fl.iter().enumerate() {
         if i < g.free_lists.len() {
             g.free_lists[i] = *v;
         }
     }
     // Restored into THIS executor's list; see the note where it is written.
-    let remembered = r.u32s();
+    let remembered = r.addrs();
     g.stats.minor = r.u64();
     g.stats.major = r.u64();
     g.stats.bytes_allocated = r.u64();
@@ -423,10 +446,10 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     // Regions, blitted back to the SAME addresses. Relocating would mean
     // rewriting every pointer, which is a traversal, which is what this avoids.
     let nreg = r.usz();
-    let mut plan: Vec<(u32, u32, usize)> = Vec::new();
+    let mut plan: Vec<(crate::mem::Addr, crate::mem::Addr, usize)> = Vec::new();
     for _ in 0..nreg {
-        let addr = r.u32();
-        let len = r.u32();
+        let addr = r.addr();
+        let len = r.addr();
         if r.i + len as usize > bytes.len() {
             return false;
         }
@@ -446,7 +469,7 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     rt.gc.sp.in_use = in_use;
     for (addr, len, off) in plan {
         rt.gc.sp
-            .bytes_mut(addr, len)
+            .bytes_mut(addr, len as u32)
             .copy_from_slice(&bytes[off..off + len as usize]);
     }
 
@@ -530,8 +553,8 @@ const V_REF: u8 = 1;
 /// Address order rather than discovery order because it is derived from the
 /// heap rather than from a walk this file wrote -- one less thing that can be
 /// subtly wrong and still look plausible.
-fn live_objects(rt: &Rt) -> Vec<u32> {
-    let mut out: Vec<u32> = Vec::new();
+fn live_objects(rt: &Rt) -> Vec<crate::mem::Addr> {
+    let mut out: Vec<crate::mem::Addr> = Vec::new();
     let sp = &rt.gc.sp;
     // The nursery is contiguous: a copying minor leaves exactly the survivors
     // between `from` and `bump`.
@@ -566,11 +589,11 @@ fn live_objects(rt: &Rt) -> Vec<u32> {
 }
 
 struct Index {
-    addrs: Vec<u32>,
+    addrs: Vec<crate::mem::Addr>,
 }
 
 impl Index {
-    fn of(&self, addr: u32) -> Option<u32> {
+    fn of(&self, addr: crate::mem::Addr) -> Option<u32> {
         self.addrs.binary_search(&addr).ok().map(|i| i as u32)
     }
 }
@@ -631,8 +654,8 @@ pub fn export_live(rt: &mut Rt, out: &mut Vec<u8>) -> bool {
             _ => {
                 let size = crate::obj::size_of(&rt.gc.sp, a);
                 let body = size - crate::obj::HDR;
-                w.u32(body);
-                let bytes: Vec<u8> = rt.gc.sp.bytes(a + crate::obj::HDR, body).to_vec();
+                w.u32(body as u32);
+                let bytes: Vec<u8> = rt.gc.sp.bytes(a + crate::obj::HDR, body as u32).to_vec();
                 w.b.extend_from_slice(&bytes);
             }
         }
@@ -720,7 +743,7 @@ pub fn export_live(rt: &mut Rt, out: &mut Vec<u8>) -> bool {
 
 /// Read a value written by `write_value`. `map` turns a snapshot index into the
 /// address it was rebuilt at.
-fn read_value(r: &mut R, map: &[u32]) -> Value {
+fn read_value(r: &mut R, map: &[crate::mem::Addr]) -> Value {
     match r.u8() {
         V_REF => {
             let i = r.u32() as usize;
@@ -801,7 +824,7 @@ pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
 
     // Every address, now that they all exist and nothing more will move them:
     // the objects are all rooted, so the map is taken AFTER the last allocation.
-    let map: Vec<u32> = (0..n).map(|i| rt.r(base + i).as_heap()).collect();
+    let map: Vec<crate::mem::Addr> = (0..n).map(|i| rt.r(base + i).as_heap()).collect();
 
     // Pass two: fill the bodies.
     for (i, (t, len, off)) in bodies.iter().enumerate() {

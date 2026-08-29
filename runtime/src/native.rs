@@ -113,6 +113,10 @@ impl<'a> Sections<'a> {
     /// it. A LATER segment wins, because that is how the splice overwrites a
     /// descriptor in place rather than editing the linker's own data
     /// (`flint.bundle`).
+    /// NOT an `Addr`. This is a wasm module's LINEAR-MEMORY address, from its
+    /// data segments -- 32-bit by the platform's definition, and nothing to do
+    /// with flint's heap addresses even though both are integers. The two being
+    /// different types is the point of `Addr` existing.
     fn read(&self, addr: u32, len: usize) -> Option<&'a [u8]> {
         let mut found = None;
         for (at, bytes) in &self.data {

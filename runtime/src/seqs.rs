@@ -353,7 +353,7 @@ impl Rt {
         let b0 = if s.is_inline_str() {
             s.inline_bytes(&mut buf)[byte as usize]
         } else {
-            self.gc.sp.read_u8(s.as_heap() + STR_DATA + byte)
+            self.gc.sp.read_u8(s.as_heap() + STR_DATA + byte as crate::mem::Addr)
         };
         if b0 < 0x80 {
             1
@@ -374,7 +374,7 @@ impl Rt {
             let b = s.inline_bytes(&mut buf);
             Value::inline_str(&b[byte as usize..(byte + w) as usize])
         } else {
-            let b = self.gc.sp.bytes(s.as_heap() + STR_DATA + byte, w);
+            let b = self.gc.sp.bytes(s.as_heap() + STR_DATA + byte as crate::mem::Addr, w);
             let mut tmp = [0u8; 4];
             tmp[..w as usize].copy_from_slice(b);
             Value::inline_str(&tmp[..w as usize])

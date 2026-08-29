@@ -427,7 +427,7 @@ impl Rt {
         let mut off = 0u32;
         let mut ascii = true;
         for p in parts {
-            self.gc.sp.bytes_mut(a + STR_DATA + off, p.len() as u32).copy_from_slice(p.as_bytes());
+            self.gc.sp.bytes_mut(a + STR_DATA + off as crate::mem::Addr, p.len() as u32).copy_from_slice(p.as_bytes());
             off += p.len() as u32;
             ascii &= p.is_ascii();
         }

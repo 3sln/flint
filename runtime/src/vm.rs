@@ -1601,7 +1601,7 @@ impl Rt {
         let limit = self.gc.heap_limit();
         if self.mem_trips == 0 {
             self.mem_trips = 1;
-            self.gc.set_heap_limit(limit.saturating_add(1024 * 1024));
+            self.gc.set_heap_limit(limit.saturating_add(1024 * 1024) as u32);
         }
         let used = self.gc.heap_used();
         let msg = alloc::format!(

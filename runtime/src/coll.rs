@@ -587,7 +587,7 @@ impl Rt {
                 let mut t = crate::rt::sbuf();
                 s.inline_bytes(&mut t)[i as usize]
             } else {
-                self.gc.sp.read_u8(s.as_heap() + STR_DATA + i)
+                self.gc.sp.read_u8(s.as_heap() + STR_DATA + i as crate::mem::Addr)
             };
             return Some(Value::inline_str(&[b]));
         }
@@ -624,7 +624,7 @@ impl Rt {
                 let mut t = crate::rt::sbuf();
                 s.inline_bytes(&mut t)[idx]
             } else {
-                self.gc.sp.read_u8(s.as_heap() + STR_DATA + idx as u32)
+                self.gc.sp.read_u8(s.as_heap() + STR_DATA + idx as crate::mem::Addr)
             };
             return Value::fixnum(b as i64);
         }

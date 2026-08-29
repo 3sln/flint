@@ -36,8 +36,14 @@ console.log(`    snapshot ${beforeBytes.length} bytes; ${a.regions.length} regio
 ok('a snapshot carries the Rust-side state, not just the heap',
    a.frames !== undefined && a.roots.globals.length > 0 && a.interns.length === 4,
    `frames ${a.frames.length} globals ${a.roots.globals.length} interns ${a.interns.length}`);
+// A LIST, which is the claim -- the per-object flags travel separately in the
+// heap bytes, and this investigation turned on the two being able to disagree.
+// Not `Uint32Array` any more: an address is 48 bits since the heap stopped
+// being capped at 4 GB, so the container is a plain array of numbers. The
+// property being asserted is that the set is carried at all, not what holds it.
 ok('  ... including the remembered set as a LIST',
-   a.remembered instanceof Uint32Array);
+   Array.isArray(a.remembered) || a.remembered instanceof Uint32Array,
+   typeof a.remembered);
 ok('  ... and the gas counter, which makes resumption checkable',
    a.steps > 0n, String(a.steps));
 

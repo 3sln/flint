@@ -12,7 +12,7 @@
 //     reference is reported together rather than one per run.
 
 const MAGIC = 0x464c534e;
-const VERSION = 2;
+const VERSION = 3;
 
 export const TY = {
   0: 'FREE', 1: 'FWD', 2: 'STR', 3: 'BIGINT', 4: 'SYM', 5: 'KW', 6: 'CONS',
@@ -32,6 +32,13 @@ const align8 = (n) => (n + 7) & ~7;
 class Reader {
   constructor(b) { this.b = b; this.i = 0; this.v = new DataView(b.buffer, b.byteOffset, b.byteLength); }
   u32() { const x = this.v.getUint32(this.i, true); this.i += 4; return x; }
+  /// An ADDRESS. 64 bits on the wire since flint's heap stopped being capped
+  /// at 4 GB -- `Value`'s `TAG_HEAP` always left 48 payload bits, and the
+  /// `u32` was a limit inherited from wasm32 rather than one the encoding had.
+  /// `Number` rather than `BigInt`: 48 bits is inside the 53 a double holds
+  /// exactly, so an address is never approximated here.
+  addr() { const x = this.v.getBigUint64(this.i, true); this.i += 8; return Number(x); }
+  addrs() { const n = this.u32(); const out = []; for (let k = 0; k < n; k++) out.push(this.addr()); return out; }
   u64() { const x = this.v.getBigUint64(this.i, true); this.i += 8; return x; }
   u32s() { const n = this.u32(); const out = new Uint32Array(n); for (let k = 0; k < n; k++) out[k] = this.u32(); return out; }
   vals() { const n = this.u32(); const out = new BigUint64Array(n); for (let k = 0; k < n; k++) out[k] = this.u64(); return out; }
@@ -52,15 +59,15 @@ export function read(bytes) {
   // frame ip, constant index and var slot in it only means something against
   // the image it was taken from.
   s.fingerprint = r.u64();
-  s.inUse = r.u32(); s.reserved = r.u32();
-  s.youngBase = r.u32(); s.half = r.u32(); s.from = r.u32(); s.to = r.u32();
-  s.toBump = r.u32(); s.bump = r.u32(); s.fromEnd = r.u32();
-  s.oldCapacity = r.u32(); s.oldLive = r.u32(); s.maxHeap = r.u32();
-  s.collecting = !!r.u32(); s.oom = !!r.u32(); s.stress = !!r.u32(); s.badForward = r.u32();
+  s.inUse = r.addr(); s.reserved = r.addr();
+  s.youngBase = r.addr(); s.half = r.addr(); s.from = r.addr(); s.to = r.addr();
+  s.toBump = r.addr(); s.bump = r.addr(); s.fromEnd = r.addr();
+  s.oldCapacity = r.addr(); s.oldLive = r.addr(); s.maxHeap = r.addr();
+  s.collecting = !!r.u32(); s.oom = !!r.u32(); s.stress = !!r.u32(); s.badForward = r.addr();
   const nch = r.u32(); s.oldChunks = [];
-  for (let k = 0; k < nch; k++) s.oldChunks.push({ addr: r.u32(), len: r.u32() });
-  s.freeLists = r.u32s();
-  s.remembered = r.u32s();
+  for (let k = 0; k < nch; k++) s.oldChunks.push({ addr: r.addr(), len: r.addr() });
+  s.freeLists = r.addrs();
+  s.remembered = r.addrs();
   s.stats = { minor: r.u64(), major: r.u64(), bytesAllocated: r.u64(), bytesCopied: r.u64(), bytesPromoted: r.u64(), peakLive: r.u64() };
   s.stackTop = r.u32();
   s.roots = { stack: r.vals(), shadow: r.vals(), globals: r.vals(), consts: r.vals(), singletons: r.vals() };
@@ -82,7 +89,7 @@ export function read(bytes) {
   const nreg = r.u32();
   s.regions = [];
   for (let k = 0; k < nreg; k++) {
-    const addr = r.u32(), len = r.u32();
+    const addr = r.addr(), len = r.addr();
     s.regions.push({ addr, len, bytes: bytes.subarray(r.i, r.i + len) });
     r.i += len;
   }

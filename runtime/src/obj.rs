@@ -18,11 +18,11 @@
 //!
 //! Sizes are always a multiple of 8.
 
-use crate::mem::Space;
+use crate::mem::{Addr, Space};
 use crate::value::Value;
 
-pub const HDR: u32 = 8;
-pub const STR_DATA: u32 = 16;
+pub const HDR: Addr = 8;
+pub const STR_DATA: Addr = 16;
 
 // --- object types ----------------------------------------------------------
 pub const TY_FREE: u8 = 0; // old-space free block; len = byte size
@@ -148,13 +148,15 @@ pub fn layout_of(ty: u8) -> Layout {
 }
 
 #[inline(always)]
-pub fn align8(n: u32) -> u32 {
+pub fn align8(n: Addr) -> Addr {
     (n + 7) & !7
 }
 
 /// Byte size of an object in the heap, always a multiple of 8.
 #[inline]
-pub fn size_of(sp: &Space, addr: u32) -> u32 {
+/// A byte SIZE, but `Addr`-wide: it is almost always added to an address, and
+/// a size that had to be cast at every such site would be a cast per line.
+pub fn size_of(sp: &Space, addr: Addr) -> Addr {
     let w0 = sp.read_u32(addr);
     let ty = (w0 >> 24) as u8;
     let len = sp.read_u32(addr + 4);
@@ -165,7 +167,7 @@ pub fn size_of(sp: &Space, addr: u32) -> u32 {
     // symptom was `forward: N is not the start of a from-space object` about
     // an object that was plainly fine. Deriving it removes the second table.
     match ty {
-        TY_FREE => len,
+        TY_FREE => len as Addr,
         TY_FWD => HDR,
         _ => size_for(ty, len),
     }
@@ -189,9 +191,9 @@ mod layout_tests {
                 assert!(s >= HDR, "type {t} len {len} sized {s}");
                 assert_eq!(s % 8, 0, "type {t} len {len} sized {s}, not 8-aligned");
                 match layout_of(t) {
-                    Layout::Raw => assert_eq!(s, align8(HDR + len), "raw type {t}"),
-                    Layout::Str => assert_eq!(s, align8(STR_DATA + len), "str type {t}"),
-                    Layout::Vals => assert_eq!(s, HDR + len * 8, "vals type {t}"),
+                    Layout::Raw => assert_eq!(s, align8(HDR + len as Addr), "raw type {t}"),
+                    Layout::Str => assert_eq!(s, align8(STR_DATA + len as Addr), "str type {t}"),
+                    Layout::Vals => assert_eq!(s, HDR + len as Addr * 8, "vals type {t}"),
                 }
             }
         }
@@ -199,48 +201,71 @@ mod layout_tests {
 }
 
 #[inline]
-pub fn size_for(ty: u8, len: u32) -> u32 {
+pub fn size_for(ty: u8, len: u32) -> Addr {
     match layout_of(ty) {
-        Layout::Vals => HDR + len * 8,
-        Layout::Str => align8(STR_DATA + len),
-        Layout::Raw => align8(HDR + len),
+        Layout::Vals => HDR + len as Addr * 8,
+        Layout::Str => align8(STR_DATA + len as Addr),
+        Layout::Raw => align8(HDR + len as Addr),
     }
 }
 
 // --- header fields ---------------------------------------------------------
 
 #[inline(always)]
-pub fn ty(sp: &Space, a: u32) -> u8 {
+pub fn ty(sp: &Space, a: Addr) -> u8 {
     (sp.read_u32(a) >> 24) as u8
 }
 #[inline(always)]
-pub fn len(sp: &Space, a: u32) -> u32 {
+pub fn len(sp: &Space, a: Addr) -> u32 {
     sp.read_u32(a + 4)
 }
 #[inline(always)]
-pub fn set_len(sp: &Space, a: u32, n: u32) {
+pub fn set_len(sp: &Space, a: Addr, n: u32) {
     sp.write_u32(a + 4, n)
 }
 #[inline(always)]
-pub fn write_header(sp: &Space, a: u32, ty: u8, len: u32) {
+/// Stamp a forwarding pointer, and read one back.
+///
+/// A forwarded object's new address does NOT fit in `len` any more: an address
+/// is 48 bits and `len` is 32. It does not need a wider header either -- word 0
+/// is `[31:24] type [23:21] age [20] mark [19] in-remset`, and a `TY_FWD` has
+/// no age, no mark and is in no remembered set, so its whole low 24 bits are
+/// free. 24 + 32 = 56 bits, against the 48 an address can hold.
+///
+/// The two live together so the packing cannot drift; splitting them is how a
+/// reader ends up with half the address.
+#[inline]
+pub fn set_forward(sp: &Space, a: Addr, dest: Addr) {
+    let hi = ((dest >> 32) & 0x00FF_FFFF) as u32;
+    sp.write_u32(a, ((TY_FWD as u32) << 24) | hi);
+    sp.write_u32(a + 4, dest as u32);
+}
+
+#[inline]
+pub fn forward_target(sp: &Space, a: Addr) -> Addr {
+    let hi = (sp.read_u32(a) & 0x00FF_FFFF) as Addr;
+    (hi << 32) | sp.read_u32(a + 4) as Addr
+}
+
+pub fn write_header(sp: &Space, a: Addr, ty: u8, len: u32) {
     sp.write_u32(a, (ty as u32) << 24);
     sp.write_u32(a + 4, len);
 }
 #[inline(always)]
-pub fn age(sp: &Space, a: u32) -> u32 {
+pub fn age(sp: &Space, a: Addr) -> u32 {
     (sp.read_u32(a) >> 21) & 7
 }
 #[inline(always)]
-pub fn set_age(sp: &Space, a: u32, age: u32) {
+pub fn set_age(sp: &Space, a: Addr, age: u32) {
     let w = sp.read_u32(a);
     sp.write_u32(a, (w & !(7 << 21)) | ((age & 7) << 21));
 }
 #[inline(always)]
-pub fn marked(sp: &Space, a: u32) -> bool {
+pub fn marked(sp: &Space, a: Addr) -> bool {
     sp.read_u32(a) & (1 << 20) != 0
 }
 #[inline(always)]
-pub fn set_marked(sp: &Space, a: u32, m: bool) {
+pub fn set_marked(sp: &Space, a: Addr, m: bool) {
     let w = sp.read_u32(a);
     sp.write_u32(a, if m { w | (1 << 20) } else { w & !(1 << 20) });
 }
@@ -260,21 +285,21 @@ pub const RP_FLAT: u32 = 2;
 pub const RP_KIDS: u32 = 3;
 
 #[inline(always)]
-pub fn str_is_ascii(sp: &Space, a: u32) -> bool {
+pub fn str_is_ascii(sp: &Space, a: Addr) -> bool {
     sp.read_u32(a) & (1 << 18) != 0
 }
 #[inline(always)]
-pub fn set_str_ascii(sp: &Space, a: u32, v: bool) {
+pub fn set_str_ascii(sp: &Space, a: Addr, v: bool) {
     let w = sp.read_u32(a);
     sp.write_u32(a, if v { w | (1 << 18) } else { w & !(1 << 18) });
 }
 
 #[inline(always)]
-pub fn in_remset(sp: &Space, a: u32) -> bool {
+pub fn in_remset(sp: &Space, a: Addr) -> bool {
     sp.read_u32(a) & (1 << 19) != 0
 }
 #[inline(always)]
-pub fn set_in_remset(sp: &Space, a: u32, m: bool) {
+pub fn set_in_remset(sp: &Space, a: Addr, m: bool) {
     let w = sp.read_u32(a);
     sp.write_u32(a, if m { w | (1 << 19) } else { w & !(1 << 19) });
 }
@@ -282,11 +307,11 @@ pub fn set_in_remset(sp: &Space, a: u32, m: bool) {
 // --- slot access -----------------------------------------------------------
 
 #[inline(always)]
-pub fn slot_addr(a: u32, i: u32) -> u32 {
-    a + HDR + i * 8
+pub fn slot_addr(a: Addr, i: u32) -> Addr {
+    a + HDR + i as Addr * 8
 }
 #[inline(always)]
-pub fn slot(sp: &Space, a: u32, i: u32) -> Value {
+pub fn slot(sp: &Space, a: Addr, i: u32) -> Value {
     let out = Value(sp.read_u64(slot_addr(a, i)));
     // Reading a forwarded pointer outside the collector means the edge INTO
     // this object was never traced: the collector moved the target and nothing
@@ -309,12 +334,12 @@ pub fn slot(sp: &Space, a: u32, i: u32) -> Value {
 /// Raw slot store. Callers that may be writing into an *old* object must go
 /// through `Gc::set_slot` so the write barrier runs.
 #[inline(always)]
-pub fn set_slot_raw(sp: &Space, a: u32, i: u32, v: Value) {
+pub fn set_slot_raw(sp: &Space, a: Addr, i: u32, v: Value) {
     sp.write_u64(slot_addr(a, i), v.0)
 }
 
 #[inline]
-pub fn str_bytes<'a>(sp: &'a Space, a: u32) -> &'a [u8] {
+pub fn str_bytes<'a>(sp: &'a Space, a: Addr) -> &'a [u8] {
     // A rope's `len` is its SLOT COUNT and its body is Values, so reading it
     // here returns the slots as bytes -- garbage that looks like a string. Two
     // callers did exactly that (`char_count` and `str_indexable`) and `count`
@@ -323,14 +348,14 @@ pub fn str_bytes<'a>(sp: &'a Space, a: u32) -> &'a [u8] {
     sp.bytes(a + STR_DATA, len(sp, a))
 }
 #[inline]
-pub fn str_hash(sp: &Space, a: u32) -> u32 {
+pub fn str_hash(sp: &Space, a: Addr) -> u32 {
     sp.read_u32(a + HDR)
 }
 #[inline]
-pub fn set_str_hash(sp: &Space, a: u32, h: u32) {
+pub fn set_str_hash(sp: &Space, a: Addr, h: u32) {
     sp.write_u32(a + HDR, h)
 }
 #[inline]
-pub fn raw_bytes<'a>(sp: &'a Space, a: u32) -> &'a [u8] {
+pub fn raw_bytes<'a>(sp: &'a Space, a: Addr) -> &'a [u8] {
     sp.bytes(a + HDR, len(sp, a))
 }

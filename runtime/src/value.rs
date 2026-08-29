@@ -118,12 +118,17 @@ impl Value {
         self.tag() == TAG_HEAP
     }
     #[inline(always)]
-    pub const fn heap(off: u32) -> Value {
+    pub const fn heap(off: crate::mem::Addr) -> Value {
         Value((TAG_HEAP << 48) | off as u64)
     }
     #[inline(always)]
-    pub const fn as_heap(self) -> u32 {
-        self.0 as u32
+    pub const fn as_heap(self) -> crate::mem::Addr {
+        // MASK to the payload, do not merely cast. `self.0 as u32` was right
+        // while an address was 32 bits -- the cast did the masking. With a
+        // wider address the tag would come back as part of the value, so the
+        // 48 payload bits are taken explicitly and the cast then narrows to
+        // whatever this target's `Addr` is.
+        (self.0 & 0x0000_FFFF_FFFF_FFFF) as crate::mem::Addr
     }
 
     #[inline(always)]
@@ -251,6 +256,7 @@ impl fmt::Debug for Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mem::Addr;
 
     #[test]
     fn doubles_roundtrip() {
@@ -364,12 +370,22 @@ mod tests {
         }
     }
 
+    /// A heap reference round-trips across the WHOLE payload, not just the
+    /// first 4 GB.
+    ///
+    /// `0x0000_FFFF_FFFF_FFFF` is the largest address the encoding can carry:
+    /// `TAG_HEAP` occupies bits 63..48 and everything below is payload. The
+    /// address type used to be `u32`, which capped flint's heap at 4 GB on
+    /// every runtime -- a limit inherited from wasm32 rather than one the
+    /// representation ever had. This asserts the range is really there, and
+    /// that the tag is not read back as part of the address.
     #[test]
     fn heap_refs() {
-        for off in [8u32, 16, 0x1000, u32::MAX] {
+        for off in [8 as Addr, 16, 0x1000, u32::MAX as Addr,
+                    0x1_0000_0000, 0x0000_FFFF_FFFF_FFF8] {
             let v = Value::heap(off);
-            assert!(v.is_heap() && !v.is_double());
-            assert_eq!(v.as_heap(), off);
+            assert!(v.is_heap() && !v.is_double(), "{off:#x} did not encode as a heap ref");
+            assert_eq!(v.as_heap(), off, "{off:#x} did not survive the round trip");
         }
     }
 }

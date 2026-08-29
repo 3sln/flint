@@ -31,7 +31,7 @@
 
 use alloc::vec::Vec;
 
-use crate::mem::{align_up, Region, Space, PAGE};
+use crate::mem::{Addr, align_up, Region, Space, PAGE};
 use crate::obj::*;
 use crate::value::Value;
 
@@ -54,7 +54,7 @@ pub static mut CUR_NATIVE: u32 = 0;
 #[cfg(feature = "diagnostics")]
 pub const ORIG_CAP: usize = 1 << 16;
 #[cfg(feature = "diagnostics")]
-pub static mut ORIG_ADDR: [u32; ORIG_CAP] = [0; ORIG_CAP];
+pub static mut ORIG_ADDR: [Addr; ORIG_CAP] = [0; ORIG_CAP];
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_WHO: [u32; ORIG_CAP] = [0; ORIG_CAP];
 /// A monotonic allocation serial. This bug propagates a stale pointer verbatim
@@ -68,21 +68,21 @@ pub static mut ORIG_SEQ: [u32; ORIG_CAP] = [0; ORIG_CAP];
 /// A stale value caught at the instant it is written, rather than found later
 /// in a scan. [count, obj, slot, value, obj-type, native, collection]
 #[cfg(feature = "diagnostics")]
-pub static mut STALE_SET: [u32; 10] = [0; 10];
+pub static mut STALE_SET: [Addr; 10] = [0; 10];
 
 /// Roots that are still stale after a collection has finished.
 /// [count, first address, collection, which array, index]
-pub static mut STALE_ROOT: [u32; 7] = [0; 7];
+pub static mut STALE_ROOT: [Addr; 7] = [0; 7];
 
 /// The whole shadow stack at the instant of the stale write, so the frame that
 /// owns the bad slot is read off rather than inferred. [len, then addresses]
-pub static mut STALE_SHADOW: [u32; 65] = [0; 65];
+pub static mut STALE_SHADOW: [Addr; 65] = [0; 65];
 
 /// A stale value ROOTED -- pushed onto the shadow stack. This is the exact
 /// signature of a Rust local held across an allocation, caught one step earlier
 /// than the write that finally makes it visible, and it costs one comparison.
 /// [count, first address, collection, pushes checked]
-pub static mut STALE_PUSH: [u32; 4] = [0; 4];
+pub static mut STALE_PUSH: [Addr; 4] = [0; 4];
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_N: usize = 0;
 pub struct InternTable {
@@ -183,7 +183,7 @@ pub struct ExecRoots {
     ///
     /// The collector drains every executor's at a safepoint, which is the only
     /// time anything reads them.
-    pub remembered: Vec<u32>,
+    pub remembered: Vec<Addr>,
 }
 
 impl ExecRoots {
@@ -494,7 +494,7 @@ impl Roots {
     /// rooting ARGUMENT, and a more careful reading of a rooting argument is
     /// still a rooting argument.
     #[cfg(feature = "diagnostics")]
-    pub fn holds(&self, addr: u32) -> bool {
+    pub fn holds(&self, addr: Addr) -> bool {
         let hit = |v: &Value| v.is_heap() && v.as_heap() == addr;
         let top = self.own.stack_top;
         self.own.stack[..top].iter().any(hit)
@@ -509,7 +509,7 @@ impl Roots {
     }
 
     #[cfg(all(feature = "diagnostics", feature = "parallel"))]
-    fn parked_hold(&self, addr: u32) -> bool {
+    fn parked_hold(&self, addr: Addr) -> bool {
         let hit = |v: &Value| v.is_heap() && v.as_heap() == addr;
         self.shared.others.iter().any(|e| {
             let e = unsafe { &*e.0 };
@@ -518,7 +518,7 @@ impl Roots {
     }
 
     #[cfg(all(feature = "diagnostics", not(feature = "parallel")))]
-    fn parked_hold(&self, _addr: u32) -> bool {
+    fn parked_hold(&self, _addr: Addr) -> bool {
         false
     }
 
@@ -528,7 +528,7 @@ impl Roots {
     /// executor is stopped. Draining one executor's list and not the rest would
     /// lose old-to-young edges that another thread recorded, and a lost edge is
     /// a young object collected while an old one still points at it.
-    fn drain_remembered(&mut self) -> Vec<u32> {
+    fn drain_remembered(&mut self) -> Vec<Addr> {
         let mut out = core::mem::take(&mut self.own.remembered);
         #[cfg(feature = "parallel")]
         for e in self.shared.others.iter().copied() {
@@ -602,8 +602,8 @@ pub struct GcStats {
     pub bytes_allocated: u64,
     pub bytes_copied: u64,
     pub bytes_promoted: u64,
-    pub old_live: u32,
-    pub old_capacity: u32,
+    pub old_live: Addr,
+    pub old_capacity: Addr,
     /// High-water mark of live bytes -- old survivors plus whatever is in the
     /// nursery -- sampled at every collection. This is the number a memory
     /// claim has to be made against: "peak memory is proportional to content
@@ -614,25 +614,25 @@ pub struct GcStats {
 
 pub struct Gc {
     pub sp: Space,
-    pub(crate) young_base: u32,
-    pub(crate) half: u32,
-    pub(crate) from: u32,
-    pub(crate) to: u32,
+    pub(crate) young_base: Addr,
+    pub(crate) half: Addr,
+    pub(crate) from: Addr,
+    pub(crate) to: Addr,
     /// Bump pointer into the destination semispace; live only during `minor`.
-    pub(crate) to_bump: u32,
-    pub(crate) bump: u32,
-    pub(crate) from_end: u32,
+    pub(crate) to_bump: Addr,
+    pub(crate) bump: Addr,
+    pub(crate) from_end: Addr,
     pub(crate) old_chunks: Vec<Region>,
-    pub(crate) free_lists: [u32; NCLASS],
-    pub(crate) old_capacity: u32,
-    pub(crate) old_live: u32,
+    pub(crate) free_lists: [Addr; NCLASS],
+    pub(crate) old_capacity: Addr,
+    pub(crate) old_live: Addr,
     /// What the COLLECTOR re-enrols while rebuilding the set.
     ///
     /// The mutators' lists are per-executor (`ExecRoots::remembered`); this one
     /// belongs to the collection itself, which runs with everything stopped.
-    pub(crate) remembered_during_collect: Vec<u32>,
-    work: Vec<u32>,
-    pub(crate) max_heap: u32,
+    pub(crate) remembered_during_collect: Vec<Addr>,
+    work: Vec<Addr>,
+    pub(crate) max_heap: Addr,
     pub stats: GcStats,
     pub oom: bool,
     /// Guards the retry below: a collection must not try to collect again when
@@ -694,7 +694,7 @@ pub struct Gc {
     pub remset_end_violations: u32,
     /// The first few, as (object, its type, slot, young target, target type).
     #[cfg(feature = "diagnostics")]
-    pub remset_bad: [[u32; 5]; 8],
+    pub remset_bad: [[Addr; 5]; 8],
     /// Coverage, not just result. "Zero violations" and "walked nothing
     /// relevant" produce identical output, and this codebase has already shipped
     /// one walker that reported success while covering part of the heap.
@@ -704,7 +704,7 @@ pub struct Gc {
     pub remset_walk_errors: u32,
     /// An address the walk must reach, or the zero above means nothing.
     #[cfg(feature = "diagnostics")]
-    pub remset_watch: u32,
+    pub remset_watch: Addr,
     #[cfg(feature = "diagnostics")]
     pub remset_watch_seen: u32,
     /// A young pointer must be in the LIVE half, not merely inside the young
@@ -718,7 +718,7 @@ pub struct Gc {
     #[cfg(feature = "diagnostics")]
     pub dead_half_refs: u32,
     #[cfg(feature = "diagnostics")]
-    pub dead_half_bad: [[u32; 7]; 8],
+    pub dead_half_bad: [[Addr; 7]; 8],
     /// A young-range pointer handed to `forward` that is in NEITHER a live
     /// from-space object nor an already-copied to-space one.
     ///
@@ -733,7 +733,7 @@ pub struct Gc {
     #[cfg(feature = "diagnostics")]
     pub limbo_refs: u32,
     #[cfg(feature = "diagnostics")]
-    pub limbo_bad: [[u32; 4]; 8],
+    pub limbo_bad: [[Addr; 4]; 8],
     /// `bump` at the END of a chosen collection, before any allocation that
     /// follows it. Comparing an object's address against THIS says whether it
     /// existed then or was created afterwards -- and the value at the next
@@ -741,9 +741,9 @@ pub struct Gc {
     #[cfg(feature = "diagnostics")]
     pub watch_end_cycle: u64,
     #[cfg(feature = "diagnostics")]
-    pub watch_end_bump: u32,
+    pub watch_end_bump: Addr,
     #[cfg(feature = "diagnostics")]
-    pub watch_end_from: u32,
+    pub watch_end_from: Addr,
     /// Record allocation origins only for collections in `[from, until)`. The
     /// ring is a fixed size, so recording every allocation in an 18-million
     /// allocation run overwrites the interesting one long before anything asks.
@@ -762,7 +762,7 @@ pub struct Gc {
     #[cfg(feature = "diagnostics")]
     pub restore_stale: u32,
     #[cfg(feature = "diagnostics")]
-    pub restore_bad: [[u32; 4]; 8],
+    pub restore_bad: [[Addr; 4]; 8],
     /// Coverage: how many resumes were checked, and how many values across
     /// them. Zero violations from a check that never ran is not a result.
     #[cfg(feature = "diagnostics")]
@@ -772,12 +772,12 @@ pub struct Gc {
     /// First from-space address `forward` was asked to treat as an object and
     /// could not believe. `0` means none seen. See `plausible_from_object`.
     #[cfg(feature = "diagnostics")]
-    pub bad_forward: u32,
+    pub bad_forward: Addr,
 }
 
 impl Gc {
     pub fn new(nursery_bytes: u32, max_heap: u32) -> Gc {
-        let half = align_up(nursery_bytes.max(64 * 1024), PAGE);
+        let half = align_up((nursery_bytes as Addr).max(64 * 1024), PAGE as Addr);
         let mut sp = Space::new(max_heap);
         let young_base = sp.take(half * 2);
         assert!(young_base != 0, "flint: cannot reserve nursery");
@@ -796,7 +796,7 @@ impl Gc {
             old_live: 0,
             remembered_during_collect: Vec::new(),
             work: Vec::new(),
-            max_heap,
+            max_heap: max_heap as Addr,
             stats: GcStats::default(),
             oom: false,
             collecting: false,
@@ -860,18 +860,18 @@ impl Gc {
             #[cfg(feature = "diagnostics")]
             bad_forward: 0,
         };
-        gc.add_chunk(MIN_CHUNK);
+        gc.add_chunk(MIN_CHUNK as Addr);
         gc
     }
 
     #[cfg(feature = "diagnostics")]
-    pub fn from_now(&self) -> u32 { self.from }
+    pub fn from_now(&self) -> Addr { self.from }
     #[cfg(feature = "diagnostics")]
-    pub fn bump_now(&self) -> u32 { self.bump }
+    pub fn bump_now(&self) -> Addr { self.bump }
     #[cfg(feature = "diagnostics")]
-    pub fn to_now(&self) -> u32 { self.to }
+    pub fn to_now(&self) -> Addr { self.to }
     #[cfg(feature = "diagnostics")]
-    pub fn half_now(&self) -> u32 { self.half }
+    pub fn half_now(&self) -> Addr { self.half }
 
     /// Is `addr` in the LIVE half -- an actually allocated young object -- as
     /// opposed to merely inside the young address range?
@@ -882,19 +882,19 @@ impl Gc {
     /// barrier and the generational invariant check.
     #[cfg(feature = "diagnostics")]
     #[inline(always)]
-    pub fn in_live_half(&self, addr: u32) -> bool {
+    pub fn in_live_half(&self, addr: Addr) -> bool {
         addr >= self.from && addr < self.bump
     }
     #[inline(always)]
-    pub fn is_young(&self, addr: u32) -> bool {
+    pub fn is_young(&self, addr: Addr) -> bool {
         addr.wrapping_sub(self.young_base) < self.half * 2
     }
     #[inline(always)]
-    fn in_from(&self, addr: u32) -> bool {
+    fn in_from(&self, addr: Addr) -> bool {
         addr.wrapping_sub(self.from) < self.half
     }
 
-    pub fn young_used(&self) -> u32 {
+    pub fn young_used(&self) -> Addr {
         self.bump - self.from
     }
 
@@ -908,7 +908,7 @@ impl Gc {
     #[cfg(feature = "parallel")]
     pub fn would_collect(&self, ty: u8, len_: u32) -> bool {
         let size = size_for(ty, len_);
-        size >= LARGE_OBJECT || self.bump.saturating_add(size) > self.from.saturating_add(self.half)
+        size >= LARGE_OBJECT as Addr || self.bump.saturating_add(size) > self.from.saturating_add(self.half)
     }
 
     /// Sample the high-water mark. Called after each collection, when the
@@ -919,27 +919,27 @@ impl Gc {
             self.stats.peak_live = live;
         }
     }
-    pub fn old_capacity(&self) -> u32 {
+    pub fn old_capacity(&self) -> Addr {
         self.old_capacity
     }
-    pub fn old_live(&self) -> u32 {
+    pub fn old_live(&self) -> Addr {
         self.old_live
     }
     /// Bytes of heap this program is permitted, and how much it holds now.
-    pub fn heap_limit(&self) -> u32 {
+    pub fn heap_limit(&self) -> Addr {
         self.max_heap
     }
     pub fn set_heap_limit(&mut self, bytes: u32) {
-        self.max_heap = bytes;
+        self.max_heap = bytes as Addr;
     }
-    pub fn heap_used(&self) -> u32 {
+    pub fn heap_used(&self) -> Addr {
         self.old_capacity.saturating_add(self.half * 2)
     }
 
     // --- old space -------------------------------------------------------
 
-    fn add_chunk(&mut self, want: u32) -> bool {
-        let size = align_up(want.max(MIN_CHUNK), PAGE);
+    fn add_chunk(&mut self, want: Addr) -> bool {
+        let size = align_up((want as Addr).max(MIN_CHUNK as Addr), PAGE as Addr);
         if self.old_capacity.saturating_add(self.half * 2).saturating_add(size) > self.max_heap {
             return false;
         }
@@ -949,13 +949,17 @@ impl Gc {
         }
         self.old_chunks.push(Region { addr, len: size });
         self.old_capacity += size;
-        write_header(&self.sp, addr, TY_FREE, size);
+        // A free block's `len` is a BYTE SIZE in a u32 field, so one block
+        // caps at 4 GB even though the space no longer does. Chunks are far
+        // smaller than that and there can be many, so this is a cast rather
+        // than a limit anyone reaches.
+        write_header(&self.sp, addr, TY_FREE, size as u32);
         self.push_free(addr, size);
         true
     }
 
     #[inline]
-    fn class_of(size: u32) -> usize {
+    fn class_of(size: Addr) -> usize {
         let c = (size / 8) as usize;
         if c >= NCLASS {
             NCLASS - 1
@@ -964,39 +968,46 @@ impl Gc {
         }
     }
 
-    fn push_free(&mut self, addr: u32, size: u32) {
-        write_header(&self.sp, addr, TY_FREE, size);
+    fn push_free(&mut self, addr: Addr, size: Addr) {
+        // A free block's `len` is a BYTE SIZE in a u32 field, so one block
+        // caps at 4 GB even though the space no longer does. Chunks are far
+        // smaller than that and there can be many, so this is a cast rather
+        // than a limit anyone reaches.
+        write_header(&self.sp, addr, TY_FREE, size as u32);
         if size < 16 {
             return; // an 8-byte hole: unlinkable, coalesced by the next sweep
         }
         let c = Self::class_of(size);
-        self.sp.write_u32(addr + 8, self.free_lists[c]);
+        // A `u64`, because the next-pointer IS an address. The `size < 16`
+        // guard above is what reserves the room: a linked block always has the
+        // eight bytes at +8 free, which is exactly a wide pointer.
+        self.sp.write_u64(addr + 8, self.free_lists[c]);
         self.free_lists[c] = addr;
     }
 
-    fn take_free(&mut self, size: u32) -> u32 {
+    fn take_free(&mut self, size: Addr) -> Addr {
         let want = Self::class_of(size);
         // Exact and larger fixed classes first.
         for c in want..NCLASS - 1 {
             let head = self.free_lists[c];
             if head != 0 {
-                self.free_lists[c] = self.sp.read_u32(head + 8);
-                let bs = len(&self.sp, head);
+                self.free_lists[c] = self.sp.read_u64(head + 8);
+                let bs = len(&self.sp, head) as Addr;
                 self.split(head, bs, size);
                 return head;
             }
         }
         // The "big" list: first fit.
-        let mut prev = 0u32;
+        let mut prev = 0 as Addr;
         let mut cur = self.free_lists[NCLASS - 1];
         while cur != 0 {
-            let bs = len(&self.sp, cur);
-            let next = self.sp.read_u32(cur + 8);
+            let bs = len(&self.sp, cur) as Addr;
+            let next = self.sp.read_u64(cur + 8);
             if bs >= size {
                 if prev == 0 {
                     self.free_lists[NCLASS - 1] = next;
                 } else {
-                    self.sp.write_u32(prev + 8, next);
+                    self.sp.write_u64(prev + 8, next);
                 }
                 self.split(cur, bs, size);
                 return cur;
@@ -1007,7 +1018,7 @@ impl Gc {
         0
     }
 
-    fn split(&mut self, addr: u32, block: u32, want: u32) {
+    fn split(&mut self, addr: Addr, block: Addr, want: Addr) {
         let rest = block - want;
         if rest > 0 {
             self.push_free(addr + want, rest);
@@ -1020,7 +1031,7 @@ impl Gc {
     /// depend on when the collector last ran, which is exactly the kind of
     /// timing dependence a deterministic limit exists to avoid
     /// (`doc/decisions/0009`).
-    fn alloc_old_collecting(&mut self, roots: &mut Roots, ty: u8, len_: u32) -> u32 {
+    fn alloc_old_collecting(&mut self, roots: &mut Roots, ty: u8, len_: u32) -> Addr {
         let a = self.alloc_old(ty, len_);
         if a != 0 || self.collecting {
             return a;
@@ -1032,11 +1043,11 @@ impl Gc {
         self.alloc_old(ty, len_)
     }
 
-    fn alloc_old(&mut self, ty: u8, len_: u32) -> u32 {
+    fn alloc_old(&mut self, ty: u8, len_: u32) -> Addr {
         let size = size_for(ty, len_);
         let mut a = self.take_free(size);
         if a == 0 {
-            if !self.add_chunk(size + PAGE) {
+            if !self.add_chunk(size + PAGE as Addr) {
                 self.oom = true;
                 return 0;
             }
@@ -1057,10 +1068,10 @@ impl Gc {
     /// half-built object is both safe to trace and semantically sane -- an
     /// unset trie slot reads as `nil`, not as the double `0.0`, which is what
     /// zero bits would have meant.
-    pub fn alloc(&mut self, roots: &mut Roots, ty: u8, len_: u32) -> u32 {
+    pub fn alloc(&mut self, roots: &mut Roots, ty: u8, len_: u32) -> Addr {
         let size = size_for(ty, len_);
         self.stats.bytes_allocated += size as u64;
-        if size >= LARGE_OBJECT {
+        if size >= LARGE_OBJECT as Addr {
             let a = self.alloc_old_collecting(roots, ty, len_);
             if a != 0 {
                 self.zero_body(a, ty, len_);
@@ -1113,7 +1124,7 @@ impl Gc {
     }
 
     #[inline]
-    fn zero_body(&self, a: u32, ty: u8, len_: u32) {
+    fn zero_body(&self, a: Addr, ty: u8, len_: u32) {
         match layout_of(ty) {
             Layout::Vals => {
                 let dst = self.sp.bytes_mut(a + HDR, len_ * 8);
@@ -1148,7 +1159,7 @@ impl Gc {
     /// Two executors can both set the flag on one object. They write the same
     /// bit, and the worst case is the object appearing in two executors'
     /// lists -- a second scan, not a wrong answer.
-    pub(crate) fn remember(&self, obj: u32, rem: &mut Vec<u32>) {
+    pub(crate) fn remember(&self, obj: Addr, rem: &mut Vec<Addr>) {
         if !in_remset(&self.sp, obj) {
             set_in_remset(&self.sp, obj, true);
             rem.push(obj);
@@ -1157,7 +1168,7 @@ impl Gc {
 
     /// Store a value into a slot, running the generational write barrier.
     #[inline]
-    pub fn set_slot(&self, obj: u32, i: u32, v: Value, rem: &mut Vec<u32>) {
+    pub fn set_slot(&self, obj: Addr, i: u32, v: Value, rem: &mut Vec<Addr>) {
         // A young pointer that is not in the LIVE half is a leftover from
         // before a flip. `is_young` spans both semispaces, so no barrier and no
         // generational check can tell one from the other -- only this can, and
@@ -1173,11 +1184,11 @@ impl Gc {
                 STALE_SET[0] += 1;
                 if STALE_SET[1] == 0 {
                     STALE_SET[1] = obj;
-                    STALE_SET[2] = i;
+                    STALE_SET[2] = i as Addr;
                     STALE_SET[3] = v.as_heap();
-                    STALE_SET[4] = crate::obj::ty(&self.sp, obj) as u32;
-                    STALE_SET[5] = CUR_NATIVE;
-                    STALE_SET[6] = self.stats.minor as u32;
+                    STALE_SET[4] = crate::obj::ty(&self.sp, obj) as Addr;
+                    STALE_SET[5] = CUR_NATIVE as Addr;
+                    STALE_SET[6] = self.stats.minor as Addr;
                 }
             }
         }
@@ -1191,7 +1202,7 @@ impl Gc {
     /// separate for readability only: making it skip the barrier was tried and
     /// is a footgun, because a large object is born in the *old* generation.
     #[inline]
-    pub fn init_slot(&self, obj: u32, i: u32, v: Value, rem: &mut Vec<u32>) {
+    pub fn init_slot(&self, obj: Addr, i: u32, v: Value, rem: &mut Vec<Addr>) {
         self.set_slot(obj, i, v, rem)
     }
 
@@ -1207,7 +1218,7 @@ impl Gc {
     /// (`doc/HANDOFF.md`). This turns that into something catchable where it
     /// happens.
     #[cfg(feature = "diagnostics")]
-    fn plausible_from_object(&self, a: u32) -> bool {
+    fn plausible_from_object(&self, a: Addr) -> bool {
         // Live from-space runs from `from` to the allocation top, which `bump`
         // still holds until the flip at the end of the collection.
         if a < self.from || a >= self.bump {
@@ -1237,7 +1248,7 @@ impl Gc {
             {
                 let k = self.limbo_refs as usize;
                 if k < 8 {
-                    self.limbo_bad[k] = [a, self.stats.minor as u32, self.to, self.to_bump];
+                    self.limbo_bad[k] = [a, self.stats.minor as Addr, self.to, self.to_bump];
                 }
                 self.limbo_refs += 1;
             }
@@ -1252,7 +1263,7 @@ impl Gc {
             debug_assert!(false, "forward: {a} is not the start of a from-space object");
         }
         if ty(&self.sp, a) == TY_FWD {
-            return Value::heap(len(&self.sp, a));
+            return Value::heap(forward_target(&self.sp, a));
         }
         let size = size_of(&self.sp, a);
         let new_age = age(&self.sp, a) + 1;
@@ -1272,7 +1283,7 @@ impl Gc {
             0
         };
         let dest = if dest != 0 {
-            self.sp.copy_within(a, dest, size);
+            self.sp.copy_within(a, dest, size as u32);
             set_age(&self.sp, dest, new_age);
             set_in_remset(&self.sp, dest, false);
             set_marked(&self.sp, dest, false);
@@ -1281,17 +1292,17 @@ impl Gc {
             let d = self.to_bump;
             debug_assert!(d + size <= self.to + self.half, "to-space overflow");
             self.to_bump += size;
-            self.sp.copy_within(a, d, size);
+            self.sp.copy_within(a, d, size as u32);
             set_age(&self.sp, d, new_age.min(PROMOTE_AGE - 1));
             self.stats.bytes_copied += size as u64;
             d
         };
-        write_header(&self.sp, a, TY_FWD, dest);
+        set_forward(&self.sp, a, dest);
         self.work.push(dest);
         Value::heap(dest)
     }
 
-    fn scan_object(&mut self, a: u32) {
+    fn scan_object(&mut self, a: Addr) {
         let t = ty(&self.sp, a);
         if layout_of(t) != Layout::Vals {
             return;
@@ -1348,7 +1359,7 @@ impl Gc {
         // something for the space it actually walks, and the first version of
         // this covered old space alone -- so a stale pointer sitting in a young
         // object was invisible to it and it reported a clean zero.
-        let mut spans: Vec<(u32, u32)> =
+        let mut spans: Vec<(Addr, Addr)> =
             self.old_chunks.iter().map(|c| (c.addr, c.addr + c.len)).collect();
         spans.push((self.from, self.bump));
         for c in &spans {
@@ -1383,10 +1394,10 @@ impl Gc {
                                 // from another moment classify nothing.
                                 self.dead_half_bad[k] = [
                                     a,
-                                    t as u32,
-                                    i,
+                                    t as Addr,
+                                    i as Addr,
                                     v.as_heap(),
-                                    cycle as u32,
+                                    cycle as Addr,
                                     self.from,
                                     self.bump,
                                 ];
@@ -1400,10 +1411,10 @@ impl Gc {
                             if k < 8 {
                                 self.remset_bad[k] = [
                                     a,
-                                    t as u32,
-                                    i,
+                                    t as Addr,
+                                    i as Addr,
                                     v.as_heap(),
-                                    ty(&self.sp, v.as_heap()) as u32,
+                                    ty(&self.sp, v.as_heap()) as Addr,
                                 ];
                             }
                             self.remset_violations += 1;
@@ -1475,7 +1486,7 @@ impl Gc {
                 if v.is_heap() && v.as_heap().wrapping_sub(from) < half {
                     let a = v.as_heap();
                     if ty(spc, a) == TY_FWD {
-                        Some(Value::heap(len(spc, a)))
+                        Some(Value::heap(forward_target(spc, a)))
                     } else {
                         None // died in the nursery
                     }
@@ -1507,9 +1518,9 @@ impl Gc {
                         STALE_ROOT[0] += 1;
                         if STALE_ROOT[1] == 0 {
                             STALE_ROOT[1] = a;
-                            STALE_ROOT[2] = self.stats.minor as u32 + 1;
-                            STALE_ROOT[3] = which;
-                            STALE_ROOT[4] = idx;
+                            STALE_ROOT[2] = self.stats.minor as Addr + 1;
+                            STALE_ROOT[3] = which as Addr;
+                            STALE_ROOT[4] = idx as Addr;
                         }
                     }
                 }
@@ -1655,12 +1666,12 @@ impl Gc {
 
     fn sweep_old(&mut self) {
         self.free_lists = [0; NCLASS];
-        let mut live = 0u32;
+        let mut live = 0 as Addr;
         let chunks = core::mem::take(&mut self.old_chunks);
         for ch in &chunks {
             let end = ch.addr + ch.len;
             let mut a = ch.addr;
-            let mut run_start = 0u32; // start of the current dead run, 0 = none
+            let mut run_start = 0 as Addr; // start of the current dead run, 0 = none
             while a < end {
                 let size = size_of(&self.sp, a);
                 debug_assert!(size >= 8 && a + size <= end, "old space parse error");
@@ -1721,10 +1732,10 @@ mod tests {
         /// Push a value on the shadow root stack and return its index.
         /// Write a slot through the barrier, the way an `Rt` does: the list
         /// the barrier appends to is this harness's own executor roots.
-        fn set_slot(&mut self, obj: u32, i: u32, v: Value) {
+        fn set_slot(&mut self, obj: Addr, i: u32, v: Value) {
             self.gc.set_slot(obj, i, v, &mut self.r.own.remembered);
         }
-        fn init_slot(&mut self, obj: u32, i: u32, v: Value) {
+        fn init_slot(&mut self, obj: Addr, i: u32, v: Value) {
             self.gc.init_slot(obj, i, v, &mut self.r.own.remembered);
         }
         fn root(&mut self, v: Value) -> usize {

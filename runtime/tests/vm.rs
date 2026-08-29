@@ -971,6 +971,7 @@ fn a_snapshot_resumes_with_the_same_answer_and_the_same_instruction_count() {
 /// That second half is the point of the format existing: the verbatim capture
 /// restores to identical addresses by design, so it cannot cross an instance at
 /// all. Shelving a sandbox means rehydrating somewhere else.
+#[cfg(feature = "diagnostics")]
 #[test]
 fn a_live_set_exports_and_imports_into_another_rt() {
     let mut w = ImageWriter::new();
@@ -1017,6 +1018,7 @@ fn a_live_set_exports_and_imports_into_another_rt() {
     assert!(out == again, "live set bytes changed across the trip");
 }
 
+#[cfg(feature = "diagnostics")]
 fn alloc_vec() -> std::vec::Vec<u8> {
     std::vec::Vec::new()
 }

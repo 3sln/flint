@@ -452,7 +452,7 @@ impl Rt {
                     if k < 8 {
                         let t = crate::obj::ty(&self.gc.sp, v.as_heap()) as u32;
                         self.gc.restore_bad[k] =
-                            [i as u32, v.as_heap(), t, self.gc.stats.minor as u32];
+                            [i as crate::mem::Addr, v.as_heap(), t as crate::mem::Addr, self.gc.stats.minor as crate::mem::Addr];
                     }
                     self.gc.restore_stale += 1;
                 }

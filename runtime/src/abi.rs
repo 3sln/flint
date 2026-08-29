@@ -382,6 +382,25 @@ pub extern "C" fn set_step_limit(hi: u32, lo: u32) {
 }
 
 /// Instructions dispatched so far. Only counted while a step limit is set, so
+
+/// Narrow an address for a diagnostic export.
+///
+/// Every `stat_*` below hands the host a `u32`, because that is the ABI those
+/// exports have always had and several `.mjs` readers index it directly. An
+/// address is 48 bits now, so this can TRUNCATE -- above 4 GB a reported
+/// address would be wrong rather than merely large.
+///
+/// Tolerated, and only here, for two reasons: these are bisection aids that a
+/// person reads during a debugging session, and they are absent from a
+/// production build entirely (`doc/decisions/0016`). If a diagnostic ever has
+/// to name an address above 4 GB, the fix is to widen the export rather than to
+/// trust this.
+#[cfg(feature = "diagnostics")]
+#[inline]
+fn narrow(a: crate::mem::Addr) -> u32 {
+    a as u32
+}
+
 /// the counter costs nothing in a normal run -- which is also what makes the
 /// dispatch measurement honest: time it with counting off, count it with
 /// counting on, divide.
@@ -401,7 +420,7 @@ pub extern "C" fn set_memory_limit(bytes: u32) {
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_heap_used() -> u32 {
-    unsafe { ensure_rt().gc.heap_used() }
+    unsafe { narrow(ensure_rt().gc.heap_used()) }
 }
 
 /// Diagnostics for the benchmarks: bytes the collector has handed out.
@@ -484,7 +503,7 @@ pub extern "C" fn stat_dead_half(i: u32, f: u32) -> u32 {
     unsafe {
         let g = &ensure_rt().gc;
         if i == 99 { return g.dead_half_refs; }
-        if (i as usize) < 8 && (f as usize) < 7 { g.dead_half_bad[i as usize][f as usize] } else { 0 }
+        if (i as usize) < 8 && (f as usize) < 7 { narrow(g.dead_half_bad[i as usize][f as usize]) } else { 0 }
     }
 }
 
@@ -495,7 +514,7 @@ pub extern "C" fn stat_limbo(i: u32, f: u32) -> u32 {
     unsafe {
         let g = &ensure_rt().gc;
         if i == 99 { return g.limbo_refs; }
-        if (i as usize) < 8 && (f as usize) < 4 { g.limbo_bad[i as usize][f as usize] } else { 0 }
+        if (i as usize) < 8 && (f as usize) < 4 { narrow(g.limbo_bad[i as usize][f as usize]) } else { 0 }
     }
 }
 
@@ -510,7 +529,7 @@ pub extern "C" fn stat_restore_stale(i: u32, f: u32) -> u32 {
         if i == 99 { return g.restore_stale; }
         if i == 98 { return g.restores_checked; }
         if i == 97 { return g.restore_values; }
-        if (i as usize) < 8 && (f as usize) < 4 { g.restore_bad[i as usize][f as usize] } else { 0 }
+        if (i as usize) < 8 && (f as usize) < 4 { narrow(g.restore_bad[i as usize][f as usize]) } else { 0 }
     }
 }
 
@@ -529,7 +548,7 @@ pub extern "C" fn set_gc_origin_window(from: u32, until: u32) {
 /// interpreter itself. Searches the origin ring newest-first.
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
-pub extern "C" fn stat_origin(addr: u32) -> u32 {
+pub extern "C" fn stat_origin(addr: crate::mem::Addr) -> u32 {
     unsafe {
         let n = crate::gc::ORIG_N;
         let cap = crate::gc::ORIG_CAP;
@@ -548,7 +567,7 @@ pub extern "C" fn stat_origin(addr: u32) -> u32 {
 /// stale pointer can be ordered and the EARLIEST -- the introducer -- picked out.
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
-pub extern "C" fn stat_origin_seq(addr: u32) -> u32 {
+pub extern "C" fn stat_origin_seq(addr: crate::mem::Addr) -> u32 {
     unsafe {
         let n = crate::gc::ORIG_N;
         let cap = crate::gc::ORIG_CAP;
@@ -601,14 +620,14 @@ pub extern "C" fn set_gc_watch_end(c: u32) {
 pub extern "C" fn stat_end_bump(i: u32) -> u32 {
     unsafe {
         let g = &ensure_rt().gc;
-        if i == 0 { g.watch_end_bump } else { g.watch_end_from }
+        if i == 0 { narrow(g.watch_end_bump) } else { narrow(g.watch_end_from) }
     }
 }
 
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn set_gc_remset_watch(a: u32) {
-    unsafe { ensure_rt().gc.remset_watch = a }
+    unsafe { ensure_rt().gc.remset_watch = a as crate::mem::Addr }
 }
 
 #[cfg(feature = "diagnostics")]
@@ -623,7 +642,7 @@ pub extern "C" fn stat_remset_end_violations() -> u32 {
 pub extern "C" fn stat_remset_bad(i: u32, f: u32) -> u32 {
     unsafe {
         let g = &ensure_rt().gc;
-        if (i as usize) < 8 && (f as usize) < 5 { g.remset_bad[i as usize][f as usize] } else { 0 }
+        if (i as usize) < 8 && (f as usize) < 5 { narrow(g.remset_bad[i as usize][f as usize]) } else { 0 }
     }
 }
 
@@ -727,7 +746,7 @@ const _: () = {
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_stale_set(i: u32) -> u32 {
-    unsafe { *crate::gc::STALE_SET.get(i as usize).unwrap_or(&0) }
+    unsafe { narrow(*crate::gc::STALE_SET.get(i as usize).unwrap_or(&0)) }
 }
 
 /// Roots left stale by a collection. 0 count, 1 address, 2 collection,
@@ -735,14 +754,14 @@ pub extern "C" fn stat_stale_set(i: u32) -> u32 {
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_stale_root(i: u32) -> u32 {
-    unsafe { *crate::gc::STALE_ROOT.get(i as usize).unwrap_or(&0) }
+    unsafe { narrow(*crate::gc::STALE_ROOT.get(i as usize).unwrap_or(&0)) }
 }
 
 /// The shadow stack at the stale write. 0 is the length, 1.. the addresses.
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_stale_shadow(i: u32) -> u32 {
-    unsafe { *crate::gc::STALE_SHADOW.get(i as usize).unwrap_or(&0) }
+    unsafe { narrow(*crate::gc::STALE_SHADOW.get(i as usize).unwrap_or(&0)) }
 }
 
 /// Stale values caught as they were rooted. 0 count, 1 address, 2 collection,
@@ -750,7 +769,7 @@ pub extern "C" fn stat_stale_shadow(i: u32) -> u32 {
 #[cfg(feature = "diagnostics")]
 #[no_mangle]
 pub extern "C" fn stat_stale_push(i: u32) -> u32 {
-    unsafe { *crate::gc::STALE_PUSH.get(i as usize).unwrap_or(&0) }
+    unsafe { narrow(*crate::gc::STALE_PUSH.get(i as usize).unwrap_or(&0)) }
 }
 
 /// The region histogram of `doc/decisions/0013`. One export rather than one per

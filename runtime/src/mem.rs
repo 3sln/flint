@@ -10,10 +10,37 @@
 
 use alloc::vec::Vec;
 
+/// A GC address: an offset into the flat space above, never a machine pointer.
+///
+/// **64 bits everywhere, including wasm32.** It does not hurt there -- an
+/// address simply never exceeds 32 bits when linear memory cannot -- and it
+/// buys two things that a per-target width would not. wasm64 works with no
+/// change and no configuration. And there is ONE width to reason about, so a
+/// snapshot, an image and a `Value` mean the same thing on every runtime
+/// rather than nearly the same thing.
+///
+/// The `Value` encoding already allowed for it: `TAG_HEAP` leaves 48 payload
+/// bits (256 TB, or 2 PB if the 8-byte alignment were folded in). Capping the
+/// heap at 4 GB was an artificial limit inherited from the first target, not a
+/// property of the representation.
+pub type Addr = u64;
+
 pub const PAGE: u32 = 65536;
 
+/// Round up a 32-bit quantity. The wasm ARENA works in linear-memory addresses,
+/// which are 32-bit by the platform's definition and have nothing to do with
+/// flint's heap `Addr` -- it backs Rust's own allocator there, below the flint
+/// heap entirely.
 #[inline(always)]
-pub fn align_up(n: u32, a: u32) -> u32 {
+pub fn align_up_u32(n: u32, a: u32) -> u32 {
+    (n + a - 1) & !(a - 1)
+}
+
+/// Round up, on ADDRESSES. A run length in this space can exceed 4 GB now, so
+/// the arithmetic is `Addr`-wide; the few callers that round a `u32` size cast
+/// at the call.
+#[inline(always)]
+pub fn align_up(n: Addr, a: Addr) -> Addr {
     (n + a - 1) & !(a - 1)
 }
 
@@ -24,7 +51,7 @@ pub fn align_up(n: u32, a: u32) -> u32 {
 
 #[cfg(target_arch = "wasm32")]
 pub mod arena {
-    use super::{align_up, PAGE};
+    use super::{align_up_u32 as align_up, PAGE};
 
     const NUM_SMALL: usize = 64; // 16,32,...,1024
     const SMALL_MAX: usize = NUM_SMALL * 16;
@@ -161,8 +188,8 @@ mod global_alloc {
 /// A run of bytes inside the flat space, described by 32-bit address + length.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Region {
-    pub addr: u32,
-    pub len: u32,
+    pub addr: Addr,
+    pub len: Addr,
 }
 
 
@@ -193,8 +220,8 @@ pub struct Space {
     #[allow(dead_code)]
     owned_len: usize,
     pub(crate) free_runs: Vec<Region>,
-    pub reserved: u32,
-    pub in_use: u32,
+    pub reserved: Addr,
+    pub in_use: Addr,
     #[cfg(debug_assertions)]
     /// True while a collection is running over this space. The collector reads
     /// forwarded pointers as a matter of course -- that is how it updates them
@@ -215,7 +242,7 @@ impl Space {
                 base: core::ptr::null_mut(),
                 owned_len: 0,
                 free_runs: Vec::new(),
-                reserved: u32::MAX,
+                reserved: u32::MAX as Addr,
                 in_use: 0,
                 #[cfg(debug_assertions)]
                 in_gc: core::cell::Cell::new(false),
@@ -223,7 +250,7 @@ impl Space {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let len = align_up(reserve, PAGE) as usize;
+            let len = align_up(reserve as Addr, PAGE as Addr) as usize;
             let layout = core::alloc::Layout::from_size_align(len, PAGE as usize).unwrap();
             let p = unsafe { alloc::alloc::alloc_zeroed(layout) };
             assert!(!p.is_null(), "flint: could not reserve {len} bytes");
@@ -231,8 +258,8 @@ impl Space {
                 base: p,
                 owned_len: len,
                 free_runs: Vec::new(),
-                reserved: len as u32,
-                in_use: PAGE, // address 0 is never a valid object
+                reserved: len as Addr,
+                in_use: PAGE as Addr, // address 0 is never a valid object
                 #[cfg(debug_assertions)]
                 in_gc: core::cell::Cell::new(false),
             }
@@ -245,8 +272,10 @@ impl Space {
     }
 
     /// Address of a fresh run of `len` bytes, page aligned. 0 on exhaustion.
-    pub fn take(&mut self, len: u32) -> u32 {
-        let len = align_up(len, PAGE);
+    /// `len` is `Addr`-wide: a semispace or an old-space chunk can exceed 4 GB
+    /// now, so a run length is measured in the same units as an address.
+    pub fn take(&mut self, len: Addr) -> Addr {
+        let len = align_up(len, PAGE as Addr);
         // Reuse an exact-fit or larger freed run first.
         let mut best: Option<usize> = None;
         for (i, r) in self.free_runs.iter().enumerate() {
@@ -265,7 +294,10 @@ impl Space {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let a = unsafe { arena::sbrk(len, PAGE) };
+            // The wasm arena is 32-bit: linear memory cannot exceed 4 GB, so
+            // the request narrows here and the answer widens back. This is the
+            // one place the two address spaces meet.
+            let a = unsafe { arena::sbrk(len as u32, PAGE) } as Addr;
             if a != 0 {
                 self.in_use += len;
             }
@@ -282,20 +314,20 @@ impl Space {
         }
     }
 
-    pub fn give_back(&mut self, addr: u32, len: u32) {
-        self.free_runs.push(Region { addr, len: align_up(len, PAGE) });
+    pub fn give_back(&mut self, addr: Addr, len: Addr) {
+        self.free_runs.push(Region { addr, len: align_up(len, PAGE as Addr) });
     }
 
     #[inline(always)]
-    pub unsafe fn ptr(&self, addr: u32) -> *mut u8 {
+    pub unsafe fn ptr(&self, addr: Addr) -> *mut u8 {
         self.base.wrapping_add(addr as usize)
     }
     #[inline(always)]
-    pub fn read_u32(&self, addr: u32) -> u32 {
+    pub fn read_u32(&self, addr: Addr) -> u32 {
         unsafe { core::ptr::read_unaligned(self.ptr(addr) as *const u32) }
     }
     #[inline(always)]
-    pub fn write_u32(&self, addr: u32, v: u32) {
+    pub fn write_u32(&self, addr: Addr, v: u32) {
         unsafe { core::ptr::write_unaligned(self.ptr(addr) as *mut u32, v) }
     }
     #[inline(always)]
@@ -306,33 +338,33 @@ impl Space {
         self.base as u32
     }
     #[inline(always)]
-    pub fn read_u64(&self, addr: u32) -> u64 {
+    pub fn read_u64(&self, addr: Addr) -> u64 {
         unsafe { core::ptr::read_unaligned(self.ptr(addr) as *const u64) }
     }
     #[inline(always)]
-    pub fn write_u64(&self, addr: u32, v: u64) {
+    pub fn write_u64(&self, addr: Addr, v: u64) {
         unsafe { core::ptr::write_unaligned(self.ptr(addr) as *mut u64, v) }
     }
     #[inline(always)]
-    pub fn read_u8(&self, addr: u32) -> u8 {
+    pub fn read_u8(&self, addr: Addr) -> u8 {
         unsafe { *self.ptr(addr) }
     }
     #[inline(always)]
-    pub fn write_u8(&self, addr: u32, v: u8) {
+    pub fn write_u8(&self, addr: Addr, v: u8) {
         unsafe { *self.ptr(addr) = v }
     }
     #[inline(always)]
-    pub fn bytes(&self, addr: u32, len: u32) -> &[u8] {
+    pub fn bytes(&self, addr: Addr, len: u32) -> &[u8] {
         unsafe { core::slice::from_raw_parts(self.ptr(addr), len as usize) }
     }
     #[inline(always)]
-    pub fn bytes_mut(&self, addr: u32, len: u32) -> &mut [u8] {
+    pub fn bytes_mut(&self, addr: Addr, len: u32) -> &mut [u8] {
         unsafe { core::slice::from_raw_parts_mut(self.ptr(addr), len as usize) }
     }
-    pub fn copy_within(&self, from: u32, to: u32, len: u32) {
+    pub fn copy_within(&self, from: Addr, to: Addr, len: u32) {
         unsafe { core::ptr::copy(self.ptr(from), self.ptr(to), len as usize) }
     }
-    pub fn zero(&self, addr: u32, len: u32) {
+    pub fn zero(&self, addr: Addr, len: u32) {
         unsafe { core::ptr::write_bytes(self.ptr(addr), 0, len as usize) }
     }
 }
@@ -355,11 +387,11 @@ mod tests {
     #[test]
     fn space_hands_out_disjoint_runs() {
         let mut s = Space::new(4 * 1024 * 1024);
-        let a = s.take(PAGE);
-        let b = s.take(2 * PAGE);
+        let a = s.take((PAGE as Addr) as Addr);
+        let b = s.take(2 * (PAGE as Addr) as Addr);
         assert_ne!(a, 0);
         assert_ne!(b, 0);
-        assert!(b >= a + PAGE || a >= b + 2 * PAGE);
+        assert!(b >= a + (PAGE as Addr) || a >= b + 2 * (PAGE as Addr));
         s.write_u64(a, 0xdead_beef_cafe_babe);
         s.write_u64(b, 1);
         assert_eq!(s.read_u64(a), 0xdead_beef_cafe_babe);
@@ -369,24 +401,24 @@ mod tests {
     #[test]
     fn space_reuses_returned_runs() {
         let mut s = Space::new(4 * 1024 * 1024);
-        let a = s.take(2 * PAGE);
-        s.give_back(a, 2 * PAGE);
-        let b = s.take(2 * PAGE);
+        let a = s.take(2 * (PAGE as Addr));
+        s.give_back(a, 2 * (PAGE as Addr));
+        let b = s.take(2 * (PAGE as Addr) as Addr);
         assert_eq!(a, b, "a freed run should be reused, not leaked");
     }
 
     #[test]
     fn space_reports_exhaustion_rather_than_crashing() {
         let mut s = Space::new(2 * PAGE);
-        assert_ne!(s.take(PAGE), 0);
-        assert_eq!(s.take(64 * PAGE), 0);
+        assert_ne!(s.take((PAGE as Addr)), 0);
+        assert_eq!(s.take(64 * (PAGE as Addr)), 0);
     }
 
     #[test]
     fn byte_windows_are_addressable() {
         let s = Space::new(1024 * 1024);
         let mut s = s;
-        let a = s.take(PAGE);
+        let a = s.take((PAGE as Addr) as Addr);
         s.bytes_mut(a, 5).copy_from_slice(b"hello");
         assert_eq!(s.bytes(a, 5), b"hello");
         s.zero(a, 5);

@@ -66,7 +66,7 @@ impl Rt {
 
     /// A flat byte string of `n` bytes, uninitialised. The caller fills it
     /// before anything can collect, which is why this is not public.
-    fn alloc_bytes(&mut self, n: u32) -> u32 {
+    fn alloc_bytes(&mut self, n: u32) -> crate::mem::Addr {
         self.alloc(TY_BYTES, n)
     }
 
