@@ -160,6 +160,68 @@ public final class Vm {
                            System.getenv("FLINT_MAX_DEPTH") == null ? 0
                            : Integer.parseInt(System.getenv("FLINT_MAX_DEPTH")));
     private int depth = 0;
+
+    /// One flint call, as DATA rather than as a Java frame
+    /// (`doc/decisions/0005`).
+    ///
+    /// This used to be the Java stack: a `CALL` opcode called `call`, which
+    /// called `run`, which called `call`. That is why this port has no green
+    /// threads and no ports -- a continuation living on the host stack cannot
+    /// be parked, saved, or resumed, and everything `0005` and `0027` want
+    /// rests on being able to do all three.
+    ///
+    /// Each frame owns its own operand stack, which the wasm runtime does not
+    /// need to do: there, arguments are already on one shared value stack, and
+    /// here a `CALL` gathers them into an array before entering. Keeping them
+    /// separate makes the transformation local to `CALL`/`TAIL_CALL`/`RETURN`
+    /// rather than a rewrite of every opcode's stack arithmetic.
+    static final class Frame {
+        Closure self;
+        Img.Arity arity;
+        Object[] locals;
+        Object[] stack = new Object[64];
+        int sp = 0;
+        int ip;
+        int end;
+        int[] handlerIp = new int[8];
+        int[] handlerSp = new int[8];
+        int handlers = 0;
+    }
+
+    /// The frame stack IS the continuation, and there is one PER EXECUTING
+    /// THREAD.
+    ///
+    /// A `ThreadLocal` rather than a field, because this port runs several real
+    /// Java threads through one `Vm` (`runtimes/jvm/test/ThreadTest.java`) and
+    /// the old interpreter was implicitly safe: every frame lived in a Java
+    /// local, so each thread had its own by construction. Making the frames
+    /// data took that away, and one shared list deadlocked ThreadTest
+    /// immediately -- which is the good version of that mistake, since the
+    /// alternative is two threads quietly interleaving one continuation.
+    ///
+    /// This is also the shape green threads want: a green thread IS one of
+    /// these lists plus its saved state, and a scheduler swaps which one the
+    /// executing thread is running.
+    private final ThreadLocal<ArrayList<Frame>> FRAMES = ThreadLocal.withInitial(ArrayList::new);
+
+    /// Build a frame for `c` at `a`, with `args` bound. Does not enter it.
+    private Frame frameFor(Closure c, Img.Arity a, Object[] args, int argc) {
+        Frame f = new Frame();
+        f.self = c;
+        f.arity = a;
+        f.locals = new Object[Math.max(a.nlocals, a.argc + 1)];
+        System.arraycopy(args, 0, f.locals, 0, Math.min(a.argc, argc));
+        if (a.variadic) {
+            List<Object> rest = new ArrayList<>();
+            for (int i = a.argc; i < argc; i++) rest.add(args[i]);
+            // A SEQ, not a vector: `clojure.core/list` is `[& xs] xs`, so a
+            // vector here makes `(list 1 2)` print as `[1 2]`.
+            f.locals[a.argc] = rest.isEmpty() ? null : Seq.of(rest);
+        }
+        f.ip = a.code;
+        f.end = a.code + a.len;
+        return f;
+    }
     /// The last 128 calls in the order they were MADE, tail calls included.
     ///
     /// A call LOG, not a stack trace: a call that has already returned is still
@@ -221,7 +283,21 @@ public final class Vm {
             try {
                 Aot.Compiled compiledArity = compiledFor(c.fnIndex(), a);
                 if (compiledArity != null) return compiledArity.run(this, c, locals);
-                return run(c, a, locals);
+                // Entering from OUTSIDE the interpreter -- a builtin calling
+                // back into flint, or the host calling an entry point. That
+                // still costs one Java frame, exactly as it does in the wasm
+                // runtime's `call_value`; what no longer costs one is a `CALL`
+                // opcode, which is the case that recurses without bound.
+                Frame f = new Frame();
+                f.self = c;
+                f.arity = a;
+                f.locals = locals;
+                f.ip = a.code;
+                f.end = a.code + a.len;
+                ArrayList<Frame> fs = FRAMES.get();
+                int baseDepth = fs.size();
+                fs.add(f);
+                return run(baseDepth);
             } finally { if (MAX_DEPTH > 0) depth--; }
         }
         if (fn instanceof Builtins.Fn f) return f.apply(this, args);
@@ -253,24 +329,47 @@ public final class Vm {
     /// the empty string, the empty vector -- is true.
     static boolean truthy(Object v) { return v != null && v != Boolean.FALSE; }
 
-    private Object run(Closure self, Img.Arity arity, Object[] locals) {
-        Object[] stack = new Object[64];
-        int sp = 0;
-        int ip = arity.code;
-        int end = arity.code + arity.len;
+    /// Run until the frame stack is back down to `baseDepth`.
+    ///
+    /// The frame's fields are held in LOCALS for the length of one frame and
+    /// written back only at a boundary -- the same trade the wasm interpreter
+    /// makes with `ip`. That is what keeps this a flattening of `CALL` rather
+    /// than a rewrite of every opcode's stack arithmetic.
+    private Object run(int baseDepth) {
+        final ArrayList<Frame> frames = FRAMES.get();
+        Frame f = frames.get(frames.size() - 1);
+        Closure self = f.self;
+        Img.Arity arity = f.arity;
+        Object[] locals = f.locals;
+        Object[] stack = f.stack;
+        int sp = f.sp;
+        int ip = f.ip;
+        int end = f.end;
         // Handler stack for TRY/POP_HANDLER: each entry is the ip to jump to
         // and the stack depth to restore, because a throw unwinds the value
         // stack as well as the instruction pointer.
-        int[] handlerIp = new int[8];
-        int[] handlerSp = new int[8];
-        int handlers = 0;
+        int[] handlerIp = f.handlerIp;
+        int[] handlerSp = f.handlerSp;
+        int handlers = f.handlers;
 
         for (;;) {
-            if (ip >= end) return sp > 0 ? stack[sp - 1] : null;
+            if (ip >= end) {
+                Object v = sp > 0 ? stack[sp - 1] : null;
+                frames.remove(frames.size() - 1);
+                if (frames.size() <= baseDepth) return v;
+                        f = frames.get(frames.size() - 1);
+                        self = f.self; arity = f.arity; locals = f.locals;
+                        stack = f.stack; sp = f.sp; ip = f.ip; end = f.end;
+                        handlerIp = f.handlerIp; handlerSp = f.handlerSp;
+                        handlers = f.handlers;
+                stack[sp++] = v;
+                continue;
+            }
             if (sp + 4 >= stack.length) {
                 Object[] bigger = new Object[stack.length * 2];
                 System.arraycopy(stack, 0, bigger, 0, sp);
                 stack = bigger;
+                f.stack = stack;
             }
             int opcode = u8(ip);
             ip += 1;
@@ -319,8 +418,30 @@ public final class Vm {
                         Object[] args = new Object[argc];
                         System.arraycopy(stack, sp - argc, args, 0, argc);
                         sp -= argc + 1;
-                        Object f = stack[sp];
-                        stack[sp++] = call(f, args);
+                        Object callee = stack[sp];
+                        // A flint closure gets a FRAME, not a Java call. This
+                        // is the whole point of the flattening: Clojure
+                        // recursion stops living on the host stack, so a green
+                        // thread can park at any depth (`doc/decisions/0005`).
+                        if (callee instanceof Closure c) {
+                            Img.Arity a = img.fns[c.fnIndex()].select(args.length);
+                            if (a != null && compiledFor(c.fnIndex(), a) == null) {
+                        f.stack = stack; f.sp = sp; f.ip = ip; f.end = end;
+                        f.locals = locals; f.self = self; f.arity = arity;
+                        f.handlerIp = handlerIp; f.handlerSp = handlerSp;
+                        f.handlers = handlers;
+                                frames.add(frameFor(c, a, args, argc));
+                        f = frames.get(frames.size() - 1);
+                        self = f.self; arity = f.arity; locals = f.locals;
+                        stack = f.stack; sp = f.sp; ip = f.ip; end = f.end;
+                        handlerIp = f.handlerIp; handlerSp = f.handlerSp;
+                        handlers = f.handlers;
+                                continue;
+                            }
+                        }
+                        // Everything else -- a builtin, a keyword, a map, a
+                        // compiled arity -- completes in place.
+                        stack[sp++] = call(callee, args);
                         break;
                     }
                     case TAIL_CALL: {
@@ -343,8 +464,8 @@ public final class Vm {
                         Object[] args = new Object[argc];
                         System.arraycopy(stack, sp - argc, args, 0, argc);
                         sp -= argc + 1;
-                        Object f = stack[sp];
-                        if (f instanceof Closure c) {
+                        Object callee = stack[sp];
+                        if (callee instanceof Closure c) {
                             Img.Arity a = img.fns[c.fnIndex()].select(argc);
                             // A COMPILED target has to be entered through its
                             // compiled body, so it takes a frame. It cannot
@@ -372,9 +493,32 @@ public final class Vm {
                                 continue;
                             }
                         }
-                        return call(f, args);
+                        // Not a closure this port can enter: a builtin, or a
+                        // compiled arity. It completes in place and this frame
+                        // returns its answer.
+                        Object v = call(callee, args);
+                        frames.remove(frames.size() - 1);
+                        if (frames.size() <= baseDepth) return v;
+                        f = frames.get(frames.size() - 1);
+                        self = f.self; arity = f.arity; locals = f.locals;
+                        stack = f.stack; sp = f.sp; ip = f.ip; end = f.end;
+                        handlerIp = f.handlerIp; handlerSp = f.handlerSp;
+                        handlers = f.handlers;
+                        stack[sp++] = v;
+                        continue;
                     }
-                    case RETURN: return sp > 0 ? stack[--sp] : null;
+                    case RETURN: {
+                        Object v = sp > 0 ? stack[--sp] : null;
+                        frames.remove(frames.size() - 1);
+                        if (frames.size() <= baseDepth) return v;
+                        f = frames.get(frames.size() - 1);
+                        self = f.self; arity = f.arity; locals = f.locals;
+                        stack = f.stack; sp = f.sp; ip = f.ip; end = f.end;
+                        handlerIp = f.handlerIp; handlerSp = f.handlerSp;
+                        handlers = f.handlers;
+                        stack[sp++] = v;
+                        continue;
+                    }
                     case CLOSURE: {
                         int fnIdx = u16(ip); ip += 2;
                         int nup = u8(ip); ip += 1;
@@ -389,12 +533,12 @@ public final class Vm {
                         Object[] args = new Object[argc];
                         System.arraycopy(stack, sp - argc, args, 0, argc);
                         sp -= argc;
-                        Builtins.Fn f = natives[idx];
-                        if (f == null) {
+                        Builtins.Fn nf = natives[idx];
+                        if (nf == null) {
                             throw new Thrown("this runtime does not carry the builtin `"
                                 + img.nativeNames[idx] + "`");
                         }
-                        stack[sp++] = f.apply(this, args);
+                        stack[sp++] = nf.apply(this, args);
                         break;
                     }
                     case VECTOR: {
@@ -437,11 +581,11 @@ public final class Vm {
                         Object[] fixed = new Object[argc - 1];
                         System.arraycopy(stack, sp - (argc - 1), fixed, 0, argc - 1);
                         sp -= argc - 1;
-                        Object f = stack[--sp];
+                        Object af = stack[--sp];
                         List<Object> all = new ArrayList<>(List.of());
                         for (Object o : fixed) all.add(o);
                         for (Object o : Builtins.iterate(seq)) all.add(o);
-                        stack[sp++] = call(f, all.toArray());
+                        stack[sp++] = call(af, all.toArray());
                         break;
                     }
                     case THROW: throw new Thrown(stack[--sp]);
@@ -485,7 +629,25 @@ public final class Vm {
                         throw new Thrown("unknown opcode 0x" + Integer.toHexString(opcode));
                 }
             } catch (Thrown t) {
-                if (handlers == 0) throw t;
+                // Unwind FRAMES, not the Java stack.
+                //
+                // While a flint call was a Java call, `throw` did this for us:
+                // the JVM popped host frames until one had a `catch`. Now the
+                // frames are ours, so finding the handler is ours too -- pop
+                // until a frame has one, and hand the Java exception onward
+                // only when the whole region this `run` owns has none.
+                //
+                // Getting this wrong would not fail loudly: a `try` in a CALLER
+                // would simply stop catching what a callee threw.
+                while (handlers == 0) {
+                    frames.remove(frames.size() - 1);
+                    if (frames.size() <= baseDepth) throw t;
+                    f = frames.get(frames.size() - 1);
+                    self = f.self; arity = f.arity; locals = f.locals;
+                    stack = f.stack; sp = f.sp; ip = f.ip; end = f.end;
+                    handlerIp = f.handlerIp; handlerSp = f.handlerSp;
+                    handlers = f.handlers;
+                }
                 handlers -= 1;
                 sp = handlerSp[handlers];
                 ip = handlerIp[handlers];

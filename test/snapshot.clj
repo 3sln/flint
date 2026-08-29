@@ -85,6 +85,28 @@
            "  (pr-str {:n (tally 300) :snap (pos? (snap/snapshot!))}))"))
 (build! "other" "out/sn-other.wasm")
 
+;; A program with a PARKED GREEN THREAD in it when the snapshot is taken.
+;;
+;; Nothing in this file exercised threads before, so "a snapshot captures the
+;; threads" was structurally plausible and never checked: a parked thread's
+;; saved stack and frames are ordinary heap objects hanging off the scheduler
+;; singleton, so they should travel with the heap. Should is not a measurement.
+(src! "parked"
+      (str "(ns parked (:require [flint.thread :as t] [flint.port :as p]\n"
+           "                     [flint.snapshot :as snap]))\n"
+           "(defn main [_]\n"
+           "  (let [[tx rx] (p/channel 1 \"c\")\n"
+           ;; Two workers, both parked on an empty channel when the snapshot is
+           ;; taken. Two rather than one so a count can tell "captured them"
+           ;; from "captured a thread".
+           "        a (t/spawn (fn [] (+ 40 (p/receive rx))))\n"
+           "        b (t/spawn (fn [] (* 2 (p/receive rx))))\n"
+           "        n (snap/snapshot!)]\n"
+           "    (p/send tx 2)\n"
+           "    (p/send tx 3)\n"
+           "    (pr-str {:snap n :a (t/join a) :b (t/join b)})))"))
+(build! "parked" "out/sn-parked.wasm")
+
 (let [r (sh "node" "test/snapshot.mjs")]
   (print (:all r)) (flush)
   (when-not (zero? (:exit r)) (swap! fails inc)))

@@ -190,5 +190,42 @@ ok('  ... and a plain export leaves the sandbox running',
 ok('  ... while export-and-stop leaves it with nothing runnable',
    se.flint_snapshot_stopped() === 1);
 
+// --- does a snapshot carry a PARKED GREEN THREAD? ---------------------------
+//
+// Structurally it should: a parked thread's saved value stack and frame record
+// are ordinary heap objects reachable from the scheduler singleton, and the
+// RUNNING thread's frames are written out explicitly beside the heap. Nothing
+// checked it until now.
+{
+  const { module: pm } = await load('out/sn-parked.wasm');
+  const pinst = instantiate(pm);
+  const pe = pinst.exports;
+  const answer = pinst.main();
+  // The program returns the snapshot's LENGTH, because that is the only way
+  // the host learns it: `snapshot!` is a guest builtin and hands the count back
+  // to the guest, while `flint_snapshot_capture` would capture NOW -- after the
+  // workers have finished, which is the state this is trying not to look at.
+  const m = /^\{:snap (\d+), :a 42, :b 6\}$/.exec(answer.out.trim());
+  ok('a program with parked threads runs', !!m, answer.out.trim());
+  const n = m ? Number(m[1]) : 0;
+  const bytes = new Uint8Array(pe.memory.buffer, pe.flint_snapshot_ptr(), n).slice();
+  const st = snap.read(bytes);
+  const threads = [...snap.objects(st)].filter((o) => o.tyName === 'THREAD');
+  ok('  ... and the snapshot taken while they were parked carries them',
+     threads.length >= 2, `found ${threads.length} THREAD objects`);
+  // A parked thread's continuation is its SAVED VALUE STACK and its frame
+  // record, both hanging off the thread object. Read them off the threads
+  // themselves rather than trusting a type census: `RAW` and `NODE` are used
+  // for plenty of other things, and finding one proves nothing.
+  const withState = threads.filter((t) => {
+    const sl = snap.slots(st, t.addr);
+    return sl.some((v) => snap.heapAddr(v) !== null);
+  });
+  ok('  ... with their saved stacks and frame records attached',
+     withState.length >= 2, `${withState.length} of ${threads.length} carry state`);
+  ok('  ... and the running thread\'s own frames, beside the heap',
+     st.frames.length > 0, `${st.frames.length} frames`);
+}
+
 console.log(fails === 0 ? 'snapshots: ok' : `snapshots: ${fails} FAILURES`);
 process.exitCode = fails === 0 ? 0 : 1;
