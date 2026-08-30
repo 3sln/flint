@@ -87,6 +87,58 @@ public final class Sets {
         return out;
     }
 
+    // --- transients ---------------------------------------------------------
+    //
+    // `TY_TSET [tmap, edit]`. A set is a map from element to itself, so its
+    // transient is a transient MAP with a wrapper -- one trie, one transient.
+
+    public static final int TS_MAP = 0, TS_EDIT = 1;
+
+    public static boolean isTransient(Rt rt, long v) {
+        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_TSET;
+    }
+
+    public static long transientOf(Rt rt, long s) {
+        int base = rt.mark();
+        int ti = rt.push(Maps.transientOf(rt, rt.slot(s, S_MAP)));
+        long a = rt.alloc(TY_TSET, 2);
+        if (a == 0) { rt.popTo(base); return Val.NIL; }
+        rt.setSlot(a, TS_MAP, rt.r(ti));
+        rt.setSlot(a, TS_EDIT, rt.slot(rt.r(ti), Maps.TM_EDIT));
+        rt.popTo(base);
+        return Val.heap(a);
+    }
+
+    public static long tconj(Rt rt, long t, long x) {
+        int base = rt.mark();
+        int ti = rt.push(t), xi = rt.push(x);
+        Maps.tassoc(rt, rt.slot(rt.r(ti), TS_MAP), rt.r(xi), rt.r(xi));
+        long out = rt.r(ti);
+        rt.popTo(base);
+        return out;
+    }
+
+    public static long tdisj(Rt rt, long t, long x) {
+        int base = rt.mark();
+        int ti = rt.push(t), xi = rt.push(x);
+        Maps.tdissoc(rt, rt.slot(rt.r(ti), TS_MAP), rt.r(xi));
+        long out = rt.r(ti);
+        rt.popTo(base);
+        return out;
+    }
+
+    public static int tcount(Rt rt, long t) { return Maps.tcount(rt, rt.slot(t, TS_MAP)); }
+
+    public static long tpersistent(Rt rt, long t) {
+        int base = rt.mark();
+        int ti = rt.push(t);
+        int mi = rt.push(Maps.tpersistent(rt, rt.slot(rt.r(ti), TS_MAP)));
+        rt.setSlot(Val.asHeap(rt.r(ti)), TS_EDIT, Val.NIL);
+        long out = newSet(rt, rt.r(mi), Val.NIL);
+        rt.popTo(base);
+        return out;
+    }
+
     public static boolean eq(Rt rt, long a, long b) {
         if (count(rt, a) != count(rt, b)) return false;
         return Maps.eq(rt, rt.slot(a, S_MAP), rt.slot(b, S_MAP));

@@ -284,7 +284,7 @@ public final class Vec {
 
     /// A fresh identity for a transient's ownership token. Its TYPE is
     /// irrelevant and its contents are never read -- only `==` on the address.
-    static long newEditToken(Rt rt) {
+    public static long newEditToken(Rt rt) {
         long a = rt.alloc(TY_VOLATILE, 1);
         return a == 0 ? Val.NIL : Val.heap(a);
     }

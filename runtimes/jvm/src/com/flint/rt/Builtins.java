@@ -147,6 +147,10 @@ public final class Builtins {
             if (Str.isString(rt, v)) return Val.fixnum(Str.charLen(rt, v));
             if (Maps.isMap(rt, v)) return Val.fixnum(Maps.count(rt, v));
             if (Sets.isSet(rt, v)) return Val.fixnum(Sets.count(rt, v));
+            if (Maps.isTransient(rt, v)) return Val.fixnum(Maps.tcount(rt, v));
+            if (Sets.isTransient(rt, v)) return Val.fixnum(Sets.tcount(rt, v));
+            if (Vec.isTransient(rt, v)) return Val.fixnum(Vec.tcount(rt, v));
+            if (Bytes.isBytes(rt, v)) return Val.fixnum(Bytes.count(rt, v));
             if (rt.isSeq(v)) return Val.fixnum(Seqs.count(rt, v));
             throw new UnsupportedOperationException("count over " + rt.describe(v) + " needs more of the data structures");
         });
@@ -228,8 +232,9 @@ public final class Builtins {
         def("transient", (rt, at, n) -> {
             long v = rt.vat(at);
             if (rt.isHeapTy(v, TY_VEC)) return Vec.transientOf(rt, v);
-            throw new UnsupportedOperationException(
-                "transient of " + rt.describe(v) + " needs maps and sets ported");
+            if (Maps.isMap(rt, v)) return Maps.transientOf(rt, v);
+            if (Sets.isSet(rt, v)) return Sets.transientOf(rt, v);
+            throw new ClassCastException(rt.describe(v) + " is not transientable");
         });
         def("persistent!", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -239,8 +244,10 @@ public final class Builtins {
                 }
                 return Vec.tpersistent(rt, v);
             }
-            throw new UnsupportedOperationException(
-                "persistent! of " + rt.describe(v) + " needs maps and sets ported");
+            if (Maps.isTransient(rt, v)) return Maps.tpersistent(rt, v);
+            if (Sets.isTransient(rt, v)) return Sets.tpersistent(rt, v);
+            if (Bytes.isTransient(rt, v)) return Bytes.persistent(rt, v);
+            throw new ClassCastException(rt.describe(v) + " is not a transient");
         });
         def("conj!", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -252,8 +259,21 @@ public final class Builtins {
                 for (int i = 1; i < n; i++) acc = Vec.tconj(rt, acc, rt.vat(at + i));
                 return acc;
             }
-            throw new UnsupportedOperationException(
-                "conj! onto " + rt.describe(v) + " needs maps and sets ported");
+            if (Sets.isTransient(rt, v)) {
+                long acc = v;
+                for (int i = 1; i < n; i++) acc = Sets.tconj(rt, acc, rt.vat(at + i));
+                return acc;
+            }
+            if (Maps.isTransient(rt, v)) {
+                // `conj!` onto a map takes an ENTRY or a two-element vector.
+                long acc = v;
+                for (int i = 1; i < n; i++) {
+                    long e = rt.vat(at + i);
+                    acc = Maps.tassoc(rt, acc, Seqs.first(rt, e), Seqs.first(rt, Seqs.rest(rt, e)));
+                }
+                return acc;
+            }
+            throw new ClassCastException(rt.describe(v) + " is not a transient");
         });
         def("assoc!", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -267,8 +287,26 @@ public final class Builtins {
                 }
                 return acc;
             }
-            throw new UnsupportedOperationException(
-                "assoc! onto " + rt.describe(v) + " needs maps and sets ported");
+            if (Maps.isTransient(rt, v)) {
+                long acc = v;
+                for (int i = 1; i + 1 < n; i += 2) acc = Maps.tassoc(rt, acc, rt.vat(at + i), rt.vat(at + i + 1));
+                return acc;
+            }
+            throw new ClassCastException(rt.describe(v) + " is not a transient");
+        });
+        def("dissoc!", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (Maps.isTransient(rt, v)) {
+                long acc = v;
+                for (int i = 1; i < n; i++) acc = Maps.tdissoc(rt, acc, rt.vat(at + i));
+                return acc;
+            }
+            if (Sets.isTransient(rt, v)) {
+                long acc = v;
+                for (int i = 1; i < n; i++) acc = Sets.tdisj(rt, acc, rt.vat(at + i));
+                return acc;
+            }
+            throw new ClassCastException(rt.describe(v) + " is not a transient");
         });
 
         // Maps.
@@ -278,6 +316,13 @@ public final class Builtins {
             if (Val.isNil(coll)) return dflt;
             if (Maps.isMap(rt, coll)) return Maps.get(rt, coll, rt.vat(at + 1), dflt);
             if (Sets.isSet(rt, coll)) return Sets.get(rt, coll, rt.vat(at + 1), dflt);
+            if (Maps.isTransient(rt, coll)) return Maps.tget(rt, coll, rt.vat(at + 1), dflt);
+            if (Vec.isTransient(rt, coll)) {
+                long k = rt.vat(at + 1);
+                if (!Val.isFixnum(k)) return dflt;
+                long got = Vec.tnth(rt, coll, (int) Val.asFixnum(k));
+                return got == Val.NOT_FOUND ? dflt : got;
+            }
             if (rt.isHeapTy(coll, TY_VEC)) {
                 long k = rt.vat(at + 1);
                 if (!Val.isFixnum(k)) return dflt;
