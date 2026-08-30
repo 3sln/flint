@@ -135,6 +135,10 @@ public sealed class Rt : System.IDisposable {
     public sealed class Arity {
         public readonly int argc, nlocals, code, len;
         public readonly bool variadic;
+        /// Index into `Rt.aot`, or `Aot.NONE`. The whole AOT question is one
+        /// field on the arity, so `Enter` answers it without a lookup keyed on
+        /// something the frame does not carry.
+        public int aotIdx = Aot.NONE;
         public Arity(int argc, bool variadic, int nlocals, int code, int len) {
             this.argc = argc; this.variadic = variadic;
             this.nlocals = nlocals; this.code = code; this.len = len;
@@ -318,6 +322,14 @@ public sealed class Rt : System.IDisposable {
         f.End = a.code + a.len;
         f.RetTo = calleeAt;
         f.Handlers = handlers.Count;
+        f.AotIdx = a.aotIdx;
+        // ENTRY AT THE TOP is just the first re-entry point, so nothing about
+        // starting a frame is special-cased. Leaving this at `NEVER` -- which
+        // the JVM port did at first -- means compiled code is never entered at
+        // all, and every assertion still passes because an interpreter agrees
+        // with itself.
+        f.AotIp = a.aotIdx == Aot.NONE ? Aot.NEVER : a.code;
+        f.AotBlock = 0;
         frames.Add(f);
         return true;
     }
@@ -358,6 +370,18 @@ public sealed class Rt : System.IDisposable {
             // `safepoints` is false in a sandbox with one executor and
             // `checkpoint` is 0 when nothing is counting, so a single-threaded
             // program with no scheduler runs a loop with neither test in it.
+            // COMPILED CODE takes over when `Ip` reaches the point it named.
+            // Every re-entry in the design funnels through this one comparison:
+            // an entry, a return from a call, a resumed thread, an unwind into a
+            // handler. `AotIp` is `Aot.NEVER` in a program with no compiled
+            // arities, so this costs one compare.
+            if (f.AotIp == ip && f.AotIdx != Aot.NONE) {
+                if (AotEnter(ip)) return Val.Nil;
+                if (frames.Count == 0 || frames.Count <= baseDepth) {
+                    return roots.StackTop > 0 ? VPop() : Val.Nil;
+                }
+                continue;
+            }
             if (safepoints && roots.shared.par.StopRequested()) {
                 f.Ip = ip;
                 roots.shared.par.Park();
@@ -408,14 +432,51 @@ public sealed class Rt : System.IDisposable {
                     if (Val.Truthy(roots.Stack[roots.StackTop - 1])) ip += off; else roots.StackTop -= 1;
                     break;
                 }
-                case Op.AddInt: { long b = Val.AsFixnum(VPop()), x = Val.AsFixnum(VPop()); VPush(Val.Fixnum(AddExact(x, b))); } break;
-                case Op.SubInt: { long b = Val.AsFixnum(VPop()), x = Val.AsFixnum(VPop()); VPush(Val.Fixnum(SubExact(x, b))); } break;
-                case Op.MulInt: { long b = Val.AsFixnum(VPop()), x = Val.AsFixnum(VPop()); VPush(Val.Fixnum(MulExact(x, b))); } break;
-                case Op.LtInt: { long b = Val.AsFixnum(VPop()), x = Val.AsFixnum(VPop()); VPush(Val.Bool(x < b)); } break;
-                case Op.LeInt: { long b = Val.AsFixnum(VPop()), x = Val.AsFixnum(VPop()); VPush(Val.Bool(x <= b)); } break;
-                case Op.GtInt: { long b = Val.AsFixnum(VPop()), x = Val.AsFixnum(VPop()); VPush(Val.Bool(x > b)); } break;
-                case Op.GeInt: { long b = Val.AsFixnum(VPop()), x = Val.AsFixnum(VPop()); VPush(Val.Bool(x >= b)); } break;
-                case Op.EqInt: { long b = Val.AsFixnum(VPop()), x = Val.AsFixnum(VPop()); VPush(Val.Bool(x == b)); } break;
+                // The SPECIALISED integer operations. The compiler emits these
+                // only where it proved both operands are integers -- but
+                // `^int` means integer and not FIXNUM, so a bigint still
+                // answers `int?` and still arrives here. Reading one with
+                // `AsFixnum` was silently wrong, and the checked arithmetic
+                // threw a host exception on overflow instead of promoting.
+                case Op.AddInt: case Op.SubInt: case Op.MulInt: case Op.LtInt:
+                case Op.LeInt: case Op.GtInt: case Op.GeInt: case Op.EqInt: {
+                    long y = VPop(), x = VPop();
+                    bool fast = Val.IsFixnum(x) && Val.IsFixnum(y);
+                    long v = 0;
+                    if (fast) {
+                        long p = Val.AsFixnum(x), q = Val.AsFixnum(y);
+                        switch (opcode) {
+                            case Op.AddInt: {
+                                long r = p + q;
+                                if (((p ^ r) & (q ^ r)) < 0 || !Val.FitsFixnum(r)) fast = false;
+                                else v = Val.Fixnum(r);
+                            } break;
+                            case Op.SubInt: {
+                                long r = p - q;
+                                if (((p ^ q) & (p ^ r)) < 0 || !Val.FitsFixnum(r)) fast = false;
+                                else v = Val.Fixnum(r);
+                            } break;
+                            case Op.MulInt: {
+                                long r = unchecked(p * q);
+                                if ((p != 0 && (r / p != q || (p == -1 && q == long.MinValue)))
+                                    || !Val.FitsFixnum(r)) fast = false;
+                                else v = Val.Fixnum(r);
+                            } break;
+                            case Op.LtInt: v = Val.Bool(p < q); break;
+                            case Op.LeInt: v = Val.Bool(p <= q); break;
+                            case Op.GtInt: v = Val.Bool(p > q); break;
+                            case Op.GeInt: v = Val.Bool(p >= q); break;
+                            default: v = Val.Bool(p == q); break;
+                        }
+                    }
+                    if (fast) { VPush(v); }
+                    else {
+                        f.Ip = ip;
+                        long r2 = IntBinopSlow(opcode, x, y);
+                        if (Failed()) { if (!Unwind()) return Val.Nil; continue; }
+                        VPush(r2);
+                    }
+                } break;
                 case Op.Closure: {
                     int fnIdx = U16(ip); int nup = U8(ip + 2); ip += 3;
                     long[] up = new long[nup];
@@ -979,6 +1040,253 @@ public sealed class Rt : System.IDisposable {
     /// whole point.
     public void ChargeWork(long n) { steps += n; }
     public void ChargeBytes(long n) { ChargeWork((n / 8) + 1); }
+
+    /// The out-of-line half of a specialised integer operation: a bigint
+    /// operand, an overflow, or a result past the fixnum range. Shared with
+    /// compiled code, which emits the fast path inline and calls this when the
+    /// tags say it does not apply.
+    public long IntBinopSlow(int opcode, long x, long y) {
+        switch (opcode) {
+            case Op.AddInt: return Num.Add(this, x, y);
+            case Op.SubInt: return Num.Sub(this, x, y);
+            case Op.MulInt: return Num.Mul(this, x, y);
+            default:
+                if (!Num.IsNumber(this, x) || !Num.IsNumber(this, y))
+                    return ThrowStr("ClassCastException",
+                        "not a number: " + Describe(x) + " and " + Describe(y));
+                int c = Num.Cmp(this, x, y);
+                return Val.Bool(opcode switch {
+                    Op.LtInt => c < 0,
+                    Op.LeInt => c <= 0,
+                    Op.GtInt => c > 0,
+                    Op.GeInt => c >= 0,
+                    _ => c == 0,
+                });
+        }
+    }
+
+    // --- AOT (`doc/decisions/0013`) ------------------------------------------
+    //
+    // A MIRROR of the JVM port, which is a port of `runtime/src/vm.rs`. The
+    // machine is the same at every hop: a flat heap, NaN-boxed values, and an
+    // operand stack of `long`s compiled code writes directly.
+
+    /// The image's compiled arities, indexed by `Frame.AotIdx`.
+    public Aot.Fn[] aot = System.Array.Empty<Aot.Fn>();
+    /// Counters, so a claim about where the time goes is measured rather than
+    /// argued. Cheap enough to leave in: a static increment on paths that
+    /// already cross a boundary.
+    public static long aotEntries, aotBails, aotCalls, aotNatives, aotTicks;
+    /// What compiled code re-reads after any crossing.
+    public readonly Aot.Sync aotSync = new Aot.Sync();
+    /// An uncaught throw unwound out of compiled code. The interpreter's own
+    /// arms answer this by returning from `Run`; compiled code cannot.
+    public bool aotUnwoundOut;
+    /// How many compiled frames are live on the HOST stack right now.
+    public int aotDepth;
+    /// Bumped by every unwind. A nested compiled call cannot use the frame
+    /// COUNT to tell "the callee returned" from "a throw was caught".
+    public long unwinds;
+    /// The `baseDepth` the innermost `Run` was called with.
+    public int runBase;
+
+    /// Bounded, because the HOST stack cannot be suspended and cannot be grown.
+    const int AotMaxDepth = 48;
+    const int ParkedSaved = 0, ParkedYielded = 1, ParkedFailed = 2;
+
+    int AotParked(int opcodeAt, int keepTop, int baseDepth, bool reexecutable) {
+        if (baseDepth != 0) {
+            // Host frames are live underneath: a lazy-seq force, a comparator,
+            // `map`. There is no continuation to save, so say so plainly rather
+            // than corrupting the stack.
+            thrown = Val.Nil;
+            parkOn = Val.Nil;
+            ThrowStr("IllegalStateException",
+                "cannot park here: this call is nested inside native code "
+                + "(map, sort, reduce, a lazy seq). Park from a green thread's own code instead.");
+            return ParkedFailed;
+        }
+        thrown = Val.Nil;
+        if (parkOn == Conc.PARK_YIELD) {
+            // A courtesy yield: the call itself is finished, so let it finish.
+            return ParkedYielded;
+        }
+        if (!reexecutable) {
+            parkOn = Val.Nil;
+            ThrowStr("IllegalStateException",
+                "cannot park here: this native was reached through `apply`, which has already "
+                + "spread its arguments onto the stack, so the call cannot be re-executed on "
+                + "resume. Call it directly instead.");
+            return ParkedFailed;
+        }
+        if (frames.Count > 0) frames[frames.Count - 1].Ip = opcodeAt;
+        roots.StackTop = keepTop;
+        thrown = Val.Park;
+        return ParkedSaved;
+    }
+
+    /// A call from compiled code failed. THREE outcomes, and conflating any two
+    /// of them is a bug the Rust already had: a PARK is handled here rather than
+    /// handed back, because handing it back makes the interpreter dispatch the
+    /// same call twice before the host has answered; a COURTESY YIELD has
+    /// already made the call, so the frame comes back after it; and a THROW must
+    /// not re-execute, because it already happened.
+    int AotFailed(int ip, int block, int nextIp, int nextBlock,
+                  int keepTop, int yieldTop, long r) {
+        if (thrown == Val.Park) {
+            if (frames.Count > 0) frames[frames.Count - 1].AotBlock = block;
+            switch (AotParked(ip, keepTop, runBase, true)) {
+                case ParkedSaved: aotUnwoundOut = true; break;
+                case ParkedYielded: {
+                    roots.StackTop = yieldTop;
+                    VPush(r);
+                    if (frames.Count > 0) {
+                        var f2 = frames[frames.Count - 1];
+                        f2.Ip = nextIp; f2.AotIp = nextIp; f2.AotBlock = nextBlock;
+                    }
+                    aotUnwoundOut = true;
+                } break;
+                default: if (!Unwind()) aotUnwoundOut = true; break;
+            }
+            return 1;
+        }
+        if (!Unwind()) aotUnwoundOut = true;
+        return 1;
+    }
+
+    /// `NATIVE`, run from compiled code. A native is a host call either way, so
+    /// there is nothing to gain by leaving.
+    public int AotNativeAt(int idx, int argc, int ip, int block, int nextIp, int nextBlock) {
+        int keepTop = roots.StackTop;
+        int bas = keepTop - argc;
+        var fn = natives[idx];
+        if (fn == null) {
+            ThrowStr("UnsupportedOperationException",
+                "this runtime does not carry the builtin `" + nativeNames[idx] + "`");
+            return AotFailed(ip, block, nextIp, nextBlock, keepTop, bas, Val.Nil);
+        }
+        long r = fn(this, bas, argc);
+        roots.StackTop = bas;
+        if (Failed()) return AotFailed(ip, block, nextIp, nextBlock, keepTop, bas, r);
+        VPush(r);
+        return 0;
+    }
+
+    /// The out-of-line half of a specialised integer operation. A helper rather
+    /// than a bail so that no chunk boundary is needed after arithmetic -- a
+    /// boundary per arithmetic instruction is the shape `0013` rejected.
+    public int AotIntBinopAt(int opcode, int ip, int block, int nextIp, int nextBlock) {
+        int keepTop = roots.StackTop;
+        int bas = keepTop - 2;
+        long y = roots.Stack[bas + 1], x = roots.Stack[bas];
+        long r = IntBinopSlow(opcode, x, y);
+        roots.StackTop = bas;
+        if (Failed()) return AotFailed(ip, block, nextIp, nextBlock, keepTop, bas, r);
+        VPush(r);
+        return 0;
+    }
+
+    /// `CALL`, run from compiled code. A callee that is not a closure completes
+    /// right here; one that IS a closure gets its frame pushed and then runs on
+    /// the HOST stack to a bounded depth.
+    public int AotCallAt(int argc, int ip, int block, int nextIp, int nextBlock) {
+        int keepTop = roots.StackTop;
+        int calleeAt = keepTop - argc - 1;
+        long callee = roots.Stack[calleeAt];
+        if (IsHeapTy(callee, Obj.TyClosure)) {
+            // `nextIp`, NOT `ip`. This performs the `Enter` itself, so an `Ip`
+            // still pointing at the CALL would have the interpreter dispatch it
+            // a second time when the callee returned.
+            if (frames.Count > 0) {
+                var f0 = frames[frames.Count - 1];
+                f0.Ip = nextIp; f0.AotIp = nextIp; f0.AotBlock = nextBlock;
+            }
+            int before = frames.Count;
+            long unwindsBefore = unwinds;
+            if (!Enter(callee, calleeAt, argc)) {
+                if (!Unwind()) aotUnwoundOut = true;
+                return 1;
+            }
+            var callf = frames[frames.Count - 1];
+            if (callf.AotIdx != Aot.NONE && aotDepth < AotMaxDepth) {
+                var a = aot[callf.AotIdx];
+                int cfp = callf.Fp, cret = callf.RetTo;
+                AotReserve(a.depth);
+                frames[frames.Count - 1].AotIp = Aot.NEVER;
+                Aot.Resync(this);
+                aotDepth++;
+                a.body(this, cfp, cret, 0);
+                aotDepth--;
+                // NOT the frame count on its own: an unwind to a handler in this
+                // very frame truncates back to exactly the depth the call
+                // started at.
+                if (frames.Count == before && unwinds == unwindsBefore && !aotUnwoundOut) {
+                    return 0;
+                }
+            }
+            return 1;
+        }
+        long r = CallValue(calleeAt, argc);
+        if (Failed()) return AotFailed(ip, block, nextIp, nextBlock, keepTop, calleeAt, r);
+        roots.StackTop = calleeAt;
+        VPush(r);
+        return 0;
+    }
+
+    /// `RETURN`, run from compiled code.
+    public void AotReturnHere() {
+        long v = VPop();
+        var f = frames[frames.Count - 1];
+        frames.RemoveAt(frames.Count - 1);
+        while (handlers.Count > f.Handlers) handlers.RemoveAt(handlers.Count - 1);
+        roots.StackTop = f.RetTo;
+        VPush(v);
+    }
+
+    void AotReserve(int n) { VReserve(n); }
+
+    /// Run compiled code for the top frame, if it is asking to be entered.
+    /// Returns true if the interpreter should return from `Run`.
+    bool AotEnter(int ip) {
+        var f = frames[frames.Count - 1];
+        int idx = f.AotIdx, fp = f.Fp, retTo = f.RetTo, block = f.AotBlock;
+        if (idx == Aot.NONE) { f.AotIp = Aot.NEVER; return false; }
+        if (block == Aot.LOOKUP) {
+            int b = aot[idx].BlockAt(ip);
+            if (b < 0) { f.AotIp = Aot.NEVER; return false; }
+            block = b;
+        }
+        var a = aot[idx];
+        aotEntries++;
+        // Reserved HERE rather than by a prologue call, so a compiled body makes
+        // no call at all on the way in.
+        AotReserve(a.depth);
+        frames[frames.Count - 1].AotIp = Aot.NEVER;
+        Aot.Resync(this);
+        a.body(this, fp, retTo, block);
+        bool outv = aotUnwoundOut;
+        aotUnwoundOut = false;
+        return outv;
+    }
+
+    /// Compile every arity the image asked for. An arity that cannot be
+    /// compiled simply stays interpreted, which is why this can be COMPLETE
+    /// from the first version rather than refusing a whole program over one
+    /// rare opcode. Returns how many were compiled.
+    public int CompileArities(bool chunkAll) {
+        var outl = new System.Collections.Generic.List<Aot.Fn>();
+        foreach (var d in fns) {
+            foreach (var a in d.arities) {
+                var fn = AotEmit.Compile(this, code, a.code, a.len, chunkAll);
+                if (fn == null) continue;
+                a.aotIdx = outl.Count;
+                outl.Add(fn);
+            }
+        }
+        aot = outl.ToArray();
+        Aot.Install(this);
+        return aot.Length;
+    }
 
     public bool Parked() => thrown == Val.Park;
     public bool Failed() => !Val.IsNil(thrown);

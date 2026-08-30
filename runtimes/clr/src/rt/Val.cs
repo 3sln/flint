@@ -39,6 +39,13 @@ public static class Val {
             ? System.BitConverter.DoubleToInt64Bits(double.NaN) : b;
     }
 
+    /// A fixnum's payload is 48 bits, signed. Past this a value is a boxed
+    /// bigint -- which still answers `int?`, which is why the specialised
+    /// integer opcodes have to test rather than assume.
+    public const long FixnumMax = (1L << 47) - 1;
+    public const long FixnumMin = -(1L << 47);
+    public static bool FitsFixnum(long n) => n >= FixnumMin && n <= FixnumMax;
+
     public static bool IsFixnum(long v) => Tag(v) == TagFixnum;
     public static long Fixnum(long n) => (TagFixnum << 48) | (n & Payload);
     /// Sign-extended from 48 bits; larger integers are `TY_BIGINT` on the heap.

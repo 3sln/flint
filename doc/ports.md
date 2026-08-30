@@ -27,25 +27,63 @@ It also carries the two things this file used to say only the boxed port had:
   through one script and `bin/conform-hosts` compares the transcripts byte for
   byte.
 
-## What the cutover cost: AOT
+## AOT, which the cutover did not cost after all
 
-The boxed port compiled arities to host bytecode at load time, behind
-`:optimize [perf]`. That is gone on these two hosts, and it is not coming back
-as a port of the deleted code.
+An earlier version of this file said AOT was gone on these hosts and not coming
+back, on the grounds that `Aot.java` emitted bytecode over a value model where
+every value was already a host object, and the ported runtime uses NaN-boxed
+longs in a flat heap.
 
-The reason is the representation. `Aot.java` and `Aot.cs` emitted bytecode over
-a value model where **every value was already a host object** — an integer was
-an `Integer`, and a call was a virtual dispatch the JIT already understood. The
-ported runtime's values are NaN-boxed longs in a flat, manually managed heap.
-Emitting JVM bytecode or IL against that is a NEW BACKEND against a different
-machine, not a translation of the old one. Pretending otherwise would have meant
-carrying 1 048 lines of code that had to be rewritten before it could run.
+That reasoning was about the wrong artifact. The thing to port was never
+`Aot.java`; it is `runtime/src/aot.rs` and `src/flint/aot.cljc`, which run over
+the SAME value model the ported runtime already mirrors -- and they port the way
+everything else here did.
 
-So `:optimize [perf]` is a wasm and native concern. On the JVM and CLR the flag
-is still CARRIED and still READ — `RtFlags` and `--rt-flags` print
-`flags=1 aot=false` — because a decision the compiler writes and no runtime
-reads is one that can silently stop being written. What the gate asserts is that
-it arrives, not that something acts on it.
+Wasm, JVM bytecode and CIL are all stack machines with locals over a flat
+memory. `emit-instr` is a case over flint opcodes producing about twelve
+primitives -- locals, constants, loads and stores at an offset, arithmetic,
+helper calls, branches -- and every one exists on all three. What differs is the
+opcode table, the value stack being a `long[]` so a push is an array store, and
+the container. Wasm's structured `block`/`loop`/`br` becomes a flat switch into
+labels, which is SIMPLER: flint's own bytecode already uses flat jumps, and the
+wasm emitter has to reconstruct structure it never wanted.
+
+So `:optimize [perf]` compiles arities on all four runtimes. `AotPlan` is the
+analysis half and is identical on both hosts, because decoding, chunk
+boundaries, the gas charge and the depth dataflow are decisions about FLINT
+BYTECODE and have nothing to do with the target. `AotEmit` is the backend.
+
+### What the gate asserts
+
+Per conformance program, on both hosts: the answer interpreted against
+compiled; the answer again under MAXIMAL CHUNKING, which bisects the two halves
+an emitter can be wrong in -- a missing boundary and a mis-emitted opcode --
+because a failure that survives it is the second kind; and the GAS COUNT, since
+compiled code charges per chunk from a static instruction count while the
+interpreter charges per instruction, so the two agreeing says the chunking is
+right.
+
+Then the two hosts' transcripts are compared CHARACTER FOR CHARACTER. Two
+emitters written separately against different instruction sets agreeing on the
+arity count, the entry count and the gas is a stronger statement than either
+passing alone.
+
+And that compiled code was ENTERED. The first version of the JVM port left the
+frame's `aotIp` at `NEVER`, so every arity compiled, every answer matched, every
+gas count matched, and not one instruction of compiled code ever ran -- an
+interpreter agrees with itself. `entries=0` is a failure.
+
+### Measured
+
+    control   interpreted 50.94 ms   compiled 32.95 ms   1.55x
+    numbers   interpreted  1.25 ms   compiled  0.92 ms   1.36x
+    maps      interpreted  3.44 ms   compiled  2.68 ms   1.28x
+    regex     interpreted  4.16 ms   compiled  6.07 ms   0.68x
+
+Regex is SLOWER, and that is not a defect to hide: it is dominated by natives,
+where compiled code removes no dispatch and adds a crossing. `doc/decisions/0013`
+predicts exactly that. Declining to compile native-bound arities is the obvious
+next move, and it is tuning rather than a gap in the port.
 
 ## What the cutover removed
 

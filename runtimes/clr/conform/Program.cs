@@ -14,6 +14,7 @@ public static class Program {
         if (args.Length >= 1 && args[0] == "--rt-parallel") return RtParallel();
         if (args.Length >= 3 && args[0] == "--rt-shelve") return RtShelve(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "--rt-selfhost") return RtSelfHost(args[1], args[2]);
+        if (args.Length >= 2 && args[0] == "--rt-aot") return RtAot(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-flags") return RtFlags(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-hostports") return RtHostPorts(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-image")
@@ -180,6 +181,88 @@ public static class Program {
             return "the program threw " + Flint.Rt.Str.Text(rt, rt.ExKind(t))
                  + ": " + Flint.Rt.Str.Text(rt, rt.ExMessage(t));
         return "the program threw " + rt.Describe(t);
+    }
+
+    // ------------------------------------------------------------------
+    // AOT: the same program interpreted and compiled, and the answers diffed.
+    //
+    // A MIRROR of `runtimes/jvm/test/RtAot.java`. The only thing worth
+    // asserting about a backend is that IT DID NOT CHANGE THE ANSWER -- fast
+    // and wrong is worse than absent, and "it ran" does not tell them apart.
+
+    private readonly record struct AotRun(string Out, long Steps, int Compiled, long Entries);
+
+    private static AotRun AotGo(string path, bool aot, bool chunkAll) {
+        var rt = new Flint.Rt.Rt(4L * 1024 * 1024, 512L * 1024 * 1024);
+        var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
+        if (img == null) return new AotRun("FAIL not a flint image", 0, 0, 0);
+        int n = aot ? rt.CompileArities(chunkAll) : 0;
+        Flint.Rt.Rt.aotEntries = 0;
+        foreach (int fn in img.init) {
+            rt.Call(rt.MakeClosure(fn, System.Array.Empty<long>()), System.Array.Empty<long>());
+            if (!Flint.Rt.Val.IsNil(rt.thrown))
+                return new AotRun(AotWhy(rt), rt.steps, n, Flint.Rt.Rt.aotEntries);
+        }
+        long v = rt.RunProgram(rt.MakeClosure(img.entry, System.Array.Empty<long>()),
+                               new long[]{ Flint.Rt.Val.Nil });
+        if (!Flint.Rt.Val.IsNil(rt.thrown))
+            return new AotRun(AotWhy(rt), rt.steps, n, Flint.Rt.Rt.aotEntries);
+        return new AotRun(
+            Flint.Rt.Str.IsString(rt, v) ? Flint.Rt.Str.Text(rt, v) : rt.Describe(v),
+            rt.steps, n, Flint.Rt.Rt.aotEntries);
+    }
+
+    private static string AotWhy(Flint.Rt.Rt rt) {
+        long t = rt.thrown;
+        if (rt.IsException(t) && Flint.Rt.Str.IsString(rt, rt.ExMessage(t)))
+            return "threw " + Flint.Rt.Str.Text(rt, rt.ExKind(t)) + ": "
+                 + Flint.Rt.Str.Text(rt, rt.ExMessage(t));
+        return "threw " + rt.Describe(t);
+    }
+
+    private static int RtAot(string path) {
+        var interp = AotGo(path, false, false);
+        var comp = AotGo(path, true, false);
+        if (comp.Compiled == 0) {
+            Console.WriteLine("  FAIL nothing compiled, so this asserts nothing");
+            return 1;
+        }
+        // AND ENTERED. Compiling is not running: the JVM port's first version
+        // left the frame's re-entry point at NEVER, so every arity compiled and
+        // not one instruction of compiled code ever executed -- and every
+        // assertion below passed, because an interpreter agrees with itself.
+        if (comp.Entries == 0) {
+            Console.WriteLine("  FAIL " + comp.Compiled
+                              + " arities compiled and compiled code was never ENTERED");
+            return 1;
+        }
+        if (interp.Out != comp.Out) {
+            Console.WriteLine("  FAIL compiled and interpreted disagree");
+            Console.WriteLine("        interpreted " + interp.Out);
+            Console.WriteLine("        compiled    " + comp.Out);
+            return 1;
+        }
+        // MAXIMAL CHUNKING as well. If a failure survives it then no boundary
+        // was missing and the fault is in how an opcode is emitted; if it does
+        // not, a boundary is. Those are the two halves this can be wrong in and
+        // they want opposite fixes.
+        var all = AotGo(path, true, true);
+        if (interp.Out != all.Out) {
+            Console.WriteLine("  FAIL compiled disagrees under maximal chunking");
+            Console.WriteLine("        interpreted " + interp.Out);
+            Console.WriteLine("        compiled    " + all.Out);
+            return 1;
+        }
+        if (interp.Steps != comp.Steps) {
+            Console.WriteLine("  FAIL the gas counts differ, so the chunking is wrong");
+            Console.WriteLine("        interpreted " + interp.Steps);
+            Console.WriteLine("        compiled    " + comp.Steps);
+            return 1;
+        }
+        Console.WriteLine("  ok   " + comp.Compiled + " arities compiled, entered "
+                          + comp.Entries + " times, same answer and same gas ("
+                          + interp.Steps + ")");
+        return 0;
     }
 
     /// What the compiler decided, and what this runtime does about it.

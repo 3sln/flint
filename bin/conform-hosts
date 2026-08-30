@@ -351,9 +351,28 @@ for prog in collections control green hosted lazy maps numbers regex strings thr
   [ -f "$img" ] || continue
   out="$("$JDK/bin/java" -cp runtimes/jvm/classes RtAot "$img" 2>&1)"
   case "$out" in
-    *"  ok "*) echo "$out" | sed 's/$/ ['"$prog"']/' ;;
+    *"  ok "*) echo "$out" | sed 's/$/ ['"$prog"' jvm]/' ;;
     *) echo "$out"; echo "  FAIL aot $prog [jvm]"; exit 1 ;;
   esac
+  if [ -n "$CLR" ]; then
+    cout="$("$CLR" --rt-aot "$img" 2>&1)"
+    case "$cout" in
+      *"  ok "*) ;;
+      *) echo "$cout"; echo "  FAIL aot $prog [clr]"; exit 1 ;;
+    esac
+    # CHARACTER FOR CHARACTER. The two emitters were written separately against
+    # different instruction sets, so them agreeing on the arity count, the entry
+    # count AND the gas is a much stronger statement than either passing alone:
+    # it says the chunking, the bail protocol and the charge are the same
+    # decisions on both, not merely compatible ones.
+    if [ "$out" != "$cout" ]; then
+      echo "  FAIL the two emitters disagree on $prog"
+      echo "        jvm $out"
+      echo "        clr $cout"
+      exit 1
+    fi
+    echo "  ok   and the clr emitter agrees line for line [$prog]"
+  fi
 done
 
 

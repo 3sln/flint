@@ -666,17 +666,24 @@ predicted there: specialisation plus keeping an integer expression unboxed took
 the JVM's AOT from 5.9x to 12x over its own interpreter (`0029`). That is
 independent evidence for the mechanism, on a backend where it was cheap to try.
 
-> **Those two backends are gone**, deleted with the boxed port they belonged to
-> (`doc/ports.md`). The evidence above stands as evidence — it was measured —
-> but it cannot be re-run here. Nothing was cheap about that backend except the
-> value model: it emitted bytecode over a representation where every value was
-> already a host object, and the runtime that replaced it uses NaN-boxed longs
-> in a flat heap. An AOT for THAT is a new backend, not a port.
+> **Those two backends were deleted with the boxed port** they belonged to, and
+> a note here said an AOT for the ported runtime would be a new backend rather
+> than a port. That was wrong, and about the wrong artifact: the thing to port
+> is not the boxed `Aot.java` but THIS design — `runtime/src/aot.rs` and
+> `src/flint/aot.cljc` — which runs over the same NaN-boxed value model the
+> ported runtimes already mirror.
 >
-> `:optimize [perf]` is therefore a wasm and native concern. The JVM and CLR
-> still carry and read the flag — `RtFlags` prints `flags=1 aot=false` — because
-> a decision no runtime reads is one that can stop being written without anyone
-> noticing.
+> It ports. Wasm, JVM bytecode and CIL are all stack machines with locals over a
+> flat memory, so the emitted sequences transfer; what changes is the opcode
+> table, the value stack being a `long[]`, and the container. The structured
+> `block`/`loop`/`br` this document's emitter reconstructs becomes a flat switch
+> into labels on both hosts, which is simpler than the wasm form.
+>
+> `:optimize [perf]` therefore compiles arities on all four runtimes. The gate
+> compares interpreted against compiled, again under maximal chunking, and the
+> GAS COUNTS — and then compares the two hosts' transcripts character for
+> character, which is what says the chunking and the charge are the same
+> decisions on both rather than merely compatible ones. See `doc/ports.md`.
 
 ## The bug that was open for four days, and what it was
 
