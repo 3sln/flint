@@ -72,12 +72,97 @@ public final class Seqs {
         return Val.heap(a);
     }
 
+    // -----------------------------------------------------------------------
+    // Ranges, string seqs and LAZY seqs.
+
+    public static final int LS_THUNK = 0, LS_SEQ = 1;
+
+    /// `TY_RANGE [start, end, step, meta]`. A `nil` end means UNBOUNDED, which
+    /// is what makes `(range)` an infinite seq rather than an error.
+    public static long range(Rt rt, long start, long end, long step) {
+        int base = rt.mark();
+        int s = rt.push(start), e = rt.push(end), st = rt.push(step);
+        long a = rt.alloc(TY_RANGE, 4);
+        if (a == 0) { rt.popTo(base); return Val.NIL; }
+        rt.setSlot(a, 0, rt.r(s));
+        rt.setSlot(a, 1, rt.r(e));
+        rt.setSlot(a, 2, rt.r(st));
+        rt.setSlot(a, 3, Val.NIL);
+        rt.popTo(base);
+        return Val.heap(a);
+    }
+
+    static boolean rangeEmpty(Rt rt, long v) {
+        long e = rt.slot(v, 1);
+        if (Val.isNil(e)) return false;   // unbounded
+        double s = Num.f64(rt, rt.slot(v, 0));
+        double en = Num.f64(rt, e);
+        double st = Num.f64(rt, rt.slot(v, 2));
+        if (st > 0) return s >= en;
+        if (st < 0) return s <= en;
+        // A zero step never advances. Empty rather than infinite, which is
+        // what Clojure does and is the answer that terminates.
+        return true;
+    }
+
+    static long strseq(Rt rt, long s, int i) {
+        int base = rt.mark();
+        int si = rt.push(s);
+        long a = rt.alloc(TY_STRSEQ, 3);
+        if (a == 0) { rt.popTo(base); return Val.NIL; }
+        rt.setSlot(a, 0, rt.r(si));
+        rt.setSlot(a, 1, Val.fixnum(i));
+        rt.setSlot(a, 2, Val.NIL);
+        rt.popTo(base);
+        return Val.heap(a);
+    }
+
+    /// `TY_LAZYSEQ [thunk, seq, meta]`. The thunk becomes NIL once forced,
+    /// which is both the memo and the "already forced" flag.
+    public static long lazySeq(Rt rt, long thunk) {
+        int base = rt.mark();
+        int t = rt.push(thunk);
+        long a = rt.alloc(TY_LAZYSEQ, 3);
+        if (a == 0) { rt.popTo(base); return Val.NIL; }
+        rt.setSlot(a, LS_THUNK, rt.r(t));
+        rt.setSlot(a, LS_SEQ, Val.NIL);
+        rt.setSlot(a, 2, Val.NIL);
+        rt.popTo(base);
+        return Val.heap(a);
+    }
+
+    /// Force a lazy seq, memoising the result.
+    ///
+    /// The LOOP is not an optimisation: a thunk may return another lazy seq,
+    /// and a chain of them is what `(take 1 (iterate f x))` builds. Recursing
+    /// instead would put that chain on the HOST stack, which is exactly what
+    /// the green-thread design keeps off it.
+    public static long force(Rt rt, long ls) {
+        long thunk = rt.slot(ls, LS_THUNK);
+        if (Val.isNil(thunk)) return rt.slot(ls, LS_SEQ);
+        int base = rt.mark();
+        int li = rt.push(ls);
+        int vi = rt.push(rt.call(thunk, new long[0]));
+        while (Val.isHeap(rt.r(vi)) && ty(rt.gc.sp, Val.asHeap(rt.r(vi))) == TY_LAZYSEQ) {
+            long t2 = rt.slot(rt.r(vi), LS_THUNK);
+            if (Val.isNil(t2)) { rt.setR(vi, rt.slot(rt.r(vi), LS_SEQ)); break; }
+            rt.setR(vi, rt.call(t2, new long[0]));
+        }
+        long cur = rt.r(vi);
+        long l = rt.r(li);
+        rt.popTo(base);
+        rt.setSlot(Val.asHeap(l), LS_THUNK, Val.NIL);
+        rt.setSlot(Val.asHeap(l), LS_SEQ, cur);
+        return cur;
+    }
+
     /// `seq`: nil for an empty collection, otherwise a seq object.
     ///
     /// NIL rather than an empty seq is the whole convention -- `(seq [])` is
     /// nil, and every `while (s)` loop in the library depends on it.
     public static long seq(Rt rt, long v) {
         if (Val.isNil(v)) return Val.NIL;
+        if (Str.isString(rt, v)) return Str.charLen(rt, v) == 0 ? Val.NIL : strseq(rt, v, 0);
         if (!Val.isHeap(v)) return Val.NIL;
         int t = ty(rt.gc.sp, Val.asHeap(v));
         switch (t) {
@@ -85,6 +170,23 @@ public final class Seqs {
             case TY_CONS: case TY_VECSEQ: return v;
             case TY_VEC: return Vec.count(rt, v) == 0 ? Val.NIL : vecseq(rt, v, 0);
             case TY_MAPENTRY: return vecseq(rt, entryAsVec(rt, v), 0);
+            case TY_STRSEQ: return v;
+            case TY_RANGE: return rangeEmpty(rt, v) ? Val.NIL : v;
+            case TY_LAZYSEQ: {
+                int base = rt.mark();
+                int fi = rt.push(force(rt, v));
+                long out = Val.isNil(rt.r(fi)) ? Val.NIL : seq(rt, rt.r(fi));
+                rt.popTo(base);
+                return out;
+            }
+            case TY_SET: {
+                if (Sets.count(rt, v) == 0) return Val.NIL;
+                int base = rt.mark();
+                int ev = rt.push(Sets.elementVector(rt, v));
+                long out = vecseq(rt, rt.r(ev), 0);
+                rt.popTo(base);
+                return out;
+            }
             case TY_ARRAYMAP:
             case TY_HASHMAP: {
                 if (Maps.count(rt, v) == 0) return Val.NIL;
@@ -121,6 +223,8 @@ public final class Seqs {
         if (t == TY_VECSEQ) {
             return Vec.nth(rt, rt.slot(s, 0), (int) Val.asFixnum(rt.slot(s, 1)));
         }
+        if (t == TY_STRSEQ) return Str.nth(rt, rt.slot(s, 0), (int) Val.asFixnum(rt.slot(s, 1)));
+        if (t == TY_RANGE) return rt.slot(s, 0);
         throw new UnsupportedOperationException("first over " + rt.describe(v));
     }
 
@@ -135,6 +239,23 @@ public final class Seqs {
             long vec = rt.slot(s, 0);
             int i = (int) Val.asFixnum(rt.slot(s, 1)) + 1;
             return i >= Vec.count(rt, vec) ? Val.NIL : vecseq(rt, vec, i);
+        }
+        if (t == TY_STRSEQ) {
+            long str = rt.slot(s, 0);
+            int i = (int) Val.asFixnum(rt.slot(s, 1)) + 1;
+            return i >= Str.charLen(rt, str) ? Val.NIL : strseq(rt, str, i);
+        }
+        if (t == TY_RANGE) {
+            // A fresh range, not a mutated cursor: a range IS a persistent
+            // value, so walking one must not disturb anything else holding it.
+            int base = rt.mark();
+            int ri = rt.push(s);
+            int ni = rt.push(Num.add(rt, rt.slot(rt.r(ri), 0), rt.slot(rt.r(ri), 2)));
+            long nr = range(rt, rt.r(ni), rt.slot(rt.r(ri), 1), rt.slot(rt.r(ri), 2));
+            int nri = rt.push(nr);
+            long out = rangeEmpty(rt, rt.r(nri)) ? Val.NIL : rt.r(nri);
+            rt.popTo(base);
+            return out;
         }
         throw new UnsupportedOperationException("next over " + rt.describe(v));
     }

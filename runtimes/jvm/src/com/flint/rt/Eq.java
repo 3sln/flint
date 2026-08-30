@@ -44,6 +44,7 @@ public final class Eq {
             return true;
         }
         if (Maps.isMap(rt, a) && Maps.isMap(rt, b)) return Maps.eq(rt, a, b);
+        if (Sets.isSet(rt, a) && Sets.isSet(rt, b)) return Sets.eq(rt, a, b);
         // A vector and a seq holding the same elements ARE equal in Clojure:
         // `=` is over the sequential abstraction, not the concrete type.
         boolean sa = rt.isSequential(a);
@@ -96,6 +97,7 @@ public final class Eq {
             }
             case TY_ARRAYMAP:
             case TY_HASHMAP: return Maps.hash(rt, v);
+            case TY_SET: return Sets.hash(rt, v);
             default: {
                 if (rt.isSeq(v)) {
                     int base = rt.mark();

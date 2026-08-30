@@ -146,6 +146,7 @@ public final class Builtins {
             if (rt.isHeapTy(v, TY_VEC)) return Val.fixnum(Vec.count(rt, v));
             if (Str.isString(rt, v)) return Val.fixnum(Str.charLen(rt, v));
             if (Maps.isMap(rt, v)) return Val.fixnum(Maps.count(rt, v));
+            if (Sets.isSet(rt, v)) return Val.fixnum(Sets.count(rt, v));
             if (rt.isSeq(v)) return Val.fixnum(Seqs.count(rt, v));
             throw new UnsupportedOperationException("count over " + rt.describe(v) + " needs more of the data structures");
         });
@@ -185,6 +186,23 @@ public final class Builtins {
                 long acc = v;
                 for (int i = 1; i < n; i++) acc = Vec.conj(rt, acc, rt.vat(at + i));
                 return acc;
+            }
+            if (Sets.isSet(rt, v)) {
+                long acc = v;
+                for (int i = 1; i < n; i++) acc = Sets.conj(rt, acc, rt.vat(at + i));
+                return acc;
+            }
+            if (Maps.isMap(rt, v)) {
+                // `conj` onto a map takes an ENTRY or a two-element vector.
+                int base = rt.mark();
+                int ai = rt.push(v);
+                for (int i = 1; i < n; i++) {
+                    long e = rt.vat(at + i);
+                    rt.setR(ai, Maps.assoc(rt, rt.r(ai), Seqs.first(rt, e), Seqs.first(rt, Seqs.rest(rt, e))));
+                }
+                long out = rt.r(ai);
+                rt.popTo(base);
+                return out;
             }
             // `conj` on a SEQ prepends, where on a vector it appends. That
             // asymmetry is Clojure's and is about where the collection is cheap
@@ -259,6 +277,7 @@ public final class Builtins {
             long coll = rt.vat(at);
             if (Val.isNil(coll)) return dflt;
             if (Maps.isMap(rt, coll)) return Maps.get(rt, coll, rt.vat(at + 1), dflt);
+            if (Sets.isSet(rt, coll)) return Sets.get(rt, coll, rt.vat(at + 1), dflt);
             if (rt.isHeapTy(coll, TY_VEC)) {
                 long k = rt.vat(at + 1);
                 if (!Val.isFixnum(k)) return dflt;
@@ -282,14 +301,15 @@ public final class Builtins {
                 return out;
             }
             if (rt.isHeapTy(acc, TY_VEC)) {
+                int base = rt.mark();
+                int ai = rt.push(acc);
                 for (int i = 1; i + 1 < n; i += 2) {
-                    int idx = (int) Val.asFixnum(rt.vat(at + i));
-                    if (idx != Vec.count(rt, acc)) {
-                        throw new UnsupportedOperationException("assoc on a vector index needs vec-assoc ported");
-                    }
-                    acc = Vec.conj(rt, acc, rt.vat(at + i + 1));
+                    rt.setR(ai, Vec.assoc(rt, rt.r(ai),
+                                          (int) Val.asFixnum(rt.vat(at + i)), rt.vat(at + i + 1)));
                 }
-                return acc;
+                long out = rt.r(ai);
+                rt.popTo(base);
+                return out;
             }
             throw new UnsupportedOperationException("assoc onto " + rt.describe(acc) + " needs more of the data structures");
         });
@@ -310,6 +330,7 @@ public final class Builtins {
             long coll = rt.vat(at);
             if (Val.isNil(coll)) return Val.FALSE;
             if (Maps.isMap(rt, coll)) return Val.bool(Maps.contains(rt, coll, rt.vat(at + 1)));
+            if (Sets.isSet(rt, coll)) return Val.bool(Sets.contains(rt, coll, rt.vat(at + 1)));
             if (rt.isHeapTy(coll, TY_VEC)) {
                 long k = rt.vat(at + 1);
                 return Val.bool(Val.isFixnum(k) && Val.asFixnum(k) >= 0
@@ -319,10 +340,70 @@ public final class Builtins {
         });
         def("hash", (rt, at, n) -> Val.fixnum(Eq.hashValue(rt, rt.vat(at))));
 
+        // `apply`: spread the trailing seq onto the argument list.
+        //
+        // The spread arguments go on the SHADOW stack, not into a host array:
+        // `first` and `next` allocate on a lazy seq, so a host array would hold
+        // addresses across a collection that moves them.
+        def("flint/apply", (rt, at, n) -> {
+            int base = rt.mark();
+            int fi = rt.push(rt.vat(at));
+            int si = rt.push(Seqs.seq(rt, rt.vat(at + 1)));
+            int count = 0;
+            while (!Val.isNil(rt.r(si))) {
+                rt.push(Seqs.first(rt, rt.r(si)));
+                count++;
+                rt.setR(si, Seqs.next(rt, rt.r(si)));
+            }
+            long[] argv = new long[count];
+            for (int i = 0; i < count; i++) argv[i] = rt.r(si + 1 + i);
+            long f = rt.r(fi);
+            long out = rt.invoke(f, argv);
+            rt.popTo(base);
+            return out;
+        });
+
+        def("flint/keyword2", (rt, at, n) -> {
+            long ns = n == 1 ? Val.NIL : rt.vat(at);
+            long nm = n == 1 ? rt.vat(at) : rt.vat(at + 1);
+            return Str.keyword(rt, Val.isNil(ns) ? null : nameOf(rt, ns), nameOf(rt, nm));
+        });
+        def("flint/symbol2", (rt, at, n) -> {
+            long ns = n == 1 ? Val.NIL : rt.vat(at);
+            long nm = n == 1 ? rt.vat(at) : rt.vat(at + 1);
+            return Str.symbol(rt, Val.isNil(ns) ? null : nameOf(rt, ns), nameOf(rt, nm));
+        });
+
+        // Lazy sequences and ranges.
+        def("flint/lazy-seq", (rt, at, n) -> Seqs.lazySeq(rt, rt.vat(at)));
+        def("flint/range3", (rt, at, n) ->
+            Seqs.range(rt, rt.vat(at), rt.vat(at + 1), rt.vat(at + 2)));
+
+        // Sets.
+        def("disj", (rt, at, n) -> {
+            long acc = rt.vat(at);
+            if (Val.isNil(acc)) return Val.NIL;
+            int base = rt.mark();
+            int ai = rt.push(acc);
+            for (int i = 1; i < n; i++) rt.setR(ai, Sets.disj(rt, rt.r(ai), rt.vat(at + i)));
+            long out = rt.r(ai);
+            rt.popTo(base);
+            return out;
+        });
+
         def("=", (rt, at, n) -> {
             for (int i = 1; i < n; i++) if (!eq(rt, rt.vat(at), rt.vat(at + i))) return Val.FALSE;
             return Val.TRUE;
         });
+    }
+
+    /// The NAME of a string, keyword or symbol, as a host string. `keyword`
+    /// and `symbol` accept any of the three, which is what lets
+    /// `(keyword (name x))` round-trip.
+    static String nameOf(Rt rt, long v) {
+        if (Val.isInlineKw(v)) return new String(Val.inlineBytes(v), java.nio.charset.StandardCharsets.UTF_8);
+        if (rt.isHeapTy(v, TY_KW) || rt.isHeapTy(v, TY_SYM)) return Str.text(rt, rt.slot(v, 1));
+        return Str.text(rt, v);
     }
 
     /// Clojure prints a double with a trailing `.0` where Java prints `1.0`

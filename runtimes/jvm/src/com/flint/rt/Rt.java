@@ -321,6 +321,31 @@ public final class Rt {
                     roots.stackTop = at;
                     vpush(m);
                 }
+                case Op.SET -> {
+                    int nv = u16(ip); ip += 2;
+                    int base = mark();
+                    int si = push(Sets.empty(this));
+                    int at = roots.stackTop - nv;
+                    for (int i = 0; i < nv; i++) {
+                        setR(si, Sets.conj(this, r(si), roots.stack[at + i]));
+                    }
+                    long sv = r(si);
+                    popTo(base);
+                    roots.stackTop = at;
+                    vpush(sv);
+                }
+                case Op.LIST -> {
+                    int nv = u16(ip); ip += 2;
+                    // The elements move to the shadow stack first: `cons`
+                    // allocates, and the value stack is where they are now.
+                    int base = mark();
+                    int at = roots.stackTop - nv;
+                    for (int i = 0; i < nv; i++) push(roots.stack[at + i]);
+                    long lv = Seqs.fromRoots(this, base, nv);
+                    popTo(base);
+                    roots.stackTop = at;
+                    vpush(lv);
+                }
                 case Op.TYPE_P -> {
                     int c = u8(ip); ip += 1;
                     roots.stack[roots.stackTop - 1] = Val.bool(typeP(c, roots.stack[roots.stackTop - 1]));
@@ -368,6 +393,10 @@ public final class Rt {
             }
             return fn.apply(this, calleeAt + 1, argc);
         }
+        if (Sets.isSet(this, callee)) {
+            if (argc < 1) throw new UnsupportedOperationException("a set takes 1 argument");
+            return Sets.get(this, callee, roots.stack[calleeAt + 1], Val.NIL);
+        }
         if (Maps.isMap(this, callee)) {
             if (argc < 1) throw new UnsupportedOperationException("a map takes 1 or 2 arguments");
             long dflt = argc >= 2 ? roots.stack[calleeAt + 2] : Val.NIL;
@@ -388,12 +417,13 @@ public final class Rt {
     long lookup(long coll, long k, long dflt) {
         if (Val.isNil(coll)) return dflt;
         if (Maps.isMap(this, coll)) return Maps.get(this, coll, k, dflt);
+        if (Sets.isSet(this, coll)) return Sets.get(this, coll, k, dflt);
         if (isHeapTy(coll, TY_VEC)) {
             if (!Val.isFixnum(k)) return dflt;
             long got = Vec.nth(this, coll, (int) Val.asFixnum(k));
             return got == Val.NOT_FOUND ? dflt : got;
         }
-        throw new UnsupportedOperationException("lookup needs sets ported");
+        return dflt;   // `get` on a non-collection is nil, as Clojure's is
     }
 
     /// `flint.types/code`'s canonical table, from `vm.rs`. The numbers are the
@@ -478,6 +508,20 @@ public final class Rt {
     /// sequential without being seqs. `=` is over this, not over seq-ness.
     boolean isSequential(long v) {
         return isSeq(v) || isHeapTy(v, TY_VEC) || isHeapTy(v, TY_MAPENTRY);
+    }
+
+    /// Call ANY callable with `args`: a closure, a builtin, a keyword, or a
+    /// collection in function position. `call` handles only closures, and
+    /// `apply` has to handle whatever it is given.
+    public long invoke(long f, long[] args) {
+        if (isHeapTy(f, TY_CLOSURE)) return call(f, args);
+        int save = roots.stackTop;
+        vreserve(args.length + 1);
+        vpush(f);
+        for (long a : args) vpush(a);
+        long v = callValue(save, args.length);
+        roots.stackTop = save;
+        return v;
     }
 
     /// Call `closure` with `args` from outside the interpreter.

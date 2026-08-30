@@ -181,6 +181,39 @@ public final class Img {
                 rt.popTo(base);
                 return Val.heap(a);
             }
+            case K_VECTOR:
+            case K_LIST:
+            case K_SET: {
+                // The elements are EARLIER constants, by index: the writer
+                // emits in dependency order so one pass suffices.
+                int n = (int) r.u32();
+                int base = rt.mark();
+                for (int i = 0; i < n; i++) rt.push(consts[(int) r.u32()]);
+                long out;
+                if (tag == K_VECTOR) {
+                    out = Vec.fromRoots(rt, base, n);
+                } else if (tag == K_LIST) {
+                    out = Seqs.fromRoots(rt, base, n);
+                } else {
+                    int si = rt.push(Sets.empty(rt));
+                    for (int i = 0; i < n; i++) rt.setR(si, Sets.conj(rt, rt.r(si), rt.r(base + i)));
+                    out = rt.r(si);
+                }
+                rt.popTo(base);
+                return out;
+            }
+            case K_MAP: {
+                int n = (int) r.u32();
+                int base = rt.mark();
+                for (int i = 0; i < 2 * n; i++) rt.push(consts[(int) r.u32()]);
+                int mi = rt.push(Maps.empty(rt));
+                for (int i = 0; i < n; i++) {
+                    rt.setR(mi, Maps.assoc(rt, rt.r(mi), rt.r(base + 2 * i), rt.r(base + 2 * i + 1)));
+                }
+                long out = rt.r(mi);
+                rt.popTo(base);
+                return out;
+            }
             case K_FN: {
                 long f = r.u32();
                 // A closure with no upvalues: a top-level fn is a constant.

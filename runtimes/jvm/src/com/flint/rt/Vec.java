@@ -211,6 +211,52 @@ public final class Vec {
         return out;
     }
 
+    static long doAssoc(Rt rt, int level, long node, int i, long val) {
+        int base = rt.mark();
+        int n = rt.push(node), v = rt.push(val);
+        long ret = nodeClone(rt, rt.r(n), WIDTH, Val.NIL);
+        if (Val.isNil(ret)) { rt.popTo(base); return Val.NIL; }
+        int ri = rt.push(ret);
+        if (level == 0) {
+            nodeSet(rt, rt.r(ri), i & MASK, rt.r(v));
+        } else {
+            int subidx = (i >>> level) & MASK;
+            long child = nodeGet(rt, rt.r(n), subidx);
+            long nc = doAssoc(rt, level - BITS, child, i, rt.r(v));
+            nodeSet(rt, rt.r(ri), subidx, nc);
+        }
+        long out = rt.r(ri);
+        rt.popTo(base);
+        return out;
+    }
+
+    /// `assoc` at an index. `i == count` APPENDS, which is Clojure's rule and
+    /// the only index past the end that is legal.
+    public static long assoc(Rt rt, long v, int i, long x) {
+        int cnt = count(rt, v);
+        if (i == cnt) return conj(rt, v, x);
+        int base = rt.mark();
+        int vi = rt.push(v), xi = rt.push(x);
+        long out;
+        if (i >= tailOff(rt, v)) {
+            long tail = tail(rt, rt.r(vi));
+            int tl = nodeLen(rt, tail);
+            int nti = rt.push(nodeClone(rt, tail, tl, Val.NIL));
+            nodeSet(rt, rt.r(nti), i - tailOff(rt, rt.r(vi)), rt.r(xi));
+            long vv = rt.r(vi);
+            out = newVec(rt, cnt, shift(rt, vv), root(rt, vv), rt.r(nti), rt.slot(vv, V_META));
+        } else {
+            long vv = rt.r(vi);
+            int sh = shift(rt, vv);
+            long nr = doAssoc(rt, sh, root(rt, vv), i, rt.r(xi));
+            int nri = rt.push(nr);
+            vv = rt.r(vi);
+            out = newVec(rt, cnt, sh, rt.r(nri), tail(rt, vv), rt.slot(vv, V_META));
+        }
+        rt.popTo(base);
+        return out;
+    }
+
     /// Build a vector from `n` values already rooted at `base` on the shadow
     /// stack. What the `VECTOR` opcode uses.
     public static long fromRoots(Rt rt, int base, int n) {
