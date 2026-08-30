@@ -575,126 +575,150 @@ impl Rt {
     }
 
     /// The one-character string at code-point index `i`.
-    /// The byte offset of code point `i` in a non-ASCII string, resuming from
-    /// the cursor when it can.
+    /// The byte offset of code point `i`, and the bytes there.
     ///
-    /// This is the whole of the quadratic fix. `.chars().nth(i)` is O(i), and a
-    /// reader that walks a string with `nth` therefore costs O(n^2) -- which
-    /// every reader in the language did, and which only showed up on strings
-    /// that were not ASCII, because the ASCII path indexes bytes directly. One
-    /// `ä` in a 115 KB EDN document was the difference between 119 ms and
-    /// 5 375 ms.
+    /// ONE path for both tiers, and NO STATE. A rope descends its own
+    /// code-point counts; a flat string is either ASCII -- where the index is
+    /// the offset -- or short enough that `raw_string` left it flat, which is
+    /// what `INDEX_LEAF` decides.
     ///
-    /// Returns `None` when `i` is past the end.
-    fn byte_of_cp(&mut self, s: Value, i: u32) -> Option<u32> {
+    /// This replaced a one-entry cursor, and the reason is worth keeping: a
+    /// cursor made the cost of an index depend on what was indexed BEFORE it,
+    /// and the cursor had to be invalidated by the collector. So the same walk
+    /// cost 8 000 gas undisturbed and 8 500 with one collection halfway through
+    /// -- and under parallel executors that collection belongs to another
+    /// thread. `doc/decisions/0009` says gas is deterministic; a memo keyed on
+    /// collector state is not. `runtime/tests/determinism.rs` is the guard.
+    fn cp_bytes_at(&mut self, s: Value, i: u32, out: &mut [u8; 4]) -> Option<u32> {
+        // WHICH MECHANISM, AND WHY -- `0011` calls them complementary and this
+        // is the line where that has to be acted on.
+        //
+        // ASCII: FLATTEN, once, and index by byte. A code-point index IS a byte
+        // index, so after the flatten every index is O(1); descending the tree
+        // instead costs O(depth) EVERY time, and measured 3.05x on
+        // `test/scaling.clj` -- a linear operation made superlinear by using
+        // the more general mechanism where the cheaper one applies.
+        //
+        // NON-ASCII: DESCEND, and never flatten. Here there is no byte index to
+        // have, so a flat run leaves nothing but a scan, and the scan is the
+        // quadratic.
+        if self.is_rope(s) && !self.s_ascii(s) {
+            let byte = self.rope_byte_of_cp(s, i)?;
+            let w = self.rope_bytes_at(s, byte, out);
+            return if w == 0 { None } else { Some(w) };
+        }
+        let s = self.string_arg(s);
         let mut buf = crate::rt::sbuf();
-        let epoch = self.gc.epoch;
-        let cur = self.str_cursor;
-        // Resume only FORWARD from a cursor that is still this string in this
-        // epoch. Anything else starts at the beginning, which is what the code
-        // did every time before.
-        let (mut cp, mut byte) = if cur.bits == s.bits() && cur.epoch == epoch && cur.cp <= i {
-            (cur.cp, cur.byte)
-        } else {
-            (0, 0)
-        };
         let b: &[u8] = if s.is_inline_str() {
             s.inline_bytes(&mut buf)
         } else {
             str_bytes(&self.gc.sp, s.as_heap())
         };
-        let n = b.len() as u32;
-        let from = byte;
-        while cp < i {
-            if byte >= n {
-                return None;
+        let mut scanned = 0u32;
+        let at = if self.str_indexable(s) {
+            i
+        } else {
+            // A flat non-ASCII run, bounded by `INDEX_LEAF`: anything longer
+            // arrives as a tree, so this scan is O(INDEX_LEAF), not O(n).
+            let mut at = 0u32;
+            for _ in 0..i {
+                if at as usize >= b.len() {
+                    return None;
+                }
+                at += utf8_width(b[at as usize]);
             }
-            byte += utf8_width(b[byte as usize]);
-            cp += 1;
-        }
-        // CHARGED FOR WHAT WAS WALKED, not per call (`doc/decisions/0009`).
-        //
-        // This is what makes `test/scaling.clj` able to see a regression here.
-        // Gas is meant to be proportional to work; a fixed charge per call made
-        // the counter blind to the very defect the cursor exists to prevent, so
-        // the quadratic that motivated it produced right answers, took five
-        // seconds, and moved the counter linearly. With the cursor a sequential
-        // walk charges O(1) amortised; without it, the ratio goes to four and
-        // the test says so.
-        let walked = byte - from;
-        if byte >= n {
-            self.charge_bytes(walked);
+            scanned = at;
+            at
+        };
+        if at as usize >= b.len() {
             return None;
         }
-        self.charge_bytes(walked);
-        self.str_cursor = crate::rt::StrCursor { bits: s.bits(), epoch, cp, byte };
-        Some(byte)
+        let w = utf8_width(b[at as usize]);
+        out[..w as usize].copy_from_slice(&b[at as usize..at as usize + w as usize]);
+        // After the borrow of `b` ends: charged for what was walked.
+        self.charge_bytes(scanned);
+        Some(w)
     }
 
+    /// The code point at `i`, as a one-character string.
+    ///
+    /// NOTE THE MISSING `string_arg`. Every indexing path used to flatten a
+    /// rope first, which threw away the per-node code-point counts
+    /// `doc/decisions/0011` computes, stores and traces for exactly this
+    /// question -- and then answered it by scanning.
     pub fn char_at(&mut self, s: Value, i: u32) -> Option<Value> {
-        let s = self.string_arg(s);
-        // ASCII fast path: byte index == code-point index, so this is O(1).
-        if self.str_indexable(s) {
-            let n = self.str_len(s);
-            if i >= n {
-                return None;
-            }
-            let b = if s.is_inline_str() {
-                let mut t = crate::rt::sbuf();
-                s.inline_bytes(&mut t)[i as usize]
-            } else {
-                self.gc.sp.read_u8(s.as_heap() + STR_DATA + i as crate::mem::Addr)
-            };
-            return Some(Value::inline_str(&[b]));
-        }
-        let byte = self.byte_of_cp(s, i)?;
-        let mut buf = crate::rt::sbuf();
-        let b: &[u8] = if s.is_inline_str() {
-            s.inline_bytes(&mut buf)
-        } else {
-            str_bytes(&self.gc.sp, s.as_heap())
-        };
-        let w = utf8_width(b[byte as usize]) as usize;
-        Some(Value::inline_str(&b[byte as usize..byte as usize + w]))
+        let mut out = [0u8; 4];
+        let w = self.cp_bytes_at(s, i, &mut out)?;
+        Some(Value::inline_str(&out[..w as usize]))
     }
 
     pub fn code_point_at(&mut self, s: Value, i: Value) -> Value {
-        let s = self.string_arg(s);
         let idx = match self.as_i64(i) {
             Some(n) if n >= 0 => n as usize,
             _ => return self.throw_str("IndexOutOfBoundsException", "bad index"),
         };
-        if self.str_indexable(s) {
-            if (idx as u32) >= self.str_len(s) {
-                return self.throw_str("IndexOutOfBoundsException", "string index out of range");
-            }
-            let b = if s.is_inline_str() {
-                let mut t = crate::rt::sbuf();
-                s.inline_bytes(&mut t)[idx]
-            } else {
-                self.gc.sp.read_u8(s.as_heap() + STR_DATA + idx as crate::mem::Addr)
-            };
-            return Value::fixnum(b as i64);
-        }
-        let byte = match self.byte_of_cp(s, idx as u32) {
-            Some(b) => b as usize,
+        let mut out = [0u8; 4];
+        let w = match self.cp_bytes_at(s, idx as u32, &mut out) {
+            Some(w) => w as usize,
             None => return self.throw_str("IndexOutOfBoundsException", "string index out of range"),
         };
-        let mut buf = crate::rt::sbuf();
-        let b: &[u8] = if s.is_inline_str() {
-            s.inline_bytes(&mut buf)
-        } else {
-            str_bytes(&self.gc.sp, s.as_heap())
-        };
-        let w = utf8_width(b[byte]) as usize;
-        match core::str::from_utf8(&b[byte..byte + w]).ok().and_then(|t| t.chars().next()) {
+        match core::str::from_utf8(&out[..w]).ok().and_then(|t| t.chars().next()) {
             Some(c) => Value::fixnum(c as u32 as i64),
             None => self.throw_str("IndexOutOfBoundsException", "string index out of range"),
         }
     }
 
+    /// `subs` over a tree, by descent: two offsets and a byte copy.
+    ///
+    /// `charge_bytes` is for the SLICE, not the source, for the reason the flat
+    /// path already records -- charging the whole string per call makes the
+    /// counter quadratic for splitting even when the code is not.
+    fn rope_substring(&mut self, s: Value, start: i64, end: Option<i64>) -> Value {
+        let n = self.s_count(s) as i64;
+        let e = end.unwrap_or(n);
+        if start < 0 || e > n || start > e {
+            return self.throw_str("StringIndexOutOfBoundsException", "bad substring range");
+        }
+        self.charge_bytes((e - start) as u32);
+        if start == e {
+            return self.string("");
+        }
+        let from = match self.rope_byte_of_cp(s, start as u32) {
+            Some(b) => b,
+            None => return self.throw_str("StringIndexOutOfBoundsException", "bad substring range"),
+        };
+        // The END offset is the start of code point `e`, or the whole byte
+        // length when `e` is the count -- there is no code point AT the end.
+        let to = if e as u32 == self.s_count(s) {
+            self.s_bytes(s)
+        } else {
+            match self.rope_byte_of_cp(s, e as u32) {
+                Some(b) => b,
+                None => self.s_bytes(s),
+            }
+        };
+        let base = self.mark();
+        let si = self.push(s);
+        let mut bytes: alloc::vec::Vec<u8> =
+            alloc::vec::Vec::with_capacity((to - from) as usize);
+        self.append_range(self.r(si), from, to, &mut bytes);
+        self.pop_to(base);
+        let t = core::str::from_utf8(&bytes).unwrap_or("");
+        self.string(t)
+    }
+
     /// `subs`, in code points.
     pub fn substring(&mut self, s: Value, start: i64, end: Option<i64>) -> Value {
+        // NO `string_arg` on the non-ASCII path. Flattening first turned a tree
+        // into one long run and then walked it with `chars().skip(start)`,
+        // which is O(start) per call -- so slicing a string n times was
+        // quadratic, which is the defect `doc/decisions/0011` predicts in the
+        // sentence "without the flag, `nth` and `subs` on a flat string are
+        // O(n) and splitting one is quadratic". The tree answers both offsets
+        // by descent instead.
+        if self.is_rope(s) && !self.s_ascii(s) {
+            return self.rope_substring(s, start, end);
+        }
         let s = self.string_arg(s);
         // The slice, not the source. Charging the whole string per call made
         // the COUNTER quadratic for splitting -- n slices of an n-byte string is
@@ -1331,7 +1355,7 @@ pub const SBUF_LEN: usize = INLINE_MAX;
 /// The same table `char_width_at` uses, as a free function so the cursor walk
 /// can read it straight off a byte slice rather than re-fetching per byte.
 #[inline]
-fn utf8_width(b0: u8) -> u32 {
+pub fn utf8_width(b0: u8) -> u32 {
     if b0 < 0x80 {
         1
     } else if b0 < 0xE0 {

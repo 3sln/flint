@@ -26,15 +26,94 @@ public static class Str {
     }
 
     /// A bare, UNINTERNED heap string. `Of` is the canonical constructor.
+    /// A LONG NON-ASCII STRING ARRIVES AS A TREE. The tier transitions fire on
+    /// CONCATENATION, so a string that arrives whole from outside never became
+    /// a rope however big it was -- and `0011` then says, correctly, that "a
+    /// flat string carries one total count, which does not locate code point
+    /// k". Nothing covered a flat string that is not ASCII, and every reader in
+    /// the language indexes by code point, so one non-ASCII character in a
+    /// 115 KB document made the whole document quadratic.
+    ///
+    /// ASCII strings stay flat: for them a code-point index IS a byte index.
     static long RawString(Rt rt, byte[] b) {
+        bool ascii = true;
+        foreach (byte x in b) if ((x & 0x80) != 0) { ascii = false; break; }
+        if (!ascii && b.Length > FLAT_MAX) return IndexedString(rt, b);
+        return FlatString(rt, b, ascii);
+    }
+
+    /// One contiguous run. The leaf tier.
+    static long FlatString(Rt rt, byte[] b, bool ascii) {
         long a = rt.Alloc(Obj.TyStr, b.Length);
         if (a == 0) return Val.Nil;
         rt.gc.sp.WriteBytes(a + Obj.StrData, b);
         Obj.SetStrHash(rt.gc.sp, a, 0);
-        bool ascii = true;
-        foreach (byte x in b) if ((x & 0x80) != 0) { ascii = false; break; }
         Obj.SetStrAscii(rt.gc.sp, a, ascii);
         return Val.Heap(a);
+    }
+
+    /// A string that is GUARANTEED contiguous: inline, or one flat run.
+    ///
+    /// The difference from `Of` is the whole of the tiering, and it has to be
+    /// said out loud at the call site: `Flatten` used to build its result with
+    /// `Of`, and once `Of` started answering a TREE for a long non-ASCII input,
+    /// flattening a rope produced another rope.
+    public static long Contiguous(Rt rt, byte[] b) {
+        if (b.Length <= Val.InlineMax) return Val.InlineStr(b);
+        bool ascii = true;
+        foreach (byte x in b) if ((x & 0x80) != 0) { ascii = false; break; }
+        return FlatString(rt, b, ascii);
+    }
+
+    /// A balanced tree over `INDEX_LEAF`-sized pieces, split on code-point
+    /// boundaries. The node array IS the sparse code-point index.
+    static long IndexedString(Rt rt, byte[] b) {
+        int bas = rt.Mark();
+        int n = 0, start = 0;
+        while (start < b.Length) {
+            // Split on a CHARACTER boundary at or before the limit: a leaf that
+            // ended mid-code-point would make every count downstream wrong.
+            int end = System.Math.Min(start + INDEX_LEAF, b.Length);
+            while (end > start && (b[end - 1] & 0xC0) == 0x80) end--;
+            if (end == start) end = System.Math.Min(start + INDEX_LEAF, b.Length);
+            var piece = new byte[end - start];
+            System.Array.Copy(b, start, piece, 0, end - start);
+            bool pa = true;
+            foreach (byte x in piece) if ((x & 0x80) != 0) { pa = false; break; }
+            long leaf = FlatString(rt, piece, pa);
+            if (Val.IsNil(leaf)) { rt.PopTo(bas); return Val.Nil; }
+            rt.Push(leaf);
+            n++;
+            start = end;
+        }
+        long v = RopeFromRoots(rt, bas, n);
+        rt.PopTo(bas);
+        return v;
+    }
+
+    /// A balanced tree over `n` leaves on the shadow stack from `bas`, built
+    /// bottom-up in `FANOUT` groups so it is balanced by construction.
+    static long RopeFromRoots(Rt rt, int bas, int n) {
+        if (n == 0) return Of(rt, "");
+        if (n == 1) return rt.R(bas);
+        int level = n, from = bas;
+        for (;;) {
+            if (level == 1) return rt.R(from);
+            int outAt = rt.Mark();
+            int made = 0, i = 0;
+            while (i < level) {
+                int take = System.Math.Min(FANOUT, level - i);
+                long[] kids = new long[take];
+                for (int k = 0; k < take; k++) kids[k] = rt.R(from + i + k);
+                long node = RopeNode(rt, kids);
+                if (Val.IsNil(node)) return Val.Nil;
+                rt.Push(node);
+                made++;
+                i += take;
+            }
+            from = outAt;
+            level = made;
+        }
     }
 
     /// The CANONICAL value for a string.
@@ -137,17 +216,11 @@ public static class Str {
     /// type: flint has no char, and `doc/decisions/0010` counts that among the
     /// documented divergences rather than a gap.
     public static long Nth(Rt rt, long v, int i) {
-        if (i < 0) return Val.NotFound;
-        byte[] b = Bytes(rt, v);
-        if (IsAscii(rt, v)) {
-            if (i >= b.Length) return Val.NotFound;
-            return Val.InlineStr(new byte[]{ b[i] });
-        }
-        int at = ByteOfCp(rt, v, b, i);
-        if (at < 0) return Val.NotFound;
-        int size = Utf8Width(b[at]);
-        var one = new byte[size];
-        System.Array.Copy(b, at, one, 0, size);
+        var outb = new byte[4];
+        int w = CpBytesAt(rt, v, i, outb);
+        if (w < 0) return Val.NotFound;
+        var one = new byte[w];
+        System.Array.Copy(outb, 0, one, 0, w);
         return Val.InlineStr(one);
     }
 
@@ -160,39 +233,106 @@ public static class Str {
         return 4;
     }
 
-    /// The byte offset of code point `i`, RESUMING FROM THE CURSOR when it can.
+    /// The byte offset of code point `k` in a rope, BY DESCENDING its per-node
+    /// code-point counts.
     ///
-    /// A byte index and a code-point index coincide only for ASCII, so a
-    /// non-ASCII string has to be walked -- and every reader in the language
-    /// walks a string with `nth` in a loop, which made every reader O(n^2).
-    /// One `ä` in a 115 KB EDN document was the difference between 119 ms and
-    /// 5 375 ms, quadrupling each time the input doubled.
-    ///
-    /// The cursor makes SEQUENTIAL indexing O(1) amortised, which is the access
-    /// pattern that was quadratic. Random access is unchanged.
-    ///
-    /// Keyed on the COLLECTION COUNT as well as the value, because a copying
-    /// collector moves objects and can put a different one where this was --
-    /// comparing addresses alone would be a memo that is silently wrong rather
-    /// than merely stale.
-    static int ByteOfCp(Rt rt, long v, byte[] b, int i) {
-        long epoch = rt.gc.minors + rt.gc.majors;
-        int cp = 0, at = 0;
-        if (rt.cursorBits == v && rt.cursorEpoch == epoch && rt.cursorCp <= i) {
-            cp = rt.cursorCp;
-            at = rt.cursorByte;
+    /// `doc/decisions/0011` designed those counts for exactly this and nothing
+    /// used them: every indexing path flattened first, so the counts were
+    /// computed, stored, traced by the collector, and thrown away before the
+    /// one question they answer.
+    static int RopeByteOfCp(Rt rt, long v, int k) {
+        long node = v;
+        int want = k, byteAt = 0;
+        for (;;) {
+            if (!IsRope(rt, node)) {
+                int n = SCount(rt, node);
+                if (want >= n) return -1;
+                if (SAscii(rt, node)) return byteAt + want;
+                byte[] b = Bytes(rt, node);
+                int at = 0;
+                for (int c2 = 0; c2 < want; c2++) at += Utf8Width(b[at]);
+                rt.ChargeBytes(at);
+                return byteAt + at;
+            }
+            int nk = RopeKids(rt, node), i = 0;
+            for (;;) {
+                if (i >= nk) return -1;
+                long kid = rt.Slot(node, RP_KIDS + i);
+                int c = SCount(rt, kid);
+                if (want < c) { node = kid; break; }
+                want -= c;
+                byteAt += SBytes(rt, kid);
+                i++;
+            }
+            rt.ChargeWork(i + 1);
         }
-        while (cp < i) {
-            if (at >= b.Length) return -1;
-            at += Utf8Width(b[at]);
-            cp++;
+    }
+
+    /// The bytes of the code point at byte offset `byteAt`, from whichever leaf
+    /// holds it. Returns the width, with the bytes written into `outb`.
+    static int RopeBytesAt(Rt rt, long v, int byteAt, byte[] outb) {
+        long node = v;
+        int want = byteAt;
+        for (;;) {
+            if (!IsRope(rt, node)) {
+                byte[] b = Bytes(rt, node);
+                int w = Utf8Width(b[want]);
+                System.Array.Copy(b, want, outb, 0, w);
+                return w;
+            }
+            int nk = RopeKids(rt, node), i = 0;
+            for (;;) {
+                if (i >= nk) return 0;
+                long kid = rt.Slot(node, RP_KIDS + i);
+                int n = SBytes(rt, kid);
+                if (want < n) { node = kid; break; }
+                want -= n;
+                i++;
+            }
+        }
+    }
+
+    /// The bytes of the code point at index `i`, or -1.
+    ///
+    /// WHICH MECHANISM, AND WHY -- `0011` calls them complementary and this is
+    /// the line where that is acted on. ASCII: flatten once and index by byte,
+    /// which is O(1) forever after; descending instead costs O(depth) EVERY
+    /// time and made a linear operation superlinear. Non-ASCII: descend, and
+    /// never flatten, because there is no byte index to have and a flat run
+    /// leaves nothing but the scan that was the quadratic.
+    ///
+    /// This replaced a one-entry cursor. The cursor had to be invalidated by
+    /// the collector, so the same walk cost different GAS depending on when a
+    /// collection happened -- and under parallel executors that collection
+    /// belongs to another thread. `doc/decisions/0009` says gas is
+    /// deterministic; a memo keyed on collector state is not.
+    static int CpBytesAt(Rt rt, long v, int i, byte[] outb) {
+        if (i < 0) return -1;
+        if (IsRope(rt, v) && !SAscii(rt, v)) {
+            int at2 = RopeByteOfCp(rt, v, i);
+            if (at2 < 0) return -1;
+            int w2 = RopeBytesAt(rt, v, at2, outb);
+            return w2 == 0 ? -1 : w2;
+        }
+        long flat = Flatten(rt, v);
+        byte[] b = Bytes(rt, flat);
+        int at;
+        if (IsAscii(rt, flat)) {
+            at = i;
+        } else {
+            // A flat non-ASCII run, bounded by `INDEX_LEAF`: anything longer
+            // arrives as a tree, so this scan is O(INDEX_LEAF), not O(n).
+            at = 0;
+            for (int k = 0; k < i; k++) {
+                if (at >= b.Length) return -1;
+                at += Utf8Width(b[at]);
+            }
+            rt.ChargeBytes(at);
         }
         if (at >= b.Length) return -1;
-        rt.cursorBits = v;
-        rt.cursorEpoch = epoch;
-        rt.cursorCp = cp;
-        rt.cursorByte = at;
-        return at;
+        int w = Utf8Width(b[at]);
+        System.Array.Copy(b, at, outb, 0, w);
+        return w;
     }
 
     /// The CODE POINT at index `i`, or -1 when `i` is past the end.
@@ -200,13 +340,12 @@ public static class Str {
     /// Separate from `Nth` so the reader does not build a one-character string
     /// per character just to ask what it is.
     public static int CodePointAt(Rt rt, long v, int i) {
-        if (i < 0) return -1;
-        byte[] b = Bytes(rt, v);
-        if (IsAscii(rt, v)) return i >= b.Length ? -1 : (b[i] & 0xFF);
-        int at = ByteOfCp(rt, v, b, i);
-        if (at < 0) return -1;
-        return char.ConvertToUtf32(Encoding.UTF8.GetString(b, at, Utf8Width(b[at])), 0);
+        var outb = new byte[4];
+        int w = CpBytesAt(rt, v, i, outb);
+        if (w < 0) return -1;
+        return char.ConvertToUtf32(Encoding.UTF8.GetString(outb, 0, w), 0);
     }
+
 
     public static byte[] Bytes(Rt rt, long v) {
         if (Val.IsInlineStr(v)) return Val.InlineBytes(v);
@@ -309,6 +448,11 @@ public static class Str {
     public const int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_KIDS = 3;
     public const int FLAT_MAX = 1024, FANOUT = 16;
 
+    /// LEAF SIZE FOR A STRING THAT ARRIVES NON-ASCII AND WHOLE. See
+    /// `IndexedString`: the tree's node array is the sparse code-point index,
+    /// and this is the bound on the scan inside one leaf.
+    public const int INDEX_LEAF = 128;
+
     public static bool IsRope(Rt rt, long v) =>
         Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyRope;
 
@@ -362,25 +506,76 @@ public static class Str {
             // the tier that must not be skipped.
             return CopyConcat(rt, a, b);
         }
-        // Append into the RIGHT SPINE while there is room, so a thousand small
-        // appends do not become a thousand nodes.
-        if (IsRope(rt, a) && RopeKids(rt, a) < FANOUT) {
-            int n = RopeKids(rt, a);
-            int bas = rt.Mark();
-            int ai = rt.Push(a);
-            for (int i = 0; i < n; i++) rt.Push(rt.Slot(rt.R(ai), RP_KIDS + i));
-            rt.Push(b);
-            long[] kids = new long[n + 1];
-            for (int i = 0; i <= n; i++) kids[i] = rt.R(bas + 1 + i);
-            long outv = RopeNode(rt, kids);
-            rt.PopTo(bas);
-            return outv;
-        }
+        // Append down the RIGHT SPINE, adding a level only when every node on it
+        // is full. This used to widen the root while it had room and otherwise
+        // make `[a, b]` -- which put the whole old tree back as kid 0 and grew
+        // the depth by one every FANOUT appends, so depth was O(n) rather than
+        // O(log n). It never showed because nothing indexed a rope: every path
+        // flattened first.
+        long appended = RopeAppend(rt, a, b);
+        if (!Val.IsNil(appended)) return appended;
         int bas2 = rt.Mark();
         int a2 = rt.Push(a), b2 = rt.Push(b);
-        long outv2 = RopeNode(rt, new long[]{ rt.R(a2), rt.R(b2) });
+        // A new level: `b` is lifted to stand as tall as the old root.
+        int h2 = RopeHeight(rt, rt.R(a2));
+        int l2 = rt.Push(RopeLift(rt, rt.R(b2), h2));
+        long outv2 = RopeNode(rt, new long[]{ rt.R(a2), rt.R(l2) });
         rt.PopTo(bas2);
         return outv2;
+    }
+
+    /// How many levels of node sit above the leaves. A leaf is 0.
+    static int RopeHeight(Rt rt, long v) =>
+        IsRope(rt, v) ? 1 + RopeHeight(rt, rt.Slot(v, RP_KIDS)) : 0;
+
+    /// Wrap `v` in single-kid nodes until it stands `h` levels tall, which is
+    /// what keeps every leaf at the SAME depth.
+    static long RopeLift(Rt rt, long v, int h) {
+        int bas = rt.Mark();
+        int vi = rt.Push(v);
+        for (int i = 0; i < h; i++) {
+            long n = RopeNode(rt, new long[]{ rt.R(vi) });
+            if (Val.IsNil(n)) { rt.PopTo(bas); return Val.Nil; }
+            rt.SetR(vi, n);
+        }
+        long outv = rt.R(vi);
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    /// Append `b` into the rightmost subtree of `a` that has room, rebuilding
+    /// the spine above it. Nil when the right spine is full at every level.
+    static long RopeAppend(Rt rt, long a, long b) {
+        if (!IsRope(rt, a)) return Val.Nil;
+        int n = RopeKids(rt, a);
+        int bas = rt.Mark();
+        int ai = rt.Push(a), bi = rt.Push(b);
+        int li = rt.Push(rt.Slot(rt.R(ai), RP_KIDS + n - 1));
+        // Deepest first: room further down costs no depth at all.
+        long deeper = IsRope(rt, rt.R(li)) ? RopeAppend(rt, rt.R(li), rt.R(bi)) : Val.Nil;
+        long outv;
+        if (!Val.IsNil(deeper)) {
+            int ni = rt.Push(deeper);
+            long[] kids = new long[n];
+            for (int i = 0; i < n - 1; i++) kids[i] = rt.Slot(rt.R(ai), RP_KIDS + i);
+            kids[n - 1] = rt.R(ni);
+            outv = RopeNode(rt, kids);
+        } else if (n < FANOUT) {
+            // Full below, room here: `b` joins as a sibling, LIFTED to the
+            // height its siblings stand at.
+            int h = RopeHeight(rt, rt.R(li));
+            long lifted = RopeLift(rt, rt.R(bi), h);
+            if (Val.IsNil(lifted)) { rt.PopTo(bas); return Val.Nil; }
+            int ni = rt.Push(lifted);
+            long[] kids = new long[n + 1];
+            for (int i = 0; i < n; i++) kids[i] = rt.Slot(rt.R(ai), RP_KIDS + i);
+            kids[n] = rt.R(ni);
+            outv = RopeNode(rt, kids);
+        } else {
+            outv = Val.Nil;
+        }
+        rt.PopTo(bas);
+        return outv;
     }
 
     static long CopyConcat(Rt rt, long a, long b) {
@@ -419,7 +614,9 @@ public static class Str {
         int bas = rt.Mark();
         int vi = rt.Push(v);
         AppendBytes(rt, rt.R(vi), ms);
-        long flat = Of(rt, Encoding.UTF8.GetString(ms.ToArray()));
+        // CONTIGUOUS, not `Of`: `Of` tiers, and a flatten that produced a tree
+        // would put a tree in `RP_FLAT`.
+        long flat = Contiguous(rt, ms.ToArray());
         long vv = rt.R(vi);
         rt.PopTo(bas);
         if (Val.IsHeap(vv) && !Val.IsNil(flat)) rt.SetSlot(Val.AsHeap(vv), RP_FLAT, flat);

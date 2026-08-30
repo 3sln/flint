@@ -330,6 +330,12 @@ pub fn finish_run(rt: &mut Rt, result: Value) -> i32 {
             out.extend_from_slice(m.as_bytes());
             return 1;
         }
+        // FLATTENED FIRST. `as_str` borrows, so it cannot flatten, and a rope
+        // that has never been asked for contiguous bytes answers `None` --
+        // which this reported as "the entry function did not return a string".
+        // The host boundary is the legitimate place to flatten: it is where
+        // contiguous bytes are actually required.
+        let result = rt.string_arg(result);
         let mut b = crate::rt::sbuf();
         match rt.as_str(result, &mut b) {
             Some(s) => {

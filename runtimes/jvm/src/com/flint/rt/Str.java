@@ -33,15 +33,107 @@ public final class Str {
     }
 
     /// A bare, UNINTERNED heap string. `of` is the canonical constructor.
+    ///
+    /// A LONG NON-ASCII STRING ARRIVES AS A TREE. The tier transitions fire on
+    /// CONCATENATION, so a string that arrives whole from outside never became
+    /// a rope however big it was -- and `0011` then says, correctly, that "a
+    /// flat string carries one total count, which does not locate code point
+    /// k". Nothing covered a flat string that is not ASCII, and every reader in
+    /// the language indexes by code point, so one non-ASCII character in a
+    /// 115 KB document made the whole document quadratic.
+    ///
+    /// ASCII strings stay flat: for them a code-point index IS a byte index,
+    /// so there is nothing to locate and a tree would be pure overhead.
     static long rawString(Rt rt, byte[] b) {
+        boolean ascii = true;
+        for (byte x : b) if ((x & 0x80) != 0) { ascii = false; break; }
+        if (!ascii && b.length > FLAT_MAX) return indexedString(rt, b);
+        return flatString(rt, b, ascii);
+    }
+
+    /// One contiguous run. The leaf tier.
+    static long flatString(Rt rt, byte[] b, boolean ascii) {
         long a = rt.alloc(TY_STR, b.length);
         if (a == 0) return Val.NIL;
         rt.gc.sp.writeBytes(a + STR_DATA, b);
         setStrHash(rt.gc.sp, a, 0);
-        boolean ascii = true;
-        for (byte x : b) if ((x & 0x80) != 0) { ascii = false; break; }
         setStrAscii(rt.gc.sp, a, ascii);
         return Val.heap(a);
+    }
+
+    /// A string that is GUARANTEED contiguous: inline, or one flat run.
+    ///
+    /// The difference from `of` is the whole of the tiering, and it has to be
+    /// said out loud at the call site: `flatten` used to build its result with
+    /// `of`, and once `of` started answering a TREE for a long non-ASCII input,
+    /// flattening a rope produced another rope -- so every caller that
+    /// flattened precisely to get contiguous bytes was handed something that
+    /// was not.
+    public static long contiguous(Rt rt, byte[] b) {
+        if (b.length <= Val.INLINE_MAX) return Val.inlineStr(b);
+        boolean ascii = true;
+        for (byte x : b) if ((x & 0x80) != 0) { ascii = false; break; }
+        return flatString(rt, b, ascii);
+    }
+
+    /// A balanced tree over `INDEX_LEAF`-sized pieces, split on code-point
+    /// boundaries.
+    ///
+    /// The node array IS the sparse code-point index: each node carries its
+    /// subtree's code-point count, so locating code point `k` is a descent plus
+    /// a scan bounded by one leaf. Both are properties of the string, which is
+    /// what makes the cost PREDICTABLE -- it does not depend on what was
+    /// indexed before, and it does not change because another executor
+    /// collected.
+    static long indexedString(Rt rt, byte[] b) {
+        int base = rt.mark();
+        int n = 0, start = 0;
+        while (start < b.length) {
+            // Split on a CHARACTER boundary at or before the limit: a leaf that
+            // ended mid-code-point would make every count downstream wrong.
+            int end = Math.min(start + INDEX_LEAF, b.length);
+            while (end > start && (b[end - 1] & 0xC0) == 0x80) end--;
+            if (end == start) end = Math.min(start + INDEX_LEAF, b.length);
+            byte[] piece = java.util.Arrays.copyOfRange(b, start, end);
+            boolean pa = true;
+            for (byte x : piece) if ((x & 0x80) != 0) { pa = false; break; }
+            long leaf = flatString(rt, piece, pa);
+            if (Val.isNil(leaf)) { rt.popTo(base); return Val.NIL; }
+            rt.push(leaf);
+            n++;
+            start = end;
+        }
+        long v = ropeFromRoots(rt, base, n);
+        rt.popTo(base);
+        return v;
+    }
+
+    /// A balanced tree over `n` leaves sitting on the shadow stack from `base`.
+    ///
+    /// Built bottom-up in `FANOUT` groups, so the result is balanced by
+    /// construction rather than by rebalancing afterwards -- which matters
+    /// because the depth is what every index pays.
+    static long ropeFromRoots(Rt rt, int base, int n) {
+        if (n == 0) return of(rt, "");
+        if (n == 1) return rt.r(base);
+        int level = n, from = base;
+        for (;;) {
+            if (level == 1) return rt.r(from);
+            int outAt = rt.mark();
+            int made = 0, i = 0;
+            while (i < level) {
+                int take = Math.min(FANOUT, level - i);
+                long[] kids = new long[take];
+                for (int k = 0; k < take; k++) kids[k] = rt.r(from + i + k);
+                long node = ropeNode(rt, kids);
+                if (Val.isNil(node)) return Val.NIL;
+                rt.push(node);
+                made++;
+                i += take;
+            }
+            from = outAt;
+            level = made;
+        }
     }
 
     /// The CANONICAL value for a string.
@@ -242,17 +334,11 @@ public final class Str {
     /// type: flint has no char, and `doc/decisions/0010` counts that among the
     /// documented divergences rather than a gap.
     public static long nth(Rt rt, long v, int i) {
-        if (i < 0) return Val.NOT_FOUND;
-        byte[] b = bytes(rt, v);
-        if (isAscii(rt, v)) {
-            if (i >= b.length) return Val.NOT_FOUND;
-            return Val.inlineStr(new byte[]{ b[i] });
-        }
-        int at = byteOfCp(rt, v, b, i);
-        if (at < 0) return Val.NOT_FOUND;
-        int size = utf8Width(b[at]);
-        byte[] one = new byte[size];
-        System.arraycopy(b, at, one, 0, size);
+        byte[] out = new byte[4];
+        int w = cpBytesAt(rt, v, i, out);
+        if (w < 0) return Val.NOT_FOUND;
+        byte[] one = new byte[w];
+        System.arraycopy(out, 0, one, 0, w);
         return Val.inlineStr(one);
     }
 
@@ -265,39 +351,107 @@ public final class Str {
         return 4;
     }
 
-    /// The byte offset of code point `i`, RESUMING FROM THE CURSOR when it can.
+    /// The byte offset of code point `k` in a rope, BY DESCENDING its per-node
+    /// code-point counts.
     ///
-    /// A byte index and a code-point index coincide only for ASCII, so a
-    /// non-ASCII string has to be walked -- and every reader in the language
-    /// walks a string with `nth` in a loop, which made every reader O(n^2).
-    /// One `ä` in a 115 KB EDN document was the difference between 119 ms and
-    /// 5 375 ms, quadrupling each time the input doubled.
+    /// `doc/decisions/0011` designed those counts for exactly this and nothing
+    /// used them: every indexing path flattened first, so the counts were
+    /// computed, stored, traced by the collector, and thrown away before the
+    /// one question they answer.
     ///
-    /// The cursor makes SEQUENTIAL indexing O(1) amortised, which is the access
-    /// pattern that was quadratic. Random access is unchanged.
-    ///
-    /// Keyed on the COLLECTION COUNT as well as the value, because a copying
-    /// collector moves objects and can put a different one where this was --
-    /// comparing addresses alone would be a memo that is silently wrong rather
-    /// than merely stale.
-    static int byteOfCp(Rt rt, long v, byte[] b, int i) {
-        long epoch = rt.gc.minors + rt.gc.majors;
-        int cp = 0, at = 0;
-        if (rt.cursorBits == v && rt.cursorEpoch == epoch && rt.cursorCp <= i) {
-            cp = rt.cursorCp;
-            at = rt.cursorByte;
+    /// -1 when `k` is past the end.
+    static int ropeByteOfCp(Rt rt, long v, int k) {
+        long node = v;
+        int want = k, byteAt = 0;
+        for (;;) {
+            if (!isRope(rt, node)) {
+                int n = sCount(rt, node);
+                if (want >= n) return -1;
+                if (sAscii(rt, node)) return byteAt + want;
+                byte[] b = bytes(rt, node);
+                int at = 0;
+                for (int i = 0; i < want; i++) at += utf8Width(b[at]);
+                rt.chargeBytes(at);
+                return byteAt + at;
+            }
+            int nk = ropeKids(rt, node), i = 0;
+            for (;;) {
+                if (i >= nk) return -1;
+                long kid = rt.slot(node, RP_KIDS + i);
+                int c = sCount(rt, kid);
+                if (want < c) { node = kid; break; }
+                want -= c;
+                byteAt += sBytes(rt, kid);
+                i++;
+            }
+            rt.chargeWork(i + 1);
         }
-        while (cp < i) {
-            if (at >= b.length) return -1;
-            at += utf8Width(b[at]);
-            cp++;
+    }
+
+    /// The bytes of the code point at byte offset `byteAt`, from whichever leaf
+    /// holds it. Returns the width, with the bytes written into `out`.
+    static int ropeBytesAt(Rt rt, long v, int byteAt, byte[] out) {
+        long node = v;
+        int want = byteAt;
+        for (;;) {
+            if (!isRope(rt, node)) {
+                byte[] b = bytes(rt, node);
+                int w = utf8Width(b[want]);
+                System.arraycopy(b, want, out, 0, w);
+                return w;
+            }
+            int nk = ropeKids(rt, node), i = 0;
+            for (;;) {
+                if (i >= nk) return 0;
+                long kid = rt.slot(node, RP_KIDS + i);
+                int n = sBytes(rt, kid);
+                if (want < n) { node = kid; break; }
+                want -= n;
+                i++;
+            }
+        }
+    }
+
+    /// The bytes of the code point at index `i`, or -1.
+    ///
+    /// WHICH MECHANISM, AND WHY -- `0011` calls them complementary and this is
+    /// the line where that is acted on. ASCII: flatten once and index by byte,
+    /// which is O(1) forever after; descending instead costs O(depth) EVERY
+    /// time and made a linear operation superlinear. Non-ASCII: descend, and
+    /// never flatten, because there is no byte index to have and a flat run
+    /// leaves nothing but the scan that was the quadratic.
+    ///
+    /// This replaced a one-entry cursor. The cursor had to be invalidated by
+    /// the collector, so the same walk cost different GAS depending on when a
+    /// collection happened -- and under parallel executors that collection
+    /// belongs to another thread. `doc/decisions/0009` says gas is
+    /// deterministic; a memo keyed on collector state is not.
+    static int cpBytesAt(Rt rt, long v, int i, byte[] out) {
+        if (i < 0) return -1;
+        if (isRope(rt, v) && !sAscii(rt, v)) {
+            int at = ropeByteOfCp(rt, v, i);
+            if (at < 0) return -1;
+            int w = ropeBytesAt(rt, v, at, out);
+            return w == 0 ? -1 : w;
+        }
+        byte[] b = bytes(rt, flatten(rt, v));
+        int at;
+        if (isAscii(rt, flatten(rt, v))) {
+            at = i;
+        } else {
+            // A flat non-ASCII run, bounded by `INDEX_LEAF`: anything longer
+            // arrives as a tree, so this scan is O(INDEX_LEAF), not O(n).
+            at = 0;
+            for (int k = 0; k < i; k++) {
+                if (at >= b.length) return -1;
+                at += utf8Width(b[at]);
+            }
+            rt.chargeBytes(at);
         }
         if (at >= b.length) return -1;
-        rt.cursorBits = v;
-        rt.cursorEpoch = epoch;
-        rt.cursorCp = cp;
-        rt.cursorByte = at;
-        return at;
+        int w = utf8Width(b[at]);
+        System.arraycopy(b, at, out, 0, w);
+        return w;
     }
 
     /// The CODE POINT at index `i`, or -1 when `i` is past the end.
@@ -305,13 +459,12 @@ public final class Str {
     /// Separate from `nth` so the reader does not build a one-character string
     /// per character just to ask what it is.
     public static int codePointAt(Rt rt, long v, int i) {
-        if (i < 0) return -1;
-        byte[] b = bytes(rt, v);
-        if (isAscii(rt, v)) return i >= b.length ? -1 : (b[i] & 0xFF);
-        int at = byteOfCp(rt, v, b, i);
-        if (at < 0) return -1;
-        return new String(b, at, utf8Width(b[at]), StandardCharsets.UTF_8).codePointAt(0);
+        byte[] out = new byte[4];
+        int w = cpBytesAt(rt, v, i, out);
+        if (w < 0) return -1;
+        return new String(out, 0, w, StandardCharsets.UTF_8).codePointAt(0);
     }
+
 
     // --- ropes (`doc/decisions/0011`) ---------------------------------------
     //
@@ -326,6 +479,11 @@ public final class Str {
 
     public static final int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_KIDS = 3;
     public static final int FLAT_MAX = 1024, FANOUT = 16;
+
+    /// LEAF SIZE FOR A STRING THAT ARRIVES NON-ASCII AND WHOLE. See
+    /// `indexedString`: the tree's node array is the sparse code-point index,
+    /// and this is the bound on the scan inside one leaf.
+    public static final int INDEX_LEAF = 128;
 
     public static boolean isRope(Rt rt, long v) {
         return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_ROPE;
@@ -383,23 +541,81 @@ public final class Str {
             // the tier that must not be skipped.
             return copyConcat(rt, a, b);
         }
-        // Append into the RIGHT SPINE while there is room, so a thousand small
-        // appends do not become a thousand nodes.
-        if (isRope(rt, a) && ropeKids(rt, a) < FANOUT) {
-            int n = ropeKids(rt, a);
-            int base = rt.mark();
-            int ai = rt.push(a);
-            for (int i = 0; i < n; i++) rt.push(rt.slot(rt.r(ai), RP_KIDS + i));
-            rt.push(b);
-            long[] kids = new long[n + 1];
-            for (int i = 0; i <= n; i++) kids[i] = rt.r(base + 1 + i);
-            long outv = ropeNode(rt, kids);
-            rt.popTo(base);
-            return outv;
-        }
+        // Append down the RIGHT SPINE, adding a level only when every node on
+        // it is full.
+        //
+        // This used to widen the root while it had room and otherwise make
+        // `[a, b]` -- which put the whole old tree back as kid 0 and grew the
+        // depth by one every FANOUT appends. Depth was therefore O(n), not
+        // O(log n), and `0011`'s "fanout 16-32, depth is what random access
+        // pays for" was a statement about a tree this did not build. It never
+        // showed because nothing indexed a rope: every path flattened first.
+        long appended = ropeAppend(rt, a, b);
+        if (!Val.isNil(appended)) return appended;
         int base = rt.mark();
         int ai = rt.push(a), bi = rt.push(b);
-        long outv = ropeNode(rt, new long[]{ rt.r(ai), rt.r(bi) });
+        // A new level: `b` is lifted to stand as tall as the old root, so the
+        // leaves stay at one depth on this side too.
+        int h = ropeHeight(rt, rt.r(ai));
+        int li = rt.push(ropeLift(rt, rt.r(bi), h));
+        long outv = ropeNode(rt, new long[]{ rt.r(ai), rt.r(li) });
+        rt.popTo(base);
+        return outv;
+    }
+
+    /// How many levels of node sit above the leaves. A leaf is 0.
+    static int ropeHeight(Rt rt, long v) {
+        if (!isRope(rt, v)) return 0;
+        return 1 + ropeHeight(rt, rt.slot(v, RP_KIDS));
+    }
+
+    /// Wrap `v` in single-kid nodes until it stands `h` levels tall, which is
+    /// what keeps every leaf at the SAME depth.
+    static long ropeLift(Rt rt, long v, int h) {
+        int base = rt.mark();
+        int vi = rt.push(v);
+        for (int i = 0; i < h; i++) {
+            long n = ropeNode(rt, new long[]{ rt.r(vi) });
+            if (Val.isNil(n)) { rt.popTo(base); return Val.NIL; }
+            rt.setR(vi, n);
+        }
+        long outv = rt.r(vi);
+        rt.popTo(base);
+        return outv;
+    }
+
+    /// Append `b` into the rightmost subtree of `a` that has room, rebuilding
+    /// the spine above it. NIL when the right spine is full at every level,
+    /// which is the only time the caller adds one.
+    static long ropeAppend(Rt rt, long a, long b) {
+        if (!isRope(rt, a)) return Val.NIL;
+        int n = ropeKids(rt, a);
+        int base = rt.mark();
+        int ai = rt.push(a), bi = rt.push(b);
+        int li = rt.push(rt.slot(rt.r(ai), RP_KIDS + n - 1));
+        // Deepest first: room further down costs no depth at all.
+        long deeper = isRope(rt, rt.r(li)) ? ropeAppend(rt, rt.r(li), rt.r(bi)) : Val.NIL;
+        long outv;
+        if (!Val.isNil(deeper)) {
+            int ni = rt.push(deeper);
+            long[] kids = new long[n];
+            for (int i = 0; i < n - 1; i++) kids[i] = rt.slot(rt.r(ai), RP_KIDS + i);
+            kids[n - 1] = rt.r(ni);
+            outv = ropeNode(rt, kids);
+        } else if (n < FANOUT) {
+            // Full below, room here: `b` joins as a sibling, LIFTED to the
+            // height its siblings stand at.
+            int h = ropeHeight(rt, rt.r(li));
+            long lifted = ropeLift(rt, rt.r(bi), h);
+            if (Val.isNil(lifted)) { rt.popTo(base); return Val.NIL; }
+            int ni = rt.push(lifted);
+            long[] kids = new long[n + 1];
+            for (int i = 0; i < n; i++) kids[i] = rt.slot(rt.r(ai), RP_KIDS + i);
+            kids[n] = rt.r(ni);
+            outv = ropeNode(rt, kids);
+        } else {
+            outv = Val.NIL;
+        }
         rt.popTo(base);
         return outv;
     }
@@ -440,7 +656,9 @@ public final class Str {
         int base = rt.mark();
         int vi = rt.push(v);
         appendBytes(rt, rt.r(vi), out);
-        long flat = of(rt, new String(out.toByteArray(), StandardCharsets.UTF_8));
+        // CONTIGUOUS, not `of`: `of` tiers, and a flatten that produced a tree
+        // would put a tree in `RP_FLAT`.
+        long flat = contiguous(rt, out.toByteArray());
         long vv = rt.r(vi);
         rt.popTo(base);
         if (Val.isHeap(vv) && !Val.isNil(flat)) rt.setSlot(Val.asHeap(vv), RP_FLAT, flat);

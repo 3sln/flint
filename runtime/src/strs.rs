@@ -34,6 +34,46 @@ pub const INTERN_MAX: u32 = 32;
 impl Rt {
     /// Allocate a bare (uninterned) heap string.
     fn raw_string(&mut self, s: &str) -> Value {
+        // A LONG NON-ASCII STRING ARRIVES AS A TREE, not as one flat run.
+        //
+        // The tier transitions in `rope.rs` fire on CONCATENATION -- `flat (+)
+        // flat -> rope` past the threshold -- so a string that arrives whole
+        // from outside never became a rope however big it was. `0011` then
+        // says, correctly, that "a flat string carries one total count, which
+        // does not locate code point k", and leaves the ASCII flag to cover the
+        // case where it does not have to. Nothing covered a flat string that is
+        // NOT ASCII, and every reader in the language indexes by code point --
+        // so one `ä` in a 115 KB document made the whole document quadratic.
+        //
+        // ASCII strings stay flat. For them a code-point index IS a byte index,
+        // there is nothing to locate, and a tree would be pure overhead.
+        // The THRESHOLD is `FLAT_MAX`, the same one the concatenation tiering
+        // uses, not the leaf size. A 200-byte string as a two-leaf tree is
+        // overhead for a scan `0011` already accepts as bounded; what has to be
+        // a tree is the string big enough for that scan to be the quadratic.
+        if !s.is_ascii() && s.len() as u32 > crate::rope::FLAT_MAX {
+            return self.indexed_string(s);
+        }
+        self.flat_string(s)
+    }
+
+    /// A string that is GUARANTEED contiguous: inline, or one flat run.
+    ///
+    /// The difference from `string` is the whole of the tiering, and it has to
+    /// be said out loud at the call site. `flatten` used to call `string`, and
+    /// once `string` started answering a TREE for a long non-ASCII input,
+    /// flattening a rope produced another rope: `RP_FLAT` held a tree, and
+    /// every caller that had flattened precisely to get contiguous bytes was
+    /// handed something that was not.
+    pub(crate) fn contiguous_string(&mut self, s: &str) -> Value {
+        if s.len() <= INLINE_MAX {
+            return Value::inline_str(s.as_bytes());
+        }
+        self.flat_string(s)
+    }
+
+    /// One contiguous run. The leaf tier.
+    fn flat_string(&mut self, s: &str) -> Value {
         let n = s.len() as u32;
         let a = self.alloc(TY_STR, n);
         if a == 0 {
@@ -43,6 +83,40 @@ impl Rt {
         set_str_hash(&self.gc.sp, a, 0);
         set_str_ascii(&self.gc.sp, a, s.is_ascii());
         Value::heap(a)
+    }
+
+    /// A balanced tree over `INDEX_LEAF`-sized pieces, split on code-point
+    /// boundaries.
+    ///
+    /// The node array IS the sparse code-point index: each node carries its
+    /// subtree's code-point count, so locating code point `k` is a descent plus
+    /// a scan bounded by one leaf. Both are properties of the string, which is
+    /// what makes the cost PREDICTABLE -- it does not depend on what was
+    /// indexed before, and it does not change because another executor
+    /// collected.
+    fn indexed_string(&mut self, s: &str) -> Value {
+        let base = self.mark();
+        let mut n = 0usize;
+        let mut start = 0usize;
+        while start < s.len() {
+            // Split on a CHARACTER boundary at or before the limit: a leaf that
+            // ended mid-code-point would make every count downstream wrong.
+            let mut end = (start + crate::rope::INDEX_LEAF as usize).min(s.len());
+            while end > start && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            let piece = self.flat_string(&s[start..end]);
+            if piece.is_nil() {
+                self.pop_to(base);
+                return NIL;
+            }
+            self.push(piece);
+            n += 1;
+            start = end;
+        }
+        let v = self.rope_from_roots(base, n);
+        self.pop_to(base);
+        v
     }
 
     /// ASCII case folding, as one pass over the bytes.

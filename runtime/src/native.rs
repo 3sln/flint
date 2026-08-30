@@ -600,6 +600,11 @@ fn status_of(rt: &mut Rt, result: Value) -> i32 {
     if rt.failed() {
         return 1;
     }
+    // FLATTENED FIRST, for the reason `abi.rs` records: `as_str` borrows and
+    // so cannot flatten, and a rope nobody has asked for contiguous bytes
+    // answers `None`. Reading that as "not a string" made a long non-ASCII
+    // answer look like a program that returned the wrong type.
+    let result = rt.string_arg(result);
     let mut b = crate::rt::sbuf();
     if rt.as_str(result, &mut b).is_none() {
         return 1;
@@ -626,6 +631,7 @@ fn rendered(rt: &mut Rt, result: Value) -> String {
         };
         return alloc::format!("{kind}: {msg}");
     }
+    let result = rt.string_arg(result);
     let mut b = crate::rt::sbuf();
     match rt.as_str(result, &mut b) {
         Some(s) => s.into(),

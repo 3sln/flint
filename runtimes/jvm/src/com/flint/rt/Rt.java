@@ -941,6 +941,17 @@ public final class Rt {
 
     public long opaqueLabel(long v) { return isOpaque(v) ? slot(v, 0) : Val.NIL; }
 
+
+    /// Gas for work that is not O(1) (`doc/decisions/0009`).
+    ///
+    /// The counter is meant to be proportional to WORK and reproducible, and
+    /// that is a property of the language rather than of one runtime: a port
+    /// that dispatches the same opcodes but does not charge for the same scans
+    /// answers a different number for the same program, and the number is the
+    /// whole point.
+    public void chargeWork(long n) { steps += n; }
+    public void chargeBytes(long n) { chargeWork((n / 8) + 1); }
+
     public boolean parked() { return thrown == Val.PARK; }
     public boolean failed() { return !Val.isNil(thrown); }
 

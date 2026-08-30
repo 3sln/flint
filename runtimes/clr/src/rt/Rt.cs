@@ -969,6 +969,17 @@ public sealed class Rt : System.IDisposable {
 
     public long OpaqueLabel(long v) => IsOpaque(v) ? Slot(v, 0) : Val.Nil;
 
+
+    /// Gas for work that is not O(1) (`doc/decisions/0009`).
+    ///
+    /// The counter is meant to be proportional to WORK and reproducible, and
+    /// that is a property of the language rather than of one runtime: a port
+    /// that dispatches the same opcodes but does not charge for the same scans
+    /// answers a different number for the same program, and the number is the
+    /// whole point.
+    public void ChargeWork(long n) { steps += n; }
+    public void ChargeBytes(long n) { ChargeWork((n / 8) + 1); }
+
     public bool Parked() => thrown == Val.Park;
     public bool Failed() => !Val.IsNil(thrown);
 
