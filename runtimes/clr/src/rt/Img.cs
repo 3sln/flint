@@ -78,7 +78,7 @@ public static class Img {
         int nconsts = (int) r.U32();
         long[] consts = new long[nconsts];
         rt.consts = consts;
-        rt.roots.Consts = consts;
+        rt.roots.shared.Consts = consts;
         for (int i = 0; i < nconsts; i++) consts[i] = ReadConst(rt, r, consts, i);
 
         int nfns = (int) r.U32();
@@ -104,8 +104,8 @@ public static class Img {
         int nvars = (int) r.U32();
         outl.varNames = new int[nvars];
         for (int i = 0; i < nvars; i++) outl.varNames[i] = (int) r.U32();
-        rt.roots.Globals = new long[nvars];
-        System.Array.Fill(rt.roots.Globals, Val.Nil);
+        rt.roots.shared.Globals = new long[nvars];
+        System.Array.Fill(rt.roots.shared.Globals, Val.Nil);
 
         int codelen = (int) r.U32();
         rt.code = r.Bytes(codelen);

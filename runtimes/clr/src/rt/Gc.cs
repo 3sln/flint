@@ -142,6 +142,19 @@ public sealed class Gc : System.IDisposable {
 
     // --- allocation --------------------------------------------------------
 
+    /// WOULD allocating this collect?
+    ///
+    /// Asked BEFORE allocating, because under several executors a collection
+    /// has to be staged -- everyone stopped -- and staging one around every
+    /// allocation would be a stop-the-world per allocation rather than per
+    /// collection. Conservative on purpose: a false yes costs one needless
+    /// safepoint, a false no would let the collector move objects while another
+    /// thread was running.
+    public bool WouldCollect(int ty, int len) {
+        long size = SizeFor(ty, len);
+        return size >= LARGE_OBJECT || bump + size > from + half;
+    }
+
     public long Alloc(Roots roots, int ty, int len) {
         long size = SizeFor(ty, len);
         bytesAllocated += size;
@@ -295,8 +308,9 @@ public sealed class Gc : System.IDisposable {
         roots.ForEach(Forward);
 
         // 2. the remembered set: old -> young edges
-        List<long> oldRem = new List<long>(roots.Remembered);
-        roots.Remembered.Clear();
+        // EVERY executor's, not just this one's. Draining one and not the rest
+        // would lose old-to-young edges another thread recorded.
+        List<long> oldRem = roots.DrainRemembered();
         foreach (long a in oldRem) SetInRemset(sp, a, false);
         foreach (long a in oldRem) ScanObject(a);
 
@@ -306,7 +320,7 @@ public sealed class Gc : System.IDisposable {
         // 4. weak tables. A nursery entry that was copied is FORWARDED; one
         // that was not is dead, and the entry goes. This runs BEFORE the flip,
         // while `from` still names the space that was just evacuated.
-        foreach (Interns tbl in roots.interns) {
+        foreach (Interns tbl in roots.shared.interns) {
             tbl.Refresh(v => {
                 if (Val.IsHeap(v) && (ulong)(Val.AsHeap(v) - from) < (ulong) half) {
                     long a2 = Val.AsHeap(v);
@@ -341,13 +355,12 @@ public sealed class Gc : System.IDisposable {
             for (int i = 0; i < n; i++) MarkFrom(Slot(sp, a, i));
         }
         // Weak tables: anything unmarked is unreachable.
-        foreach (Interns tbl in roots.interns) {
+        foreach (Interns tbl in roots.shared.interns) {
             tbl.Refresh(v => (!Val.IsHeap(v) || Marked(sp, Val.AsHeap(v))) ? v : Val.NotFound);
         }
 
         // The remembered set may name objects about to be freed.
-        List<long> rem = new List<long>(roots.Remembered);
-        roots.Remembered.Clear();
+        List<long> rem = roots.DrainRemembered();
         foreach (long a in rem) {
             if (Marked(sp, a)) rememberedDuringCollect.Add(a);
             else SetInRemset(sp, a, false);

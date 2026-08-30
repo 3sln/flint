@@ -256,6 +256,25 @@ if [ -n "$CLR" ]; then
     || { echo "  FAIL the two ports hash differently"; exit 1; }
 fi
 
+# PARALLEL EXECUTORS (`doc/decisions/0028`): K REAL HOST THREADS on one flint
+# heap, which is a different thing from the green threads next door and both
+# exist. Green threads are how one sandbox interleaves its own work
+# deterministically; this is how a host drives one sandbox with a pool.
+#
+# The claim is not "it does not crash": it is that a collection staged by one
+# thread walks the OTHER thread's roots, so what that thread is holding
+# survives and what moved is found where it moved to. The collection count is
+# printed so that a change which quietly stops the nursery filling shows up as
+# a WEAKER test rather than as a passing one.
+"$JDK/bin/java" -cp runtimes/jvm/classes RtParallel > /tmp/flint-par-jvm.out 2>&1 \
+  || { cat /tmp/flint-par-jvm.out; echo "  FAIL parallel executors [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' /tmp/flint-par-jvm.out
+if [ -n "$CLR" ]; then
+  "$CLR" --rt-parallel > /tmp/flint-par-clr.out 2>&1 \
+    || { cat /tmp/flint-par-clr.out; echo "  FAIL parallel executors [clr]"; exit 1; }
+  sed 's/$/ [clr]/' /tmp/flint-par-clr.out
+fi
+
 # MAPS: the array-map, the promotion to CHAMP at 9 entries, and the two
 # properties CHAMP is chosen FOR -- canonical form (a map built by deleting
 # equals and hashes like the same map built directly) and collision nodes.

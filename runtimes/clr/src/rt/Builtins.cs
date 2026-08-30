@@ -490,16 +490,16 @@ public static class Builtins {
         // whole map and restores it, so a park in the middle carries the
         // bindings with the thread rather than leaving them behind.
         Def("flint/dyn-get", (rt, at, n) => {
-            long binds = rt.roots.Singletons[Rt.SingBindings];
+            long binds = rt.roots.shared.Singletons[Rt.SingBindings];
             if (Val.IsNil(binds)) return rt.VAt(at + 1);
             return Maps.Get(rt, binds, rt.VAt(at), rt.VAt(at + 1));
         });
         Def("flint/dyn-bindings", (rt, at, n) => {
-            long b = rt.roots.Singletons[Rt.SingBindings];
+            long b = rt.roots.shared.Singletons[Rt.SingBindings];
             return Val.IsNil(b) ? Maps.Empty(rt) : b;
         });
         Def("flint/dyn-set-bindings", (rt, at, n) => {
-            rt.roots.Singletons[Rt.SingBindings] = rt.VAt(at);
+            rt.roots.shared.Singletons[Rt.SingBindings] = rt.VAt(at);
             return rt.VAt(at);
         });
 
@@ -839,11 +839,11 @@ public static class Builtins {
             return Conc.Join(rt, rt.VAt(at));
         });
         Def("flint/bindings", (rt, at, n) => {
-            long b = rt.roots.Singletons[Rt.SingBindings];
+            long b = rt.roots.shared.Singletons[Rt.SingBindings];
             return Val.IsNil(b) ? Maps.Empty(rt) : b;
         });
         Def("flint/set-bindings", (rt, at, n) => {
-            rt.roots.Singletons[Rt.SingBindings] = rt.VAt(at);
+            rt.roots.shared.Singletons[Rt.SingBindings] = rt.VAt(at);
             return rt.VAt(at);
         });
 

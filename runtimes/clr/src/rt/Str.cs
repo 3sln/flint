@@ -49,10 +49,9 @@ public static class Str {
         if (b.Length <= Val.InlineMax) return Val.InlineStr(b);
         if (b.Length > Interns.InternMax) return RawString(rt, b);
         int h = Hash.HashString(b);
-        Interns t = rt.roots.interns[Interns.STR];
         Interns.Match matches = v => Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr
                                      && SameBytes(Bytes(rt, v), b);
-        long found = t.Lookup(h, matches);
+        long found = Probe(rt, Interns.STR, h, matches);
         if (found != Val.NotFound) return found;
 
         // Allocated OUTSIDE the probe, which keeps interning off the allocation
@@ -78,17 +77,40 @@ public static class Str {
     /// unequal while reading identically -- and symbol equality is slot
     /// equality on those same strings, so it would spread.
     static long Publish(Rt rt, int table, int h, long v, Interns.Match matches) {
-        Interns t = rt.roots.interns[table];
-        long again = t.Lookup(h, matches);
-        if (again != Val.NotFound) return again;   // somebody got there first
-        int idx = t.slot;
-        if (t.NeedsGrow()) {
-            t.Grow();
-            t.Lookup(h, x => false);   // `Grow` invalidates the index
-            idx = t.slot;
+        // ROOTED across the lock. `LockIntern` can PARK -- that is the point of
+        // it, so a thread waiting for the lock still reaches a safepoint -- and
+        // parking means another executor may collect and move `v` while this
+        // thread is stopped.
+        int bas = rt.Mark();
+        int vi = rt.Push(v);
+        rt.roots.shared.par.LockIntern(table);
+        try {
+            Interns t = rt.roots.shared.interns[table];
+            long again = t.Lookup(h, matches);
+            if (again != Val.NotFound) return again;   // somebody got there first
+            int idx = t.slot;
+            if (t.NeedsGrow()) {
+                t.Grow();
+                t.Lookup(h, x => false);   // `Grow` invalidates the index
+                idx = t.slot;
+            }
+            t.InsertAt(idx, h, rt.R(vi));
+            return rt.R(vi);
+        } finally {
+            rt.roots.shared.par.UnlockIntern(table);
+            rt.PopTo(bas);
         }
-        t.InsertAt(idx, h, v);
-        return v;
+    }
+
+    /// Probe a table under its lock. Nothing needs rooting: no allocation
+    /// happens, and the lock can only park before anything is live.
+    static long Probe(Rt rt, int table, int h, Interns.Match matches) {
+        rt.roots.shared.par.LockIntern(table);
+        try {
+            return rt.roots.shared.interns[table].Lookup(h, matches);
+        } finally {
+            rt.roots.shared.par.UnlockIntern(table);
+        }
     }
 
     /// The number of CODE POINTS, which is what `count` on a string means in
@@ -168,7 +190,7 @@ public static class Str {
         int h = Hash.HashKeyword(nsb, nb);
         Interns.Match matches = v => Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyKw
                                      && SameName(rt, v, nsb, nb);
-        long found = rt.roots.interns[Interns.KW].Lookup(h, matches);
+        long found = Probe(rt, Interns.KW, h, matches);
         if (found != Val.NotFound) return found;
         long built = BuildKeyword(rt, ns, name);
         if (Val.IsNil(built)) return built;
@@ -207,7 +229,7 @@ public static class Str {
         int h = Hash.HashSymbol(nsb, nb);
         Interns.Match matches = v => Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TySym
                                      && SameName(rt, v, nsb, nb);
-        long found = rt.roots.interns[Interns.SYM].Lookup(h, matches);
+        long found = Probe(rt, Interns.SYM, h, matches);
         if (found != Val.NotFound) return found;
         long built = BuildSymbol(rt, ns, name);
         if (Val.IsNil(built)) return built;

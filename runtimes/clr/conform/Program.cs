@@ -14,6 +14,7 @@ public static class Program {
         if (args.Length >= 1 && args[0] == "--rt-snapshot") return RtSnapshot();
         if (args.Length >= 1 && args[0] == "--rt-hash") return RtHash();
         if (args.Length >= 1 && args[0] == "--rt-maps") return RtMaps();
+        if (args.Length >= 1 && args[0] == "--rt-parallel") return RtParallel();
         if (args.Length >= 3 && args[0] == "--rt-shelve") return RtShelve(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "--rt-selfhost") return RtSelfHost(args[1], args[2]);
         if (args.Length >= 2 && args[0] == "--rt-image")
@@ -95,7 +96,7 @@ public static class Program {
         var a = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
         a.fingerprint = 0xABCDEF12345L;
         long root = SnapBuild(a, N);
-        a.roots.Globals = new long[]{ root };
+        a.roots.shared.Globals = new long[]{ root };
         string before = SnapRender(a, root);
         SnapOk("built a structure to snapshot: " + N + " entries", before.StartsWith("0=item-0;"));
 
@@ -104,11 +105,11 @@ public static class Program {
 
         var b = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
         b.fingerprint = a.fingerprint;
-        b.roots.Globals = new long[1];
+        b.roots.shared.Globals = new long[1];
         SnapOk("restore accepts it", Flint.Rt.Snap.Restore(b, verbatim));
-        SnapOk("the restored heap reads back identically", SnapRender(b, b.roots.Globals[0]) == before);
+        SnapOk("the restored heap reads back identically", SnapRender(b, b.roots.shared.Globals[0]) == before);
         SnapOk("and at the SAME address, which is what a memcpy means",
-               Flint.Rt.Val.AsHeap(b.roots.Globals[0]) == Flint.Rt.Val.AsHeap(root));
+               Flint.Rt.Val.AsHeap(b.roots.shared.Globals[0]) == Flint.Rt.Val.AsHeap(root));
 
         // A snapshot restored against a DIFFERENT program does not fail -- it
         // quietly means something else. The fingerprint is what makes that
@@ -127,7 +128,7 @@ public static class Program {
         var c = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
         c.fingerprint = 0xABCDEF12345L;
         long croot = SnapBuild(c, N);
-        c.roots.Globals = new long[]{ croot };
+        c.roots.shared.Globals = new long[]{ croot };
         byte[] live = Flint.Rt.Snap.ExportLive(c);
         SnapOk("exportLive agrees with the collector about what is live", live != null);
         SnapOk("and is smaller than the memcpy, being the data rather than the heap: "
@@ -139,22 +140,22 @@ public static class Program {
         // Sized as an image load would size it. The import fills var slots, it
         // does not create them: the slots belong to the program, and a snapshot
         // that could add them would be carrying code after all.
-        d.roots.Globals = new long[1];
+        d.roots.shared.Globals = new long[1];
         SnapOk("importLive accepts it", Flint.Rt.Snap.ImportLive(d, live));
-        SnapOk("the rehydrated heap reads back identically", SnapRender(d, d.roots.Globals[0]) == before);
+        SnapOk("the rehydrated heap reads back identically", SnapRender(d, d.roots.shared.Globals[0]) == before);
         SnapOk("at a DIFFERENT address, which is what relocating means",
-               Flint.Rt.Val.AsHeap(d.roots.Globals[0]) != Flint.Rt.Val.AsHeap(croot));
+               Flint.Rt.Val.AsHeap(d.roots.shared.Globals[0]) != Flint.Rt.Val.AsHeap(croot));
 
         // The rehydrated heap has to be a working heap, not just a readable
         // one: keep allocating on it and collect, which is what would trip a
         // bad remembered set or a missed write barrier from pass two.
         long more = SnapBuild(d, 200);
-        d.roots.Globals = new long[]{ d.roots.Globals[0], more };
+        d.roots.shared.Globals = new long[]{ d.roots.shared.Globals[0], more };
         d.gc.Major(d.roots);
         SnapOk("survives a major collection after import",
-               SnapRender(d, d.roots.Globals[0]) == before);
+               SnapRender(d, d.roots.shared.Globals[0]) == before);
         SnapOk("and the objects allocated after it are intact too",
-               SnapRender(d, d.roots.Globals[1]).StartsWith("0=item-0;"));
+               SnapRender(d, d.roots.shared.Globals[1]).StartsWith("0=item-0;"));
 
         // --- shelving: the halt that leaves nothing runnable.
         Flint.Rt.Snap.Halt(d);
@@ -546,7 +547,7 @@ public static class Program {
         for (int i = 0; i < img.varNames.Length; i++)
             if (Flint.Rt.Str.Text(rt, rt.consts[img.varNames[i]]) == "flint.selfhost/main") slot = i;
         if (slot < 0) { Console.WriteLine("  FAIL flint.selfhost/main is not in the var table"); return 1; }
-        long compiler = rt.roots.Globals[slot];
+        long compiler = rt.roots.shared.Globals[slot];
         if (Flint.Rt.Val.IsNil(compiler)) {
             Console.WriteLine("  FAIL flint.selfhost/main is unbound after the initialisers");
             return 1;
@@ -574,6 +575,114 @@ public static class Program {
             return 1;
         }
         Console.WriteLine("  ok   and it is byte for byte what the wasm compiler emits");
+        return 0;
+    }
+
+
+    // ------------------------------------------------------------------
+    /// Two executors, one heap (`doc/decisions/0028`). A mirror of the JVM's
+    /// `RtParallel.java`, printing the same lines so the gate can compare them.
+    ///
+    /// The claim is not "it does not crash". It is that a collection staged by
+    /// one thread walks the OTHER thread's roots, so objects that thread is
+    /// holding survive and the ones it moved are found where they moved to.
+    ///
+    /// These are REAL HOST THREADS sharing one flint heap -- a different thing
+    /// from the green threads in `Conc`, and both exist: green threads are how
+    /// one sandbox interleaves its own work deterministically, and this is how
+    /// a host drives one sandbox with a pool.
+
+    static int parFails;
+
+    static void POk(string what, bool cond) {
+        Console.WriteLine((cond ? "  ok   " : "  FAIL ") + what);
+        if (!cond) parFails++;
+    }
+
+    /// Build `n` cons cells and read every one back. Everything stays on the
+    /// ROOT STACK across the allocations, which is the discipline that has to
+    /// hold across ANOTHER thread's collection now too.
+    static int Churn(Flint.Rt.Rt rt, long tag, int n) {
+        // From here this thread can be stopped for a collection; after
+        // `LeaveGuest` nothing waits for it. Getting this bracket wrong is not
+        // a subtle bug: the Rust's first version without it HUNG.
+        rt.EnterGuest();
+        int bas = rt.Mark();
+        for (int i = 0; i < n; i++)
+            rt.Push(Flint.Rt.Seqs.Cons(rt, Flint.Rt.Val.Fixnum(tag * 1_000_000 + i), Flint.Rt.Val.Nil));
+        // A cell whose pointer was not fixed up after a move reads as the WRONG
+        // NUMBER here, rather than crashing. That is the failure worth
+        // catching: a crash would at least be obvious.
+        for (int i = 0; i < n; i++) {
+            long got = Flint.Rt.Seqs.First(rt, rt.R(bas + i));
+            if (!Flint.Rt.Val.IsFixnum(got) || Flint.Rt.Val.AsFixnum(got) != tag * 1_000_000 + i)
+                throw new System.InvalidOperationException(
+                    "thread " + tag + ": slot " + i + " came back wrong: " + rt.Describe(got));
+        }
+        rt.PopTo(bas);
+        rt.LeaveGuest();
+        return n;
+    }
+
+    private static int RtParallel() {
+        var primary = new Flint.Rt.Rt(64 * 1024, 256L * 1024 * 1024);
+        var secondary = primary.Executor();
+        POk("a second executor registers", primary.roots.shared.par.Executors() == 2);
+
+        const int n = 20_000;
+        System.Exception err = null;
+        var t = new System.Threading.Thread(() => {
+            try { Churn(secondary, 2, n); } catch (System.Exception e) { err = e; }
+        });
+        t.Start();
+        Churn(primary, 1, n);
+        t.Join();
+        if (err != null) { Console.WriteLine("  FAIL the second executor: " + err); return 1; }
+        POk("two executors churned " + n + " cells each on one heap", true);
+
+        // Both really did collect, or the test proved nothing about collection.
+        // This says HOW MANY, so a change that quietly stops the nursery
+        // filling shows up as a weaker test rather than as a passing one.
+        long minor = primary.gc.minors;
+        POk("and the nursery was under real pressure: " + minor + " collections", minor >= 4);
+        secondary.Close();
+
+        var lone = new Flint.Rt.Rt(64 * 1024, 64L * 1024 * 1024);
+        POk("a lone sandbox has one executor and polls nothing",
+            lone.roots.shared.par.Executors() == 1 && !lone.safepoints);
+
+        // Two threads interning the same text must get ONE object, or `=` on
+        // two interned strings -- a pointer compare -- answers false for equal
+        // values.
+        var p2 = new Flint.Rt.Rt(1024 * 1024, 128L * 1024 * 1024);
+        var s2 = p2.Executor();
+        long[] got2 = new long[2];
+        // Longer than InlineMax (5) so it is on the heap, and no longer than
+        // InternMax (32) so it is INTERNED. Outside that window the test would
+        // pass or fail for the wrong reason.
+        const string text = "interned-across-executors";
+        var t2 = new System.Threading.Thread(() => {
+            s2.EnterGuest();
+            int b = s2.Mark();
+            s2.Push(Flint.Rt.Str.Of(s2, text));
+            got2[1] = s2.R(b);
+            s2.PopTo(b);
+            s2.LeaveGuest();
+        });
+        t2.Start();
+        p2.EnterGuest();
+        int b2 = p2.Mark();
+        p2.Push(Flint.Rt.Str.Of(p2, text));
+        got2[0] = p2.R(b2);
+        p2.PopTo(b2);
+        p2.LeaveGuest();
+        t2.Join();
+        POk("the text is in the interned window: " + text.Length + " bytes",
+            text.Length > Flint.Rt.Val.InlineMax && text.Length <= Flint.Rt.Interns.InternMax);
+        POk("two executors interning one text agree on ONE object", got2[0] == got2[1]);
+        s2.Close();
+
+        if (parFails > 0) { Console.WriteLine("  " + parFails + " failed"); return 1; }
         return 0;
     }
 

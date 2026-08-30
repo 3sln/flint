@@ -21,29 +21,14 @@ public sealed class Roots {
     public long[] Shadow = new long[256];
     public int ShadowTop;
 
-    /// The intern tables. WEAK, and scanned by the collector rather than
-    /// traced: an entry whose value died is dropped, which is what lets every
-    /// short string and keyword be interned without the table being a leak.
-    public readonly Interns[] interns = Interns.Tables();
+    /// What this executor shares with every other in the same sandbox: var
+    /// slots, constants, singletons and the intern tables. One object, pointed
+    /// at by all of them.
+    public Shared shared = new Shared();
 
-    public long[] Globals = System.Array.Empty<long>();
-    public long[] Consts = System.Array.Empty<long>();
-    /// Sized AND FILLED WITH NIL at construction.
-    ///
-    /// Both halves matter. Sized, because `SingBindings` is read before any
-    /// image has been loaded and an empty array would be an index error rather
-    /// than an absent binding. Filled, because a zero-filled array of values is
-    /// NOT a nil-filled one: 0 is the bit pattern of `+0.0`, so an unset slot
-    /// read back as the DOUBLE ZERO and `dyn-bindings` answered a number where
-    /// a map was expected. The failure surfaced three frames away as "assoc
-    /// onto a double".
-    public long[] Singletons = NewSingletons();
-
-    static long[] NewSingletons() {
-        long[] s = new long[Rt.SingCount];
-        System.Array.Fill(s, Val.Nil);
-        return s;
-    }
+    /// The runtime these roots belong to, so that registering a new executor
+    /// can flip every peer's `safepoints` flag in one place.
+    public Rt owner;
 
     /// Old objects holding a young pointer. An old object pointing at a young
     /// one MUST be in here, or the young one is never traced, dies, and leaves
@@ -77,10 +62,50 @@ public sealed class Roots {
     public delegate long Visitor(long v);
 
     public void ForEach(Visitor f) {
+        // This executor's own.
         for (int i = 0; i < StackTop; i++) Stack[i] = f(Stack[i]);
         for (int i = 0; i < ShadowTop; i++) Shadow[i] = f(Shadow[i]);
-        for (int i = 0; i < Globals.Length; i++) Globals[i] = f(Globals[i]);
-        for (int i = 0; i < Consts.Length; i++) Consts[i] = f(Consts[i]);
-        for (int i = 0; i < Singletons.Length; i++) Singletons[i] = f(Singletons[i]);
+        // The sandbox's.
+        long[] g = shared.Globals, c = shared.Consts, sg = shared.Singletons;
+        for (int i = 0; i < g.Length; i++) g[i] = f(g[i]);
+        for (int i = 0; i < c.Length; i++) c[i] = f(c[i]);
+        for (int i = 0; i < sg.Length; i++) sg[i] = f(sg[i]);
+        // Every OTHER executor in this sandbox (`doc/decisions/0028`). A
+        // collection happens with all of them PARKED at a safepoint, so nothing
+        // is mutating these while they are walked.
+        //
+        // Skipping one would not fail here. It would collect that thread's live
+        // objects out from under it and fail somewhere else, later, as a
+        // corrupted value in code that did nothing wrong.
+        foreach (Roots e in shared.others) {
+            if (ReferenceEquals(e, this)) continue;
+            // A parked executor's roots do not change. If they have, the
+            // collector is walking a thread that is still RUNNING -- say so
+            // here rather than as an index error four frames down.
+            if (e.StackTop > e.Stack.Length) {
+                throw new System.InvalidOperationException(
+                    "flint: scanning a RUNNING executor: StackTop " + e.StackTop
+                    + " past len " + e.Stack.Length);
+            }
+            for (int i = 0; i < e.StackTop; i++) e.Stack[i] = f(e.Stack[i]);
+            for (int i = 0; i < e.ShadowTop; i++) e.Shadow[i] = f(e.Shadow[i]);
+        }
+    }
+
+    /// Every executor's remembered set, drained together.
+    ///
+    /// Only correct during a collection, which is the only time every other
+    /// executor is stopped. Draining one and not the rest would LOSE
+    /// old-to-young edges another thread recorded, and a lost edge is a young
+    /// object collected while an old one still points at it.
+    public List<long> DrainRemembered() {
+        var outv = new List<long>(Remembered);
+        Remembered.Clear();
+        foreach (Roots e in shared.others) {
+            if (ReferenceEquals(e, this)) continue;
+            outv.AddRange(e.Remembered);
+            e.Remembered.Clear();
+        }
+        return outv;
     }
 }

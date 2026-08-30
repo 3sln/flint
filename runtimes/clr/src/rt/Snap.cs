@@ -154,9 +154,9 @@ public static class Snap {
         w.U32(r.StackTop);
         w.Vals(r.Stack, r.StackTop);
         w.Vals(r.Shadow, r.ShadowTop);
-        w.Vals(r.Globals, r.Globals.Length);
-        w.Vals(r.Consts, r.Consts.Length);
-        w.Vals(r.Singletons, r.Singletons.Length);
+        w.Vals(r.shared.Globals, r.shared.Globals.Length);
+        w.Vals(r.shared.Consts, r.shared.Consts.Length);
+        w.Vals(r.shared.Singletons, r.shared.Singletons.Length);
         // The intern tables. This runtime does not carry them yet, so the count
         // is 0 -- the SECTION is here, in position, so adding them later does
         // not move any field that follows.
@@ -337,10 +337,10 @@ public static class Snap {
         if (rr.Shadow.Length < shadow.Length + 8) rr.Shadow = new long[shadow.Length + 8];
         System.Array.Copy(shadow, rr.Shadow, shadow.Length);
         rr.ShadowTop = shadow.Length;
-        rr.Globals = globals;
-        rr.Consts = consts;
+        rr.shared.Globals = globals;
+        rr.shared.Consts = consts;
         rt.consts = consts;
-        rr.Singletons = singletons;
+        rr.shared.Singletons = singletons;
         rt.thrown = thrown;
         rt.parkOn = parkOn;
         // LAST, after the heap is in place. Identities are PRESERVED; whether
@@ -483,12 +483,12 @@ public static class Snap {
         for (int i = 0; i < r.StackTop; i++) ok &= WriteValue(w, r.Stack[i], ix);
         w.U32(r.ShadowTop);
         for (int i = 0; i < r.ShadowTop; i++) ok &= WriteValue(w, r.Shadow[i], ix);
-        w.U32(r.Globals.Length);
-        foreach (long v in r.Globals) ok &= WriteValue(w, v, ix);
-        w.U32(r.Consts.Length);
-        foreach (long v in r.Consts) ok &= WriteValue(w, v, ix);
-        w.U32(r.Singletons.Length);
-        foreach (long v in r.Singletons) ok &= WriteValue(w, v, ix);
+        w.U32(r.shared.Globals.Length);
+        foreach (long v in r.shared.Globals) ok &= WriteValue(w, v, ix);
+        w.U32(r.shared.Consts.Length);
+        foreach (long v in r.shared.Consts) ok &= WriteValue(w, v, ix);
+        w.U32(r.shared.Singletons.Length);
+        foreach (long v in r.shared.Singletons) ok &= WriteValue(w, v, ix);
         w.U32(0);                          // intern tables, as above
 
         WriteVmState(w, rt);
@@ -514,7 +514,7 @@ public static class Snap {
         rt.handlers.Clear();
         rt.roots.StackTop = 0;
         rt.roots.ShadowTop = 0;
-        System.Array.Fill(rt.roots.Globals, Val.Nil);
+        System.Array.Fill(rt.roots.shared.Globals, Val.Nil);
 
         // Pass one: allocate every object, EMPTY.
         //
@@ -614,10 +614,10 @@ public static class Snap {
         rr2.Shadow = new long[System.Math.Max(nsh, 64)];
         System.Array.Copy(shadow, rr2.Shadow, nsh);
         rr2.ShadowTop = nsh;
-        for (int i = 0; i < globals.Length && i < rr2.Globals.Length; i++) rr2.Globals[i] = globals[i];
-        rr2.Consts = consts;
+        for (int i = 0; i < globals.Length && i < rr2.shared.Globals.Length; i++) rr2.shared.Globals[i] = globals[i];
+        rr2.shared.Consts = consts;
         rt.consts = consts;
-        rr2.Singletons = singletons;
+        rr2.shared.Singletons = singletons;
         rt.thrown = thrown;
         rt.parkOn = parkOn;
         // LAST, and for the same reason as `Restore`: the identities come back

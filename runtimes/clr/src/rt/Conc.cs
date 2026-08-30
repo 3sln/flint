@@ -97,7 +97,7 @@ public static class Conc {
         return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyPort;
     }
 
-    public static long Sched(Rt rt) { return rt.roots.Singletons[Rt.SingSched]; }
+    public static long Sched(Rt rt) { return rt.roots.shared.Singletons[Rt.SingSched]; }
 
     /// Create the scheduler on first use, enrolling whatever is running now as
     /// THREAD 0. Built here rather than at startup so a program that never
@@ -129,7 +129,7 @@ public static class Conc {
         long ts = Vec.Conj(rt, rt.R(tsi), rt.R(ti));
         rt.SetSlot(Val.AsHeap(rt.R(si)), SC_THREADS, ts);
         long outv = rt.R(si);
-        rt.roots.Singletons[Rt.SingSched] = outv;
+        rt.roots.shared.Singletons[Rt.SingSched] = outv;
         rt.PopTo(bas);
         rt.schedInstalled = true;
         rt.SetSliceEnd(rt.steps + SLICE);
@@ -273,7 +273,7 @@ public static class Conc {
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_ID, Val.Fixnum(id));
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_TOKEN, Val.Fixnum(-1));
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_ENTRY, rt.R(fi));
-        long binds = rt.roots.Singletons[Rt.SingBindings];
+        long binds = rt.roots.shared.Singletons[Rt.SingBindings];
         if (Val.IsNil(binds)) binds = Maps.Empty(rt);
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_BINDINGS, binds);
         int tsi = rt.Push(rt.Slot(rt.R(si), SC_THREADS));
@@ -548,7 +548,7 @@ public static class Conc {
         int bas = rt.Mark();
         int ti = rt.Push(th);
         // Dynamic bindings travel WITH the thread.
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_BINDINGS, rt.roots.Singletons[Rt.SingBindings]);
+        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_BINDINGS, rt.roots.shared.Singletons[Rt.SingBindings]);
         if (!Val.IsNil(rt.parkOn)) {
             long on = rt.parkOn;
             rt.parkOn = Val.Nil;
@@ -614,7 +614,7 @@ public static class Conc {
         int bas = rt.Mark();
         int ti = rt.Push(th);
         long st = Fx(rt.Slot(rt.R(ti), TH_STATUS));
-        rt.roots.Singletons[Rt.SingBindings] = rt.Slot(rt.R(ti), TH_BINDINGS);
+        rt.roots.shared.Singletons[Rt.SingBindings] = rt.Slot(rt.R(ti), TH_BINDINGS);
         rt.SetSliceEnd(rt.steps + SLICE);
         long v;
         if (st == ST_NEW) {

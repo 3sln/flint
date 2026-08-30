@@ -47,6 +47,13 @@ public sealed class Rt : System.IDisposable {
     /// a program that never spawns runs a loop with no counter in it at all.
     public bool schedInstalled;
 
+    /// True once this sandbox has more than one executor. Read once per
+    /// instruction, so it is a plain field rather than a call.
+    public bool safepoints;
+
+    /// True while this executor is running GUEST code and can be stopped.
+    public bool running;
+
     public void SetSliceEnd(long at) {
         sliceEnd = at;
         checkpoint = at;
@@ -88,7 +95,12 @@ public sealed class Rt : System.IDisposable {
 
     public Rt(long nurseryBytes, long maxHeap) {
         this.gc = new Gc(nurseryBytes, maxHeap);
-        roots.Consts = consts;
+        this.roots.owner = this;
+        roots.shared.Consts = consts;
+        // The first executor registers too, so `Executors()` counts everybody
+        // and `StageStop` has a truthful `live`.
+        roots.shared.par.Register();
+        roots.shared.all.Add(roots);
     }
 
     public sealed class FnDef {
@@ -127,7 +139,97 @@ public sealed class Rt : System.IDisposable {
 
     // --- allocation, with the rooting discipline ---------------------------
 
-    public long Alloc(int ty, int len) { return gc.Alloc(roots, ty, len); }
+    /// Allocate. With one executor this is `gc.Alloc` and nothing else; with
+    /// several it is the whole safepoint protocol (`doc/decisions/0028`).
+    ///
+    /// The allocation lock keeps two threads out of the collector's
+    /// bookkeeping. The safepoint is staged ONLY when this allocation would
+    /// actually collect, because staging one every time would be a
+    /// stop-the-world per allocation rather than per collection.
+    public long Alloc(int ty, int len) {
+        Parallel par = roots.shared.par;
+        if (par.Executors() <= 1) return gc.Alloc(roots, ty, len);
+
+        par.LockAlloc();
+        bool staged = gc.WouldCollect(ty, len);
+        if (staged) {
+            // `running` is not a detail. The target is "every running executor
+            // EXCEPT ME", and an allocation can happen outside guest code --
+            // loading an image, running initialisers, a host call -- where this
+            // thread is not one of them.
+            par.StageStop(running);
+            // Every other executor is stopped NOW. Built here and dropped
+            // after, because a list that outlived the stop would be pointers
+            // into threads that have started running again.
+            roots.shared.others.Clear();
+            lock (roots.shared) {
+                foreach (Roots r in roots.shared.all)
+                    if (!ReferenceEquals(r, roots)) roots.shared.others.Add(r);
+            }
+        }
+        long a;
+        try {
+            a = gc.Alloc(roots, ty, len);
+        } finally {
+            if (staged) {
+                roots.shared.others.Clear();
+                par.ReleaseStop();
+            }
+            par.UnlockAlloc();
+        }
+        return a;
+    }
+
+    /// Another executor on THIS sandbox's heap (`doc/decisions/0028`).
+    ///
+    /// One heap, one set of shared roots, one safepoint protocol -- and its own
+    /// value stack, shadow stack and remembered set, because those are per
+    /// THREAD.
+    public Rt Executor() {
+        var e = new Rt(gc, roots.shared);
+        lock (roots.shared) {
+            roots.shared.all.Add(e.roots);
+            bool many = roots.shared.par.Executors() > 1;
+            foreach (Roots r in roots.shared.all) r.owner.safepoints = many;
+        }
+        return e;
+    }
+
+    /// Bracket the stretch where this executor runs GUEST code.
+    ///
+    /// Between these two calls the thread polls and can be stopped. Outside
+    /// them it is registered -- its roots are still scanned -- but the collector
+    /// does not wait for it.
+    public void EnterGuest() {
+        if (running) return;
+        roots.shared.par.Enter();
+        running = true;
+    }
+
+    public void LeaveGuest() {
+        if (!running) return;
+        running = false;
+        roots.shared.par.Leave();
+    }
+
+    /// Give this executor's slot back. Its roots stop being scanned.
+    public void Close() {
+        LeaveGuest();
+        lock (roots.shared) {
+            roots.shared.all.Remove(roots);
+            roots.shared.par.Deregister();
+            bool many = roots.shared.par.Executors() > 1;
+            foreach (Roots r in roots.shared.all) r.owner.safepoints = many;
+        }
+    }
+
+    Rt(Gc gc, Shared shared) {
+        this.gc = gc;
+        this.roots.shared = shared;
+        this.roots.owner = this;
+        this.consts = shared.Consts;
+        shared.par.Register();
+    }
 
     public void SetSlot(long obj, int i, long v) { gc.SetSlot(obj, i, v, roots); }
     public long Slot(long v, int i) { return Obj.Slot(gc.sp, Val.AsHeap(v), i); }
@@ -239,6 +341,19 @@ public sealed class Rt : System.IDisposable {
             //
             // One comparison against a precomputed value, and only when
             // something is counting.
+            // THE SAFEPOINT (`doc/decisions/0028`), and the slice check, at the
+            // same place -- because they want the same place. `Ip` has been
+            // written back and every live value is on the value stack by
+            // construction, which is what makes it safe to stop here and
+            // nowhere else.
+            //
+            // `safepoints` is false in a sandbox with one executor and
+            // `checkpoint` is 0 when nothing is counting, so a single-threaded
+            // program with no scheduler runs a loop with neither test in it.
+            if (safepoints && roots.shared.par.StopRequested()) {
+                f.Ip = ip;
+                roots.shared.par.Park();
+            }
             if (checkpoint != 0 && steps >= checkpoint) {
                 f.Ip = ip;
                 checkpoint = 0;
@@ -266,8 +381,8 @@ public sealed class Rt : System.IDisposable {
                 case Op.SetLocal: { roots.Stack[fp + U8(ip)] = VPop(); ip += 1; } break;
                 case Op.SetLocalKeep: { roots.Stack[fp + U8(ip)] = roots.Stack[roots.StackTop - 1]; ip += 1; } break;
                 case Op.Self: VPush(roots.Stack[f.RetTo]); break;
-                case Op.Var: { VPush(roots.Globals[U16(ip)]); ip += 2; } break;
-                case Op.SetVar: { roots.Globals[U16(ip)] = VPop(); ip += 2; } break;
+                case Op.Var: { VPush(roots.shared.Globals[U16(ip)]); ip += 2; } break;
+                case Op.SetVar: { roots.shared.Globals[U16(ip)] = VPop(); ip += 2; } break;
                 case Op.Upval: { VPush(Slot(roots.Stack[f.RetTo], 1 + U8(ip))); ip += 1; } break;
                 case Op.Pop: roots.StackTop -= 1; break;
                 case Op.PopN: { roots.StackTop -= U8(ip); ip += 1; } break;
