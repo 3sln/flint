@@ -193,6 +193,10 @@ public final class Rt {
     public static final class Arity {
         public final int argc, nlocals, code, len;
         public final boolean variadic;
+        /// Index into `Rt.aot`, or `Aot.NONE`. The whole AOT question is one
+        /// field on the arity, so `enter` answers it without a lookup keyed on
+        /// something the frame does not carry.
+        public int aotIdx = Aot.NONE;
         public Arity(int argc, boolean variadic, int nlocals, int code, int len) {
             this.argc = argc; this.variadic = variadic;
             this.nlocals = nlocals; this.code = code; this.len = len;
@@ -330,6 +334,14 @@ public final class Rt {
         f.end = a.code + a.len;
         f.retTo = calleeAt;
         f.handlers = handlers.size();
+        f.aotIdx = a.aotIdx;
+        // ENTRY AT THE TOP is just the first re-entry point, so nothing about
+        // starting a frame is special-cased. Leaving this at `NEVER` -- which is
+        // what the port did at first -- meant compiled code was never entered at
+        // all: every arity compiled, every answer matched, every gas count
+        // matched, and not one instruction of it ever ran.
+        f.aotIp = a.aotIdx == Aot.NONE ? Aot.NEVER : a.code;
+        f.aotBlock = 0;
         frames.add(f);
         return true;
     }
@@ -373,6 +385,18 @@ public final class Rt {
             // counting, and `safepoints` is false in a sandbox with one
             // executor, so a single-threaded program with no scheduler runs a
             // loop with neither test in it.
+            // COMPILED CODE takes over when `ip` reaches the point it named.
+            // Every re-entry in the design funnels through this one comparison:
+            // an entry, a return from a call, a resumed thread, an unwind into a
+            // handler. `aotIp` is `Aot.NEVER` in a program with no compiled
+            // arities, so this costs one compare.
+            if (f.aotIp == ip && f.aotIdx != Aot.NONE) {
+                if (aotEnter(ip)) return Val.NIL;
+                if (frames.isEmpty() || frames.size() <= baseDepth) {
+                    return roots.stackTop > 0 ? vpop() : Val.NIL;
+                }
+                continue;
+            }
             if (safepoints && roots.shared.par.stopRequested()) {
                 f.ip = ip;
                 roots.shared.par.park();
@@ -1015,6 +1039,29 @@ public final class Rt {
         }
     }
 
+    /// Compile every arity the image asked for.
+    ///
+    /// Called once, after an image loads, when `:optimize [perf]` set the flag.
+    /// An arity that cannot be compiled -- an opcode the walk does not know --
+    /// simply stays interpreted, which is why this can be COMPLETE from the
+    /// first version rather than refusing a whole program over one rare opcode.
+    ///
+    /// Returns how many arities were compiled.
+    public int compileArities(boolean chunkAll) {
+        java.util.ArrayList<Aot.Fn> out = new java.util.ArrayList<>();
+        for (FnDef d : fns) {
+            for (Arity a : d.arities) {
+                Aot.Fn fn = AotEmit.compile(this, code, a.code, a.len, chunkAll);
+                if (fn == null) continue;
+                a.aotIdx = out.size();
+                out.add(fn);
+            }
+        }
+        aot = out.toArray(new Aot.Fn[0]);
+        Aot.install(this);
+        return aot.length;
+    }
+
     // --- AOT (`doc/decisions/0013`) ------------------------------------------
     //
     // PORTED from `runtime/src/vm.rs`, and it is a port rather than a rewrite
@@ -1026,6 +1073,10 @@ public final class Rt {
     /// The image's compiled arities, indexed by `Frame.aotIdx`. Empty when the
     /// image was not built with `:optimize [perf]`, which is the ordinary case
     /// and costs one array read on entry.
+    /// Counters, so a claim about where the time goes is measured rather than
+    /// argued. Cheap enough to leave in: a static increment on paths that
+    /// already cross a boundary.
+    public static long aotEntries, aotBails, aotCalls, aotNatives, aotTicks;
     public Aot.Fn[] aot = new Aot.Fn[0];
         public final Aot.Sync aotSync = new Aot.Sync();
     /// An uncaught throw unwound out of compiled code. The interpreter's own
@@ -1242,6 +1293,7 @@ public final class Rt {
             block = b;
         }
         Aot.Fn a = aot[idx];
+        aotEntries++;
         // Reserved HERE rather than by a prologue call, so a compiled body makes
         // no call at all on the way in -- and it is entered once per frame AND
         // once per return-from-call, so a call on that path is not cheap.

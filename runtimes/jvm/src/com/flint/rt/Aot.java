@@ -122,6 +122,7 @@ public final class Aot {
     public static int aotNative(Rt rt, int idx, int argc, int top,
                                 int ip, int block, int nextIp, int nextBlock, int gas) {
         rt.steps += gas;
+        Rt.aotNatives++;
         rt.roots.stackTop = top;
         int out = rt.aotNativeAt(idx, argc, ip, block, nextIp, nextBlock);
         refresh(rt);
@@ -173,6 +174,7 @@ public final class Aot {
         // here or this function pushes the frame; either way the interpreter
         // never dispatches it.
         rt.steps += gas + 1;
+        Rt.aotCalls++;
         rt.roots.stackTop = top;
         int out = rt.aotCallAt(argc, ip, block, nextIp, nextBlock);
         refresh(rt);
@@ -189,6 +191,7 @@ public final class Aot {
     /// duplicated here); `resumeIp` is where compiled code takes over again.
     public static void aotBail(Rt rt, int top, int ip, int resumeIp, int resumeBlock, int gas) {
         rt.steps += gas;
+        Rt.aotBails++;
         rt.roots.stackTop = top;
         if (!rt.frames.isEmpty()) {
             Frame f = rt.frames.get(rt.frames.size() - 1);
@@ -212,6 +215,7 @@ public final class Aot {
         // one of which was a message on its way to the host -- were not there.
         rt.roots.stackTop = top;
         rt.steps += gas;
+        Rt.aotTicks++;
         if (rt.checkpoint != 0 && rt.steps >= rt.checkpoint) {
             if (!rt.frames.isEmpty()) {
                 Frame f = rt.frames.get(rt.frames.size() - 1);

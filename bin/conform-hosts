@@ -327,6 +327,36 @@ for prog in collections control green hosted lazy maps numbers regex strings thr
   fi
 done
 
+# AOT (`doc/decisions/0013`) on the ported runtime: the same program
+# interpreted and compiled, and the answers diffed.
+#
+# The only thing worth asserting about a backend is that IT DID NOT CHANGE THE
+# ANSWER -- fast and wrong is worse than absent, and "it ran" does not tell them
+# apart. Three things are compared, and each has caught a different fault:
+#
+#   * the ANSWER, interpreted against compiled;
+#   * the answer again under MAXIMAL CHUNKING, which bisects the two halves this
+#     emitter can be wrong in -- a missing boundary and a mis-emitted opcode --
+#     because a failure that survives it is the second kind;
+#   * the GAS COUNT. Compiled code charges per chunk from a static instruction
+#     count and the interpreter charges per instruction, so the two agreeing is
+#     a statement that the chunking is right. `0013` records the bug that found:
+#     every answer matched and the counts did not.
+#
+# And that compiled code was ENTERED. The first version of this port left the
+# frame's `aotIp` at NEVER, so every arity compiled, every answer matched, every
+# gas count matched, and not one instruction of compiled code ever ran.
+for prog in collections control green hosted lazy maps numbers regex strings threads; do
+  img="out/conform/$prog.img"
+  [ -f "$img" ] || continue
+  out="$("$JDK/bin/java" -cp runtimes/jvm/classes RtAot "$img" 2>&1)"
+  case "$out" in
+    *"  ok "*) echo "$out" | sed 's/$/ ['"$prog"']/' ;;
+    *) echo "$out"; echo "  FAIL aot $prog [jvm]"; exit 1 ;;
+  esac
+done
+
+
 # ONE CONFIG, THREE RUNTIMES. `:optimize [perf]` cannot be carried the same way
 # on any two of them: on wasm it changes the ARTIFACT -- a different runtime
 # binary, compiled arities emitted into the module -- while on the JVM and the
