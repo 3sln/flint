@@ -106,7 +106,15 @@ public sealed class Rt : System.IDisposable {
     public sealed class FnDef {
         public readonly Arity[] arities;
         public readonly int nupvals;
-        public FnDef(Arity[] arities, int nupvals) { this.arities = arities; this.nupvals = nupvals; }
+        /// Index into `Consts` of this function's name, or -1. KEPT rather than
+        /// read-and-discarded: a port refuses to send a function BY NAME, and
+        /// "cannot send that" with no subject sends somebody hunting through a
+        /// nested structure to find which one.
+        public readonly int Name;
+        public FnDef(Arity[] arities, int nupvals) : this(arities, nupvals, -1) { }
+        public FnDef(Arity[] arities, int nupvals, int name) {
+            this.arities = arities; this.nupvals = nupvals; this.Name = name;
+        }
         /// An EXACT fixed arity wins over a variadic one, whatever order they
         /// were written in -- so `(fn ([] :a) ([& xs] xs))` and the same two
         /// clauses reversed both answer `:a` for zero arguments. Taking
@@ -594,28 +602,39 @@ public sealed class Rt : System.IDisposable {
                             "this runtime does not carry the builtin `" + nativeNames[idx] + "`");
                     }
                     long v = fn(this, at, argc);
-                    if (Parked()) {
-                        // A PARKING builtin. Rewind to the instruction and
-                        // leave the operands where they are: resuming
-                        // RE-EXECUTES the call, which is why such a builtin must
-                        // decide to park before it changes anything.
-                        //
-                        // Except a courtesy yield, which is finished: rewinding
-                        // there would re-execute `yield`, which yields again,
-                        // for ever.
-                        thrown = Val.Nil;
-                        if (parkOn == Conc.PARK_YIELD) {
-                            roots.StackTop = at;
-                            VPush(Val.Nil);
+                    roots.StackTop = at;
+                    if (Failed()) {
+                        if (Parked()) {
+                            // A PARKING builtin. Rewind to the instruction and
+                            // leave the operands where they are: resuming
+                            // RE-EXECUTES the call, which is why such a builtin
+                            // must decide to park before it changes anything.
+                            //
+                            // Except a courtesy yield, which is finished:
+                            // rewinding there would re-execute `yield`, which
+                            // yields again, for ever.
+                            thrown = Val.Nil;
+                            if (parkOn == Conc.PARK_YIELD) {
+                                VPush(Val.Nil);
+                                thrown = Val.Park;
+                                return Val.Nil;
+                            }
+                            f.Ip = opAt;
+                            roots.StackTop = at + argc;
                             thrown = Val.Park;
                             return Val.Nil;
                         }
-                        f.Ip = opAt;
-                        roots.StackTop = at + argc;
-                        thrown = Val.Park;
-                        return Val.Nil;
+                        // A BUILTIN THAT FAILED. It set `thrown` and returned
+                        // nil, exactly as the Rust does -- so the throw unwinds
+                        // to a `catch` in the program rather than out of the
+                        // interpreter as a host exception. A host exception here
+                        // is uncatchable by flint code, which is how a port with
+                        // a working `try` could still not catch a division by
+                        // zero: the failure never entered the flint machinery.
+                        f.Ip = ip;
+                        if (!Unwind()) return Val.Nil;
+                        continue;
                     }
-                    roots.StackTop = at;
                     VPush(v);
                 } break;
                 default: throw new System.NotSupportedException(
@@ -649,27 +668,29 @@ public sealed class Rt : System.IDisposable {
             int idx = (int) Val.AsFixnum(Slot(callee, 0));
             Builtins.Fn fn = idx < natives.Length ? natives[idx] : null;
             if (fn == null) {
-                throw new System.NotSupportedException(
+                return ThrowStr("UnsupportedOperationException",
                     "this runtime does not carry the builtin `"
                     + (idx < nativeNames.Length ? nativeNames[idx] : "#" + idx) + "`");
             }
             return fn(this, calleeAt + 1, argc);
         }
         if (Sets.IsSet(this, callee)) {
-            if (argc < 1) throw new System.NotSupportedException("a set takes 1 argument");
+            if (argc < 1) return ThrowStr("ArityException", "a set takes 1 argument");
             return Sets.Get(this, callee, roots.Stack[calleeAt + 1], Val.Nil);
         }
         if (Maps.IsMap(this, callee)) {
-            if (argc < 1) throw new System.NotSupportedException("a map takes 1 or 2 arguments");
+            if (argc < 1) return ThrowStr("ArityException", "a map takes 1 or 2 arguments");
             long dflt2 = argc >= 2 ? roots.Stack[calleeAt + 2] : Val.Nil;
             return Maps.Get(this, callee, roots.Stack[calleeAt + 1], dflt2);
         }
         if (IsHeapTy(callee, TyVec)) {
-            if (argc < 1) throw new System.NotSupportedException("a vector takes 1 argument");
+            if (argc < 1) return ThrowStr("ArityException", "a vector takes 1 argument");
             long got = Vec.Nth(this, callee, (int) Val.AsFixnum(roots.Stack[calleeAt + 1]));
             return got == Val.NotFound ? Val.Nil : got;
         }
-        throw new System.NotSupportedException(
+        // Say WHAT was called: "value is not a function" with no subject is
+        // the least useful message in the runtime.
+        return ThrowStr("ClassCastException",
             "value is not a function (object type "
             + (Val.IsHeap(callee) ? Ty(gc.sp, Val.AsHeap(callee)).ToString() : "inline")
             + ", " + argc + " args)");
@@ -802,7 +823,7 @@ public sealed class Rt : System.IDisposable {
     /// not values anybody wants. `StackTop` and `ShadowTop` are restored to
     /// what they were when the handler was installed, which is what makes a
     /// throw out of arbitrarily deep code leave no residue.
-    bool Unwind() {
+    public bool Unwind() {
         while (handlers.Count != 0) {
             Handler h = handlers[handlers.Count - 1];
             handlers.RemoveAt(handlers.Count - 1);
@@ -839,7 +860,112 @@ public sealed class Rt : System.IDisposable {
     /// interpreter the same way, but `Settle` reads `parkOn` rather than
     /// `thrown`, and every caller between here and the scheduler must pass it
     /// through untouched rather than treating it as a failure.
+
+    // --- exceptions ---------------------------------------------------------
+    //
+    // An exception is `[kind, msg, data, cause]` and the KIND IS A STRING:
+    // flint has no class hierarchy, so `(catch ClassCastException e ...)` has
+    // to match on a flat name. The port carried only `[msg, data, cause]` and
+    // answered `:ex-info` to every `flint/ex-kind`, so every catch clause the
+    // emitter wrote asked a question the runtime could not answer.
+
+    public const int ExKindSlot = 0, ExMsgSlot = 1, ExDataSlot = 2, ExCauseSlot = 3;
+
+    public static long ExInfo(Rt rt, long kind, long msg, long data, long cause) {
+        int bas = rt.Mark();
+        int k = rt.Push(kind), m = rt.Push(msg), d = rt.Push(data), c = rt.Push(cause);
+        long a = rt.Alloc(Obj.TyExinfo, 4);
+        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+        rt.SetSlot(a, ExKindSlot, rt.R(k));
+        rt.SetSlot(a, ExMsgSlot, rt.R(m));
+        rt.SetSlot(a, ExDataSlot, rt.R(d));
+        rt.SetSlot(a, ExCauseSlot, rt.R(c));
+        rt.PopTo(bas);
+        return Val.Heap(a);
+    }
+
+    /// Build an exception without throwing it. The scheduler needs this: it
+    /// hands an error to a PARKED thread, to be raised when that thread next
+    /// resumes rather than in whatever thread noticed the problem.
+    public long MakeError(string kind, string msg) {
+        int bas = Mark();
+        int ki = Push(Str.Of(this, kind));
+        long m = Str.Of(this, msg);
+        long e = ExInfo(this, R(ki), m, Val.Nil, Val.Nil);
+        PopTo(bas);
+        return e;
+    }
+
+    /// Set the pending exception and return nil, which is what a failing
+    /// builtin returns.
+    public long ThrowStr(string kind, string msg) {
+        thrown = MakeError(kind, msg);
+        return Val.Nil;
+    }
+
+    public bool IsException(long v) => IsHeapTy(v, Obj.TyExinfo);
+    public long ExMessage(long e) => IsException(e) ? Slot(e, ExMsgSlot) : Val.Nil;
+    public long ExData(long e) => IsException(e) ? Slot(e, ExDataSlot) : Val.Nil;
+    public long ExKind(long e) => IsException(e) ? Slot(e, ExKindSlot) : Val.Nil;
+
+    /// Does an exception match a `catch` clause's name?
+    ///
+    /// The rules are Java's, over flat names rather than classes: `Throwable`
+    /// matches everything; `Exception` and `RuntimeException` match everything
+    /// that is not an `...Error` -- the distinction a program catching broadly
+    /// still wants, so a stack overflow is not swallowed by a `catch Exception`
+    /// around a parser; `Error` matches the `...Error`s; anything else is exact.
+    public long ExMatches(long e, long name) {
+        string k = Str.IsString(this, ExKind(e)) ? Str.Text(this, ExKind(e)) : "";
+        string n = Str.IsString(this, name) ? Str.Text(this, name) : "";
+        bool isError = k.EndsWith("Error");
+        bool hit = n switch {
+            "Throwable" => true,
+            "Exception" or "RuntimeException" => !isError,
+            "Error" => isError,
+            _ => k == n,
+        };
+        return hit ? Val.True : Val.False;
+    }
+
+    // --- opaque values (`doc/decisions/0022`) --------------------------------
+
+    /// The next identity to hand out. STORED in the object rather than derived
+    /// from its address: the nursery is a copying collector, so an
+    /// address-derived hash would change under collection and a value in a map
+    /// would stop being findable by the key that put it there.
+    public long nextOpaque = 1;
+
+    /// `[label, id, host-id]`. Guest code can mint one only with host id 0, and
+    /// there is deliberately no builtin that reads an id back -- so a host id is
+    /// a thing the HOST wrote and only the host can read.
+    public long NewOpaque(long label, long hostId) {
+        int bas = Mark();
+        int li = Push(label);
+        long a = Alloc(Obj.TyOpaque, 3);
+        if (a == 0) { PopTo(bas); return Val.Nil; }
+        long l = R(li);
+        PopTo(bas);
+        long id = nextOpaque++;
+        SetSlot(a, 0, l);
+        SetSlot(a, 1, Val.Fixnum(id));
+        SetSlot(a, 2, Val.Fixnum(hostId));
+        return Val.Heap(a);
+    }
+
+    public bool IsOpaque(long v) => IsHeapTy(v, Obj.TyOpaque);
+
+    /// The host id a capability was issued with, or 0 for a guest-minted one.
+    public long OpaqueHostId(long v) {
+        if (!IsOpaque(v)) return 0;
+        long s = Slot(v, 2);
+        return Val.IsFixnum(s) ? Val.AsFixnum(s) : 0;
+    }
+
+    public long OpaqueLabel(long v) => IsOpaque(v) ? Slot(v, 0) : Val.Nil;
+
     public bool Parked() => thrown == Val.Park;
+    public bool Failed() => !Val.IsNil(thrown);
 
     /// Carry on a program a snapshot restored.
     ///

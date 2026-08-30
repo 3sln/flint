@@ -215,7 +215,7 @@ public final class Pike {
     /// instruction.
     public static long compile(Rt rt, long source, long words) {
         int n = Vec.count(rt, words);
-        if (n < PROG_HDR) throw new IllegalArgumentException("regex: malformed program");
+        if (n < PROG_HDR) return rt.throwStr("IllegalArgumentException", "regex: malformed program");
         int[] raw = new int[n];
         for (int k = 0; k < n; k++) raw[k] = (int) Val.asFixnum(Vec.nth(rt, words, k));
         int base = rt.mark();
@@ -254,8 +254,8 @@ public final class Pike {
     /// Match at `from`, returning `[s0 e0 s1 e1 ...]` or nil. Positions are
     /// CODE-POINT indices and `-1` marks a group that did not participate.
     public static long run(Rt rt, long re, long s, long from, int entry, boolean full) {
-        if (!rt.isHeapTy(re, TY_REGEX)) throw new ClassCastException("not a compiled pattern");
-        if (!Str.isString(rt, s)) throw new ClassCastException("re-run wants a string");
+        if (!rt.isHeapTy(re, TY_REGEX)) return rt.throwStr("ClassCastException", "not a compiled pattern");
+        if (!Str.isString(rt, s)) return rt.throwStr("ClassCastException", "re-run wants a string");
         int[] prog = progOf(rt, re);
         int ninstrs = prog[0];
         int nslots = (prog[2] + 1) * 2;
@@ -270,8 +270,8 @@ public final class Pike {
     /// them `run` in a loop was quadratic: each call decoded the whole subject
     /// again. Returns a flat vector, `nslots` entries per match, back to back.
     public static long findAll(Rt rt, long re, long s, long limit) {
-        if (!rt.isHeapTy(re, TY_REGEX)) throw new ClassCastException("not a compiled pattern");
-        if (!Str.isString(rt, s)) throw new ClassCastException("re-find-all wants a string");
+        if (!rt.isHeapTy(re, TY_REGEX)) return rt.throwStr("ClassCastException", "not a compiled pattern");
+        if (!Str.isString(rt, s)) return rt.throwStr("ClassCastException", "re-find-all wants a string");
         int[] prog = progOf(rt, re);
         int ninstrs = prog[0];
         int nslots = (prog[2] + 1) * 2;

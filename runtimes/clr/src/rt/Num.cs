@@ -59,9 +59,16 @@ public static class Num {
         return n == null ? Double.NaN : (double) n.Value;
     }
 
-    static System.Exception Overflow() => new System.OverflowException("integer overflow");
-    static System.Exception NotNumber(Rt rt, long a, long b) =>
-        new System.ArgumentException("not a number: " + rt.Describe(a) + " and " + rt.Describe(b));
+    // A failing arithmetic builtin SETS `thrown` and returns nil, exactly as
+    // the Rust does. Throwing a host exception here would leave flint's `try`
+    // with nothing to catch: the failure would never enter the flint machinery
+    // at all, and `(try (/ 1 0) (catch ...))` could not work however correct
+    // the opcode handling was.
+    static long Overflow(Rt rt) => rt.ThrowStr("ArithmeticException", "integer overflow");
+    static long NotNumber(Rt rt, long a, long b) =>
+        rt.ThrowStr("ClassCastException",
+                    "not a number: " + rt.Describe(a) + " and " + rt.Describe(b));
+    static long DivByZero(Rt rt) => rt.ThrowStr("ArithmeticException", "Divide by zero");
 
     /// flint's integers OVERFLOW rather than wrap; .NET's `checked` is the
     /// analogue of the JVM's `Math.*Exact`.
@@ -72,23 +79,32 @@ public static class Num {
 
     public static long Add(Rt rt, long a, long b) {
         long? x = AsI64(rt, a), y = AsI64(rt, b);
-        if (x != null && y != null) return Integer(rt, AddExact(x.Value, y.Value));
+        if (x != null && y != null) {
+            try { return Integer(rt, AddExact(x.Value, y.Value)); }
+            catch (System.OverflowException) { return Overflow(rt); }
+        }
         if (IsNumber(rt, a) && IsNumber(rt, b)) return Val.OfDouble(F64(rt, a) + F64(rt, b));
-        throw NotNumber(rt, a, b);
+        return NotNumber(rt, a, b);
     }
 
     public static long Sub(Rt rt, long a, long b) {
         long? x = AsI64(rt, a), y = AsI64(rt, b);
-        if (x != null && y != null) return Integer(rt, SubExact(x.Value, y.Value));
+        if (x != null && y != null) {
+            try { return Integer(rt, SubExact(x.Value, y.Value)); }
+            catch (System.OverflowException) { return Overflow(rt); }
+        }
         if (IsNumber(rt, a) && IsNumber(rt, b)) return Val.OfDouble(F64(rt, a) - F64(rt, b));
-        throw NotNumber(rt, a, b);
+        return NotNumber(rt, a, b);
     }
 
     public static long Mul(Rt rt, long a, long b) {
         long? x = AsI64(rt, a), y = AsI64(rt, b);
-        if (x != null && y != null) return Integer(rt, MulExact(x.Value, y.Value));
+        if (x != null && y != null) {
+            try { return Integer(rt, MulExact(x.Value, y.Value)); }
+            catch (System.OverflowException) { return Overflow(rt); }
+        }
         if (IsNumber(rt, a) && IsNumber(rt, b)) return Val.OfDouble(F64(rt, a) * F64(rt, b));
-        throw NotNumber(rt, a, b);
+        return NotNumber(rt, a, b);
     }
 
     /// `/`. See the class note: integer division that does not divide evenly
@@ -96,45 +112,48 @@ public static class Num {
     public static long Div(Rt rt, long a, long b) {
         long? x = AsI64(rt, a), y = AsI64(rt, b);
         if (x != null && y != null) {
-            if (y == 0) throw new System.OverflowException("Divide by zero");
+            if (y == 0) return DivByZero(rt);
             if (x.Value % y.Value == 0) return Integer(rt, x.Value / y.Value);
             return Val.OfDouble((double) x.Value / (double) y.Value);
         }
         if (IsNumber(rt, a) && IsNumber(rt, b)) return Val.OfDouble(F64(rt, a) / F64(rt, b));
-        throw NotNumber(rt, a, b);
+        return NotNumber(rt, a, b);
     }
 
     public static long Quot(Rt rt, long a, long b) {
         long? x = AsI64(rt, a), y = AsI64(rt, b);
         if (x != null && y != null) {
-            if (y == 0) throw new System.OverflowException("Divide by zero");
+            if (y == 0) return DivByZero(rt);
             return Integer(rt, x.Value / y.Value);
         }
         if (IsNumber(rt, a) && IsNumber(rt, b)) {
             double q = F64(rt, a) / F64(rt, b);
             return Val.OfDouble(q < 0 ? System.Math.Ceiling(q) : System.Math.Floor(q));
         }
-        throw NotNumber(rt, a, b);
+        return NotNumber(rt, a, b);
     }
 
     public static long Rem(Rt rt, long a, long b) {
         long? x = AsI64(rt, a), y = AsI64(rt, b);
         if (x != null && y != null) {
-            if (y == 0) throw new System.OverflowException("Divide by zero");
+            if (y == 0) return DivByZero(rt);
             return Integer(rt, x.Value % y.Value);
         }
         if (IsNumber(rt, a) && IsNumber(rt, b)) {
             double p = F64(rt, a), q = F64(rt, b), t = p / q;
             return Val.OfDouble(p - (t < 0 ? System.Math.Ceiling(t) : System.Math.Floor(t)) * q);
         }
-        throw NotNumber(rt, a, b);
+        return NotNumber(rt, a, b);
     }
 
     public static long Neg(Rt rt, long a) {
         long? x = AsI64(rt, a);
-        if (x != null) return Integer(rt, NegExact(x.Value));
+        if (x != null) {
+            try { return Integer(rt, NegExact(x.Value)); }
+            catch (System.OverflowException) { return Overflow(rt); }
+        }
         if (Val.IsDouble(a)) return Val.OfDouble(-Val.AsDouble(a));
-        throw NotNumber(rt, a, a);
+        return NotNumber(rt, a, a);
     }
 
     /// Numeric equality (`==`): compares ACROSS int and float, unlike `=`.

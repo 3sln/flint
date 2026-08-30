@@ -401,7 +401,7 @@ public static class Bytes {
     /// holding the address the object had BEFORE the flip.
     public static long Conj(Rt rt, long t, int b) {
         if (!Live(rt, t)) {
-            throw new System.InvalidOperationException("this transient byte string is no longer usable");
+            return rt.ThrowStr("IllegalStateException", "this transient byte string is no longer usable");
         }
         int fill = (int) Val.AsFixnum(rt.Slot(t, TB_FILL));
         if (fill == TAIL_CAP) {
@@ -423,7 +423,7 @@ public static class Bytes {
     /// byte at a time is the thing this type exists to stop doing.
     public static long AppendBytes(Rt rt, long t, long v) {
         if (!Live(rt, t)) {
-            throw new System.InvalidOperationException("this transient byte string is no longer usable");
+            return rt.ThrowStr("IllegalStateException", "this transient byte string is no longer usable");
         }
         // The source is copied outv FIRST, so nothing holds a reference into the
         // heap while the loop below allocates.
@@ -458,7 +458,7 @@ public static class Bytes {
 
     public static long Persistent(Rt rt, long t) {
         if (!Live(rt, t)) {
-            throw new System.InvalidOperationException("this transient byte string is no longer usable");
+            return rt.ThrowStr("IllegalStateException", "this transient byte string is no longer usable");
         }
         int fill = (int) Val.AsFixnum(rt.Slot(t, TB_FILL));
         int bas = rt.Mark();

@@ -192,7 +192,7 @@ public static class Seqs {
                 return outv;
             }
             default:
-                throw new System.NotSupportedException(
+                return rt.ThrowStr("UnsupportedOperationException", 
                     "seq over " + rt.Describe(v) + " needs more of the data structures");
         }
     }
@@ -218,7 +218,7 @@ public static class Seqs {
         if (t == Obj.TyVecseq) return Vec.Nth(rt, rt.Slot(s, 0), (int) Val.AsFixnum(rt.Slot(s, 1)));
         if (t == Obj.TyStrseq) return Str.Nth(rt, rt.Slot(s, 0), (int) Val.AsFixnum(rt.Slot(s, 1)));
         if (t == Obj.TyRange) return rt.Slot(s, 0);
-        throw new System.NotSupportedException("first over " + rt.Describe(v));
+        return rt.ThrowStr("UnsupportedOperationException", "first over " + rt.Describe(v));
     }
 
     /// `next`: the rest, or NIL when there is none. `rest` differs -- it gives
@@ -250,7 +250,7 @@ public static class Seqs {
             rt.PopTo(bas);
             return outv;
         }
-        throw new System.NotSupportedException("next over " + rt.Describe(v));
+        return rt.ThrowStr("UnsupportedOperationException", "next over " + rt.Describe(v));
     }
 
     public static long Rest(Rt rt, long v) {

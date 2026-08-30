@@ -62,8 +62,9 @@ public class RtImage {
   /// What was thrown, said in flint's terms rather than the host's.
   static String why(Rt rt) {
     long t = rt.thrown;
-    if (rt.describe(t).equals("an ex-info") && Str.isString(rt, rt.slot(t, 0))) {
-      return "the program threw: " + Str.text(rt, rt.slot(t, 0));
+    if (rt.isException(t) && Str.isString(rt, rt.exMessage(t))) {
+      return "the program threw " + Str.text(rt, rt.exKind(t))
+             + ": " + Str.text(rt, rt.exMessage(t));
     }
     return "the program threw " + rt.describe(t);
   }

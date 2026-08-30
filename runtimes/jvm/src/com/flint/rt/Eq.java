@@ -94,10 +94,6 @@ public final class Eq {
             // it and `a == b` above already answered.
             return false;
         }
-        if (ta == TY_EXINFO) {
-            return eq(rt, rt.slot(a, 0), rt.slot(b, 0))
-                && eq(rt, rt.slot(a, 1), rt.slot(b, 1));
-        }
         // Everything else is compared by IDENTITY: an atom, a var, a regex, a
         // function. That is Clojure's rule and not a gap.
         return false;
@@ -180,8 +176,12 @@ public final class Eq {
         if (ka && kb) return cmpNamed(rt, a, b);
         if (rt.isHeapTy(a, TY_SYM) && rt.isHeapTy(b, TY_SYM)) return cmpNamed(rt, a, b);
         if (rt.isSequential(a) && rt.isSequential(b)) return cmpSequential(rt, a, b);
-        throw new ClassCastException(
+        // Sets `thrown` and answers 0, as the Rust does: `compare` returns an
+        // int, so there is no failure value to hand back -- the pending throw
+        // is the answer, and the interpreter unwinds on the way out.
+        rt.throwStr("ClassCastException",
             "cannot compare " + rt.describe(a) + " with " + rt.describe(b));
+        return 0;
     }
 
     /// By UTF-16 CODE UNIT, as `String.compareTo` is -- not by code point.

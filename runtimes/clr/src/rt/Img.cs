@@ -84,7 +84,7 @@ public static class Img {
         int nfns = (int) r.U32();
         Rt.FnDef[] fns = new Rt.FnDef[nfns];
         for (int i = 0; i < nfns; i++) {
-            r.U32();                       // the name constant, for diagnostics
+            int fname = (int) r.U32();     // the name constant, for diagnostics
             int nupvals = r.U8();
             int na = r.U8();
             Rt.Arity[] arities = new Rt.Arity[na];
@@ -97,7 +97,7 @@ public static class Img {
                 r.U32();                   // the compiled-arity index: a wasm concern
                 arities[k] = new Rt.Arity(argc, (flags & 1) != 0, nlocals, code, len);
             }
-            fns[i] = new Rt.FnDef(arities, nupvals);
+            fns[i] = new Rt.FnDef(arities, nupvals, fname);
         }
         rt.fns = fns;
 

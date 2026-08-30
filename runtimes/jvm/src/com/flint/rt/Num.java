@@ -61,33 +61,50 @@ public final class Num {
         return n == null ? Double.NaN : (double) n;
     }
 
-    static RuntimeException overflow() {
-        return new ArithmeticException("integer overflow");
+    // A failing arithmetic builtin SETS `thrown` and returns nil, exactly as
+    // the Rust does. Throwing a host `ArithmeticException` here would leave
+    // flint's `try` with nothing to catch: the failure would never enter the
+    // flint machinery at all, and `(try (/ 1 0) (catch ...))` could not work
+    // however correct the opcode handling was.
+    static long overflow(Rt rt) {
+        return rt.throwStr("ArithmeticException", "integer overflow");
     }
-    static RuntimeException notNumber(Rt rt, long a, long b) {
-        return new IllegalArgumentException(
+    static long notNumber(Rt rt, long a, long b) {
+        return rt.throwStr("ClassCastException",
             "not a number: " + rt.describe(a) + " and " + rt.describe(b));
+    }
+    static long divByZero(Rt rt) {
+        return rt.throwStr("ArithmeticException", "Divide by zero");
     }
 
     public static long add(Rt rt, long a, long b) {
         Long x = asI64(rt, a), y = asI64(rt, b);
-        if (x != null && y != null) return integer(rt, Math.addExact(x, y));
+        if (x != null && y != null) {
+            try { return integer(rt, Math.addExact(x, y)); }
+            catch (ArithmeticException e) { return overflow(rt); }
+        }
         if (isNumber(rt, a) && isNumber(rt, b)) return Val.ofDouble(f64(rt, a) + f64(rt, b));
-        throw notNumber(rt, a, b);
+        return notNumber(rt, a, b);
     }
 
     public static long sub(Rt rt, long a, long b) {
         Long x = asI64(rt, a), y = asI64(rt, b);
-        if (x != null && y != null) return integer(rt, Math.subtractExact(x, y));
+        if (x != null && y != null) {
+            try { return integer(rt, Math.subtractExact(x, y)); }
+            catch (ArithmeticException e) { return overflow(rt); }
+        }
         if (isNumber(rt, a) && isNumber(rt, b)) return Val.ofDouble(f64(rt, a) - f64(rt, b));
-        throw notNumber(rt, a, b);
+        return notNumber(rt, a, b);
     }
 
     public static long mul(Rt rt, long a, long b) {
         Long x = asI64(rt, a), y = asI64(rt, b);
-        if (x != null && y != null) return integer(rt, Math.multiplyExact(x, y));
+        if (x != null && y != null) {
+            try { return integer(rt, Math.multiplyExact(x, y)); }
+            catch (ArithmeticException e) { return overflow(rt); }
+        }
         if (isNumber(rt, a) && isNumber(rt, b)) return Val.ofDouble(f64(rt, a) * f64(rt, b));
-        throw notNumber(rt, a, b);
+        return notNumber(rt, a, b);
     }
 
     /// `/`. See the class note: integer division that does not divide evenly
@@ -95,45 +112,48 @@ public final class Num {
     public static long div(Rt rt, long a, long b) {
         Long x = asI64(rt, a), y = asI64(rt, b);
         if (x != null && y != null) {
-            if (y == 0) throw new ArithmeticException("Divide by zero");
+            if (y == 0) return divByZero(rt);
             if (x % y == 0) return integer(rt, x / y);
             return Val.ofDouble((double) x / (double) y);
         }
         if (isNumber(rt, a) && isNumber(rt, b)) return Val.ofDouble(f64(rt, a) / f64(rt, b));
-        throw notNumber(rt, a, b);
+        return notNumber(rt, a, b);
     }
 
     public static long quot(Rt rt, long a, long b) {
         Long x = asI64(rt, a), y = asI64(rt, b);
         if (x != null && y != null) {
-            if (y == 0) throw new ArithmeticException("Divide by zero");
+            if (y == 0) return divByZero(rt);
             return integer(rt, x / y);
         }
         if (isNumber(rt, a) && isNumber(rt, b)) {
             double q = f64(rt, a) / f64(rt, b);
             return Val.ofDouble(q < 0 ? Math.ceil(q) : Math.floor(q));
         }
-        throw notNumber(rt, a, b);
+        return notNumber(rt, a, b);
     }
 
     public static long rem(Rt rt, long a, long b) {
         Long x = asI64(rt, a), y = asI64(rt, b);
         if (x != null && y != null) {
-            if (y == 0) throw new ArithmeticException("Divide by zero");
+            if (y == 0) return divByZero(rt);
             return integer(rt, x % y);
         }
         if (isNumber(rt, a) && isNumber(rt, b)) {
             double p = f64(rt, a), q = f64(rt, b), t = p / q;
             return Val.ofDouble(p - (t < 0 ? Math.ceil(t) : Math.floor(t)) * q);
         }
-        throw notNumber(rt, a, b);
+        return notNumber(rt, a, b);
     }
 
     public static long neg(Rt rt, long a) {
         Long x = asI64(rt, a);
-        if (x != null) return integer(rt, Math.negateExact(x));
+        if (x != null) {
+            try { return integer(rt, Math.negateExact(x)); }
+            catch (ArithmeticException e) { return overflow(rt); }
+        }
         if (Val.isDouble(a)) return Val.ofDouble(-Val.asDouble(a));
-        throw notNumber(rt, a, a);
+        return notNumber(rt, a, a);
     }
 
     /// Numeric equality (`==`): compares ACROSS int and float, unlike `=`.

@@ -160,7 +160,15 @@ public final class Rt {
     public static final class FnDef {
         public final Arity[] arities;
         public final int nupvals;
-        public FnDef(Arity[] arities, int nupvals) { this.arities = arities; this.nupvals = nupvals; }
+        /// Index into `consts` of this function's name, or -1. KEPT rather than
+        /// read-and-discarded: a port refuses to send a function BY NAME, and
+        /// "cannot send that" with no subject sends somebody hunting through a
+        /// nested structure to find which one.
+        public final int name;
+        public FnDef(Arity[] arities, int nupvals) { this(arities, nupvals, -1); }
+        public FnDef(Arity[] arities, int nupvals, int name) {
+            this.arities = arities; this.nupvals = nupvals; this.name = name;
+        }
         /// An EXACT fixed arity wins over a variadic one, whatever order they
         /// were written in -- so `(fn ([] :a) ([& xs] xs))` and the same two
         /// clauses reversed both answer `:a` for zero arguments. Taking
@@ -613,28 +621,40 @@ public final class Rt {
                             "this runtime does not carry the builtin `" + nativeNames[idx] + "`");
                     }
                     long v = fn.apply(this, at, argc);
-                    if (parked()) {
-                        // A PARKING builtin. Rewind to the instruction and
-                        // leave the operands where they are: resuming
-                        // RE-EXECUTES the call, which is why such a builtin must
-                        // decide to park before it changes anything.
-                        //
-                        // Except a courtesy yield, which is finished: rewinding
-                        // there would re-execute `yield`, which yields again,
-                        // for ever, and the scheduler reports no progress.
-                        thrown = Val.NIL;
-                        if (parkOn == Conc.PARK_YIELD) {
-                            roots.stackTop = at;
-                            vpush(Val.NIL);
+                    roots.stackTop = at;
+                    if (failed()) {
+                        if (parked()) {
+                            // A PARKING builtin. Rewind to the instruction and
+                            // leave the operands where they are: resuming
+                            // RE-EXECUTES the call, which is why such a builtin
+                            // must decide to park before it changes anything.
+                            //
+                            // Except a courtesy yield, which is finished:
+                            // rewinding there would re-execute `yield`, which
+                            // yields again, for ever, and the scheduler reports
+                            // no progress.
+                            thrown = Val.NIL;
+                            if (parkOn == Conc.PARK_YIELD) {
+                                vpush(Val.NIL);
+                                thrown = Val.PARK;
+                                return Val.NIL;
+                            }
+                            f.ip = opAt;
+                            roots.stackTop = at + argc;
                             thrown = Val.PARK;
                             return Val.NIL;
                         }
-                        f.ip = opAt;
-                        roots.stackTop = at + argc;
-                        thrown = Val.PARK;
-                        return Val.NIL;
+                        // A BUILTIN THAT FAILED. It set `thrown` and returned
+                        // nil, exactly as the Rust does -- so the throw unwinds
+                        // to a `catch` in the program rather than out of the
+                        // interpreter as a host exception. A host exception here
+                        // is uncatchable by flint code, which is how a port with
+                        // a working `try` could still not catch a division by
+                        // zero: the failure never entered the flint machinery.
+                        f.ip = ip;
+                        if (!unwind()) return Val.NIL;
+                        continue;
                     }
-                    roots.stackTop = at;
                     vpush(v);
                 }
                 default -> throw new UnsupportedOperationException(
@@ -661,27 +681,29 @@ public final class Rt {
             int idx = (int) Val.asFixnum(slot(callee, 0));
             Builtins.Fn fn = idx < natives.length ? natives[idx] : null;
             if (fn == null) {
-                throw new UnsupportedOperationException(
+                return throwStr("UnsupportedOperationException",
                     "this runtime does not carry the builtin `"
                     + (idx < nativeNames.length ? nativeNames[idx] : "#" + idx) + "`");
             }
             return fn.apply(this, calleeAt + 1, argc);
         }
         if (Sets.isSet(this, callee)) {
-            if (argc < 1) throw new UnsupportedOperationException("a set takes 1 argument");
+            if (argc < 1) return throwStr("ArityException", "a set takes 1 argument");
             return Sets.get(this, callee, roots.stack[calleeAt + 1], Val.NIL);
         }
         if (Maps.isMap(this, callee)) {
-            if (argc < 1) throw new UnsupportedOperationException("a map takes 1 or 2 arguments");
+            if (argc < 1) return throwStr("ArityException", "a map takes 1 or 2 arguments");
             long dflt = argc >= 2 ? roots.stack[calleeAt + 2] : Val.NIL;
             return Maps.get(this, callee, roots.stack[calleeAt + 1], dflt);
         }
         if (isHeapTy(callee, TY_VEC)) {
-            if (argc < 1) throw new UnsupportedOperationException("a vector takes 1 argument");
+            if (argc < 1) return throwStr("ArityException", "a vector takes 1 argument");
             long got = Vec.nth(this, callee, (int) Val.asFixnum(roots.stack[calleeAt + 1]));
             return got == Val.NOT_FOUND ? Val.NIL : got;
         }
-        throw new UnsupportedOperationException(
+        // Say WHAT was called: "value is not a function" with no subject is
+        // the least useful message in the runtime.
+        return throwStr("ClassCastException",
             "value is not a function (object type "
             + (Val.isHeap(callee) ? String.valueOf(ty(gc.sp, Val.asHeap(callee))) : "inline")
             + ", " + argc + " args)");
@@ -810,7 +832,112 @@ public final class Rt {
     /// interpreter the same way, but `settle` reads `parkOn` rather than
     /// `thrown`, and every caller between here and the scheduler must pass it
     /// through untouched rather than treating it as a failure.
+
+    // --- exceptions ---------------------------------------------------------
+    //
+    // An exception is `[kind, msg, data, cause]` and the KIND IS A STRING:
+    // flint has no class hierarchy, so `(catch ClassCastException e ...)` has
+    // to match on a flat name. The port carried only `[msg, data, cause]` and
+    // answered `:ex-info` to every `flint/ex-kind`, so every catch clause the
+    // emitter wrote asked a question the runtime could not answer.
+
+    public static final int EX_KIND = 0, EX_MSG = 1, EX_DATA = 2, EX_CAUSE = 3;
+
+    public static long exInfo(Rt rt, long kind, long msg, long data, long cause) {
+        int base = rt.mark();
+        int k = rt.push(kind), m = rt.push(msg), d = rt.push(data), c = rt.push(cause);
+        long a = rt.alloc(Obj.TY_EXINFO, 4);
+        if (a == 0) { rt.popTo(base); return Val.NIL; }
+        rt.setSlot(a, EX_KIND, rt.r(k));
+        rt.setSlot(a, EX_MSG, rt.r(m));
+        rt.setSlot(a, EX_DATA, rt.r(d));
+        rt.setSlot(a, EX_CAUSE, rt.r(c));
+        rt.popTo(base);
+        return Val.heap(a);
+    }
+
+    /// Build an exception without throwing it. The scheduler needs this: it
+    /// hands an error to a PARKED thread, to be raised when that thread next
+    /// resumes rather than in whatever thread noticed the problem.
+    public long makeError(String kind, String msg) {
+        int base = mark();
+        int ki = push(Str.of(this, kind));
+        long m = Str.of(this, msg);
+        long e = exInfo(this, r(ki), m, Val.NIL, Val.NIL);
+        popTo(base);
+        return e;
+    }
+
+    /// Set the pending exception and return nil, which is what a failing
+    /// builtin returns.
+    public long throwStr(String kind, String msg) {
+        thrown = makeError(kind, msg);
+        return Val.NIL;
+    }
+
+    public boolean isException(long v) { return isHeapTy(v, Obj.TY_EXINFO); }
+    public long exMessage(long e) { return isException(e) ? slot(e, EX_MSG) : Val.NIL; }
+    public long exData(long e) { return isException(e) ? slot(e, EX_DATA) : Val.NIL; }
+    public long exKind(long e) { return isException(e) ? slot(e, EX_KIND) : Val.NIL; }
+
+    /// Does an exception match a `catch` clause's name?
+    ///
+    /// The rules are Java's, over flat names rather than classes: `Throwable`
+    /// matches everything; `Exception` and `RuntimeException` match everything
+    /// that is not an `...Error` -- the distinction a program catching broadly
+    /// still wants, so a stack overflow is not swallowed by a `catch Exception`
+    /// around a parser; `Error` matches the `...Error`s; anything else is exact.
+    public long exMatches(long e, long name) {
+        String k = Str.isString(this, exKind(e)) ? Str.text(this, exKind(e)) : "";
+        String n = Str.isString(this, name) ? Str.text(this, name) : "";
+        boolean isError = k.endsWith("Error");
+        boolean hit = switch (n) {
+            case "Throwable" -> true;
+            case "Exception", "RuntimeException" -> !isError;
+            case "Error" -> isError;
+            default -> k.equals(n);
+        };
+        return hit ? Val.TRUE : Val.FALSE;
+    }
+
+    // --- opaque values (`doc/decisions/0022`) --------------------------------
+
+    /// The next identity to hand out. STORED in the object rather than derived
+    /// from its address: the nursery is a copying collector, so an
+    /// address-derived hash would change under collection and a value in a map
+    /// would stop being findable by the key that put it there.
+    public long nextOpaque = 1;
+
+    /// `[label, id, host-id]`. Guest code can mint one only with host id 0, and
+    /// there is deliberately no builtin that reads an id back -- so a host id is
+    /// a thing the HOST wrote and only the host can read.
+    public long newOpaque(long label, long hostId) {
+        int base = mark();
+        int li = push(label);
+        long a = alloc(Obj.TY_OPAQUE, 3);
+        if (a == 0) { popTo(base); return Val.NIL; }
+        long l = r(li);
+        popTo(base);
+        long id = nextOpaque++;
+        setSlot(a, 0, l);
+        setSlot(a, 1, Val.fixnum(id));
+        setSlot(a, 2, Val.fixnum(hostId));
+        return Val.heap(a);
+    }
+
+    public boolean isOpaque(long v) { return isHeapTy(v, Obj.TY_OPAQUE); }
+
+    /// The host id a capability was issued with, or 0 for a guest-minted one.
+    public long opaqueHostId(long v) {
+        if (!isOpaque(v)) return 0;
+        long s = slot(v, 2);
+        return Val.isFixnum(s) ? Val.asFixnum(s) : 0;
+    }
+
+    public long opaqueLabel(long v) { return isOpaque(v) ? slot(v, 0) : Val.NIL; }
+
     public boolean parked() { return thrown == Val.PARK; }
+    public boolean failed() { return !Val.isNil(thrown); }
 
     /// Find the innermost handler that can take `thrown`, or false if nothing
     /// can and the whole call must fail.
@@ -820,7 +947,7 @@ public final class Rt {
     /// not values anybody wants. `stackTop` and `shadowTop` are restored to
     /// what they were when the handler was installed, which is what makes a
     /// throw out of arbitrarily deep code leave no residue.
-    boolean unwind() {
+    public boolean unwind() {
         while (!handlers.isEmpty()) {
             Handler h = handlers.remove(handlers.size() - 1);
             // The frame that installed it may already be gone -- a handler

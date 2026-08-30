@@ -402,7 +402,7 @@ public final class Bytes {
     /// holding the address the object had BEFORE the flip.
     public static long conj(Rt rt, long t, int b) {
         if (!live(rt, t)) {
-            throw new IllegalStateException("this transient byte string is no longer usable");
+            return rt.throwStr("IllegalStateException", "this transient byte string is no longer usable");
         }
         int fill = (int) Val.asFixnum(rt.slot(t, TB_FILL));
         if (fill == TAIL_CAP) {
@@ -424,7 +424,7 @@ public final class Bytes {
     /// byte at a time is the thing this type exists to stop doing.
     public static long appendBytes(Rt rt, long t, long v) {
         if (!live(rt, t)) {
-            throw new IllegalStateException("this transient byte string is no longer usable");
+            return rt.throwStr("IllegalStateException", "this transient byte string is no longer usable");
         }
         // The source is copied out FIRST, so nothing holds a reference into the
         // heap while the loop below allocates.
@@ -459,7 +459,7 @@ public final class Bytes {
 
     public static long persistent(Rt rt, long t) {
         if (!live(rt, t)) {
-            throw new IllegalStateException("this transient byte string is no longer usable");
+            return rt.throwStr("IllegalStateException", "this transient byte string is no longer usable");
         }
         int fill = (int) Val.asFixnum(rt.slot(t, TB_FILL));
         int base = rt.mark();

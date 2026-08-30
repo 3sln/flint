@@ -197,7 +197,7 @@ public final class Seqs {
                 return out;
             }
             default:
-                throw new UnsupportedOperationException(
+                return rt.throwStr("UnsupportedOperationException", 
                     "seq over " + rt.describe(v) + " needs more of the data structures");
         }
     }
@@ -225,7 +225,7 @@ public final class Seqs {
         }
         if (t == TY_STRSEQ) return Str.nth(rt, rt.slot(s, 0), (int) Val.asFixnum(rt.slot(s, 1)));
         if (t == TY_RANGE) return rt.slot(s, 0);
-        throw new UnsupportedOperationException("first over " + rt.describe(v));
+        return rt.throwStr("UnsupportedOperationException", "first over " + rt.describe(v));
     }
 
     /// `next`: the rest, or NIL when there is none. `rest` differs -- it gives
@@ -257,7 +257,7 @@ public final class Seqs {
             rt.popTo(base);
             return out;
         }
-        throw new UnsupportedOperationException("next over " + rt.describe(v));
+        return rt.throwStr("UnsupportedOperationException", "next over " + rt.describe(v));
     }
 
     public static long rest(Rt rt, long v) {

@@ -863,7 +863,7 @@ public static class Maps {
 
     public static long TAssoc(Rt rt, long t, long k, long v) {
         if (Val.IsNil(rt.Slot(t, TM_EDIT)))
-            throw new System.InvalidOperationException("transient used after persistent!");
+            return rt.ThrowStr("IllegalStateException", "transient used after persistent!");
         int bas = rt.Mark();
         int ti = rt.Push(t), ki = rt.Push(k), vi = rt.Push(v);
         int ei = rt.Push(rt.Slot(rt.R(ti), TM_EDIT));
@@ -881,7 +881,7 @@ public static class Maps {
 
     public static long TDissoc(Rt rt, long t, long k) {
         if (Val.IsNil(rt.Slot(t, TM_EDIT)))
-            throw new System.InvalidOperationException("transient used after persistent!");
+            return rt.ThrowStr("IllegalStateException", "transient used after persistent!");
         int bas = rt.Mark();
         int ti = rt.Push(t), ki = rt.Push(k);
         int ei = rt.Push(rt.Slot(rt.R(ti), TM_EDIT));

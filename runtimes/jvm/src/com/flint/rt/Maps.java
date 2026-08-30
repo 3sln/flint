@@ -866,7 +866,7 @@ public final class Maps {
 
     public static long tassoc(Rt rt, long t, long k, long v) {
         if (Val.isNil(rt.slot(t, TM_EDIT))) {
-            throw new IllegalStateException("transient used after persistent!");
+            return rt.throwStr("IllegalStateException", "transient used after persistent!");
         }
         int base = rt.mark();
         int ti = rt.push(t), ki = rt.push(k), vi = rt.push(v);
@@ -887,7 +887,7 @@ public final class Maps {
 
     public static long tdissoc(Rt rt, long t, long k) {
         if (Val.isNil(rt.slot(t, TM_EDIT))) {
-            throw new IllegalStateException("transient used after persistent!");
+            return rt.throwStr("IllegalStateException", "transient used after persistent!");
         }
         int base = rt.mark();
         int ti = rt.push(t), ki = rt.push(k);

@@ -81,8 +81,8 @@ public class RtSelfHost {
     System.out.println("  ok   the compiler ran and produced " + s.length() + " chars");
     if (!Val.isNil(rt.thrown)) {
       System.out.println("  FAIL the compiler threw: " + rt.describe(rt.thrown)
-        + (rt.describe(rt.thrown).equals("an ex-info")
-           ? " :: " + Str.text(rt, rt.slot(rt.thrown, 0)) : ""));
+        + (rt.isException(rt.thrown) && Str.isString(rt, rt.exMessage(rt.thrown))
+           ? " :: " + Str.text(rt, rt.exMessage(rt.thrown)) : ""));
       System.exit(1);
     }
     // Against the REFERENCE, byte for byte. A compiler that runs and emits

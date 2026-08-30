@@ -161,7 +161,8 @@ public final class Builtins {
             if (Vec.isTransient(rt, v)) return Val.fixnum(Vec.tcount(rt, v));
             if (Bytes.isBytes(rt, v)) return Val.fixnum(Bytes.count(rt, v));
             if (rt.isSeq(v)) return Val.fixnum(Seqs.count(rt, v));
-            throw new UnsupportedOperationException("count over " + rt.describe(v) + " needs more of the data structures");
+            return rt.throwStr("UnsupportedOperationException",
+"count over " + rt.describe(v) + " needs more of the data structures");
         });
         def("nth", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -187,11 +188,13 @@ public final class Builtins {
                 if (!Val.isNil(rt.r(s))) got = Seqs.first(rt, rt.r(s));
                 rt.popTo(base);
             } else {
-                throw new UnsupportedOperationException("nth over " + rt.describe(v) + " needs more of the data structures");
+                return rt.throwStr("UnsupportedOperationException",
+"nth over " + rt.describe(v) + " needs more of the data structures");
             }
             if (got != Val.NOT_FOUND) return got;
             if (n > 2) return rt.vat(at + 2);
-            throw new IndexOutOfBoundsException("index " + i + " out of range");
+            return rt.throwStr("IndexOutOfBoundsException",
+"index " + i + " out of range");
         });
         def("conj", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -225,7 +228,8 @@ public final class Builtins {
                 for (int i = 1; i < n; i++) acc = Seqs.cons(rt, rt.vat(at + i), acc);
                 return acc;
             }
-            throw new UnsupportedOperationException("conj onto " + rt.describe(v) + " needs more of the data structures");
+            return rt.throwStr("UnsupportedOperationException",
+"conj onto " + rt.describe(v) + " needs more of the data structures");
         });
 
         def("seq", (rt, at, n) -> Seqs.seq(rt, rt.vat(at)));
@@ -243,26 +247,30 @@ public final class Builtins {
             if (rt.isHeapTy(v, TY_VEC)) return Vec.transientOf(rt, v);
             if (Maps.isMap(rt, v)) return Maps.transientOf(rt, v);
             if (Sets.isSet(rt, v)) return Sets.transientOf(rt, v);
-            throw new ClassCastException(rt.describe(v) + " is not transientable");
+            return rt.throwStr("ClassCastException",
+rt.describe(v) + " is not transientable");
         });
         def("persistent!", (rt, at, n) -> {
             long v = rt.vat(at);
             if (Vec.isTransient(rt, v)) {
                 if (!Vec.alive(rt, v)) {
-                    throw new IllegalStateException("persistent! called twice on one transient");
+                    return rt.throwStr("IllegalStateException",
+"persistent! called twice on one transient");
                 }
                 return Vec.tpersistent(rt, v);
             }
             if (Maps.isTransient(rt, v)) return Maps.tpersistent(rt, v);
             if (Sets.isTransient(rt, v)) return Sets.tpersistent(rt, v);
             if (Bytes.isTransient(rt, v)) return Bytes.persistent(rt, v);
-            throw new ClassCastException(rt.describe(v) + " is not a transient");
+            return rt.throwStr("ClassCastException",
+rt.describe(v) + " is not a transient");
         });
         def("conj!", (rt, at, n) -> {
             long v = rt.vat(at);
             if (Vec.isTransient(rt, v)) {
                 if (!Vec.alive(rt, v)) {
-                    throw new IllegalStateException("conj! on a transient already made persistent");
+                    return rt.throwStr("IllegalStateException",
+"conj! on a transient already made persistent");
                 }
                 long acc = v;
                 for (int i = 1; i < n; i++) acc = Vec.tconj(rt, acc, rt.vat(at + i));
@@ -282,13 +290,15 @@ public final class Builtins {
                 }
                 return acc;
             }
-            throw new ClassCastException(rt.describe(v) + " is not a transient");
+            return rt.throwStr("ClassCastException",
+rt.describe(v) + " is not a transient");
         });
         def("assoc!", (rt, at, n) -> {
             long v = rt.vat(at);
             if (Vec.isTransient(rt, v)) {
                 if (!Vec.alive(rt, v)) {
-                    throw new IllegalStateException("assoc! on a transient already made persistent");
+                    return rt.throwStr("IllegalStateException",
+"assoc! on a transient already made persistent");
                 }
                 long acc = v;
                 for (int i = 1; i + 1 < n; i += 2) {
@@ -301,7 +311,8 @@ public final class Builtins {
                 for (int i = 1; i + 1 < n; i += 2) acc = Maps.tassoc(rt, acc, rt.vat(at + i), rt.vat(at + i + 1));
                 return acc;
             }
-            throw new ClassCastException(rt.describe(v) + " is not a transient");
+            return rt.throwStr("ClassCastException",
+rt.describe(v) + " is not a transient");
         });
         def("dissoc!", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -315,7 +326,8 @@ public final class Builtins {
                 for (int i = 1; i < n; i++) acc = Sets.tdisj(rt, acc, rt.vat(at + i));
                 return acc;
             }
-            throw new ClassCastException(rt.describe(v) + " is not a transient");
+            return rt.throwStr("ClassCastException",
+rt.describe(v) + " is not a transient");
         });
 
         // Maps.
@@ -339,7 +351,8 @@ public final class Builtins {
                 long got = Vec.nth(rt, coll, (int) Val.asFixnum(k));
                 return got == Val.NOT_FOUND ? dflt : got;
             }
-            throw new UnsupportedOperationException("get over " + rt.describe(coll) + " needs sets ported");
+            return rt.throwStr("UnsupportedOperationException",
+"get over " + rt.describe(coll) + " needs sets ported");
         });
         def("assoc", (rt, at, n) -> {
             long acc = rt.vat(at);
@@ -366,7 +379,8 @@ public final class Builtins {
                 rt.popTo(base);
                 return out;
             }
-            throw new UnsupportedOperationException("assoc onto " + rt.describe(acc) + " needs more of the data structures");
+            return rt.throwStr("UnsupportedOperationException",
+"assoc onto " + rt.describe(acc) + " needs more of the data structures");
         });
         def("dissoc", (rt, at, n) -> {
             long acc = rt.vat(at);
@@ -403,7 +417,8 @@ public final class Builtins {
                 return Val.bool(Val.isFixnum(k) && Val.asFixnum(k) >= 0
                                 && Val.asFixnum(k) < Vec.count(rt, coll));
             }
-            throw new UnsupportedOperationException("contains? over " + rt.describe(coll) + " needs sets ported");
+            return rt.throwStr("UnsupportedOperationException",
+"contains? over " + rt.describe(coll) + " needs sets ported");
         });
         def("hash", (rt, at, n) -> Val.fixnum(Eq.hashValue(rt, rt.vat(at))));
 
@@ -442,11 +457,13 @@ public final class Builtins {
         def("flint/to-long", (rt, at, n) -> {
             long v = rt.vat(at);
             if (Num.isInt(rt, v)) return v;
-            if (!Val.isDouble(v)) throw new IllegalArgumentException("not a number: " + rt.describe(v));
+            if (!Val.isDouble(v)) return rt.throwStr("IllegalArgumentException",
+"not a number: " + rt.describe(v));
             double d = Val.asDouble(v);
             d = d < 0 ? Math.ceil(d) : Math.floor(d);
             if (!Double.isFinite(d) || d < -9.223372036854776e18 || d > 9.223372036854776e18) {
-                throw new IllegalArgumentException("value out of long range");
+                return rt.throwStr("IllegalArgumentException",
+"value out of long range");
             }
             return Num.integer(rt, (long) d);
         });
@@ -455,7 +472,8 @@ public final class Builtins {
         /// print a double bit-exactly rather than through a formatter.
         def("flint/double-bits", (rt, at, n) -> {
             long v = rt.vat(at);
-            if (!Val.isDouble(v)) throw new ClassCastException("not a double: " + rt.describe(v));
+            if (!Val.isDouble(v)) return rt.throwStr("ClassCastException",
+"not a double: " + rt.describe(v));
             return Num.integer(rt, Double.doubleToRawLongBits(Val.asDouble(v)));
         });
 
@@ -485,12 +503,14 @@ public final class Builtins {
                 rt.popTo(base);
                 return out;
             }
-            throw new ClassCastException("cannot deref " + rt.describe(v));
+            return rt.throwStr("ClassCastException",
+"cannot deref " + rt.describe(v));
         });
         def("reset!", (rt, at, n) -> {
             long a = rt.vat(at);
             if (!rt.isHeapTy(a, TY_ATOM) && !rt.isHeapTy(a, TY_VOLATILE)) {
-                throw new ClassCastException("not an atom: " + rt.describe(a));
+                return rt.throwStr("ClassCastException",
+"not an atom: " + rt.describe(a));
             }
             rt.setSlot(Val.asHeap(a), 0, rt.vat(at + 1));
             return rt.vat(at + 1);
@@ -498,7 +518,8 @@ public final class Builtins {
         def("compare-and-set!", (rt, at, n) -> {
             long a = rt.vat(at);
             if (!rt.isHeapTy(a, TY_ATOM) && !rt.isHeapTy(a, TY_VOLATILE)) {
-                throw new ClassCastException("not an atom: " + rt.describe(a));
+                return rt.throwStr("ClassCastException",
+"not an atom: " + rt.describe(a));
             }
             if (rt.slot(a, 0) != rt.vat(at + 1)) return Val.FALSE;
             rt.setSlot(Val.asHeap(a), 0, rt.vat(at + 2));
@@ -541,7 +562,8 @@ public final class Builtins {
             long v = rt.vat(at);
             if (rt.isHeapTy(v, TY_VEC)) {
                 int c = Vec.count(rt, v);
-                if (c == 0) throw new IllegalStateException("cannot pop an empty vector");
+                if (c == 0) return rt.throwStr("IllegalStateException",
+"cannot pop an empty vector");
                 int base = rt.mark();
                 int ai = rt.push(Vec.empty(rt));
                 int vi = rt.push(v);
@@ -552,7 +574,8 @@ public final class Builtins {
                 rt.popTo(base);
                 return out;
             }
-            if (Val.isNil(v)) throw new IllegalStateException("cannot pop nil");
+            if (Val.isNil(v)) return rt.throwStr("IllegalStateException",
+"cannot pop nil");
             return Seqs.rest(rt, v);
         });
         def("empty", (rt, at, n) -> {
@@ -571,7 +594,8 @@ public final class Builtins {
             int start = (int) Val.asFixnum(rt.vat(at + 1));
             int end = n > 2 ? (int) Val.asFixnum(rt.vat(at + 2)) : len;
             if (start < 0 || end > len || start > end) {
-                throw new IndexOutOfBoundsException("subs " + start + ".." + end + " of " + len);
+                return rt.throwStr("IndexOutOfBoundsException",
+"subs " + start + ".." + end + " of " + len);
             }
             // By CODE POINT, not by char: a Java `String` is UTF-16, so slicing
             // it by index would cut a surrogate pair in half.
@@ -615,14 +639,16 @@ public final class Builtins {
             String s = Str.text(rt, rt.vat(at));
             int i = (int) Val.asFixnum(rt.vat(at + 1));
             if (i < 0 || i >= s.codePointCount(0, s.length())) {
-                throw new IndexOutOfBoundsException("index " + i + " out of range");
+                return rt.throwStr("IndexOutOfBoundsException",
+"index " + i + " out of range");
             }
             return Val.fixnum(s.codePointAt(s.offsetByCodePoints(0, i)));
         });
         def("flint/from-code-point", (rt, at, n) -> {
             long c = Val.asFixnum(rt.vat(at));
             if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) {
-                throw new IllegalArgumentException("not a code point: " + c);
+                return rt.throwStr("IllegalArgumentException",
+"not a code point: " + c);
             }
             return Str.of(rt, new String(Character.toChars((int) c)));
         });
@@ -638,7 +664,8 @@ public final class Builtins {
         def("flint/bytes->str", (rt, at, n) -> {
             long v = rt.vat(at);
             if (!rt.isHeapTy(v, TY_VEC)) {
-                throw new ClassCastException("bytes->str wants a vector of bytes");
+                return rt.throwStr("ClassCastException",
+"bytes->str wants a vector of bytes");
             }
             int c = Vec.count(rt, v);
             byte[] b = new byte[c];
@@ -647,7 +674,8 @@ public final class Builtins {
         });
         def("flint/bits->double", (rt, at, n) -> {
             long v = rt.vat(at);
-            if (!Num.isInt(rt, v)) throw new ClassCastException("bits->double wants an integer");
+            if (!Num.isInt(rt, v)) return rt.throwStr("ClassCastException",
+"bits->double wants an integer");
             return Val.ofDouble(Double.longBitsToDouble(Num.asI64(rt, v)));
         });
 
@@ -708,19 +736,11 @@ public final class Builtins {
         // builtin that reads an id back, so an id is a thing the HOST wrote and
         // only the host can read. That is the whole surface, and it is what
         // lets a snapshot preserve identities without granting any.
-        def("flint/opaque", (rt, at, n) -> {
-            int base = rt.mark();
-            int li = rt.push(n > 0 ? rt.vat(at) : Val.NIL);
-            long a = rt.alloc(TY_OPAQUE, 2);
-            if (a == 0) { rt.popTo(base); return Val.NIL; }
-            rt.setSlot(a, 0, Val.fixnum(0));   // id 0: minted by the guest
-            rt.setSlot(a, 1, rt.r(li));
-            rt.popTo(base);
-            return Val.heap(a);
-        });
+        def("flint/opaque", (rt, at, n) ->
+            rt.newOpaque(n > 0 ? rt.vat(at) : Val.NIL, 0));   // host id 0: minted by the guest
         def("flint/capabilities", (rt, at, n) -> Val.fixnum(rt.restoredCapabilities));
-        def("flint/ex-kind", (rt, at, n) ->
-            rt.isHeapTy(rt.vat(at), TY_EXINFO) ? Str.keyword(rt, null, "ex-info") : Val.NIL);
+        def("flint/ex-kind", (rt, at, n) -> rt.exKind(rt.vat(at)));
+        def("flint/ex-matches?", (rt, at, n) -> rt.exMatches(rt.vat(at), rt.vat(at + 1)));
 
         /// `flint/array-map` takes ONE argument: a SEQUENCE of alternating keys
         /// and values. It is not varargs, and reading it as varargs is how a
@@ -751,7 +771,8 @@ public final class Builtins {
             }
             if (count % 2 != 0) {
                 rt.popTo(base);
-                throw new IllegalArgumentException("array-map needs an even number of forms");
+                return rt.throwStr("IllegalArgumentException",
+"array-map needs an even number of forms");
             }
             int pairs = count / 2;
             long a = rt.alloc(TY_ARRAYMAP, Maps.AM_BASE + 2 * pairs);
@@ -857,7 +878,8 @@ public final class Builtins {
         def("flint/thread-state", (rt, at, n) -> {
             long t = rt.vat(at);
             if (!Conc.isThread(rt, t)) {
-                throw new ClassCastException("thread-state wants a thread, got " + rt.describe(t));
+                return rt.throwStr("ClassCastException",
+"thread-state wants a thread, got " + rt.describe(t));
             }
             switch ((int) Val.asFixnum(rt.slot(t, Conc.TH_STATUS))) {
                 case Conc.ST_NEW: return Str.keyword(rt, null, "new");
@@ -883,40 +905,82 @@ public final class Builtins {
         def("flint/channel", (rt, at, n) -> {
             long cap = n > 0 ? rt.vat(at) : Val.NIL;
             long label = n > 1 ? rt.vat(at + 1) : Val.NIL;
-            long c = Val.isFixnum(cap) ? Val.asFixnum(cap) : 32;
-            if (c < 1) throw new IllegalArgumentException("a channel needs a buffer of at least 1");
+            long c = Val.isFixnum(cap) ? Val.asFixnum(cap) : Conc.DEFAULT_CAP;
+            if (c < 1) return rt.throwStr("IllegalArgumentException",
+                "a channel needs a buffer of at least 1");
             return Conc.channel(rt, c, label);
+        });
+        def("flint/open", (rt, at, n) -> {
+            long name = rt.vat(at);
+            long format = n > 1 ? rt.vat(at + 1) : Val.NIL;
+            if (!Str.isString(rt, name)) {
+                return rt.throwStr("ClassCastException",
+                    "open wants a capability name (a string)");
+            }
+            // A third argument is the CAPABILITY the caller presents (`0022`).
+            // The runtime records it and carries it to the host; it does not
+            // judge it, because only the host has a grant table.
+            long cap = n > 2 ? rt.vat(at + 2) : Val.NIL;
+            return Conc.portOpenWith(rt, name, format, cap);
         });
         def("flint/port-send", (rt, at, n) -> Conc.send(rt, rt.vat(at), rt.vat(at + 1)));
         def("flint/port-receive", (rt, at, n) -> Conc.receive(rt, rt.vat(at)));
         def("flint/port-close", (rt, at, n) -> Conc.close(rt, rt.vat(at)));
         def("flint/port?", (rt, at, n) -> Val.bool(Conc.isPort(rt, rt.vat(at))));
-        def("flint/port-id", (rt, at, n) -> rt.slot(rt.vat(at), Conc.PT_ID));
-        def("flint/port-label", (rt, at, n) -> rt.slot(rt.vat(at), Conc.PT_LABEL));
-        def("flint/port-format", (rt, at, n) -> rt.slot(rt.vat(at), Conc.PT_FORMAT));
+        def("flint/port-id", (rt, at, n) -> {
+            long p = rt.vat(at);
+            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-id wants a port");
+            return rt.slot(p, Conc.PT_ID);
+        });
+        def("flint/port-label", (rt, at, n) -> {
+            long p = rt.vat(at);
+            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-label wants a port");
+            return rt.slot(p, Conc.PT_LABEL);
+        });
+        def("flint/port-format", (rt, at, n) -> {
+            long p = rt.vat(at);
+            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-format wants a port");
+            return rt.slot(p, Conc.PT_FORMAT);
+        });
         def("flint/port-opts", (rt, at, n) -> {
-            long o = rt.slot(rt.vat(at), Conc.PT_OPTS);
-            return Val.isNil(o) ? Maps.empty(rt) : o;
+            long p = rt.vat(at);
+            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-opts wants a port");
+            return rt.slot(p, Conc.PT_OPTS);
         });
         def("flint/set-port-opts", (rt, at, n) -> {
-            rt.setSlot(Val.asHeap(rt.vat(at)), Conc.PT_OPTS, rt.vat(at + 1));
-            return rt.vat(at + 1);
+            long p = rt.vat(at), o = rt.vat(at + 1);
+            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "set-port-opts wants a port");
+            rt.setSlot(Val.asHeap(p), Conc.PT_OPTS, o);
+            return o;
         });
         def("flint/set-port-binary", (rt, at, n) -> {
-            rt.setSlot(Val.asHeap(rt.vat(at)), Conc.PT_BINARY, rt.vat(at + 1));
-            return rt.vat(at + 1);
+            long p = rt.vat(at), v = rt.vat(at + 1);
+            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "set-port-binary wants a port");
+            boolean on = !(Val.isNil(v) || v == Val.FALSE);
+            rt.setSlot(Val.asHeap(p), Conc.PT_BINARY, Val.fixnum(on ? 1 : 0));
+            return v;
         });
-        /// A CHANNEL end is never a host port. This runtime carries no host
-        /// ports yet, so the honest answer is false rather than a refusal --
-        /// asking is how library code decides whether to serialise.
-        def("flint/port-host?", (rt, at, n) ->
-            Val.bool(Val.asFixnum(rt.slot(rt.vat(at), Conc.PT_KIND)) != Conc.K_CHANNEL));
+        /// Any port whose messages CROSS A HEAP, which is what the name is
+        /// really asking: a host port and a global port both carry bytes and
+        /// both need a codec, and `flint.port/send` branches on exactly that.
+        def("flint/port-host?", (rt, at, n) -> {
+            long p = rt.vat(at);
+            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-host? wants a port");
+            return Val.bool(Conc.crossesAHeap(Val.asFixnum(rt.slot(p, Conc.PT_KIND))));
+        });
         def("flint/port-state", (rt, at, n) -> {
-            switch ((int) Val.asFixnum(rt.slot(rt.vat(at), Conc.PT_STATE))) {
+            long p = rt.vat(at);
+            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-state wants a port");
+            // THE QUERY IS THE TRUTH (`doc/decisions/0006`), so it resolves the
+            // peer rather than reporting a state that reaping has not caught up
+            // with yet.
+            switch ((int) Conc.portStateNow(rt, p)) {
+                case Conc.P_PENDING: return Str.keyword(rt, null, "pending");
                 case Conc.P_OPEN: return Str.keyword(rt, null, "open");
                 case Conc.P_CLOSED: return Str.keyword(rt, null, "closed");
-                case Conc.P_HALF: return Str.keyword(rt, null, "half");
-                default: return Str.keyword(rt, null, "orphaned");
+                case Conc.P_HALF: return Str.keyword(rt, null, "half-closed");
+                case Conc.P_ORPHANED: return Str.keyword(rt, null, "orphaned");
+                default: return Str.keyword(rt, null, "refused");
             }
         });
 
@@ -927,20 +991,13 @@ public final class Builtins {
             int mi = rt.push(rt.vat(at));
             int di = rt.push(n > 1 ? rt.vat(at + 1) : Val.NIL);
             int ci = rt.push(n > 2 ? rt.vat(at + 2) : Val.NIL);
-            long a = rt.alloc(TY_EXINFO, 3);
-            if (a == 0) { rt.popTo(base); return Val.NIL; }
-            rt.setSlot(a, 0, rt.r(mi));
-            rt.setSlot(a, 1, rt.r(di));
-            rt.setSlot(a, 2, rt.r(ci));
+            long k = Str.of(rt, "ExceptionInfo");
+            long out = Rt.exInfo(rt, k, rt.r(mi), rt.r(di), rt.r(ci));
             rt.popTo(base);
-            return Val.heap(a);
+            return out;
         });
-        def("ex-message", (rt, at, n) ->
-            rt.isHeapTy(rt.vat(at), TY_EXINFO) ? rt.slot(rt.vat(at), 0) : Val.NIL);
-        def("ex-data", (rt, at, n) ->
-            rt.isHeapTy(rt.vat(at), TY_EXINFO) ? rt.slot(rt.vat(at), 1) : Val.NIL);
-        def("ex-cause", (rt, at, n) ->
-            rt.isHeapTy(rt.vat(at), TY_EXINFO) ? rt.slot(rt.vat(at), 2) : Val.NIL);
+        def("ex-message", (rt, at, n) -> rt.exMessage(rt.vat(at)));
+        def("ex-data", (rt, at, n) -> rt.exData(rt.vat(at)));
 
         // `apply`: spread the trailing seq onto the argument list.
         //
@@ -1020,14 +1077,16 @@ public final class Builtins {
     /// refusal wrong.
     static long mathOne(Rt rt, long v, D1 f) {
         if (!Num.isNumber(rt, v)) {
-            throw new IllegalArgumentException("not a number: " + rt.describe(v));
+            return rt.throwStr("IllegalArgumentException",
+"not a number: " + rt.describe(v));
         }
         return Val.ofDouble(f.apply(Num.f64(rt, v)));
     }
 
     static long mathTwo(Rt rt, long a, long b, D2 f) {
         if (!Num.isNumber(rt, a) || !Num.isNumber(rt, b)) {
-            throw new IllegalArgumentException(
+            return rt.throwStr("IllegalArgumentException",
+
                 "not a number: " + rt.describe(a) + " and " + rt.describe(b));
         }
         return Val.ofDouble(f.apply(Num.f64(rt, a), Num.f64(rt, b)));

@@ -178,8 +178,12 @@ public static class Eq {
         if (ka && kb) return CmpNamed(rt, a, b);
         if (rt.IsHeapTy(a, Obj.TySym) && rt.IsHeapTy(b, Obj.TySym)) return CmpNamed(rt, a, b);
         if (rt.IsSequential(a) && rt.IsSequential(b)) return CmpSequential(rt, a, b);
-        throw new System.InvalidCastException(
+        // Sets `thrown` and answers 0, as the Rust does: `Compare` returns an
+        // int, so there is no failure value to hand back -- the pending throw
+        // is the answer, and the interpreter unwinds on the way out.
+        rt.ThrowStr("ClassCastException",
             "cannot compare " + rt.Describe(a) + " with " + rt.Describe(b));
+        return 0;
     }
 
     /// By UTF-16 CODE UNIT, as Java's `compareTo` is -- not by code point. The

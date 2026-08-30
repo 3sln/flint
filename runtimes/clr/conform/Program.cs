@@ -178,8 +178,9 @@ public static class Program {
     /// What was thrown, said in flint's terms rather than the host's.
     static string Why(Flint.Rt.Rt rt) {
         long t = rt.thrown;
-        if (rt.Describe(t) == "an ex-info" && Flint.Rt.Str.IsString(rt, rt.Slot(t, 0)))
-            return "the program threw: " + Flint.Rt.Str.Text(rt, rt.Slot(t, 0));
+        if (rt.IsException(t) && Flint.Rt.Str.IsString(rt, rt.ExMessage(t)))
+            return "the program threw " + Flint.Rt.Str.Text(rt, rt.ExKind(t))
+                 + ": " + Flint.Rt.Str.Text(rt, rt.ExMessage(t));
         return "the program threw " + rt.Describe(t);
     }
 

@@ -158,7 +158,7 @@ public static class Builtins {
             if (Vec.IsTransient(rt, v)) return Val.Fixnum(Vec.TCount(rt, v));
             if (Bytes.IsBytes(rt, v)) return Val.Fixnum(Bytes.Count(rt, v));
             if (rt.IsSeq(v)) return Val.Fixnum(Seqs.Count(rt, v));
-            throw new System.NotSupportedException("count over " + rt.Describe(v) + " needs more of the data structures");
+            return rt.ThrowStr("UnsupportedOperationException", "count over " + rt.Describe(v) + " needs more of the data structures");
         });
         Def("nth", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -182,12 +182,12 @@ public static class Builtins {
                 if (!Val.IsNil(rt.R(sq))) got = Seqs.First(rt, rt.R(sq));
                 rt.PopTo(bas);
             } else {
-                throw new System.NotSupportedException(
+                return rt.ThrowStr("UnsupportedOperationException", 
                     "nth over " + rt.Describe(v) + " needs more of the data structures");
             }
             if (got != Val.NotFound) return got;
             if (n > 2) return rt.VAt(at + 2);
-            throw new System.IndexOutOfRangeException("index " + i + " out of range");
+            return rt.ThrowStr("IndexOutOfBoundsException", "index " + i + " out of range");
         });
         Def("conj", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -221,7 +221,7 @@ public static class Builtins {
                 for (int i = 1; i < n; i++) acc = Seqs.Cons(rt, rt.VAt(at + i), acc);
                 return acc;
             }
-            throw new System.NotSupportedException("conj onto " + rt.Describe(v) + " needs more of the data structures");
+            return rt.ThrowStr("UnsupportedOperationException", "conj onto " + rt.Describe(v) + " needs more of the data structures");
         });
 
         Def("seq", (rt, at, n) => Seqs.Seq(rt, rt.VAt(at)));
@@ -239,25 +239,25 @@ public static class Builtins {
             if (rt.IsHeapTy(v, Obj.TyVec)) return Vec.TransientOf(rt, v);
             if (Maps.IsMap(rt, v)) return Maps.TransientOf(rt, v);
             if (Sets.IsSet(rt, v)) return Sets.TransientOf(rt, v);
-            throw new System.InvalidCastException(rt.Describe(v) + " is not transientable");
+            return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not transientable");
         });
         Def("persistent!", (rt, at, n) => {
             long v = rt.VAt(at);
             if (Vec.IsTransient(rt, v)) {
                 if (!Vec.Alive(rt, v))
-                    throw new System.InvalidOperationException("persistent! called twice on one transient");
+                    return rt.ThrowStr("IllegalStateException", "persistent! called twice on one transient");
                 return Vec.TPersistent(rt, v);
             }
             if (Maps.IsTransient(rt, v)) return Maps.TPersistent(rt, v);
             if (Sets.IsTransient(rt, v)) return Sets.TPersistent(rt, v);
             if (Bytes.IsTransient(rt, v)) return Bytes.Persistent(rt, v);
-            throw new System.InvalidCastException(rt.Describe(v) + " is not a transient");
+            return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not a transient");
         });
         Def("conj!", (rt, at, n) => {
             long v = rt.VAt(at);
             if (Vec.IsTransient(rt, v)) {
                 if (!Vec.Alive(rt, v))
-                    throw new System.InvalidOperationException("conj! on a transient already made persistent");
+                    return rt.ThrowStr("IllegalStateException", "conj! on a transient already made persistent");
                 long acc = v;
                 for (int i = 1; i < n; i++) acc = Vec.TConj(rt, acc, rt.VAt(at + i));
                 return acc;
@@ -276,13 +276,13 @@ public static class Builtins {
                 }
                 return acc;
             }
-            throw new System.InvalidCastException(rt.Describe(v) + " is not a transient");
+            return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not a transient");
         });
         Def("assoc!", (rt, at, n) => {
             long v = rt.VAt(at);
             if (Vec.IsTransient(rt, v)) {
                 if (!Vec.Alive(rt, v))
-                    throw new System.InvalidOperationException("assoc! on a transient already made persistent");
+                    return rt.ThrowStr("IllegalStateException", "assoc! on a transient already made persistent");
                 long acc = v;
                 for (int i = 1; i + 1 < n; i += 2) {
                     acc = Vec.TAssoc(rt, acc, (int) Val.AsFixnum(rt.VAt(at + i)), rt.VAt(at + i + 1));
@@ -294,7 +294,7 @@ public static class Builtins {
                 for (int i = 1; i + 1 < n; i += 2) acc = Maps.TAssoc(rt, acc, rt.VAt(at + i), rt.VAt(at + i + 1));
                 return acc;
             }
-            throw new System.InvalidCastException(rt.Describe(v) + " is not a transient");
+            return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not a transient");
         });
         Def("dissoc!", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -308,7 +308,7 @@ public static class Builtins {
                 for (int i = 1; i < n; i++) acc = Sets.TDisj(rt, acc, rt.VAt(at + i));
                 return acc;
             }
-            throw new System.InvalidCastException(rt.Describe(v) + " is not a transient");
+            return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not a transient");
         });
 
         // Maps.
@@ -332,7 +332,7 @@ public static class Builtins {
                 long got = Vec.Nth(rt, coll, (int) Val.AsFixnum(k));
                 return got == Val.NotFound ? dflt : got;
             }
-            throw new System.NotSupportedException("get over " + rt.Describe(coll) + " needs sets ported");
+            return rt.ThrowStr("UnsupportedOperationException", "get over " + rt.Describe(coll) + " needs sets ported");
         });
         Def("assoc", (rt, at, n) => {
             long acc = rt.VAt(at);
@@ -359,7 +359,7 @@ public static class Builtins {
                 rt.PopTo(bas);
                 return outv;
             }
-            throw new System.NotSupportedException("assoc onto " + rt.Describe(acc) + " needs more of the data structures");
+            return rt.ThrowStr("UnsupportedOperationException", "assoc onto " + rt.Describe(acc) + " needs more of the data structures");
         });
         Def("dissoc", (rt, at, n) => {
             long acc = rt.VAt(at);
@@ -396,7 +396,7 @@ public static class Builtins {
                 return Val.Bool(Val.IsFixnum(k) && Val.AsFixnum(k) >= 0
                                 && Val.AsFixnum(k) < Vec.Count(rt, coll));
             }
-            throw new System.NotSupportedException("contains? over " + rt.Describe(coll) + " needs sets ported");
+            return rt.ThrowStr("UnsupportedOperationException", "contains? over " + rt.Describe(coll) + " needs sets ported");
         });
         Def("hash", (rt, at, n) => Val.Fixnum(Flint.Rt.Eq.HashValue(rt, rt.VAt(at))));
 
@@ -433,10 +433,10 @@ public static class Builtins {
         Def("flint/to-long", (rt, at, n) => {
             long v = rt.VAt(at);
             if (Num.IsInt(rt, v)) return v;
-            if (!Val.IsDouble(v)) throw new System.ArgumentException("not a number: " + rt.Describe(v));
+            if (!Val.IsDouble(v)) return rt.ThrowStr("IllegalArgumentException", "not a number: " + rt.Describe(v));
             double d = System.Math.Truncate(Val.AsDouble(v));
             if (!double.IsFinite(d) || d < -9.223372036854776e18 || d > 9.223372036854776e18)
-                throw new System.ArgumentException("value out of long range");
+                return rt.ThrowStr("IllegalArgumentException", "value out of long range");
             return Num.Integer(rt, (long) d);
         });
 
@@ -466,19 +466,19 @@ public static class Builtins {
                 rt.PopTo(bas);
                 return outv;
             }
-            throw new System.InvalidCastException("cannot deref " + rt.Describe(v));
+            return rt.ThrowStr("ClassCastException", "cannot deref " + rt.Describe(v));
         });
         Def("reset!", (rt, at, n) => {
             long a = rt.VAt(at);
             if (!rt.IsHeapTy(a, Obj.TyAtom) && !rt.IsHeapTy(a, Obj.TyVolatile))
-                throw new System.InvalidCastException("not an atom: " + rt.Describe(a));
+                return rt.ThrowStr("ClassCastException", "not an atom: " + rt.Describe(a));
             rt.SetSlot(Val.AsHeap(a), 0, rt.VAt(at + 1));
             return rt.VAt(at + 1);
         });
         Def("compare-and-set!", (rt, at, n) => {
             long a = rt.VAt(at);
             if (!rt.IsHeapTy(a, Obj.TyAtom) && !rt.IsHeapTy(a, Obj.TyVolatile))
-                throw new System.InvalidCastException("not an atom: " + rt.Describe(a));
+                return rt.ThrowStr("ClassCastException", "not an atom: " + rt.Describe(a));
             if (rt.Slot(a, 0) != rt.VAt(at + 1)) return Val.False;
             rt.SetSlot(Val.AsHeap(a), 0, rt.VAt(at + 2));
             return Val.True;
@@ -520,7 +520,7 @@ public static class Builtins {
             long v = rt.VAt(at);
             if (rt.IsHeapTy(v, Obj.TyVec)) {
                 int c = Vec.Count(rt, v);
-                if (c == 0) throw new System.InvalidOperationException("cannot pop an empty vector");
+                if (c == 0) return rt.ThrowStr("IllegalStateException", "cannot pop an empty vector");
                 int bas = rt.Mark();
                 int ai = rt.Push(Vec.Empty(rt));
                 int vi = rt.Push(v);
@@ -530,7 +530,7 @@ public static class Builtins {
                 rt.PopTo(bas);
                 return outv;
             }
-            if (Val.IsNil(v)) throw new System.InvalidOperationException("cannot pop nil");
+            if (Val.IsNil(v)) return rt.ThrowStr("IllegalStateException", "cannot pop nil");
             return Seqs.Rest(rt, v);
         });
         Def("empty", (rt, at, n) => {
@@ -550,7 +550,7 @@ public static class Builtins {
             int start = (int) Val.AsFixnum(rt.VAt(at + 1));
             int end = n > 2 ? (int) Val.AsFixnum(rt.VAt(at + 2)) : len;
             if (start < 0 || end > len || start > end)
-                throw new System.IndexOutOfRangeException("subs " + start + ".." + end + " of " + len);
+                return rt.ThrowStr("IndexOutOfBoundsException", "subs " + start + ".." + end + " of " + len);
             // By CODE POINT, not by char: a .NET `string` is UTF-16, so slicing
             // it by index would cut a surrogate pair in half.
             int bs = OffsetByCodePoints(s, start), be = OffsetByCodePoints(s, end);
@@ -593,13 +593,13 @@ public static class Builtins {
             string s = Str.Text(rt, rt.VAt(at));
             int i = (int) Val.AsFixnum(rt.VAt(at + 1));
             if (i < 0 || i >= CodePointCount(s))
-                throw new System.IndexOutOfRangeException("index " + i + " out of range");
+                return rt.ThrowStr("IndexOutOfBoundsException", "index " + i + " out of range");
             return Val.Fixnum(char.ConvertToUtf32(s, OffsetByCodePoints(s, i)));
         });
         Def("flint/from-code-point", (rt, at, n) => {
             long c = Val.AsFixnum(rt.VAt(at));
             if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF))
-                throw new System.ArgumentException("not a code point: " + c);
+                return rt.ThrowStr("IllegalArgumentException", "not a code point: " + c);
             return Str.Of(rt, char.ConvertFromUtf32((int) c));
         });
         Def("flint/str-bytes", (rt, at, n) => {
@@ -614,7 +614,7 @@ public static class Builtins {
         Def("flint/bytes->str", (rt, at, n) => {
             long v = rt.VAt(at);
             if (!rt.IsHeapTy(v, Obj.TyVec))
-                throw new System.InvalidCastException("bytes->str wants a vector of bytes");
+                return rt.ThrowStr("ClassCastException", "bytes->str wants a vector of bytes");
             int c = Vec.Count(rt, v);
             byte[] b = new byte[c];
             for (int i = 0; i < c; i++) b[i] = (byte) Val.AsFixnum(Vec.Nth(rt, v, i));
@@ -622,7 +622,7 @@ public static class Builtins {
         });
         Def("flint/bits->double", (rt, at, n) => {
             long v = rt.VAt(at);
-            if (!Num.IsInt(rt, v)) throw new System.InvalidCastException("bits->double wants an integer");
+            if (!Num.IsInt(rt, v)) return rt.ThrowStr("ClassCastException", "bits->double wants an integer");
             return Val.OfDouble(System.BitConverter.Int64BitsToDouble(Num.AsI64(rt, v).Value));
         });
 
@@ -680,19 +680,11 @@ public static class Builtins {
         //
         // Guest code can mint one only with id 0 and no builtin reads an id
         // back, so an id is a thing the HOST wrote and only the host can read.
-        Def("flint/opaque", (rt, at, n) => {
-            int bas = rt.Mark();
-            int li = rt.Push(n > 0 ? rt.VAt(at) : Val.Nil);
-            long a = rt.Alloc(Obj.TyOpaque, 2);
-            if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-            rt.SetSlot(a, 0, Val.Fixnum(0));   // id 0: minted by the guest
-            rt.SetSlot(a, 1, rt.R(li));
-            rt.PopTo(bas);
-            return Val.Heap(a);
-        });
+        Def("flint/opaque", (rt, at, n) =>
+            rt.NewOpaque(n > 0 ? rt.VAt(at) : Val.Nil, 0));   // host id 0: minted by the guest
         Def("flint/capabilities", (rt, at, n) => Val.Fixnum(rt.restoredCapabilities));
-        Def("flint/ex-kind", (rt, at, n) =>
-            rt.IsHeapTy(rt.VAt(at), Obj.TyExinfo) ? Str.Keyword(rt, null, "ex-info") : Val.Nil);
+        Def("flint/ex-kind", (rt, at, n) => rt.ExKind(rt.VAt(at)));
+        Def("flint/ex-matches?", (rt, at, n) => rt.ExMatches(rt.VAt(at), rt.VAt(at + 1)));
 
         /// `flint/array-map` takes ONE argument: a SEQUENCE of alternating keys
         /// and values. It is not varargs, and reading it as varargs is how a
@@ -721,7 +713,7 @@ public static class Builtins {
             }
             if (count % 2 != 0) {
                 rt.PopTo(bas);
-                throw new System.ArgumentException("array-map needs an even number of forms");
+                return rt.ThrowStr("IllegalArgumentException", "array-map needs an even number of forms");
             }
             int pairs = count / 2;
             long a = rt.Alloc(Obj.TyArraymap, Maps.AM_BASE + 2 * pairs);
@@ -825,7 +817,7 @@ public static class Builtins {
         Def("flint/thread-state", (rt, at, n) => {
             long t = rt.VAt(at);
             if (!Conc.IsThread(rt, t))
-                throw new System.InvalidCastException("thread-state wants a thread, got " + rt.Describe(t));
+                return rt.ThrowStr("ClassCastException", "thread-state wants a thread, got " + rt.Describe(t));
             switch ((int) Val.AsFixnum(rt.Slot(t, Conc.TH_STATUS))) {
                 case Conc.ST_NEW: return Str.Keyword(rt, null, "new");
                 case Conc.ST_RUNNABLE: return Str.Keyword(rt, null, "runnable");
@@ -850,40 +842,82 @@ public static class Builtins {
         Def("flint/channel", (rt, at, n) => {
             long cap = n > 0 ? rt.VAt(at) : Val.Nil;
             long label = n > 1 ? rt.VAt(at + 1) : Val.Nil;
-            long c = Val.IsFixnum(cap) ? Val.AsFixnum(cap) : 32;
-            if (c < 1) throw new System.ArgumentException("a channel needs a buffer of at least 1");
+            long c = Val.IsFixnum(cap) ? Val.AsFixnum(cap) : Conc.DEFAULT_CAP;
+            if (c < 1) return rt.ThrowStr("IllegalArgumentException",
+                "a channel needs a buffer of at least 1");
             return Conc.Channel(rt, c, label);
+        });
+        Def("flint/open", (rt, at, n) => {
+            long name = rt.VAt(at);
+            long format = n > 1 ? rt.VAt(at + 1) : Val.Nil;
+            if (!Str.IsString(rt, name)) {
+                return rt.ThrowStr("ClassCastException",
+                    "open wants a capability name (a string)");
+            }
+            // A third argument is the CAPABILITY the caller presents (`0022`).
+            // The runtime records it and carries it to the host; it does not
+            // judge it, because only the host has a grant table.
+            long cap = n > 2 ? rt.VAt(at + 2) : Val.Nil;
+            return Conc.PortOpenWith(rt, name, format, cap);
         });
         Def("flint/port-send", (rt, at, n) => Conc.Send(rt, rt.VAt(at), rt.VAt(at + 1)));
         Def("flint/port-receive", (rt, at, n) => Conc.Receive(rt, rt.VAt(at)));
         Def("flint/port-close", (rt, at, n) => Conc.Close(rt, rt.VAt(at)));
         Def("flint/port?", (rt, at, n) => Val.Bool(Conc.IsPort(rt, rt.VAt(at))));
-        Def("flint/port-id", (rt, at, n) => rt.Slot(rt.VAt(at), Conc.PT_ID));
-        Def("flint/port-label", (rt, at, n) => rt.Slot(rt.VAt(at), Conc.PT_LABEL));
-        Def("flint/port-format", (rt, at, n) => rt.Slot(rt.VAt(at), Conc.PT_FORMAT));
+        Def("flint/port-id", (rt, at, n) => {
+            long p = rt.VAt(at);
+            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-id wants a port");
+            return rt.Slot(p, Conc.PT_ID);
+        });
+        Def("flint/port-label", (rt, at, n) => {
+            long p = rt.VAt(at);
+            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-label wants a port");
+            return rt.Slot(p, Conc.PT_LABEL);
+        });
+        Def("flint/port-format", (rt, at, n) => {
+            long p = rt.VAt(at);
+            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-format wants a port");
+            return rt.Slot(p, Conc.PT_FORMAT);
+        });
         Def("flint/port-opts", (rt, at, n) => {
-            long o = rt.Slot(rt.VAt(at), Conc.PT_OPTS);
-            return Val.IsNil(o) ? Maps.Empty(rt) : o;
+            long p = rt.VAt(at);
+            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-opts wants a port");
+            return rt.Slot(p, Conc.PT_OPTS);
         });
         Def("flint/set-port-opts", (rt, at, n) => {
-            rt.SetSlot(Val.AsHeap(rt.VAt(at)), Conc.PT_OPTS, rt.VAt(at + 1));
-            return rt.VAt(at + 1);
+            long p = rt.VAt(at), o = rt.VAt(at + 1);
+            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "set-port-opts wants a port");
+            rt.SetSlot(Val.AsHeap(p), Conc.PT_OPTS, o);
+            return o;
         });
         Def("flint/set-port-binary", (rt, at, n) => {
-            rt.SetSlot(Val.AsHeap(rt.VAt(at)), Conc.PT_BINARY, rt.VAt(at + 1));
-            return rt.VAt(at + 1);
+            long p = rt.VAt(at), v = rt.VAt(at + 1);
+            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "set-port-binary wants a port");
+            bool on = !(Val.IsNil(v) || v == Val.False);
+            rt.SetSlot(Val.AsHeap(p), Conc.PT_BINARY, Val.Fixnum(on ? 1 : 0));
+            return v;
         });
-        /// A CHANNEL end is never a host port. This runtime carries no host
-        /// ports yet, so the honest answer is false rather than a refusal --
-        /// asking is how library code decides whether to serialise.
-        Def("flint/port-host?", (rt, at, n) =>
-            Val.Bool(Val.AsFixnum(rt.Slot(rt.VAt(at), Conc.PT_KIND)) != Conc.K_CHANNEL));
+        /// Any port whose messages CROSS A HEAP, which is what the name is
+        /// really asking: a host port and a global port both carry bytes and
+        /// both need a codec, and `flint.port/send` branches on exactly that.
+        Def("flint/port-host?", (rt, at, n) => {
+            long p = rt.VAt(at);
+            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-host? wants a port");
+            return Val.Bool(Conc.CrossesAHeap(Val.AsFixnum(rt.Slot(p, Conc.PT_KIND))));
+        });
         Def("flint/port-state", (rt, at, n) => {
-            switch ((int) Val.AsFixnum(rt.Slot(rt.VAt(at), Conc.PT_STATE))) {
+            long p = rt.VAt(at);
+            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-state wants a port");
+            // THE QUERY IS THE TRUTH (`doc/decisions/0006`), so it resolves the
+            // peer rather than reporting a state that reaping has not caught up
+            // with yet.
+            switch ((int) Conc.PortStateNow(rt, p)) {
+                case Conc.P_PENDING: return Str.Keyword(rt, null, "pending");
                 case Conc.P_OPEN: return Str.Keyword(rt, null, "open");
                 case Conc.P_CLOSED: return Str.Keyword(rt, null, "closed");
-                case Conc.P_HALF: return Str.Keyword(rt, null, "half");
-                default: return Str.Keyword(rt, null, "orphaned");
+                case Conc.P_HALF: return Str.Keyword(rt, null, "half-closed");
+                case Conc.P_ORPHANED: return Str.Keyword(rt, null, "orphaned");
+                default: return Str.Keyword(rt, null, "refused");
             }
         });
 
@@ -891,7 +925,7 @@ public static class Builtins {
         /// print a double bit-exactly rather than through a formatter.
         Def("flint/double-bits", (rt, at, n) => {
             long v = rt.VAt(at);
-            if (!Val.IsDouble(v)) throw new System.InvalidCastException("not a double: " + rt.Describe(v));
+            if (!Val.IsDouble(v)) return rt.ThrowStr("ClassCastException", "not a double: " + rt.Describe(v));
             return Num.Integer(rt, System.BitConverter.DoubleToInt64Bits(Val.AsDouble(v)));
         });
 
@@ -902,20 +936,13 @@ public static class Builtins {
             int mi = rt.Push(rt.VAt(at));
             int di = rt.Push(n > 1 ? rt.VAt(at + 1) : Val.Nil);
             int ci = rt.Push(n > 2 ? rt.VAt(at + 2) : Val.Nil);
-            long a = rt.Alloc(Obj.TyExinfo, 3);
-            if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-            rt.SetSlot(a, 0, rt.R(mi));
-            rt.SetSlot(a, 1, rt.R(di));
-            rt.SetSlot(a, 2, rt.R(ci));
+            long k = Str.Of(rt, "ExceptionInfo");
+            long outv = Rt.ExInfo(rt, k, rt.R(mi), rt.R(di), rt.R(ci));
             rt.PopTo(bas);
-            return Val.Heap(a);
+            return outv;
         });
-        Def("ex-message", (rt, at, n) =>
-            rt.IsHeapTy(rt.VAt(at), Obj.TyExinfo) ? rt.Slot(rt.VAt(at), 0) : Val.Nil);
-        Def("ex-data", (rt, at, n) =>
-            rt.IsHeapTy(rt.VAt(at), Obj.TyExinfo) ? rt.Slot(rt.VAt(at), 1) : Val.Nil);
-        Def("ex-cause", (rt, at, n) =>
-            rt.IsHeapTy(rt.VAt(at), Obj.TyExinfo) ? rt.Slot(rt.VAt(at), 2) : Val.Nil);
+        Def("ex-message", (rt, at, n) => rt.ExMessage(rt.VAt(at)));
+        Def("ex-data", (rt, at, n) => rt.ExData(rt.VAt(at)));
 
         // `apply`: spread the trailing seq onto the argument list.
         //
@@ -1010,13 +1037,13 @@ public static class Builtins {
     /// refusal wrong.
     static long MathOne(Rt rt, long v, System.Func<double, double> f) {
         if (!Num.IsNumber(rt, v))
-            throw new System.ArgumentException("not a number: " + rt.Describe(v));
+            return rt.ThrowStr("IllegalArgumentException", "not a number: " + rt.Describe(v));
         return Val.OfDouble(f(Num.F64(rt, v)));
     }
 
     static long MathTwo(Rt rt, long a, long b, System.Func<double, double, double> f) {
         if (!Num.IsNumber(rt, a) || !Num.IsNumber(rt, b))
-            throw new System.ArgumentException(
+            return rt.ThrowStr("IllegalArgumentException", 
                 "not a number: " + rt.Describe(a) + " and " + rt.Describe(b));
         return Val.OfDouble(f(Num.F64(rt, a), Num.F64(rt, b)));
     }
