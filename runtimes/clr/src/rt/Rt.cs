@@ -213,6 +213,7 @@ public sealed class Rt : System.IDisposable {
 
             if (ip >= f.End) {   // fell off the end: an implicit return
                 long v = roots.StackTop > fp ? VPop() : Val.Nil;
+                while (handlers.Count > f.Handlers) handlers.RemoveAt(handlers.Count - 1);
                 frames.RemoveAt(frames.Count - 1);
                 roots.StackTop = f.RetTo;
                 VPush(v);
@@ -319,24 +320,62 @@ public sealed class Rt : System.IDisposable {
                     VPush(cv);
                 } break;
                 case Op.TailCall: {
+                    int opAt = ip - 1;
                     int argc = U8(ip); ip += 1;
                     f.Ip = ip;
                     int calleeAt = roots.StackTop - argc - 1;
                     long callee = roots.Stack[calleeAt];
-                    // Drop this frame FIRST: that is what makes a tail call
-                    // constant-space, and it is why mutual recursion between
-                    // three functions runs for ever here and overflowed on the
-                    // old port.
+                    if (IsHeapTy(callee, TyClosure)) {
+                        // Drop this frame FIRST: that is what makes a tail call
+                        // constant-space, and it is why mutual recursion between
+                        // three functions runs for ever here and overflowed on
+                        // the old port.
+                        frames.RemoveAt(frames.Count - 1);
+                        while (handlers.Count > f.Handlers) handlers.RemoveAt(handlers.Count - 1);
+                        int dest = f.RetTo;
+                        for (int i = 0; i <= argc; i++) roots.Stack[dest + i] = roots.Stack[calleeAt + i];
+                        roots.StackTop = dest + argc + 1;
+                        if (!Enter(callee, dest, argc)) return Val.Nil;
+                        continue;
+                    }
+                    // A tail call to something that is NOT a closure: a builtin
+                    // held in a var, a keyword, a collection. It completes in
+                    // place and then this frame returns its value.
+                    //
+                    // Entering it as a closure instead read `Slot(callee, 0)`
+                    // off whatever the value happened to be -- for a fixnum, an
+                    // address 2 TB into a 2 GB heap. The compiler is the first
+                    // program big enough to tail-call a builtin.
+                    long cv = CallValue(calleeAt, argc);
+                    if (Parked()) {
+                        thrown = Val.Nil;
+                        if (parkOn == Conc.PARK_YIELD) {
+                            roots.StackTop = calleeAt;
+                            VPush(cv);
+                        } else {
+                            f.Ip = opAt;
+                        }
+                        thrown = Val.Park;
+                        return Val.Nil;
+                    }
+                    roots.StackTop = calleeAt;
+                    VPush(cv);
+                    long tv = VPop();
                     frames.RemoveAt(frames.Count - 1);
-                    int dest = f.RetTo;
-                    for (int i = 0; i <= argc; i++) roots.Stack[dest + i] = roots.Stack[calleeAt + i];
-                    roots.StackTop = dest + argc + 1;
-                    if (!Enter(callee, dest, argc)) return Val.Nil;
+                    while (handlers.Count > f.Handlers) handlers.RemoveAt(handlers.Count - 1);
+                    roots.StackTop = f.RetTo;
+                    VPush(tv);
+                    if (frames.Count <= baseDepth) return VPop();
                     continue;
                 }
                 case Op.Return: {
                     long v = VPop();
                     frames.RemoveAt(frames.Count - 1);
+                    // Handlers installed by this frame go with it. A `try` that
+                    // returns from inside its body would otherwise leave its
+                    // handler on the stack, and the next throw anywhere would
+                    // unwind to a frame that had already returned.
+                    while (handlers.Count > f.Handlers) handlers.RemoveAt(handlers.Count - 1);
                     roots.StackTop = f.RetTo;
                     VPush(v);
                     if (frames.Count <= baseDepth) return VPop();

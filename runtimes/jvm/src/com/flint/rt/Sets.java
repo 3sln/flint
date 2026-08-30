@@ -129,6 +129,12 @@ public final class Sets {
 
     public static int tcount(Rt rt, long t) { return Maps.tcount(rt, rt.slot(t, TS_MAP)); }
 
+    /// `get` on a transient set, which answers the STORED element for the same
+    /// reason the persistent one does.
+    public static long tget(Rt rt, long t, long x, long notFound) {
+        return Maps.tget(rt, rt.slot(t, TS_MAP), x, notFound);
+    }
+
     public static long tpersistent(Rt rt, long t) {
         int base = rt.mark();
         int ti = rt.push(t);

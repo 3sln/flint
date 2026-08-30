@@ -213,6 +213,7 @@ public final class Rt {
 
             if (ip >= f.end) {   // fell off the end: an implicit return
                 long v = roots.stackTop > fp ? vpop() : Val.NIL;
+                while (handlers.size() > f.handlers) handlers.remove(handlers.size() - 1);
                 frames.remove(frames.size() - 1);
                 roots.stackTop = f.retTo;
                 vpush(v);
@@ -318,24 +319,62 @@ public final class Rt {
                     vpush(cv);
                 }
                 case Op.TAIL_CALL -> {
+                    int opAt = ip - 1;
                     int argc = u8(ip); ip += 1;
                     f.ip = ip;
                     int calleeAt = roots.stackTop - argc - 1;
                     long callee = roots.stack[calleeAt];
-                    // Drop this frame FIRST: that is what makes a tail call
-                    // constant-space, and it is why mutual recursion between
-                    // three functions runs for ever here and overflowed on the
-                    // old port.
+                    if (isHeapTy(callee, TY_CLOSURE)) {
+                        // Drop this frame FIRST: that is what makes a tail call
+                        // constant-space, and it is why mutual recursion between
+                        // three functions runs for ever here and overflowed on
+                        // the old port.
+                        frames.remove(frames.size() - 1);
+                        while (handlers.size() > f.handlers) handlers.remove(handlers.size() - 1);
+                        int dest = f.retTo;
+                        for (int i = 0; i <= argc; i++) roots.stack[dest + i] = roots.stack[calleeAt + i];
+                        roots.stackTop = dest + argc + 1;
+                        if (!enter(callee, dest, argc)) return Val.NIL;
+                        continue;
+                    }
+                    // A tail call to something that is NOT a closure: a builtin
+                    // held in a var, a keyword, a collection. It completes in
+                    // place and then this frame returns its value.
+                    //
+                    // Entering it as a closure instead read `slot(callee, 0)`
+                    // off whatever the value happened to be -- for a fixnum,
+                    // an address 2 TB into a 2 GB heap. The compiler is the
+                    // first program big enough to tail-call a builtin.
+                    long cv = callValue(calleeAt, argc);
+                    if (parked()) {
+                        thrown = Val.NIL;
+                        if (parkOn == Conc.PARK_YIELD) {
+                            roots.stackTop = calleeAt;
+                            vpush(cv);
+                        } else {
+                            f.ip = opAt;
+                        }
+                        thrown = Val.PARK;
+                        return Val.NIL;
+                    }
+                    roots.stackTop = calleeAt;
+                    vpush(cv);
+                    long tv = vpop();
                     frames.remove(frames.size() - 1);
-                    int dest = f.retTo;
-                    for (int i = 0; i <= argc; i++) roots.stack[dest + i] = roots.stack[calleeAt + i];
-                    roots.stackTop = dest + argc + 1;
-                    if (!enter(callee, dest, argc)) return Val.NIL;
+                    while (handlers.size() > f.handlers) handlers.remove(handlers.size() - 1);
+                    roots.stackTop = f.retTo;
+                    vpush(tv);
+                    if (frames.size() <= baseDepth) return vpop();
                     continue;
                 }
                 case Op.RETURN -> {
                     long v = vpop();
                     frames.remove(frames.size() - 1);
+                    // Handlers installed by this frame go with it. A `try` that
+                    // returns from inside its body would otherwise leave its
+                    // handler on the stack, and the next throw anywhere would
+                    // unwind to a frame that had already returned.
+                    while (handlers.size() > f.handlers) handlers.remove(handlers.size() - 1);
                     roots.stackTop = f.retTo;
                     vpush(v);
                     if (frames.size() <= baseDepth) return vpop();

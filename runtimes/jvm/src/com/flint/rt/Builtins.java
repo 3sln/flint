@@ -319,6 +319,7 @@ public final class Builtins {
             if (Maps.isMap(rt, coll)) return Maps.get(rt, coll, rt.vat(at + 1), dflt);
             if (Sets.isSet(rt, coll)) return Sets.get(rt, coll, rt.vat(at + 1), dflt);
             if (Maps.isTransient(rt, coll)) return Maps.tget(rt, coll, rt.vat(at + 1), dflt);
+            if (Sets.isTransient(rt, coll)) return Sets.tget(rt, coll, rt.vat(at + 1), dflt);
             if (Vec.isTransient(rt, coll)) {
                 long k = rt.vat(at + 1);
                 if (!Val.isFixnum(k)) return dflt;
@@ -378,6 +379,18 @@ public final class Builtins {
             if (Val.isNil(coll)) return Val.FALSE;
             if (Maps.isMap(rt, coll)) return Val.bool(Maps.contains(rt, coll, rt.vat(at + 1)));
             if (Sets.isSet(rt, coll)) return Val.bool(Sets.contains(rt, coll, rt.vat(at + 1)));
+            // The TRANSIENT forms too. A transient is a handle on the same
+            // trie, so every reader that works on the persistent value works on
+            // it -- and the library reaches for exactly that while building.
+            if (Maps.isTransient(rt, coll))
+                return Val.bool(Maps.tget(rt, coll, rt.vat(at + 1), Val.NOT_FOUND) != Val.NOT_FOUND);
+            if (Sets.isTransient(rt, coll))
+                return Val.bool(Sets.tget(rt, coll, rt.vat(at + 1), Val.NOT_FOUND) != Val.NOT_FOUND);
+            if (Vec.isTransient(rt, coll)) {
+                long k = rt.vat(at + 1);
+                return Val.bool(Val.isFixnum(k) && Val.asFixnum(k) >= 0
+                                && Val.asFixnum(k) < Vec.tcount(rt, coll));
+            }
             if (rt.isHeapTy(coll, TY_VEC)) {
                 long k = rt.vat(at + 1);
                 return Val.bool(Val.isFixnum(k) && Val.asFixnum(k) >= 0

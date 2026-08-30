@@ -312,6 +312,7 @@ public static class Builtins {
             if (Maps.IsMap(rt, coll)) return Maps.Get(rt, coll, rt.VAt(at + 1), dflt);
             if (Sets.IsSet(rt, coll)) return Sets.Get(rt, coll, rt.VAt(at + 1), dflt);
             if (Maps.IsTransient(rt, coll)) return Maps.TGet(rt, coll, rt.VAt(at + 1), dflt);
+            if (Sets.IsTransient(rt, coll)) return Sets.TGet(rt, coll, rt.VAt(at + 1), dflt);
             if (Vec.IsTransient(rt, coll)) {
                 long k2 = rt.VAt(at + 1);
                 if (!Val.IsFixnum(k2)) return dflt;
@@ -371,6 +372,18 @@ public static class Builtins {
             if (Val.IsNil(coll)) return Val.False;
             if (Maps.IsMap(rt, coll)) return Val.Bool(Maps.Contains(rt, coll, rt.VAt(at + 1)));
             if (Sets.IsSet(rt, coll)) return Val.Bool(Sets.Contains(rt, coll, rt.VAt(at + 1)));
+            // The TRANSIENT forms too. A transient is a handle on the same
+            // trie, so every reader that works on the persistent value works on
+            // it -- and the library reaches for exactly that while building.
+            if (Maps.IsTransient(rt, coll))
+                return Val.Bool(Maps.TGet(rt, coll, rt.VAt(at + 1), Val.NotFound) != Val.NotFound);
+            if (Sets.IsTransient(rt, coll))
+                return Val.Bool(Sets.TGet(rt, coll, rt.VAt(at + 1), Val.NotFound) != Val.NotFound);
+            if (Vec.IsTransient(rt, coll)) {
+                long k3 = rt.VAt(at + 1);
+                return Val.Bool(Val.IsFixnum(k3) && Val.AsFixnum(k3) >= 0
+                                && Val.AsFixnum(k3) < Vec.TCount(rt, coll));
+            }
             if (rt.IsHeapTy(coll, Obj.TyVec)) {
                 long k = rt.VAt(at + 1);
                 return Val.Bool(Val.IsFixnum(k) && Val.AsFixnum(k) >= 0

@@ -126,6 +126,11 @@ public static class Sets {
 
     public static int TCount(Rt rt, long t) => Maps.TCount(rt, rt.Slot(t, TS_MAP));
 
+    /// `get` on a transient set, which answers the STORED element for the same
+    /// reason the persistent one does.
+    public static long TGet(Rt rt, long t, long x, long notFound) =>
+        Maps.TGet(rt, rt.Slot(t, TS_MAP), x, notFound);
+
     public static long TPersistent(Rt rt, long t) {
         int bas = rt.Mark();
         int ti = rt.Push(t);
