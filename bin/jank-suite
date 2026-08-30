@@ -57,7 +57,13 @@ run_one() {
     echo "(ns jt)"
     cat "$file"
     echo ""
-    echo "(defn main [_] :ok)"
+    # A STRING, not a keyword. `RtImage` prints a fixnum, a string or nil and
+    # renders anything else as hex -- so a keyword marker never matched, every
+    # test looked like a failure, and the suite reported 0/195 passing and
+    # 99/99 refusing. That shape is the tell: a perfect score on the half that
+    # expects rejection is not a runtime that refuses everything, it is a
+    # harness that recognises nothing.
+    echo "(defn main [_] \"jank-ok\")"
   } > "$src"
 
   local out status
@@ -75,7 +81,7 @@ run_one() {
         out="$(cap "$CLR" --rt-image "$WORK/t.img" 2>&1)"; status=$?
       fi
       # The ported harnesses report by LINE rather than by exit status.
-      case "$out" in *"main -> :ok"*) status=0 ;; *) status=1 ;; esac ;;
+      case "$out" in *"main -> jank-ok"*) status=0 ;; *) status=1 ;; esac ;;
   esac
 
   # 142 is SIGALRM from `cap`: the test did not finish inside the limit.
