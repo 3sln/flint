@@ -128,8 +128,10 @@ public final class Builtins {
             return Val.NIL;
         });
 
-        def("flint/str2", (rt, at, n) ->
-            Str.of(rt, Str.text(rt, rt.vat(at)) + Str.text(rt, rt.vat(at + 1))));
+        // A ROPE join, not a copy. `str` in a loop is what `doc/decisions/0011`
+        // exists for: copying makes it quadratic, and the compiler builds its
+        // whole output this way.
+        def("flint/str2", (rt, at, n) -> Str.concat(rt, rt.vat(at), rt.vat(at + 1)));
         def("flint/num->str", (rt, at, n) -> {
             long v = rt.vat(at);
             return Str.of(rt, Num.isInt(rt, v) ? Long.toString(Num.asI64(rt, v))

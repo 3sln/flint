@@ -26,7 +26,10 @@ public final class Str {
     private Str() {}
 
     public static boolean isString(Rt rt, long v) {
-        return Val.isInlineStr(v) || (Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR);
+        if (Val.isInlineStr(v)) return true;
+        if (!Val.isHeap(v)) return false;
+        int t = ty(rt.gc.sp, Val.asHeap(v));
+        return t == TY_STR || t == TY_ROPE;
     }
 
     /// A bare, UNINTERNED heap string. `of` is the canonical constructor.
@@ -102,6 +105,11 @@ public final class Str {
 
     public static byte[] bytes(Rt rt, long v) {
         if (Val.isInlineStr(v)) return Val.inlineBytes(v);
+        if (isRope(rt, v)) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(sBytes(rt, v));
+            appendBytes(rt, v, out);
+            return out.toByteArray();
+        }
         long a = Val.asHeap(v);
         return rt.gc.sp.bytes(a + STR_DATA, len(rt.gc.sp, a));
     }
@@ -202,6 +210,7 @@ public final class Str {
             for (byte x : Val.inlineBytes(v)) if ((x & 0x80) != 0) return false;
             return true;
         }
+        if (isRope(rt, v)) return (Val.asFixnum(rt.slot(v, RP_CPS)) & 1) != 0;
         return strIsAscii(rt.gc.sp, Val.asHeap(v));
     }
 
@@ -235,8 +244,140 @@ public final class Str {
         return Val.NOT_FOUND;
     }
 
-    /// Byte length. NOT the code-point count -- see the class comment.
-    public static int byteLen(Rt rt, long v) {
-        return Val.isInlineStr(v) ? Val.inlineLen(v) : len(rt.gc.sp, Val.asHeap(v));
+    // --- ropes (`doc/decisions/0011`) ---------------------------------------
+    //
+    // The THIRD tier: a shallow tree of string pieces, so `str` of two large
+    // strings is a tree join rather than a copy. A node carries its subtree's
+    // byte length, its CODE-POINT COUNT and an ASCII bit, all summed from its
+    // children -- so `count` on a rope is O(1) and does not walk.
+    //
+    // Packing the count and the ASCII bit into ONE slot is the Rust's, and it
+    // is not thrift: a slot is a NaN-boxed value, and two of them would make
+    // every node 8 bytes bigger for one bit.
+
+    public static final int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_KIDS = 3;
+    public static final int FLAT_MAX = 1024, FANOUT = 16;
+
+    public static boolean isRope(Rt rt, long v) {
+        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_ROPE;
     }
+
+    /// Byte length of any string, ALL THREE TIERS, O(1).
+    public static int sBytes(Rt rt, long v) {
+        if (Val.isInlineStr(v)) return Val.inlineLen(v);
+        if (isRope(rt, v)) return (int) Val.asFixnum(rt.slot(v, RP_BYTES));
+        return len(rt.gc.sp, Val.asHeap(v));
+    }
+
+    /// Code-point count of any string, all three tiers, O(1).
+    public static int sCount(Rt rt, long v) {
+        if (isRope(rt, v)) return (int) (Val.asFixnum(rt.slot(v, RP_CPS)) >> 1);
+        return charLen(rt, v);
+    }
+
+    /// Is every byte below 0x80? All three tiers, O(1).
+    public static boolean sAscii(Rt rt, long v) {
+        if (isRope(rt, v)) return (Val.asFixnum(rt.slot(v, RP_CPS)) & 1) != 0;
+        return isAscii(rt, v);
+    }
+
+    static int ropeKids(Rt rt, long v) { return len(rt.gc.sp, Val.asHeap(v)) - RP_KIDS; }
+
+    /// A node over `kids`, whose aggregates are SUMMED from them rather than
+    /// derived from their bytes. That is what makes `count` O(1) on a tree.
+    static long ropeNode(Rt rt, long[] kids) {
+        int bytes = 0, cps = 0;
+        boolean ascii = true;
+        for (long k : kids) {
+            bytes += sBytes(rt, k);
+            cps += sCount(rt, k);
+            ascii &= sAscii(rt, k);
+        }
+        int base = rt.mark();
+        for (long k : kids) rt.push(k);
+        long a = rt.alloc(TY_ROPE, RP_KIDS + kids.length);
+        if (a == 0) { rt.popTo(base); return Val.NIL; }
+        rt.setSlot(a, RP_BYTES, Val.fixnum(bytes));
+        rt.setSlot(a, RP_CPS, Val.fixnum(((long) cps << 1) | (ascii ? 1 : 0)));
+        rt.setSlot(a, RP_FLAT, Val.NIL);
+        for (int i = 0; i < kids.length; i++) rt.setSlot(a, RP_KIDS + i, rt.r(base + i));
+        rt.popTo(base);
+        return Val.heap(a);
+    }
+
+    /// `str` of two strings. O(1) once the pieces are big enough to matter.
+    public static long concat(Rt rt, long a, long b) {
+        if (sBytes(rt, a) == 0) return b;
+        if (sBytes(rt, b) == 0) return a;
+        if (sBytes(rt, a) + sBytes(rt, b) <= FLAT_MAX) {
+            // Small enough that a tree would cost more than the copy. This is
+            // the tier that must not be skipped.
+            return copyConcat(rt, a, b);
+        }
+        // Append into the RIGHT SPINE while there is room, so a thousand small
+        // appends do not become a thousand nodes.
+        if (isRope(rt, a) && ropeKids(rt, a) < FANOUT) {
+            int n = ropeKids(rt, a);
+            int base = rt.mark();
+            int ai = rt.push(a);
+            for (int i = 0; i < n; i++) rt.push(rt.slot(rt.r(ai), RP_KIDS + i));
+            rt.push(b);
+            long[] kids = new long[n + 1];
+            for (int i = 0; i <= n; i++) kids[i] = rt.r(base + 1 + i);
+            long outv = ropeNode(rt, kids);
+            rt.popTo(base);
+            return outv;
+        }
+        int base = rt.mark();
+        int ai = rt.push(a), bi = rt.push(b);
+        long outv = ropeNode(rt, new long[]{ rt.r(ai), rt.r(bi) });
+        rt.popTo(base);
+        return outv;
+    }
+
+    static long copyConcat(Rt rt, long a, long b) {
+        byte[] x = bytes(rt, a), y = bytes(rt, b);
+        byte[] both = new byte[x.length + y.length];
+        System.arraycopy(x, 0, both, 0, x.length);
+        System.arraycopy(y, 0, both, x.length, y.length);
+        return of(rt, new String(both, StandardCharsets.UTF_8));
+    }
+
+    /// Walk the leaves in order, appending their bytes.
+    static void appendBytes(Rt rt, long v, java.io.ByteArrayOutputStream out) {
+        if (Val.isInlineStr(v)) { out.writeBytes(Val.inlineBytes(v)); return; }
+        if (!Val.isHeap(v)) return;
+        int t = ty(rt.gc.sp, Val.asHeap(v));
+        if (t == TY_STR) {
+            out.writeBytes(rt.gc.sp.bytes(Val.asHeap(v) + STR_DATA, len(rt.gc.sp, Val.asHeap(v))));
+        } else if (t == TY_ROPE) {
+            long cached = rt.slot(v, RP_FLAT);
+            if (!Val.isNil(cached)) { appendBytes(rt, cached, out); return; }
+            int n = ropeKids(rt, v);
+            for (int i = 0; i < n; i++) appendBytes(rt, rt.slot(v, RP_KIDS + i), out);
+        }
+    }
+
+    /// Contiguous bytes for a string of any tier. Identity for inline and flat;
+    /// materialises a rope ONCE and remembers it. `0011`: count the flattens,
+    /// do not hope about them -- a rope that flattens on every `index-of`
+    /// passes every correctness test and is slower than the flat string it
+    /// replaced.
+    public static long flatten(Rt rt, long v) {
+        if (!isRope(rt, v)) return v;
+        long cached = rt.slot(v, RP_FLAT);
+        if (!Val.isNil(cached)) return cached;
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(sBytes(rt, v));
+        int base = rt.mark();
+        int vi = rt.push(v);
+        appendBytes(rt, rt.r(vi), out);
+        long flat = of(rt, new String(out.toByteArray(), StandardCharsets.UTF_8));
+        long vv = rt.r(vi);
+        rt.popTo(base);
+        if (Val.isHeap(vv) && !Val.isNil(flat)) rt.setSlot(Val.asHeap(vv), RP_FLAT, flat);
+        return flat;
+    }
+
+    /// Byte length. NOT the code-point count -- see the class comment.
+    public static int byteLen(Rt rt, long v) { return sBytes(rt, v); }
 }
