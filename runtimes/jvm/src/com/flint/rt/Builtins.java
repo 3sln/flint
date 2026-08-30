@@ -584,6 +584,87 @@ public final class Builtins {
             return Val.ofDouble(Double.longBitsToDouble(Num.asI64(rt, v)));
         });
 
+        // --- green threads and ports ------------------------------------------
+        //
+        // Every one of these calls `ensureSched` first. The scheduler is built
+        // on first use rather than at startup, so a program that never mentions
+        // `spawn` never has one -- and the interpreter runs a loop with no slice
+        // counter in it at all.
+        def("flint/spawn", (rt, at, n) -> Conc.spawn(rt, rt.vat(at)));
+        def("flint/yield", (rt, at, n) -> {
+            Conc.ensureSched(rt);
+            return Conc.park(rt, Conc.PARK_YIELD);
+        });
+        def("flint/self", (rt, at, n) -> { Conc.ensureSched(rt); return Conc.currentThread(rt); });
+        def("flint/thread?", (rt, at, n) -> Val.bool(Conc.isThread(rt, rt.vat(at))));
+        def("flint/thread-id", (rt, at, n) -> rt.slot(rt.vat(at), Conc.TH_ID));
+        def("flint/thread-result", (rt, at, n) -> rt.slot(rt.vat(at), Conc.TH_RESULT));
+        def("flint/thread-state", (rt, at, n) -> {
+            long t = rt.vat(at);
+            if (!Conc.isThread(rt, t)) {
+                throw new ClassCastException("thread-state wants a thread, got " + rt.describe(t));
+            }
+            switch ((int) Val.asFixnum(rt.slot(t, Conc.TH_STATUS))) {
+                case Conc.ST_NEW: return Str.keyword(rt, null, "new");
+                case Conc.ST_RUNNABLE: return Str.keyword(rt, null, "runnable");
+                case Conc.ST_PARKED: return Str.keyword(rt, null, "parked");
+                case Conc.ST_DONE: return Str.keyword(rt, null, "done");
+                default: return Str.keyword(rt, null, "failed");
+            }
+        });
+        def("flint/thread-join", (rt, at, n) -> {
+            Conc.ensureSched(rt);
+            return Conc.join(rt, rt.vat(at));
+        });
+        def("flint/bindings", (rt, at, n) -> {
+            long b = rt.roots.singletons[Rt.SING_BINDINGS];
+            return Val.isNil(b) ? Maps.empty(rt) : b;
+        });
+        def("flint/set-bindings", (rt, at, n) -> {
+            rt.roots.singletons[Rt.SING_BINDINGS] = rt.vat(at);
+            return rt.vat(at);
+        });
+
+        def("flint/channel", (rt, at, n) -> {
+            long cap = n > 0 ? rt.vat(at) : Val.NIL;
+            long label = n > 1 ? rt.vat(at + 1) : Val.NIL;
+            long c = Val.isFixnum(cap) ? Val.asFixnum(cap) : 32;
+            if (c < 1) throw new IllegalArgumentException("a channel needs a buffer of at least 1");
+            return Conc.channel(rt, c, label);
+        });
+        def("flint/port-send", (rt, at, n) -> Conc.send(rt, rt.vat(at), rt.vat(at + 1)));
+        def("flint/port-receive", (rt, at, n) -> Conc.receive(rt, rt.vat(at)));
+        def("flint/port-close", (rt, at, n) -> Conc.close(rt, rt.vat(at)));
+        def("flint/port?", (rt, at, n) -> Val.bool(Conc.isPort(rt, rt.vat(at))));
+        def("flint/port-id", (rt, at, n) -> rt.slot(rt.vat(at), Conc.PT_ID));
+        def("flint/port-label", (rt, at, n) -> rt.slot(rt.vat(at), Conc.PT_LABEL));
+        def("flint/port-format", (rt, at, n) -> rt.slot(rt.vat(at), Conc.PT_FORMAT));
+        def("flint/port-opts", (rt, at, n) -> {
+            long o = rt.slot(rt.vat(at), Conc.PT_OPTS);
+            return Val.isNil(o) ? Maps.empty(rt) : o;
+        });
+        def("flint/set-port-opts", (rt, at, n) -> {
+            rt.setSlot(Val.asHeap(rt.vat(at)), Conc.PT_OPTS, rt.vat(at + 1));
+            return rt.vat(at + 1);
+        });
+        def("flint/set-port-binary", (rt, at, n) -> {
+            rt.setSlot(Val.asHeap(rt.vat(at)), Conc.PT_BINARY, rt.vat(at + 1));
+            return rt.vat(at + 1);
+        });
+        /// A CHANNEL end is never a host port. This runtime carries no host
+        /// ports yet, so the honest answer is false rather than a refusal --
+        /// asking is how library code decides whether to serialise.
+        def("flint/port-host?", (rt, at, n) ->
+            Val.bool(Val.asFixnum(rt.slot(rt.vat(at), Conc.PT_KIND)) != Conc.K_CHANNEL));
+        def("flint/port-state", (rt, at, n) -> {
+            switch ((int) Val.asFixnum(rt.slot(rt.vat(at), Conc.PT_STATE))) {
+                case Conc.P_OPEN: return Str.keyword(rt, null, "open");
+                case Conc.P_CLOSED: return Str.keyword(rt, null, "closed");
+                case Conc.P_HALF: return Str.keyword(rt, null, "half");
+                default: return Str.keyword(rt, null, "orphaned");
+            }
+        });
+
         // Exceptions. `ex-info` is `[msg, data, cause]`, and `throw` is an
         // OPCODE rather than a builtin -- these are what a handler reads.
         def("ex-info", (rt, at, n) -> {

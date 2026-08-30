@@ -29,7 +29,7 @@ public class RtImage {
     for (int fn : img.init) rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
     long f = rt.makeClosure(img.entry, new long[0]);
     try {
-      long v = rt.call(f, new long[]{ Val.NIL });
+      long v = rt.runProgram(f, new long[]{ Val.NIL });
       String shown = Val.isFixnum(v) ? String.valueOf(Val.asFixnum(v))
                    : Str.isString(rt, v) ? Str.text(rt, v)
                    : Val.isNil(v) ? "nil"

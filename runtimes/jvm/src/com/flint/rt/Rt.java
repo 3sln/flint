@@ -42,6 +42,16 @@ public final class Rt {
 
     public long steps;
 
+    /// True once a scheduler exists. `run` compares `steps` against
+    /// `checkpoint` once per instruction; 0 there means nothing is counting, so
+    /// a program that never spawns runs a loop with no counter in it at all.
+    public boolean schedInstalled;
+
+    public void setSliceEnd(long at) {
+        sliceEnd = at;
+        checkpoint = at;
+    }
+
     /// The rest of the interpreter's state, all of it snapshot-visible.
     ///
     /// These are here rather than spread across the classes that use them for
@@ -210,6 +220,28 @@ public final class Rt {
                 continue;
             }
 
+            // The slice check, BEFORE the opcode is read.
+            //
+            // The saved `ip` must point AT the next instruction, not past its
+            // first byte. Checking after `ip += 1` resumed on the OPERANDS --
+            // `(+ 1 <operand-read-as-opcode>)` -- and the first symptom was
+            // "not a number: an integer and nil" from a builtin whose second
+            // argument had never been pushed.
+            //
+            // One comparison against a precomputed value, and only when
+            // something is counting: `checkpoint` is 0 in a program with no
+            // scheduler, so that loop has no counter in it at all.
+            if (checkpoint != 0 && steps >= checkpoint) {
+                f.ip = ip;
+                checkpoint = 0;
+                // A COURTESY yield, not a park: the thread stays runnable and
+                // must NOT rewind. Preemption is what keeps a thread with no
+                // `yield` in it from starving the others.
+                parkOn = Conc.PARK_YIELD;
+                thrown = Val.PARK;
+                return Val.NIL;
+            }
+
             int opcode = u8(ip);
             ip += 1;
             steps++;
@@ -269,6 +301,19 @@ public final class Rt {
                     // Everything else completes IN PLACE: a builtin held in a
                     // var, a keyword used as a function, a collection looked up.
                     long cv = callValue(calleeAt, argc);
+                    if (parked()) {
+                        // Same rewind as NATIVE: the callee and its arguments
+                        // are still on the stack, so re-executing finds them.
+                        thrown = Val.NIL;
+                        if (parkOn == Conc.PARK_YIELD) {
+                            roots.stackTop = calleeAt;
+                            vpush(Val.NIL);
+                        } else {
+                            f.ip = ip - 2;   // back onto the CALL and its argc
+                        }
+                        thrown = Val.PARK;
+                        return Val.NIL;
+                    }
                     roots.stackTop = calleeAt;
                     vpush(cv);
                 }
@@ -382,6 +427,7 @@ public final class Rt {
                     roots.stack[roots.stackTop - 1] = Val.bool(typeP(c, roots.stack[roots.stackTop - 1]));
                 }
                 case Op.NATIVE -> {
+                    int opAt = ip - 1;
                     int idx = u16(ip); int argc = u8(ip + 2); ip += 3;
                     f.ip = ip;
                     int at = roots.stackTop - argc;
@@ -391,6 +437,27 @@ public final class Rt {
                             "this runtime does not carry the builtin `" + nativeNames[idx] + "`");
                     }
                     long v = fn.apply(this, at, argc);
+                    if (parked()) {
+                        // A PARKING builtin. Rewind to the instruction and
+                        // leave the operands where they are: resuming
+                        // RE-EXECUTES the call, which is why such a builtin must
+                        // decide to park before it changes anything.
+                        //
+                        // Except a courtesy yield, which is finished: rewinding
+                        // there would re-execute `yield`, which yields again,
+                        // for ever, and the scheduler reports no progress.
+                        thrown = Val.NIL;
+                        if (parkOn == Conc.PARK_YIELD) {
+                            roots.stackTop = at;
+                            vpush(Val.NIL);
+                            thrown = Val.PARK;
+                            return Val.NIL;
+                        }
+                        f.ip = opAt;
+                        roots.stackTop = at + argc;
+                        thrown = Val.PARK;
+                        return Val.NIL;
+                    }
                     roots.stackTop = at;
                     vpush(v);
                 }
@@ -545,6 +612,12 @@ public final class Rt {
         return isSeq(v) || isHeapTy(v, TY_VEC) || isHeapTy(v, TY_MAPENTRY);
     }
 
+    /// True when a park is in flight. A park is NOT an error: it unwinds the
+    /// interpreter the same way, but `settle` reads `parkOn` rather than
+    /// `thrown`, and every caller between here and the scheduler must pass it
+    /// through untouched rather than treating it as a failure.
+    public boolean parked() { return thrown == Val.PARK; }
+
     /// Find the innermost handler that can take `thrown`, or false if nothing
     /// can and the whole call must fail.
     ///
@@ -581,8 +654,25 @@ public final class Rt {
         vpush(f);
         for (long a : args) vpush(a);
         long v = callValue(save, args.length);
-        roots.stackTop = save;
+        if (!parked()) roots.stackTop = save;
         return v;
+    }
+
+    /// Run `closure` as the program's ENTRY, under the scheduler if one ever
+    /// appears.
+    ///
+    /// The scheduler is not installed until something spawns, so this starts as
+    /// a plain call. When the entry parks or its slice runs out, `thrown` is
+    /// the PARK sentinel and the answer is not ready -- that is when the
+    /// scheduler takes over, and from then on the loop in `Conc.drive` decides
+    /// what runs. A program with no concurrency in it never reaches the second
+    /// branch at all.
+    public long runProgram(long closure, long[] args) {
+        long v = call(closure, args);
+        if (!parked() && !schedInstalled) return v;
+        thrown = Val.NIL;
+        if (!schedInstalled) return v;
+        return Conc.scheduler(this, v);
     }
 
     /// Call `closure` with `args` from outside the interpreter.
@@ -595,7 +685,12 @@ public final class Rt {
         int depth = frames.size();
         if (!enter(closure, calleeAt, args.length)) { roots.stackTop = save; return Val.NIL; }
         long v = run(depth);
-        roots.stackTop = save;
+        // NOT on a park. `run` returns early with the value stack holding the
+        // parked thread's continuation, and truncating it here would throw that
+        // away -- the thread would come back with a stack the scheduler had
+        // already cut off underneath it. The first symptom was a builtin
+        // reading argument -1.
+        if (!parked()) roots.stackTop = save;
         return v;
     }
 }
