@@ -82,8 +82,26 @@ interpreter agrees with itself. `entries=0` is a failure.
 
 Regex is SLOWER, and that is not a defect to hide: it is dominated by natives,
 where compiled code removes no dispatch and adds a crossing. `doc/decisions/0013`
-predicts exactly that. Declining to compile native-bound arities is the obvious
-next move, and it is tuning rather than a gap in the port.
+predicts exactly that.
+
+### Tuning, left for later
+
+The port is the port; none of this is a gap in it, and all of it is measurable
+against the gate as it stands.
+
+* **Decline native-bound arities.** The `regex` number above is the whole
+  argument: an arity whose instructions are mostly `NATIVE` has no dispatch to
+  remove, so compiling it buys a crossing per call and nothing else. The
+  histogram needed to decide is already computed -- `AotPlan` knows every
+  instruction's opcode before anything is emitted.
+* **The `need` analysis.** The wasm emitter reloads only what a body actually
+  reads; both ports reload unconditionally after every crossing. `0013` records
+  measuring that on a four-instruction callee and finding it pure overhead.
+* **Nested compiled calls.** `aot_call_at` runs a compiled callee on the host
+  stack to `AOT_MAX_DEPTH`; the ports carry the mechanism but nothing has
+  measured what the cap should be here.
+* **Specialisation and unboxed locals**, which `0013` lists as the remaining
+  wins for wasm and which apply unchanged to a host that has real registers.
 
 ## What the cutover removed
 
