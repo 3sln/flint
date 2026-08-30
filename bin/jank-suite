@@ -27,8 +27,20 @@ JANK="${1:?usage: bin/jank-suite <jank-checkout> [native|jvm|clr]}"
 RUNTIME="${2:-native}"
 TESTS="$JANK/compiler+runtime/test/jank"
 [ -d "$TESTS" ] || { echo "no test/jank under $JANK"; exit 1; }
+if [ "$RUNTIME" = jvm ] && [ ! -x "$JDK/bin/java" ]; then
+  echo "no JDK at $JDK; set FLINT_JDK"; exit 1
+fi
+if [ "$RUNTIME" = clr ] && [ ! -x "$CLR" ]; then
+  echo "no CLR conform binary at $CLR; build it first"; exit 1
+fi
 
-JDK="${JAVA_HOME:-/opt/homebrew/opt/openjdk}"
+# The same fallback chain `bin/conform-hosts` has, and for the reason this run
+# discovered: JAVA_HOME can point at a directory with no `bin/java` in it, and
+# then every test fails to RUN and the suite reports them as failures of the
+# runtime. A missing JDK must be refused by name, not counted.
+JDK="${FLINT_JDK:-${JAVA_HOME:-/opt/homebrew/opt/openjdk}}"
+[ -x "$JDK/bin/java" ] || JDK=/opt/homebrew/opt/openjdk
+[ -x "$JDK/bin/java" ] || JDK=/opt/homebrew/opt/openjdk@21
 export DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}"
 CLR=runtimes/clr/conform/bin/Release/net10.0/Conform
 
@@ -80,8 +92,12 @@ run_one() {
       else
         out="$(cap "$CLR" --rt-image "$WORK/t.img" 2>&1)"; status=$?
       fi
-      # The ported harnesses report by LINE rather than by exit status.
-      case "$out" in *"main -> jank-ok"*) status=0 ;; *) status=1 ;; esac ;;
+      # The ported harnesses report by LINE rather than by exit status -- but
+      # NOT when the clock ran out: 142 has to survive to the check below, or a
+      # timeout is indistinguishable from a rejection.
+      if [ "$status" -ne 142 ]; then
+        case "$out" in *"main -> jank-ok"*) status=0 ;; *) status=1 ;; esac
+      fi ;;
   esac
 
   # 142 is SIGALRM from `cap`: the test did not finish inside the limit.
