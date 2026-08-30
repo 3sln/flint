@@ -172,7 +172,13 @@
                  :args [(const-node q) {:op :var :sym q}]})
             {:op :var :sym q}))
       (err (str "unable to resolve symbol: " sym)
-           {:sym sym :ns (current-ns env) :line (:line (meta sym))})))))
+           ;; The SYMBOL's own position, which it has carried since the reader
+           ;; started giving one to every meta-able form rather than only to
+           ;; sequences. Before that this key was written and always nil, so the
+           ;; error fell back to the enclosing `defn`'s line -- where the
+           ;; function starts, not where the mistake is.
+           {:sym sym :ns (current-ns env)
+            :line (:line (meta sym)) :column (:column (meta sym))})))))
 
 (defn bootstrap-key [sym]
   (cond

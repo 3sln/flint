@@ -206,17 +206,33 @@
 
 ;; --------------------------------------------------------------- collections
 
-(defn- read-delimited [st closer]
+(defn- read-delimited
+  "The elements up to `closer`, and WHERE EACH ONE STARTED.
+
+  The positions go into `:child-pos` on the reader state, as a flat
+  `[line col line col ...]`, and the caller picks them up immediately -- see
+  `with-pos`. They exist because numbers, strings and keywords cannot carry
+  metadata, here or in Clojure, so a literal has nowhere to record its own
+  position. Its PARENT can record it instead, which is the difference between
+  `(expect string? 42)` being able to point at the 42 and not.
+
+  A nested read clobbers the key, so the caller must read it back before doing
+  anything else -- which is why this is a stash rather than a return value: the
+  three call sites want the elements, and only two want the positions."
+  [st closer]
   (next-ch! st)
-  (loop [acc []]
+  (loop [acc [] poss []]
     (skip-ws! st)
-    (let [c (peek-ch st)]
+    (let [c (peek-ch st)
+          cl (:line @st) cc (:col @st)]
       (cond
         (nil? c) (err st (str "unterminated, expecting " closer))
-        (= c closer) (do (next-ch! st) acc)
+        (= c closer) (do (next-ch! st)
+                         (vswap! st assoc :child-pos poss)
+                         acc)
         :else (let [v (read-form* st)]
                 (cond
-                  (eof? v) (recur acc)
+                  (eof? v) (recur acc poss)
                   ;; `#?@(:cljs [a b])` splices its elements into the
                   ;; surrounding collection; that is the whole difference from
                   ;; `#?`, and it was not happening ANYWHERE. A matched splice
@@ -229,9 +245,15 @@
                   ;;
                   ;; This is how a library conditionally adds a `:require`, so
                   ;; it is on the path of most real `.cljc`.
-                  (identical? v SPLICE-NONE) (recur acc)
-                  (spliced? v) (recur (into acc (nth v 1)))
-                  :else (recur (conj acc v))))))))
+                  (identical? v SPLICE-NONE) (recur acc poss)
+                  ;; Every spliced element gets the SPLICE's position: they were
+                  ;; all written at `#?@`, and claiming otherwise would point a
+                  ;; caret at source that is not there.
+                  (spliced? v)
+                  (let [xs (nth v 1)]
+                    (recur (into acc xs)
+                           (into poss (mapcat (fn [_] [cl cc]) xs))))
+                  :else (recur (conj acc v) (conj poss cl cc))))))))
 
 ;; ------------------------------------------------------------- syntax quote
 
@@ -508,10 +530,32 @@
                   (symbol (subs tok 0 i) (subs tok (inc i)))))
               (symbol tok)))))))
 
-(defn- with-pos [st line col v]
-  (if (meta-able? v)
-    (with-meta v (merge (meta v) {:line line :column col :file (:file @st)}))
-    v))
+(defn- with-pos
+  "Attach `line`/`col`/`file`, and the CHILDREN's positions when the form has
+  them.
+
+  `:child-pos` is a flat `[line col line col ...]`, one pair per element, and it
+  is what lets a caret point at a literal: numbers, strings and keywords cannot
+  carry metadata -- here or in Clojure -- so the only place their position can
+  live is the collection they are in."
+  ([st line col v] (with-pos st line col v nil))
+  ([st line col v children]
+   (if (meta-able? v)
+     ;; A POSITION ALREADY THERE WINS.
+     ;;
+     ;; `#?(:flint/check (expect string? 42))` returns the inner list, and the
+     ;; conditional's own `read-form*` then stamps it -- so the form ended up
+     ;; claiming the column of the `#?` and carrying the CONDITIONAL's children
+     ;; rather than its own. Every check failure inside a reader conditional
+     ;; pointed at the `#?` and could not find its arguments.
+     ;;
+     ;; The rule is simply that a form which already knows where it is does not
+     ;; get relabelled by whatever it came out of. It was invisible while only
+     ;; sequences carried a position and nothing read `:child-pos`.
+     (with-meta v (merge {:line line :column col :file (:file @st)}
+                         (when (seq children) {:child-pos children})
+                         (meta v)))
+     v)))
 
 (defn- read-form* [st]
   (skip-ws! st)
@@ -520,8 +564,10 @@
     (if (nil? c)
       EOF
       (let [v (cond
-                (= c "(") (with-pos st line col (apply list (read-delimited st ")")))
-                (= c "[") (read-delimited st "]")
+                (= c "(") (let [xs (read-delimited st ")")]
+                            (with-pos st line col (apply list xs) (:child-pos @st)))
+                (= c "[") (let [xs (read-delimited st "]")]
+                            (with-pos st line col xs (:child-pos @st)))
                 ;; An ORDERED map: the compiler's own map literals have side
                 ;; effects in their values (each one analyses a sub-form), so
                 ;; source order has to survive the reader on every host.
@@ -550,8 +596,20 @@
                                 (list 'clojure.core/unquote (read-form* st))))
                 (= c "#") (read-dispatch st)
                 :else (read-symbolic st))]
-        (if (and (seq? v) (not (eof? v)))
-          (with-pos st line col v)
+        ;; EVERY meta-able form, not just sequences.
+        ;;
+        ;; It used to be `(seq? v)`, so a symbol had no position -- and the
+        ;; analyser already asks for one: `{:sym sym :line (:line (meta sym))}`
+        ;; was reaching for a key that was never written, so every "unable to
+        ;; resolve symbol" reported a nil line. It is also what a caret needs:
+        ;; `(expect string? x)` can only point at `x` if `x` knows its column.
+        ;;
+        ;; The cost is that a symbol carrying metadata is no longer the
+        ;; INTERNED one -- `with-meta` copies. Symbols compare by name, so
+        ;; nothing about equality changes; what changes is compile-time
+        ;; allocation, which is why this is measured rather than assumed.
+        (if (and (meta-able? v) (not (eof? v)))
+          (with-pos st line col v (:child-pos (when (seq? v) @st)))
           v)))))
 
 (defn read-form

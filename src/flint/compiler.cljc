@@ -419,11 +419,24 @@
         (catch Throwable e
           ;; Say WHERE. A bare "unable to resolve symbol" halfway through
           ;; clojure.core is close to useless without the enclosing form.
-          (throw (ex-info (str (ex-message e)
-                               "\n  in " nsname
-                               (when-let [n (first (def-form-names f))] (str "/" n))
-                               (when-let [l (:line (meta f))] (str " (line " l ")")))
-                          (merge (ex-data e) {:ns nsname :form-name (first (def-form-names f))})))))))))
+          ;;
+          ;; The OFFENDING form's line when the thrower recorded one, and the
+          ;; enclosing def's only as a fallback. Those differ by however long
+          ;; the function is, and the enclosing one sends you to the `defn`
+          ;; line to look for a symbol thirty lines below it. The analyser has
+          ;; always attached `:line` from the symbol's own metadata -- it was
+          ;; nil until the reader started giving symbols a position, so this
+          ;; read as "the definition" for want of anything better.
+          (let [d (ex-data e)
+                line (or (:line d) (:line (meta f)))
+                col (:column d)]
+            (throw (ex-info (str (ex-message e)
+                                 "\n  in " nsname
+                                 (when-let [n (first (def-form-names f))] (str "/" n))
+                                 (when line (str " (line " line
+                                                 (when col (str ":" col)) ")")))
+                            (merge d {:ns nsname
+                                      :form-name (first (def-form-names f))}))))))))))
 
 ;; ------------------------------------------------------------------ pass 3
 

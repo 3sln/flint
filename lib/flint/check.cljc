@@ -160,14 +160,26 @@
   and none is read back at run time."
   [pred & args]
   (let [fm (meta &form)
+        ;; `:child-pos` is `[line col line col ...]`, one pair per element of
+        ;; the form -- so element 0 is `expect` itself, 1 is the predicate and
+        ;; 2 is the first argument.
+        ;;
+        ;; It exists because a NUMBER cannot carry metadata, here or in
+        ;; Clojure, so `(expect string? 42)` has nowhere on the 42 to record
+        ;; where the 42 is. The collection records it instead, which is the
+        ;; difference between pointing at the offending value and not.
+        cp (:child-pos fm)
+        col-of (fn [i v]
+                 (or (:column (meta v))
+                     (when (and cp (> (count cp) (inc (* 2 i)))) (nth cp (inc (* 2 i))))))
         site {:file (:file fm)
               :line (:line fm)
               :column (:column fm)
               :in (str (:ns &env))
               :pred-src (pr-str pred)
               :arg-src (flint.rt/str-join (vec (interpose " " (map pr-str args))))
-              :pred-col (:column (meta pred))
-              :arg-col (:column (meta (first args)))}]
+              :pred-col (col-of 1 pred)
+              :arg-col (col-of 2 (first args))}]
     (list 'clojure.core/let ['p# pred 'a# (vec args)]
           (list 'if (list 'flint.check/check 'p# 'a#)
                 (list 'clojure.core/first 'a#)
