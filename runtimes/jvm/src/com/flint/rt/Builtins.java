@@ -678,6 +678,47 @@ public final class Builtins {
         def("flint/unchecked-mul", (rt, at, n) ->
             Num.integer(rt, Val.asFixnum(rt.vat(at)) * Val.asFixnum(rt.vat(at + 1))));
 
+        // --- byte strings (`doc/decisions/0024`) ------------------------------
+        //
+        // Not a vector of integers: a flint vector holds NaN-boxed 64-bit
+        // values, so a byte would cost eight bytes plus trie overhead. A byte
+        // string holds a byte in a byte.
+        def("flint/b-count", (rt, at, n) -> Val.fixnum(Bytes.count(rt, rt.vat(at))));
+        def("flint/b-at", (rt, at, n) -> {
+            int b = Bytes.at(rt, rt.vat(at), (int) Val.asFixnum(rt.vat(at + 1)));
+            return b < 0 ? Val.NIL : Val.fixnum(b);
+        });
+        def("flint/b-concat", (rt, at, n) -> Bytes.concat(rt, rt.vat(at), rt.vat(at + 1)));
+        def("flint/b-slice", (rt, at, n) -> Bytes.slice(rt, rt.vat(at),
+            (int) Val.asFixnum(rt.vat(at + 1)),
+            n > 2 ? (int) Val.asFixnum(rt.vat(at + 2)) : Bytes.count(rt, rt.vat(at))));
+        def("flint/b-depth", (rt, at, n) -> Val.fixnum(Bytes.depth(rt, rt.vat(at))));
+        def("flint/str->b", (rt, at, n) -> Bytes.of(rt, Str.bytes(rt, rt.vat(at))));
+        def("flint/b->str", (rt, at, n) -> Str.of(rt,
+            new String(Bytes.toArray(rt, rt.vat(at)), java.nio.charset.StandardCharsets.UTF_8)));
+        def("flint/vec->b", (rt, at, n) -> {
+            long v = rt.vat(at);
+            int c = Vec.count(rt, v);
+            byte[] b = new byte[c];
+            for (int i = 0; i < c; i++) b[i] = (byte) Val.asFixnum(Vec.nth(rt, v, i));
+            return Bytes.of(rt, b);
+        });
+        def("flint/b->vec", (rt, at, n) -> {
+            byte[] b = Bytes.toArray(rt, rt.vat(at));
+            int base = rt.mark();
+            int vi = rt.push(Vec.empty(rt));
+            for (byte x : b) rt.setR(vi, Vec.conj(rt, rt.r(vi), Val.fixnum(x & 0xFF)));
+            long out = rt.r(vi);
+            rt.popTo(base);
+            return out;
+        });
+        def("flint/b-transient", (rt, at, n) -> Bytes.transientOf(rt, rt.vat(at)));
+        def("flint/b-conj!", (rt, at, n) ->
+            Bytes.conj(rt, rt.vat(at), (int) Val.asFixnum(rt.vat(at + 1))));
+        def("flint/b-append!", (rt, at, n) -> Bytes.appendBytes(rt, rt.vat(at), rt.vat(at + 1)));
+        def("flint/b-tcount", (rt, at, n) -> Val.fixnum(Bytes.tcount(rt, rt.vat(at))));
+        def("flint/b-persistent!", (rt, at, n) -> Bytes.persistent(rt, rt.vat(at)));
+
         // --- regex ------------------------------------------------------------
         //
         // The PATTERN is compiled to a program by flint's own library, in
