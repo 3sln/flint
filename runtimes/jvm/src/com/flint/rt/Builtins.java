@@ -584,6 +584,100 @@ public final class Builtins {
             return Val.ofDouble(Double.longBitsToDouble(Num.asI64(rt, v)));
         });
 
+        // --- the type predicates ----------------------------------------------
+        //
+        // Every one goes through `typeP`, whose numbers are the CONTRACT
+        // between the compiler and every runtime. Answering them here
+        // independently would be a second table to keep in step with the
+        // first, and a port that renumbered one would compile and answer
+        // wrongly.
+        def("string?", (rt, at, n) -> Val.bool(rt.typeP(4, rt.vat(at))));
+        def("keyword?", (rt, at, n) -> Val.bool(rt.typeP(5, rt.vat(at))));
+        def("symbol?", (rt, at, n) -> Val.bool(rt.typeP(6, rt.vat(at))));
+        def("boolean?", (rt, at, n) -> Val.bool(rt.typeP(7, rt.vat(at))));
+        def("vector?", (rt, at, n) -> Val.bool(rt.typeP(8, rt.vat(at))));
+        def("map?", (rt, at, n) -> Val.bool(rt.typeP(9, rt.vat(at))));
+        def("set?", (rt, at, n) -> Val.bool(rt.typeP(10, rt.vat(at))));
+        def("seq?", (rt, at, n) -> Val.bool(rt.typeP(11, rt.vat(at))));
+        def("fn?", (rt, at, n) -> Val.bool(rt.typeP(12, rt.vat(at))));
+        def("sequential?", (rt, at, n) -> Val.bool(rt.isSequential(rt.vat(at))));
+        def("bytes?", (rt, at, n) -> Val.bool(rt.isHeapTy(rt.vat(at), TY_BYTES)
+                                              || rt.isHeapTy(rt.vat(at), TY_BROPE)));
+        def("flint/map-entry?", (rt, at, n) -> Val.bool(rt.isHeapTy(rt.vat(at), TY_MAPENTRY)));
+        def("flint/volatile?", (rt, at, n) -> Val.bool(rt.isHeapTy(rt.vat(at), TY_VOLATILE)));
+        def("flint/delay?", (rt, at, n) -> Val.bool(rt.isHeapTy(rt.vat(at), TY_DELAY)));
+
+        def("compare", (rt, at, n) -> Val.fixnum(Eq.compare(rt, rt.vat(at), rt.vat(at + 1))));
+
+        // --- metadata ---------------------------------------------------------
+        def("with-meta", (rt, at, n) -> {
+            long v = rt.vat(at);
+            int idx = rt.metaSlot(v);
+            if (idx < 0) return v;   // nothing carries metadata: hand it back
+            int base = rt.mark();
+            int vi = rt.push(v), mi = rt.push(rt.vat(at + 1));
+            int t = ty(rt.gc.sp, Val.asHeap(rt.r(vi)));
+            int ln = len(rt.gc.sp, Val.asHeap(rt.r(vi)));
+            long a = rt.alloc(t, ln);
+            if (a == 0) { rt.popTo(base); return Val.NIL; }
+            for (int i = 0; i < ln; i++) rt.setSlot(a, i, rt.slot(rt.r(vi), i));
+            rt.setSlot(a, idx, rt.r(mi));
+            rt.popTo(base);
+            return Val.heap(a);
+        });
+
+        // --- delays -----------------------------------------------------------
+        def("flint/delay", (rt, at, n) -> newCell(rt, TY_DELAY, rt.vat(at)));
+        def("flint/realized?", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (rt.isHeapTy(v, TY_DELAY)) return Val.bool(Val.isNil(rt.slot(v, 0)));
+            if (rt.isHeapTy(v, TY_LAZYSEQ)) return Val.bool(Val.isNil(rt.slot(v, Seqs.LS_THUNK)));
+            return Val.TRUE;
+        });
+
+        // --- opaque values (`doc/decisions/0022`) -----------------------------
+        //
+        // Guest code can mint one only with id 0 and there is deliberately no
+        // builtin that reads an id back, so an id is a thing the HOST wrote and
+        // only the host can read. That is the whole surface, and it is what
+        // lets a snapshot preserve identities without granting any.
+        def("flint/opaque", (rt, at, n) -> {
+            int base = rt.mark();
+            int li = rt.push(n > 0 ? rt.vat(at) : Val.NIL);
+            long a = rt.alloc(TY_OPAQUE, 2);
+            if (a == 0) { rt.popTo(base); return Val.NIL; }
+            rt.setSlot(a, 0, Val.fixnum(0));   // id 0: minted by the guest
+            rt.setSlot(a, 1, rt.r(li));
+            rt.popTo(base);
+            return Val.heap(a);
+        });
+        def("flint/capabilities", (rt, at, n) -> Val.fixnum(rt.restoredCapabilities));
+        def("flint/ex-kind", (rt, at, n) ->
+            rt.isHeapTy(rt.vat(at), TY_EXINFO) ? Str.keyword(rt, null, "ex-info") : Val.NIL);
+
+        def("flint/array-map", (rt, at, n) -> {
+            int base = rt.mark();
+            int mi = rt.push(Maps.empty(rt));
+            for (int i = 0; i + 1 < n; i += 2) {
+                rt.setR(mi, Maps.assoc(rt, rt.r(mi), rt.vat(at + i), rt.vat(at + i + 1)));
+            }
+            long out = rt.r(mi);
+            rt.popTo(base);
+            return out;
+        });
+
+        // --- unchecked arithmetic ---------------------------------------------
+        //
+        // WRAPS rather than throwing, which is the whole point of asking for
+        // it: `hash` and the bit-mixing in `map.rs` rely on wrapping, and the
+        // checked forms would refuse the very operations those are made of.
+        def("flint/unchecked-add", (rt, at, n) ->
+            Num.integer(rt, Val.asFixnum(rt.vat(at)) + Val.asFixnum(rt.vat(at + 1))));
+        def("flint/unchecked-sub", (rt, at, n) ->
+            Num.integer(rt, Val.asFixnum(rt.vat(at)) - Val.asFixnum(rt.vat(at + 1))));
+        def("flint/unchecked-mul", (rt, at, n) ->
+            Num.integer(rt, Val.asFixnum(rt.vat(at)) * Val.asFixnum(rt.vat(at + 1))));
+
         // --- regex ------------------------------------------------------------
         //
         // The PATTERN is compiled to a program by flint's own library, in

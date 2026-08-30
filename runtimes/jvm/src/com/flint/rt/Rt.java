@@ -528,7 +528,7 @@ public final class Rt {
     /// contract between the compiler and every runtime, so they are written out
     /// rather than derived: a port that renumbered one of these would compile
     /// and answer wrongly.
-    boolean typeP(int code, long v) {
+    public boolean typeP(int code, long v) {
         return switch (code) {
             // `isInt`, NOT `isFixnum`. A big integer is an integer, and the
             // library's printer dispatches on this: with `isFixnum` here the
@@ -595,6 +595,24 @@ public final class Rt {
         };
     }
 
+    /// Which slot holds this object's metadata, or -1. Metadata is not part
+    /// of equality, so `with-meta` copies and the copy is still `=`.
+    public int metaSlot(long v) {
+        if (!Val.isHeap(v)) return -1;
+        switch (ty(gc.sp, Val.asHeap(v))) {
+            case TY_SYM: return 2;
+            case TY_VEC: return Vec.V_META;
+            case TY_ARRAYMAP: return Maps.AM_META;
+            case TY_HASHMAP: return Maps.HM_META;
+            case TY_SET: return Sets.S_META;
+            case TY_CONS: return Seqs.C_META;
+            case TY_EMPTY_LIST: return 0;
+            case TY_LAZYSEQ: return 2;
+            case TY_ATOM: return 1;
+            default: return -1;
+        }
+    }
+
     boolean isHeapTy(long v, int t) {
         return Val.isHeap(v) && ty(gc.sp, Val.asHeap(v)) == t;
     }
@@ -608,7 +626,7 @@ public final class Rt {
 
     /// Sequential, which is WIDER than `isSeq`: a vector and a map entry are
     /// sequential without being seqs. `=` is over this, not over seq-ness.
-    boolean isSequential(long v) {
+    public boolean isSequential(long v) {
         return isSeq(v) || isHeapTy(v, TY_VEC) || isHeapTy(v, TY_MAPENTRY);
     }
 
