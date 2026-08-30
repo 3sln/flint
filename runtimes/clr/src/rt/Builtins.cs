@@ -117,6 +117,7 @@ public static class Builtins {
             if (Val.IsNil(v)) return Val.Fixnum(0);
             if (rt.IsHeapTy(v, Obj.TyVec)) return Val.Fixnum(Vec.Count(rt, v));
             if (Str.IsString(rt, v)) return Val.Fixnum(Str.ByteLen(rt, v));
+            if (Maps.IsMap(rt, v)) return Val.Fixnum(Maps.Count(rt, v));
             if (rt.IsSeq(v)) return Val.Fixnum(Seqs.Count(rt, v));
             throw new System.NotSupportedException("count on this needs more of the data structures");
         });
@@ -198,6 +199,71 @@ public static class Builtins {
             throw new System.NotSupportedException("assoc! on this needs maps and sets ported");
         });
 
+        // Maps.
+        Def("get", (rt, at, n) => {
+            long dflt = n > 2 ? rt.VAt(at + 2) : Val.Nil;
+            long coll = rt.VAt(at);
+            if (Val.IsNil(coll)) return dflt;
+            if (Maps.IsMap(rt, coll)) return Maps.Get(rt, coll, rt.VAt(at + 1), dflt);
+            if (rt.IsHeapTy(coll, Obj.TyVec)) {
+                long k = rt.VAt(at + 1);
+                if (!Val.IsFixnum(k)) return dflt;
+                long got = Vec.Nth(rt, coll, (int) Val.AsFixnum(k));
+                return got == Val.NotFound ? dflt : got;
+            }
+            throw new System.NotSupportedException("get on this needs sets ported");
+        });
+        Def("assoc", (rt, at, n) => {
+            long acc = rt.VAt(at);
+            if (Val.IsNil(acc)) acc = Maps.Empty(rt);
+            if (Maps.IsMap(rt, acc)) {
+                int bas = rt.Mark();
+                int ai = rt.Push(acc);
+                for (int i = 1; i + 1 < n; i += 2) {
+                    long nm = Maps.Assoc(rt, rt.R(ai), rt.VAt(at + i), rt.VAt(at + i + 1));
+                    rt.SetR(ai, nm);
+                }
+                long outv = rt.R(ai);
+                rt.PopTo(bas);
+                return outv;
+            }
+            if (rt.IsHeapTy(acc, Obj.TyVec)) {
+                for (int i = 1; i + 1 < n; i += 2) {
+                    int idx = (int) Val.AsFixnum(rt.VAt(at + i));
+                    if (idx != Vec.Count(rt, acc))
+                        throw new System.NotSupportedException("assoc on a vector index needs vec-assoc ported");
+                    acc = Vec.Conj(rt, acc, rt.VAt(at + i + 1));
+                }
+                return acc;
+            }
+            throw new System.NotSupportedException("assoc on this needs more of the data structures");
+        });
+        Def("dissoc", (rt, at, n) => {
+            long acc = rt.VAt(at);
+            if (Val.IsNil(acc)) return Val.Nil;
+            int bas = rt.Mark();
+            int ai = rt.Push(acc);
+            for (int i = 1; i < n; i++) {
+                long nm = Maps.Dissoc(rt, rt.R(ai), rt.VAt(at + i));
+                rt.SetR(ai, nm);
+            }
+            long o = rt.R(ai);
+            rt.PopTo(bas);
+            return o;
+        });
+        Def("contains?", (rt, at, n) => {
+            long coll = rt.VAt(at);
+            if (Val.IsNil(coll)) return Val.False;
+            if (Maps.IsMap(rt, coll)) return Val.Bool(Maps.Contains(rt, coll, rt.VAt(at + 1)));
+            if (rt.IsHeapTy(coll, Obj.TyVec)) {
+                long k = rt.VAt(at + 1);
+                return Val.Bool(Val.IsFixnum(k) && Val.AsFixnum(k) >= 0
+                                && Val.AsFixnum(k) < Vec.Count(rt, coll));
+            }
+            throw new System.NotSupportedException("contains? on this needs sets ported");
+        });
+        Def("hash", (rt, at, n) => Val.Fixnum(Flint.Rt.Eq.HashValue(rt, rt.VAt(at))));
+
         Def("=", (rt, at, n) => {
             for (int i = 1; i < n; i++) if (!Eq(rt, rt.VAt(at), rt.VAt(at + i))) return Val.False;
             return Val.True;
@@ -216,47 +282,10 @@ public static class Builtins {
         return d.ToString("R", inv);
     }
 
-    /// Structural equality, from `runtime/src/eq.rs`.
-    ///
-    /// Only the scalar, string and vector cases are ported. The rest need the
-    /// data structures; reaching one throws by name rather than answering
-    /// `false`, because a wrong `false` from `=` is the kind of bug that
-    /// surfaces as a map lookup missing, six layers away.
-    static bool Eq(Rt rt, long a, long b) {
-        if (a == b) return true;
-        if (Val.IsFixnum(a) && Val.IsFixnum(b)) return Val.AsFixnum(a) == Val.AsFixnum(b);
-        if (Val.IsDouble(a) && Val.IsDouble(b)) return Val.AsDouble(a) == Val.AsDouble(b);
-        if (Str.IsString(rt, a) && Str.IsString(rt, b)) {
-            byte[] xa = Str.Bytes(rt, a), xb = Str.Bytes(rt, b);
-            if (xa.Length != xb.Length) return false;
-            for (int i = 0; i < xa.Length; i++) if (xa[i] != xb[i]) return false;
-            return true;
-        }
-        bool ka = Val.IsInlineKw(a) || rt.IsHeapTy(a, Obj.TyKw);
-        bool kb = Val.IsInlineKw(b) || rt.IsHeapTy(b, Obj.TyKw);
-        if (ka && kb) {
-            // Inline and heap keywords must compare EQUAL when they name the
-            // same thing. They cannot here -- one is a value and one is an
-            // object -- unless both are inline, which is why interning matters
-            // and why this is refused rather than answered wrongly.
-            if (Val.IsInlineKw(a) && Val.IsInlineKw(b)) return a == b;
-            throw new System.NotSupportedException(
-                "comparing a heap keyword needs the intern tables ported");
-        }
-        if (rt.IsHeapTy(a, Obj.TyVec) && rt.IsHeapTy(b, Obj.TyVec)) {
-            int n = Vec.Count(rt, a);
-            if (n != Vec.Count(rt, b)) return false;
-            for (int i = 0; i < n; i++) {
-                if (!Eq(rt, Vec.Nth(rt, a, i), Vec.Nth(rt, b, i))) return false;
-            }
-            return true;
-        }
-        if (Val.IsHeap(a) || Val.IsHeap(b)) {
-            throw new System.NotSupportedException(
-                "= on this collection needs more of the data structures ported");
-        }
-        return false;
-    }
+    /// Equality lives in `Eq` now, because maps need it and it needs maps --
+    /// a map's `=` compares entries and an entry's key can be a map. One
+    /// implementation, not two that drift.
+    static bool Eq(Rt rt, long a, long b) => Flint.Rt.Eq.Equal(rt, a, b);
 
     /// A CHAIN, as Clojure's comparisons are: `(< 1 2 3)` is one call, not two.
     static long Cmp(Rt rt, int at, int n, int want, bool orEqual) {

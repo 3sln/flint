@@ -119,6 +119,7 @@ public final class Builtins {
             if (Val.isNil(v)) return Val.fixnum(0);
             if (rt.isHeapTy(v, TY_VEC)) return Val.fixnum(Vec.count(rt, v));
             if (Str.isString(rt, v)) return Val.fixnum(Str.byteLen(rt, v));
+            if (Maps.isMap(rt, v)) return Val.fixnum(Maps.count(rt, v));
             if (rt.isSeq(v)) return Val.fixnum(Seqs.count(rt, v));
             throw new UnsupportedOperationException("count on this needs more of the data structures");
         });
@@ -207,6 +208,72 @@ public final class Builtins {
                 "assoc! on this needs maps and sets ported");
         });
 
+        // Maps.
+        def("get", (rt, at, n) -> {
+            long dflt = n > 2 ? rt.vat(at + 2) : Val.NIL;
+            long coll = rt.vat(at);
+            if (Val.isNil(coll)) return dflt;
+            if (Maps.isMap(rt, coll)) return Maps.get(rt, coll, rt.vat(at + 1), dflt);
+            if (rt.isHeapTy(coll, TY_VEC)) {
+                long k = rt.vat(at + 1);
+                if (!Val.isFixnum(k)) return dflt;
+                long got = Vec.nth(rt, coll, (int) Val.asFixnum(k));
+                return got == Val.NOT_FOUND ? dflt : got;
+            }
+            throw new UnsupportedOperationException("get on this needs sets ported");
+        });
+        def("assoc", (rt, at, n) -> {
+            long acc = rt.vat(at);
+            if (Val.isNil(acc)) acc = Maps.empty(rt);
+            if (Maps.isMap(rt, acc)) {
+                int base = rt.mark();
+                int ai = rt.push(acc);
+                for (int i = 1; i + 1 < n; i += 2) {
+                    long nm = Maps.assoc(rt, rt.r(ai), rt.vat(at + i), rt.vat(at + i + 1));
+                    rt.setR(ai, nm);
+                }
+                long out = rt.r(ai);
+                rt.popTo(base);
+                return out;
+            }
+            if (rt.isHeapTy(acc, TY_VEC)) {
+                for (int i = 1; i + 1 < n; i += 2) {
+                    int idx = (int) Val.asFixnum(rt.vat(at + i));
+                    if (idx != Vec.count(rt, acc)) {
+                        throw new UnsupportedOperationException("assoc on a vector index needs vec-assoc ported");
+                    }
+                    acc = Vec.conj(rt, acc, rt.vat(at + i + 1));
+                }
+                return acc;
+            }
+            throw new UnsupportedOperationException("assoc on this needs more of the data structures");
+        });
+        def("dissoc", (rt, at, n) -> {
+            long acc = rt.vat(at);
+            if (Val.isNil(acc)) return Val.NIL;
+            int base = rt.mark();
+            int ai = rt.push(acc);
+            for (int i = 1; i < n; i++) {
+                long nm = Maps.dissoc(rt, rt.r(ai), rt.vat(at + i));
+                rt.setR(ai, nm);
+            }
+            long out = rt.r(ai);
+            rt.popTo(base);
+            return out;
+        });
+        def("contains?", (rt, at, n) -> {
+            long coll = rt.vat(at);
+            if (Val.isNil(coll)) return Val.FALSE;
+            if (Maps.isMap(rt, coll)) return Val.bool(Maps.contains(rt, coll, rt.vat(at + 1)));
+            if (rt.isHeapTy(coll, TY_VEC)) {
+                long k = rt.vat(at + 1);
+                return Val.bool(Val.isFixnum(k) && Val.asFixnum(k) >= 0
+                                && Val.asFixnum(k) < Vec.count(rt, coll));
+            }
+            throw new UnsupportedOperationException("contains? on this needs sets ported");
+        });
+        def("hash", (rt, at, n) -> Val.fixnum(Eq.hashValue(rt, rt.vat(at))));
+
         def("=", (rt, at, n) -> {
             for (int i = 1; i < n; i++) if (!eq(rt, rt.vat(at), rt.vat(at + i))) return Val.FALSE;
             return Val.TRUE;
@@ -225,44 +292,10 @@ public final class Builtins {
         return Double.toString(d);
     }
 
-    /// Structural equality, from `runtime/src/eq.rs`.
-    ///
-    /// Only the scalar and string cases are ported. Collections need the data
-    /// structures; reaching one throws by name rather than answering `false`,
-    /// because a wrong `false` from `=` is the kind of bug that surfaces as a
-    /// map lookup missing, six layers away.
-    static boolean eq(Rt rt, long a, long b) {
-        if (a == b) return true;
-        if (Val.isFixnum(a) && Val.isFixnum(b)) return Val.asFixnum(a) == Val.asFixnum(b);
-        if (Val.isDouble(a) && Val.isDouble(b)) return Val.asDouble(a) == Val.asDouble(b);
-        if (Str.isString(rt, a) && Str.isString(rt, b)) {
-            return java.util.Arrays.equals(Str.bytes(rt, a), Str.bytes(rt, b));
-        }
-        boolean ka = Val.isInlineKw(a) || rt.isHeapTy(a, TY_KW);
-        boolean kb = Val.isInlineKw(b) || rt.isHeapTy(b, TY_KW);
-        if (ka && kb) {
-            // Inline and heap keywords must compare EQUAL when they name the
-            // same thing. They cannot here -- one is a value and one is an
-            // object -- unless both are inline, which is why interning matters
-            // and why this is refused rather than answered wrongly.
-            if (Val.isInlineKw(a) && Val.isInlineKw(b)) return a == b;
-            throw new UnsupportedOperationException(
-                "comparing a heap keyword needs the intern tables ported");
-        }
-        if (rt.isHeapTy(a, TY_VEC) && rt.isHeapTy(b, TY_VEC)) {
-            int n = Vec.count(rt, a);
-            if (n != Vec.count(rt, b)) return false;
-            for (int i = 0; i < n; i++) {
-                if (!eq(rt, Vec.nth(rt, a, i), Vec.nth(rt, b, i))) return false;
-            }
-            return true;
-        }
-        if (Val.isHeap(a) || Val.isHeap(b)) {
-            throw new UnsupportedOperationException(
-                "= on this collection needs more of the data structures ported");
-        }
-        return false;
-    }
+    /// Equality lives in `Eq` now, because maps need it and it needs maps --
+    /// a map's `=` compares entries and an entry's key can be a map. One
+    /// implementation, not two that drift.
+    static boolean eq(Rt rt, long a, long b) { return Eq.eq(rt, a, b); }
 
     /// A CHAIN, as Clojure's comparisons are: `(< 1 2 3)` is one call, not two.
     private static long cmp(Rt rt, int at, int n, int want, boolean orEqual) {

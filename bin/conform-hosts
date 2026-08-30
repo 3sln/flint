@@ -256,6 +256,21 @@ if [ -n "$CLR" ]; then
     || { echo "  FAIL the two ports hash differently"; exit 1; }
 fi
 
+# MAPS: the array-map, the promotion to CHAMP at 9 entries, and the two
+# properties CHAMP is chosen FOR -- canonical form (a map built by deleting
+# equals and hashes like the same map built directly) and collision nodes.
+"$JDK/bin/java" -cp runtimes/jvm/classes RtMaps > /tmp/flint-maps-jvm.out 2>&1 \
+  || { cat /tmp/flint-maps-jvm.out; echo "  FAIL maps on the ported runtime [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' /tmp/flint-maps-jvm.out
+if [ -n "$CLR" ]; then
+  "$CLR" --rt-maps > /tmp/flint-maps-clr.out 2>&1 \
+    || { cat /tmp/flint-maps-clr.out; echo "  FAIL maps on the ported runtime [clr]"; exit 1; }
+  sed 's/$/ [clr]/' /tmp/flint-maps-clr.out
+  cmp -s /tmp/flint-maps-jvm.out /tmp/flint-maps-clr.out \
+    || { diff /tmp/flint-maps-jvm.out /tmp/flint-maps-clr.out | head; \
+         echo "  FAIL the two ports disagree about maps"; exit 1; }
+fi
+
 "$JDK/bin/java" -cp runtimes/jvm/classes RtSnapshot > /tmp/flint-snap-jvm.out 2>&1 \
   || { cat /tmp/flint-snap-jvm.out; echo "  FAIL snapshots on the ported runtime [jvm]"; exit 1; }
 sed 's/$/ [jvm]/' /tmp/flint-snap-jvm.out

@@ -306,6 +306,24 @@ public sealed class Rt : System.IDisposable {
                     PopTo(bas);
                     VPush(v);
                 } break;
+                case Op.Map: {
+                    int nv = U16(ip); ip += 2;
+                    // The pairs are on the VALUE stack; the map under
+                    // construction goes on the SHADOW stack, because `Assoc`
+                    // allocates and the accumulator has to survive it.
+                    int bas = Mark();
+                    int mi = Push(Maps.Empty(this));
+                    int at2 = roots.StackTop - 2 * nv;
+                    for (int i = 0; i < nv; i++) {
+                        long nm = Maps.Assoc(this, R(mi), roots.Stack[at2 + 2 * i],
+                                             roots.Stack[at2 + 2 * i + 1]);
+                        SetR(mi, nm);
+                    }
+                    long m = R(mi);
+                    PopTo(bas);
+                    roots.StackTop = at2;
+                    VPush(m);
+                } break;
                 case Op.TypeP: {
                     int c = U8(ip); ip += 1;
                     roots.Stack[roots.StackTop - 1] = Val.Bool(TypeP(c, roots.Stack[roots.StackTop - 1]));
@@ -374,7 +392,13 @@ public sealed class Rt : System.IDisposable {
     /// `get`, for the collections that are ported.
     long Lookup(long coll, long k, long dflt) {
         if (Val.IsNil(coll)) return dflt;
-        throw new System.NotSupportedException("lookup needs maps and sets ported");
+        if (Maps.IsMap(this, coll)) return Maps.Get(this, coll, k, dflt);
+        if (IsHeapTy(coll, TyVec)) {
+            if (!Val.IsFixnum(k)) return dflt;
+            long got = Vec.Nth(this, coll, (int) Val.AsFixnum(k));
+            return got == Val.NotFound ? dflt : got;
+        }
+        throw new System.NotSupportedException("lookup needs sets ported");
     }
 
     /// `flint.types/code`'s canonical table, from `vm.rs`. The numbers are the

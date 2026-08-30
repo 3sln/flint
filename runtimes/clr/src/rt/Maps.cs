@@ -1,0 +1,859 @@
+namespace Flint.Rt;
+
+
+/// Maps: a small insertion-ordered array-map, and a **CHAMP** hash-array
+/// mapped trie above it. Ported from `runtime/src/map.rs`.
+///
+/// ## Why CHAMP and not Clojure's HAMT
+///
+/// Steindorfer &amp; Vinju's CHAMP (OOPSLA 2015). A CHAMP node carries TWO
+/// bitmaps -- `datamap` for entries stored inline and `nodemap` for sub-nodes
+/// -- with entries packed at the front and sub-nodes packed at the back:
+///
+///   Obj.TyBmnode  [edit, datamap, nodemap, k0,v0, k1,v1, ..., nodeN..node0]
+///   Obj.TyCollnode[edit, hash, k0,v0, ...]                 -- full hash collision
+///
+/// Three things fall outv, and all three matter:
+///
+/// * Nodes are smaller and denser. Clojure's `BitmapIndexedNode` stores a null
+///   key beside a sub-node pointer, wasting a slot per child, and promotes to a
+///   32-wide `ArrayNode` at 16 children. CHAMP needs neither.
+/// * The representation is CANONICAL. Clojure's HAMT can represent the same map
+///   two ways depending on insertion and deletion history, because deleting
+///   does not un-inline a node that has shrunk to one entry. CHAMP always
+///   collapses, so equal maps have identical structure.
+/// * Iteration does not test each slot's type: entries are exactly the first
+///   `2*popcount(datamap)` slots.
+///
+/// ## Where the map is an array-map
+///
+/// Up to `ARRAY_MAP_MAX` entries a map is a flat `[meta, hash, k,v, ...]`, as
+/// in Clojure. For a compiler -- the workload on flint's own critical path --
+/// most maps are AST nodes with a handful of keys, and a linear scan over
+/// bit-comparable keywords beats descending a trie. `assoc` past the threshold
+/// promotes to CHAMP.
+public static class Maps {
+
+    public const int ARRAY_MAP_MAX = 8;
+
+    // array-map layout
+    public const int AM_META = 0, AM_HASH = 1, AM_BASE = 2;
+    // hash-map layout
+    public const int HM_CNT = 0, HM_ROOT = 1, HM_META = 2, HM_HASH = 3;
+    // CHAMP bitmap node layout
+    const int BN_EDIT = 0, BN_DATAMAP = 1, BN_NODEMAP = 2, BN_BASE = 3;
+    // collision node layout
+    const int CN_EDIT = 0, CN_HASH = 1, CN_BASE = 2;
+
+    public const int HASH_BITS = 5, HASH_WIDTH = 32;
+
+    static int Mask(int h, int shift) { return (h >>> shift) & 0x1f; }
+    static int Bitpos(int h, int shift) { return 1 << Mask(h, shift); }
+    static int IndexOf(int bitmap, int bit) { return System.Numerics.BitOperations.PopCount((uint)(bitmap & (bit - 1))); }
+
+    static int Olen(Rt rt, long v) { return Obj.Len(rt.gc.sp, Val.AsHeap(v)); }
+
+    // --- node primitives ----------------------------------------------------
+
+    static long BnNew(Rt rt, int datamap, int nodemap, long edit) {
+        int ne = System.Numerics.BitOperations.PopCount((uint)(datamap)), nn = System.Numerics.BitOperations.PopCount((uint)(nodemap));
+        int e = rt.Push(edit);
+        long a = rt.Alloc(Obj.TyBmnode, BN_BASE + 2 * ne + nn);
+        long ed = rt.R(e);
+        rt.PopTo(e);
+        if (a == 0) return Val.Nil;
+        rt.SetSlot(a, BN_EDIT, ed);
+        rt.SetSlot(a, BN_DATAMAP, Val.Fixnum(datamap & 0xFFFFFFFFL));
+        rt.SetSlot(a, BN_NODEMAP, Val.Fixnum(nodemap & 0xFFFFFFFFL));
+        return Val.Heap(a);
+    }
+
+    static int BnDatamap(Rt rt, long n) { return (int) Val.AsFixnum(rt.Slot(n, BN_DATAMAP)); }
+    static int BnNodemap(Rt rt, long n) { return (int) Val.AsFixnum(rt.Slot(n, BN_NODEMAP)); }
+    static long BnKey(Rt rt, long n, int i) { return rt.Slot(n, BN_BASE + 2 * i); }
+    static long BnVal(Rt rt, long n, int i) { return rt.Slot(n, BN_BASE + 2 * i + 1); }
+    static void BnSetKey(Rt rt, long n, int i, long v) { rt.SetSlot(Val.AsHeap(n), BN_BASE + 2 * i, v); }
+    static void BnSetVal(Rt rt, long n, int i, long v) { rt.SetSlot(Val.AsHeap(n), BN_BASE + 2 * i + 1, v); }
+    /// Sub-nodes live at the END, in DESCENDING bit order.
+    static long BnNode(Rt rt, long n, int j) { return rt.Slot(n, Olen(rt, n) - 1 - j); }
+    static void BnSetNode(Rt rt, long n, int j, long v) {
+        rt.SetSlot(Val.AsHeap(n), Olen(rt, n) - 1 - j, v);
+    }
+
+    static long CnNew(Rt rt, int h, int npairs, long edit) {
+        int e = rt.Push(edit);
+        long a = rt.Alloc(Obj.TyCollnode, CN_BASE + 2 * npairs);
+        long ed = rt.R(e);
+        rt.PopTo(e);
+        if (a == 0) return Val.Nil;
+        rt.SetSlot(a, CN_EDIT, ed);
+        rt.SetSlot(a, CN_HASH, Val.Fixnum(h & 0xFFFFFFFFL));
+        return Val.Heap(a);
+    }
+    static int CnCount(Rt rt, long n) { return (Olen(rt, n) - CN_BASE) / 2; }
+    static int CnHash(Rt rt, long n) { return (int) Val.AsFixnum(rt.Slot(n, CN_HASH)); }
+    static long CnKey(Rt rt, long n, int i) { return rt.Slot(n, CN_BASE + 2 * i); }
+    static long CnVal(Rt rt, long n, int i) { return rt.Slot(n, CN_BASE + 2 * i + 1); }
+    static void CnSet(Rt rt, long n, int i, long v) { rt.SetSlot(Val.AsHeap(n), i, v); }
+
+    static bool IsBmnode(Rt rt, long n) { return Obj.Ty(rt.gc.sp, Val.AsHeap(n)) == Obj.TyBmnode; }
+
+    /// EMPTY / ONE / MORE, the CHAMP size predicate that drives collapsing.
+    static int NodeSizeClass(Rt rt, long n) {
+        if (!IsBmnode(rt, n)) return 2;   // a collision node always has two pairs
+        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
+        if (nm != 0) return 2;
+        int c = System.Numerics.BitOperations.PopCount((uint)(dm));
+        return c == 0 ? 0 : c == 1 ? 1 : 2;
+    }
+
+    // --- lookup -------------------------------------------------------------
+
+    static long NodeFind(Rt rt, long n, int shift, int h, long key) {
+        // The node being walked and the key are rooted: `eq` on a compound key
+        // allocates (it seqs both sides), so a collection can happen in the
+        // middle of a lookup and move everything this walk is holding.
+        int bas = rt.Mark();
+        int ni = rt.Push(n);
+        int ki = rt.Push(key);
+        long outv = Val.NotFound;
+        for (;;) {
+            if (!IsBmnode(rt, rt.R(ni))) {
+                if (CnHash(rt, rt.R(ni)) != h) break;
+                int cnt = CnCount(rt, rt.R(ni));
+                for (int i = 0; i < cnt; i++) {
+                    if (Flint.Rt.Eq.Equal(rt, CnKey(rt, rt.R(ni), i), rt.R(ki))) {
+                        outv = CnVal(rt, rt.R(ni), i);
+                        break;
+                    }
+                }
+                break;
+            }
+            int bit = Bitpos(h, shift);
+            int dm = BnDatamap(rt, rt.R(ni));
+            if ((dm & bit) != 0) {
+                int i = IndexOf(dm, bit);
+                if (Flint.Rt.Eq.Equal(rt, BnKey(rt, rt.R(ni), i), rt.R(ki))) outv = BnVal(rt, rt.R(ni), i);
+                break;
+            }
+            int nm = BnNodemap(rt, rt.R(ni));
+            if ((nm & bit) == 0) break;
+            rt.SetR(ni, BnNode(rt, rt.R(ni), IndexOf(nm, bit)));
+            shift += HASH_BITS;
+        }
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    // --- structural copies ---------------------------------------------------
+
+    static long MergeTwo(Rt rt, int shift, long k0, long v0, int h0,
+                         long k1, long v1, int h1, long edit) {
+        int bas = rt.Mark();
+        int ik0 = rt.Push(k0), iv0 = rt.Push(v0), ik1 = rt.Push(k1), iv1 = rt.Push(v1);
+        int ie = rt.Push(edit);
+        long outv;
+        if (shift >= 32) {
+            // Two keys with the SAME 32-bit hash: a collision node, which is
+            // the only place equal hashes are stored side by side.
+            outv = CnNew(rt, h0, 2, rt.R(ie));
+            if (!Val.IsNil(outv)) {
+                CnSet(rt, outv, CN_BASE, rt.R(ik0));
+                CnSet(rt, outv, CN_BASE + 1, rt.R(iv0));
+                CnSet(rt, outv, CN_BASE + 2, rt.R(ik1));
+                CnSet(rt, outv, CN_BASE + 3, rt.R(iv1));
+            }
+        } else {
+            int m0 = Mask(h0, shift), m1 = Mask(h1, shift);
+            if (m0 != m1) {
+                int dm = (1 << m0) | (1 << m1);
+                outv = BnNew(rt, dm, 0, rt.R(ie));
+                if (!Val.IsNil(outv)) {
+                    // In BIT ORDER, not argument order: `indexOf` derives a
+                    // slot from the bitmap, so the pair with the lower mask
+                    // must land first or every later lookup is off by one.
+                    if (m0 < m1) {
+                        BnSetKey(rt, outv, 0, rt.R(ik0)); BnSetVal(rt, outv, 0, rt.R(iv0));
+                        BnSetKey(rt, outv, 1, rt.R(ik1)); BnSetVal(rt, outv, 1, rt.R(iv1));
+                    } else {
+                        BnSetKey(rt, outv, 0, rt.R(ik1)); BnSetVal(rt, outv, 0, rt.R(iv1));
+                        BnSetKey(rt, outv, 1, rt.R(ik0)); BnSetVal(rt, outv, 1, rt.R(iv0));
+                    }
+                }
+            } else {
+                long sub = MergeTwo(rt, shift + HASH_BITS, rt.R(ik0), rt.R(iv0), h0,
+                                    rt.R(ik1), rt.R(iv1), h1, rt.R(ie));
+                int si = rt.Push(sub);
+                outv = BnNew(rt, 0, 1 << m0, rt.R(ie));
+                if (!Val.IsNil(outv)) BnSetNode(rt, outv, 0, rt.R(si));
+            }
+        }
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    static long BnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {
+        int bas = rt.Mark();
+        int ni = rt.Push(n), ki = rt.Push(key), vi = rt.Push(val), ei = rt.Push(edit);
+        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
+        int ne = System.Numerics.BitOperations.PopCount((uint)(dm)), nn = System.Numerics.BitOperations.PopCount((uint)(nm));
+        int at = IndexOf(dm, bit);
+        long outv = BnNew(rt, dm | bit, nm, rt.R(ei));
+        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
+        int oi = rt.Push(outv);
+        for (int k = 0; k < ne; k++) {
+            int d = k < at ? k : k + 1;
+            BnSetKey(rt, rt.R(oi), d, BnKey(rt, rt.R(ni), k));
+            BnSetVal(rt, rt.R(oi), d, BnVal(rt, rt.R(ni), k));
+        }
+        BnSetKey(rt, rt.R(oi), at, rt.R(ki));
+        BnSetVal(rt, rt.R(oi), at, rt.R(vi));
+        for (int j = 0; j < nn; j++) BnSetNode(rt, rt.R(oi), j, BnNode(rt, rt.R(ni), j));
+        long r = rt.R(oi);
+        rt.PopTo(bas);
+        return r;
+    }
+
+    static long BnCopyRemoveEntry(Rt rt, long n, int bit, long edit) {
+        int bas = rt.Mark();
+        int ni = rt.Push(n), ei = rt.Push(edit);
+        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
+        int ne = System.Numerics.BitOperations.PopCount((uint)(dm)), nn = System.Numerics.BitOperations.PopCount((uint)(nm));
+        int at = IndexOf(dm, bit);
+        long outv = BnNew(rt, dm ^ bit, nm, rt.R(ei));
+        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
+        int oi = rt.Push(outv);
+        for (int k = 0; k < ne; k++) {
+            if (k == at) continue;
+            int d = k < at ? k : k - 1;
+            BnSetKey(rt, rt.R(oi), d, BnKey(rt, rt.R(ni), k));
+            BnSetVal(rt, rt.R(oi), d, BnVal(rt, rt.R(ni), k));
+        }
+        for (int j = 0; j < nn; j++) BnSetNode(rt, rt.R(oi), j, BnNode(rt, rt.R(ni), j));
+        long r = rt.R(oi);
+        rt.PopTo(bas);
+        return r;
+    }
+
+    static long BnCopySetValue(Rt rt, long n, int at, long val, long edit) {
+        int bas = rt.Mark();
+        int ni = rt.Push(n), vi = rt.Push(val), ei = rt.Push(edit);
+        // Owned by this transient? Then write through.
+        if (!Val.IsNil(rt.R(ei)) && rt.Slot(rt.R(ni), BN_EDIT) == rt.R(ei)) {
+            long nn0 = rt.R(ni);
+            BnSetVal(rt, nn0, at, rt.R(vi));
+            rt.PopTo(bas);
+            return nn0;
+        }
+        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
+        long outv = BnNew(rt, dm, nm, rt.R(ei));
+        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
+        int oi = rt.Push(outv);
+        for (int k = 0; k < System.Numerics.BitOperations.PopCount((uint)(dm)); k++) {
+            BnSetKey(rt, rt.R(oi), k, BnKey(rt, rt.R(ni), k));
+            BnSetVal(rt, rt.R(oi), k, BnVal(rt, rt.R(ni), k));
+        }
+        for (int j = 0; j < System.Numerics.BitOperations.PopCount((uint)(nm)); j++) BnSetNode(rt, rt.R(oi), j, BnNode(rt, rt.R(ni), j));
+        BnSetVal(rt, rt.R(oi), at, rt.R(vi));
+        long r = rt.R(oi);
+        rt.PopTo(bas);
+        return r;
+    }
+
+    static long BnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
+        int bas = rt.Mark();
+        int ni = rt.Push(n), si = rt.Push(sub), ei = rt.Push(edit);
+        if (!Val.IsNil(rt.R(ei)) && rt.Slot(rt.R(ni), BN_EDIT) == rt.R(ei)) {
+            long nn0 = rt.R(ni);
+            BnSetNode(rt, nn0, at, rt.R(si));
+            rt.PopTo(bas);
+            return nn0;
+        }
+        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
+        long outv = BnNew(rt, dm, nm, rt.R(ei));
+        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
+        int oi = rt.Push(outv);
+        for (int k = 0; k < System.Numerics.BitOperations.PopCount((uint)(dm)); k++) {
+            BnSetKey(rt, rt.R(oi), k, BnKey(rt, rt.R(ni), k));
+            BnSetVal(rt, rt.R(oi), k, BnVal(rt, rt.R(ni), k));
+        }
+        for (int j = 0; j < System.Numerics.BitOperations.PopCount((uint)(nm)); j++) BnSetNode(rt, rt.R(oi), j, BnNode(rt, rt.R(ni), j));
+        BnSetNode(rt, rt.R(oi), at, rt.R(si));
+        long r = rt.R(oi);
+        rt.PopTo(bas);
+        return r;
+    }
+
+    /// An inline entry becomes a sub-node: 2 entry slots outv, 1 node slot in.
+    static long BnInlineToNode(Rt rt, long n, int bit, long sub, long edit) {
+        int bas = rt.Mark();
+        int ni = rt.Push(n), si = rt.Push(sub), ei = rt.Push(edit);
+        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
+        int ne = System.Numerics.BitOperations.PopCount((uint)(dm)), nn = System.Numerics.BitOperations.PopCount((uint)(nm));
+        int atEntry = IndexOf(dm, bit);
+        int atNode = IndexOf(nm, bit);   // == the index in the NEW nodemap too
+        long outv = BnNew(rt, dm ^ bit, nm | bit, rt.R(ei));
+        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
+        int oi = rt.Push(outv);
+        for (int k = 0; k < ne; k++) {
+            if (k == atEntry) continue;
+            int d = k < atEntry ? k : k - 1;
+            BnSetKey(rt, rt.R(oi), d, BnKey(rt, rt.R(ni), k));
+            BnSetVal(rt, rt.R(oi), d, BnVal(rt, rt.R(ni), k));
+        }
+        for (int j = 0; j < nn; j++) {
+            int d = j < atNode ? j : j + 1;
+            BnSetNode(rt, rt.R(oi), d, BnNode(rt, rt.R(ni), j));
+        }
+        BnSetNode(rt, rt.R(oi), atNode, rt.R(si));
+        long r = rt.R(oi);
+        rt.PopTo(bas);
+        return r;
+    }
+
+    /// A sub-node has shrunk to one entry and folds back inline. THIS is the
+    /// step Clojure's HAMT omits, and the reason CHAMP's form is canonical.
+    static long BnNodeToInline(Rt rt, long n, int bit, long key, long val, long edit) {
+        int bas = rt.Mark();
+        int ni = rt.Push(n), ki = rt.Push(key), vi = rt.Push(val), ei = rt.Push(edit);
+        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
+        int ne = System.Numerics.BitOperations.PopCount((uint)(dm)), nn = System.Numerics.BitOperations.PopCount((uint)(nm));
+        int atEntry = IndexOf(dm, bit), atNode = IndexOf(nm, bit);
+        long outv = BnNew(rt, dm | bit, nm ^ bit, rt.R(ei));
+        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
+        int oi = rt.Push(outv);
+        for (int k = 0; k < ne; k++) {
+            int d = k < atEntry ? k : k + 1;
+            BnSetKey(rt, rt.R(oi), d, BnKey(rt, rt.R(ni), k));
+            BnSetVal(rt, rt.R(oi), d, BnVal(rt, rt.R(ni), k));
+        }
+        BnSetKey(rt, rt.R(oi), atEntry, rt.R(ki));
+        BnSetVal(rt, rt.R(oi), atEntry, rt.R(vi));
+        for (int j = 0; j < nn; j++) {
+            if (j == atNode) continue;
+            int d = j < atNode ? j : j - 1;
+            BnSetNode(rt, rt.R(oi), d, BnNode(rt, rt.R(ni), j));
+        }
+        long r = rt.R(oi);
+        rt.PopTo(bas);
+        return r;
+    }
+
+    // --- assoc / dissoc on nodes ---------------------------------------------
+
+    /// Returns the new node. `rt.champAdded` says whether the count grew.
+    static long NodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
+        int bas = rt.Mark();
+        int ni = rt.Push(n), ki = rt.Push(key), vi = rt.Push(val), ei = rt.Push(edit);
+        long outv;
+        if (!IsBmnode(rt, n)) {
+            outv = CollAssoc(rt, rt.R(ni), h, rt.R(ki), rt.R(vi), rt.R(ei), shift);
+            rt.PopTo(bas);
+            return outv;
+        }
+        int bit = Bitpos(h, shift);
+        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
+        if ((dm & bit) != 0) {
+            int at = IndexOf(dm, bit);
+            int k0i = rt.Push(BnKey(rt, rt.R(ni), at));
+            if (Flint.Rt.Eq.Equal(rt, rt.R(k0i), rt.R(ki))) {
+                rt.champAdded = false;
+                long v0 = BnVal(rt, rt.R(ni), at);
+                outv = v0 == rt.R(vi) ? rt.R(ni)
+                    : BnCopySetValue(rt, rt.R(ni), at, rt.R(vi), rt.R(ei));
+            } else {
+                rt.champAdded = true;
+                int v0i = rt.Push(BnVal(rt, rt.R(ni), at));
+                int h0 = Flint.Rt.Eq.HashValue(rt, rt.R(k0i));
+                long sub = MergeTwo(rt, shift + HASH_BITS, rt.R(k0i), rt.R(v0i), h0,
+                                    rt.R(ki), rt.R(vi), h, rt.R(ei));
+                int si = rt.Push(sub);
+                outv = BnInlineToNode(rt, rt.R(ni), bit, rt.R(si), rt.R(ei));
+            }
+        } else if ((nm & bit) != 0) {
+            int at = IndexOf(nm, bit);
+            // Rooted, because the comparison below is what decides whether this
+            // node changed. `nodeAssoc` allocates, a collection can move `sub`,
+            // and a stale address that happened to match the new one would drop
+            // the whole subtree's update on the floor -- a key silently missing
+            // from a map whose count says it is there.
+            int subi = rt.Push(BnNode(rt, rt.R(ni), at));
+            long newsub = NodeAssoc(rt, rt.R(subi), shift + HASH_BITS, h,
+                                    rt.R(ki), rt.R(vi), rt.R(ei));
+            outv = newsub == rt.R(subi) ? rt.R(ni)
+                : BnCopySetNode(rt, rt.R(ni), at, newsub, rt.R(ei));
+        } else {
+            rt.champAdded = true;
+            outv = BnCopyInsertEntry(rt, rt.R(ni), bit, rt.R(ki), rt.R(vi), rt.R(ei));
+        }
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    static long CollAssoc(Rt rt, long n, int h, long key, long val, long edit, int shift) {
+        int nh = CnHash(rt, n);
+        if (nh != h) {
+            // Different hash at this depth: wrap in a bitmap node and retry.
+            int wbas = rt.Mark();
+            int wni = rt.Push(n), wki = rt.Push(key), wvi = rt.Push(val), wei = rt.Push(edit);
+            int wi = rt.Push(BnNew(rt, 0, Bitpos(nh, shift), rt.R(wei)));
+            BnSetNode(rt, rt.R(wi), 0, rt.R(wni));
+            long wout = NodeAssoc(rt, rt.R(wi), shift, h, rt.R(wki), rt.R(wvi), rt.R(wei));
+            rt.PopTo(wbas);
+            return wout;
+        }
+        int scan = rt.Mark();
+        int sni = rt.Push(n), ski = rt.Push(key);
+        int cnt = CnCount(rt, rt.R(sni));
+        int hit = -1;
+        for (int i = 0; i < cnt; i++) {
+            if (Flint.Rt.Eq.Equal(rt, CnKey(rt, rt.R(sni), i), rt.R(ski))) { hit = i; break; }
+        }
+        long nn = rt.R(sni), kk = rt.R(ski);
+        rt.PopTo(scan);
+        if (hit >= 0) {
+            rt.champAdded = false;
+            int bas2 = rt.Mark();
+            int ni2 = rt.Push(nn), vi2 = rt.Push(val), ei2 = rt.Push(edit);
+            long out2 = CnCopySetVal(rt, rt.R(ni2), hit, rt.R(vi2), rt.R(ei2));
+            rt.PopTo(bas2);
+            return out2;
+        }
+        rt.champAdded = true;
+        int bas = rt.Mark();
+        int ni = rt.Push(nn), ki = rt.Push(kk), vi = rt.Push(val), ei = rt.Push(edit);
+        long outv = CnNew(rt, h, cnt + 1, rt.R(ei));
+        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
+        int oi = rt.Push(outv);
+        for (int i = 0; i < cnt; i++) {
+            CnSet(rt, rt.R(oi), CN_BASE + 2 * i, CnKey(rt, rt.R(ni), i));
+            CnSet(rt, rt.R(oi), CN_BASE + 2 * i + 1, CnVal(rt, rt.R(ni), i));
+        }
+        CnSet(rt, rt.R(oi), CN_BASE + 2 * cnt, rt.R(ki));
+        CnSet(rt, rt.R(oi), CN_BASE + 2 * cnt + 1, rt.R(vi));
+        long r = rt.R(oi);
+        rt.PopTo(bas);
+        return r;
+    }
+
+    static long CnCopySetVal(Rt rt, long n, int i, long val, long edit) {
+        int cnt = CnCount(rt, n);
+        int bas = rt.Mark();
+        int ni = rt.Push(n), vi = rt.Push(val), ei = rt.Push(edit);
+        long outv = CnNew(rt, CnHash(rt, rt.R(ni)), cnt, rt.R(ei));
+        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
+        int oi = rt.Push(outv);
+        for (int k = 0; k < cnt; k++) {
+            CnSet(rt, rt.R(oi), CN_BASE + 2 * k, CnKey(rt, rt.R(ni), k));
+            CnSet(rt, rt.R(oi), CN_BASE + 2 * k + 1, CnVal(rt, rt.R(ni), k));
+        }
+        CnSet(rt, rt.R(oi), CN_BASE + 2 * i + 1, rt.R(vi));
+        long r = rt.R(oi);
+        rt.PopTo(bas);
+        return r;
+    }
+
+    static long NodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
+        int bas = rt.Mark();
+        int ni = rt.Push(n), ki = rt.Push(key), ei = rt.Push(edit);
+        long outv;
+        if (!IsBmnode(rt, n)) {
+            outv = CollDissoc(rt, rt.R(ni), rt.R(ki), rt.R(ei));
+            rt.PopTo(bas);
+            return outv;
+        }
+        int bit = Bitpos(h, shift);
+        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
+        if ((dm & bit) != 0) {
+            int at = IndexOf(dm, bit);
+            bool same0 = Flint.Rt.Eq.Equal(rt, BnKey(rt, rt.R(ni), at), rt.R(ki));
+            if (!same0) {
+                rt.champAdded = false;
+                outv = rt.R(ni);
+            } else {
+                rt.champAdded = true;   // "changed"
+                if (System.Numerics.BitOperations.PopCount((uint)(dm)) == 2 && nm == 0) {
+                    // Collapse to a single-entry node so the parent can inline it.
+                    int other = 1 - at;
+                    int oki = rt.Push(BnKey(rt, rt.R(ni), other));
+                    int ovi = rt.Push(BnVal(rt, rt.R(ni), other));
+                    int oh = Flint.Rt.Eq.HashValue(rt, rt.R(oki));
+                    int newdm = shift == 0 ? (dm ^ bit) : Bitpos(oh, 0);
+                    long nn0 = BnNew(rt, newdm, 0, rt.R(ei));
+                    if (!Val.IsNil(nn0)) {
+                        BnSetKey(rt, nn0, 0, rt.R(oki));
+                        BnSetVal(rt, nn0, 0, rt.R(ovi));
+                    }
+                    outv = nn0;
+                } else {
+                    outv = BnCopyRemoveEntry(rt, rt.R(ni), bit, rt.R(ei));
+                }
+            }
+        } else if ((nm & bit) != 0) {
+            int at = IndexOf(nm, bit);
+            int subi = rt.Push(BnNode(rt, rt.R(ni), at));
+            long newsub = NodeDissoc(rt, rt.R(subi), shift + HASH_BITS, h, rt.R(ki), rt.R(ei));
+            if (newsub == rt.R(subi)) {
+                outv = rt.R(ni);
+            } else if (NodeSizeClass(rt, newsub) == 1) {
+                int si = rt.Push(newsub);
+                if (dm == 0 && System.Numerics.BitOperations.PopCount((uint)(nm)) == 1) {
+                    // This node has nothing else: replace it with the child.
+                    outv = rt.R(si);
+                } else {
+                    int ki2 = rt.Push(BnKey(rt, rt.R(si), 0));
+                    int vi2 = rt.Push(BnVal(rt, rt.R(si), 0));
+                    outv = BnNodeToInline(rt, rt.R(ni), bit, rt.R(ki2), rt.R(vi2), rt.R(ei));
+                }
+            } else {
+                outv = BnCopySetNode(rt, rt.R(ni), at, newsub, rt.R(ei));
+            }
+        } else {
+            rt.champAdded = false;
+            outv = rt.R(ni);
+        }
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    static long CollDissoc(Rt rt, long n, long key, long edit) {
+        int scan = rt.Mark();
+        int sni = rt.Push(n), ski = rt.Push(key);
+        int cnt = CnCount(rt, rt.R(sni));
+        int found = -1;
+        for (int i = 0; i < cnt; i++) {
+            if (Flint.Rt.Eq.Equal(rt, CnKey(rt, rt.R(sni), i), rt.R(ski))) { found = i; break; }
+        }
+        long nn = rt.R(sni);
+        rt.PopTo(scan);
+        if (found < 0) { rt.champAdded = false; return nn; }
+        rt.champAdded = true;
+        int bas = rt.Mark();
+        int ni = rt.Push(nn), ei = rt.Push(edit);
+        long outv;
+        if (cnt == 2) {
+            // Down to one pair: become a single-entry bitmap node so the parent
+            // can fold it back inline.
+            int other = 1 - found;
+            int ki = rt.Push(CnKey(rt, rt.R(ni), other));
+            int vi = rt.Push(CnVal(rt, rt.R(ni), other));
+            int kh = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+            outv = BnNew(rt, Bitpos(kh, 0), 0, rt.R(ei));
+            if (!Val.IsNil(outv)) {
+                BnSetKey(rt, outv, 0, rt.R(ki));
+                BnSetVal(rt, outv, 0, rt.R(vi));
+            }
+        } else {
+            long o = CnNew(rt, CnHash(rt, rt.R(ni)), cnt - 1, rt.R(ei));
+            if (Val.IsNil(o)) { rt.PopTo(bas); return Val.Nil; }
+            int oi = rt.Push(o);
+            int d = 0;
+            for (int i = 0; i < cnt; i++) {
+                if (i == found) continue;
+                CnSet(rt, rt.R(oi), CN_BASE + 2 * d, CnKey(rt, rt.R(ni), i));
+                CnSet(rt, rt.R(oi), CN_BASE + 2 * d + 1, CnVal(rt, rt.R(ni), i));
+                d++;
+            }
+            outv = rt.R(oi);
+        }
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    // --- the map objects -----------------------------------------------------
+
+    public static bool IsMap(Rt rt, long v) {
+        if (!Val.IsHeap(v)) return false;
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        return t == Obj.TyArraymap || t == Obj.TyHashmap;
+    }
+    public static bool IsArrayMap(Rt rt, long v) {
+        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyArraymap;
+    }
+
+    public static int Count(Rt rt, long m) {
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
+        if (t == Obj.TyArraymap) return (Olen(rt, m) - AM_BASE) / 2;
+        if (t == Obj.TyHashmap) return (int) Val.AsFixnum(rt.Slot(m, HM_CNT));
+        return 0;
+    }
+
+    static long NewArrayMap(Rt rt, int n) {
+        long a = rt.Alloc(Obj.TyArraymap, AM_BASE + 2 * n);
+        if (a == 0) return Val.Nil;
+        rt.SetSlot(a, AM_META, Val.Nil);
+        rt.SetSlot(a, AM_HASH, Val.Nil);
+        return Val.Heap(a);
+    }
+
+    public static long Empty(Rt rt) { return NewArrayMap(rt, 0); }
+
+    static long NewHashMap(Rt rt, int cnt, long root, long meta) {
+        int bas = rt.Mark();
+        int ri = rt.Push(root), mi = rt.Push(meta);
+        long a = rt.Alloc(Obj.TyHashmap, 4);
+        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+        rt.SetSlot(a, HM_CNT, Val.Fixnum(cnt));
+        rt.SetSlot(a, HM_ROOT, rt.R(ri));
+        rt.SetSlot(a, HM_META, rt.R(mi));
+        rt.SetSlot(a, HM_HASH, Val.Nil);
+        rt.PopTo(bas);
+        return Val.Heap(a);
+    }
+
+    static long AmKey(Rt rt, long m, int i) { return rt.Slot(m, AM_BASE + 2 * i); }
+    static long AmVal(Rt rt, long m, int i) { return rt.Slot(m, AM_BASE + 2 * i + 1); }
+    static void AmSet(Rt rt, long m, int i, long v) { rt.SetSlot(Val.AsHeap(m), i, v); }
+
+    static int AmIndexOf(Rt rt, long m, long k) {
+        int bas = rt.Mark();
+        int mi = rt.Push(m), ki = rt.Push(k);
+        int n = Count(rt, rt.R(mi));
+        int outv = -1;
+        for (int i = 0; i < n; i++) {
+            if (Flint.Rt.Eq.Equal(rt, AmKey(rt, rt.R(mi), i), rt.R(ki))) { outv = i; break; }
+        }
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    public static long Get(Rt rt, long m, long k, long notFound) {
+        if (!Val.IsHeap(m)) return notFound;
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
+        if (t == Obj.TyArraymap) {
+            int i = AmIndexOf(rt, m, k);
+            return i < 0 ? notFound : AmVal(rt, m, i);
+        }
+        if (t == Obj.TyHashmap) {
+            int bas = rt.Mark();
+            int mi = rt.Push(m), ki = rt.Push(k);
+            // Hash FIRST, then read the root: hashing a compound key can
+            // allocate, and an address read before that would be stale.
+            int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+            long root = rt.Slot(rt.R(mi), HM_ROOT);
+            long r = Val.IsNil(root) ? Val.NotFound : NodeFind(rt, root, 0, h, rt.R(ki));
+            rt.PopTo(bas);
+            return r == Val.NotFound ? notFound : r;
+        }
+        return notFound;
+    }
+
+    public static bool Contains(Rt rt, long m, long k) {
+        return Get(rt, m, k, Val.NotFound) != Val.NotFound;
+    }
+
+    static long Promote(Rt rt, long m) {
+        int bas = rt.Mark();
+        int mi = rt.Push(m);
+        int n = Count(rt, m);
+        int ri = rt.Push(BnNew(rt, 0, 0, Val.Nil));
+        int cnt = 0;
+        for (int i = 0; i < n; i++) {
+            int ki = rt.Push(AmKey(rt, rt.R(mi), i));
+            int vi = rt.Push(AmVal(rt, rt.R(mi), i));
+            int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+            long nr = NodeAssoc(rt, rt.R(ri), 0, h, rt.R(ki), rt.R(vi), Val.Nil);
+            rt.SetR(ri, nr);
+            rt.PopTo(ki);
+            if (rt.champAdded) cnt++;
+        }
+        long outv = NewHashMap(rt, cnt, rt.R(ri), Val.Nil);
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    public static long Assoc(Rt rt, long m, long k, long v) {
+        int bas = rt.Mark();
+        int mi = rt.Push(m), ki = rt.Push(k), vi = rt.Push(v);
+        long outv;
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
+        if (t == Obj.TyArraymap) {
+            int n = Count(rt, m);
+            int i = AmIndexOf(rt, rt.R(mi), rt.R(ki));
+            if (i >= 0) {
+                long old = AmVal(rt, rt.R(mi), i);
+                if (old == rt.R(vi)) {
+                    outv = rt.R(mi);
+                } else {
+                    int ni = rt.Push(NewArrayMap(rt, n));
+                    for (int j = 0; j < n; j++) {
+                        AmSet(rt, rt.R(ni), AM_BASE + 2 * j, AmKey(rt, rt.R(mi), j));
+                        AmSet(rt, rt.R(ni), AM_BASE + 2 * j + 1, AmVal(rt, rt.R(mi), j));
+                    }
+                    AmSet(rt, rt.R(ni), AM_BASE + 2 * i + 1, rt.R(vi));
+                    AmSet(rt, rt.R(ni), AM_META, rt.Slot(rt.R(mi), AM_META));
+                    outv = rt.R(ni);
+                }
+            } else if (n < ARRAY_MAP_MAX) {
+                int ni = rt.Push(NewArrayMap(rt, n + 1));
+                for (int j = 0; j < n; j++) {
+                    AmSet(rt, rt.R(ni), AM_BASE + 2 * j, AmKey(rt, rt.R(mi), j));
+                    AmSet(rt, rt.R(ni), AM_BASE + 2 * j + 1, AmVal(rt, rt.R(mi), j));
+                }
+                AmSet(rt, rt.R(ni), AM_BASE + 2 * n, rt.R(ki));
+                AmSet(rt, rt.R(ni), AM_BASE + 2 * n + 1, rt.R(vi));
+                AmSet(rt, rt.R(ni), AM_META, rt.Slot(rt.R(mi), AM_META));
+                outv = rt.R(ni);
+            } else {
+                int pi = rt.Push(Promote(rt, rt.R(mi)));
+                outv = Assoc(rt, rt.R(pi), rt.R(ki), rt.R(vi));
+            }
+        } else if (t == Obj.TyHashmap) {
+            int cnt = Count(rt, m);
+            int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+            int ri = rt.Push(rt.Slot(rt.R(mi), HM_ROOT));
+            rt.champAdded = false;
+            long nr = NodeAssoc(rt, rt.R(ri), 0, h, rt.R(ki), rt.R(vi), Val.Nil);
+            if (nr == rt.R(ri)) {
+                outv = rt.R(mi);
+            } else {
+                int nri = rt.Push(nr);
+                bool added = rt.champAdded;
+                long meta = rt.Slot(rt.R(mi), HM_META);
+                outv = NewHashMap(rt, cnt + (added ? 1 : 0), rt.R(nri), meta);
+            }
+        } else {
+            outv = Val.Nil;
+        }
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    public static long Dissoc(Rt rt, long m, long k) {
+        int bas = rt.Mark();
+        int mi = rt.Push(m), ki = rt.Push(k);
+        long outv;
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
+        if (t == Obj.TyArraymap) {
+            int i = AmIndexOf(rt, rt.R(mi), rt.R(ki));
+            if (i < 0) {
+                outv = rt.R(mi);
+            } else {
+                int n = Count(rt, rt.R(mi));
+                int ni = rt.Push(NewArrayMap(rt, n - 1));
+                int d = 0;
+                for (int j = 0; j < n; j++) {
+                    if (j == i) continue;
+                    AmSet(rt, rt.R(ni), AM_BASE + 2 * d, AmKey(rt, rt.R(mi), j));
+                    AmSet(rt, rt.R(ni), AM_BASE + 2 * d + 1, AmVal(rt, rt.R(mi), j));
+                    d++;
+                }
+                AmSet(rt, rt.R(ni), AM_META, rt.Slot(rt.R(mi), AM_META));
+                outv = rt.R(ni);
+            }
+        } else if (t == Obj.TyHashmap) {
+            int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+            int ri = rt.Push(rt.Slot(rt.R(mi), HM_ROOT));
+            rt.champAdded = false;
+            long nr = NodeDissoc(rt, rt.R(ri), 0, h, rt.R(ki), Val.Nil);
+            if (!rt.champAdded || nr == rt.R(ri)) {
+                outv = rt.R(mi);
+            } else {
+                int cnt = Count(rt, rt.R(mi)) - 1;
+                int nri = rt.Push(nr);
+                long meta = rt.Slot(rt.R(mi), HM_META);
+                outv = cnt == 0 ? Empty(rt) : NewHashMap(rt, cnt, rt.R(nri), meta);
+            }
+        } else {
+            outv = Val.Nil;
+        }
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    // --- traversal -----------------------------------------------------------
+
+    /// Every key and value, flattened into the shadow stack above `at`, as
+    /// `k,v,k,v,...`. Returns the number of PAIRS.
+    ///
+    /// Materialised rather than a callback because the callers -- equality,
+    /// hashing, `seq` -- all want to walk twice or in another order, and a
+    /// callback that allocated mid-walk would need every node rooted anyway.
+    public static int Entries(Rt rt, long m, int at) {
+        if (!Val.IsHeap(m)) return 0;
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
+        if (t == Obj.TyArraymap) {
+            int n = Count(rt, m);
+            int mi = rt.Push(m);
+            for (int i = 0; i < n; i++) {
+                rt.Push(AmKey(rt, rt.R(mi), i));
+                rt.Push(AmVal(rt, rt.R(mi), i));
+            }
+            // The map itself was pushed first; slide the pairs down over it.
+            for (int i = 0; i < 2 * n; i++) rt.SetR(at + i, rt.R(at + 1 + i));
+            rt.PopTo(at + 2 * n);
+            return n;
+        }
+        if (t == Obj.TyHashmap) {
+            long root = rt.Slot(m, HM_ROOT);
+            if (Val.IsNil(root)) return 0;
+            return NodeEntries(rt, root, at);
+        }
+        return 0;
+    }
+
+    static int NodeEntries(Rt rt, long node, int at) {
+        int ni = rt.Push(node);
+        int wrote = 0;
+        if (!IsBmnode(rt, rt.R(ni))) {
+            int cnt = CnCount(rt, rt.R(ni));
+            for (int i = 0; i < cnt; i++) {
+                rt.Push(CnKey(rt, rt.R(ni), i));
+                rt.Push(CnVal(rt, rt.R(ni), i));
+                wrote++;
+            }
+        } else {
+            int ne = System.Numerics.BitOperations.PopCount((uint)(BnDatamap(rt, rt.R(ni))));
+            int nn = System.Numerics.BitOperations.PopCount((uint)(BnNodemap(rt, rt.R(ni))));
+            for (int i = 0; i < ne; i++) {
+                rt.Push(BnKey(rt, rt.R(ni), i));
+                rt.Push(BnVal(rt, rt.R(ni), i));
+                wrote++;
+            }
+            for (int j = 0; j < nn; j++) {
+                wrote += NodeEntries(rt, BnNode(rt, rt.R(ni), j), rt.Mark());
+            }
+        }
+        // Slide down over the node handle, which was pushed first.
+        for (int i = 0; i < 2 * wrote; i++) rt.SetR(at + i, rt.R(at + 1 + i));
+        rt.PopTo(at + 2 * wrote);
+        return wrote;
+    }
+
+    /// Structural equality. Same count, and every key in `a` present in `b`
+    /// with an equal value -- ORDER-INDEPENDENT, which is what a map's `=`
+    /// means and why it cannot just compare slots.
+    public static bool Eq(Rt rt, long a, long b) {
+        if (Count(rt, a) != Count(rt, b)) return false;
+        int bas = rt.Mark();
+        int ai = rt.Push(a), bi = rt.Push(b);
+        int at = rt.Mark();
+        int n = Entries(rt, rt.R(ai), at);
+        bool ok = true;
+        for (int i = 0; i < n && ok; i++) {
+            long k = rt.R(at + 2 * i), v = rt.R(at + 2 * i + 1);
+            long got = Get(rt, rt.R(bi), k, Val.NotFound);
+            ok = got != Val.NotFound && Flint.Rt.Eq.Equal(rt, v, got);
+        }
+        rt.PopTo(bas);
+        return ok;
+    }
+
+    /// UNORDERED, as Clojure hashes maps: the entries are summed, so the hash
+    /// does not depend on iteration order. An entry hashes as the vector `[k v]`.
+    public static int Hash(Rt rt, long m) {
+        int bas = rt.Mark();
+        int mi = rt.Push(m);
+        int at = rt.Mark();
+        int n = Entries(rt, rt.R(mi), at);
+        int acc = 0;
+        for (int i = 0; i < n; i++) {
+            int kh = Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i));
+            int vh = Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i + 1));
+            acc = Flint.Rt.Hash.UnorderedStep(acc, Flint.Rt.Hash.MixCollHash(
+                Flint.Rt.Hash.OrderedStep(Flint.Rt.Hash.OrderedStep(1, kh), vh), 2));
+        }
+        rt.PopTo(bas);
+        return Flint.Rt.Hash.MixCollHash(acc, n);
+    }
+}

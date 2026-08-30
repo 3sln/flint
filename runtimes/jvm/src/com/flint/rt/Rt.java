@@ -303,6 +303,24 @@ public final class Rt {
                     popTo(base);
                     vpush(v);
                 }
+                case Op.MAP -> {
+                    int nv = u16(ip); ip += 2;
+                    // The pairs are on the VALUE stack; the map under
+                    // construction goes on the SHADOW stack, because `assoc`
+                    // allocates and the accumulator has to survive it.
+                    int base = mark();
+                    int mi = push(Maps.empty(this));
+                    int at = roots.stackTop - 2 * nv;
+                    for (int i = 0; i < nv; i++) {
+                        long nm = Maps.assoc(this, r(mi), roots.stack[at + 2 * i],
+                                             roots.stack[at + 2 * i + 1]);
+                        setR(mi, nm);
+                    }
+                    long m = r(mi);
+                    popTo(base);
+                    roots.stackTop = at;
+                    vpush(m);
+                }
                 case Op.TYPE_P -> {
                     int c = u8(ip); ip += 1;
                     roots.stack[roots.stackTop - 1] = Val.bool(typeP(c, roots.stack[roots.stackTop - 1]));
@@ -364,8 +382,13 @@ public final class Rt {
     /// `get`, for the collections that are ported.
     long lookup(long coll, long k, long dflt) {
         if (Val.isNil(coll)) return dflt;
-        throw new UnsupportedOperationException(
-            "lookup needs maps and sets ported");
+        if (Maps.isMap(this, coll)) return Maps.get(this, coll, k, dflt);
+        if (isHeapTy(coll, TY_VEC)) {
+            if (!Val.isFixnum(k)) return dflt;
+            long got = Vec.nth(this, coll, (int) Val.asFixnum(k));
+            return got == Val.NOT_FOUND ? dflt : got;
+        }
+        throw new UnsupportedOperationException("lookup needs sets ported");
     }
 
     /// `flint.types/code`'s canonical table, from `vm.rs`. The numbers are the

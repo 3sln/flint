@@ -13,6 +13,7 @@ public static class Program {
         if (args.Length >= 1 && args[0] == "--rt-foundation") return RtFoundation();
         if (args.Length >= 1 && args[0] == "--rt-snapshot") return RtSnapshot();
         if (args.Length >= 1 && args[0] == "--rt-hash") return RtHash();
+        if (args.Length >= 1 && args[0] == "--rt-maps") return RtMaps();
         if (args.Length >= 2 && args[0] == "--rt-image")
             return RtImage(args[1], args.Length > 2 ? args[2] : null);
         if (args.Length >= 3 && args[0] == "--selfhost") return SelfHost(args[1], args[2]);
@@ -271,6 +272,135 @@ public static class Program {
         Console.WriteLine("  ok   an astral-plane character is a surrogate PAIR");
 
         if (hashFails > 0) { Console.WriteLine("  " + hashFails + " failed"); return 1; }
+        return 0;
+    }
+
+
+    // ------------------------------------------------------------------
+    // Maps on the ported runtime. A line-for-line mirror of the JVM's
+    // `RtMaps.java`, printing the same lines so the gate can compare them.
+
+    static int mapFails;
+
+    static void MOk(string what, bool cond) {
+        Console.WriteLine((cond ? "  ok   " : "  FAIL ") + what);
+        if (!cond) mapFails++;
+    }
+
+    static long K(Flint.Rt.Rt rt, int i) => Flint.Rt.Val.Fixnum(i);
+
+    static bool AllPresent(Flint.Rt.Rt rt, long m, int from, int to) {
+        for (int i = from; i < to; i++) {
+            long got = Flint.Rt.Maps.Get(rt, m, Flint.Rt.Val.Fixnum(i), Flint.Rt.Val.Nil);
+            if (!Flint.Rt.Val.IsFixnum(got) || Flint.Rt.Val.AsFixnum(got) != i * 10L) return false;
+        }
+        return true;
+    }
+
+    private static int RtMaps() {
+
+    var rt = new Flint.Rt.Rt(4 * 1024 * 1024, 128L * 1024 * 1024);
+
+    // --- the array-map, and the boundary.
+    int bas = rt.Mark();
+    int m = rt.Push(Flint.Rt.Maps.Empty(rt));
+    MOk("an empty map counts 0", Flint.Rt.Maps.Count(rt, rt.R(m)) == 0);
+    for (int i = 0; i < 8; i++) rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
+    MOk("8 entries is still a flat array-map", Flint.Rt.Maps.IsArrayMap(rt, rt.R(m)));
+    MOk("  and every one reads back", AllPresent(rt, rt.R(m), 0, 8));
+    rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, 8), Flint.Rt.Val.Fixnum(80)));
+    MOk("the 9th promotes to a CHAMP trie", !Flint.Rt.Maps.IsArrayMap(rt, rt.R(m)) && Flint.Rt.Maps.IsMap(rt, rt.R(m)));
+    MOk("  and nothing was lost crossing the boundary", AllPresent(rt, rt.R(m), 0, 9));
+
+    // --- a big map, in and out.
+    const int N = 2000;
+    rt.SetR(m, Flint.Rt.Maps.Empty(rt));
+    for (int i = 0; i < N; i++) rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
+    MOk(N + " keys, all present, count agrees", Flint.Rt.Maps.Count(rt, rt.R(m)) == N && AllPresent(rt, rt.R(m), 0, N));
+    MOk("a key that was never added is absent",
+       Flint.Rt.Maps.Get(rt, rt.R(m), Flint.Rt.Val.Fixnum(-1), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil);
+    // Re-assoc with the same value must not grow the map.
+    rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, 5), Flint.Rt.Val.Fixnum(50)));
+    MOk("re-assoc with an identical value does not grow it", Flint.Rt.Maps.Count(rt, rt.R(m)) == N);
+
+    // --- CANONICAL FORM: the property CHAMP is chosen for.
+    int viaDelete = rt.Push(rt.R(m));
+    for (int i = 0; i < N; i += 2) {
+      rt.SetR(viaDelete, Flint.Rt.Maps.Dissoc(rt, rt.R(viaDelete), K(rt, i)));
+    }
+    int direct = rt.Push(Flint.Rt.Maps.Empty(rt));
+    for (int i = 1; i < N; i += 2) {
+      rt.SetR(direct, Flint.Rt.Maps.Assoc(rt, rt.R(direct), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
+    }
+    MOk("built-by-deleting and built-directly have the same count",
+       Flint.Rt.Maps.Count(rt, rt.R(viaDelete)) == Flint.Rt.Maps.Count(rt, rt.R(direct)));
+    MOk("  ... and are =", Flint.Rt.Maps.Eq(rt, rt.R(viaDelete), rt.R(direct)));
+    MOk("  ... and HASH ALIKE, which is what canonical form means",
+       Flint.Rt.Eq.HashValue(rt, rt.R(viaDelete)) == Flint.Rt.Eq.HashValue(rt, rt.R(direct)));
+    MOk("  ... and the deleted keys really are gone",
+       Flint.Rt.Maps.Get(rt, rt.R(viaDelete), K(rt, 0), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil
+       && Flint.Rt.Maps.Get(rt, rt.R(viaDelete), K(rt, 2), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil);
+
+    // --- COLLISIONS. Not with integer keys: `hashLong` on a small long is a
+    // BIJECTION on 32 bits -- `mixK1`, `mixH1` and `fmix` are each invertible,
+    // and with the high word zero the whole pipeline is -- so sequential
+    // integers NEVER collide. (Searched 300,000 of them and found nothing,
+    // which is what sent me looking for the reason.) That is a real property
+    // worth knowing: an integer-keyed map never reaches the collision path.
+    //
+    // Strings do collide, and the classic Java pair is the honest instrument:
+    // "Aa" and "BB" have the same `String.hashCode`, so they have the same
+    // flint hash too. Asserted rather than assumed, because the day the hash
+    // changes this test should say so instead of quietly testing nothing.
+    byte[] aa = System.Text.Encoding.UTF8.GetBytes("Aa");
+    byte[] bb = System.Text.Encoding.UTF8.GetBytes("BB");
+    MOk("\"Aa\" and \"BB\" collide, as they do in Java",
+       Flint.Rt.Hash.HashString(aa) == Flint.Rt.Hash.HashString(bb));
+    {
+      int c = rt.Push(Flint.Rt.Maps.Empty(rt));
+      // Padded past the array-map, or the collision never reaches a trie node
+      // and the collision-node code is not what is being exercised.
+      for (int i = 0; i < 20; i++) rt.SetR(c, Flint.Rt.Maps.Assoc(rt, rt.R(c), Flint.Rt.Val.Fixnum(1000000 + i), Flint.Rt.Val.Fixnum(i)));
+      int ka = rt.Push(Flint.Rt.Str.Of(rt, "Aa"));
+      int kb = rt.Push(Flint.Rt.Str.Of(rt, "BB"));
+      rt.SetR(c, Flint.Rt.Maps.Assoc(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Fixnum(111)));
+      rt.SetR(c, Flint.Rt.Maps.Assoc(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Fixnum(222)));
+      MOk("both colliding keys are stored and distinct",
+         Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Nil)) == 111
+         && Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Nil)) == 222);
+      MOk("  and the count counts them both", Flint.Rt.Maps.Count(rt, rt.R(c)) == 22);
+      rt.SetR(c, Flint.Rt.Maps.Dissoc(rt, rt.R(c), rt.R(ka)));
+      MOk("  removing one leaves the other",
+         Flint.Rt.Maps.Get(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil
+         && Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Nil)) == 222);
+      MOk("  and the collision node collapsed back to an inline entry",
+         Flint.Rt.Maps.Count(rt, rt.R(c)) == 21);
+    }
+
+    // --- keys that are not fixnums, and a collection under collection.
+    int s = rt.Push(Flint.Rt.Maps.Empty(rt));
+    rt.SetR(s, Flint.Rt.Maps.Assoc(rt, rt.R(s), Flint.Rt.Str.Of(rt, "hello, world"), Flint.Rt.Val.Fixnum(1)));
+    rt.SetR(s, Flint.Rt.Maps.Assoc(rt, rt.R(s), Flint.Rt.Str.Keyword(rt, null, "kw"), Flint.Rt.Val.Fixnum(2)));
+    int vk = rt.Push(Flint.Rt.Vec.Empty(rt));
+    rt.SetR(vk, Flint.Rt.Vec.Conj(rt, rt.R(vk), Flint.Rt.Val.Fixnum(7)));
+    rt.SetR(s, Flint.Rt.Maps.Assoc(rt, rt.R(s), rt.R(vk), Flint.Rt.Val.Fixnum(3)));
+    // A SEPARATE but equal key must find the same entry -- that is the whole
+    // difference between `=` and identity, and where interning would be a
+    // shortcut rather than the answer.
+    int vk2 = rt.Push(Flint.Rt.Vec.Empty(rt));
+    rt.SetR(vk2, Flint.Rt.Vec.Conj(rt, rt.R(vk2), Flint.Rt.Val.Fixnum(7)));
+    MOk("a string key reads back",
+       Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(s), Flint.Rt.Str.Of(rt, "hello, world"), Flint.Rt.Val.Nil)) == 1);
+    MOk("an equal-but-separate VECTOR key finds the same entry",
+       Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(s), rt.R(vk2), Flint.Rt.Val.Nil)) == 3);
+
+    // --- the collector, over all of it.
+    rt.gc.Major(rt.roots);
+    MOk("everything survives a major collection", AllPresent(rt, rt.R(m), 0, N)
+       && Flint.Rt.Maps.Eq(rt, rt.R(viaDelete), rt.R(direct)));
+
+    rt.PopTo(bas);
+        if (mapFails > 0) { Console.WriteLine("  " + mapFails + " failed"); return 1; }
         return 0;
     }
 
