@@ -214,6 +214,24 @@
                                          (vary-meta params assoc :tag t))
                                        body))
                                arities)))
+                fform)
+        ;; `:flint/value-meta` travels to the FUNCTION VALUE; everything else
+        ;; stays on the var.
+        ;;
+        ;; An EXPLICIT key rather than a rule about which keys look runtime-y.
+        ;; The first attempt sent every NAMESPACED key to the value, which
+        ;; seemed principled until it met `^{:flint/result-inverts x}` in
+        ;; `clojure.core/not` -- a compiler annotation whose value is a bare
+        ;; symbol naming a parameter. Emitted as a value, `x` does not resolve,
+        ;; and the whole of `clojure.core` stopped compiling.
+        ;;
+        ;; The lesson is that metadata is an open map with more than one
+        ;; audience in it, so which audience a key is FOR has to be said rather
+        ;; than guessed. Protocol dispatch reads `(meta value)`, so anything
+        ;; meant for dispatch goes here.
+        runtime-m (:flint/value-meta m)
+        fform (if (seq runtime-m)
+                (list 'clojure.core/with-meta fform runtime-m)
                 fform)]
     (list 'def (with-meta name m) fform)))
 

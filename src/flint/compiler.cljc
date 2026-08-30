@@ -45,7 +45,19 @@
 
 (defn- def-form-names
   "Top-level names a form defines, following the bootstrap macros far enough to
-  see through `defn`/`defmacro`/`declare`."
+  see through `defn`/`defmacro`/`declare`.
+
+  It does NOT follow user macros, and that is a real limit rather than an
+  oversight: names are collected in a pass that runs BEFORE any macro has been
+  evaluated, so there is nothing yet to expand with. A macro that expands to a
+  `def` therefore defines a var the compiler never records -- which is
+  invisible until something references that var at COMPILE time, as a macro
+  body does, and then reports `var not defined at compile time` from a
+  different namespace entirely.
+
+  Whoever lifts this has to move macro evaluation before name collection, or
+  give the pre-pass its own expander. Until then, a `def*` macro is a thing
+  this compiler does not have."
   [form]
   (when (seq? form)
     (case (first form)

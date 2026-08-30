@@ -36,11 +36,20 @@
         (img/set-entry! b f))
 
       :echo
-      ;; (fn [args] (first args))  -- proves arguments arrive
+      ;; (fn [entry] (first (first entry)))  -- proves arguments arrive.
+      ;;
+      ;; TWO `first`s, because the entry receives `[argv caps]` rather than
+      ;; argv: the capabilities cutover gave the CLI entry a second element,
+      ;; and a sandbox is handed the same pair with the map empty so that a
+      ;; program cannot tell which host started it apart from what is IN the
+      ;; map. One `first` used to be right and now yields the argv VECTOR,
+      ;; which is why this reported "did not return a string" -- the shape
+      ;; moved, the shim did not.
       (let [fst (img/native-slot b "first")
             f (img/add-fn b {:name 'main
                              :arities [{:argc 1 :variadic? false :nlocals 1
-                                        :code (asm [(op :local) 0] (native fst 1) (op :return))}]})]
+                                        :code (asm [(op :local) 0] (native fst 1)
+                                                   (native fst 1) (op :return))}]})]
         (img/set-entry! b f)))
     b))
 

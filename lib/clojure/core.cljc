@@ -43,25 +43,10 @@
 (defn hash [x] (flint.rt/hash x))
 (defn compare [a b] (flint.rt/compare a b))
 
-(defn number? [x] (flint.rt/number? x))
-(defn int? [x] (flint.rt/int? x))
-(defn integer? [x] (flint.rt/int? x))
-(defn float? [x] (flint.rt/float? x))
-(defn double? [x] (flint.rt/float? x))
-(defn string? [x] (flint.rt/string? x))
-(defn keyword? [x] (flint.rt/keyword? x))
-(defn symbol? [x] (flint.rt/symbol? x))
-(defn vector? [x] (flint.rt/vector? x))
-(defn map? [x] (flint.rt/map? x))
-(defn set? [x] (flint.rt/set? x))
-(defn seq? [x] (flint.rt/seq? x))
-(defn list? [x] (flint.rt/seq? x))
-(defn fn? [x] (flint.rt/fn? x))
 (defn ifn? [x] (if (flint.rt/fn? x) true (if (flint.rt/keyword? x) true
                                             (if (flint.rt/map? x) true
                                                 (if (flint.rt/set? x) true
                                                     (flint.rt/vector? x))))))
-(defn sequential? [x] (flint.rt/sequential? x))
 (defn coll? [x] (if (flint.rt/sequential? x) true
                     (if (flint.rt/map? x) true (flint.rt/set? x))))
 (defn associative? [x] (if (flint.rt/map? x) true (flint.rt/vector? x)))
@@ -113,6 +98,56 @@
 (defn dissoc! [c k] (flint.rt/dissoc! c k))
 
 (defn list [& xs] (if (nil? xs) '() xs))
+
+(defn- kind-explain
+  "An explanation for a type predicate: what was wanted, and what arrived.
+
+  `flint.check`'s `Predicate` protocol dispatches on `(meta value)`, and a
+  `defn`'s metadata lands on the VAR -- so `:flint/value-meta` is what puts it
+  on the function itself. There is no registry of known predicates anywhere,
+  which is what lets a predicate held in a local explain itself as well as a
+  literal one does.
+
+  Written as a function rather than a macro because a macro that expands to a
+  `def` defines a var this compiler never records: names are collected before
+  any macro is evaluated. See `def-form-names`."
+  [expected]
+  (fn [_ args]
+    {:expected expected
+     :note (flint.rt/str-join
+            ["got " (flint.rt/name (flint.rt/kind (flint.rt/nth args 0)))])}))
+
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a number")}}
+  number? [x] (flint.rt/number? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "an integer")}}
+  int? [x] (flint.rt/int? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "an integer")}}
+  integer? [x] (flint.rt/int? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a float")}}
+  float? [x] (flint.rt/float? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a float")}}
+  double? [x] (flint.rt/float? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a string")}}
+  string? [x] (flint.rt/string? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a keyword")}}
+  keyword? [x] (flint.rt/keyword? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a symbol")}}
+  symbol? [x] (flint.rt/symbol? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a vector")}}
+  vector? [x] (flint.rt/vector? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a map")}}
+  map? [x] (flint.rt/map? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a set")}}
+  set? [x] (flint.rt/set? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a seq")}}
+  seq? [x] (flint.rt/seq? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a list")}}
+  list? [x] (flint.rt/seq? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a function")}}
+  fn? [x] (flint.rt/fn? x))
+(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "something sequential")}}
+  sequential? [x] (flint.rt/sequential? x))
+
 (defn apply2 [f args] (flint.rt/apply f args))
 
 (defn second [coll] (flint.rt/first (flint.rt/next coll)))
