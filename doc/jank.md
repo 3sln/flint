@@ -39,6 +39,47 @@ if let letfn loop map nil set throw try vector`), the reader, syntax quote,
 vars and metadata. Language is exactly what should port, and it is where a
 divergence would be a real one.
 
+## What the 104 failures are
+
+Categorised by CAUSE rather than by directory, because the directories are an
+accident of jank's layout and the causes are the answer:
+
+| n | cause |
+|---:|---|
+| 38 | flint **accepts** a form jank rejects |
+| 14 | `letfn*` is not implemented |
+| 12 | failed with no message |
+| 12 | an unresolved symbol in the test's own preamble |
+|  7 | ran, but an assertion did not hold |
+|  7 | C++ interop leaking into a language test (`cpp/raw` inside `form/`) |
+|  3 | Ratio literals -- flint has no Ratio, deliberately |
+|  3 | `recur` across a `try` boundary |
+|  1 | an integer literal larger than 64 bits |
+|  1 | did not terminate |
+|  5 | one-off, listed by `SHOW_FAILURES=1` |
+
+**The largest group is not a bug in what flint computes.** Thirty-eight tests
+are `fail-*` cases that flint runs happily: duplicate keys in a `case`, two
+variadic arities on one `fn`, a parameter after `& rest`, `letfn` with a
+malformed binding vector. flint's analyser is PERMISSIVE where jank's is
+strict. Every one of these is a program no sane author writes, and each would
+need its own check in the analyser -- which is why they are reported rather
+than fixed. A compiler that refuses more is better, but "refuses more" is a
+long tail of individually small rules, and the brief was to find out where we
+are without changing much.
+
+`letfn` is the one clean gap: fourteen tests, one missing special form, and
+flint says so by name -- *"letfn* is not implemented; use let with fns that do
+not refer to each other"*. Mutual recursion in a `let` needs the bindings to
+exist before their initialisers run, which is a real feature and not an
+oversight.
+
+Seven failures are C++ interop that leaked out of `cpp/` into the language
+directories -- a `form/loop` test whose subject is `cpp/raw`. Those are not
+about `loop` at all, and excluding them would be defensible; they are counted
+as failures here because drawing that line test-by-test is how a number stops
+being trustworthy.
+
 ## The most interesting failure
 
 `(recur)` at the top level. jank rejects it; flint accepts it and loops for
