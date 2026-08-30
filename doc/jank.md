@@ -14,14 +14,37 @@ different revision is a different suite, so quote the one you ran.
 ## The numbers
 
     native                     port (jvm)
-    pass-*   130 / 195         128 / 195
+    pass-*   130 / 195         130 / 195
     fail-*    60 /  99          64 /  99
     ---------------------------------------
-    TOTAL    190 / 294 (64%)   192 / 294 (65%)
+    TOTAL    190 / 294 (64%)   194 / 294 (65%)
 
-Two tests apart, which is about what a verbatim mirror should look like. The
-composition differs slightly -- the port accepts two fewer and refuses four
-more -- and `SHOW_FAILURES=1` on both runtimes prints the exact disagreement.
+**The `pass-*` halves are identical**, which is the half that measures the
+runtime: 130 of 195, the same 130 on both. That is the parity claim, and it is
+worth more than either total.
+
+The `fail-*` difference is NOT the ported runtime being stricter than the Rust
+one. It is an artefact of the harness having to take two different routes:
+native runs through `flint run`, which compiles and executes in one process,
+while the ports must go through `--emit-image` and then load the image. Those
+are different COMPILE paths, and the image writer refuses things the direct
+runner does not -- `(fn* 1)` is rejected by one and accepted by the other.
+
+There is no way to make them the same route, because the native CLI has no
+mode that runs a pre-built image. So the four-test gap is recorded as what it
+is rather than claimed as a win: the ports look stricter because their compile
+path is, and the runtimes themselves are not being compared on those four.
+
+Two real port bugs came out of DIFFING the two failure lists, neither
+reachable from flint's own conformance set:
+
+* `meta` was a STUB returning nil. Nil is indistinguishable from "no
+  metadata", so it passed everything that never set any.
+* Arity selection took whichever clause came first, where the Rust prefers an
+  EXACT fixed arity over a variadic one. So `(fn ([] :a) ([& xs] xs))` and the
+  same two clauses reversed gave different answers for zero arguments -- the
+  same function, written two ways. jank's `pass-ambiguous` writes out all six
+  orderings precisely because that is the trap.
 
 **The port scored 201 before this was believable.** It ran a program's
 initialisers and ignored what they threw: a flint throw is not a host
