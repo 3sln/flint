@@ -72,6 +72,29 @@ export const codec = {
   str: (s) => v((w) => { w.byte(K.STRING); w.str(s); }),
   bytes: (b) => v((w) => { w.byte(K.BYTES); w.bytes(b); }),
 
+  /// An OPAQUE value the host owns: an id it issued, and a label for reading.
+  ///
+  /// This is the half that lets a JS host hand a capability IN. Decoding one
+  /// has always worked -- an opaque arriving from the guest comes back as
+  /// `{sentinel, hostId}` -- and encoding one did not, which meant a JS host
+  /// could recognise a capability it had never had any way to issue. The
+  /// asymmetry is why the `allow` hook in `guest.js` had no users.
+  ///
+  /// `doc/decisions/0022`: the id is the whole authority. It is meaningful
+  /// only to the host that issued it, the guest can carry it and compare it
+  /// and nothing else, and an id the guest MINTS is 0 -- which is why 0 must
+  /// never be issued, or a forgery is indistinguishable from a grant.
+  opaque: (hostId, label = '') => v((w) => {
+    if (!Number.isInteger(hostId) || hostId <= 0) {
+      throw new Error('flint: an opaque id must be a positive integer; ' +
+                      '0 is what a guest-minted value carries');
+    }
+    w.byte(K.SENTINEL);
+    w.u32(hostId % 0x100000000);
+    w.u32(Math.floor(hostId / 0x100000000));
+    w.str(label);
+  }),
+
   /// `kw('a')` is `:a`; `kw('my.ns', 'a')` is `:my.ns/a`.
   kw: (a, b) => v((w) => {
     w.byte(K.KEYWORD);

@@ -7,14 +7,32 @@ set -e
 cd "$(dirname "$0")/.."
 fail() { echo; echo "FAILED: $1"; exit 1; }
 
+# CARGO'S EXIT STATUS, not a grep for the word FAILED.
+#
+# It used to be the grep, and the hole that leaves is a test target that does
+# not COMPILE: `cargo test` exits non-zero, prints `error[E0425]` and never
+# prints a `test result` line at all -- so the grep matched the error lines,
+# succeeded, and the gate went green past a suite that had not run. That is
+# exactly what happened to `flint-conc`'s `hostports` test after the capability
+# cutover removed the API it was calling, and it went unnoticed for the whole
+# of the work that followed.
+#
+# The status is captured first and the output shown after, so a failure is
+# still readable rather than swallowed by a pipe.
+rust_tests() {
+  if ! cargo test -p "$1" > /tmp/flint-cargo.out 2>&1; then
+    grep -E "^(error|test result|thread .* panicked|failures:)" /tmp/flint-cargo.out | head -20
+    fail "cargo test -p $1"
+  fi
+  grep -E "^test result" /tmp/flint-cargo.out
+}
+
 echo "== rust: runtime unit tests and VM integration tests"
-cargo test -p flint-rt 2>&1 | grep -E "^(test result|error)" || fail "cargo test"
-cargo test -p flint-rt 2>&1 | grep -q "FAILED" && fail "cargo test" || true
+rust_tests flint-rt
 
 echo
 echo "== rust: green threads, ports, and a parked thread under collection"
-cargo test -p flint-conc 2>&1 | grep -E "^(test result|error)" || fail "cargo test -p flint-conc"
-cargo test -p flint-conc 2>&1 | grep -q "FAILED" && fail "cargo test -p flint-conc" || true
+rust_tests flint-conc
 
 echo
 echo "== units: the PRODUCTION build (no diagnostic machinery -- 0016)"

@@ -162,6 +162,41 @@ fn opener(cap_host_id: Option<u64>) -> Rt {
     rt
 }
 
+/// What the guest presented, as a host reads it.
+///
+/// The runtime used to answer this itself -- `presented_capability`, plus
+/// `PRESENTED_NONE` and `PRESENTED_UNKNOWN` -- and the cutover removed all
+/// three. The sandbox does not have the concept: `open` forwards its arguments
+/// and the payload is that argument vector, encoded. A host decodes it and
+/// looks for whatever it projected in.
+///
+/// So this is the Rust half of what `sdks/esm/src/guest.js` does in JS, and it
+/// is deliberately the same shape -- if the two read the wire form differently
+/// then one of them is wrong about an ABI.
+///
+/// `None` means nothing was presented. `Some(0)` means something was, and the
+/// guest minted it: `flint/opaque` gives host id 0 and a guest cannot set that
+/// field. Those two must stay distinguishable, or a host that allows
+/// unauthenticated opens accepts every forgery.
+fn presented(rt: &mut Rt, payload: &[u8]) -> Option<u64> {
+    let v = rt.decode(payload).ok()?;
+    // `[name, ...args]`, and the capability is whichever of those args is an
+    // opaque value. SCANNED rather than read at a fixed index, because the two
+    // callers put it in different places: this test drives the builtin
+    // directly, `(open name nil cap)`, while `flint.port/open` takes an options
+    // MAP and the capability is a key in it. A host looks for what it
+    // projected in; it does not count arguments.
+    let n = rt.count_of(v);
+    for k in 1..n {
+        let idx = rt.integer(k as i64);
+        let arg = rt.nth(v, idx, None);
+        if rt.is_opaque(arg) {
+            return Some(rt.opaque_host_id(arg));
+        }
+    }
+    None
+}
+
 #[test]
 fn open_asks_the_host_and_parks_until_it_answers() {
     let mut rt = opener(None);
@@ -169,10 +204,10 @@ fn open_asks_the_host_and_parks_until_it_answers() {
     let evs = drain(&mut rt);
     assert_eq!(evs.len(), 1, "exactly one open-request");
     assert_eq!(evs[0].kind, conc::EV_OPEN as u32);
-    assert_eq!(evs[0].payload, b"fs", "the capability asked for, by name");
     // Nothing was presented -- and NOTHING is a distinct answer from "something
     // I do not recognise".
-    assert_eq!(rt.presented_capability(evs[0].b), conc::PRESENTED_NONE);
+    let p = evs[0].payload.clone();
+    assert_eq!(presented(&mut rt, &p), None);
     let token = evs[0].a as i64;
     assert!(rt.host_continue(token, true), "a fresh token is honoured");
     // A SECOND answer on the same token is refused: the generation moved on.
@@ -203,24 +238,26 @@ fn a_refusal_is_a_security_exception_rather_than_a_hang() {
     assert_eq!(rt.as_str(k, &mut kb), Some("SecurityException"));
 }
 
-/// The case `PRESENTED_UNKNOWN` exists for.
+/// A forgery must not read as an absence.
 ///
 /// A guest can mint an opaque value all day -- `flint/opaque` gives it host id
-/// 0. If the runtime reported that as "nothing presented", a host that falls
-/// back to allowing unauthenticated opens would accept the forgery. The two
-/// must be distinguishable, and this is the assertion that says so.
+/// 0. If that reached the host as "nothing presented", a host that falls back
+/// to allowing unauthenticated opens would accept every forgery. The two must
+/// be distinguishable, and this is the assertion that says so.
 #[test]
 fn a_guest_minted_capability_is_unknown_not_absent() {
     let mut rt = opener(Some(0));
     let evs = drain(&mut rt);
+    let p = evs[0].payload.clone();
     assert_eq!(
-        rt.presented_capability(evs[0].b),
-        conc::PRESENTED_UNKNOWN,
+        presented(&mut rt, &p),
+        Some(0),
         "a guest-minted opaque must not read as an absence"
     );
     let mut rt2 = opener(Some(77));
     let evs2 = drain(&mut rt2);
-    assert_eq!(rt2.presented_capability(evs2[0].b), 77, "a real host id travels");
+    let p2 = evs2[0].payload.clone();
+    assert_eq!(presented(&mut rt2, &p2), Some(77), "a real host id travels");
 }
 
 #[test]

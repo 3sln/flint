@@ -147,6 +147,45 @@
       a (run! (build! "park" true))]
   (check "a thread that parks mid-bail comes back to the chunk its ip names" (:out i) "33")
   (check "  ... and compiled code agrees" (:out a) (:out i))
+  ;; KNOWN FAILING as of 2026-08-30, and it is a real defect rather than a
+  ;; fragile test. Left failing on purpose: the gate saying so is worth more
+  ;; than a green gate that has forgotten.
+  ;;
+  ;; A PARK INSIDE COMPILED CODE CHARGES EXACTLY ONE GAS UNIT MORE than the
+  ;; interpreter does for the same program. Isolated by building this program
+  ;; with and without its `p/receive`, everything else identical:
+  ;;
+  ;;   | program        | interpreted | compiled |
+  ;;   | -------------- | ----------: | -------: |
+  ;;   | no park        |        5254 |     5254 |
+  ;;   | one park       |        5331 |     5332 |
+  ;;
+  ;; It is one, not a chunk: lengthening the basic block before the parking
+  ;; native (four more arithmetic instructions in the same block) moves both
+  ;; numbers to 5363/5364 and the gap stays at one. So it is a single
+  ;; instruction charged twice on the compiled path, not a chunk prefix
+  ;; re-executed -- which was the first theory and is wrong.
+  ;;
+  ;; Why it appeared now: nothing about parking changed. `clojure.core` gained
+  ;; the `:flint/check` conditionals, which moved the code layout, which moved
+  ;; where the slice boundary lands. The equality here was holding by where the
+  ;; park happened to fall, and any change that shifts layout can expose it.
+  ;; That is the argument for fixing it rather than re-baselining: the next
+  ;; unrelated change flips it back and it looks fixed.
+  ;;
+  ;; Where to look: `Rt::aot_failed`'s `PARK` branch in `runtime/src/vm.rs`
+  ;; saves the frame with `ip` at the parking instruction, exactly as the
+  ;; interpreter's own arm does with `opcode_at` -- so both re-dispatch it on
+  ;; resume and both should charge it twice. One of them charges it three
+  ;; times. `aot_native` has already added the chunk's static `gas` by then,
+  ;; and whether that count INCLUDES the native it is about is the question to
+  ;; answer first.
+  ;;
+  ;; `doc/decisions/0013` is why this matters: compiled code charges per chunk
+  ;; from a static count and the interpreter charges per instruction, and the
+  ;; two agreeing is the only evidence that the chunking is right. 0009 makes
+  ;; gas a bound on WORK, so a program that costs more when compiled hits a
+  ;; limit the interpreter would not.
   (check "  ... on the same instruction count" (:steps a) (:steps i)))
 
 (println (if (zero? @fails) "aot: ok" (str "aot: " @fails " FAILURES")))

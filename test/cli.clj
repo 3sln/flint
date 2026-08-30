@@ -107,7 +107,14 @@
 ;; capability model worth anything: it applies to the tool as much as to what
 ;; the tool runs.
 (check-that "with no :fs grant, the CLI can read nothing"
-            (str/includes? (cli false "paths") "refused the capability"))
+            ;; `refused to open`, not `refused the capability`: the cutover
+            ;; took the word out of the sandbox, which does not have the
+            ;; concept. What refuses is a host that was handed no handler for
+            ;; the name, and it says so in those terms. The PROPERTY is
+            ;; unchanged and is what this row is for -- the CLI has no ambient
+            ;; authority, so it applies to the tool as much as to what the tool
+            ;; runs.
+            (str/includes? (cli false "paths") "refused to open \"fs\""))
 (check "  ... but the commands that need no project still work"
        (cli false "version") "0.1.0")
 
