@@ -28,17 +28,16 @@ public static class Eq {
         bool kb = Val.IsInlineKw(b) || rt.IsHeapTy(b, Obj.TyKw);
         if (ka || kb) {
             if (!(ka && kb)) return false;
-            if (Val.IsInlineKw(a) && Val.IsInlineKw(b)) return a == b;
-            // One inline and one on the heap naming the same keyword must
-            // compare EQUAL. They cannot here -- one is a value and one is an
-            // object -- which is why interning matters, and why this is
-            // refused rather than answered wrongly.
-            throw new System.NotSupportedException(
-                "comparing a heap keyword needs the intern tables ported");
+            // Both inline, or both interned: identity IS equality, which is
+            // the whole point of `doc/decisions/0011`'s tiers. A keyword short
+            // enough to be inline is never on the heap, and one long enough to
+            // be on the heap is interned, so the two forms never meet.
+            return a == b;
         }
-        if (rt.IsHeapTy(a, Obj.TySym) && rt.IsHeapTy(b, Obj.TySym)) {
-            return Equal(rt, rt.Slot(a, 0), rt.Slot(b, 0)) && Equal(rt, rt.Slot(a, 1), rt.Slot(b, 1));
-        }
+        // Symbols are interned too, so `a == b` above already answered it. Two
+        // distinct symbol objects with the same name would be an interning bug
+        // rather than a case to handle, and comparing slots here would HIDE it.
+        if (rt.IsHeapTy(a, Obj.TySym) || rt.IsHeapTy(b, Obj.TySym)) return false;
         if (rt.IsHeapTy(a, Obj.TyVec) && rt.IsHeapTy(b, Obj.TyVec)) {
             int n = Vec.Count(rt, a);
             if (n != Vec.Count(rt, b)) return false;
@@ -50,8 +49,8 @@ public static class Eq {
         if (Maps.IsMap(rt, a) && Maps.IsMap(rt, b)) return Maps.Eq(rt, a, b);
         // A vector and a seq holding the same elements ARE equal in Clojure:
         // `=` is over the sequential abstraction, not the concrete type.
-        bool sa = rt.IsSeq(a) || rt.IsHeapTy(a, Obj.TyVec);
-        bool sb = rt.IsSeq(b) || rt.IsHeapTy(b, Obj.TyVec);
+        bool sa = rt.IsSequential(a);
+        bool sb = rt.IsSequential(b);
         if (sa && sb) {
             int bas = rt.Mark();
             int x = rt.Push(Seqs.Seq(rt, a)), y = rt.Push(Seqs.Seq(rt, b));
@@ -74,7 +73,7 @@ public static class Eq {
                 return false;
             }
             throw new System.NotSupportedException(
-                "= on this collection needs more of the data structures ported");
+                "= over " + rt.Describe(a) + " and " + rt.Describe(b) + " needs more of the data structures");
         }
         return false;
     }

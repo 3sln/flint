@@ -25,23 +25,28 @@ public static class Builtins {
     static long NegExact(long a) { checked { return -a; } }
 
     static Builtins() {
+        // Arithmetic goes through `Num`, which owns the PROMOTION RULE:
+        // integers stay integers and overflow rather than wrap, and any double
+        // in the operands makes the whole expression a double. These read every
+        // argument as a fixnum once, which silently read a double's MANTISSA as
+        // an integer -- `(+ 1.5 2.5)` came back 0 and agreed with nothing.
         Def("flint/add", (rt, at, n) => {
-            long acc = 0;
-            for (int i = 0; i < n; i++) acc = AddExact(acc, Val.AsFixnum(rt.VAt(at + i)));
-            return Val.Fixnum(acc);
+            long acc = Val.Fixnum(0);
+            for (int i = 0; i < n; i++) acc = Num.Add(rt, acc, rt.VAt(at + i));
+            return acc;
         });
         Def("+", (rt, at, n) => ByName("flint/add")(rt, at, n));
         Def("flint/sub", (rt, at, n) => {
-            if (n == 1) return Val.Fixnum(NegExact(Val.AsFixnum(rt.VAt(at))));
-            long acc = Val.AsFixnum(rt.VAt(at));
-            for (int i = 1; i < n; i++) acc = SubExact(acc, Val.AsFixnum(rt.VAt(at + i)));
-            return Val.Fixnum(acc);
+            if (n == 1) return Num.Neg(rt, rt.VAt(at));
+            long acc = rt.VAt(at);
+            for (int i = 1; i < n; i++) acc = Num.Sub(rt, acc, rt.VAt(at + i));
+            return acc;
         });
         Def("-", (rt, at, n) => ByName("flint/sub")(rt, at, n));
         Def("flint/mul", (rt, at, n) => {
-            long acc = 1;
-            for (int i = 0; i < n; i++) acc = MulExact(acc, Val.AsFixnum(rt.VAt(at + i)));
-            return Val.Fixnum(acc);
+            long acc = Val.Fixnum(1);
+            for (int i = 0; i < n; i++) acc = Num.Mul(rt, acc, rt.VAt(at + i));
+            return acc;
         });
         Def("*", (rt, at, n) => ByName("flint/mul")(rt, at, n));
         Def("flint/lt", (rt, at, n) => Cmp(rt, at, n, -1, false));
@@ -52,8 +57,13 @@ public static class Builtins {
         Def(">", (rt, at, n) => Cmp(rt, at, n, 1, false));
         Def("flint/ge", (rt, at, n) => Cmp(rt, at, n, 1, true));
         Def(">=", (rt, at, n) => Cmp(rt, at, n, 1, true));
-        Def("inc", (rt, at, n) => Val.Fixnum(AddExact(Val.AsFixnum(rt.VAt(at)), 1)));
-        Def("dec", (rt, at, n) => Val.Fixnum(SubExact(Val.AsFixnum(rt.VAt(at)), 1)));
+        Def("flint/num-eq", (rt, at, n) => {
+            for (int i = 1; i < n; i++) if (!Num.NumEq(rt, rt.VAt(at), rt.VAt(at + i))) return Val.False;
+            return Val.True;
+        });
+        Def("==", (rt, at, n) => ByName("flint/num-eq")(rt, at, n));
+        Def("inc", (rt, at, n) => Num.Add(rt, rt.VAt(at), Val.Fixnum(1)));
+        Def("dec", (rt, at, n) => Num.Sub(rt, rt.VAt(at), Val.Fixnum(1)));
 
         Def("identical?", (rt, at, n) => Val.Bool(rt.VAt(at) == rt.VAt(at + 1)));
         Def("nil?", (rt, at, n) => Val.Bool(Val.IsNil(rt.VAt(at))));
@@ -61,17 +71,32 @@ public static class Builtins {
         Def("true?", (rt, at, n) => Val.Bool(rt.VAt(at) == Val.True));
         Def("false?", (rt, at, n) => Val.Bool(rt.VAt(at) == Val.False));
         Def("boolean", (rt, at, n) => Val.Bool(Val.Truthy(rt.VAt(at))));
-        Def("number?", (rt, at, n) => Val.Bool(Val.IsFixnum(rt.VAt(at)) || Val.IsDouble(rt.VAt(at))));
+        Def("number?", (rt, at, n) => Val.Bool(Num.IsNumber(rt, rt.VAt(at))));
+        Def("int?", (rt, at, n) => Val.Bool(Num.IsInt(rt, rt.VAt(at))));
+        Def("float?", (rt, at, n) => Val.Bool(Num.IsFloat(rt.VAt(at))));
+        Def("double", (rt, at, n) => Val.OfDouble(Num.F64(rt, rt.VAt(at))));
+        Def("long", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (Num.IsInt(rt, v)) return v;
+            // TRUNCATES toward zero, as Clojure's `long` does on a double.
+            return Num.Integer(rt, (long) Num.F64(rt, v));
+        });
+        Def("zero?", (rt, at, n) => Val.Bool(Num.NumEq(rt, rt.VAt(at), Val.Fixnum(0))));
+        Def("pos?", (rt, at, n) => Val.Bool(Num.Cmp(rt, rt.VAt(at), Val.Fixnum(0)) > 0));
+        Def("neg?", (rt, at, n) => Val.Bool(Num.Cmp(rt, rt.VAt(at), Val.Fixnum(0)) < 0));
 
-        Def("quot", (rt, at, n) => Val.Fixnum(Val.AsFixnum(rt.VAt(at)) / Val.AsFixnum(rt.VAt(at + 1))));
-        Def("rem", (rt, at, n) => Val.Fixnum(Val.AsFixnum(rt.VAt(at)) % Val.AsFixnum(rt.VAt(at + 1))));
+        Def("quot", (rt, at, n) => Num.Quot(rt, rt.VAt(at), rt.VAt(at + 1)));
+        Def("rem", (rt, at, n) => Num.Rem(rt, rt.VAt(at), rt.VAt(at + 1)));
         // `/` on two integers that do not divide evenly is a DOUBLE here, not a
         // Ratio: flint has no rational type, and `doc/decisions/0010` counts
         // this among the documented divergences from Clojure rather than a bug.
         Def("flint/div", (rt, at, n) => {
-            long a = Val.AsFixnum(rt.VAt(at)), b = Val.AsFixnum(rt.VAt(at + 1));
-            return b != 0 && a % b == 0 ? Val.Fixnum(a / b) : Val.OfDouble((double) a / b);
+            if (n == 1) return Num.Div(rt, Val.Fixnum(1), rt.VAt(at));
+            long acc = rt.VAt(at);
+            for (int i = 1; i < n; i++) acc = Num.Div(rt, acc, rt.VAt(at + i));
+            return acc;
         });
+        Def("/", (rt, at, n) => ByName("flint/div")(rt, at, n));
 
         Def("bit-and", (rt, at, n) => Val.Fixnum(Val.AsFixnum(rt.VAt(at)) & Val.AsFixnum(rt.VAt(at + 1))));
         Def("bit-or", (rt, at, n) => Val.Fixnum(Val.AsFixnum(rt.VAt(at)) | Val.AsFixnum(rt.VAt(at + 1))));
@@ -103,8 +128,8 @@ public static class Builtins {
             Str.Of(rt, Str.Text(rt, rt.VAt(at)) + Str.Text(rt, rt.VAt(at + 1))));
         Def("flint/num->str", (rt, at, n) => {
             long v = rt.VAt(at);
-            return Str.Of(rt, Val.IsFixnum(v)
-                ? Val.AsFixnum(v).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            return Str.Of(rt, Num.IsInt(rt, v)
+                ? Num.AsI64(rt, v).Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : FmtDouble(Val.AsDouble(v)));
         });
 
@@ -116,21 +141,39 @@ public static class Builtins {
             long v = rt.VAt(at);
             if (Val.IsNil(v)) return Val.Fixnum(0);
             if (rt.IsHeapTy(v, Obj.TyVec)) return Val.Fixnum(Vec.Count(rt, v));
-            if (Str.IsString(rt, v)) return Val.Fixnum(Str.ByteLen(rt, v));
+            if (Str.IsString(rt, v)) return Val.Fixnum(Str.CharLen(rt, v));
             if (Maps.IsMap(rt, v)) return Val.Fixnum(Maps.Count(rt, v));
             if (rt.IsSeq(v)) return Val.Fixnum(Seqs.Count(rt, v));
-            throw new System.NotSupportedException("count on this needs more of the data structures");
+            throw new System.NotSupportedException("count over " + rt.Describe(v) + " needs more of the data structures");
         });
         Def("nth", (rt, at, n) => {
             long v = rt.VAt(at);
             int i = (int) Val.AsFixnum(rt.VAt(at + 1));
+            long got = Val.NotFound;
             if (rt.IsHeapTy(v, Obj.TyVec)) {
-                long got = Vec.Nth(rt, v, i);
-                if (got != Val.NotFound) return got;
-                if (n > 2) return rt.VAt(at + 2);
-                throw new System.IndexOutOfRangeException("index " + i + " out of range");
+                got = Vec.Nth(rt, v, i);
+            } else if (Str.IsString(rt, v)) {
+                got = Str.Nth(rt, v, i);
+            } else if (rt.IsHeapTy(v, Obj.TyMapentry)) {
+                if (i == 0 || i == 1) got = rt.Slot(v, i);
+            } else if (Val.IsNil(v)) {
+                got = Val.NotFound;
+            } else if (rt.IsSeq(v)) {
+                // O(n), as Clojure's `nth` on a seq is. Walking rather than
+                // refusing, because `nth` over a seq is ordinary code and the
+                // cost is the caller's to know about.
+                int bas = rt.Mark();
+                int sq = rt.Push(Seqs.Seq(rt, v));
+                for (int k = 0; k < i && !Val.IsNil(rt.R(sq)); k++) rt.SetR(sq, Seqs.Next(rt, rt.R(sq)));
+                if (!Val.IsNil(rt.R(sq))) got = Seqs.First(rt, rt.R(sq));
+                rt.PopTo(bas);
+            } else {
+                throw new System.NotSupportedException(
+                    "nth over " + rt.Describe(v) + " needs more of the data structures");
             }
-            throw new System.NotSupportedException("nth on this needs more of the data structures");
+            if (got != Val.NotFound) return got;
+            if (n > 2) return rt.VAt(at + 2);
+            throw new System.IndexOutOfRangeException("index " + i + " out of range");
         });
         Def("conj", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -147,7 +190,7 @@ public static class Builtins {
                 for (int i = 1; i < n; i++) acc = Seqs.Cons(rt, rt.VAt(at + i), acc);
                 return acc;
             }
-            throw new System.NotSupportedException("conj on this needs more of the data structures");
+            throw new System.NotSupportedException("conj onto " + rt.Describe(v) + " needs more of the data structures");
         });
 
         Def("seq", (rt, at, n) => Seqs.Seq(rt, rt.VAt(at)));
@@ -163,7 +206,7 @@ public static class Builtins {
         Def("transient", (rt, at, n) => {
             long v = rt.VAt(at);
             if (rt.IsHeapTy(v, Obj.TyVec)) return Vec.TransientOf(rt, v);
-            throw new System.NotSupportedException("transient on this needs maps and sets ported");
+            throw new System.NotSupportedException("transient of " + rt.Describe(v) + " needs maps and sets ported");
         });
         Def("persistent!", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -172,7 +215,7 @@ public static class Builtins {
                     throw new System.InvalidOperationException("persistent! called twice on one transient");
                 return Vec.TPersistent(rt, v);
             }
-            throw new System.NotSupportedException("persistent! on this needs maps and sets ported");
+            throw new System.NotSupportedException("persistent! of " + rt.Describe(v) + " needs maps and sets ported");
         });
         Def("conj!", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -183,7 +226,7 @@ public static class Builtins {
                 for (int i = 1; i < n; i++) acc = Vec.TConj(rt, acc, rt.VAt(at + i));
                 return acc;
             }
-            throw new System.NotSupportedException("conj! on this needs maps and sets ported");
+            throw new System.NotSupportedException("conj! onto " + rt.Describe(v) + " needs maps and sets ported");
         });
         Def("assoc!", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -196,7 +239,7 @@ public static class Builtins {
                 }
                 return acc;
             }
-            throw new System.NotSupportedException("assoc! on this needs maps and sets ported");
+            throw new System.NotSupportedException("assoc! onto " + rt.Describe(v) + " needs maps and sets ported");
         });
 
         // Maps.
@@ -211,7 +254,7 @@ public static class Builtins {
                 long got = Vec.Nth(rt, coll, (int) Val.AsFixnum(k));
                 return got == Val.NotFound ? dflt : got;
             }
-            throw new System.NotSupportedException("get on this needs sets ported");
+            throw new System.NotSupportedException("get over " + rt.Describe(coll) + " needs sets ported");
         });
         Def("assoc", (rt, at, n) => {
             long acc = rt.VAt(at);
@@ -236,7 +279,7 @@ public static class Builtins {
                 }
                 return acc;
             }
-            throw new System.NotSupportedException("assoc on this needs more of the data structures");
+            throw new System.NotSupportedException("assoc onto " + rt.Describe(acc) + " needs more of the data structures");
         });
         Def("dissoc", (rt, at, n) => {
             long acc = rt.VAt(at);
@@ -260,7 +303,7 @@ public static class Builtins {
                 return Val.Bool(Val.IsFixnum(k) && Val.AsFixnum(k) >= 0
                                 && Val.AsFixnum(k) < Vec.Count(rt, coll));
             }
-            throw new System.NotSupportedException("contains? on this needs sets ported");
+            throw new System.NotSupportedException("contains? over " + rt.Describe(coll) + " needs sets ported");
         });
         Def("hash", (rt, at, n) => Val.Fixnum(Flint.Rt.Eq.HashValue(rt, rt.VAt(at))));
 
@@ -290,8 +333,7 @@ public static class Builtins {
     /// A CHAIN, as Clojure's comparisons are: `(< 1 2 3)` is one call, not two.
     static long Cmp(Rt rt, int at, int n, int want, bool orEqual) {
         for (int i = 0; i + 1 < n; i++) {
-            long a = Val.AsFixnum(rt.VAt(at + i)), b = Val.AsFixnum(rt.VAt(at + i + 1));
-            int c = a.CompareTo(b);
+            int c = Num.Cmp(rt, rt.VAt(at + i), rt.VAt(at + i + 1));
             if (!(c == want || (orEqual && c == 0))) return Val.False;
         }
         return Val.True;

@@ -378,6 +378,11 @@ public sealed class Rt : System.IDisposable {
             }
             return fn(this, calleeAt + 1, argc);
         }
+        if (Maps.IsMap(this, callee)) {
+            if (argc < 1) throw new System.NotSupportedException("a map takes 1 or 2 arguments");
+            long dflt2 = argc >= 2 ? roots.Stack[calleeAt + 2] : Val.Nil;
+            return Maps.Get(this, callee, roots.Stack[calleeAt + 1], dflt2);
+        }
         if (IsHeapTy(callee, TyVec)) {
             if (argc < 1) throw new System.NotSupportedException("a vector takes 1 argument");
             long got = Vec.Nth(this, callee, (int) Val.AsFixnum(roots.Stack[calleeAt + 1]));
@@ -423,6 +428,56 @@ public sealed class Rt : System.IDisposable {
             default: return IsHeapTy(v, TyVec) || IsSeq(v);
         }
     }
+
+    /// What a value IS, for a message. A refusal that says "needs more of the
+    /// data structures" without naming the type sends the reader back to a
+    /// debugger; naming it is the difference between a report and a shrug.
+    public string Describe(long v) {
+        if (Val.IsNil(v)) return "nil";
+        if (Val.IsFixnum(v)) return "an integer";
+        if (Val.IsDouble(v)) return "a double";
+        if (v == Val.True || v == Val.False) return "a boolean";
+        if (Val.IsInlineStr(v)) return "an inline string";
+        if (Val.IsInlineKw(v)) return "an inline keyword";
+        if (!Val.IsHeap(v)) return "an unknown immediate";
+        int t = Ty(gc.sp, Val.AsHeap(v));
+        switch (t) {
+            case TyStr: return "a string";
+            case TySym: return "a symbol";
+            case TyKw: return "a keyword";
+            case TyCons: return "a list";
+            case TyEmptyList: return "an empty list";
+            case TyLazyseq: return "a lazy seq";
+            case TyVec: return "a vector";
+            case TyVecseq: return "a vector seq";
+            case TyRange: return "a range";
+            case TyArraymap: return "an array-map";
+            case TyHashmap: return "a hash-map";
+            case TySet: return "a set";
+            case TyMapentry: return "a map entry";
+            case TyClosure: return "a function";
+            case TyNativefn: return "a builtin";
+            case TyTvec: return "a transient vector";
+            case TyTmap: return "a transient map";
+            case TyTset: return "a transient set";
+            case TyRope: return "a rope";
+            case TyBytes: return "a byte string";
+            case TyRecord: return "a record";
+            case TyAtom: return "an atom";
+            case TyVar: return "a var";
+            case TyDelay: return "a delay";
+            case TyRegex: return "a regex";
+            case TyMultifn: return "a multimethod";
+            case TyReduced: return "a reduced";
+            case TyExinfo: return "an ex-info";
+            default: return "object type " + t;
+        }
+    }
+
+    /// Sequential, which is WIDER than `IsSeq`: a vector and a map entry are
+    /// sequential without being seqs. `=` is over this, not over seq-ness.
+    internal bool IsSequential(long v) =>
+        IsSeq(v) || IsHeapTy(v, TyVec) || IsHeapTy(v, TyMapentry);
 
     internal bool IsHeapTy(long v, int t) => Val.IsHeap(v) && Ty(gc.sp, Val.AsHeap(v)) == t;
 

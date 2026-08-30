@@ -79,10 +79,33 @@ public static class Seqs {
             case Obj.TyCons:
             case Obj.TyVecseq: return v;
             case Obj.TyVec: return Vec.Count(rt, v) == 0 ? Val.Nil : Vecseq(rt, v, 0);
+            case Obj.TyMapentry: return Vecseq(rt, EntryAsVec(rt, v), 0);
+            case Obj.TyArraymap:
+            case Obj.TyHashmap: {
+                if (Maps.Count(rt, v) == 0) return Val.Nil;
+                int bas = rt.Mark();
+                int ev = rt.Push(Maps.EntryVector(rt, v));
+                long outv = Vecseq(rt, rt.R(ev), 0);
+                rt.PopTo(bas);
+                return outv;
+            }
             default:
                 throw new System.NotSupportedException(
-                    "seq over object type " + t + " needs more of the data structures");
+                    "seq over " + rt.Describe(v) + " needs more of the data structures");
         }
+    }
+
+    /// A map entry read as the two-element vector `[k v]`. Clojure's entries
+    /// ARE sequential, which is what lets `(first {:a 1})` destructure.
+    static long EntryAsVec(Rt rt, long e) {
+        int bas = rt.Mark();
+        int ei = rt.Push(e);
+        int vi = rt.Push(Vec.Empty(rt));
+        rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.Slot(rt.R(ei), 0)));
+        rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.Slot(rt.R(ei), 1)));
+        long outv = rt.R(vi);
+        rt.PopTo(bas);
+        return outv;
     }
 
     public static long First(Rt rt, long v) {
@@ -91,7 +114,7 @@ public static class Seqs {
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(s));
         if (t == Obj.TyCons) return rt.Slot(s, CFirst);
         if (t == Obj.TyVecseq) return Vec.Nth(rt, rt.Slot(s, 0), (int) Val.AsFixnum(rt.Slot(s, 1)));
-        throw new System.NotSupportedException("first over object type " + t);
+        throw new System.NotSupportedException("first over " + rt.Describe(v));
     }
 
     /// `next`: the rest, or NIL when there is none. `rest` differs -- it gives
@@ -106,7 +129,7 @@ public static class Seqs {
             int i = (int) Val.AsFixnum(rt.Slot(s, 1)) + 1;
             return i >= Vec.Count(rt, vec) ? Val.Nil : Vecseq(rt, vec, i);
         }
-        throw new System.NotSupportedException("next over object type " + t);
+        throw new System.NotSupportedException("next over " + rt.Describe(v));
     }
 
     public static long Rest(Rt rt, long v) {

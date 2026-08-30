@@ -21,6 +21,11 @@ public sealed class Roots {
     public long[] Shadow = new long[256];
     public int ShadowTop;
 
+    /// The intern tables. WEAK, and scanned by the collector rather than
+    /// traced: an entry whose value died is dropped, which is what lets every
+    /// short string and keyword be interned without the table being a leak.
+    public readonly Interns[] interns = Interns.Tables();
+
     public long[] Globals = System.Array.Empty<long>();
     public long[] Consts = System.Array.Empty<long>();
     public long[] Singletons = System.Array.Empty<long>();

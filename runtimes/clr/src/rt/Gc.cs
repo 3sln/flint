@@ -303,7 +303,20 @@ public sealed class Gc : System.IDisposable {
         // 3. transitive closure
         while (work.Count != 0) ScanObject(Pop(work));
 
-        // 4. flip
+        // 4. weak tables. A nursery entry that was copied is FORWARDED; one
+        // that was not is dead, and the entry goes. This runs BEFORE the flip,
+        // while `from` still names the space that was just evacuated.
+        foreach (Interns tbl in roots.interns) {
+            tbl.Refresh(v => {
+                if (Val.IsHeap(v) && (ulong)(Val.AsHeap(v) - from) < (ulong) half) {
+                    long a2 = Val.AsHeap(v);
+                    return Ty(sp, a2) == TyFwd ? Val.Heap(ForwardTarget(sp, a2)) : Val.NotFound;
+                }
+                return v;
+            });
+        }
+
+        // 5. flip
         long t = from; from = to; to = t;
         bump = toBump;
         fromEnd = from + half;
@@ -327,6 +340,11 @@ public sealed class Gc : System.IDisposable {
             int n = Len(sp, a);
             for (int i = 0; i < n; i++) MarkFrom(Slot(sp, a, i));
         }
+        // Weak tables: anything unmarked is unreachable.
+        foreach (Interns tbl in roots.interns) {
+            tbl.Refresh(v => (!Val.IsHeap(v) || Marked(sp, Val.AsHeap(v))) ? v : Val.NotFound);
+        }
+
         // The remembered set may name objects about to be freed.
         List<long> rem = new List<long>(roots.Remembered);
         roots.Remembered.Clear();

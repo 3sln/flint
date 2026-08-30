@@ -820,6 +820,43 @@ public static class Maps {
         return wrote;
     }
 
+    /// `[k, v]`, the object a map's `seq` yields. A `TY_MAPENTRY` and not a
+    /// vector, so `key`/`val` are O(1) and the entry can still be read as a
+    /// two-element sequential -- which is what makes `(into {} (map ...))` and
+    /// destructuring `[[k v] ...]` both work over the same object.
+    public static long Entry(Rt rt, long k, long v) {
+        int bas = rt.Mark();
+        int ki = rt.Push(k), vi = rt.Push(v);
+        long a = rt.Alloc(Obj.TyMapentry, 2);
+        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+        rt.SetSlot(a, 0, rt.R(ki));
+        rt.SetSlot(a, 1, rt.R(vi));
+        rt.PopTo(bas);
+        return Val.Heap(a);
+    }
+
+    /// The entries as a VECTOR of map entries, which is what `seq` walks.
+    ///
+    /// Materialised rather than a lazy cursor over the trie: a cursor would
+    /// have to hold a path of node addresses across allocations the consumer
+    /// makes, and every one of those would need rooting.
+    public static long EntryVector(Rt rt, long m) {
+        int bas = rt.Mark();
+        int mi = rt.Push(m);
+        int at = rt.Mark();
+        int n = Entries(rt, rt.R(mi), at);
+        int ai = rt.Push(Vec.Empty(rt));
+        for (int i = 0; i < n; i++) {
+            long e = Entry(rt, rt.R(at + 2 * i), rt.R(at + 2 * i + 1));
+            int ei = rt.Push(e);
+            rt.SetR(ai, Vec.Conj(rt, rt.R(ai), rt.R(ei)));
+            rt.PopTo(ei);
+        }
+        long outv = rt.R(ai);
+        rt.PopTo(bas);
+        return outv;
+    }
+
     /// Structural equality. Same count, and every key in `a` present in `b`
     /// with an equal value -- ORDER-INDEPENDENT, which is what a map's `=`
     /// means and why it cannot just compare slots.
