@@ -399,7 +399,23 @@
                 (register-inline! cc env sym (:meta defnode))
                 (register-projections! cc sym (:meta defnode) (:init defnode))
                 (register-inversion! cc sym (:meta defnode) (:init defnode))))
-            (vswap! cc assoc-in [:vars sym] true)))
+            (vswap! cc assoc-in [:vars sym] true)
+            ;; EVERY VAR'S METADATA, indexed. Not "the test registry": the
+            ;; analyser already reads this map to find `:macro`, and scoping it
+            ;; to one consumer would put a check-system concept in the analyser
+            ;; and force the next consumer to scan the source again.
+            ;;
+            ;; Scanning again is the failure this codebase already has on
+            ;; record: `bin/flint` read every source twice more to find its
+            ;; requires and to order them, each with its own literal
+            ;; `#{:flint}`, so overriding the feature set changed nothing. A
+            ;; second reader of `defn` forms would be the same mistake with a
+            ;; different subject.
+            ;;
+            ;; `flint.check` is the first client. A doc generator, a lint pass,
+            ;; `^:deprecated` and `^:export` are all the same question asked of
+            ;; the same map.
+            (vswap! cc assoc-in [:var-meta sym] (or (meta (first names)) {}))))
         (catch Throwable e
           ;; Say WHERE. A bare "unable to resolve symbol" halfway through
           ;; clojure.core is close to useless without the enclosing form.
@@ -523,6 +539,45 @@
                                   [nsname (read-namespace! cc nsname src file)])))]
       (doseq [nsname order]
         (analyze-namespace! cc nsname (get read-forms nsname))))
+
+    ;; THE CHECK REGISTRY, when checks are on.
+    ;;
+    ;; The compile-time index above serves anything holding the compiler. This
+    ;; is the other half: a var the PROGRAM can read, so it can run its own
+    ;; checks on load and so a host can enumerate them from a shipped artifact
+    ;; without having a compiler at all.
+    ;;
+    ;; Generated as source and analysed like any other namespace, which is the
+    ;; same trick the entry shim uses one form down -- a synthetic namespace is
+    ;; cheaper than a second path through the emitter, and it is ordinary flint
+    ;; that a person can read in `--explain`.
+    ;;
+    ;; It exists only in a build with `:flint/check`, so it costs a release
+    ;; build nothing. It does make every test var REACHABLE, which is what
+    ;; stops the shaker dropping them -- intended here, and moot under
+    ;; `:optimize [perf]` where neither the registry nor the tests survive the
+    ;; reader.
+    (when (contains? (:features @cc) :flint/check)
+      (let [tests (->> (:var-meta @cc)
+                       (filter (fn [e] (:flint.check/test (val e))))
+                       (map key)
+                       sort
+                       vec)
+            reg-ns 'flint.check.registry
+            src (str "(ns flint.check.registry)\n"
+                     "(def tests\n"
+                     "  [" (apply str
+                                  (map (fn [q]
+                                         (str "{:var '" q " :fn " q "}\n   "))
+                                       tests))
+                     "])\n"
+                     ;; The entry `flint test` points at. It lives here rather
+                     ;; than in `flint.check` because `flint.check` is analysed
+                     ;; FIRST and cannot name a registry that does not exist
+                     ;; yet -- so the data is passed to it instead.
+                     "(defn run [_] (flint.check/run-tests tests))\n")]
+        (when (seq tests)
+          (analyze-namespace! cc reg-ns (read-namespace! cc reg-ns src "<check-registry>")))))
 
     ;; The entry shim: convert the result to text here, in cljc, so the printer
     ;; is reachable only because this shim uses it -- not because the runtime
@@ -650,6 +705,11 @@
        :kept-syms (vec (filter some? (map :sym kept)))
        :roots roots
        :items items
+       ;; EVERY VAR'S METADATA, for whatever wants to ask. `flint test` asks
+       ;; for `:flint.check/test`; a doc generator would ask for `:doc`, a lint
+       ;; pass for `:deprecated`. Handing back the index rather than one
+       ;; consumer's answer is what stops the next tool re-reading the source.
+       :var-meta (:var-meta @cc)
        :stats {:vars (count var-slots)
                :items-total (count items)
                :items-kept (count kept)

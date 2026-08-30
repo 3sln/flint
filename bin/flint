@@ -112,6 +112,20 @@
   "Reader conditionals that matched no feature, gathered across every source."
   (volatile! []))
 
+(defn ns-of
+  "The namespace a source file declares, or nil.
+
+  Reads only the first form, which is all `(ns ...)` can be -- so this does not
+  need the feature set and cannot be confused by a reader conditional further
+  down."
+  [src]
+  (try
+    (let [st (reader/reader src {:file "<ns-of>"})
+          f (reader/read-form st)]
+      (when (and (seq? f) (= 'ns (first f)) (symbol? (second f)))
+        (second f)))
+    (catch Exception _ nil)))
+
 (defn collect
   "Read namespaces from `entry-ns` outwards, returning [{ns {:src :file}} order].
 
@@ -535,10 +549,37 @@
       (do (when (seq (:out r)) (println (:out r)))
           (System/exit (or (:code r) 0))))))
 
+;; `flint test` -- run every `^:flint.check/test` var on the source path.
+;;
+;; It is a MODE rather than a command with its own pipeline: the same compile,
+;; with two differences. Every namespace under `:src` is a root, because a test
+;; nobody requires is still a test; and the entry is the generated registry,
+;; which is why the entry namespace cannot be resolved the ordinary way -- it
+;; does not exist until the compile has read everything else.
+(def test-mode? (= "test" (first *command-line-args*)))
+
+(defn run-tests-module!
+  "Run a compiled test module and exit with its verdict.
+
+  `flint test` compiles and RUNS: a test command that leaves you an artifact to
+  run yourself is a build command wearing the wrong name."
+  [wasm]
+  (let [p (.start (ProcessBuilder.
+                   (into-array String ["node" (str root "/host/flint.mjs") wasm])))
+        out (slurp (.getInputStream p))
+        err (slurp (.getErrorStream p))]
+    (.waitFor p)
+    (print out)
+    (when (seq err) (binding [*out* *err*] (print err)))
+    (flush)
+    (System/exit (if (or (re-find #"FAILED" (str out)) (not (zero? (.exitValue p)))) 1 0))))
+
 (let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path aot optimize loader emit-image emit-spec features]}
-      (parse-args *command-line-args*)]
+      (parse-args (if test-mode? (rest *command-line-args*) *command-line-args*))
+      fn (if test-mode? 'flint.check.registry/run fn)]
   (when-not fn
     (println "usage: flint :src <dir> :fn <ns/fn> [:out <file.wasm>]")
+    (println "       flint test :src <dir>        run every ^:flint.check/test var")
     (println "                 [:exclude [ns ...]]   assert these are unreachable")
     (println "                 [:wasm-path <dir> ...] search path for precompiled units")
     (println "                 [--self] [--stats] [--keep-names]")
@@ -552,7 +593,7 @@
         ;; (a unit is a namespace's native half; the .cljc beside it is its
         ;; Clojure half), then flint's own lib. Stated in the README.
         dirs (concat (or src []) unit-path [(str root "/lib")])
-        entry-ns (symbol (namespace fn))
+        entry-ns (if test-mode? 'clojure.core (symbol (namespace fn)))
         ;; `:optimize [perf]` REMOVES `:flint/check`.
         ;;
         ;; Not "compiles the checks away" -- removes the reader branch, so what
@@ -566,7 +607,23 @@
         ;; leave the branches already read in.
         features (cond-> (or features reader/default-features)
                    (some #{"perf" ":perf"} (or optimize [])) (disj :flint/check))
-        roots (cond-> (cons entry-ns ['clojure.core])
+        ;; In test mode every namespace under `:src` is a root: a test that
+        ;; nothing requires is still a test, and collecting from one entry
+        ;; outwards would silently run a subset. The entry itself is generated
+        ;; and so cannot be a root -- it does not exist yet.
+        ;; `clojure.core/fn`, spelled out: this `let` destructures `:keys [.. fn ..]`,
+        ;; so a bare `fn` here is the ENTRY NAME, a string, and calling it
+        ;; reports `Could not resolve symbol: p` from inside a lambda that was
+        ;; never a lambda. Same shape as the note in `aot.cljc` about not
+        ;; destructuring `:op` as `op`.
+        src-nses (when test-mode?
+                   (->> (mapcat (clojure.core/fn [d] (fs/glob d "**.cljc")) (or src []))
+                        (map (clojure.core/fn [pth] (ns-of (slurp (str pth)))))
+                        (remove nil?)
+                        vec))
+        roots (cond-> (if test-mode?
+                        (cons 'clojure.core src-nses)
+                        (cons entry-ns ['clojure.core]))
                 (contains? features :flint/check) (concat ['flint.check]))
         [sources order] (collect dirs roots features)
         order (core-first (topo-order sources features))
@@ -705,5 +762,7 @@
                        (:bytes result) (:image-bytes result)
                        (if stats* (format "vars %d/%d  " (:items-kept stats*) (:items-total stats*)) "")
                        (:builtins result))))
-    (println "wrote" out (str "(" (:bytes result) " bytes)")))
+    (if test-mode?
+      (run-tests-module! out)
+      (println "wrote" out (str "(" (:bytes result) " bytes)"))))
    (catch clojure.lang.ExceptionInfo e (die! e))))

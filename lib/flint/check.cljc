@@ -182,6 +182,39 @@
 ;; ------------------------------------------------------------------ tests
 
 (defn test-var?
-  "Is this var one of the grouped checks `flint test` runs?"
+  "Is this var one of the grouped checks `flint test` runs?
+
+  The compiler indexes EVERY var's metadata, not just this key -- see
+  `flint.compiler`. This is one client of that index; a doc generator or a
+  lint pass would be another asking the same map a different question."
   [m]
   (boolean (:flint.check/test m)))
+
+(defn run-tests
+  "Run `tests` (`[{:var .. :fn ..}]`) and report.
+
+  Takes the registry as an ARGUMENT rather than naming it, because this
+  namespace is analysed before any namespace that could have a test in it --
+  the registry is generated last, and hands itself here.
+
+  A test passes by returning; it fails by throwing, which is what `expect`
+  does. There is no assertion count and no framework: a check that has to be
+  registered with something is a check that can be forgotten to register."
+  [tests]
+  (loop [ts (seq tests) passed 0 failed 0 out []]
+    (if (nil? ts)
+      (let [total (+ passed failed)]
+        ;; `remove nil?`, because `when` answers nil and `str-join` wants
+        ;; strings -- which it says plainly, three frames from the `when`.
+        (flint.rt/str-join
+         (vec (remove nil?
+                      (concat out
+                              [(str "\n" passed "/" total " checks passed")
+                               (when (pos? failed) (str ", " failed " FAILED"))
+                               "\n"])))))
+      (let [t (first ts)
+            r (try ((:fn t)) nil (catch Throwable e (or (ex-message e) "threw")))]
+        (if (nil? r)
+          (recur (next ts) (inc passed) failed (conj out (str "  ok   " (:var t) "\n")))
+          (recur (next ts) passed (inc failed)
+                 (conj out (str "  FAIL " (:var t) "\n" r "\n"))))))))
