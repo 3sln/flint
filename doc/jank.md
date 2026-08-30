@@ -11,12 +11,30 @@ Run them with `bin/jank-suite <jank-checkout> [native|jvm|clr]`. The numbers
 below are jank `cd394c63e15d1af5f88bcfbec74fba7873e4b57d` (2026-08-29); a
 different revision is a different suite, so quote the one you ran.
 
-## The number
+## The numbers
 
-    pass-* accepted and ran    130 / 195
-    fail-* correctly refused    60 /  99
-    ------------------------------------
-    TOTAL                      190 / 294   (64%)
+    native                     port (jvm)
+    pass-*   130 / 195         128 / 195
+    fail-*    60 /  99          64 /  99
+    ---------------------------------------
+    TOTAL    190 / 294 (64%)   192 / 294 (65%)
+
+Two tests apart, which is about what a verbatim mirror should look like. The
+composition differs slightly -- the port accepts two fewer and refuses four
+more -- and `SHOW_FAILURES=1` on both runtimes prints the exact disagreement.
+
+**The port scored 201 before this was believable.** It ran a program's
+initialisers and ignored what they threw: a flint throw is not a host
+exception, so a test whose top-level `assert` FAILED ran on to `main`, which
+reported success. The harness was counting failed assertions as passes, and the
+tell was that the port beat the runtime it mirrors. A port that wins is a
+measurement problem.
+
+Before that it scored 0/195 and 99/99 twice, for two different reasons -- a
+`:ok` marker the harness printed as hex, and a `JAVA_HOME` with no `bin/java`
+under it. That shape is worth recognising: a PERFECT score on the half that
+expects rejection is not a runtime refusing everything, it is a harness
+recognising nothing.
 
 Sixteen further files follow neither naming convention and assert nothing, so
 there is no claim to make about them. One test did not terminate inside twenty
