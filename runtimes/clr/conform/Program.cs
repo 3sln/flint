@@ -187,7 +187,7 @@ public static class Program {
             rt.Call(rt.MakeClosure(fn, Array.Empty<long>()), Array.Empty<long>());
         long f = rt.MakeClosure(img.entry, Array.Empty<long>());
         try {
-            long v = rt.Call(f, new long[]{ Flint.Rt.Val.Nil });
+            long v = rt.RunProgram(f, new long[]{ Flint.Rt.Val.Nil });
             string shown = Flint.Rt.Val.IsFixnum(v)
                     ? Flint.Rt.Val.AsFixnum(v).ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : Flint.Rt.Str.IsString(rt, v) ? Flint.Rt.Str.Text(rt, v)

@@ -295,6 +295,12 @@ fi
 # EVERY conformance program the ported runtimes can run, each checked against
 # the NATIVE answer and then the two ports against each other.
 #
+# `green` is the one to read. Its `:order` row is the ORDER three green threads
+# and the main thread actually ran in, so matching means the three schedulers
+# agree on an INTERLEAVING and not merely on an answer. That is possible only
+# because the scheduler is the same one -- round-robin from just after the
+# current thread, no randomness, no clock, no host-order dependence.
+#
 # Against native rather than merely run, because both ports were wrong the same
 # way once: the arithmetic read a double's mantissa as an integer, so `numbers`
 # said `:float [0 0 0]` on BOTH and the cross-port compare saw nothing. Only
@@ -304,7 +310,7 @@ fi
 # agreeing about maps, vectors, sets, strings, seqs and doubles at once -- and
 # `maps` prints its keys in trie order, so matching means the ported CHAMP
 # ITERATES the way the Rust's does, which nothing asserts directly.
-for prog in collections control hosted lazy maps numbers strings; do
+for prog in collections control green hosted lazy maps numbers strings; do
   ./bin/flint :src runtimes/conform :fn "$prog/main" --emit-image \
     :out "out/conform/$prog.img" >/dev/null 2>&1 || {
       echo "  .. $prog does not compile; skipped"; continue; }

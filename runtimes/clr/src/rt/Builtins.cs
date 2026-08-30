@@ -555,6 +555,86 @@ public static class Builtins {
             return Val.OfDouble(System.BitConverter.Int64BitsToDouble(Num.AsI64(rt, v).Value));
         });
 
+        // --- green threads and ports ------------------------------------------
+        //
+        // Every one of these calls `EnsureSched` first. The scheduler is built
+        // on first use rather than at startup, so a program that never mentions
+        // `spawn` never has one -- and the interpreter runs a loop with no slice
+        // counter in it at all.
+        Def("flint/spawn", (rt, at, n) => Conc.Spawn(rt, rt.VAt(at)));
+        Def("flint/yield", (rt, at, n) => {
+            Conc.EnsureSched(rt);
+            return Conc.Park(rt, Conc.PARK_YIELD);
+        });
+        Def("flint/self", (rt, at, n) => { Conc.EnsureSched(rt); return Conc.CurrentThread(rt); });
+        Def("flint/thread?", (rt, at, n) => Val.Bool(Conc.IsThread(rt, rt.VAt(at))));
+        Def("flint/thread-id", (rt, at, n) => rt.Slot(rt.VAt(at), Conc.TH_ID));
+        Def("flint/thread-result", (rt, at, n) => rt.Slot(rt.VAt(at), Conc.TH_RESULT));
+        Def("flint/thread-state", (rt, at, n) => {
+            long t = rt.VAt(at);
+            if (!Conc.IsThread(rt, t))
+                throw new System.InvalidCastException("thread-state wants a thread, got " + rt.Describe(t));
+            switch ((int) Val.AsFixnum(rt.Slot(t, Conc.TH_STATUS))) {
+                case Conc.ST_NEW: return Str.Keyword(rt, null, "new");
+                case Conc.ST_RUNNABLE: return Str.Keyword(rt, null, "runnable");
+                case Conc.ST_PARKED: return Str.Keyword(rt, null, "parked");
+                case Conc.ST_DONE: return Str.Keyword(rt, null, "done");
+                default: return Str.Keyword(rt, null, "failed");
+            }
+        });
+        Def("flint/thread-join", (rt, at, n) => {
+            Conc.EnsureSched(rt);
+            return Conc.Join(rt, rt.VAt(at));
+        });
+        Def("flint/bindings", (rt, at, n) => {
+            long b = rt.roots.Singletons[Rt.SingBindings];
+            return Val.IsNil(b) ? Maps.Empty(rt) : b;
+        });
+        Def("flint/set-bindings", (rt, at, n) => {
+            rt.roots.Singletons[Rt.SingBindings] = rt.VAt(at);
+            return rt.VAt(at);
+        });
+
+        Def("flint/channel", (rt, at, n) => {
+            long cap = n > 0 ? rt.VAt(at) : Val.Nil;
+            long label = n > 1 ? rt.VAt(at + 1) : Val.Nil;
+            long c = Val.IsFixnum(cap) ? Val.AsFixnum(cap) : 32;
+            if (c < 1) throw new System.ArgumentException("a channel needs a buffer of at least 1");
+            return Conc.Channel(rt, c, label);
+        });
+        Def("flint/port-send", (rt, at, n) => Conc.Send(rt, rt.VAt(at), rt.VAt(at + 1)));
+        Def("flint/port-receive", (rt, at, n) => Conc.Receive(rt, rt.VAt(at)));
+        Def("flint/port-close", (rt, at, n) => Conc.Close(rt, rt.VAt(at)));
+        Def("flint/port?", (rt, at, n) => Val.Bool(Conc.IsPort(rt, rt.VAt(at))));
+        Def("flint/port-id", (rt, at, n) => rt.Slot(rt.VAt(at), Conc.PT_ID));
+        Def("flint/port-label", (rt, at, n) => rt.Slot(rt.VAt(at), Conc.PT_LABEL));
+        Def("flint/port-format", (rt, at, n) => rt.Slot(rt.VAt(at), Conc.PT_FORMAT));
+        Def("flint/port-opts", (rt, at, n) => {
+            long o = rt.Slot(rt.VAt(at), Conc.PT_OPTS);
+            return Val.IsNil(o) ? Maps.Empty(rt) : o;
+        });
+        Def("flint/set-port-opts", (rt, at, n) => {
+            rt.SetSlot(Val.AsHeap(rt.VAt(at)), Conc.PT_OPTS, rt.VAt(at + 1));
+            return rt.VAt(at + 1);
+        });
+        Def("flint/set-port-binary", (rt, at, n) => {
+            rt.SetSlot(Val.AsHeap(rt.VAt(at)), Conc.PT_BINARY, rt.VAt(at + 1));
+            return rt.VAt(at + 1);
+        });
+        /// A CHANNEL end is never a host port. This runtime carries no host
+        /// ports yet, so the honest answer is false rather than a refusal --
+        /// asking is how library code decides whether to serialise.
+        Def("flint/port-host?", (rt, at, n) =>
+            Val.Bool(Val.AsFixnum(rt.Slot(rt.VAt(at), Conc.PT_KIND)) != Conc.K_CHANNEL));
+        Def("flint/port-state", (rt, at, n) => {
+            switch ((int) Val.AsFixnum(rt.Slot(rt.VAt(at), Conc.PT_STATE))) {
+                case Conc.P_OPEN: return Str.Keyword(rt, null, "open");
+                case Conc.P_CLOSED: return Str.Keyword(rt, null, "closed");
+                case Conc.P_HALF: return Str.Keyword(rt, null, "half");
+                default: return Str.Keyword(rt, null, "orphaned");
+            }
+        });
+
         /// The raw IEEE bits of a double, as an integer. What lets flint code
         /// print a double bit-exactly rather than through a formatter.
         Def("flint/double-bits", (rt, at, n) => {

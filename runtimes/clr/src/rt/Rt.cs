@@ -42,6 +42,16 @@ public sealed class Rt : System.IDisposable {
 
     public long steps;
 
+    /// True once a scheduler exists. `Run` compares `steps` against
+    /// `checkpoint` once per instruction; 0 there means nothing is counting, so
+    /// a program that never spawns runs a loop with no counter in it at all.
+    public bool schedInstalled;
+
+    public void SetSliceEnd(long at) {
+        sliceEnd = at;
+        checkpoint = at;
+    }
+
     /// The builtins this image imports, resolved BY NAME. The slots in an image
     /// belong to the module it was linked against and mean nothing here, which
     /// is what makes an image portable between hosts at all.
@@ -210,6 +220,26 @@ public sealed class Rt : System.IDisposable {
                 continue;
             }
 
+            // The slice check, BEFORE the opcode is read.
+            //
+            // The saved `Ip` must point AT the next instruction, not past its
+            // first byte. Checking after `ip += 1` resumed on the OPERANDS, and
+            // the first symptom was a builtin reading an argument that had
+            // never been pushed.
+            //
+            // One comparison against a precomputed value, and only when
+            // something is counting.
+            if (checkpoint != 0 && steps >= checkpoint) {
+                f.Ip = ip;
+                checkpoint = 0;
+                // A COURTESY yield, not a park: the thread stays runnable and
+                // must NOT rewind. Preemption is what keeps a thread with no
+                // `yield` in it from starving the others.
+                parkOn = Conc.PARK_YIELD;
+                thrown = Val.Park;
+                return Val.Nil;
+            }
+
             int opcode = U8(ip);
             ip += 1;
             steps++;
@@ -272,6 +302,19 @@ public sealed class Rt : System.IDisposable {
                     // Everything else completes IN PLACE: a builtin held in a
                     // var, a keyword used as a function, a collection looked up.
                     long cv = CallValue(calleeAt, argc);
+                    if (Parked()) {
+                        // Same rewind as Native: the callee and its arguments
+                        // are still on the stack, so re-executing finds them.
+                        thrown = Val.Nil;
+                        if (parkOn == Conc.PARK_YIELD) {
+                            roots.StackTop = calleeAt;
+                            VPush(Val.Nil);
+                        } else {
+                            f.Ip = ip - 2;   // back onto the CALL and its argc
+                        }
+                        thrown = Val.Park;
+                        return Val.Nil;
+                    }
                     roots.StackTop = calleeAt;
                     VPush(cv);
                 } break;
@@ -378,6 +421,7 @@ public sealed class Rt : System.IDisposable {
                     roots.Stack[roots.StackTop - 1] = Val.Bool(TypeP(c, roots.Stack[roots.StackTop - 1]));
                 } break;
                 case Op.Native: {
+                    int opAt = ip - 1;
                     int idx = U16(ip); int argc = U8(ip + 2); ip += 3;
                     f.Ip = ip;
                     int at = roots.StackTop - argc;
@@ -387,6 +431,27 @@ public sealed class Rt : System.IDisposable {
                             "this runtime does not carry the builtin `" + nativeNames[idx] + "`");
                     }
                     long v = fn(this, at, argc);
+                    if (Parked()) {
+                        // A PARKING builtin. Rewind to the instruction and
+                        // leave the operands where they are: resuming
+                        // RE-EXECUTES the call, which is why such a builtin must
+                        // decide to park before it changes anything.
+                        //
+                        // Except a courtesy yield, which is finished: rewinding
+                        // there would re-execute `yield`, which yields again,
+                        // for ever.
+                        thrown = Val.Nil;
+                        if (parkOn == Conc.PARK_YIELD) {
+                            roots.StackTop = at;
+                            VPush(Val.Nil);
+                            thrown = Val.Park;
+                            return Val.Nil;
+                        }
+                        f.Ip = opAt;
+                        roots.StackTop = at + argc;
+                        thrown = Val.Park;
+                        return Val.Nil;
+                    }
                     roots.StackTop = at;
                     VPush(v);
                 } break;
@@ -585,8 +650,30 @@ public sealed class Rt : System.IDisposable {
         VPush(f);
         foreach (long a in args) VPush(a);
         long v = CallValue(save, args.Length);
-        roots.StackTop = save;
+        if (!Parked()) roots.StackTop = save;
         return v;
+    }
+
+    /// True when a park is in flight. A park is NOT an error: it unwinds the
+    /// interpreter the same way, but `Settle` reads `parkOn` rather than
+    /// `thrown`, and every caller between here and the scheduler must pass it
+    /// through untouched rather than treating it as a failure.
+    public bool Parked() => thrown == Val.Park;
+
+    /// Run `closure` as the program's ENTRY, under the scheduler if one ever
+    /// appears.
+    ///
+    /// The scheduler is not installed until something spawns, so this starts as
+    /// a plain call. When the entry parks or its slice runs out, `thrown` is
+    /// the PARK sentinel and the answer is not ready -- that is when the
+    /// scheduler takes over. A program with no concurrency in it never reaches
+    /// the second branch at all.
+    public long RunProgram(long closure, long[] args) {
+        long v = Call(closure, args);
+        if (!Parked() && !schedInstalled) return v;
+        thrown = Val.Nil;
+        if (!schedInstalled) return v;
+        return Conc.Scheduler(this, v);
     }
 
     /// Call `closure` with `args` from outside the interpreter.
@@ -599,7 +686,11 @@ public sealed class Rt : System.IDisposable {
         int depth = frames.Count;
         if (!Enter(closure, calleeAt, args.Length)) { roots.StackTop = save; return Val.Nil; }
         long v = Run(depth);
-        roots.StackTop = save;
+        // NOT on a park. `Run` returns early with the value stack holding the
+        // parked thread's continuation, and truncating it here would throw that
+        // away -- the thread would come back with a stack the scheduler had
+        // already cut off underneath it.
+        if (!Parked()) roots.StackTop = save;
         return v;
     }
 }
