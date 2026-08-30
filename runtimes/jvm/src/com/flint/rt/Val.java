@@ -61,6 +61,13 @@ public final class Val {
         return (b >>> 48) >= TAG_MIN_BOXED ? Double.doubleToRawLongBits(Double.NaN) : b;
     }
 
+    /// A fixnum's payload is 48 bits, signed. Past this a value is a boxed
+    /// bigint -- which still answers `int?`, which is why the specialised
+    /// integer opcodes have to test rather than assume.
+    public static final long FIXNUM_MAX = (1L << 47) - 1;
+    public static final long FIXNUM_MIN = -(1L << 47);
+    public static boolean fitsFixnum(long n) { return n >= FIXNUM_MIN && n <= FIXNUM_MAX; }
+
     public static boolean isFixnum(long v) { return tag(v) == TAG_FIXNUM; }
 
     public static long fixnum(long n) { return (TAG_FIXNUM << 48) | (n & PAYLOAD); }

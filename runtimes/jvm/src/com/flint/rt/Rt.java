@@ -421,14 +421,51 @@ public final class Rt {
                     int off = i16(ip); ip += 2;
                     if (Val.truthy(roots.stack[roots.stackTop - 1])) ip += off; else roots.stackTop -= 1;
                 }
-                case Op.ADD_INT -> { long b = Val.asFixnum(vpop()), x = Val.asFixnum(vpop()); vpush(Val.fixnum(Math.addExact(x, b))); }
-                case Op.SUB_INT -> { long b = Val.asFixnum(vpop()), x = Val.asFixnum(vpop()); vpush(Val.fixnum(Math.subtractExact(x, b))); }
-                case Op.MUL_INT -> { long b = Val.asFixnum(vpop()), x = Val.asFixnum(vpop()); vpush(Val.fixnum(Math.multiplyExact(x, b))); }
-                case Op.LT_INT -> { long b = Val.asFixnum(vpop()), x = Val.asFixnum(vpop()); vpush(Val.bool(x < b)); }
-                case Op.LE_INT -> { long b = Val.asFixnum(vpop()), x = Val.asFixnum(vpop()); vpush(Val.bool(x <= b)); }
-                case Op.GT_INT -> { long b = Val.asFixnum(vpop()), x = Val.asFixnum(vpop()); vpush(Val.bool(x > b)); }
-                case Op.GE_INT -> { long b = Val.asFixnum(vpop()), x = Val.asFixnum(vpop()); vpush(Val.bool(x >= b)); }
-                case Op.EQ_INT -> { long b = Val.asFixnum(vpop()), x = Val.asFixnum(vpop()); vpush(Val.bool(x == b)); }
+                // The SPECIALISED integer operations. The compiler emits these
+                // only where it proved both operands are integers -- but
+                // `^int` means integer and not FIXNUM, so a bigint still
+                // answers `int?` and still arrives here. Reading one with
+                // `asFixnum` was silently wrong, and `Math.addExact` threw a
+                // host exception on overflow instead of promoting.
+                case Op.ADD_INT, Op.SUB_INT, Op.MUL_INT, Op.LT_INT,
+                     Op.LE_INT, Op.GT_INT, Op.GE_INT, Op.EQ_INT -> {
+                    long y = vpop(), x = vpop();
+                    boolean fast = Val.isFixnum(x) && Val.isFixnum(y);
+                    long v = 0;
+                    if (fast) {
+                        long p = Val.asFixnum(x), q = Val.asFixnum(y);
+                        switch (opcode) {
+                            case Op.ADD_INT -> {
+                                long r = p + q;
+                                if (((p ^ r) & (q ^ r)) < 0 || !Val.fitsFixnum(r)) fast = false;
+                                else v = Val.fixnum(r);
+                            }
+                            case Op.SUB_INT -> {
+                                long r = p - q;
+                                if (((p ^ q) & (p ^ r)) < 0 || !Val.fitsFixnum(r)) fast = false;
+                                else v = Val.fixnum(r);
+                            }
+                            case Op.MUL_INT -> {
+                                long r = p * q;
+                                if (p != 0 && (r / p != q || (p == -1 && q == Long.MIN_VALUE))
+                                    || !Val.fitsFixnum(r)) fast = false;
+                                else v = Val.fixnum(r);
+                            }
+                            case Op.LT_INT -> v = Val.bool(p < q);
+                            case Op.LE_INT -> v = Val.bool(p <= q);
+                            case Op.GT_INT -> v = Val.bool(p > q);
+                            case Op.GE_INT -> v = Val.bool(p >= q);
+                            default -> v = Val.bool(p == q);
+                        }
+                    }
+                    if (fast) { vpush(v); }
+                    else {
+                        f.ip = ip;
+                        long r = intBinopSlow(opcode, x, y);
+                        if (failed()) { if (!unwind()) return Val.NIL; continue; }
+                        vpush(r);
+                    }
+                }
                 case Op.CLOSURE -> {
                     int fnIdx = u16(ip); int nup = u8(ip + 2); ip += 3;
                     long[] up = new long[nup];
@@ -951,6 +988,271 @@ public final class Rt {
     /// whole point.
     public void chargeWork(long n) { steps += n; }
     public void chargeBytes(long n) { chargeWork((n / 8) + 1); }
+
+    /// The out-of-line half of a specialised integer operation: a bigint
+    /// operand, an overflow, or a result past the fixnum range.
+    ///
+    /// Shared with compiled code, which emits the fast path inline and calls
+    /// this when the tags say it does not apply.
+    public long intBinopSlow(int opcode, long x, long y) {
+        switch (opcode) {
+            case Op.ADD_INT: return Num.add(this, x, y);
+            case Op.SUB_INT: return Num.sub(this, x, y);
+            case Op.MUL_INT: return Num.mul(this, x, y);
+            default:
+                if (!Num.isNumber(this, x) || !Num.isNumber(this, y)) {
+                    return throwStr("ClassCastException",
+                        "not a number: " + describe(x) + " and " + describe(y));
+                }
+                int c = Num.cmp(this, x, y);
+                return Val.bool(switch (opcode) {
+                    case Op.LT_INT -> c < 0;
+                    case Op.LE_INT -> c <= 0;
+                    case Op.GT_INT -> c > 0;
+                    case Op.GE_INT -> c >= 0;
+                    default -> c == 0;
+                });
+        }
+    }
+
+    // --- AOT (`doc/decisions/0013`) ------------------------------------------
+    //
+    // PORTED from `runtime/src/vm.rs`, and it is a port rather than a rewrite
+    // because the machine is the same: a flat byte-addressed heap, NaN-boxed
+    // 64-bit values, and an operand stack of `long`s compiled code writes
+    // directly. Only the instruction encoding differs.
+
+    /// What compiled code re-reads after any crossing.
+    /// The image's compiled arities, indexed by `Frame.aotIdx`. Empty when the
+    /// image was not built with `:optimize [perf]`, which is the ordinary case
+    /// and costs one array read on entry.
+    public Aot.Fn[] aot = new Aot.Fn[0];
+        public final Aot.Sync aotSync = new Aot.Sync();
+    /// An uncaught throw unwound out of compiled code. The interpreter's own
+    /// arms answer this by returning from `run`; compiled code cannot, so it
+    /// says so here.
+    public boolean aotUnwoundOut;
+    /// How many compiled frames are live on the HOST stack right now.
+    public int aotDepth;
+    /// Bumped by every unwind. A nested compiled call cannot use the frame
+    /// COUNT to tell "the callee returned" from "a throw was caught": an unwind
+    /// to a handler in the caller's own frame truncates back to exactly the
+    /// depth the call started at, and compiled code then carried on past the
+    /// handler with an unwound stack.
+    public long unwinds;
+    /// The `baseDepth` the innermost `run` was called with. A park is illegal
+    /// when host frames are live underneath, and compiled code cannot be passed
+    /// it, so the loop leaves it here.
+    public int runBase;
+
+    /// Bounded, because the HOST stack cannot be suspended and cannot be grown.
+    /// Past the cap `aotCallAt` hands back, so deep recursion still fails with a
+    /// catchable `StackOverflowError` rather than blowing the host's stack.
+    static final int AOT_MAX_DEPTH = 48;
+
+    /// Three outcomes, and conflating any two of them is a bug the Rust already
+    /// had. See `aotFailed`.
+    static final int PARKED_SAVED = 0, PARKED_YIELDED = 1, PARKED_FAILED = 2;
+
+    int aotParked(int opcodeAt, int keepTop, int baseDepth, boolean reexecutable) {
+        if (baseDepth != 0) {
+            // Host frames are live underneath: a lazy-seq force, a comparator,
+            // `map`. There is no continuation to save, so say so plainly rather
+            // than corrupting the stack.
+            thrown = Val.NIL;
+            parkOn = Val.NIL;
+            throwStr("IllegalStateException",
+                "cannot park here: this call is nested inside native code "
+                + "(map, sort, reduce, a lazy seq). Park from a green thread's own code instead.");
+            return PARKED_FAILED;
+        }
+        thrown = Val.NIL;
+        if (parkOn == Conc.PARK_YIELD) {
+            // A courtesy yield: the call itself is finished, so let it finish.
+            // Rewinding would re-execute `yield`, which yields again, for ever.
+            return PARKED_YIELDED;
+        }
+        if (!reexecutable) {
+            parkOn = Val.NIL;
+            throwStr("IllegalStateException",
+                "cannot park here: this native was reached through `apply`, which has already "
+                + "spread its arguments onto the stack, so the call cannot be re-executed on "
+                + "resume. Call it directly instead.");
+            return PARKED_FAILED;
+        }
+        // Rewind to the instruction itself and leave the operands in place:
+        // resuming re-executes the call, which is why a parking builtin must
+        // decide to park before it changes anything.
+        if (!frames.isEmpty()) frames.get(frames.size() - 1).ip = opcodeAt;
+        roots.stackTop = keepTop;
+        thrown = Val.PARK;
+        return PARKED_SAVED;
+    }
+
+    /// A call from compiled code failed. THREE outcomes:
+    ///
+    /// * A PARK is handled here rather than handed back. Handing it back looks
+    ///   tidier -- all the park logic in one place -- but it makes the
+    ///   interpreter dispatch the same call a second time, and a parking
+    ///   builtin is only re-executable across a RESUME, not twice in a row
+    ///   before the host has answered. `open` registered its request twice.
+    /// * A COURTESY YIELD has already made the call, so the frame comes back
+    ///   AFTER it, and the callee and arguments come off first -- a different
+    ///   top from the one a re-execution needs.
+    /// * A THROW must not re-execute. It already happened.
+    int aotFailed(int ip, int block, int nextIp, int nextBlock,
+                  int keepTop, int yieldTop, long r) {
+        if (thrown == Val.PARK) {
+            if (!frames.isEmpty()) frames.get(frames.size() - 1).aotBlock = block;
+            switch (aotParked(ip, keepTop, runBase, true)) {
+                case PARKED_SAVED -> aotUnwoundOut = true;
+                case PARKED_YIELDED -> {
+                    roots.stackTop = yieldTop;
+                    vpush(r);
+                    if (!frames.isEmpty()) {
+                        Frame f = frames.get(frames.size() - 1);
+                        f.ip = nextIp;
+                        f.aotIp = nextIp;
+                        f.aotBlock = nextBlock;
+                    }
+                    aotUnwoundOut = true;
+                }
+                default -> { if (!unwind()) aotUnwoundOut = true; }
+            }
+            return 1;
+        }
+        if (!unwind()) aotUnwoundOut = true;
+        return 1;
+    }
+
+    /// `NATIVE`, run from compiled code. A native is a host call either way, so
+    /// there is nothing to gain by leaving -- and at a large share of executed
+    /// instructions this is the single biggest thing worth keeping inside.
+    public int aotNativeAt(int idx, int argc, int ip, int block, int nextIp, int nextBlock) {
+        int keepTop = roots.stackTop;
+        int base = keepTop - argc;
+        Builtins.Fn fn = natives[idx];
+        if (fn == null) {
+            throwStr("UnsupportedOperationException",
+                "this runtime does not carry the builtin `" + nativeNames[idx] + "`");
+            return aotFailed(ip, block, nextIp, nextBlock, keepTop, base, Val.NIL);
+        }
+        long r = fn.apply(this, base, argc);
+        roots.stackTop = base;
+        if (failed()) return aotFailed(ip, block, nextIp, nextBlock, keepTop, base, r);
+        vpush(r);
+        return 0;
+    }
+
+    /// The out-of-line half of a specialised integer operation. The fast path is
+    /// emitted INLINE, and this is where a bigint operand, an overflow, or a
+    /// result past the fixnum range ends up. A helper rather than a bail so that
+    /// no chunk boundary is needed after arithmetic -- a boundary per arithmetic
+    /// instruction is the shape `0013` measured and rejected.
+    public int aotIntBinopAt(int opcode, int ip, int block, int nextIp, int nextBlock) {
+        int keepTop = roots.stackTop;
+        int base = keepTop - 2;
+        long y = roots.stack[base + 1], x = roots.stack[base];
+        long r = intBinopSlow(opcode, x, y);
+        roots.stackTop = base;
+        if (failed()) return aotFailed(ip, block, nextIp, nextBlock, keepTop, base, r);
+        vpush(r);
+        return 0;
+    }
+
+    /// `CALL`, run from compiled code.
+    ///
+    /// A callee that is not a closure -- a builtin held in a var, a keyword used
+    /// as a function, a map looked up -- completes right here and compiled code
+    /// carries on. A callee that IS a closure gets its frame pushed here and
+    /// then runs on the HOST stack to a bounded depth.
+    public int aotCallAt(int argc, int ip, int block, int nextIp, int nextBlock) {
+        int keepTop = roots.stackTop;
+        int calleeAt = keepTop - argc - 1;
+        long callee = roots.stack[calleeAt];
+        if (isHeapTy(callee, Obj.TY_CLOSURE)) {
+            // `nextIp`, NOT `ip`. This performs the `enter` itself, so an `ip`
+            // still pointing at the CALL would have the interpreter dispatch it
+            // a second time when the callee returned.
+            if (!frames.isEmpty()) {
+                Frame f = frames.get(frames.size() - 1);
+                f.ip = nextIp;
+                f.aotIp = nextIp;
+                f.aotBlock = nextBlock;
+            }
+            int before = frames.size();
+            long unwindsBefore = unwinds;
+            if (!enter(callee, calleeAt, argc)) {
+                if (!unwind()) aotUnwoundOut = true;
+                return 1;
+            }
+            Frame callf = frames.get(frames.size() - 1);
+            if (callf.aotIdx != Aot.NONE && aotDepth < AOT_MAX_DEPTH) {
+                Aot.Fn a = aot[callf.aotIdx];
+                int cfp = callf.fp, cret = callf.retTo;
+                aotReserve(a.depth);
+                frames.get(frames.size() - 1).aotIp = Aot.NEVER;
+                Aot.resync(this);
+                aotDepth++;
+                a.body.run(this, cfp, cret, 0);
+                aotDepth--;
+                // NOT the frame count on its own: an unwind to a handler in this
+                // very frame truncates back to exactly the depth the call
+                // started at, and compiled code then carried on past the handler
+                // with an unwound stack.
+                if (frames.size() == before && unwinds == unwindsBefore && !aotUnwoundOut) {
+                    return 0;
+                }
+            }
+            return 1;
+        }
+        long r = callValue(calleeAt, argc);
+        if (failed()) {
+            return aotFailed(ip, block, nextIp, nextBlock, keepTop, calleeAt, r);
+        }
+        roots.stackTop = calleeAt;
+        vpush(r);
+        return 0;
+    }
+
+    /// `RETURN`, run from compiled code.
+    public void aotReturnHere() {
+        long v = vpop();
+        Frame f = frames.remove(frames.size() - 1);
+        while (handlers.size() > f.handlers) handlers.remove(handlers.size() - 1);
+        roots.stackTop = f.retTo;
+        vpush(v);
+    }
+
+    void aotReserve(int n) { vreserve(n); }
+
+    /// Run compiled code for the top frame, if it is asking to be entered.
+    /// Returns true if the interpreter should return from `run` -- an uncaught
+    /// throw inside compiled code unwound past every handler.
+    boolean aotEnter(int ip) {
+        Frame f = frames.get(frames.size() - 1);
+        int idx = f.aotIdx, fp = f.fp, retTo = f.retTo, block = f.aotBlock;
+        if (idx == Aot.NONE) { f.aotIp = Aot.NEVER; return false; }
+        if (block == Aot.LOOKUP) {
+            // The one path that arrives without a block: an unwind picked the
+            // handler's target, and only the compiled arity knows which of its
+            // blocks that is.
+            int b = aot[idx].blockAt(ip);
+            if (b < 0) { f.aotIp = Aot.NEVER; return false; }
+            block = b;
+        }
+        Aot.Fn a = aot[idx];
+        // Reserved HERE rather than by a prologue call, so a compiled body makes
+        // no call at all on the way in -- and it is entered once per frame AND
+        // once per return-from-call, so a call on that path is not cheap.
+        aotReserve(a.depth);
+        frames.get(frames.size() - 1).aotIp = Aot.NEVER;
+        Aot.resync(this);
+        a.body.run(this, fp, retTo, block);
+        boolean out = aotUnwoundOut;
+        aotUnwoundOut = false;
+        return out;
+    }
 
     public boolean parked() { return thrown == Val.PARK; }
     public boolean failed() { return !Val.isNil(thrown); }

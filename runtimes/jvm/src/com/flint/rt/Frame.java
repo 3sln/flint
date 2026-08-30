@@ -14,4 +14,13 @@ public final class Frame {
     public int end;
     public int retTo;
     public int handlers;
+
+    /// Index into the image's compiled arities, or `Aot.NONE`. Set by `enter`
+    /// from the arity it SELECTED, so the whole AOT question is one field on the
+    /// frame rather than a lookup keyed on something the frame does not carry.
+    public int aotIdx = Aot.NONE;
+    /// Re-enter compiled code when `ip` reaches this, at `aotBlock`. Every
+    /// re-entry point in the design funnels through this one comparison.
+    public int aotIp = Aot.NEVER;
+    public int aotBlock;
 }
