@@ -62,8 +62,7 @@ public static class Conc {
 
     public const int PT_ID = 0, PT_STATE = 1, PT_CAP = 2, PT_INBOX = 3,
         PT_HEAD = 4, PT_BYTES = 5, PT_PEER = 6, PT_LABEL = 7, PT_KIND = 8,
-        PT_ROOT = 9, PT_FORMAT = 10, PT_OPTS = 11, PT_BINARY = 12,
-        PT_PRESENTED = 13, PT_LEN = 14;
+        PT_ROOT = 9, PT_FORMAT = 10, PT_OPTS = 11, PT_BINARY = 12, PT_LEN = 13;
 
     /// A port's STATE. `P_PENDING` is an `open` the host has not answered yet
     /// and `P_REFUSED` is one it declined -- distinct from `P_CLOSED`, because
@@ -83,17 +82,6 @@ public static class Conc {
 
     /// How much a host port will buffer before a send parks.
     public const long DEFAULT_HOST_CAP = 1 << 20;
-
-    /// What capability an `open` presented, for the host's grant table.
-    ///
-    /// `PRESENTED_NONE` and `PRESENTED_UNKNOWN` are DIFFERENT and collapsing
-    /// them is a security hole rather than a simplification: presenting nothing
-    /// is not the same as presenting something the host never issued. The first
-    /// version of this reported both as 0, so a guest-minted `(opaque "fs")`
-    /// was accepted -- the host saw "no capability offered" and fell back to
-    /// allowing it.
-    public const long PRESENTED_NONE = 0;
-    public const long PRESENTED_UNKNOWN = 0xFFFF_FFFFL;
 
     /// What the host is told about, drained through `DrainEvents`.
     public const int EV_OPEN = 1, EV_MESSAGE = 2, EV_CLOSED = 3;
@@ -540,7 +528,6 @@ public static class Conc {
         rt.SetSlot(p, PT_FORMAT, rt.R(fi));
         rt.SetSlot(p, PT_OPTS, Maps.Empty(rt));
         rt.SetSlot(p, PT_BINARY, Val.Fixnum(0));
-        rt.SetSlot(p, PT_PRESENTED, Val.Fixnum(-1));
         RegisterPort(rt, rt.R(pi));
         if (kind == K_HOST) {
             long slot = RootPort(rt, rt.R(pi));
@@ -723,7 +710,7 @@ public static class Conc {
             // run time -- is in the README.
             case Obj.TyPort:
                 return "a port cannot be sent through a port: only data crosses."
-                     + " A capability cannot be delegated at run time.";
+                     + " An endpoint cannot be delegated at run time.";
             // An opaque value is identity and nothing else
             // (`doc/decisions/0022`), so there is nothing to serialise that
             // would still BE it. Anything a codec could write down is something
@@ -821,7 +808,7 @@ public static class Conc {
                 P_CLOSED => "this end is closed",
                 P_HALF => "the other end has closed, so nothing can receive this",
                 P_ORPHANED => "the other end is gone, so nothing can ever receive this",
-                P_REFUSED => "the host refused this capability",
+                P_REFUSED => "the host refused to open this",
                 _ => "this port is not open yet",
             };
             return rt.ThrowStr("IllegalStateException", "send: " + why);
@@ -1013,36 +1000,25 @@ public static class Conc {
 
     // --- opening a capability -----------------------------------------------
 
-    /// Ask the host for a capability. Blocking from the program's point of
-    /// view; from the scheduler's, the thread stops being runnable.
+    /// Ask the host to open `name`, forwarding `args` verbatim.
     ///
-    /// The RUNTIME creates the pair -- the host never holds two ends and never
-    /// hands one back. It is told the token to answer with and the id of the
-    /// end it will hold.
-    public static long PortOpen(Rt rt, long name, long format) {
-        return PortOpenWith(rt, name, format, Val.Nil);
-    }
-
-    public static long PortOpenWith(Rt rt, long name, long format, long cap) {
-        // Read the presented id FIRST, before anything allocates. It is a
-        // fixnum from then on, so it needs no rooting -- cheaper and safer than
-        // carrying `cap` through the shadow stack for one field.
-        //
-        // Three cases, and collapsing the last two is a SECURITY HOLE rather
-        // than a simplification: presenting NOTHING is not the same as
-        // presenting something the host never issued. The first version
-        // reported both as 0, so a guest-minted `(opaque "fs")` was accepted --
-        // the host saw "no capability offered" and fell back to allowing it.
-        long presented;
-        if (Val.IsNil(cap)) {
-            presented = PRESENTED_NONE;
-        } else {
-            long oid = rt.OpaqueHostId(cap);
-            presented = oid == 0 ? PRESENTED_UNKNOWN : oid;
-        }
+    /// # The runtime does not know what a capability is
+    ///
+    /// It used to. There was a grant table in the sandbox, a `PT_PRESENTED`
+    /// slot on every port, an export to read it back, and a check inside the
+    /// SDK -- four places knowing a concept that belongs to whoever is lending
+    /// the authority.
+    ///
+    /// A capability is an OPAQUE VALUE (`doc/decisions/0022`) and nothing more.
+    /// The host projects one in by any means it likes, and a program that wants
+    /// something a capability enables PRESENTS it with the request. This
+    /// forwards whatever it was given and takes no view. What makes that safe
+    /// is the ENCODING, not a table: an opaque value crosses as `K_SENTINEL`
+    /// plus the host id it was issued with, and guest code cannot mint that id.
+    public static long PortOpen(Rt rt, long name, long args) {
         EnsureSched(rt);
         int bas = rt.Mark();
-        int ni = rt.Push(name), fi = rt.Push(format);
+        int ni = rt.Push(name), ai = rt.Push(args);
         int ti = rt.Push(CurrentThread(rt));
         long pending = rt.Slot(rt.R(ti), TH_PENDING);
         if (!Val.IsNil(pending)) {
@@ -1050,30 +1026,42 @@ public static class Conc {
             rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_PENDING, Val.Nil);
             // ONLY A REFUSAL IS A REFUSAL. The host may answer and then close
             // the port before this thread is next scheduled, and the port is
-            // then `P_HALF` -- "granted, and now finished", which is not the
-            // same as "you may not have this". Reading only `P_OPEN` as success
-            // told a guest its capability had been REFUSED when it had in fact
-            // been given one, and `SecurityException` is the last error anybody
-            // wants to be wrong about.
+            // then `P_HALF` -- "granted, and now finished", not "you may not
+            // have this".
             if (Fx(rt.Slot(pending, PT_STATE)) != P_REFUSED) { rt.PopTo(bas); return pending; }
-            string nm = Str.IsString(rt, rt.R(ni)) ? Str.Text(rt, rt.R(ni)) : "?";
+            string nm2 = Str.IsString(rt, rt.R(ni)) ? Str.Text(rt, rt.R(ni)) : "?";
             rt.PopTo(bas);
-            return rt.ThrowStr("SecurityException",
-                "the host refused the capability \"" + nm + "\"");
+            return rt.ThrowStr("SecurityException", "the host refused to open \"" + nm2 + "\"");
         }
-        int ei = rt.Push(NewPort(rt, DEFAULT_HOST_CAP, rt.R(ni), K_FLINT, P_PENDING, rt.R(fi)));
-        int hi = rt.Push(NewPort(rt, DEFAULT_HOST_CAP, rt.R(ni), K_HOST, P_PENDING, rt.R(fi)));
+        int ei = rt.Push(NewPort(rt, DEFAULT_HOST_CAP, rt.R(ni), K_FLINT, P_PENDING, Val.Nil));
+        int hi = rt.Push(NewPort(rt, DEFAULT_HOST_CAP, rt.R(ni), K_HOST, P_PENDING, Val.Nil));
         LinkPeers(rt, rt.R(ei), rt.R(hi));
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_PENDING, rt.R(ei));
         long token = NewWaiter(rt, WK_OPEN, rt.R(ei));
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_TOKEN, Val.Fixnum(token));
         long hostId = Fx(rt.Slot(rt.R(hi), PT_ID));
-        // The presented capability's host id travels WITH THE PORT, for the
-        // host to look up in its own grant table when it sees the open-request.
-        // The runtime records the claim and never judges it: only the host
-        // holds a grant table (`doc/decisions/0022`).
-        rt.SetSlot(Val.AsHeap(rt.R(hi)), PT_PRESENTED, Val.Fixnum(presented));
-        PushEvent(rt, EV_OPEN, token, hostId, rt.R(ni));
+        // THE ARGUMENTS, ENCODED, are the payload -- not a bare name string.
+        // That is the whole of "the host does what it wants with them": one
+        // value crosses, and anything an opaque value carries survives the trip
+        // because the codec already knew how to write one down.
+        int vi = rt.Push(Vec.Empty(rt));
+        rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.R(ni)));
+        int an = rt.IsHeapTy(rt.R(ai), Obj.TyVec) ? Vec.Count(rt, rt.R(ai)) : 0;
+        for (int k = 0; k < an; k++) {
+            rt.SetR(vi, Vec.Conj(rt, rt.R(vi), Vec.Nth(rt, rt.R(ai), k)));
+        }
+        byte[] call;
+        try {
+            call = Codec.Encode(rt, rt.R(vi));
+        } catch (Codec.Refused e) {
+            // A value the codec refuses is the PROGRAM's error, not the host's:
+            // say so here rather than sending something the host cannot read.
+            rt.PopTo(bas);
+            return rt.ThrowStr("IllegalArgumentException",
+                "open: this cannot be sent to the host: " + e.Message);
+        }
+        int pi = rt.Push(Bytes.Of(rt, call));
+        PushEvent(rt, EV_OPEN, token, hostId, rt.R(pi));
         long target = rt.R(ei);
         rt.PopTo(bas);
         return Park(rt, target);
@@ -1193,17 +1181,6 @@ public static class Conc {
             return P_ORPHANED;
         }
         return st;
-    }
-
-    /// The host id of the capability presented when this port was opened, or 0.
-    ///
-    /// The runtime records the claim and answers questions about it; it never
-    /// judges it. Only the host holds a grant table (`doc/decisions/0022`).
-    public static long PresentedCapability(Rt rt, long hostPortId) {
-        long p = PortById(rt, hostPortId);
-        if (Val.IsNil(p)) return 0;
-        long v = rt.Slot(p, PT_PRESENTED);
-        return Val.IsFixnum(v) ? Val.AsFixnum(v) : 0;
     }
 
     /// THE QUERY, NOT THE NOTIFICATION. What state is the RUNTIME end of this

@@ -65,10 +65,77 @@ public class RtHostPorts {
     StringBuilder b = new StringBuilder();
     for (Ev e : evs) {
       if (b.length() > 0) b.append(" ");
+      String p = e.kind() == Conc.EV_OPEN
+        ? render(e.payload())
+        : "\"" + new String(e.payload(), StandardCharsets.UTF_8) + "\"";
       b.append(kindName(e.kind())).append("(").append(e.a()).append(",").append(e.b())
-       .append(",\"").append(new String(e.payload(), StandardCharsets.UTF_8)).append("\")");
+       .append(",").append(p).append(")");
     }
     return b.toString();
+  }
+
+  /// The open-request payload, rendered.
+  ///
+  /// It is an ENCODED VALUE rather than a bare name, which is what "the host
+  /// does what it wants with the args" means in practice: this driver decodes
+  /// it the way any host would, and an opaque value arrives carrying the id the
+  /// host issued -- which is the whole of the capability check, done here
+  /// rather than by the runtime.
+  static int ri;
+  static String render(byte[] b) { ri = 0; return one(b); }
+
+  static int u32(byte[] b) {
+    int v = (b[ri] & 0xFF) | ((b[ri+1] & 0xFF) << 8)
+          | ((b[ri+2] & 0xFF) << 16) | ((b[ri+3] & 0xFF) << 24);
+    ri += 4;
+    return v;
+  }
+
+  static String str(byte[] b) {
+    int n = u32(b);
+    String s = new String(b, ri, n, StandardCharsets.UTF_8);
+    ri += n;
+    return s;
+  }
+
+  static String one(byte[] b) {
+    int t = b[ri++] & 0xFF;
+    switch (t) {
+      case 0: return "nil";
+      case 1: return "true";
+      case 2: return "false";
+      case 3: { long lo = u32(b) & 0xFFFFFFFFL, hi = u32(b) & 0xFFFFFFFFL;
+                return String.valueOf((hi << 32) | lo); }
+      case 5: return "\"" + str(b) + "\"";
+      case 6: case 7: {
+        int save = ri;
+        int ns = u32(b);
+        String nss = "";
+        if (ns != -1) { ri = save; nss = str(b) + "/"; }
+        return (t == 6 ? ":" : "") + nss + str(b);
+      }
+      case 8: case 9: case 11: {
+        int n = u32(b);
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < n; i++) { if (i > 0) sb.append(" "); sb.append(one(b)); }
+        return sb.append("]").toString();
+      }
+      case 10: {
+        int n = u32(b);
+        StringBuilder sb = new StringBuilder("{");
+        for (int i = 0; i < n; i++) {
+          if (i > 0) sb.append(", ");
+          sb.append(one(b)).append(" ").append(one(b));
+        }
+        return sb.append("}").toString();
+      }
+      // The one that matters: an opaque value with the id the HOST gave it.
+      // A guest-minted one has id 0 and is recognisably not the host's.
+      case 16: { long lo = u32(b) & 0xFFFFFFFFL, hi = u32(b) & 0xFFFFFFFFL;
+                 long id = (hi << 32) | lo;
+                 return "#opaque[\"" + str(b) + "\" id=" + id + "]"; }
+      default: return "#tag" + t;
+    }
   }
 
   /// `main`, then the scheduler -- what a host's `run` does.
@@ -77,7 +144,23 @@ public class RtHostPorts {
       rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
       if (!Val.isNil(rt.thrown) && !rt.parked()) return Val.NIL;
     }
-    return rt.runProgram(rt.makeClosure(img.entry, new long[0]), new long[]{ Val.NIL });
+    // One opaque value PROJECTED IN as the entry's second argument, under an id
+    // this driver chose. That is the whole of lending a capability: no grant
+    // table, no declaration, and nothing in the runtime that knows what it is
+    // for.
+    int base = rt.mark();
+    int ai = rt.push(Vec.empty(rt));
+    int mi = rt.push(Maps.empty(rt));
+    int ki = rt.push(Str.keyword(rt, null, "fs"));
+    int li = rt.push(Str.of(rt, "fs"));
+    int oi = rt.push(rt.newOpaque(rt.r(li), 7));
+    rt.setR(mi, Maps.assoc(rt, rt.r(mi), rt.r(ki), rt.r(oi)));
+    int vi = rt.push(Vec.empty(rt));
+    rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(ai)));
+    rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(mi)));
+    long pair = rt.r(vi);
+    rt.popTo(base);
+    return rt.runProgram(rt.makeClosure(img.entry, new long[0]), new long[]{ pair });
   }
 
   /// The status a host sees, in the same three values the Rust reports:
@@ -108,9 +191,9 @@ public class RtHostPorts {
     Ev open = evs.stream().filter(e -> e.kind() == Conc.EV_OPEN).findFirst().orElseThrow();
     int token = open.a(), port = open.b();
 
-    // 2. Nothing was presented -- and that is a DIFFERENT answer from "I do not
-    //    recognise this", which is why both exist.
-    System.out.println("  ok   presented capability: " + Conc.presentedCapability(rt, port));
+    // 2. WHAT WAS FORWARDED, decoded. Nothing in the runtime looked at it on
+    //    the way past, and nothing in it knows what a capability is.
+    System.out.println("  ok   it forwarded: " + render(open.payload()));
 
     // 3. Grant it. A second answer on the same token is refused: the generation
     //    in it has moved on, so a late or duplicated reply cannot resume a

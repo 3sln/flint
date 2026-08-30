@@ -2,16 +2,39 @@
 
 > **BUILT.** `(opaque)` and `(opaque "label")` in `clojure.core`; `TY_OPAQUE` in
 > the runtime; host-minted values reaching the entry function as its second
-> argument; `p/open`'s `:capability`; not sendable; **identities preserved
-> across a snapshot** (amended 2026-08-29 -- they used to be erased, and the
-> section below says why that was the wrong place to enforce it). Metadata and protocol extension are still deliberately absent.
+> argument; not sendable; **identities preserved across a snapshot** (amended
+> 2026-08-29 -- they used to be erased, and the section below says why that was
+> the wrong place to enforce it). Metadata and protocol extension are still
+> deliberately absent.
+>
+> **Amended 2026-08-30: a capability is not a concept the runtime has.** It used
+> to be, in four places at once -- a grant table in the sandbox, a `PT_PRESENTED`
+> slot on every port, an ABI export to read it back, and the policy check itself
+> inside the JavaScript SDK. Between them they decided what a capability WAS, so
+> a host could not.
+>
+> All of it is gone. What is left is this document's own idea and nothing on top
+> of it: an opaque value carries an id the HOST issued, guest code cannot mint
+> that id (`flint/opaque` gives 0), and the value crosses a boundary as
+> `K_SENTINEL` plus that id. A host projects one into a sandbox by any means it
+> likes; a program that wants something it enables PRESENTS it with the request;
+> `(open name & args)` forwards the arguments verbatim and takes no view. The
+> host decodes them and decides. Capabilities are optional because nothing
+> requires one, and they are a PATTERN rather than a feature -- the CLI
+> implements it, and another host may implement a different one.
+>
+> The forgery this file records is still caught, and better: it is caught by the
+> id, where the ids are. `PRESENTED_NONE` and `PRESENTED_UNKNOWN` existed to
+> stop the runtime conflating "nothing offered" with "something I never issued";
+> a host that reads the arguments itself never had that question, because it is
+> looking at its own table.
 >
 > Two things the tests found that reading would not have. A guest-minted
 > `(opaque "fs")` opened the filesystem, because "nothing was presented" and
 > "something the host never issued" both arrived as 0 and the host read a
 > forgery as an absence. And the first snapshot test asserted a clean import on
-> a heap that contained no capabilities; the counter now proves the sweep saw
-> them.
+> a heap that contained no host-minted values; the counter now proves the sweep
+> saw them.
 
 The generalisation, in the user's terms: rather than a capability type, *"the
 idea of an opaque (sentinel) value in general, which can't be minted/created,

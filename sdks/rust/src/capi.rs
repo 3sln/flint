@@ -350,20 +350,6 @@ pub unsafe extern "C" fn flint_sandbox_from_wasm(
     }
 }
 
-/// Lend a capability by name.
-///
-/// Authority is never a type test (`doc/decisions/0022`): a program holds a
-/// capability because the host gave it one. Granting nothing -- the default --
-/// means the program can reach nothing.
-///
-/// # Safety
-/// `s` must be a sandbox from this library, not already freed.
-#[no_mangle]
-pub unsafe extern "C" fn flint_sandbox_grant(s: *const Sandbox, name: *const c_char) {
-    if let (Some(s), Some(n)) = (unsafe { s.as_ref() }, unsafe { borrowed(name) }) {
-        s.grant(n);
-    }
-}
 
 /// Stop a call after `n` instructions. Gas is deterministic
 /// (`doc/decisions/0009`), so the same call stops in the same place on every

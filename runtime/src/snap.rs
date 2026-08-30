@@ -286,7 +286,7 @@ pub fn capture(rt: &Rt) -> Vec<u8> {
 /// only with id 0, and there is deliberately no builtin that reads an id back.
 /// So an id is a thing the host wrote and only the host can read.
 ///
-/// The count is still taken, because `restored_capabilities` is what a test
+/// The count is still taken, because `restored_host_opaques` is what a test
 /// reads to know the sweep saw anything at all -- a zero here would otherwise
 /// pass every assertion for the wrong reason.
 fn count_host_opaques(rt: &mut Rt) -> u32 {
@@ -507,7 +507,7 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     rt.champ_added = champ_added;
     // LAST, after the heap is in place. Identities are PRESERVED; whether any
     // of them still means anything is the host's grant table to answer.
-    rt.restored_capabilities = count_host_opaques(rt);
+    rt.restored_host_opaques = count_host_opaques(rt);
     true
 }
 
@@ -978,7 +978,7 @@ pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
     rt.champ_added = champ_added;
     // LAST, and for the same reason as `restore`: the identities come back
     // intact so a host can rehydrate against them.
-    rt.restored_capabilities = count_host_opaques(rt);
+    rt.restored_host_opaques = count_host_opaques(rt);
     true
 }
 

@@ -39,11 +39,93 @@ fn state_name(s: i64) -> &'static str {
     }
 }
 
+/// The open-request payload, rendered.
+///
+/// It is an ENCODED VALUE now rather than a bare name, which is what "the host
+/// does what it wants with the args" means in practice: this driver decodes it
+/// the way any host would, and an opaque value arrives carrying the id the host
+/// issued -- which is the whole of the capability check, done here rather than
+/// by the runtime.
+fn render(b: &[u8]) -> String {
+    let mut i = 0usize;
+    one(b, &mut i)
+}
+
+fn u32_at(b: &[u8], i: &mut usize) -> u32 {
+    let v = u32::from_le_bytes([b[*i], b[*i + 1], b[*i + 2], b[*i + 3]]);
+    *i += 4;
+    v
+}
+
+fn str_at(b: &[u8], i: &mut usize) -> String {
+    let n = u32_at(b, i) as usize;
+    let s = String::from_utf8_lossy(&b[*i..*i + n]).into_owned();
+    *i += n;
+    s
+}
+
+fn one(b: &[u8], i: &mut usize) -> String {
+    let t = b[*i];
+    *i += 1;
+    match t {
+        0 => String::from("nil"),
+        1 => String::from("true"),
+        2 => String::from("false"),
+        3 => {
+            let lo = u32_at(b, i) as u64;
+            let hi = u32_at(b, i) as u64;
+            format!("{}", ((hi << 32) | lo) as i64)
+        }
+        5 => format!("{:?}", str_at(b, i)),
+        6 | 7 => {
+            let save = *i;
+            let ns = u32_at(b, i);
+            let nss = if ns == u32::MAX {
+                String::new()
+            } else {
+                *i = save;
+                format!("{}/", str_at(b, i))
+            };
+            let sigil = if t == 6 { ":" } else { "" };
+            format!("{sigil}{nss}{}", str_at(b, i))
+        }
+        8 | 9 | 11 => {
+            let n = u32_at(b, i);
+            let parts: Vec<String> = (0..n).map(|_| one(b, i)).collect();
+            format!("[{}]", parts.join(" "))
+        }
+        10 => {
+            let n = u32_at(b, i);
+            let parts: Vec<String> = (0..n)
+                .map(|_| {
+                    let k = one(b, i);
+                    let v = one(b, i);
+                    format!("{k} {v}")
+                })
+                .collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+        // The one that matters: an opaque value with the id the HOST gave it.
+        // A guest-minted one has id 0 and is therefore recognisably not ours.
+        16 => {
+            let lo = u32_at(b, i) as u64;
+            let hi = u32_at(b, i) as u64;
+            let id = (hi << 32) | lo;
+            format!("#opaque[{:?} id={}]", str_at(b, i), id)
+        }
+        other => format!("#tag{other}"),
+    }
+}
+
 fn show(evs: &[Event]) -> String {
     evs.iter()
         .map(|e| {
-            let p = String::from_utf8_lossy(&e.payload);
-            format!("{}({},{},{:?})", kind_name(e.kind), e.a, e.b, p)
+            let p = if e.kind as i64 == conc::EV_OPEN {
+                render(&e.payload)
+            } else {
+                format!("{:?}", String::from_utf8_lossy(&e.payload))
+            };
+            format!("{}({},{},{})", kind_name(e.kind), e.a, e.b, p)
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -56,7 +138,12 @@ fn main() {
         .expect("the image loads");
 
     // 1. The program runs until it asks for something only the host has.
-    let out = p.run(&[]);
+    //
+    // One opaque value is PROJECTED IN as the entry's second argument, under an
+    // id this driver chose. That is the whole of lending a capability: there is
+    // no grant table, no declaration, and nothing in the runtime that knows what
+    // the value is for.
+    let out = p.run_with(&[], &[("fs", 7)]);
     println!("  ok   the program parked on the host: status {}", out.code);
     let evs = p.drain_events();
     println!("  ok   it asked: {}", show(&evs));
@@ -64,9 +151,11 @@ fn main() {
     let token = open.a;
     let port = open.b;
 
-    // 2. Nothing was presented -- and that is a DIFFERENT answer from "I do not
-    //    recognise this", which is why both exist.
-    println!("  ok   presented capability: {}", p.presented_capability(port));
+    // 2. WHAT WAS FORWARDED, decoded. The payload is the arguments the guest
+    //    passed to `open`, as one encoded value -- so a host reads them and
+    //    decides for itself. Nothing in the runtime looked at them on the way
+    //    past, and nothing in it knows what a capability is.
+    println!("  ok   it forwarded: {}", render(&open.payload));
 
     // 3. Grant it. A second answer on the same token is refused: the generation
     //    in it has moved on, so a late or duplicated reply cannot resume a

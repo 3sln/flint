@@ -64,8 +64,7 @@ public final class Conc {
 
     public static final int PT_ID = 0, PT_STATE = 1, PT_CAP = 2, PT_INBOX = 3,
         PT_HEAD = 4, PT_BYTES = 5, PT_PEER = 6, PT_LABEL = 7, PT_KIND = 8,
-        PT_ROOT = 9, PT_FORMAT = 10, PT_OPTS = 11, PT_BINARY = 12,
-        PT_PRESENTED = 13, PT_LEN = 14;
+        PT_ROOT = 9, PT_FORMAT = 10, PT_OPTS = 11, PT_BINARY = 12, PT_LEN = 13;
 
     /// A port's STATE. `P_PENDING` is an `open` the host has not answered yet
     /// and `P_REFUSED` is one it declined -- distinct from `P_CLOSED`, because
@@ -85,17 +84,6 @@ public final class Conc {
 
     /// How much a host port will buffer before a send parks.
     public static final long DEFAULT_HOST_CAP = 1 << 20;
-
-    /// What capability an `open` presented, for the host's grant table.
-    ///
-    /// `PRESENTED_NONE` and `PRESENTED_UNKNOWN` are DIFFERENT and collapsing
-    /// them is a security hole rather than a simplification: presenting nothing
-    /// is not the same as presenting something the host never issued. The first
-    /// version of this reported both as 0, so a guest-minted `(opaque "fs")`
-    /// was accepted -- the host saw "no capability offered" and fell back to
-    /// allowing it.
-    public static final long PRESENTED_NONE = 0;
-    public static final long PRESENTED_UNKNOWN = 0xFFFF_FFFFL;
 
     /// What the host is told about, drained through `drainEvents`.
     public static final int EV_OPEN = 1, EV_MESSAGE = 2, EV_CLOSED = 3;
@@ -542,7 +530,6 @@ public final class Conc {
         rt.setSlot(p, PT_FORMAT, rt.r(fi));
         rt.setSlot(p, PT_OPTS, Maps.empty(rt));
         rt.setSlot(p, PT_BINARY, Val.fixnum(0));
-        rt.setSlot(p, PT_PRESENTED, Val.fixnum(-1));
         registerPort(rt, rt.r(pi));
         if (kind == K_HOST) {
             long slot = rootPort(rt, rt.r(pi));
@@ -723,7 +710,7 @@ public final class Conc {
             // run time -- is in the README.
             case TY_PORT:
                 return "a port cannot be sent through a port: only data crosses."
-                     + " A capability cannot be delegated at run time.";
+                     + " An endpoint cannot be delegated at run time.";
             // An opaque value is identity and nothing else
             // (`doc/decisions/0022`), so there is nothing to serialise that
             // would still BE it. Anything a codec could write down is something
@@ -821,7 +808,7 @@ public final class Conc {
                 case P_CLOSED -> "this end is closed";
                 case P_HALF -> "the other end has closed, so nothing can receive this";
                 case P_ORPHANED -> "the other end is gone, so nothing can ever receive this";
-                case P_REFUSED -> "the host refused this capability";
+                case P_REFUSED -> "the host refused to open this";
                 default -> "this port is not open yet";
             };
             return rt.throwStr("IllegalStateException", "send: " + why);
@@ -1013,36 +1000,25 @@ public final class Conc {
 
     // --- opening a capability -----------------------------------------------
 
-    /// Ask the host for a capability. Blocking from the program's point of
-    /// view; from the scheduler's, the thread stops being runnable.
+    /// Ask the host to open `name`, forwarding `args` verbatim.
     ///
-    /// The RUNTIME creates the pair -- the host never holds two ends and never
-    /// hands one back. It is told the token to answer with and the id of the
-    /// end it will hold.
-    public static long portOpen(Rt rt, long name, long format) {
-        return portOpenWith(rt, name, format, Val.NIL);
-    }
-
-    public static long portOpenWith(Rt rt, long name, long format, long cap) {
-        // Read the presented id FIRST, before anything allocates. It is a
-        // fixnum from then on, so it needs no rooting -- cheaper and safer than
-        // carrying `cap` through the shadow stack for one field.
-        //
-        // Three cases, and collapsing the last two is a SECURITY HOLE rather
-        // than a simplification: presenting NOTHING is not the same as
-        // presenting something the host never issued. The first version
-        // reported both as 0, so a guest-minted `(opaque "fs")` was accepted --
-        // the host saw "no capability offered" and fell back to allowing it.
-        long presented;
-        if (Val.isNil(cap)) {
-            presented = PRESENTED_NONE;
-        } else {
-            long id = rt.opaqueHostId(cap);
-            presented = id == 0 ? PRESENTED_UNKNOWN : id;
-        }
+    /// # The runtime does not know what a capability is
+    ///
+    /// It used to. There was a grant table in the sandbox, a `PT_PRESENTED`
+    /// slot on every port, an export to read it back, and a check inside the
+    /// SDK -- four places knowing a concept that belongs to whoever is lending
+    /// the authority.
+    ///
+    /// A capability is an OPAQUE VALUE (`doc/decisions/0022`) and nothing more.
+    /// The host projects one in by any means it likes, and a program that wants
+    /// something a capability enables PRESENTS it with the request. This
+    /// forwards whatever it was given and takes no view. What makes that safe
+    /// is the ENCODING, not a table: an opaque value crosses as `K_SENTINEL`
+    /// plus the host id it was issued with, and guest code cannot mint that id.
+    public static long portOpen(Rt rt, long name, long args) {
         ensureSched(rt);
         int base = rt.mark();
-        int ni = rt.push(name), fi = rt.push(format);
+        int ni = rt.push(name), ai = rt.push(args);
         int ti = rt.push(currentThread(rt));
         long pending = rt.slot(rt.r(ti), TH_PENDING);
         if (!Val.isNil(pending)) {
@@ -1050,30 +1026,42 @@ public final class Conc {
             rt.setSlot(Val.asHeap(rt.r(ti)), TH_PENDING, Val.NIL);
             // ONLY A REFUSAL IS A REFUSAL. The host may answer and then close
             // the port before this thread is next scheduled, and the port is
-            // then `P_HALF` -- "granted, and now finished", which is not the
-            // same as "you may not have this". Reading only `P_OPEN` as success
-            // told a guest its capability had been REFUSED when it had in fact
-            // been given one, and `SecurityException` is the last error anybody
-            // wants to be wrong about.
+            // then `P_HALF` -- "granted, and now finished", not "you may not
+            // have this".
             if (fx(rt.slot(pending, PT_STATE)) != P_REFUSED) { rt.popTo(base); return pending; }
             String n = Str.isString(rt, rt.r(ni)) ? Str.text(rt, rt.r(ni)) : "?";
             rt.popTo(base);
-            return rt.throwStr("SecurityException",
-                "the host refused the capability \"" + n + "\"");
+            return rt.throwStr("SecurityException", "the host refused to open \"" + n + "\"");
         }
-        int ei = rt.push(newPort(rt, DEFAULT_HOST_CAP, rt.r(ni), K_FLINT, P_PENDING, rt.r(fi)));
-        int hi = rt.push(newPort(rt, DEFAULT_HOST_CAP, rt.r(ni), K_HOST, P_PENDING, rt.r(fi)));
+        int ei = rt.push(newPort(rt, DEFAULT_HOST_CAP, rt.r(ni), K_FLINT, P_PENDING, Val.NIL));
+        int hi = rt.push(newPort(rt, DEFAULT_HOST_CAP, rt.r(ni), K_HOST, P_PENDING, Val.NIL));
         linkPeers(rt, rt.r(ei), rt.r(hi));
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_PENDING, rt.r(ei));
         long token = newWaiter(rt, WK_OPEN, rt.r(ei));
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_TOKEN, Val.fixnum(token));
         long hostId = fx(rt.slot(rt.r(hi), PT_ID));
-        // The presented capability's host id travels WITH THE PORT, for the
-        // host to look up in its own grant table when it sees the open-request.
-        // The runtime records the claim and never judges it: only the host
-        // holds a grant table (`doc/decisions/0022`).
-        rt.setSlot(Val.asHeap(rt.r(hi)), PT_PRESENTED, Val.fixnum(presented));
-        pushEvent(rt, EV_OPEN, token, hostId, rt.r(ni));
+        // THE ARGUMENTS, ENCODED, are the payload -- not a bare name string.
+        // That is the whole of "the host does what it wants with them": one
+        // value crosses, and anything an opaque value carries survives the trip
+        // because the codec already knew how to write one down.
+        int vi = rt.push(Vec.empty(rt));
+        rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(ni)));
+        int an = rt.isHeapTy(rt.r(ai), TY_VEC) ? Vec.count(rt, rt.r(ai)) : 0;
+        for (int k = 0; k < an; k++) {
+            rt.setR(vi, Vec.conj(rt, rt.r(vi), Vec.nth(rt, rt.r(ai), k)));
+        }
+        byte[] call;
+        try {
+            call = Codec.encode(rt, rt.r(vi));
+        } catch (Codec.Refused e) {
+            // A value the codec refuses is the PROGRAM's error, not the host's:
+            // say so here rather than sending something the host cannot read.
+            rt.popTo(base);
+            return rt.throwStr("IllegalArgumentException",
+                "open: this cannot be sent to the host: " + e.getMessage());
+        }
+        int pi = rt.push(Bytes.of(rt, call));
+        pushEvent(rt, EV_OPEN, token, hostId, rt.r(pi));
         long target = rt.r(ei);
         rt.popTo(base);
         return park(rt, target);
@@ -1193,17 +1181,6 @@ public final class Conc {
             return P_ORPHANED;
         }
         return st;
-    }
-
-    /// The host id of the capability presented when this port was opened, or 0.
-    ///
-    /// The runtime records the claim and answers questions about it; it never
-    /// judges it. Only the host holds a grant table (`doc/decisions/0022`).
-    public static long presentedCapability(Rt rt, long hostPortId) {
-        long p = portById(rt, hostPortId);
-        if (Val.isNil(p)) return 0;
-        long v = rt.slot(p, PT_PRESENTED);
-        return Val.isFixnum(v) ? Val.asFixnum(v) : 0;
     }
 
     /// THE QUERY, NOT THE NOTIFICATION. What state is the RUNTIME end of this

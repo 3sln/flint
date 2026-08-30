@@ -434,7 +434,6 @@ pub struct Heap {
     /// What the host lent THIS SANDBOX. Per-sandbox, not per-executor: a
     /// capability is lent to a sandbox, and its threads are not separate
     /// tenants (`doc/decisions/0022`).
-    pub grants: Vec<(alloc::string::String, u64)>,
     /// Have the image's initialisers run? Once per sandbox, not per executor
     /// and not per call.
     pub started: bool,
@@ -452,7 +451,6 @@ impl Heap {
             image: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             host_natives: Vec::new(),
-            grants: Vec::new(),
             started: false,
             #[cfg(feature = "parallel")]
             par: crate::par::Parallel::new(),

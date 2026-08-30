@@ -280,7 +280,6 @@ pub struct Program {
     /// freed memory -- which surfaced as a `stack_top` of
     /// 14 728 600 375 357 765 408 against a `stack.len()` of 0.
     rt: alloc::boxed::Box<Rt>,
-    grants: u32,
 }
 
 /// What a run produced: `code` is 0 for success, and `out` is the answer or the
@@ -357,11 +356,30 @@ impl Program {
                 "this runtime does not carry the builtin `{missing}`, which the image needs"
             )
         })?;
-        Ok(Program { rt: alloc::boxed::Box::new(rt), grants: 0 })
+        Ok(Program { rt: alloc::boxed::Box::new(rt) })
     }
 
     /// Run `main` with string arguments, as the wasm entry does.
     pub fn run(&mut self, args: &[&str]) -> Outcome {
+        self.run_with(args, &[])
+    }
+
+    /// Run `main`, and PROJECT some named opaque values in as its second
+    /// argument.
+    ///
+    /// Deliberately not called `grant`, and deliberately not a table the
+    /// runtime keeps. There used to be one, and it made the runtime the arbiter
+    /// of what a capability was -- a `flint_grant` to fill it, a slot on every
+    /// port to record what was presented, an export to read that back, and a
+    /// check inside the SDK. Four places knowing a concept that belongs to the
+    /// host.
+    ///
+    /// What crosses is an ordinary opaque value (`doc/decisions/0022`) carrying
+    /// an id the host chose. Guest code cannot mint that id -- `flint/opaque`
+    /// gives 0 -- so a host recognises its own and nothing else. Whether it
+    /// MEANS a capability is entirely the host's business, and a host that
+    /// requires none simply passes nothing.
+    pub fn run_with(&mut self, args: &[&str], named: &[(&str, u64)]) -> Outcome {
         let rt = &mut self.rt;
         let base = rt.mark();
         for a in args {
@@ -369,8 +387,33 @@ impl Program {
             rt.push(v);
         }
         let argv = rt.vec_from_roots(base, args.len());
+        let ai = rt.push(argv);
+        let mut m = rt.empty_map();
+        let mi = rt.push(m);
+        for (name, id) in named {
+            let k = rt.keyword(None, name);
+            let ki = rt.push(k);
+            let l = rt.string(name);
+            let li = rt.push(l);
+            let o = rt.new_opaque(rt.r(li), *id);
+            let oi = rt.push(o);
+            m = rt.map_assoc(rt.r(mi), rt.r(ki), rt.r(oi));
+            rt.set_r(mi, m);
+            rt.pop_to(ki);
+        }
+        let pair = {
+            let v = rt.empty_vec();
+            let vi = rt.push(v);
+            let nv = rt.vec_conj(rt.r(vi), rt.r(ai));
+            rt.set_r(vi, nv);
+            let nv = rt.vec_conj(rt.r(vi), rt.r(mi));
+            rt.set_r(vi, nv);
+            rt.r(vi)
+        };
+        let pi = rt.push(pair);
+        let pv = rt.r(pi);
         rt.pop_to(base);
-        let result = rt.run_program(argv);
+        let result = rt.run_program(pv);
         // Order matters: `rendered` CLEARS the error, so the code has to be
         // taken first. Reversing these reported success for every failure.
         let code = status_of(rt, result);
@@ -445,33 +488,6 @@ impl Program {
         self.rt.host_port_state(port_id as i64)
     }
 
-    /// The host id of the capability presented at `open`, or 0.
-    ///
-    /// The runtime records the claim and never judges it: only the host holds a
-    /// grant table. `PRESENTED_UNKNOWN` means something WAS presented that this
-    /// runtime never issued -- distinct from 0, because a host that cannot tell
-    /// them apart accepts a guest-minted forgery.
-    pub fn presented_capability(&mut self, port_id: u32) -> i64 {
-        self.rt.presented_capability(port_id)
-    }
-
-    /// Lend a capability by name.
-    ///
-    /// Authority is never a type test (`doc/decisions/0022`): a program holds
-    /// a capability because the host gave it one, and the host recognises it
-    /// by an id only the host knows. Granting nothing means the program can
-    /// reach nothing, which is the default.
-    pub fn grant(&mut self, name: &str) {
-        let id = self.next_grant();
-        self.rt.add_grant(String::from(name), id);
-        self.grants += 1;
-    }
-
-    fn next_grant(&self) -> u64 {
-        // Ids start at 1: zero is "nothing presented", and a capability whose
-        // id was zero would be indistinguishable from an absent one.
-        self.grants as u64 + 1
-    }
 
     /// Call a named function with encoded arguments, and encode the answer
     /// (`doc/decisions/0025`). Same contract as the wasm `flint_call`: one

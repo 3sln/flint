@@ -91,7 +91,7 @@ public sealed class Rt : System.IDisposable {
     /// How many host-minted opaque values the last import brought back. A test
     /// reads it to know the sweep saw anything at all: a zero would otherwise
     /// pass every assertion for the wrong reason.
-    public int restoredCapabilities;
+    public int restoredHostOpaques;
 
     public Rt(long nurseryBytes, long maxHeap) {
         this.gc = new Gc(nurseryBytes, maxHeap);

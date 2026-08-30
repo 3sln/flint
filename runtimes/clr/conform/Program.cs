@@ -339,10 +339,80 @@ public static class Program {
         var b = new System.Text.StringBuilder();
         foreach (var e in evs) {
             if (b.Length > 0) b.Append(' ');
+            string p = e.Kind == Flint.Rt.Conc.EV_OPEN
+                ? Render(e.Payload)
+                : "\"" + System.Text.Encoding.UTF8.GetString(e.Payload) + "\"";
             b.Append(KindName(e.Kind)).Append('(').Append(e.A).Append(',').Append(e.B)
-             .Append(",\"").Append(System.Text.Encoding.UTF8.GetString(e.Payload)).Append("\")");
+             .Append(',').Append(p).Append(')');
         }
         return b.ToString();
+    }
+
+    /// The open-request payload, rendered.
+    ///
+    /// It is an ENCODED VALUE rather than a bare name, which is what "the host
+    /// does what it wants with the args" means in practice: this driver decodes
+    /// it the way any host would, and an opaque value arrives carrying the id
+    /// the host issued -- the whole of the capability check, done here rather
+    /// than by the runtime.
+    private static int ri;
+    private static string Render(byte[] b) { ri = 0; return One(b); }
+
+    private static int U32r(byte[] b) {
+        int v = b[ri] | (b[ri+1] << 8) | (b[ri+2] << 16) | (b[ri+3] << 24);
+        ri += 4;
+        return v;
+    }
+
+    private static string Str_(byte[] b) {
+        int n = U32r(b);
+        string s = System.Text.Encoding.UTF8.GetString(b, ri, n);
+        ri += n;
+        return s;
+    }
+
+    private static string One(byte[] b) {
+        int t = b[ri++];
+        switch (t) {
+            case 0: return "nil";
+            case 1: return "true";
+            case 2: return "false";
+            case 3: {
+                long lo = (uint) U32r(b), hi = (uint) U32r(b);
+                return ((hi << 32) | lo).ToString();
+            }
+            case 5: return "\"" + Str_(b) + "\"";
+            case 6: case 7: {
+                int save = ri;
+                int ns = U32r(b);
+                string nss = "";
+                if (ns != -1) { ri = save; nss = Str_(b) + "/"; }
+                return (t == 6 ? ":" : "") + nss + Str_(b);
+            }
+            case 8: case 9: case 11: {
+                int n = U32r(b);
+                var sb = new System.Text.StringBuilder("[");
+                for (int i = 0; i < n; i++) { if (i > 0) sb.Append(' '); sb.Append(One(b)); }
+                return sb.Append(']').ToString();
+            }
+            case 10: {
+                int n = U32r(b);
+                var sb = new System.Text.StringBuilder("{");
+                for (int i = 0; i < n; i++) {
+                    if (i > 0) sb.Append(", ");
+                    sb.Append(One(b)).Append(' ').Append(One(b));
+                }
+                return sb.Append('}').ToString();
+            }
+            // The one that matters: an opaque value with the id the HOST gave
+            // it. A guest-minted one has id 0 and is recognisably not ours.
+            case 16: {
+                long lo = (uint) U32r(b), hi = (uint) U32r(b);
+                long id = (hi << 32) | lo;
+                return "#opaque[\"" + Str_(b) + "\" id=" + id + "]";
+            }
+            default: return "#tag" + t;
+        }
     }
 
     /// `main`, then the scheduler -- what a host's `run` does.
@@ -351,8 +421,24 @@ public static class Program {
             rt.Call(rt.MakeClosure(fn, System.Array.Empty<long>()), System.Array.Empty<long>());
             if (!Flint.Rt.Val.IsNil(rt.thrown) && !rt.Parked()) return Flint.Rt.Val.Nil;
         }
+        // One opaque value PROJECTED IN as the entry's second argument, under an
+        // id this driver chose. That is the whole of lending a capability: no
+        // grant table, no declaration, and nothing in the runtime that knows
+        // what it is for.
+        int bas = rt.Mark();
+        int ai = rt.Push(Flint.Rt.Vec.Empty(rt));
+        int mi = rt.Push(Flint.Rt.Maps.Empty(rt));
+        int ki = rt.Push(Flint.Rt.Str.Keyword(rt, null, "fs"));
+        int li = rt.Push(Flint.Rt.Str.Of(rt, "fs"));
+        int oi = rt.Push(rt.NewOpaque(rt.R(li), 7));
+        rt.SetR(mi, Flint.Rt.Maps.Assoc(rt, rt.R(mi), rt.R(ki), rt.R(oi)));
+        int vi = rt.Push(Flint.Rt.Vec.Empty(rt));
+        rt.SetR(vi, Flint.Rt.Vec.Conj(rt, rt.R(vi), rt.R(ai)));
+        rt.SetR(vi, Flint.Rt.Vec.Conj(rt, rt.R(vi), rt.R(mi)));
+        long pair = rt.R(vi);
+        rt.PopTo(bas);
         return rt.RunProgram(rt.MakeClosure(img.entry, System.Array.Empty<long>()),
-                             new long[]{ Flint.Rt.Val.Nil });
+                             new long[]{ pair });
     }
 
     /// The status a host sees, in the same three values the Rust reports:
@@ -383,10 +469,9 @@ public static class Program {
         Ev open = evs.Find(e => e.Kind == Flint.Rt.Conc.EV_OPEN);
         int token = open.A, port = open.B;
 
-        // 2. Nothing was presented -- and that is a DIFFERENT answer from "I do
-        //    not recognise this", which is why both exist.
-        Console.WriteLine("  ok   presented capability: "
-                          + Flint.Rt.Conc.PresentedCapability(rt, port));
+        // 2. WHAT WAS FORWARDED, decoded. Nothing in the runtime looked at it
+        //    on the way past, and nothing in it knows what a capability is.
+        Console.WriteLine("  ok   it forwarded: " + Render(open.Payload));
 
         // 3. Grant it. A second answer on the same token is refused: the
         //    generation in it has moved on, so a late or duplicated reply cannot

@@ -345,7 +345,7 @@ public static class Snap {
         rt.parkOn = parkOn;
         // LAST, after the heap is in place. Identities are PRESERVED; whether
         // any of them still means anything is the host's grant table to answer.
-        rt.restoredCapabilities = CountHostOpaques(rt);
+        rt.restoredHostOpaques = CountHostOpaques(rt);
         return true;
     }
 
@@ -622,7 +622,7 @@ public static class Snap {
         rt.parkOn = parkOn;
         // LAST, and for the same reason as `Restore`: the identities come back
         // intact so a host can rehydrate against them.
-        rt.restoredCapabilities = CountHostOpaques(rt);
+        rt.restoredHostOpaques = CountHostOpaques(rt);
         return true;
     }
 

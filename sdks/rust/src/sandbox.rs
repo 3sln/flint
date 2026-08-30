@@ -353,12 +353,16 @@ impl Sandbox {
         self.core.on_executors.load(Ordering::Relaxed)
     }
 
-    /// Lend a capability by name. Authority is never a type test
-    /// (`doc/decisions/0022`): a program holds one because the host gave it
-    /// one, under an id only the host knows.
-    pub fn grant(&self, name: &str) {
-        self.core.program.lock().unwrap().grant(name);
-    }
+    /// PROJECT named opaque values into the sandbox, as the entry's second
+    /// argument.
+    ///
+    /// This used to be `grant(name)`, backed by a table the RUNTIME kept -- and
+    /// that made the runtime the arbiter of what a capability was. It is not,
+    /// and now it does not know the word. What crosses is an ordinary opaque
+    /// value (`doc/decisions/0022`) carrying an id you chose; guest code cannot
+    /// mint that id, so you recognise your own and nothing else. Whether it
+    /// means a capability is entirely yours to decide, and a host that requires
+    /// none passes nothing.
 
     /// A bound on WORK, in instructions. Deterministic
     /// (`doc/decisions/0009`), so the same program stops at the same

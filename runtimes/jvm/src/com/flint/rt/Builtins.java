@@ -737,7 +737,6 @@ rt.describe(v) + " is not a transient");
         // lets a snapshot preserve identities without granting any.
         def("flint/opaque", (rt, at, n) ->
             rt.newOpaque(n > 0 ? rt.vat(at) : Val.NIL, 0));   // host id 0: minted by the guest
-        def("flint/capabilities", (rt, at, n) -> Val.fixnum(rt.restoredCapabilities));
         def("flint/ex-kind", (rt, at, n) -> rt.exKind(rt.vat(at)));
         def("flint/ex-matches?", (rt, at, n) -> rt.exMatches(rt.vat(at), rt.vat(at + 1)));
 
@@ -911,16 +910,34 @@ rt.describe(v) + " is not a transient");
         });
         def("flint/open", (rt, at, n) -> {
             long name = rt.vat(at);
-            long format = n > 1 ? rt.vat(at + 1) : Val.NIL;
             if (!Str.isString(rt, name)) {
-                return rt.throwStr("ClassCastException",
-                    "open wants a capability name (a string)");
+                return rt.throwStr("ClassCastException", "open wants a name (a string)");
             }
-            // A third argument is the CAPABILITY the caller presents (`0022`).
-            // The runtime records it and carries it to the host; it does not
-            // judge it, because only the host has a grant table.
-            long cap = n > 2 ? rt.vat(at + 2) : Val.NIL;
-            return Conc.portOpenWith(rt, name, format, cap);
+            // EVERY REMAINING ARGUMENT IS FORWARDED, and the runtime takes no
+            // view of any of them. A capability is an opaque value like any
+            // other and travels as one; nothing here knows the word, which is
+            // the point (`doc/decisions/0022`).
+            int base = rt.mark();
+            int ni = rt.push(name);
+            int vi = rt.push(Vec.empty(rt));
+            for (int i = 1; i < n; i++) {
+                rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.vat(at + i)));
+            }
+            long nm = rt.r(ni), args = rt.r(vi);
+            rt.popTo(base);
+            return Conc.portOpen(rt, nm, args);
+        });
+        /// The port's format, as the guest wants to remember it. METADATA, not
+        /// behaviour: the runtime stores it and answers `port-format` with it
+        /// and does nothing else, which is why `open` no longer takes it --
+        /// what the HOST is told is whatever the caller forwarded.
+        def("flint/set-port-format", (rt, at, n) -> {
+            long p = rt.vat(at), f = rt.vat(at + 1);
+            if (!Conc.isPort(rt, p)) {
+                return rt.throwStr("ClassCastException", "set-port-format wants a port");
+            }
+            rt.setSlot(Val.asHeap(p), Conc.PT_FORMAT, f);
+            return f;
         });
         def("flint/port-send", (rt, at, n) -> Conc.send(rt, rt.vat(at), rt.vat(at + 1)));
         def("flint/port-receive", (rt, at, n) -> Conc.receive(rt, rt.vat(at)));

@@ -82,7 +82,7 @@ public final class Rt {
     /// How many host-minted opaque values the last import brought back. Read by
     /// a test to know the sweep saw anything at all: a zero would otherwise
     /// pass every assertion for the wrong reason.
-    public int restoredCapabilities;
+    public int restoredHostOpaques;
 
     /// The builtins this image imports, resolved BY NAME. The slots in an image
     /// belong to the module it was linked against and mean nothing here, which

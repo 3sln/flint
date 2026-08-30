@@ -15,6 +15,8 @@
 // `flint_resume`. That is what makes a capability work: the guest asks, the
 // host answers, and the guest carries on where it left off.
 
+import { codec } from './codec.js';
+
 export function instantiate(module, { stepLimit = 0 } = {}) {
   const instance = new WebAssembly.Instance(module, {});
   const e = instance.exports;
@@ -27,18 +29,6 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     // at the same instruction on every machine.
     if (stepLimit && e.set_step_limit) {
       e.set_step_limit(Math.floor(stepLimit / 2 ** 32), stepLimit >>> 0);
-    }
-    // Declare the grants before entering, so the entry function can be handed
-    // `{:fs <cap>}` as its second argument (doc/decisions/0021, 0022). Each is
-    // a host-minted opaque value whose id only this host knows -- a program
-    // holds one because it was given it, not because it asked.
-    if (e.flint_grant) {
-      for (const name of Object.keys(capabilities)) {
-        const b = enc.encode(name);
-        const p = e.arg_alloc(b.length);
-        new Uint8Array(e.memory.buffer).set(b, p);
-        e.flint_grant(p, b.length, grantId(name));
-      }
     }
     for (const a of args) {
       const b = enc.encode(String(a));
@@ -90,7 +80,17 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     for (let i = 0; i < n; i++) {
       const [kind, a, b, off, len] = words.subarray(i * 5, i * 5 + 5);
       const data = mem.slice(base + off, base + off + len);
-      if (kind === 1) out.push({ kind: 'open-request', token: a, port: b, name: dec.decode(data) });
+      if (kind === 1) {
+        // THE ARGUMENTS, decoded. The payload used to be a bare name; it is
+        // now whatever the guest forwarded, as one encoded value -- so an
+        // opaque value in it arrives as `{sentinel, hostId}` and this host can
+        // see whether the id is one it issued. That check lives HERE, where the
+        // ids are, rather than in the runtime.
+        let argv;
+        try { argv = codec.decode(data); } catch { argv = []; }
+        const [name, ...rest] = Array.isArray(argv) ? argv : [String(argv)];
+        out.push({ kind: 'open-request', token: a, port: b, name, args: rest });
+      }
       else if (kind === 2) out.push({ kind: 'message', port: a, data });
       else if (kind === 3) out.push({ kind: 'closed', port: a });
     }
@@ -148,47 +148,25 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   let capabilities = {};
   const openPorts = new Map();
 
-  // The GRANT TABLE. `0022` is explicit that a capability check can never be
-  // "is it opaque" -- guest code can mint as many opaque values as it likes --
-  // so authority is this host recognising an id it issued, for a name it
-  // granted. Ids start at 1 because 0 means "guest-minted".
-  const grantIds = new Map();
-  let nextGrantId = 1;
-  function grantId(name) {
-    if (!grantIds.has(name)) grantIds.set(name, nextGrantId++);
-    return grantIds.get(name);
-  }
-  /// Which capability, if any, this value IS. Takes a 64-bit flint value as
-  /// [lo, hi]; answers the name, or null for anything this host did not mint.
-  function capabilityOf(lo, hi) {
-    if (!e.flint_opaque_host_id) return null;
-    const id = e.flint_opaque_host_id(lo >>> 0, hi >>> 0);
-    if (!id) return null;
-    for (const [name, gid] of grantIds) if (gid === id) return name;
-    return null;
-  }
-
   function handle(ev) {
     if (ev.kind === 'open-request') {
       const cap = capabilities[ev.name];
       if (!cap) { e.flint_continue(ev.token, 0); return; }
-      // If the guest PRESENTED a capability, it has to be one this host issued
-      // for this name. `0022`: the check is the grant table, never the type --
-      // guest code can mint opaque values freely, so "is it opaque" would be no
-      // check at all. Presenting nothing is still allowed, which is what every
-      // program written before capabilities existed does.
-      if (e.flint_presented_capability) {
-        const presented = e.flint_presented_capability(ev.port);
-        // 0 means nothing was offered, which stays allowed -- every program
-        // written before capabilities existed opens by name alone. Anything
-        // else has to match the id this host issued for this name; 0xFFFFFFFF
-        // is "the guest offered something we never minted", and it is a
-        // REFUSAL rather than an absence. Treating those two the same accepted
-        // a forged `(opaque "fs")`.
-        if (presented !== 0 && grantIds.get(ev.name) !== presented) {
-          e.flint_continue(ev.token, 0);
-          return;
-        }
+      // WHETHER TO ALLOW IT IS THE HANDLER'S BUSINESS, not this file's.
+      //
+      // There used to be a check here: the guest's presented capability had to
+      // match an id this SDK had minted for that name. It was the wrong place
+      // twice over -- it made the SDK the arbiter of a concept that belongs to
+      // whoever is lending the authority, and it meant a host could not define
+      // its own rule without editing the driver.
+      //
+      // A handler that cares reads `ev.args`, finds whatever it projected in,
+      // and compares ids it knows. A handler that does not care does nothing,
+      // which is the honest default: capabilities are optional and most hosts
+      // want none.
+      if (cap.allow && !cap.allow(ev.args, ev.name)) {
+        e.flint_continue(ev.token, 0);
+        return;
       }
       openPorts.set(ev.port, cap);
       e.flint_continue(ev.token, 1);
@@ -223,8 +201,6 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     pump,
     grant: (name, handler) => { capabilities[name] = handler; },
     capabilities: (m) => { capabilities = m; },
-    capabilityOf,
-    grantId,
   };
 }
 

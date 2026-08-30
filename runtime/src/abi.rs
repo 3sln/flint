@@ -129,15 +129,6 @@ pub extern "C" fn arg_alloc(len: u32) -> u32 {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn flint_grant(ptr: u32, len: u32, host_id: u32) {
-    unsafe {
-        ensure_arena();
-        let bytes = core::slice::from_raw_parts(ptr as *const u8, len as usize);
-        let name: alloc::string::String = core::str::from_utf8(bytes).unwrap_or("").into();
-        ensure_rt().add_grant(name, host_id as u64);
-    }
-}
 
 /// The host id of an opaque value, or 0 if it is not one or was guest-minted.
 ///
@@ -153,15 +144,6 @@ pub extern "C" fn flint_opaque_host_id(lo: u32, hi: u32) -> u32 {
     }
 }
 
-/// The host id of the capability presented at `open` on the port `port_id`, or
-/// 0 if none was. The host looks this up in its own grant table.
-#[no_mangle]
-pub extern "C" fn flint_presented_capability(port_id: u32) -> u32 {
-    unsafe {
-        let rt = ensure_rt();
-        rt.presented_capability(port_id) as u32
-    }
-}
 
 #[no_mangle]
 pub extern "C" fn arg_push(ptr: u32, len: u32) {
@@ -198,7 +180,23 @@ pub extern "C" fn flint_main() -> i32 {
             b.clear();
         }
 
-        let result = rt.run_program(argv);
+        // THE SAME SHAPE the native entry passes: `[argv caps]`. The map is
+        // empty here and that is not a gap -- `flint_main` is the no-frills
+        // entry, and a wasm host that wants to project opaque values into a
+        // sandbox does it through the ENCODED CALL path (`doc/decisions/0025`),
+        // which carries a sentinel and its host id already. There is no
+        // separate capability channel because there is no capability concept.
+        let ai = rt.push(argv);
+        let m = rt.empty_map();
+        let mi = rt.push(m);
+        let v = rt.empty_vec();
+        let vi = rt.push(v);
+        let nv = rt.vec_conj(rt.r(vi), rt.r(ai));
+        rt.set_r(vi, nv);
+        let nv = rt.vec_conj(rt.r(vi), rt.r(mi));
+        rt.set_r(vi, nv);
+        let pair = rt.r(vi);
+        let result = rt.run_program(pair);
         finish_run(rt, result)
     }
 }

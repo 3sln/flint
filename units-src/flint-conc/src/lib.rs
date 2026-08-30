@@ -138,15 +138,41 @@ builtin!(flint_b_channel, b_channel, |rt, a, n| {
 
 builtin!(flint_b_open, b_open, |rt, a, n| {
     let name = arg(rt, a, 0);
-    let format = if n > 1 { arg(rt, a, 1) } else { NIL };
     if !rt.is_string(name) {
-        return rt.throw_str("ClassCastException", "open wants a capability name (a string)");
+        return rt.throw_str("ClassCastException", "open wants a name (a string)");
     }
-    // A third argument is the CAPABILITY the caller presents (0022). The
-    // runtime records it and carries it to the host; it does not judge it,
-    // because only the host has a grant table.
-    let cap = if n > 2 { arg(rt, a, 2) } else { NIL };
-    rt.port_open_with(name, format, cap)
+    // EVERY REMAINING ARGUMENT IS FORWARDED, and the runtime takes no view of
+    // any of them. A capability is an opaque value like any other and travels
+    // as one; there is nothing here that knows the word, which is the point
+    // (`doc/decisions/0022`). The host decodes what it was sent and decides.
+    let base = rt.mark();
+    let ni = rt.push(name);
+    let v = rt.empty_vec();
+    let vi = rt.push(v);
+    for i in 1..n {
+        let x = arg(rt, a, i as usize);
+        let xi = rt.push(x);
+        let nv = rt.vec_conj(rt.r(vi), rt.r(xi));
+        rt.set_r(vi, nv);
+        rt.pop_to(xi);
+    }
+    let (nm, args) = (rt.r(ni), rt.r(vi));
+    rt.pop_to(base);
+    rt.port_open(nm, args)
+});
+
+/// The port's format, as the guest wants to remember it. Metadata, not
+/// behaviour: the runtime stores it and answers `port-format` with it and does
+/// nothing else, which is why `open` no longer takes it -- what the HOST is
+/// told is whatever the caller forwarded.
+builtin!(flint_b_set_port_format, b_set_port_format, |rt, a, n| {
+    let _ = n;
+    let (p, f) = (arg(rt, a, 0), arg(rt, a, 1));
+    if !rt.is_port(p) {
+        return rt.throw_str("ClassCastException", "set-port-format wants a port");
+    }
+    rt.set(p, conc::PT_FORMAT, f);
+    f
 });
 
 builtin!(flint_b_port_send, b_port_send, |rt, a, n| {
@@ -295,6 +321,7 @@ pub const HOST_CATALOGUE: &[(&str, flint_rt::vm::NativeFn)] = &[
     ("flint/port-host?", flint_b_port_host_p),
     ("flint/port-id", flint_b_port_id),
     ("flint/port-format", flint_b_port_format),
+    ("flint/set-port-format", flint_b_set_port_format),
     ("flint/port-opts", flint_b_port_opts),
     ("flint/set-port-opts", flint_b_set_port_opts),
     ("flint/set-port-binary", flint_b_set_port_binary),
@@ -322,6 +349,7 @@ pub const CATALOGUE: &[(&str, &str)] = &[
     ("flint/port-host?", "flint_b_port_host_p"),
     ("flint/port-id", "flint_b_port_id"),
     ("flint/port-format", "flint_b_port_format"),
+    ("flint/set-port-format", "flint_b_set_port_format"),
     ("flint/port-opts", "flint_b_port_opts"),
     ("flint/set-port-opts", "flint_b_set_port_opts"),
     ("flint/set-port-binary", "flint_b_set_port_binary"),

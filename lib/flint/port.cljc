@@ -77,25 +77,33 @@
   ([cap label] (flint.rt/channel cap label)))
 
 (defn open
-  "Ask the host for the capability `name`. Blocking from the program's point of
-  view: the green thread stops being runnable until the host answers. Nothing
-  suspends a wasm frame and the host is never blocked.
+  "Ask the host to open `name`, forwarding `opts` to it verbatim.
 
-  A refusal is a normal outcome and arrives as a catchable `SecurityException`.
+  **The runtime takes no view of what `opts` contains.** Everything except
+  `:codec` — which is this side's business, not the host's — crosses as data,
+  and anything in it that is an opaque value (`doc/decisions/0022`) crosses
+  carrying the host id it was ISSUED with. So a host that lent a capability
+  recognises its own and nothing else, and one that requires none simply
+  ignores what it was sent.
 
-  `opts` may carry `:codec` (none means raw bytes), `:capability` (the object
-  the host issued for this name), and whatever options that codec understands —
-  `:key-fn` for JSON, for instance. The codec's format name is what the host is
-  told the bytes are."
+  That is the whole of the capability pattern, and none of it is a concept the
+  sandbox knows. A refusal is a normal outcome and arrives as a catchable
+  `SecurityException`.
+
+      (p/open \"fs\")                                  ; ask, present nothing
+      (p/open \"fs\" {:capability c :codec edn/codec}) ; present what you hold
+
+  `:codec` (none means raw bytes) and `:format` stay here: the codec runs on
+  this side, and the format is what this end remembers about its own bytes."
   ([name] (open name nil))
   ([name opts]
    (let [codec (:codec opts)
-         ;; `:capability` is the object the host issued (`doc/decisions/0022`).
-         ;; The host checks it against its own GRANT TABLE -- never against the
-         ;; type, because guest code can mint opaque values freely and "is it
-         ;; opaque" would therefore be no check at all.
-         p (flint.rt/open name (or (:format opts) (:format codec) :bytes)
-                          (:capability opts))]
+         fmt (or (:format opts) (:format codec) :bytes)
+         ;; Everything but the codec goes to the host, as one value. A codec is
+         ;; functions, and functions do not cross (`doc/decisions/0006`).
+         wire (assoc (dissoc (or opts {}) :codec) :format fmt)
+         p (flint.rt/open name wire)]
+     (flint.rt/set-port-format p fmt)
      (flint.rt/set-port-opts p (assoc (dissoc (or opts {}) :codec) :flint/codec codec))
      (flint.rt/set-port-binary p (boolean (:binary codec)))
      p)))

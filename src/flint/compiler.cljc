@@ -540,12 +540,20 @@
           takes-caps? (boolean (some (fn [[argc variadic?]]
                                        (or (= argc 2) (and variadic? (<= argc 2))))
                                      entry-arities))
+          ;; The entry is handed `[args caps]` -- what the host projected in,
+          ;; and nothing the runtime decided. `caps` is an ordinary map of
+          ;; opaque values (`doc/decisions/0022`); it used to be
+          ;; `(flint.rt/capabilities)`, read out of a grant table the runtime
+          ;; kept, which made the runtime the arbiter of a concept that belongs
+          ;; to the host.
           call (if takes-caps?
-                 (str "(" entry " args (flint.rt/capabilities))")
+                 (str "(" entry " args caps)")
                  (str "(" entry " args)"))
           shim-src (str "(ns flint.main (:require [" (namespace entry) "]))\n"
-                        "(defn -main [args]\n"
-                        "  (let [r " call "]\n"
+                        "(defn -main [in]\n"
+                        "  (let [args (nth in 0 nil)\n"
+                        "        caps (nth in 1 nil)\n"
+                        "        r " call "]\n"
                         "    (if (string? r) r (pr-str r))))\n")]
       (analyze-namespace! cc shim-ns (read-namespace! cc shim-ns shim-src "<entry-shim>")))
 

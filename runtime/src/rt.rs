@@ -143,7 +143,7 @@ pub struct Rt {
     /// How many host-minted opaque values the last `restore` invalidated. A
     /// counter so a test can assert the sweep SAW them -- a snapshot that
     /// carried no capabilities proves nothing about one that did.
-    pub restored_capabilities: u32,
+    pub restored_host_opaques: u32,
     /// The `base_depth` the innermost `run` was called with. `parked` needs it
     /// -- a park is illegal when Rust frames are live underneath -- and compiled
     /// code cannot be passed it, so the loop leaves it here.
@@ -183,13 +183,6 @@ pub struct Rt {
     /// Non-zero when `main` should report something other than "here is your
     /// answer" -- 2 means "I need the host" (`doc/decisions/0005`, section 1).
     pub status: i32,
-    /// What the host lent this SANDBOX, as `(name, host-id)`.
-    ///
-    /// Per-sandbox rather than per-`Rt`: it stopped being a process-global
-    /// because a capability belongs to a run and not to a process, and it is
-    /// not per-executor for the same reason in the other direction -- a
-    /// sandbox's threads are not separate tenants.
-    pub grants: crate::gc::SandboxRef<alloc::vec::Vec<(alloc::string::String, u64)>>,
 }
 
 /// Root `$v` for the duration of `$body`, rebinding the name to the (possibly
@@ -205,27 +198,6 @@ macro_rules! rooted {
     }};
 }
 
-/// Capabilities the host is willing to grant this run, as `(name, host-id)`.
-///
-/// Declared before `flint_main` and turned into a map of host-minted opaque
-/// values handed to the entry function as its second argument
-/// (`doc/decisions/0021`, `0022`). The host id is the host's own handle for the
-/// grant; guest code cannot read it, and possessing an opaque value is never
-/// authority -- only the host recognising THIS one is.
-///
-/// **This was a `static mut` and that was a hole.** On wasm each module
-/// instance has its own statics, so a process-global table was per-sandbox by
-/// accident and correct by accident. Natively one process hosts MANY sandboxes
-/// (`doc/decisions/0010`), and they all read the same table: granting `:fs` to
-/// one sandbox granted it to every sandbox in the process, including ones
-/// created before or after. A capability nobody lent is exactly what `0022`
-/// exists to make impossible, so it lives on the `Rt` now -- where "this run"
-/// actually means this run.
-pub fn add_grant(_name: alloc::string::String, _host_id: u64) {
-    // Kept as a no-op shim only long enough for out-of-tree callers to move to
-    // `Rt::add_grant`; nothing in this repository calls it.
-    debug_assert!(false, "grants belong to an Rt: use Rt::add_grant");
-}
 
 /// An `Rt` is ONE executor and may be moved to the thread that will run it.
 ///
@@ -254,45 +226,6 @@ impl Drop for Rt {
             }
             unsafe { (*self.heap.as_ptr()).par.deregister(id) };
         }
-    }
-}
-
-impl Rt {
-    /// `{:name <host-minted opaque>}` for every grant the host declared.
-    ///
-    /// Minted fresh rather than stored, so the values only exist once a program
-    /// asks -- and so a second call yields values the host will NOT recognise,
-    /// because their ids are new. That is deliberate: the entry shim calls this
-    /// once and hands the map on, and there is no way to re-derive a capability
-    /// you were not given.
-    pub fn add_grant(&mut self, name: alloc::string::String, host_id: u64) {
-        self.grants.push((name, host_id));
-    }
-
-    pub fn grants_map(&mut self) -> Value {
-        let n = self.grants.len();
-        let base = self.mark();
-        // Rooted across every step: `keyword`, `string`, `new_opaque` and
-        // `assoc` all allocate, so any one of them can collect, and a raw
-        // `Value` held across a collection is a stale pointer.
-        let empty = self.empty_map();
-        let mi = self.push(empty);
-        for i in 0..n {
-            let (name, id) = (self.grants[i].0.clone(), self.grants[i].1);
-            let k = self.keyword(None, &name);
-            let ki = self.push(k);
-            let label = self.string(&name);
-            let li = self.push(label);
-            let lv = self.r(li);
-            let o = self.new_opaque(lv, id);
-            let oi = self.push(o);
-            let (m, kv, ov) = (self.r(mi), self.r(ki), self.r(oi));
-            let m = self.assoc(m, kv, ov);
-            self.set_r(mi, m);
-        }
-        let m = self.r(mi);
-        self.pop_to(base);
-        m
     }
 }
 
@@ -334,15 +267,11 @@ impl Rt {
         let host_natives = crate::gc::SandboxRef(core::ptr::NonNull::from(unsafe {
             &mut (*heap.as_ptr()).host_natives
         }));
-        let grants = crate::gc::SandboxRef(core::ptr::NonNull::from(unsafe {
-            &mut (*heap.as_ptr()).grants
-        }));
         Rt {
             owned_heap,
             image,
             #[cfg(not(target_arch = "wasm32"))]
             host_natives,
-            grants,
             heap,
             #[cfg(feature = "parallel")]
             exec_id: None,
@@ -363,7 +292,7 @@ impl Rt {
             // host ids never share the sentinel.
             next_opaque: 1,
             str_cursor: StrCursor::none(),
-            restored_capabilities: 0,
+            restored_host_opaques: 0,
             #[cfg(feature = "aot")]
             run_base: 0,
             steps: 0,

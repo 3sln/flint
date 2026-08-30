@@ -55,7 +55,6 @@
    flint.rt/bindings
    flint.rt/bits->double
    flint.rt/bytes->str
-   flint.rt/capabilities
    flint.rt/cbrt
    flint.rt/ceil
    flint.rt/channel
@@ -121,6 +120,7 @@
    flint.rt/self
    flint.rt/set-bindings
    flint.rt/set-port-binary
+   flint.rt/set-port-format
    flint.rt/set-port-opts
    flint.rt/signum
    flint.rt/sin

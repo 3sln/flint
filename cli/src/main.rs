@@ -287,14 +287,19 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String]) -
     // `flint run` cannot execute a program that spawns a thread.
     let mut p = Program::load_with(&bytes, 2_000_000_000, flint_conc::HOST_CATALOGUE)
         .map_err(|e| anyhow::anyhow!("the compiled program did not load: {e}"))?;
-    // Capabilities are the host's to grant, and a program holds one because it
-    // was GIVEN it (`doc/decisions/0022`). Naming one here is what lends it;
-    // a program granted nothing can reach nothing.
-    for name in caps {
-        p.grant(name);
-    }
+    // `:with` mints one opaque value per name and PROJECTS them in as the
+    // entry's second argument, so a program receives `[args {name -> cap}]`.
+    //
+    // The CLI decides these are capabilities. The runtime does not know the
+    // word: what it carries is an opaque value with an id, and the check that
+    // matters -- "did I issue this?" -- happens here, where the ids are, rather
+    // than in a table the sandbox keeps. Ids start at 1 because 0 is what
+    // `flint/opaque` gives guest-minted values, and a capability whose id was 0
+    // would be indistinguishable from one the guest made up.
+    let named: Vec<(&str, u64)> =
+        caps.iter().enumerate().map(|(i, n)| (n.as_str(), i as u64 + 1)).collect();
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let out = p.run(&refs);
+    let out = p.run_with(&refs, &named);
     print!("{}", out.out);
     Ok(out.code)
 }

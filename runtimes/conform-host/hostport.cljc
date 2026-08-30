@@ -21,9 +21,12 @@
   protocol."
   (:require [flint.port :as p]))
 
-(defn main [_]
-  (let [;; A capability the host has to grant. This parks until it answers.
-        fs (p/open "fs")
+(defn main [_ caps]
+  (let [;; PRESENT what the host projected in. The runtime forwards it and takes
+        ;; no view of it: it crosses as a sentinel carrying the id the host
+        ;; issued, and the host recognises its own. Nothing in the sandbox knows
+        ;; the word "capability" (`doc/decisions/0022`).
+        fs (p/open "fs" {:capability (:fs caps)})
         ;; What the host pushed in while we were away.
         a (p/receive fs)
         ;; Something back the other way, which leaves as one event.

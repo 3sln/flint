@@ -166,7 +166,7 @@
                :meta (or (:meta opts) {})
                :features {:diagnostics (contains? (set exported) "collect_now")
                           :snapshots (contains? (set exported) "snapshot_export")
-                          :capabilities (contains? (set exported) "flint_grant")
+                          :capabilities (contains? (set exported) "flint_opaque_host_id")
                           :loader (contains? (set exported) "flint_load_image")
                           :aot (boolean (:aot? opts))}})
         ;; Written last so it describes the module as it actually is, and

@@ -682,7 +682,6 @@ public static class Builtins {
         // back, so an id is a thing the HOST wrote and only the host can read.
         Def("flint/opaque", (rt, at, n) =>
             rt.NewOpaque(n > 0 ? rt.VAt(at) : Val.Nil, 0));   // host id 0: minted by the guest
-        Def("flint/capabilities", (rt, at, n) => Val.Fixnum(rt.restoredCapabilities));
         Def("flint/ex-kind", (rt, at, n) => rt.ExKind(rt.VAt(at)));
         Def("flint/ex-matches?", (rt, at, n) => rt.ExMatches(rt.VAt(at), rt.VAt(at + 1)));
 
@@ -849,16 +848,29 @@ public static class Builtins {
         });
         Def("flint/open", (rt, at, n) => {
             long name = rt.VAt(at);
-            long format = n > 1 ? rt.VAt(at + 1) : Val.Nil;
-            if (!Str.IsString(rt, name)) {
-                return rt.ThrowStr("ClassCastException",
-                    "open wants a capability name (a string)");
-            }
-            // A third argument is the CAPABILITY the caller presents (`0022`).
-            // The runtime records it and carries it to the host; it does not
-            // judge it, because only the host has a grant table.
-            long cap = n > 2 ? rt.VAt(at + 2) : Val.Nil;
-            return Conc.PortOpenWith(rt, name, format, cap);
+            if (!Str.IsString(rt, name))
+                return rt.ThrowStr("ClassCastException", "open wants a name (a string)");
+            // EVERY REMAINING ARGUMENT IS FORWARDED, and the runtime takes no
+            // view of any of them. A capability is an opaque value like any
+            // other and travels as one; nothing here knows the word, which is
+            // the point (`doc/decisions/0022`).
+            int bas = rt.Mark();
+            int ni = rt.Push(name);
+            int vi = rt.Push(Vec.Empty(rt));
+            for (int i = 1; i < n; i++) rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.VAt(at + i)));
+            long nm = rt.R(ni), args = rt.R(vi);
+            rt.PopTo(bas);
+            return Conc.PortOpen(rt, nm, args);
+        });
+        /// The port's format, as the guest wants to remember it. METADATA, not
+        /// behaviour: the runtime stores it and answers `port-format` with it
+        /// and does nothing else, which is why `open` no longer takes it.
+        Def("flint/set-port-format", (rt, at, n) => {
+            long p = rt.VAt(at), f = rt.VAt(at + 1);
+            if (!Conc.IsPort(rt, p))
+                return rt.ThrowStr("ClassCastException", "set-port-format wants a port");
+            rt.SetSlot(Val.AsHeap(p), Conc.PT_FORMAT, f);
+            return f;
         });
         Def("flint/port-send", (rt, at, n) => Conc.Send(rt, rt.VAt(at), rt.VAt(at + 1)));
         Def("flint/port-receive", (rt, at, n) => Conc.Receive(rt, rt.VAt(at)));

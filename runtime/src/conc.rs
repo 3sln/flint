@@ -122,21 +122,7 @@ pub const PT_OPTS: u32 = 11;
 /// formats happen to be UTF-8, but a binary one (Transit-msgpack) is not, so
 /// its payloads travel as vectors of 0..255 rather than as strings.
 pub const PT_BINARY: u32 = 12;
-/// The host id of the capability the opener PRESENTED, or 0 (`0022`).
-///
-/// Recorded rather than checked here: the runtime has no grant table and no
-/// business having one. It carries the claim across to the host, which is the
-/// only party that can say whether it issued this id. That is why the check is
-/// never "is it opaque" -- guest code can mint those all day.
-pub const PT_PRESENTED: u32 = 13;
-/// Nothing was presented at `open`.
-pub const PRESENTED_NONE: i64 = 0;
-/// Something was presented that this runtime did not receive from the host --
-/// a guest-minted opaque value, or any other value entirely. Distinct from
-/// `PRESENTED_NONE`, because a host that cannot tell them apart will accept a
-/// forgery by treating it as an absence.
-pub const PRESENTED_UNKNOWN: i64 = 0xFFFF_FFFF;
-pub const PT_LEN: u32 = 14;
+pub const PT_LEN: u32 = 13;
 
 /// One end of a `channel` pair: no host involvement at all.
 pub const K_CHANNEL: i64 = 0;
@@ -1092,7 +1078,7 @@ impl Rt {
             // and a wire format that never has to represent a port. The cost --
             // a capability cannot be delegated at run time -- is in the README.
             TY_PORT => Err("a port cannot be sent through a port: only data crosses. \
-                            A capability cannot be delegated at run time."
+                            An endpoint cannot be delegated at run time."
                 .into()),
             // An opaque value is identity and nothing else (doc/decisions/0022),
             // so there is nothing to serialise that would still BE it. Anything
@@ -1519,7 +1505,7 @@ impl Rt {
                 P_CLOSED => "this end is closed",
                 P_HALF => "the other end has closed, so nothing can receive this",
                 P_ORPHANED => "the other end is gone, so nothing can ever receive this",
-                P_REFUSED => "the host refused this capability",
+                P_REFUSED => "the host refused to open this",
                 _ => "this port is not open yet",
             };
             let msg = alloc::format!("send: {why}");
@@ -1715,36 +1701,38 @@ impl Rt {
         self.park_on_port(WK_RECEIVE, target)
     }
 
-    /// Ask the host for a capability. Blocking from the program's point of
-    /// view; from wasm's point of view the thread stops being runnable.
+    /// Ask the host to open `name`, forwarding `args` verbatim. Blocking from
+    /// the program's point of view; from the scheduler's, the thread stops
+    /// being runnable.
+    ///
+    /// # The runtime does not know what a capability is
+    ///
+    /// It used to. There was a grant table in the sandbox, a `PT_PRESENTED`
+    /// slot on every port, an ABI export to read it back, and a `flint_grant`
+    /// to fill the table -- so a host could not decide for itself what a
+    /// capability meant, because three layers had already decided.
+    ///
+    /// A capability is an OPAQUE VALUE (`doc/decisions/0022`) and nothing more.
+    /// The host projects one into a sandbox by any means it likes -- an
+    /// argument, a call, a port -- and a program that wants something a
+    /// capability enables PRESENTS it with the request. This function forwards
+    /// whatever it was given and takes no view; the host decodes the arguments
+    /// and answers. Capabilities are optional because nothing here requires one.
+    ///
+    /// What makes that safe is not a table but the encoding: an opaque value
+    /// crosses as `K_SENTINEL` plus the host id it was ISSUED with, and guest
+    /// code cannot mint that id -- `flint/opaque` gives 0. So a host recognises
+    /// its own grants and nothing else, which is the whole check and it lives
+    /// where the grants do.
     ///
     /// The **runtime** creates the pair -- the host never holds two ends and
     /// never hands one back. It is told the token to answer with and the id of
     /// the end it will hold.
-    pub fn port_open(&mut self, name: Value, format: Value) -> Value {
-        self.port_open_with(name, format, NIL)
-    }
-
-    pub fn port_open_with(&mut self, name: Value, format: Value, cap: Value) -> Value {
-        // Read the presented id FIRST, before anything allocates. It is a
-        // fixnum from then on, so it needs no rooting -- which is cheaper and
-        // safer than carrying `cap` through the shadow stack for one field.
-        //
-        // Three cases, and collapsing the last two is a security hole rather
-        // than a simplification: presenting NOTHING is not the same as
-        // presenting something the host never issued. The first version
-        // reported both as 0, so a guest-minted `(opaque "fs")` was accepted --
-        // the host saw "no capability offered" and fell back to allowing it.
-        let presented = if cap.is_nil() {
-            PRESENTED_NONE
-        } else {
-            let id = self.opaque_host_id(cap);
-            if id == 0 { PRESENTED_UNKNOWN } else { id as i64 }
-        };
+    pub fn port_open(&mut self, name: Value, args: Value) -> Value {
         self.ensure_sched();
         let base = self.mark();
         let ni = self.push(name);
-        let fi = self.push(format);
+        let ai = self.push(args);
         let th = self.current_thread();
         let ti = self.push(th);
         let pending = self.slot(self.r(ti), TH_PENDING);
@@ -1754,10 +1742,7 @@ impl Rt {
             // ONLY A REFUSAL IS A REFUSAL. The host may answer and then close
             // the port before this thread is next scheduled, and the port is
             // then `P_HALF` -- "granted, and now finished", which is not the
-            // same as "you may not have this". Reading only `P_OPEN` as success
-            // told a guest its capability had been REFUSED when it had in fact
-            // been given one, and `SecurityException` is the last error anybody
-            // wants to be wrong about.
+            // same as "you may not have this".
             let st = fx(self.slot(pending, PT_STATE));
             if st != P_REFUSED {
                 self.pop_to(base);
@@ -1766,15 +1751,14 @@ impl Rt {
             let mut b = crate::rt::sbuf();
             let n: alloc::string::String = self.as_str(self.r(ni), &mut b).unwrap_or("?").into();
             self.pop_to(base);
-            let msg = alloc::format!("the host refused the capability {n:?}");
+            let msg = alloc::format!("the host refused to open {n:?}");
             return self.throw_str("SecurityException", &msg);
         }
-        let (nm, fmt) = (self.r(ni), self.r(fi));
+        let (nm, fmt) = (self.r(ni), NIL);
         let flint_end = self.new_port(DEFAULT_HOST_CAP, nm, K_FLINT, P_PENDING, fmt);
         let ei = self.push(flint_end);
         let nm = self.r(ni);
-        let fmt = self.r(fi);
-        let host_end = self.new_port(DEFAULT_HOST_CAP, nm, K_HOST, P_PENDING, fmt);
+        let host_end = self.new_port(DEFAULT_HOST_CAP, nm, K_HOST, P_PENDING, NIL);
         let hi = self.push(host_end);
         let (ev, hv) = (self.r(ei), self.r(hi));
         self.link_peers(ev, hv);
@@ -1785,12 +1769,42 @@ impl Rt {
         let t = self.r(ti);
         self.set(t, TH_TOKEN, Value::fixnum(token));
         let host_id = fx(self.slot(self.r(hi), PT_ID));
-        // The presented capability's host id travels with the port, for the
-        // host to look up in its own grant table when it sees the open-request.
-        let hv = self.r(hi);
-        self.set(hv, PT_PRESENTED, Value::fixnum(presented));
-        let nm = self.r(ni);
-        self.push_event(EV_OPEN, token, host_id, nm);
+        // THE ARGUMENTS, ENCODED, are the payload -- not a bare name string.
+        // That is the whole of "the host does what it wants with them": one
+        // value crosses, the host decodes it, and anything an opaque value
+        // carries (`K_SENTINEL` plus the id the host issued) survives the trip
+        // because `codec.rs` already knew how to write one down.
+        let mut call: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        {
+            let v = self.empty_vec();
+            let vi = self.push(v);
+            let nm = self.r(ni);
+            let nv = self.vec_conj(self.r(vi), nm);
+            self.set_r(vi, nv);
+            let a = self.r(ai);
+            let n = if self.is_vector(a) { self.vec_count(a) } else { 0 };
+            for k in 0..n {
+                let x = self.vec_nth(self.r(ai), k).unwrap_or(NIL);
+                let xi = self.push(x);
+                let nv = self.vec_conj(self.r(vi), self.r(xi));
+                self.set_r(vi, nv);
+                self.pop_to(xi);
+            }
+            // A value the codec refuses is the program's error, not the host's:
+            // say so here rather than sending something the host cannot read.
+            match self.encode(self.r(vi)) {
+                Ok(b) => call = b,
+                Err(e) => {
+                    self.pop_to(base);
+                    let msg = alloc::format!("open: this cannot be sent to the host: {e}");
+                    return self.throw_str("IllegalArgumentException", &msg);
+                }
+            }
+        }
+        let payload = self.new_bytes(&call);
+        let pi = self.push(payload);
+        let pv = self.r(pi);
+        self.push_event(EV_OPEN, token, host_id, pv);
         let target = self.r(ei);
         self.pop_to(base);
         self.park(target)
@@ -2019,19 +2033,6 @@ impl Rt {
     /// pushed `:closed` an optimisation over polling rather than the sole
     /// carrier of the truth. 255 means the runtime knows nothing about this id,
     /// which a host should also treat as "done".
-    /// The host id of the capability presented when this port was opened, or 0.
-    ///
-    /// The runtime records the claim and answers questions about it; it never
-    /// judges it. Only the host holds a grant table (`doc/decisions/0022`).
-    pub fn presented_capability(&mut self, host_port_id: u32) -> i64 {
-        let p = self.port_by_id(host_port_id as i64);
-        if p.is_nil() {
-            return 0;
-        }
-        let v = self.slot(p, PT_PRESENTED);
-        if v.is_fixnum() { v.as_fixnum() } else { 0 }
-    }
-
     pub fn host_port_state(&mut self, host_port_id: i64) -> i64 {
         let host = self.port_by_id(host_port_id);
         if host.is_nil() {

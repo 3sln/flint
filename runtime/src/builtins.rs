@@ -683,10 +683,6 @@ builtins! {
     // over, not because any code can ask for it. There is no ambient path to it
     // -- this builtin is not in `clojure.core`, and a second call builds a map
     // of DIFFERENT opaque values, which are not the ones the host issued.
-    "flint/capabilities", flint_b_capabilities, b_capabilities, |rt, a, n| {
-        let _ = (a, n);
-        rt.grants_map()
-    };
     "flint/opaque?", flint_b_opaquep, b_opaquep, |rt, a, n| {
         let _ = n;
         let v = arg(rt, a, 0);
