@@ -275,6 +275,50 @@ if [ -n "$CLR" ]; then
   sed 's/$/ [clr]/' /tmp/flint-par-clr.out
 fi
 
+# HOST PORTS (`doc/decisions/0006`, `0027`): the half of the port protocol the
+# HOST drives, on all three runtimes at once.
+#
+# `green` next door covers what a program can do on its own -- spawn, join, a
+# channel between two green threads. This is what it cannot: a capability it has
+# to ASK for, bytes the host pushes in, and the event queue the two talk over.
+#
+# Three drivers, ONE image and ONE script, and the transcripts are compared
+# byte for byte. That is the only thing that settles it: the host protocol is an
+# ABI -- a token whose generation must be checked, a byte budget respected in
+# both directions, five `u32`s per event record -- and three separately written
+# implementations of an ABI are three ABIs until something makes them say the
+# same thing out loud.
+#
+# It found a real bug the first time it ran, on all three at once: an `open` the
+# host GRANTED and then closed came back to the guest as
+# `SecurityException: the host refused the capability`, because the retry read
+# only `P_OPEN` as success and the port was by then `P_HALF`.
+if ./bin/flint :src runtimes/conform-host :fn hostport/main --emit-image \
+     :out out/conform/hostport.img >/dev/null 2>&1; then
+  cargo build --release -p flint-conc --bin hostports >/dev/null 2>&1 \
+    || { echo "  FAIL the native host-port driver does not build"; exit 1; }
+  ./target/release/hostports out/conform/hostport.img > /tmp/flint-hp-native.out 2>&1 \
+    || { cat /tmp/flint-hp-native.out; echo "  FAIL host ports [native]"; exit 1; }
+  sed 's/$/ [native]/' /tmp/flint-hp-native.out
+  "$JDK/bin/java" -cp runtimes/jvm/classes RtHostPorts out/conform/hostport.img \
+    > /tmp/flint-hp-jvm.out 2>&1 \
+    || { cat /tmp/flint-hp-jvm.out; echo "  FAIL host ports [jvm]"; exit 1; }
+  cmp -s /tmp/flint-hp-native.out /tmp/flint-hp-jvm.out \
+    || { diff /tmp/flint-hp-native.out /tmp/flint-hp-jvm.out | head -20; \
+         echo "  FAIL the jvm port drives the host protocol differently"; exit 1; }
+  echo "  ok   the jvm port produces the same transcript, line for line"
+  if [ -n "$CLR" ]; then
+    "$CLR" --rt-hostports out/conform/hostport.img > /tmp/flint-hp-clr.out 2>&1 \
+      || { cat /tmp/flint-hp-clr.out; echo "  FAIL host ports [clr]"; exit 1; }
+    cmp -s /tmp/flint-hp-native.out /tmp/flint-hp-clr.out \
+      || { diff /tmp/flint-hp-native.out /tmp/flint-hp-clr.out | head -20; \
+           echo "  FAIL the clr port drives the host protocol differently"; exit 1; }
+    echo "  ok   and so does the clr port"
+  fi
+else
+  echo "  .. hostport does not compile; skipped"
+fi
+
 # MAPS: the array-map, the promotion to CHAMP at 9 entries, and the two
 # properties CHAMP is chosen FOR -- canonical form (a map built by deleting
 # equals and hashes like the same map built directly) and collision nodes.

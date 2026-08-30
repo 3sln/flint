@@ -1226,9 +1226,18 @@ public final class Conc {
     /// Layout: `count` records of five little-endian `u32`s --
     /// `kind, a, b, payload-offset, payload-len` -- followed by the payload
     /// bytes, all offsets relative to the start of the buffer.
-    public static byte[] drainEvents(Rt rt) {
+    /// What `drainEvents` hands back: the COUNT and the buffer.
+    ///
+    /// The Rust signature is `drain_events(&mut Vec<u8>) -> u32` -- it fills a
+    /// buffer and answers how many records it wrote. Java has no out-parameter,
+    /// so the pair travels together rather than the count being inferred from
+    /// the first payload offset, which is derivable but is not what the wire
+    /// says.
+    public record Events(int count, byte[] bytes) {}
+
+    public static Events drainEvents(Rt rt) {
         long s = sched(rt);
-        if (Val.isNil(s)) return new byte[0];
+        if (Val.isNil(s)) return new Events(0, new byte[0]);
         int base = rt.mark();
         int si = rt.push(s);
         int ei = rt.push(rt.slot(rt.r(si), SC_EVENTS));
@@ -1280,7 +1289,7 @@ public final class Conc {
         rt.popTo(base);
         byte[] buf = out.toByteArray();
         System.arraycopy(header, 0, buf, 0, header.length);
-        return buf;
+        return new Events(n, buf);
     }
 
     static void le32(byte[] b, int at, long v) {
@@ -1545,6 +1554,18 @@ public final class Conc {
     /// The scheduler hook: settle whatever just stopped, then drive.
     public static long scheduler(Rt rt, long first) {
         settle(rt, first);
+        return drive(rt);
+    }
+
+    /// Re-enter the scheduler after the host has answered.
+    ///
+    /// What a host calls when `status` came back 2. There is no separate resume
+    /// state: the answer was already recorded by `hostContinue`/`hostDeliver`,
+    /// and this only starts the loop again. That is why those two record rather
+    /// than run -- a host calling one from inside a host function the runtime
+    /// itself invoked would otherwise run the scheduler on top of itself.
+    public static long resume(Rt rt) {
+        if (Val.isNil(sched(rt))) return Val.NIL;
         return drive(rt);
     }
 

@@ -1226,9 +1226,17 @@ public static class Conc {
     /// Layout: `count` records of five little-endian `u32`s --
     /// `kind, a, b, payload-offset, payload-len` -- followed by the payload
     /// bytes, all offsets relative to the start of the buffer.
-    public static byte[] DrainEvents(Rt rt) {
+    /// What `DrainEvents` hands back: the COUNT and the buffer.
+    ///
+    /// The Rust signature is `drain_events(&mut Vec<u8>) -> u32` -- it fills a
+    /// buffer and answers how many records it wrote. The pair travels together
+    /// rather than the count being inferred from the first payload offset,
+    /// which is derivable but is not what the wire says.
+    public readonly record struct Events(int Count, byte[] Bytes);
+
+    public static Events DrainEvents(Rt rt) {
         long s = Sched(rt);
-        if (Val.IsNil(s)) return System.Array.Empty<byte>();
+        if (Val.IsNil(s)) return new Events(0, System.Array.Empty<byte>());
         int bas = rt.Mark();
         int si = rt.Push(s);
         int ei = rt.Push(rt.Slot(rt.R(si), SC_EVENTS));
@@ -1280,7 +1288,7 @@ public static class Conc {
         rt.PopTo(bas);
         byte[] buf = outb.ToArray();
         System.Array.Copy(header, buf, header.Length);
-        return buf;
+        return new Events(n, buf);
     }
 
     static void Le32(byte[] b, int at, long v) {
@@ -1545,6 +1553,18 @@ public static class Conc {
     /// The scheduler hook: settle whatever just stopped, then drive.
     public static long Scheduler(Rt rt, long first) {
         Settle(rt, first);
+        return Drive(rt);
+    }
+
+    /// Re-enter the scheduler after the host has answered.
+    ///
+    /// What a host calls when `status` came back 2. There is no separate resume
+    /// state: the answer was already recorded by `HostContinue`/`HostDeliver`,
+    /// and this only starts the loop again. That is why those two record rather
+    /// than run -- a host calling one from inside a host function the runtime
+    /// itself invoked would otherwise run the scheduler on top of itself.
+    public static long Resume(Rt rt) {
+        if (Val.IsNil(Sched(rt))) return Val.Nil;
         return Drive(rt);
     }
 

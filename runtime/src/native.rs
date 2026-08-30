@@ -290,6 +290,19 @@ pub struct Outcome {
     pub out: String,
 }
 
+/// One outbound event, decoded (`Program::drain_events`).
+///
+/// `a` and `b` mean different things per kind: for `EV_OPEN` they are the token
+/// to answer with and the port id the host will hold; for `EV_MESSAGE` the port
+/// id and the byte count; for `EV_CLOSED` the port id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Event {
+    pub kind: u32,
+    pub a: u32,
+    pub b: u32,
+    pub payload: Vec<u8>,
+}
+
 /// The builtin registry, in the same `(slot, name-len, name)` shape a loader
 /// module carries. Built from the host registry, so an image compiled anywhere
 /// can be re-pointed at these functions.
@@ -363,6 +376,83 @@ impl Program {
         let code = status_of(rt, result);
         let out = rendered(rt, result);
         Outcome { code, out }
+    }
+
+    /// Re-enter after answering a parked thread. The host's half of `run`.
+    ///
+    /// A run that came back with `code == 2` is parked on the host: it wants a
+    /// capability, or room in a buffer, and nothing else can proceed. The host
+    /// answers with the calls below and then comes back through here.
+    pub fn resume(&mut self) -> Outcome {
+        let rt = &mut self.rt;
+        let result = rt.resume();
+        // Order matters: `rendered` CLEARS the error, so the code has to be
+        // taken first.
+        let code = status_of(rt, result);
+        let out = rendered(rt, result);
+        Outcome { code, out }
+    }
+
+    /// One thing the runtime wants the host to know.
+    ///
+    /// The wire form is five little-endian `u32`s per record plus a payload
+    /// area (`Rt::drain_events`); this is that, decoded, for a host that is
+    /// already in this process and does not need the marshalling.
+    pub fn drain_events(&mut self) -> Vec<Event> {
+        let mut buf: Vec<u8> = Vec::new();
+        let n = self.rt.drain_events(&mut buf) as usize;
+        let at = |b: &[u8], i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        (0..n)
+            .map(|i| {
+                let r = i * 20;
+                let off = at(&buf, r + 12) as usize;
+                let len = at(&buf, r + 16) as usize;
+                Event {
+                    kind: at(&buf, r),
+                    a: at(&buf, r + 4),
+                    b: at(&buf, r + 8),
+                    payload: buf[off..off + len].to_vec(),
+                }
+            })
+            .collect()
+    }
+
+    /// Answer an open-request. `false` refuses it, and the guest sees a
+    /// catchable `SecurityException` rather than a hang.
+    ///
+    /// Returns false when the token is stale or already used -- the
+    /// late-or-duplicated reply that would otherwise resume a stranger's
+    /// thread. Like the rest of these it RECORDS rather than runs: the answer
+    /// is acted on at the next `resume`.
+    pub fn host_continue(&mut self, token: u32, ok: bool) -> bool {
+        self.rt.host_continue(token as i64, ok)
+    }
+
+    /// Push bytes into the flint end of a host port. False means the guest's
+    /// buffer is full and the host must offer this again after the next pump.
+    pub fn host_deliver(&mut self, port_id: u32, bytes: &[u8]) -> bool {
+        self.rt.host_deliver(port_id as i64, bytes)
+    }
+
+    /// The host lets go of its end.
+    pub fn host_close_port(&mut self, port_id: u32) {
+        self.rt.host_close_port(port_id as i64);
+    }
+
+    /// What state the RUNTIME end of this port is in. 255 means the runtime
+    /// knows nothing about this id, which a host should also treat as done.
+    pub fn host_port_state(&mut self, port_id: u32) -> i64 {
+        self.rt.host_port_state(port_id as i64)
+    }
+
+    /// The host id of the capability presented at `open`, or 0.
+    ///
+    /// The runtime records the claim and never judges it: only the host holds a
+    /// grant table. `PRESENTED_UNKNOWN` means something WAS presented that this
+    /// runtime never issued -- distinct from 0, because a host that cannot tell
+    /// them apart accepts a guest-minted forgery.
+    pub fn presented_capability(&mut self, port_id: u32) -> i64 {
+        self.rt.presented_capability(port_id)
     }
 
     /// Lend a capability by name.

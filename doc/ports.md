@@ -17,6 +17,17 @@ It runs all ten conformance programs and agrees with the native runtime
 character for character, snapshots in both formats, and **self-hosts**: the
 flint compiler runs on it and emits byte for byte what the wasm compiler emits.
 
+It also carries the two things this file used to say it did not:
+
+* **Parallel executors** (`doc/decisions/0028`) -- K REAL host threads driving
+  one heap, with the interpreter's checkpoint as the only safepoint. That is the
+  host-thread question, re-asked and answered.
+* **Host ports** (`doc/decisions/0006`, `0027`) -- `open`, `hostContinue`,
+  `hostDeliver`, `hostClosePort`, `drainEvents`, `reapPorts`, the weak port
+  registry and the generation-tagged waiter tokens. Three drivers run one image
+  through one script and `bin/conform-hosts` compares the transcripts byte for
+  byte.
+
 ## `com.flint` / `Flint` — the older boxed port
 
 Every value is a host object, so an integer is boxed. Measured at 24x slower on
@@ -26,13 +37,16 @@ ported runtime exists.
 It has **no green threads and no ports at all**, and its own source says why:
 "a continuation living on the host stack cannot be parked, saved, or resumed".
 
-Two things are still only here:
+One thing is still only here:
 
 * **AOT** (`Aot.java`, `Aot.cs`) -- compiling arities to host bytecode at load
   time, behind `:optimize [perf]`.
-* **Host-thread safety** -- `ThreadTest` runs several REAL host threads through
-  one VM. The ported runtime's threads are green, so this asks a different
-  question of it, and the answer is not the same answer.
+
+`ThreadTest` used to be the other. It ran several REAL host threads through one
+VM, and this file used to say the green-thread runtime "asks a different
+question". It does not: `doc/decisions/0028` is exactly that question, and
+`RtParallel` on both hosts is exactly that answer -- K host threads on ONE
+heap, with a collection staged by one walking the other's roots.
 
 ## What the cutover needs
 
@@ -40,9 +54,7 @@ Deleting the boxed port today would drop those two. That is a trade, not a
 tidy-up, and it is worth saying out loud rather than discovering later:
 
 * AOT would have to be ported, or dropped on these hosts and the `:optimize`
-  flag made a wasm-only concern;
-* the host-thread question would have to be re-asked of the green-thread
-  runtime -- probably "several host threads each driving their own sandbox",
-  which is a different and better-defined thing.
+  flag made a wasm-only concern.
 
-Until then both build, both are tested, and this file says which is which.
+That is now the whole list. Until it is settled both build, both are tested, and
+this file says which is which.

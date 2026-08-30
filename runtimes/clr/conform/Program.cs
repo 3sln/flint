@@ -17,6 +17,7 @@ public static class Program {
         if (args.Length >= 1 && args[0] == "--rt-parallel") return RtParallel();
         if (args.Length >= 3 && args[0] == "--rt-shelve") return RtShelve(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "--rt-selfhost") return RtSelfHost(args[1], args[2]);
+        if (args.Length >= 2 && args[0] == "--rt-hostports") return RtHostPorts(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-image")
             return RtImage(args[1], args.Length > 2 ? args[2] : null);
         if (args.Length >= 3 && args[0] == "--selfhost") return SelfHost(args[1], args[2]);
@@ -183,6 +184,162 @@ public static class Program {
                  + ": " + Flint.Rt.Str.Text(rt, rt.ExMessage(t));
         return "the program threw " + rt.Describe(t);
     }
+
+    // ------------------------------------------------------------------
+    // THE HOST, driving a real image through the port protocol.
+    //
+    // `runtimes/conform/hostport.cljc` is the program; this is the other half
+    // of it. The native driver (`units-src/flint-conc/src/bin/hostports.rs`)
+    // and the JVM's (`RtHostPorts.java`) run the SAME image through the SAME
+    // script, and `bin/conform-hosts` compares the three transcripts.
+    //
+    // That comparison is the whole point. The host protocol is an ABI: a token
+    // whose generation must be checked, a byte budget that must be respected in
+    // both directions, an event layout with five fields per record. Three
+    // runtimes implementing an ABI separately are three ABIs until something
+    // makes them say the same thing out loud.
+
+    private readonly record struct Ev(int Kind, int A, int B, byte[] Payload);
+
+    private static string KindName(int k) => k switch {
+        Flint.Rt.Conc.EV_OPEN => "open",
+        Flint.Rt.Conc.EV_MESSAGE => "message",
+        Flint.Rt.Conc.EV_CLOSED => "closed",
+        _ => "?",
+    };
+
+    private static string StateName(long s) => (int) s switch {
+        Flint.Rt.Conc.P_PENDING => "pending",
+        Flint.Rt.Conc.P_OPEN => "open",
+        Flint.Rt.Conc.P_CLOSED => "closed",
+        Flint.Rt.Conc.P_HALF => "half-closed",
+        Flint.Rt.Conc.P_ORPHANED => "orphaned",
+        Flint.Rt.Conc.P_REFUSED => "refused",
+        255 => "unknown",
+        _ => "?",
+    };
+
+    private static int Le32(byte[] b, int at) =>
+        b[at] | (b[at + 1] << 8) | (b[at + 2] << 16) | (b[at + 3] << 24);
+
+    private static Ev[] Drain(Flint.Rt.Rt rt) {
+        var ev = Flint.Rt.Conc.DrainEvents(rt);
+        byte[] buf = ev.Bytes;
+        var outv = new Ev[ev.Count];
+        for (int i = 0; i < ev.Count; i++) {
+            int r = i * 20;
+            int off = Le32(buf, r + 12), len = Le32(buf, r + 16);
+            var p = new byte[len];
+            System.Array.Copy(buf, off, p, 0, len);
+            outv[i] = new Ev(Le32(buf, r), Le32(buf, r + 4), Le32(buf, r + 8), p);
+        }
+        return outv;
+    }
+
+    private static string Show(System.Collections.Generic.List<Ev> evs) {
+        var b = new System.Text.StringBuilder();
+        foreach (var e in evs) {
+            if (b.Length > 0) b.Append(' ');
+            b.Append(KindName(e.Kind)).Append('(').Append(e.A).Append(',').Append(e.B)
+             .Append(",\"").Append(System.Text.Encoding.UTF8.GetString(e.Payload)).Append("\")");
+        }
+        return b.ToString();
+    }
+
+    /// `main`, then the scheduler -- what a host's `run` does.
+    private static long RunAll(Flint.Rt.Rt rt, Flint.Rt.Img.Loaded img) {
+        foreach (int fn in img.init) {
+            rt.Call(rt.MakeClosure(fn, System.Array.Empty<long>()), System.Array.Empty<long>());
+            if (!Flint.Rt.Val.IsNil(rt.thrown) && !rt.Parked()) return Flint.Rt.Val.Nil;
+        }
+        return rt.RunProgram(rt.MakeClosure(img.entry, System.Array.Empty<long>()),
+                             new long[]{ Flint.Rt.Val.Nil });
+    }
+
+    /// The status a host sees, in the same three values the Rust reports:
+    /// 0 finished, 1 threw, 2 parked on the host.
+    private static int Status(Flint.Rt.Rt rt) {
+        if (rt.status != 0) return rt.status;
+        return Flint.Rt.Val.IsNil(rt.thrown) ? 0 : 1;
+    }
+
+    private static string Rendered(Flint.Rt.Rt rt, long v) {
+        if (!Flint.Rt.Val.IsNil(rt.thrown)) {
+            long e = rt.thrown;
+            return Flint.Rt.Str.Text(rt, rt.ExKind(e)) + ": " + Flint.Rt.Str.Text(rt, rt.ExMessage(e));
+        }
+        return Flint.Rt.Str.IsString(rt, v) ? Flint.Rt.Str.Text(rt, v) : rt.Describe(v);
+    }
+
+    private static int RtHostPorts(string path) {
+        var rt = new Flint.Rt.Rt(4L * 1024 * 1024, 512L * 1024 * 1024);
+        var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
+        if (img == null) { Console.WriteLine("  FAIL not a flint image"); return 1; }
+
+        // 1. The program runs until it asks for something only the host has.
+        long v = RunAll(rt, img);
+        Console.WriteLine("  ok   the program parked on the host: status " + Status(rt));
+        var evs = new System.Collections.Generic.List<Ev>(Drain(rt));
+        Console.WriteLine("  ok   it asked: " + Show(evs));
+        Ev open = evs.Find(e => e.Kind == Flint.Rt.Conc.EV_OPEN);
+        int token = open.A, port = open.B;
+
+        // 2. Nothing was presented -- and that is a DIFFERENT answer from "I do
+        //    not recognise this", which is why both exist.
+        Console.WriteLine("  ok   presented capability: "
+                          + Flint.Rt.Conc.PresentedCapability(rt, port));
+
+        // 3. Grant it. A second answer on the same token is refused: the
+        //    generation in it has moved on, so a late or duplicated reply cannot
+        //    resume a stranger's thread.
+        Console.WriteLine("  ok   the host grants it: "
+                          + Low(Flint.Rt.Conc.HostContinue(rt, token, true)));
+        Console.WriteLine("  ok   and a duplicate reply is refused: "
+                          + Low(Flint.Rt.Conc.HostContinue(rt, token, true)));
+        Console.WriteLine("  ok   the runtime end is now: "
+                          + StateName(Flint.Rt.Conc.HostPortState(rt, port)));
+
+        // 4. Push something in, let the program read it and answer.
+        Console.WriteLine("  ok   delivered: "
+            + Low(Flint.Rt.Conc.HostDeliver(rt, port, System.Text.Encoding.UTF8.GetBytes("one"))));
+        v = Flint.Rt.Conc.Resume(rt);
+        Console.WriteLine("  ok   ran on: status " + Status(rt));
+        Console.WriteLine("  ok   it sent back: "
+                          + Show(new System.Collections.Generic.List<Ev>(Drain(rt))));
+
+        // 5. A second wave, then hang up. Drained-and-closed is END OF STREAM --
+        //    `nil` and not an error -- and the program's own `state` call has to
+        //    agree with what the host sees.
+        Console.WriteLine("  ok   delivered: "
+            + Low(Flint.Rt.Conc.HostDeliver(rt, port, System.Text.Encoding.UTF8.GetBytes("two"))));
+        Flint.Rt.Conc.HostClosePort(rt, port);
+        Console.WriteLine("  ok   after the host hangs up: "
+                          + StateName(Flint.Rt.Conc.HostPortState(rt, port)));
+        v = Flint.Rt.Conc.Resume(rt);
+        var tail = new System.Collections.Generic.List<Ev>();
+        // The last pump is TWO pumps: exit closes every flint end and pushes an
+        // `EV_CLOSED` for each, and a run with events pending comes back 2 -- so
+        // a host is never left guessing whether more is coming.
+        for (int i = 0; i < 4 && Status(rt) == 2; i++) {
+            tail.AddRange(Drain(rt));
+            v = Flint.Rt.Conc.Resume(rt);
+        }
+        Console.WriteLine("  ok   the program answered: " + Rendered(rt, v));
+        Console.WriteLine("  ok   status " + Status(rt));
+        Console.WriteLine("  ok   and was told the port closed: " + Show(tail));
+
+        // 6. An id the runtime has never heard of. A host treats this as done,
+        //    which is what makes the pushed `:closed` an optimisation over
+        //    polling rather than the sole carrier of the truth.
+        Console.WriteLine("  ok   an unknown port id: "
+                          + StateName(Flint.Rt.Conc.HostPortState(rt, 999999)));
+        return 0;
+    }
+
+    /// `true`/`false` spelled the way Rust and Java spell them. C# capitalises
+    /// them, and a transcript that differs only in capitalisation would fail a
+    /// comparison that is supposed to be about the protocol.
+    private static string Low(bool b) => b ? "true" : "false";
 
     private static int RtImage(string path, string want) {
         var rt = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);

@@ -17,5 +17,10 @@ diagnostics = ["flint-rt/diagnostics"]
 name = "manifest"
 required-features = ["host-tools"]
 
+# The HOST side of the port protocol, driving a real image. Its transcript is
+# what `bin/conform-hosts` compares the JVM and CLR drivers against.
+[[bin]]
+name = "hostports"
+
 [dependencies]
 flint-rt = { path = "../../runtime" }
