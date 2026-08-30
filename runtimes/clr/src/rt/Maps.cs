@@ -820,6 +820,98 @@ public static class Maps {
         return wrote;
     }
 
+    // --- transients ---------------------------------------------------------
+    //
+    // `TY_TMAP [cnt, root, edit]`. The trie is the SAME CHAMP: a node whose
+    // ownership token matches this transient's is written in place, and any
+    // other is copied once and thereafter owned. That is the whole difference,
+    // and it is why `NodeAssoc` already takes an `edit` argument -- the
+    // persistent path passes NIL, which owns nothing and so copies everything.
+
+    public const int TM_CNT = 0, TM_ROOT = 1, TM_EDIT = 2;
+
+    public static bool IsTransient(Rt rt, long v) =>
+        Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTmap;
+
+    public static long TransientOf(Rt rt, long m) {
+        int bas = rt.Mark();
+        int mi = rt.Push(m);
+        // An array-map becomes a CHAMP FIRST: one transient implementation, and
+        // the workload that uses transients is the one with many entries.
+        long hm = IsArrayMap(rt, rt.R(mi)) ? Promote(rt, rt.R(mi)) : rt.R(mi);
+        int hi = rt.Push(hm);
+        int ei = rt.Push(Vec.NewEditToken(rt));
+        long a = rt.Alloc(Obj.TyTmap, 3);
+        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+        long h = rt.R(hi);
+        rt.SetSlot(a, TM_CNT, Val.Fixnum(Count(rt, h)));
+        rt.SetSlot(a, TM_ROOT, rt.Slot(h, HM_ROOT));
+        rt.SetSlot(a, TM_EDIT, rt.R(ei));
+        rt.PopTo(bas);
+        return Val.Heap(a);
+    }
+
+    public static long TGet(Rt rt, long t, long k, long notFound) {
+        int bas = rt.Mark();
+        int ti = rt.Push(t), ki = rt.Push(k);
+        int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+        long root = rt.Slot(rt.R(ti), TM_ROOT);
+        long r = Val.IsNil(root) ? Val.NotFound : NodeFind(rt, root, 0, h, rt.R(ki));
+        rt.PopTo(bas);
+        return r == Val.NotFound ? notFound : r;
+    }
+
+    public static long TAssoc(Rt rt, long t, long k, long v) {
+        if (Val.IsNil(rt.Slot(t, TM_EDIT)))
+            throw new System.InvalidOperationException("transient used after persistent!");
+        int bas = rt.Mark();
+        int ti = rt.Push(t), ki = rt.Push(k), vi = rt.Push(v);
+        int ei = rt.Push(rt.Slot(rt.R(ti), TM_EDIT));
+        int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+        int ri = rt.Push(rt.Slot(rt.R(ti), TM_ROOT));
+        rt.champAdded = false;
+        long nr = NodeAssoc(rt, rt.R(ri), 0, h, rt.R(ki), rt.R(vi), rt.R(ei));
+        bool added = rt.champAdded;
+        long tv = rt.R(ti);
+        rt.SetSlot(Val.AsHeap(tv), TM_ROOT, nr);
+        if (added) rt.SetSlot(Val.AsHeap(tv), TM_CNT, Val.Fixnum(Val.AsFixnum(rt.Slot(tv, TM_CNT)) + 1));
+        rt.PopTo(bas);
+        return tv;
+    }
+
+    public static long TDissoc(Rt rt, long t, long k) {
+        if (Val.IsNil(rt.Slot(t, TM_EDIT)))
+            throw new System.InvalidOperationException("transient used after persistent!");
+        int bas = rt.Mark();
+        int ti = rt.Push(t), ki = rt.Push(k);
+        int ei = rt.Push(rt.Slot(rt.R(ti), TM_EDIT));
+        int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+        int ri = rt.Push(rt.Slot(rt.R(ti), TM_ROOT));
+        rt.champAdded = false;
+        long nr = NodeDissoc(rt, rt.R(ri), 0, h, rt.R(ki), rt.R(ei));
+        bool removed = rt.champAdded;
+        long tv = rt.R(ti);
+        rt.SetSlot(Val.AsHeap(tv), TM_ROOT, nr);
+        if (removed) rt.SetSlot(Val.AsHeap(tv), TM_CNT, Val.Fixnum(Val.AsFixnum(rt.Slot(tv, TM_CNT)) - 1));
+        rt.PopTo(bas);
+        return tv;
+    }
+
+    public static int TCount(Rt rt, long t) => (int) Val.AsFixnum(rt.Slot(t, TM_CNT));
+
+    public static long TPersistent(Rt rt, long t) {
+        int bas = rt.Mark();
+        int ti = rt.Push(t);
+        int cnt = TCount(rt, rt.R(ti));
+        int ri = rt.Push(rt.Slot(rt.R(ti), TM_ROOT));
+        // Invalidate: using the handle afterwards is a bug, not a silent
+        // mutation of a value somebody else now owns.
+        rt.SetSlot(Val.AsHeap(rt.R(ti)), TM_EDIT, Val.Nil);
+        long outv = cnt == 0 ? Empty(rt) : NewHashMap(rt, cnt, rt.R(ri), Val.Nil);
+        rt.PopTo(bas);
+        return outv;
+    }
+
     /// `[k, v]`, the object a map's `seq` yields. A `TY_MAPENTRY` and not a
     /// vector, so `key`/`val` are O(1) and the entry can still be read as a
     /// two-element sequential -- which is what makes `(into {} (map ...))` and

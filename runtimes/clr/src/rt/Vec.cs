@@ -280,7 +280,7 @@ public static class Vec {
 
     /// A fresh identity for a transient's ownership token. Its TYPE is
     /// irrelevant and its contents are never read -- only `==` on the address.
-    static long NewEditToken(Rt rt) {
+    public static long NewEditToken(Rt rt) {
         long a = rt.Alloc(Obj.TyVolatile, 1);
         return a == 0 ? Val.Nil : Val.Heap(a);
     }

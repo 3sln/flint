@@ -18,8 +18,12 @@ namespace Flint.Rt;
 /// quadratic. Before it existed the word-frequency benchmark took 762 ms
 /// instead of 62.
 public static class Str {
-    public static bool IsString(Rt rt, long v) =>
-        Val.IsInlineStr(v) || (Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr);
+    public static bool IsString(Rt rt, long v) {
+        if (Val.IsInlineStr(v)) return true;
+        if (!Val.IsHeap(v)) return false;
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        return t == Obj.TyStr || t == Obj.TyRope;
+    }
 
     /// A bare, UNINTERNED heap string. `Of` is the canonical constructor.
     static long RawString(Rt rt, byte[] b) {
@@ -103,6 +107,7 @@ public static class Str {
             foreach (byte x in Val.InlineBytes(v)) if ((x & 0x80) != 0) return false;
             return true;
         }
+        if (IsRope(rt, v)) return (Val.AsFixnum(rt.Slot(v, RP_CPS)) & 1) != 0;
         return Obj.StrIsAscii(rt.gc.sp, Val.AsHeap(v));
     }
 
@@ -138,6 +143,11 @@ public static class Str {
 
     public static byte[] Bytes(Rt rt, long v) {
         if (Val.IsInlineStr(v)) return Val.InlineBytes(v);
+        if (IsRope(rt, v)) {
+            var ms = new System.IO.MemoryStream(SBytes(rt, v));
+            AppendBytes(rt, v, ms);
+            return ms.ToArray();
+        }
         long a = Val.AsHeap(v);
         return rt.gc.sp.Bytes(a + Obj.StrData, Obj.Len(rt.gc.sp, a));
     }
@@ -218,7 +228,137 @@ public static class Str {
         return Val.Heap(a);
     }
 
+    // --- ropes (`doc/decisions/0011`) ---------------------------------------
+    //
+    // The THIRD tier: a shallow tree of string pieces, so `str` of two large
+    // strings is a tree join rather than a copy. A node carries its subtree's
+    // byte length, its CODE-POINT COUNT and an ASCII bit, all summed from its
+    // children -- so `count` on a rope is O(1) and does not walk.
+    //
+    // Packing the count and the ASCII bit into ONE slot is not thrift: a slot
+    // is a NaN-boxed value, and two would make every node 8 bytes bigger for
+    // one bit.
+
+    public const int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_KIDS = 3;
+    public const int FLAT_MAX = 1024, FANOUT = 16;
+
+    public static bool IsRope(Rt rt, long v) =>
+        Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyRope;
+
+    /// Byte length of any string, ALL THREE TIERS, O(1).
+    public static int SBytes(Rt rt, long v) {
+        if (Val.IsInlineStr(v)) return Val.InlineLen(v);
+        if (IsRope(rt, v)) return (int) Val.AsFixnum(rt.Slot(v, RP_BYTES));
+        return Obj.Len(rt.gc.sp, Val.AsHeap(v));
+    }
+
+    public static int SCount(Rt rt, long v) {
+        if (IsRope(rt, v)) return (int) (Val.AsFixnum(rt.Slot(v, RP_CPS)) >> 1);
+        return CharLen(rt, v);
+    }
+
+    public static bool SAscii(Rt rt, long v) {
+        if (IsRope(rt, v)) return (Val.AsFixnum(rt.Slot(v, RP_CPS)) & 1) != 0;
+        return IsAscii(rt, v);
+    }
+
+    static int RopeKids(Rt rt, long v) => Obj.Len(rt.gc.sp, Val.AsHeap(v)) - RP_KIDS;
+
+    /// A node over `kids`, whose aggregates are SUMMED from them rather than
+    /// derived from their bytes. That is what makes `count` O(1) on a tree.
+    static long RopeNode(Rt rt, long[] kids) {
+        int bytes = 0, cps = 0;
+        bool ascii = true;
+        foreach (long k in kids) {
+            bytes += SBytes(rt, k);
+            cps += SCount(rt, k);
+            ascii &= SAscii(rt, k);
+        }
+        int bas = rt.Mark();
+        foreach (long k in kids) rt.Push(k);
+        long a = rt.Alloc(Obj.TyRope, RP_KIDS + kids.Length);
+        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+        rt.SetSlot(a, RP_BYTES, Val.Fixnum(bytes));
+        rt.SetSlot(a, RP_CPS, Val.Fixnum(((long) cps << 1) | (ascii ? 1L : 0L)));
+        rt.SetSlot(a, RP_FLAT, Val.Nil);
+        for (int i = 0; i < kids.Length; i++) rt.SetSlot(a, RP_KIDS + i, rt.R(bas + i));
+        rt.PopTo(bas);
+        return Val.Heap(a);
+    }
+
+    /// `str` of two strings. O(1) once the pieces are big enough to matter.
+    public static long Concat(Rt rt, long a, long b) {
+        if (SBytes(rt, a) == 0) return b;
+        if (SBytes(rt, b) == 0) return a;
+        if (SBytes(rt, a) + SBytes(rt, b) <= FLAT_MAX) {
+            // Small enough that a tree would cost more than the copy. This is
+            // the tier that must not be skipped.
+            return CopyConcat(rt, a, b);
+        }
+        // Append into the RIGHT SPINE while there is room, so a thousand small
+        // appends do not become a thousand nodes.
+        if (IsRope(rt, a) && RopeKids(rt, a) < FANOUT) {
+            int n = RopeKids(rt, a);
+            int bas = rt.Mark();
+            int ai = rt.Push(a);
+            for (int i = 0; i < n; i++) rt.Push(rt.Slot(rt.R(ai), RP_KIDS + i));
+            rt.Push(b);
+            long[] kids = new long[n + 1];
+            for (int i = 0; i <= n; i++) kids[i] = rt.R(bas + 1 + i);
+            long outv = RopeNode(rt, kids);
+            rt.PopTo(bas);
+            return outv;
+        }
+        int bas2 = rt.Mark();
+        int a2 = rt.Push(a), b2 = rt.Push(b);
+        long outv2 = RopeNode(rt, new long[]{ rt.R(a2), rt.R(b2) });
+        rt.PopTo(bas2);
+        return outv2;
+    }
+
+    static long CopyConcat(Rt rt, long a, long b) {
+        byte[] x = Bytes(rt, a), y = Bytes(rt, b);
+        byte[] both = new byte[x.Length + y.Length];
+        System.Array.Copy(x, 0, both, 0, x.Length);
+        System.Array.Copy(y, 0, both, x.Length, y.Length);
+        return Of(rt, Encoding.UTF8.GetString(both));
+    }
+
+    /// Walk the leaves in order, appending their bytes.
+    static void AppendBytes(Rt rt, long v, System.IO.MemoryStream outv) {
+        if (Val.IsInlineStr(v)) { byte[] ib = Val.InlineBytes(v); outv.Write(ib, 0, ib.Length); return; }
+        if (!Val.IsHeap(v)) return;
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        if (t == Obj.TyStr) {
+            byte[] sb = rt.gc.sp.Bytes(Val.AsHeap(v) + Obj.StrData, Obj.Len(rt.gc.sp, Val.AsHeap(v)));
+            outv.Write(sb, 0, sb.Length);
+        } else if (t == Obj.TyRope) {
+            long cached = rt.Slot(v, RP_FLAT);
+            if (!Val.IsNil(cached)) { AppendBytes(rt, cached, outv); return; }
+            int n = RopeKids(rt, v);
+            for (int i = 0; i < n; i++) AppendBytes(rt, rt.Slot(v, RP_KIDS + i), outv);
+        }
+    }
+
+    /// Contiguous bytes for a string of any tier. Materialises a rope ONCE and
+    /// remembers it: `0011`'s rule is to count the flattens rather than hope
+    /// about them, because a rope that flattens on every `index-of` passes
+    /// every correctness test and is slower than the flat string it replaced.
+    public static long Flatten(Rt rt, long v) {
+        if (!IsRope(rt, v)) return v;
+        long cached = rt.Slot(v, RP_FLAT);
+        if (!Val.IsNil(cached)) return cached;
+        var ms = new System.IO.MemoryStream(SBytes(rt, v));
+        int bas = rt.Mark();
+        int vi = rt.Push(v);
+        AppendBytes(rt, rt.R(vi), ms);
+        long flat = Of(rt, Encoding.UTF8.GetString(ms.ToArray()));
+        long vv = rt.R(vi);
+        rt.PopTo(bas);
+        if (Val.IsHeap(vv) && !Val.IsNil(flat)) rt.SetSlot(Val.AsHeap(vv), RP_FLAT, flat);
+        return flat;
+    }
+
     /// Byte length. NOT the code-point count -- see the class comment.
-    public static int ByteLen(Rt rt, long v) =>
-        Val.IsInlineStr(v) ? Val.InlineLen(v) : Obj.Len(rt.gc.sp, Val.AsHeap(v));
+    public static int ByteLen(Rt rt, long v) => SBytes(rt, v);
 }

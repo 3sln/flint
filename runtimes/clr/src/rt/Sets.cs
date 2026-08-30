@@ -85,6 +85,57 @@ public static class Sets {
         return outv;
     }
 
+    // --- transients ---------------------------------------------------------
+    //
+    // `TY_TSET [tmap, edit]`. A set is a map from element to itself, so its
+    // transient is a transient MAP with a wrapper -- one trie, one transient.
+
+    public const int TS_MAP = 0, TS_EDIT = 1;
+
+    public static bool IsTransient(Rt rt, long v) =>
+        Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTset;
+
+    public static long TransientOf(Rt rt, long s) {
+        int bas = rt.Mark();
+        int ti = rt.Push(Maps.TransientOf(rt, rt.Slot(s, S_MAP)));
+        long a = rt.Alloc(Obj.TyTset, 2);
+        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+        rt.SetSlot(a, TS_MAP, rt.R(ti));
+        rt.SetSlot(a, TS_EDIT, rt.Slot(rt.R(ti), Maps.TM_EDIT));
+        rt.PopTo(bas);
+        return Val.Heap(a);
+    }
+
+    public static long TConj(Rt rt, long t, long x) {
+        int bas = rt.Mark();
+        int ti = rt.Push(t), xi = rt.Push(x);
+        Maps.TAssoc(rt, rt.Slot(rt.R(ti), TS_MAP), rt.R(xi), rt.R(xi));
+        long outv = rt.R(ti);
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    public static long TDisj(Rt rt, long t, long x) {
+        int bas = rt.Mark();
+        int ti = rt.Push(t), xi = rt.Push(x);
+        Maps.TDissoc(rt, rt.Slot(rt.R(ti), TS_MAP), rt.R(xi));
+        long outv = rt.R(ti);
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    public static int TCount(Rt rt, long t) => Maps.TCount(rt, rt.Slot(t, TS_MAP));
+
+    public static long TPersistent(Rt rt, long t) {
+        int bas = rt.Mark();
+        int ti = rt.Push(t);
+        int mi = rt.Push(Maps.TPersistent(rt, rt.Slot(rt.R(ti), TS_MAP)));
+        rt.SetSlot(Val.AsHeap(rt.R(ti)), TS_EDIT, Val.Nil);
+        long outv = NewSet(rt, rt.R(mi), Val.Nil);
+        rt.PopTo(bas);
+        return outv;
+    }
+
     public static bool Eq(Rt rt, long a, long b) {
         if (Count(rt, a) != Count(rt, b)) return false;
         return Maps.Eq(rt, rt.Slot(a, S_MAP), rt.Slot(b, S_MAP));
