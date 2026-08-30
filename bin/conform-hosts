@@ -327,6 +327,41 @@ for prog in collections control green hosted lazy maps numbers regex strings thr
   fi
 done
 
+# THE LANGUAGE SUITE, on every runtime. `test/common` is written in flint and
+# ASSERTS its answers, which is the half everything above cannot cover: every
+# other row here diffs one runtime against another, so two ports wrong the same
+# way agree and pass. That happened -- both read a double's mantissa as an
+# integer, `numbers` said `:float [0 0 0]` on both, and only the native answer
+# caught it. A suite with an answer of its own has no such blind spot.
+#
+# One image, four runtimes, and the transcript compared as well as the verdict:
+# the report names each check, so identical transcripts mean the ports agreed
+# check by check rather than merely both reaching a total.
+if ./bin/flint test :src test/common --emit-image :out out/conform/common.img \
+     >/dev/null 2>&1; then
+  common_want="$(./target/release/flint test :path test/common 2>&1)"
+  case "$common_want" in
+    *FAILED*|"") echo "  FAIL the language suite is red on the native runtime"
+                 echo "$common_want" | grep -A8 FAIL | head -20; exit 1 ;;
+  esac
+  echo "  ok   the language suite passes [native]: \
+$(echo "$common_want" | grep 'checks passed' | tr -d '\n')"
+  "$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/conform/common.img "$common_want" \
+    > /tmp/flint-common-jvm.out 2>&1 \
+    || { tail -20 /tmp/flint-common-jvm.out
+         echo "  FAIL the language suite disagrees with native [jvm]"; exit 1; }
+  echo "  ok   and produces the same report, check by check [jvm]"
+  if [ -n "$CLR" ]; then
+    "$CLR" --rt-image out/conform/common.img "$common_want" \
+      > /tmp/flint-common-clr.out 2>&1 \
+      || { tail -20 /tmp/flint-common-clr.out
+           echo "  FAIL the language suite disagrees with native [clr]"; exit 1; }
+    echo "  ok   and so does the clr port"
+  fi
+else
+  echo "  FAIL the language suite does not compile"; exit 1
+fi
+
 # AOT (`doc/decisions/0013`) on the ported runtime: the same program
 # interpreted and compiled, and the answers diffed.
 #

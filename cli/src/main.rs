@@ -146,7 +146,8 @@ fn read_sources(dir: &Path, prefix: &str, out: &mut BTreeMap<String, String>) ->
 /// The EDN the compiler takes: the sources, the entry, and what the runtime
 /// carries. Shared by `compile` and `run` so the two cannot drift.
 fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
-              aot: bool, shake: bool, meta: &[(String, String)]) -> Result<String> {
+              aot: bool, shake: bool, meta: &[(String, String)],
+              roots: Option<&[String]>) -> Result<String> {
     let mut files: BTreeMap<String, String> = BTreeMap::new();
     for (p, body) in STDLIB {
         files.insert((*p).to_string(), (*body).to_string());
@@ -168,6 +169,18 @@ fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     }
     out.push_str("} :entry ");
     out.push_str(entry);
+    // `:roots` overrides "start from the entry namespace", which `test` needs
+    // because its entry is `flint.check.registry` -- a namespace the compiler
+    // GENERATES from what it found, so no source path contains it and
+    // resolving from it reports the entry itself missing.
+    if let Some(rs) = roots {
+        out.push_str(" :roots [");
+        for r in rs {
+            out.push_str(r);
+            out.push(' ');
+        }
+        out.push(']');
+    }
     out.push_str(" :builtins #{");
     for k in slots.keys() {
         out.push_str(&edn_string(k));
@@ -238,7 +251,7 @@ fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
     let aot = wants_aot(optimize);
     let slots = parse_slots(if aot { SLOTS_AOT } else { SLOTS })?;
     let base = if aot { RUNTIME_AOT } else { RUNTIME };
-    let spec = build_spec(srcs, entry, &slots, aot, true, meta)?;
+    let spec = build_spec(srcs, entry, &slots, aot, true, meta, None)?;
 
     let mut p = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
@@ -267,8 +280,9 @@ fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
 /// written: `run` compiles to flint's internal bytecode and runs it here,
 /// which is what having the runtime compiled in is for. The bytecode format
 /// is an implementation detail and never leaves this process.
-fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String]) -> Result<i32> {
-    let spec = build_spec(srcs, entry, &parse_slots(SLOTS)?, false, false, &[])?;
+fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
+              roots: Option<&[String]>) -> Result<(i32, String)> {
+    let spec = build_spec(srcs, entry, &parse_slots(SLOTS)?, false, false, &[], roots)?;
     let mut c = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
     let r = c.run(&["project", &spec]);
@@ -301,7 +315,45 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String]) -
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let out = p.run_with(&refs, &named);
     print!("{}", out.out);
-    Ok(out.code)
+    Ok((out.code, out.out))
+}
+
+/// Every namespace declared under `srcs`, for `test`.
+///
+/// A test that nothing requires is still a test, so a test run cannot collect
+/// from one entry outwards -- it would silently run a subset and report the
+/// subset as the total, which is the one failure mode a test runner must not
+/// have. Every file on the path is a root instead.
+///
+/// The `ns` form is found by scanning rather than by reading, and that is a
+/// deliberate limit: this binary has no Clojure reader outside the embedded
+/// compiler, and calling into the compiler to find out what to hand the
+/// compiler is a circle. A file whose `ns` form is not the first `(ns ` in it
+/// is not found, and no such file exists.
+fn test_roots(srcs: &[PathBuf]) -> Result<Vec<String>> {
+    let mut files: BTreeMap<String, String> = BTreeMap::new();
+    for s in srcs {
+        if s.is_dir() {
+            read_sources(s, "", &mut files)?;
+        } else {
+            let name = s.file_name().unwrap().to_string_lossy().to_string();
+            files.insert(name, fs::read_to_string(s)?);
+        }
+    }
+    let mut out = vec!["clojure.core".to_string()];
+    for body in files.values() {
+        let Some(i) = body.find("(ns ") else { continue };
+        let rest = &body[i + 4..];
+        let name: String = rest
+            .chars()
+            .skip_while(|c| c.is_whitespace())
+            .take_while(|c| !c.is_whitespace() && *c != ')')
+            .collect();
+        if !name.is_empty() && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    Ok(out)
 }
 
 fn usage() -> ! {
@@ -318,6 +370,10 @@ fn usage() -> ! {
       `:with` DECLARES rather than grants: it is recorded in the artifact's
       metadata, because the arguments arrive later and what a program needs
       has to survive until then.
+
+  flint test :path <dir>
+      Run every var marked `^:flint.check/test` under `:path`, and report.
+      The suite is what is on the path; nothing has to be registered.
 
   flint version
 
@@ -496,6 +552,28 @@ fn main() -> Result<()> {
             }
             compile(&a.srcs, &entry, Path::new(&out), &a.optimize, &to, &meta)
         }
+        // `test` is `run` with a generated entry: the compiler collects every
+        // var marked `^:flint.check/test` into `flint.check.registry` and this
+        // calls its `run`. The suite is therefore whatever is ON THE PATH, not
+        // whatever a list somewhere remembered to name.
+        //
+        // It exists on this binary and not only on the development CLI because
+        // a check system that runs on the compiler's own host and not on the
+        // one that ships is a check system half the users cannot use.
+        "test" => {
+            let a = parse(&argv[1..])?;
+            if a.srcs.is_empty() {
+                bail!("test needs at least one :path");
+            }
+            let roots = test_roots(&a.srcs)?;
+            let (code, out) = run_source(&a.srcs, "flint.check.registry/run", &[],
+                                         &a.grants, Some(&roots))?;
+            // A failing check is a failing RUN. `run-tests` reports by
+            // returning text -- it catches what a check throws, so the program
+            // itself succeeds -- and a test command that exits 0 on a red
+            // suite is a test command CI cannot use.
+            std::process::exit(if code != 0 || out.contains("FAILED") { 1 } else { 0 });
+        }
         "run" => {
             let a = parse(&argv[1..])?;
             let Some(entry) = a.entry else { bail!("run needs :fn ns/fn") };
@@ -515,7 +593,7 @@ fn main() -> Result<()> {
             // shell spells it.
             let mut argv = a.args.clone();
             argv.extend(a.rest.iter().cloned());
-            std::process::exit(run_source(&a.srcs, &entry, &argv, &a.grants)?);
+            std::process::exit(run_source(&a.srcs, &entry, &argv, &a.grants, None)?.0);
         }
         other => {
             eprintln!("flint: no such command `{other}`");

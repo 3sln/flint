@@ -133,7 +133,11 @@
                               {:src src :file (str base ".cljc")})
                             (when-let [src (get files (str base ".clj"))]
                               {:src src :file (str base ".clj")}))))
-        {:keys [sources order missing]} (project/resolve-project find-source entry-ns features)]
+        ;; `:roots` is how `flint test` compiles: its entry is generated and
+        ;; is on no source path, so resolving from it would report the entry
+        ;; itself missing. Absent, the entry is the root as always.
+        {:keys [sources order missing]}
+        (project/resolve-project find-source entry-ns features (:roots spec))]
     (if (seq missing)
       {:missing (vec missing)}
       (let [result (compiler/compile-image
@@ -187,7 +191,11 @@
                               {:src src :file (str base ".cljc")})
                             (when-let [src (get files (str base ".clj"))]
                               {:src src :file (str base ".clj")}))))
-        {:keys [sources order missing]} (project/resolve-project find-source entry-ns features)]
+        ;; `:roots` is how `flint test` compiles: its entry is generated and
+        ;; is on no source path, so resolving from it would report the entry
+        ;; itself missing. Absent, the entry is the root as always.
+        {:keys [sources order missing]}
+        (project/resolve-project find-source entry-ns features (:roots spec))]
     (if (seq missing)
       {:missing (vec missing)}
       (let [result (compiler/compile-image

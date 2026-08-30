@@ -92,23 +92,32 @@
 (defn resolve-project
   "Everything a compile needs, from an entry and a way to find source.
   Returns `{:sources .. :order .. :missing ..}` with the order already
-  topological and core-first."
-  [find-source entry-ns features]
-  ;; `clojure.core` is a root, not something the graph reaches: every namespace
-  ;; refers it implicitly and almost none of them `:require` it, so starting
-  ;; only from the entry collects a program whose `str` resolves to nothing.
-  ;;
-  ;; `flint.check` is a root for the same reason and only when checks are on
-  ;; (`doc/decisions/0032`). A module writes `#?(:flint/check (expect ...))`
-  ;; without requiring anything, because the branch does not exist in a build
-  ;; where the namespace does not either -- so there is nothing to require and
-  ;; nothing left behind. Under `:optimize [perf]` this root is simply not
-  ;; added, and `flint.check` is not in the program at all.
-  (let [roots (cond-> ['clojure.core entry-ns]
-                (contains? features :flint/check) (conj 'flint.check))
-        {:keys [sources order missing]}
-        (collect find-source roots features)
-        _ order]
-    {:sources sources
-     :order (vec (core-first (topo-order sources)))
-     :missing missing}))
+  topological and core-first.
+
+  `roots` overrides the entry as the starting point, and `flint test` is why:
+  its entry is `flint.check.registry`, which the COMPILER generates and no
+  source path contains, so resolving from it reports the entry itself missing.
+  Every namespace under the source path becomes a root instead -- which is also
+  the right answer for a test run, because a test that nothing requires is
+  still a test and collecting from one entry outwards would silently run a
+  subset."
+  ([find-source entry-ns features] (resolve-project find-source entry-ns features nil))
+  ([find-source entry-ns features roots*]
+    ;; `clojure.core` is a root, not something the graph reaches: every namespace
+    ;; refers it implicitly and almost none of them `:require` it, so starting
+    ;; only from the entry collects a program whose `str` resolves to nothing.
+    ;;
+    ;; `flint.check` is a root for the same reason and only when checks are on
+    ;; (`doc/decisions/0032`). A module writes `#?(:flint/check (expect ...))`
+    ;; without requiring anything, because the branch does not exist in a build
+    ;; where the namespace does not either -- so there is nothing to require and
+    ;; nothing left behind. Under `:optimize [perf]` this root is simply not
+    ;; added, and `flint.check` is not in the program at all.
+    (let [roots (cond-> (vec (or roots* ['clojure.core entry-ns]))
+                  (contains? features :flint/check) (conj 'flint.check))
+          {:keys [sources order missing]}
+          (collect find-source roots features)
+          _ order]
+      {:sources sources
+       :order (vec (core-first (topo-order sources)))
+       :missing missing})))
