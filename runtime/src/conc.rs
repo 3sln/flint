@@ -1340,6 +1340,20 @@ fn main_finished(rt: &mut Rt) -> bool {
 }
 
 /// The main loop, also re-entered from the host's `resume`.
+/// Re-enter the scheduler after the host has answered.
+///
+/// What a host calls when `status` came back 2. There is no separate resume
+/// state: the answer was already recorded by `host_continue`/`host_deliver`,
+/// and this only starts the loop again. That is why those two record rather
+/// than run -- a host calling one from inside a host function the runtime
+/// itself invoked would otherwise run the scheduler on top of itself.
+pub fn resume(rt: &mut Rt) -> Value {
+    if rt.sched().is_nil() {
+        return NIL;
+    }
+    drive(rt)
+}
+
 pub fn drive(rt: &mut Rt) -> Value {
     loop {
         // What the collector left behind is the lifetime rule: a flint end that
@@ -1737,8 +1751,15 @@ impl Rt {
         if !pending.is_nil() {
             // Second time round: the host has answered.
             self.set(self.r(ti), TH_PENDING, NIL);
+            // ONLY A REFUSAL IS A REFUSAL. The host may answer and then close
+            // the port before this thread is next scheduled, and the port is
+            // then `P_HALF` -- "granted, and now finished", which is not the
+            // same as "you may not have this". Reading only `P_OPEN` as success
+            // told a guest its capability had been REFUSED when it had in fact
+            // been given one, and `SecurityException` is the last error anybody
+            // wants to be wrong about.
             let st = fx(self.slot(pending, PT_STATE));
-            if st == P_OPEN {
+            if st != P_REFUSED {
                 self.pop_to(base);
                 return pending;
             }

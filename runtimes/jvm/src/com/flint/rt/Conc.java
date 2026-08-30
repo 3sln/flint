@@ -1042,7 +1042,14 @@ public final class Conc {
         if (!Val.isNil(pending)) {
             // Second time round: the host has answered.
             rt.setSlot(Val.asHeap(rt.r(ti)), TH_PENDING, Val.NIL);
-            if (fx(rt.slot(pending, PT_STATE)) == P_OPEN) { rt.popTo(base); return pending; }
+            // ONLY A REFUSAL IS A REFUSAL. The host may answer and then close
+            // the port before this thread is next scheduled, and the port is
+            // then `P_HALF` -- "granted, and now finished", which is not the
+            // same as "you may not have this". Reading only `P_OPEN` as success
+            // told a guest its capability had been REFUSED when it had in fact
+            // been given one, and `SecurityException` is the last error anybody
+            // wants to be wrong about.
+            if (fx(rt.slot(pending, PT_STATE)) != P_REFUSED) { rt.popTo(base); return pending; }
             String n = Str.isString(rt, rt.r(ni)) ? Str.text(rt, rt.r(ni)) : "?";
             rt.popTo(base);
             return rt.throwStr("SecurityException",

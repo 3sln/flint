@@ -1042,7 +1042,14 @@ public static class Conc {
         if (!Val.IsNil(pending)) {
             // Second time round: the host has answered.
             rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_PENDING, Val.Nil);
-            if (Fx(rt.Slot(pending, PT_STATE)) == P_OPEN) { rt.PopTo(bas); return pending; }
+            // ONLY A REFUSAL IS A REFUSAL. The host may answer and then close
+            // the port before this thread is next scheduled, and the port is
+            // then `P_HALF` -- "granted, and now finished", which is not the
+            // same as "you may not have this". Reading only `P_OPEN` as success
+            // told a guest its capability had been REFUSED when it had in fact
+            // been given one, and `SecurityException` is the last error anybody
+            // wants to be wrong about.
+            if (Fx(rt.Slot(pending, PT_STATE)) != P_REFUSED) { rt.PopTo(bas); return pending; }
             string nm = Str.IsString(rt, rt.R(ni)) ? Str.Text(rt, rt.R(ni)) : "?";
             rt.PopTo(bas);
             return rt.ThrowStr("SecurityException",

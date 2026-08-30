@@ -1738,6 +1738,15 @@ impl Rt {
         }
     }
 
+    /// Re-enter the scheduler after the host has answered a parked thread.
+    ///
+    /// What a host calls when `run_program` came back with `status == 2`. The
+    /// answer was already recorded by `host_continue` or `host_deliver`; this
+    /// only starts the loop again.
+    pub fn resume(&mut self) -> Value {
+        crate::conc::resume(self)
+    }
+
     /// Run the image's initialisers, once. A sandbox serves many calls
     /// (`doc/decisions/0025`) and they must not re-run per call -- the state a
     /// program sets up at load is the state every call after it sees.
