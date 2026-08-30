@@ -35,7 +35,15 @@ CLR=runtimes/clr/conform/bin/Release/net10.0/Conform
 WORK=out/jank
 rm -rf "$WORK"; mkdir -p "$WORK/src"
 
-pass_ok=0; pass_no=0; fail_ok=0; fail_no=0; skipped=0
+# A per-test wall clock. macOS has no `timeout(1)`, and one is needed: jank's
+# `fail-*` tests include programs that are supposed to be REJECTED, and a
+# runtime that accepts one instead may not stop. `(recur)` at the top level is
+# exactly that -- flint accepts it and loops for ever -- so without a limit the
+# suite hangs on a test whose whole point is that it should not run.
+LIMIT="${JANK_TIMEOUT:-20}"
+cap() { perl -e 'alarm shift; exec @ARGV' "$LIMIT" "$@"; }
+
+pass_ok=0; pass_no=0; fail_ok=0; fail_no=0; skipped=0; hung=0
 declare -a failures
 
 run_one() {
@@ -55,20 +63,30 @@ run_one() {
   local out status
   case "$RUNTIME" in
     native)
-      out="$(./target/release/flint run :path "$WORK/src" :fn jt/main 2>&1)"
+      out="$(cap ./target/release/flint run :path "$WORK/src" :fn jt/main 2>&1)"
       status=$? ;;
     jvm|clr)
-      if ! ./bin/flint :src "$WORK/src" :fn jt/main --emit-image \
+      if ! cap ./bin/flint :src "$WORK/src" :fn jt/main --emit-image \
              :out "$WORK/t.img" >/dev/null 2>&1; then
         out="compile failed"; status=1
       elif [ "$RUNTIME" = jvm ]; then
-        out="$("$JDK/bin/java" -cp runtimes/jvm/classes RtImage "$WORK/t.img" 2>&1)"; status=$?
+        out="$(cap "$JDK/bin/java" -cp runtimes/jvm/classes RtImage "$WORK/t.img" 2>&1)"; status=$?
       else
-        out="$("$CLR" --rt-image "$WORK/t.img" 2>&1)"; status=$?
+        out="$(cap "$CLR" --rt-image "$WORK/t.img" 2>&1)"; status=$?
       fi
       # The ported harnesses report by LINE rather than by exit status.
       case "$out" in *"main -> :ok"*) status=0 ;; *) status=1 ;; esac ;;
   esac
+
+  # 142 is SIGALRM from `cap`: the test did not finish inside the limit.
+  # Counted SEPARATELY rather than as a rejection, because "it never stopped"
+  # and "it was refused" are different answers and only one of them is right.
+  if [ "$status" -eq 142 ]; then
+    hung=$((hung+1))
+    failures+=("HUNG(${LIMIT}s) $name")
+    if [ "$kind" = pass ]; then pass_no=$((pass_no+1)); else fail_no=$((fail_no+1)); fi
+    return
+  fi
 
   if [ "$kind" = pass ]; then
     if [ "$status" -eq 0 ]; then pass_ok=$((pass_ok+1))
@@ -102,6 +120,7 @@ printf "  ----------------------------------------------------------------------
 printf "  TOTAL                     %4d / %4d  (%d%%)\n" \
        "$((pass_ok+fail_ok))" "$total" "$(( (pass_ok+fail_ok) * 100 / (total>0?total:1) ))"
 [ "$skipped" -gt 0 ] && printf "  %d files follow neither naming convention and assert nothing\n" "$skipped"
+[ "$hung" -gt 0 ] && printf "  %d did not finish inside %ss and are counted as failures\n" "$hung" "$LIMIT"
 
 if [ "${SHOW_FAILURES:-0}" = 1 ]; then
   echo; echo "  --- what did not hold ---"
