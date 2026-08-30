@@ -42,6 +42,10 @@ public final class Rt {
 
     public long steps;
 
+    /// True once this sandbox has more than one executor. Read once per
+    /// instruction, so it is a plain field rather than a call.
+    public boolean safepoints;
+
     /// True once a scheduler exists. `run` compares `steps` against
     /// `checkpoint` once per instruction; 0 there means nothing is counting, so
     /// a program that never spawns runs a loop with no counter in it at all.
@@ -86,9 +90,71 @@ public final class Rt {
     public Builtins.Fn[] natives = new Builtins.Fn[0];
     public String[] nativeNames = new String[0];
 
+    /// Another executor on THIS sandbox's heap (`doc/decisions/0028`).
+    ///
+    /// One heap, one set of shared roots, one safepoint protocol -- and its own
+    /// value stack, shadow stack and remembered set, because those are per
+    /// THREAD. The returned runtime is meant to be driven from another host
+    /// thread; `enter`/`leave` bracket the stretch where it runs guest code and
+    /// can therefore be stopped.
+    public Rt executor() {
+        Rt e = new Rt(gc, roots.shared);
+        // Every executor already registered learns about this one, and it
+        // learns about them: the collector walks `shared.others` and each list
+        // has to include everybody.
+        synchronized (roots.shared) {
+            roots.shared.all.add(e.roots);
+            boolean many = roots.shared.par.executors() > 1;
+            for (Roots r : roots.shared.all) r.owner.safepoints = many;
+        }
+        return e;
+    }
+
+    /// Bracket the stretch where this executor runs GUEST code.
+    ///
+    /// Between these two calls the thread polls and can be stopped. Outside
+    /// them it is registered -- its roots are still scanned -- but the
+    /// collector does not wait for it, which is the difference between a
+    /// thread "in Java" and one "in native".
+    public void enterGuest() {
+        if (running) return;
+        roots.shared.par.enter();
+        running = true;
+    }
+
+    public void leaveGuest() {
+        if (!running) return;
+        running = false;
+        roots.shared.par.leave();
+    }
+
+    /// Give this executor's slot back. Its roots stop being scanned.
+    public void close() {
+        leaveGuest();
+        synchronized (roots.shared) {
+            roots.shared.all.remove(roots);
+            roots.shared.par.deregister();
+            boolean many = roots.shared.par.executors() > 1;
+            for (Roots r : roots.shared.all) r.owner.safepoints = many;
+        }
+    }
+
+    private Rt(Gc gc, Shared shared) {
+        this.gc = gc;
+        this.roots.shared = shared;
+        this.roots.owner = this;
+        this.consts = shared.consts;
+        shared.par.register();
+    }
+
     public Rt(long nurseryBytes, long maxHeap) {
         this.gc = new Gc(nurseryBytes, maxHeap);
-        roots.consts = consts;
+        this.roots.owner = this;
+        roots.shared.consts = consts;
+        // The first executor registers too, so `executors()` counts everybody
+        // and `stageStop` has a truthful `live`.
+        roots.shared.par.register();
+        roots.shared.all.add(roots);
     }
 
     public static final class FnDef {
@@ -131,7 +197,51 @@ public final class Rt {
 
     // --- allocation, with the rooting discipline ---------------------------
 
-    public long alloc(int ty, int len) { return gc.alloc(roots, ty, len); }
+    /// Allocate. With one executor this is `gc.alloc` and nothing else; with
+    /// several it is the whole safepoint protocol (`doc/decisions/0028`).
+    ///
+    /// The allocation lock keeps two threads out of the collector's
+    /// bookkeeping. The safepoint is staged ONLY when this allocation would
+    /// actually collect, because staging one every time would be a
+    /// stop-the-world per allocation rather than per collection.
+    public long alloc(int ty, int len) {
+        Parallel par = roots.shared.par;
+        if (par.executors() <= 1) return gc.alloc(roots, ty, len);
+
+        par.lockAlloc();
+        boolean staged = gc.wouldCollect(ty, len);
+        if (staged) {
+            // `running` is not a detail. The target is "every running executor
+            // EXCEPT ME", and an allocation can happen outside guest code --
+            // loading an image, running initialisers, a host call -- where this
+            // thread is not one of them. Getting it wrong either waits for a
+            // thread that will never park, or starts collecting with a peer
+            // still executing.
+            par.stageStop(running);
+            // Every other executor is stopped NOW, so their roots can be given
+            // to the collector. Built here and dropped after, because a list
+            // that outlived the stop would be pointers into threads that have
+            // started running again.
+            roots.shared.others.clear();
+            synchronized (roots.shared) {
+                for (Roots r : roots.shared.all) if (r != roots) roots.shared.others.add(r);
+            }
+        }
+        long a;
+        try {
+            a = gc.alloc(roots, ty, len);
+        } finally {
+            if (staged) {
+                roots.shared.others.clear();
+                par.releaseStop();
+            }
+            par.unlockAlloc();
+        }
+        return a;
+    }
+
+    /// True while this executor is running GUEST code and can be stopped.
+    public boolean running;
 
     public void setSlot(long obj, int i, long v) { gc.setSlot(obj, i, v, roots); }
     public long slot(long v, int i) { return Obj.slot(gc.sp, Val.asHeap(v), i); }
@@ -245,6 +355,20 @@ public final class Rt {
             // One comparison against a precomputed value, and only when
             // something is counting: `checkpoint` is 0 in a program with no
             // scheduler, so that loop has no counter in it at all.
+            // THE SAFEPOINT (`doc/decisions/0028`), and the slice check, at the
+            // same place -- because they want the same place. `ip` has been
+            // written back and every live value is on the value stack by
+            // construction, which is what makes it safe to stop here and
+            // nowhere else.
+            //
+            // One comparison guards both. `checkpoint` is 0 when nothing is
+            // counting, and `safepoints` is false in a sandbox with one
+            // executor, so a single-threaded program with no scheduler runs a
+            // loop with neither test in it.
+            if (safepoints && roots.shared.par.stopRequested()) {
+                f.ip = ip;
+                roots.shared.par.park();
+            }
             if (checkpoint != 0 && steps >= checkpoint) {
                 f.ip = ip;
                 checkpoint = 0;
@@ -272,8 +396,8 @@ public final class Rt {
                 case Op.SET_LOCAL -> { roots.stack[fp + u8(ip)] = vpop(); ip += 1; }
                 case Op.SET_LOCAL_KEEP -> { roots.stack[fp + u8(ip)] = roots.stack[roots.stackTop - 1]; ip += 1; }
                 case Op.SELF -> vpush(roots.stack[f.retTo]);
-                case Op.VAR -> { vpush(roots.globals[u16(ip)]); ip += 2; }
-                case Op.SET_VAR -> { roots.globals[u16(ip)] = vpop(); ip += 2; }
+                case Op.VAR -> { vpush(roots.shared.globals[u16(ip)]); ip += 2; }
+                case Op.SET_VAR -> { roots.shared.globals[u16(ip)] = vpop(); ip += 2; }
                 case Op.UPVAL -> { vpush(slot(roots.stack[f.retTo], 1 + u8(ip))); ip += 1; }
                 case Op.POP -> roots.stackTop -= 1;
                 case Op.POP_N -> { roots.stackTop -= u8(ip); ip += 1; }

@@ -29,33 +29,24 @@ public final class Roots {
     public long[] shadow = new long[256];
     public int shadowTop = 0;
 
-    /// The intern tables. WEAK, and scanned by the collector rather than
-    /// traced: an entry whose value died is dropped, which is what lets every
-    /// short string and keyword be interned without the table being a leak.
-    public final Interns[] interns = Interns.tables();
+    /// What this executor shares with every other in the same sandbox: var
+    /// slots, constants, singletons and the intern tables. One object, pointed
+    /// at by all of them.
+    public Shared shared = new Shared();
 
-    public long[] globals = new long[0];
-    public long[] consts = new long[0];
-    /// Sized AND FILLED WITH NIL at construction.
+    /// The runtime these roots belong to. Needed only so that registering a new
+    /// executor can flip every peer's `safepoints` flag in one place.
+    public Rt owner;
+
+    /// Old objects THIS EXECUTOR gave a young pointer to.
     ///
-    /// Both halves matter. Sized, because `SING_BINDINGS` is read before any
-    /// image has been loaded and an empty array would be an index error rather
-    /// than an absent binding. Filled, because a zero-filled array of values is
-    /// NOT a nil-filled one: 0 is the bit pattern of `+0.0`, so an unset slot
-    /// read back as the DOUBLE ZERO and `dyn-bindings` answered a number where
-    /// a map was expected. The failure surfaced three frames away as "assoc
-    /// onto a double", which is why the slot is written rather than left.
-    public long[] singletons = newSingletons();
-
-    static long[] newSingletons() {
-        long[] s = new long[Rt.SING_COUNT];
-        java.util.Arrays.fill(s, Val.NIL);
-        return s;
-    }
-
-    /// Old objects holding a young pointer. The generational invariant: an old
-    /// object pointing at a young one MUST be in here, or the young one is
-    /// never traced, dies, and leaves a stale pointer in something still live.
+    /// PER-EXECUTOR, and that is the whole reason the write barrier is safe
+    /// with several threads running. A shared list pushed to from the barrier
+    /// would reallocate under another thread's push, and the barrier is far
+    /// hotter than allocation -- locking it would cost more than it protects.
+    ///
+    /// The collector drains every executor's at a safepoint, which is the only
+    /// time anything reads them.
     public final ArrayList<Long> remembered = new ArrayList<>();
 
     public void vpush(long v) {
@@ -95,10 +86,51 @@ public final class Roots {
     interface Visitor { long visit(long v); }
 
     void forEach(Visitor f) {
+        // This executor's own.
         for (int i = 0; i < stackTop; i++) stack[i] = f.visit(stack[i]);
         for (int i = 0; i < shadowTop; i++) shadow[i] = f.visit(shadow[i]);
-        for (int i = 0; i < globals.length; i++) globals[i] = f.visit(globals[i]);
-        for (int i = 0; i < consts.length; i++) consts[i] = f.visit(consts[i]);
-        for (int i = 0; i < singletons.length; i++) singletons[i] = f.visit(singletons[i]);
+        // The sandbox's.
+        long[] g = shared.globals, c = shared.consts, sg = shared.singletons;
+        for (int i = 0; i < g.length; i++) g[i] = f.visit(g[i]);
+        for (int i = 0; i < c.length; i++) c[i] = f.visit(c[i]);
+        for (int i = 0; i < sg.length; i++) sg[i] = f.visit(sg[i]);
+        // Every OTHER executor in this sandbox (`doc/decisions/0028`). A
+        // collection happens with all of them PARKED at a safepoint, so nothing
+        // is mutating these while they are walked.
+        //
+        // Skipping one would not fail here. It would collect that thread's live
+        // objects out from under it and fail somewhere else, later, as a
+        // corrupted value in code that did nothing wrong -- which is why this is
+        // one loop in one place rather than a rule to remember.
+        for (Roots e : shared.others) {
+            if (e == this) continue;
+            // A parked executor's roots do not change. If they have, the
+            // collector is walking a thread that is still RUNNING -- say so
+            // here rather than as an index error four frames down.
+            if (e.stackTop > e.stack.length) {
+                throw new IllegalStateException(
+                    "flint: scanning a RUNNING executor: stackTop " + e.stackTop
+                    + " past len " + e.stack.length);
+            }
+            for (int i = 0; i < e.stackTop; i++) e.stack[i] = f.visit(e.stack[i]);
+            for (int i = 0; i < e.shadowTop; i++) e.shadow[i] = f.visit(e.shadow[i]);
+        }
+    }
+
+    /// Every executor's remembered set, drained together.
+    ///
+    /// Only correct during a collection, which is the only time every other
+    /// executor is stopped. Draining one and not the rest would LOSE
+    /// old-to-young edges another thread recorded, and a lost edge is a young
+    /// object collected while an old one still points at it.
+    ArrayList<Long> drainRemembered() {
+        ArrayList<Long> out = new ArrayList<>(remembered);
+        remembered.clear();
+        for (Roots e : shared.others) {
+            if (e == this) continue;
+            out.addAll(e.remembered);
+            e.remembered.clear();
+        }
+        return out;
     }
 }

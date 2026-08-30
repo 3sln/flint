@@ -81,7 +81,7 @@ public final class Img {
         int nconsts = (int) r.u32();
         long[] consts = new long[nconsts];
         rt.consts = consts;
-        rt.roots.consts = consts;
+        rt.roots.shared.consts = consts;
         for (int i = 0; i < nconsts; i++) {
             consts[i] = readConst(rt, r, consts, i);
         }
@@ -109,8 +109,8 @@ public final class Img {
         int nvars = (int) r.u32();
         out.varNames = new int[nvars];
         for (int i = 0; i < nvars; i++) out.varNames[i] = (int) r.u32();
-        rt.roots.globals = new long[nvars];
-        java.util.Arrays.fill(rt.roots.globals, Val.NIL);
+        rt.roots.shared.globals = new long[nvars];
+        java.util.Arrays.fill(rt.roots.shared.globals, Val.NIL);
 
         int codelen = (int) r.u32();
         rt.code = r.bytes(codelen);

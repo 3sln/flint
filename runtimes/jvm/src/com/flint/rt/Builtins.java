@@ -511,16 +511,16 @@ public final class Builtins {
         // whole map and restores it, so a park in the middle carries the
         // bindings with the thread rather than leaving them behind.
         def("flint/dyn-get", (rt, at, n) -> {
-            long binds = rt.roots.singletons[Rt.SING_BINDINGS];
+            long binds = rt.roots.shared.singletons[Rt.SING_BINDINGS];
             if (Val.isNil(binds)) return rt.vat(at + 1);
             return Maps.get(rt, binds, rt.vat(at), rt.vat(at + 1));
         });
         def("flint/dyn-bindings", (rt, at, n) -> {
-            long b = rt.roots.singletons[Rt.SING_BINDINGS];
+            long b = rt.roots.shared.singletons[Rt.SING_BINDINGS];
             return Val.isNil(b) ? Maps.empty(rt) : b;
         });
         def("flint/dyn-set-bindings", (rt, at, n) -> {
-            rt.roots.singletons[Rt.SING_BINDINGS] = rt.vat(at);
+            rt.roots.shared.singletons[Rt.SING_BINDINGS] = rt.vat(at);
             return rt.vat(at);
         });
 
@@ -872,11 +872,11 @@ public final class Builtins {
             return Conc.join(rt, rt.vat(at));
         });
         def("flint/bindings", (rt, at, n) -> {
-            long b = rt.roots.singletons[Rt.SING_BINDINGS];
+            long b = rt.roots.shared.singletons[Rt.SING_BINDINGS];
             return Val.isNil(b) ? Maps.empty(rt) : b;
         });
         def("flint/set-bindings", (rt, at, n) -> {
-            rt.roots.singletons[Rt.SING_BINDINGS] = rt.vat(at);
+            rt.roots.shared.singletons[Rt.SING_BINDINGS] = rt.vat(at);
             return rt.vat(at);
         });
 

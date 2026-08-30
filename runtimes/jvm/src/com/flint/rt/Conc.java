@@ -99,7 +99,7 @@ public final class Conc {
         return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_PORT;
     }
 
-    public static long sched(Rt rt) { return rt.roots.singletons[Rt.SING_SCHED]; }
+    public static long sched(Rt rt) { return rt.roots.shared.singletons[Rt.SING_SCHED]; }
 
     /// Create the scheduler on first use, enrolling whatever is running now as
     /// THREAD 0. Built here rather than at startup so a program that never
@@ -131,7 +131,7 @@ public final class Conc {
         long ts = Vec.conj(rt, rt.r(tsi), rt.r(ti));
         rt.setSlot(Val.asHeap(rt.r(si)), SC_THREADS, ts);
         long out = rt.r(si);
-        rt.roots.singletons[Rt.SING_SCHED] = out;
+        rt.roots.shared.singletons[Rt.SING_SCHED] = out;
         rt.popTo(base);
         rt.schedInstalled = true;
         rt.setSliceEnd(rt.steps + SLICE);
@@ -275,7 +275,7 @@ public final class Conc {
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_ID, Val.fixnum(id));
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_TOKEN, Val.fixnum(-1));
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_ENTRY, rt.r(fi));
-        long binds = rt.roots.singletons[Rt.SING_BINDINGS];
+        long binds = rt.roots.shared.singletons[Rt.SING_BINDINGS];
         if (Val.isNil(binds)) binds = Maps.empty(rt);
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_BINDINGS, binds);
         int tsi = rt.push(rt.slot(rt.r(si), SC_THREADS));
@@ -550,7 +550,7 @@ public final class Conc {
         int base = rt.mark();
         int ti = rt.push(th);
         // Dynamic bindings travel WITH the thread.
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_BINDINGS, rt.roots.singletons[Rt.SING_BINDINGS]);
+        rt.setSlot(Val.asHeap(rt.r(ti)), TH_BINDINGS, rt.roots.shared.singletons[Rt.SING_BINDINGS]);
         if (!Val.isNil(rt.parkOn)) {
             long on = rt.parkOn;
             rt.parkOn = Val.NIL;
@@ -616,7 +616,7 @@ public final class Conc {
         int base = rt.mark();
         int ti = rt.push(th);
         long st = fx(rt.slot(rt.r(ti), TH_STATUS));
-        rt.roots.singletons[Rt.SING_BINDINGS] = rt.slot(rt.r(ti), TH_BINDINGS);
+        rt.roots.shared.singletons[Rt.SING_BINDINGS] = rt.slot(rt.r(ti), TH_BINDINGS);
         rt.setSliceEnd(rt.steps + SLICE);
         long v;
         if (st == ST_NEW) {

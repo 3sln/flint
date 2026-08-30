@@ -141,6 +141,19 @@ public final class Gc {
 
     // --- allocation --------------------------------------------------------
 
+    /// WOULD allocating this collect?
+    ///
+    /// Asked BEFORE allocating, because under several executors a collection
+    /// has to be staged -- everyone stopped -- and staging one around every
+    /// allocation would be a stop-the-world per allocation rather than per
+    /// collection. Conservative on purpose: a false yes costs one needless
+    /// safepoint, a false no would let the collector move objects while
+    /// another thread was running.
+    public boolean wouldCollect(int ty, int len) {
+        long size = sizeFor(ty, len);
+        return size >= LARGE_OBJECT || bump + size > from + half;
+    }
+
     public long alloc(Roots roots, int ty, int len) {
         long size = sizeFor(ty, len);
         bytesAllocated += size;
@@ -295,8 +308,10 @@ public final class Gc {
         roots.forEach(this::forward);
 
         // 2. the remembered set: old -> young edges
-        ArrayList<Long> oldRem = new ArrayList<>(roots.remembered);
-        roots.remembered.clear();
+        // EVERY executor's, not just this one's. Draining one and not the rest
+        // would lose old-to-young edges another thread recorded, and a lost
+        // edge is a young object collected while an old one still points at it.
+        ArrayList<Long> oldRem = roots.drainRemembered();
         for (long a : oldRem) setInRemset(sp, a, false);
         for (long a : oldRem) scanObject(a);
 
@@ -306,7 +321,7 @@ public final class Gc {
         // 4. weak tables. A nursery entry that was copied is FORWARDED; one
         // that was not is dead, and the entry goes. This runs BEFORE the flip,
         // while `from` still names the space that was just evacuated.
-        for (Interns tbl : roots.interns) {
+        for (Interns tbl : roots.shared.interns) {
             tbl.refresh(v -> {
                 if (Val.isHeap(v) && Long.compareUnsigned(Val.asHeap(v) - from, half) < 0) {
                     long a2 = Val.asHeap(v);
@@ -341,13 +356,12 @@ public final class Gc {
             for (int i = 0; i < n; i++) markFrom(slot(sp, a, i));
         }
         // Weak tables: anything unmarked is unreachable.
-        for (Interns tbl : roots.interns) {
+        for (Interns tbl : roots.shared.interns) {
             tbl.refresh(v -> (!Val.isHeap(v) || marked(sp, Val.asHeap(v))) ? v : Val.NOT_FOUND);
         }
 
         // The remembered set may name objects about to be freed.
-        ArrayList<Long> rem = new ArrayList<>(roots.remembered);
-        roots.remembered.clear();
+        ArrayList<Long> rem = roots.drainRemembered();
         for (long a : rem) {
             if (marked(sp, a)) rememberedDuringCollect.add(a);
             else setInRemset(sp, a, false);

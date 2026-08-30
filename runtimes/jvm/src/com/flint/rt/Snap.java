@@ -167,9 +167,9 @@ public final class Snap {
         w.u32(r.stackTop);
         w.vals(r.stack, r.stackTop);
         w.vals(r.shadow, r.shadowTop);
-        w.vals(r.globals, r.globals.length);
-        w.vals(r.consts, r.consts.length);
-        w.vals(r.singletons, r.singletons.length);
+        w.vals(r.shared.globals, r.shared.globals.length);
+        w.vals(r.shared.consts, r.shared.consts.length);
+        w.vals(r.shared.singletons, r.shared.singletons.length);
         // The intern tables. This runtime does not carry them yet, so the count
         // is 0 -- the SECTION is here, in position, so that adding them later
         // does not move any field that follows.
@@ -340,10 +340,10 @@ public final class Snap {
         if (rr.shadow.length < shadow.length + 8) rr.shadow = new long[shadow.length + 8];
         System.arraycopy(shadow, 0, rr.shadow, 0, shadow.length);
         rr.shadowTop = shadow.length;
-        rr.globals = globals;
-        rr.consts = consts;
+        rr.shared.globals = globals;
+        rr.shared.consts = consts;
         rt.consts = consts;
-        rr.singletons = singletons;
+        rr.shared.singletons = singletons;
         rt.thrown = thrown;
         rt.parkOn = parkOn;
         // LAST, after the heap is in place. Identities are PRESERVED; whether
@@ -492,12 +492,12 @@ public final class Snap {
         for (int i = 0; i < r.stackTop; i++) ok &= writeValue(w, r.stack[i], ix);
         w.u32(r.shadowTop);
         for (int i = 0; i < r.shadowTop; i++) ok &= writeValue(w, r.shadow[i], ix);
-        w.u32(r.globals.length);
-        for (long v : r.globals) ok &= writeValue(w, v, ix);
-        w.u32(r.consts.length);
-        for (long v : r.consts) ok &= writeValue(w, v, ix);
-        w.u32(r.singletons.length);
-        for (long v : r.singletons) ok &= writeValue(w, v, ix);
+        w.u32(r.shared.globals.length);
+        for (long v : r.shared.globals) ok &= writeValue(w, v, ix);
+        w.u32(r.shared.consts.length);
+        for (long v : r.shared.consts) ok &= writeValue(w, v, ix);
+        w.u32(r.shared.singletons.length);
+        for (long v : r.shared.singletons) ok &= writeValue(w, v, ix);
         w.u32(0);                          // intern tables, as above
 
         writeVmState(w, rt);
@@ -523,7 +523,7 @@ public final class Snap {
         rt.handlers.clear();
         rt.roots.stackTop = 0;
         rt.roots.shadowTop = 0;
-        Arrays.fill(rt.roots.globals, Val.NIL);
+        Arrays.fill(rt.roots.shared.globals, Val.NIL);
 
         // Pass one: allocate every object, EMPTY.
         //
@@ -619,10 +619,10 @@ public final class Snap {
         rr.stackTop = stackTop;
         rr.shadow = Arrays.copyOf(shadow, Math.max(nsh, 64));
         rr.shadowTop = nsh;
-        for (int i = 0; i < globals.length && i < rr.globals.length; i++) rr.globals[i] = globals[i];
-        rr.consts = consts;
+        for (int i = 0; i < globals.length && i < rr.shared.globals.length; i++) rr.shared.globals[i] = globals[i];
+        rr.shared.consts = consts;
         rt.consts = consts;
-        rr.singletons = singletons;
+        rr.shared.singletons = singletons;
         rt.thrown = thrown;
         rt.parkOn = parkOn;
         // LAST, and for the same reason as `restore`: the identities come back

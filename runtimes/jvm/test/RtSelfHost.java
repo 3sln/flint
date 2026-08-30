@@ -56,7 +56,7 @@ public class RtSelfHost {
       if ("flint.selfhost/main".equals(Str.text(rt, rt.consts[img.varNames[i]]))) slot = i;
     }
     if (slot < 0) { System.out.println("  FAIL flint.selfhost/main is not in the var table"); System.exit(1); }
-    long compiler = rt.roots.globals[slot];
+    long compiler = rt.roots.shared.globals[slot];
     if (Val.isNil(compiler)) {
       System.out.println("  FAIL flint.selfhost/main is unbound after the initialisers");
       System.exit(1);

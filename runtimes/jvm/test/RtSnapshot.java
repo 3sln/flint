@@ -59,7 +59,7 @@ public class RtSnapshot {
     Rt a = new Rt(1024 * 1024, 64L * 1024 * 1024);
     a.fingerprint = 0xABCDEF12345L;
     long root = build(a, N);
-    a.roots.globals = new long[]{root};
+    a.roots.shared.globals = new long[]{root};
     String before = render(a, root);
     ok("built a structure to snapshot: " + N + " entries", before.startsWith("0=item-0;"));
 
@@ -68,11 +68,11 @@ public class RtSnapshot {
 
     Rt b = new Rt(1024 * 1024, 64L * 1024 * 1024);
     b.fingerprint = a.fingerprint;
-    b.roots.globals = new long[1];
+    b.roots.shared.globals = new long[1];
     ok("restore accepts it", Snap.restore(b, verbatim));
-    ok("the restored heap reads back identically", render(b, b.roots.globals[0]).equals(before));
+    ok("the restored heap reads back identically", render(b, b.roots.shared.globals[0]).equals(before));
     ok("and at the SAME address, which is what a memcpy means",
-       Val.asHeap(b.roots.globals[0]) == Val.asHeap(root));
+       Val.asHeap(b.roots.shared.globals[0]) == Val.asHeap(root));
 
     // A snapshot restored against a DIFFERENT program does not fail -- it
     // quietly means something else. The fingerprint is what makes that
@@ -90,7 +90,7 @@ public class RtSnapshot {
     Rt c = new Rt(1024 * 1024, 64L * 1024 * 1024);
     c.fingerprint = 0xABCDEF12345L;
     long croot = build(c, N);
-    c.roots.globals = new long[]{croot};
+    c.roots.shared.globals = new long[]{croot};
     byte[] live = Snap.exportLive(c);
     ok("exportLive agrees with the collector about what is live", live != null);
     ok("and is smaller than the memcpy, being the data rather than the heap: "
@@ -102,22 +102,22 @@ public class RtSnapshot {
     // Sized as an image load would size it. The import fills var slots, it
     // does not create them: the slots belong to the program, and a snapshot
     // that could add them would be carrying code after all.
-    d.roots.globals = new long[1];
+    d.roots.shared.globals = new long[1];
     ok("importLive accepts it", Snap.importLive(d, live));
-    ok("the rehydrated heap reads back identically", render(d, d.roots.globals[0]).equals(before));
+    ok("the rehydrated heap reads back identically", render(d, d.roots.shared.globals[0]).equals(before));
     ok("at a DIFFERENT address, which is what relocating means",
-       Val.asHeap(d.roots.globals[0]) != Val.asHeap(croot));
+       Val.asHeap(d.roots.shared.globals[0]) != Val.asHeap(croot));
 
     // The rehydrated heap has to be a working heap, not just a readable one:
     // keep allocating on it and collect, which is what would trip a bad
     // remembered set or a missed write barrier from pass two.
     long more = build(d, 200);
-    d.roots.globals = new long[]{d.roots.globals[0], more};
+    d.roots.shared.globals = new long[]{d.roots.shared.globals[0], more};
     d.gc.major(d.roots);
     ok("survives a major collection after import",
-       render(d, d.roots.globals[0]).equals(before));
+       render(d, d.roots.shared.globals[0]).equals(before));
     ok("and the objects allocated after it are intact too",
-       render(d, d.roots.globals[1]).startsWith("0=item-0;"));
+       render(d, d.roots.shared.globals[1]).startsWith("0=item-0;"));
 
     // --- shelving: the halt that leaves nothing runnable.
     Snap.halt(d);

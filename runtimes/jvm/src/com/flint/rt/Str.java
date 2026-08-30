@@ -56,9 +56,9 @@ public final class Str {
         if (b.length <= Val.INLINE_MAX) return Val.inlineStr(b);
         if (b.length > Interns.INTERN_MAX) return rawString(rt, b);
         int h = Hash.hashString(b);
-        Interns t = rt.roots.interns[Interns.STR];
-        long found = t.lookup(h, v -> Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR
-                                     && sameBytes(bytes(rt, v), b));
+        long found = probe(rt, Interns.STR, h,
+            v -> Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR
+                 && sameBytes(bytes(rt, v), b));
         if (found != Val.NOT_FOUND) return found;
 
         // Allocated OUTSIDE the probe, which is what keeps interning off the
@@ -89,18 +89,42 @@ public final class Str {
     /// same rooting bug before: a protocol with three copies is a protocol with
     /// three chances to diverge.
     static long publish(Rt rt, int table, int h, long v, Interns.Match matches) {
-        Interns t = rt.roots.interns[table];
-        long again = t.lookup(h, matches);
-        if (again != Val.NOT_FOUND) return again;   // somebody got there first
-        int idx = t.slot;
-        if (t.needsGrow()) {
-            t.grow();
-            // `grow` invalidates the index, so re-probe for a slot.
-            t.lookup(h, x -> false);
-            idx = t.slot;
+        // ROOTED across the lock. `lockIntern` can PARK -- that is the whole
+        // point of it, so a thread waiting for the lock still reaches a
+        // safepoint -- and parking means another executor may collect and move
+        // `v` while this thread is stopped. A value in a host local does not
+        // survive that.
+        int base = rt.mark();
+        int vi = rt.push(v);
+        rt.roots.shared.par.lockIntern(table);
+        try {
+            Interns t = rt.roots.shared.interns[table];
+            long again = t.lookup(h, matches);
+            if (again != Val.NOT_FOUND) return again;   // somebody got there first
+            int idx = t.slot;
+            if (t.needsGrow()) {
+                t.grow();
+                // `grow` invalidates the index, so re-probe for a slot.
+                t.lookup(h, x -> false);
+                idx = t.slot;
+            }
+            t.insertAt(idx, h, rt.r(vi));
+            return rt.r(vi);
+        } finally {
+            rt.roots.shared.par.unlockIntern(table);
+            rt.popTo(base);
         }
-        t.insertAt(idx, h, v);
-        return v;
+    }
+
+    /// Probe a table under its lock. Nothing needs rooting: no allocation
+    /// happens, and the lock can only park before anything is live.
+    static long probe(Rt rt, int table, int h, Interns.Match matches) {
+        rt.roots.shared.par.lockIntern(table);
+        try {
+            return rt.roots.shared.interns[table].lookup(h, matches);
+        } finally {
+            rt.roots.shared.par.unlockIntern(table);
+        }
     }
 
     public static byte[] bytes(Rt rt, long v) {
@@ -134,7 +158,7 @@ public final class Str {
         int h = Hash.hashKeyword(nsb, nb);
         Interns.Match matches = v -> Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_KW
                                      && sameName(rt, v, nsb, nb);
-        long found = rt.roots.interns[Interns.KW].lookup(h, matches);
+        long found = probe(rt, Interns.KW, h, matches);
         if (found != Val.NOT_FOUND) return found;
         long built = buildKeyword(rt, ns, name);
         if (Val.isNil(built)) return built;
@@ -173,7 +197,7 @@ public final class Str {
         int h = Hash.hashSymbol(nsb, nb);
         Interns.Match matches = v -> Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_SYM
                                      && sameName(rt, v, nsb, nb);
-        long found = rt.roots.interns[Interns.SYM].lookup(h, matches);
+        long found = probe(rt, Interns.SYM, h, matches);
         if (found != Val.NOT_FOUND) return found;
         long built = buildSymbol(rt, ns, name);
         if (Val.isNil(built)) return built;
