@@ -702,15 +702,47 @@ public final class Builtins {
         def("flint/ex-kind", (rt, at, n) ->
             rt.isHeapTy(rt.vat(at), TY_EXINFO) ? Str.keyword(rt, null, "ex-info") : Val.NIL);
 
+        /// `flint/array-map` takes ONE argument: a SEQUENCE of alternating keys
+        /// and values. It is not varargs, and reading it as varargs is how a
+        /// map literal came back EMPTY -- one argument, so the pairwise loop
+        /// never ran. `(read-one "{:a 1}")` answered `{}`, and the compiler's
+        /// reader is built on this.
+        ///
+        /// INSERTION ORDER is the point. `into {}` goes through a transient and
+        /// a transient map does not preserve it; the reader needs source order
+        /// to survive or the self-hosting fixpoint breaks.
+        ///
+        /// The values are ROOTED AS THEY ARE TAKEN, not gathered into a host
+        /// array first. Both calls in the loop can collect -- `first` forces a
+        /// lazy seq and `next` forces the tail, which runs arbitrary flint code
+        /// -- so anything already gathered would go stale at the first
+        /// collection and be written into the map as an address in a space that
+        /// has been reused. That is `doc/decisions/0031`, and it needed a map
+        /// big enough to span a collection, which is why it survived so long.
         def("flint/array-map", (rt, at, n) -> {
             int base = rt.mark();
-            int mi = rt.push(Maps.empty(rt));
-            for (int i = 0; i + 1 < n; i += 2) {
-                rt.setR(mi, Maps.assoc(rt, rt.r(mi), rt.vat(at + i), rt.vat(at + i + 1)));
+            int si = rt.push(Seqs.seq(rt, rt.vat(at)));
+            int valsAt = rt.mark();
+            int count = 0;
+            while (!Val.isNil(rt.r(si))) {
+                rt.push(Seqs.first(rt, rt.r(si)));
+                count++;
+                rt.setR(si, Seqs.next(rt, rt.r(si)));
             }
-            long out = rt.r(mi);
+            if (count % 2 != 0) {
+                rt.popTo(base);
+                throw new IllegalArgumentException("array-map needs an even number of forms");
+            }
+            int pairs = count / 2;
+            long a = rt.alloc(TY_ARRAYMAP, Maps.AM_BASE + 2 * pairs);
+            if (a == 0) { rt.popTo(base); return Val.NIL; }
+            rt.setSlot(a, Maps.AM_META, Val.NIL);
+            rt.setSlot(a, Maps.AM_HASH, Val.NIL);
+            for (int i = 0; i < 2 * pairs; i++) {
+                rt.setSlot(a, Maps.AM_BASE + i, rt.r(valsAt + i));
+            }
             rt.popTo(base);
-            return out;
+            return Val.heap(a);
         });
 
         // --- unchecked arithmetic ---------------------------------------------

@@ -674,14 +674,43 @@ public static class Builtins {
         Def("flint/ex-kind", (rt, at, n) =>
             rt.IsHeapTy(rt.VAt(at), Obj.TyExinfo) ? Str.Keyword(rt, null, "ex-info") : Val.Nil);
 
+        /// `flint/array-map` takes ONE argument: a SEQUENCE of alternating keys
+        /// and values. It is not varargs, and reading it as varargs is how a
+        /// map literal came back EMPTY -- one argument, so the pairwise loop
+        /// never ran. `(read-one "{:a 1}")` answered `{}`, and the compiler's
+        /// reader is built on this.
+        ///
+        /// INSERTION ORDER is the point. `into {}` goes through a transient and
+        /// a transient map does not preserve it; the reader needs source order
+        /// to survive or the self-hosting fixpoint breaks.
+        ///
+        /// The values are ROOTED AS THEY ARE TAKEN, not gathered into a host
+        /// array first. Both calls in the loop can collect -- `first` forces a
+        /// lazy seq and `next` forces the tail -- so anything already gathered
+        /// would go stale at the first collection. That is
+        /// `doc/decisions/0031`.
         Def("flint/array-map", (rt, at, n) => {
             int bas = rt.Mark();
-            int mi = rt.Push(Maps.Empty(rt));
-            for (int i = 0; i + 1 < n; i += 2)
-                rt.SetR(mi, Maps.Assoc(rt, rt.R(mi), rt.VAt(at + i), rt.VAt(at + i + 1)));
-            long outv = rt.R(mi);
+            int si = rt.Push(Seqs.Seq(rt, rt.VAt(at)));
+            int valsAt = rt.Mark();
+            int count = 0;
+            while (!Val.IsNil(rt.R(si))) {
+                rt.Push(Seqs.First(rt, rt.R(si)));
+                count++;
+                rt.SetR(si, Seqs.Next(rt, rt.R(si)));
+            }
+            if (count % 2 != 0) {
+                rt.PopTo(bas);
+                throw new System.ArgumentException("array-map needs an even number of forms");
+            }
+            int pairs = count / 2;
+            long a = rt.Alloc(Obj.TyArraymap, Maps.AM_BASE + 2 * pairs);
+            if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+            rt.SetSlot(a, Maps.AM_META, Val.Nil);
+            rt.SetSlot(a, Maps.AM_HASH, Val.Nil);
+            for (int i = 0; i < 2 * pairs; i++) rt.SetSlot(a, Maps.AM_BASE + i, rt.R(valsAt + i));
             rt.PopTo(bas);
-            return outv;
+            return Val.Heap(a);
         });
 
         // --- unchecked arithmetic ---------------------------------------------
