@@ -368,6 +368,11 @@ public final class Rt {
             }
             return fn.apply(this, calleeAt + 1, argc);
         }
+        if (Maps.isMap(this, callee)) {
+            if (argc < 1) throw new UnsupportedOperationException("a map takes 1 or 2 arguments");
+            long dflt = argc >= 2 ? roots.stack[calleeAt + 2] : Val.NIL;
+            return Maps.get(this, callee, roots.stack[calleeAt + 1], dflt);
+        }
         if (isHeapTy(callee, TY_VEC)) {
             if (argc < 1) throw new UnsupportedOperationException("a vector takes 1 argument");
             long got = Vec.nth(this, callee, (int) Val.asFixnum(roots.stack[calleeAt + 1]));
@@ -414,6 +419,50 @@ public final class Rt {
         };
     }
 
+    /// What a value IS, for a message. A refusal that says "needs more of the
+    /// data structures" without naming the type sends the reader back to a
+    /// debugger; naming it is the difference between a report and a shrug.
+    public String describe(long v) {
+        if (Val.isNil(v)) return "nil";
+        if (Val.isFixnum(v)) return "an integer";
+        if (Val.isDouble(v)) return "a double";
+        if (v == Val.TRUE || v == Val.FALSE) return "a boolean";
+        if (Val.isInlineStr(v)) return "an inline string";
+        if (Val.isInlineKw(v)) return "an inline keyword";
+        if (!Val.isHeap(v)) return "an unknown immediate";
+        return switch (ty(gc.sp, Val.asHeap(v))) {
+            case TY_STR -> "a string";
+            case TY_SYM -> "a symbol";
+            case TY_KW -> "a keyword";
+            case TY_CONS -> "a list";
+            case TY_EMPTY_LIST -> "an empty list";
+            case TY_LAZYSEQ -> "a lazy seq";
+            case TY_VEC -> "a vector";
+            case TY_VECSEQ -> "a vector seq";
+            case TY_RANGE -> "a range";
+            case TY_ARRAYMAP -> "an array-map";
+            case TY_HASHMAP -> "a hash-map";
+            case TY_SET -> "a set";
+            case TY_MAPENTRY -> "a map entry";
+            case TY_CLOSURE -> "a function";
+            case TY_NATIVEFN -> "a builtin";
+            case TY_TVEC -> "a transient vector";
+            case TY_TMAP -> "a transient map";
+            case TY_TSET -> "a transient set";
+            case TY_ROPE -> "a rope";
+            case TY_BYTES -> "a byte string";
+            case TY_RECORD -> "a record";
+            case TY_ATOM -> "an atom";
+            case TY_VAR -> "a var";
+            case TY_DELAY -> "a delay";
+            case TY_REGEX -> "a regex";
+            case TY_MULTIFN -> "a multimethod";
+            case TY_REDUCED -> "a reduced";
+            case TY_EXINFO -> "an ex-info";
+            default -> "object type " + ty(gc.sp, Val.asHeap(v));
+        };
+    }
+
     boolean isHeapTy(long v, int t) {
         return Val.isHeap(v) && ty(gc.sp, Val.asHeap(v)) == t;
     }
@@ -423,6 +472,12 @@ public final class Rt {
         int t = ty(gc.sp, Val.asHeap(v));
         return t == TY_CONS || t == TY_EMPTY_LIST || t == TY_LAZYSEQ
             || t == TY_VECSEQ || t == TY_STRSEQ || t == TY_RANGE;
+    }
+
+    /// Sequential, which is WIDER than `isSeq`: a vector and a map entry are
+    /// sequential without being seqs. `=` is over this, not over seq-ness.
+    boolean isSequential(long v) {
+        return isSeq(v) || isHeapTy(v, TY_VEC) || isHeapTy(v, TY_MAPENTRY);
     }
 
     /// Call `closure` with `args` from outside the interpreter.

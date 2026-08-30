@@ -30,23 +30,29 @@ public final class Builtins {
         // Arithmetic. flint's integers OVERFLOW rather than wrap, which
         // `doc/decisions/0010` names as one of the ways two hosts quietly
         // disagree -- so every one of these is checked.
+        // Arithmetic goes through `Num`, which owns the PROMOTION RULE:
+        // integers stay integers and overflow rather than wrap, and any double
+        // in the operands makes the whole expression a double. These read
+        // every argument as a fixnum once, which silently read a double's
+        // MANTISSA as an integer -- `(+ 1.5 2.5)` came back 0 and agreed with
+        // nothing.
         def("flint/add", (rt, at, n) -> {
-            long acc = 0;
-            for (int i = 0; i < n; i++) acc = Math.addExact(acc, Val.asFixnum(rt.vat(at + i)));
-            return Val.fixnum(acc);
+            long acc = Val.fixnum(0);
+            for (int i = 0; i < n; i++) acc = Num.add(rt, acc, rt.vat(at + i));
+            return acc;
         });
         def("+", (rt, at, n) -> byName("flint/add").apply(rt, at, n));
         def("flint/sub", (rt, at, n) -> {
-            if (n == 1) return Val.fixnum(Math.negateExact(Val.asFixnum(rt.vat(at))));
-            long acc = Val.asFixnum(rt.vat(at));
-            for (int i = 1; i < n; i++) acc = Math.subtractExact(acc, Val.asFixnum(rt.vat(at + i)));
-            return Val.fixnum(acc);
+            if (n == 1) return Num.neg(rt, rt.vat(at));
+            long acc = rt.vat(at);
+            for (int i = 1; i < n; i++) acc = Num.sub(rt, acc, rt.vat(at + i));
+            return acc;
         });
         def("-", (rt, at, n) -> byName("flint/sub").apply(rt, at, n));
         def("flint/mul", (rt, at, n) -> {
-            long acc = 1;
-            for (int i = 0; i < n; i++) acc = Math.multiplyExact(acc, Val.asFixnum(rt.vat(at + i)));
-            return Val.fixnum(acc);
+            long acc = Val.fixnum(1);
+            for (int i = 0; i < n; i++) acc = Num.mul(rt, acc, rt.vat(at + i));
+            return acc;
         });
         def("*", (rt, at, n) -> byName("flint/mul").apply(rt, at, n));
         def("flint/lt", (rt, at, n) -> cmp(rt, at, n, -1, false));
@@ -57,8 +63,13 @@ public final class Builtins {
         def(">", (rt, at, n) -> cmp(rt, at, n, 1, false));
         def("flint/ge", (rt, at, n) -> cmp(rt, at, n, 1, true));
         def(">=", (rt, at, n) -> cmp(rt, at, n, 1, true));
-        def("inc", (rt, at, n) -> Val.fixnum(Math.addExact(Val.asFixnum(rt.vat(at)), 1)));
-        def("dec", (rt, at, n) -> Val.fixnum(Math.subtractExact(Val.asFixnum(rt.vat(at)), 1)));
+        def("flint/num-eq", (rt, at, n) -> {
+            for (int i = 1; i < n; i++) if (!Num.numEq(rt, rt.vat(at), rt.vat(at + i))) return Val.FALSE;
+            return Val.TRUE;
+        });
+        def("==", (rt, at, n) -> byName("flint/num-eq").apply(rt, at, n));
+        def("inc", (rt, at, n) -> Num.add(rt, rt.vat(at), Val.fixnum(1)));
+        def("dec", (rt, at, n) -> Num.sub(rt, rt.vat(at), Val.fixnum(1)));
 
         def("identical?", (rt, at, n) -> Val.bool(rt.vat(at) == rt.vat(at + 1)));
         def("nil?", (rt, at, n) -> Val.bool(Val.isNil(rt.vat(at))));
@@ -66,17 +77,32 @@ public final class Builtins {
         def("true?", (rt, at, n) -> Val.bool(rt.vat(at) == Val.TRUE));
         def("false?", (rt, at, n) -> Val.bool(rt.vat(at) == Val.FALSE));
         def("boolean", (rt, at, n) -> Val.bool(Val.truthy(rt.vat(at))));
-        def("number?", (rt, at, n) -> Val.bool(Val.isFixnum(rt.vat(at)) || Val.isDouble(rt.vat(at))));
+        def("number?", (rt, at, n) -> Val.bool(Num.isNumber(rt, rt.vat(at))));
+        def("int?", (rt, at, n) -> Val.bool(Num.isInt(rt, rt.vat(at))));
+        def("float?", (rt, at, n) -> Val.bool(Num.isFloat(rt.vat(at))));
+        def("double", (rt, at, n) -> Val.ofDouble(Num.f64(rt, rt.vat(at))));
+        def("long", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (Num.isInt(rt, v)) return v;
+            // TRUNCATES toward zero, as Clojure's `long` does on a double.
+            return Num.integer(rt, (long) Num.f64(rt, v));
+        });
+        def("zero?", (rt, at, n) -> Val.bool(Num.numEq(rt, rt.vat(at), Val.fixnum(0))));
+        def("pos?", (rt, at, n) -> Val.bool(Num.cmp(rt, rt.vat(at), Val.fixnum(0)) > 0));
+        def("neg?", (rt, at, n) -> Val.bool(Num.cmp(rt, rt.vat(at), Val.fixnum(0)) < 0));
 
-        def("quot", (rt, at, n) -> Val.fixnum(Val.asFixnum(rt.vat(at)) / Val.asFixnum(rt.vat(at + 1))));
-        def("rem", (rt, at, n) -> Val.fixnum(Val.asFixnum(rt.vat(at)) % Val.asFixnum(rt.vat(at + 1))));
+        def("quot", (rt, at, n) -> Num.quot(rt, rt.vat(at), rt.vat(at + 1)));
+        def("rem", (rt, at, n) -> Num.rem(rt, rt.vat(at), rt.vat(at + 1)));
         // `/` on two integers that do not divide evenly is a DOUBLE here, not a
         // Ratio: flint has no rational type, and `doc/decisions/0010` counts
         // this among the documented divergences from Clojure rather than a bug.
         def("flint/div", (rt, at, n) -> {
-            long a = Val.asFixnum(rt.vat(at)), b = Val.asFixnum(rt.vat(at + 1));
-            return b != 0 && a % b == 0 ? Val.fixnum(a / b) : Val.ofDouble((double) a / b);
+            if (n == 1) return Num.div(rt, Val.fixnum(1), rt.vat(at));
+            long acc = rt.vat(at);
+            for (int i = 1; i < n; i++) acc = Num.div(rt, acc, rt.vat(at + i));
+            return acc;
         });
+        def("/", (rt, at, n) -> byName("flint/div").apply(rt, at, n));
 
         def("bit-and", (rt, at, n) -> Val.fixnum(Val.asFixnum(rt.vat(at)) & Val.asFixnum(rt.vat(at + 1))));
         def("bit-or", (rt, at, n) -> Val.fixnum(Val.asFixnum(rt.vat(at)) | Val.asFixnum(rt.vat(at + 1))));
@@ -106,7 +132,7 @@ public final class Builtins {
             Str.of(rt, Str.text(rt, rt.vat(at)) + Str.text(rt, rt.vat(at + 1))));
         def("flint/num->str", (rt, at, n) -> {
             long v = rt.vat(at);
-            return Str.of(rt, Val.isFixnum(v) ? Long.toString(Val.asFixnum(v))
+            return Str.of(rt, Num.isInt(rt, v) ? Long.toString(Num.asI64(rt, v))
                                               : fmtDouble(Val.asDouble(v)));
         });
 
@@ -118,21 +144,40 @@ public final class Builtins {
             long v = rt.vat(at);
             if (Val.isNil(v)) return Val.fixnum(0);
             if (rt.isHeapTy(v, TY_VEC)) return Val.fixnum(Vec.count(rt, v));
-            if (Str.isString(rt, v)) return Val.fixnum(Str.byteLen(rt, v));
+            if (Str.isString(rt, v)) return Val.fixnum(Str.charLen(rt, v));
             if (Maps.isMap(rt, v)) return Val.fixnum(Maps.count(rt, v));
             if (rt.isSeq(v)) return Val.fixnum(Seqs.count(rt, v));
-            throw new UnsupportedOperationException("count on this needs more of the data structures");
+            throw new UnsupportedOperationException("count over " + rt.describe(v) + " needs more of the data structures");
         });
         def("nth", (rt, at, n) -> {
             long v = rt.vat(at);
             int i = (int) Val.asFixnum(rt.vat(at + 1));
+            long got = Val.NOT_FOUND;
             if (rt.isHeapTy(v, TY_VEC)) {
-                long got = Vec.nth(rt, v, i);
-                if (got != Val.NOT_FOUND) return got;
-                if (n > 2) return rt.vat(at + 2);
-                throw new IndexOutOfBoundsException("index " + i + " out of range");
+                got = Vec.nth(rt, v, i);
+            } else if (Str.isString(rt, v)) {
+                got = Str.nth(rt, v, i);
+            } else if (rt.isHeapTy(v, TY_MAPENTRY)) {
+                if (i == 0 || i == 1) got = rt.slot(v, i);
+            } else if (Val.isNil(v)) {
+                got = Val.NOT_FOUND;
+            } else if (rt.isSeq(v)) {
+                // O(n), as Clojure's `nth` on a seq is. Walking rather than
+                // refusing, because `nth` over a seq is ordinary code and the
+                // cost is the caller's to know about.
+                int base = rt.mark();
+                int s = rt.push(Seqs.seq(rt, v));
+                for (int k = 0; k < i && !Val.isNil(rt.r(s)); k++) {
+                    rt.setR(s, Seqs.next(rt, rt.r(s)));
+                }
+                if (!Val.isNil(rt.r(s))) got = Seqs.first(rt, rt.r(s));
+                rt.popTo(base);
+            } else {
+                throw new UnsupportedOperationException("nth over " + rt.describe(v) + " needs more of the data structures");
             }
-            throw new UnsupportedOperationException("nth on this needs more of the data structures");
+            if (got != Val.NOT_FOUND) return got;
+            if (n > 2) return rt.vat(at + 2);
+            throw new IndexOutOfBoundsException("index " + i + " out of range");
         });
         def("conj", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -149,7 +194,7 @@ public final class Builtins {
                 for (int i = 1; i < n; i++) acc = Seqs.cons(rt, rt.vat(at + i), acc);
                 return acc;
             }
-            throw new UnsupportedOperationException("conj on this needs more of the data structures");
+            throw new UnsupportedOperationException("conj onto " + rt.describe(v) + " needs more of the data structures");
         });
 
         def("seq", (rt, at, n) -> Seqs.seq(rt, rt.vat(at)));
@@ -166,7 +211,7 @@ public final class Builtins {
             long v = rt.vat(at);
             if (rt.isHeapTy(v, TY_VEC)) return Vec.transientOf(rt, v);
             throw new UnsupportedOperationException(
-                "transient on this needs maps and sets ported");
+                "transient of " + rt.describe(v) + " needs maps and sets ported");
         });
         def("persistent!", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -177,7 +222,7 @@ public final class Builtins {
                 return Vec.tpersistent(rt, v);
             }
             throw new UnsupportedOperationException(
-                "persistent! on this needs maps and sets ported");
+                "persistent! of " + rt.describe(v) + " needs maps and sets ported");
         });
         def("conj!", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -190,7 +235,7 @@ public final class Builtins {
                 return acc;
             }
             throw new UnsupportedOperationException(
-                "conj! on this needs maps and sets ported");
+                "conj! onto " + rt.describe(v) + " needs maps and sets ported");
         });
         def("assoc!", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -205,7 +250,7 @@ public final class Builtins {
                 return acc;
             }
             throw new UnsupportedOperationException(
-                "assoc! on this needs maps and sets ported");
+                "assoc! onto " + rt.describe(v) + " needs maps and sets ported");
         });
 
         // Maps.
@@ -220,7 +265,7 @@ public final class Builtins {
                 long got = Vec.nth(rt, coll, (int) Val.asFixnum(k));
                 return got == Val.NOT_FOUND ? dflt : got;
             }
-            throw new UnsupportedOperationException("get on this needs sets ported");
+            throw new UnsupportedOperationException("get over " + rt.describe(coll) + " needs sets ported");
         });
         def("assoc", (rt, at, n) -> {
             long acc = rt.vat(at);
@@ -246,7 +291,7 @@ public final class Builtins {
                 }
                 return acc;
             }
-            throw new UnsupportedOperationException("assoc on this needs more of the data structures");
+            throw new UnsupportedOperationException("assoc onto " + rt.describe(acc) + " needs more of the data structures");
         });
         def("dissoc", (rt, at, n) -> {
             long acc = rt.vat(at);
@@ -270,7 +315,7 @@ public final class Builtins {
                 return Val.bool(Val.isFixnum(k) && Val.asFixnum(k) >= 0
                                 && Val.asFixnum(k) < Vec.count(rt, coll));
             }
-            throw new UnsupportedOperationException("contains? on this needs sets ported");
+            throw new UnsupportedOperationException("contains? over " + rt.describe(coll) + " needs sets ported");
         });
         def("hash", (rt, at, n) -> Val.fixnum(Eq.hashValue(rt, rt.vat(at))));
 
@@ -300,8 +345,7 @@ public final class Builtins {
     /// A CHAIN, as Clojure's comparisons are: `(< 1 2 3)` is one call, not two.
     private static long cmp(Rt rt, int at, int n, int want, boolean orEqual) {
         for (int i = 0; i + 1 < n; i++) {
-            long a = Val.asFixnum(rt.vat(at + i)), b = Val.asFixnum(rt.vat(at + i + 1));
-            int c = Long.compare(a, b);
+            int c = Num.cmp(rt, rt.vat(at + i), rt.vat(at + i + 1));
             if (!(c == want || (orEqual && c == 0))) return Val.FALSE;
         }
         return Val.TRUE;

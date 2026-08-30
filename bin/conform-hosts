@@ -292,24 +292,33 @@ if [ -n "$CLR" ]; then
   fi
 fi
 
-# And on a program the library is not ported far enough for yet, which reports
-# HOW FAR it gets. While that is true it is the useful answer; a silent pass
-# would be the misleading one.
+# A SECOND real program, and a harder one: `numbers` exercises the whole
+# numeric tower -- integer overflow, int/float promotion, bit operations,
+# printing -- and its answer is a nested collection rather than a number, so
+# agreeing means agreeing about maps, vectors, strings and doubles at once.
+#
+# Compared against the NATIVE answer, not merely run. The port produced
+# `:float [0 0 0]` here where the native runtime said `[4.0 6.0 0.25]`, because
+# the arithmetic read a double's mantissa as an integer. Nothing else in the
+# suite noticed; this line is why it was found.
 ./bin/flint :src runtimes/conform :fn numbers/main --emit-image \
   :out out/conform/rt-probe.img >/dev/null 2>&1
-"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/conform/rt-probe.img > /tmp/flint-far-jvm.out 2>&1
-grep -v "^  ok   loads" /tmp/flint-far-jvm.out | sed 's/$/ [jvm]/'
+num_want="$(./target/release/flint run :path runtimes/conform :fn numbers/main 2>&1 || true)"
+"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/conform/rt-probe.img "$num_want" \
+  > /tmp/flint-far-jvm.out 2>&1 \
+  || { cat /tmp/flint-far-jvm.out; echo "  FAIL numbers disagrees with the native runtime [jvm]"; exit 1; }
+grep -v "^  ok   loads" /tmp/flint-far-jvm.out | cut -c1-100 | sed 's/$/ ... [jvm]/'
 if [ -n "$CLR" ]; then
-  "$CLR" --rt-image out/conform/rt-probe.img > /tmp/flint-far-clr.out 2>&1
-  grep -v "^  ok   loads" /tmp/flint-far-clr.out | sed 's/$/ [clr]/'
-  # The two ports must stop at the SAME PLACE. A port that got further would be
-  # the interesting news; a port that stopped earlier would be the bug. Either
-  # way it is a divergence, and comparing the reports is what makes it visible
-  # rather than something to notice by eye.
+  "$CLR" --rt-image out/conform/rt-probe.img "$num_want" > /tmp/flint-far-clr.out 2>&1 \
+    || { cat /tmp/flint-far-clr.out; echo "  FAIL numbers disagrees with the native runtime [clr]"; exit 1; }
+  grep -v "^  ok   loads" /tmp/flint-far-clr.out | cut -c1-100 | sed 's/$/ ... [clr]/'
+  # And the two ports to each other. A port that got further would be the
+  # interesting news; one that stopped earlier would be the bug. Either way a
+  # divergence, and comparing the reports is what makes it visible.
   cmp -s /tmp/flint-far-jvm.out /tmp/flint-far-clr.out \
-    && echo "  ok   and both ports stop at exactly the same place" \
+    && echo "  ok   and the two ports agree line for line on it" \
     || { diff /tmp/flint-far-jvm.out /tmp/flint-far-clr.out | head; \
-         echo "  FAIL the two ports do not get equally far"; exit 1; }
+         echo "  FAIL the two ports do not agree on numbers"; exit 1; }
 fi
 
 # ONE CONFIG, THREE RUNTIMES. `:optimize [perf]` cannot be carried the same way

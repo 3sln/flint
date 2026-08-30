@@ -29,6 +29,11 @@ public final class Roots {
     public long[] shadow = new long[256];
     public int shadowTop = 0;
 
+    /// The intern tables. WEAK, and scanned by the collector rather than
+    /// traced: an entry whose value died is dropped, which is what lets every
+    /// short string and keyword be interned without the table being a leak.
+    public final Interns[] interns = Interns.tables();
+
     public long[] globals = new long[0];
     public long[] consts = new long[0];
     public long[] singletons = new long[0];

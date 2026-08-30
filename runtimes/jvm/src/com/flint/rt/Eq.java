@@ -25,17 +25,16 @@ public final class Eq {
         boolean kb = Val.isInlineKw(b) || rt.isHeapTy(b, TY_KW);
         if (ka || kb) {
             if (!(ka && kb)) return false;
-            if (Val.isInlineKw(a) && Val.isInlineKw(b)) return a == b;
-            // One inline and one on the heap naming the same keyword must
-            // compare EQUAL. They cannot here -- one is a value and one is an
-            // object -- which is why interning matters, and why this is
-            // refused rather than answered wrongly.
-            throw new UnsupportedOperationException(
-                "comparing a heap keyword needs the intern tables ported");
+            // Both inline, or both interned: identity IS equality, which is the
+            // whole point of `doc/decisions/0011`'s tiers. A keyword short
+            // enough to be inline is never on the heap, and one long enough to
+            // be on the heap is interned, so the two forms never meet.
+            return a == b;
         }
-        if (rt.isHeapTy(a, TY_SYM) && rt.isHeapTy(b, TY_SYM)) {
-            return eq(rt, rt.slot(a, 0), rt.slot(b, 0)) && eq(rt, rt.slot(a, 1), rt.slot(b, 1));
-        }
+        // Symbols are interned too, so `a == b` above already answered it. Two
+        // distinct symbol objects with the same name would be an interning bug
+        // rather than a case to handle, and comparing slots here would HIDE it.
+        if (rt.isHeapTy(a, TY_SYM) || rt.isHeapTy(b, TY_SYM)) return false;
         if (rt.isHeapTy(a, TY_VEC) && rt.isHeapTy(b, TY_VEC)) {
             int n = Vec.count(rt, a);
             if (n != Vec.count(rt, b)) return false;
@@ -47,8 +46,8 @@ public final class Eq {
         if (Maps.isMap(rt, a) && Maps.isMap(rt, b)) return Maps.eq(rt, a, b);
         // A vector and a seq holding the same elements ARE equal in Clojure:
         // `=` is over the sequential abstraction, not the concrete type.
-        boolean sa = rt.isSeq(a) || rt.isHeapTy(a, TY_VEC);
-        boolean sb = rt.isSeq(b) || rt.isHeapTy(b, TY_VEC);
+        boolean sa = rt.isSequential(a);
+        boolean sb = rt.isSequential(b);
         if (sa && sb) {
             int base = rt.mark();
             int x = rt.push(Seqs.seq(rt, a)), y = rt.push(Seqs.seq(rt, b));
@@ -71,7 +70,7 @@ public final class Eq {
                 return false;
             }
             throw new UnsupportedOperationException(
-                "= on this collection needs more of the data structures ported");
+                "= over " + rt.describe(a) + " and " + rt.describe(b) + " needs more of the data structures");
         }
         return false;
     }

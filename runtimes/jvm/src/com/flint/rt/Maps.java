@@ -822,6 +822,44 @@ public final class Maps {
         return wrote;
     }
 
+    /// `[k, v]`, the object a map's `seq` yields. A `TY_MAPENTRY` and not a
+    /// vector, so `key`/`val` are O(1) and the entry can still be read as a
+    /// two-element sequential -- which is what makes `(into {} (map ...))` and
+    /// destructuring `[[k v] ...]` both work over the same object.
+    public static long entry(Rt rt, long k, long v) {
+        int base = rt.mark();
+        int ki = rt.push(k), vi = rt.push(v);
+        long a = rt.alloc(TY_MAPENTRY, 2);
+        if (a == 0) { rt.popTo(base); return Val.NIL; }
+        rt.setSlot(a, 0, rt.r(ki));
+        rt.setSlot(a, 1, rt.r(vi));
+        rt.popTo(base);
+        return Val.heap(a);
+    }
+
+    /// The entries as a VECTOR of map entries, which is what `seq` walks.
+    ///
+    /// Materialised rather than a lazy cursor over the trie: a cursor would
+    /// have to hold a path of node addresses across allocations the consumer
+    /// makes, and every one of those would need rooting. The Rust does the same
+    /// and for the same reason.
+    public static long entryVector(Rt rt, long m) {
+        int base = rt.mark();
+        int mi = rt.push(m);
+        int at = rt.mark();
+        int n = entries(rt, rt.r(mi), at);
+        int ai = rt.push(Vec.empty(rt));
+        for (int i = 0; i < n; i++) {
+            long e = entry(rt, rt.r(at + 2 * i), rt.r(at + 2 * i + 1));
+            int ei = rt.push(e);
+            rt.setR(ai, Vec.conj(rt, rt.r(ai), rt.r(ei)));
+            rt.popTo(ei);
+        }
+        long out = rt.r(ai);
+        rt.popTo(base);
+        return out;
+    }
+
     /// Structural equality. Same count, and every key in `a` present in `b`
     /// with an equal value -- ORDER-INDEPENDENT, which is what a map's `=`
     /// means and why it cannot just compare slots.

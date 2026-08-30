@@ -303,7 +303,20 @@ public final class Gc {
         // 3. transitive closure
         while (!work.isEmpty()) scanObject(work.remove(work.size() - 1));
 
-        // 4. flip
+        // 4. weak tables. A nursery entry that was copied is FORWARDED; one
+        // that was not is dead, and the entry goes. This runs BEFORE the flip,
+        // while `from` still names the space that was just evacuated.
+        for (Interns tbl : roots.interns) {
+            tbl.refresh(v -> {
+                if (Val.isHeap(v) && Long.compareUnsigned(Val.asHeap(v) - from, half) < 0) {
+                    long a2 = Val.asHeap(v);
+                    return ty(sp, a2) == TY_FWD ? Val.heap(forwardTarget(sp, a2)) : Val.NOT_FOUND;
+                }
+                return v;
+            });
+        }
+
+        // 5. flip
         long t = from; from = to; to = t;
         bump = toBump;
         fromEnd = from + half;
@@ -327,6 +340,11 @@ public final class Gc {
             int n = len(sp, a);
             for (int i = 0; i < n; i++) markFrom(slot(sp, a, i));
         }
+        // Weak tables: anything unmarked is unreachable.
+        for (Interns tbl : roots.interns) {
+            tbl.refresh(v -> (!Val.isHeap(v) || marked(sp, Val.asHeap(v))) ? v : Val.NOT_FOUND);
+        }
+
         // The remembered set may name objects about to be freed.
         ArrayList<Long> rem = new ArrayList<>(roots.remembered);
         roots.remembered.clear();

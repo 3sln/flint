@@ -84,10 +84,33 @@ public final class Seqs {
             case TY_EMPTY_LIST: return Val.NIL;
             case TY_CONS: case TY_VECSEQ: return v;
             case TY_VEC: return Vec.count(rt, v) == 0 ? Val.NIL : vecseq(rt, v, 0);
+            case TY_MAPENTRY: return vecseq(rt, entryAsVec(rt, v), 0);
+            case TY_ARRAYMAP:
+            case TY_HASHMAP: {
+                if (Maps.count(rt, v) == 0) return Val.NIL;
+                int base = rt.mark();
+                int ev = rt.push(Maps.entryVector(rt, v));
+                long out = vecseq(rt, rt.r(ev), 0);
+                rt.popTo(base);
+                return out;
+            }
             default:
                 throw new UnsupportedOperationException(
-                    "seq over object type " + t + " needs more of the data structures");
+                    "seq over " + rt.describe(v) + " needs more of the data structures");
         }
+    }
+
+    /// A map entry read as the two-element vector `[k v]`. Clojure's entries
+    /// ARE sequential, which is what lets `(first {:a 1})` destructure.
+    static long entryAsVec(Rt rt, long e) {
+        int base = rt.mark();
+        int ei = rt.push(e);
+        int vi = rt.push(Vec.empty(rt));
+        rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.slot(rt.r(ei), 0)));
+        rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.slot(rt.r(ei), 1)));
+        long out = rt.r(vi);
+        rt.popTo(base);
+        return out;
     }
 
     public static long first(Rt rt, long v) {
@@ -98,7 +121,7 @@ public final class Seqs {
         if (t == TY_VECSEQ) {
             return Vec.nth(rt, rt.slot(s, 0), (int) Val.asFixnum(rt.slot(s, 1)));
         }
-        throw new UnsupportedOperationException("first over object type " + t);
+        throw new UnsupportedOperationException("first over " + rt.describe(v));
     }
 
     /// `next`: the rest, or NIL when there is none. `rest` differs -- it gives
@@ -113,7 +136,7 @@ public final class Seqs {
             int i = (int) Val.asFixnum(rt.slot(s, 1)) + 1;
             return i >= Vec.count(rt, vec) ? Val.NIL : vecseq(rt, vec, i);
         }
-        throw new UnsupportedOperationException("next over object type " + t);
+        throw new UnsupportedOperationException("next over " + rt.describe(v));
     }
 
     public static long rest(Rt rt, long v) {
