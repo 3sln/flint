@@ -19,9 +19,14 @@ different revision is a different suite, so quote the one you ran.
     ---------------------------------------
     TOTAL    190 / 294 (64%)   194 / 294 (65%)
 
-**The `pass-*` halves are identical**, which is the half that measures the
-runtime: 130 of 195, the same 130 on both. That is the parity claim, and it is
-worth more than either total.
+**The `pass-*` halves are identical, test for test.** Not the same COUNT --
+the same SET: `comm` over the two failure lists is empty in both directions, so
+the native runtime and the port fail the same 65 and pass the same 130.
+
+Equal counts would not have been that claim. Two runtimes can score 130 apiece
+while disagreeing about twenty tests in each direction, and that is exactly
+what a pair of nearly-mirrors looks like. The set being identical is what says
+they are the same runtime.
 
 The `fail-*` difference is NOT the ported runtime being stricter than the Rust
 one. It is an artefact of the harness having to take two different routes:
