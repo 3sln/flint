@@ -15,6 +15,7 @@ public static class Program {
         if (args.Length >= 1 && args[0] == "--rt-hash") return RtHash();
         if (args.Length >= 1 && args[0] == "--rt-maps") return RtMaps();
         if (args.Length >= 3 && args[0] == "--rt-shelve") return RtShelve(args[1], args[2]);
+        if (args.Length >= 3 && args[0] == "--rt-selfhost") return RtSelfHost(args[1], args[2]);
         if (args.Length >= 2 && args[0] == "--rt-image")
             return RtImage(args[1], args.Length > 2 ? args[2] : null);
         if (args.Length >= 3 && args[0] == "--selfhost") return SelfHost(args[1], args[2]);
@@ -496,6 +497,67 @@ public static class Program {
     SOk("a snapshot is refused by a runtime holding a different program",
        !Flint.Rt.Snap.Restore(other, Flint.Rt.Snap.Capture(plain)));
         if (shelveFails > 0) { Console.WriteLine("  " + shelveFails + " failed"); return 1; }
+        return 0;
+    }
+
+
+    // ------------------------------------------------------------------
+    /// The flint COMPILER, on the ported runtime. A mirror of the JVM's
+    /// `RtSelfHost.java`, printing the same lines so the gate can compare them.
+    ///
+    /// Checked against the wasm compiler's OUTPUT, byte for byte. "It ran"
+    /// would have passed with every map literal empty, which is one of the four
+    /// bugs this found.
+    private static int RtSelfHost(string specPath, string refPath) {
+        var rt = new Flint.Rt.Rt(64L * 1024 * 1024, 2048L * 1024 * 1024);
+        var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes("dist/flintc.bytecode"));
+        if (img == null) { Console.WriteLine("  FAIL not an image"); return 1; }
+        Console.WriteLine("  the compiler: " + rt.fns.Length + " fns, " + rt.consts.Length
+            + " consts, " + rt.code.Length + " code bytes, " + img.nativeNames.Length + " natives");
+        int missing = 0;
+        var names = new System.Text.StringBuilder();
+        for (int i = 0; i < img.nativeNames.Length; i++) {
+            if (rt.natives[i] == null) { missing++; if (missing <= 60) names.Append(" ").Append(img.nativeNames[i]); }
+        }
+        Console.WriteLine("  builtins it wants that this runtime lacks: " + missing + names);
+        foreach (int fn in img.init)
+            rt.Call(rt.MakeClosure(fn, Array.Empty<long>()), Array.Empty<long>());
+        Console.WriteLine("  ok   " + img.init.Length + " initialisers ran");
+
+        // `flint.selfhost/main` is a VAR, not a named entry in the function
+        // table. The initialisers bind it, which is why they have to run first.
+        int slot = -1;
+        for (int i = 0; i < img.varNames.Length; i++)
+            if (Flint.Rt.Str.Text(rt, rt.consts[img.varNames[i]]) == "flint.selfhost/main") slot = i;
+        if (slot < 0) { Console.WriteLine("  FAIL flint.selfhost/main is not in the var table"); return 1; }
+        long compiler = rt.roots.Globals[slot];
+        if (Flint.Rt.Val.IsNil(compiler)) {
+            Console.WriteLine("  FAIL flint.selfhost/main is unbound after the initialisers");
+            return 1;
+        }
+        Console.WriteLine("  ok   flint.selfhost/main is bound: " + rt.Describe(compiler));
+
+        // ROOTED, and passed as an ARGV: `main` dispatches on the FIRST element.
+        int bas = rt.Mark();
+        int ci = rt.Push(compiler);
+        int si = rt.Push(Flint.Rt.Str.Of(rt, File.ReadAllText(specPath)));
+        int li = rt.Push(Flint.Rt.Seqs.FromRoots(rt, si, 1));
+        long outv = rt.RunProgram(rt.R(ci), new long[]{ rt.R(li) });
+        string s = Flint.Rt.Str.IsString(rt, outv) ? Flint.Rt.Str.Text(rt, outv)
+                 : "NOT A STRING: " + rt.Describe(outv);
+        rt.PopTo(bas);
+        Console.WriteLine("  ok   the compiler ran and produced " + s.Length + " chars");
+        if (!Flint.Rt.Val.IsNil(rt.thrown)) {
+            Console.WriteLine("  FAIL the compiler threw: " + rt.Describe(rt.thrown));
+            return 1;
+        }
+        string want = File.ReadAllText(refPath);
+        if (s != want) {
+            Console.WriteLine("  FAIL the output differs from the wasm compiler's ("
+                              + s.Length + " vs " + want.Length + " chars)");
+            return 1;
+        }
+        Console.WriteLine("  ok   and it is byte for byte what the wasm compiler emits");
         return 0;
     }
 

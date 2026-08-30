@@ -399,12 +399,20 @@ if [ "${FLINT_SELFHOST:-0}" = "1" ]; then
   ./bin/flint :src bench/progs :fn hello/main --emit-spec :out out/conform/self.spec     >/dev/null 2>&1
   # The reference: the same spec through the compiler running as wasm.
   node host/flint-file.mjs dist/flintc.wasm out/conform/self.spec > out/conform/self.ref 2>/dev/null
-  if ! "$JDK/bin/java" -cp runtimes/jvm/classes SelfHost          out/conform/self.spec out/conform/self.ref; then
+  # The PORTED runtime, checked against that reference BYTE FOR BYTE.
+  #
+  # "It ran" would not have been enough. Every one of the four bugs this found
+  # let the compiler run: map literals came back empty, a tail call to a
+  # builtin read a slot off a fixnum, `=` threw where it should answer false,
+  # and symbols compared by identity so every local looked unbound. Only
+  # comparing the OUTPUT catches the first of those.
+  if ! "$JDK/bin/java" -Xss1g -cp runtimes/jvm/classes RtSelfHost \
+       out/conform/self.spec out/conform/self.ref; then
     echo "  FAIL jvm self-host"
     exit 1
   fi
   if [ -n "$CLR" ]; then
-    if ! "$CLR" --selfhost out/conform/self.spec out/conform/self.ref; then
+    if ! "$CLR" --rt-selfhost out/conform/self.spec out/conform/self.ref; then
       echo "  FAIL clr self-host"
       exit 1
     fi
