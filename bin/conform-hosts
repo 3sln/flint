@@ -292,34 +292,36 @@ if [ -n "$CLR" ]; then
   fi
 fi
 
-# A SECOND real program, and a harder one: `numbers` exercises the whole
-# numeric tower -- integer overflow, int/float promotion, bit operations,
-# printing -- and its answer is a nested collection rather than a number, so
-# agreeing means agreeing about maps, vectors, strings and doubles at once.
+# EVERY conformance program the ported runtimes can run, each checked against
+# the NATIVE answer and then the two ports against each other.
 #
-# Compared against the NATIVE answer, not merely run. The port produced
-# `:float [0 0 0]` here where the native runtime said `[4.0 6.0 0.25]`, because
-# the arithmetic read a double's mantissa as an integer. Nothing else in the
-# suite noticed; this line is why it was found.
-./bin/flint :src runtimes/conform :fn numbers/main --emit-image \
-  :out out/conform/rt-probe.img >/dev/null 2>&1
-num_want="$(./target/release/flint run :path runtimes/conform :fn numbers/main 2>&1 || true)"
-"$JDK/bin/java" -cp runtimes/jvm/classes RtImage out/conform/rt-probe.img "$num_want" \
-  > /tmp/flint-far-jvm.out 2>&1 \
-  || { cat /tmp/flint-far-jvm.out; echo "  FAIL numbers disagrees with the native runtime [jvm]"; exit 1; }
-grep -v "^  ok   loads" /tmp/flint-far-jvm.out | cut -c1-100 | sed 's/$/ ... [jvm]/'
-if [ -n "$CLR" ]; then
-  "$CLR" --rt-image out/conform/rt-probe.img "$num_want" > /tmp/flint-far-clr.out 2>&1 \
-    || { cat /tmp/flint-far-clr.out; echo "  FAIL numbers disagrees with the native runtime [clr]"; exit 1; }
-  grep -v "^  ok   loads" /tmp/flint-far-clr.out | cut -c1-100 | sed 's/$/ ... [clr]/'
-  # And the two ports to each other. A port that got further would be the
-  # interesting news; one that stopped earlier would be the bug. Either way a
-  # divergence, and comparing the reports is what makes it visible.
-  cmp -s /tmp/flint-far-jvm.out /tmp/flint-far-clr.out \
-    && echo "  ok   and the two ports agree line for line on it" \
-    || { diff /tmp/flint-far-jvm.out /tmp/flint-far-clr.out | head; \
-         echo "  FAIL the two ports do not agree on numbers"; exit 1; }
-fi
+# Against native rather than merely run, because both ports were wrong the same
+# way once: the arithmetic read a double's mantissa as an integer, so `numbers`
+# said `:float [0 0 0]` on BOTH and the cross-port compare saw nothing. Only
+# the native answer could tell.
+#
+# The answers are nested collections rather than numbers, so agreeing means
+# agreeing about maps, vectors, sets, strings, seqs and doubles at once -- and
+# `maps` prints its keys in trie order, so matching means the ported CHAMP
+# ITERATES the way the Rust's does, which nothing asserts directly.
+for prog in collections control lazy maps numbers strings; do
+  ./bin/flint :src runtimes/conform :fn "$prog/main" --emit-image \
+    :out "out/conform/$prog.img" >/dev/null 2>&1 || {
+      echo "  .. $prog does not compile; skipped"; continue; }
+  want="$(./target/release/flint run :path runtimes/conform :fn "$prog/main" 2>&1 || true)"
+  "$JDK/bin/java" -cp runtimes/jvm/classes RtImage "out/conform/$prog.img" "$want" \
+    > /tmp/flint-c-jvm.out 2>&1 \
+    || { tail -3 /tmp/flint-c-jvm.out; echo "  FAIL $prog disagrees with native [jvm]"; exit 1; }
+  echo "  ok   $prog agrees with the native runtime [jvm]"
+  if [ -n "$CLR" ]; then
+    "$CLR" --rt-image "out/conform/$prog.img" "$want" > /tmp/flint-c-clr.out 2>&1 \
+      || { tail -3 /tmp/flint-c-clr.out; echo "  FAIL $prog disagrees with native [clr]"; exit 1; }
+    echo "  ok   $prog agrees with the native runtime [clr]"
+    cmp -s /tmp/flint-c-jvm.out /tmp/flint-c-clr.out \
+      || { diff /tmp/flint-c-jvm.out /tmp/flint-c-clr.out | head -4
+           echo "  FAIL the two ports disagree on $prog"; exit 1; }
+  fi
+done
 
 # ONE CONFIG, THREE RUNTIMES. `:optimize [perf]` cannot be carried the same way
 # on any two of them: on wasm it changes the ARTIFACT -- a different runtime

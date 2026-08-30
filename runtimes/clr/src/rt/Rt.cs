@@ -324,6 +324,50 @@ public sealed class Rt : System.IDisposable {
                     roots.StackTop = at2;
                     VPush(m);
                 } break;
+                case Op.Set: {
+                    int nv = U16(ip); ip += 2;
+                    int bas = Mark();
+                    int si = Push(Sets.Empty(this));
+                    int at3 = roots.StackTop - nv;
+                    for (int i = 0; i < nv; i++) SetR(si, Sets.Conj(this, R(si), roots.Stack[at3 + i]));
+                    long sv = R(si);
+                    PopTo(bas);
+                    roots.StackTop = at3;
+                    VPush(sv);
+                } break;
+                case Op.List: {
+                    int nv = U16(ip); ip += 2;
+                    // The elements move to the shadow stack first: `Cons`
+                    // allocates, and the value stack is where they are now.
+                    int bas = Mark();
+                    int at4 = roots.StackTop - nv;
+                    for (int i = 0; i < nv; i++) Push(roots.Stack[at4 + i]);
+                    long lv = Seqs.FromRoots(this, bas, nv);
+                    PopTo(bas);
+                    roots.StackTop = at4;
+                    VPush(lv);
+                } break;
+                case Op.Throw:
+                case Op.Rethrow: {
+                    thrown = VPop();
+                    f.Ip = ip;
+                    if (!Unwind()) return Val.Nil;
+                    continue;
+                }
+                case Op.Try: {
+                    int off = I16(ip); ip += 2;
+                    Handler h = new Handler();
+                    h.frame = frames.Count - 1;
+                    h.stackTop = roots.StackTop;
+                    h.target = ip + off;
+                    // The SHADOW depth too, not just the value stack. A throw
+                    // out of a builtin that was midway through rooting would
+                    // otherwise leave those entries live for ever, and the
+                    // collector would keep whatever they name.
+                    h.shadow = roots.ShadowTop;
+                    handlers.Add(h);
+                } break;
+                case Op.PopHandler: handlers.RemoveAt(handlers.Count - 1); break;
                 case Op.TypeP: {
                     int c = U8(ip); ip += 1;
                     roots.Stack[roots.StackTop - 1] = Val.Bool(TypeP(c, roots.Stack[roots.StackTop - 1]));
@@ -378,6 +422,10 @@ public sealed class Rt : System.IDisposable {
             }
             return fn(this, calleeAt + 1, argc);
         }
+        if (Sets.IsSet(this, callee)) {
+            if (argc < 1) throw new System.NotSupportedException("a set takes 1 argument");
+            return Sets.Get(this, callee, roots.Stack[calleeAt + 1], Val.Nil);
+        }
         if (Maps.IsMap(this, callee)) {
             if (argc < 1) throw new System.NotSupportedException("a map takes 1 or 2 arguments");
             long dflt2 = argc >= 2 ? roots.Stack[calleeAt + 2] : Val.Nil;
@@ -398,12 +446,13 @@ public sealed class Rt : System.IDisposable {
     long Lookup(long coll, long k, long dflt) {
         if (Val.IsNil(coll)) return dflt;
         if (Maps.IsMap(this, coll)) return Maps.Get(this, coll, k, dflt);
+        if (Sets.IsSet(this, coll)) return Sets.Get(this, coll, k, dflt);
         if (IsHeapTy(coll, TyVec)) {
             if (!Val.IsFixnum(k)) return dflt;
             long got = Vec.Nth(this, coll, (int) Val.AsFixnum(k));
             return got == Val.NotFound ? dflt : got;
         }
-        throw new System.NotSupportedException("lookup needs sets ported");
+        return dflt;   // `get` on a non-collection is nil, as Clojure's is
     }
 
     /// `flint.types/code`'s canonical table, from `vm.rs`. The numbers are the
@@ -489,6 +538,47 @@ public sealed class Rt : System.IDisposable {
     }
 
     public void Dispose() => gc.Dispose();
+
+    /// Find the innermost handler that can take `thrown`, or false if nothing
+    /// can and the whole call must fail.
+    ///
+    /// The frames ABOVE the handler are dropped, not returned from: an
+    /// exception is not a return, and the operands those frames had pushed are
+    /// not values anybody wants. `StackTop` and `ShadowTop` are restored to
+    /// what they were when the handler was installed, which is what makes a
+    /// throw out of arbitrarily deep code leave no residue.
+    bool Unwind() {
+        while (handlers.Count != 0) {
+            Handler h = handlers[handlers.Count - 1];
+            handlers.RemoveAt(handlers.Count - 1);
+            // The frame that installed it may already be gone -- a handler
+            // outlives its frame when the throw came from further out.
+            if (h.frame >= frames.Count) continue;
+            while (frames.Count > h.frame + 1) frames.RemoveAt(frames.Count - 1);
+            roots.StackTop = h.stackTop;
+            roots.ShadowTop = h.shadow;
+            long exc = thrown;
+            thrown = Val.Nil;
+            VPush(exc);
+            frames[frames.Count - 1].Ip = h.target;
+            return true;
+        }
+        return false;
+    }
+
+    /// Call ANY callable with `args`: a closure, a builtin, a keyword, or a
+    /// collection in function position. `Call` handles only closures, and
+    /// `apply` has to handle whatever it is given.
+    public long Invoke(long f, long[] args) {
+        if (IsHeapTy(f, TyClosure)) return Call(f, args);
+        int save = roots.StackTop;
+        VReserve(args.Length + 1);
+        VPush(f);
+        foreach (long a in args) VPush(a);
+        long v = CallValue(save, args.Length);
+        roots.StackTop = save;
+        return v;
+    }
 
     /// Call `closure` with `args` from outside the interpreter.
     public long Call(long closure, long[] args) {

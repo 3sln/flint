@@ -44,7 +44,7 @@ public static class Seqs {
             return Val.IsFixnum(c) ? Val.Fixnum(Val.AsFixnum(c) + 1) : Val.Nil;
         }
         if (t == Obj.TyVec) return Val.Fixnum(Vec.Count(rt, v) + 1);
-        return Val.Nil;
+        return Val.Nil;   // a lazy seq or a range: walking it to count would force it
     }
 
     public static long EmptyList(Rt rt) {
@@ -66,12 +66,97 @@ public static class Seqs {
         return Val.Heap(a);
     }
 
+    // -----------------------------------------------------------------------
+    // Ranges, string seqs and LAZY seqs.
+
+    public const int LsThunk = 0, LsSeq = 1;
+
+    /// `TY_RANGE [start, end, step, meta]`. A `nil` end means UNBOUNDED, which
+    /// is what makes `(range)` an infinite seq rather than an error.
+    public static long Range(Rt rt, long start, long end, long step) {
+        int bas = rt.Mark();
+        int s = rt.Push(start), e = rt.Push(end), st = rt.Push(step);
+        long a = rt.Alloc(Obj.TyRange, 4);
+        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+        rt.SetSlot(a, 0, rt.R(s));
+        rt.SetSlot(a, 1, rt.R(e));
+        rt.SetSlot(a, 2, rt.R(st));
+        rt.SetSlot(a, 3, Val.Nil);
+        rt.PopTo(bas);
+        return Val.Heap(a);
+    }
+
+    static bool RangeEmpty(Rt rt, long v) {
+        long e = rt.Slot(v, 1);
+        if (Val.IsNil(e)) return false;   // unbounded
+        double s = Num.F64(rt, rt.Slot(v, 0));
+        double en = Num.F64(rt, e);
+        double st = Num.F64(rt, rt.Slot(v, 2));
+        if (st > 0) return s >= en;
+        if (st < 0) return s <= en;
+        // A zero step never advances. Empty rather than infinite, which is
+        // what Clojure does and is the answer that terminates.
+        return true;
+    }
+
+    static long Strseq(Rt rt, long s, int i) {
+        int bas = rt.Mark();
+        int si = rt.Push(s);
+        long a = rt.Alloc(Obj.TyStrseq, 3);
+        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+        rt.SetSlot(a, 0, rt.R(si));
+        rt.SetSlot(a, 1, Val.Fixnum(i));
+        rt.SetSlot(a, 2, Val.Nil);
+        rt.PopTo(bas);
+        return Val.Heap(a);
+    }
+
+    /// `TY_LAZYSEQ [thunk, seq, meta]`. The thunk becomes NIL once forced,
+    /// which is both the memo and the "already forced" flag.
+    public static long LazySeq(Rt rt, long thunk) {
+        int bas = rt.Mark();
+        int t = rt.Push(thunk);
+        long a = rt.Alloc(Obj.TyLazyseq, 3);
+        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+        rt.SetSlot(a, LsThunk, rt.R(t));
+        rt.SetSlot(a, LsSeq, Val.Nil);
+        rt.SetSlot(a, 2, Val.Nil);
+        rt.PopTo(bas);
+        return Val.Heap(a);
+    }
+
+    /// Force a lazy seq, memoising the result.
+    ///
+    /// The LOOP is not an optimisation: a thunk may return another lazy seq,
+    /// and a chain of them is what `(take 1 (iterate f x))` builds. Recursing
+    /// instead would put that chain on the HOST stack, which is exactly what
+    /// the green-thread design keeps off it.
+    public static long Force(Rt rt, long ls) {
+        long thunk = rt.Slot(ls, LsThunk);
+        if (Val.IsNil(thunk)) return rt.Slot(ls, LsSeq);
+        int bas = rt.Mark();
+        int li = rt.Push(ls);
+        int vi = rt.Push(rt.Call(thunk, System.Array.Empty<long>()));
+        while (Val.IsHeap(rt.R(vi)) && Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(vi))) == Obj.TyLazyseq) {
+            long t2 = rt.Slot(rt.R(vi), LsThunk);
+            if (Val.IsNil(t2)) { rt.SetR(vi, rt.Slot(rt.R(vi), LsSeq)); break; }
+            rt.SetR(vi, rt.Call(t2, System.Array.Empty<long>()));
+        }
+        long cur = rt.R(vi);
+        long l = rt.R(li);
+        rt.PopTo(bas);
+        rt.SetSlot(Val.AsHeap(l), LsThunk, Val.Nil);
+        rt.SetSlot(Val.AsHeap(l), LsSeq, cur);
+        return cur;
+    }
+
     /// `seq`: nil for an empty collection, otherwise a seq object.
     ///
     /// NIL rather than an empty seq is the whole convention -- `(seq [])` is
     /// nil, and every `while (s)` loop in the library depends on it.
     public static long Seq(Rt rt, long v) {
         if (Val.IsNil(v)) return Val.Nil;
+        if (Str.IsString(rt, v)) return Str.CharLen(rt, v) == 0 ? Val.Nil : Strseq(rt, v, 0);
         if (!Val.IsHeap(v)) return Val.Nil;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
         switch (t) {
@@ -80,6 +165,23 @@ public static class Seqs {
             case Obj.TyVecseq: return v;
             case Obj.TyVec: return Vec.Count(rt, v) == 0 ? Val.Nil : Vecseq(rt, v, 0);
             case Obj.TyMapentry: return Vecseq(rt, EntryAsVec(rt, v), 0);
+            case Obj.TyStrseq: return v;
+            case Obj.TyRange: return RangeEmpty(rt, v) ? Val.Nil : v;
+            case Obj.TyLazyseq: {
+                int bas = rt.Mark();
+                int fi = rt.Push(Force(rt, v));
+                long outv = Val.IsNil(rt.R(fi)) ? Val.Nil : Seq(rt, rt.R(fi));
+                rt.PopTo(bas);
+                return outv;
+            }
+            case Obj.TySet: {
+                if (Sets.Count(rt, v) == 0) return Val.Nil;
+                int bas = rt.Mark();
+                int ev = rt.Push(Sets.ElementVector(rt, v));
+                long outv = Vecseq(rt, rt.R(ev), 0);
+                rt.PopTo(bas);
+                return outv;
+            }
             case Obj.TyArraymap:
             case Obj.TyHashmap: {
                 if (Maps.Count(rt, v) == 0) return Val.Nil;
@@ -114,6 +216,8 @@ public static class Seqs {
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(s));
         if (t == Obj.TyCons) return rt.Slot(s, CFirst);
         if (t == Obj.TyVecseq) return Vec.Nth(rt, rt.Slot(s, 0), (int) Val.AsFixnum(rt.Slot(s, 1)));
+        if (t == Obj.TyStrseq) return Str.Nth(rt, rt.Slot(s, 0), (int) Val.AsFixnum(rt.Slot(s, 1)));
+        if (t == Obj.TyRange) return rt.Slot(s, 0);
         throw new System.NotSupportedException("first over " + rt.Describe(v));
     }
 
@@ -128,6 +232,23 @@ public static class Seqs {
             long vec = rt.Slot(s, 0);
             int i = (int) Val.AsFixnum(rt.Slot(s, 1)) + 1;
             return i >= Vec.Count(rt, vec) ? Val.Nil : Vecseq(rt, vec, i);
+        }
+        if (t == Obj.TyStrseq) {
+            long str = rt.Slot(s, 0);
+            int i = (int) Val.AsFixnum(rt.Slot(s, 1)) + 1;
+            return i >= Str.CharLen(rt, str) ? Val.Nil : Strseq(rt, str, i);
+        }
+        if (t == Obj.TyRange) {
+            // A fresh range, not a mutated cursor: a range IS a persistent
+            // value, so walking one must not disturb anything else holding it.
+            int bas = rt.Mark();
+            int ri = rt.Push(s);
+            int ni = rt.Push(Num.Add(rt, rt.Slot(rt.R(ri), 0), rt.Slot(rt.R(ri), 2)));
+            long nr = Range(rt, rt.R(ni), rt.Slot(rt.R(ri), 1), rt.Slot(rt.R(ri), 2));
+            int nri = rt.Push(nr);
+            long outv = RangeEmpty(rt, rt.R(nri)) ? Val.Nil : rt.R(nri);
+            rt.PopTo(bas);
+            return outv;
         }
         throw new System.NotSupportedException("next over " + rt.Describe(v));
     }

@@ -178,6 +178,39 @@ public static class Img {
                 rt.PopTo(bas);
                 return Val.Heap(a);
             }
+            case KVector:
+            case KList:
+            case KSet: {
+                // The elements are EARLIER constants, by index: the writer
+                // emits in dependency order so one pass suffices.
+                int n = (int) r.U32();
+                int bas = rt.Mark();
+                for (int i = 0; i < n; i++) rt.Push(consts[(int) r.U32()]);
+                long outv;
+                if (tag == KVector) {
+                    outv = Vec.FromRoots(rt, bas, n);
+                } else if (tag == KList) {
+                    outv = Seqs.FromRoots(rt, bas, n);
+                } else {
+                    int si = rt.Push(Sets.Empty(rt));
+                    for (int i = 0; i < n; i++) rt.SetR(si, Sets.Conj(rt, rt.R(si), rt.R(bas + i)));
+                    outv = rt.R(si);
+                }
+                rt.PopTo(bas);
+                return outv;
+            }
+            case KMap: {
+                int n = (int) r.U32();
+                int bas = rt.Mark();
+                for (int i = 0; i < 2 * n; i++) rt.Push(consts[(int) r.U32()]);
+                int mi = rt.Push(Maps.Empty(rt));
+                for (int i = 0; i < n; i++) {
+                    rt.SetR(mi, Maps.Assoc(rt, rt.R(mi), rt.R(bas + 2 * i), rt.R(bas + 2 * i + 1)));
+                }
+                long outv = rt.R(mi);
+                rt.PopTo(bas);
+                return outv;
+            }
             case KFn: {
                 long f = r.U32();
                 // A closure with no upvalues: a top-level fn is a constant.

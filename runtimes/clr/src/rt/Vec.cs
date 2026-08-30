@@ -207,6 +207,52 @@ public static class Vec {
         return outv;
     }
 
+    static long DoAssoc(Rt rt, int level, long node, int i, long val) {
+        int bas = rt.Mark();
+        int n = rt.Push(node), v = rt.Push(val);
+        long ret = NodeClone(rt, rt.R(n), Width, Val.Nil);
+        if (Val.IsNil(ret)) { rt.PopTo(bas); return Val.Nil; }
+        int ri = rt.Push(ret);
+        if (level == 0) {
+            NodeSet(rt, rt.R(ri), i & Mask, rt.R(v));
+        } else {
+            int subidx = (int)((uint) i >> level) & Mask;
+            long child = NodeGet(rt, rt.R(n), subidx);
+            long nc = DoAssoc(rt, level - Bits, child, i, rt.R(v));
+            NodeSet(rt, rt.R(ri), subidx, nc);
+        }
+        long outv = rt.R(ri);
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    /// `assoc` at an index. `i == count` APPENDS, which is Clojure's rule and
+    /// the only index past the end that is legal.
+    public static long Assoc(Rt rt, long v, int i, long x) {
+        int cnt = Count(rt, v);
+        if (i == cnt) return Conj(rt, v, x);
+        int bas = rt.Mark();
+        int vi = rt.Push(v), xi = rt.Push(x);
+        long outv;
+        if (i >= TailOff(rt, v)) {
+            long tl0 = Tail(rt, rt.R(vi));
+            int tl = NodeLen(rt, tl0);
+            int nti = rt.Push(NodeClone(rt, tl0, tl, Val.Nil));
+            NodeSet(rt, rt.R(nti), i - TailOff(rt, rt.R(vi)), rt.R(xi));
+            long vv = rt.R(vi);
+            outv = NewVec(rt, cnt, Shift(rt, vv), Root(rt, vv), rt.R(nti), rt.Slot(vv, VMeta));
+        } else {
+            long vv = rt.R(vi);
+            int sh = Shift(rt, vv);
+            long nr = DoAssoc(rt, sh, Root(rt, vv), i, rt.R(xi));
+            int nri = rt.Push(nr);
+            vv = rt.R(vi);
+            outv = NewVec(rt, cnt, sh, rt.R(nri), Tail(rt, vv), rt.Slot(vv, VMeta));
+        }
+        rt.PopTo(bas);
+        return outv;
+    }
+
     /// Build a vector from `n` values already rooted at `bas` on the shadow
     /// stack. What the `VECTOR` opcode uses.
     public static long FromRoots(Rt rt, int bas, int n) {

@@ -47,6 +47,7 @@ public static class Eq {
             return true;
         }
         if (Maps.IsMap(rt, a) && Maps.IsMap(rt, b)) return Maps.Eq(rt, a, b);
+        if (Sets.IsSet(rt, a) && Sets.IsSet(rt, b)) return Sets.Eq(rt, a, b);
         // A vector and a seq holding the same elements ARE equal in Clojure:
         // `=` is over the sequential abstraction, not the concrete type.
         bool sa = rt.IsSequential(a);
@@ -99,6 +100,7 @@ public static class Eq {
             }
             case Obj.TyArraymap:
             case Obj.TyHashmap: return Maps.Hash(rt, v);
+            case Obj.TySet: return Sets.Hash(rt, v);
             default: {
                 if (rt.IsSeq(v)) {
                     int bas = rt.Mark();

@@ -321,6 +321,32 @@ public final class Rt {
                     roots.stackTop = at;
                     vpush(m);
                 }
+                case Op.THROW -> {
+                    thrown = vpop();
+                    f.ip = ip;
+                    if (!unwind()) return Val.NIL;
+                    continue;
+                }
+                case Op.RETHROW -> {
+                    thrown = vpop();
+                    f.ip = ip;
+                    if (!unwind()) return Val.NIL;
+                    continue;
+                }
+                case Op.TRY -> {
+                    int off = i16(ip); ip += 2;
+                    Handler h = new Handler();
+                    h.frame = frames.size() - 1;
+                    h.stackTop = roots.stackTop;
+                    h.target = ip + off;
+                    // The SHADOW depth too, not just the value stack. A throw
+                    // out of a builtin that was midway through rooting would
+                    // otherwise leave those entries live for ever, and the
+                    // collector would keep whatever they name.
+                    h.shadow = roots.shadowTop;
+                    handlers.add(h);
+                }
+                case Op.POP_HANDLER -> handlers.remove(handlers.size() - 1);
                 case Op.SET -> {
                     int nv = u16(ip); ip += 2;
                     int base = mark();
@@ -508,6 +534,32 @@ public final class Rt {
     /// sequential without being seqs. `=` is over this, not over seq-ness.
     boolean isSequential(long v) {
         return isSeq(v) || isHeapTy(v, TY_VEC) || isHeapTy(v, TY_MAPENTRY);
+    }
+
+    /// Find the innermost handler that can take `thrown`, or false if nothing
+    /// can and the whole call must fail.
+    ///
+    /// The frames ABOVE the handler are dropped, not returned from: an
+    /// exception is not a return, and the operands those frames had pushed are
+    /// not values anybody wants. `stackTop` and `shadowTop` are restored to
+    /// what they were when the handler was installed, which is what makes a
+    /// throw out of arbitrarily deep code leave no residue.
+    boolean unwind() {
+        while (!handlers.isEmpty()) {
+            Handler h = handlers.remove(handlers.size() - 1);
+            // The frame that installed it may already be gone -- a handler
+            // outlives its frame when the throw came from further out.
+            if (h.frame >= frames.size()) continue;
+            while (frames.size() > h.frame + 1) frames.remove(frames.size() - 1);
+            roots.stackTop = h.stackTop;
+            roots.shadowTop = h.shadow;
+            long exc = thrown;
+            thrown = Val.NIL;
+            vpush(exc);
+            frames.get(frames.size() - 1).ip = h.target;
+            return true;
+        }
+        return false;
     }
 
     /// Call ANY callable with `args`: a closure, a builtin, a keyword, or a

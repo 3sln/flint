@@ -340,6 +340,28 @@ public final class Builtins {
         });
         def("hash", (rt, at, n) -> Val.fixnum(Eq.hashValue(rt, rt.vat(at))));
 
+        // Exceptions. `ex-info` is `[msg, data, cause]`, and `throw` is an
+        // OPCODE rather than a builtin -- these are what a handler reads.
+        def("ex-info", (rt, at, n) -> {
+            int base = rt.mark();
+            int mi = rt.push(rt.vat(at));
+            int di = rt.push(n > 1 ? rt.vat(at + 1) : Val.NIL);
+            int ci = rt.push(n > 2 ? rt.vat(at + 2) : Val.NIL);
+            long a = rt.alloc(TY_EXINFO, 3);
+            if (a == 0) { rt.popTo(base); return Val.NIL; }
+            rt.setSlot(a, 0, rt.r(mi));
+            rt.setSlot(a, 1, rt.r(di));
+            rt.setSlot(a, 2, rt.r(ci));
+            rt.popTo(base);
+            return Val.heap(a);
+        });
+        def("ex-message", (rt, at, n) ->
+            rt.isHeapTy(rt.vat(at), TY_EXINFO) ? rt.slot(rt.vat(at), 0) : Val.NIL);
+        def("ex-data", (rt, at, n) ->
+            rt.isHeapTy(rt.vat(at), TY_EXINFO) ? rt.slot(rt.vat(at), 1) : Val.NIL);
+        def("ex-cause", (rt, at, n) ->
+            rt.isHeapTy(rt.vat(at), TY_EXINFO) ? rt.slot(rt.vat(at), 2) : Val.NIL);
+
         // `apply`: spread the trailing seq onto the argument list.
         //
         // The spread arguments go on the SHADOW stack, not into a host array:
