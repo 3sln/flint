@@ -666,6 +666,18 @@ predicted there: specialisation plus keeping an integer expression unboxed took
 the JVM's AOT from 5.9x to 12x over its own interpreter (`0029`). That is
 independent evidence for the mechanism, on a backend where it was cheap to try.
 
+> **Those two backends are gone**, deleted with the boxed port they belonged to
+> (`doc/ports.md`). The evidence above stands as evidence — it was measured —
+> but it cannot be re-run here. Nothing was cheap about that backend except the
+> value model: it emitted bytecode over a representation where every value was
+> already a host object, and the runtime that replaced it uses NaN-boxed longs
+> in a flat heap. An AOT for THAT is a new backend, not a port.
+>
+> `:optimize [perf]` is therefore a wasm and native concern. The JVM and CLR
+> still carry and read the flag — `RtFlags` prints `flags=1 aot=false` — because
+> a decision no runtime reads is one that can stop being written without anyone
+> noticing.
+
 ## The bug that was open for four days, and what it was
 
 **A program that combined green threads with a HOST port produced wrong answers
