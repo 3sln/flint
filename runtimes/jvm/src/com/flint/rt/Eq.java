@@ -14,66 +14,111 @@ import static com.flint.rt.Obj.*;
 public final class Eq {
     private Eq() {}
 
+    /// The three things `=` dispatches on. A value's CATEGORY, not its type: a
+    /// vector, a list and a map entry are all sequential and compare
+    /// elementwise, which is what makes `(= [1 2] '(1 2))` true.
+    public static final int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1, CAT_MAP = 2, CAT_SET = 3;
+
+    public static int category(Rt rt, long v) {
+        if (!Val.isHeap(v)) return CAT_SCALAR;
+        switch (ty(rt.gc.sp, Val.asHeap(v))) {
+            case TY_CONS: case TY_EMPTY_LIST: case TY_LAZYSEQ: case TY_VECSEQ:
+            case TY_STRSEQ: case TY_RANGE: case TY_VEC: case TY_MAPENTRY:
+                return CAT_SEQUENTIAL;
+            case TY_ARRAYMAP: case TY_HASHMAP: return CAT_MAP;
+            case TY_SET: return CAT_SET;
+            default: return CAT_SCALAR;
+        }
+    }
+
     public static boolean eq(Rt rt, long a, long b) {
+        // Doubles FIRST: bit equality would wrongly make NaN equal to itself,
+        // and would wrongly separate 0.0 from -0.0.
+        if (Val.isDouble(a) || Val.isDouble(b)) {
+            return Val.isDouble(a) && Val.isDouble(b) && Val.asDouble(a) == Val.asDouble(b);
+        }
         if (a == b) return true;
-        if (Val.isFixnum(a) && Val.isFixnum(b)) return Val.asFixnum(a) == Val.asFixnum(b);
-        if (Val.isDouble(a) && Val.isDouble(b)) return Val.asDouble(a) == Val.asDouble(b);
-        if (Str.isString(rt, a) && Str.isString(rt, b)) {
+        if (Num.isInt(rt, a) || Num.isInt(rt, b)) {
+            // Integers are CANONICAL, so the only way two are equal without
+            // being bit-equal is two distinct boxes.
+            Long x = Num.asI64(rt, a), y = Num.asI64(rt, b);
+            return x != null && y != null && x.longValue() == y.longValue();
+        }
+        if (!Val.isHeap(a) || !Val.isHeap(b)) {
+            // Immediates are canonical: an inline string can only equal another
+            // inline string, and that would have been bit equality. So a
+            // boolean and a list are simply NOT EQUAL -- which is Clojure's
+            // answer, and refusing here instead was a runtime error where a
+            // `false` belonged.
+            return false;
+        }
+        int ca = category(rt, a), cb = category(rt, b);
+        if (ca != cb) return false;
+        if (ca == CAT_SEQUENTIAL) return seqEq(rt, a, b);
+        if (ca == CAT_MAP) return Maps.eq(rt, a, b);
+        if (ca == CAT_SET) return Sets.eq(rt, a, b);
+
+        int ta = ty(rt.gc.sp, Val.asHeap(a)), tb = ty(rt.gc.sp, Val.asHeap(b));
+        // A string is a string WHATEVER TIER it is in: `(str a b)` and a flat
+        // string of the same bytes must be `=` and must hash alike, or a map
+        // keyed by one is not found by the other (`doc/decisions/0011`). This
+        // is BEFORE the tag comparison, because the tags differ and the values
+        // do not. Byte strings compare by content across both tiers for the
+        // same reason.
+        if ((ta == TY_STR || ta == TY_ROPE) && (tb == TY_STR || tb == TY_ROPE)) {
             return java.util.Arrays.equals(Str.bytes(rt, a), Str.bytes(rt, b));
         }
-        boolean ka = Val.isInlineKw(a) || rt.isHeapTy(a, TY_KW);
-        boolean kb = Val.isInlineKw(b) || rt.isHeapTy(b, TY_KW);
-        if (ka || kb) {
-            if (!(ka && kb)) return false;
-            // Both inline, or both interned: identity IS equality, which is the
-            // whole point of `doc/decisions/0011`'s tiers. A keyword short
-            // enough to be inline is never on the heap, and one long enough to
-            // be on the heap is interned, so the two forms never meet.
-            return a == b;
+        if ((ta == TY_BYTES || ta == TY_BROPE) && (tb == TY_BYTES || tb == TY_BROPE)) {
+            return Bytes.eq(rt, a, b);
         }
-        // Symbols are interned too, so `a == b` above already answered it. Two
-        // distinct symbol objects with the same name would be an interning bug
-        // rather than a case to handle, and comparing slots here would HIDE it.
-        if (rt.isHeapTy(a, TY_SYM) || rt.isHeapTy(b, TY_SYM)) return false;
-        if (rt.isHeapTy(a, TY_VEC) && rt.isHeapTy(b, TY_VEC)) {
-            int n = Vec.count(rt, a);
-            if (n != Vec.count(rt, b)) return false;
-            for (int i = 0; i < n; i++) {
-                if (!eq(rt, Vec.nth(rt, a, i), Vec.nth(rt, b, i))) return false;
-            }
-            return true;
+        if (ta != tb) return false;
+        if (ta == TY_STR) {
+            int la = len(rt.gc.sp, Val.asHeap(a)), lb = len(rt.gc.sp, Val.asHeap(b));
+            if (la != lb) return false;
+            // Both interned and not bit-equal means NOT EQUAL, with no need to
+            // look at the bytes at all.
+            if (la <= Interns.INTERN_MAX) return false;
+            return java.util.Arrays.equals(Str.bytes(rt, a), Str.bytes(rt, b));
         }
-        if (Maps.isMap(rt, a) && Maps.isMap(rt, b)) return Maps.eq(rt, a, b);
-        if (Sets.isSet(rt, a) && Sets.isSet(rt, b)) return Sets.eq(rt, a, b);
-        // A vector and a seq holding the same elements ARE equal in Clojure:
-        // `=` is over the sequential abstraction, not the concrete type.
-        boolean sa = rt.isSequential(a);
-        boolean sb = rt.isSequential(b);
-        if (sa && sb) {
-            int base = rt.mark();
-            int x = rt.push(Seqs.seq(rt, a)), y = rt.push(Seqs.seq(rt, b));
-            boolean ok = true;
-            for (;;) {
-                boolean ex = Val.isNil(rt.r(x)), ey = Val.isNil(rt.r(y));
-                if (ex || ey) { ok = ex && ey; break; }
-                if (!eq(rt, Seqs.first(rt, rt.r(x)), Seqs.first(rt, rt.r(y)))) { ok = false; break; }
-                long nx = Seqs.next(rt, rt.r(x));
-                long ny = Seqs.next(rt, rt.r(y));
-                rt.setR(x, nx);
-                rt.setR(y, ny);
-            }
-            rt.popTo(base);
-            return ok;
+        if (ta == TY_SYM) {
+            // By (ns, name), NOT by identity. `with-meta` makes a DISTINCT
+            // object that must still be `=` -- and the analyser keys its
+            // environment by symbols carrying source metadata, so treating
+            // interning as identity here made every local look unbound. It
+            // surfaced as "unable to resolve symbol: i" from the compiler
+            // compiling a `loop`.
+            return rt.slot(a, 0) == rt.slot(b, 0) && rt.slot(a, 1) == rt.slot(b, 1);
         }
-        if (Val.isHeap(a) || Val.isHeap(b)) {
-            if (Val.isHeap(a) && Val.isHeap(b)
-                && ty(rt.gc.sp, Val.asHeap(a)) != ty(rt.gc.sp, Val.asHeap(b))) {
-                return false;
-            }
-            throw new UnsupportedOperationException(
-                "= over " + rt.describe(a) + " and " + rt.describe(b) + " needs more of the data structures");
+        if (ta == TY_KW) {
+            // A keyword carries no metadata slot, so interning IS identity for
+            // it and `a == b` above already answered.
+            return false;
         }
+        if (ta == TY_EXINFO) {
+            return eq(rt, rt.slot(a, 0), rt.slot(b, 0))
+                && eq(rt, rt.slot(a, 1), rt.slot(b, 1));
+        }
+        // Everything else is compared by IDENTITY: an atom, a var, a regex, a
+        // function. That is Clojure's rule and not a gap.
         return false;
+    }
+
+    /// Elementwise, over the SEQUENTIAL abstraction -- so a vector and a list
+    /// with the same elements are equal, which is what `category` is for.
+    static boolean seqEq(Rt rt, long a, long b) {
+        int base = rt.mark();
+        int x = rt.push(Seqs.seq(rt, a)), y = rt.push(Seqs.seq(rt, b));
+        boolean ok = true;
+        for (;;) {
+            boolean ex = Val.isNil(rt.r(x)), ey = Val.isNil(rt.r(y));
+            if (ex || ey) { ok = ex && ey; break; }
+            if (!eq(rt, Seqs.first(rt, rt.r(x)), Seqs.first(rt, rt.r(y)))) { ok = false; break; }
+            long nx = Seqs.next(rt, rt.r(x)), ny = Seqs.next(rt, rt.r(y));
+            rt.setR(x, nx);
+            rt.setR(y, ny);
+        }
+        rt.popTo(base);
+        return ok;
     }
 
     /// The hash of a value, agreeing with `eq` above and with Clojure's.

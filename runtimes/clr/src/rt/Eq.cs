@@ -17,66 +17,101 @@ namespace Flint.Rt;
 /// code does; that requirement is the reason `nodeFind` roots its walk.
 public static class Eq {
 
+    /// The three things `=` dispatches on. A value's CATEGORY, not its type: a
+    /// vector, a list and a map entry are all sequential and compare
+    /// elementwise, which is what makes `(= [1 2] '(1 2))` true.
+    public const int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1, CAT_MAP = 2, CAT_SET = 3;
+
+    public static int Category(Rt rt, long v) {
+        if (!Val.IsHeap(v)) return CAT_SCALAR;
+        switch (Obj.Ty(rt.gc.sp, Val.AsHeap(v))) {
+            case Obj.TyCons: case Obj.TyEmptyList: case Obj.TyLazyseq: case Obj.TyVecseq:
+            case Obj.TyStrseq: case Obj.TyRange: case Obj.TyVec: case Obj.TyMapentry:
+                return CAT_SEQUENTIAL;
+            case Obj.TyArraymap: case Obj.TyHashmap: return CAT_MAP;
+            case Obj.TySet: return CAT_SET;
+            default: return CAT_SCALAR;
+        }
+    }
+
     public static bool Equal(Rt rt, long a, long b) {
+        // Doubles FIRST: bit equality would wrongly make NaN equal to itself,
+        // and would wrongly separate 0.0 from -0.0.
+        if (Val.IsDouble(a) || Val.IsDouble(b))
+            return Val.IsDouble(a) && Val.IsDouble(b) && Val.AsDouble(a) == Val.AsDouble(b);
         if (a == b) return true;
-        if (Val.IsFixnum(a) && Val.IsFixnum(b)) return Val.AsFixnum(a) == Val.AsFixnum(b);
-        if (Val.IsDouble(a) && Val.IsDouble(b)) return Val.AsDouble(a) == Val.AsDouble(b);
-        if (Str.IsString(rt, a) && Str.IsString(rt, b)) {
+        if (Num.IsInt(rt, a) || Num.IsInt(rt, b)) {
+            // Integers are CANONICAL, so the only way two are equal without
+            // being bit-equal is two distinct boxes.
+            long? x = Num.AsI64(rt, a), y = Num.AsI64(rt, b);
+            return x.HasValue && y.HasValue && x.Value == y.Value;
+        }
+        if (!Val.IsHeap(a) || !Val.IsHeap(b)) {
+            // Immediates are canonical: an inline string can only equal another
+            // inline string, and that would have been bit equality. So a
+            // boolean and a list are simply NOT EQUAL -- which is Clojure's
+            // answer, and refusing here instead was a runtime error where a
+            // `false` belonged.
+            return false;
+        }
+        int ca = Category(rt, a), cb = Category(rt, b);
+        if (ca != cb) return false;
+        if (ca == CAT_SEQUENTIAL) return SeqEq(rt, a, b);
+        if (ca == CAT_MAP) return Maps.Eq(rt, a, b);
+        if (ca == CAT_SET) return Sets.Eq(rt, a, b);
+
+        int ta = Obj.Ty(rt.gc.sp, Val.AsHeap(a)), tb = Obj.Ty(rt.gc.sp, Val.AsHeap(b));
+        // A string is a string WHATEVER TIER it is in: `(str a b)` and a flat
+        // string of the same bytes must be `=` and must hash alike, or a map
+        // keyed by one is not found by the other (`doc/decisions/0011`).
+        if ((ta == Obj.TyStr || ta == Obj.TyRope) && (tb == Obj.TyStr || tb == Obj.TyRope))
+            return SameBytes(Str.Bytes(rt, a), Str.Bytes(rt, b));
+        if ((ta == Obj.TyBytes || ta == Obj.TyBrope) && (tb == Obj.TyBytes || tb == Obj.TyBrope))
+            return Bytes.Eq(rt, a, b);
+        if (ta != tb) return false;
+        if (ta == Obj.TyStr) {
+            int la = Obj.Len(rt.gc.sp, Val.AsHeap(a)), lb = Obj.Len(rt.gc.sp, Val.AsHeap(b));
+            if (la != lb) return false;
+            // Both interned and not bit-equal means NOT EQUAL, with no need to
+            // look at the bytes at all.
+            if (la <= Interns.InternMax) return false;
             return SameBytes(Str.Bytes(rt, a), Str.Bytes(rt, b));
         }
-        bool ka = Val.IsInlineKw(a) || rt.IsHeapTy(a, Obj.TyKw);
-        bool kb = Val.IsInlineKw(b) || rt.IsHeapTy(b, Obj.TyKw);
-        if (ka || kb) {
-            if (!(ka && kb)) return false;
-            // Both inline, or both interned: identity IS equality, which is
-            // the whole point of `doc/decisions/0011`'s tiers. A keyword short
-            // enough to be inline is never on the heap, and one long enough to
-            // be on the heap is interned, so the two forms never meet.
-            return a == b;
+        if (ta == Obj.TySym) {
+            // By (ns, name), NOT by identity. `with-meta` makes a DISTINCT
+            // object that must still be `=` -- and the analyser keys its
+            // environment by symbols carrying source metadata, so treating
+            // interning as identity here made every local look unbound.
+            return rt.Slot(a, 0) == rt.Slot(b, 0) && rt.Slot(a, 1) == rt.Slot(b, 1);
         }
-        // Symbols are interned too, so `a == b` above already answered it. Two
-        // distinct symbol objects with the same name would be an interning bug
-        // rather than a case to handle, and comparing slots here would HIDE it.
-        if (rt.IsHeapTy(a, Obj.TySym) || rt.IsHeapTy(b, Obj.TySym)) return false;
-        if (rt.IsHeapTy(a, Obj.TyVec) && rt.IsHeapTy(b, Obj.TyVec)) {
-            int n = Vec.Count(rt, a);
-            if (n != Vec.Count(rt, b)) return false;
-            for (int i = 0; i < n; i++) {
-                if (!Equal(rt, Vec.Nth(rt, a, i), Vec.Nth(rt, b, i))) return false;
-            }
-            return true;
+        if (ta == Obj.TyKw) {
+            // A keyword carries no metadata slot, so interning IS identity for
+            // it and `a == b` above already answered.
+            return false;
         }
-        if (Maps.IsMap(rt, a) && Maps.IsMap(rt, b)) return Maps.Eq(rt, a, b);
-        if (Sets.IsSet(rt, a) && Sets.IsSet(rt, b)) return Sets.Eq(rt, a, b);
-        // A vector and a seq holding the same elements ARE equal in Clojure:
-        // `=` is over the sequential abstraction, not the concrete type.
-        bool sa = rt.IsSequential(a);
-        bool sb = rt.IsSequential(b);
-        if (sa && sb) {
-            int bas = rt.Mark();
-            int x = rt.Push(Seqs.Seq(rt, a)), y = rt.Push(Seqs.Seq(rt, b));
-            bool ok = true;
-            for (;;) {
-                bool ex = Val.IsNil(rt.R(x)), ey = Val.IsNil(rt.R(y));
-                if (ex || ey) { ok = ex && ey; break; }
-                if (!Equal(rt, Seqs.First(rt, rt.R(x)), Seqs.First(rt, rt.R(y)))) { ok = false; break; }
-                long nx = Seqs.Next(rt, rt.R(x));
-                long ny = Seqs.Next(rt, rt.R(y));
-                rt.SetR(x, nx);
-                rt.SetR(y, ny);
-            }
-            rt.PopTo(bas);
-            return ok;
-        }
-        if (Val.IsHeap(a) || Val.IsHeap(b)) {
-            if (Val.IsHeap(a) && Val.IsHeap(b)
-                && Obj.Ty(rt.gc.sp, Val.AsHeap(a)) != Obj.Ty(rt.gc.sp, Val.AsHeap(b))) {
-                return false;
-            }
-            throw new System.NotSupportedException(
-                "= over " + rt.Describe(a) + " and " + rt.Describe(b) + " needs more of the data structures");
-        }
+        if (ta == Obj.TyExinfo)
+            return Equal(rt, rt.Slot(a, 0), rt.Slot(b, 0)) && Equal(rt, rt.Slot(a, 1), rt.Slot(b, 1));
+        // Everything else is compared by IDENTITY: an atom, a var, a regex, a
+        // function. That is Clojure's rule and not a gap.
         return false;
+    }
+
+    /// Elementwise, over the SEQUENTIAL abstraction -- so a vector and a list
+    /// with the same elements are equal, which is what `Category` is for.
+    static bool SeqEq(Rt rt, long a, long b) {
+        int bas = rt.Mark();
+        int x = rt.Push(Seqs.Seq(rt, a)), y = rt.Push(Seqs.Seq(rt, b));
+        bool ok = true;
+        for (;;) {
+            bool ex = Val.IsNil(rt.R(x)), ey = Val.IsNil(rt.R(y));
+            if (ex || ey) { ok = ex && ey; break; }
+            if (!Equal(rt, Seqs.First(rt, rt.R(x)), Seqs.First(rt, rt.R(y)))) { ok = false; break; }
+            long nx = Seqs.Next(rt, rt.R(x)), ny = Seqs.Next(rt, rt.R(y));
+            rt.SetR(x, nx);
+            rt.SetR(y, ny);
+        }
+        rt.PopTo(bas);
+        return ok;
     }
 
     /// The hash of a value, agreeing with `eq` above and with Clojure's.
