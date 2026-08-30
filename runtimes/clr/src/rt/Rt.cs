@@ -660,6 +660,24 @@ public sealed class Rt : System.IDisposable {
     /// through untouched rather than treating it as a failure.
     public bool Parked() => thrown == Val.Park;
 
+    /// Carry on a program a snapshot restored.
+    ///
+    /// A snapshot is faithful: if the program was mid-park when it was taken,
+    /// `thrown` comes back holding the PARK sentinel. That is right for a
+    /// sandbox parked on a PORT -- it really is still waiting -- and wrong for
+    /// one paused by the SLICE, where the pause is over the moment somebody
+    /// resumes. Clearing a courtesy yield here is exactly what `Settle` does
+    /// for a running scheduler; without it every later call saw a park already
+    /// in flight, rewound, and answered nil.
+    public long Resume() {
+        if (Parked() && parkOn == Conc.PARK_YIELD) {
+            thrown = Val.Nil;
+            parkOn = Val.Nil;
+        }
+        if (schedInstalled) return Conc.Drive(this);
+        return Run(0);
+    }
+
     /// Run `closure` as the program's ENTRY, under the scheduler if one ever
     /// appears.
     ///

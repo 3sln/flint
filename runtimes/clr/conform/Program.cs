@@ -14,6 +14,7 @@ public static class Program {
         if (args.Length >= 1 && args[0] == "--rt-snapshot") return RtSnapshot();
         if (args.Length >= 1 && args[0] == "--rt-hash") return RtHash();
         if (args.Length >= 1 && args[0] == "--rt-maps") return RtMaps();
+        if (args.Length >= 3 && args[0] == "--rt-shelve") return RtShelve(args[1], args[2]);
         if (args.Length >= 2 && args[0] == "--rt-image")
             return RtImage(args[1], args.Length > 2 ? args[2] : null);
         if (args.Length >= 3 && args[0] == "--selfhost") return SelfHost(args[1], args[2]);
@@ -401,6 +402,100 @@ public static class Program {
 
     rt.PopTo(bas);
         if (mapFails > 0) { Console.WriteLine("  " + mapFails + " failed"); return 1; }
+        return 0;
+    }
+
+
+    // ------------------------------------------------------------------
+    // SHELVING A REAL PROGRAM, mid-run. A mirror of the JVM's `RtShelve.java`,
+    // printing the same lines so the gate can compare them.
+
+    static int shelveFails;
+
+    static void SOk(string what, bool cond) {
+        Console.WriteLine((cond ? "  ok   " : "  FAIL ") + what);
+        if (!cond) shelveFails++;
+    }
+
+    static string SShow(Flint.Rt.Rt rt, long v) =>
+        Flint.Rt.Val.IsFixnum(v) ? Flint.Rt.Val.AsFixnum(v).ToString(System.Globalization.CultureInfo.InvariantCulture)
+      : Flint.Rt.Str.IsString(rt, v) ? Flint.Rt.Str.Text(rt, v)
+      : Flint.Rt.Val.IsNil(v) ? "nil" : "0x" + Convert.ToString(v, 16);
+
+    static string STrim(string s) => s.Length > 60 ? s.Substring(0, 60) + "..." : s;
+
+    /// Run until the step budget trips, leaving the runtime mid-program.
+    static bool RunUntilPaused(Flint.Rt.Rt rt, Flint.Rt.Img.Loaded img, long budget) {
+        foreach (int fn in img.init)
+            rt.Call(rt.MakeClosure(fn, Array.Empty<long>()), Array.Empty<long>());
+        long f = rt.MakeClosure(img.entry, Array.Empty<long>());
+        rt.SetSliceEnd(budget);
+        rt.Call(f, new long[]{ Flint.Rt.Val.Nil });
+        return rt.Parked();
+    }
+
+    private static int RtShelve(string path, string wantArg) {
+
+    byte[] image = File.ReadAllBytes(path);
+    string want = wantArg;
+
+    // What the program says when nothing interrupts it.
+    var plain = new Flint.Rt.Rt(4 * 1024 * 1024, 128L * 1024 * 1024);
+    Flint.Rt.Img.Loaded pimg = Flint.Rt.Img.Load(plain, image);
+    foreach (int fn in pimg.init) plain.Call(plain.MakeClosure(fn, new long[0]), new long[0]);
+    string straight = SShow(plain, plain.Call(plain.MakeClosure(pimg.entry, new long[0]),
+                                             new long[]{ Flint.Rt.Val.Nil }));
+    SOk("the program runs straight through to " + STrim(straight), straight == want);
+
+    foreach (string kind in new[]{ "verbatim", "live" }) {
+      var rt = new Flint.Rt.Rt(4 * 1024 * 1024, 128L * 1024 * 1024);
+      Flint.Rt.Img.Loaded img = Flint.Rt.Img.Load(rt, image);
+      // Partway: enough to be deep in the program, not enough to finish. The
+      // budget is a fraction of what the program takes, so the pause lands
+      // inside a loop with frames live rather than at a tidy boundary.
+      bool paused = RunUntilPaused(rt, img, 5000);
+      SOk(kind + ": stopped mid-program with " + rt.frames.Count + " frames live", paused);
+
+      byte[] snap = kind == "verbatim" ? Flint.Rt.Snap.Capture(rt) : Flint.Rt.Snap.ExportLive(rt);
+      SOk(kind + ": snapshot taken of a half-finished program (" + snap.Length + " bytes)",
+         snap != null && snap.Length > 0);
+
+      // A FRESH runtime. The image is loaded first, because a snapshot carries
+      // no code -- that is the whole point of the fingerprint, and it is what
+      // makes the snapshot small enough to move.
+      var back = new Flint.Rt.Rt(kind == "live" ? 7 * 1024 * 1024 : 4 * 1024 * 1024,
+                       128L * 1024 * 1024);
+      Flint.Rt.Img.Load(back, image);
+      bool took = kind == "verbatim" ? Flint.Rt.Snap.Restore(back, snap)
+                                             : Flint.Rt.Snap.ImportLive(back, snap);
+      SOk(kind + ": the fresh runtime accepts it", took);
+
+      // And carries on. `run(0)` resumes the frames the snapshot restored --
+      // there is no entry point to call, because the program is already inside
+      // itself.
+      // `resume`, not `run`: a snapshot is FAITHFUL, so `thrown` comes back
+      // holding the park that was in flight when it was taken. Ending a
+      // slice pause is what resuming means, and it is what the scheduler's
+      // `settle` does for a program that never stopped.
+      back.SetSliceEnd(0);
+      string finished = SShow(back, back.Resume());
+      SOk(kind + ": it carries on to the SAME answer", finished == want);
+      if (finished != want) {
+        Console.WriteLine("        wanted " + STrim(want));
+        Console.WriteLine("        got    " + STrim(finished));
+      }
+    }
+
+    // A snapshot of one program must not load into another. Refused by
+    // FINGERPRINT, because every `ip` and constant index in it is an index into
+    // the image it came from -- so the wrong image does not fail, it quietly
+    // means something else.
+    var other = new Flint.Rt.Rt(4 * 1024 * 1024, 128L * 1024 * 1024);
+    Flint.Rt.Img.Load(other, image);
+    other.fingerprint ^= 1;
+    SOk("a snapshot is refused by a runtime holding a different program",
+       !Flint.Rt.Snap.Restore(other, Flint.Rt.Snap.Capture(plain)));
+        if (shelveFails > 0) { Console.WriteLine("  " + shelveFails + " failed"); return 1; }
         return 0;
     }
 

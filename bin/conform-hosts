@@ -271,6 +271,25 @@ if [ -n "$CLR" ]; then
          echo "  FAIL the two ports disagree about maps"; exit 1; }
 fi
 
+# SHELVING A REAL PROGRAM, mid-run. `RtSnapshot` next door round-trips a heap
+# built by hand, which checks the FORMAT; this stops a program that is genuinely
+# half-finished -- frames on the stack, locals live, a loop counter partway --
+# moves it to a fresh runtime with a different nursery, and checks that it
+# carries on to the answer it would have reached uninterrupted. A hand-built
+# heap has no interpreter state in it at all, so none of that was covered.
+"$JDK/bin/java" -cp runtimes/jvm/classes RtShelve out/rt-probe/probe.img "$rt_want" \
+  > /tmp/flint-shelve-jvm.out 2>&1 \
+  || { cat /tmp/flint-shelve-jvm.out; echo "  FAIL shelving a real program [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' /tmp/flint-shelve-jvm.out
+if [ -n "$CLR" ]; then
+  "$CLR" --rt-shelve out/rt-probe/probe.img "$rt_want" > /tmp/flint-shelve-clr.out 2>&1 \
+    || { cat /tmp/flint-shelve-clr.out; echo "  FAIL shelving a real program [clr]"; exit 1; }
+  sed 's/$/ [clr]/' /tmp/flint-shelve-clr.out
+  cmp -s /tmp/flint-shelve-jvm.out /tmp/flint-shelve-clr.out \
+    || { diff /tmp/flint-shelve-jvm.out /tmp/flint-shelve-clr.out | head -4
+         echo "  FAIL the two ports shelve differently"; exit 1; }
+fi
+
 "$JDK/bin/java" -cp runtimes/jvm/classes RtSnapshot > /tmp/flint-snap-jvm.out 2>&1 \
   || { cat /tmp/flint-snap-jvm.out; echo "  FAIL snapshots on the ported runtime [jvm]"; exit 1; }
 sed 's/$/ [jvm]/' /tmp/flint-snap-jvm.out
