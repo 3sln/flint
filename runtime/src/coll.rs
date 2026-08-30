@@ -575,6 +575,62 @@ impl Rt {
     }
 
     /// The one-character string at code-point index `i`.
+    /// The byte offset of code point `i` in a non-ASCII string, resuming from
+    /// the cursor when it can.
+    ///
+    /// This is the whole of the quadratic fix. `.chars().nth(i)` is O(i), and a
+    /// reader that walks a string with `nth` therefore costs O(n^2) -- which
+    /// every reader in the language did, and which only showed up on strings
+    /// that were not ASCII, because the ASCII path indexes bytes directly. One
+    /// `ä` in a 115 KB EDN document was the difference between 119 ms and
+    /// 5 375 ms.
+    ///
+    /// Returns `None` when `i` is past the end.
+    fn byte_of_cp(&mut self, s: Value, i: u32) -> Option<u32> {
+        let mut buf = crate::rt::sbuf();
+        let epoch = self.gc.epoch;
+        let cur = self.str_cursor;
+        // Resume only FORWARD from a cursor that is still this string in this
+        // epoch. Anything else starts at the beginning, which is what the code
+        // did every time before.
+        let (mut cp, mut byte) = if cur.bits == s.bits() && cur.epoch == epoch && cur.cp <= i {
+            (cur.cp, cur.byte)
+        } else {
+            (0, 0)
+        };
+        let b: &[u8] = if s.is_inline_str() {
+            s.inline_bytes(&mut buf)
+        } else {
+            str_bytes(&self.gc.sp, s.as_heap())
+        };
+        let n = b.len() as u32;
+        let from = byte;
+        while cp < i {
+            if byte >= n {
+                return None;
+            }
+            byte += utf8_width(b[byte as usize]);
+            cp += 1;
+        }
+        // CHARGED FOR WHAT WAS WALKED, not per call (`doc/decisions/0009`).
+        //
+        // This is what makes `test/scaling.clj` able to see a regression here.
+        // Gas is meant to be proportional to work; a fixed charge per call made
+        // the counter blind to the very defect the cursor exists to prevent, so
+        // the quadratic that motivated it produced right answers, took five
+        // seconds, and moved the counter linearly. With the cursor a sequential
+        // walk charges O(1) amortised; without it, the ratio goes to four and
+        // the test says so.
+        let walked = byte - from;
+        if byte >= n {
+            self.charge_bytes(walked);
+            return None;
+        }
+        self.charge_bytes(walked);
+        self.str_cursor = crate::rt::StrCursor { bits: s.bits(), epoch, cp, byte };
+        Some(byte)
+    }
+
     pub fn char_at(&mut self, s: Value, i: u32) -> Option<Value> {
         let s = self.string_arg(s);
         // ASCII fast path: byte index == code-point index, so this is O(1).
@@ -591,23 +647,15 @@ impl Rt {
             };
             return Some(Value::inline_str(&[b]));
         }
+        let byte = self.byte_of_cp(s, i)?;
         let mut buf = crate::rt::sbuf();
-        let owned: alloc::string::String = {
-            let b: &[u8] = if s.is_inline_str() {
-                s.inline_bytes(&mut buf)
-            } else {
-                str_bytes(&self.gc.sp, s.as_heap())
-            };
-            match core::str::from_utf8(b).ok()?.chars().nth(i as usize) {
-                Some(c) => {
-                    let mut t = alloc::string::String::new();
-                    t.push(c);
-                    t
-                }
-                None => return None,
-            }
+        let b: &[u8] = if s.is_inline_str() {
+            s.inline_bytes(&mut buf)
+        } else {
+            str_bytes(&self.gc.sp, s.as_heap())
         };
-        Some(Value::inline_str(owned.as_bytes()))
+        let w = utf8_width(b[byte as usize]) as usize;
+        Some(Value::inline_str(&b[byte as usize..byte as usize + w]))
     }
 
     pub fn code_point_at(&mut self, s: Value, i: Value) -> Value {
@@ -628,17 +676,19 @@ impl Rt {
             };
             return Value::fixnum(b as i64);
         }
-        let mut buf = crate::rt::sbuf();
-        let cp = {
-            let b: &[u8] = if s.is_inline_str() {
-                s.inline_bytes(&mut buf)
-            } else {
-                str_bytes(&self.gc.sp, s.as_heap())
-            };
-            core::str::from_utf8(b).ok().and_then(|t| t.chars().nth(idx)).map(|c| c as u32)
+        let byte = match self.byte_of_cp(s, idx as u32) {
+            Some(b) => b as usize,
+            None => return self.throw_str("IndexOutOfBoundsException", "string index out of range"),
         };
-        match cp {
-            Some(c) => Value::fixnum(c as i64),
+        let mut buf = crate::rt::sbuf();
+        let b: &[u8] = if s.is_inline_str() {
+            s.inline_bytes(&mut buf)
+        } else {
+            str_bytes(&self.gc.sp, s.as_heap())
+        };
+        let w = utf8_width(b[byte]) as usize;
+        match core::str::from_utf8(&b[byte..byte + w]).ok().and_then(|t| t.chars().next()) {
+            Some(c) => Value::fixnum(c as u32 as i64),
             None => self.throw_str("IndexOutOfBoundsException", "string index out of range"),
         }
     }
@@ -1275,3 +1325,20 @@ impl Rt {
 
 /// A scratch buffer type used by string builtins.
 pub const SBUF_LEN: usize = INLINE_MAX;
+
+/// How many bytes the code point starting with `b0` occupies.
+///
+/// The same table `char_width_at` uses, as a free function so the cursor walk
+/// can read it straight off a byte slice rather than re-fetching per byte.
+#[inline]
+fn utf8_width(b0: u8) -> u32 {
+    if b0 < 0x80 {
+        1
+    } else if b0 < 0xE0 {
+        2
+    } else if b0 < 0xF0 {
+        3
+    } else {
+        4
+    }
+}

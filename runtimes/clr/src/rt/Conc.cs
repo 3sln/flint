@@ -68,8 +68,14 @@ public static class Conc {
     /// A port's STATE. `P_PENDING` is an `open` the host has not answered yet
     /// and `P_REFUSED` is one it declined -- distinct from `P_CLOSED`, because
     /// "you may not have this" and "this is finished" are different answers.
-    public const int P_PENDING = 0, P_OPEN = 1, P_CLOSED = 2, P_HALF = 3,
-                     P_ORPHANED = 4, P_REFUSED = 5;
+    ///
+    /// THE NUMBERS ARE THE RUST'S, and they are an ABI: `flint_port_state`
+    /// answers one of them to a host that reads it as a number. A port that
+    /// merely spelled the same six names in a different order would agree with
+    /// the native runtime on every transcript that renders them and disagree
+    /// with every host that reads them.
+    public const int P_PENDING = 0, P_OPEN = 1, P_CLOSED = 2, P_REFUSED = 3,
+                     P_HALF = 4, P_ORPHANED = 5;
     public const int K_CHANNEL = 0, K_FLINT = 1, K_HOST = 2, K_GLOBAL = 3;
 
     /// A channel's default buffer, in MESSAGES.
@@ -1565,6 +1571,7 @@ public static class Conc {
     /// itself invoked would otherwise run the scheduler on top of itself.
     public static long Resume(Rt rt) {
         if (Val.IsNil(Sched(rt))) return Val.Nil;
+        rt.status = 0;
         return Drive(rt);
     }
 

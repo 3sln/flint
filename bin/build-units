@@ -55,8 +55,18 @@ echo "  dependencies (cargo, once)"
 # ABI. None can be built for wasm32, and a workspace-wide build tries -- so the
 # exclusion is not a preference, it is the difference between this working and
 # not.
-PATH="$TC/bin:$PATH" cargo build --release --target wasm32-unknown-unknown \
-  --workspace --exclude flint-cli --exclude flint --exclude flint-c >/dev/null 2>&1
+# NOT silenced. This used to be `>/dev/null 2>&1`, and when a host-only binary
+# was added to a unit crate without `required-features`, cargo failed here,
+# `set -e` ended the script, and `bin/build-dist` printed "==> production units"
+# and stopped -- with dist/ still holding yesterday's artifacts, looking current.
+# A build step that can fail has to be able to say why.
+if ! PATH="$TC/bin:$PATH" cargo build --release --target wasm32-unknown-unknown \
+       --workspace --exclude flint-cli --exclude flint --exclude flint-c \
+       > /tmp/flint-units-cargo.log 2>&1; then
+  echo "  the dependency build FAILED:"
+  sed 's/^/    /' /tmp/flint-units-cargo.log | tail -30
+  exit 1
+fi
 
 rlib() { ls "$DEPS"/lib$1-*.rlib 2>/dev/null | head -1; }
 

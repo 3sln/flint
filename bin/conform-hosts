@@ -295,8 +295,13 @@ fi
 # only `P_OPEN` as success and the port was by then `P_HALF`.
 if ./bin/flint :src runtimes/conform-host :fn hostport/main --emit-image \
      :out out/conform/hostport.img >/dev/null 2>&1; then
-  cargo build --release -p flint-conc --bin hostports >/dev/null 2>&1 \
-    || { echo "  FAIL the native host-port driver does not build"; exit 1; }
+  # `--features host-tools`: this driver links `std` and `Program`, neither of
+  # which exists on wasm32, so the bin is gated -- otherwise a workspace-wide
+  # wasm build trips over it and the whole distributable stops building.
+  cargo build --release -p flint-conc --bin hostports --features host-tools \
+    > /tmp/flint-hp-build.log 2>&1 \
+    || { tail -20 /tmp/flint-hp-build.log; \
+         echo "  FAIL the native host-port driver does not build"; exit 1; }
   ./target/release/hostports out/conform/hostport.img > /tmp/flint-hp-native.out 2>&1 \
     || { cat /tmp/flint-hp-native.out; echo "  FAIL host ports [native]"; exit 1; }
   sed 's/$/ [native]/' /tmp/flint-hp-native.out

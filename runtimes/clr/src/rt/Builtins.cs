@@ -590,11 +590,11 @@ public static class Builtins {
         Def("flint/lower-case", (rt, at, n) =>
             Str.Of(rt, Str.Text(rt, rt.VAt(at)).ToLowerInvariant()));
         Def("flint/code-point-at", (rt, at, n) => {
-            string s = Str.Text(rt, rt.VAt(at));
             int i = (int) Val.AsFixnum(rt.VAt(at + 1));
-            if (i < 0 || i >= CodePointCount(s))
+            int c = Str.CodePointAt(rt, rt.VAt(at), i);
+            if (c < 0)
                 return rt.ThrowStr("IndexOutOfBoundsException", "index " + i + " out of range");
-            return Val.Fixnum(char.ConvertToUtf32(s, OffsetByCodePoints(s, i)));
+            return Val.Fixnum(c);
         });
         Def("flint/from-code-point", (rt, at, n) => {
             long c = Val.AsFixnum(rt.VAt(at));

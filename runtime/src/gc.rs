@@ -634,6 +634,15 @@ pub struct Gc {
     work: Vec<Addr>,
     pub(crate) max_heap: Addr,
     pub stats: GcStats,
+    /// Bumped at the START of every collection, in every build.
+    ///
+    /// `stats` is a diagnostics-only counter; this one always exists, because
+    /// something outside the collector needs to know when its cached view of an
+    /// object's ADDRESS has expired. A copying collector moves objects, so a
+    /// memo keyed on an address is valid only within one epoch -- and comparing
+    /// the epoch is exact where comparing the address is not: an object can be
+    /// freed and a different one allocated where it was.
+    pub epoch: u64,
     pub oom: bool,
     /// Guards the retry below: a collection must not try to collect again when
     /// it is the thing that ran out of room.
@@ -798,6 +807,7 @@ impl Gc {
             work: Vec::new(),
             max_heap: max_heap as Addr,
             stats: GcStats::default(),
+            epoch: 0,
             oom: false,
             collecting: false,
             #[cfg(feature = "diagnostics")]
@@ -1440,6 +1450,7 @@ impl Gc {
         }
         #[cfg(debug_assertions)]
         self.sp.in_gc.set(true);
+        self.epoch += 1;
         self.stats.minor += 1;
         self.to_bump = self.to;
         self.work.clear();
@@ -1595,6 +1606,7 @@ impl Gc {
         let was_collecting = core::mem::replace(&mut self.in_collect, true);
         #[cfg(debug_assertions)]
         self.sp.in_gc.set(true);
+        self.epoch += 1;
         self.stats.major += 1;
         self.work.clear();
 

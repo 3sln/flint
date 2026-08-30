@@ -38,6 +38,24 @@ pub const SING_SCHED: usize = 4;
 pub const SING_BINDINGS: usize = 5;
 pub const SING_COUNT: usize = 6;
 
+/// Where the last non-ASCII string index left off. See `Rt::str_cursor`.
+#[derive(Clone, Copy)]
+pub struct StrCursor {
+    /// The string's bits, or 0 when the cursor holds nothing.
+    pub bits: u64,
+    /// The collector epoch those bits were valid in.
+    pub epoch: u64,
+    /// The code-point index, and the byte offset it sits at.
+    pub cp: u32,
+    pub byte: u32,
+}
+
+impl StrCursor {
+    pub fn none() -> StrCursor {
+        StrCursor { bits: 0, epoch: 0, cp: 0, byte: 0 }
+    }
+}
+
 pub struct Rt {
     /// The heap, when this `Rt` is the one that made it.
     ///
@@ -105,6 +123,23 @@ pub struct Rt {
     /// rather than the address, because the nursery moves objects and an
     /// identity hash that changes under collection makes a map key unfindable.
     pub next_opaque: u64,
+    /// A one-entry cursor into the last NON-ASCII string that was indexed.
+    ///
+    /// Indexing UTF-8 by CODE POINT means walking it, so `nth`/`code-point-at`
+    /// cost O(i) -- and every reader in the language walks a string with
+    /// exactly that, so every reader was O(n^2). One `ä` in a 115 KB EDN
+    /// document made `clojure.edn/read-string` 190x slower than the same
+    /// document with the `ä` replaced by an `x`: 5 375 ms against 119 ms, and
+    /// quadrupling each time the input doubled.
+    ///
+    /// A cursor makes SEQUENTIAL indexing O(1) amortised, which is the access
+    /// pattern that was quadratic. Random access is unchanged.
+    ///
+    /// Keyed on the `epoch` as well as the value, because a copying collector
+    /// moves objects and can put a DIFFERENT object where this one was --
+    /// comparing addresses would be a memo that is silently wrong rather than
+    /// merely stale.
+    pub str_cursor: StrCursor,
     /// How many host-minted opaque values the last `restore` invalidated. A
     /// counter so a test can assert the sweep SAW them -- a snapshot that
     /// carried no capabilities proves nothing about one that did.
@@ -327,6 +362,7 @@ impl Rt {
             // From 1: a `host-id` of 0 means "guest-minted", so identities and
             // host ids never share the sentinel.
             next_opaque: 1,
+            str_cursor: StrCursor::none(),
             restored_capabilities: 0,
             #[cfg(feature = "aot")]
             run_base: 0,

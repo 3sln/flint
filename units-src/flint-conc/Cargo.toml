@@ -19,8 +19,14 @@ required-features = ["host-tools"]
 
 # The HOST side of the port protocol, driving a real image. Its transcript is
 # what `bin/conform-hosts` compares the JVM and CLR drivers against.
+#
+# `required-features` is not decoration: it links `std` and `flint_rt::native`,
+# neither of which exists on wasm32, and without the gate a workspace-wide
+# `cargo build --target wasm32-unknown-unknown` fails on it -- which is exactly
+# what `bin/build-units` does, so the whole distributable stopped building.
 [[bin]]
 name = "hostports"
+required-features = ["host-tools"]
 
 [dependencies]
 flint-rt = { path = "../../runtime" }

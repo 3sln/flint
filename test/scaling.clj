@@ -36,6 +36,16 @@
 (spit (str d "/scale.cljc")
       (str "(ns scale (:require [clojure.string :as str]))\n"
            "(defn text [n] (loop [i 0 acc \"\"] (if (< i n) (recur (inc i) (str acc \"word\" i \" \")) acc)))\n"
+           ;; The SAME text with ONE non-ASCII character in front of it.
+           ;;
+           ;; That one character is the whole difference between a string the
+           ;; runtime can index by byte and one it has to walk by code point,
+           ;; and a walk per index is a quadratic that produces right answers.
+           ;; One `ä` in a 115 KB EDN document made `clojure.edn/read-string`
+           ;; take 5 375 ms where the same document with an `x` in its place
+           ;; took 119 ms -- and nothing in this file could see it, because
+           ;; every case above builds pure ASCII.
+           "(defn wide [n] (str \"ä\" (text n)))\n"
            "(defn words [n] (mapv (fn [i] (str \"w\" i)) (range n)))\n"
            "(defn main [args]\n"
            "  (let [what (first args)\n"
@@ -61,6 +71,13 @@
            "        (= what \"group-by\") (count (group-by odd? (range n)))\n"
            "        (= what \"distinct\") (count (distinct (range n)))\n"
            "        (= what \"str-count\") (count (text n))\n"
+           ;; Walking a string BY INDEX, which is what every reader in the
+           ;; language does. Both tiers, because they are different code paths
+           ;; and only one of them was ever quadratic.
+           "        (= what \"nth-ascii\") (let [s (text n) m (count s)]\n"
+           "                               (loop [i 0 a 0] (if (>= i m) a (recur (inc i) (+ a (flint.rt/code-point-at s i))))))\n"
+           "        (= what \"nth-wide\") (let [s (wide n) m (count s)]\n"
+           "                              (loop [i 0 a 0] (if (>= i m) a (recur (inc i) (+ a (flint.rt/code-point-at s i))))))\n"
            "        (= what \"reverse\") (count (reverse (range n)))\n"
            "        :else -1))))\n"))
 
@@ -72,7 +89,8 @@
 (def linear
   ["concat" "split-literal" "split-regex" "re-seq" "replace-str" "replace-re"
    "lower-case" "index-of" "join" "subs" "includes" "conj-vec" "into-map"
-   "frequencies" "group-by" "distinct" "str-count" "reverse"])
+   "frequencies" "group-by" "distinct" "str-count" "reverse"
+   "nth-ascii" "nth-wide"])
 
 (println "scaling: doubling the input must not square the work")
 (let [runner (str "import('./host/flint.mjs').then(async (m) => {"

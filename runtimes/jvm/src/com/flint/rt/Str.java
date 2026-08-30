@@ -242,30 +242,75 @@ public final class Str {
     /// type: flint has no char, and `doc/decisions/0010` counts that among the
     /// documented divergences rather than a gap.
     public static long nth(Rt rt, long v, int i) {
+        if (i < 0) return Val.NOT_FOUND;
         byte[] b = bytes(rt, v);
         if (isAscii(rt, v)) {
-            if (i < 0 || i >= b.length) return Val.NOT_FOUND;
+            if (i >= b.length) return Val.NOT_FOUND;
             return Val.inlineStr(new byte[]{ b[i] });
         }
-        // A byte index and a character index coincide only for ASCII, so this
-        // walks. That is the cost the header flag exists to avoid on the
-        // common path, not a shortcut being taken here.
-        int at = 0, seen = 0;
-        while (at < b.length) {
-            int size = 1;
-            int c = b[at] & 0xFF;
-            if ((c & 0xE0) == 0xC0) size = 2;
-            else if ((c & 0xF0) == 0xE0) size = 3;
-            else if ((c & 0xF8) == 0xF0) size = 4;
-            if (seen == i) {
-                byte[] one = new byte[size];
-                System.arraycopy(b, at, one, 0, size);
-                return of(rt, new String(one, StandardCharsets.UTF_8));
-            }
-            at += size;
-            seen++;
+        int at = byteOfCp(rt, v, b, i);
+        if (at < 0) return Val.NOT_FOUND;
+        int size = utf8Width(b[at]);
+        byte[] one = new byte[size];
+        System.arraycopy(b, at, one, 0, size);
+        return Val.inlineStr(one);
+    }
+
+    /// How many bytes the code point starting with `b0` occupies.
+    static int utf8Width(byte b0) {
+        int c = b0 & 0xFF;
+        if (c < 0x80) return 1;
+        if (c < 0xE0) return 2;
+        if (c < 0xF0) return 3;
+        return 4;
+    }
+
+    /// The byte offset of code point `i`, RESUMING FROM THE CURSOR when it can.
+    ///
+    /// A byte index and a code-point index coincide only for ASCII, so a
+    /// non-ASCII string has to be walked -- and every reader in the language
+    /// walks a string with `nth` in a loop, which made every reader O(n^2).
+    /// One `ä` in a 115 KB EDN document was the difference between 119 ms and
+    /// 5 375 ms, quadrupling each time the input doubled.
+    ///
+    /// The cursor makes SEQUENTIAL indexing O(1) amortised, which is the access
+    /// pattern that was quadratic. Random access is unchanged.
+    ///
+    /// Keyed on the COLLECTION COUNT as well as the value, because a copying
+    /// collector moves objects and can put a different one where this was --
+    /// comparing addresses alone would be a memo that is silently wrong rather
+    /// than merely stale.
+    static int byteOfCp(Rt rt, long v, byte[] b, int i) {
+        long epoch = rt.gc.minors + rt.gc.majors;
+        int cp = 0, at = 0;
+        if (rt.cursorBits == v && rt.cursorEpoch == epoch && rt.cursorCp <= i) {
+            cp = rt.cursorCp;
+            at = rt.cursorByte;
         }
-        return Val.NOT_FOUND;
+        while (cp < i) {
+            if (at >= b.length) return -1;
+            at += utf8Width(b[at]);
+            cp++;
+        }
+        if (at >= b.length) return -1;
+        rt.cursorBits = v;
+        rt.cursorEpoch = epoch;
+        rt.cursorCp = cp;
+        rt.cursorByte = at;
+        return at;
+    }
+
+    /// The CODE POINT at index `i`, or -1 when `i` is past the end.
+    ///
+    /// Separate from `nth` so the reader does not build a one-character string
+    /// per character just to ask what it is.
+    public static int codePointAt(Rt rt, long v, int i) {
+        if (i < 0) return -1;
+        byte[] b = bytes(rt, v);
+        if (isAscii(rt, v)) return i >= b.length ? -1 : (b[i] & 0xFF);
+        int at = byteOfCp(rt, v, b, i);
+        if (at < 0) return -1;
+        return new String(b, at, utf8Width(b[at]), StandardCharsets.UTF_8).codePointAt(0);
     }
 
     // --- ropes (`doc/decisions/0011`) ---------------------------------------

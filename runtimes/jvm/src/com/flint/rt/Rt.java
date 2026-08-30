@@ -906,6 +906,11 @@ public final class Rt {
     /// from its address: the nursery is a copying collector, so an
     /// address-derived hash would change under collection and a value in a map
     /// would stop being findable by the key that put it there.
+    /// A one-entry cursor into the last NON-ASCII string that was indexed.
+    /// See `Str.byteOfCp` -- this is the state, that is the reason.
+    public long cursorBits = 0, cursorEpoch = 0;
+    public int cursorCp = 0, cursorByte = 0;
+
     public long nextOpaque = 1;
 
     /// `[label, id, host-id]`. Guest code can mint one only with host id 0, and

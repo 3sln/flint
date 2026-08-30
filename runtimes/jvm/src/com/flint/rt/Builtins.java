@@ -636,13 +636,12 @@ rt.describe(v) + " is not a transient");
         def("flint/upper-case", (rt, at, n) -> Str.of(rt, Str.text(rt, rt.vat(at)).toUpperCase()));
         def("flint/lower-case", (rt, at, n) -> Str.of(rt, Str.text(rt, rt.vat(at)).toLowerCase()));
         def("flint/code-point-at", (rt, at, n) -> {
-            String s = Str.text(rt, rt.vat(at));
             int i = (int) Val.asFixnum(rt.vat(at + 1));
-            if (i < 0 || i >= s.codePointCount(0, s.length())) {
-                return rt.throwStr("IndexOutOfBoundsException",
-"index " + i + " out of range");
+            int c = Str.codePointAt(rt, rt.vat(at), i);
+            if (c < 0) {
+                return rt.throwStr("IndexOutOfBoundsException", "index " + i + " out of range");
             }
-            return Val.fixnum(s.codePointAt(s.offsetByCodePoints(0, i)));
+            return Val.fixnum(c);
         });
         def("flint/from-code-point", (rt, at, n) -> {
             long c = Val.asFixnum(rt.vat(at));

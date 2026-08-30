@@ -137,30 +137,75 @@ public static class Str {
     /// type: flint has no char, and `doc/decisions/0010` counts that among the
     /// documented divergences rather than a gap.
     public static long Nth(Rt rt, long v, int i) {
+        if (i < 0) return Val.NotFound;
         byte[] b = Bytes(rt, v);
         if (IsAscii(rt, v)) {
-            if (i < 0 || i >= b.Length) return Val.NotFound;
+            if (i >= b.Length) return Val.NotFound;
             return Val.InlineStr(new byte[]{ b[i] });
         }
-        // A byte index and a character index coincide only for ASCII, so this
-        // walks. That is the cost the header flag exists to avoid on the common
-        // path, not a shortcut being taken here.
-        int at = 0, seen = 0;
-        while (at < b.Length) {
-            int size = 1;
-            int c = b[at] & 0xFF;
-            if ((c & 0xE0) == 0xC0) size = 2;
-            else if ((c & 0xF0) == 0xE0) size = 3;
-            else if ((c & 0xF8) == 0xF0) size = 4;
-            if (seen == i) {
-                byte[] one = new byte[size];
-                System.Array.Copy(b, at, one, 0, size);
-                return Of(rt, Encoding.UTF8.GetString(one));
-            }
-            at += size;
-            seen++;
+        int at = ByteOfCp(rt, v, b, i);
+        if (at < 0) return Val.NotFound;
+        int size = Utf8Width(b[at]);
+        var one = new byte[size];
+        System.Array.Copy(b, at, one, 0, size);
+        return Val.InlineStr(one);
+    }
+
+    /// How many bytes the code point starting with `b0` occupies.
+    static int Utf8Width(byte b0) {
+        int c = b0 & 0xFF;
+        if (c < 0x80) return 1;
+        if (c < 0xE0) return 2;
+        if (c < 0xF0) return 3;
+        return 4;
+    }
+
+    /// The byte offset of code point `i`, RESUMING FROM THE CURSOR when it can.
+    ///
+    /// A byte index and a code-point index coincide only for ASCII, so a
+    /// non-ASCII string has to be walked -- and every reader in the language
+    /// walks a string with `nth` in a loop, which made every reader O(n^2).
+    /// One `ä` in a 115 KB EDN document was the difference between 119 ms and
+    /// 5 375 ms, quadrupling each time the input doubled.
+    ///
+    /// The cursor makes SEQUENTIAL indexing O(1) amortised, which is the access
+    /// pattern that was quadratic. Random access is unchanged.
+    ///
+    /// Keyed on the COLLECTION COUNT as well as the value, because a copying
+    /// collector moves objects and can put a different one where this was --
+    /// comparing addresses alone would be a memo that is silently wrong rather
+    /// than merely stale.
+    static int ByteOfCp(Rt rt, long v, byte[] b, int i) {
+        long epoch = rt.gc.minors + rt.gc.majors;
+        int cp = 0, at = 0;
+        if (rt.cursorBits == v && rt.cursorEpoch == epoch && rt.cursorCp <= i) {
+            cp = rt.cursorCp;
+            at = rt.cursorByte;
         }
-        return Val.NotFound;
+        while (cp < i) {
+            if (at >= b.Length) return -1;
+            at += Utf8Width(b[at]);
+            cp++;
+        }
+        if (at >= b.Length) return -1;
+        rt.cursorBits = v;
+        rt.cursorEpoch = epoch;
+        rt.cursorCp = cp;
+        rt.cursorByte = at;
+        return at;
+    }
+
+    /// The CODE POINT at index `i`, or -1 when `i` is past the end.
+    ///
+    /// Separate from `Nth` so the reader does not build a one-character string
+    /// per character just to ask what it is.
+    public static int CodePointAt(Rt rt, long v, int i) {
+        if (i < 0) return -1;
+        byte[] b = Bytes(rt, v);
+        if (IsAscii(rt, v)) return i >= b.Length ? -1 : (b[i] & 0xFF);
+        int at = ByteOfCp(rt, v, b, i);
+        if (at < 0) return -1;
+        return char.ConvertToUtf32(Encoding.UTF8.GetString(b, at, Utf8Width(b[at])), 0);
     }
 
     public static byte[] Bytes(Rt rt, long v) {
