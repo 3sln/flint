@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Run jank's dialect test suite against flint.
+#
+# jank (https://github.com/jank-lang/jank) is a Clojure dialect on LLVM. Its
+# tests are a clean contract, which is why they can be run against a different
+# implementation at all:
+#
+#   pass-*.jank   must run to completion
+#   fail-*.jank   must be REJECTED -- a compile error or a throw
+#
+# The `cpp/` directory is EXCLUDED and that is not a dodge: those 514 tests are
+# C++ interop, and flint has no host classes at all (`doc/decisions/0010`).
+# There is nothing to be "close to" there; a runtime that answered them would
+# not be flint. Everything else -- the special forms, the reader, syntax quote,
+# vars, metadata -- is language, and language is exactly what should port.
+#
+# Usage: bin/jank-suite <path-to-jank-checkout> [runtime]
+#   runtime: native (default) | jvm | clr
+#
+# Get the checkout with:
+#   git clone https://github.com/jank-lang/jank
+# The numbers in doc/jank.md were taken at jank
+# cd394c63e15d1af5f88bcfbec74fba7873e4b57d (2026-08-29); a different revision
+# is a different suite, so quote the one you ran.
+set -u
+JANK="${1:?usage: bin/jank-suite <jank-checkout> [native|jvm|clr]}"
+RUNTIME="${2:-native}"
+TESTS="$JANK/compiler+runtime/test/jank"
+[ -d "$TESTS" ] || { echo "no test/jank under $JANK"; exit 1; }
+
+JDK="${JAVA_HOME:-/opt/homebrew/opt/openjdk}"
+export DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}"
+CLR=runtimes/clr/conform/bin/Release/net10.0/Conform
+
+WORK=out/jank
+rm -rf "$WORK"; mkdir -p "$WORK/src"
+
+pass_ok=0; pass_no=0; fail_ok=0; fail_no=0; skipped=0
+declare -a failures
+
+run_one() {
+  local file="$1" kind="$2" name="$3"
+  local src="$WORK/src/jt.cljc"
+  # A jank test is a bare script: top-level forms, `assert`s, and `:success`.
+  # flint wants a namespace with an entry point, so the body becomes the
+  # namespace's top-level forms -- which flint runs as initialisers, in order,
+  # exactly as a script would -- and `main` just reports.
+  {
+    echo "(ns jt)"
+    cat "$file"
+    echo ""
+    echo "(defn main [_] :ok)"
+  } > "$src"
+
+  local out status
+  case "$RUNTIME" in
+    native)
+      out="$(./target/release/flint run :path "$WORK/src" :fn jt/main 2>&1)"
+      status=$? ;;
+    jvm|clr)
+      if ! ./bin/flint :src "$WORK/src" :fn jt/main --emit-image \
+             :out "$WORK/t.img" >/dev/null 2>&1; then
+        out="compile failed"; status=1
+      elif [ "$RUNTIME" = jvm ]; then
+        out="$("$JDK/bin/java" -cp runtimes/jvm/classes RtImage "$WORK/t.img" 2>&1)"; status=$?
+      else
+        out="$("$CLR" --rt-image "$WORK/t.img" 2>&1)"; status=$?
+      fi
+      # The ported harnesses report by LINE rather than by exit status.
+      case "$out" in *"main -> :ok"*) status=0 ;; *) status=1 ;; esac ;;
+  esac
+
+  if [ "$kind" = pass ]; then
+    if [ "$status" -eq 0 ]; then pass_ok=$((pass_ok+1))
+    else pass_no=$((pass_no+1)); failures+=("PASS-EXPECTED $name :: $(echo "$out" | tr '\n' ' ' | cut -c1-150)"); fi
+  else
+    # A `fail-` test is expected to be REJECTED. Any nonzero status counts:
+    # jank distinguishes compile-time from run-time rejection and flint need
+    # not agree about WHICH, only that the program is not accepted.
+    if [ "$status" -ne 0 ]; then fail_ok=$((fail_ok+1))
+    else fail_no=$((fail_no+1)); failures+=("SHOULD-HAVE-FAILED $name"); fi
+  fi
+}
+
+for file in $(find "$TESTS" -path "$TESTS/cpp" -prune -o -name '*.jank' -print | sort); do
+  base="$(basename "$file" .jank)"
+  rel="${file#$TESTS/}"
+  case "$base" in
+    pass-*) run_one "$file" pass "$rel" ;;
+    fail-*) run_one "$file" fail "$rel" ;;
+    *)      skipped=$((skipped+1)) ;;   # neither convention: nothing to assert
+  esac
+done
+
+total=$((pass_ok+pass_no+fail_ok+fail_no))
+echo
+echo "  jank dialect suite on the $RUNTIME runtime (cpp/ excluded: flint has no host classes)"
+echo "  ---------------------------------------------------------------------------"
+printf "  pass-* accepted and ran   %4d / %4d\n" "$pass_ok" "$((pass_ok+pass_no))"
+printf "  fail-* correctly refused  %4d / %4d\n" "$fail_ok" "$((fail_ok+fail_no))"
+printf "  ---------------------------------------------------------------------------\n"
+printf "  TOTAL                     %4d / %4d  (%d%%)\n" \
+       "$((pass_ok+fail_ok))" "$total" "$(( (pass_ok+fail_ok) * 100 / (total>0?total:1) ))"
+[ "$skipped" -gt 0 ] && printf "  %d files follow neither naming convention and assert nothing\n" "$skipped"
+
+if [ "${SHOW_FAILURES:-0}" = 1 ]; then
+  echo; echo "  --- what did not hold ---"
+  for f in "${failures[@]}"; do echo "  $f"; done
+fi
