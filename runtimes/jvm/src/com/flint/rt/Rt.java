@@ -95,11 +95,24 @@ public final class Rt {
         public final Arity[] arities;
         public final int nupvals;
         public FnDef(Arity[] arities, int nupvals) { this.arities = arities; this.nupvals = nupvals; }
+        /// An EXACT fixed arity wins over a variadic one, whatever order they
+        /// were written in -- so `(fn ([] :a) ([& xs] xs))` and the same two
+        /// clauses reversed both answer `:a` for zero arguments. Taking
+        /// whichever came first made the answer depend on source order, which
+        /// is the kind of divergence that looks like a program bug.
+        ///
+        /// Among variadics, the one with the MOST fixed parameters wins:
+        /// `([a & xs])` beats `([& xs])` for two arguments, because it is the
+        /// more specific match.
         public Arity select(int argc) {
+            Arity best = null;
             for (Arity a : arities) {
-                if (a.variadic ? argc >= a.argc : argc == a.argc) return a;
+                if (!a.variadic && argc == a.argc) return a;
+                if (a.variadic && argc >= a.argc && (best == null || a.argc > best.argc)) {
+                    best = a;
+                }
             }
-            return null;
+            return best;
         }
     }
 

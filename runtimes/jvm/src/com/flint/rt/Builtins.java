@@ -140,7 +140,14 @@ public final class Builtins {
 
         def("flint/opaque?", (rt, at, n) -> Val.FALSE);
         def("flint/opaque-label", (rt, at, n) -> Val.NIL);
-        def("meta", (rt, at, n) -> Val.NIL);
+        /// The metadata slot, or nil. This was a STUB answering nil, which is
+        /// indistinguishable from "no metadata" and so passed every test that
+        /// did not set any.
+        def("meta", (rt, at, n) -> {
+            long v = rt.vat(at);
+            int idx = rt.metaSlot(v);
+            return idx < 0 ? Val.NIL : rt.slot(v, idx);
+        });
 
         def("count", (rt, at, n) -> {
             long v = rt.vat(at);

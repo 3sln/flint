@@ -95,11 +95,20 @@ public sealed class Rt : System.IDisposable {
         public readonly Arity[] arities;
         public readonly int nupvals;
         public FnDef(Arity[] arities, int nupvals) { this.arities = arities; this.nupvals = nupvals; }
+        /// An EXACT fixed arity wins over a variadic one, whatever order they
+        /// were written in -- so `(fn ([] :a) ([& xs] xs))` and the same two
+        /// clauses reversed both answer `:a` for zero arguments. Taking
+        /// whichever came first made the answer depend on source order.
+        ///
+        /// Among variadics, the one with the MOST fixed parameters wins:
+        /// `([a & xs])` beats `([& xs])` for two arguments.
         public Arity Select(int argc) {
+            Arity best = null;
             foreach (Arity a in arities) {
-                if (a.variadic ? argc >= a.argc : argc == a.argc) return a;
+                if (!a.variadic && argc == a.argc) return a;
+                if (a.variadic && argc >= a.argc && (best == null || a.argc > best.argc)) best = a;
             }
-            return null;
+            return best;
         }
     }
 

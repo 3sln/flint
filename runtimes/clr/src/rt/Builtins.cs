@@ -137,7 +137,14 @@ public static class Builtins {
 
         Def("flint/opaque?", (rt, at, n) => Val.False);
         Def("flint/opaque-label", (rt, at, n) => Val.Nil);
-        Def("meta", (rt, at, n) => Val.Nil);
+        /// The metadata slot, or nil. This was a STUB answering nil, which is
+        /// indistinguishable from "no metadata" and so passed every test that
+        /// did not set any.
+        Def("meta", (rt, at, n) => {
+            long v = rt.VAt(at);
+            int idx = rt.MetaSlot(v);
+            return idx < 0 ? Val.Nil : rt.Slot(v, idx);
+        });
 
         Def("count", (rt, at, n) => {
             long v = rt.VAt(at);
