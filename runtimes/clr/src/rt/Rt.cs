@@ -529,7 +529,7 @@ public sealed class Rt : System.IDisposable {
     /// contract between the compiler and every runtime, so they are written out
     /// rather than derived: a port that renumbered one of these would compile
     /// and answer wrongly.
-    bool TypeP(int code, long v) {
+    public bool TypeP(int code, long v) {
         switch (code) {
             // `IsInt`, NOT `IsFixnum`. A big integer is an integer, and the
             // library's printer dispatches on this: with `IsFixnum` here the
@@ -599,8 +599,26 @@ public sealed class Rt : System.IDisposable {
 
     /// Sequential, which is WIDER than `IsSeq`: a vector and a map entry are
     /// sequential without being seqs. `=` is over this, not over seq-ness.
-    internal bool IsSequential(long v) =>
+    public bool IsSequential(long v) =>
         IsSeq(v) || IsHeapTy(v, TyVec) || IsHeapTy(v, TyMapentry);
+
+    /// Which slot holds this object's metadata, or -1. Metadata is not part
+    /// of equality, so `with-meta` copies and the copy is still `=`.
+    public int MetaSlot(long v) {
+        if (!Val.IsHeap(v)) return -1;
+        switch (Ty(gc.sp, Val.AsHeap(v))) {
+            case TySym: return 2;
+            case TyVec: return Vec.VMeta;
+            case TyArraymap: return Maps.AM_META;
+            case TyHashmap: return Maps.HM_META;
+            case TySet: return Sets.S_META;
+            case TyCons: return Seqs.CMeta;
+            case TyEmptyList: return 0;
+            case TyLazyseq: return 2;
+            case TyAtom: return 1;
+            default: return -1;
+        }
+    }
 
     internal bool IsHeapTy(long v, int t) => Val.IsHeap(v) && Ty(gc.sp, Val.AsHeap(v)) == t;
 

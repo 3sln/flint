@@ -124,8 +124,10 @@ public static class Builtins {
             return Val.Nil;
         });
 
-        Def("flint/str2", (rt, at, n) =>
-            Str.Of(rt, Str.Text(rt, rt.VAt(at)) + Str.Text(rt, rt.VAt(at + 1))));
+        // A ROPE join, not a copy. `str` in a loop is what
+        // `doc/decisions/0011` exists for: copying makes it quadratic, and the
+        // compiler builds its whole output this way.
+        Def("flint/str2", (rt, at, n) => Str.Concat(rt, rt.VAt(at), rt.VAt(at + 1)));
         Def("flint/num->str", (rt, at, n) => {
             long v = rt.VAt(at);
             return Str.Of(rt, Num.IsInt(rt, v)
@@ -141,9 +143,13 @@ public static class Builtins {
             long v = rt.VAt(at);
             if (Val.IsNil(v)) return Val.Fixnum(0);
             if (rt.IsHeapTy(v, Obj.TyVec)) return Val.Fixnum(Vec.Count(rt, v));
-            if (Str.IsString(rt, v)) return Val.Fixnum(Str.CharLen(rt, v));
+            if (Str.IsString(rt, v)) return Val.Fixnum(Str.SCount(rt, v));
             if (Maps.IsMap(rt, v)) return Val.Fixnum(Maps.Count(rt, v));
             if (Sets.IsSet(rt, v)) return Val.Fixnum(Sets.Count(rt, v));
+            if (Maps.IsTransient(rt, v)) return Val.Fixnum(Maps.TCount(rt, v));
+            if (Sets.IsTransient(rt, v)) return Val.Fixnum(Sets.TCount(rt, v));
+            if (Vec.IsTransient(rt, v)) return Val.Fixnum(Vec.TCount(rt, v));
+            if (Bytes.IsBytes(rt, v)) return Val.Fixnum(Bytes.Count(rt, v));
             if (rt.IsSeq(v)) return Val.Fixnum(Seqs.Count(rt, v));
             throw new System.NotSupportedException("count over " + rt.Describe(v) + " needs more of the data structures");
         });
@@ -224,7 +230,9 @@ public static class Builtins {
         Def("transient", (rt, at, n) => {
             long v = rt.VAt(at);
             if (rt.IsHeapTy(v, Obj.TyVec)) return Vec.TransientOf(rt, v);
-            throw new System.NotSupportedException("transient of " + rt.Describe(v) + " needs maps and sets ported");
+            if (Maps.IsMap(rt, v)) return Maps.TransientOf(rt, v);
+            if (Sets.IsSet(rt, v)) return Sets.TransientOf(rt, v);
+            throw new System.InvalidCastException(rt.Describe(v) + " is not transientable");
         });
         Def("persistent!", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -233,7 +241,10 @@ public static class Builtins {
                     throw new System.InvalidOperationException("persistent! called twice on one transient");
                 return Vec.TPersistent(rt, v);
             }
-            throw new System.NotSupportedException("persistent! of " + rt.Describe(v) + " needs maps and sets ported");
+            if (Maps.IsTransient(rt, v)) return Maps.TPersistent(rt, v);
+            if (Sets.IsTransient(rt, v)) return Sets.TPersistent(rt, v);
+            if (Bytes.IsTransient(rt, v)) return Bytes.Persistent(rt, v);
+            throw new System.InvalidCastException(rt.Describe(v) + " is not a transient");
         });
         Def("conj!", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -244,7 +255,21 @@ public static class Builtins {
                 for (int i = 1; i < n; i++) acc = Vec.TConj(rt, acc, rt.VAt(at + i));
                 return acc;
             }
-            throw new System.NotSupportedException("conj! onto " + rt.Describe(v) + " needs maps and sets ported");
+            if (Sets.IsTransient(rt, v)) {
+                long acc = v;
+                for (int i = 1; i < n; i++) acc = Sets.TConj(rt, acc, rt.VAt(at + i));
+                return acc;
+            }
+            if (Maps.IsTransient(rt, v)) {
+                // `conj!` onto a map takes an ENTRY or a two-element vector.
+                long acc = v;
+                for (int i = 1; i < n; i++) {
+                    long e = rt.VAt(at + i);
+                    acc = Maps.TAssoc(rt, acc, Seqs.First(rt, e), Seqs.First(rt, Seqs.Rest(rt, e)));
+                }
+                return acc;
+            }
+            throw new System.InvalidCastException(rt.Describe(v) + " is not a transient");
         });
         Def("assoc!", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -257,7 +282,26 @@ public static class Builtins {
                 }
                 return acc;
             }
-            throw new System.NotSupportedException("assoc! onto " + rt.Describe(v) + " needs maps and sets ported");
+            if (Maps.IsTransient(rt, v)) {
+                long acc = v;
+                for (int i = 1; i + 1 < n; i += 2) acc = Maps.TAssoc(rt, acc, rt.VAt(at + i), rt.VAt(at + i + 1));
+                return acc;
+            }
+            throw new System.InvalidCastException(rt.Describe(v) + " is not a transient");
+        });
+        Def("dissoc!", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (Maps.IsTransient(rt, v)) {
+                long acc = v;
+                for (int i = 1; i < n; i++) acc = Maps.TDissoc(rt, acc, rt.VAt(at + i));
+                return acc;
+            }
+            if (Sets.IsTransient(rt, v)) {
+                long acc = v;
+                for (int i = 1; i < n; i++) acc = Sets.TDisj(rt, acc, rt.VAt(at + i));
+                return acc;
+            }
+            throw new System.InvalidCastException(rt.Describe(v) + " is not a transient");
         });
 
         // Maps.
@@ -267,6 +311,13 @@ public static class Builtins {
             if (Val.IsNil(coll)) return dflt;
             if (Maps.IsMap(rt, coll)) return Maps.Get(rt, coll, rt.VAt(at + 1), dflt);
             if (Sets.IsSet(rt, coll)) return Sets.Get(rt, coll, rt.VAt(at + 1), dflt);
+            if (Maps.IsTransient(rt, coll)) return Maps.TGet(rt, coll, rt.VAt(at + 1), dflt);
+            if (Vec.IsTransient(rt, coll)) {
+                long k2 = rt.VAt(at + 1);
+                if (!Val.IsFixnum(k2)) return dflt;
+                long got2 = Vec.TNth(rt, coll, (int) Val.AsFixnum(k2));
+                return got2 == Val.NotFound ? dflt : got2;
+            }
             if (rt.IsHeapTy(coll, Obj.TyVec)) {
                 long k = rt.VAt(at + 1);
                 if (!Val.IsFixnum(k)) return dflt;
@@ -554,6 +605,137 @@ public static class Builtins {
             if (!Num.IsInt(rt, v)) throw new System.InvalidCastException("bits->double wants an integer");
             return Val.OfDouble(System.BitConverter.Int64BitsToDouble(Num.AsI64(rt, v).Value));
         });
+
+        // --- the type predicates ----------------------------------------------
+        //
+        // Every one goes through `TypeP`, whose numbers are the CONTRACT
+        // between the compiler and every runtime. Answering them here
+        // independently would be a second table to keep in step with the first.
+        Def("string?", (rt, at, n) => Val.Bool(rt.TypeP(4, rt.VAt(at))));
+        Def("keyword?", (rt, at, n) => Val.Bool(rt.TypeP(5, rt.VAt(at))));
+        Def("symbol?", (rt, at, n) => Val.Bool(rt.TypeP(6, rt.VAt(at))));
+        Def("boolean?", (rt, at, n) => Val.Bool(rt.TypeP(7, rt.VAt(at))));
+        Def("vector?", (rt, at, n) => Val.Bool(rt.TypeP(8, rt.VAt(at))));
+        Def("map?", (rt, at, n) => Val.Bool(rt.TypeP(9, rt.VAt(at))));
+        Def("set?", (rt, at, n) => Val.Bool(rt.TypeP(10, rt.VAt(at))));
+        Def("seq?", (rt, at, n) => Val.Bool(rt.TypeP(11, rt.VAt(at))));
+        Def("fn?", (rt, at, n) => Val.Bool(rt.TypeP(12, rt.VAt(at))));
+        Def("sequential?", (rt, at, n) => Val.Bool(rt.IsSequential(rt.VAt(at))));
+        Def("bytes?", (rt, at, n) => Val.Bool(rt.IsHeapTy(rt.VAt(at), Obj.TyBytes)
+                                              || rt.IsHeapTy(rt.VAt(at), Obj.TyBrope)));
+        Def("flint/map-entry?", (rt, at, n) => Val.Bool(rt.IsHeapTy(rt.VAt(at), Obj.TyMapentry)));
+        Def("flint/volatile?", (rt, at, n) => Val.Bool(rt.IsHeapTy(rt.VAt(at), Obj.TyVolatile)));
+        Def("flint/delay?", (rt, at, n) => Val.Bool(rt.IsHeapTy(rt.VAt(at), Obj.TyDelay)));
+
+        Def("compare", (rt, at, n) =>
+            Val.Fixnum(Flint.Rt.Eq.Compare(rt, rt.VAt(at), rt.VAt(at + 1))));
+
+        // --- metadata ---------------------------------------------------------
+        Def("with-meta", (rt, at, n) => {
+            long v = rt.VAt(at);
+            int idx = rt.MetaSlot(v);
+            if (idx < 0) return v;   // nothing carries metadata: hand it back
+            int bas = rt.Mark();
+            int vi = rt.Push(v), mi = rt.Push(rt.VAt(at + 1));
+            int t = Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(vi)));
+            int ln = Obj.Len(rt.gc.sp, Val.AsHeap(rt.R(vi)));
+            long a = rt.Alloc(t, ln);
+            if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+            for (int i = 0; i < ln; i++) rt.SetSlot(a, i, rt.Slot(rt.R(vi), i));
+            rt.SetSlot(a, idx, rt.R(mi));
+            rt.PopTo(bas);
+            return Val.Heap(a);
+        });
+
+        // --- delays -----------------------------------------------------------
+        Def("flint/delay", (rt, at, n) => NewCell(rt, Obj.TyDelay, rt.VAt(at)));
+        Def("flint/realized?", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (rt.IsHeapTy(v, Obj.TyDelay)) return Val.Bool(Val.IsNil(rt.Slot(v, 0)));
+            if (rt.IsHeapTy(v, Obj.TyLazyseq)) return Val.Bool(Val.IsNil(rt.Slot(v, Seqs.LsThunk)));
+            return Val.True;
+        });
+
+        // --- opaque values (`doc/decisions/0022`) -----------------------------
+        //
+        // Guest code can mint one only with id 0 and no builtin reads an id
+        // back, so an id is a thing the HOST wrote and only the host can read.
+        Def("flint/opaque", (rt, at, n) => {
+            int bas = rt.Mark();
+            int li = rt.Push(n > 0 ? rt.VAt(at) : Val.Nil);
+            long a = rt.Alloc(Obj.TyOpaque, 2);
+            if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+            rt.SetSlot(a, 0, Val.Fixnum(0));   // id 0: minted by the guest
+            rt.SetSlot(a, 1, rt.R(li));
+            rt.PopTo(bas);
+            return Val.Heap(a);
+        });
+        Def("flint/capabilities", (rt, at, n) => Val.Fixnum(rt.restoredCapabilities));
+        Def("flint/ex-kind", (rt, at, n) =>
+            rt.IsHeapTy(rt.VAt(at), Obj.TyExinfo) ? Str.Keyword(rt, null, "ex-info") : Val.Nil);
+
+        Def("flint/array-map", (rt, at, n) => {
+            int bas = rt.Mark();
+            int mi = rt.Push(Maps.Empty(rt));
+            for (int i = 0; i + 1 < n; i += 2)
+                rt.SetR(mi, Maps.Assoc(rt, rt.R(mi), rt.VAt(at + i), rt.VAt(at + i + 1)));
+            long outv = rt.R(mi);
+            rt.PopTo(bas);
+            return outv;
+        });
+
+        // --- unchecked arithmetic ---------------------------------------------
+        //
+        // WRAPS rather than throwing, which is the point of asking for it:
+        // `hash` and the bit-mixing in `map.rs` are made of wrapping
+        // arithmetic, and the checked forms refuse the very operations those
+        // are. `unchecked` is the .NET spelling of "I meant this".
+        Def("flint/unchecked-add", (rt, at, n) => {
+            unchecked { return Num.Integer(rt, Val.AsFixnum(rt.VAt(at)) + Val.AsFixnum(rt.VAt(at + 1))); }
+        });
+        Def("flint/unchecked-sub", (rt, at, n) => {
+            unchecked { return Num.Integer(rt, Val.AsFixnum(rt.VAt(at)) - Val.AsFixnum(rt.VAt(at + 1))); }
+        });
+        Def("flint/unchecked-mul", (rt, at, n) => {
+            unchecked { return Num.Integer(rt, Val.AsFixnum(rt.VAt(at)) * Val.AsFixnum(rt.VAt(at + 1))); }
+        });
+
+        // --- byte strings (`doc/decisions/0024`) ------------------------------
+        Def("flint/b-count", (rt, at, n) => Val.Fixnum(Bytes.Count(rt, rt.VAt(at))));
+        Def("flint/b-at", (rt, at, n) => {
+            int b = Bytes.At(rt, rt.VAt(at), (int) Val.AsFixnum(rt.VAt(at + 1)));
+            return b < 0 ? Val.Nil : Val.Fixnum(b);
+        });
+        Def("flint/b-concat", (rt, at, n) => Bytes.Concat(rt, rt.VAt(at), rt.VAt(at + 1)));
+        Def("flint/b-slice", (rt, at, n) => Bytes.Slice(rt, rt.VAt(at),
+            (int) Val.AsFixnum(rt.VAt(at + 1)),
+            n > 2 ? (int) Val.AsFixnum(rt.VAt(at + 2)) : Bytes.Count(rt, rt.VAt(at))));
+        Def("flint/b-depth", (rt, at, n) => Val.Fixnum(Bytes.Depth(rt, rt.VAt(at))));
+        Def("flint/str->b", (rt, at, n) => Bytes.Of(rt, Str.Bytes(rt, rt.VAt(at))));
+        Def("flint/b->str", (rt, at, n) =>
+            Str.Of(rt, System.Text.Encoding.UTF8.GetString(Bytes.ToArray(rt, rt.VAt(at)))));
+        Def("flint/vec->b", (rt, at, n) => {
+            long v = rt.VAt(at);
+            int c = Vec.Count(rt, v);
+            byte[] b = new byte[c];
+            for (int i = 0; i < c; i++) b[i] = (byte) Val.AsFixnum(Vec.Nth(rt, v, i));
+            return Bytes.Of(rt, b);
+        });
+        Def("flint/b->vec", (rt, at, n) => {
+            byte[] b = Bytes.ToArray(rt, rt.VAt(at));
+            int bas = rt.Mark();
+            int vi = rt.Push(Vec.Empty(rt));
+            foreach (byte x in b) rt.SetR(vi, Vec.Conj(rt, rt.R(vi), Val.Fixnum(x & 0xFF)));
+            long outv = rt.R(vi);
+            rt.PopTo(bas);
+            return outv;
+        });
+        Def("flint/b-transient", (rt, at, n) => Bytes.TransientOf(rt, rt.VAt(at)));
+        Def("flint/b-conj!", (rt, at, n) =>
+            Bytes.Conj(rt, rt.VAt(at), (int) Val.AsFixnum(rt.VAt(at + 1))));
+        Def("flint/b-append!", (rt, at, n) => Bytes.AppendBytes(rt, rt.VAt(at), rt.VAt(at + 1)));
+        Def("flint/b-tcount", (rt, at, n) => Val.Fixnum(Bytes.Tcount(rt, rt.VAt(at))));
+        Def("flint/b-persistent!", (rt, at, n) => Bytes.Persistent(rt, rt.VAt(at)));
 
         // --- regex ------------------------------------------------------------
         //
