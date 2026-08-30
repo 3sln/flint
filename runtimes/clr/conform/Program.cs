@@ -174,6 +174,14 @@ public static class Program {
     /// because the standard library is not ported yet and "loaded 85 functions
     /// and then wanted `transient`" is the useful answer while that is true. A
     /// silent pass here would be the misleading one.
+    /// What was thrown, said in flint's terms rather than the host's.
+    static string Why(Flint.Rt.Rt rt) {
+        long t = rt.thrown;
+        if (rt.Describe(t) == "an ex-info" && Flint.Rt.Str.IsString(rt, rt.Slot(t, 0)))
+            return "the program threw: " + Flint.Rt.Str.Text(rt, rt.Slot(t, 0));
+        return "the program threw " + rt.Describe(t);
+    }
+
     private static int RtImage(string path, string want) {
         var rt = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
         var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
@@ -185,11 +193,19 @@ public static class Program {
             + " consts, " + rt.code.Length + " code bytes, entry=" + img.entry
             + ", " + img.nativeNames.Length + " natives, " + img.init.Length + " initialisers");
         // The initialisers first, in order: a program's top-level forms.
-        foreach (int fn in img.init)
+        //
+        // AND CHECKED. A flint throw is not a host exception -- it sets
+        // `thrown` and unwinds to the top, where `Call` returns nil -- so
+        // ignoring it means a program whose top-level `assert` FAILED runs on
+        // to `main` and reports whatever `main` says.
+        foreach (int fn in img.init) {
             rt.Call(rt.MakeClosure(fn, Array.Empty<long>()), Array.Empty<long>());
+            if (!Flint.Rt.Val.IsNil(rt.thrown)) { Console.WriteLine("  FAIL " + Why(rt)); return 1; }
+        }
         long f = rt.MakeClosure(img.entry, Array.Empty<long>());
         try {
             long v = rt.RunProgram(f, new long[]{ Flint.Rt.Val.Nil });
+            if (!Flint.Rt.Val.IsNil(rt.thrown)) { Console.WriteLine("  FAIL " + Why(rt)); return 1; }
             string shown = Flint.Rt.Val.IsFixnum(v)
                     ? Flint.Rt.Val.AsFixnum(v).ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : Flint.Rt.Str.IsString(rt, v) ? Flint.Rt.Str.Text(rt, v)

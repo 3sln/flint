@@ -26,10 +26,22 @@ public class RtImage {
       + " consts, " + rt.code.length + " code bytes, entry=" + img.entry
       + ", " + img.nativeNames.length + " natives, " + img.init.length + " initialisers");
     // The initialisers first, in order: a program's top-level forms.
-    for (int fn : img.init) rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
+    //
+    // AND CHECKED. A flint throw is not a host exception -- it sets `thrown`
+    // and unwinds to the top, where `call` returns nil -- so ignoring it means
+    // a program whose top-level `assert` FAILED runs on to `main` and reports
+    // whatever `main` says. That is how this harness scored the jank suite
+    // HIGHER on the ported runtime than on the native one: it was not noticing
+    // the failed assertions, and a port that beats the thing it mirrors is
+    // never good news.
+    for (int fn : img.init) {
+      rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
+      if (!Val.isNil(rt.thrown)) { System.out.println("  FAIL " + why(rt)); System.exit(1); }
+    }
     long f = rt.makeClosure(img.entry, new long[0]);
     try {
       long v = rt.runProgram(f, new long[]{ Val.NIL });
+      if (!Val.isNil(rt.thrown)) { System.out.println("  FAIL " + why(rt)); System.exit(1); }
       String shown = Val.isFixnum(v) ? String.valueOf(Val.asFixnum(v))
                    : Str.isString(rt, v) ? Str.text(rt, v)
                    : Val.isNil(v) ? "nil"
@@ -45,5 +57,14 @@ public class RtImage {
     } catch (UnsupportedOperationException e) {
       System.out.println("  .. as far as: " + e.getMessage());
     }
+  }
+
+  /// What was thrown, said in flint's terms rather than the host's.
+  static String why(Rt rt) {
+    long t = rt.thrown;
+    if (rt.describe(t).equals("an ex-info") && Str.isString(rt, rt.slot(t, 0))) {
+      return "the program threw: " + Str.text(rt, rt.slot(t, 0));
+    }
+    return "the program threw " + rt.describe(t);
   }
 }
