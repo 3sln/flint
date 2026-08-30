@@ -646,9 +646,22 @@
                           " is shadowed by " (:by u))))
         ;; Grouped by file, and capped, because a library can have dozens and
         ;; the point is to be told, not to be buried.
-        _ (let [by-file (group-by :file @elisions)]
+        ;; Flint's OWN sources are excluded, and that is what keeps the note
+        ;; worth reading. `clojure.core` carries `#?(:flint/check ...)` in
+        ;; every hardened function, so any build with a non-default feature set
+        ;; elides several of them BY DESIGN -- and a warning that fires on
+        ;; correct, intended behaviour is one a reader learns to skip past,
+        ;; which costs them the one time it is about their own code.
+        ;;
+        ;; The note exists to say "a form you wrote silently vanished". A form
+        ;; flint wrote, vanishing exactly as flint intended, is not that.
+        _ (let [mine? (clojure.core/fn [f]
+                        (not (or (str/starts-with? (str f) (str root "/lib"))
+                                 (str/starts-with? (str f) (str root "/units")))))
+                by-file (group-by :file (filter (comp mine? :file) @elisions))]
             (when (seq by-file)
-              (println (str "note: " (count @elisions) " reader conditional(s) in "
+              (println (str "note: " (reduce + (map (comp count val) by-file))
+                            " reader conditional(s) in "
                             (count by-file) " file(s) matched none of "
                             (str/join ", " (sort (map str features)))
                             " -- the form each stood in was DELETED"))

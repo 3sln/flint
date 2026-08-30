@@ -110,42 +110,64 @@
 
   Written as a function rather than a macro because a macro that expands to a
   `def` defines a var this compiler never records: names are collected before
-  any macro is evaluated. See `def-form-names`."
+  any macro is evaluated. See `def-form-names`.
+
+  Every call site is inside `#?(:flint/check ...)`, and that is MEASURED rather
+  than tidy: attaching these fifteen explanations unconditionally cost 3 578
+  bytes in a module that calls none of them (264 941 against 261 363, a pure
+  `(defn main [_] \"nothing\")`). `doc/decisions/0032` says a check costs
+  nothing in the build that ships, and metadata that ships is a cost -- so the
+  reader removes the map and `m-defn` emits no `with-meta` at all."
   [expected]
   (fn [_ args]
     {:expected expected
      :note (flint.rt/str-join
             ["got " (flint.rt/name (flint.rt/kind (flint.rt/nth args 0)))])}))
 
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a number")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a number")}
+                             :default nil)}
   number? [x] (flint.rt/number? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "an integer")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "an integer")}
+                             :default nil)}
   int? [x] (flint.rt/int? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "an integer")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "an integer")}
+                             :default nil)}
   integer? [x] (flint.rt/int? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a float")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a float")}
+                             :default nil)}
   float? [x] (flint.rt/float? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a float")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a float")}
+                             :default nil)}
   double? [x] (flint.rt/float? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a string")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a string")}
+                             :default nil)}
   string? [x] (flint.rt/string? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a keyword")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a keyword")}
+                             :default nil)}
   keyword? [x] (flint.rt/keyword? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a symbol")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a symbol")}
+                             :default nil)}
   symbol? [x] (flint.rt/symbol? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a vector")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a vector")}
+                             :default nil)}
   vector? [x] (flint.rt/vector? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a map")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a map")}
+                             :default nil)}
   map? [x] (flint.rt/map? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a set")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a set")}
+                             :default nil)}
   set? [x] (flint.rt/set? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a seq")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a seq")}
+                             :default nil)}
   seq? [x] (flint.rt/seq? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a list")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a list")}
+                             :default nil)}
   list? [x] (flint.rt/seq? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "a function")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a function")}
+                             :default nil)}
   fn? [x] (flint.rt/fn? x))
-(defn ^{:flint/value-meta {:flint.check/explain (kind-explain "something sequential")}}
+(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "something sequential")}
+                             :default nil)}
   sequential? [x] (flint.rt/sequential? x))
 
 (defn apply2 [f args] (flint.rt/apply f args))
@@ -418,9 +440,51 @@
   ([x & more] (loop [acc (str x) s (seq more)]
                 (if s (recur (flint.rt/str2 acc (str (first s))) (next s)) acc))))
 
+(defn- check-subs
+  "Throw a substring range error that says which end was wrong, and by how much."
+  [who s start end]
+  (let [n (count s)]
+    (cond
+      (not (string? s))
+      (throw (ex-info (str who " wants a string, got " (name (flint.rt/kind s)))
+                      {:actual s}))
+      (not (int? start))
+      (throw (ex-info (str who " start must be an integer, got "
+                           (name (flint.rt/kind start)))
+                      {:start start}))
+      (not (int? end))
+      (throw (ex-info (str who " end must be an integer, got "
+                           (name (flint.rt/kind end)))
+                      {:end end}))
+      (neg? start)
+      (throw (ex-info (str who " start is negative: " start)
+                      {:start start :end end :length n}))
+      (> end n)
+      (throw (ex-info (str who " end is " end ", past the end of a string of "
+                           n " character" (if (= n 1) "" "s"))
+                      {:start start :end end :length n}))
+      (> start end)
+      (throw (ex-info (str who " start " start " is past its end " end)
+                      {:start start :end end :length n}))
+      :else nil)))
+
 (defn subs
-  ([s start] (flint.rt/subs s start))
-  ([s start end] (flint.rt/subs s start end)))
+  ;; The check names the NUMBERS. `bad substring range` is true and useless:
+  ;; the two things a reader needs are which end was out and what the length
+  ;; actually was, and both are right here and gone by the time it throws.
+  ;;
+  ;; Written as a `throw` rather than as `flint.check/expect`, and that is a
+  ;; hard constraint rather than a style: `clojure.core` is compiled BEFORE
+  ;; `flint.check` -- it has to be, since `flint.check` is written in this
+  ;; language -- so nothing in this file can name it. What the check branch
+  ;; buys here is the same thing it buys anywhere: under `:optimize [perf]`
+  ;; the reader deletes it and the call is the raw builtin again.
+  ([s start]
+   #?(:flint/check (check-subs "subs" s start (count s)))
+   (flint.rt/subs s start))
+  ([s start end]
+   #?(:flint/check (check-subs "subs" s start end))
+   (flint.rt/subs s start end)))
 
 (defn keyword
   ([n] (if (keyword? n) n (flint.rt/keyword2 n)))
@@ -928,9 +992,30 @@
   ([kf cmp coll] (let [c (as-comparator cmp)]
                    (merge-sort (fn [a b] (c (kf a) (kf b))) (vec coll)))))
 
+(defn- check-partition [who n step]
+  (cond
+    (not (int? n))
+    (throw (ex-info (str who " size must be an integer, got " (name (flint.rt/kind n)))
+                    {:n n}))
+    (not (pos? n))
+    ;; `(partition 0 coll)` took nothing, found nothing missing, dropped
+    ;; nothing and recurred -- an infinite sequence of nils, produced silently
+    ;; and lazily, so the symptom appeared wherever it was finally realised
+    ;; rather than here.
+    (throw (ex-info (str who " size must be positive, got " n
+                         " -- a partition of " n " would never consume the "
+                         "collection and the sequence would not end")
+                    {:n n}))
+    (not (pos? step))
+    (throw (ex-info (str who " step must be positive, got " step
+                         " -- a step of " step " would not advance")
+                    {:step step}))
+    :else nil))
+
 (defn partition
   ([n coll] (partition n n coll))
   ([n step coll]
+   #?(:flint/check (check-partition "partition" n step))
    (lazy-seq (let [s (seq coll)]
                (when s
                  (let [p (vec (take n s))]
@@ -940,6 +1025,7 @@
 (defn partition-all
   ([n coll] (partition-all n n coll))
   ([n step coll]
+   #?(:flint/check (check-partition "partition-all" n step))
    (lazy-seq (let [s (seq coll)]
                (when s (cons (seq (vec (take n s))) (partition-all n step (drop step s))))))))
 
