@@ -35,6 +35,11 @@ public sealed class Rt : System.IDisposable {
     /// exception would unwind the host stack instead.
     public long thrown = Val.Nil;
 
+    /// The singleton slots, from `rt.rs`. Numbered rather than named fields so
+    /// a snapshot can write them as one array.
+    public const int SingEmptyList = 0, SingEmptyVec = 1, SingEmptyMap = 2,
+        SingEmptySet = 3, SingSched = 4, SingBindings = 5, SingCount = 6;
+
     public long steps;
 
     /// The builtins this image imports, resolved BY NAME. The slots in an image
@@ -461,9 +466,13 @@ public sealed class Rt : System.IDisposable {
     /// and answer wrongly.
     bool TypeP(int code, long v) {
         switch (code) {
-            case 1: return Val.IsFixnum(v);
+            // `IsInt`, NOT `IsFixnum`. A big integer is an integer, and the
+            // library's printer dispatches on this: with `IsFixnum` here the
+            // bits of 1.5 printed as `#<unprintable>` rather than as
+            // 4609434218613702656, because a bigint fell through every arm.
+            case 1: return Num.IsInt(this, v);
             case 2: return Val.IsDouble(v);
-            case 3: return Val.IsFixnum(v) || Val.IsDouble(v);
+            case 3: return Num.IsNumber(this, v);
             case 4: return Str.IsString(this, v);
             case 5: return Val.IsInlineKw(v) || IsHeapTy(v, TyKw);
             case 6: return IsHeapTy(v, TySym);

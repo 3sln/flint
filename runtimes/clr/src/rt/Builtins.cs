@@ -329,6 +329,240 @@ public static class Builtins {
         });
         Def("hash", (rt, at, n) => Val.Fixnum(Flint.Rt.Eq.HashValue(rt, rt.VAt(at))));
 
+        // The math builtins. `fmath.rs` implements these itself because wasm
+        // has no libm; on a host they go to the platform, which is where the
+        // IEEE results come from in the first place.
+        Def("flint/sqrt", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Sqrt(x)));
+        Def("flint/cbrt", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Cbrt(x)));
+        Def("flint/exp", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Exp(x)));
+        Def("flint/expm1", (rt, at, n) => MathOne(rt, rt.VAt(at), x => (System.Math.Exp(x) - 1.0)));
+        Def("flint/log", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Log(x)));
+        Def("flint/log10", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Log10(x)));
+        Def("flint/log1p", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Log(1.0 + x)));
+        Def("flint/sin", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Sin(x)));
+        Def("flint/cos", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Cos(x)));
+        Def("flint/tan", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Tan(x)));
+        Def("flint/asin", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Asin(x)));
+        Def("flint/acos", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Acos(x)));
+        Def("flint/atan", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Atan(x)));
+        Def("flint/sinh", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Sinh(x)));
+        Def("flint/cosh", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Cosh(x)));
+        Def("flint/tanh", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Tanh(x)));
+        Def("flint/floor", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Floor(x)));
+        Def("flint/ceil", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Ceiling(x)));
+        Def("flint/rint", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Round(x)));
+        Def("flint/signum", (rt, at, n) => MathOne(rt, rt.VAt(at), x => (double) System.Math.Sign(x)));
+        Def("flint/fabs", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Abs(x)));
+        Def("flint/pow", (rt, at, n) => MathTwo(rt, rt.VAt(at), rt.VAt(at + 1), (x, y) => System.Math.Pow(x, y)));
+        Def("flint/atan2", (rt, at, n) => MathTwo(rt, rt.VAt(at), rt.VAt(at + 1), (x, y) => System.Math.Atan2(x, y)));
+        Def("flint/hypot", (rt, at, n) => MathTwo(rt, rt.VAt(at), rt.VAt(at + 1), (x, y) => (double) System.Math.Sqrt(x*x + y*y)));
+        Def("flint/trunc", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Truncate(x)));
+        Def("flint/copy-sign", (rt, at, n) =>
+            MathTwo(rt, rt.VAt(at), rt.VAt(at + 1), (x, y) => System.Math.CopySign(System.Math.Abs(x), y)));
+        Def("flint/to-long", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (Num.IsInt(rt, v)) return v;
+            if (!Val.IsDouble(v)) throw new System.ArgumentException("not a number: " + rt.Describe(v));
+            double d = System.Math.Truncate(Val.AsDouble(v));
+            if (!double.IsFinite(d) || d < -9.223372036854776e18 || d > 9.223372036854776e18)
+                throw new System.ArgumentException("value out of long range");
+            return Num.Integer(rt, (long) d);
+        });
+
+        // --- atoms, volatiles and delays --------------------------------------
+        //
+        // One slot each, and `deref` reads it. There is no lock: a sandbox's
+        // threads are GREEN, so only one runs at a time and a compare-and-set
+        // cannot be interrupted between the compare and the set. That is a
+        // property of the scheduler and not of this code, and it is why it can
+        // be written this plainly.
+        Def("atom", (rt, at, n) => NewCell(rt, Obj.TyAtom, rt.VAt(at)));
+        Def("flint/volatile", (rt, at, n) => NewCell(rt, Obj.TyVolatile, rt.VAt(at)));
+        Def("deref", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (rt.IsHeapTy(v, Obj.TyAtom) || rt.IsHeapTy(v, Obj.TyVolatile)) return rt.Slot(v, 0);
+            if (rt.IsHeapTy(v, Obj.TyDelay)) {
+                long thunk = rt.Slot(v, 0);
+                if (Val.IsNil(thunk)) return rt.Slot(v, 1);
+                int bas = rt.Mark();
+                int di = rt.Push(v);
+                long r = rt.Invoke(thunk, System.Array.Empty<long>());
+                int ri = rt.Push(r);
+                long d = rt.R(di);
+                rt.SetSlot(Val.AsHeap(d), 0, Val.Nil);   // forced: drop the thunk
+                rt.SetSlot(Val.AsHeap(d), 1, rt.R(ri));
+                long outv = rt.R(ri);
+                rt.PopTo(bas);
+                return outv;
+            }
+            throw new System.InvalidCastException("cannot deref " + rt.Describe(v));
+        });
+        Def("reset!", (rt, at, n) => {
+            long a = rt.VAt(at);
+            if (!rt.IsHeapTy(a, Obj.TyAtom) && !rt.IsHeapTy(a, Obj.TyVolatile))
+                throw new System.InvalidCastException("not an atom: " + rt.Describe(a));
+            rt.SetSlot(Val.AsHeap(a), 0, rt.VAt(at + 1));
+            return rt.VAt(at + 1);
+        });
+        Def("compare-and-set!", (rt, at, n) => {
+            long a = rt.VAt(at);
+            if (!rt.IsHeapTy(a, Obj.TyAtom) && !rt.IsHeapTy(a, Obj.TyVolatile))
+                throw new System.InvalidCastException("not an atom: " + rt.Describe(a));
+            if (rt.Slot(a, 0) != rt.VAt(at + 1)) return Val.False;
+            rt.SetSlot(Val.AsHeap(a), 0, rt.VAt(at + 2));
+            return Val.True;
+        });
+
+        // --- dynamic bindings -------------------------------------------------
+        //
+        // A MAP in a singleton slot, not a per-var stack. `binding` swaps the
+        // whole map and restores it, so a park in the middle carries the
+        // bindings with the thread rather than leaving them behind.
+        Def("flint/dyn-get", (rt, at, n) => {
+            long binds = rt.roots.Singletons[Rt.SingBindings];
+            if (Val.IsNil(binds)) return rt.VAt(at + 1);
+            return Maps.Get(rt, binds, rt.VAt(at), rt.VAt(at + 1));
+        });
+        Def("flint/dyn-bindings", (rt, at, n) => {
+            long b = rt.roots.Singletons[Rt.SingBindings];
+            return Val.IsNil(b) ? Maps.Empty(rt) : b;
+        });
+        Def("flint/dyn-set-bindings", (rt, at, n) => {
+            rt.roots.Singletons[Rt.SingBindings] = rt.VAt(at);
+            return rt.VAt(at);
+        });
+
+        // --- vectors as stacks ------------------------------------------------
+        Def("peek", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (Val.IsNil(v)) return Val.Nil;
+            // A VECTOR peeks at its LAST element and a seq at its FIRST. That
+            // asymmetry is Clojure's, and it is the same one `conj` has: each
+            // takes the end that is cheap.
+            if (rt.IsHeapTy(v, Obj.TyVec)) {
+                int c = Vec.Count(rt, v);
+                return c == 0 ? Val.Nil : Vec.Nth(rt, v, c - 1);
+            }
+            return Seqs.First(rt, v);
+        });
+        Def("pop", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (rt.IsHeapTy(v, Obj.TyVec)) {
+                int c = Vec.Count(rt, v);
+                if (c == 0) throw new System.InvalidOperationException("cannot pop an empty vector");
+                int bas = rt.Mark();
+                int ai = rt.Push(Vec.Empty(rt));
+                int vi = rt.Push(v);
+                for (int i = 0; i < c - 1; i++)
+                    rt.SetR(ai, Vec.Conj(rt, rt.R(ai), Vec.Nth(rt, rt.R(vi), i)));
+                long outv = rt.R(ai);
+                rt.PopTo(bas);
+                return outv;
+            }
+            if (Val.IsNil(v)) throw new System.InvalidOperationException("cannot pop nil");
+            return Seqs.Rest(rt, v);
+        });
+        Def("empty", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (rt.IsHeapTy(v, Obj.TyVec)) return Vec.Empty(rt);
+            if (Maps.IsMap(rt, v)) return Maps.Empty(rt);
+            if (Sets.IsSet(rt, v)) return Sets.Empty(rt);
+            if (rt.IsSeq(v)) return Seqs.EmptyList(rt);
+            return Val.Nil;
+        });
+
+        // --- strings ----------------------------------------------------------
+        Def("flint/subs", (rt, at, n) => {
+            string s = Str.Text(rt, rt.VAt(at));
+            var si = new System.Globalization.StringInfo(s);
+            int len = CodePointCount(s);
+            int start = (int) Val.AsFixnum(rt.VAt(at + 1));
+            int end = n > 2 ? (int) Val.AsFixnum(rt.VAt(at + 2)) : len;
+            if (start < 0 || end > len || start > end)
+                throw new System.IndexOutOfRangeException("subs " + start + ".." + end + " of " + len);
+            // By CODE POINT, not by char: a .NET `string` is UTF-16, so slicing
+            // it by index would cut a surrogate pair in half.
+            int bs = OffsetByCodePoints(s, start), be = OffsetByCodePoints(s, end);
+            return Str.Of(rt, s.Substring(bs, be - bs));
+        });
+        Def("flint/str->num", (rt, at, n) => {
+            string s = Str.Text(rt, rt.VAt(at)).Trim();
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            if (s.IndexOf('.') < 0 && s.IndexOf('e') < 0 && s.IndexOf('E') < 0) {
+                return long.TryParse(s, System.Globalization.NumberStyles.Integer, inv, out long l)
+                    ? Num.Integer(rt, l) : Val.Nil;
+            }
+            return double.TryParse(s, System.Globalization.NumberStyles.Float, inv, out double d)
+                ? Val.OfDouble(d) : Val.Nil;   // nil, not a throw: this is a PARSE attempt
+        });
+        Def("flint/str-index-of", (rt, at, n) => {
+            string h = Str.Text(rt, rt.VAt(at));
+            string needle = Str.Text(rt, rt.VAt(at + 1));
+            int from = n > 2 ? (int) Val.AsFixnum(rt.VAt(at + 2)) : 0;
+            int at16 = from <= 0 ? 0 : OffsetByCodePoints(h, System.Math.Min(from, CodePointCount(h)));
+            int i = h.IndexOf(needle, at16, System.StringComparison.Ordinal);
+            return i < 0 ? Val.Nil : Val.Fixnum(CodePointCount(h.Substring(0, i)));
+        });
+        Def("flint/str-join", (rt, at, n) => {
+            var sb = new System.Text.StringBuilder();
+            int bas = rt.Mark();
+            int s = rt.Push(Seqs.Seq(rt, rt.VAt(at)));
+            while (!Val.IsNil(rt.R(s))) {
+                sb.Append(Str.Text(rt, Seqs.First(rt, rt.R(s))));
+                rt.SetR(s, Seqs.Next(rt, rt.R(s)));
+            }
+            rt.PopTo(bas);
+            return Str.Of(rt, sb.ToString());
+        });
+        Def("flint/upper-case", (rt, at, n) =>
+            Str.Of(rt, Str.Text(rt, rt.VAt(at)).ToUpperInvariant()));
+        Def("flint/lower-case", (rt, at, n) =>
+            Str.Of(rt, Str.Text(rt, rt.VAt(at)).ToLowerInvariant()));
+        Def("flint/code-point-at", (rt, at, n) => {
+            string s = Str.Text(rt, rt.VAt(at));
+            int i = (int) Val.AsFixnum(rt.VAt(at + 1));
+            if (i < 0 || i >= CodePointCount(s))
+                throw new System.IndexOutOfRangeException("index " + i + " out of range");
+            return Val.Fixnum(char.ConvertToUtf32(s, OffsetByCodePoints(s, i)));
+        });
+        Def("flint/from-code-point", (rt, at, n) => {
+            long c = Val.AsFixnum(rt.VAt(at));
+            if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF))
+                throw new System.ArgumentException("not a code point: " + c);
+            return Str.Of(rt, char.ConvertFromUtf32((int) c));
+        });
+        Def("flint/str-bytes", (rt, at, n) => {
+            byte[] b = Str.Bytes(rt, rt.VAt(at));
+            int bas = rt.Mark();
+            int vi = rt.Push(Vec.Empty(rt));
+            foreach (byte x in b) rt.SetR(vi, Vec.Conj(rt, rt.R(vi), Val.Fixnum(x & 0xFF)));
+            long outv = rt.R(vi);
+            rt.PopTo(bas);
+            return outv;
+        });
+        Def("flint/bytes->str", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (!rt.IsHeapTy(v, Obj.TyVec))
+                throw new System.InvalidCastException("bytes->str wants a vector of bytes");
+            int c = Vec.Count(rt, v);
+            byte[] b = new byte[c];
+            for (int i = 0; i < c; i++) b[i] = (byte) Val.AsFixnum(Vec.Nth(rt, v, i));
+            return Str.Of(rt, System.Text.Encoding.UTF8.GetString(b));
+        });
+        Def("flint/bits->double", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (!Num.IsInt(rt, v)) throw new System.InvalidCastException("bits->double wants an integer");
+            return Val.OfDouble(System.BitConverter.Int64BitsToDouble(Num.AsI64(rt, v).Value));
+        });
+
+        /// The raw IEEE bits of a double, as an integer. What lets flint code
+        /// print a double bit-exactly rather than through a formatter.
+        Def("flint/double-bits", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (!Val.IsDouble(v)) throw new System.InvalidCastException("not a double: " + rt.Describe(v));
+            return Num.Integer(rt, System.BitConverter.DoubleToInt64Bits(Val.AsDouble(v)));
+        });
+
         // Exceptions. `ex-info` is `[msg, data, cause]`, and `throw` is an
         // OPCODE rather than a builtin -- these are what a handler reads.
         Def("ex-info", (rt, at, n) => {
@@ -406,6 +640,53 @@ public static class Builtins {
             for (int i = 1; i < n; i++) if (!Eq(rt, rt.VAt(at), rt.VAt(at + i))) return Val.False;
             return Val.True;
         });
+    }
+
+    /// A one-slot cell: an atom or a volatile. Same shape, different type tag
+    /// -- the difference is what the LIBRARY allows, not what the runtime does.
+    static long NewCell(Rt rt, int ty, long v) {
+        int bas = rt.Mark();
+        int vi = rt.Push(v);
+        long a = rt.Alloc(ty, 2);
+        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+        rt.SetSlot(a, 0, rt.R(vi));
+        rt.SetSlot(a, 1, Val.Nil);
+        rt.PopTo(bas);
+        return Val.Heap(a);
+    }
+
+    /// .NET has no `codePointCount`/`offsetByCodePoints`, so they are written
+    /// out. Both count SURROGATE PAIRS as one, which is the whole point: flint
+    /// indexes strings by code point and a UTF-16 index would cut one in half.
+    static int CodePointCount(string s) {
+        int n = 0;
+        for (int i = 0; i < s.Length; i++) { if (!char.IsLowSurrogate(s[i])) n++; }
+        return n;
+    }
+
+    static int OffsetByCodePoints(string s, int cp) {
+        int i = 0, seen = 0;
+        while (i < s.Length && seen < cp) {
+            i += char.IsHighSurrogate(s[i]) && i + 1 < s.Length ? 2 : 1;
+            seen++;
+        }
+        return i;
+    }
+
+    /// Every unary math builtin has the same shape: refuse a non-number by
+    /// NAME, else compute in double. Written once so a new one cannot get the
+    /// refusal wrong.
+    static long MathOne(Rt rt, long v, System.Func<double, double> f) {
+        if (!Num.IsNumber(rt, v))
+            throw new System.ArgumentException("not a number: " + rt.Describe(v));
+        return Val.OfDouble(f(Num.F64(rt, v)));
+    }
+
+    static long MathTwo(Rt rt, long a, long b, System.Func<double, double, double> f) {
+        if (!Num.IsNumber(rt, a) || !Num.IsNumber(rt, b))
+            throw new System.ArgumentException(
+                "not a number: " + rt.Describe(a) + " and " + rt.Describe(b));
+        return Val.OfDouble(f(Num.F64(rt, a), Num.F64(rt, b)));
     }
 
     /// The NAME of a string, keyword or symbol, as a host string. `keyword`

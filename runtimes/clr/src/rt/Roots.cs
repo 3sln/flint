@@ -28,7 +28,22 @@ public sealed class Roots {
 
     public long[] Globals = System.Array.Empty<long>();
     public long[] Consts = System.Array.Empty<long>();
-    public long[] Singletons = System.Array.Empty<long>();
+    /// Sized AND FILLED WITH NIL at construction.
+    ///
+    /// Both halves matter. Sized, because `SingBindings` is read before any
+    /// image has been loaded and an empty array would be an index error rather
+    /// than an absent binding. Filled, because a zero-filled array of values is
+    /// NOT a nil-filled one: 0 is the bit pattern of `+0.0`, so an unset slot
+    /// read back as the DOUBLE ZERO and `dyn-bindings` answered a number where
+    /// a map was expected. The failure surfaced three frames away as "assoc
+    /// onto a double".
+    public long[] Singletons = NewSingletons();
+
+    static long[] NewSingletons() {
+        long[] s = new long[Rt.SingCount];
+        System.Array.Fill(s, Val.Nil);
+        return s;
+    }
 
     /// Old objects holding a young pointer. An old object pointing at a young
     /// one MUST be in here, or the young one is never traced, dies, and leaves

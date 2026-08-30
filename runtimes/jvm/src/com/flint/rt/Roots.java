@@ -36,7 +36,22 @@ public final class Roots {
 
     public long[] globals = new long[0];
     public long[] consts = new long[0];
-    public long[] singletons = new long[0];
+    /// Sized AND FILLED WITH NIL at construction.
+    ///
+    /// Both halves matter. Sized, because `SING_BINDINGS` is read before any
+    /// image has been loaded and an empty array would be an index error rather
+    /// than an absent binding. Filled, because a zero-filled array of values is
+    /// NOT a nil-filled one: 0 is the bit pattern of `+0.0`, so an unset slot
+    /// read back as the DOUBLE ZERO and `dyn-bindings` answered a number where
+    /// a map was expected. The failure surfaced three frames away as "assoc
+    /// onto a double", which is why the slot is written rather than left.
+    public long[] singletons = newSingletons();
+
+    static long[] newSingletons() {
+        long[] s = new long[Rt.SING_COUNT];
+        java.util.Arrays.fill(s, Val.NIL);
+        return s;
+    }
 
     /// Old objects holding a young pointer. The generational invariant: an old
     /// object pointing at a young one MUST be in here, or the young one is

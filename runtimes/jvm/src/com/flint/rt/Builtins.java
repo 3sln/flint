@@ -340,6 +340,250 @@ public final class Builtins {
         });
         def("hash", (rt, at, n) -> Val.fixnum(Eq.hashValue(rt, rt.vat(at))));
 
+        // The math builtins. `fmath.rs` implements these itself because wasm
+        // has no libm; on a host they go to the platform, which is where the
+        // IEEE results come from in the first place. `hosted` compares them
+        // against the native runtime, so a divergence in the last bit shows up
+        // as a differing STRING rather than passing silently.
+        def("flint/sqrt", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.sqrt(x)));
+        def("flint/cbrt", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.cbrt(x)));
+        def("flint/exp", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.exp(x)));
+        def("flint/expm1", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.expm1(x)));
+        def("flint/log", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.log(x)));
+        def("flint/log10", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.log10(x)));
+        def("flint/log1p", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.log1p(x)));
+        def("flint/sin", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.sin(x)));
+        def("flint/cos", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.cos(x)));
+        def("flint/tan", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.tan(x)));
+        def("flint/asin", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.asin(x)));
+        def("flint/acos", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.acos(x)));
+        def("flint/atan", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.atan(x)));
+        def("flint/sinh", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.sinh(x)));
+        def("flint/cosh", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.cosh(x)));
+        def("flint/tanh", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.tanh(x)));
+        def("flint/floor", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.floor(x)));
+        def("flint/ceil", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.ceil(x)));
+        def("flint/rint", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.rint(x)));
+        def("flint/signum", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.signum(x)));
+        def("flint/fabs", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> Math.abs(x)));
+        def("flint/pow", (rt, at, n) -> mathTwo(rt, rt.vat(at), rt.vat(at + 1), (x, y) -> Math.pow(x, y)));
+        def("flint/atan2", (rt, at, n) -> mathTwo(rt, rt.vat(at), rt.vat(at + 1), (x, y) -> Math.atan2(x, y)));
+        def("flint/hypot", (rt, at, n) -> mathTwo(rt, rt.vat(at), rt.vat(at + 1), (x, y) -> Math.hypot(x, y)));
+        def("flint/trunc", (rt, at, n) -> mathOne(rt, rt.vat(at), x -> x < 0 ? Math.ceil(x) : Math.floor(x)));
+        def("flint/copy-sign", (rt, at, n) ->
+            mathTwo(rt, rt.vat(at), rt.vat(at + 1), (x, y) -> Math.copySign(Math.abs(x), y)));
+        def("flint/to-long", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (Num.isInt(rt, v)) return v;
+            if (!Val.isDouble(v)) throw new IllegalArgumentException("not a number: " + rt.describe(v));
+            double d = Val.asDouble(v);
+            d = d < 0 ? Math.ceil(d) : Math.floor(d);
+            if (!Double.isFinite(d) || d < -9.223372036854776e18 || d > 9.223372036854776e18) {
+                throw new IllegalArgumentException("value out of long range");
+            }
+            return Num.integer(rt, (long) d);
+        });
+
+        /// The raw IEEE bits of a double, as an integer. What lets flint code
+        /// print a double bit-exactly rather than through a formatter.
+        def("flint/double-bits", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (!Val.isDouble(v)) throw new ClassCastException("not a double: " + rt.describe(v));
+            return Num.integer(rt, Double.doubleToRawLongBits(Val.asDouble(v)));
+        });
+
+        // --- atoms, volatiles and delays --------------------------------------
+        //
+        // One slot each, and `deref` reads it. There is no lock: a sandbox's
+        // threads are GREEN, so only one runs at a time and a compare-and-set
+        // cannot be interrupted between the compare and the set. That is a
+        // property of the scheduler and not of this code, and it is why it can
+        // be written this plainly.
+        def("atom", (rt, at, n) -> newCell(rt, TY_ATOM, rt.vat(at)));
+        def("flint/volatile", (rt, at, n) -> newCell(rt, TY_VOLATILE, rt.vat(at)));
+        def("deref", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (rt.isHeapTy(v, TY_ATOM) || rt.isHeapTy(v, TY_VOLATILE)) return rt.slot(v, 0);
+            if (rt.isHeapTy(v, TY_DELAY)) {
+                long thunk = rt.slot(v, 0);
+                if (Val.isNil(thunk)) return rt.slot(v, 1);
+                int base = rt.mark();
+                int di = rt.push(v);
+                long r = rt.invoke(thunk, new long[0]);
+                int ri = rt.push(r);
+                long d = rt.r(di);
+                rt.setSlot(Val.asHeap(d), 0, Val.NIL);   // forced: drop the thunk
+                rt.setSlot(Val.asHeap(d), 1, rt.r(ri));
+                long out = rt.r(ri);
+                rt.popTo(base);
+                return out;
+            }
+            throw new ClassCastException("cannot deref " + rt.describe(v));
+        });
+        def("reset!", (rt, at, n) -> {
+            long a = rt.vat(at);
+            if (!rt.isHeapTy(a, TY_ATOM) && !rt.isHeapTy(a, TY_VOLATILE)) {
+                throw new ClassCastException("not an atom: " + rt.describe(a));
+            }
+            rt.setSlot(Val.asHeap(a), 0, rt.vat(at + 1));
+            return rt.vat(at + 1);
+        });
+        def("compare-and-set!", (rt, at, n) -> {
+            long a = rt.vat(at);
+            if (!rt.isHeapTy(a, TY_ATOM) && !rt.isHeapTy(a, TY_VOLATILE)) {
+                throw new ClassCastException("not an atom: " + rt.describe(a));
+            }
+            if (rt.slot(a, 0) != rt.vat(at + 1)) return Val.FALSE;
+            rt.setSlot(Val.asHeap(a), 0, rt.vat(at + 2));
+            return Val.TRUE;
+        });
+
+        // --- dynamic bindings -------------------------------------------------
+        //
+        // A MAP in a singleton slot, not a per-var stack. `binding` swaps the
+        // whole map and restores it, so a park in the middle carries the
+        // bindings with the thread rather than leaving them behind.
+        def("flint/dyn-get", (rt, at, n) -> {
+            long binds = rt.roots.singletons[Rt.SING_BINDINGS];
+            if (Val.isNil(binds)) return rt.vat(at + 1);
+            return Maps.get(rt, binds, rt.vat(at), rt.vat(at + 1));
+        });
+        def("flint/dyn-bindings", (rt, at, n) -> {
+            long b = rt.roots.singletons[Rt.SING_BINDINGS];
+            return Val.isNil(b) ? Maps.empty(rt) : b;
+        });
+        def("flint/dyn-set-bindings", (rt, at, n) -> {
+            rt.roots.singletons[Rt.SING_BINDINGS] = rt.vat(at);
+            return rt.vat(at);
+        });
+
+        // --- vectors as stacks ------------------------------------------------
+        def("peek", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (Val.isNil(v)) return Val.NIL;
+            // A VECTOR peeks at its LAST element and a seq at its FIRST. That
+            // asymmetry is Clojure's, and it is the same one `conj` has: each
+            // takes the end that is cheap.
+            if (rt.isHeapTy(v, TY_VEC)) {
+                int c = Vec.count(rt, v);
+                return c == 0 ? Val.NIL : Vec.nth(rt, v, c - 1);
+            }
+            return Seqs.first(rt, v);
+        });
+        def("pop", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (rt.isHeapTy(v, TY_VEC)) {
+                int c = Vec.count(rt, v);
+                if (c == 0) throw new IllegalStateException("cannot pop an empty vector");
+                int base = rt.mark();
+                int ai = rt.push(Vec.empty(rt));
+                int vi = rt.push(v);
+                for (int i = 0; i < c - 1; i++) {
+                    rt.setR(ai, Vec.conj(rt, rt.r(ai), Vec.nth(rt, rt.r(vi), i)));
+                }
+                long out = rt.r(ai);
+                rt.popTo(base);
+                return out;
+            }
+            if (Val.isNil(v)) throw new IllegalStateException("cannot pop nil");
+            return Seqs.rest(rt, v);
+        });
+        def("empty", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (rt.isHeapTy(v, TY_VEC)) return Vec.empty(rt);
+            if (Maps.isMap(rt, v)) return Maps.empty(rt);
+            if (Sets.isSet(rt, v)) return Sets.empty(rt);
+            if (rt.isSeq(v)) return Seqs.emptyList(rt);
+            return Val.NIL;
+        });
+
+        // --- strings ----------------------------------------------------------
+        def("flint/subs", (rt, at, n) -> {
+            String s = Str.text(rt, rt.vat(at));
+            int len = s.codePointCount(0, s.length());
+            int start = (int) Val.asFixnum(rt.vat(at + 1));
+            int end = n > 2 ? (int) Val.asFixnum(rt.vat(at + 2)) : len;
+            if (start < 0 || end > len || start > end) {
+                throw new IndexOutOfBoundsException("subs " + start + ".." + end + " of " + len);
+            }
+            // By CODE POINT, not by char: a Java `String` is UTF-16, so slicing
+            // it by index would cut a surrogate pair in half.
+            int bs = s.offsetByCodePoints(0, start);
+            int be = s.offsetByCodePoints(0, end);
+            return Str.of(rt, s.substring(bs, be));
+        });
+        def("flint/str->num", (rt, at, n) -> {
+            String s = Str.text(rt, rt.vat(at)).trim();
+            try {
+                if (s.indexOf('.') < 0 && s.indexOf('e') < 0 && s.indexOf('E') < 0) {
+                    return Num.integer(rt, Long.parseLong(s));
+                }
+                return Val.ofDouble(Double.parseDouble(s));
+            } catch (NumberFormatException e) {
+                return Val.NIL;   // nil, not a throw: `str->num` is a PARSE attempt
+            }
+        });
+        def("flint/str-index-of", (rt, at, n) -> {
+            String h = Str.text(rt, rt.vat(at));
+            String needle = Str.text(rt, rt.vat(at + 1));
+            int from = n > 2 ? (int) Val.asFixnum(rt.vat(at + 2)) : 0;
+            int at16 = from <= 0 ? 0 : h.offsetByCodePoints(0, Math.min(from, h.codePointCount(0, h.length())));
+            int i = h.indexOf(needle, at16);
+            return i < 0 ? Val.NIL : Val.fixnum(h.codePointCount(0, i));
+        });
+        def("flint/str-join", (rt, at, n) -> {
+            StringBuilder sb = new StringBuilder();
+            int base = rt.mark();
+            int s = rt.push(Seqs.seq(rt, rt.vat(at)));
+            while (!Val.isNil(rt.r(s))) {
+                sb.append(Str.text(rt, Seqs.first(rt, rt.r(s))));
+                rt.setR(s, Seqs.next(rt, rt.r(s)));
+            }
+            rt.popTo(base);
+            return Str.of(rt, sb.toString());
+        });
+        def("flint/upper-case", (rt, at, n) -> Str.of(rt, Str.text(rt, rt.vat(at)).toUpperCase()));
+        def("flint/lower-case", (rt, at, n) -> Str.of(rt, Str.text(rt, rt.vat(at)).toLowerCase()));
+        def("flint/code-point-at", (rt, at, n) -> {
+            String s = Str.text(rt, rt.vat(at));
+            int i = (int) Val.asFixnum(rt.vat(at + 1));
+            if (i < 0 || i >= s.codePointCount(0, s.length())) {
+                throw new IndexOutOfBoundsException("index " + i + " out of range");
+            }
+            return Val.fixnum(s.codePointAt(s.offsetByCodePoints(0, i)));
+        });
+        def("flint/from-code-point", (rt, at, n) -> {
+            long c = Val.asFixnum(rt.vat(at));
+            if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) {
+                throw new IllegalArgumentException("not a code point: " + c);
+            }
+            return Str.of(rt, new String(Character.toChars((int) c)));
+        });
+        def("flint/str-bytes", (rt, at, n) -> {
+            byte[] b = Str.bytes(rt, rt.vat(at));
+            int base = rt.mark();
+            int vi = rt.push(Vec.empty(rt));
+            for (byte x : b) rt.setR(vi, Vec.conj(rt, rt.r(vi), Val.fixnum(x & 0xFF)));
+            long out = rt.r(vi);
+            rt.popTo(base);
+            return out;
+        });
+        def("flint/bytes->str", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (!rt.isHeapTy(v, TY_VEC)) {
+                throw new ClassCastException("bytes->str wants a vector of bytes");
+            }
+            int c = Vec.count(rt, v);
+            byte[] b = new byte[c];
+            for (int i = 0; i < c; i++) b[i] = (byte) Val.asFixnum(Vec.nth(rt, v, i));
+            return Str.of(rt, new String(b, java.nio.charset.StandardCharsets.UTF_8));
+        });
+        def("flint/bits->double", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (!Num.isInt(rt, v)) throw new ClassCastException("bits->double wants an integer");
+            return Val.ofDouble(Double.longBitsToDouble(Num.asI64(rt, v)));
+        });
+
         // Exceptions. `ex-info` is `[msg, data, cause]`, and `throw` is an
         // OPCODE rather than a builtin -- these are what a handler reads.
         def("ex-info", (rt, at, n) -> {
@@ -417,6 +661,40 @@ public final class Builtins {
             for (int i = 1; i < n; i++) if (!eq(rt, rt.vat(at), rt.vat(at + i))) return Val.FALSE;
             return Val.TRUE;
         });
+    }
+
+    /// A one-slot cell: an atom or a volatile. Same shape, different type tag
+    /// -- the difference is what the LIBRARY allows, not what the runtime does.
+    static long newCell(Rt rt, int ty, long v) {
+        int base = rt.mark();
+        int vi = rt.push(v);
+        long a = rt.alloc(ty, 2);
+        if (a == 0) { rt.popTo(base); return Val.NIL; }
+        rt.setSlot(a, 0, rt.r(vi));
+        rt.setSlot(a, 1, Val.NIL);
+        rt.popTo(base);
+        return Val.heap(a);
+    }
+
+    interface D1 { double apply(double x); }
+    interface D2 { double apply(double x, double y); }
+
+    /// Every unary math builtin has the same shape: refuse a non-number by
+    /// NAME, else compute in double. Written once so a new one cannot get the
+    /// refusal wrong.
+    static long mathOne(Rt rt, long v, D1 f) {
+        if (!Num.isNumber(rt, v)) {
+            throw new IllegalArgumentException("not a number: " + rt.describe(v));
+        }
+        return Val.ofDouble(f.apply(Num.f64(rt, v)));
+    }
+
+    static long mathTwo(Rt rt, long a, long b, D2 f) {
+        if (!Num.isNumber(rt, a) || !Num.isNumber(rt, b)) {
+            throw new IllegalArgumentException(
+                "not a number: " + rt.describe(a) + " and " + rt.describe(b));
+        }
+        return Val.ofDouble(f.apply(Num.f64(rt, a), Num.f64(rt, b)));
     }
 
     /// The NAME of a string, keyword or symbol, as a host string. `keyword`

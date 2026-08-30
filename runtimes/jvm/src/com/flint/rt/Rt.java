@@ -35,6 +35,11 @@ public final class Rt {
     /// exception would unwind the host stack instead.
     public long thrown = Val.NIL;
 
+    /// The singleton slots, from `rt.rs`. Numbered rather than named fields so
+    /// a snapshot can write them as one array.
+    public static final int SING_EMPTY_LIST = 0, SING_EMPTY_VEC = 1, SING_EMPTY_MAP = 2,
+        SING_EMPTY_SET = 3, SING_SCHED = 4, SING_BINDINGS = 5, SING_COUNT = 6;
+
     public long steps;
 
     /// The rest of the interpreter's state, all of it snapshot-visible.
@@ -458,9 +463,13 @@ public final class Rt {
     /// and answer wrongly.
     boolean typeP(int code, long v) {
         return switch (code) {
-            case 1 -> Val.isFixnum(v);
+            // `isInt`, NOT `isFixnum`. A big integer is an integer, and the
+            // library's printer dispatches on this: with `isFixnum` here the
+            // bits of 1.5 printed as `#<unprintable>` rather than as
+            // 4609434218613702656, because a bigint fell through every arm.
+            case 1 -> Num.isInt(this, v);
             case 2 -> Val.isDouble(v);
-            case 3 -> Val.isFixnum(v) || Val.isDouble(v);
+            case 3 -> Num.isNumber(this, v);
             case 4 -> Str.isString(this, v);
             case 5 -> Val.isInlineKw(v) || isHeapTy(v, TY_KW);
             case 6 -> isHeapTy(v, TY_SYM);
