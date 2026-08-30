@@ -584,6 +584,27 @@ public final class Builtins {
             return Val.ofDouble(Double.longBitsToDouble(Num.asI64(rt, v)));
         });
 
+        // --- regex ------------------------------------------------------------
+        //
+        // The PATTERN is compiled to a program by flint's own library, in
+        // Clojure; this runs it. That split is why the engine is the same on
+        // every runtime -- there is no host regex anywhere in it, so there is
+        // no way for two hosts to disagree about what a pattern means.
+        def("flint/re-compile", (rt, at, n) -> Pike.compile(rt, rt.vat(at), rt.vat(at + 1)));
+        def("flint/re-run", (rt, at, n) -> {
+            long from = n > 2 ? Val.asFixnum(rt.vat(at + 2)) : 0;
+            // 0 searches from `from`; 3 matches exactly at it. Both are entry
+            // points into ONE program, so there is no second program to keep in
+            // step with the first.
+            int entry = n > 3 ? (int) Val.asFixnum(rt.vat(at + 3)) : 0;
+            // The fifth argument asks for a match reaching the END, which is
+            // `re-matches` and cannot be had by checking the span afterwards.
+            boolean full = n > 4 && Val.asFixnum(rt.vat(at + 4)) != 0;
+            return Pike.run(rt, rt.vat(at), rt.vat(at + 1), from, entry, full);
+        });
+        def("flint/re-find-all", (rt, at, n) ->
+            Pike.findAll(rt, rt.vat(at), rt.vat(at + 1), n > 2 ? Val.asFixnum(rt.vat(at + 2)) : 0));
+
         // --- green threads and ports ------------------------------------------
         //
         // Every one of these calls `ensureSched` first. The scheduler is built

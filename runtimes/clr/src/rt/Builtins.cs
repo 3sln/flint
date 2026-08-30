@@ -555,6 +555,27 @@ public static class Builtins {
             return Val.OfDouble(System.BitConverter.Int64BitsToDouble(Num.AsI64(rt, v).Value));
         });
 
+        // --- regex ------------------------------------------------------------
+        //
+        // The PATTERN is compiled to a program by flint's own library, in
+        // Clojure; this runs it. That split is why the engine is the same on
+        // every runtime -- there is no host regex anywhere in it, so there is
+        // no way for two hosts to disagree about what a pattern means.
+        Def("flint/re-compile", (rt, at, n) => Pike.Compile(rt, rt.VAt(at), rt.VAt(at + 1)));
+        Def("flint/re-run", (rt, at, n) => {
+            long from = n > 2 ? Val.AsFixnum(rt.VAt(at + 2)) : 0;
+            // 0 searches from `from`; 3 matches exactly at it. Both are entry
+            // points into ONE program, so there is no second program to keep in
+            // step with the first.
+            int entry = n > 3 ? (int) Val.AsFixnum(rt.VAt(at + 3)) : 0;
+            // The fifth argument asks for a match reaching the END, which is
+            // `re-matches` and cannot be had by checking the span afterwards.
+            bool full = n > 4 && Val.AsFixnum(rt.VAt(at + 4)) != 0;
+            return Pike.Run(rt, rt.VAt(at), rt.VAt(at + 1), from, entry, full);
+        });
+        Def("flint/re-find-all", (rt, at, n) =>
+            Pike.FindAll(rt, rt.VAt(at), rt.VAt(at + 1), n > 2 ? Val.AsFixnum(rt.VAt(at + 2)) : 0));
+
         // --- green threads and ports ------------------------------------------
         //
         // Every one of these calls `EnsureSched` first. The scheduler is built
