@@ -575,8 +575,16 @@
   It lives here, once, because it did not: `bin/flint` read every source twice
   more -- to find its requires and to order them -- each with its own literal
   `#{:flint}`, so overriding the compiler's set changed nothing. That is the
-  same shape as the two EDN readers that both had to learn `#:ns{...}`."
-  #{:flint})
+  same shape as the two EDN readers that both had to learn `#:ns{...}`.
+
+  `:flint/check` is ON by default and removed by `:optimize [perf]`
+  (`doc/decisions/0032`). A check that has to be asked for is a check nobody
+  turns on, and one that survives into production is a tax on every call --
+  so the default is the developer's build and the release build is the
+  exception. Everything inside `#?(:flint/check ...)` then does not merely
+  compile to nothing: the reader never hands it to the analyzer, so it costs no
+  image bytes, no constants, and no shaking."
+  #{:flint :flint/check})
 
 (defn reader
   "A reader state over `src`. `opts` may set `:file`, `:ns`, `:aliases` and

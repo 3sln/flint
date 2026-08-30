@@ -269,10 +269,15 @@ public sealed class Rt : System.IDisposable {
     public long MakeClosure(int fnIdx, long[] upvals) {
         int mk = Mark();
         foreach (long u in upvals) Push(u);
-        long a = Alloc(TyClosure, 1 + upvals.Length);
+        // `2 + n`: METADATA IS THE LAST SLOT, not the second. Putting it after
+        // the function index would shift every upvalue by one, and `Upval` is
+        // indexed arithmetically in the interpreter AND in the IL emitter. At
+        // the end, every `1 + i` stays exactly as it was.
+        long a = Alloc(TyClosure, 2 + upvals.Length);
         if (a == 0) { PopTo(mk); return Val.Nil; }
         SetSlot(a, 0, Val.Fixnum(fnIdx));
         for (int i = 0; i < upvals.Length; i++) SetSlot(a, 1 + i, R(mk + i));
+        SetSlot(a, 1 + upvals.Length, Val.Nil);
         PopTo(mk);
         return Val.Heap(a);
     }
@@ -861,6 +866,11 @@ public sealed class Rt : System.IDisposable {
             case TyEmptyList: return 0;
             case TyLazyseq: return 2;
             case TyAtom: return 1;
+            // THE LAST SLOT. A closure could not carry metadata at all before,
+            // and `with-meta` answered by SILENTLY returning the value
+            // unchanged -- which made a per-FUNCTION protocol implementation
+            // impossible, since dispatch looks at metadata before kind.
+            case TyClosure: return Obj.Len(gc.sp, Val.AsHeap(v)) - 1;
             default: return -1;
         }
     }

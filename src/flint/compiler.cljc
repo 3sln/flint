@@ -65,9 +65,11 @@
               :deps {}
               :items []
               :builtins (:builtins opts #{})
-              ;; Which reader-conditional branches are selected. `#{:flint}` by
-              ;; default; a project compiling third-party `.cljc` may need more.
-              :features (or (:features opts) #{:flint})
+              ;; Which reader-conditional branches are selected. The default
+              ;; lives in ONE place -- `reader/default-features` -- because it
+              ;; did not: a literal `#{:flint}` here silently overrode it, which
+              ;; is the exact shape the reader's own docstring warns about.
+              :features (or (:features opts) reader/default-features)
               :native-alias {}
               ;; `:inline` expanders, keyed by qualified var. Compile-time only:
               ;; flint carries no var metadata at run time, so nothing here
@@ -321,7 +323,7 @@
         ;; number of forms -- so the file does not even READ. Which set actually
         ;; helps is a measurement, not a preference; see `flint build :features`.
         st (reader/reader src {:file file
-                               :features (or (:features spec) #{:flint})
+                               :features (or (:features spec) reader/default-features)
                                :resolve resolve-hook})
         _ (vswap! cc assoc-in [:namespaces nsname] (get-in @cc [:namespaces nsname] {}))
         forms (loop [acc []]

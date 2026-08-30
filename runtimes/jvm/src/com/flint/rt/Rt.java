@@ -281,10 +281,16 @@ public final class Rt {
     public long makeClosure(int fnIdx, long[] upvals) {
         int base = mark();
         for (long u : upvals) push(u);
-        long a = alloc(TY_CLOSURE, 1 + upvals.length);
+        // `2 + n`: METADATA IS THE LAST SLOT, not the second. The obvious
+        // layout is the expensive one -- putting it after the function index
+        // shifts every upvalue by one, and `UPVAL` is indexed arithmetically in
+        // the interpreter AND in the AOT emitter. At the end, every `1 + i`
+        // stays exactly as it was.
+        long a = alloc(TY_CLOSURE, 2 + upvals.length);
         if (a == 0) { popTo(base); return Val.NIL; }
         setSlot(a, 0, Val.fixnum(fnIdx));
         for (int i = 0; i < upvals.length; i++) setSlot(a, 1 + i, r(base + i));
+        setSlot(a, 1 + upvals.length, Val.NIL);
         popTo(base);
         return Val.heap(a);
     }
@@ -868,6 +874,11 @@ public final class Rt {
             case TY_EMPTY_LIST: return 0;
             case TY_LAZYSEQ: return 2;
             case TY_ATOM: return 1;
+            // THE LAST SLOT. A closure could not carry metadata at all before,
+            // and `with-meta` answered by SILENTLY returning the value
+            // unchanged -- which made a per-FUNCTION protocol implementation
+            // impossible, since dispatch looks at metadata before kind.
+            case TY_CLOSURE: return len(gc.sp, Val.asHeap(v)) - 1;
             default: return -1;
         }
     }

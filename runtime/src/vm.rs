@@ -347,12 +347,27 @@ impl Rt {
 
     // --- callable objects --------------------------------------------------
 
+    /// `[fnidx, ...upvals, meta]`.
+    ///
+    /// METADATA IS THE LAST SLOT, not the second, and that is worth a sentence
+    /// because the obvious layout is the expensive one. Putting it after the
+    /// function index would shift every upvalue by one, and `UPVAL` is indexed
+    /// arithmetically in five places -- two interpreter loops, and three AOT
+    /// emitters that bake the offset into generated code. At the end, every
+    /// `1 + i` stays exactly as it was and the only files that change are this
+    /// one and `meta_slot`.
+    ///
+    /// A closure could not carry metadata at all before, and `with_meta`
+    /// answered by SILENTLY RETURNING THE VALUE UNCHANGED -- so
+    /// `(meta (with-meta f {:a 1}))` was nil and nothing said why. That is what
+    /// made per-function protocol implementations impossible, since dispatch
+    /// looks at metadata first.
     pub fn make_closure(&mut self, fn_idx: u32, upvals: &[Value]) -> Value {
         let base = self.mark();
         for v in upvals {
             self.push(*v);
         }
-        let a = self.alloc(TY_CLOSURE, 1 + upvals.len() as u32);
+        let a = self.alloc(TY_CLOSURE, 2 + upvals.len() as u32);
         if a == 0 {
             self.pop_to(base);
             return NIL;
@@ -362,6 +377,7 @@ impl Rt {
             let v = self.r(base + i);
             self.set_slot(a, 1 + i as u32, v);
         }
+        self.set_slot(a, 1 + upvals.len() as u32, NIL);
         self.pop_to(base);
         Value::heap(a)
     }
@@ -1240,7 +1256,13 @@ impl Rt {
                     let n = self.u8_at(ip + 2) as usize;
                     ip += 3;
                     let base = self.roots.stack_top - n;
-                    let a = self.alloc(TY_CLOSURE, 1 + n as u32);
+                    // `2 + n`, and the trailing slot is the metadata one --
+                    // see `make_closure`, which this arm deliberately does not
+                    // call because the upvalues are already on the value stack
+                    // and rooted. Two allocation sites for one layout is how a
+                    // layout change goes half-applied, so they carry the same
+                    // note.
+                    let a = self.alloc(TY_CLOSURE, 2 + n as u32);
                     if a == 0 {
                         self.oom_unwind();
                         if !self.unwind() {
@@ -1253,6 +1275,7 @@ impl Rt {
                         let v = self.roots.stack[base + i];
                         self.set_slot(a, 1 + i as u32, v);
                     }
+                    self.set_slot(a, 1 + n as u32, NIL);
                     self.roots.stack_top = base;
                     self.vpush(Value::heap(a));
                 }

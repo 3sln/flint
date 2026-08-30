@@ -79,9 +79,15 @@
 
 (defn core-first
   "`clojure.core` is referred by every namespace, so it is analysed first
-  whatever the require graph says."
+  whatever the require graph says. `flint.check` follows it for the same reason
+  and with one addition: `expect` is a MACRO, and a macro has to be compiled
+  before the namespace that expands it is analysed. Nothing `:require`s
+  `flint.check`, so the graph has no edge to order by and this supplies one."
   [order]
-  (cons 'clojure.core (remove (fn [n] (= 'clojure.core n)) order)))
+  (let [pinned '[clojure.core flint.check]
+        pin? (set pinned)]
+    (concat (filter (set order) pinned)
+            (remove pin? order))))
 
 (defn resolve-project
   "Everything a compile needs, from an entry and a way to find source.
@@ -91,8 +97,17 @@
   ;; `clojure.core` is a root, not something the graph reaches: every namespace
   ;; refers it implicitly and almost none of them `:require` it, so starting
   ;; only from the entry collects a program whose `str` resolves to nothing.
-  (let [{:keys [sources order missing]}
-        (collect find-source ['clojure.core entry-ns] features)
+  ;;
+  ;; `flint.check` is a root for the same reason and only when checks are on
+  ;; (`doc/decisions/0032`). A module writes `#?(:flint/check (expect ...))`
+  ;; without requiring anything, because the branch does not exist in a build
+  ;; where the namespace does not either -- so there is nothing to require and
+  ;; nothing left behind. Under `:optimize [perf]` this root is simply not
+  ;; added, and `flint.check` is not in the program at all.
+  (let [roots (cond-> ['clojure.core entry-ns]
+                (contains? features :flint/check) (conj 'flint.check))
+        {:keys [sources order missing]}
+        (collect find-source roots features)
         _ order]
     {:sources sources
      :order (vec (core-first (topo-order sources)))

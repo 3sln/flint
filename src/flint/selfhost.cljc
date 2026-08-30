@@ -111,7 +111,7 @@
       {:files {\"clojure/core.cljc\" \"(ns clojure.core) ..\" ..}
        :entry my.app/main
        :builtins #{..}
-       :features #{:flint}}
+       :features flint.reader/default-features}
 
   The difference from `compile-to-base64` is that the caller does not have to
   know what the program requires. That resolution is most of what a compiler
@@ -124,7 +124,7 @@
   [spec-edn]
   (let [spec (reader/read-one spec-edn)
         files (:files spec)
-        features (or (:features spec) #{:flint})
+        features (or (:features spec) flint.reader/default-features)
         entry (:entry spec)
         entry-ns (symbol (namespace entry))
         find-source (fn [n]
@@ -177,7 +177,7 @@
   [spec-edn base-b64]
   (let [spec (reader/read-one spec-edn)
         files (:files spec)
-        features (or (:features spec) #{:flint})
+        features (or (:features spec) flint.reader/default-features)
         entry (:entry spec)
         entry-ns (symbol (namespace entry))
         slots (:slots spec)

@@ -521,6 +521,12 @@ impl Rt {
             TY_EMPTY_LIST => Some(0),
             TY_LAZYSEQ => Some(2),
             TY_ATOM => Some(1),
+            // THE LAST SLOT. See `make_closure`: at the end, every `UPVAL`
+            // index stays as it was, in both interpreters and all three AOT
+            // emitters. This is what lets a protocol be implemented for one
+            // FUNCTION rather than for a whole kind, since dispatch looks at
+            // metadata before it looks at kind.
+            TY_CLOSURE => Some(self.olen(v) - 1),
             _ => None,
         }
     }

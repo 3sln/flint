@@ -160,9 +160,18 @@
           (recur (into done ready) (into seen ready) (vec (remove (set ready) pending))))))))
 
 (defn core-first [order]
-  ;; clojure.core is referred by every namespace, so it is always analysed first
-  ;; whatever the require graph says.
-  (cons 'clojure.core (remove #{'clojure.core} order)))
+  ;; clojure.core is referred by every namespace, so it is always analysed
+  ;; first whatever the require graph says. `flint.check` follows it when
+  ;; checks are on, for the same reason and one more: `expect` is a MACRO, and
+  ;; a macro has to be compiled before the namespace expanding it is analysed.
+  ;; Nothing `:require`s it, so the graph has no edge and this supplies one.
+  ;;
+  ;; Kept identical to `flint.project/core-first`. It is duplicated because
+  ;; this script cannot call into the compiled compiler, which is the same
+  ;; reason the feature set was once read in three places with three different
+  ;; literals.
+  (let [pinned '[clojure.core flint.check]]
+    (concat (filter (set order) pinned) (remove (set pinned) order))))
 
 (defn b64-decode [s]
   (vec (map #(bit-and (int %) 0xff)
@@ -544,8 +553,22 @@
         ;; Clojure half), then flint's own lib. Stated in the README.
         dirs (concat (or src []) unit-path [(str root "/lib")])
         entry-ns (symbol (namespace fn))
-        features (or features reader/default-features)
-        [sources order] (collect dirs (cons entry-ns ['clojure.core]) features)
+        ;; `:optimize [perf]` REMOVES `:flint/check`.
+        ;;
+        ;; Not "compiles the checks away" -- removes the reader branch, so what
+        ;; is inside it is never read, never analysed and never in the image.
+        ;; That is the bargain the whole system rests on: checks are on by
+        ;; default because a check nobody turns on is a check nobody has, and
+        ;; they cost exactly nothing in the build that ships.
+        ;;
+        ;; It has to happen HERE, before the sources are collected: the
+        ;; collection reads every file, and a feature decided afterwards would
+        ;; leave the branches already read in.
+        features (cond-> (or features reader/default-features)
+                   (some #{"perf" ":perf"} (or optimize [])) (disj :flint/check))
+        roots (cond-> (cons entry-ns ['clojure.core])
+                (contains? features :flint/check) (concat ['flint.check]))
+        [sources order] (collect dirs roots features)
         order (core-first (topo-order sources features))
         out (or out "out.wasm")
         t0 (System/nanoTime)
