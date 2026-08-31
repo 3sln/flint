@@ -29,11 +29,38 @@ it stops being a shape heuristic and starts being a name check.
 
 A tagged literal is its own value: `TY_TAGGED`, two slots, a namespaced SYMBOL
 and a value. `#my.ns/thing v` reads to one, `pr-str` writes one back, and two
-are equal when both halves are.
+are equal when both halves are. Two slots rather than an array-map's boxed pairs
+plus a count, because the shape is fixed and known.
+
+**It still answers the map protocols.** `(:tag x)`, `(get x :form)`, `count`,
+`keys`, `vals`, `seq` and `contains?` all work, so nothing that treats one as a
+map has to learn a new way to read it. That is the point of making it a type
+rather than a wrapper: the ambiguity a codec suffers from goes away without
+costing the reader anything.
+
+**`:tag` and `:form`, matching Clojure**, whose `tagged-literal` gives a value
+answering exactly those two and a `tagged-literal?` beside it. The current
+reader emits `:flint/tagged` and `:flint/value`, and nothing in the tree reads
+them -- checked -- so the names are free and compatibility should have them.
+
+**`assoc` on either key preserves the type**; on any other key it REFUSES,
+naming the two it has. The object is two slots and there is nowhere for a third
+to go, so the alternative is silently promoting to a map and losing the
+taggedness, which is the sort of quiet coercion this codebase refuses elsewhere.
+`dissoc` refuses for the same reason: a tagged literal with one half is not a
+smaller tagged literal, it is not one.
+
+**`map?` is FALSE and `kind` is `:tagged`.** Lookup working is not the same as
+being a map, and Clojure agrees -- `map?` on a `TaggedLiteral` is false. It
+matters more here than there, because `kind` is the closed set protocol dispatch
+runs on (`0005`): if it answered `:map`, every `extend-protocol :map` in every
+program would silently start catching tagged literals.
 
 ## What this touches
 
 * **The reader** stops building the map (`reader.cljc`, the `#` branch).
+* **`tagged-literal`, `tagged-literal?`, `tag` and `form`** in `clojure.core`,
+  as Clojure has them.
 * **`flint.rt/kind` gains `:tagged`**, which is a change to the CLOSED SET that
   protocol dispatch runs on (`0005`). `test/common/lang/protocols.cljc` pins
   that set deliberately, so it fails until updated -- which is the test doing
