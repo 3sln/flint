@@ -101,6 +101,17 @@
 ;; own two-slot type; on this host it is Clojure's own, which answers `:tag`
 ;; and `:form` exactly as flint's does -- which is why those are the names.
 (defn tagged-literal [tag form] (clojure.core/tagged-literal tag form))
+
+;; Tables (`doc/decisions/0026`) exist only on flint: the compile-time host has
+;; no columnar store and no program compiled here builds one, so these refuse
+;; rather than pretend. A table literal in SOURCE would need them; there is no
+;; such literal yet.
+(defn schema [pairs] (throw (ex-info "schema is not available at compile time" {})))
+(defn table [s rows] (throw (ex-info "table is not available at compile time" {})))
+(defn table? [x] false)
+(defn table-schema [x] nil)
+(defn schema-columns [x] nil)
+(defn schema-types [x] nil)
 (defn tagged-literal? [x] (clojure.core/tagged-literal? x))
 (defn symbol2 ([n] (clojure.core/symbol n)) ([ns n] (clojure.core/symbol ns n)))
 (defn subs ([s a] (clojure.core/subs s a)) ([s a b] (clojure.core/subs s a b)))

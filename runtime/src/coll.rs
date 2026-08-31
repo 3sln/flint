@@ -50,6 +50,12 @@ impl Rt {
             TY_VEC => self.vec_count(v),
             TY_MAPENTRY => 2,
             crate::obj::TY_TAGGED => 2,
+            crate::obj::TY_TABLE => self.table_count(v),
+            // A ref counts its COLUMNS, because it is a map of them.
+            crate::obj::TY_TABLEREF => {
+                let s = self.slot(v, crate::table::RF_SCHEMA);
+                self.schema_len(s)
+            }
             TY_ARRAYMAP | TY_HASHMAP => self.map_count(v),
             TY_SET => self.set_count(v),
             TY_BYTES | TY_BROPE => self.b_count(v),
@@ -221,6 +227,16 @@ impl Rt {
             // A tagged literal reads like a two-key map, so `(:tag x)` and
             // `(get x :form)` work and nothing treating one as a map has to
             // learn a different way in (`doc/decisions/0034`).
+            // A table indexes by ROW and hands back a ref, which materialises
+            // nothing (`doc/decisions/0026`).
+            crate::obj::TY_TABLE => match self.as_i64(k) {
+                Some(i) if i >= 0 => {
+                    let r = self.table_ref(coll, i as u32);
+                    if r.is_nil() { dflt } else { r }
+                }
+                _ => dflt,
+            },
+            crate::obj::TY_TABLEREF => self.ref_get(coll, k, dflt),
             crate::obj::TY_TAGGED => {
                 if k == self.keyword(None, "tag") {
                     self.slot(coll, 0)

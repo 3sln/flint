@@ -689,6 +689,50 @@ builtins! {
     // `#my.ns/thing v` (`doc/decisions/0034`). The tag must be a SYMBOL, and a
     // namespaced one in practice, because an unqualified tag is reserved for
     // the reader's own literals.
+    // --- tables (`doc/decisions/0026`) --------------------------------------
+    "flint/schema", flint_b_schema, b_schema, |rt, a, n| {
+        let _ = n;
+        let pairs = arg(rt, a, 0);
+        rt.new_schema(pairs)
+    };
+    "flint/table", flint_b_table, b_table, |rt, a, n| {
+        let _ = n;
+        let (s, rows) = (arg(rt, a, 0), arg(rt, a, 1));
+        if !rt.is_schema(s) {
+            return rt.throw_str(
+                "IllegalArgumentException",
+                "a table needs a schema; build one with `(schema [[:name :type] ...])`",
+            );
+        }
+        rt.new_table(s, rows)
+    };
+    "flint/table?", flint_b_tablep, b_tablep, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        Value::boolean(rt.is_table(v))
+    };
+    "flint/table-schema", flint_b_tableschema, b_tableschema, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        if rt.is_table(v) {
+            rt.slot(v, crate::table::TB_SCHEMA)
+        } else if rt.is_table_ref(v) {
+            rt.slot(v, crate::table::RF_SCHEMA)
+        } else {
+            NIL
+        }
+    };
+    "flint/schema-columns", flint_b_schemacols, b_schemacols, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        if rt.is_schema(v) { rt.slot(v, crate::table::SC_NAMES) } else { NIL }
+    };
+    "flint/schema-types", flint_b_schematypes, b_schematypes, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        if rt.is_schema(v) { rt.slot(v, crate::table::SC_TYPES) } else { NIL }
+    };
+
     "flint/tagged-literal", flint_b_tagged, b_tagged, |rt, a, n| {
         let _ = n;
         let (t, f) = (arg(rt, a, 0), arg(rt, a, 1));
@@ -755,51 +799,7 @@ builtins! {
     "flint/kind", flint_b_kind, b_kind, |rt, a, n| {
         let _ = n;
         let v = arg(rt, a, 0);
-        let name = if v.is_nil() {
-            "nil"
-        } else if v.is_bool() {
-            "boolean"
-        } else if v.is_double() || v.is_fixnum() {
-            "number"
-        } else if v.is_inline_str() {
-            "string"
-        } else if v.is_inline_kw() {
-            "keyword"
-        } else if !v.is_heap() {
-            "other"
-        } else {
-            match crate::obj::ty(&rt.gc.sp, v.as_heap()) {
-                // A rope IS a string. `kind` is the closed set protocol
-                // dispatch runs on (doc/decisions/0005), so a tier leaking into
-                // it would make `extend-protocol :string` work for some strings
-                // and not others depending on how they were built.
-                crate::obj::TY_STR | crate::obj::TY_ROPE => "string",
-                crate::obj::TY_KW => "keyword",
-                crate::obj::TY_SYM => "symbol",
-                crate::obj::TY_BIGINT => "number",
-                crate::obj::TY_VEC | crate::obj::TY_MAPENTRY => "vector",
-                crate::obj::TY_ARRAYMAP | crate::obj::TY_HASHMAP => "map",
-                crate::obj::TY_SET => "set",
-                crate::obj::TY_CONS
-                | crate::obj::TY_EMPTY_LIST
-                | crate::obj::TY_LAZYSEQ
-                | crate::obj::TY_VECSEQ
-                | crate::obj::TY_STRSEQ
-                | crate::obj::TY_RANGE
-                | crate::obj::TY_ITERSEQ
-                | crate::obj::TY_CHUNKSEQ => "list",
-                crate::obj::TY_CLOSURE | crate::obj::TY_NATIVEFN | crate::obj::TY_MULTIFN => "fn",
-                crate::obj::TY_PORT => "port",
-                crate::obj::TY_THREAD => "thread",
-                crate::obj::TY_ATOM => "atom",
-                crate::obj::TY_VAR => "var",
-                crate::obj::TY_REGEX => "regex",
-                crate::obj::TY_EXINFO => "exception",
-                crate::obj::TY_TAGGED => "tagged",
-                _ => "other",
-            }
-        };
-        rt.keyword(None, name)
+        rt.kind_of(v)
     };
 
     // --- dynamic bindings ----------------------------------------------------

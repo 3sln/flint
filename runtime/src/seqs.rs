@@ -207,6 +207,13 @@ impl Rt {
                 }
             }
             TY_MAPENTRY => self.vecseq(v, 0),
+            // A ref materialises HERE and only here: `seq`, `=` and `hash` all
+            // want the whole row, and each is O(columns) anyway. The paths that
+            // must stay cheap -- `get` and `(:name row)` -- never come through.
+            crate::obj::TY_TABLEREF => {
+                let m = self.ref_to_map(v);
+                self.seq(m)
+            }
             TY_ARRAYMAP | TY_HASHMAP => {
                 let ents = self.map_entry_vector(v);
                 if ents.is_nil() || self.vec_count(ents) == 0 {

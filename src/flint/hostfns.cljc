@@ -96,6 +96,12 @@
    "flint/opaque" flint.rt/opaque
    "flint/opaque?" flint.rt/opaque?
    "flint/opaque-label" flint.rt/opaque-label
+   "flint/schema" flint.rt/schema
+   "flint/table" flint.rt/table
+   "flint/table?" flint.rt/table?
+   "flint/table-schema" flint.rt/table-schema
+   "flint/schema-columns" flint.rt/schema-columns
+   "flint/schema-types" flint.rt/schema-types
    "flint/tagged-literal" flint.rt/tagged-literal
    "flint/tagged-literal?" flint.rt/tagged-literal?
    "flint/volatile?" flint.rt/volatile?

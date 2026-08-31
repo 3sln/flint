@@ -112,7 +112,24 @@ pub const TY_TBYTES: u8 = 46;
 /// It still ANSWERS the map protocols on `:tag` and `:form`, so nothing that
 /// treats one as a map has to learn a new way to read it.
 pub const TY_TAGGED: u8 = 47;
-pub const TY_MAX: u8 = 48;
+/// A SCHEMA: `[names, types, index]` -- a vector of column names, a vector of
+/// column types, and a map from name to position. One per table, shared by
+/// every chunk (`doc/decisions/0026`).
+pub const TY_SCHEMA: u8 = 48;
+/// A TABLE: `[schema, chunks, count]`.
+///
+/// `chunks` is an ordinary flint VECTOR, which is already a 32-way
+/// path-copying trie -- so the "B-tree keyed by row index" `0026` asks for is
+/// the vector we have, with chunks as its elements. `get` descends it and
+/// `assoc` gets its path copy for free; no new tree is written.
+pub const TY_TABLE: u8 = 49;
+/// A ROW REF: `[schema, chunk, row-in-chunk]`.
+///
+/// What iterating a table yields. It holds the CHUNK and not the table, so
+/// keeping one row out of a million retains one chunk. It cannot dangle,
+/// because chunks are persistent.
+pub const TY_TABLEREF: u8 = 50;
+pub const TY_MAX: u8 = 51;
 
 /// Every type tag must be distinct. This list exists because they were not:
 /// `TY_THREAD`/`TY_PORT`/`TY_SCHED` were first numbered 33..35, which silently
@@ -128,6 +145,7 @@ const _: () = {
         TY_RECORD, TY_REGEX, TY_REDUCED, TY_EXINFO, TY_MULTIFN, TY_DELAY,
         TY_VOLATILE, TY_RAW, TY_ITERSEQ, TY_CHUNKSEQ, TY_TYPE, TY_THREAD, TY_PORT,
         TY_SCHED, TY_ROPE, TY_OPAQUE, TY_BYTES, TY_BROPE, TY_TBYTES, TY_TAGGED,
+        TY_SCHEMA, TY_TABLE, TY_TABLEREF,
     ];
     let mut i = 0;
     while i < tags.len() {

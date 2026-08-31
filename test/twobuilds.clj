@@ -89,7 +89,19 @@
 ;; branches in `eq`, `hash`, `get`, `assoc` and `kind`, and those live in the
 ;; runtime where nothing shakes them out. A value type that only some programs
 ;; use still costs every program, which is the trade a language type is.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 267000))
+;; Raised for TABLES (`doc/decisions/0026`): 287 854 shipped where it had been
+;; 264 997, so the value type, its schema, its row ref and their arms in `eq`,
+;; `hash`, `kind`, `get`, `count`, `map_get` and `seq` cost 22 857 bytes.
+;;
+;; That is a LOT, and it is recorded rather than absorbed: every module pays it
+;; whether or not it ever builds a table, because these are runtime branches and
+;; `bin/flint` links the whole runtime. A table is therefore a strong candidate
+;; for a UNIT (`doc/decisions/0023`) the way threads and ports are -- "a program
+;; that never mentions it never reaches any of it" is exactly the argument. What
+;; makes it harder than `flint-conc` is that the dispatch hooks are in the core
+;; and a unit cannot supply those today. Written down here so the number is
+;; visible the next time someone asks what a data structure costs.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 292000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

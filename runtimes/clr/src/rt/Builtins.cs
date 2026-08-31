@@ -199,6 +199,15 @@ public static class Builtins {
         Def("flint/tagged-literal?", (rt, at, n) =>
             Val.Bool(rt.IsHeapTy(rt.VAt(at), Obj.TyTagged)));
 
+        /// TABLES are not ported yet (`doc/decisions/0026`), and answering
+        /// false is honest rather than a stub: this runtime cannot construct
+        /// one, so no value it holds is a table. It has to exist at all because
+        /// the PRINTER asks every value, so every program that prints needs it
+        /// -- which is a real consequence of adding a printable type, not an
+        /// oversight. `schema` and `table` are absent, so building one here
+        /// reports "this runtime does not carry the builtin" and names it.
+        Def("flint/table?", (rt, at, n) => Val.False);
+
         Def("flint/opaque?", (rt, at, n) => Val.False);
         Def("flint/opaque-label", (rt, at, n) => Val.Nil);
         /// The metadata slot, or nil. This was a STUB answering nil, which is

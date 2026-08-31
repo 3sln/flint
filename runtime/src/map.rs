@@ -890,8 +890,16 @@ impl Rt {
         self.roots.shared.singletons[crate::rt::SING_EMPTY_MAP] = Value::heap(a);
     }
 
+    /// A ROW REF counts, and that is deliberate (`doc/decisions/0026`): a table
+    /// is not a vector of maps, but a row IS a map -- seen cheaply. Code that
+    /// does not know it has a table keeps working only if the row half is
+    /// honest about being one.
     pub fn is_map(&self, v: Value) -> bool {
-        v.is_heap() && matches!(ty(&self.gc.sp, v.as_heap()), TY_ARRAYMAP | TY_HASHMAP)
+        v.is_heap()
+            && matches!(
+                ty(&self.gc.sp, v.as_heap()),
+                TY_ARRAYMAP | TY_HASHMAP | crate::obj::TY_TABLEREF
+            )
     }
     pub fn is_array_map(&self, v: Value) -> bool {
         v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_ARRAYMAP
@@ -975,6 +983,13 @@ impl Rt {
     pub fn map_get(&mut self, m: Value, k: Value, not_found: Value) -> Value {
         if !m.is_heap() {
             return not_found;
+        }
+        // A ROW REF answers here rather than at every call site. `is_map` says
+        // true for one, so every path that asks "is this a map?" and then calls
+        // this would otherwise read a table row as an array-map and find
+        // nothing -- which is what `(:name row)` did.
+        if ty(&self.gc.sp, m.as_heap()) == crate::obj::TY_TABLEREF {
+            return self.ref_get(m, k, not_found);
         }
         if !self.eq_may_alloc(k) {
             return match ty(&self.gc.sp, m.as_heap()) {

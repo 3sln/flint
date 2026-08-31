@@ -25,7 +25,7 @@ impl Rt {
         match ty(&self.gc.sp, v.as_heap()) {
             TY_CONS | TY_EMPTY_LIST | TY_LAZYSEQ | TY_VECSEQ | TY_STRSEQ | TY_RANGE | TY_VEC
             | TY_MAPENTRY => CAT_SEQUENTIAL,
-            TY_ARRAYMAP | TY_HASHMAP => CAT_MAP,
+            TY_ARRAYMAP | TY_HASHMAP | crate::obj::TY_TABLEREF => CAT_MAP,
             TY_SET => CAT_SET,
             _ => CAT_SCALAR,
         }
@@ -82,6 +82,19 @@ impl Rt {
             // inline string, and that would have been bit equality.
             return false;
         }
+        // A ROW REF is compared as the map it is. Materialising here rather
+        // than in `map_eq` keeps one place that knows, and equality is
+        // O(columns) either way.
+        if self.is_table_ref(a) || self.is_table_ref(b) {
+            let base = self.mark();
+            let ma = if self.is_table_ref(a) { self.ref_to_map(a) } else { a };
+            let mi = self.push(ma);
+            let mb = if self.is_table_ref(b) { self.ref_to_map(b) } else { b };
+            let mj = self.push(mb);
+            let out = self.eq(self.r(mi), self.r(mj));
+            self.pop_to(base);
+            return out;
+        }
         let (ca, cb) = (self.category(a), self.category(b));
         if ca != cb {
             return false;
@@ -112,6 +125,31 @@ impl Rt {
                 // (`doc/decisions/0034`). Structural, like the collections, and
                 // NOT equal to a two-key map -- which is the whole reason it is
                 // a type: a codec has to be able to tell them apart.
+                // A TABLE is not a vector of maps (`doc/decisions/0026`).
+                // Refusing that equality is what frees `hash` to be columnar --
+                // it no longer has to agree with what a vector of maps would
+                // produce -- and it is why a table prints as its own literal.
+                if ta == crate::obj::TY_TABLE || tb == crate::obj::TY_TABLE {
+                    if ta != tb {
+                        return false;
+                    }
+                    let (na, nb) = (self.table_count(a), self.table_count(b));
+                    if na != nb {
+                        return false;
+                    }
+                    let sa = self.slot(a, crate::table::TB_SCHEMA);
+                    let sb = self.slot(b, crate::table::TB_SCHEMA);
+                    if !self.schema_eq(sa, sb) {
+                        return false;
+                    }
+                    for i in 0..na {
+                        let (ra, rb) = (self.table_ref(a, i), self.table_ref(b, i));
+                        if !self.eq(ra, rb) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
                 if ta == crate::obj::TY_TAGGED || tb == crate::obj::TY_TAGGED {
                     if ta != tb {
                         return false;
@@ -259,6 +297,24 @@ impl Rt {
             }
             // Both halves, so a tagged literal hashes like the pair it is and
             // two equal ones land in the same bucket.
+            // COLUMNAR is available precisely because a table is not `=` to a
+            // vector of maps, so this need not agree with what one would hash.
+            crate::obj::TY_TABLE => {
+                let n = self.table_count(v);
+                let mut acc: u32 = 1;
+                for i in 0..n {
+                    let r = self.table_ref(v, i);
+                    let h = self.hash_value(r);
+                    acc = acc.wrapping_mul(31).wrapping_add(h);
+                }
+                hash::hash_int(acc ^ n)
+            }
+            // A ref hashes as the map it is, or a map keyed by a row would not
+            // find it.
+            crate::obj::TY_TABLEREF => {
+                let m = self.ref_to_map(v);
+                self.hash_value(m)
+            }
             crate::obj::TY_TAGGED => {
                 let (t, f) = (self.slot(v, 0), self.slot(v, 1));
                 let th = self.hash_value(t);

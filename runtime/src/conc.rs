@@ -292,7 +292,7 @@ impl Rt {
         v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_PORT
     }
 
-    fn new_obj(&mut self, t: u8, n: u32) -> Value {
+    pub(crate) fn new_obj(&mut self, t: u8, n: u32) -> Value {
         let a = self.alloc(t, n);
         if a == 0 {
             return NIL;

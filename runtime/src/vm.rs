@@ -700,6 +700,9 @@ impl Rt {
                 self.map_get(coll, kw, dflt)
             } else if self.is_set(coll) {
                 self.set_get(coll, kw, dflt)
+            } else if self.is_table_ref(coll) {
+                // `(:name row)` on a row ref, which is how a table is read.
+                self.get(coll, kw, dflt)
             } else if self.is_tagged(coll) {
                 // `(:tag x)` and `(:form x)`, which is how anyone actually
                 // reads one (`doc/decisions/0034`). This arm used to fall to

@@ -428,13 +428,18 @@ fi
 for prog in collections control green hosted lazy maps numbers regex strings threads; do
   img="out/conform/$prog.img"
   [ -f "$img" ] || continue
-  out="$(run_bounded "$JDK/bin/java" -cp runtimes/jvm/classes RtAot "$img")" || exit 1
+  # `|| { echo; exit 1; }` and not a bare `|| exit 1`: the output is CAPTURED
+  # by `$(...)`, so exiting without printing it throws away the only thing that
+  # says what went wrong -- which is what it did the first time this fired.
+  out="$(run_bounded "$JDK/bin/java" -cp runtimes/jvm/classes RtAot "$img")" \
+    || { echo "$out"; echo "  FAIL aot $prog [jvm] did not run"; exit 1; }
   case "$out" in
     *"  ok "*) echo "$out" | sed 's/$/ ['"$prog"' jvm]/' ;;
     *) echo "$out"; echo "  FAIL aot $prog [jvm]"; exit 1 ;;
   esac
   if [ -n "$CLR" ]; then
-    cout="$(run_bounded "$CLR" --rt-aot "$img")" || exit 1
+    cout="$(run_bounded "$CLR" --rt-aot "$img")" \
+      || { echo "$cout"; echo "  FAIL aot $prog [clr] did not run"; exit 1; }
     case "$cout" in
       *"  ok "*) ;;
       *) echo "$cout"; echo "  FAIL aot $prog [clr]"; exit 1 ;;

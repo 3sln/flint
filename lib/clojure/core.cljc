@@ -505,6 +505,8 @@
 
 (defn tagged-literal? [x] (flint.rt/tagged-literal? x))
 
+
+
 ;; `:tag` and `:form`, the names Clojure's own `tagged-literal` answers to.
 (defn tag [x] (flint.rt/get x :tag))
 (defn form [x] (flint.rt/get x :form))
@@ -1260,6 +1262,10 @@
     ;; back is forgeable by construction (0022).
     ;; Before the map branch, because a tagged literal READS like a map and
     ;; would otherwise print as one.
+    ;; `#flint/table [...]`, which reads back -- a table is NOT `=` to a vector
+    ;; of maps, so it prints as its own literal rather than as one (`0026`).
+    (flint.rt/table? x) (flint.rt/str2 "#flint/table "
+                              (pr-str* (mapv (fn [i] (get x i)) (range (count x))) readable?))
     (tagged-literal? x) (flint.rt/str2 "#" (flint.rt/str2 (kw-or-sym-str (tag x))
                                                           (flint.rt/str2 " " (pr-str* (form x) readable?))))
     (opaque? x) (let [l (opaque-label x)]
