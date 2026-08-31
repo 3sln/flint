@@ -68,6 +68,13 @@ public static class Eq {
             return SameBytes(Str.Bytes(rt, a), Str.Bytes(rt, b));
         if ((ta == Obj.TyBytes || ta == Obj.TyBrope) && (tb == Obj.TyBytes || tb == Obj.TyBrope))
             return Bytes.Eq(rt, a, b);
+        // Two tagged literals are equal when both halves are, and never equal
+        // to a two-key map -- the whole reason it is a type (`0034`).
+        if (ta == Obj.TyTagged || tb == Obj.TyTagged) {
+            if (ta != tb) return false;
+            return Equal(rt, rt.Slot(a, 0), rt.Slot(b, 0))
+                && Equal(rt, rt.Slot(a, 1), rt.Slot(b, 1));
+        }
         if (ta != tb) return false;
         if (ta == Obj.TyStr) {
             int la = Obj.Len(rt.gc.sp, Val.AsHeap(a)), lb = Obj.Len(rt.gc.sp, Val.AsHeap(b));
@@ -135,6 +142,9 @@ public static class Eq {
             }
             case Obj.TyArraymap:
             case Obj.TyHashmap: return Maps.Hash(rt, v);
+            // Both halves, so two equal tagged literals share a bucket.
+            case Obj.TyTagged:
+                return HashValue(rt, rt.Slot(v, 0)) * 31 + HashValue(rt, rt.Slot(v, 1));
             case Obj.TySet: return Sets.Hash(rt, v);
             default: {
                 if (rt.IsSeq(v)) {

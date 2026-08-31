@@ -108,6 +108,21 @@ impl Rt {
                 if ta == crate::obj::TY_ROPE || tb == crate::obj::TY_ROPE {
                     return self.is_string(a) && self.is_string(b) && self.string_eq(a, b);
                 }
+                // Two tagged literals are equal when both halves are
+                // (`doc/decisions/0034`). Structural, like the collections, and
+                // NOT equal to a two-key map -- which is the whole reason it is
+                // a type: a codec has to be able to tell them apart.
+                if ta == crate::obj::TY_TAGGED || tb == crate::obj::TY_TAGGED {
+                    if ta != tb {
+                        return false;
+                    }
+                    let (t1, t2) = (self.slot(a, 0), self.slot(b, 0));
+                    if !self.eq(t1, t2) {
+                        return false;
+                    }
+                    let (f1, f2) = (self.slot(a, 1), self.slot(b, 1));
+                    return self.eq(f1, f2);
+                }
                 if ta != tb {
                     return false;
                 }
@@ -241,6 +256,14 @@ impl Rt {
             crate::obj::TY_OPAQUE => {
                 let id = crate::obj::slot(&self.gc.sp, v.as_heap(), 1);
                 hash::hash_long(if id.is_fixnum() { id.as_fixnum() } else { 0 })
+            }
+            // Both halves, so a tagged literal hashes like the pair it is and
+            // two equal ones land in the same bucket.
+            crate::obj::TY_TAGGED => {
+                let (t, f) = (self.slot(v, 0), self.slot(v, 1));
+                let th = self.hash_value(t);
+                let fh = self.hash_value(f);
+                hash::hash_int(th.wrapping_mul(31).wrapping_add(fh))
             }
             // Functions, atoms, vars and the like are only ever `=` to
             // themselves, so a per-type constant is a correct (if unhelpful)

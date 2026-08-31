@@ -23,7 +23,10 @@ public static class Img {
 
     const int KNil = 0, KTrue = 1, KFalse = 2, KInt = 3, KDouble = 4,
         KString = 5, KKeyword = 6, KSymbol = 7, KVector = 8, KList = 9,
-        KMap = 10, KSet = 11, KFn = 12, KNative = 13;
+        KMap = 10, KSet = 11, KFn = 12, KNative = 13,
+        /// 17, not 14: the image's tags and the wire codec's share a numbering
+        /// space, and 14/15/16 are bytes, port and sentinel (`0025`, `0034`).
+        KTagged = 17;
     const long NoConst = 0xFFFF_FFFFL;
 
     public sealed class Loaded {
@@ -165,6 +168,10 @@ public static class Img {
                 string ns = nsc == NoConst ? null : Str.Text(rt, consts[(int) nsc]);
                 string nm = Str.Text(rt, consts[(int) nmc]);
                 return tag == KKeyword ? Str.Keyword(rt, ns, nm) : Str.Symbol(rt, ns, nm);
+            }
+            case KTagged: {
+                long tagc = r.U32(), formc = r.U32();
+                return rt.NewTagged(consts[(int) tagc], consts[(int) formc]);
             }
             case KNative: {
                 long idx = r.U32();

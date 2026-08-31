@@ -102,7 +102,17 @@ pub const TY_BROPE: u8 = 45;
 /// is a `TY_BYTES` the transient owns and writes into, which is what makes
 /// appending amortise to O(1) instead of copying the whole thing each time.
 pub const TY_TBYTES: u8 = 46;
-pub const TY_MAX: u8 = 47;
+/// A tagged literal: `[tag, form]`, where `tag` is a namespaced SYMBOL.
+///
+/// Its own type rather than a two-key map (`doc/decisions/0034`). A map is
+/// ambiguous with a map in every format that has tags -- a codec meeting one
+/// cannot tell a tagged literal from a map that happens to have those keys --
+/// and it loses the namespace when the key has to become a string.
+///
+/// It still ANSWERS the map protocols on `:tag` and `:form`, so nothing that
+/// treats one as a map has to learn a new way to read it.
+pub const TY_TAGGED: u8 = 47;
+pub const TY_MAX: u8 = 48;
 
 /// Every type tag must be distinct. This list exists because they were not:
 /// `TY_THREAD`/`TY_PORT`/`TY_SCHED` were first numbered 33..35, which silently
@@ -117,7 +127,7 @@ const _: () = {
         TY_CLOSURE, TY_NATIVEFN, TY_VAR, TY_ATOM, TY_TVEC, TY_TMAP, TY_TSET,
         TY_RECORD, TY_REGEX, TY_REDUCED, TY_EXINFO, TY_MULTIFN, TY_DELAY,
         TY_VOLATILE, TY_RAW, TY_ITERSEQ, TY_CHUNKSEQ, TY_TYPE, TY_THREAD, TY_PORT,
-        TY_SCHED, TY_ROPE, TY_OPAQUE, TY_BYTES, TY_BROPE, TY_TBYTES,
+        TY_SCHED, TY_ROPE, TY_OPAQUE, TY_BYTES, TY_BROPE, TY_TBYTES, TY_TAGGED,
     ];
     let mut i = 0;
     while i < tags.len() {

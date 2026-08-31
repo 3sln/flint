@@ -35,6 +35,9 @@
 (def K-NIL 0) (def K-TRUE 1) (def K-FALSE 2) (def K-INT 3) (def K-DOUBLE 4)
 (def K-STRING 5) (def K-KEYWORD 6) (def K-SYMBOL 7) (def K-VECTOR 8)
 (def K-LIST 9) (def K-MAP 10) (def K-SET 11) (def K-FN 12) (def K-NATIVE 13)
+;; 17, not 14: these tags and `codec.rs`'s wire tags share a numbering space,
+;; and 14/15/16 are bytes, port and sentinel over there (`0025`, `0034`).
+(def K-TAGGED 17)
 
 (def NO-CONST 0xFFFFFFFF)
 
@@ -93,6 +96,9 @@
     (map? v) (intern-const b (into [:map] (mapcat (fn [e] [(const b (first e)) (const b (second e))])
                                                  (canon/sorted-entries v))))
     (seq? v) (intern-const b (into [:list] (mapv #(const b %) v)))
+    ;; A tagged literal is a VALUE (`0034`), so a literal one is a constant
+    ;; like any other: the tag symbol and the form, each interned.
+    (tagged-literal? v) (intern-const b [:tagged (const b (:tag v)) (const b (:form v))])
     :else (throw (ex-info "not a constant" {:v v :type (type v)}))))
 
 (defn- emit-const [entry]
@@ -118,7 +124,8 @@
       :set [K-SET (u32 (count args)) (map u32 args)]
       :map [K-MAP (u32 (quot (count args) 2)) (map u32 args)]
       :fn [K-FN (u32 (first args))]
-      :native [K-NATIVE (u32 (first args)) (u32 (second args))])))
+      :native [K-NATIVE (u32 (first args)) (u32 (second args))]
+      :tagged [K-TAGGED (u32 (first args)) (u32 (second args))])))
 
 ;; ------------------------------------------------------------ vars, natives
 

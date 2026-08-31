@@ -45,7 +45,13 @@
 (check "tag metadata" (:tag (meta (reads "^long x"))) 'long)
 (check "regex literal" (reads "#\"a.c\"") {:flint/regex "a.c"})
 (check "regex keeps escapes" (reads "#\"\\d+\"") {:flint/regex "\\d+"})
-(check "tagged literal" (reads "#inst \"2020\"") {:flint/tagged 'inst :flint/value "2020"})
+;; A VALUE, not a two-key map (`doc/decisions/0034`). The map was ambiguous
+;; with an ordinary map in every format that has tags, and lost the namespace
+;; wherever the key had to become a string.
+(check "tagged literal" (reads "#inst \"2020\"") (tagged-literal 'inst "2020"))
+(check "  ... which is not the map it used to be"
+       (= (reads "#inst \"2020\"") {:tag 'inst :form "2020"}) false)
+(check "  ... and keeps its namespace" (namespace (:tag (reads "#my.ns/t 1"))) "my.ns")
 (check "anon fn" (reads "#(+ % 1)") '(fn* [p1__flint#] (+ p1__flint# 1)))
 (check "anon fn %2" (reads "#(+ %1 %2)") '(fn* [p1__flint# p2__flint#] (+ p1__flint# p2__flint#)))
 (check "line metadata" (:line (meta (r/read-one "\n\n(foo)"))) 3)

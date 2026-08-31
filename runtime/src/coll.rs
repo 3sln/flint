@@ -49,6 +49,7 @@ impl Rt {
         match ty(&self.gc.sp, v.as_heap()) {
             TY_VEC => self.vec_count(v),
             TY_MAPENTRY => 2,
+            crate::obj::TY_TAGGED => 2,
             TY_ARRAYMAP | TY_HASHMAP => self.map_count(v),
             TY_SET => self.set_count(v),
             TY_BYTES | TY_BROPE => self.b_count(v),
@@ -155,6 +156,39 @@ impl Rt {
                 }
                 _ => self.throw_str("IndexOutOfBoundsException", "assoc index out of range"),
             },
+            // A tagged literal has exactly two slots and there is nowhere for a
+            // third to go, so `assoc` on either key PRESERVES the type and
+            // anything else is refused (`doc/decisions/0034`). The alternative
+            // is silently promoting to a map and losing the taggedness, which
+            // is the quiet coercion this codebase refuses elsewhere.
+            crate::obj::TY_TAGGED => {
+                if k == self.keyword(None, "tag") {
+                    if !self.is_symbol(v) {
+                        return self.throw_str(
+                            "IllegalArgumentException",
+                            "a tagged literal's :tag must be a symbol",
+                        );
+                    }
+                    let form = self.slot(coll, 1);
+                    self.new_tagged(v, form)
+                } else if k == self.keyword(None, "form") {
+                    let tag = self.slot(coll, 0);
+                    self.new_tagged(tag, v)
+                } else {
+                    // The KEY is named, because "wrong key" without saying
+                    // which one is the error message this codebase keeps
+                    // replacing (`doc/decisions/0032`).
+                    let nm = self.name_of(k);
+                    let mut b = crate::rt::sbuf();
+                    let shown: alloc::string::String =
+                        self.as_str(nm, &mut b).unwrap_or("?").into();
+                    let msg = alloc::format!(
+                        "a tagged literal has :tag and :form and nothing else, so it cannot \
+                         take :{shown}"
+                    );
+                    self.throw_str("IllegalArgumentException", &msg)
+                }
+            }
             _ => self.throw_str("ClassCastException", "assoc needs an associative collection"),
         }
     }
@@ -184,6 +218,18 @@ impl Rt {
                 Some(1) => self.slot(coll, 1),
                 _ => dflt,
             },
+            // A tagged literal reads like a two-key map, so `(:tag x)` and
+            // `(get x :form)` work and nothing treating one as a map has to
+            // learn a different way in (`doc/decisions/0034`).
+            crate::obj::TY_TAGGED => {
+                if k == self.keyword(None, "tag") {
+                    self.slot(coll, 0)
+                } else if k == self.keyword(None, "form") {
+                    self.slot(coll, 1)
+                } else {
+                    dflt
+                }
+            }
             TY_BYTES | TY_BROPE => match self.as_i64(k) {
                 Some(i) if i >= 0 => match self.b_at(coll, i as u32) {
                     Some(b) => Value::fixnum(b as i64),
@@ -1071,6 +1117,26 @@ impl Rt {
     /// guest-minted kind introduces: because a program can mint its own,
     /// authority can never be "is it opaque", only the host recognising this
     /// specific object in its own grant table.
+    /// `#my.ns/thing v`. `tag` is a namespaced symbol; `form` is any value.
+    pub fn new_tagged(&mut self, tag: Value, form: Value) -> Value {
+        let base = self.mark();
+        let ti = self.push(tag);
+        let fi = self.push(form);
+        let a = self.alloc(crate::obj::TY_TAGGED, 2);
+        let v = Value::heap(a);
+        let vi = self.push(v);
+        let (t, f) = (self.r(ti), self.r(fi));
+        self.set(self.r(vi), 0, t);
+        self.set(self.r(vi), 1, f);
+        let out = self.r(vi);
+        self.pop_to(base);
+        out
+    }
+
+    pub fn is_tagged(&self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == crate::obj::TY_TAGGED
+    }
+
     pub fn new_opaque(&mut self, label: Value, host_id: u64) -> Value {
         let base = self.mark();
         let li = self.push(label);

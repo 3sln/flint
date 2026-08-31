@@ -96,6 +96,12 @@
 (def name clojure.core/name)
 (def namespace clojure.core/namespace)
 (defn keyword2 ([n] (clojure.core/keyword n)) ([ns n] (clojure.core/keyword ns n)))
+
+;; A tagged literal (`doc/decisions/0034`). On flint this is `TY_TAGGED`, its
+;; own two-slot type; on this host it is Clojure's own, which answers `:tag`
+;; and `:form` exactly as flint's does -- which is why those are the names.
+(defn tagged-literal [tag form] (clojure.core/tagged-literal tag form))
+(defn tagged-literal? [x] (clojure.core/tagged-literal? x))
 (defn symbol2 ([n] (clojure.core/symbol n)) ([ns n] (clojure.core/symbol ns n)))
 (defn subs ([s a] (clojure.core/subs s a)) ([s a b] (clojure.core/subs s a b)))
 (defn num->str [n] (clojure.core/str n))

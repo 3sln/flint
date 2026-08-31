@@ -46,7 +46,13 @@ public class RtImage {
                    : Str.isString(rt, v) ? Str.text(rt, v)
                    : Val.isNil(v) ? "nil"
                    : "0x" + Long.toHexString(v);
-      if (want != null && !want.equals(shown)) {
+      // TRIMMED on both sides. `want` arrives as an argv element, and a shell
+      // `$(...)` strips trailing newlines -- so the native answer reaches here
+      // one byte shorter than the guest's own return value, which ends with the
+      // newline `run-tests` writes. That is an artifact of how the harness
+      // CAPTURES the answer, not a disagreement between two runtimes, and it is
+      // not even representable through an argument.
+      if (want != null && !want.strip().equals(shown.strip())) {
         System.out.println("  FAIL the ported runtime DISAGREES with the native one");
         System.out.println("        native " + want);
         System.out.println("        ported " + shown);

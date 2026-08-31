@@ -686,6 +686,25 @@ builtins! {
     // The LABEL is readable; the host id is not, and there is deliberately no
     // builtin that returns it. Reading provenance from guest code would invite
     // exactly the check 0022 forbids.
+    // `#my.ns/thing v` (`doc/decisions/0034`). The tag must be a SYMBOL, and a
+    // namespaced one in practice, because an unqualified tag is reserved for
+    // the reader's own literals.
+    "flint/tagged-literal", flint_b_tagged, b_tagged, |rt, a, n| {
+        let _ = n;
+        let (t, f) = (arg(rt, a, 0), arg(rt, a, 1));
+        if !rt.is_symbol(t) {
+            return rt.throw_str(
+                "IllegalArgumentException",
+                "a tagged literal's tag must be a symbol",
+            );
+        }
+        rt.new_tagged(t, f)
+    };
+    "flint/tagged-literal?", flint_b_taggedp, b_taggedp, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        Value::boolean(rt.is_tagged(v))
+    };
     "flint/opaque-label", flint_b_opaquelabel, b_opaquelabel, |rt, a, n| {
         let _ = n;
         let v = arg(rt, a, 0);
@@ -776,6 +795,7 @@ builtins! {
                 crate::obj::TY_VAR => "var",
                 crate::obj::TY_REGEX => "regex",
                 crate::obj::TY_EXINFO => "exception",
+                crate::obj::TY_TAGGED => "tagged",
                 _ => "other",
             }
         };

@@ -96,6 +96,8 @@
    "flint/opaque" flint.rt/opaque
    "flint/opaque?" flint.rt/opaque?
    "flint/opaque-label" flint.rt/opaque-label
+   "flint/tagged-literal" flint.rt/tagged-literal
+   "flint/tagged-literal?" flint.rt/tagged-literal?
    "flint/volatile?" flint.rt/volatile?
    "meta" flint.rt/meta
    "with-meta" flint.rt/with-meta

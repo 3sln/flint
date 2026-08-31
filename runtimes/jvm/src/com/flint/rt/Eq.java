@@ -71,6 +71,14 @@ public final class Eq {
         if ((ta == TY_BYTES || ta == TY_BROPE) && (tb == TY_BYTES || tb == TY_BROPE)) {
             return Bytes.eq(rt, a, b);
         }
+        // Two tagged literals are equal when both halves are, and a tagged
+        // literal is NEVER equal to a two-key map -- which is the whole reason
+        // it is a type (`doc/decisions/0034`).
+        if (ta == Obj.TY_TAGGED || tb == Obj.TY_TAGGED) {
+            if (ta != tb) return false;
+            return eq(rt, rt.slot(a, 0), rt.slot(b, 0))
+                && eq(rt, rt.slot(a, 1), rt.slot(b, 1));
+        }
         if (ta != tb) return false;
         if (ta == TY_STR) {
             int la = len(rt.gc.sp, Val.asHeap(a)), lb = len(rt.gc.sp, Val.asHeap(b));
@@ -138,6 +146,9 @@ public final class Eq {
             }
             case TY_ARRAYMAP:
             case TY_HASHMAP: return Maps.hash(rt, v);
+            // Both halves, so two equal tagged literals land in one bucket.
+            case Obj.TY_TAGGED:
+                return hashValue(rt, rt.slot(v, 0)) * 31 + hashValue(rt, rt.slot(v, 1));
             case TY_SET: return Sets.hash(rt, v);
             default: {
                 if (rt.isSeq(v)) {

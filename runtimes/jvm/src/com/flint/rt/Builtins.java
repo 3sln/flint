@@ -17,6 +17,22 @@ public final class Builtins {
 
     public interface Fn { long apply(Rt rt, int at, int argc); }
 
+    /// A keyword's name, for a message that has to say WHICH key.
+    static long kwName(Rt rt, long v) {
+        if (Val.isInlineKw(v)) return Val.inlineStr(Val.inlineBytes(v));
+        if (rt.isHeapTy(v, TY_KW) || rt.isHeapTy(v, TY_SYM)) return rt.slot(v, 1);
+        return v;
+    }
+
+    /// `:tag` and `:form` on a tagged literal, which is how anyone reads one
+    /// (`doc/decisions/0034`). Kept beside the `get` builtin because the
+    /// keyword-apply path needs the same two keys.
+    static long taggedGet(Rt rt, long t, long k, long dflt) {
+        if (k == Str.keyword(rt, null, "tag")) return rt.slot(t, 0);
+        if (k == Str.keyword(rt, null, "form")) return rt.slot(t, 1);
+        return dflt;
+    }
+
     private static final Map<String, Fn> TABLE = new HashMap<>();
 
     public static Fn byName(String n) { return TABLE.get(n); }
@@ -138,6 +154,57 @@ public final class Builtins {
                                               : fmtDouble(Val.asDouble(v)));
         });
 
+        /// The CLOSED SET protocol dispatch runs on (`doc/decisions/0005`).
+        ///
+        /// Small on purpose: three string tiers and eight seq representations
+        /// all answer with ONE keyword each, or `extend-protocol :string` would
+        /// work for some strings and not others depending on how they were
+        /// built. It was MISSING from this port entirely, which meant no
+        /// program using a protocol could run here -- found by the language
+        /// suite in `test/common`, which is what that suite is for.
+        def("flint/kind", (rt, at, n) -> {
+            long v = rt.vat(at);
+            String k;
+            if (Val.isNil(v)) k = "nil";
+            else if (Val.isTrue(v) || Val.isFalse(v)) k = "boolean";
+            else if (Val.isDouble(v) || Val.isFixnum(v)) k = "number";
+            else if (Val.isInlineStr(v)) k = "string";
+            else if (Val.isInlineKw(v)) k = "keyword";
+            else if (!Val.isHeap(v)) k = "other";
+            else switch (ty(rt.gc.sp, Val.asHeap(v))) {
+                case TY_STR: case TY_ROPE: k = "string"; break;
+                case TY_KW: k = "keyword"; break;
+                case TY_SYM: k = "symbol"; break;
+                case TY_BIGINT: k = "number"; break;
+                case TY_VEC: case TY_MAPENTRY: k = "vector"; break;
+                case TY_ARRAYMAP: case TY_HASHMAP: k = "map"; break;
+                case TY_SET: k = "set"; break;
+                case TY_CONS: case TY_EMPTY_LIST: case TY_LAZYSEQ: case TY_VECSEQ:
+                case TY_STRSEQ: case TY_RANGE: case TY_ITERSEQ: case TY_CHUNKSEQ:
+                    k = "list"; break;
+                case TY_CLOSURE: case TY_NATIVEFN: case TY_MULTIFN: k = "fn"; break;
+                case TY_PORT: k = "port"; break;
+                case TY_THREAD: k = "thread"; break;
+                case TY_ATOM: k = "atom"; break;
+                case TY_VAR: k = "var"; break;
+                case TY_REGEX: k = "regex"; break;
+                case TY_EXINFO: k = "exception"; break;
+                case Obj.TY_TAGGED: k = "tagged"; break;
+                default: k = "other";
+            }
+            return Str.keyword(rt, null, k);
+        });
+
+        def("flint/tagged-literal", (rt, at, n) -> {
+            long t = rt.vat(at);
+            if (!rt.isHeapTy(t, Obj.TY_SYM))
+                return rt.throwStr("IllegalArgumentException",
+                                   "a tagged literal's tag must be a symbol");
+            return rt.newTagged(t, rt.vat(at + 1));
+        });
+        def("flint/tagged-literal?", (rt, at, n) ->
+            Val.bool(rt.isHeapTy(rt.vat(at), Obj.TY_TAGGED)));
+
         def("flint/opaque?", (rt, at, n) -> Val.FALSE);
         def("flint/opaque-label", (rt, at, n) -> Val.NIL);
         /// The metadata slot, or nil. This was a STUB answering nil, which is
@@ -153,6 +220,7 @@ public final class Builtins {
             long v = rt.vat(at);
             if (Val.isNil(v)) return Val.fixnum(0);
             if (rt.isHeapTy(v, TY_VEC)) return Val.fixnum(Vec.count(rt, v));
+            if (rt.isHeapTy(v, Obj.TY_TAGGED)) return Val.fixnum(2);
             if (Str.isString(rt, v)) return Val.fixnum(Str.charLen(rt, v));
             if (Maps.isMap(rt, v)) return Val.fixnum(Maps.count(rt, v));
             if (Sets.isSet(rt, v)) return Val.fixnum(Sets.count(rt, v));
@@ -336,6 +404,8 @@ rt.describe(v) + " is not a transient");
             long coll = rt.vat(at);
             if (Val.isNil(coll)) return dflt;
             if (Maps.isMap(rt, coll)) return Maps.get(rt, coll, rt.vat(at + 1), dflt);
+            // A tagged literal reads like a two-key map (`0034`).
+            if (rt.isHeapTy(coll, Obj.TY_TAGGED)) return taggedGet(rt, coll, rt.vat(at + 1), dflt);
             if (Sets.isSet(rt, coll)) return Sets.get(rt, coll, rt.vat(at + 1), dflt);
             if (Maps.isTransient(rt, coll)) return Maps.tget(rt, coll, rt.vat(at + 1), dflt);
             if (Sets.isTransient(rt, coll)) return Sets.tget(rt, coll, rt.vat(at + 1), dflt);
@@ -363,6 +433,36 @@ rt.describe(v) + " is not a transient");
                 for (int i = 1; i + 1 < n; i += 2) {
                     long nm = Maps.assoc(rt, rt.r(ai), rt.vat(at + i), rt.vat(at + i + 1));
                     rt.setR(ai, nm);
+                }
+                long out = rt.r(ai);
+                rt.popTo(base);
+                return out;
+            }
+            // Two slots and nowhere for a third, so `assoc` on either key keeps
+            // the type and anything else is refused, NAMING the key
+            // (`doc/decisions/0034`). Promoting to a map would lose the
+            // taggedness silently.
+            if (rt.isHeapTy(acc, Obj.TY_TAGGED)) {
+                int base = rt.mark();
+                int ai = rt.push(acc);
+                for (int i = 1; i + 1 < n; i += 2) {
+                    long k = rt.vat(at + i), v = rt.vat(at + i + 1);
+                    long cur = rt.r(ai);
+                    if (k == Str.keyword(rt, null, "tag")) {
+                        if (!rt.isHeapTy(v, Obj.TY_SYM)) {
+                            rt.popTo(base);
+                            return rt.throwStr("IllegalArgumentException",
+                                "a tagged literal's :tag must be a symbol");
+                        }
+                        rt.setR(ai, rt.newTagged(v, rt.slot(cur, 1)));
+                    } else if (k == Str.keyword(rt, null, "form")) {
+                        rt.setR(ai, rt.newTagged(rt.slot(cur, 0), v));
+                    } else {
+                        rt.popTo(base);
+                        return rt.throwStr("IllegalArgumentException",
+                            "a tagged literal has :tag and :form and nothing else, so it "
+                            + "cannot take :" + Str.text(rt, kwName(rt, k)));
+                    }
                 }
                 long out = rt.r(ai);
                 rt.popTo(base);

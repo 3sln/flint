@@ -48,7 +48,11 @@
   (expect = :list (flint.rt/kind (map inc [1])))
   (expect = :list (flint.rt/kind (range 3)))
   (expect = :fn (flint.rt/kind (fn [] nil)))
-  (expect = :atom (flint.rt/kind (atom 1))))
+  (expect = :atom (flint.rt/kind (atom 1)))
+  ;; `:tagged`, not `:map` (`doc/decisions/0034`). A tagged literal READS like
+  ;; a two-key map, and if it answered `:map` here every `extend-protocol :map`
+  ;; in every program would silently start catching them.
+  (expect = :tagged (flint.rt/kind #a/b [1])))
 
 (defn ^:flint.check/test metadata-beats-kind []
   ;; The same vector, one of them carrying its own implementation. Kind

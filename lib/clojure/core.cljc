@@ -493,6 +493,22 @@
   ([n] (if (symbol? n) n (flint.rt/symbol2 n)))
   ([ns n] (flint.rt/symbol2 ns n)))
 
+(defn tagged-literal
+  "`#my.ns/thing form`, as a value.
+
+  Its own type rather than a map (`doc/decisions/0034`): a map is ambiguous
+  with a map in every format that has tags, and loses the namespace wherever
+  the key has to become a string. It still READS like a two-key map on `:tag`
+  and `:form`, so nothing treating one as a map needs a different way in."
+  [tag form]
+  (flint.rt/tagged-literal tag form))
+
+(defn tagged-literal? [x] (flint.rt/tagged-literal? x))
+
+;; `:tag` and `:form`, the names Clojure's own `tagged-literal` answers to.
+(defn tag [x] (flint.rt/get x :tag))
+(defn form [x] (flint.rt/get x :form))
+
 (defn parse-long [s] (let [v (flint.rt/str->num s)] (if (int? v) v nil)))
 (defn parse-double [s] (let [v (flint.rt/str->num s)] (if (number? v) (flint.rt/add v 0.0) nil)))
 
@@ -1242,6 +1258,10 @@
     (map? x) (flint.rt/str2 "{" (flint.rt/str2 (join-entries* x readable?) "}"))
     ;; No read syntax, deliberately: a value whose printed form can be read
     ;; back is forgeable by construction (0022).
+    ;; Before the map branch, because a tagged literal READS like a map and
+    ;; would otherwise print as one.
+    (tagged-literal? x) (flint.rt/str2 "#" (flint.rt/str2 (kw-or-sym-str (tag x))
+                                                          (flint.rt/str2 " " (pr-str* (form x) readable?))))
     (opaque? x) (let [l (opaque-label x)]
                   (if (nil? l) "#<opaque>" (flint.rt/str2 "#<opaque " (flint.rt/str2 (pr-str* l false) ">"))))
     (seq? x) (flint.rt/str2 "(" (flint.rt/str2 (join-with* " " x readable?) ")"))

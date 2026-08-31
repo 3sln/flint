@@ -781,6 +781,10 @@ public final class Rt {
         if (Val.isNil(coll)) return dflt;
         if (Maps.isMap(this, coll)) return Maps.get(this, coll, k, dflt);
         if (Sets.isSet(this, coll)) return Sets.get(this, coll, k, dflt);
+        // `(:tag x)` and `(:form x)` (`doc/decisions/0034`). Without this the
+        // same lookup by two spellings disagrees: `(get x :tag)` answers and
+        // `(:tag x)` falls through to the default.
+        if (isHeapTy(coll, Obj.TY_TAGGED)) return Builtins.taggedGet(this, coll, k, dflt);
         if (isHeapTy(coll, TY_VEC)) {
             if (!Val.isFixnum(k)) return dflt;
             long got = Vec.nth(this, coll, (int) Val.asFixnum(k));
@@ -988,6 +992,19 @@ public final class Rt {
     /// `[label, id, host-id]`. Guest code can mint one only with host id 0, and
     /// there is deliberately no builtin that reads an id back -- so a host id is
     /// a thing the HOST wrote and only the host can read.
+    /// `#my.ns/thing v` (`doc/decisions/0034`): `[tag, form]`, tag a symbol.
+    public long newTagged(long tag, long form) {
+        int base = mark();
+        int ti = push(tag), fi = push(form);
+        long a = alloc(Obj.TY_TAGGED, 2);
+        if (a == 0) { popTo(base); return Val.NIL; }
+        long t = r(ti), f = r(fi);
+        popTo(base);
+        setSlot(a, 0, t);
+        setSlot(a, 1, f);
+        return Val.heap(a);
+    }
+
     public long newOpaque(long label, long hostId) {
         int base = mark();
         int li = push(label);

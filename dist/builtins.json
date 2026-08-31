@@ -131,6 +131,8 @@
   "flint/sub",
   "flint/subs",
   "flint/symbol2",
+  "flint/tagged-literal",
+  "flint/tagged-literal?",
   "flint/tan",
   "flint/tanh",
   "flint/thread-id",

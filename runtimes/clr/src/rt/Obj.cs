@@ -30,7 +30,13 @@ public static class Obj {
                      /// can read. That is what lets a snapshot preserve identities
                      /// without granting any.
                      TyOpaque = 43,
-                     TyBytes = 44, TyBrope = 45, TyTbytes = 46, TyMax = 47;
+                     TyBytes = 44, TyBrope = 45, TyTbytes = 46,
+                     /// A tagged literal: `[tag, form]`, tag a namespaced
+                     /// SYMBOL. Its own type rather than a two-key map
+                     /// (`doc/decisions/0034`), because a map is ambiguous with
+                     /// a map in every format that has tags and loses the
+                     /// namespace wherever the key must become a string.
+                     TyTagged = 47, TyMax = 48;
 
     /// The three layout classes. Prefixed `L` where the JVM writes `VALS`,
     /// `STR`, `RAW`: C#'s PascalCase would make the layout constant `Str`

@@ -131,6 +131,7 @@
     fnil
     for
     force
+    form
     format
     frequencies
     gensym
@@ -310,6 +311,9 @@
     swap-vals!
     symbol
     symbol?
+    tag
+    tagged-literal
+    tagged-literal?
     take
     take-last
     take-nth
@@ -397,7 +401,7 @@
     when-not
     when-some
     while},
-  :count 346,
+  :count 350,
   :absent
   #{*'
     *1
@@ -665,8 +669,6 @@
     supers
     sync
     system-time
-    tagged-literal
-    tagged-literal?
     tap>
     test
     the-ns
@@ -715,6 +717,7 @@
     cond-chain
     count-matching
     find-protocol-method
+    form
     int-of-char
     interleave-all
     interleave2
@@ -737,6 +740,7 @@
     str-bytes
     str-join
     subvec2
+    tag
     volatile?},
   :compared-with clojure.core},
  clojure.edn

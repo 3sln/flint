@@ -10,6 +10,22 @@ namespace Flint.Rt;
 public static class Builtins {
     public delegate long Fn(Rt rt, int at, int argc);
 
+    /// `:tag` and `:form` on a tagged literal (`doc/decisions/0034`). Shared
+    /// with the keyword-apply path, or the same lookup by two spellings
+    /// disagrees.
+    /// A keyword's name, for a message that has to say WHICH key.
+    static long KwName(Rt rt, long v) {
+        if (Val.IsInlineKw(v)) return Val.InlineStr(Val.InlineBytes(v));
+        if (rt.IsHeapTy(v, Obj.TyKw) || rt.IsHeapTy(v, Obj.TySym)) return rt.Slot(v, 1);
+        return v;
+    }
+
+    internal static long TaggedGet(Rt rt, long t, long k, long dflt) {
+        if (k == Str.Keyword(rt, null, "tag")) return rt.Slot(t, 0);
+        if (k == Str.Keyword(rt, null, "form")) return rt.Slot(t, 1);
+        return dflt;
+    }
+
     static readonly Dictionary<string, Fn> Table = new();
 
     public static Fn ByName(string n) => Table.TryGetValue(n, out var f) ? f : null;
@@ -135,6 +151,54 @@ public static class Builtins {
                 : FmtDouble(Val.AsDouble(v)));
         });
 
+        /// The CLOSED SET protocol dispatch runs on (`doc/decisions/0005`).
+        /// Small on purpose: three string tiers and eight seq representations
+        /// answer with ONE keyword each. It was MISSING from this port, so no
+        /// program using a protocol could run here -- found by the language
+        /// suite in `test/common`, which is what that suite is for.
+        Def("flint/kind", (rt, at, n) => {
+            long v = rt.VAt(at);
+            string k;
+            if (Val.IsNil(v)) k = "nil";
+            else if (v == Val.True || v == Val.False) k = "boolean";
+            else if (Val.IsDouble(v) || Val.IsFixnum(v)) k = "number";
+            else if (Val.IsInlineStr(v)) k = "string";
+            else if (Val.IsInlineKw(v)) k = "keyword";
+            else if (!Val.IsHeap(v)) k = "other";
+            else switch (Obj.Ty(rt.gc.sp, Val.AsHeap(v))) {
+                case Obj.TyStr: case Obj.TyRope: k = "string"; break;
+                case Obj.TyKw: k = "keyword"; break;
+                case Obj.TySym: k = "symbol"; break;
+                case Obj.TyBigint: k = "number"; break;
+                case Obj.TyVec: case Obj.TyMapentry: k = "vector"; break;
+                case Obj.TyArraymap: case Obj.TyHashmap: k = "map"; break;
+                case Obj.TySet: k = "set"; break;
+                case Obj.TyCons: case Obj.TyEmptyList: case Obj.TyLazyseq:
+                case Obj.TyVecseq: case Obj.TyStrseq: case Obj.TyRange:
+                case Obj.TyIterseq: case Obj.TyChunkseq: k = "list"; break;
+                case Obj.TyClosure: case Obj.TyNativefn: case Obj.TyMultifn: k = "fn"; break;
+                case Obj.TyPort: k = "port"; break;
+                case Obj.TyThread: k = "thread"; break;
+                case Obj.TyAtom: k = "atom"; break;
+                case Obj.TyVar: k = "var"; break;
+                case Obj.TyRegex: k = "regex"; break;
+                case Obj.TyExinfo: k = "exception"; break;
+                case Obj.TyTagged: k = "tagged"; break;
+                default: k = "other"; break;
+            }
+            return Str.Keyword(rt, null, k);
+        });
+
+        Def("flint/tagged-literal", (rt, at, n) => {
+            long t = rt.VAt(at);
+            if (!rt.IsHeapTy(t, Obj.TySym))
+                return rt.ThrowStr("IllegalArgumentException",
+                                   "a tagged literal's tag must be a symbol");
+            return rt.NewTagged(t, rt.VAt(at + 1));
+        });
+        Def("flint/tagged-literal?", (rt, at, n) =>
+            Val.Bool(rt.IsHeapTy(rt.VAt(at), Obj.TyTagged)));
+
         Def("flint/opaque?", (rt, at, n) => Val.False);
         Def("flint/opaque-label", (rt, at, n) => Val.Nil);
         /// The metadata slot, or nil. This was a STUB answering nil, which is
@@ -150,6 +214,7 @@ public static class Builtins {
             long v = rt.VAt(at);
             if (Val.IsNil(v)) return Val.Fixnum(0);
             if (rt.IsHeapTy(v, Obj.TyVec)) return Val.Fixnum(Vec.Count(rt, v));
+            if (rt.IsHeapTy(v, Obj.TyTagged)) return Val.Fixnum(2);
             if (Str.IsString(rt, v)) return Val.Fixnum(Str.SCount(rt, v));
             if (Maps.IsMap(rt, v)) return Val.Fixnum(Maps.Count(rt, v));
             if (Sets.IsSet(rt, v)) return Val.Fixnum(Sets.Count(rt, v));
@@ -317,6 +382,8 @@ public static class Builtins {
             long coll = rt.VAt(at);
             if (Val.IsNil(coll)) return dflt;
             if (Maps.IsMap(rt, coll)) return Maps.Get(rt, coll, rt.VAt(at + 1), dflt);
+            // A tagged literal reads like a two-key map (`0034`).
+            if (rt.IsHeapTy(coll, Obj.TyTagged)) return TaggedGet(rt, coll, rt.VAt(at + 1), dflt);
             if (Sets.IsSet(rt, coll)) return Sets.Get(rt, coll, rt.VAt(at + 1), dflt);
             if (Maps.IsTransient(rt, coll)) return Maps.TGet(rt, coll, rt.VAt(at + 1), dflt);
             if (Sets.IsTransient(rt, coll)) return Sets.TGet(rt, coll, rt.VAt(at + 1), dflt);
@@ -347,6 +414,35 @@ public static class Builtins {
                 long outv = rt.R(ai);
                 rt.PopTo(bas);
                 return outv;
+            }
+            // Two slots and nowhere for a third, so `assoc` on either key keeps
+            // the type and anything else is refused, NAMING the key
+            // (`doc/decisions/0034`).
+            if (rt.IsHeapTy(acc, Obj.TyTagged)) {
+                int bas = rt.Mark();
+                int ai = rt.Push(acc);
+                for (int i = 1; i + 1 < n; i += 2) {
+                    long k = rt.VAt(at + i), v = rt.VAt(at + i + 1);
+                    long cur = rt.R(ai);
+                    if (k == Str.Keyword(rt, null, "tag")) {
+                        if (!rt.IsHeapTy(v, Obj.TySym)) {
+                            rt.PopTo(bas);
+                            return rt.ThrowStr("IllegalArgumentException",
+                                "a tagged literal's :tag must be a symbol");
+                        }
+                        rt.SetR(ai, rt.NewTagged(v, rt.Slot(cur, 1)));
+                    } else if (k == Str.Keyword(rt, null, "form")) {
+                        rt.SetR(ai, rt.NewTagged(rt.Slot(cur, 0), v));
+                    } else {
+                        rt.PopTo(bas);
+                        return rt.ThrowStr("IllegalArgumentException",
+                            "a tagged literal has :tag and :form and nothing else, so it "
+                            + "cannot take :" + Str.Text(rt, KwName(rt, k)));
+                    }
+                }
+                long outt = rt.R(ai);
+                rt.PopTo(bas);
+                return outt;
             }
             if (rt.IsHeapTy(acc, Obj.TyVec)) {
                 int bas = rt.Mark();

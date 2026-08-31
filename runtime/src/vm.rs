@@ -700,6 +700,13 @@ impl Rt {
                 self.map_get(coll, kw, dflt)
             } else if self.is_set(coll) {
                 self.set_get(coll, kw, dflt)
+            } else if self.is_tagged(coll) {
+                // `(:tag x)` and `(:form x)`, which is how anyone actually
+                // reads one (`doc/decisions/0034`). This arm used to fall to
+                // `dflt` for everything that was not a map or a set, so
+                // `(get x :tag)` answered and `(:tag x)` did not -- the same
+                // lookup by two spellings disagreeing.
+                self.get(coll, kw, dflt)
             } else {
                 dflt
             }

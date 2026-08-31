@@ -494,7 +494,10 @@
             _ (skip-ws! st)
             v (read-form* st)]
         (if (symbol? tag)
-          {:flint/tagged tag :flint/value v}
+          ;; A VALUE, not a two-key map (`doc/decisions/0034`). The map was
+          ;; ambiguous with an ordinary map in every format that has tags, and
+          ;; lost the namespace wherever the key had to become a string.
+          (flint.rt/tagged-literal tag v)
           (err st "reader tag must be a symbol"))))))
 
 (defn- read-symbolic [st]

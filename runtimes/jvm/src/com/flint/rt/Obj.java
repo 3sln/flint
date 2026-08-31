@@ -75,7 +75,13 @@ public final class Obj {
     public static final int TY_BYTES = 44;
     public static final int TY_BROPE = 45;
     public static final int TY_TBYTES = 46;
-    public static final int TY_MAX = 47;
+    /// A tagged literal: `[tag, form]`, tag a namespaced SYMBOL. Its own type
+    /// rather than a two-key map (`doc/decisions/0034`), because a map is
+    /// ambiguous with a map in every format that has tags and loses the
+    /// namespace wherever the key must become a string. It still ANSWERS the
+    /// map protocols on `:tag` and `:form`.
+    public static final int TY_TAGGED = 47;
+    public static final int TY_MAX = 48;
 
     public static final int VALS = 0, STR = 1, RAW = 2;
 

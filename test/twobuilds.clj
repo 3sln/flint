@@ -82,7 +82,14 @@
 ;; The change that matters more than the number: it used to measure the build
 ;; with checks IN, so development machinery was spending the production budget.
 ;; The two now move independently.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 263000))
+;; Raised again for the TAGGED LITERAL type (`doc/decisions/0034`): the shipped
+;; floor measured 264 997 where it had been 261 363. That net is not all of it
+;; -- the ring simplifications in `8f33c76` and `4b4bfb6` moved it DOWN in
+;; between -- but the direction and the reason are clear: a new heap type puts
+;; branches in `eq`, `hash`, `get`, `assoc` and `kind`, and those live in the
+;; runtime where nothing shakes them out. A value type that only some programs
+;; use still costs every program, which is the trade a language type is.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 267000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

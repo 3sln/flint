@@ -54,6 +54,13 @@ pub const K_FN: u8 = 12;
 /// A builtin as a first-class value; payload is the native *import* index, so
 /// this does not depend on the natives table having been read yet.
 pub const K_NATIVE: u8 = 13;
+/// A tagged literal (`doc/decisions/0034`): two constant indices, the tag
+/// symbol and the form.
+///
+/// 17 rather than 14, because the image's constant tags and `codec.rs`'s wire
+/// tags SHARE a numbering space -- the codec re-exports most of these -- and
+/// 14, 15 and 16 are `K_BYTES`, `K_PORT` and `K_SENTINEL` over there.
+pub const K_TAGGED: u8 = 17;
 
 pub const NO_CONST: u32 = 0xFFFF_FFFF;
 
@@ -294,6 +301,13 @@ impl Rt {
                     let namec = r.u32();
                     let name = self.roots.shared.consts[namec as usize];
                     self.make_native(idx, name)
+                }
+                K_TAGGED => {
+                    let tagc = r.u32() as usize;
+                    let formc = r.u32() as usize;
+                    let t = self.roots.shared.consts[tagc];
+                    let f = self.roots.shared.consts[formc];
+                    self.new_tagged(t, f)
                 }
                 _ => return false,
             };

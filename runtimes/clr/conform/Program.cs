@@ -554,7 +554,11 @@ public static class Program {
                 : Flint.Rt.Str.IsString(rt, v) ? Flint.Rt.Str.Text(rt, v)
                 : Flint.Rt.Val.IsNil(v) ? "nil"
                 : "0x" + Convert.ToString(v, 16);
-            if (want != null && want != shown) {
+            // TRIMMED on both sides, as in `RtImage`: a shell `$(...)` strips
+            // trailing newlines, so the native answer arrives one byte shorter
+            // than the guest's own return value. An artifact of how the harness
+            // captures the answer, not a disagreement between runtimes.
+            if (want != null && want.Trim() != shown.Trim()) {
                 Console.WriteLine("  FAIL the ported runtime DISAGREES with the native one");
                 Console.WriteLine("        native " + want);
                 Console.WriteLine("        ported " + shown);

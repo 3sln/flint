@@ -767,6 +767,9 @@ public sealed class Rt : System.IDisposable {
         if (Val.IsNil(coll)) return dflt;
         if (Maps.IsMap(this, coll)) return Maps.Get(this, coll, k, dflt);
         if (Sets.IsSet(this, coll)) return Sets.Get(this, coll, k, dflt);
+        // `(:tag x)` and `(:form x)` (`doc/decisions/0034`). Without this
+        // `(get x :tag)` answers and `(:tag x)` does not.
+        if (IsHeapTy(coll, Obj.TyTagged)) return Builtins.TaggedGet(this, coll, k, dflt);
         if (IsHeapTy(coll, TyVec)) {
             if (!Val.IsFixnum(k)) return dflt;
             long got = Vec.Nth(this, coll, (int) Val.AsFixnum(k));
@@ -1015,6 +1018,19 @@ public sealed class Rt : System.IDisposable {
     /// `[label, id, host-id]`. Guest code can mint one only with host id 0, and
     /// there is deliberately no builtin that reads an id back -- so a host id is
     /// a thing the HOST wrote and only the host can read.
+    /// `#my.ns/thing v` (`doc/decisions/0034`): `[tag, form]`.
+    public long NewTagged(long tag, long form) {
+        int bas = Mark();
+        int ti = Push(tag), fi = Push(form);
+        long a = Alloc(Obj.TyTagged, 2);
+        if (a == 0) { PopTo(bas); return Val.Nil; }
+        long t = R(ti), f = R(fi);
+        PopTo(bas);
+        SetSlot(a, 0, t);
+        SetSlot(a, 1, f);
+        return Val.Heap(a);
+    }
+
     public long NewOpaque(long label, long hostId) {
         int bas = Mark();
         int li = Push(label);

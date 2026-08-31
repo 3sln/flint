@@ -130,8 +130,15 @@
 ;; function. `flint.strs` records what that costs: `symbol` and `keyword` had
 ;; the same four lines and the same rooting bug, and only one of them surfaced.
 ;; Two copies of the write barrier is a worse trade than 5 040 bytes.
+;; Raised again for the TAGGED LITERAL type (`doc/decisions/0034`): the shipped
+;; floor measured 264 997 where it had been 261 363. That net is not all of it
+;; -- the ring simplifications in `8f33c76` and `4b4bfb6` moved it DOWN in
+;; between -- but the direction and the reason are clear: a new heap type puts
+;; branches in `eq`, `hash`, `get`, `assoc` and `kind`, and those live in the
+;; runtime where nothing shakes them out. A value type that only some programs
+;; use still costs every program, which is the trade a language type is.
 (check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
-            (< pure-size 263000))
+            (< pure-size 267000))
 
 ;; RE-BASELINED 2026-08-30, from 252 000, and the honest version of why: the
 ;; guard was measuring the DEFAULT build against a shipping floor, and it had
