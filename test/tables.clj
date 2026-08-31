@@ -102,6 +102,169 @@
             "the baseline did too little to compare against")
 
 
+;; --------------------------------------------------------------- step 5
+;;
+;; CHUNK ENCODINGS. The schema says what a column MEANS; the chunk says how it
+;; is written down, and may change its mind per chunk without the table's
+;; meaning moving. The first encoding is the constant column, because migration
+;; leans on it: adding a column with a default to a million-row table must write
+;; one value per chunk rather than one per row.
+;;
+;; Measured rather than asserted, and measured on PEAK LIVE rather than on
+;; allocation, because the claim is about what the table costs to HOLD. Two
+;; tables of the same shape and the same row count, one with a column that
+;; varies per row and one with a column that does not.
+(spit (str d "/enc.cljc")
+      (str "(ns enc (:require [flint.table :as ft]))\n"
+           "(def N 20000)\n"
+           "(def S (ft/schema [[:id :int] [:tag :keyword]]))\n"
+           "(defn- vary [] (ft/table S (mapv (fn [i] {:id i :tag (if (even? i) :a :b)}) (range N))))\n"
+           "(defn- same [] (ft/table S (mapv (fn [i] {:id i :tag :a}) (range N))))\n"
+           "(defn main [args]\n"
+           "  (let [w (first args)\n"
+           "        t (if (= w \"same\") (same) (vary))]\n"
+           "    (pr-str [(count t) (:tag (get t 0)) (:tag (get t (dec N))) (:id (get t 7))])))\n"))
+(let [r (sh "./bin/flint" ":src" d ":fn" "enc/main" ":out" "out/tbl-enc.wasm")]
+  (when-not (zero? (:exit r)) (println "enc build failed:" (:out r) (:err r)) (System/exit 1)))
+(spit "out/tbl-enc-run.mjs"
+      (str "import { load, instantiate } from '../host/flint.mjs';\n"
+           "const { module } = await load('out/tbl-enc.wasm');\n"
+           "const out = {};\n"
+           "for (const w of ['vary', 'same']) {\n"
+           "  const i = instantiate(module);\n"
+           "  i.exports.set_step_limit(0x7ffffff0);\n"
+           "  const r = i.main(w);\n"
+           "  i.exports.collect_now();\n"
+           "  out[w] = { answer: r.out, peak: Number(i.exports.stat_peak_live()) };\n"
+           "}\n"
+           "console.log(JSON.stringify(out));\n"))
+(def enc (let [r (sh "node" "out/tbl-enc-run.mjs")]
+           (when-not (zero? (:exit r)) (println "enc run failed:" (:out r) (:err r)) (System/exit 1))
+           (read-string (str/replace (str/trim (:out r)) #"\"(\w+)\":" "\"$1\" "))))
+(def ev (get enc "vary"))
+(def es (get enc "same"))
+
+;; The ANSWERS first: an encoding that is invisible is the whole claim, so a
+;; constant column has to read back exactly as a varying one does.
+(check "a constant column reads back like any other"
+       (get es "answer") "[20000 :a :a 7]")
+(check "  ... and a varying one still varies"
+       (get ev "answer") "[20000 :a :b 7]")
+(println (format "    %-22s %10s" "" "peak live"))
+(doseq [[nm m] [["a column that varies" ev] ["a column that does not" es]]]
+  (println (format "    %-22s %10d" nm (get m "peak"))))
+;; A DIFFERENCE and not a ratio, because both runs are dominated by the vector
+;; of maps they are built from, which is the same on either side. What the
+;; encoding saves is one 8-byte slot per row -- 160 000 for 20 000 rows -- and
+;; what is asserted is that most of that actually came back. `stat_heap_used`
+;; was the first thing tried here and is the wrong instrument: it reports the
+;; heap's SIZE, so a 131 072-byte saving showed up as noise on 7.3 MB.
+(check-that "a constant column costs nothing per row"
+            (> (- (get ev "peak") (get es "peak")) 120000)
+            (format "peak %d against %d -- saved %d of the 160 000 a 20 000-row column holds"
+                    (get es "peak") (get ev "peak")
+                    (- (get ev "peak") (get es "peak"))))
+(check-that "  ... and both runs really built a table"
+            (and (> (get es "peak") 500000) (> (get ev "peak") 500000))
+            "one of the runs did too little to compare")
+
+;; --------------------------------------------------------------- step 6
+;;
+;; MIGRATION, and the claim that makes it worth having: a column both schemas
+;; name is SHARED, not copied, so dropping one or adding a defaulted one is a
+;; head-only edit however many rows there are. Measured on gas, because "it did
+;; not walk the rows" is a statement about work and not about bytes.
+(spit (str d "/mig.cljc")
+      (str "(ns mig (:require [flint.table :as ft]))\n"
+           "(def N 50000)\n"
+           "(def S (ft/schema [[:id :int] [:score :int]]))\n"
+           "(def S2 (ft/schema [[:id :int]]))\n"
+           "(def S3 (ft/schema [[:id :int] [:score :int] [:tag :keyword]]))\n"
+           "(defn- t [] (ft/table S (mapv (fn [i] {:id i :score (* 2 i)}) (range N))))\n"
+           "(defn- msg [f] (try (do (f) \"no throw\") (catch Exception e (ex-message e))))\n"
+           "(defn main [args]\n"
+           "  (let [w (first args) tb (t)]\n"
+           "    (cond\n"
+           "      (= w \"drop\")  (let [m (ft/migrate tb S2)]\n"
+           "                      (pr-str [(count m) (:id (get m 9)) (:score (get m 9))\n"
+           "                               (ft/columns (ft/table-schema m))]))\n"
+           "      (= w \"add\")   (let [m (ft/migrate tb S3 {:tag :x})]\n"
+           "                      (pr-str [(count m) (:tag (get m 0)) (:tag (get m 49999))\n"
+           "                               (:score (get m 9))]))\n"
+           "      (= w \"map\")   (let [m (ft/migrate tb S3 (fn [r] (assoc (into {} r) :tag :y)))]\n"
+           "                      (pr-str [(count m) (:tag (get m 3)) (:score (get m 3))]))\n"
+           "      (= w \"errs\")  (pr-str\n"
+           "                      {:no-default (msg (fn [] (ft/migrate tb S3)))\n"
+           "                       :bad-default (msg (fn [] (ft/migrate tb S3 {:tag 1})))\n"
+           "                       :retype (msg (fn [] (ft/migrate tb (ft/schema [[:id :string]]))))})\n"
+           "      :else (pr-str [(count tb)]))))\n"))
+(let [r (sh "./bin/flint" ":src" d ":fn" "mig/main" ":out" "out/tbl-mig.wasm")]
+  (when-not (zero? (:exit r)) (println "mig build failed:" (:out r) (:err r)) (System/exit 1)))
+(spit "out/tbl-mig-run.mjs"
+      (str "import { load, instantiate } from '../host/flint.mjs';\n"
+           "const { module } = await load('out/tbl-mig.wasm');\n"
+           "const out = {};\n"
+           "for (const w of ['none', 'drop', 'add', 'map', 'errs']) {\n"
+           "  const i = instantiate(module);\n"
+           "  i.exports.set_step_limit(0x7ffffff0);\n"
+           "  const before = Number(i.exports.stat_steps());\n"
+           "  const r = i.main(w);\n"
+           "  out[w] = { answer: r.out, gas: Number(i.exports.stat_steps()) - before,\n"
+           "             allocated: Number(i.exports.stat_bytes_allocated()) };\n"
+           "}\n"
+           "console.log(JSON.stringify(out));\n"))
+(def mig (let [r (sh "node" "out/tbl-mig-run.mjs")]
+           (when-not (zero? (:exit r)) (println "mig run failed:" (:out r) (:err r)) (System/exit 1))
+           (read-string (str/replace (str/trim (:out r)) #"\"(\w+)\":" "\"$1\" "))))
+
+(check "dropping a column leaves the rest readable"
+       (get (get mig "drop") "answer") "[50000 9 nil [:id]]")
+(check "adding a defaulted column reaches every row"
+       (get (get mig "add") "answer") "[50000 :x :x 18]")
+(check "  ... and a mapper recomputes them"
+       (get (get mig "map") "answer") "[50000 :y 6]")
+
+;; The measurement `0026` rests on. Every run builds the same 50 000-row table
+;; first, so what differs is the migration and nothing else. A head-only edit
+;; must not scale with the rows; the mapper is the case that does, and it is
+;; here as the CONTROL -- without it "cheap" has nothing to be cheap against.
+
+;; Every run BUILDS the same table before migrating it, so the build has to come
+;; out of the number or all three look alike -- which is exactly what the first
+;; version of this measurement showed, and what it hid.
+(def build-gas (get (get mig "none") "gas"))
+(defn mig-gas [k] (- (get (get mig k) "gas") build-gas))
+(println (format "    %-28s %12s   %s" "" "gas" "(the 50 000-row build removed)"))
+(doseq [[nm k] [["drop a column" "drop"] ["add a defaulted column" "add"]
+                ["recompute every row" "map"]]]
+  (println (format "    %-28s %12d" nm (mig-gas k))))
+(check-that "dropping a column does not walk the rows"
+            (< (* 20 (mig-gas "drop")) (mig-gas "map"))
+            (format "%d gas against the rewrite's %d -- a head-only edit should be nowhere near it"
+                    (mig-gas "drop") (mig-gas "map")))
+(check-that "  ... and neither does adding a defaulted one"
+            (< (* 20 (mig-gas "add")) (mig-gas "map"))
+            (format "%d gas against the rewrite's %d" (mig-gas "add") (mig-gas "map")))
+(check-that "  ... and the rewrite really did rewrite, so the comparison is real"
+            (> (mig-gas "map") 1000000)
+            "the mapper run was too cheap to be a control")
+(check-that "  ... and the build really was the bulk of what was subtracted"
+            (> build-gas 1000000)
+            (format "the build cost %d gas, which is too little to be the 50 000-row build"
+                    build-gas))
+
+(let [e (get (get mig "errs") "answer")
+      m (read-string e)]
+  (check "a new column with no default says both ways to give it one"
+         (:no-default m)
+         "the new schema adds :tag and the table has no values for it; give it a default -- (migrate t s {:tag v}) -- or compute one per row: (migrate t s (fn [row] ...))")
+  (check "a default of the wrong type is refused before anything is built"
+         (:bad-default m)
+         "the default for :tag is a number and the column holds :keyword")
+  (check "changing a column's type says why it needs a function"
+         (:retype m)
+         "column :id holds :int and the new schema declares :string; a type change needs a value per row, so migrate with a function: (migrate t s (fn [row] ...))"))
+
 ;; --------------------------------------------------------------- step 4
 ;;
 ;; `assoc`, `conj`, iteration, printing and the REFUSALS. The refusals are

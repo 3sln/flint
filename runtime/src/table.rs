@@ -51,6 +51,25 @@ pub const TB_CHUNKS: u32 = 1;
 pub const TB_COUNT: u32 = 2;
 pub const TB_LEN: u32 = 3;
 
+// Chunk slots. A chunk is `[nrows, encodings, col…]`, the columns addressed by
+// their stable schema id.
+//
+// The ENCODINGS node says how each column is written down, and it is what makes
+// the separation `0026` draws possible: the schema decides what a column MEANS,
+// the chunk decides how it is stored, and may change its mind per chunk without
+// the table's meaning moving. Nothing above `chunk_get` can tell the difference.
+pub const CH_ROWS: u32 = 0;
+pub const CH_ENC: u32 = 1;
+pub const CH_BASE: u32 = 2;
+
+/// A value per row, in a flat `TY_NODE`.
+pub const ENC_FLAT: i64 = 0;
+/// ONE value for every row: the column slot holds the value itself rather than
+/// a run. Adding a column with a constant default to a million-row table
+/// therefore writes one value per chunk, which is what makes that migration
+/// cheap (`doc/decisions/0026`).
+pub const ENC_CONST: i64 = 1;
+
 // Row-ref slots.
 pub const RF_SCHEMA: u32 = 0;
 pub const RF_CHUNK: u32 = 1;
@@ -116,6 +135,79 @@ impl Rt {
             }
         };
         self.keyword(None, name)
+    }
+
+    pub fn chunk_rows(&mut self, ch: Value) -> u32 {
+        self.slot(ch, CH_ROWS).as_fixnum() as u32
+    }
+
+    fn chunk_enc(&mut self, ch: Value, id: u32) -> i64 {
+        let e = self.slot(ch, CH_ENC);
+        self.slot(e, id).as_fixnum()
+    }
+
+    /// One cell. The ONLY place that knows how a column is encoded, which is
+    /// what lets an encoding be added without touching anything above.
+    pub fn chunk_get(&mut self, ch: Value, id: u32, row: u32) -> Value {
+        let col = self.slot(ch, CH_BASE + id);
+        if self.chunk_enc(ch, id) == ENC_CONST {
+            col
+        } else {
+            self.slot(col, row)
+        }
+    }
+
+    /// A chunk of `rows` rows and `width` column slots, every column flat and
+    /// empty. The caller fills it and may then collapse columns.
+    fn new_chunk(&mut self, width: u32, rows: u32) -> Value {
+        let base = self.mark();
+        let ch = self.new_obj(TY_NODE, CH_BASE + width);
+        let ci = self.push(ch);
+        self.set(self.r(ci), CH_ROWS, Value::fixnum(rows as i64));
+        let enc = self.new_obj(TY_NODE, width.max(1));
+        let ei = self.push(enc);
+        for id in 0..width {
+            self.set(self.r(ei), id, Value::fixnum(ENC_FLAT));
+        }
+        let ev = self.r(ei);
+        self.set(self.r(ci), CH_ENC, ev);
+        let out = self.r(ci);
+        self.pop_to(base);
+        out
+    }
+
+    /// Collapse column `id` to a single value if every row holds the same one.
+    ///
+    /// Run over the COLUMN rather than over the rows: the values are already
+    /// gathered, so this is a scan of the thing being collapsed and not a
+    /// second pass through the map lookups that built it.
+    fn collapse(&mut self, ch: Value, id: u32) {
+        let base = self.mark();
+        let ci = self.push(ch);
+        let col = self.slot(self.r(ci), CH_BASE + id);
+        let coli = self.push(col);
+        let n = self.olen(self.r(coli));
+        if n == 0 {
+            self.pop_to(base);
+            return;
+        }
+        let first = self.slot(self.r(coli), 0);
+        let fi = self.push(first);
+        let mut same = true;
+        for k in 1..n {
+            let v = self.slot(self.r(coli), k);
+            if !self.eq(self.r(fi), v) {
+                same = false;
+                break;
+            }
+        }
+        if same {
+            let fv = self.r(fi);
+            self.set(self.r(ci), CH_BASE + id, fv);
+            let e = self.slot(self.r(ci), CH_ENC);
+            self.set(e, id, Value::fixnum(ENC_CONST));
+        }
+        self.pop_to(base);
     }
 
     pub fn is_schema(&self, v: Value) -> bool {
@@ -303,9 +395,8 @@ impl Rt {
         while row < nrows {
             let take = core::cmp::min(CHUNK, nrows - row);
             // The chunk: [nrows, col0 … colN], each column a flat run.
-            let ch = self.new_obj(TY_NODE, 1 + width);
+            let ch = self.new_chunk(width, take);
             let chi = self.push(ch);
-            self.set(self.r(chi), 0, Value::fixnum(take as i64));
             for c in 0..ncols {
                 let id = self.schema_id_at(self.r(si), c);
                 let col = self.new_obj(TY_NODE, take);
@@ -331,7 +422,9 @@ impl Rt {
                     self.pop_to(rvi);
                 }
                 let cv = self.r(coli);
-                self.set(self.r(chi), 1 + id, cv);
+                self.set(self.r(chi), CH_BASE + id, cv);
+                let chv = self.r(chi);
+                self.collapse(chv, id);
                 self.pop_to(coli);
             }
             let chv = self.r(chi);
@@ -409,9 +502,8 @@ impl Rt {
             return dflt;
         }
         let ch = self.slot(r, RF_CHUNK);
-        let col = self.slot(ch, 1 + id as u32);
         let row = self.slot(r, RF_ROW).as_fixnum() as u32;
-        self.slot(col, row)
+        self.chunk_get(ch, id as u32, row)
     }
 
     /// A row ref as a map, built only when someone actually asks for one.
@@ -615,7 +707,7 @@ impl Rt {
         for c in 0..n {
             let id = self.schema_id_at(self.r(si), c);
             let v = self.row_column(self.r(si), self.r(ri), c);
-            let col = self.slot(self.r(ci), 1 + id);
+            let col = self.slot(self.r(ci), CH_BASE + id);
             self.set(col, k, v);
         }
         self.pop_to(base);
@@ -630,31 +722,54 @@ impl Rt {
         let si = self.push(s);
         let ci = self.push(ch);
         let ri = self.push(row);
-        let width = self.schema_width(self.r(si));
-        let old = self.slot(self.r(ci), 0).as_fixnum() as u32;
+        let old = self.chunk_rows(self.r(ci));
         let take = if grow { old + 1 } else { old };
-        let nch = self.new_obj(TY_NODE, 1 + width);
+        let width = self.schema_width(self.r(si));
+        let nch = self.new_chunk(width, take);
         let ni = self.push(nch);
-        self.set(self.r(ni), 0, Value::fixnum(take as i64));
-        for id in 0..width {
-            let src = self.slot(self.r(ci), 1 + id);
-            if src.is_nil() {
+        let ncols = self.schema_len(self.r(si));
+        // Only the columns the schema NAMES are carried over. A slot the schema
+        // has dropped is left empty, which is where the "data stays resident and
+        // invisible until a chunk is next rewritten" trade in `0026` is paid
+        // back -- a migration is head-only, and the first write to a chunk after
+        // it is what actually reclaims.
+        for c in 0..ncols {
+            let id = self.schema_id_at(self.r(si), c);
+            let newv = self.row_column(self.r(si), self.r(ri), c);
+            let vi = self.push(newv);
+            // A CONSTANT column whose new value is the same value stays
+            // constant, and costs nothing to carry: this is the case that makes
+            // appending to a table with a constant column cheap rather than the
+            // case that un-does the encoding.
+            let stays = self.chunk_enc(self.r(ci), id) == ENC_CONST && {
+                let cv = self.slot(self.r(ci), CH_BASE + id);
+                self.eq(cv, self.r(vi))
+            };
+            if stays {
+                let cv = self.slot(self.r(ci), CH_BASE + id);
+                self.set(self.r(ni), CH_BASE + id, cv);
+                let e = self.slot(self.r(ni), CH_ENC);
+                self.set(e, id, Value::fixnum(ENC_CONST));
+                self.pop_to(vi);
                 continue;
             }
-            let sj = self.push(src);
-            let col = self.new_obj(TY_NODE, take);
+            let col = self.new_obj(TY_NODE, take.max(1));
             let cj = self.push(col);
-            let copy = core::cmp::min(old, take);
-            for j in 0..copy {
-                let v = self.slot(self.r(sj), j);
+            for j in 0..core::cmp::min(old, take) {
+                let v = self.chunk_get(self.r(ci), id, j);
                 self.set(self.r(cj), j, v);
             }
+            let vv = self.r(vi);
+            self.set(self.r(cj), k, vv);
             let cv = self.r(cj);
-            self.set(self.r(ni), 1 + id, cv);
-            self.pop_to(sj);
+            self.set(self.r(ni), CH_BASE + id, cv);
+            // Replacing the one row that differed can make a column constant
+            // again, so the collapse is checked on the way out as well as on
+            // the way in. Without it a table would only ever lose encodings.
+            let nv = self.r(ni);
+            self.collapse(nv, id);
+            self.pop_to(vi);
         }
-        let (nv, rv, sv) = (self.r(ni), self.r(ri), self.r(si));
-        self.write_row(sv, nv, k, rv);
         let out = self.r(ni);
         self.pop_to(base);
         out
@@ -706,17 +821,25 @@ impl Rt {
             // A new chunk, one row wide. `chunk_with_row` grows an existing
             // one; an empty table has none to grow.
             let width = self.schema_width(self.r(si));
-            let ch = self.new_obj(TY_NODE, 1 + width);
+            let ch = self.new_chunk(width, 1);
             let chi = self.push(ch);
-            self.set(self.r(chi), 0, Value::fixnum(1));
             let ncols = self.schema_len(self.r(si));
             for c in 0..ncols {
                 let id = self.schema_id_at(self.r(si), c);
                 let col = self.new_obj(TY_NODE, 1);
-                self.set(self.r(chi), 1 + id, col);
+                self.set(self.r(chi), CH_BASE + id, col);
             }
             let (sv, chv, rv) = (self.r(si), self.r(chi), self.r(ri));
             self.write_row(sv, chv, 0, rv);
+            // A one-row column is trivially constant, so a table grown row by
+            // row starts every chunk collapsed and expands only where the rows
+            // actually differ. Skipping this would make the append path the one
+            // path that never encodes.
+            for c in 0..ncols {
+                let id = self.schema_id_at(self.r(si), c);
+                let chv = self.r(chi);
+                self.collapse(chv, id);
+            }
             let chv = self.r(chi);
             let nv = self.vec_conj(self.r(ci), chv);
             self.set_r(ci, nv);
@@ -766,5 +889,205 @@ impl Rt {
         let out = self.map_assoc(mv, kv, vv);
         self.pop_to(base);
         out
+    }
+
+    // ---------------------------------------------------------------- step 6
+    //
+    // MIGRATION. A schema change makes a NEW TABLE -- there is no in-place
+    // evolution and no inference. What makes it cheap is that a chunk addresses
+    // its columns by stable id, so a column the new schema keeps is the SAME
+    // COLUMN OBJECT, shared rather than copied.
+
+    fn schema_type_at(&mut self, s: Value, c: u32) -> Value {
+        let types = self.slot(s, SC_TYPES);
+        self.vec_nth(types, c).unwrap_or(NIL)
+    }
+
+    fn schema_name_at(&mut self, s: Value, c: u32) -> Value {
+        let names = self.slot(s, SC_NAMES);
+        self.vec_nth(names, c).unwrap_or(NIL)
+    }
+
+    /// `want` REBASED onto `have`'s column ids: a column both schemas name
+    /// keeps its id, so the chunks that hold it can be shared unchanged; a
+    /// column only `want` has gets a fresh one past the end.
+    ///
+    /// This is the whole reason ids are stable. With positional columns, adding
+    /// `:a` in front would move every existing column and every chunk in the
+    /// table would have to be rewritten to say the same thing it already said.
+    fn rebase_schema(&mut self, have: Value, want: Value) -> Value {
+        let base = self.mark();
+        let hi = self.push(have);
+        let wi = self.push(want);
+        let n = self.schema_len(self.r(wi));
+        let mut width = self.schema_width(self.r(hi));
+        let ids = self.empty_vec();
+        let di = self.push(ids);
+        let idx = self.empty_map();
+        let ii = self.push(idx);
+        for c in 0..n {
+            let name = self.schema_name_at(self.r(wi), c);
+            let ni = self.push(name);
+            let old = self.schema_id(self.r(hi), self.r(ni));
+            let id = if old >= 0 {
+                old as u32
+            } else {
+                let fresh = width;
+                width += 1;
+                fresh
+            };
+            let dv = self.vec_conj(self.r(di), Value::fixnum(id as i64));
+            self.set_r(di, dv);
+            let nv = self.r(ni);
+            let m = self.map_assoc(self.r(ii), nv, Value::fixnum(id as i64));
+            self.set_r(ii, m);
+            self.pop_to(ni);
+        }
+        let a = self.alloc(TY_SCHEMA, SC_LEN);
+        let sc = Value::heap(a);
+        let si = self.push(sc);
+        let names = self.slot(self.r(wi), SC_NAMES);
+        self.set(self.r(si), SC_NAMES, names);
+        let types = self.slot(self.r(wi), SC_TYPES);
+        self.set(self.r(si), SC_TYPES, types);
+        let (iv, dv) = (self.r(ii), self.r(di));
+        self.set(self.r(si), SC_INDEX, iv);
+        self.set(self.r(si), SC_IDS, dv);
+        self.set(self.r(si), SC_WIDTH, Value::fixnum(width as i64));
+        let out = self.r(si);
+        self.pop_to(base);
+        out
+    }
+
+    /// `t` under `want`, sharing every column both schemas keep.
+    ///
+    /// `defaults` supplies a value for each column `want` adds; it is stored
+    /// ONCE PER CHUNK as a constant column, which is what makes adding a
+    /// defaulted column to a million-row table cheap. A column that needs a
+    /// value per row is not this function's job -- `flint.table/migrate`
+    /// rebuilds for that, and says so.
+    pub fn table_migrate(&mut self, t: Value, want: Value, defaults: Value) -> Value {
+        let base = self.mark();
+        let ti = self.push(t);
+        let wi = self.push(want);
+        let dfi = self.push(defaults);
+        let have = self.slot(self.r(ti), TB_SCHEMA);
+        let hi = self.push(have);
+        let n = self.schema_len(self.r(wi));
+
+        // Refuse first, and completely, before anything is built.
+        for c in 0..n {
+            let name = self.schema_name_at(self.r(wi), c);
+            let nmi = self.push(name);
+            let want_ty = self.schema_type_at(self.r(wi), c);
+            let old = self.schema_id(self.r(hi), self.r(nmi));
+            if old >= 0 {
+                // A carried column keeps its VALUES, so it must keep its type.
+                let hc = self.schema_pos_of(self.r(hi), self.r(nmi));
+                let have_ty = self.schema_type_at(self.r(hi), hc);
+                if !self.eq(have_ty, want_ty) {
+                    let nm = self.kw_name(self.r(nmi));
+                    let ht = self.kw_name(have_ty);
+                    let wt = self.kw_name(want_ty);
+                    self.pop_to(base);
+                    let msg = alloc::format!(
+                        "column :{nm} holds :{ht} and the new schema declares :{wt}; \
+                         a type change needs a value per row, so migrate with a \
+                         function: (migrate t s (fn [row] ...))"
+                    );
+                    return self.throw_str("IllegalArgumentException", &msg);
+                }
+            } else {
+                let dv = self.map_get(self.r(dfi), self.r(nmi), NOT_FOUND);
+                if dv == NOT_FOUND {
+                    let nm = self.kw_name(self.r(nmi));
+                    self.pop_to(base);
+                    let msg = alloc::format!(
+                        "the new schema adds :{nm} and the table has no values for it; \
+                         give it a default -- (migrate t s {{:{nm} v}}) -- or compute \
+                         one per row: (migrate t s (fn [row] ...))"
+                    );
+                    return self.throw_str("IllegalArgumentException", &msg);
+                }
+                if !self.type_ok(want_ty, dv) {
+                    let nm = self.kw_name(self.r(nmi));
+                    let wt = self.kw_name(want_ty);
+                    let gk = self.kind_of(dv);
+                    let gt = self.kw_name(gk);
+                    self.pop_to(base);
+                    let msg = alloc::format!(
+                        "the default for :{nm} is a {gt} and the column holds :{wt}"
+                    );
+                    return self.throw_str("IllegalArgumentException", &msg);
+                }
+            }
+            self.pop_to(nmi);
+        }
+
+        let rebased = self.rebase_schema(self.r(hi), self.r(wi));
+        let ri = self.push(rebased);
+        let width = self.schema_width(self.r(ri));
+        let chunks = self.slot(self.r(ti), TB_CHUNKS);
+        let ci = self.push(chunks);
+        let nch = self.vec_count(self.r(ci));
+        let out_chunks = self.empty_vec();
+        let oi = self.push(out_chunks);
+        for k in 0..nch {
+            let ch = self.vec_nth(self.r(ci), k).unwrap_or(NIL);
+            let chi = self.push(ch);
+            let rows = self.chunk_rows(self.r(chi));
+            let nc = self.new_chunk(width, rows);
+            let ni = self.push(nc);
+            for c in 0..n {
+                let id = self.schema_id_at(self.r(ri), c);
+                let name = self.schema_name_at(self.r(ri), c);
+                let old = self.schema_id(self.r(hi), name);
+                if old >= 0 {
+                    // SHARED, column object and encoding both. Nothing is
+                    // copied and nothing is scanned; this is the head-only
+                    // edit, and dropping a column is the case where the loop
+                    // simply never reaches the old slot.
+                    let col = self.slot(self.r(chi), CH_BASE + old as u32);
+                    self.set(self.r(ni), CH_BASE + id, col);
+                    let e = self.chunk_enc(self.r(chi), old as u32);
+                    let ne = self.slot(self.r(ni), CH_ENC);
+                    self.set(ne, id, Value::fixnum(e));
+                } else {
+                    let dv = self.map_get(self.r(dfi), name, NIL);
+                    self.set(self.r(ni), CH_BASE + id, dv);
+                    let ne = self.slot(self.r(ni), CH_ENC);
+                    self.set(ne, id, Value::fixnum(ENC_CONST));
+                }
+            }
+            let nv = self.r(ni);
+            let ov = self.vec_conj(self.r(oi), nv);
+            self.set_r(oi, ov);
+            self.pop_to(chi);
+        }
+        let count = self.table_count(self.r(ti));
+        let a = self.alloc(TY_TABLE, TB_LEN);
+        let nt = Value::heap(a);
+        let nti = self.push(nt);
+        let (sv, cv) = (self.r(ri), self.r(oi));
+        self.set(self.r(nti), TB_SCHEMA, sv);
+        self.set(self.r(nti), TB_CHUNKS, cv);
+        self.set(self.r(nti), TB_COUNT, Value::fixnum(count as i64));
+        let out = self.r(nti);
+        self.pop_to(base);
+        out
+    }
+
+    /// The POSITION of `name` in the schema's own order -- which is not its
+    /// column id once a migration has moved things. Used only to read the
+    /// parallel `SC_TYPES`.
+    fn schema_pos_of(&mut self, s: Value, name: Value) -> u32 {
+        let n = self.schema_len(s);
+        for c in 0..n {
+            let nm = self.schema_name_at(s, c);
+            if self.eq(nm, name) {
+                return c;
+            }
+        }
+        0
     }
 }

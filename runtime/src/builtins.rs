@@ -706,6 +706,20 @@ builtins! {
         }
         rt.new_table(s, rows)
     };
+    "flint/table-migrate", flint_b_tablemig, b_tablemig, |rt, a, n| {
+        let _ = n;
+        let (t, w, d) = (arg(rt, a, 0), arg(rt, a, 1), arg(rt, a, 2));
+        if !rt.is_table(t) {
+            return rt.throw_str("IllegalArgumentException", "migrate wants a table");
+        }
+        if !rt.is_schema(w) {
+            return rt.throw_str(
+                "IllegalArgumentException",
+                "migrate wants a schema; build one with `(schema [[:name :type] ...])`",
+            );
+        }
+        rt.table_migrate(t, w, d)
+    };
     "flint/table?", flint_b_tablep, b_tablep, |rt, a, n| {
         let _ = n;
         let v = arg(rt, a, 0);

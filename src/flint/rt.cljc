@@ -110,6 +110,7 @@
 (defn table [s rows] (throw (ex-info "table is not available at compile time" {})))
 (defn table? [x] false)
 (defn table-schema [x] nil)
+(defn table-migrate [t s defaults] (throw (ex-info "migrate is not available at compile time" {})))
 (defn schema-columns [x] nil)
 (defn schema-types [x] nil)
 (defn tagged-literal? [x] (clojure.core/tagged-literal? x))

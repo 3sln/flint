@@ -93,3 +93,36 @@
   :table (print-form [t readable?]
                      (clojure.core/str "#flint/table "
                                        (clojure.core/pr-str* (vec (rows t)) readable?))))
+
+;; ----------------------------------------------------------------- migration
+;;
+;; A schema change makes a NEW TABLE. There is no in-place evolution and no
+;; inference: what the new table's columns are is said, not guessed
+;; (`doc/decisions/0026`).
+
+(defn migrate
+  "`t` under `s`, a new schema.
+
+  A column both schemas name is CARRIED -- the same column objects, shared, not
+  copied -- so dropping a column or adding a defaulted one is a head-only edit
+  however many rows the table has. That is what stable column ids buy.
+
+  Three forms:
+
+      (migrate t s)            every column of `s` is already in `t`
+      (migrate t s {:c 0})     `:c` is new; every row gets 0, stored ONCE
+                               per chunk as a constant column
+      (migrate t s (fn [row] {...}))
+                               every row is recomputed from a ref, which is
+                               the case that costs -- it rewrites the chunks
+
+  A column the new schema adds with no default and no function is refused by
+  name, and so is a type change without a function: changing what a column
+  holds means computing new values for it, which only the third form does."
+  ([t s] (flint.rt/table-migrate t s {}))
+  ([t s defaults-or-fn]
+   (if (fn? defaults-or-fn)
+     ;; The rewriting case, and honestly a rebuild: every row is a new row, so
+     ;; there is nothing to share and no cheaper path hiding here.
+     (table s (mapv defaults-or-fn (rows t)))
+     (flint.rt/table-migrate t s defaults-or-fn))))

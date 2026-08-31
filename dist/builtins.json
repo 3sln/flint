@@ -135,6 +135,7 @@
   "flint/subs",
   "flint/symbol2",
   "flint/table",
+  "flint/table-migrate",
   "flint/table-schema",
   "flint/table?",
   "flint/tagged-literal",

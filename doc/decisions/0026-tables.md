@@ -216,8 +216,16 @@ transient table appends into an open chunk and seals it when full.
    across namespaces was a silent no-op; and `kind` answered `:other` for
    opaque values, byte strings, delays and volatiles, which means they could not
    be dispatched on at all.
-5. The chunk encodings: constant first, since migration leans on it.
-6. `migrate`, sharing chunks for add-constant and remove.
+5. The chunk encodings: constant first, since migration leans on it. **Done**
+   for the constant column, MEASURED: a 20 000-row column that does not vary
+   costs 160 368 bytes less than one that does, which is one 8-byte slot per row
+   and all of it. RLE and the dictionary are not built; the encoding lives
+   entirely behind `chunk_get`, so adding one touches nothing above it.
+6. `migrate`, sharing chunks for add-constant and remove. **Done**, MEASURED on
+   a 50 000-row table: dropping a column costs 218 gas and adding a defaulted
+   one 192, against 6 750 156 to recompute every row. Head-only is 31 000x
+   cheaper than a rewrite, which is the whole claim. The mapper case rebuilds,
+   in guest code, because there is nothing to share when every row is new.
 7. The transient, measured against the persistent path on a build loop.
 8. `flint.table`: bulk construction, column selection, ranges, splits.
 9. The `0025` codec tag and `0033`'s columnar JSON, so a table crosses a port as
