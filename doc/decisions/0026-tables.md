@@ -81,9 +81,8 @@ rather than a class cast three frames away.
   name to id; a chunk stores columns by id. This is what makes migration cheap
   -- see below -- and it costs one indirection that a small map or a linear scan
   over a short vector answers.
-* **A row is materialised on demand.** `(get table 0)` builds a map; a scan that
-  wants one column never builds one. `get-in` must not materialise, because it
-  is the common case.
+* **A row is never materialised.** `(get table 0)` hands back a REF into the
+  chunk; a map is built only if someone asks for one. See below.
 
 ## Chunks optimise; the schema does not care
 
@@ -119,13 +118,54 @@ Because chunks address columns by id:
   because the values differ per row. That is the case that costs, and it is
   explicit rather than something a table does behind an `assoc`.
 
-## What has to be decided before any of it
+## A table is not a vector of maps
 
-**Is `(= table [{:a 1}])` true?** Everything a vector answers, a table answers
--- but if EQUALITY is included then `hash` must agree, so hashing a table has to
-materialise every row and no columnar shortcut is available. That is affordable,
-since hashing is O(n) either way, but it forecloses hashing column runs directly
-and so has to be a decision rather than a discovery.
+`(= table [{:a 1}])` is **false**. A table is its own kind of thing -- a schema'd
+column store -- and it prints as its own literal:
+
+    #flint/table [{:a 1 :b 2} {:a 3 :b 4}]
+
+which reads back as a table, so `pr-str` round-trips. That is `0034`'s tagged
+literal doing the work, and it is why `0034` comes first.
+
+`flint/table` is NOT a reserved tag in `0033`'s sense. Reserved means CONFERS
+AUTHORITY -- `flint/port` and `flint/opaque` are refused from guest code because
+forging one fabricates a claim on something. Forging a table fabricates data,
+which anyone can do by writing a literal. The reserved set is about identity,
+not about the namespace.
+
+Refusing the equality buys the thing that made it worth asking: **`hash` is free
+to be columnar**, because it no longer has to agree with what a vector of maps
+would produce. Hashing a million-row table can hash column runs rather than
+materialise a million maps.
+
+## A row is a REF, not a map
+
+Iterating a table yields **table refs**: schema, chunk, row index. Three slots,
+and materialising nothing.
+
+* **It behaves as a map.** `get`, keyword lookup, `count`, `keys`, `vals`, `seq`
+  and `contains?` all work, `map?` is TRUE and `kind` is `:map` -- so code that
+  does not know it has a table keeps working, which is the whole promise at the
+  top of this file. `kind` being many-to-one is not new: three string tiers all
+  answer `:string`.
+* **It equals a map with the same entries**, and hashes the same. That is the
+  opposite call to table-versus-vector above, and coherently so: a table is a
+  distinct kind of thing, a row IS just a map, seen cheaply.
+* **`assoc` on a ref produces a MAP.** A ref is a view; changing it makes an
+  independent value, and neither the chunk nor the table moves.
+* **It does NOT hold the table.** Only the schema and the chunk -- so keeping
+  one row out of a million-row table retains one chunk, not the table. That is
+  the point of the type rather than a detail of it.
+* **It cannot dangle.** Chunks are persistent, so a ref stays valid for ever,
+  and a later `assoc` on the table path-copies rather than editing the chunk the
+  ref is looking at. The ref keeps seeing the row it was made from, which is
+  what a persistent structure should do.
+
+This is also what deletes a special case. An earlier draft required `get-in` not
+to materialise, because it is the common path. With refs `(get table 0)`
+materialises nothing either, so the general path IS the fast path and `get-in`
+needs no special handling at all.
 
 ## Transients
 
@@ -137,8 +177,9 @@ transient table appends into an open chunk and seals it when full.
 ## Order
 
 1. The schema, the value type, and the vector trie with columnar leaves.
-2. `get`, `get-in`, `count`, `=` and printing -- the surface that makes it a
-   value rather than a library.
+2. The table ref, then `get`, `get-in`, `count`, `=` and printing -- the surface
+   that makes it a value rather than a library. The ref comes first because
+   `get` returns one.
 3. **MEASURE, before going further.** The entire justification is memory and
    scan speed: 10 000 rows of `{:a int :b int}` against the vector of maps, for
    size and for the cost of scanning one field. If the win is not dramatic the
