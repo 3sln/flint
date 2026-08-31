@@ -47,6 +47,43 @@ if command -v dotnet >/dev/null 2>&1; then
 fi
 [ -n "$CLR" ] || missing "no dotnet, or the conform project did not build; CLR rows"
 
+# A WALL-CLOCK BOUND on one runtime invocation, printed on its stdout.
+#
+# There is no `timeout(1)` on macOS, so this is it: run in the background, poll,
+# and kill what overruns. Crude, and the alternative is what happened -- a
+# `Conform --aot green.img` from an earlier run sat at 99.6% of a core for
+# FORTY-TWO HOURS, was never reaped, and starved the machine badly enough that
+# an unrelated `node` in the gate blocked for twelve minutes with 0.06 seconds
+# of CPU. A harness that can hang forever eventually does, on a machine nobody
+# is watching.
+#
+# It is generous on purpose. The slowest legitimate row here is well under a
+# minute; this only has to be shorter than "until someone notices".
+RUN_LIMIT="${FLINT_RUN_LIMIT:-300}"
+run_bounded() {
+  local out rc pid waited
+  out="$(mktemp)"
+  "$@" > "$out" 2>&1 &
+  pid=$!
+  waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$RUN_LIMIT" ]; then
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      echo "  FAIL $1 did not finish in ${RUN_LIMIT}s -- killed" >&2
+      cat "$out" >&2
+      rm -f "$out"
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$pid"; rc=$?
+  cat "$out"
+  rm -f "$out"
+  return $rc
+}
+
 # Cleared, not reused. Images used to be kept if present, which meant one from
 # an earlier build survived a change to the image FORMAT -- and the symptom was
 # `this image is version 2 and this runtime reads 3` from a test that had
@@ -391,13 +428,13 @@ fi
 for prog in collections control green hosted lazy maps numbers regex strings threads; do
   img="out/conform/$prog.img"
   [ -f "$img" ] || continue
-  out="$("$JDK/bin/java" -cp runtimes/jvm/classes RtAot "$img" 2>&1)"
+  out="$(run_bounded "$JDK/bin/java" -cp runtimes/jvm/classes RtAot "$img")" || exit 1
   case "$out" in
     *"  ok "*) echo "$out" | sed 's/$/ ['"$prog"' jvm]/' ;;
     *) echo "$out"; echo "  FAIL aot $prog [jvm]"; exit 1 ;;
   esac
   if [ -n "$CLR" ]; then
-    cout="$("$CLR" --rt-aot "$img" 2>&1)"
+    cout="$(run_bounded "$CLR" --rt-aot "$img")" || exit 1
     case "$cout" in
       *"  ok "*) ;;
       *) echo "$cout"; echo "  FAIL aot $prog [clr]"; exit 1 ;;
