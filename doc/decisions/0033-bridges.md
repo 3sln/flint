@@ -186,17 +186,32 @@ Which gives every property at once:
 * `check_sendable` therefore does NOT grow a format dimension for identities. It
   keeps only the rows about what a format can represent structurally.
 
-**What the format still decides** is structural coverage. A keyword, a symbol, a
-set and a bigint have no JSON equivalent, so a `:json` port either refuses them
--- naming the value and the format, rather than coercing quietly -- or tags them
-by the same convention. That is a per-port choice and it has a cost either way:
+**What the format still decides** is structural coverage, and the two halves of
+that get opposite answers for a reason rather than by taste.
 
-* `:a` written as `"a"` comes back a STRING. Round-tripping stops being
-  identity, which is a legitimate trade for output that looks like JSON, but it
-  is a property of the port and must not be a surprise on the far side.
-* `{"$flintTag": ..., "$flintVal": ...}` needs an ESCAPE, or the encoding is not
-  total: an ordinary map that happens to carry that key is ambiguous. Requiring
-  the exact key set and escaping a colliding user map is the shape that works.
+**Identities round-trip, in every format.** Losing one is not degradation, it is
+breakage: a port that comes back as a number is not a weaker port, it is not a
+port. So `:json` tags them --
+`{"$flintTag": "port", "$flintVal": <index>}` -- exactly as EDN and CBOR do with
+their own tagging, and the index is into the frame's identity table as above.
+
+**Keywords do not round-trip in JSON, and that is accepted.** `:a` is written
+`"a"` and comes back a string. The fix would be to prefix keyword strings with
+a colon, and then every string beginning with one needs escaping -- a constant
+tax on the common case to preserve a distinction that JSON does not have. A
+keyword arriving as a string is still usable data; a port arriving as a number
+is not a port. That asymmetry is the whole argument.
+
+The escape rule follows the same reasoning. `$flintTag` needs one -- an ordinary
+map carrying that key is otherwise ambiguous -- but a collision needs a map with
+that exact key, which is near-never, so the branch is almost never taken. The
+colon prefix would be paid on every string. Same mechanism, costs an order of
+magnitude apart.
+
+And with the identity table, a collision FAILS CLOSED: `{"$flintTag": "port",
+"$flintVal": 7}` resolves index 7 in this message's table, and if there is no
+such entry that is an error rather than a handle. So the escape is about not
+misreading a user's map, not about safety -- the frame split already has that.
 
 ## Consequences
 
