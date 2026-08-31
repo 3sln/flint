@@ -137,8 +137,18 @@ impl Rt {
                     self.throw_str("IllegalArgumentException", "conj on a map wants a map entry")
                 }
             }
+            // `conj` on a table APPENDS A ROW, which is what conj means on
+            // every indexed collection here. The default arm conses, and a
+            // table consed onto is not a table.
+            crate::obj::TY_TABLE => self.table_conj(coll, x),
             _ => self.cons(x, coll),
         }
+    }
+
+    /// `first_foreign_key` walks a map's entries and needs the key half of
+    /// one; this is the same two-shapes-of-entry rule the rest of `conj` uses.
+    pub(crate) fn slot_or_nth_pub(&mut self, v: Value, i: u32) -> Value {
+        self.slot_or_nth(v, i)
     }
 
     fn slot_or_nth(&mut self, v: Value, i: u32) -> Value {
@@ -195,6 +205,15 @@ impl Rt {
                     self.throw_str("IllegalArgumentException", &msg)
                 }
             }
+            // A table is indexed by ROW and its schema is CLOSED, so the
+            // refusals live in `table_assoc` where the schema is
+            // (`doc/decisions/0026`).
+            crate::obj::TY_TABLE => self.table_assoc(coll, k, v),
+            // A ref is a VIEW. Changing it produces an independent MAP, and
+            // neither the chunk nor the table it came from moves -- so the
+            // schema does not constrain the result, because the result is no
+            // longer a row.
+            crate::obj::TY_TABLEREF => self.ref_assoc(coll, k, v),
             _ => self.throw_str("ClassCastException", "assoc needs an associative collection"),
         }
     }

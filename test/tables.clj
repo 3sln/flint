@@ -101,6 +101,83 @@
             (and (> (get v "collections") 5) (> (get v "allocated") 1000000))
             "the baseline did too little to compare against")
 
+
+;; --------------------------------------------------------------- step 4
+;;
+;; `assoc`, `conj`, iteration, printing and the REFUSALS. The refusals are
+;; asserted on their MESSAGE, not on the fact that something threw: `0026` says
+;; a closed table's value is that it says what was wrong, and a test that only
+;; checks for an exception would pass on "invalid row" -- which is the message
+;; this codebase keeps replacing.
+(spit (str d "/ops.cljc")
+      (str "(ns ops (:require [flint.table :as ft]))\n"
+           "(def S (ft/schema [[:id :int] [:name :string]]))\n"
+           "(def T (ft/table S [{:id 1 :name \"a\"} {:id 2 :name \"b\"}]))\n"
+           "(defn- msg [f] (try (do (f) \"no throw\") (catch Exception e (ex-message e))))\n"
+           "(defn main [_]\n"
+           "  (pr-str\n"
+           "   {:print (pr-str T)\n"
+           "    :str (str T)\n"
+           "    :rows (mapv (fn [r] (:name r)) (ft/rows T))\n"
+           "    :row-is-a-map (map? (first (ft/rows T)))\n"
+           "    :row-equals-map (= {:id 1 :name \"a\"} (get T 0))\n"
+           "    :conj (count (ft/add-row T {:id 3 :name \"c\"}))\n"
+           "    :conj-reads (:name (get (ft/add-row T {:id 3 :name \"c\"}) 2))\n"
+           "    :set (:name (get (ft/set-row T 0 {:id 9 :name \"z\"}) 0))\n"
+           "    :update (:id (get (ft/update-row T 1 (fn [r] (assoc r :id 20))) 1))\n"
+           "    :original-unmoved (:name (get T 0))\n"
+           "    :ref-assoc-is-a-map (ft/table? (assoc (get T 0) :name \"q\"))\n"
+           "    :ref-assoc-value (:name (assoc (get T 0) :name \"q\"))\n"
+           "    :e-extra (msg (fn [] (ft/add-row T {:id 3 :name \"c\" :extra 1})))\n"
+           "    :e-missing (msg (fn [] (ft/add-row T {:id 3})))\n"
+           "    :e-type (msg (fn [] (ft/add-row T {:id 3 :name :notastring})))\n"
+           "    :e-key (msg (fn [] (assoc T :id 4)))\n"
+           "    :e-range (msg (fn [] (ft/set-row T 7 {:id 1 :name \"a\"})))\n"
+           "    :e-notmap (msg (fn [] (ft/add-row T [1 \"a\"])))}))\n"))
+(let [r (sh "./bin/flint" ":src" d ":fn" "ops/main" ":out" "out/tbl-ops.wasm")]
+  (when-not (zero? (:exit r)) (println "ops build failed:" (:out r) (:err r)) (System/exit 1)))
+(def ops (let [r (sh "node" "host/flint.mjs" "out/tbl-ops.wasm")]
+           (when-not (zero? (:exit r)) (println "ops run failed:" (:out r) (:err r)) (System/exit 1))
+           (read-string (str/trim (:out r)))))
+
+(check "a table prints as its own literal, which reads back"
+       (:print ops) "#flint/table [{:id 1, :name \"a\"} {:id 2, :name \"b\"}]")
+(check "  ... and `str` reaches the same printer"
+       (:str ops) (:print ops))
+(check "iterating a table yields rows, materialising none of them"
+       (:rows ops) ["a" "b"])
+(check "  ... and a row reads as the map it is" (:row-is-a-map ops) true)
+(check "  ... and is `=` to one with the same entries" (:row-equals-map ops) true)
+
+(check "conj appends a row" (:conj ops) 3)
+(check "  ... and it reads back" (:conj-reads ops) "c")
+(check "assoc replaces one" (:set ops) "z")
+(check "update-row hands `f` the row and re-checks the result" (:update ops) 20)
+(check "  ... and the table it was built from has not moved" (:original-unmoved ops) "a")
+(check "assoc on a ROW REF makes a map, not a table" (:ref-assoc-is-a-map ops) false)
+(check "  ... carrying the change" (:ref-assoc-value ops) "q")
+
+;; Each refusal names the thing that was wrong AND the columns there are,
+;; because "which column?" is the next question every one of these provokes.
+(check "a key outside the schema is refused, named, with the columns listed"
+       (:e-extra ops)
+       "row 2 has :extra, which is not a column; a table is closed, and the columns are :id :name")
+(check "a missing column is refused, named"
+       (:e-missing ops)
+       "row 2 has no :name; a table is closed, so every row has every column, and the columns are :id :name")
+(check "a wrong type names the column, the type it holds and the KIND it got"
+       (:e-type ops)
+       "row 2, column :name holds :string and was given a keyword")
+(check "indexing a table by a column says how to reach a column"
+       (:e-key ops)
+       "a table is indexed by row number and this key is a keyword; to reach a column, index the row first: (assoc-in t [row :column] v)")
+(check "a row out of range says what the range is"
+       (:e-range ops)
+       "row 7 is out of range for a table of 2 rows; assoc may replace any row or append at 2")
+(check "a row that is not a map says what it is instead"
+       (:e-notmap ops)
+       "a table row is a map, and row 2 is a vector")
+
 (if (pos? @fails)
   (do (println "tables:" @fails "FAILURES") (System/exit 1))
   (println "tables: ok"))

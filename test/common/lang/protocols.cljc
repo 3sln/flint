@@ -6,7 +6,8 @@
   be given an implementation without a new type, and what makes
   `flint.check`'s `Predicate` work on a function held in a local. A runtime
   that checked kind first would still pass every single-implementation test."
-  (:require [flint.check :refer [expect]]))
+  (:require [flint.check :refer [expect]]
+            [flint.bytes]))
 
 (defprotocol Greet
   (greet [x] "A greeting, however this value gives one."))
@@ -15,6 +16,16 @@
   :string (greet [s] (str "hello " s))
   :number (greet [n] (str "hello #" n))
   :vector (greet [v] (str "hello " (count v) " things")))
+
+;; A protocol with NO implementations here, for `lang.extending` to extend from
+;; another namespace. It is separate from `Greet` because a protocol's table is
+;; GLOBAL: extending `Greet` over there would change what `greet` does over
+;; here, and the two tests below -- a miss, and `satisfies?` being false --
+;; would start failing for a reason that has nothing to do with them. That is
+;; not a flaw to hide, it is how extension works, and keeping the two protocols
+;; apart is the same discipline a program has to keep.
+(defprotocol Describe
+  (describe [x] "A description, however this value gives one."))
 
 (defn ^:flint.check/test dispatch-on-kind []
   (expect = "hello world" (greet "world"))
@@ -52,7 +63,15 @@
   ;; `:tagged`, not `:map` (`doc/decisions/0034`). A tagged literal READS like
   ;; a two-key map, and if it answered `:map` here every `extend-protocol :map`
   ;; in every program would silently start catching them.
-  (expect = :tagged (flint.rt/kind #a/b [1])))
+  (expect = :tagged (flint.rt/kind #a/b [1]))
+  ;; These four answered `:other` until the printer moved onto a protocol and
+  ;; the hole showed. `:other` is not a kind, it is the ABSENCE of one, and a
+  ;; value that answers it cannot be dispatched on: an `extend-protocol :other`
+  ;; written for byte strings would have caught delays, volatiles, opaque
+  ;; values and every type added after. A value a guest can HOLD needs a kind.
+  (expect = :bytes (flint.rt/kind (flint.bytes/of-string "ab")))
+  (expect = :delay (flint.rt/kind (delay 1)))
+  (expect = :volatile (flint.rt/kind (volatile! 1))))
 
 (defn ^:flint.check/test metadata-beats-kind []
   ;; The same vector, one of them carrying its own implementation. Kind

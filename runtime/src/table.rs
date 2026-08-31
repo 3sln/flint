@@ -23,7 +23,7 @@
 
 use crate::obj::{ty, TY_SCHEMA, TY_TABLE, TY_TABLEREF, TY_NODE};
 use crate::rt::Rt;
-use crate::value::{Value, NIL};
+use crate::value::{Value, NIL, NOT_FOUND};
 
 /// Rows per chunk. A power of two so the row-to-chunk split is a shift and a
 /// mask rather than a division.
@@ -31,10 +31,19 @@ pub const CHUNK: u32 = 256;
 pub const CHUNK_SHIFT: u32 = 8;
 
 // Schema slots.
+//
+// A column is addressed in a chunk by a stable ID, not by its position in the
+// schema. `SC_IDS` is parallel to `SC_NAMES`, `SC_INDEX` maps name -> id, and
+// `SC_WIDTH` is how many column slots a chunk carries. At construction the id
+// IS the position and the width is the column count; they part company under
+// migration, which is the point (`doc/decisions/0026`): dropping a column is
+// then a head-only edit that leaves every chunk shared and unchanged.
 pub const SC_NAMES: u32 = 0;
 pub const SC_TYPES: u32 = 1;
 pub const SC_INDEX: u32 = 2;
-pub const SC_LEN: u32 = 3;
+pub const SC_IDS: u32 = 3;
+pub const SC_WIDTH: u32 = 4;
+pub const SC_LEN: u32 = 5;
 
 // Table slots.
 pub const TB_SCHEMA: u32 = 0;
@@ -90,6 +99,16 @@ impl Rt {
                 crate::obj::TY_REGEX => "regex",
                 crate::obj::TY_EXINFO => "exception",
                 crate::obj::TY_TAGGED => "tagged",
+                // These four answered `:other` until the printer was moved onto
+                // a protocol and the hole showed. `:other` is not a kind, it is
+                // the ABSENCE of one -- and an `extend-protocol :other` written
+                // for one of them would have caught all of them and every future
+                // type besides. A value a guest can hold needs a kind of its own
+                // or it cannot be dispatched on at all (`doc/decisions/0005`).
+                crate::obj::TY_OPAQUE => "opaque",
+                crate::obj::TY_BYTES | crate::obj::TY_BROPE | crate::obj::TY_TBYTES => "bytes",
+                crate::obj::TY_DELAY => "delay",
+                crate::obj::TY_VOLATILE => "volatile",
                 TY_SCHEMA => "schema",
                 TY_TABLE => "table",
                 TY_TABLEREF => "map",
@@ -121,6 +140,8 @@ impl Rt {
         let ti = self.push(types);
         let idx = self.empty_map();
         let ii = self.push(idx);
+        let ids = self.empty_vec();
+        let di = self.push(ids);
         for i in 0..n {
             let pair = self.vec_nth(self.r(pi), i).unwrap_or(NIL);
             let pj = self.push(pair);
@@ -166,15 +187,19 @@ impl Rt {
             self.set_r(ti, tv);
             let m = self.map_assoc(self.r(ii), nm, Value::fixnum(i as i64));
             self.set_r(ii, m);
+            let dv = self.vec_conj(self.r(di), Value::fixnum(i as i64));
+            self.set_r(di, dv);
             self.pop_to(pj);
         }
         let a = self.alloc(TY_SCHEMA, SC_LEN);
         let s = Value::heap(a);
         let si = self.push(s);
-        let (nv, tv, iv) = (self.r(ni), self.r(ti), self.r(ii));
+        let (nv, tv, iv, dv) = (self.r(ni), self.r(ti), self.r(ii), self.r(di));
         self.set(self.r(si), SC_NAMES, nv);
         self.set(self.r(si), SC_TYPES, tv);
         self.set(self.r(si), SC_INDEX, iv);
+        self.set(self.r(si), SC_IDS, dv);
+        self.set(self.r(si), SC_WIDTH, Value::fixnum(n as i64));
         let out = self.r(si);
         self.pop_to(base);
         out
@@ -218,10 +243,23 @@ impl Rt {
         self.vec_count(names)
     }
 
-    /// The position of `name`, or -1. The index is a map because a wide schema
+    /// How many column slots a chunk of this schema carries. Not the same as
+    /// `schema_len` once a migration has dropped a column: the slot stays, the
+    /// name does not.
+    pub fn schema_width(&mut self, s: Value) -> u32 {
+        self.slot(s, SC_WIDTH).as_fixnum() as u32
+    }
+
+    /// The stable id of the `c`th column of the schema.
+    pub fn schema_id_at(&mut self, s: Value, c: u32) -> u32 {
+        let ids = self.slot(s, SC_IDS);
+        self.vec_nth(ids, c).unwrap_or(NIL).as_fixnum() as u32
+    }
+
+    /// The column id of `name`, or -1. The index is a map because a wide schema
     /// wants one; a narrow one would be as fast scanned, and is not worth two
     /// code paths.
-    pub fn schema_pos(&mut self, s: Value, name: Value) -> i64 {
+    pub fn schema_id(&mut self, s: Value, name: Value) -> i64 {
         let idx = self.slot(s, SC_INDEX);
         let p = self.map_get(idx, name, NIL);
         if p.is_fixnum() {
@@ -256,6 +294,7 @@ impl Rt {
         let si = self.push(schema);
         let ri = self.push(rows);
         let ncols = self.schema_len(self.r(si));
+        let width = self.schema_width(self.r(si));
         let nrows = self.vec_count(self.r(ri));
         let chunks = self.empty_vec();
         let ci = self.push(chunks);
@@ -264,10 +303,11 @@ impl Rt {
         while row < nrows {
             let take = core::cmp::min(CHUNK, nrows - row);
             // The chunk: [nrows, col0 … colN], each column a flat run.
-            let ch = self.new_obj(TY_NODE, 1 + ncols);
+            let ch = self.new_obj(TY_NODE, 1 + width);
             let chi = self.push(ch);
             self.set(self.r(chi), 0, Value::fixnum(take as i64));
             for c in 0..ncols {
+                let id = self.schema_id_at(self.r(si), c);
                 let col = self.new_obj(TY_NODE, take);
                 let coli = self.push(col);
                 for k in 0..take {
@@ -291,7 +331,7 @@ impl Rt {
                     self.pop_to(rvi);
                 }
                 let cv = self.r(coli);
-                self.set(self.r(chi), 1 + c, cv);
+                self.set(self.r(chi), 1 + id, cv);
                 self.pop_to(coli);
             }
             let chv = self.r(chi);
@@ -364,12 +404,12 @@ impl Rt {
     /// two indexes -- no map is built and no row is copied.
     pub fn ref_get(&mut self, r: Value, name: Value, dflt: Value) -> Value {
         let s = self.slot(r, RF_SCHEMA);
-        let pos = self.schema_pos(s, name);
-        if pos < 0 {
+        let id = self.schema_id(s, name);
+        if id < 0 {
             return dflt;
         }
         let ch = self.slot(r, RF_CHUNK);
-        let col = self.slot(ch, 1 + pos as u32);
+        let col = self.slot(ch, 1 + id as u32);
         let row = self.slot(r, RF_ROW).as_fixnum() as u32;
         self.slot(col, row)
     }
@@ -396,6 +436,334 @@ impl Rt {
             self.pop_to(nmi);
         }
         let out = self.r(mi);
+        self.pop_to(base);
+        out
+    }
+
+    // ---------------------------------------------------------------- step 4
+    //
+    // `assoc` and `update`, and the refusals. These are ORDINARY errors and not
+    // `#?(:flint/check ...)`: a closed table that accepted a bad row in a
+    // release build would not be closed (`doc/decisions/0026`). What they take
+    // from `0032` is the quality of the message -- expected, actual, and the
+    // column -- rather than the mechanism.
+
+    /// The value of column `c` in `row`, or `NOT_FOUND`. `row` may be a map or
+    /// another table's row ref, so a row can be moved between tables without
+    /// being materialised first.
+    fn row_column(&mut self, s: Value, row: Value, c: u32) -> Value {
+        let names = self.slot(s, SC_NAMES);
+        let name = self.vec_nth(names, c).unwrap_or(NIL);
+        if self.is_table_ref(row) {
+            self.ref_get(row, name, NOT_FOUND)
+        } else {
+            self.map_get(row, name, NOT_FOUND)
+        }
+    }
+
+    /// The schema's column names as `:a :b :c`, for a message that has to say
+    /// what the columns ARE rather than only that the key was not one.
+    fn column_list(&mut self, s: Value) -> alloc::string::String {
+        let n = self.schema_len(s);
+        let mut out = alloc::string::String::new();
+        for c in 0..n {
+            let names = self.slot(s, SC_NAMES);
+            let name = self.vec_nth(names, c).unwrap_or(NIL);
+            let mut b = crate::rt::sbuf();
+            let nm = self.name_of(name);
+            let shown: alloc::string::String = self.as_str(nm, &mut b).unwrap_or("?").into();
+            if c > 0 {
+                out.push(' ');
+            }
+            out.push(':');
+            out.push_str(&shown);
+        }
+        out
+    }
+
+    fn kw_name(&mut self, v: Value) -> alloc::string::String {
+        let mut b = crate::rt::sbuf();
+        let nm = self.name_of(v);
+        self.as_str(nm, &mut b).unwrap_or("?").into()
+    }
+
+    /// Does `row` fit `s`? Exactly the schema's columns, each of its declared
+    /// type. Throws and returns false if not; `rowno` appears in the message.
+    ///
+    /// The three refusals are separate because they are three different
+    /// mistakes: a column you forgot, a key that is not a column, and a value
+    /// of the wrong type. One "invalid row" for all three is the message this
+    /// codebase keeps replacing.
+    pub fn check_row(&mut self, s: Value, row: Value, rowno: u32) -> bool {
+        let base = self.mark();
+        let si = self.push(s);
+        let ri = self.push(row);
+        if !self.is_map(self.r(ri)) {
+            let k = self.kind_of(self.r(ri));
+            let kn = self.kw_name(k);
+            self.pop_to(base);
+            let msg = alloc::format!("a table row is a map, and row {rowno} is a {kn}");
+            self.throw_str("IllegalArgumentException", &msg);
+            return false;
+        }
+        let n = self.schema_len(self.r(si));
+        for c in 0..n {
+            let val = self.row_column(self.r(si), self.r(ri), c);
+            let vi = self.push(val);
+            let name = {
+                let names = self.slot(self.r(si), SC_NAMES);
+                self.vec_nth(names, c).unwrap_or(NIL)
+            };
+            let ni = self.push(name);
+            if self.r(vi) == NOT_FOUND {
+                let nm = self.kw_name(self.r(ni));
+                let cols = self.column_list(self.r(si));
+                self.pop_to(base);
+                let msg = alloc::format!(
+                    "row {rowno} has no :{nm}; a table is closed, so every row has \
+                     every column, and the columns are {cols}"
+                );
+                self.throw_str("IllegalArgumentException", &msg);
+                return false;
+            }
+            let tp = {
+                let types = self.slot(self.r(si), SC_TYPES);
+                self.vec_nth(types, c).unwrap_or(NIL)
+            };
+            if !self.type_ok(tp, self.r(vi)) {
+                let (nv, tv, vv) = (self.r(ni), tp, self.r(vi));
+                let msg = self.column_type_error(nv, tv, vv, rowno);
+                self.pop_to(base);
+                self.throw_str("IllegalArgumentException", &msg);
+                return false;
+            }
+            self.pop_to(vi);
+        }
+        // Every column is present, so a wider row has a key that is not one.
+        // Counted first and hunted only when the count disagrees, because the
+        // hunt walks the row and the good path must not.
+        let extra = if self.is_table_ref(self.r(ri)) {
+            let rs = self.slot(self.r(ri), RF_SCHEMA);
+            self.schema_len(rs) > n
+        } else {
+            self.map_count(self.r(ri)) > n
+        };
+        if extra {
+            let bad = self.first_foreign_key(self.r(si), self.r(ri));
+            let bi = self.push(bad);
+            let nm = self.kw_name(self.r(bi));
+            let cols = self.column_list(self.r(si));
+            self.pop_to(base);
+            let msg = alloc::format!(
+                "row {rowno} has :{nm}, which is not a column; a table is closed, and \
+                 the columns are {cols}"
+            );
+            self.throw_str("IllegalArgumentException", &msg);
+            return false;
+        }
+        self.pop_to(base);
+        true
+    }
+
+    /// The first key of `row` that the schema does not name. Only ever called
+    /// once a count has already proved there is one.
+    fn first_foreign_key(&mut self, s: Value, row: Value) -> Value {
+        let base = self.mark();
+        let si = self.push(s);
+        if self.is_table_ref(row) {
+            let rs = self.slot(row, RF_SCHEMA);
+            let rsi = self.push(rs);
+            let n = self.schema_len(self.r(rsi));
+            for c in 0..n {
+                let names = self.slot(self.r(rsi), SC_NAMES);
+                let name = self.vec_nth(names, c).unwrap_or(NIL);
+                if self.schema_id(self.r(si), name) < 0 {
+                    self.pop_to(base);
+                    return name;
+                }
+            }
+            self.pop_to(base);
+            return NIL;
+        }
+        let seq = self.seq(row);
+        let qi = self.push(seq);
+        while !self.r(qi).is_nil() {
+            let e = self.first(self.r(qi));
+            let ei = self.push(e);
+            let k = self.slot_or_nth_pub(self.r(ei), 0);
+            if self.schema_id(self.r(si), k) < 0 {
+                self.pop_to(base);
+                return k;
+            }
+            self.pop_to(ei);
+            let nx = self.next(self.r(qi));
+            self.set_r(qi, nx);
+        }
+        self.pop_to(base);
+        NIL
+    }
+
+    /// One row of `rows` (a vector) written into chunk `ch` at `k`, column by
+    /// column. Shared by `new_table` and the assoc path so the two cannot drift
+    /// on what a row is allowed to be.
+    fn write_row(&mut self, s: Value, ch: Value, k: u32, row: Value) {
+        let base = self.mark();
+        let si = self.push(s);
+        let ci = self.push(ch);
+        let ri = self.push(row);
+        let n = self.schema_len(self.r(si));
+        for c in 0..n {
+            let id = self.schema_id_at(self.r(si), c);
+            let v = self.row_column(self.r(si), self.r(ri), c);
+            let col = self.slot(self.r(ci), 1 + id);
+            self.set(col, k, v);
+        }
+        self.pop_to(base);
+    }
+
+    /// A copy of chunk `ch` with row `k` replaced by `row`, and optionally one
+    /// more row of room. The chunk and every column it holds are copied, which
+    /// is what makes the ref that was looking at the old one still valid: a
+    /// persistent structure does not edit what someone else can see.
+    fn chunk_with_row(&mut self, s: Value, ch: Value, k: u32, row: Value, grow: bool) -> Value {
+        let base = self.mark();
+        let si = self.push(s);
+        let ci = self.push(ch);
+        let ri = self.push(row);
+        let width = self.schema_width(self.r(si));
+        let old = self.slot(self.r(ci), 0).as_fixnum() as u32;
+        let take = if grow { old + 1 } else { old };
+        let nch = self.new_obj(TY_NODE, 1 + width);
+        let ni = self.push(nch);
+        self.set(self.r(ni), 0, Value::fixnum(take as i64));
+        for id in 0..width {
+            let src = self.slot(self.r(ci), 1 + id);
+            if src.is_nil() {
+                continue;
+            }
+            let sj = self.push(src);
+            let col = self.new_obj(TY_NODE, take);
+            let cj = self.push(col);
+            let copy = core::cmp::min(old, take);
+            for j in 0..copy {
+                let v = self.slot(self.r(sj), j);
+                self.set(self.r(cj), j, v);
+            }
+            let cv = self.r(cj);
+            self.set(self.r(ni), 1 + id, cv);
+            self.pop_to(sj);
+        }
+        let (nv, rv, sv) = (self.r(ni), self.r(ri), self.r(si));
+        self.write_row(sv, nv, k, rv);
+        let out = self.r(ni);
+        self.pop_to(base);
+        out
+    }
+
+    /// `(assoc table i row)`. `i` may be `count`, which appends -- the same
+    /// rule a vector follows, so nothing new has to be learned to grow one.
+    pub fn table_assoc(&mut self, t: Value, k: Value, row: Value) -> Value {
+        let i = match self.as_i64(k) {
+            Some(i) => i,
+            None => {
+                let kind = self.kind_of(k);
+                let kn = self.kw_name(kind);
+                let msg = alloc::format!(
+                    "a table is indexed by row number and this key is a {kn}; to reach a \
+                     column, index the row first: (assoc-in t [row :column] v)"
+                );
+                return self.throw_str("IllegalArgumentException", &msg);
+            }
+        };
+        let n = self.table_count(t) as i64;
+        if i < 0 || i > n {
+            let msg = alloc::format!(
+                "row {i} is out of range for a table of {n} rows; assoc may replace any \
+                 row or append at {n}"
+            );
+            return self.throw_str("IndexOutOfBoundsException", &msg);
+        }
+        let base = self.mark();
+        let ti = self.push(t);
+        let ri = self.push(row);
+        let s = self.slot(self.r(ti), TB_SCHEMA);
+        let si = self.push(s);
+        if !self.check_row(self.r(si), self.r(ri), i as u32) {
+            self.pop_to(base);
+            return NIL;
+        }
+        let i = i as u32;
+        let ci = self.push(NIL);
+        {
+            let chunks = self.slot(self.r(ti), TB_CHUNKS);
+            self.set_r(ci, chunks);
+        }
+        let which = i >> CHUNK_SHIFT;
+        let within = i & (CHUNK - 1);
+        let append = i == self.table_count(self.r(ti));
+        let nchunks = self.vec_count(self.r(ci));
+        if append && which >= nchunks {
+            // A new chunk, one row wide. `chunk_with_row` grows an existing
+            // one; an empty table has none to grow.
+            let width = self.schema_width(self.r(si));
+            let ch = self.new_obj(TY_NODE, 1 + width);
+            let chi = self.push(ch);
+            self.set(self.r(chi), 0, Value::fixnum(1));
+            let ncols = self.schema_len(self.r(si));
+            for c in 0..ncols {
+                let id = self.schema_id_at(self.r(si), c);
+                let col = self.new_obj(TY_NODE, 1);
+                self.set(self.r(chi), 1 + id, col);
+            }
+            let (sv, chv, rv) = (self.r(si), self.r(chi), self.r(ri));
+            self.write_row(sv, chv, 0, rv);
+            let chv = self.r(chi);
+            let nv = self.vec_conj(self.r(ci), chv);
+            self.set_r(ci, nv);
+            self.pop_to(chi);
+        } else {
+            let ch = self.vec_nth(self.r(ci), which).unwrap_or(NIL);
+            let chi = self.push(ch);
+            let (sv, chv, rv) = (self.r(si), self.r(chi), self.r(ri));
+            let nch = self.chunk_with_row(sv, chv, within, rv, append);
+            let nj = self.push(nch);
+            let njv = self.r(nj);
+            let nv = self.vec_assoc(self.r(ci), which, njv);
+            self.set_r(ci, nv);
+            self.pop_to(chi);
+        }
+        let count = self.table_count(self.r(ti)) + if append { 1 } else { 0 };
+        let a = self.alloc(TY_TABLE, TB_LEN);
+        let nt = Value::heap(a);
+        let ni = self.push(nt);
+        let (sv, cv) = (self.r(si), self.r(ci));
+        self.set(self.r(ni), TB_SCHEMA, sv);
+        self.set(self.r(ni), TB_CHUNKS, cv);
+        self.set(self.r(ni), TB_COUNT, Value::fixnum(count as i64));
+        let out = self.r(ni);
+        self.pop_to(base);
+        out
+    }
+
+    /// `(conj table row)` -- append, which is `assoc` at the end.
+    pub fn table_conj(&mut self, t: Value, row: Value) -> Value {
+        let n = self.table_count(t) as i64;
+        self.table_assoc(t, Value::fixnum(n), row)
+    }
+
+    /// `(assoc row-ref k v)` -> a MAP. A ref is a VIEW; changing it makes an
+    /// independent value and neither the chunk nor the table it came from
+    /// moves (`doc/decisions/0026`). The schema does not constrain the result,
+    /// because the result is no longer a row.
+    pub fn ref_assoc(&mut self, r: Value, k: Value, v: Value) -> Value {
+        let base = self.mark();
+        let ri = self.push(r);
+        let ki = self.push(k);
+        let vi = self.push(v);
+        let m = self.ref_to_map(self.r(ri));
+        let mi = self.push(m);
+        let (mv, kv, vv) = (self.r(mi), self.r(ki), self.r(vi));
+        let out = self.map_assoc(mv, kv, vv);
         self.pop_to(base);
         out
     }

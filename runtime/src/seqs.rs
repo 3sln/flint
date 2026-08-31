@@ -207,6 +207,18 @@ impl Rt {
                 }
             }
             TY_MAPENTRY => self.vecseq(v, 0),
+            // Iterating a table hands back REFS, one per row, materialising
+            // nothing -- which is the point of the ref type and not a detail of
+            // it (`doc/decisions/0026`). It rides on `TY_VECSEQ` because a
+            // table is indexed and counted exactly as a vector is; only `first`
+            // differs, and it differs by calling `table_ref`.
+            crate::obj::TY_TABLE => {
+                if self.table_count(v) == 0 {
+                    NIL
+                } else {
+                    self.vecseq(v, 0)
+                }
+            }
             // A ref materialises HERE and only here: `seq`, `=` and `hash` all
             // want the whole row, and each is O(columns) anyway. The paths that
             // must stay cheap -- `get` and `(:name row)` -- never come through.
@@ -245,6 +257,8 @@ impl Rt {
                 let (vec, i) = (self.slot(s, 0), self.slot(s, 1).as_fixnum() as u32);
                 if self.ty(vec) == TY_MAPENTRY {
                     self.slot(vec, i)
+                } else if self.ty(vec) == crate::obj::TY_TABLE {
+                    self.table_ref(vec, i)
                 } else {
                     self.vec_nth(vec, i).unwrap_or(NIL)
                 }
@@ -281,7 +295,13 @@ impl Rt {
             }
             TY_VECSEQ => {
                 let (vec, i) = (self.slot(s, 0), self.slot(s, 1).as_fixnum() as u32);
-                let n = if self.ty(vec) == TY_MAPENTRY { 2 } else { self.vec_count(vec) };
+                let n = if self.ty(vec) == TY_MAPENTRY {
+                    2
+                } else if self.ty(vec) == crate::obj::TY_TABLE {
+                    self.table_count(vec)
+                } else {
+                    self.vec_count(vec)
+                };
                 if i + 1 >= n {
                     NIL
                 } else {

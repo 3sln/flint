@@ -125,8 +125,31 @@ column store -- and it prints as its own literal:
 
     #flint/table [{:a 1 :b 2} {:a 3 :b 4}]
 
-which reads back as a table, so `pr-str` round-trips. That is `0034`'s tagged
-literal doing the work, and it is why `0034` comes first.
+That is `0034`'s tagged literal doing the work, and it is why `0034` comes
+first.
+
+An earlier draft of this file said the form "reads back as a table, so `pr-str`
+round-trips". **It does not, and did not.** `#flint/table [...]` reads as a
+tagged literal whose form is a vector of maps -- which is a faithful record of
+the value and not the value. Reading it back as a table needs the mirror of what
+printing just got: a tag registry a library can register into, so `flint.table`
+supplies the reader for its own tag exactly as it supplies the printer. That
+belongs with the codec tag in step 9, because the two are the same question
+asked of a file and of a port. Until then the round trip is print-only, and
+saying so is better than a claim nobody had run.
+
+**The printer does not know about tables.** `#flint/table` is an implementation
+of `clojure.core/Printable` registered by `flint.table`, not a branch in
+`pr-str*`. The first cut was a branch, and it cost **15 832 bytes in every
+module that prints anything** -- `pr-str*` is linked by nearly everything, and
+the closure inside the branch is a `call_indirect` target the shaker has to root
+conservatively, so it dragged the whole table `get` path in behind it. A type
+specialising its own printing is what a protocol is for, and here it is worth
+16 KB of floor. The consequence to state plainly: a program that never requires
+`flint.table` prints a table as `#<unprintable>`. That is right -- it is a
+program that could not have built one -- and when a table can arrive over a
+PORT, the decoder that admits one lives in `flint.table` too, so requiring the
+decoder brings the printer with it.
 
 `flint/table` is NOT a reserved tag in `0033`'s sense. Reserved means CONFERS
 AUTHORITY -- `flint/port` and `flint/opaque` are refused from guest code because
@@ -186,10 +209,19 @@ transient table appends into an open chunk and seals it when full.
    design is wrong, and this is the cheapest moment to learn it -- before the
    path copy and the transient, which are the expensive things to build and the
    hard things to undo.
-4. `assoc` and `update`, with the rejections and their messages.
+4. `assoc` and `update`, with the rejections and their messages. **Done**, with
+   `conj`, iteration by ref, and printing through `Printable`. Two things had to
+   be fixed underneath: `extend-protocol` built its method key from the
+   EXTENDING namespace rather than the defining one, so extending a protocol
+   across namespaces was a silent no-op; and `kind` answered `:other` for
+   opaque values, byte strings, delays and volatiles, which means they could not
+   be dispatched on at all.
 5. The chunk encodings: constant first, since migration leans on it.
 6. `migrate`, sharing chunks for add-constant and remove.
 7. The transient, measured against the persistent path on a build loop.
 8. `flint.table`: bulk construction, column selection, ranges, splits.
 9. The `0025` codec tag and `0033`'s columnar JSON, so a table crosses a port as
-   a table rather than as a vector of maps.
+   a table rather than as a vector of maps -- and, the same question asked of
+   source rather than of a port, a reader tag registry so `#flint/table [...]`
+   reads back as a table. Printing is already a library's own business
+   (`Printable`); reading is the half still hard-coded.

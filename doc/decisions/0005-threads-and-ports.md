@@ -142,6 +142,15 @@ dispatch design unusual and, I think, rather clean:
 
 - **Built-in kinds** are a small closed set — nil, number, string, keyword,
   symbol, vector, map, set, list, fn, port. Protocols extend to those by kind.
+  Since written it has grown: `thread`, `atom`, `var`, `regex`, `exception`,
+  `tagged`, `opaque`, `bytes`, `delay`, `volatile`, `schema`, `table`. The rule
+  that governs the growth is **`:other` is not a kind** — it is the absence of
+  one, and a value that answers it cannot be dispatched on at all. Four types a
+  guest can hold answered `:other` for a long time (opaque values, byte strings,
+  delays, volatiles), which meant an `extend-protocol :other` written for any
+  one of them would have caught all of them and every type added afterwards. So:
+  **anything a guest can hold gets a kind of its own.** `:other` is for what a
+  guest cannot hold.
 - **Everything else dispatches on METADATA.** Clojure has this as
   `extend-via-metadata`, opt-in and a bit of a corner. **Here it is the primary
   mechanism**, because there is nothing else for a user-defined abstraction to
@@ -149,6 +158,18 @@ dispatch design unusual and, I think, rather clean:
 
 That is a real deviation from Clojure and it belongs in *Where flint differs*,
 stated plainly rather than left for somebody to infer.
+
+**A method key belongs to the protocol, not to the extender.** A protocol's
+methods are keyed by fully-qualified keyword so that two protocols with an
+`area` do not collide on a value carrying one. The namespace doing the
+qualifying must be the one that DEFINED the protocol — `extend-protocol` built
+the key from the namespace doing the EXTENDING, which meant extending a protocol
+from another namespace wrote an implementation under a key nothing ever looked
+up. It failed silently, as `protocol-miss` at some later call. Nothing caught it
+because every protocol test defined and extended in one file, where the two
+namespaces are the same one; it surfaced only when the printer was moved onto a
+protocol so a library type could print itself. Extending across namespaces is
+the case the mechanism exists for, so it is the case to test.
 
 **Metadata must therefore work properly**, including on the values that can carry
 it. One limit falls out of the value encoding and should be documented rather

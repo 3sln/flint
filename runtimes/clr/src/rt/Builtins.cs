@@ -184,6 +184,15 @@ public static class Builtins {
                 case Obj.TyRegex: k = "regex"; break;
                 case Obj.TyExinfo: k = "exception"; break;
                 case Obj.TyTagged: k = "tagged"; break;
+                // These four answered "other" until the printer moved onto a
+                // protocol and the hole showed. "other" is not a kind, it is
+                // the ABSENCE of one, and a value that answers it cannot be
+                // dispatched on at all (`doc/decisions/0005`).
+                case Obj.TyOpaque: k = "opaque"; break;
+                case Obj.TyBytes: case Obj.TyBrope: case Obj.TyTbytes:
+                    k = "bytes"; break;
+                case Obj.TyDelay: k = "delay"; break;
+                case Obj.TyVolatile: k = "volatile"; break;
                 default: k = "other"; break;
             }
             return Str.Keyword(rt, null, k);

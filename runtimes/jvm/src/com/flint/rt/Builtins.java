@@ -190,6 +190,15 @@ public final class Builtins {
                 case TY_REGEX: k = "regex"; break;
                 case TY_EXINFO: k = "exception"; break;
                 case Obj.TY_TAGGED: k = "tagged"; break;
+                // These four answered "other" until the printer moved onto a
+                // protocol and the hole showed. "other" is not a kind, it is
+                // the ABSENCE of one, and a value that answers it cannot be
+                // dispatched on at all (`doc/decisions/0005`).
+                case Obj.TY_OPAQUE: k = "opaque"; break;
+                case Obj.TY_BYTES: case Obj.TY_BROPE: case Obj.TY_TBYTES:
+                    k = "bytes"; break;
+                case Obj.TY_DELAY: k = "delay"; break;
+                case Obj.TY_VOLATILE: k = "volatile"; break;
                 default: k = "other";
             }
             return Str.keyword(rt, null, k);

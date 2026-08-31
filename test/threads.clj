@@ -138,19 +138,31 @@
 ;; runtime where nothing shakes them out. A value type that only some programs
 ;; use still costs every program, which is the trade a language type is.
 (check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
-;; Raised for TABLES (`doc/decisions/0026`): 287 854 shipped where it had been
-;; 264 997, so the value type, its schema, its row ref and their arms in `eq`,
-;; `hash`, `kind`, `get`, `count`, `map_get` and `seq` cost 22 857 bytes.
+;; TABLES (`doc/decisions/0026`) cost 22 857 bytes here when they landed --
+;; 287 854 shipped against 264 997 -- and then gave 15 832 of it back, which is
+;; the more interesting number and the reason both are recorded.
 ;;
-;; That is a LOT, and it is recorded rather than absorbed: every module pays it
-;; whether or not it ever builds a table, because these are runtime branches and
-;; `bin/flint` links the whole runtime. A table is therefore a strong candidate
-;; for a UNIT (`doc/decisions/0023`) the way threads and ports are -- "a program
-;; that never mentions it never reaches any of it" is exactly the argument. What
-;; makes it harder than `flint-conc` is that the dispatch hooks are in the core
-;; and a unit cannot supply those today. Written down here so the number is
-;; visible the next time someone asks what a data structure costs.
-            (< pure-size 292000))
+;; The cost was NOT the value type. It was one line in the printer:
+;;
+;;     (flint.rt/table? x) (... (mapv (fn [i] (get x i)) (range (count x))))
+;;
+;; `pr-str*` is linked by anything that prints, so that branch made every module
+;; know what a table is -- and the closure inside it is a `call_indirect`
+;; target, which the shaker roots CONSERVATIVELY, so it dragged `get`-on-a-table
+;; and the whole chunk descent in behind it. Measured by removing it: 287 751
+;; against 271 919 on the same units.
+;;
+;; What replaced it is a `Printable` protocol whose `:table` implementation
+;; lives in `flint.table`, so the type specialises its own printing and a
+;; program that never requires that namespace never carries any of it. That is
+;; what protocols are for, and the 15 832 bytes are what the coupling was
+;; costing while the branch merely looked convenient.
+;;
+;; The 6 922 bytes tables still cost every module are the runtime arms in `eq`,
+;; `hash`, `kind`, `get`, `count`, `map_get` and `seq`, which are Rust and do
+;; not shake. A table remains a candidate for a UNIT (`doc/decisions/0023`); the
+;; printer is no longer the thing standing in the way.
+            (< pure-size 276000))
 
 ;; RE-BASELINED 2026-08-30, from 252 000, and the honest version of why: the
 ;; guard was measuring the DEFAULT build against a shipping floor, and it had

@@ -48,3 +48,48 @@
   "The column types, in the same order as `columns`."
   [s]
   (flint.rt/schema-types s))
+
+(defn rows
+  "The rows of `t`, as a seq of ROW REFS -- materialising nothing.
+
+  A ref reads as the map it is: `count`, `get`, `(:col row)`, `keys`, `vals`
+  and `=` against a map all work, so a function that does not know it was
+  handed a table keeps working."
+  [t]
+  (seq t))
+
+(defn add-row
+  "`t` with `row` appended. The row must have exactly the schema's columns,
+  with values of the declared types; anything else is refused by name."
+  [t row]
+  (conj t row))
+
+(defn set-row
+  "`t` with row `i` replaced by `row`. `i` may be `(count t)`, which appends --
+  the same rule a vector follows."
+  [t i row]
+  (assoc t i row))
+
+(defn update-row
+  "`t` with row `i` replaced by `(f row & args)`. `f` is handed a row REF and
+  may return a map; the result is checked against the schema like any other."
+  [t i f & args]
+  (assoc t i (apply f (get t i) args)))
+
+;; ------------------------------------------------------------------ printing
+;;
+;; A table prints as `#flint/table [...]` and reads back, because a table is
+;; NOT `=` to a vector of maps and must not print as one (`doc/decisions/0026`).
+;;
+;; It is registered HERE rather than branched on in `clojure.core`'s printer.
+;; The printer is linked by every program; a branch there would make every
+;; program know what a table is, which is the coupling a protocol exists to
+;; remove. The consequence is worth stating plainly: a program that never
+;; requires this namespace prints a table as `#<unprintable>`. That is correct
+;; -- it is a program that cannot have made one -- but a table arriving over a
+;; PORT will be able to, and the codec that decodes one lives here too, so
+;; requiring the decoder is what brings the printer with it.
+(extend-protocol clojure.core/Printable
+  :table (print-form [t readable?]
+                     (clojure.core/str "#flint/table "
+                                       (clojure.core/pr-str* (vec (rows t)) readable?))))

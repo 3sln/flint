@@ -19,6 +19,8 @@
     >
     >=
     NaN?
+    Printable
+    Printable__impls
     abs
     and
     any?
@@ -115,6 +117,7 @@
     ex-info
     ex-message
     extend
+    extend-method
     extend-protocol
     false?
     ffirst
@@ -239,6 +242,8 @@
     pos-int?
     pos?
     pr-str
+    pr-str*
+    print-form
     print-str
     println-str
     prn-str
@@ -401,7 +406,7 @@
     when-not
     when-some
     while},
-  :count 350,
+  :count 355,
   :absent
   #{*'
     *1
@@ -711,11 +716,14 @@
     xml-seq},
   :extra
   #{->str-builder
+    Printable
+    Printable__impls
     apply2
     bigdec?
     bytes->str
     cond-chain
     count-matching
+    extend-method
     find-protocol-method
     form
     int-of-char
@@ -730,6 +738,8 @@
     opaque
     opaque-label
     opaque?
+    pr-str*
+    print-form
     println-str
     re-quote-replacement
     repeat-forever

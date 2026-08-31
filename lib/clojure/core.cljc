@@ -1246,7 +1246,47 @@
                (next s) false))
       acc)))
 
-(defn- pr-str* [x readable?]
+(def Printable__impls (atom {}))
+
+;; `Printable`: how a value writes ITSELF.
+;;
+;; `pr-str` and `str` fall through to this for anything `clojure.core` does not
+;; define itself, so a library type specialises its own printing without the
+;; printer learning what it is. `readable?` true asks for a form that reads
+;; back, false for the human one -- the `pr-str` / `print-str` split.
+;;
+;; Written LONGHAND rather than with `defprotocol`, for the reason recorded on
+;; `def-form-names`: top-level `def` names are collected before macros are
+;; expanded, so a name a macro would have produced cannot be referenced earlier
+;; in the file -- and the printer is four hundred lines above `defprotocol`.
+;; The alternative was moving the printer below the protocol section, which
+;; would put the printer nowhere in particular to save four lines. This is the
+;; second time that limit has cost something (the first was `defpred`), which
+;; is worth knowing when it is next weighed.
+;;
+;; The shape is exactly what `defprotocol` emits, so `extend`, `extend-method`,
+;; `extend-protocol` and `satisfies?` all work on it unchanged.
+(def Printable
+  (hash-map :flint/protocol 'clojure.core/Printable
+            :impls Printable__impls
+            :method-keys [:clojure.core/print-form]))
+
+(defn print-form
+  "The printed form of `x`, as its own kind defines it. Prefer `pr-str`, which
+  handles the built-in kinds first and falls through to here."
+  [x readable?]
+  (let [f (find-protocol-method Printable__impls :clojure.core/print-form x)]
+    (if f
+      (f x readable?)
+      (protocol-miss 'clojure.core/Printable 'clojure.core/print-form x))))
+
+(defn pr-str*
+  "The printer's recursion point: the printed form of `x`, readable or not.
+
+  Public because a `Printable` implementation has to print its children, and
+  `readable?` has to travel with them -- `pr-str` would force it back to true
+  and `print-str` back to false."
+  [x readable?]
   (cond
     (nil? x) "nil"
     (true? x) "true"
@@ -1262,17 +1302,30 @@
     ;; back is forgeable by construction (0022).
     ;; Before the map branch, because a tagged literal READS like a map and
     ;; would otherwise print as one.
-    ;; `#flint/table [...]`, which reads back -- a table is NOT `=` to a vector
-    ;; of maps, so it prints as its own literal rather than as one (`0026`).
-    (flint.rt/table? x) (flint.rt/str2 "#flint/table "
-                              (pr-str* (mapv (fn [i] (get x i)) (range (count x))) readable?))
     (tagged-literal? x) (flint.rt/str2 "#" (flint.rt/str2 (kw-or-sym-str (tag x))
                                                           (flint.rt/str2 " " (pr-str* (form x) readable?))))
     (opaque? x) (let [l (opaque-label x)]
                   (if (nil? l) "#<opaque>" (flint.rt/str2 "#<opaque " (flint.rt/str2 (pr-str* l false) ">"))))
     (seq? x) (flint.rt/str2 "(" (flint.rt/str2 (join-with* " " x readable?) ")"))
     (sequential? x) (flint.rt/str2 "(" (flint.rt/str2 (join-with* " " x readable?) ")"))
-    :else "#<unprintable>"))
+    ;; Everything else asks the VALUE how it writes itself.
+    ;;
+    ;; The branches above are core's own types, and core knowing its own
+    ;; internals is not a coupling. Anything a LIBRARY adds is a different
+    ;; matter: a `(flint.rt/table? x)` here would mean the printer -- which
+    ;; every program links -- had to know about a type most programs never use,
+    ;; which is what a protocol exists to stop. `#flint/table` therefore lives
+    ;; in `flint.table` and arrives here as an implementation, so a program that
+    ;; never requires that namespace never carries the branch or the builtin
+    ;; behind it.
+    ;;
+    ;; `find-protocol-method` rather than the generated `print-form`, because a
+    ;; miss here is a FALLBACK and not an error: an unprintable value should
+    ;; print as one rather than throw out of `str`. Metadata is consulted first,
+    ;; which is `0005`'s primary mechanism -- so one value can carry its own
+    ;; printer without its kind having one.
+    :else (let [f (find-protocol-method Printable__impls :clojure.core/print-form x)]
+            (if f (f x readable?) "#<unprintable>"))))
 
 (defn pr-str [x] (pr-str* x true))
 
@@ -1553,6 +1606,32 @@
   (swap! (:impls protocol) update kind merge mmap)
   nil)
 
+(defn- method-key
+  "The protocol's OWN key for the method named `n`.
+
+  A method key is qualified by the namespace that DEFINED the protocol, which
+  is not the namespace doing the extending. Computing it lexically at the
+  extend site -- which is what `extend-protocol` did -- writes an
+  implementation under a key nobody ever reads, so extending a protocol from
+  another namespace was a silent no-op that surfaced later as `protocol-miss`.
+  Silent is the part that made it worth a named function and this comment."
+  [protocol n]
+  (loop [ks (seq (:method-keys protocol))]
+    (cond
+      (nil? ks)
+      (throw (ex-info (str "the protocol " (:flint/protocol protocol)
+                           " has no method named " n "; its methods are "
+                           (pr-str (mapv name (:method-keys protocol))))
+                      {:protocol (:flint/protocol protocol) :method n}))
+      (= n (name (first ks))) (first ks)
+      :else (recur (next ks)))))
+
+(defn extend-method
+  "One method of `protocol` for one `kind`. `mname` is the method's bare name as
+  a string, resolved against the protocol rather than against the caller."
+  [protocol kind mname f]
+  (extend protocol kind (hash-map (method-key protocol mname) f)))
+
 (defn satisfies?
   "Does `x` have an implementation of every method of `protocol`, by metadata or
   by kind?"
@@ -1614,8 +1693,7 @@
         :vector (area [s] (* (nth s 0) (nth s 1)))
         :map    (area [s] (* (:w s) (:h s))))"
   [pname & body]
-  (let [nsname (str (:ns &env))
-        groups (loop [xs body k nil acc []]
+  (let [groups (loop [xs body k nil acc []]
                  (if (empty? xs)
                    acc
                    (if (keyword? (first xs))
@@ -1623,8 +1701,7 @@
                      (recur (rest xs) k (conj acc [k (first xs)])))))]
     (list* 'do
            (map (fn [[k mform]]
-                  (list 'clojure.core/extend pname k
-                        (list 'clojure.core/hash-map
-                              (keyword nsname (name (first mform)))
-                              (list* 'clojure.core/fn (rest mform)))))
+                  (list 'clojure.core/extend-method pname k
+                        (name (first mform))
+                        (list* 'clojure.core/fn (rest mform))))
                 groups))))
