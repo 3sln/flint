@@ -17,7 +17,7 @@ public static class Val {
     public const long Payload = 0x0000_FFFF_FFFF_FFFFL;
 
     const long SpecialNil = 0, SpecialFalse = 1, SpecialTrue = 2;
-    const long SpecialNotFound = 3, SpecialPark = 4, SpecialOom = 5;
+    const long SpecialNotFound = 3, SpecialPark = 4, SpecialOom = 5, SpecialEmpty = 6;
 
     public const long Nil = (TagSpecial << 48) | SpecialNil;
     public const long False = (TagSpecial << 48) | SpecialFalse;
@@ -25,6 +25,12 @@ public static class Val {
     public const long NotFound = (TagSpecial << 48) | SpecialNotFound;
     public const long Park = (TagSpecial << 48) | SpecialPark;
     public const long Oom = (TagSpecial << 48) | SpecialOom;
+
+    /// A port ring slot with nothing in it. A slot's own word carries whether it
+    /// is vacant, so claiming and filling are ONE compare-and-swap. It must be a
+    /// value no program can produce -- `nil` is a perfectly good message -- so
+    /// it lives in the special tag space with NOT_FOUND and PARK.
+    public const long Empty = (TagSpecial << 48) | SpecialEmpty;
 
     /// Logical shift, not arithmetic: a signed shift sign-extends and every tag
     /// on a boxed value comes back as -1.

@@ -56,6 +56,8 @@ const SPECIAL_PARK: u64 = 4;
 /// into a real error. Building the error where the allocation failed would make
 /// the error builder reachable from `alloc`, which every program pays for.
 const SPECIAL_OOM: u64 = 5;
+/// A vacant port ring slot; see `EMPTY`.
+const SPECIAL_EMPTY: u64 = 6;
 
 pub const NIL: Value = Value((TAG_SPECIAL << 48) | SPECIAL_NIL);
 pub const FALSE: Value = Value((TAG_SPECIAL << 48) | SPECIAL_FALSE);
@@ -63,6 +65,19 @@ pub const TRUE: Value = Value((TAG_SPECIAL << 48) | SPECIAL_TRUE);
 pub const NOT_FOUND: Value = Value((TAG_SPECIAL << 48) | SPECIAL_NOT_FOUND);
 pub const PARK: Value = Value((TAG_SPECIAL << 48) | SPECIAL_PARK);
 pub const OOM: Value = Value((TAG_SPECIAL << 48) | SPECIAL_OOM);
+
+/// A port ring slot with nothing in it.
+///
+/// A port's inbox is one array, and a slot's own word carries whether it is
+/// vacant -- so claiming a slot and filling it are ONE compare-and-swap from
+/// `EMPTY` to the message, and a reader takes it with a compare-and-swap back.
+/// There is no instant at which a slot is spoken for and not yet written.
+///
+/// It has to be a value no program can produce, or a message equal to the
+/// marker would read as an empty slot. `nil` is a perfectly good message, so
+/// the marker lives here with `NOT_FOUND` and `PARK`: in the special tag
+/// space, which guest code has no way to construct.
+pub const EMPTY: Value = Value((TAG_SPECIAL << 48) | SPECIAL_EMPTY);
 
 pub const FIXNUM_MAX: i64 = (1 << 47) - 1;
 pub const FIXNUM_MIN: i64 = -(1 << 47);

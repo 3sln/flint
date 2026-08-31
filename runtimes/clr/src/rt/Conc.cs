@@ -69,7 +69,7 @@ public static class Conc {
     public const int PT_ID = 0, PT_STATE = 1, PT_CAP = 2, PT_INBOX = 3,
         PT_READ = 4, PT_BYTES = 5, PT_PEER = 6, PT_LABEL = 7, PT_KIND = 8,
         PT_ROOT = 9, PT_FORMAT = 10, PT_OPTS = 11, PT_BINARY = 12,
-        PT_SEQ = 13, PT_WRITE = 14, PT_GEN = 15, PT_RING = 16, PT_LEN = 17;
+        PT_WRITE = 13, PT_RING = 14, PT_LEN = 15;
 
     /// How many messages a bridge end's ring holds. Its `PT_CAP` bounds BYTES,
     /// which is the bound that matters for memory; this bounds the count so the
@@ -551,21 +551,21 @@ public static class Conc {
         rt.SetSlot(p, PT_ID, Val.Fixnum(id));
         rt.SetSlot(p, PT_STATE, Val.Fixnum(state));
         rt.SetSlot(p, PT_CAP, Val.Fixnum(cap));
-        // The ring, allocated ONCE: a send must not allocate, because
-        // allocation is where the old inbox lost messages.
-        long ring = kind == K_CHANNEL ? System.Math.Max(cap, 1) : RingMessages;
+        // The ring, allocated ONCE: a send must not allocate. NOT on a K_HOST
+        // end, which never has a message put in it -- both directions go
+        // elsewhere. ONE array: a slot's own word says whether it is vacant.
+        long ring = kind == K_CHANNEL ? System.Math.Max(cap, 1) : kind == K_HOST ? 0 : RingMessages;
         rt.SetSlot(p, PT_RING, Val.Fixnum(ring));
-        int sli = rt.Push(NewObj(rt, Obj.TyNode, (int) ring));
-        for (int i = 0; i < ring; i++) rt.SetSlot(Val.AsHeap(rt.R(sli)), i, Val.Nil);
-        rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_INBOX, rt.R(sli));
-        // `seq[i] = i`: slot i is free and belongs to reservation number i.
-        int sqi = rt.Push(NewObj(rt, Obj.TyNode, (int) ring));
-        for (int i = 0; i < ring; i++) rt.SetSlot(Val.AsHeap(rt.R(sqi)), i, Val.Fixnum(i));
-        rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_SEQ, rt.R(sqi));
+        if (ring == 0) {
+            rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_INBOX, Val.Nil);
+        } else {
+            int sli = rt.Push(NewObj(rt, Obj.TyNode, (int) ring));
+            for (int i = 0; i < ring; i++) rt.SetSlot(Val.AsHeap(rt.R(sli)), i, Val.Empty);
+            rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_INBOX, rt.R(sli));
+        }
         p = Val.AsHeap(rt.R(pi));
         rt.SetSlot(p, PT_READ, Val.Fixnum(0));
         rt.SetSlot(p, PT_WRITE, Val.Fixnum(0));
-        rt.SetSlot(p, PT_GEN, Val.Fixnum(0));
         rt.SetSlot(p, PT_BYTES, Val.Fixnum(0));
         // PEERS ARE LINKED BY ID, never by object. When one end is collected
         // its object is gone, and a field holding the peer would keep it alive
@@ -706,62 +706,54 @@ public static class Conc {
     static long SlotAtomic(Rt rt, long o, int i) =>
         rt.gc.sp.AtomicLoad(Obj.SlotAddr(Val.AsHeap(o), i));
 
-    /// Store a slot atomically, AND run the write barrier.
-    ///
-    /// The barrier is the whole reason this is not just an atomic store. A ring
-    /// big enough to miss the nursery lives in the old generation, and an old
-    /// object pointing at a young one is an edge the collector finds only
-    /// through the remembered set. Skipping it made every bridge trap -- a
-    /// bridge's ring is 1024 slots where a small channel's is two, so channels
-    /// worked and `open` died with nothing on the stack to say why.
-    static void SetSlotAtomic(Rt rt, long o, int i, long v) {
+    /// Compare-and-swap a slot, AND run the write barrier when it lands. See
+    /// the Rust: a ring in the old generation pointing at a young value is an
+    /// edge the collector finds only through the remembered set.
+    static bool CasSlotBarriered(Rt rt, long o, int i, long want, long next) {
         long obj = Val.AsHeap(o);
-        rt.gc.sp.AtomicStore(Obj.SlotAddr(obj, i), v);
-        if (Val.IsHeap(v) && rt.gc.IsYoung(Val.AsHeap(v)) && !rt.gc.IsYoung(obj)) {
+        if (!rt.gc.sp.Cas(Obj.SlotAddr(obj, i), want, next)) return false;
+        if (Val.IsHeap(next) && rt.gc.IsYoung(Val.AsHeap(next)) && !rt.gc.IsYoung(obj)) {
             rt.gc.Remember(obj, rt.roots);
         }
+        return true;
     }
 
     static bool CasSlot(Rt rt, long o, int i, long want, long next) =>
         rt.gc.sp.Cas(Obj.SlotAddr(Val.AsHeap(o), i), want, next);
 
-    /// Put `v` in `p`'s ring. False means full. Mirrors the Rust exactly.
+    /// Put `v` in `p`'s ring. False means full.
+    ///
+    /// ONE compare-and-swap: the slot's own word is the lease, and swapping
+    /// Empty for the message both claims the slot and fills it. Mirrors the
+    /// Rust, including why there is no sequence word.
     static bool Enqueue(Rt rt, long p, long v) {
         long ring = Fx(rt.Slot(p, PT_RING));
+        if (ring == 0) return false;
         long inbox = rt.Slot(p, PT_INBOX);
-        long seq = rt.Slot(p, PT_SEQ);
         for (;;) {
             long w = Cursor(rt, p, PT_WRITE);
             long r = Cursor(rt, p, PT_READ);
             if (w - r >= ring) return false;
             int idx = (int) (w % ring);
-            if (Fx(SlotAtomic(rt, seq, idx)) != w) continue;
             if (!CasSlot(rt, p, PT_WRITE, Val.Fixnum(w), Val.Fixnum(w + 1))) continue;
-            long gen = Cursor(rt, p, PT_GEN);
-            SetSlotAtomic(rt, inbox, idx, v);
-            SetSlotAtomic(rt, seq, idx, Val.Fixnum(w + 1));
-            if (Cursor(rt, p, PT_GEN) != gen) continue;
-            return true;
+            if (CasSlotBarriered(rt, inbox, idx, Val.Empty, v)) return true;
         }
     }
 
-    /// Take the next readable message, or nil. A reserved-but-unfilled slot
-    /// reads as empty rather than being skipped: skipping would reorder
-    /// messages a sender had already sequenced.
+    /// Take the next message, or nil. The mirror image: swap the message out
+    /// for Empty, freeing the slot in the step that takes the value.
     static long Dequeue(Rt rt, long p) {
         long ring = Fx(rt.Slot(p, PT_RING));
+        if (ring == 0) return Val.Nil;
         long inbox = rt.Slot(p, PT_INBOX);
-        long seq = rt.Slot(p, PT_SEQ);
         for (;;) {
             long r = Cursor(rt, p, PT_READ);
             if (r >= Cursor(rt, p, PT_WRITE)) return Val.Nil;
             int idx = (int) (r % ring);
-            if (Fx(SlotAtomic(rt, seq, idx)) != r + 1) return Val.Nil;
-            if (!CasSlot(rt, p, PT_READ, Val.Fixnum(r), Val.Fixnum(r + 1))) continue;
             long v = SlotAtomic(rt, inbox, idx);
-            SetSlotAtomic(rt, inbox, idx, Val.Nil);
-            SetSlotAtomic(rt, seq, idx, Val.Fixnum(r + ring));
-            return v;
+            if (v == Val.Empty) return Val.Nil;
+            if (!CasSlot(rt, p, PT_READ, Val.Fixnum(r), Val.Fixnum(r + 1))) continue;
+            if (CasSlotBarriered(rt, inbox, idx, v, Val.Empty)) return v;
         }
     }
 

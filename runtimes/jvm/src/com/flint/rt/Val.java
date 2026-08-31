@@ -37,6 +37,7 @@ public final class Val {
     static final long SPECIAL_NOT_FOUND = 3;
     static final long SPECIAL_PARK = 4;
     static final long SPECIAL_OOM = 5;
+    static final long SPECIAL_EMPTY = 6;
 
     public static final long NIL = (TAG_SPECIAL << 48) | SPECIAL_NIL;
     public static final long FALSE = (TAG_SPECIAL << 48) | SPECIAL_FALSE;
@@ -44,6 +45,12 @@ public final class Val {
     public static final long NOT_FOUND = (TAG_SPECIAL << 48) | SPECIAL_NOT_FOUND;
     public static final long PARK = (TAG_SPECIAL << 48) | SPECIAL_PARK;
     public static final long OOM = (TAG_SPECIAL << 48) | SPECIAL_OOM;
+
+    /// A port ring slot with nothing in it. A slot's own word carries whether it
+    /// is vacant, so claiming and filling are ONE compare-and-swap. It must be a
+    /// value no program can produce -- `nil` is a perfectly good message -- so
+    /// it lives in the special tag space with NOT_FOUND and PARK.
+    public static final long EMPTY = (TAG_SPECIAL << 48) | SPECIAL_EMPTY;
 
     /// The top sixteen bits. `>>> 48` and not `>> 48`: an arithmetic shift on a
     /// boxed value sign-extends and every tag comes back as -1.

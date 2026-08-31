@@ -103,6 +103,11 @@ pub const PT_STATE: u32 = 1;
 pub const PT_CAP: u32 = 2;
 /// Inbox: a FIXED ring of `PT_RING` slots, written and read without a lock.
 ///
+/// ONE array, and a slot's own word says whether it is vacant: `Value::EMPTY`
+/// is in the special tag space, so no program can produce one and no message
+/// can be mistaken for a free slot. That is what collapses the protocol --
+/// claiming a slot and filling it are a single compare-and-swap.
+///
 /// It used to be a persistent vector with a read cursor, and `conj`-then-store
 /// is a read-modify-write with an ALLOCATION in the middle -- which takes the
 /// allocation lock and can stage a safepoint, so the window was not theoretical.
@@ -134,25 +139,13 @@ pub const PT_OPTS: u32 = 11;
 /// formats happen to be UTF-8, but a binary one (Transit-msgpack) is not, so
 /// its payloads travel as vectors of 0..255 rather than as strings.
 pub const PT_BINARY: u32 = 12;
-/// One sequence word per ring slot, which is what makes the ring lock-free.
-///
-/// `seq[i]` says what the slot is ready for: equal to the write cursor means
-/// "free, and the reservation with this number may take it"; one past it means
-/// "filled, and the read cursor with the previous number may take it". A
-/// reserved-but-unfilled slot is therefore invisible to a reader rather than
-/// half-read, without anybody holding anything.
-pub const PT_SEQ: u32 = 13;
-/// Write (reservation) cursor. Monotonic, as `PT_READ`.
-pub const PT_WRITE: u32 = 14;
-/// Flush generation. Bumped when a drain SKIPS a slot that was reserved and not
-/// yet filled; a sender whose reservation spans a bump starts its put over,
-/// because its slot may have been passed by.
-pub const PT_GEN: u32 = 15;
+/// Write cursor. Monotonic, never wrapped, as `PT_READ`.
+pub const PT_WRITE: u32 = 13;
 /// Ring capacity, in messages. A channel's is what `channel` was asked for; a
 /// bridge end's is `RING_MESSAGES`, because its own bound (`PT_CAP`) is in
 /// BYTES and the two are different questions.
-pub const PT_RING: u32 = 16;
-pub const PT_LEN: u32 = 17;
+pub const PT_RING: u32 = 14;
+pub const PT_LEN: u32 = 15;
 
 /// How many messages a bridge end's ring holds.
 ///
@@ -734,29 +727,18 @@ impl Rt {
         self.set(self.r(pi), PT_RING, Value::fixnum(ring));
         if ring == 0 {
             self.set(self.r(pi), PT_INBOX, NIL);
-            self.set(self.r(pi), PT_SEQ, NIL);
             self.set(self.r(pi), PT_READ, Value::fixnum(0));
             self.set(self.r(pi), PT_WRITE, Value::fixnum(0));
-            self.set(self.r(pi), PT_GEN, Value::fixnum(0));
         } else {
-        let slots = self.new_obj(crate::obj::TY_NODE, ring as u32);
-        let sli = self.push(slots);
-        for i in 0..ring as u32 {
-            self.set(self.r(sli), i, NIL);
-        }
-        let sv = self.r(sli);
-        self.set(self.r(pi), PT_INBOX, sv);
-        // `seq[i] = i`: slot i is free and belongs to reservation number i.
-        let seqs = self.new_obj(crate::obj::TY_NODE, ring as u32);
-        let sqi = self.push(seqs);
-        for i in 0..ring as u32 {
-            self.set(self.r(sqi), i, Value::fixnum(i as i64));
-        }
-        let qv = self.r(sqi);
-        self.set(self.r(pi), PT_SEQ, qv);
-        self.set(self.r(pi), PT_READ, Value::fixnum(0));
-        self.set(self.r(pi), PT_WRITE, Value::fixnum(0));
-        self.set(self.r(pi), PT_GEN, Value::fixnum(0));
+            let slots = self.new_obj(crate::obj::TY_NODE, ring as u32);
+            let sli = self.push(slots);
+            for i in 0..ring as u32 {
+                self.set(self.r(sli), i, crate::value::EMPTY);
+            }
+            let sv = self.r(sli);
+            self.set(self.r(pi), PT_INBOX, sv);
+            self.set(self.r(pi), PT_READ, Value::fixnum(0));
+            self.set(self.r(pi), PT_WRITE, Value::fixnum(0));
         }
         self.set(self.r(pi), PT_BYTES, Value::fixnum(0));
         self.set(self.r(pi), PT_PEER, Value::fixnum(-1));
@@ -938,26 +920,28 @@ impl Rt {
         Value(self.gc.sp.atomic_load(crate::obj::slot_addr(o.as_heap(), i)))
     }
 
-    /// Store a slot atomically, AND run the write barrier.
+    /// Compare-and-swap a slot, AND run the write barrier when it lands.
     ///
-    /// The barrier is the whole reason this is not just `atomic_store`. A ring
-    /// big enough to miss the nursery is allocated in the old generation, and
-    /// an old object pointing at a young one is an edge the collector finds
-    /// only through the remembered set. Skipping it made every bridge trap --
-    /// a bridge's ring is 1024 slots where a small channel's is two, so the
-    /// channel tests passed and `open` died -- and the symptom was
-    /// `RuntimeError: unreachable` with nothing on the stack to say why.
+    /// The barrier is the whole reason this is not a bare compare-and-swap. A
+    /// ring big enough to miss the nursery lives in the old generation, and an
+    /// old object pointing at a young one is an edge the collector finds only
+    /// through the remembered set. Skipping it made every bridge trap while
+    /// channels passed, because a bridge's ring is larger than a small
+    /// channel's.
     ///
-    /// The order matters. The value is published FIRST and remembered second,
-    /// which is safe because a collection cannot run between them: the only
-    /// safepoint is the interpreter's checkpoint, and there is not one here.
+    /// Remembered after the swap lands, which is safe because a collection
+    /// cannot run in between: the only safepoint is the interpreter's
+    /// checkpoint, and there is not one here.
     #[inline]
-    fn set_slot_atomic(&mut self, o: Value, i: u32, v: Value) {
+    fn cas_slot_barriered(&mut self, o: Value, i: u32, want: Value, next: Value) -> bool {
         let obj = o.as_heap();
-        self.gc.sp.atomic_store(crate::obj::slot_addr(obj, i), v.0);
-        if v.is_heap() && self.gc.is_young(v.as_heap()) && !self.gc.is_young(obj) {
+        if !self.gc.sp.cas(crate::obj::slot_addr(obj, i), want.0, next.0) {
+            return false;
+        }
+        if next.is_heap() && self.gc.is_young(next.as_heap()) && !self.gc.is_young(obj) {
             self.gc.remember(obj, &mut self.roots.own.remembered);
         }
+        true
     }
 
     #[inline]
@@ -965,45 +949,46 @@ impl Rt {
         self.gc.sp.cas(crate::obj::slot_addr(o.as_heap(), i), want.0, next.0)
     }
 
-    /// Put `v` in `p`'s inbox. `false` means the ring is full.
-    ///
-    /// The protocol, and every step of it is load-bearing:
-    ///
-    ///   1. RESERVE by claiming the write cursor with a compare-and-swap. The
-    ///      slot's sequence word must equal the cursor first, or the slot is
-    ///      still holding a message nobody has taken.
-    ///   2. FILL the slot, then publish by setting its sequence word one past
-    ///      the reservation. Until that store, a reader sees the slot as not
-    ///      yet readable rather than as garbage -- which is the whole reason
-    ///      the sequence word exists and an index alone would not do.
-    ///   3. CHECK BACK. If the flush generation moved while we were filling, a
-    ///      drain may have passed our slot by, so the put starts over. That is
-    ///      the case `doc/decisions/0028` cannot leave to chance: a message
-    ///      that was reserved, skipped, and then written would be a message
-    ///      nobody ever reads sitting in a slot everybody thinks is free.
-    ///
-    /// No lock, and nothing here allocates.
-    /// `port_enqueue`, exposed for the parallel tests: they need to drive the
-    /// ring from two host threads without a green-thread scheduler in the way,
-    /// and back-pressure is a RETURN VALUE here rather than a park.
+    /// `port_enqueue`, exposed for the parallel tests: they drive the ring from
+    /// two host threads without a green-thread scheduler in the way, and
+    /// back-pressure is a RETURN VALUE here rather than a park.
     pub fn port_try_enqueue(&mut self, p: Value, v: Value) -> bool {
         self.port_enqueue(p, v)
     }
 
-    /// How many messages are in `p`'s ring, reservations included.
+    /// How many messages are in `p`'s ring.
     pub fn inbox_depth(&self, p: Value) -> u32 {
         self.inbox_count(p)
     }
 
+    /// Put `v` in `p`'s inbox. `false` means the ring is full.
+    ///
+    /// ONE compare-and-swap does the whole thing. The slot's own word is the
+    /// lease: `EMPTY` means vacant, and swapping `EMPTY` for the message both
+    /// CLAIMS the slot and FILLS it, in a step no other thread can observe half
+    /// of. Winning the swap is the confirmation; losing it means somebody else
+    /// took that slot and this sender looks at the next one.
+    ///
+    /// It replaced a reserve-then-publish protocol with a sequence word per
+    /// slot -- a second array the same size as the ring -- and the sequence
+    /// word existed only to describe a state this design does not have. A slot
+    /// was reservable but not yet written, which meant a reader could meet one,
+    /// a drain had to be allowed to skip one, a skip had to be signalled by a
+    /// generation counter, and a sender whose reservation spanned a bump had to
+    /// start over. None of that exists when there is no such state: a slot is
+    /// vacant or it holds a whole message.
+    ///
+    /// The cursor is still here and still moved by compare-and-swap, but only
+    /// to say WHICH slot to try next. It is a hint about order, not a claim on
+    /// anything -- so a sender that loses the race for a slot simply advances,
+    /// and who claimed it never mattered.
     fn port_enqueue(&mut self, p: Value, v: Value) -> bool {
         let ring = fx(self.slot(p, PT_RING)) as u64;
-        // A `K_HOST` end has no ring and nothing ever enqueues into one; saying
-        // so is cheaper than the modulo it would otherwise divide by zero on.
+        // A `K_HOST` end has no ring and nothing ever enqueues into one.
         if ring == 0 {
             return false;
         }
         let inbox = self.slot(p, PT_INBOX);
-        let seq = self.slot(p, PT_SEQ);
         loop {
             let w = self.cursor(p, PT_WRITE);
             let r = self.cursor(p, PT_READ);
@@ -1011,57 +996,55 @@ impl Rt {
                 return false;
             }
             let idx = (w % ring) as u32;
-            if fx(self.slot_atomic(seq, idx)) as u64 != w {
-                // Another sender is between reserve and fill here, or a reader
-                // has not released it yet. Neither is our business; look again.
-                core::hint::spin_loop();
-                continue;
-            }
+            // The cursor moves FIRST, so two senders reading the same `w` do
+            // not both sit on one slot: the loser sees `w + 1` next time round
+            // and tries the slot after it. Failing here is contention, not
+            // fullness, and the fullness test above is the only thing that says
+            // full.
             if !self.cas_slot(p, PT_WRITE, Value::fixnum(w as i64), Value::fixnum(w as i64 + 1)) {
                 continue;
             }
-            let gen = self.cursor(p, PT_GEN);
-            self.set_slot_atomic(inbox, idx, v);
-            self.set_slot_atomic(seq, idx, Value::fixnum(w as i64 + 1));
-            if self.cursor(p, PT_GEN) != gen {
-                continue;
+            if self.cas_slot_barriered(inbox, idx, crate::value::EMPTY, v) {
+                return true;
             }
-            return true;
+            // The slot still holds a message nobody has taken. The cursor has
+            // moved past it, which is correct -- it is not a slot to write --
+            // and the next turn of the loop tries the next one.
+            core::hint::spin_loop();
         }
     }
 
-    /// Take the next readable message, or `NIL` when there is none.
+    /// Take the next message, or `NIL` when there is none.
     ///
-    /// A slot that is reserved and not yet filled reads as EMPTY here rather
-    /// than being skipped: for a single receive there is nothing to gain by
-    /// jumping the queue, and skipping would reorder messages that a sender
-    /// had already sequenced. `port_flush` is the one that skips, because a
-    /// drain must not be held up by one slow sender.
+    /// The mirror image: swap the message out for `EMPTY`, which frees the slot
+    /// in the same step that takes the value. A slot holding `EMPTY` under the
+    /// read cursor means the ring is drained, because a slot is never claimed
+    /// without being filled.
     fn port_dequeue(&mut self, p: Value) -> Value {
         let ring = fx(self.slot(p, PT_RING)) as u64;
         if ring == 0 {
             return NIL;
         }
         let inbox = self.slot(p, PT_INBOX);
-        let seq = self.slot(p, PT_SEQ);
         loop {
             let r = self.cursor(p, PT_READ);
             if r >= self.cursor(p, PT_WRITE) {
                 return NIL;
             }
             let idx = (r % ring) as u32;
-            if fx(self.slot_atomic(seq, idx)) as u64 != r + 1 {
+            let v = self.slot_atomic(inbox, idx);
+            if v.bits() == crate::value::EMPTY.bits() {
+                // Claimed by a sender that has not landed its swap yet. It is
+                // one instruction away; there is nothing here to take.
                 return NIL;
             }
             if !self.cas_slot(p, PT_READ, Value::fixnum(r as i64), Value::fixnum(r as i64 + 1)) {
                 continue;
             }
-            let v = self.slot_atomic(inbox, idx);
-            // Cleared, so a taken message is not kept alive by the ring: the
-            // slot outlives the message and the collector traces it either way.
-            self.set_slot_atomic(inbox, idx, NIL);
-            self.set_slot_atomic(seq, idx, Value::fixnum((r + ring) as i64));
-            return v;
+            if self.cas_slot_barriered(inbox, idx, v, crate::value::EMPTY) {
+                return v;
+            }
+            core::hint::spin_loop();
         }
     }
 

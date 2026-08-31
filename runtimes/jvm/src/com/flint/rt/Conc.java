@@ -71,7 +71,7 @@ public final class Conc {
     public static final int PT_ID = 0, PT_STATE = 1, PT_CAP = 2, PT_INBOX = 3,
         PT_READ = 4, PT_BYTES = 5, PT_PEER = 6, PT_LABEL = 7, PT_KIND = 8,
         PT_ROOT = 9, PT_FORMAT = 10, PT_OPTS = 11, PT_BINARY = 12,
-        PT_SEQ = 13, PT_WRITE = 14, PT_GEN = 15, PT_RING = 16, PT_LEN = 17;
+        PT_WRITE = 13, PT_RING = 14, PT_LEN = 15;
 
     /// How many messages a bridge end's ring holds. Its `PT_CAP` bounds BYTES,
     /// which is the bound that matters for memory; this bounds the count so the
@@ -554,21 +554,21 @@ public final class Conc {
         rt.setSlot(p, PT_ID, Val.fixnum(id));
         rt.setSlot(p, PT_STATE, Val.fixnum(state));
         rt.setSlot(p, PT_CAP, Val.fixnum(cap));
-        // The ring, allocated ONCE: a send must not allocate, because
-        // allocation is where the old inbox lost messages.
-        long ring = kind == K_CHANNEL ? Math.max(cap, 1) : RING_MESSAGES;
+        // The ring, allocated ONCE: a send must not allocate. NOT on a K_HOST
+        // end, which never has a message put in it -- both directions go
+        // elsewhere. ONE array: a slot's own word says whether it is vacant.
+        long ring = kind == K_CHANNEL ? Math.max(cap, 1) : kind == K_HOST ? 0 : RING_MESSAGES;
         rt.setSlot(p, PT_RING, Val.fixnum(ring));
-        int sli = rt.push(newObj(rt, TY_NODE, (int) ring));
-        for (int i = 0; i < ring; i++) rt.setSlot(Val.asHeap(rt.r(sli)), i, Val.NIL);
-        rt.setSlot(Val.asHeap(rt.r(pi)), PT_INBOX, rt.r(sli));
-        // `seq[i] = i`: slot i is free and belongs to reservation number i.
-        int sqi = rt.push(newObj(rt, TY_NODE, (int) ring));
-        for (int i = 0; i < ring; i++) rt.setSlot(Val.asHeap(rt.r(sqi)), i, Val.fixnum(i));
-        rt.setSlot(Val.asHeap(rt.r(pi)), PT_SEQ, rt.r(sqi));
+        if (ring == 0) {
+            rt.setSlot(Val.asHeap(rt.r(pi)), PT_INBOX, Val.NIL);
+        } else {
+            int sli = rt.push(newObj(rt, TY_NODE, (int) ring));
+            for (int i = 0; i < ring; i++) rt.setSlot(Val.asHeap(rt.r(sli)), i, Val.EMPTY);
+            rt.setSlot(Val.asHeap(rt.r(pi)), PT_INBOX, rt.r(sli));
+        }
         p = Val.asHeap(rt.r(pi));
         rt.setSlot(p, PT_READ, Val.fixnum(0));
         rt.setSlot(p, PT_WRITE, Val.fixnum(0));
-        rt.setSlot(p, PT_GEN, Val.fixnum(0));
         rt.setSlot(p, PT_BYTES, Val.fixnum(0));
         // PEERS ARE LINKED BY ID, never by object. When one end is collected
         // its object is gone, and a field holding the peer would keep it alive
@@ -712,65 +712,56 @@ public final class Conc {
         return rt.gc.sp.atomicLoad(Obj.slotAddr(Val.asHeap(o), i));
     }
 
-    /// Store a slot atomically, AND run the write barrier.
-    ///
-    /// The barrier is the whole reason this is not just an atomic store. A ring
-    /// big enough to miss the nursery lives in the old generation, and an old
-    /// object pointing at a young one is an edge the collector finds only
-    /// through the remembered set. Skipping it made every bridge trap -- a
-    /// bridge's ring is 1024 slots where a small channel's is two, so channels
-    /// worked and `open` died with nothing on the stack to say why.
-    static void setSlotAtomic(Rt rt, long o, int i, long v) {
+    /// Compare-and-swap a slot, AND run the write barrier when it lands. See
+    /// the Rust: a ring in the old generation pointing at a young value is an
+    /// edge the collector finds only through the remembered set.
+    static boolean casSlotBarriered(Rt rt, long o, int i, long want, long next) {
         long obj = Val.asHeap(o);
-        rt.gc.sp.atomicStore(Obj.slotAddr(obj, i), v);
-        if (Val.isHeap(v) && rt.gc.isYoung(Val.asHeap(v)) && !rt.gc.isYoung(obj)) {
+        if (!rt.gc.sp.cas(Obj.slotAddr(obj, i), want, next)) return false;
+        if (Val.isHeap(next) && rt.gc.isYoung(Val.asHeap(next)) && !rt.gc.isYoung(obj)) {
             rt.gc.remember(obj, rt.roots);
         }
+        return true;
     }
 
     static boolean casSlot(Rt rt, long o, int i, long want, long next) {
         return rt.gc.sp.cas(Obj.slotAddr(Val.asHeap(o), i), want, next);
     }
 
-    /// Put `v` in `p`'s ring. False means full. Mirrors the Rust exactly:
-    /// reserve by claiming the write cursor, fill, publish, then check that no
-    /// flush passed the slot by while it was being filled.
+    /// Put `v` in `p`'s ring. False means full.
+    ///
+    /// ONE compare-and-swap: the slot's own word is the lease, and swapping
+    /// EMPTY for the message both claims the slot and fills it. Winning is the
+    /// confirmation; losing means somebody took that slot and this sender looks
+    /// at the next. Mirrors the Rust, including why there is no sequence word.
     static boolean enqueue(Rt rt, long p, long v) {
         long ring = fx(rt.slot(p, PT_RING));
+        if (ring == 0) return false;
         long inbox = rt.slot(p, PT_INBOX);
-        long seq = rt.slot(p, PT_SEQ);
         for (;;) {
             long w = cursor(rt, p, PT_WRITE);
             long r = cursor(rt, p, PT_READ);
             if (w - r >= ring) return false;
             int idx = (int) (w % ring);
-            if (fx(slotAtomic(rt, seq, idx)) != w) continue;
             if (!casSlot(rt, p, PT_WRITE, Val.fixnum(w), Val.fixnum(w + 1))) continue;
-            long gen = cursor(rt, p, PT_GEN);
-            setSlotAtomic(rt, inbox, idx, v);
-            setSlotAtomic(rt, seq, idx, Val.fixnum(w + 1));
-            if (cursor(rt, p, PT_GEN) != gen) continue;
-            return true;
+            if (casSlotBarriered(rt, inbox, idx, Val.EMPTY, v)) return true;
         }
     }
 
-    /// Take the next readable message, or NIL. A slot that is reserved and not
-    /// yet filled reads as empty rather than being skipped: skipping would
-    /// reorder messages a sender had already sequenced.
+    /// Take the next message, or NIL. The mirror image: swap the message out
+    /// for EMPTY, freeing the slot in the step that takes the value.
     static long dequeue(Rt rt, long p) {
         long ring = fx(rt.slot(p, PT_RING));
+        if (ring == 0) return Val.NIL;
         long inbox = rt.slot(p, PT_INBOX);
-        long seq = rt.slot(p, PT_SEQ);
         for (;;) {
             long r = cursor(rt, p, PT_READ);
             if (r >= cursor(rt, p, PT_WRITE)) return Val.NIL;
             int idx = (int) (r % ring);
-            if (fx(slotAtomic(rt, seq, idx)) != r + 1) return Val.NIL;
-            if (!casSlot(rt, p, PT_READ, Val.fixnum(r), Val.fixnum(r + 1))) continue;
             long v = slotAtomic(rt, inbox, idx);
-            setSlotAtomic(rt, inbox, idx, Val.NIL);
-            setSlotAtomic(rt, seq, idx, Val.fixnum(r + ring));
-            return v;
+            if (v == Val.EMPTY) return Val.NIL;
+            if (!casSlot(rt, p, PT_READ, Val.fixnum(r), Val.fixnum(r + 1))) continue;
+            if (casSlotBarriered(rt, inbox, idx, v, Val.EMPTY)) return v;
         }
     }
 
