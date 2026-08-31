@@ -719,8 +719,26 @@ impl Rt {
         self.set(self.r(pi), PT_CAP, Value::fixnum(cap));
         // The ring, allocated ONCE and never again: a send must not allocate,
         // because allocation is where the old inbox lost messages.
-        let ring = if kind == K_CHANNEL { cap.max(1) } else { RING_MESSAGES };
+        //
+        // NOT ON A `K_HOST` END, which never has one message put in it. That
+        // end is bookkeeping -- an id the host knows, a byte counter, a peer
+        // link, a state -- and the two directions both go elsewhere: a guest
+        // sending across a bridge pushes an EVENT, and `host_deliver` enqueues
+        // into the guest's end, never this one. Allocating a ring here was half
+        // the memory of every `open` doing nothing at all.
+        let ring = match kind {
+            K_CHANNEL => cap.max(1),
+            K_HOST => 0,
+            _ => RING_MESSAGES,
+        };
         self.set(self.r(pi), PT_RING, Value::fixnum(ring));
+        if ring == 0 {
+            self.set(self.r(pi), PT_INBOX, NIL);
+            self.set(self.r(pi), PT_SEQ, NIL);
+            self.set(self.r(pi), PT_READ, Value::fixnum(0));
+            self.set(self.r(pi), PT_WRITE, Value::fixnum(0));
+            self.set(self.r(pi), PT_GEN, Value::fixnum(0));
+        } else {
         let slots = self.new_obj(crate::obj::TY_NODE, ring as u32);
         let sli = self.push(slots);
         for i in 0..ring as u32 {
@@ -739,6 +757,7 @@ impl Rt {
         self.set(self.r(pi), PT_READ, Value::fixnum(0));
         self.set(self.r(pi), PT_WRITE, Value::fixnum(0));
         self.set(self.r(pi), PT_GEN, Value::fixnum(0));
+        }
         self.set(self.r(pi), PT_BYTES, Value::fixnum(0));
         self.set(self.r(pi), PT_PEER, Value::fixnum(-1));
         let l = self.r(li);
@@ -978,6 +997,11 @@ impl Rt {
 
     fn port_enqueue(&mut self, p: Value, v: Value) -> bool {
         let ring = fx(self.slot(p, PT_RING)) as u64;
+        // A `K_HOST` end has no ring and nothing ever enqueues into one; saying
+        // so is cheaper than the modulo it would otherwise divide by zero on.
+        if ring == 0 {
+            return false;
+        }
         let inbox = self.slot(p, PT_INBOX);
         let seq = self.slot(p, PT_SEQ);
         loop {
@@ -1015,6 +1039,9 @@ impl Rt {
     /// drain must not be held up by one slow sender.
     fn port_dequeue(&mut self, p: Value) -> Value {
         let ring = fx(self.slot(p, PT_RING)) as u64;
+        if ring == 0 {
+            return NIL;
+        }
         let inbox = self.slot(p, PT_INBOX);
         let seq = self.slot(p, PT_SEQ);
         loop {
