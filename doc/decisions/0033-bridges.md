@@ -51,8 +51,15 @@ Six verbs, and a writer needs no more than these to write a message safely:
 reserve(size_hint) -> buf      grow(buf, n) -> buf
 commit(buf)                    abort(buf)
 take() -> buf | none           release(buf)
-format() -> :flint | :json | :edn | :cbor
+format() -> :flint | :json-strict | :json | :edn | :cbor
+memo() -> bytes | none
 ```
+
+`memo()` is arbitrary data the BRIDGE supplies, carried alongside a port's id
+whenever the port is serialised, so a receiver can reconstruct the connection
+rather than merely name it. It is also what a snapshot stores, so a restored
+sandbox can ask for its bridges back. NOT BUILT -- the verb is listed here
+because the encoding leaves room for it and the two must agree.
 
 Reserve, serialise into it, commit — or abort. Take, read, release. The
 implementations diverge completely underneath and no caller can tell:
@@ -147,42 +154,51 @@ The codec is configuration the WRITER consults, which keeps the port agnostic
 and makes the encoder ordinary guest code -- so a program that only uses
 `:flint` never links a CBOR encoder.
 
-### Identities, and who owns which half of the frame
+### Identities serialise as themselves
 
 Every one of these formats CAN express an identity -- EDN has tagged literals,
-CBOR has tags, and JSON can carry a convention object -- so "only `:flint` may
-name a port" would be a restriction invented by this design rather than one the
-formats impose. The real constraint is not expressiveness. It is two invariants
-that bite from opposite directions:
+CBOR has tags, JSON can carry a convention object -- so a rule that only
+`:flint` may name a port would be invented here rather than imposed by the
+formats. What a format decides is whether it has ANY way to say it; `:json`
+does and `:json-strict` deliberately does not.
 
-* **A guest cannot read an id.** `flint/opaque-label` exists and there is
-  deliberately no builtin returning the host id, because reading provenance from
-  guest code invites the check `0022` forbids. So guest code cannot WRITE
-  `#flint/opaque ["foo" 111]`: it has no way to obtain the 111.
-* **A guest-side decoder must not turn bytes into an identity.** If it could
-  parse `#flint/port [333]` into a live port then possession stops being proof,
-  which is the whole of `0022`.
+**The serialised form is the real id**, not a reference into some per-message
+table:
 
-So the split is not by format. It is by **which half of the frame each side
-owns**:
+    #flint/port [333 <memo>]
+    #flint/opaque ["foo" 111]
 
-    frame := identity-table   -- the RUNTIME writes and reads this
-             body             -- the CODEC writes and reads this
+For a port the id may be process-bound, and that is fine -- it is the
+embedder's number and the embedder's business.
 
-The body references identities BY INDEX into the table, never by id. Outbound,
-the codec meets a port value, calls a runtime hook that appends it to the table
-and hands back an index, and writes `#flint/port [2]`. Inbound, the codec sees
-`#flint/port [2]` and asks the runtime to resolve index 2.
+**A PORT ALSO CARRIES ITS MEMO**, so the receiver has options rather than a
+number it can only compare. The id is the fast path -- same process, port still
+live -- and the memo is what makes the reference reconstructable when it is not:
+a different process, or a bridge that has to be re-established. Bridge memos are
+NOT BUILT (see below), so the slot exists in the encoding now and is filled when
+they are.
 
-Which gives every property at once:
+An earlier draft of this file had the body reference identities by index into a
+runtime-owned table, so a guest could only ever name an identity already present
+in the message. It was solving a problem `0022` already solves, and it cost more
+than it bought: a reference valid only inside one message cannot be stored,
+logged, or forwarded later.
 
-* every format carries identities, in its own natural tagging;
-* the guest never sees an id, so `0022` holds unweakened;
-* the guest can only name identities ACTUALLY PRESENT in this message -- an
-  out-of-range index is an error, not a handle -- so there is nothing to forge,
-  and that is a stronger statement than "this format cannot say it";
-* `check_sendable` therefore does NOT grow a format dimension for identities. It
-  keeps only the rows about what a format can represent structurally.
+**Resolution is mediated, which is the whole of the safety argument.** A
+receiver hands the runtime an id and asks for the thing; whether it gets one is
+the grant table's answer, not the format's. NAMING IS NOT HAVING. A guest may
+write any id it likes and get nothing back, which is `0022` restated rather than
+new machinery -- "possession is not the check, the grant table is".
+
+**One invariant this retires, deliberately.** `builtins.rs` says of an opaque's
+host id: *"the host id is not readable, and there is deliberately no builtin
+that returns it. Reading provenance from guest code would invite exactly the
+check 0022 forbids."* A guest-side codec writing `#flint/opaque ["foo" 111]`
+either sees the 111 or has the runtime emit it, and the second is awkward for a
+text format the codec assembles as a string. Since resolution is mediated,
+seeing an id grants nothing -- so the rule was guarding a door that already has
+a lock, and it goes. It is listed here because it is a stated invariant and
+should be retired on purpose rather than eroded.
 
 **What the format still decides** is structural coverage, and rather than one
 JSON with a judgement call per type there are TWO, so the caller chooses:
