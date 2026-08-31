@@ -184,11 +184,43 @@ in the message. It was solving a problem `0022` already solves, and it cost more
 than it bought: a reference valid only inside one message cannot be stored,
 logged, or forwarded later.
 
-**Resolution is mediated, which is the whole of the safety argument.** A
-receiver hands the runtime an id and asks for the thing; whether it gets one is
-the grant table's answer, not the format's. NAMING IS NOT HAVING. A guest may
-write any id it likes and get nothing back, which is `0022` restated rather than
-new machinery -- "possession is not the check, the grant table is".
+### A guest cannot write a reserved tag
+
+Two guards, defending opposite directions, and both are needed.
+
+**Inbound, resolution is mediated.** A receiver hands the runtime an id and asks
+for the thing; whether it gets one is the grant table's answer, not the
+format's. That is `0022` restated -- "possession is not the check, the grant
+table is" -- and it covers bytes arriving from anywhere.
+
+**Outbound, the reserved tags are refused.** A guest value that would serialise
+to `flint/port` or `flint/opaque` -- by any route -- throws, naming the tag.
+
+The second is not redundant with the first, and the reason is the far side. "It
+can name anything and get nothing back" assumes the receiver HAS a grant table
+that knows better. A bridge to a foreign peer -- a socket, another process, some
+service that speaks JSON -- has no such thing, and a guest that could emit
+`{"$flintTag": "port", "$flintVal": 333}` into that stream is handing a claim to
+something that may act on it. Only the outbound guard covers a peer that is not
+ours.
+
+**Identity tags are emitted BY TYPE, which is what makes the intended path
+safe.** A codec writes a port tag because it met a PORT, not because it met data
+shaped like one, and a guest cannot make a port it does not hold.
+
+**The guard covers every format, not just JSON**, and checking is what
+established that. A reader tag in flint is `{:flint/tagged tag :flint/value v}`
+-- an ORDINARY MAP, with no runtime tagged type -- so nothing structurally stops
+a guest building one and handing it to an EDN codec that round-trips tags by
+shape. The assumption that native tagging is naturally safe was wrong; JSON's
+convention object is more obviously ordinary data, not uniquely so.
+
+**Throw rather than escape.** An earlier draft escaped a colliding map so the
+encoding stayed total. Refusing is simpler, is loud at the point of the mistake
+rather than silently transforming it, and makes "reserved" mean reserved. The
+cost is that a `:json` port cannot carry a map that happens to use the reserved
+key -- and `:json-strict` reserves NOTHING, so that map crosses a strict port
+untouched. The restriction exists only where the tags do.
 
 **One invariant this retires, deliberately.** `builtins.rs` says of an opaque's
 host id: *"the host id is not readable, and there is deliberately no builtin
