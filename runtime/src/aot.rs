@@ -336,6 +336,29 @@ pub extern "C" fn aot_tick(rt: *mut Rt, gas: u32, top: u32, ip: u32, block: u32)
         unsafe {
             crate::aotstat::COUNTS[crate::aotstat::C_AOT_TICK_TRIPS] += 1;
         }
+        // ONE BACK, because the back-edge instruction is about to be charged a
+        // second time. `gas` above is the chunk's static count and the
+        // back-edge is IN it -- compiled code jumps for itself, so the chunk
+        // charges for the jump. Handing the instruction back then makes the
+        // interpreter's own `tick` charge it again on the way to the
+        // hand-over, and the resumed slice charges it a third time when it
+        // finally dispatches it. The interpreter alone charges it twice: once
+        // at the tick that trips, once after the resume.
+        //
+        // So the flush is right for a chunk that RUNS ON and wrong for one
+        // that trips, and this is the difference. Subtracted after the
+        // comparison, not before: the jump did execute, so it counts towards
+        // deciding that the slice is over -- and the interpreter's tick adds
+        // it straight back, so the trip lands on the same instruction either
+        // way.
+        //
+        // Worth one gas unit of care because `0013` treats interpreted and
+        // compiled charging the same as the evidence that the chunking is
+        // right, and `0009` makes gas a bound on WORK -- a program that costs
+        // more compiled hits a limit the interpreter would not. It showed up
+        // as exactly +1 on any program that spawns a thread, because a slice
+        // is what makes this path run at all.
+        rt.steps -= 1;
         if let Some(f) = rt.frames.last_mut() {
             f.ip = ip;
             // Not a re-entry right here: the interpreter has to reach its own

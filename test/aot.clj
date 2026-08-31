@@ -147,46 +147,85 @@
       a (run! (build! "park" true))]
   (check "a thread that parks mid-bail comes back to the chunk its ip names" (:out i) "33")
   (check "  ... and compiled code agrees" (:out a) (:out i))
-  ;; KNOWN FAILING as of 2026-08-30, and it is a real defect rather than a
-  ;; fragile test. Left failing on purpose: the gate saying so is worth more
-  ;; than a green gate that has forgotten.
-  ;;
-  ;; A PARK INSIDE COMPILED CODE CHARGES EXACTLY ONE GAS UNIT MORE than the
-  ;; interpreter does for the same program. Isolated by building this program
-  ;; with and without its `p/receive`, everything else identical:
+  ;; A PARK USED TO COST ONE GAS UNIT MORE COMPILED THAN INTERPRETED, and the
+  ;; measurements are kept because the shape of them is what found it.
   ;;
   ;;   | program        | interpreted | compiled |
   ;;   | -------------- | ----------: | -------: |
   ;;   | no park        |        5254 |     5254 |
   ;;   | one park       |        5331 |     5332 |
   ;;
-  ;; It is one, not a chunk: lengthening the basic block before the parking
-  ;; native (four more arithmetic instructions in the same block) moves both
-  ;; numbers to 5363/5364 and the gap stays at one. So it is a single
-  ;; instruction charged twice on the compiled path, not a chunk prefix
-  ;; re-executed -- which was the first theory and is wrong.
+  ;; Three facts narrowed it, and each killed a theory:
   ;;
-  ;; Why it appeared now: nothing about parking changed. `clojure.core` gained
-  ;; the `:flint/check` conditionals, which moved the code layout, which moved
-  ;; where the slice boundary lands. The equality here was holding by where the
-  ;; park happened to fall, and any change that shifts layout can expose it.
-  ;; That is the argument for fixing it rather than re-baselining: the next
-  ;; unrelated change flips it back and it looks fixed.
+  ;;   * lengthening the basic block before the parking native moved both
+  ;;     numbers and kept the gap at one -- so it was ONE INSTRUCTION charged
+  ;;     twice, not a chunk prefix re-executed;
+  ;;   * three parks still cost one -- so it was not per park;
+  ;;   * a bare `(t/spawn (fn [] 1))` with no join, no yield and no port cost
+  ;;     it too, and a program with no threads at all was exact -- so it was
+  ;;     not parking. It was having a SLICE.
   ;;
-  ;; Where to look: `Rt::aot_failed`'s `PARK` branch in `runtime/src/vm.rs`
-  ;; saves the frame with `ip` at the parking instruction, exactly as the
-  ;; interpreter's own arm does with `opcode_at` -- so both re-dispatch it on
-  ;; resume and both should charge it twice. One of them charges it three
-  ;; times. `aot_native` has already added the chunk's static `gas` by then,
-  ;; and whether that count INCLUDES the native it is about is the question to
-  ;; answer first.
+  ;; `aot_tick` is the only place a compiled loop can be preempted. It flushes
+  ;; the chunk's static `gas`, which INCLUDES the back-edge instruction because
+  ;; compiled code jumps for itself, and then hands that same instruction back
+  ;; so the interpreter can perform the hand-over -- where the interpreter's own
+  ;; tick charges it again. Three charges against the interpreter's two. It now
+  ;; gives one back on the trip path, after the comparison, so the slice still
+  ;; ends on the same instruction.
   ;;
-  ;; `doc/decisions/0013` is why this matters: compiled code charges per chunk
-  ;; from a static count and the interpreter charges per instruction, and the
-  ;; two agreeing is the only evidence that the chunking is right. 0009 makes
-  ;; gas a bound on WORK, so a program that costs more when compiled hits a
-  ;; limit the interpreter would not.
+  ;; It surfaced when `clojure.core` gained its `:flint/check` conditionals,
+  ;; which moved the code layout, which moved where the slice boundary lands.
+  ;; The equality was holding by where the slice happened to fall.
   (check "  ... on the same instruction count" (:steps a) (:steps i)))
+
+;; THE MINIMAL REPRODUCTION, kept as its own row.
+;;
+;; The park program above caught the slice-trip double charge, and only by
+;; accident: it is written at exactly the size that exposed a DIFFERENT bug,
+;; and whether its slice boundary lands on a back-edge is a property of the
+;; code layout that any unrelated change can move. It went green again on its
+;; own once before.
+;;
+;; This one cannot. All it needs is a slice, which is what having a thread at
+;; all creates -- no join, no yield, no port, nothing to park on. If compiled
+;; code ever charges a preemption differently from the interpreter again, this
+;; says so whatever the layout is doing.
+(src! "slice" (str "(ns slice (:require [flint.thread :as t]))\n"
+                   "(defn- work [] (count (mapv (fn [i] (* i i)) (range 200))))\n"
+                   "(defn main [_] (t/spawn (fn [] 1)) (pr-str (work)))"))
+(let [i (run! (build! "slice" false))
+      a (run! (build! "slice" true))]
+  (check "a program with a thread costs the same compiled" (:out a) (:out i))
+  (check "  ... including its preemptions, to the instruction" (:steps a) (:steps i)))
+
+;; A SECOND, SMALLER DIVERGENCE IS STILL OPEN, in the other direction. Written
+;; down rather than left for the next person to re-derive, because the two are
+;; easy to mistake for one and the measurements above cost a while.
+;;
+;; A threaded program whose work is INTERPRETED -- a lazy seq, so the preemption
+;; lands in the interpreter and never in compiled code -- charges slightly LESS
+;; compiled, and it grows with the number of preemptions:
+;;
+;;   (defn main [_] (t/spawn (fn [] 1))
+;;                  (pr-str (reduce + (map (fn [i] (* i i)) (range N)))))
+;;
+;;   |    N | interpreted | compiled | slices (SLICE = 4096) |
+;;   | ---: | ----------: | -------: | --------------------: |
+;;   |  100 |        6175 |     6175 |                     1 |
+;;   |  200 |       11976 |    11975 |                     2 |
+;;   |  400 |       23578 |    23575 |                     5 |
+;;   |  800 |       46781 |    46775 |                    11 |
+;;
+;; It is NOT the bug fixed above, and the check that says so is that these four
+;; numbers are byte-identical with `aot_tick`'s correction and without it -- so
+;; `aot_tick` never trips in them at all. The same program with `mapv` instead
+;; of `reduce`/`map`, which compiles, is exact.
+;;
+;; Where to look: the interpreter's own tick writes `f.ip` and yields, and on
+;; resume the AOT re-entry comparison runs BEFORE `B::tick`. A frame whose
+;; `aot_ip` equals that `ip` therefore re-enters compiled code without the
+;; interpreter charging for the dispatch, and whether the chunk's own charge
+;; covers exactly that instruction is the thing to check.
 
 (println (if (zero? @fails) "aot: ok" (str "aot: " @fails " FAILURES")))
 (System/exit (if (zero? @fails) 0 1))

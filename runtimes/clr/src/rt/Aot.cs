@@ -189,6 +189,16 @@ public static class Aot {
         rt.steps += gas;
         Rt.aotTicks++;
         if (rt.checkpoint != 0 && rt.steps >= rt.checkpoint) {
+                // ONE BACK, because the back-edge instruction is about to be
+                // charged a second time. `gas` is the chunk's static count and
+                // the back-edge is IN it -- compiled code jumps for itself.
+                // Handing the instruction back makes the interpreter's own tick
+                // charge it again on the way to the hand-over, and the resumed
+                // slice a third time when it dispatches it; the interpreter
+                // alone charges it twice. Subtracted AFTER the comparison, so
+                // the slice still ends on the same instruction. See the Rust,
+                // and `test/aot.clj` for how it was found.
+            rt.steps -= 1;
             if (rt.frames.Count > 0) {
                 var f = rt.frames[rt.frames.Count - 1];
                 f.Ip = ip;
