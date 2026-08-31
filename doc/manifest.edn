@@ -242,8 +242,8 @@
     pos-int?
     pos?
     pr-str
-    pr-str*
-    print-form
+    print-data
+    print-human
     print-str
     println-str
     prn-str
@@ -738,8 +738,8 @@
     opaque
     opaque-label
     opaque?
-    pr-str*
-    print-form
+    print-data
+    print-human
     println-str
     re-quote-replacement
     repeat-forever

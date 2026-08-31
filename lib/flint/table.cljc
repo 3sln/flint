@@ -90,9 +90,20 @@
 ;; PORT will be able to, and the codec that decodes one lives here too, so
 ;; requiring the decoder is what brings the printer with it.
 (extend-protocol clojure.core/Printable
-  :table (print-form [t readable?]
-                     (clojure.core/str "#flint/table "
-                                       (clojure.core/pr-str* (vec (rows t)) readable?))))
+  ;; As DATA: the form that reads back.
+  :table (print-data [t] (clojure.core/str "#flint/table " (pr-str (vec (rows t)))))
+  ;; FOR A PERSON: the rows without their quoting, and the row COUNT, because a
+  ;; hundred-thousand-row table printed in full is not something a person reads.
+  ;; This is the difference the two hooks exist for -- with one method and a
+  ;; flag, the honest human form would have had to be branched into the same
+  ;; function that has to produce a readable one.
+  :table (print-human [t]
+                      (let [n (count t)
+                            shown (if (> n 5) (vec (take 5 (rows t))) (vec (rows t)))]
+                        (clojure.core/str "#flint/table " (print-str shown)
+                                          (if (> n 5)
+                                            (clojure.core/str " (" n " rows)")
+                                            "")))))
 
 ;; ----------------------------------------------------------------- migration
 ;;

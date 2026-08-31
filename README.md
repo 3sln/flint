@@ -1196,7 +1196,7 @@ hierarchies (`derive`, `isa?`, `parents`, `prefer-method`);
 transducers (`transduce`, `eduction`, `cat`, `completing`, `halt-when`, and the 1-arity transducer forms of `map`/`filter`/`take`/...);
 and sorted collections (`sorted-map`, `sorted-set`, `subseq`, `rsubseq`).
 
-*Added by flint:* `->str-builder` `Printable` `Printable__impls` `apply2` `bigdec?` `bytes->str` `cond-chain` `count-matching` `extend-method` `find-protocol-method` `form` `int-of-char` `interleave-all` `interleave2` `keep2` `kind` `map2` `mapcat2` `methods-of` `nil-or` `opaque` `opaque-label` `opaque?` `pr-str*` `print-form` `println-str` `re-quote-replacement` `repeat-forever` `repeat2` `sb-append!` `sb-str` `spread` `str-bytes` `str-join` `subvec2` `tag` `volatile?`
+*Added by flint:* `->str-builder` `Printable` `Printable__impls` `apply2` `bigdec?` `bytes->str` `cond-chain` `count-matching` `extend-method` `find-protocol-method` `form` `int-of-char` `interleave-all` `interleave2` `keep2` `kind` `map2` `mapcat2` `methods-of` `nil-or` `opaque` `opaque-label` `opaque?` `print-data` `print-human` `println-str` `re-quote-replacement` `repeat-forever` `repeat2` `sb-append!` `sb-str` `spread` `str-bytes` `str-join` `subvec2` `tag` `volatile?`
 
 *Absent:* 306 names -- see `doc/manifest.edn` for all of them.
 

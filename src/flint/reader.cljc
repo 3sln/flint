@@ -471,6 +471,30 @@
       (not (map? m)) (err st "#: wants a map")
       :else (qualify-keys ns m))))
 
+(def builtin-tags
+  "Reader tags every project can read without asking.
+
+  Empty for now, and named rather than left implicit because the list is the
+  thing `doc/decisions/0035` is about: a tag is a NAME BOUND IN A SCOPE, the
+  built-ins are the ones bound in every scope, and they are the ones a value may
+  PRINT as -- a project-local rename is an addition, never a replacement, so
+  that a printed form reads back everywhere rather than only where it was made. `#flint/table` joins it when a
+  table can be a constant (`0026` step 9); `#\"...\"`, `#{}`, `#()`, `#_` and
+  `#?` are reader SYNTAX rather than tags and are handled above."
+  {})
+
+(defn- tag-error [tag readers]
+  (let [known (sort (map str (keys readers)))]
+    (str "no reader for the tag #" tag
+         (if (seq known)
+           (str "; the tags that can be read here are "
+                (str/join ", " (map (fn [k] (str "#" k)) known)))
+           "; there are no reader tags yet")
+         ". To make a tagged literal as a VALUE, call (tagged-literal '" tag
+         " form); to read one from data, use clojure.edn/read-string with"
+         " :readers or :default. Registering a tag so it can be written in"
+         " SOURCE is doc/decisions/0035 and is not built.")))
+
 (defn- read-dispatch [st]
   (next-ch! st)                                              ; #
   (let [c (peek-ch st)]
@@ -493,12 +517,23 @@
       (let [tag (read-form* st)
             _ (skip-ws! st)
             v (read-form* st)]
-        (if (symbol? tag)
-          ;; A VALUE, not a two-key map (`doc/decisions/0034`). The map was
-          ;; ambiguous with an ordinary map in every format that has tags, and
-          ;; lost the namespace wherever the key had to become a string.
-          (flint.rt/tagged-literal tag v)
-          (err st "reader tag must be a symbol"))))))
+        (when-not (symbol? tag)
+          (err st "reader tag must be a symbol"))
+        ;; AN UNKNOWN TAG IS AN ERROR, as it is in Clojure. It used to build a
+        ;; tagged literal out of anything, which meant a typo in a tag name --
+        ;; `#inst` for `#instant`, a namespace misremembered -- read as a
+        ;; perfectly good value and failed somewhere else entirely, or not at
+        ;; all. `#a/b [1]` is not a value the reader may invent; it is a
+        ;; request for a reader that has to have been registered.
+        ;;
+        ;; Reading DATA is the other case and is `clojure.edn/read-string`,
+        ;; which takes `:readers` and `:default` and has always refused an
+        ;; unknown tag. That is where a tagged literal comes from at runtime.
+        (let [readers (:tags @st)
+              f (get readers tag)]
+          (if f
+            (f v)
+            (err st (tag-error tag readers))))))))
 
 (defn- read-symbolic [st]
   (let [tok (read-token st)]
@@ -653,8 +688,13 @@
   ([src] (reader src {}))
   ([src opts]
    (let [st (make-state src (:file opts "<string>"))]
-     (vswap! st merge (select-keys opts [:ns :aliases :features :resolve]))
+     (vswap! st merge (select-keys opts [:ns :aliases :features :resolve :tags]))
      (vswap! st assoc :features (or (:features opts) default-features))
+     ;; PER PROJECT, merged over the built-ins. A dependency is read with its
+     ;; own `:tags` and not with this project's, which is the whole point:
+     ;; using a library's tag has to be something a project opts into
+     ;; (`doc/decisions/0035`).
+     (vswap! st assoc :tags (merge builtin-tags (:tags opts)))
      st)))
 
 (defn elided

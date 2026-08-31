@@ -281,6 +281,8 @@
            "  (pr-str\n"
            "   {:print (pr-str T)\n"
            "    :str (str T)\n"
+           "    :human (print-str T)\n"
+           "    :human-big (print-str (ft/table S (mapv (fn [i] {:id i :name \"n\"}) (range 9))))\n"
            "    :rows (mapv (fn [r] (:name r)) (ft/rows T))\n"
            "    :row-is-a-map (map? (first (ft/rows T)))\n"
            "    :row-equals-map (= {:id 1 :name \"a\"} (get T 0))\n"
@@ -307,6 +309,14 @@
        (:print ops) "#flint/table [{:id 1, :name \"a\"} {:id 2, :name \"b\"}]")
 (check "  ... and `str` reaches the same printer"
        (:str ops) (:print ops))
+;; The two hooks are for two jobs. `pr-str` has to read back and so quotes its
+;; strings; `print-str` is for a person and does not, and may elide -- which is
+;; a thing a printer CANNOT do while it is also the one that must read back.
+(check "printing for a person is a different form, not the same one unquoted"
+       (:human ops) "#flint/table [{:id 1, :name a} {:id 2, :name b}]")
+(check "  ... and it may elide, which the readable form must never do"
+       (:human-big ops)
+       "#flint/table [{:id 0, :name n} {:id 1, :name n} {:id 2, :name n} {:id 3, :name n} {:id 4, :name n}] (9 rows)")
 (check "iterating a table yields rows, materialising none of them"
        (:rows ops) ["a" "b"])
 (check "  ... and a row reads as the map it is" (:row-is-a-map ops) true)

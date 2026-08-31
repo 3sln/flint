@@ -1252,8 +1252,17 @@
 ;;
 ;; `pr-str` and `str` fall through to this for anything `clojure.core` does not
 ;; define itself, so a library type specialises its own printing without the
-;; printer learning what it is. `readable?` true asks for a form that reads
-;; back, false for the human one -- the `pr-str` / `print-str` split.
+;; printer learning what it is.
+;;
+;; TWO METHODS. `print-data` is the form that READS BACK -- what `pr-str` wants.
+;; `print-human` is the form for a person, with no quoting and nothing there for
+;; a reader -- what `print-str` wants. They are separate rather than one method
+;; taking a `readable?` flag, because they are separate jobs and a flag argument
+;; is two functions sharing a name. An implementation may give only
+;; `print-data`; `print-human` falls back to it, never the other way round.
+;;
+;; A method recurses into its children through `pr-str` or `print-str`, which
+;; are the same two things it is choosing between, so no flag has to travel.
 ;;
 ;; Written LONGHAND rather than with `defprotocol`, for the reason recorded on
 ;; `def-form-names`: top-level `def` names are collected before macros are
@@ -1269,24 +1278,28 @@
 (def Printable
   (hash-map :flint/protocol 'clojure.core/Printable
             :impls Printable__impls
-            :method-keys [:clojure.core/print-form]))
+            :method-keys [:clojure.core/print-data :clojure.core/print-human]))
 
-(defn print-form
-  "The printed form of `x`, as its own kind defines it. Prefer `pr-str`, which
-  handles the built-in kinds first and falls through to here."
-  [x readable?]
-  (let [f (find-protocol-method Printable__impls :clojure.core/print-form x)]
-    (if f
-      (f x readable?)
-      (protocol-miss 'clojure.core/Printable 'clojure.core/print-form x))))
+(defn print-data
+  "`x` as DATA: a form meant to be read back. This is what `pr-str` reaches."
+  [x]
+  (let [f (find-protocol-method Printable__impls :clojure.core/print-data x)]
+    (if f (f x) (protocol-miss 'clojure.core/Printable 'clojure.core/print-data x))))
 
-(defn pr-str*
-  "The printer's recursion point: the printed form of `x`, readable or not.
+(defn print-human
+  "`x` FOR A PERSON: no quoting, no escaping, nothing there to satisfy a reader.
+  This is what `print-str` reaches.
 
-  Public because a `Printable` implementation has to print its children, and
-  `readable?` has to travel with them -- `pr-str` would force it back to true
-  and `print-str` back to false."
-  [x readable?]
+  A kind that gives only `print-data` gets it used here too, because a readable
+  form is a serviceable human one. The reverse is NOT true and is not done: a
+  human form promoted into `pr-str` would produce something that does not read
+  back, which is the one thing `pr-str` promises."
+  [x]
+  (let [f (or (find-protocol-method Printable__impls :clojure.core/print-human x)
+              (find-protocol-method Printable__impls :clojure.core/print-data x))]
+    (if f (f x) (protocol-miss 'clojure.core/Printable 'clojure.core/print-human x))))
+
+(defn- pr-str* [x readable?]
   (cond
     (nil? x) "nil"
     (true? x) "true"
@@ -1319,13 +1332,23 @@
     ;; never requires that namespace never carries the branch or the builtin
     ;; behind it.
     ;;
-    ;; `find-protocol-method` rather than the generated `print-form`, because a
+    ;; TWO HOOKS, not one with a flag. Printing as DATA and printing for a
+    ;; PERSON are different jobs -- one has to read back, the other has to be
+    ;; legible -- and an implementation that branches on a boolean is two
+    ;; functions wearing one name. The split also means an implementation can
+    ;; supply only the data half, which is the common case, and `print-human`
+    ;; falls back to it.
+    ;;
+    ;; `find-protocol-method` rather than the generated `print-data`, because a
     ;; miss here is a FALLBACK and not an error: an unprintable value should
     ;; print as one rather than throw out of `str`. Metadata is consulted first,
     ;; which is `0005`'s primary mechanism -- so one value can carry its own
     ;; printer without its kind having one.
-    :else (let [f (find-protocol-method Printable__impls :clojure.core/print-form x)]
-            (if f (f x readable?) "#<unprintable>"))))
+    :else (let [f (if readable?
+                    (find-protocol-method Printable__impls :clojure.core/print-data x)
+                    (or (find-protocol-method Printable__impls :clojure.core/print-human x)
+                        (find-protocol-method Printable__impls :clojure.core/print-data x)))]
+            (if f (f x) "#<unprintable>"))))
 
 (defn pr-str [x] (pr-str* x true))
 

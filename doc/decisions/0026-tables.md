@@ -1,11 +1,19 @@
 # 0026 — Tables: columnar storage that is a value
 
-> **QUEUED — not built.** Nothing in this file exists. Recorded now because
-> `0025`'s wire codec has to carry a table, and a tag is cheaper to add before
-> that format ships than after.
+> **PARTLY BUILT — steps 1-6.** The value type, the row ref, `assoc`, `conj`,
+> `update-row`, iteration, the constant column encoding and `migrate`, on the
+> wasm and native runtimes. MEASURED throughout: 12x smaller resident than a
+> vector of maps and 2.6x cheaper to scan; a constant column costs nothing per
+> row (160 368 bytes back on 20 000); dropping a column from a 50 000-row table
+> costs 218 gas against 6 750 156 to rewrite it.
 >
-> REVISED once since: a table is CLOSED, its schema fixed at construction, and
-> that one decision deleted most of what this file used to call hard.
+> NOT built: the transient (step 7), the column API (step 8), the codec and
+> reader tags (step 9), and the JVM and CLR ports, which are deliberately last
+> so the type is ported once rather than after every step.
+>
+> REVISED once since first written: a table is CLOSED, its schema fixed at
+> construction, and that one decision deleted most of what this file used to
+> call hard.
 >
 > `0033` is the second half of that argument: a table needs a JSON encoding
 > too, and a COLUMNAR one, because a vector of maps repeats every key name on

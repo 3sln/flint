@@ -1,8 +1,15 @@
 # 0034 — A tagged literal is a value, not a map
 
-> **QUEUED — not built.** Today the reader turns `#my.ns/thing v` into
-> `{:flint/tagged my.ns/thing :flint/value v}`, an ordinary map. That is fine
-> until something has to serialise it, which `0033` now does.
+> **BUILT — 2026-08-26.** `TY_TAGGED` on all four runtimes: two slots, `:tag`
+> and `:form` reading like a map, structural `=` and `hash`, and an `assoc` that
+> keeps the type or refuses naming the key. The two-key map it replaced was
+> ambiguous with an ordinary map in every format that has tags and lost the
+> namespace wherever a key had to become a string.
+>
+> ONE THING CHANGED SINCE: the READER no longer makes one. An unknown tag in
+> source is an error, as in Clojure — see `0035`. A tagged literal comes from
+> `(tagged-literal 'a/b form)` or from `clojure.edn/read-string`, and still
+> prints as `#a/b form`.
 
 ## Why a map is not good enough
 

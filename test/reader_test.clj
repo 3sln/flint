@@ -45,13 +45,11 @@
 (check "tag metadata" (:tag (meta (reads "^long x"))) 'long)
 (check "regex literal" (reads "#\"a.c\"") {:flint/regex "a.c"})
 (check "regex keeps escapes" (reads "#\"\\d+\"") {:flint/regex "\\d+"})
-;; A VALUE, not a two-key map (`doc/decisions/0034`). The map was ambiguous
-;; with an ordinary map in every format that has tags, and lost the namespace
-;; wherever the key had to become a string.
-(check "tagged literal" (reads "#inst \"2020\"") (tagged-literal 'inst "2020"))
-(check "  ... which is not the map it used to be"
-       (= (reads "#inst \"2020\"") {:tag 'inst :form "2020"}) false)
-(check "  ... and keeps its namespace" (namespace (:tag (reads "#my.ns/t 1"))) "my.ns")
+;; A tagged literal is a VALUE, not a two-key map (`doc/decisions/0034`) -- but
+;; the SOURCE READER does not make one, because an unknown tag is an error here
+;; as it is in Clojure. That is asserted at the bottom of this file. What a
+;; tagged literal is, and that it keeps its namespace, is `lang.tagged`, which
+;; constructs them rather than reading them.
 (check "anon fn" (reads "#(+ % 1)") '(fn* [p1__flint#] (+ p1__flint# 1)))
 (check "anon fn %2" (reads "#(+ %1 %2)") '(fn* [p1__flint# p2__flint#] (+ p1__flint# p2__flint#)))
 (check "line metadata" (:line (meta (r/read-one "\n\n(foo)"))) 3)
@@ -171,6 +169,42 @@
              tail (drop-while (complement vector?) form)]
          (and (seq tail) (= 1 (count tail))))
        true)
+
+
+;; --------------------------------------------------------- unknown tags
+;;
+;; An unknown reader tag is an ERROR, as it is in canonical Clojure. The reader
+;; used to build a tagged literal out of any `#foo/bar` it met, which meant a
+;; typo in a tag -- `#inst` for `#instant`, a namespace misremembered -- read as
+;; a perfectly good value and failed somewhere else entirely, or silently did
+;; the wrong thing. A tag is a request for a reader, not permission to invent a
+;; value.
+(defn- read-err [src]
+  (try (r/read-all src {:features #{:flint}}) nil
+       (catch Exception e (ex-message e))))
+
+(check "an unknown tag in source is refused" (some? (read-err "#a/b [1]")) true)
+(check "  ... and the message names the tag"
+       (some? (re-find #"no reader for the tag #a/b" (read-err "#a/b [1]"))) true)
+;; A refusal that only says no is half a message: this one says how to get a
+;; tagged literal as a VALUE, and how to read one from DATA, which are the two
+;; things somebody who wrote this actually wanted (`doc/decisions/0032`).
+(check "  ... and says how to make one as a value"
+       (some? (re-find #"tagged-literal 'a/b" (read-err "#a/b [1]"))) true)
+(check "  ... and how to read one from data"
+       (some? (re-find #"clojure.edn/read-string" (read-err "#a/b [1]"))) true)
+;; QUOTED is not an exemption. `'#a/b [1]` is still a read, and Clojure refuses
+;; it too -- quoting defers evaluation, not reading.
+(check "quoting does not exempt it" (some? (read-err "'#a/b [1]")) true)
+(check "  ... nor does syntax-quote" (some? (read-err "`#a/b [1]")) true)
+(check "  ... nor being nested in a collection" (some? (read-err "[1 #a/b [1]]")) true)
+;; And the syntax that only LOOKS like a tag is untouched.
+(check "a set is not a tag" (read-err "#{1 2}") nil)
+(check "an anonymous fn is not a tag" (read-err "#(inc %)") nil)
+(check "a regex is not a tag" (read-err "#\"a+\"") nil)
+(check "a discard is not a tag" (read-err "[1 #_2 3]") nil)
+(check "a namespaced map is not a tag" (read-err "#:a{:b 1}") nil)
+(check "a reader conditional is not a tag" (read-err "#?(:flint 1)") nil)
 
 (if (zero? @fails)
   (println "reader: ok")

@@ -63,7 +63,7 @@
   ;; `:tagged`, not `:map` (`doc/decisions/0034`). A tagged literal READS like
   ;; a two-key map, and if it answered `:map` here every `extend-protocol :map`
   ;; in every program would silently start catching them.
-  (expect = :tagged (flint.rt/kind #a/b [1]))
+  (expect = :tagged (flint.rt/kind (tagged-literal 'a/b [1])))
   ;; These four answered `:other` until the printer moved onto a protocol and
   ;; the hole showed. `:other` is not a kind, it is the ABSENCE of one, and a
   ;; value that answers it cannot be dispatched on: an `extend-protocol :other`
