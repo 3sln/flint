@@ -66,12 +66,19 @@ rm -rf runtimes/jvm/classes
 if ! "$JDK/bin/javac" -d runtimes/jvm/classes \
      runtimes/jvm/src/com/flint/rt/*.java runtimes/jvm/test/*.java > /tmp/flint-javac.out 2>&1; then
   head -20 /tmp/flint-javac.out
+  # A JDK TOO OLD is a missing toolchain and skippable. Anything else is the
+  # PORT NOT COMPILING, which is a failure -- and treating it as a skip is how
+  # this ran for a whole session reporting nothing while `Conc.java` had a call
+  # to a method that does not exist. `missing` exits 0 by design, so the
+  # distinction has to be made here.
   if grep -q "java.lang.classfile" /tmp/flint-javac.out; then
     echo "  (this JDK is older than 24, which is what java.lang.classfile needs;"
     echo "   set FLINT_JDK to a 24+ install to run the JVM rows)"
+    missing "javac needs a newer JDK than $JDK"
+    exit 0
   fi
-  missing "javac failed at $JDK"
-  exit 0
+  echo "  FAIL the jvm port does not compile at $JDK"
+  exit 1
 fi
 
 

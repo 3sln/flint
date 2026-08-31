@@ -17,15 +17,21 @@
   (:require [flint.types :as ty]))
 
 (def flint-keys
-  "The function metadata flint reads. Namespaced because it is flint's own."
-  #{:flint/result-projected-meta :flint/result-inverts})
+  "The function metadata flint reads. Namespaced because it is flint's own.
+
+  `:flint/value-meta` is metadata for the VALUE rather than the var: `m-defn`
+  attaches it by wrapping the function, which is how a predicate carries its
+  own explanation (`doc/decisions/0032`). A `defn`'s ordinary metadata lands on
+  the var, and the callee never sees it."
+  #{:flint/result-projected-meta :flint/result-inverts :flint/value-meta})
 
 (def ^:private bare
   "The un-namespaced spelling of each, which flint does NOT read. Someone else
   may legitimately own these names, so this is a suspicion, not a verdict --
   which is exactly why it is reported here and not thrown by the compiler."
   {:result-projected-meta :flint/result-projected-meta
-   :result-inverts        :flint/result-inverts})
+   :result-inverts        :flint/result-inverts
+   :value-meta            :flint/value-meta})
 
 (defn- meta-of [x]
   (when (or (symbol? x) (seq? x) (vector? x) (map? x) (set? x)) (meta x)))

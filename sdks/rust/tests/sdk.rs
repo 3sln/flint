@@ -15,7 +15,6 @@ const APP: &str = r#"
 (defn echo [x] x)
 (defn spin [] (loop [i 0] (if (< i 10000000) (recur (inc i)) i)))
 (defn churn [t] (+ t (reduce + 0 (map (fn [i] i) (range 2000)))))
-(defn caps [] (vec (sort (map name (keys (flint.rt/capabilities))))))
 (defn boom [] (throw (ex-info "deliberate" {:a 1})))
 (defn main [args] (str "main saw " (pr-str args)))
 "#;
@@ -26,7 +25,7 @@ fn image() -> flint::Image {
         .compile(Compile {
             resolve: &|ns: &str| if ns == "app" { Some(APP.to_string()) } else { None },
             fn_name: "app/main",
-            exports: &["app/greet", "app/tally", "app/echo", "app/boom", "app/spin", "app/caps", "app/churn"],
+            exports: &["app/greet", "app/tally", "app/echo", "app/boom", "app/spin", "app/churn"],
             meta: vec![("capabilities".into(), Value::Vector(vec![Value::str("fs")]))],
             ..Default::default()
         })
@@ -151,39 +150,18 @@ fn metadata_is_carried_and_not_interpreted() {
 
 /// A capability lent to one sandbox is lent to THAT sandbox.
 ///
-/// This was a real hole and not a hypothetical one. The grant table was a
-/// `static mut` in the runtime, which on wasm is per-module-instance and so was
-/// per-sandbox by accident. Natively one process hosts many sandboxes
-/// (`doc/decisions/0010`) and they all read the same table, so granting `fs` to
-/// one granted it to every sandbox in the process -- including ones made before
-/// the grant, and ones the host never lent anything at all.
+/// REMOVED 2026-08-30: `a_grant_reaches_one_sandbox_and_not_its_neighbours`.
 ///
-/// `0022`'s whole claim is that a program holds a capability because the host
-/// gave it one. A test for that has to include a sandbox that was given
-/// nothing, because the bug is invisible from the sandbox that WAS given
-/// something.
-#[test]
-fn a_grant_reaches_one_sandbox_and_not_its_neighbours() {
-    let img = image();
-
-    let lent = img.sandbox().unwrap();
-    lent.grant("fs");
-    let ungranted = img.sandbox().unwrap();
-
-    let seen = |s: &flint::Sandbox| -> String {
-        match s.call_blocking("app/caps", &[]) {
-            Ok(v) => v.to_string(),
-            Err(e) => panic!("app/caps failed: {e}"),
-        }
-    };
-
-    assert!(seen(&lent).contains("fs"), "the sandbox that was lent fs should see it");
-    assert_eq!(seen(&ungranted), "[]", "a sandbox lent nothing must see nothing");
-
-    // And in the other order, because a global table would also leak backwards.
-    let later = img.sandbox().unwrap();
-    assert_eq!(seen(&later), "[]", "a sandbox made after the grant must see nothing");
-}
+/// It tested that a capability lent to one sandbox did not leak to another,
+/// through `Sandbox::grant` and the `flint.rt/capabilities` builtin. Both are
+/// gone: the cutover took the concept out of the sandbox entirely, so there is
+/// no table to leak from and no ambient path for a guest to ask what it holds.
+/// The property is structural now rather than enforced.
+///
+/// What replaced the coverage is in `test/capability.clj`, where a HOST
+/// implements the pattern: it issues ids, checks them on an open, and refuses
+/// a guest-minted opaque -- which carries id 0 and cannot carry anything else.
+/// `codec.opaque` refusing to issue 0 is the other half.
 
 // --- drivers (`doc/decisions/0028`) -----------------------------------------
 

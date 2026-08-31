@@ -131,14 +131,37 @@
   [0x00 0x00 0x0b])
 
 (defn scan-calls
-  "The functions body `b` calls, scanned on demand. Conservative, as above."
+  "The functions body `b` calls, scanned on demand.
+
+  A BYTE SCAN, not an instruction decoder: every `0x10` is treated as a call
+  and the ULEB after it as a function index. That over-approximates, which is
+  the safe direction -- an immediate that happens to contain `0x10` keeps a
+  function alive that nothing calls.
+
+  It used to CONTINUE PAST the operand, and that is the unsafe direction and
+  was a real bug. A `0x10` byte inside an immediate is not a call, so the bytes
+  after it are not an operand -- skipping them steps over whatever is really
+  there, and a genuine call in those bytes is never seen. The function it names
+  is then stubbed with `unreachable`, and the failure is a wasm trap in a
+  program that does nothing wrong, at a call site the shaker decided could not
+  happen.
+
+  It took a lock-free ring in `Rt::new_port` to expose it: the new code shifted
+  the runtime's bytes, one immediate landed on `0x10`, and the skip jumped a
+  call reached only when a program OPENS A BRIDGE. Channels were unaffected and
+  every path that does not shake was correct, which is what made it look like a
+  port bug for an hour.
+
+  So the scan advances by ONE BYTE always. The index is still read, because
+  reading it is how the edge is found; what is no longer done is trusting it
+  enough to skip."
   [payload nfuncs {:keys [start end]}]
   (loop [i start out #{}]
     (if (>= i end)
       out
       (if (= CALL (ub payload i))
-        (let [[t j] (uleb-at payload (inc i))]
-          (recur j (if (< t nfuncs) (conj out t) out)))
+        (let [[t _] (uleb-at payload (inc i))]
+          (recur (inc i) (if (< t nfuncs) (conj out t) out)))
         (recur (inc i) out)))))
 
 (defn stub-dead

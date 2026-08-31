@@ -74,7 +74,7 @@ public static class Conc {
     /// How many messages a bridge end's ring holds. Its `PT_CAP` bounds BYTES,
     /// which is the bound that matters for memory; this bounds the count so the
     /// ring can be one fixed allocation.
-    public const long RingMessages = 1024;
+    public const long RingMessages = 64;
 
     /// A port's STATE. `P_PENDING` is an `open` the host has not answered yet
     /// and `P_REFUSED` is one it declined -- distinct from `P_CLOSED`, because

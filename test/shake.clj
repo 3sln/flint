@@ -38,6 +38,39 @@
   (check "and stops at what nothing reaches" (set (shake/dead (keys g) [:a] g)) #{:d :e})
   (check "a cycle terminates" (set (shake/reachable [:e] g)) #{:e}))
 
+;; THE SCAN ITSELF, on bytes chosen to break it.
+;;
+;; `scan-calls` is a byte scan rather than an instruction decoder: every `0x10`
+;; is taken for a call. Over-approximating is safe -- an immediate that happens
+;; to contain `0x10` keeps a function nothing calls. Skipping the operand is
+;; NOT: a `0x10` inside an immediate has no operand after it, so continuing
+;; past one steps over whatever is really there, and a real call in those bytes
+;; is never seen. The function it names is then stubbed with `unreachable`, and
+;; the failure is a trap in a correct program at a call site the shaker decided
+;; could not happen.
+;;
+;; The body below is exactly that shape: an `i64.const` whose LEB bytes contain
+;; `0x10`, immediately followed by a genuine `call 7`. A scanner that skips
+;; lands past the call and reports nothing.
+;;
+;; Found the hard way. A lock-free ring in `Rt::new_port` shifted the runtime's
+;; bytes, one immediate landed on `0x10`, and the skip jumped a call reached
+;; only when a program OPENS A BRIDGE -- so channels worked, every unshaken
+;; path worked, and it looked like a port bug for an hour.
+(let [;; i64.const with a multi-byte LEB containing 0x10, then `call 7`.
+      body (byte-array (map unchecked-byte [0x42 0x90 0x10 0x10 0x07 0x0b]))
+      found (ws/scan-calls body 64 {:start 0 :end (count body)})]
+  (check-that "a call after a 0x10 inside an immediate is still found"
+              (contains? found 7)))
+
+;; And the over-approximation is deliberate, so it is stated rather than
+;; discovered: the byte INSIDE the immediate is read as a call too. Keeping a
+;; function nothing calls costs bytes; missing one costs a trap.
+(let [body (byte-array (map unchecked-byte [0x42 0x90 0x10 0x10 0x07 0x0b]))
+      found (ws/scan-calls body 64 {:start 0 :end (count body)})]
+  (check-that "  ... and the false positive it implies is accepted"
+              (contains? found 0x10)))
+
 (def slots (into {} (map (fn [[k v]] [(str k) v])
                          (edn/read-string (str/replace (slurp "dist/slots.json")
                                                        #"\"([^\"]+)\":" "\"$1\" ")))))
@@ -104,10 +137,30 @@
     (println (format "    prebuilt %d, shaken %d, linked %d -- recovered %.0f%% of what lld removes"
                      base shook linked (* 100 recovered)))
     ;; Conservative by construction: the scan can invent an edge, never miss
-    ;; one, so this recovers MOST of the linker's result and not all of it.
+    ;; one, so this recovers MUCH of the linker's result and not all of it.
     ;; Both bounds are asserted, because a shake that suddenly recovered 100%
     ;; would mean the scan stopped being conservative.
-    (check-that "it recovers most of what the linker removes" (> recovered 0.55))
+    ;;
+    ;; RE-BASELINED 2026-08-30, from 0.55, and the reason is a trade rather
+    ;; than drift. The comment above has always said the scan "can invent an
+    ;; edge, never miss one" -- and the implementation did not match it. It
+    ;; continued past the operand of every byte that looked like a call, so a
+    ;; `0x10` inside an immediate made it step over the bytes after it, and a
+    ;; real call in those bytes was missed. That is the unsafe direction: the
+    ;; function is stubbed with `unreachable` and a correct program traps.
+    ;;
+    ;; It found one. A lock-free ring in `Rt::new_port` shifted the runtime's
+    ;; bytes and the skip jumped a call reached only when a program opens a
+    ;; bridge.
+    ;;
+    ;; Advancing one byte at a time makes the stated invariant true, and costs
+    ;; about 34 KB on this program -- 55% recovered against 46%. Soundness for
+    ;; 7% of a module is the right way round when the alternative is a silent
+    ;; trap. A real instruction decoder would recover both, and would be exact
+    ;; rather than conservative; it is not written because a decoder with one
+    ;; wrong immediate width desynchronises and starts MISSING calls again,
+    ;; which is the failure this just cost an hour to find.
+    (check-that "it recovers much of what the linker removes" (> recovered 0.45))
     (check-that "and does not claim to beat the linker" (< recovered 1.0))))
 
 (if (pos? @fails)

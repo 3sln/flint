@@ -826,7 +826,7 @@ fn an_imported_snapshot_keeps_its_identities() {
 
     // COVERAGE: a sweep that found nothing would pass the assertions below for
     // the wrong reason.
-    assert!(rt.restored_capabilities >= 2, "the sweep did not see the opaque values");
+    assert!(rt.restored_host_opaques >= 2, "the sweep did not see the opaque values");
     assert_eq!(
         rt.opaque_host_id(rt.r(ci)),
         7,

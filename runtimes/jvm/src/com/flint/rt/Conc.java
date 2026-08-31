@@ -76,7 +76,7 @@ public final class Conc {
     /// How many messages a bridge end's ring holds. Its `PT_CAP` bounds BYTES,
     /// which is the bound that matters for memory; this bounds the count so the
     /// ring can be one fixed allocation.
-    public static final long RING_MESSAGES = 1024;
+    public static final long RING_MESSAGES = 64;
 
     /// A port's STATE. `P_PENDING` is an `open` the host has not answered yet
     /// and `P_REFUSED` is one it declined -- distinct from `P_CLOSED`, because
@@ -558,11 +558,11 @@ public final class Conc {
         // allocation is where the old inbox lost messages.
         long ring = kind == K_CHANNEL ? Math.max(cap, 1) : RING_MESSAGES;
         rt.setSlot(p, PT_RING, Val.fixnum(ring));
-        int sli = rt.push(rt.newObj(Obj.TY_NODE, (int) ring));
+        int sli = rt.push(newObj(rt, TY_NODE, (int) ring));
         for (int i = 0; i < ring; i++) rt.setSlot(Val.asHeap(rt.r(sli)), i, Val.NIL);
         rt.setSlot(Val.asHeap(rt.r(pi)), PT_INBOX, rt.r(sli));
         // `seq[i] = i`: slot i is free and belongs to reservation number i.
-        int sqi = rt.push(rt.newObj(Obj.TY_NODE, (int) ring));
+        int sqi = rt.push(newObj(rt, TY_NODE, (int) ring));
         for (int i = 0; i < ring; i++) rt.setSlot(Val.asHeap(rt.r(sqi)), i, Val.fixnum(i));
         rt.setSlot(Val.asHeap(rt.r(pi)), PT_SEQ, rt.r(sqi));
         p = Val.asHeap(rt.r(pi));

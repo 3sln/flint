@@ -157,10 +157,20 @@ pub const PT_LEN: u32 = 17;
 /// How many messages a bridge end's ring holds.
 ///
 /// Its `PT_CAP` bounds BYTES, which is the bound that matters for memory, and
-/// this bounds the count so the ring can be a fixed allocation. A host that
+/// this bounds the COUNT so the ring can be one fixed allocation. A host that
 /// fills it is told to offer the message again, exactly as it is told when the
-/// byte bound is reached.
-pub const RING_MESSAGES: i64 = 1024;
+/// byte bound is reached -- back-pressure either way, not an error.
+///
+/// 64 rather than 1024, and the difference is not free: the ring is allocated
+/// EAGERLY, two arrays per end and two ends per bridge, so each doubling costs
+/// 32 bytes per message of capacity per bridge whether or not a message is ever
+/// sent. At 1024 that is 32 KB per `open`, which `test/document.mjs` measured
+/// as a real regression -- its module peak went from 56 800 to 86 632 bytes on
+/// the same workload, and the memory-scaling bound it exists to defend failed.
+///
+/// The byte bound is what actually caps memory here, and 64 pending messages
+/// is a deep queue for a boundary that back-pressures correctly when it fills.
+pub const RING_MESSAGES: i64 = 64;
 
 /// What a carrying port can convey, for `check_sendable_at`.
 ///
