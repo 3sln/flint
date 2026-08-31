@@ -3,6 +3,10 @@
 > **QUEUED — not built.** Nothing in this file exists. Recorded now because
 > `0025`'s wire codec has to carry a table, and a tag is cheaper to add before
 > that format ships than after.
+>
+> `0033` is the second half of that argument: a table needs a JSON encoding
+> too, and a COLUMNAR one, because a vector of maps repeats every key name on
+> every row and throws away the compactness a table exists for.
 
 ## What a table is
 

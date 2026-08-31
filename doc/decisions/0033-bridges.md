@@ -142,8 +142,6 @@ buffer, in the format the far side wants. Nothing re-encodes at the boundary,
 which was the whole objection to shuffling a value sandbox -> host ->
 destination.
 
-`:flint` (default), `:json`, `:edn`, `:cbor`.
-
 The port machinery never invokes a codec and never learns what the bytes mean.
 The codec is configuration the WRITER consults, which keeps the port agnostic
 and makes the encoder ordinary guest code -- so a program that only uses
@@ -186,32 +184,74 @@ Which gives every property at once:
 * `check_sendable` therefore does NOT grow a format dimension for identities. It
   keeps only the rows about what a format can represent structurally.
 
-**What the format still decides** is structural coverage, and the two halves of
-that get opposite answers for a reason rather than by taste.
+**What the format still decides** is structural coverage, and rather than one
+JSON with a judgement call per type there are TWO, so the caller chooses:
 
-**Identities round-trip, in every format.** Losing one is not degradation, it is
-breakage: a port that comes back as a number is not a weaker port, it is not a
-port. So `:json` tags them --
-`{"$flintTag": "port", "$flintVal": <index>}` -- exactly as EDN and CBOR do with
-their own tagging, and the index is into the frame's identity table as above.
+`:flint` (default), `:json-strict`, `:json`, `:edn`, `:cbor`.
 
-**Keywords do not round-trip in JSON, and that is accepted.** `:a` is written
-`"a"` and comes back a string. The fix would be to prefix keyword strings with
-a colon, and then every string beginning with one needs escaping -- a constant
-tax on the common case to preserve a distinction that JSON does not have. A
-keyword arriving as a string is still usable data; a port arriving as a number
-is not a port. That asymmetry is the whole argument.
+### `:json-strict` -- for something that is not flint
 
-The escape rule follows the same reasoning. `$flintTag` needs one -- an ordinary
-map carrying that key is otherwise ambiguous -- but a collision needs a map with
-that exact key, which is near-never, so the branch is almost never taken. The
-colon prefix would be paid on every string. Same mechanism, costs an order of
-magnitude apart.
+Best effort into plain JSON, and a throw for what will not fit. Nothing a
+foreign consumer has to know about flint appears in the output.
 
-And with the identity table, a collision FAILS CLOSED: `{"$flintTag": "port",
-"$flintVal": 7}` resolves index 7 in this message's table, and if there is no
-such entry that is an error rather than a handle. So the escape is about not
-misreading a user's map, not about safety -- the frame split already has that.
+| flint | JSON | back as |
+| --- | --- | --- |
+| vector, set | array | vector |
+| map, string keys | object | map |
+| keyword, symbol, string | string | string |
+| fixnum, double | number | number |
+| bytes | base64 string | string |
+| nil, boolean | null, boolean | same |
+| table | array of objects | vector of maps |
+| bigint | -- | REFUSED |
+| map, non-string keys | -- | REFUSED |
+| port, opaque | -- | REFUSED |
+
+The three refusals are not arbitrary. **Type loss is acceptable; value loss is
+not**, and that one rule decides the whole table:
+
+* A keyword returning as a string is weaker typing over the same data.
+* A BIGINT through a double comes back silently rounded, which is wrong
+  arithmetic rather than weaker typing.
+* Non-string keys cannot be expressed at all -- `{1 :a, "1" :b}` stringifies
+  into one entry, so the map is not merely weaker, it is smaller.
+* An IDENTITY has nowhere to go without a tag, and a port returning as a number
+  is not a weak port, it is not a port.
+
+So a strict port CANNOT DELEGATE. That is the right answer rather than a
+limitation: an HTTP service on the other end has no use for a flint port.
+
+**Integers are safe, and it is worth writing down why.** A fixnum is 47 bits
+plus sign, +/-140 737 488 355 327. A JSON number is a double, exact to 2^53,
+about 9.0e15 -- 64x the headroom. EVERY fixnum round-trips exactly, so
+int-versus-double is type loss and never value loss. Only a bigint can exceed
+it, which is why only a bigint is refused.
+
+### `:json` -- for flint on the other end
+
+Everything above, plus `$flintTag` for what plain JSON cannot say: port,
+opaque, bigint, table and set. A tagged value is
+`{"$flintTag": <name>, "$flintVal": <payload>}`, and a user map carrying that
+exact key set is escaped on the way out or the encoding is not total.
+
+**The table tag is columnar, and fidelity and size point the same way.** A
+vector of maps repeats every key name on every row; columnar names each once:
+
+    {"$flintTag": "table",
+     "$flintVal": {"cols": ["id", "name"],
+                   "data": [[1, 2, 3], ["a", "b", "c"]]}}
+
+At 1 000 rows and 5 columns that is 5 key strings rather than 5 000, which is
+the compactness a table exists for (`0026`) and which array-of-objects throws
+away. `0026` was written early for exactly this reason -- "a tag is cheaper to
+add before that format ships than after" -- and this is that moment for the
+JSON encodings as well as for the wire codec.
+
+**Keywords and symbols stay strings in BOTH.** Tagging them would restore
+fidelity, but a JSON object key must be a string regardless, so `{:a 1}`
+degrades either way -- and a keyword faithful as a VALUE while lossy as a KEY is
+a worse inconsistency than uniform degradation. It also keeps the rule intact:
+tags are for value loss and breakage, not for type loss.
 
 ## Consequences
 
