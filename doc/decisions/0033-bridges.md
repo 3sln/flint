@@ -208,12 +208,14 @@ ours.
 safe.** A codec writes a port tag because it met a PORT, not because it met data
 shaped like one, and a guest cannot make a port it does not hold.
 
-**The guard covers every format, not just JSON**, and checking is what
-established that. A reader tag in flint is `{:flint/tagged tag :flint/value v}`
--- an ORDINARY MAP, with no runtime tagged type -- so nothing structurally stops
-a guest building one and handing it to an EDN codec that round-trips tags by
-shape. The assumption that native tagging is naturally safe was wrong; JSON's
-convention object is more obviously ordinary data, not uniquely so.
+**The guard covers every format, not just JSON.** Checking established that,
+and it also found something worse: a reader tag in flint is TODAY
+`{:flint/tagged tag :flint/value v}`, an ordinary map with no runtime tagged
+type. So nothing structurally stops a guest building one, the guard has to match
+on SHAPE, and a codec cannot tell a tagged literal from a map that looks like
+one -- which breaks round-tripping in both directions for every format that has
+tags. `0034` makes it a real value, after which this guard is a comparison on
+the tag SYMBOL and the ambiguity is gone.
 
 **Throw rather than escape.** An earlier draft escaped a colliding map so the
 encoding stayed total. Refusing is simpler, is loud at the point of the mistake
