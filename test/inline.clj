@@ -69,6 +69,53 @@
               (and (not (zero? (:exit x)))
                    (str/includes? (str (:out x) (:err x)) "is not a function"))))
 
+;; A CORE PREDICATE STILL REACHES ITS BUILTIN WITH CHECKS ON.
+;;
+;; `(int? x)` compiles to the `type-p` builtin rather than a call, because
+;; `register-native-aliases!` recognises a var whose body is exactly one
+;; `flint.rt/` call. `doc/decisions/0032` gave the fifteen core predicates
+;; `:flint/value-meta`, which `m-defn` attaches by WRAPPING the function in
+;; `with-meta` -- and the wrapper is where the pass wanted a `:fn`, so it
+;; silently stopped aliasing them.
+;;
+;; Silently is the word. Every answer stayed correct; the same loop went from
+;; 34,293 gas to 42,305, a 23% regression that existed only in the build with
+;; checks ON -- which is to say in every build but the shipping one, where it
+;; would never have been measured. `fn-under-meta` in `flint.compiler` looks
+;; through the wrapper.
+;;
+;; Measured as a SLOPE rather than as a total, and that distinction is the
+;; whole test. Checks-on legitimately costs ~98 gas more overall: `flint.check`
+;; is in the program and its own top-level forms run. That is a fixed price
+;; paid once. What must not differ is the PER-ITERATION cost -- a call where
+;; there should be a builtin -- so the two builds are each measured at two loop
+;; sizes and the growth compared. A constant offset passes; a per-call one
+;; cannot.
+(defn probe! [n & flags]
+  (spit "out/aliasprobe.cljc"
+        (str "(ns aliasprobe)\n"
+             "(defn main [_]\n"
+             "  (pr-str (loop [i 0 acc 0]\n"
+             "            (if (< i " n ") (recur (inc i) (if (int? i) (inc acc) acc)) acc))))\n"))
+  (let [b (apply sh "./bin/flint" ":src" "out" ":fn" "aliasprobe/main"
+                 ":out" "out/aliasprobe.wasm" flags)]
+    (when-not (zero? (:exit b))
+      (println "probe build failed:" (:out b) (:err b)) (System/exit 1)))
+  (let [r (sh "node" "-e"
+              (str "import('./host/flint.mjs').then(async (m) => {"
+                   "const {module} = await m.load('out/aliasprobe.wasm');"
+                   "const i = m.instantiate(module);"
+                   "i.exports.set_step_limit(0x7ffffff0); i.main();"
+                   "console.log(Number(i.exports.stat_steps()));})"))]
+    (Long/parseLong (str/trim (:out r)))))
+(let [on-slope  (- (probe! 3000) (probe! 1000))
+      off-slope (- (probe! 3000 ":features" "[flint]") (probe! 1000 ":features" "[flint]"))]
+  (println (str "    int? over 2,000 more iterations: " on-slope " gas with checks, "
+                off-slope " without"))
+  (check-that "  ... which is a real measurement, not two zeros" (pos? off-slope))
+  (check-that "a core predicate costs the same PER CALL with checks on as off"
+              (= on-slope off-slope)))
+
 (if (pos? @fails)
   (do (println "inline:" @fails "failed") (System/exit 1))
   (println "inline: ok"))

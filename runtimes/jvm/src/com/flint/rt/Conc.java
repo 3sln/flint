@@ -674,7 +674,21 @@ public final class Conc {
     /// Null if `v` is data; otherwise WHY it cannot be sent. Functions are
     /// refused BY NAME, because "cannot send that" sends somebody hunting
     /// through a nested structure.
-    public static String checkSendable(Rt rt, long v) { return checkSendableAt(rt, v, 0); }
+    public static String checkSendable(Rt rt, long v) {
+        return checkSendableAt(rt, v, 0, CARRY_SANDBOXED);
+    }
+
+    /// The same, for a carrier that may convey IDENTITIES. See the Rust.
+    public static String checkSendableVia(Rt rt, long v, int carry) {
+        return checkSendableAt(rt, v, 0, carry);
+    }
+
+    /// What a carrying port can convey. A CHANNEL encodes nothing, so anything
+    /// may go; a host port whose encoding the RUNTIME owns carries identities
+    /// that mean something on the far side; a host port whose codec runs in the
+    /// SANDBOX carries none, because a guest-side decoder is an encoder read
+    /// backwards.
+    public static final int CARRY_LOCAL = 0, CARRY_CROSSING = 1, CARRY_SANDBOXED = 2;
 
     static String describeFn(Rt rt, long v) {
         int t = ty(rt.gc.sp, Val.asHeap(v));
@@ -691,7 +705,7 @@ public final class Conc {
         return n.isEmpty() ? "an anonymous fn" : n;
     }
 
-    static String checkSendableAt(Rt rt, long v, int depth) {
+    static String checkSendableAt(Rt rt, long v, int depth, int carry) {
         if (depth > 64) return "value nested too deeply to send";
         if (!Val.isHeap(v)) return null;
         int t = ty(rt.gc.sp, Val.asHeap(v));
@@ -703,22 +717,40 @@ public final class Conc {
             case TY_ATOM:   return "a port carries data only; this is an atom";
             case TY_VAR:    return "a port carries data only; this is a var";
             case TY_THREAD: return "a port carries data only; this is a thread";
-            // Ports are not transferable and cannot be sent
-            // (`doc/decisions/0006`). No ownership transfer, no capability
-            // leaking through a message, and a wire format that never has to
-            // represent a port. The cost -- a capability cannot be delegated at
-            // run time -- is in the README.
+            // `doc/decisions/0006` refused this outright -- "an endpoint cannot
+            // be delegated at run time" -- and `0025` REVERSES it: a capability
+            // a program holds becomes something it can hand on.
+            //
+            // WHICH port may go WHERE is not symmetric. A channel is internal:
+            // both ends live in this heap and the host was never told it
+            // exists, so its id would name one of our objects from outside --
+            // the integer-to-port conversion this design exists to prevent. A
+            // host port's id is the HOST's own and already means something
+            // there. See the table in the Rust.
             case TY_PORT:
-                return "a port cannot be sent through a port: only data crosses."
-                     + " An endpoint cannot be delegated at run time.";
+                if (carry == CARRY_LOCAL) return null;
+                if (carry == CARRY_CROSSING) {
+                    if (crossesAHeap(fx(rt.slot(v, PT_KIND)))) return null;
+                    return "a channel endpoint cannot be sent to the host: both its ends"
+                         + " live in this heap and the host has never been told it exists,"
+                         + " so its id would name one of our objects from outside. A host"
+                         + " port can be sent, because its id is the host's own.";
+                }
+                return "a port cannot be sent through a port whose codec runs in the"
+                     + " sandbox: the receiver could write the same bytes, and then a port"
+                     + " is mintable from an integer. A channel carries one, and so does a"
+                     + " host port opened with :format :flint.";
             // An opaque value is identity and nothing else
             // (`doc/decisions/0022`), so there is nothing to serialise that
             // would still BE it. Anything a codec could write down is something
             // the receiver could write down too, and then it is mintable --
             // which is the entire property gone.
             case TY_OPAQUE:
-                return "an opaque value cannot be sent through a port:"
-                     + " it is identity, and identity does not serialise.";
+                if (carry != CARRY_SANDBOXED) return null;
+                return "an opaque value cannot be sent through a port whose codec runs in"
+                     + " the sandbox: the receiver could write the same bytes, and then it"
+                     + " is mintable. Open the port with :format :flint, where the runtime"
+                     + " encodes and only the host can decode.";
             case TY_STR: case TY_ROPE: case TY_SYM: case TY_KW:
             case TY_BIGINT: case TY_REGEX:
                 return null;
@@ -736,7 +768,7 @@ public final class Conc {
             int at = rt.mark();
             int n = Maps.entries(rt, rt.r(vi), at);
             for (int i = 0; i < 2 * n; i++) {
-                out = checkSendableAt(rt, rt.r(at + i), depth + 1);
+                out = checkSendableAt(rt, rt.r(at + i), depth + 1, carry);
                 if (out != null) break;
             }
             rt.popTo(at);
@@ -744,14 +776,14 @@ public final class Conc {
             int ei = rt.push(Sets.elementVector(rt, rt.r(vi)));
             int n = Vec.count(rt, rt.r(ei));
             for (int i = 0; i < n; i++) {
-                out = checkSendableAt(rt, Vec.nth(rt, rt.r(ei), i), depth + 1);
+                out = checkSendableAt(rt, Vec.nth(rt, rt.r(ei), i), depth + 1, carry);
                 if (out != null) break;
             }
         } else if (rt.isSequential(rt.r(vi))) {
             int si = rt.push(Seqs.seq(rt, rt.r(vi)));
             while (!Val.isNil(rt.r(si))) {
                 int fi = rt.push(Seqs.first(rt, rt.r(si)));
-                out = checkSendableAt(rt, rt.r(fi), depth + 1);
+                out = checkSendableAt(rt, rt.r(fi), depth + 1, carry);
                 rt.popTo(fi);
                 if (out != null) break;
                 rt.setR(si, Seqs.next(rt, rt.r(si)));
@@ -789,6 +821,15 @@ public final class Conc {
     /// of them was missed.
     public static boolean crossesAHeap(long kind) { return kind == K_FLINT || kind == K_GLOBAL; }
 
+    /// Does this port carry VALUES rather than bytes? `:format :flint` means the
+    /// wire codec, run by the RUNTIME at the boundary rather than by a codec in
+    /// the sandbox. See the Rust `is_wire_port` for why that is what makes an
+    /// identity safe to send.
+    public static boolean isWirePort(Rt rt, long p) {
+        long f = rt.slot(p, PT_FORMAT);
+        return !Val.isNil(f) && f == Str.keyword(rt, null, "flint");
+    }
+
     static boolean needPort(Rt rt, long p, String what) {
         if (!isPort(rt, p)) {
             rt.throwStr("ClassCastException", what + " wants a port");
@@ -819,9 +860,12 @@ public final class Conc {
         // Nothing downstream can tell that from a live pointer.
         int base = rt.mark();
         int pi = rt.push(p), vi = rt.push(v);
-        String bad = checkSendable(rt, rt.r(vi));
-        if (bad != null) { rt.popTo(base); return rt.throwStr("IllegalArgumentException", bad); }
         long kind = fx(rt.slot(rt.r(pi), PT_KIND));
+        int carry = !crossesAHeap(kind) ? CARRY_LOCAL
+                  : isWirePort(rt, rt.r(pi)) ? CARRY_CROSSING
+                  : CARRY_SANDBOXED;
+        String bad = checkSendableVia(rt, rt.r(vi), carry);
+        if (bad != null) { rt.popTo(base); return rt.throwStr("IllegalArgumentException", bad); }
         if (crossesAHeap(kind)) {
             // Bound the host's queue in BYTES: back-pressure exists to bound
             // memory, and one 4 MB message is not one message's worth of it.

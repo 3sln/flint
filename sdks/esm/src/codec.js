@@ -72,6 +72,25 @@ export const codec = {
   str: (s) => v((w) => { w.byte(K.STRING); w.str(s); }),
   bytes: (b) => v((w) => { w.byte(K.BYTES); w.bytes(b); }),
 
+  /// A PORT, by the id this sandbox knows it as.
+  ///
+  /// The host gets an id from `decode` (a port arrives as `{port: id}`) or from
+  /// an open-request, and hands it back to name the same endpoint. There is no
+  /// way to invent one that means anything: the runtime looks the id up in its
+  /// own registry and refuses what it does not find, so a wrong id is an error
+  /// rather than a handle to something else.
+  ///
+  /// A CHANNEL is never one of these. Its ends both live inside the sandbox and
+  /// the host is never told it exists, so an id for one would name an object
+  /// the host has no business naming -- the runtime refuses to send one out.
+  port: (id) => v((w) => {
+    if (!Number.isInteger(id) || id < 0) {
+      throw new Error('flint: a port id must be a non-negative integer');
+    }
+    w.byte(K.PORT);
+    w.u32(id);
+  }),
+
   /// An OPAQUE value the host owns: an id it issued, and a label for reading.
   ///
   /// This is the half that lets a JS host hand a capability IN. Decoding one
@@ -84,10 +103,27 @@ export const codec = {
   /// only to the host that issued it, the guest can carry it and compare it
   /// and nothing else, and an id the guest MINTS is 0 -- which is why 0 must
   /// never be issued, or a forgery is indistinguishable from a grant.
-  opaque: (hostId, label = '') => v((w) => {
+  opaque: (hostId, label = '') => {
+    // The ISSUING builder, so it refuses 0: that is what a guest-minted value
+    // carries, and a host that issued 0 would have issued something every
+    // program can already make for itself. Relaying one that is ALREADY 0 is a
+    // different act and goes through `sentinel` below.
     if (!Number.isInteger(hostId) || hostId <= 0) {
       throw new Error('flint: an opaque id must be a positive integer; ' +
-                      '0 is what a guest-minted value carries');
+                      '0 is what a guest-minted value carries, so issuing it ' +
+                      'would grant nothing. Use codec.sentinel to relay one.');
+    }
+    return codec.sentinel(hostId, label);
+  },
+
+  /// The same, without the check: relay an opaque exactly as it arrived.
+  ///
+  /// `from` uses this so that a host can decode a message, look at it and send
+  /// it back unchanged -- including a guest-minted one, whose id is 0 and which
+  /// must survive the trip still saying so.
+  sentinel: (hostId, label = '') => v((w) => {
+    if (!Number.isInteger(hostId) || hostId < 0) {
+      throw new Error('flint: an opaque id must be a non-negative integer');
     }
     w.byte(K.SENTINEL);
     w.u32(hostId % 0x100000000);
@@ -137,6 +173,20 @@ export const codec = {
         return x.startsWith(':') && x.length > 1 ? kwOf(x.slice(1)) : codec.str(x);
       }
       if (x instanceof Val) return x;
+      // The shapes `decode` PRODUCES, recognised so that a host can decode a
+      // message, look at it, and send it back without taking it apart. Matched
+      // on the exact key set rather than on the presence of a key, so an
+      // ordinary map that happens to have a `port` entry is still a map.
+      if (typeof x === 'object' && !Array.isArray(x)) {
+        const ks = Object.keys(x);
+        if (ks.length === 1 && ks[0] === 'port' && Number.isInteger(x.port)) {
+          return codec.port(x.port);
+        }
+        if (ks.length === 2 && ks.includes('sentinel') && ks.includes('hostId')
+            && Number.isInteger(x.hostId)) {
+          return codec.sentinel(x.hostId, String(x.sentinel));
+        }
+      }
       if (x instanceof Uint8Array) return codec.bytes(x);
       if (Array.isArray(x)) return codec.vec(x.map(go));
       if (x instanceof Set) return codec.set([...x].map(go));

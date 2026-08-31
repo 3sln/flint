@@ -61,6 +61,24 @@ console.log(`    the unproven loop pays ` +
 // analyzer cannot read anything from. The annotation inside the guard is free
 // in the first and a real check in the second, and the difference is what
 // narrowing is worth on code that was never annotated at all.
+//
+// KNOWN FAILING as of 2026-08-30, and PRE-EXISTING: both rows below fail at
+// 3854e4f and at every commit checked since, so this is not the check system
+// and not the metadata on the core predicates. Verified by running this file
+// against that tree with nothing else changed.
+//
+// It went unnoticed because the gate stops at its first failure and never got
+// this far: `capability`, `cli`, `host_abi` and `aot` were all red ahead of it
+// on stale expectations, and fixing those is what let this one be seen.
+//
+// The symptom is that the guard teaches the analyzer nothing -- annotated
+// 54,000 against unannotated 48,000, where equal is the claim -- so a `^int`
+// inside `(if (int? x) ...)` is still emitting a check. `flint.types`'
+// `native-projections` table is what should make it free, keyed on the BUILTIN
+// name because `(int? x)` is rewritten to one before narrowing runs. Whether
+// that rewrite still happens for these guards is the thing to establish first;
+// `test/inline.clj` now measures the closely related property that the alias
+// survives `:flint/value-meta`, and it passes, so the alias itself is intact.
 const narrowed = loopCost('narrowed', ITERS);
 const unnarrowed = loopCost('unnarrowed', ITERS);
 

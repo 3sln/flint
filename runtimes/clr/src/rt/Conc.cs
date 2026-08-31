@@ -674,7 +674,21 @@ public static class Conc {
     /// Null if `v` is data; otherwise WHY it cannot be sent. Functions are
     /// refused BY NAME, because "cannot send that" sends somebody hunting
     /// through a nested structure.
-    public static string CheckSendable(Rt rt, long v) { return CheckSendableAt(rt, v, 0); }
+    public static string CheckSendable(Rt rt, long v) {
+        return CheckSendableAt(rt, v, 0, CarrySandboxed);
+    }
+
+    /// The same, for a carrier that may convey IDENTITIES. See the Rust.
+    public static string CheckSendableVia(Rt rt, long v, int carry) {
+        return CheckSendableAt(rt, v, 0, carry);
+    }
+
+    /// What a carrying port can convey. A CHANNEL encodes nothing, so anything
+    /// may go; a host port whose encoding the RUNTIME owns carries identities
+    /// that mean something on the far side; a host port whose codec runs in the
+    /// SANDBOX carries none, because a guest-side decoder is an encoder read
+    /// backwards.
+    public const int CarryLocal = 0, CarryCrossing = 1, CarrySandboxed = 2;
 
     static string DescribeFn(Rt rt, long v) {
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
@@ -691,7 +705,7 @@ public static class Conc {
         return n.Length == 0 ? "an anonymous fn" : n;
     }
 
-    static string CheckSendableAt(Rt rt, long v, int depth) {
+    static string CheckSendableAt(Rt rt, long v, int depth, int carry) {
         if (depth > 64) return "value nested too deeply to send";
         if (!Val.IsHeap(v)) return null;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
@@ -703,22 +717,40 @@ public static class Conc {
             case Obj.TyAtom:   return "a port carries data only; this is an atom";
             case Obj.TyVar:    return "a port carries data only; this is a var";
             case Obj.TyThread: return "a port carries data only; this is a thread";
-            // Ports are not transferable and cannot be sent
-            // (`doc/decisions/0006`). No ownership transfer, no capability
-            // leaking through a message, and a wire format that never has to
-            // represent a port. The cost -- a capability cannot be delegated at
-            // run time -- is in the README.
+            // `doc/decisions/0006` refused this outright -- "an endpoint cannot
+            // be delegated at run time" -- and `0025` REVERSES it: a capability
+            // a program holds becomes something it can hand on.
+            //
+            // WHICH port may go WHERE is not symmetric. A channel is internal:
+            // both ends live in this heap and the host was never told it
+            // exists, so its id would name one of our objects from outside --
+            // the integer-to-port conversion this design exists to prevent. A
+            // host port's id is the HOST's own and already means something
+            // there. See the table in the Rust.
             case Obj.TyPort:
-                return "a port cannot be sent through a port: only data crosses."
-                     + " An endpoint cannot be delegated at run time.";
+                if (carry == CarryLocal) return null;
+                if (carry == CarryCrossing) {
+                    if (CrossesAHeap(Fx(rt.Slot(v, PT_KIND)))) return null;
+                    return "a channel endpoint cannot be sent to the host: both its ends"
+                         + " live in this heap and the host has never been told it exists,"
+                         + " so its id would name one of our objects from outside. A host"
+                         + " port can be sent, because its id is the host's own.";
+                }
+                return "a port cannot be sent through a port whose codec runs in the"
+                     + " sandbox: the receiver could write the same bytes, and then a port"
+                     + " is mintable from an integer. A channel carries one, and so does a"
+                     + " host port opened with :format :flint.";
             // An opaque value is identity and nothing else
             // (`doc/decisions/0022`), so there is nothing to serialise that
             // would still BE it. Anything a codec could write down is something
             // the receiver could write down too, and then it is mintable --
             // which is the entire property gone.
             case Obj.TyOpaque:
-                return "an opaque value cannot be sent through a port:"
-                     + " it is identity, and identity does not serialise.";
+                if (carry != CarrySandboxed) return null;
+                return "an opaque value cannot be sent through a port whose codec runs in"
+                     + " the sandbox: the receiver could write the same bytes, and then it"
+                     + " is mintable. Open the port with :format :flint, where the runtime"
+                     + " encodes and only the host can decode.";
             case Obj.TyStr: case Obj.TyRope: case Obj.TySym: case Obj.TyKw:
             case Obj.TyBigint: case Obj.TyRegex:
                 return null;
@@ -736,7 +768,7 @@ public static class Conc {
             int at = rt.Mark();
             int en = Maps.Entries(rt, rt.R(vi), at);
             for (int i = 0; i < 2 * en; i++) {
-                outs = CheckSendableAt(rt, rt.R(at + i), depth + 1);
+                outs = CheckSendableAt(rt, rt.R(at + i), depth + 1, carry);
                 if (outs != null) break;
             }
             rt.PopTo(at);
@@ -744,14 +776,14 @@ public static class Conc {
             int ei = rt.Push(Sets.ElementVector(rt, rt.R(vi)));
             int en = Vec.Count(rt, rt.R(ei));
             for (int i = 0; i < en; i++) {
-                outs = CheckSendableAt(rt, Vec.Nth(rt, rt.R(ei), i), depth + 1);
+                outs = CheckSendableAt(rt, Vec.Nth(rt, rt.R(ei), i), depth + 1, carry);
                 if (outs != null) break;
             }
         } else if (rt.IsSequential(rt.R(vi))) {
             int si = rt.Push(Seqs.Seq(rt, rt.R(vi)));
             while (!Val.IsNil(rt.R(si))) {
                 int fi = rt.Push(Seqs.First(rt, rt.R(si)));
-                outs = CheckSendableAt(rt, rt.R(fi), depth + 1);
+                outs = CheckSendableAt(rt, rt.R(fi), depth + 1, carry);
                 rt.PopTo(fi);
                 if (outs != null) break;
                 rt.SetR(si, Seqs.Next(rt, rt.R(si)));
@@ -789,6 +821,14 @@ public static class Conc {
     /// of them was missed.
     public static bool CrossesAHeap(long kind) { return kind == K_FLINT || kind == K_GLOBAL; }
 
+    /// Does this port carry VALUES rather than bytes? `:format :flint` means the
+    /// wire codec, run by the RUNTIME at the boundary rather than by a codec in
+    /// the sandbox. See the Rust `is_wire_port`.
+    public static bool IsWirePort(Rt rt, long p) {
+        long f = rt.Slot(p, PT_FORMAT);
+        return !Val.IsNil(f) && f == Str.Keyword(rt, null, "flint");
+    }
+
     static bool NeedPort(Rt rt, long p, string what) {
         if (!IsPort(rt, p)) {
             rt.ThrowStr("ClassCastException", what + " wants a port");
@@ -819,9 +859,12 @@ public static class Conc {
         // downstream can tell that from a live pointer.
         int bas = rt.Mark();
         int pi = rt.Push(p), vi = rt.Push(v);
-        string bad = CheckSendable(rt, rt.R(vi));
-        if (bad != null) { rt.PopTo(bas); return rt.ThrowStr("IllegalArgumentException", bad); }
         long kind = Fx(rt.Slot(rt.R(pi), PT_KIND));
+        int carry = !CrossesAHeap(kind) ? CarryLocal
+                  : IsWirePort(rt, rt.R(pi)) ? CarryCrossing
+                  : CarrySandboxed;
+        string bad = CheckSendableVia(rt, rt.R(vi), carry);
+        if (bad != null) { rt.PopTo(bas); return rt.ThrowStr("IllegalArgumentException", bad); }
         if (CrossesAHeap(kind)) {
             // Bound the host's queue in BYTES: back-pressure exists to bound
             // memory, and one 4 MB message is not one message's worth of it.

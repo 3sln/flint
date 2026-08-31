@@ -94,6 +94,34 @@
               :inversions {}
               :eval-vars (atom {})}))
 
+(defn- fn-under-meta
+  "The `fn` a `def`'s init is, seeing through a `with-meta` wrapper.
+
+  `m-defn` wraps the function when the `defn` carried `:flint/value-meta` --
+  metadata that has to land on the VALUE rather than the var, which is how a
+  predicate explains itself (`doc/decisions/0032`). Everything that INSPECTS an
+  init has to look through that wrapper, and the failure when it does not is
+  silent: `register-native-aliases!` saw an `:invoke` instead of a `:fn`, so the
+  fifteen core predicates stopped compiling to their builtins and occurrence
+  narrowing stopped working -- correct answers, quietly slower, and only in the
+  build with checks ON.
+
+  Metadata does not change what a function does, so an alias or an inline
+  inferred from the body underneath stays valid: the call site goes to the
+  builtin, and anything asking the VAR for the value still gets the wrapped
+  one."
+  [init]
+  ;; A `:native` node rather than an `:invoke`: `with-meta` is itself one of the
+  ;; one-native-body vars this same pass aliases, and it is defined well above
+  ;; the predicates, so by the time one is compiled the call has already been
+  ;; rewritten to the builtin. The builtin is named `with-meta`, with no
+  ;; `flint/` prefix -- `builtins.rs` registers it that way.
+  (if (and (= :native (:op init))
+           (= "with-meta" (:name init))
+           (= :fn (:op (first (:args init)))))
+    (first (:args init))
+    init))
+
 (defn- register-native-aliases!
   "A core var whose body is exactly one `flint.rt/x` call with the same
   arguments is recorded, so call sites go straight to the builtin. This is what
@@ -405,12 +433,12 @@
           (when sym
             (let [defnode (-> ast :arities first :body)]
               (when (= :def (:op defnode))
-                (register-native-aliases! cc sym (:init defnode))
+                (register-native-aliases! cc sym (fn-under-meta (:init defnode)))
                 ;; After the alias, so an explicit `:inline` beats the one
                 ;; inferred from a one-native body. The author said which.
                 (register-inline! cc env sym (:meta defnode))
-                (register-projections! cc sym (:meta defnode) (:init defnode))
-                (register-inversion! cc sym (:meta defnode) (:init defnode))))
+                (register-projections! cc sym (:meta defnode) (fn-under-meta (:init defnode)))
+                (register-inversion! cc sym (:meta defnode) (fn-under-meta (:init defnode)))))
             (vswap! cc assoc-in [:vars sym] true)
             ;; EVERY VAR'S METADATA, indexed. Not "the test registry": the
             ;; analyser already reads this map to find `:macro`, and scoping it

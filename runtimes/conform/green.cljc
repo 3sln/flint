@@ -52,8 +52,36 @@
                      (let [inner (t/spawn (fn [] (squares 5)))]
                        (+ 1 (t/join inner)))))))
 
+(defn- delegated
+  "An ENDPOINT sent through a channel, and then used by whoever received it.
+
+  `doc/decisions/0006` refused this outright -- \"an endpoint cannot be
+  delegated at run time\" -- and `0025` reverses it, which is what makes a
+  capability something a program can hand on rather than only hold. Between two
+  green threads there is no encoding involved at all: both ends live in one
+  heap, so the port that arrives IS the port that was sent.
+
+  Checked by USING it rather than by inspecting it: the receiving thread is
+  given an endpoint it never opened, sends through it, and the answer comes
+  back out the other end. A port that arrived as a copy, or as a handle to
+  nothing, would fail here rather than look right."
+  []
+  (let [[out-a out-b] (p/channel 4 "outer")
+        [in-a in-b] (p/channel 4 "inner")
+        w (t/spawn (fn []
+                     (let [got (p/receive out-b)]
+                       (p/send got :sent-through-a-delegated-port)
+                       (p/port? got))))]
+    (p/send out-a in-a)
+    {:received (p/receive in-b)
+     :is-a-port (t/join w)
+     ;; The label travels with it, so what arrived is recognisably the same
+     ;; endpoint and not merely something port-shaped.
+     :label (p/label in-a)}))
+
 (defn main [_]
   (pr-str {:joined  (joined)
            :channel (through-a-channel)
            :order   (interleaving)
-           :nested  (nested)}))
+           :nested  (nested)
+           :delegated (delegated)}))

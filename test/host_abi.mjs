@@ -54,7 +54,10 @@ console.log('host abi');
   });
   const r = inst.main();
   eq('a granted capability opens, round-trips and closes',
-     r.out, '{:back {:hello 1}, :refused "the host refused the capability \\"secret\\"", :state :closed}');
+     // `refused to open`, not `refused the capability`: the cutover took the
+     // word out of the sandbox, which does not have the concept. What refuses
+     // is a host given no handler for the name, and it says so in those terms.
+     r.out, '{:back {:hello 1}, :refused "the host refused to open \\"secret\\"", :state :closed}');
   ok('  ... and the host saw open, the message and the close',
      seen.length === 3 && seen[0][0] === 'open' && seen[1][0] === 'msg' && seen[2][0] === 'closed',
      JSON.stringify(seen));

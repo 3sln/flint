@@ -169,6 +169,29 @@
        (run! (build! "chan"))
        "{:got [0 1 2 3 4], :worker :sent, :state :done}")
 
+;; DELEGATION (`doc/decisions/0025`), which `0006` refused: an endpoint sent
+;; through a channel and then USED by whoever received it.
+;;
+;; Between green threads no encoding is involved -- both ends are in one heap,
+;; so the port that arrives is the port that was sent. The test is that the
+;; receiver can send through an endpoint it never opened, and that what comes
+;; back out the far end is what the receiver put in. A port that arrived as a
+;; copy, or as a handle to nothing, fails here rather than merely looking
+;; wrong.
+(src! "delegate"
+      (str "(ns delegate (:require [flint.thread :as t] [flint.port :as p]))\n"
+           "(defn main [_]\n"
+           "  (let [[oa ob] (p/channel 4 \"outer\")\n"
+           "        [ia ib] (p/channel 4 \"inner\")\n"
+           "        w (t/spawn (fn [] (let [got (p/receive ob)]\n"
+           "                            (p/send got :delegated)\n"
+           "                            [(p/port? got) (p/label got)])))]\n"
+           "    (p/send oa ia)\n"
+           "    (pr-str [(p/receive ib) (t/join w)])))"))
+(check "an endpoint can be sent through a channel, and used by whoever gets it"
+       (run! (build! "delegate"))
+       "[:delegated [true \"inner\"]]")
+
 (src! "closed"
       (str "(ns closed (:require [flint.thread :as t] [flint.port :as p]))\n"
            "(defn main [_]\n"
@@ -205,28 +228,58 @@
 (src! "crossing"
       (str "(ns crossing (:require [flint.port :as p]))\n"
            "(defn helper [x] x)\n"
+           "(defn- try! [f] (try (f) (catch Throwable e (ex-message e))))\n"
            "(defn main [_]\n"
-           "  (let [[a b] (p/channel 2)]\n"
-           "    (pr-str [(try (p/send a helper) (catch Throwable e (ex-message e)))\n"
-           "             (try (p/send a b) (catch Throwable e (ex-message e)))\n"
-           "             (try (p/send a [1 {:k helper}]) (catch Throwable e (ex-message e)))\n"
-           ;; An opaque value is identity and nothing else (0022). Anything a
-           ;; codec could write down, a receiver could write down too -- and
-           ;; then it is mintable, which is the whole property gone. Same
-           ;; rejection as a port, for the same reason.
-           "             (try (p/send a (opaque \"fs\")) (catch Throwable e (ex-message e)))\n"
-           "             (try (p/send a {:cap (opaque)}) (catch Throwable e (ex-message e)))])))"))
-(def crossing (run! (build! "crossing")))
+           "  (let [[a b] (p/channel 8)\n"
+           "        h (p/open \"thing\" {:format :flint})]\n"
+           "    (pr-str\n"
+           "     {:fn (try! (fn [] (p/send a helper)))\n"
+           "      :nested-fn (try! (fn [] (p/send a [1 {:k helper}])))\n"
+           ;; The four cells of the matrix. A channel encodes nothing, so
+           ;; anything with an identity may cross one; a host port encodes with
+           ;; the wire codec, so only what means something on the far side may.
+           "      :chan-through-chan (try! (fn [] (p/send a b) :sent))\n"
+           "      :host-through-chan (try! (fn [] (p/send a h) :sent))\n"
+           "      :host-through-host (try! (fn [] (p/send h h) :sent))\n"
+           "      :chan-through-host (try! (fn [] (p/send h b) :sent))\n"
+           "      :opaque-through-chan (try! (fn [] (p/send a (opaque \"fs\")) :sent))\n"
+           "      :opaque-through-host (try! (fn [] (p/send h {:cap (opaque \"fs\")}) :sent))})))"))
+;; Run under a host that GRANTS a port, because half the matrix is about what
+;; may cross one -- and the default host refuses every `open`, which would end
+;; the program before the interesting sends happen.
+(def crossing (run! (build! "crossing") "test/delegate.mjs"))
+
+;; A FUNCTION never crosses, on any port: a closure's meaning is its
+;; environment, and that does not travel. This is the part `0025` did not
+;; change, and it is checked by NAME so the message stays useful.
 (check-that "a function is refused at the send, by name"
             (str/includes? crossing "helper is a function"))
-(check-that "a port cannot be sent through a port"
-            (str/includes? crossing "a port cannot be sent through a port"))
-(check-that "a function nested inside a value is refused too"
-            (str/includes? crossing "helper is a function"))
-(check-that "an opaque value cannot be sent through a port"
-            (str/includes? crossing "an opaque value cannot be sent through a port"))
-(check-that "  ... nor nested inside one, which is how a capability would leak"
-            (= 2 (count (re-seq #"an opaque value cannot be sent" crossing))))
+(check-that "  ... and nested inside a value too"
+            (= 2 (count (re-seq #"helper is a function" crossing))))
+
+;; DELEGATION (`0025` reversing `0006`): an endpoint is something a program can
+;; hand on. Which endpoint may go where is not symmetric, and the asymmetry is
+;; the point rather than an omission -- see the table in `check_sendable_at`.
+(check-that "a channel carries a channel endpoint"
+            (str/includes? crossing ":chan-through-chan :sent"))
+(check-that "a channel carries a host endpoint"
+            (str/includes? crossing ":host-through-chan :sent"))
+(check-that "a host port carries a host endpoint, because its id is the host's own"
+            (str/includes? crossing ":host-through-host :sent"))
+;; THE ONE THAT MUST NOT WORK. A channel's ends both live in this heap and the
+;; host was never told it exists, so sending one out would hand the host an id
+;; naming one of our objects -- and a host that sent it back would be the
+;; integer-to-port conversion the whole design forbids.
+(check-that "a channel endpoint cannot leave the sandbox"
+            (str/includes? crossing "a channel endpoint cannot be sent to the host"))
+
+;; An opaque value is identity (`0022`). It crosses for the same reason a port
+;; does: the guest hands over a VALUE and the runtime encodes it, so holding it
+;; is the proof, and no decoder for the wire format is reachable from guest
+;; code.
+(check-that "an opaque value crosses a channel" (str/includes? crossing ":opaque-through-chan :sent"))
+(check-that "  ... and a host port, which is how a capability is handed on"
+            (str/includes? crossing ":opaque-through-host :sent"))
 
 ;; ------------------------------------------------- parking through a value
 ;;

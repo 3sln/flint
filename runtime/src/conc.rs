@@ -124,6 +124,20 @@ pub const PT_OPTS: u32 = 11;
 pub const PT_BINARY: u32 = 12;
 pub const PT_LEN: u32 = 13;
 
+/// What a carrying port can convey, for `check_sendable_at`.
+///
+/// A CHANNEL encodes nothing: both ends are in this heap, so an identity
+/// crossing one is a pointer move and anything may go.
+pub const CARRY_LOCAL: u8 = 0;
+/// A host or global port whose encoding the RUNTIME owns (`:format :flint`).
+/// Identities cross as `K_PORT` / `K_SENTINEL`, and only what means something
+/// on the far side may go -- see the table on `TY_PORT`.
+pub const CARRY_CROSSING: u8 = 1;
+/// A host port whose codec runs in the SANDBOX (`0006` §5, which `0025`
+/// replaces). No identity may cross one, because a guest-side decoder is an
+/// encoder read backwards.
+pub const CARRY_SANDBOXED: u8 = 2;
+
 /// One end of a `channel` pair: no host involvement at all.
 pub const K_CHANNEL: i64 = 0;
 /// A GLOBAL port (`doc/decisions/0027`): the host owns it, this is a handle.
@@ -1033,7 +1047,19 @@ impl Rt {
     /// `Ok` if `v` is data. Functions are refused **by name**, because "cannot
     /// send that" sends somebody hunting through a nested structure.
     pub fn check_sendable(&mut self, v: Value) -> Result<(), alloc::string::String> {
-        self.check_sendable_at(v, 0)
+        self.check_sendable_at(v, 0, CARRY_SANDBOXED)
+    }
+
+    /// The same, for a carrier that may convey IDENTITIES.
+    ///
+    /// `carry` is what the carrying port can reach, and it decides what a port
+    /// VALUE inside the message is allowed to be. See `Carry` above.
+    pub fn check_sendable_via(
+        &mut self,
+        v: Value,
+        carry: u8,
+    ) -> Result<(), alloc::string::String> {
+        self.check_sendable_at(v, 0, carry)
     }
 
     fn describe_fn(&mut self, v: Value) -> alloc::string::String {
@@ -1054,7 +1080,12 @@ impl Rt {
         }
     }
 
-    fn check_sendable_at(&mut self, v: Value, depth: u32) -> Result<(), alloc::string::String> {
+    fn check_sendable_at(
+        &mut self,
+        v: Value,
+        depth: u32,
+        carry: u8,
+    ) -> Result<(), alloc::string::String> {
         if depth > 64 {
             return Err("value nested too deeply to send".into());
         }
@@ -1073,20 +1104,83 @@ impl Rt {
             TY_ATOM => Err("a port carries data only; this is an atom".into()),
             TY_VAR => Err("a port carries data only; this is a var".into()),
             TY_THREAD => Err("a port carries data only; this is a thread".into()),
-            // Ports are not transferable and cannot be sent (doc/decisions/0006).
-            // No ownership transfer, no capability leaking through a message,
-            // and a wire format that never has to represent a port. The cost --
-            // a capability cannot be delegated at run time -- is in the README.
-            TY_PORT => Err("a port cannot be sent through a port: only data crosses. \
-                            An endpoint cannot be delegated at run time."
-                .into()),
-            // An opaque value is identity and nothing else (doc/decisions/0022),
-            // so there is nothing to serialise that would still BE it. Anything
-            // a codec could write down is something the receiver could write
-            // down too, and then it is mintable -- which is the entire property
-            // gone. Same rejection as a port, for the same reason.
-            crate::obj::TY_OPAQUE => Err("an opaque value cannot be sent through a port:                                           it is identity, and identity does not serialise."
-                .into()),
+            // `doc/decisions/0006` refused this outright -- "an endpoint cannot
+            // be delegated at run time" -- and `0025` REVERSES it, which is the
+            // point: a capability a program holds becomes something it can hand
+            // on rather than only use.
+            //
+            // What made the old rule seem necessary was the worry that also
+            // covers an opaque: a wire format that can write a port down is one
+            // a receiver could write down too, and then a port is mintable from
+            // an integer. `codec.rs` answers it -- the guest hands over a VALUE
+            // and the runtime encodes it, so for `K_PORT` to appear in the
+            // bytes the guest had to be holding the port, and a decoder
+            // reachable from the guest refuses the tag (`decode_guest`).
+            //
+            // WHICH port may go WHERE is the other half, and it is not
+            // symmetric:
+            //
+            //   | sent        | through     |               |
+            //   | ----------- | ----------- | ------------- |
+            //   | host port   | channel     | yes           |
+            //   | host port   | host port   | yes           |
+            //   | channel end | channel     | yes           |
+            //   | channel end | host port   | NO            |
+            //
+            // The last row is the whole asymmetry. A channel is internal: both
+            // ends live in this heap, the host was never told it exists and has
+            // no id for it, so what would cross is a number meaningful only
+            // here -- and a host that sent it back would be naming one of our
+            // objects from outside, which is the integer-to-port conversion
+            // this design exists to prevent. A host port is the opposite: its
+            // id is the HOST's, so it already means something over there.
+            TY_PORT if carry == CARRY_LOCAL => Ok(()),
+            TY_PORT if carry == CARRY_CROSSING => {
+                let kind = fx(self.slot(v, PT_KIND));
+                if crosses_a_heap(kind) {
+                    Ok(())
+                } else {
+                    Err("a channel endpoint cannot be sent to the host: both its ends live \
+                         in this heap and the host has never been told it exists, so its id \
+                         would name one of our objects from outside. A host port can be \
+                         sent, because its id is the host's own."
+                        .into())
+                }
+            }
+            TY_PORT => {
+                Err("a port cannot be sent through a port whose codec runs in the sandbox: \
+                     the receiver could write the same bytes, and then a port is mintable \
+                     from an integer. A channel carries one, and so does a host port \
+                     opened with :format :flint."
+                    .into())
+            }
+            // An opaque value is identity and nothing else (doc/decisions/0022).
+            // The old rule refused it outright, and the reasoning was: anything
+            // a codec could write down is something the RECEIVER could write
+            // down too, and then it is mintable -- the whole property gone.
+            //
+            // That is right for a guest-side codec and wrong for `:format
+            // :flint`, and the difference is who holds the decoder. On a wire
+            // port the runtime encodes on the way out and decodes on the way in
+            // (`is_wire_port`), and no decoder for that format is reachable from
+            // the guest -- `codec.rs`'s one safety rule is exactly that, and
+            // `decode_guest` is what enforces it. So the bytes are only ever
+            // written and read on the host's side of the line: a guest can hand
+            // over an opaque it HOLDS and can be handed one back, and still has
+            // no way to turn an integer into one.
+            //
+            // A port is still refused on both, and not for a serialisation
+            // reason: `doc/decisions/0006` says an endpoint is not transferable
+            // and cannot be delegated at run time. That is a design decision
+            // about ownership, which the encoding does not change.
+            crate::obj::TY_OPAQUE if carry == CARRY_SANDBOXED => {
+                Err("an opaque value cannot be sent through a port whose codec runs in the \
+                     sandbox: the receiver could write the same bytes, and then it is \
+                     mintable. Open the port with :format :flint, where the runtime encodes \
+                     and only the host can decode."
+                    .into())
+            }
+            crate::obj::TY_OPAQUE => Ok(()),
             TY_STR | crate::obj::TY_ROPE | TY_SYM | TY_KW | TY_BIGINT | TY_REGEX => Ok(()),
             _ => {
                 let base = self.mark();
@@ -1101,7 +1195,7 @@ impl Rt {
                     });
                     for it in items {
                         let ii = self.push(it);
-                        out = self.check_sendable_at(self.r(ii), depth + 1);
+                        out = self.check_sendable_at(self.r(ii), depth + 1, carry);
                         self.pop_to(ii);
                         if out.is_err() {
                             break;
@@ -1113,7 +1207,7 @@ impl Rt {
                     self.set_for_each(self.r(vi), &mut st, &mut |_rt, k, st| st.push(k));
                     for it in items {
                         let ii = self.push(it);
-                        out = self.check_sendable_at(self.r(ii), depth + 1);
+                        out = self.check_sendable_at(self.r(ii), depth + 1, carry);
                         self.pop_to(ii);
                         if out.is_err() {
                             break;
@@ -1125,7 +1219,7 @@ impl Rt {
                     while !self.r(si).is_nil() {
                         let f = self.first(self.r(si));
                         let fi = self.push(f);
-                        out = self.check_sendable_at(self.r(fi), depth + 1);
+                        out = self.check_sendable_at(self.r(fi), depth + 1, carry);
                         self.pop_to(fi);
                         if out.is_err() {
                             break;
@@ -1521,7 +1615,18 @@ impl Rt {
         let base = self.mark();
         let pi = self.push(p);
         let vi = self.push(v);
-        if let Err(e) = self.check_sendable(self.r(vi)) {
+        let carry = {
+            let p = self.r(pi);
+            let kind = fx(self.slot(p, PT_KIND));
+            if !crosses_a_heap(kind) {
+                CARRY_LOCAL
+            } else if self.is_wire_port(p) {
+                CARRY_CROSSING
+            } else {
+                CARRY_SANDBOXED
+            }
+        };
+        if let Err(e) = self.check_sendable_via(self.r(vi), carry) {
             self.pop_to(base);
             return self.throw_str("IllegalArgumentException", &e);
         }
@@ -1529,7 +1634,25 @@ impl Rt {
         if crosses_a_heap(kind) {
             // Bound the host's queue in BYTES: back-pressure exists to bound
             // memory, and one 4 MB message is not one message's worth of it.
-            let binary = fx(self.slot(self.r(pi), PT_BINARY)) == 1;
+            // A wire port encodes HERE, so what leaves is bytes like any other
+            // host port and the byte budget still means something. `send`
+            // already encodes for a codec'd port; this is the same step for a
+            // format the runtime owns.
+            let wire = self.is_wire_port(self.r(pi));
+            if wire {
+                match self.encode(self.r(vi)) {
+                    Ok(b) => {
+                        let bv = self.new_bytes(&b);
+                        self.set_r(vi, bv);
+                    }
+                    Err(e) => {
+                        self.pop_to(base);
+                        let msg = alloc::format!("send: this cannot be sent to the host: {e}");
+                        return self.throw_str("IllegalArgumentException", &msg);
+                    }
+                }
+            }
+            let binary = wire || fx(self.slot(self.r(pi), PT_BINARY)) == 1;
             let encoded = if binary {
                 // A byte string OR a vector of 0..255. `doc/decisions/0024` gave
                 // flint a byte type after this path was written, and a codec that
@@ -1930,6 +2053,31 @@ impl Rt {
     /// whole answer would be resident in the guest heap -- which is precisely
     /// what waves exist to prevent. Inbound needs the same back-pressure as
     /// outbound; it is the same buffer bound, seen from the other side.
+    /// Does this port carry VALUES rather than bytes?
+    ///
+    /// `:format :flint` means the wire codec (`doc/decisions/0025`) -- the same
+    /// encoding `flint_call` uses -- and the runtime runs it at the boundary
+    /// rather than handing a guest an encoder.
+    ///
+    /// That is not a convenience. `codec.rs` states the one safety rule: a
+    /// decoder REACHABLE FROM THE GUEST must refuse the live tags, because
+    /// bytes are integers a guest can write and `K_PORT`/`K_SENTINEL` carry
+    /// their identity inline. A guest-side codec for this format would be
+    /// exactly the integer-to-opaque conversion the sandbox forbids -- it could
+    /// mint any host id it liked, and an opaque value's whole meaning is that
+    /// it cannot. Encoding on the way out and decoding on the way IN, here,
+    /// keeps the bytes on the host's side of the line: the guest hands over a
+    /// value and is handed one back, and never sees the encoding at all.
+    ///
+    /// The format keyword is the switch rather than a slot on the port, so the
+    /// object layout is unchanged and the two ports do not have to mirror a
+    /// new field. `:flint` is five bytes, so the keyword is inline in the value
+    /// and the comparison allocates nothing.
+    fn is_wire_port(&mut self, p: Value) -> bool {
+        let f = self.slot(p, PT_FORMAT);
+        !f.is_nil() && f == self.keyword(None, "flint")
+    }
+
     pub fn host_deliver(&mut self, host_port_id: i64, bytes: &[u8]) -> bool {
         let host = self.port_by_id(host_port_id);
         if host.is_nil() {
@@ -1958,7 +2106,23 @@ impl Rt {
             return false;
         }
         self.set(self.r(pi), PT_BYTES, Value::fixnum(queued + bytes.len() as i64));
-        let v = if fx(self.slot(self.r(pi), PT_BINARY)) == 1 {
+        let v = if self.is_wire_port(self.r(pi)) {
+            // The HOST wrote these bytes, so the live tags are honoured --
+            // `decode`, not `decode_guest`. That is the whole asymmetry: an
+            // opaque the host issued arrives as itself, with the id it was
+            // given, and nothing the guest can write reaches this call.
+            match self.decode(bytes) {
+                Ok(v) => v,
+                // Refused rather than delivered as anything else: a message the
+                // format cannot read is the host's error, and turning it into a
+                // string here would hand the guest something that silently was
+                // not what was sent.
+                Err(_) => {
+                    self.pop_to(base);
+                    return false;
+                }
+            }
+        } else if fx(self.slot(self.r(pi), PT_BINARY)) == 1 {
             // One object, not one boxed fixnum per byte. This used to build a
             // vector, which cost a 32-way trie and an allocation per 32 bytes for
             // data the codec immediately walked back into bytes.
