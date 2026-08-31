@@ -149,18 +149,54 @@ The codec is configuration the WRITER consults, which keeps the port agnostic
 and makes the encoder ordinary guest code -- so a program that only uses
 `:flint` never links a CBOR encoder.
 
-**Only `:flint` can carry an identity.** `K_PORT` and `K_SENTINEL` are
-representable there and nowhere else, and the runtime owns both ends of that
-format. This is the non-arbitrary version of the rule that made per-port codecs
-look unsafe in the first place: a guest-side JSON encoder has nothing to forge
-with, because JSON cannot express a port. The distinction is what a format can
-SAY, not who runs it.
+### Identities, and who owns which half of the frame
 
-**So the format decides what is sendable, not just how it is written.** A
-keyword, a symbol, a set and a bigint have no JSON equivalent. `check_sendable`
-grows a format dimension and REFUSES, naming the value and the format, rather
-than coercing quietly. Identities become one more row in a table that already
-distinguishes functions, atoms, vars and threads.
+Every one of these formats CAN express an identity -- EDN has tagged literals,
+CBOR has tags, and JSON can carry a convention object -- so "only `:flint` may
+name a port" would be a restriction invented by this design rather than one the
+formats impose. The real constraint is not expressiveness. It is two invariants
+that bite from opposite directions:
+
+* **A guest cannot read an id.** `flint/opaque-label` exists and there is
+  deliberately no builtin returning the host id, because reading provenance from
+  guest code invites the check `0022` forbids. So guest code cannot WRITE
+  `#flint/opaque ["foo" 111]`: it has no way to obtain the 111.
+* **A guest-side decoder must not turn bytes into an identity.** If it could
+  parse `#flint/port [333]` into a live port then possession stops being proof,
+  which is the whole of `0022`.
+
+So the split is not by format. It is by **which half of the frame each side
+owns**:
+
+    frame := identity-table   -- the RUNTIME writes and reads this
+             body             -- the CODEC writes and reads this
+
+The body references identities BY INDEX into the table, never by id. Outbound,
+the codec meets a port value, calls a runtime hook that appends it to the table
+and hands back an index, and writes `#flint/port [2]`. Inbound, the codec sees
+`#flint/port [2]` and asks the runtime to resolve index 2.
+
+Which gives every property at once:
+
+* every format carries identities, in its own natural tagging;
+* the guest never sees an id, so `0022` holds unweakened;
+* the guest can only name identities ACTUALLY PRESENT in this message -- an
+  out-of-range index is an error, not a handle -- so there is nothing to forge,
+  and that is a stronger statement than "this format cannot say it";
+* `check_sendable` therefore does NOT grow a format dimension for identities. It
+  keeps only the rows about what a format can represent structurally.
+
+**What the format still decides** is structural coverage. A keyword, a symbol, a
+set and a bigint have no JSON equivalent, so a `:json` port either refuses them
+-- naming the value and the format, rather than coercing quietly -- or tags them
+by the same convention. That is a per-port choice and it has a cost either way:
+
+* `:a` written as `"a"` comes back a STRING. Round-tripping stops being
+  identity, which is a legitimate trade for output that looks like JSON, but it
+  is a property of the port and must not be a surprise on the far side.
+* `{"$flintTag": ..., "$flintVal": ...}` needs an ESCAPE, or the encoding is not
+  total: an ordinary map that happens to carry that key is ambiguous. Requiring
+  the exact key set and escaping a colliding user map is the shape that works.
 
 ## Consequences
 
