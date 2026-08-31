@@ -55,6 +55,28 @@ public sealed unsafe class Space : System.IDisposable {
     public void WriteU32(long addr, int v) => *(int*)(_base + addr) = v;
     public long ReadU64(long addr) => *(long*)(_base + addr);
     public void WriteU64(long addr, long v) => *(long*)(_base + addr) = v;
+
+    // --- atomic word access -------------------------------------------------
+    //
+    // Mirrors the Rust `Space::atomic_load` / `atomic_store` / `cas`. Every
+    // object is 8-aligned -- `SizeFor` rounds each layout to a multiple of 8 --
+    // so `SlotAddr`, which is `base + 8 + i * 8`, is always aligned, which is
+    // what makes an interlocked operation on it legal.
+    //
+    // These exist for ONE thing: a port's inbox, where two executors reserve
+    // and publish without a lock (`doc/decisions/0028`). Nothing else in the
+    // heap is written by two threads at once -- a collection is stop-the-world
+    // at a safepoint -- so ordinary slots need no synchronisation.
+    public long AtomicLoad(long addr) =>
+        System.Threading.Volatile.Read(ref *(long*)(_base + addr));
+
+    public void AtomicStore(long addr, long v) =>
+        System.Threading.Volatile.Write(ref *(long*)(_base + addr), v);
+
+    /// Compare-and-swap. True when this thread won the slot.
+    public bool Cas(long addr, long want, long next) =>
+        System.Threading.Interlocked.CompareExchange(
+            ref *(long*)(_base + addr), next, want) == want;
     public int ReadU8(long addr) => _base[addr];
     public void WriteU8(long addr, int v) => _base[addr] = (byte) v;
 

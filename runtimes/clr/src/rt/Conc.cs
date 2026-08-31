@@ -60,9 +60,21 @@ public static class Conc {
 
     // --- port --------------------------------------------------------------
 
+    /// `PT_INBOX` is a FIXED ring of `PT_RING` slots with a sequence word each,
+    /// reserved by compare-and-swap and published by the sequence store. It was
+    /// a persistent vector and a read cursor, and `conj`-then-store is a
+    /// read-modify-write with an allocation in the middle -- two executors
+    /// sending into one channel lost exactly half the traffic. See the Rust
+    /// `port_enqueue` for the protocol, which this mirrors step for step.
     public const int PT_ID = 0, PT_STATE = 1, PT_CAP = 2, PT_INBOX = 3,
-        PT_HEAD = 4, PT_BYTES = 5, PT_PEER = 6, PT_LABEL = 7, PT_KIND = 8,
-        PT_ROOT = 9, PT_FORMAT = 10, PT_OPTS = 11, PT_BINARY = 12, PT_LEN = 13;
+        PT_READ = 4, PT_BYTES = 5, PT_PEER = 6, PT_LABEL = 7, PT_KIND = 8,
+        PT_ROOT = 9, PT_FORMAT = 10, PT_OPTS = 11, PT_BINARY = 12,
+        PT_SEQ = 13, PT_WRITE = 14, PT_GEN = 15, PT_RING = 16, PT_LEN = 17;
+
+    /// How many messages a bridge end's ring holds. Its `PT_CAP` bounds BYTES,
+    /// which is the bound that matters for memory; this bounds the count so the
+    /// ring can be one fixed allocation.
+    public const long RingMessages = 1024;
 
     /// A port's STATE. `P_PENDING` is an `open` the host has not answered yet
     /// and `P_REFUSED` is one it declined -- distinct from `P_CLOSED`, because
@@ -388,6 +400,31 @@ public static class Conc {
         return c;
     }
 
+    /// Park until there is room in `p`'s ring.
+    ///
+    /// The re-check after registering is not belt and braces: `WakeOn` reaches
+    /// only waiters ALREADY in the list, so a receive that drains the ring
+    /// between the failed reservation and the registration would wake nobody.
+    static long ParkForSpace(Rt rt, long p) {
+        int bas = rt.Mark();
+        int pi = rt.Push(p);
+        long token = NewWaiter(rt, WK_SEND, rt.R(pi));
+        long th = CurrentThread(rt);
+        if (!Val.IsNil(th)) rt.SetSlot(Val.AsHeap(th), TH_TOKEN, Val.Fixnum(token));
+        long ring = Fx(rt.Slot(rt.R(pi), PT_RING));
+        if (InboxCount(rt, rt.R(pi)) < ring) {
+            FreeWaiter(rt, token);
+            if (!Val.IsNil(th)) rt.SetSlot(Val.AsHeap(th), TH_TOKEN, Val.Fixnum(-1));
+            rt.PopTo(bas);
+            // A yield rather than a park: the thread stays runnable and the
+            // send runs again on its next turn.
+            return Park(rt, PARK_YIELD);
+        }
+        long pv = rt.R(pi);
+        rt.PopTo(bas);
+        return Park(rt, pv);
+    }
+
     static long ParkOnPort(Rt rt, long kind, long port) {
         int bas = rt.Mark();
         int pi = rt.Push(port);
@@ -514,8 +551,21 @@ public static class Conc {
         rt.SetSlot(p, PT_ID, Val.Fixnum(id));
         rt.SetSlot(p, PT_STATE, Val.Fixnum(state));
         rt.SetSlot(p, PT_CAP, Val.Fixnum(cap));
-        rt.SetSlot(p, PT_INBOX, Vec.Empty(rt));
-        rt.SetSlot(p, PT_HEAD, Val.Fixnum(0));
+        // The ring, allocated ONCE: a send must not allocate, because
+        // allocation is where the old inbox lost messages.
+        long ring = kind == K_CHANNEL ? System.Math.Max(cap, 1) : RingMessages;
+        rt.SetSlot(p, PT_RING, Val.Fixnum(ring));
+        int sli = rt.Push(NewObj(rt, Obj.TyNode, (int) ring));
+        for (int i = 0; i < ring; i++) rt.SetSlot(Val.AsHeap(rt.R(sli)), i, Val.Nil);
+        rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_INBOX, rt.R(sli));
+        // `seq[i] = i`: slot i is free and belongs to reservation number i.
+        int sqi = rt.Push(NewObj(rt, Obj.TyNode, (int) ring));
+        for (int i = 0; i < ring; i++) rt.SetSlot(Val.AsHeap(rt.R(sqi)), i, Val.Fixnum(i));
+        rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_SEQ, rt.R(sqi));
+        p = Val.AsHeap(rt.R(pi));
+        rt.SetSlot(p, PT_READ, Val.Fixnum(0));
+        rt.SetSlot(p, PT_WRITE, Val.Fixnum(0));
+        rt.SetSlot(p, PT_GEN, Val.Fixnum(0));
         rt.SetSlot(p, PT_BYTES, Val.Fixnum(0));
         // PEERS ARE LINKED BY ID, never by object. When one end is collected
         // its object is gone, and a field holding the peer would keep it alive
@@ -642,31 +692,77 @@ public static class Conc {
         return -1;
     }
 
+    /// How many messages are in the ring, reservations included: a reserved
+    /// slot is spoken for even before it is filled.
     static int InboxCount(Rt rt, long p) {
-        return Vec.Count(rt, rt.Slot(p, PT_INBOX)) - (int) Fx(rt.Slot(p, PT_HEAD));
+        return (int) System.Math.Max(0, Cursor(rt, p, PT_WRITE) - Cursor(rt, p, PT_READ));
     }
 
-    static void Enqueue(Rt rt, long p, long v) {
-        int bas = rt.Mark();
-        int pi = rt.Push(p), vi = rt.Push(v);
-        int ibi = rt.Push(rt.Slot(rt.R(pi), PT_INBOX));
-        long nib = Vec.Conj(rt, rt.R(ibi), rt.R(vi));
-        rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_INBOX, nib);
-        rt.PopTo(bas);
-    }
+    static long Cursor(Rt rt, long p, int which) => Fx(SlotAtomic(rt, p, which));
 
-    static long Dequeue(Rt rt, long p) {
-        int head = (int) Fx(rt.Slot(p, PT_HEAD));
-        long ib = rt.Slot(p, PT_INBOX);
-        long v = Vec.Nth(rt, ib, head);
-        if (head + 1 >= Vec.Count(rt, ib)) {
-            // Drained: drop the backing vector so nothing stays reachable.
-            rt.SetSlot(Val.AsHeap(p), PT_INBOX, Vec.Empty(rt));
-            rt.SetSlot(Val.AsHeap(p), PT_HEAD, Val.Fixnum(0));
-        } else {
-            rt.SetSlot(Val.AsHeap(p), PT_HEAD, Val.Fixnum(head + 1));
+    /// One slot, read atomically. Cursors and sequence words are fixnums like
+    /// any other slot -- the collector sees nothing unusual -- and the atomic
+    /// operates on the TAGGED word.
+    static long SlotAtomic(Rt rt, long o, int i) =>
+        rt.gc.sp.AtomicLoad(Obj.SlotAddr(Val.AsHeap(o), i));
+
+    /// Store a slot atomically, AND run the write barrier.
+    ///
+    /// The barrier is the whole reason this is not just an atomic store. A ring
+    /// big enough to miss the nursery lives in the old generation, and an old
+    /// object pointing at a young one is an edge the collector finds only
+    /// through the remembered set. Skipping it made every bridge trap -- a
+    /// bridge's ring is 1024 slots where a small channel's is two, so channels
+    /// worked and `open` died with nothing on the stack to say why.
+    static void SetSlotAtomic(Rt rt, long o, int i, long v) {
+        long obj = Val.AsHeap(o);
+        rt.gc.sp.AtomicStore(Obj.SlotAddr(obj, i), v);
+        if (Val.IsHeap(v) && rt.gc.IsYoung(Val.AsHeap(v)) && !rt.gc.IsYoung(obj)) {
+            rt.gc.Remember(obj, rt.roots);
         }
-        return v == Val.NotFound ? Val.Nil : v;
+    }
+
+    static bool CasSlot(Rt rt, long o, int i, long want, long next) =>
+        rt.gc.sp.Cas(Obj.SlotAddr(Val.AsHeap(o), i), want, next);
+
+    /// Put `v` in `p`'s ring. False means full. Mirrors the Rust exactly.
+    static bool Enqueue(Rt rt, long p, long v) {
+        long ring = Fx(rt.Slot(p, PT_RING));
+        long inbox = rt.Slot(p, PT_INBOX);
+        long seq = rt.Slot(p, PT_SEQ);
+        for (;;) {
+            long w = Cursor(rt, p, PT_WRITE);
+            long r = Cursor(rt, p, PT_READ);
+            if (w - r >= ring) return false;
+            int idx = (int) (w % ring);
+            if (Fx(SlotAtomic(rt, seq, idx)) != w) continue;
+            if (!CasSlot(rt, p, PT_WRITE, Val.Fixnum(w), Val.Fixnum(w + 1))) continue;
+            long gen = Cursor(rt, p, PT_GEN);
+            SetSlotAtomic(rt, inbox, idx, v);
+            SetSlotAtomic(rt, seq, idx, Val.Fixnum(w + 1));
+            if (Cursor(rt, p, PT_GEN) != gen) continue;
+            return true;
+        }
+    }
+
+    /// Take the next readable message, or nil. A reserved-but-unfilled slot
+    /// reads as empty rather than being skipped: skipping would reorder
+    /// messages a sender had already sequenced.
+    static long Dequeue(Rt rt, long p) {
+        long ring = Fx(rt.Slot(p, PT_RING));
+        long inbox = rt.Slot(p, PT_INBOX);
+        long seq = rt.Slot(p, PT_SEQ);
+        for (;;) {
+            long r = Cursor(rt, p, PT_READ);
+            if (r >= Cursor(rt, p, PT_WRITE)) return Val.Nil;
+            int idx = (int) (r % ring);
+            if (Fx(SlotAtomic(rt, seq, idx)) != r + 1) return Val.Nil;
+            if (!CasSlot(rt, p, PT_READ, Val.Fixnum(r), Val.Fixnum(r + 1))) continue;
+            long v = SlotAtomic(rt, inbox, idx);
+            SetSlotAtomic(rt, inbox, idx, Val.Nil);
+            SetSlotAtomic(rt, seq, idx, Val.Fixnum(r + ring));
+            return v;
+        }
     }
 
     // --- what may cross a port ----------------------------------------------
@@ -930,18 +1026,18 @@ public static class Conc {
             rt.PopTo(bas);
             return rt.ThrowStr("IllegalStateException", "the other end of this port is closed");
         }
-        long ccap = Fx(rt.Slot(rt.R(pei), PT_CAP));
-        if (InboxCount(rt, rt.R(pei)) >= ccap) {
-            // FULL: park on the PEER, because that is what a receive there
-            // frees. Parking on this end would never be woken.
-            long tgt = rt.R(pei);
+        // TRY, then park -- rather than ask whether it is full and then put.
+        // The reservation IS the question, in one atomic step.
+        if (Enqueue(rt, rt.R(pei), rt.R(vi))) {
+            WakeOn(rt, rt.R(pei));
             rt.PopTo(bas);
-            return ParkOnPort(rt, WK_SEND, tgt);
+            return Val.Nil;
         }
-        Enqueue(rt, rt.R(pei), rt.R(vi));
-        WakeOn(rt, rt.R(pei));
+        // FULL: back-pressure. Park on the PEER, because that is what a receive
+        // there frees; parking on this end would never be woken.
+        long full = rt.R(pei);
         rt.PopTo(bas);
-        return Val.Nil;
+        return ParkForSpace(rt, full);
     }
 
     /// Take from this port's inbox. Parks when empty.
@@ -1170,10 +1266,18 @@ public static class Conc {
             if (Val.IsNil(flint)) { rt.PopTo(bas); return false; }
             pi = rt.Push(flint);
         }
-        long queued = Fx(rt.Slot(rt.R(pi), PT_BYTES));
+        // BACK-PRESSURE in bytes, CLAIMED ATOMICALLY: two host threads
+        // delivering into one end would both read the same `queued`, both find
+        // room, and both write -- and the bound that exists to cap memory would
+        // be the one thing not enforced.
         long cap = Fx(rt.Slot(rt.R(pi), PT_CAP));
-        if (queued > 0 && queued + bytes.Length > cap) { rt.PopTo(bas); return false; }
-        rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_BYTES, Val.Fixnum(queued + bytes.Length));
+        long len = bytes.Length;
+        for (;;) {
+            long pv = rt.R(pi);
+            long queued = Fx(SlotAtomic(rt, pv, PT_BYTES));
+            if (queued > 0 && queued + len > cap) { rt.PopTo(bas); return false; }
+            if (CasSlot(rt, pv, PT_BYTES, Val.Fixnum(queued), Val.Fixnum(queued + len))) break;
+        }
         // One object, not one boxed fixnum per byte, on a binary port: a vector
         // would cost a 32-way trie and an allocation per 32 bytes for data the
         // codec immediately walks back into bytes.
@@ -1181,10 +1285,26 @@ public static class Conc {
                ? Bytes.Of(rt, bytes)
                : Str.Of(rt, System.Text.Encoding.UTF8.GetString(bytes));
         int vi = rt.Push(v);
-        Enqueue(rt, rt.R(pi), rt.R(vi));
+        if (!Enqueue(rt, rt.R(pi), rt.R(vi))) {
+            // The ring is full though the byte bound had room: the guest has
+            // not drained. Give the bytes back and tell the host to offer this
+            // again. Back-pressure, not an error.
+            GiveBack(rt, rt.R(pi), len);
+            rt.PopTo(bas);
+            return false;
+        }
         WakeOn(rt, rt.R(pi));
         rt.PopTo(bas);
         return true;
+    }
+
+    /// Return bytes claimed against a port's bound for a message never delivered.
+    static void GiveBack(Rt rt, long p, long len) {
+        for (;;) {
+            long q = Fx(SlotAtomic(rt, p, PT_BYTES));
+            long back = q > len ? q - len : 0;
+            if (CasSlot(rt, p, PT_BYTES, Val.Fixnum(q), Val.Fixnum(back))) return;
+        }
     }
 
     /// The host lets go of its end. The port may now be collected.

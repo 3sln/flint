@@ -62,9 +62,21 @@ public final class Conc {
 
     // --- port --------------------------------------------------------------
 
+    /// `PT_INBOX` is a FIXED ring of `PT_RING` slots with a sequence word each,
+    /// reserved by compare-and-swap and published by the sequence store. It was
+    /// a persistent vector and a read cursor, and `conj`-then-store is a
+    /// read-modify-write with an allocation in the middle -- two executors
+    /// sending into one channel lost exactly half the traffic. See the Rust
+    /// `port_enqueue` for the protocol, which this mirrors step for step.
     public static final int PT_ID = 0, PT_STATE = 1, PT_CAP = 2, PT_INBOX = 3,
-        PT_HEAD = 4, PT_BYTES = 5, PT_PEER = 6, PT_LABEL = 7, PT_KIND = 8,
-        PT_ROOT = 9, PT_FORMAT = 10, PT_OPTS = 11, PT_BINARY = 12, PT_LEN = 13;
+        PT_READ = 4, PT_BYTES = 5, PT_PEER = 6, PT_LABEL = 7, PT_KIND = 8,
+        PT_ROOT = 9, PT_FORMAT = 10, PT_OPTS = 11, PT_BINARY = 12,
+        PT_SEQ = 13, PT_WRITE = 14, PT_GEN = 15, PT_RING = 16, PT_LEN = 17;
+
+    /// How many messages a bridge end's ring holds. Its `PT_CAP` bounds BYTES,
+    /// which is the bound that matters for memory; this bounds the count so the
+    /// ring can be one fixed allocation.
+    public static final long RING_MESSAGES = 1024;
 
     /// A port's STATE. `P_PENDING` is an `open` the host has not answered yet
     /// and `P_REFUSED` is one it declined -- distinct from `P_CLOSED`, because
@@ -390,6 +402,32 @@ public final class Conc {
         return c;
     }
 
+    /// Park until there is room in `p`'s ring.
+    ///
+    /// The re-check after registering is not belt and braces: `wakeOn` reaches
+    /// only waiters ALREADY in the list, so a receive that drains the ring
+    /// between the failed reservation and the registration would wake nobody
+    /// and this thread would sleep with space in front of it.
+    static long parkForSpace(Rt rt, long p) {
+        int base = rt.mark();
+        int pi = rt.push(p);
+        long token = newWaiter(rt, WK_SEND, rt.r(pi));
+        long th = currentThread(rt);
+        if (!Val.isNil(th)) rt.setSlot(Val.asHeap(th), TH_TOKEN, Val.fixnum(token));
+        long ring = fx(rt.slot(rt.r(pi), PT_RING));
+        if (inboxCount(rt, rt.r(pi)) < ring) {
+            freeWaiter(rt, token);
+            if (!Val.isNil(th)) rt.setSlot(Val.asHeap(th), TH_TOKEN, Val.fixnum(-1));
+            rt.popTo(base);
+            // A yield rather than a park: the thread stays runnable and the
+            // send runs again on its next turn.
+            return park(rt, PARK_YIELD);
+        }
+        long pv = rt.r(pi);
+        rt.popTo(base);
+        return park(rt, pv);
+    }
+
     static long parkOnPort(Rt rt, long kind, long port) {
         int base = rt.mark();
         int pi = rt.push(port);
@@ -516,8 +554,21 @@ public final class Conc {
         rt.setSlot(p, PT_ID, Val.fixnum(id));
         rt.setSlot(p, PT_STATE, Val.fixnum(state));
         rt.setSlot(p, PT_CAP, Val.fixnum(cap));
-        rt.setSlot(p, PT_INBOX, Vec.empty(rt));
-        rt.setSlot(p, PT_HEAD, Val.fixnum(0));
+        // The ring, allocated ONCE: a send must not allocate, because
+        // allocation is where the old inbox lost messages.
+        long ring = kind == K_CHANNEL ? Math.max(cap, 1) : RING_MESSAGES;
+        rt.setSlot(p, PT_RING, Val.fixnum(ring));
+        int sli = rt.push(rt.newObj(Obj.TY_NODE, (int) ring));
+        for (int i = 0; i < ring; i++) rt.setSlot(Val.asHeap(rt.r(sli)), i, Val.NIL);
+        rt.setSlot(Val.asHeap(rt.r(pi)), PT_INBOX, rt.r(sli));
+        // `seq[i] = i`: slot i is free and belongs to reservation number i.
+        int sqi = rt.push(rt.newObj(Obj.TY_NODE, (int) ring));
+        for (int i = 0; i < ring; i++) rt.setSlot(Val.asHeap(rt.r(sqi)), i, Val.fixnum(i));
+        rt.setSlot(Val.asHeap(rt.r(pi)), PT_SEQ, rt.r(sqi));
+        p = Val.asHeap(rt.r(pi));
+        rt.setSlot(p, PT_READ, Val.fixnum(0));
+        rt.setSlot(p, PT_WRITE, Val.fixnum(0));
+        rt.setSlot(p, PT_GEN, Val.fixnum(0));
         rt.setSlot(p, PT_BYTES, Val.fixnum(0));
         // PEERS ARE LINKED BY ID, never by object. When one end is collected
         // its object is gone, and a field holding the peer would keep it alive
@@ -642,31 +693,85 @@ public final class Conc {
         return -1;
     }
 
+    /// How many messages are in the ring, reservations included: a reserved
+    /// slot is spoken for even before it is filled, and the bound this feeds is
+    /// on occupancy.
     static int inboxCount(Rt rt, long p) {
-        return Vec.count(rt, rt.slot(p, PT_INBOX)) - (int) fx(rt.slot(p, PT_HEAD));
+        return (int) Math.max(0, cursor(rt, p, PT_WRITE) - cursor(rt, p, PT_READ));
     }
 
-    static void enqueue(Rt rt, long p, long v) {
-        int base = rt.mark();
-        int pi = rt.push(p), vi = rt.push(v);
-        int ibi = rt.push(rt.slot(rt.r(pi), PT_INBOX));
-        long nib = Vec.conj(rt, rt.r(ibi), rt.r(vi));
-        rt.setSlot(Val.asHeap(rt.r(pi)), PT_INBOX, nib);
-        rt.popTo(base);
+    static long cursor(Rt rt, long p, int which) {
+        return fx(slotAtomic(rt, p, which));
     }
 
-    static long dequeue(Rt rt, long p) {
-        int head = (int) fx(rt.slot(p, PT_HEAD));
-        long ib = rt.slot(p, PT_INBOX);
-        long v = Vec.nth(rt, ib, head);
-        if (head + 1 >= Vec.count(rt, ib)) {
-            // Drained: drop the backing vector so nothing stays reachable.
-            rt.setSlot(Val.asHeap(p), PT_INBOX, Vec.empty(rt));
-            rt.setSlot(Val.asHeap(p), PT_HEAD, Val.fixnum(0));
-        } else {
-            rt.setSlot(Val.asHeap(p), PT_HEAD, Val.fixnum(head + 1));
+    /// One slot, read atomically. Cursors and sequence words are fixnums like
+    /// any other slot -- the collector sees nothing unusual -- and the atomic
+    /// operates on the TAGGED word, so a compare-and-swap compares tagged
+    /// against tagged and never invents a value.
+    static long slotAtomic(Rt rt, long o, int i) {
+        return rt.gc.sp.atomicLoad(Obj.slotAddr(Val.asHeap(o), i));
+    }
+
+    /// Store a slot atomically, AND run the write barrier.
+    ///
+    /// The barrier is the whole reason this is not just an atomic store. A ring
+    /// big enough to miss the nursery lives in the old generation, and an old
+    /// object pointing at a young one is an edge the collector finds only
+    /// through the remembered set. Skipping it made every bridge trap -- a
+    /// bridge's ring is 1024 slots where a small channel's is two, so channels
+    /// worked and `open` died with nothing on the stack to say why.
+    static void setSlotAtomic(Rt rt, long o, int i, long v) {
+        long obj = Val.asHeap(o);
+        rt.gc.sp.atomicStore(Obj.slotAddr(obj, i), v);
+        if (Val.isHeap(v) && rt.gc.isYoung(Val.asHeap(v)) && !rt.gc.isYoung(obj)) {
+            rt.gc.remember(obj, rt.roots);
         }
-        return v == Val.NOT_FOUND ? Val.NIL : v;
+    }
+
+    static boolean casSlot(Rt rt, long o, int i, long want, long next) {
+        return rt.gc.sp.cas(Obj.slotAddr(Val.asHeap(o), i), want, next);
+    }
+
+    /// Put `v` in `p`'s ring. False means full. Mirrors the Rust exactly:
+    /// reserve by claiming the write cursor, fill, publish, then check that no
+    /// flush passed the slot by while it was being filled.
+    static boolean enqueue(Rt rt, long p, long v) {
+        long ring = fx(rt.slot(p, PT_RING));
+        long inbox = rt.slot(p, PT_INBOX);
+        long seq = rt.slot(p, PT_SEQ);
+        for (;;) {
+            long w = cursor(rt, p, PT_WRITE);
+            long r = cursor(rt, p, PT_READ);
+            if (w - r >= ring) return false;
+            int idx = (int) (w % ring);
+            if (fx(slotAtomic(rt, seq, idx)) != w) continue;
+            if (!casSlot(rt, p, PT_WRITE, Val.fixnum(w), Val.fixnum(w + 1))) continue;
+            long gen = cursor(rt, p, PT_GEN);
+            setSlotAtomic(rt, inbox, idx, v);
+            setSlotAtomic(rt, seq, idx, Val.fixnum(w + 1));
+            if (cursor(rt, p, PT_GEN) != gen) continue;
+            return true;
+        }
+    }
+
+    /// Take the next readable message, or NIL. A slot that is reserved and not
+    /// yet filled reads as empty rather than being skipped: skipping would
+    /// reorder messages a sender had already sequenced.
+    static long dequeue(Rt rt, long p) {
+        long ring = fx(rt.slot(p, PT_RING));
+        long inbox = rt.slot(p, PT_INBOX);
+        long seq = rt.slot(p, PT_SEQ);
+        for (;;) {
+            long r = cursor(rt, p, PT_READ);
+            if (r >= cursor(rt, p, PT_WRITE)) return Val.NIL;
+            int idx = (int) (r % ring);
+            if (fx(slotAtomic(rt, seq, idx)) != r + 1) return Val.NIL;
+            if (!casSlot(rt, p, PT_READ, Val.fixnum(r), Val.fixnum(r + 1))) continue;
+            long v = slotAtomic(rt, inbox, idx);
+            setSlotAtomic(rt, inbox, idx, Val.NIL);
+            setSlotAtomic(rt, seq, idx, Val.fixnum(r + ring));
+            return v;
+        }
     }
 
     // --- what may cross a port ----------------------------------------------
@@ -931,18 +1036,19 @@ public final class Conc {
             rt.popTo(base);
             return rt.throwStr("IllegalStateException", "the other end of this port is closed");
         }
-        long cap = fx(rt.slot(rt.r(pei), PT_CAP));
-        if (inboxCount(rt, rt.r(pei)) >= cap) {
-            // FULL: park on the PEER, because that is what a receive there
-            // frees. Parking on this end would never be woken.
-            long target = rt.r(pei);
+        // TRY, then park -- rather than ask whether it is full and then put.
+        // The reservation IS the question, in one atomic step, so nothing can
+        // change between asking and acting.
+        if (enqueue(rt, rt.r(pei), rt.r(vi))) {
+            wakeOn(rt, rt.r(pei));
             rt.popTo(base);
-            return parkOnPort(rt, WK_SEND, target);
+            return Val.NIL;
         }
-        enqueue(rt, rt.r(pei), rt.r(vi));
-        wakeOn(rt, rt.r(pei));
+        // FULL: back-pressure. Park on the PEER, because that is what a receive
+        // there frees; parking on this end would never be woken.
+        long target = rt.r(pei);
         rt.popTo(base);
-        return Val.NIL;
+        return parkForSpace(rt, target);
     }
 
     /// Take from this port's inbox. Parks when empty.
@@ -1171,10 +1277,18 @@ public final class Conc {
             if (Val.isNil(flint)) { rt.popTo(base); return false; }
             pi = rt.push(flint);
         }
-        long queued = fx(rt.slot(rt.r(pi), PT_BYTES));
+        // BACK-PRESSURE in bytes, CLAIMED ATOMICALLY: two host threads
+        // delivering into one end would both read the same `queued`, both find
+        // room, and both write -- and the bound that exists to cap memory would
+        // be the one thing not enforced.
         long cap = fx(rt.slot(rt.r(pi), PT_CAP));
-        if (queued > 0 && queued + bytes.length > cap) { rt.popTo(base); return false; }
-        rt.setSlot(Val.asHeap(rt.r(pi)), PT_BYTES, Val.fixnum(queued + bytes.length));
+        long len = bytes.length;
+        for (;;) {
+            long pv = rt.r(pi);
+            long queued = fx(slotAtomic(rt, pv, PT_BYTES));
+            if (queued > 0 && queued + len > cap) { rt.popTo(base); return false; }
+            if (casSlot(rt, pv, PT_BYTES, Val.fixnum(queued), Val.fixnum(queued + len))) break;
+        }
         // One object, not one boxed fixnum per byte, on a binary port: a vector
         // would cost a 32-way trie and an allocation per 32 bytes for data the
         // codec immediately walks back into bytes.
@@ -1182,10 +1296,28 @@ public final class Conc {
                ? Bytes.of(rt, bytes)
                : Str.of(rt, new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
         int vi = rt.push(v);
-        enqueue(rt, rt.r(pi), rt.r(vi));
+        if (!enqueue(rt, rt.r(pi), rt.r(vi))) {
+            // The ring is full though the byte bound had room: the guest has
+            // not drained. Give the bytes back -- a message the guest never saw
+            // must not go on counting against its bound -- and tell the host to
+            // offer it again. Back-pressure, not an error.
+            giveBack(rt, rt.r(pi), len);
+            rt.popTo(base);
+            return false;
+        }
         wakeOn(rt, rt.r(pi));
         rt.popTo(base);
         return true;
+    }
+
+    /// Return bytes claimed against a port's bound for a message that was never
+    /// delivered.
+    static void giveBack(Rt rt, long p, long len) {
+        for (;;) {
+            long q = fx(slotAtomic(rt, p, PT_BYTES));
+            long back = q > len ? q - len : 0;
+            if (casSlot(rt, p, PT_BYTES, Val.fixnum(q), Val.fixnum(back))) return;
+        }
     }
 
     /// The host lets go of its end. The port may now be collected.

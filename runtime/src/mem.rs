@@ -330,7 +330,6 @@ impl Space {
     pub fn write_u32(&self, addr: Addr, v: u32) {
         unsafe { core::ptr::write_unaligned(self.ptr(addr) as *mut u32, v) }
     }
-    #[inline(always)]
     /// Where object addresses are measured from. Compiled code needs it to read
     /// a slot without a call back into Rust (`doc/decisions/0013`).
     #[inline(always)]
@@ -345,6 +344,43 @@ impl Space {
     pub fn write_u64(&self, addr: Addr, v: u64) {
         unsafe { core::ptr::write_unaligned(self.ptr(addr) as *mut u64, v) }
     }
+    // --- atomic word access -------------------------------------------------
+    //
+    // Every object is 8-aligned -- `size_for` rounds each layout to a multiple
+    // of 8 and the arena base is aligned to 16 -- so `slot_addr`, which is
+    // `base + 8 + i * 8`, is always 8-aligned and a `u64` atomic on it is
+    // sound. The plain accessors above use `read_unaligned` because they also
+    // serve string and byte payloads, which are not.
+    //
+    // These exist for ONE thing: a port's inbox, where two executors reserve
+    // and publish without a lock (`doc/decisions/0028`). Nothing else in the
+    // heap is written by two threads at once -- a collection is stop-the-world
+    // at a safepoint, so ordinary slots need no synchronisation at all.
+    #[inline(always)]
+    fn atomic_at(&self, addr: Addr) -> &core::sync::atomic::AtomicU64 {
+        debug_assert!(addr % 8 == 0, "an atomic word must be 8-aligned, got {addr}");
+        unsafe { &*(self.ptr(addr) as *const core::sync::atomic::AtomicU64) }
+    }
+
+    #[inline(always)]
+    pub fn atomic_load(&self, addr: Addr) -> u64 {
+        self.atomic_at(addr).load(core::sync::atomic::Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    pub fn atomic_store(&self, addr: Addr, v: u64) {
+        self.atomic_at(addr).store(v, core::sync::atomic::Ordering::Release)
+    }
+
+    /// Compare-and-swap. `Ok(())` when this thread won the slot.
+    #[inline(always)]
+    pub fn cas(&self, addr: Addr, want: u64, next: u64) -> bool {
+        use core::sync::atomic::Ordering;
+        self.atomic_at(addr)
+            .compare_exchange(want, next, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
     #[inline(always)]
     pub fn read_u8(&self, addr: Addr) -> u8 {
         unsafe { *self.ptr(addr) }

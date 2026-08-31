@@ -70,6 +70,34 @@ public final class Space implements AutoCloseable {
     public void writeU32(long addr, int v) { mem.set(I32, addr, v); }
     public long readU64(long addr) { return mem.get(I64, addr); }
     public void writeU64(long addr, long v) { mem.set(I64, addr, v); }
+
+    // --- atomic word access -------------------------------------------------
+    //
+    // Mirrors the Rust `Space::atomic_load` / `atomic_store` / `cas`. Every
+    // object is 8-aligned -- `sizeFor` rounds each layout to a multiple of 8 --
+    // so `slotAddr`, which is `base + 8 + i * 8`, is always aligned and these
+    // are legal. A `VarHandle` over a MemorySegment supports the atomic access
+    // modes only for aligned addresses, which is the same requirement.
+    //
+    // These exist for ONE thing: a port's inbox, where two executors reserve
+    // and publish without a lock (`doc/decisions/0028`). Nothing else in the
+    // heap is written by two threads at once -- a collection is stop-the-world
+    // at a safepoint -- so ordinary slots need no synchronisation.
+    private static final java.lang.invoke.VarHandle I64_ATOMIC =
+        ValueLayout.JAVA_LONG.varHandle();
+
+    public long atomicLoad(long addr) {
+        return (long) I64_ATOMIC.getVolatile(mem, addr);
+    }
+
+    public void atomicStore(long addr, long v) {
+        I64_ATOMIC.setVolatile(mem, addr, v);
+    }
+
+    /// Compare-and-swap. True when this thread won the slot.
+    public boolean cas(long addr, long want, long next) {
+        return I64_ATOMIC.compareAndSet(mem, addr, want, next);
+    }
     public int readU8(long addr) { return mem.get(I8, addr) & 0xFF; }
     public void writeU8(long addr, int v) { mem.set(I8, addr, (byte) v); }
 

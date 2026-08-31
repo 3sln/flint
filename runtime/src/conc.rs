@@ -101,9 +101,21 @@ pub const PT_STATE: u32 = 1;
 /// point of back-pressure is to bound memory, and one 4 MB message is not one
 /// message's worth of memory.
 pub const PT_CAP: u32 = 2;
-/// Inbox: a vector used as a FIFO with a read cursor, so both ends are O(1).
+/// Inbox: a FIXED ring of `PT_RING` slots, written and read without a lock.
+///
+/// It used to be a persistent vector with a read cursor, and `conj`-then-store
+/// is a read-modify-write with an ALLOCATION in the middle -- which takes the
+/// allocation lock and can stage a safepoint, so the window was not theoretical.
+/// Two executors sending into one channel lost exactly half the traffic: 4 000
+/// sent, 2 000 received.
+///
+/// A ring is fixed at creation, so nothing about a send allocates and there is
+/// no shared structure to rebuild. See `port_enqueue` for the protocol.
 pub const PT_INBOX: u32 = 3;
-pub const PT_HEAD: u32 = 4;
+/// Read cursor. Monotonic, never wrapped: the slot is `read % PT_RING`, so a
+/// cursor and its slot are different things and the empty and full cases do not
+/// collide the way two wrapped indices do.
+pub const PT_READ: u32 = 4;
 /// Bytes currently queued against this end's bound.
 pub const PT_BYTES: u32 = 5;
 /// The other end's **id**, not the other end. See above.
@@ -122,7 +134,33 @@ pub const PT_OPTS: u32 = 11;
 /// formats happen to be UTF-8, but a binary one (Transit-msgpack) is not, so
 /// its payloads travel as vectors of 0..255 rather than as strings.
 pub const PT_BINARY: u32 = 12;
-pub const PT_LEN: u32 = 13;
+/// One sequence word per ring slot, which is what makes the ring lock-free.
+///
+/// `seq[i]` says what the slot is ready for: equal to the write cursor means
+/// "free, and the reservation with this number may take it"; one past it means
+/// "filled, and the read cursor with the previous number may take it". A
+/// reserved-but-unfilled slot is therefore invisible to a reader rather than
+/// half-read, without anybody holding anything.
+pub const PT_SEQ: u32 = 13;
+/// Write (reservation) cursor. Monotonic, as `PT_READ`.
+pub const PT_WRITE: u32 = 14;
+/// Flush generation. Bumped when a drain SKIPS a slot that was reserved and not
+/// yet filled; a sender whose reservation spans a bump starts its put over,
+/// because its slot may have been passed by.
+pub const PT_GEN: u32 = 15;
+/// Ring capacity, in messages. A channel's is what `channel` was asked for; a
+/// bridge end's is `RING_MESSAGES`, because its own bound (`PT_CAP`) is in
+/// BYTES and the two are different questions.
+pub const PT_RING: u32 = 16;
+pub const PT_LEN: u32 = 17;
+
+/// How many messages a bridge end's ring holds.
+///
+/// Its `PT_CAP` bounds BYTES, which is the bound that matters for memory, and
+/// this bounds the count so the ring can be a fixed allocation. A host that
+/// fills it is told to offer the message again, exactly as it is told when the
+/// byte bound is reached.
+pub const RING_MESSAGES: i64 = 1024;
 
 /// What a carrying port can convey, for `check_sendable_at`.
 ///
@@ -669,9 +707,28 @@ impl Rt {
         self.set(self.r(pi), PT_ID, Value::fixnum(id));
         self.set(self.r(pi), PT_STATE, Value::fixnum(state));
         self.set(self.r(pi), PT_CAP, Value::fixnum(cap));
-        let ev = self.empty_vec();
-        self.set(self.r(pi), PT_INBOX, ev);
-        self.set(self.r(pi), PT_HEAD, Value::fixnum(0));
+        // The ring, allocated ONCE and never again: a send must not allocate,
+        // because allocation is where the old inbox lost messages.
+        let ring = if kind == K_CHANNEL { cap.max(1) } else { RING_MESSAGES };
+        self.set(self.r(pi), PT_RING, Value::fixnum(ring));
+        let slots = self.new_obj(crate::obj::TY_NODE, ring as u32);
+        let sli = self.push(slots);
+        for i in 0..ring as u32 {
+            self.set(self.r(sli), i, NIL);
+        }
+        let sv = self.r(sli);
+        self.set(self.r(pi), PT_INBOX, sv);
+        // `seq[i] = i`: slot i is free and belongs to reservation number i.
+        let seqs = self.new_obj(crate::obj::TY_NODE, ring as u32);
+        let sqi = self.push(seqs);
+        for i in 0..ring as u32 {
+            self.set(self.r(sqi), i, Value::fixnum(i as i64));
+        }
+        let qv = self.r(sqi);
+        self.set(self.r(pi), PT_SEQ, qv);
+        self.set(self.r(pi), PT_READ, Value::fixnum(0));
+        self.set(self.r(pi), PT_WRITE, Value::fixnum(0));
+        self.set(self.r(pi), PT_GEN, Value::fixnum(0));
         self.set(self.r(pi), PT_BYTES, Value::fixnum(0));
         self.set(self.r(pi), PT_PEER, Value::fixnum(-1));
         let l = self.r(li);
@@ -826,38 +883,149 @@ impl Rt {
         self.port_by_id(id)
     }
 
+    /// How many messages are readable right now.
+    ///
+    /// Reservations that have not been filled are INCLUDED, because the bound
+    /// this feeds is on occupancy rather than on readability: a reserved slot
+    /// is spoken for. A reader asks `port_dequeue`, which tells readable from
+    /// reserved by the sequence word.
     fn inbox_count(&self, p: Value) -> u32 {
-        let ib = self.slot(p, PT_INBOX);
-        let head = fx(self.slot(p, PT_HEAD)) as u32;
-        self.vec_count(ib) - head
+        let w = self.cursor(p, PT_WRITE);
+        let r = self.cursor(p, PT_READ);
+        w.saturating_sub(r) as u32
     }
 
-    fn port_enqueue(&mut self, p: Value, v: Value) {
-        let base = self.mark();
-        let pi = self.push(p);
-        let vi = self.push(v);
-        let ib = self.slot(self.r(pi), PT_INBOX);
-        let ibi = self.push(ib);
-        let vv = self.r(vi);
-        let nib = self.vec_conj(self.r(ibi), vv);
-        self.set(self.r(pi), PT_INBOX, nib);
-        self.pop_to(base);
+    #[inline]
+    fn cursor(&self, p: Value, which: u32) -> u64 {
+        fx(self.slot_atomic(p, which)) as u64
     }
 
-    fn port_dequeue(&mut self, p: Value) -> Value {
-        let head = fx(self.slot(p, PT_HEAD)) as u32;
-        let ib = self.slot(p, PT_INBOX);
-        let v = self.vec_nth(ib, head).unwrap_or(NIL);
-        let n = self.vec_count(ib);
-        if head + 1 >= n {
-            // Drained: drop the backing vector so nothing stays reachable.
-            let e = self.empty_vec();
-            self.set(p, PT_INBOX, e);
-            self.set(p, PT_HEAD, Value::fixnum(0));
-        } else {
-            self.set(p, PT_HEAD, Value::fixnum(head as i64 + 1));
+    /// One slot, read atomically. Cursors and sequence words are fixnums like
+    /// any other slot -- the collector sees nothing unusual -- and the atomic
+    /// operates on the tagged word, so a compare-and-swap compares tagged
+    /// against tagged and never invents a value.
+    #[inline]
+    fn slot_atomic(&self, o: Value, i: u32) -> Value {
+        Value(self.gc.sp.atomic_load(crate::obj::slot_addr(o.as_heap(), i)))
+    }
+
+    /// Store a slot atomically, AND run the write barrier.
+    ///
+    /// The barrier is the whole reason this is not just `atomic_store`. A ring
+    /// big enough to miss the nursery is allocated in the old generation, and
+    /// an old object pointing at a young one is an edge the collector finds
+    /// only through the remembered set. Skipping it made every bridge trap --
+    /// a bridge's ring is 1024 slots where a small channel's is two, so the
+    /// channel tests passed and `open` died -- and the symptom was
+    /// `RuntimeError: unreachable` with nothing on the stack to say why.
+    ///
+    /// The order matters. The value is published FIRST and remembered second,
+    /// which is safe because a collection cannot run between them: the only
+    /// safepoint is the interpreter's checkpoint, and there is not one here.
+    #[inline]
+    fn set_slot_atomic(&mut self, o: Value, i: u32, v: Value) {
+        let obj = o.as_heap();
+        self.gc.sp.atomic_store(crate::obj::slot_addr(obj, i), v.0);
+        if v.is_heap() && self.gc.is_young(v.as_heap()) && !self.gc.is_young(obj) {
+            self.gc.remember(obj, &mut self.roots.own.remembered);
         }
-        v
+    }
+
+    #[inline]
+    fn cas_slot(&self, o: Value, i: u32, want: Value, next: Value) -> bool {
+        self.gc.sp.cas(crate::obj::slot_addr(o.as_heap(), i), want.0, next.0)
+    }
+
+    /// Put `v` in `p`'s inbox. `false` means the ring is full.
+    ///
+    /// The protocol, and every step of it is load-bearing:
+    ///
+    ///   1. RESERVE by claiming the write cursor with a compare-and-swap. The
+    ///      slot's sequence word must equal the cursor first, or the slot is
+    ///      still holding a message nobody has taken.
+    ///   2. FILL the slot, then publish by setting its sequence word one past
+    ///      the reservation. Until that store, a reader sees the slot as not
+    ///      yet readable rather than as garbage -- which is the whole reason
+    ///      the sequence word exists and an index alone would not do.
+    ///   3. CHECK BACK. If the flush generation moved while we were filling, a
+    ///      drain may have passed our slot by, so the put starts over. That is
+    ///      the case `doc/decisions/0028` cannot leave to chance: a message
+    ///      that was reserved, skipped, and then written would be a message
+    ///      nobody ever reads sitting in a slot everybody thinks is free.
+    ///
+    /// No lock, and nothing here allocates.
+    /// `port_enqueue`, exposed for the parallel tests: they need to drive the
+    /// ring from two host threads without a green-thread scheduler in the way,
+    /// and back-pressure is a RETURN VALUE here rather than a park.
+    pub fn port_try_enqueue(&mut self, p: Value, v: Value) -> bool {
+        self.port_enqueue(p, v)
+    }
+
+    /// How many messages are in `p`'s ring, reservations included.
+    pub fn inbox_depth(&self, p: Value) -> u32 {
+        self.inbox_count(p)
+    }
+
+    fn port_enqueue(&mut self, p: Value, v: Value) -> bool {
+        let ring = fx(self.slot(p, PT_RING)) as u64;
+        let inbox = self.slot(p, PT_INBOX);
+        let seq = self.slot(p, PT_SEQ);
+        loop {
+            let w = self.cursor(p, PT_WRITE);
+            let r = self.cursor(p, PT_READ);
+            if w.saturating_sub(r) >= ring {
+                return false;
+            }
+            let idx = (w % ring) as u32;
+            if fx(self.slot_atomic(seq, idx)) as u64 != w {
+                // Another sender is between reserve and fill here, or a reader
+                // has not released it yet. Neither is our business; look again.
+                core::hint::spin_loop();
+                continue;
+            }
+            if !self.cas_slot(p, PT_WRITE, Value::fixnum(w as i64), Value::fixnum(w as i64 + 1)) {
+                continue;
+            }
+            let gen = self.cursor(p, PT_GEN);
+            self.set_slot_atomic(inbox, idx, v);
+            self.set_slot_atomic(seq, idx, Value::fixnum(w as i64 + 1));
+            if self.cursor(p, PT_GEN) != gen {
+                continue;
+            }
+            return true;
+        }
+    }
+
+    /// Take the next readable message, or `NIL` when there is none.
+    ///
+    /// A slot that is reserved and not yet filled reads as EMPTY here rather
+    /// than being skipped: for a single receive there is nothing to gain by
+    /// jumping the queue, and skipping would reorder messages that a sender
+    /// had already sequenced. `port_flush` is the one that skips, because a
+    /// drain must not be held up by one slow sender.
+    fn port_dequeue(&mut self, p: Value) -> Value {
+        let ring = fx(self.slot(p, PT_RING)) as u64;
+        let inbox = self.slot(p, PT_INBOX);
+        let seq = self.slot(p, PT_SEQ);
+        loop {
+            let r = self.cursor(p, PT_READ);
+            if r >= self.cursor(p, PT_WRITE) {
+                return NIL;
+            }
+            let idx = (r % ring) as u32;
+            if fx(self.slot_atomic(seq, idx)) as u64 != r + 1 {
+                return NIL;
+            }
+            if !self.cas_slot(p, PT_READ, Value::fixnum(r as i64), Value::fixnum(r as i64 + 1)) {
+                continue;
+            }
+            let v = self.slot_atomic(inbox, idx);
+            // Cleared, so a taken message is not kept alive by the ring: the
+            // slot outlives the message and the collector traces it either way.
+            self.set_slot_atomic(inbox, idx, NIL);
+            self.set_slot_atomic(seq, idx, Value::fixnum((r + ring) as i64));
+            return v;
+        }
     }
 
     // --- waiters and their tokens ------------------------------------------
@@ -1735,19 +1903,65 @@ impl Rt {
             self.pop_to(base);
             return self.throw_str("IllegalStateException", "the other end of this port is closed");
         }
-        let cap = fx(self.slot(self.r(pei), PT_CAP));
-        if self.inbox_count(self.r(pei)) as i64 >= cap {
-            let target = self.r(pei);
-            self.pop_to(base);
-            return self.park_on_port(WK_SEND, target);
-        }
+        // TRY, then park -- rather than ask whether it is full and then put.
+        //
+        // The old order had a window between the question and the answer, and
+        // with two executors that window is where messages went missing. The
+        // reservation IS the question now: it either claims a slot or reports
+        // the ring full, in one atomic step, and nothing can have changed in
+        // between because there is no in between.
         let val = self.r(vi);
         let target = self.r(pei);
-        self.port_enqueue(target, val);
+        if self.port_enqueue(target, val) {
+            let target = self.r(pei);
+            self.wake_on(target);
+            self.pop_to(base);
+            return NIL;
+        }
+        // FULL: back-pressure, which is the point of a bound. Park, and the
+        // send re-runs when a receive frees a slot -- a parked builtin is
+        // re-executable across a resume, so the whole put happens again rather
+        // than being resumed halfway.
         let target = self.r(pei);
-        self.wake_on(target);
         self.pop_to(base);
-        NIL
+        self.park_for_space(target)
+    }
+
+    /// Park until there is room in `p`'s ring.
+    ///
+    /// The re-check after registering is not belt and braces: `wake_on` only
+    /// reaches waiters that are ALREADY in the list, so a receive that drains
+    /// the ring between the failed reservation and the registration would wake
+    /// nobody, and this thread would sleep with space in front of it. Register,
+    /// look again, and give the token back if the answer changed.
+    fn park_for_space(&mut self, p: Value) -> Value {
+        let base = self.mark();
+        let pi = self.push(p);
+        let pv = self.r(pi);
+        let token = self.new_waiter(WK_SEND, pv);
+        let th = self.current_thread();
+        if !th.is_nil() {
+            self.set(th, TH_TOKEN, Value::fixnum(token));
+        }
+        let pv = self.r(pi);
+        let ring = fx(self.slot(pv, PT_RING)) as u64;
+        if (self.inbox_count(pv) as u64) < ring {
+            // Room appeared while we were registering. Drop the waiter and let
+            // the send run again immediately rather than waiting for a wake
+            // that has already been and gone.
+            self.free_waiter(token);
+            if !th.is_nil() {
+                self.set(th, TH_TOKEN, Value::fixnum(-1));
+            }
+            self.pop_to(base);
+            // A yield rather than a park: the thread stays runnable and the
+            // send runs again on its next turn, which is what "look again"
+            // means when there is nothing left to wait for.
+            return self.park(PARK_YIELD);
+        }
+        let pv = self.r(pi);
+        self.pop_to(base);
+        self.park(pv)
     }
 
     pub fn port_receive(&mut self, p: Value) -> Value {
@@ -2099,13 +2313,44 @@ impl Rt {
             }
             self.push(flint)
         };
-        let queued = fx(self.slot(self.r(pi), PT_BYTES));
+        // BACK-PRESSURE, in bytes, and it is claimed atomically for the same
+        // reason the ring slot is: two host threads delivering into one end
+        // would both read the same `queued`, both decide there is room, and
+        // both write -- and the bound that exists to cap memory would be the
+        // one thing not enforced. Claimed BEFORE the message is built, and
+        // given back if anything after this refuses.
         let cap = fx(self.slot(self.r(pi), PT_CAP));
-        if queued > 0 && queued + bytes.len() as i64 > cap {
-            self.pop_to(base);
-            return false;
+        let len = bytes.len() as i64;
+        loop {
+            let pv = self.r(pi);
+            let queued = fx(self.slot_atomic(pv, PT_BYTES));
+            if queued > 0 && queued + len > cap {
+                self.pop_to(base);
+                return false;
+            }
+            if self.cas_slot(
+                pv,
+                PT_BYTES,
+                Value::fixnum(queued),
+                Value::fixnum(queued + len),
+            ) {
+                break;
+            }
         }
-        self.set(self.r(pi), PT_BYTES, Value::fixnum(queued + bytes.len() as i64));
+        // From here every refusal has to hand the bytes back, or a message the
+        // guest never saw goes on counting against its bound for ever.
+        macro_rules! give_back {
+            () => {{
+                let pv = self.r(pi);
+                loop {
+                    let q = fx(self.slot_atomic(pv, PT_BYTES));
+                    let back = if q > len { q - len } else { 0 };
+                    if self.cas_slot(pv, PT_BYTES, Value::fixnum(q), Value::fixnum(back)) {
+                        break;
+                    }
+                }
+            }};
+        }
         let v = if self.is_wire_port(self.r(pi)) {
             // The HOST wrote these bytes, so the live tags are honoured --
             // `decode`, not `decode_guest`. That is the whole asymmetry: an
@@ -2118,6 +2363,7 @@ impl Rt {
                 // string here would hand the guest something that silently was
                 // not what was sent.
                 Err(_) => {
+                    give_back!();
                     self.pop_to(base);
                     return false;
                 }
@@ -2134,7 +2380,15 @@ impl Rt {
         };
         let vi = self.push(v);
         let (target, val) = (self.r(pi), self.r(vi));
-        self.port_enqueue(target, val);
+        if !self.port_enqueue(target, val) {
+            // The ring is full even though the byte bound had room: the guest
+            // has not drained, so the host is told to offer this again. Same
+            // answer as the byte bound gives, because it is the same
+            // situation -- back-pressure, not an error.
+            give_back!();
+            self.pop_to(base);
+            return false;
+        }
         let target = self.r(pi);
         self.wake_on(target);
         self.pop_to(base);
