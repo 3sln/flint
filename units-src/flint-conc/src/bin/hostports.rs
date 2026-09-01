@@ -22,6 +22,8 @@ fn kind_name(k: u32) -> &'static str {
         conc::EV_OPEN => "open",
         conc::EV_MESSAGE => "message",
         conc::EV_CLOSED => "closed",
+        conc::EV_RETAIN => "retain",
+        conc::EV_RELEASE => "release",
         _ => "?",
     }
 }
@@ -120,16 +122,21 @@ fn one(b: &[u8], i: &mut usize) -> String {
 fn show(evs: &[Event]) -> String {
     evs.iter()
         .map(|e| {
-            let p = if e.kind as i64 == conc::EV_OPEN {
-                render(&e.payload)
-            } else {
-                format!("{:?}", String::from_utf8_lossy(&e.payload))
-            };
+            // EVERY payload is the wire format now: a bridge carries values
+            // and the runtime encodes them, so a message reads the same way an
+            // open-request does rather than as opaque bytes.
+            let p = if e.payload.is_empty() { String::new() } else { render(&e.payload) };
             format!("{}({},{},{})", kind_name(e.kind), e.a, e.b, p)
         })
         .collect::<Vec<_>>()
         .join(" ")
 }
+
+/// The host's id for this sandbox's system port, and for the port it grants.
+/// The HOST picks both: a sandbox no longer mints port ids, which is the whole
+/// of `doc/decisions/0027`.
+const SYSTEM: u32 = 1;
+const GRANTED: u32 = 500;
 
 fn main() {
     let path = std::env::args().nth(1).expect("usage: hostports <image>");
@@ -143,13 +150,18 @@ fn main() {
     // id this driver chose. That is the whole of lending a capability: there is
     // no grant table, no declaration, and nothing in the runtime that knows what
     // the value is for.
+    // A SYSTEM PORT, installed before anything runs: `open` is a request ON
+    // one (`doc/decisions/0027`), and a sandbox given none can ask for nothing.
+    p.install_port(SYSTEM, "system", true);
     let out = p.run_with(&[], &[("fs", 7)]);
     println!("  ok   the program parked on the host: status {}", out.code);
     let evs = p.drain_events();
     println!("  ok   it asked: {}", show(&evs));
     let open = evs.iter().find(|e| e.kind as i64 == conc::EV_OPEN).expect("an open-request");
     let token = open.a;
-    let port = open.b;
+    // The request came out ON THE SYSTEM PORT. There is no port for it yet --
+    // the answer is what creates one, and the host picks its id.
+    let port = GRANTED;
 
     // 2. WHAT WAS FORWARDED, decoded. The payload is the arguments the guest
     //    passed to `open`, as one encoded value -- so a host reads them and
@@ -160,12 +172,16 @@ fn main() {
     // 3. Grant it. A second answer on the same token is refused: the generation
     //    in it has moved on, so a late or duplicated reply cannot resume a
     //    stranger's thread.
-    println!("  ok   the host grants it: {}", p.host_continue(token, true));
-    println!("  ok   and a duplicate reply is refused: {}", p.host_continue(token, true));
+    println!("  ok   a grant must name a port: {}", p.host_continue(token, true));
+    println!("  ok   the host grants it: {}", p.host_grant(token, port));
+    println!("  ok   and a duplicate reply is refused: {}", p.host_grant(token, port));
     println!("  ok   the runtime end is now: {}", state_name(p.host_port_state(port)));
 
     // 4. Push something in, let the program read it and answer.
-    println!("  ok   delivered: {}", p.host_deliver(port, b"one"));
+    // ENCODED, because a bridge carries values: the runtime decodes what
+    // arrives, so a host writes the wire format rather than raw bytes.
+    let one = flint_rt::codec::Wire::of_str("one");
+    println!("  ok   delivered: {}", p.host_deliver(port, &one));
     let out = p.resume();
     println!("  ok   ran on: status {}", out.code);
     let evs = p.drain_events();
@@ -174,7 +190,8 @@ fn main() {
     // 5. A second wave, then hang up. Drained-and-closed is END OF STREAM --
     //    `nil` and not an error -- and the program's own `state` call has to
     //    agree with what the host sees.
-    println!("  ok   delivered: {}", p.host_deliver(port, b"two"));
+    let two = flint_rt::codec::Wire::of_str("two");
+    println!("  ok   delivered: {}", p.host_deliver(port, &two));
     p.host_close_port(port);
     println!("  ok   after the host hangs up: {}", state_name(p.host_port_state(port)));
     let mut out = p.resume();

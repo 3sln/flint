@@ -1143,18 +1143,6 @@ rt.describe(v) + " is not a transient");
             rt.popTo(base);
             return Conc.portOpen(rt, nm, args);
         });
-        /// The port's format, as the guest wants to remember it. METADATA, not
-        /// behaviour: the runtime stores it and answers `port-format` with it
-        /// and does nothing else, which is why `open` no longer takes it --
-        /// what the HOST is told is whatever the caller forwarded.
-        def("flint/set-port-format", (rt, at, n) -> {
-            long p = rt.vat(at), f = rt.vat(at + 1);
-            if (!Conc.isPort(rt, p)) {
-                return rt.throwStr("ClassCastException", "set-port-format wants a port");
-            }
-            rt.setSlot(Val.asHeap(p), Conc.PT_FORMAT, f);
-            return f;
-        });
         def("flint/port-send", (rt, at, n) -> Conc.send(rt, rt.vat(at), rt.vat(at + 1)));
         def("flint/port-receive", (rt, at, n) -> Conc.receive(rt, rt.vat(at)));
         def("flint/port-close", (rt, at, n) -> Conc.close(rt, rt.vat(at)));
@@ -1169,35 +1157,12 @@ rt.describe(v) + " is not a transient");
             if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-label wants a port");
             return rt.slot(p, Conc.PT_LABEL);
         });
-        def("flint/port-format", (rt, at, n) -> {
+        /// Does this port carry BYTES across a boundary? A bridge does and a
+        /// channel does not, and that is the only distinction a guest can see
+        /// -- it cannot see the encoding, because the runtime owns it.
+        def("flint/port-bridge?", (rt, at, n) -> {
             long p = rt.vat(at);
-            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-format wants a port");
-            return rt.slot(p, Conc.PT_FORMAT);
-        });
-        def("flint/port-opts", (rt, at, n) -> {
-            long p = rt.vat(at);
-            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-opts wants a port");
-            return rt.slot(p, Conc.PT_OPTS);
-        });
-        def("flint/set-port-opts", (rt, at, n) -> {
-            long p = rt.vat(at), o = rt.vat(at + 1);
-            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "set-port-opts wants a port");
-            rt.setSlot(Val.asHeap(p), Conc.PT_OPTS, o);
-            return o;
-        });
-        def("flint/set-port-binary", (rt, at, n) -> {
-            long p = rt.vat(at), v = rt.vat(at + 1);
-            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "set-port-binary wants a port");
-            boolean on = !(Val.isNil(v) || v == Val.FALSE);
-            rt.setSlot(Val.asHeap(p), Conc.PT_BINARY, Val.fixnum(on ? 1 : 0));
-            return v;
-        });
-        /// Any port whose messages CROSS A HEAP, which is what the name is
-        /// really asking: a host port and a global port both carry bytes and
-        /// both need a codec, and `flint.port/send` branches on exactly that.
-        def("flint/port-host?", (rt, at, n) -> {
-            long p = rt.vat(at);
-            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-host? wants a port");
+            if (!Conc.isPort(rt, p)) return rt.throwStr("ClassCastException", "port-bridge? wants a port");
             return Val.bool(Conc.crossesAHeap(Val.asFixnum(rt.slot(p, Conc.PT_KIND))));
         });
         def("flint/port-state", (rt, at, n) -> {

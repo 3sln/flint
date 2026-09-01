@@ -24,6 +24,8 @@ public class RtHostPorts {
       case Conc.EV_OPEN -> "open";
       case Conc.EV_MESSAGE -> "message";
       case Conc.EV_CLOSED -> "closed";
+      case Conc.EV_RETAIN -> "retain";
+      case Conc.EV_RELEASE -> "release";
       default -> "?";
     };
   }
@@ -65,9 +67,10 @@ public class RtHostPorts {
     StringBuilder b = new StringBuilder();
     for (Ev e : evs) {
       if (b.length() > 0) b.append(" ");
-      String p = e.kind() == Conc.EV_OPEN
-        ? render(e.payload())
-        : "\"" + new String(e.payload(), StandardCharsets.UTF_8) + "\"";
+      // EVERY payload is the wire format now: a bridge carries values and the
+      // runtime encodes them, so a message reads the same way an open-request
+      // does rather than as opaque bytes.
+      String p = e.payload().length == 0 ? "" : render(e.payload());
       b.append(kindName(e.kind())).append("(").append(e.a()).append(",").append(e.b())
        .append(",").append(p).append(")");
     }
@@ -178,10 +181,33 @@ public class RtHostPorts {
     return Str.isString(rt, v) ? Str.text(rt, v) : rt.describe(v);
   }
 
+  /// The host's id for this sandbox's system port, and for the port it grants.
+  /// The HOST picks both: a sandbox no longer mints port ids, which is the
+  /// whole of `doc/decisions/0027`.
+  static final int SYSTEM = 1, GRANTED = 500;
+
+  /// One string, as the host writes it: the wire format, which is what the
+  /// runtime decodes on the way in.
+  static byte[] wireStr(String s) {
+    byte[] u = s.getBytes(StandardCharsets.UTF_8);
+    byte[] out = new byte[5 + u.length];
+    out[0] = Codec.K_STRING;
+    out[1] = (byte) u.length;
+    out[2] = (byte) (u.length >> 8);
+    out[3] = (byte) (u.length >> 16);
+    out[4] = (byte) (u.length >> 24);
+    System.arraycopy(u, 0, out, 5, u.length);
+    return out;
+  }
+
   public static void main(String[] a) throws Exception {
     Rt rt = new Rt(4L * 1024 * 1024, 512L * 1024 * 1024);
     Img.Loaded img = Img.load(rt, Files.readAllBytes(Path.of(a[0])));
     if (img == null) { System.out.println("  FAIL not a flint image"); System.exit(1); }
+
+    // A SYSTEM PORT, installed before anything runs: `open` is a request ON one
+    // (`doc/decisions/0027`), and a sandbox given none can ask for nothing.
+    Conc.installSystemPort(rt, SYSTEM, Str.of(rt, "system"));
 
     // 1. The program runs until it asks for something only the host has.
     long v = run(rt, img);
@@ -189,7 +215,10 @@ public class RtHostPorts {
     java.util.List<Ev> evs = java.util.Arrays.asList(drain(rt));
     System.out.println("  ok   it asked: " + show(evs));
     Ev open = evs.stream().filter(e -> e.kind() == Conc.EV_OPEN).findFirst().orElseThrow();
-    int token = open.a(), port = open.b();
+    int token = open.a();
+    // The request came out ON THE SYSTEM PORT. There is no port for it yet --
+    // the answer is what creates one, and the host picks its id.
+    int port = GRANTED;
 
     // 2. WHAT WAS FORWARDED, decoded. Nothing in the runtime looked at it on
     //    the way past, and nothing in it knows what a capability is.
@@ -198,15 +227,17 @@ public class RtHostPorts {
     // 3. Grant it. A second answer on the same token is refused: the generation
     //    in it has moved on, so a late or duplicated reply cannot resume a
     //    stranger's thread.
-    System.out.println("  ok   the host grants it: " + Conc.hostContinue(rt, token, true));
+    System.out.println("  ok   a grant must name a port: " + Conc.hostContinue(rt, token, true));
+    System.out.println("  ok   the host grants it: " + Conc.hostGrant(rt, token, port));
     System.out.println("  ok   and a duplicate reply is refused: "
-                       + Conc.hostContinue(rt, token, true));
+                       + Conc.hostGrant(rt, token, port));
     System.out.println("  ok   the runtime end is now: "
                        + stateName(Conc.hostPortState(rt, port)));
 
     // 4. Push something in, let the program read it and answer.
-    System.out.println("  ok   delivered: "
-                       + Conc.hostDeliver(rt, port, "one".getBytes(StandardCharsets.UTF_8)));
+    // ENCODED, because a bridge carries values: the runtime decodes what
+    // arrives, so a host writes the wire format rather than raw bytes.
+    System.out.println("  ok   delivered: " + Conc.hostDeliver(rt, port, wireStr("one")));
     v = Conc.resume(rt);
     System.out.println("  ok   ran on: status " + status(rt));
     System.out.println("  ok   it sent back: " + show(java.util.Arrays.asList(drain(rt))));
@@ -214,8 +245,7 @@ public class RtHostPorts {
     // 5. A second wave, then hang up. Drained-and-closed is END OF STREAM --
     //    `nil` and not an error -- and the program's own `state` call has to
     //    agree with what the host sees.
-    System.out.println("  ok   delivered: "
-                       + Conc.hostDeliver(rt, port, "two".getBytes(StandardCharsets.UTF_8)));
+    System.out.println("  ok   delivered: " + Conc.hostDeliver(rt, port, wireStr("two")));
     Conc.hostClosePort(rt, port);
     System.out.println("  ok   after the host hangs up: "
                        + stateName(Conc.hostPortState(rt, port)));

@@ -68,10 +68,14 @@ public final class Conc {
     /// read-modify-write with an allocation in the middle -- two executors
     /// sending into one channel lost exactly half the traffic. See the Rust
     /// `port_enqueue` for the protocol, which this mirrors step for step.
+    /// `PT_ROOT`, `PT_FORMAT`, `PT_OPTS` and `PT_BINARY` are GONE
+    /// (`doc/decisions/0027`). A bridge handle is ordinary memory -- a handle
+    /// nothing refers to is precisely what a release is for, so rooting it would
+    /// defeat the count -- and a bridge is always the runtime's wire format, so
+    /// there is no format, no options and no binary flag to remember.
     public static final int PT_ID = 0, PT_STATE = 1, PT_CAP = 2, PT_INBOX = 3,
         PT_READ = 4, PT_BYTES = 5, PT_PEER = 6, PT_LABEL = 7, PT_KIND = 8,
-        PT_ROOT = 9, PT_FORMAT = 10, PT_OPTS = 11, PT_BINARY = 12,
-        PT_WRITE = 13, PT_RING = 14, PT_LEN = 15;
+        PT_WRITE = 9, PT_RING = 10, PT_LEN = 11;
 
     /// How many messages a bridge end's ring holds. Its `PT_CAP` bounds BYTES,
     /// which is the bound that matters for memory; this bounds the count so the
@@ -89,16 +93,29 @@ public final class Conc {
     /// with every host that reads them.
     public static final int P_PENDING = 0, P_OPEN = 1, P_CLOSED = 2, P_REFUSED = 3,
                             P_HALF = 4, P_ORPHANED = 5;
-    public static final int K_CHANNEL = 0, K_FLINT = 1, K_HOST = 2, K_GLOBAL = 3;
+    /// Two kinds, and no third (`doc/decisions/0027`). `K_CHANNEL` joins two
+    /// green threads inside one sandbox and passes values by reference;
+    /// `K_BRIDGE` is a HANDLE on a port the host owns, carrying the host's id
+    /// and encoded messages.
+    ///
+    /// There is no "host port". `open` used to manufacture a PAIR of ends here,
+    /// keep one and offer the other up as the host's, which made the confined
+    /// thing the author of its own authority.
+    public static final int K_CHANNEL = 0, K_BRIDGE = 1;
 
     /// A channel's default buffer, in MESSAGES.
     public static final long DEFAULT_CAP = 16;
 
-    /// How much a host port will buffer before a send parks.
-    public static final long DEFAULT_HOST_CAP = 1 << 20;
+    /// How much a bridge will buffer before a send parks, in BYTES.
+    public static final long DEFAULT_BRIDGE_CAP = 1 << 20;
 
     /// What the host is told about, drained through `drainEvents`.
-    public static final int EV_OPEN = 1, EV_MESSAGE = 2, EV_CLOSED = 3;
+    /// `EV_RETAIN` says this sandbox now holds the host's port `a`, pushed
+    /// exactly once per port per sandbox on the miss that mints the handle;
+    /// `EV_RELEASE` says it no longer does. One per retain, so the host's count
+    /// is of HOLDERS (`doc/decisions/0027`).
+    public static final int EV_OPEN = 1, EV_MESSAGE = 2, EV_CLOSED = 3,
+                            EV_RETAIN = 4, EV_RELEASE = 5;
 
     // --- waiter ------------------------------------------------------------
 
@@ -116,7 +133,11 @@ public final class Conc {
 
     public static final int SC_THREADS = 0, SC_CURRENT = 1, SC_NEXTID = 2,
         SC_EVENTS = 3, SC_EHEAD = 4, SC_PORTS = 5, SC_PAIRS = 6,
-        SC_WAITERS = 7, SC_WFREE = 8, SC_SYSTEM = 9, SC_LEN = 10;
+        SC_WAITERS = 7, SC_WFREE = 8, SC_SYSTEM = 9,
+        /// Host ids of every BRIDGE this sandbox holds a handle for -- ids, not
+        /// references, so the list pins nothing. This is the walk that turns a
+        /// collection into a release (`doc/decisions/0027`).
+        SC_BRIDGES = 10, SC_LEN = 11;
 
     /// Instructions a thread runs before the scheduler takes the slice back.
     /// Preemptive, so a thread with no `yield` in it cannot starve the others.
@@ -151,6 +172,7 @@ public final class Conc {
         rt.setSlot(Val.asHeap(rt.r(si)), SC_EHEAD, Val.fixnum(0));
         rt.setSlot(Val.asHeap(rt.r(si)), SC_PORTS, Vec.empty(rt));
         rt.setSlot(Val.asHeap(rt.r(si)), SC_PAIRS, Vec.empty(rt));
+        rt.setSlot(Val.asHeap(rt.r(si)), SC_BRIDGES, Vec.empty(rt));
         rt.setSlot(Val.asHeap(rt.r(si)), SC_WAITERS, Vec.empty(rt));
         rt.setSlot(Val.asHeap(rt.r(si)), SC_WFREE, Val.fixnum(-1));
         rt.setSlot(Val.asHeap(rt.r(si)), SC_NEXTID, Val.fixnum(1));
@@ -477,8 +499,8 @@ public final class Conc {
         ensureSched(rt);
         int base = rt.mark();
         int li = rt.push(label);
-        int ai = rt.push(newPort(rt, cap, rt.r(li), K_CHANNEL, P_OPEN, Val.NIL));
-        int bi = rt.push(newPort(rt, cap, rt.r(li), K_CHANNEL, P_OPEN, Val.NIL));
+        int ai = rt.push(newPort(rt, cap, rt.r(li), K_CHANNEL, P_OPEN, -1));
+        int bi = rt.push(newPort(rt, cap, rt.r(li), K_CHANNEL, P_OPEN, -1));
         linkPeers(rt, rt.r(ai), rt.r(bi));
         int vi = rt.push(Vec.empty(rt));
         rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(ai)));
@@ -488,41 +510,52 @@ public final class Conc {
         return out;
     }
 
-    /// Install a GLOBAL port the host owns, and hand back the handle
-    /// (`doc/decisions/0027`).
+    /// The handle in THIS sandbox for the host's port `hostId`, minting one if
+    /// this sandbox does not hold it yet (`doc/decisions/0027`).
     ///
-    /// The inversion that file exists to make: a sandbox does not manufacture
-    /// an endpoint and offer it up, it is GIVEN one. `hostId` is the HOST's,
-    /// not this sandbox's -- it means the same thing on both sides, which is
-    /// what makes a handle sendable between two sandboxes at all.
+    /// THIS IS THE REFERENCE COUNT, and it is a count of HOLDERS. The weak
+    /// intern table is what makes that possible: one handle object per host id
+    /// per sandbox, so a port that arrives in two messages -- or is handed in
+    /// twice, or arrives having already been handed in -- is the same object
+    /// both times. `=` says yes, a map keyed by it hits, and the host is told
+    /// exactly once that this sandbox took a reference.
     ///
-    /// The object in this heap carries the id and nothing else that crosses:
-    /// no pointer into host memory, no pointer out of it.
-    public static long installGlobalPort(Rt rt, long hostId, long label, long format) {
+    /// `EV_RETAIN` goes out only on a MISS. Counting arrivals instead would make
+    /// the number mean "how many references" rather than "how many holders",
+    /// which is not a number anyone can act on: the host wants to know when it
+    /// may let the port go, and that is when the last holder drops it. The
+    /// matching `EV_RELEASE` comes from `reapPorts`, or promptly from `close`.
+    ///
+    /// NOT ROOTED, unlike the host end this replaces: a handle nothing refers
+    /// to is precisely what a release is for. The system port is the exception
+    /// and is rooted by living in `SC_SYSTEM`.
+    public static long installBridgePort(Rt rt, long hostId, long label) {
         ensureSched(rt);
+        if (hostId < 0) return Val.NIL;
+        long existing = portById(rt, hostId);
+        if (!Val.isNil(existing) && fx(rt.slot(existing, PT_KIND)) == K_BRIDGE) return existing;
         int base = rt.mark();
-        int li = rt.push(label), fi = rt.push(format);
-        int pi = rt.push(newPort(rt, DEFAULT_HOST_CAP, rt.r(li), K_GLOBAL, P_OPEN, rt.r(fi)));
+        int li = rt.push(label);
+        int pi = rt.push(newPort(rt, DEFAULT_BRIDGE_CAP, rt.r(li), K_BRIDGE, P_OPEN, hostId));
         if (Val.isNil(rt.r(pi))) { rt.popTo(base); return Val.NIL; }
-        // The HOST's id replaces the one `newPort` minted from this sandbox's
-        // counter. A sandbox-local id would mean something different in every
-        // other sandbox, which is the coupling `0027` removes.
-        rt.setSlot(Val.asHeap(rt.r(pi)), PT_ID, Val.fixnum(hostId));
-        // Rooted for as long as the host says it exists: the host holds the
-        // other end, so this one cannot be reclaimed just because the guest
-        // dropped its last reference.
-        long slot = rootPort(rt, rt.r(pi));
-        rt.setSlot(Val.asHeap(rt.r(pi)), PT_ROOT, Val.fixnum(slot));
-        registerPort(rt, rt.r(pi));
+        // Recorded as HELD, which is what `reapPorts` walks to notice the drop.
+        int si = rt.push(sched(rt));
+        int bi = rt.push(rt.slot(rt.r(si), SC_BRIDGES));
+        long nb = Vec.conj(rt, rt.r(bi), Val.fixnum(hostId));
+        rt.setSlot(Val.asHeap(rt.r(si)), SC_BRIDGES, nb);
+        pushEvent(rt, EV_RETAIN, hostId, 0, Val.NIL);
         long out = rt.r(pi);
         rt.popTo(base);
         return out;
     }
 
-    /// The system port: the one a sandbox is given at construction, if it is
-    /// given one at all.
-    public static long installSystemPort(Rt rt, long hostId, long label, long format) {
-        long p = installGlobalPort(rt, hostId, label, format);
+    /// Install the system port: the bridge a sandbox is DRIVEN over.
+    ///
+    /// A sandbox that is given one can ask for more ports on it; a sandbox that
+    /// is not has no way to reach anything outside itself, which is the honest
+    /// meaning of "no capabilities" and is the default.
+    public static long installSystemPort(Rt rt, long hostId, long label) {
+        long p = installBridgePort(rt, hostId, label);
         if (Val.isNil(p)) return Val.NIL;
         int base = rt.mark();
         int pi = rt.push(p);
@@ -546,32 +579,30 @@ public final class Conc {
         return Val.isNil(s) ? Val.NIL : rt.slot(s, SC_SYSTEM);
     }
 
-    /// A port of any kind. The id comes from the scheduler so that every port
-    /// in a sandbox has a distinct one, which is what the registry is keyed by.
-    static long newPort(Rt rt, long cap, long label, long kind, long state, long format) {
+    /// A port object. `id` is `-1` to mint one from this sandbox's counter,
+    /// which is what a channel end does; a bridge handle passes the HOST's id
+    /// instead, because that is the id that means the same thing on both sides.
+    static long newPort(Rt rt, long cap, long label, long kind, long state, long id) {
         int base = rt.mark();
-        int li = rt.push(label), fi = rt.push(format);
+        int li = rt.push(label);
         int pi = rt.push(newObj(rt, TY_PORT, PT_LEN));
         if (Val.isNil(rt.r(pi))) { rt.popTo(base); return Val.NIL; }
         int si = rt.push(sched(rt));
-        long id = fx(rt.slot(rt.r(si), SC_NEXTID));
-        rt.setSlot(Val.asHeap(rt.r(si)), SC_NEXTID, Val.fixnum(id + 1));
+        if (id < 0) {
+            id = fx(rt.slot(rt.r(si), SC_NEXTID));
+            rt.setSlot(Val.asHeap(rt.r(si)), SC_NEXTID, Val.fixnum(id + 1));
+        }
         long p = Val.asHeap(rt.r(pi));
         rt.setSlot(p, PT_ID, Val.fixnum(id));
         rt.setSlot(p, PT_STATE, Val.fixnum(state));
         rt.setSlot(p, PT_CAP, Val.fixnum(cap));
-        // The ring, allocated ONCE: a send must not allocate. NOT on a K_HOST
-        // end, which never has a message put in it -- both directions go
-        // elsewhere. ONE array: a slot's own word says whether it is vacant.
-        long ring = kind == K_CHANNEL ? Math.max(cap, 1) : kind == K_HOST ? 0 : RING_MESSAGES;
+        // The ring, allocated ONCE: a send must not allocate. ONE array: a
+        // slot's own word says whether it is vacant.
+        long ring = kind == K_CHANNEL ? Math.max(cap, 1) : RING_MESSAGES;
         rt.setSlot(p, PT_RING, Val.fixnum(ring));
-        if (ring == 0) {
-            rt.setSlot(Val.asHeap(rt.r(pi)), PT_INBOX, Val.NIL);
-        } else {
-            int sli = rt.push(newObj(rt, TY_NODE, (int) ring));
-            for (int i = 0; i < ring; i++) rt.setSlot(Val.asHeap(rt.r(sli)), i, Val.EMPTY);
-            rt.setSlot(Val.asHeap(rt.r(pi)), PT_INBOX, rt.r(sli));
-        }
+        int sli = rt.push(newObj(rt, TY_NODE, (int) ring));
+        for (int i = 0; i < ring; i++) rt.setSlot(Val.asHeap(rt.r(sli)), i, Val.EMPTY);
+        rt.setSlot(Val.asHeap(rt.r(pi)), PT_INBOX, rt.r(sli));
         p = Val.asHeap(rt.r(pi));
         rt.setSlot(p, PT_READ, Val.fixnum(0));
         rt.setSlot(p, PT_WRITE, Val.fixnum(0));
@@ -583,15 +614,7 @@ public final class Conc {
         rt.setSlot(p, PT_PEER, Val.fixnum(-1));
         rt.setSlot(p, PT_LABEL, rt.r(li));
         rt.setSlot(p, PT_KIND, Val.fixnum(kind));
-        rt.setSlot(p, PT_ROOT, Val.fixnum(-1));
-        rt.setSlot(p, PT_FORMAT, rt.r(fi));
-        rt.setSlot(p, PT_OPTS, Maps.empty(rt));
-        rt.setSlot(p, PT_BINARY, Val.fixnum(0));
         registerPort(rt, rt.r(pi));
-        if (kind == K_HOST) {
-            long slot = rootPort(rt, rt.r(pi));
-            rt.setSlot(Val.asHeap(rt.r(pi)), PT_ROOT, Val.fixnum(slot));
-        }
         long out = rt.r(pi);
         rt.popTo(base);
         return out;
@@ -636,29 +659,6 @@ public final class Conc {
             return v == Val.NOT_FOUND ? Val.NIL : v;
         } finally {
             rt.roots.shared.par.unlockIntern(Interns.PORT);
-        }
-    }
-
-    /// A HOST end must outlive every flint reference to it, so it goes in
-    /// `singletons`, which the collector already traces. Returns the slot.
-    static long rootPort(Rt rt, long p) {
-        long[] sg = rt.roots.shared.singletons;
-        for (int i = Rt.SING_COUNT; i < sg.length; i++) {
-            if (Val.isNil(sg[i])) { sg[i] = p; return i; }
-        }
-        long[] bigger = java.util.Arrays.copyOf(sg, Math.max(sg.length * 2, Rt.SING_COUNT + 8));
-        java.util.Arrays.fill(bigger, sg.length, bigger.length, Val.NIL);
-        bigger[sg.length] = p;
-        rt.roots.shared.singletons = bigger;
-        return sg.length;
-    }
-
-    static void unrootPort(Rt rt, long p) {
-        long slot = fx(rt.slot(p, PT_ROOT));
-        long[] sg = rt.roots.shared.singletons;
-        if (slot >= 0 && slot < sg.length) {
-            sg[(int) slot] = Val.NIL;
-            rt.setSlot(Val.asHeap(p), PT_ROOT, Val.fixnum(-1));
         }
     }
 
@@ -777,7 +777,7 @@ public final class Conc {
     /// refused BY NAME, because "cannot send that" sends somebody hunting
     /// through a nested structure.
     public static String checkSendable(Rt rt, long v) {
-        return checkSendableAt(rt, v, 0, CARRY_SANDBOXED);
+        return checkSendableAt(rt, v, 0, CARRY_CROSSING);
     }
 
     /// The same, for a carrier that may convey IDENTITIES. See the Rust.
@@ -786,11 +786,14 @@ public final class Conc {
     }
 
     /// What a carrying port can convey. A CHANNEL encodes nothing, so anything
-    /// may go; a host port whose encoding the RUNTIME owns carries identities
-    /// that mean something on the far side; a host port whose codec runs in the
-    /// SANDBOX carries none, because a guest-side decoder is an encoder read
-    /// backwards.
-    public static final int CARRY_LOCAL = 0, CARRY_CROSSING = 1, CARRY_SANDBOXED = 2;
+    /// may go; a BRIDGE, whose encoding the runtime owns, carries identities
+    /// that mean something on the far side.
+    ///
+    /// There used to be a third class, for a port whose codec ran in the
+    /// SANDBOX. There is no such port any more: encoding happens at the bridge
+    /// boundary, in the runtime, and a guest is never handed an encoder. The
+    /// rule that class enforced is now enforced by the guest not having one.
+    public static final int CARRY_LOCAL = 0, CARRY_CROSSING = 1;
 
     static String describeFn(Rt rt, long v) {
         int t = ty(rt.gc.sp, Val.asHeap(v));
@@ -831,28 +834,18 @@ public final class Conc {
             // there. See the table in the Rust.
             case TY_PORT:
                 if (carry == CARRY_LOCAL) return null;
-                if (carry == CARRY_CROSSING) {
-                    if (crossesAHeap(fx(rt.slot(v, PT_KIND)))) return null;
-                    return "a channel endpoint cannot be sent to the host: both its ends"
-                         + " live in this heap and the host has never been told it exists,"
-                         + " so its id would name one of our objects from outside. A host"
-                         + " port can be sent, because its id is the host's own.";
-                }
-                return "a port cannot be sent through a port whose codec runs in the"
-                     + " sandbox: the receiver could write the same bytes, and then a port"
-                     + " is mintable from an integer. A channel carries one, and so does a"
-                     + " host port opened with :format :flint.";
+                if (crossesAHeap(fx(rt.slot(v, PT_KIND)))) return null;
+                return "a channel endpoint cannot be sent to the host: both its ends"
+                     + " live in this heap and the host has never been told it exists,"
+                     + " so its id would name one of our objects from outside. A bridge"
+                     + " can be sent, because its id is the host's own.";
             // An opaque value is identity and nothing else
             // (`doc/decisions/0022`), so there is nothing to serialise that
             // would still BE it. Anything a codec could write down is something
             // the receiver could write down too, and then it is mintable --
             // which is the entire property gone.
             case TY_OPAQUE:
-                if (carry != CARRY_SANDBOXED) return null;
-                return "an opaque value cannot be sent through a port whose codec runs in"
-                     + " the sandbox: the receiver could write the same bytes, and then it"
-                     + " is mintable. Open the port with :format :flint, where the runtime"
-                     + " encodes and only the host can decode.";
+                return null;
             case TY_STR: case TY_ROPE: case TY_SYM: case TY_KW:
             case TY_BIGINT: case TY_REGEX:
                 return null;
@@ -916,21 +909,10 @@ public final class Conc {
     }
 
     /// Does this KIND carry BYTES across a boundary, rather than values inside
-    /// one heap? True for a host port and for a global port, and the two paths
-    /// are the same path -- a host port is just a global port whose far end is
-    /// the host. One predicate rather than a widening `==` at each of six
+    /// one heap? One predicate rather than a widening `==` at each of six
     /// sites, because the last time this was a set of scattered comparisons one
     /// of them was missed.
-    public static boolean crossesAHeap(long kind) { return kind == K_FLINT || kind == K_GLOBAL; }
-
-    /// Does this port carry VALUES rather than bytes? `:format :flint` means the
-    /// wire codec, run by the RUNTIME at the boundary rather than by a codec in
-    /// the sandbox. See the Rust `is_wire_port` for why that is what makes an
-    /// identity safe to send.
-    public static boolean isWirePort(Rt rt, long p) {
-        long f = rt.slot(p, PT_FORMAT);
-        return !Val.isNil(f) && f == Str.keyword(rt, null, "flint");
-    }
+    public static boolean crossesAHeap(long kind) { return kind == K_BRIDGE; }
 
     static boolean needPort(Rt rt, long p, String what) {
         if (!isPort(rt, p)) {
@@ -963,59 +945,46 @@ public final class Conc {
         int base = rt.mark();
         int pi = rt.push(p), vi = rt.push(v);
         long kind = fx(rt.slot(rt.r(pi), PT_KIND));
-        int carry = !crossesAHeap(kind) ? CARRY_LOCAL
-                  : isWirePort(rt, rt.r(pi)) ? CARRY_CROSSING
-                  : CARRY_SANDBOXED;
+        int carry = crossesAHeap(kind) ? CARRY_CROSSING : CARRY_LOCAL;
         String bad = checkSendableVia(rt, rt.r(vi), carry);
         if (bad != null) { rt.popTo(base); return rt.throwStr("IllegalArgumentException", bad); }
         if (crossesAHeap(kind)) {
-            // Bound the host's queue in BYTES: back-pressure exists to bound
-            // memory, and one 4 MB message is not one message's worth of it.
-            boolean binary = fx(rt.slot(rt.r(pi), PT_BINARY)) == 1;
-            boolean encoded = binary
-                ? (Bytes.isBytes(rt, rt.r(vi)) || rt.isHeapTy(rt.r(vi), TY_VEC))
-                : Str.isString(rt, rt.r(vi));
-            if (!encoded) {
+            // ENCODING HAPPENS HERE, ALWAYS, AND ONLY HERE.
+            //
+            // A bridge carries bytes and the runtime is what writes them. The
+            // guest hands over a VALUE and is handed one back; it never sees an
+            // encoding, has no encoder, and cannot choose one. That is the
+            // safety rule `Codec` states: a decoder reachable from the guest
+            // would be an encoder read backwards, and since `K_PORT` and
+            // `K_SENTINEL` carry their identity inline as integers a guest can
+            // write, such a guest could mint any host id it liked. An opaque
+            // value's whole meaning is that it cannot.
+            byte[] enc;
+            try {
+                enc = Codec.encode(rt, rt.r(vi));
+            } catch (Codec.Refused e) {
                 rt.popTo(base);
                 return rt.throwStr("IllegalArgumentException",
-                    "a host port carries bytes; flint.port/send encodes for you, so this is a "
-                    + "raw send of something that is not already encoded (a string, or a vector "
-                    + "of 0..255, or a byte string, on a binary port)");
+                    "send: this cannot cross a bridge: " + e.getMessage());
             }
-            // The host reads contiguous bytes, so the rope stops here. This is
-            // the boundary `doc/decisions/0011` means by "flatten before
-            // matching": the tree is an internal representation and nothing
-            // outside the module has to know about it.
-            if (!binary) rt.setR(vi, Str.flatten(rt, rt.r(vi)));
-            // Whose bookkeeping the back-pressure lives on.
+            rt.setR(vi, Bytes.of(rt, enc));
+            // Bound the queue in BYTES: back-pressure exists to bound memory,
+            // and one 4 MB message is not one message's worth of it.
             //
-            // A HOST port is a pair: two objects in this heap, and the far end
-            // carries the id the host knows and the byte count. A GLOBAL port
-            // is ONE object -- the far end is the host's registry and is not in
-            // any heap (`doc/decisions/0027`) -- so it is its own accounting.
-            int hi;
-            if (kind == K_GLOBAL) {
-                hi = rt.push(rt.r(pi));
-            } else {
-                long host = peerOf(rt, rt.r(pi));
-                if (Val.isNil(host)) {
-                    rt.popTo(base);
-                    return rt.throwStr("IllegalStateException", "the host has closed this port");
-                }
-                hi = rt.push(host);
-            }
-            long len = binary
-                ? (Bytes.isBytes(rt, rt.r(vi)) ? Bytes.count(rt, rt.r(vi)) : Vec.count(rt, rt.r(vi)))
-                : Str.byteLen(rt, rt.r(vi));
-            long cap = fx(rt.slot(rt.r(hi), PT_CAP));
-            long queued = fx(rt.slot(rt.r(hi), PT_BYTES));
+            // On the handle itself. A bridge is ONE object here -- the far end
+            // is the host's registry and is not in any heap -- so it is its own
+            // accounting, where a host port used to need a second object to
+            // carry the count.
+            long len = enc.length;
+            long cap = fx(rt.slot(rt.r(pi), PT_CAP));
+            long queued = fx(rt.slot(rt.r(pi), PT_BYTES));
             if (queued > 0 && queued + len > cap) {
-                long target = rt.r(hi);
+                long target = rt.r(pi);
                 rt.popTo(base);
                 return parkOnPort(rt, WK_SEND, target);
             }
-            rt.setSlot(Val.asHeap(rt.r(hi)), PT_BYTES, Val.fixnum(queued + len));
-            long id = fx(rt.slot(rt.r(hi), PT_ID));
+            rt.setSlot(Val.asHeap(rt.r(pi)), PT_BYTES, Val.fixnum(queued + len));
+            long id = fx(rt.slot(rt.r(pi), PT_ID));
             pushEvent(rt, EV_MESSAGE, id, len, rt.r(vi));
             rt.popTo(base);
             return Val.NIL;
@@ -1081,12 +1050,12 @@ public final class Conc {
             return rt.throwStr("IllegalStateException",
                 "receive: the other end of this port is gone, so this can never complete");
         }
-        // A GLOBAL port has no peer OBJECT to ask about: the far end is the
+        // A BRIDGE has no peer OBJECT to ask about: the far end is the
         // host's registry and is not in any heap (`doc/decisions/0027`). Its own
         // state is the whole answer, and the states above have already covered
         // every way that can say "no more" -- so an empty buffer here means
         // "nothing yet", which is what parking is for.
-        if (fx(rt.slot(rt.r(pi), PT_KIND)) != K_GLOBAL) {
+        if (fx(rt.slot(rt.r(pi), PT_KIND)) != K_BRIDGE) {
             long peer = peerOf(rt, rt.r(pi));
             if (Val.isNil(peer)) {
                 rt.setSlot(Val.asHeap(rt.r(pi)), PT_STATE, Val.fixnum(P_ORPHANED));
@@ -1119,19 +1088,23 @@ public final class Conc {
     }
 
     /// Everything that follows from an end closing, however it closed: tell the
-    /// host if it is the peer, and wake anybody parked on either side.
+    /// host if this was a bridge, and wake anybody parked on either side.
     static void closeSideEffects(Rt rt, long p) {
         int base = rt.mark();
         int pi = rt.push(p);
         if (crossesAHeap(fx(rt.slot(rt.r(pi), PT_KIND)))) {
-            long host = peerOf(rt, rt.r(pi));
-            if (!Val.isNil(host)) {
-                int hi = rt.push(host);
-                long id = fx(rt.slot(rt.r(hi), PT_ID));
-                rt.setSlot(Val.asHeap(rt.r(hi)), PT_STATE, Val.fixnum(P_CLOSED));
-                pushEvent(rt, EV_CLOSED, id, 0, Val.NIL);
-                rt.popTo(hi);
-            }
+            // A CLOSE IS A RELEASE, and it is the prompt one.
+            //
+            // Dropping the last reference and waiting for the collector gets
+            // here too, via `reapPorts`, but that is the backstop rather than
+            // the mechanism -- it is not prompt, and a host holding a socket
+            // until then is a real cost. Closing says so now. The id leaves
+            // `SC_BRIDGES` in the same breath, so the sweep does not send a
+            // second release for a port already let go.
+            long id = fx(rt.slot(rt.r(pi), PT_ID));
+            pushEvent(rt, EV_CLOSED, id, 0, Val.NIL);
+            forgetBridge(rt, id);
+            pushEvent(rt, EV_RELEASE, id, 0, Val.NIL);
         }
         wakeOn(rt, rt.r(pi));
         // The peer becomes HALF-closed rather than closed: it may still drain
@@ -1142,6 +1115,24 @@ public final class Conc {
             rt.setSlot(Val.asHeap(peer), PT_STATE, Val.fixnum(P_HALF));
             wakeOn(rt, peer);
         }
+        rt.popTo(base);
+    }
+
+    /// Drop `id` from the held list, so the sweep does not release it twice.
+    static void forgetBridge(Rt rt, long id) {
+        long s = sched(rt);
+        if (Val.isNil(s)) return;
+        int base = rt.mark();
+        int si = rt.push(s);
+        int bi = rt.push(rt.slot(rt.r(si), SC_BRIDGES));
+        int n = Vec.count(rt, rt.r(bi));
+        int ki = rt.push(Vec.empty(rt));
+        for (int k = 0; k < n; k++) {
+            long x = fx(Vec.nth(rt, rt.r(bi), k));
+            if (x == id) continue;
+            rt.setR(ki, Vec.conj(rt, rt.r(ki), Val.fixnum(x)));
+        }
+        rt.setSlot(Val.asHeap(rt.r(si)), SC_BRIDGES, rt.r(ki));
         rt.popTo(base);
     }
 
@@ -1171,22 +1162,37 @@ public final class Conc {
         if (!Val.isNil(pending)) {
             // Second time round: the host has answered.
             rt.setSlot(Val.asHeap(rt.r(ti)), TH_PENDING, Val.NIL);
-            // ONLY A REFUSAL IS A REFUSAL. The host may answer and then close
+            // A GRANT left the handle here; a refusal left the sentinel below.
+            // Only a refusal is a refusal -- the host may grant and then close
             // the port before this thread is next scheduled, and the port is
-            // then `P_HALF` -- "granted, and now finished", not "you may not
+            // then `P_HALF` ("granted, and now finished"), not "you may not
             // have this".
-            if (fx(rt.slot(pending, PT_STATE)) != P_REFUSED) { rt.popTo(base); return pending; }
+            if (isPort(rt, pending)) { rt.popTo(base); return pending; }
             String n = Str.isString(rt, rt.r(ni)) ? Str.text(rt, rt.r(ni)) : "?";
             rt.popTo(base);
             return rt.throwStr("SecurityException", "the host refused to open \"" + n + "\"");
         }
-        int ei = rt.push(newPort(rt, DEFAULT_HOST_CAP, rt.r(ni), K_FLINT, P_PENDING, Val.NIL));
-        int hi = rt.push(newPort(rt, DEFAULT_HOST_CAP, rt.r(ni), K_HOST, P_PENDING, Val.NIL));
-        linkPeers(rt, rt.r(ei), rt.r(hi));
-        rt.setSlot(Val.asHeap(rt.r(ti)), TH_PENDING, rt.r(ei));
-        long token = newWaiter(rt, WK_OPEN, rt.r(ei));
+        // NO SYSTEM PORT, NO ASKING. A sandbox given no transport has no way to
+        // reach anything outside itself, and saying so here is more honest than
+        // pushing an event nothing will ever drain -- that would park the thread
+        // for ever and read as a hang rather than as a refusal.
+        long sys = systemPort(rt);
+        if (Val.isNil(sys)) {
+            String n = Str.isString(rt, rt.r(ni)) ? Str.text(rt, rt.r(ni)) : "?";
+            rt.popTo(base);
+            return rt.throwStr("SecurityException",
+                "this sandbox was given no system port, so it cannot ask for \"" + n + "\"");
+        }
+        int si = rt.push(sys);
+        // The waiter hangs off the SYSTEM port, because that is the port the
+        // request went out on and there is no other port yet -- the whole point
+        // is that the answer is what creates one.
+        long token = newWaiter(rt, WK_OPEN, rt.r(si));
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_TOKEN, Val.fixnum(token));
-        long hostId = fx(rt.slot(rt.r(hi), PT_ID));
+        // Marked as awaiting an answer with a value that is NOT a port, so the
+        // resume above can tell "granted" from "refused" by type rather than by
+        // a state flag on an object that does not exist until granted.
+        rt.setSlot(Val.asHeap(rt.r(ti)), TH_PENDING, Val.fixnum(0));
         // THE ARGUMENTS, ENCODED, are the payload -- not a bare name string.
         // That is the whole of "the host does what it wants with them": one
         // value crosses, and anything an opaque value carries survives the trip
@@ -1207,9 +1213,10 @@ public final class Conc {
             return rt.throwStr("IllegalArgumentException",
                 "open: this cannot be sent to the host: " + e.getMessage());
         }
-        int pi = rt.push(Bytes.of(rt, call));
-        pushEvent(rt, EV_OPEN, token, hostId, rt.r(pi));
-        long target = rt.r(ei);
+        int payi = rt.push(Bytes.of(rt, call));
+        long sysId = fx(rt.slot(rt.r(si), PT_ID));
+        pushEvent(rt, EV_OPEN, token, sysId, rt.r(payi));
+        long target = rt.r(si);
         rt.popTo(base);
         return park(rt, target);
     }
@@ -1227,30 +1234,56 @@ public final class Conc {
     /// it no longer matches the slot, which is exactly the late-or-duplicated
     /// reply that would otherwise resume a stranger's thread.
     public static boolean hostContinue(Rt rt, long token, boolean ok) {
+        if (ok) {
+            // A GRANT HAS TO NAME A PORT. There is no port to grant until the
+            // host says which one -- that is what `0027` inverted -- so this
+            // form can only ever mean a refusal, and a host that means to grant
+            // calls `hostGrant`. Answering `true` here would have to invent a
+            // port, which is exactly the construction the sandbox may not do and
+            // the host must not be able to do by accident.
+            return false;
+        }
         long w = waiterAt(rt, token);
         if (Val.isNil(w)) return false;
         int base = rt.mark();
         int wi = rt.push(w);
-        if (fx(rt.slot(rt.r(wi), W_KIND)) == WK_OPEN) {
-            int pi = rt.push(rt.slot(rt.r(wi), W_PORT));
-            long state = ok ? P_OPEN : P_REFUSED;
-            rt.setSlot(Val.asHeap(rt.r(pi)), PT_STATE, Val.fixnum(state));
-            long host = peerOf(rt, rt.r(pi));
-            if (!Val.isNil(host)) {
-                rt.setSlot(Val.asHeap(host), PT_STATE, Val.fixnum(state));
-                // Refused: the host never gets a handle, so nothing needs to
-                // keep this end alive.
-                if (!ok) unrootPort(rt, host);
-            }
-            rt.popTo(pi);
-        }
+        // The refusal is left on the thread as a non-port, which `portOpen`
+        // reads on resume. Nothing else has to be cleaned up, because a refused
+        // open allocated nothing in the first place.
         wakeWaiter(rt, rt.r(wi));
         rt.popTo(base);
         return true;
     }
 
-    /// Put bytes into the flint end of a host port. Wakes a parked receiver; it
-    /// does not run anything.
+    /// Grant an open: hand the waiting thread a handle on the host's port
+    /// `hostPortId` (`doc/decisions/0027`).
+    ///
+    /// The id is the HOST's. It is the same id in every sandbox that holds this
+    /// port, which is what makes a handle sendable between two of them at all,
+    /// and it is the id the retain and release events name.
+    ///
+    /// If this sandbox already holds that port, the SAME handle comes back and
+    /// no reference is taken -- granting a port twice is not two holders.
+    public static boolean hostGrant(Rt rt, long token, long hostPortId) {
+        long w = waiterAt(rt, token);
+        if (Val.isNil(w)) return false;
+        int base = rt.mark();
+        int wi = rt.push(w);
+        long label = rt.slot(rt.r(wi), W_PORT);
+        label = Val.isNil(label) ? Val.NIL : rt.slot(label, PT_LABEL);
+        int li = rt.push(label);
+        long p = installBridgePort(rt, hostPortId, rt.r(li));
+        if (Val.isNil(p)) { rt.popTo(base); return false; }
+        int pi = rt.push(p);
+        long th = rt.slot(rt.r(wi), W_THREAD);
+        if (!Val.isNil(th)) rt.setSlot(Val.asHeap(th), TH_PENDING, rt.r(pi));
+        wakeWaiter(rt, rt.r(wi));
+        rt.popTo(base);
+        return true;
+    }
+
+    /// Put a message into a bridge from the host's side. Wakes a parked
+    /// receiver; it does not run anything.
     ///
     /// Returns FALSE WHEN THE GUEST'S BUFFER IS FULL, and the host must hold the
     /// message and offer it again after the next pump. Without that, a server
@@ -1258,22 +1291,22 @@ public final class Conc {
     /// answer would be resident in the guest heap -- which is precisely what
     /// waves exist to prevent. Inbound needs the same back-pressure as
     /// outbound; it is the same buffer bound, seen from the other side.
+    ///
+    /// The bytes are DECODED here, by the runtime, which is the mirror of
+    /// `send` encoding them. The HOST wrote them, so the live tags are honoured
+    /// -- `decode`, not `decodeGuest`. That is the whole asymmetry: an opaque
+    /// the host issued arrives as itself, with the id it was given, and nothing
+    /// the guest can write reaches this call.
     public static boolean hostDeliver(Rt rt, long hostPortId, byte[] bytes) {
         long host = portById(rt, hostPortId);
         if (Val.isNil(host)) return false;
         int base = rt.mark();
         int hi = rt.push(host);
-        // A GLOBAL port is ONE object and the id is its own, so the lookup has
-        // already found the end to deliver into. A HOST port is a pair, and the
-        // id belongs to the far end, so the delivery goes to its peer.
-        int pi;
-        if (fx(rt.slot(rt.r(hi), PT_KIND)) == K_GLOBAL) {
-            pi = rt.push(rt.r(hi));
-        } else {
-            long flint = peerOf(rt, rt.r(hi));
-            if (Val.isNil(flint)) { rt.popTo(base); return false; }
-            pi = rt.push(flint);
-        }
+        // A bridge is ONE object and the id is its own, so the lookup above has
+        // already found the end to deliver into. There is no pair and no peer
+        // hop: that indirection existed only because a host port kept its
+        // bookkeeping on a second object (`doc/decisions/0027`).
+        int pi = rt.push(rt.r(hi));
         // BACK-PRESSURE in bytes, CLAIMED ATOMICALLY: two host threads
         // delivering into one end would both read the same `queued`, both find
         // room, and both write -- and the bound that exists to cap memory would
@@ -1286,12 +1319,18 @@ public final class Conc {
             if (queued > 0 && queued + len > cap) { rt.popTo(base); return false; }
             if (casSlot(rt, pv, PT_BYTES, Val.fixnum(queued), Val.fixnum(queued + len))) break;
         }
-        // One object, not one boxed fixnum per byte, on a binary port: a vector
-        // would cost a 32-way trie and an allocation per 32 bytes for data the
-        // codec immediately walks back into bytes.
-        long v = fx(rt.slot(rt.r(pi), PT_BINARY)) == 1
-               ? Bytes.of(rt, bytes)
-               : Str.of(rt, new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
+        long v;
+        try {
+            v = Codec.decode(rt, bytes);
+        } catch (RuntimeException e) {
+            // Refused rather than delivered as anything else: a message the
+            // format cannot read is the host's error, and turning it into a
+            // string here would hand the guest something that silently was not
+            // what was sent.
+            giveBack(rt, rt.r(pi), len);
+            rt.popTo(base);
+            return false;
+        }
         int vi = rt.push(v);
         if (!enqueue(rt, rt.r(pi), rt.r(vi))) {
             // The ring is full though the byte bound had room: the guest has
@@ -1317,32 +1356,24 @@ public final class Conc {
         }
     }
 
-    /// The host lets go of its end. The port may now be collected.
+    /// The host lets go of its end.
+    ///
+    /// HALF-CLOSED, not closed: whatever the host already delivered is still
+    /// there to be read, and only when that is drained does it read as end of
+    /// stream. There is one object now, not a pair, so this is the state of the
+    /// handle itself rather than of a second end standing in for it.
     public static void hostClosePort(Rt rt, long hostPortId) {
         long host = portById(rt, hostPortId);
         if (Val.isNil(host)) return;
         int base = rt.mark();
         int hi = rt.push(host);
-        rt.setSlot(Val.asHeap(rt.r(hi)), PT_STATE, Val.fixnum(P_CLOSED));
-        long flint = peerOf(rt, rt.r(hi));
-        if (!Val.isNil(flint)) {
-            int fi = rt.push(flint);
-            // Half-closed: whatever the host already delivered is still there
-            // to be read, and only then does it read as end of stream.
-            if (fx(rt.slot(rt.r(fi), PT_STATE)) == P_OPEN) {
-                rt.setSlot(Val.asHeap(rt.r(fi)), PT_STATE, Val.fixnum(P_HALF));
-            }
-            wakeOn(rt, rt.r(fi));
-            rt.popTo(fi);
+        if (fx(rt.slot(rt.r(hi), PT_STATE)) == P_OPEN) {
+            rt.setSlot(Val.asHeap(rt.r(hi)), PT_STATE, Val.fixnum(P_HALF));
         }
-        unrootPort(rt, rt.r(hi));
+        wakeOn(rt, rt.r(hi));
         rt.popTo(base);
     }
 
-    /// This end's state, RESOLVED rather than remembered.
-    ///
-    /// A port whose peer has been collected is orphaned whether or not the
-    /// scheduler has got round to noticing, and a query that answered `:open`
     /// until then would be a notification wearing a query's clothes.
     public static long portStateNow(Rt rt, long p) {
         long st = fx(rt.slot(p, PT_STATE));
@@ -1366,13 +1397,12 @@ public final class Conc {
     /// carrier of the truth. 255 means the runtime knows nothing about this id,
     /// which a host should also treat as "done".
     public static long hostPortState(Rt rt, long hostPortId) {
-        long host = portById(rt, hostPortId);
-        if (Val.isNil(host)) return 255;
-        long flint = peerOf(rt, host);
-        // The runtime end has been collected: as good as closed, and this is
-        // exactly the case a missed event would have lost.
-        if (Val.isNil(flint)) return P_CLOSED;
-        return portStateNow(rt, flint);
+        long p = portById(rt, hostPortId);
+        // Never heard of, or the handle has been collected. Either way a host
+        // treats it as done, which is the case a missed `:closed` event would
+        // otherwise leak.
+        if (Val.isNil(p)) return 255;
+        return portStateNow(rt, p);
     }
 
     /// Serialise every pending event into one contiguous buffer and hand it
@@ -1468,6 +1498,23 @@ public final class Conc {
         if (Val.isNil(s)) return;
         int base = rt.mark();
         int si = rt.push(s);
+        // --- bridges: a collection is a RELEASE -----------------------------
+        //
+        // The handle is ordinary memory and is not rooted, so the collector
+        // finding it unreachable IS this sandbox letting the port go. One
+        // release per retain, which is what makes the host's count a count of
+        // holders rather than of arrivals (`doc/decisions/0027`).
+        int bi = rt.push(rt.slot(rt.r(si), SC_BRIDGES));
+        int bn = Vec.count(rt, rt.r(bi));
+        int hi = rt.push(Vec.empty(rt));
+        for (int k = 0; k < bn; k++) {
+            long id = fx(Vec.nth(rt, rt.r(bi), k));
+            if (Val.isNil(portById(rt, id))) { pushEvent(rt, EV_RELEASE, id, 0, Val.NIL); continue; }
+            rt.setR(hi, Vec.conj(rt, rt.r(hi), Val.fixnum(id)));
+        }
+        rt.setSlot(Val.asHeap(rt.r(si)), SC_BRIDGES, rt.r(hi));
+
+        // --- channels: a collected end orphans its peer ----------------------
         int ii = rt.push(rt.slot(rt.r(si), SC_PORTS));
         int n = Vec.count(rt, rt.r(ii));
         int li = rt.push(Vec.empty(rt));
@@ -1482,15 +1529,11 @@ public final class Conc {
             long peer = portById(rt, peerIdOfDead(rt, id));
             if (Val.isNil(peer)) continue;
             int pi = rt.push(peer);
-            long pkind = fx(rt.slot(rt.r(pi), PT_KIND));
             long pst = fx(rt.slot(rt.r(pi), PT_STATE));
             if (pst != P_CLOSED && pst != P_ORPHANED) {
                 // Its peer vanished WITHOUT closing, which is not the same as a
                 // tidy close and should not read like one.
                 rt.setSlot(Val.asHeap(rt.r(pi)), PT_STATE, Val.fixnum(P_ORPHANED));
-                if (pkind == K_HOST) {
-                    pushEvent(rt, EV_CLOSED, fx(rt.slot(rt.r(pi), PT_ID)), 0, Val.NIL);
-                }
             }
             failWaitersOn(rt, rt.r(pi),
                 "the other end of this port is unreachable, so this can never complete");
@@ -1524,7 +1567,10 @@ public final class Conc {
 
     /// Program exit: close every flint end so a host is never left guessing
     /// whether more is coming, and leave the events for the final drain.
-    public static void closeAllFlintEnds(Rt rt) {
+    /// Program exit: close and release every bridge, so a host is never left
+    /// holding a reference for a sandbox that has finished, and leave the
+    /// events for the final drain.
+    public static void closeAllBridges(Rt rt) {
         long s = sched(rt);
         if (Val.isNil(s)) return;
         int base = rt.mark();
@@ -1763,7 +1809,7 @@ public final class Conc {
             if (mainFinished(rt)) {
                 // Exit closes every flint end and leaves the events for one last
                 // drain, so a host never has to guess whether more is coming.
-                closeAllFlintEnds(rt);
+                closeAllBridges(rt);
                 if (pendingEvents(rt)) { rt.status = 2; return Val.NIL; }
                 rt.status = 0;
                 return mainResult(rt);

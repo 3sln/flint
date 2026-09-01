@@ -471,8 +471,56 @@ impl Program {
         self.rt.host_continue(token as i64, ok)
     }
 
-    /// Push bytes into the flint end of a host port. False means the guest's
-    /// buffer is full and the host must offer this again after the next pump.
+    /// Grant an open: hand the waiting thread a handle on the host's port
+    /// `port_id` (`doc/decisions/0027`).
+    ///
+    /// The half `host_continue` cannot do. A grant has to NAME a port, because
+    /// there is no port until the host says which one -- the sandbox no longer
+    /// manufactures a pair and keeps one end -- so `host_continue(token, true)`
+    /// is refused rather than guessed at.
+    pub fn host_grant(&mut self, token: u32, port_id: u32) -> bool {
+        self.rt.host_grant(token as i64, port_id as i64)
+    }
+
+    /// Hand a port this host owns to the sandbox, without being asked.
+    ///
+    /// `system` makes it the SYSTEM port: the one `open` requests go out on. A
+    /// sandbox given none can run logic and ask for nothing, which is the
+    /// honest default rather than a degraded mode.
+    ///
+    /// Installing a port the sandbox already holds is FREE and takes no second
+    /// reference -- the handle is interned by id -- so a host may install
+    /// without tracking what it has installed before.
+    pub fn install_port(&mut self, port_id: u32, label: &str, system: bool) -> bool {
+        let base = self.rt.mark();
+        let l = self.rt.string(label);
+        let li = self.rt.push(l);
+        let l = self.rt.r(li);
+        let p = if system {
+            self.rt.install_system_port(port_id as i64, l)
+        } else {
+            self.rt.install_bridge_port(port_id as i64, l)
+        };
+        self.rt.pop_to(base);
+        !p.is_nil()
+    }
+
+    /// The wire codec, for a host that wants to write a message itself.
+    ///
+    /// The LOW-LEVEL half. `host_deliver` takes encoded bytes because a bridge
+    /// carries values and the runtime decodes what arrives; these two are how a
+    /// host produces and reads them without hand-assembling the format.
+    pub fn encode(&mut self, v: crate::value::Value) -> Result<alloc::vec::Vec<u8>, alloc::string::String> {
+        self.rt.encode(v)
+    }
+
+    /// The mirror: bytes a host drained, as a value in this heap.
+    pub fn decode(&mut self, bytes: &[u8]) -> Result<crate::value::Value, alloc::string::String> {
+        self.rt.decode(bytes)
+    }
+
+    /// Push a message into a bridge. False means the guest's buffer is full and
+    /// the host must offer this again after the next pump.
     pub fn host_deliver(&mut self, port_id: u32, bytes: &[u8]) -> bool {
         self.rt.host_deliver(port_id as i64, bytes)
     }

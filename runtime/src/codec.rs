@@ -802,3 +802,173 @@ mod tests {
         assert!(rt.eq(t, back));
     }
 }
+
+// --- the host's side of the codec -------------------------------------------
+//
+// A host has to WRITE messages, and it has no flint heap to write them from.
+// `Rt::encode` turns a value in the sandbox into bytes; this turns a host's own
+// data into the same bytes, with no runtime involved at all.
+//
+// This is the LOW-LEVEL half, deliberately (`doc/decisions/0027`). A host that
+// wants to hand over a capability, or a port, or a table has to say so exactly;
+// a host that just wants to send a string or a map of them uses the shorthands
+// at the bottom. The guest gets neither half -- it hands over a value and is
+// handed one back, and never sees an encoding.
+
+/// One message, under construction.
+///
+/// Cheap and linear: every `put` appends, so building a nested value is a
+/// pre-order walk with no backtracking and no length patching. The counts go in
+/// before the elements because the decoder needs them before it starts, which is
+/// what lets it build a collection without growing one.
+#[derive(Default, Clone)]
+pub struct Wire {
+    b: Vec<u8>,
+}
+
+impl Wire {
+    pub fn new() -> Wire {
+        Wire { b: Vec::new() }
+    }
+    /// The bytes, ready for `host_deliver`.
+    pub fn done(self) -> Vec<u8> {
+        self.b
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.b
+    }
+
+    fn u32(&mut self, n: u32) -> &mut Wire {
+        self.b.extend_from_slice(&n.to_le_bytes());
+        self
+    }
+    fn u64(&mut self, n: u64) -> &mut Wire {
+        self.b.extend_from_slice(&n.to_le_bytes());
+        self
+    }
+    fn text(&mut self, s: &str) -> &mut Wire {
+        let n = s.len() as u32;
+        self.u32(n);
+        self.b.extend_from_slice(s.as_bytes());
+        self
+    }
+    /// A namespace that is ABSENT, which is not the same as empty: that is what
+    /// distinguishes `:kw` from `:/kw`.
+    fn absent(&mut self) -> &mut Wire {
+        self.u32(NO_NS)
+    }
+
+    pub fn nil(&mut self) -> &mut Wire {
+        self.b.push(K_NIL);
+        self
+    }
+    pub fn bool(&mut self, v: bool) -> &mut Wire {
+        self.b.push(if v { K_TRUE } else { K_FALSE });
+        self
+    }
+    pub fn int(&mut self, n: i64) -> &mut Wire {
+        self.b.push(K_INT);
+        self.u64(n as u64)
+    }
+    pub fn float(&mut self, n: f64) -> &mut Wire {
+        self.b.push(K_DOUBLE);
+        self.u64(n.to_bits())
+    }
+    pub fn string(&mut self, s: &str) -> &mut Wire {
+        self.b.push(K_STRING);
+        self.text(s)
+    }
+    pub fn bytes(&mut self, v: &[u8]) -> &mut Wire {
+        self.b.push(K_BYTES);
+        self.u32(v.len() as u32);
+        self.b.extend_from_slice(v);
+        self
+    }
+    pub fn keyword(&mut self, ns: Option<&str>, name: &str) -> &mut Wire {
+        self.b.push(K_KEYWORD);
+        match ns {
+            Some(n) => self.text(n),
+            None => self.absent(),
+        };
+        self.text(name)
+    }
+    pub fn symbol(&mut self, ns: Option<&str>, name: &str) -> &mut Wire {
+        self.b.push(K_SYMBOL);
+        match ns {
+            Some(n) => self.text(n),
+            None => self.absent(),
+        };
+        self.text(name)
+    }
+
+    /// A PORT, by the id the HOST knows it as.
+    ///
+    /// This is how a capability is delegated: the sandbox decodes it into a
+    /// handle, interned by that id, and is told nothing else about it. Sending
+    /// the same port twice costs one holder, not two.
+    pub fn port(&mut self, id: u32) -> &mut Wire {
+        self.b.push(K_PORT);
+        self.u32(id)
+    }
+
+    /// An OPAQUE value the host owns: an id it issued, and a label for reading.
+    ///
+    /// `doc/decisions/0022`: the id is the whole authority. It is meaningful
+    /// only to the host that issued it, the guest can carry it and compare it
+    /// and nothing else, and an id the guest MINTS is 0 -- which is why 0 must
+    /// never be issued, or a forgery is indistinguishable from a grant.
+    pub fn opaque(&mut self, host_id: u64, label: &str) -> &mut Wire {
+        self.b.push(K_SENTINEL);
+        self.u64(host_id);
+        self.text(label)
+    }
+
+    /// `n` elements FOLLOW. The count first, because the decoder needs it
+    /// before it starts.
+    pub fn vector(&mut self, n: u32) -> &mut Wire {
+        self.b.push(K_VECTOR);
+        self.u32(n)
+    }
+    pub fn list(&mut self, n: u32) -> &mut Wire {
+        self.b.push(K_LIST);
+        self.u32(n)
+    }
+    pub fn set(&mut self, n: u32) -> &mut Wire {
+        self.b.push(K_SET);
+        self.u32(n)
+    }
+    /// `n` ENTRIES follow, each a key then a value -- so `2 * n` values.
+    pub fn map(&mut self, n: u32) -> &mut Wire {
+        self.b.push(K_MAP);
+        self.u32(n)
+    }
+    /// The tag SYMBOL, then the form (`doc/decisions/0034`).
+    pub fn tagged(&mut self) -> &mut Wire {
+        self.b.push(K_TAGGED);
+        self
+    }
+}
+
+/// The shorthands. A host sending a string should not have to know there is a
+/// tag byte.
+impl Wire {
+    /// One string, as a whole message.
+    pub fn of_str(s: &str) -> Vec<u8> {
+        let mut w = Wire::new();
+        w.string(s);
+        w.done()
+    }
+    /// One integer, as a whole message.
+    pub fn of_int(n: i64) -> Vec<u8> {
+        let mut w = Wire::new();
+        w.int(n);
+        w.done()
+    }
+    /// One port handle, as a whole message: the shape that delegates a
+    /// capability in a single call.
+    pub fn of_port(id: u32) -> Vec<u8> {
+        let mut w = Wire::new();
+        w.port(id);
+        w.done()
+    }
+}
