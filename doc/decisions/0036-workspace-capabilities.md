@@ -410,15 +410,73 @@ Which suggests the cheap implementation, if it is wanted later: give capabilitie
 slots the way vars have them, and `&capabilities` lookup becomes a slot read
 rather than a map lookup.
 
+### The table is PER NAMESPACE, not one merged set
+
+An earlier draft of this file said `&capabilities` was "the merged capability set
+for the compilation context". That is too flat and it is wrong.
+
+Grants are per workspace, and one program contains many workspaces. So two
+namespaces in the same program legitimately see different capability sets, and a
+single global table cannot express that -- it would either be the union, which
+hands every workspace everything, or the intersection, which is useless.
+
+The table belongs to the NAMESPACE. Which is again the var shape: vars are
+per-namespace and bound at load, and capability slots can be exactly that.
+
+### Why it must not be `*ns*`, or any other dynamic var
+
+The tempting spelling is Clojure's: hang `:workspace {:capabilities {...}}` off
+`*ns*`, which during macroexpansion is the namespace being compiled, so a macro
+picks up its caller's table for free.
+
+Two things are wrong with it here.
+
+**flint has no `*ns*`.** There is no runtime namespace object -- flint compiles
+ahead of time and namespaces do not exist as values at run time. Adding one
+solely to carry this table would be inventing a runtime concept to hold
+something the compiler already knows.
+
+**And dynamic scoping is backwards for authority.** flint's dynamic vars are real
+(`^:dynamic`, `binding`, a per-green-thread binding map, `dyn-get` reading
+through it), so this is not hypothetical:
+
+* A function from workspace A, CALLED from B, would read B's binding. A would
+  lose its own authority the moment it was called from somewhere else. Authority
+  has to travel with the code that was granted it -- lexically -- not with
+  whoever calls it. This one is fatal on its own.
+* A caller could SUBSTITUTE. Rebind so that a library asking for `:net` is handed
+  the caller's `:fs` token; the library then presents it to the host believing it
+  is something else. No privilege escalation -- you can only substitute tokens
+  you already hold -- but a confused deputy, and an avoidable one.
+
+### What keeps the conciseness without the dynamic scope
+
+The macro still emits a reference and never holds a token; the difference is that
+the COMPILER resolves it, against the namespace it is expanding in:
+
+```clojure
+(fs/read path)   =>   (fs/read* <cap :fs of this namespace> path)
+```
+
+Lexical, static, resolved at compile time to a per-namespace slot that the host
+binds at load. Nothing is rebindable, nothing is dynamic, nothing is looked up
+by a name a caller controls -- and the source is as short as it would have been.
+
+The macro's compile-time knowledge is the same knowledge either way: which
+capability names its namespace has. It just does not need a runtime var to reach
+them.
+
 ### Two things were being called `&capabilities`
 
 Separating them is what makes the above work:
 
-* **At compile time**, the set of capability NAMES available in this compilation
-  context. Ordinary data, safe in a form, safe in the pool. This is what a macro
-  branches on when it wants compile-time knowledge of what is available.
-* **At run time**, the mapping from those names to host-issued sentinels. A live
-  table, populated over the system port, never serialised and never in the image.
+* **At compile time**, the set of capability NAMES available in the namespace
+  being compiled. Ordinary data, safe in a form, safe in the pool. This is what
+  a macro branches on when it wants compile-time knowledge of what is
+  available.
+* **At run time**, the mapping from those names to host-issued sentinels, PER
+  NAMESPACE. A live table, populated over the system port, never serialised and
+  never in the image.
 
 A macro reads the first and emits a reference into the second. It never holds a
 sentinel, so the question of handing one over does not arise.
@@ -528,9 +586,11 @@ being careful.
    behind a guard.
 7. **The request primitive**, generalising `port_open` so its answer is not
    constrained to a port, and `open` retired onto it.
-8. **Declared capabilities and `&capabilities`**: the declaration in the
-   artifact at compile time, the sentinels supplied by the host at load or first
-   use. Never baked in -- that would make the artifact a bearer token.
+8. **Declared capabilities and the per-namespace table**: the declaration in
+   the artifact at compile time, the sentinels supplied by the host at load or
+   first use. Never baked in -- that would make the artifact a bearer token --
+   and never dynamically scoped, or a library loses its own authority the moment
+   it is called from elsewhere.
 
 ## What is undecided
 
