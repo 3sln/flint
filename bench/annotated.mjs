@@ -31,7 +31,7 @@ const timeIt = async (file, args) => {
   let best = Infinity, steps = 0, out = null;
   for (let k = 0; k < 5; k++) {
     const inst = instantiate(module);
-    inst.exports.set_step_limit(0, 1e12);
+    inst.exports.set_step_limit(BigInt(1e12));
     const t0 = process.hrtime.bigint();
     const r = inst.main(...args);
     const t1 = process.hrtime.bigint();
@@ -46,7 +46,7 @@ const timeIt = async (file, args) => {
 const countIt = async (file, args) => {
   const { module } = await load(file);
   const inst = instantiate(module);
-  inst.exports.set_step_limit(0, 1e12);
+  inst.exports.set_step_limit(BigInt(1e12));
   inst.main(...args);
   const e = inst.exports;
   let spec = 0, checks = 0;

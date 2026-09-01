@@ -54,7 +54,7 @@
            "const out = {};\n"
            "for (const w of ['vec', 'table']) {\n"
            "  const i = instantiate(module);\n"
-           "  i.exports.set_step_limit(0x7ffffff0);\n"
+           "  i.exports.set_step_limit(0x7ffffff000000000n);\n"
            "  const r = i.main(w);\n"
            "  out[w] = { answer: r.out,\n"
            "             allocated: Number(i.exports.stat_bytes_allocated()),\n"
@@ -132,7 +132,7 @@
            "const out = {};\n"
            "for (const w of ['vary', 'same']) {\n"
            "  const i = instantiate(module);\n"
-           "  i.exports.set_step_limit(0x7ffffff0);\n"
+           "  i.exports.set_step_limit(0x7ffffff000000000n);\n"
            "  const r = i.main(w);\n"
            "  i.exports.collect_now();\n"
            "  out[w] = { answer: r.out, peak: Number(i.exports.stat_peak_live()) };\n"
@@ -206,7 +206,7 @@
            "const out = {};\n"
            "for (const w of ['none', 'drop', 'add', 'map', 'errs']) {\n"
            "  const i = instantiate(module);\n"
-           "  i.exports.set_step_limit(0x7ffffff0);\n"
+           "  i.exports.set_step_limit(0x7ffffff000000000n);\n"
            "  const before = Number(i.exports.stat_steps());\n"
            "  const r = i.main(w);\n"
            "  out[w] = { answer: r.out, gas: Number(i.exports.stat_steps()) - before,\n"
@@ -298,12 +298,34 @@
            "    :e-type (msg (fn [] (ft/add-row T {:id 3 :name :notastring})))\n"
            "    :e-key (msg (fn [] (assoc T :id 4)))\n"
            "    :e-range (msg (fn [] (ft/set-row T 7 {:id 1 :name \"a\"})))\n"
-           "    :e-notmap (msg (fn [] (ft/add-row T [1 \"a\"])))}))\n"))
+           "    :e-notmap (msg (fn [] (ft/add-row T [1 \"a\"])))\n"
+           "    :built (count (ft/build S (range 600) (fn [i] {:id i :name \"n\"})))\n"
+           "    :built-reads (:id (get (ft/build S (range 600) (fn [i] {:id i :name \"n\"})) 599))\n"
+           "    :trans-checks (msg (fn [] (ft/build S (range 3) (fn [i] {:id i}))))\n"
+           "    :trans-used-twice (msg (fn [] (let [t (transient (ft/table S []))]\n"
+           "                                    (persistent! t) (conj! t {:id 1 :name \"a\"}))))}))\n"))
 (let [r (sh "./bin/flint" ":src" d ":fn" "ops/main" ":out" "out/tbl-ops.wasm")]
   (when-not (zero? (:exit r)) (println "ops build failed:" (:out r) (:err r)) (System/exit 1)))
 (def ops (let [r (sh "node" "host/flint.mjs" "out/tbl-ops.wasm")]
            (when-not (zero? (:exit r)) (println "ops run failed:" (:out r) (:err r)) (System/exit 1))
            (read-string (str/trim (:out r)))))
+
+
+;; --------------------------------------------------------------- step 7
+;;
+;; The transient. It spans three chunks here on purpose: a build that never
+;; fills one would not exercise the seal, and sealing is where the encodings are
+;; decided and where the open chunk stops being writable.
+(check "a transient build spans several chunks" (:built ops) 600)
+(check "  ... and every row reads back" (:built-reads ops) 599)
+;; A transient is a FASTER way to build a table, not a way to build one that is
+;; not closed. `conj!` runs the same check the persistent path runs.
+(check "  ... and conj! still refuses a row that does not fit the schema"
+       (:trans-checks ops)
+       "row 0 has no :name; a table is closed, so every row has every column, and the columns are :id :name")
+(check "  ... and a transient used after persistent! says so"
+       (:trans-used-twice ops)
+       "conj! on a transient table that persistent! has already taken; a transient is used once and the table it produced is the value")
 
 (check "a table prints as its own literal, which reads back"
        (:print ops) "#flint/table [{:id 1, :name \"a\"} {:id 2, :name \"b\"}]")

@@ -18,7 +18,7 @@ const time = (what, n) => {
   let best = Infinity, steps = 0, out = null;
   for (let i = 0; i < REPS; i++) {
     const inst = instantiate(module);
-    inst.exports.set_step_limit(0, 1e12);
+    inst.exports.set_step_limit(BigInt(1e12));
     const t0 = process.hrtime.bigint();
     const r = inst.main(what, String(n));
     const t1 = process.hrtime.bigint();

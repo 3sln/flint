@@ -39,8 +39,12 @@ pub const BB_FLAT: u32 = 1;
 /// more per level. Every child of a node has the SAME depth, which is what
 /// makes this a B-tree rather than a spine -- see `b_absorb`.
 pub const BB_DEPTH: u32 = 2;
+/// The subtree's content hash, or NIL until asked. The mirror of `RP_HASH`,
+/// and for the same reason: hashing a byte rope used to FLATTEN it, which
+/// bought the caching by spending the sharing.
+pub const BB_HASH: u32 = 3;
 /// Children start here.
-pub const BB_KIDS: u32 = 3;
+pub const BB_KIDS: u32 = 4;
 
 impl Rt {
     #[inline]
@@ -187,6 +191,7 @@ impl Rt {
         }
         self.set_slot(a, BB_BYTES, Value::fixnum(total as i64));
         self.set_slot(a, BB_FLAT, NIL);
+        self.set_slot(a, BB_HASH, NIL);
         let d = {
             let k0 = self.r(base);
             self.b_depth(k0) + 1
@@ -451,17 +456,226 @@ impl Rt {
         if from == 0 && to == n {
             return v;
         }
-        let mut out = alloc::vec::Vec::with_capacity((to - from) as usize);
-        self.b_append_range(v, from, to, &mut out);
-        let _ = SLICE_MIN;
-        self.new_bytes(&out)
+        // SHARES, like `rope_slice`. This descended to the range -- which is
+        // what fixed the quadratic above -- and then COPIED it, so a slice of a
+        // 509 KB code section allocated a fresh 509 KB minus the trim. The
+        // `let _ = SLICE_MIN;` that used to sit on the next line is the whole
+        // story: the constant that names this policy had exactly one reference
+        // in the tree, and its job was to stop the compiler mentioning that the
+        // policy was not implemented.
+        //
+        // A byte rope is the same shape as a text rope with less to carry --
+        // no code-point count, no ASCII bit -- so this is `rope_slice` with the
+        // metadata dropped.
+        if to - from < SLICE_MIN || !self.is_brope(v) {
+            // Small, or a leaf: copy. `SLICE_MIN` is the retention fix -- a
+            // three-byte slice must not keep the section alive.
+            let mut out = alloc::vec::Vec::with_capacity((to - from) as usize);
+            self.b_append_range(v, from, to, &mut out);
+            return self.new_bytes(&out);
+        }
+        let base = self.mark();
+        let vi = self.push(v);
+        let kids = len(&self.gc.sp, self.r(vi).as_heap()) - BB_KIDS;
+        let out = self.mark();
+        let mut made = 0usize;
+        let mut at = 0u32;
+        for i in 0..kids {
+            let k = self.slot(self.r(vi), BB_KIDS + i);
+            let w = self.b_count(k);
+            if at + w > from && at < to {
+                let lo = from.saturating_sub(at);
+                let hi = (to - at).min(w);
+                let piece = if lo == 0 && hi == w {
+                    k // WHOLLY INSIDE: shared, not copied
+                } else {
+                    self.b_slice(k, lo, hi)
+                };
+                if piece.is_nil() {
+                    self.pop_to(base);
+                    return NIL;
+                }
+                if self.b_count(piece) > 0 {
+                    self.push(piece);
+                    made += 1;
+                }
+            }
+            at += w;
+            if at >= to {
+                break;
+            }
+        }
+        let r = self.b_from_roots(out, made);
+        self.pop_to(base);
+        r
     }
 
+    /// A balanced byte rope over `n` pieces on the shadow stack, the mirror of
+    /// `rope_from_roots`.
+    fn b_from_roots(&mut self, base: usize, n: usize) -> Value {
+        if n == 0 {
+            return self.new_bytes(&[]);
+        }
+        if n == 1 {
+            return self.r(base);
+        }
+        let mut level = n;
+        let mut from = base;
+        loop {
+            if level == 1 {
+                return self.r(from);
+            }
+            let out = self.mark();
+            let mut made = 0usize;
+            let mut i = 0usize;
+            while i < level {
+                let take = FANOUT.min((level - i) as u32) as usize;
+                let mut kids: alloc::vec::Vec<Value> = alloc::vec::Vec::with_capacity(take);
+                for k in 0..take {
+                    kids.push(self.r(from + i + k));
+                }
+                let node = self.b_node(&kids);
+                if node.is_nil() {
+                    return NIL;
+                }
+                self.push(node);
+                made += 1;
+                i += take;
+            }
+            from = out;
+            level = made;
+        }
+    }
+
+    pub fn is_brope(&self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_BROPE
+    }
+
+    /// The byte-rope mirror of `tree_eq`, and it had the same defect twice
+    /// over: it built a `Vec<u8>` of BOTH sides in full and then compared them,
+    /// so two 500 KB sections differing in their first byte cost a megabyte of
+    /// copying to tell apart.
+    ///
+    /// Now that `b_slice` SHARES, two slices of one section meet the same leaf
+    /// on both sides over and over, and each meeting is a pointer comparison.
     pub fn b_eq(&self, a: Value, b: Value) -> bool {
+        if a.0 == b.0 {
+            return true;
+        }
         if self.b_count(a) != self.b_count(b) {
             return false;
         }
-        self.b_to_vec(a) == self.b_to_vec(b)
+        let mut sa: alloc::vec::Vec<(Value, u32)> = alloc::vec::Vec::new();
+        let mut sb: alloc::vec::Vec<(Value, u32)> = alloc::vec::Vec::new();
+        sa.push((a, 0));
+        sb.push((b, 0));
+        let (mut la, mut lb): (&[u8], &[u8]) = (&[], &[]);
+        let (mut pa, mut pb) = (0usize, 0usize);
+        loop {
+            if pa == la.len() {
+                match self.b_walk_next(&mut sa) {
+                    None => break,
+                    Some(v) => {
+                        if pb == lb.len() && !sb.is_empty() {
+                            let mut peek = sb.clone();
+                            if let Some(w) = self.b_walk_next(&mut peek) {
+                                if w.0 == v.0 {
+                                    sb = peek;
+                                    la = &[];
+                                    lb = &[];
+                                    pa = 0;
+                                    pb = 0;
+                                    continue;
+                                }
+                            }
+                        }
+                        la = self.b_leaf_bytes(v);
+                        pa = 0;
+                    }
+                }
+            }
+            if pb == lb.len() {
+                match self.b_walk_next(&mut sb) {
+                    None => break,
+                    Some(v) => {
+                        lb = self.b_leaf_bytes(v);
+                        pb = 0;
+                    }
+                }
+            }
+            let n = (la.len() - pa).min(lb.len() - pb);
+            if n == 0 {
+                continue;
+            }
+            if la[pa..pa + n] != lb[pb..pb + n] {
+                return false;
+            }
+            pa += n;
+            pb += n;
+        }
+        pa == la.len()
+            && pb == lb.len()
+            && self.b_walk_next(&mut sa).is_none()
+            && self.b_walk_next(&mut sb).is_none()
+    }
+
+    /// The content hash of a byte tree, cached per node. `rope_hash` with the
+    /// text dropped.
+    pub fn b_hash(&mut self, v: Value) -> u32 {
+        if !self.is_brope(v) {
+            let bs: alloc::vec::Vec<u8> = self.b_leaf_bytes(v).to_vec();
+            let mut h: u32 = 0;
+            for c in bs {
+                h = h.wrapping_mul(31).wrapping_add(c as u32);
+            }
+            return h;
+        }
+        let cached = self.slot(v, BB_HASH);
+        if cached.is_fixnum() {
+            return cached.as_fixnum() as u32;
+        }
+        let base = self.mark();
+        let vi = self.push(v);
+        let kids = len(&self.gc.sp, self.r(vi).as_heap()) - BB_KIDS;
+        let mut h: u32 = 0;
+        for i in 0..kids {
+            let k = self.slot(self.r(vi), BB_KIDS + i);
+            let ki = self.push(k);
+            let kh = self.b_hash(self.r(ki));
+            let kb = self.b_count(self.r(ki));
+            h = h.wrapping_mul(Self::pow31(kb)).wrapping_add(kh);
+            self.pop_to(ki);
+        }
+        let vv = self.r(vi);
+        self.set_slot(vv.as_heap(), BB_HASH, Value::fixnum(h as i64));
+        self.pop_to(base);
+        h
+    }
+
+    fn b_walk_next(&self, stack: &mut alloc::vec::Vec<(Value, u32)>) -> Option<Value> {
+        loop {
+            let (node, i) = *stack.last()?;
+            if !self.is_brope(node) {
+                stack.pop();
+                return Some(node);
+            }
+            let kids = len(&self.gc.sp, node.as_heap()) - BB_KIDS;
+            if i >= kids {
+                stack.pop();
+                continue;
+            }
+            stack.last_mut().unwrap().1 = i + 1;
+            let k = self.slot(node, BB_KIDS + i);
+            stack.push((k, 0));
+        }
+    }
+
+    fn b_leaf_bytes(&self, v: Value) -> &[u8] {
+        if v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_BYTES {
+            raw_bytes(&self.gc.sp, v.as_heap())
+        } else {
+            &[]
+        }
     }
 }
 

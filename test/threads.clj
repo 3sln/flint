@@ -162,7 +162,33 @@
 ;; `hash`, `kind`, `get`, `count`, `map_get` and `seq`, which are Rust and do
 ;; not shake. A table remains a candidate for a UNIT (`doc/decisions/0023`); the
 ;; printer is no longer the thing standing in the way.
-            (< pure-size 276000))
+            (< pure-size 284000))
+
+;; RE-BASELINED from 276 000: 280 781 shipped against 272 129 at the previous
+;; commit, so the work below costs 8 652 bytes in every module. MEASURED by
+;; building the same fixture at both revisions, and worth writing down as one
+;; number because it is one decision -- three bounds this runtime claimed and
+;; did not have:
+;;
+;; * THE TRANSIENT TABLE (`0026` step 7). Appending 20 000 rows through the
+;;   persistent path allocated 49 061 464 bytes and collected 23 times, against
+;;   3 082 984 and once through the transient.
+;;
+;; * GAS THAT BOUNDS RATHER THAN BILLS (`0009`). `charge_tick`/`charge_checked`
+;;   at every loop a guest can make big, plus a charge on allocation itself.
+;;   Thirteen operations ran past an exhausted budget before this -- `apply` by
+;;   2 698 032 steps, `str-bytes` by 11 937 109 -- and `0009` had said natives
+;;   must charge since it was written.
+;;
+;; * ROPES THAT SHARE (`0011`). `subs` copied every byte on both paths and
+;;   flattened on one; equality copied BOTH sides in full before comparing a
+;;   byte; hashing flattened to get a cache. `SLICE_MIN` -- the constant naming
+;;   the sharing policy -- had one reference in the tree, and it was
+;;   `let _ = SLICE_MIN;`, silencing the warning that said it was unimplemented.
+;;
+;; Every one of those is a property the project already claimed. The bytes buy
+;; back claims rather than features, which is the only reason this is a
+;; re-baseline and not a refusal.
 
 ;; RE-BASELINED 2026-08-30, from 252 000, and the honest version of why: the
 ;; guard was measuring the DEFAULT build against a shipping floor, and it had

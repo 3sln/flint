@@ -386,7 +386,13 @@ impl Rt {
         let base = self.mark();
         let ti = self.push(th);
         let n = self.roots.stack_top as u32;
-        let sv = self.new_obj(TY_NODE, n);
+        // UNBILLED: see `alloc_unbilled`. The size of a saved stack is a
+        // property of the calling convention, not of the program, and billing
+        // it made the same program cost more interpreted than compiled.
+        let sv = {
+            let a = self.alloc_unbilled(TY_NODE, n);
+            if a == 0 { NIL } else { Value::heap(a) }
+        };
         if sv.is_nil() {
             self.pop_to(base);
             return;
@@ -397,7 +403,10 @@ impl Rt {
         }
         self.set(self.r(ti), TH_STACK, sv);
 
-        let fb = self.new_obj(TY_RAW, (self.frames.len() * FRAME_REC) as u32);
+        let fb = {
+            let a = self.alloc_unbilled(TY_RAW, (self.frames.len() * FRAME_REC) as u32);
+            if a == 0 { NIL } else { Value::heap(a) }
+        };
         if !fb.is_nil() {
             let addr = fb.as_heap();
             let bytes = self.gc.sp.bytes_mut(addr + HDR, (self.frames.len() * FRAME_REC) as u32);

@@ -371,14 +371,30 @@ pub extern "C" fn flint_rt_ptr() -> u32 {
 /// Set an instruction budget. 0 disables it. Used by the test harness to turn a
 /// hang into a frame trace.
 #[no_mangle]
-pub extern "C" fn set_step_limit(hi: u32, lo: u32) {
+pub extern "C" fn set_step_limit(want: u64) {
     unsafe {
         let rt = ensure_rt();
+        // ONE u64, not `(hi, lo)`. It was two `u32`s and nothing recorded why;
+        // the rest of this ABI returns `u64` in ten places, so a host here
+        // already unwraps BigInts and the split bought nothing.
+        //
+        // What it cost: a caller passing one argument gets `undefined -> 0` for
+        // the second, and a limit 2^32 times too large. SILENTLY, and in the
+        // dangerous direction -- the bound gets looser, so nothing fails, it
+        // just stops bounding. Six call sites in this repo were doing exactly
+        // that and passing, because they only wanted "effectively unlimited"
+        // and a far bigger number is still that. It was found by the first
+        // caller that wanted a SMALL limit, which spent 661 938 057 steps under
+        // what it believed was a 200 000-step cap.
+        //
+        // As one `u64`, wasm requires a BigInt and a plain number throws at the
+        // call. For a value whose whole job is to be a bound, failing loudly
+        // beats failing loose.
+        //
         // `u64::MAX` is the sentinel for "no checkpoint", so asking for the
         // largest possible limit switched counting OFF -- which is what
         // `bench/wasm.mjs` did, and it then reported a tight loop as dispatching
         // zero instructions. An explicit limit now always counts.
-        let want = ((hi as u64) << 32) | lo as u64;
         rt.set_gas_limit(if want == u64::MAX { u64::MAX - 1 } else { want });
         rt.steps = 0;
         rt.refresh_checkpoint();

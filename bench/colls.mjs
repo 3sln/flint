@@ -16,7 +16,7 @@ const run = (what) => {
   let best = Infinity, allocs = 0, bytes = 0, colls = 0, out = null;
   for (let k = 0; k < 7; k++) {
     const inst = instantiate(module);
-    inst.exports.set_step_limit(0, 1e12);
+    inst.exports.set_step_limit(BigInt(1e12));
     const t0 = process.hrtime.bigint();
     const r = inst.main(what, String(N));
     const t1 = process.hrtime.bigint();

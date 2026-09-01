@@ -246,6 +246,7 @@ impl Rt {
         self.set_slot(a, RP_BYTES, Value::fixnum(bytes as i64));
         self.set_slot(a, RP_CPS, Value::fixnum(((cps as i64) << 1) | ascii as i64));
         self.set_slot(a, RP_FLAT, NIL);
+        self.set_slot(a, RP_HASH, NIL);
         for (i, _) in kids.iter().enumerate() {
             let v = self.r(base + i);
             self.set_slot(a, RP_KIDS + i as u32, v);
@@ -292,6 +293,234 @@ impl Rt {
             from = out;
             level = made;
         }
+    }
+
+    /// A slice that SHARES its interior.
+    ///
+    /// This is the half of `0011` that was designed, documented at the top of
+    /// this file, given a constant -- and never written. `SLICE_MIN` had one
+    /// reference in the tree, `let _ = SLICE_MIN;` in `bytes.rs`, whose only
+    /// job was to silence the unused-constant warning. The compiler was saying
+    /// the policy was not implemented and the message was turned off.
+    ///
+    /// Meanwhile BOTH `subs` paths copied every byte: the ASCII one flattened
+    /// first, and the careful non-ASCII one descended only far enough to find
+    /// the byte offsets and then copied the range. Sharing is half the point of
+    /// a rope, and `subs` is the operation that most wants it.
+    ///
+    /// What it does: a child wholly inside the range is returned UNCHANGED --
+    /// no copy, no allocation, the same object -- and only the two edge
+    /// children are cut. So slicing the middle out of a megabyte touches a
+    /// handful of nodes.
+    ///
+    /// `SLICE_MIN` is the retention fix and not a performance tweak: a slice
+    /// under it copies, so `(subs big 0 3)` cannot keep `big` alive through
+    /// three characters.
+    pub fn rope_slice(&mut self, v: Value, from: u32, to: u32) -> Value {
+        if from >= to {
+            return self.string("");
+        }
+        let n = self.s_bytes(v);
+        let to = to.min(n);
+        if from == 0 && to == n {
+            return v; // the whole thing: share it and allocate nothing
+        }
+        if to - from < SLICE_MIN || !self.is_rope(v) {
+            // Small, or a leaf: copy. A leaf's bytes are contiguous and there
+            // is nothing to share below it.
+            let base = self.mark();
+            let vi = self.push(v);
+            let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity((to - from) as usize);
+            self.append_range(self.r(vi), from, to, &mut out);
+            self.pop_to(base);
+            let t = core::str::from_utf8(&out).unwrap_or("");
+            return self.string(t);
+        }
+        let base = self.mark();
+        let vi = self.push(v);
+        let kids = self.rope_kids(self.r(vi));
+        let out = self.mark();
+        let mut made = 0usize;
+        let mut at = 0u32;
+        for i in 0..kids {
+            let k = self.slot(self.r(vi), RP_KIDS + i);
+            let w = self.s_bytes(k);
+            if at + w > from && at < to {
+                let lo = from.saturating_sub(at);
+                let hi = (to - at).min(w);
+                let piece = if lo == 0 && hi == w {
+                    k // WHOLLY INSIDE: shared, not copied
+                } else {
+                    self.rope_slice(k, lo, hi)
+                };
+                if piece.is_nil() {
+                    self.pop_to(base);
+                    return NIL;
+                }
+                if self.s_bytes(piece) > 0 {
+                    self.push(piece);
+                    made += 1;
+                }
+            }
+            at += w;
+            if at >= to {
+                break;
+            }
+        }
+        let r = self.rope_from_roots(out, made);
+        self.pop_to(base);
+        r
+    }
+
+    /// The next leaf of a tree walk, given a stack of `(node, next-child)`.
+    /// Pushes down the left spine until it reaches something with bytes in it.
+    fn walk_next(&self, stack: &mut alloc::vec::Vec<(Value, u32)>) -> Option<Value> {
+        loop {
+            let (node, i) = *stack.last()?;
+            if !self.is_rope(node) {
+                stack.pop();
+                return Some(node);
+            }
+            let kids = self.rope_kids(node);
+            if i >= kids {
+                stack.pop();
+                continue;
+            }
+            stack.last_mut().unwrap().1 = i + 1;
+            let k = self.slot(node, RP_KIDS + i);
+            stack.push((k, 0));
+        }
+    }
+
+    /// Content equality over two string trees, WITHOUT materialising either.
+    ///
+    /// What it replaces copied both sides into Rust vectors in full and then
+    /// compared them -- so two megabyte strings differing in their first byte
+    /// cost two megabytes of copying to discover it.
+    ///
+    /// Two short circuits, and the first one matters much more since `subs`
+    /// started SHARING:
+    ///
+    ///  * **A node is equal to itself.** Sliced strings share their interior,
+    ///    so comparing two of them now meets the same leaf on both sides
+    ///    repeatedly, and each meeting is a pointer comparison rather than a
+    ///    byte scan.
+    ///  * **A mismatch stops where it happens**, not after both sides are
+    ///    copied.
+    pub fn tree_eq(&self, a: Value, b: Value) -> bool {
+        if a.0 == b.0 {
+            return true;
+        }
+        let mut sa: alloc::vec::Vec<(Value, u32)> = alloc::vec::Vec::new();
+        let mut sb: alloc::vec::Vec<(Value, u32)> = alloc::vec::Vec::new();
+        sa.push((a, 0));
+        sb.push((b, 0));
+        let (mut ba, mut bb) = (crate::rt::sbuf(), crate::rt::sbuf());
+        let (mut la, mut lb): (&[u8], &[u8]) = (&[], &[]);
+        let (mut pa, mut pb) = (0usize, 0usize);
+        loop {
+            if pa == la.len() {
+                match self.walk_next(&mut sa) {
+                    None => break,
+                    Some(v) => {
+                        // IDENTITY, at the leaf: if the other side is also at a
+                        // leaf boundary and holding the same object, neither
+                        // needs reading.
+                        if pb == lb.len() && !sb.is_empty() {
+                            let mut peek = sb.clone();
+                            if let Some(w) = self.walk_next(&mut peek) {
+                                if w.0 == v.0 {
+                                    sb = peek;
+                                    la = &[];
+                                    lb = &[];
+                                    pa = 0;
+                                    pb = 0;
+                                    continue;
+                                }
+                            }
+                        }
+                        la = self.leaf_bytes(v, &mut ba);
+                        pa = 0;
+                    }
+                }
+            }
+            if pb == lb.len() {
+                match self.walk_next(&mut sb) {
+                    None => break,
+                    Some(v) => {
+                        lb = self.leaf_bytes(v, &mut bb);
+                        pb = 0;
+                    }
+                }
+            }
+            let n = (la.len() - pa).min(lb.len() - pb);
+            if n == 0 {
+                continue;
+            }
+            if la[pa..pa + n] != lb[pb..pb + n] {
+                return false;
+            }
+            pa += n;
+            pb += n;
+        }
+        // Both must have ended together. The caller checks the lengths first,
+        // so reaching here with either side unfinished is not possible -- but
+        // saying so costs one comparison and does not rely on that.
+        pa == la.len() && pb == lb.len()
+            && self.walk_next(&mut sa).is_none()
+            && self.walk_next(&mut sb).is_none()
+    }
+
+    /// `31^n`, by squaring. The multiplier that lets two cached hashes join.
+    pub(crate) fn pow31(mut n: u32) -> u32 {
+        let (mut base, mut acc) = (31u32, 1u32);
+        while n > 0 {
+            if n & 1 == 1 {
+                acc = acc.wrapping_mul(base);
+            }
+            base = base.wrapping_mul(base);
+            n >>= 1;
+        }
+        acc
+    }
+
+    /// The content hash of a string tree, WITHOUT materialising it.
+    ///
+    /// Cached per node, so a subtree already hashed costs a slot read. After a
+    /// sharing `subs` most of the tree is a subtree of something else, so this
+    /// is the case that matters rather than a corner.
+    pub fn rope_hash(&mut self, v: Value) -> u32 {
+        if !self.is_rope(v) {
+            let mut b = crate::rt::sbuf();
+            let bs: alloc::vec::Vec<u8> = self.leaf_bytes(v, &mut b).to_vec();
+            let mut h: u32 = 0;
+            for c in bs {
+                h = h.wrapping_mul(31).wrapping_add(c as u32);
+            }
+            return h;
+        }
+        let cached = self.slot(v, RP_HASH);
+        if cached.is_fixnum() {
+            return cached.as_fixnum() as u32;
+        }
+        let base = self.mark();
+        let vi = self.push(v);
+        let kids = self.rope_kids(self.r(vi));
+        let mut h: u32 = 0;
+        for i in 0..kids {
+            let k = self.slot(self.r(vi), RP_KIDS + i);
+            let ki = self.push(k);
+            let kh = self.rope_hash(self.r(ki));
+            let kb = self.s_bytes(self.r(ki));
+            // h(A·B) = h(A)·31^|B| + h(B). The bytes, not the code points:
+            // this must agree with the flat hash, which steps per BYTE.
+            h = h.wrapping_mul(Self::pow31(kb)).wrapping_add(kh);
+            self.pop_to(ki);
+        }
+        let vv = self.r(vi);
+        self.set_slot(vv.as_heap(), RP_HASH, Value::fixnum(h as i64));
+        self.pop_to(base);
+        h
     }
 
     fn rope_kids(&self, v: Value) -> u32 {
@@ -542,7 +771,17 @@ impl Rt {
             FLATTENS[F_BYTES] += self.s_bytes(v) as u64;
         }
         let n = self.s_bytes(v);
-        self.charge_bytes(n);
+        // FLATTENING IS THE SHARED CULPRIT. `subs`, `str-index-of` and
+        // `str-bytes` each call `string_arg` first, which lands here, so all
+        // three walked and copied the whole rope BEFORE their own charge got a
+        // say. Fixing them one at a time moved nothing; they were paying at the
+        // door of a room they had already been through.
+        //
+        // `n` is known -- a rope carries its own byte count -- so this refuses
+        // rather than ticks, and never begins a copy it cannot pay for.
+        if !self.charge_checked((n as u64 / 8) + 1, "flatten") {
+            return crate::value::NIL;
+        }
         let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity(n as usize);
         let base = self.mark();
         let vi = self.push(v);

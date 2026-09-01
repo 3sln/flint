@@ -51,6 +51,7 @@ impl Rt {
             TY_MAPENTRY => 2,
             crate::obj::TY_TAGGED => 2,
             crate::obj::TY_TABLE => self.table_count(v),
+            crate::obj::TY_TTABLE => self.ttable_count(v),
             // A ref counts its COLUMNS, because it is a map of them.
             crate::obj::TY_TABLEREF => {
                 let s = self.slot(v, crate::table::RF_SCHEMA);
@@ -426,6 +427,7 @@ impl Rt {
             TY_VEC => self.vec_transient(v),
             TY_ARRAYMAP | TY_HASHMAP => self.map_transient(v),
             TY_SET => self.set_transient(v),
+            crate::obj::TY_TABLE => self.table_transient(v),
             _ => self.throw_str("ClassCastException", "not transientable"),
         }
     }
@@ -465,6 +467,7 @@ impl Rt {
             TY_TVEC => self.tvec_persistent(v),
             TY_TMAP => self.tmap_persistent(v),
             TY_TSET => self.tset_persistent(v),
+            crate::obj::TY_TTABLE => self.ttable_persistent(v),
             _ => self.not_a_transient("persistent!", v),
         }
     }
@@ -476,6 +479,7 @@ impl Rt {
         match ty(&self.gc.sp, t.as_heap()) {
             TY_TVEC => self.tvec_conj(t, x),
             TY_TSET => self.tset_conj(t, x),
+            crate::obj::TY_TTABLE => self.ttable_conj(t, x),
             TY_TMAP => {
                 if x.is_heap() && matches!(ty(&self.gc.sp, x.as_heap()), TY_MAPENTRY | TY_VEC) {
                     let (k, v) = (self.slot_or_nth(x, 0), self.slot_or_nth(x, 1));
@@ -689,8 +693,13 @@ impl Rt {
         // NON-ASCII: DESCEND, and never flatten. Here there is no byte index to
         // have, so a flat run leaves nothing but a scan, and the scan is the
         // quadratic.
-        if self.is_rope(s) && !self.s_ascii(s) {
-            let byte = self.rope_byte_of_cp(s, i)?;
+        if self.is_rope(s) {
+            // ASCII included: for ASCII the code-point index IS the byte index,
+            // so the descent is the same walk with the lookup skipped. It used
+            // to flatten here, which turns an O(log n) descent into an O(n)
+            // copy AND caches the flat form, undoing the tree for every later
+            // read (`doc/decisions/0011`).
+            let byte = if self.s_ascii(s) { i } else { self.rope_byte_of_cp(s, i)? };
             let w = self.rope_bytes_at(s, byte, out);
             return if w == 0 { None } else { Some(w) };
         }
@@ -766,7 +775,9 @@ impl Rt {
         if start < 0 || e > n || start > e {
             return self.throw_str("StringIndexOutOfBoundsException", "bad substring range");
         }
-        self.charge_bytes((e - start) as u32);
+        if !self.charge_checked(((e - start) as u64 / 8) + 1, "subs") {
+            return crate::value::NIL;
+        }
         if start == e {
             return self.string("");
         }
@@ -784,14 +795,7 @@ impl Rt {
                 None => self.s_bytes(s),
             }
         };
-        let base = self.mark();
-        let si = self.push(s);
-        let mut bytes: alloc::vec::Vec<u8> =
-            alloc::vec::Vec::with_capacity((to - from) as usize);
-        self.append_range(self.r(si), from, to, &mut bytes);
-        self.pop_to(base);
-        let t = core::str::from_utf8(&bytes).unwrap_or("");
-        self.string(t)
+        self.rope_slice(s, from, to)
     }
 
     /// `subs`, in code points.
@@ -805,6 +809,20 @@ impl Rt {
         // by descent instead.
         if self.is_rope(s) && !self.s_ascii(s) {
             return self.rope_substring(s, start, end);
+        }
+        // AN ASCII ROPE DESCENDS TOO. This used to fall through to
+        // `string_arg`, which flattens -- so the non-ASCII path was careful and
+        // the easy path was not, which is the wrong way round and exactly the
+        // "flatten because the platform likes flat things" that `0011` exists
+        // to refuse. For ASCII a code point IS a byte, so `append_range` is the
+        // whole implementation and it never materialises the tree.
+        if self.is_rope(s) {
+            let n = self.s_count(s) as i64;
+            let e = end.unwrap_or(n);
+            if start < 0 || e > n || start > e {
+                return self.throw_str("StringIndexOutOfBoundsException", "bad substring range");
+            }
+            return self.rope_slice(s, start as u32, e as u32);
         }
         let s = self.string_arg(s);
         // The slice, not the source. Charging the whole string per call made
@@ -963,14 +981,38 @@ impl Rt {
         let s = self.seq(coll);
         let si = self.push(s);
         let mut out = alloc::string::String::new();
+        let mut i = 0u64;
         while !self.r(si).is_nil() {
+            // CHARGED AND CHECKED INSIDE THE LOOP. `string_from_parts` charges
+            // for the bytes at the end, which bills correctly and bounds
+            // nothing: this walked 300 000 elements 2 698 029 steps past an
+            // exhausted budget before anyone looked, because a counter nobody
+            // reads until the next interpreter instruction cannot stop a native
+            // that never reaches one.
+            if !self.charge_tick(i, 1, "str-join") {
+                self.pop_to(base);
+                return NIL;
+            }
+            i += 1;
             let x = self.first(self.r(si));
-            let mut b = crate::rt::sbuf();
-            match self.as_str(x, &mut b) {
-                Some(t) => out.push_str(t),
-                None => {
-                    self.pop_to(base);
-                    return self.throw_str("ClassCastException", "str-join wants strings");
+            // A ROPE IS A STRING. `as_str` borrows and so cannot materialise
+            // one -- it returns `None` by design -- and this read that as "not
+            // a string" and threw. Nothing noticed while `subs` returned flat
+            // strings; the moment `subs` started SHARING and handed back a
+            // rope, joining its results stopped working. The tier is supposed
+            // to be invisible, so walk it.
+            if self.is_rope(x) {
+                let mut bs: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+                self.append_bytes(x, &mut bs);
+                out.push_str(core::str::from_utf8(&bs).unwrap_or(""));
+            } else {
+                let mut b = crate::rt::sbuf();
+                match self.as_str(x, &mut b) {
+                    Some(t) => out.push_str(t),
+                    None => {
+                        self.pop_to(base);
+                        return self.throw_str("ClassCastException", "str-join wants strings");
+                    }
                 }
             }
             let nx = self.next(self.r(si));
@@ -987,6 +1029,17 @@ impl Rt {
         // A naive search is O(haystack x needle); charging the haystack keeps a
         // long scan from being free.
         let hn = if self.is_string(haystack) { self.str_len(haystack) } else { 0 };
+        // BOUNDED before the search and BILLED after it, which are two
+        // different jobs. The pre-charge is the worst case and is refunded
+        // below, so the count stays the distance actually scanned -- the
+        // accounting the comment below fought for -- while a search that cannot
+        // be paid for never starts. Billing after alone ran 148 114 steps past
+        // an exhausted budget.
+        let pre = (hn as u64 / 8) + 1;
+        if !self.charge_checked(pre, "str-index-of") {
+            return NIL;
+        }
+        self.steps = self.steps.saturating_sub(pre);
         // Charged AFTER the search, for the distance actually scanned -- see
         // below. Charging the whole haystack made the counter quadratic;
         // charging what remained after `from` still did, because a scan that
@@ -1050,16 +1103,29 @@ impl Rt {
             Some(i) => Value::fixnum(i as i64),
             None => NIL,
         }
+        // (the pre-charge that bounds this is above, before the search)
     }
 
     /// The UTF-8 bytes of a string, as a vector of integers. The image writer
     /// needs this when the compiler is hosted on flint.
     pub fn string_bytes_vector(&mut self, s: Value) -> Value {
-        let s = self.string_arg(s);
+        // `append_bytes` WALKS a rope; `string_arg` flattens it. Both produce
+        // the same bytes and only one of them replaces the tree with a copy
+        // that every later read then uses.
         let n = if self.is_string(s) { self.str_len(s) } else { 0 };
-        self.charge_work(n as u64);
+        // Worst of the lot before this: 11 937 109 steps past the limit, because
+        // it billed the whole string and then built a vector of every byte.
+        if !self.charge_checked(n as u64, "str-bytes") {
+            return crate::value::NIL;
+        }
         let mut buf = crate::rt::sbuf();
-        let owned: alloc::vec::Vec<u8> = {
+        let owned: alloc::vec::Vec<u8> = if self.is_rope(s) {
+            // WALK, do not flatten. Both produce the same bytes; only one of
+            // them replaces the tree with a copy that every later read uses.
+            let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+            self.append_bytes(s, &mut out);
+            out
+        } else {
             let b: &[u8] = if s.is_inline_str() {
                 s.inline_bytes(&mut buf)
             } else if s.is_heap() && ty(&self.gc.sp, s.as_heap()) == TY_STR {

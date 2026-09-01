@@ -137,3 +137,24 @@
      ;; there is nothing to share and no cheaper path hiding here.
      (table s (mapv defaults-or-fn (rows t)))
      (flint.rt/table-migrate t s defaults-or-fn))))
+
+;; ----------------------------------------------------------------- building
+;;
+;; `transient`, `conj!` and `persistent!` work on a table, so building one row
+;; by row is the ordinary Clojure shape rather than a table-specific API.
+;;
+;; It exists because the persistent path copies the whole chunk per row -- 256
+;; copies to fill one chunk. A transient writes into an open chunk in place and
+;; seals it when full, and `conj!` still CHECKS the row: a transient is a faster
+;; way to build a table, not a way to build one that is not closed.
+
+(defn build
+  "A table over `s` built by feeding each of `xs` through `f` to a row map.
+
+  The transient shape written out, since it is the same three lines every time:
+
+      (build S rows identity)
+      (build S (range 1000) (fn [i] {:id i :score (* 2 i)}))"
+  ([s xs] (build s xs identity))
+  ([s xs f]
+   (persistent! (reduce (fn [t x] (conj! t (f x))) (transient (table s [])) xs))))

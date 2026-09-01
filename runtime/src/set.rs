@@ -115,6 +115,10 @@ impl Rt {
     }
 
     pub fn set_element_vector(&mut self, s: Value) -> Value {
+        let n = self.set_count(s);
+        if !self.charge_checked(n as u64, "seq of a set") {
+            return crate::value::NIL;
+        }
         let base = self.mark();
         let acc = self.empty_vec();
         let ai = self.push(acc);

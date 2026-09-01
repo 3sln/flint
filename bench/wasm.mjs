@@ -61,7 +61,7 @@ for (let r = 0; r < reps; r++) {
     // NOT 0xffffffff/0xffffffff: that is exactly `u64::MAX`, which the runtime
     // reads as "no checkpoint" -- so the largest possible limit turned the
     // counter off and the answer came back zero.
-    exports.set_step_limit(0x7fffffff, 0xffffffff);
+    exports.set_step_limit(0x7fffffffffffffffn);
     main(...args);
     const before = Number(exports.stat_steps());
     main(...args);

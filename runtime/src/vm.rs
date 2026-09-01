@@ -1507,11 +1507,30 @@ impl Rt {
                     let mut cur = self.seq(self.r(si));
                     self.set_r(si, cur);
                     while !self.r(si).is_nil() {
+                        // The same hazard as the `flint/apply` BUILTIN, which
+                        // is where it was measured: a spread walks the whole
+                        // sequence under one bytecode instruction. This is the
+                        // other road to it -- `(apply f a b seq)` compiled
+                        // inline -- and it gets the same tick, because a bound
+                        // that holds on one of two paths is not a bound.
+                        if !self.charge_tick(spread as u64, 1, "apply") {
+                            self.pop_to(si);
+                            break;
+                        }
                         let f = self.first(self.r(si));
                         self.vpush(f);
                         spread += 1;
                         cur = self.next(self.r(si));
                         self.set_r(si, cur);
+                    }
+                    if self.failed() {
+                        // Same unwind the call below uses: the spread is
+                        // abandoned and the handler search starts, rather than
+                        // a half-spread call going ahead.
+                        if !self.unwind() {
+                            return NIL;
+                        }
+                        continue;
                     }
                     self.pop_to(si);
                     let total = argc - 1 + spread;

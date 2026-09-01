@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Every rope materialisation must justify itself; see the python for why.
+exec python3 "$(dirname "$0")/check_flattens.py" "$@"

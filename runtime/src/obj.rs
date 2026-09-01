@@ -129,7 +129,18 @@ pub const TY_TABLE: u8 = 49;
 /// keeping one row out of a million retains one chunk. It cannot dangle,
 /// because chunks are persistent.
 pub const TY_TABLEREF: u8 = 50;
-pub const TY_MAX: u8 = 51;
+/// A TRANSIENT TABLE: `[schema, chunks, count, open, live]`.
+///
+/// `open` is a chunk allocated at full width that rows are written INTO, in
+/// place, until it fills -- at which point it is collapsed, sealed and conj'd
+/// onto `chunks`. Appending through the persistent path copies the chunk per
+/// row, which is 256 copies per chunk and 49 MB to build 20 000 rows; measured
+/// against 3.25 MB for the bulk path (`doc/decisions/0026` step 7).
+///
+/// Like every transient it is NOT a value: no `eq`, no `hash`, no `kind`. It is
+/// a building site, and `persistent!` is what turns it back into a table.
+pub const TY_TTABLE: u8 = 51;
+pub const TY_MAX: u8 = 52;
 
 /// Every type tag must be distinct. This list exists because they were not:
 /// `TY_THREAD`/`TY_PORT`/`TY_SCHED` were first numbered 33..35, which silently
@@ -145,7 +156,7 @@ const _: () = {
         TY_RECORD, TY_REGEX, TY_REDUCED, TY_EXINFO, TY_MULTIFN, TY_DELAY,
         TY_VOLATILE, TY_RAW, TY_ITERSEQ, TY_CHUNKSEQ, TY_TYPE, TY_THREAD, TY_PORT,
         TY_SCHED, TY_ROPE, TY_OPAQUE, TY_BYTES, TY_BROPE, TY_TBYTES, TY_TAGGED,
-        TY_SCHEMA, TY_TABLE, TY_TABLEREF,
+        TY_SCHEMA, TY_TABLE, TY_TABLEREF, TY_TTABLE,
     ];
     let mut i = 0;
     while i < tags.len() {
@@ -310,7 +321,19 @@ pub const RP_CPS: u32 = 1;
 /// rope that flattens on every operation passes every correctness test and is
 /// slower than the flat string it replaced.
 pub const RP_FLAT: u32 = 2;
-pub const RP_KIDS: u32 = 3;
+/// The subtree's content hash, computed once and reused -- `nil` until asked.
+///
+/// A flat string caches its hash in the `Str` header; a rope had nowhere to put
+/// one, so hashing a rope FLATTENED it and hashed the result. That is why the
+/// flatten was there, and it worked: a rope used as a map key paid once. It
+/// also spent the sharing, which is the thing the tree exists for.
+///
+/// A per-node hash removes the trade. Clojure's string hash is `h = 31h + c`,
+/// which COMPOSES: `h(A·B) = h(A)·31^|B| + h(B)`. So a node combines its
+/// children's cached hashes, and a subtree that has already been hashed -- which
+/// after a sharing `subs` is most of them -- costs one slot read.
+pub const RP_HASH: u32 = 3;
+pub const RP_KIDS: u32 = 4;
 
 #[inline(always)]
 pub fn str_is_ascii(sp: &Space, a: Addr) -> bool {

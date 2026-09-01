@@ -136,7 +136,14 @@ impl Rt {
             return self.throw_str("ClassCastException", "not a string");
         }
         let n = self.str_len(s);
-        self.charge_bytes(n);
+        // CHARGED BEFORE THE WORK, and refused if it cannot be paid for. `n` is
+        // known here, so this is a better bound than a per-iteration tick: it
+        // never begins work the budget cannot cover, and costs nothing inside
+        // the loop. `charge_bytes` alone billed 48 097 steps past an exhausted
+        // budget, because billing is not bounding.
+        if !self.charge_checked((n as u64 / 8) + 1, "case conversion") {
+            return crate::value::NIL;
+        }
         let mut buf = crate::rt::sbuf();
         let mut out: alloc::vec::Vec<u8> = {
             let b: &[u8] = if s.is_inline_str() {

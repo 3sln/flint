@@ -133,10 +133,10 @@
                  ;; Counting is only on when a budget is: 0009 monomorphises the
                  ;; counter out of the unlimited loop, so setting a high limit is
                  ;; how a host asks for a count.
-                 "a.exports.set_step_limit(0, 1e9); a.main();"
+                 "a.exports.set_step_limit(BigInt(1e9)); a.main();"
                  "const n = Number(a.exports.stat_steps());"
                  "const b = m.instantiate(module);"
-                 "b.exports.set_step_limit(0, 5000); const r = b.main();"
+                 "b.exports.set_step_limit(BigInt(5000)); const r = b.main();"
                  "console.log(JSON.stringify({n, code: r.code, msg: r.out.slice(0,40)}));})"))
       out (str/trim (:all r))]
   (check-that "gas still counts in a stripped module"

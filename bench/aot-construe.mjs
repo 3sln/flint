@@ -28,7 +28,7 @@ const run = ({ module }, args) => {
   let best = Infinity, steps = 0, out = null;
   for (let i = 0; i < REPS; i++) {
     const inst = instantiate(module);
-    inst.exports.set_step_limit(0, 1e12);
+    inst.exports.set_step_limit(BigInt(1e12));
     const t0 = process.hrtime.bigint();
     const r = inst.main(...args);
     const t1 = process.hrtime.bigint();
@@ -77,7 +77,7 @@ try {
   console.log('  how much of this reaches the specialised path at all:');
   for (const [name, args] of [['parse', ['parse', '3']], ['suggest', ['suggest', '1']]]) {
     const inst = instantiate(module);
-    inst.exports.set_step_limit(0, 1e12);
+    inst.exports.set_step_limit(BigInt(1e12));
     inst.main(...args);
     const total = Number(inst.exports.stat_region(NB * 4));
     let spec = 0;

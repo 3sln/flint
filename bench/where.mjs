@@ -57,7 +57,7 @@ const time = async (file, args) => {
   let best = Infinity;
   for (let k = 0; k < 5; k++) {
     const inst = instantiate(module);
-    inst.exports.set_step_limit(0, 1e12);
+    inst.exports.set_step_limit(BigInt(1e12));
     const t0 = process.hrtime.bigint();
     const r = inst.main(...args);
     const t1 = process.hrtime.bigint();
@@ -70,7 +70,7 @@ const time = async (file, args) => {
 const census = async (args) => {
   const { module } = await load('out/cb-diag.wasm');
   const inst = instantiate(module);
-  inst.exports.set_step_limit(0, 1e12);
+  inst.exports.set_step_limit(BigInt(1e12));
   inst.main(...args);
   const e = inst.exports;
   const g = (k) => Number(e.stat_region(k));

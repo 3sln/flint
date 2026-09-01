@@ -18,7 +18,7 @@ const eq = (label, a, b) => ok(label, a === b, `expected ${JSON.stringify(b)} go
 
 const { module } = await load('out/limits.wasm');
 const fresh = () => instantiate(module);
-const gas = (inst, n) => inst.exports.set_step_limit(Math.floor(n / 2 ** 32), n >>> 0);
+const gas = (inst, n) => inst.exports.set_step_limit(BigInt(n));
 
 console.log('limits');
 

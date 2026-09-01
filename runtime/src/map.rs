@@ -1282,6 +1282,12 @@ impl Rt {
 
     /// Materialise the entries as a vector of map entries, for `seq`.
     pub fn map_entry_vector(&mut self, m: Value) -> Value {
+        // `seq`, `keys` and `vals` all come through here, and it built an entry
+        // per key for the price of one builtin dispatch: 6 499 574 steps past an
+        // exhausted budget on 200 000 entries.
+        if !self.charge_checked(self.map_count(m) as u64, "seq of a map") {
+            return crate::value::NIL;
+        }
         let base = self.mark();
         let acc = self.empty_vec();
         let ai = self.push(acc);

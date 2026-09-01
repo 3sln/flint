@@ -1008,6 +1008,17 @@ builtins! {
         rt.set_r(si, cur);
         let mut count = 0usize;
         while !rt.r(si).is_nil() {
+            // `apply` is the general way to turn a long sequence into one call,
+            // and this walked all of it for the price of ONE builtin dispatch:
+            // 2 698 032 steps past an exhausted budget on 300 000 elements,
+            // whatever the function was. `(apply + v)` and `(apply str v)` blew
+            // it by exactly the same amount, which is what named the SPREAD
+            // rather than either callee -- and is why the fix belongs here and
+            // not in `str-join`, which was the first suspect and was innocent.
+            if !rt.charge_tick(count as u64, 1, "apply") {
+                rt.pop_to(base);
+                return crate::value::NIL;
+            }
             let x = rt.first(rt.r(si));
             rt.push(x);
             count += 1;

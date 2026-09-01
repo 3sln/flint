@@ -125,6 +125,53 @@ than leaving the budget with a silent hole in it.
 - **Charge allocation, not collection.** Bytes allocated is deterministic; work
   done by the collector depends on heap size and on when it ran, and charging it
   would make gas depend on the memory limit.
+
+  **This was written and then not done, for a long time.** Natives charged for
+  string bytes, comparisons and regex steps, but nothing charged for
+  ALLOCATION -- so a builtin could allocate without bound for a constant price.
+  It surfaced by accident: appending 20 000 rows to a table allocated 49 061 464
+  bytes and charged 461 232 gas, LESS than the 741 252 charged by the bulk build
+  that allocated 3 254 832. Gas said the expensive path was the cheap one, and it
+  had been saying so about every allocating builtin in the runtime.
+
+  It is now charged in `Rt::alloc`, one unit per 8 bytes -- the same rate
+  `charge_bytes` uses, and for the same reason: eight bytes touched is eight
+  bytes touched whether a string copied them or an allocation initialised them.
+  ONE PLACE, deliberately, because "the builtin that allocates a lot must
+  remember to charge" is a rule that gets forgotten and did. The collector does
+  not come through `Rt::alloc` -- promotion uses `alloc_old` -- so gas stays
+  independent of when a collection ran, which is what this bullet asked for and
+  what `determinism.rs` pins.
+
+  **And billing is not bounding.** `charge_work` adds to a counter; nothing
+  looks at that counter until the next interpreter instruction, so a native that
+  charges a million and then loops a million times still burns a million
+  iterations of real CPU. Measured by giving a program exactly enough gas to
+  build its input and then one operation on it:
+
+      | operation      | steps past an exhausted budget |
+      | -------------- | -----------------------------: |
+      | (apply str v)  |                      2 698 029 |
+      | (apply + v)    |                      2 698 032 |
+      | (table S v)    |                        637 379 |
+      | sort, into, reverse, str-join |            54-91 |
+
+  `apply` was the culprit for BOTH of the first two -- they blew it by the same
+  amount, which is what named the SPREAD rather than either callee. So the rule
+  is not "charge for the loop" but **charge INSIDE the loop, and look**:
+  `charge_tick` returns false with the gas error already thrown, and checks the
+  budget every 64 iterations; `charge_checked` looks every time, for a loop
+  whose each iteration is already substantial. Both roads to a spread tick --
+  the `flint/apply` builtin and the compiled APPLY opcode -- because a bound
+  that holds on one of two paths is not a bound.
+
+  `test/gas.clj` is the guard: each operation runs at n and 8n with its setup
+  subtracted, and must charge more for more work. Its CONTROLS are the load
+  bearing part -- `(count v)` and a table row ref must NOT scale -- and they
+  earned it immediately: the first version of that file subtracted its baseline
+  wrongly, every op rebuilt its own input, and `(count v)` "scaled" 7.9x. Without
+  an operation asserted not to scale, the file would have passed while measuring
+  only its own setup.
 - **Global or per-thread?** Global bounds the run, which is what a caller wants.
   Per-thread accounting is worth keeping for diagnostics — *which thread spent
   it* is the first question when a budget is exceeded.
@@ -143,7 +190,13 @@ than leaving the budget with a silent hole in it.
   program reports **the same count every run, on any machine**.
 - A single pathological `re-find` is **stopped by the gas limit**, with a test
   using a known catastrophic pattern.
-- A large `sort`/`merge`/`into` charges proportionally, not 1.
+- A large `sort`/`merge`/`into` charges proportionally, not 1. **Held**, and
+  measured at two sizes rather than asserted: `test/gas.clj`.
+- **No single native call outruns the budget.** A separate property from the
+  one above and the one that makes gas a bound: `test/gas.clj` gives a program
+  just enough gas to build its input, then measures how far past the limit one
+  operation runs. Under 20 000 steps; they cost 54-322 when the loop ticks and
+  hundreds of thousands when it does not.
 - Exceeding memory raises a catchable error after a collection, and the error
   says what was spent against what limit.
 - The README presents limits as a feature, with the honest comparison: a wall

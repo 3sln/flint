@@ -68,7 +68,7 @@
   (str "import('./host/flint.mjs').then(async (m) => {"
        "const {module} = await m.load(process.argv[1]);"
        "const i = m.instantiate(module);"
-       "i.exports.set_step_limit(0x7ffffff0);"
+       "i.exports.set_step_limit(0x7ffffff000000000n);"
        "const r = i.main();"
        "console.log(JSON.stringify({out: r.out.trim(), code: r.code,"
        " steps: Number(i.exports.stat_steps())}));})"))

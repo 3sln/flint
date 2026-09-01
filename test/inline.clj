@@ -105,7 +105,7 @@
               (str "import('./host/flint.mjs').then(async (m) => {"
                    "const {module} = await m.load('out/aliasprobe.wasm');"
                    "const i = m.instantiate(module);"
-                   "i.exports.set_step_limit(0x7ffffff0); i.main();"
+                   "i.exports.set_step_limit(0x7ffffff000000000n); i.main();"
                    "console.log(Number(i.exports.stat_steps()));})"))]
     (Long/parseLong (str/trim (:out r)))))
 (let [on-slope  (- (probe! 3000) (probe! 1000))

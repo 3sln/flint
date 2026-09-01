@@ -21,7 +21,7 @@
 //! Unboxed column runs and the constant/RLE encodings are step 5; this is the
 //! shape they slot into, and nothing above the chunk can tell the difference.
 
-use crate::obj::{ty, TY_SCHEMA, TY_TABLE, TY_TABLEREF, TY_NODE};
+use crate::obj::{ty, TY_SCHEMA, TY_TABLE, TY_TABLEREF, TY_TTABLE, TY_NODE};
 use crate::rt::Rt;
 use crate::value::{Value, NIL, NOT_FOUND};
 
@@ -69,6 +69,14 @@ pub const ENC_FLAT: i64 = 0;
 /// therefore writes one value per chunk, which is what makes that migration
 /// cheap (`doc/decisions/0026`).
 pub const ENC_CONST: i64 = 1;
+
+// Transient-table slots.
+pub const TT_SCHEMA: u32 = 0;
+pub const TT_CHUNKS: u32 = 1;
+pub const TT_COUNT: u32 = 2;
+pub const TT_OPEN: u32 = 3;
+pub const TT_LIVE: u32 = 4;
+pub const TT_LEN: u32 = 5;
 
 // Row-ref slots.
 pub const RF_SCHEMA: u32 = 0;
@@ -187,6 +195,10 @@ impl Rt {
         let col = self.slot(self.r(ci), CH_BASE + id);
         let coli = self.push(col);
         let n = self.olen(self.r(coli));
+        // A SCAN that allocates nothing charges nothing unless it says so.
+        // Allocation charging covers the copying paths; this one is pure
+        // comparison over `n` values (`doc/decisions/0009`).
+        self.charge_work(n as u64);
         if n == 0 {
             self.pop_to(base);
             return;
@@ -392,7 +404,18 @@ impl Rt {
         let ci = self.push(chunks);
 
         let mut row = 0u32;
+        let mut tick = 0u64;
         while row < nrows {
+            // Per CHUNK rather than per row: a chunk is 256 rows of bounded
+            // work, so checking every chunk bounds the overshoot at 256 rows
+            // and costs one branch per 256. Charging `rows * cols` up front is
+            // what this used to do, and it ran 637 379 steps past an exhausted
+            // budget.
+            let _ = tick;
+            if !self.charge_checked(1, "table") {
+                self.pop_to(base);
+                return NIL;
+            }
             let take = core::cmp::min(CHUNK, nrows - row);
             // The chunk: [nrows, col0 … colN], each column a flat run.
             let ch = self.new_chunk(width, take);
@@ -599,6 +622,7 @@ impl Rt {
             return false;
         }
         let n = self.schema_len(self.r(si));
+        self.charge_work(n as u64);
         for c in 0..n {
             let val = self.row_column(self.r(si), self.r(ri), c);
             let vi = self.push(val);
@@ -704,6 +728,7 @@ impl Rt {
         let ci = self.push(ch);
         let ri = self.push(row);
         let n = self.schema_len(self.r(si));
+        self.charge_work(n as u64);
         for c in 0..n {
             let id = self.schema_id_at(self.r(si), c);
             let v = self.row_column(self.r(si), self.r(ri), c);
@@ -1033,6 +1058,10 @@ impl Rt {
         let out_chunks = self.empty_vec();
         let oi = self.push(out_chunks);
         for k in 0..nch {
+            if !self.charge_checked(1, "migrate") {
+                self.pop_to(base);
+                return NIL;
+            }
             let ch = self.vec_nth(self.r(ci), k).unwrap_or(NIL);
             let chi = self.push(ch);
             let rows = self.chunk_rows(self.r(chi));
@@ -1082,6 +1111,7 @@ impl Rt {
     /// parallel `SC_TYPES`.
     fn schema_pos_of(&mut self, s: Value, name: Value) -> u32 {
         let n = self.schema_len(s);
+        self.charge_work(n as u64);
         for c in 0..n {
             let nm = self.schema_name_at(s, c);
             if self.eq(nm, name) {
@@ -1089,5 +1119,229 @@ impl Rt {
             }
         }
         0
+    }
+
+    // ---------------------------------------------------------------- step 7
+    //
+    // THE TRANSIENT. Appending through the persistent path copies the whole
+    // chunk for every row, so filling one 256-row chunk copies it 256 times.
+    // MEASURED on 20 000 rows: 49 061 192 bytes allocated and 23 collections,
+    // against 3 254 584 and 4 for the bulk path.
+    //
+    // GAS SAID THE OPPOSITE -- 381 220 for the appends against 741 240 for the
+    // bulk build -- because gas counts interpreter steps and the copying
+    // happens INSIDE a builtin, where one step is charged however much work it
+    // does. Worth knowing before trusting gas as a proxy for work: it measures
+    // the program, not the runtime underneath it.
+
+    pub fn is_ttable(&self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_TTABLE
+    }
+
+    /// A fresh open chunk: full width, `CHUNK` rows of room, every column flat.
+    /// Rows are written into it in place; nothing else can see it until it is
+    /// sealed, which is what makes the mutation sound.
+    fn open_chunk(&mut self, s: Value) -> Value {
+        let base = self.mark();
+        let si = self.push(s);
+        let width = self.schema_width(self.r(si));
+        let ch = self.new_chunk(width, 0);
+        let ci = self.push(ch);
+        let ncols = self.schema_len(self.r(si));
+        for c in 0..ncols {
+            let id = self.schema_id_at(self.r(si), c);
+            let col = self.new_obj(TY_NODE, CHUNK);
+            self.set(self.r(ci), CH_BASE + id, col);
+        }
+        let out = self.r(ci);
+        self.pop_to(base);
+        out
+    }
+
+    /// `(transient t)`. The table's own chunks are carried over UNCHANGED --
+    /// they are persistent and shared, and a transient must never write into
+    /// something a table can still see. A partial last chunk is copied into the
+    /// open chunk instead, which is the only copying the whole build does.
+    pub fn table_transient(&mut self, t: Value) -> Value {
+        let base = self.mark();
+        let ti = self.push(t);
+        let s = self.slot(self.r(ti), TB_SCHEMA);
+        let si = self.push(s);
+        let count = self.table_count(self.r(ti));
+        let full = count & !(CHUNK - 1);
+        let chunks = self.slot(self.r(ti), TB_CHUNKS);
+        let ci = self.push(chunks);
+        let open = self.open_chunk(self.r(si));
+        let oi = self.push(open);
+        let partial = count - full;
+        if partial > 0 {
+            // The last chunk is not full, so its rows move into the open one
+            // and the chunk itself is dropped from the carried list.
+            let last = self.vec_nth(self.r(ci), full >> CHUNK_SHIFT).unwrap_or(NIL);
+            let li = self.push(last);
+            let ncols = self.schema_len(self.r(si));
+            self.charge_work((partial as u64) * (ncols as u64));
+            for c in 0..ncols {
+                let id = self.schema_id_at(self.r(si), c);
+                let col = self.slot(self.r(oi), CH_BASE + id);
+                for k in 0..partial {
+                    let v = self.chunk_get(self.r(li), id, k);
+                    self.set(col, k, v);
+                }
+            }
+            let popped = self.vec_pop(self.r(ci));
+            self.set_r(ci, popped);
+            self.pop_to(li);
+        }
+        self.set(self.r(oi), CH_ROWS, Value::fixnum(partial as i64));
+        let a = self.alloc(TY_TTABLE, TT_LEN);
+        let tt = Value::heap(a);
+        let tti = self.push(tt);
+        let (sv, cv, ov) = (self.r(si), self.r(ci), self.r(oi));
+        self.set(self.r(tti), TT_SCHEMA, sv);
+        self.set(self.r(tti), TT_CHUNKS, cv);
+        self.set(self.r(tti), TT_COUNT, Value::fixnum(count as i64));
+        self.set(self.r(tti), TT_OPEN, ov);
+        self.set(self.r(tti), TT_LIVE, Value::boolean(true));
+        let out = self.r(tti);
+        self.pop_to(base);
+        out
+    }
+
+    fn ttable_live(&mut self, t: Value, op: &str) -> bool {
+        if self.slot(t, TT_LIVE) == Value::boolean(true) {
+            return true;
+        }
+        let msg = alloc::format!(
+            "{op} on a transient table that persistent! has already taken; a \
+             transient is used once and the table it produced is the value"
+        );
+        self.throw_str("IllegalStateException", &msg);
+        false
+    }
+
+    /// A chunk holding exactly `rows` rows, copied out of the open one. The
+    /// open chunk is `CHUNK` wide whatever it holds, so the last one has to be
+    /// cut down -- and that is the moment the encodings are decided, because it
+    /// is the first moment the column is complete.
+    fn seal(&mut self, s: Value, open: Value, rows: u32) -> Value {
+        let base = self.mark();
+        let si = self.push(s);
+        let oi = self.push(open);
+        let width = self.schema_width(self.r(si));
+        let ch = self.new_chunk(width, rows);
+        let ci = self.push(ch);
+        let ncols = self.schema_len(self.r(si));
+        for c in 0..ncols {
+            let id = self.schema_id_at(self.r(si), c);
+            let col = self.new_obj(TY_NODE, rows.max(1));
+            let cj = self.push(col);
+            let src = self.slot(self.r(oi), CH_BASE + id);
+            let sj = self.push(src);
+            for k in 0..rows {
+                let v = self.slot(self.r(sj), k);
+                self.set(self.r(cj), k, v);
+            }
+            let cv = self.r(cj);
+            self.set(self.r(ci), CH_BASE + id, cv);
+            let chv = self.r(ci);
+            self.collapse(chv, id);
+            self.pop_to(cj);
+        }
+        let out = self.r(ci);
+        self.pop_to(base);
+        out
+    }
+
+    /// `(conj! tt row)`. The row is checked against the schema exactly as the
+    /// persistent path checks it -- a transient is a faster way to build a
+    /// table, not a way to build one that is not closed.
+    pub fn ttable_conj(&mut self, t: Value, row: Value) -> Value {
+        if !self.ttable_live(t, "conj!") {
+            return NIL;
+        }
+        let base = self.mark();
+        let ti = self.push(t);
+        let ri = self.push(row);
+        let s = self.slot(self.r(ti), TT_SCHEMA);
+        let si = self.push(s);
+        let count = self.slot(self.r(ti), TT_COUNT).as_fixnum() as u32;
+        if !self.check_row(self.r(si), self.r(ri), count) {
+            self.pop_to(base);
+            return NIL;
+        }
+        let open = self.slot(self.r(ti), TT_OPEN);
+        let oi = self.push(open);
+        let fill = self.chunk_rows(self.r(oi));
+        let (sv, ov, rv) = (self.r(si), self.r(oi), self.r(ri));
+        self.write_row(sv, ov, fill, rv);
+        self.set(self.r(oi), CH_ROWS, Value::fixnum((fill + 1) as i64));
+        if fill + 1 == CHUNK {
+            // A FULL open chunk is already exactly the chunk it wants to be --
+            // its columns are `CHUNK` long and every slot is written -- so it
+            // is collapsed and handed over as-is. `seal` copies, and copying
+            // here made the transient allocate MORE than the bulk path it was
+            // supposed to beat (3 408 712 against 3 254 832), which is the sort
+            // of thing only a measurement finds.
+            let ncols = self.schema_len(self.r(si));
+            for c in 0..ncols {
+                let id = self.schema_id_at(self.r(si), c);
+                let ov = self.r(oi);
+                self.collapse(ov, id);
+            }
+            let chunks = self.slot(self.r(ti), TT_CHUNKS);
+            let ov = self.r(oi);
+            let nv = self.vec_conj(chunks, ov);
+            self.set(self.r(ti), TT_CHUNKS, nv);
+            let sv3 = self.r(si);
+            let fresh = self.open_chunk(sv3);
+            self.set(self.r(ti), TT_OPEN, fresh);
+        }
+        self.set(self.r(ti), TT_COUNT, Value::fixnum((count + 1) as i64));
+        let out = self.r(ti);
+        self.pop_to(base);
+        out
+    }
+
+    /// `(persistent! tt)`. Seals whatever the open chunk holds and hands back a
+    /// table. The transient is dead afterwards, and says so if used again.
+    pub fn ttable_persistent(&mut self, t: Value) -> Value {
+        if !self.ttable_live(t, "persistent!") {
+            return NIL;
+        }
+        let base = self.mark();
+        let ti = self.push(t);
+        let s = self.slot(self.r(ti), TT_SCHEMA);
+        let si = self.push(s);
+        let chunks = self.slot(self.r(ti), TT_CHUNKS);
+        let ci = self.push(chunks);
+        let open = self.slot(self.r(ti), TT_OPEN);
+        let oi = self.push(open);
+        let fill = self.chunk_rows(self.r(oi));
+        if fill > 0 {
+            let (sv, ov) = (self.r(si), self.r(oi));
+            let sealed = self.seal(sv, ov, fill);
+            let sj = self.push(sealed);
+            let sv2 = self.r(sj);
+            let nv = self.vec_conj(self.r(ci), sv2);
+            self.set_r(ci, nv);
+            self.pop_to(sj);
+        }
+        let count = self.slot(self.r(ti), TT_COUNT);
+        self.set(self.r(ti), TT_LIVE, Value::boolean(false));
+        let a = self.alloc(TY_TABLE, TB_LEN);
+        let nt = Value::heap(a);
+        let ni = self.push(nt);
+        let (sv, cv) = (self.r(si), self.r(ci));
+        self.set(self.r(ni), TB_SCHEMA, sv);
+        self.set(self.r(ni), TB_CHUNKS, cv);
+        self.set(self.r(ni), TB_COUNT, count);
+        let out = self.r(ni);
+        self.pop_to(base);
+        out
+    }
+
+    pub fn ttable_count(&mut self, t: Value) -> u32 {
+        self.slot(t, TT_COUNT).as_fixnum() as u32
     }
 }

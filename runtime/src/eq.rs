@@ -53,11 +53,7 @@ impl Rt {
         if self.str_len(a) != self.str_len(b) {
             return false;
         }
-        let mut xa: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
-        let mut xb: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
-        self.append_bytes(a, &mut xa);
-        self.append_bytes(b, &mut xb);
-        xa == xb
+        self.tree_eq(a, b)
     }
 
     pub fn eq(&mut self, a: Value, b: Value) -> bool {
@@ -260,11 +256,11 @@ impl Rt {
         match ty(&self.gc.sp, v.as_heap()) {
             TY_STR => self.string_hash(v),
             // Hash the CONTENT, so `"abc"` inline, flat and as a rope are one
-            // key. Flattening caches, so a rope used as a map key pays once.
-            crate::obj::TY_ROPE => {
-                let f = self.flatten(v);
-                self.hash_value(f)
-            }
+            // key -- but WALK it rather than flattening. Flattening was here for
+            // the caching, which is real: a rope used as a map key must not
+            // rehash every lookup. `RP_HASH` gives the same caching per node and
+            // keeps the tree, so the trade is gone rather than chosen.
+            crate::obj::TY_ROPE => self.rope_hash(v),
             // Same rule for bytes: the content decides, so a flat and a tree
             // holding the same bytes hash alike and are one key.
             crate::obj::TY_BYTES => {
@@ -275,10 +271,8 @@ impl Rt {
                 }
                 h
             }
-            crate::obj::TY_BROPE => {
-                let f = self.b_flatten(v);
-                self.hash_value(f)
-            }
+            // WALKED and cached per node, not flattened -- see `TY_ROPE`.
+            crate::obj::TY_BROPE => self.b_hash(v),
             TY_KW => self.keyword_hash(v),
             TY_SYM => self.symbol_hash(v),
             TY_BIGINT => hash::hash_long(self.as_i64(v).unwrap_or(0)),
@@ -345,7 +339,14 @@ impl Rt {
         let mut acc = 1u32;
         let mut n = 0u32;
         while !self.r(si).is_nil() {
-            self.charge_work(1);
+            // A TICK and not a pre-charge: this walks a SEQ, whose length is not
+            // known until it ends, and which may not end at all. `charge_work`
+            // billed each element and stopped nothing -- 998 068 steps past an
+            // exhausted budget.
+            if !self.charge_tick(n as u64, 1, "hash") {
+                self.pop_to(base);
+                return 0;
+            }
             let f = self.first(self.r(si));
             let fi = self.push(f);
             let h = self.hash_value(self.r(fi));

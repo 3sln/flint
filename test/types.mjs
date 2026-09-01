@@ -15,7 +15,7 @@ const ok = (label, cond, detail) => {
 const { module } = await load(process.argv[2] ?? 'out/types.wasm');
 const run = (mode, iters) => {
   const inst = instantiate(module);
-  inst.exports.set_step_limit(0, 1e9);
+  inst.exports.set_step_limit(BigInt(1e9));
   const r = inst.main(mode, String(iters));
   if (r.code !== 0) throw new Error(`${mode} failed: ${r.out}`);
   return { out: r.out, steps: Number(inst.exports.stat_steps()) };

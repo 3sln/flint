@@ -118,7 +118,7 @@ impl Rt {
         }
     }
 
-    fn leaf_bytes<'a>(&'a self, v: Value, buf: &'a mut [u8; crate::value::INLINE_MAX]) -> &'a [u8] {
+    pub(crate) fn leaf_bytes<'a>(&'a self, v: Value, buf: &'a mut [u8; crate::value::INLINE_MAX]) -> &'a [u8] {
         if v.is_inline_str() {
             v.inline_bytes(buf)
         } else {

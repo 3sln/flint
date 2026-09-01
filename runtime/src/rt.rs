@@ -416,8 +416,63 @@ impl Rt {
     /// is worse than any crash. So a sentinel goes into `thrown` here -- three
     /// instructions, and nothing else pulled in -- and the interpreter's cold
     /// path turns it into a real error with numbers in it.
+    /// Allocate WITHOUT charging gas, for the runtime's own bookkeeping.
+    ///
+    /// There is exactly one legitimate use: state the runtime saves on the
+    /// program's behalf whose SIZE is a property of the runtime rather than of
+    /// the program. A parked thread's saved shadow stack and frame record are
+    /// that -- compiled code keeps fewer values live across a call than the
+    /// interpreter does, so the same program parks 112 bytes lighter compiled.
+    ///
+    /// Billing it made `stat_steps` differ by exactly 14 (112/8) between the
+    /// two, which broke `test/aot.clj`'s "the same instruction count" -- and
+    /// that test is right: gas measures the PROGRAM's work, and a program does
+    /// not do more work by being interpreted.
+    ///
+    /// Nothing a program can ask for goes through here. If a guest can make it
+    /// bigger, it must be billed.
+    #[inline]
+    pub fn alloc_unbilled(&mut self, ty: u8, len: u32) -> crate::mem::Addr {
+        #[cfg(feature = "parallel")]
+        if self.exec_id.is_some() {
+            return self.alloc_shared(ty, len);
+        }
+        let a = self.gc.alloc(&mut self.roots, ty, len);
+        if a == 0 && self.thrown.is_nil() {
+            self.thrown = crate::value::OOM;
+        }
+        a
+    }
+
     #[inline]
     pub fn alloc(&mut self, ty: u8, len: u32) -> crate::mem::Addr {
+        // ALLOCATION CHARGES GAS, one unit per 8 bytes -- the same rate
+        // `charge_bytes` uses for string work, and for the same reason: eight
+        // bytes touched is eight bytes touched whether a string copied them or
+        // an allocation initialised them.
+        //
+        // It is HERE rather than in each builtin because "the builtin that
+        // allocates a lot must remember to charge" is a rule that gets
+        // forgotten, and had been: the table builtins allocated 49 MB to append
+        // 20 000 rows and charged 461 232 gas, LESS than the 741 252 of the bulk
+        // path that allocated 3.25 MB. Gas said the expensive one was cheap.
+        //
+        // A budget that a single call can escape is worse than no budget,
+        // because somebody will trust it (`doc/decisions/0009`). One place
+        // covers every builtin that exists and every one added later.
+        //
+        // The COLLECTOR does not come through here -- promotion uses
+        // `alloc_old` directly -- which is what keeps gas independent of when a
+        // collection ran, as `determinism.rs` requires.
+        // Only when the sandbox is COUNTING. `0009` says an unbudgeted sandbox
+        // does not count -- the interpreter is instantiated twice so a run with
+        // no budget carries no counter at all -- and charging here regardless
+        // put 1 231 steps on a sandbox that the SDK asserts reports zero.
+        // A charge that appears when nobody asked for a budget is not free: it
+        // is the counter the second instantiation exists to avoid.
+        if self.counting() {
+            self.charge_work((crate::obj::size_for(ty, len) as u64) >> 3);
+        }
         #[cfg(feature = "parallel")]
         if self.exec_id.is_some() {
             return self.alloc_shared(ty, len);
@@ -711,9 +766,70 @@ impl Rt {
 
     /// Charge for work that cannot stop part-way. Same counter, no return value
     /// to check: the limit trips at the next instruction instead.
+    ///
+    /// Use this only where the loop is already bounded by something the guest
+    /// cannot grow. Where it is not, use `charge_tick`, and charge INSIDE the
+    /// loop -- see there for why charging the whole cost up front does not
+    /// bound anything.
     #[inline]
     pub fn charge_work(&mut self, n: u64) {
         self.steps = self.steps.saturating_add(n);
+    }
+
+    /// How often `charge_tick` looks at the budget. A power of two so the test
+    /// is a mask, and small enough that the overshoot -- at most this many
+    /// iterations past the limit -- is not worth measuring.
+    pub const TICK_MASK: u64 = 63;
+
+    /// Charge one iteration of a loop and say whether to keep going.
+    ///
+    /// `false` means the budget is gone AND the gas error has already been
+    /// thrown: the caller must unwind, not continue.
+    ///
+    /// **Charge inside the loop, not before it.** Charging `n` up front bills
+    /// correctly and bounds NOTHING: `charge_work` only adds to a counter, and
+    /// the counter is not examined until the next interpreter instruction -- so
+    /// a native that charges a billion and then loops a billion times still
+    /// burns a billion iterations of real CPU before anyone looks. A budget a
+    /// single call can outrun is worse than no budget, because somebody will
+    /// trust it (`doc/decisions/0009`).
+    ///
+    /// The budget is examined every 64 iterations rather than every one,
+    /// because the check is a branch on a hot path and 64 iterations of
+    /// overshoot bounds nothing differently.
+    /// Charge `n` up front for work whose size is known, and REFUSE it if the
+    /// budget cannot cover it.
+    ///
+    /// This is the better shape whenever `n` is known before the loop runs: it
+    /// never begins work it cannot pay for, and costs nothing per iteration. A
+    /// tick is for the other case -- walking a seq whose length is not known
+    /// until it ends.
+    ///
+    /// On refusal it charges NOTHING. Billing for work that was declined is how
+    /// the first version of this read: every refused operation reported an
+    /// overshoot exactly equal to its own estimate, which looks like a runaway
+    /// and is the opposite of one.
+    #[inline]
+    pub fn charge_checked(&mut self, n: u64, where_: &str) -> bool {
+        if self.gas_limit != 0 && self.steps.saturating_add(n) >= self.gas_limit {
+            self.gas_error(where_);
+            return false;
+        }
+        self.steps = self.steps.saturating_add(n);
+        true
+    }
+
+    #[inline]
+    pub fn charge_tick(&mut self, i: u64, n: u64, where_: &str) -> bool {
+        self.steps = self.steps.saturating_add(n);
+        if (i & Self::TICK_MASK) != 0 {
+            return true;
+        }
+        if self.gas_limit != 0 && self.steps >= self.gas_limit {
+            self.gas_error(where_);
+            return false;
+        }
+        true
     }
 
     /// Charge for `n` bytes of string work. Scaled so that a byte is not an
