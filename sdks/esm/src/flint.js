@@ -189,7 +189,7 @@ export class Compiler {
     // quarters of a megabyte of base64 in an EDN string is three quarters of a
     // megabyte for flint's reader to scan a character at a time, and that alone
     // was 198 seconds of a 199-second compile.
-    const r = inst.main('wasm', spec, base64Encode(base));
+    const r = inst.run('flint.selfhost/main', ['wasm', spec, base64Encode(base)]);
     if (r.code !== 0) throw new Error(`flint: ${r.out.trim()}`);
     if (r.out.startsWith('!missing')) {
       const missing = r.out.split('\n').slice(1).filter(Boolean);
@@ -436,10 +436,13 @@ export class Sandbox {
     return out;
   }
 
-  /// The raw instance, for a caller that wants the module's own exports or the
-  /// legacy `main` entry.
+  /// The raw instance, for a caller that wants the module's own exports.
   get exports() { return this.inst.exports; }
-  main(...args) { return this.inst.main(...args); }
+  /// Run a named function, rendering its answer the way a command line would.
+  /// There is no entry point to default to (`doc/decisions/0025` step 5).
+  run(fn, args = []) { return this.inst.run(fn, args); }
+  /// Ask for a function by name and get its VALUE back, undecorated.
+  call(fn, args = []) { return this.inst.call(fn, args); }
 }
 
 /// Compile and call, for the case that just wants an answer.

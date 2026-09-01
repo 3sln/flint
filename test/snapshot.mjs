@@ -23,7 +23,7 @@ const grab = () => {
   return new Uint8Array(e.memory.buffer, p, n).slice();
 };
 
-inst.main();
+inst.run('work/main', []);
 const beforeBytes = grab();
 e.collect_now();
 const afterBytes = grab();
@@ -111,7 +111,7 @@ ok('  ... and the reader says so by name', refusedByName);
 const { module: otherModule } = await load('out/sn-other.wasm');
 const other = instantiate(otherModule);
 const oe = other.exports;
-other.main();
+other.run('other/main', []);
 ok('two programs have different image fingerprints',
    oe.flint_image_fingerprint() !== e.flint_image_fingerprint(),
    `${oe.flint_image_fingerprint()} vs ${e.flint_image_fingerprint()}`);
@@ -138,7 +138,7 @@ ok('  ... while its own program still accepts it',
 const { module: liveModule } = await load('out/sn-work.wasm');
 const live = instantiate(liveModule);
 const le = live.exports;
-const answer = live.main();
+const answer = live.run('work/main', []);
 const exportBytes = (() => {
   const n = le.flint_snapshot_export();
   return new Uint8Array(le.memory.buffer, le.flint_snapshot_ptr(), n).slice();
@@ -186,7 +186,7 @@ ok('  ... and another program refuses it, naming the image',
 const { module: shelfModule } = await load('out/sn-work.wasm');
 const shelf = instantiate(shelfModule);
 const se = shelf.exports;
-shelf.main();
+shelf.run('work/main', []);
 const shelved = se.flint_snapshot_export_and_stop();
 ok('export-and-stop returns a snapshot', shelved > 0);
 // The control first: a plain export must NOT stop anything, or the assertion
@@ -206,7 +206,7 @@ ok('  ... while export-and-stop leaves it with nothing runnable',
   const { module: pm } = await load('out/sn-parked.wasm');
   const pinst = instantiate(pm);
   const pe = pinst.exports;
-  const answer = pinst.main();
+  const answer = pinst.run('parked/main', []);
   // The program returns the snapshot's LENGTH, because that is the only way
   // the host learns it: `snapshot!` is a guest builtin and hands the count back
   // to the guest, while `flint_snapshot_capture` would capture NOW -- after the

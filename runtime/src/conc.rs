@@ -1655,16 +1655,32 @@ fn run_one(rt: &mut Rt, i: u32) {
 ///
 /// Defining completion any other way means a driver that leaves a reader parked
 /// keeps the whole program alive for ever, which is the bug this replaced.
-fn main_finished(rt: &mut Rt) -> bool {
+/// Has every thread finished, one way or another?
+///
+/// This is what "the sandbox has nothing left to do" means now that there is no
+/// entry function. A thread still PARKED is not settled -- something may yet
+/// wake it -- and `needs_host` has already been asked, so a park nobody can
+/// answer falls through to the deadlock report below.
+fn all_threads_settled(rt: &mut Rt) -> bool {
     let s = rt.sched();
-    let ts = rt.slot(s, SC_THREADS);
-    let th = rt.vec_nth(ts, 0).unwrap_or(NIL);
-    if th.is_nil() {
+    if s.is_nil() {
         return true;
     }
-    let st = fx(rt.slot(th, TH_STATUS));
-    st == ST_DONE || st == ST_FAILED
+    let ts = rt.slot(s, SC_THREADS);
+    let n = rt.vec_count(ts);
+    for i in 0..n {
+        let th = rt.vec_nth(ts, i).unwrap_or(NIL);
+        if th.is_nil() {
+            continue;
+        }
+        let st = fx(rt.slot(th, TH_STATUS));
+        if st != ST_DONE && st != ST_FAILED {
+            return false;
+        }
+    }
+    true
 }
+
 
 /// The main loop, also re-entered from the host's `resume`.
 /// Re-enter the scheduler after the host has answered.
@@ -1690,25 +1706,33 @@ pub fn drive(rt: &mut Rt) -> Value {
         match pick(rt) {
             Some(i) => run_one(rt, i),
             None => {
-                // The entry function's value IS the answer, so once it has
-                // returned and nothing else can run, the program is over --
-                // whatever a service thread may still be parked on. Asking
-                // "does anything need the host?" first would keep a driver's
-                // reader thread alive for ever.
-                if main_finished(rt) {
-                    // Exit closes every flint end and leaves the events for one
-                    // last drain, so a host never has to guess whether more is
-                    // coming.
+                // THE HOST FIRST, because there is no entry function whose
+                // return means "the program is over".
+                //
+                // It used to be the other way round: thread 0 was `main`, its
+                // value was the answer, and once it had returned everything else
+                // was torn down "whatever a service thread may still be parked
+                // on". With `main` gone (`doc/decisions/0025` step 5) a sandbox
+                // is a thing the host CALLS, and the only reason to stop is that
+                // nothing can proceed. Asking `main_finished` first here closed
+                // the system port out from under a call that had just parked on
+                // an `open` -- the grant then arrived for a port that was
+                // already gone, and the guest saw its own capability refused.
+                if needs_host(rt) {
+                    rt.status = 2;
+                    return NIL;
+                }
+                // Nothing runnable and nothing outstanding: the sandbox has run
+                // out of work. Close the bridges and leave the events for one
+                // last drain, so a host is never left guessing whether more is
+                // coming.
+                if all_threads_settled(rt) {
                     rt.close_all_bridges();
                     if pending_events(rt) {
                         rt.status = 2;
                         return NIL;
                     }
                     rt.status = 0;
-                    return main_result(rt);
-                }
-                if needs_host(rt) {
-                    rt.status = 2;
                     return NIL;
                 }
                 rt.status = 0;
@@ -1766,20 +1790,6 @@ pub fn drive(rt: &mut Rt) -> Value {
     }
 }
 
-fn main_result(rt: &mut Rt) -> Value {
-    let s = rt.sched();
-    let ts = rt.slot(s, SC_THREADS);
-    let th = rt.vec_nth(ts, 0).unwrap_or(NIL);
-    if th.is_nil() {
-        return NIL;
-    }
-    let r = rt.slot(th, TH_RESULT);
-    if fx(rt.slot(th, TH_STATUS)) == ST_FAILED {
-        rt.thrown = r;
-        return NIL;
-    }
-    r
-}
 
 impl Rt {
     /// Start a thread's entry closure with the frame stack empty.

@@ -47,7 +47,7 @@
 (println "catch: Exception means what it means in Clojure")
 (let [r (sh "./bin/flint" ":src" d ":fn" "c/main" ":out" "out/catch.wasm")]
   (when-not (zero? (:exit r)) (println "build failed:" (:all r)) (System/exit 1)))
-(let [got (str/trim (:out (sh "node" "host/flint.mjs" "out/catch.wasm")))]
+(let [got (str/trim (:out (sh "node" "host/flint.mjs" "out/catch.wasm" "c/main")))]
   (println (str "    " got))
   (check "the bare kind names match, and the specific clause wins"
          got "[:exinfo :arith :broad :specific :error-escaped-Exception]"))

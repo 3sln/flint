@@ -283,13 +283,16 @@
   (binding [*out* *err*] (println (ex-message e)))
   (System/exit 1))
 
-;; `flint run <file> [args]` -- a module or a bytecode IMAGE. The image path is
+;; `flint run <file> <ns/fn> [args]` -- a module or a bytecode IMAGE. THE
+;; FUNCTION IS NAMED: a module has no entry point, nothing is called
+;; automatically, and no name is recorded for a runner to find
+;; (`doc/decisions/0025` step 5). The image path is
 ;; what construe's sandbox binding settled on and needs no linker anywhere
 ;; (doc/decisions/0021, 0023); it is here rather than in `lib/flint/cli.cljc`
 ;; because running an image means instantiating a SECOND module, which is the
 ;; host's job and not the guest's.
 (when (= "run" (first *command-line-args*))
-  (let [[_ file & rest] *command-line-args*
+  (let [[_ file fname & rest] *command-line-args*
         loader (or (System/getenv "FLINT_LOADER") "out/flint-loader.wasm")
         ;; An image is not a module: it has to be instantiated INTO a loader.
         ;; Saying so beats `ENOENT: out/flint-loader.wasm`, which names a path
@@ -302,12 +305,13 @@
               (println "  FLINT_LOADER=<path>      points at one you already have"))
             (System/exit 1))
         script (str "import('" root "/host/run.mjs').then(async (m) => {"
-                    "  const r = await m.run(process.argv[1], process.argv.slice(3),"
-                    "                        {loaderPath: process.argv[2]});"
+                    "  const r = await m.run(process.argv[1], process.argv.slice(4),"
+                    "                        {loaderPath: process.argv[2], fn: process.argv[3]});"
                     "  process.stdout.write(r.out); process.exitCode = r.code;"
                     "}).catch((e) => { console.error(String(e.message ?? e)); process.exit(2); })")
         p (.start (ProcessBuilder.
-                   (into-array String (concat ["node" "-e" script "--" (str file) loader]
+                   (into-array String (concat ["node" "-e" script "--" (str file) loader
+                                               (str fname)]
                                               (map str rest)))))]
     (.start (Thread. (clojure.core/fn [] (io/copy (.getInputStream p) System/out))))
     (.start (Thread. (clojure.core/fn [] (io/copy (.getErrorStream p) System/err))))
@@ -577,7 +581,8 @@
               (println (:src x)))
             (System/exit 1))
           (let [p (.start (ProcessBuilder.
-                           (into-array String (concat [(str root "/bin/flint") "run" wasm]
+                           (into-array String (concat [(str root "/bin/flint") "run" wasm
+                                                       (str (:entry x))]
                                                       (map str (:args x))))))]
             (.start (Thread. (clojure.core/fn [] (io/copy (.getInputStream p) System/out))))
             (.start (Thread. (clojure.core/fn [] (io/copy (.getErrorStream p) System/err))))

@@ -44,7 +44,7 @@
 (let [r (sh "./bin/flint" ":src" b ":src" a ":fn" "b/main" ":out" "out/tags.wasm")]
   (check-that "two projects can each bind the same tag name to their own reader"
               (zero? (:exit r)) (:all r)))
-(let [r (sh "node" "host/flint.mjs" "out/tags.wasm")]
+(let [r (sh "node" "host/flint.mjs" "out/tags.wasm" "b/main")]
   ;; `a`'s `#pt` made an `:a`; `b`'s made a `:b`. One name, two readers, no
   ;; collision -- which is the whole design, and is exactly what a global
   ;; `data_readers.clj` cannot do.

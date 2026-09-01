@@ -53,6 +53,11 @@ function makeDoc({ pages = 2, blocks = 4, leaves = 8, leafBytes = 200 } = {}) {
 ///
 /// Stressing the collector restores the sampling rather than the memory: the
 /// numbers below are what was always resident, not a regression being hidden.
+/// The module's namespace, from the file it was built into. Each is compiled
+/// `:fn <ns>/main`, and the FUNCTION IS NAMED at the call now: a module has no
+/// entry point (`doc/decisions/0025` step 5).
+const fnOf = (wasm) => `${/out\/doc-([a-z]+)\.wasm$/.exec(wasm)[1]}/main`;
+
 async function runWith(wasm, store, args = [], { stress = false } = {}) {
   const { module } = await load(wasm);
   const inst = instantiate(module);
@@ -65,7 +70,7 @@ async function runWith(wasm, store, args = [], { stress = false } = {}) {
       poll(port, api) { cap.poll(port, api); },
     },
   });
-  const r = inst.main(...args);
+  const r = inst.run(fnOf(wasm), args);
   if (r.code !== 0) throw new Error(`module failed: ${r.out}`);
   const e = inst.exports;
   e.collect_now();

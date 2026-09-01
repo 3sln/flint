@@ -122,7 +122,7 @@
 
 ;; The one that matters. A shake that cuts something reachable makes a SMALLER
 ;; module that traps, and only running it says so.
-(let [r (sh "node" "host/flint.mjs" "out/shaken-hello.wasm")]
+(let [r (sh "node" "host/flint.mjs" "out/shaken-hello.wasm" "hello/main")]
   (check "the shaken module still runs, and answers" (str/trim (:out r)) "SHAKEN 45 10"))
 
 ;; Against the linker's own answer for the same program.

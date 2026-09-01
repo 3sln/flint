@@ -12,7 +12,7 @@
   (when-not (zero? (:exit b))
     (println "build failed:" (:out b) (:err b)) (System/exit 1)))
 
-(let [r (sh "node" "host/flint.mjs" "out/gcstress.wasm")]
+(let [r (sh "node" "host/flint.mjs" "out/gcstress.wasm" "gcstress/main")]
   (when-not (zero? (:exit r))
     (println "  FAIL  the module trapped:" (str/trim (:err r))) (System/exit 1))
   (let [res (edn/read-string (str/trim (:out r)))
@@ -46,7 +46,7 @@
                  "const {module} = await m.load('out/gcstress.wasm');"
                  "const i = m.instantiate(module);"
                  "i.exports.set_gc_verify_remset(1);"
-                 "i.main();"
+                 "i.run('gcstress/main', []);"
                  "console.log(JSON.stringify({start: i.exports.stat_remset_violations(),"
                  " end: i.exports.stat_remset_end_violations(),"
                  " dead: i.exports.stat_dead_half(99,0),"

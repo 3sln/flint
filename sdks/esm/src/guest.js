@@ -330,6 +330,34 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   let nextTx = 1;
   const pending = new Map();
   function call(name, args = []) {
+    // TWO PATHS, and which one is right is decided by the module rather than
+    // by the caller.
+    //
+    // A module with no ports does not link the concurrency unit at all, so it
+    // has no system port to send a message on -- and it cannot need one: a
+    // function that cannot open a port cannot park, so nothing has to be
+    // answered while the call is outstanding. `flint_call` is that case:
+    // encoded arguments in, an encoded answer out, synchronous.
+    //
+    // This is what keeps "none of it is in a pure module" true
+    // (`doc/decisions/0003`). Routing every call through the system port would
+    // put a scheduler, a ring and an event queue in a module whose whole source
+    // is `(defn f [x] x)` -- 300,801 bytes becoming 335,320, which is the
+    // budget `test/threads.clj` holds.
+    //
+    // Neither path is an entry point. Both name the function.
+    //
+    // The choice is by NEED, not by what the module happens to export. A
+    // partially shaken module can export `flint_install_port` with a stubbed
+    // body (`test/shake.clj` builds exactly that), so the export is not
+    // evidence that the machinery behind it is there. What is evidence is
+    // whether this host has anything to answer with: a capability registered,
+    // or a port installed. Without either, nothing the guest does can park on
+    // us, and the synchronous path is both sufficient and cheaper.
+    if (!e.flint_install_port
+        || (!systemInstalled && Object.keys(capabilities).length === 0)) {
+      return callSync(name, args);
+    }
     ensureSystem();
     const tx = nextTx++;
     const bytes = codec.map([
@@ -343,8 +371,25 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     }
     let answer;
     pending.set(tx, (m) => { answer = m; });
-    pump(e.flint_resume());
-    if (!answer) throw new Error(`flint: the call to ${name} was never answered`);
+    // PUMPED UNTIL THIS CALL IS ANSWERED, not until the sandbox is idle.
+    //
+    // A sandbox does not "finish" any more. `main` used to be the end -- its
+    // return tore everything down, "whatever a service thread may still be
+    // parked on" -- and with it gone a sandbox is a thing you call, which may
+    // keep threads alive between calls. An RPC client's reader thread is
+    // exactly that: parked on a receive for ever, by design. Waiting for the
+    // whole sandbox to settle would wait for something that is never coming.
+    let guard = 0;
+    let code = e.flint_resume();
+    while (answer === undefined) {
+      if (++guard > 1e6) throw new Error('flint: the host pump made no progress');
+      for (const ev of drain()) handle(ev);
+      flush();
+      if (answer !== undefined) break;
+      if (code !== 2) break;
+      code = e.flint_resume();
+    }
+    if (answer === undefined) throw new Error(`flint: the call to ${name} was never answered`);
     pending.delete(tx);
     if (answer[':op'] === ':throw') {
       const err = new Error(`${answer[':kind']}: ${answer[':message']}`);
@@ -352,6 +397,25 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
       throw err;
     }
     return answer[':value'];
+  }
+
+  /// The no-port call: `flint_call`, synchronous, no scheduler involved.
+  function callSync(name, args = []) {
+    const encoded = codec.vec([
+      codec.str(name),
+      ...args.map((a) => (a instanceof Val ? a : codec.from(a))),
+    ]).encode();
+    const p = e.arg_alloc(encoded.length);
+    new Uint8Array(e.memory.buffer).set(encoded, p);
+    const code = e.flint_call(p, encoded.length);
+    const out = new Uint8Array(e.memory.buffer, e.out_ptr(), e.out_len()).slice();
+    const value = codec.decode(out);
+    if (code !== 0) {
+      const err = new Error(value?.[':message'] ?? 'the call failed');
+      err.kind = value?.[':error'] ?? value?.[':kind'];
+      throw err;
+    }
+    return value;
   }
 
   const api = {

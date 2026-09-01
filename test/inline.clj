@@ -27,7 +27,7 @@
   (when-not (zero? (:exit b))
     (println "build failed:" (:out b) (:err b)) (System/exit 1)))
 
-(def r (let [x (sh "node" "host/flint.mjs" "out/inline.wasm")]
+(def r (let [x (sh "node" "host/flint.mjs" "out/inline.wasm" "inline/main")]
          (when-not (zero? (:exit x))
            (println "  FAIL the module trapped:" (str/trim (:err x))) (System/exit 1))
          (edn/read-string (str/trim (:out x)))))
@@ -105,7 +105,7 @@
               (str "import('./host/flint.mjs').then(async (m) => {"
                    "const {module} = await m.load('out/aliasprobe.wasm');"
                    "const i = m.instantiate(module);"
-                   "i.exports.set_step_limit(0x7ffffff000000000n); i.main();"
+                   "i.exports.set_step_limit(0x7ffffff000000000n); i.run('aliasprobe/main', []);"
                    "console.log(Number(i.exports.stat_steps()));})"))]
     (Long/parseLong (str/trim (:out r)))))
 (let [on-slope  (- (probe! 3000) (probe! 1000))

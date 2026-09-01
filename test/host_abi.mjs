@@ -64,7 +64,7 @@ console.log('host abi');
       closed: (p) => seen.push(['closed', p]),
     },
   });
-  const r = inst.main();
+  const r = inst.run('echo/main', []);
   eq('a granted capability opens, round-trips and closes',
      // `refused to open`, not `refused the capability`: the cutover took the
      // word out of the sandbox, which does not have the concept. What refuses
@@ -221,7 +221,7 @@ console.log('host abi');
     // rather than anything the guest chose.
     wire: { message: (p, v, api, ev) => { seen.push([v, ev.data]); api.deliver(p, v); } },
   });
-  const r = inst.main();
+  const r = inst.run('formats/main', []);
   const out = r.out;
   ok('a set and a keyword round-trip, which JSON refused by name',
      out.includes('{:a #{1 2}, :b [:x]}'), out);

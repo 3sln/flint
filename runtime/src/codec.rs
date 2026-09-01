@@ -120,8 +120,21 @@ impl Rt {
             return Ok(());
         }
         if self.is_string(v) {
+            // FLATTENED FIRST. `as_str` borrows, so by design it will not
+            // materialise a rope -- it answers `None` — and `unwrap_or("")`
+            // turned that into THE EMPTY STRING. Every rope that crossed a
+            // bridge arrived as "", silently: `(pr-str x)` builds a rope, so
+            // this hit the ordinary case of answering a call with rendered
+            // text. The host boundary is the legitimate place to flatten, and
+            // it is what `port_send` already does for its own bytes
+            // (`doc/decisions/0011`).
+            let base = self.mark();
+            let vi = self.push(v);
+            let flat = self.string_arg(self.r(vi));
+            self.set_r(vi, flat);
             let mut b = crate::rt::sbuf();
-            let s: String = self.as_str(v, &mut b).unwrap_or("").into();
+            let s: String = self.as_str(self.r(vi), &mut b).unwrap_or("").into();
+            self.pop_to(base);
             out.push(K_STRING);
             put_str(out, &s);
             return Ok(());

@@ -89,7 +89,7 @@ console.log('global ports');
   const e = inst.exports;
   ok('a port is installed before a program with initialisers runs',
      install(e, 7, 'system', 'edn', true) === 1);
-  const r = inst.main();
+  const r = inst.run('init/main', []);
   eq('  ... and the entry still returns its value', r.out.trim(), 'constantfalsefalse');
   eq('  ... with status 0', r.code, 0);
 }

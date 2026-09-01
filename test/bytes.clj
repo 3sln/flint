@@ -24,7 +24,7 @@
 (let [b (sh "./bin/flint" ":src" "test" ":fn" "bytes/main" ":out" "out/bytes.wasm")]
   (when-not (zero? (:exit b))
     (println "build failed:" (:out b) (:err b)) (System/exit 1)))
-(def r (let [x (sh "node" "host/flint.mjs" "out/bytes.wasm")]
+(def r (let [x (sh "node" "host/flint.mjs" "out/bytes.wasm" "bytes/main")]
          (when-not (zero? (:exit x))
            (println "  FAIL the module trapped:" (str/trim (:err x))) (System/exit 1))
          (edn/read-string (str/trim (:out x)))))

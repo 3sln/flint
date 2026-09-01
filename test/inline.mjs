@@ -18,7 +18,7 @@ const { module } = await load(process.argv[2] ?? 'out/inline.wasm');
 const run = (mode, iters) => {
   const inst = instantiate(module);
   inst.exports.set_step_limit(BigInt(1e9));
-  const r = inst.main(mode, String(iters));
+  const r = inst.run('inline/main', [mode, String(iters)]);
   if (r.code !== 0) throw new Error(`${mode} failed: ${r.out}`);
   return { out: r.out, steps: Number(inst.exports.stat_steps()) };
 };

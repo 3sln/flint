@@ -31,8 +31,16 @@ export async function run(path, args, caps, fn) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const [, , path, ...args] = process.argv;
-  const r = await run(path, args);
+  // `node host/flint.mjs <module> <ns/fn> [args...]`. The FUNCTION IS NAMED,
+  // because a module has none that is special: nothing is called automatically
+  // and there is no entry recorded for a runner to find
+  // (`doc/decisions/0025` step 5).
+  const [, , path, fn, ...args] = process.argv;
+  if (!fn) {
+    process.stderr.write('usage: flint.mjs <module.wasm> <ns/fn> [args...]\n');
+    process.exitCode = 2;
+  }
+  const r = await run(path, args, null, fn);
   // Not process.exit: it does not flush an async pipe write, and output past
   // the pipe buffer would be lost.
   process.exitCode = r.code;

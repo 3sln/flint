@@ -28,7 +28,7 @@ console.log('limits');
   for (let i = 0; i < 5; i++) {
     const inst = fresh();
     gas(inst, 1e9);                       // high enough not to fire
-    inst.main('work', '200');
+    inst.run('limits/main', ['work', '200']);
     counts.push(Number(inst.exports.stat_steps()));
   }
   eq('the same program reports the same instruction count every run',
@@ -42,7 +42,7 @@ console.log('limits');
   for (const limit of [500_000, 2_000_000]) {
     const inst = fresh();
     gas(inst, limit);
-    const r = inst.main('spin');
+    const r = inst.run('limits/main', ['spin']);
     ok(`a runaway loop stops at exactly ${limit}`,
        r.code === 1 && r.out.includes(`spent ${limit} of ${limit}`), r.out.slice(0, 120));
   }
@@ -52,7 +52,7 @@ console.log('limits');
 {
   const inst = fresh();
   gas(inst, 1_000_000);
-  const r = inst.main('caught');
+  const r = inst.run('limits/main', ['caught']);
   eq('the gas error is catchable', r.code, 0);
   ok('  ... and carries spent, limit and thread as data',
      r.out.includes(':spent 1000000') && r.out.includes(':limit 1000000') &&
@@ -63,7 +63,7 @@ console.log('limits');
 {
   const inst = fresh();
   gas(inst, 1_000_000);
-  const r = inst.main('caught-then-spin');
+  const r = inst.run('limits/main', ['caught-then-spin']);
   eq('a program that catches the error and loops again is still stopped', r.code, 1);
   ok('  ... by an error that escapes every handler',
      r.out.includes('gas limit exceeded'), r.out.slice(0, 160));
@@ -78,7 +78,7 @@ console.log('limits');
   const measure = (what, n) => {
     const inst = fresh();
     gas(inst, 1e9);
-    inst.main(what, String(n));
+    inst.run('limits/main', [what, String(n)]);
     return Number(inst.exports.stat_steps());
   };
   for (const [label, what] of [['= over two big vectors', 'eq'],
@@ -107,7 +107,7 @@ console.log('limits');
 {
   const inst = fresh();
   gas(inst, 3_000_000);
-  const r = inst.main('redos');
+  const r = inst.run('limits/main', ['redos']);
   eq('a known catastrophic regex now COMPLETES, in a budget that used to stop it',
      r.code, 0);
   ok('  ... with the right answer', r.out.trim() === '0', r.out.slice(0, 160));
@@ -122,7 +122,7 @@ console.log('limits');
 {
   const inst = fresh();
   inst.exports.set_memory_limit(6 * 1024 * 1024);
-  const r = inst.main('eat');
+  const r = inst.run('limits/main', ['eat']);
   eq('exceeding the memory limit is a catchable error, not a trap', r.code, 0);
   ok('  ... naming what was held against what was allowed',
      r.out.includes('memory limit exceeded') && r.out.includes(':limit 6291456'),
@@ -153,8 +153,8 @@ console.log('limits');
   let tFree = Infinity;
   let tCounted = Infinity;
   for (let i = 0; i < 15; i++) {
-    tFree = Math.min(tFree, best(1, () => free.main('work', N)));
-    tCounted = Math.min(tCounted, best(1, () => counted.main('work', N)));
+    tFree = Math.min(tFree, best(1, () => free.run('limits/main', ['work', N])));
+    tCounted = Math.min(tCounted, best(1, () => counted.run('limits/main', ['work', N])));
   }
   const steps = Number(counted.exports.stat_steps());
   const overhead = (tCounted / tFree - 1) * 100;
@@ -163,7 +163,7 @@ console.log('limits');
   console.log(`    the second instantiation costs 16 335 bytes of module; see the`);
   console.log(`    README, which reports both halves of that trade.`);
   ok('the two loops are separate instantiations and both give the same answer',
-     free.main('work', N).out === counted.main('work', N).out);
+     free.run('limits/main', ['work', N]).out === counted.run('limits/main', ['work', N]).out);
   if (Math.abs(overhead) < 3) {
     console.log('    the difference is inside the noise on this machine, which is');
     console.log('    itself the finding: counting is not what makes gas expensive.');

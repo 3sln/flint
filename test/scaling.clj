@@ -101,7 +101,7 @@
                   "  for (const n of [400, 800]) {"
                   "    const i = m.instantiate(module);"
                   "    i.exports.set_step_limit(0x7fffffffffffffffn);"
-                  "    const res = i.main(w, String(n));"
+                  "    const res = i.run('scale/main', [w, String(n)]);"
                   "    if (res.code !== 0) { console.error(w + ': ' + res.out); process.exit(1); }"
                   "    r.push(Number(i.exports.stat_steps()));"
                   "  }"

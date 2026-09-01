@@ -51,7 +51,7 @@
       (.waitFor p)
       (if (zero? (.exitValue p))
         (let [q (.start (ProcessBuilder.
-                         (into-array String ["node" "host/flint.mjs" "out/probe.wasm"])))
+                         (into-array String ["node" "host/flint.mjs" "out/probe.wasm" "probe/main"])))
               r (str/trim (slurp (.getInputStream q)))]
           (.waitFor q)
           (if (= r (str (count vars)))

@@ -23,7 +23,7 @@
 (println "pause: the collector collects little and often (0018)")
 (let [b (sh "./bin/flint" ":src" "test" ":fn" "pause/main" ":out" "out/pause.wasm")]
   (when-not (zero? (:exit b)) (println "build failed:" (:out b) (:err b)) (System/exit 1)))
-(def rows (edn/read-string (str/trim (:out (sh "node" "host/flint.mjs" "out/pause.wasm")))))
+(def rows (edn/read-string (str/trim (:out (sh "node" "host/flint.mjs" "out/pause.wasm" "pause/main")))))
 
 (doseq [r rows]
   (println (format "    keep 1/%-3d  live %5d  alloc %6.1f MB  %2d collections  largest copies %6.1f KB"

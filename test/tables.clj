@@ -55,7 +55,7 @@
            "for (const w of ['vec', 'table']) {\n"
            "  const i = instantiate(module);\n"
            "  i.exports.set_step_limit(0x7ffffff000000000n);\n"
-           "  const r = i.main(w);\n"
+           "  const r = i.run('tbl/main', [w]);\n"
            "  out[w] = { answer: r.out,\n"
            "             allocated: Number(i.exports.stat_bytes_allocated()),\n"
            "             peak: Number(i.exports.stat_peak_live()),\n"
@@ -133,7 +133,7 @@
            "for (const w of ['vary', 'same']) {\n"
            "  const i = instantiate(module);\n"
            "  i.exports.set_step_limit(0x7ffffff000000000n);\n"
-           "  const r = i.main(w);\n"
+           "  const r = i.run('enc/main', [w]);\n"
            "  i.exports.collect_now();\n"
            "  out[w] = { answer: r.out, peak: Number(i.exports.stat_peak_live()) };\n"
            "}\n"
@@ -203,7 +203,7 @@
            "for (const w of ['none', 'col', 'rows', 'slice', 'rebuild']) {\n"
            "  const i = instantiate(module);\n"
            "  i.exports.set_step_limit(0x7ffffff0n);\n"
-           "  const r = i.main(w);\n"
+           "  const r = i.run('col/main', [w]);\n"
            "  out[w] = { answer: r.out, gas: Number(i.exports.stat_steps()),\n"
            "             allocated: Number(i.exports.stat_bytes_allocated()) };\n"
            "}\n"
@@ -282,7 +282,7 @@
            "  const i = instantiate(module);\n"
            "  i.exports.set_step_limit(0x7ffffff000000000n);\n"
            "  const before = Number(i.exports.stat_steps());\n"
-           "  const r = i.main(w);\n"
+           "  const r = i.run('mig/main', [w]);\n"
            "  out[w] = { answer: r.out, gas: Number(i.exports.stat_steps()) - before,\n"
            "             allocated: Number(i.exports.stat_bytes_allocated()) };\n"
            "}\n"
@@ -382,7 +382,7 @@
            "                                    (persistent! t) (conj! t {:id 1 :name \"a\"}))))}))\n"))
 (let [r (sh "./bin/flint" ":src" d ":fn" "ops/main" ":out" "out/tbl-ops.wasm")]
   (when-not (zero? (:exit r)) (println "ops build failed:" (:out r) (:err r)) (System/exit 1)))
-(def ops (let [r (sh "node" "host/flint.mjs" "out/tbl-ops.wasm")]
+(def ops (let [r (sh "node" "host/flint.mjs" "out/tbl-ops.wasm" "ops/main")]
            (when-not (zero? (:exit r)) (println "ops run failed:" (:out r) (:err r)) (System/exit 1))
            (read-string (str/trim (:out r)))))
 

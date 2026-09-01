@@ -56,7 +56,7 @@
 
 (let [r (sh "./bin/flint" ":src" d ":fn" "probe/main" ":out" "out/ropes.wasm")]
   (when-not (zero? (:exit r)) (println "build failed:" (:all r)) (System/exit 1)))
-(let [f (str/trim (:out (sh "node" "host/flint.mjs" "out/ropes.wasm")))
+(let [f (str/trim (:out (sh "node" "host/flint.mjs" "out/ropes.wasm" "probe/main")))
       b (str/trim (:out (sh "bb" "/tmp/rope-bb.clj")))]
   (check "every rope answer matches babashka on the same source" f b)
   (when (not= f b)
@@ -77,7 +77,7 @@
 (let [r (sh "node" "-e"
             (str "import('./host/flint.mjs').then(async (m) => {"
                  "const {module} = await m.load('out/ropes-flat.wasm');"
-                 "const i = m.instantiate(module); const out = i.main().out.trim();"
+                 "const i = m.instantiate(module); const out = i.run('flat/main', []).out.trim();"
                  "console.log(JSON.stringify({out, calls: Number(i.exports.stat_flattens(0)),"
                  " materialised: Number(i.exports.stat_flattens(1)),"
                  " bytes: Number(i.exports.stat_flattens(2)),"

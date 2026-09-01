@@ -23,7 +23,7 @@ const nativeName = (e, i) => {
 
 const checksIn = (shape) => {
   const inst = instantiate(module);
-  const r = inst.main(shape);
+  const r = inst.run('narrow/main', [shape]);
   if (r.code !== 0) throw new Error(`${shape}: ${r.out}`);
   const e = inst.exports;
   let n = 0, sawAny = 0;
@@ -37,7 +37,7 @@ const checksIn = (shape) => {
 };
 
 const shapes = JSON.parse(
-  instantiate(module).main('list').out.replace(/[\[\]]/g, (m) => m).replace(/ /g, ', '));
+  instantiate(module).run('narrow/main', ['list']).out.replace(/[\[\]]/g, (m) => m).replace(/ /g, ', '));
 
 let fails = 0;
 console.log('occurrence narrowing: which forms does it compose with?');

@@ -27,13 +27,19 @@ export function isImage(bytes) {
 
 /// Run `file` with `args`. When it is an image, `loaderPath` must name a module
 /// built with `--loader`; the same loader may be reused across many images.
-export async function run(file, args, { loaderPath, capabilities } = {}) {
+/// Run `fn` in `file`, which may be a module or a bytecode image.
+///
+/// **The function is named by the caller.** A module has no entry point:
+/// nothing is called automatically and no name is recorded for a runner to
+/// find (`doc/decisions/0025` step 5).
+export async function run(file, args, { loaderPath, capabilities, fn } = {}) {
+  if (!fn) throw new Error('run: name the function to call, as "ns/name"');
   const bytes = readFileSync(file);
   if (!isImage(bytes)) {
     const { module } = await load(file);
     const inst = instantiate(module);
     if (capabilities) inst.capabilities(capabilities);
-    return inst.main(...args);
+    return inst.run(fn, args);
   }
   if (!loaderPath) {
     throw new Error(
@@ -70,5 +76,5 @@ export async function run(file, args, { loaderPath, capabilities } = {}) {
       new Uint8Array(e.memory.buffer).subarray(e.out_ptr(), e.out_ptr() + e.out_len()));
     throw new Error(`could not load the image (${rc}): ${why}`);
   }
-  return inst.main(...args);
+  return inst.run(fn, args);
 }

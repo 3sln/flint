@@ -59,7 +59,7 @@
   (when-not (zero? (:exit b))
     (println "build failed:" (:out b) (:err b)) (System/exit 1)))
 
-(def r (let [x (sh "node" "host/flint.mjs" "out/types.wasm")]
+(def r (let [x (sh "node" "host/flint.mjs" "out/types.wasm" "types/main")]
          (when-not (zero? (:exit x))
            (println "  FAIL the module trapped:" (str/trim (:err x))) (System/exit 1))
          (edn/read-string (str/trim (:out x)))))

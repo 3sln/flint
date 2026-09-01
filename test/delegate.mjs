@@ -12,6 +12,6 @@ const i = instantiate(module);
 // sandbox given none cannot ask for anything at all.
 i.install(1, { label: 'system', system: true });
 i.capabilities({ thing: { open() {}, message() {} } });
-const r = i.main();
+const r = i.run('crossing/main', []);
 process.stdout.write(r.out);
 process.exit(r.code === 0 ? 0 : 1);

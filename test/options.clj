@@ -21,8 +21,8 @@
     (.waitFor p)
     {:exit (.exitValue p) :out out :err err :all (str out err)}))
 
-(defn run [wasm]
-  (let [p (.start (ProcessBuilder. (into-array String ["node" "host/flint.mjs" wasm])))
+(defn run [wasm fname]
+  (let [p (.start (ProcessBuilder. (into-array String ["node" "host/flint.mjs" wasm fname])))
         out (slurp (.getInputStream p))]
     (slurp (.getErrorStream p)) (.waitFor p) (str/trim out)))
 
@@ -57,7 +57,7 @@
 
 (def lit (flint ":src" d ":fn" "splitlit/main" ":out" "out/opt-lit.wasm" ":exclude" "[flint.regex]"))
 (check "excluding something UNREACHABLE succeeds" (:exit lit) 0)
-(check "  ... and the module still runs" (run "out/opt-lit.wasm") "a|b|c")
+(check "  ... and the module still runs" (run "out/opt-lit.wasm" "splitlit/main") "a|b|c")
 
 ;; The size drop. `flint` shakes per VAR, so excluding code that is already
 ;; unreachable cannot shrink a module -- the module never held it. The drop the
@@ -96,7 +96,7 @@
 (check "a unit found on the :wasm-path path links" (:exit wl) 0)
 (check "  ... and --stats says which manifest was used"
        (str/includes? (:all wl) "demo.shout <- test/fixtures/wasm-path/demo/shout.unit.edn") true)
-(check "  ... and the module RUNS, calling into the unit" (run "out/opt-wl.wasm") "HELLO!")
+(check "  ... and the module RUNS, calling into the unit" (run "out/opt-wl.wasm" "app/main") "HELLO!")
 
 (def refused (flint ":src" d ":fn" "app/main" ":wasm-path" "test/fixtures/wasm-path-bad"
                     ":out" "out/opt-wlbad.wasm"))
@@ -145,7 +145,7 @@
 (check-that "  ... and then there is nothing to report"
             (not (str/includes? (:all picked) "was DELETED")))
 (check "  ... and the branch it selected is the one that runs"
-       (str/trim (run "out/opt-feat.wasm")) "js 1")
+       (str/trim (run "out/opt-feat.wasm" "f/main")) "js 1")
 
 ;; The crash this replaced said `Don't know how to create ISeq from:
 ;; clojure.lang.Symbol`, which names nothing a reader can act on. It is reached

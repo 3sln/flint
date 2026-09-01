@@ -90,7 +90,15 @@
     (when-not (zero? (:exit r)) (println "build failed:" (:all r)) (System/exit 1))
     o))
 
-(let [f (str/trim (:out (sh "node" "host/flint.mjs" (build! "battery"))))
+;; THE FUNCTION IS NAMED at the run, because a module has no entry point
+;; (`doc/decisions/0025` step 5). `build!` knows the namespace, so this derives
+;; the name from the artifact it made rather than repeating it at every call.
+(defn fn-of [wasm]
+  (str (second (re-find #"out/pike-([a-z]+)\.wasm" wasm)) "/main"))
+(defn run! [wasm & args]
+  (apply sh "node" "host/flint.mjs" wasm (fn-of wasm) args))
+
+(let [f (str/trim (:out (run! (build! "battery"))))
       b (str/trim (:out (sh "bb" "/tmp/pike-bb.clj")))]
   (check (str "the whole API agrees with babashka over " (count cases) " patterns") f b)
   (when (not= f b)
@@ -109,13 +117,13 @@
 (spit (str d "/diverge.cljc")
       (str "(ns diverge)\n(defn main [_] (pr-str (re-find #\"(a?)*b\" \"b\")))\n"))
 (check "the one documented divergence is exactly where it is documented"
-       (str/trim (:out (sh "node" "host/flint.mjs" (build! "diverge"))))
+       (str/trim (:out (run! (build! "diverge"))))
        "[\"b\" nil]")
 (println "    Java reports group 1 as \"\" there; a Thompson simulation never takes")
 (println "    the empty iteration, and neither do Go's RE2 or Rust's regex.")
 
-(let [r (str/trim (:out (sh "node" "host/flint.mjs" (build! "refsim"))))
-      n (str/trim (:out (sh "node" "host/flint.mjs" (build! "natsim"))))]
+(let [r (str/trim (:out (run! (build! "refsim"))))
+      n (str/trim (:out (run! (build! "natsim"))))]
   (check "the native simulator agrees with the cljc reference, span for span" n r))
 
 ;; A subject built from many pieces is a ROPE. The simulator reads it through a
@@ -134,7 +142,7 @@
       r (sh "node" "-e"
             (str "import('./host/flint.mjs').then(async (m) => {"
                  "const {module} = await m.load('" w "');"
-                 "const i = m.instantiate(module); const out = i.main().out.trim();"
+                 "const i = m.instantiate(module); const out = i.run('ropey/main', []).out.trim();"
                  "console.log(JSON.stringify({out, materialised: Number(i.exports.stat_flattens(1))}));})"))
       out (str/trim (str (:out r) (:err r)))]
   (println (str "    " out))
@@ -154,7 +162,7 @@
            "    (str (count (re-seq #\"(a+)+$\" (str s \"b\"))))))\n"))
 (let [w (build! "redos")
       t (fn [n] (let [t0 (System/nanoTime)]
-                  (sh "node" "host/flint.mjs" w (str n))
+                  (run! w (str n))
                   (/ (- (System/nanoTime) t0) 1e6)))
       a (t 24) b (t 48)]
   (println (format "    (a+)+$ over 24 a's %.0f ms, over 48 %.0f ms" a b))

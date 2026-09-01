@@ -68,7 +68,7 @@
        "const {module} = await m.load('out/cli.wasm');"
        "const i = m.instantiate(module);"
        "if (process.argv[1] === 'grant') i.capabilities({fs: fsCapability(process.argv[2])});"
-       "const r = i.main(...process.argv.slice(3));"
+       "const r = i.run('entry/main', process.argv.slice(3));"
        "process.stdout.write(r.out);})"))
 
 (defn cli [grant & argv]
@@ -135,9 +135,9 @@
     (when-not (zero? (:exit r)) (println "build failed:" (:all r)) (System/exit 1))))
 
 (check "flint run executes a module"
-       (str/trim (:out (sh "./bin/flint" "run" "out/cli-hi.wasm" "there"))) "hi there")
+       (str/trim (:out (sh "./bin/flint" "run" "out/cli-hi.wasm" "hi/main" "there"))) "hi there")
 (let [env (into {} (System/getenv))
-      p (doto (ProcessBuilder. (into-array String ["./bin/flint" "run" "out/cli-hi.image" "there"]))
+      p (doto (ProcessBuilder. (into-array String ["./bin/flint" "run" "out/cli-hi.image" "hi/main" "there"]))
           (-> .environment (.put "FLINT_LOADER" "out/cli-loader.wasm")))
       pr (.start p)
       out (slurp (.getInputStream pr))]
@@ -197,7 +197,7 @@
   (spit (str bp "/code/app.cljc") "(ns app)\n(defn main [args] (str \"built \" (first args)))\n")
   (check "build takes its source roots and entry point from deps.edn"
          (:exit (run-in bp "build")) 0)
-  (check "  ... and the artifact runs" (:out (run-in bp "run" "out/app.wasm" "ok")) "built ok")
+  (check "  ... and the artifact runs" (:out (run-in bp "run" "out/app.wasm" "app/main" "ok")) "built ok")
   ;; The image path is the shape flint's first real consumer uses: a resident
   ;; loader instantiated once, an image loaded per call. So `--image` has to
   ;; produce something RUNNABLE, which means the loader too -- an image on its
@@ -206,7 +206,7 @@
          (boolean (str/includes? (:out (run-in bp "build" "--image")) "out/app.image")) true)
   (check "  ... and the loader beside it, because an image cannot run alone"
          (boolean (fs/exists? (str bp "/out/flint-loader.wasm"))) true)
-  (check "  ... so the image runs" (:out (run-in bp "run" "out/app.image" "ok")) "built ok")
+  (check "  ... so the image runs" (:out (run-in bp "run" "out/app.image" "app/main" "ok")) "built ok")
   (check "  ... and a build leaves no scratch file next to the artifact"
          (vec (sort (map fs/file-name (fs/list-dir (str bp "/out")))))
          ["app.image" "app.wasm" "flint-loader.wasm"])
@@ -215,11 +215,11 @@
   ;; loader belongs is named from its bytes, before compiling half a megabyte of
   ;; wasm to find out.
   (check-that "  ... and a MODULE used as a loader is refused by name"
-              (let [o (:out (run-in bp "run" "out/app.image" "ok"))]
+              (let [o (:out (run-in bp "run" "out/app.image" "app/main" "ok"))]
                 (or (str/includes? o "not built with --loader")
                     (str/includes? o "no loader at"))))
   (check-that "  ... while a missing loader says what would produce one"
-              (let [o (:out (run-in bp "run" "out/app.image" "ok"))]
+              (let [o (:out (run-in bp "run" "out/app.image" "app/main" "ok"))]
                 (and (str/includes? o "flint build --image")
                      (not (str/includes? o "ENOENT")))))
   (check "  ... and an unbuilt target exits nonzero"
@@ -280,7 +280,7 @@
     ;; dep has a `:paths` that is not the default.
     (check "a git dep is fetched, transitively, on the way to a build"
            (:exit (flint-in gproj "build")) 0)
-    (check "  ... and the project compiles against it" (:out (flint-in gproj "run" "out/app.wasm" "you")) "HI YOU")
+    (check "  ... and the project compiles against it" (:out (flint-in gproj "run" "out/app.wasm" "app/main" "you")) "HI YOU")
     (check-that "  ... with the project's own roots first, then the deps'"
                 (let [ls (str/split-lines (:out (flint-in gproj "paths")))]
                   (and (= (first ls) "src") (= (count ls) 3)
@@ -353,7 +353,7 @@
     (check "an npm dep is fetched and unpacked on the way to a build"
            (:exit (flint-in np "build")) 0)
     (check "  ... and the project compiles against the cljc in it"
-           (:out (flint-in np "run" "out/app.wasm" "hello")) "HELLO!")
+           (:out (flint-in np "run" "out/app.wasm" "app/main" "hello")) "HELLO!")
     (check-that "  ... with the package ROOT as the source root, not src"
                 (str/includes? (:out (flint-in np "paths")) "/package"))
 
@@ -411,7 +411,7 @@
   (check "a maven jar is fetched and unpacked on the way to a build"
          (:exit (flint-in mp "build")) 0)
   (check "  ... and the project compiles against the source in it"
-         (:out (flint-in mp "run" "out/app.wasm")) "42")
+         (:out (flint-in mp "run" "out/app.wasm" "app/main")) "42")
   (check-that "  ... with the jar ROOT as the source root"
               (str/includes? (:out (flint-in mp "paths")) ".flint/mvn/"))
   ;; The limitation is stated next to the dependency, not buried.

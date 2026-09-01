@@ -1906,10 +1906,44 @@ impl Rt {
         let fv = self.r(base);
         let r = self.invoke(fv, &held);
         self.pop_to(base);
-        Ok(match self.sched_hook {
+        let out = match self.sched_hook {
             Some(hook) => hook(self, r),
             None => r,
-        })
+        };
+        // THE THROW HAS TO SURVIVE THE SCHEDULER.
+        //
+        // With a scheduler present the call goes through `settle`, which takes
+        // the thrown value OFF `rt.thrown` and records it on the thread -- that
+        // is what makes a failed green thread joinable rather than a crash. A
+        // caller reaching in from outside then saw a successful call returning
+        // nil: `flint_call` checks `rt.failed()`, and it was no longer true.
+        //
+        // A sandbox with no ports never had a scheduler, so this never showed
+        // until a call could create one.
+        if !self.failed() {
+            if let Some(e) = self.thread_failure() {
+                self.thrown = e;
+            }
+        }
+        Ok(out)
+    }
+
+    /// The error a finished CALLING thread failed with, if it did.
+    fn thread_failure(&mut self) -> Option<Value> {
+        let s = self.roots.shared.singletons[crate::rt::SING_SCHED];
+        if s.is_nil() {
+            return None;
+        }
+        let ts = self.slot(s, crate::conc::SC_THREADS);
+        let th = self.vec_nth(ts, 0).unwrap_or(NIL);
+        if th.is_nil() {
+            return None;
+        }
+        if self.slot(th, crate::conc::TH_STATUS).as_fixnum() != crate::conc::ST_FAILED {
+            return None;
+        }
+        let e = self.slot(th, crate::conc::TH_RESULT);
+        if e.is_nil() { None } else { Some(e) }
     }
 }
 
