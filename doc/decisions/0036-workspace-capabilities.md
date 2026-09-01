@@ -118,6 +118,77 @@ it — the same three members become an explicit `NamespaceResolver` implementat
 That shape is already established here: `Rt::bridge_hook` is a function pointer
 the runtime installs, and the Rust SDK's `Driver` is a trait.
 
+### A namespace does not have to have source
+
+`reader` is one of two answers. The other is a **virtual namespace**: an
+interface that lists its vars, invokes them, and gets their values. Same surface
+a pod needs underneath, so a pod is one implementation of it rather than a
+special case beside it.
+
+```text
+namespace -> { workspace, identity, reader }              // source to compile
+namespace -> { workspace, identity, virtual }             // an interface
+```
+
+**The compiler needs the var list, and nothing else, to compile against one.**
+`resolve-sym` refuses any symbol not in `cc[:vars]`, and `:vars` is populated by
+reading each namespace's source. A virtual namespace populates the same map from
+`list`, and every existing check -- unknown var, missing `:require`, the alias
+message -- keeps working unchanged. That is the whole reason this fits: the
+compiler already has one place where "what names exist here" lives.
+
+**What differs is who binds the slot.** A var compiles to `VAR <slot>` either
+way (`emitter.cljc`), and for an ordinary namespace an initialiser binds that
+slot to the `defn`'s closure. A virtual namespace has no `defn`, so something
+must bind it at load time to a stub that invokes across a boundary. The compiler
+already generates synthetic namespaces for exactly this kind of job -- the check
+registry, and the entry shim -- and records why: a generated namespace is
+cheaper than a second path through the emitter, and it is ordinary flint a
+person can read in `--explain`.
+
+Tree shaking then works unchanged. A virtual var nothing reaches gets no stub,
+for the same reason an unreached `defn` ships no code.
+
+**Crossing it is crossing a bridge, so it carries data.** The stub's arguments
+and its result go through the wire codec, which means a virtual namespace's
+functions take and return DATA -- a closure cannot cross one (`0006`, `0025`).
+That is not a new rule, but it becomes visible in the language surface for the
+first time, and it should be said in the error rather than discovered.
+
+**Reaching it at run time is a capability**, and this is where the two halves of
+this file meet. Per `0027` a sandbox cannot manufacture a port; it is given one
+or it asks on the system port. So a virtual namespace's stub can only reach its
+implementation through a bridge the host granted -- which means requiring a
+virtual namespace IS requiring the authority to reach it, and the guard is the
+mechanism that makes that a decision rather than an inheritance.
+
+### The split that is easy to get wrong
+
+The resolver is a **compile-time** object. The invoke surface it describes is a
+**run-time** one. The shipped artifact cannot hold the resolver -- it holds
+stubs, and a way to reach what they stand for.
+
+So `virtual` has to answer two different questions: what the namespace CONTAINS,
+now, for the compiler; and how a running program REACHES it, later. Those are
+not the same field and should not pretend to be.
+
+### Open, on virtual namespaces
+
+* **Arities.** If `list` gives them, the compiler checks a call like any other.
+  If it gives only names, wrong-arity becomes a run-time error in a language
+  where it is otherwise a compile-time one. Leaning: require arities, and let an
+  implementation say "variadic, unchecked" explicitly rather than by omission.
+* **`get` on a non-function var**: a snapshot taken at load, or a live read each
+  time? They are different semantics and the interface should not leave it to
+  the implementation to decide silently.
+* **Macros.** A pod providing a macro would mean invoking the interface AT
+  COMPILE TIME, from inside the compiler. Babashka's pods do not, and allowing
+  it would put a live process in the middle of a build. Leaning no, stated.
+* Whether a virtual namespace can be `:require`d transitively by something that
+  does not know it is virtual. It should be indistinguishable at the call site
+  -- that is the point -- but the guard has to be checked at every edge, not
+  only the first.
+
 ### Why this is the fix and not a refactor
 
 **The COMPILER enforces the guard, at require-resolution time.** It has both
