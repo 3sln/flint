@@ -39,10 +39,16 @@ the requiring project made on purpose rather than one it inherited.
 
 ## Why this opens the door to babashka pods
 
-A pod becomes an ordinary dependency with `:pod/version x`. What makes that
-tractable is the guard, not the grant: we cannot regulate what a pod does
-internally — it is a process with its own authority — but we can regulate WHO IS
-ALLOWED TO DEPEND ON IT. A guard turns "this code can do anything" from a
+A pod becomes an ordinary dependency with `:pod/version x`, and an ordinary
+VIRTUAL NAMESPACE underneath -- the resolver flags it, the compiler wires it to
+the system port, and the protocol below is what travels. A pod is one
+implementation of that, not a shape invented for it, which is also the test of
+whether the protocol is right: if a pod needs something it does not carry, it is
+wrong.
+
+What makes it tractable is the guard, not the grant: we cannot regulate what a
+pod does internally (it is a process with its own authority), but we can regulate
+WHO IS ALLOWED TO DEPEND ON IT. A guard turns "this code can do anything" from a
 property of the build into a decision a project takes and records.
 
 That is a real and honest limit, stated rather than papered over: the guard is a
@@ -120,74 +126,95 @@ the runtime installs, and the Rust SDK's `Driver` is a trait.
 
 ### A namespace does not have to have source
 
-`reader` is one of two answers. The other is a **virtual namespace**: an
-interface that lists its vars, invokes them, and gets their values. Same surface
-a pod needs underneath, so a pod is one implementation of it rather than a
-special case beside it.
+`reader` is one of two answers. The other is a **flag**: this namespace is
+VIRTUAL. That is all the resolver says about it, and it is all the compiler needs
+from the resolver -- enough to decide what to emit, and nothing more.
 
 ```text
-namespace -> { workspace, identity, reader }              // source to compile
-namespace -> { workspace, identity, virtual }             // an interface
+namespace -> { workspace, identity, reader }     // source to compile
+namespace -> { workspace, identity, :virtual }   // a flag
 ```
 
-**The compiler needs the var list, and nothing else, to compile against one.**
-`resolve-sym` refuses any symbol not in `cc[:vars]`, and `:vars` is populated by
-reading each namespace's source. A virtual namespace populates the same map from
-`list`, and every existing check -- unknown var, missing `:require`, the alias
-message -- keeps working unchanged. That is the whole reason this fits: the
-compiler already has one place where "what names exist here" lives.
+The resolver deliberately does NOT carry an invoke surface. Resolving happens
+while compiling; invoking happens while running; a resolver that could do both
+would have to exist in the shipped artifact, and it does not.
 
-**What differs is who binds the slot.** A var compiles to `VAR <slot>` either
-way (`emitter.cljc`), and for an ordinary namespace an initialiser binds that
-slot to the `defn`'s closure. A virtual namespace has no `defn`, so something
-must bind it at load time to a stub that invokes across a boundary. The compiler
-already generates synthetic namespaces for exactly this kind of job -- the check
-registry, and the entry shim -- and records why: a generated namespace is
-cheaper than a second path through the emitter, and it is ordinary flint a
-person can read in `--explain`.
+**The wire-up is on the system port.** Seeing the flag, the compiler emits code
+that asks the system port for a port for that namespace, and compiles every form
+targeting it -- or an alias into it -- into blocking port operations that request
+the equivalent thing over that port.
 
-Tree shaking then works unchanged. A virtual var nothing reaches gets no stub,
-for the same reason an unreached `defn` ships no code.
+That is `open` (`0027`): a sandbox cannot manufacture a port, it asks on the
+system port and the host answers or refuses. So a virtual namespace costs no new
+run-time mechanism. It also means requiring one IS requiring the authority to
+reach it, which is what the guard above is for.
 
-**Crossing it is crossing a bridge, so it carries data.** The stub's arguments
-and its result go through the wire codec, which means a virtual namespace's
-functions take and return DATA -- a closure cannot cross one (`0006`, `0025`).
-That is not a new rule, but it becomes visible in the language surface for the
-first time, and it should be said in the error rather than discovered.
+**Blocking is fine and is the point.** A port operation parks the green thread
+and the scheduler runs something else; a call that parks is answered while it is
+outstanding (`0025` step 5). A virtual call looks synchronous in the source and
+is not synchronous in the runtime, which is the same trade every other port
+operation makes.
 
-**Reaching it at run time is a capability**, and this is where the two halves of
-this file meet. Per `0027` a sandbox cannot manufacture a port; it is given one
-or it asks on the system port. So a virtual namespace's stub can only reach its
-implementation through a bridge the host granted -- which means requiring a
-virtual namespace IS requiring the authority to reach it, and the guard is the
-mechanism that makes that a decision rather than an inheritance.
+## The protocol
 
-### The split that is easy to get wrong
+Request/response over one port per virtual namespace, correlated by id --
+which is exactly what `flint.rpc` already is (`client`, `call`, a reader thread,
+`:id` correlation, `:error` thrown rather than returned as data). The protocol
+below is what goes over it.
 
-The resolver is a **compile-time** object. The invoke surface it describes is a
-**run-time** one. The shipped artifact cannot hold the resolver -- it holds
-stubs, and a way to reach what they stand for.
+```text
+->  {:op :invoke :var f :args [...]}     <-  {:body v}  |  {:error {...}}
+->  {:op :get    :var x}                 <-  {:body v}
+->  {:op :list}                          <-  {:body [{:name f :arities [...]}]}
+```
 
-So `virtual` has to answer two different questions: what the namespace CONTAINS,
-now, for the compiler; and how a running program REACHES it, later. Those are
-not the same field and should not pretend to be.
+`:list` is not needed to CALL anything; it is there so a build or a tool can ask
+what a namespace holds. Whether the build asks is the open question below.
+
+**It carries data.** Arguments and results cross a bridge, so they go through the
+wire codec: a closure cannot cross one (`0006`, `0025`). Not a new rule, but a
+virtual namespace is the first place it becomes visible in the language surface,
+and the refusal should say so rather than leave it to be discovered.
+
+### The one thing that has to be decided first: are the var names known?
+
+The flag is enough to choose what to emit. It is not enough to know whether
+`(vns/f x)` should compile at all, and that fork is worth taking deliberately.
+
+**If the names are known at build time** -- declared in `deps.edn` beside the
+`:pod/version`, or fetched once and cached -- then the compiler generates a stub
+namespace: one `defn` per var, each an `rpc/call`. Three things follow, and they
+are all good. `resolve-sym` keeps working untouched, so an unknown var stays a
+COMPILE error with the message it has today. Arities are checked like any other
+call. And there is no new emitter path at all -- the stub is ordinary flint
+source, which is the same trick the check registry and the entry shim already
+use, and which that code records as cheaper than a second path through the
+emitter.
+
+**If the names are not known** then every call site emits an inline request,
+unknown-var becomes a RUN-TIME error in a language where it is otherwise a
+compile-time one, and `vns/f` used as a value -- passed to `map`, say -- has to
+synthesise a function with no arity to give it.
+
+Leaning strongly to **known at build time, declared rather than fetched**:
+fetching means a live process in the middle of a build, and the whole reason
+this file exists is to make what a dependency can do a thing you can read.
 
 ### Open, on virtual namespaces
 
-* **Arities.** If `list` gives them, the compiler checks a call like any other.
-  If it gives only names, wrong-arity becomes a run-time error in a language
-  where it is otherwise a compile-time one. Leaning: require arities, and let an
-  implementation say "variadic, unchecked" explicitly rather than by omission.
-* **`get` on a non-function var**: a snapshot taken at load, or a live read each
-  time? They are different semantics and the interface should not leave it to
-  the implementation to decide silently.
-* **Macros.** A pod providing a macro would mean invoking the interface AT
-  COMPILE TIME, from inside the compiler. Babashka's pods do not, and allowing
-  it would put a live process in the middle of a build. Leaning no, stated.
-* Whether a virtual namespace can be `:require`d transitively by something that
-  does not know it is virtual. It should be indistinguishable at the call site
-  -- that is the point -- but the guard has to be checked at every edge, not
-  only the first.
+* Whether the port is opened at LOAD time by the stub namespace's initialiser,
+  or lazily on first use. Load time is simpler and matches "initialisers run
+  once"; lazy means a program that never calls into the pod never asks for the
+  authority, which is a real difference for a guard.
+* `:get` on a var: a snapshot taken when the port opens, or a read each time?
+  Different semantics, and the interface should not leave an implementation to
+  choose silently.
+* **Macros.** A pod providing one means invoking at COMPILE time, from inside
+  the compiler, which is the live-process-in-the-build problem again. Babashka's
+  pods do not. Leaning no, stated rather than merely absent.
+* A virtual namespace required transitively by something that does not know it
+  is virtual. Indistinguishable at the call site is the point, but the guard has
+  to be checked at every edge rather than only the first.
 
 ### Why this is the fix and not a refactor
 
@@ -252,7 +279,13 @@ being careful.
    way tags already are.
 3. `:flint/capabilities-guard`, checked when resolving a `:require` across a
    project boundary — the one new rule in the resolver.
-4. Pods as a dependency kind, behind the guard.
+4. **Virtual namespaces**: the resolver's flag, the protocol above over one
+   port per namespace, and the generated stub namespace that turns each var into
+   an `rpc/call`. Independent of grants and guards -- a virtual namespace is
+   useful without them -- but it is what makes a pod expressible. Decide the
+   names question first; everything else follows from it.
+5. Pods as a dependency kind: one implementation of the virtual interface,
+   behind a guard.
 
 ## What is undecided
 
