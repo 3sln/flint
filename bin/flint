@@ -606,7 +606,8 @@
   run yourself is a build command wearing the wrong name."
   [wasm]
   (let [p (.start (ProcessBuilder.
-                   (into-array String ["node" (str root "/host/flint.mjs") wasm])))
+                   (into-array String ["node" (str root "/host/flint.mjs") wasm
+                                       "flint.check.registry/run"])))
         out (slurp (.getInputStream p))
         err (slurp (.getErrorStream p))]
     (.waitFor p)
