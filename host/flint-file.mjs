@@ -3,7 +3,12 @@
 import { readFileSync } from 'fs';
 import { instantiate } from './flint.mjs';
 
-const [, , wasmPath, argPath] = process.argv;
+const [, , wasmPath, argPath, fnArg] = process.argv;
+// THE FUNCTION, named. A module has no entry point (`doc/decisions/0025`
+// step 5). Every caller of this file compiles `flint.selfhost/main` -- it is
+// what `bin/build-dist`, `bin/flint` and `test/selfhost.clj` all build -- so it
+// is the default rather than something three call sites repeat.
+const fn = fnArg ?? 'flint.selfhost/main';
 const bytes = readFileSync(wasmPath);
 const module = await WebAssembly.compile(bytes);
 const inst = instantiate(module);
@@ -12,9 +17,8 @@ const inst = instantiate(module);
 // `memory access out of bounds` with nothing pointing at the cap. The compiler
 // grew past it the day it started carrying the wasm writer.
 if (inst.exports.set_memory_limit) inst.exports.set_memory_limit(3_000_000_000);
-const { main } = inst;
 const arg = readFileSync(argPath, 'utf8');
-const r = main(arg);
+const r = inst.run(fn, [arg]);
 // `process.exit` does not flush an async write to a pipe: anything past the
 // pipe buffer (64 KiB here) is silently lost. Set the code and let node drain.
 process.exitCode = r.code;

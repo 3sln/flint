@@ -23,7 +23,7 @@ function runOnce(i, which) {
   new Uint8Array(e.memory.buffer).set(img, p);
   const rc = e.flint_load_image(p, img.length);
   if (rc !== 0) throw new Error('image load failed: ' + rc);
-  const code = e.main();
+  const code = wireCall(e, FN);
   const out = new TextDecoder().decode(
     new Uint8Array(e.memory.buffer, e.out_ptr(), e.out_len()));
   return { code, out };
@@ -48,3 +48,25 @@ export default {
     }), { headers: { 'content-type': 'application/json' } });
   },
 };
+
+// `[name []]` in the wire format, written by hand: these drivers use nothing but
+// a `WebAssembly.Instance` on purpose (`doc/decisions/0018`), so there is no SDK
+// to encode for them, and nothing is called automatically any more
+// (`doc/decisions/0025` step 5).
+function wireCall(e, fn) {
+  var enc = function (s) {
+    var u = new TextEncoder().encode(s);
+    var b = [5];                                     // K_STRING
+    for (var i = 0; i < 4; i++) b.push((u.length >> (8 * i)) & 0xff);
+    return b.concat(Array.prototype.slice.call(u));
+  };
+  var call = [8, 2, 0, 0, 0]                         // K_VECTOR, 2 items
+    .concat(enc(fn))
+    .concat([8, 0, 0, 0, 0]);                        // K_VECTOR, no arguments
+  var b = Uint8Array.from(call);
+  var p = e.arg_alloc(b.length);
+  new Uint8Array(e.memory.buffer).set(b, p);
+  return e.flint_call(p, b.length);
+}
+
+const FN = 'construe.bench.xrt25/main';
