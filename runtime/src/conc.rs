@@ -65,7 +65,19 @@ pub const TH_TOKEN: u32 = 10;
 /// scheduler uses it to say "the other end of your port is gone" in the thread
 /// that cares rather than in whichever thread noticed.
 pub const TH_FAIL: u32 = 11;
-pub const TH_LEN: u32 = 12;
+/// Arguments for the thread's entry, or nil for the no-argument case a
+/// `spawn` makes. A CALL from the host arrives with them
+/// (`doc/decisions/0025`), and a green thread is what runs it -- the called
+/// function may open a port and park, and a call that ran on the host's stack
+/// could not.
+pub const TH_ARGS: u32 = 12;
+/// The transaction id of the CALL this thread is answering, or -1.
+///
+/// A thread with one sends its result back on the system port when it finishes,
+/// which is the whole of "nothing is called automatically": there is no entry
+/// point the runtime invokes, only calls the host asks for and answers it gets.
+pub const TH_TX: u32 = 13;
+pub const TH_LEN: u32 = 14;
 
 pub const ST_NEW: i64 = 0;
 pub const ST_RUNNABLE: i64 = 1;
@@ -352,15 +364,29 @@ impl Rt {
         self.set(self.r(si), SC_CURRENT, Value::fixnum(0));
         // The running thread becomes thread 0. Its stack is the live one, so it
         // has nothing saved until it parks.
+        //
+        // UNLESS NOTHING IS RUNNING. A scheduler can now be created before any
+        // program has started -- a host that installs a port at construction
+        // makes one (`doc/decisions/0027`) -- and then thread 0 represents no
+        // stack at all. Left RUNNABLE it would be picked, restored from a
+        // `TH_STACK` of nil, and run off the end of an empty value stack. An
+        // empty frame stack is what says which case this is.
         let th = self.new_obj(TY_THREAD, TH_LEN);
         if th.is_nil() {
             self.pop_to(base);
             return NIL;
         }
         let ti = self.push(th);
-        self.set(self.r(ti), TH_STATUS, Value::fixnum(ST_RUNNABLE));
+        let running = !self.frames.is_empty();
+        self.set(
+            self.r(ti),
+            TH_STATUS,
+            Value::fixnum(if running { ST_RUNNABLE } else { ST_DONE }),
+        );
         self.set(self.r(ti), TH_ID, Value::fixnum(0));
         self.set(self.r(ti), TH_TOKEN, Value::fixnum(-1));
+        self.set(self.r(ti), TH_ARGS, NIL);
+        self.set(self.r(ti), TH_TX, Value::fixnum(-1));
         let empty = self.empty_map();
         self.set(self.r(ti), TH_BINDINGS, empty);
         let ts = self.empty_vec();
@@ -647,6 +673,8 @@ impl Rt {
         self.set(self.r(ti), TH_STATUS, Value::fixnum(ST_NEW));
         self.set(self.r(ti), TH_ID, Value::fixnum(id));
         self.set(self.r(ti), TH_TOKEN, Value::fixnum(-1));
+        self.set(self.r(ti), TH_ARGS, NIL);
+        self.set(self.r(ti), TH_TX, Value::fixnum(-1));
         let ff = self.r(fi);
         self.set(self.r(ti), TH_ENTRY, ff);
         // Inherit a SNAPSHOT of the spawner's dynamic bindings, as Clojure
@@ -1478,6 +1506,7 @@ fn settle(rt: &mut Rt, result: Value) {
         rt.frames.clear();
         rt.handlers.clear();
         rt.roots.stack_top = 0;
+        answer_if_call(rt, rt.r(ti), true);
     } else {
         let ri = rt.push(result);
         rt.set(rt.r(ti), TH_STATUS, Value::fixnum(ST_DONE));
@@ -1489,8 +1518,27 @@ fn settle(rt: &mut Rt, result: Value) {
         rt.frames.clear();
         rt.handlers.clear();
         rt.roots.stack_top = 0;
+        answer_if_call(rt, rt.r(ti), false);
     }
     rt.pop_to(base);
+}
+
+/// A thread that was answering a CALL sends its result back on the system port.
+///
+/// This is where "nothing is called automatically" gets its other half: a call
+/// arrives as a message, runs as a thread, and its answer leaves as a message
+/// carrying the same `:tx`. A thread nobody asked for -- an ordinary `spawn` --
+/// has `TH_TX` of -1 and says nothing.
+fn answer_if_call(rt: &mut Rt, th: Value, threw: bool) {
+    let tx = fx(rt.slot(th, TH_TX));
+    if tx < 0 {
+        return;
+    }
+    // Cleared FIRST, so a thread cannot answer twice however it is settled
+    // again.
+    rt.set(th, TH_TX, Value::fixnum(-1));
+    let r = rt.slot(th, TH_RESULT);
+    rt.answer_call(tx, r, threw);
 }
 
 /// Round-robin from just after the current thread. Deterministic by
@@ -1568,9 +1616,11 @@ fn run_one(rt: &mut Rt, i: u32) {
         rt.handlers.clear();
         rt.roots.stack_top = 0;
         let f = rt.slot(rt.r(ti), TH_ENTRY);
+        let a = rt.slot(rt.r(ti), TH_ARGS);
         rt.set(rt.r(ti), TH_STATUS, Value::fixnum(ST_RUNNABLE));
         rt.set(rt.r(ti), TH_ENTRY, NIL);
-        rt.run_thread_entry(f)
+        rt.set(rt.r(ti), TH_ARGS, NIL);
+        rt.run_thread_entry(f, a)
     } else {
         let t = rt.r(ti);
         rt.restore_state(t);
@@ -1733,14 +1783,33 @@ fn main_result(rt: &mut Rt) -> Value {
 
 impl Rt {
     /// Start a thread's entry closure with the frame stack empty.
-    fn run_thread_entry(&mut self, f: Value) -> Value {
+    /// Start a thread's entry closure with the frame stack empty.
+    ///
+    /// `args` is nil for a `spawn`, which takes a function of no arguments, and
+    /// a vector for a CALL the host asked for (`doc/decisions/0025`).
+    fn run_thread_entry(&mut self, f: Value, args: Value) -> Value {
         if !self.is_callable(f) {
             self.throw_str("ClassCastException", "spawn wants a function of no arguments");
             return NIL;
         }
+        // NOTHING IS PUSHED AS A ROOT HERE. The root stack and the value stack
+        // are the same stack, and `enter` takes the callee's frame from
+        // `callee_at` upward -- so a root pushed first would be read as an
+        // argument, and the extra entries left behind would underflow `vpop`.
+        // `run_one` empties the stack before calling this for exactly that
+        // reason.
+        //
+        // `f` and `args` are therefore Rust locals across `vec_nth`, which
+        // walks a trie and does not allocate. The original code held `f` the
+        // same way.
+        let n = if self.is_vector(args) { self.vec_count(args) } else { 0 };
         let callee_at = self.roots.stack_top;
         self.vpush(f);
-        if !self.enter(f, callee_at, 0) {
+        for k in 0..n {
+            let a = self.vec_nth(args, k).unwrap_or(NIL);
+            self.vpush(a);
+        }
+        if !self.enter(f, callee_at, n as usize) {
             self.roots.stack_top = callee_at;
             return NIL;
         }
@@ -2329,6 +2398,187 @@ impl Rt {
         true
     }
 
+    /// A message on the SYSTEM PORT is a request to the runtime, not a message
+    /// for the guest (`doc/decisions/0025`, `0027`).
+    ///
+    /// The guest cannot name the system port, so nothing there could ever
+    /// receive one. This is where the host asks for work instead:
+    ///
+    /// ```text
+    /// {:tx n :op :call :fn "ns/name" :args [...]}
+    /// ```
+    ///
+    /// and gets back, on the same port and carrying the same `:tx`:
+    ///
+    /// ```text
+    /// {:tx n :op :return :value v}
+    /// {:tx n :op :throw  :kind "..." :message "..."}
+    /// ```
+    ///
+    /// **A call runs as a GREEN THREAD**, which is the whole reason this is not
+    /// a function the host calls straight through. The called function may open
+    /// a port and park, and the host has to be able to answer that while the
+    /// call is still outstanding -- a call on the host's stack could not park at
+    /// all. It also means several calls can be in flight at once, told apart by
+    /// their `:tx`, and `settle` sends each answer as its thread finishes.
+    ///
+    /// There is no entry point the runtime invokes. `main` was one, and it is
+    /// gone: nothing runs until somebody asks for it by name.
+    fn system_message(&mut self, msg: Value) -> bool {
+        let base = self.mark();
+        let mi = self.push(msg);
+        let k_tx = self.keyword(None, "tx");
+        let tx = self.map_get(self.r(mi), k_tx, NIL);
+        let k_op = self.keyword(None, "op");
+        let op = self.map_get(self.r(mi), k_op, NIL);
+        let k_call = self.keyword(None, "call");
+        if op != k_call {
+            self.pop_to(base);
+            return false;
+        }
+        let k_fn = self.keyword(None, "fn");
+        let namev = self.map_get(self.r(mi), k_fn, NIL);
+        let mut b = crate::rt::sbuf();
+        let name: alloc::string::String = match self.as_str(namev, &mut b) {
+            Some(n) => n.into(),
+            None => {
+                self.pop_to(base);
+                return false;
+            }
+        };
+        let k_args = self.keyword(None, "args");
+        let args = self.map_get(self.r(mi), k_args, NIL);
+        let ai = self.push(args);
+        // The initialisers run ONCE, on the first call rather than at load: a
+        // sandbox serves many calls and the state a program sets up must not be
+        // rebuilt per call.
+        if !self.ensure_started() {
+            let txv = fx(tx);
+            self.pop_to(base);
+            self.answer_call(txv, NIL, true);
+            return true;
+        }
+        let idx = match self.var_named(&name) {
+            Some(i) => i,
+            None => {
+                let txv = fx(tx);
+                self.pop_to(base);
+                let msg = alloc::format!("this module has no `{name}`");
+                self.throw_str("IllegalArgumentException", &msg);
+                self.answer_call(txv, NIL, true);
+                return true;
+            }
+        };
+        let f = self.roots.shared.globals.get(idx as usize).map_or(NIL, |g| g.get());
+        if f.is_nil() || !self.is_callable(f) {
+            let txv = fx(tx);
+            self.pop_to(base);
+            let msg = alloc::format!("`{name}` is not a function");
+            self.throw_str("IllegalArgumentException", &msg);
+            self.answer_call(txv, NIL, true);
+            return true;
+        }
+        let fi = self.push(f);
+        let fv = self.r(fi);
+        let th = self.spawn_thread(fv);
+        if th.is_nil() {
+            self.pop_to(base);
+            return false;
+        }
+        let thi = self.push(th);
+        let av = self.r(ai);
+        self.set(self.r(thi), TH_ARGS, av);
+        self.set(self.r(thi), TH_TX, tx);
+        self.pop_to(base);
+        true
+    }
+
+    /// Send a call's answer back on the system port, carrying its `:tx`.
+    fn answer_call(&mut self, tx: i64, value: Value, threw: bool) {
+        let sys = self.system_port();
+        if sys.is_nil() {
+            return;
+        }
+        let base = self.mark();
+        let si = self.push(sys);
+        let vi = self.push(value);
+        let mut m = self.empty_map();
+        let mi = self.push(m);
+        let k = self.keyword(None, "tx");
+        m = self.map_assoc(self.r(mi), k, Value::fixnum(tx));
+        self.set_r(mi, m);
+        let k = self.keyword(None, "op");
+        let opv = self.keyword(None, if threw { "throw" } else { "return" });
+        m = self.map_assoc(self.r(mi), k, opv);
+        self.set_r(mi, m);
+        if threw {
+            // The thrown value is rendered into two strings rather than sent as
+            // itself: an exception is an object with a stack in it, and what
+            // crosses a boundary is data (`doc/decisions/0006`).
+            let e = if self.failed() { self.clear_error() } else { self.r(vi) };
+            let ei = self.push(e);
+            let kindv = self.ex_kind(self.r(ei));
+            let msgv = self.ex_message(self.r(ei));
+            let kvi = self.push(kindv);
+            let mvi = self.push(msgv);
+            let k = self.keyword(None, "kind");
+            let kv = self.r(kvi);
+            m = self.map_assoc(self.r(mi), k, kv);
+            self.set_r(mi, m);
+            let k = self.keyword(None, "message");
+            let mv = self.r(mvi);
+            m = self.map_assoc(self.r(mi), k, mv);
+            self.set_r(mi, m);
+        } else {
+            let k = self.keyword(None, "value");
+            let vv = self.r(vi);
+            m = self.map_assoc(self.r(mi), k, vv);
+            self.set_r(mi, m);
+        }
+        let payload = self.r(mi);
+        match self.encode(payload) {
+            Ok(b) => {
+                let len = b.len() as i64;
+                let bv = self.new_bytes(&b);
+                let bi = self.push(bv);
+                let id = fx(self.slot(self.r(si), PT_ID));
+                let pv = self.r(bi);
+                self.push_event(EV_MESSAGE, id, len, pv);
+            }
+            Err(_) => {
+                // A value the wire cannot carry: say so, rather than dropping
+                // the answer and leaving the caller waiting for ever.
+                let mut m2 = self.empty_map();
+                let m2i = self.push(m2);
+                let k = self.keyword(None, "tx");
+                m2 = self.map_assoc(self.r(m2i), k, Value::fixnum(tx));
+                self.set_r(m2i, m2);
+                let k = self.keyword(None, "op");
+                let ov = self.keyword(None, "throw");
+                m2 = self.map_assoc(self.r(m2i), k, ov);
+                self.set_r(m2i, m2);
+                let k = self.keyword(None, "kind");
+                let kv = self.string("IllegalArgumentException");
+                m2 = self.map_assoc(self.r(m2i), k, kv);
+                self.set_r(m2i, m2);
+                let k = self.keyword(None, "message");
+                let mv = self.string("this answer cannot cross a bridge");
+                m2 = self.map_assoc(self.r(m2i), k, mv);
+                self.set_r(m2i, m2);
+                let payload = self.r(m2i);
+                if let Ok(b) = self.encode(payload) {
+                    let len = b.len() as i64;
+                    let bv = self.new_bytes(&b);
+                    let bi = self.push(bv);
+                    let id = fx(self.slot(self.r(si), PT_ID));
+                    let pv = self.r(bi);
+                    self.push_event(EV_MESSAGE, id, len, pv);
+                }
+            }
+        }
+        self.pop_to(base);
+    }
+
     /// Put a message into a bridge from the host's side. Wakes a parked
     /// receiver; it does not run anything.
     ///
@@ -2409,6 +2659,22 @@ impl Rt {
                 return false;
             }
         };
+        // THE SYSTEM PORT IS THE RUNTIME'S. A message there is a request to it,
+        // not a message for the guest -- the guest cannot name the port, so
+        // nothing could ever receive one. The bytes are given straight back:
+        // the request is consumed now, so it holds no queue.
+        {
+            let sys = self.system_port();
+            let here = self.r(pi);
+            if !sys.is_nil() && sys == here {
+                let vi = self.push(v);
+                let mv = self.r(vi);
+                let ok = self.system_message(mv);
+                give_back!();
+                self.pop_to(base);
+                return ok;
+            }
+        }
         let vi = self.push(v);
         // `[len value]`, because the refund has to be the number that was
         // CHARGED and nothing about a decoded value says what that was. A mark

@@ -489,3 +489,86 @@ fn a_keyword_crosses_a_bridge_inbound() {
         );
     }
 }
+
+/// A CALL is a message on the system port, and its answer is one too
+/// (`doc/decisions/0025` step 5).
+///
+/// Nothing here invokes an entry point. The host asks for a function by name,
+/// the runtime runs it as a green thread, and the result comes back on the same
+/// port carrying the same `:tx`.
+#[test]
+fn a_call_arrives_as_a_message_and_answers_as_one() {
+    let mut b = Build::new();
+    // `(defn answer [x] x)` -- an identity, so the argument's round trip is
+    // visible in the reply. A VAR, because a call is looked up by name in the
+    // var table, and an initialiser that sets it, because that is how a program
+    // binds one.
+    let fvar = {
+        let c = b.w.k_string("mod/answer");
+        b.w.add_var(c)
+    };
+    let body = {
+        let mut a = Asm::new();
+        a.op(op::LOCAL).u8v(0);
+        a.op(op::RETURN);
+        a.done()
+    };
+    let n = b.w.k_string("answer");
+    let f = b.w.add_fn(n, 1, false, 4, &body);
+    let init_body = {
+        let mut a = Asm::new();
+        a.op(op::CLOSURE).u16v(f as u16).u8v(0);
+        a.op(op::SET_VAR).u16v(fvar as u16);
+        a.op(op::NIL).op(op::RETURN);
+        a.done()
+    };
+    let n2 = b.w.k_string("init");
+    let init = b.w.add_fn(n2, 0, false, 4, &init_body);
+    b.w.init.push(init);
+    b.w.entry = f;
+    let bytes = b.w.finish();
+    let mut rt = b.rt;
+    assert!(rt.load_image(&bytes), "image did not load");
+    let l = rt.string("system");
+    rt.install_system_port(SYSTEM, l);
+
+    // {:tx 7 :op :call :fn "mod/answer" :args ["hello"]}
+    let call = {
+        let mut w = flint_rt::codec::Wire::new();
+        w.map(4);
+        w.keyword(None, "tx");
+        w.int(7);
+        w.keyword(None, "op");
+        w.keyword(None, "call");
+        w.keyword(None, "fn");
+        w.string("mod/answer");
+        w.keyword(None, "args");
+        w.vector(1);
+        w.string("hello");
+        w.done()
+    };
+    assert!(rt.host_deliver(SYSTEM, &call), "the system port took the call");
+    let _ = rt.resume();
+    let mut evs = drain(&mut rt);
+    for _ in 0..4 {
+        if evs.iter().any(|e| e.kind == conc::EV_MESSAGE as u32) {
+            break;
+        }
+        let _ = rt.resume();
+        evs.extend(drain(&mut rt));
+    }
+    let reply = evs
+        .iter()
+        .find(|e| e.kind == conc::EV_MESSAGE as u32)
+        .unwrap_or_else(|| panic!("no answer came back: {evs:?}"));
+    let v = rt.decode(&reply.payload).expect("the answer decodes");
+    let k = rt.keyword(None, "tx");
+    assert_eq!(rt.map_get(v, k, NIL).as_fixnum(), 7, "the answer carries its tx");
+    let k = rt.keyword(None, "op");
+    let want = rt.keyword(None, "return");
+    assert_eq!(rt.map_get(v, k, NIL), want, "and says it returned");
+    let k = rt.keyword(None, "value");
+    let got = rt.map_get(v, k, NIL);
+    let mut sb = flint_rt::rt::sbuf();
+    assert_eq!(rt.as_str(got, &mut sb), Some("hello"), "and carries the value");
+}
