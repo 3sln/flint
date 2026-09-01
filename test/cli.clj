@@ -65,10 +65,9 @@
 (def driver
   (str "import('./host/flint.mjs').then(async (m) => {"
        "const {fsCapability} = await import('./host/fs.mjs');"
-       "const {codec} = await import('./host/edn.mjs');"
        "const {module} = await m.load('out/cli.wasm');"
        "const i = m.instantiate(module);"
-       "if (process.argv[1] === 'grant') i.capabilities({fs: fsCapability(process.argv[2], codec)});"
+       "if (process.argv[1] === 'grant') i.capabilities({fs: fsCapability(process.argv[2])});"
        "const r = i.main(...process.argv.slice(3));"
        "process.stdout.write(r.out);})"))
 
@@ -107,14 +106,22 @@
 ;; capability model worth anything: it applies to the tool as much as to what
 ;; the tool runs.
 (check-that "with no :fs grant, the CLI can read nothing"
-            ;; `refused to open`, not `refused the capability`: the cutover
-            ;; took the word out of the sandbox, which does not have the
-            ;; concept. What refuses is a host that was handed no handler for
-            ;; the name, and it says so in those terms. The PROPERTY is
-            ;; unchanged and is what this row is for -- the CLI has no ambient
+            ;; TWO refusals now, and which one you get says something real
+            ;; (`doc/decisions/0027`). A host that lent SOMETHING installs a
+            ;; system port, so an `open` it does not recognise comes back
+            ;; "refused to open". A host that lent NOTHING installs none, and
+            ;; the sandbox has no way to ask anybody anything -- which is the
+            ;; stronger statement and the one this row gets, because the driver
+            ;; calls `capabilities` only when granting.
+            ;;
+            ;; Neither says "refused the capability": the cutover took that word
+            ;; out of the sandbox, which does not have the concept. The PROPERTY
+            ;; is what this row is for and is unchanged -- the CLI has no ambient
             ;; authority, so it applies to the tool as much as to what the tool
             ;; runs.
-            (str/includes? (cli false "paths") "refused to open \"fs\""))
+            (let [o (cli false "paths")]
+              (or (str/includes? o "refused to open \"fs\"")
+                  (str/includes? o "no system port, so it cannot ask for \"fs\""))))
 (check "  ... but the commands that need no project still work"
        (cli false "version") "0.1.0")
 

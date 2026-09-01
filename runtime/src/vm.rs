@@ -1766,23 +1766,57 @@ impl Rt {
         // wrong argument. See `doc/HANDOFF.md`.
         let base = self.mark();
         let ai = self.push(args);
+        // INITIALISERS RUN WITHOUT PREEMPTION.
+        //
+        // A slice is armed the moment a scheduler exists, and a scheduler can
+        // exist before this function is ever entered -- a host that installs a
+        // port at construction (`doc/decisions/0027`) creates one. The loop
+        // below then ran namespace initialisers under a live slice, and a yield
+        // inside one is DISCARDED here (`let _ =`): the thread came back with
+        // `park_on` still set, `settle` read it as a yield, saved a half-built
+        // state and never recorded the entry's value. The run reported "the
+        // entry function did not return a string", and it reported it for a
+        // program whose entry was `(defn main [_] "constant")`.
+        //
+        // There is nothing to preempt here anyway: no other thread can be
+        // runnable until the program has been initialised.
+        let slice = self.slice_end;
+        self.set_slice_end(0);
         for i in 0..self.image.init.len() {
             let f = self.image.init[i];
             let c = self.make_closure(f, &[]);
             let _ = self.invoke(c, &[]);
             if self.failed() {
+                self.set_slice_end(slice);
                 self.pop_to(base);
                 return NIL;
             }
         }
+        // Re-armed for the ENTRY, which may legitimately park: it is invoked
+        // with the frame stack empty, so a park there is one `settle` handles.
+        self.set_slice_end(slice);
         let entry = self.image.entry;
         let c = self.make_closure(entry, &[]);
-        let args = self.r(ai);
-        self.pop_to(base);
+        // ROOTED ACROSS THE CALL, both of them.
+        //
+        // This used to `pop_to(base)` first and then pass two Rust locals into
+        // `invoke`, which allocates a frame before it roots anything -- so a
+        // collection there left the entry closure and the argument vector
+        // pointing into the abandoned semispace. It is the same mistake the
+        // comment at the top of this function describes, one line further down,
+        // and it survived because it needs a collection to land inside that
+        // window: a program whose entry ran with no scheduler never allocated
+        // enough to see it. Installing a port before `main` changed the timing
+        // and it became reproducible -- the entry returned nil, `settle`
+        // recorded nil, and the run reported "the entry function did not return
+        // a string".
+        let ci = self.push(c);
+        let (cv, av) = (self.r(ci), self.r(ai));
         // `invoke` enters with the frame stack empty, so `run`'s `base_depth`
         // is 0 and the entry *can* park. Anything deeper -- a comparator, a
         // lazy-seq force -- re-enters with Rust frames underneath and cannot.
-        let r = self.invoke(c, &[args]);
+        let r = self.invoke(cv, &[av]);
+        self.pop_to(base);
         match self.sched_hook {
             // Only ever `Some` in a module that reached the concurrency unit.
             Some(f) => f(self, r),

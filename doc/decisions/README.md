@@ -32,7 +32,7 @@ for the first.
 | [0023](0023-construe-integration-bar.md) | What "ready for construe" means, concretely | **Live.** The milestone the current work is aimed at |
 | [0025](0025-structured-ports.md) | A wire codec, and structured ports | **Roadmap.** Reverses 0006's no-transfer rule, which left the door open |
 | [0026](0026-tables.md) | Tables: columnar storage that is a value | **Partly shipped.** Steps 1-6: the value type, row refs, `assoc`/`conj`/`migrate`, the constant column encoding. 12x smaller resident than a vector of maps and 2.6x cheaper to scan; a constant column costs nothing per row; dropping a column from 50 000 rows costs 218 gas. The transient, the column API and the codec tag are not built, and nor is the JVM/CLR port |
-| [0027](0027-ports-are-the-hosts.md) | Ports belong to the host, not to a sandbox | **Queued.** Local ports stay by-reference; global ones encode, and the encode is the GC boundary |
+| [0027](0027-ports-are-the-hosts.md) | Ports belong to the host, not to a sandbox | **Shipped**, all four runtimes. One `K_BRIDGE` and no host port; `open` is a request on the system port; handles interned per host id and reference-counted by HOLDERS; the codec runs at the bridge and the guest has none. Weak-table fixup through a copy, and codec back-references, are not built |
 | [0030](0030-clr-runtime.md) | The CLR runtime | **Partly shipped.** Self-hosts byte for byte, all 155 builtins, threads, AOT to IL at 1.8x, all nine conformance cases |
 | [0031](0031-a-vec-of-values-is-not-a-root.md) | A `Vec<Value>` is not a root | **Shipped.** `array-map` gathered values into a Rust vector across calls that collect, so a big map literal from a lazy seq wrote stale pointers. It broke self-hosting. Same fault found and fixed in the codec |
 | [0032](0032-checks.md) | Checks that cost nothing in the build that ships | **Shipped.** `#?(:flint/check ...)` on by default, removed by `:optimize [perf]` before the source is read. A `Predicate` protocol that dispatches on the value, so a predicate in a local explains itself. `^:flint.check/test` collected by the compiler; `flint test` on both CLIs; 53 checks on all four runtimes |
@@ -96,12 +96,6 @@ what remains, and what each thing is waiting on.
     a no-op refactor. Wanted BEFORE the SDKs are published, because `call`
     cannot stop being synchronous afterwards.
 
-13. **Ports belong to the host** (`0027`) — a global port's registry moves out
-    of the sandbox, the system channel is passed IN, and creating one becomes a
-    dispatch. Local ports are untouched and still pass by reference. Needed
-    before `0025`'s system port is built, because building it sandbox-local
-    would be building the thing this replaces.
-
 **Closed, with the result rather than the plan:**
 
 - ~~**AOT** (`0013`)~~ — **built, measured, shelved; correct as of 2026-08-28.**
@@ -117,6 +111,15 @@ what remains, and what each thing is waiting on.
 - ~~**Cross-runtime benchmarks**~~ (`0018`) — eight engines.
 - ~~**The port bug**~~ — `../HANDOFF.md` is now a post-mortem, not live state.
   Its five rules are the standard the work is held to.
+- ~~**Ports belong to the host** (`0027`)~~ — shipped on all four runtimes. One
+  `K_BRIDGE` and no host port at all; `open` is a request on the system port;
+  handles interned per host id so a port delivered four times is one object with
+  one retain and one release; the codec runs at the bridge in both directions
+  and the guest has none. **It was marked "Queued — nothing exists yet" while
+  half of it was already built and unreachable** (`system_port()` had zero
+  callers on three runtimes), which is the understating direction the note below
+  warns about, and it cost a wire-port path that was granted permission on the
+  JVM and CLR and then refused by their own send.
 
 ## How to read this directory
 
@@ -126,4 +129,9 @@ what remains, and what each thing is waiting on.
 - A **roadmap** file carries a NOT BUILT banner at the top, and a **shipped**
   one says so in the same place. Either kind of disagreement between a file's
   banner and its row here is a bug in this index — including the direction that
-  understates what exists, which is the one that gets something rebuilt.
+  understates what exists, which is the one that gets something rebuilt. `0027`
+  is the worked example: it read "QUEUED — nothing in this file exists yet"
+  through the whole period in which half of it was built, so the tree carried
+  two generations of the port model at once and the newer one had no callers.
+  **Check the banner against the code when you touch a file, not when you
+  finish it.**

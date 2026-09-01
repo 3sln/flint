@@ -499,7 +499,7 @@ impl Program {
         let p = if system {
             self.rt.install_system_port(port_id as i64, l)
         } else {
-            self.rt.install_bridge_port(port_id as i64, l)
+            self.rt.install_bridge_port(port_id as i64, l, false)
         };
         self.rt.pop_to(base);
         !p.is_nil()

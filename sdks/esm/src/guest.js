@@ -232,7 +232,13 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
       // known. The handler's `open` fires on the RETAIN below, which is the
       // event that says the sandbox actually holds it -- one place where the
       // count is maintained, and `holders` reads 1 inside `open` rather than 0.
+      // Counted HERE, not from an event: this host granted the port, so it
+      // knows, and the runtime does not push a retain for something the host
+      // did itself (`doc/decisions/0027`). The retain event carries only the
+      // case the host could not have known -- a port arriving inside a message.
+      ports.get(port).holders++;
       openPorts.set(port, cap);
+      if (cap.open) cap.open(port, api);
     } else if (ev.kind === 'message') {
       const cap = openPorts.get(ev.port);
       if (cap && cap.message) cap.message(ev.port, ev.value, api, ev);
@@ -297,7 +303,9 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     const p = e.flint_in_alloc(b.length);
     new Uint8Array(e.memory.buffer).set(b, p);
     if (!e.flint_install_port(port, b.length, system ? 1 : 0)) return false;
+    // Counted here for the same reason a grant is: this host installed it.
     if (!ports.has(port)) ports.set(port, { cap: handler, holders: 0 });
+    ports.get(port).holders++;
     if (handler) openPorts.set(port, handler);
     return true;
   }

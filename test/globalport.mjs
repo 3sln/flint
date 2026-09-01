@@ -60,11 +60,38 @@ console.log('global ports');
   ok('the host installs a system port', install(e, 7, 'system', 'edn', true) === 1);
   ok('  ... and a second, ordinary global port', install(e, 8, 'work', 'edn', false) === 1);
 
-  const code = e.main();
-  eq('  ... and the program runs undisturbed', code, 0);
+  // AT EXIT the runtime closes and releases every bridge, so the first return
+  // is 2 ("the host is needed") with those events pending, and the answer comes
+  // on the next turn. That is the documented protocol -- "the last pump is two
+  // pumps" -- and it is why the host is never left guessing whether more is
+  // coming. It used to be silent here only because a global port had no peer
+  // and `close_side_effects` therefore pushed nothing, which meant a host was
+  // never told it could let the port go.
+  let code = e.main();
+  eq('  ... and the program runs, asking the host to drain', code, 2);
+  const tail = drain(e);
+  eq('  ... releasing both ports it was given', tail.filter((x) => x.kind === 5).length, 2);
+  code = e.flint_resume();
+  eq('  ... and then finishes', code, 0);
   const out = dec.decode(new Uint8Array(e.memory.buffer, e.out_ptr(), e.out_len()));
   eq('  ... producing its own answer', out.trim(), '{:ran true, :local :hello}');
-  ok('  ... having generated no host traffic of its own', drain(e).length === 0);
+  ok('  ... having generated no host traffic of its OWN, only the teardown',
+     tail.every((x) => x.kind === 3 || x.kind === 5));
+}
+
+// A program with real INITIALISERS still returns its entry's value when a port
+// was installed before it ran. See `test/globalport.clj` for the mechanism: a
+// scheduler existing at start-up armed a preemption slice, the initialisers ran
+// under it, and the yield was discarded -- so the entry's value was lost and a
+// constant-returning program reported "did not return a string".
+{
+  const inst = await fresh('out/gp-init.wasm');
+  const e = inst.exports;
+  ok('a port is installed before a program with initialisers runs',
+     install(e, 7, 'system', 'edn', true) === 1);
+  const r = inst.main();
+  eq('  ... and the entry still returns its value', r.out.trim(), 'constantfalsefalse');
+  eq('  ... with status 0', r.code, 0);
 }
 
 console.log(fails === 0 ? 'global ports: ok' : `global ports: ${fails} FAILURES`);

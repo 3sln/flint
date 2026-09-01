@@ -53,6 +53,24 @@
            "    (pr-str {:ran true :local (p/receive rx)})))"))
 (build! "sys" "out/gp-sys.wasm")
 
+;; A program with REAL INITIALISERS, whose entry simply returns a value.
+;;
+;; `flint.cli` is here for its namespace initialisers and nothing else -- it is
+;; the biggest one to hand, and the amount of work it does at load is the whole
+;; point. Installing a port creates the scheduler, creating a scheduler ARMS A
+;; PREEMPTION SLICE, and `run_program` ran the initialisers under it and threw
+;; the yield away: the thread came back with `park_on` still set, `settle` read
+;; it as a yield, saved a half-built state and never recorded the entry's value.
+;; A program whose entry is a constant answered "the entry function did not
+;; return a string".
+;;
+;; It needs enough initialiser work to cross a 4096-step slice, which is exactly
+;; why it went unnoticed -- every small program finishes inside one.
+(src! "init"
+      (str "(ns init (:require [flint.cli :as cli] [flint.port :as p]))\n"
+           "(defn main [_] (str \"constant\" (nil? cli/run) (p/port? 1)))"))
+(build! "init" "out/gp-init.wasm")
+
 (let [r (sh "node" "test/globalport.mjs")]
   (print (:all r)) (flush)
   (System/exit (:exit r)))

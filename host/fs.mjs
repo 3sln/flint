@@ -13,12 +13,14 @@
 // question nobody asked. This is `0022`'s "derived capability" in its simplest
 // form -- `:fs` narrowed to a subtree -- done by the host at grant time.
 //
-// Requests and replies are EDN maps, so the wire is the same one the document
-// capability uses and nothing here needs a codec of its own.
+// Requests and replies are VALUES. A bridge encodes and decodes in the runtime
+// (`doc/decisions/0027`), so `data` arrives here already decoded and a reply is
+// handed over as an ordinary JS object -- there is no codec on either side of
+// this file, and the guest could not have one.
 import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync } from 'fs';
 import { resolve, join, dirname, relative, isAbsolute } from 'path';
 
-export function fsCapability(root, codec, opts = {}) {
+export function fsCapability(root, opts = {}) {
   const base = resolve(root);
   const writable = opts.write === true;
 
@@ -33,43 +35,47 @@ export function fsCapability(root, codec, opts = {}) {
   };
 
   return {
-    message(port, data, api) {
-      const req = codec.decode(data);
-      const op = req.op && req.op.name !== undefined ? req.op.name : req.op;
-      const reply = (m) => api.deliver(port, codec.encode({ id: req.id, ...m }));
-      const path = req.path === undefined ? null : under(String(req.path));
+    message(port, req, api) {
+      // Keywords arrive as `:name` strings from the wire codec, so an op is
+      // matched with the colon stripped -- the guest wrote `:read`, not "read".
+      const kw = (x) => (typeof x === 'string' && x.startsWith(':') ? x.slice(1) : x);
+      const op = kw(req[':op'] ?? req.op);
+      const id = req[':id'] ?? req.id;
+      const reply = (m) => api.deliver(port, { ':id': id, ...m });
+      const rawPath = req[':path'] ?? req.path;
+      const path = rawPath === undefined ? null : under(String(rawPath));
       if (path === null && op !== 'root') {
-        return reply({ error: `outside the granted root: ${req.path}`, final: true });
+        return reply({ ':error': `outside the granted root: ${rawPath}`, ':final': true });
       }
       try {
         if (op === 'read') {
-          reply({ body: readFileSync(path, 'utf8'), final: true });
+          reply({ ':body': readFileSync(path, 'utf8'), ':final': true });
         } else if (op === 'exists') {
           let ok = true;
           try { statSync(path); } catch { ok = false; }
-          reply({ body: ok, final: true });
+          reply({ ':body': ok, ':final': true });
         } else if (op === 'list') {
           // Directories are marked, because a caller walking a tree otherwise
           // has to ask again per entry.
           reply({
-            body: readdirSync(path, { withFileTypes: true })
-              .map((d) => ({ name: d.name, dir: d.isDirectory() })),
-            final: true,
+            ':body': readdirSync(path, { withFileTypes: true })
+              .map((d) => ({ ':name': d.name, ':dir': d.isDirectory() })),
+            ':final': true,
           });
         } else if (op === 'write') {
-          if (!writable) return reply({ error: 'this grant is read-only', final: true });
+          if (!writable) return reply({ ':error': 'this grant is read-only', ':final': true });
           mkdirSync(dirname(path), { recursive: true });
-          writeFileSync(path, String(req.body));
-          reply({ body: true, final: true });
+          writeFileSync(path, String(req[':body'] ?? req.body));
+          reply({ ':body': true, ':final': true });
         } else if (op === 'root') {
-          reply({ body: base, final: true });
+          reply({ ':body': base, ':final': true });
         } else {
-          reply({ error: `no such op: ${op}`, final: true });
+          reply({ ':error': `no such op: ${op}`, ':final': true });
         }
       } catch (err) {
         // A missing file is an ordinary answer, not a crash: the guest asked a
         // question and this is the answer to it.
-        reply({ error: String(err.message ?? err), final: true });
+        reply({ ':error': String(err.message ?? err), ':final': true });
       }
     },
   };

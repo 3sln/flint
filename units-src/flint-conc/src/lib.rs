@@ -380,7 +380,7 @@ mod host {
         let p = if system != 0 {
             rt.install_system_port(id as i64, l)
         } else {
-            rt.install_bridge_port(id as i64, l)
+            rt.install_bridge_port(id as i64, l, false)
         };
         rt.pop_to(base);
         (!p.is_nil()) as u32

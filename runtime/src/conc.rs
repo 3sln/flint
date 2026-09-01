@@ -329,7 +329,7 @@ impl Rt {
         // The decoder's route to `install_bridge_port`, set HERE and nowhere
         // else. See `Rt::bridge_hook`: reaching it directly from `codec.rs` put
         // the whole scheduler in every module, including ones with no ports.
-        self.bridge_hook = Some(|rt, id| rt.install_bridge_port(id, NIL));
+        self.bridge_hook = Some(|rt, id| rt.install_bridge_port(id, NIL, true));
         let base = self.mark();
         let sc = self.new_obj(TY_SCHED, SC_LEN);
         if sc.is_nil() {
@@ -762,12 +762,23 @@ impl Rt {
     /// both times. `=` says yes, a map keyed by it hits, and the host is told
     /// exactly once that this sandbox took a reference.
     ///
-    /// `EV_RETAIN` goes out only on a MISS. The alternative, counting arrivals,
-    /// would make the number mean "how many references" rather than "how many
-    /// holders", which is not a number anyone can act on: the host wants to know
-    /// when it may let the port go, and that is when the last holder drops it.
-    /// The matching `EV_RELEASE` is pushed by `reap_ports` when the collector
-    /// finds the handle unreachable.
+    /// `announce` says whether to PUSH `EV_RETAIN`, and it is false for a host
+    /// that installed or granted the port itself: that host already knows, and
+    /// an event it does not need is traffic queued before the program has even
+    /// started -- which makes `main` come back 2 ("the host is needed") when
+    /// nothing is parked, and `test/globalport.mjs` states the property that
+    /// breaks: "installing one does not disturb a program that does not know it
+    /// exists". True only for the DECODER, where a port arriving inside a
+    /// message is the one case the host could not have known about.
+    ///
+    /// Either way it is one increment per sandbox, on the MISS that mints the
+    /// handle. Counting arrivals instead would make the number mean "how many
+    /// references" rather than "how many holders", which is not a number anyone
+    /// can act on: the host wants to know when it may let the port go, and that
+    /// is when the last holder drops it. The matching `EV_RELEASE` is pushed by
+    /// `reap_ports` when the collector finds the handle unreachable, or promptly
+    /// by `close` -- and that one always goes out, because a drop is never
+    /// something the host asked for.
     ///
     /// The object in this heap carries the id and nothing else that crosses: no
     /// pointer into host memory, no pointer out of it. The collector traces and
@@ -775,7 +786,7 @@ impl Rt {
     /// rooted, because a handle nothing refers to is precisely what a release
     /// is for. The system port is the exception, and it is rooted by being in
     /// `SC_SYSTEM` rather than by anything here.
-    pub fn install_bridge_port(&mut self, host_id: i64, label: Value) -> Value {
+    pub fn install_bridge_port(&mut self, host_id: i64, label: Value, announce: bool) -> Value {
         self.ensure_sched();
         if host_id < 0 {
             return NIL;
@@ -802,7 +813,9 @@ impl Rt {
         let nb = self.vec_conj(self.r(bi), Value::fixnum(host_id));
         self.set(self.r(sci), SC_BRIDGES, nb);
         // One increment, now that the handle exists and is interned.
-        self.push_event(EV_RETAIN, host_id, 0, NIL);
+        if announce {
+            self.push_event(EV_RETAIN, host_id, 0, NIL);
+        }
         let out = self.r(pi);
         self.pop_to(base);
         out
@@ -814,7 +827,7 @@ impl Rt {
     /// is not has no way to reach anything outside itself, which is the honest
     /// meaning of "no capabilities" and is the default.
     pub fn install_system_port(&mut self, host_id: i64, label: Value) -> Value {
-        let p = self.install_bridge_port(host_id, label);
+        let p = self.install_bridge_port(host_id, label, false);
         if p.is_nil() {
             return NIL;
         }
@@ -2291,7 +2304,7 @@ impl Rt {
         let label = if label.is_nil() { NIL } else { self.slot(label, PT_LABEL) };
         let li = self.push(label);
         let l = self.r(li);
-        let p = self.install_bridge_port(host_port_id, l);
+        let p = self.install_bridge_port(host_port_id, l, false);
         if p.is_nil() {
             self.pop_to(base);
             return false;

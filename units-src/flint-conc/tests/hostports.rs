@@ -243,10 +243,15 @@ fn open_asks_the_host_and_parks_until_it_answers() {
         1,
         "exactly one open-request: {evs:?}"
     );
-    // Installing the system port took a reference, and said so.
+    // NO RETAIN FOR AN EXPLICIT INSTALL. This host installed the system port,
+    // so it already knows it holds it, and an event it does not need is traffic
+    // queued before the program has even started -- which makes the first run
+    // come back "the host is needed" when nothing is parked
+    // (`doc/decisions/0027`). The retain carries only what a host could not have
+    // known: a port arriving inside a message.
     assert!(
-        evs.iter().any(|e| e.kind == conc::EV_RETAIN as u32 && e.a as i64 == SYSTEM),
-        "installing a bridge retains it: {evs:?}"
+        !evs.iter().any(|e| e.kind == conc::EV_RETAIN as u32),
+        "an explicit install announces nothing: {evs:?}"
     );
     // Nothing was presented -- and NOTHING is a distinct answer from "something
     // I do not recognise".
@@ -261,11 +266,13 @@ fn open_asks_the_host_and_parks_until_it_answers() {
     assert!(grant(&mut rt, token), "a fresh token is honoured");
     // A SECOND answer on the same token is refused: the generation moved on.
     assert!(!grant(&mut rt, token), "a duplicate reply is refused");
-    // And the host was told it now HOLDS the port -- one retain, on the mint.
+    // A GRANT is the host's own act too, so it announces nothing either -- the
+    // host chose the id and knows it lent it. What it does get, at the end, is
+    // the RELEASE, because a drop is never something the host asked for.
     let after = drain(&mut rt);
     assert!(
-        after.iter().any(|e| e.kind == conc::EV_RETAIN as u32 && e.a as i64 == GRANTED),
-        "granting takes a reference and says so: {after:?}"
+        !after.iter().any(|e| e.kind == conc::EV_RETAIN as u32),
+        "granting announces nothing: {after:?}"
     );
     let msg = wire(&mut rt, "hello");
     assert!(rt.host_deliver(GRANTED, &msg));

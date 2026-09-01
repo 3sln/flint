@@ -1,8 +1,16 @@
 # 0027 — Ports belong to the host, not to a sandbox
 
-> **QUEUED.** Nothing in this file exists yet. Recorded now because `0025`'s
-> system port is the next thing to build, and building it sandbox-local would
-> be building the exact thing this replaces.
+> **SHIPPED**, on all four runtimes, except the two parts named under "What is
+> not built yet" at the bottom.
+>
+> It was marked QUEUED and "nothing in this file exists yet" long after half of
+> it had been built and then left unreachable: `install_global_port`,
+> `install_system_port`, `SC_SYSTEM` and `K_GLOBAL` all existed, and
+> `system_port()` had **zero callers on all three runtimes**. Two generations of
+> the port model were live at once for months, which is how a wire port came to
+> be classed `CARRY_CROSSING` on the JVM and CLR and then refused by their own
+> send. A banner that lies about the tree is worse than no banner: it is what
+> made that state readable as "not started yet" rather than as "half-done".
 
 **A port is one of two things, and the difference is which side of a heap its
 two ends are on.** A LOCAL port joins two green threads inside one sandbox and
@@ -230,6 +238,57 @@ knows how to park on (`doc/decisions/0007`).
 encodes ten times, because the wire form is a tree. That is a real cost for the
 shape it hits, and the fix -- back-references in the codec -- is known and not
 built. It goes here so it is not discovered as a surprise.
+
+## What was built, and what it is called
+
+The vocabulary moved once during implementation and the file uses the new words
+throughout: what this document calls a GLOBAL port is `K_BRIDGE`, and there is
+no "host port" at all. `K_FLINT` and `K_HOST` -- the pair a sandbox used to
+manufacture on `open` -- are deleted, along with `PT_ROOT`, `PT_FORMAT`,
+`PT_OPTS` and `PT_BINARY`.
+
+* `open` is a request ON the system port. Nothing is allocated until the host
+  answers. A sandbox given no system port is told so rather than parked for ever
+  on an event nobody will drain.
+* A grant has to NAME a port, so `host_continue(token, true)` is refused and
+  `host_grant(token, port)` is the granting half.
+* The handle is INTERNED by host id, in the weak port table. `EV_RETAIN` goes
+  out on the miss that mints it; `EV_RELEASE` from the collection sweep, or
+  promptly from `close`. The count is of HOLDERS, exactly as the table argument
+  above says it should be.
+* The handle is NOT rooted, which is what makes a drop observable.
+* Encoding happens at the bridge, in the runtime, in both directions. The guest
+  has no codec: `:codec`, `set-codec` and the raw byte mode are gone, and with
+  them `CARRY_SANDBOXED`, whose rule is now enforced by the guest not having an
+  encoder rather than by a check.
+* The host gets both halves explicitly: `codec::Wire` builds a message with no
+  flint heap involved, and `install_port` / `host_grant` / `encode` / `decode`
+  sit beside it. The ESM driver adds the conveniences -- `deliver(port, value)`
+  encodes for you, `tryDeliverBytes` does not.
+
+Measured, one image through three separately written host drivers, compared
+byte for byte: the native, JVM and CLR transcripts are identical.
+
+### The decoder must not drag the scheduler in
+
+Interning an arriving port means the decoder calls `install_bridge_port`, and
+`flint_call` is an unconditional export with the decoder hanging off it. Done
+directly, that linked the scheduler, the ring, the event queue and the port
+registry into EVERY module: a pure one grew from 300,801 to 335,320 bytes,
+against a 304,000 budget `test/threads.clj` holds.
+
+So it goes through `Rt::bridge_hook`, a function pointer only `ensure_sched`
+sets. `None` means refuse rather than "not yet", and that is correct: a port
+arrives over a bridge, so a program with no ports can never be handed one. The
+residue is +217 bytes.
+
+## What is not built yet
+
+* **The weak-table fixup through a nursery COPY**, described under "Three things
+  the table has to get right". Today the sweep walks `SC_BRIDGES` after a
+  collection and releases the ids whose lookup misses.
+* **Back-references in the codec**, so a value whose subtree is shared ten times
+  does not encode ten times. Named below as a cost; still a cost.
 
 ## "Global" means the host's, not a process static
 
