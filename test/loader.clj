@@ -55,20 +55,45 @@
      const fs = fsm.default;
      const e = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(process.argv[1])), {}).exports;
      const mem = () => new Uint8Array(e.memory.buffer);
-     const out = () => new TextDecoder().decode(mem().subarray(e.out_ptr(), e.out_ptr() + e.out_len()));
+     const raw = () => mem().subarray(e.out_ptr(), e.out_ptr() + e.out_len());
+     // `flint_call` writes the ENCODED answer, where the old entry point wrote
+     // rendered text. A string is `K_STRING`, a u32 length, then the bytes --
+     // unpacked here rather than by an SDK, so this driver stays a plain
+     // `WebAssembly.Instance` with nothing behind it.
+     const out = () => {
+       const b = raw();
+       if (b.length > 5 && b[0] === 5) return new TextDecoder().decode(b.subarray(5));
+       return new TextDecoder().decode(b);
+     };
      const res = [];
+     // `path=arg=ns/fn`: the FUNCTION IS NAMED, because a loaded image has no
+     // entry point -- nothing is called automatically (`doc/decisions/0025`
+     // step 5) and the loader module cannot know what the image calls itself.
      for (const spec of process.argv.slice(2)) {
-       const [path, arg] = spec.split('=');
+       const [path, arg, fname] = spec.split('=');
        const img = fs.readFileSync(path);
        const p = e.arg_alloc(img.length);
        mem().set(img, p);
        const rc = e.flint_load_image ? e.flint_load_image(p, img.length) : -1;
        if (rc !== 0) { res.push({rc, why: rc === -1 ? 'no flint_load_image export' : out()}); continue; }
-       const b = new TextEncoder().encode(arg);
-       const q = e.arg_alloc(b.length);
-       mem().set(b, q);
-       e.arg_push(q, b.length);
-       res.push({rc: 0, code: e.main(), out: out()});
+       // `[name [arg]]`, encoded: one string argument, the way a command line
+       // hands one over. Written by hand rather than through the codec so this
+       // driver stays a plain WebAssembly.Instance with no SDK behind it.
+       const enc = (str) => {
+         const u = new TextEncoder().encode(str);
+         const b = [5];                                     // K_STRING
+         for (let i = 0; i < 4; i++) b.push((u.length >> (8 * i)) & 0xff);
+         return b.concat(Array.from(u));
+       };
+       const call = [8, 2, 0, 0, 0]                         // K_VECTOR, 2 items
+         .concat(enc(fname))
+         .concat([8, 1, 0, 0, 0])                           // K_VECTOR, 1 item
+         .concat(enc(arg));
+       const cb = Uint8Array.from(call);
+       const cp = e.arg_alloc(cb.length);
+       mem().set(cb, cp);
+       const code = e.flint_call(cp, cb.length);
+       res.push({rc: 0, code, out: out()});
      }
      console.log(JSON.stringify(res));
    })")
@@ -79,8 +104,8 @@
 
 ;; The whole claim: a module built for `one` runs `two`, having never seen it,
 ;; and the two do not contaminate each other across a swap.
-(let [got (drive "out/loader.wasm" "out/one.image=4" "out/two.image=3"
-                 "out/one.image=2" "out/two.image=1")]
+(let [got (drive "out/loader.wasm" "out/one.image=4=one/main" "out/two.image=3=two/main"
+                 "out/one.image=2=one/main" "out/two.image=1=two/main")]
   (println (str "    " got))
   (check-that "an image runs in a module that never linked it"
               (str/includes? got "x0,x1,x4,x9"))
@@ -94,7 +119,7 @@
 ;; And the refusal, which has to name the builtin: a plain module carries only
 ;; what its own program reached, so an image wanting more is a real failure and
 ;; "wrong builtin set" is otherwise indistinguishable from a corrupt image.
-(let [got (drive "out/plain.wasm" "out/one.image=2")]
+(let [got (drive "out/plain.wasm" "out/one.image=2=one/main")]
   (check-that "a module built WITHOUT --loader refuses, by name"
               (str/includes? got "no flint_load_image export")))
 

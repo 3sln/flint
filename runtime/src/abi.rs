@@ -683,6 +683,13 @@ pub extern "C" fn flint_load_image(ptr: u32, len: u32) -> i32 {
         // already clears the constants and the globals.
         rt.frames.clear();
         rt.handlers.clear();
+        // NOR ITS INITIALISERS. `ensure_started` runs a program's `init`
+        // functions ONCE, and that once was per SANDBOX; with `main` gone a
+        // call is what triggers them (`doc/decisions/0025` step 5), so a
+        // swapped image found the flag already set, never bound its vars, and
+        // answered "`two/main` is not a function". `run_program` used to run
+        // `image.init` unconditionally on every entry, which hid it.
+        rt.set_started(false);
         rt.roots.stack_top = 0;
         rt.thrown = crate::value::NIL;
         if !rt.load_image(bytes) {
