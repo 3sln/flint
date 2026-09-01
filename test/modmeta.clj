@@ -48,7 +48,15 @@
 (check-that "a module carries a metadata section, readable without instantiating"
             (some? (:meta prod)))
 (check "  ... in the format this reader understands" (:flint/module (:meta prod)) 1)
-(check "  ... naming the entry point" (:entry (:meta prod)) "m/main")
+;; NO ENTRY POINT, and its absence is the assertion. A module has no
+;; distinguished function (`doc/decisions/0025` step 5): nothing is called
+;; automatically and a caller names what it wants, so recording one here would
+;; describe a concept the runtime no longer has. `:exports` is the honest list
+;; and every name in it is equally callable.
+(check-that "  ... and names NO entry point, because a module has none"
+            (nil? (:entry (:meta prod))))
+(check-that "  ... while its callable names are listed"
+            (some? (:exports (:meta prod))))
 ;; Early, so a streaming runner has it before the code section rather than after
 ;; a megabyte of body.
 (check-that "  ... early in the byte stream, under 1% in"

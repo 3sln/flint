@@ -51,12 +51,14 @@ what remains, and what each thing is waiting on.
 
 **Open, in the order the last measurement left them:**
 
-0. **A project boundary the SDK can express** (`0036` step 1) — the CLI has
+0. **A namespace resolver both front doors produce** (`0036` step 1) — it
+   answers `{workspace, identity, reader}` per namespace, where `workspace`
+   carries reader tags today and capability grants and guards next. The CLI has
    source roots and reads each one's own `deps.edn`; the SDK's `compile` takes a
-   FLAT map of path to source with no boundary in it at all. That is why `0035`
-   step 3 was never done, and it now blocks workspace-scoped capabilities as
-   well. One concept both front doors share, with `0035` step 3 completed on top
-   of it as the proof that the shape works.
+   FLAT map of path to source with no boundary in it at all, which is why `0035`
+   step 3 was never done. With the resolver the COMPILER enforces the guard at
+   require-resolution time, so neither front door can be right while the other
+   is not. `0035` step 3 completed on top of it is the proof the shape works.
 
 1. **The wire codec and structured ports** (`0025`) — one encoding for
    everything crossing the host boundary, an entry that takes a map, ports

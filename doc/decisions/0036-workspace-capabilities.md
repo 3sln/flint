@@ -95,14 +95,88 @@ and the SDK was left with a flat file map that cannot express the concept. That
 gap is now load-bearing for a second feature, which is the moment to fix it
 rather than route around it again.
 
+## The shape: a namespace resolver
+
+The SDK takes a **namespace resolver**, and it answers with a record rather than
+a string:
+
+```text
+namespace -> { workspace, identity, reader }
+```
+
+* **`workspace`** — the namespace's workspace, and everything scoped to one:
+  reader tags today, capability grants and guards next, whatever comes after.
+  This is the thing that has no representation in the SDK at all right now.
+* **`identity`** — the namespace's module identity: source path, and whatever
+  else a diagnostic needs. It is what reader metadata is annotated WITH, so an
+  error can say where a form came from.
+* **`reader`** — a closure producing something the reader can pull from, rather
+  than the source as one string.
+
+Where there are no closures — the C ABI, and a host driving the runtime through
+it — the same three members become an explicit `NamespaceResolver` implementation.
+That shape is already established here: `Rt::bridge_hook` is a function pointer
+the runtime installs, and the Rust SDK's `Driver` is a trait.
+
+### Why this is the fix and not a refactor
+
+**The COMPILER enforces the guard, at require-resolution time.** It has both
+halves there: the requiring namespace's workspace and the required one's, each
+from the same resolver. So the check is local, and neither front door can be
+correct while the other is not — which is exactly how `0035` went wrong.
+
+Everything workspace-scoped stops being something the CLI knows and the SDK does
+not. Reader tags become one field of a record both front doors produce.
+
+### What it costs, from the code
+
+**The reader is a whole-string cursor.** `make-state` is
+`{:s s :i 0 :n (count s)}` and every `peek`/`next` indexes into it. A `reader`
+that does not hold the file resident means changing the reader's substrate to a
+pull source. That is a real change, not an interface tidy-up, and a rope does
+not get us out of it: a rope is still resident.
+
+Worth doing anyway, and worth doing for its own reason rather than this one --
+but it should be costed separately, and it does not block grants and guards. A
+first cut can hand back a whole string behind the same interface.
+
+**The compiler runs inside a wasm module, so a resolver is a CALL BACK OUT.**
+Today `Compiler.compile` marshals every source into one EDN blob and hands it
+over in a single `flint_call`. A resolver function means the guest asks the host
+for a namespace mid-compile.
+
+That was not possible when `0035` was written. It is now: a sandbox has a system
+port, a call is a message, and a call that parks is answered while it is
+outstanding (`0025` step 5, `0027`). The compiler asking its host to resolve a
+namespace is exactly that shape. The port work is what makes this design
+buildable, which is worth saying because it also means it should be built on
+that machinery rather than beside it.
+
+**The resolver will be asked for the same namespace more than once.** `0035`
+records that `:tags` had to reach THREE readers -- `collect`, `topo-order` and
+the compiler -- and that a value only one of them knows about is a value the
+other two get wrong. A resolver has the same exposure: either it must be
+idempotent and cheap, or the compiler must ask once and carry the record through
+all three. **Carry it once** is the answer that does not depend on the host
+being careful.
+
+### Open, in this shape
+
+* Which workspace `clojure.core` and the standard library are in. Everything
+  refers them implicitly, so it must be one that grants nothing and guards
+  nothing, and that should be stated rather than emergent.
+* Whether `identity` is the same thing `0020`'s module metadata records, or a
+  compile-time-only notion that happens to overlap.
+
 ## Order
 
-1. **A project boundary in the SDK's input**, and it must be one concept both
-   front doors share. Something like `{:projects [{:root "x" :files {...}
-   :config {...}}]}` where the CLI's roots and the SDK's file groups are the
-   same thing seen from two sides. `:tags` and any capability key hang off
-   `:config`. This is the blocker and should land alone, with `0035` step 3
-   completed on top of it as the proof that the shape works.
+1. **The namespace resolver**, as above: one concept both front doors produce,
+   answering `{workspace, identity, reader}`. The CLI's source roots and the
+   SDK's file map become two ways of building the same resolver. This is the
+   blocker and should land alone, with `0035` step 3 -- reader tags through the
+   SDK -- completed on top of it as the proof the shape works. A first cut may
+   hand back a whole string from `reader`; the incremental source is a separate
+   piece of work with its own reason.
 2. `:flint/capabilities-grant`, read from a dependency's own project file, the
    way tags already are.
 3. `:flint/capabilities-guard`, checked when resolving a `:require` across a
