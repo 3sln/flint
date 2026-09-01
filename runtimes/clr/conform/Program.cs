@@ -306,6 +306,8 @@ public static class Program {
         Flint.Rt.Conc.EV_OPEN => "open",
         Flint.Rt.Conc.EV_MESSAGE => "message",
         Flint.Rt.Conc.EV_CLOSED => "closed",
+        Flint.Rt.Conc.EV_RETAIN => "retain",
+        Flint.Rt.Conc.EV_RELEASE => "release",
         _ => "?",
     };
 
@@ -341,9 +343,10 @@ public static class Program {
         var b = new System.Text.StringBuilder();
         foreach (var e in evs) {
             if (b.Length > 0) b.Append(' ');
-            string p = e.Kind == Flint.Rt.Conc.EV_OPEN
-                ? Render(e.Payload)
-                : "\"" + System.Text.Encoding.UTF8.GetString(e.Payload) + "\"";
+            // EVERY payload is the wire format now: a bridge carries values and
+            // the runtime encodes them, so a message reads the same way an
+            // open-request does rather than as opaque bytes.
+            string p = e.Payload.Length == 0 ? "" : Render(e.Payload);
             b.Append(KindName(e.Kind)).Append('(').Append(e.A).Append(',').Append(e.B)
              .Append(',').Append(p).Append(')');
         }
@@ -458,10 +461,34 @@ public static class Program {
         return Flint.Rt.Str.IsString(rt, v) ? Flint.Rt.Str.Text(rt, v) : rt.Describe(v);
     }
 
+    /// The host's id for this sandbox's system port, and for the port it grants.
+    /// The HOST picks both: a sandbox no longer mints port ids, which is the
+    /// whole of `doc/decisions/0027`.
+    private const int SYSTEM = 1, GRANTED = 500;
+
+    /// One string, as the host writes it: the wire format, which is what the
+    /// runtime decodes on the way in.
+    private static byte[] WireStr(string s) {
+        byte[] u = System.Text.Encoding.UTF8.GetBytes(s);
+        byte[] outb = new byte[5 + u.Length];
+        outb[0] = (byte) Flint.Rt.Codec.K_STRING;
+        outb[1] = (byte) u.Length;
+        outb[2] = (byte) (u.Length >> 8);
+        outb[3] = (byte) (u.Length >> 16);
+        outb[4] = (byte) (u.Length >> 24);
+        System.Array.Copy(u, 0, outb, 5, u.Length);
+        return outb;
+    }
+
     private static int RtHostPorts(string path) {
         var rt = new Flint.Rt.Rt(4L * 1024 * 1024, 512L * 1024 * 1024);
         var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
         if (img == null) { Console.WriteLine("  FAIL not a flint image"); return 1; }
+
+        // A SYSTEM PORT, installed before anything runs: `open` is a request ON
+        // one (`doc/decisions/0027`), and a sandbox given none can ask for
+        // nothing.
+        Flint.Rt.Conc.InstallSystemPort(rt, SYSTEM, Flint.Rt.Str.Of(rt, "system"));
 
         // 1. The program runs until it asks for something only the host has.
         long v = RunAll(rt, img);
@@ -469,7 +496,10 @@ public static class Program {
         var evs = new System.Collections.Generic.List<Ev>(Drain(rt));
         Console.WriteLine("  ok   it asked: " + Show(evs));
         Ev open = evs.Find(e => e.Kind == Flint.Rt.Conc.EV_OPEN);
-        int token = open.A, port = open.B;
+        int token = open.A;
+        // The request came out ON THE SYSTEM PORT. There is no port for it yet
+        // -- the answer is what creates one, and the host picks its id.
+        int port = GRANTED;
 
         // 2. WHAT WAS FORWARDED, decoded. Nothing in the runtime looked at it
         //    on the way past, and nothing in it knows what a capability is.
@@ -478,16 +508,20 @@ public static class Program {
         // 3. Grant it. A second answer on the same token is refused: the
         //    generation in it has moved on, so a late or duplicated reply cannot
         //    resume a stranger's thread.
+        Console.WriteLine("  ok   a grant must name a port: "
+                          + Low(Flint.Rt.Conc.HostContinue(rt, token, true)));
         Console.WriteLine("  ok   the host grants it: "
-                          + Low(Flint.Rt.Conc.HostContinue(rt, token, true)));
+                          + Low(Flint.Rt.Conc.HostGrant(rt, token, port)));
         Console.WriteLine("  ok   and a duplicate reply is refused: "
-                          + Low(Flint.Rt.Conc.HostContinue(rt, token, true)));
+                          + Low(Flint.Rt.Conc.HostGrant(rt, token, port)));
         Console.WriteLine("  ok   the runtime end is now: "
                           + StateName(Flint.Rt.Conc.HostPortState(rt, port)));
 
         // 4. Push something in, let the program read it and answer.
+        // ENCODED, because a bridge carries values: the runtime decodes what
+        // arrives, so a host writes the wire format rather than raw bytes.
         Console.WriteLine("  ok   delivered: "
-            + Low(Flint.Rt.Conc.HostDeliver(rt, port, System.Text.Encoding.UTF8.GetBytes("one"))));
+            + Low(Flint.Rt.Conc.HostDeliver(rt, port, WireStr("one"))));
         v = Flint.Rt.Conc.Resume(rt);
         Console.WriteLine("  ok   ran on: status " + Status(rt));
         Console.WriteLine("  ok   it sent back: "
@@ -497,7 +531,7 @@ public static class Program {
         //    `nil` and not an error -- and the program's own `state` call has to
         //    agree with what the host sees.
         Console.WriteLine("  ok   delivered: "
-            + Low(Flint.Rt.Conc.HostDeliver(rt, port, System.Text.Encoding.UTF8.GetBytes("two"))));
+            + Low(Flint.Rt.Conc.HostDeliver(rt, port, WireStr("two"))));
         Flint.Rt.Conc.HostClosePort(rt, port);
         Console.WriteLine("  ok   after the host hangs up: "
                           + StateName(Flint.Rt.Conc.HostPortState(rt, port)));

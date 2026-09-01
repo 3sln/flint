@@ -1056,16 +1056,6 @@ public static class Builtins {
             rt.PopTo(bas);
             return Conc.PortOpen(rt, nm, args);
         });
-        /// The port's format, as the guest wants to remember it. METADATA, not
-        /// behaviour: the runtime stores it and answers `port-format` with it
-        /// and does nothing else, which is why `open` no longer takes it.
-        Def("flint/set-port-format", (rt, at, n) => {
-            long p = rt.VAt(at), f = rt.VAt(at + 1);
-            if (!Conc.IsPort(rt, p))
-                return rt.ThrowStr("ClassCastException", "set-port-format wants a port");
-            rt.SetSlot(Val.AsHeap(p), Conc.PT_FORMAT, f);
-            return f;
-        });
         Def("flint/port-send", (rt, at, n) => Conc.Send(rt, rt.VAt(at), rt.VAt(at + 1)));
         Def("flint/port-receive", (rt, at, n) => Conc.Receive(rt, rt.VAt(at)));
         Def("flint/port-close", (rt, at, n) => Conc.Close(rt, rt.VAt(at)));
@@ -1080,35 +1070,12 @@ public static class Builtins {
             if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-label wants a port");
             return rt.Slot(p, Conc.PT_LABEL);
         });
-        Def("flint/port-format", (rt, at, n) => {
+        /// Does this port carry BYTES across a boundary? A bridge does and a
+        /// channel does not, and that is the only distinction a guest can see
+        /// -- it cannot see the encoding, because the runtime owns it.
+        Def("flint/port-bridge?", (rt, at, n) => {
             long p = rt.VAt(at);
-            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-format wants a port");
-            return rt.Slot(p, Conc.PT_FORMAT);
-        });
-        Def("flint/port-opts", (rt, at, n) => {
-            long p = rt.VAt(at);
-            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-opts wants a port");
-            return rt.Slot(p, Conc.PT_OPTS);
-        });
-        Def("flint/set-port-opts", (rt, at, n) => {
-            long p = rt.VAt(at), o = rt.VAt(at + 1);
-            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "set-port-opts wants a port");
-            rt.SetSlot(Val.AsHeap(p), Conc.PT_OPTS, o);
-            return o;
-        });
-        Def("flint/set-port-binary", (rt, at, n) => {
-            long p = rt.VAt(at), v = rt.VAt(at + 1);
-            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "set-port-binary wants a port");
-            bool on = !(Val.IsNil(v) || v == Val.False);
-            rt.SetSlot(Val.AsHeap(p), Conc.PT_BINARY, Val.Fixnum(on ? 1 : 0));
-            return v;
-        });
-        /// Any port whose messages CROSS A HEAP, which is what the name is
-        /// really asking: a host port and a global port both carry bytes and
-        /// both need a codec, and `flint.port/send` branches on exactly that.
-        Def("flint/port-host?", (rt, at, n) => {
-            long p = rt.VAt(at);
-            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-host? wants a port");
+            if (!Conc.IsPort(rt, p)) return rt.ThrowStr("ClassCastException", "port-bridge? wants a port");
             return Val.Bool(Conc.CrossesAHeap(Val.AsFixnum(rt.Slot(p, Conc.PT_KIND))));
         });
         Def("flint/port-state", (rt, at, n) => {

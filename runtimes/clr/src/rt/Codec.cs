@@ -6,12 +6,14 @@ using System.Text;
 /// Values across a boundary (`doc/decisions/0025`), a MIRROR of the JVM port's
 /// `Codec.java` and a port of `runtime/src/codec.rs`.
 ///
-/// Only the ENCODER is here. Encoding is what the guest side needs: `open`
-/// forwards its arguments to the host as one encoded value, and the host
-/// decodes them. A guest-callable DECODER would be the dangerous half -- it
-/// would let a program turn arbitrary bytes into a port or an identity, which
-/// is exactly the integer-to-capability conversion the sandbox forbids -- so
-/// its absence is deliberate rather than unfinished.
+/// BOTH HALVES, because a bridge is full duplex: `Send` encodes and
+/// `HostDeliver` decodes, and both run in the RUNTIME (`doc/decisions/0027`).
+/// Neither is reachable from a program -- there is no builtin that encodes and
+/// none that decodes -- and that, rather than the absence of the code, is what
+/// keeps a guest from turning arbitrary bytes into a port or an identity. This
+/// file used to carry only the encoder and a comment calling the omission
+/// deliberate; the omission meant a port on this runtime handed the guest raw
+/// bytes where the native one handed it a value.
 ///
 /// `K_SENTINEL` is why this exists at all. An opaque value crosses as its host
 /// id plus its label, and guest code cannot mint that id (`flint/opaque` gives
@@ -183,4 +185,213 @@ public static class Codec {
         for (int i = 0; i < n; i++) EncodeInto(rt, rt.R(si + 1 + i), outs, depth + 1);
         rt.PopTo(bas);
     }
+
+    // --- decoding ----------------------------------------------------------
+    //
+    // The mirror of the encoder, and it lives HERE rather than being reachable
+    // from a program: `HostDeliver` is its only caller (`doc/decisions/0027`).
+    //
+    // A bridge carries VALUES. The runtime encodes on the way out and decodes
+    // on the way in, and the guest is handed neither half -- because a decoder
+    // a guest could drive would be an encoder read backwards, and `K_PORT` and
+    // `K_SENTINEL` carry their identity inline as integers a guest can write.
+    // Such a guest could mint any host id it liked, and an opaque value's whole
+    // meaning is that it cannot.
+    //
+    // `live` is that rule as one parameter. `Decode` honours the identity tags
+    // because the HOST wrote the bytes; `DecodeGuest` refuses them. Nothing
+    // calls the second yet, and it exists so that whoever adds a guest-reachable
+    // decoder finds it rather than writing the unsafe one.
+
+    /// A cursor over the bytes. Every read is bounds-checked, because the
+    /// encoding is something outside this sandbox wrote.
+    internal sealed class Reader {
+        internal readonly byte[] b;
+        internal int i;
+        internal Reader(byte[] b) { this.b = b; }
+
+        internal int U8() {
+            if (i >= b.Length) throw new Refused("the encoding ends mid-value");
+            return b[i++] & 0xff;
+        }
+        internal int U32() {
+            if (i + 4 > b.Length) throw new Refused("the encoding ends mid-value");
+            int n = (b[i] & 0xff) | ((b[i + 1] & 0xff) << 8)
+                  | ((b[i + 2] & 0xff) << 16) | ((b[i + 3] & 0xff) << 24);
+            i += 4;
+            return n;
+        }
+        internal long U64() {
+            long lo = U32() & 0xffffffffL, hi = U32() & 0xffffffffL;
+            return lo | (hi << 32);
+        }
+        /// `null` means ABSENT, which is not the same as empty -- that is what
+        /// distinguishes `:kw` from `:/kw`.
+        internal string Str_() {
+            int n = U32();
+            if (n == NO_NS) return null;
+            if (n < 0 || i + n > b.Length) throw new Refused("the encoding ends mid-string");
+            string s = Encoding.UTF8.GetString(b, i, n);
+            i += n;
+            return s;
+        }
+        internal byte[] Raw(int n) {
+            if (n < 0 || i + n > b.Length) throw new Refused("the encoding ends mid-bytes");
+            byte[] outb = new byte[n];
+            System.Array.Copy(b, i, outb, 0, n);
+            i += n;
+            return outb;
+        }
+    }
+
+    /// Decode a value the HOST produced. Live tags are honoured.
+    public static long Decode(Rt rt, byte[] bytes) {
+        return DecodeAt(rt, new Reader(bytes), true, 0);
+    }
+
+    /// Decode a value the GUEST produced, where the live tags are refused.
+    ///
+    /// This is the whole of `0025`'s safety rule, and it is one line: a guest
+    /// that could decode arbitrary bytes into a port would have exactly the
+    /// integer-to-port conversion the sandbox forbids.
+    public static long DecodeGuest(Rt rt, byte[] bytes) {
+        return DecodeAt(rt, new Reader(bytes), false, 0);
+    }
+
+    static long DecodeAt(Rt rt, Reader r, bool live, int depth) {
+        if (depth > 128) throw new Refused("value nested too deeply to decode");
+        int tag = r.U8();
+        switch (tag) {
+            case K_NIL: return Val.Nil;
+            case K_TRUE: return Val.True;
+            case K_FALSE: return Val.False;
+            case K_INT: return Num.Integer(rt, r.U64());
+            case K_DOUBLE: return Val.OfDouble(System.BitConverter.Int64BitsToDouble(r.U64()));
+            case K_STRING: {
+                string s = r.Str_();
+                if (s == null) throw new Refused("a string cannot be absent");
+                return Str.Of(rt, s);
+            }
+            case K_KEYWORD: case K_SYMBOL: {
+                string ns = r.Str_();
+                string name = r.Str_();
+                if (name == null) throw new Refused("a name cannot be absent");
+                return tag == K_KEYWORD ? Str.Keyword(rt, ns, name) : Str.Symbol(rt, ns, name);
+            }
+            case K_BYTES: return Bytes.Of(rt, r.Raw(r.U32()));
+            case K_TAGGED: {
+                int bas = rt.Mark();
+                int ti = rt.Push(DecodeAt(rt, r, live, depth + 1));
+                int fi = rt.Push(DecodeAt(rt, r, live, depth + 1));
+                long outv = rt.NewTagged(rt.R(ti), rt.R(fi));
+                rt.PopTo(bas);
+                return outv;
+            }
+            case K_VECTOR: case K_LIST: case K_SET: {
+                int n = r.U32();
+                int bas = rt.Mark();
+                for (int k = 0; k < n; k++) rt.Push(DecodeAt(rt, r, live, depth + 1));
+                long outv;
+                if (tag == K_VECTOR) {
+                    outv = Vec.FromRoots(rt, bas, n);
+                } else if (tag == K_LIST) {
+                    outv = Seqs.FromRoots(rt, bas, n);
+                } else {
+                    // No `FromRoots` for a set, so it is built by conj -- and
+                    // the accumulator lives on the ROOT STACK, because
+                    // `Sets.Conj` allocates.
+                    int acc = rt.Push(rt.roots.shared.Singletons[Rt.SingEmptySet]);
+                    for (int k = 0; k < n; k++) {
+                        rt.SetR(acc, Sets.Conj(rt, rt.R(acc), rt.R(bas + k)));
+                    }
+                    outv = rt.R(acc);
+                }
+                rt.PopTo(bas);
+                return outv;
+            }
+            case K_MAP: {
+                int n = r.U32();
+                int bas = rt.Mark();
+                for (int k = 0; k < n * 2; k++) rt.Push(DecodeAt(rt, r, live, depth + 1));
+                int acc = rt.Push(rt.roots.shared.Singletons[Rt.SingEmptyMap]);
+                for (int k = 0; k < n; k++) {
+                    rt.SetR(acc, Maps.Assoc(rt, rt.R(acc), rt.R(bas + k * 2), rt.R(bas + k * 2 + 1)));
+                }
+                long outv = rt.R(acc);
+                rt.PopTo(bas);
+                return outv;
+            }
+            case K_TABLE: {
+                int ncols = r.U32();
+                int bas = rt.Mark();
+                // The schema pairs, then the columns. Built through the ordinary
+                // constructors, so a table off the wire is checked exactly as
+                // one built in the program is -- a decoder that skipped the
+                // schema check would be a way to make a table that is not
+                // closed.
+                int pi = rt.Push(Vec.Empty(rt));
+                for (int c = 0; c < ncols; c++) {
+                    int ni = rt.Push(DecodeAt(rt, r, live, depth + 1));
+                    int tyi = rt.Push(DecodeAt(rt, r, live, depth + 1));
+                    int ei = rt.Push(Vec.Empty(rt));
+                    rt.SetR(ei, Vec.Conj(rt, rt.R(ei), rt.R(ni)));
+                    rt.SetR(ei, Vec.Conj(rt, rt.R(ei), rt.R(tyi)));
+                    long pair = rt.R(ei);
+                    rt.PopTo(ni);
+                    rt.SetR(pi, Vec.Conj(rt, rt.R(pi), pair));
+                }
+                int nrows = r.U32();
+                int ci = rt.Push(Vec.Empty(rt));
+                for (int c = 0; c < ncols; c++) {
+                    int coli = rt.Push(Vec.Empty(rt));
+                    for (int k = 0; k < nrows; k++) {
+                        rt.SetR(coli, Vec.Conj(rt, rt.R(coli), DecodeAt(rt, r, live, depth + 1)));
+                    }
+                    long col = rt.R(coli);
+                    rt.PopTo(coli);
+                    rt.SetR(ci, Vec.Conj(rt, rt.R(ci), col));
+                }
+                long schema = Table.newSchema(rt, rt.R(pi));
+                if (!Val.IsNil(rt.thrown)) {
+                    rt.PopTo(bas);
+                    throw new Refused("a table arrived with a schema it cannot have");
+                }
+                int si = rt.Push(schema);
+                long outv = Table.tableFromColumns(rt, rt.R(si), rt.R(ci), nrows);
+                rt.PopTo(bas);
+                if (!Val.IsNil(rt.thrown)) {
+                    throw new Refused("a table arrived that its own schema refuses");
+                }
+                return outv;
+            }
+            case K_PORT: {
+                if (!live) throw new Refused(IdentityRefused);
+                int id = r.U32();
+                // INTERN OR MINT. A port the host names in a message is a port
+                // it is handing to this sandbox, and that is how a capability
+                // gets delegated (`doc/decisions/0027`). Arriving twice costs
+                // nothing and counts once: the handle is interned by host id,
+                // so the second arrival finds the first object.
+                long p = Conc.InstallBridgePort(rt, id, Val.Nil);
+                if (Val.IsNil(p)) throw new Refused("port " + id + " could not be installed here");
+                return p;
+            }
+            case K_SENTINEL: {
+                if (!live) throw new Refused(IdentityRefused);
+                long hostId = r.U64();
+                string label = r.Str_();
+                if (label == null) throw new Refused("a label cannot be absent");
+                int bas = rt.Mark();
+                int li = rt.Push(Str.Of(rt, label));
+                long outv = rt.NewOpaque(rt.R(li), hostId);
+                rt.PopTo(bas);
+                return outv;
+            }
+            default: throw new Refused("unknown tag " + tag + " in the encoding");
+        }
+    }
+
+    const string IdentityRefused =
+        "a port or a sentinel cannot be decoded here: they are identities, "
+        + "and an identity is held rather than described";
 }

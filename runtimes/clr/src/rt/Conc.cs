@@ -66,10 +66,14 @@ public static class Conc {
     /// read-modify-write with an allocation in the middle -- two executors
     /// sending into one channel lost exactly half the traffic. See the Rust
     /// `port_enqueue` for the protocol, which this mirrors step for step.
+    /// `PT_ROOT`, `PT_FORMAT`, `PT_OPTS` and `PT_BINARY` are GONE
+    /// (`doc/decisions/0027`). A bridge handle is ordinary memory -- a handle
+    /// nothing refers to is precisely what a release is for, so rooting it would
+    /// defeat the count -- and a bridge is always the runtime's wire format, so
+    /// there is no format, no options and no binary flag to remember.
     public const int PT_ID = 0, PT_STATE = 1, PT_CAP = 2, PT_INBOX = 3,
         PT_READ = 4, PT_BYTES = 5, PT_PEER = 6, PT_LABEL = 7, PT_KIND = 8,
-        PT_ROOT = 9, PT_FORMAT = 10, PT_OPTS = 11, PT_BINARY = 12,
-        PT_WRITE = 13, PT_RING = 14, PT_LEN = 15;
+        PT_WRITE = 9, PT_RING = 10, PT_LEN = 11;
 
     /// How many messages a bridge end's ring holds. Its `PT_CAP` bounds BYTES,
     /// which is the bound that matters for memory; this bounds the count so the
@@ -87,16 +91,29 @@ public static class Conc {
     /// with every host that reads them.
     public const int P_PENDING = 0, P_OPEN = 1, P_CLOSED = 2, P_REFUSED = 3,
                      P_HALF = 4, P_ORPHANED = 5;
-    public const int K_CHANNEL = 0, K_FLINT = 1, K_HOST = 2, K_GLOBAL = 3;
+    /// Two kinds, and no third (`doc/decisions/0027`). `K_CHANNEL` joins two
+    /// green threads inside one sandbox and passes values by reference;
+    /// `K_BRIDGE` is a HANDLE on a port the host owns, carrying the host's id
+    /// and encoded messages.
+    ///
+    /// There is no "host port". `open` used to manufacture a PAIR of ends here,
+    /// keep one and offer the other up as the host's, which made the confined
+    /// thing the author of its own authority.
+    public const int K_CHANNEL = 0, K_BRIDGE = 1;
 
     /// A channel's default buffer, in MESSAGES.
     public const long DEFAULT_CAP = 16;
 
-    /// How much a host port will buffer before a send parks.
-    public const long DEFAULT_HOST_CAP = 1 << 20;
+    /// How much a bridge will buffer before a send parks, in BYTES.
+    public const long DEFAULT_BRIDGE_CAP = 1 << 20;
 
     /// What the host is told about, drained through `DrainEvents`.
-    public const int EV_OPEN = 1, EV_MESSAGE = 2, EV_CLOSED = 3;
+    /// `EV_RETAIN` says this sandbox now holds the host's port `a`, pushed
+    /// exactly once per port per sandbox on the miss that mints the handle;
+    /// `EV_RELEASE` says it no longer does. One per retain, so the host's count
+    /// is of HOLDERS (`doc/decisions/0027`).
+    public const int EV_OPEN = 1, EV_MESSAGE = 2, EV_CLOSED = 3,
+                     EV_RETAIN = 4, EV_RELEASE = 5;
 
     // --- waiter ------------------------------------------------------------
 
@@ -114,7 +131,11 @@ public static class Conc {
 
     public const int SC_THREADS = 0, SC_CURRENT = 1, SC_NEXTID = 2,
         SC_EVENTS = 3, SC_EHEAD = 4, SC_PORTS = 5, SC_PAIRS = 6,
-        SC_WAITERS = 7, SC_WFREE = 8, SC_SYSTEM = 9, SC_LEN = 10;
+        SC_WAITERS = 7, SC_WFREE = 8, SC_SYSTEM = 9,
+        /// Host ids of every BRIDGE this sandbox holds a handle for -- ids, not
+        /// references, so the list pins nothing. This is the walk that turns a
+        /// collection into a release (`doc/decisions/0027`).
+        SC_BRIDGES = 10, SC_LEN = 11;
 
     /// Instructions a thread runs before the scheduler takes the slice back.
     /// Preemptive, so a thread with no `yield` in it cannot starve the others.
@@ -149,6 +170,7 @@ public static class Conc {
         rt.SetSlot(Val.AsHeap(rt.R(si)), SC_EHEAD, Val.Fixnum(0));
         rt.SetSlot(Val.AsHeap(rt.R(si)), SC_PORTS, Vec.Empty(rt));
         rt.SetSlot(Val.AsHeap(rt.R(si)), SC_PAIRS, Vec.Empty(rt));
+        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_BRIDGES, Vec.Empty(rt));
         rt.SetSlot(Val.AsHeap(rt.R(si)), SC_WAITERS, Vec.Empty(rt));
         rt.SetSlot(Val.AsHeap(rt.R(si)), SC_WFREE, Val.Fixnum(-1));
         rt.SetSlot(Val.AsHeap(rt.R(si)), SC_NEXTID, Val.Fixnum(1));
@@ -473,8 +495,8 @@ public static class Conc {
         EnsureSched(rt);
         int bas = rt.Mark();
         int li = rt.Push(label);
-        int ai = rt.Push(NewPort(rt, cap, rt.R(li), K_CHANNEL, P_OPEN, Val.Nil));
-        int bi = rt.Push(NewPort(rt, cap, rt.R(li), K_CHANNEL, P_OPEN, Val.Nil));
+        int ai = rt.Push(NewPort(rt, cap, rt.R(li), K_CHANNEL, P_OPEN, -1));
+        int bi = rt.Push(NewPort(rt, cap, rt.R(li), K_CHANNEL, P_OPEN, -1));
         LinkPeers(rt, rt.R(ai), rt.R(bi));
         int vi = rt.Push(Vec.Empty(rt));
         rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.R(ai)));
@@ -484,41 +506,52 @@ public static class Conc {
         return outv;
     }
 
-    /// Install a GLOBAL port the host owns, and hand back the handle
-    /// (`doc/decisions/0027`).
+    /// The handle in THIS sandbox for the host's port `hostId`, minting one if
+    /// this sandbox does not hold it yet (`doc/decisions/0027`).
     ///
-    /// The inversion that file exists to make: a sandbox does not manufacture
-    /// an endpoint and offer it up, it is GIVEN one. `hostId` is the HOST's,
-    /// not this sandbox's -- it means the same thing on both sides, which is
-    /// what makes a handle sendable between two sandboxes at all.
+    /// THIS IS THE REFERENCE COUNT, and it is a count of HOLDERS. The weak
+    /// intern table is what makes that possible: one handle object per host id
+    /// per sandbox, so a port that arrives in two messages -- or is handed in
+    /// twice, or arrives having already been handed in -- is the same object
+    /// both times. `=` says yes, a map keyed by it hits, and the host is told
+    /// exactly once that this sandbox took a reference.
     ///
-    /// The object in this heap carries the id and nothing else that crosses:
-    /// no pointer into host memory, no pointer out of it.
-    public static long InstallGlobalPort(Rt rt, long hostId, long label, long format) {
+    /// `EV_RETAIN` goes out only on a MISS. Counting arrivals instead would make
+    /// the number mean "how many references" rather than "how many holders",
+    /// which is not a number anyone can act on: the host wants to know when it
+    /// may let the port go, and that is when the last holder drops it. The
+    /// matching `EV_RELEASE` comes from `ReapPorts`, or promptly from `Close`.
+    ///
+    /// NOT ROOTED, unlike the host end this replaces: a handle nothing refers
+    /// to is precisely what a release is for. The system port is the exception
+    /// and is rooted by living in `SC_SYSTEM`.
+    public static long InstallBridgePort(Rt rt, long hostId, long label) {
         EnsureSched(rt);
+        if (hostId < 0) return Val.Nil;
+        long existing = PortById(rt, hostId);
+        if (!Val.IsNil(existing) && Fx(rt.Slot(existing, PT_KIND)) == K_BRIDGE) return existing;
         int bas = rt.Mark();
-        int li = rt.Push(label), fi = rt.Push(format);
-        int pi = rt.Push(NewPort(rt, DEFAULT_HOST_CAP, rt.R(li), K_GLOBAL, P_OPEN, rt.R(fi)));
+        int li = rt.Push(label);
+        int pi = rt.Push(NewPort(rt, DEFAULT_BRIDGE_CAP, rt.R(li), K_BRIDGE, P_OPEN, hostId));
         if (Val.IsNil(rt.R(pi))) { rt.PopTo(bas); return Val.Nil; }
-        // The HOST's id replaces the one `NewPort` minted from this sandbox's
-        // counter. A sandbox-local id would mean something different in every
-        // other sandbox, which is the coupling `0027` removes.
-        rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_ID, Val.Fixnum(hostId));
-        // Rooted for as long as the host says it exists: the host holds the
-        // other end, so this one cannot be reclaimed just because the guest
-        // dropped its last reference.
-        long slot = RootPort(rt, rt.R(pi));
-        rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_ROOT, Val.Fixnum(slot));
-        RegisterPort(rt, rt.R(pi));
+        // Recorded as HELD, which is what `ReapPorts` walks to notice the drop.
+        int si = rt.Push(Sched(rt));
+        int bi = rt.Push(rt.Slot(rt.R(si), SC_BRIDGES));
+        long nb = Vec.Conj(rt, rt.R(bi), Val.Fixnum(hostId));
+        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_BRIDGES, nb);
+        PushEvent(rt, EV_RETAIN, hostId, 0, Val.Nil);
         long outv = rt.R(pi);
         rt.PopTo(bas);
         return outv;
     }
 
-    /// The system port: the one a sandbox is given at construction, if it is
-    /// given one at all.
-    public static long InstallSystemPort(Rt rt, long hostId, long label, long format) {
-        long p = InstallGlobalPort(rt, hostId, label, format);
+    /// Install the system port: the bridge a sandbox is DRIVEN over.
+    ///
+    /// A sandbox that is given one can ask for more ports on it; a sandbox that
+    /// is not has no way to reach anything outside itself, which is the honest
+    /// meaning of "no capabilities" and is the default.
+    public static long InstallSystemPort(Rt rt, long hostId, long label) {
+        long p = InstallBridgePort(rt, hostId, label);
         if (Val.IsNil(p)) return Val.Nil;
         int bas = rt.Mark();
         int pi = rt.Push(p);
@@ -544,30 +577,30 @@ public static class Conc {
 
     /// A port of any kind. The id comes from the scheduler so that every port
     /// in a sandbox has a distinct one, which is what the registry is keyed by.
-    static long NewPort(Rt rt, long cap, long label, long kind, long state, long format) {
+    /// A port object. `id` is `-1` to mint one from this sandbox's counter,
+    /// which is what a channel end does; a bridge handle passes the HOST's id
+    /// instead, because that is the id that means the same thing on both sides.
+    static long NewPort(Rt rt, long cap, long label, long kind, long state, long id) {
         int bas = rt.Mark();
-        int li = rt.Push(label), fi = rt.Push(format);
+        int li = rt.Push(label);
         int pi = rt.Push(NewObj(rt, Obj.TyPort, PT_LEN));
         if (Val.IsNil(rt.R(pi))) { rt.PopTo(bas); return Val.Nil; }
         int si = rt.Push(Sched(rt));
-        long id = Fx(rt.Slot(rt.R(si), SC_NEXTID));
-        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_NEXTID, Val.Fixnum(id + 1));
+        if (id < 0) {
+            id = Fx(rt.Slot(rt.R(si), SC_NEXTID));
+            rt.SetSlot(Val.AsHeap(rt.R(si)), SC_NEXTID, Val.Fixnum(id + 1));
+        }
         long p = Val.AsHeap(rt.R(pi));
         rt.SetSlot(p, PT_ID, Val.Fixnum(id));
         rt.SetSlot(p, PT_STATE, Val.Fixnum(state));
         rt.SetSlot(p, PT_CAP, Val.Fixnum(cap));
-        // The ring, allocated ONCE: a send must not allocate. NOT on a K_HOST
-        // end, which never has a message put in it -- both directions go
-        // elsewhere. ONE array: a slot's own word says whether it is vacant.
-        long ring = kind == K_CHANNEL ? System.Math.Max(cap, 1) : kind == K_HOST ? 0 : RingMessages;
+        // The ring, allocated ONCE: a send must not allocate. ONE array: a
+        // slot's own word says whether it is vacant.
+        long ring = kind == K_CHANNEL ? System.Math.Max(cap, 1) : RingMessages;
         rt.SetSlot(p, PT_RING, Val.Fixnum(ring));
-        if (ring == 0) {
-            rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_INBOX, Val.Nil);
-        } else {
-            int sli = rt.Push(NewObj(rt, Obj.TyNode, (int) ring));
-            for (int i = 0; i < ring; i++) rt.SetSlot(Val.AsHeap(rt.R(sli)), i, Val.Empty);
-            rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_INBOX, rt.R(sli));
-        }
+        int sli = rt.Push(NewObj(rt, Obj.TyNode, (int) ring));
+        for (int i = 0; i < ring; i++) rt.SetSlot(Val.AsHeap(rt.R(sli)), i, Val.Empty);
+        rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_INBOX, rt.R(sli));
         p = Val.AsHeap(rt.R(pi));
         rt.SetSlot(p, PT_READ, Val.Fixnum(0));
         rt.SetSlot(p, PT_WRITE, Val.Fixnum(0));
@@ -579,15 +612,7 @@ public static class Conc {
         rt.SetSlot(p, PT_PEER, Val.Fixnum(-1));
         rt.SetSlot(p, PT_LABEL, rt.R(li));
         rt.SetSlot(p, PT_KIND, Val.Fixnum(kind));
-        rt.SetSlot(p, PT_ROOT, Val.Fixnum(-1));
-        rt.SetSlot(p, PT_FORMAT, rt.R(fi));
-        rt.SetSlot(p, PT_OPTS, Maps.Empty(rt));
-        rt.SetSlot(p, PT_BINARY, Val.Fixnum(0));
         RegisterPort(rt, rt.R(pi));
-        if (kind == K_HOST) {
-            long slot = RootPort(rt, rt.R(pi));
-            rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_ROOT, Val.Fixnum(slot));
-        }
         long outv = rt.R(pi);
         rt.PopTo(bas);
         return outv;
@@ -636,30 +661,6 @@ public static class Conc {
     }
 
     /// A HOST end must outlive every flint reference to it, so it goes in
-    /// `Singletons`, which the collector already traces. Returns the slot.
-    static long RootPort(Rt rt, long p) {
-        long[] sg = rt.roots.shared.Singletons;
-        for (int i = Rt.SingCount; i < sg.Length; i++) {
-            if (Val.IsNil(sg[i])) { sg[i] = p; return i; }
-        }
-        int old = sg.Length;
-        long[] bigger = new long[System.Math.Max(old * 2, Rt.SingCount + 8)];
-        System.Array.Copy(sg, bigger, old);
-        for (int i = old; i < bigger.Length; i++) bigger[i] = Val.Nil;
-        bigger[old] = p;
-        rt.roots.shared.Singletons = bigger;
-        return old;
-    }
-
-    static void UnrootPort(Rt rt, long p) {
-        long slot = Fx(rt.Slot(p, PT_ROOT));
-        long[] sg = rt.roots.shared.Singletons;
-        if (slot >= 0 && slot < sg.Length) {
-            sg[(int) slot] = Val.Nil;
-            rt.SetSlot(Val.AsHeap(p), PT_ROOT, Val.Fixnum(-1));
-        }
-    }
-
     /// Link two ends. IDS ONLY, and the pairing is recorded in the scheduler as
     /// well, because when one end is collected its object is gone and the other
     /// end still has to be able to find out what happened to it.
@@ -768,7 +769,7 @@ public static class Conc {
     /// refused BY NAME, because "cannot send that" sends somebody hunting
     /// through a nested structure.
     public static string CheckSendable(Rt rt, long v) {
-        return CheckSendableAt(rt, v, 0, CarrySandboxed);
+        return CheckSendableAt(rt, v, 0, CarryCrossing);
     }
 
     /// The same, for a carrier that may convey IDENTITIES. See the Rust.
@@ -781,7 +782,11 @@ public static class Conc {
     /// that mean something on the far side; a host port whose codec runs in the
     /// SANDBOX carries none, because a guest-side decoder is an encoder read
     /// backwards.
-    public const int CarryLocal = 0, CarryCrossing = 1, CarrySandboxed = 2;
+    /// There used to be a third class, for a port whose codec ran in the
+    /// SANDBOX. There is no such port any more: encoding happens at the bridge
+    /// boundary, in the runtime, and a guest is never handed an encoder. The
+    /// rule that class enforced is now enforced by the guest not having one.
+    public const int CarryLocal = 0, CarryCrossing = 1;
 
     static string DescribeFn(Rt rt, long v) {
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
@@ -822,28 +827,18 @@ public static class Conc {
             // there. See the table in the Rust.
             case Obj.TyPort:
                 if (carry == CarryLocal) return null;
-                if (carry == CarryCrossing) {
-                    if (CrossesAHeap(Fx(rt.Slot(v, PT_KIND)))) return null;
-                    return "a channel endpoint cannot be sent to the host: both its ends"
-                         + " live in this heap and the host has never been told it exists,"
-                         + " so its id would name one of our objects from outside. A host"
-                         + " port can be sent, because its id is the host's own.";
-                }
-                return "a port cannot be sent through a port whose codec runs in the"
-                     + " sandbox: the receiver could write the same bytes, and then a port"
-                     + " is mintable from an integer. A channel carries one, and so does a"
-                     + " host port opened with :format :flint.";
+                if (CrossesAHeap(Fx(rt.Slot(v, PT_KIND)))) return null;
+                return "a channel endpoint cannot be sent to the host: both its ends"
+                     + " live in this heap and the host has never been told it exists,"
+                     + " so its id would name one of our objects from outside. A bridge"
+                     + " can be sent, because its id is the host's own.";
             // An opaque value is identity and nothing else
             // (`doc/decisions/0022`), so there is nothing to serialise that
             // would still BE it. Anything a codec could write down is something
             // the receiver could write down too, and then it is mintable --
             // which is the entire property gone.
             case Obj.TyOpaque:
-                if (carry != CarrySandboxed) return null;
-                return "an opaque value cannot be sent through a port whose codec runs in"
-                     + " the sandbox: the receiver could write the same bytes, and then it"
-                     + " is mintable. Open the port with :format :flint, where the runtime"
-                     + " encodes and only the host can decode.";
+                return null;
             case Obj.TyStr: case Obj.TyRope: case Obj.TySym: case Obj.TyKw:
             case Obj.TyBigint: case Obj.TyRegex:
                 return null;
@@ -907,20 +902,10 @@ public static class Conc {
     }
 
     /// Does this KIND carry BYTES across a boundary, rather than values inside
-    /// one heap? True for a host port and for a global port, and the two paths
-    /// are the same path -- a host port is just a global port whose far end is
-    /// the host. One predicate rather than a widening `==` at each of six
+    /// one heap? One predicate rather than a widening `==` at each of six
     /// sites, because the last time this was a set of scattered comparisons one
     /// of them was missed.
-    public static bool CrossesAHeap(long kind) { return kind == K_FLINT || kind == K_GLOBAL; }
-
-    /// Does this port carry VALUES rather than bytes? `:format :flint` means the
-    /// wire codec, run by the RUNTIME at the boundary rather than by a codec in
-    /// the sandbox. See the Rust `is_wire_port`.
-    public static bool IsWirePort(Rt rt, long p) {
-        long f = rt.Slot(p, PT_FORMAT);
-        return !Val.IsNil(f) && f == Str.Keyword(rt, null, "flint");
-    }
+    public static bool CrossesAHeap(long kind) { return kind == K_BRIDGE; }
 
     static bool NeedPort(Rt rt, long p, string what) {
         if (!IsPort(rt, p)) {
@@ -953,59 +938,46 @@ public static class Conc {
         int bas = rt.Mark();
         int pi = rt.Push(p), vi = rt.Push(v);
         long kind = Fx(rt.Slot(rt.R(pi), PT_KIND));
-        int carry = !CrossesAHeap(kind) ? CarryLocal
-                  : IsWirePort(rt, rt.R(pi)) ? CarryCrossing
-                  : CarrySandboxed;
+        int carry = CrossesAHeap(kind) ? CarryCrossing : CarryLocal;
         string bad = CheckSendableVia(rt, rt.R(vi), carry);
         if (bad != null) { rt.PopTo(bas); return rt.ThrowStr("IllegalArgumentException", bad); }
         if (CrossesAHeap(kind)) {
-            // Bound the host's queue in BYTES: back-pressure exists to bound
-            // memory, and one 4 MB message is not one message's worth of it.
-            bool binary = Fx(rt.Slot(rt.R(pi), PT_BINARY)) == 1;
-            bool encoded = binary
-                ? (Bytes.IsBytes(rt, rt.R(vi)) || rt.IsHeapTy(rt.R(vi), Obj.TyVec))
-                : Str.IsString(rt, rt.R(vi));
-            if (!encoded) {
+            // ENCODING HAPPENS HERE, ALWAYS, AND ONLY HERE.
+            //
+            // A bridge carries bytes and the runtime is what writes them. The
+            // guest hands over a VALUE and is handed one back; it never sees an
+            // encoding, has no encoder, and cannot choose one. That is the
+            // safety rule `Codec` states: a decoder reachable from the guest
+            // would be an encoder read backwards, and since `K_PORT` and
+            // `K_SENTINEL` carry their identity inline as integers a guest can
+            // write, such a guest could mint any host id it liked. An opaque
+            // value's whole meaning is that it cannot.
+            byte[] enc;
+            try {
+                enc = Codec.Encode(rt, rt.R(vi));
+            } catch (Codec.Refused e) {
                 rt.PopTo(bas);
                 return rt.ThrowStr("IllegalArgumentException",
-                    "a host port carries bytes; flint.port/send encodes for you, so this is a "
-                    + "raw send of something that is not already encoded (a string, or a vector "
-                    + "of 0..255, or a byte string, on a binary port)");
+                    "send: this cannot cross a bridge: " + e.Message);
             }
-            // The host reads contiguous bytes, so the rope stops here. This is
-            // the boundary `doc/decisions/0011` means by "flatten before
-            // matching": the tree is an internal representation and nothing
-            // outside the module has to know about it.
-            if (!binary) rt.SetR(vi, Str.Flatten(rt, rt.R(vi)));
-            // Whose bookkeeping the back-pressure lives on.
+            rt.SetR(vi, Bytes.Of(rt, enc));
+            // Bound the queue in BYTES: back-pressure exists to bound memory,
+            // and one 4 MB message is not one message's worth of it.
             //
-            // A HOST port is a pair: two objects in this heap, and the far end
-            // carries the id the host knows and the byte count. A GLOBAL port
-            // is ONE object -- the far end is the host's registry and is not in
-            // any heap (`doc/decisions/0027`) -- so it is its own accounting.
-            int hi;
-            if (kind == K_GLOBAL) {
-                hi = rt.Push(rt.R(pi));
-            } else {
-                long hostEnd = PeerOf(rt, rt.R(pi));
-                if (Val.IsNil(hostEnd)) {
-                    rt.PopTo(bas);
-                    return rt.ThrowStr("IllegalStateException", "the host has closed this port");
-                }
-                hi = rt.Push(hostEnd);
-            }
-            long len = binary
-                ? (Bytes.IsBytes(rt, rt.R(vi)) ? Bytes.Count(rt, rt.R(vi)) : Vec.Count(rt, rt.R(vi)))
-                : Str.ByteLen(rt, rt.R(vi));
-            long cap = Fx(rt.Slot(rt.R(hi), PT_CAP));
-            long queued = Fx(rt.Slot(rt.R(hi), PT_BYTES));
+            // On the handle itself. A bridge is ONE object here -- the far end
+            // is the host's registry and is not in any heap -- so it is its own
+            // accounting, where a host port used to need a second object to
+            // carry the count.
+            long len = enc.Length;
+            long cap = Fx(rt.Slot(rt.R(pi), PT_CAP));
+            long queued = Fx(rt.Slot(rt.R(pi), PT_BYTES));
             if (queued > 0 && queued + len > cap) {
-                long tgt = rt.R(hi);
+                long tgt = rt.R(pi);
                 rt.PopTo(bas);
                 return ParkOnPort(rt, WK_SEND, tgt);
             }
-            rt.SetSlot(Val.AsHeap(rt.R(hi)), PT_BYTES, Val.Fixnum(queued + len));
-            long hid = Fx(rt.Slot(rt.R(hi), PT_ID));
+            rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_BYTES, Val.Fixnum(queued + len));
+            long hid = Fx(rt.Slot(rt.R(pi), PT_ID));
             PushEvent(rt, EV_MESSAGE, hid, len, rt.R(vi));
             rt.PopTo(bas);
             return Val.Nil;
@@ -1070,12 +1042,12 @@ public static class Conc {
             return rt.ThrowStr("IllegalStateException",
                 "receive: the other end of this port is gone, so this can never complete");
         }
-        // A GLOBAL port has no peer OBJECT to ask about: the far end is the
+        // A BRIDGE has no peer OBJECT to ask about: the far end is the
         // host's registry and is not in any heap (`doc/decisions/0027`). Its own
         // state is the whole answer, and the states above have already covered
         // every way that can say "no more" -- so an empty buffer here means
         // "nothing yet", which is what parking is for.
-        if (Fx(rt.Slot(rt.R(pi), PT_KIND)) != K_GLOBAL) {
+        if (Fx(rt.Slot(rt.R(pi), PT_KIND)) != K_BRIDGE) {
             long peer = PeerOf(rt, rt.R(pi));
             if (Val.IsNil(peer)) {
                 rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_STATE, Val.Fixnum(P_ORPHANED));
@@ -1109,18 +1081,40 @@ public static class Conc {
 
     /// Everything that follows from an end closing, however it closed: tell the
     /// host if it is the peer, and wake anybody parked on either side.
+    /// Drop `id` from the held list, so the sweep does not release it twice.
+    static void ForgetBridge(Rt rt, long id) {
+        long s = Sched(rt);
+        if (Val.IsNil(s)) return;
+        int bas = rt.Mark();
+        int si = rt.Push(s);
+        int bi = rt.Push(rt.Slot(rt.R(si), SC_BRIDGES));
+        int n = Vec.Count(rt, rt.R(bi));
+        int ki = rt.Push(Vec.Empty(rt));
+        for (int k = 0; k < n; k++) {
+            long x = Fx(Vec.Nth(rt, rt.R(bi), k));
+            if (x == id) continue;
+            rt.SetR(ki, Vec.Conj(rt, rt.R(ki), Val.Fixnum(x)));
+        }
+        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_BRIDGES, rt.R(ki));
+        rt.PopTo(bas);
+    }
+
     static void CloseSideEffects(Rt rt, long p) {
         int bas = rt.Mark();
         int pi = rt.Push(p);
         if (CrossesAHeap(Fx(rt.Slot(rt.R(pi), PT_KIND)))) {
-            long hostEnd = PeerOf(rt, rt.R(pi));
-            if (!Val.IsNil(hostEnd)) {
-                int hi = rt.Push(hostEnd);
-                long id = Fx(rt.Slot(rt.R(hi), PT_ID));
-                rt.SetSlot(Val.AsHeap(rt.R(hi)), PT_STATE, Val.Fixnum(P_CLOSED));
-                PushEvent(rt, EV_CLOSED, id, 0, Val.Nil);
-                rt.PopTo(hi);
-            }
+            // A CLOSE IS A RELEASE, and it is the prompt one.
+            //
+            // Dropping the last reference and waiting for the collector gets
+            // here too, via `ReapPorts`, but that is the backstop rather than
+            // the mechanism -- it is not prompt, and a host holding a socket
+            // until then is a real cost. Closing says so now. The id leaves
+            // `SC_BRIDGES` in the same breath, so the sweep does not send a
+            // second release for a port already let go.
+            long id = Fx(rt.Slot(rt.R(pi), PT_ID));
+            PushEvent(rt, EV_CLOSED, id, 0, Val.Nil);
+            ForgetBridge(rt, id);
+            PushEvent(rt, EV_RELEASE, id, 0, Val.Nil);
         }
         WakeOn(rt, rt.R(pi));
         // The peer becomes HALF-closed rather than closed: it may still drain
@@ -1160,22 +1154,37 @@ public static class Conc {
         if (!Val.IsNil(pending)) {
             // Second time round: the host has answered.
             rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_PENDING, Val.Nil);
-            // ONLY A REFUSAL IS A REFUSAL. The host may answer and then close
+            // A GRANT left the handle here; a refusal left the sentinel below.
+            // Only a refusal is a refusal -- the host may grant and then close
             // the port before this thread is next scheduled, and the port is
-            // then `P_HALF` -- "granted, and now finished", not "you may not
+            // then `P_HALF` ("granted, and now finished"), not "you may not
             // have this".
-            if (Fx(rt.Slot(pending, PT_STATE)) != P_REFUSED) { rt.PopTo(bas); return pending; }
+            if (IsPort(rt, pending)) { rt.PopTo(bas); return pending; }
             string nm2 = Str.IsString(rt, rt.R(ni)) ? Str.Text(rt, rt.R(ni)) : "?";
             rt.PopTo(bas);
             return rt.ThrowStr("SecurityException", "the host refused to open \"" + nm2 + "\"");
         }
-        int ei = rt.Push(NewPort(rt, DEFAULT_HOST_CAP, rt.R(ni), K_FLINT, P_PENDING, Val.Nil));
-        int hi = rt.Push(NewPort(rt, DEFAULT_HOST_CAP, rt.R(ni), K_HOST, P_PENDING, Val.Nil));
-        LinkPeers(rt, rt.R(ei), rt.R(hi));
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_PENDING, rt.R(ei));
-        long token = NewWaiter(rt, WK_OPEN, rt.R(ei));
+        // NO SYSTEM PORT, NO ASKING. A sandbox given no transport has no way to
+        // reach anything outside itself, and saying so here is more honest than
+        // pushing an event nothing will ever drain -- that would park the thread
+        // for ever and read as a hang rather than as a refusal.
+        long sys = SystemPort(rt);
+        if (Val.IsNil(sys)) {
+            string nm3 = Str.IsString(rt, rt.R(ni)) ? Str.Text(rt, rt.R(ni)) : "?";
+            rt.PopTo(bas);
+            return rt.ThrowStr("SecurityException",
+                "this sandbox was given no system port, so it cannot ask for \"" + nm3 + "\"");
+        }
+        int si = rt.Push(sys);
+        // The waiter hangs off the SYSTEM port, because that is the port the
+        // request went out on and there is no other port yet -- the whole point
+        // is that the answer is what creates one.
+        long token = NewWaiter(rt, WK_OPEN, rt.R(si));
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_TOKEN, Val.Fixnum(token));
-        long hostId = Fx(rt.Slot(rt.R(hi), PT_ID));
+        // Marked as awaiting an answer with a value that is NOT a port, so the
+        // resume above can tell "granted" from "refused" by type rather than by
+        // a state flag on an object that does not exist until granted.
+        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_PENDING, Val.Fixnum(0));
         // THE ARGUMENTS, ENCODED, are the payload -- not a bare name string.
         // That is the whole of "the host does what it wants with them": one
         // value crosses, and anything an opaque value carries survives the trip
@@ -1196,9 +1205,10 @@ public static class Conc {
             return rt.ThrowStr("IllegalArgumentException",
                 "open: this cannot be sent to the host: " + e.Message);
         }
-        int pi = rt.Push(Bytes.Of(rt, call));
-        PushEvent(rt, EV_OPEN, token, hostId, rt.R(pi));
-        long target = rt.R(ei);
+        int payi = rt.Push(Bytes.Of(rt, call));
+        long sysId = Fx(rt.Slot(rt.R(si), PT_ID));
+        PushEvent(rt, EV_OPEN, token, sysId, rt.R(payi));
+        long target = rt.R(si);
         rt.PopTo(bas);
         return Park(rt, target);
     }
@@ -1216,30 +1226,56 @@ public static class Conc {
     /// it no longer matches the slot, which is exactly the late-or-duplicated
     /// reply that would otherwise resume a stranger's thread.
     public static bool HostContinue(Rt rt, long token, bool ok) {
+        if (ok) {
+            // A GRANT HAS TO NAME A PORT. There is no port to grant until the
+            // host says which one -- that is what `0027` inverted -- so this
+            // form can only ever mean a refusal, and a host that means to grant
+            // calls `HostGrant`. Answering `true` here would have to invent a
+            // port, which is exactly the construction the sandbox may not do and
+            // the host must not be able to do by accident.
+            return false;
+        }
         long w = WaiterAt(rt, token);
         if (Val.IsNil(w)) return false;
         int bas = rt.Mark();
         int wi = rt.Push(w);
-        if (Fx(rt.Slot(rt.R(wi), W_KIND)) == WK_OPEN) {
-            int pi = rt.Push(rt.Slot(rt.R(wi), W_PORT));
-            long state = ok ? P_OPEN : P_REFUSED;
-            rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_STATE, Val.Fixnum(state));
-            long hostEnd = PeerOf(rt, rt.R(pi));
-            if (!Val.IsNil(hostEnd)) {
-                rt.SetSlot(Val.AsHeap(hostEnd), PT_STATE, Val.Fixnum(state));
-                // Refused: the host never gets a handle, so nothing needs to
-                // keep this end alive.
-                if (!ok) UnrootPort(rt, hostEnd);
-            }
-            rt.PopTo(pi);
-        }
+        // The refusal is left on the thread as a non-port, which `PortOpen`
+        // reads on resume. Nothing else has to be cleaned up, because a refused
+        // open allocated nothing in the first place.
         WakeWaiter(rt, rt.R(wi));
         rt.PopTo(bas);
         return true;
     }
 
-    /// Put bytes into the flint end of a host port. Wakes a parked receiver; it
-    /// does not run anything.
+    /// Grant an open: hand the waiting thread a handle on the host's port
+    /// `hostPortId` (`doc/decisions/0027`).
+    ///
+    /// The id is the HOST's. It is the same id in every sandbox that holds this
+    /// port, which is what makes a handle sendable between two of them at all,
+    /// and it is the id the retain and release events name.
+    ///
+    /// If this sandbox already holds that port, the SAME handle comes back and
+    /// no reference is taken -- granting a port twice is not two holders.
+    public static bool HostGrant(Rt rt, long token, long hostPortId) {
+        long w = WaiterAt(rt, token);
+        if (Val.IsNil(w)) return false;
+        int bas = rt.Mark();
+        int wi = rt.Push(w);
+        long label = rt.Slot(rt.R(wi), W_PORT);
+        label = Val.IsNil(label) ? Val.Nil : rt.Slot(label, PT_LABEL);
+        int li = rt.Push(label);
+        long p = InstallBridgePort(rt, hostPortId, rt.R(li));
+        if (Val.IsNil(p)) { rt.PopTo(bas); return false; }
+        int pi = rt.Push(p);
+        long th = rt.Slot(rt.R(wi), W_THREAD);
+        if (!Val.IsNil(th)) rt.SetSlot(Val.AsHeap(th), TH_PENDING, rt.R(pi));
+        WakeWaiter(rt, rt.R(wi));
+        rt.PopTo(bas);
+        return true;
+    }
+
+    /// Put a message into a bridge from the host's side. Wakes a parked
+    /// receiver; it does not run anything.
     ///
     /// Returns FALSE WHEN THE GUEST'S BUFFER IS FULL, and the host must hold the
     /// message and offer it again after the next pump. Without that, a server
@@ -1252,17 +1288,11 @@ public static class Conc {
         if (Val.IsNil(hostEnd)) return false;
         int bas = rt.Mark();
         int hi = rt.Push(hostEnd);
-        // A GLOBAL port is ONE object and the id is its own, so the lookup has
-        // already found the end to deliver into. A HOST port is a pair, and the
-        // id belongs to the far end, so the delivery goes to its peer.
-        int pi;
-        if (Fx(rt.Slot(rt.R(hi), PT_KIND)) == K_GLOBAL) {
-            pi = rt.Push(rt.R(hi));
-        } else {
-            long flint = PeerOf(rt, rt.R(hi));
-            if (Val.IsNil(flint)) { rt.PopTo(bas); return false; }
-            pi = rt.Push(flint);
-        }
+        // A bridge is ONE object and the id is its own, so the lookup above has
+        // already found the end to deliver into. There is no pair and no peer
+        // hop: that indirection existed only because a host port kept its
+        // bookkeeping on a second object (`doc/decisions/0027`).
+        int pi = rt.Push(rt.R(hi));
         // BACK-PRESSURE in bytes, CLAIMED ATOMICALLY: two host threads
         // delivering into one end would both read the same `queued`, both find
         // room, and both write -- and the bound that exists to cap memory would
@@ -1275,12 +1305,18 @@ public static class Conc {
             if (queued > 0 && queued + len > cap) { rt.PopTo(bas); return false; }
             if (CasSlot(rt, pv, PT_BYTES, Val.Fixnum(queued), Val.Fixnum(queued + len))) break;
         }
-        // One object, not one boxed fixnum per byte, on a binary port: a vector
-        // would cost a 32-way trie and an allocation per 32 bytes for data the
-        // codec immediately walks back into bytes.
-        long v = Fx(rt.Slot(rt.R(pi), PT_BINARY)) == 1
-               ? Bytes.Of(rt, bytes)
-               : Str.Of(rt, System.Text.Encoding.UTF8.GetString(bytes));
+        long v;
+        try {
+            v = Codec.Decode(rt, bytes);
+        } catch (System.Exception) {
+            // Refused rather than delivered as anything else: a message the
+            // format cannot read is the host's error, and turning it into a
+            // string here would hand the guest something that silently was not
+            // what was sent.
+            GiveBack(rt, rt.R(pi), len);
+            rt.PopTo(bas);
+            return false;
+        }
         int vi = rt.Push(v);
         if (!Enqueue(rt, rt.R(pi), rt.R(vi))) {
             // The ring is full though the byte bound had room: the guest has
@@ -1305,24 +1341,19 @@ public static class Conc {
     }
 
     /// The host lets go of its end. The port may now be collected.
+    /// HALF-CLOSED, not closed: whatever the host already delivered is still
+    /// there to be read, and only when that is drained does it read as end of
+    /// stream. There is one object now, not a pair, so this is the state of the
+    /// handle itself rather than of a second end standing in for it.
     public static void HostClosePort(Rt rt, long hostPortId) {
-        long hostEnd = PortById(rt, hostPortId);
-        if (Val.IsNil(hostEnd)) return;
+        long p = PortById(rt, hostPortId);
+        if (Val.IsNil(p)) return;
         int bas = rt.Mark();
-        int hi = rt.Push(hostEnd);
-        rt.SetSlot(Val.AsHeap(rt.R(hi)), PT_STATE, Val.Fixnum(P_CLOSED));
-        long flint = PeerOf(rt, rt.R(hi));
-        if (!Val.IsNil(flint)) {
-            int fi = rt.Push(flint);
-            // Half-closed: whatever the host already delivered is still there
-            // to be read, and only then does it read as end of stream.
-            if (Fx(rt.Slot(rt.R(fi), PT_STATE)) == P_OPEN) {
-                rt.SetSlot(Val.AsHeap(rt.R(fi)), PT_STATE, Val.Fixnum(P_HALF));
-            }
-            WakeOn(rt, rt.R(fi));
-            rt.PopTo(fi);
+        int hi = rt.Push(p);
+        if (Fx(rt.Slot(rt.R(hi), PT_STATE)) == P_OPEN) {
+            rt.SetSlot(Val.AsHeap(rt.R(hi)), PT_STATE, Val.Fixnum(P_HALF));
         }
-        UnrootPort(rt, rt.R(hi));
+        WakeOn(rt, rt.R(hi));
         rt.PopTo(bas);
     }
 
@@ -1353,13 +1384,12 @@ public static class Conc {
     /// carrier of the truth. 255 means the runtime knows nothing about this id,
     /// which a host should also treat as "done".
     public static long HostPortState(Rt rt, long hostPortId) {
-        long hostEnd = PortById(rt, hostPortId);
-        if (Val.IsNil(hostEnd)) return 255;
-        long flint = PeerOf(rt, hostEnd);
-        // The runtime end has been collected: as good as closed, and this is
-        // exactly the case a missed event would have lost.
-        if (Val.IsNil(flint)) return P_CLOSED;
-        return PortStateNow(rt, flint);
+        long p = PortById(rt, hostPortId);
+        // Never heard of, or the handle has been collected. Either way a host
+        // treats it as done, which is the case a missed `:closed` event would
+        // otherwise leak.
+        if (Val.IsNil(p)) return 255;
+        return PortStateNow(rt, p);
     }
 
     /// Serialise every pending event into one contiguous buffer and hand it
@@ -1454,6 +1484,26 @@ public static class Conc {
         if (Val.IsNil(s)) return;
         int bas = rt.Mark();
         int si = rt.Push(s);
+        // --- bridges: a collection is a RELEASE -----------------------------
+        //
+        // The handle is ordinary memory and is not rooted, so the collector
+        // finding it unreachable IS this sandbox letting the port go. One
+        // release per retain, which is what makes the host's count a count of
+        // holders rather than of arrivals (`doc/decisions/0027`).
+        int bri = rt.Push(rt.Slot(rt.R(si), SC_BRIDGES));
+        int brn = Vec.Count(rt, rt.R(bri));
+        int hli = rt.Push(Vec.Empty(rt));
+        for (int k = 0; k < brn; k++) {
+            long bid = Fx(Vec.Nth(rt, rt.R(bri), k));
+            if (Val.IsNil(PortById(rt, bid))) {
+                PushEvent(rt, EV_RELEASE, bid, 0, Val.Nil);
+                continue;
+            }
+            rt.SetR(hli, Vec.Conj(rt, rt.R(hli), Val.Fixnum(bid)));
+        }
+        rt.SetSlot(Val.AsHeap(rt.R(si)), SC_BRIDGES, rt.R(hli));
+
+        // --- channels: a collected end orphans its peer ----------------------
         int ii = rt.Push(rt.Slot(rt.R(si), SC_PORTS));
         int n = Vec.Count(rt, rt.R(ii));
         int li = rt.Push(Vec.Empty(rt));
@@ -1468,15 +1518,11 @@ public static class Conc {
             long peer = PortById(rt, PeerIdOfDead(rt, id));
             if (Val.IsNil(peer)) continue;
             int pi = rt.Push(peer);
-            long pkind = Fx(rt.Slot(rt.R(pi), PT_KIND));
             long pst = Fx(rt.Slot(rt.R(pi), PT_STATE));
             if (pst != P_CLOSED && pst != P_ORPHANED) {
                 // Its peer vanished WITHOUT closing, which is not the same as a
                 // tidy close and should not read like one.
                 rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_STATE, Val.Fixnum(P_ORPHANED));
-                if (pkind == K_HOST) {
-                    PushEvent(rt, EV_CLOSED, Fx(rt.Slot(rt.R(pi), PT_ID)), 0, Val.Nil);
-                }
             }
             FailWaitersOn(rt, rt.R(pi),
                 "the other end of this port is unreachable, so this can never complete");
@@ -1510,7 +1556,10 @@ public static class Conc {
 
     /// Program exit: close every flint end so a host is never left guessing
     /// whether more is coming, and leave the events for the final drain.
-    public static void CloseAllFlintEnds(Rt rt) {
+    /// Program exit: close and release every bridge, so a host is never left
+    /// holding a reference for a sandbox that has finished, and leave the
+    /// events for the final drain.
+    public static void CloseAllBridges(Rt rt) {
         long s = Sched(rt);
         if (Val.IsNil(s)) return;
         int bas = rt.Mark();
@@ -1749,7 +1798,7 @@ public static class Conc {
             if (MainFinished(rt)) {
                 // Exit closes every flint end and leaves the events for one last
                 // drain, so a host never has to guess whether more is coming.
-                CloseAllFlintEnds(rt);
+                CloseAllBridges(rt);
                 if (PendingEvents(rt)) { rt.status = 2; return Val.Nil; }
                 rt.status = 0;
                 return MainResult(rt);
