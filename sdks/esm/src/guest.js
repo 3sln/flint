@@ -37,7 +37,13 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     // at the same instruction on every machine.
     if (stepLimit && e.set_step_limit) e.set_step_limit(stepLimit);
     try {
-      const v = call(fn, [args.map(String)]);
+      // STRINGS, explicitly. `codec.from` reads a leading `:` as a keyword,
+      // which is right for a host handing over data and wrong for a command
+      // line: `:target` is an argument spelled with a colon, not a keyword, and
+      // `flint.cli`'s option parser tests `starts-with? k ":"` on a STRING. It
+      // silently skipped every `:key value` option, so `build :target jvm` read
+      // as a bare `build`.
+      const v = call(fn, [codec.vec(args.map((a) => codec.str(String(a))))]);
       return { code: 0, out: v === null || v === undefined ? '' : String(v) };
     } catch (err) {
       return { code: 1, out: err.kind ? `${err.kind}: ${err.message.replace(/^[^:]*: /, '')}` : String(err.message ?? err) };
