@@ -204,32 +204,75 @@ wire codec: a closure cannot cross one (`0006`, `0025`). Not a new rule, but a
 virtual namespace is the first place it becomes visible in the language surface,
 and the refusal should say so rather than leave it to be discovered.
 
-### The one thing to decide first: are the var names known?
+### The var list is OPTIONAL, and that is the whole answer
 
-The flag is enough to choose what to emit. It is not enough to know whether
-`(vns/f x)` should compile at all.
+The resolver may answer with the namespace's vars and their signatures, and may
+answer without them:
 
-**Known at build time** -- declared in `deps.edn` beside the `:pod/version` --
-and the compiler can refuse an unknown var and a wrong arity before it emits
-anything, with the message `resolve-sym` already produces. **Not known** and both
-become run-time errors, in a language where they are otherwise compile-time ones.
+```text
+namespace -> { workspace, identity, :virtual }
+namespace -> { workspace, identity, :virtual, vars [{:name f :arities [...]}] }
+```
 
-Note what this fork is NOT, now: it is no longer about how to emit. The emission
-is the same either way, which is what makes the library shape worth having. It is
-only about how early a mistake is caught.
+**With them**, the compiler puts them in `cc[:vars]` and every existing check
+works untouched: an unknown var is a COMPILE error with the message
+`resolve-sym` already produces, a wrong arity is caught where every other wrong
+arity is caught, and `--explain` can show what a program actually reaches inside
+a pod.
 
-Leaning to **declared, not fetched**. Fetching means a live process in the middle
-of a build, and the point of this file is to make what a dependency can do
-something you can read.
+**Without them**, any symbol in that namespace resolves, `flint.virtual/call` is
+emitted, and both of those become run-time errors -- in a language where they are
+otherwise compile-time ones.
+
+Note what does NOT change between the two: the emission. Identical either way,
+which is what makes the library shape worth having. The var list buys checking,
+not codegen.
+
+### Where the list comes from, and it is the same question asked twice
+
+`:list` in the protocol above IS this request. A build that wants the checking
+boots the pod, opens its port, sends `{:op :list}`, and compiles against the
+answer -- and babashka's pods already support exactly that, which is why the
+option is worth having rather than theoretical.
+
+So there is one way to ask what a namespace holds, and the only difference is
+WHEN. That is worth more than it sounds: a second, build-only description format
+would be a second thing to keep true.
+
+The alternative source is a declaration in `deps.edn` beside the
+`:pod/version` -- no process, and true only as long as somebody maintains it.
+
+Both are legitimate and the project picks. A build that boots a pod is a build
+with a live process in it, which is a real cost and should be a choice made in
+the open rather than a default; the answer should be cached under `.flint` like
+a fetched dependency, so it is paid once rather than per build.
+
+### It has to be legible which mode a build was in
+
+The same mistake is a compile error or a run-time error depending on what the
+resolver could tell the compiler. That is defensible -- you get more checking if
+you can afford to boot the pod -- but only if a program can say which it got.
+The build should name the virtual namespaces it CHECKED and the ones it took on
+trust, rather than leaving the difference to be discovered when one of them
+throws in production.
+
+### Signatures are partial, and should say so
+
+A pod's `describe` gives names and metadata; arities are not always in it. An
+implementation that does not know a var's arities should say so explicitly --
+"variadic, unchecked" -- rather than by omitting the field, so that "no arity
+information" and "takes no arguments" cannot be confused.
 
 ### Open, on virtual namespaces
 
 * `:get` on a var: a snapshot taken when the port opens, or a read each time?
   Different semantics, and the interface should not leave an implementation to
   choose silently.
-* **Macros.** A pod providing one means invoking at COMPILE time, from inside
-  the compiler -- the live-process-in-the-build problem again. Babashka's pods
-  do not. Leaning no, stated rather than merely absent.
+* **Macros.** A pod providing one means invoking at COMPILE time from inside
+  the compiler -- which is a bigger step than asking `:list`, even though both
+  need the pod booted: `:list` reads a description, a macro runs the pod's code
+  and lets its output into the program. Babashka's pods do not. Leaning no,
+  stated rather than merely absent.
 * A virtual namespace required transitively by something that does not know it
   is virtual. Indistinguishable at the call site is the point, but the guard has
   to be checked at every edge rather than only the first.
@@ -303,9 +346,11 @@ being careful.
 4. **Virtual namespaces**: the resolver's flag, `flint.virtual` over
    `flint.port` and `flint.rpc`, and the three forms the compiler emits into it.
    Independent of grants and guards -- a virtual namespace is useful without
-   them -- but it is what makes a pod expressible. Decide the names question
-   first; it decides how early a mistake is caught, not how anything is emitted.
-5. Pods as a dependency kind: one implementation of the virtual interface,
+   them -- but it is what makes a pod expressible.
+5. **The optional var list**, through the protocol's own `:list`, and the build
+   output that says which virtual namespaces were checked and which were taken
+   on trust. Separable from 4: it buys checking, not codegen.
+6. Pods as a dependency kind: one implementation of the virtual interface,
    behind a guard.
 
 ## What is undecided
