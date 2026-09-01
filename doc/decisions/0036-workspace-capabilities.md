@@ -40,11 +40,11 @@ the requiring project made on purpose rather than one it inherited.
 ## Why this opens the door to babashka pods
 
 A pod becomes an ordinary dependency with `:pod/version x`, and an ordinary
-VIRTUAL NAMESPACE underneath -- the resolver flags it, the compiler wires it to
-the system port, and the protocol below is what travels. A pod is one
-implementation of that, not a shape invented for it, which is also the test of
-whether the protocol is right: if a pod needs something it does not carry, it is
-wrong.
+VIRTUAL NAMESPACE underneath -- the resolver flags it, the compiler emits
+`flint.virtual/call`, and the protocol below is what travels. A pod is one
+implementation of that rather than a shape invented for it, which is also the
+test of whether the protocol is right: if a pod needs something it does not
+carry, it is wrong.
 
 What makes it tractable is the guard, not the grant: we cannot regulate what a
 pod does internally (it is a process with its own authority), but we can regulate
@@ -128,39 +128,67 @@ the runtime installs, and the Rust SDK's `Driver` is a trait.
 
 `reader` is one of two answers. The other is a **flag**: this namespace is
 VIRTUAL. That is all the resolver says about it, and it is all the compiler needs
-from the resolver -- enough to decide what to emit, and nothing more.
+from it -- enough to decide what to emit, and nothing more.
 
 ```text
 namespace -> { workspace, identity, reader }     // source to compile
 namespace -> { workspace, identity, :virtual }   // a flag
 ```
 
-The resolver deliberately does NOT carry an invoke surface. Resolving happens
-while compiling; invoking happens while running; a resolver that could do both
-would have to exist in the shipped artifact, and it does not.
+The resolver deliberately carries no invoke surface. Resolving happens while
+COMPILING, invoking happens while RUNNING, and a resolver that did both would
+have to exist in the shipped artifact. It does not.
 
-**The wire-up is on the system port.** Seeing the flag, the compiler emits code
-that asks the system port for a port for that namespace, and compiles every form
-targeting it -- or an alias into it -- into blocking port operations that request
-the equivalent thing over that port.
+### What the compiler emits
 
-That is `open` (`0027`): a sandbox cannot manufacture a port, it asks on the
-system port and the host answers or refuses. So a virtual namespace costs no new
-run-time mechanism. It also means requiring one IS requiring the authority to
-reach it, which is what the guard above is for.
+A call to a library. Seeing the flag, a form targeting that namespace -- or an
+alias into it -- becomes:
 
-**Blocking is fine and is the point.** A port operation parks the green thread
-and the scheduler runs something else; a call that parks is answered while it is
-outstanding (`0025` step 5). A virtual call looks synchronous in the source and
-is not synchronous in the runtime, which is the same trade every other port
-operation makes.
+```clojure
+(vns/f x y)   =>  (flint.virtual/call 'the.ns/f x y)
+vns/x         =>  (flint.virtual/get  'the.ns/x)
+vns/f         =>  (flint.virtual/fn   'the.ns/f)   ; used as a value
+```
+
+**And that is the whole of the compiler's part.** No stub namespace to generate,
+no emission path to add, no port machinery in the emitter: an ordinary call to an
+ordinary function, with a quoted symbol naming what is wanted. The symbol is a
+constant in the image and carries the name into any diagnostic.
+
+The third form matters as much as the first. `(map vns/f xs)` has to work, and a
+virtual var used as a value needs a callable to hand over rather than a call to
+make.
+
+### What the library handles
+
+`flint.virtual` does the namespace-to-port resolution, and the waiting,
+memoisation and laziness dance that goes with it:
+
+* **Resolution.** One port per virtual namespace, obtained with `flint.port/open`
+  under the namespace's name -- which is a request on the system port (`0027`),
+  so the host answers or refuses and nothing is manufactured inside.
+* **Memoisation.** Opened once and cached, so a thousand calls into one pod cost
+  one port.
+* **Laziness.** Opened on FIRST USE rather than at load. This is the better
+  answer to a question the previous draft left open: a program that never calls
+  into a pod never asks for the authority to reach it, which is exactly the
+  property a guard is supposed to give.
+* **Waiting.** `flint.rpc` over that port: request/response correlated by id, a
+  reader thread, `:error` thrown rather than returned as data. It exists.
+
+Being a library is the point. It is ordinary flint in `lib/flint/virtual.cljc`,
+testable on its own, and it is a namespace UNIT like any other -- so a program
+that touches no virtual namespace links none of it, and the pure-module floor is
+untouched.
+
+One consequence to be deliberate about: a namespace that uses a virtual one
+acquires an implicit `:require` on `flint.virtual`, the way every namespace
+implicitly refers `clojure.core`. It comes from the standard library rather than
+from anyone's workspace, and the resolver has to answer for it.
 
 ## The protocol
 
-Request/response over one port per virtual namespace, correlated by id --
-which is exactly what `flint.rpc` already is (`client`, `call`, a reader thread,
-`:id` correlation, `:error` thrown rather than returned as data). The protocol
-below is what goes over it.
+Over one port per virtual namespace, correlated by id.
 
 ```text
 ->  {:op :invoke :var f :args [...]}     <-  {:body v}  |  {:error {...}}
@@ -168,53 +196,46 @@ below is what goes over it.
 ->  {:op :list}                          <-  {:body [{:name f :arities [...]}]}
 ```
 
-`:list` is not needed to CALL anything; it is there so a build or a tool can ask
-what a namespace holds. Whether the build asks is the open question below.
+`:list` is not needed to call anything; it is there so a build or a tool can ask
+what a namespace holds.
 
 **It carries data.** Arguments and results cross a bridge, so they go through the
 wire codec: a closure cannot cross one (`0006`, `0025`). Not a new rule, but a
 virtual namespace is the first place it becomes visible in the language surface,
 and the refusal should say so rather than leave it to be discovered.
 
-### The one thing that has to be decided first: are the var names known?
+### The one thing to decide first: are the var names known?
 
 The flag is enough to choose what to emit. It is not enough to know whether
-`(vns/f x)` should compile at all, and that fork is worth taking deliberately.
+`(vns/f x)` should compile at all.
 
-**If the names are known at build time** -- declared in `deps.edn` beside the
-`:pod/version`, or fetched once and cached -- then the compiler generates a stub
-namespace: one `defn` per var, each an `rpc/call`. Three things follow, and they
-are all good. `resolve-sym` keeps working untouched, so an unknown var stays a
-COMPILE error with the message it has today. Arities are checked like any other
-call. And there is no new emitter path at all -- the stub is ordinary flint
-source, which is the same trick the check registry and the entry shim already
-use, and which that code records as cheaper than a second path through the
-emitter.
+**Known at build time** -- declared in `deps.edn` beside the `:pod/version` --
+and the compiler can refuse an unknown var and a wrong arity before it emits
+anything, with the message `resolve-sym` already produces. **Not known** and both
+become run-time errors, in a language where they are otherwise compile-time ones.
 
-**If the names are not known** then every call site emits an inline request,
-unknown-var becomes a RUN-TIME error in a language where it is otherwise a
-compile-time one, and `vns/f` used as a value -- passed to `map`, say -- has to
-synthesise a function with no arity to give it.
+Note what this fork is NOT, now: it is no longer about how to emit. The emission
+is the same either way, which is what makes the library shape worth having. It is
+only about how early a mistake is caught.
 
-Leaning strongly to **known at build time, declared rather than fetched**:
-fetching means a live process in the middle of a build, and the whole reason
-this file exists is to make what a dependency can do a thing you can read.
+Leaning to **declared, not fetched**. Fetching means a live process in the middle
+of a build, and the point of this file is to make what a dependency can do
+something you can read.
 
 ### Open, on virtual namespaces
 
-* Whether the port is opened at LOAD time by the stub namespace's initialiser,
-  or lazily on first use. Load time is simpler and matches "initialisers run
-  once"; lazy means a program that never calls into the pod never asks for the
-  authority, which is a real difference for a guard.
 * `:get` on a var: a snapshot taken when the port opens, or a read each time?
   Different semantics, and the interface should not leave an implementation to
   choose silently.
 * **Macros.** A pod providing one means invoking at COMPILE time, from inside
-  the compiler, which is the live-process-in-the-build problem again. Babashka's
-  pods do not. Leaning no, stated rather than merely absent.
+  the compiler -- the live-process-in-the-build problem again. Babashka's pods
+  do not. Leaning no, stated rather than merely absent.
 * A virtual namespace required transitively by something that does not know it
   is virtual. Indistinguishable at the call site is the point, but the guard has
   to be checked at every edge rather than only the first.
+* Whether `flint.virtual/call` should be told the ARITY it was compiled for, so
+  a pod that changed under a built artifact fails with something better than an
+  argument-count mismatch from the far side.
 
 ### Why this is the fix and not a refactor
 
@@ -279,11 +300,11 @@ being careful.
    way tags already are.
 3. `:flint/capabilities-guard`, checked when resolving a `:require` across a
    project boundary — the one new rule in the resolver.
-4. **Virtual namespaces**: the resolver's flag, the protocol above over one
-   port per namespace, and the generated stub namespace that turns each var into
-   an `rpc/call`. Independent of grants and guards -- a virtual namespace is
-   useful without them -- but it is what makes a pod expressible. Decide the
-   names question first; everything else follows from it.
+4. **Virtual namespaces**: the resolver's flag, `flint.virtual` over
+   `flint.port` and `flint.rpc`, and the three forms the compiler emits into it.
+   Independent of grants and guards -- a virtual namespace is useful without
+   them -- but it is what makes a pod expressible. Decide the names question
+   first; it decides how early a mistake is caught, not how anything is emitted.
 5. Pods as a dependency kind: one implementation of the virtual interface,
    behind a guard.
 
