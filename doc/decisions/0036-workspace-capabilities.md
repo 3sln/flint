@@ -356,6 +356,73 @@ So the split has to be:
 time -- the compiler knows which names will be there, the host decides whether
 they arrive.
 
+### Can a macro hand a live opaque to the runtime? No, and the compiler already says so
+
+This is a REPRESENTATION question before it is a security one, and the code
+answers it.
+
+A macro runs at compile time and returns a FORM. That form is analysed and
+emitted, and any literal in it becomes a constant-pool entry. `image/const`
+accepts nil, booleans, ints, doubles, strings, keywords, symbols, vectors, sets,
+maps, lists and tagged literals, and everything else is:
+
+```clojure
+:else (throw (ex-info "not a constant" {:v v :type (type v)}))
+```
+
+There is no opaque constant and no port constant. A macro that tried to put a
+sentinel in its output would fail the compile, today, with that message.
+
+**That is the right answer rather than a gap.** An image is bytes on disk. Adding
+`[:opaque host-id label]` to the pool would mean the authority is written down --
+and anything that can write those bytes can mint one, which is precisely the
+integer-to-capability conversion the sandbox exists to forbid. It is the same
+hazard `decode_guest` refuses `K_SENTINEL` for, arriving by a different road:
+`0022` states it as *"accept those bytes back and it is mintable, which is the
+entire property gone."*
+
+Serialising also loses the thing the question was trying to keep. Reconstructing
+an opaque from bytes produces a NEW object; the identity that made it worth
+having does not survive the round trip. So serialising costs the typing AND opens
+the minting -- there is no version of it that pays.
+
+### So the handoff is by NAME, which is what vars already do
+
+The macro emits a name and the runtime resolves it:
+
+```clojure
+;; the macro emits data -- a keyword names what is wanted
+(flint.cap/of :fs)
+;; and at run time that is a lookup in the table the HOST populated
+```
+
+The type is not lost, because the value never becomes data: only the name does.
+Nothing is serialised, so nothing is mintable. And the emitted form is ordinary
+data, so it goes in the constant pool like any other keyword.
+
+This is exactly the var mechanism, and the resemblance is not a coincidence.
+`(defn f ...)` does not put the closure in the constant pool -- it puts a SLOT
+INDEX, and an initialiser binds that slot at load. A capability is the same
+shape: the compiler emits a name, and something at load binds it to a value the
+compiler never held.
+
+Which suggests the cheap implementation, if it is wanted later: give capabilities
+slots the way vars have them, and `&capabilities` lookup becomes a slot read
+rather than a map lookup.
+
+### Two things were being called `&capabilities`
+
+Separating them is what makes the above work:
+
+* **At compile time**, the set of capability NAMES available in this compilation
+  context. Ordinary data, safe in a form, safe in the pool. This is what a macro
+  branches on when it wants compile-time knowledge of what is available.
+* **At run time**, the mapping from those names to host-issued sentinels. A live
+  table, populated over the system port, never serialised and never in the image.
+
+A macro reads the first and emits a reference into the second. It never holds a
+sentinel, so the question of handing one over does not arise.
+
 ### The reader-conditional hazard, if the declaration hides in one
 
 Putting the declaration behind `#?(:flint ...)` for `.cljc` portability is
@@ -373,12 +440,13 @@ elision is today.
 
 ### Open, on capabilities
 
-* Whether `&capabilities` is bound at a macro's DEFINITION site or its USE site.
-  Definition site matches "A's macro carries A's authority, because A exported
-  it"; use site matches "the compilation context", which is what the name says.
-  They differ exactly when A's macro is expanded in B, which is the case the
-  guard has already authorised -- so definition site looks right and the name
-  may be what is wrong.
+* Whether the compile-time NAME SET is a macro's definition site or its use
+  site. Definition site matches "A's macro knows what A was granted"; use site
+  matches "the compilation context", which is what the name says. They differ
+  exactly when A's macro is expanded in B, which is a case the guard has already
+  authorised -- so definition site looks right, and the name may be what is
+  wrong. The run-time table does not have this question: there is one per
+  program.
 * Whether a declaration is a requirement (refuse to run without it) or a request
   (run, and fail at the call). A requirement is checkable at load and is the
   better failure; a request allows a program that degrades.
