@@ -1,16 +1,20 @@
 # 0027 — Ports belong to the host, not to a sandbox
 
-> **SHIPPED**, on all four runtimes, except the two parts named under "What is
-> not built yet" at the bottom.
->
-> It was marked QUEUED and "nothing in this file exists yet" long after half of
-> it had been built and then left unreachable: `install_global_port`,
-> `install_system_port`, `SC_SYSTEM` and `K_GLOBAL` all existed, and
-> `system_port()` had **zero callers on all three runtimes**. Two generations of
-> the port model were live at once for months, which is how a wire port came to
-> be classed `CARRY_CROSSING` on the JVM and CLR and then refused by their own
-> send. A banner that lies about the tree is worse than no banner: it is what
-> made that state readable as "not started yet" rather than as "half-done".
+> **BUILT**, on all four runtimes, except the two parts named under "What is
+> still open" at the bottom.
+
+## What this banner used to say
+
+It said "QUEUED — nothing in this file exists yet", and it went on saying it
+long after half of the file had been built and then left unreachable:
+`install_global_port`, `install_system_port`, `SC_SYSTEM` and `K_GLOBAL` all
+existed, and `system_port()` had **zero callers on all three runtimes**.
+
+Two generations of the port model were live at once, which is how a wire port
+came to be classed `CARRY_CROSSING` on the JVM and CLR and then refused by their
+own send. A banner that lies about the tree is worse than no banner: it is what
+made that state readable as "not started yet" rather than as "half-done", and it
+is why `bin/check-decisions` compares the two.
 
 **A port is one of two things, and the difference is which side of a heap its
 two ends are on.** A LOCAL port joins two green threads inside one sandbox and
@@ -282,7 +286,7 @@ sets. `None` means refuse rather than "not yet", and that is correct: a port
 arrives over a bridge, so a program with no ports can never be handed one. The
 residue is +217 bytes.
 
-## What is not built yet
+## What is still open
 
 * **The weak-table fixup through a nursery COPY**, described under "Three things
   the table has to get right". Today the sweep walks `SC_BRIDGES` after a
