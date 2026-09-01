@@ -465,3 +465,27 @@ fn what_may_cross_depends_on_the_carrier() {
         "a channel end inside a vector too"
     );
 }
+
+/// A KEYWORD delivered from the host arrives as a keyword.
+///
+/// The decoder is new on this side of the boundary (`doc/decisions/0027`): the
+/// guest never decoded anything before, so this is the first time the runtime
+/// builds a value out of bytes it did not write.
+#[test]
+fn a_keyword_crosses_a_bridge_inbound() {
+    for name in ["a", "abcd", "abcde", "abcdef", "nope", "a-longer-keyword"] {
+        let mut rt = opener(None);
+        let evs = drain(&mut rt);
+        assert!(grant(&mut rt, open_ev(&evs).a));
+        let msg = {
+            let v = rt.keyword(None, name);
+            rt.encode(v).expect("a keyword encodes")
+        };
+        assert!(rt.host_deliver(GRANTED, &msg), "delivered {name}");
+        let (v, _) = finish(&mut rt);
+        assert!(
+            rt.is_keyword(v),
+            "{name}: a keyword arrives as a keyword, not {v:?}"
+        );
+    }
+}

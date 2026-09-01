@@ -17,9 +17,9 @@
       (println "build failed for" ns-name ":" (:all r)) (System/exit 1))))
 
 (src! "echo"
-      (str "(ns echo (:require [flint.port :as p] [flint.port.edn :as edn]))\n"
+      (str "(ns echo (:require [flint.port :as p]))\n"
            "(defn main [_]\n"
-           "  (let [r (p/open \"echo\" {:codec edn/codec})\n"
+           "  (let [r (p/open \"echo\")\n"
            "        _ (p/send r {:hello 1})\n"
            "        back (p/receive r)\n"
            "        refused (try (p/open \"secret\") (catch Throwable e (ex-message e)))]\n"
@@ -58,22 +58,28 @@
            "    (doseq [x ps] (p/send x \"hi\"))\n"
            "    \"left open\"))"))
 
+;; ONE FORMAT, and it carries everything.
+;;
+;; This used to be three programs opening three ports with three codecs -- EDN,
+;; JSON and Transit-over-msgpack -- because a port carried BYTES and the guest
+;; chose how to write them. There is no codec to choose any more
+;; (`doc/decisions/0027`): a bridge encodes and decodes in the runtime, and the
+;; guest hands over a value and is handed one back.
+;;
+;; The values are the ones that used to separate the three: a set and a keyword,
+;; which JSON refused by name, and a VECTOR AS A MAP KEY, which needed Transit.
+;; All of them cross one port now, and the program says nothing about encoding.
 (src! "formats"
-      (str "(ns formats (:require [flint.port :as p]\n"
-           "                      [flint.port.edn :as e]\n"
-           "                      [flint.port.json :as j]\n"
-           "                      [flint.port.transit :as tr]))\n"
+      (str "(ns formats (:require [flint.port :as p]))\n"
            "(defn try-send [port v]\n"
            "  (try (p/send port v) (p/receive port) (catch Throwable ex (ex-message ex))))\n"
            "(defn main [_]\n"
-           "  (p/with-open [ep (p/open \"edn\" {:codec e/codec})\n"
-           "                jp (p/open \"json\" {:codec j/codec})\n"
-           "                tp (p/open \"transit\" {:codec tr/codec})]\n"
-           "    (pr-str [(try-send ep {:a #{1 2} :b [:x]})\n"
-           "             (try-send jp {\"a\" [1 2]})\n"
-           "             (try-send jp :nope)\n"
-           "             (try-send jp #{1})\n"
-           "             (try-send tp {:a #{1 2} :b [:x] [1 2] :k})])))"))
+           "  (p/with-open [w (p/open \"wire\")]\n"
+           "    (pr-str [(try-send w {:a #{1 2} :b [:x]})\n"
+           "             (try-send w {\"a\" [1 2]})\n"
+           "             (try-send w :nope)\n"
+           "             (try-send w #{1})\n"
+           "             (try-send w {:a #{1 2} :b [:x] [1 2] :k})])))"))
 
 (src! "query"
       (str "(ns query (:require [flint.port :as p]))\n"

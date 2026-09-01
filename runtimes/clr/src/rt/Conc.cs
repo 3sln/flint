@@ -166,7 +166,7 @@ public static class Conc {
         // The decoder's route to `InstallBridgePort`, set HERE and nowhere else.
         // See `Rt.bridgeHook`: reaching it directly from the codec put the whole
         // scheduler into every wasm module, including ones with no ports.
-        rt.bridgeHook = (r, id) => InstallBridgePort(r, id, Val.Nil);
+        rt.bridgeHook = (r, id) => InstallBridgePort(r, id, Val.Nil, true);
         int bas = rt.Mark();
         int si = rt.Push(NewObj(rt, Obj.TySched, SC_LEN));
         if (Val.IsNil(rt.R(si))) { rt.PopTo(bas); return Val.Nil; }
@@ -520,16 +520,24 @@ public static class Conc {
     /// both times. `=` says yes, a map keyed by it hits, and the host is told
     /// exactly once that this sandbox took a reference.
     ///
-    /// `EV_RETAIN` goes out only on a MISS. Counting arrivals instead would make
-    /// the number mean "how many references" rather than "how many holders",
-    /// which is not a number anyone can act on: the host wants to know when it
-    /// may let the port go, and that is when the last holder drops it. The
-    /// matching `EV_RELEASE` comes from `ReapPorts`, or promptly from `Close`.
+    /// `announce` says whether to PUSH `EV_RETAIN`, and it is false for a host
+    /// that installed or granted the port itself: that host already knows, and
+    /// an event it does not need is traffic queued before the program has even
+    /// started -- which makes the first run come back "the host is needed" when
+    /// nothing is parked. True only for the DECODER, where a port arriving
+    /// inside a message is the one case the host could not have known about.
+    ///
+    /// Either way it is one increment per sandbox, on the MISS that mints the
+    /// handle. Counting arrivals instead would make the number mean "how many
+    /// references" rather than "how many holders", which is not a number anyone
+    /// can act on. The matching `EV_RELEASE` comes from `ReapPorts`, or promptly
+    /// from `Close` -- and that one always goes out, because a drop is never
+    /// something the host asked for.
     ///
     /// NOT ROOTED, unlike the host end this replaces: a handle nothing refers
     /// to is precisely what a release is for. The system port is the exception
     /// and is rooted by living in `SC_SYSTEM`.
-    public static long InstallBridgePort(Rt rt, long hostId, long label) {
+    public static long InstallBridgePort(Rt rt, long hostId, long label, bool announce) {
         EnsureSched(rt);
         if (hostId < 0) return Val.Nil;
         long existing = PortById(rt, hostId);
@@ -543,7 +551,7 @@ public static class Conc {
         int bi = rt.Push(rt.Slot(rt.R(si), SC_BRIDGES));
         long nb = Vec.Conj(rt, rt.R(bi), Val.Fixnum(hostId));
         rt.SetSlot(Val.AsHeap(rt.R(si)), SC_BRIDGES, nb);
-        PushEvent(rt, EV_RETAIN, hostId, 0, Val.Nil);
+        if (announce) PushEvent(rt, EV_RETAIN, hostId, 0, Val.Nil);
         long outv = rt.R(pi);
         rt.PopTo(bas);
         return outv;
@@ -555,7 +563,7 @@ public static class Conc {
     /// is not has no way to reach anything outside itself, which is the honest
     /// meaning of "no capabilities" and is the default.
     public static long InstallSystemPort(Rt rt, long hostId, long label) {
-        long p = InstallBridgePort(rt, hostId, label);
+        long p = InstallBridgePort(rt, hostId, label, false);
         if (Val.IsNil(p)) return Val.Nil;
         int bas = rt.Mark();
         int pi = rt.Push(p);
@@ -1021,10 +1029,18 @@ public static class Conc {
         if (InboxCount(rt, rt.R(pi)) > 0) {
             int vi = rt.Push(Dequeue(rt, rt.R(pi)));
             if (CrossesAHeap(Fx(rt.Slot(rt.R(pi), PT_KIND)))) {
-                // Room again for the host to deliver the next wave.
-                long n = Bytes.IsBytes(rt, rt.R(vi)) ? Bytes.Count(rt, rt.R(vi))
-                       : rt.IsHeapTy(rt.R(vi), Obj.TyVec) ? Vec.Count(rt, rt.R(vi))
-                       : Str.ByteLen(rt, rt.R(vi));
+                // A bridge queues `[len value]`, and `len` is what
+                // `HostDeliver` actually CHARGED -- the length of the encoded
+                // message, which is what bounds the host's queue.
+                //
+                // It used to be recomputed from the value, `Str.ByteLen` on
+                // whatever came out of the ring. That was wrong twice: it
+                // refunded the string's length where the encoded length had
+                // been charged, and once a bridge carried VALUES it walked a
+                // keyword as a string. On the Rust that was a segfault.
+                long item = rt.R(vi);
+                long n = Fx(Vec.Nth(rt, item, 0));
+                rt.SetR(vi, Vec.Nth(rt, item, 1));
                 long queued = Fx(rt.Slot(rt.R(pi), PT_BYTES));
                 rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_BYTES, Val.Fixnum(queued > n ? queued - n : 0));
             }
@@ -1268,7 +1284,7 @@ public static class Conc {
         long label = rt.Slot(rt.R(wi), W_PORT);
         label = Val.IsNil(label) ? Val.Nil : rt.Slot(label, PT_LABEL);
         int li = rt.Push(label);
-        long p = InstallBridgePort(rt, hostPortId, rt.R(li));
+        long p = InstallBridgePort(rt, hostPortId, rt.R(li), false);
         if (Val.IsNil(p)) { rt.PopTo(bas); return false; }
         int pi = rt.Push(p);
         long th = rt.Slot(rt.R(wi), W_THREAD);
@@ -1322,6 +1338,15 @@ public static class Conc {
             return false;
         }
         int vi = rt.Push(v);
+        // `[len value]`, because the refund has to be the number that was
+        // CHARGED and nothing about a decoded value says what that was.
+        {
+            int m = rt.Mark();
+            int ei = rt.Push(Vec.Empty(rt));
+            rt.SetR(ei, Vec.Conj(rt, rt.R(ei), Val.Fixnum(len)));
+            rt.SetR(vi, Vec.Conj(rt, rt.R(ei), rt.R(vi)));
+            rt.PopTo(m);
+        }
         if (!Enqueue(rt, rt.R(pi), rt.R(vi))) {
             // The ring is full though the byte bound had room: the guest has
             // not drained. Give the bytes back and tell the host to offer this
@@ -1500,6 +1525,10 @@ public static class Conc {
         for (int k = 0; k < brn; k++) {
             long bid = Fx(Vec.Nth(rt, rt.R(bri), k));
             if (Val.IsNil(PortById(rt, bid))) {
+                // CLOSED as well as released. `doc/decisions/0006`: an end the
+                // collector finds unreachable IS the script having called
+                // `Close`, so the host hears the same pair either way.
+                PushEvent(rt, EV_CLOSED, bid, 0, Val.Nil);
                 PushEvent(rt, EV_RELEASE, bid, 0, Val.Nil);
                 continue;
             }

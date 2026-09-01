@@ -524,16 +524,25 @@ public final class Conc {
     /// both times. `=` says yes, a map keyed by it hits, and the host is told
     /// exactly once that this sandbox took a reference.
     ///
-    /// `EV_RETAIN` goes out only on a MISS. Counting arrivals instead would make
-    /// the number mean "how many references" rather than "how many holders",
-    /// which is not a number anyone can act on: the host wants to know when it
-    /// may let the port go, and that is when the last holder drops it. The
-    /// matching `EV_RELEASE` comes from `reapPorts`, or promptly from `close`.
+    /// `announce` says whether to PUSH `EV_RETAIN`, and it is false for a host
+    /// that installed or granted the port itself: that host already knows, and
+    /// an event it does not need is traffic queued before the program has even
+    /// started -- which makes the first run come back "the host is needed" when
+    /// nothing is parked. True only for the DECODER, where a port arriving
+    /// inside a message is the one case the host could not have known about.
+    ///
+    /// Either way it is one increment per sandbox, on the MISS that mints the
+    /// handle. Counting arrivals instead would make the number mean "how many
+    /// references" rather than "how many holders", which is not a number anyone
+    /// can act on: the host wants to know when it may let the port go, and that
+    /// is when the last holder drops it. The matching `EV_RELEASE` comes from
+    /// `reapPorts`, or promptly from `close` -- and that one always goes out,
+    /// because a drop is never something the host asked for.
     ///
     /// NOT ROOTED, unlike the host end this replaces: a handle nothing refers
     /// to is precisely what a release is for. The system port is the exception
     /// and is rooted by living in `SC_SYSTEM`.
-    public static long installBridgePort(Rt rt, long hostId, long label) {
+    public static long installBridgePort(Rt rt, long hostId, long label, boolean announce) {
         ensureSched(rt);
         if (hostId < 0) return Val.NIL;
         long existing = portById(rt, hostId);
@@ -547,7 +556,7 @@ public final class Conc {
         int bi = rt.push(rt.slot(rt.r(si), SC_BRIDGES));
         long nb = Vec.conj(rt, rt.r(bi), Val.fixnum(hostId));
         rt.setSlot(Val.asHeap(rt.r(si)), SC_BRIDGES, nb);
-        pushEvent(rt, EV_RETAIN, hostId, 0, Val.NIL);
+        if (announce) pushEvent(rt, EV_RETAIN, hostId, 0, Val.NIL);
         long out = rt.r(pi);
         rt.popTo(base);
         return out;
@@ -560,11 +569,11 @@ public final class Conc {
     /// meaning of "no capabilities" and is the default.
     /// The hook's shape: a bridge arriving in a message carries no label.
     static long installBridgePort2(Rt rt, long hostId) {
-        return installBridgePort(rt, hostId, Val.NIL);
+        return installBridgePort(rt, hostId, Val.NIL, true);
     }
 
     public static long installSystemPort(Rt rt, long hostId, long label) {
-        long p = installBridgePort(rt, hostId, label);
+        long p = installBridgePort(rt, hostId, label, false);
         if (Val.isNil(p)) return Val.NIL;
         int base = rt.mark();
         int pi = rt.push(p);
@@ -1034,10 +1043,18 @@ public final class Conc {
         if (inboxCount(rt, rt.r(pi)) > 0) {
             int vi = rt.push(dequeue(rt, rt.r(pi)));
             if (crossesAHeap(fx(rt.slot(rt.r(pi), PT_KIND)))) {
-                // Room again for the host to deliver the next wave.
-                long n = Bytes.isBytes(rt, rt.r(vi)) ? Bytes.count(rt, rt.r(vi))
-                       : rt.isHeapTy(rt.r(vi), TY_VEC) ? Vec.count(rt, rt.r(vi))
-                       : Str.byteLen(rt, rt.r(vi));
+                // A bridge queues `[len value]`, and `len` is what
+                // `hostDeliver` actually CHARGED -- the length of the encoded
+                // message, which is what bounds the host's queue.
+                //
+                // It used to be recomputed from the value, `Str.byteLen` on
+                // whatever came out of the ring. That was wrong twice: it
+                // refunded the string's length where the encoded length had
+                // been charged, and once a bridge carried VALUES it walked a
+                // keyword as a string. On the Rust that was a segfault.
+                long item = rt.r(vi);
+                long n = fx(Vec.nth(rt, item, 0));
+                rt.setR(vi, Vec.nth(rt, item, 1));
                 long queued = fx(rt.slot(rt.r(pi), PT_BYTES));
                 rt.setSlot(Val.asHeap(rt.r(pi)), PT_BYTES, Val.fixnum(queued > n ? queued - n : 0));
             }
@@ -1281,7 +1298,7 @@ public final class Conc {
         long label = rt.slot(rt.r(wi), W_PORT);
         label = Val.isNil(label) ? Val.NIL : rt.slot(label, PT_LABEL);
         int li = rt.push(label);
-        long p = installBridgePort(rt, hostPortId, rt.r(li));
+        long p = installBridgePort(rt, hostPortId, rt.r(li), false);
         if (Val.isNil(p)) { rt.popTo(base); return false; }
         int pi = rt.push(p);
         long th = rt.slot(rt.r(wi), W_THREAD);
@@ -1341,6 +1358,15 @@ public final class Conc {
             return false;
         }
         int vi = rt.push(v);
+        // `[len value]`, because the refund has to be the number that was
+        // CHARGED and nothing about a decoded value says what that was.
+        {
+            int m = rt.mark();
+            int ei = rt.push(Vec.empty(rt));
+            rt.setR(ei, Vec.conj(rt, rt.r(ei), Val.fixnum(len)));
+            rt.setR(vi, Vec.conj(rt, rt.r(ei), rt.r(vi)));
+            rt.popTo(m);
+        }
         if (!enqueue(rt, rt.r(pi), rt.r(vi))) {
             // The ring is full though the byte bound had room: the guest has
             // not drained. Give the bytes back -- a message the guest never saw
@@ -1518,7 +1544,14 @@ public final class Conc {
         int hi = rt.push(Vec.empty(rt));
         for (int k = 0; k < bn; k++) {
             long id = fx(Vec.nth(rt, rt.r(bi), k));
-            if (Val.isNil(portById(rt, id))) { pushEvent(rt, EV_RELEASE, id, 0, Val.NIL); continue; }
+            if (Val.isNil(portById(rt, id))) {
+                // CLOSED as well as released. `doc/decisions/0006`: an end the
+                // collector finds unreachable IS the script having called
+                // `close`, so the host hears the same pair either way.
+                pushEvent(rt, EV_CLOSED, id, 0, Val.NIL);
+                pushEvent(rt, EV_RELEASE, id, 0, Val.NIL);
+                continue;
+            }
             rt.setR(hi, Vec.conj(rt, rt.r(hi), Val.fixnum(id)));
         }
         rt.setSlot(Val.asHeap(rt.r(si)), SC_BRIDGES, rt.r(hi));

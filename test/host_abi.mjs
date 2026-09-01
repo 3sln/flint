@@ -17,11 +17,23 @@ async function fresh(path) {
 
 // A host that drives the queue by hand, so the tests can see each step rather
 // than letting host/flint.mjs's pump do it for them.
-function raw(inst) {
+function raw(inst, { system = 1 } = {}) {
   const e = inst.exports;
   const dec = new TextDecoder();
+  // A SYSTEM PORT, because `open` is a request ON one (`doc/decisions/0027`)
+  // and a sandbox given none can ask for nothing. Installed before `main`.
+  if (system) {
+    const b = new TextEncoder().encode('system');
+    const p = e.flint_in_alloc(b.length);
+    new Uint8Array(e.memory.buffer).set(b, p);
+    e.flint_install_port(system, b.length, 1);
+  }
+  // Ids for the ports this host owns. A grant has to NAME one: the sandbox no
+  // longer mints port ids, so `flint_continue(token, 1)` cannot mean "yes".
+  let next = 500;
   return {
     e,
+    grant(token) { const id = next++; return e.flint_grant(token, id) ? id : 0; },
     drain() {
       const n = e.flint_drain();
       const base = e.flint_events_ptr();
@@ -48,7 +60,7 @@ console.log('host abi');
   inst.capabilities({
     echo: {
       open: (p) => seen.push(['open', p]),
-      message: (p, data, api) => { seen.push(['msg', api.text(data)]); api.deliver(p, data); },
+      message: (p, value, api) => { seen.push(['msg', value]); api.deliver(p, value); },
       closed: (p) => seen.push(['closed', p]),
     },
   });
@@ -71,13 +83,14 @@ console.log('host abi');
   eq('a program waiting on the host reports status 2', code, 2);
   const evs = h.drain();
   const req = evs.find((x) => x.kind === 1);
-  ok('the open request carries a token and a port id', req && req.a > 0 && req.b > 0,
-     JSON.stringify(evs));
-  eq('continue with the real token is accepted', h.e.flint_continue(req.a, 1), 1);
-  eq('the SAME token a second time is rejected -- generation', h.e.flint_continue(req.a, 1), 0);
+  ok('the open request carries a token and names the system port',
+     req && req.a > 0 && req.b === 1, JSON.stringify(evs));
+  eq('a grant must NAME a port, so continue cannot mean yes', h.e.flint_continue(req.a, 1), 0);
+  ok('granting with the real token is accepted', h.grant(req.a) > 0);
+  eq('the SAME token a second time is rejected -- generation', h.e.flint_grant(req.a, 501), 0);
   eq('a token for a slot that was never handed out is rejected',
-     h.e.flint_continue(req.a + 0x10000, 1), 0);
-  eq('a nonsense token is rejected', h.e.flint_continue(0xffffffff, 1), 0);
+     h.e.flint_grant(req.a + 0x10000, 502), 0);
+  eq('a nonsense token is rejected', h.e.flint_grant(0xffffffff, 503), 0);
 
   // --- and continue ENQUEUES: it must not re-enter the scheduler ------------
   ok('continue did not run the program: nothing new is queued yet',
@@ -94,7 +107,7 @@ console.log('host abi');
     h.e.main();
     // Answer the open first; the messages arrive on the next pump, all of them
     // in one drain, which is the thing being measured.
-    for (const ev of h.drain()) if (ev.kind === 1) h.e.flint_continue(ev.a, 1);
+    for (const ev of h.drain()) if (ev.kind === 1) h.grant(ev.a);
     h.e.flint_resume();
     const t0 = process.hrtime.bigint();
     const evs = h.drain();
@@ -122,7 +135,7 @@ console.log('host abi');
     const evs = h.drain();
     turns.push(evs.map((x) => `${x.kind}:${x.a}`).join(','));
     for (const ev of evs) {
-      if (ev.kind === 1) h.e.flint_continue(ev.a, 1);
+      if (ev.kind === 1) h.grant(ev.a);
       else if (ev.kind === 3) h.e.flint_close(ev.a);
     }
     code = h.e.flint_resume();
@@ -147,13 +160,18 @@ console.log('host abi');
   let guard = 0;
   while (code === 2 && guard++ < 100) {
     for (const ev of h.drain()) {
-      if (ev.kind === 1) h.e.flint_continue(ev.a, 1);
+      if (ev.kind === 1) h.grant(ev.a);
       else if (ev.kind === 3) { closes.push(ev.a); h.e.flint_close(ev.a); }
     }
     code = h.e.flint_resume();
   }
   eq('a program that never closes its ports still finishes', code, 0);
-  eq('  ... and the host is told about every one of them', closes.length, 3);
+  // FOUR: the three the program opened, plus the SYSTEM PORT it was given.
+  // A bridge the host installed is a bridge the sandbox holds, so it is closed
+  // and released at exit like any other -- which is how the host learns it may
+  // let go of the last reference (`doc/decisions/0027`).
+  eq('  ... and the host is told about every one of them, the system port too',
+     closes.length, 4);
 }
 
 // --- the event is a notification; the state is the truth --------------------
@@ -170,7 +188,7 @@ console.log('host abi');
   let guard = 0;
   while (code === 2 && guard++ < 100) {
     for (const ev of h.drain()) {
-      if (ev.kind === 1) { held.add(ev.b); h.e.flint_continue(ev.a, 1); }
+      if (ev.kind === 1) { const id = h.grant(ev.a); if (id) held.add(id); }
       else if (ev.kind === 3) ignored++;   // deliberately thrown away
     }
     // ... and instead, ASK.
@@ -188,34 +206,38 @@ console.log('host abi');
   eq('a host that only ever ASKS still releases every handle', held.size, 0);
 }
 
-// --- formats ---------------------------------------------------------------
+// --- one wire format --------------------------------------------------------
+//
+// Three ports with three codecs became one port with none. What is checked is
+// the property that replaced them: every value that used to need a different
+// format crosses the same bridge, and the host sees VALUES rather than text it
+// has to parse.
 {
   const inst = await fresh('out/ha-formats.wasm');
-  const wire = [];
+  const seen = [];
   inst.capabilities({
-    edn: { message: (p, d, api) => { wire.push(['edn', api.text(d)]); api.deliver(p, d); } },
-    json: { message: (p, d, api) => { wire.push(['json', api.text(d)]); api.deliver(p, d); } },
-    // Echoed as raw bytes: decoding msgpack as UTF-8 would corrupt it, which is
-    // exactly the bug this line is here to make impossible.
-    transit: { message: (p, d, api) => { wire.push(['transit', d]); api.deliver(p, d); } },
+    // `value` is the message decoded by the RUNTIME. `data` is still there for
+    // a host that wants the bytes, and is checked below to be the wire format
+    // rather than anything the guest chose.
+    wire: { message: (p, v, api, ev) => { seen.push([v, ev.data]); api.deliver(p, v); } },
   });
   const r = inst.main();
   const out = r.out;
-  ok('an EDN port round-trips keywords, sets and nested values',
+  ok('a set and a keyword round-trip, which JSON refused by name',
      out.includes('{:a #{1 2}, :b [:x]}'), out);
-  ok('a JSON port round-trips what JSON can carry', out.includes('{"a" [1 2]}'), out);
-  ok('a JSON port REFUSES a keyword, naming the value',
-     out.includes('JSON cannot represent a keyword: :nope'), out);
-  ok('  ... and a set', out.includes('JSON cannot represent a set'), out);
-  ok('a Transit+msgpack port round-trips everything EDN can, over BYTES',
+  ok('a string-keyed map does too', out.includes('{"a" [1 2]}'), out);
+  ok('a bare keyword is a value like any other', out.includes(':nope'), out);
+  ok('  ... and so is a bare set', out.includes('#{1}'), out);
+  ok('a VECTOR AS A MAP KEY crosses, which used to need Transit',
      out.includes('{:a #{1 2}, :b [:x], [1 2] :k}'), out);
-  ok('the wire really carried EDN text', wire.some(([f, b]) => f === 'edn' && b.includes('#{')),
-     JSON.stringify(wire));
-  ok('  ... and JSON text', wire.some(([f, b]) => f === 'json' && b.startsWith('{"')),
-     JSON.stringify(wire));
-  ok('  ... and Transit\'s msgpack, which is not text at all',
-     wire.some(([f, b]) => f === 'transit' && b.some((x) => x > 0x7e)),
-     JSON.stringify(wire.filter(([f]) => f === 'transit').map(([, b]) => Array.from(b))));
+  // The host was handed values, not text. A keyword arrives as `:a`, so this is
+  // the check that nothing on either side parsed a serialisation.
+  ok('the host received decoded values rather than text',
+     seen.some(([v]) => v && typeof v === 'object' && ':a' in v),
+     JSON.stringify(seen.map(([v]) => v)));
+  ok('  ... over bytes the RUNTIME wrote, which start with the wire tag',
+     seen.every(([, d]) => d instanceof Uint8Array && d.length > 0),
+     JSON.stringify(seen.map(([, d]) => Array.from(d).slice(0, 4))));
 }
 
 console.log(fails === 0 ? 'host abi: ok' : `host abi: ${fails} FAILURES`);

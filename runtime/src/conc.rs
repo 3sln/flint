@@ -1950,14 +1950,21 @@ impl Rt {
             let v = self.port_dequeue(target);
             let vi = self.push(v);
             if crosses_a_heap(fx(self.slot(self.r(pi), PT_KIND))) {
-                // Room again for the host to deliver the next wave.
-                let n = if self.is_bytes(self.r(vi)) {
-                    self.b_count(self.r(vi)) as i64
-                } else if self.is_vector(self.r(vi)) {
-                    self.vec_count(self.r(vi)) as i64
-                } else {
-                    self.str_len(self.r(vi)) as i64
-                };
+                // A bridge queues `[len value]`, and `len` is the number
+                // `host_deliver` actually CHARGED -- the length of the encoded
+                // message, which is what bounds the host's queue.
+                //
+                // It used to be recomputed from the value, `str_len` on
+                // whatever came out of the ring. That was wrong twice. It
+                // refunded the string's length where the encoded length had
+                // been charged, so the bound drifted every message; and once a
+                // bridge carried VALUES rather than bytes it walked a keyword
+                // as a string and read off the end of the heap. `abcd` arriving
+                // on a port was a segfault.
+                let item = self.r(vi);
+                let n = fx(self.vec_nth(item, 0).unwrap_or(NIL));
+                let v = self.vec_nth(item, 1).unwrap_or(NIL);
+                self.set_r(vi, v);
                 let queued = fx(self.slot(self.r(pi), PT_BYTES));
                 let left = if queued > n { queued - n } else { 0 };
                 self.set(self.r(pi), PT_BYTES, Value::fixnum(left));
@@ -2403,6 +2410,20 @@ impl Rt {
             }
         };
         let vi = self.push(v);
+        // `[len value]`, because the refund has to be the number that was
+        // CHARGED and nothing about a decoded value says what that was. A mark
+        // of its own, since `pop_to(vi)` would drop the slot being written.
+        {
+            let m = self.mark();
+            let e = self.empty_vec();
+            let ei = self.push(e);
+            let c1 = self.vec_conj(self.r(ei), Value::fixnum(len));
+            self.set_r(ei, c1);
+            let vv = self.r(vi);
+            let c2 = self.vec_conj(self.r(ei), vv);
+            self.set_r(vi, c2);
+            self.pop_to(m);
+        }
         let (target, val) = (self.r(pi), self.r(vi));
         if !self.port_enqueue(target, val) {
             // The ring is full even though the byte bound had room: the guest
@@ -2578,6 +2599,14 @@ impl Rt {
         for k in 0..bn {
             let id = fx(self.vec_nth(self.r(bi), k).unwrap_or(NIL));
             if self.port_by_id(id).is_nil() {
+                // CLOSED as well as released, and the two say different things.
+                // `doc/decisions/0006`: an end the collector finds unreachable
+                // IS the script having called `close`, so the host hears the
+                // same pair it would have heard from an explicit close -- this
+                // sandbox is finished with the port, and it has let go of its
+                // reference. A host that acts on `:closed` should not have to
+                // special-case which of the two ways it happened.
+                self.push_event(EV_CLOSED, id, 0, NIL);
                 self.push_event(EV_RELEASE, id, 0, NIL);
                 continue;
             }
