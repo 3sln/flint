@@ -53,7 +53,44 @@ public final class Rt {
 
     public void setSliceEnd(long at) {
         sliceEnd = at;
-        checkpoint = at;
+        refreshCheckpoint();
+    }
+
+    /// The single value the interpreter's hot loop compares against: whichever
+    /// budget runs out first.
+    ///
+    /// THIS PORT DID NOT ENFORCE GAS AT ALL. `gasLimit` was a field it wrote
+    /// into snapshots and never read, and `checkpoint` carried only the
+    /// scheduler's slice -- so the native runtime bounded a runaway program and
+    /// these two did not. Conformance could not see it: it diffs ANSWERS, and a
+    /// program that is allowed to run forever eventually produces the right one
+    /// (`doc/decisions/0009`).
+    public void refreshCheckpoint() {
+        long a = gasLimit == 0 ? Long.MAX_VALUE : gasLimit;
+        long b = sliceEnd == 0 ? Long.MAX_VALUE : sliceEnd;
+        long c = a < b ? a : b;
+        checkpoint = (c == Long.MAX_VALUE) ? 0 : c;
+    }
+
+    public void setGasLimit(long limit) {
+        gasLimit = limit;
+        gasTrips = 0;
+        refreshCheckpoint();
+    }
+
+    /// Room for a handler to unwind after the budget blew. Small, and granted
+    /// once.
+    public static final long GAS_GRACE = 64 * 1024;
+
+    /// The error a blown budget raises: CATCHABLE, and carrying what was spent
+    /// against what was allowed, because a host has to be able to tell "the
+    /// program is wrong" from "the budget was too small".
+    public long gasError(String where) {
+        long e = makeError("ResourceExhausted",
+                "gas limit exceeded: spent " + steps + " of " + gasLimit
+                        + (where == null || where.isEmpty() ? "" : " in " + where));
+        thrown = e;
+        return e;
     }
 
     /// The rest of the interpreter's state, all of it snapshot-visible.
@@ -409,6 +446,23 @@ public final class Rt {
             }
             if (checkpoint != 0 && steps >= checkpoint) {
                 f.ip = ip;
+                // WHICH budget fired. One comparison covers both; telling them
+                // apart is a cold path.
+                if (gasLimit != 0 && steps >= gasLimit) {
+                    gasError("");
+                    gasTrips++;
+                    if (gasTrips > 1) {
+                        // It was caught once and the program carried on. A gate
+                        // a candidate can catch its way out of is not a gate,
+                        // so this one escapes every handler.
+                        return Val.NIL;
+                    }
+                    // Grace, once, so a `finally` can put things back.
+                    gasLimit = steps + GAS_GRACE;
+                    refreshCheckpoint();
+                    if (!unwind()) return Val.NIL;
+                    continue;
+                }
                 checkpoint = 0;
                 // A COURTESY yield, not a park: the thread stays runnable and
                 // must NOT rewind. Preemption is what keeps a thread with no
@@ -1040,6 +1094,33 @@ public final class Rt {
     /// whole point.
     public void chargeWork(long n) { steps += n; }
     public void chargeBytes(long n) { chargeWork((n / 8) + 1); }
+
+    /// How often `chargeTick` looks at the budget: a power of two so the test
+    /// is a mask, small enough that the overshoot is not worth measuring.
+    public static final long TICK_MASK = 63;
+
+    /// Charge one iteration of a loop and say whether to keep going. `false`
+    /// means the budget is gone AND the gas error is already thrown.
+    ///
+    /// CHARGE INSIDE THE LOOP, not before it: `chargeWork` only adds to a
+    /// counter, and nothing reads that counter until the next interpreter
+    /// instruction, so a native that charges a million and then loops a million
+    /// times still burns a million iterations (`doc/decisions/0009`).
+    public boolean chargeTick(long i, long n, String where) {
+        steps += n;
+        if ((i & TICK_MASK) != 0) return true;
+        if (gasLimit != 0 && steps >= gasLimit) { gasError(where); return false; }
+        return true;
+    }
+
+    /// Charge `n` up front for work whose size is known, and REFUSE it if the
+    /// budget cannot cover it. Better than a tick whenever `n` is known: it
+    /// never begins work it cannot pay for. Charges NOTHING when it refuses.
+    public boolean chargeChecked(long n, String where) {
+        if (gasLimit != 0 && steps + n >= gasLimit) { gasError(where); return false; }
+        steps += n;
+        return true;
+    }
 
     /// The out-of-line half of a specialised integer operation: a bigint
     /// operand, an overflow, or a result past the fixnum range.

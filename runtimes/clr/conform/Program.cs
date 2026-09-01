@@ -17,6 +17,7 @@ public static class Program {
         if (args.Length >= 2 && args[0] == "--rt-aot") return RtAot(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-flags") return RtFlags(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-hostports") return RtHostPorts(args[1]);
+        if (args.Length >= 2 && args[0] == "--rt-gas") return RtGas(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-image")
             return RtImage(args[1], args.Length > 2 ? args[2] : null);
         // No bare-argument form any more. It ran an image on the BOXED port,
@@ -524,6 +525,53 @@ public static class Program {
     /// them, and a transcript that differs only in capitalisation would fail a
     /// comparison that is supposed to be about the protocol.
     private static string Low(bool b) => b ? "true" : "false";
+
+    /// GAS IS A BOUND, on this port too (`doc/decisions/0009`).
+    ///
+    /// This existed nowhere, and the hole it left is invisible to everything
+    /// else: `gasLimit` was a field this runtime wrote into snapshots and never
+    /// read, so the native runtime stopped a runaway program and this one ran it
+    /// to completion. Conformance cannot catch that -- it diffs ANSWERS, and a
+    /// program allowed to run forever eventually produces the right one. A
+    /// property about REFUSING has to be tested by asking for the refusal.
+    private static int RtGas(string path) {
+        int fails = 0;
+        void Ok(string label, bool cond, string extra) {
+            if (cond) Console.WriteLine("  ok   " + label);
+            else { fails++; Console.WriteLine("  FAIL " + label + "\n        " + extra); }
+        }
+        var rt = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
+        var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
+        if (img == null) { Console.WriteLine("  FAIL not a flint image"); return 1; }
+        rt.SetGasLimit(0);
+        foreach (int fn in img.init) rt.Call(rt.MakeClosure(fn, new long[0]), new long[0]);
+        rt.RunProgram(rt.MakeClosure(img.entry, new long[0]), new long[]{ Flint.Rt.Val.Nil });
+        bool threw = !Flint.Rt.Val.IsNil(rt.thrown);
+        Ok("with no budget the program runs to its answer", !threw,
+            threw ? Flint.Rt.Str.Text(rt, rt.ExMessage(rt.thrown)) : "");
+        long spent = rt.steps;
+        Ok("  ... and the instructions were counted: " + spent, spent > 1000,
+            "steps " + spent + " -- nothing counted, so the bound below proves nothing");
+
+        var rt2 = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
+        var img2 = Flint.Rt.Img.Load(rt2, File.ReadAllBytes(path));
+        foreach (int fn in img2.init) rt2.Call(rt2.MakeClosure(fn, new long[0]), new long[0]);
+        long limit = rt2.steps + spent / 4;
+        rt2.SetGasLimit(limit);
+        rt2.RunProgram(rt2.MakeClosure(img2.entry, new long[0]), new long[]{ Flint.Rt.Val.Nil });
+        bool stopped = !Flint.Rt.Val.IsNil(rt2.thrown);
+        Ok("a tight budget stops the program", stopped,
+            "it ran to completion on " + limit + " gas when it needs " + spent);
+        string msg = stopped ? Flint.Rt.Str.Text(rt2, rt2.ExMessage(rt2.thrown)) : "";
+        Ok("  ... with a catchable ResourceExhausted", msg.Contains("gas limit exceeded"), msg);
+        Ok("  ... saying what was spent against what was allowed",
+            msg.Contains("of " + limit) || msg.Contains("spent"), msg);
+        long over = rt2.steps - limit;
+        Ok("  ... near the limit rather than far past it (over by " + over + ")",
+            over < 200000, "ran " + over + " steps past an exhausted budget");
+        if (fails > 0) { Console.WriteLine("gas: " + fails + " FAILURES"); return 1; }
+        return 0;
+    }
 
     private static int RtImage(string path, string want) {
         var rt = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);

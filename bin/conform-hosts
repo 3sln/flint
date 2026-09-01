@@ -211,6 +211,30 @@ if [ -n "$CLR" ]; then
     || { echo "  FAIL the two ports hash differently"; exit 1; }
 fi
 
+# GAS IS A BOUND ON EVERY RUNTIME, not just the native one
+# (`doc/decisions/0009`).
+#
+# This row exists because its absence hid a real hole for a long time: both
+# ports had a `gasLimit` field they wrote into snapshots and never read, so a
+# runaway program was stopped by the native runtime and run to completion by the
+# other two. Nothing else here could see it -- every other row diffs ANSWERS,
+# and a program allowed to run forever eventually produces the right one.
+#
+# So this asks for the REFUSAL, and then asks the two ports to agree on the
+# instruction count at which it came, which is the parity claim rather than the
+# mere existence of a limit.
+"$JDK/bin/java" -cp runtimes/jvm/classes RtGas out/rt-probe/probe.img > /tmp/flint-gas-jvm.out 2>&1 \
+  || { cat /tmp/flint-gas-jvm.out; echo "  FAIL gas is not a bound [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' /tmp/flint-gas-jvm.out
+if [ -n "$CLR" ]; then
+  "$CLR" --rt-gas out/rt-probe/probe.img > /tmp/flint-gas-clr.out 2>&1 \
+    || { cat /tmp/flint-gas-clr.out; echo "  FAIL gas is not a bound [clr]"; exit 1; }
+  sed 's/$/ [clr]/' /tmp/flint-gas-clr.out
+  cmp -s /tmp/flint-gas-jvm.out /tmp/flint-gas-clr.out \
+    || { echo "  FAIL the two ports stop at different instruction counts"; exit 1; }
+  echo "  ok   and both stop at the same instruction, which is the parity claim"
+fi
+
 # PARALLEL EXECUTORS (`doc/decisions/0028`): K REAL HOST THREADS on one flint
 # heap, which is a different thing from the green threads next door and both
 # exist. Green threads are how one sandbox interleaves its own work

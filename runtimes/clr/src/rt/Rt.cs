@@ -56,7 +56,41 @@ public sealed class Rt : System.IDisposable {
 
     public void SetSliceEnd(long at) {
         sliceEnd = at;
-        checkpoint = at;
+        RefreshCheckpoint();
+    }
+
+    /// Whichever budget runs out first.
+    ///
+    /// THIS PORT DID NOT ENFORCE GAS AT ALL. `gasLimit` was written into
+    /// snapshots and never read, and `checkpoint` carried only the scheduler's
+    /// slice -- so the native runtime bounded a runaway program and this one did
+    /// not. Conformance could not see it: it diffs ANSWERS, and a program
+    /// allowed to run forever eventually produces the right one
+    /// (`doc/decisions/0009`).
+    public void RefreshCheckpoint() {
+        long a = gasLimit == 0 ? long.MaxValue : gasLimit;
+        long b = sliceEnd == 0 ? long.MaxValue : sliceEnd;
+        long c = a < b ? a : b;
+        checkpoint = (c == long.MaxValue) ? 0 : c;
+    }
+
+    public void SetGasLimit(long limit) {
+        gasLimit = limit;
+        gasTrips = 0;
+        RefreshCheckpoint();
+    }
+
+    /// Room for a handler to unwind after the budget blew. Small, and once.
+    public const long GAS_GRACE = 64 * 1024;
+
+    /// The error a blown budget raises: CATCHABLE, and carrying what was spent
+    /// against what was allowed.
+    public long GasError(string where) {
+        long e = MakeError("ResourceExhausted",
+            "gas limit exceeded: spent " + steps + " of " + gasLimit
+                + (string.IsNullOrEmpty(where) ? "" : " in " + where));
+        thrown = e;
+        return e;
     }
 
     /// The builtins this image imports, resolved BY NAME. The slots in an image
@@ -393,6 +427,21 @@ public sealed class Rt : System.IDisposable {
             }
             if (checkpoint != 0 && steps >= checkpoint) {
                 f.Ip = ip;
+                // WHICH budget fired. One comparison covers both; telling them
+                // apart is a cold path.
+                if (gasLimit != 0 && steps >= gasLimit) {
+                    GasError("");
+                    gasTrips++;
+                    if (gasTrips > 1) {
+                        // A gate a candidate can catch its way out of is not a
+                        // gate, so this one escapes every handler.
+                        return Val.Nil;
+                    }
+                    gasLimit = steps + GAS_GRACE;
+                    RefreshCheckpoint();
+                    if (!Unwind()) return Val.Nil;
+                    continue;
+                }
                 checkpoint = 0;
                 // A COURTESY yield, not a park: the thread stays runnable and
                 // must NOT rewind. Preemption is what keeps a thread with no
@@ -1066,6 +1115,27 @@ public sealed class Rt : System.IDisposable {
     /// whole point.
     public void ChargeWork(long n) { steps += n; }
     public void ChargeBytes(long n) { ChargeWork((n / 8) + 1); }
+
+    public const long TICK_MASK = 63;
+
+    /// Charge one iteration and say whether to keep going. `false` means the
+    /// budget is gone AND the error is already thrown. CHARGE INSIDE THE LOOP:
+    /// `ChargeWork` only adds to a counter nobody reads until the next
+    /// instruction (`doc/decisions/0009`).
+    public bool ChargeTick(long i, long n, string where) {
+        steps += n;
+        if ((i & TICK_MASK) != 0) return true;
+        if (gasLimit != 0 && steps >= gasLimit) { GasError(where); return false; }
+        return true;
+    }
+
+    /// Charge `n` up front for work whose size is known, and refuse it if the
+    /// budget cannot cover it. Charges NOTHING when it refuses.
+    public bool ChargeChecked(long n, string where) {
+        if (gasLimit != 0 && steps + n >= gasLimit) { GasError(where); return false; }
+        steps += n;
+        return true;
+    }
 
     /// The out-of-line half of a specialised integer operation: a bigint
     /// operand, an overflow, or a result past the fixnum range. Shared with
