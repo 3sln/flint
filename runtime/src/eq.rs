@@ -138,12 +138,29 @@ impl Rt {
                     if !self.schema_eq(sa, sb) {
                         return false;
                     }
+                    // BOTH SIDES ROOTED. `table_ref` allocates, and `a` and
+                    // `b` are Rust locals: `doc/decisions/0031` -- a value in a
+                    // host local does not survive an allocation. This was
+                    // latent here and surfaced on the JVM as "object type 1 is
+                    // not a transient", type 1 being `TY_FWD`, because that
+                    // runtime's nursery happened to fill during the compare.
+                    // Same defect, and only one of three runtimes was unlucky
+                    // enough to show it.
+                    let base = self.mark();
+                    let ai = self.push(a);
+                    let bi = self.push(b);
                     for i in 0..na {
-                        let (ra, rb) = (self.table_ref(a, i), self.table_ref(b, i));
-                        if !self.eq(ra, rb) {
+                        let ra = self.table_ref(self.r(ai), i);
+                        let ri = self.push(ra);
+                        let rb = self.table_ref(self.r(bi), i);
+                        let same = self.eq(self.r(ri), rb);
+                        self.pop_to(ri);
+                        if !same {
+                            self.pop_to(base);
                             return false;
                         }
                     }
+                    self.pop_to(base);
                     return true;
                 }
                 if ta == crate::obj::TY_TAGGED || tb == crate::obj::TY_TAGGED {
@@ -294,13 +311,20 @@ impl Rt {
             // COLUMNAR is available precisely because a table is not `=` to a
             // vector of maps, so this need not agree with what one would hash.
             crate::obj::TY_TABLE => {
-                let n = self.table_count(v);
+                // ROOTED, for the reason the equality arm above is: `table_ref`
+                // allocates and `v` is a Rust local (`doc/decisions/0031`).
+                let base = self.mark();
+                let vi = self.push(v);
+                let n = self.table_count(self.r(vi));
                 let mut acc: u32 = 1;
                 for i in 0..n {
-                    let r = self.table_ref(v, i);
-                    let h = self.hash_value(r);
+                    let r = self.table_ref(self.r(vi), i);
+                    let ri = self.push(r);
+                    let h = self.hash_value(self.r(ri));
+                    self.pop_to(ri);
                     acc = acc.wrapping_mul(31).wrapping_add(h);
                 }
+                self.pop_to(base);
                 hash::hash_int(acc ^ n)
             }
             // A ref hashes as the map it is, or a map keyed by a row would not

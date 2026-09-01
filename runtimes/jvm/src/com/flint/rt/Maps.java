@@ -567,7 +567,10 @@ public final class Maps {
     public static boolean isMap(Rt rt, long v) {
         if (!Val.isHeap(v)) return false;
         int t = ty(rt.gc.sp, Val.asHeap(v));
-        return t == TY_ARRAYMAP || t == TY_HASHMAP;
+        // A ROW REF is a map: `get`, keyword lookup, `count`, `keys`, `vals`
+        // and `=` against a map all work, so code that does not know it has a
+        // table keeps working (`doc/decisions/0026`).
+        return t == TY_ARRAYMAP || t == TY_HASHMAP || t == Obj.TY_TABLEREF;
     }
     public static boolean isArrayMap(Rt rt, long v) {
         return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_ARRAYMAP;
@@ -575,6 +578,11 @@ public final class Maps {
 
     public static int count(Rt rt, long m) {
         int t = ty(rt.gc.sp, Val.asHeap(m));
+        // A ROW REF counts its COLUMNS. `isMap` says true for one, so anything
+        // that asks "is this a map?" and then calls a map internal lands here
+        // -- and reading a ref as an array-map is not a wrong answer, it is
+        // garbage that becomes a bogus pointer later (`doc/decisions/0026`).
+        if (t == Obj.TY_TABLEREF) return Table.schemaLen(rt, rt.slot(m, Table.RF_SCHEMA));
         if (t == TY_ARRAYMAP) return (olen(rt, m) - AM_BASE) / 2;
         if (t == TY_HASHMAP) return (int) Val.asFixnum(rt.slot(m, HM_CNT));
         return 0;
@@ -620,6 +628,12 @@ public final class Maps {
     }
 
     public static long get(Rt rt, long m, long k, long notFound) {
+        // A ROW REF answers HERE rather than at every call site. `isMap` says
+        // true for one, so every path that asks "is this a map?" and then calls
+        // this would otherwise read a table row as an array-map and find
+        // nothing -- which is what `(:name row)` did.
+        if (Val.isHeap(m) && ty(rt.gc.sp, Val.asHeap(m)) == Obj.TY_TABLEREF)
+            return Table.refGet(rt, m, k, notFound);
         if (!Val.isHeap(m)) return notFound;
         int t = ty(rt.gc.sp, Val.asHeap(m));
         if (t == TY_ARRAYMAP) {
@@ -943,6 +957,10 @@ public final class Maps {
     /// makes, and every one of those would need rooting. The Rust does the same
     /// and for the same reason.
     public static long entryVector(Rt rt, long m) {
+        // Same choke point as `count`: a ref materialises here rather than
+        // being read as an array-map.
+        if (Val.isHeap(m) && ty(rt.gc.sp, Val.asHeap(m)) == Obj.TY_TABLEREF)
+            return entryVector(rt, Table.refToMap(rt, m));
         int base = rt.mark();
         int mi = rt.push(m);
         int at = rt.mark();
@@ -963,6 +981,17 @@ public final class Maps {
     /// with an equal value -- ORDER-INDEPENDENT, which is what a map's `=`
     /// means and why it cannot just compare slots.
     public static boolean eq(Rt rt, long a, long b) {
+        // A ROW REF materialises here rather than being read as an array-map:
+        // `category` puts one in `CAT_MAP`, so this is where a map compared
+        // against a row arrives.
+        if (Val.isHeap(a) && ty(rt.gc.sp, Val.asHeap(a)) == Obj.TY_TABLEREF)
+            a = Table.refToMap(rt, a);
+        if (Val.isHeap(b) && ty(rt.gc.sp, Val.asHeap(b)) == Obj.TY_TABLEREF) {
+            int mi = rt.push(a);
+            b = Table.refToMap(rt, b);
+            a = rt.r(mi);
+            rt.popTo(mi);
+        }
         if (count(rt, a) != count(rt, b)) return false;
         int base = rt.mark();
         int ai = rt.push(a), bi = rt.push(b);

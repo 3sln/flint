@@ -25,7 +25,10 @@ public final class Eq {
             case TY_CONS: case TY_EMPTY_LIST: case TY_LAZYSEQ: case TY_VECSEQ:
             case TY_STRSEQ: case TY_RANGE: case TY_VEC: case TY_MAPENTRY:
                 return CAT_SEQUENTIAL;
-            case TY_ARRAYMAP: case TY_HASHMAP: return CAT_MAP;
+            // A ROW REF is in the MAP category: it is `=` to a map with the
+            // same entries, and `category` is what decides that
+            // (`doc/decisions/0026`).
+            case TY_ARRAYMAP: case TY_HASHMAP: case Obj.TY_TABLEREF: return CAT_MAP;
             case TY_SET: return CAT_SET;
             default: return CAT_SCALAR;
         }
@@ -80,6 +83,42 @@ public final class Eq {
         // Two tagged literals are equal when both halves are, and a tagged
         // literal is NEVER equal to a two-key map -- which is the whole reason
         // it is a type (`doc/decisions/0034`).
+        // A ROW REF is `=` to a map with the same entries, and hashes the same.
+        // That is the opposite call to table-versus-vector below, and
+        // coherently so: a table is a distinct kind of thing, a row IS just a
+        // map seen cheaply (`doc/decisions/0026`).
+        if (Table.isTableRef(rt, a) || Table.isTableRef(rt, b)) {
+            long ma = Table.isTableRef(rt, a) ? Table.refToMap(rt, a) : a;
+            int mi = rt.push(ma);
+            long mb = Table.isTableRef(rt, b) ? Table.refToMap(rt, b) : b;
+            boolean r = eq(rt, rt.r(mi), mb);
+            rt.popTo(mi);
+            return r;
+        }
+        // A TABLE is NOT `=` to a vector of maps. Refusing that is what frees
+        // `hash` to be columnar, and is why a table prints as its own literal.
+        if (ta == Obj.TY_TABLE || tb == Obj.TY_TABLE) {
+            if (ta != tb) return false;
+            int na = Table.tableCount(rt, a), nb = Table.tableCount(rt, b);
+            if (na != nb) return false;
+            if (!Table.schemaEq(rt, rt.slot(a, Table.TB_SCHEMA), rt.slot(b, Table.TB_SCHEMA)))
+                return false;
+            // BOTH SIDES ROOTED. `tableRef` allocates, and `a` and `b` are
+            // host locals: `doc/decisions/0031` -- a value in a host local does
+            // not survive an allocation. This surfaced here as "object type 1
+            // is not a transient", type 1 being `TY_FWD`.
+            int base = rt.mark();
+            int ai = rt.push(a);
+            int bi = rt.push(b);
+            for (int i = 0; i < na; i++) {
+                int ri = rt.push(Table.tableRef(rt, rt.r(ai), i));
+                boolean same = eq(rt, rt.r(ri), Table.tableRef(rt, rt.r(bi), i));
+                rt.popTo(ri);
+                if (!same) { rt.popTo(base); return false; }
+            }
+            rt.popTo(base);
+            return true;
+        }
         if (ta == Obj.TY_TAGGED || tb == Obj.TY_TAGGED) {
             if (ta != tb) return false;
             return eq(rt, rt.slot(a, 0), rt.slot(b, 0))
@@ -158,6 +197,22 @@ public final class Eq {
             case TY_ARRAYMAP:
             case TY_HASHMAP: return Maps.hash(rt, v);
             // Both halves, so two equal tagged literals land in one bucket.
+            // A ROW REF hashes as the map it is, so it lands in the same
+            // bucket as an equal map.
+            case Obj.TY_TABLEREF: return hashValue(rt, Table.refToMap(rt, v));
+            case Obj.TY_TABLE: {
+                // ROOTED, for the reason the equality arm is.
+                int base = rt.mark();
+                int vi = rt.push(v);
+                int n = Table.tableCount(rt, rt.r(vi)), acc = 1;
+                for (int i = 0; i < n; i++) {
+                    int ri = rt.push(Table.tableRef(rt, rt.r(vi), i));
+                    acc = acc * 31 + hashValue(rt, rt.r(ri));
+                    rt.popTo(ri);
+                }
+                rt.popTo(base);
+                return Hash.hashInt(acc ^ n);
+            }
             case Obj.TY_TAGGED:
                 return hashValue(rt, rt.slot(v, 0)) * 31 + hashValue(rt, rt.slot(v, 1));
             case TY_SET: return Sets.hash(rt, v);

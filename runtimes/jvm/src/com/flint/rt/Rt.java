@@ -839,6 +839,13 @@ public final class Rt {
         // same lookup by two spellings disagrees: `(get x :tag)` answers and
         // `(:tag x)` falls through to the default.
         if (isHeapTy(coll, Obj.TY_TAGGED)) return Builtins.taggedGet(this, coll, k, dflt);
+        // A TABLE indexes by ROW and hands back a ref, which materialises
+        // nothing (`doc/decisions/0026`).
+        if (isHeapTy(coll, Obj.TY_TABLE)) {
+            if (!Val.isFixnum(k)) return dflt;
+            long r = Table.tableRef(this, coll, (int) Val.asFixnum(k));
+            return Val.isNil(r) ? dflt : r;
+        }
         if (isHeapTy(coll, TY_VEC)) {
             if (!Val.isFixnum(k)) return dflt;
             long got = Vec.nth(this, coll, (int) Val.asFixnum(k));
@@ -865,7 +872,13 @@ public final class Rt {
             case 6 -> isHeapTy(v, TY_SYM);
             case 7 -> v == Val.TRUE || v == Val.FALSE;
             case 8 -> isHeapTy(v, TY_VEC);
-            case 9 -> isHeapTy(v, TY_ARRAYMAP) || isHeapTy(v, TY_HASHMAP);
+            // A ROW REF is a map here too. `map?` goes through THIS table
+            // and not through `Maps.isMap`, so wiring only the latter left
+            // `(map? row)` false while `(get row :k)` worked -- and the
+            // printer, which dispatches on `map?`, printed a row as
+            // `#<unprintable>` (`doc/decisions/0026`).
+            case 9 -> isHeapTy(v, TY_ARRAYMAP) || isHeapTy(v, TY_HASHMAP)
+                      || isHeapTy(v, Obj.TY_TABLEREF);
             case 10 -> isHeapTy(v, TY_SET);
             case 11 -> isSeq(v);
             case 12 -> isHeapTy(v, TY_CLOSURE) || isHeapTy(v, TY_NATIVEFN);
@@ -1438,7 +1451,22 @@ public final class Rt {
             long exc = thrown;
             thrown = Val.NIL;
             vpush(exc);
-            frames.get(frames.size() - 1).ip = h.target;
+            Frame hf = frames.get(frames.size() - 1);
+            hf.ip = h.target;
+            // A handler target is a jump target, so it is a CHUNK START -- but
+            // only the compiled arity knows which chunk, and an unwind is the
+            // one path that arrives without having been told. The Rust runtime
+            // does this and the ports did not, so a `try` inside a compiled
+            // arity resumed compiled code at whatever `aotIp` the last bail had
+            // registered: the handler ran with the wrong entry point and the
+            // value stack came apart, reported as "value is not a function".
+            //
+            // Nothing caught it because no conformance program had a `try`
+            // inside an arity the AOT layer compiles.
+            if (hf.aotIdx != Aot.NONE) {
+                hf.aotIp = h.target;
+                hf.aotBlock = Aot.LOOKUP;
+            }
             return true;
         }
         return false;
@@ -1513,4 +1541,62 @@ public final class Rt {
         if (!parked()) roots.stackTop = save;
         return v;
     }
+    /// The CLOSED SET protocol dispatch runs on (`doc/decisions/0005`), lifted
+    /// out of the `flint/kind` builtin so an ERROR MESSAGE can name a value's
+    /// kind in the same words a program would.
+    public long kindOf(long v) {
+        String k;
+            
+            if (Val.isNil(v)) k = "nil";
+            else if (Val.isTrue(v) || Val.isFalse(v)) k = "boolean";
+            else if (Val.isDouble(v) || Val.isFixnum(v)) k = "number";
+            else if (Val.isInlineStr(v)) k = "string";
+            else if (Val.isInlineKw(v)) k = "keyword";
+            else if (!Val.isHeap(v)) k = "other";
+            else switch (ty(gc.sp, Val.asHeap(v))) {
+                case TY_STR: case TY_ROPE: k = "string"; break;
+                case TY_KW: k = "keyword"; break;
+                case TY_SYM: k = "symbol"; break;
+                case TY_BIGINT: k = "number"; break;
+                case TY_VEC: case TY_MAPENTRY: k = "vector"; break;
+                case TY_ARRAYMAP: case TY_HASHMAP: k = "map"; break;
+                case TY_SET: k = "set"; break;
+                case TY_CONS: case TY_EMPTY_LIST: case TY_LAZYSEQ: case TY_VECSEQ:
+                case TY_STRSEQ: case TY_RANGE: case TY_ITERSEQ: case TY_CHUNKSEQ:
+                    k = "list"; break;
+                case TY_CLOSURE: case TY_NATIVEFN: case TY_MULTIFN: k = "fn"; break;
+                case TY_PORT: k = "port"; break;
+                case TY_THREAD: k = "thread"; break;
+                case TY_ATOM: k = "atom"; break;
+                case TY_VAR: k = "var"; break;
+                case TY_REGEX: k = "regex"; break;
+                case TY_EXINFO: k = "exception"; break;
+                case Obj.TY_TAGGED: k = "tagged"; break;
+                case Obj.TY_SCHEMA: k = "schema"; break;
+                case Obj.TY_TABLE: k = "table"; break;
+                // A ROW REF answers `:map`, because it IS a map seen cheaply --
+                // `kind` being many-to-one is not new, three string tiers all
+                // answer `:string` (`doc/decisions/0026`).
+                case Obj.TY_TABLEREF: k = "map"; break;
+                // These four answered "other" until the printer moved onto a
+                // protocol and the hole showed. "other" is not a kind, it is
+                // the ABSENCE of one, and a value that answers it cannot be
+                // dispatched on at all (`doc/decisions/0005`).
+                case Obj.TY_OPAQUE: k = "opaque"; break;
+                case Obj.TY_BYTES: case Obj.TY_BROPE: case Obj.TY_TBYTES:
+                    k = "bytes"; break;
+                case Obj.TY_DELAY: k = "delay"; break;
+                case Obj.TY_VOLATILE: k = "volatile"; break;
+                default: k = "other";
+            }
+        return Str.keyword(this, null, k);
+    }
+
+    /// The bare name of a keyword, symbol or string -- what `name` returns.
+    public long nameOf(long v) {
+        if (Val.isInlineKw(v)) return Val.inlineStr(Val.inlineBytes(v));
+        if (isHeapTy(v, Obj.TY_KW) || isHeapTy(v, Obj.TY_SYM)) return slot(v, 1);
+        return v;
+    }
+
 }

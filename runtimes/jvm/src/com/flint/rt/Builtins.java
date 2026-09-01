@@ -162,46 +162,58 @@ public final class Builtins {
         /// built. It was MISSING from this port entirely, which meant no
         /// program using a protocol could run here -- found by the language
         /// suite in `test/common`, which is what that suite is for.
-        def("flint/kind", (rt, at, n) -> {
+        def("flint/kind", (rt, at, n) -> rt.kindOf(rt.vat(at)));
+
+        // --- tables (`doc/decisions/0026`) -----------------------------------
+        def("flint/schema", (rt, at, n) -> Table.newSchema(rt, rt.vat(at)));
+        def("flint/table", (rt, at, n) -> {
+            long s = rt.vat(at);
+            if (!Table.isSchema(rt, s))
+                return rt.throwStr("IllegalArgumentException",
+                    "a table needs a schema; build one with `(schema [[:name :type] ...])`");
+            return Table.newTable(rt, s, rt.vat(at + 1));
+        });
+        def("flint/table?", (rt, at, n) -> Val.bool(Table.isTable(rt, rt.vat(at))));
+        def("flint/table-schema", (rt, at, n) -> {
             long v = rt.vat(at);
-            String k;
-            if (Val.isNil(v)) k = "nil";
-            else if (Val.isTrue(v) || Val.isFalse(v)) k = "boolean";
-            else if (Val.isDouble(v) || Val.isFixnum(v)) k = "number";
-            else if (Val.isInlineStr(v)) k = "string";
-            else if (Val.isInlineKw(v)) k = "keyword";
-            else if (!Val.isHeap(v)) k = "other";
-            else switch (ty(rt.gc.sp, Val.asHeap(v))) {
-                case TY_STR: case TY_ROPE: k = "string"; break;
-                case TY_KW: k = "keyword"; break;
-                case TY_SYM: k = "symbol"; break;
-                case TY_BIGINT: k = "number"; break;
-                case TY_VEC: case TY_MAPENTRY: k = "vector"; break;
-                case TY_ARRAYMAP: case TY_HASHMAP: k = "map"; break;
-                case TY_SET: k = "set"; break;
-                case TY_CONS: case TY_EMPTY_LIST: case TY_LAZYSEQ: case TY_VECSEQ:
-                case TY_STRSEQ: case TY_RANGE: case TY_ITERSEQ: case TY_CHUNKSEQ:
-                    k = "list"; break;
-                case TY_CLOSURE: case TY_NATIVEFN: case TY_MULTIFN: k = "fn"; break;
-                case TY_PORT: k = "port"; break;
-                case TY_THREAD: k = "thread"; break;
-                case TY_ATOM: k = "atom"; break;
-                case TY_VAR: k = "var"; break;
-                case TY_REGEX: k = "regex"; break;
-                case TY_EXINFO: k = "exception"; break;
-                case Obj.TY_TAGGED: k = "tagged"; break;
-                // These four answered "other" until the printer moved onto a
-                // protocol and the hole showed. "other" is not a kind, it is
-                // the ABSENCE of one, and a value that answers it cannot be
-                // dispatched on at all (`doc/decisions/0005`).
-                case Obj.TY_OPAQUE: k = "opaque"; break;
-                case Obj.TY_BYTES: case Obj.TY_BROPE: case Obj.TY_TBYTES:
-                    k = "bytes"; break;
-                case Obj.TY_DELAY: k = "delay"; break;
-                case Obj.TY_VOLATILE: k = "volatile"; break;
-                default: k = "other";
-            }
-            return Str.keyword(rt, null, k);
+            if (Table.isTable(rt, v)) return rt.slot(v, Table.TB_SCHEMA);
+            if (Table.isTableRef(rt, v)) return rt.slot(v, Table.RF_SCHEMA);
+            return Val.NIL;
+        });
+        def("flint/table-migrate", (rt, at, n) -> {
+            long t = rt.vat(at), w = rt.vat(at + 1);
+            if (!Table.isTable(rt, t))
+                return rt.throwStr("IllegalArgumentException", "migrate wants a table");
+            if (!Table.isSchema(rt, w))
+                return rt.throwStr("IllegalArgumentException",
+                    "migrate wants a schema; build one with `(schema [[:name :type] ...])`");
+            return Table.tableMigrate(rt, t, w, rt.vat(at + 2));
+        });
+        def("flint/table-slice", (rt, at, n) -> {
+            long t = rt.vat(at);
+            if (!Table.isTable(rt, t))
+                return rt.throwStr("IllegalArgumentException", "slice wants a table");
+            return Table.tableSlice(rt, t, Val.asFixnum(rt.vat(at + 1)), Val.asFixnum(rt.vat(at + 2)));
+        });
+        def("flint/table-column", (rt, at, n) -> {
+            long t = rt.vat(at);
+            if (!Table.isTable(rt, t))
+                return rt.throwStr("IllegalArgumentException", "column wants a table");
+            return Table.tableColumn(rt, t, rt.vat(at + 1));
+        });
+        def("flint/table-reduce-column", (rt, at, n) -> {
+            long t = rt.vat(at);
+            if (!Table.isTable(rt, t))
+                return rt.throwStr("IllegalArgumentException", "reduce-column wants a table");
+            return Table.tableReduceColumn(rt, t, rt.vat(at + 1), rt.vat(at + 2), rt.vat(at + 3));
+        });
+        def("flint/schema-columns", (rt, at, n) -> {
+            long v = rt.vat(at);
+            return Table.isSchema(rt, v) ? rt.slot(v, Table.SC_NAMES) : Val.NIL;
+        });
+        def("flint/schema-types", (rt, at, n) -> {
+            long v = rt.vat(at);
+            return Table.isSchema(rt, v) ? rt.slot(v, Table.SC_TYPES) : Val.NIL;
         });
 
         def("flint/tagged-literal", (rt, at, n) -> {
@@ -214,14 +226,6 @@ public final class Builtins {
         def("flint/tagged-literal?", (rt, at, n) ->
             Val.bool(rt.isHeapTy(rt.vat(at), Obj.TY_TAGGED)));
 
-        /// TABLES are not ported yet (`doc/decisions/0026`), and answering
-        /// false is honest rather than a stub: this runtime cannot construct
-        /// one, so no value it holds is a table. It has to exist at all because
-        /// the PRINTER asks every value, so every program that prints needs it
-        /// -- which is a real consequence of adding a printable type, not an
-        /// oversight. `schema` and `table` are absent, so building one here
-        /// reports "this runtime does not carry the builtin" and names it.
-        def("flint/table?", (rt, at, n) -> Val.FALSE);
 
         def("flint/opaque?", (rt, at, n) -> Val.FALSE);
         def("flint/opaque-label", (rt, at, n) -> Val.NIL);
@@ -239,6 +243,9 @@ public final class Builtins {
             if (Val.isNil(v)) return Val.fixnum(0);
             if (rt.isHeapTy(v, TY_VEC)) return Val.fixnum(Vec.count(rt, v));
             if (rt.isHeapTy(v, Obj.TY_TAGGED)) return Val.fixnum(2);
+            if (rt.isHeapTy(v, Obj.TY_TABLE)) return Val.fixnum(Table.tableCount(rt, v));
+            if (rt.isHeapTy(v, Obj.TY_TABLEREF))
+                return Val.fixnum(Table.schemaLen(rt, rt.slot(v, Table.RF_SCHEMA)));
             if (Str.isString(rt, v)) return Val.fixnum(Str.charLen(rt, v));
             if (Maps.isMap(rt, v)) return Val.fixnum(Maps.count(rt, v));
             if (Sets.isSet(rt, v)) return Val.fixnum(Sets.count(rt, v));
@@ -284,6 +291,13 @@ public final class Builtins {
         });
         def("conj", (rt, at, n) -> {
             long v = rt.vat(at);
+            // `conj` on a table APPENDS A ROW, which is what conj means on
+            // every indexed collection here.
+            if (Table.isTable(rt, v)) {
+                long acc = v;
+                for (int i = 1; i < n; i++) acc = Table.tableConj(rt, acc, rt.vat(at + i));
+                return acc;
+            }
             if (rt.isHeapTy(v, TY_VEC)) {
                 long acc = v;
                 for (int i = 1; i < n; i++) acc = Vec.conj(rt, acc, rt.vat(at + i));
@@ -331,6 +345,7 @@ public final class Builtins {
         def("transient", (rt, at, n) -> {
             long v = rt.vat(at);
             if (rt.isHeapTy(v, TY_VEC)) return Vec.transientOf(rt, v);
+            if (Table.isTable(rt, v)) return Table.tableTransient(rt, v);
             if (Maps.isMap(rt, v)) return Maps.transientOf(rt, v);
             if (Sets.isSet(rt, v)) return Sets.transientOf(rt, v);
             return rt.throwStr("ClassCastException",
@@ -338,6 +353,7 @@ rt.describe(v) + " is not transientable");
         });
         def("persistent!", (rt, at, n) -> {
             long v = rt.vat(at);
+            if (Table.isTtable(rt, v)) return Table.ttablePersistent(rt, v);
             if (Vec.isTransient(rt, v)) {
                 if (!Vec.alive(rt, v)) {
                     return rt.throwStr("IllegalStateException",
@@ -353,6 +369,11 @@ rt.describe(v) + " is not a transient");
         });
         def("conj!", (rt, at, n) -> {
             long v = rt.vat(at);
+            if (Table.isTtable(rt, v)) {
+                long acc = v;
+                for (int i = 1; i < n; i++) acc = Table.ttableConj(rt, acc, rt.vat(at + i));
+                return acc;
+            }
             if (Vec.isTransient(rt, v)) {
                 if (!Vec.alive(rt, v)) {
                     return rt.throwStr("IllegalStateException",
@@ -369,12 +390,33 @@ rt.describe(v) + " is not a transient");
             }
             if (Maps.isTransient(rt, v)) {
                 // `conj!` onto a map takes an ENTRY or a two-element vector.
-                long acc = v;
+                //
+                // THE ACCUMULATOR IS ROOTED. It was a bare Java local passed as
+                // the first argument, and Java evaluates arguments LEFT TO
+                // RIGHT -- so `acc` was read, and then `Seqs.rest` and
+                // `Seqs.first` allocated (a map entry becomes a vector and a
+                // seq over it), and `tassoc` wrote through a forwarded pointer.
+                //
+                // `doc/decisions/0031`: a value in a host local does not
+                // survive an allocation. It surfaced as `(into {} m)` inside a
+                // `mapv` over a few hundred elements answering "object type 1
+                // is not a transient" -- type 1 being `TY_FWD` -- and only
+                // under enough allocation to collect, which is why nothing here
+                // had ever hit it.
+                int base = rt.mark();
+                int ai = rt.push(v);
                 for (int i = 1; i < n; i++) {
-                    long e = rt.vat(at + i);
-                    acc = Maps.tassoc(rt, acc, Seqs.first(rt, e), Seqs.first(rt, Seqs.rest(rt, e)));
+                    int ei = rt.push(rt.vat(at + i));
+                    long k = Seqs.first(rt, rt.r(ei));
+                    int ki = rt.push(k);
+                    long val = Seqs.first(rt, Seqs.rest(rt, rt.r(ei)));
+                    int vi2 = rt.push(val);
+                    rt.setR(ai, Maps.tassoc(rt, rt.r(ai), rt.r(ki), rt.r(vi2)));
+                    rt.popTo(ei);
                 }
-                return acc;
+                long out = rt.r(ai);
+                rt.popTo(base);
+                return out;
             }
             return rt.throwStr("ClassCastException",
 rt.describe(v) + " is not a transient");
@@ -439,12 +481,29 @@ rt.describe(v) + " is not a transient");
                 long got = Vec.nth(rt, coll, (int) Val.asFixnum(k));
                 return got == Val.NOT_FOUND ? dflt : got;
             }
+            // A TABLE indexes by ROW and hands back a ref (`0026`). There are
+            // two `get` paths in this port -- this one and `Rt.lookup` -- and a
+            // type wired into only one of them works through `(:k x)` and
+            // throws through `(get x k)`, which is the shape of the keyword-vs-
+            // `get` disagreement `0034` already had to fix once.
+            if (Table.isTable(rt, coll)) {
+                long k = rt.vat(at + 1);
+                if (!Val.isFixnum(k)) return dflt;
+                long r = Table.tableRef(rt, coll, (int) Val.asFixnum(k));
+                return Val.isNil(r) ? dflt : r;
+            }
             return rt.throwStr("UnsupportedOperationException",
 "get over " + rt.describe(coll) + " needs sets ported");
         });
         def("assoc", (rt, at, n) -> {
             long acc = rt.vat(at);
             if (Val.isNil(acc)) acc = Maps.empty(rt);
+            // A table is indexed by ROW and its schema is CLOSED, so the
+            // refusals live where the schema is (`doc/decisions/0026`).
+            if (Table.isTable(rt, acc)) return Table.tableAssoc(rt, acc, rt.vat(at + 1), rt.vat(at + 2));
+            // A ref is a VIEW: changing it produces an independent MAP, and
+            // neither the chunk nor the table it came from moves.
+            if (Table.isTableRef(rt, acc)) return Table.refAssoc(rt, acc, rt.vat(at + 1), rt.vat(at + 2));
             if (Maps.isMap(rt, acc)) {
                 int base = rt.mark();
                 int ai = rt.push(acc);

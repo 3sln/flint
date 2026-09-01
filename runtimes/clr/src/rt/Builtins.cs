@@ -156,46 +156,58 @@ public static class Builtins {
         /// answer with ONE keyword each. It was MISSING from this port, so no
         /// program using a protocol could run here -- found by the language
         /// suite in `test/common`, which is what that suite is for.
-        Def("flint/kind", (rt, at, n) => {
+        Def("flint/kind", (rt, at, n) => rt.KindOf(rt.VAt(at)));
+
+        // --- tables (`doc/decisions/0026`) -----------------------------------
+        Def("flint/schema", (rt, at, n) => Flint.Rt.Table.newSchema(rt, rt.VAt(at)));
+        Def("flint/table", (rt, at, n) => {
+            long s2 = rt.VAt(at);
+            if (!Flint.Rt.Table.isSchema(rt, s2))
+                return rt.ThrowStr("IllegalArgumentException",
+                    "a table needs a schema; build one with `(schema [[:name :type] ...])`");
+            return Flint.Rt.Table.newTable(rt, s2, rt.VAt(at + 1));
+        });
+        Def("flint/table?", (rt, at, n) => Val.Bool(Flint.Rt.Table.isTable(rt, rt.VAt(at))));
+        Def("flint/table-schema", (rt, at, n) => {
             long v = rt.VAt(at);
-            string k;
-            if (Val.IsNil(v)) k = "nil";
-            else if (v == Val.True || v == Val.False) k = "boolean";
-            else if (Val.IsDouble(v) || Val.IsFixnum(v)) k = "number";
-            else if (Val.IsInlineStr(v)) k = "string";
-            else if (Val.IsInlineKw(v)) k = "keyword";
-            else if (!Val.IsHeap(v)) k = "other";
-            else switch (Obj.Ty(rt.gc.sp, Val.AsHeap(v))) {
-                case Obj.TyStr: case Obj.TyRope: k = "string"; break;
-                case Obj.TyKw: k = "keyword"; break;
-                case Obj.TySym: k = "symbol"; break;
-                case Obj.TyBigint: k = "number"; break;
-                case Obj.TyVec: case Obj.TyMapentry: k = "vector"; break;
-                case Obj.TyArraymap: case Obj.TyHashmap: k = "map"; break;
-                case Obj.TySet: k = "set"; break;
-                case Obj.TyCons: case Obj.TyEmptyList: case Obj.TyLazyseq:
-                case Obj.TyVecseq: case Obj.TyStrseq: case Obj.TyRange:
-                case Obj.TyIterseq: case Obj.TyChunkseq: k = "list"; break;
-                case Obj.TyClosure: case Obj.TyNativefn: case Obj.TyMultifn: k = "fn"; break;
-                case Obj.TyPort: k = "port"; break;
-                case Obj.TyThread: k = "thread"; break;
-                case Obj.TyAtom: k = "atom"; break;
-                case Obj.TyVar: k = "var"; break;
-                case Obj.TyRegex: k = "regex"; break;
-                case Obj.TyExinfo: k = "exception"; break;
-                case Obj.TyTagged: k = "tagged"; break;
-                // These four answered "other" until the printer moved onto a
-                // protocol and the hole showed. "other" is not a kind, it is
-                // the ABSENCE of one, and a value that answers it cannot be
-                // dispatched on at all (`doc/decisions/0005`).
-                case Obj.TyOpaque: k = "opaque"; break;
-                case Obj.TyBytes: case Obj.TyBrope: case Obj.TyTbytes:
-                    k = "bytes"; break;
-                case Obj.TyDelay: k = "delay"; break;
-                case Obj.TyVolatile: k = "volatile"; break;
-                default: k = "other"; break;
-            }
-            return Str.Keyword(rt, null, k);
+            if (Flint.Rt.Table.isTable(rt, v)) return rt.Slot(v, Flint.Rt.Table.TB_SCHEMA);
+            if (Flint.Rt.Table.isTableRef(rt, v)) return rt.Slot(v, Flint.Rt.Table.RF_SCHEMA);
+            return Val.Nil;
+        });
+        Def("flint/schema-columns", (rt, at, n) => {
+            long v = rt.VAt(at);
+            return Flint.Rt.Table.isSchema(rt, v) ? rt.Slot(v, Flint.Rt.Table.SC_NAMES) : Val.Nil;
+        });
+        Def("flint/schema-types", (rt, at, n) => {
+            long v = rt.VAt(at);
+            return Flint.Rt.Table.isSchema(rt, v) ? rt.Slot(v, Flint.Rt.Table.SC_TYPES) : Val.Nil;
+        });
+        Def("flint/table-migrate", (rt, at, n) => {
+            long t = rt.VAt(at), w = rt.VAt(at + 1);
+            if (!Flint.Rt.Table.isTable(rt, t))
+                return rt.ThrowStr("IllegalArgumentException", "migrate wants a table");
+            if (!Flint.Rt.Table.isSchema(rt, w))
+                return rt.ThrowStr("IllegalArgumentException",
+                    "migrate wants a schema; build one with `(schema [[:name :type] ...])`");
+            return Flint.Rt.Table.tableMigrate(rt, t, w, rt.VAt(at + 2));
+        });
+        Def("flint/table-slice", (rt, at, n) => {
+            long t = rt.VAt(at);
+            if (!Flint.Rt.Table.isTable(rt, t))
+                return rt.ThrowStr("IllegalArgumentException", "slice wants a table");
+            return Flint.Rt.Table.tableSlice(rt, t, Val.AsFixnum(rt.VAt(at + 1)), Val.AsFixnum(rt.VAt(at + 2)));
+        });
+        Def("flint/table-column", (rt, at, n) => {
+            long t = rt.VAt(at);
+            if (!Flint.Rt.Table.isTable(rt, t))
+                return rt.ThrowStr("IllegalArgumentException", "column wants a table");
+            return Flint.Rt.Table.tableColumn(rt, t, rt.VAt(at + 1));
+        });
+        Def("flint/table-reduce-column", (rt, at, n) => {
+            long t = rt.VAt(at);
+            if (!Flint.Rt.Table.isTable(rt, t))
+                return rt.ThrowStr("IllegalArgumentException", "reduce-column wants a table");
+            return Flint.Rt.Table.tableReduceColumn(rt, t, rt.VAt(at + 1), rt.VAt(at + 2), rt.VAt(at + 3));
         });
 
         Def("flint/tagged-literal", (rt, at, n) => {
@@ -208,14 +220,6 @@ public static class Builtins {
         Def("flint/tagged-literal?", (rt, at, n) =>
             Val.Bool(rt.IsHeapTy(rt.VAt(at), Obj.TyTagged)));
 
-        /// TABLES are not ported yet (`doc/decisions/0026`), and answering
-        /// false is honest rather than a stub: this runtime cannot construct
-        /// one, so no value it holds is a table. It has to exist at all because
-        /// the PRINTER asks every value, so every program that prints needs it
-        /// -- which is a real consequence of adding a printable type, not an
-        /// oversight. `schema` and `table` are absent, so building one here
-        /// reports "this runtime does not carry the builtin" and names it.
-        Def("flint/table?", (rt, at, n) => Val.False);
 
         Def("flint/opaque?", (rt, at, n) => Val.False);
         Def("flint/opaque-label", (rt, at, n) => Val.Nil);
@@ -233,6 +237,9 @@ public static class Builtins {
             if (Val.IsNil(v)) return Val.Fixnum(0);
             if (rt.IsHeapTy(v, Obj.TyVec)) return Val.Fixnum(Vec.Count(rt, v));
             if (rt.IsHeapTy(v, Obj.TyTagged)) return Val.Fixnum(2);
+            if (rt.IsHeapTy(v, Obj.TyTable)) return Val.Fixnum(Flint.Rt.Table.tableCount(rt, v));
+            if (rt.IsHeapTy(v, Obj.TyTableref))
+                return Val.Fixnum(Flint.Rt.Table.schemaLen(rt, rt.Slot(v, Flint.Rt.Table.RF_SCHEMA)));
             if (Str.IsString(rt, v)) return Val.Fixnum(Str.SCount(rt, v));
             if (Maps.IsMap(rt, v)) return Val.Fixnum(Maps.Count(rt, v));
             if (Sets.IsSet(rt, v)) return Val.Fixnum(Sets.Count(rt, v));
@@ -274,6 +281,12 @@ public static class Builtins {
         });
         Def("conj", (rt, at, n) => {
             long v = rt.VAt(at);
+            // `conj` on a table APPENDS A ROW.
+            if (Flint.Rt.Table.isTable(rt, v)) {
+                long tacc = v;
+                for (int i = 1; i < n; i++) tacc = Flint.Rt.Table.tableConj(rt, tacc, rt.VAt(at + i));
+                return tacc;
+            }
             if (rt.IsHeapTy(v, Obj.TyVec)) {
                 long acc = v;
                 for (int i = 1; i < n; i++) acc = Vec.Conj(rt, acc, rt.VAt(at + i));
@@ -320,12 +333,14 @@ public static class Builtins {
         Def("transient", (rt, at, n) => {
             long v = rt.VAt(at);
             if (rt.IsHeapTy(v, Obj.TyVec)) return Vec.TransientOf(rt, v);
+            if (Flint.Rt.Table.isTable(rt, v)) return Flint.Rt.Table.tableTransient(rt, v);
             if (Maps.IsMap(rt, v)) return Maps.TransientOf(rt, v);
             if (Sets.IsSet(rt, v)) return Sets.TransientOf(rt, v);
             return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not transientable");
         });
         Def("persistent!", (rt, at, n) => {
             long v = rt.VAt(at);
+            if (Flint.Rt.Table.isTtable(rt, v)) return Flint.Rt.Table.ttablePersistent(rt, v);
             if (Vec.IsTransient(rt, v)) {
                 if (!Vec.Alive(rt, v))
                     return rt.ThrowStr("IllegalStateException", "persistent! called twice on one transient");
@@ -338,6 +353,11 @@ public static class Builtins {
         });
         Def("conj!", (rt, at, n) => {
             long v = rt.VAt(at);
+            if (Flint.Rt.Table.isTtable(rt, v)) {
+                long tacc = v;
+                for (int i = 1; i < n; i++) tacc = Flint.Rt.Table.ttableConj(rt, tacc, rt.VAt(at + i));
+                return tacc;
+            }
             if (Vec.IsTransient(rt, v)) {
                 if (!Vec.Alive(rt, v))
                     return rt.ThrowStr("IllegalStateException", "conj! on a transient already made persistent");
@@ -352,12 +372,26 @@ public static class Builtins {
             }
             if (Maps.IsTransient(rt, v)) {
                 // `conj!` onto a map takes an ENTRY or a two-element vector.
-                long acc = v;
+                //
+                // THE ACCUMULATOR IS ROOTED. It was a bare local passed as the
+                // first argument, and C# evaluates arguments LEFT TO RIGHT --
+                // so `acc` was read, then `Seqs.Rest` and `Seqs.First`
+                // allocated, and `TAssoc` wrote through a forwarded pointer
+                // (`doc/decisions/0031`).
+                int bas = rt.Mark();
+                int ai = rt.Push(v);
                 for (int i = 1; i < n; i++) {
-                    long e = rt.VAt(at + i);
-                    acc = Maps.TAssoc(rt, acc, Seqs.First(rt, e), Seqs.First(rt, Seqs.Rest(rt, e)));
+                    int ei = rt.Push(rt.VAt(at + i));
+                    long k = Seqs.First(rt, rt.R(ei));
+                    int ki = rt.Push(k);
+                    long val = Seqs.First(rt, Seqs.Rest(rt, rt.R(ei)));
+                    int vi2 = rt.Push(val);
+                    rt.SetR(ai, Maps.TAssoc(rt, rt.R(ai), rt.R(ki), rt.R(vi2)));
+                    rt.PopTo(ei);
                 }
-                return acc;
+                long outv = rt.R(ai);
+                rt.PopTo(bas);
+                return outv;
             }
             return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not a transient");
         });
@@ -417,11 +451,25 @@ public static class Builtins {
                 long got = Vec.Nth(rt, coll, (int) Val.AsFixnum(k));
                 return got == Val.NotFound ? dflt : got;
             }
+            // A TABLE indexes by ROW. There are TWO `get` paths in this port
+            // -- this one and `Rt.Lookup` -- and a type wired into only one
+            // works through `(:k x)` and throws through `(get x k)`.
+            if (Flint.Rt.Table.isTable(rt, coll)) {
+                long k2 = rt.VAt(at + 1);
+                if (!Val.IsFixnum(k2)) return dflt;
+                long r = Flint.Rt.Table.tableRef(rt, coll, (int) Val.AsFixnum(k2));
+                return Val.IsNil(r) ? dflt : r;
+            }
             return rt.ThrowStr("UnsupportedOperationException", "get over " + rt.Describe(coll) + " needs sets ported");
         });
         Def("assoc", (rt, at, n) => {
             long acc = rt.VAt(at);
             if (Val.IsNil(acc)) acc = Maps.Empty(rt);
+            // A table is indexed by ROW and its schema is CLOSED, so the
+            // refusals live where the schema is (`doc/decisions/0026`).
+            if (Flint.Rt.Table.isTable(rt, acc)) return Flint.Rt.Table.tableAssoc(rt, acc, rt.VAt(at + 1), rt.VAt(at + 2));
+            // A ref is a VIEW: changing it produces an independent MAP.
+            if (Flint.Rt.Table.isTableRef(rt, acc)) return Flint.Rt.Table.refAssoc(rt, acc, rt.VAt(at + 1), rt.VAt(at + 2));
             if (Maps.IsMap(rt, acc)) {
                 int bas = rt.Mark();
                 int ai = rt.Push(acc);

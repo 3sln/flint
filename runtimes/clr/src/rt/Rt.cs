@@ -819,6 +819,12 @@ public sealed class Rt : System.IDisposable {
         // `(:tag x)` and `(:form x)` (`doc/decisions/0034`). Without this
         // `(get x :tag)` answers and `(:tag x)` does not.
         if (IsHeapTy(coll, Obj.TyTagged)) return Builtins.TaggedGet(this, coll, k, dflt);
+        // A TABLE indexes by ROW and hands back a ref (`doc/decisions/0026`).
+        if (IsHeapTy(coll, Obj.TyTable)) {
+            if (!Val.IsFixnum(k)) return dflt;
+            long r = Table.tableRef(this, coll, (int) Val.AsFixnum(k));
+            return Val.IsNil(r) ? dflt : r;
+        }
         if (IsHeapTy(coll, TyVec)) {
             if (!Val.IsFixnum(k)) return dflt;
             long got = Vec.Nth(this, coll, (int) Val.AsFixnum(k));
@@ -845,7 +851,10 @@ public sealed class Rt : System.IDisposable {
             case 6: return IsHeapTy(v, TySym);
             case 7: return v == Val.True || v == Val.False;
             case 8: return IsHeapTy(v, TyVec);
-            case 9: return IsHeapTy(v, TyArraymap) || IsHeapTy(v, TyHashmap);
+            // A ROW REF is a map here too: `map?` goes through THIS table and
+            // not through `Maps.IsMap` (`doc/decisions/0026`).
+            case 9: return IsHeapTy(v, TyArraymap) || IsHeapTy(v, TyHashmap)
+                          || IsHeapTy(v, Obj.TyTableref);
             case 10: return IsHeapTy(v, TySet);
             case 11: return IsSeq(v);
             case 12: return IsHeapTy(v, TyClosure) || IsHeapTy(v, TyNativefn);
@@ -959,7 +968,16 @@ public sealed class Rt : System.IDisposable {
             long exc = thrown;
             thrown = Val.Nil;
             VPush(exc);
-            frames[frames.Count - 1].Ip = h.target;
+            var hf = frames[frames.Count - 1];
+            hf.Ip = h.target;
+            // A handler target is a jump target, so it is a CHUNK START -- but
+            // only the compiled arity knows which chunk, and an unwind is the
+            // one path that arrives without having been told. The Rust runtime
+            // does this and the ports did not (`doc/decisions/0029`, `0030`).
+            if (hf.AotIdx != Aot.NONE) {
+                hf.AotIp = h.target;
+                hf.AotBlock = Aot.LOOKUP;
+            }
             return true;
         }
         return false;
@@ -1438,5 +1456,61 @@ public sealed class Rt : System.IDisposable {
         if (!Parked()) roots.StackTop = save;
         return v;
     }
+    /// The CLOSED SET protocol dispatch runs on (`doc/decisions/0005`), lifted
+    /// out of the `flint/kind` builtin so an ERROR MESSAGE can name a value's
+    /// kind in the same words a program would.
+    public long KindOf(long v) {
+        string k;
+                                    if (Val.IsNil(v)) k = "nil";
+            else if (v == Val.True || v == Val.False) k = "boolean";
+            else if (Val.IsDouble(v) || Val.IsFixnum(v)) k = "number";
+            else if (Val.IsInlineStr(v)) k = "string";
+            else if (Val.IsInlineKw(v)) k = "keyword";
+            else if (!Val.IsHeap(v)) k = "other";
+            else switch (Obj.Ty(gc.sp, Val.AsHeap(v))) {
+                case Obj.TyStr: case Obj.TyRope: k = "string"; break;
+                case Obj.TyKw: k = "keyword"; break;
+                case Obj.TySym: k = "symbol"; break;
+                case Obj.TyBigint: k = "number"; break;
+                case Obj.TyVec: case Obj.TyMapentry: k = "vector"; break;
+                case Obj.TyArraymap: case Obj.TyHashmap: k = "map"; break;
+                case Obj.TySet: k = "set"; break;
+                case Obj.TyCons: case Obj.TyEmptyList: case Obj.TyLazyseq:
+                case Obj.TyVecseq: case Obj.TyStrseq: case Obj.TyRange:
+                case Obj.TyIterseq: case Obj.TyChunkseq: k = "list"; break;
+                case Obj.TyClosure: case Obj.TyNativefn: case Obj.TyMultifn: k = "fn"; break;
+                case Obj.TyPort: k = "port"; break;
+                case Obj.TyThread: k = "thread"; break;
+                case Obj.TyAtom: k = "atom"; break;
+                case Obj.TyVar: k = "var"; break;
+                case Obj.TyRegex: k = "regex"; break;
+                case Obj.TyExinfo: k = "exception"; break;
+                case Obj.TyTagged: k = "tagged"; break;
+                case Obj.TySchema: k = "schema"; break;
+                case Obj.TyTable: k = "table"; break;
+                // A ROW REF answers `:map`: it IS a map seen cheaply, and
+                // `kind` being many-to-one is not new (`doc/decisions/0026`).
+                case Obj.TyTableref: k = "map"; break;
+                // These four answered "other" until the printer moved onto a
+                // protocol and the hole showed. "other" is not a kind, it is
+                // the ABSENCE of one, and a value that answers it cannot be
+                // dispatched on at all (`doc/decisions/0005`).
+                case Obj.TyOpaque: k = "opaque"; break;
+                case Obj.TyBytes: case Obj.TyBrope: case Obj.TyTbytes:
+                    k = "bytes"; break;
+                case Obj.TyDelay: k = "delay"; break;
+                case Obj.TyVolatile: k = "volatile"; break;
+                default: k = "other"; break;
+            }
+        return Str.Keyword(this, null, k);
+    }
+
+    /// The bare name of a keyword, symbol or string -- what `name` returns.
+    public long NameOf(long v) {
+        if (Val.IsInlineKw(v)) return Val.InlineStr(Val.InlineBytes(v));
+        if (IsHeapTy(v, Obj.TyKw) || IsHeapTy(v, Obj.TySym)) return Slot(v, 1);
+        return v;
+    }
+
 }
 

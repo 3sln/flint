@@ -565,13 +565,20 @@ public static class Maps {
     public static bool IsMap(Rt rt, long v) {
         if (!Val.IsHeap(v)) return false;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
-        return t == Obj.TyArraymap || t == Obj.TyHashmap;
+        // A ROW REF is a map: `get`, keyword lookup, `count`, `keys`, `vals`
+        // and `=` against a map all work, so code that does not know it has a
+        // table keeps working (`doc/decisions/0026`).
+        return t == Obj.TyArraymap || t == Obj.TyHashmap || t == Obj.TyTableref;
     }
     public static bool IsArrayMap(Rt rt, long v) {
         return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyArraymap;
     }
 
     public static int Count(Rt rt, long m) {
+        // A ROW REF counts its COLUMNS -- `IsMap` says true for one, so map
+        // internals get called on one directly (`doc/decisions/0026`).
+        if (Val.IsHeap(m) && Obj.Ty(rt.gc.sp, Val.AsHeap(m)) == Obj.TyTableref)
+            return Table.schemaLen(rt, rt.Slot(m, Table.RF_SCHEMA));
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
         if (t == Obj.TyArraymap) return (Olen(rt, m) - AM_BASE) / 2;
         if (t == Obj.TyHashmap) return (int) Val.AsFixnum(rt.Slot(m, HM_CNT));
@@ -618,6 +625,11 @@ public static class Maps {
     }
 
     public static long Get(Rt rt, long m, long k, long notFound) {
+        // A ROW REF answers HERE rather than at every call site: `IsMap` says
+        // true for one, so every path that asks "is this a map?" and then calls
+        // this would read a table row as an array-map and find nothing.
+        if (Val.IsHeap(m) && Obj.Ty(rt.gc.sp, Val.AsHeap(m)) == Obj.TyTableref)
+            return Table.refGet(rt, m, k, notFound);
         if (!Val.IsHeap(m)) return notFound;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
         if (t == Obj.TyArraymap) {
@@ -933,6 +945,8 @@ public static class Maps {
     /// have to hold a path of node addresses across allocations the consumer
     /// makes, and every one of those would need rooting.
     public static long EntryVector(Rt rt, long m) {
+        if (Val.IsHeap(m) && Obj.Ty(rt.gc.sp, Val.AsHeap(m)) == Obj.TyTableref)
+            return EntryVector(rt, Table.refToMap(rt, m));
         int bas = rt.Mark();
         int mi = rt.Push(m);
         int at = rt.Mark();
@@ -953,6 +967,15 @@ public static class Maps {
     /// with an equal value -- ORDER-INDEPENDENT, which is what a map's `=`
     /// means and why it cannot just compare slots.
     public static bool Eq(Rt rt, long a, long b) {
+        // A ROW REF materialises here rather than being read as an array-map.
+        if (Val.IsHeap(a) && Obj.Ty(rt.gc.sp, Val.AsHeap(a)) == Obj.TyTableref)
+            a = Table.refToMap(rt, a);
+        if (Val.IsHeap(b) && Obj.Ty(rt.gc.sp, Val.AsHeap(b)) == Obj.TyTableref) {
+            int mi = rt.Push(a);
+            b = Table.refToMap(rt, b);
+            a = rt.R(mi);
+            rt.PopTo(mi);
+        }
         if (Count(rt, a) != Count(rt, b)) return false;
         int bas = rt.Mark();
         int ai = rt.Push(a), bi = rt.Push(b);

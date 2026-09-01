@@ -28,7 +28,9 @@ public static class Eq {
             case Obj.TyCons: case Obj.TyEmptyList: case Obj.TyLazyseq: case Obj.TyVecseq:
             case Obj.TyStrseq: case Obj.TyRange: case Obj.TyVec: case Obj.TyMapentry:
                 return CAT_SEQUENTIAL;
-            case Obj.TyArraymap: case Obj.TyHashmap: return CAT_MAP;
+            // A ROW REF is in the MAP category: it is `=` to a map with the
+            // same entries (`doc/decisions/0026`).
+            case Obj.TyArraymap: case Obj.TyHashmap: case Obj.TyTableref: return CAT_MAP;
             case Obj.TySet: return CAT_SET;
             default: return CAT_SCALAR;
         }
@@ -76,6 +78,39 @@ public static class Eq {
             return Bytes.Eq(rt, a, b);
         // Two tagged literals are equal when both halves are, and never equal
         // to a two-key map -- the whole reason it is a type (`0034`).
+        // A ROW REF is `=` to a map with the same entries, and hashes the same.
+        // The opposite call to table-versus-vector below, and coherently so: a
+        // table is a distinct kind of thing, a row IS a map seen cheaply.
+        if (Table.isTableRef(rt, a) || Table.isTableRef(rt, b)) {
+            long ma = Table.isTableRef(rt, a) ? Table.refToMap(rt, a) : a;
+            int mi = rt.Push(ma);
+            long mb = Table.isTableRef(rt, b) ? Table.refToMap(rt, b) : b;
+            bool same = Equal(rt, rt.R(mi), mb);
+            rt.PopTo(mi);
+            return same;
+        }
+        // A TABLE is NOT `=` to a vector of maps. Refusing that is what frees
+        // `hash` to be columnar, and is why a table prints as its own literal.
+        if (ta == Obj.TyTable || tb == Obj.TyTable) {
+            if (ta != tb) return false;
+            int na = Table.tableCount(rt, a), nb = Table.tableCount(rt, b);
+            if (na != nb) return false;
+            if (!Table.schemaEq(rt, rt.Slot(a, Table.TB_SCHEMA), rt.Slot(b, Table.TB_SCHEMA)))
+                return false;
+            // BOTH SIDES ROOTED: `tableRef` allocates and `a`/`b` are host
+            // locals (`doc/decisions/0031`).
+            int bas = rt.Mark();
+            int ai = rt.Push(a);
+            int bi = rt.Push(b);
+            for (int i = 0; i < na; i++) {
+                int ri = rt.Push(Table.tableRef(rt, rt.R(ai), i));
+                bool same = Equal(rt, rt.R(ri), Table.tableRef(rt, rt.R(bi), i));
+                rt.PopTo(ri);
+                if (!same) { rt.PopTo(bas); return false; }
+            }
+            rt.PopTo(bas);
+            return true;
+        }
         if (ta == Obj.TyTagged || tb == Obj.TyTagged) {
             if (ta != tb) return false;
             return Equal(rt, rt.Slot(a, 0), rt.Slot(b, 0))
@@ -157,6 +192,21 @@ public static class Eq {
             case Obj.TyArraymap:
             case Obj.TyHashmap: return Maps.Hash(rt, v);
             // Both halves, so two equal tagged literals share a bucket.
+            // A ROW REF hashes as the map it is, so it lands in the same
+            // bucket as an equal map.
+            case Obj.TyTableref: return HashValue(rt, Table.refToMap(rt, v));
+            case Obj.TyTable: {
+                int bas = rt.Mark();
+                int vi = rt.Push(v);
+                int n = Table.tableCount(rt, rt.R(vi)), acc = 1;
+                for (int i = 0; i < n; i++) {
+                    int ri = rt.Push(Table.tableRef(rt, rt.R(vi), i));
+                    acc = acc * 31 + HashValue(rt, rt.R(ri));
+                    rt.PopTo(ri);
+                }
+                rt.PopTo(bas);
+                return Hash.HashInt(acc ^ n);
+            }
             case Obj.TyTagged:
                 return HashValue(rt, rt.Slot(v, 0)) * 31 + HashValue(rt, rt.Slot(v, 1));
             case Obj.TySet: return Sets.Hash(rt, v);

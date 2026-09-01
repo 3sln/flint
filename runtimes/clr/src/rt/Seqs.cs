@@ -165,6 +165,14 @@ public static class Seqs {
             case Obj.TyVecseq: return v;
             case Obj.TyVec: return Vec.Count(rt, v) == 0 ? Val.Nil : Vecseq(rt, v, 0);
             case Obj.TyMapentry: return Vecseq(rt, EntryAsVec(rt, v), 0);
+            // Iterating a table hands back REFS, materialising nothing. It
+            // rides on `Vecseq` because a table is indexed and counted exactly
+            // as a vector is; only `First` differs (`doc/decisions/0026`).
+            case Obj.TyTable:
+                return Table.tableCount(rt, v) == 0 ? Val.Nil : Vecseq(rt, v, 0);
+            // A ref materialises HERE and only here: `seq`, `=` and `hash` all
+            // want the whole row and each is O(columns) anyway.
+            case Obj.TyTableref: return Seq(rt, Table.refToMap(rt, v));
             case Obj.TyStrseq: return v;
             case Obj.TyRange: return RangeEmpty(rt, v) ? Val.Nil : v;
             case Obj.TyLazyseq: {
@@ -215,7 +223,14 @@ public static class Seqs {
         if (Val.IsNil(s)) return Val.Nil;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(s));
         if (t == Obj.TyCons) return rt.Slot(s, CFirst);
-        if (t == Obj.TyVecseq) return Vec.Nth(rt, rt.Slot(s, 0), (int) Val.AsFixnum(rt.Slot(s, 1)));
+        if (t == Obj.TyVecseq) {
+            long coll = rt.Slot(s, 0);
+            int i = (int) Val.AsFixnum(rt.Slot(s, 1));
+            // A TABLE rides on `TyVecseq`; only this differs, and it differs by
+            // handing back a ref (`doc/decisions/0026`).
+            if (Table.isTable(rt, coll)) return Table.tableRef(rt, coll, i);
+            return Vec.Nth(rt, coll, i);
+        }
         if (t == Obj.TyStrseq) return Str.Nth(rt, rt.Slot(s, 0), (int) Val.AsFixnum(rt.Slot(s, 1)));
         if (t == Obj.TyRange) return rt.Slot(s, 0);
         return rt.ThrowStr("UnsupportedOperationException", "first over " + rt.Describe(v));
@@ -231,7 +246,8 @@ public static class Seqs {
         if (t == Obj.TyVecseq) {
             long vec = rt.Slot(s, 0);
             int i = (int) Val.AsFixnum(rt.Slot(s, 1)) + 1;
-            return i >= Vec.Count(rt, vec) ? Val.Nil : Vecseq(rt, vec, i);
+            int cnt = Table.isTable(rt, vec) ? Table.tableCount(rt, vec) : Vec.Count(rt, vec);
+            return i >= cnt ? Val.Nil : Vecseq(rt, vec, i);
         }
         if (t == Obj.TyStrseq) {
             long str = rt.Slot(s, 0);

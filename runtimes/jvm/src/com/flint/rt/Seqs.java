@@ -170,6 +170,16 @@ public final class Seqs {
             case TY_CONS: case TY_VECSEQ: return v;
             case TY_VEC: return Vec.count(rt, v) == 0 ? Val.NIL : vecseq(rt, v, 0);
             case TY_MAPENTRY: return vecseq(rt, entryAsVec(rt, v), 0);
+            // Iterating a table hands back REFS, one per row, materialising
+            // nothing -- the point of the ref type, not a detail of it. It
+            // rides on `vecseq` because a table is indexed and counted exactly
+            // as a vector is; only `first` differs (`doc/decisions/0026`).
+            case Obj.TY_TABLE:
+                return Table.tableCount(rt, v) == 0 ? Val.NIL : vecseq(rt, v, 0);
+            // A ref materialises HERE and only here: `seq`, `=` and `hash` all
+            // want the whole row and each is O(columns) anyway. `get` and
+            // `(:name row)` never come through.
+            case Obj.TY_TABLEREF: return seq(rt, Table.refToMap(rt, v));
             case TY_STRSEQ: return v;
             case TY_RANGE: return rangeEmpty(rt, v) ? Val.NIL : v;
             case TY_LAZYSEQ: {
@@ -221,7 +231,12 @@ public final class Seqs {
         int t = ty(rt.gc.sp, Val.asHeap(s));
         if (t == TY_CONS) return rt.slot(s, C_FIRST);
         if (t == TY_VECSEQ) {
-            return Vec.nth(rt, rt.slot(s, 0), (int) Val.asFixnum(rt.slot(s, 1)));
+            long coll = rt.slot(s, 0);
+            int i = (int) Val.asFixnum(rt.slot(s, 1));
+            // A TABLE rides on `TY_VECSEQ`; only `first` differs, and it
+            // differs by handing back a ref (`doc/decisions/0026`).
+            if (Table.isTable(rt, coll)) return Table.tableRef(rt, coll, i);
+            return Vec.nth(rt, coll, i);
         }
         if (t == TY_STRSEQ) return Str.nth(rt, rt.slot(s, 0), (int) Val.asFixnum(rt.slot(s, 1)));
         if (t == TY_RANGE) return rt.slot(s, 0);
@@ -238,7 +253,8 @@ public final class Seqs {
         if (t == TY_VECSEQ) {
             long vec = rt.slot(s, 0);
             int i = (int) Val.asFixnum(rt.slot(s, 1)) + 1;
-            return i >= Vec.count(rt, vec) ? Val.NIL : vecseq(rt, vec, i);
+            int n = Table.isTable(rt, vec) ? Table.tableCount(rt, vec) : Vec.count(rt, vec);
+            return i >= n ? Val.NIL : vecseq(rt, vec, i);
         }
         if (t == TY_STRSEQ) {
             long str = rt.slot(s, 0);

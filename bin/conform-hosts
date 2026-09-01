@@ -376,7 +376,7 @@ fi
 # agreeing about maps, vectors, sets, strings, seqs and doubles at once -- and
 # `maps` prints its keys in trie order, so matching means the ported CHAMP
 # ITERATES the way the Rust's does, which nothing asserts directly.
-for prog in collections control green hosted lazy maps numbers regex strings threads; do
+for prog in churn collections control green hosted lazy maps numbers regex strings tables threads; do
   ./bin/flint :src runtimes/conform :fn "$prog/main" --emit-image \
     :out "out/conform/$prog.img" >/dev/null 2>&1 || {
       echo "  .. $prog does not compile; skipped"; continue; }
@@ -449,7 +449,16 @@ fi
 # And that compiled code was ENTERED. The first version of this port left the
 # frame's `aotIp` at NEVER, so every arity compiled, every answer matched, every
 # gas count matched, and not one instruction of compiled code ever ran.
-for prog in collections control green hosted lazy maps numbers regex strings threads; do
+# `tables` is diffed for ANSWERS above but not compiled here, and the reason is
+# a KNOWN-OPEN DEFECT rather than a convenience: two `try` regions in one
+# function come apart under a compiled arity on both ports.
+# `runtimes/conform/aot_try.cljc` is that reduced to four lines, and the whole
+# note is there. It is PRE-EXISTING -- the ports fail it at the previous commit
+# too -- and it survived because no conformance program had a `try` inside an
+# arity the AOT layer compiles. `tables` was the first, which is how it was
+# found. Excluded here rather than deleted, so the exclusion is one grep away
+# from whoever fixes it.
+for prog in churn collections control green hosted lazy maps numbers regex strings threads; do
   img="out/conform/$prog.img"
   [ -f "$img" ] || continue
   # `|| { echo; exit 1; }` and not a bare `|| exit 1`: the output is CAPTURED
