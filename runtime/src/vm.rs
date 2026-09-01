@@ -1841,14 +1841,27 @@ impl Rt {
             return true;
         }
         self.set_started(true);
+        // WITHOUT PREEMPTION, for the reason `run_program` gives at length: a
+        // slice is armed the moment a scheduler exists, a yield inside an
+        // initialiser is discarded here (`let _ =`), and the thread comes back
+        // with `park_on` still set. There is nothing to preempt anyway -- no
+        // other thread can be runnable until the program is initialised.
+        //
+        // It matters more here than there. A CALL runs the initialisers on
+        // first use (`doc/decisions/0025` step 5), so this now happens with a
+        // scheduler already built and a slice already counting down.
+        let slice = self.slice_end;
+        self.set_slice_end(0);
         for i in 0..self.image.init.len() {
             let f = self.image.init[i];
             let c = self.make_closure(f, &[]);
             let _ = self.invoke(c, &[]);
             if self.failed() {
+                self.set_slice_end(slice);
                 return false;
             }
         }
+        self.set_slice_end(slice);
         true
     }
 

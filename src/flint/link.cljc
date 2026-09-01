@@ -423,7 +423,6 @@
                :memory :unshared
                :gas-in-aot (boolean aot?)
                :version flint-version
-               :entry (str entry-sym)
                :exports exported
                :imports (vec (sort (map (fn [i] (str (:module i) "/" (:name i)))
                                         (w/imports m))))

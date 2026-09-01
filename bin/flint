@@ -37,6 +37,13 @@
         (= k ":fn") (recur (drop 2 a) (assoc m :fn (symbol (second a))))
         (= k ":exclude") (let [[vs rest-a] (take-list (rest a))]
                            (recur rest-a (update m :exclude (fnil into #{}) (map symbol vs))))
+        ;; MORE ROOTS, so a function nobody calls from inside the module is
+        ;; still reachable from OUTSIDE it (`doc/decisions/0025` step 5).
+        ;; Nothing runs automatically any more: a host asks for a function by
+        ;; name over the system port, and a name the linker dropped is a name
+        ;; that cannot be asked for.
+        (= k ":exports") (let [[vs rest-a] (take-list (rest a))]
+                           (recur rest-a (update m :exports (fnil into []) (map symbol vs))))
         ;; `:wasm-ld` shipped once under that name and reads like "flags for the
         ;; linker"; `:wasm-path` says what it is. The old spelling stays as a
         ;; deprecated alias for one release (doc/decisions/0005, section 7).
@@ -603,7 +610,7 @@
     (flush)
     (System/exit (if (or (re-find #"FAILED" (str out)) (not (zero? (.exitValue p)))) 1 0))))
 
-(let [{:keys [src fn out stats keep-names explain disasm const self exclude wasm-path aot optimize loader emit-image emit-spec features]}
+(let [{:keys [src fn out stats keep-names explain disasm const self exclude exports wasm-path aot optimize loader emit-image emit-spec features]}
       (parse-args (if test-mode? (rest *command-line-args*) *command-line-args*))
       fn (if test-mode? 'flint.check.registry/run fn)]
   (when-not fn
@@ -707,6 +714,7 @@
         ;; the linker for something that is not the linker's doing.
         _ (when-let [d (fs/parent (fs/absolutize out))] (fs/create-dirs d))
         spec {:sources sources :order order :entry fn
+              :exports exports
               :features features
               :exclude exclude
               :excluded-builtins (select-keys (builtins-by-unit unit-path) (vec (or exclude [])))

@@ -72,7 +72,7 @@
 (defn describe
   "Build the metadata map. `compat` is the ABI-affecting subset; everything else
   is descriptive."
-  [{:keys [abi memory gas-in-aot version exports imports units features entry builtins
+  [{:keys [abi memory gas-in-aot version exports imports units features builtins
            meta]}]
   (let [compat {:abi abi
                 :memory (or memory :unshared)
@@ -82,7 +82,13 @@
            :compat compat
            ;; Descriptive from here down. Nothing below this line may change the
            ;; compatibility key, and `test/modmeta.clj` asserts it.
-           :entry entry
+           ;;
+           ;; THERE IS NO `:entry`. A module has no entry point: nothing is
+           ;; called automatically, and a caller names the function it wants
+           ;; (`doc/decisions/0025` step 5). Recording one here made the module
+           ;; look like it had a distinguished function, which is exactly the
+           ;; idea being removed -- `:exports` is the honest list, and every
+           ;; name in it is equally callable.
            :exports (vec (sort exports))
            :builtins builtins
            :imports (vec (sort imports))

@@ -23,20 +23,25 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   const enc = new TextEncoder();
   const dec = new TextDecoder();
 
-  function main(...args) {
+  /// Run `fn`, and render what it returned the way a command line would.
+  ///
+  /// **The caller names the function.** There is no entry point: nothing is
+  /// called automatically (`doc/decisions/0025` step 5), and a module's
+  /// functions are all equally callable by name. This is the shape the old
+  /// `main` had -- string arguments in, a rendered string and an exit code out
+  /// -- kept because a runner wants it, but it is now one caller of `call`
+  /// rather than a thing the runtime does on its own.
+  function run(fn, args = []) {
     // A gas limit, if one was asked for. `0009`'s counting is deterministic,
     // so this is a bound on WORK rather than on time -- the same program stops
     // at the same instruction on every machine.
-    if (stepLimit && e.set_step_limit) {
-      e.set_step_limit(Math.floor(stepLimit / 2 ** 32), stepLimit >>> 0);
+    if (stepLimit && e.set_step_limit) e.set_step_limit(stepLimit);
+    try {
+      const v = call(fn, [args.map(String)]);
+      return { code: 0, out: v === null || v === undefined ? '' : String(v) };
+    } catch (err) {
+      return { code: 1, out: err.kind ? `${err.kind}: ${err.message.replace(/^[^:]*: /, '')}` : String(err.message ?? err) };
     }
-    for (const a of args) {
-      const b = enc.encode(String(a));
-      const p = e.arg_alloc(b.length);
-      new Uint8Array(e.memory.buffer).set(b, p);
-      e.arg_push(p, b.length);
-    }
-    return pump(e.main());
   }
 
   // --- the pump -------------------------------------------------------------
@@ -240,6 +245,11 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
       openPorts.set(port, cap);
       if (cap.open) cap.open(port, api);
     } else if (ev.kind === 'message') {
+      // An answer to a CALL comes back on the system port carrying its `:tx`.
+      if (ev.port === SYSTEM_PORT && ev.value && pending.has(ev.value[':tx'])) {
+        pending.get(ev.value[':tx'])(ev.value);
+        return;
+      }
       const cap = openPorts.get(ev.port);
       if (cap && cap.message) cap.message(ev.port, ev.value, api, ev);
     } else if (ev.kind === 'retain') {
@@ -310,6 +320,40 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     return true;
   }
 
+  /// Ask the module to run a function, BY NAME (`doc/decisions/0025` step 5).
+  ///
+  /// Nothing is called automatically. A call is a message on the system port:
+  /// `{:tx n :op :call :fn "ns/name" :args [...]}`, and the answer comes back on
+  /// the same port carrying the same `:tx`. The runtime runs it as a green
+  /// thread, so the called function may open a port and park and this host can
+  /// answer that while the call is still outstanding.
+  let nextTx = 1;
+  const pending = new Map();
+  function call(name, args = []) {
+    ensureSystem();
+    const tx = nextTx++;
+    const bytes = codec.map([
+      [codec.kw('tx'), codec.int(tx)],
+      [codec.kw('op'), codec.kw('call')],
+      [codec.kw('fn'), codec.str(name)],
+      [codec.kw('args'), codec.vec(args.map((a) => (a instanceof Val ? a : codec.from(a))))],
+    ]).encode();
+    if (!tryDeliverBytes(SYSTEM_PORT, bytes)) {
+      throw new Error('flint: the system port would not take the call');
+    }
+    let answer;
+    pending.set(tx, (m) => { answer = m; });
+    pump(e.flint_resume());
+    if (!answer) throw new Error(`flint: the call to ${name} was never answered`);
+    pending.delete(tx);
+    if (answer[':op'] === ':throw') {
+      const err = new Error(`${answer[':kind']}: ${answer[':message']}`);
+      err.kind = answer[':kind'];
+      throw err;
+    }
+    return answer[':value'];
+  }
+
   const api = {
     /// Send a VALUE. The ordinary way: encoding is done for you.
     deliver,
@@ -331,12 +375,13 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   };
 
   return {
-    main,
+    run,
     exports: e,
     drain,
     deliver,
     flush,
     pump,
+    call,
     grant: (name, handler) => { capabilities[name] = handler; ensureSystem(); },
     capabilities: (m) => { capabilities = m; ensureSystem(); },
     install,
