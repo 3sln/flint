@@ -99,9 +99,12 @@ console.log(row(['', 'per call', 'vs cherry']));
 
 const { mod: cherryParse } = await cherryModule('parse');
 const { module: cbModule } = await load('out/cb.wasm');
+// The module is built `:fn construe.bench.main/main` at line 77; a call names it
+// (`doc/decisions/0025` step 5).
+const FN = 'construe.bench.main/main';
 const flintInst = instantiate(cbModule);
 
-const flintAnswer = flintInst.main('parse', '1').out;
+const flintAnswer = flintInst.run(FN, ['parse', '1']).out;
 const cherryAnswer = String(cherryParse.run(1));
 if (flintAnswer !== cherryAnswer) {
   throw new Error(`the runtimes disagree: flint ${flintAnswer}, cherry ${cherryAnswer}`);
@@ -109,7 +112,7 @@ if (flintAnswer !== cherryAnswer) {
 
 const REPS = 200;
 const cherryPer = best(7, () => cherryParse.run(REPS)) / REPS / 4;
-const flintPer = best(7, () => flintInst.main('parse', String(REPS))) / REPS / 4;
+const flintPer = best(7, () => flintInst.run(FN, ['parse', String(REPS)])) / REPS / 4;
 console.log(row(['cherry -> JS in node (JIT)', ms(cherryPer) + ' ms', '1.0x']));
 console.log(row(['flint (wasm interpreter)', ms(flintPer) + ' ms',
                  (flintPer / cherryPer).toFixed(1) + 'x']));
@@ -120,7 +123,7 @@ console.log();
 // re-runs the module's top-level initialisers. Amortised over 800 parses above
 // that vanishes; over one parse it does not, and construe's read path is the
 // second shape. Report both or the number is misleading.
-const oneShot = best(9, () => flintInst.main('parse', '1'));
+const oneShot = best(9, () => flintInst.run(FN, ['parse', '1']));
 const cherryOne = best(9, () => cherryParse.run(1));
 console.log(row(['', 'one invocation', 'of which']));
 console.log(row(['flint: main() doing ONE parse', ms(oneShot) + ' ms',
@@ -142,7 +145,7 @@ const wasmBytes = readFileSync('out/cb.wasm');
 const coldFlint = await bestAsync(7, async () => {
   const mod = await WebAssembly.compile(wasmBytes);
   const inst = instantiate(mod);
-  inst.main('parse', '1');
+  inst.run(FN, ['parse', '1']);
 });
 // `collect_now` and `stat_peak_live` are diagnostic exports and a production
 // module does not carry them (doc/decisions/0016). This used to call them
@@ -215,7 +218,7 @@ console.log();
 console.log('=== the suite: 500 contexts through one warm module ========');
 const CASES = 125;   // x4 contexts = 500 parses
 const beforeColl = DIAG ? Number(flintInst.exports.stat_collections()) : null;
-const suiteMs = best(5, () => flintInst.main('parse', String(CASES)));
+const suiteMs = best(5, () => flintInst.run(FN, ['parse', String(CASES)]));
 const afterColl = DIAG ? Number(flintInst.exports.stat_collections()) : null;
 const cherrySuite = best(5, () => cherryParse.run(CASES));
 console.log(row(['flint', ms(suiteMs) + ' ms', ms(suiteMs / 500) + ' ms/case']));
@@ -236,7 +239,7 @@ console.log('    (a REPRESENTATIVE implementation, not construe\'s annotator:');
 console.log('     the fixtures here are the seed interpreter and four contexts)');
 const { mod: cherrySuggest } = await cherryModule('suggest');
 const SUG = 20;
-const flintSug = best(5, () => flintInst.main('suggest', String(SUG))) / SUG;
+const flintSug = best(5, () => flintInst.run(FN, ['suggest', String(SUG)])) / SUG;
 const cherrySug = best(5, () => cherrySuggest.run(4000, SUG)) / SUG;
 console.log(row(['flint', ms(flintSug) + ' ms', (flintSug / cherrySug).toFixed(0) + 'x slower']));
 console.log(row(['cherry -> JS', ms(cherrySug) + ' ms', '1.0x']));
@@ -258,7 +261,7 @@ const patterns = [
   ['clojure.string/split, regex', 'regex', 5000],
 ];
 for (const [label, which, n] of patterns) {
-  const f = best(5, () => flintInst.main(which, String(n))) * 1e6 / n;   // ns/op
+  const f = best(5, () => flintInst.run(FN, [which, String(n)])) * 1e6 / n;   // ns/op
   const c = best(5, () => cherryPat.run(which, n)) * 1e6 / n;
   console.log(row([label, f.toFixed(0) + ' ns', c.toFixed(0) + ' ns',
                    (f / c).toFixed(1) + 'x']));

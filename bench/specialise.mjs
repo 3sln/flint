@@ -16,6 +16,7 @@
 //   * The ceiling is reported against total instructions, so "specialise
 //     everything perfectly" has a number and it is less than 100%.
 import { load, instantiate } from '../host/flint.mjs';
+import { fnOf } from './entry.mjs';
 
 const NB = 20, NCOUNT = 28;
 const OPS_AT = NB * 4 + NCOUNT;
@@ -55,7 +56,7 @@ const totals = [];
 for (const [name, args, desc] of WORKLOADS) {
   const { module } = await load(wasm);
   const inst = instantiate(module);
-  const r = inst.main(...args);
+  const r = inst.run(fnOf(wasm), [...args]);
   if (r.code !== 0) throw new Error(`${name} failed: ${r.out}`);
   const e = inst.exports;
   const g = (i) => Number(e.stat_region(i));

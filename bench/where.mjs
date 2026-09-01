@@ -22,6 +22,8 @@
 // with the predicate opcode on and off and subtracts, which is a measurement
 // on the workload rather than an estimate carried in from another one.
 import { load, instantiate } from '../host/flint.mjs';
+// Built `:fn construe.bench.main/main`; a call names it (`0025` step 5).
+const FN = 'construe.bench.main/main';
 
 const NB = 20, NCOUNT = 28, C = NB * 4, OPS_AT = C + NCOUNT, NAT_AT = OPS_AT + 256;
 
@@ -59,7 +61,7 @@ const time = async (file, args) => {
     const inst = instantiate(module);
     inst.exports.set_step_limit(BigInt(1e12));
     const t0 = process.hrtime.bigint();
-    const r = inst.main(...args);
+    const r = inst.run(FN, [...args]);
     const t1 = process.hrtime.bigint();
     if (r.code !== 0) throw new Error(`${file}: ${r.out}`);
     best = Math.min(best, Number(t1 - t0) / 1e6);
@@ -71,7 +73,7 @@ const census = async (args) => {
   const { module } = await load('out/cb-diag.wasm');
   const inst = instantiate(module);
   inst.exports.set_step_limit(BigInt(1e12));
-  inst.main(...args);
+  inst.run(FN, [...args]);
   const e = inst.exports;
   const g = (k) => Number(e.stat_region(k));
   const ops = [];

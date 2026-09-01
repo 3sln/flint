@@ -11,6 +11,8 @@
 // asserted rather than assumed: if they differ, the two are not running the
 // same program and the times are not comparable.
 import { load, instantiate } from '../host/flint.mjs';
+// Built `:fn construe.bench.main/main`; a call names it (`0025` step 5).
+const FN = 'construe.bench.main/main';
 import { statSync } from 'fs';
 
 const WORK = [
@@ -30,7 +32,7 @@ const run = ({ module }, args) => {
     const inst = instantiate(module);
     inst.exports.set_step_limit(BigInt(1e12));
     const t0 = process.hrtime.bigint();
-    const r = inst.main(...args);
+    const r = inst.run(FN, [...args]);
     const t1 = process.hrtime.bigint();
     if (r.code !== 0) throw new Error(`${args.join(' ')}: ${r.out}`);
     best = Math.min(best, Number(t1 - t0) / 1e6);
@@ -78,7 +80,7 @@ try {
   for (const [name, args] of [['parse', ['parse', '3']], ['suggest', ['suggest', '1']]]) {
     const inst = instantiate(module);
     inst.exports.set_step_limit(BigInt(1e12));
-    inst.main(...args);
+    inst.run(FN, [...args]);
     const total = Number(inst.exports.stat_region(NB * 4));
     let spec = 0;
     for (const k of SPEC) spec += Number(inst.exports.stat_region(OPS_AT + k));

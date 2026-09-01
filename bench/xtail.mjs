@@ -10,7 +10,10 @@ const read = typeof Deno !== 'undefined'
   ? (p) => Deno.readFileSync(p)
   : (await import('node:fs')).readFileSync;
 
-const [loaderPath, imagePath, callsArg] = argv;
+const [loaderPath, imagePath, callsArg, fnArg] = argv;
+// The FUNCTION, named: a loaded image cannot be asked what it calls itself
+// (`doc/decisions/0025` step 5).
+const FN = fnArg ?? 'construe.bench.xrt25/main';
 const CALLS = Number(callsArg || 2000);
 const loader = read(loaderPath);
 const image = read(imagePath);
@@ -21,7 +24,7 @@ function once() {
   const p = e.arg_alloc(image.length);
   new Uint8Array(e.memory.buffer).set(image, p);
   if (e.flint_load_image(p, image.length) !== 0) throw new Error('image load failed');
-  e.main();
+  wireCall(e, FN);
 }
 
 for (let i = 0; i < 300; i++) once();          // warm
@@ -47,4 +50,24 @@ console.log(JSON.stringify({
   tailRatio: +(q(0.99) / q(0.5)).toFixed(2),
   heapMB: +(e.memory.buffer.byteLength / 1048576).toFixed(2),
 }));
+}
+
+// `[name []]` in the wire format, written by hand: these drivers deliberately
+// use nothing but a `WebAssembly.Instance` (`doc/decisions/0018`), so there is
+// no SDK here to encode for them. Nothing is called automatically any more
+// (`doc/decisions/0025` step 5), so the name has to travel.
+function wireCall(e, fn) {
+  const enc = (s) => {
+    const u = new TextEncoder().encode(s);
+    const b = [5];                                   // K_STRING
+    for (let i = 0; i < 4; i++) b.push((u.length >> (8 * i)) & 0xff);
+    return b.concat(Array.from(u));
+  };
+  const call = [8, 2, 0, 0, 0]                       // K_VECTOR, 2 items
+    .concat(enc(fn))
+    .concat([8, 0, 0, 0, 0]);                        // K_VECTOR, no arguments
+  const b = Uint8Array.from(call);
+  const p = e.arg_alloc(b.length);
+  new Uint8Array(e.memory.buffer).set(b, p);
+  return e.flint_call(p, b.length);
 }

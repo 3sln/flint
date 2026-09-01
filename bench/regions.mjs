@@ -14,6 +14,7 @@
 // boundary cost is measured here too rather than guessed: a wasm call taking a
 // pointer, on this host, through the same call_indirect the natives use.
 import { load, instantiate } from '../host/flint.mjs';
+import { fnOf } from './entry.mjs';
 import { DocStore, documentCapability } from '../host/docstore.mjs';
 import { codec } from '../host/edn.mjs';
 
@@ -153,7 +154,7 @@ const S = { FNS: 0, ARITIES: 1, BYTES: 2, INSTRS: 3, CALLSITES: 4,
 {
   const { module } = await load(wasm);
   const inst = instantiate(module);
-  inst.main('parse', '1');
+  inst.run(fnOf(wasm), ['parse', '1']);
   const g = (k) => Number(inst.exports.stat_static(S[k]));
   const fns = g('FNS'), ar = g('ARITIES'), instrs = g('INSTRS');
   const sites = g('CALLSITES'), back = g('BACKTARGETS');
@@ -202,7 +203,7 @@ const rows = [];
 for (const [name, args, desc] of WORKLOADS) {
   const { module } = await load(wasm);
   const inst = instantiate(module);
-  const r = inst.main(...args);
+  const r = inst.run(fnOf(wasm), [...args]);
   if (r.code !== 0) throw new Error(`${name} failed: ${r.out}`);
   const { frame, run, resumed, counts } = readRegions(inst.exports);
   console.log(`=== ${name} — ${desc}`);
@@ -288,7 +289,7 @@ try {
   const { module } = await load('out/doc-waves.wasm');
   const inst = instantiate(module);
   inst.capabilities({ doc: documentCapability(store, codec) });
-  const r = inst.main();
+  const r = inst.run(fnOf(wasm), []);
   if (r.code !== 0) throw new Error(r.out);
   const { seg, resumed, counts } = readRegions(inst.exports);
   console.log();

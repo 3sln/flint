@@ -11,6 +11,8 @@ const MODES = process.argv.slice(3);
 const N = Number(process.argv[2] ?? 20000);
 const file = 'out/colls-diag.wasm';
 const { module } = await load(file);
+// Built `:fn colls/main`; a call names it (`doc/decisions/0025` step 5).
+const FN = 'colls/main';
 
 const run = (what) => {
   let best = Infinity, allocs = 0, bytes = 0, colls = 0, out = null;
@@ -18,7 +20,7 @@ const run = (what) => {
     const inst = instantiate(module);
     inst.exports.set_step_limit(BigInt(1e12));
     const t0 = process.hrtime.bigint();
-    const r = inst.main(what, String(N));
+    const r = inst.run(FN, [what, String(N)]);
     const t1 = process.hrtime.bigint();
     if (r.code !== 0) throw new Error(`${what}: ${r.out}`);
     best = Math.min(best, Number(t1 - t0) / 1e6);

@@ -12,6 +12,7 @@
 // whether register-allocating operands between safepoints is worth building.
 import { readFileSync } from 'fs';
 import { load, instantiate } from '../host/flint.mjs';
+import { fnOf } from './entry.mjs';
 
 const N = 1_000_000n, Nn = 1_000_000;
 const best = (k, f) => {
@@ -32,7 +33,7 @@ for (const [k, f] of [['ti', '/tmp/tight-i.wasm'], ['ta', '/tmp/tight-a.wasm'],
                       ['ni', '/tmp/nat-i.wasm'], ['na', '/tmp/nat-a.wasm']]) {
   try {
     const { module } = await load(f);
-    t[k] = best(5, () => instantiate(module).main());
+    t[k] = best(5, () => instantiate(module).run(fnOf(f), []));
   } catch { t[k] = null; }
 }
 const ns = (x) => x == null ? '     n/a' : (x * 1e6 / Nn).toFixed(1).padStart(8);

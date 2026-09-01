@@ -9,8 +9,11 @@
 // Same program twice, same answer, same operation count. The only difference
 // is whether the compiler could prove the operands were integers.
 import { load, instantiate } from '../host/flint.mjs';
+import { fnOf } from './entry.mjs';
 
-const { module } = await load(process.argv[2] ?? 'out/spec.wasm');
+const wasmPath = process.argv[2] ?? 'out/spec.wasm';
+const { module } = await load(wasmPath);
+const FN = fnOf(wasmPath);
 const N = Number(process.argv[3] ?? 300000);
 const REPS = 7;
 
@@ -20,7 +23,7 @@ const time = (what, n) => {
     const inst = instantiate(module);
     inst.exports.set_step_limit(BigInt(1e12));
     const t0 = process.hrtime.bigint();
-    const r = inst.main(what, String(n));
+    const r = inst.run(FN, [what, String(n)]);
     const t1 = process.hrtime.bigint();
     if (r.code !== 0) throw new Error(`${what}: ${r.out}`);
     best = Math.min(best, Number(t1 - t0) / 1e6);

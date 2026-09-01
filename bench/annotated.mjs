@@ -11,6 +11,7 @@
 // a native call. So annotating pays only where one check feeds MANY
 // specialisable operations, and in a parser it feeds one, or none.
 import { load, instantiate } from '../host/flint.mjs';
+import { fnOf } from './entry.mjs';
 
 const NB = 20, NCOUNT = 28, OPS_AT = NB * 4 + NCOUNT, NAT_AT = OPS_AT + 256;
 const SPEC = [0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B];
@@ -33,7 +34,7 @@ const timeIt = async (file, args) => {
     const inst = instantiate(module);
     inst.exports.set_step_limit(BigInt(1e12));
     const t0 = process.hrtime.bigint();
-    const r = inst.main(...args);
+    const r = inst.run(fnOf(file), [...args]);
     const t1 = process.hrtime.bigint();
     if (r.code !== 0) throw new Error(`${file} ${args.join(' ')}: ${r.out}`);
     best = Math.min(best, Number(t1 - t0) / 1e6);
@@ -47,7 +48,7 @@ const countIt = async (file, args) => {
   const { module } = await load(file);
   const inst = instantiate(module);
   inst.exports.set_step_limit(BigInt(1e12));
-  inst.main(...args);
+  inst.run(fnOf(file), [...args]);
   const e = inst.exports;
   let spec = 0, checks = 0;
   for (const k of SPEC) spec += Number(e.stat_region(OPS_AT + k));

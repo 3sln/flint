@@ -6,6 +6,7 @@
 // marketing page, which is this project's own rule from `bench/construe.mjs`.
 import { readFileSync, statSync } from 'fs';
 import { load, instantiate } from '../host/flint.mjs';
+import { fnOf } from './entry.mjs';
 
 const best = (n, f) => {
   let b = Infinity;
@@ -46,7 +47,7 @@ for (const k of ['interpreter', 'aot']) {
   const cold = best(5, () => {
     const mod = new WebAssembly.Module(bytes);
     const inst = instantiate(mod);
-    inst.main('parse', '1');
+    inst.run(fnOf(f), ['parse', '1']);
   });
   console.log(`  cold start (compile + instantiate + first answer), ${pad(k, 12)} ${ms(cold)} ms`);
 }
@@ -57,9 +58,9 @@ for (const [name, args, reps] of WORK) {
   const row = {};
   for (const k of ['interpreter', 'aot']) {
     const inst = instantiate(mods[k].module);
-    const r = inst.main(...args);
+    const r = inst.run(fnOf(f), [...args]);
     if (r.code !== 0) throw new Error(`${k} ${name} failed: ${r.out}`);
-    row[k] = { out: r.out.trim(), t: best(reps, () => instantiate(mods[k].module).main(...args)) };
+    row[k] = { out: r.out.trim(), t: best(reps, () => instantiate(mods[k].module).run(fnOf(f), [...args])) };
   }
   if (row.interpreter.out !== row.aot.out) {
     console.log(`  ${name}: ANSWERS DIFFER`);
