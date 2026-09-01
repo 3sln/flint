@@ -239,7 +239,8 @@ for (const k of ['small', 'big']) {
   const { module } = await load(`out/gm-${k}.wasm`);
   const i = instantiate(module);
   i.exports.set_step_limit(0x7ffffff0n);
-  i.main('');
+  // Named: `gasmeter/small` and `gasmeter/big` (`doc/decisions/0025` step 5).
+  i.run(`gasmeter/${k}`, ['']);
   o[k] = Number(i.exports.stat_steps());
 }
 console.log(o.big - o.small);
