@@ -51,7 +51,8 @@
            "    return !!c && c.hostId === ids[name];\n"
            "  }, open() {} });\n"
            "const sb = await image.sandbox({ capabilities: { fs: rule('fs') } });\n"
-           "process.stdout.write(String((await sb.main()).out));\n"))
+           ;; NAMED. A sandbox has no entry point (`doc/decisions/0025` step 5).
+           "process.stdout.write(String(await sb.call('capability/main', [[]])));\n"))
 (def raw (sh "node" "out/capdriver.mjs"))
 (when-not (zero? (:exit raw))
   (println "driver failed:" (:out raw) (:err raw)) (System/exit 1))

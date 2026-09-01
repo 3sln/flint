@@ -397,25 +397,22 @@ export class Sandbox {
   /// Kept because a wasm sandbox genuinely is synchronous underneath, and a
   /// caller with nothing else to do should not have to await a promise that is
   /// already resolved. Never reachable from inside a sandbox.
-  callSync(fn, args = [], opts = {}) {
+  callSync(fn, args = []) {
     const e = this.inst.exports;
     if (!e.flint_call) {
       throw new Error(
         'this module predates `flint_call`: rebuild it with a current flint');
     }
-    const encoded = codec.vec([codec.str(fn), ...args.map((a) => codec.from(a))]).encode();
-    const p = e.arg_alloc(encoded.length);
-    new Uint8Array(e.memory.buffer).set(encoded, p);
-    const code = e.flint_call(p, encoded.length);
-    const out = new Uint8Array(e.memory.buffer,
-                               e.out_ptr(), e.out_len()).slice();
-    const value = codec.decode(out, opts);
-    if (code !== 0) {
-      const err = new Error(`flint: ${value?.[':message'] ?? value?.message ?? 'the call failed'}`);
-      err.flint = value;
-      throw err;
-    }
-    return value;
+    // DELEGATED, rather than a second copy of the call path.
+    //
+    // There are two ways to make a call and which is right depends on whether
+    // the sandbox has a system port (`doc/decisions/0025` step 5): with one, a
+    // call is a message and can park; without one, `flint_call` is synchronous
+    // and cannot. This used to drive `flint_call` itself and got the choice
+    // wrong for every sandbox with a capability -- the guest opened a port, the
+    // run came back "the host is needed", and `flint_call` encoded the nil that
+    // a not-yet-finished run returns. Every such call answered null.
+    return this.inst.call(fn, args);
   }
 
   /// What the build measures, read after a call rather than printed

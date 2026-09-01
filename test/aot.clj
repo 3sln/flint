@@ -69,7 +69,11 @@
        "const {module} = await m.load(process.argv[1]);"
        "const i = m.instantiate(module);"
        "i.exports.set_step_limit(0x7ffffff000000000n);"
-       "const r = i.main();"
+       ;; The FUNCTION IS NAMED, and its name is derivable from the artifact:
+       ;; `build!` writes `out/aot-<ns>-{a,i}.wasm`. Nothing is called
+       ;; automatically (`doc/decisions/0025` step 5).
+       "const fn = /out\\/aot-([a-z]+)-[ai]\\.wasm$/.exec(process.argv[1])[1] + '/main';"
+       "const r = i.run(fn, []);"
        "console.log(JSON.stringify({out: r.out.trim(), code: r.code,"
        " steps: Number(i.exports.stat_steps())}));})"))
 
