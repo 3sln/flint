@@ -2,6 +2,7 @@
 // (doc/decisions/0006). Driven from test/host_abi.clj, which compiles the
 // modules this exercises.
 import { load, instantiate } from '../host/flint.mjs';
+import { codec } from '../sdks/esm/src/codec.js';
 
 let fails = 0;
 const ok = (label, cond, extra) => {
@@ -34,6 +35,21 @@ function raw(inst, { system = 1 } = {}) {
   return {
     e,
     grant(token) { const id = next++; return e.flint_grant(token, id) ? id : 0; },
+    /// Start a CALL by hand: a message on the system port, which is the only
+    /// way to run anything now (`doc/decisions/0025` step 5). Returns the first
+    /// status, so the caller drives the pump itself as these tests do.
+    call(fn, args = []) {
+      const bytes = codec.map([
+        [codec.kw('tx'), codec.int(1)],
+        [codec.kw('op'), codec.kw('call')],
+        [codec.kw('fn'), codec.str(fn)],
+        [codec.kw('args'), codec.vec([codec.vec(args.map((a) => codec.str(String(a))))])],
+      ]).encode();
+      const p = e.flint_in_alloc(bytes.length);
+      new Uint8Array(e.memory.buffer).set(bytes, p);
+      e.flint_deliver(system, bytes.length);
+      return e.flint_resume();
+    },
     drain() {
       const n = e.flint_drain();
       const base = e.flint_events_ptr();
@@ -79,7 +95,7 @@ console.log('host abi');
 {
   const inst = await fresh('out/ha-echo.wasm');
   const h = raw(inst);
-  let code = h.e.main();
+  let code = h.call('echo/main');
   eq('a program waiting on the host reports status 2', code, 2);
   const evs = h.drain();
   const req = evs.find((x) => x.kind === 1);
@@ -104,7 +120,7 @@ console.log('host abi');
   const time = async (path) => {
     const inst = await fresh(path);
     const h = raw(inst);
-    h.e.main();
+    h.call(path.includes('batch1000') ? 'batch1000/main' : 'batch1/main');
     // Answer the open first; the messages arrive on the next pump, all of them
     // in one drain, which is the thing being measured.
     for (const ev of h.drain()) if (ev.kind === 1) h.grant(ev.a);
@@ -112,7 +128,10 @@ console.log('host abi');
     const t0 = process.hrtime.bigint();
     const evs = h.drain();
     const t1 = process.hrtime.bigint();
-    return { msgs: evs.filter((x) => x.kind === 2).length, ns: Number(t1 - t0) };
+    // NOT the system port: the call's own answer comes back as a message there
+    // (`doc/decisions/0025` step 5), and what is being counted is the traffic
+    // the program produced.
+    return { msgs: evs.filter((x) => x.kind === 2 && x.a !== 1).length, ns: Number(t1 - t0) };
   };
   const one = await time('out/ha-batch1.wasm');
   const many = await time('out/ha-batch1000.wasm');
@@ -127,7 +146,7 @@ console.log('host abi');
 {
   const inst = await fresh('out/ha-drop.wasm');
   const h = raw(inst);
-  h.e.main();
+  h.call('drop/main');
   const turns = [];
   let code = 2;
   let guard = 0;
@@ -155,7 +174,7 @@ console.log('host abi');
 {
   const inst = await fresh('out/ha-exit.wasm');
   const h = raw(inst);
-  let code = h.e.main();
+  let code = h.call('exit/main');
   const closes = [];
   let guard = 0;
   while (code === 2 && guard++ < 100) {
@@ -184,7 +203,7 @@ console.log('host abi');
   const h = raw(inst);
   const held = new Set();
   let ignored = 0;
-  let code = h.e.main();
+  let code = h.call('query/main');
   let guard = 0;
   while (code === 2 && guard++ < 100) {
     for (const ev of h.drain()) {

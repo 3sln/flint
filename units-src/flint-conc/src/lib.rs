@@ -386,6 +386,22 @@ mod host {
         (!p.is_nil()) as u32
     }
 
+    /// The id of this sandbox's SYSTEM PORT, or 0 if it has none.
+    ///
+    /// A host has to know whether one exists, because it decides how a call is
+    /// made: with a system port a call is a MESSAGE on it and can park, and
+    /// without one it is `flint_call`, synchronous and unable to park. Guessing
+    /// from the export table does not work -- a partially shaken module can
+    /// export `flint_install_port` with a stubbed body, and a host that
+    /// installed a port through the raw ABI has told the runtime and not the
+    /// driver. Asking is one call and always right.
+    #[no_mangle]
+    pub extern "C" fn flint_system_port() -> u32 {
+        let rt = rt();
+        let p = rt.system_port_id();
+        if p < 0 { 0 } else { p as u32 }
+    }
+
     /// Grant an `open`: hand the waiting thread a handle on the host's port
     /// `port` (`doc/decisions/0027`).
     ///
@@ -452,10 +468,25 @@ mod host {
     /// Run the scheduler until it needs the host again or the program is done.
     /// Same status codes as `main`: 0 finished, 1 threw, 2 needs the host.
     #[no_mangle]
+    /// Advance the sandbox after the host has answered something.
+    ///
+    /// Returns the STATUS and renders nothing. It used to hand the value back
+    /// through `finish_run`, which was `main`'s shape: one entry function, one
+    /// answer, rendered as a string into `OUT`. With `main` gone
+    /// (`doc/decisions/0025` step 5) a resume has no single answer to render --
+    /// a call's result goes back as a message on the system port, carrying its
+    /// `:tx`, and there may be several in flight. Rendering here reported 1
+    /// ("that is not a string") for a sandbox that had simply run out of work.
     pub extern "C" fn flint_resume() -> i32 {
         let rt = rt();
         rt.status = 0;
-        let v = flint_rt::conc::drive(rt);
-        flint_rt::abi::finish_run(rt, v)
+        let _ = flint_rt::conc::drive(rt);
+        if rt.status == 0 && rt.failed() {
+            // A thread nobody asked for -- an ordinary `spawn` -- failed, and
+            // there is no `:tx` to send it back on. Say so rather than losing it.
+            let v = flint_rt::value::NIL;
+            return flint_rt::abi::finish_run(rt, v);
+        }
+        rt.status
     }
 }

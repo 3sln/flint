@@ -46,7 +46,10 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
       const v = call(fn, [codec.vec(args.map((a) => codec.str(String(a))))]);
       return { code: 0, out: v === null || v === undefined ? '' : String(v) };
     } catch (err) {
-      return { code: 1, out: err.kind ? `${err.kind}: ${err.message.replace(/^[^:]*: /, '')}` : String(err.message ?? err) };
+      // NOT stripped. The message is content, not a repeated kind: the gas
+      // error reads "gas limit exceeded: spent N of M", and a regex that took
+      // everything up to the first colon threw the first clause away.
+      return { code: 1, out: err.kind ? `${err.kind}: ${err.message}` : String(err.message ?? err) };
     }
   }
 
@@ -252,7 +255,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
       if (cap.open) cap.open(port, api);
     } else if (ev.kind === 'message') {
       // An answer to a CALL comes back on the system port carrying its `:tx`.
-      if (ev.port === SYSTEM_PORT && ev.value && pending.has(ev.value[':tx'])) {
+      if (ev.value && pending.has(ev.value[':tx'])) {
         pending.get(ev.value[':tx'])(ev.value);
         return;
       }
@@ -353,18 +356,20 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     //
     // Neither path is an entry point. Both name the function.
     //
-    // The choice is by NEED, not by what the module happens to export. A
-    // partially shaken module can export `flint_install_port` with a stubbed
-    // body (`test/shake.clj` builds exactly that), so the export is not
-    // evidence that the machinery behind it is there. What is evidence is
-    // whether this host has anything to answer with: a capability registered,
-    // or a port installed. Without either, nothing the guest does can park on
-    // us, and the synchronous path is both sufficient and cheaper.
-    if (!e.flint_install_port
-        || (!systemInstalled && Object.keys(capabilities).length === 0)) {
-      return callSync(name, args);
-    }
-    ensureSystem();
+    // The choice is by NEED, and the runtime is ASKED rather than guessed at.
+    //
+    // A partially shaken module can export `flint_install_port` with a stubbed
+    // body (`test/shake.clj` builds exactly that), so the export is not evidence
+    // that the machinery is there; and a host that installed a port through the
+    // raw ABI told the RUNTIME, not this driver. `flint_system_port` answers
+    // both questions at once: whether one exists, and what its id is.
+    //
+    // Without one, nothing the guest does can park on us -- there is nothing to
+    // park on -- so the synchronous path is sufficient and cheaper, and it is
+    // what keeps a pure module free of a scheduler.
+    if (Object.keys(capabilities).length > 0) ensureSystem();
+    const sysId = e.flint_system_port ? e.flint_system_port() : 0;
+    if (!sysId) return callSync(name, args);
     const tx = nextTx++;
     const bytes = codec.map([
       [codec.kw('tx'), codec.int(tx)],
@@ -372,7 +377,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
       [codec.kw('fn'), codec.str(name)],
       [codec.kw('args'), codec.vec(args.map((a) => (a instanceof Val ? a : codec.from(a))))],
     ]).encode();
-    if (!tryDeliverBytes(SYSTEM_PORT, bytes)) {
+    if (!tryDeliverBytes(sysId, bytes)) {
       throw new Error('flint: the system port would not take the call');
     }
     let answer;

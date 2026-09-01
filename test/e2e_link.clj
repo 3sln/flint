@@ -13,6 +13,24 @@
 (defn native [i n] [(op :native) (img/u16 i) n])
 (defn int16 [n] [(op :int) (img/u16 n)])
 
+(defn expose!
+  "Bind `f` to the var `sym`, so a host can CALL it by name.
+
+  Nothing is called automatically (`doc/decisions/0025` step 5): a module has no
+  entry point, so a function nobody can name is a function nobody can run. These
+  images are assembled by hand and had only `set-entry!`, which is why they were
+  the last thing still relying on `main`. One initialiser per image binds the
+  var, which is exactly what a compiled namespace does."
+  [b sym f]
+  (let [v (img/var-slot b sym)
+        init (img/add-fn b {:name (symbol (str sym "-init"))
+                            :arities [{:argc 0 :variadic? false :nlocals 0
+                                       :code (asm [(op :closure)] (img/u16 f) [0]
+                                                  [(op :set-var)] (img/u16 v)
+                                                  (op :nil) (op :return))}]})]
+    (img/add-init! b init)
+    (img/set-entry! b f)))
+
 (defn build-image
   "Returns [builder needed-builtin-names]."
   [which]
@@ -23,7 +41,7 @@
             f (img/add-fn b {:name 'main
                              :arities [{:argc 1 :variadic? false :nlocals 1
                                         :code (asm (const k) (op :return))}]})]
-        (img/set-entry! b f))
+        (expose! b 'e2e/hello f))
 
       :arith
       ;; (fn [args] (num->str (+ 2 3)))
@@ -33,24 +51,23 @@
                              :arities [{:argc 1 :variadic? false :nlocals 1
                                         :code (asm (int16 2) (int16 3) (native add 2)
                                                    (native n2s 1) (op :return))}]})]
-        (img/set-entry! b f))
+        (expose! b 'e2e/arith f))
 
       :echo
-      ;; (fn [entry] (first (first entry)))  -- proves arguments arrive.
+      ;; (fn [argv] (first argv))  -- proves arguments arrive.
       ;;
-      ;; TWO `first`s, because the entry receives `[argv caps]` rather than
-      ;; argv: the capabilities cutover gave the CLI entry a second element,
-      ;; and a sandbox is handed the same pair with the map empty so that a
-      ;; program cannot tell which host started it apart from what is IN the
-      ;; map. One `first` used to be right and now yields the argv VECTOR,
-      ;; which is why this reported "did not return a string" -- the shape
-      ;; moved, the shim did not.
+      ;; ONE `first`, and it went back to one when `main` did. The entry used to
+      ;; be handed `[argv caps]`, a pair that existed because the runtime was
+      ;; the thing invoking it and had to say something about the host. Nothing
+      ;; invokes anything now (`doc/decisions/0025` step 5): a caller names a
+      ;; function and passes its arguments, so this function takes what it was
+      ;; given and the pair is gone with the entry point that needed it.
       (let [fst (img/native-slot b "first")
             f (img/add-fn b {:name 'main
                              :arities [{:argc 1 :variadic? false :nlocals 1
-                                        :code (asm [(op :local) 0] (native fst 1)
+                                        :code (asm [(op :local) 0]
                                                    (native fst 1) (op :return))}]})]
-        (img/set-entry! b f)))
+        (expose! b 'e2e/echo f)))
     b))
 
 (defn build! [which out]
@@ -62,9 +79,9 @@
                    :emit-image (fn [slots] (img/emit b slots))
                    :out out})))
 
-(defn run-node [path & args]
+(defn run-node [path fname & args]
   (let [p (.exec (Runtime/getRuntime)
-                 (into-array String (concat ["node" "host/flint.mjs" path] args)))
+                 (into-array String (concat ["node" "host/flint.mjs" path fname] args)))
         out (slurp (.getInputStream p))
         err (slurp (.getErrorStream p))]
     (.waitFor p)
@@ -81,15 +98,15 @@
 
 (let [r (build! :hello "out/hello.wasm")]
   (println "  hello.wasm:" (:bytes r) "bytes," (:builtins r) "builtins," (:image-bytes r) "image bytes")
-  (check "hello" (:out (run-node "out/hello.wasm")) "hello from flint"))
+  (check "hello" (:out (run-node "out/hello.wasm" "e2e/hello")) "hello from flint"))
 
 (let [r (build! :arith "out/arith.wasm")]
   (println "  arith.wasm:" (:bytes r) "bytes," (:builtins r) "builtins")
-  (check "arith" (:out (run-node "out/arith.wasm")) "5"))
+  (check "arith" (:out (run-node "out/arith.wasm" "e2e/arith")) "5"))
 
 (let [r (build! :echo "out/echo.wasm")]
   (println "  echo.wasm:" (:bytes r) "bytes," (:builtins r) "builtins")
-  (check "echo" (:out (run-node "out/echo.wasm" "first-arg" "second")) "first-arg"))
+  (check "echo" (:out (run-node "out/echo.wasm" "e2e/echo" "first-arg" "second")) "first-arg"))
 
 (println "e2e: ok")
 

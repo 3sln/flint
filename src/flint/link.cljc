@@ -159,7 +159,7 @@
   ;; means it likes, the guest presents it with a request, and it crosses as a
   ;; sentinel carrying that id. Nothing here decides what any of it MEANS
   ;; (`doc/decisions/0022`).
-  ["flint_main" "flint_call" "arg_alloc" "arg_push" "out_ptr" "out_len"
+  ["flint_call" "arg_alloc" "arg_push" "out_ptr" "out_len"
    "image_desc_addr" "set_step_limit" "stat_steps" "set_memory_limit"
    "flint_opaque_host_id"])
 
@@ -404,7 +404,6 @@
         m (w/append-data m desc-addr
                          (w/->bytes [(flint.image/u32 img-addr)
                                      (flint.image/u32 (count image))]))
-        m (w/rename-export m "flint_main" "main")
         m (w/strip-custom m (if keep-names #{"producers" "target_features"}
                                 #{"producers" "target_features" "name"}))
         ;; What the module says about itself (`doc/decisions/0020`). Written

@@ -1,6 +1,7 @@
 // Global ports and the system port (`doc/decisions/0027`), driven by hand so
 // each step is visible.
 import { load, instantiate } from '../host/flint.mjs';
+import { codec } from '../sdks/esm/src/codec.js';
 
 let fails = 0;
 const ok = (label, cond, extra) => {
@@ -25,6 +26,20 @@ function install(e, id, label, format, system) {
   return e.flint_install_port(id, payload.length, system ? 1 : 0);
 }
 
+/// Start a call by hand: a message on the system port `port`, then a resume.
+function callOn(e, port, fn) {
+  const bytes = codec.map([
+    [codec.kw('tx'), codec.int(1)],
+    [codec.kw('op'), codec.kw('call')],
+    [codec.kw('fn'), codec.str(fn)],
+    [codec.kw('args'), codec.vec([codec.vec([])])],
+  ]).encode();
+  const p = e.flint_in_alloc(bytes.length);
+  new Uint8Array(e.memory.buffer).set(bytes, p);
+  e.flint_deliver(port, bytes.length);
+  return e.flint_resume();
+}
+
 function drain(e) {
   const n = e.flint_drain();
   if (n === 0) return [];
@@ -40,7 +55,10 @@ function drain(e) {
     const kind = dv.getUint32(at, true), a = dv.getUint32(at + 4, true);
     const b = dv.getUint32(at + 8, true), off = dv.getUint32(at + 12, true);
     const len = dv.getUint32(at + 16, true);
-    out.push({ kind, a, b, bytes: dec.decode(mem.slice(base + off, base + off + len)) });
+    // The raw bytes as well as the text: a message on the system port is the
+    // wire format now, and decoding it as UTF-8 would be reading an encoding.
+    const data = mem.slice(base + off, base + off + len);
+    out.push({ kind, a, b, data, bytes: dec.decode(data) });
   }
   return out;
 }
@@ -60,23 +78,37 @@ console.log('global ports');
   ok('the host installs a system port', install(e, 7, 'system', 'edn', true) === 1);
   ok('  ... and a second, ordinary global port', install(e, 8, 'work', 'edn', false) === 1);
 
-  // AT EXIT the runtime closes and releases every bridge, so the first return
-  // is 2 ("the host is needed") with those events pending, and the answer comes
-  // on the next turn. That is the documented protocol -- "the last pump is two
-  // pumps" -- and it is why the host is never left guessing whether more is
-  // coming. It used to be silent here only because a global port had no peer
-  // and `close_side_effects` therefore pushed nothing, which meant a host was
-  // never told it could let the port go.
-  let code = e.main();
-  eq('  ... and the program runs, asking the host to drain', code, 2);
-  const tail = drain(e);
-  eq('  ... releasing both ports it was given', tail.filter((x) => x.kind === 5).length, 2);
-  code = e.flint_resume();
+  // A CALL, by name, on the system port: nothing is called automatically
+  // (`doc/decisions/0025` step 5), and the ANSWER comes back the same way --
+  // a message carrying the call's `:tx`, not a string rendered into `out`.
+  let code = callOn(e, 7, 'sys/main');
+  const seen = [];
+  let answer = null;
+  for (let i = 0; i < 8 && answer === null; i++) {
+    for (const ev of drain(e)) {
+      seen.push(ev);
+      if (ev.kind === 2 && ev.a === 7) answer = codec.decode(ev.data);
+    }
+    if (answer !== null) break;
+    code = e.flint_resume();
+  }
+  ok('  ... and the program runs, answering on the system port', answer !== null);
+  eq('  ... producing its own answer', answer && answer[':value'],
+     '{:ran true, :local :hello}');
+  // AT EXIT the runtime closes and releases every bridge, so a host is never
+  // left holding a reference for a sandbox that has finished. It used to be
+  // silent here: a global port had no peer, so `close_side_effects` pushed
+  // nothing and a host was never told it could let the port go.
+  let guard = 0;
+  while (code === 2 && guard++ < 8) {
+    for (const ev of drain(e)) seen.push(ev);
+    code = e.flint_resume();
+  }
   eq('  ... and then finishes', code, 0);
-  const out = dec.decode(new Uint8Array(e.memory.buffer, e.out_ptr(), e.out_len()));
-  eq('  ... producing its own answer', out.trim(), '{:ran true, :local :hello}');
-  ok('  ... having generated no host traffic of its OWN, only the teardown',
-     tail.every((x) => x.kind === 3 || x.kind === 5));
+  eq('  ... releasing both ports it was given',
+     seen.filter((x) => x.kind === 5).length, 2);
+  ok('  ... having generated no host traffic of its OWN beyond the answer',
+     seen.every((x) => x.kind === 2 || x.kind === 3 || x.kind === 5));
 }
 
 // A program with real INITIALISERS still returns its entry's value when a port

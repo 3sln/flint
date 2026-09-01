@@ -25,10 +25,16 @@
         r (apply sh "./bin/flint" ":src" d ":fn" (str ns-name "/main") ":out" o flags)]
     (when-not (zero? (:exit r))
       (println "build failed for" ns-name ":" (:all r)) (System/exit 1))
-    o))
+    ;; The artifact AND the function to call. Nothing is called automatically
+    ;; (`doc/decisions/0025` step 5), so a runner has to name one, and `build!`
+    ;; is the only place that knows the namespace.
+    [o (str ns-name "/main")]))
 
-(defn run! [wasm & [host]]
-  (let [r (sh "node" (or host "host/flint.mjs") wasm)]
+(defn wasm-of [b] (if (vector? b) (first b) b))
+(defn fn-of [b] (if (vector? b) (second b) nil))
+
+(defn run! [b & [host]]
+  (let [r (sh "node" (or host "host/flint.mjs") (wasm-of b) (fn-of b))]
     (str/trim (:all r))))
 
 (defn src! [name body] (spit (str d "/" name ".cljc") body))
@@ -57,13 +63,13 @@
 ;; compiles every arity, and a floor that moved for two reasons at once
 ;; measures neither.
 (def shipped-wasm (build! "pure" "out/th-pure-shipped.wasm" ":features" "[flint]"))
-(def pure-size (fs/size shipped-wasm))
-(def check-cost (- (fs/size pure-wasm) pure-size))
+(def pure-size (fs/size (wasm-of shipped-wasm)))
+(def check-cost (- (fs/size (wasm-of pure-wasm)) pure-size))
 (println (format "    pure module %d bytes shipped, +%d with checks, with threads %d (+%d)"
-                 pure-size check-cost (fs/size threaded-wasm)
-                 (- (fs/size threaded-wasm) (fs/size pure-wasm))))
+                 pure-size check-cost (fs/size (wasm-of threaded-wasm))
+                 (- (fs/size (wasm-of threaded-wasm)) (fs/size (wasm-of pure-wasm)))))
 
-(def pure-bytes (String. (fs/read-all-bytes pure-wasm) "ISO-8859-1"))
+(def pure-bytes (String. (fs/read-all-bytes (wasm-of pure-wasm)) "ISO-8859-1"))
 (doseq [sym ["flint_resume" "flint_drain" "flint_continue" "flint_b_spawn"
              "flint_b_port_send" "flint_b_channel"]]
   (check (str "a pure module has no " sym) (str/includes? pure-bytes sym) false))

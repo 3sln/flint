@@ -154,52 +154,15 @@ pub extern "C" fn arg_push(ptr: u32, len: u32) {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn flint_main() -> i32 {
-    unsafe {
-        let rt = ensure_rt();
-        let base = rt.mark();
-        let args = &*core::ptr::addr_of!(ARGS);
-        for (p, l) in args.iter() {
-            let bytes = core::slice::from_raw_parts(*p as *const u8, *l as usize);
-            let s: alloc::string::String = core::str::from_utf8(bytes).unwrap_or("").into();
-            let v = rt.string(&s);
-            rt.push(v);
-        }
-        let n = args.len();
-        let argv = rt.vec_from_roots(base, n);
-        rt.pop_to(base);
-
-        // Consume the arguments: `main` may be called more than once on the
-        // same instance, and leaving them here made the second call see the
-        // first call's arguments followed by its own.
-        {
-            let a = &mut *core::ptr::addr_of_mut!(ARGS);
-            a.clear();
-            let b = &mut *core::ptr::addr_of_mut!(BUFS);
-            b.clear();
-        }
-
-        // THE SAME SHAPE the native entry passes: `[argv caps]`. The map is
-        // empty here and that is not a gap -- `flint_main` is the no-frills
-        // entry, and a wasm host that wants to project opaque values into a
-        // sandbox does it through the ENCODED CALL path (`doc/decisions/0025`),
-        // which carries a sentinel and its host id already. There is no
-        // separate capability channel because there is no capability concept.
-        let ai = rt.push(argv);
-        let m = rt.empty_map();
-        let mi = rt.push(m);
-        let v = rt.empty_vec();
-        let vi = rt.push(v);
-        let nv = rt.vec_conj(rt.r(vi), rt.r(ai));
-        rt.set_r(vi, nv);
-        let nv = rt.vec_conj(rt.r(vi), rt.r(mi));
-        rt.set_r(vi, nv);
-        let pair = rt.r(vi);
-        let result = rt.run_program(pair);
-        finish_run(rt, result)
-    }
-}
+// `flint_main` used to live here: the module's ONE entry point, invoked by the
+// runtime with `[argv caps]` and its answer rendered into `OUT`. It is gone
+// (`doc/decisions/0025` step 5). Nothing is called automatically, a module has
+// no distinguished function, and a caller names the one it wants -- through
+// `flint_call` below when the call cannot park, or as a message on the system
+// port when it can.
+//
+// `arg_alloc` and `arg_push` stay: `flint_call` writes its encoded argument
+// vector through the same buffer.
 
 /// Call a named function with encoded arguments, and encode what it returns
 /// (`doc/decisions/0025`).

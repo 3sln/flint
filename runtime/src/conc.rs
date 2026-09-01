@@ -878,6 +878,17 @@ impl Rt {
     /// would make it ambient authority inside the sandbox, which is the thing
     /// `doc/decisions/0022` and `0027` both exist to prevent. There is no
     /// builtin that answers it; only the runtime looks it up.
+    /// The system port's id, or -1. What a HOST asks, since it cannot hold the
+    /// port itself -- the value is deliberately not reachable from outside.
+    pub fn system_port_id(&mut self) -> i64 {
+        let p = self.system_port();
+        if p.is_nil() {
+            -1
+        } else {
+            fx(self.slot(p, PT_ID))
+        }
+    }
+
     pub(crate) fn system_port(&mut self) -> Value {
         let s = self.sched();
         if s.is_nil() {
