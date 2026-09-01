@@ -903,6 +903,11 @@
   :present #{omit read-str write-str},
   :macros #{},
   :count 3},
+ flint.data.transit
+ {:file "lib/flint/data/transit.cljc",
+  :present #{decode encode},
+  :macros #{},
+  :count 2},
  flint.data.xml
  {:file "lib/flint/data/xml.cljc",
   :present
@@ -936,37 +941,20 @@
  flint.port
  {:file "lib/flint/port.cljc",
   :present
-  #{channel
+  #{bridge?
+    channel
     close
     closed?
-    format-of
-    host?
     label
     open
     port-id
     port?
     receive
     send
-    set-codec
     state
     with-open},
   :macros #{with-open},
-  :count 14},
- flint.port.edn
- {:file "lib/flint/port/edn.cljc",
-  :present #{codec decode encode},
-  :macros #{},
-  :count 3},
- flint.port.json
- {:file "lib/flint/port/json.cljc",
-  :present #{codec decode encode},
-  :macros #{},
-  :count 3},
- flint.port.transit
- {:file "lib/flint/port/transit.cljc",
-  :present #{codec decode encode},
-  :macros #{},
-  :count 3},
+  :count 12},
  flint.regex
  {:file "lib/flint/regex.cljc",
   :present

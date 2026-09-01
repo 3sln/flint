@@ -692,14 +692,18 @@ host *lends* it a capability, and how two green threads talk.
 ```clojure
 (let [[a b] (p/channel "label")]  (p/send a :hello) (p/receive b))   ; => :hello
 
-(p/with-open [r (p/open "the-thing" {:codec edn/codec})]
+(p/with-open [r (p/open "the-thing")]
   (p/send r :now)
   (p/receive r))
 ```
 
-`open` signals the host, which **allows or refuses**. A refusal is a normal,
-expected outcome and arrives as a catchable `SecurityException` — not a crash,
-and not something a program has to guess at.
+`open` is a **request on the system port** the sandbox was given at construction
+([`doc/decisions/0027`](doc/decisions/0027-ports-are-the-hosts.md)): the sandbox
+cannot make a port, it asks for one. The host **allows or refuses**, and a
+refusal is a normal, expected outcome that arrives as a catchable
+`SecurityException` — not a crash, and not something a program has to guess at. A
+sandbox given no system port cannot ask at all, which is what "confined" means by
+default rather than something a host has to remember to withhold.
 
 ### What may cross, and why by reference is sound
 
@@ -854,49 +858,41 @@ machine named under [Benchmarks](#benchmarks):
 Eager serialisation does cost work when the host never reads. That is the trade:
 it is what makes the drain cheap and the byte budget mean anything.
 
-### Formats, and the conversion that is allowed to fail
+### One format, and the guest does not choose it
 
-A host port carries bytes, so a value has to be encoded. The codec is a **value
-you pass**:
+A bridge carries bytes, so a value has to be encoded — and **the runtime is what
+encodes it**. `send` takes a value, `receive` gives one back, and there is no
+codec to pass, attach, or get wrong:
 
 ```clojure
-(:require [flint.port :as p] [flint.port.edn :as edn])
-(p/open "thing" {:codec edn/codec})
+(:require [flint.port :as p])
+(p/open "thing")
 ```
 
-| codec | carries | notes |
-|---|---|---|
-| `flint.port.edn` | everything | flint's own notation; nothing is lost |
-| `flint.port.json` | JSON's data model | **strict**: see below |
-| `flint.port.transit` | everything | Transit over msgpack, binary |
-| *(none)* | raw bytes | `send` takes a string; driving a resource raw has to work |
+That is a safety rule rather than a convenience
+([`doc/decisions/0025`](doc/decisions/0025-structured-ports.md),
+[`0027`](doc/decisions/0027-ports-are-the-hosts.md)). The wire format writes an
+opaque value's host id inline, and bytes are integers a guest can write; a codec
+running inside the sandbox would therefore be an integer-to-capability
+conversion, and an opaque value's whole meaning is that no such conversion
+exists. Keeping the encoder on the runtime's side of the line is what makes
+`(send p {:cap c})` safe to allow at all.
 
-Passing the codec rather than naming a format is deliberate twice over. A `cond`
-over every format inside `flint.port` would make all of them reachable from any
-program that opens any port, so a JSON program would carry an EDN reader it never
-uses. And a registry filled by requiring a namespace for its side effect is a
-load-order trap.
+**It carries everything**, which is what makes one format enough. A set, a
+keyword, a symbol, a vector used as a map key, a table, a tagged literal, an
+opaque value, a bridge — all of them cross, and the program says nothing about
+encoding. There used to be three codecs here, one of which (JSON) refused
+keywords and sets by name and one of which (Transit) existed to carry what the
+other two could not.
 
-**JSON cannot represent EDN**, and that is not a detail to paper over. Keywords,
-symbols, sets and non-string map keys have no JSON form. "The runtime will try to
-convert" hides exactly the failures that bite later: a keyword that comes back a
-string, a set that comes back an array, `{:a 1}` that becomes `{"a": 1}` and
-never comes home. So a value JSON cannot carry is **an error at the send, naming
-the value**:
+The two that were thin wrappers are gone. The Transit implementation was real
+work and stayed, as `flint.data.transit` — a value-to-bytes utility, which is a
+different job from carrying a port's messages, and the one to reach for when
+something *outside* wants Transit.
 
-```
-JSON cannot represent a keyword: :nope. JSON has no keywords, symbols, sets or
-non-string map keys, and converting silently is how a :a comes back a "a".
-```
-
-Where the coercion genuinely is wanted, ask for it, the way `clojure.data.json`
-makes `:key-fn` the caller's decision: `(p/open "x" {:codec json/codec :key-fn name})`.
-
-**Transit rather than a fourth format**, because it exists for this, it is
-self-describing, and it already has the extension mechanism tagged values need.
-This implementation leaves out Transit's *caching* — an optimisation, not part of
-the data model — so messages are larger than a caching writer's would be, and
-says so in the namespace docstring rather than leaving it to be discovered.
+On the host's side both halves are explicit: a low-level builder for a host that
+wants to write the encoding itself, and a convenience that takes an ordinary
+host value and encodes it for you.
 
 ### None of it is in a pure module
 
@@ -1166,12 +1162,10 @@ claim fails the build.
 | `clojure.walk` | 7 | 0 | 3 | 0 |
 | `flint.data.html` | 12 | 0 | n/a | n/a |
 | `flint.data.json` | 3 | 0 | n/a | n/a |
+| `flint.data.transit` | 2 | 0 | n/a | n/a |
 | `flint.data.xml` | 9 | 0 | n/a | n/a |
 | `flint.doc` | 11 | 0 | n/a | n/a |
-| `flint.port` | 14 | 1 | n/a | n/a |
-| `flint.port.edn` | 3 | 0 | n/a | n/a |
-| `flint.port.json` | 3 | 0 | n/a | n/a |
-| `flint.port.transit` | 3 | 0 | n/a | n/a |
+| `flint.port` | 12 | 1 | n/a | n/a |
 | `flint.regex` | 11 | 0 | n/a | n/a |
 | `flint.rpc` | 6 | 0 | n/a | n/a |
 | `flint.thread` | 8 | 0 | n/a | n/a |
