@@ -327,34 +327,90 @@ Closure capture of authority is delegation, and delegation is A's decision.
 the host, at run time. Nothing about the build reaches the host, so the program
 must present something.
 
-### Sentinels are enough, IF they are never baked in
+### Two layers, and only one of them is the host's business
 
-`0022` already gives unforgeability inside a sandbox: an opaque value's authority
-is the host id it was ISSUED with, and guest code cannot set that field --
-`flint/opaque` yields id 0, which is why 0 must never be issued. That property is
-tested (`test/capability.clj`: "guessing the right id does not help, because the
-guest cannot set it") and it was found by a test rather than by reading, because
-a forgery and an absence both arrived as 0 and the host read one as the other.
+The earlier draft of this section said a token must never be compiled into the
+artifact, because that makes it a bearer token. That is true of one layer and
+wrong about the other, and the distinction is the whole design.
 
-So no cryptography is needed, on one condition.
+**Intra-sandbox: may THIS namespace call that capability-gated function?** This
+is a composition question inside one program. The host has no view of it, cannot
+answer it, and should not be asked -- a round trip per invocation would be
+absurd. It has to be answered inside the sandbox, in constant time.
 
-**A token compiled INTO the artifact is a bearer token.** Bake a host-issued
-sentinel into the image and anyone holding the `.wasm` holds the capability;
-copying the file copies the authority. That is a worse property than the one
-being replaced.
+**Host-facing: may this program touch the real filesystem?** Only the host can
+answer, and it answers ONCE, when the capability is acquired -- not per call. The
+cost objection does not apply here.
 
-So the split has to be:
+So the artifact carries what settles the first, and the host issues what settles
+the second, and **the two must never be the same value**. A token that is both is
+a bearer token: copy the `.wasm`, copy the authority. Keeping them separate is
+what makes baking safe.
 
-* **Compile time** puts the DECLARATION in the artifact -- this code requires
-  `:fs` -- which is auditable: a module says what it demands before anyone runs
-  it, next to what it exports (`0020`).
-* **Load or first use** is when the host supplies the actual sentinels, over the
-  system port, and `&capabilities` is populated from them. Absent unless the host
-  granted them; unforgeable because they are host-issued.
+### Why a compile-time-only check cannot work
 
-`&capabilities` is therefore a run-time binding whose SHAPE is known at compile
-time -- the compiler knows which names will be there, the host decides whether
-they arrive.
+Because anything a macro emits can be written by hand. If `(fs/read p)` expands
+to a form that a hostile namespace can read in `--explain` and type out itself,
+the check has moved from the compiler into the source, where it is not a check.
+
+So the emitted code must carry something the hand-writer cannot produce. That is
+the argument for a run-time token, and it is correct.
+
+### Sentinel, not secret -- and the reason is specific
+
+Given "a sentinel that cannot be hydrated by the guest, or a secure random
+token", the sentinel wins, and not on general principle.
+
+**A secret is defeated by reading the artifact.** The adversary's code is
+compiled INTO the same artifact that holds the token. Bake a random integer, and
+a hostile namespace reads it out of the `.wasm` and writes the same integer
+literal. Baking a secret next to the code that must not have it is not a hiding
+place.
+
+**A sentinel cannot be spelled.** There is no reader syntax for an opaque value
+and no constructor that takes an id: `flint/opaque` hardcodes 0 (`builtins.rs`),
+which is exactly why 0 must never be issued. So a hostile namespace that has READ
+the artifact still cannot produce one, because the thing it would have to write
+down has no written form.
+
+Three supporting properties, all already true:
+
+* **Identity is the object, not its bytes.** The check is a pointer compare:
+  constant time by construction, with no value comparison to get wrong.
+* **Provenance is unreadable from guest code.** No builtin returns an opaque's
+  host id -- deliberately, and `builtins.rs` says so at the definition. Holding
+  one teaches you nothing about how to make one.
+* **No reflection.** There is no builtin that enumerates vars or reads a constant
+  by index, so a table the compiler emits is not nameable by code the compiler
+  did not emit it into. "Never allow guest code access to the table" is satisfied
+  by construction -- provided nobody later adds a reflective accessor, which is
+  now a thing to say out loud rather than assume.
+
+### Better than either: the artifact carries SLOTS, not values
+
+Pushed one step further, the artifact need not contain a secret at all.
+
+A constant-pool entry says *"sentinel #3"*, and the LOADER mints the actual
+opaque -- with the runtime's authority, not the guest's -- when the image loads.
+Every reference to #3 in that artifact resolves to the same object; identity is
+established per run.
+
+What this buys:
+
+* **Reading the `.wasm` yields nothing usable.** It tells you there are four
+  sentinels. It does not give you one, and there is no way to write one down.
+* **Nothing is a bearer token**, because nothing in the file IS the authority --
+  the authority is an object that exists only inside a run.
+* **The check stays a pointer compare.** No hashing, no comparison of secrets, no
+  timing surface.
+* **The image format gains no way to express a host id**, so the mintable
+  serialisation `0022` forbids is still not expressible.
+
+The constant pool would gain one tag for this, next to `[:tagged ...]`. That is a
+real format change and should be costed, but it is a small one and it is the
+piece that makes capability checking a purely internal, constant-time concern.
+
+
 
 ### Can a macro hand a live opaque to the runtime? No, and the compiler already says so
 
@@ -373,22 +429,29 @@ maps, lists and tagged literals, and everything else is:
 There is no opaque constant and no port constant. A macro that tried to put a
 sentinel in its output would fail the compile, today, with that message.
 
-**That is the right answer rather than a gap.** An image is bytes on disk. Adding
-`[:opaque host-id label]` to the pool would mean the authority is written down --
-and anything that can write those bytes can mint one, which is precisely the
-integer-to-capability conversion the sandbox exists to forbid. It is the same
-hazard `decode_guest` refuses `K_SENTINEL` for, arriving by a different road:
-`0022` states it as *"accept those bytes back and it is mintable, which is the
-entire property gone."*
+**And a HOST-ISSUED opaque must stay unwritable.** An image is bytes on disk, so
+adding `[:opaque host-id label]` to the pool would write the authority down --
+and anything that can write those bytes can mint one, which is exactly the
+integer-to-capability conversion the sandbox exists to forbid. Same hazard
+`decode_guest` refuses `K_SENTINEL` for, by a different road; `0022` states it as
+*"accept those bytes back and it is mintable, which is the entire property
+gone."*
+
+The slot tag proposed above is not that, and the difference is the whole reason
+it is safe: a slot entry says *"sentinel #3"*, carries no id, and is minted by the
+LOADER. Nothing about the authority is in the file, so there is nothing in the
+file to forge. Adding `[:sentinel n]` is safe for precisely the reason adding
+`[:opaque id label]` is not.
 
 Serialising also loses the thing the question was trying to keep. Reconstructing
 an opaque from bytes produces a NEW object; the identity that made it worth
 having does not survive the round trip. So serialising costs the typing AND opens
 the minting -- there is no version of it that pays.
 
-### So the handoff is by NAME, which is what vars already do
+### So the handoff is by REFERENCE, which is what vars already do
 
-The macro emits a name and the runtime resolves it:
+The macro emits a reference -- a capability name the compiler resolves to a
+sentinel slot, or the slot directly -- and the loader supplies the value:
 
 ```clojure
 ;; the macro emits data -- a keyword names what is wanted
@@ -586,11 +649,13 @@ being careful.
    behind a guard.
 7. **The request primitive**, generalising `port_open` so its answer is not
    constrained to a port, and `open` retired onto it.
-8. **Declared capabilities and the per-namespace table**: the declaration in
-   the artifact at compile time, the sentinels supplied by the host at load or
-   first use. Never baked in -- that would make the artifact a bearer token --
-   and never dynamically scoped, or a library loses its own authority the moment
-   it is called from elsewhere.
+8. **Sentinel slots in the image**: one constant-pool tag, minted by the loader,
+   per-namespace references emitted by the compiler. This is what makes the
+   intra-sandbox check constant time and host-free.
+9. **The host-facing half**: what the host issues at run time and the program
+   presents when it actually touches the world, acquired ONCE rather than per
+   call -- and never the same value as the slot sentinel, or the artifact
+   becomes a bearer token.
 
 ## What is undecided
 
