@@ -193,12 +193,18 @@ public final class Conc {
         int base = rt.mark();
         int ti = rt.push(th);
         int n = rt.roots.stackTop;
-        long sv = newObj(rt, TY_NODE, n);
+        // UNBILLED: the size of a saved stack is a property of the calling
+        // convention, not of the program. Billing it makes the same program
+        // cost more interpreted than compiled, which breaks the AOT gas parity
+        // the suite asserts (`doc/decisions/0009`).
+        long a0 = rt.allocUnbilled(TY_NODE, n);
+        long sv = a0 == 0 ? Val.NIL : Val.heap(a0);
         if (Val.isNil(sv)) { rt.popTo(base); return; }
         for (int i = 0; i < n; i++) rt.setSlot(Val.asHeap(sv), i, rt.roots.stack[i]);
         rt.setSlot(Val.asHeap(rt.r(ti)), TH_STACK, sv);
 
-        long fb = newObj(rt, TY_RAW, rt.frames.size() * FRAME_REC);
+        long a1 = rt.allocUnbilled(TY_RAW, rt.frames.size() * FRAME_REC);
+        long fb = a1 == 0 ? Val.NIL : Val.heap(a1);
         if (!Val.isNil(fb)) {
             long a = Val.asHeap(fb) + HDR;
             for (int k = 0; k < rt.frames.size(); k++) {

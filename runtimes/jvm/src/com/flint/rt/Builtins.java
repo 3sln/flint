@@ -829,15 +829,28 @@ rt.describe(v) + " is not a transient");
             StringBuilder sb = new StringBuilder();
             int base = rt.mark();
             int s = rt.push(Seqs.seq(rt, rt.vat(at)));
+            long ticks = 0;
             while (!Val.isNil(rt.r(s))) {
+                // CHARGED AND CHECKED INSIDE THE LOOP: the length is not known
+                // until the walk ends (`doc/decisions/0009`).
+                if (!rt.chargeTick(ticks++, 1, "str-join")) { rt.popTo(base); return Val.NIL; }
                 sb.append(Str.text(rt, Seqs.first(rt, rt.r(s))));
                 rt.setR(s, Seqs.next(rt, rt.r(s)));
             }
             rt.popTo(base);
+            rt.chargeBytes(sb.length());
             return Str.of(rt, sb.toString());
         });
-        def("flint/upper-case", (rt, at, n) -> Str.of(rt, Str.text(rt, rt.vat(at)).toUpperCase()));
-        def("flint/lower-case", (rt, at, n) -> Str.of(rt, Str.text(rt, rt.vat(at)).toLowerCase()));
+        def("flint/upper-case", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (!rt.chargeChecked((Str.sBytes(rt, v) / 8) + 1, "case conversion")) return Val.NIL;
+            return Str.of(rt, Str.text(rt, v).toUpperCase());
+        });
+        def("flint/lower-case", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (!rt.chargeChecked((Str.sBytes(rt, v) / 8) + 1, "case conversion")) return Val.NIL;
+            return Str.of(rt, Str.text(rt, v).toLowerCase());
+        });
         def("flint/code-point-at", (rt, at, n) -> {
             int i = (int) Val.asFixnum(rt.vat(at + 1));
             int c = Str.codePointAt(rt, rt.vat(at), i);

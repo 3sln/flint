@@ -596,7 +596,15 @@ public final class Maps {
         return Val.heap(a);
     }
 
-    public static long empty(Rt rt) { return newArrayMap(rt, 0); }
+    /// The SINGLETON empty map. Allocating a fresh one per call is what made
+    /// this port bill more gas than the Rust runtime for the same program.
+    public static long empty(Rt rt) {
+        long s = rt.roots.shared.singletons[Rt.SING_EMPTY_MAP];
+        return Val.isNil(s) ? newArrayMap(rt, 0) : s;
+    }
+
+    /// The one allocation `initSingletons` makes.
+    static long newEmpty(Rt rt) { return newArrayMap(rt, 0); }
 
     static long newHashMap(Rt rt, int cnt, long root, long meta) {
         int base = rt.mark();
@@ -957,6 +965,10 @@ public final class Maps {
     /// makes, and every one of those would need rooting. The Rust does the same
     /// and for the same reason.
     public static long entryVector(Rt rt, long m) {
+        // CHARGED UP FRONT: `n` is known, so this refuses rather than ticks.
+        // `seq`, `keys` and `vals` all come through here and build an entry per
+        // key (`doc/decisions/0009`).
+        if (!rt.chargeChecked(count(rt, m), "seq of a map")) return Val.NIL;
         // Same choke point as `count`: a ref materialises here rather than
         // being read as an array-map.
         if (Val.isHeap(m) && ty(rt.gc.sp, Val.asHeap(m)) == Obj.TY_TABLEREF)

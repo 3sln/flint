@@ -153,6 +153,7 @@ public static class Eq {
         for (;;) {
             bool ex = Val.IsNil(rt.R(x)), ey = Val.IsNil(rt.R(y));
             if (ex || ey) { ok = ex && ey; break; }
+            rt.ChargeWork(1);
             if (!Equal(rt, Seqs.First(rt, rt.R(x)), Seqs.First(rt, rt.R(y)))) { ok = false; break; }
             long nx = Seqs.Next(rt, rt.R(x)), ny = Seqs.Next(rt, rt.R(y));
             rt.SetR(x, nx);
@@ -216,6 +217,8 @@ public static class Eq {
                     int s = rt.Push(Seqs.Seq(rt, v));
                     int acc = 1, n = 0;
                     while (!Val.IsNil(rt.R(s))) {
+                        // A TICK: a seq's length is not known until it ends.
+                        if (!rt.ChargeTick(n, 1, "hash")) { rt.PopTo(bas); return 0; }
                         acc = Hash.OrderedStep(acc, HashValue(rt, Seqs.First(rt, rt.R(s))));
                         n++;
                         long nx = Seqs.Next(rt, rt.R(s));

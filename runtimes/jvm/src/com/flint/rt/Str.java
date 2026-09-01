@@ -781,6 +781,8 @@ public final class Str {
 
     static long copyConcat(Rt rt, long a, long b) {
         byte[] x = bytes(rt, a), y = bytes(rt, b);
+        // Copying is work, and it is charged at the same rate everywhere.
+        rt.chargeBytes(x.length + y.length);
         byte[] both = new byte[x.length + y.length];
         System.arraycopy(x, 0, both, 0, x.length);
         System.arraycopy(y, 0, both, x.length, y.length);
@@ -832,6 +834,9 @@ public final class Str {
         if (!isRope(rt, v)) return v;
         long cached = rt.slot(v, RP_FLAT);
         if (!Val.isNil(cached)) return cached;
+        // Flattening is a copy of the whole tree, and it REFUSES when the
+        // budget cannot cover it: `n` is known, so the charge goes up front.
+        if (!rt.chargeChecked((sBytes(rt, v) / 8) + 1, "flatten")) return Val.NIL;
         java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(sBytes(rt, v));
         int base = rt.mark();
         int vi = rt.push(v);

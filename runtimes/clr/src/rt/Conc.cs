@@ -191,12 +191,17 @@ public static class Conc {
         int bas = rt.Mark();
         int ti = rt.Push(th);
         int n = rt.roots.StackTop;
-        long sv = NewObj(rt, Obj.TyNode, n);
+        // UNBILLED: the size of a saved stack is a property of the calling
+        // convention, not of the program. Billing it makes the same program
+        // cost more interpreted than compiled (`doc/decisions/0009`).
+        long a0 = rt.AllocUnbilled(Obj.TyNode, n);
+        long sv = a0 == 0 ? Val.Nil : Val.Heap(a0);
         if (Val.IsNil(sv)) { rt.PopTo(bas); return; }
         for (int i = 0; i < n; i++) rt.SetSlot(Val.AsHeap(sv), i, rt.roots.Stack[i]);
         rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_STACK, sv);
 
-        long fb = NewObj(rt, Obj.TyRaw, rt.frames.Count * FRAME_REC);
+        long a1 = rt.AllocUnbilled(Obj.TyRaw, rt.frames.Count * FRAME_REC);
+        long fb = a1 == 0 ? Val.Nil : Val.Heap(a1);
         if (!Val.IsNil(fb)) {
             long a = Val.AsHeap(fb) + Obj.Hdr;
             for (int k = 0; k < rt.frames.Count; k++) {

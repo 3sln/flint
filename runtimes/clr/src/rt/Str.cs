@@ -743,6 +743,8 @@ public static class Str {
     }
 
     static long CopyConcat(Rt rt, long a, long b) {
+        // Copying is work, charged at the same rate everywhere.
+        rt.ChargeBytes(SBytes(rt, a) + SBytes(rt, b));
         byte[] x = Bytes(rt, a), y = Bytes(rt, b);
         byte[] both = new byte[x.Length + y.Length];
         System.Array.Copy(x, 0, both, 0, x.Length);
@@ -774,6 +776,9 @@ public static class Str {
         if (!IsRope(rt, v)) return v;
         long cached = rt.Slot(v, RP_FLAT);
         if (!Val.IsNil(cached)) return cached;
+        // Flattening copies the whole tree, and REFUSES when the budget cannot
+        // cover it: `n` is known, so the charge goes up front.
+        if (!rt.ChargeChecked((SBytes(rt, v) / 8) + 1, "flatten")) return Val.Nil;
         var ms = new System.IO.MemoryStream(SBytes(rt, v));
         int bas = rt.Mark();
         int vi = rt.Push(v);

@@ -761,17 +761,28 @@ public static class Builtins {
             var sb = new System.Text.StringBuilder();
             int bas = rt.Mark();
             int s = rt.Push(Seqs.Seq(rt, rt.VAt(at)));
+            long ticks = 0;
             while (!Val.IsNil(rt.R(s))) {
+                // CHARGED AND CHECKED INSIDE THE LOOP: the length is not known
+                // until the walk ends (`doc/decisions/0009`).
+                if (!rt.ChargeTick(ticks++, 1, "str-join")) { rt.PopTo(bas); return Val.Nil; }
                 sb.Append(Str.Text(rt, Seqs.First(rt, rt.R(s))));
                 rt.SetR(s, Seqs.Next(rt, rt.R(s)));
             }
             rt.PopTo(bas);
+            rt.ChargeBytes(sb.Length);
             return Str.Of(rt, sb.ToString());
         });
-        Def("flint/upper-case", (rt, at, n) =>
-            Str.Of(rt, Str.Text(rt, rt.VAt(at)).ToUpperInvariant()));
-        Def("flint/lower-case", (rt, at, n) =>
-            Str.Of(rt, Str.Text(rt, rt.VAt(at)).ToLowerInvariant()));
+        Def("flint/upper-case", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (!rt.ChargeChecked((Str.SBytes(rt, v) / 8) + 1, "case conversion")) return Val.Nil;
+            return Str.Of(rt, Str.Text(rt, v).ToUpperInvariant());
+        });
+        Def("flint/lower-case", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (!rt.ChargeChecked((Str.SBytes(rt, v) / 8) + 1, "case conversion")) return Val.Nil;
+            return Str.Of(rt, Str.Text(rt, v).ToLowerInvariant());
+        });
         Def("flint/code-point-at", (rt, at, n) => {
             int i = (int) Val.AsFixnum(rt.VAt(at + 1));
             int c = Str.CodePointAt(rt, rt.VAt(at), i);

@@ -31,6 +31,12 @@ public static class Sets {
     }
 
     public static long Empty(Rt rt) {
+        long sg = rt.roots.shared.Singletons[Rt.SingEmptySet];
+        if (!Val.IsNil(sg)) return sg;
+        return NewEmpty(rt);
+    }
+
+    internal static long NewEmpty(Rt rt) {
         int bas = rt.Mark();
         int mi = rt.Push(Maps.Empty(rt));
         long outv = NewSet(rt, rt.R(mi), Val.Nil);
@@ -73,6 +79,7 @@ public static class Sets {
 
     /// The elements as a vector, which is what `seq` walks.
     public static long ElementVector(Rt rt, long s) {
+        if (!rt.ChargeChecked(Count(rt, s), "seq of a set")) return Val.Nil;
         int bas = rt.Mark();
         int si = rt.Push(s);
         int at = rt.Mark();

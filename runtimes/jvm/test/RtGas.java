@@ -24,8 +24,11 @@ public class RtGas {
     Img.Loaded img = Img.load(rt, Files.readAllBytes(Path.of(a[0])));
     if (img == null) { System.out.println("  FAIL not a flint image"); System.exit(1); }
 
-    // Generous: the program runs and answers.
-    rt.setGasLimit(0);
+    // GENEROUS, not absent. A limit of 0 means "not counting", and an
+    // unbudgeted sandbox deliberately maintains no counter -- so measuring with
+    // one would compare a counted run against an uncounted one and call the
+    // difference a parity gap.
+    rt.setGasLimit(0x7ffffff0L);
     for (int fn : img.init) rt.call(rt.makeClosure(fn, new long[0]), new long[0]);
     long f = rt.makeClosure(img.entry, new long[0]);
     rt.runProgram(f, new long[]{ Val.NIL });

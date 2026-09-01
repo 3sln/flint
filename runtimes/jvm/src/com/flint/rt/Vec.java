@@ -96,6 +96,15 @@ public final class Vec {
     }
 
     public static long empty(Rt rt) {
+        long sg = rt.roots.shared.singletons[Rt.SING_EMPTY_VEC];
+        if (!Val.isNil(sg)) return sg;
+        return newEmpty(rt);
+    }
+
+    /// The one allocation `initSingletons` makes. An empty vector is THREE
+    /// objects -- a root node, a tail node and the header -- so building one
+    /// per `into []` was the most expensive of the three empties.
+    static long newEmpty(Rt rt) {
         int base = rt.mark();
         long root = newNode(rt, WIDTH, Val.NIL);
         int ri = rt.push(root);

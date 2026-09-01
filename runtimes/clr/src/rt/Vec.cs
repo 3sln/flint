@@ -92,6 +92,12 @@ public static class Vec {
     }
 
     public static long Empty(Rt rt) {
+        long sg = rt.roots.shared.Singletons[Rt.SingEmptyVec];
+        if (!Val.IsNil(sg)) return sg;
+        return NewEmpty(rt);
+    }
+
+    internal static long NewEmpty(Rt rt) {
         int bas = rt.Mark();
         long root = NewNode(rt, Width, Val.Nil);
         int ri = rt.Push(root);

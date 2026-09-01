@@ -211,6 +211,62 @@ if [ -n "$CLR" ]; then
     || { echo "  FAIL the two ports hash differently"; exit 1; }
 fi
 
+# THE SAME PROGRAM COSTS THE SAME GAS ON EVERY RUNTIME (`doc/decisions/0009`).
+#
+# Two workloads, one a scaled-up version of the other, and what is compared is
+# the DIFFERENCE -- which cancels whatever each runtime spends starting up and
+# leaves only what the program did.
+#
+# The answer used to be no, and nothing here could see it: every other row diffs
+# ANSWERS. The ports allocated a FRESH EMPTY collection every time `empty` was
+# called where the Rust runtime returns a singleton, so a map literal cost 24
+# bytes more and an empty vector cost three objects; and they were missing most
+# of the runtime's charge sites. The same program billed 143 247 steps on the
+# JVM against 137 207 native -- 37% on allocation-heavy code, invisible on
+# loop-heavy code.
+#
+# It is now within 0.1%, and the residue is one named thing: the ports' map
+# allocates more per entry than the Rust CHAMP does. A budget that fits on one
+# runtime has to fit on the others, or the mirror stops at the answers.
+if [ -f out/gm-small.img ] || ./bin/flint :src runtimes/conform :fn gasmeter/small --emit-image :out out/gm-small.img >/dev/null 2>&1; then
+  ./bin/flint :src runtimes/conform :fn gasmeter/big --emit-image :out out/gm-big.img >/dev/null 2>&1
+  ./bin/flint :src runtimes/conform :fn gasmeter/small :out out/gm-small.wasm >/dev/null 2>&1
+  ./bin/flint :src runtimes/conform :fn gasmeter/big :out out/gm-big.wasm >/dev/null 2>&1
+  cat > out/gm-run.mjs <<'GMJS'
+import { load, instantiate } from '../host/flint.mjs';
+const o = {};
+for (const k of ['small', 'big']) {
+  const { module } = await load(`out/gm-${k}.wasm`);
+  const i = instantiate(module);
+  i.exports.set_step_limit(0x7ffffff0n);
+  i.main('');
+  o[k] = Number(i.exports.stat_steps());
+}
+console.log(o.big - o.small);
+GMJS
+  nd="$(node out/gm-run.mjs)"
+  ja="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/gm-small.img)"
+  jb="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/gm-big.img)"
+  jd=$((jb - ja))
+  gap=$(( nd > jd ? nd - jd : jd - nd ))
+  # 1% of the native figure. Not exact, and the reason is named above rather
+  # than hidden in a loose bound.
+  lim=$(( nd / 100 ))
+  if [ "$gap" -le "$lim" ]; then
+    echo "  ok   the same program costs the same gas: $nd native, $jd jvm (within $gap) [jvm]"
+  else
+    echo "  FAIL gas differs by $gap: $nd native against $jd [jvm]"; exit 1
+  fi
+  if [ -n "$CLR" ]; then
+    ca="$("$CLR" --rt-steps out/gm-small.img)"
+    cb="$("$CLR" --rt-steps out/gm-big.img)"
+    cd2=$((cb - ca))
+    [ "$cd2" = "$jd" ] \
+      || { echo "  FAIL the two ports cost different gas: $jd against $cd2"; exit 1; }
+    echo "  ok     ... and the two ports agree to the instruction ($cd2) [clr]"
+  fi
+fi
+
 # GAS IS A BOUND ON EVERY RUNTIME, not just the native one
 # (`doc/decisions/0009`).
 #

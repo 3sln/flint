@@ -192,7 +192,29 @@ public final class Rt {
         // and `stageStop` has a truthful `live`.
         roots.shared.par.register();
         roots.shared.all.add(roots);
+        initSingletons();
     }
+
+    /// The empty collections, allocated ONCE per sandbox.
+    ///
+    /// This port allocated a fresh empty every time `Maps.empty`, `Vec.empty`
+    /// or `Sets.empty` was called, where the Rust runtime returns a singleton.
+    /// It is a parity defect and not only a performance one: with allocation
+    /// charged as gas, the same program billed 143 247 steps here against
+    /// 137 207 native, because it allocated 346 928 bytes against 299 024. A
+    /// map literal cost 24 bytes more EVERY TIME, which is exactly one empty
+    /// array-map, and an empty vector cost three objects.
+    ///
+    /// A budget that fits on one runtime has to fit on the others, or "verbatim
+    /// mirror" stops at the answers (`doc/decisions/0009`).
+    void initSingletons() {
+        long el = alloc(Obj.TY_EMPTY_LIST, 1);
+        roots.shared.singletons[SING_EMPTY_LIST] = Val.heap(el);
+        roots.shared.singletons[SING_EMPTY_MAP] = Maps.newEmpty(this);
+        roots.shared.singletons[SING_EMPTY_VEC] = Vec.newEmpty(this);
+        roots.shared.singletons[SING_EMPTY_SET] = Sets.newEmpty(this);
+    }
+
 
     public static final class FnDef {
         public final Arity[] arities;
@@ -254,6 +276,29 @@ public final class Rt {
     /// actually collect, because staging one every time would be a
     /// stop-the-world per allocation rather than per collection.
     public long alloc(int ty, int len) {
+        // ALLOCATION CHARGES GAS, one unit per 8 bytes -- the same rate
+        // `chargeBytes` uses, and mirroring `Rt::alloc` in the Rust runtime.
+        //
+        // Without it the three runtimes bill DIFFERENTLY for the same program:
+        // 137 207 steps against 100 410 on an allocation-heavy one, a 37% gap,
+        // while a loop-heavy program agreed to 0.07%. "Verbatim mirror" has to
+        // mean the counter too, or a budget that fits on one runtime does not
+        // fit on another (`doc/decisions/0009`).
+        //
+        // Only when COUNTING: an unbudgeted sandbox does not count, which is
+        // what the second interpreter instantiation exists to express.
+        if (checkpoint != 0) chargeWork(Obj.sizeFor(ty, len) >> 3);
+        return allocUnbilled(ty, len);
+    }
+
+    /// Allocate WITHOUT charging, for the runtime's own bookkeeping.
+    ///
+    /// One legitimate use: state the runtime saves on the program's behalf
+    /// whose SIZE is a property of the runtime rather than of the program. A
+    /// parked thread's saved shadow stack is that -- compiled code keeps fewer
+    /// values live across a call than the interpreter does, so billing it made
+    /// the same program cost more interpreted than compiled.
+    public long allocUnbilled(int ty, int len) {
         Parallel par = roots.shared.par;
         if (par.executors() <= 1) return gc.alloc(roots, ty, len);
 

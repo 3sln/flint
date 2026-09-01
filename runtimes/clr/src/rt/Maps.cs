@@ -593,7 +593,14 @@ public static class Maps {
         return Val.Heap(a);
     }
 
-    public static long Empty(Rt rt) { return NewArrayMap(rt, 0); }
+    /// The SINGLETON empty map: allocating a fresh one per call is what made
+    /// this port bill more gas than the Rust runtime for the same program.
+    public static long Empty(Rt rt) {
+        long sg = rt.roots.shared.Singletons[Rt.SingEmptyMap];
+        return Val.IsNil(sg) ? NewArrayMap(rt, 0) : sg;
+    }
+
+    internal static long NewEmpty(Rt rt) { return NewArrayMap(rt, 0); }
 
     static long NewHashMap(Rt rt, int cnt, long root, long meta) {
         int bas = rt.Mark();
@@ -945,6 +952,8 @@ public static class Maps {
     /// have to hold a path of node addresses across allocations the consumer
     /// makes, and every one of those would need rooting.
     public static long EntryVector(Rt rt, long m) {
+        // CHARGED UP FRONT: `n` is known, so this refuses rather than ticks.
+        if (!rt.ChargeChecked(Count(rt, m), "seq of a map")) return Val.Nil;
         if (Val.IsHeap(m) && Obj.Ty(rt.gc.sp, Val.AsHeap(m)) == Obj.TyTableref)
             return EntryVector(rt, Table.refToMap(rt, m));
         int bas = rt.Mark();

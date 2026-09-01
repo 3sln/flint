@@ -33,6 +33,12 @@ public final class Sets {
     }
 
     public static long empty(Rt rt) {
+        long sg = rt.roots.shared.singletons[Rt.SING_EMPTY_SET];
+        if (!Val.isNil(sg)) return sg;
+        return newEmpty(rt);
+    }
+
+    static long newEmpty(Rt rt) {
         int base = rt.mark();
         int mi = rt.push(Maps.empty(rt));
         long out = newSet(rt, rt.r(mi), Val.NIL);
@@ -75,6 +81,7 @@ public final class Sets {
 
     /// The elements as a vector, which is what `seq` walks.
     public static long elementVector(Rt rt, long s) {
+        if (!rt.chargeChecked(count(rt, s), "seq of a set")) return Val.NIL;
         int base = rt.mark();
         int si = rt.push(s);
         int at = rt.mark();

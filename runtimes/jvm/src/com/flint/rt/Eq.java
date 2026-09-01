@@ -161,6 +161,7 @@ public final class Eq {
         for (;;) {
             boolean ex = Val.isNil(rt.r(x)), ey = Val.isNil(rt.r(y));
             if (ex || ey) { ok = ex && ey; break; }
+            rt.chargeWork(1);
             if (!eq(rt, Seqs.first(rt, rt.r(x)), Seqs.first(rt, rt.r(y)))) { ok = false; break; }
             long nx = Seqs.next(rt, rt.r(x)), ny = Seqs.next(rt, rt.r(y));
             rt.setR(x, nx);
@@ -226,6 +227,9 @@ public final class Eq {
                     int s = rt.push(Seqs.seq(rt, v));
                     int acc = 1, n = 0;
                     while (!Val.isNil(rt.r(s))) {
+                        // A TICK: a seq's length is not known until it ends,
+                        // and it may not end (`doc/decisions/0009`).
+                        if (!rt.chargeTick(n, 1, "hash")) { rt.popTo(base); return 0; }
                         acc = Hash.orderedStep(acc, hashValue(rt, Seqs.first(rt, rt.r(s))));
                         n++;
                         long nx = Seqs.next(rt, rt.r(s));

@@ -18,6 +18,7 @@ public static class Program {
         if (args.Length >= 2 && args[0] == "--rt-flags") return RtFlags(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-hostports") return RtHostPorts(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-gas") return RtGas(args[1]);
+        if (args.Length >= 2 && args[0] == "--rt-steps") return RtSteps(args[1]);
         if (args.Length >= 2 && args[0] == "--rt-image")
             return RtImage(args[1], args.Length > 2 ? args[2] : null);
         // No bare-argument form any more. It ran an image on the BOXED port,
@@ -534,6 +535,20 @@ public static class Program {
     /// to completion. Conformance cannot catch that -- it diffs ANSWERS, and a
     /// program allowed to run forever eventually produces the right one. A
     /// property about REFUSING has to be tested by asking for the refusal.
+    /// The step count for an image, and nothing else -- the CLR half of
+    /// `RtSteps`. Two workloads are compared by their DIFFERENCE, so start-up
+    /// cancels and only the program's work is left.
+    private static int RtSteps(string path) {
+        var rt = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
+        var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
+        if (img == null) { Console.WriteLine("-1"); return 0; }
+        rt.SetGasLimit(0x7ffffff0L);
+        foreach (int fn in img.init) rt.Call(rt.MakeClosure(fn, new long[0]), new long[0]);
+        rt.RunProgram(rt.MakeClosure(img.entry, new long[0]), new long[]{ Flint.Rt.Val.Nil });
+        Console.WriteLine(rt.steps);
+        return 0;
+    }
+
     private static int RtGas(string path) {
         int fails = 0;
         void Ok(string label, bool cond, string extra) {
@@ -543,7 +558,9 @@ public static class Program {
         var rt = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
         var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(path));
         if (img == null) { Console.WriteLine("  FAIL not a flint image"); return 1; }
-        rt.SetGasLimit(0);
+        // GENEROUS, not absent: a limit of 0 means "not counting", and an
+        // unbudgeted sandbox deliberately maintains no counter.
+        rt.SetGasLimit(0x7ffffff0L);
         foreach (int fn in img.init) rt.Call(rt.MakeClosure(fn, new long[0]), new long[0]);
         rt.RunProgram(rt.MakeClosure(img.entry, new long[0]), new long[]{ Flint.Rt.Val.Nil });
         bool threw = !Flint.Rt.Val.IsNil(rt.thrown);

@@ -135,6 +135,7 @@ public sealed class Rt : System.IDisposable {
         // and `StageStop` has a truthful `live`.
         roots.shared.par.Register();
         roots.shared.all.Add(roots);
+        InitSingletons();
     }
 
     public sealed class FnDef {
@@ -193,6 +194,16 @@ public sealed class Rt : System.IDisposable {
     /// actually collect, because staging one every time would be a
     /// stop-the-world per allocation rather than per collection.
     public long Alloc(int ty, int len) {
+        // ALLOCATION CHARGES GAS, one unit per 8 bytes, mirroring `Rt::alloc`
+        // in the Rust runtime. Without it the three runtimes bill differently
+        // for the same program (`doc/decisions/0009`). Only when COUNTING.
+        if (checkpoint != 0) ChargeWork(Obj.SizeFor(ty, len) >> 3);
+        return AllocUnbilled(ty, len);
+    }
+
+    /// Allocate WITHOUT charging, for the runtime's own bookkeeping: state
+    /// whose SIZE is a property of the runtime rather than of the program.
+    public long AllocUnbilled(int ty, int len) {
         Parallel par = roots.shared.par;
         if (par.Executors() <= 1) return gc.Alloc(roots, ty, len);
 
@@ -1510,6 +1521,19 @@ public sealed class Rt : System.IDisposable {
         if (Val.IsInlineKw(v)) return Val.InlineStr(Val.InlineBytes(v));
         if (IsHeapTy(v, Obj.TyKw) || IsHeapTy(v, Obj.TySym)) return Slot(v, 1);
         return v;
+    }
+
+    /// The empty collections, allocated ONCE per sandbox. This port allocated a
+    /// fresh empty every time, where the Rust runtime returns a singleton --
+    /// 24 bytes per map literal and three objects per empty vector, which with
+    /// allocation charged as gas made the same program bill differently on each
+    /// runtime (`doc/decisions/0009`).
+    void InitSingletons() {
+        long el = Alloc(Obj.TyEmptyList, 1);
+        roots.shared.Singletons[SingEmptyList] = Val.Heap(el);
+        roots.shared.Singletons[SingEmptyMap] = Maps.NewEmpty(this);
+        roots.shared.Singletons[SingEmptyVec] = Vec.NewEmpty(this);
+        roots.shared.Singletons[SingEmptySet] = Sets.NewEmpty(this);
     }
 
 }
