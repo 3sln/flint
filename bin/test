@@ -47,7 +47,7 @@ tail -1 /tmp/flint-test.out
 echo
 echo "== conformance: 130 Clojure expressions, on flint"
 ./bin/flint :src test :fn conform.runner/main :out out/conform.wasm >/dev/null
-node host/flint.mjs out/conform.wasm | tee /tmp/conform.out
+node host/flint.mjs out/conform.wasm conform.runner/main | tee /tmp/conform.out
 grep -q '^PASS' /tmp/conform.out || fail "conformance"
 
 echo
@@ -237,7 +237,7 @@ printf '(ns smoke (:require [clojure.string :as s]))\n(defn main [args] (s/upper
 # leaves the process.
 ./target/release/flint compile :src /tmp/flint-smoke :fn smoke/main :out /tmp/flint-smoke/out.wasm 2>&1 \
   | sed 's/^/    /' || fail "flint compile"
-node host/flint.mjs /tmp/flint-smoke/out.wasm > /tmp/flint-test.out 2>&1 || fail "the module does not run"
+node host/flint.mjs /tmp/flint-smoke/out.wasm smoke/main > /tmp/flint-test.out 2>&1 || fail "the module does not run"
 [ "$(cat /tmp/flint-test.out)" = "OK 45" ] || { cat /tmp/flint-test.out; fail "the module answered wrongly"; }
 got="$(./target/release/flint run :src /tmp/flint-smoke :fn smoke/main)"
 [ "$got" = "OK 45" ] || { echo "    got '$got'"; fail "the binary did not run source"; }
