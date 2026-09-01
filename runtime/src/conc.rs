@@ -1655,6 +1655,26 @@ fn run_one(rt: &mut Rt, i: u32) {
 ///
 /// Defining completion any other way means a driver that leaves a reader parked
 /// keeps the whole program alive for ever, which is the bug this replaced.
+/// The answer the thread a host started left behind: its value, or its error
+/// put back on `rt.thrown` where the boundary looks for it.
+fn settled_answer(rt: &mut Rt) -> Value {
+    let s = rt.sched();
+    if s.is_nil() {
+        return NIL;
+    }
+    let ts = rt.slot(s, SC_THREADS);
+    let th = rt.vec_nth(ts, 0).unwrap_or(NIL);
+    if th.is_nil() {
+        return NIL;
+    }
+    let r = rt.slot(th, TH_RESULT);
+    if fx(rt.slot(th, TH_STATUS)) == ST_FAILED {
+        rt.thrown = r;
+        return NIL;
+    }
+    r
+}
+
 /// Has every thread finished, one way or another?
 ///
 /// This is what "the sandbox has nothing left to do" means now that there is no
@@ -1733,7 +1753,15 @@ pub fn drive(rt: &mut Rt) -> Value {
                         return NIL;
                     }
                     rt.status = 0;
-                    return NIL;
+                    // WHAT THE CALLING THREAD LEFT BEHIND.
+                    //
+                    // `settle` records a thread's answer -- and its error -- ON
+                    // THE THREAD, which is what makes a green thread joinable
+                    // rather than a crash. A caller reaching in from outside,
+                    // through `run_program` or `call_named`, has to be handed
+                    // both back or it sees a successful call returning nil.
+                    // `main_result` used to do this and went with `main`.
+                    return settled_answer(rt);
                 }
                 rt.status = 0;
                 {
