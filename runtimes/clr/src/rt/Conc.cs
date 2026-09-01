@@ -163,6 +163,10 @@ public static class Conc {
     public static long EnsureSched(Rt rt) {
         long s = Sched(rt);
         if (!Val.IsNil(s)) return s;
+        // The decoder's route to `InstallBridgePort`, set HERE and nowhere else.
+        // See `Rt.bridgeHook`: reaching it directly from the codec put the whole
+        // scheduler into every wasm module, including ones with no ports.
+        rt.bridgeHook = (r, id) => InstallBridgePort(r, id, Val.Nil);
         int bas = rt.Mark();
         int si = rt.Push(NewObj(rt, Obj.TySched, SC_LEN));
         if (Val.IsNil(rt.R(si))) { rt.PopTo(bas); return Val.Nil; }

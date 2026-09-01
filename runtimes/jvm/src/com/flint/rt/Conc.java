@@ -165,6 +165,10 @@ public final class Conc {
     public static long ensureSched(Rt rt) {
         long s = sched(rt);
         if (!Val.isNil(s)) return s;
+        // The decoder's route to `installBridgePort`, set HERE and nowhere else.
+        // See `Rt.bridgeHook`: reaching it directly from the codec put the whole
+        // scheduler into every wasm module, including ones with no ports.
+        rt.bridgeHook = Conc::installBridgePort2;
         int base = rt.mark();
         int si = rt.push(newObj(rt, TY_SCHED, SC_LEN));
         if (Val.isNil(rt.r(si))) { rt.popTo(base); return Val.NIL; }
@@ -554,6 +558,11 @@ public final class Conc {
     /// A sandbox that is given one can ask for more ports on it; a sandbox that
     /// is not has no way to reach anything outside itself, which is the honest
     /// meaning of "no capabilities" and is the default.
+    /// The hook's shape: a bridge arriving in a message carries no label.
+    static long installBridgePort2(Rt rt, long hostId) {
+        return installBridgePort(rt, hostId, Val.NIL);
+    }
+
     public static long installSystemPort(Rt rt, long hostId, long label) {
         long p = installBridgePort(rt, hostId, label);
         if (Val.isNil(p)) return Val.NIL;

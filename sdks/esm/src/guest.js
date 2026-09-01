@@ -272,7 +272,27 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   /// Installing a port the sandbox already holds is FREE and takes no second
   /// reference -- the handle is interned by id -- so a host may install without
   /// tracking what it has installed before.
+  /// The system port, installed on demand.
+  ///
+  /// A host that names capabilities has said it wants to be ASKED, and an
+  /// `open` request goes out on the system port -- a sandbox given none cannot
+  /// ask at all (`doc/decisions/0027`). Requiring every host to remember that
+  /// would make "I granted a capability and nothing happened" the common first
+  /// experience, so declaring one installs the transport it needs.
+  ///
+  /// A host that wants a different id, or wants the port to carry a handler,
+  /// calls `install` itself first; this is idempotent because the handle is
+  /// interned by id.
+  const SYSTEM_PORT = 1;
+  let systemInstalled = false;
+  function ensureSystem() {
+    if (systemInstalled) return;
+    systemInstalled = true;
+    install(SYSTEM_PORT, { label: 'system', system: true });
+  }
+
   function install(port, { label = '', system = false, handler = null } = {}) {
+    if (system) systemInstalled = true;
     const b = enc.encode(label);
     const p = e.flint_in_alloc(b.length);
     new Uint8Array(e.memory.buffer).set(b, p);
@@ -309,8 +329,8 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     deliver,
     flush,
     pump,
-    grant: (name, handler) => { capabilities[name] = handler; },
-    capabilities: (m) => { capabilities = m; },
+    grant: (name, handler) => { capabilities[name] = handler; ensureSystem(); },
+    capabilities: (m) => { capabilities = m; ensureSystem(); },
     install,
     codec,
     holders: (p) => (ports.get(p)?.holders ?? 0),

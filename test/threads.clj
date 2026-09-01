@@ -312,19 +312,19 @@
            "(defn- try! [f] (try (f) (catch Throwable e (ex-message e))))\n"
            "(defn main [_]\n"
            "  (let [[a b] (p/channel 8)\n"
-           "        h (p/open \"thing\" {:format :flint})]\n"
+           "        h (p/open \"thing\")]\n"
            "    (pr-str\n"
            "     {:fn (try! (fn [] (p/send a helper)))\n"
            "      :nested-fn (try! (fn [] (p/send a [1 {:k helper}])))\n"
            ;; The four cells of the matrix. A channel encodes nothing, so
-           ;; anything with an identity may cross one; a host port encodes with
-           ;; the wire codec, so only what means something on the far side may.
+           ;; anything with an identity may cross one; a bridge encodes with the
+           ;; wire codec, so only what means something on the far side may.
            "      :chan-through-chan (try! (fn [] (p/send a b) :sent))\n"
-           "      :host-through-chan (try! (fn [] (p/send a h) :sent))\n"
-           "      :host-through-host (try! (fn [] (p/send h h) :sent))\n"
-           "      :chan-through-host (try! (fn [] (p/send h b) :sent))\n"
+           "      :bridge-through-chan (try! (fn [] (p/send a h) :sent))\n"
+           "      :bridge-through-bridge (try! (fn [] (p/send h h) :sent))\n"
+           "      :chan-through-bridge (try! (fn [] (p/send h b) :sent))\n"
            "      :opaque-through-chan (try! (fn [] (p/send a (opaque \"fs\")) :sent))\n"
-           "      :opaque-through-host (try! (fn [] (p/send h {:cap (opaque \"fs\")}) :sent))})))"))
+           "      :opaque-through-bridge (try! (fn [] (p/send h {:cap (opaque \"fs\")}) :sent))})))"))
 ;; Run under a host that GRANTS a port, because half the matrix is about what
 ;; may cross one -- and the default host refuses every `open`, which would end
 ;; the program before the interesting sends happen.
@@ -343,10 +343,10 @@
 ;; the point rather than an omission -- see the table in `check_sendable_at`.
 (check-that "a channel carries a channel endpoint"
             (str/includes? crossing ":chan-through-chan :sent"))
-(check-that "a channel carries a host endpoint"
-            (str/includes? crossing ":host-through-chan :sent"))
-(check-that "a host port carries a host endpoint, because its id is the host's own"
-            (str/includes? crossing ":host-through-host :sent"))
+(check-that "a channel carries a bridge"
+            (str/includes? crossing ":bridge-through-chan :sent"))
+(check-that "a bridge carries a bridge, because its id is the host's own"
+            (str/includes? crossing ":bridge-through-bridge :sent"))
 ;; THE ONE THAT MUST NOT WORK. A channel's ends both live in this heap and the
 ;; host was never told it exists, so sending one out would hand the host an id
 ;; naming one of our objects -- and a host that sent it back would be the
@@ -359,8 +359,8 @@
 ;; is the proof, and no decoder for the wire format is reachable from guest
 ;; code.
 (check-that "an opaque value crosses a channel" (str/includes? crossing ":opaque-through-chan :sent"))
-(check-that "  ... and a host port, which is how a capability is handed on"
-            (str/includes? crossing ":opaque-through-host :sent"))
+(check-that "  ... and a bridge, which is how a capability is handed on"
+            (str/includes? crossing ":opaque-through-bridge :sent"))
 
 ;; ------------------------------------------------- parking through a value
 ;;

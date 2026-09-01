@@ -87,6 +87,23 @@ pub struct Rt {
     pub thrown: Value,
     /// The loaded program: bytecode, function table, native imports.
     pub image: crate::gc::SandboxRef<crate::vm::Image>,
+    /// How the decoder turns a `K_PORT` into a handle -- **an indirection on
+    /// purpose, and it is a SIZE decision** (`doc/decisions/0027`).
+    ///
+    /// A port arriving in a message must be interned-or-minted, which is
+    /// `install_bridge_port`, which reaches the scheduler, the ring, the event
+    /// queue and the port registry. Calling it straight from `codec.rs` made
+    /// all of that reachable from `flint_call` -- an unconditional export --
+    /// and so linked it into EVERY module: a pure one with no threads and no
+    /// ports grew 34,519 bytes, from 300,801 to 335,320, which is precisely the
+    /// rule `test/threads.clj` exists to hold ("none of this may grow a pure
+    /// module").
+    ///
+    /// Through a pointer that only `ensure_sched` sets, the chain is reachable
+    /// only from a program that already has a scheduler -- and a program with
+    /// no ports can never be handed one, because a port arrives over a bridge
+    /// and it has none. `None` therefore means "refuse", not "not yet".
+    pub bridge_hook: Option<fn(&mut Rt, i64) -> Value>,
     /// Interpreter frames. Clojure recursion uses this, not the Rust stack, so
     /// deep recursion fails with a catchable StackOverflowError instead of
     /// smashing the wasm stack.
@@ -268,6 +285,7 @@ impl Rt {
             &mut (*heap.as_ptr()).host_natives
         }));
         Rt {
+            bridge_hook: None,
             owned_heap,
             image,
             #[cfg(not(target_arch = "wasm32"))]

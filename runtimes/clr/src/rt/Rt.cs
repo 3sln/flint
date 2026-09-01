@@ -35,6 +35,22 @@ public sealed class Rt : System.IDisposable {
     /// exception would unwind the host stack instead.
     public long thrown = Val.Nil;
 
+    /// How the decoder turns a `K_PORT` into a handle -- an indirection kept
+    /// because the RUST needs it, and mirrored so the three runtimes stay one
+    /// implementation (`doc/decisions/0027`).
+    ///
+    /// There it is a size decision: calling `InstallBridgePort` straight from
+    /// the codec made the scheduler, the ring, the event queue and the port
+    /// registry reachable from `flint_call` -- an unconditional export -- and so
+    /// linked them into every wasm module. A pure one with no threads and no
+    /// ports grew 34,519 bytes, 300,801 to 335,320. This runtime ships whole and
+    /// pays nothing either way, but a branch that exists on one runtime and not
+    /// the others is how the two ports drifted before.
+    ///
+    /// `null` means this sandbox has no scheduler, so it has no ports, so it
+    /// cannot be being handed one: refuse, rather than "not yet".
+    public System.Func<Rt, long, long> bridgeHook = null;
+
     /// The singleton slots, from `rt.rs`. Numbered rather than named fields so
     /// a snapshot can write them as one array.
     public const int SingEmptyList = 0, SingEmptyVec = 1, SingEmptyMap = 2,

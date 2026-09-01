@@ -326,6 +326,10 @@ impl Rt {
         if !s.is_nil() {
             return s;
         }
+        // The decoder's route to `install_bridge_port`, set HERE and nowhere
+        // else. See `Rt::bridge_hook`: reaching it directly from `codec.rs` put
+        // the whole scheduler in every module, including ones with no ports.
+        self.bridge_hook = Some(|rt, id| rt.install_bridge_port(id, NIL));
         let base = self.mark();
         let sc = self.new_obj(TY_SCHED, SC_LEN);
         if sc.is_nil() {

@@ -373,7 +373,14 @@ public final class Codec {
                 // gets delegated (`doc/decisions/0027`). Arriving twice costs
                 // nothing and counts once: the handle is interned by host id,
                 // so the second arrival finds the first object.
-                long p = Conc.installBridgePort(rt, id, Val.NIL);
+                //
+                // Through `bridgeHook` rather than straight to
+                // `installBridgePort` -- see `Rt.bridgeHook` for why the Rust
+                // needs the indirection and why this mirrors it.
+                if (rt.bridgeHook == null) {
+                    throw new Refused("port " + id + " arrived, but this sandbox has no ports");
+                }
+                long p = rt.bridgeHook.install(rt, id);
                 if (Val.isNil(p)) throw new Refused("port " + id + " could not be installed here");
                 return p;
             }

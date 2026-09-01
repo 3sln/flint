@@ -535,7 +535,20 @@ impl Rt {
                 // Arriving twice costs nothing and counts once: the handle is
                 // interned by host id, so the second arrival finds the first
                 // object and no second reference is taken.
-                let p = self.install_bridge_port(id as i64, NIL);
+                //
+                // Through `bridge_hook` rather than straight to
+                // `install_bridge_port`, and that indirection is a SIZE
+                // decision rather than a style one -- see `Rt::bridge_hook`.
+                // `None` means this sandbox has no scheduler, so it has no
+                // ports, so it cannot be being handed one.
+                let p = match self.bridge_hook {
+                    Some(f) => f(self, id as i64),
+                    None => {
+                        return Err(alloc::format!(
+                            "port {id} arrived, but this sandbox has no ports"
+                        ))
+                    }
+                };
                 if p.is_nil() {
                     return Err(alloc::format!("port {id} could not be installed here"));
                 }
