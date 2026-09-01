@@ -280,6 +280,112 @@ information" and "takes no arguments" cannot be confused.
   a pod that changed under a built artifact fails with something better than an
   argument-count mismatch from the far side.
 
+## `open` stops carrying its weight
+
+`flint.port/open` asks the host for a thing, presents what the caller holds, and
+gets a PORT back or a refusal. Under this design the presenting half moves into
+the capability system and the port-shaped half is one answer among several. What
+is left is a request to the host on the system port, which is what `port_open`
+already is underneath -- an `EV_OPEN` with an encoded payload and a parked
+thread.
+
+So: **one primitive that issues a request to the host over the system port**, and
+a port is one possible answer rather than the only one. `open` becomes a thin
+thing over it, or goes.
+
+That is a simplification of what exists rather than new machinery: the request,
+the token, the park and the answer are all built (`0027`). What changes is that
+the answer stops being constrained to a port.
+
+## Capabilities on namespaces and macros, and `&capabilities`
+
+A built-in namespace should be able to say what it needs -- `flint.fs` requires
+`:fs` -- and so should a macro, since a macro is where the wrapping happens. The
+compiler merges what is declared and what the workspace was granted into the
+compilation context, and injects the result as `&capabilities`.
+
+The reason a compile-time check alone is not enough is worth stating plainly: it
+is invisible to the HOST. The host sees a request arrive on the system port and
+has to decide; it cannot see the build that produced the caller. So something has
+to travel from the build to the host, and that something is the token.
+
+### Two questions that look like one
+
+Conflating these is the trap in the whole area.
+
+**Composition: may this code call that code?** That is the GUARD, checked at the
+`:require` edge, at compile time, between workspaces. By the time B can call A's
+function or expand A's macro at all, B has satisfied A's guard -- so the token is
+not defending against B here, and does not need to.
+
+That also settles a question that would otherwise be nasty: a macro from A,
+expanded in B, emitting A's capability. It is fine, because it is A choosing to
+export a macro that does that -- exactly as A may export a FUNCTION that does it.
+Closure capture of authority is delegation, and delegation is A's decision.
+
+**Authorisation: may this program do that thing?** That is the TOKEN, checked by
+the host, at run time. Nothing about the build reaches the host, so the program
+must present something.
+
+### Sentinels are enough, IF they are never baked in
+
+`0022` already gives unforgeability inside a sandbox: an opaque value's authority
+is the host id it was ISSUED with, and guest code cannot set that field --
+`flint/opaque` yields id 0, which is why 0 must never be issued. That property is
+tested (`test/capability.clj`: "guessing the right id does not help, because the
+guest cannot set it") and it was found by a test rather than by reading, because
+a forgery and an absence both arrived as 0 and the host read one as the other.
+
+So no cryptography is needed, on one condition.
+
+**A token compiled INTO the artifact is a bearer token.** Bake a host-issued
+sentinel into the image and anyone holding the `.wasm` holds the capability;
+copying the file copies the authority. That is a worse property than the one
+being replaced.
+
+So the split has to be:
+
+* **Compile time** puts the DECLARATION in the artifact -- this code requires
+  `:fs` -- which is auditable: a module says what it demands before anyone runs
+  it, next to what it exports (`0020`).
+* **Load or first use** is when the host supplies the actual sentinels, over the
+  system port, and `&capabilities` is populated from them. Absent unless the host
+  granted them; unforgeable because they are host-issued.
+
+`&capabilities` is therefore a run-time binding whose SHAPE is known at compile
+time -- the compiler knows which names will be there, the host decides whether
+they arrive.
+
+### The reader-conditional hazard, if the declaration hides in one
+
+Putting the declaration behind `#?(:flint ...)` for `.cljc` portability is
+reasonable on its face and has a real edge. `bin/flint` records it: *"a
+conditional that matched nothing DELETED the form it stood in -- a function body,
+or a `:require` this loop is here to find. Silently compiling a mutilated library
+is the failure this note exists to prevent."*
+
+A guard that can be elided by a feature set is not a guard. If the declaration
+lives inside a conditional, a build with different `:features` drops it silently
+and the module compiles without the requirement it was written with. Either it
+goes somewhere the reader cannot elide -- the `ns` form proper, or `deps.edn` --
+or an elided capability declaration has to be an ERROR rather than the note that
+elision is today.
+
+### Open, on capabilities
+
+* Whether `&capabilities` is bound at a macro's DEFINITION site or its USE site.
+  Definition site matches "A's macro carries A's authority, because A exported
+  it"; use site matches "the compilation context", which is what the name says.
+  They differ exactly when A's macro is expanded in B, which is the case the
+  guard has already authorised -- so definition site looks right and the name
+  may be what is wrong.
+* Whether a declaration is a requirement (refuse to run without it) or a request
+  (run, and fail at the call). A requirement is checkable at load and is the
+  better failure; a request allows a program that degrades.
+* What the host answers when a capability is declared and not granted: absent
+  from `&capabilities`, or present and refusing. Absent is simpler; present-and-
+  refusing lets an error say WHICH capability was wanted.
+
 ### Why this is the fix and not a refactor
 
 **The COMPILER enforces the guard, at require-resolution time.** It has both
@@ -352,6 +458,11 @@ being careful.
    on trust. Separable from 4: it buys checking, not codegen.
 6. Pods as a dependency kind: one implementation of the virtual interface,
    behind a guard.
+7. **The request primitive**, generalising `port_open` so its answer is not
+   constrained to a port, and `open` retired onto it.
+8. **Declared capabilities and `&capabilities`**: the declaration in the
+   artifact at compile time, the sentinels supplied by the host at load or first
+   use. Never baked in -- that would make the artifact a bearer token.
 
 ## What is undecided
 
