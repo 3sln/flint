@@ -356,6 +356,8 @@
            "   {:print (pr-str T)\n"
            "    :str (str T)\n"
            "    :human (print-str T)\n"
+           "    :roundtrip (= T #flint/table {:schema [[:id :int] [:name :string]]\n"
+           "                                  :rows [{:id 1 :name \"a\"} {:id 2 :name \"b\"}]})\n"
            "    :human-big (print-str (ft/table S (mapv (fn [i] {:id i :name \"n\"}) (range 9))))\n"
            "    :rows (mapv (fn [r] (:name r)) (ft/rows T))\n"
            "    :row-is-a-map (map? (first (ft/rows T)))\n"
@@ -402,7 +404,8 @@
        "conj! on a transient table that persistent! has already taken; a transient is used once and the table it produced is the value")
 
 (check "a table prints as its own literal, which reads back"
-       (:print ops) "#flint/table [{:id 1, :name \"a\"} {:id 2, :name \"b\"}]")
+       (:print ops)
+       "#flint/table {:schema [[:id :int] [:name :string]] :rows [{:id 1, :name \"a\"} {:id 2, :name \"b\"}]}")
 (check "  ... and `str` reaches the same printer"
        (:str ops) (:print ops))
 ;; The two hooks are for two jobs. `pr-str` has to read back and so quotes its
@@ -413,6 +416,11 @@
 (check "  ... and it may elide, which the readable form must never do"
        (:human-big ops)
        "#flint/table [{:id 0, :name n} {:id 1, :name n} {:id 2, :name n} {:id 3, :name n} {:id 4, :name n}] (9 rows)")
+;; THE ROUND TRIP, run rather than claimed. `0026` first said the form was
+;; `#flint/table [{:a 1}]`, which cannot read back: the types are half of a
+;; table's identity and nothing in a row says which they were.
+(check "  ... and the readable form READS BACK to an equal table"
+       (:roundtrip ops) true)
 (check "iterating a table yields rows, materialising none of them"
        (:rows ops) ["a" "b"])
 (check "  ... and a row reads as the map it is" (:row-is-a-map ops) true)

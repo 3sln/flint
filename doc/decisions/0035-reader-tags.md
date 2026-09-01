@@ -1,9 +1,14 @@
 # 0035 — A reader tag is a name; the var it names is the identity
 
-> **QUEUED — the refusal is built, the registry is not.** An unknown reader
-> tag in source is now an error, as in canonical Clojure. What is not built is
-> where a tag gets registered: per project, in `deps.edn`, applying only to that
-> project's own source roots.
+> **PARTLY BUILT.** An unknown reader tag in source is an error, as in canonical
+> Clojure. Tags are bound per project in `deps.edn` under `:flint/tag-readers`,
+> mapping a tag NAME to the VAR that reads it, and apply only to that project's
+> own source roots -- so two libraries can both want `#x`. `#x form` rewrites to
+> `(the-var form)` carrying `:flint/read-form`, `:flint/read-tag`,
+> `:flint/read-var` and its position. `#flint/table` is built in.
+>
+> NOT built: `reader-tag-of`, so a printer can ask what name this build bound to
+> its reader, and the SDK's equivalent of the `deps.edn` key.
 
 ## What is true today
 
@@ -214,7 +219,13 @@ is a second resolution rule.
    and how to read data. **Done.**
 2. `:flint/tag-readers` in `deps.edn`, threaded to the reader for that project's
    roots only, with a dependency read under its own. `#x form` rewrites to
-   `(var form)`.
+   `(var form)`. **Done.** `test/tags.clj` is the case the mechanism exists for:
+   two projects each bind `#pt` to their own reader, each source reads under its
+   own, and a tag a dependency binds is NOT in scope for the project requiring
+   it. The threading had to reach THREE readers -- `collect`, `topo-order` and
+   the compiler -- which is the same defect `default-features` records for
+   `:features`: a value only one reader knows about is a value the other two get
+   wrong.
 3. `reader-tag-of`, resolved at build time, and the SDK's equivalent option.
    The rewrite carries `:flint/read-form` and `:flint/read-var`, and macro
    expansion inherits them; asserted by a test that a bad tagged literal reports

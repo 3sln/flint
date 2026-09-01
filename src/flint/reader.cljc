@@ -481,19 +481,22 @@
   that a printed form reads back everywhere rather than only where it was made. `#flint/table` joins it when a
   table can be a constant (`0026` step 9); `#\"...\"`, `#{}`, `#()`, `#_` and
   `#?` are reader SYNTAX rather than tags and are handled above."
-  {})
+  {'flint/table 'flint.table/read-table})
 
 (defn- tag-error [tag readers]
   (let [known (sort (map str (keys readers)))]
     (str "no reader for the tag #" tag
          (if (seq known)
-           (str "; the tags that can be read here are "
+           (str "; this project can read "
                 (str/join ", " (map (fn [k] (str "#" k)) known)))
-           "; there are no reader tags yet")
-         ". To make a tagged literal as a VALUE, call (tagged-literal '" tag
-         " form); to read one from data, use clojure.edn/read-string with"
-         " :readers or :default. Registering a tag so it can be written in"
-         " SOURCE is doc/decisions/0035 and is not built.")))
+           "; this project has no reader tags")
+         ". A tag is bound per PROJECT, not per namespace: add it under"
+         " :flint/tag-readers in deps.edn, mapping the tag NAME to the VAR that"
+         " reads it -- {" tag " my.ns/read-it}. Using another project's tag is"
+         " opt-in, which is why yours are not in scope here by default"
+         " (doc/decisions/0035). To make a tagged literal as a VALUE instead,"
+         " call (tagged-literal '" tag " form); to read one from data, use"
+         " clojure.edn/read-string with :readers or :default.")))
 
 (defn- read-dispatch [st]
   (next-ch! st)                                              ; #
@@ -530,10 +533,32 @@
         ;; which takes `:readers` and `:default` and has always refused an
         ;; unknown tag. That is where a tagged literal comes from at runtime.
         (let [readers (:tags @st)
-              f (get readers tag)]
-          (if f
-            (f v)
-            (err st (tag-error tag readers))))))))
+              target (get readers tag)]
+          (if-not target
+            (err st (tag-error tag readers))
+            ;; A REWRITE, not a call. The reader evaluates nothing: it emits
+            ;; `(the-var form)` and the ordinary pipeline takes it from there --
+            ;; a macro expands at compile time and can fold to a constant, a
+            ;; function is an ordinary call. That is why there is no
+            ;; bootstrapping problem here and why a tag reader need not be a
+            ;; macro (`doc/decisions/0035`).
+            ;;
+            ;; It carries what it WAS. A rewrite that forgets its origin reports
+            ;; errors against code nobody wrote, which is the `#?` bug one layer
+            ;; down: reader conditionals used to relabel their result with the
+            ;; position of the `#?`, and every failure inside one pointed at the
+            ;; conditional. `:flint/read-form` is a `0034` tagged literal
+            ;; holding the tag AS WRITTEN, so `pr-str` gives back what was
+            ;; typed; `:flint/read-var` is what it resolved to, because "no
+            ;; reader for #x" and "lib.a/read-x threw" name different things.
+            ;;
+            ;; The position sits on the SAME metadata map, so anything holding
+            ;; the read form holds where it came from.
+            (with-meta (list target v)
+              {:flint/read-form (flint.rt/tagged-literal tag v)
+               :flint/read-tag tag
+               :flint/read-var target
+               :line (:line @st) :column (:col @st) :file (:file @st)})))))))
 
 (defn- read-symbolic [st]
   (let [tok (read-token st)]

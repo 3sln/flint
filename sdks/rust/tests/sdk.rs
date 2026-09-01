@@ -13,6 +13,9 @@ const APP: &str = r#"
 (defn greet [name] (s/upper-case (str "hello " name)))
 (defn tally [] (swap! seen inc))
 (defn echo [x] x)
+;; NOTE what this namespace does NOT do: it never requires `flint.table` and
+;; never names a table. It reads whatever arrives as an ordinary collection.
+(defn tabled [t] [(count t) (map? (get t 0)) (:id (get t 1)) (:name (get t 1))])
 (defn spin [] (loop [i 0] (if (< i 10000000) (recur (inc i)) i)))
 (defn churn [t] (+ t (reduce + 0 (map (fn [i] i) (range 2000)))))
 (defn boom [] (throw (ex-info "deliberate" {:a 1})))
@@ -25,7 +28,7 @@ fn image() -> flint::Image {
         .compile(Compile {
             resolve: &|ns: &str| if ns == "app" { Some(APP.to_string()) } else { None },
             fn_name: "app/main",
-            exports: &["app/greet", "app/tally", "app/echo", "app/boom", "app/spin", "app/churn"],
+            exports: &["app/greet", "app/tally", "app/echo", "app/boom", "app/spin", "app/churn", "app/tabled"],
             meta: vec![("capabilities".into(), Value::Vector(vec![Value::str("fs")]))],
             ..Default::default()
         })
@@ -355,4 +358,56 @@ fn swap_under_contention_loses_nothing() {
         "swap! lost {} increments; it is a read-modify-write, not a CAS",
         want - total.as_i64().unwrap_or(0)
     );
+}
+
+
+/// A TABLE ARRIVES AT A MODULE THAT NEVER MENTIONS TABLES.
+///
+/// This is the tree-shaking soundness question Ray raised: if a program can
+/// TAKE from a port, it might receive a table, so the shaker must not remove
+/// the machinery that builds one just because the program never names it.
+///
+/// It holds for a reason worth writing down rather than hoping about:
+/// `flint_call` is an unconditional export (`link.rs`'s root list), the wire
+/// decoder hangs off it, and the decoder references the table constructor
+/// directly -- so the constructor is reachable in every module, always.
+///
+/// The test is behavioural rather than a symbol check because release modules
+/// are stripped: grepping the wasm for `table_from_columns` finds nothing in a
+/// module that certainly contains it.
+#[test]
+fn a_table_reaches_a_module_that_never_heard_of_tables() {
+    let img = image();
+    let sandbox = img.sandbox().expect("it instantiates");
+    let table = Value::Table {
+        schema: vec![("id".into(), "int".into()), ("name".into(), "string".into())],
+        columns: vec![
+            vec![Value::Int(10), Value::Int(20)],
+            vec![Value::str("a"), Value::str("b")],
+        ],
+    };
+    let got = sandbox.call_blocking("app/tabled", &[table]).unwrap();
+    assert_eq!(
+        got,
+        Value::Vector(vec![
+            Value::Int(2),
+            Value::Bool(true),
+            Value::Int(20),
+            Value::str("b"),
+        ]),
+        "a shaken module that never names a table must still be able to receive one"
+    );
+}
+
+/// And it comes back OUT as a table, columnar, rather than as a vector of maps.
+#[test]
+fn a_table_returns_as_a_table() {
+    let img = image();
+    let sandbox = img.sandbox().expect("it instantiates");
+    let table = Value::Table {
+        schema: vec![("id".into(), "int".into())],
+        columns: vec![vec![Value::Int(1), Value::Int(2), Value::Int(3)]],
+    };
+    let got = sandbox.call_blocking("app/echo", &[table.clone()]).unwrap();
+    assert_eq!(got, table, "a table crosses both ways as a table");
 }

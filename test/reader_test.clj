@@ -206,6 +206,29 @@
 (check "a namespaced map is not a tag" (read-err "#:a{:b 1}") nil)
 (check "a reader conditional is not a tag" (read-err "#?(:flint 1)") nil)
 
+
+;; --- what a rewrite remembers ---------------------------------------------
+;;
+;; `#x form` becomes `(the-var form)`. A rewrite that forgets its origin reports
+;; errors against code nobody wrote -- which is the `#?` bug one layer down,
+;; where a conditional relabelled its result with its own position and every
+;; failure inside pointed at the `#?`.
+(def tagged-form
+  (first (r/read-all "#pt [1 2]" {:features #{:flint} :tags {'pt 'my.ns/point}})))
+
+(check "a tag rewrites to a call on the var it names" tagged-form '(my.ns/point [1 2]))
+(check "  ... and remembers the form as WRITTEN, as a tagged literal"
+       (pr-str (:flint/read-form (meta tagged-form))) "#pt [1 2]")
+(check "  ... and which var it resolved to"
+       (:flint/read-var (meta tagged-form)) 'my.ns/point)
+(check "  ... and where it was, on the same metadata map"
+       [(:line (meta tagged-form)) (:file (meta tagged-form))] [1 "<string>"])
+;; The tag as WRITTEN, not the var: `#pt` is what the person typed and what they
+;; will search for. The var is beside it because "no reader for #pt" and
+;; "my.ns/point threw" name different things.
+(check "  ... keeping the tag the person typed"
+       (:flint/read-tag (meta tagged-form)) 'pt)
+
 (if (zero? @fails)
   (println "reader: ok")
   (do (println "reader:" @fails "FAILURES") (System/exit 1)))

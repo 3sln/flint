@@ -379,6 +379,26 @@ fn edn_value(v: &Value) -> String {
         Value::Bytes(_) | Value::Port(_) | Value::Sentinel { .. } => {
             edn_string("<not representable in metadata>")
         }
+        // EDN HAS TAGS, so a tagged literal is written as one -- which is the
+        // format-level half of why `0034` made it a type rather than a map: a
+        // map would have come out here as a map and read back as one.
+        Value::Tagged { tag, form } => {
+            format!("#{} {}", qualified(&tag.0, &tag.1), edn_value(form))
+        }
+        // COLUMNAR, so a table survives as a table rather than flattening into
+        // a vector of maps on the way out -- which would lose exactly what the
+        // type is for (`doc/decisions/0026`).
+        Value::Table { schema, columns } => {
+            let cols: Vec<String> = schema
+                .iter()
+                .zip(columns.iter())
+                .map(|((n, t), col)| {
+                    let vs: Vec<String> = col.iter().map(edn_value).collect();
+                    format!("[:{n} :{t} [{}]]", vs.join(" "))
+                })
+                .collect();
+            format!("#flint/table {{:columns [{}]}}", cols.join(" "))
+        }
     }
 }
 

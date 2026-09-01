@@ -193,7 +193,15 @@ typedef enum {
   /* A live thing, by identity. You may receive one and hand it back; nothing
    * here can MAKE one, which is the sandbox rule (doc/decisions/0025). */
   FLINT_PORT = 12,
-  FLINT_SENTINEL = 13
+  FLINT_SENTINEL = 13,
+  /* A tagged literal (doc/decisions/0034): a namespaced symbol and a form.
+   * Its own tag rather than a two-key map, because a host meeting one has to
+   * be able to tell it from a map that happens to have those keys. */
+  FLINT_TAGGED = 14,
+  /* A table (doc/decisions/0026). COLUMNAR, here as on the wire: ask for the
+   * schema, then for one column at a time. Handing rows across would rebuild a
+   * map per row and spend on arrival exactly what the sender saved. */
+  FLINT_TABLE = 15
 } FlintTag;
 
 FlintTag flint_value_tag(const FlintValue *v);

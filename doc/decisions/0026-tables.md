@@ -259,8 +259,36 @@ transient table appends into an open chunk and seals it when full.
    table -- `SLICE_MIN`'s rule for ropes, achieved by construction rather than
    by a threshold. `select` is a `migrate` to a narrower schema, so it is a
    head-only edit that shares every column it keeps.
-9. The `0025` codec tag and `0033`'s columnar JSON, so a table crosses a port as
-   a table rather than as a vector of maps -- and, the same question asked of
-   source rather than of a port, a reader tag registry so `#flint/table [...]`
-   reads back as a table. Printing is already a library's own business
-   (`Printable`); reading is the half still hard-coded.
+9. The `0025` codec tag, so a table crosses a port as a table rather than as a
+   vector of maps -- and the same question asked of source, a reader tag.
+   **Done** for both. `K_TABLE` is COLUMNAR on the wire: the schema, the row
+   count, then each column in full before the next starts. Row-major would be a
+   vector of maps with extra steps and would make the receiver rebuild a map per
+   row to read one field. `table_from_columns` fills chunk runs directly on
+   decode, and still checks every value against the schema -- a decoder that
+   skipped that would be a way to make a table that is not closed.
+
+   `K_TAGGED` went in beside it: the wire codec had no arm for a tagged literal
+   either, so both of the types `0026` and `0034` added could be image constants
+   and could not cross a port, which is half of what each was for.
+
+   The Rust SDK gained `Value::Table` and `Value::Tagged` to match, columnar
+   there too, so a host sends and receives a table as a table.
+
+   And the printed form CHANGED, because the one this file specified could not
+   read back. `#flint/table [{:a 1}]` loses the types, and the types are half of
+   a table's identity -- an `:int` column and an `:any` column holding the same
+   values are different tables. It is now
+   `#flint/table {:schema [[:a :int]] :rows [{:a 1}]}`, `flint/table` is a
+   built-in reader tag bound to `flint.table/read-table`, and the round trip is
+   RUN in `test/tables.clj` rather than claimed.
+
+   Tree-shaking soundness is covered by `sdks/rust/tests/sdk.rs`: a module that
+   never requires `flint.table` and never names a table still receives one over
+   `flint_call` and reads it. It holds because `flint_call` is an unconditional
+   export, the decoder hangs off it, and the decoder references the table
+   constructor directly. The test is behavioural because release modules are
+   stripped -- grepping the wasm for the constructor finds nothing in a module
+   that certainly contains it.
+
+   `0033`'s columnar JSON is still to come, with the rest of that file.

@@ -94,13 +94,37 @@
         :when (.exists f)]
     (str f)))
 
+(defn- root-of
+  "Which search-path dir a file came from. A file belongs to the project that
+  owns its root, and reader tags are bound per PROJECT (`doc/decisions/0035`),
+  so this is what a tag lookup keys on."
+  [dirs f]
+  (first (filter (clojure.core/fn [d] (str/starts-with? (str f) (str d))) dirs)))
+
 (defn find-source
   "First hit wins. The path is `:src` dirs, then `:wasm-path` dirs, then flint's
   own `lib/`: your source beats source a unit vendored beside itself, which
   beats flint's."
   [dirs n]
   (when-let [f (first (source-candidates dirs n))]
-    {:src (slurp (io/file f)) :file f}))
+    {:src (slurp (io/file f)) :file f :root (root-of dirs f)}))
+
+(defn tag-readers-for
+  "The `:flint/tag-readers` a source root is read under.
+
+  Looked up from the root's OWN project file -- `deps.edn` beside it or one
+  directory up -- and never from the project doing the compiling. That is the
+  whole point: two libraries may both want `#x`, so a tag a dependency binds is
+  in scope for ITS sources and not for yours, and using one is opt-in
+  (`doc/decisions/0035`)."
+  [d]
+  (let [try-read (clojure.core/fn [p]
+                   (try (let [m (edn/read-string (slurp p))]
+                          (when (map? m) (:flint/tag-readers m)))
+                        (catch Exception _ nil)))]
+    (or (try-read (io/file d "deps.edn"))
+        (try-read (io/file (.getParentFile (.getAbsoluteFile (io/file d))) "deps.edn"))
+        {})))
 
 (def virtual-namespaces
   ;; flint.rt is not a namespace you can load: the analyzer turns flint.rt/x into
@@ -137,7 +161,8 @@
       (if (or (contains? sources n) (contains? virtual-namespaces n))
         (recur (rest todo) sources order)
         (if-let [s (find-source dirs n)]
-          (let [st (reader/reader (:src s) {:file (:file s) :features features})
+          (let [tags (tag-readers-for (:root s))
+                st (reader/reader (:src s) {:file (:file s) :features features :tags tags})
                 forms (try (loop [acc []]
                              (let [v (reader/read-form st)]
                                (if (reader/eof? v) acc (recur (conj acc v)))))
@@ -153,7 +178,10 @@
                 nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))
                 reqs (if nsform (compiler/ns-requires nsform) [])]
             (recur (into (vec (rest todo)) reqs)
-                   (assoc sources n s)
+                   ;; The tags travel WITH the source. `topo-order` and the
+                   ;; compiler read this same file again, and a tag map only
+                   ;; this loop knew about is a tag map they would get wrong.
+                   (assoc sources n (assoc s :tags tags))
                    (conj order n)))
           (do (println "cannot find source for namespace" n
                        "\n  searched:" (str/join ", " dirs))
@@ -162,8 +190,9 @@
 
 (defn topo-order [sources features]
   ;; Dependencies before dependents; clojure.core always first.
-  (let [deps (into {} (for [[n {:keys [src file]}] sources]
-                        [n (let [forms (reader/read-all src {:file file :features features})
+  (let [deps (into {} (for [[n {:keys [src file tags]}] sources]
+                        [n (let [forms (reader/read-all src {:file file :features features
+                                                             :tags tags})
                                  nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
                              (set (when nsform (compiler/ns-requires nsform))))]))]
     (loop [done [] seen #{} pending (vec (keys deps))]

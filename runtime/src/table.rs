@@ -1515,4 +1515,77 @@ impl Rt {
         self.pop_to(base);
         out
     }
+
+    /// A table from COLUMNS rather than rows -- `cols` is a vector of column
+    /// vectors, in schema order.
+    ///
+    /// What the wire decoder builds into (`doc/decisions/0026` step 9). Going
+    /// through rows would mean building a map per row only to take it apart
+    /// again, which is the shape the type exists to avoid, and on the decode
+    /// path it would be the receiver paying for the sender's compactness.
+    ///
+    /// The values are still CHECKED against the schema. A decoder that skipped
+    /// that would be a way to make a table that is not closed, which is the one
+    /// property everything else here rests on.
+    pub fn table_from_columns(&mut self, schema: Value, cols: Value, nrows: u32) -> Value {
+        let base = self.mark();
+        let si = self.push(schema);
+        let ci = self.push(cols);
+        let ncols = self.schema_len(self.r(si));
+        let width = self.schema_width(self.r(si));
+        let chunks = self.empty_vec();
+        let ki = self.push(chunks);
+        let mut row = 0u32;
+        while row < nrows {
+            if !self.charge_checked(1, "table") {
+                self.pop_to(base);
+                return NIL;
+            }
+            let take = core::cmp::min(CHUNK, nrows - row);
+            let ch = self.new_chunk(width, take);
+            let chi = self.push(ch);
+            for c in 0..ncols {
+                let id = self.schema_id_at(self.r(si), c);
+                let src = self.vec_nth(self.r(ci), c).unwrap_or(NIL);
+                let sj = self.push(src);
+                let tp = {
+                    let types = self.slot(self.r(si), SC_TYPES);
+                    self.vec_nth(types, c).unwrap_or(NIL)
+                };
+                let col = self.new_obj(TY_NODE, take);
+                let cj = self.push(col);
+                for k in 0..take {
+                    let v = self.vec_nth(self.r(sj), row + k).unwrap_or(NIL);
+                    if !self.type_ok(tp, v) {
+                        let name = self.schema_name_at(self.r(si), c);
+                        let msg = self.column_type_error(name, tp, v, row + k);
+                        self.pop_to(base);
+                        return self.throw_str("IllegalArgumentException", &msg);
+                    }
+                    self.set(self.r(cj), k, v);
+                }
+                let cv = self.r(cj);
+                self.set(self.r(chi), CH_BASE + id, cv);
+                let chv = self.r(chi);
+                self.collapse(chv, id);
+                self.pop_to(sj);
+            }
+            let chv = self.r(chi);
+            let nv = self.vec_conj(self.r(ki), chv);
+            self.set_r(ki, nv);
+            self.pop_to(chi);
+            row += take;
+        }
+        let a = self.alloc(TY_TABLE, TB_LEN);
+        let t = Value::heap(a);
+        let ti = self.push(t);
+        let (sv, kv) = (self.r(si), self.r(ki));
+        self.set(self.r(ti), TB_SCHEMA, sv);
+        self.set(self.r(ti), TB_CHUNKS, kv);
+        self.set(self.r(ti), TB_COUNT, Value::fixnum(nrows as i64));
+        self.set(self.r(ti), TB_OFFSET, Value::fixnum(0));
+        let out = self.r(ti);
+        self.pop_to(base);
+        out
+    }
 }

@@ -162,7 +162,31 @@
 ;; `hash`, `kind`, `get`, `count`, `map_get` and `seq`, which are Rust and do
 ;; not shake. A table remains a candidate for a UNIT (`doc/decisions/0023`); the
 ;; printer is no longer the thing standing in the way.
-            (< pure-size 284000))
+            (< pure-size 304000))
+
+;; RE-BASELINED AGAIN, and this one is a decision rather than a drift:
+;; 300 281 against 280 781, and 18 917 of it is ONE ARM IN THE WIRE CODEC.
+;;
+;; MEASURED by building the same fixture with the `K_TABLE` arm and without
+;; (300 281 against 281 364). The mechanism is not subtle: `flint_call` is an
+;; unconditional export (`link.cljc`'s root list), the decoder hangs off it, and
+;; the decoder names the table constructor -- so every module that can be CALLED
+;; carries the machinery to build a table, whether or not it has ever heard of
+;; one.
+;;
+;; That is the correct trade for soundness and it is what Ray asked for: a
+;; program that takes from a port MIGHT be handed a table, and a shaker that
+;; removed the constructor would turn that into a crash. `sdks/rust/tests/sdk.rs`
+;; pins it -- a module that never requires `flint.table` receives one and reads
+;; it.
+;;
+;; It is also 6.7% of a module, paid by every program in the world that never
+;; uses a table, and that is the strongest argument yet for the UNIT this file
+;; has been recommending since tables landed (`doc/decisions/0023`). The shape
+;; is clear: a module that does not link the table unit refuses a `K_TABLE` on
+;; the wire with a message naming what it cannot decode, which is honest to the
+;; sender and free to everyone else. Recorded with the number attached rather
+;; than absorbed, because 18 917 bytes is what should force that conversation.
 
 ;; RE-BASELINED from 276 000: 280 781 shipped against 272 129 at the previous
 ;; commit, so the work below costs 8 652 bytes in every module. MEASURED by

@@ -340,7 +340,7 @@
   references -- within a namespace and between namespaces -- resolve without
   `declare`. Clojure needs `declare` for the intra-namespace case; reading
   everything before analysing anything makes it unnecessary."
-  [cc nsname src file]
+  [cc nsname src file tags]
   (let [spec {:features (:features @cc)}
         resolve-hook
         (fn [sym]
@@ -362,8 +362,14 @@
         ;; selects NOTHING here, and inside a map literal that leaves an odd
         ;; number of forms -- so the file does not even READ. Which set actually
         ;; helps is a measurement, not a preference; see `flint build :features`.
+        ;; `:tags` travels with the source, per SOURCE ROOT. It cannot be
+        ;; defaulted here for the same reason `:features` cannot -- and for the
+        ;; reason `default-features` records: this file is read THREE times, by
+        ;; `collect`, by `topo-order` and by here, and a value only one of them
+        ;; knows about is a value the other two get wrong (`doc/decisions/0035`).
         st (reader/reader src {:file file
                                :features (or (:features spec) reader/default-features)
+                               :tags tags
                                :resolve resolve-hook})
         _ (vswap! cc assoc-in [:namespaces nsname] (get-in @cc [:namespaces nsname] {}))
         forms (loop [acc []]
@@ -587,9 +593,9 @@
   [{:keys [sources order entry exports builtins exclude excluded-builtins features]}]
   (let [cc (new-context {:builtins builtins :features features})]
     (let [read-forms (into {} (for [nsname order]
-                                (let [{:keys [src file]} (get sources nsname)]
+                                (let [{:keys [src file tags]} (get sources nsname)]
                                   (when-not src (err (str "no source for namespace " nsname) {:ns nsname}))
-                                  [nsname (read-namespace! cc nsname src file)])))]
+                                  [nsname (read-namespace! cc nsname src file tags)])))]
       (doseq [nsname order]
         (analyze-namespace! cc nsname (get read-forms nsname))))
 
@@ -630,7 +636,7 @@
                      ;; yet -- so the data is passed to it instead.
                      "(defn run [_] (flint.check/run-tests tests))\n")]
         (when (seq tests)
-          (analyze-namespace! cc reg-ns (read-namespace! cc reg-ns src "<check-registry>")))))
+          (analyze-namespace! cc reg-ns (read-namespace! cc reg-ns src "<check-registry>" {})))))
 
     ;; The entry shim: convert the result to text here, in cljc, so the printer
     ;; is reachable only because this shim uses it -- not because the runtime
@@ -665,7 +671,7 @@
                         "        caps (nth in 1 nil)\n"
                         "        r " call "]\n"
                         "    (if (string? r) r (pr-str r))))\n")]
-      (analyze-namespace! cc shim-ns (read-namespace! cc shim-ns shim-src "<entry-shim>")))
+      (analyze-namespace! cc shim-ns (read-namespace! cc shim-ns shim-src "<entry-shim>" {})))
 
     (let [entry-var 'flint.main/-main
           ;; Everything that must stay CALLABLE, not just the default entry.

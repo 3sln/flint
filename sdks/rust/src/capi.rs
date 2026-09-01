@@ -446,6 +446,14 @@ pub enum FlintTag {
     /// here can MAKE one, which is the sandbox rule (`doc/decisions/0025`).
     Port = 12,
     Sentinel = 13,
+    /// A tagged literal (`doc/decisions/0034`). C reads its tag with
+    /// `flint_value_tag_symbol` and its form with `flint_value_form`.
+    Tagged = 14,
+    /// A table (`doc/decisions/0026`), COLUMNAR here as on the wire: C asks for
+    /// the schema and then for a column at a time. Handing it rows would mean
+    /// building a map per row on the way out, which is exactly what the type
+    /// exists to avoid.
+    Table = 15,
 }
 
 fn boxed(v: Value) -> *mut Value {
@@ -497,6 +505,8 @@ pub unsafe extern "C" fn flint_value_tag(v: *const Value) -> FlintTag {
         Some(Value::Map(_)) => FlintTag::Map,
         Some(Value::Port(_)) => FlintTag::Port,
         Some(Value::Sentinel { .. }) => FlintTag::Sentinel,
+        Some(Value::Tagged { .. }) => FlintTag::Tagged,
+        Some(Value::Table { .. }) => FlintTag::Table,
     }
 }
 

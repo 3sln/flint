@@ -25,6 +25,8 @@ const K_SET: u8 = 11;
 const K_BYTES: u8 = 14;
 const K_PORT: u8 = 15;
 const K_SENTINEL: u8 = 16;
+const K_TAGGED: u8 = 17;
+const K_TABLE: u8 = 18;
 const NO_NS: u32 = u32::MAX;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +50,23 @@ pub enum Value {
     /// make one from an integer, which is the sandbox rule (`0025`).
     Port(u32),
     Sentinel { host_id: u64, label: String },
+    /// A tagged literal (`doc/decisions/0034`): a namespaced symbol and a form.
+    /// Its own variant rather than a two-key map, for the reason the type
+    /// exists -- a host meeting one must be able to tell it from a map that
+    /// happens to have those keys.
+    Tagged { tag: (Option<String>, String), form: Box<Value> },
+    /// A table (`doc/decisions/0026`), COLUMNAR both on the wire and here.
+    ///
+    /// Columns rather than rows because that is what the type is for: a host
+    /// reading one field should read one run, and rebuilding a map per row to
+    /// hand it over would spend on arrival exactly what the sender saved.
+    Table {
+        /// `(name, type)` in order; the type is one of `:int :double :string
+        /// :bool :keyword :any`.
+        schema: Vec<(String, String)>,
+        /// One entry per column, each `rows` long.
+        columns: Vec<Vec<Value>>,
+    },
 }
 
 impl Value {
@@ -171,6 +190,35 @@ impl Value {
                 out.extend_from_slice(&host_id.to_le_bytes());
                 put_str(out, label);
             }
+            Value::Tagged { tag, form } => {
+                out.push(K_TAGGED);
+                out.push(K_SYMBOL);
+                match &tag.0 {
+                    Some(ns) => put_str(out, ns),
+                    None => put_u32(out, u32::MAX),
+                }
+                put_str(out, &tag.1);
+                form.write(out);
+            }
+            Value::Table { schema, columns } => {
+                out.push(K_TABLE);
+                put_u32(out, schema.len() as u32);
+                for (name, ty) in schema {
+                    out.push(K_KEYWORD);
+                    put_u32(out, u32::MAX);
+                    put_str(out, name);
+                    out.push(K_KEYWORD);
+                    put_u32(out, u32::MAX);
+                    put_str(out, ty);
+                }
+                let rows = columns.first().map(|c| c.len()).unwrap_or(0);
+                put_u32(out, rows as u32);
+                for col in columns {
+                    for v in col {
+                        v.write(out);
+                    }
+                }
+            }
         }
     }
 
@@ -259,6 +307,40 @@ fn read(b: &[u8], i: &mut usize, depth: u32) -> Result<Value, String> {
             let host_id = read_u64(b, i)?;
             let label = read_str(b, i)?.ok_or("a label cannot be absent")?;
             Value::Sentinel { host_id, label }
+        }
+        K_TAGGED => {
+            let t = read(b, i, depth + 1)?;
+            let tag = match t {
+                Value::Symbol(ns, name) => (ns, name),
+                _ => return Err(String::from("a tagged literal's tag must be a symbol")),
+            };
+            let form = read(b, i, depth + 1)?;
+            Value::Tagged { tag, form: Box::new(form) }
+        }
+        K_TABLE => {
+            let ncols = read_u32(b, i)? as usize;
+            let mut schema = Vec::with_capacity(ncols);
+            for _ in 0..ncols {
+                let name = match read(b, i, depth + 1)? {
+                    Value::Keyword(_, n) => n,
+                    _ => return Err(String::from("a column name must be a keyword")),
+                };
+                let ty = match read(b, i, depth + 1)? {
+                    Value::Keyword(_, n) => n,
+                    _ => return Err(String::from("a column type must be a keyword")),
+                };
+                schema.push((name, ty));
+            }
+            let rows = read_u32(b, i)? as usize;
+            let mut columns = Vec::with_capacity(ncols);
+            for _ in 0..ncols {
+                let mut col = Vec::with_capacity(rows);
+                for _ in 0..rows {
+                    col.push(read(b, i, depth + 1)?);
+                }
+                columns.push(col);
+            }
+            Value::Table { schema, columns }
         }
         other => return Err(format!("unknown tag {other} in the encoding")),
     })
@@ -386,6 +468,23 @@ impl std::fmt::Display for Value {
             // granted (`doc/decisions/0025`).
             Value::Port(id) => write!(f, "#port[{id}]"),
             Value::Sentinel { label, .. } => write!(f, "#sentinel[{label}]"),
+            Value::Tagged { tag, form } => {
+                f.write_str("#")?;
+                qualified(f, &tag.0, &tag.1)?;
+                write!(f, " {form}")
+            }
+            // The SCHEMA and the row count, not the rows. A host printing a
+            // million-row table in full is not something anyone reads, and the
+            // readable form is `pr-str`'s job on the guest side.
+            Value::Table { schema, columns } => {
+                let rows = columns.first().map(|c| c.len()).unwrap_or(0);
+                f.write_str("#flint/table {:schema [")?;
+                for (i, (n, t)) in schema.iter().enumerate() {
+                    if i > 0 { f.write_str(" ")? }
+                    write!(f, "[:{n} :{t}]")?;
+                }
+                write!(f, "] :rows {rows}}}")
+            }
         }
     }
 }

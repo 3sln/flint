@@ -49,6 +49,21 @@ pub const K_PORT: u8 = 15;
 /// 0 (`doc/decisions/0022`), which is what makes it recognisable as not the
 /// host's own.
 pub const K_SENTINEL: u8 = 16;
+/// A tagged literal (`doc/decisions/0034`): the tag symbol, then the form.
+///
+/// 17 here and 17 in `image.rs`, because the two SHARE a numbering space. It
+/// was defined for the image and not for the wire, so a tagged literal could be
+/// an image constant and could not cross a port -- which is half of what `0034`
+/// said the type was for.
+pub const K_TAGGED: u8 = 17;
+/// A table (`doc/decisions/0026`), COLUMNAR: the schema, the row count, then
+/// each column's values in full before the next one starts.
+///
+/// Row-major would be a vector of maps with extra steps, and would lose exactly
+/// what the type is for -- the receiver would rebuild a map per row to read one
+/// field. Column-major means a decoder can fill chunk runs directly, and it is
+/// what `0033`'s columnar JSON mirrors at the format layer.
+pub const K_TABLE: u8 = 18;
 
 /// `None` means the namespace is absent, which is not the same as empty.
 const NO_NS: u32 = u32::MAX;
@@ -145,6 +160,60 @@ impl Rt {
             TY_PORT => {
                 out.push(K_PORT);
                 put_u32(out, self.slot(v, crate::conc::PT_ID).as_fixnum() as u32);
+                Ok(())
+            }
+            crate::obj::TY_TAGGED => {
+                out.push(K_TAGGED);
+                let tag = self.slot(v, 0);
+                let form = self.slot(v, 1);
+                self.encode_into(tag, out, depth + 1)?;
+                self.encode_into(form, out, depth + 1)
+            }
+            crate::obj::TY_TABLE => {
+                out.push(K_TABLE);
+                let base = self.mark();
+                let vi = self.push(v);
+                let s = self.slot(self.r(vi), crate::table::TB_SCHEMA);
+                let si = self.push(s);
+                let ncols = self.schema_len(self.r(si));
+                let nrows = self.table_count(self.r(vi));
+                put_u32(out, ncols);
+                for c in 0..ncols {
+                    let names = self.slot(self.r(si), crate::table::SC_NAMES);
+                    let name = self.vec_nth(names, c).unwrap_or(NIL);
+                    let types = self.slot(self.r(si), crate::table::SC_TYPES);
+                    let tp = self.vec_nth(types, c).unwrap_or(NIL);
+                    if let Err(e) = self.encode_into(name, out, depth + 1) {
+                        self.pop_to(base);
+                        return Err(e);
+                    }
+                    if let Err(e) = self.encode_into(tp, out, depth + 1) {
+                        self.pop_to(base);
+                        return Err(e);
+                    }
+                }
+                put_u32(out, nrows);
+                // COLUMN BY COLUMN, each in full. A receiver reading one field
+                // reads one run.
+                for c in 0..ncols {
+                    let col = {
+                        let nm = {
+                            let names = self.slot(self.r(si), crate::table::SC_NAMES);
+                            self.vec_nth(names, c).unwrap_or(NIL)
+                        };
+                        self.table_column(self.r(vi), nm)
+                    };
+                    let ci = self.push(col);
+                    for i in 0..nrows {
+                        let x = self.vec_nth(self.r(ci), i).unwrap_or(NIL);
+                        if let Err(e) = self.encode_into(x, out, depth + 1) {
+                            self.pop_to(base);
+                            return Err(e);
+                        }
+                    }
+                    self.pop_to(ci);
+                }
+                self.pop_to(base);
                 Ok(())
             }
             TY_OPAQUE => {
@@ -333,6 +402,80 @@ impl Rt {
                 let s = r.b.get(r.i..e).ok_or("the encoding ends mid-bytes")?.to_vec();
                 r.i = e;
                 Ok(self.new_bytes(&s))
+            }
+            K_TAGGED => {
+                let tag = self.decode_at(r, live, depth + 1)?;
+                let base = self.mark();
+                let ti = self.push(tag);
+                let form = self.decode_at(r, live, depth + 1)?;
+                let fi = self.push(form);
+                let (tv, fv) = (self.r(ti), self.r(fi));
+                let out = self.new_tagged(tv, fv);
+                self.pop_to(base);
+                Ok(out)
+            }
+            K_TABLE => {
+                let ncols = r.u32()? as usize;
+                let base = self.mark();
+                // The schema pairs, then the columns. Built through the ordinary
+                // constructors, so a table off the wire is checked exactly as
+                // one built in the program is -- a decoder that skipped the
+                // schema check would be a way to make a table that is not
+                // closed.
+                let pairs = self.empty_vec();
+                let pi = self.push(pairs);
+                for _ in 0..ncols {
+                    let name = self.decode_at(r, live, depth + 1)?;
+                    let ni = self.push(name);
+                    let tp = self.decode_at(r, live, depth + 1)?;
+                    let ti2 = self.push(tp);
+                    let pair = {
+                        let e = self.empty_vec();
+                        let ei = self.push(e);
+                        let nv = self.r(ni);
+                        let c1 = self.vec_conj(self.r(ei), nv);
+                        self.set_r(ei, c1);
+                        let tv = self.r(ti2);
+                        let c2 = self.vec_conj(self.r(ei), tv);
+                        self.set_r(ei, c2);
+                        let out = self.r(ei);
+                        self.pop_to(ei);
+                        out
+                    };
+                    let nv = self.vec_conj(self.r(pi), pair);
+                    self.set_r(pi, nv);
+                    self.pop_to(ni);
+                }
+                let nrows = r.u32()? as usize;
+                let cols = self.empty_vec();
+                let ci = self.push(cols);
+                for _ in 0..ncols {
+                    let col = self.empty_vec();
+                    let coli = self.push(col);
+                    for _ in 0..nrows {
+                        let x = self.decode_at(r, live, depth + 1)?;
+                        let nv = self.vec_conj(self.r(coli), x);
+                        self.set_r(coli, nv);
+                    }
+                    let cv = self.r(coli);
+                    let nv = self.vec_conj(self.r(ci), cv);
+                    self.set_r(ci, nv);
+                    self.pop_to(coli);
+                }
+                let pv = self.r(pi);
+                let schema = self.new_schema(pv);
+                if !self.thrown.is_nil() {
+                    self.pop_to(base);
+                    return Err(String::from("a table arrived with a schema it cannot have"));
+                }
+                let si = self.push(schema);
+                let (sv, cv) = (self.r(si), self.r(ci));
+                let out = self.table_from_columns(sv, cv, nrows as u32);
+                self.pop_to(base);
+                if !self.thrown.is_nil() {
+                    return Err(String::from("a table arrived that its own schema refuses"));
+                }
+                Ok(out)
             }
             K_VECTOR | K_LIST | K_SET => {
                 let n = r.u32()? as usize;
@@ -538,5 +681,114 @@ mod tests {
         assert!(rt.decode(&[K_INT, 1, 2]).is_err(), "a truncated int decoded");
         assert!(rt.decode(&[]).is_err(), "an empty encoding decoded");
         assert!(rt.decode(&[200]).is_err(), "an unknown tag decoded");
+    }
+
+    /// A table crosses as a TABLE, columnar, and comes back one.
+    ///
+    /// The wire codec had no arm for a table or for a tagged literal, so both
+    /// of the types `0026` and `0034` added could be image constants and could
+    /// not cross a port -- which is half of what each was for.
+    #[test]
+    fn a_table_crosses_columnar_and_returns_a_table() {
+        let mut rt = Rt::new();
+        // Built by conj, with everything on the ROOT STACK: a `Vec<Value>` is
+        // not a root (`doc/decisions/0031`) and these allocate.
+        let vec2 = |rt: &mut Rt, a: Value, b: Value| {
+            let base = rt.mark();
+            let ai = rt.push(a);
+            let bi = rt.push(b);
+            let e = rt.empty_vec();
+            let ei = rt.push(e);
+            let av = rt.r(ai);
+            let v1 = rt.vec_conj(rt.r(ei), av);
+            rt.set_r(ei, v1);
+            let bv = rt.r(bi);
+            let v2 = rt.vec_conj(rt.r(ei), bv);
+            rt.set_r(ei, v2);
+            let out = rt.r(ei);
+            rt.pop_to(base);
+            out
+        };
+        let pairs = {
+            let (id, int) = (rt.keyword(None, "id"), rt.keyword(None, "int"));
+            let p1 = vec2(&mut rt, id, int);
+            let pi = rt.push(p1);
+            let (nm, st) = (rt.keyword(None, "name"), rt.keyword(None, "string"));
+            let p2 = vec2(&mut rt, nm, st);
+            let a = rt.r(pi);
+            let out = vec2(&mut rt, a, p2);
+            rt.pop_to(pi);
+            out
+        };
+        let schema = rt.new_schema(pairs);
+        let row = |rt: &mut Rt, n: i64, s: &str| {
+            let base = rt.mark();
+            let m = rt.empty_map();
+            let mi = rt.push(m);
+            let idk = rt.keyword(None, "id");
+            let m1 = rt.map_assoc(rt.r(mi), idk, Value::fixnum(n));
+            rt.set_r(mi, m1);
+            let nmk = rt.keyword(None, "name");
+            let sv = rt.string(s);
+            let svi = rt.push(sv);
+            let (mv, v) = (rt.r(mi), rt.r(svi));
+            let m2 = rt.map_assoc(mv, nmk, v);
+            rt.set_r(mi, m2);
+            let out = rt.r(mi);
+            rt.pop_to(base);
+            out
+        };
+        let si = rt.push(schema);
+        let rows = {
+            let m1 = row(&mut rt, 1, "a");
+            let mi = rt.push(m1);
+            let m2 = row(&mut rt, 2, "b");
+            let a = rt.r(mi);
+            let out = vec2(&mut rt, a, m2);
+            rt.pop_to(mi);
+            out
+        };
+        let schema = rt.r(si);
+        let t = rt.new_table(schema, rows);
+        assert!(rt.is_table(t), "built a table");
+        let mut out = alloc::vec::Vec::new();
+        rt.encode_into(t, &mut out, 0).expect("a table encodes");
+        assert_eq!(out[0], K_TABLE, "and it encodes AS a table, not as a vector of maps");
+        let back = rt.decode(&out).expect("and decodes");
+        assert!(rt.is_table(back), "and comes back a TABLE, not a vector of maps");
+        assert_eq!(rt.table_count(back), 2);
+        let nm = rt.keyword(None, "name");
+        let r0 = rt.table_ref(back, 0);
+        let v0 = rt.ref_get(r0, nm, NIL);
+        let want = rt.string("a");
+        assert!(rt.eq(v0, want), "and its values survived");
+        assert!(rt.eq(t, back), "and it is EQUAL to what was sent");
+    }
+
+    /// A tagged literal crosses too, which is the point of it being a type
+    /// rather than a two-key map (`doc/decisions/0034`).
+    #[test]
+    fn a_tagged_literal_crosses_as_itself() {
+        let mut rt = Rt::new();
+        let tag = rt.symbol(Some("my.ns"), "thing");
+        let form = {
+            let base = rt.mark();
+            let e = rt.empty_vec();
+            let ei = rt.push(e);
+            let v1 = rt.vec_conj(rt.r(ei), Value::fixnum(1));
+            rt.set_r(ei, v1);
+            let v2 = rt.vec_conj(rt.r(ei), Value::fixnum(2));
+            rt.set_r(ei, v2);
+            let out = rt.r(ei);
+            rt.pop_to(base);
+            out
+        };
+        let t = rt.new_tagged(tag, form);
+        let mut out = alloc::vec::Vec::new();
+        rt.encode_into(t, &mut out, 0).expect("encodes");
+        assert_eq!(out[0], K_TAGGED);
+        let back = rt.decode(&out).expect("decodes");
+        assert!(rt.is_tagged(back), "comes back TAGGED, not as a map");
+        assert!(rt.eq(t, back));
     }
 }

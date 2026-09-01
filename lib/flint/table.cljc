@@ -91,7 +91,12 @@
 ;; requiring the decoder is what brings the printer with it.
 (extend-protocol clojure.core/Printable
   ;; As DATA: the form that reads back.
-  :table (print-data [t] (clojure.core/str "#flint/table " (pr-str (vec (rows t)))))
+  :table (print-data [t]
+                     (clojure.core/str "#flint/table {:schema "
+                                       (pr-str (mapv (fn [i] [(nth (columns (table-schema t)) i)
+                                                              (nth (types (table-schema t)) i)])
+                                                     (range (count (columns (table-schema t))))))
+                                       " :rows " (pr-str (vec (rows t))) "}"))
   ;; FOR A PERSON: the rows without their quoting, and the row COUNT, because a
   ;; hundred-thousand-row table printed in full is not something a person reads.
   ;; This is the difference the two hooks exist for -- with one method and a
@@ -207,3 +212,17 @@
                        [k (nth (types s) i)]))
                    ks)]
     (migrate t (schema want))))
+
+
+(defn read-table
+  "The reader for `#flint/table`, bound in every project (`doc/decisions/0035`).
+
+  It takes what the printer wrote -- `{:schema [[:name :type] ...] :rows [...]}`
+  -- and not a bare vector of rows. `0026` originally said the form was
+  `#flint/table [{:a 1}]`, and that CANNOT read back: the types are half of a
+  table's identity, an `:int` column and an `:any` column holding the same
+  values are different tables, and nothing in a row says which it was. A form
+  that loses that is a record of the value rather than the value, which is the
+  same overclaim this file already had to withdraw once."
+  [m]
+  (table (schema (:schema m)) (:rows m)))
