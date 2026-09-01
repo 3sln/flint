@@ -161,20 +161,6 @@ builtin!(flint_b_open, b_open, |rt, a, n| {
     rt.port_open(nm, args)
 });
 
-/// The port's format, as the guest wants to remember it. Metadata, not
-/// behaviour: the runtime stores it and answers `port-format` with it and does
-/// nothing else, which is why `open` no longer takes it -- what the HOST is
-/// told is whatever the caller forwarded.
-builtin!(flint_b_set_port_format, b_set_port_format, |rt, a, n| {
-    let _ = n;
-    let (p, f) = (arg(rt, a, 0), arg(rt, a, 1));
-    if !rt.is_port(p) {
-        return rt.throw_str("ClassCastException", "set-port-format wants a port");
-    }
-    rt.set(p, conc::PT_FORMAT, f);
-    f
-});
-
 builtin!(flint_b_port_send, b_port_send, |rt, a, n| {
     let _ = n;
     let (p, v) = (arg(rt, a, 0), arg(rt, a, 1));
@@ -225,25 +211,16 @@ builtin!(flint_b_port_label, b_port_label, |rt, a, n| {
     rt.slot(p, conc::PT_LABEL)
 });
 
-builtin!(flint_b_port_host_p, b_port_host_p, |rt, a, n| {
+builtin!(flint_b_port_bridge_p, b_port_bridge_p, |rt, a, n| {
     let _ = n;
     let p = arg(rt, a, 0);
     if !rt.is_port(p) {
-        return rt.throw_str("ClassCastException", "port-host? wants a port");
+        return rt.throw_str("ClassCastException", "port-bridge? wants a port");
     }
-    // Any port whose messages CROSS A HEAP, which is what the name is really
-    // asking: a host port and a global port both carry bytes and both need a
-    // codec, and `flint.port/send` branches on exactly that.
+    // Does this port carry BYTES across a boundary? A bridge does and a
+    // channel does not, and that is the only distinction a guest can see --
+    // it cannot see the encoding, because the runtime owns it.
     if conc::crosses_a_heap(rt.slot(p, conc::PT_KIND).as_fixnum()) { TRUE } else { FALSE }
-});
-
-builtin!(flint_b_port_format, b_port_format, |rt, a, n| {
-    let _ = n;
-    let p = arg(rt, a, 0);
-    if !rt.is_port(p) {
-        return rt.throw_str("ClassCastException", "port-format wants a port");
-    }
-    rt.slot(p, conc::PT_FORMAT)
 });
 
 builtin!(flint_b_port_id, b_port_id, |rt, a, n| {
@@ -253,36 +230,6 @@ builtin!(flint_b_port_id, b_port_id, |rt, a, n| {
         return rt.throw_str("ClassCastException", "port-id wants a port");
     }
     rt.slot(p, conc::PT_ID)
-});
-
-builtin!(flint_b_set_port_binary, b_set_port_binary, |rt, a, n| {
-    let _ = n;
-    let (p, v) = (arg(rt, a, 0), arg(rt, a, 1));
-    if !rt.is_port(p) {
-        return rt.throw_str("ClassCastException", "set-port-binary wants a port");
-    }
-    let on = !(v.is_nil() || v.bits() == FALSE.bits());
-    rt.set(p, conc::PT_BINARY, Value::fixnum(on as i64));
-    v
-});
-
-builtin!(flint_b_port_opts, b_port_opts, |rt, a, n| {
-    let _ = n;
-    let p = arg(rt, a, 0);
-    if !rt.is_port(p) {
-        return rt.throw_str("ClassCastException", "port-opts wants a port");
-    }
-    rt.slot(p, conc::PT_OPTS)
-});
-
-builtin!(flint_b_set_port_opts, b_set_port_opts, |rt, a, n| {
-    let _ = n;
-    let (p, o) = (arg(rt, a, 0), arg(rt, a, 1));
-    if !rt.is_port(p) {
-        return rt.throw_str("ClassCastException", "set-port-opts wants a port");
-    }
-    rt.set(p, conc::PT_OPTS, o);
-    o
 });
 
 /// Names and symbols together, so the manifest cannot drift from the code.
@@ -318,13 +265,8 @@ pub const HOST_CATALOGUE: &[(&str, flint_rt::vm::NativeFn)] = &[
     ("flint/port?", flint_b_port_p),
     ("flint/port-state", flint_b_port_state),
     ("flint/port-label", flint_b_port_label),
-    ("flint/port-host?", flint_b_port_host_p),
+    ("flint/port-bridge?", flint_b_port_bridge_p),
     ("flint/port-id", flint_b_port_id),
-    ("flint/port-format", flint_b_port_format),
-    ("flint/set-port-format", flint_b_set_port_format),
-    ("flint/port-opts", flint_b_port_opts),
-    ("flint/set-port-opts", flint_b_set_port_opts),
-    ("flint/set-port-binary", flint_b_set_port_binary),
 ];
 
 pub const CATALOGUE: &[(&str, &str)] = &[
@@ -346,13 +288,8 @@ pub const CATALOGUE: &[(&str, &str)] = &[
     ("flint/port?", "flint_b_port_p"),
     ("flint/port-state", "flint_b_port_state"),
     ("flint/port-label", "flint_b_port_label"),
-    ("flint/port-host?", "flint_b_port_host_p"),
+    ("flint/port-bridge?", "flint_b_port_bridge_p"),
     ("flint/port-id", "flint_b_port_id"),
-    ("flint/port-format", "flint_b_port_format"),
-    ("flint/set-port-format", "flint_b_set_port_format"),
-    ("flint/port-opts", "flint_b_port_opts"),
-    ("flint/set-port-opts", "flint_b_set_port_opts"),
-    ("flint/set-port-binary", "flint_b_set_port_binary"),
 ];
 
 // --- the host's side of a port ---------------------------------------------
@@ -413,9 +350,8 @@ mod host {
         rt().host_continue(token as i64, ok != 0) as u32
     }
 
-    /// Install a GLOBAL port the host owns (`doc/decisions/0027`), and say
-    /// whether it worked. The label and format are read out of the inbound
-    /// buffer as `label\0format`, so this needs no second buffer.
+    /// Install a BRIDGE the host owns (`doc/decisions/0027`), and say whether
+    /// it worked. The label is read out of the inbound buffer.
     ///
     /// `system` non-zero makes it the sandbox's SYSTEM port: the one it can ask
     /// the host for things through. A sandbox given none runs logic and can ask
@@ -425,6 +361,11 @@ mod host {
     /// mints an endpoint and offers it up, and an id means the same thing in
     /// every sandbox that holds it -- which is what lets a handle be passed
     /// from one to another at all.
+    ///
+    /// **Installing a port this sandbox already holds takes no second
+    /// reference.** The handle is interned by host id, so the same object comes
+    /// back and no `EV_RETAIN` is pushed. A host may therefore install freely
+    /// without tracking what it has already installed.
     #[no_mangle]
     pub extern "C" fn flint_install_port(id: u32, len: u32, system: u32) -> u32 {
         let rt = rt();
@@ -432,22 +373,29 @@ mod host {
             let b = &*core::ptr::addr_of!(IN);
             alloc::string::String::from_utf8_lossy(&b[..len as usize]).into_owned()
         };
-        let mut parts = text.splitn(2, '\0');
-        let label = parts.next().unwrap_or("");
-        let format = parts.next().unwrap_or("");
         let base = rt.mark();
-        let l = rt.string(label);
+        let l = rt.string(&text);
         let li = rt.push(l);
-        let f = if format.is_empty() { flint_rt::value::NIL } else { rt.string(format) };
-        let fi = rt.push(f);
-        let (l, f) = (rt.r(li), rt.r(fi));
+        let l = rt.r(li);
         let p = if system != 0 {
-            rt.install_system_port(id as i64, l, f)
+            rt.install_system_port(id as i64, l)
         } else {
-            rt.install_global_port(id as i64, l, f)
+            rt.install_bridge_port(id as i64, l)
         };
         rt.pop_to(base);
         (!p.is_nil()) as u32
+    }
+
+    /// Grant an `open`: hand the waiting thread a handle on the host's port
+    /// `port` (`doc/decisions/0027`).
+    ///
+    /// This is the half `flint_continue` cannot do. A grant has to NAME a port,
+    /// because there is no port until the host says which one -- the sandbox no
+    /// longer manufactures a pair and keeps one end. `flint_continue(token, 1)`
+    /// is therefore refused rather than guessed at, and returns 0.
+    #[no_mangle]
+    pub extern "C" fn flint_grant(token: u32, port: u32) -> u32 {
+        rt().host_grant(token as i64, port as i64) as u32
     }
 
     /// A buffer to write an inbound message into.

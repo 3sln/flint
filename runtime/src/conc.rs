@@ -79,21 +79,32 @@ pub const PARK_YIELD: Value = Value((crate::value::TAG_FIXNUM << 48) | 0);
 
 // --- port ------------------------------------------------------------------
 //
-// A port is one END. `channel` makes two of them; `open` makes two of them, one
-// of which the host holds. The two ends have **separate lifetimes**
-// (`doc/decisions/0006`):
+// A port is one END, and there are exactly two kinds of them
+// (`doc/decisions/0027`).
 //
-// * a **host end** is a strong root -- it must be, or every handle the host is
-//   holding is a use-after-free waiting for a collection;
-// * a **flint end** is ordinary reachable memory, and when the collector finds
-//   it unreachable that is semantically identical to the script having called
-//   `close`. The scheduler notices and raises `:closed` on its behalf.
+// * A **channel** end joins two green threads inside one sandbox. Both ends are
+//   in this heap, so a message is a pointer move: nothing is encoded, nothing
+//   is copied, and an identity crossing one still means what it meant.
+// * A **bridge** end is a HANDLE on a port the host owns. The id in it is the
+//   HOST's, so it means the same thing in every sandbox, and the messages are
+//   encoded bytes that live outside both heaps. No collector ever holds a
+//   pointer it does not own.
 //
-// Which is why the two ends do **not** point at each other with `Value`s: each
-// holds the other's *id*, and ids are resolved through a weak table
-// (`INTERN_PORT`). A strong peer link would keep a dropped end alive for ever,
-// and would also defeat the liveness check that wakes a thread parked on a port
-// whose peer has gone.
+// There is no third kind, and in particular there is no "host port". A sandbox
+// used to manufacture a PAIR of ends on `open` -- one for itself, one standing
+// in for the host -- which made the sandbox the author of its own authority and
+// gave a port an id that meant nothing anywhere else. A bridge is handed in, or
+// it is asked for on the system port and handed back; it is never made here.
+//
+// The two ends of a CHANNEL do not point at each other with `Value`s: each
+// holds the other's *id*, resolved through the weak table `INTERN_PORT`. A
+// strong peer link would keep a dropped end alive for ever and would defeat the
+// liveness check that wakes a thread parked on a port whose peer has gone.
+//
+// That same weak table is what makes a bridge handle **interned**: one handle
+// object per host id per sandbox. A port arriving in two different messages is
+// one object, so `=` says yes and a map keyed by a port hits -- and the host is
+// told exactly once that this sandbox holds it, and exactly once when it stops.
 
 pub const PT_ID: u32 = 0;
 pub const PT_STATE: u32 = 1;
@@ -127,25 +138,13 @@ pub const PT_BYTES: u32 = 5;
 pub const PT_PEER: u32 = 6;
 pub const PT_LABEL: u32 = 7;
 pub const PT_KIND: u32 = 8;
-/// Where this end sits in `roots.shared.singletons` when it is a host end, so closing
-/// can let go of the strong root. -1 otherwise.
-pub const PT_ROOT: u32 = 9;
-/// Format the creating side asked for, as a keyword; nil for a channel.
-pub const PT_FORMAT: u32 = 10;
-/// Whatever the cljc layer wants to remember about this port -- codec options,
-/// mostly. Here rather than in a side table so that it dies with the port.
-pub const PT_OPTS: u32 = 11;
-/// 1 when this port's bytes are not text. A host port carries **bytes**; most
-/// formats happen to be UTF-8, but a binary one (Transit-msgpack) is not, so
-/// its payloads travel as vectors of 0..255 rather than as strings.
-pub const PT_BINARY: u32 = 12;
 /// Write cursor. Monotonic, never wrapped, as `PT_READ`.
-pub const PT_WRITE: u32 = 13;
+pub const PT_WRITE: u32 = 9;
 /// Ring capacity, in messages. A channel's is what `channel` was asked for; a
 /// bridge end's is `RING_MESSAGES`, because its own bound (`PT_CAP`) is in
 /// BYTES and the two are different questions.
-pub const PT_RING: u32 = 14;
-pub const PT_LEN: u32 = 15;
+pub const PT_RING: u32 = 10;
+pub const PT_LEN: u32 = 11;
 
 /// How many messages a bridge end's ring holds.
 ///
@@ -170,37 +169,35 @@ pub const RING_MESSAGES: i64 = 64;
 /// A CHANNEL encodes nothing: both ends are in this heap, so an identity
 /// crossing one is a pointer move and anything may go.
 pub const CARRY_LOCAL: u8 = 0;
-/// A host or global port whose encoding the RUNTIME owns (`:format :flint`).
-/// Identities cross as `K_PORT` / `K_SENTINEL`, and only what means something
-/// on the far side may go -- see the table on `TY_PORT`.
+/// A BRIDGE, whose encoding the RUNTIME owns. Identities cross as `K_PORT` /
+/// `K_SENTINEL`, and only what means something on the far side may go -- see
+/// the table on `TY_PORT`.
+///
+/// There used to be a third class, for a port whose codec ran in the SANDBOX.
+/// There is no such port any more: encoding happens at the bridge boundary, in
+/// the runtime, and a guest is never handed an encoder. The rule that class
+/// existed to enforce -- that no identity may cross a codec the guest drives --
+/// is now enforced by the guest not having one.
 pub const CARRY_CROSSING: u8 = 1;
-/// A host port whose codec runs in the SANDBOX (`0006` §5, which `0025`
-/// replaces). No identity may cross one, because a guest-side decoder is an
-/// encoder read backwards.
-pub const CARRY_SANDBOXED: u8 = 2;
 
 /// One end of a `channel` pair: no host involvement at all.
 pub const K_CHANNEL: i64 = 0;
-/// A GLOBAL port (`doc/decisions/0027`): the host owns it, this is a handle.
+/// A handle on a port the HOST owns (`doc/decisions/0027`).
 ///
-/// The id is the HOST's, not this sandbox's. Everything queued on it lives in
+/// The id is the host's, not this sandbox's. Everything queued on it lives in
 /// host memory as encoded bytes, so no collector ever holds a pointer it does
 /// not own, and nothing here is a cross-heap reference.
-pub const K_GLOBAL: i64 = 3;
+pub const K_BRIDGE: i64 = 1;
 
 /// Does this kind carry BYTES across a boundary, rather than values inside one
-/// heap? True for a host port and for a global port, and the two paths are the
-/// same path -- a host port is just a global port whose far end is the host.
+/// heap?
+///
 /// One predicate rather than a widening `==` at each of six sites, because the
 /// last time this was a set of scattered comparisons one of them was missed.
 #[inline]
 pub fn crosses_a_heap(kind: i64) -> bool {
-    kind == K_FLINT || kind == K_GLOBAL
+    kind == K_BRIDGE
 }
-/// The end a script holds after `open`. Ordinary memory.
-pub const K_FLINT: i64 = 1;
-/// The end the host holds. A strong root until the host closes it.
-pub const K_HOST: i64 = 2;
 
 pub const P_PENDING: i64 = 0;
 pub const P_OPEN: i64 = 1;
@@ -218,8 +215,8 @@ pub const P_ORPHANED: i64 = 5;
 
 /// Messages, for a channel end.
 pub const DEFAULT_CAP: i64 = 16;
-/// Bytes, for a host end. Back-pressure exists to bound memory.
-pub const DEFAULT_HOST_CAP: i64 = 1 << 20;
+/// Bytes, for a bridge end. Back-pressure exists to bound memory.
+pub const DEFAULT_BRIDGE_CAP: i64 = 1 << 20;
 
 // --- waiters ---------------------------------------------------------------
 //
@@ -266,12 +263,27 @@ pub const SC_WFREE: u32 = 8;
 /// cannot ask the host for anything, which is the honest default for confined
 /// code rather than a degraded mode.
 pub const SC_SYSTEM: u32 = 9;
-pub const SC_LEN: u32 = 10;
+/// Host ids of every BRIDGE this sandbox holds a handle for -- ids, not
+/// references, so the list pins nothing (`doc/decisions/0027`).
+///
+/// This is the walk that turns a collection into a release. The handle objects
+/// live in the weak `INTERN_PORT` table; after a collection an id whose lookup
+/// misses is one whose handle was not forwarded, and that is exactly this
+/// sandbox letting go. Walking a list of ports held is proportional to a
+/// handful, not to the heap.
+pub const SC_BRIDGES: u32 = 10;
+pub const SC_LEN: u32 = 11;
 
 /// The one outbound queue. One export, one call per pump, one ordering rule.
 pub const EV_OPEN: i64 = 1;
 pub const EV_MESSAGE: i64 = 2;
 pub const EV_CLOSED: i64 = 3;
+/// This sandbox now holds a reference to the host's port `a`. Pushed exactly
+/// once per port per sandbox, on the miss that mints the handle.
+pub const EV_RETAIN: i64 = 4;
+/// This sandbox no longer holds the host's port `a` -- the collector found the
+/// handle unreachable, or the script closed it. Exactly one per `EV_RETAIN`.
+pub const EV_RELEASE: i64 = 5;
 
 /// Instructions a thread runs before the scheduler takes it off. Fixed, because
 /// a deterministic answer is most of what this project is for: the same program
@@ -327,6 +339,8 @@ impl Rt {
         self.set(self.r(si), SC_PORTS, pv);
         let pairs = self.empty_vec();
         self.set(self.r(si), SC_PAIRS, pairs);
+        let brs = self.empty_vec();
+        self.set(self.r(si), SC_BRIDGES, brs);
         let ws = self.empty_vec();
         self.set(self.r(si), SC_WAITERS, ws);
         self.set(self.r(si), SC_WFREE, Value::fixnum(-1));
@@ -681,31 +695,12 @@ impl Rt {
         self.pop_to(base);
     }
 
-    /// A host end must outlive every flint reference to it, so it goes in
-    /// `singletons`, which the collector already traces. Returns the slot.
-    fn root_port(&mut self, p: Value) -> i64 {
-        for i in crate::rt::SING_COUNT..self.roots.shared.singletons.len() {
-            if self.roots.shared.singletons[i].is_nil() {
-                self.roots.shared.singletons[i] = p;
-                return i as i64;
-            }
-        }
-        self.roots.shared.singletons.push(p);
-        (self.roots.shared.singletons.len() - 1) as i64
-    }
-
-    fn unroot_port(&mut self, p: Value) {
-        let slot = fx(self.slot(p, PT_ROOT));
-        if slot >= 0 && (slot as usize) < self.roots.shared.singletons.len() {
-            self.roots.shared.singletons[slot as usize] = NIL;
-            self.set(p, PT_ROOT, Value::fixnum(-1));
-        }
-    }
-
-    fn new_port(&mut self, cap: i64, label: Value, kind: i64, state: i64, format: Value) -> Value {
+    /// A port object. `id` is `-1` to mint one from this sandbox's counter,
+    /// which is what a channel end does; a bridge handle passes the HOST's id
+    /// instead, because that is the id that means the same thing on both sides.
+    fn new_port(&mut self, cap: i64, label: Value, kind: i64, state: i64, id: i64) -> Value {
         let base = self.mark();
         let li = self.push(label);
-        let fi = self.push(format);
         let p = self.new_obj(TY_PORT, PT_LEN);
         if p.is_nil() {
             self.pop_to(base);
@@ -714,109 +709,108 @@ impl Rt {
         let pi = self.push(p);
         let s = self.sched();
         let si = self.push(s);
-        let id = fx(self.slot(self.r(si), SC_NEXTID));
-        self.set(self.r(si), SC_NEXTID, Value::fixnum(id + 1));
+        let id = if id >= 0 {
+            id
+        } else {
+            let n = fx(self.slot(self.r(si), SC_NEXTID));
+            self.set(self.r(si), SC_NEXTID, Value::fixnum(n + 1));
+            n
+        };
         self.set(self.r(pi), PT_ID, Value::fixnum(id));
         self.set(self.r(pi), PT_STATE, Value::fixnum(state));
         self.set(self.r(pi), PT_CAP, Value::fixnum(cap));
         // The ring, allocated ONCE and never again: a send must not allocate,
         // because allocation is where the old inbox lost messages.
         //
-        // NOT ON A `K_HOST` END, which never has one message put in it. That
-        // end is bookkeeping -- an id the host knows, a byte counter, a peer
-        // link, a state -- and the two directions both go elsewhere: a guest
-        // sending across a bridge pushes an EVENT, and `host_deliver` enqueues
-        // into the guest's end, never this one. Allocating a ring here was half
-        // the memory of every `open` doing nothing at all.
-        let ring = match kind {
-            K_CHANNEL => cap.max(1),
-            K_HOST => 0,
-            _ => RING_MESSAGES,
-        };
+        // A channel's ring is what `channel` was asked for; a bridge's is
+        // `RING_MESSAGES`, because its own bound (`PT_CAP`) is in BYTES and the
+        // two are different questions.
+        let ring = if kind == K_CHANNEL { cap.max(1) } else { RING_MESSAGES };
         self.set(self.r(pi), PT_RING, Value::fixnum(ring));
-        if ring == 0 {
-            self.set(self.r(pi), PT_INBOX, NIL);
-            self.set(self.r(pi), PT_READ, Value::fixnum(0));
-            self.set(self.r(pi), PT_WRITE, Value::fixnum(0));
-        } else {
-            let slots = self.new_obj(crate::obj::TY_NODE, ring as u32);
-            let sli = self.push(slots);
-            for i in 0..ring as u32 {
-                self.set(self.r(sli), i, crate::value::EMPTY);
-            }
-            let sv = self.r(sli);
-            self.set(self.r(pi), PT_INBOX, sv);
-            self.set(self.r(pi), PT_READ, Value::fixnum(0));
-            self.set(self.r(pi), PT_WRITE, Value::fixnum(0));
+        let slots = self.new_obj(crate::obj::TY_NODE, ring as u32);
+        let sli = self.push(slots);
+        for i in 0..ring as u32 {
+            self.set(self.r(sli), i, crate::value::EMPTY);
         }
+        let sv = self.r(sli);
+        self.set(self.r(pi), PT_INBOX, sv);
+        self.set(self.r(pi), PT_READ, Value::fixnum(0));
+        self.set(self.r(pi), PT_WRITE, Value::fixnum(0));
         self.set(self.r(pi), PT_BYTES, Value::fixnum(0));
         self.set(self.r(pi), PT_PEER, Value::fixnum(-1));
         let l = self.r(li);
         self.set(self.r(pi), PT_LABEL, l);
         self.set(self.r(pi), PT_KIND, Value::fixnum(kind));
-        self.set(self.r(pi), PT_ROOT, Value::fixnum(-1));
-        let f = self.r(fi);
-        self.set(self.r(pi), PT_FORMAT, f);
-        let o = self.empty_map();
-        self.set(self.r(pi), PT_OPTS, o);
-        self.set(self.r(pi), PT_BINARY, Value::fixnum(0));
         let pv = self.r(pi);
         self.register_port(pv);
-        if kind == K_HOST {
-            let pv = self.r(pi);
-            let slot = self.root_port(pv);
-            self.set(self.r(pi), PT_ROOT, Value::fixnum(slot));
-        }
         let out = self.r(pi);
         self.pop_to(base);
         out
     }
 
-    /// Install a GLOBAL port the host owns, and hand back the handle
-    /// (`doc/decisions/0027`).
+    /// The handle in THIS sandbox for the host's port `host_id`, minting one if
+    /// this sandbox does not hold it yet (`doc/decisions/0027`).
     ///
-    /// The inversion this file exists to make: a sandbox does not manufacture
-    /// an endpoint and offer it up, it is GIVEN one. `host_id` is the host's,
-    /// not this sandbox's -- it means the same thing on both sides, which is
-    /// what makes a handle sendable between two sandboxes at all.
+    /// **This is the reference count, and it is a count of HOLDERS.** The weak
+    /// intern table is what makes that possible: one handle object per host id
+    /// per sandbox, so a port that arrives in two messages -- or is handed in
+    /// twice, or arrives having already been handed in -- is the same object
+    /// both times. `=` says yes, a map keyed by it hits, and the host is told
+    /// exactly once that this sandbox took a reference.
     ///
-    /// The object in this heap carries the id and nothing else that crosses:
-    /// no pointer into host memory, no pointer out of it. The collector traces
-    /// and moves it like any other object, with no special case.
-    pub fn install_global_port(&mut self, host_id: i64, label: Value, format: Value) -> Value {
+    /// `EV_RETAIN` goes out only on a MISS. The alternative, counting arrivals,
+    /// would make the number mean "how many references" rather than "how many
+    /// holders", which is not a number anyone can act on: the host wants to know
+    /// when it may let the port go, and that is when the last holder drops it.
+    /// The matching `EV_RELEASE` is pushed by `reap_ports` when the collector
+    /// finds the handle unreachable.
+    ///
+    /// The object in this heap carries the id and nothing else that crosses: no
+    /// pointer into host memory, no pointer out of it. The collector traces and
+    /// moves it like any other object, with no special case -- and it is NOT
+    /// rooted, because a handle nothing refers to is precisely what a release
+    /// is for. The system port is the exception, and it is rooted by being in
+    /// `SC_SYSTEM` rather than by anything here.
+    pub fn install_bridge_port(&mut self, host_id: i64, label: Value) -> Value {
         self.ensure_sched();
+        if host_id < 0 {
+            return NIL;
+        }
+        // Already held: hand back the SAME object and say nothing to the host.
+        let existing = self.port_by_id(host_id);
+        if !existing.is_nil() && fx(self.slot(existing, PT_KIND)) == K_BRIDGE {
+            return existing;
+        }
         let base = self.mark();
         let li = self.push(label);
-        let fi = self.push(format);
-        let (l, f) = (self.r(li), self.r(fi));
-        let p = self.new_port(DEFAULT_HOST_CAP, l, K_GLOBAL, P_OPEN, f);
+        let l = self.r(li);
+        let p = self.new_port(DEFAULT_BRIDGE_CAP, l, K_BRIDGE, P_OPEN, host_id);
         if p.is_nil() {
             self.pop_to(base);
             return NIL;
         }
         let pi = self.push(p);
-        // The HOST's id replaces the one `new_port` minted from this sandbox's
-        // counter. A sandbox-local id would mean something different in every
-        // other sandbox, which is the coupling `0027` removes.
-        self.set(self.r(pi), PT_ID, Value::fixnum(host_id));
-        // Rooted for as long as the host says it exists: the host holds the
-        // other end, so this one cannot be reclaimed just because the guest
-        // dropped its last reference. `0027`'s weak-table reclamation is what
-        // replaces this, and is not built yet.
-        let pv = self.r(pi);
-        let slot = self.root_port(pv);
-        self.set(self.r(pi), PT_ROOT, Value::fixnum(slot));
-        let pv = self.r(pi);
-        self.register_port(pv);
+        // Recorded as HELD, which is what `reap_ports` walks to notice the drop.
+        let sc = self.sched();
+        let sci = self.push(sc);
+        let brs = self.slot(self.r(sci), SC_BRIDGES);
+        let bi = self.push(brs);
+        let nb = self.vec_conj(self.r(bi), Value::fixnum(host_id));
+        self.set(self.r(sci), SC_BRIDGES, nb);
+        // One increment, now that the handle exists and is interned.
+        self.push_event(EV_RETAIN, host_id, 0, NIL);
         let out = self.r(pi);
         self.pop_to(base);
         out
     }
 
-    /// Install the system port. The one a sandbox is given at construction, if
-    /// it is given one at all.
-    pub fn install_system_port(&mut self, host_id: i64, label: Value, format: Value) -> Value {
-        let p = self.install_global_port(host_id, label, format);
+    /// Install the system port: the bridge a sandbox is DRIVEN over.
+    ///
+    /// A sandbox that is given one can ask for more ports on it; a sandbox that
+    /// is not has no way to reach anything outside itself, which is the honest
+    /// meaning of "no capabilities" and is the default.
+    pub fn install_system_port(&mut self, host_id: i64, label: Value) -> Value {
+        let p = self.install_bridge_port(host_id, label);
         if p.is_nil() {
             return NIL;
         }
@@ -880,10 +874,10 @@ impl Rt {
         let base = self.mark();
         let li = self.push(label);
         let l = self.r(li);
-        let a = self.new_port(cap, l, K_CHANNEL, P_OPEN, NIL);
+        let a = self.new_port(cap, l, K_CHANNEL, P_OPEN, -1);
         let ai = self.push(a);
         let l = self.r(li);
-        let b = self.new_port(cap, l, K_CHANNEL, P_OPEN, NIL);
+        let b = self.new_port(cap, l, K_CHANNEL, P_OPEN, -1);
         let bi = self.push(b);
         let (av, bv) = (self.r(ai), self.r(bi));
         self.link_peers(av, bv);
@@ -993,7 +987,6 @@ impl Rt {
     /// and who claimed it never mattered.
     fn port_enqueue(&mut self, p: Value, v: Value) -> bool {
         let ring = fx(self.slot(p, PT_RING)) as u64;
-        // A `K_HOST` end has no ring and nothing ever enqueues into one.
         if ring == 0 {
             return false;
         }
@@ -1244,7 +1237,7 @@ impl Rt {
     /// `Ok` if `v` is data. Functions are refused **by name**, because "cannot
     /// send that" sends somebody hunting through a nested structure.
     pub fn check_sendable(&mut self, v: Value) -> Result<(), alloc::string::String> {
-        self.check_sendable_at(v, 0, CARRY_SANDBOXED)
+        self.check_sendable_at(v, 0, CARRY_CROSSING)
     }
 
     /// The same, for a carrier that may convey IDENTITIES.
@@ -1370,13 +1363,6 @@ impl Rt {
             // reason: `doc/decisions/0006` says an endpoint is not transferable
             // and cannot be delegated at run time. That is a design decision
             // about ownership, which the encoding does not change.
-            crate::obj::TY_OPAQUE if carry == CARRY_SANDBOXED => {
-                Err("an opaque value cannot be sent through a port whose codec runs in the \
-                     sandbox: the receiver could write the same bytes, and then it is \
-                     mintable. Open the port with :format :flint, where the runtime encodes \
-                     and only the host can decode."
-                    .into())
-            }
             crate::obj::TY_OPAQUE => Ok(()),
             TY_STR | crate::obj::TY_ROPE | TY_SYM | TY_KW | TY_BIGINT | TY_REGEX => Ok(()),
             _ => {
@@ -1649,7 +1635,7 @@ pub fn drive(rt: &mut Rt) -> Value {
                     // Exit closes every flint end and leaves the events for one
                     // last drain, so a host never has to guess whether more is
                     // coming.
-                    rt.close_all_flint_ends();
+                    rt.close_all_bridges();
                     if pending_events(rt) {
                         rt.status = 2;
                         return NIL;
@@ -1812,106 +1798,52 @@ impl Rt {
         let base = self.mark();
         let pi = self.push(p);
         let vi = self.push(v);
-        let carry = {
-            let p = self.r(pi);
-            let kind = fx(self.slot(p, PT_KIND));
-            if !crosses_a_heap(kind) {
-                CARRY_LOCAL
-            } else if self.is_wire_port(p) {
-                CARRY_CROSSING
-            } else {
-                CARRY_SANDBOXED
-            }
-        };
+        let kind = fx(self.slot(self.r(pi), PT_KIND));
+        let carry = if crosses_a_heap(kind) { CARRY_CROSSING } else { CARRY_LOCAL };
         if let Err(e) = self.check_sendable_via(self.r(vi), carry) {
             self.pop_to(base);
             return self.throw_str("IllegalArgumentException", &e);
         }
-        let kind = fx(self.slot(self.r(pi), PT_KIND));
         if crosses_a_heap(kind) {
-            // Bound the host's queue in BYTES: back-pressure exists to bound
-            // memory, and one 4 MB message is not one message's worth of it.
-            // A wire port encodes HERE, so what leaves is bytes like any other
-            // host port and the byte budget still means something. `send`
-            // already encodes for a codec'd port; this is the same step for a
-            // format the runtime owns.
-            let wire = self.is_wire_port(self.r(pi));
-            if wire {
-                match self.encode(self.r(vi)) {
-                    Ok(b) => {
-                        let bv = self.new_bytes(&b);
-                        self.set_r(vi, bv);
-                    }
-                    Err(e) => {
-                        self.pop_to(base);
-                        let msg = alloc::format!("send: this cannot be sent to the host: {e}");
-                        return self.throw_str("IllegalArgumentException", &msg);
-                    }
-                }
-            }
-            let binary = wire || fx(self.slot(self.r(pi), PT_BINARY)) == 1;
-            let encoded = if binary {
-                // A byte string OR a vector of 0..255. `doc/decisions/0024` gave
-                // flint a byte type after this path was written, and a codec that
-                // produces one should not have to explode it into boxed fixnums
-                // to get it across.
-                self.is_bytes(self.r(vi)) || self.is_vector(self.r(vi))
-            } else {
-                self.is_string(self.r(vi))
-            };
-            if !encoded {
-                self.pop_to(base);
-                return self.throw_str(
-                    "IllegalArgumentException",
-                    "a host port carries bytes; flint.port/send encodes for you, so this is a \
-                     raw send of something that is not already encoded (a string, or a vector \
-                     of 0..255, or a byte string, on a binary port)",
-                );
-            }
-            // The host reads contiguous bytes, so the rope stops here. This is
-            // the boundary `doc/decisions/0011` means by "flatten before
-            // matching": the tree is an internal representation and nothing
-            // outside the module has to know about it.
-            if !binary {
-                let flat = self.string_arg(self.r(vi));
-                self.set_r(vi, flat);
-            }
-            // Whose bookkeeping the back-pressure lives on.
+            // ENCODING HAPPENS HERE, ALWAYS, AND ONLY HERE.
             //
-            // A HOST port is a pair: two objects in this heap, and the far end
-            // carries the id the host knows and the byte count. A GLOBAL port is
-            // ONE object -- the far end is the host's registry and is not in any
-            // heap (`doc/decisions/0027`) -- so it is its own accounting.
-            let hi = if kind == K_GLOBAL {
-                let pv = self.r(pi);
-                self.push(pv)
-            } else {
-                let host = self.peer_of(self.r(pi));
-                if host.is_nil() {
+            // A bridge carries bytes, and the runtime is what writes them. The
+            // guest hands over a VALUE and is handed one back; it never sees an
+            // encoding, has no encoder, and cannot choose one. That is not a
+            // convenience -- `codec.rs` states the safety rule it enforces: a
+            // decoder reachable from the guest would be an encoder read
+            // backwards, and since `K_PORT` and `K_SENTINEL` carry their
+            // identity inline as integers a guest can write, such a guest could
+            // mint any host id it liked. An opaque value's whole meaning is that
+            // it cannot.
+            match self.encode(self.r(vi)) {
+                Ok(b) => {
+                    let bv = self.new_bytes(&b);
+                    self.set_r(vi, bv);
+                }
+                Err(e) => {
                     self.pop_to(base);
-                    return self
-                        .throw_str("IllegalStateException", "the host has closed this port");
+                    let msg = alloc::format!("send: this cannot cross a bridge: {e}");
+                    return self.throw_str("IllegalArgumentException", &msg);
                 }
-                self.push(host)
-            };
-            let len = if binary {
-                if self.is_bytes(self.r(vi)) {
-                    self.b_count(self.r(vi)) as i64
-                } else {
-                    self.vec_count(self.r(vi)) as i64
-                }
-            } else {
-                self.str_len(self.r(vi)) as i64
-            };
-            let cap = fx(self.slot(self.r(hi), PT_CAP));
-            let queued = fx(self.slot(self.r(hi), PT_BYTES));
+            }
+            // Bound the queue in BYTES: back-pressure exists to bound memory,
+            // and one 4 MB message is not one message's worth of it.
+            //
+            // On the handle itself. A bridge is ONE object here -- the far end
+            // is the host's registry and is not in any heap -- so it is its own
+            // accounting, where a host port used to need a second object to
+            // carry the count.
+            let len = self.b_count(self.r(vi)) as i64;
+            let cap = fx(self.slot(self.r(pi), PT_CAP));
+            let queued = fx(self.slot(self.r(pi), PT_BYTES));
             if queued > 0 && queued + len > cap {
-                let target = self.r(hi);
+                let target = self.r(pi);
                 self.pop_to(base);
                 return self.park_on_port(WK_SEND, target);
             }
-            self.set(self.r(hi), PT_BYTES, Value::fixnum(queued + len));
-            let id = fx(self.slot(self.r(hi), PT_ID));
+            self.set(self.r(pi), PT_BYTES, Value::fixnum(queued + len));
+            let id = fx(self.slot(self.r(pi), PT_ID));
             let payload = self.r(vi);
             self.push_event(EV_MESSAGE, id, len, payload);
             self.pop_to(base);
@@ -2040,12 +1972,12 @@ impl Rt {
                 "receive: the other end of this port is gone, so this can never complete",
             );
         }
-        // A GLOBAL port has no peer OBJECT to ask about: the far end is the
+        // A BRIDGE has no peer OBJECT to ask about: the far end is the
         // host's registry and is not in any heap (`doc/decisions/0027`). Its own
         // state is the whole answer, and the states above have already covered
         // every way that can say "no more" -- so an empty buffer here means
         // "nothing yet", which is what parking is for.
-        if fx(self.slot(self.r(pi), PT_KIND)) != K_GLOBAL {
+        if fx(self.slot(self.r(pi), PT_KIND)) != K_BRIDGE {
             let peer = self.peer_of(self.r(pi));
             if peer.is_nil() {
                 self.set(self.r(pi), PT_STATE, Value::fixnum(P_ORPHANED));
@@ -2094,6 +2026,20 @@ impl Rt {
     /// The **runtime** creates the pair -- the host never holds two ends and
     /// never hands one back. It is told the token to answer with and the id of
     /// the end it will hold.
+    /// Ask for a port. **A REQUEST ON THE SYSTEM PORT**, not a construction
+    /// (`doc/decisions/0027`).
+    ///
+    /// A sandbox cannot make a bridge. It used to: `open` allocated a PAIR of
+    /// ends here, kept one and offered the other up as "the host's", which made
+    /// the confined thing the author of its own authority and gave the port an
+    /// id that meant nothing in any other sandbox. Now nothing is allocated
+    /// until the host answers, and what comes back is a handle on a port the
+    /// host already owns.
+    ///
+    /// Combined with `0025`'s rule -- flint is given no way to turn an integer
+    /// into a port -- this is stronger than either piece alone: a sandbox can
+    /// obtain a port neither by fabrication NOR by construction. Every port it
+    /// will ever hold was handed to it.
     pub fn port_open(&mut self, name: Value, args: Value) -> Value {
         self.ensure_sched();
         let base = self.mark();
@@ -2105,12 +2051,12 @@ impl Rt {
         if !pending.is_nil() {
             // Second time round: the host has answered.
             self.set(self.r(ti), TH_PENDING, NIL);
-            // ONLY A REFUSAL IS A REFUSAL. The host may answer and then close
+            // A GRANT left the handle here; a refusal left the sentinel below.
+            // Only a refusal is a refusal -- the host may grant and then close
             // the port before this thread is next scheduled, and the port is
-            // then `P_HALF` -- "granted, and now finished", which is not the
-            // same as "you may not have this".
-            let st = fx(self.slot(pending, PT_STATE));
-            if st != P_REFUSED {
+            // then `P_HALF` ("granted, and now finished"), which is not the same
+            // as "you may not have this".
+            if self.is_port(pending) {
                 self.pop_to(base);
                 return pending;
             }
@@ -2120,21 +2066,33 @@ impl Rt {
             let msg = alloc::format!("the host refused to open {n:?}");
             return self.throw_str("SecurityException", &msg);
         }
-        let (nm, fmt) = (self.r(ni), NIL);
-        let flint_end = self.new_port(DEFAULT_HOST_CAP, nm, K_FLINT, P_PENDING, fmt);
-        let ei = self.push(flint_end);
-        let nm = self.r(ni);
-        let host_end = self.new_port(DEFAULT_HOST_CAP, nm, K_HOST, P_PENDING, NIL);
-        let hi = self.push(host_end);
-        let (ev, hv) = (self.r(ei), self.r(hi));
-        self.link_peers(ev, hv);
-        let ev = self.r(ei);
-        self.set(self.r(ti), TH_PENDING, ev);
-        let target = self.r(ei);
+        // NO SYSTEM PORT, NO ASKING. A sandbox given no transport has no way to
+        // reach anything outside itself, and saying so here is more honest than
+        // pushing an event nothing will ever drain -- that would park the thread
+        // for ever and read as a hang rather than as a refusal.
+        let sys = self.system_port();
+        if sys.is_nil() {
+            let mut b = crate::rt::sbuf();
+            let n: alloc::string::String = self.as_str(self.r(ni), &mut b).unwrap_or("?").into();
+            self.pop_to(base);
+            let msg = alloc::format!(
+                "this sandbox was given no system port, so it cannot ask for {n:?}"
+            );
+            return self.throw_str("SecurityException", &msg);
+        }
+        let si = self.push(sys);
+        // The waiter hangs off the SYSTEM port, because that is the port the
+        // request went out on and there is no other port yet -- the whole point
+        // is that the answer is what creates one.
+        let target = self.r(si);
         let token = self.new_waiter(WK_OPEN, target);
         let t = self.r(ti);
         self.set(t, TH_TOKEN, Value::fixnum(token));
-        let host_id = fx(self.slot(self.r(hi), PT_ID));
+        // Mark the thread as awaiting an answer with a value that is NOT a port,
+        // so the resume above can tell "granted" from "refused" by type rather
+        // than by a state flag on an object that no longer exists until granted.
+        let t = self.r(ti);
+        self.set(t, TH_PENDING, Value::fixnum(0));
         // THE ARGUMENTS, ENCODED, are the payload -- not a bare name string.
         // That is the whole of "the host does what it wants with them": one
         // value crosses, the host decodes it, and anything an opaque value
@@ -2169,9 +2127,10 @@ impl Rt {
         }
         let payload = self.new_bytes(&call);
         let pi = self.push(payload);
+        let sys_id = fx(self.slot(self.r(si), PT_ID));
         let pv = self.r(pi);
-        self.push_event(EV_OPEN, token, host_id, pv);
-        let target = self.r(ei);
+        self.push_event(EV_OPEN, token, sys_id, pv);
+        let target = self.r(si);
         self.pop_to(base);
         self.park(target)
     }
@@ -2216,20 +2175,24 @@ impl Rt {
     }
 
     /// Everything that follows from an end closing, however it closed: tell the
-    /// host if it is the peer, and wake anybody parked on either side.
+    /// host if this was a bridge, and wake anybody parked on either side.
     fn close_side_effects(&mut self, p: Value) {
         let base = self.mark();
         let pi = self.push(p);
         let kind = fx(self.slot(self.r(pi), PT_KIND));
         if crosses_a_heap(kind) {
-            let host = self.peer_of(self.r(pi));
-            if !host.is_nil() {
-                let hi = self.push(host);
-                let id = fx(self.slot(self.r(hi), PT_ID));
-                self.set(self.r(hi), PT_STATE, Value::fixnum(P_CLOSED));
-                self.push_event(EV_CLOSED, id, 0, NIL);
-                self.pop_to(hi);
-            }
+            // A CLOSE IS A RELEASE, and it is the prompt one.
+            //
+            // Dropping the last reference and waiting for the collector gets
+            // here too, via `reap_ports`, but that is the backstop rather than
+            // the mechanism -- it is not prompt, and a host holding a socket
+            // until then is a real cost. Closing says so now. The id is dropped
+            // from `SC_BRIDGES` in the same breath, so the sweep does not send
+            // a second release for a port already let go.
+            let id = fx(self.slot(self.r(pi), PT_ID));
+            self.push_event(EV_CLOSED, id, 0, NIL);
+            self.forget_bridge(id);
+            self.push_event(EV_RELEASE, id, 0, NIL);
         }
         let target = self.r(pi);
         self.wake_on(target);
@@ -2241,6 +2204,32 @@ impl Rt {
             self.set(peer, PT_STATE, Value::fixnum(P_HALF));
             self.wake_on(peer);
         }
+        self.pop_to(base);
+    }
+
+    /// Drop `id` from the held list, so the sweep does not release it twice.
+    fn forget_bridge(&mut self, id: i64) {
+        let base = self.mark();
+        let s = self.sched();
+        if s.is_nil() {
+            return;
+        }
+        let si = self.push(s);
+        let brs = self.slot(self.r(si), SC_BRIDGES);
+        let bi = self.push(brs);
+        let n = self.vec_count(self.r(bi));
+        let keep = self.empty_vec();
+        let ki = self.push(keep);
+        for k in 0..n {
+            let x = fx(self.vec_nth(self.r(bi), k).unwrap_or(NIL));
+            if x == id {
+                continue;
+            }
+            let nk = self.vec_conj(self.r(ki), Value::fixnum(x));
+            self.set_r(ki, nk);
+        }
+        let keep = self.r(ki);
+        self.set(self.r(si), SC_BRIDGES, keep);
         self.pop_to(base);
     }
 
@@ -2257,28 +2246,61 @@ impl Rt {
     /// it no longer matches the slot, which is exactly the late-or-duplicated
     /// reply that would otherwise resume a stranger's thread.
     pub fn host_continue(&mut self, token: i64, ok: bool) -> bool {
+        if ok {
+            // A GRANT HAS TO NAME A PORT. There is no port to grant until the
+            // host says which one -- that is what `0027` inverted -- so this
+            // form can only ever mean a refusal, and a host that means to grant
+            // calls `host_grant`. Answering `true` here would have to invent a
+            // port, which is exactly the construction the sandbox may not do
+            // and the host must not be able to do by accident.
+            return false;
+        }
         let w = self.waiter_at(token);
         if w.is_nil() {
             return false;
         }
         let base = self.mark();
         let wi = self.push(w);
-        let kind = fx(self.slot(self.r(wi), W_KIND));
-        if kind == WK_OPEN {
-            let p = self.slot(self.r(wi), W_PORT);
-            let pi = self.push(p);
-            let state = if ok { P_OPEN } else { P_REFUSED };
-            self.set(self.r(pi), PT_STATE, Value::fixnum(state));
-            let host = self.peer_of(self.r(pi));
-            if !host.is_nil() {
-                self.set(host, PT_STATE, Value::fixnum(state));
-                if !ok {
-                    // Refused: the host never gets a handle, so nothing needs
-                    // to keep this end alive.
-                    self.unroot_port(host);
-                }
-            }
-            self.pop_to(pi);
+        // The refusal is left on the thread as a non-port, which `port_open`
+        // reads on resume. Nothing else has to be cleaned up, because a refused
+        // open allocated nothing in the first place.
+        let wv = self.r(wi);
+        self.wake_waiter(wv);
+        self.pop_to(base);
+        true
+    }
+
+    /// Grant an open: hand the waiting thread a handle on the host's port
+    /// `host_port_id` (`doc/decisions/0027`).
+    ///
+    /// The id is the HOST's. It is the same id in every sandbox that holds this
+    /// port, which is what makes a handle sendable between two of them at all,
+    /// and it is the id the retain and release events name.
+    ///
+    /// If this sandbox already holds that port, the SAME handle comes back and
+    /// no reference is taken -- granting a port twice is not two holders.
+    pub fn host_grant(&mut self, token: i64, host_port_id: i64) -> bool {
+        let w = self.waiter_at(token);
+        if w.is_nil() {
+            return false;
+        }
+        let base = self.mark();
+        let wi = self.push(w);
+        let label = self.slot(self.r(wi), W_PORT);
+        let label = if label.is_nil() { NIL } else { self.slot(label, PT_LABEL) };
+        let li = self.push(label);
+        let l = self.r(li);
+        let p = self.install_bridge_port(host_port_id, l);
+        if p.is_nil() {
+            self.pop_to(base);
+            return false;
+        }
+        let pi = self.push(p);
+        // Onto the thread that asked, which `port_open` reads when it resumes.
+        let th = self.slot(self.r(wi), W_THREAD);
+        if !th.is_nil() {
+            let pv = self.r(pi);
+            self.set(th, TH_PENDING, pv);
         }
         let wv = self.r(wi);
         self.wake_waiter(wv);
@@ -2286,9 +2308,8 @@ impl Rt {
         true
     }
 
-    /// Put bytes into the flint end of a host port. Wakes a parked receiver;
-    /// it does not run anything.
-    /// Put bytes into the flint end of a host port.
+    /// Put a message into a bridge from the host's side. Wakes a parked
+    /// receiver; it does not run anything.
     ///
     /// Returns **false when the guest's buffer is full**, and the host must hold
     /// the message and offer it again after the next pump. Without that, a
@@ -2296,31 +2317,12 @@ impl Rt {
     /// whole answer would be resident in the guest heap -- which is precisely
     /// what waves exist to prevent. Inbound needs the same back-pressure as
     /// outbound; it is the same buffer bound, seen from the other side.
-    /// Does this port carry VALUES rather than bytes?
     ///
-    /// `:format :flint` means the wire codec (`doc/decisions/0025`) -- the same
-    /// encoding `flint_call` uses -- and the runtime runs it at the boundary
-    /// rather than handing a guest an encoder.
-    ///
-    /// That is not a convenience. `codec.rs` states the one safety rule: a
-    /// decoder REACHABLE FROM THE GUEST must refuse the live tags, because
-    /// bytes are integers a guest can write and `K_PORT`/`K_SENTINEL` carry
-    /// their identity inline. A guest-side codec for this format would be
-    /// exactly the integer-to-opaque conversion the sandbox forbids -- it could
-    /// mint any host id it liked, and an opaque value's whole meaning is that
-    /// it cannot. Encoding on the way out and decoding on the way IN, here,
-    /// keeps the bytes on the host's side of the line: the guest hands over a
-    /// value and is handed one back, and never sees the encoding at all.
-    ///
-    /// The format keyword is the switch rather than a slot on the port, so the
-    /// object layout is unchanged and the two ports do not have to mirror a
-    /// new field. `:flint` is five bytes, so the keyword is inline in the value
-    /// and the comparison allocates nothing.
-    fn is_wire_port(&mut self, p: Value) -> bool {
-        let f = self.slot(p, PT_FORMAT);
-        !f.is_nil() && f == self.keyword(None, "flint")
-    }
-
+    /// The bytes are DECODED here, by the runtime, which is the mirror of
+    /// `port_send` encoding them. The HOST wrote them, so the live tags are
+    /// honoured -- `decode`, not `decode_guest`. That is the whole asymmetry: an
+    /// opaque the host issued arrives as itself, with the id it was given, and
+    /// nothing the guest can write reaches this call.
     pub fn host_deliver(&mut self, host_port_id: i64, bytes: &[u8]) -> bool {
         let host = self.port_by_id(host_port_id);
         if host.is_nil() {
@@ -2328,19 +2330,13 @@ impl Rt {
         }
         let base = self.mark();
         let hi = self.push(host);
-        // A GLOBAL port is ONE object and the id is its own, so the lookup has
-        // already found the end to deliver into. A HOST port is a pair, and the
-        // id belongs to the far end, so the delivery goes to its peer.
-        let pi = if fx(self.slot(self.r(hi), PT_KIND)) == K_GLOBAL {
+        // A bridge is ONE object and the id is its own, so the lookup above has
+        // already found the end to deliver into. There is no pair and no peer
+        // hop: that indirection existed only because a host port kept its
+        // bookkeeping on a second object (`doc/decisions/0027`).
+        let pi = {
             let pv = self.r(hi);
             self.push(pv)
-        } else {
-            let flint = self.peer_of(self.r(hi));
-            if flint.is_nil() {
-                self.pop_to(base);
-                return false;
-            }
-            self.push(flint)
         };
         // BACK-PRESSURE, in bytes, and it is claimed atomically for the same
         // reason the ring slot is: two host threads delivering into one end
@@ -2380,32 +2376,17 @@ impl Rt {
                 }
             }};
         }
-        let v = if self.is_wire_port(self.r(pi)) {
-            // The HOST wrote these bytes, so the live tags are honoured --
-            // `decode`, not `decode_guest`. That is the whole asymmetry: an
-            // opaque the host issued arrives as itself, with the id it was
-            // given, and nothing the guest can write reaches this call.
-            match self.decode(bytes) {
-                Ok(v) => v,
-                // Refused rather than delivered as anything else: a message the
-                // format cannot read is the host's error, and turning it into a
-                // string here would hand the guest something that silently was
-                // not what was sent.
-                Err(_) => {
-                    give_back!();
-                    self.pop_to(base);
-                    return false;
-                }
+        let v = match self.decode(bytes) {
+            Ok(v) => v,
+            // Refused rather than delivered as anything else: a message the
+            // format cannot read is the host's error, and turning it into a
+            // string here would hand the guest something that silently was not
+            // what was sent.
+            Err(_) => {
+                give_back!();
+                self.pop_to(base);
+                return false;
             }
-        } else if fx(self.slot(self.r(pi), PT_BINARY)) == 1 {
-            // One object, not one boxed fixnum per byte. This used to build a
-            // vector, which cost a 32-way trie and an allocation per 32 bytes for
-            // data the codec immediately walked back into bytes.
-            self.new_bytes(bytes)
-        } else {
-            let s: alloc::string::String =
-                core::str::from_utf8(bytes).unwrap_or("").into();
-            self.string(&s)
         };
         let vi = self.push(v);
         let (target, val) = (self.r(pi), self.r(vi));
@@ -2445,8 +2426,6 @@ impl Rt {
             self.wake_on(target);
             self.pop_to(fi);
         }
-        let hv = self.r(hi);
-        self.unroot_port(hv);
         self.pop_to(base);
     }
 
@@ -2584,6 +2563,30 @@ impl Rt {
         }
         let base = self.mark();
         let si = self.push(s);
+        // --- bridges: a collection is a RELEASE ------------------------------
+        //
+        // The handle is ordinary memory and is not rooted, so the collector
+        // finding it unreachable IS this sandbox letting the port go. One
+        // `EV_RELEASE` per `EV_RETAIN`, which is what makes the host's count a
+        // count of holders rather than of arrivals (`doc/decisions/0027`).
+        let brs = self.slot(self.r(si), SC_BRIDGES);
+        let bi = self.push(brs);
+        let bn = self.vec_count(self.r(bi));
+        let held = self.empty_vec();
+        let hi = self.push(held);
+        for k in 0..bn {
+            let id = fx(self.vec_nth(self.r(bi), k).unwrap_or(NIL));
+            if self.port_by_id(id).is_nil() {
+                self.push_event(EV_RELEASE, id, 0, NIL);
+                continue;
+            }
+            let nh = self.vec_conj(self.r(hi), Value::fixnum(id));
+            self.set_r(hi, nh);
+        }
+        let held = self.r(hi);
+        self.set(self.r(si), SC_BRIDGES, held);
+
+        // --- channels: a collected end orphans its peer -----------------------
         let ids = self.slot(self.r(si), SC_PORTS);
         let ii = self.push(ids);
         let n = self.vec_count(self.r(ii));
@@ -2604,16 +2607,11 @@ impl Rt {
                 continue;
             }
             let pi = self.push(peer);
-            let pkind = fx(self.slot(self.r(pi), PT_KIND));
             let pst = fx(self.slot(self.r(pi), PT_STATE));
             if pst != P_CLOSED && pst != P_ORPHANED {
                 // Its peer vanished without closing, which is not the same as a
                 // tidy close and should not read like one.
                 self.set(self.r(pi), PT_STATE, Value::fixnum(P_ORPHANED));
-                if pkind == K_HOST {
-                    let hid = fx(self.slot(self.r(pi), PT_ID));
-                    self.push_event(EV_CLOSED, hid, 0, NIL);
-                }
             }
             let target = self.r(pi);
             self.fail_waiters_on(
@@ -2644,9 +2642,10 @@ impl Rt {
         -1
     }
 
-    /// Program exit: close every flint end so a host is never left guessing
-    /// whether more is coming, and leave the events for the final drain.
-    pub fn close_all_flint_ends(&mut self) {
+    /// Program exit: close and release every bridge, so a host is never left
+    /// holding a reference for a sandbox that has finished, and leave the events
+    /// for the final drain.
+    pub fn close_all_bridges(&mut self) {
         let s = self.sched();
         if s.is_nil() {
             return;

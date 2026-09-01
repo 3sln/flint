@@ -22,7 +22,16 @@ public final class Codec {
     public static final int K_NIL = 0, K_TRUE = 1, K_FALSE = 2, K_INT = 3,
         K_DOUBLE = 4, K_STRING = 5, K_KEYWORD = 6, K_SYMBOL = 7, K_VECTOR = 8,
         K_LIST = 9, K_MAP = 10, K_SET = 11, K_BYTES = 14, K_PORT = 15,
-        K_SENTINEL = 16;
+        K_SENTINEL = 16,
+        /// A tagged literal (`doc/decisions/0034`): the tag symbol, then the
+        /// form. 17 here and 17 in the image's constant tags, because the two
+        /// SHARE a numbering space.
+        K_TAGGED = 17,
+        /// A table (`doc/decisions/0026`), COLUMNAR: the schema, the row count,
+        /// then each column's values in full before the next one starts.
+        /// Row-major would be a vector of maps with extra steps and would lose
+        /// exactly what the type is for.
+        K_TABLE = 18;
 
     /// `-1` means the namespace is ABSENT, which is not the same as empty.
     static final int NO_NS = -1;
@@ -97,6 +106,37 @@ public final class Codec {
                 u64(out, rt.opaqueHostId(v));
                 str(out, Str.isString(rt, rt.opaqueLabel(v)) ? Str.text(rt, rt.opaqueLabel(v)) : "");
                 return;
+            case Obj.TY_TAGGED: {
+                out.write(K_TAGGED);
+                encodeInto(rt, rt.slot(v, 0), out, depth + 1);
+                encodeInto(rt, rt.slot(v, 1), out, depth + 1);
+                return;
+            }
+            case Obj.TY_TABLE: {
+                out.write(K_TABLE);
+                int base = rt.mark();
+                int vi = rt.push(v);
+                int si = rt.push(rt.slot(rt.r(vi), Table.TB_SCHEMA));
+                int ncols = Table.schemaLen(rt, rt.r(si));
+                int nrows = Table.tableCount(rt, rt.r(vi));
+                u32(out, ncols);
+                for (int c = 0; c < ncols; c++) {
+                    encodeInto(rt, Table.schemaNameAt(rt, rt.r(si), c), out, depth + 1);
+                    encodeInto(rt, Table.schemaTypeAt(rt, rt.r(si), c), out, depth + 1);
+                }
+                u32(out, nrows);
+                // COLUMN BY COLUMN, each in full: a receiver reading one field
+                // reads one run.
+                for (int c = 0; c < ncols; c++) {
+                    long nm = Table.schemaNameAt(rt, rt.r(si), c);
+                    int ci = rt.push(Table.tableColumn(rt, rt.r(vi), nm));
+                    for (int i = 0; i < nrows; i++)
+                        encodeInto(rt, Vec.nth(rt, rt.r(ci), i), out, depth + 1);
+                    rt.popTo(ci);
+                }
+                rt.popTo(base);
+                return;
+            }
             case Obj.TY_CLOSURE: case Obj.TY_NATIVEFN: case Obj.TY_MULTIFN:
                 throw new Refused("a function cannot cross a boundary: its meaning is its "
                                   + "environment, and that does not travel");

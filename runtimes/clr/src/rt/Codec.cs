@@ -22,7 +22,14 @@ public static class Codec {
     public const int K_NIL = 0, K_TRUE = 1, K_FALSE = 2, K_INT = 3,
         K_DOUBLE = 4, K_STRING = 5, K_KEYWORD = 6, K_SYMBOL = 7, K_VECTOR = 8,
         K_LIST = 9, K_MAP = 10, K_SET = 11, K_BYTES = 14, K_PORT = 15,
-        K_SENTINEL = 16;
+        K_SENTINEL = 16,
+        /// A tagged literal (`doc/decisions/0034`): the tag symbol, then the
+        /// form. 17 here and 17 in the image's constant tags, which share a
+        /// numbering space.
+        K_TAGGED = 17,
+        /// A table (`doc/decisions/0026`), COLUMNAR: the schema, the row count,
+        /// then each column in full before the next one starts.
+        K_TABLE = 18;
 
     /// `-1` means the namespace is ABSENT, which is not the same as empty.
     internal const int NO_NS = -1;
@@ -100,6 +107,36 @@ public static class Codec {
                 Str_(outs, Str.IsString(rt, rt.OpaqueLabel(v))
                            ? Str.Text(rt, rt.OpaqueLabel(v)) : "");
                 return;
+            case Obj.TyTagged: {
+                outs.WriteByte(K_TAGGED);
+                EncodeInto(rt, rt.Slot(v, 0), outs, depth + 1);
+                EncodeInto(rt, rt.Slot(v, 1), outs, depth + 1);
+                return;
+            }
+            case Obj.TyTable: {
+                outs.WriteByte(K_TABLE);
+                int bas = rt.Mark();
+                int vi = rt.Push(v);
+                int si = rt.Push(rt.Slot(rt.R(vi), Table.TB_SCHEMA));
+                int ncols = Table.schemaLen(rt, rt.R(si));
+                int nrows = Table.tableCount(rt, rt.R(vi));
+                U32(outs, ncols);
+                for (int c = 0; c < ncols; c++) {
+                    EncodeInto(rt, Table.schemaNameAt(rt, rt.R(si), c), outs, depth + 1);
+                    EncodeInto(rt, Table.schemaTypeAt(rt, rt.R(si), c), outs, depth + 1);
+                }
+                U32(outs, nrows);
+                // COLUMN BY COLUMN, each in full.
+                for (int c = 0; c < ncols; c++) {
+                    long nm = Table.schemaNameAt(rt, rt.R(si), c);
+                    int ci = rt.Push(Table.tableColumn(rt, rt.R(vi), nm));
+                    for (int i = 0; i < nrows; i++)
+                        EncodeInto(rt, Vec.Nth(rt, rt.R(ci), i), outs, depth + 1);
+                    rt.PopTo(ci);
+                }
+                rt.PopTo(bas);
+                return;
+            }
             case Obj.TyClosure: case Obj.TyNativefn: case Obj.TyMultifn:
                 throw new Refused("a function cannot cross a boundary: its meaning is its "
                                   + "environment, and that does not travel");
