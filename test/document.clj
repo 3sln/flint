@@ -17,8 +17,8 @@
       (println "build failed for" ns-name ":" (:all r)) (System/exit 1))))
 
 (def preamble
-  (str "(:require [flint.port :as p] [flint.port.edn :as edn] [flint.doc :as doc]))\n"
-       "(defn open-doc [] (doc/open (p/open \"doc\" {:codec edn/codec})))\n"))
+  (str "(:require [flint.port :as p] [flint.doc :as doc]))\n"
+       "(defn open-doc [] (doc/open (p/open \"doc\")))\n"))
 
 ;; A full structure walk, and nothing else. Every one of these calls is ordinary
 ;; in-memory Clojure; if any of them reached the port this would show up as

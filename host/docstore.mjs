@@ -216,8 +216,11 @@ export class DocStore {
 }
 
 /// The capability handler `host/flint.mjs` expects. Requests and replies are
-/// EDN-ish maps carried by whatever codec the script opened the port with.
-export function documentCapability(store, codec) {
+/// VALUES: a bridge encodes and decodes in the runtime
+/// (`doc/decisions/0027`), so a message arrives here already decoded and a
+/// reply is handed over as an ordinary JS object. Keyword keys read as `:name`
+/// strings, which is what `codec.from` writes back as keywords.
+export function documentCapability(store) {
   // One in-flight plan per port, pulled from as the guest makes room.
   const inflight = new Map();
   const offer = (port, api) => {
@@ -225,7 +228,7 @@ export function documentCapability(store, codec) {
     if (!job) return;
     const next = job.plan.next();
     if (!next) { inflight.delete(port); return; }
-    api.deliver(port, codec.encode({ id: job.id, body: next.wave, final: next.final }));
+    api.deliver(port, { ':id': job.id, ':body': next.wave, ':final': next.final });
     if (next.final) inflight.delete(port);
   };
   return {
@@ -233,32 +236,33 @@ export function documentCapability(store, codec) {
     /// taken. This is where "the caller processes and releases, and the next
     /// wave arrives" actually happens.
     poll(port, api) { offer(port, api); },
-    message(port, data, api) {
-      const req = codec.decode(data);
-      // A keyword stays a keyword across an EDN port -- that is the point of
-      // using EDN rather than JSON -- so unwrap it rather than comparing a
-      // Keyword to a string and silently never matching.
-      const op = req.op && req.op.name !== undefined ? req.op.name : req.op;
-      const reply = (body, final, id) => api.deliver(port, codec.encode({ id, body, final }));
+    message(port, req, api) {
+      // A keyword arrives as `:name`, so an op is matched with the colon
+      // stripped: the guest wrote `:structure`, not "structure".
+      const kw = (x) => (typeof x === 'string' && x.startsWith(':') ? x.slice(1) : x);
+      const op = kw(req[':op'] ?? req.op);
+      const reqId = req[':id'] ?? req.id;
+      const reply = (body, final, id) => api.deliver(port, { ':id': id, ':body': body, ':final': final });
       if (op === 'structure') {
         // Structure carries no text: that is the whole point of the split.
         reply(
           {
-            root: store.structure.root,
-            nodes: store.structure.nodes.map(({ id, type, page, box, parent, children, len }) => ({
-              id, type, page, box, parent, children, len,
+            ':root': store.structure.root,
+            ':nodes': store.structure.nodes.map(({ id, type, page, box, parent, children, len }) => ({
+              ':id': id, ':type': type, ':page': page, ':box': box,
+              ':parent': parent, ':children': children, ':len': len,
             })),
           },
           true,
-          req.id,
+          reqId,
         );
       } else if (op === 'content') {
-        inflight.set(port, { id: req.id, plan: store.contentPlan(req.nodes) });
+        inflight.set(port, { id: reqId, plan: store.contentPlan(req[':nodes'] ?? req.nodes) });
         offer(port, api);
       } else if (op === 'cancel') {
         inflight.delete(port);
       } else {
-        api.deliver(port, codec.encode({ id: req.id, error: `no such op: ${op}`, final: true }));
+        api.deliver(port, { ':id': reqId, ':error': `no such op: ${op}`, ':final': true });
       }
     },
   };

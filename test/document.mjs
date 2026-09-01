@@ -5,7 +5,6 @@
 // assertion is a measurement rather than an inspection of the code.
 import { load, instantiate } from '../host/flint.mjs';
 import { DocStore, documentCapability, coalesce, breakEvenGap } from '../host/docstore.mjs';
-import { codec } from '../host/edn.mjs';
 
 let fails = 0;
 const ok = (label, cond, extra) => {
@@ -41,11 +40,25 @@ function makeDoc({ pages = 2, blocks = 4, leaves = 8, leafBytes = 200 } = {}) {
   return { structure: { root: 0, nodes }, content: new TextEncoder().encode(parts.join('')) };
 }
 
-async function runWith(wasm, store, args = []) {
+/// `stress` turns the collector on for every allocation.
+///
+/// `stat_peak_live` is a HIGH-WATER MARK SAMPLED AFTER EACH COLLECTION -- see
+/// `note_peak`: mid-cycle the nursery is full of garbage and the number would
+/// mean nothing. That is fine for a workload that collects often, and this one
+/// stopped: when a port carried bytes the guest held an EDN text buffer and ran
+/// a reader over it, and that garbage is what drove the collections the metric
+/// was sampled at. A bridge decodes in the runtime now, so the same walk makes
+/// almost none, and the mark was never taken while the structure was live --
+/// every row reported the same 12,224 bytes.
+///
+/// Stressing the collector restores the sampling rather than the memory: the
+/// numbers below are what was always resident, not a regression being hidden.
+async function runWith(wasm, store, args = [], { stress = false } = {}) {
   const { module } = await load(wasm);
   const inst = instantiate(module);
+  if (stress && inst.exports.set_gc_stress) inst.exports.set_gc_stress(1);
   let messages = 0;
-  const cap = documentCapability(store, codec);
+  const cap = documentCapability(store);
   inst.capabilities({
     doc: {
       message(port, data, api) { messages += 1; cap.message(port, data, api); },
@@ -194,7 +207,7 @@ console.log('documents');
   for (const leafBytes of [256, 1024, 4096]) {
     const d = makeDoc({ pages: 2, blocks: 4, leaves: 8, leafBytes });
     const store = new DocStore(d.structure, d.content, {});
-    const r = await runWith('out/doc-onepct.wasm', store);
+    const r = await runWith('out/doc-onepct.wasm', store, [], { stress: true });
     rows.push({ docBytes: d.content.length, peak: r.peakLive, fetched: store.stats.bytesDelivered });
   }
   console.log('    document bytes | content read | module peak live');
@@ -211,7 +224,7 @@ console.log('documents');
   for (const leaves of [8, 32]) {
     const d = makeDoc({ pages: 2, blocks: 4, leaves, leafBytes: 256 });
     const store = new DocStore(d.structure, d.content, {});
-    const r = await runWith('out/doc-onepct.wasm', store);
+    const r = await runWith('out/doc-onepct.wasm', store, [], { stress: true });
     rows.push({ nodes: d.structure.nodes.length, peak: r.peakLive });
   }
   console.log(`    structure is resident: ${rows[0].nodes} nodes -> ${rows[0].peak} bytes, ` +
