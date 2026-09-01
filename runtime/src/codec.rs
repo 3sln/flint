@@ -525,9 +525,19 @@ impl Rt {
             }
             K_PORT if live => {
                 let id = r.u32()?;
-                let p = self.port_by_id(id as i64);
+                // INTERN OR MINT. A port the host names in a message is a port
+                // it is handing to this sandbox, and that is how a capability
+                // gets delegated (`doc/decisions/0027`). It used to be refused
+                // unless the sandbox already held it, which made delegation
+                // impossible and was the pre-0027 rule that a port could only
+                // ever be one the sandbox had asked for.
+                //
+                // Arriving twice costs nothing and counts once: the handle is
+                // interned by host id, so the second arrival finds the first
+                // object and no second reference is taken.
+                let p = self.install_bridge_port(id as i64, NIL);
                 if p.is_nil() {
-                    return Err(alloc::format!("there is no port {id} here"));
+                    return Err(alloc::format!("port {id} could not be installed here"));
                 }
                 Ok(p)
             }

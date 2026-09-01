@@ -1,8 +1,14 @@
-(ns flint.port.transit
-  "The binary codec for a host port: **Transit over msgpack**.
+(ns flint.data.transit
+  "**Transit over msgpack**: values to bytes and back.
 
-      (:require [flint.port :as p] [flint.port.transit :as transit])
-      (p/open \"thing\" {:codec transit/codec})
+      (:require [flint.data.transit :as transit])
+      (transit/encode {:a 1})   ; => a byte string
+      (transit/decode bytes)    ; => {:a 1}
+
+  A value-to-bytes utility, which is a different job from carrying a port's
+  messages: a port encodes with the runtime's own wire format and gives a guest
+  no say in it (`doc/decisions/0025`, `0027`). Reach for this when something
+  OUTSIDE wants Transit and you are producing bytes to hand it.
 
   Transit rather than a fourth format of our own, for the reason
   `doc/decisions/0006` gives: it exists for exactly this, it is self-describing,
@@ -238,11 +244,15 @@
 ;; `build` rather than a bare vector: the writer threads a transient through and
 ;; freezes it once at the end, which is what makes appending amortised O(1)
 ;; instead of a copy per byte.
-(defn encode [v _opts]
+(defn encode
+  "`v` as Transit-over-msgpack bytes."
+  [v]
   (flint.rt/b-persistent! (write-any (flint.rt/b-transient (flint.rt/str->b "")) v)))
-;; `bs` arrives as a byte string from a binary port and is indexed as one. It
+;; `bs` is indexed as a byte string rather than walked as a seq. It
 ;; used to be coerced with `(vec bs)`, which allocated a boxed fixnum per byte
 ;; before reading a single one of them.
-(defn decode [bs _opts] (first (read-at bs 0)))
+(defn decode
+  "The value those bytes were written from."
+  [bs]
+  (first (read-at bs 0)))
 
-(def codec {:format :transit+msgpack :binary true :encode encode :decode decode})

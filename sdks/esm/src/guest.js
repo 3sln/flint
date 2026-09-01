@@ -15,7 +15,7 @@
 // `flint_resume`. That is what makes a capability work: the guest asks, the
 // host answers, and the guest carries on where it left off.
 
-import { codec } from './codec.js';
+import { codec, Val } from './codec.js';
 
 export function instantiate(module, { stepLimit = 0 } = {}) {
   const instance = new WebAssembly.Instance(module, {});
@@ -89,35 +89,67 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
         let argv;
         try { argv = codec.decode(data); } catch { argv = []; }
         const [name, ...rest] = Array.isArray(argv) ? argv : [String(argv)];
-        out.push({ kind: 'open-request', token: a, port: b, name, args: rest });
+        // `b` is the SYSTEM port the request came out on, not a port that was
+        // made for it -- there is no port until this host grants one
+        // (`doc/decisions/0027`).
+        out.push({ kind: 'open-request', token: a, system: b, name, args: rest });
       }
-      else if (kind === 2) out.push({ kind: 'message', port: a, data });
+      else if (kind === 2) {
+        // A bridge carries VALUES: the runtime encoded this, so decoding it
+        // here is the mirror of that and not something the guest chose. `data`
+        // stays for a host that wants the bytes -- explicit low-level access
+        // is deliberate -- and `value` is the same message decoded.
+        let value, error;
+        try { value = codec.decode(data); } catch (e) { error = e; }
+        out.push({ kind: 'message', port: a, data, value, error });
+      }
       else if (kind === 3) out.push({ kind: 'closed', port: a });
+      else if (kind === 4) out.push({ kind: 'retain', port: a });
+      else if (kind === 5) out.push({ kind: 'release', port: a });
     }
     return out;
   }
 
-  /// Send bytes back. A string is encoded as UTF-8; a Uint8Array goes as it is,
-  /// which is what a binary format needs.
+  /// Send ENCODED BYTES into a bridge. The low-level half.
   ///
-  /// **Returns false when the guest's buffer is full.** `deliver` below queues
-  /// on our side and retries, so a caller does not have to think about it, but
-  /// the distinction is the whole of flow control: without it a server that
-  /// answers in waves just pushes every wave at once and the guest holds the
-  /// entire answer, which is what waves exist to avoid.
-  function tryDeliver(port, payload) {
-    const b = typeof payload === 'string' ? enc.encode(payload) : payload;
-    const p = e.flint_in_alloc(b.length);
-    new Uint8Array(e.memory.buffer).set(b, p);
-    return e.flint_deliver(port, b.length) !== 0;
+  /// The runtime decodes what arrives here, so these bytes have to be the wire
+  /// format -- build them with `codec` (`codec.str('x').encode()`, and so on)
+  /// when you want to control the encoding exactly. For the ordinary case,
+  /// `deliver` below takes a JS value and encodes it for you.
+  ///
+  /// **Returns false when the guest's buffer is full.** `deliver` queues on our
+  /// side and retries, so a caller does not have to think about it, but the
+  /// distinction is the whole of flow control: without it a server that answers
+  /// in waves just pushes every wave at once and the guest holds the entire
+  /// answer, which is what waves exist to avoid.
+  function tryDeliverBytes(port, bytes) {
+    const p = e.flint_in_alloc(bytes.length);
+    new Uint8Array(e.memory.buffer).set(bytes, p);
+    return e.flint_deliver(port, bytes.length) !== 0;
+  }
+
+  /// The same, taking a VALUE. `Val` (from `codec`) goes as written; anything
+  /// else is converted with `codec.from`, so a plain JS object, array, string
+  /// or number just works.
+  function tryDeliver(port, value) {
+    return tryDeliverBytes(port, toBytes(value));
+  }
+
+  function toBytes(value) {
+    if (value instanceof Uint8Array) return value;
+    return (value instanceof Val ? value : codec.from(value)).encode();
   }
 
   // Per port: what we have not managed to hand over yet.
   const outbox = new Map();
 
-  function deliver(port, payload) {
+  /// Send a value, queueing on our side if the guest's buffer is full.
+  ///
+  /// Encoded ONCE, here, rather than on every retry: a message held back is
+  /// already bytes by the time it is held.
+  function deliver(port, value) {
     const q = outbox.get(port) ?? [];
-    q.push(payload);
+    q.push(toBytes(value));
     outbox.set(port, q);
     return flushPort(port);
   }
@@ -126,7 +158,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     const q = outbox.get(port);
     if (!q) return true;
     while (q.length) {
-      if (!tryDeliver(port, q[0])) return false;
+      if (!tryDeliverBytes(port, q[0])) return false;
       q.shift();
     }
     outbox.delete(port);
@@ -148,6 +180,25 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   let capabilities = {};
   const openPorts = new Map();
 
+  /// Ids for the ports THIS HOST owns. A sandbox no longer mints them
+  /// (`doc/decisions/0027`), so somebody outside has to, and the id has to mean
+  /// the same thing in every sandbox that holds the port -- which is what makes
+  /// a handle passable from one to another.
+  ///
+  /// Starts above the ids a sandbox uses for its own channels so a stray
+  /// collision in a log is obvious rather than plausible.
+  let nextPortId = 1000;
+  function newPortId() { return nextPortId++; }
+
+  /// What each port this host owns is FOR, and how many sandboxes hold it.
+  ///
+  /// The count is maintained by `retain`/`release`, which the runtime pushes
+  /// exactly once each per sandbox (`doc/decisions/0027`): a port arriving
+  /// twice is one holder, because the handle is interned by id. At zero the
+  /// host may let the resource go, and that is the whole point of counting --
+  /// a number that says "how many arrivals" would not answer that question.
+  const ports = new Map();
+
   function handle(ev) {
     if (ev.kind === 'open-request') {
       const cap = capabilities[ev.name];
@@ -168,12 +219,42 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
         e.flint_continue(ev.token, 0);
         return;
       }
-      openPorts.set(ev.port, cap);
-      e.flint_continue(ev.token, 1);
-      if (cap.open) cap.open(ev.port, api);
+      // A GRANT NAMES A PORT. `flint_continue(token, 1)` cannot mean "yes",
+      // because there is no port until this line decides which one.
+      const port = newPortId();
+      ports.set(port, { cap, holders: 0 });
+      if (!e.flint_grant(ev.token, port)) {
+        ports.delete(port);
+        e.flint_continue(ev.token, 0);
+        return;
+      }
+      // Routing is set NOW, so a message cannot arrive before the port is
+      // known. The handler's `open` fires on the RETAIN below, which is the
+      // event that says the sandbox actually holds it -- one place where the
+      // count is maintained, and `holders` reads 1 inside `open` rather than 0.
+      openPorts.set(port, cap);
     } else if (ev.kind === 'message') {
       const cap = openPorts.get(ev.port);
-      if (cap && cap.message) cap.message(ev.port, ev.data, api);
+      if (cap && cap.message) cap.message(ev.port, ev.value, api, ev);
+    } else if (ev.kind === 'retain') {
+      const p = ports.get(ev.port);
+      if (!p) return;
+      p.holders++;
+      if (p.holders === 1 && p.cap && p.cap.open) p.cap.open(ev.port, api);
+    } else if (ev.kind === 'release') {
+      const p = ports.get(ev.port);
+      if (!p) return;
+      p.holders--;
+      // Nobody holds it any more, so whatever it was standing for can go. This
+      // is the moment a host was previously never told about: a dropped handle
+      // used to be indistinguishable from a live one it had simply not heard
+      // from.
+      if (p.holders <= 0) {
+        if (p.cap && p.cap.released) p.cap.released(ev.port, api);
+        ports.delete(ev.port);
+        openPorts.delete(ev.port);
+        outbox.delete(ev.port);
+      }
     } else if (ev.kind === 'closed') {
       const cap = openPorts.get(ev.port);
       if (cap && cap.closed) cap.closed(ev.port, api);
@@ -182,11 +263,40 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     }
   }
 
+  /// Hand a port this host owns to the sandbox, without waiting to be asked.
+  ///
+  /// `system` makes it the sandbox's SYSTEM port: the one `open` requests go
+  /// out on. A sandbox given none can run logic and ask for nothing, which is
+  /// the honest default rather than a degraded mode.
+  ///
+  /// Installing a port the sandbox already holds is FREE and takes no second
+  /// reference -- the handle is interned by id -- so a host may install without
+  /// tracking what it has installed before.
+  function install(port, { label = '', system = false, handler = null } = {}) {
+    const b = enc.encode(label);
+    const p = e.flint_in_alloc(b.length);
+    new Uint8Array(e.memory.buffer).set(b, p);
+    if (!e.flint_install_port(port, b.length, system ? 1 : 0)) return false;
+    if (!ports.has(port)) ports.set(port, { cap: handler, holders: 0 });
+    if (handler) openPorts.set(port, handler);
+    return true;
+  }
+
   const api = {
+    /// Send a VALUE. The ordinary way: encoding is done for you.
     deliver,
     tryDeliver,
+    /// Send BYTES you encoded yourself, with `codec`. The low-level way, for a
+    /// host that wants to control the encoding exactly.
+    tryDeliverBytes,
+    /// The wire codec itself, for building and reading values by hand.
+    codec,
+    install,
     close: (p) => e.flint_close(p),
     text: (d) => dec.decode(d),
+    /// How many sandboxes hold this port. Zero means nobody, and the resource
+    /// behind it can go.
+    holders: (p) => (ports.get(p)?.holders ?? 0),
     /// How much the guest will still accept on this port right now. A capability
     /// that wants to be a good citizen can ask instead of being refused.
     state: (p) => e.flint_port_state(p),
@@ -201,6 +311,9 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     pump,
     grant: (name, handler) => { capabilities[name] = handler; },
     capabilities: (m) => { capabilities = m; },
+    install,
+    codec,
+    holders: (p) => (ports.get(p)?.holders ?? 0),
   };
 }
 

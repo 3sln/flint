@@ -9,7 +9,7 @@
         (send a :hello)
         (receive b))                ; => :hello
 
-      (with-open [r (open \"clock\" {:codec edn/codec})]
+      (with-open [r (open \"clock\")]
         (send r :now)
         (receive r))
 
@@ -45,92 +45,66 @@
   behalf — but that is a *safety net*: it is deterministic, and it is not
   prompt, and a host holding a socket open until then is a real cost.
 
-  ## Formats
+  ## What a bridge carries
 
-  A host port carries **bytes**, so a value has to be encoded. Hand the codec
-  in, as a value:
+  **Values, not bytes.** A bridge encodes on the way out and decodes on the way
+  in, and the runtime is what does it — there is no codec to choose, to attach,
+  or to get wrong, and `send` takes the same value a channel would take.
 
-      (:require [flint.port :as p] [flint.port.edn :as edn])
-      (p/open \"thing\" {:codec edn/codec})
+  That is a safety rule, not a convenience (`doc/decisions/0025`). The wire
+  format writes an opaque value's host id inline, and bytes are integers a guest
+  can write; a codec running in here would therefore be an integer-to-capability
+  conversion, and an opaque value's whole meaning is that no such conversion
+  exists. Keeping the encoder on the runtime's side of the line is what makes
+  `(send p {:cap c})` safe to allow at all.
 
-  Passing it rather than naming a format is deliberate. A `cond` here over every
-  format would make all of them reachable from any program that opens any port,
-  so a JSON program would carry an EDN reader it never uses; and a registry
-  filled by requiring a namespace for its side effect is a load-order trap. A
-  codec is a value, so you link the one you use.
-
-  With no codec the port is **raw**: `send` takes a string and `receive` gives
-  one back. Driving a resource raw has to work, and this is what that looks
-  like."
+  There used to be a `:codec` option taking `:encode`/`:decode` functions. It is
+  gone, and so is the raw byte mode it sat on: a port that carried strings the
+  program had already serialised was the same hole seen from the other side."
   (:refer-clojure :exclude [send])
   (:require [flint.rt]))
-
-(defn- codec-of [p]
-  (:flint/codec (flint.rt/port-opts p)))
 
 (defn channel
   "A coupled pair `[a b]`: what goes into one comes out of the other, both ways.
   `cap` is the buffer size in messages (default 16); `label` is for diagnostics
-  and shows up in a deadlock report."
+  and shows up in a deadlock report.
+
+  Both ends are in this heap, so a message is a pointer move: nothing is
+  encoded, nothing is copied, and an identity crossing one still means what it
+  meant. This is the port that costs nothing."
   ([] (flint.rt/channel 16 nil))
   ([label] (if (string? label) (flint.rt/channel 16 label) (flint.rt/channel label nil)))
   ([cap label] (flint.rt/channel cap label)))
 
 (defn open
-  "Ask the host to open `name`, forwarding `opts` to it verbatim.
+  "Ask the host for a port called `name`, forwarding `opts` to it verbatim.
 
-  **The runtime takes no view of what `opts` contains.** Everything except
-  `:codec` — which is this side's business, not the host's — crosses as data,
-  and anything in it that is an opaque value (`doc/decisions/0022`) crosses
-  carrying the host id it was ISSUED with. So a host that lent a capability
-  recognises its own and nothing else, and one that requires none simply
-  ignores what it was sent.
+  **A request, not a construction** (`doc/decisions/0027`). The sandbox cannot
+  make a bridge; it asks on the system port it was given at construction, and
+  the host answers with a handle on a port the host already owns — or refuses,
+  which is a normal outcome and arrives as a catchable `SecurityException`. A
+  sandbox given no system port cannot ask at all, and is told so.
 
-  That is the whole of the capability pattern, and none of it is a concept the
-  sandbox knows. A refusal is a normal outcome and arrives as a catchable
-  `SecurityException`.
+  **The runtime takes no view of what `opts` contains.** It crosses as data, and
+  anything in it that is an opaque value (`doc/decisions/0022`) crosses carrying
+  the host id it was ISSUED with. So a host that lent a capability recognises
+  its own and nothing else, and one that requires none simply ignores what it
+  was sent.
 
-      (p/open \"fs\")                                  ; ask, present nothing
-      (p/open \"fs\" {:capability c :codec edn/codec}) ; present what you hold
-
-  `:codec` (none means raw bytes) and `:format` stay here: the codec runs on
-  this side, and the format is what this end remembers about its own bytes."
+      (p/open \"fs\")                   ; ask, present nothing
+      (p/open \"fs\" {:capability c})   ; present what you hold"
   ([name] (open name nil))
-  ([name opts]
-   (let [codec (:codec opts)
-         fmt (or (:format opts) (:format codec) :bytes)
-         ;; Everything but the codec goes to the host, as one value. A codec is
-         ;; functions, and functions do not cross (`doc/decisions/0006`).
-         wire (assoc (dissoc (or opts {}) :codec) :format fmt)
-         p (flint.rt/open name wire)]
-     (flint.rt/set-port-format p fmt)
-     (flint.rt/set-port-opts p (assoc (dissoc (or opts {}) :codec) :flint/codec codec))
-     (flint.rt/set-port-binary p (boolean (:binary codec)))
-     p)))
-
-(defn set-codec
-  "Attach a codec to a port that already exists.
-
-  `open` bundled this into creating a port, which worked only because the
-  sandbox was the one creating it. A GLOBAL port is handed over by the host
-  (`doc/decisions/0027`), so choosing how to read its bytes is a separate
-  decision made by whoever holds it — and both ends have to agree, which is a
-  protocol question rather than something the constructor can settle.
-
-  `nil` means raw bytes."
-  ([p codec] (set-codec p codec nil))
-  ([p codec opts]
-   (flint.rt/set-port-opts p (assoc (dissoc (or opts {}) :codec) :flint/codec codec))
-   (flint.rt/set-port-binary p (boolean (:binary codec)))
-   p))
+  ([name opts] (flint.rt/open name (or opts {}))))
 
 (defn port? [x] (flint.rt/port? x))
 
-(defn host?
-  "True when the other end is the host's, which is also when messages are bytes
-  and a codec is involved."
+(defn bridge?
+  "True when this port crosses a heap — the host owns the other end, messages
+  are encoded, and only what means something on the far side may cross.
+
+  False for a channel, whose ends are both in here."
   [p]
-  (flint.rt/port-host? p))
+  (flint.rt/port-bridge? p))
 
 (defn state
   "What this end is doing:
@@ -160,7 +134,6 @@
     (or (= s :closed) (= s :half-closed) (= s :orphaned) (= s :refused))))
 
 (defn label [p] (flint.rt/port-label p))
-(defn format-of [p] (flint.rt/port-format p))
 
 (defn port-id
   "The number the host knows this port by."
@@ -170,23 +143,24 @@
 (defn send
   "Put `v` into the other end. Parks if that end's buffer is full.
 
-  On a host port the value is **encoded now**, not when the host gets round to
-  reading it: that is what makes draining cheap and the byte budget mean
-  something. A value the format cannot represent is an error here, naming the
-  value — not a quiet coercion."
+  On a bridge the value is **encoded now**, by the runtime, not when the host
+  gets round to reading it: that is what makes draining cheap and the byte
+  budget mean something. A value the wire format cannot represent is an error
+  here, naming the value — not a quiet coercion.
+
+  A function is refused **by name**, on any port: a closure's meaning is its
+  environment and an environment does not travel."
   [p v]
-  (if (host? p)
-    (let [c (codec-of p)]
-      (flint.rt/port-send p (if c ((:encode c) v (flint.rt/port-opts p)) v)))
-    (flint.rt/port-send p v)))
+  (flint.rt/port-send p v))
 
 (defn receive
   "Take the next message. Parks if there is none; returns `nil` once the port is
-  closed and drained."
+  closed and drained.
+
+  On a bridge the bytes are decoded by the runtime before you see them, so this
+  answers a value on every kind of port."
   [p]
-  (let [v (flint.rt/port-receive p)
-        c (and (host? p) (some? v) (codec-of p))]
-    (if c ((:decode c) v (flint.rt/port-opts p)) v)))
+  (flint.rt/port-receive p))
 
 (defn close
   "Close a port — any port, not only one you opened. Anybody parked on it wakes

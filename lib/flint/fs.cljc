@@ -9,13 +9,12 @@
   comes back as an error rather than being clamped, because quietly rewriting a
   path answers a question nobody asked."
   (:require [flint.rpc :as rpc]
-            [flint.port :as p]
-            [flint.port.edn :as edn]))
+            [flint.port :as p]))
 
 (defn open
   "Open the filesystem capability `name`, or throw if the host refuses."
   ([] (open "fs"))
-  ([name] {:client (rpc/client (p/open name {:codec edn/codec}))}))
+  ([name] {:client (rpc/client (p/open name))}))
 
 (defn- ask
   "`rpc/call` already returns the reply's `:body` and already throws on an
