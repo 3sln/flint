@@ -235,7 +235,30 @@ transient table appends into an open chunk and seals it when full.
    cheaper than a rewrite, which is the whole claim. The mapper case rebuilds,
    in guest code, because there is nothing to share when every row is new.
 7. The transient, measured against the persistent path on a build loop.
-8. `flint.table`: bulk construction, column selection, ranges, splits.
+   **Done**, MEASURED: appending 20 000 rows through the persistent path
+   allocates 49 061 464 bytes and collects 23 times, against 3 082 984 and once.
+   A full open chunk is handed over uncopied -- sealing it made the transient
+   allocate MORE than the bulk path it was meant to beat, which only the
+   measurement showed.
+8. `flint.table`: bulk construction, column selection, ranges, splits. **Done**
+   -- `column`, `reduce-column`, `slice`, `select`, `build`. The two numbers
+   that justify the type, on 40 000 rows with the build subtracted:
+
+   | | gas | allocated |
+   |---|---:|---:|
+   | `reduce-column` | 200 011 | **32** |
+   | the same sum through `rows` | 2 764 077 | 2 912 152 |
+   | `slice` of 38 000 rows | 3 871 | **30 848** |
+   | the same range rebuilt | 10 480 385 | 34 153 240 |
+
+   Scanning one field allocates THIRTY-TWO BYTES, because it reads the chunk
+   runs and never builds a row. And `slice` shares every chunk it spans: a row
+   offset in the table head means a range starting anywhere costs the chunks it
+   covers rather than the rows, which is the same thing `subs` must do one type
+   over. Chunks outside the range are dropped, so a slice does not retain the
+   table -- `SLICE_MIN`'s rule for ropes, achieved by construction rather than
+   by a threshold. `select` is a `migrate` to a narrower schema, so it is a
+   head-only edit that shares every column it keeps.
 9. The `0025` codec tag and `0033`'s columnar JSON, so a table crosses a port as
    a table rather than as a vector of maps -- and, the same question asked of
    source rather than of a port, a reader tag registry so `#flint/table [...]`

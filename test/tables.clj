@@ -168,6 +168,80 @@
             (and (> (get es "peak") 500000) (> (get ev "peak") 500000))
             "one of the runs did too little to compare")
 
+;; --------------------------------------------------------------- step 8
+;;
+;; THE COLUMN API, and the two claims that make it worth having.
+;;
+;; `reduce-column` reaches the chunk runs directly; reducing over `rows` reads
+;; the same field through a ref per row. Both answer the same number, so the
+;; difference is the cost of the row that one of them did not need.
+;;
+;; `slice` SHARES the chunks it spans, so taking a range out of a table is
+;; O(chunks) rather than O(rows) -- the same thing a rope `subs` must do, one
+;; type over, and for the same reason.
+(spit (str d "/col.cljc")
+      (str "(ns col (:require [flint.table :as ft]))\n"
+           "(def N 40000)\n"
+           "(def S (ft/schema [[:id :int] [:score :int]]))\n"
+           "(defn- t [] (ft/table S (mapv (fn [i] {:id i :score (* 2 i)}) (range N))))\n"
+           "(defn main [args]\n"
+           "  (let [w (first args) tb (t)]\n"
+           "    (cond\n"
+           "      (= w \"none\")  (pr-str (count tb))\n"
+           "      (= w \"col\")   (pr-str (ft/reduce-column tb :score + 0))\n"
+           "      (= w \"rows\")  (pr-str (reduce + 0 (mapv :score (ft/rows tb))))\n"
+           "      (= w \"slice\") (pr-str (count (ft/slice tb 1000 39000)))\n"
+           "      (= w \"rebuild\") (pr-str (count (ft/table S (mapv (fn [r] (into {} r))\n"
+           "                                                        (take 38000 (drop 1000 (ft/rows tb)))))))\n"
+           "      :else (pr-str :none))))\n"))
+(let [r (sh "./bin/flint" ":src" d ":fn" "col/main" ":out" "out/tbl-col.wasm")]
+  (when-not (zero? (:exit r)) (println "col build failed:" (:out r) (:err r)) (System/exit 1)))
+(spit "out/tbl-col-run.mjs"
+      (str "import { load, instantiate } from '../host/flint.mjs';\n"
+           "const { module } = await load('out/tbl-col.wasm');\n"
+           "const out = {};\n"
+           "for (const w of ['none', 'col', 'rows', 'slice', 'rebuild']) {\n"
+           "  const i = instantiate(module);\n"
+           "  i.exports.set_step_limit(0x7ffffff0n);\n"
+           "  const r = i.main(w);\n"
+           "  out[w] = { answer: r.out, gas: Number(i.exports.stat_steps()),\n"
+           "             allocated: Number(i.exports.stat_bytes_allocated()) };\n"
+           "}\n"
+           "console.log(JSON.stringify(out));\n"))
+(def cl (let [r (sh "node" "out/tbl-col-run.mjs")]
+          (when-not (zero? (:exit r)) (println "col run failed:" (:out r) (:err r)) (System/exit 1))
+          (read-string (str/replace (str/trim (:out r)) #"\"(\w+)\":" "\"$1\" "))))
+(def base-gas (get (get cl "none") "gas"))
+(def base-alloc (get (get cl "none") "allocated"))
+(defn col-gas [k] (- (get (get cl k) "gas") base-gas))
+(defn col-alloc [k] (- (get (get cl k) "allocated") base-alloc))
+
+;; SAME ANSWER first: a scan that is fast and wrong is worse than absent.
+(check "reduce-column and reducing over rows agree"
+       (get (get cl "col") "answer") (get (get cl "rows") "answer"))
+(check "  ... and a slice counts what was asked for"
+       (get (get cl "slice") "answer") "38000")
+
+(println (format "    %-26s %12s %12s   %s" "" "gas" "allocated" "(the build removed)"))
+(doseq [[nm k] [["reduce one column" "col"] ["  ... through rows" "rows"]
+                ["slice 38 000 rows" "slice"] ["  ... by rebuilding" "rebuild"]]]
+  (println (format "    %-26s %12d %12d" nm (col-gas k) (col-alloc k))))
+
+(check-that "scanning a column does not build a row"
+            (< (* 2 (col-alloc "col")) (col-alloc "rows"))
+            (format "%d bytes against %d through rows -- the refs are not free but they should show"
+                    (col-alloc "col") (col-alloc "rows")))
+(check-that "  ... and costs less work"
+            (< (col-gas "col") (col-gas "rows"))
+            (format "%d gas against %d" (col-gas "col") (col-gas "rows")))
+(check-that "a slice shares its chunks rather than copying rows"
+            (< (* 20 (col-alloc "slice")) (col-alloc "rebuild"))
+            (format "%d bytes against %d to rebuild -- a slice should be O(chunks)"
+                    (col-alloc "slice") (col-alloc "rebuild")))
+(check-that "  ... and the rebuild really did rebuild, so the comparison is real"
+            (> (col-alloc "rebuild") 1000000)
+            "the rebuild was too cheap to be a control")
+
 ;; --------------------------------------------------------------- step 6
 ;;
 ;; MIGRATION, and the claim that makes it worth having: a column both schemas

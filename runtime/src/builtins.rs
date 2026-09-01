@@ -720,6 +720,31 @@ builtins! {
         }
         rt.table_migrate(t, w, d)
     };
+    "flint/table-slice", flint_b_tableslice, b_tableslice, |rt, a, n| {
+        let _ = n;
+        let (t, f, e) = (arg(rt, a, 0), arg(rt, a, 1), arg(rt, a, 2));
+        if !rt.is_table(t) {
+            return rt.throw_str("IllegalArgumentException", "slice wants a table");
+        }
+        let (f, e) = (rt.as_i64(f).unwrap_or(-1), rt.as_i64(e).unwrap_or(-1));
+        rt.table_slice(t, f, e)
+    };
+    "flint/table-column", flint_b_tablecolumn, b_tablecolumn, |rt, a, n| {
+        let _ = n;
+        let (t, name) = (arg(rt, a, 0), arg(rt, a, 1));
+        if !rt.is_table(t) {
+            return rt.throw_str("IllegalArgumentException", "column wants a table");
+        }
+        rt.table_column(t, name)
+    };
+    "flint/table-reduce-column", flint_b_tablereduce, b_tablereduce, |rt, a, n| {
+        let _ = n;
+        let (t, name, f, init) = (arg(rt, a, 0), arg(rt, a, 1), arg(rt, a, 2), arg(rt, a, 3));
+        if !rt.is_table(t) {
+            return rt.throw_str("IllegalArgumentException", "reduce-column wants a table");
+        }
+        rt.table_reduce_column(t, name, f, init)
+    };
     "flint/table?", flint_b_tablep, b_tablep, |rt, a, n| {
         let _ = n;
         let v = arg(rt, a, 0);

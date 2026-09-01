@@ -158,3 +158,52 @@
   ([s xs] (build s xs identity))
   ([s xs f]
    (persistent! (reduce (fn [t x] (conj! t (f x))) (transient (table s [])) xs))))
+
+;; ------------------------------------------------------------------ columns
+;;
+;; The half that makes a column store worth having rather than merely compact.
+;; Everything here reaches the COLUMN and never builds a row: scanning one field
+;; of a million-row table should touch a million values and nothing else.
+
+(defn column
+  "Column `k` of `t`, as a vector. Read straight out of the chunk runs -- no row
+  is built and no ref is made."
+  [t k]
+  (flint.rt/table-column t k))
+
+(defn reduce-column
+  "`(f acc v)` over column `k`, without materialising a row for any of them.
+
+  This is what a table is FOR. `(reduce + 0 (map :score (rows t)))` reads the
+  same field and pays for a ref per row on the way."
+  [t k f init]
+  (flint.rt/table-reduce-column t k f init))
+
+(defn slice
+  "Rows `[from to)` of `t`, as a table.
+
+  SHARES every chunk the range spans -- the row offset lives in the head, so a
+  range that starts anywhere costs the chunks it spans and not the rows.
+  Chunks outside the range are dropped, so a slice does not retain the table."
+  [t from to]
+  (flint.rt/table-slice t from to))
+
+(defn select
+  "`t` with only the columns named in `ks`, in that order.
+
+  A `migrate` to a narrower schema, which is a head-only edit: the columns kept
+  are the SAME column objects, and the ones dropped are simply not named any
+  more."
+  [t ks]
+  (let [s (table-schema t)
+        want (mapv (fn [k]
+                     (let [i (loop [j 0]
+                               (cond (>= j (count (columns s))) nil
+                                     (= k (nth (columns s) j)) j
+                                     :else (recur (inc j))))]
+                       (when (nil? i)
+                         (throw (ex-info (str "no column " k "; the columns are " (columns s))
+                                         {:column k :columns (columns s)})))
+                       [k (nth (types s) i)]))
+                   ks)]
+    (migrate t (schema want))))

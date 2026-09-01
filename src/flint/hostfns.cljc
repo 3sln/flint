@@ -101,6 +101,9 @@
    "flint/table?" flint.rt/table?
    "flint/table-schema" flint.rt/table-schema
    "flint/table-migrate" flint.rt/table-migrate
+   "flint/table-slice" flint.rt/table-slice
+   "flint/table-column" flint.rt/table-column
+   "flint/table-reduce-column" flint.rt/table-reduce-column
    "flint/schema-columns" flint.rt/schema-columns
    "flint/schema-types" flint.rt/schema-types
    "flint/tagged-literal" flint.rt/tagged-literal

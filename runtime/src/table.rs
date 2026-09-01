@@ -49,7 +49,21 @@ pub const SC_LEN: u32 = 5;
 pub const TB_SCHEMA: u32 = 0;
 pub const TB_CHUNKS: u32 = 1;
 pub const TB_COUNT: u32 = 2;
-pub const TB_LEN: u32 = 3;
+/// Row index of the table's first row WITHIN its first chunk, always less than
+/// `CHUNK`.
+///
+/// This is what makes `slice` share. A chunk holds exactly `CHUNK` rows, so a
+/// range that does not start on a chunk boundary cannot be expressed by
+/// dropping chunks alone -- and rebuilding them would copy every value, which
+/// is the mistake `subs` was making on ropes one type over. An offset in the
+/// head costs one slot and one addition per index, and lets a slice SHARE every
+/// chunk it spans.
+///
+/// Chunks outside the range are dropped rather than retained, so a slice cannot
+/// keep the whole table alive -- the same retention rule `SLICE_MIN` states for
+/// ropes, achieved here by construction instead of by a threshold.
+pub const TB_OFFSET: u32 = 3;
+pub const TB_LEN: u32 = 4;
 
 // Chunk slots. A chunk is `[nrows, encodings, col…]`, the columns addressed by
 // their stable schema id.
@@ -385,6 +399,10 @@ impl Rt {
         self.eq(ta, tb)
     }
 
+    pub fn table_offset(&mut self, t: Value) -> u32 {
+        self.slot(t, TB_OFFSET).as_fixnum() as u32
+    }
+
     pub fn table_count(&mut self, t: Value) -> u32 {
         self.slot(t, TB_COUNT).as_fixnum() as u32
     }
@@ -464,6 +482,7 @@ impl Rt {
         self.set(self.r(ti), TB_SCHEMA, sv);
         self.set(self.r(ti), TB_CHUNKS, cv);
         self.set(self.r(ti), TB_COUNT, Value::fixnum(nrows as i64));
+        self.set(self.r(ti), TB_OFFSET, Value::fixnum(0));
         let out = self.r(ti);
         self.pop_to(base);
         out
@@ -500,6 +519,10 @@ impl Rt {
         }
         let base = self.mark();
         let ti = self.push(t);
+        // THE OFFSET IS ADDED HERE, and only here: `table_ref` is the single
+        // place a row number becomes a chunk and a row within it, so a sliced
+        // table needs no other arm to know it was sliced.
+        let i = i + self.table_offset(self.r(ti));
         let chunks = self.slot(self.r(ti), TB_CHUNKS);
         let ch = self.vec_nth(chunks, i >> CHUNK_SHIFT).unwrap_or(NIL);
         let chi = self.push(ch);
@@ -838,8 +861,9 @@ impl Rt {
             let chunks = self.slot(self.r(ti), TB_CHUNKS);
             self.set_r(ci, chunks);
         }
-        let which = i >> CHUNK_SHIFT;
-        let within = i & (CHUNK - 1);
+        let phys = i + self.table_offset(self.r(ti));
+        let which = phys >> CHUNK_SHIFT;
+        let within = phys & (CHUNK - 1);
         let append = i == self.table_count(self.r(ti));
         let nchunks = self.vec_count(self.r(ci));
         if append && which >= nchunks {
@@ -888,6 +912,8 @@ impl Rt {
         self.set(self.r(ni), TB_SCHEMA, sv);
         self.set(self.r(ni), TB_CHUNKS, cv);
         self.set(self.r(ni), TB_COUNT, Value::fixnum(count as i64));
+        let off = self.slot(self.r(ti), TB_OFFSET);
+        self.set(self.r(ni), TB_OFFSET, off);
         let out = self.r(ni);
         self.pop_to(base);
         out
@@ -1101,6 +1127,8 @@ impl Rt {
         self.set(self.r(nti), TB_SCHEMA, sv);
         self.set(self.r(nti), TB_CHUNKS, cv);
         self.set(self.r(nti), TB_COUNT, Value::fixnum(count as i64));
+        let off = self.slot(self.r(ti), TB_OFFSET);
+        self.set(self.r(nti), TB_OFFSET, off);
         let out = self.r(nti);
         self.pop_to(base);
         out
@@ -1336,6 +1364,7 @@ impl Rt {
         self.set(self.r(ni), TB_SCHEMA, sv);
         self.set(self.r(ni), TB_CHUNKS, cv);
         self.set(self.r(ni), TB_COUNT, count);
+        self.set(self.r(ni), TB_OFFSET, Value::fixnum(0));
         let out = self.r(ni);
         self.pop_to(base);
         out
@@ -1343,5 +1372,147 @@ impl Rt {
 
     pub fn ttable_count(&mut self, t: Value) -> u32 {
         self.slot(t, TT_COUNT).as_fixnum() as u32
+    }
+
+    // ---------------------------------------------------------------- step 8
+    //
+    // The column API -- the half that makes a column store worth having rather
+    // than merely compact. Everything here reaches the COLUMN and never builds
+    // a row: a scan of one field of a million-row table should touch a million
+    // values and nothing else.
+
+    /// `(slice t from to)` -- rows `[from, to)`, SHARING every chunk it spans.
+    ///
+    /// Chunks outside the range are dropped, so a slice does not retain the
+    /// table; chunks inside it are the same objects. The row offset in the head
+    /// is what lets the range start anywhere without rebuilding a chunk.
+    pub fn table_slice(&mut self, t: Value, from: i64, to: i64) -> Value {
+        let n = self.table_count(t) as i64;
+        if from < 0 || to > n || from > to {
+            let msg = alloc::format!(
+                "slice [{from} {to}) is outside a table of {n} rows"
+            );
+            return self.throw_str("IndexOutOfBoundsException", &msg);
+        }
+        let base = self.mark();
+        let ti = self.push(t);
+        if from == to {
+            let s = self.slot(self.r(ti), TB_SCHEMA);
+            let si = self.push(s);
+            let sv = self.r(si);
+            let out = self.new_table(sv, self.empty_vec());
+            self.pop_to(base);
+            return out;
+        }
+        let off = self.table_offset(self.r(ti));
+        let first = (off + from as u32) >> CHUNK_SHIFT;
+        let last = (off + to as u32 - 1) >> CHUNK_SHIFT;
+        let chunks = self.slot(self.r(ti), TB_CHUNKS);
+        let ci = self.push(chunks);
+        let kept = self.empty_vec();
+        let ki = self.push(kept);
+        for k in first..=last {
+            let ch = self.vec_nth(self.r(ci), k).unwrap_or(NIL);
+            let nv = self.vec_conj(self.r(ki), ch);
+            self.set_r(ki, nv);
+        }
+        let s = self.slot(self.r(ti), TB_SCHEMA);
+        let si = self.push(s);
+        let a = self.alloc(TY_TABLE, TB_LEN);
+        let nt = Value::heap(a);
+        let ni = self.push(nt);
+        let (sv, kv) = (self.r(si), self.r(ki));
+        self.set(self.r(ni), TB_SCHEMA, sv);
+        self.set(self.r(ni), TB_CHUNKS, kv);
+        self.set(self.r(ni), TB_COUNT, Value::fixnum(to - from));
+        self.set(
+            self.r(ni),
+            TB_OFFSET,
+            Value::fixnum(((off + from as u32) & (CHUNK - 1)) as i64),
+        );
+        let out = self.r(ni);
+        self.pop_to(base);
+        out
+    }
+
+    /// One column, as a vector. Reads the column runs directly -- no row is
+    /// built and no ref is made.
+    pub fn table_column(&mut self, t: Value, name: Value) -> Value {
+        let base = self.mark();
+        let ti = self.push(t);
+        let s = self.slot(self.r(ti), TB_SCHEMA);
+        let id = self.schema_id(s, name);
+        if id < 0 {
+            let nm = self.kw_name(name);
+            let cols = self.column_list(s);
+            self.pop_to(base);
+            let msg = alloc::format!("no column :{nm}; the columns are {cols}");
+            return self.throw_str("IllegalArgumentException", &msg);
+        }
+        let id = id as u32;
+        let n = self.table_count(self.r(ti));
+        if !self.charge_checked(n as u64, "column") {
+            self.pop_to(base);
+            return NIL;
+        }
+        let out = self.empty_vec();
+        let oi = self.push(out);
+        for i in 0..n {
+            let v = self.table_cell(self.r(ti), id, i);
+            let nv = self.vec_conj(self.r(oi), v);
+            self.set_r(oi, nv);
+        }
+        let r = self.r(oi);
+        self.pop_to(base);
+        r
+    }
+
+    /// Cell `(row, column-id)`, straight out of the chunk. The scan path.
+    fn table_cell(&mut self, t: Value, id: u32, i: u32) -> Value {
+        let phys = i + self.table_offset(t);
+        let chunks = self.slot(t, TB_CHUNKS);
+        let ch = self.vec_nth(chunks, phys >> CHUNK_SHIFT).unwrap_or(NIL);
+        self.chunk_get(ch, id, phys & (CHUNK - 1))
+    }
+
+    /// `(reduce-column t :col f init)` -- `f` over one column, without building
+    /// a row or a ref for any of them. This is the operation the type exists
+    /// for: scanning one field should cost one field.
+    pub fn table_reduce_column(&mut self, t: Value, name: Value, f: Value, init: Value) -> Value {
+        let base = self.mark();
+        let ti = self.push(t);
+        let fi = self.push(f);
+        let acc = self.push(init);
+        let s = self.slot(self.r(ti), TB_SCHEMA);
+        let id = self.schema_id(s, name);
+        if id < 0 {
+            let nm = self.kw_name(name);
+            let cols = self.column_list(s);
+            self.pop_to(base);
+            let msg = alloc::format!("no column :{nm}; the columns are {cols}");
+            return self.throw_str("IllegalArgumentException", &msg);
+        }
+        let id = id as u32;
+        let n = self.table_count(self.r(ti));
+        for i in 0..n {
+            if !self.charge_tick(i as u64, 1, "reduce-column") {
+                self.pop_to(base);
+                return NIL;
+            }
+            let v = self.table_cell(self.r(ti), id, i);
+            let vi = self.push(v);
+            let argv = [self.r(acc), self.r(vi)];
+            let fv = self.r(fi);
+            let nv = self.invoke(fv, &argv);
+            if !self.thrown.is_nil() {
+                self.pop_to(base);
+                return NIL;
+            }
+            self.set_r(acc, nv);
+            self.pop_to(vi);
+        }
+        let out = self.r(acc);
+        self.pop_to(base);
+        out
     }
 }
