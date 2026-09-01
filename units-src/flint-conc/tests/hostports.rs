@@ -1,9 +1,9 @@
-//! HOST PORTS: the half of `conc.rs` the host drives.
+//! BRIDGES: the half of `conc.rs` the host drives.
 //!
 //! `threads.rs` next door covers what a program can do on its own -- spawn,
 //! join, a channel between two green threads. This covers what it cannot: a
-//! capability it has to ASK the host for, bytes the host pushes in, and the
-//! event queue the two talk over.
+//! capability it has to ASK the host for on its system port, messages the host
+//! pushes in, and the event queue the two talk over.
 //!
 //! Every assertion here has a mirror on the JVM and CLR ports
 //! (`RtHostPorts.java`, `--rt-hostports`), and `bin/conform-hosts` runs all
@@ -85,6 +85,18 @@ struct Ev {
     payload: Vec<u8>,
 }
 
+/// The open-request in a drain.
+///
+/// A drain is no longer one event: installing a bridge pushes an `EV_RETAIN`
+/// first, because the host's count is maintained in exactly one place and that
+/// place is the event stream (`doc/decisions/0027`). Finding the request by
+/// KIND rather than by index is what a host does anyway.
+fn open_ev(evs: &[Ev]) -> &Ev {
+    evs.iter()
+        .find(|e| e.kind == conc::EV_OPEN as u32)
+        .unwrap_or_else(|| panic!("no open-request in {evs:?}"))
+}
+
 fn drain(rt: &mut Rt) -> Vec<Ev> {
     let mut buf: Vec<u8> = Vec::new();
     let n = rt.drain_events(&mut buf) as usize;
@@ -158,8 +170,32 @@ fn opener(cap_host_id: Option<u64>) -> Rt {
         }
         None => NIL,
     };
+    // A SYSTEM PORT, because `open` is a request ON one (`doc/decisions/0027`).
+    // A sandbox given none cannot ask for anything, which the last test here
+    // checks; every other test needs one installed before the program runs.
+    let l = rt.string("system");
+    rt.install_system_port(SYSTEM, l);
     rt.run_program(arg);
     rt
+}
+
+/// The host's id for this sandbox's system port. The HOST picks it: a sandbox
+/// no longer mints port ids, which is the whole of `0027`.
+const SYSTEM: i64 = 1;
+/// The host's id for the port these tests grant when asked.
+const GRANTED: i64 = 500;
+
+/// Grant an open with `GRANTED`, the way a host answers a request.
+fn grant(rt: &mut Rt, token: u32) -> bool {
+    rt.host_grant(token as i64, GRANTED)
+}
+
+/// A message as the host writes it: the wire format, because a bridge carries
+/// VALUES and the runtime decodes what arrives. A host that wrote raw bytes
+/// here would be writing something the runtime cannot read.
+fn wire(rt: &mut Rt, s: &str) -> Vec<u8> {
+    let v = rt.string(s);
+    rt.encode(v).expect("a string encodes")
 }
 
 /// What the guest presented, as a host reads it.
@@ -202,26 +238,51 @@ fn open_asks_the_host_and_parks_until_it_answers() {
     let mut rt = opener(None);
     assert_eq!(rt.status, 2, "parked on the host, not finished and not deadlocked");
     let evs = drain(&mut rt);
-    assert_eq!(evs.len(), 1, "exactly one open-request");
-    assert_eq!(evs[0].kind, conc::EV_OPEN as u32);
+    assert_eq!(
+        evs.iter().filter(|e| e.kind == conc::EV_OPEN as u32).count(),
+        1,
+        "exactly one open-request: {evs:?}"
+    );
+    // Installing the system port took a reference, and said so.
+    assert!(
+        evs.iter().any(|e| e.kind == conc::EV_RETAIN as u32 && e.a as i64 == SYSTEM),
+        "installing a bridge retains it: {evs:?}"
+    );
     // Nothing was presented -- and NOTHING is a distinct answer from "something
     // I do not recognise".
-    let p = evs[0].payload.clone();
+    let p = open_ev(&evs).payload.clone();
     assert_eq!(presented(&mut rt, &p), None);
-    let token = evs[0].a as i64;
-    assert!(rt.host_continue(token, true), "a fresh token is honoured");
+    // The request went out ON THE SYSTEM PORT: there is no port for it yet.
+    assert_eq!(open_ev(&evs).b as i64, SYSTEM, "asked on the system port");
+    let token = open_ev(&evs).a;
+    // A GRANT NAMES A PORT. `host_continue(token, true)` cannot: there is no
+    // port until the host says which one, so that form is refused outright.
+    assert!(!rt.host_continue(token as i64, true), "a grant must name a port");
+    assert!(grant(&mut rt, token), "a fresh token is honoured");
     // A SECOND answer on the same token is refused: the generation moved on.
-    assert!(!rt.host_continue(token, true), "a duplicate reply is refused");
-    let host_id = evs[0].b;
-    assert!(rt.host_deliver(host_id as i64, b"hello"));
+    assert!(!grant(&mut rt, token), "a duplicate reply is refused");
+    // And the host was told it now HOLDS the port -- one retain, on the mint.
+    let after = drain(&mut rt);
+    assert!(
+        after.iter().any(|e| e.kind == conc::EV_RETAIN as u32 && e.a as i64 == GRANTED),
+        "granting takes a reference and says so: {after:?}"
+    );
+    let msg = wire(&mut rt, "hello");
+    assert!(rt.host_deliver(GRANTED, &msg));
     let (v, tail) = finish(&mut rt);
     let mut sb = flint_rt::rt::sbuf();
     assert_eq!(rt.as_str(v, &mut sb), Some("hello"));
     assert_eq!(rt.status, 0);
     // And the host was TOLD the port closed, rather than left to infer it.
     assert!(
-        tail.iter().any(|e| e.kind == conc::EV_CLOSED as u32 && e.a == host_id),
-        "exit closes the flint end and says so: {tail:?}"
+        tail.iter().any(|e| e.kind == conc::EV_CLOSED as u32 && e.a as i64 == GRANTED),
+        "exit closes the bridge and says so: {tail:?}"
+    );
+    // And RELEASES it: one per retain, so the host's count reaches zero and
+    // whatever the port stood for can go.
+    assert!(
+        tail.iter().any(|e| e.kind == conc::EV_RELEASE as u32 && e.a as i64 == GRANTED),
+        "exit releases the bridge: {tail:?}"
     );
 }
 
@@ -229,7 +290,7 @@ fn open_asks_the_host_and_parks_until_it_answers() {
 fn a_refusal_is_a_security_exception_rather_than_a_hang() {
     let mut rt = opener(None);
     let evs = drain(&mut rt);
-    assert!(rt.host_continue(evs[0].a as i64, false));
+    assert!(rt.host_continue(open_ev(&evs).a as i64, false));
     finish(&mut rt);
     assert!(rt.failed(), "a refused open must throw");
     let e = rt.clear_error();
@@ -248,7 +309,7 @@ fn a_refusal_is_a_security_exception_rather_than_a_hang() {
 fn a_guest_minted_capability_is_unknown_not_absent() {
     let mut rt = opener(Some(0));
     let evs = drain(&mut rt);
-    let p = evs[0].payload.clone();
+    let p = open_ev(&evs).payload.clone();
     assert_eq!(
         presented(&mut rt, &p),
         Some(0),
@@ -256,7 +317,7 @@ fn a_guest_minted_capability_is_unknown_not_absent() {
     );
     let mut rt2 = opener(Some(77));
     let evs2 = drain(&mut rt2);
-    let p2 = evs2[0].payload.clone();
+    let p2 = open_ev(&evs2).payload.clone();
     assert_eq!(presented(&mut rt2, &p2), Some(77), "a real host id travels");
 }
 
@@ -264,28 +325,32 @@ fn a_guest_minted_capability_is_unknown_not_absent() {
 fn the_guest_buffer_bounds_what_the_host_may_push() {
     let mut rt = opener(None);
     let evs = drain(&mut rt);
-    let host_id = evs[0].b as i64;
-    assert!(rt.host_continue(evs[0].a as i64, true));
+    assert!(grant(&mut rt, open_ev(&evs).a));
     // One message under the cap goes in; a second that would cross it is
     // REFUSED rather than queued, so a server answering in waves cannot make
     // the whole answer resident at once.
-    let big = vec![b'x'; conc::DEFAULT_HOST_CAP as usize];
-    assert!(rt.host_deliver(host_id, &big), "the first wave fits");
-    assert!(!rt.host_deliver(host_id, b"more"), "the second must wait");
+    let big = {
+        let s: String = core::iter::repeat('x')
+            .take(conc::DEFAULT_BRIDGE_CAP as usize)
+            .collect();
+        wire(&mut rt, &s)
+    };
+    let more = wire(&mut rt, "more");
+    assert!(rt.host_deliver(GRANTED, &big), "the first wave fits");
+    assert!(!rt.host_deliver(GRANTED, &more), "the second must wait");
     finish(&mut rt);
-    assert!(rt.host_deliver(host_id, b"more"), "after a receive there is room again");
+    assert!(rt.host_deliver(GRANTED, &more), "after a receive there is room again");
 }
 
 #[test]
 fn the_host_hanging_up_reads_as_end_of_stream() {
     let mut rt = opener(None);
     let evs = drain(&mut rt);
-    let host_id = evs[0].b as i64;
-    assert!(rt.host_continue(evs[0].a as i64, true));
-    assert_eq!(rt.host_port_state(host_id), conc::P_OPEN);
-    rt.host_close_port(host_id);
+    assert!(grant(&mut rt, open_ev(&evs).a));
+    assert_eq!(rt.host_port_state(GRANTED), conc::P_OPEN);
+    rt.host_close_port(GRANTED);
     // HALF-closed, not closed: anything already delivered is still readable.
-    assert_eq!(rt.host_port_state(host_id), conc::P_HALF);
+    assert_eq!(rt.host_port_state(GRANTED), conc::P_HALF);
     let (v, _) = finish(&mut rt);
     assert!(v.is_nil(), "a drained, closed port receives nil");
     if rt.failed() {
@@ -322,22 +387,38 @@ fn a_send_leaves_as_one_event_carrying_its_bytes() {
     let bytes = b.w.finish();
     let mut rt = b.rt;
     assert!(rt.load_image(&bytes));
+    let l = rt.string("system");
+    rt.install_system_port(SYSTEM, l);
     rt.run_program(NIL);
     let evs = drain(&mut rt);
-    let host_id = evs[0].b;
-    assert!(rt.host_continue(evs[0].a as i64, true));
+    assert!(grant(&mut rt, open_ev(&evs).a));
     let (_, evs) = finish(&mut rt);
     let msgs: Vec<&Ev> = evs.iter().filter(|e| e.kind == conc::EV_MESSAGE as u32).collect();
     assert_eq!(msgs.len(), 1, "one send, one event");
-    assert_eq!(msgs[0].a, host_id, "addressed to the host's end");
-    assert_eq!(msgs[0].payload, b"a line");
-    assert_eq!(msgs[0].b as usize, "a line".len(), "the length travels too");
+    assert_eq!(msgs[0].a as i64, GRANTED, "addressed to the bridge");
+    // ENCODED, because a bridge carries values and the runtime is what writes
+    // them. The host reads it back with the same codec it uses everywhere else,
+    // rather than being handed bytes the guest chose the shape of.
+    let back = rt.decode(&msgs[0].payload).expect("the host can read what left");
+    let mut sb = flint_rt::rt::sbuf();
+    assert_eq!(rt.as_str(back, &mut sb), Some("a line"));
+    assert_eq!(msgs[0].b as usize, msgs[0].payload.len(), "the length travels too");
 }
 
-/// A port cannot be sent through a port, and neither can a function or an
-/// opaque value (`doc/decisions/0006`, `0022`).
+/// What may cross, and it depends on the CARRIER.
+///
+/// A CHANNEL end never crosses a bridge: the host has never been told it exists
+/// and its id would name one of our objects from outside. A BRIDGE handle does
+/// cross, because its id is the host's own and means the same thing on the far
+/// side -- that is how a capability is delegated, which `0025` made the point
+/// rather than the omission `0006` called the right default.
+///
+/// An opaque value crosses a bridge, and the runtime owning the encoding is
+/// what makes that safe: the guest cannot mint one from bytes, which is what the
+/// old third carry class existed to prevent and what removing the guest's codec
+/// now prevents by construction.
 #[test]
-fn only_data_crosses_a_port() {
+fn what_may_cross_depends_on_the_carrier() {
     let mut rt = Rt::new();
     rt.install_host_natives();
     rt.ensure_sched();
@@ -345,19 +426,35 @@ fn only_data_crosses_a_port() {
     let pi = rt.push(pair);
     let a = rt.vec_nth(rt.r(pi), 0).unwrap();
     let ai = rt.push(a);
-    assert!(rt.check_sendable(rt.r(ai)).is_err(), "a port may not be sent");
+    // A CHANNEL end may cross a channel -- both ends are in this heap, so it is
+    // a pointer move -- and may NOT cross a bridge: the host has never been told
+    // it exists, so its id would name one of our objects from outside.
+    assert!(
+        rt.check_sendable_via(rt.r(ai), conc::CARRY_LOCAL).is_ok(),
+        "a channel end crosses a channel"
+    );
+    assert!(
+        rt.check_sendable_via(rt.r(ai), conc::CARRY_CROSSING).is_err(),
+        "a channel end may not cross a bridge"
+    );
     let l = rt.string("fs");
     let li = rt.push(l);
     let o = rt.new_opaque(rt.r(li), 9);
     let oi = rt.push(o);
-    assert!(rt.check_sendable(rt.r(oi)).is_err(), "an opaque value may not be sent");
+    assert!(
+        rt.check_sendable_via(rt.r(oi), conc::CARRY_CROSSING).is_ok(),
+        "an opaque value crosses a bridge: the runtime owns the encoding"
+    );
     let s = rt.string("data");
     let si = rt.push(s);
-    assert!(rt.check_sendable(rt.r(si)).is_ok(), "a string is data");
+    assert!(rt.check_sendable_via(rt.r(si), conc::CARRY_CROSSING).is_ok(), "a string is data");
     // And NESTED: the walk is what makes the refusal worth anything.
     let v = rt.empty_vec();
     let vi = rt.push(v);
     let nested = rt.vec_conj(rt.r(vi), rt.r(ai));
     let ni = rt.push(nested);
-    assert!(rt.check_sendable(rt.r(ni)).is_err(), "a port inside a vector too");
+    assert!(
+        rt.check_sendable_via(rt.r(ni), conc::CARRY_CROSSING).is_err(),
+        "a channel end inside a vector too"
+    );
 }

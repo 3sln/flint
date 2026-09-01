@@ -1234,13 +1234,10 @@ impl Rt {
 
     // --- what may cross a port ---------------------------------------------
 
-    /// `Ok` if `v` is data. Functions are refused **by name**, because "cannot
-    /// send that" sends somebody hunting through a nested structure.
-    pub fn check_sendable(&mut self, v: Value) -> Result<(), alloc::string::String> {
-        self.check_sendable_at(v, 0, CARRY_CROSSING)
-    }
-
-    /// The same, for a carrier that may convey IDENTITIES.
+    /// `Ok` if `v` may cross this carrier.
+    ///
+    /// Functions are refused **by name**, because "cannot send that" sends
+    /// somebody hunting through a nested structure.
     ///
     /// `carry` is what the carrying port can reach, and it decides what a port
     /// VALUE inside the message is allowed to be. See `Carry` above.
@@ -2413,19 +2410,15 @@ impl Rt {
         }
         let base = self.mark();
         let hi = self.push(host);
-        self.set(self.r(hi), PT_STATE, Value::fixnum(P_CLOSED));
-        let flint = self.peer_of(self.r(hi));
-        if !flint.is_nil() {
-            let fi = self.push(flint);
-            // Half-closed: whatever the host already delivered is still there to
-            // be read, and only then does it read as end of stream.
-            if fx(self.slot(self.r(fi), PT_STATE)) == P_OPEN {
-                self.set(self.r(fi), PT_STATE, Value::fixnum(P_HALF));
-            }
-            let target = self.r(fi);
-            self.wake_on(target);
-            self.pop_to(fi);
+        // HALF-CLOSED, not closed: whatever the host already delivered is still
+        // there to be read, and only when that is drained does it read as end
+        // of stream. There is one object now, not a pair, so this is the state
+        // of the handle itself rather than of a second end standing in for it.
+        if fx(self.slot(self.r(hi), PT_STATE)) == P_OPEN {
+            self.set(self.r(hi), PT_STATE, Value::fixnum(P_HALF));
         }
+        let target = self.r(hi);
+        self.wake_on(target);
         self.pop_to(base);
     }
 
@@ -2460,25 +2453,16 @@ impl Rt {
     /// carrier of the truth. 255 means the runtime knows nothing about this id,
     /// which a host should also treat as "done".
     pub fn host_port_state(&mut self, host_port_id: i64) -> i64 {
-        let host = self.port_by_id(host_port_id);
-        if host.is_nil() {
+        let p = self.port_by_id(host_port_id);
+        if p.is_nil() {
+            // Never heard of, or the handle has been collected. Either way a
+            // host treats it as done, which is the case a missed `:closed`
+            // event would otherwise leak.
             return 255;
         }
-        let flint = self.peer_of(host);
-        if flint.is_nil() {
-            // The runtime end has been collected: as good as closed, and this is
-            // exactly the case a missed event would have lost.
-            return P_CLOSED;
-        }
-        self.port_state_now(flint)
+        self.port_state_now(p)
     }
 
-    /// Serialise every pending event into one contiguous buffer and hand it
-    /// over. One call per pump: the boundary crossing is tens of nanoseconds,
-    /// the marshalling is the cost, so everything pending goes at once.
-    ///
-    /// Layout: `count` records of five little-endian `u32`s --
-    /// `kind, a, b, payload-offset, payload-len` -- followed by the payload
     /// bytes, all offsets relative to the start of the buffer.
     pub fn drain_events(&mut self, out: &mut alloc::vec::Vec<u8>) -> u32 {
         out.clear();

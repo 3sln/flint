@@ -15,13 +15,18 @@
 
   ## What may cross
 
-  **Data only.** A function is refused *by name* at the send, because a
-  closure's meaning is its environment and an environment does not travel. And
-  **a port cannot be sent through a port**: ports are not transferable. That
-  costs the ability to delegate a capability at run time, and buys no ownership
-  transfer to reason about, no capability leaking through a message, and a wire
-  format that never has to represent a port. Transfer can be added later; it
-  could not be removed.
+  **Data, and capabilities.** A function is refused *by name* at the send,
+  because a closure's meaning is its environment and an environment does not
+  travel.
+
+  A **bridge may be sent through a bridge**, and that is how a capability is
+  delegated: its id is the host's own and means the same thing on the far side,
+  so the receiver ends up holding *the same port*. `0006` called the absence of
+  this the right default and `0025` reversed it.
+
+  A **channel end may not** cross a bridge. Both its ends live in this heap and
+  the host has never been told it exists, so its id would name one of our
+  objects from outside — a refusal with a reason, not a silent promotion.
 
   Transfer is **by value**. Inside one runtime the value is passed by reference
   as an optimisation, and that is sound *precisely because flint values are
