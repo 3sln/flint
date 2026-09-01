@@ -34,7 +34,10 @@ public static class Bytes {
     /// more per level. EVERY CHILD OF A NODE HAS THE SAME DEPTH, which is what
     /// makes this a B-tree rather than a spine.
     public const int BB_DEPTH = 2;
-    public const int BB_KIDS = 3;
+    /// The subtree's content hash, or nil until asked -- the mirror of
+    /// `RP_HASH`, and for the same reason.
+    public const int BB_HASH = 3;
+    public const int BB_KIDS = 4;
 
     public static bool IsBytes(Rt rt, long v) {
         if (!Val.IsHeap(v)) return false;
@@ -138,6 +141,7 @@ public static class Bytes {
         if (a == 0) { rt.PopTo(bas); return Val.Nil; }
         rt.SetSlot(a, BB_BYTES, Val.Fixnum(total));
         rt.SetSlot(a, BB_FLAT, Val.Nil);
+        rt.SetSlot(a, BB_HASH, Val.Nil);
         rt.SetSlot(a, BB_DEPTH, Val.Fixnum(Depth(rt, rt.R(bas)) + 1));
         for (int i = 0; i < kids.Length; i++) rt.SetSlot(a, BB_KIDS + i, rt.R(bas + i));
         rt.PopTo(bas);
@@ -299,26 +303,148 @@ public static class Bytes {
         }
     }
 
+    public static bool IsBrope(Rt rt, long v) =>
+        Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyBrope;
+
+    /// SHARES, like `Str.RopeSlice`. This descended to the range and then
+    /// COPIED it (`doc/decisions/0011`).
     public static long Slice(Rt rt, long v, int from, int to) {
         int n = Count(rt, v);
         int lo = System.Math.Min(System.Math.Max(from, 0), n);
         int hi = System.Math.Min(System.Math.Max(to, lo), n);
         if (lo == 0 && hi == n) return v;
-        List<byte[]> parts = new List<byte[]>();
-        AppendRange(rt, v, lo, hi, parts);
-        int total = 0;
-        foreach (byte[] p in parts) total += p.Length;
-        byte[] outb = new byte[total];
-        int at = 0;
-        foreach (byte[] p in parts) { System.Array.Copy(p, 0, outb, at, p.Length); at += p.Length; }
-        return Of(rt, outb);
+        if (hi - lo < Str.SLICE_MIN || !IsBrope(rt, v)) {
+            List<byte[]> parts = new List<byte[]>();
+            AppendRange(rt, v, lo, hi, parts);
+            int total = 0;
+            foreach (byte[] p in parts) total += p.Length;
+            byte[] outb = new byte[total];
+            int at0 = 0;
+            foreach (byte[] p in parts) { System.Array.Copy(p, 0, outb, at0, p.Length); at0 += p.Length; }
+            return Of(rt, outb);
+        }
+        int bas = rt.Mark();
+        int vi = rt.Push(v);
+        int kids = Obj.Len(rt.gc.sp, Val.AsHeap(rt.R(vi))) - BB_KIDS;
+        int outb2 = rt.Mark();
+        int made = 0, at = 0;
+        for (int i = 0; i < kids; i++) {
+            long k = rt.Slot(rt.R(vi), BB_KIDS + i);
+            int w = Count(rt, k);
+            if (at + w > lo && at < hi) {
+                int l2 = System.Math.Max(0, lo - at);
+                int h2 = System.Math.Min(hi - at, w);
+                long piece = (l2 == 0 && h2 == w) ? k : Slice(rt, k, l2, h2);
+                if (piece == Val.Nil) { rt.PopTo(bas); return Val.Nil; }
+                if (Count(rt, piece) > 0) { rt.Push(piece); made++; }
+            }
+            at += w;
+            if (at >= hi) break;
+        }
+        long r = FromRoots(rt, outb2, made);
+        rt.PopTo(bas);
+        return r;
     }
 
+    static long FromRoots(Rt rt, int bas, int n) {
+        if (n == 0) return Of(rt, new byte[0]);
+        if (n == 1) return rt.R(bas);
+        int level = n, from = bas;
+        while (true) {
+            if (level == 1) return rt.R(from);
+            int outb = rt.Mark();
+            int made = 0, i = 0;
+            while (i < level) {
+                int take = System.Math.Min(Str.FANOUT, level - i);
+                long[] kids = new long[take];
+                for (int k = 0; k < take; k++) kids[k] = rt.R(from + i + k);
+                long nd = Node(rt, kids);
+                if (nd == Val.Nil) return Val.Nil;
+                rt.Push(nd);
+                made++;
+                i += take;
+            }
+            from = outb;
+            level = made;
+        }
+    }
+
+    /// The mirror of `Str.RopeHash`, cached per node.
+    public static int Hash(Rt rt, long v) {
+        if (!IsBrope(rt, v)) {
+            byte[] bs = ToArray(rt, v);
+            int h0 = 0;
+            foreach (byte b in bs) h0 = h0 * 31 + b;
+            return h0;
+        }
+        long cached = rt.Slot(v, BB_HASH);
+        if (Val.IsFixnum(cached)) return (int) Val.AsFixnum(cached);
+        int bas = rt.Mark();
+        int vi = rt.Push(v);
+        int kids = Obj.Len(rt.gc.sp, Val.AsHeap(rt.R(vi))) - BB_KIDS;
+        int h = 0;
+        for (int i = 0; i < kids; i++) {
+            long k = rt.Slot(rt.R(vi), BB_KIDS + i);
+            int ki = rt.Push(k);
+            h = h * Str.Pow31Public(Count(rt, rt.R(ki))) + Hash(rt, rt.R(ki));
+            rt.PopTo(ki);
+        }
+        rt.SetSlot(Val.AsHeap(rt.R(vi)), BB_HASH, Val.Fixnum(h));
+        rt.PopTo(bas);
+        return h;
+    }
+
+    /// Content equality without materialising either side, short-circuiting on
+    /// NODE IDENTITY -- which matters now that `Slice` shares.
     public static bool Eq(Rt rt, long a, long b) {
+        if (a == b) return true;
         if (Count(rt, a) != Count(rt, b)) return false;
-        byte[] x = ToArray(rt, a), y = ToArray(rt, b);
-        for (int i = 0; i < x.Length; i++) if (x[i] != y[i]) return false;
-        return true;
+        var sa = new List<long[]>(); var sb = new List<long[]>();
+        sa.Add(new long[]{a, 0}); sb.Add(new long[]{b, 0});
+        byte[] la = System.Array.Empty<byte>(), lb = System.Array.Empty<byte>();
+        int pa = 0, pb = 0;
+        while (true) {
+            if (pa == la.Length) {
+                long nv = WalkNext(rt, sa);
+                if (nv == Val.NotFound) break;
+                if (pb == lb.Length && sb.Count > 0) {
+                    var peek = new List<long[]>();
+                    foreach (var e in sb) peek.Add(new long[]{e[0], e[1]});
+                    long w = WalkNext(rt, peek);
+                    if (w != Val.NotFound && w == nv) {
+                        sb = peek; la = System.Array.Empty<byte>(); lb = System.Array.Empty<byte>();
+                        pa = 0; pb = 0;
+                        continue;
+                    }
+                }
+                la = ToArray(rt, nv); pa = 0;
+            }
+            if (pb == lb.Length) {
+                long nv = WalkNext(rt, sb);
+                if (nv == Val.NotFound) break;
+                lb = ToArray(rt, nv); pb = 0;
+            }
+            int n2 = System.Math.Min(la.Length - pa, lb.Length - pb);
+            if (n2 == 0) continue;
+            for (int i = 0; i < n2; i++) if (la[pa + i] != lb[pb + i]) return false;
+            pa += n2; pb += n2;
+        }
+        return pa == la.Length && pb == lb.Length
+            && WalkNext(rt, sa) == Val.NotFound && WalkNext(rt, sb) == Val.NotFound;
+    }
+
+    static long WalkNext(Rt rt, List<long[]> stack) {
+        while (stack.Count > 0) {
+            var top = stack[stack.Count - 1];
+            long node = top[0];
+            int i = (int) top[1];
+            if (!IsBrope(rt, node)) { stack.RemoveAt(stack.Count - 1); return node; }
+            int kids = Obj.Len(rt.gc.sp, Val.AsHeap(node)) - BB_KIDS;
+            if (i >= kids) { stack.RemoveAt(stack.Count - 1); continue; }
+            top[1] = i + 1;
+            stack.Add(new long[]{rt.Slot(node, BB_KIDS + i), 0});
+        }
+        return Val.NotFound;
     }
 
     // --- the transient ------------------------------------------------------

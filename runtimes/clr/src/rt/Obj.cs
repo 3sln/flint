@@ -36,7 +36,13 @@ public static class Obj {
                      /// (`doc/decisions/0034`), because a map is ambiguous with
                      /// a map in every format that has tags and loses the
                      /// namespace wherever the key must become a string.
-                     TyTagged = 47, TyMax = 48;
+                     TyTagged = 47,
+                     // `doc/decisions/0026`: a schema addresses columns by a
+                     // stable id, a table carries a row offset so `slice`
+                     // shares its chunks, a row ref holds the chunk and not the
+                     // table, and the transient writes into an open chunk.
+                     TySchema = 48, TyTable = 49, TyTableref = 50, TyTtable = 51,
+                     TyMax = 52;
 
     /// The three layout classes. Prefixed `L` where the JVM writes `VALS`,
     /// `STR`, `RAW`: C#'s PascalCase would make the layout constant `Str`

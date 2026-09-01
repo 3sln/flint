@@ -66,7 +66,13 @@ public final class Eq {
         // do not. Byte strings compare by content across both tiers for the
         // same reason.
         if ((ta == TY_STR || ta == TY_ROPE) && (tb == TY_STR || tb == TY_ROPE)) {
-            return java.util.Arrays.equals(Str.bytes(rt, a), Str.bytes(rt, b));
+            // WALKED, not copied. This built a byte array of BOTH sides in full
+            // before comparing one of them, so two megabyte strings differing
+            // at byte 0 cost two megabytes to tell apart. `treeEq` stops at the
+            // first mismatch and short-circuits on NODE IDENTITY, which matters
+            // much more now that `subs` shares (`doc/decisions/0011`).
+            if (Str.sBytes(rt, a) != Str.sBytes(rt, b)) return false;
+            return Str.treeEq(rt, a, b);
         }
         if ((ta == TY_BYTES || ta == TY_BROPE) && (tb == TY_BYTES || tb == TY_BROPE)) {
             return Bytes.eq(rt, a, b);
@@ -137,6 +143,11 @@ public final class Eq {
         if (!Val.isHeap(v)) return 0;
         switch (ty(rt.gc.sp, Val.asHeap(v))) {
             case TY_STR: return Hash.hashString(Str.bytes(rt, v));
+            // WALKED and cached per node, not flattened. Flattening was here
+            // for the caching, which is real -- a rope used as a map key must
+            // not rehash every lookup -- and `RP_HASH` gives the same caching
+            // without spending the tree (`doc/decisions/0011`).
+            case TY_ROPE: return Str.ropeHash(rt, v);
             case TY_KW: return Hash.hashKeyword(nsBytes(rt, v), Str.bytes(rt, rt.slot(v, 1)));
             case TY_SYM: return Hash.hashSymbol(nsBytes(rt, v), Str.bytes(rt, rt.slot(v, 1)));
             case TY_VEC: {
@@ -150,6 +161,10 @@ public final class Eq {
             case Obj.TY_TAGGED:
                 return hashValue(rt, rt.slot(v, 0)) * 31 + hashValue(rt, rt.slot(v, 1));
             case TY_SET: return Sets.hash(rt, v);
+            // A byte string hashes by CONTENT across both tiers, walked and
+            // cached per node rather than flattened (`doc/decisions/0011`).
+            case TY_BYTES:
+            case TY_BROPE: return Bytes.hash(rt, v);
             default: {
                 if (rt.isSeq(v)) {
                     int base = rt.mark();

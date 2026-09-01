@@ -64,8 +64,14 @@ public static class Eq {
         // A string is a string WHATEVER TIER it is in: `(str a b)` and a flat
         // string of the same bytes must be `=` and must hash alike, or a map
         // keyed by one is not found by the other (`doc/decisions/0011`).
-        if ((ta == Obj.TyStr || ta == Obj.TyRope) && (tb == Obj.TyStr || tb == Obj.TyRope))
-            return SameBytes(Str.Bytes(rt, a), Str.Bytes(rt, b));
+        if ((ta == Obj.TyStr || ta == Obj.TyRope) && (tb == Obj.TyStr || tb == Obj.TyRope)) {
+            // WALKED, not copied. This built the bytes of BOTH sides in full
+            // before comparing one of them; `TreeEq` stops at the first
+            // mismatch and short-circuits on NODE IDENTITY, which matters much
+            // more now that `subs` shares (`doc/decisions/0011`).
+            if (Str.SBytes(rt, a) != Str.SBytes(rt, b)) return false;
+            return Str.TreeEq(rt, a, b);
+        }
         if ((ta == Obj.TyBytes || ta == Obj.TyBrope) && (tb == Obj.TyBytes || tb == Obj.TyBrope))
             return Bytes.Eq(rt, a, b);
         // Two tagged literals are equal when both halves are, and never equal
@@ -133,6 +139,14 @@ public static class Eq {
         if (!Val.IsHeap(v)) return 0;
         switch (Obj.Ty(rt.gc.sp, Val.AsHeap(v))) {
             case Obj.TyStr: return Hash.HashString(Str.Bytes(rt, v));
+            // WALKED and cached per node, not flattened. Flattening was here
+            // for the caching, which is real; `RP_HASH` gives the same caching
+            // without spending the tree (`doc/decisions/0011`).
+            case Obj.TyRope: return Str.RopeHash(rt, v);
+            // Byte strings hash by CONTENT across both tiers, walked and cached
+            // per node rather than flattened (`doc/decisions/0011`).
+            case Obj.TyBytes:
+            case Obj.TyBrope: return Bytes.Hash(rt, v);
             case Obj.TyKw: return Hash.HashKeyword(NsBytes(rt, v), Str.Bytes(rt, rt.Slot(v, 1)));
             case Obj.TySym: return Hash.HashSymbol(NsBytes(rt, v), Str.Bytes(rt, rt.Slot(v, 1)));
             case Obj.TyVec: {

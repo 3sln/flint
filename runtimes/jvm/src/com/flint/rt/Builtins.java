@@ -707,7 +707,33 @@ rt.describe(v) + " is not a transient");
 
         // --- strings ----------------------------------------------------------
         def("flint/subs", (rt, at, n) -> {
-            String s = Str.text(rt, rt.vat(at));
+            long v0 = rt.vat(at);
+            // A ROPE SLICES BY DESCENT AND SHARES ITS CHUNKS. This used to call
+            // `Str.text`, which materialises the whole string into a Java
+            // `String` -- the same defect the Rust runtime had, in a different
+            // shape, and on the operation that most wants sharing
+            // (`doc/decisions/0011`).
+            if (Str.isRope(rt, v0)) {
+                int cps = Str.sCount(rt, v0);
+                int st = (int) Val.asFixnum(rt.vat(at + 1));
+                int en = n > 2 ? (int) Val.asFixnum(rt.vat(at + 2)) : cps;
+                if (st < 0 || en > cps || st > en) {
+                    return rt.throwStr("IndexOutOfBoundsException",
+                            "subs " + st + ".." + en + " of " + cps);
+                }
+                boolean ascii = Str.sAscii(rt, v0);
+                // For ASCII a code point IS a byte; otherwise descend for the
+                // byte offsets rather than scanning.
+                int from = ascii ? st : Str.ropeByteOfCp(rt, v0, st);
+                int to = (en == cps) ? Str.sBytes(rt, v0)
+                        : (ascii ? en : Str.ropeByteOfCp(rt, v0, en));
+                if (from < 0 || to < 0) {
+                    return rt.throwStr("IndexOutOfBoundsException",
+                            "subs " + st + ".." + en + " of " + cps);
+                }
+                return Str.ropeSlice(rt, v0, from, to);
+            }
+            String s = Str.text(rt, v0);
             int len = s.codePointCount(0, s.length());
             int start = (int) Val.asFixnum(rt.vat(at + 1));
             int end = n > 2 ? (int) Val.asFixnum(rt.vat(at + 2)) : len;

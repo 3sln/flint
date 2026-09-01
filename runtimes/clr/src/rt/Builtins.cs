@@ -658,7 +658,28 @@ public static class Builtins {
 
         // --- strings ----------------------------------------------------------
         Def("flint/subs", (rt, at, n) => {
-            string s = Str.Text(rt, rt.VAt(at));
+            long v0 = rt.VAt(at);
+            // A ROPE SLICES BY DESCENT AND SHARES ITS CHUNKS. This called
+            // `Str.Text`, which materialises the whole string into a CLR
+            // `string` -- the same defect the Rust runtime had in a different
+            // shape, on the operation that most wants sharing.
+            if (Str.IsRope(rt, v0)) {
+                int cps = Str.SCount(rt, v0);
+                int st = (int) Val.AsFixnum(rt.VAt(at + 1));
+                int en = n > 2 ? (int) Val.AsFixnum(rt.VAt(at + 2)) : cps;
+                if (st < 0 || en > cps || st > en)
+                    return rt.ThrowStr("IndexOutOfBoundsException",
+                        "subs " + st + ".." + en + " of " + cps);
+                bool ascii = Str.SAscii(rt, v0);
+                int from = ascii ? st : Str.RopeByteOfCpPublic(rt, v0, st);
+                int to = (en == cps) ? Str.SBytes(rt, v0)
+                       : (ascii ? en : Str.RopeByteOfCpPublic(rt, v0, en));
+                if (from < 0 || to < 0)
+                    return rt.ThrowStr("IndexOutOfBoundsException",
+                        "subs " + st + ".." + en + " of " + cps);
+                return Str.RopeSlice(rt, v0, from, to);
+            }
+            string s = Str.Text(rt, v0);
             var si = new System.Globalization.StringInfo(s);
             int len = CodePointCount(s);
             int start = (int) Val.AsFixnum(rt.VAt(at + 1));

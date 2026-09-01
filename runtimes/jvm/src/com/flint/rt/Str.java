@@ -477,8 +477,18 @@ public final class Str {
     // is not thrift: a slot is a NaN-boxed value, and two of them would make
     // every node 8 bytes bigger for one bit.
 
-    public static final int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_KIDS = 3;
+    /// `RP_HASH` is the subtree's content hash, or nil until asked. A flat
+    /// string caches its hash in the `Str` header; a rope had nowhere to put
+    /// one, so hashing a rope FLATTENED it -- which bought the caching by
+    /// spending the sharing the tree exists for. Clojure's string hash
+    /// composes, `h(A.B) = h(A)*31^|B| + h(B)`, so a node combines its
+    /// children's (`doc/decisions/0011`).
+    public static final int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
     public static final int FLAT_MAX = 1024, FANOUT = 16;
+    /// A slice smaller than this COPIES rather than sharing, so a small `subs`
+    /// cannot retain a large parent. Not a performance choice -- the retention
+    /// fix (`doc/decisions/0011`).
+    public static final int SLICE_MIN = 256;
 
     /// LEAF SIZE FOR A STRING THAT ARRIVES NON-ASCII AND WHOLE. See
     /// `indexedString`: the tree's node array is the sparse code-point index,
@@ -527,9 +537,158 @@ public final class Str {
         rt.setSlot(a, RP_BYTES, Val.fixnum(bytes));
         rt.setSlot(a, RP_CPS, Val.fixnum(((long) cps << 1) | (ascii ? 1 : 0)));
         rt.setSlot(a, RP_FLAT, Val.NIL);
+        rt.setSlot(a, RP_HASH, Val.NIL);
         for (int i = 0; i < kids.length; i++) rt.setSlot(a, RP_KIDS + i, rt.r(base + i));
         rt.popTo(base);
         return Val.heap(a);
+    }
+
+    /// A slice that SHARES its interior.
+    ///
+    /// A child wholly inside the range is returned UNCHANGED -- no copy, no
+    /// allocation, the same object -- and only the two edge children are cut.
+    /// Slicing the middle out of a megabyte touches a handful of nodes.
+    ///
+    /// Both `subs` paths used to copy every byte and one flattened first, which
+    /// spends the sharing that is half the point of a rope on the operation
+    /// that most wants it (`doc/decisions/0011`).
+    public static long ropeSlice(Rt rt, long v, int from, int to) {
+        if (from >= to) return of(rt, "");
+        int n = sBytes(rt, v);
+        if (to > n) to = n;
+        if (from == 0 && to == n) return v; // the whole thing: share it
+        if (to - from < SLICE_MIN || !isRope(rt, v)) {
+            // Small, or a leaf: copy. `SLICE_MIN` is the retention fix.
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            appendRange(rt, v, from, to, out);
+            return of(rt, new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8));
+        }
+        int base = rt.mark();
+        int vi = rt.push(v);
+        int kids = ropeKids(rt, rt.r(vi));
+        int out = rt.mark();
+        int made = 0, at = 0;
+        for (int i = 0; i < kids; i++) {
+            long k = rt.slot(rt.r(vi), RP_KIDS + i);
+            int w = sBytes(rt, k);
+            if (at + w > from && at < to) {
+                int lo = Math.max(0, from - at);
+                int hi = Math.min(to - at, w);
+                long piece = (lo == 0 && hi == w) ? k : ropeSlice(rt, k, lo, hi);
+                if (piece == Val.NIL) { rt.popTo(base); return Val.NIL; }
+                if (sBytes(rt, piece) > 0) { rt.push(piece); made++; }
+            }
+            at += w;
+            if (at >= to) break;
+        }
+        long r = ropeFromRoots(rt, out, made);
+        rt.popTo(base);
+        return r;
+    }
+
+    /// `31^n`, by squaring: the multiplier that lets two cached hashes join.
+    public static int pow31(int n) {
+        int base = 31, acc = 1;
+        while (n > 0) {
+            if ((n & 1) == 1) acc *= base;
+            base *= base;
+            n >>>= 1;
+        }
+        return acc;
+    }
+
+    /// The content hash of a string tree, WITHOUT materialising it, cached per
+    /// node. After a sharing `subs` most of a tree is a subtree of something
+    /// else, so the cache is the case that matters rather than a corner.
+    public static int ropeHash(Rt rt, long v) {
+        if (!isRope(rt, v)) {
+            byte[] bs = bytes(rt, v);
+            int h = 0;
+            for (byte b : bs) h = h * 31 + (b & 0xFF);
+            return h;
+        }
+        long cached = rt.slot(v, RP_HASH);
+        if (Val.isFixnum(cached)) return (int) Val.asFixnum(cached);
+        int base = rt.mark();
+        int vi = rt.push(v);
+        int kids = ropeKids(rt, rt.r(vi));
+        int h = 0;
+        for (int i = 0; i < kids; i++) {
+            long k = rt.slot(rt.r(vi), RP_KIDS + i);
+            int ki = rt.push(k);
+            int kh = ropeHash(rt, rt.r(ki));
+            int kb = sBytes(rt, rt.r(ki));
+            // h(A.B) = h(A)*31^|B| + h(B). The BYTES, not the code points: this
+            // must agree with the flat hash, which steps per byte.
+            h = h * pow31(kb) + kh;
+            rt.popTo(ki);
+        }
+        rt.setSlot(Val.asHeap(rt.r(vi)), RP_HASH, Val.fixnum(h));
+        rt.popTo(base);
+        return h;
+    }
+
+    /// Content equality over two string trees WITHOUT materialising either.
+    ///
+    /// Two short circuits, and the first matters much more since `subs` began
+    /// SHARING: a node is equal to itself, so two slices meeting the same leaf
+    /// cost a pointer comparison; and a mismatch stops where it happens rather
+    /// than after both sides are copied in full, which is what this replaced.
+    public static boolean treeEq(Rt rt, long a, long b) {
+        if (a == b) return true;
+        java.util.ArrayDeque<long[]> sa = new java.util.ArrayDeque<>();
+        java.util.ArrayDeque<long[]> sb = new java.util.ArrayDeque<>();
+        sa.push(new long[]{a, 0});
+        sb.push(new long[]{b, 0});
+        byte[] la = new byte[0], lb = new byte[0];
+        int pa = 0, pb = 0;
+        while (true) {
+            if (pa == la.length) {
+                long nv = walkNext(rt, sa);
+                if (nv == Val.NOT_FOUND) break;
+                if (pb == lb.length && !sb.isEmpty()) {
+                    java.util.ArrayDeque<long[]> peek = copyStack(sb);
+                    long w = walkNext(rt, peek);
+                    if (w != Val.NOT_FOUND && w == nv) {
+                        sb = peek; la = new byte[0]; lb = new byte[0]; pa = 0; pb = 0;
+                        continue;
+                    }
+                }
+                la = bytes(rt, nv); pa = 0;
+            }
+            if (pb == lb.length) {
+                long nv = walkNext(rt, sb);
+                if (nv == Val.NOT_FOUND) break;
+                lb = bytes(rt, nv); pb = 0;
+            }
+            int n = Math.min(la.length - pa, lb.length - pb);
+            if (n == 0) continue;
+            for (int i = 0; i < n; i++) if (la[pa + i] != lb[pb + i]) return false;
+            pa += n; pb += n;
+        }
+        return pa == la.length && pb == lb.length
+                && walkNext(rt, sa) == Val.NOT_FOUND && walkNext(rt, sb) == Val.NOT_FOUND;
+    }
+
+    private static java.util.ArrayDeque<long[]> copyStack(java.util.ArrayDeque<long[]> s) {
+        java.util.ArrayDeque<long[]> out = new java.util.ArrayDeque<>();
+        for (long[] e : s) out.addLast(new long[]{e[0], e[1]});
+        return out;
+    }
+
+    /// The next leaf of a tree walk, or `NOT_FOUND` when the walk is done.
+    private static long walkNext(Rt rt, java.util.ArrayDeque<long[]> stack) {
+        while (!stack.isEmpty()) {
+            long[] top = stack.peek();
+            long node = top[0];
+            int i = (int) top[1];
+            if (!isRope(rt, node)) { stack.pop(); return node; }
+            int kids = ropeKids(rt, node);
+            if (i >= kids) { stack.pop(); continue; }
+            top[1] = i + 1;
+            stack.push(new long[]{rt.slot(node, RP_KIDS + i), 0});
+        }
+        return Val.NOT_FOUND;
     }
 
     /// `str` of two strings. O(1) once the pieces are big enough to matter.
@@ -629,6 +788,27 @@ public final class Str {
     }
 
     /// Walk the leaves in order, appending their bytes.
+    /// Bytes `[from, to)` of a string tree, appended WITHOUT materialising it.
+    /// A child wholly before or after the range is skipped -- the "after" case
+    /// is what stops a slice near the start walking the whole tail.
+    static void appendRange(Rt rt, long v, int from, int to, java.io.ByteArrayOutputStream out) {
+        if (from >= to) return;
+        if (!isRope(rt, v)) {
+            byte[] bs = bytes(rt, v);
+            int hi = Math.min(to, bs.length), lo = Math.min(from, hi);
+            out.write(bs, lo, hi - lo);
+            return;
+        }
+        int n = ropeKids(rt, v), at = 0;
+        for (int i = 0; i < n; i++) {
+            long k = rt.slot(v, RP_KIDS + i);
+            int w = sBytes(rt, k);
+            if (at + w > from && at < to) appendRange(rt, k, Math.max(0, from - at), to - at, out);
+            at += w;
+            if (at >= to) return;
+        }
+    }
+
     static void appendBytes(Rt rt, long v, java.io.ByteArrayOutputStream out) {
         if (Val.isInlineStr(v)) { out.writeBytes(Val.inlineBytes(v)); return; }
         if (!Val.isHeap(v)) return;

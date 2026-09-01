@@ -81,7 +81,21 @@ public final class Obj {
     /// namespace wherever the key must become a string. It still ANSWERS the
     /// map protocols on `:tag` and `:form`.
     public static final int TY_TAGGED = 47;
-    public static final int TY_MAX = 48;
+    /// A SCHEMA: `[names, types, index, ids, width]` (`doc/decisions/0026`).
+    /// A column is addressed in a chunk by a stable ID, not by its position,
+    /// which is what makes dropping one a head-only edit.
+    public static final int TY_SCHEMA = 48;
+    /// A TABLE: `[schema, chunks, count, offset]`. `chunks` is an ordinary
+    /// flint VECTOR, so the "B-tree keyed by row index" is the vector we have.
+    /// `offset` is the first row's index within the first chunk, which is what
+    /// lets `slice` SHARE every chunk it spans.
+    public static final int TY_TABLE = 49;
+    /// A ROW REF: `[schema, chunk, row]`. Holds the CHUNK and not the table, so
+    /// keeping one row out of a million retains one chunk.
+    public static final int TY_TABLEREF = 50;
+    /// A TRANSIENT TABLE: `[schema, chunks, count, open, live]`.
+    public static final int TY_TTABLE = 51;
+    public static final int TY_MAX = 52;
 
     public static final int VALS = 0, STR = 1, RAW = 2;
 

@@ -37,7 +37,10 @@ public final class Bytes {
     /// more per level. EVERY CHILD OF A NODE HAS THE SAME DEPTH, which is what
     /// makes this a B-tree rather than a spine.
     public static final int BB_DEPTH = 2;
-    public static final int BB_KIDS = 3;
+    /// The subtree's content hash, or nil until asked -- the mirror of
+    /// `RP_HASH`, and for the same reason.
+    public static final int BB_HASH = 3;
+    public static final int BB_KIDS = 4;
 
     public static boolean isBytes(Rt rt, long v) {
         if (!Val.isHeap(v)) return false;
@@ -141,6 +144,7 @@ public final class Bytes {
         if (a == 0) { rt.popTo(base); return Val.NIL; }
         rt.setSlot(a, BB_BYTES, Val.fixnum(total));
         rt.setSlot(a, BB_FLAT, Val.NIL);
+        rt.setSlot(a, BB_HASH, Val.NIL);
         rt.setSlot(a, BB_DEPTH, Val.fixnum(depth(rt, rt.r(base)) + 1));
         for (int i = 0; i < kids.length; i++) rt.setSlot(a, BB_KIDS + i, rt.r(base + i));
         rt.popTo(base);
@@ -302,24 +306,161 @@ public final class Bytes {
         }
     }
 
+    static boolean isBrope(Rt rt, long v) {
+        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_BROPE;
+    }
+
+    /// SHARES, like `Str.ropeSlice`. This descended to the range -- which is
+    /// what stopped it being quadratic -- and then COPIED it, so slicing a
+    /// 509 KB code section allocated a fresh 509 KB minus the trim
+    /// (`doc/decisions/0011`).
     public static long slice(Rt rt, long v, int from, int to) {
         int n = count(rt, v);
         int lo = Math.min(Math.max(from, 0), n);
         int hi = Math.min(Math.max(to, lo), n);
         if (lo == 0 && hi == n) return v;
-        ArrayList<byte[]> parts = new ArrayList<>();
-        appendRange(rt, v, lo, hi, parts);
-        int total = 0;
-        for (byte[] p : parts) total += p.length;
-        byte[] outb = new byte[total];
-        int at = 0;
-        for (byte[] p : parts) { System.arraycopy(p, 0, outb, at, p.length); at += p.length; }
-        return of(rt, outb);
+        if (hi - lo < Str.SLICE_MIN || !isBrope(rt, v)) {
+            // Small, or a leaf: copy. `SLICE_MIN` is the retention fix -- a
+            // three-byte slice must not keep the section alive.
+            ArrayList<byte[]> parts = new ArrayList<>();
+            appendRange(rt, v, lo, hi, parts);
+            int total = 0;
+            for (byte[] p : parts) total += p.length;
+            byte[] outb = new byte[total];
+            int at = 0;
+            for (byte[] p : parts) { System.arraycopy(p, 0, outb, at, p.length); at += p.length; }
+            return of(rt, outb);
+        }
+        int base = rt.mark();
+        int vi = rt.push(v);
+        int kids = len(rt.gc.sp, Val.asHeap(rt.r(vi))) - BB_KIDS;
+        int out = rt.mark();
+        int made = 0, at = 0;
+        for (int i = 0; i < kids; i++) {
+            long k = rt.slot(rt.r(vi), BB_KIDS + i);
+            int w = count(rt, k);
+            if (at + w > lo && at < hi) {
+                int l2 = Math.max(0, lo - at);
+                int h2 = Math.min(hi - at, w);
+                long piece = (l2 == 0 && h2 == w) ? k : slice(rt, k, l2, h2);
+                if (piece == Val.NIL) { rt.popTo(base); return Val.NIL; }
+                if (count(rt, piece) > 0) { rt.push(piece); made++; }
+            }
+            at += w;
+            if (at >= hi) break;
+        }
+        long r = fromRoots(rt, out, made);
+        rt.popTo(base);
+        return r;
     }
 
+    /// A balanced byte rope over `n` pieces on the shadow stack, the mirror of
+    /// `Str.ropeFromRoots`.
+    static long fromRoots(Rt rt, int base, int n) {
+        if (n == 0) return of(rt, new byte[0]);
+        if (n == 1) return rt.r(base);
+        int level = n, from = base;
+        while (true) {
+            if (level == 1) return rt.r(from);
+            int out = rt.mark();
+            int made = 0, i = 0;
+            while (i < level) {
+                int take = Math.min(Str.FANOUT, level - i);
+                long[] kids = new long[take];
+                for (int k = 0; k < take; k++) kids[k] = rt.r(from + i + k);
+                long nd = node(rt, kids);
+                if (nd == Val.NIL) return Val.NIL;
+                rt.push(nd);
+                made++;
+                i += take;
+            }
+            from = out;
+            level = made;
+        }
+    }
+
+    /// The mirror of `Str.ropeHash`: cached per node, `h(A.B) = h(A)*31^|B| +
+    /// h(B)`. Hashing a byte rope used to FLATTEN it, buying the caching by
+    /// spending the sharing.
+    public static int hash(Rt rt, long v) {
+        if (!isBrope(rt, v)) {
+            byte[] bs = toArray(rt, v);
+            int h0 = 0;
+            for (byte b : bs) h0 = h0 * 31 + (b & 0xFF);
+            return h0;
+        }
+        long cached = rt.slot(v, BB_HASH);
+        if (Val.isFixnum(cached)) return (int) Val.asFixnum(cached);
+        int base = rt.mark();
+        int vi = rt.push(v);
+        int kids = len(rt.gc.sp, Val.asHeap(rt.r(vi))) - BB_KIDS;
+        int h = 0;
+        for (int i = 0; i < kids; i++) {
+            long k = rt.slot(rt.r(vi), BB_KIDS + i);
+            int ki = rt.push(k);
+            h = h * Str.pow31(count(rt, rt.r(ki))) + hash(rt, rt.r(ki));
+            rt.popTo(ki);
+        }
+        rt.setSlot(Val.asHeap(rt.r(vi)), BB_HASH, Val.fixnum(h));
+        rt.popTo(base);
+        return h;
+    }
+
+    /// Content equality WITHOUT materialising either side, short-circuiting on
+    /// NODE IDENTITY. This built a byte array of both sides in full, so two
+    /// 500 KB sections differing at byte 0 cost a megabyte to tell apart -- and
+    /// now that `slice` SHARES, two slices of one section meet the same leaf
+    /// over and over.
     public static boolean eq(Rt rt, long a, long b) {
+        if (a == b) return true;
         if (count(rt, a) != count(rt, b)) return false;
-        return java.util.Arrays.equals(toArray(rt, a), toArray(rt, b));
+        java.util.ArrayDeque<long[]> sa = new java.util.ArrayDeque<>();
+        java.util.ArrayDeque<long[]> sb = new java.util.ArrayDeque<>();
+        sa.push(new long[]{a, 0});
+        sb.push(new long[]{b, 0});
+        byte[] la = new byte[0], lb = new byte[0];
+        int pa = 0, pb = 0;
+        while (true) {
+            if (pa == la.length) {
+                long nv = walkNext(rt, sa);
+                if (nv == Val.NOT_FOUND) break;
+                if (pb == lb.length && !sb.isEmpty()) {
+                    java.util.ArrayDeque<long[]> peek = new java.util.ArrayDeque<>();
+                    for (long[] e : sb) peek.addLast(new long[]{e[0], e[1]});
+                    long w = walkNext(rt, peek);
+                    if (w != Val.NOT_FOUND && w == nv) {
+                        sb = peek; la = new byte[0]; lb = new byte[0]; pa = 0; pb = 0;
+                        continue;
+                    }
+                }
+                la = toArray(rt, nv); pa = 0;
+            }
+            if (pb == lb.length) {
+                long nv = walkNext(rt, sb);
+                if (nv == Val.NOT_FOUND) break;
+                lb = toArray(rt, nv); pb = 0;
+            }
+            int n = Math.min(la.length - pa, lb.length - pb);
+            if (n == 0) continue;
+            for (int i = 0; i < n; i++) if (la[pa + i] != lb[pb + i]) return false;
+            pa += n; pb += n;
+        }
+        return pa == la.length && pb == lb.length
+                && walkNext(rt, sa) == Val.NOT_FOUND && walkNext(rt, sb) == Val.NOT_FOUND;
+    }
+
+    private static long walkNext(Rt rt, java.util.ArrayDeque<long[]> stack) {
+        while (!stack.isEmpty()) {
+            long[] top = stack.peek();
+            long node = top[0];
+            int i = (int) top[1];
+            if (!isBrope(rt, node)) { stack.pop(); return node; }
+            int kids = len(rt.gc.sp, Val.asHeap(node)) - BB_KIDS;
+            if (i >= kids) { stack.pop(); continue; }
+            top[1] = i + 1;
+            stack.push(new long[]{rt.slot(node, BB_KIDS + i), 0});
+        }
+        return Val.NOT_FOUND;
     }
 
     // --- the transient ------------------------------------------------------

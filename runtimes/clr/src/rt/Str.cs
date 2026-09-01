@@ -240,6 +240,8 @@ public static class Str {
     /// used them: every indexing path flattened first, so the counts were
     /// computed, stored, traced by the collector, and thrown away before the
     /// one question they answer.
+    public static int RopeByteOfCpPublic(Rt rt, long v, int k) => RopeByteOfCp(rt, v, k);
+
     static int RopeByteOfCp(Rt rt, long v, int k) {
         long node = v;
         int want = k, byteAt = 0;
@@ -445,8 +447,15 @@ public static class Str {
     // is a NaN-boxed value, and two would make every node 8 bytes bigger for
     // one bit.
 
-    public const int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_KIDS = 3;
+    // `RP_HASH` is the subtree's content hash, or nil until asked. Hashing a
+    // rope used to FLATTEN it to reach the flat string's cached hash, which
+    // bought the caching by spending the sharing (`doc/decisions/0011`).
+    public const int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
     public const int FLAT_MAX = 1024, FANOUT = 16;
+    /// A slice smaller than this COPIES rather than sharing, so a small `subs`
+    /// cannot retain a large parent -- the retention fix, not a performance
+    /// choice (`doc/decisions/0011`).
+    public const int SLICE_MIN = 256;
 
     /// LEAF SIZE FOR A STRING THAT ARRIVES NON-ASCII AND WHOLE. See
     /// `IndexedString`: the tree's node array is the sparse code-point index,
@@ -475,6 +484,160 @@ public static class Str {
 
     static int RopeKids(Rt rt, long v) => Obj.Len(rt.gc.sp, Val.AsHeap(v)) - RP_KIDS;
 
+    /// Bytes `[from, to)` appended WITHOUT materialising the tree.
+    static void AppendRange(Rt rt, long v, int from, int to, System.IO.MemoryStream outv) {
+        if (from >= to) return;
+        if (!IsRope(rt, v)) {
+            byte[] bs = Bytes(rt, v);
+            int hi = System.Math.Min(to, bs.Length), lo = System.Math.Min(from, hi);
+            outv.Write(bs, lo, hi - lo);
+            return;
+        }
+        int n = RopeKids(rt, v), at = 0;
+        for (int i = 0; i < n; i++) {
+            long k = rt.Slot(v, RP_KIDS + i);
+            int w = SBytes(rt, k);
+            if (at + w > from && at < to) AppendRange(rt, k, System.Math.Max(0, from - at), to - at, outv);
+            at += w;
+            if (at >= to) return;
+        }
+    }
+
+    /// A slice that SHARES its interior: a child wholly inside the range comes
+    /// back unchanged, and only the two edge children are cut.
+    public static long RopeSlice(Rt rt, long v, int from, int to) {
+        if (from >= to) return Of(rt, "");
+        int n = SBytes(rt, v);
+        if (to > n) to = n;
+        if (from == 0 && to == n) return v;
+        if (to - from < SLICE_MIN || !IsRope(rt, v)) {
+            var ms = new System.IO.MemoryStream();
+            AppendRange(rt, v, from, to, ms);
+            return Of(rt, System.Text.Encoding.UTF8.GetString(ms.ToArray()));
+        }
+        int bas = rt.Mark();
+        int vi = rt.Push(v);
+        int kids = RopeKids(rt, rt.R(vi));
+        int outb = rt.Mark();
+        int made = 0, at = 0;
+        for (int i = 0; i < kids; i++) {
+            long k = rt.Slot(rt.R(vi), RP_KIDS + i);
+            int w = SBytes(rt, k);
+            if (at + w > from && at < to) {
+                int lo = System.Math.Max(0, from - at);
+                int hi = System.Math.Min(to - at, w);
+                long piece = (lo == 0 && hi == w) ? k : RopeSlice(rt, k, lo, hi);
+                if (piece == Val.Nil) { rt.PopTo(bas); return Val.Nil; }
+                if (SBytes(rt, piece) > 0) { rt.Push(piece); made++; }
+            }
+            at += w;
+            if (at >= to) break;
+        }
+        long r = RopeFromRoots(rt, outb, made);
+        rt.PopTo(bas);
+        return r;
+    }
+
+    public static int Pow31Public(int n) => Pow31(n);
+
+    static int Pow31(int n) {
+        int b = 31, acc = 1;
+        while (n > 0) {
+            if ((n & 1) == 1) acc *= b;
+            b *= b;
+            n >>= 1;
+        }
+        return acc;
+    }
+
+    /// The content hash of a string tree without materialising it, cached per
+    /// node. `h(A.B) = h(A)*31^|B| + h(B)`, over BYTES so it agrees with the
+    /// flat hash.
+    public static int RopeHash(Rt rt, long v) {
+        if (!IsRope(rt, v)) {
+            byte[] bs = Bytes(rt, v);
+            int h0 = 0;
+            foreach (byte b in bs) h0 = h0 * 31 + b;
+            return h0;
+        }
+        long cached = rt.Slot(v, RP_HASH);
+        if (Val.IsFixnum(cached)) return (int) Val.AsFixnum(cached);
+        int bas = rt.Mark();
+        int vi = rt.Push(v);
+        int kids = RopeKids(rt, rt.R(vi));
+        int h = 0;
+        for (int i = 0; i < kids; i++) {
+            long k = rt.Slot(rt.R(vi), RP_KIDS + i);
+            int ki = rt.Push(k);
+            int kh = RopeHash(rt, rt.R(ki));
+            int kb = SBytes(rt, rt.R(ki));
+            h = h * Pow31(kb) + kh;
+            rt.PopTo(ki);
+        }
+        rt.SetSlot(Val.AsHeap(rt.R(vi)), RP_HASH, Val.Fixnum(h));
+        rt.PopTo(bas);
+        return h;
+    }
+
+    /// Content equality over two trees without materialising either: stops at
+    /// the first mismatch, and short-circuits on NODE IDENTITY.
+    public static bool TreeEq(Rt rt, long a, long b) {
+        if (a == b) return true;
+        var sa = new System.Collections.Generic.List<long[]>();
+        var sb = new System.Collections.Generic.List<long[]>();
+        sa.Add(new long[]{a, 0});
+        sb.Add(new long[]{b, 0});
+        byte[] la = System.Array.Empty<byte>(), lb = System.Array.Empty<byte>();
+        int pa = 0, pb = 0;
+        while (true) {
+            if (pa == la.Length) {
+                long nv = WalkNext(rt, sa);
+                if (nv == Val.NotFound) break;
+                if (pb == lb.Length && sb.Count > 0) {
+                    var peek = CopyStack(sb);
+                    long w = WalkNext(rt, peek);
+                    if (w != Val.NotFound && w == nv) {
+                        sb = peek; la = System.Array.Empty<byte>(); lb = System.Array.Empty<byte>();
+                        pa = 0; pb = 0;
+                        continue;
+                    }
+                }
+                la = Bytes(rt, nv); pa = 0;
+            }
+            if (pb == lb.Length) {
+                long nv = WalkNext(rt, sb);
+                if (nv == Val.NotFound) break;
+                lb = Bytes(rt, nv); pb = 0;
+            }
+            int n = System.Math.Min(la.Length - pa, lb.Length - pb);
+            if (n == 0) continue;
+            for (int i = 0; i < n; i++) if (la[pa + i] != lb[pb + i]) return false;
+            pa += n; pb += n;
+        }
+        return pa == la.Length && pb == lb.Length
+            && WalkNext(rt, sa) == Val.NotFound && WalkNext(rt, sb) == Val.NotFound;
+    }
+
+    static System.Collections.Generic.List<long[]> CopyStack(System.Collections.Generic.List<long[]> s) {
+        var o = new System.Collections.Generic.List<long[]>();
+        foreach (var e in s) o.Add(new long[]{e[0], e[1]});
+        return o;
+    }
+
+    static long WalkNext(Rt rt, System.Collections.Generic.List<long[]> stack) {
+        while (stack.Count > 0) {
+            var top = stack[stack.Count - 1];
+            long node = top[0];
+            int i = (int) top[1];
+            if (!IsRope(rt, node)) { stack.RemoveAt(stack.Count - 1); return node; }
+            int kids = RopeKids(rt, node);
+            if (i >= kids) { stack.RemoveAt(stack.Count - 1); continue; }
+            top[1] = i + 1;
+            stack.Add(new long[]{rt.Slot(node, RP_KIDS + i), 0});
+        }
+        return Val.NotFound;
+    }
+
     /// A node over `kids`, whose aggregates are SUMMED from them rather than
     /// derived from their bytes. That is what makes `count` O(1) on a tree.
     static long RopeNode(Rt rt, long[] kids) {
@@ -492,6 +655,7 @@ public static class Str {
         rt.SetSlot(a, RP_BYTES, Val.Fixnum(bytes));
         rt.SetSlot(a, RP_CPS, Val.Fixnum(((long) cps << 1) | (ascii ? 1L : 0L)));
         rt.SetSlot(a, RP_FLAT, Val.Nil);
+        rt.SetSlot(a, RP_HASH, Val.Nil);
         for (int i = 0; i < kids.Length; i++) rt.SetSlot(a, RP_KIDS + i, rt.R(bas + i));
         rt.PopTo(bas);
         return Val.Heap(a);
