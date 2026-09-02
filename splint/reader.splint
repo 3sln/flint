@@ -4,8 +4,9 @@
 ;; a position, and reading advances it.
 (ns runtime.codec-reader
   (:require [flint.impl.codec :refer [defstruct defn let do if set return .
-                                      byte-at len shl bit-or refuse + >
+                                      byte-at len shl bit-or refuse + > ==
                                       try-u32 mask32 shl64 I64
+                                      absent present utf8-str no-ns MaybeText
                                       I32 Bytes Reader]]))
 
 (defstruct reader [^Bytes b ^I32 i])
@@ -31,3 +32,15 @@
   (let [^I64 lo (mask32 (try-u32 r))
         ^I64 hi (mask32 (try-u32 r))]
     (return (bit-or lo (shl64 hi 32)))))
+
+;; `null` means ABSENT, which is not the same as empty -- that is what
+;; distinguishes `:kw` from `:/kw`.
+(defn ^:throws ^MaybeText text [^Reader r]
+  (let [^I32 n (try-u32 r)]
+    (if (== n (no-ns))
+      (return (absent)))
+    (if (> (+ (. r i) n) (len (. r b)))
+      (refuse "the encoding ends mid-string"))
+    (let [^MaybeText s (present (utf8-str (. r b) (. r i) n))]
+      (set (. r i) (+ (. r i) n))
+      (return s))))

@@ -7,9 +7,12 @@ fn main() {
     let c = u32(&mut r).unwrap();
     let mut r2 = Reader { b: vec![0x88,0x77,0x66,0x55,0x44,0x33,0x22,0x11], i: 0 };
     let d = u64(&mut r2).unwrap();
-    println!("{:08x} {:02x} {:08x} {} {:016x}", a, b, c, r.i, d);
+    let mut r3 = Reader { b: vec![0x05,0x00,0x00,0x00, b'h', b'e', b'l', b'l', b'o'], i: 0 };
+    let t = text(&mut r3).unwrap().unwrap();
+    println!("{:08x} {:02x} {:08x} {} {:016x} {}", a, b, c, r.i, d, t);
 }
 --java
+    static final int NO_NS = -1;
     static final class Refused extends RuntimeException {
         Refused(String m) { super(m); }
     }
@@ -22,9 +25,14 @@ fn main() {
         r2.b = new byte[]{ (byte)0x88,0x77,0x66,0x55,0x44,0x33,0x22,0x11 };
         r2.i = 0;
         long d = u64(r2);
-        System.out.println(String.format("%08x %02x %08x %d %016x", a, b, c, r.i, d));
+        Reader r3 = new Reader();
+        r3.b = new byte[]{ 5,0,0,0, 'h','e','l','l','o' };
+        r3.i = 0;
+        String t = text(r3);
+        System.out.println(String.format("%08x %02x %08x %d %016x %s", a, b, c, r.i, d, t));
     }
 --csharp
+    const int NO_NS = -1;
     sealed class Refused : System.Exception {
         internal Refused(string m) : base(m) {}
     }
@@ -37,5 +45,9 @@ fn main() {
         r2.b = new byte[]{ 0x88,0x77,0x66,0x55,0x44,0x33,0x22,0x11 };
         r2.i = 0;
         long d = U64(r2);
-        Console.WriteLine($"{a:x8} {b:x2} {c:x8} {r.i} {d:x16}");
+        var r3 = new Reader();
+        r3.b = new byte[]{ 5,0,0,0, (byte)'h',(byte)'e',(byte)'l',(byte)'l',(byte)'o' };
+        r3.i = 0;
+        string t = Text(r3);
+        Console.WriteLine($"{a:x8} {b:x2} {c:x8} {r.i} {d:x16} {t}");
     }

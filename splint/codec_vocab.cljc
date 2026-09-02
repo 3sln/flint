@@ -23,12 +23,23 @@
    :types {:rust "&mut Vec<u8>" :java "ByteArrayOutputStream" :csharp "MemoryStream"}
    :methods {}})
 
+(def MaybeText
+  "A string that may be ABSENT, which is not the same as empty -- that is what
+  distinguishes `:kw` from `:/kw`.
+
+  Rust says so in the type and the other two use null, which is the second
+  divergence in this port that is not naming. It rides the TAG rather than a
+  mark on the function, because absence is a property of the value."
+  {:name 'MaybeText
+   :types {:rust "Option<String>" :java "String" :csharp "string"}
+   :methods {}})
+
 (def Reader
   {:name 'Reader
    :types {:rust "&mut Reader" :java "Reader" :csharp "Reader"}
    :methods {}})
 
-(def tags-for {'I32 I32 'I64 I64 'Text Text 'Bytes Bytes 'Sink Sink 'Reader Reader})
+(def tags-for {'I32 I32 'I64 I64 'Text Text 'Bytes Bytes 'Sink Sink 'Reader Reader 'MaybeText MaybeText})
 
 (defn- t [ctx] (:target ctx))
 
@@ -239,4 +250,16 @@
     'mask32 (call {:rust "({0} as u64)"
                    :java "((long) {0} & 0xffffffffL)"
                    :csharp "((long) {0} & 0xffffffffL)"})
-    'shl64 (call {:rust "({0} << {1})" :java "({0} << {1})" :csharp "({0} << {1})"})}))
+    'shl64 (call {:rust "({0} << {1})" :java "({0} << {1})" :csharp "({0} << {1})"})
+    ;; A CONSTANT CAN DIFFER PER TARGET when the types do. The absent-namespace
+    ;; marker is the same 32 bits everywhere and is spelled `u32::MAX` in Rust
+    ;; and `-1` in Java and C#, whose ints are signed -- writing `4294967295` in
+    ;; the source produced `integer number too large` on two of the three.
+    'no-ns (call {:rust "u32::MAX" :java "NO_NS" :csharp "NO_NS"})
+
+    ;; ABSENCE. Rust has a type for it and the other two have null.
+    'absent (call {:rust "None" :java "null" :csharp "null"})
+    'present (call {:rust "Some({0})" :java "{0}" :csharp "{0}"})
+    'utf8-str (call {:rust "String::from_utf8_lossy(&{0}[{1} as usize..({1} + {2}) as usize]).into_owned()"
+                     :java "new String({0}, {1}, {2}, StandardCharsets.UTF_8)"
+                     :csharp "Encoding.UTF8.GetString({0}, {1}, {2})"})}))

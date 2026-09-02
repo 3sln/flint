@@ -85,14 +85,19 @@ enough — three implementations can each compile and disagree, which is the
 failure the port exists to prevent. A new port writes a `.drivers` file beside
 its source and the harness is unchanged.
 
-**Done:** the reader's `u8` and `u32`, and with them the first splint source
-that declares a MUTABLE STRUCT and the first that can FAIL:
+**Done:** the reader's `u8`, `u32`, `u64` and `text` — the whole primitive
+half of the decoder. The first splint source that declares a MUTABLE STRUCT and
+the first whose functions can FAIL.
 
 ```text
-rust   01020304 ff 44332211 9
-java   01020304 ff 44332211 9
-csharp 01020304 ff 44332211 9
+rust   01020304 ff 44332211 9 1122334455667788 hello
+java   01020304 ff 44332211 9 1122334455667788 hello
+csharp 01020304 ff 44332211 9 1122334455667788 hello
 ```
+
+The `u64` there is a genuine ROUND TRIP: the writer put those bytes on the wire
+little-endian and the reader took them back, two independently generated halves
+agreeing across three targets.
 
 **Next:** `encodeInto` — the tag dispatch. It needs type predicates
 (`isNil`, `isString`, `isHeapTy`), heap slot reads and recursion, which is more
@@ -118,6 +123,20 @@ Three more Rust-only rules, each found by `rustc` refusing something:
 * **`x as u32 << 8` does not parse** — Rust reads `u32 <<` as the start of
   generic arguments and says so. A cast used as a shift operand needs its own
   parentheses.
+
+**A second non-naming divergence, and it rides the TAG rather than the
+function.** A decoded string may be ABSENT — which is not the same as empty,
+and is what distinguishes `:kw` from `:/kw`. Rust says so in the type,
+`Option<String>`; Java and C# use null. So `MaybeText` is a tag whose Rust type
+is `Option<String>`, with `absent` and `present` as forms. Absence is a property
+of the VALUE, so it belongs on the tag; failure is a property of the CALL, so it
+belongs on the function. Two marks, two homes, and the reason each is where it
+is.
+
+**A constant can differ per target when the types do.** The absent-namespace
+marker is the same 32 bits everywhere and is `u32::MAX` in Rust and `-1` in
+Java and C#, whose ints are signed. Writing `4294967295` in the source produced
+`integer number too large` on two of the three, so `no-ns` is a form.
 
 And one that was not Rust's fault: `defstruct` emitted Java's
 `static final class` for C# as well, because the vocabulary had a Rust branch
