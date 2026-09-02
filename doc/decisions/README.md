@@ -78,6 +78,50 @@ what remains, and what each thing is waiting on.
    flag could gate it -- while a GUEST-NAMED one is optional and should be
    declared. Splitting the two is what stops the next one going missing.
 
+0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
+   against Rust.** None is a port problem; all were invisible to the old
+   `jvm`-against-`clr` similarity table because BOTH ports share them. Two
+   kinds, and the first kind matters more than its size suggests.
+
+   **Gas and allocation parity — a budget that fits on one runtime must fit
+   on the others** (`Rt.java:214` already says exactly this, with numbers,
+   about a defect that was fixed for `Maps`, `Vec` and `Sets`):
+
+   * `Seqs.emptyList` ALLOCATES on every call where Rust returns a
+     singleton. `initSingletons` writes `SING_EMPTY_LIST` and nothing ever
+     reads it -- `Seqs` was missed when the others were fixed.
+   * `Maps.eq` and `Maps.hash` charge NO GAS on either port; Rust charges per
+     entry. `(= m1 m2)` is unbounded on two runtimes.
+   * `Pike.compile`, `run` and `findAll` charge no gas; Rust charges
+     `charge_work(n)` and `charge_bytes(n)`. A regex is exactly where an
+     unbounded budget matters.
+   * `Seqs.entryAsVec` materialises a two-element vector Rust never builds --
+     two allocations per `(first {:a 1})`.
+
+   **Performance and correctness drift:**
+
+   * `Str.cpBytesAt` takes the FLATTEN path on an ASCII rope, which is the
+     exact regression `coll.rs` says it fixed, citing 3.05x on
+     `test/scaling.clj`. Live on both ports.
+   * The vector header is FIVE slots on the ports and SIX in Rust -- the
+     hash cache. `Eq.java` rewalks every element on every `hash`. `Vec.java`'s
+     own comment says an object of a different length between runtimes is
+     exactly the divergence a snapshot carries silently.
+   * `pop` on a vector is O(n) on both ports: `n-1` `conj` calls, each
+     allocating. Rust's `vec_pop` allocates about `2*depth + 2`.
+   * `Seqs.count` walks the seq while ignoring the `C_COUNT` cache it
+     maintains; Rust reads it. O(n) against O(1).
+   * `Bytes.at` ignores the `BB_FLAT` cache Rust follows.
+   * `Pike.codePoints` flattens a rope, breaking `0012`'s documented
+     `stat_flattens == 0` invariant, which Rust upholds by walking leaves.
+   * `Eq.java` has two DEAD branches -- the table-ref arm and the `TY_STR`
+     arm are both unreachable because `category` dispatched first. Rust
+     reaches both, because it tests refs BEFORE the category dispatch.
+   * `Snap.java`'s header claims it "writes the same fields in the same order
+     at the same widths as the Rust". It writes a literal `0` for the intern
+     tables. The claim is false, and a snapshot is where the header itself
+     says a divergence would surface as silent nonsense.
+
 0e. **A debug feature for `gc-stats` and `snap`** — `flint.rt/gc-stats` is
    guest-reachable and probably should not be, and snapshotting is the same
    shape. `default-features` is `#{:flint :flint/check}` and `:flint/check` is

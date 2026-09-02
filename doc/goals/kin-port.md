@@ -626,6 +626,61 @@ nowhere.
 
 ### Blocked on a capability, in the order they bite
 
+**RE-RANKED against Rust, and the old order was wrong in both directions.**
+Three analyses covering `Maps`+`Table`, `Str`+`Bytes`+`Vec` and
+`Seqs`+`Eq`+`Snap`+`Pike` agree: the holes this file ranked highest block
+almost nothing, and the two that block most were not on the list at all.
+
+| hole | this file claimed | measured against Rust |
+| --- | --- | --- |
+| **9 (new) `and` / `or`** | absent | **15 functions** in `Seqs`+`Eq`+`Pike` alone, plus every `&&` guard in `Maps`, `Vec`, `Str`. Cost: **one line** -- `'and "&&" 'or "\|\|"`, spelled identically on all three |
+| **10 (new) allocation** | absent | **~2,000 lines.** `alloc`, `heap`, `fixnum`, a `NIL` name, an `Addr` tag. Every constructor in every file |
+| **11 (new) cross-module calls** | absent | **11 functions.** Rust reaches a sibling through `self`; the ports through a class-qualified static taking `rt`. One pattern, not one decision per function |
+| 5 string building | mid | **13 in `Table`**, 0 in `Maps`, 0 blockers in `Seqs`/`Eq`/`Pike` |
+| 2 arrays | "the real gate on 4,500 lines" | **2 functions** in `Maps`+`Table`. And the array-of-`Value`s half **is not needed at all** -- converging node construction to `(base, n)` on the shadow stack removes it from eight functions, measured 5.5x faster in Rust at 2 kids |
+| 3 `case` statements | "every dispatch" | **1 function** in `Maps`+`Table`, **0** in `Str`/`Bytes`/`Vec`, 5 in `Seqs`+`Eq` |
+| 4 absence | "every partial function" | **1** in `Table` (the others are drift), 3 in `Seqs`+`Eq`+`Pike` after converging |
+| **6 borrowed types** | "close it" | **REFUSE IT.** Measured: converging Rust's borrow-and-memcmp down to the ports' copy is 2.7x-8x worse; converging to a portable indexed loop is **28x worse at 256 bytes**. Neither direction survives -- the first divergence found in this port that is neither naming nor a missing capability |
+
+**Hole 9 is the finding.** One line of vocabulary, unblocking more functions
+than everything else combined, and it went unnoticed for four shipped files
+because none of them happened to need a boolean connective. A capability
+census taken from the files that DID ship is a census of what those files
+needed.
+
+### Port order, re-derived
+
+| # | region | gate | lines across 3 |
+| --- | --- | --- | --- |
+| 1 | `Pike`: `word_cp`, `space_cp`, `pred_hit` | **hole 9 only**; contiguous in all three, no reorder | 50 |
+| 2 | `Seqs`: `rest` | one template, after the `emptyList` convergence | 16 |
+| 3 | `Eq`: `cmp_named` | hole 9 + 2 templates | 37 |
+| 4 | `Vec`: the whole file, two regions | holes 9, 10 + the header convergence | **~860 net** |
+| 5 | `Seqs`: the constructors | hole 10 + convergences | 247 |
+| 6 | `Bytes`: two regions | hole 10 + a byte sink + the `(base, n)` convergence | **~880 net** |
+| 7 | `Maps`: `merge_two` + the six structural copies | **nothing new** -- 639 lines, algorithm line-for-line identical | 639 |
+| 8 | `Table`, `Str`'s rope half, the rest | hole 5, reorders | ~2,600 |
+
+`Vec` first among the big ones because it has **no host arrays at all** --
+its "arrays" are heap slots and the shadow stack, which `champ.kin` already
+paid for.
+
+### Never, on evidence
+
+* **`Snap`** moves to phase 5. 785/449/456 lines of direct `Gc`, `Roots`,
+  `Frame` and raw-memory access -- the list phase 5 already names. Its 1%
+  jvm-clr delta is the purest example of the old table's failure.
+* **`Seqs.force`** -- the most alike function in the file, and it must not be
+  ported. `0037` says the park fix turns it into a re-entry state machine.
+  Generating it now would freeze a shape known to be about to change.
+* **`Str`'s constructor half** -- five stacked blockers, and two Rust
+  functions there do not exist in the ports at all.
+* **`Eq.utf16_cmp`** -- Rust walks an iterator over `&str`; the ports index a
+  host `String`. Rust has no host `String`. The languages genuinely refuse
+  each other's form.
+
+
+
 Numbers are the codec spike's ranking, kept so the references in this file
 stay meaningful. 1 and 8 are done.
 

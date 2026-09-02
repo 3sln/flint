@@ -1,0 +1,8 @@
+;; kin is its own library now (`3sln/kin`), pulled in by path.
+;;
+;; It ships the LANGUAGE -- `defn`, `let`, `if`, `case`, the operators, the
+;; marks -- and knows nothing about flint. What lives here is the SUBJECT: a
+;; vocabulary naming this runtime's `Rt`, its heap slots, its type tags and
+;; its rooting, plus the sources written in them.
+{:paths ["kin/src"]
+ :deps {io.github.3sln/kin {:local/root "../kin"}}}

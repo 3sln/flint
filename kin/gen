@@ -1,0 +1,6 @@
+#!/bin/sh
+# Generate one kin source for every target, using the kin library from
+# `bb.edn`'s `:local/root` dep and this project's vocabularies from `kin.edn`.
+set -e
+export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
+exec bb ../kin/bin/kin gen "$@"

@@ -1,0 +1,5 @@
+;; What kin needs to know about this project: which vocabularies to load.
+;; Everything else -- the sources, their drivers, their target files -- it
+;; discovers from the files themselves.
+{:vocabularies [flint.impl.rt flint.impl.hash]
+ :targets [:rust :java :csharp]}

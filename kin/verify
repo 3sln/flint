@@ -14,7 +14,7 @@ work=${TMPDIR:-/tmp}/kin-verify
 rm -rf "$work"; mkdir -p "$work"
 cd "$root"
 
-bb kin/run.clj "$src" > "$work/gen.txt"
+./kin/gen "$src" > "$work/gen.txt"
 sed -n '/==== rust/,/==== java/p'   "$work/gen.txt" | sed '1d;$d' > "$work/gen.rs"
 sed -n '/==== java/,/==== csharp/p' "$work/gen.txt" | sed '1d;$d' > "$work/gen.java"
 sed -n '/==== csharp/,$p'           "$work/gen.txt" | sed '1d'    > "$work/gen.cs"

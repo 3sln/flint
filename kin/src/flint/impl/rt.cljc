@@ -14,8 +14,8 @@
   `Obj.TyCons` in C#, which pascalises. There are a dozen of them and they
   appear all over the runtime, so they are named here once rather than at
   every use."
-  (:require [flint.kin :as sp]
-            [flint.impl.core :as core]
+  (:require [kin :as sp]
+            [kin.lang :as core]
             [clojure.string :as str]))
 
 (def Rt
@@ -74,66 +74,10 @@
                                     :csharp (csharp-tag sym)}))
           {} type-tags))
 
-(defn- case-form
-  "`(case expr [tags...] value ... :else value)`. A form that RETURNS.
-
-  The arms are VALUES, not statements, and that is forced rather than chosen.
-  A Rust match arm is an expression, so writing `return X;` inside one emits
-  `=> return CAT_MAP;,` -- which is what the first attempt did. The JVM and
-  CLR need the opposite: a `case` label cannot yield a value, so each arm has
-  to `return` for itself.
-
-  So the source says the VALUE and each target spends what it must: Rust wraps
-  the whole match in one `return`, the other two put a `return` in every arm.
-  This is the statement/expression split the design anticipated, arriving in
-  the first place it actually bites."
-  [ctx form]
-  (let [[_ subject & clauses] form
-        ;; A `(comment ...)` between arms is emitted where it stands and does
-        ;; NOT consume an arm. Without this a comment could only sit outside
-        ;; the switch, which is not where it explains anything.
-        pairs (loop [cs clauses acc []]
-                (cond (empty? cs) acc
-                      (and (seq? (first cs)) (= 'comment (first (first cs))))
-                      (recur (rest cs) (conj acc [:comment (first cs)]))
-                      :else (recur (drop 2 cs) (conj acc [(first cs) (second cs)]))))
-        scrut (core/strip-parens (sp/kin-render ctx subject))]
-    (sp/kin-emit! ctx (sp/indent-of ctx)
-                     (if (= :rust (t ctx))
-                       (str "return match " scrut " {\n")
-                       (str "switch (" scrut ") {\n")))
-    (sp/kin-scoped
-     ctx {:key :in-case :value true :indent 1}
-     (fn [inner]
-       (doseq [[labels body] pairs]
-         (if (= :comment labels)
-           (core/comment-form inner body)
-           (let [else? (= :else labels)
-               ls (when-not else? (mapv (fn [l] (sp/kin-render inner l)) labels))]
-           (case (t inner)
-             :rust (sp/kin-emit! inner (sp/indent-of inner)
-                                    (if else? "_" (str/join " | " ls)) " => ")
-             ;; FOUR LABELS TO A LINE, which is what the hand-written files
-             ;; do. A one-per-arm line for eight tags runs past 150 columns,
-             ;; and the not-worse rule covers what a diff reads like as much
-             ;; as what it compiles to.
-             (if else?
-               (sp/kin-emit! inner (sp/indent-of inner) "default:\n")
-               (doseq [chunk (partition-all 4 ls)]
-                 (sp/kin-emit! inner (sp/indent-of inner)
-                                  (str/join " " (mapv (fn [l] (str "case " l ":")) chunk))
-                                  "\n"))))
-           (if (= :rust (t inner))
-             (sp/kin-emit! inner (core/strip-parens (sp/kin-render inner body)) ",\n")
-             (sp/kin-emit! inner (sp/indent-of inner) "    return "
-                              (core/strip-parens (sp/kin-render inner body)) ";\n")))))))
-    (sp/kin-emit! ctx (sp/indent-of ctx) (if (= :rust (t ctx)) "};\n" "}\n"))))
-
 (defn forms-for []
   (merge
    (core/forms-for {:default-tag Value})
-   {'case case-form
-    ;; IS THIS VALUE ON THE HEAP? A method in Rust, a static in the other two,
+   {    ;; IS THIS VALUE ON THE HEAP? A method in Rust, a static in the other two,
     ;; which is the same split `^:method` handles for generated functions --
     ;; here it is a hand-written one, so the vocabulary spells it.
     'is-heap (core/call {:rust "{0}.is_heap()" :java "Val.isHeap({0})" :csharp "Val.IsHeap({0})"})
