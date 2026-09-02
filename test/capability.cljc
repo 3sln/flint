@@ -25,3 +25,14 @@
     ;; guest cannot set that field, which is the entire mechanism.
     :with-a-guessed-id  (try-open "fs" {:capability (opaque "fs") :id 5})
     :ungranted          (try-open "net" {:capability (opaque "net")})}))
+
+(defn granted
+  "The POSITIVE case: a host that allows, an open that returns a real port, and
+  a message that reaches the host over it.
+
+  Asserted as the round trip rather than as \"open returned something\", because
+  a port that cannot carry a message is not a granted capability."
+  [_]
+  (let [port (p/open "fs")]
+    (p/send port "ping")
+    (str "opened " (p/port? port))))

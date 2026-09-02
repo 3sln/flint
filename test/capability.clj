@@ -36,7 +36,8 @@
            "import { Compiler } from '../sdks/esm/dist/flint.js';\n"
            "const src = await readFile('test/capability.cljc', 'utf8');\n"
            "const image = (await Compiler.load()).compile({\n"
-           "  files: { 'capability.cljc': src }, fn: 'capability/main' });\n"
+           "  files: { 'capability.cljc': src }, fn: 'capability/main',\n"
+           "  exports: ['capability/main', 'capability/granted'] });\n"
            ;; THE HOST, implementing the pattern. One grant, id 5 -- arbitrary
            ;; and the host's own business; a guest can carry it and compare it
            ;; and do nothing else with it.
@@ -51,12 +52,26 @@
            "    return !!c && c.hostId === ids[name];\n"
            "  }, open() {} });\n"
            "const sb = await image.sandbox({ capabilities: { fs: rule('fs') } });\n"
-           ;; NAMED. A sandbox has no entry point (`doc/decisions/0025` step 5).
-           "process.stdout.write(String(await sb.call('capability/main', [[]])));\n"))
+           "process.stdout.write(String(await sb.call('capability/main', [[]])));\n"
+           ;; A SECOND sandbox, with a host that allows, for the positive case.
+           ;; Separate rather than another name on the first, because a rule
+           ;; that both refuses forgeries and allows this would have to be two
+           ;; rules anyway, and one of them would not be the rule under test.
+           "let seen = null;\n"
+           "const sb2 = await image.sandbox({ capabilities: { fs: {\n"
+           "  allow: () => true, open() {},\n"
+           "  message: (p, v) => { seen = v; } } } });\n"
+           "const got = await sb2.call('capability/granted', [[]]);\n"
+           "process.stdout.write('\\n{:granted ' + JSON.stringify(got) +\n"
+           "  ' :granted-message ' + JSON.stringify(seen) + '}');\n"
+           ))
 (def raw (sh "node" "out/capdriver.mjs"))
 (when-not (zero? (:exit raw))
   (println "driver failed:" (:out raw) (:err raw)) (System/exit 1))
-(def r (edn/read-string (:out raw)))
+;; TWO forms on stdout, one per sandbox, merged here. One driver run rather
+;; than two, because compiling the fixture twice is the slow part.
+(def r (let [[a b] (str/split-lines (str/trim (:out raw)))]
+         (merge (edn/read-string a) (edn/read-string (or b "{}")))))
 (def refused "the host refused to open \"fs\"")
 
 ;; A host that HAS a rule applies it to every open, including the ones that
@@ -79,21 +94,38 @@
 (check "an ungranted name is refused before any rule is consulted"
        (:ungranted r) "the host refused to open \"net\"")
 
-;; WHAT THIS CANNOT TEST YET, said out loud rather than left as a gap someone
-;; discovers by trusting the row above for more than it says.
+;; THE POSITIVE CASE, which this file used to say could not be tested here.
 ;;
-;; The positive case -- a host-issued id actually opening -- needs the host to
-;; hand the guest a capability, and on wasm there is no way to do that today:
+;; What blocked it was that the encoded call path did not pump host-port events,
+;; so an `open` inside a `call` never reached a handler and answered nil. It does
+;; now: a host that names a capability gets a SYSTEM PORT, and a call over the
+;; system port is a message the pump serves, so the whole open-grant-send round
+;; trip happens inside one `call` (`doc/decisions/0027`).
 ;;
-;;   * the entry receives `[argv caps]` with the map EMPTY, by design (`abi.rs`
-;;     points at the encoded call path instead);
-;;   * the encoded call path does not pump host-port events, so an `open` inside
-;;     a `call` never reaches a handler and returns nil.
+;; Asserted as the round trip rather than as "open returned something", because
+;; a port that cannot carry a message is not a granted capability.
+(check "a granted open returns a real port, inside an ordinary call"
+       (:granted r) "opened true")
+(check "and the host receives what is sent on it" (:granted-message r) "ping")
+
+;; WHAT THIS STILL CANNOT TEST, said out loud rather than left as a gap someone
+;; discovers by trusting a row above for more than it says.
 ;;
-;; `Program::run_with` on the native runtime DOES mint and project, so the model
-;; is implementable there. Until one of those two wasm paths carries an opaque
-;; in, `allow` can only ever refuse on this runtime, and every row above is a
-;; refusal for exactly that reason.
+;; A host-issued capability reaching the guest IN THE FIRST PLACE. The rows above
+;; cover a host that refuses, and the two new ones cover a host that allows --
+;; but `allow` there returns true unconditionally, because the guest has nothing
+;; host-issued to present. The entry receives `[argv caps]` with the map empty,
+;; by design (`abi.rs` points at the encoded call path instead), so a guest
+;; cannot hold an opaque the host minted and hand it back.
+;;
+;; The way in exists now and is not wired: `flint.host/request` can answer with
+;; any value, an opaque among them (`doc/decisions/0036` step 7). A guest could
+;; ask for its capability and present what it was given. That is worth doing,
+;; and it is what the row below would then assert instead of `allow: () => true`.
+;;
+;; What used to be written here -- "the encoded call path does not pump host-port
+;; events, so an `open` inside a `call` never reaches a handler and returns nil"
+;; -- is no longer true, and the two rows above are the measurement that says so.
 ;;
 ;; `sdks/esm/src/codec.js` gained `codec.opaque` for this: it could decode a
 ;; sentinel and not encode one, so a JS host could recognise a capability it had
