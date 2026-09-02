@@ -998,3 +998,301 @@ impl Wire {
         w.done()
     }
 }
+
+// --------------------------------------------------------------- reading back
+//
+// The other half of `Wire`, and it was missing.
+//
+// A host could WRITE the wire format and not read it, which is the same
+// asymmetry the JVM and CLR runtimes had until `0027` was finished: an encoder
+// without a decoder means a host can send a value and cannot serve a request.
+// Everything the guest sends -- an RPC call into a virtual namespace, a message
+// on any bridge -- arrives here as bytes, and a host that must decode them by
+// hand will decode them differently from the next host.
+//
+// This is the HOST's reader. It builds a plain Rust tree and never touches a
+// heap, so it needs no `Rt` and cannot allocate a guest object; `Rt::decode` is
+// the other direction and stays what a value crossing INTO the sandbox uses.
+
+/// A decoded value, host-side.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Val {
+    Nil,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Bytes(Vec<u8>),
+    /// Namespace, then name. `None` is ABSENT, which is not empty: that is what
+    /// separates `:kw` from `:/kw`.
+    Keyword(Option<String>, String),
+    Symbol(Option<String>, String),
+    Vector(Vec<Val>),
+    List(Vec<Val>),
+    Set(Vec<Val>),
+    /// Entries in the order they crossed. A vector rather than a map because
+    /// the wire has no ordering guarantee to preserve and a key need not be
+    /// hashable in Rust -- a vector key is legal in flint.
+    Map(Vec<(Val, Val)>),
+    Port(u32),
+    Opaque(u64, String),
+    Tagged(alloc::boxed::Box<Val>, alloc::boxed::Box<Val>),
+}
+
+impl Val {
+    /// The value at keyword key `name` (no namespace), or `None`.
+    ///
+    /// The lookup a request handler does on every message, so it is here rather
+    /// than written out at each call site with a different idea of what counts
+    /// as a match.
+    pub fn get(&self, name: &str) -> Option<&Val> {
+        match self {
+            Val::Map(es) => es.iter().find_map(|(k, v)| match k {
+                Val::Keyword(None, n) if n == name => Some(v),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Val::Str(s) => Some(s),
+            // A keyword or symbol answers its NAME, because `{:op :invoke}` and
+            // `{:op "invoke"}` mean the same thing to a server and a host that
+            // matched only one of them would work until somebody wrote the
+            // other.
+            Val::Keyword(_, s) | Val::Symbol(_, s) => Some(s),
+            _ => None,
+        }
+    }
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            Val::Int(n) => Some(*n),
+            _ => None,
+        }
+    }
+    pub fn as_slice(&self) -> Option<&[Val]> {
+        match self {
+            Val::Vector(v) | Val::List(v) | Val::Set(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
+struct HostReader<'a> {
+    b: &'a [u8],
+    at: usize,
+}
+
+impl<'a> HostReader<'a> {
+    fn byte(&mut self) -> Result<u8, String> {
+        let v = *self.b.get(self.at).ok_or("wire: ran off the end")?;
+        self.at += 1;
+        Ok(v)
+    }
+    fn u32(&mut self) -> Result<u32, String> {
+        if self.at + 4 > self.b.len() {
+            return Err("wire: ran off the end".into());
+        }
+        let v = u32::from_le_bytes([
+            self.b[self.at],
+            self.b[self.at + 1],
+            self.b[self.at + 2],
+            self.b[self.at + 3],
+        ]);
+        self.at += 4;
+        Ok(v)
+    }
+    fn u64(&mut self) -> Result<u64, String> {
+        if self.at + 8 > self.b.len() {
+            return Err("wire: ran off the end".into());
+        }
+        let mut a = [0u8; 8];
+        a.copy_from_slice(&self.b[self.at..self.at + 8]);
+        self.at += 8;
+        Ok(u64::from_le_bytes(a))
+    }
+    fn text(&mut self) -> Result<String, String> {
+        let n = self.u32()? as usize;
+        if self.at + n > self.b.len() {
+            return Err("wire: a string ran off the end".into());
+        }
+        let s = core::str::from_utf8(&self.b[self.at..self.at + n])
+            .map_err(|_| String::from("wire: a string was not utf-8"))?
+            .into();
+        self.at += n;
+        Ok(s)
+    }
+    fn ns(&mut self) -> Result<Option<String>, String> {
+        // Peek: `NO_NS` is a length that means ABSENT, so it has to be read as
+        // a length and then rejected rather than read as text.
+        if self.at + 4 > self.b.len() {
+            return Err("wire: ran off the end".into());
+        }
+        let n = u32::from_le_bytes([
+            self.b[self.at],
+            self.b[self.at + 1],
+            self.b[self.at + 2],
+            self.b[self.at + 3],
+        ]);
+        if n == NO_NS {
+            self.at += 4;
+            return Ok(None);
+        }
+        Ok(Some(self.text()?))
+    }
+    fn many(&mut self, n: u32) -> Result<Vec<Val>, String> {
+        // NOT `with_capacity(n)`: `n` is attacker-controlled in the sense that
+        // matters -- a truncated or corrupt message can claim four billion
+        // elements, and reserving for that is an allocation failure rather than
+        // the "ran off the end" this would otherwise report one element later.
+        let mut out = Vec::new();
+        for _ in 0..n {
+            out.push(self.val()?);
+        }
+        Ok(out)
+    }
+    fn val(&mut self) -> Result<Val, String> {
+        let t = self.byte()?;
+        Ok(match t {
+            K_NIL => Val::Nil,
+            K_TRUE => Val::Bool(true),
+            K_FALSE => Val::Bool(false),
+            K_INT => Val::Int(self.u64()? as i64),
+            K_DOUBLE => Val::Float(f64::from_bits(self.u64()?)),
+            K_STRING => Val::Str(self.text()?),
+            K_BYTES => {
+                let n = self.u32()? as usize;
+                if self.at + n > self.b.len() {
+                    return Err("wire: a byte string ran off the end".into());
+                }
+                let v = self.b[self.at..self.at + n].to_vec();
+                self.at += n;
+                Val::Bytes(v)
+            }
+            K_KEYWORD => {
+                let ns = self.ns()?;
+                Val::Keyword(ns, self.text()?)
+            }
+            K_SYMBOL => {
+                let ns = self.ns()?;
+                Val::Symbol(ns, self.text()?)
+            }
+            K_VECTOR => {
+                let n = self.u32()?;
+                Val::Vector(self.many(n)?)
+            }
+            K_LIST => {
+                let n = self.u32()?;
+                Val::List(self.many(n)?)
+            }
+            K_SET => {
+                let n = self.u32()?;
+                Val::Set(self.many(n)?)
+            }
+            K_MAP => {
+                let n = self.u32()?;
+                let mut out = Vec::new();
+                for _ in 0..n {
+                    let k = self.val()?;
+                    let v = self.val()?;
+                    out.push((k, v));
+                }
+                Val::Map(out)
+            }
+            K_PORT => Val::Port(self.u32()?),
+            K_SENTINEL => {
+                let id = self.u64()?;
+                Val::Opaque(id, self.text()?)
+            }
+            K_TAGGED => {
+                let tag = self.val()?;
+                let form = self.val()?;
+                Val::Tagged(alloc::boxed::Box::new(tag), alloc::boxed::Box::new(form))
+            }
+            // A TABLE is columnar and its decode needs the schema machinery
+            // (`doc/decisions/0026`). Refused by name rather than mis-read:
+            // a host that gets "unsupported" can act on it, and one that gets a
+            // wrong value cannot.
+            K_TABLE => return Err("wire: a table cannot be read host-side yet".into()),
+            other => return Err(alloc::format!("wire: unknown tag {other}")),
+        })
+    }
+}
+
+/// Read one value from `bytes`, host-side.
+///
+/// Trailing bytes are an ERROR rather than ignored: a message that decodes to a
+/// value and has more after it is not the message that was sent, and quietly
+/// taking the first value would hide a framing bug for as long as the extra
+/// bytes happened to be harmless.
+pub fn parse(bytes: &[u8]) -> Result<Val, String> {
+    let mut r = HostReader { b: bytes, at: 0 };
+    let v = r.val()?;
+    if r.at != bytes.len() {
+        return Err(alloc::format!(
+            "wire: {} trailing byte(s) after a complete value",
+            bytes.len() - r.at
+        ));
+    }
+    Ok(v)
+}
+
+#[cfg(test)]
+mod host_reader_tests {
+    use super::*;
+
+    #[test]
+    fn round_trips_what_the_builder_writes() {
+        let mut w = Wire::new();
+        w.map(3);
+        w.keyword(None, "op");
+        w.keyword(None, "invoke");
+        w.keyword(None, "var");
+        w.string("list-dir");
+        w.keyword(None, "args");
+        w.vector(2);
+        w.string("src");
+        w.int(-7);
+        let v = parse(&w.done()).expect("parses");
+        assert_eq!(v.get("op").and_then(|x| x.as_str()), Some("invoke"));
+        assert_eq!(v.get("var").and_then(|x| x.as_str()), Some("list-dir"));
+        let args = v.get("args").and_then(|x| x.as_slice()).expect("args");
+        assert_eq!(args[0].as_str(), Some("src"));
+        assert_eq!(args[1].as_i64(), Some(-7));
+    }
+
+    #[test]
+    fn an_absent_namespace_is_not_an_empty_one() {
+        let mut w = Wire::new();
+        w.vector(2);
+        w.keyword(None, "kw");
+        w.keyword(Some(""), "kw");
+        let v = parse(&w.done()).expect("parses");
+        let xs = v.as_slice().expect("vector");
+        assert_eq!(xs[0], Val::Keyword(None, "kw".into()));
+        assert_eq!(xs[1], Val::Keyword(Some(String::new()), "kw".into()));
+    }
+
+    #[test]
+    fn trailing_bytes_are_refused_rather_than_ignored() {
+        let mut b = Wire::of_int(1);
+        b.push(K_NIL);
+        assert!(parse(&b).is_err());
+    }
+
+    #[test]
+    fn a_truncated_message_says_so_rather_than_panicking() {
+        let full = Wire::of_str("hello");
+        for n in 0..full.len() {
+            assert!(parse(&full[..n]).is_err(), "prefix of {n} should not parse");
+        }
+    }
+
+    #[test]
+    fn a_claimed_count_far_past_the_end_is_an_error_not_an_allocation() {
+        let mut w = Wire::new();
+        w.vector(u32::MAX);
+        assert!(parse(&w.done()).is_err());
+    }
+}
