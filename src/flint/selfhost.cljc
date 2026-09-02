@@ -144,10 +144,12 @@
         ;; `:roots` is how `flint test` compiles: its entry is generated and
         ;; is on no source path, so resolving from it would report the entry
         ;; itself missing. Absent, the entry is the root as always.
-        {:keys [sources order missing]}
+        {:keys [sources order missing refused]}
         (project/resolve-project resolve-ns entry-ns features (:roots spec))]
     (if (seq missing)
       {:missing (vec missing)}
+      (if (seq refused)
+        {:refused (vec refused)}
       (let [result (compiler/compile-image
                     ;; `:tags` and `:workspace` travel WITH the source. This
                     ;; used to hand on `:src` and `:file` only, and the compiler
@@ -170,7 +172,7 @@
                      :features features})
             builder (:builder result)]
         {:image (base64 (img/emit builder {}))
-         :natives (img/natives builder)}))))
+         :natives (img/natives builder)})))))
 
 (defn compile-to-wasm
   "Compile a program and splice it into a PREBUILT runtime module, producing a
@@ -213,10 +215,12 @@
         ;; `:roots` is how `flint test` compiles: its entry is generated and
         ;; is on no source path, so resolving from it would report the entry
         ;; itself missing. Absent, the entry is the root as always.
-        {:keys [sources order missing]}
+        {:keys [sources order missing refused]}
         (project/resolve-project resolve-ns entry-ns features (:roots spec))]
     (if (seq missing)
       {:missing (vec missing)}
+      (if (seq refused)
+        {:refused (vec refused)}
       (let [result (compiler/compile-image
                     ;; `:tags` and `:workspace` travel WITH the source. This
                     ;; used to hand on `:src` and `:file` only, and the compiler
@@ -294,7 +298,7 @@
                                               :meta (:meta spec)}))
          :compiled (when res (:compiled res))
          :arities (when res (:total res))
-         :shaken (when shaken (second shaken))}))))
+         :shaken (when shaken (second shaken))})))))
 
 (defn main [args]
   ;; Two entries, chosen by the first argument. `spec` is the original: the
@@ -311,6 +315,22 @@
     (cond
       (:missing r)
       (flint.rt/str-join (concat ["!missing\n"] (interpose "\n" (map str (:missing r)))))
+      ;; A REFUSED require is not a missing one and must not be reported as
+      ;; one: the source is there and readable, and the answer is that this
+      ;; workspace may not have it (`doc/decisions/0036`). Each line names both
+      ;; ends and what was missing, because "refused" without the capability is
+      ;; a message nobody can act on.
+      (:refused r)
+      (flint.rt/str-join
+       (concat ["!refused\n"]
+               (interpose "\n"
+                          (map (fn [x]
+                                 (str (:from x) " requires " (:to x)
+                                      ", which " (:to-workspace x) " guards with "
+                                      (pr-str (:needs x))
+                                      "; " (or (:from-workspace x) "this program")
+                                      " does not hold it"))
+                               (:refused r)))))
       ;; A module comes back alone: its native slots are already in it, so
       ;; there is no import order for the host to apply.
       (:module r) (:module r)

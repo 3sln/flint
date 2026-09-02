@@ -50,7 +50,9 @@
       {:src       the source text
        :file      what to name it in a diagnostic
        :workspace who owns it -- a symbol, nil for the anonymous one
-       :tags      the reader tags its workspace binds (`doc/decisions/0035`)}
+       :tags      the reader tags its workspace binds (`doc/decisions/0035`)
+       :grants    what its workspace HOLDS -- a set of capability keywords
+       :guard     what a workspace must hold to require it (`doc/decisions/0036`)}
 
   Only `:src` is required. A resolver that answers just `{:src :file}` is the
   old `find-source` and still works; it simply reports every namespace as
@@ -82,7 +84,8 @@
                   reqs (compiler/ns-requires (or (ns-form forms) '(ns x)))]
               (recur (into (vec (rest todo)) reqs)
                      (assoc sources n {:src (:src s) :file (:file s) :forms forms
-                                       :workspace (:workspace s) :tags (:tags s)})
+                                       :workspace (:workspace s) :tags (:tags s)
+                                       :grants (:grants s) :guard (:guard s)})
                      (conj order n)
                      missing))
             (recur (vec (rest todo)) sources order (conj missing n)))))
@@ -94,7 +97,8 @@
 
   `workspaces` says who owns what, as a vector searched in order:
 
-      [{:prefix \"foo/\" :name foo/bar :tags {tag-sym var-sym}} ..]
+      [{:prefix \"foo/\" :name foo/bar :tags {tag-sym var-sym}
+        :grants #{:fs} :guard #{:trusted}} ..]
 
   First matching prefix wins, and a file matching none belongs to the anonymous
   workspace with only the built-in tags -- so a caller that passes no
@@ -118,7 +122,8 @@
                                               (str/starts-with? (str path) (str pre)))))
                                 (or workspaces [])))]
            {:src (get files path) :file path
-            :workspace (:name w) :tags (:tags w)}))))))
+            :workspace (:name w) :tags (:tags w)
+            :grants (set (:grants w)) :guard (set (:guard w))}))))))
 
 (defn topo-order
   "Dependencies before dependents. A cycle does not stop the build -- it picks
@@ -139,6 +144,44 @@
           (recur (into done ready) (into seen ready)
                  (vec (remove (fn [x] (contains? rs x)) pending))))))))
 
+(defn refused-requires
+  "Every `:require` a workspace guard refuses (`doc/decisions/0036`).
+
+  Level one of two. A workspace may declare `:flint/capabilities-guard`, and
+  then only a workspace holding those capabilities may require it AT ALL. The
+  var-level guard is the other level and is the analyzer's; this one is checked
+  from the dependency graph alone, before a line of the guarded workspace has
+  been analysed, which is the point of having it separately: `flint deps` can
+  answer \"this project needs :fs because it depends on X\" without compiling.
+
+  Checked at EVERY EDGE and never transitively. A requires B requires C: if B
+  holds what C guards and A does not, A still reaches C's behaviour through B,
+  and that is correct -- it is B choosing to re-export, which is the same
+  delegation allowed everywhere else. What a guard buys is that the set of
+  workspaces holding a capability DIRECTLY is small and declared; it does not
+  and cannot stop authority spreading through the functions a holder exports.
+
+  Within one workspace, nothing is checked. A project is not a security boundary
+  against itself, and making it one would mean every file in a library declaring
+  what every other file may use.
+
+  Returns `[{:from :to :from-workspace :to-workspace :needs}]`, `:needs` being
+  what was missing rather than the whole guard -- naming the three capabilities
+  a caller already holds helps nobody find the one it does not."
+  [sources]
+  (vec (for [[n info] sources
+             r (compiler/ns-requires (or (ns-form (:forms info)) '(ns x)))
+             :let [to (get sources r)
+                   guard (:guard to)]
+             :when (and to
+                        (seq guard)
+                        (not= (:workspace info) (:workspace to)))
+             :let [missing (into #{} (remove (or (:grants info) #{}) guard))]
+             :when (seq missing)]
+         {:from n :to r
+          :from-workspace (:workspace info) :to-workspace (:workspace to)
+          :needs missing})))
+
 (defn core-first
   "`clojure.core` is referred by every namespace, so it is analysed first
   whatever the require graph says. `flint.check` follows it for the same reason
@@ -153,8 +196,10 @@
 
 (defn resolve-project
   "Everything a compile needs, from an entry and a namespace resolver.
-  Returns `{:sources .. :order .. :workspaces .. :missing ..}` with the order
-  already topological and core-first.
+  Returns `{:sources .. :order .. :workspaces .. :refused .. :missing ..}` with
+  the order already topological and core-first. `:refused` is REPORTED for the
+  same reason `:missing` is: whether a refused require stops the build is the
+  front end's call, and a tool listing dependencies wants to see them all.
 
   `roots` overrides the entry as the starting point, and `flint test` is why:
   its entry is `flint.check.registry`, which the COMPILER generates and no
@@ -183,4 +228,5 @@
       {:sources sources
        :order (vec (core-first (topo-order sources)))
        :workspaces (into {} (map (fn [e] [(key e) (:workspace (val e))]) sources))
+       :refused (refused-requires sources)
        :missing missing})))

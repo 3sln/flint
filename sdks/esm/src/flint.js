@@ -137,7 +137,7 @@ export class Compiler {
   /// | --- | --- |
   /// | `resolve` | `(namespace) => source \| {source, workspace, tags} \| null` |
   /// | `files`   | `{ 'path.cljc': source }`, an alternative to `resolve` |
-  /// | `workspaces` | `[{prefix, name, tags}]`, who owns which files |
+  /// | `workspaces` | `[{prefix, name, tags, grants, guard}]`, who owns which files |
   /// | `fn`      | the function a default `run` would call |
   /// | `exports` | every other function that must stay callable |
   /// | `optimize` | `['perf']` compiles each arity; `['size']` interprets |
@@ -200,6 +200,14 @@ export class Compiler {
         `flint: no source for ${missing.join(', ')}. ` +
         'Every namespace a program requires has to be resolvable.');
     }
+    // REFUSED is not missing. The source was found and read; the answer is that
+    // this workspace may not require it (`doc/decisions/0036`).
+    if (r.out.startsWith('!refused')) {
+      const refused = r.out.split('\n').slice(1).filter(Boolean);
+      const err = new Error(`flint: ${refused.join('\n        ')}`);
+      err.refused = refused;
+      throw err;
+    }
     return new Image(base64Decode(r.out.trim()), meta);
   }
 }
@@ -243,7 +251,7 @@ function collectSources({ resolve, files, workspaces, target, withLib }) {
   return { files: all, workspaces: spaces };
 }
 
-/// `[{prefix, name, tags}]` as the EDN the compiler reads.
+/// `[{prefix, name, tags, grants, guard}]` as the EDN the compiler reads.
 ///
 /// `name` is a SYMBOL and `tags` maps symbol to symbol, because a workspace
 /// name and a tag reader are both things the reader resolves, not strings it
@@ -252,6 +260,11 @@ function ednWorkspaces(spaces) {
   return `[${spaces.map((w) => {
     const parts = [`:prefix ${edn(String(w.prefix ?? ''))}`];
     if (w.name) parts.push(`:name ${String(w.name)}`);
+    // KEYWORDS, and a set: a capability is a name, and holding one twice is
+    // not a thing (`doc/decisions/0036`).
+    const caps = (xs) => `#{${xs.map((c) => `:${String(c).replace(/^:/, '')}`).join(' ')}}`;
+    if (w.grants?.length) parts.push(`:grants ${caps(w.grants)}`);
+    if (w.guard?.length) parts.push(`:guard ${caps(w.guard)}`);
     if (w.tags && Object.keys(w.tags).length) {
       parts.push(`:tags {${Object.entries(w.tags)
         .map(([t, v]) => `${String(t)} ${String(v)}`).join(' ')}}`);

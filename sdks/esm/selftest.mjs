@@ -185,6 +185,47 @@ ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled a
   ok('and a tag no workspace binds is refused', refused);
 }
 
+// --- workspace capability guards (`doc/decisions/0036`) ---------------------
+//
+// Level one of two: a workspace declaring `guard` may be required only by a
+// workspace holding it. The three cases that are easy to get wrong are here
+// alongside the one that is easy to get right.
+{
+  const files = {
+    'priv/p.cljc': '(ns priv.p) (defn secret [] "the goods")',
+    'app/a.cljc': '(ns app.a (:require [priv.p :as p])) (defn go [] (p/secret))',
+    'mid/m.cljc': '(ns mid.m (:require [priv.p :as p])) (defn wrap [] (p/secret))',
+    'app2/a.cljc': '(ns app2.a (:require [mid.m :as m])) (defn go [] (m/wrap))',
+  };
+  const priv = { prefix: 'priv/', name: 'priv/priv', guard: ['fs'] };
+  const run = async (workspaces, fn) =>
+    (await (compiler.compile({ files, workspaces, fn })).sandbox()).call(fn);
+
+  let refused = null;
+  try { compiler.compile({ files, workspaces: [priv, { prefix: 'app/', name: 'app/app' }], fn: 'app.a/go' }); }
+  catch (e) { refused = e.refused?.[0] ?? e.message; }
+  ok('a guarded workspace refuses a require from one without the capability',
+     /priv\.p/.test(refused ?? '') && /:fs/.test(refused ?? ''), refused);
+
+  eq('and allows it from one that holds it',
+     await run([priv, { prefix: 'app/', name: 'app/app', grants: ['fs'] }], 'app.a/go'),
+     'the goods');
+
+  // NOT transitive, deliberately. `app2` holds nothing and reaches the guarded
+  // workspace through `mid`, which does -- that is `mid` re-exporting, and it
+  // is the delegation a guard cannot and should not stop. A guard makes the set
+  // of DIRECT holders small and declared; it does not confine what they hand on.
+  eq('a guard is checked per edge, not transitively',
+     await run([priv, { prefix: 'mid/', name: 'mid/mid', grants: ['fs'] },
+                { prefix: 'app2/', name: 'app2/app2' }], 'app2.a/go'),
+     'the goods');
+
+  // A project is not a security boundary against itself.
+  eq('and nothing is checked within one workspace',
+     await run([{ prefix: '', name: 'one/one', guard: ['fs'] }], 'app.a/go'),
+     'the goods');
+}
+
 // --- the artifact stands on its own -----------------------------------------
 const dir = mkdtempSync(`${tmpdir()}/flint-`);
 writeFileSync(`${dir}/m.wasm`, image.wasm);
