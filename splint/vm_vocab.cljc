@@ -29,6 +29,8 @@
 
 ;; --------------------------------------------------------------- helpers
 
+(declare statement-if)
+
 (defn- t [ctx] (:target ctx))
 
 (defn- strip-parens
@@ -105,7 +107,13 @@
                (mapv (fn [a f] (if (nested-call? f) (hoist! ctx (first f) a) a))
                      as (rest form))
                as)]
-      (sp/splint-emit! ctx (fmt (get tmpls (t ctx)) as)))))
+      ;; A CALL READS ITS POSITION. `(set-r si x)` is the same call in
+      ;; `(if (nil? x) ...)` and at the top of a body; what differs is that one
+      ;; of them needs indentation and a terminator. The form asks rather than
+      ;; something downstream guessing from the shape of the string.
+      (if (= :statement (sp/splint-position ctx))
+        (sp/splint-emit! ctx (sp/indent-of ctx) (fmt (get tmpls (t ctx)) as) ";\n")
+        (sp/splint-emit! ctx (fmt (get tmpls (t ctx)) as))))))
 
 ;; ------------------------------------------------------------------- forms
 
@@ -120,13 +128,13 @@
                          (str (get ops sym) (first as))
                          (str "(" (str/join (str " " (get ops sym) " ") as) ")"))))))
 
-(defn- ^{:splint/emits :statement} let-form [ctx form]
+(defn- let-form [ctx form]
   (let [[_ bindings & body] form
         pairs (partition 2 bindings)]
     (doseq [[nm init] pairs]
       (let [tag (:tag (meta nm))
             ty (get-in (if (= 'Usize tag) Usize Val) [:types (t ctx)])
-            code (sp/splint-render ctx init)]
+            code (strip-parens (sp/splint-render ctx init))]
         (sp/splint-emit!
          ctx (sp/indent-of ctx)
          (case (t ctx)
@@ -136,7 +144,7 @@
            (str ty " " nm " = " code ";\n")))))
     (doseq [f body] (sp/splint-statement! ctx f))))
 
-(defn- ^{:splint/emits :statement} set-form [ctx form]
+(defn- set-form [ctx form]
   (let [[_ place value] form
         p (sp/splint-render ctx place)]
     ;; `x += n` where a person would write it. `spread = (spread + 1)` is
@@ -149,7 +157,28 @@
       (sp/splint-emit! ctx (sp/indent-of ctx) p " = "
                        (strip-parens (sp/splint-render ctx value)) ";\n"))))
 
-(defn- ^{:splint/emits :statement} if-form [ctx form]
+(defn- if-form [ctx form]
+  ;; THE SAME `if` IN BOTH POSITIONS, and the three targets differ.
+  ;;
+  ;; In expression position Rust writes `if c { a } else { b }` -- `if` is an
+  ;; expression there and that is what a person writes. Java and C# have no such
+  ;; thing and want the conditional operator. In statement position all three
+  ;; want braces.
+  ;;
+  ;; The implementation ASKS. Nothing declares that `if` is a statement, because
+  ;; it is not one -- it is whatever the thing enclosing it needed.
+  (if (= :expression (sp/splint-position ctx))
+    (let [[_ test then else] form
+          c (sp/splint-render ctx test)
+          a (sp/splint-render ctx then)
+          b (sp/splint-render ctx else)]
+      (sp/splint-emit! ctx
+                       (if (= :rust (t ctx))
+                         (str "if " c " { " a " } else { " b " }")
+                         (str "(" c " ? " a " : " b ")"))))
+    (statement-if ctx form)))
+
+(defn- statement-if [ctx form]
   (let [[_ test then else] form
         c (sp/splint-render ctx test)]
     (sp/splint-emit! ctx (sp/indent-of ctx)
@@ -173,7 +202,7 @@
     (sp/splint-render probe form)
     (pos? (deref (:tmp probe)))))
 
-(defn- ^{:splint/emits :statement} while-form [ctx form]
+(defn- while-form [ctx form]
   ;; THE TEST GOES INSIDE. A loop test is evaluated every iteration, so it
   ;; cannot be hoisted out -- lifting it produced a temporary bound once,
   ;; before the loop. `while (true) { if (!test) break; ... }` is correct on
@@ -221,41 +250,14 @@
                       {:tag (:name tag-val) :method m :target (t ctx)})))
     (sp/splint-emit! ctx (fmt tmpl (render-args ctx (cons target-form args))))))
 
-(defn place
-  "How this family of targets seats a rendered thing at a position.
-
-  Java, C# and Rust are all C-like here: an EXPRESSION used where a statement
-  goes needs indentation and a terminator, and something that already emitted a
-  statement is left alone. A target that has no statements supplies a `:place`
-  that returns `body` and never thinks about it again.
-
-  This is the whole of what `statement-heads` used to be, moved to where it
-  belongs -- the question is about the TARGET, and the targets disagree even
-  among these three: Rust's `if` is an expression and Java's is not."
-  [ctx position kind body]
-  (if (and (= :statement position) (= :expression kind))
-    (str (sp/indent-of ctx) body ";\n")
-    body))
-
 (defn forms-for
   "Every form, for every target. One map because a form's three implementations
   belong beside each other -- that is what makes a divergence visible."
   []
   (merge
-   {'let (with-meta let-form {:splint/emits :statement})
-    'set (with-meta set-form {:splint/emits :statement})
-    ;; RUST'S `if` IS AN EXPRESSION and Java's is not. Marked a statement here
-    ;; because this vocabulary only ever uses it as one; a vocabulary that
-    ;; wanted `(let [x (if c a b)] ...)` would mark it `:expression` and let
-    ;; each target's `place` sort it out -- which is exactly why the kind is
-    ;; metadata on the implementation rather than a list somewhere.
-    'if (with-meta if-form {:splint/emits :statement})
-    'while (with-meta while-form {:splint/emits :statement})
-    'invoke invoke-form
-    'do (with-meta (fn [ctx form] (doseq [f (rest form)] (sp/splint-statement! ctx f)))
-                   {:splint/emits :statement})
-    'break (with-meta (fn [ctx _] (sp/splint-emit! ctx (sp/indent-of ctx) "break;\n"))
-                      {:splint/emits :statement})}
+   {'let let-form 'set set-form 'if if-form 'while while-form 'invoke invoke-form
+    'do (fn [ctx form] (doseq [f (rest form)] (sp/splint-statement! ctx f)))
+    'break (fn [ctx _] (sp/splint-emit! ctx (sp/indent-of ctx) "break;\n"))}
    (reduce (fn [m s] (assoc m s (op-form s))) {} (keys ops))
    ;; The runtime's own calls. Three spellings, side by side.
    {'r       (call {:rust "self.r({0})" :java "r({0})" :csharp "R({0})"})

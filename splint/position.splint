@@ -1,0 +1,5 @@
+;; The same `if`, in both positions. One source.
+(let [^Val picked (if (invoke ^Val (r si) nil?) (first (r si)) (next (r si)))]
+  (vpush picked)
+  (if (invoke ^Val picked nil?)
+    (do (pop-to si) (break))))

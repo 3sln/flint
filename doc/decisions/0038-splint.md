@@ -84,24 +84,54 @@ declaration wants the top of the FUNCTION, and neither is one level up. An
 anchor is carried in a scope frame, so a form deep inside emits to a place an
 enclosing form chose.
 
-### Statement-ness belongs to the TARGET
+### Position is pushed DOWN, and a form asks
 
-A form's implementation says what it EMITS, in metadata on the implementation
-so the two cannot drift. The target supplies `place`, which is handed the
-position and the kind and decides.
+A form does not have a kind. It has a POSITION, and whatever encloses it is what
+knows: a top-level form in a method body is a statement whether or not the
+construct could also be an expression, and the body is the thing that knows it
+is a body. So the enclosing form scopes `:position`, and the implementation
+reads it.
 
-This started as a set of "statement heads" in the vocabulary, and that is wrong
-because **"is this a statement" is a question about the target, and the targets
-disagree — including two of ours**:
+That is decisive rather than tidy, and this is the proof — one source:
 
-* in Java and C#, `if` is a statement and cannot produce a value;
-* **in Rust `if` is an expression**, and `let x = if c { a } else { b };` is
-  what a person writes;
-* a language with no statements at all — a Lisp backend, which is the point of
-  being language-agnostic — has nothing to wrap, and supplies a `place` that
-  returns its argument.
+```clojure
+(let [^Val picked (if (invoke ^Val (r si) nil?) (first (r si)) (next (r si)))]
+  (vpush picked)
+  (if (invoke ^Val picked nil?)
+    (do (pop-to si) (break))))
+```
 
-Moving it changed no output, which is the check that it was a refactor.
+```rust
+let picked: Value = if self.r(si).is_nil() { self.first(self.r(si)) } else { self.next(self.r(si)) };
+self.vpush(picked);
+if picked.is_nil() {
+    self.pop_to(si);
+    break;
+}
+```
+
+```java
+long picked = Val.isNil(r(si)) ? Seqs.first(this, r(si)) : Seqs.next(this, r(si));
+vpush(picked);
+if (Val.isNil(r(si))) { ... }
+```
+
+**The same `if`, twice, differently.** Rust gets an `if` EXPRESSION, which is
+what a person writes there; Java and C# get the conditional operator, which is
+what those languages have; and in statement position all three get braces.
+
+### What this replaced, and why it was wrong
+
+Two earlier versions, both discarded:
+
+* a set of "statement heads" in the vocabulary — wrong because the question is
+  about the TARGET and the targets disagree, `if` being a statement in Java and
+  an expression in Rust;
+* metadata on the implementation saying what it EMITS, plus a per-target
+  `place` wrapper combining the two — wrong because it still assigned `if` ONE
+  kind, so the example above could not be expressed at all.
+
+Both were answering from the wrong end. Position is not a property of a form.
 
 ## The rule: generated code may not be worse
 

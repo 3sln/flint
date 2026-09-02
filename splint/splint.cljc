@@ -147,39 +147,35 @@
   `splint-emit!` -- which is how one vocabulary serves both positions without
   the translator deciding which is which."
   [ctx form]
-  (let [sub (assoc ctx :out (new-sink))]
+  (let [sub (-> ctx
+                (assoc :out (new-sink))
+                (assoc-in [:scope :position] :expression))]
     (dispatch sub form)
     (resolve-sink (deref (:out sub)))))
 
-(defn emits
-  "What kind of thing a form's implementation produces.
+(defn splint-position
+  "What this form is being compiled AS: `:statement` or `:expression`.
 
-  Metadata ON THE IMPLEMENTATION rather than a list kept beside it, so the two
-  cannot drift: a form that starts emitting a complete statement says so where
-  it is written."
-  [f]
-  (or (:splint/emits (meta f)) :expression))
+  Pushed DOWN by whatever encloses it, because that is who knows. A top-level
+  form in a method body is a statement whether or not the construct could also
+  be an expression, and the method body is the thing that knows it is a body.
 
-(defn splint-place!
-  "Render `form` at `position`, and let the TARGET decide how a thing of that
-  kind sits there.
+  This replaced metadata on the implementation saying what it EMITS, plus a
+  per-target wrapper that combined the two. That was answering the question from
+  the wrong end: a form does not have a kind, it has a POSITION, and the same
+  `if` is a statement here and an expression there --
 
-  ## Why the target decides
+      (if c (do-a) (do-b))            statement
+      (let [x (if c a b)] ...)        expression, and legal Rust
 
-  \"Is this a statement\" is not a property of a form and not a property of the
-  language-neutral source. It is a question about the TARGET, and the targets
-  disagree -- including two of ours:
+  -- so the enclosing form says which, and the implementation reads it and emits
+  what that target wants in that position. One lookup, no wrapper, and nothing
+  post-processes a string it did not produce."
+  [ctx]
+  (or (splint-get ctx :position) :expression))
 
-  * in Java and C#, `if` is a statement and cannot produce a value;
-  * **in Rust `if` is an expression**, and `let x = if c { a } else { b };` is
-    what a person writes;
-  * a language with no statements at all -- a Lisp backend, which is the whole
-    point of splint being language-agnostic -- has nothing to wrap.
-
-  So a form's implementation says what it EMITS, in metadata, and the target
-  supplies `:place`, which is handed the position and the kind and decides. A
-  target with no statements supplies a `:place` that returns its argument, and
-  the concept costs it nothing."
+(defn splint-in
+  "Render `form` at `position`, with an anchor for anything it hoists."
   [ctx position form]
   ;; The anchor goes down FIRST, so anything hoisted lands above whatever this
   ;; turns out to be, however deep the form that hoisted it.
@@ -187,19 +183,14 @@
         sub (-> ctx
                 (assoc :out (new-sink))
                 (assoc-in [:scope :splint/stmt-anchor] a)
-                (assoc :position position))
-        head (when (seq? form) (first form))
-        impl (when head (get-in ctx [:vocab head]))
-        kind (if impl (emits impl) :expression)]
+                (assoc-in [:scope :position] position))]
     (dispatch sub form)
-    (let [body (resolve-sink (deref (:out sub)))
-          place (or (:place ctx) (fn [_ _ _ b] b))]
-      (splint-emit! ctx (place ctx position kind body)))))
+    (splint-emit! ctx (resolve-sink (deref (:out sub))))))
 
 (defn splint-statement!
-  "`splint-place!` at statement position -- the common call, kept short."
+  "Render `form` as a statement -- the common call, kept short."
   [ctx form]
-  (splint-place! ctx :statement form))
+  (splint-in ctx :statement form))
 
 (defn dispatch
   "One form. A seq whose head the vocabulary knows goes to its implementation;
