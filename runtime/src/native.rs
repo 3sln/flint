@@ -494,6 +494,17 @@ impl Program {
         self.rt.host_answer(token as i64, bytes)
     }
 
+    /// One slot of the diagnostics census (`doc/decisions/0013`).
+    ///
+    /// Exposed natively as well as through the wasm ABI so that a coverage
+    /// question -- WHICH OPCODES DOES OUR CROSS-RUNTIME SUITE ACTUALLY RUN --
+    /// can be answered by a program rather than by reading fourteen conformance
+    /// files and hoping.
+    #[cfg(feature = "diagnostics")]
+    pub fn stat_region(&self, i: u32) -> u64 {
+        crate::aotstat::read(i)
+    }
+
     /// Hand a port this host owns to the sandbox, without being asked.
     ///
     /// `system` makes it the SYSTEM port: the one `open` requests go out on. A

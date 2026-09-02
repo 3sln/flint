@@ -433,7 +433,7 @@ fi
 # agreeing about maps, vectors, sets, strings, seqs and doubles at once -- and
 # `maps` prints its keys in trie order, so matching means the ported CHAMP
 # ITERATES the way the Rust's does, which nothing asserts directly.
-for prog in churn collections control green hosted lazy maps numbers regex strings tables threads; do
+for prog in churn collections control green hosted lazy maps numbers opcodes regex strings tables threads; do
   ./bin/flint :src runtimes/conform :fn "$prog/main" --emit-image \
     :out "out/conform/$prog.img" >/dev/null 2>&1 || {
       echo "  .. $prog does not compile; skipped"; continue; }

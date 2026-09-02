@@ -334,6 +334,66 @@ case Op.TYPE_P -> {
 The Java and C# output is what is in the tree, modulo one line break. The Rust
 is not — it is the in-place shape, which the tree does not use, and it compiles.
 
+## Coverage first: what would notice if a port were wrong
+
+Regenerating three runtimes' opcode bodies is only safe if a mistake would be
+caught, so the question was asked before the port rather than after:
+**which opcodes does the cross-runtime suite actually execute?**
+
+`runtime/examples/opcov.rs` answers it. The diagnostics build already keeps an
+opcode histogram (`aotstat::OPS`); this runs every conformance image with it on
+and reports what was never reached.
+
+```text
+36 of 45 defined opcodes are exercised
+
+NOT exercised:
+  0x00 nop        0x1d list               0x21 pop-n
+  0x07 local-w    0x1f jump-if-false-keep 0x22 set-local-keep
+  0x10 jump-if-true  0x20 jump-if-true-keep  0x2b eq-int
+```
+
+`list` — the opcode with the interesting divergence, the one this file was about
+to hold up as the hard case — had **zero** cross-runtime coverage.
+
+### Seven of the nine are emitted by nothing
+
+Following each one back through the compiler:
+
+| | |
+| --- | --- |
+| `local-w`, `eq-int` | reachable, and the suite simply missed them |
+| `nop`, `jump-if-true`, `list`, `jump-if-false-keep`, `jump-if-true-keep`, `pop-n`, `set-local-keep` | **emitted by no code path at all** |
+
+Checked by looking for every way the emitter writes an opcode -- `(op :x)`
+directly and `jump!` for the control-flow ones -- and none of the seven appears
+in either. They exist in the opcode table, and they are implemented in the Rust,
+JVM and CLR interpreters, and nothing ever produces one.
+
+**So the port question for those seven is the wrong question.** They should be
+deleted, or the compiler should start emitting them if the optimisation was
+intended and never wired up. Porting them would be carefully maintaining three
+copies of unreachable code, which is worse than the situation this file exists
+to improve.
+
+### The two reachable ones now have coverage
+
+`runtimes/conform/opcodes.cljc`, in the suite and agreeing on all three
+runtimes. Both needed something specific, which is why nothing else reached
+them:
+
+* `local-w` is the wide local index, so it needs a function with more than 256
+  bindings — 260, generated;
+* `eq-int` needs `==` AND an `^int` annotation. `=` is generic equality and
+  compiles to `flint/eq`; the specialised opcode comes from `flint/num-eq`,
+  which is `==`. A suite full of `=` never reaches it.
+
+### What this changes about the port
+
+The safe set is the 36 covered opcodes. The 7 dead ones are a deletion, not a
+port. And the census is the instrument to re-run after any port -- if coverage
+drops, something stopped being reachable.
+
 ## What it deliberately cannot do
 
 The divergent parts, and they should not be attempted: the GC write barrier,
