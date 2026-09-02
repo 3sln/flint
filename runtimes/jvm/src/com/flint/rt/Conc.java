@@ -115,7 +115,12 @@ public final class Conc {
     /// `EV_RELEASE` says it no longer does. One per retain, so the host's count
     /// is of HOLDERS (`doc/decisions/0027`).
     public static final int EV_OPEN = 1, EV_MESSAGE = 2, EV_CLOSED = 3,
-                            EV_RETAIN = 4, EV_RELEASE = 5;
+                            EV_RETAIN = 4, EV_RELEASE = 5,
+    /// The guest is asking the host for SOMETHING, and the answer is an
+    /// ordinary value rather than a port (`doc/decisions/0036` step 7).
+    /// `EV_OPEN` is the special case whose answer is a port, and it stays: a
+    /// port is granted by id and never encoded.
+                            EV_REQUEST = 6;
 
     // --- waiter ------------------------------------------------------------
 
@@ -127,7 +132,10 @@ public final class Conc {
     // unfindable in production. The generation makes that a rejection instead.
     public static final int W_GEN = 0, W_THREAD = 1, W_KIND = 2, W_PORT = 3,
                             W_NEXT = 4, W_LEN = 5;
-    public static final int WK_OPEN = 1, WK_SEND = 2, WK_RECEIVE = 3, WK_JOIN = 4;
+    public static final int WK_OPEN = 1, WK_SEND = 2, WK_RECEIVE = 3, WK_JOIN = 4,
+    /// Parked on `hostRequest`, which is `WK_OPEN` generalised: the answer is a
+    /// VALUE rather than necessarily a port (`doc/decisions/0036` step 7).
+                            WK_REQUEST = 5;
 
     // --- scheduler ---------------------------------------------------------
 
@@ -1247,6 +1255,78 @@ public final class Conc {
         return park(rt, target);
     }
 
+    /// Ask the host for something, and get a VALUE back.
+    ///
+    /// `portOpen` generalised (`doc/decisions/0036` step 7). The two differ in
+    /// exactly one place -- what the answer may be -- and that difference is
+    /// load-bearing, so they are two methods rather than one with a flag: a
+    /// port is granted BY ID through `hostGrant` and never encoded, because
+    /// encoding a handle the host is lending is the one thing the codec must
+    /// not do. Everything else is the same park, waiter and system port.
+    public static long hostRequest(Rt rt, long what, long args) {
+        ensureSched(rt);
+        int base = rt.mark();
+        int ni = rt.push(what), ai = rt.push(args);
+        int ti = rt.push(currentThread(rt));
+        long pending = rt.slot(rt.r(ti), TH_PENDING);
+        if (!Val.isNil(pending)) {
+            // Second time round: the host has answered.
+            rt.setSlot(Val.asHeap(rt.r(ti)), TH_PENDING, Val.NIL);
+            // A one-element VECTOR is an answer, holding whatever the host
+            // sent. Anything else is a refusal.
+            //
+            // The wrapper is not decoration. An answer may be any value at all,
+            // NIL included, so "answered" cannot be read off the value's type
+            // the way `portOpen` reads it off `isPort` -- a host answering nil
+            // and a host refusing would be the same bits.
+            if (rt.isHeapTy(pending, TY_VEC)) {
+                long v = Vec.count(rt, pending) > 0 ? Vec.nth(rt, pending, 0) : Val.NIL;
+                rt.popTo(base);
+                return v;
+            }
+            String n = Str.isString(rt, rt.r(ni)) ? Str.text(rt, rt.r(ni)) : "?";
+            rt.popTo(base);
+            return rt.throwStr("SecurityException",
+                "the host refused the request \"" + n + "\"");
+        }
+        // NO SYSTEM PORT, NO ASKING -- the same honesty as `portOpen`: pushing
+        // an event nothing will drain parks the thread for ever and reads as a
+        // hang rather than as a refusal.
+        long sys = systemPort(rt);
+        if (Val.isNil(sys)) {
+            String n = Str.isString(rt, rt.r(ni)) ? Str.text(rt, rt.r(ni)) : "?";
+            rt.popTo(base);
+            return rt.throwStr("SecurityException",
+                "this sandbox was given no system port, so it cannot ask for \"" + n + "\"");
+        }
+        int si = rt.push(sys);
+        long token = newWaiter(rt, WK_REQUEST, rt.r(si));
+        rt.setSlot(Val.asHeap(rt.r(ti)), TH_TOKEN, Val.fixnum(token));
+        rt.setSlot(Val.asHeap(rt.r(ti)), TH_PENDING, Val.fixnum(0));
+        // `[what & args]`, encoded -- the same payload shape `portOpen` sends,
+        // so a host that already routes one routes the other.
+        int vi = rt.push(Vec.empty(rt));
+        rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(ni)));
+        int an = rt.isHeapTy(rt.r(ai), TY_VEC) ? Vec.count(rt, rt.r(ai)) : 0;
+        for (int k = 0; k < an; k++) {
+            rt.setR(vi, Vec.conj(rt, rt.r(vi), Vec.nth(rt, rt.r(ai), k)));
+        }
+        byte[] call;
+        try {
+            call = Codec.encode(rt, rt.r(vi));
+        } catch (Codec.Refused e) {
+            rt.popTo(base);
+            return rt.throwStr("IllegalArgumentException",
+                "request: this cannot be sent to the host: " + e.getMessage());
+        }
+        int payi = rt.push(Bytes.of(rt, call));
+        long sysId = fx(rt.slot(rt.r(si), PT_ID));
+        pushEvent(rt, EV_REQUEST, token, sysId, rt.r(payi));
+        long target = rt.r(si);
+        rt.popTo(base);
+        return park(rt, target);
+    }
+
     // --- the host's side ----------------------------------------------------
 
     /// Resume whatever is waiting on `token`.
@@ -1303,6 +1383,37 @@ public final class Conc {
         int pi = rt.push(p);
         long th = rt.slot(rt.r(wi), W_THREAD);
         if (!Val.isNil(th)) rt.setSlot(Val.asHeap(th), TH_PENDING, rt.r(pi));
+        wakeWaiter(rt, rt.r(wi));
+        rt.popTo(base);
+        return true;
+    }
+
+    /// The host's answer to an `EV_REQUEST`, as encoded bytes.
+    ///
+    /// Decoded HERE, at the boundary, like every other thing crossing a bridge
+    /// (`doc/decisions/0027`): the guest gets a value and never a codec.
+    ///
+    /// To REFUSE, call `hostContinue(token, false)` as with an open -- a
+    /// refusal carries no value and needs no bytes.
+    public static boolean hostAnswer(Rt rt, long token, byte[] bytes) {
+        long w = waiterAt(rt, token);
+        if (Val.isNil(w)) return false;
+        int base = rt.mark();
+        int wi = rt.push(w);
+        long v;
+        try {
+            v = Codec.decode(rt, bytes);
+        } catch (RuntimeException e) {
+            rt.popTo(base);
+            return false;
+        }
+        int vi = rt.push(v);
+        // Wrapped, so that a host answering nil is distinguishable from a host
+        // refusing. See `hostRequest`.
+        int oi = rt.push(Vec.empty(rt));
+        rt.setR(oi, Vec.conj(rt, rt.r(oi), rt.r(vi)));
+        long th = rt.slot(rt.r(wi), W_THREAD);
+        if (!Val.isNil(th)) rt.setSlot(Val.asHeap(th), TH_PENDING, rt.r(oi));
         wakeWaiter(rt, rt.r(wi));
         rt.popTo(base);
         return true;

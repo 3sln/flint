@@ -113,7 +113,12 @@ public static class Conc {
     /// `EV_RELEASE` says it no longer does. One per retain, so the host's count
     /// is of HOLDERS (`doc/decisions/0027`).
     public const int EV_OPEN = 1, EV_MESSAGE = 2, EV_CLOSED = 3,
-                     EV_RETAIN = 4, EV_RELEASE = 5;
+                     EV_RETAIN = 4, EV_RELEASE = 5,
+    /// The guest is asking the host for SOMETHING, and the answer is an
+    /// ordinary value rather than a port (`doc/decisions/0036` step 7).
+    /// `EV_OPEN` is the special case whose answer is a port, and it stays: a
+    /// port is granted by id and never encoded.
+                     EV_REQUEST = 6;
 
     // --- waiter ------------------------------------------------------------
 
@@ -125,7 +130,10 @@ public static class Conc {
     // unfindable in production. The generation makes that a rejection instead.
     public const int W_GEN = 0, W_THREAD = 1, W_KIND = 2, W_PORT = 3,
                      W_NEXT = 4, W_LEN = 5;
-    public const int WK_OPEN = 1, WK_SEND = 2, WK_RECEIVE = 3, WK_JOIN = 4;
+    public const int WK_OPEN = 1, WK_SEND = 2, WK_RECEIVE = 3, WK_JOIN = 4,
+    /// Parked on `HostRequest`, which is `WK_OPEN` generalised: the answer is a
+    /// VALUE rather than necessarily a port (`doc/decisions/0036` step 7).
+                     WK_REQUEST = 5;
 
     // --- scheduler ---------------------------------------------------------
 
@@ -1233,6 +1241,78 @@ public static class Conc {
         return Park(rt, target);
     }
 
+    /// Ask the host for something, and get a VALUE back.
+    ///
+    /// `PortOpen` generalised (`doc/decisions/0036` step 7). The two differ in
+    /// exactly one place -- what the answer may be -- and that difference is
+    /// load-bearing, so they are two methods rather than one with a flag: a
+    /// port is granted BY ID through `HostGrant` and never encoded, because
+    /// encoding a handle the host is lending is the one thing the codec must
+    /// not do. Everything else is the same park, waiter and system port.
+    public static long HostRequest(Rt rt, long what, long args) {
+        EnsureSched(rt);
+        int bas = rt.Mark();
+        int ni = rt.Push(what), ai = rt.Push(args);
+        int ti = rt.Push(CurrentThread(rt));
+        long pending = rt.Slot(rt.R(ti), TH_PENDING);
+        if (!Val.IsNil(pending)) {
+            // Second time round: the host has answered.
+            rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_PENDING, Val.Nil);
+            // A one-element VECTOR is an answer, holding whatever the host
+            // sent. Anything else is a refusal.
+            //
+            // The wrapper is not decoration. An answer may be any value at all,
+            // NIL included, so "answered" cannot be read off the value's type
+            // the way `PortOpen` reads it off `IsPort` -- a host answering nil
+            // and a host refusing would be the same bits.
+            if (rt.IsHeapTy(pending, Obj.TyVec)) {
+                long v = Vec.Count(rt, pending) > 0 ? Vec.Nth(rt, pending, 0) : Val.Nil;
+                rt.PopTo(bas);
+                return v;
+            }
+            string nm2 = Str.IsString(rt, rt.R(ni)) ? Str.Text(rt, rt.R(ni)) : "?";
+            rt.PopTo(bas);
+            return rt.ThrowStr("SecurityException",
+                "the host refused the request \"" + nm2 + "\"");
+        }
+        // NO SYSTEM PORT, NO ASKING -- the same honesty as `PortOpen`: pushing
+        // an event nothing will drain parks the thread for ever and reads as a
+        // hang rather than as a refusal.
+        long sys = SystemPort(rt);
+        if (Val.IsNil(sys)) {
+            string nm3 = Str.IsString(rt, rt.R(ni)) ? Str.Text(rt, rt.R(ni)) : "?";
+            rt.PopTo(bas);
+            return rt.ThrowStr("SecurityException",
+                "this sandbox was given no system port, so it cannot ask for \"" + nm3 + "\"");
+        }
+        int si = rt.Push(sys);
+        long token = NewWaiter(rt, WK_REQUEST, rt.R(si));
+        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_TOKEN, Val.Fixnum(token));
+        rt.SetSlot(Val.AsHeap(rt.R(ti)), TH_PENDING, Val.Fixnum(0));
+        // `[what & args]`, encoded -- the same payload shape `PortOpen` sends,
+        // so a host that already routes one routes the other.
+        int vi = rt.Push(Vec.Empty(rt));
+        rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.R(ni)));
+        int an = rt.IsHeapTy(rt.R(ai), Obj.TyVec) ? Vec.Count(rt, rt.R(ai)) : 0;
+        for (int k = 0; k < an; k++) {
+            rt.SetR(vi, Vec.Conj(rt, rt.R(vi), Vec.Nth(rt, rt.R(ai), k)));
+        }
+        byte[] call;
+        try {
+            call = Codec.Encode(rt, rt.R(vi));
+        } catch (Codec.Refused e) {
+            rt.PopTo(bas);
+            return rt.ThrowStr("IllegalArgumentException",
+                "request: this cannot be sent to the host: " + e.Message);
+        }
+        int payi = rt.Push(Bytes.Of(rt, call));
+        long sysId = Fx(rt.Slot(rt.R(si), PT_ID));
+        PushEvent(rt, EV_REQUEST, token, sysId, rt.R(payi));
+        long target = rt.R(si);
+        rt.PopTo(bas);
+        return Park(rt, target);
+    }
+
     // --- the host's side ----------------------------------------------------
 
     /// Resume whatever is waiting on `token`.
@@ -1289,6 +1369,37 @@ public static class Conc {
         int pi = rt.Push(p);
         long th = rt.Slot(rt.R(wi), W_THREAD);
         if (!Val.IsNil(th)) rt.SetSlot(Val.AsHeap(th), TH_PENDING, rt.R(pi));
+        WakeWaiter(rt, rt.R(wi));
+        rt.PopTo(bas);
+        return true;
+    }
+
+    /// The host's answer to an `EV_REQUEST`, as encoded bytes.
+    ///
+    /// Decoded HERE, at the boundary, like every other thing crossing a bridge
+    /// (`doc/decisions/0027`): the guest gets a value and never a codec.
+    ///
+    /// To REFUSE, call `HostContinue(token, false)` as with an open -- a
+    /// refusal carries no value and needs no bytes.
+    public static bool HostAnswer(Rt rt, long token, byte[] bytes) {
+        long w = WaiterAt(rt, token);
+        if (Val.IsNil(w)) return false;
+        int bas = rt.Mark();
+        int wi = rt.Push(w);
+        long v;
+        try {
+            v = Codec.Decode(rt, bytes);
+        } catch (Exception) {
+            rt.PopTo(bas);
+            return false;
+        }
+        int vi = rt.Push(v);
+        // Wrapped, so that a host answering nil is distinguishable from a host
+        // refusing. See `HostRequest`.
+        int oi = rt.Push(Vec.Empty(rt));
+        rt.SetR(oi, Vec.Conj(rt, rt.R(oi), rt.R(vi)));
+        long th = rt.Slot(rt.R(wi), W_THREAD);
+        if (!Val.IsNil(th)) rt.SetSlot(Val.AsHeap(th), TH_PENDING, rt.R(oi));
         WakeWaiter(rt, rt.R(wi));
         rt.PopTo(bas);
         return true;

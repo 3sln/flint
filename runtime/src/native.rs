@@ -482,6 +482,18 @@ impl Program {
         self.rt.host_grant(token as i64, port_id as i64)
     }
 
+    /// Answer a request: the bytes are the value the guest asked for
+    /// (`doc/decisions/0036` step 7).
+    ///
+    /// The counterpart of `host_grant`, for the requests whose answer is not a
+    /// port. A port is granted BY ID and never encoded; anything else crosses
+    /// as encoded bytes like every other value on a bridge. To REFUSE, call
+    /// `host_continue(token, false)` as with an open -- a refusal carries no
+    /// value and needs no bytes.
+    pub fn host_answer(&mut self, token: u32, bytes: &[u8]) -> bool {
+        self.rt.host_answer(token as i64, bytes)
+    }
+
     /// Hand a port this host owns to the sandbox, without being asked.
     ///
     /// `system` makes it the SYSTEM port: the one `open` requests go out on. A

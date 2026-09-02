@@ -1056,6 +1056,21 @@ public static class Builtins {
             rt.PopTo(bas);
             return Conc.PortOpen(rt, nm, args);
         });
+        Def("flint/request", (rt, at, n) => {
+            long what = rt.VAt(at);
+            if (!Str.IsString(rt, what))
+                return rt.ThrowStr("ClassCastException", "request wants a name (a string)");
+            // Identical to `open` above, and deliberately so: same forwarding,
+            // same no-view-of-the-arguments. What differs is what comes back
+            // (`doc/decisions/0036` step 7).
+            int bas = rt.Mark();
+            int ni = rt.Push(what);
+            int vi = rt.Push(Vec.Empty(rt));
+            for (int i = 1; i < n; i++) rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.VAt(at + i)));
+            long nm = rt.R(ni), args = rt.R(vi);
+            rt.PopTo(bas);
+            return Conc.HostRequest(rt, nm, args);
+        });
         Def("flint/port-send", (rt, at, n) => Conc.Send(rt, rt.VAt(at), rt.VAt(at + 1)));
         Def("flint/port-receive", (rt, at, n) => Conc.Receive(rt, rt.VAt(at)));
         Def("flint/port-close", (rt, at, n) => Conc.Close(rt, rt.VAt(at)));

@@ -1143,6 +1143,24 @@ rt.describe(v) + " is not a transient");
             rt.popTo(base);
             return Conc.portOpen(rt, nm, args);
         });
+        def("flint/request", (rt, at, n) -> {
+            long what = rt.vat(at);
+            if (!Str.isString(rt, what)) {
+                return rt.throwStr("ClassCastException", "request wants a name (a string)");
+            }
+            // Identical to `open` above, and deliberately so: same forwarding,
+            // same no-view-of-the-arguments. What differs is what comes back
+            // (`doc/decisions/0036` step 7).
+            int base = rt.mark();
+            int ni = rt.push(what);
+            int vi = rt.push(Vec.empty(rt));
+            for (int i = 1; i < n; i++) {
+                rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.vat(at + i)));
+            }
+            long nm = rt.r(ni), args = rt.r(vi);
+            rt.popTo(base);
+            return Conc.hostRequest(rt, nm, args);
+        });
         def("flint/port-send", (rt, at, n) -> Conc.send(rt, rt.vat(at), rt.vat(at + 1)));
         def("flint/port-receive", (rt, at, n) -> Conc.receive(rt, rt.vat(at)));
         def("flint/port-close", (rt, at, n) -> Conc.close(rt, rt.vat(at)));
