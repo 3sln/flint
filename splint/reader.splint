@@ -1,0 +1,27 @@
+;; The wire codec's reader primitives, written once.
+;;
+;; The first splint source with a MUTABLE STRUCT: a reader is a byte slice and
+;; a position, and reading advances it.
+(ns runtime.codec-reader
+  (:require [flint.impl.codec :refer [defstruct defn let do if set return .
+                                      byte-at len shl bit-or refuse + >
+                                      I32 Bytes Reader]]))
+
+(defstruct reader [^Bytes b ^I32 i])
+
+(defn ^:throws ^I32 u8 [^Reader r]
+  (if (> (+ (. r i) 1) (len (. r b)))
+    (refuse "the encoding ends mid-value"))
+  (let [^I32 v (byte-at (. r b) (. r i))]
+    (set (. r i) (+ (. r i) 1))
+    (return v)))
+
+(defn ^:throws ^I32 u32 [^Reader r]
+  (if (> (+ (. r i) 4) (len (. r b)))
+    (refuse "the encoding ends mid-value"))
+  (let [^I32 n (bit-or (bit-or (byte-at (. r b) (. r i))
+                               (shl (byte-at (. r b) (+ (. r i) 1)) 8))
+                       (bit-or (shl (byte-at (. r b) (+ (. r i) 2)) 16)
+                               (shl (byte-at (. r b) (+ (. r i) 3)) 24)))]
+    (set (. r i) (+ (. r i) 4))
+    (return n)))

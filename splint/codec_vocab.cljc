@@ -23,7 +23,12 @@
    :types {:rust "&mut Vec<u8>" :java "ByteArrayOutputStream" :csharp "MemoryStream"}
    :methods {}})
 
-(def tags-for {'I32 I32 'I64 I64 'Text Text 'Bytes Bytes 'Sink Sink})
+(def Reader
+  {:name 'Reader
+   :types {:rust "&mut Reader" :java "Reader" :csharp "Reader"}
+   :methods {}})
+
+(def tags-for {'I32 I32 'I64 I64 'Text Text 'Bytes Bytes 'Sink Sink 'Reader Reader})
 
 (defn- t [ctx] (:target ctx))
 
@@ -88,10 +93,22 @@
                 (str h (str/join (mapv str/capitalize r))))
         pascal (str/join (mapv str/capitalize (str/split (str nm) #"-")))]
     (case (t ctx)
+      ;; RUST RETURNS A RESULT WHERE THE OTHERS THROW, and that is the first
+      ;; divergence found in this port that is not naming: it changes the
+      ;; signature and every call site. `^:throws` on the name says a function
+      ;; can fail; Rust turns the return type into `Result<T, String>` and a
+      ;; call to it gets `?`, and Java and C# ignore the mark entirely because
+      ;; an exception needs nothing in either place.
       :rust (sp/splint-emit!
              ctx (sp/indent-of ctx) "fn " (str/replace (str nm) "-" "_") "("
              (str/join ", " (mapv (fn [[p tag]] (str p ": " (ty-of ctx tag))) ps))
-             ")" (if ret (str " -> " (ty-of ctx ret)) "") " {\n")
+             ")"
+             (cond
+               (and ret (:throws (meta nm))) (str " -> Result<" (ty-of ctx ret) ", String>")
+               ret (str " -> " (ty-of ctx ret))
+               (:throws (meta nm)) " -> Result<(), String>"
+               :else "")
+             " {\n")
       :java (sp/splint-emit!
              ctx (sp/indent-of ctx) "static " (if ret (ty-of ctx ret) "void") " " camel "("
              (str/join ", " (mapv (fn [[p tag]] (str (ty-of ctx tag) " " p)) ps)) ") {\n")
@@ -99,7 +116,10 @@
                ctx (sp/indent-of ctx) "static " (if ret (ty-of ctx ret) "void") " " pascal "("
                (str/join ", " (mapv (fn [[p tag]] (str (ty-of ctx tag) " " p)) ps)) ") {\n"))
     (sp/splint-scoped ctx {:key :fn :value nm :indent 1}
-                      (fn [inner] (doseq [f body] (sp/splint-statement! inner f))))
+                      (fn [inner]
+                        (sp/splint-scoped inner {:key :throws :value (:throws (meta nm))}
+                                          (fn [in2] (doseq [f body]
+                                                      (sp/splint-statement! in2 f))))))
     (sp/splint-emit! ctx (sp/indent-of ctx) "}\n")))
 
 (defn- let-form [ctx form]
@@ -113,9 +133,69 @@
                            (str ty " " nm " = " code ";\n")))))
     (doseq [f body] (sp/splint-statement! ctx f))))
 
+(defn- defstruct-form
+  "A small mutable record, declared the way each target declares one.
+
+  The first form here that is not a function or a statement, and the three
+  differ in mechanism rather than meaning: Rust wants a `struct` with a
+  lifetime for the borrowed slice, Java and C# want a class with fields. What
+  a source says is the FIELDS."
+  [ctx form]
+  (let [[_ nm fields] form
+        fs (mapv (fn [f] [f (:tag (meta f))]) fields)
+        pascal (str/join (mapv str/capitalize (str/split (str nm) #"-")))]
+    (case (t ctx)
+      :rust (do (sp/splint-emit! ctx (sp/indent-of ctx) "struct " pascal " {\n")
+                (doseq [[f tag] fs]
+                  (sp/splint-emit! ctx (sp/indent-of ctx) "    " f ": "
+                                   (ty-of ctx tag) ",\n"))
+                (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))
+      :java (do (sp/splint-emit! ctx (sp/indent-of ctx) "static final class " pascal " {\n")
+                (doseq [[f tag] fs]
+                  (sp/splint-emit! ctx (sp/indent-of ctx) "    " (ty-of ctx tag) " " f ";\n"))
+                (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))
+      :csharp (do (sp/splint-emit! ctx (sp/indent-of ctx) "sealed class " pascal " {\n")
+                  (doseq [[f tag] fs]
+                    (sp/splint-emit! ctx (sp/indent-of ctx) "    internal "
+                                     (ty-of ctx tag) " " f ";\n"))
+                  (sp/splint-emit! ctx (sp/indent-of ctx) "}\n")))))
+
+(defn- field-form
+  "`(. r i)` -- a field, readable and assignable. One spelling everywhere, which
+  is why it is one form."
+  [ctx form]
+  (let [[_ obj f] form]
+    (sp/splint-emit! ctx (sp/splint-render ctx obj) "." (str f))))
+
+(defn- set-form [ctx form]
+  (let [[_ place value] form]
+    (sp/splint-emit! ctx (sp/indent-of ctx)
+                     (sp/splint-render ctx place) " = "
+                     (strip-parens (sp/splint-render ctx value)) ";\n")))
+
+(defn- if-form [ctx form]
+  (let [[_ test then else] form
+        c (sp/splint-render ctx test)]
+    (sp/splint-emit! ctx (sp/indent-of ctx)
+                     (if (= :rust (t ctx)) (str "if " c " {\n") (str "if (" c ") {\n")))
+    (sp/splint-scoped ctx {:key :in-if :value true :indent 1}
+                      (fn [inner] (sp/splint-statement! inner then)))
+    (when else
+      (sp/splint-emit! ctx (sp/indent-of ctx) "} else {\n")
+      (sp/splint-scoped ctx {:key :in-if :value true :indent 1}
+                        (fn [inner] (sp/splint-statement! inner else))))
+    (sp/splint-emit! ctx (sp/indent-of ctx) "}\n")))
+
+(defn- return-form [ctx form]
+  (let [v (strip-parens (sp/splint-render ctx (second form)))
+        throws? (sp/splint-get ctx :throws)]
+    (sp/splint-emit! ctx (sp/indent-of ctx) "return "
+                     (if (and (= :rust (t ctx)) throws?) (str "Ok(" v ")") v) ";\n")))
+
 (defn forms-for []
   (merge
-   {'defn defn-form 'let let-form
+   {'defn defn-form 'let let-form 'defstruct defstruct-form
+    '. field-form 'set set-form 'if if-form 'return return-form
     'do (fn [ctx form] (doseq [f (rest form)] (sp/splint-statement! ctx f)))}
    (reduce (fn [m s] (assoc m s (op-form s))) {} (keys ops))
    {;; THE BYTE SINK. One byte, and the cast the CLR needs lives here rather
@@ -134,4 +214,21 @@
     'utf8 (call {:rust "{0}.as_bytes().to_vec()"
                  :java "{0}.getBytes(StandardCharsets.UTF_8)"
                  :csharp "Encoding.UTF8.GetBytes({0})"})
-    'u32 (call {:rust "u32({0}, {1})" :java "u32({0}, {1})" :csharp "U32({0}, {1})"})}))
+    'u32 (call {:rust "u32({0}, {1})" :java "u32({0}, {1})" :csharp "U32({0}, {1})"})
+    ;; THE READER SIDE.
+    ;;
+    ;; A byte out of a slice, unsigned. Java and C# have signed bytes and need
+    ;; the mask; Rust's `u8` does not, which is one idea and three spellings --
+    ;; exactly what a vocabulary is for.
+    'byte-at (call {:rust "({0}[{1} as usize] as u32)"
+                    :java "({0}[{1}] & 0xff)"
+                    :csharp "({0}[{1}] & 0xff)"})
+    'len (call {:rust "({0}.len() as u32)" :java "{0}.length" :csharp "{0}.Length"})
+    'shl (call {:rust "({0} << {1})" :java "({0} << {1})" :csharp "({0} << {1})"})
+    'bit-or (call {:rust "({0} | {1})" :java "({0} | {1})" :csharp "({0} | {1})"})
+    'to-i64 (call {:rust "({0} as u64)" :java "((long) {0} & 0xffffffffL)"
+                   :csharp "((long) {0} & 0xffffffffL)"})
+    'refuse (call {:rust "return Err(String::from({0}))"
+                   :java "throw new Refused({0})"
+                   :csharp "throw new Refused({0})"})
+    'read-u32 (call {:rust "u32(r)" :java "r.u32()" :csharp "r.U32()"})}))

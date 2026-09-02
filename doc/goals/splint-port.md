@@ -85,11 +85,45 @@ enough — three implementations can each compile and disagree, which is the
 failure the port exists to prevent. A new port writes a `.drivers` file beside
 its source and the harness is unchanged.
 
-**Next:** `encodeInto` — the tag dispatch. It needs type predicates
-(`isNil`, `isString`, `isHeapTy`), heap slot reads, and the `Refused`
-exception, which is more vocabulary than the primitives needed.
+**Done:** the reader's `u8` and `u32`, and with them the first splint source
+that declares a MUTABLE STRUCT and the first that can FAIL:
 
-**Then:** `decodeAt`, which needs the reader and bounds checks.
+```text
+rust   01020304 ff 44332211 9
+java   01020304 ff 44332211 9
+csharp 01020304 ff 44332211 9
+```
+
+**Next:** `encodeInto` — the tag dispatch. It needs type predicates
+(`isNil`, `isString`, `isHeapTy`), heap slot reads and recursion, which is more
+vocabulary than anything so far.
+
+**Then:** `decodeAt`, which builds heap values and so needs rooting.
+
+### What the reader surfaced
+
+The first divergence in this port that is **not naming**, and it was predicted:
+Rust returns a `Result` where the other two throw. That changes the SIGNATURE
+and every call site, so it cannot live in a call template.
+
+`^:throws` on a function name now says it can fail. Rust turns the return type
+into `Result<T, String>` and wraps returns in `Ok(...)`; Java and C# ignore the
+mark entirely, because an exception needs nothing in either. That is the shape
+every further Rust-only rule should take.
+
+Three more Rust-only rules, each found by `rustc` refusing something:
+
+* an **index is `usize`** and the struct field is `u32`, so indexing casts;
+* a **length is `usize`** and has to come back to be compared;
+* **`x as u32 << 8` does not parse** — Rust reads `u32 <<` as the start of
+  generic arguments and says so. A cast used as a shift operand needs its own
+  parentheses.
+
+And one that was not Rust's fault: `defstruct` emitted Java's
+`static final class` for C# as well, because the vocabulary had a Rust branch
+and a branch for "the rest". `final` is not C#. **A two-way split with three
+targets is a default wearing a shared name**, and the fix was to write all three
+out.
 
 ### 2. The small pure files
 `Eq`, `Hash`, `Interns`, `Seqs`. Near-identical, no ownership subtleties.
