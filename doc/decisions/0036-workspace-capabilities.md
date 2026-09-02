@@ -380,11 +380,11 @@ Three supporting properties, all already true:
 * **Provenance is unreadable from guest code.** No builtin returns an opaque's
   host id -- deliberately, and `builtins.rs` says so at the definition. Holding
   one teaches you nothing about how to make one.
-* **No reflection.** There is no builtin that enumerates vars or reads a constant
-  by index, so a table the compiler emits is not nameable by code the compiler
-  did not emit it into. "Never allow guest code access to the table" is satisfied
-  by construction -- provided nobody later adds a reflective accessor, which is
-  now a thing to say out loud rather than assume.
+* **No reflection.** There is no builtin that enumerates vars or resolves one by
+  name, and `native-name` shows why that matters: any source may write
+  `flint.rt/<name>` for anything in the catalogue, so a reflective lookup added
+  to the catalogue would be reachable from hostile source immediately. Not adding
+  one is now load-bearing rather than incidental.
 
 ### Better than either: the artifact carries SLOTS, not values
 
@@ -625,6 +625,78 @@ anyone trusts.
 No workspace is passed anywhere. No call site changes. A closure is an ordinary
 value again, because the guard was spent when it was obtained.
 
+### What the reference compiles to
+
+A cross-workspace reference to a var that DECLARES requirements becomes,
+in shape:
+
+```clojure
+(resolve 'the.ns/the-var :capabilities (select-keys &capabilities [:fs]))
+```
+
+This unifies the two halves rather than stacking them: you cannot resolve the
+var without holding what it requires, and resolving is what hands the tokens
+over. The guard and the authority are the same act.
+
+`select-keys` is exactly right for the check, too -- it OMITS missing keys, so a
+workspace without `:fs` produces `{}` and the requirement is visibly unmet rather
+than met with a nil.
+
+### `&capabilities` is not a secret, and that is fine
+
+An earlier section here said guest code must never reach the table. That was too
+strong. `&capabilities` is lexical -- it means "this workspace's capabilities",
+the way `&env` means "this expansion's environment" -- so a guest writing it gets
+ITS OWN set and learns nothing it did not already have. There is no hole to
+close, and no need for the table to be unnameable.
+
+What a guest can then do is pass its own tokens to a workspace that lacks them.
+That is delegation, which is allowed everywhere else here for the same reason it
+is allowed here.
+
+### Three things that keep it free
+
+**Elide the empty case.** A var that declares no requirements emits no resolve.
+That is the overwhelming majority -- `str`, `map`, `+` -- and it matters more
+than it sounds, because the standard library is a different workspace from user
+code, so without this every call into `clojure.core` would pay.
+
+**Hoist to load.** A workspace's capabilities do not change during a run, so the
+`select-keys` and the check happen ONCE, at load, into a slot. The reference site
+is then a slot read -- which is what a var reference already is. Nothing is
+recomputed per call and nothing is recomputed per reference.
+
+**Fail at load, naming the capability.** A requirement that cannot be met should
+stop the program before it starts, which is a better failure than the first call
+in production. It does foreclose graceful degradation; if a program should be
+able to run without an optional capability, that has to be a different construct
+rather than this one failing softly.
+
+### The one spelling that would undo all of it
+
+**`resolve` must not be a callable builtin.**
+
+`native-name` in `analyzer.cljc` lets any source write `flint.rt/<name>` for
+anything in the builtin catalogue. So a builtin `resolve` taking a quoted symbol
+is a general reflective var lookup, and a hostile namespace writes:
+
+```clojure
+(flint.rt/resolve 'flint.fs/read {})
+```
+
+-- obtaining the var with no compile-time check, which is precisely the
+reflection hole that reference-guarding depends on not existing. It would defeat
+the entire scheme, by the same route the `*ns*` shape would have.
+
+So the form above is a NOTATION for what the analyzer does, not a call it emits.
+It has to be an analyzer construct with no builtin and no var behind it, lowered
+at compile time to the load-bound slot described above. Which is where the
+hoisting lands anyway -- the two constraints agree.
+
+This is now the third time in this file that a natural spelling has been the
+dangerous part of an otherwise correct idea. Worth stating as a rule: **anything
+that resolves authority must be a compile-time construct, never a callable.**
+
 ### Per WORKSPACE, and per-namespace was a mechanism mistaken for a concept
 
 The grain is the workspace: that is the unit of third-party identity, and inside
@@ -740,8 +812,9 @@ being careful.
 7. **The request primitive**, generalising `port_open` so its answer is not
    constrained to a port, and `open` retired onto it.
 8. **Reference guards**: `:flint/capabilities-guard` on a var, checked where the
-   var is REFERENCED, against the referencing workspace's grants. Compile time,
-   no run-time cost, no workspace threaded anywhere. This is most of the feature.
+   var is REFERENCED, against the referencing workspace's grants -- an analyzer
+   construct lowered to a load-bound slot, never a callable. Compile time, no
+   run-time cost, no workspace threaded anywhere. This is most of the feature.
 9. **Load-time slot binding**, so an image the compiler never checked
    (`flint_load_image`, `0023`) still cannot help itself: the host binds each
    workspace's slots from what it granted, and a boundary primitive compares
