@@ -544,6 +544,96 @@ Separating them is what makes the above work:
 A macro reads the first and emits a reference into the second. It never holds a
 sentinel, so the question of handing one over does not arise.
 
+## Guard the REFERENCE, not the invocation
+
+This is the answer to "must every call carry the calling workspace?" -- no, and
+the reason removes most of the machinery above.
+
+### Two things a guard could mean
+
+* **Authority to act**: what the callee may do. LEXICAL. It travels with the code
+  that was granted it and the caller has nothing to do with it. A library called
+  from anywhere keeps its own authority, which is the property the dynamic-var
+  shape lost.
+* **Permission to call**: who may invoke this. A property of the CALLER, and the
+  thing `:flint/capabilities-guard` on a function means.
+
+Only the second needs caller identity, and only at the point the caller is
+identified -- which is not the invocation.
+
+### The closure case dissolves
+
+The worry is real: `(map fs/read paths)` hands a guarded function to `map`, which
+lives in another workspace, and `map` invokes it. Checking at the invocation
+checks `clojure.core`, which is wrong.
+
+But **the reference `fs/read` appears in the caller's source, in exactly one
+workspace, at compile time.** Guard it there. Once the reference is allowed, the
+resulting closure is an ordinary value, and `map` calling it is fine -- the
+caller chose to hand it over, which is delegation, and delegation is allowed
+everywhere else in this design for the same reason.
+
+So:
+
+* Every reference to a guarded var has a static site in one workspace.
+* Obtaining the closure is the guarded act; calling it is not.
+* Nothing is threaded, nothing is passed, and a builtin call costs exactly what
+  it costs today.
+
+The only ways to obtain a reference without a static site are reflection -- which
+does not exist, and now must not be added -- or being handed one, which is
+delegation.
+
+### Which means the run-time check is nearly free, and nearly unnecessary
+
+The argument for a run-time token was that anything a macro emits can be written
+by hand: read the expansion, type it out, bypass the macro. That holds only if
+the thing the expansion reaches is itself unguarded. If `fs/read*` and the raw
+builtin under it are guarded vars too, then the hand-written bypass is refused at
+compile time exactly as the macro path would have been. **Guard every rung and
+the ladder has no unguarded rung.**
+
+And the sentinel-slot scheme does NOT defend against the case it looked like it
+did. A hostile artifact is not compiled by an honest compiler, so it never had a
+reference checked -- but it also writes its own constant pool, so it declares
+whatever slots it likes and the loader mints them. Slots minted from the file
+defend against nothing the compiler was not already defending against.
+
+### What the load-time binding is actually for
+
+It earns its place once the loader binds slots from what the HOST granted, rather
+than from what the file asked for:
+
+* A slot is not "mint object #3", it is "bind the `:fs` capability here, if this
+  artifact's workspace was granted it".
+* A hostile artifact declaring the slot gets nil, because the host never granted
+  it, and the guarded primitive's one pointer compare fails.
+* This is once per load, not per call.
+
+That covers the case compile-time checking cannot: an image loaded at run time
+(`0023`, `flint_load_image`) whose call sites were never checked by a compiler
+anyone trusts.
+
+### So the shape is
+
+| when | what | cost |
+|---|---|---|
+| compile | the reference to a guarded var is checked against the referencing WORKSPACE's grants | none at run time |
+| load | the host binds each workspace's capability slots from what it granted | once |
+| run | a boundary primitive compares its slot | one pointer compare, at the boundary only |
+
+No workspace is passed anywhere. No call site changes. A closure is an ordinary
+value again, because the guard was spent when it was obtained.
+
+### Per WORKSPACE, and per-namespace was a mechanism mistaken for a concept
+
+The grain is the workspace: that is the unit of third-party identity, and inside
+one there is nothing to defend. An earlier section here said "per namespace",
+which is right as an IMPLEMENTATION -- a namespace belongs to exactly one
+workspace, statically, so a per-namespace slot is just where a workspace's grant
+is reached from -- and wrong as a concept, because it suggests two namespaces in
+one project could differ. They cannot and should not.
+
 ### The reader-conditional hazard, if the declaration hides in one
 
 Putting the declaration behind `#?(:flint ...)` for `.cljc` portability is
@@ -649,13 +739,16 @@ being careful.
    behind a guard.
 7. **The request primitive**, generalising `port_open` so its answer is not
    constrained to a port, and `open` retired onto it.
-8. **Sentinel slots in the image**: one constant-pool tag, minted by the loader,
-   per-namespace references emitted by the compiler. This is what makes the
-   intra-sandbox check constant time and host-free.
-9. **The host-facing half**: what the host issues at run time and the program
-   presents when it actually touches the world, acquired ONCE rather than per
-   call -- and never the same value as the slot sentinel, or the artifact
-   becomes a bearer token.
+8. **Reference guards**: `:flint/capabilities-guard` on a var, checked where the
+   var is REFERENCED, against the referencing workspace's grants. Compile time,
+   no run-time cost, no workspace threaded anywhere. This is most of the feature.
+9. **Load-time slot binding**, so an image the compiler never checked
+   (`flint_load_image`, `0023`) still cannot help itself: the host binds each
+   workspace's slots from what it granted, and a boundary primitive compares
+   one. Once per load, one pointer compare per boundary crossing.
+10. **The host-facing half**: what the host issues and the program presents when
+    it touches the world -- acquired once, never the same value as a slot
+    sentinel, or the artifact becomes a bearer token.
 
 ## What is undecided
 
