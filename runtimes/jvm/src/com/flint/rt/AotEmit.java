@@ -175,6 +175,10 @@ public final class AotEmit {
                 popToT(x);
                 x.aload(L_STACK).iload(L_FP).loadConstant(i.b[0]).iadd().lload(L_T).lastore();
             }
+            case Op.SET_LOCAL_W -> {
+                popToT(x);
+                x.aload(L_STACK).iload(L_FP).loadConstant(AotPlan.u16(i.b)).iadd().lload(L_T).lastore();
+            }
             case Op.SET_VAR -> {
                 popToT(x);
                 x.aload(L_GLOBALS).loadConstant(AotPlan.u16(i.b)).lload(L_T).lastore();

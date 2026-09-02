@@ -11,5 +11,10 @@ public static class Op {
         PopHandler = 0x18, Rethrow = 0x19, Vector = 0x1A, Map = 0x1B, Set = 0x1C,
         Apply = 0x1E, Self = 0x23, AddInt = 0x24,
         SubInt = 0x25, MulInt = 0x26, LtInt = 0x27, LeInt = 0x28, GtInt = 0x29,
-        GeInt = 0x2A, EqInt = 0x2B, TypeP = 0x2C;
+        GeInt = 0x2A, EqInt = 0x2B, TypeP = 0x2C,
+        // The wide STORE, counterpart of LocalW. Its absence silently
+        // truncated a local index to a byte, so binding local 256 wrote
+        // local 0 -- on every runtime identically, which is why the
+        // cross-runtime suite never saw it.
+        SetLocalW = 0x2D;
 }

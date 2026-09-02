@@ -16,5 +16,10 @@ public final class Op {
         POP_HANDLER = 0x18, RETHROW = 0x19, VECTOR = 0x1A, MAP = 0x1B, SET = 0x1C,
         APPLY = 0x1E, SELF = 0x23, ADD_INT = 0x24,
         SUB_INT = 0x25, MUL_INT = 0x26, LT_INT = 0x27, LE_INT = 0x28, GT_INT = 0x29,
-        GE_INT = 0x2A, EQ_INT = 0x2B, TYPE_P = 0x2C;
+        GE_INT = 0x2A, EQ_INT = 0x2B, TYPE_P = 0x2C,
+        // The wide STORE, counterpart of LOCAL_W. Its absence silently
+        // truncated a local index to a byte, so binding local 256 wrote
+        // local 0 -- on every runtime identically, which is why the
+        // cross-runtime suite never saw it.
+        SET_LOCAL_W = 0x2D;
 }

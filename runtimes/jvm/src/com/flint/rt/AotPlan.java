@@ -26,7 +26,7 @@ public final class AotPlan {
     static {
         int[][] ops = {
             {Op.CONST,2},{Op.NIL,0},{Op.TRUE,0},{Op.FALSE,0},{Op.INT,2},
-            {Op.LOCAL,1},{Op.LOCAL_W,2},{Op.SET_LOCAL,1},{Op.UPVAL,1},{Op.VAR,2},
+            {Op.LOCAL,1},{Op.LOCAL_W,2},{Op.SET_LOCAL,1},{Op.SET_LOCAL_W,2},{Op.UPVAL,1},{Op.VAR,2},
             {Op.SET_VAR,2},{Op.POP,0},{Op.DUP,0},{Op.JUMP,2},{Op.JUMP_IF_FALSE,2},
             {Op.CALL,1},{Op.TAIL_CALL,1},{Op.RETURN,0},
             {Op.CLOSURE,3},{Op.NATIVE,3},{Op.THROW,0},{Op.TRY,2},{Op.POP_HANDLER,0},
@@ -39,7 +39,7 @@ public final class AotPlan {
         for (int o : new int[]{ Op.JUMP, Op.JUMP_IF_FALSE }) JUMPS[o] = true;
         for (int o : new int[]{ Op.CALL, Op.TAIL_CALL, Op.APPLY }) CALLS[o] = true;
         for (int o : new int[]{ Op.CONST, Op.NIL, Op.TRUE, Op.FALSE, Op.INT,
-                Op.LOCAL, Op.LOCAL_W, Op.SET_LOCAL, Op.POP,
+                Op.LOCAL, Op.LOCAL_W, Op.SET_LOCAL, Op.SET_LOCAL_W, Op.POP,
                 Op.DUP, Op.VAR, Op.SET_VAR, Op.SELF, Op.UPVAL, Op.JUMP, Op.JUMP_IF_FALSE,
                 Op.RETURN,
                 Op.NATIVE, Op.ADD_INT, Op.SUB_INT, Op.MUL_INT, Op.LT_INT, Op.LE_INT,
@@ -206,7 +206,7 @@ public final class AotPlan {
             case Op.NIL, Op.TRUE, Op.FALSE, Op.INT, Op.CONST, Op.VAR, Op.LOCAL,
                  Op.LOCAL_W, Op.SELF, Op.UPVAL, Op.DUP -> new int[]{ 1, 1 };
             case Op.TYPE_P -> new int[]{ 0, 0 };
-            case Op.POP, Op.SET_LOCAL, Op.SET_VAR, Op.THROW, Op.RETHROW,
+            case Op.POP, Op.SET_LOCAL, Op.SET_LOCAL_W, Op.SET_VAR, Op.THROW, Op.RETHROW,
                  Op.RETURN -> new int[]{ -1, -1 };
             case Op.JUMP -> new int[]{ 0, 0 };
             case Op.JUMP_IF_FALSE -> new int[]{ -1, -1 };

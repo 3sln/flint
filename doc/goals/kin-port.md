@@ -65,9 +65,43 @@ become safe to port. Never port a test and its subject in the same change.
   under `#[cfg(test)]` — so the build checks the claim rather than this file.
 * Seven opcodes that were implemented three times and emitted never have been
   removed; their numbers are retired, not reused.
-* **Opcode coverage is 38 of 38.** Every opcode the compiler can emit is
+* **Two silent compiler bugs, found by the coverage work and fixed.** Both
+  were TRUNCATIONS that no runtime refused, and neither was visible to
+  `conform` because **all four runtimes truncate identically** -- so the suite
+  compared four identical wrong answers and reported agreement. That is the
+  same shape as `bin/check-builtins` crashing instead of checking, one layer
+  up: a gate that cannot distinguish "everyone is right" from "everyone is
+  wrong the same way" is not a gate.
+
+  * **A call's argument count is one byte** and was written unmasked, so the
+    260-argument `(+ v0 ... v259)` in `wide-locals` was emitted as a
+    FOUR-argument call. The VM popped four operands, took the fifth from the
+    top as the callee, and died with `value is not a function (255, 4 args)`.
+    Now refused at compile time, naming the count, following this file's own
+    `jump out of range` precedent.
+  * **There was no wide `set-local`.** A wide READ (`local-w`, 0x07) has
+    always existed; the WRITE truncated its index to a byte, so binding local
+    256 stored into local 0. Low locals were clobbered and high ones read
+    `nil` -- silent wrong answers, no crash. `set-local-w` (0x2D) is now
+    implemented in all four runtimes and both AOT backends, and every local
+    index in the emitter goes through ONE width-aware helper rather than eight
+    hand-written `put!` calls, which is what let the two halves disagree.
+
+    Cost, and worth recording as a measure of the prize: one opcode, written
+    by hand into `vm.rs`, `Rt.java`, `Rt.cs`, both `AotPlan`s, both
+    `AotEmit`s, and `aot.cljc`'s wasm backend. The interpreter arm is one line
+    per runtime; the tables around it are where the porting actually goes.
+
+* **Opcode coverage was NOT 38 of 38.** Every opcode the compiler can emit is
   executed by `bin/conform-hosts` on all three runtimes. That is the baseline a
   port must not lower.
+
+  The census counted an opcode as covered when a program that emitted it ran.
+  `local-w` was emitted, and the program that emitted it THREW before
+  producing an answer -- so the opcode was reached and its correctness was
+  never observed. Reaching an instruction is not covering it, and the fix for
+  the count is the same as the fix for the suite: check the answer, not the
+  arrival.
 
   Checking it per slice means running `opcov` over the images a build leaves in
   `out/`, which is a SMALLER set than the 38-of-38 figure covers -- it reports

@@ -82,7 +82,11 @@
    0x2A [:ge-int 0]   0x2B [:eq-int 0]
    ;; One operand: the type code. Needs no type information to emit, so unlike
    ;; the arithmetic above it fires on code nobody annotated.
-   0x2C [:type-p 1]})
+   0x2C [:type-p 1]
+   ;; The wide STORE. Registered here for the same reason as the arithmetic
+   ;; above: a walk that does not know an opcode refuses the whole arity, so a
+   ;; function with more than 255 locals would silently stop being compiled.
+   0x2D [:set-local-w 2]})
 
 (def JUMPS #{:jump :jump-if-false})
 
@@ -95,7 +99,7 @@
 (def INLINED
   "Emitted as wasm. 0013's opcode histogram says these are 98.7% of executed
   instructions, and the rest go back to the interpreter one at a time."
-  #{:const :nil :true :false :int :local :local-w :set-local
+  #{:const :nil :true :false :int :local :local-w :set-local :set-local-w
     :pop :dup :var :set-var :self :upval :jump :jump-if-false
     :return :native
     :add-int :sub-int :mul-int :lt-int :le-int :gt-int :ge-int :eq-int
@@ -304,7 +308,7 @@
   [{:keys [op b]}]
   (case op
     (:const :nil :true :false :int :local :local-w :upval :var :self :dup) [1 1]
-    (:set-local :set-var :pop :throw :jump-if-false) [-1 -1]
+    (:set-local :set-local-w :set-var :pop :throw :jump-if-false) [-1 -1]
     (:jump :try :pop-handler :return :tail-call) [0 0]
     :rethrow [1 1]
     :call [(- (nth b 0)) (- (nth b 0))]
@@ -564,6 +568,7 @@
       :upval (push-from [(lget HEAP) (lget RETB) (i64ld 0) (op :i32-wrap-i64)
                          (op :i32-add) (i64ld (+ 8 (* 8 (inc (nth b 0)))))])
       :set-local [(lget FPB) (pop-to-t) (lget T) (i64st (* 8 (nth b 0)))]
+      :set-local-w [(lget FPB) (pop-to-t) (lget T) (i64st (* 8 (u16 b)))]
       :set-var [(lget GLOBALS) (pop-to-t) (lget T) (i64st (* 8 (u16 b)))]
       :pop [(lget TOPB) (i32c 8) (op :i32-sub) (lset TOPB)]
       :dup (push-from [(lget TOPB) (i32c 8) (op :i32-sub) (i64ld 0)])

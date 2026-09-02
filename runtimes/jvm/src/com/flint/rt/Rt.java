@@ -547,6 +547,7 @@ public final class Rt {
                 case Op.LOCAL -> { vpush(roots.stack[fp + u8(ip)]); ip += 1; }
                 case Op.LOCAL_W -> { vpush(roots.stack[fp + u16(ip)]); ip += 2; }
                 case Op.SET_LOCAL -> { roots.stack[fp + u8(ip)] = vpop(); ip += 1; }
+                case Op.SET_LOCAL_W -> { roots.stack[fp + u16(ip)] = vpop(); ip += 2; }
                 case Op.SELF -> vpush(roots.stack[f.retTo]);
                 case Op.VAR -> { vpush(roots.shared.globals[u16(ip)]); ip += 2; }
                 case Op.SET_VAR -> { roots.shared.globals[u16(ip)] = vpop(); ip += 2; }

@@ -59,6 +59,7 @@ pub mod op {
     pub const LOCAL: u8 = 0x06; // u8
     pub const LOCAL_W: u8 = 0x07; // u16
     pub const SET_LOCAL: u8 = 0x08; // u8, pops
+    pub const SET_LOCAL_W: u8 = 0x2D; // u16, pops -- the counterpart of LOCAL_W
     pub const UPVAL: u8 = 0x09; // u8
     pub const VAR: u8 = 0x0A; // u16
     pub const SET_VAR: u8 = 0x0B; // u16, pops
@@ -1072,6 +1073,12 @@ impl Rt {
                 op::SET_LOCAL => {
                     let i = self.u8_at(ip) as usize;
                     ip += 1;
+                    let v = self.vpop();
+                    self.roots.stack[fp + i] = v;
+                }
+                op::SET_LOCAL_W => {
+                    let i = self.u16_at(ip) as usize;
+                    ip += 2;
                     let v = self.vpop();
                     self.roots.stack[fp + i] = v;
                 }

@@ -51,7 +51,20 @@
    ;; The census says they are 28% of the native calls in a real workload, and
    ;; a native call costs 22.7 ns to REACH, against a body that is one
    ;; comparison.
-   :type-p 0x2C})
+   :type-p 0x2C
+   ;; A wide STORE, the counterpart of `local-w`.
+   ;;
+   ;; Its absence was a silent-corruption bug, not a missing optimisation.
+   ;; There has always been a wide READ, so a function with more than 255
+   ;; locals read slots 256+ correctly -- and WROTE them through a `set-local`
+   ;; whose index is one byte, so binding local 256 stored into local 0. The
+   ;; low locals were clobbered and the high ones read `nil`, and nothing
+   ;; failed: all four runtimes truncate identically, so the cross-runtime
+   ;; suite compared four identical wrong answers and called it agreement.
+   ;;
+   ;; A new number rather than one of the seven retired ones, so an older
+   ;; image cannot be misread as this.
+   :set-local-w 0x2D})
 
 (def type-predicates
   "Builtin name to the `flint.types/code` its test corresponds to. One
@@ -73,6 +86,16 @@
 
 (defn- put! [buf & bs]
   (vswap! buf update :bytes into (flatten bs)))
+
+(defn- put-local!
+  "Emit `narrow` with a one-byte index, or `wide` with two.
+
+  Every store of a local goes through here. Writing the index unmasked did not
+  fail, it TRUNCATED -- which is the whole of the bug this exists to stop."
+  [buf narrow wide idx]
+  (if (< idx 256)
+    (put! buf (op narrow) idx)
+    (put! buf (op wide) (img/u16 idx))))
 
 (defn- here [buf] (count (:bytes @buf)))
 
@@ -123,6 +146,20 @@
 (defn- emit-invoke [ctx buf {:keys [fn args]} tail?]
   (emit ctx buf fn false)
   (doseq [a args] (emit ctx buf a false))
+  ;; THE ARGUMENT COUNT IS ONE BYTE, in the instruction and in all four
+  ;; runtimes, which read it with a `u8`. Writing it unmasked did not fail --
+  ;; it TRUNCATED, so a 260-argument call was emitted as a 4-argument one, the
+  ;; VM popped four operands and took the fifth-from-top as the callee, and the
+  ;; program died with `value is not a function`.
+  ;;
+  ;; Nothing caught it for the same reason the runtimes agreed: all four
+  ;; truncate identically, so the cross-runtime suite compared two identical
+  ;; crashes and called them agreement. A limit of the encoding has to be
+  ;; refused where it is known, which is here.
+  (when (> (count args) 255)
+    (throw (ex-info (str "a call takes at most 255 arguments; this one has "
+                         (count args))
+                    {:type :compile :arity (count args)})))
   (if (and tail? (not (:in-try? ctx)))
     (put! buf (op :tail-call) (count args))
     (put! buf (op :call) (count args))))
@@ -131,7 +168,8 @@
   (let [fidx (:fn-index (emit-fn-object ctx node))]
     (doseq [u upvals]
       (case (:kind u)
-        :local (put! buf (op :local) (:idx u))
+        ;; A capture READS a local, and had the same truncation.
+        :local (put-local! buf :local :local-w (:idx u))
         :upval (put! buf (op :upval) (:idx u))
         :self (put! buf (op :self))))
     (put! buf (op :closure) (img/u16 fidx) (count upvals))))
@@ -158,13 +196,13 @@
 (defn- emit-let [ctx buf {:keys [bindings body]} tail?]
   (doseq [{:keys [idx init]} bindings]
     (emit ctx buf init false)
-    (put! buf (op :set-local) idx))
+    (put-local! buf :set-local :set-local-w idx))
   (emit ctx buf body tail?))
 
 (defn- emit-loop [ctx buf {:keys [id bindings body]} tail?]
   (doseq [{:keys [idx init]} bindings]
     (emit ctx buf init false)
-    (put! buf (op :set-local) idx))
+    (put-local! buf :set-local :set-local-w idx))
   (let [lbl (gensym "loop")
         ctx' (assoc-in ctx [:loops id] {:label lbl :slots (mapv :idx bindings)})]
     (label! buf lbl)
@@ -176,7 +214,7 @@
   (doseq [a args] (emit ctx buf a false))
   ;; Stores happen after every argument is evaluated, which is what makes
   ;; (recur b a) a simultaneous rebinding rather than a sequential one.
-  (doseq [s (reverse slots)] (put! buf (op :set-local) s))
+  (doseq [s (reverse slots)] (put-local! buf :set-local :set-local-w s))
   (let [lbl (get-in ctx [:loops id :label])]
     (when-not lbl (throw (ex-info "recur target not found" {:id id})))
     (jump! buf :jump lbl)))
@@ -217,14 +255,14 @@
             (if-let [{:keys [kind idx body]} (first cs)]
               (let [l-next (gensym "cnext")]
                 (if (= :any kind)
-                  (do (put! buf (op :set-local) idx)
+                  (do (put-local! buf :set-local :set-local-w idx)
                       (emit ctx buf body false))
                   (do (put! buf (op :dup))
                       (emit-const ctx buf (str kind))
                       (put! buf (op :native)
                             (img/u16 (img/native-slot (:b ctx) "flint/ex-matches?")) 2)
                       (jump! buf :jump-if-false l-next)
-                      (put! buf (op :set-local) idx)
+                      (put-local! buf :set-local :set-local-w idx)
                       (emit ctx buf body false)
                       (jump! buf :jump l-end)
                       (label! buf l-next)
@@ -248,9 +286,7 @@
   [ctx buf node tail?]
   (case (:op node)
     :const (emit-const ctx buf (:val node))
-    :local (if (< (:idx node) 256)
-             (put! buf (op :local) (:idx node))
-             (put! buf (op :local-w) (img/u16 (:idx node))))
+    :local (put-local! buf :local :local-w (:idx node))
     :upval (put! buf (op :upval) (:idx node))
     :self (put! buf (op :self))
     :var (put! buf (op :var) (img/u16 (var-slot! ctx (:sym node))))

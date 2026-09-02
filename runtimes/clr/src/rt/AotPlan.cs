@@ -27,7 +27,7 @@ public static class AotPlan {
     static AotPlan() {
         void D(int op, int nb) { OPERANDS[op] = nb; KNOWN[op] = true; }
         D(Op.Const,2); D(Op.Nil,0); D(Op.True,0); D(Op.False,0);
-        D(Op.Int,2); D(Op.Local,1); D(Op.LocalW,2); D(Op.SetLocal,1); D(Op.Upval,1);
+        D(Op.Int,2); D(Op.Local,1); D(Op.LocalW,2); D(Op.SetLocal,1); D(Op.SetLocalW,2); D(Op.Upval,1);
         D(Op.Var,2); D(Op.SetVar,2); D(Op.Pop,0); D(Op.Dup,0); D(Op.Jump,2);
         D(Op.JumpIfFalse,2); D(Op.Call,1); D(Op.TailCall,1);
         D(Op.Return,0); D(Op.Closure,3); D(Op.Native,3); D(Op.Throw,0); D(Op.Try,2);
@@ -39,7 +39,7 @@ public static class AotPlan {
         foreach (int o in new[]{ Op.Jump, Op.JumpIfFalse }) JUMPS[o] = true;
         foreach (int o in new[]{ Op.Call, Op.TailCall, Op.Apply }) CALLS[o] = true;
         foreach (int o in new[]{ Op.Const, Op.Nil, Op.True, Op.False, Op.Int,
-                Op.Local, Op.LocalW, Op.SetLocal, Op.Pop,
+                Op.Local, Op.LocalW, Op.SetLocal, Op.SetLocalW, Op.Pop,
                 Op.Dup, Op.Var, Op.SetVar, Op.Self, Op.Upval, Op.Jump, Op.JumpIfFalse,
                 Op.Return,
                 Op.Native, Op.AddInt, Op.SubInt, Op.MulInt, Op.LtInt, Op.LeInt,
@@ -196,7 +196,7 @@ public static class AotPlan {
             case Op.Var: case Op.Local: case Op.LocalW: case Op.Self: case Op.Upval:
             case Op.Dup: return new int[]{ 1, 1 };
             case Op.TypeP: return new int[]{ 0, 0 };
-            case Op.Pop: case Op.SetLocal: case Op.SetVar: case Op.Throw:
+            case Op.Pop: case Op.SetLocal: case Op.SetLocalW: case Op.SetVar: case Op.Throw:
             case Op.Rethrow: case Op.Return: return new int[]{ -1, -1 };
             case Op.Jump: return new int[]{ 0, 0 };
             case Op.JumpIfFalse: return new int[]{ -1, -1 };

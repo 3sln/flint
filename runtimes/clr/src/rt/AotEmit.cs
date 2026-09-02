@@ -207,6 +207,7 @@ public static class AotEmit {
                 il.Emit(OpCodes.Ldarg_2);
                 il.Emit(OpCodes.Ldelem_I8); Push(c); break;
             case Op.SetLocal: PopToT(c); StoreFrameSlot(c, i.b[0]); break;
+            case Op.SetLocalW: PopToT(c); StoreFrameSlot(c, AotPlan.U16(i.b)); break;
             case Op.SetVar:
                 PopToT(c);
                 il.Emit(OpCodes.Ldloc, c.globals);

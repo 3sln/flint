@@ -491,6 +491,7 @@ public sealed class Rt : System.IDisposable {
                 case Op.Local: { VPush(roots.Stack[fp + U8(ip)]); ip += 1; } break;
                 case Op.LocalW: { VPush(roots.Stack[fp + U16(ip)]); ip += 2; } break;
                 case Op.SetLocal: { roots.Stack[fp + U8(ip)] = VPop(); ip += 1; } break;
+                case Op.SetLocalW: { roots.Stack[fp + U16(ip)] = VPop(); ip += 2; } break;
                 case Op.Self: VPush(roots.Stack[f.RetTo]); break;
                 case Op.Var: { VPush(roots.shared.Globals[U16(ip)]); ip += 2; } break;
                 case Op.SetVar: { roots.shared.Globals[U16(ip)] = VPop(); ip += 2; } break;
