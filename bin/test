@@ -254,6 +254,13 @@ echo "    compiled a module, and ran the same source NATIVELY: $got"
 [ -z "$(ls /tmp/flint-smoke | grep -v 'smoke.cljc\|out.wasm')" ] \
   || { ls /tmp/flint-smoke; fail "run left an artifact behind"; }
 
+# `flint.sys.*`: the virtual namespaces this binary SERVES (`0037`). Placed here
+# because it needs the release binary the section above just built, and because
+# what is being tested is the shipped artifact rather than the source it came
+# from -- the same reason the SDK selftest imports `dist/`.
+bb test/sysns.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/sysns.clj"; }
+grep -E "^ +(ok|FAIL|\()" /tmp/flint-test.out | sed 's/^/  /'
+
 # The surface `doc/decisions/0021` describes: `:path`, `:with`, `:args`, `:to`
 # and `:optimize`. A list may be bracketed or the key repeated -- and the
 # bracketed form is QUOTED here on purpose, because in zsh an unquoted `[a b]`

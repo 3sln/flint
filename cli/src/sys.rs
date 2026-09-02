@@ -1,0 +1,396 @@
+//! `flint.sys.*`: the system surface, served over ports (`doc/decisions/0037`).
+//!
+//! These namespaces are **VIRTUAL** (`0036` step 4). A program writes
+//!
+//! ```clojure
+//! (:require [flint.sys.fs :as fs])
+//! (fs/list-dir "src")
+//! ```
+//!
+//! and the compiler emits a call over a port rather than a var reference. What
+//! is on the other end is this file.
+//!
+//! ## Why they are not `flint.*`
+//!
+//! `lib/flint/fs.cljc` used to ship in flint's own workspace, beside
+//! `clojure.core`, so nothing in the tree said that the thing behind it was a
+//! decision the CLI made rather than part of the language. A reader meeting
+//! `flint.sys.fs` can tell from the segment. Three things follow, and all three
+//! are wanted: it cannot be linked into a pure module, `flint inspect` can list
+//! what a program asks the world for, and another host may serve the same name
+//! differently.
+//!
+//! ## The split is by AUTHORITY
+//!
+//! `slurp` is bytes-at-a-name and `fs` is hierarchy, and they are separate
+//! because granting one should not grant the other: a program that reads one
+//! configuration file has no business enumerating a disk. That `file://` and
+//! `https://` share `:slurp` is the uncomfortable half and is answered the way
+//! `0036` answered it for `flint.host/request` -- the compile-time guard is
+//! coarse, and the POLICY below is what makes it specific.
+
+use crate::policy::Policy;
+use flint_rt::codec::{Val, Wire};
+use std::path::{Component, Path, PathBuf};
+
+/// What a request handler answers: a body, or an error to be thrown at the
+/// caller.
+///
+/// `Result` rather than a body and an optional error, because a server that
+/// can return both has two ways to say one thing and callers will check the
+/// wrong one.
+pub type Answer = Result<Wire, String>;
+
+/// A served namespace.
+pub trait Service {
+    /// The namespace this serves, as a program writes it.
+    fn name(&self) -> &str;
+    /// `[{:name f :arities [..]} ..]`, for `{:op :list}`.
+    ///
+    /// Not optional here. `0036` makes the var list optional because a POD may
+    /// not be able to answer, but the CLI knows its own surface, so every
+    /// namespace in this file gives the compiler what it needs to turn an
+    /// unknown var into a compile error. Taking our own API on trust would be
+    /// choosing the worse of two answers for no reason.
+    fn vars(&self) -> Vec<(&'static str, &'static [u32])>;
+    fn invoke(&mut self, var: &str, args: &[Val], policy: &Policy) -> Answer;
+}
+
+/// Every path under `:fs` resolves under the granted root, and an escape is
+/// REFUSED rather than clamped.
+///
+/// Silently rewriting `../../etc/passwd` into something inside the root answers
+/// a question nobody asked. This is the one part of the old `host/fs.mjs` that
+/// was never in the wrong place, and it moves across unchanged.
+///
+/// The check is on the NORMALISED path and does not touch the filesystem, so it
+/// is the same answer whether or not the file exists -- a probe that behaved
+/// differently for a missing file would leak whether it was there.
+pub fn under(root: &Path, p: &str) -> Result<PathBuf, String> {
+    let mut out = PathBuf::from(root);
+    for c in Path::new(p).components() {
+        match c {
+            Component::Normal(s) => out.push(s),
+            Component::CurDir => {}
+            // `..` is refused rather than popped. Popping would make
+            // `a/../../x` depend on how deep `a` was, which is exactly the
+            // arithmetic an attacker gets to do.
+            Component::ParentDir => {
+                return Err(format!("{p:?} leaves the root: `..` is not allowed"))
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!("{p:?} is absolute; paths are relative to the root"))
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn arg<'a>(args: &'a [Val], i: usize, what: &str) -> Result<&'a Val, String> {
+    args.get(i).ok_or_else(|| format!("missing argument {i}: {what}"))
+}
+
+fn str_arg<'a>(args: &'a [Val], i: usize, what: &str) -> Result<&'a str, String> {
+    arg(args, i, what)?
+        .as_str()
+        .ok_or_else(|| format!("argument {i} ({what}) has to be a string"))
+}
+
+// ------------------------------------------------------------------ flint.sys.fs
+
+pub struct Fs {
+    pub root: PathBuf,
+    pub write: bool,
+}
+
+impl Service for Fs {
+    fn name(&self) -> &str {
+        "flint.sys.fs"
+    }
+    fn vars(&self) -> Vec<(&'static str, &'static [u32])> {
+        vec![
+            ("read-file", &[1]),
+            ("write-file", &[2]),
+            ("exists?", &[1]),
+            ("dir?", &[1]),
+            ("list-dir", &[1]),
+            ("mkdir", &[1]),
+            ("delete", &[1]),
+            ("root", &[0]),
+        ]
+    }
+    fn invoke(&mut self, var: &str, args: &[Val], _p: &Policy) -> Answer {
+        let mut w = Wire::new();
+        match var {
+            "root" => {
+                w.string(&self.root.display().to_string());
+            }
+            "read-file" => {
+                let p = under(&self.root, str_arg(args, 0, "path")?)?;
+                let b = std::fs::read(&p).map_err(|e| format!("read {p:?}: {e}"))?;
+                match String::from_utf8(b) {
+                    Ok(s) => {
+                        w.string(&s);
+                    }
+                    // NOT lossy. A file that is not text comes back as BYTES
+                    // (`doc/decisions/0024`) rather than as a string with
+                    // replacement characters in it, because a caller can act on
+                    // bytes and cannot undo a lossy conversion.
+                    Err(e) => {
+                        w.bytes(e.as_bytes());
+                    }
+                }
+            }
+            "write-file" => {
+                if !self.write {
+                    return Err("this :fs grant is read-only".into());
+                }
+                let p = under(&self.root, str_arg(args, 0, "path")?)?;
+                let body = arg(args, 1, "body")?;
+                let bytes = match body {
+                    Val::Str(s) => s.as_bytes().to_vec(),
+                    Val::Bytes(b) => b.clone(),
+                    _ => return Err("write-file wants a string or a byte string".into()),
+                };
+                if let Some(d) = p.parent() {
+                    std::fs::create_dir_all(d).map_err(|e| format!("mkdir {d:?}: {e}"))?;
+                }
+                std::fs::write(&p, bytes).map_err(|e| format!("write {p:?}: {e}"))?;
+                w.nil();
+            }
+            "exists?" => {
+                let p = under(&self.root, str_arg(args, 0, "path")?)?;
+                w.bool(p.exists());
+            }
+            "dir?" => {
+                let p = under(&self.root, str_arg(args, 0, "path")?)?;
+                w.bool(p.is_dir());
+            }
+            "list-dir" => {
+                let p = under(&self.root, str_arg(args, 0, "path")?)?;
+                let mut es: Vec<(String, bool)> = std::fs::read_dir(&p)
+                    .map_err(|e| format!("list {p:?}: {e}"))?
+                    .filter_map(|e| e.ok())
+                    .map(|e| {
+                        (
+                            e.file_name().to_string_lossy().into_owned(),
+                            e.path().is_dir(),
+                        )
+                    })
+                    .collect();
+                // SORTED. A directory listing in filesystem order makes a build
+                // that reads one non-reproducible, and the cost is nothing.
+                es.sort();
+                w.vector(es.len() as u32);
+                for (name, dir) in es {
+                    w.map(2);
+                    w.keyword(None, "name");
+                    w.string(&name);
+                    w.keyword(None, "dir");
+                    w.bool(dir);
+                }
+            }
+            "mkdir" => {
+                if !self.write {
+                    return Err("this :fs grant is read-only".into());
+                }
+                let p = under(&self.root, str_arg(args, 0, "path")?)?;
+                std::fs::create_dir_all(&p).map_err(|e| format!("mkdir {p:?}: {e}"))?;
+                w.nil();
+            }
+            "delete" => {
+                if !self.write {
+                    return Err("this :fs grant is read-only".into());
+                }
+                let p = under(&self.root, str_arg(args, 0, "path")?)?;
+                let r = if p.is_dir() {
+                    std::fs::remove_dir_all(&p)
+                } else {
+                    std::fs::remove_file(&p)
+                };
+                r.map_err(|e| format!("delete {p:?}: {e}"))?;
+                w.nil();
+            }
+            other => return Err(format!("flint.sys.fs has no {other}")),
+        }
+        Ok(w)
+    }
+}
+
+// --------------------------------------------------------------- flint.sys.env
+
+pub struct Env {
+    pub args: Vec<String>,
+}
+
+impl Service for Env {
+    fn name(&self) -> &str {
+        "flint.sys.env"
+    }
+    fn vars(&self) -> Vec<(&'static str, &'static [u32])> {
+        vec![("get", &[1]), ("args", &[0]), ("cwd", &[0])]
+    }
+    fn invoke(&mut self, var: &str, args: &[Val], p: &Policy) -> Answer {
+        let mut w = Wire::new();
+        match var {
+            "get" => {
+                let k = str_arg(args, 0, "name")?;
+                // The POLICY decides which variables exist, and a refused one
+                // reads as ABSENT rather than as an error: a program asking for
+                // `HOME` and a program probing for `AWS_SECRET_ACCESS_KEY` get
+                // the same nil, so the allowlist does not leak its own contents.
+                match p.env_allows(k).then(|| std::env::var(k).ok()).flatten() {
+                    Some(v) => {
+                        w.string(&v);
+                    }
+                    None => {
+                        w.nil();
+                    }
+                }
+            }
+            "args" => {
+                w.vector(self.args.len() as u32);
+                for a in &self.args {
+                    w.string(a);
+                }
+            }
+            "cwd" => {
+                let d = std::env::current_dir().map_err(|e| format!("cwd: {e}"))?;
+                w.string(&d.display().to_string());
+            }
+            other => return Err(format!("flint.sys.env has no {other}")),
+        }
+        Ok(w)
+    }
+}
+
+/// The `{:op :list}` answer for a service.
+pub fn list_reply(s: &dyn Service) -> Wire {
+    let vars = s.vars();
+    let mut w = Wire::new();
+    w.vector(vars.len() as u32);
+    for (name, arities) in vars {
+        w.map(2);
+        w.keyword(None, "name");
+        w.symbol(None, name);
+        w.keyword(None, "arities");
+        w.vector(arities.len() as u32);
+        for a in arities {
+            w.int(*a as i64);
+        }
+    }
+    w
+}
+
+/// Serve one decoded request, producing the reply bytes.
+///
+/// The `:id` is copied from the request and never invented: `flint.rpc`
+/// correlates on it, and a reply carrying the wrong one wakes the wrong caller.
+pub fn serve(s: &mut dyn Service, req: &Val, policy: &Policy) -> Vec<u8> {
+    let id = req.get("id").cloned().unwrap_or(Val::Nil);
+    let op = req.get("op").and_then(|v| v.as_str()).unwrap_or("");
+    let result: Answer = match op {
+        "list" => Ok(list_reply(s)),
+        "invoke" => {
+            let var = req.get("var").and_then(|v| v.as_str()).unwrap_or("");
+            let empty: Vec<Val> = Vec::new();
+            let args = req
+                .get("args")
+                .and_then(|v| v.as_slice())
+                .map(|s| s.to_vec())
+                .unwrap_or(empty);
+            s.invoke(var, &args, policy)
+        }
+        // `:get` is a var's VALUE. Nothing in `flint.sys.*` holds one -- every
+        // var here is a function -- so this is refused by name rather than
+        // silently answering nil, which a caller could not tell from a var that
+        // really is nil.
+        "get" => Err(format!(
+            "{} holds no values, only functions -- use a call",
+            s.name()
+        )),
+        other => Err(format!("unknown op {other:?}")),
+    };
+    let mut w = Wire::new();
+    w.map(2);
+    w.keyword(None, "id");
+    put(&mut w, &id);
+    match result {
+        Ok(body) => {
+            w.keyword(None, "body");
+            w.raw(body.as_bytes());
+        }
+        Err(msg) => {
+            w.keyword(None, "error");
+            w.map(1);
+            w.keyword(None, "message");
+            w.string(&msg);
+        }
+    }
+    w.done()
+}
+
+/// Write a decoded value back out. Only the shapes an `:id` can be, because
+/// that is all this needs and a general one would be an encoder nobody checked.
+fn put(w: &mut Wire, v: &Val) {
+    match v {
+        Val::Int(n) => {
+            w.int(*n);
+        }
+        Val::Str(s) => {
+            w.string(s);
+        }
+        Val::Keyword(ns, n) => {
+            w.keyword(ns.as_deref(), n);
+        }
+        _ => {
+            w.nil();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_may_not_leave_the_root() {
+        let root = Path::new("/tmp/x");
+        assert!(under(root, "a/b").is_ok());
+        assert!(under(root, "./a").is_ok());
+        for bad in ["../etc/passwd", "a/../../etc", "/etc/passwd", "a/../.."] {
+            assert!(under(root, bad).is_err(), "{bad} should be refused");
+        }
+    }
+
+    #[test]
+    fn dotdot_is_refused_and_not_popped() {
+        // `a/../b` is INSIDE the root once normalised, and is still refused.
+        // Popping would make the answer depend on how deep the path had got,
+        // which is arithmetic an attacker gets to do.
+        assert!(under(Path::new("/tmp/x"), "a/../b").is_err());
+    }
+}
+
+/// Every namespace this binary serves, and what each holds.
+///
+/// One list, used twice and deliberately so: it is what the COMPILER is told
+/// (so a `:require` resolves and an unknown var is a compile error) and what a
+/// `{:op :list}` answers at run time. Two lists would drift, and the drift
+/// would read as "the compiler and the server disagree about my program".
+pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
+    let fs = Fs { root: PathBuf::from("."), write: false };
+    let env = Env { args: Vec::new() };
+    vec![(fs.name_static(), fs.vars()), (env.name_static(), env.vars())]
+}
+
+impl Fs {
+    fn name_static(&self) -> &'static str {
+        "flint.sys.fs"
+    }
+}
+impl Env {
+    fn name_static(&self) -> &'static str {
+        "flint.sys.env"
+    }
+}

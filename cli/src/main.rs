@@ -14,6 +14,10 @@
 //! It is worth 2.7 s against 15.6 s on the same compile (`doc/decisions/0010`).
 //! The output is still wasm: what changed is what the compiler runs ON.
 
+mod policy;
+mod serve;
+mod sys;
+
 use anyhow::{bail, Context, Result};
 use flint_rt::native::Program;
 use std::{collections::BTreeMap, fs, path::{Path, PathBuf}};
@@ -181,7 +185,27 @@ fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
         }
         out.push(']');
     }
-    out.push_str(" :builtins #{");
+    // The VIRTUAL namespaces this binary serves (`doc/decisions/0036` step 4,
+    // `0037`). They have no source, so the resolver has to be told they exist
+    // or a `:require` of one is reported missing -- and it has to be told what
+    // they HOLD, so an unknown var is a compile error rather than a run-time
+    // one. The CLI knows its own surface, so taking it on trust would be
+    // choosing the worse of two available answers.
+    out.push_str(" :workspaces [");
+    for (ns, vars) in crate::sys::catalogue() {
+        out.push_str("{:prefix ");
+        out.push_str(&edn_string(&format!("{}/", ns.replace('.', "/"))));
+        out.push_str(" :name flint/sys :virtual true :vars [");
+        for (name, arities) in vars {
+            out.push_str(&format!("{{:name {name} :arities ["));
+            for a in arities {
+                out.push_str(&format!("{a} "));
+            }
+            out.push_str("]} ");
+        }
+        out.push_str("]} ");
+    }
+    out.push_str("] :builtins #{");
     for k in slots.keys() {
         out.push_str(&edn_string(k));
         out.push(' ');
@@ -313,7 +337,31 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
     let named: Vec<(&str, u64)> =
         caps.iter().enumerate().map(|(i, n)| (n.as_str(), i as u64 + 1)).collect();
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let out = p.run_with(&refs, &named);
+    // SERVED, not just run. `run_with` alone leaves a program that opens a port
+    // parked for ever, because nothing drains the event queue -- so `flint run`
+    // could execute logic and nothing that talked to the world
+    // (`doc/decisions/0037`).
+    //
+    // The opaque values `:with` mints stay: they are `0022`'s capabilities, a
+    // different mechanism from the served namespaces, and a host may hand over
+    // both. What each `:with` entry now ALSO does is carry the policy for the
+    // namespace of that name.
+    let mut policy = crate::policy::Policy::default();
+    for c in caps {
+        policy.add(c);
+    }
+    let mut host = crate::serve::Host::new(policy);
+    let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if caps.iter().any(|c| c == "fs" || c.starts_with("fs:")) {
+        host.serve(Box::new(crate::sys::Fs {
+            root,
+            write: caps.iter().any(|c| c == "fs:write"),
+        }));
+    }
+    if caps.iter().any(|c| c == "env" || c.starts_with("env:")) {
+        host.serve(Box::new(crate::sys::Env { args: args.to_vec() }));
+    }
+    let out = host.run_with(&mut p, &refs, &named);
     print!("{}", out.out);
     Ok((out.code, out.out))
 }

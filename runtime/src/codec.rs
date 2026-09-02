@@ -968,6 +968,21 @@ impl Wire {
         self.b.push(K_MAP);
         self.u32(n)
     }
+    /// Splice an already-built value in where the next one would go.
+    ///
+    /// A reply wraps a body that a handler built separately, and the format is
+    /// a pre-order walk with no length patching -- so appending finished bytes
+    /// is exactly as valid as writing them here, and it saves every handler
+    /// having to build into its caller's buffer.
+    ///
+    /// It takes bytes that ARE one complete value. Nothing checks that, because
+    /// checking would mean parsing, and this is the low-level half by
+    /// construction.
+    pub fn raw(&mut self, bytes: &[u8]) -> &mut Wire {
+        self.b.extend_from_slice(bytes);
+        self
+    }
+
     /// The tag SYMBOL, then the form (`doc/decisions/0034`).
     pub fn tagged(&mut self) -> &mut Wire {
         self.b.push(K_TAGGED);
