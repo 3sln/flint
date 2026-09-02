@@ -191,7 +191,14 @@ echo "== distributable: the compiler and loader, driven by the SDK alone"
 # The SDK is a separate package with its own build (`sdks/`), and what is
 # tested is the DISTRIBUTABLE: one portable ESM with the artifacts inside it.
 ./sdks/esm/build > /tmp/flint-test.out 2>&1 || { tail -25 /tmp/flint-test.out; fail "sdks/esm/build"; }
-grep -E "^    (ok|FAIL|dist/|no node)" /tmp/flint-test.out | sed 's/^  /  /'
+# SIX spaces, not four. The selftest prints "  ok   label" and the build script
+# indents its output by four, so every one of its rows has always failed this
+# filter -- the gate ran forty assertions and displayed none of them, showing
+# only the two lines the build script prints itself. Nothing was broken by it,
+# because the exit code is what fails the gate, but "ran and passed" and "was
+# never shown" look identical in a log, and that is the difference this file
+# exists to make visible.
+grep -E "^ *(ok|FAIL|dist/|no node)" /tmp/flint-test.out | sed 's/^      /  /'
 
 echo
 echo "== bytes: a string of bytes, in two tiers (0024)"
