@@ -539,7 +539,6 @@ public final class Rt {
             steps++;
 
             switch (opcode) {
-                case Op.NOP -> {}
                 case Op.CONST -> { vpush(consts[u16(ip)]); ip += 2; }
                 case Op.NIL -> vpush(Val.NIL);
                 case Op.TRUE -> vpush(Val.TRUE);
@@ -548,25 +547,14 @@ public final class Rt {
                 case Op.LOCAL -> { vpush(roots.stack[fp + u8(ip)]); ip += 1; }
                 case Op.LOCAL_W -> { vpush(roots.stack[fp + u16(ip)]); ip += 2; }
                 case Op.SET_LOCAL -> { roots.stack[fp + u8(ip)] = vpop(); ip += 1; }
-                case Op.SET_LOCAL_KEEP -> { roots.stack[fp + u8(ip)] = roots.stack[roots.stackTop - 1]; ip += 1; }
                 case Op.SELF -> vpush(roots.stack[f.retTo]);
                 case Op.VAR -> { vpush(roots.shared.globals[u16(ip)]); ip += 2; }
                 case Op.SET_VAR -> { roots.shared.globals[u16(ip)] = vpop(); ip += 2; }
                 case Op.UPVAL -> { vpush(slot(roots.stack[f.retTo], 1 + u8(ip))); ip += 1; }
                 case Op.POP -> roots.stackTop -= 1;
-                case Op.POP_N -> { roots.stackTop -= u8(ip); ip += 1; }
                 case Op.DUP -> vpush(roots.stack[roots.stackTop - 1]);
                 case Op.JUMP -> ip += 2 + i16(ip);
                 case Op.JUMP_IF_FALSE -> { int off = i16(ip); ip += 2; if (!Val.truthy(vpop())) ip += off; }
-                case Op.JUMP_IF_TRUE -> { int off = i16(ip); ip += 2; if (Val.truthy(vpop())) ip += off; }
-                case Op.JUMP_IF_FALSE_KEEP -> {
-                    int off = i16(ip); ip += 2;
-                    if (!Val.truthy(roots.stack[roots.stackTop - 1])) ip += off; else roots.stackTop -= 1;
-                }
-                case Op.JUMP_IF_TRUE_KEEP -> {
-                    int off = i16(ip); ip += 2;
-                    if (Val.truthy(roots.stack[roots.stackTop - 1])) ip += off; else roots.stackTop -= 1;
-                }
                 // The SPECIALISED integer operations. The compiler emits these
                 // only where it proved both operands are integers -- but
                 // `^int` means integer and not FIXNUM, so a bigint still
@@ -854,18 +842,6 @@ public final class Rt {
                     popTo(base);
                     roots.stackTop = at;
                     vpush(sv);
-                }
-                case Op.LIST -> {
-                    int nv = u16(ip); ip += 2;
-                    // The elements move to the shadow stack first: `cons`
-                    // allocates, and the value stack is where they are now.
-                    int base = mark();
-                    int at = roots.stackTop - nv;
-                    for (int i = 0; i < nv; i++) push(roots.stack[at + i]);
-                    long lv = Seqs.fromRoots(this, base, nv);
-                    popTo(base);
-                    roots.stackTop = at;
-                    vpush(lv);
                 }
                 case Op.TYPE_P -> {
                     int c = u8(ip); ip += 1;

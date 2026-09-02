@@ -188,7 +188,6 @@ public static class AotEmit {
     static void Emit(Ctx c, AotPlan.Ins i, AotPlan.Chunk ch) {
         var il = c.il;
         switch (i.op) {
-            case Op.Nop: break;
             case Op.Nil: il.Emit(OpCodes.Ldc_I8, Val.Nil); Push(c); break;
             case Op.True: il.Emit(OpCodes.Ldc_I8, Val.True); Push(c); break;
             case Op.False: il.Emit(OpCodes.Ldc_I8, Val.False); Push(c); break;
@@ -208,7 +207,6 @@ public static class AotEmit {
                 il.Emit(OpCodes.Ldarg_2);
                 il.Emit(OpCodes.Ldelem_I8); Push(c); break;
             case Op.SetLocal: PopToT(c); StoreFrameSlot(c, i.b[0]); break;
-            case Op.SetLocalKeep: PeekToT(c); StoreFrameSlot(c, i.b[0]); break;
             case Op.SetVar:
                 PopToT(c);
                 il.Emit(OpCodes.Ldloc, c.globals);
@@ -216,7 +214,6 @@ public static class AotEmit {
                 il.Emit(OpCodes.Ldloc, c.t);
                 il.Emit(OpCodes.Stelem_I8); break;
             case Op.Pop: Inc(c, c.top, -1); break;
-            case Op.PopN: Inc(c, c.top, -i.b[0]); break;
             case Op.Dup: PeekToT(c); il.Emit(OpCodes.Ldloc, c.t); Push(c); break;
             // The closure is `stack[retTo]`, and an upvalue is one of its slots.
             // The frame deliberately does not cache the closure -- that copy was
@@ -231,13 +228,8 @@ public static class AotEmit {
                 il.Emit(OpCodes.Callvirt, M_SLOT); Push(c); break;
             case Op.Jump: Jump(c, AotPlan.JumpTarget(i), i, ch); break;
             case Op.JumpIfFalse: PopToT(c); Falsy(c); JumpIf(c, i, ch); break;
-            case Op.JumpIfTrue: PopToT(c); Truthy(c); JumpIf(c, i, ch); break;
             // The `keep` forms do not pop when they jump, so the pop belongs on
             // the fallthrough only.
-            case Op.JumpIfFalseKeep:
-                PeekToT(c); Falsy(c); JumpIf(c, i, ch); Inc(c, c.top, -1); break;
-            case Op.JumpIfTrueKeep:
-                PeekToT(c); Truthy(c); JumpIf(c, i, ch); Inc(c, c.top, -1); break;
             case Op.Return:
                 il.Emit(OpCodes.Ldarg_0);
                 il.Emit(OpCodes.Ldloc, c.top);

@@ -228,14 +228,12 @@ pub static mut STATIC: [u64; 12] = [0; 12];
 fn operand_len(op: u8) -> u32 {
     use crate::vm::op;
     match op {
-        op::NOP | op::NIL | op::TRUE | op::FALSE | op::POP | op::DUP | op::RETURN
+        op::NIL | op::TRUE | op::FALSE | op::POP | op::DUP | op::RETURN
         | op::THROW | op::POP_HANDLER | op::RETHROW | op::SELF => 0,
-        op::LOCAL | op::SET_LOCAL | op::SET_LOCAL_KEEP | op::UPVAL | op::CALL
-        | op::TAIL_CALL | op::APPLY | op::POP_N => 1,
+        op::LOCAL | op::SET_LOCAL | op::UPVAL | op::CALL
+        | op::TAIL_CALL | op::APPLY => 1,
         op::CONST | op::INT | op::LOCAL_W | op::VAR | op::SET_VAR | op::JUMP
-        | op::JUMP_IF_FALSE | op::JUMP_IF_TRUE | op::JUMP_IF_FALSE_KEEP
-        | op::JUMP_IF_TRUE_KEEP | op::TRY | op::VECTOR | op::MAP | op::SET
-        | op::LIST => 2,
+        | op::JUMP_IF_FALSE | op::TRY | op::VECTOR | op::MAP | op::SET => 2,
         op::CLOSURE | op::NATIVE => 3,
         _ => u32::MAX,
     }
@@ -270,8 +268,7 @@ pub fn scan(rt: &mut crate::rt::Rt) {
                         op::CALL | op::TAIL_CALL | op::APPLY | op::NATIVE => {
                             STATIC[S_CALLSITES] += 1;
                         }
-                        op::JUMP | op::JUMP_IF_FALSE | op::JUMP_IF_TRUE
-                        | op::JUMP_IF_FALSE_KEEP | op::JUMP_IF_TRUE_KEEP => {
+                        op::JUMP | op::JUMP_IF_FALSE => {
                             let off = rt.i16_at(ip + 1) as i32;
                             if off < 0 {
                                 let t = (ip as i32 + 3 + off) as u32;

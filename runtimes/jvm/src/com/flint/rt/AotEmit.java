@@ -162,7 +162,6 @@ public final class AotEmit {
     static void emit(CodeBuilder x, AotPlan.Ins i, AotPlan.Chunk c,
                      Label[] labels, Map<Integer,Integer> chunkOf) {
         switch (i.op) {
-            case Op.NOP -> {}
             case Op.NIL -> { x.loadConstant(Val.NIL); push(x); }
             case Op.TRUE -> { x.loadConstant(Val.TRUE); push(x); }
             case Op.FALSE -> { x.loadConstant(Val.FALSE); push(x); }
@@ -176,16 +175,11 @@ public final class AotEmit {
                 popToT(x);
                 x.aload(L_STACK).iload(L_FP).loadConstant(i.b[0]).iadd().lload(L_T).lastore();
             }
-            case Op.SET_LOCAL_KEEP -> {
-                peekToT(x);
-                x.aload(L_STACK).iload(L_FP).loadConstant(i.b[0]).iadd().lload(L_T).lastore();
-            }
             case Op.SET_VAR -> {
                 popToT(x);
                 x.aload(L_GLOBALS).loadConstant(AotPlan.u16(i.b)).lload(L_T).lastore();
             }
             case Op.POP -> x.iinc(L_TOP, -1);
-            case Op.POP_N -> x.iinc(L_TOP, -i.b[0]);
             case Op.DUP -> { peekToT(x); x.lload(L_T); push(x); }
             // The closure is `stack[retTo]`, and an upvalue is one of its slots.
             // The frame deliberately does not cache the closure -- that copy was
@@ -200,15 +194,8 @@ public final class AotEmit {
             }
             case Op.JUMP -> jump(x, AotPlan.jumpTarget(i), labels, chunkOf, i, c);
             case Op.JUMP_IF_FALSE -> { popToT(x); falsy(x); jumpIf(x, i, labels, chunkOf, c); }
-            case Op.JUMP_IF_TRUE -> { popToT(x); truthy(x); jumpIf(x, i, labels, chunkOf, c); }
             // The `keep` forms do not pop when they jump, so the pop belongs on
             // the fallthrough only.
-            case Op.JUMP_IF_FALSE_KEEP -> {
-                peekToT(x); falsy(x); jumpIf(x, i, labels, chunkOf, c); x.iinc(L_TOP, -1);
-            }
-            case Op.JUMP_IF_TRUE_KEEP -> {
-                peekToT(x); truthy(x); jumpIf(x, i, labels, chunkOf, c); x.iinc(L_TOP, -1);
-            }
             case Op.RETURN -> {
                 x.aload(L_RT).iload(L_TOP).iload(L_GAS)
                  .invokestatic(CD_AOT, "aotReturn", MethodTypeDesc.of(CD_void, CD_RT, CD_int, CD_int));

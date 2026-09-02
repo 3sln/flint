@@ -25,25 +25,23 @@ public final class AotPlan {
 
     static {
         int[][] ops = {
-            {Op.NOP,0},{Op.CONST,2},{Op.NIL,0},{Op.TRUE,0},{Op.FALSE,0},{Op.INT,2},
+            {Op.CONST,2},{Op.NIL,0},{Op.TRUE,0},{Op.FALSE,0},{Op.INT,2},
             {Op.LOCAL,1},{Op.LOCAL_W,2},{Op.SET_LOCAL,1},{Op.UPVAL,1},{Op.VAR,2},
             {Op.SET_VAR,2},{Op.POP,0},{Op.DUP,0},{Op.JUMP,2},{Op.JUMP_IF_FALSE,2},
-            {Op.JUMP_IF_TRUE,2},{Op.CALL,1},{Op.TAIL_CALL,1},{Op.RETURN,0},
+            {Op.CALL,1},{Op.TAIL_CALL,1},{Op.RETURN,0},
             {Op.CLOSURE,3},{Op.NATIVE,3},{Op.THROW,0},{Op.TRY,2},{Op.POP_HANDLER,0},
-            {Op.RETHROW,0},{Op.VECTOR,2},{Op.MAP,2},{Op.SET,2},{Op.LIST,2},
-            {Op.APPLY,1},{Op.JUMP_IF_FALSE_KEEP,2},{Op.JUMP_IF_TRUE_KEEP,2},
-            {Op.POP_N,1},{Op.SET_LOCAL_KEEP,1},{Op.SELF,0},
+            {Op.RETHROW,0},{Op.VECTOR,2},{Op.MAP,2},{Op.SET,2},
+            {Op.APPLY,1},{Op.SELF,0},
             {Op.ADD_INT,0},{Op.SUB_INT,0},{Op.MUL_INT,0},{Op.LT_INT,0},
             {Op.LE_INT,0},{Op.GT_INT,0},{Op.GE_INT,0},{Op.EQ_INT,0},{Op.TYPE_P,1},
         };
         for (int[] e : ops) { OPERANDS[e[0]] = e[1]; KNOWN[e[0]] = true; }
-        for (int o : new int[]{ Op.JUMP, Op.JUMP_IF_FALSE, Op.JUMP_IF_TRUE,
-                                Op.JUMP_IF_FALSE_KEEP, Op.JUMP_IF_TRUE_KEEP }) JUMPS[o] = true;
+        for (int o : new int[]{ Op.JUMP, Op.JUMP_IF_FALSE }) JUMPS[o] = true;
         for (int o : new int[]{ Op.CALL, Op.TAIL_CALL, Op.APPLY }) CALLS[o] = true;
-        for (int o : new int[]{ Op.NOP, Op.CONST, Op.NIL, Op.TRUE, Op.FALSE, Op.INT,
-                Op.LOCAL, Op.LOCAL_W, Op.SET_LOCAL, Op.SET_LOCAL_KEEP, Op.POP, Op.POP_N,
+        for (int o : new int[]{ Op.CONST, Op.NIL, Op.TRUE, Op.FALSE, Op.INT,
+                Op.LOCAL, Op.LOCAL_W, Op.SET_LOCAL, Op.POP,
                 Op.DUP, Op.VAR, Op.SET_VAR, Op.SELF, Op.UPVAL, Op.JUMP, Op.JUMP_IF_FALSE,
-                Op.JUMP_IF_TRUE, Op.JUMP_IF_FALSE_KEEP, Op.JUMP_IF_TRUE_KEEP, Op.RETURN,
+                Op.RETURN,
                 Op.NATIVE, Op.ADD_INT, Op.SUB_INT, Op.MUL_INT, Op.LT_INT, Op.LE_INT,
                 Op.GT_INT, Op.GE_INT, Op.EQ_INT, Op.TYPE_P }) INLINED[o] = true;
     }
@@ -207,20 +205,18 @@ public final class AotPlan {
         return switch (i.op) {
             case Op.NIL, Op.TRUE, Op.FALSE, Op.INT, Op.CONST, Op.VAR, Op.LOCAL,
                  Op.LOCAL_W, Op.SELF, Op.UPVAL, Op.DUP -> new int[]{ 1, 1 };
-            case Op.NOP, Op.SET_LOCAL_KEEP, Op.TYPE_P -> new int[]{ 0, 0 };
+            case Op.TYPE_P -> new int[]{ 0, 0 };
             case Op.POP, Op.SET_LOCAL, Op.SET_VAR, Op.THROW, Op.RETHROW,
                  Op.RETURN -> new int[]{ -1, -1 };
-            case Op.POP_N -> new int[]{ -i.b[0], -i.b[0] };
             case Op.JUMP -> new int[]{ 0, 0 };
-            case Op.JUMP_IF_FALSE, Op.JUMP_IF_TRUE -> new int[]{ -1, -1 };
+            case Op.JUMP_IF_FALSE -> new int[]{ -1, -1 };
             // The `keep` forms do not pop when they JUMP.
-            case Op.JUMP_IF_FALSE_KEEP, Op.JUMP_IF_TRUE_KEEP -> new int[]{ -1, 0 };
             case Op.ADD_INT, Op.SUB_INT, Op.MUL_INT, Op.LT_INT, Op.LE_INT,
                  Op.GT_INT, Op.GE_INT, Op.EQ_INT -> new int[]{ -1, -1 };
             case Op.NATIVE -> { int n = i.b[2]; yield new int[]{ 1 - n, 1 - n }; }
             case Op.CALL, Op.TAIL_CALL, Op.APPLY -> { int n = i.b[0]; yield new int[]{ -n, -n }; }
             case Op.CLOSURE -> { int n = i.b[2]; yield new int[]{ 1 - n, 1 - n }; }
-            case Op.VECTOR, Op.LIST, Op.SET -> { int n = u16(i.b); yield new int[]{ 1 - n, 1 - n }; }
+            case Op.VECTOR, Op.SET -> { int n = u16(i.b); yield new int[]{ 1 - n, 1 - n }; }
             case Op.MAP -> { int n = u16(i.b) * 2; yield new int[]{ 1 - n, 1 - n }; }
             default -> new int[]{ 0, 0 };
         };

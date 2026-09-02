@@ -49,3 +49,10 @@ required-features = ["host-tools"]
 # possible in a bare wasm build (no libc, no JVM Math).
 libm = { version = "0.2", default-features = false }
 
+# The opcode-coverage instrument reads the diagnostics census, so it only
+# exists in that build. Declared rather than `#[cfg]`-ed out, so
+# `cargo test -p flint-rt` -- which builds every example -- does not try to
+# compile it without the feature and fail on `stat_region`.
+[[example]]
+name = "opcov"
+required-features = ["diagnostics"]

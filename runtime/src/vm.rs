@@ -40,8 +40,18 @@ use crate::value::{Value, FALSE, NIL, TRUE};
 // --- opcodes ---------------------------------------------------------------
 
 pub mod op {
-    pub const NOP: u8 = 0x00;
     pub const CONST: u8 = 0x01; // u16
+    // 0x00, 0x10, 0x1D and 0x1F..0x22 ARE NOT REUSED.
+    //
+    // `nop`, `jump-if-true`, `list`, the two `*-keep` jumps, `pop-n` and
+    // `set-local-keep` were defined here and implemented in all three
+    // interpreters, and the compiler emitted NONE of them -- found by running
+    // the conformance suite under the opcode census (`doc/decisions/0038`).
+    // They are removed rather than ported, because maintaining three copies of
+    // unreachable code is worse than not having it.
+    //
+    // The numbers stay retired so that an image built before this cannot be
+    // silently misread as something else. A future opcode takes a new number.
     pub const NIL: u8 = 0x02;
     pub const TRUE: u8 = 0x03;
     pub const FALSE: u8 = 0x04;
@@ -56,7 +66,6 @@ pub mod op {
     pub const DUP: u8 = 0x0D;
     pub const JUMP: u8 = 0x0E; // i16
     pub const JUMP_IF_FALSE: u8 = 0x0F; // i16, pops
-    pub const JUMP_IF_TRUE: u8 = 0x10; // i16, pops
     pub const CALL: u8 = 0x11; // u8 argc
     pub const TAIL_CALL: u8 = 0x12; // u8 argc
     pub const RETURN: u8 = 0x13;
@@ -69,12 +78,7 @@ pub mod op {
     pub const VECTOR: u8 = 0x1A; // u16 n
     pub const MAP: u8 = 0x1B; // u16 n (pairs)
     pub const SET: u8 = 0x1C; // u16 n
-    pub const LIST: u8 = 0x1D; // u16 n
     pub const APPLY: u8 = 0x1E; // u8 argc, last is a seq
-    pub const JUMP_IF_FALSE_KEEP: u8 = 0x1F; // i16, does not pop when jumping
-    pub const JUMP_IF_TRUE_KEEP: u8 = 0x20; // i16
-    pub const POP_N: u8 = 0x21; // u8
-    pub const SET_LOCAL_KEEP: u8 = 0x22; // u8, leaves the value
     /// Push this frame's own closure, so a named `fn` can call itself without
     /// capturing itself (which it could not: it does not exist yet).
     pub const SELF: u8 = 0x23;
@@ -1039,7 +1043,6 @@ impl Rt {
             }
 
             match opcode {
-                op::NOP => {}
                 op::CONST => {
                     let k = self.u16_at(ip) as usize;
                     ip += 2;
@@ -1072,12 +1075,6 @@ impl Rt {
                     let v = self.vpop();
                     self.roots.stack[fp + i] = v;
                 }
-                op::SET_LOCAL_KEEP => {
-                    let i = self.u8_at(ip) as usize;
-                    ip += 1;
-                    let v = self.vpeek(0);
-                    self.roots.stack[fp + i] = v;
-                }
                 op::SELF => {
                     let c = self.cur_closure();
                     self.vpush(c);
@@ -1104,11 +1101,6 @@ impl Rt {
                 op::POP => {
                     self.roots.stack_top -= 1;
                 }
-                op::POP_N => {
-                    let n = self.u8_at(ip) as usize;
-                    ip += 1;
-                    self.roots.stack_top -= n;
-                }
                 op::DUP => {
                     let v = self.vpeek(0);
                     self.vpush(v);
@@ -1123,32 +1115,6 @@ impl Rt {
                     let v = self.vpop();
                     if !v.truthy() {
                         ip = (ip as i32 + off) as u32;
-                    }
-                }
-                op::JUMP_IF_TRUE => {
-                    let off = self.i16_at(ip) as i32;
-                    ip += 2;
-                    let v = self.vpop();
-                    if v.truthy() {
-                        ip = (ip as i32 + off) as u32;
-                    }
-                }
-                op::JUMP_IF_FALSE_KEEP => {
-                    let off = self.i16_at(ip) as i32;
-                    ip += 2;
-                    if !self.vpeek(0).truthy() {
-                        ip = (ip as i32 + off) as u32;
-                    } else {
-                        self.roots.stack_top -= 1;
-                    }
-                }
-                op::JUMP_IF_TRUE_KEEP => {
-                    let off = self.i16_at(ip) as i32;
-                    ip += 2;
-                    if self.vpeek(0).truthy() {
-                        ip = (ip as i32 + off) as u32;
-                    } else {
-                        self.roots.stack_top -= 1;
                     }
                 }
                 op::CALL => {
@@ -1462,24 +1428,6 @@ impl Rt {
                     self.pop_to(vi);
                     self.roots.stack_top = base;
                     self.vpush(v);
-                    continue;
-                }
-                op::LIST => {
-                    let n = self.u16_at(ip) as usize;
-                    ip += 2;
-                    commit!();
-                    let base = self.roots.stack_top - n;
-                    let mut acc = self.empty_list();
-                    let ai = self.push(acc);
-                    for i in (0..n).rev() {
-                        let x = self.roots.stack[base + i];
-                        let c = self.cons(x, self.r(ai));
-                        self.set_r(ai, c);
-                    }
-                    acc = self.r(ai);
-                    self.pop_to(ai);
-                    self.roots.stack_top = base;
-                    self.vpush(acc);
                     continue;
                 }
                 op::MAP => {

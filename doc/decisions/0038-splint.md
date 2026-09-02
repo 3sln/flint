@@ -394,6 +394,50 @@ The safe set is the 36 covered opcodes. The 7 dead ones are a deletion, not a
 port. And the census is the instrument to re-run after any port -- if coverage
 drops, something stopped being reachable.
 
+## What else is portable, measured
+
+Opcodes were the obvious target and are not the biggest one. Comparing the JVM
+and CLR mirrors file by file, counting non-comment lines:
+
+| file | jvm | clr | delta |
+| --- | --- | --- | --- |
+| `Maps` | 856 | 848 | 0% |
+| `Table` | 832 | 830 | 0% |
+| `Str` | 575 | 574 | 0% |
+| `Bytes` | 469 | 464 | 1% |
+| `Snap` | 449 | 456 | 1% |
+| `Vec` | 383 | 379 | 1% |
+| `Codec` | 309 | 312 | 0% |
+| `Seqs` | 230 | 229 | 0% |
+| `Eq` | 226 | 223 | 1% |
+| `Pike` | 222 | 220 | 0% |
+| `Interns` | 62 | 62 | 0% |
+
+For hand-mirrored code, line counts that agree to within a percent mean the
+structure agrees too. **That is roughly 4,500 lines per runtime** of logic over
+data structures — CHAMP maps, columnar tables, ropes, the wire codec, the regex
+simulator — against a few dozen lines of opcode bodies.
+
+The outliers are the small files where language structure dominates rather than
+logic: `Obj` 33%, `Frame` 36%, `Space` 18%, `Roots` 12%. Those are the ones to
+leave alone.
+
+**Rust is the third target and a harder one.** Its counterparts are consistently
+larger, and the difference is ownership: `Vec` is 1,013 lines against 383, `Gc`
+2,137 against 413. Some of that is genuinely different work and some is the
+temporaries the borrow checker requires — which splint can generate, as the
+`apply` and `type-p` ports showed, but it means the Rust rules carry more.
+
+So the order to attack it in is by RATIO, not by size:
+
+1. **`Codec`** — 309/312, self-contained, no allocation subtleties, and the wire
+   format is already specified elsewhere. The best first real port.
+2. **`Eq`, `Hash`, `Interns`, `Seqs`** — small, near-identical, pure.
+3. **`Maps`, `Table`, `Str`, `Bytes`** — the bulk, and worth it, but each is
+   large enough that a port wants its own review.
+4. **`Obj`, `Frame`, `Space`, `Roots`, `Gc`** — do not port. The divergence is
+   in what each language makes cheap, and the ratios say so.
+
 ## What it deliberately cannot do
 
 The divergent parts, and they should not be attempted: the GC write barrier,

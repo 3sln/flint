@@ -483,7 +483,6 @@ public sealed class Rt : System.IDisposable {
             steps++;
 
             switch (opcode) {
-                case Op.Nop: {} break;
                 case Op.Const: { VPush(consts[U16(ip)]); ip += 2; } break;
                 case Op.Nil: VPush(Val.Nil); break;
                 case Op.True: VPush(Val.True); break;
@@ -492,27 +491,14 @@ public sealed class Rt : System.IDisposable {
                 case Op.Local: { VPush(roots.Stack[fp + U8(ip)]); ip += 1; } break;
                 case Op.LocalW: { VPush(roots.Stack[fp + U16(ip)]); ip += 2; } break;
                 case Op.SetLocal: { roots.Stack[fp + U8(ip)] = VPop(); ip += 1; } break;
-                case Op.SetLocalKeep: { roots.Stack[fp + U8(ip)] = roots.Stack[roots.StackTop - 1]; ip += 1; } break;
                 case Op.Self: VPush(roots.Stack[f.RetTo]); break;
                 case Op.Var: { VPush(roots.shared.Globals[U16(ip)]); ip += 2; } break;
                 case Op.SetVar: { roots.shared.Globals[U16(ip)] = VPop(); ip += 2; } break;
                 case Op.Upval: { VPush(Slot(roots.Stack[f.RetTo], 1 + U8(ip))); ip += 1; } break;
                 case Op.Pop: roots.StackTop -= 1; break;
-                case Op.PopN: { roots.StackTop -= U8(ip); ip += 1; } break;
                 case Op.Dup: VPush(roots.Stack[roots.StackTop - 1]); break;
                 case Op.Jump: ip += 2 + I16(ip); break;
                 case Op.JumpIfFalse: { int off = I16(ip); ip += 2; if (!Val.Truthy(VPop())) ip += off; } break;
-                case Op.JumpIfTrue: { int off = I16(ip); ip += 2; if (Val.Truthy(VPop())) ip += off; } break;
-                case Op.JumpIfFalseKeep: {
-                    int off = I16(ip); ip += 2;
-                    if (!Val.Truthy(roots.Stack[roots.StackTop - 1])) ip += off; else roots.StackTop -= 1;
-                    break;
-                }
-                case Op.JumpIfTrueKeep: {
-                    int off = I16(ip); ip += 2;
-                    if (Val.Truthy(roots.Stack[roots.StackTop - 1])) ip += off; else roots.StackTop -= 1;
-                    break;
-                }
                 // The SPECIALISED integer operations. The compiler emits these
                 // only where it proved both operands are integers -- but
                 // `^int` means integer and not FIXNUM, so a bigint still
@@ -773,18 +759,6 @@ public sealed class Rt : System.IDisposable {
                     PopTo(bas);
                     roots.StackTop = at3;
                     VPush(sv);
-                } break;
-                case Op.List: {
-                    int nv = U16(ip); ip += 2;
-                    // The elements move to the shadow stack first: `Cons`
-                    // allocates, and the value stack is where they are now.
-                    int bas = Mark();
-                    int at4 = roots.StackTop - nv;
-                    for (int i = 0; i < nv; i++) Push(roots.Stack[at4 + i]);
-                    long lv = Seqs.FromRoots(this, bas, nv);
-                    PopTo(bas);
-                    roots.StackTop = at4;
-                    VPush(lv);
                 } break;
                 case Op.Throw:
                 case Op.Rethrow: {

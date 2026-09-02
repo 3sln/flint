@@ -26,24 +26,22 @@ public static class AotPlan {
 
     static AotPlan() {
         void D(int op, int nb) { OPERANDS[op] = nb; KNOWN[op] = true; }
-        D(Op.Nop,0); D(Op.Const,2); D(Op.Nil,0); D(Op.True,0); D(Op.False,0);
+        D(Op.Const,2); D(Op.Nil,0); D(Op.True,0); D(Op.False,0);
         D(Op.Int,2); D(Op.Local,1); D(Op.LocalW,2); D(Op.SetLocal,1); D(Op.Upval,1);
         D(Op.Var,2); D(Op.SetVar,2); D(Op.Pop,0); D(Op.Dup,0); D(Op.Jump,2);
-        D(Op.JumpIfFalse,2); D(Op.JumpIfTrue,2); D(Op.Call,1); D(Op.TailCall,1);
+        D(Op.JumpIfFalse,2); D(Op.Call,1); D(Op.TailCall,1);
         D(Op.Return,0); D(Op.Closure,3); D(Op.Native,3); D(Op.Throw,0); D(Op.Try,2);
         D(Op.PopHandler,0); D(Op.Rethrow,0); D(Op.Vector,2); D(Op.Map,2); D(Op.Set,2);
-        D(Op.List,2); D(Op.Apply,1); D(Op.JumpIfFalseKeep,2); D(Op.JumpIfTrueKeep,2);
-        D(Op.PopN,1); D(Op.SetLocalKeep,1); D(Op.Self,0);
+        D(Op.Apply,1); D(Op.Self,0);
         D(Op.AddInt,0); D(Op.SubInt,0); D(Op.MulInt,0); D(Op.LtInt,0);
         D(Op.LeInt,0); D(Op.GtInt,0); D(Op.GeInt,0); D(Op.EqInt,0); D(Op.TypeP,1);
 
-        foreach (int o in new[]{ Op.Jump, Op.JumpIfFalse, Op.JumpIfTrue,
-                                 Op.JumpIfFalseKeep, Op.JumpIfTrueKeep }) JUMPS[o] = true;
+        foreach (int o in new[]{ Op.Jump, Op.JumpIfFalse }) JUMPS[o] = true;
         foreach (int o in new[]{ Op.Call, Op.TailCall, Op.Apply }) CALLS[o] = true;
-        foreach (int o in new[]{ Op.Nop, Op.Const, Op.Nil, Op.True, Op.False, Op.Int,
-                Op.Local, Op.LocalW, Op.SetLocal, Op.SetLocalKeep, Op.Pop, Op.PopN,
+        foreach (int o in new[]{ Op.Const, Op.Nil, Op.True, Op.False, Op.Int,
+                Op.Local, Op.LocalW, Op.SetLocal, Op.Pop,
                 Op.Dup, Op.Var, Op.SetVar, Op.Self, Op.Upval, Op.Jump, Op.JumpIfFalse,
-                Op.JumpIfTrue, Op.JumpIfFalseKeep, Op.JumpIfTrueKeep, Op.Return,
+                Op.Return,
                 Op.Native, Op.AddInt, Op.SubInt, Op.MulInt, Op.LtInt, Op.LeInt,
                 Op.GtInt, Op.GeInt, Op.EqInt, Op.TypeP }) INLINED[o] = true;
     }
@@ -197,14 +195,12 @@ public static class AotPlan {
             case Op.Nil: case Op.True: case Op.False: case Op.Int: case Op.Const:
             case Op.Var: case Op.Local: case Op.LocalW: case Op.Self: case Op.Upval:
             case Op.Dup: return new int[]{ 1, 1 };
-            case Op.Nop: case Op.SetLocalKeep: case Op.TypeP: return new int[]{ 0, 0 };
+            case Op.TypeP: return new int[]{ 0, 0 };
             case Op.Pop: case Op.SetLocal: case Op.SetVar: case Op.Throw:
             case Op.Rethrow: case Op.Return: return new int[]{ -1, -1 };
-            case Op.PopN: return new int[]{ -i.b[0], -i.b[0] };
             case Op.Jump: return new int[]{ 0, 0 };
-            case Op.JumpIfFalse: case Op.JumpIfTrue: return new int[]{ -1, -1 };
+            case Op.JumpIfFalse: return new int[]{ -1, -1 };
             // The `keep` forms do not pop when they JUMP.
-            case Op.JumpIfFalseKeep: case Op.JumpIfTrueKeep: return new int[]{ -1, 0 };
             case Op.AddInt: case Op.SubInt: case Op.MulInt: case Op.LtInt:
             case Op.LeInt: case Op.GtInt: case Op.GeInt: case Op.EqInt:
                 return new int[]{ -1, -1 };
@@ -213,7 +209,7 @@ public static class AotPlan {
                 int n = i.b[0]; return new int[]{ -n, -n };
             }
             case Op.Closure: { int n = i.b[2]; return new int[]{ 1 - n, 1 - n }; }
-            case Op.Vector: case Op.List: case Op.Set: {
+            case Op.Vector: case Op.Set: {
                 int n = U16(i.b); return new int[]{ 1 - n, 1 - n };
             }
             case Op.Map: { int n = U16(i.b) * 2; return new int[]{ 1 - n, 1 - n }; }

@@ -8,12 +8,11 @@
 
 (def ^:private operands
   {:const [:u16] :int [:i16] :local [:u8] :local-w [:u16] :set-local [:u8]
-   :set-local-keep [:u8] :upval [:u8] :var [:u16] :set-var [:u16]
-   :jump [:i16] :jump-if-false [:i16] :jump-if-true [:i16]
-   :jump-if-false-keep [:i16] :jump-if-true-keep [:i16]
+   :upval [:u8] :var [:u16] :set-var [:u16]
+   :jump [:i16] :jump-if-false [:i16]
    :call [:u8] :tail-call [:u8] :closure [:u16 :u8] :native [:u16 :u8]
-   :try [:i16] :vector [:u16] :map [:u16] :set [:u16] :list [:u16]
-   :apply [:u8] :pop-n [:u8]})
+   :try [:i16] :vector [:u16] :map [:u16] :set [:u16]
+   :apply [:u8]})
 
 (defn- u8 [code i] (nth code i))
 (defn- u16 [code i] (+ (nth code i) (* 256 (nth code (inc i)))))
@@ -36,8 +35,7 @@
                   :u8 (recur (rest os) (inc at) (conj acc (u8 code at)) (inc w))
                   :u16 (recur (rest os) (+ at 2) (conj acc (u16 code at)) (+ w 2))
                   :i16 (recur (rest os) (+ at 2) (conj acc (i16 code at)) (+ w 2)))))
-            target (when (contains? #{:jump :jump-if-false :jump-if-true :try
-                                      :jump-if-false-keep :jump-if-true-keep} nm)
+            target (when (contains? #{:jump :jump-if-false :try} nm)
                      (+ i width (first args)))]
         (recur (+ i width)
                (conj out (str (format "%5d" i) "  " (name nm)

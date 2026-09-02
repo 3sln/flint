@@ -60,15 +60,17 @@
   "opcode -> [name operand-bytes]. The operand width is what a walk strides by,
   and a walk that mis-strides produces plausible nonsense rather than an error,
   so an unknown opcode refuses the whole arity instead."
-  {0x00 [:nop 0]      0x01 [:const 2]   0x02 [:nil 0]      0x03 [:true 0]
+  ;; 0x00, 0x10, 0x1D and 0x1F..0x22 are RETIRED and deliberately absent, so a
+  ;; walk that meets one refuses the arity rather than striding over something
+  ;; no compiler emits (`doc/decisions/0038`).
+  {0x01 [:const 2]    0x02 [:nil 0]      0x03 [:true 0]
    0x04 [:false 0]    0x05 [:int 2]     0x06 [:local 1]    0x07 [:local-w 2]
    0x08 [:set-local 1] 0x09 [:upval 1]  0x0A [:var 2]      0x0B [:set-var 2]
    0x0C [:pop 0]      0x0D [:dup 0]     0x0E [:jump 2]     0x0F [:jump-if-false 2]
-   0x10 [:jump-if-true 2] 0x11 [:call 1] 0x12 [:tail-call 1] 0x13 [:return 0]
+   0x11 [:call 1]     0x12 [:tail-call 1] 0x13 [:return 0]
    0x14 [:closure 3]  0x15 [:native 3]  0x16 [:throw 0]    0x17 [:try 2]
    0x18 [:pop-handler 0] 0x19 [:rethrow 0] 0x1A [:vector 2] 0x1B [:map 2]
-   0x1C [:set 2]      0x1D [:list 2]    0x1E [:apply 1]    0x1F [:jump-if-false-keep 2]
-   0x20 [:jump-if-true-keep 2] 0x21 [:pop-n 1] 0x22 [:set-local-keep 1] 0x23 [:self 0]
+   0x1C [:set 2]      0x1E [:apply 1]   0x23 [:self 0]
    ;; The type-specialised operations. Registered here BEFORE the emitter
    ;; inlines them, so a walk strides correctly over code that contains them
    ;; and each one bails to the interpreter for its single instruction. That is
@@ -82,7 +84,7 @@
    ;; the arithmetic above it fires on code nobody annotated.
    0x2C [:type-p 1]})
 
-(def JUMPS #{:jump :jump-if-false :jump-if-true :jump-if-false-keep :jump-if-true-keep})
+(def JUMPS #{:jump :jump-if-false})
 
 (def CALLS
   "Instructions that can leave compiled code. `:call` often does NOT -- a callee
@@ -93,9 +95,9 @@
 (def INLINED
   "Emitted as wasm. 0013's opcode histogram says these are 98.7% of executed
   instructions, and the rest go back to the interpreter one at a time."
-  #{:nop :const :nil :true :false :int :local :local-w :set-local :set-local-keep
-    :pop :pop-n :dup :var :set-var :self :upval :jump :jump-if-false :jump-if-true
-    :jump-if-false-keep :jump-if-true-keep :return :native
+  #{:const :nil :true :false :int :local :local-w :set-local
+    :pop :dup :var :set-var :self :upval :jump :jump-if-false
+    :return :native
     :add-int :sub-int :mul-int :lt-int :le-int :gt-int :ge-int :eq-int
     :type-p})
 
@@ -302,11 +304,9 @@
   [{:keys [op b]}]
   (case op
     (:const :nil :true :false :int :local :local-w :upval :var :self :dup) [1 1]
-    (:set-local :set-var :pop :throw :jump-if-false :jump-if-true) [-1 -1]
-    (:jump-if-false-keep :jump-if-true-keep) [-1 0]
-    (:nop :jump :set-local-keep :try :pop-handler :return :tail-call) [0 0]
+    (:set-local :set-var :pop :throw :jump-if-false) [-1 -1]
+    (:jump :try :pop-handler :return :tail-call) [0 0]
     :rethrow [1 1]
-    :pop-n [(- (nth b 0)) (- (nth b 0))]
     :call [(- (nth b 0)) (- (nth b 0))]
     :apply [(- (nth b 0)) (- (nth b 0))]
     :native [(- 1 (nth b 2)) (- 1 (nth b 2))]
@@ -548,7 +548,6 @@
         to-if (fn [t] (br-to-if ctx (chunk-of t) ip))
         tgt (jump-target ins)]
     (case k
-      :nop []
       :nil (push-from (i64c V-NIL))
       :true (push-from (i64c V-TRUE))
       :false (push-from (i64c V-FALSE))
@@ -565,20 +564,11 @@
       :upval (push-from [(lget HEAP) (lget RETB) (i64ld 0) (op :i32-wrap-i64)
                          (op :i32-add) (i64ld (+ 8 (* 8 (inc (nth b 0)))))])
       :set-local [(lget FPB) (pop-to-t) (lget T) (i64st (* 8 (nth b 0)))]
-      :set-local-keep [(lget FPB) (peek-to-t) (lget T) (i64st (* 8 (nth b 0)))]
       :set-var [(lget GLOBALS) (pop-to-t) (lget T) (i64st (* 8 (u16 b)))]
       :pop [(lget TOPB) (i32c 8) (op :i32-sub) (lset TOPB)]
-      :pop-n [(lget TOPB) (i32c (* 8 (nth b 0))) (op :i32-sub) (lset TOPB)]
       :dup (push-from [(lget TOPB) (i32c 8) (op :i32-sub) (i64ld 0)])
       :jump (to tgt)
       :jump-if-false [(pop-to-t) (falsy) (to-if tgt)]
-      :jump-if-true [(pop-to-t) (truthy) (to-if tgt)]
-      ;; The `keep` forms do not pop when they jump, so the pop belongs on the
-      ;; fallthrough only -- which is also why `max-depth` is a dataflow.
-      :jump-if-false-keep [(peek-to-t) (falsy) (to-if tgt)
-                           (lget TOPB) (i32c 8) (op :i32-sub) (lset TOPB)]
-      :jump-if-true-keep [(peek-to-t) (truthy) (to-if tgt)
-                          (lget TOPB) (i32c 8) (op :i32-sub) (lset TOPB)]
       :return [(lget RT) (top-index) (lget GAS) (call-fn helpers :return) (op :return)]
       :call (let [nx (+ ip len) j (chunk-of nx)]
               [(lget RT) (i32c (nth b 0)) (top-index) (i32c ip) (i32c (:i ctx))

@@ -13,16 +13,26 @@
             [flint.types :as ty]))
 
 (def op
-  {:nop 0x00 :const 0x01 :nil 0x02 :true 0x03 :false 0x04 :int 0x05
+  ;; 0x00, 0x10, 0x1D and 0x1F..0x22 ARE RETIRED, NOT FREE.
+  ;;
+  ;; `nop`, `jump-if-true`, `list`, the two `*-keep` jumps, `pop-n` and
+  ;; `set-local-keep` were in this table and implemented in all three
+  ;; interpreters, and nothing here ever emitted one -- found by running the
+  ;; conformance suite under the opcode census (`doc/decisions/0038`). An
+  ;; optimisation implemented before anything uses it is three copies of dead
+  ;; code, so they are gone.
+  ;;
+  ;; The numbers are not reused, so an image built before this cannot be
+  ;; silently misread as something else. A future opcode takes a new number.
+  {:const 0x01 :nil 0x02 :true 0x03 :false 0x04 :int 0x05
    :local 0x06 :local-w 0x07 :set-local 0x08 :upval 0x09
    :var 0x0A :set-var 0x0B :pop 0x0C :dup 0x0D
-   :jump 0x0E :jump-if-false 0x0F :jump-if-true 0x10
+   :jump 0x0E :jump-if-false 0x0F
    :call 0x11 :tail-call 0x12 :return 0x13
    :closure 0x14 :native 0x15 :throw 0x16
    :try 0x17 :pop-handler 0x18 :rethrow 0x19
-   :vector 0x1A :map 0x1B :set 0x1C :list 0x1D :apply 0x1E
-   :jump-if-false-keep 0x1F :jump-if-true-keep 0x20
-   :pop-n 0x21 :set-local-keep 0x22 :self 0x23
+   :vector 0x1A :map 0x1B :set 0x1C :apply 0x1E
+   :self 0x23
    ;; --- specialised on type ------------------------------------------------
    ;;
    ;; Emitted where the analyzer PROVED both operands are integers -- from an
