@@ -69,6 +69,18 @@
       (doseq [f body] (walk f)))
     @found))
 
+(def ^:private places
+  "Forms that render to a PLACE -- a field, an index -- rather than to a call.
+
+  They do not borrow, so nesting one inside a call is not what `rustc` refuses,
+  and hoisting it produces a temporary a person would not write. Found by the
+  \"generated code may not be worse\" rule while porting `type-p`: `(top)` reads
+  like a call in the source and is `roots.stack[roots.stack_top - 1]` in every
+  target."
+  '#{top})
+
+(defn- first-sym [f] (when (seq? f) (first f)))
+
 (defn- nested-call?
   "Does `form` contain a call INSIDE a call?
 
@@ -83,7 +95,10 @@
   hand-written original. So an argument is hoisted only when it is itself a
   call WITH a call inside it."
   [form]
-  (and (seq? form) (some seq? (rest form)) true))
+  (and (seq? form)
+       (not (contains? places (first form)))
+       (some (fn [a] (and (seq? a) (not (contains? places (first a))))) (rest form))
+       true))
 
 (defn- hoist!
   "Bind `code` to a temporary named after the call, and return the name.
@@ -133,7 +148,7 @@
         pairs (partition 2 bindings)]
     (doseq [[nm init] pairs]
       (let [tag (:tag (meta nm))
-            ty (get-in (if (= 'Usize tag) Usize Val) [:types (t ctx)])
+            ty (get-in (or (sp/splint-tag ctx tag) Val) [:types (t ctx)])
             code (strip-parens (sp/splint-render ctx init))]
         (sp/splint-emit!
          ctx (sp/indent-of ctx)
@@ -154,8 +169,42 @@
              (= 3 (count value)))
       (sp/splint-emit! ctx (sp/indent-of ctx) p " += "
                        (sp/splint-render ctx (nth value 2)) ";\n")
-      (sp/splint-emit! ctx (sp/indent-of ctx) p " = "
-                       (strip-parens (sp/splint-render ctx value)) ";\n"))))
+      (let [code (strip-parens (sp/splint-render ctx value))
+            ;; ASSIGNMENT TO A PLACE IS ITSELF A BORROW SITE in Rust:
+            ;;
+            ;;   self.roots.stack[i] = Value::boolean(self.type_p(c, ...))
+            ;;   E0502: cannot borrow `self.roots` as immutable because it is
+            ;;          also borrowed as mutable
+            ;;
+            ;; So the right-hand side is bound first when the left is a place
+            ;; and the right is a call. Java and C# accept the nested form, and
+            ;; this is why the Rust runtime writes `type-p` with a pop and a
+            ;; push where the other two write in place -- that divergence is
+            ;; FORCED by the language rather than drift, which is worth knowing
+            ;; before trying to make three runtimes say the same thing.
+            rust-place? (and (= :rust (t ctx)) (contains? places (first-sym place)))
+            code (if (and rust-place? (seq? value)
+                          (not (contains? places (first-sym value))))
+                   (hoist! ctx (first value) code)
+                   code)]
+        (if rust-place?
+          ;; AND THE INDEX TOO. `self.roots.stack[self.roots.stack_top - 1] = v`
+          ;; is still E0502 -- the index expression borrows `self.roots`
+          ;; immutably while the assignment borrows it mutably. So Rust needs
+          ;; the index in a local as well.
+          ;;
+          ;; This is why the Rust runtime writes `type-p` with a pop and a push
+          ;; while the JVM and CLR write in place: `vpop`/`vpush` are methods
+          ;; that hide exactly this. The divergence is FORCED, not drift, and a
+          ;; port that tried to make all three say the same thing would have
+          ;; made Rust worse.
+          (let [n (swap! (:tmp ctx) inc)
+                idx (str "at_" n)]
+            (sp/splint-emit! ctx (sp/indent-of ctx)
+                             "let " idx " = self.roots.stack_top - 1;\n")
+            (sp/splint-emit! ctx (sp/indent-of ctx)
+                             "self.roots.stack[" idx "] = " code ";\n"))
+          (sp/splint-emit! ctx (sp/indent-of ctx) p " = " code ";\n"))))))
 
 (defn- if-form [ctx form]
   ;; THE SAME `if` IN BOTH POSITIONS, and the three targets differ.
@@ -202,6 +251,34 @@
     (sp/splint-render probe form)
     (pos? (deref (:tmp probe)))))
 
+(defn- defop-form
+  "An opcode arm, framing and all.
+
+  The FRAMING is where the three runtimes differ without differing in meaning:
+  Rust matches `op::X => { .. }` and commits `ip` through a macro, Java uses an
+  arrow case, C# needs a `break`. That is exactly the kind of thing a target
+  should own, and putting it here means an opcode body never mentions it."
+  [ctx form]
+  (let [[_ nm & body] form
+        rust-name (str/upper-case (str/replace (str nm) "-" "_"))
+        pascal (str/join (mapv str/capitalize (str/split (str nm) #"-")))]
+    (case (t ctx)
+      :rust (sp/splint-emit! ctx (sp/indent-of ctx) "op::" rust-name " => {\n")
+      :java (sp/splint-emit! ctx (sp/indent-of ctx) "case Op." rust-name " -> {\n")
+      :csharp (sp/splint-emit! ctx (sp/indent-of ctx) "case Op." pascal ": {\n"))
+    (sp/splint-scoped ctx {:key :opcode :value nm :indent 1}
+                      (fn [inner] (doseq [f body] (sp/splint-statement! inner f))))
+    (sp/splint-emit! ctx (sp/indent-of ctx)
+                     (if (= :csharp (t ctx)) "} break;\n" "}\n"))))
+
+(defn- advance-form
+  "Advance the instruction pointer, and commit it where the target needs to."
+  [ctx form]
+  (let [n (sp/splint-render ctx (second form))]
+    (case (t ctx)
+      :rust (sp/splint-emit! ctx (sp/indent-of ctx) "ip += " n ";\n")
+      (sp/splint-emit! ctx (sp/indent-of ctx) "ip += " n ";\n"))))
+
 (defn- while-form [ctx form]
   ;; THE TEST GOES INSIDE. A loop test is evaluated every iteration, so it
   ;; cannot be hoisted out -- lifting it produced a temporary bound once,
@@ -241,8 +318,8 @@
   in the translator."
   [ctx form]
   (let [[_ target-form m & args] form
-        tag (or (:tag (meta target-form)) 'Val)
-        tag-val (if (= 'Usize tag) Usize Val)
+        tag (:tag (meta target-form))
+        tag-val (or (sp/splint-tag ctx tag) Val)
         tmpl (get-in tag-val [:methods m (t ctx)])]
     (when-not tmpl
       (throw (ex-info (str "splint: the tag " (:name tag-val) " has no " m
@@ -250,12 +327,17 @@
                       {:tag (:name tag-val) :method m :target (t ctx)})))
     (sp/splint-emit! ctx (fmt tmpl (render-args ctx (cons target-form args))))))
 
+(def tags-for
+  "The tags this vocabulary exports. Named so `:refer` can find them."
+  {'Usize Usize 'Val Val})
+
 (defn forms-for
   "Every form, for every target. One map because a form's three implementations
   belong beside each other -- that is what makes a divergence visible."
   []
   (merge
    {'let let-form 'set set-form 'if if-form 'while while-form 'invoke invoke-form
+    'defop defop-form 'advance advance-form
     'do (fn [ctx form] (doseq [f (rest form)] (sp/splint-statement! ctx f)))
     'break (fn [ctx _] (sp/splint-emit! ctx (sp/indent-of ctx) "break;\n"))}
    (reduce (fn [m s] (assoc m s (op-form s))) {} (keys ops))
@@ -269,6 +351,15 @@
     'next    (call {:rust "self.next({0})" :java "Seqs.next(this, {0})" :csharp "Seqs.Next(this, {0})"})
     ;; THE CAST LIVES HERE. `charge_tick` takes u64, the caller counts in
     ;; usize, and both other targets use `long` for both.
+    'u8-at   (call {:rust "self.u8_at(ip)" :java "u8(ip)" :csharp "U8(ip)"})
+    ;; The top of the value stack, as a PLACE -- assignable, which is what lets
+    ;; `type-p` rewrite in situ instead of popping and pushing.
+    'top     (call {:rust "self.roots.stack[self.roots.stack_top - 1]"
+                    :java "roots.stack[roots.stackTop - 1]"
+                    :csharp "roots.Stack[roots.StackTop - 1]"})
+    'type-p  (call {:rust "self.type_p({0}, {1})"
+                    :java "typeP({0}, {1})" :csharp "TypeP({0}, {1})"})
+    'bool    (call {:rust "Value::boolean({0})" :java "Val.bool({0})" :csharp "Val.Bool({0})"})
     'charge  (call {:rust "self.charge_tick({0} as u64, {1}, {2})"
                     :java "chargeTick({0}, {1}, {2})"
                     :csharp "ChargeTick({0}, {1}, {2})"})}))

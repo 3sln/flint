@@ -134,10 +134,79 @@
 
 (declare dispatch literal)
 
+(defn require-scope
+  "The symbol table a source's `ns` form asks for.
+
+  `{written-symbol -> [vocabulary-name simple-symbol]}`, honouring both halves
+  of a require:
+
+      (:require [flint.impl.vm :as vm :refer [let set if]])
+
+  gives `let` (referred, unqualified) and `vm/let` (through the alias) and
+  `flint.impl.vm/let` (fully qualified), and gives NOTHING else -- a form that
+  was not referred is not in scope unqualified, exactly as in Clojure.
+
+  This matters for the same reason it matters in Clojure: two vocabularies can
+  both define `let`, and which one a file means has to be a fact about the file
+  rather than about the order somebody merged two maps."
+  [ns-form vocabs]
+  (let [reqs (->> (rest ns-form)
+                  (filter (fn [f] (and (seq? f) (= :require (first f)))))
+                  (mapcat rest))]
+    (reduce
+     (fn [scope spec]
+       (let [spec (if (vector? spec) spec [spec])
+             vname (first spec)
+             opts (apply hash-map (rest spec))
+             alias (:as opts)
+             referred (:refer opts)
+             vocab (get vocabs vname)]
+         (when-not vocab
+           (throw (ex-info (str "splint: no vocabulary " vname)
+                           {:required vname :known (vec (keys vocabs))})))
+         ;; FORMS AND TAGS ALIKE. A tag is referred and aliased exactly as a
+         ;; form is -- `^Usize` has to mean whichever vocabulary's `Usize` this
+         ;; file asked for, for the same reason `let` does.
+         (let [names (concat (keys (:forms vocab)) (keys (:tags vocab)))]
+           (as-> scope sc
+             ;; Fully qualified always works.
+             (reduce (fn [m k] (assoc m (symbol (str vname) (str k)) [vname k])) sc names)
+             ;; The alias, when one was asked for.
+             (if alias
+               (reduce (fn [m k] (assoc m (symbol (str alias) (str k)) [vname k])) sc names)
+               sc)
+             ;; And only what was REFERRED, unqualified.
+             (reduce (fn [m k]
+                       (when-not (or (contains? (:forms vocab) k)
+                                     (contains? (:tags vocab) k))
+                         (throw (ex-info (str "splint: " vname " has no " k " to refer")
+                                         {:vocabulary vname :symbol k})))
+                       (assoc m k [vname k]))
+                     sc (or referred []))))))
+     {} reqs)))
+
+(defn splint-tag
+  "The TAG value a symbol names, resolved through the file's require scope.
+
+  Tags are namespaced like everything else, so `^Usize` means the `Usize` this
+  file asked for and not whichever one happened to be merged last."
+  [ctx sym]
+  (when sym
+    (if-let [scope (:scope-syms ctx)]
+      (when-let [[vname k] (get scope sym)]
+        (get-in ctx [:vocabs vname :tags k]))
+      (get-in ctx [:tags sym]))))
+
 (defn- form-fn
-  "The implementation of `head` for this context's target, or nil."
+  "The implementation of `head` for this context's target, or nil.
+
+  Resolved through the source's require scope when there is one, so a name
+  means what the file said it means."
   [ctx head]
-  (get-in ctx [:vocab head]))
+  (if-let [scope (:scope-syms ctx)]
+    (when-let [[vname k] (get scope head)]
+      (get-in ctx [:vocabs vname :forms k]))
+    (get-in ctx [:vocab head])))
 
 (defn splint-render
   "Run `form` into a STRING rather than into the current sink.
@@ -193,12 +262,23 @@
   (splint-in ctx :statement form))
 
 (defn dispatch
-  "One form. A seq whose head the vocabulary knows goes to its implementation;
-  anything else is a literal."
+  "One form. A seq whose head is in scope goes to its implementation.
+
+  A seq whose head is a symbol NOT in scope is an error rather than a literal.
+  Falling through would emit the symbol's name and produce something that looks
+  like a call and is not one -- which is the failure mode a require scope exists
+  to prevent."
   [ctx form]
-  (if (and (seq? form) (symbol? (first form)) (form-fn ctx (first form)))
-    ((form-fn ctx (first form)) ctx form)
-    (splint-emit! ctx (literal ctx form))))
+  (cond
+    (and (seq? form) (symbol? (first form)))
+    (if-let [f (form-fn ctx (first form))]
+      (f ctx form)
+      (throw (ex-info (str "splint: " (first form) " is not in scope"
+                           (when (:scope-syms ctx)
+                             (str " -- this file requires "
+                                  (pr-str (vec (sort (map str (keys (:scope-syms ctx))))))))) 
+                      {:symbol (first form)})))
+    :else (splint-emit! ctx (literal ctx form))))
 
 (defn literal
   "A non-form: a symbol, a number, a string, a boolean."

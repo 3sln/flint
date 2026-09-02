@@ -1,0 +1,16 @@
+;; The `type-p` opcode: read a type code, test the value on top of the stack,
+;; and replace it with the answer.
+;;
+;; Written in the IN-PLACE shape the JVM and CLR already use. The Rust runtime
+;; pops and pushes to do the same thing, which is a slower way to write it --
+;; so this is a case where regenerating changes one runtime for the better
+;; rather than reproducing what is there.
+(ns runtime.typep
+  (:require [flint.impl.vm :refer [defop advance let set
+                                   Usize Val
+                                   u8-at top type-p bool]]))
+
+(defop type-p
+  (let [^Usize c (u8-at)]
+    (advance 1)
+    (set (top) (bool (type-p c (top))))))

@@ -189,6 +189,104 @@ hand-written code modulo whitespace.
 without an edit — asserted by the build rather than claimed here, since the
 snippet sits in the file under `#[cfg(test)]`.
 
+## Namespacing, because two vocabularies can both define `let`
+
+A source's `ns` form is honoured for real:
+
+```clojure
+(ns runtime.spread
+  (:require [flint.impl.vm :as vm
+             :refer [let set if while do break invoke not + Usize Val
+                     r set-r vpush pop-to seq first next charge]]))
+```
+
+`let` (referred), `vm/let` (aliased) and `flint.impl.vm/let` (qualified) all
+resolve; anything NOT referred is not in scope unqualified, exactly as in
+Clojure — `(seq 1)` in a file that referred only `vpush` is refused by name and
+told what the file did ask for. **Tags are namespaced the same way**, so
+`^Usize` means the one this file required.
+
+A head symbol that is not in scope is an ERROR rather than a literal. Falling
+through would emit the symbol's name and produce something that looks like a
+call and is not one.
+
+The library is plain `.cljc` with no reader conditionals and runs under
+babashka, which is what it has to do to bootstrap.
+
+## Porting real opcodes, and the holes it surfaced
+
+This is the measurement the spike needed, and it changed the picture.
+
+**The three runtimes are not verbatim mirrors at the statement level.** They are
+behaviourally equivalent with locally different implementations, and the
+differences are not all drift:
+
+| | |
+| --- | --- |
+| `TYPE_P` | Rust pops and pushes; the JVM and CLR rewrite the top slot IN PLACE |
+| `LIST` | Rust conses backwards off the value stack; the JVM pushes to the shadow stack and calls `Seqs.fromRoots` — a **different algorithm**, not a different spelling |
+
+So a port is not "translate what is there". It is "pick one shape and regenerate
+all three", and the generated code will then differ from what at least two
+runtimes currently contain — which means the not-worse rule has to be judged
+against the BEST of the three rather than against each.
+
+### The `TYPE_P` divergence is forced, not drift
+
+Written in the JVM's in-place shape, Rust refuses it twice over:
+
+```text
+self.roots.stack[i] = Value::boolean(self.type_p(c, self.roots.stack[i]))
+E0502: cannot borrow `self.roots` as immutable because it is also
+       borrowed as mutable
+```
+
+— once for the call on the right, and **again for the index expression**, which
+borrows `self.roots` immutably while the assignment borrows it mutably. So Rust
+needs the value AND the index in locals. `vpop`/`vpush` are methods that hide
+exactly that, which is why the Rust runtime is written the way it is.
+
+**That is worth more than the port itself.** A reasonable person looking at
+those three files would call it drift and "fix" it, and would make Rust worse.
+splint can express the divergence, because a form is a function per target.
+
+### Holes found, all four closed
+
+Each was found by the compiler refusing something or by the not-worse rule, not
+by reading:
+
+1. **A place is not a call.** `(top)` renders to `roots.stack[...]`, an index,
+   which does not borrow — so hoisting it produced a temporary a person would
+   not write.
+2. **Assignment to a place is a borrow site** (above).
+3. **The index of a place is a borrow site too** (above).
+4. **Opcode framing is a target's business.** `op::X => {}`, `case Op.X -> {}`
+   and `case Op.X: {} break;` differ in mechanism and not in meaning, so
+   `defop` owns it and an opcode body never mentions it.
+
+Generated `TYPE_P`, all three, from one source:
+
+```rust
+op::TYPE_P => {
+    let c: usize = self.u8_at(ip);
+    ip += 1;
+    let bool_1 = Value::boolean(self.type_p(c, self.roots.stack[self.roots.stack_top - 1]));
+    let at_2 = self.roots.stack_top - 1;
+    self.roots.stack[at_2] = bool_1;
+}
+```
+
+```java
+case Op.TYPE_P -> {
+    int c = u8(ip);
+    ip += 1;
+    roots.stack[roots.stackTop - 1] = Val.bool(typeP(c, roots.stack[roots.stackTop - 1]));
+}
+```
+
+The Java and C# output is what is in the tree, modulo one line break. The Rust
+is not — it is the in-place shape, which the tree does not use, and it compiles.
+
 ## What it deliberately cannot do
 
 The divergent parts, and they should not be attempted: the GC write barrier,

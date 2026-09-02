@@ -1,4 +1,8 @@
 ;; The same `if`, in both positions. One source.
+(ns runtime.position
+  (:require [flint.impl.vm :refer [let if do break invoke
+                                   Val r vpush pop-to first next]]))
+
 (let [^Val picked (if (invoke ^Val (r si) nil?) (first (r si)) (next (r si)))]
   (vpush picked)
   (if (invoke ^Val picked nil?)
