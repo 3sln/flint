@@ -23,12 +23,26 @@ sed -n '/==== csharp/,$p'           "$work/gen.txt" | sed '1d'    > "$work/gen.c
 # one and the harness stays the same.
 drv="${src%.splint}.drivers"
 [ -f "$drv" ] || { echo "splint/verify: no drivers file at $drv"; exit 2; }
-sed -n '/^--rust$/,/^--java$/p' "$drv" | sed '1d;$d' >> "$work/gen.rs"
+
+# A named section of the drivers file: everything after `--name` up to the
+# next line that starts with `--`. A `-head` section is emitted BEFORE the
+# generated code, which is how a source whose functions need a receiver or a
+# type to exist gets one -- `impl Rt {` has to open before the methods and
+# close after them.
+section() {
+  awk -v want="--$1" '
+    /^--/ { on = ($0 == want); next }
+    on { print }
+  ' "$drv"
+}
+
+{ section rust-head; cat "$work/gen.rs"; section rust; } > "$work/probe.rs"
+mv "$work/probe.rs" "$work/gen.rs"
 { echo 'import java.io.ByteArrayOutputStream; import java.nio.charset.StandardCharsets;'
-  echo 'public class Probe {'; cat "$work/gen.java"
-  sed -n '/^--java$/,/^--csharp$/p' "$drv" | sed '1d;$d'; echo '}'; } > "$work/Probe.java"
+  echo 'public class Probe {'; section java-head; cat "$work/gen.java"
+  section java; echo '}'; } > "$work/Probe.java"
 { echo 'using System; using System.IO; using System.Text; using System.Numerics;'; echo 'class Probe {'
-  cat "$work/gen.cs"; sed -n '/^--csharp$/,$p' "$drv" | sed '1d'; echo '}'; } > "$work/Program.cs"
+  section csharp-head; cat "$work/gen.cs"; section csharp; echo '}'; } > "$work/Program.cs"
 
 rustc -O -o "$work/probe.rust" "$work/gen.rs" 2>&1 | head -20
 r_out=$("$work/probe.rust")

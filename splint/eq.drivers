@@ -1,0 +1,72 @@
+--rust-head
+#[derive(Clone, Copy)]
+struct Value(u64);
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 0x100 }
+    fn as_heap(self) -> u32 { (self.0 & 0xff) as u32 }
+}
+struct Sp;
+struct Gc { sp: Sp }
+struct Rt { gc: Gc }
+fn ty(_sp: &Sp, h: u32) -> u32 { h }
+const TY_CONS: u32 = 1; const TY_EMPTY_LIST: u32 = 2; const TY_LAZYSEQ: u32 = 3;
+const TY_VECSEQ: u32 = 4; const TY_STRSEQ: u32 = 5; const TY_RANGE: u32 = 6;
+const TY_VEC: u32 = 7; const TY_MAPENTRY: u32 = 8; const TY_ARRAYMAP: u32 = 9;
+const TY_HASHMAP: u32 = 10; const TY_TABLEREF: u32 = 11; const TY_SET: u32 = 12;
+const CAT_SCALAR: u8 = 0; const CAT_SEQUENTIAL: u8 = 1;
+const CAT_MAP: u8 = 2; const CAT_SET: u8 = 3;
+impl Rt {
+--rust
+}
+fn main() {
+    let rt = Rt { gc: Gc { sp: Sp } };
+    let mut o = String::new();
+    o.push_str(&format!("{} ", rt.category(Value(7))));
+    for h in 1..=13u64 { o.push_str(&format!("{}", rt.category(Value(0x100 | h)))); }
+    println!("{}", o);
+}
+--java-head
+    static final class Val {
+        static boolean isHeap(long v) { return v >= 0x100; }
+        static int asHeap(long v) { return (int)(v & 0xff); }
+    }
+    static final class Obj { static final int TY_TABLEREF = 11; }
+    static final class Sp {}
+    static final class Gc { final Sp sp = new Sp(); }
+    static final class Rt { final Gc gc = new Gc(); }
+    static int ty(Sp sp, int h) { return h; }
+    static final int TY_CONS = 1, TY_EMPTY_LIST = 2, TY_LAZYSEQ = 3, TY_VECSEQ = 4,
+        TY_STRSEQ = 5, TY_RANGE = 6, TY_VEC = 7, TY_MAPENTRY = 8, TY_ARRAYMAP = 9,
+        TY_HASHMAP = 10, TY_TABLEREF = 11, TY_SET = 12;
+    static final int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1, CAT_MAP = 2, CAT_SET = 3;
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        o.append(category(rt, 7)).append(' ');
+        for (long h = 1; h <= 13; h++) o.append(category(rt, 0x100 | h));
+        System.out.println(o);
+    }
+--csharp-head
+    static class Val {
+        internal static bool IsHeap(long v) { return v >= 0x100; }
+        internal static int AsHeap(long v) { return (int)(v & 0xff); }
+    }
+    internal sealed class Sp {}
+    internal sealed class Gc { internal readonly Sp sp = new Sp(); }
+    internal sealed class Rt { internal readonly Gc gc = new Gc(); }
+    static class Obj {
+        internal const int TyCons = 1, TyEmptyList = 2, TyLazyseq = 3, TyVecseq = 4,
+            TyStrseq = 5, TyRange = 6, TyVec = 7, TyMapentry = 8, TyArraymap = 9,
+            TyHashmap = 10, TyTableref = 11, TySet = 12;
+        internal static int Ty(Sp sp, int h) { return h; }
+    }
+    const int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1, CAT_MAP = 2, CAT_SET = 3;
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        var o = new StringBuilder();
+        o.Append(Category(rt, 7)).Append(' ');
+        for (long h = 1; h <= 13; h++) o.Append(Category(rt, 0x100 | h));
+        Console.WriteLine(o.ToString());
+    }

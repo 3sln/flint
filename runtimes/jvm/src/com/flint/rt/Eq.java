@@ -19,8 +19,11 @@ public final class Eq {
     /// elementwise, which is what makes `(= [1 2] '(1 2))` true.
     public static final int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1, CAT_MAP = 2, CAT_SET = 3;
 
+    // splint:begin splint/eq.splint
     public static int category(Rt rt, long v) {
-        if (!Val.isHeap(v)) return CAT_SCALAR;
+        if (!Val.isHeap(v)) {
+            return CAT_SCALAR;
+        }
         switch (ty(rt.gc.sp, Val.asHeap(v))) {
             case TY_CONS: case TY_EMPTY_LIST: case TY_LAZYSEQ: case TY_VECSEQ:
             case TY_STRSEQ: case TY_RANGE: case TY_VEC: case TY_MAPENTRY:
@@ -28,11 +31,16 @@ public final class Eq {
             // A ROW REF is in the MAP category: it is `=` to a map with the
             // same entries, and `category` is what decides that
             // (`doc/decisions/0026`).
-            case TY_ARRAYMAP: case TY_HASHMAP: case Obj.TY_TABLEREF: return CAT_MAP;
-            case TY_SET: return CAT_SET;
-            default: return CAT_SCALAR;
+            case TY_ARRAYMAP: case TY_HASHMAP: case TY_TABLEREF:
+                return CAT_MAP;
+            case TY_SET:
+                return CAT_SET;
+            default:
+                return CAT_SCALAR;
         }
     }
+
+    // splint:end splint/eq.splint
 
     public static boolean eq(Rt rt, long a, long b) {
         // Doubles FIRST: bit equality would wrongly make NaN equal to itself,

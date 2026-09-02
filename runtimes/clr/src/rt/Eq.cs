@@ -22,19 +22,28 @@ public static class Eq {
     /// elementwise, which is what makes `(= [1 2] '(1 2))` true.
     public const int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1, CAT_MAP = 2, CAT_SET = 3;
 
+    // splint:begin splint/eq.splint
     public static int Category(Rt rt, long v) {
-        if (!Val.IsHeap(v)) return CAT_SCALAR;
+        if (!Val.IsHeap(v)) {
+            return CAT_SCALAR;
+        }
         switch (Obj.Ty(rt.gc.sp, Val.AsHeap(v))) {
             case Obj.TyCons: case Obj.TyEmptyList: case Obj.TyLazyseq: case Obj.TyVecseq:
             case Obj.TyStrseq: case Obj.TyRange: case Obj.TyVec: case Obj.TyMapentry:
                 return CAT_SEQUENTIAL;
             // A ROW REF is in the MAP category: it is `=` to a map with the
-            // same entries (`doc/decisions/0026`).
-            case Obj.TyArraymap: case Obj.TyHashmap: case Obj.TyTableref: return CAT_MAP;
-            case Obj.TySet: return CAT_SET;
-            default: return CAT_SCALAR;
+            // same entries, and `category` is what decides that
+            // (`doc/decisions/0026`).
+            case Obj.TyArraymap: case Obj.TyHashmap: case Obj.TyTableref:
+                return CAT_MAP;
+            case Obj.TySet:
+                return CAT_SET;
+            default:
+                return CAT_SCALAR;
         }
     }
+
+    // splint:end splint/eq.splint
 
     public static bool Equal(Rt rt, long a, long b) {
         // Doubles FIRST: bit equality would wrongly make NaN equal to itself,

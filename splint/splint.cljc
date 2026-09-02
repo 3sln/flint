@@ -167,7 +167,8 @@
          ;; FORMS AND TAGS ALIKE. A tag is referred and aliased exactly as a
          ;; form is -- `^Usize` has to mean whichever vocabulary's `Usize` this
          ;; file asked for, for the same reason `let` does.
-         (let [names (concat (keys (:forms vocab)) (keys (:tags vocab)))]
+         (let [names (concat (keys (:forms vocab)) (keys (:tags vocab))
+                             (keys (:names vocab)))]
            (as-> scope sc
              ;; Fully qualified always works.
              (reduce (fn [m k] (assoc m (symbol (str vname) (str k)) [vname k])) sc names)
@@ -178,7 +179,8 @@
              ;; And only what was REFERRED, unqualified.
              (reduce (fn [m k]
                        (when-not (or (contains? (:forms vocab) k)
-                                     (contains? (:tags vocab) k))
+                                     (contains? (:tags vocab) k)
+                                     (contains? (:names vocab) k))
                          (throw (ex-info (str "splint: " vname " has no " k " to refer")
                                          {:vocabulary vname :symbol k})))
                        (assoc m k [vname k]))
@@ -196,6 +198,21 @@
       (when-let [[vname k] (get scope sym)]
         (get-in ctx [:vocabs vname :tags k]))
       (get-in ctx [:tags sym]))))
+
+(defn vocab-name
+  "How a VOCABULARY spells `sym` for this target, through the require scope.
+
+  The third thing a vocabulary provides, after forms and tags. A type tag like
+  `TY_CONS` is a value rather than a call -- it appears in a `case` label,
+  where a call cannot go -- so it cannot be a form, and it is spelled
+  `Obj.TyCons` on one of the three, so it cannot be left alone either.
+
+  Resolved through the scope like everything else, so an alias works on a name
+  exactly as it works on a form."
+  [ctx sym]
+  (when-let [scope (:scope-syms ctx)]
+    (when-let [[vname k] (get scope sym)]
+      (get-in ctx [:vocabs vname :names k (:target ctx)]))))
 
 (defn splint-declare-name!
   "Register how `sym` is SPELLED in each target, for a name whose convention is
@@ -334,7 +351,8 @@
   [ctx v]
   (cond
     (string? v) (pr-str v)
-    (symbol? v) (or (get-in (some-> (:names ctx) deref) [v (:target ctx)])
+    (symbol? v) (or (vocab-name ctx v)
+                    (get-in (some-> (:names ctx) deref) [v (:target ctx)])
                     (local-name (:target ctx) v))
     (nil? v) (or (splint-get ctx :nil) "null")
     :else (str v)))

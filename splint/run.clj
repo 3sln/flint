@@ -6,13 +6,17 @@
 (load-file "splint/vm_vocab.cljc")
 (load-file "splint/codec_vocab.cljc")
 (load-file "splint/hash_vocab.cljc")
+(load-file "splint/rt_vocab.cljc")
 
 (def vocabs {'flint.impl.vm {:forms (flint.impl.vm/forms-for)
                              :tags flint.impl.vm/tags-for}
              'flint.impl.codec {:forms (flint.impl.codec/forms-for)
                                 :tags flint.impl.codec/tags-for}
              'flint.impl.hash {:forms (flint.impl.hash/forms-for)
-                               :tags flint.impl.hash/tags-for}})
+                               :tags flint.impl.hash/tags-for}
+             'flint.impl.rt {:forms (flint.impl.rt/forms-for)
+                             :tags flint.impl.rt/tags-for
+                             :names flint.impl.rt/names-for}})
 
 (def which (or (first *command-line-args*) "splint/spread.splint"))
 (def src (slurp which))

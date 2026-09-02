@@ -18,18 +18,23 @@ pub const CAT_MAP: u8 = 2;
 pub const CAT_SET: u8 = 3;
 
 impl Rt {
+    // splint:begin splint/eq.splint
     pub fn category(&self, v: Value) -> u8 {
         if !v.is_heap() {
             return CAT_SCALAR;
         }
-        match ty(&self.gc.sp, v.as_heap()) {
-            TY_CONS | TY_EMPTY_LIST | TY_LAZYSEQ | TY_VECSEQ | TY_STRSEQ | TY_RANGE | TY_VEC
-            | TY_MAPENTRY => CAT_SEQUENTIAL,
-            TY_ARRAYMAP | TY_HASHMAP | crate::obj::TY_TABLEREF => CAT_MAP,
+        return match ty(&self.gc.sp, v.as_heap()) {
+            TY_CONS | TY_EMPTY_LIST | TY_LAZYSEQ | TY_VECSEQ | TY_STRSEQ | TY_RANGE | TY_VEC | TY_MAPENTRY => CAT_SEQUENTIAL,
+            // A ROW REF is in the MAP category: it is `=` to a map with the
+            // same entries, and `category` is what decides that
+            // (`doc/decisions/0026`).
+            TY_ARRAYMAP | TY_HASHMAP | TY_TABLEREF => CAT_MAP,
             TY_SET => CAT_SET,
             _ => CAT_SCALAR,
-        }
+        };
     }
+
+    // splint:end splint/eq.splint
 
     pub fn is_sequential(&self, v: Value) -> bool {
         self.category(v) == CAT_SEQUENTIAL

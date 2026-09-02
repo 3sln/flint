@@ -52,8 +52,9 @@ become safe to port. Never port a test and its subject in the same change.
   Plain `.cljc`, no reader conditionals, runs under bb so it can bootstrap.
   `flint.impl.core` holds the SHAPE of a program and each subject vocabulary
   merges it in, so a new source pays for its own subject and not for `defn`.
-* **`Hash` ships.** `splint/hash.splint` is emitted into `runtime/src/hash.rs`,
-  `Hash.java` and `Hash.cs`, and those three no longer carry murmur3 by hand.
+* **`Hash` ships**, emitted into `runtime/src/hash.rs`, `Hash.java` and
+  `Hash.cs`, which no longer carry murmur3 by hand. **`Eq.category` ships**,
+  which is the first generated function with a RECEIVER.
 * **`codec.splint` and `reader.splint` still ship nowhere**, and the two have
   different reasons. Measured, not guessed -- see below. Until they land, those
   slices proved the generator rather than reduced the tree.
@@ -260,6 +261,43 @@ agreeing with Clojure.
   `{i}` immediately between delimiters, so there is provably nothing to bind
   with. `wrapping_add({1})` qualifies; `((int) {0})` does not, and that is
   exactly the case whose parens were load-bearing.
+
+#### `Eq.category`, and the receiver
+
+`Eq` is not the clean mirror the ratio ordering assumed -- Rust has
+`is_sequential` and `eq_may_alloc` that the JVM and CLR simply do not -- but
+`category` is, and it is now generated into all three.
+
+What it took was `^:method`. Rust puts these on `impl Rt` and reaches the
+runtime as `self`; the JVM and CLR make them statics taking an `Rt`. That
+difference, not the bodies, is what had kept `Eq`, `Seqs` and most of the bulk
+out of reach, and it costs one mark on the `defn` plus registering the
+receiver's NAME so `(. rt gc)` comes out as `self.gc` in one place and `rt.gc`
+in two.
+
+Three more things it surfaced:
+
+* **A vocabulary provides NAMES, not just forms and tags.** `TY_CONS` is
+  imported unqualified in Rust and Java and is `Obj.TyCons` in C#. It cannot
+  be a form, because it appears in a `case` label where a call cannot go, and
+  it cannot be left alone, because one target spells it differently. Names
+  resolve through the require scope like everything else, so an alias works on
+  one exactly as it works on a form.
+* **`case` arms are VALUES, and that is forced rather than chosen.** A Rust
+  match arm is an expression, so `return X;` inside one emits `=> return X;,`
+  -- which is what the first attempt produced. A JVM `case` label cannot yield
+  a value, so each arm must `return` for itself. The source says the value and
+  each target spends what it must: Rust wraps the whole match in one `return`,
+  the other two put a `return` in every arm. This is the statement/expression
+  split the design anticipated, arriving in the first place it bites.
+* **A generator that drops comments is a generator that throws away the
+  expensive part.** `category` carries the explanation of why a row ref is in
+  the map category, with a pointer to `0026`, and the first emit silently
+  deleted it from two runtimes. `;;` in a splint source is for the source and
+  never reaches the output -- the reader discards it -- so a comment meant for
+  a reader of the GENERATED file has to be said as a form. That distinction is
+  exactly the difference between explaining the rule and explaining the code
+  the rule produces.
 
 ### 3. The bulk
 `Maps`, `Table`, `Str`, `Bytes`, `Vec`, `Snap`, `Pike`. Each large enough to

@@ -1,0 +1,30 @@
+;; `category` -- which of the four kinds of thing a value is.
+;;
+;; Phase 2 of `doc/goals/splint-port.md`, and the first source with a RECEIVER.
+;; Rust puts this on `impl Rt` and reaches the runtime as `self`; the JVM and
+;; CLR make it a static that takes an `Rt`. That difference, and not the body,
+;; is what had kept `Eq` and the bulk behind it out of reach.
+;;
+;; What it decides is load-bearing: a ROW REF is in the MAP category, because
+;; it is `=` to a map with the same entries (`doc/decisions/0026`), and this
+;; function is where that is said.
+(ns runtime.eq
+  (:require [flint.impl.rt :refer [defn if return case comment not
+                                   is-heap as-heap ty ==
+                                   TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ
+                                   TY_STRSEQ TY_RANGE TY_VEC TY_MAPENTRY
+                                   TY_ARRAYMAP TY_HASHMAP TY_TABLEREF TY_SET
+                                   Rt Value Cat Bool]]))
+
+(defn ^:pub ^:method ^Cat category [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return CAT_SCALAR))
+  (case (ty rt (as-heap v))
+    [TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ TY_STRSEQ TY_RANGE TY_VEC TY_MAPENTRY]
+    CAT_SEQUENTIAL
+    (comment "A ROW REF is in the MAP category: it is `=` to a map with the"
+             "same entries, and `category` is what decides that"
+             "(`doc/decisions/0026`).")
+    [TY_ARRAYMAP TY_HASHMAP TY_TABLEREF] CAT_MAP
+    [TY_SET] CAT_SET
+    :else CAT_SCALAR))

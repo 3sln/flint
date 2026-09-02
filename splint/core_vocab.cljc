@@ -99,6 +99,8 @@
 ;; One name in the source, three conventions in the output. This is the whole
 ;; of what a reader has to know to find the generated function by hand.
 
+(defn- cons* [x xs] (if x (cons x xs) xs))
+
 (defn target-name [ctx nm]
   (case (t ctx)
     :rust (str/replace (str nm) "-" "_")
@@ -129,13 +131,31 @@
           ;; nests into `unchecked(unchecked(a * b) + c)` -- the same IL and a
           ;; good deal harder to read, which the not-worse rule covers.
           unchecked? (:unchecked (meta nm))
+          ;; `^:method`: the FIRST parameter is the receiver.
+          ;;
+          ;; Rust puts these on `impl Rt` and the JVM and CLR make them
+          ;; statics that take the runtime as an argument. That is the same
+          ;; function three ways, and it is the difference that has kept `Eq`,
+          ;; `Seqs` and most of the bulk out of reach -- not the bodies, which
+          ;; already agree, but where the receiver goes.
+          method? (:method (meta nm))
+          recv (when method? (first params))
+          params (if method? (rest params) params)
           ps (partition 2 (interleave params (map (fn [p] (:tag (meta p))) params)))
           ty (partial ty-of ctx default)]
+      ;; The receiver is spelled `self` in Rust and by its own name in the
+      ;; other two, so a body that says `(. rt gc)` comes out as `self.gc`
+      ;; there and `rt.gc` here. Registering the NAME is all that takes.
+      (when recv
+        (sp/splint-declare-name! ctx recv {:rust "self" :java (str recv) :csharp (str recv)}))
       (sp/splint-declare!
        ctx nm
        (fn [c f]
          (let [as (mapv (fn [x] (sp/splint-render c x)) (rest f))
-               code (str (target-name c nm) "(" (str/join ", " as) ")"
+               code (str (if (and method? (= :rust (t c)))
+                           (str (first as) "." (target-name c nm)
+                                "(" (str/join ", " (rest as)) ")")
+                           (str (target-name c nm) "(" (str/join ", " as) ")"))
                          (if (and throws? (= :rust (t c))) "?" ""))]
            (if (= :statement (sp/splint-position c))
              (sp/splint-emit! c (sp/indent-of c) code ";\n")
@@ -160,8 +180,9 @@
                ;; the mark and emit nothing, which is the ordinary shape of a
                ;; divergence here -- one target needs a word, so the source
                ;; says the thing and each target spends what it must.
-               (str/join ", " (mapv (fn [[p tag]] (str (when (:mut (meta p)) "mut ")
-                                                       (sp/local-name :rust p) ": " (ty tag))) ps))
+               (str/join ", " (cons* (when recv (if (:mut (meta recv)) "&mut self" "&self"))
+                                     (mapv (fn [[p tag]] (str (when (:mut (meta p)) "mut ")
+                                                              (sp/local-name :rust p) ": " (ty tag))) ps)))
                ")"
                (cond
                  (and ret throws?) (str " -> Result<" (ty ret) ", String>")
@@ -172,11 +193,13 @@
         :java (sp/splint-emit!
                ctx (sp/indent-of ctx) (if pub? "public static " "static ")
                (if ret (ty ret) "void") " " (target-name ctx nm) "("
-               (str/join ", " (mapv (fn [[p tag]] (str (ty tag) " " (sp/local-name :java p))) ps)) ") {\n")
+               (str/join ", " (cons* (when recv (str (ty (:tag (meta recv))) " " recv))
+                                     (mapv (fn [[p tag]] (str (ty tag) " " (sp/local-name :java p))) ps))) ") {\n")
         :csharp (sp/splint-emit!
                  ctx (sp/indent-of ctx) (if pub? "public static " "static ")
                (if ret (ty ret) "void") " " (target-name ctx nm) "("
-                 (str/join ", " (mapv (fn [[p tag]] (str (ty tag) " " (sp/local-name :csharp p))) ps)) ") {\n"))
+                 (str/join ", " (cons* (when recv (str (ty (:tag (meta recv))) " " recv))
+                                       (mapv (fn [[p tag]] (str (ty tag) " " (sp/local-name :csharp p))) ps))) ") {\n"))
       (let [wrap? (and unchecked? (= :csharp (t ctx)))]
         (sp/splint-scoped
          ctx {:key :fn :value nm :indent 1}
@@ -226,6 +249,24 @@
                       (sp/splint-emit! ctx (sp/indent-of ctx) "    internal "
                                        (ty-of ctx default tag) " " f ";\n"))
                     (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))))))
+
+(defn comment-form
+  "`(comment \"line\" \"line\")` -- a comment, in the output.
+
+  Added the moment the first port LOST one. `category` carries an explanation
+  of why a row ref is in the map category, with a pointer to the decision that
+  settled it, and generating the function silently dropped it from two
+  runtimes. A generator that discards the reasoning keeps the code and throws
+  away the part that was expensive to work out.
+
+  `;;` comments in a splint source are for the SOURCE and never reach the
+  output -- the reader discards them before any of this runs. So a comment
+  meant for a reader of the generated file has to be said as a form, and the
+  difference between the two is exactly the difference between explaining the
+  rule and explaining the code it produces."
+  [ctx form]
+  (doseq [line (rest form)]
+    (sp/splint-emit! ctx (sp/indent-of ctx) "// " line "\n")))
 
 (defn- field-form
   "`(. r i)` -- a field, readable and assignable. One spelling everywhere, which
@@ -310,5 +351,6 @@
     'let (let-form default-tag)
     'defstruct (defstruct-form default-tag)
     '. field-form 'set (set-form (merge base-compound compound)) 'if if-form 'return return-form
+    'comment comment-form
     'do (fn [ctx form] (doseq [f (rest form)] (sp/splint-statement! ctx f)))}
    (reduce (fn [m s] (assoc m s (op-form s))) {} (keys ops))))
