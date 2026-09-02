@@ -336,7 +336,22 @@ static taking one. The gate turned out to be three call templates -- `slot`,
 `set-slot`, `olen` -- not an array subject. A blocker named from reading is
 not the same as a blocker met.
 
-**It needed no new structural capability.** `hash` bought four marks;
+**It needed no new structural capability** -- but that claim needs one
+qualification, found by trying a fourth file. `Rt.isSeq` is the same shape on
+paper and could NOT be ported, because `^:method` means "Rust `self`, JVM and
+CLR static taking the receiver", and that is true of `Eq` and `Maps` by
+accident of how those files happen to be written. `Rt.isSeq` is an INSTANCE
+method on all three, which `^:method` cannot say -- exactly hole 7 as the
+codec spike predicted it. It also wants per-target visibility: `pub` in Rust
+and package-private on the JVM.
+
+Two new capabilities for a six-line function is a bad trade, so it stays hand
+written and the finding is recorded instead. **What converged is the
+vocabulary of a SUBJECT -- slots, rooting, type tags. What has not converged
+is the shape of a DECLARATION**, and the next file that needs an instance
+method will have to pay for it.
+
+`hash` bought four marks;
 `eq.category` bought the receiver, vocabulary names and statement-vs-value
 `case` arms; `champ` bought heap slots and a `doc` form and nothing else. That
 is the first evidence the vocabulary is CONVERGING rather than growing once
