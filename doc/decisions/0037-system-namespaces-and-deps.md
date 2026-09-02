@@ -1,9 +1,14 @@
 # 0037 — System access and dependencies are virtual namespaces the CLI serves
 
-> **NOT BUILT — a proposal.** Nothing in this file exists yet, and it is blocked
-> on `0036` steps 4–6: every namespace here is a VIRTUAL namespace, and virtual
-> namespaces are designed but unbuilt. That is step one under any reading of
-> this document.
+> **PARTLY BUILT.** Virtual namespaces, `flint.sys.fs`, `flint.sys.env`,
+> `flint.sys.slurp`, `flint.deps.npm`, `flint.deps.mvn`, `flint.deps.git`, the
+> `.cljc` plan and `flint deps add` are in. Pods, the rest of `flint deps`,
+> `flint.sys.net`/`proc`/`clock` and deleting the old babashka path are not.
+> See "What is built" at the bottom.
+
+> **What this banner used to say.** *"NOT BUILT — a proposal. Nothing in this
+> file exists yet, and it is blocked on `0036` steps 4–6."* That blocker was
+> built first, as this file's order said it had to be.
 
 ## What is wrong with what we have
 
@@ -466,6 +471,39 @@ flint decides.
 9. **`flint.deps.pod`** and the babashka pod protocol.
 10. **The old path deleted**: `bin/flint`'s `git!`/`npm!`/`mvn!` shell-outs and
     the parts of `lib/flint/deps.cljc` they served.
+
+## What is built
+
+Measured, and in the gate (`test/sysns.clj`, thirteen assertions against the
+shipped binary).
+
+* **Virtual namespaces** (`0036` step 4) — a source rewrite in the analyzer, no
+  new AST node. The optional var list decides compile error versus run-time
+  error, and the CLI always supplies one because it knows its own surface.
+* **`flint.sys.fs`** and **`flint.sys.env`**, with the rooting rule ported from
+  `host/fs.mjs` unchanged. `:fs` is read-only unless `fs:write` was asked for.
+* **`flint.sys.slurp`**, `file://` and `https://` behind one capability with a
+  host-side allowlist.
+* **`flint.deps.npm`**, **`flint.deps.mvn`**, **`flint.deps.git`** — real
+  registries, real fetches, escape-refusing unpackers.
+* **`flint.deps.resolve`** in `.cljc`: the conflict rule, the transitive walk,
+  the pins.
+* **`flint deps add`**, which runs the `.cljc` plan rather than reimplementing
+  it.
+* **Capability delegation** on a dependency entry, with both rules.
+
+Two things the build found that the design had not:
+
+* **A pin that was not a pin.** A bare `1.2.0` written as a semver RANGE means
+  `^1.2.0`, so pinning to `1.2.0` resolved to `1.3.0`. "Everything is pinned by
+  default" has to be true or it is worse than not claiming it.
+* **An annotated tag resolves twice.** `ls-remote` lists the tag object and the
+  commit it dereferences to; taking the first pins an object no checkout wants,
+  and the sha integrity check then fails against a correct repository.
+
+And one deliberate exception to "pull in the crates", recorded above: git is
+`git` the program, because the two operations needed do not justify `gix`'s
+dependency tree.
 
 ## What is undecided
 
