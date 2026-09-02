@@ -1,0 +1,43 @@
+{:name "clr"
+ :ext "cs"
+ :self ""
+ :end ";"
+ :true "true" :false "false" :nil "Val.Nil"
+ :let {:fmt "{type} {name} = {init};" :mut "{type} {name} = {init};"}
+
+ ;; A HOISTED TEMPORARY, which is not a declared binding: its type is whatever
+ ;; the call returned, and inference knows that where the translator does not.
+ ;; Typing them `Value` produced `let t4__: Value = t3__.is_nil();` -- a bool
+ ;; declared as a value, which no target accepts.
+ :tmp "var {name} = {init};"
+
+ :set {:fmt "{place} = {value};"}
+ :if {:open "if ({test}) {" :else "} else {" :close "}"}
+ :while {:open "while ({test}) {" :close "}"}
+ :return {:fmt "return {value};"}
+ :continue "continue;"
+ :break "break;"
+ :types {:u32 "int" :usize "int" :val "long" :bool "bool" :i64 "long"}
+ :fields {:stack-top "roots.StackTop"
+          :stack     "roots.Stack"
+          :ip        "ip"
+          :frame-ip  "f.Ip"}
+ :calls {:vpush     "VPush({0})"
+         :vpop      "VPop()"
+         :vat       "roots.Stack[{0}]"
+         :push      "Push({0})"
+         :pop-to    "PopTo({0})"
+         :r         "R({0})"
+         :set-r     "SetR({0}, {1})"
+         :seq       "Seqs.Seq(this, {0})"
+         :first     "Seqs.First(this, {0})"
+         :next      "Seqs.Next(this, {0})"
+         :nil?      "Val.IsNil({0})"
+         :closure?  "IsHeapTy({0}, TyClosure)"
+         :enter     "Enter({0}, {1}, {2})"
+         :call-value "CallValue({0})"
+         :failed    "Failed()"
+         :parked    "Parked()"
+         :charge    "ChargeTick({0}, {1}, {2})"
+         :u8-at     "U8({0})"}
+ :ops {:+ "+" :- "-" :* "*" :< "<" :> ">" :== "==" :!= "!=" :and "&&" :or "||" :not "!"}}

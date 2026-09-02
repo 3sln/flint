@@ -2299,6 +2299,42 @@ impl Rt {
     }
 }
 
+// SPIKE: the code `splint` GENERATED, pasted verbatim and compiled
+// (`doc/decisions/0038`). If it needs an edit to compile, the translator is
+// not done -- so it is pasted rather than paraphrased.
+#[cfg(test)]
+#[allow(dead_code, unused_variables)]
+impl Rt {
+    fn splint_generated(&mut self, si: usize) -> usize {
+        let mut spread: usize = 0;
+        let t1__ = self.r(si);
+        let t2__ = self.seq(t1__);
+        self.set_r(si, t2__);
+        while true {
+            let t3__ = self.r(si);
+            let t4__ = t3__.is_nil();
+            let t5__ = !t4__;
+            if !t5__ {
+                break;
+            }
+            let t6__ = self.charge_tick(spread as u64, 1, "apply");
+            if !t6__ {
+                self.pop_to(si);
+                break;
+            }
+            let t7__ = self.r(si);
+            let t8__ = self.first(t7__);
+            self.vpush(t8__);
+            spread = (spread + 1);
+            let t9__ = self.r(si);
+            let t10__ = self.next(t9__);
+            self.set_r(si, t10__);
+        }
+        spread;
+        spread
+    }
+}
+
 #[cfg(test)]
 mod frame_layout {
     use super::*;

@@ -1,0 +1,25 @@
+;; The sequence spread inside `apply`, written ONCE.
+;;
+;; Chosen for the spike because it is the exact code I wrote three times by hand
+;; -- Rust, Java, C# -- while fixing the park bug, and the three differ only in
+;; naming and punctuation. If splint cannot do this one, it cannot do anything;
+;; if it can, the claim is that most of the interpreter's opcode bodies are the
+;; same shape.
+
+(defsnippet spread-seq
+  "Spread `seq` onto the value stack, returning how many elements went on.
+   `si` is a shadow-stack root the caller already pushed."
+  [^usize si]
+  (let [^usize spread 0]
+    (set-r si (seq (r si)))
+    (while (not (nil? (r si)))
+      ;; A spread walks a whole sequence under ONE bytecode instruction, so it
+      ;; is charged per element -- a bound that holds on one of two paths is
+      ;; not a bound.
+      (if (not (charge spread 1 "apply"))
+        (do (pop-to si)
+            (break)))
+      (vpush (first (r si)))
+      (set spread (+ spread 1))
+      (set-r si (next (r si))))
+    spread))
