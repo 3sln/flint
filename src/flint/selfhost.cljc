@@ -163,7 +163,8 @@
                     {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e))
                                                               :file (:file (val e))
                                                               :tags (:tags (val e))
-                                                              :workspace (:workspace (val e))}])
+                                                              :workspace (:workspace (val e))
+                                                              :grants (:grants (val e))}])
                                             sources))
                      :order (vec (filter (fn [n] (contains? sources n)) order))
                      :entry entry
@@ -234,7 +235,8 @@
                     {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e))
                                                               :file (:file (val e))
                                                               :tags (:tags (val e))
-                                                              :workspace (:workspace (val e))}])
+                                                              :workspace (:workspace (val e))
+                                                              :grants (:grants (val e))}])
                                             sources))
                      :order (vec (filter (fn [n] (contains? sources n)) order))
                      :entry entry

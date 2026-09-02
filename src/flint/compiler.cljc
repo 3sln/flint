@@ -92,6 +92,13 @@
               :projections {}
               ;; Vars whose result inverts an argument's truthiness.
               :inversions {}
+              ;; `{ns {:workspace w :grants #{..}}}` -- who owns each namespace
+              ;; and what they hold (`doc/decisions/0036`). The analyzer reads
+              ;; it to decide whether a reference crosses a workspace boundary,
+              ;; and what the referencing side may claim when it does. Empty is
+              ;; the anonymous workspace, which is every program that declares
+              ;; none, and nothing is ever checked within one.
+              :workspaces (or (:workspaces opts) {})
               :eval-vars (atom {})}))
 
 (defn- fn-under-meta
@@ -588,10 +595,19 @@
           (err (exclusion-error ns-sym best others) {:excluded ns-sym}))))))
 
 (defn compile-image
-  "Compile `sources` ({ns-symbol {:src s :file f}}) with entry var `entry-sym`.
+  "Compile `sources` ({ns-symbol {:src s :file f :tags t :workspace w :grants g}})
+  with entry var `entry-sym`.
   Returns {:builder b :stats {...}}."
   [{:keys [sources order entry exports builtins exclude excluded-builtins features]}]
-  (let [cc (new-context {:builtins builtins :features features})]
+  (let [cc (new-context
+            {:builtins builtins :features features
+             ;; Lifted off the sources rather than passed separately: the
+             ;; resolver already answered it per namespace, and a second channel
+             ;; for the same fact is a second thing to get out of step.
+             :workspaces (into {} (map (fn [e]
+                                         [(key e) {:workspace (:workspace (val e))
+                                                   :grants (set (:grants (val e)))}])
+                                       sources))})]
     (let [read-forms (into {} (for [nsname order]
                                 (let [{:keys [src file tags]} (get sources nsname)]
                                   (when-not src (err (str "no source for namespace " nsname) {:ns nsname}))

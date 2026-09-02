@@ -226,6 +226,47 @@ ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled a
      'the goods');
 }
 
+// --- var capability guards (`doc/decisions/0036`) ---------------------------
+//
+// Level two: the workspace is NOT guarded and may be depended on freely, and
+// one var in it is. This is what makes a partly privileged library expressible
+// -- everyone depends on the standard library, and three vars in it matter.
+{
+  const files = {
+    'lib/l.cljc': '(ns lib.l)\n(defn safe [] "anyone")\n' +
+                  '(defn ^{:flint/capabilities-guard [:fs]} danger [] "privileged")\n',
+    'app/a.cljc': '(ns app.a (:require [lib.l :as l])) (defn go [] (l/safe))',
+    'app/b.cljc': '(ns app.b (:require [lib.l :as l])) (defn go [] (l/danger))',
+    'app/c.cljc': '(ns app.c (:require [lib.l :as l])) (defn go [] (first (map l/danger [1])))',
+  };
+  const lib = { prefix: 'lib/', name: 'lib/lib' };
+  const bare = { prefix: 'app/', name: 'app/app' };
+  const held = { prefix: 'app/', name: 'app/app', grants: ['fs'] };
+  const run = async (ws, fn) =>
+    (await (compiler.compile({ files, workspaces: ws, fn })).sandbox()).call(fn);
+  const refusal = (ws, fn) => {
+    try { compiler.compile({ files, workspaces: ws, fn }); return null; }
+    catch (e) { return e.message; }
+  };
+
+  eq('an unguarded var in the same workspace is free',
+     await run([lib, bare], 'app.a/go'), 'anyone');
+  ok('a guarded var is refused without the capability',
+     /lib\.l\/danger is guarded/.test(refusal([lib, bare], 'app.b/go') ?? ''),
+     refusal([lib, bare], 'app.b/go'));
+  eq('and allowed with it', await run([lib, held], 'app.b/go'), 'privileged');
+
+  // The REFERENCE is guarded, not the call. Otherwise `(map l/danger ..)` would
+  // hand the function to something unguarded and the guard would be one line of
+  // indirection deep.
+  ok('and refused when merely passed as a value, not called',
+     /lib\.l\/danger is guarded/.test(refusal([lib, bare], 'app.c/go') ?? ''),
+     refusal([lib, bare], 'app.c/go'));
+
+  eq('a program declaring no workspaces is checked nowhere',
+     await run(undefined, 'app.b/go'), 'privileged');
+}
+
 // --- the artifact stands on its own -----------------------------------------
 const dir = mkdtempSync(`${tmpdir()}/flint-`);
 writeFileSync(`${dir}/m.wasm`, image.wasm);

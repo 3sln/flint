@@ -151,7 +151,56 @@
 
 (defn- const-node [v] {:op :const :val v})
 
+(defn- guard-check!
+  "Refuse a reference to a var its workspace guards (`doc/decisions/0036`).
+
+  Level two of two. Level one is the `:require` edge and is checked from the
+  dependency graph; this is the reference itself, so a workspace may be depended
+  on freely while three of its vars are not.
+
+  Checked HERE, at the reference, and emitted nowhere. A guard is a compile-time
+  construct: it costs a run nothing, and there is no callable behind it. That is
+  not a convenience -- `native-name` lets any source write `flint.rt/<name>` for
+  anything in the builtin catalogue, so a callable `resolve` taking a quoted
+  symbol would be a general reflective var lookup and would defeat this entirely
+  in one line. Anything that resolves authority has to be a compile-time
+  construct, never a callable.
+
+  Same workspace, no check, for the reason level one has none: a project is not
+  a security boundary against itself. Two namespaces with NO workspace are both
+  the anonymous one and so are the same -- a program that declares no workspaces
+  is checked nowhere, which is what it was before any of this existed.
+
+  One honest limit. The guard has to be recorded before the reference is
+  analysed, and it is, because namespaces are analysed dependencies-first. A
+  cycle ACROSS workspaces could put a reference before the guard that would have
+  refused it, and this fails open there. Level one still refuses the require in
+  the ordinary case, and a guarded workspace in a cycle with the workspace it
+  guards is pathological rather than merely unusual."
+  [env q]
+  (when (namespace q)
+    (let [c @(:cc env)
+          guard (:flint/capabilities-guard (get (:var-meta c) q))]
+      (when (seq guard)
+        (let [here (current-ns env)
+              there (symbol (namespace q))
+              ws (:workspaces c)
+              w-here (get-in ws [here :workspace])
+              w-there (get-in ws [there :workspace])]
+          (when (not= w-here w-there)
+            ;; What is MISSING, not the whole guard: naming three capabilities
+            ;; the caller already holds helps nobody find the one it does not.
+            (let [missing (into #{} (remove (or (get-in ws [here :grants]) #{}) guard))]
+              (when (seq missing)
+                (err (str q " is guarded with " (pr-str (into #{} guard))
+                          " by " (or w-there "its workspace")
+                          "; " (or w-here "this program") " does not hold "
+                          (pr-str missing))
+                     {:var q :needs missing
+                      :from-workspace w-here :to-workspace w-there})))))))))
+
 (defn- record-dep! [env q]
+  (guard-check! env q)
   (when-let [cur (:current-var env)]
     (vswap! (:cc env) update-in [:deps cur] (fnil conj #{}) q)))
 
