@@ -155,39 +155,64 @@ can say what a build can actually reach, and so an unknown var in
 `flint.sys.fs` is a COMPILE error rather than a run-time one. The CLI knows its
 own surface, so there is no reason to take it on trust.
 
-## Git is a first-class package manager
+## Git: canonical coordinates, and a tool for when they disagree
 
-Not "a URL and a sha", which is what canonical `deps.edn` treats it as.
+`:git/tag` and `:git/sha`, exactly as canonical `deps.edn` has them.
+
+**`:git/version` was built and then removed**, and the removal is the decision
+worth recording because the addition looked obviously right. A semver range over
+tags is the wrong shape for the problem twice over:
+
+1. **It makes every build a resolution.** A range asks the network what the
+   newest matching tag is, so what a checkout means depends on when it ran --
+   which is the objection this project already raises to a git branch.
+2. **It answers the wrong question.** What actually hurts is not naming a
+   version; it is two dependencies naming DIFFERENT tags of one repository. A
+   range does not resolve that, it just gives each of them its own way to be
+   right.
+
+So resolution happens ONCE, at `flint deps add`, which picks the highest version
+tag and writes it down:
 
 ```clojure
-{:deps
- {org/lib {:git/url "https://github.com/org/lib"
-           :git/version "^1.2.0"     ; SEMVER, resolved against tags
-           :git/sha "a1b2c3d"}}}     ; integrity, full or prefix
+{org/lib {:git/url "https://github.com/org/lib"
+          :git/tag "v1.2.0"
+          :git/sha "a1b2c3d..."}}
 ```
 
-* **`:git/version`** resolves semver against the repository's tags — `v1.2.3`,
-  `1.2.3` and `release-1.2.3` are all recognised, because tagging conventions
-  differ and refusing three of the four common ones would make the feature
-  unusable on real repositories. This is the part canonical `deps.edn` has no
-  answer for.
-* **`:git/sha`** on top is INTEGRITY, not identity: the resolved tag must point
-  at that commit or the fetch is refused. A prefix is accepted and compared as a
-  prefix, so the familiar 7-character form works, and a match is a match on the
-  full object id the remote reports rather than on the prefix alone.
-* **`:git/tag`** keeps canonical Clojure behaviour exactly, including requiring
-  `:git/sha` beside it. Somebody's existing `deps.edn` must keep meaning what it
-  meant.
+`:git/sha` is INTEGRITY, not identity: the tag must resolve to that commit or
+the plan is refused, and a prefix compares as a prefix so the 7-character form
+works.
 
-**Transitives.** A git dependency's own `deps.edn` is read and its dependencies
-resolved, to a fixpoint, the same as npm and Maven. That is the whole of "first
-class" — today a git dep is a directory that arrives and is never asked what it
-needs.
+### `flint deps agree`
 
-**Version conflict** is resolved by the same rule for all four kinds, and the
-rule is: the nearest declaration wins, ties go to the higher version, and an
-override beats both. Stated once here rather than per-kind, because four
-resolution rules is how a dependency system becomes unpredictable.
+The tool the removal makes necessary, and the thing the range was reaching for:
+
+```text
+$ flint deps agree
+https://github.com/clojure/data.json
+  v2.4.0  <- lib-a
+  v2.5.2  <- lib-b
+  => v2.5.2
+
+$ flint deps agree --apply
+wrote the agreed tags into :flint/overrides
+```
+
+Three properties, each deliberate:
+
+* **URL spellings are folded.** `…/x`, `…/x.git` and `…/x/` are one repository.
+  A detector that missed that would miss the conflicts that actually happen.
+* **It proposes only a tag somebody ALREADY ASKED FOR.** It does not go looking
+  for a newer one. Choosing a version no dependency requested is a decision
+  nobody made, and the job here is agreement rather than upgrade.
+* **It writes the sha with the tag**, so the result is pinned in the sense
+  `0037` means -- which is the other half of the request: agree on a tag, then
+  update the truncated sha to match.
+
+Tags with no version in them -- a branch-like name -- are reported and NOT
+resolved, because there is nothing to be right about and a guess is worse than
+saying so.
 
 ## npm without a `package.json`
 

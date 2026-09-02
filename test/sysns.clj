@@ -128,6 +128,49 @@
     (check "and its var list makes an unknown var a COMPILE error"
            (str/includes? (:out r) "does not hold subtract") (:out r))))
 
+;; --- git tags that disagree (`doc/decisions/0037`) ---------------------------
+;;
+;; `:git/version` was built and then REMOVED: a semver range re-resolves on
+;; every build, and it answered the wrong question anyway. The question is two
+;; dependencies naming different tags of one repository, and this is it.
+(if-not online?
+  (println "  (skipped: `flint deps agree` needs the network)")
+  (let [p5 (str (fs/create-temp-dir))]
+    (spit (str p5 "/deps.edn")
+          (str "{:deps {lib-a {:git/url \"https://github.com/clojure/data.json\" :git/tag \"v2.4.0\"}\n"
+               "        lib-b {:git/url \"https://github.com/clojure/data.json.git\" :git/tag \"v2.5.2\"}}}\n"))
+    (let [r (sh p5 flint "deps" "agree")]
+      ;; THE THREE SPELLINGS ARE ONE REPOSITORY. A `.git` suffix and a trailing
+      ;; slash are the common case, and a detector that missed them would miss
+      ;; the conflicts that actually occur.
+      (check "disagreeing git tags are found across url spellings"
+             (and (str/includes? (:out r) "v2.4.0") (str/includes? (:out r) "v2.5.2"))
+             (:out r))
+      (check "and it proposes the highest tag ALREADY ASKED FOR"
+             (str/includes? (:out r) "=> v2.5.2") (:out r)))
+    (sh p5 flint "deps" "agree" "--apply")
+    (let [text (slurp (str p5 "/deps.edn"))]
+      (check "applying writes overrides carrying the tag AND its sha"
+             (and (str/includes? text ":flint/overrides")
+                  (str/includes? text ":git/tag \"v2.5.2\"")
+                  (str/includes? text ":git/sha \""))
+             text))
+    ;; It CONVERGES: a second run has nothing to say.
+    (let [r (sh p5 flint "deps" "agree")]
+      (check "and then everybody agrees"
+             (str/includes? (:out r) "every git dependency agrees") (:out r)))))
+
+;; A missing `git` says what to install, for this platform.
+(let [r (sh proj "/bin/sh" "-c"
+             (str "PATH=/nonexistent " flint " deps add git:github.com/clojure/data.json"))]
+  (check "a missing git says why and how to get it"
+         (and (str/includes? (:out r) "not on your PATH")
+              (or (str/includes? (:out r) "brew install git")
+                  (str/includes? (:out r) "apt install git")
+                  (str/includes? (:out r) "winget")
+                  (str/includes? (:out r) "git-scm.com")))
+         (:out r)))
+
 (let [r (sh proj flint "deps" "add" "cargo:serde")]
   (check "an unknown dependency kind is refused by name"
          (and (not (zero? (:exit r))) (str/includes? (:out r) "cargo")) (:out r)))

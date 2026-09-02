@@ -100,7 +100,8 @@ pub fn entry_for(kind: &str, name: &str, version: &str, extra: &[(&str, &str)]) 
     match kind {
         "npm" => s.push_str(&format!(":npm/version {version:?}")),
         "mvn" => s.push_str(&format!(":mvn/version {version:?}")),
-        "git" => s.push_str(&format!(":git/version {version:?}")),
+        // CANONICAL: a tag and a sha, which is what `deps.edn` has always had.
+        "git" => s.push_str(&format!(":git/tag {version:?}")),
         _ => s.push_str(&format!(":version {version:?}")),
     }
     for (k, v) in extra {
@@ -175,10 +176,25 @@ mod tests {
 fn resolve_program(kind: &str, name: &str, range: &str) -> String {
     let coord = match kind {
         "npm" => format!("{{:npm/version {range:?}}}"),
-        "git" => format!("{{:git/url {:?} :git/version {range:?}}}", git_url(name)),
+        "git" => String::new(),
         "mvn" => format!("{{:mvn/version {range:?}}}"),
         _ => "{}".to_string(),
     };
+    if kind == "git" {
+        // GIT CHOOSES A TAG ONCE, at add time. `:git/version` used to record a
+        // range and re-resolve it on every build, which made a checkout mean
+        // different things on different days -- the same objection this project
+        // raises to a branch. What is written down is a tag and its sha.
+        return format!(
+            r#"(ns depsadd (:require [flint.deps.resolve :as r]))
+(defn main [_]
+  (let [n (r/newest-tag {url:?})]
+    (if (nil? n) "!unresolved"
+      (pr-str {{:version (:version n) :tag (:tag n) :sha (:sha n)}}))))
+"#,
+            url = git_url(name)
+        );
+    }
     format!(
         r#"(ns depsadd (:require [flint.deps.resolve :as r]))
 (defn main [_]
@@ -262,6 +278,60 @@ pub fn set_version(text: &str, dep: &str, to: &str) -> String {
     text.to_string()
 }
 
+/// The agree program: which repositories are named with different tags, and
+/// what they could all take instead.
+fn agree_program(apply: bool) -> String {
+    let tail = if apply {
+        // The OVERRIDES that settle it, ready to write. A pin and an agreement
+        // are the same operation (`doc/decisions/0037`), so they produce the
+        // same thing.
+        r#"(pr-str (reduce (fn [m row]
+                             (if (:to row)
+                               (reduce (fn [mm d] (assoc mm d {:git/url (:url row)
+                                                               :git/tag (:to row)
+                                                               :git/sha (:sha row)}))
+                                       m (apply concat (vals (:from row))))
+                               m))
+                           {} rows))"#
+    } else {
+        r#"(str/join "
+"
+             (mapv (fn [row]
+                     (str (:url row) "
+"
+                          (str/join "
+"
+                            (mapv (fn [e] (str "  " (key e) "  <- " (str/join ", " (val e))))
+                                  (:from row)))
+                          "
+  => " (or (:to row) "no version in these tags; choose by hand")))
+                   rows))"#
+    };
+    format!(
+        r#"(ns depsagree
+  (:require [flint.deps.resolve :as r] [clojure.string :as str]
+            [clojure.edn :as edn] [flint.sys.fs :as fs]))
+(defn main [_]
+  (let [d (edn/read-string (fs/read-file "deps.edn"))
+        deps (merge (or (:deps d) {{}}) (or (:flint/overrides d) {{}}))
+        rows (r/tag-agreement deps)]
+    (if (empty? rows) "" {tail})))
+"#
+    )
+}
+
+/// `flint deps agree [--apply]`.
+pub fn agree(
+    apply: bool,
+    run: impl Fn(&str, &str, &[String]) -> Result<String>,
+) -> Result<String> {
+    run(&agree_program(apply), "depsagree/main",
+        &["deps".to_string(), "fs".to_string(),
+          // Every git host the file names -- resolving the agreed tag's sha
+          // needs to reach the repository, and nothing wider than that.
+          "deps:https://**".to_string()])
+}
+
 /// `flint deps tree|why|pin`.
 pub fn view(
     spec: &str,
@@ -318,7 +388,7 @@ pub fn add(
         let end = rest.find('"')?;
         Some(rest[..end].to_string())
     };
-    let version = field(":version").unwrap_or_default();
+    let mut version = field(":version").unwrap_or_default();
     let mut extra: Vec<(&str, String)> = Vec::new();
     if let Some(i) = field(":integrity") {
         if !i.is_empty() {
@@ -328,6 +398,14 @@ pub fn add(
     if let Some(sha) = field(":sha") {
         if !sha.is_empty() {
             extra.push((":git/sha", sha));
+        }
+    }
+    // For git the entry records the TAG, not the version it parsed to.
+    if s.kind == "git" {
+        if let Some(t) = field(":tag") {
+            if !t.is_empty() {
+                version = t;
+            }
         }
     }
     if s.kind == "git" {

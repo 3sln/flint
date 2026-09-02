@@ -79,6 +79,21 @@
 
 ;; ------------------------------------------------------------------- kinds
 
+(defn tag-version-string
+  "The version a tag NAMES, as a string, or nil.
+
+  `v1.2.3`, `1.2.3`, `release-1.2.3` and `lib-v1.2.3` all name `1.2.3`. This is
+  not resolution -- nothing is asked of the network -- it is reading a tag, and
+  it is what lets two coordinates that named different tags be COMPARED."
+  [tag]
+  (let [t (str tag)
+        strip (fn [x] (if (str/starts-with? x "v") (subs x 1) x))
+        cand (if (parse-version (strip t))
+               (strip t)
+               (let [i (str/last-index-of t "-")]
+                 (when i (strip (subs t (inc i))))))]
+    (when (and cand (parse-version cand)) cand)))
+
 (defn coord-kind
   "Which sort of coordinate this is, by the key that identifies it.
 
@@ -127,30 +142,37 @@
          :candidates (mapv :version hits)}))))
 
 (defn resolve-git
-  "A git coordinate, by whichever of the three ways it was named.
+  "A git coordinate: `:git/tag` and `:git/sha`, as canonical `deps.edn` has them.
 
-  The three are not alternatives to each other -- they compose, and the
-  composition is what `0037` is for:
+  **`:git/version` is gone**, and its removal is worth recording because it was
+  built first. A semver range over tags looked like the obvious improvement on
+  canonical `deps.edn`, and it is the wrong shape for the problem it was aimed
+  at. Two reasons:
 
-  * `:git/version` picks a tag by SEMVER;
-  * `:git/tag` names one exactly, which is canonical `deps.edn`;
-  * `:git/sha` on top of either is INTEGRITY -- the resolved commit must start
-    with it, or the plan is refused.
+  1. **It makes every build a resolution.** A range asks the network what the
+     newest matching tag is, so what a checkout means depends on when it ran --
+     which is the objection this project already raises to a git branch.
+  2. **It solved the wrong half.** The thing that actually hurts is not naming a
+     version, it is two dependencies that named DIFFERENT tags of the same
+     repository. A range does not answer that; it just gives each of them a
+     different way to be right.
 
-  A bare `:git/sha` with neither is canonical too, and is taken as given."
+  So a coordinate names a tag, exactly as it always did, and the disagreement is
+  handled where it happens -- see `tag-conflicts` and `agree-on-tag` below.
+
+  `:git/sha` beside a tag is INTEGRITY: the tag must resolve to that commit or
+  the plan is refused, and a prefix compares as a prefix so the familiar
+  7-character form works. A bare `:git/sha` with no tag is canonical too, and is
+  taken as given."
   [nm c]
   (let [url (str (:git/url c))
         want-sha (some-> (:git/sha c) str)
         picked
         (cond
-          (:git/version c)
-          (let [hits (git/resolve url (exact-range (:git/version c)))]
-            (when (seq hits) (last hits)))
-
           (:git/tag c)
           {:tag (str (:git/tag c))
            :sha (git/resolve-tag url (str (:git/tag c)))
-           :version nil}
+           :version (tag-version-string (str (:git/tag c)))}
 
           want-sha {:sha want-sha :tag nil :version nil})]
     (when picked
@@ -457,3 +479,103 @@
           acc)))
     []
     deps)))
+
+;; ----------------------------------------------------- git tags that disagree
+;;
+;; This is what `:git/version` was reaching for and did not solve. A range gave
+;; every dependency its own way to be right; what is wanted is to NOTICE that
+;; two of them named different tags of one repository, and to find a tag they
+;; can all take.
+
+(defn- url-key
+  "Two spellings of one repository. `https://github.com/org/x`,
+  `https://github.com/org/x.git` and a trailing slash are the same place, and a
+  conflict detector that missed that would miss the common case."
+  [url]
+  (let [u (str/trim (str url))
+        u (if (str/ends-with? u "/") (subs u 0 (dec (count u))) u)
+        u (if (str/ends-with? u ".git") (subs u 0 (- (count u) 4)) u)]
+    (str/lower-case u)))
+
+(defn tag-conflicts
+  "Every repository that two coordinates named DIFFERENT tags of.
+
+  `deps` is `{name coord}` -- both the declared ones and whatever a transitive
+  walk added, because the case that matters is a direct dependency and a
+  transitive one disagreeing.
+
+  Returns `[{:url :wanted {tag [dep ..]} :versions {tag version-or-nil}}]`,
+  empty when everybody agrees. A repository named once, however many times, is
+  not a conflict."
+  [deps]
+  (let [by-url (reduce (fn [m e]
+                         (let [nm (key e) c (val e)]
+                           (if (and (= :git (coord-kind c)) (:git/tag c) (:git/url c))
+                             (update-in m [(url-key (:git/url c)) (str (:git/tag c))]
+                                        (fn [xs] (conj (or xs []) nm)))
+                             m)))
+                       {} deps)]
+    (vec (for [[u tags] by-url
+               :when (> (count tags) 1)]
+           {:url u
+            :wanted tags
+            :versions (reduce (fn [m t] (assoc m t (tag-version-string t))) {} (keys tags))}))))
+
+(defn agree-on-tag
+  "The tag a conflicted repository should settle on, or nil.
+
+  **The HIGHEST version among the tags already asked for**, and nothing else --
+  it does not go to the network and does not invent a tag nobody named. That is
+  deliberate: choosing a version none of the dependencies asked for is a
+  decision nobody made, and the point here is to find agreement rather than to
+  upgrade.
+
+  nil when the tags carry no version to compare -- two branch-ish tags, say --
+  because there is nothing to be right about and a guess would be worse than
+  the honest refusal."
+  [conflict]
+  (let [ts (keys (:wanted conflict))
+        versioned (filterv (fn [t] (get (:versions conflict) t)) ts)]
+    (when (seq versioned)
+      (reduce (fn [best t]
+                (if (or (nil? best)
+                        (pos? (version-compare (get (:versions conflict) t)
+                                               (get (:versions conflict) best))))
+                  t best))
+              nil versioned))))
+
+(defn tag-agreement
+  "What `flint deps agree` would do: one row per conflicted repository.
+
+  `[{:url :from {tag [dep ..]} :to tag :sha sha}]`, and `:to` is nil when the
+  tags cannot be compared. The SHA is resolved for the chosen tag, so the
+  overrides this produces carry the integrity that `0037` says a pin must --
+  which is the other half of the request: agree on a tag, then update the
+  truncated sha to match."
+  [deps]
+  (reduce (fn [acc c]
+            (let [to (agree-on-tag c)]
+              (conj acc {:url (:url c)
+                         :from (:wanted c)
+                         :to to
+                         :sha (when to (git/resolve-tag (:url c) to))})))
+          [] (tag-conflicts deps)))
+
+(defn newest-tag
+  "The highest version tag a repository has, as `{:tag :version :sha}`, or nil.
+
+  What `flint deps add git:...` uses to choose ONCE. Resolution at ADD time is
+  a decision somebody made and a tag it wrote down; resolution at BUILD time is
+  what `:git/version` was and is what makes a checkout mean different things on
+  different days."
+  [url]
+  (let [rows (git/tags url)
+        best (reduce (fn [best r]
+                       (let [v (tag-version-string (:tag r))]
+                         (cond
+                           (nil? v) best
+                           (nil? best) (assoc r :version v)
+                           (pos? (version-compare v (:version best))) (assoc r :version v)
+                           :else best)))
+                     nil rows)]
+    best))

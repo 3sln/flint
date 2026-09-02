@@ -853,6 +853,35 @@ fn main() -> Result<()> {
                     std::fs::write(&path, text)?;
                     Ok(())
                 }
+                "agree" => {
+                    let apply = argv.iter().any(|a| a == "--apply");
+                    let tmp = std::env::temp_dir()
+                        .join(format!("flint-depsagree-{}", std::process::id()));
+                    let out = depscmd::agree(apply, |src, entry, caps| {
+                        std::fs::create_dir_all(&tmp)?;
+                        std::fs::write(tmp.join("depsagree.cljc"), src)?;
+                        let (code, out) =
+                            run_source_q(&[tmp.clone()], entry, &[], caps, None, true)?;
+                        if code != 0 {
+                            bail!("{out}");
+                        }
+                        Ok(out)
+                    });
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    let out = out?;
+                    if out.trim().is_empty() {
+                        println!("every git dependency agrees on its tag");
+                    } else if apply {
+                        let path = depscmd::deps_path(&dir);
+                        let before = std::fs::read_to_string(&path)?;
+                        std::fs::write(&path, depscmd::set_overrides(&before, out.trim()))?;
+                        println!("wrote the agreed tags into :flint/overrides");
+                    } else {
+                        println!("{}", out.trim_end());
+                        println!("\n`flint deps agree --apply` writes these into :flint/overrides.");
+                    }
+                    Ok(())
+                }
                 "" | "help" => {
                     eprintln!(
                         "flint deps add kind:name[@range]   npm:, mvn:, git:, pod:\n\
@@ -860,6 +889,7 @@ fn main() -> Result<()> {
                          flint deps why <dep>               why it is in the plan\n\
                          flint deps pin                     pin every transitive\n\
                          flint deps bump [:patch|:minor|:major]\n\
+                         flint deps agree [--apply]        git tags that disagree\n\
                          \n\
                          Resolves, pins and writes into deps.edn. The version written is the\n\
                          version a build picks, because both ask flint.deps.resolve."
