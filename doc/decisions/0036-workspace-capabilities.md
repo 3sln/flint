@@ -787,6 +787,85 @@ being careful.
 * Whether `identity` is the same thing `0020`'s module metadata records, or a
   compile-time-only notion that happens to overlap.
 
+## Does the two-level check guard the right things?
+
+Linking becomes two checks: the requiring WORKSPACE against the required
+workspace's guard, then the referencing workspace against the required VAR's
+guard. Asked plainly -- is that useful, and is it wrong?
+
+### It is useful, and the two levels are not the same thing
+
+**Level 2 subsumes level 1 in expressiveness.** Guard every var in a workspace
+and requiring it is useless without the capability, so level 1 could be read as a
+default -- "guard everything here".
+
+But they differ in what they are FOR:
+
+* **Level 1 is about linkage**, and is checkable without compiling anything, from
+  `deps.edn` alone. `flint deps` can say "this project needs `:fs` because it
+  depends on X" before a line is read. That is real auditing value that level 2
+  cannot give, because level 2's answer depends on which vars a program actually
+  reaches.
+* **Level 2 is about use**, and is the enforcement. It is what makes a partly
+  privileged library possible: depend on me freely, touch these three functions
+  only with `:fs`.
+
+A pod wants level 1: depending on it at all is the decision, because its whole
+surface is the pod. A standard library wants level 2: everyone depends on it, and
+three vars in it are dangerous.
+
+Checked at EVERY edge rather than transitively. A requires B requires C: if B
+holds `:fs` and A does not, A still gets C's behaviour through B -- and that is
+correct, because it is B choosing to re-export, which is the same delegation
+allowed everywhere else here.
+
+### Where it guards the wrong thing, stated plainly
+
+**It constrains linking, not leaking.**
+
+A workspace holding `:fs` can read a file and hand the CONTENTS to anyone.
+Capabilities gate the ability to act, not the propagation of results. And more
+sharply: a granted workspace can wrap a guarded var in an unguarded one --
+
+```clojure
+;; workspace A holds :fs
+(defn read-anything [p] (fs/read p))   ; no guard on this one
+```
+
+-- and now anyone who may require A can read any file. That is A's choice and it
+is exactly delegation, but it means **a guard is only as strong as the discipline
+of the workspace that was granted the capability.** Authority is not transitive
+in NAME and is entirely transitive in EFFECT, through any exported function.
+
+This is how every capability system works and it is not a defect, but the
+property has to be stated the right way round, because the wrong way round is the
+one people assume:
+
+* **True**: you can audit which workspaces directly hold an authority, and that
+  set is small and declared.
+* **NOT true**: authority cannot spread. It spreads through every function a
+  holder exports.
+
+Anyone reading a `:flint/capabilities-grant` should read it as "this workspace
+may act" and not as "code beyond this workspace cannot".
+
+### The corollary for the standard library
+
+Since the standard library is a workspace, and everything refers it, its guards
+matter more than anyone's. A single over-broad wrapper in `clojure.core` would
+hand every program the thing it wraps. The guarded surface there should be as
+narrow as it can be, and that is a maintenance rule rather than something the
+mechanism enforces.
+
+### And for the host-request builtin
+
+Guarding the builtin that asks the host for something answers a coarse question
+-- may this workspace talk to the embedder AT ALL -- and the host answers the
+specific one, per request, as it already does. Both are wanted: without the
+guard, a library nobody vetted can open a dialogue with the embedder silently;
+without the host's check, the guard would be the only thing standing between a
+declaration and the world.
+
 ## Order
 
 1. **The namespace resolver**, as above: one concept both front doors produce,
