@@ -1,13 +1,20 @@
-;; The spike's driver: read the DSL, read the rules, emit for every target.
-;;
-;; babashka for now. If this proves out it belongs in the flint CLI, and the
-;; translator is already `.cljc` so it can move without being rewritten.
-(require '[clojure.string :as str] '[clojure.edn :as edn])
+;; The v2 driver.
+(require '[clojure.string :as str])
 (load-file "splint/splint.cljc")
+(load-file "splint/vm_vocab.cljc")
 
-(def src (slurp "splint/spike/spread.splint"))
-(doseq [t ["rust" "jvm" "clr"]]
-  (let [rules (edn/read-string (slurp (str "splint/rules/" t ".edn")))]
-    (println (str "==== " t " ===================================="))
-    (println (splint/translate src rules))
+(def src (slurp "splint/spread.splint"))
+;; Skip the `ns` form: what it requires is the vocabulary, which this spike
+;; wires directly. Resolving it for real is one of the open questions.
+(def forms (let [all (read-string (str "[" src "]"))]
+             (vec (remove (fn [f] (and (seq? f) (= 'ns (first f)))) all))))
+
+(doseq [target [:rust :java :csharp]]
+  (let [ctx (assoc (flint.splint/context {} target)
+                   :vocab (flint.impl.vm/forms-for)
+                   :statements flint.impl.vm/statement-heads
+                   :tmp (atom 0))]
+    (println (str "==== " (name target) " ===================================="))
+    (doseq [f forms] (flint.splint/splint-statement! ctx f))
+    (print (str/join (deref (:out ctx))))
     (println)))

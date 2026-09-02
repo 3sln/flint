@@ -1,241 +1,171 @@
-(ns splint
-  "A spike: write a runtime's shared logic once, emit it for every host.
+(ns flint.splint
+  "splint: write a runtime's shared logic once, emit it for every host.
 
-  ## The problem this is aimed at
+  ## Why this is code and not data
 
-  flint has four runtimes that are meant to be verbatim mirrors, and keeping
-  them so is done BY HAND. Porting one interpreter opcode -- `APPLY`, while
-  fixing a park bug -- meant writing the same thirty lines three times in Rust,
-  Java and C#. The three differed in naming and punctuation and in nothing else.
+  The first version made per-target knowledge a table of format strings. It got
+  most of the way and then leaked: FOUR things turned out not to be expressible
+  as data, and each ended up special-cased in the translator instead --
 
-  ## The bet
+  * Rust needs call arguments hoisted into temporaries and the others do not;
+  * a loop test cannot be hoisted and has to be rewritten into the loop;
+  * `mut` has to be inferred from whether the body assigns;
+  * numeric width is a per-call cast.
 
-  Per-target knowledge is DATA, and the translator knows only control flow. If
-  that split holds, the shared parts of three runtimes can be written once.
+  A translator that knows about all four is not a translator with a config
+  file; it is a compiler for three languages wearing one. So the rules are
+  FUNCTIONS. Each target implements each form, and the four become ordinary
+  code inside the implementations that need them -- the Rust `invoke` hoists
+  because Rust's `invoke` says so, and nothing else in the system knows.
 
-  `splint/rules/<target>.edn` says how a call, a field, a type and a statement
-  render. This file knows `let`, `set`, `if`, `while`, `do`, `return`,
-  `break`, `continue`, operators, and nothing about any language.
+  ## The pieces
 
-  ## What it deliberately does NOT try to do
+  * `splint-ns` -- a VOCABULARY: tags, and per-target implementations of forms.
+  * `splint` -- a DRIVER: targets, each with a path and a file preamble.
+  * A source file is an ordinary `ns` with `:require`, so what a file may say is
+    what it asked for. Two sources can use different vocabularies.
 
-  The divergent parts. A GC write barrier, a wasm ABI shim, the `unsafe` in the
-  Rust heap -- those are different by nature and pretending otherwise would
-  produce three things that are each wrong. The claim is only about the 1:1
-  logic, which is most of the opcode bodies."
-  (:require [clojure.string :as str]
-            [clojure.edn :as edn]))
+  ## Emission
 
-(defn- fmt
-  "`\"self.{0}({1})\"` with arguments substituted."
-  [tmpl args]
-  (reduce (fn [s i]
-            (str/replace s (str "{" i "}") (nth args i "")))
-          tmpl
-          (range (count args))))
+  Two sinks, and the difference is the whole reason hoisting works:
 
-(defn- named-fmt
-  "`\"{type} {name} = {init};\"` with a map substituted."
-  [tmpl m]
-  (reduce (fn [s e] (str/replace s (str "{" (name (key e)) "}") (str (val e))))
-          tmpl m))
+      (splint-emit!  ctx \"...\")   append here
+      (splint-before! ctx \"...\")   append BEFORE the current statement
 
-(defn- pad [n] (apply str (repeat n " ")))
+  and `splint-render` runs a form into a string instead of the current sink, so
+  an expression can be composed while a statement is emitted."
+  (:require [clojure.string :as str]))
 
-(declare expr)
+;; --------------------------------------------------------------- the context
 
-;; Temporaries hoisted out of the expression currently being built.
-;;
-;; RUST NEEDS THIS AND THE OTHERS DO NOT, which is the one place the spike found
-;; that is not a naming difference. `self.set_r(si, self.seq(self.r(si)))` is
-;; two mutable borrows of `self` and the borrow checker refuses it:
-;;
-;;     error[E0499]: cannot borrow `*self` as mutable more than once at a time
-;;
-;; Java and C# accept the same shape happily. So a target may ask for call
-;; arguments that are THEMSELVES calls to be lifted into locals first -- which
-;; is exactly what the hand-written Rust does, and now nobody has to remember
-;; to do it.
-(def ^:private hoisted (atom []))
-;; NEVER RESET WITHIN A SNIPPET. Per-statement numbering produced two locals
-;; called `t0__` in one scope -- which Rust shadows silently and Java and C#
-;; reject, so the bug would have shown up on two targets and not the third.
-(def ^:private tmp-n (atom 0))
+(defn- new-sink [] (atom []))
 
-(defn- hoist!
-  "Bind `code` to a fresh local and return the local's name."
-  [rules code]
-  (let [nm (str "t" (swap! tmp-n inc) "__")]
-    (swap! hoisted conj (named-fmt (:tmp rules) {:name nm :init code}))
-    nm))
+(defn context
+  "A fresh emission context for `target`."
+  [driver target]
+  {:driver driver
+   :target target
+   :out (new-sink)
+   ;; Statements to place BEFORE the one being built. A form that needs a
+   ;; temporary writes here and the statement layer flushes it.
+   :pre (new-sink)
+   :scope {}
+   :indent 0})
 
-(defn- call? [x] (and (seq? x) (symbol? (first x))))
+(defn splint-emit!
+  "Append to the current sink."
+  [ctx & parts]
+  (swap! (:out ctx) conj (apply str parts))
+  nil)
 
-(defn- args*
-  [rules xs]
-  (mapv (fn [x]
-          (let [code (expr rules x)]
-            (if (and (:hoist-call-args rules) (call? x))
-              (hoist! rules code)
-              code)))
-        xs))
+(defn splint-before!
+  "Append a STATEMENT before the one currently being built.
 
-(defn- expr
-  "One EXPRESSION, as target source."
-  [rules form]
+  This is what makes hoisting a target's own business: Rust's `invoke` binds a
+  temporary and emits the binding here, and no other target's implementation --
+  or the translator -- has to know that happened."
+  [ctx & parts]
+  (swap! (:pre ctx) conj (apply str parts))
+  nil)
+
+(defn splint-scoped
+  "Call `f` with `ctx` extended by one scoped entry.
+
+  `{:key :class :value {...}}`, and `:indent` if the scope indents. Scoped
+  rather than global because a form's implementation asks what encloses it --
+  which class, which package, how deep -- and that is a stack, not a variable."
+  [ctx entry f]
+  (f (-> ctx
+         (assoc-in [:scope (:key entry)] (:value entry))
+         (update :indent + (or (:indent entry) 0)))))
+
+(defn splint-get
+  "Read a scoped entry."
+  [ctx k]
+  (get (:scope ctx) k))
+
+(defn indent-of [ctx] (apply str (repeat (* 4 (:indent ctx)) " ")))
+
+;; ------------------------------------------------------------------ dispatch
+
+(declare dispatch literal)
+
+(defn- form-fn
+  "The implementation of `head` for this context's target, or nil."
+  [ctx head]
+  (get-in ctx [:vocab head]))
+
+(defn splint-render
+  "Run `form` into a STRING rather than into the current sink.
+
+  Expressions compose; statements emit. A form implementation that needs a
+  sub-expression calls this, and one that emits a statement calls
+  `splint-emit!` -- which is how one vocabulary serves both positions without
+  the translator deciding which is which."
+  [ctx form]
+  (let [sub (assoc ctx :out (new-sink))]
+    (dispatch sub form)
+    (str/join (deref (:out sub)))))
+
+(defn splint-statement!
+  "Run `form` as a statement, flushing anything it hoisted BEFORE it.
+
+  The order is the point: a temporary must be bound before the statement that
+  reads it, and a statement that hoists nothing pays nothing.
+
+  ## Expressions and statements are different, and the vocabulary says which
+
+  `(set-r si x)` is a call -- an EXPRESSION -- and its implementation emits just
+  the call, because in `(if (nil? x) ...)` that is exactly what is wanted. Used
+  as a statement it needs indentation and a terminator, and the first version
+  emitted neither: `self.set_r(si, t2__)while true {`.
+
+  Rather than guess -- a trailing newline would have been a workable heuristic
+  and a bad rule -- the vocabulary DECLARES which heads emit complete
+  statements. Everything else is an expression and gets wrapped."
+  [ctx form]
+  (let [sub (assoc ctx :out (new-sink) :pre (new-sink))
+        head (when (seq? form) (first form))
+        stmt? (contains? (or (:statements ctx) #{}) head)]
+    (dispatch sub form)
+    (doseq [p (deref (:pre sub))] (splint-emit! ctx p))
+    (let [body (str/join (deref (:out sub)))]
+      (if stmt?
+        (splint-emit! ctx body)
+        (splint-emit! ctx (indent-of ctx) body ";\n")))))
+
+(defn dispatch
+  "One form. A seq whose head the vocabulary knows goes to its implementation;
+  anything else is a literal."
+  [ctx form]
+  (if (and (seq? form) (symbol? (first form)) (form-fn ctx (first form)))
+    ((form-fn ctx (first form)) ctx form)
+    (splint-emit! ctx (literal ctx form))))
+
+(defn literal
+  "A non-form: a symbol, a number, a string, a boolean."
+  [ctx v]
   (cond
-    (symbol? form) (str form)
-    (string? form) (pr-str form)
-    (number? form) (str form)
-    (true? form) (:true rules)
-    (false? form) (:false rules)
-    (nil? form) (:nil rules)
+    (string? v) (pr-str v)
+    (symbol? v) (str v)
+    (nil? v) (or (splint-get ctx :nil) "null")
+    :else (str v)))
 
-    (seq? form)
-    (let [head (keyword (name (first form)))
-          as (args* rules (rest form))]
-      (cond
-        ;; An operator: infix, and parenthesised so precedence is never a
-        ;; question. Ugly output beats output that is wrong once.
-        (get (:ops rules) head)
-        (if (= 1 (count as))
-          (str (get (:ops rules) head) (first as))
-          (str "(" (str/join (str " " (get (:ops rules) head) " ") as) ")"))
+;; ------------------------------------------------------------- declarations
 
-        ;; A named call, from the rules.
-        (get (:calls rules) head)
-        (fmt (get (:calls rules) head) as)
+(defn splint-ns
+  "A vocabulary: `:name`, `:tags`, and `:forms` keyed by target.
 
-        ;; A field.
-        (= head :field)
-        (get (:fields rules) (keyword (str/replace (str (first (rest form))) ":" "")))
+  A TAG carries data rather than being a name. `^Stack` can hold the type each
+  target spells it as AND a dispatch table saying what `(push it x)` becomes --
+  which is the compile-time protocol, and the reason tags are values."
+  [& {:keys [name tags forms]}]
+  {:name name :tags (or tags {}) :forms (or forms {})})
 
-        :else
-        (throw (ex-info (str "splint: no rule for " head " on " (:name rules))
-                        {:form form :target (:name rules)}))))
-    :else (str form)))
+(defn splint
+  "A driver: `:targets` and the `:namespaces` in scope.
 
-(declare stmt)
-
-(defn- with-hoists
-  "Render one statement, emitting any temporaries it needed FIRST.
-
-  The order is the whole point: a temporary has to be bound before the
-  statement that reads it, and a statement that hoists nothing pays nothing."
-  [rules f indent]
-  ;; SAVE AND RESTORE, not reset. A nested block -- an `if`'s then-branch, a
-  ;; `do` -- renders through here too, and resetting threw away the temporaries
-  ;; the ENCLOSING statement had already collected. The symptom was a generated
-  ;; `if !t6__` with no `let t6__` above it, which is the kind of thing that
-  ;; compiles on no target and is invisible until you run the compiler.
-  (let [outer @hoisted]
-    (reset! hoisted [])
-    (let [body (stmt rules f indent)
-          pre @hoisted]
-      (reset! hoisted outer)
-      (if (seq pre)
-        (str (str/join "\n" (mapv (fn [h] (str (pad indent) h)) pre)) "\n" body)
-        body))))
-
-(defn- block [rules forms indent]
-  (str/join "\n" (mapv (fn [f] (with-hoists rules f indent)) forms)))
-
-
-(defn- stmt
-  "One STATEMENT, as target source, indented by `indent` spaces."
-  [rules form indent]
-  (let [i (pad indent)]
-    (if-not (seq? form)
-      (str i (expr rules form) (:end rules))
-      (let [head (keyword (name (first form)))]
-        (case head
-          :let
-          (let [[_ bindings & body] form
-                pairs (partition 2 bindings)
-                ;; MUTABILITY IS INFERRED, not declared. Rust needs `mut` and
-                ;; refuses a second assignment without it; Java and C# need
-                ;; nothing. Asking the author to write it would be asking them
-                ;; to know which target they are writing for, which is the whole
-                ;; thing this is trying to avoid.
-                assigned (let [found (atom #{})]
-                           (letfn [(walk [f]
-                                     (when (seq? f)
-                                       (when (and (= 'set (first f)) (symbol? (second f)))
-                                         (swap! found conj (second f)))
-                                       (doseq [x f] (walk x))))]
-                             (doseq [f body] (walk f)))
-                           @found)]
-            (str (str/join "\n"
-                           (mapv (fn [[nm init]]
-                                   (let [tag (:tag (meta nm))
-                                         ty (get (:types rules)
-                                                 (keyword (str (or tag "val"))))
-                                         f (if (contains? assigned nm)
-                                             (get-in rules [:let :mut])
-                                             (get-in rules [:let :fmt]))]
-                                     (str i (named-fmt f
-                                                       {:type ty :name (str nm)
-                                                        :init (expr rules init)}))))
-                                 pairs))
-                 "\n" (block rules body indent)))
-
-          :set
-          (let [[_ place value] form]
-            (str i (named-fmt (get-in rules [:set :fmt])
-                              {:place (expr rules place) :value (expr rules value)})))
-
-          :if
-          (let [[_ test then else] form]
-            (str i (named-fmt (get-in rules [:if :open]) {:test (expr rules test)}) "\n"
-                 (stmt rules then (+ indent 4)) "\n"
-                 (if else
-                   (str i (get-in rules [:if :else]) "\n"
-                        (stmt rules else (+ indent 4)) "\n" i (get-in rules [:if :close]))
-                   (str i (get-in rules [:if :close])))))
-
-          ;; A LOOP TEST IS EVALUATED EVERY ITERATION, so it cannot be
-          ;; hoisted out the way an `if` test can.
-          ;;
-          ;; The first version lifted it and produced `while !t1__ {` with the
-          ;; temporary bound once, before the loop -- an infinite loop, or a
-          ;; loop that never runs. So the test moves INSIDE:
-          ;;
-          ;;     while (true) { <hoists> if (!test) break; <body> }
-          ;;
-          ;; which is correct on every target and needs no target-specific rule.
-          ;; The cost is one `break` and a `true` that any compiler folds.
-          :while
-          (let [[_ test & body] form
-                inner (+ indent 4)]
-            (str i (named-fmt (get-in rules [:while :open]) {:test (:true rules)}) "\n"
-                 (with-hoists rules
-                   (list 'if (if (and (seq? test) (= 'not (first test)))
-                               (second test)
-                               (list 'not test))
-                         '(break))
-                   inner) "\n"
-                 (block rules body inner) "\n"
-                 i (get-in rules [:while :close])))
-
-          :do (block rules (rest form) indent)
-          :return (str i (named-fmt (get-in rules [:return :fmt])
-                                    {:value (expr rules (second form))}))
-          :break (str i (:break rules))
-          :continue (str i (:continue rules))
-          ;; Anything else is an expression used for effect.
-          (str i (expr rules form) (:end rules)))))))
-
-(defn render
-  "A `defsnippet` form, as target source."
-  [rules form]
-  (reset! tmp-n 0)
-  (let [[_ nm doc params & body] form]
-    (str "// " (str/replace (str doc) "\n" "\n// ") "\n"
-         "// GENERATED by splint from the shared source. Do not edit here.\n"
-         (block rules body 0))))
-
-(defn translate
-  "`source` and a rules map -> target source."
-  [source rules]
-  (let [forms (read-string (str "[" source "]"))]
-    (str/join "\n\n" (mapv (fn [f] (render rules f)) forms))))
+  Each target has `:path` (where a namespace's file goes), `:write` (the file's
+  preamble and epilogue) and `:vfs` (where it is written)."
+  [& {:keys [targets namespaces]}]
+  {:targets (or targets {}) :namespaces (or namespaces [])})

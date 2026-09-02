@@ -17,98 +17,102 @@ be written once.**
 
 ## The shape
 
+A splint source is an ordinary `ns` with `:require`, so **what a file may say is
+what it asked for** — two sources can be written in different vocabularies, and
+a form nobody imported is not silently available.
+
 ```clojure
-(defsnippet spread-seq
-  "Spread `seq` onto the value stack, returning how many went on."
-  [^usize si]
-  (let [^usize spread 0]
-    (set-r si (seq (r si)))
-    (while (not (nil? (r si)))
-      (if (not (charge spread 1 "apply"))
-        (do (pop-to si) (break)))
-      (vpush (first (r si)))
-      (set spread (+ spread 1))
-      (set-r si (next (r si))))
-    spread))
+(ns runtime.spread
+  (:require [flint.impl.vm :refer [let set if while do break invoke
+                                   Usize Val
+                                   r set-r vpush pop-to seq first next charge]]))
+
+(let [^Usize spread 0]
+  (set-r si (seq (r si)))
+  (while (not (invoke ^Val (r si) nil?))
+    (if (not (charge spread 1 "apply"))
+      (do (pop-to si) (break)))
+    (vpush (first (r si)))
+    (set spread (+ spread 1))
+    (set-r si (next (r si)))))
 ```
 
-`splint/rules/<target>.edn` says what each call, field, type and statement looks
-like. `splint/splint.cljc` knows `let`, `set`, `if`, `while`, `do`, `return`,
-`break`, `continue` and operators — and nothing about any language.
+A **vocabulary** is `splint-ns`: tags, and each form implemented per target as a
+FUNCTION. A **driver** is `splint`: targets, each with a path and a file
+preamble.
 
-The subject is deliberate: it is the exact code that was written three times by
-hand, so the output can be compared against something real rather than against
-an example chosen to flatter the tool.
+### Rules are code, and that is the decision
+
+The first version made per-target knowledge a table of format strings. It got
+most of the way and then leaked — four things turned out not to be expressible
+as data, and each ended up special-cased in the TRANSLATOR:
+
+* Rust needs call arguments hoisted into temporaries and the others do not;
+* a loop test cannot be hoisted and has to be rewritten into the loop;
+* `mut` has to be inferred from whether the body assigns;
+* numeric width is a per-call cast.
+
+A translator that knows all four is not a translator with a config file; it is a
+compiler for three languages wearing one. With forms as functions, all four
+become ordinary code inside the implementation that needs them. Rust's `set-r`
+hoists because Rust's `set-r` says so, and nothing else in the system knows.
+
+### Tags are values
+
+A tag carries the type each target spells it as AND a dispatch table, so
+`(invoke ^Val x nil?)` asks the TAG what to emit:
+
+```text
+rust    self.r(si).is_nil()
+java    Val.isNil(r(si))
+csharp  Val.IsNil(R(si))
+```
+
+That is the compile-time protocol: a new target is a new entry in a tag rather
+than a new case in the translator.
+
+### Two sinks, and a declared statement set
+
+`splint-emit!` appends here; `splint-before!` appends BEFORE the current
+statement, which is what makes hoisting a target's own business.
+`splint-render` runs a form into a string instead, so expressions compose while
+statements emit.
+
+The vocabulary declares which heads are complete STATEMENTS. Everything else is
+an expression and gets wrapped with indentation and a terminator — without that,
+a call used as a statement came out as `self.set_r(si, t2__)while true {`.
+Declared rather than sniffed for a trailing newline, which would have worked and
+been a rule nobody could reason about.
 
 ## What came out
 
+```rust
+let mut spread: usize = 0;
+let t1__ = self.r(si);
+let t2__ = self.seq(t1__);
+self.set_r(si, t2__);
+while true {
+    if self.r(si).is_nil() { break; }
+    let t3__ = self.charge_tick(spread as u64, 1, "apply");
+    ...
+```
+
 ```java
-// jvm
 int spread = 0;
 setR(si, Seqs.seq(this, r(si)));
 while (true) {
     if (Val.isNil(r(si))) { break; }
     if (!chargeTick(spread, 1, "apply")) { popTo(si); break; }
     vpush(Seqs.first(this, r(si)));
-    spread = (spread + 1);
-    setR(si, Seqs.next(this, r(si)));
-}
 ```
 
-```rust
-// rust
-let mut spread: usize = 0;
-let t1__ = self.r(si);
-let t2__ = self.seq(t1__);
-self.set_r(si, t2__);
-while true {
-    let t3__ = self.r(si);
-    if t3__.is_nil() { break; }
-    let t4__ = self.charge_tick(spread as u64, 1, "apply");
-    if !t4__ { self.pop_to(si); break; }
-    ...
-```
-
-The JVM and CLR outputs are the hand-written ones modulo whitespace. The Rust
-output is the hand-written one **including its temporaries** — and that is the
-finding.
-
-## Four things it is not just naming, and all four are expressible
-
-The spike's value is these, because each was discovered by the compiler
-refusing something rather than by thinking about it.
-
-1. **Rust needs temporaries; the others do not.**
-   `self.set_r(si, self.seq(self.r(si)))` is two mutable borrows and `rustc`
-   refuses it. Java and C# accept the same shape. So a target may set
-   `:hoist-call-args`, and Rust alone does — which is why the Rust output has
-   `t1__` and the others do not, from one source.
-
-2. **A loop test cannot be hoisted.** The first version lifted it and emitted
-   `while !t1__` with the temporary bound once, before the loop. The fix is to
-   put the test inside — `while (true) { if (!test) break; … }` — which is
-   correct on every target and needs no per-target rule.
-
-3. **Mutability is inferred, not declared.** Rust needs `mut` and refuses a
-   second assignment without it; Java and C# need nothing. Asking the author to
-   write it would be asking them which target they are writing for.
-
-4. **Numeric width is per-call.** `charge_tick` takes `u64`, the caller counts
-   in `usize`, and Java and C# use `long` for both. The cast lives in the
-   Rust rule for that call: `"self.charge_tick({0} as u64, {1}, {2})"`.
-
-Two bugs found the same way, worth recording because they are what a reader
-would hit next: temporaries numbered per statement collided in one scope (Rust
-shadows silently, Java and C# reject — so it would have looked like a
-two-target bug), and a nested block reset the pending temporary list, producing
-`if !t6__` with no `let t6__` above it.
-
-## The result that matters
+Same source. Rust gets temporaries, `mut`, a type and a cast; Java and C# get
+the natural nested form and none of them. The JVM and CLR output is the
+hand-written code modulo whitespace.
 
 **The generated Rust compiles verbatim**, pasted into `runtime/src/vm.rs`
-without an edit. That is asserted by the build rather than claimed here: the
-snippet is in the file under `#[cfg(test)]`, so if it stops compiling, the
-build says so.
+without an edit — asserted by the build rather than claimed here, since the
+snippet sits in the file under `#[cfg(test)]`.
 
 ## What it deliberately cannot do
 
@@ -122,11 +126,14 @@ builtin, and most of what has cost time.
 
 ## What is undecided
 
-* **Whether the rules stay data.** Four structural transforms already exist
-  (hoisting, the loop rewrite, mutability inference, per-call casts). One or
-  two more and the "rules are data, translator knows control flow" split stops
-  being true, and it becomes a compiler with a config file — which is a
-  different and much larger thing.
+* **How `:require` resolves.** The spike wires the vocabulary directly and
+  ignores the `ns` form. Making it real means deciding where a vocabulary lives
+  and how a source names one — which is the same question flint answers with
+  its namespace resolver (`0036`), so it may be the same answer.
+* **Expressions that need statements.** A form that must emit a statement while
+  being used as an expression — a Rust `match`, a ternary — has `splint-before!`
+  and nothing else. It is enough for hoisting and it has not been tested on
+  anything harder.
 * **Where the generated code goes.** Pasting into the three runtimes means
   generated code in the repository, which needs a check that it is up to date.
   Generating at build time means three build steps that need flint or babashka
