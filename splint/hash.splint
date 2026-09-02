@@ -1,0 +1,78 @@
+;; Murmur3, written once.
+;;
+;; Phase 2 of `doc/goals/splint-port.md`, and the first COMPLETE unit: this is
+;; the whole of the murmur3 core that `runtime/src/hash.rs`, `Hash.java` and
+;; `Hash.cs` each carry, and after this slice none of them carries it by hand.
+;;
+;; It was chosen because the three files already say, in a comment, that they
+;; must agree and are kept in step deliberately -- `Hash.java` warns against
+;; using `String.hashCode()` precisely because it would let the two ports reach
+;; the same number by different routes. A file with that warning in it is a
+;; file asking to be generated.
+;;
+;; `hash` is OBSERVABLE from Clojure, so these numbers are not an internal
+;; detail: a program ported to flint has to get the hashes it got before. The
+;; formulas are pinned by tests in all three runtimes, which is what makes this
+;; slice safe to replace and what makes the replacement worth checking.
+(ns runtime.hash
+  (:require [flint.impl.hash :refer [defn let if return defconst hex
+                                     mul32 add32 shl ushr sar bit-xor bit-or == -
+                                     low32 high32 set
+                                     U32 I64]]))
+
+(defconst ^U32 C1 (hex 0xcc9e2d51))
+(defconst ^U32 C2 (hex 0x1b873593))
+(defconst ^:pub ^U32 SEED 0)
+
+(defconst ^:pub ^U32 HASH_TRUE 1231)
+(defconst ^:pub ^U32 HASH_FALSE 1237)
+
+(defn ^U32 rotl [^U32 x ^U32 n]
+  (return (bit-or (shl x n) (ushr x (- 32 n)))))
+
+(defn ^U32 mix-k1 [^U32 k1]
+  (return (mul32 (rotl (mul32 k1 C1) 15) C2)))
+
+(defn ^U32 mix-h1 [^U32 h1 ^U32 k1]
+  (return (add32 (mul32 (rotl (bit-xor h1 k1) 13) 5) (hex 0xe6546b64))))
+
+(defn ^U32 fmix [^:mut ^U32 h1 ^U32 len]
+  (set h1 (bit-xor h1 len))
+  (set h1 (bit-xor h1 (ushr h1 16)))
+  (set h1 (mul32 h1 (hex 0x85ebca6b)))
+  (set h1 (bit-xor h1 (ushr h1 13)))
+  (set h1 (mul32 h1 (hex 0xc2b2ae35)))
+  (return (bit-xor h1 (ushr h1 16))))
+
+(defn ^:pub ^U32 hash-int [^U32 input]
+  (if (== input 0)
+    (return 0))
+  (return (fmix (mix-h1 SEED (mix-k1 input)) 4)))
+
+(defn ^:pub ^U32 hash-long [^I64 input]
+  (if (== input 0)
+    (return 0))
+  (let [^U32 low (low32 input)
+        ^U32 high (high32 input)
+        ^U32 h1 (mix-h1 SEED (mix-k1 low))
+        ^U32 h2 (mix-h1 h1 (mix-k1 high))]
+    (return (fmix h2 8))))
+
+;; `boost::hash_combine`, as Clojure's `Util.hashCombine`. The `sar` is the
+;; point of interest: an ARITHMETIC shift, which Rust can only reach by going
+;; through `i32` and back.
+(defn ^:pub ^U32 hash-combine [^U32 seed ^U32 h]
+  (return (bit-xor seed (add32 (add32 (add32 h (hex 0x9e3779b9))
+                                      (shl seed 6))
+                               (sar seed 2)))))
+
+(defn ^:pub ^U32 mix-coll-hash [^U32 hash ^U32 count]
+  (return (fmix (mix-h1 SEED (mix-k1 hash)) count)))
+
+;; The running accumulators. Start ordered at 1 and unordered at 0, fold, then
+;; `mix-coll-hash` with the count.
+(defn ^:pub ^U32 ordered-step [^U32 acc ^U32 item-hash]
+  (return (add32 (mul32 acc 31) item-hash)))
+
+(defn ^:pub ^U32 unordered-step [^U32 acc ^U32 item-hash]
+  (return (add32 acc item-hash)))

@@ -1,0 +1,48 @@
+--rust
+fn main() {
+    let mut o = String::new();
+    o.push_str(&format!("{} ", hash_int(42) as i32));
+    o.push_str(&format!("{} ", hash_long(1) as i32));
+    o.push_str(&format!("{} ", hash_long(-1) as i32));
+    o.push_str(&format!("{} ", hash_combine(7, 11) as i32));
+    let mut a: u32 = 1;
+    for x in [1i64, 2, 3] { a = ordered_step(a, hash_long(x)); }
+    o.push_str(&format!("{} ", mix_coll_hash(a, 3) as i32));
+    let mut b: u32 = 0;
+    for x in [1i64, 2, 3] { b = unordered_step(b, hash_long(x)); }
+    o.push_str(&format!("{} ", mix_coll_hash(b, 3) as i32));
+    o.push_str(&format!("{} {}", HASH_TRUE as i32, HASH_FALSE as i32));
+    println!("{}", o);
+}
+--java
+    public static void main(String[] args) {
+        StringBuilder o = new StringBuilder();
+        o.append(hashInt(42)).append(' ');
+        o.append(hashLong(1)).append(' ');
+        o.append(hashLong(-1)).append(' ');
+        o.append(hashCombine(7, 11)).append(' ');
+        int a = 1;
+        for (long x : new long[]{1, 2, 3}) a = orderedStep(a, hashLong(x));
+        o.append(mixCollHash(a, 3)).append(' ');
+        int b = 0;
+        for (long x : new long[]{1, 2, 3}) b = unorderedStep(b, hashLong(x));
+        o.append(mixCollHash(b, 3)).append(' ');
+        o.append(HASH_TRUE).append(' ').append(HASH_FALSE);
+        System.out.println(o);
+    }
+--csharp
+    static void Main() {
+        var o = new StringBuilder();
+        o.Append(HashInt(42)).Append(' ');
+        o.Append(HashLong(1)).Append(' ');
+        o.Append(HashLong(-1)).Append(' ');
+        o.Append(HashCombine(7, 11)).Append(' ');
+        int a = 1;
+        foreach (long x in new long[]{1, 2, 3}) a = OrderedStep(a, HashLong(x));
+        o.Append(MixCollHash(a, 3)).Append(' ');
+        int b = 0;
+        foreach (long x in new long[]{1, 2, 3}) b = UnorderedStep(b, HashLong(x));
+        o.Append(MixCollHash(b, 3)).Append(' ');
+        o.Append(HASH_TRUE).Append(' ').Append(HASH_FALSE);
+        Console.WriteLine(o.ToString());
+    }

@@ -8,8 +8,14 @@
   Everything here is naming. The three codecs already agree on structure -- what
   differs is `out.write` against `out.WriteByte((byte) x)`, `>>>` against
   `((ulong) n >> 32)`, `getBytes(UTF_8)` against `Encoding.UTF8.GetBytes`. That
-  is a vocabulary, which is the whole bet."
+  is a vocabulary, which is the whole bet.
+
+  The SHAPE of a program -- `defn`, `let`, `if`, `return` -- is not here. It
+  moved to `flint.impl.core` the moment a second source needed it, and is
+  merged in below: a vocabulary says what its subject is called, not what a
+  function declaration looks like."
   (:require [flint.splint :as sp]
+            [flint.impl.core :as core]
             [clojure.string :as str]))
 
 (def I32 {:name 'I32 :types {:rust "u32" :java "int" :csharp "int"} :methods {}})
@@ -41,174 +47,13 @@
 
 (def tags-for {'I32 I32 'I64 I64 'Text Text 'Bytes Bytes 'Sink Sink 'Reader Reader 'MaybeText MaybeText})
 
-(defn- t [ctx] (:target ctx))
-
-(defn- fmt [tmpl args]
-  (reduce (fn [s i] (str/replace s (str "{" i "}") (nth args i ""))) tmpl (range (count args))))
-
-(defn- strip-parens
-  "Drop the outer parentheses of a whole expression.
-
-  **NOT for call arguments**, and that restriction was learned the hard way.
-  Stripping them there produced
-
-      u32(o, (int) n >>> 32)        // casts, THEN shifts -- wrong
-      u32(o, (int) (n >>> 32))      // what it has to be
-
-  because the argument is substituted into another template that does not
-  re-parenthesise it, so the parens were carrying the precedence. An aesthetic
-  rule silently changed the semantics, which is the one way the not-worse rule
-  can do harm: correct always outranks tidy.
-
-  Safe only where the expression is the WHOLE right-hand side of an assignment,
-  which is where it is used."
-  [c]
-  (if (and (str/starts-with? c "(") (str/ends-with? c ")")
-           (loop [i 1 d 1]
-             (cond (>= i (dec (count c))) (= d 1)
-                   (= \( (nth c i)) (recur (inc i) (inc d))
-                   (= \) (nth c i)) (if (= d 1) false (recur (inc i) (dec d)))
-                   :else (recur (inc i) d))))
-    (subs c 1 (dec (count c)))
-    c))
-
-(defn- call [tmpls]
-  (fn [ctx form]
-    (let [as (mapv (fn [f] (sp/splint-render ctx f)) (rest form))
-          code (fmt (get tmpls (t ctx)) as)]
-      (if (= :statement (sp/splint-position ctx))
-        (sp/splint-emit! ctx (sp/indent-of ctx) code ";\n")
-        (sp/splint-emit! ctx code)))))
-
-(def ^:private ops {'+ "+" '- "-" '* "*" '< "<" '> ">" '== "==" 'not "!" 'bit-shift-right ">>"})
-
-(defn- op-form [sym]
-  (fn [ctx form]
-    (let [as (mapv (fn [f] (sp/splint-render ctx f)) (rest form))]
-      (sp/splint-emit! ctx (if (= 1 (count as))
-                             (str (get ops sym) (first as))
-                             (str "(" (str/join (str " " (get ops sym) " ") as) ")"))))))
-
-(defn- ty-of [ctx tag] (get-in (or (sp/splint-tag ctx tag) I64) [:types (t ctx)]))
-
-(defn- defn-form
-  "A function, framed the way each target frames one.
-
-  The signature is where three languages disagree most and it is entirely
-  mechanical: a return type before or after, `static` or `fn`, `self` or not."
-  [ctx form]
-  (let [[_ nm params & body] form
-        ret (:tag (meta nm))
-        ps (partition 2 (interleave params (map (fn [p] (:tag (meta p))) params)))
-        camel (let [[h & r] (str/split (str nm) #"-")]
-                (str h (str/join (mapv str/capitalize r))))
-        pascal (str/join (mapv str/capitalize (str/split (str nm) #"-")))]
-    (case (t ctx)
-      ;; RUST RETURNS A RESULT WHERE THE OTHERS THROW, and that is the first
-      ;; divergence found in this port that is not naming: it changes the
-      ;; signature and every call site. `^:throws` on the name says a function
-      ;; can fail; Rust turns the return type into `Result<T, String>` and a
-      ;; call to it gets `?`, and Java and C# ignore the mark entirely because
-      ;; an exception needs nothing in either place.
-      :rust (sp/splint-emit!
-             ctx (sp/indent-of ctx) "fn " (str/replace (str nm) "-" "_") "("
-             (str/join ", " (mapv (fn [[p tag]] (str p ": " (ty-of ctx tag))) ps))
-             ")"
-             (cond
-               (and ret (:throws (meta nm))) (str " -> Result<" (ty-of ctx ret) ", String>")
-               ret (str " -> " (ty-of ctx ret))
-               (:throws (meta nm)) " -> Result<(), String>"
-               :else "")
-             " {\n")
-      :java (sp/splint-emit!
-             ctx (sp/indent-of ctx) "static " (if ret (ty-of ctx ret) "void") " " camel "("
-             (str/join ", " (mapv (fn [[p tag]] (str (ty-of ctx tag) " " p)) ps)) ") {\n")
-      :csharp (sp/splint-emit!
-               ctx (sp/indent-of ctx) "static " (if ret (ty-of ctx ret) "void") " " pascal "("
-               (str/join ", " (mapv (fn [[p tag]] (str (ty-of ctx tag) " " p)) ps)) ") {\n"))
-    (sp/splint-scoped ctx {:key :fn :value nm :indent 1}
-                      (fn [inner]
-                        (sp/splint-scoped inner {:key :throws :value (:throws (meta nm))}
-                                          (fn [in2] (doseq [f body]
-                                                      (sp/splint-statement! in2 f))))))
-    (sp/splint-emit! ctx (sp/indent-of ctx) "}\n")))
-
-(defn- let-form [ctx form]
-  (let [[_ bindings & body] form]
-    (doseq [[nm init] (partition 2 bindings)]
-      (let [ty (ty-of ctx (:tag (meta nm)))
-            code (strip-parens (sp/splint-render ctx init))]
-        (sp/splint-emit! ctx (sp/indent-of ctx)
-                         (case (t ctx)
-                           :rust (str "let " nm ": " ty " = " code ";\n")
-                           (str ty " " nm " = " code ";\n")))))
-    (doseq [f body] (sp/splint-statement! ctx f))))
-
-(defn- defstruct-form
-  "A small mutable record, declared the way each target declares one.
-
-  The first form here that is not a function or a statement, and the three
-  differ in mechanism rather than meaning: Rust wants a `struct` with a
-  lifetime for the borrowed slice, Java and C# want a class with fields. What
-  a source says is the FIELDS."
-  [ctx form]
-  (let [[_ nm fields] form
-        fs (mapv (fn [f] [f (:tag (meta f))]) fields)
-        pascal (str/join (mapv str/capitalize (str/split (str nm) #"-")))]
-    (case (t ctx)
-      :rust (do (sp/splint-emit! ctx (sp/indent-of ctx) "struct " pascal " {\n")
-                (doseq [[f tag] fs]
-                  (sp/splint-emit! ctx (sp/indent-of ctx) "    " f ": "
-                                   (ty-of ctx tag) ",\n"))
-                (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))
-      :java (do (sp/splint-emit! ctx (sp/indent-of ctx) "static final class " pascal " {\n")
-                (doseq [[f tag] fs]
-                  (sp/splint-emit! ctx (sp/indent-of ctx) "    " (ty-of ctx tag) " " f ";\n"))
-                (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))
-      :csharp (do (sp/splint-emit! ctx (sp/indent-of ctx) "sealed class " pascal " {\n")
-                  (doseq [[f tag] fs]
-                    (sp/splint-emit! ctx (sp/indent-of ctx) "    internal "
-                                     (ty-of ctx tag) " " f ";\n"))
-                  (sp/splint-emit! ctx (sp/indent-of ctx) "}\n")))))
-
-(defn- field-form
-  "`(. r i)` -- a field, readable and assignable. One spelling everywhere, which
-  is why it is one form."
-  [ctx form]
-  (let [[_ obj f] form]
-    (sp/splint-emit! ctx (sp/splint-render ctx obj) "." (str f))))
-
-(defn- set-form [ctx form]
-  (let [[_ place value] form]
-    (sp/splint-emit! ctx (sp/indent-of ctx)
-                     (sp/splint-render ctx place) " = "
-                     (strip-parens (sp/splint-render ctx value)) ";\n")))
-
-(defn- if-form [ctx form]
-  (let [[_ test then else] form
-        c (sp/splint-render ctx test)]
-    (sp/splint-emit! ctx (sp/indent-of ctx)
-                     (if (= :rust (t ctx)) (str "if " c " {\n") (str "if (" c ") {\n")))
-    (sp/splint-scoped ctx {:key :in-if :value true :indent 1}
-                      (fn [inner] (sp/splint-statement! inner then)))
-    (when else
-      (sp/splint-emit! ctx (sp/indent-of ctx) "} else {\n")
-      (sp/splint-scoped ctx {:key :in-if :value true :indent 1}
-                        (fn [inner] (sp/splint-statement! inner else))))
-    (sp/splint-emit! ctx (sp/indent-of ctx) "}\n")))
-
-(defn- return-form [ctx form]
-  (let [v (strip-parens (sp/splint-render ctx (second form)))
-        throws? (sp/splint-get ctx :throws)]
-    (sp/splint-emit! ctx (sp/indent-of ctx) "return "
-                     (if (and (= :rust (t ctx)) throws?) (str "Ok(" v ")") v) ";\n")))
+(def call core/call)
 
 (defn forms-for []
   (merge
-   {'defn defn-form 'let let-form 'defstruct defstruct-form
-    '. field-form 'set set-form 'if if-form 'return return-form
-    'do (fn [ctx form] (doseq [f (rest form)] (sp/splint-statement! ctx f)))}
-   (reduce (fn [m s] (assoc m s (op-form s))) {} (keys ops))
+   ;; The shape of a program. An untagged name is an `I64` here, which is the
+   ;; codec's default and nobody else's -- hence the argument.
+   (core/forms-for {:default-tag I64})
    {;; THE BYTE SINK. One byte, and the cast the CLR needs lives here rather
     ;; than in every call.
     'write-byte (call {:rust "{0}.push({1} as u8)"

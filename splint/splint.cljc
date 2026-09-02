@@ -197,16 +197,35 @@
         (get-in ctx [:vocabs vname :tags k]))
       (get-in ctx [:tags sym]))))
 
+(defn splint-declare!
+  "Register `sym` as callable by later forms in THIS source file.
+
+  A source has to be able to define a helper and then call it. Without this,
+  every helper would have to live in a vocabulary -- and a helper in a
+  vocabulary is a helper written once per target, which is the cost this whole
+  exercise exists to remove.
+
+  Declarations are FILE-LOCAL and come second: a vocabulary name still wins, so
+  a file cannot quietly redefine `let` out from under the reader. They are also
+  ordered -- a call before the `defn` that declares it is not in scope, the
+  same rule C and Rust modules differ on and the stricter of the two."
+  [ctx sym f]
+  (when-let [a (:locals ctx)] (swap! a assoc sym f))
+  nil)
+
 (defn- form-fn
   "The implementation of `head` for this context's target, or nil.
 
   Resolved through the source's require scope when there is one, so a name
-  means what the file said it means."
+  means what the file said it means, then through what the file itself has
+  declared."
   [ctx head]
   (if-let [scope (:scope-syms ctx)]
-    (when-let [[vname k] (get scope head)]
-      (get-in ctx [:vocabs vname :forms k]))
-    (get-in ctx [:vocab head])))
+    (or (when-let [[vname k] (get scope head)]
+          (get-in ctx [:vocabs vname :forms k]))
+        (get (some-> (:locals ctx) deref) head))
+    (or (get-in ctx [:vocab head])
+        (get (some-> (:locals ctx) deref) head))))
 
 (defn splint-render
   "Run `form` into a STRING rather than into the current sink.
@@ -280,12 +299,29 @@
                       {:symbol (first form)})))
     :else (splint-emit! ctx (literal ctx form))))
 
+(defn local-name
+  "A dashed name, spelled the way the target spells a LOCAL.
+
+  Only dashes are touched, so `SEED` and `C1` pass through untouched -- a
+  constant is written the same in all three and must not be camelised into
+  something a reader cannot grep for. Locals are camel in BOTH Java and C#,
+  which is where they differ from a function name: C# pascalises the function
+  and not the variable, and one rule for both would have produced `ItemHash`."
+  [target sym]
+  (let [s (str sym)]
+    (if-not (clojure.string/includes? s "-")
+      s
+      (case target
+        :rust (clojure.string/replace s "-" "_")
+        (let [[h & r] (clojure.string/split s #"-")]
+          (str h (clojure.string/join (mapv clojure.string/capitalize r))))))))
+
 (defn literal
   "A non-form: a symbol, a number, a string, a boolean."
   [ctx v]
   (cond
     (string? v) (pr-str v)
-    (symbol? v) (str v)
+    (symbol? v) (local-name (:target ctx) v)
     (nil? v) (or (splint-get ctx :nil) "null")
     :else (str v)))
 
