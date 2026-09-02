@@ -109,6 +109,7 @@
   "flint/re-find-all",
   "flint/re-run",
   "flint/realized?",
+  "flint/request",
   "flint/rint",
   "flint/schema",
   "flint/schema-columns",

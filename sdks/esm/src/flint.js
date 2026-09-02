@@ -248,6 +248,22 @@ function collectSources({ resolve, files, workspaces, target, withLib }) {
     }
   }
   for (const w of workspaces ?? []) spaces.push(w);
+  // The standard library is its own WORKSPACE, and last so anything the caller
+  // declared wins the prefix.
+  //
+  // Without this every guard in the standard library would be unenforceable
+  // through the SDK: a guard is only checked ACROSS workspaces, and a program
+  // that declared none would share the anonymous workspace with the library it
+  // is being guarded against. `flint.host/request` is the first var this
+  // matters for (`doc/decisions/0036`).
+  //
+  // It grants nothing. The library holding a capability is not the same
+  // question as a program being allowed to reach it, and the library does not
+  // need one to define a guarded var.
+  if (withLib) {
+    spaces.push({ prefix: 'clojure/', name: 'flint/flint' });
+    spaces.push({ prefix: 'flint/', name: 'flint/flint' });
+  }
   return { files: all, workspaces: spaces };
 }
 

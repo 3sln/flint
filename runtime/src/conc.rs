@@ -250,6 +250,9 @@ pub const WK_OPEN: i64 = 1;
 pub const WK_SEND: i64 = 2;
 pub const WK_RECEIVE: i64 = 3;
 pub const WK_JOIN: i64 = 4;
+/// Parked on `host_request`, which is `WK_OPEN` generalised: the answer is a
+/// VALUE rather than necessarily a port (`doc/decisions/0036` step 7).
+pub const WK_REQUEST: i64 = 5;
 
 // --- scheduler state -------------------------------------------------------
 
@@ -296,6 +299,14 @@ pub const EV_RETAIN: i64 = 4;
 /// This sandbox no longer holds the host's port `a` -- the collector found the
 /// handle unreachable, or the script closed it. Exactly one per `EV_RETAIN`.
 pub const EV_RELEASE: i64 = 5;
+/// The guest is asking the host for SOMETHING, and the answer is an ordinary
+/// value rather than a port (`doc/decisions/0036` step 7).
+///
+/// `EV_OPEN` is the special case of this whose answer happens to be a port, and
+/// it stays: a port is granted by id through `host_grant` and never encoded, so
+/// collapsing the two would mean encoding a handle, which is the one thing the
+/// codec must not do for a port it is lending rather than sending.
+pub const EV_REQUEST: i64 = 6;
 
 /// Instructions a thread runs before the scheduler takes it off. Fixed, because
 /// a deterministic answer is most of what this project is for: the same program
@@ -2272,6 +2283,143 @@ impl Rt {
         let target = self.r(si);
         self.pop_to(base);
         self.park(target)
+    }
+
+    /// Ask the host for something, and get a VALUE back.
+    ///
+    /// `port_open` generalised (`doc/decisions/0036` step 7). The two differ in
+    /// exactly one place -- what the answer may be -- and that difference is
+    /// load-bearing, so they are two functions rather than one with a flag: a
+    /// port is granted BY ID through `host_grant` and never encoded, because
+    /// encoding a handle the host is lending is the one thing the codec must
+    /// not do. Everything else here is the same park, the same waiter, the same
+    /// system port.
+    ///
+    /// The guest cannot construct a request it was not compiled to make: the
+    /// capability guard on the wrapper is a compile-time construct
+    /// (`doc/decisions/0036` step 8), and this primitive is the thing it
+    /// guards. What the host does with the request is the host's business, and
+    /// it may refuse -- which is a normal outcome and arrives catchably.
+    pub fn host_request(&mut self, what: Value, args: Value) -> Value {
+        self.ensure_sched();
+        let base = self.mark();
+        let ni = self.push(what);
+        let ai = self.push(args);
+        let th = self.current_thread();
+        let ti = self.push(th);
+        let pending = self.slot(self.r(ti), TH_PENDING);
+        if !pending.is_nil() {
+            // Second time round: the host has answered.
+            self.set(self.r(ti), TH_PENDING, NIL);
+            // A one-element VECTOR is an answer, holding whatever the host
+            // sent. Anything else is a refusal.
+            //
+            // The wrapper is not decoration. An answer may be any value at all,
+            // NIL included, so "answered" cannot be read off the value's type
+            // the way `port_open` reads it off `is_port` -- a host answering nil
+            // and a host refusing would be the same bits.
+            if self.is_vector(pending) {
+                let v = self.vec_nth(pending, 0).unwrap_or(NIL);
+                self.pop_to(base);
+                return v;
+            }
+            let mut b = crate::rt::sbuf();
+            let n: alloc::string::String = self.as_str(self.r(ni), &mut b).unwrap_or("?").into();
+            self.pop_to(base);
+            let msg = alloc::format!("the host refused the request {n:?}");
+            return self.throw_str("SecurityException", &msg);
+        }
+        // NO SYSTEM PORT, NO ASKING -- the same honesty as `port_open`: pushing
+        // an event nothing will drain parks the thread for ever and reads as a
+        // hang rather than as a refusal.
+        let sys = self.system_port();
+        if sys.is_nil() {
+            let mut b = crate::rt::sbuf();
+            let n: alloc::string::String = self.as_str(self.r(ni), &mut b).unwrap_or("?").into();
+            self.pop_to(base);
+            let msg = alloc::format!(
+                "this sandbox was given no system port, so it cannot ask for {n:?}"
+            );
+            return self.throw_str("SecurityException", &msg);
+        }
+        let si = self.push(sys);
+        let target = self.r(si);
+        let token = self.new_waiter(WK_REQUEST, target);
+        let t = self.r(ti);
+        self.set(t, TH_TOKEN, Value::fixnum(token));
+        let t = self.r(ti);
+        self.set(t, TH_PENDING, Value::fixnum(0));
+        // `[what & args]`, encoded -- the same payload shape `port_open` sends,
+        // so a host that already routes one routes the other.
+        let mut call: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+        {
+            let v = self.empty_vec();
+            let vi = self.push(v);
+            let nm = self.r(ni);
+            let nv = self.vec_conj(self.r(vi), nm);
+            self.set_r(vi, nv);
+            let a = self.r(ai);
+            let n = if self.is_vector(a) { self.vec_count(a) } else { 0 };
+            for k in 0..n {
+                let x = self.vec_nth(self.r(ai), k).unwrap_or(NIL);
+                let xi = self.push(x);
+                let nv = self.vec_conj(self.r(vi), self.r(xi));
+                self.set_r(vi, nv);
+                self.pop_to(xi);
+            }
+            match self.encode(self.r(vi)) {
+                Ok(b) => call = b,
+                Err(e) => {
+                    self.pop_to(base);
+                    let msg = alloc::format!("request: this cannot be sent to the host: {e}");
+                    return self.throw_str("IllegalArgumentException", &msg);
+                }
+            }
+        }
+        let payload = self.new_bytes(&call);
+        let pi = self.push(payload);
+        let sys_id = fx(self.slot(self.r(si), PT_ID));
+        let pv = self.r(pi);
+        self.push_event(EV_REQUEST, token, sys_id, pv);
+        let target = self.r(si);
+        self.pop_to(base);
+        self.park(target)
+    }
+
+    /// The host's answer to an `EV_REQUEST`, as encoded bytes.
+    ///
+    /// Decoded HERE, at the boundary, like every other thing crossing a bridge
+    /// (`doc/decisions/0027`): the guest gets a value and never a codec.
+    pub fn host_answer(&mut self, token: i64, bytes: &[u8]) -> bool {
+        let w = self.waiter_at(token);
+        if w.is_nil() {
+            return false;
+        }
+        let base = self.mark();
+        let wi = self.push(w);
+        let v = match self.decode(bytes) {
+            Ok(v) => v,
+            Err(_) => {
+                self.pop_to(base);
+                return false;
+            }
+        };
+        let vi = self.push(v);
+        // Wrapped, so that a host answering nil is distinguishable from a host
+        // refusing. See `host_request`.
+        let one = self.empty_vec();
+        let oi = self.push(one);
+        let nv = self.vec_conj(self.r(oi), self.r(vi));
+        self.set_r(oi, nv);
+        let th = self.slot(self.r(wi), W_THREAD);
+        if !th.is_nil() {
+            let ov = self.r(oi);
+            self.set(th, TH_PENDING, ov);
+        }
+        let wv = self.r(wi);
+        self.wake_waiter(wv);
+        self.pop_to(base);
+        true
     }
 
     /// Wait for `t` to finish. Parks rather than spinning: a spinning joiner

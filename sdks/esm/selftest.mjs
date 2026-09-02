@@ -267,6 +267,42 @@ ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled a
      await run(undefined, 'app.b/go'), 'privileged');
 }
 
+// --- asking the host for something (`doc/decisions/0036` step 7) ------------
+//
+// `open` asks for a PORT; `request` asks for anything and gets a value. It is
+// guarded with `:host`, and the standard library is its own workspace, which is
+// what makes that guard mean something to a program.
+{
+  const files = {
+    'app/a.cljc':
+      '(ns app.a (:require [flint.host :as h]))\n' +
+      '(defn go [] (h/request "config"))\n' +
+      '(defn opt [] (h/ask "nothing-here"))\n' +
+      '(defn nily [] (pr-str (h/request "nil-please")))\n',
+  };
+  let refused = null;
+  try { compiler.compile({ files, workspaces: [{ prefix: 'app/', name: 'app/app' }], fn: 'app.a/go' }); }
+  catch (e) { refused = e.message; }
+  ok('asking the host is refused without the :host capability',
+     /flint\.host\/request is guarded/.test(refused ?? ''), refused);
+
+  const sb = await (compiler.compile({
+    files, workspaces: [{ prefix: 'app/', name: 'app/app', grants: ['host'] }],
+    exports: ['app.a/go', 'app.a/opt', 'app.a/nily'], fn: 'app.a/go',
+  })).sandbox();
+  sb.inst.requests({ config: () => ({ mode: 'live', retries: 3 }), 'nil-please': () => null });
+  eq('and answered with a value when it is held',
+     await sb.call('app.a/go'), { mode: 'live', retries: 3 });
+
+  // NIL IS AN ANSWER. The runtime wraps a host's answer in a one-element vector
+  // for exactly this: without it, a host answering nil and a host refusing
+  // would be the same bits on the parked thread.
+  eq('nil is an answer, not a refusal', await sb.call('app.a/nily'), 'nil');
+  // And an unhandled name REFUSES rather than answering nil, which is the same
+  // distinction from the other side.
+  eq('an unhandled request is refused', await sb.call('app.a/opt'), null);
+}
+
 // --- the artifact stands on its own -----------------------------------------
 const dir = mkdtempSync(`${tmpdir()}/flint-`);
 writeFileSync(`${dir}/m.wasm`, image.wasm);

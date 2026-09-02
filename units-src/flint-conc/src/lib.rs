@@ -161,6 +161,30 @@ builtin!(flint_b_open, b_open, |rt, a, n| {
     rt.port_open(nm, args)
 });
 
+builtin!(flint_b_request, b_request, |rt, a, n| {
+    let what = arg(rt, a, 0);
+    if !rt.is_string(what) {
+        return rt.throw_str("ClassCastException", "request wants a name (a string)");
+    }
+    // Identical to `open` above, and deliberately so: same forwarding, same
+    // no-view-of-the-arguments. What differs is what comes back
+    // (`doc/decisions/0036` step 7).
+    let base = rt.mark();
+    let ni = rt.push(what);
+    let v = rt.empty_vec();
+    let vi = rt.push(v);
+    for i in 1..n {
+        let x = arg(rt, a, i as usize);
+        let xi = rt.push(x);
+        let nv = rt.vec_conj(rt.r(vi), rt.r(xi));
+        rt.set_r(vi, nv);
+        rt.pop_to(xi);
+    }
+    let (nm, args) = (rt.r(ni), rt.r(vi));
+    rt.pop_to(base);
+    rt.host_request(nm, args)
+});
+
 builtin!(flint_b_port_send, b_port_send, |rt, a, n| {
     let _ = n;
     let (p, v) = (arg(rt, a, 0), arg(rt, a, 1));
@@ -259,6 +283,7 @@ pub const HOST_CATALOGUE: &[(&str, flint_rt::vm::NativeFn)] = &[
     ("flint/set-bindings", flint_b_set_binds),
     ("flint/channel", flint_b_channel),
     ("flint/open", flint_b_open),
+    ("flint/request", flint_b_request),
     ("flint/port-send", flint_b_port_send),
     ("flint/port-receive", flint_b_port_receive),
     ("flint/port-close", flint_b_port_close),
@@ -282,6 +307,7 @@ pub const CATALOGUE: &[(&str, &str)] = &[
     ("flint/set-bindings", "flint_b_set_binds"),
     ("flint/channel", "flint_b_channel"),
     ("flint/open", "flint_b_open"),
+    ("flint/request", "flint_b_request"),
     ("flint/port-send", "flint_b_port_send"),
     ("flint/port-receive", "flint_b_port_receive"),
     ("flint/port-close", "flint_b_port_close"),
@@ -412,6 +438,23 @@ mod host {
     #[no_mangle]
     pub extern "C" fn flint_grant(token: u32, port: u32) -> u32 {
         rt().host_grant(token as i64, port as i64) as u32
+    }
+
+    /// Answer an `EV_REQUEST`: the bytes in the inbound buffer are the value
+    /// (`doc/decisions/0036` step 7).
+    ///
+    /// The counterpart of `flint_grant`, for the requests whose answer is not a
+    /// port. A port is granted BY ID and never encoded; anything else crosses
+    /// as encoded bytes like every other value on a bridge. To REFUSE, call
+    /// `flint_continue(token, 0)` as with an open -- a refusal carries no value
+    /// and needs no buffer.
+    #[no_mangle]
+    pub extern "C" fn flint_answer(token: u32, len: u32) -> u32 {
+        let bytes: alloc::vec::Vec<u8> = unsafe {
+            let b = &*core::ptr::addr_of!(IN);
+            b[..len as usize].to_vec()
+        };
+        rt().host_answer(token as i64, &bytes) as u32
     }
 
     /// A buffer to write an inbound message into.

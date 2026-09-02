@@ -117,6 +117,15 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
         try { value = codec.decode(data); } catch (e) { error = e; }
         out.push({ kind: 'message', port: a, data, value, error });
       }
+      else if (kind === 6) {
+        // A REQUEST, whose answer is an ordinary value rather than a port
+        // (`doc/decisions/0036` step 7). Decoded exactly like an open, because
+        // it carries exactly the same payload -- what differs is what goes back.
+        let argv;
+        try { argv = codec.decode(data); } catch { argv = []; }
+        const [what, ...rest] = Array.isArray(argv) ? argv : [String(argv)];
+        out.push({ kind: 'request', token: a, system: b, name: what, args: rest });
+      }
       else if (kind === 3) out.push({ kind: 'closed', port: a });
       else if (kind === 4) out.push({ kind: 'retain', port: a });
       else if (kind === 5) out.push({ kind: 'release', port: a });
@@ -192,6 +201,26 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
   // refused, which is a normal outcome and reaches the program as a catchable
   // error rather than a crash.
   let capabilities = {};
+
+  /// What the host is willing to ANSWER (`doc/decisions/0036` step 7). A name
+  /// to `(args, name, api) => value`; `'*'` catches whatever no name did.
+  ///
+  /// Separate from `capabilities` because the two answer different questions. A
+  /// capability lends a PORT -- an ongoing conversation the host keeps an end
+  /// of. A request is one question and one answer, and there is nothing left
+  /// afterwards. Folding them into one map would mean a handler had to say
+  /// which of the two it was, on every entry, for the benefit of neither.
+  let requests = {};
+
+  /// Answer a request with a value: encode it and hand it back by token.
+  function answer(token, value) {
+    const bytes = (value instanceof Val ? value : codec.from(value)).encode();
+    const p = e.flint_in_alloc(bytes.length);
+    new Uint8Array(e.memory.buffer).set(bytes, p);
+    // A failure here is a REFUSAL rather than silence: the thread is parked on
+    // this token and nothing else will ever wake it.
+    if (!e.flint_answer(token, bytes.length)) e.flint_continue(token, 0);
+  }
   const openPorts = new Map();
 
   /// Ids for the ports THIS HOST owns. A sandbox no longer mints them
@@ -253,6 +282,19 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
       ports.get(port).holders++;
       openPorts.set(port, cap);
       if (cap.open) cap.open(port, api);
+    } else if (ev.kind === 'request') {
+      // The host's own answer, and there is no default one. An unhandled
+      // request is REFUSED rather than answered nil: nil is a value a host may
+      // legitimately answer, so answering it for "nobody handled this" would
+      // make a missing handler indistinguishable from a deliberate one.
+      const fn = requests[ev.name] ?? requests['*'];
+      if (!fn) { e.flint_continue(ev.token, 0); return; }
+      let value;
+      try { value = fn(ev.args, ev.name, api); }
+      catch { e.flint_continue(ev.token, 0); return; }
+      // REFUSAL is `undefined`, not nil, for the same reason.
+      if (value === undefined) { e.flint_continue(ev.token, 0); return; }
+      answer(ev.token, value);
     } else if (ev.kind === 'message') {
       // An answer to a CALL comes back on the system port carrying its `:tx`.
       if (ev.value && pending.has(ev.value[':tx'])) {
@@ -367,7 +409,9 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     // Without one, nothing the guest does can park on us -- there is nothing to
     // park on -- so the synchronous path is sufficient and cheaper, and it is
     // what keeps a pure module free of a scheduler.
-    if (Object.keys(capabilities).length > 0) ensureSystem();
+    if (Object.keys(capabilities).length > 0 || Object.keys(requests).length > 0) {
+      ensureSystem();
+    }
     const sysId = e.flint_system_port ? e.flint_system_port() : 0;
     if (!sysId) return callSync(name, args);
     const tx = nextTx++;
@@ -465,6 +509,11 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     call,
     grant: (name, handler) => { capabilities[name] = handler; ensureSystem(); },
     capabilities: (m) => { capabilities = m; ensureSystem(); },
+    /// Answer `(request "name" ..)` from the guest. `fn(args, name, api)`
+    /// returns the value; returning `undefined` REFUSES, which nil does not,
+    /// because nil is an answer a host may legitimately give.
+    answers: (name, fn) => { requests[name] = fn; ensureSystem(); },
+    requests: (m) => { requests = m; ensureSystem(); },
     install,
     codec,
     holders: (p) => (ports.get(p)?.holders ?? 0),
