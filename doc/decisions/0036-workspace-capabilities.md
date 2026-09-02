@@ -895,6 +895,34 @@ without which a guard in it would be unenforceable: a guard is checked only
 across workspaces, and a program declaring none would share the anonymous
 workspace with the library it is being guarded against.
 
+## The macro hazard, measured
+
+The objection that made a compile-time-only check look unworkable was this:
+macros emit code, so anything a macro can emit can be inlined into a caller that
+was never allowed to write it. That was the reason for reaching for run-time
+tokens.
+
+It does not happen. An expansion is analysed in the CALLER's namespace, so the
+CALLER's workspace is what the guard is checked against:
+
+    macro expansion  -> refused: lib.l/danger is guarded with #{:fs}
+                        by lib/lib; app/app does not hold #{:fs}
+    function wrapper -> OK privileged
+
+The macro is defined in the workspace that HOLDS `:fs` and still cannot hand the
+reference to one that does not. The function in the same workspace can, and that
+is not a leak in the mechanism -- it is the delegation described above, which no
+guard stops and none should.
+
+The two belong together. Stated alone, the first row reads as "authority cannot
+spread", which is false; the second is what makes the first mean what it says.
+
+This is why the run-time token half of this design is still unbuilt and may
+stay so. Compile time answers "may this code reference that code" completely for
+any program a trusted compiler saw. What it cannot answer is an image loaded at
+run time whose call sites no compiler checked, which is step 9 and a narrower
+problem than the one tokens were first reached for.
+
 ## Order
 
 1. **The namespace resolver**, as above: one concept both front doors produce,

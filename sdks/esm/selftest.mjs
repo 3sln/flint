@@ -267,6 +267,39 @@ ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled a
      await run(undefined, 'app.b/go'), 'privileged');
 }
 
+// A MACRO CANNOT LAUNDER A GUARDED REFERENCE, and a function can.
+//
+// This is the hazard that made a compile-time-only check look unworkable:
+// macros emit code, so anything a macro emits could be inlined into a caller
+// that was never allowed to write it. It does not happen, because an expansion
+// is analysed in the CALLER's namespace -- so the caller's workspace is what
+// the guard is checked against, which is the right answer and the safe one.
+//
+// A function in the granted workspace still wraps it freely. That is the
+// delegation guards do not stop, and the two rows belong together: without the
+// second, the first would read as "authority cannot spread", which is false.
+{
+  const files = {
+    'lib/l.cljc': '(ns lib.l)\n' +
+      '(defn ^{:flint/capabilities-guard [:fs]} danger [] "privileged")\n' +
+      '(defmacro sneak [] `(danger))\n' +
+      '(defn wrapped [] (danger))\n',
+    'app/m.cljc': '(ns app.m (:require [lib.l :as l])) (defn go [] (l/sneak))',
+    'app/f.cljc': '(ns app.f (:require [lib.l :as l])) (defn go [] (l/wrapped))',
+  };
+  const ws = [{ prefix: 'lib/', name: 'lib/lib', grants: ['fs'] },
+              { prefix: 'app/', name: 'app/app' }];
+  let refused = null;
+  try { compiler.compile({ files, workspaces: ws, fn: 'app.m/go' }); }
+  catch (e) { refused = e.message; }
+  ok('a macro cannot expand a guarded reference into an ungranted caller',
+     /lib\.l\/danger is guarded/.test(refused ?? ''), refused);
+  eq('but a function in the granted workspace wraps it freely',
+     await (await (compiler.compile({ files, workspaces: ws, fn: 'app.f/go' })).sandbox())
+       .call('app.f/go'),
+     'privileged');
+}
+
 // --- asking the host for something (`doc/decisions/0036` step 7) ------------
 //
 // `open` asks for a PORT; `request` asks for anything and gets a value. It is
