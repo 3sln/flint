@@ -231,4 +231,12 @@
     'refuse (call {:rust "return Err(String::from({0}))"
                    :java "throw new Refused({0})"
                    :csharp "throw new Refused({0})"})
-    'read-u32 (call {:rust "u32(r)" :java "r.u32()" :csharp "r.U32()"})}))
+    ;; Calling a function that CAN FAIL. Rust propagates with `?`; the other
+    ;; two do nothing, because an exception needs nothing at the call site.
+    ;; Same shape as `^:throws` on the declaration -- the mark is in the source
+    ;; and only the target that cares reads it.
+    'try-u32 (call {:rust "u32({0})?" :java "u32({0})" :csharp "U32({0})"})
+    'mask32 (call {:rust "({0} as u64)"
+                   :java "((long) {0} & 0xffffffffL)"
+                   :csharp "((long) {0} & 0xffffffffL)"})
+    'shl64 (call {:rust "({0} << {1})" :java "({0} << {1})" :csharp "({0} << {1})"})}))

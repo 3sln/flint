@@ -5,6 +5,7 @@
 (ns runtime.codec-reader
   (:require [flint.impl.codec :refer [defstruct defn let do if set return .
                                       byte-at len shl bit-or refuse + >
+                                      try-u32 mask32 shl64 I64
                                       I32 Bytes Reader]]))
 
 (defstruct reader [^Bytes b ^I32 i])
@@ -25,3 +26,8 @@
                                (shl (byte-at (. r b) (+ (. r i) 3)) 24)))]
     (set (. r i) (+ (. r i) 4))
     (return n)))
+
+(defn ^:throws ^I64 u64 [^Reader r]
+  (let [^I64 lo (mask32 (try-u32 r))
+        ^I64 hi (mask32 (try-u32 r))]
+    (return (bit-or lo (shl64 hi 32)))))
