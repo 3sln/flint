@@ -7,8 +7,12 @@
 > `(the-var form)` carrying `:flint/read-form`, `:flint/read-tag`,
 > `:flint/read-var` and its position. `#flint/table` is built in.
 >
+> The SDK carries the same map: `workspaces: [{prefix, name, tags}]` on
+> `compile`, or a resolver answering `{source, workspace, tags}`. It rides the
+> namespace resolver of `0036`, which is what step 3 was actually blocked on.
+>
 > NOT built: `reader-tag-of`, so a printer can ask what name this build bound to
-> its reader, and the SDK's equivalent of the `deps.edn` key.
+> its reader.
 
 ## What is true today
 
@@ -196,10 +200,29 @@ is free here is specifically that a form is not a value.
 
 ## The SDK
 
-`deps.edn` is the CLI's project file, and the SDK does not read one. It needs the
-same map by another route — a build option carrying `{tag-name -> var}`,
-resolved identically. Same registry, different front door. What must not happen
-is a second resolution rule.
+**Done.** `deps.edn` is the CLI's project file, and the SDK does not read one.
+
+The answer was not a second option carrying `{tag-name -> var}`, and this file
+proposing one was the mistake underneath the delay: it would have been a second
+route to the same fact, which is how the two front doors got out of step in the
+first place. What landed instead is the NAMESPACE RESOLVER of `0036` — one
+function answering what a namespace is, `{:src :file :workspace :tags}`, which
+the CLI builds from source roots and the SDK builds from a path map. Tags are
+one of the things a workspace carries, not a thing threaded beside it.
+
+    compile({ files, workspaces: [{prefix: 'foo/', name: 'foo/bar',
+                                   tags: {x: 'foo.a/read-x'}}], fn })
+
+The proof is the case that distinguishes bound-per-workspace from bound-globally
+rather than either alone: two workspaces binding the SAME tag name to different
+readers, compiled together, each source reading under its own. It is in the SDK
+selftest, with the companion assertion that a tag no workspace binds is still
+refused — so the pass is not tags appearing from nowhere.
+
+One bug came out of it, and it is the one this file already names in step 2: the
+selfhost path handed the compiler `:src` and `:file` only, so a tag known to
+`collect` was unknown to the third reader, exactly as `default-features`
+records for `:features`.
 
 ## What is undecided
 
@@ -226,7 +249,10 @@ is a second resolution rule.
    the compiler -- which is the same defect `default-features` records for
    `:features`: a value only one reader knows about is a value the other two get
    wrong.
-3. `reader-tag-of`, resolved at build time, and the SDK's equivalent option.
+3. The SDK's equivalent of the `deps.edn` key. **Done**, as the namespace
+   resolver of `0036` rather than as an option of its own — see "The SDK" above
+   for why that is the better answer and not merely a different one.
+4. `reader-tag-of`, resolved at build time.
    The rewrite carries `:flint/read-form` and `:flint/read-var`, and macro
    expansion inherits them; asserted by a test that a bad tagged literal reports
    against `#x` and not against the call it became. `flint.check`'s renderer
