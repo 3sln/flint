@@ -53,6 +53,11 @@ what remains, and what each thing is waiting on.
 
 **Open, in the order the last measurement left them:**
 
+0a. **Port the runtimes' shared logic to splint** — `doc/goals/splint-port.md`
+   is the plan, `0038` the design. About 4,500 lines per runtime are mirrored to
+   within a percent; opcode bodies were never the prize. Code before tests,
+   because the tests are the oracle.
+
 0. **Pods** (`0036` step 6, `0037` step 9) — one implementation of the virtual
    namespace interface, speaking babashka's pod protocol, answering `:list` from
    `describe`. The interface it plugs into is built and proven by five served
