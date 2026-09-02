@@ -39,8 +39,10 @@ are near-identical to each other because BOTH WERE PORTED FROM THE RUST BY
 THE SAME HAND -- so the delta says how alike the two copies are, not how alike
 either is to the original, and the original is the one that diverges.
 
-`Interns` is the proof: 0% here, and three structural divergences from Rust
-(see phase 2). It was ranked easiest and is close to the hardest.
+`Interns` is the proof: 0% here, and three differences from Rust the table
+cannot see (see phase 2). Only one of them turns out to be essential, and it
+points at converging rather than at refusing -- but the table could not tell
+either way, because it never looked at Rust.
 
 This is the same failure as everything else this file records. Two things that
 agree by construction cannot testify about a third: `conform` comparing four
@@ -300,8 +302,14 @@ COLLECTOR-ADJACENT: entries are weak and dropped by the GC, which is what
 lets every short string and keyword be interned without leaking. Rust files it
 beside the heap; Java and C# convention gives it a file of its own.
 
-It is on the list wrongly because it is one of the most structurally divergent
-things in the tree, with three differences that are not naming:
+It was moved to phase 5 on the grounds that its three differences from Rust
+were structural. **That was wrong, and the reasoning was backwards.** The rule
+in this file is to treat a divergence as INCIDENTAL until somebody can point
+at a language refusing the alternative -- and the divergence itself was used
+as the evidence, which inverts it. Different implementations having different
+trade-offs does not mean they SHOULD differ: the trade-offs port too.
+
+Taken one at a time, only ONE of the three is a language refusing anything:
 
 | | Rust | JVM / CLR |
 | --- | --- | --- |
@@ -309,10 +317,40 @@ things in the tree, with three differences that are not naming:
 | `lookup` result | `Result<Value, usize>` -- value OR insert index | returns the value, writes the index to a mutable `slot` field |
 | candidate test | an `FnMut(Value) -> bool` closure | a `Match` functional interface |
 
-Array-of-struct against struct-of-arrays changes every access; `Result`
-against an out-parameter is hole 4; the closure is hole 13, which the spike
-marked "redesign, and don't". It belongs in phase 5 with the other honest
-divergences.
+**Storage is the only real one, and it points at converging.** Java has no
+value types, so a packed array of `(u32, u64)` pairs is not available to it --
+it would be object references and pointer chasing. Java is FORCED to parallel
+arrays. Rust and C# can do either.
+
+Which is faster is a genuine trade-off, and it is the same trade-off in all
+three: parallel arrays give better locality while SCANNING, because a probe
+walks 16 hashes per cache line against 4 packed entries; an array of pairs
+wins when the first probe hits, because the value is already in the line. At
+75% load -- which is this table's grow threshold, and high for linear probing
+-- probe chains are what dominate. Measured, `rustc -O`, ns per lookup:
+
+| table | | parallel arrays | array of pairs |
+| --- | --- | --- | --- |
+| 16384 slots | hit | **7.86** | 8.27 |
+| | miss | **14.05** | 15.20 |
+| 1024 slots (real size) | hit | 7.2-7.4 | 6.1-7.4 (noise) |
+| | miss | **20.4-20.8** | 21.4-22.1 |
+
+At the size the tables actually run, hits are within noise and misses favour
+parallel arrays by ~5%; at a grown table the advantage is 5-8% on both. So
+parallel arrays are equal-or-better everywhere measured, AND are the only
+option one target has. Rust should move to them, and then the layout is one
+decision expressed once rather than three accidents.
+
+**The other two are incidental.** `Result<Value, usize>` against a returned
+value plus a mutable `slot` field is a shape kin cannot say yet (hole 4) --
+but nothing refuses the alternative; Java could return a packed `long`. The
+`FnMut(Value) -> bool` against a `Match` functional interface is not a
+divergence at all: a functional interface IS the closure, and they correspond
+one to one.
+
+(The mutable `slot` field is safe, incidentally -- every read of it happens
+between `lockIntern` and `unlockIntern`. Checked rather than assumed.)
 
 **A note on how it got here, because the mistake is repeatable.** I first
 reported `Interns` as having no Rust counterpart at all, on the evidence that
