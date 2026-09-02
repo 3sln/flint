@@ -33,6 +33,27 @@ code, agreeing to within a percent means the structure agrees too:
 | `Pike` | 222 | 220 | 0% |
 | `Interns` | 62 | 62 | 0% |
 
+**This table measures the wrong pair, and the phase ordering inherited the
+error.** Its columns are `jvm` and `clr`. Rust is not in it. The JVM and CLR
+are near-identical to each other because BOTH WERE PORTED FROM THE RUST BY
+THE SAME HAND -- so the delta says how alike the two copies are, not how alike
+either is to the original, and the original is the one that diverges.
+
+`Interns` is the proof: 0% here, and three structural divergences from Rust
+(see phase 2). It was ranked easiest and is close to the hardest.
+
+This is the same failure as everything else this file records. Two things that
+agree by construction cannot testify about a third: `conform` comparing four
+identical truncations, `check-builtins` crashing rather than checking, and a
+similarity metric computed on two of four mirrors are all the same mistake at
+different layers.
+
+Every blocker actually MET so far has been a Rust divergence, which is what a
+JVM-vs-CLR table cannot see: the receiver (`impl Rt` against statics taking
+one), a lifetime on `Reader<'a>`, `matches!` against a switch, `to_le_bytes`
+against four pushes, `Result` against exceptions. **The ordering should be
+redone against Rust before phase 3 is trusted.**
+
 **About 4,500 lines per runtime.** Opcode bodies, which is where this started,
 are a few dozen lines and were never the prize.
 
@@ -270,7 +291,35 @@ wrap on 64-bit, and the JVM and CLR have no unsigned `int` and need the
 vocabulary form with three bodies rather than duplication in disguise.
 
 ### 2. The small pure files
-`Eq`, `Hash`, `Interns`, `Seqs`. Near-identical, no ownership subtleties.
+`Eq`, `Hash`, `Seqs`. Near-identical, no ownership subtleties.
+
+**`Interns` was listed here and should not have been.** Not because it is
+missing from Rust -- it is not; `Interns.java`'s own header says "ported from
+`runtime/src/gc.rs`", where it lives as `InternTable` because the tables are
+COLLECTOR-ADJACENT: entries are weak and dropped by the GC, which is what
+lets every short string and keyword be interned without leaking. Rust files it
+beside the heap; Java and C# convention gives it a file of its own.
+
+It is on the list wrongly because it is one of the most structurally divergent
+things in the tree, with three differences that are not naming:
+
+| | Rust | JVM / CLR |
+| --- | --- | --- |
+| storage | `Vec<(u32, u64)>`, array of pairs | `int[] hashes` + `long[] values`, parallel arrays |
+| `lookup` result | `Result<Value, usize>` -- value OR insert index | returns the value, writes the index to a mutable `slot` field |
+| candidate test | an `FnMut(Value) -> bool` closure | a `Match` functional interface |
+
+Array-of-struct against struct-of-arrays changes every access; `Result`
+against an out-parameter is hole 4; the closure is hole 13, which the spike
+marked "redesign, and don't". It belongs in phase 5 with the other honest
+divergences.
+
+**A note on how it got here, because the mistake is repeatable.** I first
+reported `Interns` as having no Rust counterpart at all, on the evidence that
+`ls runtime/src/interns.rs` failed. That tests a FILENAME, not whether the
+code exists, and the answer was one `grep` away. Same class of error as
+measuring the wrong reader function: a check that is cheap to run is not the
+same as a check that answers the question.
 
 **`Hash` is done, and is the first thing generated that actually ships.**
 The murmur3 core -- `mix-k1`, `mix-h1`, `fmix`, `hash-int`, `hash-long`,

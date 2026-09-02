@@ -92,18 +92,28 @@ public final class Seqs {
         return Val.heap(a);
     }
 
+    // kin:begin kin/range.kin
     static boolean rangeEmpty(Rt rt, long v) {
         long e = rt.slot(v, 1);
-        if (Val.isNil(e)) return false;   // unbounded
+        // An absent end is an UNBOUNDED range, which is never empty.
+        if (Val.isNil(e)) {
+            return false;
+        }
         double s = Num.f64(rt, rt.slot(v, 0));
         double en = Num.f64(rt, e);
         double st = Num.f64(rt, rt.slot(v, 2));
-        if (st > 0) return s >= en;
-        if (st < 0) return s <= en;
-        // A zero step never advances. Empty rather than infinite, which is
-        // what Clojure does and is the answer that terminates.
+        if (st > 0.0) {
+            return s >= en;
+        }
+        if (st < 0.0) {
+            return s <= en;
+        }
+        // A zero step never advances. Empty rather than infinite, which
+        // is what Clojure does and is the answer that terminates.
         return true;
     }
+
+    // kin:end kin/range.kin
 
     static long strseq(Rt rt, long s, int i) {
         int base = rt.mark();

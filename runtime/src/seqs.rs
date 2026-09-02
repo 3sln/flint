@@ -155,20 +155,28 @@ impl Rt {
         Value::heap(a)
     }
 
+    // kin:begin kin/range.kin
     fn range_empty(&self, v: Value) -> bool {
-        let (s, e, st) = (self.slot(v, 0), self.slot(v, 1), self.slot(v, 2));
+        let e: Value = self.slot(v, 1);
+        // An absent end is an UNBOUNDED range, which is never empty.
         if e.is_nil() {
-            return false; // unbounded
+            return false;
         }
-        let (s, e, st) = (self.num_f64(s), self.num_f64(e), self.num_f64(st));
+        let s: f64 = self.num_f64(self.slot(v, 0));
+        let en: f64 = self.num_f64(e);
+        let st: f64 = self.num_f64(self.slot(v, 2));
         if st > 0.0 {
-            s >= e
-        } else if st < 0.0 {
-            s <= e
-        } else {
-            true
+            return s >= en;
         }
+        if st < 0.0 {
+            return s <= en;
+        }
+        // A zero step never advances. Empty rather than infinite, which
+        // is what Clojure does and is the answer that terminates.
+        return true;
     }
+
+    // kin:end kin/range.kin
 
     /// `seq`: nil for an empty collection, otherwise a seq object.
     pub fn seq(&mut self, v: Value) -> Value {

@@ -91,6 +91,7 @@
 
 (def ops
   {'+ "+" '- "-" '* "*" '< "<" '> ">" '== "==" 'not "!"
+   '>= ">=" '<= "<=" '!= "!="
    'bit-shift-right ">>" 'bit-and "&" 'bit-or "|" 'bit-xor "^"
    ;; Integer division. `/` on two ints truncates in all three, so `quot` is
    ;; the honest name for what it does -- and `/` is left unbound rather than

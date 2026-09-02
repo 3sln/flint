@@ -40,7 +40,14 @@
   "An index into the shadow stack. `usize` in Rust, `int` in the other two."
   {:name 'RootIx :types {:rust "usize" :java "int" :csharp "int"} :methods {}})
 
-(def tags-for {'Rt Rt 'Value Value 'Cat Cat 'Bool Bool 'I32 I32 'RootIx RootIx})
+(def F64
+  "A double. The one place `Value` is unwrapped to a host float -- `range`
+  compares its bounds numerically, and an integer range and a float range have
+  to answer the same question."
+  {:name 'F64 :types {:rust "f64" :java "double" :csharp "double"} :methods {}})
+
+(def tags-for {'Rt Rt 'Value Value 'Cat Cat 'Bool Bool 'I32 I32 'RootIx RootIx
+               'F64 F64})
 
 (defn- t [ctx] (:target ctx))
 
@@ -159,6 +166,11 @@
     ;; NOT symmetrical: `olen` is a method on Rust's `Rt` and a file-local
     ;; static on the other two. The receiver still comes first in the source.
     'olen (core/call {:rust "{0}.olen({1})" :java "olen({0}, {1})" :csharp "Olen({0}, {1})"})
+    ;; A value as a host double, whatever numeric type it holds.
+    'num-f64 (core/call {:rust "{0}.num_f64({1})"
+                         :java "Num.f64({0}, {1})"
+                         :csharp "Num.F64({0}, {1})"})
+    'nil? (core/call {:rust "{1}.is_nil()" :java "Val.isNil({1})" :csharp "Val.IsNil({1})"})
     'as-fixnum (core/call {:rust "{0}.as_fixnum()"
                            :java "Val.asFixnum({0})"
                            :csharp "Val.AsFixnum({0})"})

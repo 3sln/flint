@@ -1,0 +1,30 @@
+;; `range-empty`: has a range already passed its end?
+;;
+;; Phase 2 of `doc/goals/kin-port.md`. Small, and chosen because it is the
+;; first ported function whose body is a CHAIN OF DECISIONS rather than a
+;; formula or an accessor -- three early returns and a fallthrough, which is
+;; the shape most of `Seqs` and `Vec` are made of.
+;;
+;; The zero-step answer is the interesting one and all three already agree on
+;; it: a step of zero never advances, so the range is EMPTY rather than
+;; infinite. That is what Clojure does, and it is the answer that terminates.
+(ns runtime.range
+  (:require [flint.impl.rt :refer [defn return if let comment nil? slot num-f64
+                                   > < >= <=
+                                   Rt Value Bool F64]]))
+
+(defn ^:method ^Bool range-empty [^Rt rt ^Value v]
+  (let [^Value e (slot rt v 1)]
+    (comment "An absent end is an UNBOUNDED range, which is never empty.")
+    (if (nil? rt e)
+      (return false))
+    (let [^F64 s (num-f64 rt (slot rt v 0))
+          ^F64 en (num-f64 rt e)
+          ^F64 st (num-f64 rt (slot rt v 2))]
+      (if (> st 0.0)
+        (return (>= s en)))
+      (if (< st 0.0)
+        (return (<= s en)))
+      (comment "A zero step never advances. Empty rather than infinite, which"
+               "is what Clojure does and is the answer that terminates.")
+      (return true))))
