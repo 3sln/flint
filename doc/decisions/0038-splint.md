@@ -224,16 +224,27 @@ differences are not all drift:
 | | |
 | --- | --- |
 | `TYPE_P` | Rust pops and pushes; the JVM and CLR rewrite the top slot IN PLACE |
-| `LIST` | Rust conses backwards off the value stack; the JVM pushes to the shadow stack and calls `Seqs.fromRoots` — a **different algorithm**, not a different spelling |
+| `LIST` | Rust conses backwards off the value stack; the JVM copies to the shadow stack first — a **different algorithm**, not a different spelling |
+
+Both turn out to be incidental. See below — that question is the one worth
+asking about every divergence, and neither of these survived it.
 
 So a port is not "translate what is there". It is "pick one shape and regenerate
 all three", and the generated code will then differ from what at least two
 runtimes currently contain — which means the not-worse rule has to be judged
 against the BEST of the three rather than against each.
 
-### The `TYPE_P` divergence is forced, not drift
+### Are the divergences justified, or incidental?
 
-Written in the JVM's in-place shape, Rust refuses it twice over:
+Both are **incidental**, and the first of them corrects a claim this file made
+one commit ago.
+
+**`TYPE_P`: not forced.** The earlier text said the divergence was forced by the
+borrow checker. That was wrong, and wrong in the direction that matters — it
+would have licensed leaving three implementations different for a reason that
+does not exist.
+
+What is true is that the NAIVE in-place form is refused, twice:
 
 ```text
 self.roots.stack[i] = Value::boolean(self.type_p(c, self.roots.stack[i]))
@@ -241,14 +252,50 @@ E0502: cannot borrow `self.roots` as immutable because it is also
        borrowed as mutable
 ```
 
-— once for the call on the right, and **again for the index expression**, which
-borrows `self.roots` immutably while the assignment borrows it mutably. So Rust
-needs the value AND the index in locals. `vpop`/`vpush` are methods that hide
-exactly that, which is why the Rust runtime is written the way it is.
+— once for the call on the right, and again for the index expression. What is
+NOT true is that in-place is impossible. With the value and the index in locals
+it compiles, and that is the form splint generates:
 
-**That is worth more than the port itself.** A reasonable person looking at
-those three files would call it drift and "fix" it, and would make Rust worse.
-splint can express the divergence, because a form is a function per target.
+```rust
+let bool_1 = Value::boolean(self.type_p(c, self.roots.stack[self.roots.stack_top - 1]));
+let at_2 = self.roots.stack_top - 1;
+self.roots.stack[at_2] = bool_1;
+```
+
+Three statements, same as the pop/push version, and it does not touch
+`stack_top` at all where pop/push moves it down and back up. So the Rust runtime
+should be in-place too, and the divergence is something nobody chose.
+
+**`LIST`: also not justified.** The JVM copies all *n* elements to the shadow
+stack before consing, with the comment *"cons allocates, and the value stack is
+where they are now"*. That reasoning does not hold here, for two independent
+reasons:
+
+* the value stack IS a root set — `for v in &mut self.own.stack[..top]` in the
+  collector's forwarding pass — so a value in it survives an allocation and is
+  updated;
+* and `cons` roots both of its arguments on the shadow stack before it allocates
+  anyway, so even a value read into a host local is protected across the call
+  that could move it.
+
+So the copy buys nothing and costs *n* shadow slots and *n* pushes, where the
+Rust version uses one slot. Rust's shape is the better one and the JVM's is
+incidental — it looks like someone applying `0031`'s rule ("a value in a host
+local does not survive an allocation") in a place where the callee already
+handles it.
+
+### What that means for splint
+
+Better than the alternative. If the divergences had been justified, splint would
+have to express three different shapes and the shared source would be a fiction.
+They are not — so **splint's job here is to converge the runtimes, not to
+encode their differences**, and the generated code is the argument for changing
+two of them.
+
+It also sharpens what to be suspicious of: a divergence should be treated as
+incidental until someone can point at the language refusing the alternative.
+Both of these looked principled, one of them had a comment explaining itself,
+and neither survived being checked.
 
 ### Holes found, all four closed
 
