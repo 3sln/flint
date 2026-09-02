@@ -3,9 +3,12 @@
 (require '[clojure.string :as str])
 (load-file "splint/splint.cljc")
 (load-file "splint/vm_vocab.cljc")
+(load-file "splint/codec_vocab.cljc")
 
 (def vocabs {'flint.impl.vm {:forms (flint.impl.vm/forms-for)
-                             :tags flint.impl.vm/tags-for}})
+                             :tags flint.impl.vm/tags-for}
+             'flint.impl.codec {:forms (flint.impl.codec/forms-for)
+                                :tags flint.impl.codec/tags-for}})
 
 (def which (or (first *command-line-args*) "splint/spread.splint"))
 (def src (slurp which))

@@ -1,6 +1,7 @@
 # Goal — port the runtimes' shared logic to splint
 
-**Status:** foundation done, first real port not started.
+**Status:** phase 1 begun — the codec's primitive writers are generated and
+verified byte-identical on all three targets.
 **Design:** `doc/decisions/0038-splint.md`. **Tool:** `splint/`.
 
 ## The objective
@@ -69,6 +70,27 @@ Ordered by RATIO — how alike the mirrors already are — not by size.
 specified elsewhere already. Big enough to be a real test of the tool and small
 enough to abandon if it is not.
 
+**Done:** `u32`, `u64`, `str` — the primitive writers. Generated for all three,
+compiled, run, and BYTE-IDENTICAL:
+
+```text
+rust   0403020188776655443322110600000068c3a96c6c6f
+java   0403020188776655443322110600000068c3a96c6c6f
+csharp 0403020188776655443322110600000068c3a96c6c6f
+```
+
+`splint/verify <source>` is that check, made repeatable: it generates, compiles
+each target, runs each, and requires the outputs to match. Compiling is not
+enough — three implementations can each compile and disagree, which is the
+failure the port exists to prevent. A new port writes a `.drivers` file beside
+its source and the harness is unchanged.
+
+**Next:** `encodeInto` — the tag dispatch. It needs type predicates
+(`isNil`, `isString`, `isHeapTy`), heap slot reads, and the `Refused`
+exception, which is more vocabulary than the primitives needed.
+
+**Then:** `decodeAt`, which needs the reader and bounds checks.
+
 ### 2. The small pure files
 `Eq`, `Hash`, `Interns`, `Seqs`. Near-identical, no ownership subtleties.
 
@@ -104,6 +126,12 @@ Nothing lands without all of these:
   already caught four things: a loop rewritten when it did not need to be,
   hoisting where `rustc` did not require it, `x = (x + 1)` for `x += 1`, and a
   parenthesised ternary.
+* **…but CORRECT outranks TIDY, and that is not theoretical.** Stripping
+  redundant parentheses from call arguments produced
+  `u32(o, (int) n >>> 32)` — which casts and then shifts — where the parentheses
+  had been carrying the precedence. An aesthetic rule silently changed the
+  semantics. Paren-stripping is now allowed only on a whole assignment
+  right-hand side, where there is nothing to bind with.
 * **Coverage before regeneration.** Ask what would notice a mistake before
   making it. `list` — the opcode with the most interesting divergence — had zero
   cross-runtime coverage.

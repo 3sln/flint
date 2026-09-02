@@ -1,0 +1,52 @@
+#!/bin/sh
+# Generate a splint source for all three targets, compile each, run each, and
+# require BYTE-IDENTICAL output.
+#
+# This is the acceptance check `doc/goals/splint-port.md` asks for, made
+# repeatable. Compiling is not enough: three implementations can each compile
+# and disagree, which is the failure the whole port exists to prevent.
+#
+#     splint/verify splint/codec.splint
+set -e
+root=$(cd "$(dirname "$0")/.." && pwd)
+src=${1:-splint/codec.splint}
+work=${TMPDIR:-/tmp}/splint-verify
+rm -rf "$work"; mkdir -p "$work"
+cd "$root"
+
+bb splint/run.clj "$src" > "$work/gen.txt"
+sed -n '/==== rust/,/==== java/p'   "$work/gen.txt" | sed '1d;$d' > "$work/gen.rs"
+sed -n '/==== java/,/==== csharp/p' "$work/gen.txt" | sed '1d;$d' > "$work/gen.java"
+sed -n '/==== csharp/,$p'           "$work/gen.txt" | sed '1d'    > "$work/gen.cs"
+
+# The driver each language needs. Kept beside the source so a new port writes
+# one and the harness stays the same.
+drv="${src%.splint}.drivers"
+[ -f "$drv" ] || { echo "splint/verify: no drivers file at $drv"; exit 2; }
+sed -n '/^--rust$/,/^--java$/p' "$drv" | sed '1d;$d' >> "$work/gen.rs"
+{ echo 'import java.io.ByteArrayOutputStream; import java.nio.charset.StandardCharsets;'
+  echo 'public class Probe {'; cat "$work/gen.java"
+  sed -n '/^--java$/,/^--csharp$/p' "$drv" | sed '1d;$d'; echo '}'; } > "$work/Probe.java"
+{ echo 'using System; using System.IO; using System.Text;'; echo 'class Probe {'
+  cat "$work/gen.cs"; sed -n '/^--csharp$/,$p' "$drv" | sed '1d'; echo '}'; } > "$work/Program.cs"
+
+rustc -O -o "$work/probe.rust" "$work/gen.rs" 2>&1 | head -20
+r_out=$("$work/probe.rust")
+
+JDK=/opt/homebrew/opt/openjdk
+[ -x "$JDK/bin/javac" ] || JDK=$(/usr/libexec/java_home 2>/dev/null)
+"$JDK/bin/javac" -d "$work" "$work/Probe.java" 2>&1 | head -20
+j_out=$("$JDK/bin/java" -cp "$work" Probe)
+
+mkdir -p "$work/cs" && (cd "$work/cs" && dotnet new console -o . --force >/dev/null 2>&1)
+cp "$work/Program.cs" "$work/cs/Program.cs"
+c_out=$(cd "$work/cs" && dotnet run 2>/dev/null | tail -1)
+
+echo "  rust   $r_out"
+echo "  java   $j_out"
+echo "  csharp $c_out"
+if [ "$r_out" = "$j_out" ] && [ "$j_out" = "$c_out" ]; then
+  echo "  ok   three targets, one source, identical output"
+else
+  echo "  FAIL the three targets disagree"; exit 1
+fi

@@ -1,0 +1,30 @@
+--rust
+fn main() {
+    let mut o: Vec<u8> = Vec::new();
+    u32(&mut o, 0x01020304u32);
+    u64(&mut o, 0x1122334455667788u64);
+    str(&mut o, "héllo");
+    let mut s = String::new();
+    for b in &o { s.push_str(&format!("{:02x}", b)); }
+    println!("{}", s);
+}
+--java
+    public static void main(String[] a) {
+        ByteArrayOutputStream o = new ByteArrayOutputStream();
+        u32(o, 0x01020304);
+        u64(o, 0x1122334455667788L);
+        str(o, "héllo");
+        StringBuilder sb = new StringBuilder();
+        for (byte b : o.toByteArray()) sb.append(String.format("%02x", b));
+        System.out.println(sb);
+    }
+--csharp
+    static void Main() {
+        var o = new MemoryStream();
+        U32(o, 0x01020304);
+        U64(o, 0x1122334455667788L);
+        Str(o, "héllo");
+        var sb = new StringBuilder();
+        foreach (var b in o.ToArray()) sb.Append(b.ToString("x2"));
+        Console.WriteLine(sb.ToString());
+    }
