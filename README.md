@@ -894,6 +894,68 @@ On the host's side both halves are explicit: a low-level builder for a host that
 wants to write the encoding itself, and a convenience that takes an ordinary
 host value and encodes it for you.
 
+### Asking the host for something, and who may ask
+
+`open` asks for a **port**. `request` asks for anything and gets a value back:
+
+```clojure
+(:require '[flint.host :as h])
+(h/request "config")              ; => whatever the host answered
+(h/request "config" {:for :boot}) ; arguments forwarded verbatim
+```
+
+Blocking like any other port operation — the calling green thread parks and the
+rest of the sandbox keeps running, so a host may answer this while serving other
+calls. A refusal is a catchable `SecurityException`, and so is asking at all from
+a sandbox that was given no system port; saying so is more honest than parking
+for ever on an answer that cannot come.
+
+**Nil is an answer.** A host returning nil and a host refusing are different
+facts and stay different, on both sides: the runtime wraps an answer so the
+parked thread can tell them apart, and on the host's side a handler returning
+`undefined` refuses while returning `null` answers.
+
+```js
+sandbox.inst.requests({ config: () => ({ mode: 'live' }) });
+```
+
+**Who may ask is a compile-time question.** `flint.host/request` carries
+`^{:flint/capabilities-guard [:host]}`, and only a workspace whose project file
+grants `:host` may *reference* it:
+
+```clojure
+;; deps.edn
+{:flint/workspace app/app
+ :flint/capabilities-grant [:host]}
+```
+
+Without the grant the build stops, naming the var, the workspace that guards it
+and the capability that is missing. The check emits nothing into the module — a
+guard is a compile-time construct with no callable behind it, so a run costs
+nothing, and that is a security property before it is a performance one
+([`doc/decisions/0036`](doc/decisions/0036-workspace-capabilities.md)).
+
+The **reference** is guarded, not the call, so `(map h/request xs)` is refused
+too. Guarding calls would put the guard one line of indirection deep.
+
+A whole workspace can be guarded the same way, with
+`:flint/capabilities-guard`, and then only a workspace holding those
+capabilities may `:require` it at all — checkable from `deps.edn` alone, before
+a line is compiled. Nothing is checked *within* a workspace: a project is not a
+security boundary against itself.
+
+Two things this deliberately does not do, because a capability system that is
+believed to do them is worse than none:
+
+* It constrains **linking, not leaking**. A workspace granted `:fs` can wrap a
+  guarded var in an unguarded one of its own and hand the result to anyone.
+  Authority is not transitive in name and is entirely transitive in effect.
+  What a guard buys is that the set of workspaces holding an authority
+  *directly* is small and declared.
+* The guard is coarse by design. It answers "may this workspace talk to the
+  embedder at all"; the host answers the specific question, per request, as it
+  already does. Neither replaces the other.
+
 ### None of it is in a pure module
 
 Threads and ports are namespace units like any other
