@@ -778,9 +778,88 @@ fn main() -> Result<()> {
                         Ok(out)
                     })
                 }
+                "tree" | "why" | "pin" => {
+                    let target = argv.get(2).cloned().unwrap_or_default();
+                    if sub == "why" && target.is_empty() {
+                        bail!("flint deps why <dep>");
+                    }
+                    let tmp = std::env::temp_dir()
+                        .join(format!("flint-depsview-{}", std::process::id()));
+                    let out = depscmd::view(sub, &target, |src, entry, caps| {
+                        std::fs::create_dir_all(&tmp)?;
+                        std::fs::write(tmp.join("depsview.cljc"), src)?;
+                        let (code, out) =
+                            run_source_q(&[tmp.clone()], entry, &[], caps, None, true)?;
+                        if code != 0 {
+                            bail!("{out}");
+                        }
+                        Ok(out)
+                    });
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    let out = out?;
+                    if sub == "pin" {
+                        // WRITTEN, not printed. `pin` exists to change the file.
+                        let path = depscmd::deps_path(&dir);
+                        let before = std::fs::read_to_string(&path)?;
+                        std::fs::write(&path, depscmd::set_overrides(&before, out.trim()))?;
+                        println!("pinned every transitive into :flint/overrides");
+                    } else {
+                        println!("{}", out.trim_end());
+                    }
+                    Ok(())
+                }
+                "bump" => {
+                    let level = argv.get(2).cloned().unwrap_or_default();
+                    let tmp = std::env::temp_dir()
+                        .join(format!("flint-depsbump-{}", std::process::id()));
+                    let out = depscmd::bump(&level, |src, entry, caps| {
+                        std::fs::create_dir_all(&tmp)?;
+                        std::fs::write(tmp.join("depsbump.cljc"), src)?;
+                        let (code, out) =
+                            run_source_q(&[tmp.clone()], entry, &[], caps, None, true)?;
+                        if code != 0 {
+                            bail!("{out}");
+                        }
+                        Ok(out)
+                    });
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    let out = out?;
+                    let changes = depscmd::parse_bumps(&out);
+                    if changes.is_empty() {
+                        println!("nothing to bump");
+                        return Ok(());
+                    }
+                    // A MAJOR IS A DECISION. Crossing one silently is how a
+                    // tool loses the trust it needs to be used at all, so it
+                    // is reported and refused unless it was asked for by name.
+                    let crossing: Vec<_> = changes.iter().filter(|c| c.major).collect();
+                    if !crossing.is_empty() && level != ":major" {
+                        for c in &crossing {
+                            println!("{} {} -> {}  CROSSES A MAJOR", c.dep, c.from, c.to);
+                        }
+                        println!(
+                            "\nnot bumped. `flint deps bump :major` if that is what you mean."
+                        );
+                    }
+                    let path = depscmd::deps_path(&dir);
+                    let mut text = std::fs::read_to_string(&path)?;
+                    for c in &changes {
+                        if c.major && level != ":major" {
+                            continue;
+                        }
+                        text = depscmd::set_version(&text, &c.dep, &c.to);
+                        println!("{} {} -> {}", c.dep, c.from, c.to);
+                    }
+                    std::fs::write(&path, text)?;
+                    Ok(())
+                }
                 "" | "help" => {
                     eprintln!(
                         "flint deps add kind:name[@range]   npm:, mvn:, git:, pod:\n\
+                         flint deps tree                    what is reached, and how deep\n\
+                         flint deps why <dep>               why it is in the plan\n\
+                         flint deps pin                     pin every transitive\n\
+                         flint deps bump [:patch|:minor|:major]\n\
                          \n\
                          Resolves, pins and writes into deps.edn. The version written is the\n\
                          version a build picks, because both ask flint.deps.resolve."

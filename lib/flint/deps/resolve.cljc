@@ -355,3 +355,105 @@
                            " and this deps.edn does not grant it -- add "
                            ":flint/capabilities-grant " (pr-str (vec (sort short)))
                            " to its entry")}))))))
+
+;; ------------------------------------------------------------------ reporting
+;;
+;; `tree`, `why` and `pin` are all views of one plan. They live here rather than
+;; in the CLI for the reason the rest of this file does: the CLI would have to
+;; re-derive the graph to render it, and a second derivation is a second answer.
+
+(defn tree-lines
+  "The plan as indented lines: what is reached, and how deep.
+
+  Depth rather than parentage, because `plan` records the depth a node was
+  REACHED at -- which is what the conflict rule uses -- and inventing a parent
+  edge to draw would be drawing something the resolver did not decide."
+  [p]
+  (mapv (fn [nm]
+          (let [n (get (:nodes p) nm)]
+            (str (apply str (repeat (* 2 (:depth n 0)) " "))
+                 nm " " (or (:version n) (:sha n) "?")
+                 (when (= :git (:kind n)) (str "  " (:url n))))))
+        (:order p)))
+
+(defn why-lines
+  "Why `target` is in the plan: the declaration that reached it, and at what
+  depth. Empty when it is not in the plan at all, which is itself the answer."
+  [p target]
+  (let [n (get (:nodes p) target)]
+    (if (nil? n)
+      []
+      [(str target " " (or (:version n) (:sha n))
+            (if (zero? (:depth n 0))
+              "  -- declared directly"
+              (str "  -- reached at depth " (:depth n))))])))
+
+;; ---------------------------------------------------------------------- bump
+
+(defn bump-range
+  "The range to look in when bumping `current` by `level`.
+
+  * `nil`   -- stay inside whatever the declaration already said;
+  * `:patch` -- `>=1.2.3 <1.3.0`;
+  * `:minor` -- `>=1.2.3 <2.0.0`;
+  * `:major` -- `>=1.2.3`, which crosses one and is why the CLI asks first.
+
+  Built from the CURRENT version rather than from the declared range, because
+  \"bump\" means *move forward from where I am*, and a declaration of `^1.0` on
+  a project pinned at `1.2.3` should not offer to move to `1.0.9`."
+  [current level]
+  (let [v (parse-version current)]
+    (when v
+      (let [[maj min* _] [(nth v 0 0) (nth v 1 0) (nth v 2 0)]]
+        (case level
+          ;; COMMA-separated. `semver` refuses `>=1.1.3 <2.0.0` -- "expected
+          ;; comma after patch version number" -- and npm accepts the space
+          ;; form, so writing the one npm uses gets a message about nothing.
+          :patch (str ">=" current ", <" maj "." (inc min*) ".0")
+          :minor (str ">=" current ", <" (inc maj) ".0.0")
+          :major (str ">=" current)
+          nil)))))
+
+(defn bump-plan
+  "What `flint deps bump` would change: `[{:dep :from :to :crosses-major?}]`.
+
+  Reported rather than applied, and the CLI decides what to do about it. A
+  dependency already at the newest matching version is simply absent from the
+  result, so an empty answer means \"nothing to do\" rather than \"nothing was
+  looked at\"."
+  ([deps] (bump-plan deps nil))
+  ([deps level]
+   ;; `reduce`, NOT `for`, and that is not a style choice.
+   ;;
+   ;; Every branch here makes a call into a virtual namespace, which PARKS, and
+   ;; parking is refused inside native code -- a `for` is a lazy seq, which is
+   ;; native. On wasm that refusal is a catchable error; on the NATIVE runtime
+   ;; it currently panics the process:
+   ;;
+   ;;     index out of bounds: the len is 1024 but the index is
+   ;;     18446744073709551615
+   ;;
+   ;; So this walks eagerly. `mapv` and `reduce` over a vector are eager and
+   ;; carry a parking call happily; `for` and `map` do not. The panic is a
+   ;; runtime bug rather than a rule of the language, and it is written up in
+   ;; `doc/decisions/0037` with a one-line reproduction -- but code that has to
+   ;; work today is written the way that works today, and says why.
+   (reduce
+    (fn [acc e]
+      (let [nm (key e) coord (val e)
+            kind (coord-kind coord)
+            current (str (or (:npm/version coord) (:git/version coord)
+                             (:mvn/version coord)))
+            range* (or (bump-range current level) current)
+            hits (case kind
+                   :npm (npm/resolve (str (or (:npm/name coord) nm)) range*)
+                   :git (git/resolve (str (:git/url coord)) range*)
+                   [])
+            newest (:version (last hits))]
+        (if (and newest (pos? (version-compare newest current)))
+          (conj acc {:dep nm :from current :to newest
+                     :crosses-major? (not= (first (parse-version current))
+                                           (first (parse-version newest)))})
+          acc)))
+    []
+    deps)))

@@ -190,6 +190,94 @@ fn resolve_program(kind: &str, name: &str, range: &str) -> String {
     )
 }
 
+/// A program that reads `deps.edn`, plans it, and prints one of the views.
+///
+/// The VIEWS ARE IN `flint.deps.resolve` too. The CLI would otherwise have to
+/// re-derive the graph to render it, and a second derivation is a second
+/// answer -- the same reason `add` runs the plan rather than reimplementing it.
+fn view_program(view: &str, target: &str) -> String {
+    let body = match view {
+        "tree" => "(str/join \"\\n\" (r/tree-lines p))".to_string(),
+        "why" => format!("(str/join \"\\n\" (r/why-lines p '{target}))"),
+        // `pin` prints the overrides map. The CLI writes it; deciding what goes
+        // in it is the plan's job.
+        _ => "(pr-str (r/pins p))".to_string(),
+    };
+    format!(
+        r#"(ns depsview
+  (:require [flint.deps.resolve :as r] [clojure.string :as str]
+            [clojure.edn :as edn] [flint.sys.fs :as fs]))
+(defn main [_]
+  (let [d (edn/read-string (fs/read-file "deps.edn"))
+        p (r/plan (or (:deps d) {{}}) (or (:flint/overrides d) {{}}))]
+    (if (seq (:refused p))
+      (str "!refused " (pr-str (:refused p)))
+      {body})))
+"#
+    )
+}
+
+/// The bump program: what would change, as EDN, for the CLI to render.
+fn bump_program(level: &str) -> String {
+    let lvl = if level.is_empty() { "nil".to_string() } else { level.to_string() };
+    format!(
+        r#"(ns depsbump
+  (:require [flint.deps.resolve :as r] [clojure.edn :as edn] [flint.sys.fs :as fs]))
+(defn main [_]
+  (let [d (edn/read-string (fs/read-file "deps.edn"))]
+    (pr-str (r/bump-plan (or (:deps d) {{}}) {lvl}))))
+"#
+    )
+}
+
+/// `flint deps bump [:patch|:minor|:major]`.
+pub fn bump(
+    level: &str,
+    run: impl Fn(&str, &str, &[String]) -> Result<String>,
+) -> Result<String> {
+    run(&bump_program(level), "depsbump/main", &["deps".to_string(), "fs".to_string()])
+}
+
+/// Rewrite one dependency's version in place, by text.
+pub fn set_version(text: &str, dep: &str, to: &str) -> String {
+    // Find the entry, then the FIRST version string after it. Narrow on
+    // purpose: a wider search would rewrite the next dependency's version when
+    // this one has no version key at all.
+    let Some(at) = text.find(dep) else { return text.to_string() };
+    let rest = &text[at..];
+    let Some(close) = rest.find('}') else { return text.to_string() };
+    let entry = &rest[..close];
+    for key in [":npm/version", ":git/version", ":mvn/version"] {
+        if let Some(k) = entry.find(key) {
+            let after = &entry[k + key.len()..];
+            if let Some(q1) = after.find('"') {
+                if let Some(q2) = after[q1 + 1..].find('"') {
+                    let s = at + k + key.len() + q1 + 1;
+                    let e = s + q2;
+                    return format!("{}{}{}", &text[..s], to, &text[e..]);
+                }
+            }
+        }
+    }
+    text.to_string()
+}
+
+/// `flint deps tree|why|pin`.
+pub fn view(
+    spec: &str,
+    target: &str,
+    run: impl Fn(&str, &str, &[String]) -> Result<String>,
+) -> Result<String> {
+    let src = view_program(spec, target);
+    // `:fs` to read `deps.edn`, `:deps` to resolve what is in it. Both, and
+    // nothing else -- a view does not write.
+    let out = run(&src, "depsview/main", &["deps".to_string(), "fs".to_string()])?;
+    if out.trim_start().starts_with("!refused") {
+        bail!("{}", out.trim_start().trim_start_matches("!refused").trim());
+    }
+    Ok(out)
+}
+
 /// `flint deps add kind:name[@range]`.
 pub fn add(
     dir: &Path,
@@ -272,4 +360,124 @@ pub fn add(
     }
     println!();
     Ok(())
+}
+
+/// Replace or insert `:flint/overrides` in `text`.
+///
+/// Text editing, like `insert_dep` and for the same reason: a `deps.edn` is a
+/// file somebody wrote. Replacing an existing block means finding its extent,
+/// which is a brace scan rather than a parser -- and a brace scan is honest
+/// here because what it is scanning was written by `pins`, which never emits a
+/// string containing a brace.
+pub fn set_overrides(text: &str, edn: &str) -> String {
+    let block = format!(" :flint/overrides {edn}");
+    match text.find(":flint/overrides") {
+        None => {
+            let trimmed = text.trim_end();
+            match trimmed.strip_suffix('}') {
+                Some(head) => format!("{head}\n{block}}}\n"),
+                None => format!("{{{block}}}\n"),
+            }
+        }
+        Some(i) => {
+            // From the key to the end of its map value.
+            let rest = &text[i..];
+            let Some(open) = rest.find('{') else { return text.to_string() };
+            let mut depth = 0i32;
+            let mut end = None;
+            for (off, c) in rest[open..].char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(open + off + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            match end {
+                Some(e) => format!("{}{}{}", &text[..i], block.trim_start(), &text[i + e..]),
+                None => text.to_string(),
+            }
+        }
+    }
+}
+
+/// One line of a bump plan.
+pub struct Bump {
+    pub dep: String,
+    pub from: String,
+    pub to: String,
+    pub major: bool,
+}
+
+/// The EDN `bump-plan` printed, as rows.
+///
+/// A scan, like the rest of this file's reading: the shape is a flat vector of
+/// flat maps that flint just printed, and a parser here would be a second
+/// reader of a format the other side owns.
+pub fn parse_bumps(edn: &str) -> Vec<Bump> {
+    let mut out = Vec::new();
+    for chunk in edn.split(":dep ").skip(1) {
+        let field = |k: &str| -> String {
+            match chunk.find(k) {
+                None => String::new(),
+                Some(i) => {
+                    let after = chunk[i + k.len()..].trim_start();
+                    match after.strip_prefix('"') {
+                        Some(r) => r.find('"').map(|e| r[..e].to_string()).unwrap_or_default(),
+                        None => String::new(),
+                    }
+                }
+            }
+        };
+        let dep = chunk
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_matches(|c| c == ',' || c == '}')
+            .to_string();
+        if dep.is_empty() {
+            continue;
+        }
+        out.push(Bump {
+            dep,
+            from: field(":from"),
+            to: field(":to"),
+            major: chunk.contains(":crosses-major? true"),
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod bump_tests {
+    use super::*;
+
+    #[test]
+    fn a_bump_row_reads_back() {
+        let edn = r#"[{:dep left-pad, :from "1.2.0", :to "1.3.0", :crosses-major? false}]"#;
+        let rows = parse_bumps(edn);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].dep, "left-pad");
+        assert_eq!(rows[0].to, "1.3.0");
+        assert!(!rows[0].major);
+    }
+
+    #[test]
+    fn crossing_a_major_is_flagged() {
+        let edn = r#"[{:dep a, :from "1.0.0", :to "2.0.0", :crosses-major? true}]"#;
+        assert!(parse_bumps(edn)[0].major);
+    }
+
+    #[test]
+    fn set_version_touches_only_the_named_dependency() {
+        let before = "{:deps {a {:npm/version \"1.0.0\"} b {:npm/version \"1.0.0\"}}}";
+        let after = set_version(before, "b", "2.0.0");
+        assert!(after.contains("a {:npm/version \"1.0.0\"}"), "{after}");
+        assert!(after.contains("b {:npm/version \"2.0.0\"}"), "{after}");
+    }
 }

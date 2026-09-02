@@ -515,6 +515,40 @@ And one deliberate exception to "pull in the crates", recorded above: git is
 `git` the program, because the two operations needed do not justify `gix`'s
 dependency tree.
 
+## A crash found on the way, and not yet fixed
+
+A virtual-namespace call PARKS, and parking is refused inside native code -- a
+lazy seq is native, so `(for [x xs] (fs/exists? x))` cannot work. That much is
+by design and `flint.virtual` documents it.
+
+What is not by design is that **the two runtimes disagree about what happens
+next**, and the native one crashes:
+
+```clojure
+(defn eager [_] (mapv (fn [x] (fs/exists? x)) [""]))   ; => [true]
+(defn lazy  [_] (vec (for [x [""]] (fs/exists? x))))   ; => panic, natively
+```
+
+| | |
+| --- | --- |
+| wasm, through the SDK | `IllegalStateException: cannot park here …` — catchable |
+| native, `flint run` | `index out of bounds: the len is 1024 but the index is 18446744073709551615` |
+
+A **panic in the shipped binary** for what is a catchable error on the other
+runtime, reachable from any `flint.sys.*` call written inside a `for` or a
+`map`. The underflow is `vpop` taking `stack_top` from 0 to `usize::MAX`, and
+the panic surfaces in `enter` rather than in the park path itself.
+
+**Not fixed here**, deliberately. The obvious repair -- `Rt::parked` restoring
+`stack_top` and returning instead of unwinding while Rust frames are live -- was
+written, measured, and did NOT fix it, so it was reverted rather than left in
+the tree as an unverified change to the interpreter. What is recorded instead is
+everything the next attempt needs: the two-line reproduction, the runtime that
+diverges, the exact panic, and the fact that the eager forms are unaffected.
+
+`flint.deps.resolve/bump-plan` is written with `reduce` rather than `for` for
+this reason, and says so where it is written.
+
 ## What is undecided
 
 * Whether `flint.sys.*` should be servable by the SDKs too, or stay the CLI's.
