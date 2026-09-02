@@ -382,10 +382,14 @@ pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
     let fs = Fs { root: PathBuf::from("."), write: false };
     let env = Env { args: Vec::new() };
     let sl = Slurp;
+    let npm = crate::deps::Npm::default();
+    let mvn = crate::deps::Mvn::default();
     vec![
         (fs.name_static(), fs.vars()),
         (env.name_static(), env.vars()),
         (sl.name_static(), sl.vars()),
+        (npm.name_static(), npm.vars()),
+        (mvn.name_static(), mvn.vars()),
     ]
 }
 

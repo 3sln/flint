@@ -14,6 +14,7 @@
 //! It is worth 2.7 s against 15.6 s on the same compile (`doc/decisions/0010`).
 //! The output is still wasm: what changed is what the compiler runs ON.
 
+mod deps;
 mod policy;
 mod serve;
 mod sys;
@@ -360,6 +361,10 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
     }
     if caps.iter().any(|c| c == "slurp" || c.starts_with("slurp:")) {
         host.serve(Box::new(crate::sys::Slurp));
+    }
+    if caps.iter().any(|c| c == "deps" || c.starts_with("deps:")) {
+        host.serve(Box::new(crate::deps::Npm::default()));
+        host.serve(Box::new(crate::deps::Mvn::default()));
     }
     if caps.iter().any(|c| c == "env" || c.starts_with("env:")) {
         host.serve(Box::new(crate::sys::Env { args: args.to_vec() }));

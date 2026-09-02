@@ -410,6 +410,7 @@ otherwise**, which is why the guess is left visible rather than quietly edited:
 | --- | --- | --- |
 | before any crate | 2 835 088 | |
 | with `ureq` + `rustls`, used by `slurp` | 3 979 520 | **+1.1 MB** |
+| with `flate2`/`tar`/`zip`/`semver`/`sha2`/`serde_json`, used by npm and Maven | 4 393 808 | **+0.4 MB** |
 
 `ureq` with `default-features = false, features = ["rustls"]` is the whole TLS
 stack for 1.1 MB, and adding the dependency changed nothing at all until

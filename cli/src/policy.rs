@@ -32,6 +32,12 @@ pub struct Policy {
     pub env: Vec<String>,
     /// URL prefixes `:net` may reach.
     pub net: Vec<String>,
+    /// URL prefixes `:deps` may fetch from. Unlike the others this DEFAULTS to
+    /// the public registries: a dependency resolver that reaches nowhere is one
+    /// nobody can use, and reaching them is the whole point of holding `:deps`.
+    /// A project wanting an internal mirror and nothing else says so and
+    /// replaces them.
+    pub deps: Vec<String>,
 }
 
 /// A prefix match with one wildcard form: a trailing `**` matches any
@@ -57,6 +63,9 @@ impl Policy {
     pub fn env_allows(&self, name: &str) -> bool {
         allows(&self.env, name)
     }
+    pub fn deps_allows(&self, url: &str) -> bool {
+        allows(&self.deps, url)
+    }
 
     /// `slurp:file://./config/**` and `slurp:https://example.com/**`, as the
     /// CLI's `:with` writes them. An entry with no `:` is the bare name, which
@@ -70,6 +79,17 @@ impl Policy {
             "slurp" => &mut self.slurp,
             "net" => &mut self.net,
             "env" => &mut self.env,
+            "deps" => {
+                if rest.is_none() {
+                    self.deps.extend([
+                        "https://registry.npmjs.org/**".to_string(),
+                        "https://repo.clojars.org/**".to_string(),
+                        "https://repo1.maven.org/maven2/**".to_string(),
+                    ]);
+                    return;
+                }
+                &mut self.deps
+            }
             _ => return,
         };
         if let Some(r) = rest {

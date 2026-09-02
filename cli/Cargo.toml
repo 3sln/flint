@@ -21,6 +21,13 @@ flint-rt = { path = "../runtime" }
 flint-conc = { path = "../units-src/flint-conc" }
 anyhow = "1"
 ureq = { version = "3.4.0", default-features = false, features = ["rustls"] }
+flate2 = "1.1.10"
+tar = "0.4.46"
+zip = "8.6.0"
+semver = "1.0.28"
+sha2 = "0.11.0"
+hex = "0.4.3"
+serde_json = "1.0.151"
 
 [profile.release]
 opt-level = "z"
