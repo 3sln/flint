@@ -405,6 +405,11 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     if (answer[':op'] === ':throw') {
       const err = new Error(`${answer[':kind']}: ${answer[':message']}`);
       err.kind = answer[':kind'];
+      // The DECODED value, not just the two fields rendered into the message.
+      // `(throw (ex-info "no" {:code 42}))` carries data, and a host that can
+      // read the message but not `{:code 42}` cannot act on the failure --
+      // which is the whole of "failure is data".
+      err.flint = answer;
       throw err;
     }
     return answer[':value'];
@@ -424,6 +429,7 @@ export function instantiate(module, { stepLimit = 0 } = {}) {
     if (code !== 0) {
       const err = new Error(value?.[':message'] ?? 'the call failed');
       err.kind = value?.[':error'] ?? value?.[':kind'];
+      err.flint = value;
       throw err;
     }
     return value;

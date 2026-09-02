@@ -87,8 +87,15 @@
            ;; called automatically, and a caller names the function it wants
            ;; (`doc/decisions/0025` step 5). Recording one here made the module
            ;; look like it had a distinguished function, which is exactly the
-           ;; idea being removed -- `:exports` is the honest list, and every
-           ;; name in it is equally callable.
+           ;; idea being removed.
+           ;;
+           ;; `:exports` is the module's ABI SURFACE -- `flint_call`, `memory`,
+           ;; the rest -- and not the flint functions a host may name. Those are
+           ;; the compile's `:exports`, and they are not recorded here yet, so
+           ;; `flint inspect` cannot answer "what can I call". That is a gap the
+           ;; entry's removal opened rather than one it found, and it is on the
+           ;; roadmap; saying so here is better than a comment that implies this
+           ;; field answers it.
            :exports (vec (sort exports))
            :builtins builtins
            :imports (vec (sort imports))

@@ -157,11 +157,18 @@ ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled a
 const dir = mkdtempSync(`${tmpdir()}/flint-`);
 writeFileSync(`${dir}/m.wasm`, image.wasm);
 const root = new URL('../../', import.meta.url).pathname;
-const out = execFileSync('node', [`${root}host/flint.mjs`, `${dir}/m.wasm`, 'x'],
+// The FUNCTION is named, and then its arguments. `x` alone used to be the
+// argument, back when there was an entry point to default to; with `main` gone
+// there is nothing to default to and nothing named `x` (`doc/decisions/0025`).
+const out = execFileSync('node', [`${root}host/flint.mjs`, `${dir}/m.wasm`, 'app/main', 'x'],
                          { encoding: 'utf8' }).trim();
 ok('the module runs under a different host', out.startsWith('main saw'), out);
 const meta = execFileSync(`${root}bin/flint`, ['inspect', `${dir}/m.wasm`],
                           { encoding: 'utf8', cwd: root });
-ok('and describes itself', /entry app\/main/.test(meta), meta.split('\n')[0]);
+// It no longer claims an entry, and it still carries what the host recorded.
+// NOT the callable flint functions: `exports` in the metadata is the module's
+// ABI surface, and which flint names a host may call is not recorded yet.
+ok('and describes itself', !/entry/.test(meta) && /author/.test(meta),
+   meta.split('\n')[0]);
 
 process.exit(fails ? 1 : 0);

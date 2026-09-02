@@ -336,7 +336,13 @@
             (println "Either it is not a flint module, or it was built before 0020."))
           (System/exit 1))
       (do
-        (println (str "flint " (:version m) "   entry " (:entry m)))
+        ;; No entry. There is not one to print any more -- nothing is called
+        ;; automatically and a caller names the function it wants
+        ;; (`doc/decisions/0025`) -- and this went on printing the label with
+        ;; nothing after it, which reads as an artifact that lost its entry
+        ;; rather than one that never had the concept. `exports` below is the
+        ;; honest answer to "what can I call".
+        (println (str "flint " (:version m)))
         (println (str "compatibility key " (get-in m [:compat :key])
                       "   abi " (pr-str (get-in m [:compat :abi]))
                       "   " (name (get-in m [:compat :memory]))

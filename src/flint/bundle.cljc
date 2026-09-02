@@ -144,11 +144,11 @@
                   (w/append-data at blob)
                   (w/append-data addr (w/->bytes [(img/u32 at) (img/u32 (b-count blob))]))))
             m)
-        ;; The runtime module was built as a LOADER, so it carries a builtin
-        ;; registry and `flint_load_image`. Neither is wrong in the output --
-        ;; the module simply also happens to be able to load another image --
-        ;; but the entry has to become `main`, which is what a host calls.
-        m (if (get exp "main") m (w/rename-export m "flint_main" "main"))
+        ;; No `main` is renamed into place. This used to point a `main` export
+        ;; at `flint_main` because "the entry has to become `main`, which is
+        ;; what a host calls" -- and there is no `flint_main` any more, so the
+        ;; rename found nothing and quietly did nothing (`doc/decisions/0025`
+        ;; step 5). A host calls a function by name through `flint_call`.
         all-exported (vec (keys (w/exports m)))
         builtin? (fn [n] (str/starts-with? n "flint_b_"))
         exported (vec (remove builtin? all-exported))
@@ -157,7 +157,6 @@
                :memory :unshared
                :gas-in-aot (boolean (:aot? opts))
                :version (or (:version opts) "0.1.0")
-               :entry (str (:entry opts))
                :exports exported
                :imports (vec (sort (map (fn [i] (str (:module i) "/" (:name i)))
                                         (w/imports m))))

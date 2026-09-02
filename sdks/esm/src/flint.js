@@ -135,14 +135,15 @@ export class Compiler {
   ///
   /// | | |
   /// | --- | --- |
-  /// | `resolve` | `(namespace) => source \| null` |
+  /// | `resolve` | `(namespace) => source \| {source, workspace, tags} \| null` |
   /// | `files`   | `{ 'path.cljc': source }`, an alternative to `resolve` |
+  /// | `workspaces` | `[{prefix, name, tags}]`, who owns which files |
   /// | `fn`      | the function a default `run` would call |
   /// | `exports` | every other function that must stay callable |
   /// | `optimize` | `['perf']` compiles each arity; `['size']` interprets |
   /// | `shake`   | cut the runtime to what the program reaches (on by default) |
   /// | `meta`    | arbitrary metadata to record in the artifact |
-  compile({ resolve, files, fn, entry, exports, optimize = [], shake = true,
+  compile({ resolve, files, workspaces, fn, entry, exports, optimize = [], shake = true,
             runtime, slots, meta, memoryLimit = 3_000_000_000,
             builtins, features, standardLibrary: withLib = true }) {
     const target = fn ?? entry;
@@ -156,7 +157,8 @@ export class Compiler {
                         .map((o) => known[o]).find((v) => v !== undefined) ?? false;
     const base = runtime ?? (aot ? RUNTIME_AOT : RUNTIME);
     const table = slots ?? (aot ? aotRuntimeSlots() : runtimeSlots());
-    const all = collectSources({ resolve, files, target, withLib });
+    const { files: all, workspaces: spaces } =
+      collectSources({ resolve, files, workspaces, target, withLib });
     // Everything that must stay CALLABLE. Only reachable code ships (`0002`),
     // and a function nobody calls from the entry is exactly the one a host
     // wants to call -- so a sandbox's callable set has to be declared. The
@@ -176,6 +178,7 @@ export class Compiler {
                  // written to disk has to still say what it needs. flint never
                  // reads it (`0025`).
                  (meta ? ` :meta ${edn(meta)}` : '') +
+                 (spaces.length ? ` :workspaces ${ednWorkspaces(spaces)}` : '') +
                  (features ? ` :features ${edn(new Set(features.map((f) => sym(`:${f}`))))}` : '') +
                  '}';
     const inst = instantiate(this.module);
@@ -206,27 +209,55 @@ export class Compiler {
 /// The compiler resolves `:require`s itself, so what it needs is every file it
 /// might ask for. With `files` that is the map; with `resolve` it is what the
 /// resolver answers, and the compiler names anything missing.
-function collectSources({ resolve, files, target, withLib }) {
+function collectSources({ resolve, files, workspaces, target, withLib }) {
   const all = withLib ? { ...standardLibrary() } : {};
   if (files) Object.assign(all, files);
+  // Exact-path entries first, then whatever prefixes the caller gave: the
+  // compiler takes the first match, so the specific has to precede the broad.
+  const spaces = [];
   if (resolve) {
-    // A resolver is asked by NAMESPACE and answers with source; the compiler
-    // wants them keyed by the path a namespace maps to.
+    // A resolver is asked by NAMESPACE and answers with what that namespace IS;
+    // the compiler wants sources keyed by the path a namespace maps to.
     const seen = new Set();
     const want = [target.split('/')[0]];
     while (want.length) {
       const ns = want.pop();
       if (seen.has(ns)) continue;
       seen.add(ns);
-      const src = resolve(ns);
+      const r = resolve(ns);
+      if (r == null) continue;
+      // A bare string is source and nothing else, which is what a resolver
+      // answered before there were workspaces and still answers.
+      const src = typeof r === 'string' ? r : r.source;
       if (src == null) continue;
       const path = ns.replace(/-/g, '_').replace(/\./g, '/') + '.cljc';
       all[path] = src;
+      if (typeof r !== 'string' && (r.workspace || r.tags)) {
+        spaces.push({ prefix: path, name: r.workspace, tags: r.tags });
+      }
       // Follow its requires, so a resolver is asked only for what is reached.
       for (const m of String(src).matchAll(/\[([a-zA-Z0-9._-]+)\s/g)) want.push(m[1]);
     }
   }
-  return all;
+  for (const w of workspaces ?? []) spaces.push(w);
+  return { files: all, workspaces: spaces };
+}
+
+/// `[{prefix, name, tags}]` as the EDN the compiler reads.
+///
+/// `name` is a SYMBOL and `tags` maps symbol to symbol, because a workspace
+/// name and a tag reader are both things the reader resolves, not strings it
+/// would have to re-parse.
+function ednWorkspaces(spaces) {
+  return `[${spaces.map((w) => {
+    const parts = [`:prefix ${edn(String(w.prefix ?? ''))}`];
+    if (w.name) parts.push(`:name ${String(w.name)}`);
+    if (w.tags && Object.keys(w.tags).length) {
+      parts.push(`:tags {${Object.entries(w.tags)
+        .map(([t, v]) => `${String(t)} ${String(v)}`).join(' ')}}`);
+    }
+    return `{${parts.join(' ')}}`;
+  }).join(' ')}]`;
 }
 
 /// A compiled artifact: inert, holds functions, says what it is.
@@ -437,9 +468,16 @@ export class Sandbox {
   get exports() { return this.inst.exports; }
   /// Run a named function, rendering its answer the way a command line would.
   /// There is no entry point to default to (`doc/decisions/0025` step 5).
+  ///
+  /// There is deliberately no `call` here. There WAS -- a passthrough to
+  /// `this.inst.call` added beside `run` when the entry point went away -- and
+  /// a second method of that name in one class body silently replaced the
+  /// asynchronous `call` above with no error anywhere. Every call then bypassed
+  /// the driver: the returned value was not a promise, nothing was ever
+  /// queued, and coalescing counted zero dispatches for fifty requests while
+  /// the answers still came back correct. `callSync` is the undecorated call,
+  /// and it is the one this was duplicating.
   run(fn, args = []) { return this.inst.run(fn, args); }
-  /// Ask for a function by name and get its VALUE back, undecorated.
-  call(fn, args = []) { return this.inst.call(fn, args); }
 }
 
 /// Compile and call, for the case that just wants an answer.

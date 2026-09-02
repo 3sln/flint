@@ -111,7 +111,15 @@
       {:files {\"clojure/core.cljc\" \"(ns clojure.core) ..\" ..}
        :entry my.app/main
        :builtins #{..}
+       :workspaces [{:prefix \"vendor/foo/\" :name foo/bar :tags {t f}} ..]
        :features flint.reader/default-features}
+
+  `:workspaces` says who OWNS which files, first matching prefix winning. It is
+  how a caller with no filesystem says what the CLI reads off a source root:
+  which reader tags a file is read under, and -- once capabilities land -- what
+  its workspace was granted (`doc/decisions/0036`). Absent, every file belongs
+  to the anonymous workspace and only the built-in tags are bound, which is
+  what this did before workspaces existed.
 
   The difference from `compile-to-base64` is that the caller does not have to
   know what the program requires. That resolution is most of what a compiler
@@ -127,17 +135,17 @@
         features (or (:features spec) flint.reader/default-features)
         entry (:entry spec)
         entry-ns (symbol (namespace entry))
-        find-source (fn [n]
-                      (let [base (project/ns->path n)]
-                        (or (when-let [src (get files (str base ".cljc"))]
-                              {:src src :file (str base ".cljc")})
-                            (when-let [src (get files (str base ".clj"))]
-                              {:src src :file (str base ".clj")}))))
+        ;; The namespace RESOLVER (`doc/decisions/0036`). This used to be a
+        ;; lambda here that answered source text and nothing else, which is why
+        ;; reader tags worked from the CLI and silently did not through the
+        ;; SDK: the CLI knew which project a file belonged to and this did not.
+        ;; Now both front doors produce the same thing.
+        resolve-ns (project/files-resolver files (:workspaces spec))
         ;; `:roots` is how `flint test` compiles: its entry is generated and
         ;; is on no source path, so resolving from it would report the entry
         ;; itself missing. Absent, the entry is the root as always.
         {:keys [sources order missing]}
-        (project/resolve-project find-source entry-ns features (:roots spec))]
+        (project/resolve-project resolve-ns entry-ns features (:roots spec))]
     (if (seq missing)
       {:missing (vec missing)}
       (let [result (compiler/compile-image
@@ -185,17 +193,17 @@
         entry (:entry spec)
         entry-ns (symbol (namespace entry))
         slots (:slots spec)
-        find-source (fn [n]
-                      (let [base (project/ns->path n)]
-                        (or (when-let [src (get files (str base ".cljc"))]
-                              {:src src :file (str base ".cljc")})
-                            (when-let [src (get files (str base ".clj"))]
-                              {:src src :file (str base ".clj")}))))
+        ;; The namespace RESOLVER (`doc/decisions/0036`). This used to be a
+        ;; lambda here that answered source text and nothing else, which is why
+        ;; reader tags worked from the CLI and silently did not through the
+        ;; SDK: the CLI knew which project a file belonged to and this did not.
+        ;; Now both front doors produce the same thing.
+        resolve-ns (project/files-resolver files (:workspaces spec))
         ;; `:roots` is how `flint test` compiles: its entry is generated and
         ;; is on no source path, so resolving from it would report the entry
         ;; itself missing. Absent, the entry is the root as always.
         {:keys [sources order missing]}
-        (project/resolve-project find-source entry-ns features (:roots spec))]
+        (project/resolve-project resolve-ns entry-ns features (:roots spec))]
     (if (seq missing)
       {:missing (vec missing)}
       (let [result (compiler/compile-image

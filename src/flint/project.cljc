@@ -9,8 +9,20 @@
 
   Source access is a FUNCTION, not a directory list. The babashka front end
   passes one backed by the filesystem; a host driving `flintc.wasm` passes one
-  backed by a map it already has. Neither of them is the compiler's business."
+  backed by a map it already has. Neither of them is the compiler's business.
+
+  That function is the NAMESPACE RESOLVER (`doc/decisions/0036`), and it
+  answers more than source text. A namespace belongs to a WORKSPACE, and the
+  workspace is what carries identity: which reader tags the source is read
+  under, and -- once capabilities land -- what it was granted and what it may
+  require. The alternative was for each front end to answer those separately,
+  which is what `0035` did with reader tags, and the result was that tags
+  worked from the CLI and silently did not through the SDK, because only one
+  of the two front doors had been taught the concept.
+
+  One function, two producers, and nothing here knows which it got."
   (:require [flint.reader :as reader]
+            [clojure.string :as str]
             [flint.compiler :as compiler]))
 
 (def virtual-namespaces
@@ -32,14 +44,29 @@
   (first (filter (fn [f] (and (seq? f) (= 'ns (first f)))) forms)))
 
 (defn collect
-  "Read from `roots` outwards. `find-source` takes a namespace symbol and
-  returns `{:src .. :file ..}` or nil.
+  "Read from `roots` outwards. `resolve-ns` takes a namespace symbol and returns
+  nil, or what that namespace IS:
 
-  Returns `{:sources {ns {:src :file :forms}} :order [..] :missing [..]}`.
-  A namespace with no source is REPORTED rather than thrown on, because the
-  caller knows better than this does whether that is fatal -- a front end says
-  so and stops, a tool listing dependencies keeps going."
-  [find-source roots features]
+      {:src       the source text
+       :file      what to name it in a diagnostic
+       :workspace who owns it -- a symbol, nil for the anonymous one
+       :tags      the reader tags its workspace binds (`doc/decisions/0035`)}
+
+  Only `:src` is required. A resolver that answers just `{:src :file}` is the
+  old `find-source` and still works; it simply reports every namespace as
+  belonging to the anonymous workspace, which is the right answer for a caller
+  that has no notion of projects.
+
+  Returns `{:sources {ns {:src :file :forms :workspace :tags}} :order [..]
+  :missing [..]}`. A namespace with no source is REPORTED rather than thrown
+  on, because the caller knows better than this does whether that is fatal --
+  a front end says so and stops, a tool listing dependencies keeps going.
+
+  The tags travel WITH the source, and that is not bookkeeping: whoever reads
+  this file again -- `topo-order` here, the compiler later -- must read it
+  under the same tags, and a tag map only this loop knew about is a tag map
+  they would get wrong."
+  [resolve-ns roots features]
   (loop [todo (vec roots) sources {} order [] missing []]
     (if (seq todo)
       (let [n (first todo)]
@@ -48,15 +75,46 @@
           (recur (vec (rest todo)) sources order missing)
 
           :else
-          (if-let [s (find-source n)]
-            (let [forms (reader/read-all (:src s) {:file (:file s) :features features})
+          (if-let [s (resolve-ns n)]
+            (let [forms (reader/read-all (:src s) {:file (:file s)
+                                                   :features features
+                                                   :tags (:tags s)})
                   reqs (compiler/ns-requires (or (ns-form forms) '(ns x)))]
               (recur (into (vec (rest todo)) reqs)
-                     (assoc sources n {:src (:src s) :file (:file s) :forms forms})
+                     (assoc sources n {:src (:src s) :file (:file s) :forms forms
+                                       :workspace (:workspace s) :tags (:tags s)})
                      (conj order n)
                      missing))
             (recur (vec (rest todo)) sources order (conj missing n)))))
       {:sources sources :order order :missing missing})))
+
+(defn files-resolver
+  "A namespace resolver over a flat map of `path -> source`, which is what a
+  host driving `flintc.wasm` has (`doc/decisions/0023`).
+
+  `workspaces` says who owns what, as a vector searched in order:
+
+      [{:prefix \"vendor/foo/\" :name foo/bar :tags {tag-sym var-sym}} ..]
+
+  First matching prefix wins, and a file matching none belongs to the anonymous
+  workspace with only the built-in tags -- so a caller that passes no
+  workspaces gets exactly the behaviour this had before there were any.
+
+  Prefixes rather than namespace patterns because the FILE is what a workspace
+  owns. A dependency is a directory of files; which namespaces it happens to
+  declare is its business and can change without the ownership changing."
+  ([files] (files-resolver files nil))
+  ([files workspaces]
+   (fn [n]
+     (let [base (ns->path n)]
+       (when-let [path (first (filter (fn [p] (contains? files p))
+                                      [(str base ".cljc") (str base ".clj")]))]
+         (let [w (first (filter (fn [w] (let [pre (:prefix w)]
+                                          (or (nil? pre) (= "" pre)
+                                              (str/starts-with? (str path) (str pre)))))
+                                (or workspaces [])))]
+           {:src (get files path) :file path
+            :workspace (:name w) :tags (:tags w)}))))))
 
 (defn topo-order
   "Dependencies before dependents. A cycle does not stop the build -- it picks
@@ -90,9 +148,9 @@
             (remove pin? order))))
 
 (defn resolve-project
-  "Everything a compile needs, from an entry and a way to find source.
-  Returns `{:sources .. :order .. :missing ..}` with the order already
-  topological and core-first.
+  "Everything a compile needs, from an entry and a namespace resolver.
+  Returns `{:sources .. :order .. :workspaces .. :missing ..}` with the order
+  already topological and core-first.
 
   `roots` overrides the entry as the starting point, and `flint test` is why:
   its entry is `flint.check.registry`, which the COMPILER generates and no
@@ -101,8 +159,8 @@
   the right answer for a test run, because a test that nothing requires is
   still a test and collecting from one entry outwards would silently run a
   subset."
-  ([find-source entry-ns features] (resolve-project find-source entry-ns features nil))
-  ([find-source entry-ns features roots*]
+  ([resolve-ns entry-ns features] (resolve-project resolve-ns entry-ns features nil))
+  ([resolve-ns entry-ns features roots*]
     ;; `clojure.core` is a root, not something the graph reaches: every namespace
     ;; refers it implicitly and almost none of them `:require` it, so starting
     ;; only from the entry collects a program whose `str` resolves to nothing.
@@ -116,8 +174,9 @@
     (let [roots (cond-> (vec (or roots* ['clojure.core entry-ns]))
                   (contains? features :flint/check) (conj 'flint.check))
           {:keys [sources order missing]}
-          (collect find-source roots features)
+          (collect resolve-ns roots features)
           _ order]
       {:sources sources
        :order (vec (core-first (topo-order sources)))
+       :workspaces (into {} (map (fn [e] [(key e) (:workspace (val e))]) sources))
        :missing missing})))

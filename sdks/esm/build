@@ -44,7 +44,17 @@ npx --yes esbuild src/flint.js \
 ls -l dist/flint.js | awk '{printf "    dist/flint.js %.1f MB\n", $5/1048576}'
 
 echo "==> checking it works, and that it depends on nothing"
-node selftest.mjs | sed 's/^/    /'
+# NOT `node selftest.mjs | sed ...`, which is what this was: a pipeline's status
+# is its LAST command's, so `sed` succeeding hid every failing assertion in here
+# from the gate, and the gate went on reporting green over a broken SDK. The
+# indenting is worth keeping and the exit code is worth more, so the output goes
+# through a file and the status is checked by itself.
+selftest_out=$(mktemp)
+selftest_status=0
+node selftest.mjs > "$selftest_out" 2>&1 || selftest_status=$?
+sed 's/^/    /' "$selftest_out"
+rm -f "$selftest_out"
+[ "$selftest_status" -eq 0 ] || exit "$selftest_status"
 
 node -e '
 const fs = require("fs");
