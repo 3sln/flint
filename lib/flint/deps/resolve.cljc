@@ -274,3 +274,84 @@
                        :mvn {:mvn/version (:version n)}
                        {}))))
           {} (:order p)))
+
+;; ------------------------------------------------------------- capabilities
+;;
+;; `0036` gives a WORKSPACE two keys: `:flint/capabilities-grant`, what it
+;; holds, and `:flint/capabilities-guard`, what a requirer must hold. A
+;; dependency ENTRY takes a third relation, and it is the one that makes a
+;; dependency graph auditable:
+;;
+;;     {:flint/capabilities-grant [:fs :slurp]          ; what THIS project holds
+;;      :deps {org/lib {:git/version "1.2.0"
+;;                      :flint/capabilities-grant [:fs]}}} ; what I LEND to org/lib
+;;
+;; Read plainly: this project holds `:fs` and `:slurp`, and lends `:fs` -- not
+;; `:slurp` -- to `org/lib`.
+
+(defn- names-of
+  "A grant in either form as a set of capability NAMES.
+
+  `0037` lets a grant be a map of name to policy as well as a set of names,
+  because a name says what KIND of authority and the policy says which routes.
+  Only the names matter here: the policy is the host's, checked when a call
+  happens, and this is the compile-time half (`0036`)."
+  [g]
+  (cond
+    (map? g) (set (keys g))
+    (or (vector? g) (set? g) (seq? g)) (set g)
+    (nil? g) #{}
+    :else #{g}))
+
+(defn lending-errors
+  "Every rule a `deps.edn`'s capability delegation breaks.
+
+  Two of the three rules `0037` states; the third is `flint deps add` writing
+  the grant it found, which is the tool's job and not this one's.
+
+  1. **You cannot lend what you do not hold.** A grant on a dependency entry
+     that the project itself was never granted is refused, naming both. Without
+     this, `deps.edn` would be a way to MINT authority: a project could hand a
+     dependency `:fs` it never had, and the whole chain stops being auditable
+     from the top.
+
+  2. **A dependency declaring a guard must be granted it.** This is `0036` level
+     one moved to where the coordinate is. The guard already refuses the
+     `:require`; refusing here as well says so at the place a person can fix it,
+     with the dependency's name in front of them rather than a namespace three
+     levels down.
+
+  `guards` is `{dep-name #{capability ..}}` -- what each dependency's own
+  project file demands -- because that is read from the fetched dependency and
+  is not in this file's input.
+
+  Returns `[{:dep :missing :reason}]`, empty when all is well. REPORTED rather
+  than thrown for the same reason `plan` reports: whether it is fatal is the
+  front end's call, and a tool listing a graph wants to see every problem at
+  once rather than the first."
+  ([project deps] (lending-errors project deps {}))
+  ([project deps guards]
+   (let [held (names-of (:flint/capabilities-grant project))]
+     (vec (concat
+           ;; 1. lending what you do not hold
+           (for [[nm coord] deps
+                 :let [lent (names-of (:flint/capabilities-grant coord))
+                       over (into #{} (remove held lent))]
+                 :when (seq over)]
+             {:dep nm :missing over
+              :reason (str "this project lends " (pr-str over) " to " nm
+                           " and was never granted it"
+                           (if (seq held)
+                             (str "; it holds " (pr-str held))
+                             " -- it holds nothing"))})
+           ;; 2. a guard that was not granted
+           (for [[nm coord] deps
+                 :let [needs (names-of (get guards nm))
+                       lent (names-of (:flint/capabilities-grant coord))
+                       short (into #{} (remove lent needs))]
+                 :when (seq short)]
+             {:dep nm :missing short
+              :reason (str nm " requires " (pr-str short)
+                           " and this deps.edn does not grant it -- add "
+                           ":flint/capabilities-grant " (pr-str (vec (sort short)))
+                           " to its entry")}))))))
