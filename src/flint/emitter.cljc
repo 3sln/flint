@@ -262,7 +262,29 @@
     :fn (emit-fn ctx buf node)
     :invoke (emit-invoke ctx buf node tail?)
     :native-value (put! buf (op :const) (img/u16 (img/native-const (:b ctx) (:name node))))
-    :native (let [args (:args node)
+    ;; `flint/apply` with a function and a sequence becomes the APPLY OPCODE
+    ;; rather than a call to the builtin (`doc/decisions/0037`).
+    ;;
+    ;; The opcode existed and nothing emitted it, so every `apply` went through
+    ;; the builtin -- and the builtin re-enters the interpreter with
+    ;; `rt.invoke`, which puts a RUST FRAME between the callee and the green
+    ;; thread. A park anywhere inside the callee then had no continuation that
+    ;; could be saved, corrupted the value stack, and crashed later in
+    ;; `conc::run_one`, nowhere near the cause.
+    ;;
+    ;; The opcode does what `op::CALL` does: it ENTERS a closure on the
+    ;; interpreter's own frame stack and keeps going, so there is no Rust frame
+    ;; and a park inside `(apply f xs)` saves exactly as it does inside `(f x)`.
+    ;;
+    ;; Head position only. `apply` as a VALUE -- `(map apply ...)` -- is still
+    ;; the var, still the builtin, and still cannot carry a park; that is the
+    ;; residue, and it is much smaller than every `apply` in the language.
+    :native (if (and (= "flint/apply" (:name node)) (= 2 (count (:args node))))
+              (do (doseq [a (:args node)] (emit ctx buf a false))
+                  ;; `argc` counts the callee and any FIXED arguments; here
+                  ;; there are none, so 1 -- the sequence is not counted.
+                  (put! buf (op :apply) 1))
+              (let [args (:args node)
                   spec (when (= 2 (count args))
                          (let [o (get int-specialised (:name node))]
                            (when (and o (every? (fn [a] (= :int (:tag a))) args))
@@ -276,7 +298,7 @@
                 :else
                 (put! buf (op :native)
                       (img/u16 (img/native-slot (:b ctx) (:name node)))
-                      (count args))))
+                      (count args)))))
     :throw (do (emit ctx buf (:expr node) false) (put! buf (op :throw)))
     :try (emit-try ctx buf node tail?)
     :vector (do (doseq [x (:items node)] (emit ctx buf x false))

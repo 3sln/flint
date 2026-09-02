@@ -1520,22 +1520,86 @@ impl Rt {
                     continue;
                 }
                 op::APPLY => {
+                    let opcode_at = ip - 1;
                     let argc = self.u8_at(ip) as usize;
                     ip += 1;
                     commit!();
                     // stack: callee, a1..a(argc-1), seq
-                    let seq = self.vpop();
+                    let operands_at = self.roots.stack_top - argc - 1;
+                    let apply_callee = self.vat(operands_at);
+                    let is_closure = apply_callee.is_heap()
+                        && ty(&self.gc.sp, apply_callee.as_heap()) == TY_CLOSURE;
+
+                    // TWO PATHS, because a park has to be survivable on both
+                    // and they survive it differently (`doc/decisions/0037`).
+                    //
+                    // A CLOSURE IS ENTERED, not called -- exactly as `op::CALL`
+                    // does it, and for the reason `op::CALL` states: "inline
+                    // the frame push so Clojure recursion uses our frame stack,
+                    // not the Rust one". `call_value` on a closure re-enters
+                    // the interpreter RECURSIVELY, so a park inside the callee
+                    // had a Rust frame between it and the green thread, and a
+                    // Rust frame's state cannot be saved.
+                    //
+                    // A NATIVE cannot be entered -- it has no frame -- so it is
+                    // called, and survives a park by being RE-EXECUTED. That
+                    // needs the operands still in place, which is why this path
+                    // copies rather than consuming: the seq stays where it is
+                    // and the call is built above it.
+                    if is_closure {
+                        let seq = self.vpop();
+                        let mut spread = 0usize;
+                        let si = self.push(seq);
+                        let mut cur = self.seq(self.r(si));
+                        self.set_r(si, cur);
+                        while !self.r(si).is_nil() {
+                            if !self.charge_tick(spread as u64, 1, "apply") {
+                                self.pop_to(si);
+                                break;
+                            }
+                            let f = self.first(self.r(si));
+                            self.vpush(f);
+                            spread += 1;
+                            cur = self.next(self.r(si));
+                            self.set_r(si, cur);
+                        }
+                        if self.failed() {
+                            self.pop_to(si);
+                            self.roots.stack_top = operands_at;
+                            if !self.unwind() {
+                                return NIL;
+                            }
+                            continue;
+                        }
+                        self.pop_to(si);
+                        let total = argc - 1 + spread;
+                        let at = self.roots.stack_top - total - 1;
+                        if !self.enter(apply_callee, at, total) {
+                            if !self.unwind() {
+                                return NIL;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // The native path. `callee, a1..a(argc-1)` are COPIED above
+                    // the operands and the seq is spread above the copy, so
+                    // rewinding to `operands_at + argc + 1` leaves exactly what
+                    // this instruction expects to find when it runs again.
+                    let seq = self.vpeek(0);
+                    for i in 0..argc {
+                        let v = self.vat(operands_at + i);
+                        self.vpush(v);
+                    }
                     let mut spread = 0usize;
                     let si = self.push(seq);
                     let mut cur = self.seq(self.r(si));
                     self.set_r(si, cur);
                     while !self.r(si).is_nil() {
-                        // The same hazard as the `flint/apply` BUILTIN, which
-                        // is where it was measured: a spread walks the whole
-                        // sequence under one bytecode instruction. This is the
-                        // other road to it -- `(apply f a b seq)` compiled
-                        // inline -- and it gets the same tick, because a bound
-                        // that holds on one of two paths is not a bound.
+                        // The same hazard as the `flint/apply` BUILTIN: a
+                        // spread walks a whole sequence under one bytecode
+                        // instruction, so it gets the same tick -- a bound that
+                        // holds on one of two paths is not a bound.
                         if !self.charge_tick(spread as u64, 1, "apply") {
                             self.pop_to(si);
                             break;
@@ -1547,9 +1611,8 @@ impl Rt {
                         self.set_r(si, cur);
                     }
                     if self.failed() {
-                        // Same unwind the call below uses: the spread is
-                        // abandoned and the handler search starts, rather than
-                        // a half-spread call going ahead.
+                        self.pop_to(si);
+                        self.roots.stack_top = operands_at;
                         if !self.unwind() {
                             return NIL;
                         }
@@ -1557,20 +1620,21 @@ impl Rt {
                     }
                     self.pop_to(si);
                     let total = argc - 1 + spread;
-                    let apply_callee_at = self.roots.stack_top - total - 1;
                     let r = self.call_value(total);
                     if self.thrown.bits() == crate::value::PARK.bits() {
-                        // `apply` has already spread the seq onto the stack, so
-                        // there is no instruction that would re-execute this
-                        // call. Refusing is the honest outcome; silently losing
-                        // the operands is not.
-                        match self.parked(ip, 0, base_depth, false) {
+                        // RE-EXECUTABLE now: the operands are still there, so
+                        // rewinding to this instruction re-copies, re-spreads
+                        // and calls again. Which is the same contract every
+                        // other parking call already has.
+                        match self.parked(opcode_at, operands_at + argc + 1, base_depth, true) {
+                            Parked::Saved => return NIL,
                             Parked::Yielded => {
-                                self.roots.stack_top = apply_callee_at;
+                                self.roots.stack_top = operands_at;
                                 self.vpush(r);
-                                return NIL;
+                                continue;
                             }
-                            _ => {
+                            Parked::Failed => {
+                                self.roots.stack_top = operands_at;
                                 if !self.unwind() {
                                     return NIL;
                                 }
@@ -1579,16 +1643,19 @@ impl Rt {
                         }
                     }
                     if !self.park_on.is_nil() {
-                        // A closure called through `apply` parked further in.
-                        // Its continuation is already saved, frames and all, so
-                        // this must not push a result on top of it.
+                        // A native cannot park "further in" -- it has no frame
+                        // to save -- so this is the courtesy-yield shape, and
+                        // the operands go because nothing will re-execute.
+                        self.roots.stack_top = operands_at;
                         return NIL;
                     }
                     if self.failed() {
+                        self.roots.stack_top = operands_at;
                         if !self.unwind() {
                             return NIL;
                         }
                     } else {
+                        self.roots.stack_top = operands_at;
                         self.vpush(r);
                     }
                     continue;

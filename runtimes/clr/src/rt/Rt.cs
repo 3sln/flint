@@ -593,6 +593,84 @@ public sealed class Rt : System.IDisposable {
                     roots.StackTop = calleeAt;
                     VPush(cv);
                 } break;
+                case Op.Apply: {
+                    // `(apply f xs)` in head position (`doc/decisions/0037`).
+                    //
+                    // TWO PATHS, because a park has to be survivable on both and
+                    // they survive it differently. A CLOSURE is ENTERED, exactly
+                    // as `Call` does it, so the callee runs on this frame stack
+                    // and a park inside it saves like any other. A NATIVE cannot
+                    // be entered, so it is called and survives a park by being
+                    // RE-EXECUTED -- which needs its operands still in place,
+                    // which is why that path copies rather than consuming.
+                    int opAt = ip - 1;
+                    int argc = U8(ip); ip += 1;
+                    f.Ip = ip;
+                    // stack: callee, a1..a(argc-1), seq
+                    int operandsAt = roots.StackTop - argc - 1;
+                    long applyCallee = roots.Stack[operandsAt];
+                    if (IsHeapTy(applyCallee, TyClosure)) {
+                        long cseq = VPop();
+                        int csi = Push(cseq);
+                        int cspread = 0;
+                        SetR(csi, Seqs.Seq(this, R(csi)));
+                        while (!Val.IsNil(R(csi))) {
+                            // The same tick the Rust runtime charges: a spread
+                            // walks a whole sequence under one instruction.
+                            if (!ChargeTick(cspread, 1, "apply")) { PopTo(csi); break; }
+                            VPush(Seqs.First(this, R(csi)));
+                            cspread++;
+                            SetR(csi, Seqs.Next(this, R(csi)));
+                        }
+                        if (Failed()) {
+                            PopTo(csi);
+                            roots.StackTop = operandsAt;
+                            return Val.Nil;
+                        }
+                        PopTo(csi);
+                        int ctotal = argc - 1 + cspread;
+                        int cat = roots.StackTop - ctotal - 1;
+                        if (!Enter(applyCallee, cat, ctotal)) return Val.Nil;
+                        continue;
+                    }
+                    // The native path: copy `callee, a1..` above the operands
+                    // and spread above the copy, so rewinding to
+                    // `operandsAt + argc + 1` leaves what this instruction
+                    // expects to find when it runs again.
+                    long nseq = roots.Stack[roots.StackTop - 1];
+                    for (int i = 0; i < argc; i++) VPush(roots.Stack[operandsAt + i]);
+                    int nsi = Push(nseq);
+                    int nspread = 0;
+                    SetR(nsi, Seqs.Seq(this, R(nsi)));
+                    while (!Val.IsNil(R(nsi))) {
+                        if (!ChargeTick(nspread, 1, "apply")) { PopTo(nsi); break; }
+                        VPush(Seqs.First(this, R(nsi)));
+                        nspread++;
+                        SetR(nsi, Seqs.Next(this, R(nsi)));
+                    }
+                    if (Failed()) {
+                        PopTo(nsi);
+                        roots.StackTop = operandsAt;
+                        return Val.Nil;
+                    }
+                    PopTo(nsi);
+                    int ntotal = argc - 1 + nspread;
+                    long ncv = CallValue(roots.StackTop - ntotal - 1, ntotal);
+                    if (Parked()) {
+                        thrown = Val.Nil;
+                        if (parkOn == Conc.PARK_YIELD) {
+                            roots.StackTop = operandsAt;
+                            VPush(Val.Nil);
+                        } else {
+                            roots.StackTop = operandsAt + argc + 1;
+                            f.Ip = opAt;
+                        }
+                        thrown = Val.Park;
+                        return Val.Nil;
+                    }
+                    roots.StackTop = operandsAt;
+                    VPush(ncv);
+                } break;
                 case Op.TailCall: {
                     int opAt = ip - 1;
                     int argc = U8(ip); ip += 1;

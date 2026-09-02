@@ -646,6 +646,84 @@ public final class Rt {
                     roots.stackTop = calleeAt;
                     vpush(cv);
                 }
+                case Op.APPLY -> {
+                    // `(apply f xs)` in head position (`doc/decisions/0037`).
+                    //
+                    // TWO PATHS, because a park has to be survivable on both and
+                    // they survive it differently. A CLOSURE is ENTERED, exactly
+                    // as `CALL` does it, so the callee runs on this frame stack
+                    // and a park inside it saves like any other. A NATIVE cannot
+                    // be entered, so it is called and survives a park by being
+                    // RE-EXECUTED -- which needs its operands still in place,
+                    // which is why that path copies rather than consuming.
+                    int opAt = ip - 1;
+                    int argc = u8(ip); ip += 1;
+                    f.ip = ip;
+                    // stack: callee, a1..a(argc-1), seq
+                    int operandsAt = roots.stackTop - argc - 1;
+                    long applyCallee = roots.stack[operandsAt];
+                    if (isHeapTy(applyCallee, TY_CLOSURE)) {
+                        long seq = vpop();
+                        int si = push(seq);
+                        int spread = 0;
+                        setR(si, Seqs.seq(this, r(si)));
+                        while (!Val.isNil(r(si))) {
+                            // The same tick the Rust runtime charges: a spread
+                            // walks a whole sequence under one instruction.
+                            if (!chargeTick(spread, 1, "apply")) { popTo(si); break; }
+                            vpush(Seqs.first(this, r(si)));
+                            spread++;
+                            setR(si, Seqs.next(this, r(si)));
+                        }
+                        if (failed()) {
+                            popTo(si);
+                            roots.stackTop = operandsAt;
+                            return Val.NIL;
+                        }
+                        popTo(si);
+                        int total = argc - 1 + spread;
+                        int at = roots.stackTop - total - 1;
+                        if (!enter(applyCallee, at, total)) return Val.NIL;
+                        continue;
+                    }
+                    // The native path: copy `callee, a1..` above the operands
+                    // and spread above the copy, so rewinding to
+                    // `operandsAt + argc + 1` leaves what this instruction
+                    // expects to find when it runs again.
+                    long seq = roots.stack[roots.stackTop - 1];
+                    for (int i = 0; i < argc; i++) vpush(roots.stack[operandsAt + i]);
+                    int si = push(seq);
+                    int spread = 0;
+                    setR(si, Seqs.seq(this, r(si)));
+                    while (!Val.isNil(r(si))) {
+                        if (!chargeTick(spread, 1, "apply")) { popTo(si); break; }
+                        vpush(Seqs.first(this, r(si)));
+                        spread++;
+                        setR(si, Seqs.next(this, r(si)));
+                    }
+                    if (failed()) {
+                        popTo(si);
+                        roots.stackTop = operandsAt;
+                        return Val.NIL;
+                    }
+                    popTo(si);
+                    int total = argc - 1 + spread;
+                    long cv = callValue(roots.stackTop - total - 1, total);
+                    if (parked()) {
+                        thrown = Val.NIL;
+                        if (parkOn == Conc.PARK_YIELD) {
+                            roots.stackTop = operandsAt;
+                            vpush(Val.NIL);
+                        } else {
+                            roots.stackTop = operandsAt + argc + 1;
+                            f.ip = opAt;
+                        }
+                        thrown = Val.PARK;
+                        return Val.NIL;
+                    }
+                    roots.stackTop = operandsAt;
+                    vpush(cv);
+                }
                 case Op.TAIL_CALL -> {
                     int opAt = ip - 1;
                     int argc = u8(ip); ip += 1;
