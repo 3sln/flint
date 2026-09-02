@@ -36,23 +36,31 @@ public static class Pike {
     /// `Obj.TyRegex` slots.
     public const int RX_SOURCE = 0, RX_PROG = 1, RX_NGROUPS = 2;
 
+    // kin:begin kin/pike.kin
     static bool WordCp(int v) {
-        return (v >= 48 && v <= 57) || (v >= 65 && v <= 90) || (v >= 97 && v <= 122) || v == 95;
+        return ((v >= 48) && (v <= 57)) || ((v >= 65) && (v <= 90)) || ((v >= 97) && (v <= 122)) || (v == 95);
     }
     static bool SpaceCp(int v) {
-        return v == 32 || v == 9 || v == 10 || v == 13 || v == 12 || v == 11;
+        return (v == 32) || (v == 9) || (v == 10) || (v == 13) || (v == 12) || (v == 11);
     }
-
     static bool PredHit(int code, int v) {
         switch (code) {
-            case 0: return v >= 48 && v <= 57;
-            case 1: return !(v >= 48 && v <= 57);
-            case 2: return WordCp(v);
-            case 3: return !WordCp(v);
-            case 4: return SpaceCp(v);
-            default: return !SpaceCp(v);
+            case 0:
+                return (v >= 48) && (v <= 57);
+            case 1:
+                return !((v >= 48) && (v <= 57));
+            case 2:
+                return WordCp(v);
+            case 3:
+                return !WordCp(v);
+            case 4:
+                return SpaceCp(v);
+            default:
+                return !SpaceCp(v);
         }
     }
+
+    // kin:end kin/pike.kin
 
     static bool ClassHit(int[] prog, int classBase, int off, int v) {
         int n = prog[classBase + off];

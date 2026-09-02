@@ -1,0 +1,46 @@
+--rust
+fn main() {
+    let mut o = String::new();
+    for v in [48u32, 57, 58, 65, 90, 97, 122, 95, 32, 9, 13, 11, 64, 0] {
+        o.push_str(if word_cp(v) { "1" } else { "0" });
+    }
+    o.push(' ');
+    for v in [32u32, 9, 10, 13, 12, 11, 33, 48] {
+        o.push_str(if space_cp(v) { "1" } else { "0" });
+    }
+    o.push(' ');
+    for code in 0..6u32 {
+        for v in [48u32, 65, 32, 33] {
+            o.push_str(if pred_hit(code, v) { "1" } else { "0" });
+        }
+    }
+    println!("{}", o);
+}
+--java
+    public static void main(String[] args) {
+        StringBuilder o = new StringBuilder();
+        for (int v : new int[]{48, 57, 58, 65, 90, 97, 122, 95, 32, 9, 13, 11, 64, 0})
+            o.append(wordCp(v) ? "1" : "0");
+        o.append(' ');
+        for (int v : new int[]{32, 9, 10, 13, 12, 11, 33, 48})
+            o.append(spaceCp(v) ? "1" : "0");
+        o.append(' ');
+        for (int code = 0; code < 6; code++)
+            for (int v : new int[]{48, 65, 32, 33})
+                o.append(predHit(code, v) ? "1" : "0");
+        System.out.println(o);
+    }
+--csharp
+    static void Main() {
+        var o = new StringBuilder();
+        foreach (int v in new int[]{48, 57, 58, 65, 90, 97, 122, 95, 32, 9, 13, 11, 64, 0})
+            o.Append(WordCp(v) ? "1" : "0");
+        o.Append(' ');
+        foreach (int v in new int[]{32, 9, 10, 13, 12, 11, 33, 48})
+            o.Append(SpaceCp(v) ? "1" : "0");
+        o.Append(' ');
+        for (int code = 0; code < 6; code++)
+            foreach (int v in new int[]{48, 65, 32, 33})
+                o.Append(PredHit(code, v) ? "1" : "0");
+        Console.WriteLine(o.ToString());
+    }

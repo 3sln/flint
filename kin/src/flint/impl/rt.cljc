@@ -46,10 +46,38 @@
   to answer the same question."
   {:name 'F64 :types {:rust "f64" :java "double" :csharp "double"} :methods {}})
 
+(def Addr
+  "A raw heap address, BEFORE it becomes a `Value`.
+
+  Distinct from `Value` on purpose: `alloc` answers an address, and the slots
+  of a half-built object are written through it. Confusing the two is how a
+  constructor comes to write a tagged value where the collector expects a
+  pointer."
+  {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
+
 (def tags-for {'Rt Rt 'Value Value 'Cat Cat 'Bool Bool 'I32 I32 'RootIx RootIx
-               'F64 F64})
+               'F64 F64 'Addr Addr})
 
 (defn- t [ctx] (:target ctx))
+
+(defn sibling
+  "A call into another module. `(sibling \"vec_count\" \"Vec\" \"count\")` gives
+
+      rust    {0}.vec_count({1}, ...)
+      java    Vec.count({0}, {1}, ...)
+      csharp  Vec.Count({0}, {1}, ...)
+
+  `n` is how many arguments follow the receiver."
+  ([rust-name cls java-name n] (sibling rust-name cls java-name
+                                        (str (str/upper-case (subs java-name 0 1))
+                                             (subs java-name 1))
+                                        n))
+  ([rust-name cls java-name csharp-name n]
+   (let [args (fn [from] (str/join ", " (map #(str "{" % "}") (range from (inc n)))))
+         tail (fn [from] (if (zero? n) "" (str ", " (args from))))]
+     (core/call {:rust (str "{0}." rust-name "(" (args 1) ")")
+                 :java (str cls "." java-name "({0}" (tail 1) ")")
+                 :csharp (str cls "." csharp-name "({0}" (tail 1) ")")}))))
 
 (def type-tags
   "The heap type tags, and how each target spells one.
@@ -67,12 +95,20 @@
   [sym]
   (str "Obj." (str/join (mapv str/capitalize (str/split (str/lower-case (str sym)) #"_")))))
 
+(def value-names
+  "Values spelled differently per target. `NIL` is bare in Rust and qualified
+  on the other two, which is exactly why it is a NAME and not a form."
+  {'NIL {:rust "NIL" :java "Val.NIL" :csharp "Val.Nil"}
+   'TRUE {:rust "TRUE" :java "Val.TRUE" :csharp "Val.True"}
+   'FALSE {:rust "FALSE" :java "Val.FALSE" :csharp "Val.False"}
+   'NOT_FOUND {:rust "NOT_FOUND" :java "Val.NOT_FOUND" :csharp "Val.NotFound"}})
+
 (def names-for
   "Every type tag, spelled three ways. A NAME rather than a form, because a
   tag appears in a `case` label where a call cannot go."
   (reduce (fn [m sym] (assoc m sym {:rust (str sym) :java (str sym)
                                     :csharp (csharp-tag sym)}))
-          {} type-tags))
+          value-names type-tags))
 
 (defn forms-for []
   (merge
@@ -119,6 +155,45 @@
                            :java "Val.asFixnum({0})"
                            :csharp "Val.AsFixnum({0})"})
     'to-i32 (core/call {:rust "({0} as u32)" :java "((int) {0})" :csharp "((int) {0})"})
+
+    ;; --- CROSS-MODULE CALLS ---------------------------------------------
+    ;;
+    ;; One pattern, not one decision per function: Rust reaches a sibling
+    ;; module through `self`, the JVM and CLR through a class-qualified static
+    ;; taking the runtime. So `sibling` writes all three templates from the
+    ;; two names that actually differ, and this table grows by a LINE per
+    ;; function rather than by four.
+    ;;
+    ;; It matters because the alternative -- writing three templates each --
+    ;; is how a table of a hundred entries acquires a typo nobody reads.
+
+    ;; --- ALLOCATION -----------------------------------------------------
+    ;;
+    ;; `alloc` answers a raw `Addr`, not a `Value`, in all three -- so a
+    ;; constructor writes the half-built object's slots through `set-at` and
+    ;; only wraps it with `heap` at the end. `set-at` is deliberately NOT
+    ;; `set-slot`: that one takes a `Value` and inserts `asHeap` on two
+    ;; targets, which is right for reading an existing object and wrong here.
+    ;; Two questions wearing one name is the mistake `^:method` already made.
+    ;; The siblings these files actually reach for.
+    'vec-count (sibling "vec_count" "Vec" "count" 1)
+    'vec-nth (sibling "vec_nth" "Vec" "nth" 2)
+    'str-len (sibling "str_len" "Str" "byteLen" "ByteLen" 1)
+    'char-len (sibling "char_count" "Str" "charLen" "CharLen" 1)
+    'maps-eq (sibling "map_eq" "Maps" "eq" "Eq" 2)
+    'seq-of (sibling "seq" "Seqs" "seq" 1)
+    'first-of (sibling "first" "Seqs" "first" 1)
+    'next-of (sibling "next" "Seqs" "next" 1)
+
+    'alloc (core/call {:rust "{0}.alloc({1}, {2})"
+                       :java "{0}.alloc({1}, {2})"
+                       :csharp "{0}.Alloc({1}, {2})"})
+    'set-at (core/call {:rust "{0}.set_slot({1}, {2}, {3})"
+                        :java "{0}.setSlot({1}, {2}, {3})"
+                        :csharp "{0}.SetSlot({1}, {2}, {3})"})
+    'heap (core/call {:rust "Value::heap({0})" :java "Val.heap({0})" :csharp "Val.Heap({0})"})
+    'fixnum (core/call {:rust "Value::fixnum({0} as i64)"
+                        :java "Val.fixnum({0})" :csharp "Val.Fixnum({0})"})
 
     ;; --- ROOTING --------------------------------------------------------
     ;;

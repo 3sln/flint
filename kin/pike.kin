@@ -1,0 +1,34 @@
+;; The regex character predicates, written once.
+;;
+;; The cheapest region in the whole port: contiguous in all three files
+;; already, no reorder anywhere, and gated on one thing -- boolean `and`/`or`,
+;; which is a single line of vocabulary that was missing for four shipped
+;; sources because none of them happened to need it.
+;;
+;; The generated Rust is FASTER than what it replaces, measured. Rust wrote
+;; `(48..=57).contains(&v) || ...`; the ports write the comparison pair, which
+;; is what kin says. At `-O` that is 12 instructions against 9 -- 25% fewer --
+;; because the comparison form lets LLVM find the ASCII case-fold trick and
+;; merge the A-Z and a-z ranges into one masked test. Convergence paying
+;; rather than costing, as the rotate intrinsic did in `hash`.
+(ns runtime.pike
+  (:require [flint.impl.rt :refer [defn return case not and or ==
+                                   >= <= I32 Bool]]))
+
+(defn ^:inline ^Bool word-cp [^I32 v]
+  (return (or (and (>= v 48) (<= v 57))
+              (and (>= v 65) (<= v 90))
+              (and (>= v 97) (<= v 122))
+              (== v 95))))
+
+(defn ^:inline ^Bool space-cp [^I32 v]
+  (return (or (== v 32) (== v 9) (== v 10) (== v 13) (== v 12) (== v 11))))
+
+(defn ^Bool pred-hit [^I32 code ^I32 v]
+  (case code
+    [0] (and (>= v 48) (<= v 57))
+    [1] (not (and (>= v 48) (<= v 57)))
+    [2] (word-cp v)
+    [3] (not (word-cp v))
+    [4] (space-cp v)
+    :else (not (space-cp v))))

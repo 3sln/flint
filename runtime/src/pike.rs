@@ -45,25 +45,27 @@ pub const RX_SOURCE: u32 = 0;
 pub const RX_PROG: u32 = 1;
 pub const RX_NGROUPS: u32 = 2;
 
+// kin:begin kin/pike.kin
 #[inline]
 fn word_cp(v: u32) -> bool {
-    (48..=57).contains(&v) || (65..=90).contains(&v) || (97..=122).contains(&v) || v == 95
+    return ((v >= 48) && (v <= 57)) || ((v >= 65) && (v <= 90)) || ((v >= 97) && (v <= 122)) || (v == 95);
 }
 #[inline]
 fn space_cp(v: u32) -> bool {
-    matches!(v, 32 | 9 | 10 | 13 | 12 | 11)
+    return (v == 32) || (v == 9) || (v == 10) || (v == 13) || (v == 12) || (v == 11);
 }
-
 fn pred_hit(code: u32, v: u32) -> bool {
-    match code {
-        0 => (48..=57).contains(&v),
-        1 => !(48..=57).contains(&v),
+    return match code {
+        0 => (v >= 48) && (v <= 57),
+        1 => !((v >= 48) && (v <= 57)),
         2 => word_cp(v),
         3 => !word_cp(v),
         4 => space_cp(v),
         _ => !space_cp(v),
-    }
+    };
 }
+
+// kin:end kin/pike.kin
 
 fn class_hit(classes: &[u32], off: usize, v: u32) -> bool {
     let n = classes[off] as usize;
