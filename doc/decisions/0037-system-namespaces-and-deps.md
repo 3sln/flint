@@ -1,0 +1,403 @@
+# 0037 — System access and dependencies are virtual namespaces the CLI serves
+
+> **NOT BUILT — a proposal.** Nothing in this file exists yet, and it is blocked
+> on `0036` steps 4–6: every namespace here is a VIRTUAL namespace, and virtual
+> namespaces are designed but unbuilt. That is step one under any reading of
+> this document.
+
+## What is wrong with what we have
+
+Three separate things, and they have the same shape.
+
+**`flint.fs` looks like a language namespace and is not one.** It ships in
+`lib/`, so it is in flint's own workspace, beside `clojure.core` and
+`flint.port`. Nothing in the tree says that the thing on the other end of it is
+a decision the CLI made. A reader who finds `(fs/read-file h "x")` in a program
+has no way to tell whether they are looking at flint or at one host's
+convention, and the answer matters: a program written against it does not run on
+a host that never implemented it.
+
+**There is no networking at all.** Not a partial implementation — nothing. No
+HTTP, no sockets, no `slurp` of a URL. A program that wants to read a
+configuration file over HTTPS cannot.
+
+**Dependency fetching is babashka shelling out.** `bin/flint` runs `git`,
+`curl`, `tar` and `unzip` as subprocesses, and `lib/flint/deps.cljc` reports
+what it cannot do rather than doing it: no transitive graph, no version
+resolution, one jar at one exact version. The shipped binary — `cli/src/main.rs`,
+2.6 MB, whose whole claim is "nothing to install" — has **no deps surface at
+all**. `flint deps` exists only where babashka does.
+
+So: a system surface that pretends to be part of the language, a missing one,
+and a third that exists in the wrong binary.
+
+## The shape: `flint.sys.*` and `flint.deps.*`, served over RPC
+
+Everything here is a **virtual namespace** (`0036` step 4). The resolver flags
+it, the compiler emits `flint.virtual/call` rather than a var reference, and a
+library does the namespace-to-port resolution. The server is the CLI.
+
+```clojure
+(:require [flint.sys.fs :as fs])
+(fs/list-dir "src")          ; compiles to a call over a port
+```
+
+**The name is the point.** `flint.sys.*` and `flint.deps.*` are not `flint.*`,
+and a reader meeting one should be able to tell from the segment alone that it
+is served rather than linked. Three properties follow from the namespace being
+virtual, and all three are worth having:
+
+* **It cannot be linked into a pure module.** There is no code to shake out,
+  because there was never any code — a program that mentions `flint.sys.fs`
+  and runs on a host that does not serve it fails when the port does not open,
+  which is the honest failure. Today it would fail at a `p/open` buried three
+  calls deep inside a library that looks like part of the language.
+* **`flint inspect` can list what a program asks the world for**, because a
+  virtual namespace is a require the artifact records rather than code it
+  absorbed.
+* **A different host can serve the same namespace differently**, and that is
+  not a hole — it is what makes `flint.sys.fs` mean "the filesystem this host
+  chose to lend" rather than "the filesystem".
+
+`lib/flint/fs.cljc` is deleted and its callers move. It was the right idea in
+the wrong place.
+
+## The system namespaces, and the capability each one is
+
+The split is **by authority, not by convenience**. Two operations belong in one
+namespace when granting one would have been enough to do the other anyway.
+
+| namespace | capability | what it is |
+| --- | --- | --- |
+| `flint.sys.slurp` | `:slurp` | bytes at a name: `file://`, `http://`, `https://`, `data:` |
+| `flint.sys.fs` | `:fs` | hierarchy: list, stat, walk, mkdir, write, delete, rename |
+| `flint.sys.net` | `:net` | requests with a method, headers and a body; later, sockets |
+| `flint.sys.env` | `:env` | environment variables and process arguments |
+| `flint.sys.proc` | `:proc` | subprocesses |
+| `flint.sys.clock` | `:clock` | wall time; monotonic time is not authority and stays a builtin |
+
+### Why `slurp` is separate from `fs`, and why one capability covers `http://`
+
+**`slurp` is a key-value read and nothing else.** `(slurp "file:///etc/hosts")`
+and `(slurp "https://example.com/x.json")` are the same question — *give me the
+bytes at this name* — and a program that reads one configuration file should not
+be holding the thing that can enumerate a disk. Splitting them is the whole
+reason `:fs` is worth guarding: `:fs` exposes STRUCTURE and MUTATION, and a URL
+fetch never does.
+
+That `file://` and `https://` share a capability is a real decision and the
+uncomfortable one, because they are not the same authority: a URL fetch sends
+the URL to somebody. The answer is the one `0036` already settled for
+`flint.host/request` — **the compile-time guard is coarse and the host answers
+the specific question.** `:slurp` says "this workspace may read by name at all";
+the CLI's grant carries the scheme and host allowlist:
+
+```
+flint run :with [slurp:file,https://registry.npmjs.org]
+```
+
+A guard that varied by scheme could not work anyway: the guard is checked where
+the var is REFERENCED, and the URL is a run-time value. Pretending otherwise
+would be a check that looks stronger than it is, which `0036` spends a section
+refusing to do.
+
+**Streaming is not in `slurp`.** `slurp` answers with the whole thing. A
+namespace that sometimes returns bytes and sometimes returns a handle is two
+namespaces wearing one name, and the streaming one wants a port rather than a
+call — so it can be `flint.sys.stream` when something needs it, and until then
+it is honestly absent rather than half-present.
+
+### `:fs` is still rooted
+
+Every `:fs` grant carries a root and every path resolves under it; an escape is
+REFUSED and never clamped, because silently rewriting `../../etc/passwd` answers
+a question nobody asked. That rule already exists in `host/fs.mjs` and moves
+across unchanged — it is the one part of the current implementation that was
+never in the wrong place.
+
+## The dependency namespaces
+
+| namespace | capability | what it is |
+| --- | --- | --- |
+| `flint.deps.npm` | `:deps` | versions, manifest, tarball |
+| `flint.deps.mvn` | `:deps` | versions, POM, jar |
+| `flint.deps.git` | `:deps` | refs, tags, semver resolution, fetch by sha |
+| `flint.deps.pod` | `:deps` | list, boot, describe, invoke |
+
+One capability for all four, because a build that may fetch from npm may fetch
+from Maven: they are one authority — *reach out and bring code in* — and
+splitting them would be four grants that are always given together.
+
+`lib/flint/deps.cljc` is rewritten **as `.cljc` on top of these**, so the
+resolver, the version arithmetic, the transitive walk and the lockfile are
+flint code that runs anywhere, and only the fetching is Rust. That is the same
+division `0021` argues for and the same one `lib/flint/cli.cljc` already has:
+the logic is a flint program, the host does I/O.
+
+### The protocol per namespace
+
+`0036`'s three operations, unchanged:
+
+```text
+->  {:op :invoke :var f :args [...]}   <-  {:body v} | {:error {...}}
+->  {:op :get    :var x}               <-  {:body v}
+->  {:op :list}                        <-  {:body [{:name f :arities [...]}]}
+```
+
+Every one of these namespaces answers `:list`, so `flint deps` and `--explain`
+can say what a build can actually reach, and so an unknown var in
+`flint.sys.fs` is a COMPILE error rather than a run-time one. The CLI knows its
+own surface, so there is no reason to take it on trust.
+
+## Git is a first-class package manager
+
+Not "a URL and a sha", which is what canonical `deps.edn` treats it as.
+
+```clojure
+{:deps
+ {org/lib {:git/url "https://github.com/org/lib"
+           :git/version "^1.2.0"     ; SEMVER, resolved against tags
+           :git/sha "a1b2c3d"}}}     ; integrity, full or prefix
+```
+
+* **`:git/version`** resolves semver against the repository's tags — `v1.2.3`,
+  `1.2.3` and `release-1.2.3` are all recognised, because tagging conventions
+  differ and refusing three of the four common ones would make the feature
+  unusable on real repositories. This is the part canonical `deps.edn` has no
+  answer for.
+* **`:git/sha`** on top is INTEGRITY, not identity: the resolved tag must point
+  at that commit or the fetch is refused. A prefix is accepted and compared as a
+  prefix, so the familiar 7-character form works, and a match is a match on the
+  full object id the remote reports rather than on the prefix alone.
+* **`:git/tag`** keeps canonical Clojure behaviour exactly, including requiring
+  `:git/sha` beside it. Somebody's existing `deps.edn` must keep meaning what it
+  meant.
+
+**Transitives.** A git dependency's own `deps.edn` is read and its dependencies
+resolved, to a fixpoint, the same as npm and Maven. That is the whole of "first
+class" — today a git dep is a directory that arrives and is never asked what it
+needs.
+
+**Version conflict** is resolved by the same rule for all four kinds, and the
+rule is: the nearest declaration wins, ties go to the higher version, and an
+override beats both. Stated once here rather than per-kind, because four
+resolution rules is how a dependency system becomes unpredictable.
+
+## npm without a `package.json`
+
+`deps.edn` is the source of truth. flint writes no `package.json` and reads none
+of its own, because two files that both say what a project depends on is two
+files that disagree.
+
+```clojure
+{:deps {npm/left-pad {:npm/version "^1.3.0" :npm/integrity "sha512-..."}}}
+```
+
+A fetched package's own `package.json` is READ — that is where its dependencies
+and its entry point are — but it is an input, exactly like a POM, never
+something flint maintains.
+
+## Pins, and how they are kept
+
+**Everything is pinned by default.** `flint deps add` writes the resolved exact
+version AND the integrity field; nothing is left floating, because a build that
+resolves differently tomorrow is not reproducible and nobody discovers that at a
+convenient moment.
+
+**Transitives are pinned into `:flint/overrides`**, in `deps.edn`, rather than
+into a second lockfile:
+
+```clojure
+{:deps      {org/lib {:git/version "1.2.0" :git/sha "..."}}
+ :flint/overrides
+ {org/dep   {:git/version "3.1.4" :git/sha "..."}
+  npm/other {:npm/version "2.0.1" :npm/integrity "sha512-..."}}}
+```
+
+One file, and the pins are in the same language as the declarations — so a
+person can read a pin, edit it, and understand what it did. A separate lockfile
+in a different format is a second thing to keep true, and `0035` is this
+repository's record of what that costs.
+
+Overrides are also the conflict escape hatch, which is why the pin lives there
+rather than in a parallel structure: pinning a transitive and forcing a version
+are the same operation, and they should not have two spellings.
+
+## The `flint deps` surface
+
+```text
+flint deps add npm:left-pad              # resolve latest, pin, write
+flint deps add mvn:org.clojure/data.json
+flint deps add git:github.com/org/lib
+flint deps add pod:org.babashka/postgresql
+
+flint deps add npm:left-pad@^1.3.0       # a constraint, resolved and pinned
+
+flint deps bump                          # every dep, within its constraint
+flint deps bump :patch                   # …and no further
+flint deps bump :minor
+flint deps bump :major                   # crosses a major, so it asks
+
+flint deps pin                           # write every transitive into overrides
+flint deps unpin org/dep
+flint deps tree                          # what is reached, and from where
+flint deps why org/dep                   # which path pulled it in
+```
+
+`add` is the interesting one and the rest follow from it. `bump` without an
+argument stays inside each declared constraint; with `:major` it crosses one and
+therefore ASKS, because a major bump is a decision and a tool that makes it
+silently is a tool people stop trusting.
+
+## Capabilities on dependencies
+
+`0036` gives a workspace `:flint/capabilities-grant` (what it holds) and
+`:flint/capabilities-guard` (what a requirer must hold). Dependencies need one
+more thing, and it is a different relation.
+
+**A dependency entry may carry a grant, and that grant is a DELEGATION:**
+
+```clojure
+{:flint/capabilities-grant [:fs :slurp]        ; what THIS project holds
+ :deps
+ {org/lib {:git/version "1.2.0" :git/sha "..."
+           :flint/capabilities-grant [:fs]}}}  ; what I lend to org/lib
+```
+
+Read plainly: *this project holds `:fs` and `:slurp`, and lends `:fs` — not
+`:slurp` — to `org/lib`.*
+
+Three rules, and each exists because its absence is a hole:
+
+1. **You cannot lend what you do not hold.** A grant on a dependency entry that
+   the project itself was never granted is refused at read time, naming both.
+   Without this, `deps.edn` would be a way to mint authority.
+2. **A dependency declaring `:flint/capabilities-guard` must be granted it**, or
+   the build is refused, naming the dependency and the missing capability. This
+   is `0036` level one moved to where the coordinate is: the guard already
+   refuses the `:require`, and refusing at the dependency entry says so at the
+   place a person can fix it.
+3. **`flint deps add` writes the grant it found.** The tool reads the
+   dependency's own `deps.edn` (or a pod's manifest), sees its guard, and writes
+   the matching grant into the new entry — after asking, because granting a
+   capability is a decision and this is the moment to make it visible:
+
+   ```text
+   $ flint deps add git:github.com/org/lib
+     org/lib 1.2.0 (a1b2c3d) requires: :fs
+     grant :fs to org/lib? [y/N]
+   ```
+
+   A dependency hand-added to `deps.edn` without the grant is refused by rule 2,
+   so the prompt is a convenience and never the enforcement.
+
+**A pod manifest carries the same two keys**, so a pod that needs `:proc` says
+so in the artifact rather than in a README, and `flint deps add pod:` can show
+it before anything is booted.
+
+### What this does not do
+
+The same limit `0036` records, restated because a dependency system is exactly
+where somebody will expect more: **this constrains linking, not leaking.** A
+dependency granted `:fs` can wrap it in a function of its own and hand the
+result to a dependency that was granted nothing. What the grant buys is that the
+set of dependencies holding an authority DIRECTLY is small, declared, and
+diffable in a pull request.
+
+## Pods
+
+A pod is one implementation of the virtual-namespace interface, behind `:deps`
+and whatever the pod's own manifest guards. `flint.deps.pod` boots it, speaks
+babashka's pod protocol, and answers `:list` from `describe` — which is why
+`0036` made the var list optional and sourced from `:list`: a booted pod can be
+asked what it holds, and a build that boots one gets the same compile-time
+checking as any other namespace.
+
+**A build that boots a pod has a live process in it.** That is a real cost, so
+it is opt-in and the answer is cached under `.flint/` like a fetched dependency
+— paid once, not per build. A build that does not boot compiles against the
+`deps.edn` declaration and takes the surface on trust, and `flint build` says
+which namespaces were CHECKED and which were TRUSTED, because the same mistake
+being a compile error or a run-time error depending on build configuration is
+only defensible if a person can tell which they got.
+
+**Macros from a pod: no.** Invoking a pod at compile time and letting its output
+into the program is a larger step than reading a description, babashka's pods do
+not do it, and it is refused here rather than left unmentioned.
+
+## The Rust side, and what it costs
+
+The servers live in `cli/src/main.rs` and its new modules. This is the first
+time the binary takes real external dependencies, and the number that has been
+quoted in the README since it was written is going to move:
+
+| | today |
+| --- | --- |
+| `flint` binary | 2.6 MB |
+| dependencies | `flint-rt`, `flint-conc`, `anyhow` |
+
+Adding an HTTP client, a git implementation, zip/tar and semver will grow that
+substantially — plausibly to 15–25 MB — and the README's "nothing to install"
+claim has to be re-stated as what it actually becomes: still nothing to install,
+and no longer small. **The measurement goes in the commit that adds the crates,
+not in this file**, because a number nobody measured is the kind of claim this
+repository keeps a checker for.
+
+Chosen for being pure Rust, so that cross-compilation and a static binary stay
+possible:
+
+* **`ureq`** + **`rustls`** for HTTP. Blocking, which is what a CLI wants, and
+  no async runtime pulled in behind it.
+* **`gix`** for git, not `git2`: `libgit2` needs a C toolchain and OpenSSL, and
+  the point of this binary is that it needs neither.
+* **`zip`** and **`tar`** + **`flate2`** for jars and npm tarballs.
+* **`semver`** for version arithmetic, in Rust — with the caveat below.
+* **`sha2`** for integrity.
+
+**The version arithmetic is duplicated on purpose**, and that has to be said out
+loud because this repository has a record of what unplanned duplication costs
+(`0035`: a value only one of three readers knew about). The Rust `semver` crate
+resolves at FETCH time; `flint.deps` in `.cljc` compares versions at PLAN time,
+where the graph lives. Two implementations of "which version wins" is exactly
+the shape that goes wrong, so: **the plan is authoritative and Rust never
+chooses.** `flint.deps.git/resolve` is given a constraint and returns EVERY
+matching tag with its sha; picking one is the `.cljc` side's job. Rust matches,
+flint decides.
+
+## Order
+
+1. **Virtual namespaces** (`0036` steps 4–6). The blocker. Nothing here exists
+   without them, and they should land alone with one trivial `flint.sys.*`
+   namespace as the proof.
+2. **`flint.sys.slurp` and `flint.sys.fs`**, served by the Rust CLI. `:fs`
+   ported from `host/fs.mjs` including the rooting rule; `lib/flint/fs.cljc`
+   deleted and its callers moved.
+3. **`flint.sys.env`, `flint.sys.proc`, `flint.sys.net`, `flint.sys.clock`.**
+4. **The crates**, with the size measurement, behind `flint.deps.npm` and
+   `flint.deps.mvn` — the two whose semantics are simplest.
+5. **`flint.deps.git`**, with semver over tags, prefix sha integrity, and
+   canonical `:git/tag` unchanged.
+6. **`flint.deps` rewritten in `.cljc`**: the graph, the conflict rule, the
+   transitive walk, overrides.
+7. **`flint deps add` / `bump` / `pin` / `tree` / `why`.**
+8. **Capability delegation on dependency entries**, with all three rules.
+9. **`flint.deps.pod`** and the babashka pod protocol.
+10. **The old path deleted**: `bin/flint`'s `git!`/`npm!`/`mvn!` shell-outs and
+    the parts of `lib/flint/deps.cljc` they served.
+
+## What is undecided
+
+* Whether `flint.sys.*` should be servable by the SDKs too, or stay the CLI's.
+  Leaning: the namespace is a contract, so any host may serve it, and the SDK
+  should get a helper — but the CLI is the only implementation this file
+  proposes building.
+* Whether `:slurp` of `file://` should be rooted the way `:fs` is. Leaning yes,
+  by the same argument, which means a `:slurp` grant carries a root as well as
+  an allowlist.
+* Whether a dependency's transitives inherit its delegated grants, or must be
+  granted separately. Rule 1 above says a project cannot lend what it does not
+  hold; whether a DEPENDENCY can re-lend what it was lent is the same question
+  one level down, and the answer should be the same — but it makes `deps.edn`
+  wordier and the alternative is that a grant stops at the first edge.
+* `flint.sys.clock` at all. Wall time is authority (it fingerprints), monotonic
+  time is not, and separating them may be more pedantry than it is worth.
