@@ -44,13 +44,41 @@
     (subs c 1 (dec (count c)))
     c))
 
+(defn- delimited?
+  "Does `tmpl` place `{i}` IMMEDIATELY inside a delimiter pair?
+
+  This is the safe test for stripping an argument's outer parentheses, and it
+  is a question about the TEMPLATE rather than about the expression -- which is
+  what the earlier bug got wrong. `to-i32` is `((int) {0})`: the `{0}` sits
+  after a cast, so its parens are load-bearing and stripping them produced
+  `(int) n >>> 32`, which casts and then shifts. `wrapping_add({1})` puts the
+  argument between `(` and `)` with nothing to bind to on either side, so its
+  outer parens can only be noise.
+
+  So the rule is not `strip when the expression looks fully parenthesised` --
+  it is `strip only where the template guarantees there is nothing to bind
+  with`. Same conclusion the hard way round: correct outranks tidy, and the way
+  to be tidy safely is to prove there is nothing to break."
+  [tmpl i]
+  (let [k (str "{" i "}")
+        at (.indexOf (str tmpl) k)]
+    (and (pos? at)
+         (contains? #{\( \,} (nth tmpl (dec at)))
+         (< (+ at (count k)) (inc (count tmpl)))
+         (contains? #{\) \,} (nth tmpl (+ at (count k)) \space)))))
+
 (defn call
   "A form that is a call: render the arguments, fill the target's template, and
   emit as a statement or an expression depending on where it sits."
   [tmpls]
   (fn [ctx form]
-    (let [as (mapv (fn [f] (sp/splint-render ctx f)) (rest form))
-          code (fmt (get tmpls (t ctx)) as)]
+    (let [tmpl (get tmpls (t ctx))
+          as (vec (map-indexed
+                   (fn [i f]
+                     (let [c (sp/splint-render ctx f)]
+                       (if (delimited? tmpl i) (strip-parens c) c)))
+                   (rest form)))
+          code (fmt tmpl as)]
       (if (= :statement (sp/splint-position ctx))
         (sp/splint-emit! ctx (sp/indent-of ctx) code ";\n")
         (sp/splint-emit! ctx code)))))
@@ -94,6 +122,13 @@
     (let [[_ nm params & body] form
           ret (:tag (meta nm))
           throws? (:throws (meta nm))
+          pub? (:pub (meta nm))
+          ;; `^:unchecked`: C# wraps the BODY, which is what the hand-written
+          ;; runtime does and is why murmur's wrapping arithmetic can then be
+          ;; written as plain `*` and `+`. Per-expression `unchecked(...)`
+          ;; nests into `unchecked(unchecked(a * b) + c)` -- the same IL and a
+          ;; good deal harder to read, which the not-worse rule covers.
+          unchecked? (:unchecked (meta nm))
           ps (partition 2 (interleave params (map (fn [p] (:tag (meta p))) params)))
           ty (partial ty-of ctx default)]
       (sp/splint-declare!
@@ -105,6 +140,12 @@
            (if (= :statement (sp/splint-position c))
              (sp/splint-emit! c (sp/indent-of c) code ";\n")
              (sp/splint-emit! c code)))))
+      ;; `^:inline`. Rust is the only one that says so in the source; the JVM
+      ;; and the CLR decide at run time from profile data, which is strictly
+      ;; more information than a source can have. So the mark is emitted for
+      ;; one target and dropped by two -- and dropping it is not a loss.
+      (when (and (:inline (meta nm)) (= :rust (t ctx)))
+        (sp/splint-emit! ctx (sp/indent-of ctx) "#[inline]\n"))
       (case (t ctx)
         ;; RUST RETURNS A RESULT WHERE THE OTHERS THROW, and that is the first
         ;; divergence found in this port that is not naming: it changes the
@@ -113,7 +154,7 @@
         ;; call to it gets `?`, and Java and C# ignore the mark entirely because
         ;; an exception needs nothing in either place.
         :rust (sp/splint-emit!
-               ctx (sp/indent-of ctx) "fn " (target-name ctx nm) "("
+               ctx (sp/indent-of ctx) (if pub? "pub fn " "fn ") (target-name ctx nm) "("
                ;; `^:mut` on a PARAMETER. Rust is the only one of the three
                ;; that has to say a parameter is reassigned; Java and C# read
                ;; the mark and emit nothing, which is the ordinary shape of a
@@ -129,16 +170,22 @@
                  :else "")
                " {\n")
         :java (sp/splint-emit!
-               ctx (sp/indent-of ctx) "static " (if ret (ty ret) "void") " " (target-name ctx nm) "("
+               ctx (sp/indent-of ctx) (if pub? "public static " "static ")
+               (if ret (ty ret) "void") " " (target-name ctx nm) "("
                (str/join ", " (mapv (fn [[p tag]] (str (ty tag) " " (sp/local-name :java p))) ps)) ") {\n")
         :csharp (sp/splint-emit!
-                 ctx (sp/indent-of ctx) "static " (if ret (ty ret) "void") " " (target-name ctx nm) "("
+                 ctx (sp/indent-of ctx) (if pub? "public static " "static ")
+               (if ret (ty ret) "void") " " (target-name ctx nm) "("
                  (str/join ", " (mapv (fn [[p tag]] (str (ty tag) " " (sp/local-name :csharp p))) ps)) ") {\n"))
-      (sp/splint-scoped ctx {:key :fn :value nm :indent 1}
-                        (fn [inner]
-                          (sp/splint-scoped inner {:key :throws :value throws?}
-                                            (fn [in2] (doseq [f body]
-                                                        (sp/splint-statement! in2 f))))))
+      (let [wrap? (and unchecked? (= :csharp (t ctx)))]
+        (sp/splint-scoped
+         ctx {:key :fn :value nm :indent 1}
+         (fn [inner]
+           (when wrap? (sp/splint-emit! inner (sp/indent-of inner) "unchecked {\n"))
+           (sp/splint-scoped
+            inner {:key :throws :value throws? :indent (if wrap? 1 0)}
+            (fn [in2] (doseq [f body] (sp/splint-statement! in2 f))))
+           (when wrap? (sp/splint-emit! inner (sp/indent-of inner) "}\n")))))
       (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))))
 
 (defn- let-form [default]
@@ -187,20 +234,59 @@
   (let [[_ obj f] form]
     (sp/splint-emit! ctx (sp/splint-render ctx obj) "." (str f))))
 
-(defn- set-form [ctx form]
-  (let [[_ place value] form]
-    (sp/splint-emit! ctx (sp/indent-of ctx)
-                     (sp/splint-render ctx place) " = "
-                     (strip-parens (sp/splint-render ctx value)) ";\n")))
+(def base-compound
+  "Forms with a compound-assignment spelling, PER TARGET.
+
+  Per target because a form can have one in two languages and not the third:
+  `mul32` is `*=` on the JVM and the CLR and `wrapping_mul` in Rust, which has
+  no compound spelling at all. A target with no entry simply gets the long
+  form, which is what it would have been written by hand.
+
+  Shifts are deliberately absent everywhere: `>>>` against `>>` is the
+  difference the vocabulary exists to hide, and `>>>=` would put it back in
+  the source."
+  (let [everywhere (fn [op] {:rust op :java op :csharp op})]
+    {'+ (everywhere "+=") '- (everywhere "-=") '* (everywhere "*=")
+     'bit-and (everywhere "&=") 'bit-or (everywhere "|=")
+     'bit-xor (everywhere "^=")}))
+
+(defn- head-op
+  "The compound spelling of a head symbol for this target, through the file's
+  require scope."
+  [table ctx head]
+  (when (symbol? head)
+    (let [k (if (:scope-syms ctx) (second (get (:scope-syms ctx) head)) head)]
+      (get-in table [k (t ctx)]))))
+
+(defn- set-form
+  "`(set x v)`.
+
+  `x = x ^ y` is written `x ^= y` where the operator has a compound form, which
+  is not an optimisation -- the two compile identically -- but is what the
+  hand-written code says, and the rule is that generated code may not be worse
+  than what it replaces. A diff full of `h1 = h1 ^ len` against `h1 ^= len` is
+  a diff nobody reads, and an unread diff is the acceptance check not running."
+  [table]
+  (fn [ctx form]
+    (let [[_ place value] form
+          p (sp/splint-render ctx place)
+          cmp (when (seq? value) (head-op table ctx (first value)))]
+      (if (and cmp (= 3 (count value)) (= p (sp/splint-render ctx (second value))))
+        (sp/splint-emit! ctx (sp/indent-of ctx) p " " cmp " "
+                         (strip-parens (sp/splint-render ctx (nth value 2))) ";\n")
+        (sp/splint-emit! ctx (sp/indent-of ctx) p " = "
+                         (strip-parens (sp/splint-render ctx value)) ";\n")))))
 
 (defn- if-form [ctx form]
   (let [[_ test then else] form
         c (sp/splint-render ctx test)]
     (sp/splint-emit! ctx (sp/indent-of ctx)
-                     ;; Rust warns on the parens the other two require.
-                     (if (= :rust (t ctx))
-                       (str "if " (strip-parens c) " {\n")
-                       (str "if (" c ") {\n")))
+                     ;; The test is a WHOLE expression with nothing to bind
+                     ;; with, so its outer parens are the safe case to strip --
+                     ;; Rust warns on them and the other two would otherwise
+                     ;; get `if ((x == 0))`.
+                     (let [c (strip-parens c)]
+                       (if (= :rust (t ctx)) (str "if " c " {\n") (str "if (" c ") {\n"))))
     (sp/splint-scoped ctx {:key :in-if :value true :indent 1}
                       (fn [inner] (sp/splint-statement! inner then)))
     (when else
@@ -218,11 +304,11 @@
 (defn forms-for
   "The shape forms. `:default-tag` is the tag an untagged name is given, which
   is a per-subject choice and so is asked for rather than assumed."
-  [{:keys [default-tag]}]
+  [{:keys [default-tag compound]}]
   (merge
    {'defn (defn-form default-tag)
     'let (let-form default-tag)
     'defstruct (defstruct-form default-tag)
-    '. field-form 'set set-form 'if if-form 'return return-form
+    '. field-form 'set (set-form (merge base-compound compound)) 'if if-form 'return return-form
     'do (fn [ctx form] (doseq [f (rest form)] (sp/splint-statement! ctx f)))}
    (reduce (fn [m s] (assoc m s (op-form s))) {} (keys ops))))

@@ -32,18 +32,16 @@ package com.flint.rt;
 public final class Hash {
     private Hash() {}
 
+    // splint:begin splint/hash.splint
     static final int C1 = 0xcc9e2d51;
     static final int C2 = 0x1b873593;
     public static final int SEED = 0;
-
-    public static final int HASH_TRUE = 1231;
-    public static final int HASH_FALSE = 1237;
-
-    static int rotl(int x, int n) { return (x << n) | (x >>> (32 - n)); }
-
-    static int mixK1(int k1) { return rotl(k1 * C1, 15) * C2; }
-    static int mixH1(int h1, int k1) { return rotl(h1 ^ k1, 13) * 5 + 0xe6546b64; }
-
+    static int mixK1(int k1) {
+        return Integer.rotateLeft(k1 * C1, 15) * C2;
+    }
+    static int mixH1(int h1, int k1) {
+        return (Integer.rotateLeft(h1 ^ k1, 13) * 5) + 0xe6546b64;
+    }
     static int fmix(int h1, int len) {
         h1 ^= len;
         h1 ^= h1 >>> 16;
@@ -52,30 +50,43 @@ public final class Hash {
         h1 *= 0xc2b2ae35;
         return h1 ^ (h1 >>> 16);
     }
-
     public static int hashInt(int input) {
-        if (input == 0) return 0;
+        if (input == 0) {
+            return 0;
+        }
         return fmix(mixH1(SEED, mixK1(input)), 4);
     }
-
     public static int hashLong(long input) {
-        if (input == 0) return 0;
+        if (input == 0) {
+            return 0;
+        }
         int low = (int) input;
         int high = (int) (input >>> 32);
         int h1 = mixH1(SEED, mixK1(low));
-        h1 = mixH1(h1, mixK1(high));
-        return fmix(h1, 8);
+        int h2 = mixH1(h1, mixK1(high));
+        return fmix(h2, 8);
     }
+    public static int hashCombine(int seed, int h) {
+        return seed ^ (((h + 0x9e3779b9) + (seed << 6)) + (seed >> 2));
+    }
+    public static int mixCollHash(int hash, int count) {
+        return fmix(mixH1(SEED, mixK1(hash)), count);
+    }
+    public static int orderedStep(int acc, int itemHash) {
+        return (acc * 31) + itemHash;
+    }
+    public static int unorderedStep(int acc, int itemHash) {
+        return acc + itemHash;
+    }
+    public static final int HASH_TRUE = 1231;
+    public static final int HASH_FALSE = 1237;
+
+    // splint:end splint/hash.splint
 
     public static int hashDouble(double d) {
         if (d == 0.0) return 0;   // both 0.0 and -0.0, matching Numbers.hasheq
         long bits = Double.doubleToLongBits(d);
         return (int) (bits ^ (bits >>> 32));
-    }
-
-    /// `boost::hash_combine`, as Clojure's `Util.hashCombine`.
-    public static int hashCombine(int seed, int h) {
-        return seed ^ (h + 0x9e3779b9 + (seed << 6) + (seed >> 2));
     }
 
     /// The UTF-16 code units of a UTF-8 byte string, without materialising a
@@ -142,16 +153,8 @@ public final class Hash {
         return hashSymbol(ns, name) + 0x9e3779b9;
     }
 
-    public static int mixCollHash(int hash, int count) {
-        return fmix(mixH1(SEED, mixK1(hash)), count);
-    }
-
-    /// Running accumulator for an ordered collection: start at 1, fold, then
-    /// `mixCollHash(acc, n)`.
     /// Exposed for the test: a surrogate pair must count as TWO units, and a
     /// port that got that wrong would still hash stably and still be wrong.
     public static int[] utf16Test(byte[] b) { return utf16(b); }
 
-    public static int orderedStep(int acc, int itemHash) { return acc * 31 + itemHash; }
-    public static int unorderedStep(int acc, int itemHash) { return acc + itemHash; }
 }

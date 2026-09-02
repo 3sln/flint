@@ -52,11 +52,21 @@
 
 (defn- hex-form [ctx form] (sp/splint-emit! ctx (hex ctx (second form))))
 
+(defn- const-name
+  "Rust and Java SCREAM a constant; C# pascalises it. `SEED` against `Seed`,
+  `HASH_TRUE` against `HashTrue` -- the existing three files already disagree
+  this way and their callers are written to it, so the port has to keep it."
+  [target nm]
+  (if (= :csharp target)
+    (str/join (mapv str/capitalize (str/split (str nm) #"_")))
+    (str nm)))
+
 (defn- defconst-form
   "A named constant. `^:pub` when it is part of the API."
   [ctx form]
   (let [[_ nm v] form
         pub? (:pub (meta nm))
+        cn (const-name (t ctx) nm)
         ty (get-in (sp/splint-tag ctx (:tag (meta nm))) [:types (t ctx)])
         ;; The SOURCE says whether a constant is written in hex, by wrapping
         ;; it in `(hex ...)` or not. Deriving it from the value produced
@@ -66,13 +76,20 @@
     (sp/splint-emit!
      ctx (sp/indent-of ctx)
      (case (t ctx)
-       :rust (str (when pub? "pub ") "const " nm ": " ty " = " lit ";\n")
-       :java (str (if pub? "public " "") "static final " ty " " nm " = " lit ";\n")
-       :csharp (str (if pub? "public " "") "const " ty " " nm " = " lit ";\n")))))
+       :rust (str (when pub? "pub ") "const " cn ": " ty " = " lit ";\n")
+       :java (str (if pub? "public " "") "static final " ty " " cn " = " lit ";\n")
+       :csharp (str (if pub? "public " "") "const " ty " " cn " = " lit ";\n")))
+    (sp/splint-declare-name!
+     ctx nm (reduce (fn [m tg] (assoc m tg (const-name tg nm))) {} [:rust :java :csharp]))))
 
 (defn forms-for []
   (merge
-   (core/forms-for {:default-tag U32})
+   ;; `mul32` and `add32` have a compound spelling on the JVM and the CLR and
+   ;; none in Rust, where they are `wrapping_mul` and `wrapping_add`. Saying so
+   ;; keeps `h1 *= 0x85ebca6b` in the Java exactly as it was hand-written.
+   (core/forms-for {:default-tag U32
+                    :compound {'mul32 {:java "*=" :csharp "*="}
+                               'add32 {:java "+=" :csharp "+="}}})
    {'defconst defconst-form
     'hex hex-form
 
@@ -83,10 +100,10 @@
     ;; deliberately checked and a reader should not have to know the default.
     'mul32 (core/call {:rust "{0}.wrapping_mul({1})"
                        :java "({0} * {1})"
-                       :csharp "unchecked({0} * {1})"})
+                       :csharp "({0} * {1})"})
     'add32 (core/call {:rust "{0}.wrapping_add({1})"
                        :java "({0} + {1})"
-                       :csharp "unchecked({0} + {1})"})
+                       :csharp "({0} + {1})"})
 
     ;; THE TWO SHIFTS. Which one a line wants is invisible in Java and C#,
     ;; where the TYPE is signed and the OPERATOR chooses -- and visible in
@@ -96,12 +113,21 @@
     'ushr (core/call {:rust "({0} >> {1})"
                       :java "({0} >>> {1})"
                       :csharp "((int)((uint) {0} >> {1}))"})
-    'sar (core/call {:rust "((({0}) as i32) >> {1}) as u32"
+    'sar (core/call {:rust "(({0} as i32) >> {1}) as u32"
                      :java "({0} >> {1})"
                      :csharp "({0} >> {1})"})
 
+    ;; A ROTATE. All three have an intrinsic for it and the hand-written code
+    ;; only used Rust's -- `Hash.java` and `Hash.cs` spell it out as a shift
+    ;; pair. Naming it here gets `rotl` on the Rust exactly as it stands today
+    ;; and upgrades the other two, which is the not-worse rule paying rather
+    ;; than costing for once.
+    'rotl (core/call {:rust "{0}.rotate_left({1})"
+                      :java "Integer.rotateLeft({0}, {1})"
+                      :csharp "((int) BitOperations.RotateLeft((uint) {0}, {1}))"})
+
     ;; THE HALVES OF A 64-BIT VALUE, as `hash_long` reads them.
     'low32 (core/call {:rust "({0} as u32)" :java "((int) {0})" :csharp "((int) {0})"})
-    'high32 (core/call {:rust "((({0}) as u64 >> 32) as u32)"
+    'high32 (core/call {:rust "((({0} as u64) >> 32) as u32)"
                         :java "((int) ({0} >>> 32))"
                         :csharp "((int)((ulong) {0} >> 32))"})}))

@@ -27,7 +27,7 @@ sed -n '/^--rust$/,/^--java$/p' "$drv" | sed '1d;$d' >> "$work/gen.rs"
 { echo 'import java.io.ByteArrayOutputStream; import java.nio.charset.StandardCharsets;'
   echo 'public class Probe {'; cat "$work/gen.java"
   sed -n '/^--java$/,/^--csharp$/p' "$drv" | sed '1d;$d'; echo '}'; } > "$work/Probe.java"
-{ echo 'using System; using System.IO; using System.Text;'; echo 'class Probe {'
+{ echo 'using System; using System.IO; using System.Text; using System.Numerics;'; echo 'class Probe {'
   cat "$work/gen.cs"; sed -n '/^--csharp$/,$p' "$drv" | sed '1d'; echo '}'; } > "$work/Program.cs"
 
 rustc -O -o "$work/probe.rust" "$work/gen.rs" 2>&1 | head -20

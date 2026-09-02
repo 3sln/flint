@@ -48,8 +48,17 @@ become safe to port. Never port a test and its subject in the same change.
 
 ## Where things stand
 
-* `splint/` — the library, one vocabulary, three sources, a babashka driver.
+* `splint/` — the library, three vocabularies, four sources, a babashka driver.
   Plain `.cljc`, no reader conditionals, runs under bb so it can bootstrap.
+  `flint.impl.core` holds the SHAPE of a program and each subject vocabulary
+  merges it in, so a new source pays for its own subject and not for `defn`.
+* **`Hash` ships.** `splint/hash.splint` is emitted into `runtime/src/hash.rs`,
+  `Hash.java` and `Hash.cs`, and those three no longer carry murmur3 by hand.
+* **`codec.splint` and `reader.splint` still ship nowhere.** They verify, and
+  that is all they do; the codec's writers and the reader's primitives remain
+  hand-written in all three runtimes. Substituting them is outstanding work,
+  and until it is done those two slices have proved the generator rather than
+  reduced the tree.
 * Verified end to end: the `apply` spread, the `type-p` opcode, and `if` in both
   statement and expression position (Rust gets an `if` expression, Java and C#
   get the conditional operator, from one source).
@@ -60,6 +69,15 @@ become safe to port. Never port a test and its subject in the same change.
 * **Opcode coverage is 38 of 38.** Every opcode the compiler can emit is
   executed by `bin/conform-hosts` on all three runtimes. That is the baseline a
   port must not lower.
+
+  Checking it per slice means running `opcov` over the images a build leaves in
+  `out/`, which is a SMALLER set than the 38-of-38 figure covers -- it reports
+  36 hot, and comparing that number against 38 would be comparing two different
+  image sets. So the check is a before/after over the SAME images, taken by
+  stashing the slice and re-running: `Hash` measured 220 of 256 cold both ways,
+  unchanged. Answering criterion 4 with a reading -- "hashing contains no
+  opcode dispatch, so coverage cannot move" -- would have been true and would
+  not have been a measurement.
 
 ## Phases
 
@@ -147,6 +165,53 @@ out.
 ### 2. The small pure files
 `Eq`, `Hash`, `Interns`, `Seqs`. Near-identical, no ownership subtleties.
 
+**`Hash` is done, and is the first thing generated that actually ships.**
+The murmur3 core -- `mix-k1`, `mix-h1`, `fmix`, `hash-int`, `hash-long`,
+`hash-combine`, `mix-coll-hash`, `ordered-step`, `unordered-step` and the
+constants -- is now written once in `splint/hash.splint` and emitted into all
+three runtimes. It was the right file to start substituting with because the
+three copies already SAID they were kept in step by hand: `Hash.java` warns
+against `String.hashCode()` because it would let the two ports reach the same
+number by different routes, and ends "The arithmetic is written out on both."
+
+    rust   ... 736442005 439094965 1231 1237
+    java   ... 736442005 439094965 1231 1237
+    csharp ... 736442005 439094965 1231 1237
+
+736442005 is Clojure's hash of `[1 2 3]` and 439094965 is its hash of
+`#{1 2 3}`, both pinned in `hash.rs`'s tests against real Clojure. Three
+targets agreeing with each other is the weaker claim; this is three targets
+agreeing with Clojure.
+
+#### What `Hash` surfaced
+
+* **`^:mut` on a parameter.** Rust alone has to say a parameter is reassigned.
+* **`^:inline`.** Rust says so in the source; the JVM and CLR decide at run
+  time from profile data, which is strictly more information than a source
+  has. Emitted for one target and dropped by two, and dropping it is not a
+  loss. Two `#[inline]`s were missed on the first pass and the diff caught it.
+* **`^:unchecked`.** C# wraps the BODY, which is what the hand-written runtime
+  does, and is what lets murmur's wrapping arithmetic be plain `*` and `+`.
+  Per-expression `unchecked(...)` nests into `unchecked(unchecked(a * b) + c)`
+  -- the same IL and much harder to read.
+* **Constants are named per target.** Rust and Java scream (`HASH_TRUE`), C#
+  pascalises (`HashTrue`), and the existing callers are written to it. So a
+  declaration registers how its name is SPELLED, and a reference in the body
+  reads that rather than guessing. Locals are camel in BOTH Java and C#, where
+  functions are camel and Pascal — one rule for both emitted `ItemHash`.
+* **Hex is said by the source.** Deriving it from the value wrote
+  `HASH_TRUE = 0x4cf`: the right number and the wrong constant.
+* **A rotate is an intrinsic in all three** and only Rust was using it. Naming
+  it in the vocabulary kept the Rust identical and upgraded the other two --
+  the not-worse rule paying rather than costing, for once.
+* **Compound assignment is per target.** `mul32` is `*=` on the JVM and the
+  CLR and `wrapping_mul` in Rust, which has no compound form at all.
+* **Paren-stripping got its safe rule at last.** Ask the TEMPLATE, not the
+  expression: strip an argument's outer parens only where the template puts
+  `{i}` immediately between delimiters, so there is provably nothing to bind
+  with. `wrapping_add({1})` qualifies; `((int) {0})` does not, and that is
+  exactly the case whose parens were load-bearing.
+
 ### 3. The bulk
 `Maps`, `Table`, `Str`, `Bytes`, `Vec`, `Snap`, `Pike`. Each large enough to
 want its own change and its own review.
@@ -160,6 +225,34 @@ and the per-runtime unit tests are the candidates.
 access. The mirrors diverge by 12–36% there and the divergence is what each
 language makes cheap. Generating three subtly wrong things is worse than three
 honestly separate ones.
+
+## How generated code reaches the runtimes
+
+`splint/verify` proves three targets agree. It does not put anything in the
+tree, and for the first three sources nothing was: the codec and reader
+slices were a verified parallel implementation that shipped in no runtime.
+Every acceptance criterion below presupposes SUBSTITUTION, so that gap made
+four of the five unanswerable.
+
+`splint/emit` closes it. Each source has a `.targets` file naming the file
+and indent per target, and each target file carries a marked region:
+
+```
+// splint:begin splint/hash.splint
+...generated...
+// splint:end splint/hash.splint
+```
+
+The generated code is **checked in**. Somebody cloning this repo to build the
+JVM runtime must not have to install a Clojure to do it, and a generator in
+the build path is a generator that breaks the build. So `splint/emit` is run
+by hand, its output is committed, and the markers make the next run a diff
+rather than a merge.
+
+The region has to be CONTIGUOUS, which means the hand-written file is
+reordered once when it is first carved. That is free in all three -- a Rust
+module, a Java class and a C# class do not care what order their members are
+declared in -- and it is a one-time cost per file.
 
 ## Acceptance, per phase
 

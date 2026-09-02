@@ -197,6 +197,19 @@
         (get-in ctx [:vocabs vname :tags k]))
       (get-in ctx [:tags sym]))))
 
+(defn splint-declare-name!
+  "Register how `sym` is SPELLED in each target, for a name whose convention is
+  not the local one.
+
+  Constants are the case that forced it. Rust and Java scream (`HASH_TRUE`) and
+  C# pascalises (`HashTrue`), so a reference in the body cannot be rendered by
+  a single rule, and the declaration is the only place that knows. A name not
+  registered here falls back to `local-name`, which is right for everything
+  else."
+  [ctx sym names]
+  (when-let [a (:names ctx)] (swap! a assoc sym names))
+  nil)
+
 (defn splint-declare!
   "Register `sym` as callable by later forms in THIS source file.
 
@@ -321,7 +334,8 @@
   [ctx v]
   (cond
     (string? v) (pr-str v)
-    (symbol? v) (local-name (:target ctx) v)
+    (symbol? v) (or (get-in (some-> (:names ctx) deref) [v (:target ctx)])
+                    (local-name (:target ctx) v))
     (nil? v) (or (splint-get ctx :nil) "null")
     :else (str v)))
 

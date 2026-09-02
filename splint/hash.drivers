@@ -43,6 +43,6 @@ fn main() {
         int b = 0;
         foreach (long x in new long[]{1, 2, 3}) b = UnorderedStep(b, HashLong(x));
         o.Append(MixCollHash(b, 3)).Append(' ');
-        o.Append(HASH_TRUE).Append(' ').Append(HASH_FALSE);
+        o.Append(HashTrue).Append(' ').Append(HashFalse);
         Console.WriteLine(o.ToString());
     }

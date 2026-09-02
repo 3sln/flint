@@ -29,6 +29,7 @@
                    ;; What this FILE has declared, fresh per target -- a
                    ;; declaration carries the target's spelling of the name.
                    :locals (atom {})
+                   :names (atom {})
                    :tmp (atom 0))]
     (println (str "==== " (name target) " ===================================="))
     (doseq [f forms] (flint.splint/splint-statement! ctx f))

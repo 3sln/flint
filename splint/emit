@@ -1,0 +1,47 @@
+#!/bin/sh
+# Write a splint source's output INTO the three runtimes, between markers.
+#
+#     splint/emit splint/hash.splint
+#
+# The generated code is CHECKED IN. A runtime build must not need babashka --
+# somebody cloning this repo to build the JVM runtime should not have to
+# install a Clojure to do it, and a generator in the build path is a generator
+# that breaks the build. So the tool is run by hand, its output is committed,
+# and the markers make the next run a diff rather than a merge.
+#
+# Each target file carries, once per source:
+#
+#     // splint:begin <source>       <- everything between these two lines
+#     ...generated...                   is replaced wholesale
+#     // splint:end <source>
+set -e
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+src=$1
+[ -n "$src" ] || { echo "usage: splint/emit <source.splint>"; exit 2; }
+map="${src%.splint}.targets"
+[ -f "$map" ] || { echo "splint/emit: no targets file at $map"; exit 2; }
+
+work=${TMPDIR:-/tmp}/splint-emit
+rm -rf "$work"; mkdir -p "$work"
+bb splint/run.clj "$src" > "$work/gen.txt"
+sed -n '/==== rust/,/==== java/p'   "$work/gen.txt" | sed '1d;$d' > "$work/rust"
+sed -n '/==== java/,/==== csharp/p' "$work/gen.txt" | sed '1d;$d' > "$work/java"
+sed -n '/==== csharp/,$p'           "$work/gen.txt" | sed '1d'    > "$work/csharp"
+
+# `<target> <file> <indent-width>` per line. Java and C# nest the generated
+# code inside a class, so it is re-indented on the way in.
+while read -r target file indent; do
+  [ -n "$target" ] || continue
+  case "$target" in '#'*) continue;; esac
+  [ -f "$file" ] || { echo "splint/emit: no such file $file"; exit 1; }
+  grep -q "splint:begin $src" "$file" || { echo "splint/emit: $file has no marker for $src"; exit 1; }
+  pad=$(printf "%${indent:-0}s" "")
+  sed "s/^\(.\)/${pad}\1/" "$work/$target" > "$work/block"
+  awk -v src="$src" -v block="$work/block" '
+    $0 ~ ("splint:begin " src) { print; while ((getline line < block) > 0) print line; skip=1; next }
+    $0 ~ ("splint:end " src)   { skip=0 }
+    !skip { print }
+  ' "$file" > "$work/out" && mv "$work/out" "$file"
+  echo "  $target  $file"
+done < "$map"
