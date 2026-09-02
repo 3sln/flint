@@ -319,6 +319,38 @@ agreeing with Clojure.
   with. `wrapping_add({1})` qualifies; `((int) {0})` does not, and that is
   exactly the case whose parens were load-bearing.
 
+#### `champ.kin` -- the CHAMP node accessors, and the first file that cost nothing new
+
+The eight `bn_*` accessors -- `bn-datamap`, `bn-nodemap`, `bn-key`, `bn-val`,
+`bn-set-key`, `bn-set-val`, `bn-node`, `bn-set-node` -- are how every insert,
+lookup and iteration in `map.rs` / `Maps.java` / `Maps.cs` addresses a bitmap
+node. They are generated into all three.
+
+Two things this settled.
+
+**The codec spike's "no array subject" was the wrong shape for the question.**
+It ranked array primitives as the real gate on phase 3's ~4,000 lines. But
+phase 3 has no native arrays: `Maps`, `Vec`, `Table` and `Snap` walk the SLOTS
+of a heap object, Rust through a method on `Rt` and the other two through a
+static taking one. The gate turned out to be three call templates -- `slot`,
+`set-slot`, `olen` -- not an array subject. A blocker named from reading is
+not the same as a blocker met.
+
+**It needed no new structural capability.** `hash` bought four marks;
+`eq.category` bought the receiver, vocabulary names and statement-vs-value
+`case` arms; `champ` bought heap slots and a `doc` form and nothing else. That
+is the first evidence the vocabulary is CONVERGING rather than growing once
+per file, which is the whole question of whether this scales.
+
+The `doc` form was bought the same way everything here is: the first emit
+turned a `///` into a `//` and quietly demoted a documented function to an
+undocumented one in three runtimes at once.
+
+`cnCount` is deliberately NOT in the region. Same shape, but in all three
+files it sits among the `cn_*` functions with `cn_new` between it and the
+block, and a region has to be contiguous. Moving it would tidy the generator
+at the cost of the reader.
+
 #### `Eq.category`, and the receiver
 
 `Eq` is not the clean mirror the ratio ordering assumed -- Rust has
