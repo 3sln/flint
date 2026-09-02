@@ -81,8 +81,16 @@
   (swap! (:waiting c) dissoc id))
 
 (defn- check [msg]
-  (if (:error msg)
-    (throw (ex-info (str "rpc: " (:error msg)) {:reply msg}))
+  (if-let [e (:error msg)]
+    ;; THE MESSAGE, when there is one, rather than the whole error map printed.
+    ;;
+    ;; This used to be `(str "rpc: " (:error msg))`, which renders a map -- so a
+    ;; server that took care to explain itself got its explanation wrapped in
+    ;; `{:message "..."}` with every newline escaped, and a multi-line answer
+    ;; came out as one long line with `\n` in it. The map is still on the
+    ;; exception as `:reply` for anything that wants to read the rest.
+    (throw (ex-info (str "rpc: " (if (map? e) (or (:message e) (pr-str e)) e))
+                    {:reply msg}))
     msg))
 
 (defn call

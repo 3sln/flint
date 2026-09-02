@@ -429,15 +429,52 @@ impl Git {
     }
 }
 
+/// What to tell somebody who has no `git`.
+///
+/// A missing tool is the one error where "not found" is useless on its own: the
+/// reader knows it is missing, and what they need is the line to type. So the
+/// platform is detected and the message says it -- and when the platform is one
+/// nobody has written a line for, it says where to go rather than guessing.
+///
+/// flint shells out to `git` deliberately (`doc/decisions/0037`): the two
+/// operations it needs do not justify `gix`'s dependency tree. That is a
+/// reasonable trade only if the failure explains itself, which is what this is.
+fn no_git_message(e: &std::io::Error) -> String {
+    // No line continuations in these literals: `\` at end of line keeps the
+    // SOURCE indentation in the output, so a carefully laid out message comes
+    // out indented by however deep the function happened to be.
+    let how = if cfg!(target_os = "macos") {
+        "  xcode-select --install    (Apple's, no Homebrew needed)\n  brew install git          (if you use Homebrew)"
+    } else if cfg!(target_os = "windows") {
+        "  winget install Git.Git\n  or download it from https://git-scm.com/download/win"
+    } else if cfg!(target_os = "linux") {
+        "  apt install git           (Debian, Ubuntu)\n  dnf install git           (Fedora, RHEL)\n  pacman -S git             (Arch)\n  apk add git               (Alpine)"
+    } else {
+        "  https://git-scm.com/downloads lists a package for every platform"
+    };
+    let mut m = String::new();
+    m.push_str("a git dependency needs the `git` program, and it is not on your PATH.\n\n");
+    m.push_str(how);
+    m.push_str("\n\nflint runs `git` rather than embedding a git implementation: what it needs\n");
+    m.push_str("is two operations -- listing a repository's tags, and fetching one commit --\n");
+    m.push_str("and a whole git library is a large thing to carry for two.\n\n");
+    m.push_str(&format!("(the underlying error was: {e})"));
+    m
+}
+
 fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     let mut c = std::process::Command::new("git");
     c.args(args);
     if let Some(d) = cwd {
         c.current_dir(d);
     }
-    let out = c
-        .output()
-        .map_err(|e| format!("git is not available: {e} (needed for a git dependency)"))?;
+    let out = c.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            no_git_message(&e)
+        } else {
+            format!("could not run git: {e}")
+        }
+    })?;
     if !out.status.success() {
         return Err(format!(
             "git {}: {}",

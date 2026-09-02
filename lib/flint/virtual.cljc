@@ -57,11 +57,12 @@
       cannot park here: this call is nested inside native code
       (map, sort, reduce, a lazy seq)
 
-  **On the native runtime the lazy case currently PANICS** rather than throwing
-  that error -- a stack underflow, reachable from any call written inside a
-  `for` or a `map`. `doc/decisions/0037` records the reproduction. Until it is
-  fixed, the eager forms above are not merely the ones that work; they are the
-  ones that fail safely.
+  **A park inside a lazy seq currently CRASHES both runtimes** rather than
+  throwing that error, and it is not this namespace's doing in any way: a plain
+  in-heap channel receive inside a `for` does it too, as does `thread/join`.
+  `doc/decisions/0037` records the reproduction. Until it is fixed, the eager
+  forms above are not merely the ones that work; they are the ones that fail
+  safely.
 
   This is not new and is not this namespace's doing -- it is true of every port
   operation, and `flint.fs` had it too. It is written down HERE because this is

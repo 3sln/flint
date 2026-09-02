@@ -517,34 +517,58 @@ dependency tree.
 
 ## A crash found on the way, and not yet fixed
 
-A virtual-namespace call PARKS, and parking is refused inside native code -- a
-lazy seq is native, so `(for [x xs] (fs/exists? x))` cannot work. That much is
-by design and `flint.virtual` documents it.
+**Corrected.** This section first said the crash was about virtual-namespace
+calls, and that it was a divergence between the runtimes. Both claims were
+wrong, and the correction is the useful part: what was measured the first time
+was one instance of a much more general bug, and attributing it to the feature
+it was found in is how a language bug gets filed as a library bug.
 
-What is not by design is that **the two runtimes disagree about what happens
-next**, and the native one crashes:
+**A park inside a LAZY SEQ crashes, on both runtimes, with no ports and no
+virtual namespaces involved.**
 
 ```clojure
-(defn eager [_] (mapv (fn [x] (fs/exists? x)) [""]))   ; => [true]
-(defn lazy  [_] (vec (for [x [""]] (fs/exists? x))))   ; => panic, natively
+;; no park: fine
+(let [[tx rx] (p/channel 4 "c")]
+  (p/send tx 1) (p/send tx 2)
+  (vec (for [_ [0 1]] (p/receive rx))))          ; => [1 2]
+
+;; a park inside `loop`: fine
+(loop [n 2 acc []]
+  (if (zero? n) acc (recur (dec n) (conj acc (p/receive rx)))))  ; => [1 2]
+
+;; a park inside a lazy seq: CRASH
+(t/spawn (fn [] (p/send tx 1)))
+(vec (for [_ [0]] (p/receive rx)))               ; panic / unreachable
+
+;; and with no ports at all
+(vec (for [th [(t/spawn (fn [] 7))]] (t/join th)))   ; panic / unreachable
 ```
 
 | | |
 | --- | --- |
-| wasm, through the SDK | `IllegalStateException: cannot park here …` — catchable |
 | native, `flint run` | `index out of bounds: the len is 1024 but the index is 18446744073709551615` |
+| wasm, through the SDK | `unreachable` — a trap |
 
-A **panic in the shipped binary** for what is a catchable error on the other
-runtime, reachable from any `flint.sys.*` call written inside a `for` or a
-`map`. The underflow is `vpop` taking `stack_top` from 0 to `usize::MAX`, and
-the panic surfaces in `enter` rather than in the park path itself.
+So it is not a divergence: both crash. What differs is only that ONE park path
+— a bridge receive on wasm — reaches the clean `cannot park here` refusal, which
+is why the first measurement looked like a divergence.
 
-**Not fixed here**, deliberately. The obvious repair -- `Rt::parked` restoring
-`stack_top` and returning instead of unwinding while Rust frames are live -- was
-written, measured, and did NOT fix it, so it was reverted rather than left in
-the tree as an unverified change to the interpreter. What is recorded instead is
-everything the next attempt needs: the two-line reproduction, the runtime that
-diverges, the exact panic, and the fact that the eager forms are unaffected.
+### What is known
+
+* It needs an ACTUAL park. The same code with the value already available works,
+  so `for` is not the problem and neither is the lazy seq by itself.
+* `loop` is fine. Only lazy realisation crashes.
+* `Rt::parked` has a guard for exactly this — `base_depth != 0`, "Rust frames
+  are live underneath: a lazy-seq force" — and it refuses cleanly when it fires.
+  It is not firing here, and finding out why is where the next attempt starts.
+* The panic surfaces in `enter`, in the outermost interpreter loop, which says
+  the damage is done by the time it shows.
+
+**Not fixed here.** The obvious repair — `parked` restoring `stack_top` and
+returning rather than unwinding — was written, measured, did not fix it, and was
+reverted rather than left in the tree as an unverified change to the
+interpreter. This belongs to the language rather than to `0037`, and it is
+recorded here only because this is where it was found.
 
 `flint.deps.resolve/bump-plan` is written with `reduce` rather than `for` for
 this reason, and says so where it is written.
