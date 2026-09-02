@@ -376,6 +376,72 @@ The set form stays and means "these names, with whatever policy I hold, unchange
 — which is the common case and should not have to be spelled out. Both forms read
 the same way: *what I lend*.
 
+### How a workspace's policy reaches the thing that enforces it
+
+Stated as a gap first, because it is one: **per-workspace policy is not enforced
+today.** `:with [slurp:https://a.com/**]` is ONE policy for the whole program.
+If workspace A is allowed only its own domain and workspace B the whole web,
+nothing at run time can tell which of them is calling.
+
+Two ways to close it, and the difference matters.
+
+**Wrapping the reference — rejected, and measured.** The obvious shape is to
+wrap a guarded var where it is referenced, carrying the referencing workspace's
+options on the closure:
+
+```clojure
+(if (fn? x) (fn {:flint/capabilities opts} [& args] (apply x args)) x)
+```
+
+It cannot work, and not for a reason of taste. `apply` is a builtin, and a park
+reached through `apply` is refused — so a wrapper of exactly this shape crashes
+on the first capability that does I/O, which is all of them:
+
+```clojure
+(let [w (fn [p] (fs/exists? p))]      (w ""))   ; => true
+(let [w (fn [& args] (apply fs/exists? args))] (w ""))   ; => crash
+```
+
+Beyond that it needs the CALLEE to read the WRAPPER's slot, which is a dynamic
+binding by another name, and it puts the options inside the guest where they can
+be read.
+
+**Binding the policy to the PORT — the answer.** A virtual namespace is reached
+over a port, and a port is the one thing a guest cannot fabricate. So:
+
+* `flint.virtual` memoises its client per **(namespace, workspace)** rather than
+  per namespace, so workspace A and workspace B talking to `flint.sys.slurp`
+  hold two different ports;
+* the open request carries the referencing workspace, which the compiler knows
+  and the guest does not choose;
+* the host binds that workspace's EFFECTIVE policy to the port when it grants
+  it, and every message arriving on that port is from that workspace by
+  construction.
+
+What this buys, and why it is better than the wrapper on every axis: nothing is
+allocated per call, the options never enter the guest at all, `apply` is not
+involved, and a transitive dependency gets its own port and therefore its own
+policy without anything being threaded through the program.
+
+It also answers the "do we hand the guest a vector of
+`[root-options … leaf-options]`" question with **no**. The host has the whole
+`deps.edn` chain already, so it computes the effective policy for each workspace
+ONCE, at startup, by narrowing down the delegation chain. The guest says who it
+is; it never carries what it is allowed to do.
+
+**The hole this depends on closing.** `flint.port/open` is not guarded, so guest
+code can open a system namespace's port by hand and get whatever policy the host
+gives an unattributed open. That is exactly what `0036` step 7 means by "`open`
+stops carrying its weight", and it stops being a style preference here: retiring
+`open` onto the guarded request primitive is a PRECONDITION for per-workspace
+policy, not a tidy-up.
+
+**On ignoring the declarations.** The `:flint/capabilities-guard` a dependency
+declares is the REQUEST and the grant in the depending project's map is the
+ANSWER; both are kept and they are not the same thing. The declaration is what
+lets `flint deps add` offer the right grant, and what lets the build refuse a
+dependency whose need was never met. Nothing about it is authority.
+
 ### Why this does not weaken the compile-time guard
 
 **The guard never sees the policy.** It compares NAMES, at the reference, exactly
