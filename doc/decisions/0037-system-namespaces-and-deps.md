@@ -690,11 +690,88 @@ frames are live underneath" — and these paths do not reach it: `apply` handles
 the deeper park itself in the branch above, and a lazy-seq force parks inside a
 nested `run` whose own `base_depth` is 0.
 
-**A fix has to reclaim the native frame's stack contribution as part of saving
-the continuation**, which is more than restoring `stack_top` at the point of
-refusal. Two attempts that only did the latter were written, measured, and
-reverted rather than left in the tree — that failure is why this section
-describes the cause instead of claiming a repair.
+### Refusing is not an acceptable answer
+
+The cheap fix is to make the refusal reliable -- have every one of these paths
+reach `Rt::parked`'s guard and throw `cannot park here` instead of crashing.
+That is not good enough:
+
+**it would make parking depend on whether a form happens to be an opcode.**
+`mapv` works and `map` does not; `reduce` works and `apply` does not. Nothing in
+a program's source says which is which, and no caller can be expected to know. A
+language where `(map f xs)` and `(mapv f xs)` differ on whether `f` may block
+has a leak in it, and moving that leak from a crash to an exception does not
+close it. Parking has to WORK across these frames.
+
+### A rewind may only land before the call-back-in
+
+The park model re-executes the innermost call on resume, which is sound while
+that call is a parking primitive -- those are written to decide to park before
+changing anything. It stops being sound once a native has already re-entered the
+interpreter, because re-execution then re-invokes arbitrary user code:
+
+```clojure
+(lazy-seq (do (swap! counter inc) (p/receive rx)))
+```
+
+Re-running `force` runs the `swap!` twice. So past the call-back-in the
+instruction must REMEMBER that it called and what it got.
+
+### The shape a fix should take
+
+Per-THREAD rather than per-instruction, because a thread is only ever on one
+instruction; and a re-entry STACK rather than a register pair on the frame,
+because two natives can be live under a single instruction:
+
+```clojure
+(apply vec [lazy-seq-that-parks])
+```
+
+`apply` and `seqs::force` are both in flight there, and `vec` is a builtin, so
+there is ONE frame and two records. A pair on the activation record cannot hold
+that; a stack holds them in the order they have to resume in.
+
+The record is `(frame-index, opstate, opvalue)`: which frame, how far the
+instruction got, and what the completed call returned. Natives unwind LIFO, so
+the entry that matters is always the top -- the fast path is `is_empty()`,
+otherwise `last().frame == mine`, and NO BIT on the frame is needed. Measured,
+because the alternative was tempting:
+
+```text
+Frame = 32 bytes, align 8; exactly packed, no padding
+```
+
+Two extra words would be 32 -> 48 on every activation record for something
+almost no frame uses. If the empty check ever does show up, the top bit of
+`handlers` is free: a handler depth, cold, and already truncated to `u32` when
+serialised.
+
+**`opvalue` has to be a GC root, and the frame is not the place.** `Frame`
+caches no `Value` on purpose -- a cached closure there once went stale after a
+collection moved it -- and the collector rests on every live reference being in
+the value stack. So the re-entry stack wants to be a heap object with its own
+`TH_REENTRY` slot, saved and restored beside `TH_STACK` and `TH_FRAMES`.
+
+The natives then become state machines: on entry, look for my record; if it is
+there, skip to that stage with the saved value. `apply` converts first -- one
+stage, one result, and there is a failing reproduction for it. `seqs::force` is
+the awkward one, needing how far along the lazy chain it got as well as whether
+it called.
+
+### Four attempts, all reverted
+
+Named so the next one does not repeat them:
+
+1. restoring `stack_top` in the nested-native branch;
+2. adding a `fail_top` to every park site, so a refusal drops the operands;
+3. making `apply` preserve its operands so the instruction could re-execute;
+4. and (3) plus retargeting the parked frame's `ret_to` so the return reclaims
+   them.
+
+Each was measured against all three symptoms, changed none of them, and was
+reverted rather than left in the tree. They were all variations on fixing the
+stack bookkeeping, and the bookkeeping is not what is wrong: a native frame's
+execution state cannot be saved at all.
 
 One smaller thing found here: the refusal message names `reduce` among the
 natives to avoid, and `reduce` is flint. The list is out of date in the
