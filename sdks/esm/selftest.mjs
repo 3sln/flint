@@ -153,6 +153,38 @@ ok('and the FIRST token this build understands decides',
    sizeOf(['no-such-thing', 'perf', 'size']) === fast, 'a later token won');
 ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled arities');
 
+// --- workspaces (`doc/decisions/0035` step 3, on `0036`'s resolver) ---------
+//
+// A reader tag is bound per WORKSPACE, and until now that was true from the CLI
+// and silently false through here: the SDK had no notion of which project a
+// file belonged to, so nothing was ever bound and every tag was unknown.
+//
+// Two workspaces binding the SAME name to different readers is the test that
+// distinguishes "bound per workspace" from "bound globally" -- either answer
+// alone would look like success.
+{
+  const files = {
+    'alpha/a.cljc':
+      '(ns alpha.a) (defn read-x [v] (str "alpha:" v)) (defn go [] #x "one")',
+    'beta/b.cljc':
+      '(ns beta.b (:require [alpha.a :as a])) (defn read-x [v] (str "beta:" v))' +
+      ' (defn go [] [(a/go) #x "two"])',
+  };
+  const workspaces = [
+    { prefix: 'alpha/', name: 'alpha/alpha', tags: { x: 'alpha.a/read-x' } },
+    { prefix: 'beta/', name: 'beta/beta', tags: { x: 'beta.b/read-x' } },
+  ];
+  const sb = await (compiler.compile({ files, workspaces, fn: 'beta.b/go' })).sandbox();
+  eq('a tag is bound per workspace, not globally',
+     await sb.call('beta.b/go'), ['alpha:one', 'beta:two']);
+  // And undeclared is UNBOUND. Without this the test above would pass just as
+  // well if tags were bound from thin air.
+  let refused = false;
+  try { compiler.compile({ files, fn: 'beta.b/go' }); }
+  catch (e) { refused = /no reader for the tag/.test(e.message); }
+  ok('and a tag no workspace binds is refused', refused);
+}
+
 // --- the artifact stands on its own -----------------------------------------
 const dir = mkdtempSync(`${tmpdir()}/flint-`);
 writeFileSync(`${dir}/m.wasm`, image.wasm);

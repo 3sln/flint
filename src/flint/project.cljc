@@ -94,15 +94,19 @@
 
   `workspaces` says who owns what, as a vector searched in order:
 
-      [{:prefix \"vendor/foo/\" :name foo/bar :tags {tag-sym var-sym}} ..]
+      [{:prefix \"foo/\" :name foo/bar :tags {tag-sym var-sym}} ..]
 
   First matching prefix wins, and a file matching none belongs to the anonymous
   workspace with only the built-in tags -- so a caller that passes no
   workspaces gets exactly the behaviour this had before there were any.
 
-  Prefixes rather than namespace patterns because the FILE is what a workspace
-  owns. A dependency is a directory of files; which namespaces it happens to
-  declare is its business and can change without the ownership changing."
+  The prefix is over the path a NAMESPACE maps to, not over wherever the caller
+  keeps its files: `files` is keyed by `ns->path`, because a namespace has to be
+  findable without a filesystem. So a workspace owns a NAMESPACE PREFIX --
+  `foo/` for everything under `foo.*` -- which is the convention a Clojure
+  library already follows. A layout whose directories do not match its
+  namespaces is the caller's to flatten first, and stripping a source root is
+  exactly what the CLI does."
   ([files] (files-resolver files nil))
   ([files workspaces]
    (fn [n]

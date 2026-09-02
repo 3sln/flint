@@ -149,8 +149,19 @@
     (if (seq missing)
       {:missing (vec missing)}
       (let [result (compiler/compile-image
+                    ;; `:tags` and `:workspace` travel WITH the source. This
+                    ;; used to hand on `:src` and `:file` only, and the compiler
+                    ;; reads each file again -- so a tag the resolver bound was
+                    ;; known to `collect` and unknown here, and `#x` read as an
+                    ;; unbound tag however carefully the workspace declared it.
+                    ;; `compiler.cljc` says a file is read three times and a
+                    ;; value only one reader knows is one the others get wrong;
+                    ;; this was that, and the SDK having no tags at all is why
+                    ;; nothing caught it (`doc/decisions/0035`, `0036`).
                     {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e))
-                                                              :file (:file (val e))}])
+                                                              :file (:file (val e))
+                                                              :tags (:tags (val e))
+                                                              :workspace (:workspace (val e))}])
                                             sources))
                      :order (vec (filter (fn [n] (contains? sources n)) order))
                      :entry entry
@@ -207,8 +218,19 @@
     (if (seq missing)
       {:missing (vec missing)}
       (let [result (compiler/compile-image
+                    ;; `:tags` and `:workspace` travel WITH the source. This
+                    ;; used to hand on `:src` and `:file` only, and the compiler
+                    ;; reads each file again -- so a tag the resolver bound was
+                    ;; known to `collect` and unknown here, and `#x` read as an
+                    ;; unbound tag however carefully the workspace declared it.
+                    ;; `compiler.cljc` says a file is read three times and a
+                    ;; value only one reader knows is one the others get wrong;
+                    ;; this was that, and the SDK having no tags at all is why
+                    ;; nothing caught it (`doc/decisions/0035`, `0036`).
                     {:sources (into {} (map (fn [e] [(key e) {:src (:src (val e))
-                                                              :file (:file (val e))}])
+                                                              :file (:file (val e))
+                                                              :tags (:tags (val e))
+                                                              :workspace (:workspace (val e))}])
                                             sources))
                      :order (vec (filter (fn [n] (contains? sources n)) order))
                      :entry entry
