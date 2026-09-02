@@ -173,11 +173,10 @@ The `u64` there is a genuine ROUND TRIP: the writer put those bytes on the wire
 little-endian and the reader took them back, two independently generated halves
 agreeing across three targets.
 
-**Next:** `encodeInto` — the tag dispatch. It needs type predicates
-(`isNil`, `isString`, `isHeapTy`), heap slot reads and recursion, which is more
-vocabulary than anything so far.
-
-**Then:** `decodeAt`, which builds heap values and so needs rooting.
+*(That said, both halves were later measured and REFUSED -- see "What the
+writers measured". They proved the generator and ship nowhere. The lines above
+are kept because the round trip is still the evidence that the generator
+works.)*
 
 ### What the reader surfaced
 
@@ -600,6 +599,51 @@ divergences that have to be closed BY HAND before generating is even
 meaningful -- several of which look like drift rather than choice, since
 `schema_name_at` and `opaque_label` already exist in Rust and `codec.rs`
 simply does not call them.
+
+## OPEN ITEMS
+
+The single list FOR THIS PORT. Project-wide work lives in
+`doc/decisions/README.md` under "Open, in the order the last measurement left
+them" -- this file is item 0a there, and anything that is not about generating
+a runtime's shared logic belongs in that list rather than this one. Two lists
+that overlap is how one of them goes stale.
+
+Anything not in one of those two places is not tracked. Earlier stretches of
+this work kept a running list in conversation, which is the same as keeping it
+nowhere.
+
+### Ready to do, no decision needed
+
+| | item | why |
+| --- | --- | --- |
+| 1 | **Port the rest of `Interns`** once the layout lands | `mask`, `needs_grow`, `insert_at`, `raw_insert` are portable as soon as Rust and the ports share parallel arrays. `lookup` and `grow` are not: `lookup` needs holes 3 and 4, `grow` needs array allocation |
+| 2 | **Re-rank phase 3 against Rust** | the ratio table is `jvm` vs `clr` with Rust absent, and every blocker actually met has been a Rust divergence. `Maps`, `Table`, `Str`, `Bytes`, `Vec`, `Snap`, `Pike` are all scored 0-1% on a metric that cannot see the thing that blocks them |
+### Wants a decision first
+
+| | item | the question |
+| --- | --- | --- |
+| 3 | **Measure the intern layout on the JVM and CLR** | the numbers backing the conversion are Rust on one machine. The conclusion is defensible without them -- the JVM has no other option -- but "equal-or-better everywhere" is currently one-third measured |
+
+### Blocked on a capability, in the order they bite
+
+Numbers are the codec spike's ranking, kept so the references in this file
+stay meaningful. 1 and 8 are done.
+
+| | hole | what it blocks |
+| --- | --- | --- |
+| 2 | no array subject | `grow`, and any file that allocates or copies an array |
+| 3 | `case` arms cannot be statements | `decodeAt`'s fourteen arms, the opcode switch, `Pike` |
+| 4 | no test for absence (`Option` against null) | `Interns::lookup`, and every partial function in `Maps`, `Vec`, `Table` |
+| 5 | no string building | every error message, and most of `Str` |
+| 6 | no type parameter on a generated type | anything holding a borrow: `Reader<'a>`, and the same shape in `Str`/`Bytes`/`Snap` |
+| 7 | `^:method` cannot say "instance method on all three" | `Rt.isSeq`, and most of what lives on `Rt` in the ports. Also wants per-target visibility, `pub` in Rust against package-private on the JVM |
+
+### Not this project
+
+| | item |
+| --- | --- |
+| A | the `/goal` hook still names `doc/goals/splint-port.md`; this file moved |
+| B | the lazy-seq park crash, documented with a repro in `0038` |
 
 ## Rules that govern this, each learned by breaking it
 

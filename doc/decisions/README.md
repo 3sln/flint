@@ -54,9 +54,38 @@ what remains, and what each thing is waiting on.
 **Open, in the order the last measurement left them:**
 
 0a. **Port the runtimes' shared logic to kin** — `doc/goals/kin-port.md`
-   is the plan, `0038` the design. About 4,500 lines per runtime are mirrored to
-   within a percent; opcode bodies were never the prize. Code before tests,
-   because the tests are the oracle.
+   is the plan and its OPEN ITEMS section is the detail, `0038` the design.
+   FOUR FILES SHIP: murmur3, `Eq.category`, the CHAMP node accessors and
+   `Seqs.rangeEmpty`, each generated once and emitted into Rust, Java and C#
+   with conform and `bin/test` green. The 4,500-line estimate came from a
+   `jvm`-against-`clr` table with Rust absent, and every blocker actually met
+   has been a Rust divergence, so the remaining phases want re-ranking against
+   Rust before they are trusted. Code before tests, because the tests are the
+   oracle.
+
+0d. **Two gates that could not fail** — found while porting, fixed, and worth
+   keeping together because they are one mistake at three layers. Silence and
+   success are indistinguishable unless something is built to tell them apart:
+   `bin/check-builtins` crashed instead of checking for 210 commits and hid two
+   missing builtins; `bin/test` piped it through `sed`, so a real FAIL could
+   not fail the suite; and `conform` compared four runtimes that truncated
+   IDENTICALLY and called it agreement, which hid a byte-wide argument count
+   and a missing wide `set-local`. All fixed.
+
+   **Still open from it:** `check-builtins` treats all 166 builtins alike. A
+   COMPILER-EMITTED builtin is mandatory on every runtime -- `flint/check-tag`
+   is emitted for every unproven `^int`, and no guest names it, so no feature
+   flag could gate it -- while a GUEST-NAMED one is optional and should be
+   declared. Splitting the two is what stops the next one going missing.
+
+0e. **A debug feature for `gc-stats` and `snap`** — `flint.rt/gc-stats` is
+   guest-reachable and probably should not be, and snapshotting is the same
+   shape. `default-features` is `#{:flint :flint/check}` and `:flint/check` is
+   the precedent: on by default, removed by `:optimize [perf]`, and dropped by
+   the READER so it costs no image bytes. This one would be off by default.
+   Wants a decision because gating a guest-named var is a change to the
+   language surface: a program naming it stops compiling. `break` does not
+   exist yet.
 
 0. **Pods** (`0036` step 6, `0037` step 9) — one implementation of the virtual
    namespace interface, speaking babashka's pod protocol, answering `:list` from

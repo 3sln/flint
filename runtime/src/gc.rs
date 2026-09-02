@@ -85,18 +85,49 @@ pub static mut STALE_SHADOW: [Addr; 65] = [0; 65];
 pub static mut STALE_PUSH: [Addr; 4] = [0; 4];
 #[cfg(feature = "diagnostics")]
 pub static mut ORIG_N: usize = 0;
+/// An intern table: open-addressed, linear-probed, weak.
+///
+/// **Parallel arrays, not an array of pairs**, and the layout is a decision
+/// rather than an accident. A probe walks hashes until it finds a match or an
+/// empty slot, so the scan wants hashes packed: sixteen `u32` to a cache line
+/// against four `(u32, u64)` entries. An array of pairs wins only when the
+/// first probe hits, because the value is already in the line -- and this
+/// table grows at 75% load, which is high for linear probing, so chains are
+/// what dominate. Measured at `rustc -O`, ns per lookup:
+///
+/// ```text
+///   16384 slots   hit   parallel 7.86   pairs 8.27
+///                 miss  parallel 14.05  pairs 15.20
+///   1024 (real)   hit   within noise
+///                 miss  parallel 20.4   pairs 21.4
+/// ```
+///
+/// It is also the only layout the JVM can have: Java has no value types, so a
+/// packed array of `(u32, u64)` there would be object references and pointer
+/// chasing. Equal-or-better everywhere measured AND available to every target
+/// is what makes it one decision expressed three times rather than three
+/// accidents (`doc/goals/kin-port.md`).
 pub struct InternTable {
-    pub slots: Vec<(u32, u64)>,
+    pub hashes: Vec<u32>,
+    pub values: Vec<u64>,
     pub count: usize,
 }
 
 impl InternTable {
     pub fn new(cap_pow2: usize) -> InternTable {
-        InternTable { slots: alloc::vec![(0u32, 0u64); cap_pow2], count: 0 }
+        InternTable {
+            hashes: alloc::vec![0u32; cap_pow2],
+            values: alloc::vec![0u64; cap_pow2],
+            count: 0,
+        }
+    }
+    #[inline]
+    pub fn cap(&self) -> usize {
+        self.values.len()
     }
     #[inline]
     fn mask(&self) -> usize {
-        self.slots.len() - 1
+        self.values.len() - 1
     }
     /// Probe for `hash`; calls `eq` on each candidate. Returns the found value
     /// or the index at which to insert.
@@ -104,28 +135,30 @@ impl InternTable {
         let mask = self.mask();
         let mut i = hash as usize & mask;
         loop {
-            let (h, v) = self.slots[i];
+            let v = self.values[i];
             if v == 0 {
                 return Err(i);
             }
-            if h == hash && eq(Value(v)) {
+            if self.hashes[i] == hash && eq(Value(v)) {
                 return Ok(Value(v));
             }
             i = (i + 1) & mask;
         }
     }
     pub fn insert_at(&mut self, idx: usize, hash: u32, v: Value) {
-        self.slots[idx] = (hash, v.0);
+        self.hashes[idx] = hash;
+        self.values[idx] = v.0;
         self.count += 1;
     }
     pub fn needs_grow(&self) -> bool {
-        self.count * 4 >= self.slots.len() * 3
+        self.count * 4 >= self.values.len() * 3
     }
     pub fn grow(&mut self) {
-        let n2 = self.slots.len() * 2;
-        let old = core::mem::replace(&mut self.slots, alloc::vec![(0u32, 0u64); n2]);
+        let n2 = self.values.len() * 2;
+        let oh = core::mem::replace(&mut self.hashes, alloc::vec![0u32; n2]);
+        let ov = core::mem::replace(&mut self.values, alloc::vec![0u64; n2]);
         self.count = 0;
-        for (h, v) in old {
+        for (h, v) in oh.into_iter().zip(ov) {
             if v != 0 {
                 self.raw_insert(h, v);
             }
@@ -134,18 +167,20 @@ impl InternTable {
     fn raw_insert(&mut self, h: u32, v: u64) {
         let mask = self.mask();
         let mut i = h as usize & mask;
-        while self.slots[i].1 != 0 {
+        while self.values[i] != 0 {
             i = (i + 1) & mask;
         }
-        self.slots[i] = (h, v);
+        self.hashes[i] = h;
+        self.values[i] = v;
         self.count += 1;
     }
     /// Rebuild, keeping only entries `f` maps to `Some`.
     fn refresh<F: FnMut(Value) -> Option<Value>>(&mut self, mut f: F) {
-        let n = self.slots.len();
-        let old = core::mem::replace(&mut self.slots, alloc::vec![(0u32, 0u64); n]);
+        let n = self.values.len();
+        let oh = core::mem::replace(&mut self.hashes, alloc::vec![0u32; n]);
+        let ov = core::mem::replace(&mut self.values, alloc::vec![0u64; n]);
         self.count = 0;
-        for (h, v) in old {
+        for (h, v) in oh.into_iter().zip(ov) {
             if v != 0 {
                 if let Some(nv) = f(Value(v)) {
                     self.raw_insert(h, nv.0);

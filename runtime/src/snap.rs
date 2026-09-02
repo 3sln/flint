@@ -203,9 +203,9 @@ pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
     w.vals(&r.shared.singletons);
     w.usz(r.shared.interns.len());
     for t in r.shared.interns.iter() {
-        w.usz(t.slots.len());
+        w.usz(t.cap());
         w.usz(t.count);
-        for (h, v) in t.slots.iter() {
+        for (h, v) in t.hashes.iter().zip(t.values.iter()) {
             w.u32(*h);
             w.u64(*v);
         }
@@ -390,13 +390,13 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     for _ in 0..nt {
         let n = r.usz();
         let count = r.usz();
-        let mut slots = Vec::with_capacity(n);
+        let mut hashes = Vec::with_capacity(n);
+        let mut values = Vec::with_capacity(n);
         for _ in 0..n {
-            let h = r.u32();
-            let v = r.u64();
-            slots.push((h, v));
+            hashes.push(r.u32());
+            values.push(r.u64());
         }
-        interns.push(crate::gc::InternTable { slots, count });
+        interns.push(crate::gc::InternTable { hashes, values, count });
     }
 
     let nf = r.usz();
@@ -688,8 +688,13 @@ pub fn export_live(rt: &mut Rt, out: &mut Vec<u8>) -> bool {
     // middle moves every later one out from under its probe sequence, and the
     // symptom would be a symbol that exists and cannot be found.
     w.usz(rt.roots.shared.interns.len());
-    let tables: Vec<Vec<(u32, u64)>> =
-        rt.roots.shared.interns.iter().map(|t| t.slots.clone()).collect();
+    let tables: Vec<Vec<(u32, u64)>> = rt
+        .roots
+        .shared
+        .interns
+        .iter()
+        .map(|t| t.hashes.iter().copied().zip(t.values.iter().copied()).collect())
+        .collect();
     for slots in &tables {
         w.usz(slots.len());
         let mut count = 0usize;
@@ -889,13 +894,13 @@ pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
     for _ in 0..nt {
         let cap = r.usz();
         let count = r.usz();
-        let mut slots = Vec::with_capacity(cap);
+        let mut hashes = Vec::with_capacity(cap);
+        let mut values = Vec::with_capacity(cap);
         for _ in 0..cap {
-            let h = r.u32();
-            let v = read_value(&mut r, &map);
-            slots.push((h, v.bits()));
+            hashes.push(r.u32());
+            values.push(read_value(&mut r, &map).bits());
         }
-        interns.push(crate::gc::InternTable { slots, count });
+        interns.push(crate::gc::InternTable { hashes, values, count });
     }
 
     // --- interpreter state
