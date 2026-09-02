@@ -99,6 +99,12 @@
               ;; the anonymous workspace, which is every program that declares
               ;; none, and nothing is ever checked within one.
               :workspaces (or (:workspaces opts) {})
+              ;; `{ns {:vars {name {..}} :checked? bool}}` -- the namespaces with
+              ;; no source, spoken to over a port (`doc/decisions/0036` step 4).
+              ;; `:checked?` records whether the resolver gave a var list, which
+              ;; is what decides whether an unknown var is a compile error or a
+              ;; run-time one -- and a build has to be able to SAY which it got.
+              :virtual {}
               :eval-vars (atom {})}))
 
 (defn- fn-under-meta
@@ -608,11 +614,22 @@
                                          [(key e) {:workspace (:workspace (val e))
                                                    :grants (set (:grants (val e)))}])
                                        sources))})]
-    (let [read-forms (into {} (for [nsname order]
+    ;; VIRTUAL namespaces first, and before anything is read: a reference to one
+    ;; compiles to a call rather than to a var (`doc/decisions/0036` step 4), and
+    ;; the analyzer has to know that while it is analysing the namespace that
+    ;; makes the reference -- which may be the first one it reads.
+    (vswap! cc assoc :virtual
+            (into {} (for [[n info] sources :when (:virtual info)]
+                       [n {:vars (into {} (map (fn [v] [(symbol (str (:name v))) v])
+                                               (or (:vars info) [])))
+                           :checked? (boolean (seq (:vars info)))}])))
+    (let [read-forms (into {} (for [nsname order
+                                    :when (not (:virtual (get sources nsname)))]
                                 (let [{:keys [src file tags]} (get sources nsname)]
                                   (when-not src (err (str "no source for namespace " nsname) {:ns nsname}))
                                   [nsname (read-namespace! cc nsname src file tags)])))]
-      (doseq [nsname order]
+      (doseq [nsname order
+              :when (not (:virtual (get sources nsname)))]
         (analyze-namespace! cc nsname (get read-forms nsname))))
 
     ;; THE CHECK REGISTRY, when checks are on.

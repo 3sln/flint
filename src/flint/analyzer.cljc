@@ -75,16 +75,41 @@
     (if-let [ns-part (namespace sym)]
       (let [alias (symbol ns-part)
             target (get (:aliases nsdef) alias alias)
-            q (symbol (str target) (name sym))]
-        ;; Refuse to invent a var. Without this a missing :require produces a
-        ;; dangling reference that only fails much later, at emission.
-        (when-not (or (get-in cc [:vars q]) (get-in cc [:declared q]))
+            q (symbol (str target) (name sym))
+            v (get (:virtual cc) target)]
+        (cond
+          ;; A VIRTUAL namespace has no vars to look up (`doc/decisions/0036`
+          ;; step 4). Whether an unknown name here is caught depends on what the
+          ;; resolver could say, and both answers are legitimate:
+          ;;
+          ;;   * a var list -- from a booted pod's `describe`, or from the CLI
+          ;;     which knows its own surface -- makes this a COMPILE error, with
+          ;;     the same message every other unknown var gets;
+          ;;   * no var list makes it a run-time error, which is worse, and is
+          ;;     the price of not booting a process at build time.
+          ;;
+          ;; The build says which it got, because the same mistake being caught
+          ;; at two different times is only defensible if a person can tell.
+          (and v (:checked? v))
+          (do (when-not (get (:vars v) (symbol (name sym)))
+                (err (str "unable to resolve " sym " -- " target
+                          " is a virtual namespace and does not hold "
+                          (name sym))
+                     {:sym sym :ns nsname :virtual target}))
+              q)
+
+          v q
+
+          ;; Refuse to invent a var. Without this a missing :require produces a
+          ;; dangling reference that only fails much later, at emission.
+          (not (or (get-in cc [:vars q]) (get-in cc [:declared q])))
           (err (str "unable to resolve " sym
                     (if (= (str target) ns-part)
                       (str " -- is " target " required?")
                       (str " -- alias " alias " means " target)))
-               {:sym sym :ns nsname}))
-        q)
+               {:sym sym :ns nsname})
+
+          :else q))
       (or (get (:refers nsdef) sym)
           (when (get-in cc [:vars (symbol (str nsname) (name sym))])
             (symbol (str nsname) (name sym)))
@@ -112,6 +137,33 @@
             (empty? bs) n
             :else (err (str "no such builtin: flint.rt/" n)
                        {:sym sym :known (count bs)})))))))
+
+(defn- virtual-var
+  "The qualified symbol `sym` names, when its namespace is VIRTUAL, else nil.
+
+  A virtual namespace has no source and no vars (`doc/decisions/0036` step 4);
+  a reference to one compiles to a call over a port. Resolving it is the same
+  `qualify` every other reference goes through -- aliases included, so
+  `(:require [flint.sys.fs :as fs])` and `fs/list-dir` work exactly as they
+  read."
+  [env sym]
+  (when (and (symbol? sym) (namespace sym) (not (resolve-local env sym)))
+    (let [cc @(:cc env)
+          nsdef (get-in cc [:namespaces (current-ns env)])
+          alias (symbol (namespace sym))
+          target (get (:aliases nsdef) alias alias)
+          v (get (:virtual cc) target)]
+      (when v
+        ;; CHECKED HERE, and not only in `qualify`. The head-position rewrite
+        ;; below resolves through this function and never reaches `qualify`, so
+        ;; a check that lived only there would fire for a virtual var used as a
+        ;; VALUE and not for one that was called -- which is every ordinary use.
+        (when (and (:checked? v) (not (get (:vars v) (symbol (name sym)))))
+          (err (str "unable to resolve " sym " -- " target
+                    " is a virtual namespace and does not hold " (name sym))
+               {:sym sym :ns (current-ns env) :virtual target
+                :line (:line (meta sym)) :column (:column (meta sym))}))
+        (symbol (str target) (name sym))))))
 
 (defn- macro-fn [env sym]
   (when-let [q (qualify env sym)]
@@ -205,6 +257,19 @@
     (vswap! (:cc env) update-in [:deps cur] (fnil conj #{}) q)))
 
 (defn- analyze-symbol [env sym]
+  (if-let [vq (virtual-var env sym)]
+    ;; IN VALUE POSITION, a virtual var becomes a closure that invokes it
+    ;; remotely -- not a `:get` on the far side.
+    ;;
+    ;; `0036` wrote the two operations as `call` and `get`, and taking a bare
+    ;; reference to mean `get` would break `(mapv fs/list-dir xs)`, and storing
+    ;; one in a local, and putting one in a map. Nearly every var behind one of
+    ;; these namespaces is a
+    ;; function, so the common reading wins and fetching a non-function var is
+    ;; spelled out as `flint.virtual/value-of`. That keeps both operations
+    ;; reachable and neither of them surprising.
+    (do (record-dep! env 'flint.virtual/fn-for)
+        (analyze env (list 'flint.virtual/fn-for (list 'quote vq))))
   (if-let [b (resolve-local env sym)]
     (assoc b :op (case (:kind b) :local :local :upval :upval :self :self) :name sym)
     (if-let [nn (and (namespace sym) (native-name env sym))]
@@ -227,7 +292,7 @@
            ;; error fell back to the enclosing `defn`'s line -- where the
            ;; function starts, not where the mistake is.
            {:sym sym :ns (current-ns env)
-            :line (:line (meta sym)) :column (:column (meta sym))})))))
+            :line (:line (meta sym)) :column (:column (meta sym))}))))))
 
 (defn bootstrap-key [sym]
   (cond
@@ -375,6 +440,20 @@
       ;; takes the argument FORMS, not their analysis -- that is the whole
       ;; point of it. Depth is counted rather than the var being blocked: the
       ;; nested call in `(f (f x) y)` is a different call and must still
+      ;; A VIRTUAL var IN HEAD POSITION becomes one call, not a closure and
+      ;; then a call (`doc/decisions/0036` step 4).
+      ;;
+      ;; `analyze-symbol` would already turn the head into `fn-for`, and
+      ;; `((fn-for 'ns/f) a b)` is correct -- and allocates a closure per call
+      ;; for nothing. This is the ordinary case and it gets the direct shape.
+      ;;
+      ;; Checked BEFORE inlines and macros because a virtual namespace has
+      ;; neither: there is no source to have defined one in.
+      (virtual-var env head)
+      (analyze env (list* 'flint.virtual/call
+                          (list 'quote (virtual-var env head))
+                          (rest form)))
+
       ;; inline, while an inline that re-emits its own name must stop.
       (and (symbol? head) (not (resolve-local env head))
            (not (macro-fn env head))

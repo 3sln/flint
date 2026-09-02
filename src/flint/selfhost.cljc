@@ -164,7 +164,12 @@
                                                               :file (:file (val e))
                                                               :tags (:tags (val e))
                                                               :workspace (:workspace (val e))
-                                                              :grants (:grants (val e))}])
+                                                              :grants (:grants (val e))
+                                                              ;; A VIRTUAL namespace has no
+                                                              ;; `:src` and must not be read
+                                                              ;; (`doc/decisions/0036` step 4).
+                                                              :virtual (:virtual (val e))
+                                                              :vars (:vars (val e))}])
                                             sources))
                      :order (vec (filter (fn [n] (contains? sources n)) order))
                      :entry entry
@@ -236,7 +241,12 @@
                                                               :file (:file (val e))
                                                               :tags (:tags (val e))
                                                               :workspace (:workspace (val e))
-                                                              :grants (:grants (val e))}])
+                                                              :grants (:grants (val e))
+                                                              ;; A VIRTUAL namespace has no
+                                                              ;; `:src` and must not be read
+                                                              ;; (`doc/decisions/0036` step 4).
+                                                              :virtual (:virtual (val e))
+                                                              :vars (:vars (val e))}])
                                             sources))
                      :order (vec (filter (fn [n] (contains? sources n)) order))
                      :entry entry

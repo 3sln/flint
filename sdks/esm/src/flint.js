@@ -281,6 +281,16 @@ function ednWorkspaces(spaces) {
     const caps = (xs) => `#{${xs.map((c) => `:${String(c).replace(/^:/, '')}`).join(' ')}}`;
     if (w.grants?.length) parts.push(`:grants ${caps(w.grants)}`);
     if (w.guard?.length) parts.push(`:guard ${caps(w.guard)}`);
+    // A VIRTUAL workspace has no files: everything under its prefix is spoken
+    // to over a port (`doc/decisions/0036` step 4). `vars` is optional and buys
+    // compile-time checking of names.
+    if (w.virtual) parts.push(':virtual true');
+    if (w.vars?.length) {
+      parts.push(`:vars [${w.vars.map((v) => {
+        const a = v.arities ? ` :arities [${v.arities.join(' ')}]` : '';
+        return `{:name ${String(v.name)}${a}}`;
+      }).join(' ')}]`);
+    }
     if (w.tags && Object.keys(w.tags).length) {
       parts.push(`:tags {${Object.entries(w.tags)
         .map(([t, v]) => `${String(t)} ${String(v)}`).join(' ')}}`);

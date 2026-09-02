@@ -52,7 +52,12 @@
        :workspace who owns it -- a symbol, nil for the anonymous one
        :tags      the reader tags its workspace binds (`doc/decisions/0035`)
        :grants    what its workspace HOLDS -- a set of capability keywords
-       :guard     what a workspace must hold to require it (`doc/decisions/0036`)}
+       :guard     what a workspace must hold to require it (`doc/decisions/0036`)
+       :virtual   true when the namespace has NO SOURCE and is spoken to over a
+                  port (`doc/decisions/0036` step 4, `0037`)
+       :vars      what a virtual namespace holds, OPTIONALLY:
+                  [{:name f :arities [..]} ..]. Present, an unknown var is a
+                  compile error; absent, it is a run-time one}
 
   Only `:src` is required. A resolver that answers just `{:src :file}` is the
   old `find-source` and still works; it simply reports every namespace as
@@ -78,6 +83,20 @@
 
           :else
           (if-let [s (resolve-ns n)]
+            ;; A VIRTUAL namespace has no source to read and no requires to
+            ;; follow (`doc/decisions/0036` step 4). It is recorded rather than
+            ;; skipped, because the compiler has to know a name is virtual --
+            ;; that is what decides whether a reference to it compiles to a var
+            ;; or to a call over a port -- and because it is not missing, which
+            ;; is what an unrecorded require would look like.
+            (if (:virtual s)
+              (recur (vec (rest todo))
+                     (assoc sources n {:virtual true :vars (:vars s)
+                                       :file (or (:file s) (str n))
+                                       :workspace (:workspace s)
+                                       :grants (:grants s) :guard (:guard s)})
+                     (conj order n)
+                     missing)
             (let [forms (reader/read-all (:src s) {:file (:file s)
                                                    :features features
                                                    :tags (:tags s)})
@@ -87,7 +106,7 @@
                                        :workspace (:workspace s) :tags (:tags s)
                                        :grants (:grants s) :guard (:guard s)})
                      (conj order n)
-                     missing))
+                     missing)))
             (recur (vec (rest todo)) sources order (conj missing n)))))
       {:sources sources :order order :missing missing})))
 
@@ -98,7 +117,14 @@
   `workspaces` says who owns what, as a vector searched in order:
 
       [{:prefix \"foo/\" :name foo/bar :tags {tag-sym var-sym}
-        :grants #{:fs} :guard #{:trusted}} ..]
+        :grants #{:fs} :guard #{:trusted}}
+       {:prefix \"flint/sys/\" :name flint/sys :virtual true
+        :vars [{:name list-dir :arities [1]} ..]} ..]
+
+  An entry with `:virtual true` declares that everything under its prefix has no
+  source and is spoken to over a port (`doc/decisions/0036` step 4). `:vars` is
+  optional and buys compile-time checking; without it any name resolves and an
+  unknown one fails at run time.
 
   First matching prefix wins, and a file matching none belongs to the anonymous
   workspace with only the built-in tags -- so a caller that passes no
@@ -114,7 +140,21 @@
   ([files] (files-resolver files nil))
   ([files workspaces]
    (fn [n]
-     (let [base (ns->path n)]
+     (let [base (ns->path n)
+           ;; A workspace entry may declare a namespace VIRTUAL rather than
+           ;; supply source for it (`doc/decisions/0036` step 4). Checked before
+           ;; the files, because a virtual namespace has no file to find and
+           ;; looking for one would report it missing.
+           virt (first (filter (fn [w] (and (:virtual w)
+                                            (let [pre (:prefix w)]
+                                              (or (nil? pre) (= "" pre)
+                                                  (str/starts-with? (str base "/") (str pre))
+                                                  (str/starts-with? (str base) (str pre))))))
+                               (or workspaces [])))]
+       (if virt
+         {:virtual true :vars (:vars virt) :file (str n)
+          :workspace (:name virt)
+          :grants (set (:grants virt)) :guard (set (:guard virt))}
        (when-let [path (first (filter (fn [p] (contains? files p))
                                       [(str base ".cljc") (str base ".clj")]))]
          (let [w (first (filter (fn [w] (let [pre (:prefix w)]
@@ -123,7 +163,7 @@
                                 (or workspaces [])))]
            {:src (get files path) :file path
             :workspace (:name w) :tags (:tags w)
-            :grants (set (:grants w)) :guard (set (:guard w))}))))))
+            :grants (set (:grants w)) :guard (set (:guard w))})))))))
 
 (defn topo-order
   "Dependencies before dependents. A cycle does not stop the build -- it picks
@@ -222,8 +262,23 @@
     ;; added, and `flint.check` is not in the program at all.
     (let [roots (cond-> (vec (or roots* ['clojure.core entry-ns]))
                   (contains? features :flint/check) (conj 'flint.check))
-          {:keys [sources order missing]}
+          {:keys [sources order missing] :as r0}
           (collect resolve-ns roots features)
+          ;; A virtual namespace compiles to CALLS on `flint.virtual`, so that
+          ;; namespace has to be in the program -- and nothing `:require`s it,
+          ;; because the requires were written against `flint.sys.fs` and the
+          ;; rewrite happens later, in the analyzer (`doc/decisions/0036` step
+          ;; 4). So the graph has no edge to it and this supplies one, the same
+          ;; way `core-first` supplies one for `flint.check`.
+          ;;
+          ;; Only when one was actually found. Adding it unconditionally would
+          ;; put an RPC client and a port in every program that has no virtual
+          ;; namespace at all, which is the cost `0003` exists to avoid.
+          virtual? (some (fn [e] (:virtual (val e))) sources)
+          {:keys [sources order missing]}
+          (if (and virtual? (not (contains? sources 'flint.virtual)))
+            (collect resolve-ns (conj (vec roots) 'flint.virtual) features)
+            r0)
           _ order]
       {:sources sources
        :order (vec (core-first (topo-order sources)))

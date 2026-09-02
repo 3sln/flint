@@ -336,6 +336,73 @@ ok('no optimize at all is the interpreter', sizeOf([]) === small, 'it compiled a
   eq('an unhandled request is refused', await sb.call('app.a/opt'), null);
 }
 
+// --- virtual namespaces (`doc/decisions/0036` step 4, `0037`) ---------------
+//
+// A namespace with NO SOURCE, spoken to over a port. The call site reads like
+// any other call, which is the whole design goal -- so the tests below are as
+// much about where the resemblance ENDS as about where it holds.
+{
+  const files = {
+    'app/a.cljc':
+      '(ns app.a (:require [demo.svc :as s]))\n' +
+      '(defn go [_] (s/greet "world"))\n' +
+      '(defn indirect [_] (let [f s/greet] (f "via a value")))\n' +
+      '(defn mapv- [_] (mapv s/greet ["a" "b"]))\n' +
+      '(defn lazily [_] (vec (for [x ["a"]] (s/greet x))))\n' +
+      '(defn unknown [_] (s/nope 1))\n',
+  };
+  const app = { prefix: 'app/', name: 'app/app' };
+  const virt = { prefix: 'demo/', name: 'demo/demo', virtual: true };
+  const exports = ['app.a/go', 'app.a/indirect', 'app.a/mapv-', 'app.a/lazily', 'app.a/unknown'];
+  const server = { allow: () => true, open() {},
+    message(port, v, api) {
+      const req = v[':body'] ?? v;
+      if (req[':op'] === ':invoke' && req[':var'] !== 'greet') {
+        api.deliver(port, { ':id': v[':id'], ':error': { ':message': `no var ${req[':var']}` } });
+        return;
+      }
+      api.deliver(port, { ':id': v[':id'], ':body': `hello ${req[':args'][0]}` });
+    } };
+  const sb = await (compiler.compile({ files, workspaces: [virt, app], fn: 'app.a/go', exports }))
+    .sandbox({ capabilities: { 'demo.svc': server } });
+
+  eq('a call into a virtual namespace reads like any other call',
+     await sb.call('app.a/go', [[]]), 'hello world');
+  // Held in a local, so the compiler emitted a closure rather than a call --
+  // and the closure writes its arities out, because `apply` is native and a
+  // park inside native code is refused.
+  eq('and a virtual var can be held as a value',
+     await sb.call('app.a/indirect', [[]]), 'hello via a value');
+  eq('and passed to an EAGER higher-order function',
+     await sb.call('app.a/mapv-', [[]]), ['hello a', 'hello b']);
+
+  // WHERE THE RESEMBLANCE ENDS, asserted rather than left in a docstring: a
+  // virtual call parks, parking is refused inside native code, and a lazy seq
+  // is native. True of every port operation and not this feature's doing, but
+  // this is where it stops looking like a port.
+  let lazyErr = null;
+  try { await sb.call('app.a/lazily', [[]]); } catch (e) { lazyErr = e.message; }
+  ok('but NOT to a lazy one, and the refusal says why',
+     /cannot park here/.test(lazyErr ?? ''), lazyErr);
+
+  // The far side's error is the caller's error.
+  let farErr = null;
+  try { await sb.call('app.a/unknown', [[]]); } catch (e) { farErr = e.message; }
+  ok('an error from the far side reaches the caller', /no var nope/.test(farErr ?? ''), farErr);
+
+  // THE VAR LIST IS OPTIONAL, and that is what decides compile error vs
+  // run-time error. Both modes asserted, because the difference is the feature.
+  let checked = null;
+  try {
+    compiler.compile({ files, fn: 'app.a/unknown',
+                       workspaces: [{ ...virt, vars: [{ name: 'greet', arities: [1] }] }, app] });
+  } catch (e) { checked = e.message; }
+  ok('with a var list, an unknown var is a COMPILE error',
+     /does not hold nope/.test(checked ?? ''), checked);
+  ok('without one it compiles, and fails when called',
+     /no var nope/.test(farErr ?? ''), farErr);
+}
+
 // --- the artifact stands on its own -----------------------------------------
 const dir = mkdtempSync(`${tmpdir()}/flint-`);
 writeFileSync(`${dir}/m.wasm`, image.wasm);
