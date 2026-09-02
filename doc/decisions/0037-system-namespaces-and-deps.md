@@ -644,22 +644,61 @@ So it is not a divergence: both crash. What differs is only that ONE park path
 — a bridge receive on wasm — reaches the clean `cannot park here` refusal, which
 is why the first measurement looked like a divergence.
 
-### What is known
+### The root cause: a park across a RUST frame
 
-* It needs an ACTUAL park. The same code with the value already available works,
-  so `for` is not the problem and neither is the lazy seq by itself.
-* `loop` is fine. Only lazy realisation crashes.
-* `Rt::parked` has a guard for exactly this — `base_depth != 0`, "Rust frames
-  are live underneath: a lazy-seq force" — and it refuses cleanly when it fires.
-  It is not firing here, and finding out why is where the next attempt starts.
-* The panic surfaces in `enter`, in the outermost interpreter loop, which says
-  the damage is done by the time it shows.
+Everything that crashes has a Rust frame between the parking call and the green
+thread; everything that works is flint all the way down.
 
-**Not fixed here.** The obvious repair — `parked` restoring `stack_top` and
-returning rather than unwinding — was written, measured, did not fix it, and was
-reverted rather than left in the tree as an unverified change to the
-interpreter. This belongs to the language rather than to `0037`, and it is
-recorded here only because this is where it was found.
+| | | |
+| --- | --- | --- |
+| `loop` | flint | works |
+| `mapv`, `reduce` | **flint** (`clojure/core.cljc`) | works |
+| `apply` | Rust — an opcode | **crashes** |
+| `for`, `map` | Rust — `seqs::force` calls back in | **crashes** |
+
+`mapv` is the one that proves it: it looks like a higher-order native and is
+`(reduce (fn [acc x] (conj! acc (f x))) …)` in flint, so a park inside it never
+crosses Rust and never breaks.
+
+For `apply` the mechanism is visible in the source. When the callee parks deeper
+in, the opcode does:
+
+```rust
+if !self.park_on.is_nil() {
+    // A closure called through `apply` parked further in.
+    // Its continuation is already saved, frames and all, so
+    // this must not push a result on top of it.
+    return NIL;
+}
+```
+
+It is careful not to push a RESULT — and it never reclaims `apply`'s own
+operands, the callee and the spread seq sitting at `apply_callee_at`. The
+continuation resumes with those still underneath it, every later `stack_top` is
+off by that much, and the next `vpop` after the scheduler resumes the thread
+goes below zero:
+
+```text
+attempt to subtract with overflow          vm.rs, in `vpop`
+… conc::run_one <- drive <- scheduler
+```
+
+Which is why the panic surfaces nowhere near the park that caused it.
+
+`Rt::parked` has a guard meant for exactly this — `base_depth != 0`, "Rust
+frames are live underneath" — and these paths do not reach it: `apply` handles
+the deeper park itself in the branch above, and a lazy-seq force parks inside a
+nested `run` whose own `base_depth` is 0.
+
+**A fix has to reclaim the native frame's stack contribution as part of saving
+the continuation**, which is more than restoring `stack_top` at the point of
+refusal. Two attempts that only did the latter were written, measured, and
+reverted rather than left in the tree — that failure is why this section
+describes the cause instead of claiming a repair.
+
+One smaller thing found here: the refusal message names `reduce` among the
+natives to avoid, and `reduce` is flint. The list is out of date in the
+direction that makes people avoid something that works.
 
 `flint.deps.resolve/bump-plan` is written with `reduce` rather than `for` for
 this reason, and says so where it is written.
