@@ -2208,3 +2208,21 @@ impl Rt {
         core::mem::take(&mut self.aot_unwound_out)
     }
 }
+
+#[cfg(test)]
+mod frame_layout {
+    use super::*;
+    #[test]
+    fn how_big_is_an_activation_record() {
+        // Printed rather than asserted: this is a measurement, and pinning it
+        // would make an unrelated field addition fail here rather than where it
+        // was made.
+        std::eprintln!(
+            "Frame = {} bytes, align {}; fields fp/ret_to/handlers usize, ip/end u32",
+            core::mem::size_of::<Frame>(),
+            core::mem::align_of::<Frame>()
+        );
+        std::eprintln!("MAX_FRAMES = {}, so a frame index needs {} bits",
+                       MAX_FRAMES, usize::BITS - (MAX_FRAMES as usize).leading_zeros());
+    }
+}
