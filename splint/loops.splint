@@ -1,0 +1,58 @@
+;; The control-flow forms, exercised end to end.
+;;
+;; Not a port -- there is no hand-written function this replaces. It is the
+;; acceptance test for the capabilities `doc/goals/splint-port.md` ranks as
+;; blockers 1, 3 and 8, written because a form that has never been RUN on all
+;; three targets is a form nobody should build a port on. Each of these was
+;; found broken by the codec spike or is new:
+;;
+;;   `for`         a counted loop. Blocker 1: nothing in phase 3 without it.
+;;   `while`       moved out of the vm vocabulary, where it was unreachable
+;;                 to every other source.
+;;   `break`       and `continue`.
+;;   `(return)`    bare, which used to emit `return null;` -- valid nowhere.
+;;   `else if`     which used to nest a brace level per arm.
+(ns runtime.loops
+  (:require [flint.impl.hash :refer [defn let set if return for while break continue rem
+                                     add32 mul32 == < > - bit-and
+                                     U32 I64]]))
+
+(defn ^:pub ^U32 sum-to [^U32 n]
+  (let [^:mut ^U32 acc 0]
+    (for [^U32 i 0 n]
+      (set acc (add32 acc i)))
+    (return acc)))
+
+(defn ^:pub ^U32 first-multiple [^U32 n ^U32 of]
+  (for [^U32 i 1 n]
+    (if (== 0 (rem i of))
+      (return i)))
+  (return 0))
+
+(defn ^:pub ^U32 skip-odds [^U32 n]
+  (let [^:mut ^U32 acc 0]
+    (for [^U32 i 0 n]
+      (if (== 1 (bit-and i 1))
+        (continue))
+      (set acc (add32 acc i))
+      (if (> acc 40)
+        (break)))
+    (return acc)))
+
+(defn ^:pub ^U32 countdown [^U32 n]
+  (let [^:mut ^U32 steps 0
+        ^:mut ^U32 cur n]
+    (while (> cur 0)
+      (set cur (- cur 1))
+      (set steps (add32 steps 1)))
+    (return steps)))
+
+;; The `else if` chain: one brace level, not one per arm.
+(defn ^:pub ^U32 bucket [^U32 n]
+  (if (< n 10)
+    (return 1)
+    (if (< n 100)
+      (return 2)
+      (if (< n 1000)
+        (return 3)
+        (return 4)))))

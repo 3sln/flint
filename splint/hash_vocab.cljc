@@ -109,6 +109,9 @@
     ;; where the TYPE is signed and the OPERATOR chooses -- and visible in
     ;; Rust, where the type chooses and the operator is always `>>`. Naming
     ;; both makes the intent survive the trip in either direction.
+    ;; Remainder. One spelling everywhere, and needed by anything that walks
+    ;; a structure in strides.
+    'rem (core/call {:rust "({0} % {1})" :java "({0} % {1})" :csharp "({0} % {1})"})
     'shl (core/call {:rust "({0} << {1})" :java "({0} << {1})" :csharp "({0} << {1})"})
     'ushr (core/call {:rust "({0} >> {1})"
                       :java "({0} >>> {1})"

@@ -63,9 +63,9 @@
   (let [k (str "{" i "}")
         at (.indexOf (str tmpl) k)]
     (and (pos? at)
-         (contains? #{\( \,} (nth tmpl (dec at)))
+         (contains? #{\( \, \[} (nth tmpl (dec at)))
          (< (+ at (count k)) (inc (count tmpl)))
-         (contains? #{\) \,} (nth tmpl (+ at (count k)) \space)))))
+         (contains? #{\) \, \]} (nth tmpl (+ at (count k)) \space)))))
 
 (defn call
   "A form that is a call: render the arguments, fill the target's template, and
@@ -218,9 +218,15 @@
         (let [ty (ty-of ctx default (:tag (meta nm)))
               code (strip-parens (sp/splint-render ctx init))]
           (sp/splint-emit! ctx (sp/indent-of ctx)
+                           ;; `^:mut` on a LOCAL, for the same reason it is on
+                           ;; a parameter: Rust alone has to say that a binding
+                           ;; is reassigned. Found the moment a loop existed to
+                           ;; accumulate into one -- `let acc: u32 = 0;`
+                           ;; followed by `acc = ...` does not compile.
                            (let [n (sp/local-name (t ctx) nm)]
                              (case (t ctx)
-                               :rust (str "let " n ": " ty " = " code ";\n")
+                               :rust (str "let " (when (:mut (meta nm)) "mut ")
+                                          n ": " ty " = " code ";\n")
                                (str ty " " n " = " code ";\n"))))))
       (doseq [f body] (sp/splint-statement! ctx f)))))
 
@@ -318,10 +324,26 @@
         (sp/splint-emit! ctx (sp/indent-of ctx) p " = "
                          (strip-parens (sp/splint-render ctx value)) ";\n")))))
 
+(defn- head-is-if?
+  "Is this seq's head the `if` THIS FILE means? Resolved through the require
+  scope, so a source that aliased something else to `if` is not chained by
+  accident."
+  [ctx form]
+  (let [h (first form)]
+    (if-let [scope (:scope-syms ctx)]
+      (= 'if (second (get scope h)))
+      (= 'if h))))
+
+(declare if-body)
+
 (defn- if-form [ctx form]
+  (sp/splint-emit! ctx (sp/indent-of ctx))
+  (if-body ctx form))
+
+(defn- if-body [ctx form]
   (let [[_ test then else] form
         c (sp/splint-render ctx test)]
-    (sp/splint-emit! ctx (sp/indent-of ctx)
+    (sp/splint-emit! ctx
                      ;; The test is a WHOLE expression with nothing to bind
                      ;; with, so its outer parens are the safe case to strip --
                      ;; Rust warns on them and the other two would otherwise
@@ -330,17 +352,95 @@
                        (if (= :rust (t ctx)) (str "if " c " {\n") (str "if (" c ") {\n"))))
     (sp/splint-scoped ctx {:key :in-if :value true :indent 1}
                       (fn [inner] (sp/splint-statement! inner then)))
-    (when else
-      (sp/splint-emit! ctx (sp/indent-of ctx) "} else {\n")
-      (sp/splint-scoped ctx {:key :in-if :value true :indent 1}
-                        (fn [inner] (sp/splint-statement! inner else))))
-    (sp/splint-emit! ctx (sp/indent-of ctx) "}\n")))
+    ;; An `else` whose body is itself an `if` becomes `} else if (...) {`
+    ;; rather than a nested block. Without this every extra arm cost a brace
+    ;; level, and a five-arm dispatch came out indented five deep -- which no
+    ;; hand-written file here does, so it fails the not-worse rule on reading
+    ;; even though it compiles.
+    (cond
+      (and else (seq? else) (= 'if (first else)) (head-is-if? ctx else))
+      (do (sp/splint-emit! ctx (sp/indent-of ctx) "} else ")
+          (sp/splint-scoped ctx {:key :else-if :value true}
+                            (fn [inner] (if-body inner else))))
 
-(defn- return-form [ctx form]
-  (let [v (strip-parens (sp/splint-render ctx (second form)))
-        throws? (sp/splint-get ctx :throws)]
-    (sp/splint-emit! ctx (sp/indent-of ctx) "return "
-                     (if (and (= :rust (t ctx)) throws?) (str "Ok(" v ")") v) ";\n")))
+      else
+      (do (sp/splint-emit! ctx (sp/indent-of ctx) "} else {\n")
+          (sp/splint-scoped ctx {:key :in-if :value true :indent 1}
+                            (fn [inner] (sp/splint-statement! inner else)))
+          (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))
+
+      :else (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))))
+
+(defn- return-form
+  "`(return v)`, and `(return)` from a function with no value.
+
+  The bare form emitted `return null;` on all three and compiled nowhere,
+  which is a hole `Codec.java` alone would hit fourteen times. Rust's is
+  `Ok(())` when the function can fail, because `^:throws` turns its return
+  type into `Result<(), String>`."
+  [ctx form]
+  (let [throws? (sp/splint-get ctx :throws)]
+    (if (= 1 (count form))
+      (sp/splint-emit! ctx (sp/indent-of ctx)
+                       (if (and (= :rust (t ctx)) throws?) "return Ok(());\n" "return;\n"))
+      (let [v (strip-parens (sp/splint-render ctx (second form)))]
+        (sp/splint-emit! ctx (sp/indent-of ctx) "return "
+                         (if (and (= :rust (t ctx)) throws?) (str "Ok(" v ")") v) ";\n")))))
+
+(defn- for-form
+  "`(for [^I32 c start end] body...)` -- a COUNTED loop, half-open.
+
+  Blocker number one for everything after `Hash`. `for (int c = 0; c < n; c++)`
+  appears twelve times in `Codec.java` and seventeen in `codec.rs`, and `Maps`,
+  `Table`, `Vec`, `Str`, `Bytes`, `Snap` and `Pike` are all loops over arrays.
+  Nothing in phase 3 can be written without it.
+
+  Rust says the range and infers the index type from it; the other two spell
+  out all three clauses and need the type. The bound is evaluated ONCE in
+  Rust's `start..end` and once per iteration in a C-style `for`, so a bound
+  with a side effect would differ -- but a bound with a side effect in a loop
+  header is not something any of the three hand-written runtimes does, and a
+  source that wants one can hoist it into a `let`."
+  [default]
+  (fn [ctx form]
+    (let [[_ binding & body] form
+          [nm start end] binding
+          ty (get-in (or (sp/splint-tag ctx (:tag (meta nm))) default) [:types (t ctx)])
+          n (sp/local-name (t ctx) nm)
+          a (strip-parens (sp/splint-render ctx start))
+          b (strip-parens (sp/splint-render ctx end))]
+      (sp/splint-emit! ctx (sp/indent-of ctx)
+                       (case (t ctx)
+                         :rust (str "for " n " in " a ".." b " {\n")
+                         (str "for (" ty " " n " = " a "; " n " < " b "; " n "++) {\n")))
+      (sp/splint-scoped ctx {:key :in-loop :value true :indent 1}
+                        (fn [inner] (doseq [f body] (sp/splint-statement! inner f))))
+      (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))))
+
+(defn- while-form
+  "`(while test body...)`.
+
+  Moved here from `flint.impl.vm`, which was the only vocabulary that had one
+  -- so a codec or a collections source could not loop at all, even where a
+  `while` was exactly right. It carried its own `let`, `set` and `if` alongside
+  it, which predate this file.
+
+  THE TEST GOES INSIDE only when it has to. A loop test is evaluated every
+  iteration, so a test needing a temporary cannot stay in the condition; but
+  one that does not need a temporary can, and rewriting it anyway emits
+
+      while true { if !c { break; } ... }
+
+  where a person would write `while !c { ... }`. That is worse than the
+  hand-written code, and generated code that is worse is not worth generating."
+  [ctx form]
+  (let [[_ test & body] form
+        c (strip-parens (sp/splint-render ctx test))]
+    (sp/splint-emit! ctx (sp/indent-of ctx)
+                     (if (= :rust (t ctx)) (str "while " c " {\n") (str "while (" c ") {\n")))
+    (sp/splint-scoped ctx {:key :in-loop :value true :indent 1}
+                      (fn [inner] (doseq [f body] (sp/splint-statement! inner f))))
+    (sp/splint-emit! ctx (sp/indent-of ctx) "}\n")))
 
 (defn forms-for
   "The shape forms. `:default-tag` is the tag an untagged name is given, which
@@ -352,5 +452,8 @@
     'defstruct (defstruct-form default-tag)
     '. field-form 'set (set-form (merge base-compound compound)) 'if if-form 'return return-form
     'comment comment-form
+    'for (for-form default-tag) 'while while-form
+    'break (fn [ctx _] (sp/splint-emit! ctx (sp/indent-of ctx) "break;\n"))
+    'continue (fn [ctx _] (sp/splint-emit! ctx (sp/indent-of ctx) "continue;\n"))
     'do (fn [ctx form] (doseq [f (rest form)] (sp/splint-statement! ctx f)))}
    (reduce (fn [m s] (assoc m s (op-form s))) {} (keys ops))))

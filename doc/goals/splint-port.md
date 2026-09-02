@@ -385,12 +385,18 @@ shared lines, the ~890 in `encodeInto` / `encodeCollection` / `decodeAt` /
 not be. Net if the capabilities below existed: about **660 lines removed**
 across the three runtimes, from a source of ~230 -- more than `Hash` returned.
 
-The holes, ranked by how much of the REST of the port hits them:
+The holes, ranked by how much of the REST of the port hits them. Numbers 1
+and 8 are now done -- both were small, both were found by the spike rather
+than by reading, and number 1 was the gate on everything after `Hash`:
 
-1. **No counted loop.** `for (int c = 0; c < n; c++)` appears 12 times in
-   `Codec.java` and 17 in `codec.rs`, and `Maps`, `Table`, `Vec`, `Str`,
-   `Bytes`, `Snap` and `Pike` are all loops over arrays. Nothing after `Hash`
-   can be written without it. It is also ~15 lines of `core_vocab`.
+1. ~~**No counted loop.**~~ **DONE.** `for`, `while`, `break` and `continue`
+   are in `core_vocab` and verified running identically on all three
+   (`splint/loops.splint`). `while` had existed only in `flint.impl.vm`, so
+   every other source was unable to loop at all even where a `while` was
+   exactly right; it moved, along with the `let`/`set`/`if` that predate this
+   file. Building it immediately exposed a hole nothing else had: **a `let`
+   that is later `set` needs `mut` in Rust**, so `^:mut` now marks a local as
+   well as a parameter.
 2. **No array subject at all.** Declaring, indexing, allocating, copying and
    measuring an array is the CONTENT of phase 3. splint has two `byte-at` and
    `len` templates in one vocabulary and nothing general. This, not the loop,
@@ -414,9 +420,11 @@ The holes, ranked by how much of the REST of the port hits them:
    "Rust `self`, JVM/CLR static", which is right for `Rt` and wrong for
    `Reader`, where all three want an instance method. Two questions wearing
    one mark.
-8. **Bare `(return)` emits `return null;`** on all three and compiles nowhere;
-   there are 14 bare `return;` in `Codec.java`. And an `else` whose body is an
-   `if` nests instead of emitting `else if`. Both trivial, both universal.
+8. ~~**Bare `(return)` and `else if`.**~~ **DONE.** `(return)` emitted
+   `return null;` on all three and compiled nowhere; `else` whose body was an
+   `if` nested a brace level per arm. Both fixed and verified. Rust's bare
+   return is `Ok(())` when the function is `^:throws`, since that turns the
+   return type into `Result<(), String>`.
 
 And two findings that are not splint's fault and block the codec just as hard:
 **`codec.rs`'s shared half is 446 lines against the JVM's 290**, with nine
