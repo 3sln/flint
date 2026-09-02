@@ -304,6 +304,72 @@ result to a dependency that was granted nothing. What the grant buys is that the
 set of dependencies holding an authority DIRECTLY is small, declared, and
 diffable in a pull request.
 
+## Where the policy lives: grants narrow as they descend
+
+A capability name says *what kind* of authority; it does not say which HTTP
+routes, which directories, which hosts. That has to be written down somewhere,
+and the somewhere decides whether the system is worth anything.
+
+**The granting side is the authority, always.** A dependency cannot be trusted
+to say what it may reach — that is the request, not the answer — so policy is
+never read from the code it constrains. Three levels, each narrowing the one
+above and never widening it:
+
+```text
+flint run :with [...]          the invoker, above everything
+  └── top-level deps.edn       the project, authority for what it holds
+        └── a dependency entry what it lends onward, narrowed
+```
+
+That is the same rule the `:fs` root already follows: a grant carries a root, and
+a derived grant can only be a subtree. Generalised, it is the only rule here —
+**a grant may be narrowed at every hop and widened at none** — and it makes the
+whole chain auditable from the top, because nothing below the root can add to it.
+
+So `:flint/capabilities-grant` takes a MAP as well as the set of names it takes
+today:
+
+```clojure
+{:flint/capabilities-grant
+ {:slurp {:allow ["file://./config/**" "https://registry.npmjs.org/**"]}
+  :fs    {:root "." :write ["target/**"]}
+  :net   {:allow ["https://api.example.com/**"]}}
+
+ :deps
+ {org/lib {:git/version "1.2.0" :git/sha "..."
+           ;; NARROWED: org/lib may reach the registry and nothing else.
+           :flint/capabilities-grant {:slurp {:allow ["https://registry.npmjs.org/**"]}}}}}
+```
+
+The set form stays and means "these names, with whatever policy I hold, unchanged"
+— which is the common case and should not have to be spelled out. Both forms read
+the same way: *what I lend*.
+
+### Why this does not weaken the compile-time guard
+
+**The guard never sees the policy.** It compares NAMES, at the reference, exactly
+as `0036` built it: does this workspace hold `:slurp` at all. The policy is
+host-side and run-time, checked when `slurp` is actually called with a URL.
+
+That is not a compromise, it is the same division stated once more. A guard that
+tried to check the route would be checking a run-time value at compile time, and
+`0036` spends a section on why a check that looks stronger than it is, is worse
+than no check. What the policy adds is that the specific question — *this URL,
+now* — gets a declarative answer in `deps.edn` instead of one buried in host
+code, and one a reviewer can read in a diff.
+
+### Per workspace, and that falls out
+
+Each dependency entry is a workspace's policy for the workspace below it, so
+policy is per-workspace by construction rather than by a separate mechanism. The
+top level is the authority not because it is special but because it is the only
+one nobody delegated to.
+
+The open question of `0036` — whether a dependency may RE-LEND what it was lent
+— is answered by the narrowing rule and needs no separate answer: it may, and
+only narrower. A grant that stopped at the first edge would make a library unable
+to use its own dependencies to do the job it was granted the authority for.
+
 ## Pods
 
 A pod is one implementation of the virtual-namespace interface, behind `:deps`
@@ -394,10 +460,5 @@ flint decides.
 * Whether `:slurp` of `file://` should be rooted the way `:fs` is. Leaning yes,
   by the same argument, which means a `:slurp` grant carries a root as well as
   an allowlist.
-* Whether a dependency's transitives inherit its delegated grants, or must be
-  granted separately. Rule 1 above says a project cannot lend what it does not
-  hold; whether a DEPENDENCY can re-lend what it was lent is the same question
-  one level down, and the answer should be the same — but it makes `deps.edn`
-  wordier and the alternative is that a grant stops at the first edge.
 * `flint.sys.clock` at all. Wall time is authority (it fingerprints), monotonic
   time is not, and separating them may be more pedantry than it is worth.
