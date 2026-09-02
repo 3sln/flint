@@ -30,7 +30,7 @@ using System.Numerics;
 /// .NET's default is unchecked already -- saying so is for the reader, and
 /// because the arithmetic elsewhere in this runtime is deliberately checked.
 public static class Hash {
-    // splint:begin splint/hash.splint
+    // kin:begin kin/hash.kin
     const int C1 = unchecked((int) 0xcc9e2d51);
     const int C2 = 0x1b873593;
     public const int Seed = 0;
@@ -97,7 +97,7 @@ public static class Hash {
     public const int HashTrue = 1231;
     public const int HashFalse = 1237;
 
-    // splint:end splint/hash.splint
+    // kin:end kin/hash.kin
 
     public static int HashDouble(double d) {
         if (d == 0.0) return 0;   // both 0.0 and -0.0, matching Numbers.hasheq

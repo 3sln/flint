@@ -70,17 +70,34 @@ public final class Maps {
         return Val.heap(a);
     }
 
-    static int bnDatamap(Rt rt, long n) { return (int) Val.asFixnum(rt.slot(n, BN_DATAMAP)); }
-    static int bnNodemap(Rt rt, long n) { return (int) Val.asFixnum(rt.slot(n, BN_NODEMAP)); }
-    static long bnKey(Rt rt, long n, int i) { return rt.slot(n, BN_BASE + 2 * i); }
-    static long bnVal(Rt rt, long n, int i) { return rt.slot(n, BN_BASE + 2 * i + 1); }
-    static void bnSetKey(Rt rt, long n, int i, long v) { rt.setSlot(Val.asHeap(n), BN_BASE + 2 * i, v); }
-    static void bnSetVal(Rt rt, long n, int i, long v) { rt.setSlot(Val.asHeap(n), BN_BASE + 2 * i + 1, v); }
-    /// Sub-nodes live at the END, in DESCENDING bit order.
-    static long bnNode(Rt rt, long n, int j) { return rt.slot(n, olen(rt, n) - 1 - j); }
-    static void bnSetNode(Rt rt, long n, int j, long v) {
-        rt.setSlot(Val.asHeap(n), olen(rt, n) - 1 - j, v);
+    // kin:begin kin/champ.kin
+    static int bnDatamap(Rt rt, long n) {
+        return (int) Val.asFixnum(rt.slot(n, BN_DATAMAP));
     }
+    static int bnNodemap(Rt rt, long n) {
+        return (int) Val.asFixnum(rt.slot(n, BN_NODEMAP));
+    }
+    static long bnKey(Rt rt, long n, int i) {
+        return rt.slot(n, BN_BASE + (2 * i));
+    }
+    static long bnVal(Rt rt, long n, int i) {
+        return rt.slot(n, BN_BASE + ((2 * i) + 1));
+    }
+    static void bnSetKey(Rt rt, long n, int i, long v) {
+        rt.setSlot(Val.asHeap(n), BN_BASE + (2 * i), v);
+    }
+    static void bnSetVal(Rt rt, long n, int i, long v) {
+        rt.setSlot(Val.asHeap(n), BN_BASE + ((2 * i) + 1), v);
+    }
+    /// Sub-nodes live at the END, in DESCENDING bit order.
+    static long bnNode(Rt rt, long n, int j) {
+        return rt.slot(n, (olen(rt, n) - 1) - j);
+    }
+    static void bnSetNode(Rt rt, long n, int j, long v) {
+        rt.setSlot(Val.asHeap(n), (olen(rt, n) - 1) - j, v);
+    }
+
+    // kin:end kin/champ.kin
 
     static long cnNew(Rt rt, int h, int npairs, long edit) {
         int e = rt.push(edit);

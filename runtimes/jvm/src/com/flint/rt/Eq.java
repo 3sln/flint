@@ -19,7 +19,7 @@ public final class Eq {
     /// elementwise, which is what makes `(= [1 2] '(1 2))` true.
     public static final int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1, CAT_MAP = 2, CAT_SET = 3;
 
-    // splint:begin splint/eq.splint
+    // kin:begin kin/eq.kin
     public static int category(Rt rt, long v) {
         if (!Val.isHeap(v)) {
             return CAT_SCALAR;
@@ -40,7 +40,7 @@ public final class Eq {
         }
     }
 
-    // splint:end splint/eq.splint
+    // kin:end kin/eq.kin
 
     public static boolean eq(Rt rt, long a, long b) {
         // Doubles FIRST: bit equality would wrongly make NaN equal to itself,

@@ -2247,40 +2247,6 @@ impl Rt {
     }
 }
 
-// The code `splint` GENERATED, pasted verbatim (`doc/decisions/0038`).
-//
-// Pasted rather than paraphrased, and compiled rather than described: if the
-// translator emits something Rust will not take, the BUILD says so.
-//
-// It is also held to the rule that generated code may not be WORSE than the
-// hand-written original. Against what this replaced, the remaining difference
-// is the temporaries' names -- no extra work, no extra allocation, `+=` where
-// a person writes `+=`, and hoisting only where `rustc` actually refuses the
-// nested form.
-//
-// A snapshot -- regenerate with `bb splint/run.clj` if the vocabulary changes.
-#[cfg(test)]
-#[allow(dead_code, unused_variables)]
-impl Rt {
-    fn splint_generated(&mut self, si: usize) -> usize {
-        let mut spread: usize = 0;
-        let seq_1 = self.seq(self.r(si));
-        self.set_r(si, seq_1);
-        while !self.r(si).is_nil() {
-            if !self.charge_tick(spread as u64, 1, "apply") {
-                self.pop_to(si);
-                break;
-            }
-            let first_2 = self.first(self.r(si));
-            self.vpush(first_2);
-            spread += 1;
-            let next_3 = self.next(self.r(si));
-            self.set_r(si, next_3);
-        }
-        spread
-    }
-}
-
 #[cfg(test)]
 mod frame_layout {
     use super::*;

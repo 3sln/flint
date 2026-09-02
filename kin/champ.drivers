@@ -1,0 +1,103 @@
+--rust-head
+#[derive(Clone, Copy)]
+struct Value(u64);
+impl Value { fn as_fixnum(self) -> i64 { self.0 as i64 } }
+struct Rt { h: Vec<u64> }
+const BN_DATAMAP: u32 = 0;
+const BN_NODEMAP: u32 = 1;
+const BN_BASE: u32 = 2;
+const CN_BASE: u32 = 2;
+impl Rt {
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn set(&mut self, n: Value, i: u32, v: Value) {
+        let k = n.0 as usize + i as usize;
+        self.h[k] = v.0;
+    }
+    fn olen(&self, n: Value) -> u32 { self.h[n.0 as usize - 1] as u32 }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 16] };
+    rt.h[3] = 8;                       // olen of the node at address 4
+    let n = Value(4);
+    rt.h[4] = 0x11; rt.h[5] = 0x22;    // datamap, nodemap
+    rt.h[6] = 70; rt.h[7] = 71;        // key0, val0
+    rt.h[8] = 80; rt.h[9] = 81;        // key1, val1
+    rt.h[10] = 90; rt.h[11] = 91;      // sub-nodes, descending from the end
+    let mut o = String::new();
+    o.push_str(&format!("{} {} ", rt.bn_datamap(n), rt.bn_nodemap(n)));
+    o.push_str(&format!("{} {} ", rt.bn_key(n, 0).0, rt.bn_val(n, 0).0));
+    o.push_str(&format!("{} {} ", rt.bn_key(n, 1).0, rt.bn_val(n, 1).0));
+    o.push_str(&format!("{} {} ", rt.bn_node(n, 0).0, rt.bn_node(n, 1).0));
+    rt.bn_set_key(n, 0, Value(700));
+    rt.bn_set_val(n, 1, Value(811));
+    rt.bn_set_node(n, 0, Value(900));
+    o.push_str(&format!("{} {} {}", rt.bn_key(n, 0).0, rt.bn_val(n, 1).0, rt.bn_node(n, 0).0));
+    println!("{}", o);
+}
+--java-head
+    static final int BN_DATAMAP = 0, BN_NODEMAP = 1, BN_BASE = 2, CN_BASE = 2;
+    static final class Val {
+        static long asFixnum(long v) { return v; }
+        static long asHeap(long v) { return v; }
+    }
+    static final class Rt {
+        final long[] h = new long[16];
+        long slot(long n, int i) { return h[(int) n + i]; }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+    }
+    static int olen(Rt rt, long n) { return (int) rt.h[(int) n - 1]; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        rt.h[3] = 8;
+        long n = 4;
+        rt.h[4] = 0x11; rt.h[5] = 0x22;
+        rt.h[6] = 70; rt.h[7] = 71;
+        rt.h[8] = 80; rt.h[9] = 81;
+        rt.h[10] = 90; rt.h[11] = 91;
+        StringBuilder o = new StringBuilder();
+        o.append(bnDatamap(rt, n)).append(' ').append(bnNodemap(rt, n)).append(' ');
+        o.append(bnKey(rt, n, 0)).append(' ').append(bnVal(rt, n, 0)).append(' ');
+        o.append(bnKey(rt, n, 1)).append(' ').append(bnVal(rt, n, 1)).append(' ');
+        o.append(bnNode(rt, n, 0)).append(' ').append(bnNode(rt, n, 1)).append(' ');
+        bnSetKey(rt, n, 0, 700);
+        bnSetVal(rt, n, 1, 811);
+        bnSetNode(rt, n, 0, 900);
+        o.append(bnKey(rt, n, 0)).append(' ').append(bnVal(rt, n, 1)).append(' ').append(bnNode(rt, n, 0));
+        System.out.println(o);
+    }
+--csharp-head
+    const int BN_DATAMAP = 0, BN_NODEMAP = 1, BN_BASE = 2, CN_BASE = 2;
+    static class Val {
+        internal static long AsFixnum(long v) { return v; }
+        internal static long AsHeap(long v) { return v; }
+    }
+    internal sealed class Rt {
+        internal readonly long[] h = new long[16];
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+    }
+    static int Olen(Rt rt, long n) { return (int) rt.h[(int) n - 1]; }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        rt.h[3] = 8;
+        long n = 4;
+        rt.h[4] = 0x11; rt.h[5] = 0x22;
+        rt.h[6] = 70; rt.h[7] = 71;
+        rt.h[8] = 80; rt.h[9] = 81;
+        rt.h[10] = 90; rt.h[11] = 91;
+        var o = new StringBuilder();
+        o.Append(BnDatamap(rt, n)).Append(' ').Append(BnNodemap(rt, n)).Append(' ');
+        o.Append(BnKey(rt, n, 0)).Append(' ').Append(BnVal(rt, n, 0)).Append(' ');
+        o.Append(BnKey(rt, n, 1)).Append(' ').Append(BnVal(rt, n, 1)).Append(' ');
+        o.Append(BnNode(rt, n, 0)).Append(' ').Append(BnNode(rt, n, 1)).Append(' ');
+        BnSetKey(rt, n, 0, 700);
+        BnSetVal(rt, n, 1, 811);
+        BnSetNode(rt, n, 0, 900);
+        o.Append(BnKey(rt, n, 0)).Append(' ').Append(BnVal(rt, n, 1)).Append(' ').Append(BnNode(rt, n, 0));
+        Console.WriteLine(o.ToString());
+    }

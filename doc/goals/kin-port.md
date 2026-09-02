@@ -1,8 +1,8 @@
-# Goal — port the runtimes' shared logic to splint
+# Goal — port the runtimes' shared logic to kin
 
 **Status:** phase 1 begun — the codec's primitive writers are generated and
 verified byte-identical on all three targets.
-**Design:** `doc/decisions/0038-splint.md`. **Tool:** `splint/`.
+**Design:** `doc/decisions/0038-kin.md`. **Tool:** `kin/`.
 
 ## The objective
 
@@ -39,7 +39,7 @@ are a few dozen lines and were never the prize.
 ## CODE FIRST, THEN TESTS — and the reason matters
 
 The tests are the ORACLE. Porting them at the same time as the code would mean a
-bug in splint could produce a wrong implementation and a wrong test that agrees
+bug in kin could produce a wrong implementation and a wrong test that agrees
 with it, and the suite would stay green while both were wrong.
 
 So: port implementation code, verify it against the EXISTING hand-written tests,
@@ -48,14 +48,14 @@ become safe to port. Never port a test and its subject in the same change.
 
 ## Where things stand
 
-* `splint/` — the library, three vocabularies, four sources, a babashka driver.
+* `kin/` — the library, three vocabularies, four sources, a babashka driver.
   Plain `.cljc`, no reader conditionals, runs under bb so it can bootstrap.
   `flint.impl.core` holds the SHAPE of a program and each subject vocabulary
   merges it in, so a new source pays for its own subject and not for `defn`.
 * **`Hash` ships**, emitted into `runtime/src/hash.rs`, `Hash.java` and
   `Hash.cs`, which no longer carry murmur3 by hand. **`Eq.category` ships**,
   which is the first generated function with a RECEIVER.
-* **`codec.splint` and `reader.splint` still ship nowhere**, and the two have
+* **`codec.kin` and `reader.kin` still ship nowhere**, and the two have
   different reasons. Measured, not guessed -- see below. Until they land, those
   slices proved the generator rather than reduced the tree.
 * Verified end to end: the `apply` spread, the `type-p` opcode, and `if` in both
@@ -96,14 +96,14 @@ java   0403020188776655443322110600000068c3a96c6c6f
 csharp 0403020188776655443322110600000068c3a96c6c6f
 ```
 
-`splint/verify <source>` is that check, made repeatable: it generates, compiles
+`kin/verify <source>` is that check, made repeatable: it generates, compiles
 each target, runs each, and requires the outputs to match. Compiling is not
 enough — three implementations can each compile and disagree, which is the
 failure the port exists to prevent. A new port writes a `.drivers` file beside
 its source and the harness is unchanged.
 
 **Done:** the reader's `u8`, `u32`, `u64` and `text` — the whole primitive
-half of the decoder. The first splint source that declares a MUTABLE STRUCT and
+half of the decoder. The first kin source that declares a MUTABLE STRUCT and
 the first whose functions can FAIL.
 
 ```text
@@ -167,7 +167,7 @@ The four-line `u32` writer looked like the safest thing in the codebase to
 generate. It is the one function found so far that **must not be**.
 
 Rust writes `o.extend_from_slice(&n.to_le_bytes())`. The JVM and the CLR write
-four bytes one at a time, and that is the shape `codec.splint` generates for
+four bytes one at a time, and that is the shape `codec.kin` generates for
 all three. Compiled at `-O` and counted:
 
 | | instructions |
@@ -229,7 +229,7 @@ it, and both worse than the one previously recorded here:
 * **JVM.** The same input gets past the missing `n < 0` guard to a
   `StringIndexOutOfBoundsException`.
 
-So porting `reader.splint` as written makes ALL THREE less safe, not two. And
+So porting `reader.kin` as written makes ALL THREE less safe, not two. And
 the guards cannot be one spelling: Rust widens to `usize` where `i + n` cannot
 wrap on 64-bit, and the JVM and CLR have no unsigned `int` and need the
 `n < 0`. That is a third genuine non-naming divergence, and an honest
@@ -241,7 +241,7 @@ vocabulary form with three bodies rather than duplication in disguise.
 **`Hash` is done, and is the first thing generated that actually ships.**
 The murmur3 core -- `mix-k1`, `mix-h1`, `fmix`, `hash-int`, `hash-long`,
 `hash-combine`, `mix-coll-hash`, `ordered-step`, `unordered-step` and the
-constants -- is now written once in `splint/hash.splint` and emitted into all
+constants -- is now written once in `kin/hash.kin` and emitted into all
 three runtimes. It was the right file to start substituting with because the
 three copies already SAID they were kept in step by hand: `Hash.java` warns
 against `String.hashCode()` because it would let the two ports reach the same
@@ -316,7 +316,7 @@ Three more things it surfaced:
 * **A generator that drops comments is a generator that throws away the
   expensive part.** `category` carries the explanation of why a row ref is in
   the map category, with a pointer to `0026`, and the first emit silently
-  deleted it from two runtimes. `;;` in a splint source is for the source and
+  deleted it from two runtimes. `;;` in a kin source is for the source and
   never reaches the output -- the reader discards it -- so a comment meant for
   a reader of the GENERATED file has to be said as a form. That distinction is
   exactly the difference between explaining the rule and explaining the code
@@ -338,24 +338,24 @@ honestly separate ones.
 
 ## How generated code reaches the runtimes
 
-`splint/verify` proves three targets agree. It does not put anything in the
+`kin/verify` proves three targets agree. It does not put anything in the
 tree, and for the first three sources nothing was: the codec and reader
 slices were a verified parallel implementation that shipped in no runtime.
 Every acceptance criterion below presupposes SUBSTITUTION, so that gap made
 four of the five unanswerable.
 
-`splint/emit` closes it. Each source has a `.targets` file naming the file
+`kin/emit` closes it. Each source has a `.targets` file naming the file
 and indent per target, and each target file carries a marked region:
 
 ```
-// splint:begin splint/hash.splint
+// kin:begin kin/hash.kin
 ...generated...
-// splint:end splint/hash.splint
+// kin:end kin/hash.kin
 ```
 
 The generated code is **checked in**. Somebody cloning this repo to build the
 JVM runtime must not have to install a Clojure to do it, and a generator in
-the build path is a generator that breaks the build. So `splint/emit` is run
+the build path is a generator that breaks the build. So `kin/emit` is run
 by hand, its output is committed, and the markers make the next run a diff
 rather than a merge.
 
@@ -381,7 +381,7 @@ The codec was chosen as a hard case on purpose. The verdict is **partly
 portable, and the split is the opposite of what was built first**: of ~1,030
 shared lines, the ~890 in `encodeInto` / `encodeCollection` / `decodeAt` /
 `encode` / `decode` are worth generating, and the ~140 of primitives that
-`codec.splint` and `reader.splint` actually implement are the part that must
+`codec.kin` and `reader.kin` actually implement are the part that must
 not be. Net if the capabilities below existed: about **660 lines removed**
 across the three runtimes, from a source of ~230 -- more than `Hash` returned.
 
@@ -391,14 +391,14 @@ than by reading, and number 1 was the gate on everything after `Hash`:
 
 1. ~~**No counted loop.**~~ **DONE.** `for`, `while`, `break` and `continue`
    are in `core_vocab` and verified running identically on all three
-   (`splint/loops.splint`). `while` had existed only in `flint.impl.vm`, so
+   (`kin/loops.kin`). `while` had existed only in `flint.impl.vm`, so
    every other source was unable to loop at all even where a `while` was
    exactly right; it moved, along with the `let`/`set`/`if` that predate this
    file. Building it immediately exposed a hole nothing else had: **a `let`
    that is later `set` needs `mut` in Rust**, so `^:mut` now marks a local as
    well as a parameter.
 2. **No array subject at all.** Declaring, indexing, allocating, copying and
-   measuring an array is the CONTENT of phase 3. splint has two `byte-at` and
+   measuring an array is the CONTENT of phase 3. kin has two `byte-at` and
    `len` templates in one vocabulary and nothing general. This, not the loop,
    is the real gate on the 4,500-line prize.
 3. **`case` arms cannot be statements.** `rt_vocab`'s `case` renders arms as
@@ -426,7 +426,7 @@ than by reading, and number 1 was the gate on everything after `Hash`:
    return is `Ok(())` when the function is `^:throws`, since that turns the
    return type into `Result<(), String>`.
 
-And two findings that are not splint's fault and block the codec just as hard:
+And two findings that are not kin's fault and block the codec just as hard:
 **`codec.rs`'s shared half is 446 lines against the JVM's 290**, with nine
 divergences that have to be closed BY HAND before generating is even
 meaningful -- several of which look like drift rather than choice, since
@@ -451,7 +451,7 @@ simply does not call them.
   cross-runtime coverage.
 * **Treat a divergence as incidental until somebody can point at the language
   refusing the alternative.** Two were checked; both looked principled, one had
-  a comment explaining itself, and neither survived. splint's job here is to
+  a comment explaining itself, and neither survived. kin's job here is to
   CONVERGE the runtimes, not to encode differences nobody chose.
 * **Verified or reverted.** Four attempts at the park bug were written, measured,
   and reverted rather than left in the tree as unverified interpreter changes.
@@ -474,6 +474,6 @@ simply does not call them.
   Making it load them properly is unfinished, and is the same question `0036`'s
   namespace resolver answers.
 * **A form that must emit a statement while being used as an expression** has
-  `splint-emit-anchor!` and nothing else. Untested beyond hoisting.
+  `kin-emit-anchor!` and nothing else. Untested beyond hoisting.
 * **The generated snippet in `vm.rs` is a snapshot.** Regenerate with
-  `bb splint/run.clj` when the vocabulary changes; nothing does it automatically.
+  `bb kin/run.clj` when the vocabulary changes; nothing does it automatically.

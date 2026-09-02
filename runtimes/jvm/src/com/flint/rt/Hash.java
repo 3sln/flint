@@ -32,7 +32,7 @@ package com.flint.rt;
 public final class Hash {
     private Hash() {}
 
-    // splint:begin splint/hash.splint
+    // kin:begin kin/hash.kin
     static final int C1 = 0xcc9e2d51;
     static final int C2 = 0x1b873593;
     public static final int SEED = 0;
@@ -81,7 +81,7 @@ public final class Hash {
     public static final int HASH_TRUE = 1231;
     public static final int HASH_FALSE = 1237;
 
-    // splint:end splint/hash.splint
+    // kin:end kin/hash.kin
 
     public static int hashDouble(double d) {
         if (d == 0.0) return 0;   // both 0.0 and -0.0, matching Numbers.hasheq

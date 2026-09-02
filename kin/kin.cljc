@@ -1,5 +1,5 @@
-(ns flint.splint
-  "splint: write a runtime's shared logic once, emit it for every host.
+(ns flint.kin
+  "kin: write a runtime's shared logic once, emit it for every host.
 
   ## Why this is code and not data
 
@@ -20,8 +20,8 @@
 
   ## The pieces
 
-  * `splint-ns` -- a VOCABULARY: tags, and per-target implementations of forms.
-  * `splint` -- a DRIVER: targets, each with a path and a file preamble.
+  * `kin-ns` -- a VOCABULARY: tags, and per-target implementations of forms.
+  * `kin` -- a DRIVER: targets, each with a path and a file preamble.
   * A source file is an ordinary `ns` with `:require`, so what a file may say is
     what it asked for. Two sources can use different vocabularies.
 
@@ -29,10 +29,10 @@
 
   Two sinks, and the difference is the whole reason hoisting works:
 
-      (splint-emit!  ctx \"...\")   append here
-      (splint-before! ctx \"...\")   append BEFORE the current statement
+      (kin-emit!  ctx \"...\")   append here
+      (kin-before! ctx \"...\")   append BEFORE the current statement
 
-  and `splint-render` runs a form into a string instead of the current sink, so
+  and `kin-render` runs a form into a string instead of the current sink, so
   an expression can be composed while a statement is emitted."
   (:require [clojure.string :as str]))
 
@@ -44,7 +44,7 @@
 ;;
 ;; An ANCHOR is a named place in the output that has already gone past.
 ;;
-;; `splint-before!` came first and could only reach ONE level up -- before the
+;; `kin-before!` came first and could only reach ONE level up -- before the
 ;; statement being built. That is enough for hoisting a temporary and enough for
 ;; nothing else: a loop-invariant binding wants to go before the LOOP, a scratch
 ;; declaration wants the top of the FUNCTION, and neither is one level up.
@@ -56,11 +56,11 @@
 (defn anchor
   "A fresh anchor -- a place to emit into, resolved when the output is joined."
   []
-  {:splint/anchor (new-sink)})
+  {:kin/anchor (new-sink)})
 
-(defn anchor? [x] (and (map? x) (contains? x :splint/anchor)))
+(defn anchor? [x] (and (map? x) (contains? x :kin/anchor)))
 
-(defn splint-emit-anchor!
+(defn kin-emit-anchor!
   "Drop an anchor HERE and return it. Whatever is emitted against it later
   appears at this point in the output."
   [ctx]
@@ -74,7 +74,7 @@
   [items]
   (str/join (mapv (fn [i]
                     (if (anchor? i)
-                      (resolve-sink (deref (:splint/anchor i)))
+                      (resolve-sink (deref (:kin/anchor i)))
                       i))
                   items)))
 
@@ -90,7 +90,7 @@
    :scope {}
    :indent 0})
 
-(defn splint-scoped
+(defn kin-scoped
   "Call `f` with `ctx` extended by one scoped entry.
 
   `{:key :class :value {...}}`, and `:indent` if the scope indents. Scoped
@@ -101,33 +101,33 @@
          (assoc-in [:scope (:key entry)] (:value entry))
          (update :indent + (or (:indent entry) 0)))))
 
-(defn splint-get
+(defn kin-get
   "Read a scoped entry."
   [ctx k]
   (get (:scope ctx) k))
 
 (defn indent-of [ctx] (apply str (repeat (* 4 (:indent ctx)) " ")))
 
-(defn splint-emit!
+(defn kin-emit!
   "Append to the current sink, or to an ANCHOR.
 
-  `(splint-emit! ctx \"...\")` writes here; `(splint-emit! a \"...\")` writes
+  `(kin-emit! ctx \"...\")` writes here; `(kin-emit! a \"...\")` writes
   where `a` was dropped. One function for both because a form implementation
   should not have to care which it was handed -- it emits at a place, and a
   place is either \"here\" or an anchor."
   [target & parts]
-  (swap! (if (anchor? target) (:splint/anchor target) (:out target))
+  (swap! (if (anchor? target) (:kin/anchor target) (:out target))
          conj (apply str parts))
   nil)
 
-(defn splint-before!
+(defn kin-before!
   "Emit before the statement being built -- the anchor the statement layer
   dropped, looked up by name.
 
   Kept as a convenience because hoisting a temporary is the common case, and
   now it is one anchor among others rather than a mechanism of its own."
   [ctx & parts]
-  (apply splint-emit! (or (splint-get ctx :splint/stmt-anchor) ctx) parts))
+  (apply kin-emit! (or (kin-get ctx :kin/stmt-anchor) ctx) parts))
 
 
 ;; ------------------------------------------------------------------ dispatch
@@ -162,7 +162,7 @@
              referred (:refer opts)
              vocab (get vocabs vname)]
          (when-not vocab
-           (throw (ex-info (str "splint: no vocabulary " vname)
+           (throw (ex-info (str "kin: no vocabulary " vname)
                            {:required vname :known (vec (keys vocabs))})))
          ;; FORMS AND TAGS ALIKE. A tag is referred and aliased exactly as a
          ;; form is -- `^Usize` has to mean whichever vocabulary's `Usize` this
@@ -181,13 +181,13 @@
                        (when-not (or (contains? (:forms vocab) k)
                                      (contains? (:tags vocab) k)
                                      (contains? (:names vocab) k))
-                         (throw (ex-info (str "splint: " vname " has no " k " to refer")
+                         (throw (ex-info (str "kin: " vname " has no " k " to refer")
                                          {:vocabulary vname :symbol k})))
                        (assoc m k [vname k]))
                      sc (or referred []))))))
      {} reqs)))
 
-(defn splint-tag
+(defn kin-tag
   "The TAG value a symbol names, resolved through the file's require scope.
 
   Tags are namespaced like everything else, so `^Usize` means the `Usize` this
@@ -214,7 +214,7 @@
     (when-let [[vname k] (get scope sym)]
       (get-in ctx [:vocabs vname :names k (:target ctx)]))))
 
-(defn splint-declare-name!
+(defn kin-declare-name!
   "Register how `sym` is SPELLED in each target, for a name whose convention is
   not the local one.
 
@@ -227,7 +227,7 @@
   (when-let [a (:names ctx)] (swap! a assoc sym names))
   nil)
 
-(defn splint-declare!
+(defn kin-declare!
   "Register `sym` as callable by later forms in THIS source file.
 
   A source has to be able to define a helper and then call it. Without this,
@@ -257,12 +257,12 @@
     (or (get-in ctx [:vocab head])
         (get (some-> (:locals ctx) deref) head))))
 
-(defn splint-render
+(defn kin-render
   "Run `form` into a STRING rather than into the current sink.
 
   Expressions compose; statements emit. A form implementation that needs a
   sub-expression calls this, and one that emits a statement calls
-  `splint-emit!` -- which is how one vocabulary serves both positions without
+  `kin-emit!` -- which is how one vocabulary serves both positions without
   the translator deciding which is which."
   [ctx form]
   (let [sub (-> ctx
@@ -271,7 +271,7 @@
     (dispatch sub form)
     (resolve-sink (deref (:out sub)))))
 
-(defn splint-position
+(defn kin-position
   "What this form is being compiled AS: `:statement` or `:expression`.
 
   Pushed DOWN by whatever encloses it, because that is who knows. A top-level
@@ -290,25 +290,25 @@
   what that target wants in that position. One lookup, no wrapper, and nothing
   post-processes a string it did not produce."
   [ctx]
-  (or (splint-get ctx :position) :expression))
+  (or (kin-get ctx :position) :expression))
 
-(defn splint-in
+(defn kin-in
   "Render `form` at `position`, with an anchor for anything it hoists."
   [ctx position form]
   ;; The anchor goes down FIRST, so anything hoisted lands above whatever this
   ;; turns out to be, however deep the form that hoisted it.
-  (let [a (splint-emit-anchor! ctx)
+  (let [a (kin-emit-anchor! ctx)
         sub (-> ctx
                 (assoc :out (new-sink))
-                (assoc-in [:scope :splint/stmt-anchor] a)
+                (assoc-in [:scope :kin/stmt-anchor] a)
                 (assoc-in [:scope :position] position))]
     (dispatch sub form)
-    (splint-emit! ctx (resolve-sink (deref (:out sub))))))
+    (kin-emit! ctx (resolve-sink (deref (:out sub))))))
 
-(defn splint-statement!
+(defn kin-statement!
   "Render `form` as a statement -- the common call, kept short."
   [ctx form]
-  (splint-in ctx :statement form))
+  (kin-in ctx :statement form))
 
 (defn dispatch
   "One form. A seq whose head is in scope goes to its implementation.
@@ -322,12 +322,12 @@
     (and (seq? form) (symbol? (first form)))
     (if-let [f (form-fn ctx (first form))]
       (f ctx form)
-      (throw (ex-info (str "splint: " (first form) " is not in scope"
+      (throw (ex-info (str "kin: " (first form) " is not in scope"
                            (when (:scope-syms ctx)
                              (str " -- this file requires "
                                   (pr-str (vec (sort (map str (keys (:scope-syms ctx))))))))) 
                       {:symbol (first form)})))
-    :else (splint-emit! ctx (literal ctx form))))
+    :else (kin-emit! ctx (literal ctx form))))
 
 (defn local-name
   "A dashed name, spelled the way the target spells a LOCAL.
@@ -354,17 +354,17 @@
     (symbol? v) (or (vocab-name ctx v)
                     (get-in (some-> (:names ctx) deref) [v (:target ctx)])
                     (local-name (:target ctx) v))
-    (nil? v) (or (splint-get ctx :nil) "null")
+    (nil? v) (or (kin-get ctx :nil) "null")
     :else (str v)))
 
 ;; ------------------------------------------------------------- declarations
 
-(defn splint-output
+(defn kin-output
   "Everything emitted into `ctx`, with anchors resolved. What a driver writes."
   [ctx]
   (resolve-sink (deref (:out ctx))))
 
-(defn splint-ns
+(defn kin-ns
   "A vocabulary: `:name`, `:tags`, and `:forms` keyed by target.
 
   A TAG carries data rather than being a name. `^Stack` can hold the type each
@@ -373,7 +373,7 @@
   [& {:keys [name tags forms]}]
   {:name name :tags (or tags {}) :forms (or forms {})})
 
-(defn splint
+(defn kin
   "A driver: `:targets` and the `:namespaces` in scope.
 
   Each target has `:path` (where a namespace's file goes), `:write` (the file's

@@ -1,7 +1,7 @@
 #!/bin/sh
-# Write a splint source's output INTO the three runtimes, between markers.
+# Write a kin source's output INTO the three runtimes, between markers.
 #
-#     splint/emit splint/hash.splint
+#     kin/emit kin/hash.kin
 #
 # The generated code is CHECKED IN. A runtime build must not need babashka --
 # somebody cloning this repo to build the JVM runtime should not have to
@@ -11,20 +11,20 @@
 #
 # Each target file carries, once per source:
 #
-#     // splint:begin <source>       <- everything between these two lines
+#     // kin:begin <source>       <- everything between these two lines
 #     ...generated...                   is replaced wholesale
-#     // splint:end <source>
+#     // kin:end <source>
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 src=$1
-[ -n "$src" ] || { echo "usage: splint/emit <source.splint>"; exit 2; }
-map="${src%.splint}.targets"
-[ -f "$map" ] || { echo "splint/emit: no targets file at $map"; exit 2; }
+[ -n "$src" ] || { echo "usage: kin/emit <source.kin>"; exit 2; }
+map="${src%.kin}.targets"
+[ -f "$map" ] || { echo "kin/emit: no targets file at $map"; exit 2; }
 
-work=${TMPDIR:-/tmp}/splint-emit
+work=${TMPDIR:-/tmp}/kin-emit
 rm -rf "$work"; mkdir -p "$work"
-bb splint/run.clj "$src" > "$work/gen.txt"
+bb kin/run.clj "$src" > "$work/gen.txt"
 sed -n '/==== rust/,/==== java/p'   "$work/gen.txt" | sed '1d;$d' > "$work/rust"
 sed -n '/==== java/,/==== csharp/p' "$work/gen.txt" | sed '1d;$d' > "$work/java"
 sed -n '/==== csharp/,$p'           "$work/gen.txt" | sed '1d'    > "$work/csharp"
@@ -34,13 +34,13 @@ sed -n '/==== csharp/,$p'           "$work/gen.txt" | sed '1d'    > "$work/cshar
 while read -r target file indent; do
   [ -n "$target" ] || continue
   case "$target" in '#'*) continue;; esac
-  [ -f "$file" ] || { echo "splint/emit: no such file $file"; exit 1; }
-  grep -q "splint:begin $src" "$file" || { echo "splint/emit: $file has no marker for $src"; exit 1; }
+  [ -f "$file" ] || { echo "kin/emit: no such file $file"; exit 1; }
+  grep -q "kin:begin $src" "$file" || { echo "kin/emit: $file has no marker for $src"; exit 1; }
   pad=$(printf "%${indent:-0}s" "")
   sed "s/^\(.\)/${pad}\1/" "$work/$target" > "$work/block"
   awk -v src="$src" -v block="$work/block" '
-    $0 ~ ("splint:begin " src) { print; while ((getline line < block) > 0) print line; skip=1; next }
-    $0 ~ ("splint:end " src)   { skip=0 }
+    $0 ~ ("kin:begin " src) { print; while ((getline line < block) > 0) print line; skip=1; next }
+    $0 ~ ("kin:end " src)   { skip=0 }
     !skip { print }
   ' "$file" > "$work/out" && mv "$work/out" "$file"
   echo "  $target  $file"

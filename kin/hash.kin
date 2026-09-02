@@ -1,6 +1,6 @@
 ;; Murmur3, written once.
 ;;
-;; Phase 2 of `doc/goals/splint-port.md`, and the first COMPLETE unit: this is
+;; Phase 2 of `doc/goals/kin-port.md`, and the first COMPLETE unit: this is
 ;; the whole of the murmur3 core that `runtime/src/hash.rs`, `Hash.java` and
 ;; `Hash.cs` each carry, and after this slice none of them carries it by hand.
 ;;

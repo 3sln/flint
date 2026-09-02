@@ -1,6 +1,6 @@
 ;; `category` -- which of the four kinds of thing a value is.
 ;;
-;; Phase 2 of `doc/goals/splint-port.md`, and the first source with a RECEIVER.
+;; Phase 2 of `doc/goals/kin-port.md`, and the first source with a RECEIVER.
 ;; Rust puts this on `impl Rt` and reaches the runtime as `self`; the JVM and
 ;; CLR make it a static that takes an `Rt`. That difference, and not the body,
 ;; is what had kept `Eq` and the bulk behind it out of reach.

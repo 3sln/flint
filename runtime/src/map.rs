@@ -99,41 +99,42 @@ impl Rt {
         Value::heap(a)
     }
 
+    // kin:begin kin/champ.kin
     #[inline]
     fn bn_datamap(&self, n: Value) -> u32 {
-        self.slot(n, BN_DATAMAP).as_fixnum() as u32
+        return self.slot(n, BN_DATAMAP).as_fixnum() as u32;
     }
     #[inline]
     fn bn_nodemap(&self, n: Value) -> u32 {
-        self.slot(n, BN_NODEMAP).as_fixnum() as u32
+        return self.slot(n, BN_NODEMAP).as_fixnum() as u32;
     }
     #[inline]
     fn bn_key(&self, n: Value, i: u32) -> Value {
-        self.slot(n, BN_BASE + 2 * i)
+        return self.slot(n, BN_BASE + (2 * i));
     }
     #[inline]
     fn bn_val(&self, n: Value, i: u32) -> Value {
-        self.slot(n, BN_BASE + 2 * i + 1)
+        return self.slot(n, BN_BASE + ((2 * i) + 1));
     }
     #[inline]
     fn bn_set_key(&mut self, n: Value, i: u32, v: Value) {
-        self.set(n, BN_BASE + 2 * i, v)
+        self.set(n, BN_BASE + (2 * i), v);
     }
     #[inline]
     fn bn_set_val(&mut self, n: Value, i: u32, v: Value) {
-        self.set(n, BN_BASE + 2 * i + 1, v)
+        self.set(n, BN_BASE + ((2 * i) + 1), v);
     }
-    /// Sub-nodes live at the end, in descending bit order.
+    /// Sub-nodes live at the END, in DESCENDING bit order.
     #[inline]
     fn bn_node(&self, n: Value, j: u32) -> Value {
-        let l = self.olen(n);
-        self.slot(n, l - 1 - j)
+        return self.slot(n, (self.olen(n) - 1) - j);
     }
     #[inline]
     fn bn_set_node(&mut self, n: Value, j: u32, v: Value) {
-        let l = self.olen(n);
-        self.set(n, l - 1 - j, v)
+        self.set(n, (self.olen(n) - 1) - j, v);
     }
+
+    // kin:end kin/champ.kin
 
     fn cn_new(&mut self, h: u32, npairs: u32, edit: Value) -> Value {
         let e = self.push(edit);

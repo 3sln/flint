@@ -3,7 +3,7 @@
 
   Where the codec had a byte sink and murmur had integers, this has the
   RUNTIME: a `Value`, a heap, type tags, and the methods that read them. It is
-  the vocabulary the bulk of `doc/goals/splint-port.md` needs, so it is built
+  the vocabulary the bulk of `doc/goals/kin-port.md` needs, so it is built
   around the two differences that kept the bulk out of reach.
 
   **The receiver.** Rust puts these on `impl Rt` and reaches the runtime as
@@ -14,7 +14,7 @@
   `Obj.TyCons` in C#, which pascalises. There are a dozen of them and they
   appear all over the runtime, so they are named here once rather than at
   every use."
-  (:require [flint.splint :as sp]
+  (:require [flint.kin :as sp]
             [flint.impl.core :as core]
             [clojure.string :as str]))
 
@@ -36,7 +36,11 @@
 (def Bool {:name 'Bool :types {:rust "bool" :java "boolean" :csharp "bool"} :methods {}})
 (def I32 {:name 'I32 :types {:rust "u32" :java "int" :csharp "int"} :methods {}})
 
-(def tags-for {'Rt Rt 'Value Value 'Cat Cat 'Bool Bool 'I32 I32})
+(def RootIx
+  "An index into the shadow stack. `usize` in Rust, `int` in the other two."
+  {:name 'RootIx :types {:rust "usize" :java "int" :csharp "int"} :methods {}})
+
+(def tags-for {'Rt Rt 'Value Value 'Cat Cat 'Bool Bool 'I32 I32 'RootIx RootIx})
 
 (defn- t [ctx] (:target ctx))
 
@@ -86,37 +90,37 @@
                       (and (seq? (first cs)) (= 'comment (first (first cs))))
                       (recur (rest cs) (conj acc [:comment (first cs)]))
                       :else (recur (drop 2 cs) (conj acc [(first cs) (second cs)]))))
-        scrut (core/strip-parens (sp/splint-render ctx subject))]
-    (sp/splint-emit! ctx (sp/indent-of ctx)
+        scrut (core/strip-parens (sp/kin-render ctx subject))]
+    (sp/kin-emit! ctx (sp/indent-of ctx)
                      (if (= :rust (t ctx))
                        (str "return match " scrut " {\n")
                        (str "switch (" scrut ") {\n")))
-    (sp/splint-scoped
+    (sp/kin-scoped
      ctx {:key :in-case :value true :indent 1}
      (fn [inner]
        (doseq [[labels body] pairs]
          (if (= :comment labels)
            (core/comment-form inner body)
            (let [else? (= :else labels)
-               ls (when-not else? (mapv (fn [l] (sp/splint-render inner l)) labels))]
+               ls (when-not else? (mapv (fn [l] (sp/kin-render inner l)) labels))]
            (case (t inner)
-             :rust (sp/splint-emit! inner (sp/indent-of inner)
+             :rust (sp/kin-emit! inner (sp/indent-of inner)
                                     (if else? "_" (str/join " | " ls)) " => ")
              ;; FOUR LABELS TO A LINE, which is what the hand-written files
              ;; do. A one-per-arm line for eight tags runs past 150 columns,
              ;; and the not-worse rule covers what a diff reads like as much
              ;; as what it compiles to.
              (if else?
-               (sp/splint-emit! inner (sp/indent-of inner) "default:\n")
+               (sp/kin-emit! inner (sp/indent-of inner) "default:\n")
                (doseq [chunk (partition-all 4 ls)]
-                 (sp/splint-emit! inner (sp/indent-of inner)
+                 (sp/kin-emit! inner (sp/indent-of inner)
                                   (str/join " " (mapv (fn [l] (str "case " l ":")) chunk))
                                   "\n"))))
            (if (= :rust (t inner))
-             (sp/splint-emit! inner (core/strip-parens (sp/splint-render inner body)) ",\n")
-             (sp/splint-emit! inner (sp/indent-of inner) "    return "
-                              (core/strip-parens (sp/splint-render inner body)) ";\n")))))))
-    (sp/splint-emit! ctx (sp/indent-of ctx) (if (= :rust (t ctx)) "};\n" "}\n"))))
+             (sp/kin-emit! inner (core/strip-parens (sp/kin-render inner body)) ",\n")
+             (sp/kin-emit! inner (sp/indent-of inner) "    return "
+                              (core/strip-parens (sp/kin-render inner body)) ";\n")))))))
+    (sp/kin-emit! ctx (sp/indent-of ctx) (if (= :rust (t ctx)) "};\n" "}\n"))))
 
 (defn forms-for []
   (merge
@@ -131,4 +135,46 @@
     ;; other two pass it and C# qualifies the call.
     'ty (core/call {:rust "ty(&{0}.gc.sp, {1})"
                     :java "ty({0}.gc.sp, {1})"
-                    :csharp "Obj.Ty({0}.gc.sp, {1})"})}))
+                    :csharp "Obj.Ty({0}.gc.sp, {1})"})
+    'heap-ty? (core/call {:rust "{0}.is_heap_ty({1}, {2})"
+                          :java "{0}.isHeapTy({1}, {2})"
+                          :csharp "{0}.IsHeapTy({1}, {2})"})
+
+    ;; --- HEAP SLOTS -----------------------------------------------------
+    ;;
+    ;; What phase 3 calls an array. `Maps`, `Vec`, `Table` and `Snap` are
+    ;; walks over the slots of a heap object, not over a native array -- Rust
+    ;; reads them through `Obj::slot(sp, addr, i)` and the other two through
+    ;; `Rt.slot`, and all three already agree on the shape. So the "array
+    ;; primitives" the codec spike ranked as the real gate on phase 3 turn out
+    ;; to be three calls, not an array subject.
+    'slot (core/call {:rust "{0}.slot({1}, {2})"
+                      :java "{0}.slot({1}, {2})"
+                      :csharp "{0}.Slot({1}, {2})"})
+    ;; Rust's `set` takes a Value and unwraps it; the other two want the
+    ;; address, so the `asHeap` lives in the template rather than at every use.
+    'set-slot (core/call {:rust "{0}.set({1}, {2}, {3})"
+                          :java "{0}.setSlot(Val.asHeap({1}), {2}, {3})"
+                          :csharp "{0}.SetSlot(Val.AsHeap({1}), {2}, {3})"})
+    ;; NOT symmetrical: `olen` is a method on Rust's `Rt` and a file-local
+    ;; static on the other two. The receiver still comes first in the source.
+    'olen (core/call {:rust "{0}.olen({1})" :java "olen({0}, {1})" :csharp "Olen({0}, {1})"})
+    'as-fixnum (core/call {:rust "{0}.as_fixnum()"
+                           :java "Val.asFixnum({0})"
+                           :csharp "Val.AsFixnum({0})"})
+    'to-i32 (core/call {:rust "({0} as u32)" :java "((int) {0})" :csharp "((int) {0})"})
+
+    ;; --- ROOTING --------------------------------------------------------
+    ;;
+    ;; The shadow stack (`doc/decisions/0031`): a value in a host local does
+    ;; not survive an allocation. These ride the `^:method` receiver, so `{0}`
+    ;; is `self` in Rust and `rt` in the other two and no branch is needed.
+    'mark (core/call {:rust "{0}.mark()" :java "{0}.mark()" :csharp "{0}.Mark()"})
+    'push (core/call {:rust "{0}.push({1})" :java "{0}.push({1})" :csharp "{0}.Push({1})"})
+    'r (core/call {:rust "{0}.r({1})" :java "{0}.r({1})" :csharp "{0}.R({1})"})
+    'set-r (core/call {:rust "{0}.set_r({1}, {2})"
+                       :java "{0}.setR({1}, {2})"
+                       :csharp "{0}.SetR({1}, {2})"})
+    'pop-to (core/call {:rust "{0}.pop_to({1})"
+                        :java "{0}.popTo({1})"
+                        :csharp "{0}.PopTo({1})"})}))

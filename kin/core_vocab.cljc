@@ -10,7 +10,7 @@
   A vocabulary MERGES these in rather than inheriting them, so a subject that
   needs a different `let` can still have one. What it must not do is get them
   by accident, which is why this is a namespace a source has to name."
-  (:require [flint.splint :as sp]
+  (:require [flint.kin :as sp]
             [clojure.string :as str]))
 
 (defn t [ctx] (:target ctx))
@@ -61,9 +61,15 @@
   to be tidy safely is to prove there is nothing to break."
   [tmpl i]
   (let [k (str "{" i "}")
-        at (.indexOf (str tmpl) k)]
+        at (.indexOf (str tmpl) k)
+        ;; Skip one space, so `, {2})` counts as delimited the way `,{2})`
+        ;; does. Templates are written for a human to read, and every one of
+        ;; them puts a space after the comma.
+        before (if (and (pos? at) (= \space (nth tmpl (dec at) \space)))
+                 (nth tmpl (- at 2) \space)
+                 (nth tmpl (dec at) \space))]
     (and (pos? at)
-         (contains? #{\( \, \[} (nth tmpl (dec at)))
+         (contains? #{\( \, \[} before)
          (< (+ at (count k)) (inc (count tmpl)))
          (contains? #{\) \, \]} (nth tmpl (+ at (count k)) \space)))))
 
@@ -75,22 +81,26 @@
     (let [tmpl (get tmpls (t ctx))
           as (vec (map-indexed
                    (fn [i f]
-                     (let [c (sp/splint-render ctx f)]
+                     (let [c (sp/kin-render ctx f)]
                        (if (delimited? tmpl i) (strip-parens c) c)))
                    (rest form)))
           code (fmt tmpl as)]
-      (if (= :statement (sp/splint-position ctx))
-        (sp/splint-emit! ctx (sp/indent-of ctx) code ";\n")
-        (sp/splint-emit! ctx code)))))
+      (if (= :statement (sp/kin-position ctx))
+        (sp/kin-emit! ctx (sp/indent-of ctx) code ";\n")
+        (sp/kin-emit! ctx code)))))
 
 (def ops
   {'+ "+" '- "-" '* "*" '< "<" '> ">" '== "==" 'not "!"
-   'bit-shift-right ">>" 'bit-and "&" 'bit-or "|" 'bit-xor "^"})
+   'bit-shift-right ">>" 'bit-and "&" 'bit-or "|" 'bit-xor "^"
+   ;; Integer division. `/` on two ints truncates in all three, so `quot` is
+   ;; the honest name for what it does -- and `/` is left unbound rather than
+   ;; meaning something different from Clojure's.
+   'quot "/" 'rem "%"})
 
 (defn op-form [sym]
   (fn [ctx form]
-    (let [as (mapv (fn [f] (sp/splint-render ctx f)) (rest form))]
-      (sp/splint-emit! ctx (if (= 1 (count as))
+    (let [as (mapv (fn [f] (sp/kin-render ctx f)) (rest form))]
+      (sp/kin-emit! ctx (if (= 1 (count as))
                              (str (get ops sym) (first as))
                              (str "(" (str/join (str " " (get ops sym) " ") as) ")"))))))
 
@@ -107,7 +117,7 @@
     :java (let [[h & r] (str/split (str nm) #"-")] (str h (str/join (mapv str/capitalize r))))
     :csharp (str/join (mapv str/capitalize (str/split (str nm) #"-")))))
 
-(defn- ty-of [ctx default tag] (get-in (or (sp/splint-tag ctx tag) default) [:types (t ctx)]))
+(defn- ty-of [ctx default tag] (get-in (or (sp/kin-tag ctx tag) default) [:types (t ctx)]))
 
 (defn- defn-form
   "A function, framed the way each target frames one.
@@ -147,25 +157,25 @@
       ;; other two, so a body that says `(. rt gc)` comes out as `self.gc`
       ;; there and `rt.gc` here. Registering the NAME is all that takes.
       (when recv
-        (sp/splint-declare-name! ctx recv {:rust "self" :java (str recv) :csharp (str recv)}))
-      (sp/splint-declare!
+        (sp/kin-declare-name! ctx recv {:rust "self" :java (str recv) :csharp (str recv)}))
+      (sp/kin-declare!
        ctx nm
        (fn [c f]
-         (let [as (mapv (fn [x] (sp/splint-render c x)) (rest f))
+         (let [as (mapv (fn [x] (sp/kin-render c x)) (rest f))
                code (str (if (and method? (= :rust (t c)))
                            (str (first as) "." (target-name c nm)
                                 "(" (str/join ", " (rest as)) ")")
                            (str (target-name c nm) "(" (str/join ", " as) ")"))
                          (if (and throws? (= :rust (t c))) "?" ""))]
-           (if (= :statement (sp/splint-position c))
-             (sp/splint-emit! c (sp/indent-of c) code ";\n")
-             (sp/splint-emit! c code)))))
+           (if (= :statement (sp/kin-position c))
+             (sp/kin-emit! c (sp/indent-of c) code ";\n")
+             (sp/kin-emit! c code)))))
       ;; `^:inline`. Rust is the only one that says so in the source; the JVM
       ;; and the CLR decide at run time from profile data, which is strictly
       ;; more information than a source can have. So the mark is emitted for
       ;; one target and dropped by two -- and dropping it is not a loss.
       (when (and (:inline (meta nm)) (= :rust (t ctx)))
-        (sp/splint-emit! ctx (sp/indent-of ctx) "#[inline]\n"))
+        (sp/kin-emit! ctx (sp/indent-of ctx) "#[inline]\n"))
       (case (t ctx)
         ;; RUST RETURNS A RESULT WHERE THE OTHERS THROW, and that is the first
         ;; divergence found in this port that is not naming: it changes the
@@ -173,7 +183,7 @@
         ;; can fail; Rust turns the return type into `Result<T, String>` and a
         ;; call to it gets `?`, and Java and C# ignore the mark entirely because
         ;; an exception needs nothing in either place.
-        :rust (sp/splint-emit!
+        :rust (sp/kin-emit!
                ctx (sp/indent-of ctx) (if pub? "pub fn " "fn ") (target-name ctx nm) "("
                ;; `^:mut` on a PARAMETER. Rust is the only one of the three
                ;; that has to say a parameter is reassigned; Java and C# read
@@ -190,34 +200,34 @@
                  throws? " -> Result<(), String>"
                  :else "")
                " {\n")
-        :java (sp/splint-emit!
+        :java (sp/kin-emit!
                ctx (sp/indent-of ctx) (if pub? "public static " "static ")
                (if ret (ty ret) "void") " " (target-name ctx nm) "("
                (str/join ", " (cons* (when recv (str (ty (:tag (meta recv))) " " recv))
                                      (mapv (fn [[p tag]] (str (ty tag) " " (sp/local-name :java p))) ps))) ") {\n")
-        :csharp (sp/splint-emit!
+        :csharp (sp/kin-emit!
                  ctx (sp/indent-of ctx) (if pub? "public static " "static ")
                (if ret (ty ret) "void") " " (target-name ctx nm) "("
                  (str/join ", " (cons* (when recv (str (ty (:tag (meta recv))) " " recv))
                                        (mapv (fn [[p tag]] (str (ty tag) " " (sp/local-name :csharp p))) ps))) ") {\n"))
       (let [wrap? (and unchecked? (= :csharp (t ctx)))]
-        (sp/splint-scoped
+        (sp/kin-scoped
          ctx {:key :fn :value nm :indent 1}
          (fn [inner]
-           (when wrap? (sp/splint-emit! inner (sp/indent-of inner) "unchecked {\n"))
-           (sp/splint-scoped
+           (when wrap? (sp/kin-emit! inner (sp/indent-of inner) "unchecked {\n"))
+           (sp/kin-scoped
             inner {:key :throws :value throws? :indent (if wrap? 1 0)}
-            (fn [in2] (doseq [f body] (sp/splint-statement! in2 f))))
-           (when wrap? (sp/splint-emit! inner (sp/indent-of inner) "}\n")))))
-      (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))))
+            (fn [in2] (doseq [f body] (sp/kin-statement! in2 f))))
+           (when wrap? (sp/kin-emit! inner (sp/indent-of inner) "}\n")))))
+      (sp/kin-emit! ctx (sp/indent-of ctx) "}\n"))))
 
 (defn- let-form [default]
   (fn [ctx form]
     (let [[_ bindings & body] form]
       (doseq [[nm init] (partition 2 bindings)]
         (let [ty (ty-of ctx default (:tag (meta nm)))
-              code (strip-parens (sp/splint-render ctx init))]
-          (sp/splint-emit! ctx (sp/indent-of ctx)
+              code (strip-parens (sp/kin-render ctx init))]
+          (sp/kin-emit! ctx (sp/indent-of ctx)
                            ;; `^:mut` on a LOCAL, for the same reason it is on
                            ;; a parameter: Rust alone has to say that a binding
                            ;; is reassigned. Found the moment a loop existed to
@@ -228,7 +238,7 @@
                                :rust (str "let " (when (:mut (meta nm)) "mut ")
                                           n ": " ty " = " code ";\n")
                                (str ty " " n " = " code ";\n"))))))
-      (doseq [f body] (sp/splint-statement! ctx f)))))
+      (doseq [f body] (sp/kin-statement! ctx f)))))
 
 (defn- defstruct-form
   "A small mutable record, declared the way each target declares one.
@@ -241,20 +251,20 @@
           fs (mapv (fn [f] [f (:tag (meta f))]) fields)
           pascal (str/join (mapv str/capitalize (str/split (str nm) #"-")))]
       (case (t ctx)
-        :rust (do (sp/splint-emit! ctx (sp/indent-of ctx) "struct " pascal " {\n")
+        :rust (do (sp/kin-emit! ctx (sp/indent-of ctx) "struct " pascal " {\n")
                   (doseq [[f tag] fs]
-                    (sp/splint-emit! ctx (sp/indent-of ctx) "    " f ": "
+                    (sp/kin-emit! ctx (sp/indent-of ctx) "    " f ": "
                                      (ty-of ctx default tag) ",\n"))
-                  (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))
-        :java (do (sp/splint-emit! ctx (sp/indent-of ctx) "static final class " pascal " {\n")
+                  (sp/kin-emit! ctx (sp/indent-of ctx) "}\n"))
+        :java (do (sp/kin-emit! ctx (sp/indent-of ctx) "static final class " pascal " {\n")
                   (doseq [[f tag] fs]
-                    (sp/splint-emit! ctx (sp/indent-of ctx) "    " (ty-of ctx default tag) " " f ";\n"))
-                  (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))
-        :csharp (do (sp/splint-emit! ctx (sp/indent-of ctx) "sealed class " pascal " {\n")
+                    (sp/kin-emit! ctx (sp/indent-of ctx) "    " (ty-of ctx default tag) " " f ";\n"))
+                  (sp/kin-emit! ctx (sp/indent-of ctx) "}\n"))
+        :csharp (do (sp/kin-emit! ctx (sp/indent-of ctx) "sealed class " pascal " {\n")
                     (doseq [[f tag] fs]
-                      (sp/splint-emit! ctx (sp/indent-of ctx) "    internal "
+                      (sp/kin-emit! ctx (sp/indent-of ctx) "    internal "
                                        (ty-of ctx default tag) " " f ";\n"))
-                    (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))))))
+                    (sp/kin-emit! ctx (sp/indent-of ctx) "}\n"))))))
 
 (defn comment-form
   "`(comment \"line\" \"line\")` -- a comment, in the output.
@@ -265,21 +275,33 @@
   runtimes. A generator that discards the reasoning keeps the code and throws
   away the part that was expensive to work out.
 
-  `;;` comments in a splint source are for the SOURCE and never reach the
+  `;;` comments in a kin source are for the SOURCE and never reach the
   output -- the reader discards them before any of this runs. So a comment
   meant for a reader of the generated file has to be said as a form, and the
   difference between the two is exactly the difference between explaining the
   rule and explaining the code it produces."
   [ctx form]
   (doseq [line (rest form)]
-    (sp/splint-emit! ctx (sp/indent-of ctx) "// " line "\n")))
+    (sp/kin-emit! ctx (sp/indent-of ctx) "// " line "\n")))
+
+(defn doc-form
+  "`(doc \"line\" ...)` -- a DOC comment, `///` on all three.
+
+  Distinct from `comment` because the distinction is real in the output: `///`
+  is picked up by rustdoc, javadoc and the C# XML doc pipeline, and `//` is
+  not. The first emit of the CHAMP accessors turned a `///` into a `//` and
+  quietly demoted a documented function to an undocumented one in three
+  runtimes at once."
+  [ctx form]
+  (doseq [line (rest form)]
+    (sp/kin-emit! ctx (sp/indent-of ctx) "/// " line "\n")))
 
 (defn- field-form
   "`(. r i)` -- a field, readable and assignable. One spelling everywhere, which
   is why it is one form."
   [ctx form]
   (let [[_ obj f] form]
-    (sp/splint-emit! ctx (sp/splint-render ctx obj) "." (str f))))
+    (sp/kin-emit! ctx (sp/kin-render ctx obj) "." (str f))))
 
 (def base-compound
   "Forms with a compound-assignment spelling, PER TARGET.
@@ -316,13 +338,13 @@
   [table]
   (fn [ctx form]
     (let [[_ place value] form
-          p (sp/splint-render ctx place)
+          p (sp/kin-render ctx place)
           cmp (when (seq? value) (head-op table ctx (first value)))]
-      (if (and cmp (= 3 (count value)) (= p (sp/splint-render ctx (second value))))
-        (sp/splint-emit! ctx (sp/indent-of ctx) p " " cmp " "
-                         (strip-parens (sp/splint-render ctx (nth value 2))) ";\n")
-        (sp/splint-emit! ctx (sp/indent-of ctx) p " = "
-                         (strip-parens (sp/splint-render ctx value)) ";\n")))))
+      (if (and cmp (= 3 (count value)) (= p (sp/kin-render ctx (second value))))
+        (sp/kin-emit! ctx (sp/indent-of ctx) p " " cmp " "
+                         (strip-parens (sp/kin-render ctx (nth value 2))) ";\n")
+        (sp/kin-emit! ctx (sp/indent-of ctx) p " = "
+                         (strip-parens (sp/kin-render ctx value)) ";\n")))))
 
 (defn- head-is-if?
   "Is this seq's head the `if` THIS FILE means? Resolved through the require
@@ -337,21 +359,21 @@
 (declare if-body)
 
 (defn- if-form [ctx form]
-  (sp/splint-emit! ctx (sp/indent-of ctx))
+  (sp/kin-emit! ctx (sp/indent-of ctx))
   (if-body ctx form))
 
 (defn- if-body [ctx form]
   (let [[_ test then else] form
-        c (sp/splint-render ctx test)]
-    (sp/splint-emit! ctx
+        c (sp/kin-render ctx test)]
+    (sp/kin-emit! ctx
                      ;; The test is a WHOLE expression with nothing to bind
                      ;; with, so its outer parens are the safe case to strip --
                      ;; Rust warns on them and the other two would otherwise
                      ;; get `if ((x == 0))`.
                      (let [c (strip-parens c)]
                        (if (= :rust (t ctx)) (str "if " c " {\n") (str "if (" c ") {\n"))))
-    (sp/splint-scoped ctx {:key :in-if :value true :indent 1}
-                      (fn [inner] (sp/splint-statement! inner then)))
+    (sp/kin-scoped ctx {:key :in-if :value true :indent 1}
+                      (fn [inner] (sp/kin-statement! inner then)))
     ;; An `else` whose body is itself an `if` becomes `} else if (...) {`
     ;; rather than a nested block. Without this every extra arm cost a brace
     ;; level, and a five-arm dispatch came out indented five deep -- which no
@@ -359,17 +381,17 @@
     ;; even though it compiles.
     (cond
       (and else (seq? else) (= 'if (first else)) (head-is-if? ctx else))
-      (do (sp/splint-emit! ctx (sp/indent-of ctx) "} else ")
-          (sp/splint-scoped ctx {:key :else-if :value true}
+      (do (sp/kin-emit! ctx (sp/indent-of ctx) "} else ")
+          (sp/kin-scoped ctx {:key :else-if :value true}
                             (fn [inner] (if-body inner else))))
 
       else
-      (do (sp/splint-emit! ctx (sp/indent-of ctx) "} else {\n")
-          (sp/splint-scoped ctx {:key :in-if :value true :indent 1}
-                            (fn [inner] (sp/splint-statement! inner else)))
-          (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))
+      (do (sp/kin-emit! ctx (sp/indent-of ctx) "} else {\n")
+          (sp/kin-scoped ctx {:key :in-if :value true :indent 1}
+                            (fn [inner] (sp/kin-statement! inner else)))
+          (sp/kin-emit! ctx (sp/indent-of ctx) "}\n"))
 
-      :else (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))))
+      :else (sp/kin-emit! ctx (sp/indent-of ctx) "}\n"))))
 
 (defn- return-form
   "`(return v)`, and `(return)` from a function with no value.
@@ -379,12 +401,12 @@
   `Ok(())` when the function can fail, because `^:throws` turns its return
   type into `Result<(), String>`."
   [ctx form]
-  (let [throws? (sp/splint-get ctx :throws)]
+  (let [throws? (sp/kin-get ctx :throws)]
     (if (= 1 (count form))
-      (sp/splint-emit! ctx (sp/indent-of ctx)
+      (sp/kin-emit! ctx (sp/indent-of ctx)
                        (if (and (= :rust (t ctx)) throws?) "return Ok(());\n" "return;\n"))
-      (let [v (strip-parens (sp/splint-render ctx (second form)))]
-        (sp/splint-emit! ctx (sp/indent-of ctx) "return "
+      (let [v (strip-parens (sp/kin-render ctx (second form)))]
+        (sp/kin-emit! ctx (sp/indent-of ctx) "return "
                          (if (and (= :rust (t ctx)) throws?) (str "Ok(" v ")") v) ";\n")))))
 
 (defn- for-form
@@ -405,17 +427,17 @@
   (fn [ctx form]
     (let [[_ binding & body] form
           [nm start end] binding
-          ty (get-in (or (sp/splint-tag ctx (:tag (meta nm))) default) [:types (t ctx)])
+          ty (get-in (or (sp/kin-tag ctx (:tag (meta nm))) default) [:types (t ctx)])
           n (sp/local-name (t ctx) nm)
-          a (strip-parens (sp/splint-render ctx start))
-          b (strip-parens (sp/splint-render ctx end))]
-      (sp/splint-emit! ctx (sp/indent-of ctx)
+          a (strip-parens (sp/kin-render ctx start))
+          b (strip-parens (sp/kin-render ctx end))]
+      (sp/kin-emit! ctx (sp/indent-of ctx)
                        (case (t ctx)
                          :rust (str "for " n " in " a ".." b " {\n")
                          (str "for (" ty " " n " = " a "; " n " < " b "; " n "++) {\n")))
-      (sp/splint-scoped ctx {:key :in-loop :value true :indent 1}
-                        (fn [inner] (doseq [f body] (sp/splint-statement! inner f))))
-      (sp/splint-emit! ctx (sp/indent-of ctx) "}\n"))))
+      (sp/kin-scoped ctx {:key :in-loop :value true :indent 1}
+                        (fn [inner] (doseq [f body] (sp/kin-statement! inner f))))
+      (sp/kin-emit! ctx (sp/indent-of ctx) "}\n"))))
 
 (defn- while-form
   "`(while test body...)`.
@@ -435,12 +457,12 @@
   hand-written code, and generated code that is worse is not worth generating."
   [ctx form]
   (let [[_ test & body] form
-        c (strip-parens (sp/splint-render ctx test))]
-    (sp/splint-emit! ctx (sp/indent-of ctx)
+        c (strip-parens (sp/kin-render ctx test))]
+    (sp/kin-emit! ctx (sp/indent-of ctx)
                      (if (= :rust (t ctx)) (str "while " c " {\n") (str "while (" c ") {\n")))
-    (sp/splint-scoped ctx {:key :in-loop :value true :indent 1}
-                      (fn [inner] (doseq [f body] (sp/splint-statement! inner f))))
-    (sp/splint-emit! ctx (sp/indent-of ctx) "}\n")))
+    (sp/kin-scoped ctx {:key :in-loop :value true :indent 1}
+                      (fn [inner] (doseq [f body] (sp/kin-statement! inner f))))
+    (sp/kin-emit! ctx (sp/indent-of ctx) "}\n")))
 
 (defn forms-for
   "The shape forms. `:default-tag` is the tag an untagged name is given, which
@@ -451,9 +473,9 @@
     'let (let-form default-tag)
     'defstruct (defstruct-form default-tag)
     '. field-form 'set (set-form (merge base-compound compound)) 'if if-form 'return return-form
-    'comment comment-form
+    'comment comment-form 'doc doc-form
     'for (for-form default-tag) 'while while-form
-    'break (fn [ctx _] (sp/splint-emit! ctx (sp/indent-of ctx) "break;\n"))
-    'continue (fn [ctx _] (sp/splint-emit! ctx (sp/indent-of ctx) "continue;\n"))
-    'do (fn [ctx form] (doseq [f (rest form)] (sp/splint-statement! ctx f)))}
+    'break (fn [ctx _] (sp/kin-emit! ctx (sp/indent-of ctx) "break;\n"))
+    'continue (fn [ctx _] (sp/kin-emit! ctx (sp/indent-of ctx) "continue;\n"))
+    'do (fn [ctx form] (doseq [f (rest form)] (sp/kin-statement! ctx f)))}
    (reduce (fn [m s] (assoc m s (op-form s))) {} (keys ops))))

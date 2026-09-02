@@ -1,5 +1,5 @@
 (ns flint.impl.hash
-  "The vocabulary murmur3 is written in (`doc/goals/splint-port.md`).
+  "The vocabulary murmur3 is written in (`doc/goals/kin-port.md`).
 
   A better test of the bet than the codec was. The three hash files were
   written to agree DELIBERATELY -- `Hash.java` says so in its header, that
@@ -18,7 +18,7 @@
   Rust carries `u32` where the other two carry a signed `int`, which is why
   every shift and every constant needs a word from one of them and nothing
   from the others. The numbers are identical; only the types disagree."
-  (:require [flint.splint :as sp]
+  (:require [flint.kin :as sp]
             [flint.impl.core :as core]
             [clojure.string :as str]))
 
@@ -50,7 +50,7 @@
     :java (format "0x%x" n)
     :csharp (if (> n 0x7fffffff) (format "unchecked((int) 0x%x)" n) (format "0x%x" n))))
 
-(defn- hex-form [ctx form] (sp/splint-emit! ctx (hex ctx (second form))))
+(defn- hex-form [ctx form] (sp/kin-emit! ctx (hex ctx (second form))))
 
 (defn- const-name
   "Rust and Java SCREAM a constant; C# pascalises it. `SEED` against `Seed`,
@@ -67,19 +67,19 @@
   (let [[_ nm v] form
         pub? (:pub (meta nm))
         cn (const-name (t ctx) nm)
-        ty (get-in (sp/splint-tag ctx (:tag (meta nm))) [:types (t ctx)])
+        ty (get-in (sp/kin-tag ctx (:tag (meta nm))) [:types (t ctx)])
         ;; The SOURCE says whether a constant is written in hex, by wrapping
         ;; it in `(hex ...)` or not. Deriving it from the value produced
         ;; `HASH_TRUE = 0x4cf`, which is the right number and the wrong
         ;; constant -- 1231 is a number a reader recognises and 0x4cf is not.
-        lit (if (seq? v) (sp/splint-render ctx v) (str v))]
-    (sp/splint-emit!
+        lit (if (seq? v) (sp/kin-render ctx v) (str v))]
+    (sp/kin-emit!
      ctx (sp/indent-of ctx)
      (case (t ctx)
        :rust (str (when pub? "pub ") "const " cn ": " ty " = " lit ";\n")
        :java (str (if pub? "public " "") "static final " ty " " cn " = " lit ";\n")
        :csharp (str (if pub? "public " "") "const " ty " " cn " = " lit ";\n")))
-    (sp/splint-declare-name!
+    (sp/kin-declare-name!
      ctx nm (reduce (fn [m tg] (assoc m tg (const-name tg nm))) {} [:rust :java :csharp]))))
 
 (defn forms-for []

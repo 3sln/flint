@@ -23,7 +23,7 @@
 //! iterators below re-derive the UTF-16 view on the fly. Getting this wrong is
 //! invisible until the first astral-plane character.
 
-// splint:begin splint/hash.splint
+// kin:begin kin/hash.kin
 const C1: u32 = 0xcc9e2d51;
 const C2: u32 = 0x1b873593;
 pub const SEED: u32 = 0;
@@ -78,7 +78,7 @@ pub fn unordered_step(acc: u32, item_hash: u32) -> u32 {
 pub const HASH_TRUE: u32 = 1231;
 pub const HASH_FALSE: u32 = 1237;
 
-// splint:end splint/hash.splint
+// kin:end kin/hash.kin
 
 pub fn hash_double(d: f64) -> u32 {
     if d == 0.0 {

@@ -1,0 +1,48 @@
+;; The CHAMP node accessors, written once.
+;;
+;; Phase 3 of `doc/goals/kin-port.md`, and the first slice that reads the
+;; HEAP. `Maps`, `Vec`, `Table` and `Snap` are walks over the slots of a heap
+;; object, and these nine functions are the whole vocabulary the map's bitmap
+;; nodes are addressed through -- every insert, lookup and iteration in
+;; `map.rs` / `Maps.java` / `Maps.cs` goes through them.
+;;
+;; `cnCount` is deliberately NOT here. It is the same shape, but in all three
+;; files it sits among the `cn_*` functions with `cn_new` between it and this
+;; block, and a region has to be contiguous. Moving it would tidy the
+;; generator at the cost of the reader, which is the wrong trade.
+;;
+;; The codec spike ranked "no array subject" as the real gate on phase 3. It
+;; turned out to be the wrong shape for the question: phase 3 has no native
+;; arrays. It reads heap slots, and all three already agree on how -- Rust
+;; through a method on `Rt`, the JVM and CLR through a static taking one.
+;; Three call templates, not an array subject.
+(ns runtime.champ
+  (:require [flint.impl.rt :refer [defn return + - * comment doc
+                                   slot set-slot olen as-fixnum to-i32
+                                   Rt Value I32]]))
+
+(defn ^:inline ^:method ^I32 bn-datamap [^Rt rt ^Value n]
+  (return (to-i32 (as-fixnum (slot rt n BN_DATAMAP)))))
+
+(defn ^:inline ^:method ^I32 bn-nodemap [^Rt rt ^Value n]
+  (return (to-i32 (as-fixnum (slot rt n BN_NODEMAP)))))
+
+(defn ^:inline ^:method ^Value bn-key [^Rt rt ^Value n ^I32 i]
+  (return (slot rt n (+ BN_BASE (* 2 i)))))
+
+(defn ^:inline ^:method ^Value bn-val [^Rt rt ^Value n ^I32 i]
+  (return (slot rt n (+ BN_BASE (+ (* 2 i) 1)))))
+
+(defn ^:inline ^:method bn-set-key [^:mut ^Rt rt ^Value n ^I32 i ^Value v]
+  (set-slot rt n (+ BN_BASE (* 2 i)) v))
+
+(defn ^:inline ^:method bn-set-val [^:mut ^Rt rt ^Value n ^I32 i ^Value v]
+  (set-slot rt n (+ BN_BASE (+ (* 2 i) 1)) v))
+
+(doc "Sub-nodes live at the END, in DESCENDING bit order.")
+
+(defn ^:inline ^:method ^Value bn-node [^Rt rt ^Value n ^I32 j]
+  (return (slot rt n (- (- (olen rt n) 1) j))))
+
+(defn ^:inline ^:method bn-set-node [^:mut ^Rt rt ^Value n ^I32 j ^Value v]
+  (set-slot rt n (- (- (olen rt n) 1) j) v))

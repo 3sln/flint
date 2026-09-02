@@ -68,17 +68,34 @@ public static class Maps {
         return Val.Heap(a);
     }
 
-    static int BnDatamap(Rt rt, long n) { return (int) Val.AsFixnum(rt.Slot(n, BN_DATAMAP)); }
-    static int BnNodemap(Rt rt, long n) { return (int) Val.AsFixnum(rt.Slot(n, BN_NODEMAP)); }
-    static long BnKey(Rt rt, long n, int i) { return rt.Slot(n, BN_BASE + 2 * i); }
-    static long BnVal(Rt rt, long n, int i) { return rt.Slot(n, BN_BASE + 2 * i + 1); }
-    static void BnSetKey(Rt rt, long n, int i, long v) { rt.SetSlot(Val.AsHeap(n), BN_BASE + 2 * i, v); }
-    static void BnSetVal(Rt rt, long n, int i, long v) { rt.SetSlot(Val.AsHeap(n), BN_BASE + 2 * i + 1, v); }
-    /// Sub-nodes live at the END, in DESCENDING bit order.
-    static long BnNode(Rt rt, long n, int j) { return rt.Slot(n, Olen(rt, n) - 1 - j); }
-    static void BnSetNode(Rt rt, long n, int j, long v) {
-        rt.SetSlot(Val.AsHeap(n), Olen(rt, n) - 1 - j, v);
+    // kin:begin kin/champ.kin
+    static int BnDatamap(Rt rt, long n) {
+        return (int) Val.AsFixnum(rt.Slot(n, BN_DATAMAP));
     }
+    static int BnNodemap(Rt rt, long n) {
+        return (int) Val.AsFixnum(rt.Slot(n, BN_NODEMAP));
+    }
+    static long BnKey(Rt rt, long n, int i) {
+        return rt.Slot(n, BN_BASE + (2 * i));
+    }
+    static long BnVal(Rt rt, long n, int i) {
+        return rt.Slot(n, BN_BASE + ((2 * i) + 1));
+    }
+    static void BnSetKey(Rt rt, long n, int i, long v) {
+        rt.SetSlot(Val.AsHeap(n), BN_BASE + (2 * i), v);
+    }
+    static void BnSetVal(Rt rt, long n, int i, long v) {
+        rt.SetSlot(Val.AsHeap(n), BN_BASE + ((2 * i) + 1), v);
+    }
+    /// Sub-nodes live at the END, in DESCENDING bit order.
+    static long BnNode(Rt rt, long n, int j) {
+        return rt.Slot(n, (Olen(rt, n) - 1) - j);
+    }
+    static void BnSetNode(Rt rt, long n, int j, long v) {
+        rt.SetSlot(Val.AsHeap(n), (Olen(rt, n) - 1) - j, v);
+    }
+
+    // kin:end kin/champ.kin
 
     static long CnNew(Rt rt, int h, int npairs, long edit) {
         int e = rt.Push(edit);

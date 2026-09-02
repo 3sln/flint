@@ -1,28 +1,28 @@
 #!/bin/sh
-# Generate a splint source for all three targets, compile each, run each, and
+# Generate a kin source for all three targets, compile each, run each, and
 # require BYTE-IDENTICAL output.
 #
-# This is the acceptance check `doc/goals/splint-port.md` asks for, made
+# This is the acceptance check `doc/goals/kin-port.md` asks for, made
 # repeatable. Compiling is not enough: three implementations can each compile
 # and disagree, which is the failure the whole port exists to prevent.
 #
-#     splint/verify splint/codec.splint
+#     kin/verify kin/codec.kin
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
-src=${1:-splint/codec.splint}
-work=${TMPDIR:-/tmp}/splint-verify
+src=${1:-kin/codec.kin}
+work=${TMPDIR:-/tmp}/kin-verify
 rm -rf "$work"; mkdir -p "$work"
 cd "$root"
 
-bb splint/run.clj "$src" > "$work/gen.txt"
+bb kin/run.clj "$src" > "$work/gen.txt"
 sed -n '/==== rust/,/==== java/p'   "$work/gen.txt" | sed '1d;$d' > "$work/gen.rs"
 sed -n '/==== java/,/==== csharp/p' "$work/gen.txt" | sed '1d;$d' > "$work/gen.java"
 sed -n '/==== csharp/,$p'           "$work/gen.txt" | sed '1d'    > "$work/gen.cs"
 
 # The driver each language needs. Kept beside the source so a new port writes
 # one and the harness stays the same.
-drv="${src%.splint}.drivers"
-[ -f "$drv" ] || { echo "splint/verify: no drivers file at $drv"; exit 2; }
+drv="${src%.kin}.drivers"
+[ -f "$drv" ] || { echo "kin/verify: no drivers file at $drv"; exit 2; }
 
 # A named section of the drivers file: everything after `--name` up to the
 # next line that starts with `--`. A `-head` section is emitted BEFORE the
