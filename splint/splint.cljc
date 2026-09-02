@@ -40,6 +40,44 @@
 
 (defn- new-sink [] (atom []))
 
+;; --------------------------------------------------------------- anchors
+;;
+;; An ANCHOR is a named place in the output that has already gone past.
+;;
+;; `splint-before!` came first and could only reach ONE level up -- before the
+;; statement being built. That is enough for hoisting a temporary and enough for
+;; nothing else: a loop-invariant binding wants to go before the LOOP, a scratch
+;; declaration wants the top of the FUNCTION, and neither is one level up.
+;;
+;; An anchor is dropped where the output should later appear, carried in a scope
+;; frame, and emitted against from arbitrarily deep. Resolution happens when the
+;; buffer is joined, so an anchor placed early can be written to late.
+
+(defn anchor
+  "A fresh anchor -- a place to emit into, resolved when the output is joined."
+  []
+  {:splint/anchor (new-sink)})
+
+(defn anchor? [x] (and (map? x) (contains? x :splint/anchor)))
+
+(defn splint-emit-anchor!
+  "Drop an anchor HERE and return it. Whatever is emitted against it later
+  appears at this point in the output."
+  [ctx]
+  (let [a (anchor)]
+    (swap! (:out ctx) conj a)
+    a))
+
+(defn resolve-sink
+  "A sink's items as one string, anchors resolved in place and recursively --
+  an anchor may itself contain anchors, which is what makes them nest."
+  [items]
+  (str/join (mapv (fn [i]
+                    (if (anchor? i)
+                      (resolve-sink (deref (:splint/anchor i)))
+                      i))
+                  items)))
+
 (defn context
   "A fresh emission context for `target`."
   [driver target]
@@ -51,22 +89,6 @@
    :pre (new-sink)
    :scope {}
    :indent 0})
-
-(defn splint-emit!
-  "Append to the current sink."
-  [ctx & parts]
-  (swap! (:out ctx) conj (apply str parts))
-  nil)
-
-(defn splint-before!
-  "Append a STATEMENT before the one currently being built.
-
-  This is what makes hoisting a target's own business: Rust's `invoke` binds a
-  temporary and emits the binding here, and no other target's implementation --
-  or the translator -- has to know that happened."
-  [ctx & parts]
-  (swap! (:pre ctx) conj (apply str parts))
-  nil)
 
 (defn splint-scoped
   "Call `f` with `ctx` extended by one scoped entry.
@@ -85,6 +107,28 @@
   (get (:scope ctx) k))
 
 (defn indent-of [ctx] (apply str (repeat (* 4 (:indent ctx)) " ")))
+
+(defn splint-emit!
+  "Append to the current sink, or to an ANCHOR.
+
+  `(splint-emit! ctx \"...\")` writes here; `(splint-emit! a \"...\")` writes
+  where `a` was dropped. One function for both because a form implementation
+  should not have to care which it was handed -- it emits at a place, and a
+  place is either \"here\" or an anchor."
+  [target & parts]
+  (swap! (if (anchor? target) (:splint/anchor target) (:out target))
+         conj (apply str parts))
+  nil)
+
+(defn splint-before!
+  "Emit before the statement being built -- the anchor the statement layer
+  dropped, looked up by name.
+
+  Kept as a convenience because hoisting a temporary is the common case, and
+  now it is one anchor among others rather than a mechanism of its own."
+  [ctx & parts]
+  (apply splint-emit! (or (splint-get ctx :splint/stmt-anchor) ctx) parts))
+
 
 ;; ------------------------------------------------------------------ dispatch
 
@@ -105,34 +149,57 @@
   [ctx form]
   (let [sub (assoc ctx :out (new-sink))]
     (dispatch sub form)
-    (str/join (deref (:out sub)))))
+    (resolve-sink (deref (:out sub)))))
+
+(defn emits
+  "What kind of thing a form's implementation produces.
+
+  Metadata ON THE IMPLEMENTATION rather than a list kept beside it, so the two
+  cannot drift: a form that starts emitting a complete statement says so where
+  it is written."
+  [f]
+  (or (:splint/emits (meta f)) :expression))
+
+(defn splint-place!
+  "Render `form` at `position`, and let the TARGET decide how a thing of that
+  kind sits there.
+
+  ## Why the target decides
+
+  \"Is this a statement\" is not a property of a form and not a property of the
+  language-neutral source. It is a question about the TARGET, and the targets
+  disagree -- including two of ours:
+
+  * in Java and C#, `if` is a statement and cannot produce a value;
+  * **in Rust `if` is an expression**, and `let x = if c { a } else { b };` is
+    what a person writes;
+  * a language with no statements at all -- a Lisp backend, which is the whole
+    point of splint being language-agnostic -- has nothing to wrap.
+
+  So a form's implementation says what it EMITS, in metadata, and the target
+  supplies `:place`, which is handed the position and the kind and decides. A
+  target with no statements supplies a `:place` that returns its argument, and
+  the concept costs it nothing."
+  [ctx position form]
+  ;; The anchor goes down FIRST, so anything hoisted lands above whatever this
+  ;; turns out to be, however deep the form that hoisted it.
+  (let [a (splint-emit-anchor! ctx)
+        sub (-> ctx
+                (assoc :out (new-sink))
+                (assoc-in [:scope :splint/stmt-anchor] a)
+                (assoc :position position))
+        head (when (seq? form) (first form))
+        impl (when head (get-in ctx [:vocab head]))
+        kind (if impl (emits impl) :expression)]
+    (dispatch sub form)
+    (let [body (resolve-sink (deref (:out sub)))
+          place (or (:place ctx) (fn [_ _ _ b] b))]
+      (splint-emit! ctx (place ctx position kind body)))))
 
 (defn splint-statement!
-  "Run `form` as a statement, flushing anything it hoisted BEFORE it.
-
-  The order is the point: a temporary must be bound before the statement that
-  reads it, and a statement that hoists nothing pays nothing.
-
-  ## Expressions and statements are different, and the vocabulary says which
-
-  `(set-r si x)` is a call -- an EXPRESSION -- and its implementation emits just
-  the call, because in `(if (nil? x) ...)` that is exactly what is wanted. Used
-  as a statement it needs indentation and a terminator, and the first version
-  emitted neither: `self.set_r(si, t2__)while true {`.
-
-  Rather than guess -- a trailing newline would have been a workable heuristic
-  and a bad rule -- the vocabulary DECLARES which heads emit complete
-  statements. Everything else is an expression and gets wrapped."
+  "`splint-place!` at statement position -- the common call, kept short."
   [ctx form]
-  (let [sub (assoc ctx :out (new-sink) :pre (new-sink))
-        head (when (seq? form) (first form))
-        stmt? (contains? (or (:statements ctx) #{}) head)]
-    (dispatch sub form)
-    (doseq [p (deref (:pre sub))] (splint-emit! ctx p))
-    (let [body (str/join (deref (:out sub)))]
-      (if stmt?
-        (splint-emit! ctx body)
-        (splint-emit! ctx (indent-of ctx) body ";\n")))))
+  (splint-place! ctx :statement form))
 
 (defn dispatch
   "One form. A seq whose head the vocabulary knows goes to its implementation;
@@ -152,6 +219,11 @@
     :else (str v)))
 
 ;; ------------------------------------------------------------- declarations
+
+(defn splint-output
+  "Everything emitted into `ctx`, with anchors resolved. What a driver writes."
+  [ctx]
+  (resolve-sink (deref (:out ctx))))
 
 (defn splint-ns
   "A vocabulary: `:name`, `:tags`, and `:forms` keyed by target.

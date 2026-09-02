@@ -12,9 +12,9 @@
 (doseq [target [:rust :java :csharp]]
   (let [ctx (assoc (flint.splint/context {} target)
                    :vocab (flint.impl.vm/forms-for)
-                   :statements flint.impl.vm/statement-heads
+                   :place flint.impl.vm/place
                    :tmp (atom 0))]
     (println (str "==== " (name target) " ===================================="))
     (doseq [f forms] (flint.splint/splint-statement! ctx f))
-    (print (str/join (deref (:out ctx))))
+    (print (flint.splint/splint-output ctx))
     (println)))

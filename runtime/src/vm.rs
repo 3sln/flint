@@ -2302,8 +2302,13 @@ impl Rt {
 // The code `splint` GENERATED, pasted verbatim (`doc/decisions/0038`).
 //
 // Pasted rather than paraphrased, and compiled rather than described: if the
-// translator emits something Rust will not take, the BUILD says so. That is
-// the whole claim the spike makes, and this is where it is checked.
+// translator emits something Rust will not take, the BUILD says so.
+//
+// It is also held to the rule that generated code may not be WORSE than the
+// hand-written original. Against what this replaced, the remaining difference
+// is the temporaries' names -- no extra work, no extra allocation, `+=` where
+// a person writes `+=`, and hoisting only where `rustc` actually refuses the
+// nested form.
 //
 // A snapshot -- regenerate with `bb splint/run.clj` if the vocabulary changes.
 #[cfg(test)]
@@ -2311,24 +2316,18 @@ impl Rt {
 impl Rt {
     fn splint_generated(&mut self, si: usize) -> usize {
         let mut spread: usize = 0;
-        let t1__ = self.r(si);
-        let t2__ = self.seq(t1__);
-        self.set_r(si, t2__);
-        while true {
-            if self.r(si).is_nil() {
-                break;
-            }
+        let seq_1 = self.seq(self.r(si));
+        self.set_r(si, seq_1);
+        while !self.r(si).is_nil() {
             if !self.charge_tick(spread as u64, 1, "apply") {
                 self.pop_to(si);
                 break;
             }
-            let t3__ = self.r(si);
-            let t4__ = self.first(t3__);
-            self.vpush(t4__);
-            spread = (spread + 1);
-            let t5__ = self.r(si);
-            let t6__ = self.next(t5__);
-            self.set_r(si, t6__);
+            let first_2 = self.first(self.r(si));
+            self.vpush(first_2);
+            spread += 1;
+            let next_3 = self.next(self.r(si));
+            self.set_r(si, next_3);
         }
         spread
     }

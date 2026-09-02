@@ -71,18 +71,63 @@ csharp  Val.IsNil(R(si))
 That is the compile-time protocol: a new target is a new entry in a tag rather
 than a new case in the translator.
 
-### Two sinks, and a declared statement set
+### Anchors, not a second sink
 
-`splint-emit!` appends here; `splint-before!` appends BEFORE the current
-statement, which is what makes hoisting a target's own business.
-`splint-render` runs a form into a string instead, so expressions compose while
-statements emit.
+`splint-emit-anchor!` drops a named place in the output and returns it;
+`(splint-emit! a "...")` writes there, from arbitrarily deep, resolved when the
+buffer is joined.
 
-The vocabulary declares which heads are complete STATEMENTS. Everything else is
-an expression and gets wrapped with indentation and a terminator — without that,
-a call used as a statement came out as `self.set_r(si, t2__)while true {`.
-Declared rather than sniffed for a trailing newline, which would have worked and
-been a rule nobody could reason about.
+This replaced a `:pre` sink that could reach exactly ONE level up — before the
+statement being built. That is enough for hoisting a temporary and enough for
+nothing else: a loop-invariant binding wants to go before the LOOP, a scratch
+declaration wants the top of the FUNCTION, and neither is one level up. An
+anchor is carried in a scope frame, so a form deep inside emits to a place an
+enclosing form chose.
+
+### Statement-ness belongs to the TARGET
+
+A form's implementation says what it EMITS, in metadata on the implementation
+so the two cannot drift. The target supplies `place`, which is handed the
+position and the kind and decides.
+
+This started as a set of "statement heads" in the vocabulary, and that is wrong
+because **"is this a statement" is a question about the target, and the targets
+disagree — including two of ours**:
+
+* in Java and C#, `if` is a statement and cannot produce a value;
+* **in Rust `if` is an expression**, and `let x = if c { a } else { b };` is
+  what a person writes;
+* a language with no statements at all — a Lisp backend, which is the point of
+  being language-agnostic — has nothing to wrap, and supplies a `place` that
+  returns its argument.
+
+Moving it changed no output, which is the check that it was a refactor.
+
+## The rule: generated code may not be worse
+
+**If what comes out is worse or less efficient than what a person would have
+written, adjust the rules or hand-write that part.** Generated code that is
+worse than what it replaces is not worth generating.
+
+It has already caught three things, each found by diffing against the
+hand-written original rather than by reading the output:
+
+1. **The loop lost its natural shape.** Every `while` was rewritten to
+   `while true { if !c { break; } … }` because a test that hoists cannot stay in
+   the condition. Most do not hoist — so the rewrite now happens only when the
+   test actually needs a temporary, and everything else keeps `while !c { … }`.
+2. **Hoisting was too aggressive.** Every call argument was being bound to a
+   temporary, giving three where a person writes none. Rust's two-phase borrows
+   accept `self.seq(self.r(si))` — one level, and the runtime is full of it.
+   What `rustc` refuses is two. So an argument is hoisted only when it is itself
+   a call containing a call.
+3. **`spread = (spread + 1)`** where a person writes `spread += 1`, and
+   parenthesised assignment right-hand sides.
+
+Against the hand-written original the remaining difference is the temporaries'
+names — no extra work, no extra allocation. Temps are named after their callee
+(`seq_1`, `first_2`) rather than numbered, for the same reason.
+
 
 ## What came out
 

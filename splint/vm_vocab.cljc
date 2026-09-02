@@ -31,6 +31,24 @@
 
 (defn- t [ctx] (:target ctx))
 
+(defn- strip-parens
+  "Drop the outer parentheses of a whole expression.
+
+  Operators are parenthesised so precedence is never a question, and at the top
+  of an assignment there is nothing to be ambiguous with -- so `x = (a + b);`
+  becomes `x = a + b;`, which is what a person writes."
+  [c]
+  (if (and (str/starts-with? c "(") (str/ends-with? c ")")
+           ;; Only when the opening paren matches the closing one, so
+           ;; `(a + b) * (c + d)` is left alone.
+           (loop [i 1 d 1]
+             (cond (>= i (dec (count c))) (= d 1)
+                   (= \( (nth c i)) (recur (inc i) (inc d))
+                   (= \) (nth c i)) (if (= d 1) false (recur (inc i) (dec d)))
+                   :else (recur (inc i) d))))
+    (subs c 1 (dec (count c)))
+    c))
+
 (defn- fmt [tmpl args]
   (reduce (fn [s i] (str/replace s (str "{" i "}") (nth args i ""))) tmpl (range (count args))))
 
@@ -49,17 +67,31 @@
       (doseq [f body] (walk f)))
     @found))
 
-(defn- hoist!
-  "Bind `code` to a fresh temporary and return its name.
+(defn- nested-call?
+  "Does `form` contain a call INSIDE a call?
 
-  RUST ONLY, and called only by the Rust implementations that need it --
-  `self.set_r(si, self.seq(self.r(si)))` is two mutable borrows and `rustc`
-  refuses it, while Java and C# accept the same shape. Nothing outside this
-  file knows that, which is the difference between this version and the one
-  built on a table of strings."
-  [ctx code]
+  The hoisting rule, and it is narrower than the first version's. Rust's
+  two-phase borrows accept `self.seq(self.r(si))` -- one level -- and the
+  runtime is full of it. What `rustc` refuses is two:
+
+      self.set_r(si, self.seq(self.r(si)))     E0499
+
+  Hoisting every call argument satisfied the compiler and produced three
+  temporaries where a person would write none, which is worse code than the
+  hand-written original. So an argument is hoisted only when it is itself a
+  call WITH a call inside it."
+  [form]
+  (and (seq? form) (some seq? (rest form)) true))
+
+(defn- hoist!
+  "Bind `code` to a temporary named after the call, and return the name.
+
+  Named rather than numbered because `let seq_1 = ...` reads and `let t2__ =
+  ...` does not, and generated code that is harder to read than what it
+  replaces is not worth generating."
+  [ctx head code]
   (let [n (swap! (:tmp ctx) inc)
-        nm (str "t" n "__")]
+        nm (str (str/replace (str head) #"[^A-Za-z0-9]" "_") "_" n)]
     (sp/splint-before! ctx (sp/indent-of ctx) "let " nm " = " code ";\n")
     nm))
 
@@ -70,7 +102,8 @@
   (fn [ctx form]
     (let [as (render-args ctx (rest form))
           as (if (= :rust (t ctx))
-               (mapv (fn [a f] (if (seq? f) (hoist! ctx a) a)) as (rest form))
+               (mapv (fn [a f] (if (nested-call? f) (hoist! ctx (first f) a) a))
+                     as (rest form))
                as)]
       (sp/splint-emit! ctx (fmt (get tmpls (t ctx)) as)))))
 
@@ -87,7 +120,7 @@
                          (str (get ops sym) (first as))
                          (str "(" (str/join (str " " (get ops sym) " ") as) ")"))))))
 
-(defn- let-form [ctx form]
+(defn- ^{:splint/emits :statement} let-form [ctx form]
   (let [[_ bindings & body] form
         pairs (partition 2 bindings)]
     (doseq [[nm init] pairs]
@@ -103,13 +136,20 @@
            (str ty " " nm " = " code ";\n")))))
     (doseq [f body] (sp/splint-statement! ctx f))))
 
-(defn- set-form [ctx form]
-  (let [[_ place value] form]
-    (sp/splint-emit! ctx (sp/indent-of ctx)
-                     (sp/splint-render ctx place) " = "
-                     (sp/splint-render ctx value) ";\n")))
+(defn- ^{:splint/emits :statement} set-form [ctx form]
+  (let [[_ place value] form
+        p (sp/splint-render ctx place)]
+    ;; `x += n` where a person would write it. `spread = (spread + 1)` is
+    ;; correct, and it is not what the hand-written code says, and the rule is
+    ;; that generated code may not be worse.
+    (if (and (seq? value) (= '+ (first value)) (= place (second value))
+             (= 3 (count value)))
+      (sp/splint-emit! ctx (sp/indent-of ctx) p " += "
+                       (sp/splint-render ctx (nth value 2)) ";\n")
+      (sp/splint-emit! ctx (sp/indent-of ctx) p " = "
+                       (strip-parens (sp/splint-render ctx value)) ";\n"))))
 
-(defn- if-form [ctx form]
+(defn- ^{:splint/emits :statement} if-form [ctx form]
   (let [[_ test then else] form
         c (sp/splint-render ctx test)]
     (sp/splint-emit! ctx (sp/indent-of ctx)
@@ -122,19 +162,46 @@
                         (fn [inner] (sp/splint-statement! inner else))))
     (sp/splint-emit! ctx (sp/indent-of ctx) "}\n")))
 
-(defn- while-form [ctx form]
+(defn- hoists?
+  "Would rendering `form` need a temporary on this target?
+
+  Asked so the loop can keep its natural shape when nothing hoists -- see
+  `while-form`."
+  [ctx form]
+  (let [probe (assoc ctx :out (atom []) :scope (assoc (:scope ctx) :splint/stmt-anchor nil)
+                     :tmp (atom 0))]
+    (sp/splint-render probe form)
+    (pos? (deref (:tmp probe)))))
+
+(defn- ^{:splint/emits :statement} while-form [ctx form]
   ;; THE TEST GOES INSIDE. A loop test is evaluated every iteration, so it
   ;; cannot be hoisted out -- lifting it produced a temporary bound once,
   ;; before the loop. `while (true) { if (!test) break; ... }` is correct on
   ;; every target and costs a `break` and a constant any compiler folds.
   (let [[_ test & body] form
         neg (if (and (seq? test) (= 'not (first test))) (second test) (list 'not test))]
-    (sp/splint-emit! ctx (sp/indent-of ctx)
-                     (if (= :rust (t ctx)) "while true {\n" "while (true) {\n"))
-    (sp/splint-scoped ctx {:key :in-loop :value true :indent 1}
-                      (fn [inner]
-                        (sp/splint-statement! inner (list 'if neg '(break)))
-                        (doseq [f body] (sp/splint-statement! inner f))))
+    ;; THE NATURAL SHAPE WHEN IT FITS. A loop test is evaluated every iteration,
+    ;; so a test that needs a temporary cannot keep it in the condition -- but
+    ;; one that needs no temporary can, and rewriting it anyway would emit
+    ;;
+    ;;     while true { if !c { break; } ... }
+    ;;
+    ;; where a person would have written `while !c { ... }`. That is WORSE than
+    ;; the hand-written code, and generated code that is worse than what it
+    ;; replaces is not worth generating.
+    (if (hoists? ctx test)
+      (do (sp/splint-emit! ctx (sp/indent-of ctx)
+                           (if (= :rust (t ctx)) "while true {\n" "while (true) {\n"))
+          (sp/splint-scoped ctx {:key :in-loop :value true :indent 1}
+                            (fn [inner]
+                              (sp/splint-statement! inner (list 'if neg '(break)))
+                              (doseq [f body] (sp/splint-statement! inner f)))))
+      (let [c (sp/splint-render ctx test)]
+        (sp/splint-emit! ctx (sp/indent-of ctx)
+                         (if (= :rust (t ctx)) (str "while " c " {\n")
+                             (str "while (" c ") {\n")))
+        (sp/splint-scoped ctx {:key :in-loop :value true :indent 1}
+                          (fn [inner] (doseq [f body] (sp/splint-statement! inner f))))))
     (sp/splint-emit! ctx (sp/indent-of ctx) "}\n")))
 
 (defn- invoke-form
@@ -154,23 +221,41 @@
                       {:tag (:name tag-val) :method m :target (t ctx)})))
     (sp/splint-emit! ctx (fmt tmpl (render-args ctx (cons target-form args))))))
 
-(def statement-heads
-  "The forms that emit COMPLETE statements -- indentation, terminator and all.
+(defn place
+  "How this family of targets seats a rendered thing at a position.
 
-  Everything else is an expression, and `splint-statement!` wraps it. Declared
-  rather than detected because the alternative was sniffing for a trailing
-  newline, which would have worked and would have been a rule nobody could
-  reason about."
-  '#{let set if while do break})
+  Java, C# and Rust are all C-like here: an EXPRESSION used where a statement
+  goes needs indentation and a terminator, and something that already emitted a
+  statement is left alone. A target that has no statements supplies a `:place`
+  that returns `body` and never thinks about it again.
+
+  This is the whole of what `statement-heads` used to be, moved to where it
+  belongs -- the question is about the TARGET, and the targets disagree even
+  among these three: Rust's `if` is an expression and Java's is not."
+  [ctx position kind body]
+  (if (and (= :statement position) (= :expression kind))
+    (str (sp/indent-of ctx) body ";\n")
+    body))
 
 (defn forms-for
   "Every form, for every target. One map because a form's three implementations
   belong beside each other -- that is what makes a divergence visible."
   []
   (merge
-   {'let let-form 'set set-form 'if if-form 'while while-form 'invoke invoke-form
-    'do (fn [ctx form] (doseq [f (rest form)] (sp/splint-statement! ctx f)))
-    'break (fn [ctx _] (sp/splint-emit! ctx (sp/indent-of ctx) "break;\n"))}
+   {'let (with-meta let-form {:splint/emits :statement})
+    'set (with-meta set-form {:splint/emits :statement})
+    ;; RUST'S `if` IS AN EXPRESSION and Java's is not. Marked a statement here
+    ;; because this vocabulary only ever uses it as one; a vocabulary that
+    ;; wanted `(let [x (if c a b)] ...)` would mark it `:expression` and let
+    ;; each target's `place` sort it out -- which is exactly why the kind is
+    ;; metadata on the implementation rather than a list somewhere.
+    'if (with-meta if-form {:splint/emits :statement})
+    'while (with-meta while-form {:splint/emits :statement})
+    'invoke invoke-form
+    'do (with-meta (fn [ctx form] (doseq [f (rest form)] (sp/splint-statement! ctx f)))
+                   {:splint/emits :statement})
+    'break (with-meta (fn [ctx _] (sp/splint-emit! ctx (sp/indent-of ctx) "break;\n"))
+                      {:splint/emits :statement})}
    (reduce (fn [m s] (assoc m s (op-form s))) {} (keys ops))
    ;; The runtime's own calls. Three spellings, side by side.
    {'r       (call {:rust "self.r({0})" :java "r({0})" :csharp "R({0})"})
