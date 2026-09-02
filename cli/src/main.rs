@@ -15,6 +15,7 @@
 //! The output is still wasm: what changed is what the compiler runs ON.
 
 mod deps;
+mod depscmd;
 mod policy;
 mod serve;
 mod sys;
@@ -307,6 +308,16 @@ fn compile(srcs: &[PathBuf], entry: &str, out_path: &Path, optimize: &[String],
 /// is an implementation detail and never leaves this process.
 fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
               roots: Option<&[String]>) -> Result<(i32, String)> {
+    run_source_q(srcs, entry, args, caps, roots, false)
+}
+
+/// The same, with the program's own output SUPPRESSED.
+///
+/// `deps add` runs `flint.deps.resolve` as a program to get an answer, and the
+/// answer is for this process rather than for the terminal -- printing it would
+/// put a raw EDN map above the human line that follows it.
+fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
+                roots: Option<&[String]>, quiet: bool) -> Result<(i32, String)> {
     let spec = build_spec(srcs, entry, &parse_slots(SLOTS)?, false, false, &[], roots)?;
     let mut c = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
@@ -371,7 +382,9 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
         host.serve(Box::new(crate::sys::Env { args: args.to_vec() }));
     }
     let out = host.run_with(&mut p, &refs, &named);
-    print!("{}", out.out);
+    if !quiet {
+        print!("{}", out.out);
+    }
     Ok((out.code, out.out))
 }
 
@@ -630,6 +643,54 @@ fn main() -> Result<()> {
             // itself succeeds -- and a test command that exits 0 on a red
             // suite is a test command CI cannot use.
             std::process::exit(if code != 0 || out.contains("FAILED") { 1 } else { 0 });
+        }
+        // `deps` -- the dependency surface (`doc/decisions/0037`). The
+        // RESOLUTION is `flint.deps.resolve`, run as a program, so what `add`
+        // writes and what a build picks cannot disagree.
+        "deps" => {
+            let sub = argv.get(1).map(|s| s.as_str()).unwrap_or("");
+            let dir = std::env::current_dir()?;
+            match sub {
+                "add" => {
+                    let Some(spec) = argv.get(2) else {
+                        bail!("flint deps add kind:name[@range], e.g. npm:left-pad")
+                    };
+                    depscmd::add(&dir, spec, |src, entry, caps| {
+                        let tmp = std::env::temp_dir().join(format!(
+                            "flint-deps-{}",
+                            std::process::id()
+                        ));
+                        std::fs::create_dir_all(&tmp)?;
+                        let f = tmp.join("depsadd.cljc");
+                        std::fs::write(&f, src)?;
+                        let (code, out) = run_source_q(
+                            &[tmp.clone()],
+                            entry,
+                            &[],
+                            // What resolution needs and all it needs -- the
+                            // registries, plus whatever URL the user named.
+                            caps,
+                            None,
+                            true,
+                        )?;
+                        let _ = std::fs::remove_dir_all(&tmp);
+                        if code != 0 {
+                            bail!("{out}");
+                        }
+                        Ok(out)
+                    })
+                }
+                "" | "help" => {
+                    eprintln!(
+                        "flint deps add kind:name[@range]   npm:, mvn:, git:, pod:\n\
+                         \n\
+                         Resolves, pins and writes into deps.edn. The version written is the\n\
+                         version a build picks, because both ask flint.deps.resolve."
+                    );
+                    std::process::exit(2)
+                }
+                other => bail!("no such deps command {other:?}"),
+            }
         }
         "run" => {
             let a = parse(&argv[1..])?;

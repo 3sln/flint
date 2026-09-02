@@ -70,6 +70,43 @@
   (check "and writable when it was"
          (and (zero? (:exit r)) (fs/exists? (str proj "/x.txt"))) (:out r)))
 
+;; --- `flint deps add` ------------------------------------------------------
+;;
+;; NETWORK. Skipped rather than failed when there is none, because a test that
+;; cannot run and a test that failed must not look alike -- and a suite that
+;; goes red on a train is a suite people stop running.
+(def online?
+  (zero? (:exit (sh proj "curl" "-sSf" "-o" "/dev/null" "--max-time" "10"
+                    "https://registry.npmjs.org/left-pad"))))
+
+(if-not online?
+  (println "  (skipped: `flint deps add` needs the network)")
+  (let [p2 (str (fs/create-temp-dir))]
+    (spit (str p2 "/deps.edn") ";; keep me\n{:paths [\"src\"]}\n")
+    (let [r (sh p2 flint "deps" "add" "npm:left-pad@^1.2.0")
+          text (slurp (str p2 "/deps.edn"))]
+      (check "deps add resolves and PINS an exact version"
+             (re-find #":npm/version \"1\.\d+\.\d+\"" text) text)
+      (check "and records the integrity"
+             (str/includes? text ":npm/integrity \"sha512-") text)
+      (check "and leaves the rest of the file alone"
+             (and (str/includes? text ";; keep me") (str/includes? text ":paths"))
+             text)
+      (check "and says what it did" (str/includes? (:out r) "added left-pad") (:out r)))
+    ;; An exact version must resolve to ITSELF. A bare `1.2.0` is a CARET RANGE
+    ;; in semver, so this was 1.3.0 until `exact-range` existed -- a pin that
+    ;; silently did nothing, which is worse than no pin at all.
+    (let [p3 (str (fs/create-temp-dir))]
+      (spit (str p3 "/deps.edn") "{}\n")
+      (sh p3 flint "deps" "add" "npm:left-pad@1.2.0")
+      (check "an exact version pins to itself, not to a caret range"
+             (str/includes? (slurp (str p3 "/deps.edn")) ":npm/version \"1.2.0\"")
+             (slurp (str p3 "/deps.edn"))))))
+
+(let [r (sh proj flint "deps" "add" "cargo:serde")]
+  (check "an unknown dependency kind is refused by name"
+         (and (not (zero? (:exit r))) (str/includes? (:out r) "cargo")) (:out r)))
+
 (if (pos? @fails)
   (do (println "sysns:" @fails "FAILURES") (System/exit 1))
   (println "sysns: ok"))
