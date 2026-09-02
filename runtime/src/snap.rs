@@ -214,11 +214,11 @@ pub fn capture_into(rt: &Rt, out: &mut Vec<u8>) {
     // --- interpreter state
     w.usz(rt.frames.len());
     for f in &rt.frames {
-        w.usz(f.fp);
+        w.u32(f.fp);
         w.u32(f.ip);
         w.u32(f.end);
-        w.usz(f.ret_to);
-        w.usz(f.handlers);
+        w.u32(f.ret_to);
+        w.u32(f.handlers);
     }
     w.usz(rt.handlers.len());
     for h in &rt.handlers {
@@ -402,11 +402,11 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     let nf = r.usz();
     let mut frames = Vec::with_capacity(nf);
     for _ in 0..nf {
-        let fp = r.usz();
+        let fp = r.u32();
         let ip = r.u32();
         let end = r.u32();
-        let ret_to = r.usz();
-        let handlers = r.usz();
+        let ret_to = r.u32();
+        let handlers = r.u32();
         frames.push(Frame {
             fp,
             ip,
@@ -420,7 +420,7 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
             #[cfg(feature = "aot")]
             aot_block: 0,
             instrs: 0,
-            resumed: false,
+            flags: 0,
         });
     }
     let nh = r.usz();
@@ -714,11 +714,11 @@ pub fn export_live(rt: &mut Rt, out: &mut Vec<u8>) -> bool {
     // --- interpreter state, byte for byte as the verbatim format writes it.
     w.usz(rt.frames.len());
     for f in &rt.frames {
-        w.usz(f.fp);
+        w.u32(f.fp);
         w.u32(f.ip);
         w.u32(f.end);
-        w.usz(f.ret_to);
-        w.usz(f.handlers);
+        w.u32(f.ret_to);
+        w.u32(f.handlers);
     }
     w.usz(rt.handlers.len());
     for h in &rt.handlers {
@@ -902,11 +902,11 @@ pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
     let nf = r.usz();
     let mut frames = Vec::with_capacity(nf);
     for _ in 0..nf {
-        let fp = r.usz();
+        let fp = r.u32();
         let ip = r.u32();
         let end = r.u32();
-        let ret_to = r.usz();
-        let handlers = r.usz();
+        let ret_to = r.u32();
+        let handlers = r.u32();
         frames.push(Frame {
             fp,
             ip,
@@ -922,7 +922,7 @@ pub fn import_live(rt: &mut Rt, bytes: &[u8]) -> bool {
             #[cfg(feature = "diagnostics")]
             instrs: 0,
             #[cfg(feature = "diagnostics")]
-            resumed: true,
+            flags: crate::vm::FRAME_RESUMED,
         });
     }
     let nh = r.usz();

@@ -192,8 +192,20 @@ pub struct Handler {
     pub shadow: usize,
 }
 
+/// One activation record.
+///
+/// **Packed deliberately, and every field is the width it means.** `fp`,
+/// `ret_to` and `handlers` were `usize` and were truncated to `u32` on the way
+/// into a thread save -- so the wider form was never anything but padding that
+/// looked like precision, and a reader had to check the serialiser to find out
+/// what the real range was. A value-stack index and a handler depth are `u32`
+/// here and `u32` there.
+///
+/// The size is measured by `frame_layout` rather than asserted, so a field
+/// added later shows up as a number instead of as a failure somewhere else.
 pub struct Frame {
-    pub fp: usize,
+    /// Frame pointer: where this frame's locals begin in the value stack.
+    pub fp: u32,
     pub ip: u32,
     pub end: u32,
     /// Stack slot holding the callee. `stack[ret_to]` IS this frame's closure
@@ -204,8 +216,10 @@ pub struct Frame {
     /// moved the closure, `UPVAL` and `SELF` read a stale address. Deriving it
     /// from the stack keeps the invariant the whole GC design rests on -- every
     /// live reference is in the value stack -- true with no second mechanism.
-    pub ret_to: usize,
-    pub handlers: usize,
+    pub ret_to: u32,
+    /// Handler-stack depth on entry. A DEPTH, not an index into anything
+    /// long-lived, so it is bounded by how deep `try` nests.
+    pub handlers: u32,
     /// Index into `image.aot`, or `AOT_NONE`. Set by `enter` from the arity it
     /// selected, so the whole AOT question is one field on the frame rather
     /// than a lookup keyed on something the frame does not carry.
@@ -223,13 +237,22 @@ pub struct Frame {
     /// run length under 0013's guard-only model.
     #[cfg(feature = "diagnostics")]
     pub instrs: u32,
-    /// Restored from a thread save, i.e. this frame has parked and come back.
-    /// 0013's pathological case is a loop that parks per iteration; without
-    /// re-entry points every instruction executed in a resumed frame is an
-    /// instruction the compiled body never gets to run.
+    /// Flags. `FRAME_RESUMED` says this frame has parked and come back --
+    /// 0013's pathological case is a loop that parks per iteration, and without
+    /// re-entry points every instruction executed in a resumed frame is one the
+    /// compiled body never gets to run.
+    ///
+    /// A WORD RATHER THAN A `bool`, so the three bytes the alignment would
+    /// spend anyway have a name and somewhere to go. The rest is reserved: if
+    /// the re-entry design ever wants "this frame has a record on the re-entry
+    /// stack" as a flag, it belongs here and costs nothing.
     #[cfg(feature = "diagnostics")]
-    pub resumed: bool,
+    pub flags: u32,
 }
+
+/// This frame has parked and been restored from a thread save.
+#[cfg(feature = "diagnostics")]
+pub const FRAME_RESUMED: u32 = 1;
 
 /// A native builtin. `base` indexes the value stack; `argc` values start there.
 /// The signature is `extern "C"` and flat so that the wasm type of the table
@@ -501,7 +524,7 @@ impl Rt {
                 crate::aotstat::NATIVE_TRACE_IP[k] = self
                     .frames
                     .last()
-                    .map(|f| f.ret_to)
+                    .map(|f| f.ret_to as usize)
                     .and_then(|rt| self.roots.stack.get(rt).copied())
                     .filter(|c| c.is_heap())
                     .filter(|c| ty(&self.gc.sp, c.as_heap()) == TY_CLOSURE)
@@ -808,11 +831,11 @@ impl Rt {
         self.roots.stack_top = fp + nlocals;
         debug_assert_eq!(self.roots.stack[callee_at], closure, "stack[ret_to] must be the callee");
         self.frames.push(Frame {
-            fp,
+            fp: fp as u32,
             ip: code,
             end,
-            ret_to: callee_at,
-            handlers: self.handlers.len(),
+            ret_to: callee_at as u32,
+            handlers: self.handlers.len() as u32,
             #[cfg(feature = "aot")]
             aot_idx,
             // Entry at the top is just the first re-entry point, so nothing
@@ -824,7 +847,7 @@ impl Rt {
             #[cfg(feature = "diagnostics")]
             instrs: 0,
             #[cfg(feature = "diagnostics")]
-            resumed: false,
+            flags: 0,
         });
         true
     }
@@ -898,7 +921,7 @@ impl Rt {
             }
             let (mut ip, fp) = {
                 let f = self.frames.last().unwrap();
-                (f.ip, f.fp)
+                (f.ip, f.fp as usize)
             };
             // The one comparison every re-entry point in the design funnels
             // through: frame entry, the instruction after a call, a resumed
@@ -981,7 +1004,7 @@ impl Rt {
                 run += 1;
                 if let Some(f) = self.frames.last_mut() {
                     f.instrs += 1;
-                    if f.resumed {
+                    if f.flags & FRAME_RESUMED != 0 {
                         COUNTS[C_RESUMED_INSTRS] += 1;
                     }
                 }
@@ -1192,9 +1215,9 @@ impl Rt {
                         // constant-space.
                         let f = self.frames.pop().unwrap();
                         #[cfg(feature = "diagnostics")]
-                        crate::aotstat::note_frame(f.instrs, f.resumed);
-                        self.handlers.truncate(f.handlers);
-                        let dest = f.ret_to;
+                        crate::aotstat::note_frame(f.instrs, (f.flags & FRAME_RESUMED != 0));
+                        self.handlers.truncate(f.handlers as usize);
+                        let dest = f.ret_to as usize;
                         for i in 0..=argc {
                             self.roots.stack[dest + i] = self.roots.stack[callee_at + i];
                         }
@@ -1236,10 +1259,10 @@ impl Rt {
                             self.vpush(r);
                             let f = self.frames.pop().unwrap();
                             #[cfg(feature = "diagnostics")]
-                            crate::aotstat::note_frame(f.instrs, f.resumed);
-                            self.handlers.truncate(f.handlers);
+                            crate::aotstat::note_frame(f.instrs, (f.flags & FRAME_RESUMED != 0));
+                            self.handlers.truncate(f.handlers as usize);
                             let v = self.vpop();
-                            self.roots.stack_top = f.ret_to;
+                            self.roots.stack_top = f.ret_to as usize;
                             self.vpush(v);
                             if self.frames.len() <= base_depth {
                                 return self.vpop();
@@ -1252,9 +1275,9 @@ impl Rt {
                     let v = self.vpop();
                     let f = self.frames.pop().unwrap();
                     #[cfg(feature = "diagnostics")]
-                    crate::aotstat::note_frame(f.instrs, f.resumed);
-                    self.handlers.truncate(f.handlers);
-                    self.roots.stack_top = f.ret_to;
+                    crate::aotstat::note_frame(f.instrs, (f.flags & FRAME_RESUMED != 0));
+                    self.handlers.truncate(f.handlers as usize);
+                    self.roots.stack_top = f.ret_to as usize;
                     self.vpush(v);
                     if self.frames.len() <= base_depth {
                         return self.vpop();
@@ -1588,11 +1611,11 @@ impl Rt {
     /// This frame's closure, read from the stack rather than cached.
     #[inline]
     fn cur_closure(&self) -> Value {
-        self.roots.stack[self.frames.last().unwrap().ret_to]
+        self.roots.stack[self.frames.last().unwrap().ret_to as usize]
     }
 
     fn frame_closure(&self, i: usize) -> Value {
-        self.roots.stack[self.frames[i].ret_to]
+        self.roots.stack[self.frames[i].ret_to as usize]
     }
 
     /// Just the frame names, for attaching to a runtime error.
@@ -1710,7 +1733,7 @@ impl Rt {
             }
             #[cfg(feature = "diagnostics")]
             for f in &self.frames[h.frame + 1..] {
-                crate::aotstat::note_frame(f.instrs, f.resumed);
+                crate::aotstat::note_frame(f.instrs, (f.flags & FRAME_RESUMED != 0));
             }
             self.frames.truncate(h.frame + 1);
             self.roots.stack_top = h.stack_top;
@@ -2122,7 +2145,7 @@ impl Rt {
                 crate::aot::resync(self);
                 let sync = crate::aot::aot_prologue();
                 self.aot_depth += 1;
-                self.call_aot(slot, cfp as u32, cret as u32, 0, sync);
+                self.call_aot(slot, cfp, cret, 0, sync);
                 self.aot_depth -= 1;
                 // NOT the frame count on its own: an unwind to a handler in this
                 // very frame truncates back to exactly the depth the call
@@ -2158,9 +2181,9 @@ impl Rt {
         let v = self.vpop();
         let f = self.frames.pop().unwrap();
         #[cfg(feature = "diagnostics")]
-        crate::aotstat::note_frame(f.instrs, f.resumed);
-        self.handlers.truncate(f.handlers);
-        self.roots.stack_top = f.ret_to;
+        crate::aotstat::note_frame(f.instrs, (f.flags & FRAME_RESUMED != 0));
+        self.handlers.truncate(f.handlers as usize);
+        self.roots.stack_top = f.ret_to as usize;
         self.vpush(v);
     }
 
@@ -2204,7 +2227,7 @@ impl Rt {
         self.frames.last_mut().unwrap().aot_ip = AOT_NEVER;
         crate::aot::resync(self);
         let sync = crate::aot::aot_prologue();
-        self.call_aot(slot, fp as u32, ret_to as u32, block, sync);
+        self.call_aot(slot, fp, ret_to, block, sync);
         core::mem::take(&mut self.aot_unwound_out)
     }
 }
@@ -2218,7 +2241,7 @@ mod frame_layout {
         // would make an unrelated field addition fail here rather than where it
         // was made.
         std::eprintln!(
-            "Frame = {} bytes, align {}; fields fp/ret_to/handlers usize, ip/end u32",
+            "Frame = {} bytes, align {}; every field u32",
             core::mem::size_of::<Frame>(),
             core::mem::align_of::<Frame>()
         );

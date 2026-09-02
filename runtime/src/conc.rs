@@ -467,11 +467,11 @@ impl Rt {
             let bytes = self.gc.sp.bytes_mut(addr + HDR, (self.frames.len() * FRAME_REC) as u32);
             for (k, f) in self.frames.iter().enumerate() {
                 let o = k * FRAME_REC;
-                bytes[o..o + 4].copy_from_slice(&(f.fp as u32).to_le_bytes());
+                bytes[o..o + 4].copy_from_slice(&f.fp.to_le_bytes());
                 bytes[o + 4..o + 8].copy_from_slice(&f.ip.to_le_bytes());
                 bytes[o + 8..o + 12].copy_from_slice(&f.end.to_le_bytes());
-                bytes[o + 12..o + 16].copy_from_slice(&(f.ret_to as u32).to_le_bytes());
-                bytes[o + 16..o + 20].copy_from_slice(&(f.handlers as u32).to_le_bytes());
+                bytes[o + 12..o + 16].copy_from_slice(&f.ret_to.to_le_bytes());
+                bytes[o + 16..o + 20].copy_from_slice(&f.handlers.to_le_bytes());
                 // The record is the same width in both builds, so a snapshot
                 // and a thread save are interchangeable between them.
                 #[cfg(feature = "aot")]
@@ -510,7 +510,7 @@ impl Rt {
         unsafe {
             use crate::aotstat::*;
             for f in &self.frames {
-                note_segment(f.instrs, f.resumed);
+                note_segment(f.instrs, (f.flags & crate::vm::FRAME_RESUMED != 0));
             }
             COUNTS[if self.park_on.bits() == PARK_YIELD.bits() {
                 C_SAVES_YIELD
@@ -577,11 +577,11 @@ impl Rt {
                     u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]])
                 };
                 self.frames.push(Frame {
-                    fp: g(o) as usize,
+                    fp: g(o),
                     ip: g(o + 4),
                     end: g(o + 8),
-                    ret_to: g(o + 12) as usize,
-                    handlers: g(o + 16) as usize,
+                    ret_to: g(o + 12),
+                    handlers: g(o + 16),
                     // A thread comes back at the instruction it parked ON, so
                     // that is where compiled code may take over again.
                     //
@@ -625,7 +625,7 @@ impl Rt {
                     #[cfg(feature = "diagnostics")]
                     instrs: 0,
                     #[cfg(feature = "diagnostics")]
-                    resumed: true,
+                    flags: crate::vm::FRAME_RESUMED,
                 });
             }
         }
