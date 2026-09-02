@@ -20,6 +20,7 @@ flint-rt = { path = "../runtime" }
 # program that spawns a thread.
 flint-conc = { path = "../units-src/flint-conc" }
 anyhow = "1"
+ureq = { version = "3.4.0", default-features = false, features = ["rustls"] }
 
 [profile.release]
 opt-level = "z"

@@ -381,7 +381,12 @@ mod tests {
 pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
     let fs = Fs { root: PathBuf::from("."), write: false };
     let env = Env { args: Vec::new() };
-    vec![(fs.name_static(), fs.vars()), (env.name_static(), env.vars())]
+    let sl = Slurp;
+    vec![
+        (fs.name_static(), fs.vars()),
+        (env.name_static(), env.vars()),
+        (sl.name_static(), sl.vars()),
+    ]
 }
 
 impl Fs {
@@ -392,5 +397,104 @@ impl Fs {
 impl Env {
     fn name_static(&self) -> &'static str {
         "flint.sys.env"
+    }
+}
+
+// ------------------------------------------------------------- flint.sys.slurp
+
+/// Bytes at a NAME. `file://`, `http://`, `https://`, `data:`.
+///
+/// One capability for all of them, and that is the uncomfortable decision this
+/// namespace exists to make (`doc/decisions/0037`). `(slurp "file:///etc/x")`
+/// and `(slurp "https://example.com/x")` are the same question -- give me the
+/// bytes at this name -- and a program reading one configuration file should
+/// not be holding the thing that can enumerate a disk, which is what `:fs` is.
+///
+/// That a URL fetch also SENDS the URL to somebody is the half that does not
+/// fit, and it is answered by the POLICY rather than by splitting the
+/// capability: the guard is coarse because the guard is checked at the
+/// reference and a URL is a run-time value, so a scheme-varying guard could not
+/// work. The allowlist is where the specific question gets answered.
+pub struct Slurp;
+
+/// The largest thing `slurp` will pull into memory.
+///
+/// A cap rather than a stream, because `slurp` answers with the WHOLE thing by
+/// definition -- a namespace that sometimes returns bytes and sometimes returns
+/// a handle is two namespaces wearing one name. Something bigger than this
+/// wants `flint.sys.stream`, which does not exist yet and is honestly absent
+/// rather than half-present.
+const SLURP_LIMIT: u64 = 64 * 1024 * 1024;
+
+fn fetch(url: &str) -> Result<Vec<u8>, String> {
+    if let Some(path) = url.strip_prefix("file://") {
+        let md = std::fs::metadata(path).map_err(|e| format!("{url}: {e}"))?;
+        if md.len() > SLURP_LIMIT {
+            return Err(format!("{url}: {} bytes is over the slurp limit", md.len()));
+        }
+        return std::fs::read(path).map_err(|e| format!("{url}: {e}"));
+    }
+    if url.starts_with("http://") || url.starts_with("https://") {
+        let resp = ureq::get(url)
+            .call()
+            .map_err(|e| format!("{url}: {e}"))?;
+        // The STATUS is checked by `ureq` for us -- a 4xx or 5xx is already an
+        // error above -- so what is left is the body and its size.
+        let mut body = Vec::new();
+        // `Read::take`, so a server that keeps sending cannot make this
+        // allocate without bound. The limit is checked with one byte of slack
+        // so that "exactly at the limit" and "over it" are distinguishable.
+        use std::io::Read as _;
+        let mut r = resp.into_body().into_reader().take(SLURP_LIMIT + 1);
+        r.read_to_end(&mut body).map_err(|e| format!("{url}: {e}"))?;
+        if body.len() as u64 > SLURP_LIMIT {
+            return Err(format!("{url}: over the slurp limit of {SLURP_LIMIT} bytes"));
+        }
+        return Ok(body);
+    }
+    // REFUSED BY NAME. A scheme nobody implemented must not fall through to
+    // "treat it as a path", which is how `https:/typo` becomes a local file
+    // read.
+    Err(format!("{url}: no such scheme -- slurp reads file://, http:// and https://"))
+}
+
+impl Service for Slurp {
+    fn name(&self) -> &str {
+        "flint.sys.slurp"
+    }
+    fn vars(&self) -> Vec<(&'static str, &'static [u32])> {
+        vec![("slurp", &[1]), ("slurp-bytes", &[1])]
+    }
+    fn invoke(&mut self, var: &str, args: &[Val], p: &Policy) -> Answer {
+        let url = str_arg(args, 0, "url")?;
+        // THE POLICY, before anything is opened. A refusal names the URL and
+        // says what would change it, because "refused" alone sends a reader to
+        // the wrong file.
+        if !p.slurp_allows(url) {
+            return Err(format!(
+                "{url} is not in this program's :slurp allowlist -- \
+                 grant it with :with [slurp:{url}] or a prefix ending in **"
+            ));
+        }
+        let bytes = fetch(url)?;
+        let mut w = Wire::new();
+        match var {
+            "slurp" => {
+                let s = String::from_utf8(bytes)
+                    .map_err(|_| format!("{url} is not utf-8; use slurp-bytes"))?;
+                w.string(&s);
+            }
+            "slurp-bytes" => {
+                w.bytes(&bytes);
+            }
+            other => return Err(format!("flint.sys.slurp has no {other}")),
+        }
+        Ok(w)
+    }
+}
+
+impl Slurp {
+    fn name_static(&self) -> &'static str {
+        "flint.sys.slurp"
     }
 }

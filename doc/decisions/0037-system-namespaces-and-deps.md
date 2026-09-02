@@ -402,12 +402,20 @@ quoted in the README since it was written is going to move:
 | `flint` binary | 2.6 MB |
 | dependencies | `flint-rt`, `flint-conc`, `anyhow` |
 
-Adding an HTTP client, a git implementation, zip/tar and semver will grow that
-substantially — plausibly to 15–25 MB — and the README's "nothing to install"
-claim has to be re-stated as what it actually becomes: still nothing to install,
-and no longer small. **The measurement goes in the commit that adds the crates,
-not in this file**, because a number nobody measured is the kind of claim this
-repository keeps a checker for.
+Adding an HTTP client, a git implementation, zip/tar and semver will grow that,
+and this file first guessed "plausibly 15–25 MB". **The first measurement says
+otherwise**, which is why the guess is left visible rather than quietly edited:
+
+| | bytes | |
+| --- | --- | --- |
+| before any crate | 2 835 088 | |
+| with `ureq` + `rustls`, used by `slurp` | 3 979 520 | **+1.1 MB** |
+
+`ureq` with `default-features = false, features = ["rustls"]` is the whole TLS
+stack for 1.1 MB, and adding the dependency changed nothing at all until
+something called it — LTO and `opt-level = "z"` removed a crate nobody used.
+So the estimate above was wrong by an order of magnitude and the honest position
+is that each crate is measured as it lands, not predicted in a table.
 
 Chosen for being pure Rust, so that cross-compilation and a static binary stay
 possible:

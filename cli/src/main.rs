@@ -358,6 +358,9 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
             write: caps.iter().any(|c| c == "fs:write"),
         }));
     }
+    if caps.iter().any(|c| c == "slurp" || c.starts_with("slurp:")) {
+        host.serve(Box::new(crate::sys::Slurp));
+    }
     if caps.iter().any(|c| c == "env" || c.starts_with("env:")) {
         host.serve(Box::new(crate::sys::Env { args: args.to_vec() }));
     }
