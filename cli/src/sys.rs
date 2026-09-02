@@ -390,6 +390,7 @@ pub fn catalogue() -> Vec<(&'static str, Vec<(&'static str, &'static [u32])>)> {
         (sl.name_static(), sl.vars()),
         (npm.name_static(), npm.vars()),
         (mvn.name_static(), mvn.vars()),
+        (crate::deps::Git.name_static(), crate::deps::Git.vars()),
     ]
 }
 

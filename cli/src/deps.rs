@@ -385,3 +385,244 @@ fn unpack_zip(body: &[u8], dir: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+
+// ------------------------------------------------------------- flint.deps.git
+
+/// Git as a FIRST-CLASS package manager (`doc/decisions/0037`).
+///
+/// Canonical `deps.edn` treats a git dependency as a URL and a sha: you pin a
+/// commit and there is no such thing as asking for a version. That is the one
+/// thing this adds, and it is why `:git/version` exists beside the canonical
+/// keys rather than instead of them:
+///
+/// ```clojure
+/// {:git/url "https://github.com/org/lib"
+///  :git/version "^1.2.0"    ; SEMVER, resolved against tags
+///  :git/sha "a1b2c3d"}      ; INTEGRITY, full or prefix
+/// ```
+///
+/// * `:git/version` resolves against the repository's TAGS. `v1.2.3`, `1.2.3`
+///   and `release-1.2.3` are all recognised, because tagging conventions differ
+///   and refusing three of the four common ones would make the feature unusable
+///   on real repositories.
+/// * `:git/sha` on top is INTEGRITY and not identity: the resolved tag must
+///   point at that commit or the fetch is refused. A prefix is compared as a
+///   prefix, so the familiar 7-character form works.
+/// * `:git/tag` keeps canonical behaviour exactly. Somebody's existing
+///   `deps.edn` has to keep meaning what it meant.
+///
+/// ## Why `git` the program, and not a git crate
+///
+/// `gix` is a large dependency tree for what this needs, which is two
+/// operations: list the remote's refs, and get one commit's tree. `git` is
+/// present wherever a developer fetches source from git at all -- the case this
+/// serves -- and shelling out to it keeps the binary small enough to stay the
+/// thing `0021` claims it is. This is a deliberate exception to "pull in the
+/// crates", made once, with the reason recorded rather than left as an
+/// inconsistency; if `git` turns out to be absent in a real environment, the
+/// crate is the answer and the surface here does not change.
+pub struct Git;
+
+impl Git {
+    pub fn name_static(&self) -> &'static str {
+        "flint.deps.git"
+    }
+}
+
+fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
+    let mut c = std::process::Command::new("git");
+    c.args(args);
+    if let Some(d) = cwd {
+        c.current_dir(d);
+    }
+    let out = c
+        .output()
+        .map_err(|e| format!("git is not available: {e} (needed for a git dependency)"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// A tag, and the version it means. `None` when the tag is not a version.
+///
+/// The four conventions that actually occur, and nothing more clever: a
+/// leading `v`, a bare number, and a `name-1.2.3` suffix. A regex would let
+/// this match things nobody meant.
+fn tag_version(tag: &str) -> Option<semver::Version> {
+    let t = tag.trim();
+    if let Ok(v) = semver::Version::parse(t.strip_prefix('v').unwrap_or(t)) {
+        return Some(v);
+    }
+    let after = t.rsplit_once('-').map(|(_, r)| r)?;
+    semver::Version::parse(after.strip_prefix('v').unwrap_or(after)).ok()
+}
+
+impl Service for Git {
+    fn name(&self) -> &str {
+        "flint.deps.git"
+    }
+    fn vars(&self) -> Vec<(&'static str, &'static [u32])> {
+        vec![
+            ("tags", &[1]),
+            ("resolve", &[2]),
+            ("resolve-tag", &[2]),
+            ("fetch", &[2]),
+        ]
+    }
+    fn invoke(&mut self, var: &str, args: &[Val], p: &Policy) -> Answer {
+        let url = str_arg(args, 0, "url")?;
+        if !p.deps_allows(url) {
+            return Err(format!("{url} is not in this program's :deps allowlist"));
+        }
+        let mut w = Wire::new();
+        match var {
+            // Every tag and the commit it points at, from ONE `ls-remote` --
+            // no clone, so asking what versions exist costs a round trip rather
+            // than a checkout.
+            "tags" => {
+                let out = git(&["ls-remote", "--tags", url], None)?;
+                let rows = parse_ls_remote(&out);
+                w.vector(rows.len() as u32);
+                for (tag, sha) in rows {
+                    w.map(2);
+                    w.keyword(None, "tag");
+                    w.string(&tag);
+                    w.keyword(None, "sha");
+                    w.string(&sha);
+                }
+            }
+            // EVERY tag matching the range, oldest first, with its sha and the
+            // version it parsed to. The caller picks -- same rule as npm.
+            "resolve" => {
+                let range = str_arg(args, 1, "range")?;
+                let req = semver::VersionReq::parse(range)
+                    .map_err(|e| format!("{range:?} is not a semver range: {e}"))?;
+                let out = git(&["ls-remote", "--tags", url], None)?;
+                let mut hits: Vec<(semver::Version, String, String)> = Vec::new();
+                for (tag, sha) in parse_ls_remote(&out) {
+                    if let Some(v) = tag_version(&tag) {
+                        if req.matches(&v) {
+                            hits.push((v, tag, sha));
+                        }
+                    }
+                }
+                hits.sort_by(|a, b| a.0.cmp(&b.0));
+                w.vector(hits.len() as u32);
+                for (v, tag, sha) in hits {
+                    w.map(3);
+                    w.keyword(None, "version");
+                    w.string(&v.to_string());
+                    w.keyword(None, "tag");
+                    w.string(&tag);
+                    w.keyword(None, "sha");
+                    w.string(&sha);
+                }
+            }
+            // CANONICAL `:git/tag`: the sha a named tag points at, unchanged.
+            "resolve-tag" => {
+                let tag = str_arg(args, 1, "tag")?;
+                let out = git(&["ls-remote", "--tags", url], None)?;
+                let hit = parse_ls_remote(&out).into_iter().find(|(t, _)| t == tag);
+                match hit {
+                    Some((_, sha)) => {
+                        w.string(&sha);
+                    }
+                    None => return Err(format!("{url} has no tag {tag}")),
+                }
+            }
+            // A SHALLOW fetch of one sha rather than a clone: it is the cheap
+            // shape, and it cannot silently give a different commit later the
+            // way a branch clone can.
+            "fetch" => {
+                let sha = str_arg(args, 1, "sha")?;
+                let dir = cache_dir("git", url, sha);
+                let stamp = dir.join(".flint-fetched");
+                if stamp.exists() {
+                    w.string(&dir.display().to_string());
+                    return Ok(w);
+                }
+                std::fs::create_dir_all(&dir).map_err(|e| format!("{dir:?}: {e}"))?;
+                git(&["init", "-q"], Some(&dir))?;
+                // `remote add` failing because it already exists is not a
+                // failure: a re-fetch into a half-finished directory is the
+                // case this has to survive.
+                let _ = git(&["remote", "add", "origin", url], Some(&dir));
+                git(&["fetch", "-q", "--depth", "1", "origin", sha], Some(&dir))?;
+                git(&["checkout", "-q", "FETCH_HEAD"], Some(&dir))?;
+                std::fs::write(&stamp, format!("{url} {sha}\n"))
+                    .map_err(|e| format!("{stamp:?}: {e}"))?;
+                w.string(&dir.display().to_string());
+            }
+            other => return Err(format!("flint.deps.git has no {other}")),
+        }
+        Ok(w)
+    }
+}
+
+/// `ls-remote --tags` output to `[(tag, sha)]`.
+///
+/// `^{}` entries are DROPPED and that is the whole subtlety here. An annotated
+/// tag is an object of its own, and `ls-remote` lists both the tag object and
+/// the commit it dereferences to, as `refs/tags/v1.0` and `refs/tags/v1.0^{}`.
+/// The commit is the one a checkout wants; taking the first line for a tag
+/// would pin the tag object, whose sha is not the commit's, and the integrity
+/// check would then fail against a correct repository.
+fn parse_ls_remote(out: &str) -> Vec<(String, String)> {
+    let mut best: Vec<(String, String)> = Vec::new();
+    for line in out.lines() {
+        let Some((sha, r)) = line.split_once('\t') else { continue };
+        let Some(name) = r.strip_prefix("refs/tags/") else { continue };
+        let (tag, deref) = match name.strip_suffix("^{}") {
+            Some(t) => (t, true),
+            None => (name, false),
+        };
+        match best.iter_mut().find(|(t, _)| t == tag) {
+            // A dereferenced entry REPLACES the tag object's.
+            Some(slot) if deref => slot.1 = sha.to_string(),
+            Some(_) => {}
+            None => best.push((tag.to_string(), sha.to_string())),
+        }
+    }
+    best
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tag_conventions_that_actually_occur() {
+        assert_eq!(tag_version("v1.2.3"), Some(semver::Version::new(1, 2, 3)));
+        assert_eq!(tag_version("1.2.3"), Some(semver::Version::new(1, 2, 3)));
+        assert_eq!(tag_version("release-1.2.3"), Some(semver::Version::new(1, 2, 3)));
+        assert_eq!(tag_version("lib-v1.2.3"), Some(semver::Version::new(1, 2, 3)));
+        assert_eq!(tag_version("nightly"), None);
+        assert_eq!(tag_version(""), None);
+    }
+
+    #[test]
+    fn an_annotated_tag_resolves_to_its_commit_and_not_to_the_tag_object() {
+        // The tag object is listed first and the commit second, with `^{}`.
+        // Taking the first would pin an object no checkout wants, and the sha
+        // integrity check would then fail against a perfectly good repository.
+        let out = "aaaa\trefs/tags/v1.0.0\nbbbb\trefs/tags/v1.0.0^{}\n";
+        assert_eq!(parse_ls_remote(out), vec![("v1.0.0".into(), "bbbb".into())]);
+    }
+
+    #[test]
+    fn a_lightweight_tag_has_only_one_line_and_keeps_it() {
+        let out = "cccc\trefs/tags/v2.0.0\n";
+        assert_eq!(parse_ls_remote(out), vec![("v2.0.0".into(), "cccc".into())]);
+    }
+
+    #[test]
+    fn heads_and_other_refs_are_not_tags() {
+        let out = "dddd\trefs/heads/main\neeee\trefs/tags/v1.0.0\n";
+        assert_eq!(parse_ls_remote(out), vec![("v1.0.0".into(), "eeee".into())]);
+    }
+}

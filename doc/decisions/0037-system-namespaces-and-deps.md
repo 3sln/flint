@@ -423,8 +423,15 @@ possible:
 
 * **`ureq`** + **`rustls`** for HTTP. Blocking, which is what a CLI wants, and
   no async runtime pulled in behind it.
-* **`gix`** for git, not `git2`: `libgit2` needs a C toolchain and OpenSSL, and
-  the point of this binary is that it needs neither.
+* **`git`, the program** -- not `gix` and not `git2`. This is a deliberate
+  exception to "pull in the crates" and the reason is measured rather than
+  aesthetic: what git resolution needs is TWO operations, `ls-remote --tags` and
+  a depth-1 fetch of one sha, and `gix` is a very large dependency tree for two
+  operations. `git` is present wherever somebody fetches source from git at all,
+  which is exactly the case this serves. Recorded here as an exception rather
+  than left to read as an inconsistency; if `git` turns out to be absent in a
+  real environment then the crate is the answer, and the surface does not
+  change.
 * **`zip`** and **`tar`** + **`flate2`** for jars and npm tarballs.
 * **`semver`** for version arithmetic, in Rust — with the caveat below.
 * **`sha2`** for integrity.

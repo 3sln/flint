@@ -365,6 +365,7 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
     if caps.iter().any(|c| c == "deps" || c.starts_with("deps:")) {
         host.serve(Box::new(crate::deps::Npm::default()));
         host.serve(Box::new(crate::deps::Mvn::default()));
+        host.serve(Box::new(crate::deps::Git));
     }
     if caps.iter().any(|c| c == "env" || c.starts_with("env:")) {
         host.serve(Box::new(crate::sys::Env { args: args.to_vec() }));
