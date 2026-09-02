@@ -317,7 +317,14 @@ echo "== hosts: every builtin is carried by every port"
 # Counted, not assumed. The count was wrong twice -- once by matching only
 # `flint/`-prefixed names, once by mispairing quotes around an escaped one --
 # and both times it reported a number that looked fine.
-./bin/check-builtins | sed 's/^/  /' || fail "check-builtins"
+# NOT `check-builtins | sed`: a pipeline's status is the LAST command's, so
+# `|| fail` would read sed's success and a real miss would pass silently. The
+# same swallow hid a broken SDK selftest earlier in this project.
+if ./bin/check-builtins > "$TMPDIR/flint-builtins.out" 2>&1; then
+  sed 's/^/  /' "$TMPDIR/flint-builtins.out"
+else
+  sed 's/^/  /' "$TMPDIR/flint-builtins.out"; fail "check-builtins"
+fi
 
 echo
 echo "== global ports: the host owns them, and passes one IN (0027)"

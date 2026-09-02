@@ -38,6 +38,20 @@ public final class Builtins {
     public static Fn byName(String n) { return TABLE.get(n); }
     static void def(String n, Fn f) { TABLE.put(n, f); }
 
+    /// The annotation names, indexed by the code `check-tag` is handed. The
+    /// codes are `flint.types/code` and `test/types.clj` asserts the tables
+    /// agree; they are integers rather than keywords because this is on the
+    /// write path of every annotated binding.
+    static final String[] TAG_NAMES = {
+        "int", "float", "number", "string", "keyword", "symbol", "boolean",
+        "vector", "map", "set", "seq", "fn", "nil", "sequential",
+    };
+
+    static final String[] GC_STAT_KEYS = {
+        "minor", "major", "bytes-allocated", "bytes-copied", "bytes-promoted",
+        "young-used", "old-live", "old-capacity",
+    };
+
     static long arg(Rt rt, int at, int i, int argc) {
         return i < argc ? rt.vat(at + i) : Val.NIL;
     }
@@ -1246,6 +1260,65 @@ rt.describe(v) + " is not a transient");
             long ns = n == 1 ? Val.NIL : rt.vat(at);
             long nm = n == 1 ? rt.vat(at) : rt.vat(at + 1);
             return Str.symbol(rt, Val.isNil(ns) ? null : nameOf(rt, ns), nameOf(rt, nm));
+        });
+
+        // --- the type-annotation barrier -----------------------------------
+        //
+        // `(let [^int x e] ...)` compiles to a bind of `check-tag(e, INT,
+        // where)`. The check is what makes the annotation SOUND rather than a
+        // hint: every read of `x` after it is known to be an int, so the reads
+        // can be specialised, and the cost is one test at the write instead of
+        // one at each read. An annotation the analyzer already proved emits no
+        // call at all, so this runs only where something was genuinely unknown.
+        //
+        // Missing here for 210 commits, because `bin/check-builtins` was
+        // looking for this file at its pre-`rt/` path and crashing instead of
+        // reporting. `byName` answers null for a native it does not have, so
+        // the symptom was not a refusal naming the missing builtin -- it was a
+        // null dereference the first time an annotated binding ran.
+        def("flint/check-tag", (rt, at, n) -> {
+            long v = rt.vat(at);
+            long code = Num.asI64(rt, rt.vat(at + 1));
+            // An unknown code is a compiler that has drifted from this table.
+            // Failing loudly beats passing everything: a silent `true` would
+            // make every annotation vacuous and every specialisation built on
+            // one unsound. The range is checked HERE because `typeP`'s default
+            // arm is permissive -- it answers the `sequential` test -- and
+            // leaning on it would turn a drifted code into a quiet yes.
+            if (code < 1 || code > 14) {
+                return rt.throwStr("IllegalArgumentException",
+                                   "check-tag: unknown type code");
+            }
+            if (rt.typeP((int) code, v)) return v;
+            String name = TAG_NAMES[(int) code - 1];
+            long site = arg(rt, at, 2, n);
+            String msg = Str.isString(rt, site)
+                ? Str.text(rt, site) + " is declared ^" + name + ", and it is not"
+                : "a value declared ^" + name + " is not one";
+            return rt.throwStr("ClassCastException", msg);
+        });
+
+        // The GC's counters, as a map. Guest-reachable through
+        // `flint.rt/gc-stats`, which `test/opaque.cljc` and `test/pause.cljc`
+        // use to assert that a shape does not allocate.
+        def("flint/gc-stats", (rt, at, n) -> {
+            long[] vals = { rt.gc.minors, rt.gc.majors, rt.gc.bytesAllocated,
+                            rt.gc.bytesCopied, rt.gc.bytesPromoted,
+                            rt.gc.youngUsed(), rt.gc.oldLive, rt.gc.oldCapacity };
+            int base = rt.mark();
+            int mi = rt.push(Maps.empty(rt));
+            for (int i = 0; i < GC_STAT_KEYS.length; i++) {
+                // The keyword stays ROOTED across `integer` and `assoc`, both
+                // of which allocate. A value in a host local does not survive
+                // an allocation (`doc/decisions/0031`).
+                int ki = rt.push(Str.keyword(rt, null, GC_STAT_KEYS[i]));
+                long vv = Num.integer(rt, vals[i]);
+                rt.setR(mi, Maps.assoc(rt, rt.r(mi), rt.r(ki), vv));
+                rt.popTo(ki);
+            }
+            long out = rt.r(mi);
+            rt.popTo(base);
+            return out;
         });
 
         // Lazy sequences and ranges.

@@ -26,6 +26,20 @@ public static class Builtins {
         return dflt;
     }
 
+    /// The annotation names, indexed by the code `check-tag` is handed. The
+    /// codes are `flint.types/code` and `test/types.clj` asserts the tables
+    /// agree; they are integers rather than keywords because this is on the
+    /// write path of every annotated binding.
+    static readonly string[] TagNames = {
+        "int", "float", "number", "string", "keyword", "symbol", "boolean",
+        "vector", "map", "set", "seq", "fn", "nil", "sequential",
+    };
+
+    static readonly string[] GcStatKeys = {
+        "minor", "major", "bytes-allocated", "bytes-copied", "bytes-promoted",
+        "young-used", "old-live", "old-capacity",
+    };
+
     static readonly Dictionary<string, Fn> Table = new();
 
     public static Fn ByName(string n) => Table.TryGetValue(n, out var f) ? f : null;
@@ -1164,6 +1178,65 @@ public static class Builtins {
             long ns = n == 1 ? Val.Nil : rt.VAt(at);
             long nm = n == 1 ? rt.VAt(at) : rt.VAt(at + 1);
             return Str.Symbol(rt, Val.IsNil(ns) ? null : NameOf(rt, ns), NameOf(rt, nm));
+        });
+
+        // --- the type-annotation barrier -----------------------------------
+        //
+        // `(let [^int x e] ...)` compiles to a bind of `check-tag(e, INT,
+        // where)`. The check is what makes the annotation SOUND rather than a
+        // hint: every read of `x` after it is known to be an int, so the reads
+        // can be specialised, and the cost is one test at the write instead of
+        // one at each read. An annotation the analyzer already proved emits no
+        // call at all, so this runs only where something was genuinely unknown.
+        //
+        // Missing here for 210 commits, because `bin/check-builtins` was
+        // looking for this file at its pre-`rt/` path and crashing instead of
+        // reporting. `ByName` answers null for a native it does not have, so
+        // the symptom was not a refusal naming the missing builtin -- it was a
+        // null dereference the first time an annotated binding ran.
+        Def("flint/check-tag", (rt, at, n) => {
+            long v = rt.VAt(at);
+            long? code = Num.AsI64(rt, rt.VAt(at + 1));
+            // An unknown code is a compiler that has drifted from this table.
+            // Failing loudly beats passing everything: a silent `true` would
+            // make every annotation vacuous and every specialisation built on
+            // one unsound. The range is checked HERE because `TypeP`'s default
+            // arm is permissive -- it answers the `sequential` test -- and
+            // leaning on it would turn a drifted code into a quiet yes.
+            if (code == null || code < 1 || code > 14) {
+                return rt.ThrowStr("IllegalArgumentException",
+                                   "check-tag: unknown type code");
+            }
+            if (rt.TypeP((int) code, v)) return v;
+            string name = TagNames[(int) code - 1];
+            long site = n > 2 ? rt.VAt(at + 2) : Val.Nil;
+            string msg = Str.IsString(rt, site)
+                ? Str.Text(rt, site) + " is declared ^" + name + ", and it is not"
+                : "a value declared ^" + name + " is not one";
+            return rt.ThrowStr("ClassCastException", msg);
+        });
+
+        // The GC's counters, as a map. Guest-reachable through
+        // `flint.rt/gc-stats`, which `test/opaque.cljc` and `test/pause.cljc`
+        // use to assert that a shape does not allocate.
+        Def("flint/gc-stats", (rt, at, n) => {
+            long[] vals = { rt.gc.minors, rt.gc.majors, rt.gc.bytesAllocated,
+                            rt.gc.bytesCopied, rt.gc.bytesPromoted,
+                            rt.gc.YoungUsed(), rt.gc.oldLive, rt.gc.oldCapacity };
+            int b = rt.Mark();
+            int mi = rt.Push(Maps.Empty(rt));
+            for (int i = 0; i < GcStatKeys.Length; i++) {
+                // The keyword stays ROOTED across `Integer` and `Assoc`, both
+                // of which allocate. A value in a host local does not survive
+                // an allocation (`doc/decisions/0031`).
+                int ki = rt.Push(Str.Keyword(rt, null, GcStatKeys[i]));
+                long vv = Num.Integer(rt, vals[i]);
+                rt.SetR(mi, Maps.Assoc(rt, rt.R(mi), rt.R(ki), vv));
+                rt.PopTo(ki);
+            }
+            long outv = rt.R(mi);
+            rt.PopTo(b);
+            return outv;
         });
 
         // Lazy sequences and ranges.

@@ -11,6 +11,11 @@ Counting this WRONG cost a session. Two traps, both live here:
   the JVM missing 153 of 155 builtins, `count` among them. An absurd number is
   a lucky failure; a plausible one gets believed.
 
+And a third, found later and worse than either: both paths went stale when the
+ports moved into `rt/`, so this script crashed before checking anything and the
+suite kept going. A check that cannot find what it checks must FAIL, not raise
+-- silence from a broken gate is indistinguishable from a pass.
+
 Run from the repo root. Exit 1 if anything is missing.
 """
 import re
@@ -27,9 +32,20 @@ def main():
         return 1
     print(f"builtins: the native runtime carries {len(names)}")
     bad = 0
-    for host, path in [("jvm", "runtimes/jvm/src/com/flint/Builtins.java"),
-                       ("clr", "runtimes/clr/src/Builtins.cs")]:
-        have = set(STR.findall(open(path).read()))
+    for host, path in [("jvm", "runtimes/jvm/src/com/flint/rt/Builtins.java"),
+                       ("clr", "runtimes/clr/src/rt/Builtins.cs")]:
+        try:
+            src = open(path).read()
+        except FileNotFoundError:
+            # A MISSING FILE IS A FAILURE, not a crash. Both paths here went
+            # stale when the ports moved into `rt/`, and the traceback that
+            # produced was swallowed by the suite -- so this file, whose whole
+            # subject is that counting wrong is expensive, spent that time
+            # counting nothing at all.
+            print(f"  FAIL {host} catalogue not found at {path}")
+            bad = 1
+            continue
+        have = set(STR.findall(src))
         missing = sorted(names - have)
         if missing:
             bad = 1

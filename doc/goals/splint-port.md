@@ -188,29 +188,52 @@ So the writers stay hand-written. Twelve lines across three runtimes is the
 correct price for three genuinely different best spellings of "put four bytes
 in a buffer".
 
-**And the reader measures the other way.** Rust reads with
-`u32::from_le_bytes([b[i], b[i+1], b[i+2], b[i+3]])`; splint generates the
-shift-and-or that the JVM and CLR already use:
+**The reader measures the same way, and an earlier entry here said the
+opposite.** That claim -- "`from_le_bytes` 19 against shift-and-or 13, so the
+generated form is BETTER" -- was wrong twice over, and it is recorded here
+rather than quietly deleted because it licensed a port that measurement
+refuses.
 
-| | instructions |
-| --- | --- |
-| `from_le_bytes` of four indexed bytes | 19 |
-| shift-and-or | 13 |
+* **Wrong baseline.** It compared against `HostReader`, which does an explicit
+  `if` and then four indexes. The GUEST `Reader` -- the one a port would
+  replace -- does `self.b.get(self.i..e)`: **one** range check for four bytes.
+* **Wrong method.** It compiled a binary with a `main` calling each form once
+  on constants, so rustc specialised them against that call site. Measuring a
+  generated function needs `--crate-type=lib`, or the numbers are about the
+  benchmark rather than the code.
 
-The generated form is BETTER than the Rust it would replace. So the answer is
-per function and not per file, which is only visible if each one is measured.
+Measured again as a lib crate, instructions to the first `ret`:
 
-What still blocks the reader is shape, not speed: all three keep these as
-METHODS on a `Reader` (`r.u32()`), and splint emits free functions. That
-wants a receiver concept -- `^:method`, with the receiver rendering as `self`
-in Rust and `this` in the other two, and a call rendering as `r.u32()`
-everywhere. Unlike the writer problem this one has no argument against it:
-all three targets want the same thing and splint simply cannot say it yet.
+| | hand-written | generated |
+| --- | --- | --- |
+| `Reader::u8` | 32 | 36 |
+| `Reader::u32` | **33** | **49** |
+| `Reader::u64` | 32 | 44 |
+| `Reader::str` | 75 | 93 |
 
-One hazard to carry into that work: the JVM and CLR readers guard `n < 0`
-before a bounds check, which catches a hostile length that overflows the add.
-`reader.splint` does not, so porting it as written would make two of the three
-LESS safe.
+Every reader primitive is WORSE generated, by 1.1x to 1.5x, and for the same
+reason as the writers: the hand-written Rust pays one bounds check where the
+shared shape pays four. So the codec's primitives are one answer after all --
+do not port -- and the interesting thing is that the per-function discipline
+was right while the number feeding it was not. **A per-function verdict built
+on a bad measurement is still a bad verdict.**
+
+Two SAFETY holes, both found by running the generated code rather than reading
+it, and both worse than the one previously recorded here:
+
+* **Rust.** Generated `text` guards with `(r.i + n) > r.b.len()` in `u32`
+  arithmetic, which wraps in release. A length of `0xfffffffe` after a 4-byte
+  header gives `4 + 0xfffffffe = 2`, the guard passes, and the slice panics --
+  in a `no_std` runtime, where the hand-written `b.get(i..e)` returns a
+  refusal.
+* **JVM.** The same input gets past the missing `n < 0` guard to a
+  `StringIndexOutOfBoundsException`.
+
+So porting `reader.splint` as written makes ALL THREE less safe, not two. And
+the guards cannot be one spelling: Rust widens to `usize` where `i + n` cannot
+wrap on 64-bit, and the JVM and CLR have no unsigned `int` and need the
+`n < 0`. That is a third genuine non-naming divergence, and an honest
+vocabulary form with three bodies rather than duplication in disguise.
 
 ### 2. The small pure files
 `Eq`, `Hash`, `Interns`, `Seqs`. Near-identical, no ownership subtleties.
@@ -352,6 +375,56 @@ Nothing lands without all of these:
    unreachable is exactly the quiet failure this guards.
 5. The generated code is diffed against what it replaces and is **not worse**.
 
+## What the codec spike found: the holes, ranked
+
+The codec was chosen as a hard case on purpose. The verdict is **partly
+portable, and the split is the opposite of what was built first**: of ~1,030
+shared lines, the ~890 in `encodeInto` / `encodeCollection` / `decodeAt` /
+`encode` / `decode` are worth generating, and the ~140 of primitives that
+`codec.splint` and `reader.splint` actually implement are the part that must
+not be. Net if the capabilities below existed: about **660 lines removed**
+across the three runtimes, from a source of ~230 -- more than `Hash` returned.
+
+The holes, ranked by how much of the REST of the port hits them:
+
+1. **No counted loop.** `for (int c = 0; c < n; c++)` appears 12 times in
+   `Codec.java` and 17 in `codec.rs`, and `Maps`, `Table`, `Vec`, `Str`,
+   `Bytes`, `Snap` and `Pike` are all loops over arrays. Nothing after `Hash`
+   can be written without it. It is also ~15 lines of `core_vocab`.
+2. **No array subject at all.** Declaring, indexing, allocating, copying and
+   measuring an array is the CONTENT of phase 3. splint has two `byte-at` and
+   `len` templates in one vocabulary and nothing general. This, not the loop,
+   is the real gate on the 4,500-line prize.
+3. **`case` arms cannot be statements.** `rt_vocab`'s `case` renders arms as
+   values, which is right for `category` and wrong for `decodeAt`'s fourteen
+   multi-statement arms. It needs the same statement/expression split `if`
+   already has, plus C#'s `break`.
+4. **Absence has no form for the TEST.** `Option<T>` against null is how every
+   partial function in `Maps`, `Vec` and `Table` answers. The `MaybeText` tag
+   solved absence in a VALUE; `if let Some(i) = ...` against `if (i != null)`
+   is unsolved.
+5. **No string building.** Rust's `format!` needs a literal format string, so a
+   variadic `str+` cannot be a template -- its Rust side has to BUILD the
+   format string, making it the first form whose implementation is code rather
+   than data.
+6. **No type parameter on a generated type.** Proven, not guessed: a `Reader`
+   holding a borrowed slice emits `error[E0261]: use of undeclared lifetime
+   name 'a`. Every borrowed cursor has this shape.
+7. **`^:method` answers the wrong question for a non-`Rt` receiver.** It means
+   "Rust `self`, JVM/CLR static", which is right for `Rt` and wrong for
+   `Reader`, where all three want an instance method. Two questions wearing
+   one mark.
+8. **Bare `(return)` emits `return null;`** on all three and compiles nowhere;
+   there are 14 bare `return;` in `Codec.java`. And an `else` whose body is an
+   `if` nests instead of emitting `else if`. Both trivial, both universal.
+
+And two findings that are not splint's fault and block the codec just as hard:
+**`codec.rs`'s shared half is 446 lines against the JVM's 290**, with nine
+divergences that have to be closed BY HAND before generating is even
+meaningful -- several of which look like drift rather than choice, since
+`schema_name_at` and `opaque_label` already exist in Rust and `codec.rs`
+simply does not call them.
+
 ## Rules that govern this, each learned by breaking it
 
 * **Generated code may not be worse or slower than the hand-written code it
@@ -374,6 +447,15 @@ Nothing lands without all of these:
   CONVERGE the runtimes, not to encode differences nobody chose.
 * **Verified or reverted.** Four attempts at the park bug were written, measured,
   and reverted rather than left in the tree as unverified interpreter changes.
+* **Measure a generated function as a LIBRARY, never as a binary.** A `main`
+  that calls each form once on constants lets rustc specialise both against
+  that call site, and the answer is about the benchmark. This is not
+  hypothetical: it is how the reader came to be recorded as 1.5x FASTER
+  generated when it is 1.5x slower, and the wrong number sat in this file
+  licensing a port that measurement refuses.
+* **Compare against the function you would actually replace.** The same wrong
+  entry measured `HostReader`, which no port would touch, instead of the guest
+  `Reader` that a port would.
 
 ## Known hazards
 
