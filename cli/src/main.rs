@@ -16,6 +16,7 @@
 
 mod deps;
 mod depscmd;
+mod pod;
 mod policy;
 mod serve;
 mod sys;
@@ -154,6 +155,15 @@ fn read_sources(dir: &Path, prefix: &str, out: &mut BTreeMap<String, String>) ->
 fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
               aot: bool, shake: bool, meta: &[(String, String)],
               roots: Option<&[String]>) -> Result<String> {
+    build_spec_with(srcs, entry, slots, aot, shake, meta, roots, &[])
+}
+
+/// The same, plus the pod namespaces this build booted.
+#[allow(clippy::too_many_arguments)]
+fn build_spec_with(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
+                   aot: bool, shake: bool, meta: &[(String, String)],
+                   roots: Option<&[String]>,
+                   pods: &[(String, Vec<String>)]) -> Result<String> {
     let mut files: BTreeMap<String, String> = BTreeMap::new();
     for (p, body) in STDLIB {
         files.insert((*p).to_string(), (*body).to_string());
@@ -194,6 +204,23 @@ fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
     // one. The CLI knows its own surface, so taking it on trust would be
     // choosing the worse of two available answers.
     out.push_str(" :workspaces [");
+    // POD namespaces, if any were declared. A pod's surface is discovered by
+    // BOOTING it, so this is the one virtual namespace whose var list costs a
+    // process -- which is why `0036` made the list optional and why a build
+    // that boots is a choice made in the open rather than a default.
+    for (ns, vars) in pods {
+        out.push_str("{:prefix ");
+        out.push_str(&edn_string(&format!("{}/", ns.replace('.', "/"))));
+        out.push_str(&format!(" :name {} :virtual true :vars [", "pod/pod"));
+        for v in vars {
+            // NO ARITIES. A pod's `describe` gives names and metadata, and
+            // arities are not always in it -- so this says "unchecked" by
+            // omitting the field rather than claiming `[]`, which would read as
+            // "takes no arguments" and refuse every real call.
+            out.push_str(&format!("{{:name {v}}} "));
+        }
+        out.push_str("]} ");
+    }
     for (ns, vars) in crate::sys::catalogue() {
         out.push_str("{:prefix ");
         out.push_str(&edn_string(&format!("{}/", ns.replace('.', "/"))));
@@ -238,6 +265,11 @@ fn build_spec(srcs: &[PathBuf], entry: &str, slots: &BTreeMap<String, u32>,
         out.push('}');
     }
     out.push('}');
+    if std::env::var("FLINT_TRACE_SPEC").is_ok() {
+        if let Some(i) = out.find(":workspaces") {
+            eprintln!("[spec] {}", &out[i..(i + 400).min(out.len())]);
+        }
+    }
     Ok(out)
 }
 
@@ -318,7 +350,24 @@ fn run_source(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
 /// put a raw EDN map above the human line that follows it.
 fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
                 roots: Option<&[String]>, quiet: bool) -> Result<(i32, String)> {
-    let spec = build_spec(srcs, entry, &parse_slots(SLOTS)?, false, false, &[], roots)?;
+    // PODS ARE BOOTED FIRST, because their surface is what the compiler needs
+    // and only a running pod can say what it is (`doc/decisions/0037`). A build
+    // with no `:flint/pods` boots nothing and this costs a map lookup.
+    let mut pods: Vec<crate::pod::Pod> = Vec::new();
+    for (ns, program, pargs) in declared_pods(srcs)? {
+        pods.push(
+            crate::pod::Pod::boot(&ns, &program, &pargs).map_err(|e| anyhow::anyhow!("{e}"))?,
+        );
+    }
+    let pod_vars: Vec<(String, Vec<String>)> = pods
+        .iter()
+        .map(|p| {
+            use crate::sys::Service as _;
+            (p.name().to_string(), p.var_names().to_vec())
+        })
+        .collect();
+    let spec = build_spec_with(srcs, entry, &parse_slots(SLOTS)?, false, false, &[], roots,
+                               &pod_vars)?;
     let mut c = Program::load(COMPILER, 3_000_000_000)
         .map_err(|e| anyhow::anyhow!("the embedded compiler did not load: {e}"))?;
     let r = c.run(&["project", &spec]);
@@ -381,11 +430,60 @@ fn run_source_q(srcs: &[PathBuf], entry: &str, args: &[String], caps: &[String],
     if caps.iter().any(|c| c == "env" || c.starts_with("env:")) {
         host.serve(Box::new(crate::sys::Env { args: args.to_vec() }));
     }
+    // A booted pod is served whatever the grants say, because DECLARING one in
+    // `deps.edn` is the grant: a pod that was started is a process this build
+    // already chose to run, and refusing to talk to it afterwards would be a
+    // check that costs a subprocess and prevents nothing.
+    for p in pods {
+        host.serve(Box::new(p));
+    }
     let out = host.run_with(&mut p, &refs, &named);
     if !quiet {
         print!("{}", out.out);
     }
     Ok((out.code, out.out))
+}
+
+/// The pods a project declares, as `(namespace, program, args)`.
+///
+/// ```clojure
+/// {:flint/pods {pod.org/postgres {:pod/program "pod-babashka-postgresql"
+///                                 :pod/args []}}}
+/// ```
+///
+/// Read from `deps.edn` with a SCAN rather than an EDN parser, for the reason
+/// `depscmd` gives: this is the host's half, and a second reader of a format
+/// the guest already owns is a second thing to keep true. The scan is deliberately
+/// narrow -- it finds `:flint/pods` and reads `symbol {:pod/program "..."}`
+/// pairs -- and anything it cannot read is simply not a pod, which fails as
+/// "no such namespace" rather than as a corrupt build.
+fn declared_pods(srcs: &[PathBuf]) -> Result<Vec<(String, String, Vec<String>)>> {
+    let mut out = Vec::new();
+    for s in srcs {
+        let f = if s.is_dir() { s.join("deps.edn") } else { continue };
+        let Ok(text) = fs::read_to_string(&f) else { continue };
+        let Some(at) = text.find(":flint/pods") else { continue };
+        let rest = &text[at..];
+        // Each entry: a symbol, then a map carrying `:pod/program`.
+        for chunk in rest.split(":pod/program").skip(1) {
+            let Some(q1) = chunk.find('"') else { continue };
+            let after = &chunk[q1 + 1..];
+            let Some(q2) = after.find('"') else { continue };
+            let program = after[..q2].to_string();
+            // The NAMESPACE is the symbol before the `{` that opened this entry.
+            let before = &rest[..rest.find(&format!("{program}")).unwrap_or(0)];
+            let ns = before
+                .rsplit('{')
+                .nth(1)
+                .and_then(|seg| seg.split_whitespace().last())
+                .unwrap_or("")
+                .to_string();
+            if !ns.is_empty() && ns != ":flint/pods" {
+                out.push((ns, program, Vec::new()));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Every namespace declared under `srcs`, for `test`.

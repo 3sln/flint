@@ -2,8 +2,9 @@
 
 > **PARTLY BUILT.** Virtual namespaces, `flint.sys.fs`, `flint.sys.env`,
 > `flint.sys.slurp`, `flint.deps.npm`, `flint.deps.mvn`, `flint.deps.git`, the
-> `.cljc` plan and `flint deps add` are in. Pods, the rest of `flint deps`,
-> `flint.sys.net`/`proc`/`clock` and deleting the old babashka path are not.
+> `.cljc` plan, `flint deps add`, capability delegation and PODS are in. The
+> rest of `flint deps`, `flint.sys.net`/`proc`/`clock` and deleting the old
+> babashka path are not.
 > See "What is built" at the bottom.
 
 > **What this banner used to say.** *"NOT BUILT — a proposal. Nothing in this
@@ -491,6 +492,15 @@ shipped binary).
 * **`flint deps add`**, which runs the `.cljc` plan rather than reimplementing
   it.
 * **Capability delegation** on a dependency entry, with both rules.
+* **Pods**, speaking babashka's protocol -- bencode over stdio, JSON payloads,
+  `describe` and `invoke`. A booted pod's `describe` supplies the var list, so a
+  pod gets the SAME compile-time checking as any other namespace:
+
+      unable to resolve d/subtract -- pod.demo is a virtual namespace
+      and does not hold subtract
+
+  Arities are omitted rather than claimed as `[]`, because a pod's `describe`
+  does not always carry them and `[]` would read as "takes no arguments".
 
 Two things the build found that the design had not:
 

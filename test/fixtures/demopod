@@ -1,0 +1,27 @@
+#!/usr/bin/env bb
+;; A minimal babashka pod: bencode over stdio, JSON payloads.
+(require '[bencode.core :as b] '[cheshire.core :as json])
+(def out (java.io.PushbackInputStream. System/in))
+(def stdout (java.io.BufferedOutputStream. System/out))
+(defn write [m] (b/write-bencode stdout m) (.flush stdout))
+(defn sread [x] (if (bytes? x) (String. x) x))
+(loop []
+  (let [msg (try (b/read-bencode out) (catch Exception _ nil))]
+    (when msg
+      (let [op (sread (get msg "op"))]
+        (cond
+          (= op "describe")
+          (write {"format" "json"
+                  "namespaces" [{"name" "pod.demo"
+                                 "vars" [{"name" "add"} {"name" "greet"}]}]})
+          (= op "invoke")
+          (let [v (sread (get msg "var"))
+                args (json/parse-string (sread (get msg "args")))
+                r (case v
+                    "pod.demo/add" (reduce + args)
+                    "pod.demo/greet" (str "hello " (first args))
+                    nil)]
+            (write {"id" (get msg "id") "value" (json/generate-string r)
+                    "status" ["done"]}))
+          (= op "shutdown") (System/exit 0)))
+      (recur))))

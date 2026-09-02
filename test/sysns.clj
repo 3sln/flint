@@ -103,6 +103,31 @@
              (str/includes? (slurp (str p3 "/deps.edn")) ":npm/version \"1.2.0\"")
              (slurp (str p3 "/deps.edn"))))))
 
+;; --- pods (`doc/decisions/0037` step 9) ------------------------------------
+;;
+;; A pod is one implementation of the SAME interface `flint.sys.fs` implements,
+;; which is the whole reason `0036` made the var list optional and sourced from
+;; `:list`. `test/fixtures/demopod` is a real babashka pod: bencode over stdio,
+;; JSON payloads, `describe` and `invoke`.
+(let [p4 (str (fs/create-temp-dir))]
+  (fs/create-dirs (str p4 "/app"))
+  (fs/copy (str root "/test/fixtures/demopod") (str p4 "/demopod"))
+  (fs/set-posix-file-permissions (str p4 "/demopod") "rwxr-xr-x")
+  (spit (str p4 "/deps.edn")
+        "{:paths [\".\"]\n :flint/pods {pod.demo {:pod/program \"./demopod\"}}}\n")
+  (spit (str p4 "/app/a.cljc")
+        "(ns app.a (:require [pod.demo :as d]))\n(defn go [_] (str \"add=\" (d/add 1 2 3) \" greet=\" (d/greet \"flint\")))\n")
+  (let [r (sh p4 flint "run" ":path" "." ":fn" "app.a/go")]
+    (check "a pod is booted, described and invoked"
+           (str/includes? (:out r) "add=6 greet=hello flint") (:out r)))
+  ;; Booting the pod is what buys the checking: `describe` gave the var list, so
+  ;; an unknown name is a COMPILE error rather than a run-time one.
+  (spit (str p4 "/app/b.cljc")
+        "(ns app.b (:require [pod.demo :as d])) (defn go [_] (d/subtract 1 2))")
+  (let [r (sh p4 flint "run" ":path" "." ":fn" "app.b/go")]
+    (check "and its var list makes an unknown var a COMPILE error"
+           (str/includes? (:out r) "does not hold subtract") (:out r))))
+
 (let [r (sh proj flint "deps" "add" "cargo:serde")]
   (check "an unknown dependency kind is refused by name"
          (and (not (zero? (:exit r))) (str/includes? (:out r) "cargo")) (:out r)))
