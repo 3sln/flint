@@ -39,7 +39,7 @@ for the first.
 | [0033](0033-bridges.md) | A bridge owns its messages | **Roadmap.** Messages in flight live in the sandbox heap and die with it, so a bridge cannot outlive its writer. Bridge-owned arenas, symmetric ends, a port as six verbs that name no sandbox, and per-port formats the WRITER serialises into |
 | [0034](0034-tagged-literals.md) | A tagged literal is a value, not a map | **Shipped.** `TY_TAGGED` on all four runtimes: `:tag` and `:form` read like a map, `=` and `hash` are structural, `assoc` keeps the type or refuses by name. The two-key map was ambiguous with a map in every format that has tags and lost the namespace in JSON |
 | [0035](0035-reader-tags.md) | A reader tag is a name; the var it names is the identity | **Partly shipped.** An unknown tag in source is now an ERROR, as in Clojure -- it used to invent a tagged literal for anything, so a typo read as a good value. `deps.edn` binds tag NAME to reader VAR, per project, applying only to that project's own roots -- so two libraries wanting `#x` no longer collide and using one is opt-in. The reader REWRITES `#x form` to `(var form)` and runs nothing, carrying the form as written. `#flint/table` is built in. `reader-tag-of` and the SDK's equivalent key are not built |
-| [0036](0036-workspace-capabilities.md) | Capabilities per workspace, guarded per dependency | **Roadmap.** A namespace resolver answering `{workspace, identity, reader-or-virtual}`: a grant says what a dependency may do, a guard says who may require it, and a VIRTUAL namespace -- flagged by the resolver, compiled to `flint.virtual/call`, spoken to over rpc on a port the library opens lazily -- is what a pod is underneath, with an OPTIONAL var list (the protocol's own `:list`, from a pod booted before the compile) buying compile-time checking. Blocked on the SDK having no notion of a project at all, which is also why `0035` step 3 was never done . Also retires `open` onto a general host-request primitive, and splits the compile-time GUARD (may this code call that code) from the run-time TOKEN (may this program do that thing) -- the first is answered by guarding the REFERENCE rather than the invocation, which is compile-time and free and makes closures ordinary values again; the second by the host once at acquisition. Load-time slot binding covers the one case compile time cannot -- an image loaded at run time whose call sites no trusted compiler checked |
+| [0036](0036-workspace-capabilities.md) | Capabilities per workspace, guarded per dependency | **Partly shipped.** Resolver, grants, workspace and var guards, and the request primitive are in; virtual namespaces, pods, load-time binding and the host-facing half are not. A namespace resolver answering `{workspace, identity, reader-or-virtual}`: a grant says what a dependency may do, a guard says who may require it, and a VIRTUAL namespace -- flagged by the resolver, compiled to `flint.virtual/call`, spoken to over rpc on a port the library opens lazily -- is what a pod is underneath, with an OPTIONAL var list (the protocol's own `:list`, from a pod booted before the compile) buying compile-time checking. Blocked on the SDK having no notion of a project at all, which is also why `0035` step 3 was never done . Also retires `open` onto a general host-request primitive, and splits the compile-time GUARD (may this code call that code) from the run-time TOKEN (may this program do that thing) -- the first is answered by guarding the REFERENCE rather than the invocation, which is compile-time and free and makes closures ordinary values again; the second by the host once at acquisition. Load-time slot binding covers the one case compile time cannot -- an image loaded at run time whose call sites no trusted compiler checked |
 | [0029](0029-jvm-runtime.md) | The JVM runtime | **Partly shipped.** Self-hosts byte for byte, all 155 builtins, threads, AOT to bytecode at 12x, all nine conformance cases |
 | [0028](0028-drivers.md) | A driver: ports are the only way to drive a sandbox | **Partly shipped.** Rust has `Driver`/`ThreadPool`/async `call`, 200 requests coalesced into 1 dispatch; the parallel collector does not exist |
 | [0024](0024-no-runtime-linking.md) | No linking at compile time; byte strings and transient ropes | **Partly shipped.** The splice and the tree shaker work with no linker; the byte strings do not exist |
@@ -51,14 +51,24 @@ what remains, and what each thing is waiting on.
 
 **Open, in the order the last measurement left them:**
 
-0. **A namespace resolver both front doors produce** (`0036` step 1) — it
-   answers `{workspace, identity, reader}` per namespace, where `workspace`
-   carries reader tags today and capability grants and guards next. The CLI has
-   source roots and reads each one's own `deps.edn`; the SDK's `compile` takes a
-   FLAT map of path to source with no boundary in it at all, which is why `0035`
-   step 3 was never done. With the resolver the COMPILER enforces the guard at
-   require-resolution time, so neither front door can be right while the other
-   is not. `0035` step 3 completed on top of it is the proof the shape works.
+0. **Virtual namespaces, and pods on top of them** (`0036` steps 4–6) — the
+   resolver flags a namespace as virtual, the compiler emits `flint.virtual/call`
+   and `flint.virtual/get` into it rather than a var reference, and a library
+   does the namespace-to-port resolution, waiting and memoisation. The optional
+   var list (the protocol's own `:list`, from a pod booted before the compile)
+   buys compile-time checking and is separable. This is what makes a babashka
+   pod expressible.
+
+   Its blocker is gone: the namespace resolver both front doors produce is
+   built, and `0035` step 3 landed on it as the proof — two workspaces binding
+   the same reader tag to different readers, each seeing its own. Grants,
+   workspace guards, var guards and the request primitive came with it.
+
+0b. **Retire `open` onto `request`** (`0036` step 7, second half) — the general
+   primitive exists and `flint.port/open` still has its own event and its own
+   path. Collapsing them is not free: a port is granted by id and never encoded,
+   so what would go is the duplication in the two builtins and not the two
+   events. Worth doing when something else touches that code.
 
 1. **The wire codec and structured ports** (`0025`) — one encoding for
    everything crossing the host boundary, an entry that takes a map, ports

@@ -1,8 +1,14 @@
 # 0036 — Capabilities are granted per workspace, and guarded per dependency
 
-> **NOT BUILT — a proposal.** Nothing in this file exists yet. It is recorded
-> now because the design leans on a notion of PROJECT that the SDK does not
-> have, and that gap is the first thing to fix — see "What the SDK is missing".
+> **PARTLY BUILT.** The resolver, grants, workspace guards, var guards and the
+> request primitive are in; virtual namespaces, pods, reference guards at load
+> time and the host-facing half are not. See "What is built" below.
+
+> **What this banner used to say.** *"NOT BUILT — a proposal. Nothing in this
+> file exists yet. It is recorded now because the design leans on a notion of
+> PROJECT that the SDK does not have, and that gap is the first thing to fix."*
+> That gap was the first thing fixed, and fixing it also closed `0035` step 3,
+> which had been open for the same reason.
 
 ## What is wrong with what we have
 
@@ -865,6 +871,29 @@ specific one, per request, as it already does. Both are wanted: without the
 guard, a library nobody vetted can open a dialogue with the embedder silently;
 without the host's check, the guard would be the only thing standing between a
 declaration and the world.
+
+## What is built
+
+Steps 1, 2, 3, 7 and 8 are done, and the order below is what remains.
+
+* **The namespace resolver** answers `{:src :file :workspace :tags :grants
+  :guard}`, and both front doors produce one -- `project/files-resolver` over a
+  path map for the SDK, `project-of` over a source root's `deps.edn` for the
+  CLI. `0035` step 3 landed on it as the proof: two workspaces binding the same
+  reader tag to different readers, in one program, each seeing its own.
+* **`:flint/capabilities-grant`** and **`:flint/capabilities-guard`** on a
+  project, checked at the `:require` edge by `project/refused-requires` and by
+  `refuse-guarded-requires!` in the CLI.
+* **`:flint/capabilities-guard`** on a var, checked at the REFERENCE by
+  `guard-check!` in the analyzer, off `record-dep!`. Emits nothing.
+* **The request primitive**: `EV_REQUEST`, `host_request`, `host_answer`,
+  `flint_answer`, `flint/request`, and `flint.host/request` guarded with
+  `:host`. In all four runtimes. `open` is NOT yet retired onto it.
+
+The standard library is its own workspace (`flint/flint`) in both front doors,
+without which a guard in it would be unenforceable: a guard is checked only
+across workspaces, and a program declaring none would share the anonymous
+workspace with the library it is being guarded against.
 
 ## Order
 

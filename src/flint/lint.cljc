@@ -22,8 +22,15 @@
   `:flint/value-meta` is metadata for the VALUE rather than the var: `m-defn`
   attaches it by wrapping the function, which is how a predicate carries its
   own explanation (`doc/decisions/0032`). A `defn`'s ordinary metadata lands on
-  the var, and the callee never sees it."
-  #{:flint/result-projected-meta :flint/result-inverts :flint/value-meta})
+  the var, and the callee never sees it.
+
+  `:flint/capabilities-guard` says which capabilities a workspace must hold to
+  REFERENCE this var (`doc/decisions/0036`). Read by the analyzer at the
+  reference site and emitted nowhere -- a guard is a compile-time construct with
+  no callable behind it, which is a security property before it is a
+  performance one."
+  #{:flint/result-projected-meta :flint/result-inverts :flint/value-meta
+    :flint/capabilities-guard})
 
 (def ^:private bare
   "The un-namespaced spelling of each, which flint does NOT read. Someone else
@@ -31,7 +38,8 @@
   which is exactly why it is reported here and not thrown by the compiler."
   {:result-projected-meta :flint/result-projected-meta
    :result-inverts        :flint/result-inverts
-   :value-meta            :flint/value-meta})
+   :value-meta            :flint/value-meta
+   :capabilities-guard    :flint/capabilities-guard})
 
 (defn- meta-of [x]
   (when (or (symbol? x) (seq? x) (vector? x) (map? x) (set? x)) (meta x)))

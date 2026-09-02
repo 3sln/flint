@@ -116,22 +116,39 @@
   (when-let [f (first (source-candidates dirs n))]
     {:src (slurp (io/file f)) :file f :root (root-of dirs f)}))
 
-(defn tag-readers-for
-  "The `:flint/tag-readers` a source root is read under.
+(defn project-of
+  "What a source root's OWN project file says about it (`doc/decisions/0036`).
 
-  Looked up from the root's OWN project file -- `deps.edn` beside it or one
-  directory up -- and never from the project doing the compiling. That is the
-  whole point: two libraries may both want `#x`, so a tag a dependency binds is
-  in scope for ITS sources and not for yours, and using one is opt-in
-  (`doc/decisions/0035`)."
+      {:name       who this workspace is
+       :tags       the reader tags its sources are read under (`0035`)
+       :grants     the capabilities it holds
+       :guard      what another workspace must hold to require it}
+
+  Read from `deps.edn` beside the root or one directory up, and never from the
+  project doing the compiling. That is the whole point of a workspace: two
+  libraries may both want `#x`, and a capability one was granted is not one the
+  other holds.
+
+  This used to be `tag-readers-for` and read the same file for one key. Reading
+  it once for all four is not only cheaper -- it is what makes the workspace a
+  single concept rather than a set of unrelated lookups that happen to share a
+  file.
+
+  `:name` defaults to the root's own path. A workspace needs an identity, not a
+  pretty one, and two roots without declared names must not collide into one --
+  which is exactly what a `nil` name shared between them would do."
   [d]
   (let [try-read (clojure.core/fn [p]
                    (try (let [m (edn/read-string (slurp p))]
-                          (when (map? m) (:flint/tag-readers m)))
-                        (catch Exception _ nil)))]
-    (or (try-read (io/file d "deps.edn"))
-        (try-read (io/file (.getParentFile (.getAbsoluteFile (io/file d))) "deps.edn"))
-        {})))
+                          (when (map? m) m))
+                        (catch Exception _ nil)))
+        m (or (try-read (io/file d "deps.edn"))
+              (try-read (io/file (.getParentFile (.getAbsoluteFile (io/file d))) "deps.edn"))
+              {})]
+    {:name (or (:flint/workspace m) (symbol (str d)))
+     :tags (or (:flint/tag-readers m) {})
+     :grants (set (:flint/capabilities-grant m))
+     :guard (set (:flint/capabilities-guard m))}))
 
 (def virtual-namespaces
   ;; flint.rt is not a namespace you can load: the analyzer turns flint.rt/x into
@@ -168,7 +185,8 @@
       (if (or (contains? sources n) (contains? virtual-namespaces n))
         (recur (rest todo) sources order)
         (if-let [s (find-source dirs n)]
-          (let [tags (tag-readers-for (:root s))
+          (let [proj (project-of (:root s))
+                tags (:tags proj)
                 st (reader/reader (:src s) {:file (:file s) :features features :tags tags})
                 forms (try (loop [acc []]
                              (let [v (reader/read-form st)]
@@ -185,10 +203,14 @@
                 nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))
                 reqs (if nsform (compiler/ns-requires nsform) [])]
             (recur (into (vec (rest todo)) reqs)
-                   ;; The tags travel WITH the source. `topo-order` and the
-                   ;; compiler read this same file again, and a tag map only
-                   ;; this loop knew about is a tag map they would get wrong.
-                   (assoc sources n (assoc s :tags tags))
+                   ;; The tags travel WITH the source, and so does everything
+                   ;; else the workspace says. `topo-order` and the compiler
+                   ;; read this same file again, and a tag map only this loop
+                   ;; knew about is a tag map they would get wrong.
+                   (assoc sources n (assoc s :tags tags
+                                           :workspace (:name proj)
+                                           :grants (:grants proj)
+                                           :guard (:guard proj)))
                    (conj order n)))
           (do (println "cannot find source for namespace" n
                        "\n  searched:" (str/join ", " dirs))
@@ -208,6 +230,43 @@
         (let [ready (filter #(every? (fn [d] (or (seen d) (not (contains? deps d)))) (deps %)) pending)
               ready (if (seq ready) ready [(first pending)])]
           (recur (into done ready) (into seen ready) (vec (remove (set ready) pending))))))))
+
+(defn refuse-guarded-requires!
+  "Stop the build on a `:require` a workspace guard refuses
+  (`doc/decisions/0036`).
+
+  Level one of two, and the one checkable from the dependency graph alone --
+  before a line of the guarded workspace has been analysed. Level two is on the
+  var and is the analyzer's, so it runs inside the compiler and applies to both
+  front doors without anything here.
+
+  Kept in step with `flint.project/refused-requires`, which is the same rule for
+  the other front door. It is duplicated for the reason `core-first` above is:
+  this script cannot call into the compiled compiler.
+
+  Checked at EVERY EDGE and never transitively -- A requires B requires C, and
+  if B holds what C guards and A does not, A still reaches C through B. That is
+  B choosing to re-export, and it is the delegation a guard cannot stop. Nothing
+  is checked within one workspace."
+  [sources features]
+  (let [bad (for [[n info] sources
+                  :let [forms (reader/read-all (:src info) {:file (:file info)
+                                                            :features features
+                                                            :tags (:tags info)})
+                        nsform (first (filter #(and (seq? %) (= 'ns (first %))) forms))]
+                  r (if nsform (compiler/ns-requires nsform) [])
+                  :let [to (get sources r)]
+                  :when (and to (seq (:guard to))
+                             (not= (:workspace info) (:workspace to)))
+                  :let [missing (remove (or (:grants info) #{}) (:guard to))]
+                  :when (seq missing)]
+              [n r (:workspace to) (:workspace info) (set missing)])]
+    (when (seq bad)
+      (binding [*out* *err*]
+        (doseq [[from to wto wfrom missing] bad]
+          (println (str from " requires " to ", which " wto " guards with "
+                        (pr-str missing) "; " wfrom " does not hold it"))))
+      (System/exit 1))))
 
 (defn core-first [order]
   ;; clojure.core is referred by every namespace, so it is always analysed
@@ -674,6 +733,10 @@
                         (cons entry-ns ['clojure.core]))
                 (contains? features :flint/check) (concat ['flint.check]))
         [sources order] (collect dirs roots features)
+        ;; BEFORE ordering and before compiling: a refused require is an answer
+        ;; about the dependency graph, and there is no point analysing a program
+        ;; that may not have what it asked for (`doc/decisions/0036`).
+        _ (refuse-guarded-requires! sources features)
         order (core-first (topo-order sources features))
         out (or out "out.wasm")
         t0 (System/nanoTime)
