@@ -54,11 +54,9 @@ become safe to port. Never port a test and its subject in the same change.
   merges it in, so a new source pays for its own subject and not for `defn`.
 * **`Hash` ships.** `splint/hash.splint` is emitted into `runtime/src/hash.rs`,
   `Hash.java` and `Hash.cs`, and those three no longer carry murmur3 by hand.
-* **`codec.splint` and `reader.splint` still ship nowhere.** They verify, and
-  that is all they do; the codec's writers and the reader's primitives remain
-  hand-written in all three runtimes. Substituting them is outstanding work,
-  and until it is done those two slices have proved the generator rather than
-  reduced the tree.
+* **`codec.splint` and `reader.splint` still ship nowhere**, and the two have
+  different reasons. Measured, not guessed -- see below. Until they land, those
+  slices proved the generator rather than reduced the tree.
 * Verified end to end: the `apply` spread, the `type-p` opcode, and `if` in both
   statement and expression position (Rust gets an `if` expression, Java and C#
   get the conditional operator, from one source).
@@ -161,6 +159,57 @@ And one that was not Rust's fault: `defstruct` emitted Java's
 and a branch for "the rest". `final` is not C#. **A two-way split with three
 targets is a default wearing a shared name**, and the fix was to write all three
 out.
+
+### 1b. What the writers measured, and why they must not be ported
+
+The four-line `u32` writer looked like the safest thing in the codebase to
+generate. It is the one function found so far that **must not be**.
+
+Rust writes `o.extend_from_slice(&n.to_le_bytes())`. The JVM and the CLR write
+four bytes one at a time, and that is the shape `codec.splint` generates for
+all three. Compiled at `-O` and counted:
+
+| | instructions |
+| --- | --- |
+| `extend_from_slice(&n.to_le_bytes())` | 18 |
+| four `push` calls | 52 |
+
+Nearly 3x, because four pushes are four capacity checks and four stores where
+the other is one reserve and one 4-byte write. **This is the first time the
+not-worse rule has blocked a port rather than tidied one**, and it blocked it
+on a measurement rather than on taste.
+
+The obvious escape -- make `write-u32-le` a vocabulary form -- is not one. The
+body would then be written three times inside the vocabulary, which is the
+same duplication moved one level down and dressed as a primitive.
+
+So the writers stay hand-written. Twelve lines across three runtimes is the
+correct price for three genuinely different best spellings of "put four bytes
+in a buffer".
+
+**And the reader measures the other way.** Rust reads with
+`u32::from_le_bytes([b[i], b[i+1], b[i+2], b[i+3]])`; splint generates the
+shift-and-or that the JVM and CLR already use:
+
+| | instructions |
+| --- | --- |
+| `from_le_bytes` of four indexed bytes | 19 |
+| shift-and-or | 13 |
+
+The generated form is BETTER than the Rust it would replace. So the answer is
+per function and not per file, which is only visible if each one is measured.
+
+What still blocks the reader is shape, not speed: all three keep these as
+METHODS on a `Reader` (`r.u32()`), and splint emits free functions. That
+wants a receiver concept -- `^:method`, with the receiver rendering as `self`
+in Rust and `this` in the other two, and a call rendering as `r.u32()`
+everywhere. Unlike the writer problem this one has no argument against it:
+all three targets want the same thing and splint simply cannot say it yet.
+
+One hazard to carry into that work: the JVM and CLR readers guard `n < 0`
+before a bounds check, which catches a hostile length that overflows the add.
+`reader.splint` does not, so porting it as written would make two of the three
+LESS safe.
 
 ### 2. The small pure files
 `Eq`, `Hash`, `Interns`, `Seqs`. Near-identical, no ownership subtleties.
