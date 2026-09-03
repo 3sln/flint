@@ -14,11 +14,12 @@
 (ns runtime.merge
   (:require [flint.impl.rt :refer [defn return if let local set do comment
                                    mark push r pop-to nil? not
-                                   cn-new bn-new cn-set bn-set-key bn-set-val
+                                   cn-new   bn-set-key bn-set-val
                                    bn-set-node hash-mask
                                    + >= != < shl bit-or
                                    Rt Value RootIx I32 NIL
-                                   CN_BASE HASH_BITS]]))
+                                   CN_BASE HASH_BITS]]
+            [flint.impl.host :refer [bn-new cn-set]]))
 
 (defn ^:method ^Value merge-two
   [^:mut ^Rt rt ^I32 shift ^Value k0 ^Value v0 ^I32 h0

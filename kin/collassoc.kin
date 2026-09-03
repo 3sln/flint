@@ -35,11 +35,12 @@
                                    for break
                                    mark push r pop-to nil? not == != <
                                    cn-hash cn-count cn-key cn-val cn-new
-                                   cn-set cn-copy-set-val
-                                   bn-new bn-set-node bitpos
+                                    
+                                    bn-set-node bitpos
                                    node-assoc val-eq
                                    + * .
-                                   Rt Value RootIx I32 Bool NIL CN_BASE]]))
+                                   Rt Value RootIx I32 Bool NIL CN_BASE]]
+            [flint.impl.host :refer [bn-new cn-set cn-copy-set-val]]))
 
 (defn ^:method ^Value coll-assoc
   [^:mut ^Rt rt ^Value n ^I32 h ^Value key ^Value val ^Value edit ^I32 shift]

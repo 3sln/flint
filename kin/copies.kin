@@ -22,12 +22,13 @@
 (ns runtime.copies
   (:require [flint.impl.rt :refer [defn return if let local set do for continue comment doc
                                    mark push r pop-to nil? not
-                                   bn-new bn-datamap bn-nodemap bn-key bn-val
+                                    bn-datamap bn-nodemap bn-key bn-val
                                    bn-node bn-set-key bn-set-val bn-set-node
                                    index-of popcount
                                    + - < == and slot bit-or bit-xor bit-and
                                    Rt Value RootIx I32 NIL
-                                   BN_EDIT]]))
+                                   BN_EDIT]]
+            [flint.impl.host :refer [bn-new]]))
 
 (defn ^:method ^Value bn-copy-insert-entry
   [^:mut ^Rt rt ^Value n ^I32 bit ^Value key ^Value val ^Value edit]

@@ -423,8 +423,6 @@
     ;; generated, by `champ.kin`, which is what makes this a second layer
     ;; rather than a second copy.
     'cn-new (own "cn_new" "cnNew" 3)
-    'bn-new (own "bn_new" "bnNew" 3)
-    'cn-set (own "set" "cnSet" 3)
     'bn-set-key (own "bn_set_key" "bnSetKey" 3)
     'bn-set-val (own "bn_set_val" "bnSetVal" 3)
     'bn-set-node (own "bn_set_node" "bnSetNode" 3)
@@ -445,7 +443,6 @@
     'cn-count (own "cn_count" "cnCount" 1)
     'cn-key (own "cn_key" "cnKey" 2)
     'cn-val (own "cn_val" "cnVal" 2)
-    'cn-copy-set-val (own "cn_copy_set_val" "cnCopySetVal" 4)
     'node-assoc (own "node_assoc" "nodeAssoc" 6)
     'coll-dissoc (own "coll_dissoc" "collDissoc" 3)
     ;; `category` is itself generated, by `kin/eq.kin`, and is reached from
