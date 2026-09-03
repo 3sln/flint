@@ -1233,6 +1233,25 @@ impl Rt {
     }
 
     pub fn map_dissoc(&mut self, m: Value, k: Value) -> Value {
+        // A ROW REF answers here, exactly as it does in `map_get`. `is_map`
+        // says true for one, and `dissoc`'s builtin guards on `is_map`, so a
+        // ref arrived here and fell into the `_` arm below -- which returns
+        // NIL. `(dissoc row :b)` was nil on all four runtimes while `assoc`,
+        // `get`, `count` and `=` on the same ref all worked.
+        //
+        // It materialises rather than removing a column: the schema is CLOSED
+        // (`doc/decisions/0026`), so there is no such thing as a row ref with
+        // one column missing. `ref_assoc` already takes the same way out.
+        if ty(&self.gc.sp, m.as_heap()) == crate::obj::TY_TABLEREF {
+            let base = self.mark();
+            let ki = self.push(k);
+            let mm = self.ref_to_map(m);
+            let mi = self.push(mm);
+            let (mv, kv) = (self.r(mi), self.r(ki));
+            let out = self.map_dissoc(mv, kv);
+            self.pop_to(base);
+            return out;
+        }
         let base = self.mark();
         let mi = self.push(m);
         let ki = self.push(k);

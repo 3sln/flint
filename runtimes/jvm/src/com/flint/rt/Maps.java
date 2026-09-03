@@ -1090,6 +1090,23 @@ public final class Maps {
     }
 
     public static long dissoc(Rt rt, long m, long k) {
+        // A ROW REF answers here, exactly as it does in `get`. `isMap` says
+        // true for one, and `dissoc`'s builtin guards on `isMap`, so a ref
+        // arrived here and fell through to the NIL at the bottom.
+        // `(dissoc row :b)` was nil on all four runtimes while `assoc`,
+        // `get`, `count` and `=` on the same ref all worked.
+        //
+        // It materialises rather than removing a column: the schema is CLOSED
+        // (`doc/decisions/0026`), so there is no such thing as a row ref with
+        // one column missing. `refAssoc` already takes the same way out.
+        if (ty(rt.gc.sp, Val.asHeap(m)) == Obj.TY_TABLEREF) {
+            int rb = rt.mark();
+            int rki = rt.push(k);
+            int rmi = rt.push(Table.refToMap(rt, m));
+            long r = dissoc(rt, rt.r(rmi), rt.r(rki));
+            rt.popTo(rb);
+            return r;
+        }
         int base = rt.mark();
         int mi = rt.push(m), ki = rt.push(k);
         long out;

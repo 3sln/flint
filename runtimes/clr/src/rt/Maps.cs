@@ -1085,6 +1085,23 @@ public static class Maps {
     }
 
     public static long Dissoc(Rt rt, long m, long k) {
+        // A ROW REF answers here, exactly as it does in `get`. `IsMap` says
+        // true for one, and `dissoc`'s builtin guards on `IsMap`, so a ref
+        // arrived here and fell through to the NIL at the bottom.
+        // `(dissoc row :b)` was nil on all four runtimes while `assoc`,
+        // `get`, `count` and `=` on the same ref all worked.
+        //
+        // It materialises rather than removing a column: the schema is CLOSED
+        // (`doc/decisions/0026`), so there is no such thing as a row ref with
+        // one column missing. `RefAssoc` already takes the same way out.
+        if (Obj.Ty(rt.gc.sp, Val.AsHeap(m)) == Obj.TyTableref) {
+            int rb = rt.Mark();
+            int rki = rt.Push(k);
+            int rmi = rt.Push(Table.refToMap(rt, m));
+            long r = Dissoc(rt, rt.R(rmi), rt.R(rki));
+            rt.PopTo(rb);
+            return r;
+        }
         int bas = rt.Mark();
         int mi = rt.Push(m), ki = rt.Push(k);
         long outv;

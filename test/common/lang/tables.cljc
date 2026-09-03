@@ -47,3 +47,28 @@
                                          (range 24)))]
                     (recur (inc i) (if (= row m) bad (inc bad))))))]
     (expect = 0 wrong)))
+
+(defn ^:flint.check/test a-row-ref-answers-every-map-operation []
+  ;; `map?` says true for a row ref, so every map operation must work on one
+  ;; -- and `dissoc` did not: it returned NIL on all four runtimes while
+  ;; `assoc`, `get`, `count` and `=` on the same ref were all correct.
+  ;;
+  ;; The cause was `dissoc`'s builtin guarding on `is_map`, which includes a
+  ;; ref, and then calling a `map_dissoc` with no ref arm -- so it fell into
+  ;; the default and returned nil. A differential test across runtimes could
+  ;; not see it, because all four fell the same way.
+  ;;
+  ;; It materialises rather than dropping a column: the schema is CLOSED, so
+  ;; there is no row ref with one column missing.
+  (let [t (ft/table S [{:a 1 :b 2 :c 3 :d 4 :e 5}])
+        row (first (ft/rows t))]
+    (expect = true (map? row))
+    (expect = 5 (count row))
+    (expect = {:a 1 :c 3 :d 4 :e 5} (dissoc row :b))
+    (expect = {:a 1 :b 2 :c 3 :d 4 :e 5} (dissoc row :zz))
+    (expect = {:a 1 :b 2 :c 3 :d 4 :e 5 :f 6} (assoc row :f 6))
+    (expect = 2 (get row :b))
+    (expect = true (contains? row :b))
+    ;; dissoc twice: the first result is a plain map, so the second is the
+    ;; ordinary path -- worth pinning that the materialised value behaves.
+    (expect = {:a 1 :d 4 :e 5} (dissoc (dissoc row :b) :c))))
