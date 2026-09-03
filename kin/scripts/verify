@@ -10,8 +10,17 @@
 set -e
 root=$(cd "$(dirname "$0")/../.." && pwd)   # kin/scripts -> repo root
 src=${1:-kin/codec.kin}
-work=${TMPDIR:-/tmp}/kin-verify
-rm -rf "$work"; mkdir -p "$work"
+# A PRIVATE WORK DIRECTORY PER RUN.
+#
+# This used to be a fixed `$TMPDIR/kin-verify`, which two concurrent runs
+# delete out from under each other -- the script starts with `rm -rf "$work"`.
+# The symptom is a missing `probe.rust` and a `targets disagree` on a source
+# that verifies perfectly on its own, which is a gate reporting red for a
+# reason that has nothing to do with the code under test. A gate that fails
+# at random gets re-run until it passes, and then it gets ignored.
+work=$(mktemp -d "${TMPDIR:-/tmp}/kin-verify.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work"
 cd "$root"
 
 mkdir -p "$work/sec"
