@@ -1,0 +1,38 @@
+### champ
+  rust   17 34 70 71 80 81 91 90 700 811 900
+  java   17 34 70 71 80 81 91 90 700 811 900
+  csharp   17 34 70 71 80 81 91 90 700 811 900
+### collnode
+  rust   50 hash=2147483649 count=2 k0=100 v0=101 k1=200 v1=201  oom=65535 roots=0
+  java   50 hash=2147483649 count=2 k0=100 v0=101 k1=200 v1=201  oom=65535 roots=0
+  csharp   50 hash=2147483649 count=2 k0=100 v0=101 k1=200 v1=201  oom=65535 roots=0
+### nodeclass
+  rust   bm=0 sz=2 0,1,2,2, roots=0
+  java   bm=0 sz=2 0,1,2,2, roots=0
+  csharp   bm=0 sz=2 0,1,2,2, roots=0
+### find
+  rust   101,65534,65534,901,301,65534,65534,| 101,901,301, eqs=11 maxroots=3 roots=0
+  java   101,65534,65534,901,301,65534,65534,| 101,901,301, eqs=11 maxroots=3 roots=0
+  csharp   101,65534,65534,901,301,65534,65534,| 101,901,301, eqs=11 maxroots=3 roots=0
+### merge
+  rust   1 10 19 35 log=BBCBB roots=0 0,0,10,11,20,21,0,0,0,0,0,40,41,30,31,0,0,0,0,0,50,51,60,61,0,0,0,70,71,80,81,0,0,0,0,0,0,0,0,
+  java   1 10 19 35 log=BBCBB roots=0 0,0,10,11,20,21,0,0,0,0,0,40,41,30,31,0,0,0,0,0,50,51,60,61,0,0,0,70,71,80,81,0,0,0,0,0,0,0,0,
+  csharp   1 10 19 35 log=BBCBB roots=0 0,0,10,11,20,21,0,0,0,0,0,40,41,30,31,0,0,0,0,0,50,51,60,61,0,0,0,70,71,80,81,0,0,0,0,0,0,0,0,
+### copies
+  rust   dm=11 nm=4 10:11 20:21 80:81 sub=44 | dm=9 10:11 80:81 | copy 80:99 | through true 5:66 | promo dm=3 nm=12 10:11 20:21 n44 n77 | demo dm=11 nm=4 10:11 20:21 80:81 n44 | setnode n55 roots=0
+  java   dm=11 nm=4 10:11 20:21 80:81 sub=44 | dm=9 10:11 80:81 | copy 80:99 | through true 5:66 | promo dm=3 nm=12 10:11 20:21 n44 n77 | demo dm=11 nm=4 10:11 20:21 80:81 n44 | setnode n55 roots=0
+  csharp   dm=11 nm=4 10:11 20:21 80:81 sub=44 | dm=9 10:11 80:81 | copy 80:99 | through true 5:66 | promo dm=3 nm=12 10:11 20:21 n44 n77 | demo dm=11 nm=4 10:11 20:21 80:81 n44 | setnode n55 roots=0
+### nodeassoc
+  rust   200:0 1:0 201:0 203:1 205:1 206:1 log=AVMIENE roots=0 bump=207
+  java   200:0 1:0 201:0 203:1 205:1 206:1 log=AVMIENE roots=0 bump=207
+  csharp   200:0 1:0 201:0 203:1 205:1 206:1 log=AVMIENE roots=0 bump=207
+### collassoc
+  rust   209:0 218:0 227:0 236:1 85,3,100,101,200,201,300,301,0,0, oom=65535 roots=0 log=BAVVCx
+  java   209:0 218:0 227:0 236:1 85,3,100,101,200,201,300,301,0,0, oom=65535 roots=0 log=BAVVCx
+  csharp   209:0 218:0 227:0 236:1 85,3,100,101,200,201,300,301,0,0, oom=65535 roots=0 log=BAVVCx
+### dissoc
+  rust   300:1 340:1 30:0 380:1 460:1 540:1 30:0 150:0 580:1 85,2,100,101,300,301, 620:1 16777216,0,200,201, oom=65535 roots=0 log=BRBBIRNCBx
+  java   300:1 340:1 30:0 380:1 460:1 540:1 30:0 150:0 580:1 85,2,100,101,300,301, 620:1 16777216,0,200,201, oom=65535 roots=0 log=BRBBIRNCBx
+  csharp   300:1 340:1 30:0 380:1 460:1 540:1 30:0 150:0 580:1 85,2,100,101,300,301, 620:1 16777216,0,200,201, oom=65535 roots=0 log=BRBBIRNCBx
+
+[exited with code 0]

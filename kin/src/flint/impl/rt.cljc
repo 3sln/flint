@@ -34,7 +34,29 @@
   {:name 'Cat :types {:rust "u8" :java "int" :csharp "int"} :methods {}})
 
 (def Bool {:name 'Bool :types {:rust "bool" :java "boolean" :csharp "bool"} :methods {}})
-(def I32 {:name 'I32 :types {:rust "u32" :java "int" :csharp "int"} :methods {}})
+(def I32
+  "A 32-bit integer whose high bit is never set: an index, a count, a shift.
+
+  Rust spells it `u32` and the ports `int`, and while the high bit stays
+  clear those agree about everything -- ordering, division, printing. Nearly
+  every number in the runtime is one of these."
+  {:name 'I32 :types {:rust "u32" :java "int" :csharp "int"} :methods {}})
+
+(def U32
+  "A 32-bit integer that MAY carry the high bit. A hash, principally.
+
+  The same host types as `I32` -- `u32` and `int` -- and a different fact
+  about the value, which is what a tag is for. Above 2^31 Rust's `u32` and
+  the ports' signed `int` disagree about `<`, `>` and `/`: `0x80000001 < 5`
+  is false in Rust and true on both ports, measured. So `<` on two of these
+  has to emit an unsigned comparison on the ports, and `<` on two `I32`s
+  must not, because `Integer.compareUnsigned` where a plain `<` would do is
+  worse code than the hand-written runtime has.
+
+  Distinguishing the two is the entire content of the difference. It cannot
+  be a type, because the types are identical; it is a claim about the value,
+  which is data, which is a tag."
+  {:name 'U32 :types {:rust "u32" :java "int" :csharp "int"} :methods {}})
 
 (def RootIx
   "An index into the shadow stack. `usize` in Rust, `int` in the other two."
@@ -73,7 +95,7 @@
   pointer."
   {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
 
-(def tags {'Rt Rt 'Value Value 'Cat Cat 'Bool Bool 'I32 I32 'RootIx RootIx
+(def tags {'Rt Rt 'Value Value 'Cat Cat 'Bool Bool 'I32 I32 'U32 U32 'RootIx RootIx
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'U32s U32s 'U64s U64s 'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
@@ -183,6 +205,55 @@
                                     :csharp (csharp-tag sym)}))
           value-names type-tags))
 
+(defn by-arg-tags
+  "A form that renders its arguments, LOOKS AT THEIR TAGS, and picks.
+
+  `choose` is `(fn [tags] -> {:templates {target -> tmpl} :tag T})`. This is
+  the vocabulary deciding: kin carried the tags here and has no opinion about
+  what they mean, which is the whole of correction C1. Another vocabulary
+  that wants a table, or a lattice, or to refuse an unknown combination,
+  writes that here instead -- and a user who wants different behaviour from
+  ours shadows the form by requiring their own vocabulary first.
+
+  The arguments are rendered ONCE. Rendering them to get the tags and again
+  to get the text would hoist any temporary twice."
+  [choose]
+  (fn [ctx form]
+    (let [rs (mapv (fn [a] (sp/kin-render-tagged ctx a)) (rest form))
+          {:keys [templates tag]} (choose (mapv :tag rs))
+          tmpl (or (get templates (t ctx))
+                   (throw (ex-info (str "kin: `" (first form) "` has no template for "
+                                        (t ctx))
+                                   {:form (first form) :target (t ctx)})))
+          code (core/fill tmpl (mapv :text rs))]
+      (sp/kin-tagged! ctx tag)
+      (if (= :statement (sp/kin-position ctx))
+        (sp/kin-emit! ctx (sp/indent-of ctx) code ";\n")
+        (sp/kin-emit! ctx code)))))
+
+(defn- both-u32
+  "The unsigned spelling when BOTH arguments are `U32`, the plain one
+  otherwise.
+
+  Both, not either. `(< hash 5)` compares a value that may carry the high bit
+  against one that cannot, and the unsigned comparison is still the right
+  one -- but a literal has no tag to say so, so requiring both would refuse
+  the commonest case. Requiring both is nonetheless what this does, because
+  the alternative is to guess: an untagged argument is not evidence of
+  anything, and silently choosing unsigned because ONE side might be large
+  is the kind of inference that produces a plausible answer. A source that
+  means the unsigned comparison against a literal still has `u<`."
+  [unsigned plain result]
+  (by-arg-tags
+   (fn [tags]
+     {:templates (if (and (= 2 (count tags)) (every? #(= U32 %) tags))
+                   unsigned plain)
+      :tag result})))
+
+(def every-target
+  "One spelling for all three, which is what a plain operator is."
+  (fn [op] {:rust op :java op :csharp op}))
+
 (defn forms []
   (merge
    (core/forms {:default-tag Value})
@@ -269,6 +340,42 @@
     ;; reaching for `<` and getting three runtimes that disagree above 2^31 --
     ;; which is exactly how `fixnum` shipped widening the wrong way for
     ;; thirteen sources without a driver noticing.
+    ;; --- THE COMPARISONS, WHICH NOW READ THEIR ARGUMENTS' TAGS ----------
+    ;;
+    ;; `<` on two `U32`s is the unsigned comparison; `<` on anything else is
+    ;; the plain one. Same source, right answer per target, and the choice is
+    ;; made HERE -- by this vocabulary, from data kin carried and did not
+    ;; read.
+    ;;
+    ;; The six `u*` forms below stay. They are not redundant: `both-u32`
+    ;; requires BOTH arguments to be tagged, and a literal carries no tag, so
+    ;; `(< hash 5)` gets the plain comparison. Naming the unsigned one is how
+    ;; a source says what it means where a tag cannot.
+    '< (both-u32 {:rust "({0} < {1})"
+                  :java "(Integer.compareUnsigned({0}, {1}) < 0)"
+                  :csharp "((uint) {0} < (uint) {1})"}
+                 (every-target "({0} < {1})") Bool)
+    '> (both-u32 {:rust "({0} > {1})"
+                  :java "(Integer.compareUnsigned({0}, {1}) > 0)"
+                  :csharp "((uint) {0} > (uint) {1})"}
+                 (every-target "({0} > {1})") Bool)
+    '<= (both-u32 {:rust "({0} <= {1})"
+                   :java "(Integer.compareUnsigned({0}, {1}) <= 0)"
+                   :csharp "((uint) {0} <= (uint) {1})"}
+                  (every-target "({0} <= {1})") Bool)
+    '>= (both-u32 {:rust "({0} >= {1})"
+                   :java "(Integer.compareUnsigned({0}, {1}) >= 0)"
+                   :csharp "((uint) {0} >= (uint) {1})"}
+                  (every-target "({0} >= {1})") Bool)
+    'quot (both-u32 {:rust "({0} / {1})"
+                     :java "Integer.divideUnsigned({0}, {1})"
+                     :csharp "((int)((uint) {0} / (uint) {1}))"}
+                    (every-target "({0} / {1})") U32)
+    'rem (both-u32 {:rust "({0} % {1})"
+                    :java "Integer.remainderUnsigned({0}, {1})"
+                    :csharp "((int)((uint) {0} % (uint) {1}))"}
+                   (every-target "({0} % {1})") U32)
+
     'u< (core/call {:rust "({0} < {1})"
                     :java "(Integer.compareUnsigned({0}, {1}) < 0)"
                     :csharp "((uint) {0} < (uint) {1})"})

@@ -17,12 +17,26 @@
 ;; source that disagrees cannot pass. It is reproduced in
 ;; `doc/goals/kin-port.md`; what is pinned here is that the fix stays fixed.
 (ns runtime.unsigned
-  (:require [flint.impl.rt :refer [defn return u< u> u<= u>= uquot urem
-                                   Rt I32 Bool]]))
+  (:require [flint.impl.rt :refer [defn return < > <= >= quot rem
+                                   Rt U32 Bool]]))
 
-(defn ^:method ^Bool ult [^Rt rt ^I32 a ^I32 b] (return (u< a b)))
-(defn ^:method ^Bool ugt [^Rt rt ^I32 a ^I32 b] (return (u> a b)))
-(defn ^:method ^Bool ule [^Rt rt ^I32 a ^I32 b] (return (u<= a b)))
-(defn ^:method ^Bool uge [^Rt rt ^I32 a ^I32 b] (return (u>= a b)))
-(defn ^:method ^I32 udiv [^Rt rt ^I32 a ^I32 b] (return (uquot a b)))
-(defn ^:method ^I32 umod [^Rt rt ^I32 a ^I32 b] (return (urem a b)))
+;; WRITTEN WITH THE PLAIN OPERATORS, and correct because the arguments carry
+;; a `^U32` tag.
+;;
+;; This file used to say `u<`, `u>`, `u<=`, `u>=`, `uquot`, `urem` -- six
+;; forms whose only job was to spell out what the generic operators could not
+;; know. `flint.impl.rt` now reads its arguments' tags: two `U32`s get
+;; `Integer.compareUnsigned` on the ports and a plain `<` in Rust, anything
+;; else gets the plain operator on all three.
+;;
+;; The generated code is BYTE-IDENTICAL to what `u<` produced, and the three
+;; runtimes still answer `0 1 1 0 715827883 0 | 1 14 2`. Retagging these
+;; parameters `^I32` makes the ports disagree with Rust again, which is the
+;; check that the tag is doing the work rather than the templates happening
+;; to coincide.
+(defn ^:method ^Bool ult [^Rt rt ^U32 a ^U32 b] (return (< a b)))
+(defn ^:method ^Bool ugt [^Rt rt ^U32 a ^U32 b] (return (> a b)))
+(defn ^:method ^Bool ule [^Rt rt ^U32 a ^U32 b] (return (<= a b)))
+(defn ^:method ^Bool uge [^Rt rt ^U32 a ^U32 b] (return (>= a b)))
+(defn ^:method ^U32 udiv [^Rt rt ^U32 a ^U32 b] (return (quot a b)))
+(defn ^:method ^U32 umod [^Rt rt ^U32 a ^U32 b] (return (rem a b)))
