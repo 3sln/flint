@@ -780,6 +780,56 @@ function) is what put `and`/`or` four files late.
 its "arrays" are heap slots and the shadow stack, which `champ.kin` already
 paid for.
 
+### What is actually left in `Maps`, counted after the block shipped
+
+The re-ranked table above was derived before any of phase 3 shipped, and its
+central claim -- that the assoc/dissoc block was gated on converging the
+hit/found sentinel -- turned out to be one line of thought rather than a
+capability. So the remainder is counted here rather than estimated.
+
+`runtime/src/map.rs`, excluding `#[test]` functions:
+
+| | functions | lines |
+| --- | --- | --- |
+| generated | 19 | 634 |
+| hand-written, needs nothing new | 26 | 254 |
+| hand-written, blocked | 11 | 375 |
+
+The blockers, by what they need:
+
+| need | functions | lines | the big ones |
+| --- | --- | --- | --- |
+| `match` on a tag | 6 | 236 | `map_assoc`, `map_get`, `map_dissoc` |
+| an absent value | 4 | 219 | the same three, plus `am_index_of` |
+| a CLOSURE argument | 5 | 133 | `map_for_each`, `node_for_each`, `hash_map_hash`, `map_eq` |
+
+`match` and absence overlap on the three public entry points, which is most of
+the remaining weight in one place. The closure group is the genuinely new
+capability: `map_for_each` takes a callback, and nothing kin has expresses a
+function argument.
+
+A CAUTION ON THIS TABLE. It was produced by pattern-matching Rust syntax, and
+that is an estimate too. `node_find` came out as "needs nothing" and does not:
+it uses `loop { ... break value }`, which yields a value and has no kin form.
+The ports spell the same function with an `out` variable and a plain `break`,
+which is the portable shape -- so the function is portable and the DETECTOR
+was wrong, not the estimate's conclusion. Treat the counts as a map of where
+the weight is, and read each function before porting it.
+
+### `node_find` has a fast path in Rust and in neither port
+
+Rust opens with `if !self.eq_may_alloc(key) { return self.node_find_scalar(...) }`
+-- a whole second copy of the walk that skips shadow-stack rooting when the key
+is a scalar, which is the common case. `eqMayAlloc` and `nodeFindScalar` exist
+in neither port.
+
+This is the `Interns` situation again: a divergence is not evidence the
+runtimes should diverge, and the trade-off very likely ports. But which way it
+ports is a MEASUREMENT -- either the fast path is worth its second copy of the
+walk and the ports should have it, or it is not and Rust should lose it. It
+should not be ported in its current shape, because that would bake one
+runtime's untested guess into all three at once.
+
 ### Never, on evidence
 
 * **`Snap`** moves to phase 5. 785/449/456 lines of direct `Gc`, `Roots`,
