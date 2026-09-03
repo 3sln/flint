@@ -883,8 +883,24 @@ signed here. Equality, the bitwise operators and `>>>` (which the vocabulary
 already spells as `hash-mask`) are safe. Nothing shipped compares or divides a
 hash, so nothing is wrong today; but the vocabulary offers `<` on an `I32`
 without saying it is only sound below 2^31, and a driver that never builds a
-high-bit value will not notice. Worth a signed/unsigned split in the tag
-system rather than a comment, and it is not done.
+high-bit value will not notice.
+
+FIXED, the way `ushr`/`sar` already answers the same question one operator
+family over: the subject names `u<`, `u>`, `u<=`, `u>=`, `uquot` and `urem`
+explicitly. `kin.lang`'s generic `<`, `>` and `quot` stay, because they are
+right for indices, counts and shifts, which is nearly every use; the unsigned
+forms exist for the values that can carry the high bit.
+
+`kin/unsigned.kin` pins it. That source ships NOWHERE -- it has no `.targets`
+-- and exists only to be verified, which makes `kin/verify` a place to pin a
+claim about what a FORM means rather than about what a runtime function does.
+Measured with `0x80000001`:
+
+    (u< hi 5)     0 0 0     agrees
+    (< hi 5)      0 1 1     DISAGREES -- negative on both ports
+
+The second line cannot live in that file, because a source whose targets
+disagree cannot pass. It is the reason the first line is worth pinning.
 ### Never, on evidence
 
 * **`Snap`** moves to phase 5. 785/449/456 lines of direct `Gc`, `Roots`,
