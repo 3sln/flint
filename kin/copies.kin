@@ -19,7 +19,7 @@
 ;; What makes them worth generating is not their length but their SAMENESS: an
 ;; off-by-one in the slot arithmetic here is a map that loses an entry, and
 ;; six near-copies in three languages is eighteen chances to make one.
-(ns runtime.copies
+(ns flint.rt.copies
   (:require [flint.impl.rt :refer [defn return if let local set do for continue comment doc
                                    mark push r pop-to nil? not
                                     bn-datamap bn-nodemap bn-key bn-val
@@ -28,7 +28,7 @@
                                    + - < == and slot bit-or bit-xor bit-and
                                    Rt Value RootIx I32 NIL
                                    BN_EDIT]]
-            [runtime.collnode :refer [bn-new]]))
+            [flint.rt.collnode :refer [bn-new]]))
 
 (defn ^:method ^Value bn-copy-insert-entry
   [^:mut ^Rt rt ^Value n ^I32 bit ^Value key ^Value val ^Value edit]

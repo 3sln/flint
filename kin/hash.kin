@@ -14,7 +14,7 @@
 ;; detail: a program ported to flint has to get the hashes it got before. The
 ;; formulas are pinned by tests in all three runtimes, which is what makes this
 ;; slice safe to replace and what makes the replacement worth checking.
-(ns runtime.hash
+(ns flint.rt.hash
   (:require [flint.impl.hash :refer [defn let if return defconst hex
                                      mul32 add32 shl ushr sar bit-xor rotl ==
                                      low32 high32 set

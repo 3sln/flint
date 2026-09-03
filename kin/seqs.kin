@@ -20,7 +20,7 @@
 ;; inside a mutable one. Java and C# accept the nested form and lose nothing
 ;; by the hoist, which is the ordinary shape of a divergence here: one target
 ;; needs a word, the others do not care.
-(ns runtime.seqs
+(ns flint.rt.seqs
   (:require [flint.impl.rt :refer [defn return if let do == pop-to
                                    mark push r alloc set-at heap fixnum
                                    nil? slot num-f64 not > < >= <= comment

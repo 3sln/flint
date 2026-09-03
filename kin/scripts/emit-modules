@@ -1,0 +1,21 @@
+#!/usr/bin/env bb
+;; Write every source as a WHOLE MODULE under `kingen/`.
+;;
+;;     kin/scripts/emit-modules
+;;
+;; TRANSITIONAL, alongside `kin/scripts/emit`, which still splices regions.
+;; Both read the same sources through the same vocabularies; only the
+;; target's `:emit` differs. Running both and diffing the two answers is what
+;; shows the scrub moved the code without changing it.
+(require '[kin.project :as kp]
+         '[flint.impl.project :as fp]
+         '[flint.impl.targets :as targets])
+
+(let [{:keys [order emitted]} (kp/emit-all! @fp/module-project)]
+  (doseq [label order]
+    (println label)
+    (doseq [{:keys [target] p :path} (get emitted label)]
+      (println (format "  %-8s %s" (name target)
+                       (if p
+                         (str (get targets/module-roots target) "/" p)
+                         "(no destination -- generated and not written)"))))))

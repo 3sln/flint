@@ -16,7 +16,7 @@
 ;; runtimes do not agree on where `is_sequential` lives -- Rust keeps it beside
 ;; `category`, the ports keep it on `Rt` -- so a single region cannot span
 ;; `category` through here in all three files.
-(ns runtime.eqalloc
+(ns flint.rt.eqalloc
   (:require [flint.impl.rt :refer [defn doc return if and not != is-heap category
                                    Rt Value Bool CAT_SCALAR]]))
 

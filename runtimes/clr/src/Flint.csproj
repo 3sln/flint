@@ -9,4 +9,12 @@
          checked by the interpreter's own invariants. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- TRANSITIONAL. The generated modules under `kingen/` exist beside the
+         regions they replace so the two can be diffed, and until the regions
+         go they are the same code twice. An SDK project globs `**/*.cs`, so
+         they have to be excluded by name or every function is declared
+         twice. This Remove is deleted in the same commit as the regions. -->
+    <Compile Remove="kingen/**" />
+  </ItemGroup>
 </Project>

@@ -16,7 +16,7 @@
 ;; The second line is why these forms exist and is not in this file, because a
 ;; source that disagrees cannot pass. It is reproduced in
 ;; `doc/goals/kin-port.md`; what is pinned here is that the fix stays fixed.
-(ns runtime.unsigned
+(ns flint.rt.unsigned
   (:require [flint.impl.rt :refer [defn return < > <= >= quot rem
                                    Rt U32 Bool]]))
 

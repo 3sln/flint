@@ -8,7 +8,7 @@
 ;; What it decides is load-bearing: a ROW REF is in the MAP category, because
 ;; it is `=` to a map with the same entries (`doc/decisions/0026`), and this
 ;; function is where that is said.
-(ns runtime.eq
+(ns flint.rt.eq
   (:require [flint.impl.rt :refer [defn if return case comment not
                                    is-heap as-heap ty ==
                                    TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ

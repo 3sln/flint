@@ -21,7 +21,7 @@
 ;; an `out` variable and `break` plain. `forever` is new vocabulary for the
 ;; loop itself -- `(while true ...)` would emit `while true`, which rustc lints
 ;; and which does not tell the type checker the loop diverges.
-(ns runtime.find
+(ns flint.rt.find
   (:require [flint.impl.rt :refer [defn return if let local set do comment
                                    forever for break
                                    mark push r set-r pop-to not == != <

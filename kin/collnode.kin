@@ -13,7 +13,7 @@
 ;; so a helper that exists in two runtimes and not the third splits what
 ;; would otherwise be one source. That is the honest cost of the divergence,
 ;; and it is cheaper than inventing a `cn_set` for Rust that nothing calls.
-(ns runtime.collnode
+(ns flint.rt.collnode
   (:require [flint.impl.rt :refer [defn return if let comment doc not do for
                                    push r pop-to alloc set-at heap fixnum
                                    mark nil? set-slot popcount

@@ -11,7 +11,7 @@
 ;; level of the trie, so either they differ deeper -- and this recurses to
 ;; build the intermediate nodes -- or they have the same 32-bit hash all the
 ;; way down, and go side by side in a collision node.
-(ns runtime.merge
+(ns flint.rt.merge
   (:require [flint.impl.rt :refer [set-slot defn return if let local set do comment
                                    mark push r pop-to nil? not
                                    cn-new   bn-set-key bn-set-val
@@ -19,7 +19,7 @@
                                    + >= != < shl bit-or
                                    Rt Value RootIx I32 NIL
                                    CN_BASE HASH_BITS]]
-            [runtime.collnode :refer [bn-new]]))
+            [flint.rt.collnode :refer [bn-new]]))
 
 (defn ^:method ^Value merge-two
   [^:mut ^Rt rt ^I32 shift ^Value k0 ^Value v0 ^I32 h0

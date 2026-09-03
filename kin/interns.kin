@@ -18,7 +18,7 @@
 ;; These are INSTANCE methods on all three, which `^:method` could not say:
 ;; it means "Rust `self`, the others a static taking it", true of `Rt`'s
 ;; methods and false of a table's own. `^:instance` is the second question.
-(ns runtime.interns
+(ns flint.rt.interns
   (:require [flint.impl.rt :refer [defn return while set let doc as-idx
                                    aget aset alen bits of-bits
                                    . + - * >= != bit-and

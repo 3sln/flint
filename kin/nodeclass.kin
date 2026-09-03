@@ -9,7 +9,7 @@
 ;; inside an `else`, and kin's `case` is for tags rather than for small integer
 ;; ranges. The ports say the same thing in one less level of nesting, which is
 ;; the tie-breaker whenever both spellings are correct.
-(ns runtime.nodeclass
+(ns flint.rt.nodeclass
   (:require [flint.impl.rt :refer [defn return if let comment doc not
                                    ty as-heap popcount == !=
                                    bn-datamap bn-nodemap

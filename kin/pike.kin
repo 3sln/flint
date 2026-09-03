@@ -11,7 +11,7 @@
 ;; because the comparison form lets LLVM find the ASCII case-fold trick and
 ;; merge the A-Z and a-z ranges into one masked test. Convergence paying
 ;; rather than costing, as the rotate intrinsic did in `hash`.
-(ns runtime.pike
+(ns flint.rt.pike
   (:require [flint.impl.rt :refer [defn return case not and or ==
                                    >= <= I32 Bool]]))
 

@@ -68,7 +68,7 @@
 ;; vocabulary and `coll_assoc`'s call to `node_assoc` resolves to the
 ;; definition above it. That is the positional rule doing the work the cycle
 ;; used to: one of the two edges is a forward reference, and only one.
-(ns runtime.assoc
+(ns flint.rt.assoc
   (:require [flint.impl.rt :refer [set-slot defn return if let local set do comment
                                    for break
                                    mark push r pop-to nil? not == != <
@@ -82,7 +82,7 @@
                                    + - * bit-and .
                                    Rt Value RootIx I32 Bool NIL
                                    CN_BASE HASH_BITS]]
-            [runtime.collnode :refer [bn-new cn-copy-set-val]]))
+            [flint.rt.collnode :refer [bn-new cn-copy-set-val]]))
 
 (defn ^:method ^Value node-assoc
   [^:mut ^Rt rt ^Value n ^I32 shift ^I32 h ^Value key ^Value val ^Value edit]

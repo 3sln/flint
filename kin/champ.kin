@@ -16,7 +16,7 @@
 ;; arrays. It reads heap slots, and all three already agree on how -- Rust
 ;; through a method on `Rt`, the JVM and CLR through a static taking one.
 ;; Three call templates, not an array subject.
-(ns runtime.champ
+(ns flint.rt.champ
   (:require [flint.impl.rt :refer [defn return + - * comment doc
                                    slot set-slot olen as-fixnum to-i32
                                    Rt Value I32
