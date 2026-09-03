@@ -455,6 +455,10 @@ impl Rt {
     /// value stack cannot move underneath it, so none of the cached bases need
     /// reloading afterwards.
     #[inline]
+    /// THE type test. `flint/check-tag` in `builtins.rs` restated this whole
+    /// match, and the two drifted the moment a map entry became a vector: this
+    /// one answered `vector?` and the other one did too, differently. It now
+    /// delegates here, so there is one table.
     pub(crate) fn type_p(&self, code: u8, v: Value) -> bool {
         match code {
             1 => self.is_int(v),
@@ -464,7 +468,7 @@ impl Rt {
             5 => self.is_keyword(v),
             6 => self.is_symbol(v),
             7 => v.is_bool(),
-            8 => self.is_vector(v),
+            8 => self.is_vector_like(v),
             9 => self.is_map(v),
             10 => self.is_set(v),
             11 => self.is_seq(v),

@@ -56,6 +56,17 @@ public final class Builtins {
         return i < argc ? rt.vat(at + i) : Val.NIL;
     }
 
+    /// A MAP ENTRY as a real two-element vector, for the operations Clojure
+    /// gives vector semantics: `conj` appends, `assoc` replaces.
+    static long mapEntryAsVec(Rt rt, long e) {
+        int base = rt.mark();
+        rt.push(rt.slot(e, 0));
+        rt.push(rt.slot(e, 1));
+        long out = Vec.fromRoots(rt, base, 2);
+        rt.popTo(base);
+        return out;
+    }
+
     static {
         // Arithmetic. flint's integers OVERFLOW rather than wrap, which
         // `doc/decisions/0010` names as one of the ways two hosts quietly
@@ -345,7 +356,18 @@ public final class Builtins {
             // A MAP ENTRY conses, exactly as `coll.rs`'s default arm does.
             // It is sequential -- the type-test switch says so now -- and
             // `Seqs.seq` already knows how to walk one.
-            if (Val.isNil(v) || rt.isSeq(v) || rt.isHeapTy(v, TY_MAPENTRY)) {
+            // A MAP ENTRY appends, because it is a vector (Clojure). It is
+            // ALSO sequential, so it would otherwise cons in the branch below
+            // -- both readings exist and Clojure picks the vector one.
+            if (rt.isHeapTy(v, TY_MAPENTRY)) {
+                int mb = rt.mark();
+                int vi = rt.push(mapEntryAsVec(rt, v));
+                for (int i = 1; i < n; i++) rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.vat(at + i)));
+                long out = rt.r(vi);
+                rt.popTo(mb);
+                return out;
+            }
+            if (Val.isNil(v) || rt.isSeq(v)) {
                 long acc = Val.isNil(v) ? Seqs.emptyList(rt) : v;
                 for (int i = 1; i < n; i++) acc = Seqs.cons(rt, rt.vat(at + i), acc);
                 return acc;
@@ -597,6 +619,25 @@ rt.describe(v) + " is not a transient");
                 }
                 long out = rt.r(ai);
                 rt.popTo(base);
+                return out;
+            }
+            // A MAP ENTRY is a vector, so it is associative and `assoc`
+            // indexes it. Without this it would answer `associative?` true --
+            // that is `(or map? vector?)` -- and then refuse.
+            if (rt.isHeapTy(acc, TY_MAPENTRY)) {
+                int ab = rt.mark();
+                int vi = rt.push(mapEntryAsVec(rt, acc));
+                for (int i = 1; i + 1 < n; i += 2) {
+                    long k = rt.vat(at + i);
+                    if (!Val.isFixnum(k)) {
+                        rt.popTo(ab);
+                        return rt.throwStr("IllegalArgumentException",
+                                           "a map entry is indexed by 0 and 1");
+                    }
+                    rt.setR(vi, Vec.assoc(rt, rt.r(vi), (int) Val.asFixnum(k), rt.vat(at + i + 1)));
+                }
+                long out = rt.r(vi);
+                rt.popTo(ab);
                 return out;
             }
             return rt.throwStr("UnsupportedOperationException",

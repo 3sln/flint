@@ -142,6 +142,21 @@ impl Rt {
             // every indexed collection here. The default arm conses, and a
             // table consed onto is not a table.
             crate::obj::TY_TABLE => self.table_conj(coll, x),
+            // A MAP ENTRY is a vector, so `conj` APPENDS rather than consing:
+            // `(conj (first {:a 1}) 9)` is `[:a 1 9]`, as in Clojure. It falls
+            // through to the cons arm otherwise, because a map entry is also
+            // sequential -- both readings are available and Clojure picks the
+            // vector one.
+            TY_MAPENTRY => {
+                let base = self.mark();
+                let xi = self.push(x);
+                let v = self.map_entry_as_vec(coll);
+                let vi = self.push(v);
+                let (vv, xv) = (self.r(vi), self.r(xi));
+                let out = self.vec_conj(vv, xv);
+                self.pop_to(base);
+                out
+            }
             _ => self.cons(x, coll),
         }
     }
@@ -215,6 +230,20 @@ impl Rt {
             // schema does not constrain the result, because the result is no
             // longer a row.
             crate::obj::TY_TABLEREF => self.ref_assoc(coll, k, v),
+            // A MAP ENTRY is a vector, so it is associative and `assoc`
+            // indexes it. Without this it would claim `associative?` -- which
+            // is `(or map? vector?)` -- and then refuse.
+            TY_MAPENTRY => {
+                let base = self.mark();
+                let ki = self.push(k);
+                let vi = self.push(v);
+                let ev = self.map_entry_as_vec(coll);
+                let ei = self.push(ev);
+                let (evv, kv, vv) = (self.r(ei), self.r(ki), self.r(vi));
+                let out = self.assoc(evv, kv, vv);
+                self.pop_to(base);
+                out
+            }
             _ => self.throw_str("ClassCastException", "assoc needs an associative collection"),
         }
     }

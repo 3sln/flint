@@ -42,6 +42,17 @@ public static class Builtins {
 
     static readonly Dictionary<string, Fn> Table = new();
 
+    /// A MAP ENTRY as a real two-element vector, for the operations Clojure
+    /// gives vector semantics: `conj` appends, `assoc` replaces.
+    static long MapEntryAsVec(Rt rt, long e) {
+        int bas = rt.Mark();
+        rt.Push(rt.Slot(e, 0));
+        rt.Push(rt.Slot(e, 1));
+        long outv = Vec.FromRoots(rt, bas, 2);
+        rt.PopTo(bas);
+        return outv;
+    }
+
     public static Fn ByName(string n) => Table.TryGetValue(n, out var f) ? f : null;
     static void Def(string n, Fn f) => Table[n] = f;
 
@@ -334,7 +345,18 @@ public static class Builtins {
             // A MAP ENTRY conses, exactly as `coll.rs`'s default arm does.
             // It is sequential -- the type-test switch says so now -- and
             // `Seqs.Seq` already knows how to walk one.
-            if (Val.IsNil(v) || rt.IsSeq(v) || rt.IsHeapTy(v, Obj.TyMapentry)) {
+            // A MAP ENTRY appends, because it is a vector (Clojure). It is
+            // ALSO sequential, so it would otherwise cons in the branch below
+            // -- both readings exist and Clojure picks the vector one.
+            if (rt.IsHeapTy(v, Obj.TyMapentry)) {
+                int mb = rt.Mark();
+                int vi = rt.Push(MapEntryAsVec(rt, v));
+                for (int i = 1; i < n; i++) rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.VAt(at + i)));
+                long o2 = rt.R(vi);
+                rt.PopTo(mb);
+                return o2;
+            }
+            if (Val.IsNil(v) || rt.IsSeq(v)) {
                 long acc = Val.IsNil(v) ? Seqs.EmptyList(rt) : v;
                 for (int i = 1; i < n; i++) acc = Seqs.Cons(rt, rt.VAt(at + i), acc);
                 return acc;
@@ -563,6 +585,25 @@ public static class Builtins {
                 long outv = rt.R(ai);
                 rt.PopTo(bas);
                 return outv;
+            }
+            // A MAP ENTRY is a vector, so it is associative and `assoc`
+            // indexes it. Without this it would answer `associative?` true --
+            // that is `(or map? vector?)` -- and then refuse.
+            if (rt.IsHeapTy(acc, Obj.TyMapentry)) {
+                int ab = rt.Mark();
+                int avi = rt.Push(MapEntryAsVec(rt, acc));
+                for (int i = 1; i + 1 < n; i += 2) {
+                    long k4 = rt.VAt(at + i);
+                    if (!Val.IsFixnum(k4)) {
+                        rt.PopTo(ab);
+                        return rt.ThrowStr("IllegalArgumentException",
+                                           "a map entry is indexed by 0 and 1");
+                    }
+                    rt.SetR(avi, Vec.Assoc(rt, rt.R(avi), (int) Val.AsFixnum(k4), rt.VAt(at + i + 1)));
+                }
+                long o3 = rt.R(avi);
+                rt.PopTo(ab);
+                return o3;
             }
             return rt.ThrowStr("UnsupportedOperationException", "assoc onto " + rt.Describe(acc) + " needs more of the data structures");
         });

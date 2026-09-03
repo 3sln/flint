@@ -25,29 +25,51 @@
 
 ;; --- the two tables must agree ---------------------------------------------
 ;;
-;; The codes live twice: `flint.types/code` and the match in
-;; `runtime/src/builtins.rs`. Drift between them would not fail loudly -- it
-;; would check the WRONG type, quietly, at every annotated binding.
+;; The codes live twice: `flint.types/code` and the match in `Rt::type_p`
+;; (`runtime/src/vm.rs`). Drift between them would not fail loudly -- it would
+;; check the WRONG type, quietly, at every annotated binding.
+;;
+;; It used to scrape `builtins.rs`, which carried a SECOND copy of the same
+;; match for `flint/check-tag`. The copies drifted the moment a map entry
+;; became a vector: the interpreter answered `vector?` one way and `check-tag`
+;; the other, for the same value. `check-tag` now delegates to `type_p`, so
+;; there is one table in the runtime and this reads it.
 (let [cljc (slurp "src/flint/types.cljc")
-      rs   (slurp "runtime/src/builtins.rs")
+      rs   (slurp "runtime/src/vm.rs")
       from-cljc (into {} (for [[_ k v] (re-seq #":(\w+) (\d+)" (re-find #"\{:int 1[^}]+\}" cljc))]
                            [(keyword k) (parse-long v)]))
-      body (re-find #"(?s)let ok = match code \{.*?\n        \};" rs)
-      ;; `rt.is_int(v)` and `v.is_nil()` both appear, so the receiver is skipped
-      ;; and the predicate NAME is what gets compared.
-      from-rs (into {} (for [[_ n f] (re-seq #"(\d+) => \w+\.is_(\w+)\(" body)]
+      ;; The `(` is load-bearing. Without it the pattern matched `type_pX`
+      ;; too, so renaming the function still "found" a table and every check
+      ;; below passed over the wrong text -- a scraper that cannot fail to
+      ;; find its subject cannot fail at all.
+      body (re-find #"(?s)pub\(crate\) fn type_p\(.*?\n    \}" rs)
+      ;; `self.is_int(v)` and `v.is_bool()` both appear, so the receiver is
+      ;; skipped and the predicate NAME is what gets compared. `is_vector_like`
+      ;; is matched as `vector` -- the trailing `_like` is deliberate and is
+      ;; about a map entry ALSO being a vector, not about a different type.
+      ;; `(or body "")`, so a missing table fails as a CHECK rather than as a
+      ;; NullPointerException from `re-seq`. A stack trace says the test broke;
+      ;; a named failure says the runtime moved.
+      from-rs (into {} (for [[_ n f] (re-seq #"(\d+) => \w+\.is_(\w+?)(?:_like)?\(" (or body ""))]
                          [(parse-long n) f]))]
   (check-that "the cljc table was found and is not empty" (>= (count from-cljc) 14))
-  (check-that "the rust table was found and is not empty" (>= (count from-rs) 14))
-  (check "the two tables have the same number of codes" (count from-rs) (count from-cljc))
+  ;; `type_p`'s last arm is `_ => is_sequential`, not `14 =>`, so 14 is not in
+  ;; the scrape. It is asserted by name instead of being silently absent.
+  (check-that "the rust table was found and is not empty"
+              (and (some? body) (>= (count from-rs) 13)))
+  (check-that "code 14 is sequential, from type_p's default arm"
+              (some? (re-find #"_ => self\.is_sequential\(" (or body ""))))
+  (check "the two tables have the same number of codes"
+         (inc (count from-rs)) (count from-cljc))
   (check "the code sets are identical"
-         (sort (vals from-cljc)) (sort (keys from-rs)))
+         (sort (vals from-cljc)) (sort (conj (keys from-rs) 14)))
   ;; And they must be about the same types, not merely the same size.
   (let [names {:int "int" :float "float" :number "number" :string "string"
                :keyword "keyword" :symbol "symbol" :boolean "bool" :vector "vector"
                :map "map" :set "set" :seq "seq" :fn "fn" :nil "nil"
                :sequential "sequential"}
         bad (for [[k v] from-cljc
+                  :when (not= v 14)
                   :let [rs-name (get from-rs v)]
                   :when (not= rs-name (get names k))]
               [k v rs-name])]

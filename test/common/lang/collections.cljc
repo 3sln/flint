@@ -133,3 +133,31 @@
   (expect = false (sequential? nil))
   (expect = true (coll? {:a 1}))
   (expect = true (coll? #{1 2})))
+
+(defn ^:flint.check/test a-map-entry-is-a-vector-as-in-clojure []
+  ;; Clojure's `MapEntry` IS a vector. Flint treated it as a list on all four
+  ;; runtimes -- `vector?` false, printing `(:a 1)`, `conj` prepending -- so
+  ;; they agreed with each other and with nothing else, which is the one shape
+  ;; a cross-runtime diff structurally cannot catch.
+  (let [e (first (seq {:a 1 :b 2}))]
+    (expect = true (vector? e))
+    (expect = true (map-entry? e))
+    (expect = true (sequential? e))
+    (expect = true (associative? e))
+    (expect = "[:a 1]" (pr-str e))
+    ;; `conj` APPENDS, where a list would have prepended. A map entry is both
+    ;; a vector and sequential, so this is the assertion that says which
+    ;; reading wins.
+    (expect = [:a 1 9] (conj e 9))
+    (expect = [:z 1] (assoc e 0 :z))
+    (expect = [:a 99] (assoc e 1 99))
+    (expect = 2 (count e))
+    (expect = :a (nth e 0))
+    (expect = :a (get e 0))
+    (expect = true (= e [:a 1]))
+    (expect = "{:k [:a 1]}" (pr-str {:k e}))
+    ;; And it is still an entry: `into` a map must not see a plain vector and
+    ;; lose the key/value reading.
+    (expect = {:a 1} (into {} [e]))
+    (expect = :a (key e))
+    (expect = 1 (val e))))

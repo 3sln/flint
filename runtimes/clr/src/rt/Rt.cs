@@ -930,7 +930,11 @@ public sealed class Rt : System.IDisposable {
             case 5: return Val.IsInlineKw(v) || IsHeapTy(v, TyKw);
             case 6: return IsHeapTy(v, TySym);
             case 7: return v == Val.True || v == Val.False;
-            case 8: return IsHeapTy(v, TyVec);
+            // A MAP ENTRY is a vector, as in Clojure: `vector?` is true, it
+            // prints `[:a 1]`, and `conj` appends. All four runtimes said
+            // false, printed `(:a 1)` and consed, agreeing with each other and
+            // with nothing else.
+            case 8: return IsHeapTy(v, TyVec) || IsHeapTy(v, TyMapentry);
             // A ROW REF is a map here too: `map?` goes through THIS table and
             // not through `Maps.IsMap` (`doc/decisions/0026`).
             case 9: return IsHeapTy(v, TyArraymap) || IsHeapTy(v, TyHashmap)

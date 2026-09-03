@@ -349,30 +349,19 @@ builtins! {
         let _ = n;
         let v = arg(rt, a, 0);
         let code = arg(rt, a, 1).as_fixnum();
-        let ok = match code {
-            1 => rt.is_int(v),
-            2 => rt.is_float(v),
-            3 => rt.is_number(v),
-            4 => rt.is_string(v),
-            5 => rt.is_keyword(v),
-            6 => rt.is_symbol(v),
-            7 => v.is_bool(),
-            8 => rt.is_vector(v),
-            9 => rt.is_map(v),
-            10 => rt.is_set(v),
-            11 => rt.is_seq(v),
-            12 => rt.is_fn(v),
-            13 => v.is_nil(),
-            14 => rt.is_sequential(v),
-            // An unknown code is a compiler that has drifted from this table.
-            // Failing loudly beats passing everything: a silent `true` here
-            // would make every annotation vacuous and every specialisation
-            // built on one unsound.
-            _ => {
-                return rt.throw_str("IllegalArgumentException",
-                                    "check-tag: unknown type code");
-            }
-        };
+        // DELEGATES to `type_p` rather than restating it. This match used to
+        // be a second copy of that one, and the copies drifted the moment a
+        // map entry became a vector -- `vector?` answered from the interpreter
+        // said one thing and `check-tag` said another, for the same value.
+        //
+        // An unknown code is still refused here, because `type_p` answers
+        // `sequential?` for anything it does not recognise and an annotation
+        // that silently passes everything is worse than one that fails.
+        if !(1..=14).contains(&code) {
+            return rt.throw_str("IllegalArgumentException",
+                                "check-tag: unknown type code");
+        }
+        let ok = rt.type_p(code as u8, v);
         if ok {
             v
         } else {

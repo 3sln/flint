@@ -988,7 +988,11 @@ public final class Rt {
             case 5 -> Val.isInlineKw(v) || isHeapTy(v, TY_KW);
             case 6 -> isHeapTy(v, TY_SYM);
             case 7 -> v == Val.TRUE || v == Val.FALSE;
-            case 8 -> isHeapTy(v, TY_VEC);
+            // A MAP ENTRY is a vector, as in Clojure: `vector?` is true, it
+            // prints `[:a 1]`, and `conj` appends. All four runtimes said
+            // false, printed `(:a 1)` and consed, agreeing with each other and
+            // with nothing else.
+            case 8 -> isHeapTy(v, TY_VEC) || isHeapTy(v, TY_MAPENTRY);
             // A ROW REF is a map here too. `map?` goes through THIS table
             // and not through `Maps.isMap`, so wiring only the latter left
             // `(map? row)` false while `(get row :k)` worked -- and the
