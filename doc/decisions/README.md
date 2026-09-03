@@ -171,6 +171,45 @@ what remains, and what each thing is waiting on.
    diverge** -- here one side had simply learned something the others had not,
    and the fix is to carry it across, not to record a difference.
 
+0k. **A MAP ENTRY is barely implemented on the ports, and is not a vector on
+   any runtime** — two defects, measured, neither fixed.
+
+   `(seq some-map)` yields map entries, so this is ordinary guest code and not
+   a corner. No tables are involved; the probe uses `(first (seq {:a 1 :b 2}))`.
+
+   | | native | JVM / CLR | Clojure |
+   | --- | --- | --- | --- |
+   | `count` | 2 | **throws** | 2 |
+   | `conj` | `(9 :a 1)` | **throws** | `[:a 1 9]` |
+   | `(get e 0)` | `:a` | **throws** | `:a` |
+   | `nth` | `:a` / `1` | ok | same |
+   | `sequential?` | true | **false** | true |
+   | `vector?` | false | false | **true** |
+   | `pr-str` | `(:a 1)` | **`#<unprintable>`** | `[:a 1]` |
+   | `map-entry?`, `key`, `val`, `=` | ok | ok | same |
+
+   **(a) The ports do not implement it.** `Builtins.java` mentions
+   `TY_MAPENTRY` twice and `Builtins.cs` not at all, where `coll.rs` handles it
+   in `count`, `nth`, `conj`, `seq` and `get`. The errors are at least honest
+   -- "count over a map entry needs more of the data structures" -- so this is
+   a known-unfinished port rather than a silent wrong answer. Native is right
+   and the ports are missing; a divergence is not evidence the runtimes should
+   diverge, so the fix is to carry it across.
+
+   **(b) All four agree with each other and disagree with Clojure.** A
+   `MapEntry` in Clojure IS a vector: `vector?` is true, it prints `[:a 1]`,
+   and `conj` APPENDS. Flint treats it as a list on every runtime -- `conj`
+   prepends, printing is parenthesised. Because all four agree, no differential
+   test can see it, and `test/common` does not assert it either.
+
+   (b) is a LANGUAGE SURFACE change -- it alters what `pr-str` emits for a form
+   people read in test output -- so it wants a decision rather than a quiet
+   fix, which is why this entry records it instead of changing it. (a) is
+   mechanical and blocked on nothing.
+
+   Found the same way as `0h` and `0j`: probing what a value can DO rather
+   than reading what its type suggests.
+
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old
    `jvm`-against-`clr` similarity table because BOTH ports share them. Two
