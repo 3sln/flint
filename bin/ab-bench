@@ -1,0 +1,100 @@
+#!/bin/sh
+# A/B a runtime change, with the three ways I got this wrong built in.
+#
+#     bin/ab-bench <file> <sed-expr> <prog-dir> <ns/fn> [rounds]
+#
+# `sed-expr` is applied to `file` to produce the B arm -- typically disabling
+# the thing under test. Everything else is held identical.
+#
+# THE THREE FAILURES THIS EXISTS TO PREVENT, each of which produced a
+# confident wrong number before it was caught:
+#
+#   1. THE ARMS DIFFERED IN MORE THAN ONE THING. A binary kept from an
+#      earlier build was compared against a fresh one; they differed by every
+#      change in between. Reported 65%, real answer 6%. So both arms are
+#      built HERE, from the same tree, one immediately after the other.
+#
+#   2. ALL-OF-A-THEN-ALL-OF-B MEASURES DRIFT. Baseline 1.46s, modified 1.78s,
+#      three runs each and stable to two decimals -- then the restored
+#      baseline came back at 1.80s. So the arms are INTERLEAVED and compared
+#      on minima, which is robust to a machine that gets busier.
+#
+#   3. THE FIXED COST WAS MOST OF THE NUMBER. `flint run` compiles before it
+#      runs, and a no-op program costs 1.67s; the workload under test was
+#      0.13s of a 1.80s measurement. So the no-op cost is measured and
+#      SUBTRACTED, and the ratio is reported on work rather than wall clock.
+#
+# It also checks the two arms produce the SAME ANSWER. A faster arm that
+# computes something else is not a result.
+set -e
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+file=$1; expr=$2; prog=$3; fn=$4; rounds=${5:-4}
+[ -n "$fn" ] || { echo "usage: bin/ab-bench <file> <sed-expr> <prog-dir> <ns/fn> [rounds]"; exit 2; }
+[ -f "$file" ] || { echo "ab-bench: no such file $file"; exit 2; }
+
+work=${TMPDIR:-/tmp}/ab-bench
+rm -rf "$work"; mkdir -p "$work"
+cp "$file" "$work/orig"
+restore() { cp "$work/orig" "$file"; }
+trap restore EXIT
+
+echo "building arm A (unchanged)..."
+cargo build --release --quiet
+cp target/release/flint "$work/a"
+
+echo "building arm B ($expr)..."
+sed -i '' "$expr" "$file"
+if cmp -s "$file" "$work/orig"; then
+  echo "ab-bench: the sed expression changed nothing -- arm B is arm A" >&2
+  exit 1
+fi
+cargo build --release --quiet
+cp target/release/flint "$work/b"
+restore
+cargo build --release --quiet   # leave the tree's binary matching the tree
+
+# A no-op program, to find what the measurement costs before the workload.
+mkdir -p "$work/noop"
+printf '(ns abnoop)\n(defn main [_] "x")\n' > "$work/noop/abnoop.cljc"
+
+run() { { /usr/bin/time -p "$1" run :path "$2" :fn "$3" > "$work/out.$4"; } 2>&1 | awk '/^real/{print $2}'; }
+
+fixed=$(for i in 1 2 3; do run "$work/a" "$work/noop" abnoop/main fixed; done | sort -n | head -1)
+echo "fixed cost (compile + startup): ${fixed}s"
+
+# Correctness before speed.
+run "$work/a" "$prog" "$fn" a >/dev/null
+run "$work/b" "$prog" "$fn" b >/dev/null
+if ! cmp -s "$work/out.a" "$work/out.b"; then
+  echo "ab-bench: THE ARMS DISAGREE -- this is not a benchmark result" >&2
+  echo "  A: $(head -c 120 "$work/out.a")" >&2
+  echo "  B: $(head -c 120 "$work/out.b")" >&2
+  exit 1
+fi
+echo "both arms agree: $(head -c 60 "$work/out.a")"
+
+i=0
+: > "$work/times"
+while [ "$i" -lt "$rounds" ]; do
+  echo "a $(run "$work/a" "$prog" "$fn" a)" >> "$work/times"
+  echo "b $(run "$work/b" "$prog" "$fn" b)" >> "$work/times"
+  i=$((i + 1))
+done
+
+awk -v fixed="$fixed" '
+  { if (m[$1] == "" || $2 + 0 < m[$1] + 0) m[$1] = $2; all[$1] = all[$1] " " $2 }
+  END {
+    wa = m["a"] - fixed; wb = m["b"] - fixed
+    printf "\n  A (unchanged)  wall %ss  work %.2fs  all:%s\n", m["a"], wa, all["a"]
+    printf "  B (patched)    wall %ss  work %.2fs  all:%s\n", m["b"], wb, all["b"]
+    if (wa <= 0 || wb <= 0) {
+      print "\n  the workload is SMALLER than the fixed cost -- make it bigger"
+      exit 1
+    }
+    printf "\n  B/A on work: %.3f", wb / wa
+    if (wb / wa > 1) printf "  (the patched arm is %.1f%% slower)\n", (wb / wa - 1) * 100
+    else printf "  (the patched arm is %.1f%% faster)\n", (1 - wb / wa) * 100
+    if (wa > wb) d = wa - wb; else d = wb - wa
+    if (d < 0.05 * wa) print "  -- under 5% of work: treat as no difference"
+  }' "$work/times"
