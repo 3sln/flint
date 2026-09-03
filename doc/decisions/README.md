@@ -95,11 +95,28 @@ what remains, and what each thing is waiting on.
    source workspaces from deps is part of `0036` steps 4-6, and finishing that
    is what gives this mark its reach.
 
-   Also open, and NOT built: an INTERNAL NAMESPACE, which an outside workspace
-   could not `:require` at all. `refused-requires` is where it would live, but
-   that check is capability-shaped today rather than visibility-shaped. The
-   var-level mark is the useful half and is done; this is the natural next
-   question rather than an omission.
+   **DECIDED as future work: a namespace-level mark.** `^:internal` or
+   `^:private` on a namespace declaration or symbol marks the WHOLE namespace
+   workspace-local -- an outside workspace cannot `:require` it at all, rather
+   than being refused var by var.
+
+   Worth noticing why the two spellings mean the same thing HERE when they
+   differ on a var. `^:private` is the namespace boundary and `^:internal` the
+   workspace boundary; applied to a namespace, "namespace-local" has nothing
+   left to mean, because the namespace IS the unit being marked. The next
+   boundary outward is the workspace, so both land there. That is a coherence
+   worth writing down rather than an ambiguity to resolve.
+
+   `refused-requires` is where it goes, and the work is that the check is
+   capability-shaped today rather than visibility-shaped -- it knows how to
+   refuse a require for what a namespace may DO, not for who may name it.
+
+   Two things to get right when it is built. The refusal must name the
+   workspace boundary it crossed, not just say "refused", or it reads as a
+   missing dependency. And a var-level mark inside an internal namespace
+   becomes redundant but must not become an ERROR -- a namespace that is
+   internal today may be published tomorrow, and the var marks are what would
+   still be true afterwards.
 
 0h. **A rooting bug in `eq`, in all four runtimes at once** — FIXED, with a
    regression check. Comparing a row ref to a map materialises the ref with
