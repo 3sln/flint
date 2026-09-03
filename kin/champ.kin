@@ -19,7 +19,8 @@
 (ns runtime.champ
   (:require [flint.impl.rt :refer [defn return + - * comment doc
                                    slot set-slot olen as-fixnum to-i32
-                                   Rt Value I32]]))
+                                   Rt Value I32
+                                   BN_DATAMAP BN_NODEMAP BN_BASE]]))
 
 (defn ^:inline ^:method ^I32 bn-datamap [^Rt rt ^Value n]
   (return (to-i32 (as-fixnum (slot rt n BN_DATAMAP)))))

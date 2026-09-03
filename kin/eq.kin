@@ -14,7 +14,8 @@
                                    TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ
                                    TY_STRSEQ TY_RANGE TY_VEC TY_MAPENTRY
                                    TY_ARRAYMAP TY_HASHMAP TY_TABLEREF TY_SET
-                                   Rt Value Cat Bool]]))
+                                   Rt Value Cat Bool
+                                   CAT_SCALAR CAT_MAP CAT_SEQUENTIAL CAT_SET]]))
 
 (defn ^:pub ^:method ^Cat category [^Rt rt ^Value v]
   (if (not (is-heap v))

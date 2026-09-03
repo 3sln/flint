@@ -30,7 +30,8 @@
                                    bn-copy-set-value bn-copy-set-node
                                    bn-copy-insert-entry bn-inline-to-node
                                    + != bit-and
-                                   Rt Value RootIx I32]]))
+                                   Rt Value RootIx I32
+                                   HASH_BITS]]))
 
 (defn ^:method ^Value node-assoc
   [^:mut ^Rt rt ^Value n ^I32 shift ^I32 h ^Value key ^Value val ^Value edit]

@@ -26,7 +26,8 @@
                                    bn-node bn-set-key bn-set-val bn-set-node
                                    index-of popcount
                                    + - < == and slot bit-or bit-xor bit-and
-                                   Rt Value RootIx I32 NIL]]))
+                                   Rt Value RootIx I32 NIL
+                                   BN_EDIT]]))
 
 (defn ^:method ^Value bn-copy-insert-entry
   [^:mut ^Rt rt ^Value n ^I32 bit ^Value key ^Value val ^Value edit]

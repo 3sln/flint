@@ -147,7 +147,8 @@
 (def value-names
   "Values spelled differently per target. `NIL` is bare in Rust and qualified
   on the other two, which is exactly why it is a NAME and not a form."
-  {'NIL {:rust "NIL" :java "Val.NIL" :csharp "Val.Nil"}
+  (merge
+   {'NIL {:rust "NIL" :java "Val.NIL" :csharp "Val.Nil"}
    'TRUE {:rust "TRUE" :java "Val.TRUE" :csharp "Val.True"}
    'FALSE {:rust "FALSE" :java "Val.FALSE" :csharp "Val.False"}
    'NOT_FOUND {:rust "NOT_FOUND" :java "Val.NOT_FOUND" :csharp "Val.NotFound"}
@@ -157,7 +158,23 @@
    ;; into a C# file whose constant is `LsThunk`. The CLR has not compiled
    ;; since `seqs.kin` shipped.
    'LS_THUNK {:rust "LS_THUNK" :java "LS_THUNK" :csharp "LsThunk"}
-   'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LsSeq"}})
+   'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LsSeq"}}
+  ;; The node and category constants. All three targets spell these
+  ;; IDENTICALLY, so every entry below is three copies of one string -- and
+  ;; they are written down anyway.
+  ;;
+  ;; Passing a constant through verbatim is only correct while every target
+  ;; agrees, and that is a fact about the runtimes rather than a property of
+  ;; the name. Leaving it unstated is what let `LS_THUNK` through: it was
+  ;; indistinguishable from these until the C# stopped compiling. A table
+  ;; entry is where the agreement is asserted, and where a future rename in
+  ;; one target has somewhere to be recorded.
+  (reduce (fn [m sym] (assoc m sym {:rust (str sym) :java (str sym)
+                                    :csharp (str sym)}))
+          {}
+          '[CAT_SCALAR CAT_MAP CAT_SEQUENTIAL CAT_SET
+            BN_DATAMAP BN_NODEMAP BN_BASE BN_EDIT
+            CN_BASE CN_HASH CN_EDIT HASH_BITS])))
 
 (def names-for
   "Every type tag, spelled three ways. A NAME rather than a form, because a
