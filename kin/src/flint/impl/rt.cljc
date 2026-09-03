@@ -293,6 +293,16 @@
     ;; declaration like any other -- `defn` registers a name for its own file's
     ;; self-calls and nothing wider, which is what keeps one source from
     ;; silently depending on another's internals.
+    ;; The COLLISION-NODE accessors. `cn-hash` did not exist in Rust -- the
+    ;; three operations were written out at each use -- so the helper was
+    ;; added there rather than the inline form taught to kin: the ports had
+    ;; already named it, and a name is the portable half.
+    'cn-hash (own "cn_hash" "cnHash" 1)
+    'cn-count (own "cn_count" "cnCount" 1)
+    'cn-key (own "cn_key" "cnKey" 2)
+    'cn-val (own "cn_val" "cnVal" 2)
+    'cn-copy-set-val (own "cn_copy_set_val" "cnCopySetVal" 4)
+    'node-assoc (own "node_assoc" "nodeAssoc" 6)
     'merge-two (own "merge_two" "mergeTwo" 8)
     'bn-copy-set-value (own "bn_copy_set_value" "bnCopySetValue" 4)
     'bn-copy-set-node (own "bn_copy_set_node" "bnCopySetNode" 4)

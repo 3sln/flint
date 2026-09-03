@@ -574,6 +574,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Maps` | `mergeTwo` -- the CHAMP insert's hard case |
 | 3 | `Maps` | all six structural copies -- insert, remove, set-value, set-node, inline-to-node, node-to-inline |
 | 3 | `Maps` | `nodeAssoc` -- the CHAMP insert itself |
+| 3 | `Maps` | `collAssoc` -- an entry into a collision node, closing the cycle |
 
 ### `nodeAssoc` ADDS forty lines, and that is the honest number
 
@@ -595,6 +596,19 @@ slice as a loss. The prize was never line count -- it is that `nodeAssoc` now
 has ONE definition instead of three that a person has to keep in step by hand.
 A slice that costs lines and buys that is still the trade this goal is making;
 a slice that saved lines and lost the single definition would not be.
+
+`collAssoc` then cost `+104` on the same terms, so this is a pattern rather
+than one slice's accident: the DENSER the hand-written ports were, the more a
+port costs in lines. The early slices removed lines because `Hash` and the
+CHAMP accessors were already one statement per line in all three. `Maps`'s
+control flow is not, and will not be.
+
+Two thirds of that is C#. `out` is a reserved word, so the result is
+`@out`; and CS0136 refuses a local whose name is reused in an enclosing
+scope, which Rust and Java both allow -- so `collAssoc`'s three blocks name
+their roots `wbase`/`rbase`/`gbase` rather than `base` three times. One
+source has to satisfy the strictest of the three targets, and every slice
+after this one pays that same tax.
 
 Comparing the SET and not only the count is the part that matters: a
 regeneration making one opcode unreachable while another became reachable

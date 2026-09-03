@@ -1,0 +1,193 @@
+--rust-head
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const CN_BASE: u32 = 2;
+impl Value { fn is_nil(self) -> bool { self.0 == 0xFFFF } }
+fn mask(h: u32, shift: u32) -> u32 { (h >> shift) & 0x1f }
+fn bitpos(h: u32, shift: u32) -> u32 { 1 << mask(h, shift) }
+struct Rt { h: Vec<u64>, bump: u64, roots: Vec<Value>, log: String, champ_added: bool, starve: bool }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn obj(&mut self, tag: &str, n: u64) -> Value {
+        let a = self.bump; self.bump += n + 1; self.log.push_str(tag); Value(a)
+    }
+    fn cn_hash(&self, n: Value) -> u32 { self.h[n.0 as usize] as u32 }
+    fn cn_count(&self, n: Value) -> u32 { self.h[n.0 as usize + 1] as u32 }
+    fn cn_key(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + 2 + 2 * i as usize]) }
+    fn cn_val(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + 3 + 2 * i as usize]) }
+    fn set(&mut self, n: Value, i: u32, v: Value) { self.h[(n.0 + i as u64) as usize] = v.0; }
+    fn eq(&self, a: Value, b: Value) -> bool { a == b }
+    fn cn_new(&mut self, hh: u32, npairs: u32, _e: Value) -> Value {
+        if self.starve { self.log.push_str("x"); return NIL; }
+        let a = self.obj("C", (npairs * 2 + 2) as u64);
+        self.h[a.0 as usize] = hh as u64;
+        self.h[a.0 as usize + 1] = npairs as u64;
+        a
+    }
+    fn cn_copy_set_val(&mut self, _n: Value, _i: u32, _v: Value, _e: Value) -> Value { self.obj("V", 8) }
+    fn bn_new(&mut self, _dm: u32, _nm: u32, _e: Value) -> Value { self.obj("B", 8) }
+    fn bn_set_node(&mut self, n: Value, j: u32, v: Value) { self.set(n, 7 - j, v); }
+    fn node_assoc(&mut self, _n: Value, _s: u32, _h: u32, _k: Value, _v: Value, _e: Value) -> Value { self.obj("A", 8) }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 400], bump: 200, roots: Vec::new(), log: String::new(),
+                      champ_added: false, starve: false };
+    // A collision node at 1: hash 0x55, two pairs.
+    rt.h[1] = 0x55; rt.h[2] = 2;
+    rt.h[3] = 100; rt.h[4] = 101;
+    rt.h[5] = 200; rt.h[6] = 201;
+    let mut o = String::new();
+    // Hashes differ at this depth: wrapped and handed to `node_assoc`.
+    let a = rt.coll_assoc(Value(1), 0x99, Value(300), Value(301), NIL, 0);
+    o.push_str(&format!("{}:{} ", a.0, rt.champ_added as u32));
+    // The key is already here, at the LAST index, so the scan runs to the end.
+    let b = rt.coll_assoc(Value(1), 0x55, Value(200), Value(999), NIL, 0);
+    o.push_str(&format!("{}:{} ", b.0, rt.champ_added as u32));
+    // The key is already here, at the FIRST index, so the scan breaks early.
+    let c = rt.coll_assoc(Value(1), 0x55, Value(100), Value(888), NIL, 0);
+    o.push_str(&format!("{}:{} ", c.0, rt.champ_added as u32));
+    // A new key: a fresh node one pair longer, old pairs copied across.
+    let d = rt.coll_assoc(Value(1), 0x55, Value(300), Value(301), NIL, 0);
+    o.push_str(&format!("{}:{} ", d.0, rt.champ_added as u32));
+    for k in (d.0 as usize)..(d.0 as usize + 10) { o.push_str(&format!("{},", rt.h[k])); }
+    // The allocation fails: NIL out, and the stack unwound to where it started.
+    rt.starve = true;
+    let e = rt.coll_assoc(Value(1), 0x55, Value(400), Value(401), NIL, 0);
+    o.push_str(&format!(" oom={} roots={} log={}", e.0, rt.roots.len(), rt.log));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int CN_BASE = 2;
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static int mask(int h, int shift) { return (h >>> shift) & 0x1f; }
+    static int bitpos(int h, int shift) { return 1 << mask(h, shift); }
+    static final class Rt {
+        long[] h = new long[400];
+        long bump = 200;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        StringBuilder log = new StringBuilder();
+        boolean champAdded = false;
+        boolean starve = false;
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long obj(String tag, long n) { long a = bump; bump += n + 1; log.append(tag); return a; }
+        boolean isNil(long v) { return v == NIL; }
+    }
+    static int cnHash(Rt rt, long n) { return (int) rt.h[(int) n]; }
+    static int cnCount(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    static long cnKey(Rt rt, long n, int i) { return rt.h[(int) n + 2 + 2 * i]; }
+    static long cnVal(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    static void cnSet(Rt rt, long n, int i, long v) { rt.h[(int) n + i] = v; }
+    static long cnNew(Rt rt, int hh, int npairs, long e) {
+        if (rt.starve) { rt.log.append("x"); return NIL; }
+        long a = rt.obj("C", npairs * 2 + 2);
+        rt.h[(int) a] = hh; rt.h[(int) a + 1] = npairs;
+        return a;
+    }
+    static long cnCopySetVal(Rt rt, long n, int i, long v, long e) { return rt.obj("V", 8); }
+    static long bnNew(Rt rt, int dm, int nm, long e) { return rt.obj("B", 8); }
+    static void bnSetNode(Rt rt, long n, int j, long v) { cnSet(rt, n, 7 - j, v); }
+    static long nodeAssoc(Rt rt, long n, int s, int h, long k, long v, long e) { return rt.obj("A", 8); }
+    static final class Eq { static boolean eq(Rt rt, long a, long b) { return a == b; } }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        rt.h[1] = 0x55; rt.h[2] = 2;
+        rt.h[3] = 100; rt.h[4] = 101;
+        rt.h[5] = 200; rt.h[6] = 201;
+        StringBuilder o = new StringBuilder();
+        long a = collAssoc(rt, 1, 0x99, 300, 301, NIL, 0);
+        o.append(a).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        long b = collAssoc(rt, 1, 0x55, 200, 999, NIL, 0);
+        o.append(b).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        long c = collAssoc(rt, 1, 0x55, 100, 888, NIL, 0);
+        o.append(c).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        long d = collAssoc(rt, 1, 0x55, 300, 301, NIL, 0);
+        o.append(d).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        for (int k = (int) d; k < (int) d + 10; k++) o.append(rt.h[k]).append(',');
+        rt.starve = true;
+        long e = collAssoc(rt, 1, 0x55, 400, 401, NIL, 0);
+        o.append(" oom=").append(e).append(" roots=").append(rt.roots.size())
+         .append(" log=").append(rt.log);
+        System.out.println(o);
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    const int CN_BASE = 2;
+    static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    static int Mask(int h, int shift) { return (int)((uint) h >> shift) & 0x1f; }
+    static int Bitpos(int h, int shift) { return 1 << Mask(h, shift); }
+    internal sealed class Rt {
+        internal long[] h = new long[400];
+        internal long bump = 200;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal StringBuilder log = new StringBuilder();
+        internal bool champAdded = false;
+        internal bool starve = false;
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Obj(string tag, long n) { long a = bump; bump += n + 1; log.Append(tag); return a; }
+        internal bool IsNil(long v) { return v == NIL; }
+    }
+    internal static class Flint {
+        internal static class Rt {
+            internal static class Eq {
+                internal static bool Equal(Probe.Rt rt, long a, long b) { return a == b; }
+            }
+        }
+    }
+    static int CnHash(Rt rt, long n) { return (int) rt.h[(int) n]; }
+    static int CnCount(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    static long CnKey(Rt rt, long n, int i) { return rt.h[(int) n + 2 + 2 * i]; }
+    static long CnVal(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    static void CnSet(Rt rt, long n, int i, long v) { rt.h[(int) n + i] = v; }
+    static long CnNew(Rt rt, int hh, int npairs, long e) {
+        if (rt.starve) { rt.log.Append("x"); return NIL; }
+        long a = rt.Obj("C", npairs * 2 + 2);
+        rt.h[(int) a] = hh; rt.h[(int) a + 1] = npairs;
+        return a;
+    }
+    static long CnCopySetVal(Rt rt, long n, int i, long v, long e) { return rt.Obj("V", 8); }
+    static long BnNew(Rt rt, int dm, int nm, long e) { return rt.Obj("B", 8); }
+    static void BnSetNode(Rt rt, long n, int j, long v) { CnSet(rt, n, 7 - j, v); }
+    static long NodeAssoc(Rt rt, long n, int s, int h, long k, long v, long e) { return rt.Obj("A", 8); }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        rt.h[1] = 0x55; rt.h[2] = 2;
+        rt.h[3] = 100; rt.h[4] = 101;
+        rt.h[5] = 200; rt.h[6] = 201;
+        var o = new StringBuilder();
+        long a = CollAssoc(rt, 1, 0x99, 300, 301, NIL, 0);
+        o.Append(a).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        long b = CollAssoc(rt, 1, 0x55, 200, 999, NIL, 0);
+        o.Append(b).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        long c = CollAssoc(rt, 1, 0x55, 100, 888, NIL, 0);
+        o.Append(c).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        long d = CollAssoc(rt, 1, 0x55, 300, 301, NIL, 0);
+        o.Append(d).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        for (int k = (int) d; k < (int) d + 10; k++) o.Append(rt.h[k]).Append(',');
+        rt.starve = true;
+        long e = CollAssoc(rt, 1, 0x55, 400, 401, NIL, 0);
+        o.Append(" oom=").Append(e).Append(" roots=").Append(rt.roots.Count)
+         .Append(" log=").Append(rt.log);
+        Console.WriteLine(o.ToString());
+    }

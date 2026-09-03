@@ -152,6 +152,14 @@ impl Rt {
     fn cn_count(&self, n: Value) -> u32 {
         (self.olen(n) - CN_BASE) / 2
     }
+
+    // The ports have had this as a named helper all along; here the same
+    // three operations were written out at each use. Naming it is what lets
+    // one kin source serve all three, and it costs nothing -- the body is the
+    // expression it replaces.
+    fn cn_hash(&self, n: Value) -> u32 {
+        self.slot(n, CN_HASH).as_fixnum() as u32
+    }
     #[inline]
     fn cn_key(&self, n: Value, i: u32) -> Value {
         self.slot(n, CN_BASE + 2 * i)
@@ -679,75 +687,91 @@ impl Rt {
 
     // kin:end kin/nodeassoc.kin
 
+    // kin:begin kin/collassoc.kin
     fn coll_assoc(&mut self, n: Value, h: u32, key: Value, val: Value, edit: Value, shift: u32) -> Value {
-        let nh = self.slot(n, CN_HASH).as_fixnum() as u32;
+        let nh: u32 = self.cn_hash(n);
         if nh != h {
-            // Different hash at this depth: wrap in a bitmap node and retry.
-            let base = self.mark();
-            let ni = self.push(n);
-            let ki = self.push(key);
-            let vi = self.push(val);
-            let ei = self.push(edit);
-            let wrapper = self.bn_new(0, bitpos(nh, shift), self.r(ei));
-            let wi = self.push(wrapper);
-            let node = self.r(ni);
-            self.bn_set_node(self.r(wi), 0, node);
-            let out =
-                self.node_assoc(self.r(wi), shift, h, self.r(ki), self.r(vi), self.r(ei));
-            self.pop_to(base);
-            return out;
+            // A different hash at this depth: the node becomes a child of
+            // a new bitmap node, and `node_assoc` takes it from there --
+            // which is the only path by which a collision node acquires a
+            // bitmap above it.
+            // Each of the three blocks below names its own roots --
+            // `wbase`/`wni`, `rbase`/`rni`, `gbase`/`gni` -- rather than
+            // reusing `base`/`ni`. Rust and Java scope them per block and
+            // would take the shorter names; C# refuses a name reused in an
+            // enclosing scope (CS0136). One source has to satisfy the
+            // strictest of the three, and this is what that costs.
+            let wbase: usize = self.mark();
+            let wni: usize = self.push(n);
+            let wki: usize = self.push(key);
+            let wvi: usize = self.push(val);
+            let wei: usize = self.push(edit);
+            let wrapper: Value = self.bn_new(0, bitpos(nh, shift), self.r(wei));
+            let wi: usize = self.push(wrapper);
+            self.bn_set_node(self.r(wi), 0, self.r(wni));
+            let wrapped: Value = self.node_assoc(self.r(wi), shift, h, self.r(wki), self.r(wvi), self.r(wei));
+            self.pop_to(wbase);
+            return wrapped;
         }
-        let scan = self.mark();
-        let sni = self.push(n);
-        let ski = self.push(key);
-        let cnt = self.cn_count(self.r(sni));
-        let mut hit = None;
+        // THE SCAN. `hit` is left at `cnt` when nothing matched -- one past
+        // the last valid index, so it cannot collide with an answer.
+        let scan: usize = self.mark();
+        let sni: usize = self.push(n);
+        let ski: usize = self.push(key);
+        let cnt: u32 = self.cn_count(self.r(sni));
+        let mut hit: u32;
+        hit = cnt;
         for i in 0..cnt {
-            let k = self.cn_key(self.r(sni), i);
-            let kk = self.push(k);
-            let same = self.eq(self.r(kk), self.r(ski));
+            // The key is rooted across `eq`, which allocates when either
+            // side is a row ref.
+            let kk: usize = self.push(self.cn_key(self.r(sni), i));
+            let same: bool = self.eq(self.r(kk), self.r(ski));
             self.pop_to(kk);
             if same {
-                hit = Some(i);
+                hit = i;
                 break;
             }
         }
-        let (n, key) = (self.r(sni), self.r(ski));
+        let nn: Value = self.r(sni);
+        let kk2: Value = self.r(ski);
         self.pop_to(scan);
-        if let Some(i) = hit {
+        if hit != cnt {
+            // The key was already here, so the map's count does not move.
             self.champ_added = false;
-            let base = self.mark();
-            let ni = self.push(n);
-            let vi = self.push(val);
-            let ei = self.push(edit);
-            let out = self.cn_copy_set_val(self.r(ni), i, self.r(vi), self.r(ei));
-            self.pop_to(base);
-            return out;
+            let rbase: usize = self.mark();
+            let rni: usize = self.push(nn);
+            let rvi: usize = self.push(val);
+            let rei: usize = self.push(edit);
+            let replaced: Value = self.cn_copy_set_val(self.r(rni), hit, self.r(rvi), self.r(rei));
+            self.pop_to(rbase);
+            return replaced;
         }
         self.champ_added = true;
-        let base = self.mark();
-        let ni = self.push(n);
-        let ki = self.push(key);
-        let vi = self.push(val);
-        let ei = self.push(edit);
-        let out = self.cn_new(h, cnt + 1, self.r(ei));
-        if out.is_nil() {
-            self.pop_to(base);
+        let gbase: usize = self.mark();
+        let gni: usize = self.push(nn);
+        let gki: usize = self.push(kk2);
+        let gvi: usize = self.push(val);
+        let gei: usize = self.push(edit);
+        let fresh: Value = self.cn_new(h, cnt + 1, self.r(gei));
+        if fresh.is_nil() {
+            self.pop_to(gbase);
             return NIL;
         }
-        let oi = self.push(out);
+        let oi: usize = self.push(fresh);
         for i in 0..cnt {
-            let (k, v) = (self.cn_key(self.r(ni), i), self.cn_val(self.r(ni), i));
-            self.set(self.r(oi), CN_BASE + 2 * i, k);
-            self.set(self.r(oi), CN_BASE + 2 * i + 1, v);
+            let ek: Value = self.cn_key(self.r(gni), i);
+            let ev: Value = self.cn_val(self.r(gni), i);
+            self.set(self.r(oi), CN_BASE + (2 * i), ek);
+            self.set(self.r(oi), (CN_BASE + (2 * i)) + 1, ev);
         }
-        let (k, v) = (self.r(ki), self.r(vi));
-        self.set(self.r(oi), CN_BASE + 2 * cnt, k);
-        self.set(self.r(oi), CN_BASE + 2 * cnt + 1, v);
-        let out = self.r(oi);
-        self.pop_to(base);
-        out
+        self.set(self.r(oi), CN_BASE + (2 * cnt), self.r(gki));
+        self.set(self.r(oi), (CN_BASE + (2 * cnt)) + 1, self.r(gvi));
+        let grown: Value = self.r(oi);
+        self.pop_to(gbase);
+        return grown;
     }
+
+    // kin:end kin/collassoc.kin
 
     fn cn_copy_set_val(&mut self, n: Value, i: u32, val: Value, edit: Value) -> Value {
         let cnt = self.cn_count(n);

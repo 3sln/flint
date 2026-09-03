@@ -568,51 +568,91 @@ public final class Maps {
 
     // kin:end kin/nodeassoc.kin
 
+    // kin:begin kin/collassoc.kin
     static long collAssoc(Rt rt, long n, int h, long key, long val, long edit, int shift) {
         int nh = cnHash(rt, n);
         if (nh != h) {
-            // Different hash at this depth: wrap in a bitmap node and retry.
-            int base = rt.mark();
-            int ni = rt.push(n), ki = rt.push(key), vi = rt.push(val), ei = rt.push(edit);
-            int wi = rt.push(bnNew(rt, 0, bitpos(nh, shift), rt.r(ei)));
-            bnSetNode(rt, rt.r(wi), 0, rt.r(ni));
-            long out = nodeAssoc(rt, rt.r(wi), shift, h, rt.r(ki), rt.r(vi), rt.r(ei));
-            rt.popTo(base);
-            return out;
+            // A different hash at this depth: the node becomes a child of
+            // a new bitmap node, and `node_assoc` takes it from there --
+            // which is the only path by which a collision node acquires a
+            // bitmap above it.
+            // Each of the three blocks below names its own roots --
+            // `wbase`/`wni`, `rbase`/`rni`, `gbase`/`gni` -- rather than
+            // reusing `base`/`ni`. Rust and Java scope them per block and
+            // would take the shorter names; C# refuses a name reused in an
+            // enclosing scope (CS0136). One source has to satisfy the
+            // strictest of the three, and this is what that costs.
+            int wbase = rt.mark();
+            int wni = rt.push(n);
+            int wki = rt.push(key);
+            int wvi = rt.push(val);
+            int wei = rt.push(edit);
+            long wrapper = bnNew(rt, 0, bitpos(nh, shift), rt.r(wei));
+            int wi = rt.push(wrapper);
+            bnSetNode(rt, rt.r(wi), 0, rt.r(wni));
+            long wrapped = nodeAssoc(rt, rt.r(wi), shift, h, rt.r(wki), rt.r(wvi), rt.r(wei));
+            rt.popTo(wbase);
+            return wrapped;
         }
+        // THE SCAN. `hit` is left at `cnt` when nothing matched -- one past
+        // the last valid index, so it cannot collide with an answer.
         int scan = rt.mark();
-        int sni = rt.push(n), ski = rt.push(key);
+        int sni = rt.push(n);
+        int ski = rt.push(key);
         int cnt = cnCount(rt, rt.r(sni));
-        int hit = -1;
+        int hit;
+        hit = cnt;
         for (int i = 0; i < cnt; i++) {
-            if (Eq.eq(rt, cnKey(rt, rt.r(sni), i), rt.r(ski))) { hit = i; break; }
+            // The key is rooted across `eq`, which allocates when either
+            // side is a row ref.
+            int kk = rt.push(cnKey(rt, rt.r(sni), i));
+            boolean same = Eq.eq(rt, rt.r(kk), rt.r(ski));
+            rt.popTo(kk);
+            if (same) {
+                hit = i;
+                break;
+            }
         }
-        long nn = rt.r(sni), kk = rt.r(ski);
+        long nn = rt.r(sni);
+        long kk2 = rt.r(ski);
         rt.popTo(scan);
-        if (hit >= 0) {
+        if (hit != cnt) {
+            // The key was already here, so the map's count does not move.
             rt.champAdded = false;
-            int base = rt.mark();
-            int ni = rt.push(nn), vi = rt.push(val), ei = rt.push(edit);
-            long out = cnCopySetVal(rt, rt.r(ni), hit, rt.r(vi), rt.r(ei));
-            rt.popTo(base);
-            return out;
+            int rbase = rt.mark();
+            int rni = rt.push(nn);
+            int rvi = rt.push(val);
+            int rei = rt.push(edit);
+            long replaced = cnCopySetVal(rt, rt.r(rni), hit, rt.r(rvi), rt.r(rei));
+            rt.popTo(rbase);
+            return replaced;
         }
         rt.champAdded = true;
-        int base = rt.mark();
-        int ni = rt.push(nn), ki = rt.push(kk), vi = rt.push(val), ei = rt.push(edit);
-        long out = cnNew(rt, h, cnt + 1, rt.r(ei));
-        if (Val.isNil(out)) { rt.popTo(base); return Val.NIL; }
-        int oi = rt.push(out);
-        for (int i = 0; i < cnt; i++) {
-            cnSet(rt, rt.r(oi), CN_BASE + 2 * i, cnKey(rt, rt.r(ni), i));
-            cnSet(rt, rt.r(oi), CN_BASE + 2 * i + 1, cnVal(rt, rt.r(ni), i));
+        int gbase = rt.mark();
+        int gni = rt.push(nn);
+        int gki = rt.push(kk2);
+        int gvi = rt.push(val);
+        int gei = rt.push(edit);
+        long fresh = cnNew(rt, h, cnt + 1, rt.r(gei));
+        if (Val.isNil(fresh)) {
+            rt.popTo(gbase);
+            return Val.NIL;
         }
-        cnSet(rt, rt.r(oi), CN_BASE + 2 * cnt, rt.r(ki));
-        cnSet(rt, rt.r(oi), CN_BASE + 2 * cnt + 1, rt.r(vi));
-        long r = rt.r(oi);
-        rt.popTo(base);
-        return r;
+        int oi = rt.push(fresh);
+        for (int i = 0; i < cnt; i++) {
+            long ek = cnKey(rt, rt.r(gni), i);
+            long ev = cnVal(rt, rt.r(gni), i);
+            cnSet(rt, rt.r(oi), CN_BASE + (2 * i), ek);
+            cnSet(rt, rt.r(oi), (CN_BASE + (2 * i)) + 1, ev);
+        }
+        cnSet(rt, rt.r(oi), CN_BASE + (2 * cnt), rt.r(gki));
+        cnSet(rt, rt.r(oi), (CN_BASE + (2 * cnt)) + 1, rt.r(gvi));
+        long grown = rt.r(oi);
+        rt.popTo(gbase);
+        return grown;
     }
+
+    // kin:end kin/collassoc.kin
 
     static long cnCopySetVal(Rt rt, long n, int i, long val, long edit) {
         int cnt = cnCount(rt, n);

@@ -566,51 +566,91 @@ public static class Maps {
 
     // kin:end kin/nodeassoc.kin
 
+    // kin:begin kin/collassoc.kin
     static long CollAssoc(Rt rt, long n, int h, long key, long val, long edit, int shift) {
         int nh = CnHash(rt, n);
         if (nh != h) {
-            // Different hash at this depth: wrap in a bitmap node and retry.
-            int wbas = rt.Mark();
-            int wni = rt.Push(n), wki = rt.Push(key), wvi = rt.Push(val), wei = rt.Push(edit);
-            int wi = rt.Push(BnNew(rt, 0, Bitpos(nh, shift), rt.R(wei)));
+            // A different hash at this depth: the node becomes a child of
+            // a new bitmap node, and `node_assoc` takes it from there --
+            // which is the only path by which a collision node acquires a
+            // bitmap above it.
+            // Each of the three blocks below names its own roots --
+            // `wbase`/`wni`, `rbase`/`rni`, `gbase`/`gni` -- rather than
+            // reusing `base`/`ni`. Rust and Java scope them per block and
+            // would take the shorter names; C# refuses a name reused in an
+            // enclosing scope (CS0136). One source has to satisfy the
+            // strictest of the three, and this is what that costs.
+            int wbase = rt.Mark();
+            int wni = rt.Push(n);
+            int wki = rt.Push(key);
+            int wvi = rt.Push(val);
+            int wei = rt.Push(edit);
+            long wrapper = BnNew(rt, 0, Bitpos(nh, shift), rt.R(wei));
+            int wi = rt.Push(wrapper);
             BnSetNode(rt, rt.R(wi), 0, rt.R(wni));
-            long wout = NodeAssoc(rt, rt.R(wi), shift, h, rt.R(wki), rt.R(wvi), rt.R(wei));
-            rt.PopTo(wbas);
-            return wout;
+            long wrapped = NodeAssoc(rt, rt.R(wi), shift, h, rt.R(wki), rt.R(wvi), rt.R(wei));
+            rt.PopTo(wbase);
+            return wrapped;
         }
+        // THE SCAN. `hit` is left at `cnt` when nothing matched -- one past
+        // the last valid index, so it cannot collide with an answer.
         int scan = rt.Mark();
-        int sni = rt.Push(n), ski = rt.Push(key);
+        int sni = rt.Push(n);
+        int ski = rt.Push(key);
         int cnt = CnCount(rt, rt.R(sni));
-        int hit = -1;
+        int hit;
+        hit = cnt;
         for (int i = 0; i < cnt; i++) {
-            if (Flint.Rt.Eq.Equal(rt, CnKey(rt, rt.R(sni), i), rt.R(ski))) { hit = i; break; }
+            // The key is rooted across `eq`, which allocates when either
+            // side is a row ref.
+            int kk = rt.Push(CnKey(rt, rt.R(sni), i));
+            bool same = Flint.Rt.Eq.Equal(rt, rt.R(kk), rt.R(ski));
+            rt.PopTo(kk);
+            if (same) {
+                hit = i;
+                break;
+            }
         }
-        long nn = rt.R(sni), kk = rt.R(ski);
+        long nn = rt.R(sni);
+        long kk2 = rt.R(ski);
         rt.PopTo(scan);
-        if (hit >= 0) {
+        if (hit != cnt) {
+            // The key was already here, so the map's count does not move.
             rt.champAdded = false;
-            int bas2 = rt.Mark();
-            int ni2 = rt.Push(nn), vi2 = rt.Push(val), ei2 = rt.Push(edit);
-            long out2 = CnCopySetVal(rt, rt.R(ni2), hit, rt.R(vi2), rt.R(ei2));
-            rt.PopTo(bas2);
-            return out2;
+            int rbase = rt.Mark();
+            int rni = rt.Push(nn);
+            int rvi = rt.Push(val);
+            int rei = rt.Push(edit);
+            long replaced = CnCopySetVal(rt, rt.R(rni), hit, rt.R(rvi), rt.R(rei));
+            rt.PopTo(rbase);
+            return replaced;
         }
         rt.champAdded = true;
-        int bas = rt.Mark();
-        int ni = rt.Push(nn), ki = rt.Push(kk), vi = rt.Push(val), ei = rt.Push(edit);
-        long outv = CnNew(rt, h, cnt + 1, rt.R(ei));
-        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
-        int oi = rt.Push(outv);
-        for (int i = 0; i < cnt; i++) {
-            CnSet(rt, rt.R(oi), CN_BASE + 2 * i, CnKey(rt, rt.R(ni), i));
-            CnSet(rt, rt.R(oi), CN_BASE + 2 * i + 1, CnVal(rt, rt.R(ni), i));
+        int gbase = rt.Mark();
+        int gni = rt.Push(nn);
+        int gki = rt.Push(kk2);
+        int gvi = rt.Push(val);
+        int gei = rt.Push(edit);
+        long fresh = CnNew(rt, h, cnt + 1, rt.R(gei));
+        if (Val.IsNil(fresh)) {
+            rt.PopTo(gbase);
+            return Val.Nil;
         }
-        CnSet(rt, rt.R(oi), CN_BASE + 2 * cnt, rt.R(ki));
-        CnSet(rt, rt.R(oi), CN_BASE + 2 * cnt + 1, rt.R(vi));
-        long r = rt.R(oi);
-        rt.PopTo(bas);
-        return r;
+        int oi = rt.Push(fresh);
+        for (int i = 0; i < cnt; i++) {
+            long ek = CnKey(rt, rt.R(gni), i);
+            long ev = CnVal(rt, rt.R(gni), i);
+            CnSet(rt, rt.R(oi), CN_BASE + (2 * i), ek);
+            CnSet(rt, rt.R(oi), (CN_BASE + (2 * i)) + 1, ev);
+        }
+        CnSet(rt, rt.R(oi), CN_BASE + (2 * cnt), rt.R(gki));
+        CnSet(rt, rt.R(oi), (CN_BASE + (2 * cnt)) + 1, rt.R(gvi));
+        long grown = rt.R(oi);
+        rt.PopTo(gbase);
+        return grown;
     }
+
+    // kin:end kin/collassoc.kin
 
     static long CnCopySetVal(Rt rt, long n, int i, long val, long edit) {
         int cnt = CnCount(rt, n);
