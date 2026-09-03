@@ -214,8 +214,26 @@ what remains, and what each thing is waiting on.
    above is gone without anything touching the printer.
 
    All four runtimes now give the same answer to every row of that table.
-   **(b) is still open**, and is now the only thing left in this item: all
-   four agree with each other and none of them agrees with Clojure.
+
+   **(b) IS DONE TOO** -- decided by the author: follow Clojure. A map entry is
+   now a vector on all four. `vector?` is true, it prints `[:a 1]`, `conj`
+   APPENDS (`[:a 1 9]`), and `assoc` indexes it, while `map-entry?`, `key`,
+   `val` and `(into {} [e])` keep working: it is a vector AND an entry.
+
+   Two things fell out of doing it, both worth more than the change itself.
+
+   **`vector?` had THREE answers in the native runtime** -- the builtin, the
+   match inside `flint/check-tag`, and `Rt::type_p` in `vm.rs`. Widening one
+   left the others, and the probe kept saying false while the code plainly
+   said true. `check-tag` now delegates to `type_p`, so the runtime has one
+   table. The ports had one already and their builtin called it; the
+   duplication was native's alone, which is not where I would have guessed.
+
+   **`is_vector` was the wrong thing to widen.** Twenty callers, most of them
+   the guard before `vec_count` or `vec_nth`, and a map entry does not have
+   the vector layout. The guest question and the layout question share an
+   answer for real vectors and part company here, so they are now two
+   predicates: `is_vector_like` and `is_vector`.
 
    Found the same way as `0h` and `0j`: probing what a value can DO rather
    than reading what its type suggests.
