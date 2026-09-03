@@ -608,7 +608,7 @@ public static class Maps {
 
     // kin:end kin/copies.kin
 
-    // kin:begin kin/nodeassoc.kin
+    // kin:begin kin/assoc.kin
     static long NodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
         int @base = rt.Mark();
         int ni = rt.Push(n);
@@ -677,10 +677,6 @@ public static class Maps {
         rt.PopTo(@base);
         return @out;
     }
-
-    // kin:end kin/nodeassoc.kin
-
-    // kin:begin kin/collassoc.kin
     static long CollAssoc(Rt rt, long n, int h, long key, long val, long edit, int shift) {
         int nh = CnHash(rt, n);
         if (nh != h) {
@@ -764,7 +760,7 @@ public static class Maps {
         return grown;
     }
 
-    // kin:end kin/collassoc.kin
+    // kin:end kin/assoc.kin
 
 
     // kin:begin kin/dissoc.kin

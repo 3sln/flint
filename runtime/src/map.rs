@@ -654,7 +654,7 @@ impl Rt {
 
     // kin:end kin/copies.kin
 
-    // kin:begin kin/nodeassoc.kin
+    // kin:begin kin/assoc.kin
     fn node_assoc(&mut self, n: Value, shift: u32, h: u32, key: Value, val: Value, edit: Value) -> Value {
         let base: usize = self.mark();
         let ni: usize = self.push(n);
@@ -723,10 +723,6 @@ impl Rt {
         self.pop_to(base);
         return out;
     }
-
-    // kin:end kin/nodeassoc.kin
-
-    // kin:begin kin/collassoc.kin
     fn coll_assoc(&mut self, n: Value, h: u32, key: Value, val: Value, edit: Value, shift: u32) -> Value {
         let nh: u32 = self.cn_hash(n);
         if nh != h {
@@ -810,7 +806,7 @@ impl Rt {
         return grown;
     }
 
-    // kin:end kin/collassoc.kin
+    // kin:end kin/assoc.kin
 
 
     // kin:begin kin/dissoc.kin

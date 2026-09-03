@@ -1,0 +1,239 @@
+;; `node_assoc` and `coll_assoc`: putting a key INTO a CHAMP.
+;;
+;; Phase 3 of `doc/goals/kin-port.md`. They ship as ONE source for the reason
+;; `dissoc.kin` gives for its own pair: the two call each other. `node_assoc`
+;; hands a collision node to `coll_assoc`, and `coll_assoc` hands a freshly
+;; wrapped node back to `node_assoc`, so neither is complete without the
+;; other and no order of the two is a dependency order.
+;;
+;; They were two sources, and that only worked because each one resolved the
+;; other's name from the VOCABULARY -- a spelling written out by hand, in
+;; `flint.impl.rt`, that had to agree with what the other source generated and
+;; that nothing checked. Namespaces are a DAG now, so the cycle those two
+;; sources described is illegal rather than merely fragile, and the fix is the
+;; one `dissoc.kin` already made: one source, and the second function resolves
+;; the first LOCALLY.
+;;
+;; ## `node_assoc`: the CHAMP insert, one level of the trie at a time
+;;
+;; Three cases, which is the whole of CHAMP's insert:
+;;
+;;   the bit is in the DATAMAP  -- an entry already sits in this slot. Same
+;;                                 key, so replace the value (or return the
+;;                                 node untouched when the value is `==` too);
+;;                                 different key, so `merge_two` builds a sub
+;;                                 -node and the entry is INLINED down into it
+;;   the bit is in the NODEMAP  -- a sub-node sits here already, so recurse
+;;                                 and copy only if the sub-node changed
+;;   the bit is in NEITHER      -- an empty slot, so insert the entry
+;;
+;; `champ_added` is how the caller learns whether the count moved. It is a
+;; field on the runtime rather than a returned pair because the return value
+;; is already the new node, and the two ports cannot return two values without
+;; allocating something to hold them.
+;;
+;; ## `coll_assoc`: an entry into a COLLISION NODE
+;;
+;; A collision node holds every entry whose key hashes the same all the way
+;; down. Three cases:
+;;
+;;   the hashes DIFFER at this depth -- which happens when the node is being
+;;                                     pushed deeper by an insert above it.
+;;                                     Wrap it in a bitmap node and hand back
+;;                                     to `node_assoc`, which then has a
+;;                                     bitmap to consult
+;;   the key is ALREADY HERE         -- replace its value, count unmoved
+;;   the key is NEW                  -- a fresh node one pair longer, the old
+;;                                     pairs copied across
+;;
+;; THE SENTINEL, and it is a THIRD spelling rather than either of the two
+;; that were there. Rust said `Option<u32>`; both ports said `-1`; next door
+;; in the same Rust file, `coll_dissoc` said `u32::MAX` -- so the divergence
+;; was between two of Rust's own functions as much as between Rust and the
+;; ports.
+;;
+;; kin has no option type, which rules the first one out. `-1` looks like the
+;; obvious convergence and is the wrong one: an index here is `u32` in Rust,
+;; so carrying `-1` means a signed tag AND a cast at every use of the index.
+;; That is machinery bought to express "absent" in a type that cannot say it.
+;;
+;; `cnt` says it with nothing. A hit is `0..cnt-1`, so `cnt` itself is
+;; unambiguous, unsigned everywhere, needs no cast, and is spelled the same in
+;; all three targets. Converging on what one runtime already said would have
+;; been the easy move and would have cost more than the answer is worth.
+;;
+;; ## Order in this file is not arbitrary
+;;
+;; `node_assoc` is first, so its call to `coll_assoc` resolves from the
+;; vocabulary and `coll_assoc`'s call to `node_assoc` resolves to the
+;; definition above it. That is the positional rule doing the work the cycle
+;; used to: one of the two edges is a forward reference, and only one.
+(ns runtime.assoc
+  (:require [flint.impl.rt :refer [set-slot defn return if let local set do comment
+                                   for break
+                                   mark push r pop-to nil? not == != <
+                                   is-bmnode coll-assoc bitpos index-of
+                                   bn-datamap bn-nodemap bn-key bn-val bn-node
+                                   bn-set-node
+                                   val-eq hash-value merge-two
+                                   bn-copy-set-value bn-copy-set-node
+                                   bn-copy-insert-entry bn-inline-to-node
+                                   cn-hash cn-count cn-key cn-val cn-new
+                                   + - * bit-and .
+                                   Rt Value RootIx I32 Bool NIL
+                                   CN_BASE HASH_BITS]]
+            [runtime.collnode :refer [bn-new cn-copy-set-val]]))
+
+(defn ^:method ^Value node-assoc
+  [^:mut ^Rt rt ^Value n ^I32 shift ^I32 h ^Value key ^Value val ^Value edit]
+  (let [^RootIx base (mark rt)
+        ^RootIx ni (push rt n)
+        ^RootIx ki (push rt key)
+        ^RootIx vi (push rt val)
+        ^RootIx ei (push rt edit)]
+    (comment "A collision node has no bitmaps to consult, so it is not this"
+             "function's shape at all -- hand it straight over.")
+    (comment "The result here is named `handed` and not `out`: C# forbids a"
+             "local in an inner scope that reuses an enclosing scope's name,"
+             "and `out` is declared at method scope just below.")
+    (if (not (is-bmnode rt n))
+      (let [^Value handed (coll-assoc rt (r rt ni) h (r rt ki) (r rt vi)
+                                      (r rt ei) shift)]
+        (pop-to rt base)
+        (return handed)))
+    (let [^I32 bit (bitpos h shift)
+          ^I32 dm (bn-datamap rt n)
+          ^I32 nm (bn-nodemap rt n)]
+      (local ^Value out)
+      (if (!= (bit-and dm bit) 0)
+        (let [^I32 at (index-of dm bit)
+              ^RootIx k0i (push rt (bn-key rt (r rt ni) at))]
+          (if (val-eq rt (r rt k0i) (r rt ki))
+            (do
+              (comment "The key was already here, so the map's count does not"
+                       "move however the value changes.")
+              (set (. rt champ-added) false)
+              (let [^Value v0 (bn-val rt (r rt ni) at)]
+                (if (== v0 (r rt vi))
+                  (set out (r rt ni))
+                  (set out (bn-copy-set-value rt (r rt ni) at (r rt vi)
+                                              (r rt ei))))))
+            (do
+              (comment "A different key in the same slot: the two are pushed"
+                       "down into a sub-node, and the entry stops being an"
+                       "entry at this level.")
+              (set (. rt champ-added) true)
+              (let [^RootIx v0i (push rt (bn-val rt (r rt ni) at))
+                    ^I32 h0 (hash-value rt (r rt k0i))
+                    ^Value sub (merge-two rt (+ shift HASH_BITS)
+                                          (r rt k0i) (r rt v0i) h0
+                                          (r rt ki) (r rt vi) h (r rt ei))
+                    ^RootIx si (push rt sub)]
+                (set out (bn-inline-to-node rt (r rt ni) bit (r rt si)
+                                            (r rt ei)))))))
+        (if (!= (bit-and nm bit) 0)
+          (let [^I32 at (index-of nm bit)]
+            (comment "Rooted, because the comparison below is what decides"
+                     "whether this node changed. `node_assoc` allocates, a"
+                     "collection can move `sub`, and a stale address that"
+                     "happened to match the new one would drop the whole"
+                     "subtree's update on the floor -- a key silently missing"
+                     "from a map whose count says it is there.")
+            (let [^RootIx subi (push rt (bn-node rt (r rt ni) at))
+                  ^Value newsub (node-assoc rt (r rt subi) (+ shift HASH_BITS)
+                                            h (r rt ki) (r rt vi) (r rt ei))]
+              (if (== newsub (r rt subi))
+                (set out (r rt ni))
+                (set out (bn-copy-set-node rt (r rt ni) at newsub
+                                           (r rt ei))))))
+          (do
+            (comment "An empty slot, which is the only branch that always"
+                     "grows the map.")
+            (set (. rt champ-added) true)
+            (set out (bn-copy-insert-entry rt (r rt ni) bit (r rt ki)
+                                           (r rt vi) (r rt ei))))))
+      (pop-to rt base)
+      (return out))))
+
+(defn ^:method ^Value coll-assoc
+  [^:mut ^Rt rt ^Value n ^I32 h ^Value key ^Value val ^Value edit ^I32 shift]
+  (let [^I32 nh (cn-hash rt n)]
+    (if (!= nh h)
+      (do
+        (comment "A different hash at this depth: the node becomes a child of"
+                 "a new bitmap node, and `node_assoc` takes it from there --"
+                 "which is the only path by which a collision node acquires a"
+                 "bitmap above it.")
+        (comment "Each of the three blocks below names its own roots --"
+                 "`wbase`/`wni`, `rbase`/`rni`, `gbase`/`gni` -- rather than"
+                 "reusing `base`/`ni`. Rust and Java scope them per block and"
+                 "would take the shorter names; C# refuses a name reused in an"
+                 "enclosing scope (CS0136). One source has to satisfy the"
+                 "strictest of the three, and this is what that costs.")
+        (let [^RootIx wbase (mark rt)
+              ^RootIx wni (push rt n)
+              ^RootIx wki (push rt key)
+              ^RootIx wvi (push rt val)
+              ^RootIx wei (push rt edit)
+              ^Value wrapper (bn-new rt 0 (bitpos nh shift) (r rt wei))
+              ^RootIx wi (push rt wrapper)]
+          (bn-set-node rt (r rt wi) 0 (r rt wni))
+          (let [^Value wrapped (node-assoc rt (r rt wi) shift h
+                                           (r rt wki) (r rt wvi) (r rt wei))]
+            (pop-to rt wbase)
+            (return wrapped))))))
+  (comment "THE SCAN. `hit` is left at `cnt` when nothing matched -- one past"
+           "the last valid index, so it cannot collide with an answer.")
+  (let [^RootIx scan (mark rt)
+        ^RootIx sni (push rt n)
+        ^RootIx ski (push rt key)
+        ^I32 cnt (cn-count rt (r rt sni))]
+    (local ^:mut ^I32 hit)
+    (set hit cnt)
+    (for [^I32 i 0 cnt]
+      (comment "The key is rooted across `eq`, which allocates when either"
+               "side is a row ref.")
+      (let [^RootIx kk (push rt (cn-key rt (r rt sni) i))
+            ^Bool same (val-eq rt (r rt kk) (r rt ski))]
+        (pop-to rt kk)
+        (if same
+          (do
+            (set hit i)
+            (break)))))
+    (let [^Value nn (r rt sni)
+          ^Value kk2 (r rt ski)]
+      (pop-to rt scan)
+      (if (!= hit cnt)
+        (do
+          (comment "The key was already here, so the map's count does not move.")
+          (set (. rt champ-added) false)
+          (let [^RootIx rbase (mark rt)
+                ^RootIx rni (push rt nn)
+                ^RootIx rvi (push rt val)
+                ^RootIx rei (push rt edit)
+                ^Value replaced (cn-copy-set-val rt (r rt rni) hit (r rt rvi)
+                                                 (r rt rei))]
+            (pop-to rt rbase)
+            (return replaced))))
+      (set (. rt champ-added) true)
+      (let [^RootIx gbase (mark rt)
+            ^RootIx gni (push rt nn)
+            ^RootIx gki (push rt kk2)
+            ^RootIx gvi (push rt val)
+            ^RootIx gei (push rt edit)
+            ^Value fresh (cn-new rt h (+ cnt 1) (r rt gei))]
+        (if (nil? rt fresh)
+          (do
+            (pop-to rt gbase)
+            (return NIL)))
+        (let [^RootIx oi (push rt fresh)]
+          (for [^I32 i 0 cnt]
+            (let [^Value ek (cn-key rt (r rt gni) i)
+                  ^Value ev (cn-val rt (r rt gni) i)]
+              (set-slot rt (r rt oi) (+ CN_BASE (* 2 i)) ek)
+              (set-slot rt (r rt oi) (+ (+ CN_BASE (* 2 i)) 1) ev)))
+          (set-slot rt (r rt oi) (+ CN_BASE (* 2 cnt)) (r rt gki))
+          (set-slot rt (r rt oi) (+ (+ CN_BASE (* 2 cnt)) 1) (r rt gvi))
+          (let [^Value grown (r rt oi)]
+            (pop-to rt gbase)
+            (return grown)))))))

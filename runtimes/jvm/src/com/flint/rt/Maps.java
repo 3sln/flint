@@ -610,7 +610,7 @@ public final class Maps {
 
     // kin:end kin/copies.kin
 
-    // kin:begin kin/nodeassoc.kin
+    // kin:begin kin/assoc.kin
     static long nodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
         int base = rt.mark();
         int ni = rt.push(n);
@@ -679,10 +679,6 @@ public final class Maps {
         rt.popTo(base);
         return out;
     }
-
-    // kin:end kin/nodeassoc.kin
-
-    // kin:begin kin/collassoc.kin
     static long collAssoc(Rt rt, long n, int h, long key, long val, long edit, int shift) {
         int nh = cnHash(rt, n);
         if (nh != h) {
@@ -766,7 +762,7 @@ public final class Maps {
         return grown;
     }
 
-    // kin:end kin/collassoc.kin
+    // kin:end kin/assoc.kin
 
 
     // kin:begin kin/dissoc.kin

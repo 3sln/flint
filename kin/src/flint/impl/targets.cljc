@@ -35,15 +35,14 @@
 
   INTERIM. See the namespace docstring: this is the sidecar in one file
   instead of sixteen, and it is deleted by the consolidation commit."
-  '{runtime.champ     maps
-    runtime.collassoc maps
-    runtime.collnode  maps
+  '{runtime.assoc     maps
+   runtime.champ     maps
+     runtime.collnode  maps
     runtime.copies    maps
     runtime.dissoc    maps
     runtime.find      maps
     runtime.merge     maps
-    runtime.nodeassoc maps
-    runtime.nodeclass maps
+     runtime.nodeclass maps
     runtime.eq        eq
     runtime.eqalloc   eq
     runtime.hash      hash
