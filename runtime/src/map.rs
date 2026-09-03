@@ -84,21 +84,6 @@ fn index_of(bitmap: u32, bit: u32) -> u32 {
 impl Rt {
     // --- node primitives ---------------------------------------------------
 
-    fn bn_new(&mut self, datamap: u32, nodemap: u32, edit: Value) -> Value {
-        let ne = datamap.count_ones();
-        let nn = nodemap.count_ones();
-        let e = self.push(edit);
-        let a = self.alloc(TY_BMNODE, BN_BASE + 2 * ne + nn);
-        let edit = self.r(e);
-        self.pop_to(e);
-        if a == 0 {
-            return NIL;
-        }
-        self.set_slot(a, BN_EDIT, edit);
-        self.set_slot(a, BN_DATAMAP, Value::fixnum(datamap as i64));
-        self.set_slot(a, BN_NODEMAP, Value::fixnum(nodemap as i64));
-        Value::heap(a)
-    }
 
     // kin:begin kin/champ.kin
     #[inline]
@@ -166,6 +151,44 @@ impl Rt {
     #[inline]
     fn cn_val(&self, n: Value, i: u32) -> Value {
         return self.slot(n, (CN_BASE + (2 * i)) + 1);
+    }
+    /// A BITMAP NODE, allocated and stamped with its two maps.
+    pub fn bn_new(&mut self, datamap: u32, nodemap: u32, edit: Value) -> Value {
+        let ne: u32 = datamap.count_ones();
+        let nn: u32 = nodemap.count_ones();
+        let e: usize = self.push(edit);
+        let a: Addr = self.alloc(TY_BMNODE, (BN_BASE + (2 * ne)) + nn);
+        let ed: Value = self.r(e);
+        self.pop_to(e);
+        if a == 0 {
+            return NIL;
+        }
+        self.set_slot(a, BN_EDIT, ed);
+        self.set_slot(a, BN_DATAMAP, Value::fixnum(datamap as i64));
+        self.set_slot(a, BN_NODEMAP, Value::fixnum(nodemap as i64));
+        return Value::heap(a);
+    }
+    /// A COLLISION NODE copied with one value replaced.
+    pub fn cn_copy_set_val(&mut self, n: Value, i: u32, val: Value, edit: Value) -> Value {
+        let cnt: u32 = self.cn_count(n);
+        let base: usize = self.mark();
+        let ni: usize = self.push(n);
+        let vi: usize = self.push(val);
+        let ei: usize = self.push(edit);
+        let out: Value = self.cn_new(self.cn_hash(self.r(ni)), cnt, self.r(ei));
+        if out.is_nil() {
+            self.pop_to(base);
+            return NIL;
+        }
+        let oi: usize = self.push(out);
+        for k in 0..cnt {
+            self.set(self.r(oi), CN_BASE + (2 * k), self.cn_key(self.r(ni), k));
+            self.set(self.r(oi), (CN_BASE + (2 * k)) + 1, self.cn_val(self.r(ni), k));
+        }
+        self.set(self.r(oi), (CN_BASE + (2 * i)) + 1, self.r(vi));
+        let res: Value = self.r(oi);
+        self.pop_to(base);
+        return res;
     }
 
     // kin:end kin/collnode.kin
@@ -789,29 +812,6 @@ impl Rt {
 
     // kin:end kin/collassoc.kin
 
-    fn cn_copy_set_val(&mut self, n: Value, i: u32, val: Value, edit: Value) -> Value {
-        let cnt = self.cn_count(n);
-        let base = self.mark();
-        let ni = self.push(n);
-        let vi = self.push(val);
-        let ei = self.push(edit);
-        let out = self.cn_new(self.slot(n, CN_HASH).as_fixnum() as u32, cnt, self.r(ei));
-        if out.is_nil() {
-            self.pop_to(base);
-            return NIL;
-        }
-        let oi = self.push(out);
-        for k in 0..cnt {
-            let (kk, vv) = (self.cn_key(self.r(ni), k), self.cn_val(self.r(ni), k));
-            self.set(self.r(oi), CN_BASE + 2 * k, kk);
-            self.set(self.r(oi), CN_BASE + 2 * k + 1, vv);
-        }
-        let v = self.r(vi);
-        self.set(self.r(oi), CN_BASE + 2 * i + 1, v);
-        let out = self.r(oi);
-        self.pop_to(base);
-        out
-    }
 
     // kin:begin kin/dissoc.kin
     fn node_dissoc(&mut self, n: Value, shift: u32, h: u32, key: Value, edit: Value) -> Value {

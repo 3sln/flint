@@ -57,18 +57,6 @@ public final class Maps {
 
     // --- node primitives ----------------------------------------------------
 
-    static long bnNew(Rt rt, int datamap, int nodemap, long edit) {
-        int ne = Integer.bitCount(datamap), nn = Integer.bitCount(nodemap);
-        int e = rt.push(edit);
-        long a = rt.alloc(TY_BMNODE, BN_BASE + 2 * ne + nn);
-        long ed = rt.r(e);
-        rt.popTo(e);
-        if (a == 0) return Val.NIL;
-        rt.setSlot(a, BN_EDIT, ed);
-        rt.setSlot(a, BN_DATAMAP, Val.fixnum(datamap & 0xFFFFFFFFL));
-        rt.setSlot(a, BN_NODEMAP, Val.fixnum(nodemap & 0xFFFFFFFFL));
-        return Val.heap(a);
-    }
 
     // kin:begin kin/champ.kin
     static int bnDatamap(Rt rt, long n) {
@@ -126,9 +114,46 @@ public final class Maps {
     static long cnVal(Rt rt, long n, int i) {
         return rt.slot(n, (CN_BASE + (2 * i)) + 1);
     }
+    /// A BITMAP NODE, allocated and stamped with its two maps.
+    public static long bnNew(Rt rt, int datamap, int nodemap, long edit) {
+        int ne = Integer.bitCount(datamap);
+        int nn = Integer.bitCount(nodemap);
+        int e = rt.push(edit);
+        long a = rt.alloc(TY_BMNODE, (BN_BASE + (2 * ne)) + nn);
+        long ed = rt.r(e);
+        rt.popTo(e);
+        if (a == 0) {
+            return Val.NIL;
+        }
+        rt.setSlot(a, BN_EDIT, ed);
+        rt.setSlot(a, BN_DATAMAP, Val.fixnum(datamap & 0xFFFFFFFFL));
+        rt.setSlot(a, BN_NODEMAP, Val.fixnum(nodemap & 0xFFFFFFFFL));
+        return Val.heap(a);
+    }
+    /// A COLLISION NODE copied with one value replaced.
+    public static long cnCopySetVal(Rt rt, long n, int i, long val, long edit) {
+        int cnt = cnCount(rt, n);
+        int base = rt.mark();
+        int ni = rt.push(n);
+        int vi = rt.push(val);
+        int ei = rt.push(edit);
+        long out = cnNew(rt, cnHash(rt, rt.r(ni)), cnt, rt.r(ei));
+        if (Val.isNil(out)) {
+            rt.popTo(base);
+            return Val.NIL;
+        }
+        int oi = rt.push(out);
+        for (int k = 0; k < cnt; k++) {
+            rt.setSlot(Val.asHeap(rt.r(oi)), CN_BASE + (2 * k), cnKey(rt, rt.r(ni), k));
+            rt.setSlot(Val.asHeap(rt.r(oi)), (CN_BASE + (2 * k)) + 1, cnVal(rt, rt.r(ni), k));
+        }
+        rt.setSlot(Val.asHeap(rt.r(oi)), (CN_BASE + (2 * i)) + 1, rt.r(vi));
+        long res = rt.r(oi);
+        rt.popTo(base);
+        return res;
+    }
 
     // kin:end kin/collnode.kin
-    static void cnSet(Rt rt, long n, int i, long v) { rt.setSlot(Val.asHeap(n), i, v); }
 
     // kin:begin kin/nodeclass.kin
     static boolean isBmnode(Rt rt, long n) {
@@ -272,10 +297,10 @@ public final class Maps {
             // is the only place equal hashes are stored side by side.
             res = cnNew(rt, h0, 2, rt.r(ie));
             if (!Val.isNil(res)) {
-                cnSet(rt, res, CN_BASE, rt.r(ik0));
-                cnSet(rt, res, CN_BASE + 1, rt.r(iv0));
-                cnSet(rt, res, CN_BASE + 2, rt.r(ik1));
-                cnSet(rt, res, CN_BASE + 3, rt.r(iv1));
+                rt.setSlot(Val.asHeap(res), CN_BASE, rt.r(ik0));
+                rt.setSlot(Val.asHeap(res), CN_BASE + 1, rt.r(iv0));
+                rt.setSlot(Val.asHeap(res), CN_BASE + 2, rt.r(ik1));
+                rt.setSlot(Val.asHeap(res), CN_BASE + 3, rt.r(iv1));
             }
         } else {
             int m0 = mask(h0, shift);
@@ -731,11 +756,11 @@ public final class Maps {
         for (int i = 0; i < cnt; i++) {
             long ek = cnKey(rt, rt.r(gni), i);
             long ev = cnVal(rt, rt.r(gni), i);
-            cnSet(rt, rt.r(oi), CN_BASE + (2 * i), ek);
-            cnSet(rt, rt.r(oi), (CN_BASE + (2 * i)) + 1, ev);
+            rt.setSlot(Val.asHeap(rt.r(oi)), CN_BASE + (2 * i), ek);
+            rt.setSlot(Val.asHeap(rt.r(oi)), (CN_BASE + (2 * i)) + 1, ev);
         }
-        cnSet(rt, rt.r(oi), CN_BASE + (2 * cnt), rt.r(gki));
-        cnSet(rt, rt.r(oi), (CN_BASE + (2 * cnt)) + 1, rt.r(gvi));
+        rt.setSlot(Val.asHeap(rt.r(oi)), CN_BASE + (2 * cnt), rt.r(gki));
+        rt.setSlot(Val.asHeap(rt.r(oi)), (CN_BASE + (2 * cnt)) + 1, rt.r(gvi));
         long grown = rt.r(oi);
         rt.popTo(gbase);
         return grown;
@@ -743,22 +768,6 @@ public final class Maps {
 
     // kin:end kin/collassoc.kin
 
-    static long cnCopySetVal(Rt rt, long n, int i, long val, long edit) {
-        int cnt = cnCount(rt, n);
-        int base = rt.mark();
-        int ni = rt.push(n), vi = rt.push(val), ei = rt.push(edit);
-        long out = cnNew(rt, cnHash(rt, rt.r(ni)), cnt, rt.r(ei));
-        if (Val.isNil(out)) { rt.popTo(base); return Val.NIL; }
-        int oi = rt.push(out);
-        for (int k = 0; k < cnt; k++) {
-            cnSet(rt, rt.r(oi), CN_BASE + 2 * k, cnKey(rt, rt.r(ni), k));
-            cnSet(rt, rt.r(oi), CN_BASE + 2 * k + 1, cnVal(rt, rt.r(ni), k));
-        }
-        cnSet(rt, rt.r(oi), CN_BASE + 2 * i + 1, rt.r(vi));
-        long r = rt.r(oi);
-        rt.popTo(base);
-        return r;
-    }
 
     // kin:begin kin/dissoc.kin
     static long nodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
@@ -896,8 +905,8 @@ public final class Maps {
                 }
                 long ek = cnKey(rt, rt.r(dni), i);
                 long ev = cnVal(rt, rt.r(dni), i);
-                cnSet(rt, rt.r(oi), CN_BASE + (2 * d), ek);
-                cnSet(rt, rt.r(oi), (CN_BASE + (2 * d)) + 1, ev);
+                rt.setSlot(Val.asHeap(rt.r(oi)), CN_BASE + (2 * d), ek);
+                rt.setSlot(Val.asHeap(rt.r(oi)), (CN_BASE + (2 * d)) + 1, ev);
                 d += 1;
             }
             res = rt.r(oi);

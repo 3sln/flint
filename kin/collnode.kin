@@ -14,12 +14,15 @@
 ;; would otherwise be one source. That is the honest cost of the divergence,
 ;; and it is cheaper than inventing a `cn_set` for Rust that nothing calls.
 (ns runtime.collnode
-  (:require [flint.impl.rt :refer [defn return if let comment doc not
+  (:require [flint.impl.rt :refer [defn return if let comment doc not do for
                                    push r pop-to alloc set-at heap fixnum
+                                   mark nil? set-slot popcount
                                    slot olen as-fixnum to-i32
                                    == quot - * +
                                    Rt Value Addr RootIx I32 NIL
-                                   CN_BASE CN_EDIT CN_HASH TY_COLLNODE]]))
+                                   CN_BASE CN_EDIT CN_HASH TY_COLLNODE
+                                   TY_BMNODE BN_BASE BN_EDIT
+                                   BN_DATAMAP BN_NODEMAP]]))
 
 (defn ^:method ^Value cn-new [^:mut ^Rt rt ^I32 h ^I32 npairs ^Value edit]
   (comment "`edit` is rooted across the allocation and read back after it:"
@@ -46,3 +49,45 @@
 (defn ^:inline ^:method ^Value cn-val [^Rt rt ^Value n ^I32 i]
   (return (slot rt n (+ (+ CN_BASE (* 2 i)) 1))))
 
+(doc "A BITMAP NODE, allocated and stamped with its two maps.")
+
+;; PORTED from the hand-written runtimes, which is what takes flint's external
+;; surface to zero. It was hand-written in all three and called from generated
+;; code -- the shape that has to work before `kingen` modules can stand alone,
+;; because `self.bn_new(..)` still resolves across files in Rust while an
+;; unqualified `bnNew(..)` does not in Java.
+(defn ^:pub ^:method ^Value bn-new [^:mut ^Rt rt ^I32 datamap ^I32 nodemap ^Value edit]
+  (let [^I32 ne (popcount datamap)
+        ^I32 nn (popcount nodemap)
+        ^RootIx e (push rt edit)
+        ^Addr a (alloc rt TY_BMNODE (+ (+ BN_BASE (* 2 ne)) nn))
+        ^Value ed (r rt e)]
+    (pop-to rt e)
+    (if (== a 0)
+      (return NIL))
+    (set-at rt a BN_EDIT ed)
+    (set-at rt a BN_DATAMAP (fixnum datamap))
+    (set-at rt a BN_NODEMAP (fixnum nodemap))
+    (return (heap a))))
+
+(doc "A COLLISION NODE copied with one value replaced.")
+
+(defn ^:pub ^:method ^Value cn-copy-set-val
+  [^:mut ^Rt rt ^Value n ^I32 i ^Value val ^Value edit]
+  (let [^I32 cnt (cn-count rt n)
+        ^RootIx base (mark rt)
+        ^RootIx ni (push rt n)
+        ^RootIx vi (push rt val)
+        ^RootIx ei (push rt edit)
+        ^Value out (cn-new rt (cn-hash rt (r rt ni)) cnt (r rt ei))]
+    (if (nil? rt out)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^RootIx oi (push rt out)]
+      (for [^I32 k 0 cnt]
+        (set-slot rt (r rt oi) (+ CN_BASE (* 2 k)) (cn-key rt (r rt ni) k))
+        (set-slot rt (r rt oi) (+ (+ CN_BASE (* 2 k)) 1) (cn-val rt (r rt ni) k)))
+      (set-slot rt (r rt oi) (+ (+ CN_BASE (* 2 i)) 1) (r rt vi))
+      (let [^Value res (r rt oi)]
+        (pop-to rt base)
+        (return res)))))

@@ -38,9 +38,5 @@
    :forms
    {;; A bitmap node, allocated and stamped with its two maps.
     'bn-new (rt/own "bn_new" "bnNew" 3)
-    ;; NOT symmetrical: Rust writes a collision-node slot through the general
-    ;; `Rt::set`, and the ports have a `cnSet` of their own. The asymmetry is
-    ;; why this is a call template rather than something kin could guess.
-    'cn-set (rt/own "set" "cnSet" 3)
     ;; A collision node copied with one value replaced.
     'cn-copy-set-val (rt/own "cn_copy_set_val" "cnCopySetVal" 4)}))

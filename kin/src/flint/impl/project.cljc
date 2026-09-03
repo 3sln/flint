@@ -15,7 +15,8 @@
 
 (def project
   (delay
-    (kp/load-project
+    (kp/resolve-exports
+     (kp/load-project
      {:vocabularies '[flint.impl.rt flint.impl.hash flint.impl.host]
       :targets targets/targets
       ;; The order every report lists them in. A map's keys have an accidental
@@ -34,4 +35,4 @@
       :sources {:vfs (vfs/disk-vfs "kin")
                 :match "*.kin"
                 :label #(str "kin/" %)
-                :unlabel #(str/replace % #"^kin/" "")}})))
+                :unlabel #(str/replace % #"^kin/" "")}}))))

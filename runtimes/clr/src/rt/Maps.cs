@@ -55,18 +55,6 @@ public static class Maps {
 
     // --- node primitives ----------------------------------------------------
 
-    static long BnNew(Rt rt, int datamap, int nodemap, long edit) {
-        int ne = System.Numerics.BitOperations.PopCount((uint)(datamap)), nn = System.Numerics.BitOperations.PopCount((uint)(nodemap));
-        int e = rt.Push(edit);
-        long a = rt.Alloc(Obj.TyBmnode, BN_BASE + 2 * ne + nn);
-        long ed = rt.R(e);
-        rt.PopTo(e);
-        if (a == 0) return Val.Nil;
-        rt.SetSlot(a, BN_EDIT, ed);
-        rt.SetSlot(a, BN_DATAMAP, Val.Fixnum(datamap & 0xFFFFFFFFL));
-        rt.SetSlot(a, BN_NODEMAP, Val.Fixnum(nodemap & 0xFFFFFFFFL));
-        return Val.Heap(a);
-    }
 
     // kin:begin kin/champ.kin
     static int BnDatamap(Rt rt, long n) {
@@ -124,9 +112,46 @@ public static class Maps {
     static long CnVal(Rt rt, long n, int i) {
         return rt.Slot(n, (CN_BASE + (2 * i)) + 1);
     }
+    /// A BITMAP NODE, allocated and stamped with its two maps.
+    public static long BnNew(Rt rt, int datamap, int nodemap, long edit) {
+        int ne = System.Numerics.BitOperations.PopCount((uint)(datamap));
+        int nn = System.Numerics.BitOperations.PopCount((uint)(nodemap));
+        int e = rt.Push(edit);
+        long a = rt.Alloc(Obj.TyBmnode, (BN_BASE + (2 * ne)) + nn);
+        long ed = rt.R(e);
+        rt.PopTo(e);
+        if (a == 0) {
+            return Val.Nil;
+        }
+        rt.SetSlot(a, BN_EDIT, ed);
+        rt.SetSlot(a, BN_DATAMAP, Val.Fixnum(datamap & 0xFFFFFFFFL));
+        rt.SetSlot(a, BN_NODEMAP, Val.Fixnum(nodemap & 0xFFFFFFFFL));
+        return Val.Heap(a);
+    }
+    /// A COLLISION NODE copied with one value replaced.
+    public static long CnCopySetVal(Rt rt, long n, int i, long val, long edit) {
+        int cnt = CnCount(rt, n);
+        int @base = rt.Mark();
+        int ni = rt.Push(n);
+        int vi = rt.Push(val);
+        int ei = rt.Push(edit);
+        long @out = CnNew(rt, CnHash(rt, rt.R(ni)), cnt, rt.R(ei));
+        if (Val.IsNil(@out)) {
+            rt.PopTo(@base);
+            return Val.Nil;
+        }
+        int oi = rt.Push(@out);
+        for (int k = 0; k < cnt; k++) {
+            rt.SetSlot(Val.AsHeap(rt.R(oi)), CN_BASE + (2 * k), CnKey(rt, rt.R(ni), k));
+            rt.SetSlot(Val.AsHeap(rt.R(oi)), (CN_BASE + (2 * k)) + 1, CnVal(rt, rt.R(ni), k));
+        }
+        rt.SetSlot(Val.AsHeap(rt.R(oi)), (CN_BASE + (2 * i)) + 1, rt.R(vi));
+        long res = rt.R(oi);
+        rt.PopTo(@base);
+        return res;
+    }
 
     // kin:end kin/collnode.kin
-    static void CnSet(Rt rt, long n, int i, long v) { rt.SetSlot(Val.AsHeap(n), i, v); }
 
     // kin:begin kin/nodeclass.kin
     static bool IsBmnode(Rt rt, long n) {
@@ -270,10 +295,10 @@ public static class Maps {
             // is the only place equal hashes are stored side by side.
             res = CnNew(rt, h0, 2, rt.R(ie));
             if (!Val.IsNil(res)) {
-                CnSet(rt, res, CN_BASE, rt.R(ik0));
-                CnSet(rt, res, CN_BASE + 1, rt.R(iv0));
-                CnSet(rt, res, CN_BASE + 2, rt.R(ik1));
-                CnSet(rt, res, CN_BASE + 3, rt.R(iv1));
+                rt.SetSlot(Val.AsHeap(res), CN_BASE, rt.R(ik0));
+                rt.SetSlot(Val.AsHeap(res), CN_BASE + 1, rt.R(iv0));
+                rt.SetSlot(Val.AsHeap(res), CN_BASE + 2, rt.R(ik1));
+                rt.SetSlot(Val.AsHeap(res), CN_BASE + 3, rt.R(iv1));
             }
         } else {
             int m0 = Mask(h0, shift);
@@ -729,11 +754,11 @@ public static class Maps {
         for (int i = 0; i < cnt; i++) {
             long ek = CnKey(rt, rt.R(gni), i);
             long ev = CnVal(rt, rt.R(gni), i);
-            CnSet(rt, rt.R(oi), CN_BASE + (2 * i), ek);
-            CnSet(rt, rt.R(oi), (CN_BASE + (2 * i)) + 1, ev);
+            rt.SetSlot(Val.AsHeap(rt.R(oi)), CN_BASE + (2 * i), ek);
+            rt.SetSlot(Val.AsHeap(rt.R(oi)), (CN_BASE + (2 * i)) + 1, ev);
         }
-        CnSet(rt, rt.R(oi), CN_BASE + (2 * cnt), rt.R(gki));
-        CnSet(rt, rt.R(oi), (CN_BASE + (2 * cnt)) + 1, rt.R(gvi));
+        rt.SetSlot(Val.AsHeap(rt.R(oi)), CN_BASE + (2 * cnt), rt.R(gki));
+        rt.SetSlot(Val.AsHeap(rt.R(oi)), (CN_BASE + (2 * cnt)) + 1, rt.R(gvi));
         long grown = rt.R(oi);
         rt.PopTo(gbase);
         return grown;
@@ -741,22 +766,6 @@ public static class Maps {
 
     // kin:end kin/collassoc.kin
 
-    static long CnCopySetVal(Rt rt, long n, int i, long val, long edit) {
-        int cnt = CnCount(rt, n);
-        int bas = rt.Mark();
-        int ni = rt.Push(n), vi = rt.Push(val), ei = rt.Push(edit);
-        long outv = CnNew(rt, CnHash(rt, rt.R(ni)), cnt, rt.R(ei));
-        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
-        int oi = rt.Push(outv);
-        for (int k = 0; k < cnt; k++) {
-            CnSet(rt, rt.R(oi), CN_BASE + 2 * k, CnKey(rt, rt.R(ni), k));
-            CnSet(rt, rt.R(oi), CN_BASE + 2 * k + 1, CnVal(rt, rt.R(ni), k));
-        }
-        CnSet(rt, rt.R(oi), CN_BASE + 2 * i + 1, rt.R(vi));
-        long r = rt.R(oi);
-        rt.PopTo(bas);
-        return r;
-    }
 
     // kin:begin kin/dissoc.kin
     static long NodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
@@ -894,8 +903,8 @@ public static class Maps {
                 }
                 long ek = CnKey(rt, rt.R(dni), i);
                 long ev = CnVal(rt, rt.R(dni), i);
-                CnSet(rt, rt.R(oi), CN_BASE + (2 * d), ek);
-                CnSet(rt, rt.R(oi), (CN_BASE + (2 * d)) + 1, ev);
+                rt.SetSlot(Val.AsHeap(rt.R(oi)), CN_BASE + (2 * d), ek);
+                rt.SetSlot(Val.AsHeap(rt.R(oi)), (CN_BASE + (2 * d)) + 1, ev);
                 d += 1;
             }
             res = rt.R(oi);

@@ -46,12 +46,14 @@ fn main() {
     static final long NIL = 0xFFFFL;
     static final int CN_BASE = 2, HASH_BITS = 5;
     static final class Val {
+        static long asHeap(long v) { return v; }
         static final long NIL = 0xFFFFL;
         static boolean isNil(long v) { return v == NIL; }
     }
     static int mask(int h, int shift) { return (h >>> shift) & 0x1f; }
     static final class Rt {
         long[] h = new long[200];
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
         long bump = 1;
         java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
         StringBuilder log = new StringBuilder();
@@ -84,12 +86,14 @@ fn main() {
     const long NIL = 0xFFFFL;
     const int CN_BASE = 2, HASH_BITS = 5;
     static class Val {
+        internal static long AsHeap(long v) { return v; }
         internal const long Nil = 0xFFFFL;
         internal static bool IsNil(long v) { return v == Nil; }
     }
     static int Mask(int h, int shift) { return (int)((uint) h >> shift) & 0x1f; }
     internal sealed class Rt {
         internal long[] h = new long[200];
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
         internal long bump = 1;
         internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
         internal System.Text.StringBuilder log = new System.Text.StringBuilder();

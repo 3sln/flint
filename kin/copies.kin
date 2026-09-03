@@ -28,7 +28,7 @@
                                    + - < == and slot bit-or bit-xor bit-and
                                    Rt Value RootIx I32 NIL
                                    BN_EDIT]]
-            [flint.impl.host :refer [bn-new]]))
+            [runtime.collnode :refer [bn-new]]))
 
 (defn ^:method ^Value bn-copy-insert-entry
   [^:mut ^Rt rt ^Value n ^I32 bit ^Value key ^Value val ^Value edit]

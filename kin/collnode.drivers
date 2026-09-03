@@ -8,7 +8,12 @@ const CN_EDIT: u32 = 0;
 const CN_HASH: u32 = 1;
 const TY_COLLNODE: u32 = 18;
 const TY_BMNODE: u32 = 16;
+const BN_EDIT: u32 = 0;
+const BN_DATAMAP: u32 = 1;
+const BN_NODEMAP: u32 = 2;
+const BN_BASE: u32 = 3;
 impl Value {
+    fn is_nil(self) -> bool { self.0 == 0xFFFF }
     fn as_heap(self) -> Addr { self.0 as Addr }
     fn as_fixnum(self) -> i64 { (self.0 & 0xFFFFFFFFFFFF) as i64 }
     fn fixnum(n: i64) -> Value { Value((n as u64) & 0xFFFFFFFFFFFF) }
@@ -18,8 +23,10 @@ struct Gc { sp: Vec<u32> }
 struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64,
             roots: Vec<Value>, starve: bool }
 impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
     fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
     fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set(&mut self, n: Value, i: u32, v: Value) { self.h[n.0 as usize + i as usize] = v.0; }
     fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
     fn alloc(&mut self, t: u32, n: u32) -> Addr {
         if self.starve { return 0; }
@@ -60,8 +67,10 @@ fn main() {
     static final long NIL = 0xFFFFL;
     static final int CN_BASE = 2, CN_EDIT = 0, CN_HASH = 1;
     static final int TY_COLLNODE = 18, TY_BMNODE = 16;
+    static final int BN_EDIT = 0, BN_DATAMAP = 1, BN_NODEMAP = 2, BN_BASE = 3;
     static final class Val {
         static final long NIL = 0xFFFFL;
+        static boolean isNil(long v) { return v == 0xFFFFL; }
         static long asHeap(long v) { return v; }
         static long asFixnum(long v) { return v & 0xFFFFFFFFFFFFL; }
         static long fixnum(long n) { return n & 0xFFFFFFFFFFFFL; }
@@ -75,6 +84,7 @@ fn main() {
         long bump = 50;
         boolean starve = false;
         java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
         int push(long v) { roots.add(v); return roots.size() - 1; }
         long r(int i) { return roots.get(i); }
         void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
@@ -111,12 +121,14 @@ fn main() {
 --csharp-head
     const long NIL = 0xFFFFL;
     const int CN_BASE = 2, CN_EDIT = 0, CN_HASH = 1;
+    const int BN_EDIT = 0, BN_DATAMAP = 1, BN_NODEMAP = 2, BN_BASE = 3;
     static class Obj {
         internal const int TyCollnode = 18, TyBmnode = 16;
         internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
     }
     static class Val {
         internal const long Nil = 0xFFFFL;
+        internal static bool IsNil(long v) { return v == 0xFFFFL; }
         internal static long AsHeap(long v) { return v; }
         internal static long AsFixnum(long v) { return v & 0xFFFFFFFFFFFFL; }
         internal static long Fixnum(long n) { return n & 0xFFFFFFFFFFFFL; }
@@ -130,6 +142,7 @@ fn main() {
         internal long bump = 50;
         internal bool starve = false;
         internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
         internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
         internal long R(int i) { return roots[i]; }
         internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }

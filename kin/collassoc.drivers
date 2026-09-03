@@ -67,6 +67,7 @@ fn main() {
     static final long NIL = 0xFFFFL;
     static final int CN_BASE = 2;
     static final class Val {
+        static long asHeap(long v) { return v; }
         static final long NIL = 0xFFFFL;
         static boolean isNil(long v) { return v == NIL; }
     }
@@ -74,6 +75,7 @@ fn main() {
     static int bitpos(int h, int shift) { return 1 << mask(h, shift); }
     static final class Rt {
         long[] h = new long[400];
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
         long bump = 200;
         java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
         StringBuilder log = new StringBuilder();
@@ -128,6 +130,7 @@ fn main() {
     const long NIL = 0xFFFFL;
     const int CN_BASE = 2;
     static class Val {
+        internal static long AsHeap(long v) { return v; }
         internal const long Nil = 0xFFFFL;
         internal static bool IsNil(long v) { return v == Nil; }
     }
@@ -135,6 +138,7 @@ fn main() {
     static int Bitpos(int h, int shift) { return 1 << Mask(h, shift); }
     internal sealed class Rt {
         internal long[] h = new long[400];
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
         internal long bump = 200;
         internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
         internal StringBuilder log = new StringBuilder();

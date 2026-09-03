@@ -141,6 +141,7 @@ fn main() {
     static final long NIL = 0xFFFFL;
     static final int CN_BASE = 2, HASH_BITS = 5;
     static final class Val {
+        static long asHeap(long v) { return v; }
         static final long NIL = 0xFFFFL;
         static boolean isNil(long v) { return v == NIL; }
     }
@@ -149,6 +150,7 @@ fn main() {
     static int indexOf(int bm, int bit) { return Integer.bitCount(bm & (bit - 1)); }
     static final class Rt {
         long[] h = new long[1600];
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
         int[] kind = new int[1600];
         long bump = 300;
         java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
@@ -256,6 +258,7 @@ fn main() {
     const long NIL = 0xFFFFL;
     const int CN_BASE = 2, HASH_BITS = 5;
     static class Val {
+        internal static long AsHeap(long v) { return v; }
         internal const long Nil = 0xFFFFL;
         internal static bool IsNil(long v) { return v == Nil; }
     }
@@ -264,6 +267,7 @@ fn main() {
     static int IndexOf(int bm, int bit) { return BitOperations.PopCount((uint)(bm & (bit - 1))); }
     internal sealed class Rt {
         internal long[] h = new long[1600];
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
         internal int[] kind = new int[1600];
         internal long bump = 300;
         internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();

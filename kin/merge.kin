@@ -12,14 +12,14 @@
 ;; build the intermediate nodes -- or they have the same 32-bit hash all the
 ;; way down, and go side by side in a collision node.
 (ns runtime.merge
-  (:require [flint.impl.rt :refer [defn return if let local set do comment
+  (:require [flint.impl.rt :refer [set-slot defn return if let local set do comment
                                    mark push r pop-to nil? not
                                    cn-new   bn-set-key bn-set-val
                                    bn-set-node hash-mask
                                    + >= != < shl bit-or
                                    Rt Value RootIx I32 NIL
                                    CN_BASE HASH_BITS]]
-            [flint.impl.host :refer [bn-new cn-set]]))
+            [runtime.collnode :refer [bn-new]]))
 
 (defn ^:method ^Value merge-two
   [^:mut ^Rt rt ^I32 shift ^Value k0 ^Value v0 ^I32 h0
@@ -40,10 +40,10 @@
                  "is the only place equal hashes are stored side by side.")
         (set res (cn-new rt h0 2 (r rt ie)))
         (if (not (nil? rt res))
-          (do (cn-set rt res CN_BASE (r rt ik0))
-              (cn-set rt res (+ CN_BASE 1) (r rt iv0))
-              (cn-set rt res (+ CN_BASE 2) (r rt ik1))
-              (cn-set rt res (+ CN_BASE 3) (r rt iv1)))))
+          (do (set-slot rt res CN_BASE (r rt ik0))
+              (set-slot rt res (+ CN_BASE 1) (r rt iv0))
+              (set-slot rt res (+ CN_BASE 2) (r rt ik1))
+              (set-slot rt res (+ CN_BASE 3) (r rt iv1)))))
       (let [^I32 m0 (hash-mask h0 shift)
             ^I32 m1 (hash-mask h1 shift)]
         (if (!= m0 m1)
