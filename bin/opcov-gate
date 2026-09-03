@@ -1,0 +1,62 @@
+#!/bin/sh
+# The opcode-coverage gate for the kin port (`doc/goals/kin-port.md`, gate 4).
+#
+# It builds the FIFTEEN conformance programs plus the conformance runner into
+# a directory of their own and runs `opcov` over exactly those. The set is
+# fixed by this script rather than by whatever happens to be in `out/`, which
+# is the whole point: the gate is a before/after comparison, and a comparison
+# over two different image sets is not one.
+#
+# Two ways to get this wrong, both of which cost a run to find out:
+#
+#   * `out/*.wasm` accumulates. It held 260 images, most of them ad-hoc, and
+#     `opcov` EXECUTES each one -- so the first long-running program hangs the
+#     census forever with no output.
+#   * `opcov` reads `aotstat::OPS`, which only the DIAGNOSTICS build records.
+#     Without the feature the run completes and reports nothing exercised,
+#     which reads exactly like a catastrophic coverage loss.
+#   * `opcov` runs IMAGES (`--emit-image`, `.img`), not wasm modules. Handed
+#     `.wasm` it rejects every one, prints "256 of 256 slots cold", and -- in
+#     this script's first version -- STILL EXITED 0. A gate that reports total
+#     coverage loss and calls it success is worse than no gate, so the checks
+#     at the bottom are the load-bearing part of this file.
+set -e
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+dir=out/opcov
+rm -rf "$dir"; mkdir -p "$dir"
+
+built=0
+for f in runtimes/conform/*.cljc; do
+  ns=$(basename "$f" .cljc | tr '_' '-')
+  if ./bin/flint :src runtimes/conform :fn "$ns/main" --emit-image \
+       :out "$dir/$ns.img" >/dev/null 2>&1; then
+    built=$((built + 1))
+  else
+    echo "opcov-gate: could not build $ns" >&2
+  fi
+done
+if ./bin/flint test :src test/common --emit-image :out "$dir/common.img" >/dev/null 2>&1; then
+  built=$((built + 1))
+else
+  echo "opcov-gate: could not build the common suite" >&2
+fi
+
+echo "images built: $built"
+[ "$built" -ge 15 ] || { echo "opcov-gate: only $built images built, expected >= 15" >&2; exit 1; }
+
+out=$dir/census.txt
+cargo run -p flint-rt --release --quiet --features diagnostics --example opcov \
+  -- "$dir"/*.img > "$out" 2>&1
+cat "$out"
+
+# The census is only evidence if the images were actually READ and actually
+# RAN. Both have failed silently once each.
+if grep -q "not a flint image" "$out"; then
+  echo "opcov-gate: some images were rejected -- the census is meaningless" >&2
+  exit 1
+fi
+cold=$(sed -n 's/^\([0-9]*\) of 256 slots cold$/\1/p' "$out" | tail -1)
+[ -n "$cold" ] || { echo "opcov-gate: no census line in the output" >&2; exit 1; }
+[ "$cold" -lt 250 ] || { echo "opcov-gate: $cold of 256 cold -- nothing ran" >&2; exit 1; }
+echo "opcov-gate: $cold of 256 cold over $built images"
