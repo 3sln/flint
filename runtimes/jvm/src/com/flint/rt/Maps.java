@@ -71,7 +71,7 @@ public final class Maps {
     }
 
     // kin:begin kin/champ.kin
-        // DELIBERATE BREAK to prove check-kin fails
+    static int bnDatamap(Rt rt, long n) {
         return (int) Val.asFixnum(rt.slot(n, BN_DATAMAP));
     }
     static int bnNodemap(Rt rt, long n) {
