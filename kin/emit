@@ -23,21 +23,62 @@ map="${src%.kin}.targets"
 [ -f "$map" ] || { echo "kin/emit: no targets file at $map"; exit 2; }
 
 work=${TMPDIR:-/tmp}/kin-emit
-rm -rf "$work"; mkdir -p "$work"
+rm -rf "$work"; mkdir -p "$work/sec"
 ./kin/gen "$src" > "$work/gen.txt"
-sed -n '/==== rust/,/==== java/p'   "$work/gen.txt" | sed '1d;$d' > "$work/rust"
-sed -n '/==== java/,/==== csharp/p' "$work/gen.txt" | sed '1d;$d' > "$work/java"
-sed -n '/==== csharp/,$p'           "$work/gen.txt" | sed '1d'    > "$work/csharp"
+
+# SPLIT ON WHAT THE GENERATOR ACTUALLY PRINTED, rather than on three target
+# names this script knows. It used to `sed` out a rust, a java and a csharp
+# section by name, which quietly assumed every source generates for exactly
+# those three -- the assumption `:targets` and `:kin/only` exist to remove.
+# A source that generates for two now writes two, and one that generates for
+# a language this script has never heard of needs no change here.
+awk -v dir="$work/sec" '/^==== .* =/ { f = dir "/" $2; next } f { print > f }' "$work/gen.txt"
+
+# SELECTION AND DESTINATION ARE SEPARATE, AND CROSS-CHECKED.
+#
+# The source's `ns` says which targets it generates for; this `.targets` file
+# says where each one goes. They are different questions -- selection is a
+# property of the logic, destination of the project's tree -- so they live in
+# different places, and the cost of that is that they can disagree. Both ways
+# of disagreeing are refused below, because either one is a file silently not
+# written:
+#
+#   * a line here for a target the source does not generate for;
+#   * a target the source generates for with no line here.
+#
+# BOTH CHECKS RUN BEFORE ANYTHING IS WRITTEN. Checking as it went wrote two
+# of three files and then refused the third, which is the worst outcome
+# available: a tree that is neither the old thing nor the new one, and no
+# gate that can tell you which files are which.
+for f in "$work"/sec/*; do
+  [ -e "$f" ] || continue
+  t=$(basename "$f")
+  awk -v t="$t" '$1 !~ /^#/ && NF >= 2 && $1 == t { found = 1 }
+                 END { exit !found }' "$map" ||
+    { echo "kin/emit: $src generates for $t, but $map gives a destination"
+      echo "          only for: $(awk '$1 !~ /^#/ && NF >= 2 { printf "%s ", $1 }' "$map")"
+      echo "          Add a line for $t, or exclude it in the source's ns form."
+      exit 1; }
+done
+
+while read -r target file indent; do
+  [ -n "$target" ] || continue
+  case "$target" in '#'*) continue;; esac
+  [ -f "$work/sec/$target" ] || {
+    echo "kin/emit: $map sends $target to $file, but $src does not generate"
+    echo "          for $target -- check its ns form's :kin/only / :kin/exclude"
+    exit 1; }
+  [ -f "$file" ] || { echo "kin/emit: no such file $file"; exit 1; }
+  grep -q "kin:begin $src" "$file" || { echo "kin/emit: $file has no marker for $src"; exit 1; }
+done < "$map"
 
 # `<target> <file> <indent-width>` per line. Java and C# nest the generated
 # code inside a class, so it is re-indented on the way in.
 while read -r target file indent; do
   [ -n "$target" ] || continue
   case "$target" in '#'*) continue;; esac
-  [ -f "$file" ] || { echo "kin/emit: no such file $file"; exit 1; }
-  grep -q "kin:begin $src" "$file" || { echo "kin/emit: $file has no marker for $src"; exit 1; }
   pad=$(printf "%${indent:-0}s" "")
-  sed "s/^\(.\)/${pad}\1/" "$work/$target" > "$work/block"
+  sed "s/^\(.\)/${pad}\1/" "$work/sec/$target" > "$work/block"
   awk -v src="$src" -v block="$work/block" '
     $0 ~ ("kin:begin " src) { print; while ((getline line < block) > 0) print line; skip=1; next }
     $0 ~ ("kin:end " src)   { skip=0 }

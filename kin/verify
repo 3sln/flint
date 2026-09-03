@@ -14,10 +14,39 @@ work=${TMPDIR:-/tmp}/kin-verify
 rm -rf "$work"; mkdir -p "$work"
 cd "$root"
 
+mkdir -p "$work/sec"
 ./kin/gen "$src" > "$work/gen.txt"
-sed -n '/==== rust/,/==== java/p'   "$work/gen.txt" | sed '1d;$d' > "$work/gen.rs"
-sed -n '/==== java/,/==== csharp/p' "$work/gen.txt" | sed '1d;$d' > "$work/gen.java"
-sed -n '/==== csharp/,$p'           "$work/gen.txt" | sed '1d'    > "$work/gen.cs"
+# Split on what the generator PRINTED, not on three names this script knows --
+# a source with `:kin/only` generates fewer sections, and one for a language
+# this script cannot compile generates a section it has to say it skipped.
+awk -v dir="$work/sec" '/^==== .* =/ { f = dir "/" $2; next } f { print > f }' "$work/gen.txt"
+cp "$work/sec/rust"   "$work/gen.rs"   2>/dev/null || true
+cp "$work/sec/java"   "$work/gen.java" 2>/dev/null || true
+cp "$work/sec/csharp" "$work/gen.cs"   2>/dev/null || true
+
+# WHAT THIS SCRIPT CAN ACTUALLY COMPILE, against what the source produced.
+# Comparing one output against itself is not a check, so a source that
+# generates for fewer than two of these is refused rather than passed: the
+# whole claim of `verify` is that independent implementations AGREE, and one
+# implementation cannot.
+present=""
+for t in rust java csharp; do
+  [ -s "$work/sec/$t" ] && present="$present $t"
+done
+skipped=""
+for f in "$work"/sec/*; do
+  [ -e "$f" ] || continue
+  case " rust java csharp " in *" $(basename "$f") "*) ;; *) skipped="$skipped $(basename "$f")";; esac
+done
+[ -n "$skipped" ] && echo "  note kin/verify cannot compile:$skipped -- not checked here"
+n=$(echo $present | wc -w | tr -d ' ')
+if [ "$n" -lt 2 ]; then
+  echo "kin/verify: $src generates for$present -- fewer than two targets this"
+  echo "            script can compile, so there is nothing to compare. An"
+  echo "            output identical to itself is not a check."
+  exit 2
+fi
+echo "  comparing:$present"
 
 # The driver each language needs. Kept beside the source so a new port writes
 # one and the harness stays the same.
@@ -44,23 +73,29 @@ mv "$work/probe.rs" "$work/gen.rs"
 { echo 'using System; using System.IO; using System.Text; using System.Numerics;'; echo 'class Probe {'
   section csharp-head; cat "$work/gen.cs"; section csharp; echo '}'; } > "$work/Program.cs"
 
-rustc -O -o "$work/probe.rust" "$work/gen.rs" 2>&1 | head -20
-r_out=$("$work/probe.rust")
+# Each present target is built, run, and its answer recorded. The comparison
+# below is over the answers that exist rather than over three fixed ones.
+: > "$work/answers"
+for t in $present; do
+  case $t in
+    rust)
+      rustc -O -o "$work/probe.rust" "$work/gen.rs" 2>&1 | head -20
+      echo "rust $("$work/probe.rust")" >> "$work/answers" ;;
+    java)
+      JDK=/opt/homebrew/opt/openjdk
+      [ -x "$JDK/bin/javac" ] || JDK=$(/usr/libexec/java_home 2>/dev/null)
+      "$JDK/bin/javac" -d "$work" "$work/Probe.java" 2>&1 | head -20
+      echo "java $("$JDK/bin/java" -cp "$work" Probe)" >> "$work/answers" ;;
+    csharp)
+      mkdir -p "$work/cs" && (cd "$work/cs" && dotnet new console -o . --force >/dev/null 2>&1)
+      cp "$work/Program.cs" "$work/cs/Program.cs"
+      echo "csharp $(cd "$work/cs" && dotnet run 2>/dev/null | tail -1)" >> "$work/answers" ;;
+  esac
+done
 
-JDK=/opt/homebrew/opt/openjdk
-[ -x "$JDK/bin/javac" ] || JDK=$(/usr/libexec/java_home 2>/dev/null)
-"$JDK/bin/javac" -d "$work" "$work/Probe.java" 2>&1 | head -20
-j_out=$("$JDK/bin/java" -cp "$work" Probe)
-
-mkdir -p "$work/cs" && (cd "$work/cs" && dotnet new console -o . --force >/dev/null 2>&1)
-cp "$work/Program.cs" "$work/cs/Program.cs"
-c_out=$(cd "$work/cs" && dotnet run 2>/dev/null | tail -1)
-
-echo "  rust   $r_out"
-echo "  java   $j_out"
-echo "  csharp $c_out"
-if [ "$r_out" = "$j_out" ] && [ "$j_out" = "$c_out" ]; then
-  echo "  ok   three targets, one source, identical output"
+while read -r t out; do echo "  $t   $out"; done < "$work/answers"
+if [ "$(cut -d' ' -f2- < "$work/answers" | sort -u | wc -l | tr -d ' ')" = "1" ]; then
+  echo "  ok   $n targets, one source, identical output"
 else
-  echo "  FAIL the three targets disagree"; exit 1
+  echo "  FAIL the targets disagree"; exit 1
 fi
