@@ -73,7 +73,7 @@
   pointer."
   {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
 
-(def tags-for {'Rt Rt 'Value Value 'Cat Cat 'Bool Bool 'I32 I32 'RootIx RootIx
+(def tags {'Rt Rt 'Value Value 'Cat Cat 'Bool Bool 'I32 I32 'RootIx RootIx
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'U32s U32s 'U64s U64s 'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
@@ -176,16 +176,16 @@
             BN_DATAMAP BN_NODEMAP BN_BASE BN_EDIT
             CN_BASE CN_HASH CN_EDIT HASH_BITS])))
 
-(def names-for
+(def names
   "Every type tag, spelled three ways. A NAME rather than a form, because a
   tag appears in a `case` label where a call cannot go."
   (reduce (fn [m sym] (assoc m sym {:rust (str sym) :java (str sym)
                                     :csharp (csharp-tag sym)}))
           value-names type-tags))
 
-(defn forms-for []
+(defn forms []
   (merge
-   (core/forms-for {:default-tag Value})
+   (core/forms {:default-tag Value})
    {    ;; IS THIS VALUE ON THE HEAP? A method in Rust, a static in the other two,
     ;; which is the same split `^:method` handles for generated functions --
     ;; here it is a hand-written one, so the vocabulary spells it.
@@ -432,3 +432,25 @@
     'pop-to (core/call {:rust "{0}.pop_to({1})"
                         :java "{0}.popTo({1})"
                         :csharp "{0}.PopTo({1})"})}))
+
+;; --------------------------------------------------------- the vocabulary
+;;
+;; ONE VAR, holding one map, saying what this vocabulary IS and which targets
+;; it can speak. It used to be three vars found by convention, which meant
+;; kin assembled the vocabulary rather than this file declaring it -- and a
+;; file that does not declare itself cannot say `:targets`, which is what
+;; every question about "does this source generate for X" now rests on.
+
+(def vocabulary
+  "The runtime vocabulary: three targets, its tags, its names, its forms.
+
+  `:targets` is the honest answer to what these forms can speak, and it is
+  three because every template in this file has a `:rust`, a `:java` and a
+  `:csharp` entry and nothing else. A fourth runtime would be a fourth entry
+  in every template here, and until that exists, saying so is what keeps kin
+  from generating a plausible-looking file for a target nobody has written."
+  (sp/vocabulary :namespace 'flint.impl.rt
+                 :targets #{:rust :java :csharp}
+                 :tags tags
+                 :names names
+                 :forms (forms)))

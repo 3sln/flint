@@ -32,7 +32,7 @@
 
 (def I64 {:name 'I64 :types {:rust "i64" :java "long" :csharp "long"} :methods {}})
 
-(def tags-for {'U32 U32 'I64 I64})
+(def tags {'U32 U32 'I64 I64})
 
 (defn- t [ctx] (:target ctx))
 
@@ -52,12 +52,12 @@
 
 (defn- hex-form [ctx form] (sp/kin-emit! ctx (hex ctx (second form))))
 
-(defn forms-for []
+(defn forms []
   (merge
    ;; `mul32` and `add32` have a compound spelling on the JVM and the CLR and
    ;; none in Rust, where they are `wrapping_mul` and `wrapping_add`. Saying so
    ;; keeps `h1 *= 0x85ebca6b` in the Java exactly as it was hand-written.
-   (core/forms-for {:default-tag U32
+   (core/forms {:default-tag U32
                     :compound {'mul32 {:java "*=" :csharp "*="}
                                'add32 {:java "+=" :csharp "+="}}})
    {'hex hex-form
@@ -103,3 +103,14 @@
     'high32 (core/call {:rust "((({0} as u64) >> 32) as u32)"
                         :java "((int) ({0} >>> 32))"
                         :csharp "((int)((ulong) {0} >> 32))"})}))
+
+(def vocabulary
+  "The murmur3 vocabulary: three targets, two tags, the wrapping arithmetic.
+
+  Same three targets as `flint.impl.rt` and for the same reason -- every
+  template in this file has exactly three entries. A source requiring both
+  gets the intersection, which is these three."
+  (sp/vocabulary :namespace 'flint.impl.hash
+                 :targets #{:rust :java :csharp}
+                 :tags tags
+                 :forms (forms)))
