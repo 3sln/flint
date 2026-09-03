@@ -1,0 +1,14 @@
+#!/bin/sh
+# The kin CLI, with this project's `kin.edn` and vocabularies.
+#
+#     kin/kin why kin/seqs.kin    where every symbol in a source comes from,
+#                                 which targets it generates for, and what an
+#                                 earlier require shadows
+#     kin/kin targets             every target, which sources reach it, and
+#                                 for those that do not, what ruled it out
+#
+# `kin/gen`, `kin/emit` and `kin/verify` are the ones in the build path; this
+# is the one you reach for when a generated file is wrong and nothing says why.
+set -e
+export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
+exec bb ../kin/bin/kin "$@"
