@@ -1,4 +1,0 @@
-# target   file                                        indent
-rust       runtime/src/pike.rs                         0
-java       runtimes/jvm/src/com/flint/rt/Pike.java     4
-csharp     runtimes/clr/src/rt/Pike.cs                 4

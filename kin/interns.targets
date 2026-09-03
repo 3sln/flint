@@ -1,4 +1,0 @@
-# target   file                                            indent
-rust       runtime/src/gc.rs                               4
-java       runtimes/jvm/src/com/flint/rt/Interns.java      4
-csharp     runtimes/clr/src/rt/Interns.cs                  4

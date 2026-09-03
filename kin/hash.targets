@@ -1,4 +1,0 @@
-# target   file                                        indent
-rust       runtime/src/hash.rs                         0
-java       runtimes/jvm/src/com/flint/rt/Hash.java     4
-csharp     runtimes/clr/src/rt/Hash.cs                 4

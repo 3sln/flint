@@ -1,4 +1,0 @@
-# target   file                                      indent
-rust       runtime/src/eq.rs                         4
-java       runtimes/jvm/src/com/flint/rt/Eq.java     4
-csharp     runtimes/clr/src/rt/Eq.cs                 4

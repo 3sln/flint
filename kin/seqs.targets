@@ -1,4 +1,0 @@
-# target   file                                        indent
-rust       runtime/src/seqs.rs                         4
-java       runtimes/jvm/src/com/flint/rt/Seqs.java     4
-csharp     runtimes/clr/src/rt/Seqs.cs                 4
