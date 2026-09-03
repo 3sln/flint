@@ -6,16 +6,16 @@
 # repeatable. Compiling is not enough: three implementations can each compile
 # and disagree, which is the failure the whole port exists to prevent.
 #
-#     kin/verify kin/codec.kin
+#     kin/scripts/verify kin/codec.kin
 set -e
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)   # kin/scripts -> repo root
 src=${1:-kin/codec.kin}
 work=${TMPDIR:-/tmp}/kin-verify
 rm -rf "$work"; mkdir -p "$work"
 cd "$root"
 
 mkdir -p "$work/sec"
-./kin/gen "$src" > "$work/gen.txt"
+./kin/scripts/gen "$src" > "$work/gen.txt"
 # Split on what the generator PRINTED, not on three names this script knows --
 # a source with `:kin/only` generates fewer sections, and one for a language
 # this script cannot compile generates a section it has to say it skipped.
@@ -41,7 +41,7 @@ done
 [ -n "$skipped" ] && echo "  note kin/verify cannot compile:$skipped -- not checked here"
 n=$(echo $present | wc -w | tr -d ' ')
 if [ "$n" -lt 2 ]; then
-  echo "kin/verify: $src generates for$present -- fewer than two targets this"
+  echo "kin/scripts/verify: $src generates for$present -- fewer than two targets this"
   echo "            script can compile, so there is nothing to compare. An"
   echo "            output identical to itself is not a check."
   exit 2
@@ -51,7 +51,7 @@ echo "  comparing:$present"
 # The driver each language needs. Kept beside the source so a new port writes
 # one and the harness stays the same.
 drv="${src%.kin}.drivers"
-[ -f "$drv" ] || { echo "kin/verify: no drivers file at $drv"; exit 2; }
+[ -f "$drv" ] || { echo "kin/scripts/verify: no drivers file at $drv"; exit 2; }
 
 # A named section of the drivers file: everything after `--name` up to the
 # next line that starts with `--`. A `-head` section is emitted BEFORE the

@@ -1,8 +1,8 @@
 #!/usr/bin/env bb
 ;; The diagnostic commands, printed.
 ;;
-;;     kin/kin why kin/seqs.kin    where every symbol in a source comes from
-;;     kin/kin targets             every target, and what ruled the rest out
+;;     kin/scripts/kin why kin/seqs.kin    where every symbol in a source comes from
+;;     kin/scripts/kin targets             every target, and what ruled the rest out
 ;;
 ;; kin answers both of these as DATA -- `kp/why` and `kp/targets-report`
 ;; return maps -- and the FORMATTING is here. That is not an accident of
@@ -106,7 +106,7 @@
     ;; when something is already wrong, so a source that will not even read
     ;; gets its message and nothing else.
     "why" (if-not path
-            (do (println "usage: kin/kin why <source.kin>") (System/exit 2))
+            (do (println "usage: kin/scripts/kin why <source.kin>") (System/exit 2))
             (try (print-why (kp/why @fp/project path))
                  (catch Exception e
                    (println)
@@ -115,6 +115,6 @@
                    (println)
                    (System/exit 1))))
     "targets" (print-targets (kp/targets-report @fp/project))
-    (do (println "usage: kin/kin why <source.kin>")
-        (println "       kin/kin targets")
+    (do (println "usage: kin/scripts/kin why <source.kin>")
+        (println "       kin/scripts/kin targets")
         (System/exit 2))))

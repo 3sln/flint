@@ -1,7 +1,7 @@
 #!/usr/bin/env bb
 ;; Write kin's output INTO the runtimes, between markers.
 ;;
-;;     kin/emit kin/hash.kin      one source
+;;     kin/scripts/emit kin/hash.kin      one source
 ;;     kin/emit                   every source
 ;;
 ;; The generated code is CHECKED IN. A runtime build must not need babashka --

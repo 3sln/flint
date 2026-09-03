@@ -2,7 +2,7 @@
 # Two questions about the kin sources, neither of which anything asked before.
 #
 #   1. Does every source still produce IDENTICAL output for all three targets?
-#      That is what `kin/verify` answers, and it was being run by hand, once,
+#      That is what `kin/scripts/verify` answers, and it was being run by hand, once,
 #      when a source was written.
 #
 #   2. Does the CHECKED-IN generated code still match what its source
@@ -29,7 +29,7 @@ for src in kin/*.kin; do
     fails=$((fails + 1))
     continue
   fi
-  if out=$(./kin/verify "$src" 2>&1); then
+  if out=$(./kin/scripts/verify "$src" 2>&1); then
     echo "  ok   $name agrees across three targets"
   else
     echo "  FAIL $name does not agree across targets"
@@ -45,7 +45,7 @@ done
 # the namespace by a function each target carries, so the only thing that
 # knows the answer is kin -- which is the point of the change, and the reason
 # a gate has to ask rather than read.
-targets=$(./kin/destinations)
+targets=$(./kin/scripts/destinations)
 i=0
 for f in $targets; do
   i=$((i + 1))
@@ -63,7 +63,7 @@ trap restore EXIT
 
 # Every source, including the ones written nowhere -- kin reports those and
 # writes nothing, which is a legitimate answer rather than a case to skip.
-./kin/emit > /dev/null
+./kin/scripts/emit > /dev/null
 
 n=0
 while read -r f; do

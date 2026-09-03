@@ -2,7 +2,7 @@
 ;; still mean one thing in three languages.
 ;;
 ;; This source ships NOWHERE -- it has no `.targets` -- and exists only to be
-;; verified. `kin/verify` compares the three outputs, so it is the natural
+;; verified. `kin/scripts/verify` compares the three outputs, so it is the natural
 ;; place to pin a claim about what a form MEANS rather than about what some
 ;; runtime function does.
 ;;

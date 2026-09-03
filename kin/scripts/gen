@@ -1,7 +1,7 @@
 #!/usr/bin/env bb
 ;; Print what each target would get for one kin source.
 ;;
-;;     kin/gen kin/hash.kin
+;;     kin/scripts/gen kin/hash.kin
 ;;
 ;; kin is a library; this is the script. `kp/generate` takes the source TEXT
 ;; and answers `{target text}` without opening or writing anything, so the
@@ -14,7 +14,7 @@
     (println "usage: kin/gen <source.kin>")
     (System/exit 2))
   (let [out (kp/generate @fp/project (kp/source-text @fp/project path) path)]
-    ;; The `====` banners are this project's format, not kin's. `kin/verify`
+    ;; The `====` banners are this project's format, not kin's. `kin/scripts/verify`
     ;; splits on them.
     (doseq [t (:target-order @fp/project)
             :when (contains? out t)]
