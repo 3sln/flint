@@ -826,9 +826,40 @@ in neither port.
 This is the `Interns` situation again: a divergence is not evidence the
 runtimes should diverge, and the trade-off very likely ports. But which way it
 ports is a MEASUREMENT -- either the fast path is worth its second copy of the
-walk and the ports should have it, or it is not and Rust should lose it. It
-should not be ported in its current shape, because that would bake one
-runtime's untested guess into all three at once.
+walk and the ports should have it, or it is not and Rust should lose it.
+
+**MEASURED: the fast path is worth about 6%, so it ports to the ports.**
+20,000,000 scalar-key lookups into a 2,000-entry CHAMP on the native runtime,
+two binaries built from the two sources and run INTERLEAVED, minimum of four
+rounds each, with the 1.67s compile cost subtracted:
+
+    with the scalar path      2.05s of lookup work
+    without it                2.18s
+    ratio                     1.063
+
+Modest, real, and reproducible -- the arms do not overlap (3.72-3.76 against
+3.85-3.87 wall clock). Six percent of the most common map operation is worth
+having in all four runtimes, and because kin generates it there is one source
+to maintain rather than the three copies the duplication argument assumes.
+
+#### Two ways this measurement was wrong before it was right
+
+**It measured a dead branch.** The first attempt toggled `eq_may_alloc`
+inside `node_find` -- and `map_get` checks `eq_may_alloc` itself and calls
+`node_find_scalar` DIRECTLY, so scalar lookups never reach `node_find` at
+all. The toggle changed nothing because it could not. The live dispatch is in
+`map_get`.
+
+**And it produced a 22% figure that was noise.** Baseline 1.46s, modified
+1.78s, three runs each, stable to two decimal places -- and on restoring the
+original the baseline came back at 1.80s, not 1.46s. Running all of arm A
+then all of arm B measures drift as readily as the change. The fix is two
+saved binaries run INTERLEAVED, and comparing minima rather than means.
+
+**And 93% of what it timed was the compiler.** `flint run` compiles before it
+runs; a no-op program costs 1.67s of the 1.80s measured. The workload had to
+grow twentyfold before the thing under test was most of the number. A ratio
+taken without knowing the fixed cost is a ratio of the fixed cost.
 
 ### Never, on evidence
 
