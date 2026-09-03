@@ -107,14 +107,14 @@
     ;; gets its message and nothing else.
     "why" (if-not path
             (do (println "usage: kin/kin why <source.kin>") (System/exit 2))
-            (try (print-why (kp/why @fp/project (fp/source-text path) path))
+            (try (print-why (kp/why @fp/project path))
                  (catch Exception e
                    (println)
                    (println (str "kin why " path " -- THIS SOURCE DOES NOT READ"))
                    (println (str "  " (ex-message e)))
                    (println)
                    (System/exit 1))))
-    "targets" (print-targets (kp/targets-report @fp/project (fp/sources)))
+    "targets" (print-targets (kp/targets-report @fp/project))
     (do (println "usage: kin/kin why <source.kin>")
         (println "       kin/kin targets")
         (System/exit 2))))

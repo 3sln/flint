@@ -1,5 +1,5 @@
 #!/usr/bin/env bb
-;; Write a kin source's output INTO the runtimes, between markers.
+;; Write kin's output INTO the runtimes, between markers.
 ;;
 ;;     kin/emit kin/hash.kin      one source
 ;;     kin/emit                   every source
@@ -14,15 +14,21 @@
 ;;     ...generated...                   is replaced wholesale
 ;;     // kin:end <source>
 ;;
-;; kin does the splicing; the I/O is still OURS. `kp/emit!` reads and writes
-;; through the `:vfs` on each target in `flint.impl.targets`, which is a disk
-;; vfs rooted at our directories. kin itself opens nothing.
+;; The scanning is kin's now, not this script's: `emit-all!` walks the source
+;; vfs and emits every source ATOMICALLY -- all sixteen and all three targets,
+;; or nothing. A partial tree is a state nobody designed and no gate
+;; describes: with eight of sixteen emitted, check-kin reports the other eight
+;; as drifted, which is true and says nothing about what happened.
+;;
+;; The I/O is still ours -- every byte goes through the vfs on each target in
+;; `flint.impl.targets`.
 (require '[kin.project :as kp]
          '[flint.impl.project :as fp]
          '[flint.impl.targets :as targets])
 
-(defn emit-one [path]
-  (doseq [{:keys [target] p :path} (kp/emit! @fp/project (fp/source-text path) path)]
+(defn show [label results]
+  (println label)
+  (doseq [{:keys [target] p :path} results]
     (println (format "  %-8s %s" (name target)
                      (if p
                        (targets/resolve-path target p)
@@ -30,5 +36,9 @@
 
 (let [[path] *command-line-args*]
   (if path
-    (emit-one path)
-    (doseq [[p _] (fp/sources)] (println p) (emit-one p))))
+    (show path (kp/emit! @fp/project (kp/source-text @fp/project path) path))
+    ;; ATOMIC over the whole batch: every source, every target, or nothing.
+    ;; A failure throws rather than being reported per source, because there
+    ;; is no partial result to report -- the tree is exactly as it was.
+    (let [{:keys [order emitted]} (kp/emit-all! @fp/project)]
+      (doseq [label order] (show label (get emitted label))))))

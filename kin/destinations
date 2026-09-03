@@ -13,5 +13,5 @@
          '[flint.impl.project :as fp]
          '[flint.impl.targets :as targets])
 
-(doseq [[target path] (kp/destinations @fp/project (fp/sources))]
+(doseq [[target path] (kp/destinations @fp/project)]
   (println (targets/resolve-path target path)))

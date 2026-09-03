@@ -13,7 +13,7 @@
   (when-not path
     (println "usage: kin/gen <source.kin>")
     (System/exit 2))
-  (let [out (kp/generate @fp/project (fp/source-text path) path)]
+  (let [out (kp/generate @fp/project (kp/source-text @fp/project path) path)]
     ;; The `====` banners are this project's format, not kin's. `kin/verify`
     ;; splits on them.
     (doseq [t (:target-order @fp/project)
