@@ -531,6 +531,35 @@ reordered once when it is first carved. That is free in all three -- a Rust
 module, a Java class and a C# class do not care what order their members are
 declared in -- and it is a one-time cost per file.
 
+## Where phase 2 stands, with the numbers
+
+Six sources ship, about thirty functions, each generated once and emitted into
+Rust, Java and C#. All five criteria, measured rather than asserted:
+
+| | evidence |
+| --- | --- |
+| 1 conform | exit 0, 227 checks, 0 failures |
+| 2 runtime build | Rust `cargo check --features diagnostics` clean; JVM `javac` clean; CLR built by conform |
+| 3 `bin/test` | exit 0, 0 failures |
+| 4 coverage | **220 of 256 cold, against a 220-of-256 baseline over the same 17 images** -- and the cold SET matches, not merely the count |
+| 5 ships | substituted in-tree between markers, committed, declaration sets diffed against `HEAD` |
+
+| phase | file | what ships |
+| --- | --- | --- |
+| 2 | `Hash` | the murmur3 core |
+| 2 | `Eq` | `category` |
+| 2 | `Seqs` | `rangeEmpty` |
+| 2 | `Interns` | `mask`, `insert_at`, `needs_grow`, `raw_insert` |
+| 3 | `Maps` | the eight CHAMP node accessors |
+| 3 | `Pike` | `word_cp`, `space_cp`, `pred_hit` |
+
+`0x2d` is among the cold opcodes and correctly so: it is `set-local-w`, added
+this session, and no conformance program has more than 255 locals now that
+`wide-locals` sums in chunks. It is covered by a direct repro instead, which
+is worth saying out loud -- an opcode being cold in this census is not the
+same as it being untested, and conflating the two is what made the 38-of-38
+claim wrong in the first place.
+
 ## Acceptance, per phase
 
 Nothing lands without all of these:
