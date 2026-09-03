@@ -47,46 +47,82 @@ public static class Seqs {
         return Val.Nil;   // a lazy seq or a range: walking it to count would force it
     }
 
+    /// The ONE empty list, not a fresh one. See `Seqs.java` for why this
+    /// allocated for so long, and what it cost.
     public static long EmptyList(Rt rt) {
-        long a = rt.Alloc(Obj.TyEmptyList, 1);
-        if (a == 0) return Val.Nil;
-        rt.SetSlot(a, 0, Val.Nil);
-        return Val.Heap(a);
+        return rt.roots.shared.Singletons[Rt.SingEmptyList];
     }
 
-    static long Vecseq(Rt rt, long v, int i) {
-        int bas = rt.Mark();
-        int vi = rt.Push(v);
-        long a = rt.Alloc(Obj.TyVecseq, 3);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-        rt.SetSlot(a, 0, rt.R(vi));
-        rt.SetSlot(a, 1, Val.Fixnum(i));
-        rt.SetSlot(a, 2, Val.Nil);
-        rt.PopTo(bas);
-        return Val.Heap(a);
-    }
-
-    // -----------------------------------------------------------------------
-    // Ranges, string seqs and LAZY seqs.
-
+    /// A lazy seq's slots. Outside the generated region, for the same reason
+    /// as in `Seqs.java`.
     public const int LsThunk = 0, LsSeq = 1;
 
-    /// `TY_RANGE [start, end, step, meta]`. A `nil` end means UNBOUNDED, which
-    /// is what makes `(range)` an infinite seq rather than an error.
-    public static long Range(Rt rt, long start, long end, long step) {
-        int bas = rt.Mark();
-        int s = rt.Push(start), e = rt.Push(end), st = rt.Push(step);
-        long a = rt.Alloc(Obj.TyRange, 4);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-        rt.SetSlot(a, 0, rt.R(s));
-        rt.SetSlot(a, 1, rt.R(e));
-        rt.SetSlot(a, 2, rt.R(st));
-        rt.SetSlot(a, 3, Val.Nil);
-        rt.PopTo(bas);
+    // kin:begin kin/seqs.kin
+    static long Vecseq(Rt rt, long v, int i) {
+        int @base = rt.Mark();
+        int vi = rt.Push(v);
+        long a = rt.Alloc(Obj.TyVecseq, 3);
+        if (a == 0) {
+            rt.PopTo(@base);
+            return Val.Nil;
+        }
+        long vv = rt.R(vi);
+        rt.SetSlot(a, 0, vv);
+        rt.SetSlot(a, 1, Val.Fixnum(i));
+        rt.SetSlot(a, 2, Val.Nil);
+        rt.PopTo(@base);
         return Val.Heap(a);
     }
-
-    // kin:begin kin/range.kin
+    static long Strseq(Rt rt, long s, int i) {
+        int @base = rt.Mark();
+        int si = rt.Push(s);
+        long a = rt.Alloc(Obj.TyStrseq, 3);
+        if (a == 0) {
+            rt.PopTo(@base);
+            return Val.Nil;
+        }
+        long sv = rt.R(si);
+        rt.SetSlot(a, 0, sv);
+        rt.SetSlot(a, 1, Val.Fixnum(i));
+        rt.SetSlot(a, 2, Val.Nil);
+        rt.PopTo(@base);
+        return Val.Heap(a);
+    }
+    public static long LazySeq(Rt rt, long thunk) {
+        int @base = rt.Mark();
+        int t = rt.Push(thunk);
+        long a = rt.Alloc(Obj.TyLazyseq, 3);
+        if (a == 0) {
+            rt.PopTo(@base);
+            return Val.Nil;
+        }
+        long tv = rt.R(t);
+        rt.SetSlot(a, LS_THUNK, tv);
+        rt.SetSlot(a, LS_SEQ, Val.Nil);
+        rt.SetSlot(a, 2, Val.Nil);
+        rt.PopTo(@base);
+        return Val.Heap(a);
+    }
+    public static long Range(Rt rt, long start, long end, long step) {
+        int @base = rt.Mark();
+        int s = rt.Push(start);
+        int e = rt.Push(end);
+        int st = rt.Push(step);
+        long a = rt.Alloc(Obj.TyRange, 4);
+        if (a == 0) {
+            rt.PopTo(@base);
+            return Val.Nil;
+        }
+        long sv = rt.R(s);
+        rt.SetSlot(a, 0, sv);
+        long ev = rt.R(e);
+        rt.SetSlot(a, 1, ev);
+        long stv = rt.R(st);
+        rt.SetSlot(a, 2, stv);
+        rt.SetSlot(a, 3, Val.Nil);
+        rt.PopTo(@base);
+        return Val.Heap(a);
+    }
     static bool RangeEmpty(Rt rt, long v) {
         long e = rt.Slot(v, 1);
         // An absent end is an UNBOUNDED range, which is never empty.
@@ -107,40 +143,8 @@ public static class Seqs {
         return true;
     }
 
-    // kin:end kin/range.kin
+    // kin:end kin/seqs.kin
 
-    static long Strseq(Rt rt, long s, int i) {
-        int bas = rt.Mark();
-        int si = rt.Push(s);
-        long a = rt.Alloc(Obj.TyStrseq, 3);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-        rt.SetSlot(a, 0, rt.R(si));
-        rt.SetSlot(a, 1, Val.Fixnum(i));
-        rt.SetSlot(a, 2, Val.Nil);
-        rt.PopTo(bas);
-        return Val.Heap(a);
-    }
-
-    /// `TY_LAZYSEQ [thunk, seq, meta]`. The thunk becomes NIL once forced,
-    /// which is both the memo and the "already forced" flag.
-    public static long LazySeq(Rt rt, long thunk) {
-        int bas = rt.Mark();
-        int t = rt.Push(thunk);
-        long a = rt.Alloc(Obj.TyLazyseq, 3);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-        rt.SetSlot(a, LsThunk, rt.R(t));
-        rt.SetSlot(a, LsSeq, Val.Nil);
-        rt.SetSlot(a, 2, Val.Nil);
-        rt.PopTo(bas);
-        return Val.Heap(a);
-    }
-
-    /// Force a lazy seq, memoising the result.
-    ///
-    /// The LOOP is not an optimisation: a thunk may return another lazy seq,
-    /// and a chain of them is what `(take 1 (iterate f x))` builds. Recursing
-    /// instead would put that chain on the HOST stack, which is exactly what
-    /// the green-thread design keeps off it.
     public static long Force(Rt rt, long ls) {
         long thunk = rt.Slot(ls, LsThunk);
         if (Val.IsNil(thunk)) return rt.Slot(ls, LsSeq);

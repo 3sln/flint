@@ -1,0 +1,136 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_VECSEQ: u32 = 4; const TY_STRSEQ: u32 = 5;
+const TY_LAZYSEQ: u32 = 3; const TY_RANGE: u32 = 6;
+const LS_THUNK: u32 = 0; const LS_SEQ: u32 = 1;
+impl Value {
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn heap(a: Addr) -> Value { Value(a) }
+    fn is_nil(self) -> bool { self.0 == 0xFFFF }
+}
+struct Rt { h: Vec<u64>, bump: u64, roots: Vec<Value>, full: bool }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn alloc(&mut self, ty: u32, len: u32) -> Addr {
+        if self.full { return 0; }
+        let a = self.bump; self.bump += (len as u64) + 1;
+        self.h[a as usize] = ty as u64;
+        a + 1
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[(a + i as u64) as usize] = v.0; }
+    fn slot(&self, v: Value, i: u32) -> Value { Value(self.h[(v.0 + i as u64) as usize]) }
+    fn num_f64(&self, v: Value) -> f64 { v.0 as f64 }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 64], bump: 1, roots: Vec::new(), full: false };
+    let mut o = String::new();
+    let vs = rt.vecseq(Value(11), 7);
+    let ss = rt.strseq(Value(22), 9);
+    let ls = rt.lazy_seq(Value(33));
+    let rg = rt.range(Value(1), Value(10), Value(2));
+    for v in [vs, ss, ls, rg] { o.push_str(&format!("{} ", v.0)); }
+    for k in 0..20 { o.push_str(&format!("{}", rt.h[k])); }
+    o.push(' ');
+    o.push_str(&format!("roots={} ", rt.roots.len()));
+    // A range whose end has passed, one unbounded, one zero-step.
+    rt.h[14] = 10; rt.h[15] = 0; rt.h[16] = 1;
+    o.push_str(if rt.range_empty(Value(14)) { "E" } else { "-" });
+    rt.full = true;
+    o.push_str(&format!(" {} {}", rt.vecseq(Value(1), 0).0 == NIL.0, rt.roots.len()));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_VECSEQ = 4, TY_STRSEQ = 5, TY_LAZYSEQ = 3, TY_RANGE = 6;
+    static final int LS_THUNK = 0, LS_SEQ = 1;
+    static final class Num { static double f64(Rt rt, long v) { return (double) v; } }
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static boolean isNil(long v) { return v == NIL; }
+        static long fixnum(long n) { return n; }
+        static long heap(long a) { return a; }
+    }
+    static final class Rt {
+        long[] h = new long[64];
+        long bump = 1;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        boolean full = false;
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long alloc(int ty, int len) {
+            if (full) return 0;
+            long a = bump; bump += len + 1; h[(int) a] = ty; return a + 1;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long v, int i) { return h[(int) v + i]; }
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long vs = vecseq(rt, 11, 7), ss = strseq(rt, 22, 9);
+        long ls = lazySeq(rt, 33), rg = range(rt, 1, 10, 2);
+        for (long v : new long[]{vs, ss, ls, rg}) o.append(v).append(' ');
+        for (int k = 0; k < 20; k++) o.append(rt.h[k]);
+        o.append(' ').append("roots=").append(rt.roots.size()).append(' ');
+        rt.h[14] = 10; rt.h[15] = 0; rt.h[16] = 1;
+        o.append(rangeEmpty(rt, 14) ? "E" : "-");
+        rt.full = true;
+        o.append(' ').append(vecseq(rt, 1, 0) == NIL).append(' ').append(rt.roots.size());
+        System.out.println(o);
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    static class Obj {
+        internal const int TyVecseq = 4, TyStrseq = 5, TyLazyseq = 3, TyRange = 6;
+    }
+    const int LS_THUNK = 0, LS_SEQ = 1;
+    static class Num { internal static double F64(Rt rt, long v) { return (double) v; } }
+    static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsNil(long v) { return v == Nil; }
+        internal static long Fixnum(long n) { return n; }
+        internal static long Heap(long a) { return a; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[64];
+        internal long bump = 1;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal bool full = false;
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Alloc(int ty, int len) {
+            if (full) return 0;
+            long a = bump; bump += len + 1; h[(int) a] = ty; return a + 1;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long v, int i) { return h[(int) v + i]; }
+    }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        var o = new StringBuilder();
+        long vs = Vecseq(rt, 11, 7), ss = Strseq(rt, 22, 9);
+        long ls = LazySeq(rt, 33), rg = Range(rt, 1, 10, 2);
+        foreach (long v in new long[]{vs, ss, ls, rg}) o.Append(v).Append(' ');
+        for (int k = 0; k < 20; k++) o.Append(rt.h[k]);
+        o.Append(' ').Append("roots=").Append(rt.roots.Count).Append(' ');
+        rt.h[14] = 10; rt.h[15] = 0; rt.h[16] = 1;
+        o.Append(RangeEmpty(rt, 14) ? "E" : "-");
+        rt.full = true;
+        o.Append(' ').Append(Vecseq(rt, 1, 0) == NIL ? "true" : "false").Append(' ').Append(rt.roots.Count);
+        Console.WriteLine(o.ToString());
+    }

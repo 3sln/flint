@@ -749,6 +749,12 @@ stay meaningful. 1 and 8 are done.
   refusing the alternative.** Two were checked; both looked principled, one had
   a comment explaining itself, and neither survived. kin's job here is to
   CONVERGE the runtimes, not to encode differences nobody chose.
+* **Generated code can name a type the HOST file does not import.** The seq
+  constructors emit `let a: Addr = ...`, and `seqs.rs` had no `use
+  crate::mem::Addr`. `kin/verify` cannot see this -- its driver supplies its
+  own mocks -- and neither can the region, because an import is a fact about
+  the host. Only the host build finds it. A third thing the gates catch that
+  nothing upstream of them can.
 * **A region's boundary is a CLAIM about what lies between two functions, and
   it must be checked against the previous commit rather than against a
   compiler.** Carving `Interns` from `mask` to `grow` silently deleted four

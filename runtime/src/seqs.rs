@@ -17,6 +17,7 @@
 //! directly and never build the vector, so the materialising path is only hit by
 //! code that genuinely asks for a sequence view.
 
+use crate::mem::Addr;
 use crate::obj::*;
 use crate::rt::Rt;
 use crate::value::{Value, NIL};
@@ -104,58 +105,72 @@ impl Rt {
                 ))
     }
 
+    // kin:begin kin/seqs.kin
     fn vecseq(&mut self, v: Value, i: u32) -> Value {
-        let base = self.mark();
-        let vi = self.push(v);
-        let a = self.alloc(TY_VECSEQ, 3);
+        let base: usize = self.mark();
+        let vi: usize = self.push(v);
+        let a: Addr = self.alloc(TY_VECSEQ, 3);
         if a == 0 {
             self.pop_to(base);
             return NIL;
         }
-        let v = self.r(vi);
-        self.pop_to(base);
-        self.set_slot(a, 0, v);
+        let vv: Value = self.r(vi);
+        self.set_slot(a, 0, vv);
         self.set_slot(a, 1, Value::fixnum(i as i64));
         self.set_slot(a, 2, NIL);
-        Value::heap(a)
+        self.pop_to(base);
+        return Value::heap(a);
     }
-
     fn strseq(&mut self, s: Value, i: u32) -> Value {
-        let base = self.mark();
-        let si = self.push(s);
-        let a = self.alloc(TY_STRSEQ, 3);
+        let base: usize = self.mark();
+        let si: usize = self.push(s);
+        let a: Addr = self.alloc(TY_STRSEQ, 3);
         if a == 0 {
             self.pop_to(base);
             return NIL;
         }
-        let s = self.r(si);
-        self.pop_to(base);
-        self.set_slot(a, 0, s);
+        let sv: Value = self.r(si);
+        self.set_slot(a, 0, sv);
         self.set_slot(a, 1, Value::fixnum(i as i64));
         self.set_slot(a, 2, NIL);
-        Value::heap(a)
+        self.pop_to(base);
+        return Value::heap(a);
     }
-
-    pub fn range(&mut self, start: Value, end: Value, step: Value) -> Value {
-        let base = self.mark();
-        let s = self.push(start);
-        let e = self.push(end);
-        let st = self.push(step);
-        let a = self.alloc(TY_RANGE, 4);
+    pub fn lazy_seq(&mut self, thunk: Value) -> Value {
+        let base: usize = self.mark();
+        let t: usize = self.push(thunk);
+        let a: Addr = self.alloc(TY_LAZYSEQ, 3);
         if a == 0 {
             self.pop_to(base);
             return NIL;
         }
-        let (start, end, step) = (self.r(s), self.r(e), self.r(st));
+        let tv: Value = self.r(t);
+        self.set_slot(a, LS_THUNK, tv);
+        self.set_slot(a, LS_SEQ, NIL);
+        self.set_slot(a, 2, NIL);
         self.pop_to(base);
-        self.set_slot(a, 0, start);
-        self.set_slot(a, 1, end);
-        self.set_slot(a, 2, step);
-        self.set_slot(a, 3, NIL);
-        Value::heap(a)
+        return Value::heap(a);
     }
-
-    // kin:begin kin/range.kin
+    pub fn range(&mut self, start: Value, end: Value, step: Value) -> Value {
+        let base: usize = self.mark();
+        let s: usize = self.push(start);
+        let e: usize = self.push(end);
+        let st: usize = self.push(step);
+        let a: Addr = self.alloc(TY_RANGE, 4);
+        if a == 0 {
+            self.pop_to(base);
+            return NIL;
+        }
+        let sv: Value = self.r(s);
+        self.set_slot(a, 0, sv);
+        let ev: Value = self.r(e);
+        self.set_slot(a, 1, ev);
+        let stv: Value = self.r(st);
+        self.set_slot(a, 2, stv);
+        self.set_slot(a, 3, NIL);
+        self.pop_to(base);
+        return Value::heap(a);
+    }
     fn range_empty(&self, v: Value) -> bool {
         let e: Value = self.slot(v, 1);
         // An absent end is an UNBOUNDED range, which is never empty.
@@ -176,9 +191,8 @@ impl Rt {
         return true;
     }
 
-    // kin:end kin/range.kin
+    // kin:end kin/seqs.kin
 
-    /// `seq`: nil for an empty collection, otherwise a seq object.
     pub fn seq(&mut self, v: Value) -> Value {
         if v.is_nil() {
             return NIL;
@@ -363,22 +377,6 @@ impl Rt {
         self.set_slot(ls.as_heap(), LS_THUNK, NIL);
         self.set_slot(ls.as_heap(), LS_SEQ, cur);
         cur
-    }
-
-    pub fn lazy_seq(&mut self, thunk: Value) -> Value {
-        let base = self.mark();
-        let t = self.push(thunk);
-        let a = self.alloc(TY_LAZYSEQ, 3);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        let thunk = self.r(t);
-        self.pop_to(base);
-        self.set_slot(a, LS_THUNK, thunk);
-        self.set_slot(a, LS_SEQ, NIL);
-        self.set_slot(a, 2, NIL);
-        Value::heap(a)
     }
 
     // --- string character access ------------------------------------------

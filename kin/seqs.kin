@@ -1,0 +1,100 @@
+;; The seq constructors and the range predicate, written once.
+;;
+;; Phase 2 of `doc/goals/kin-port.md`. Four objects, one shape: mark the
+;; shadow stack, root the arguments, allocate, bail to NIL if the heap said
+;; no, write the slots, pop, wrap the address as a value.
+;;
+;; That shape is where a rooting bug lives, which is why generating it is
+;; worth more than the line count suggests. `alloc` can collect, so every
+;; argument has to be on the shadow stack across it and re-read afterwards --
+;; `doc/decisions/0031`: a value in a host local does not survive an
+;; allocation. Written once, that rule is obeyed once.
+;;
+;; The read-then-write is hoisted into a local rather than nested, because
+;; Rust will not take `self.set_slot(a, 0, self.r(vi))` -- an immutable borrow
+;; inside a mutable one. Java and C# accept the nested form and lose nothing
+;; by the hoist, which is the ordinary shape of a divergence here: one target
+;; needs a word, the others do not care.
+(ns runtime.seqs
+  (:require [flint.impl.rt :refer [defn return if let do == pop-to
+                                   mark push r alloc set-at heap fixnum
+                                   nil? slot num-f64 not > < >= <= comment
+                                   Rt Value Addr RootIx I32 F64 Bool NIL
+                                   TY_VECSEQ TY_STRSEQ TY_LAZYSEQ TY_RANGE]]))
+
+(defn ^:method ^Value vecseq [^:mut ^Rt rt ^Value v ^I32 i]
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^Addr a (alloc rt TY_VECSEQ 3)]
+    (if (== a 0)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^Value vv (r rt vi)]
+      (set-at rt a 0 vv))
+    (set-at rt a 1 (fixnum i))
+    (set-at rt a 2 NIL)
+    (pop-to rt base)
+    (return (heap a))))
+
+(defn ^:method ^Value strseq [^:mut ^Rt rt ^Value s ^I32 i]
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt s)
+        ^Addr a (alloc rt TY_STRSEQ 3)]
+    (if (== a 0)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^Value sv (r rt si)]
+      (set-at rt a 0 sv))
+    (set-at rt a 1 (fixnum i))
+    (set-at rt a 2 NIL)
+    (pop-to rt base)
+    (return (heap a))))
+
+(defn ^:pub ^:method ^Value lazy-seq [^:mut ^Rt rt ^Value thunk]
+  (let [^RootIx base (mark rt)
+        ^RootIx t (push rt thunk)
+        ^Addr a (alloc rt TY_LAZYSEQ 3)]
+    (if (== a 0)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^Value tv (r rt t)]
+      (set-at rt a LS_THUNK tv))
+    (set-at rt a LS_SEQ NIL)
+    (set-at rt a 2 NIL)
+    (pop-to rt base)
+    (return (heap a))))
+
+(defn ^:pub ^:method ^Value range [^:mut ^Rt rt ^Value start ^Value end ^Value step]
+  (let [^RootIx base (mark rt)
+        ^RootIx s (push rt start)
+        ^RootIx e (push rt end)
+        ^RootIx st (push rt step)
+        ^Addr a (alloc rt TY_RANGE 4)]
+    (if (== a 0)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^Value sv (r rt s)]
+      (set-at rt a 0 sv))
+    (let [^Value ev (r rt e)]
+      (set-at rt a 1 ev))
+    (let [^Value stv (r rt st)]
+      (set-at rt a 2 stv))
+    (set-at rt a 3 NIL)
+    (pop-to rt base)
+    (return (heap a))))
+
+(defn ^:method ^Bool range-empty [^Rt rt ^Value v]
+  (let [^Value e (slot rt v 1)]
+    (comment "An absent end is an UNBOUNDED range, which is never empty.")
+    (if (nil? rt e)
+      (return false))
+    (let [^F64 s (num-f64 rt (slot rt v 0))
+          ^F64 en (num-f64 rt e)
+          ^F64 st (num-f64 rt (slot rt v 2))]
+      (if (> st 0.0)
+        (return (>= s en)))
+      (if (< st 0.0)
+        (return (<= s en)))
+      (comment "A zero step never advances. Empty rather than infinite, which"
+               "is what Clojure does and is the answer that terminates.")
+      (return true))))

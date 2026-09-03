@@ -53,46 +53,89 @@ public final class Seqs {
         return Val.NIL;
     }
 
+    /// The ONE empty list, not a fresh one.
+    ///
+    /// This allocated on every call while `initSingletons` wrote
+    /// `SING_EMPTY_LIST` and nothing ever read it. `Rt`'s own comment records
+    /// the same defect being fixed for maps, vectors and sets, with the
+    /// numbers: the same program billed 143,247 steps here against 137,207
+    /// native, because it allocated 346,928 bytes against 299,024. `Seqs` was
+    /// missed. A budget that fits on one runtime has to fit on the others.
     public static long emptyList(Rt rt) {
-        long a = rt.alloc(TY_EMPTY_LIST, 1);
-        if (a == 0) return Val.NIL;
-        rt.setSlot(a, 0, Val.NIL);
-        return Val.heap(a);
+        return rt.roots.shared.singletons[Rt.SING_EMPTY_LIST];
     }
 
+    /// A lazy seq's slots. Outside the generated region, because kin has no
+    /// form for a constant declaration and a region takes everything in its
+    /// span -- which is how this was silently deleted the first time.
+    public static final int LS_THUNK = 0, LS_SEQ = 1;
+
+    // kin:begin kin/seqs.kin
     static long vecseq(Rt rt, long v, int i) {
         int base = rt.mark();
         int vi = rt.push(v);
         long a = rt.alloc(TY_VECSEQ, 3);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(a, 0, rt.r(vi));
+        if (a == 0) {
+            rt.popTo(base);
+            return Val.NIL;
+        }
+        long vv = rt.r(vi);
+        rt.setSlot(a, 0, vv);
         rt.setSlot(a, 1, Val.fixnum(i));
         rt.setSlot(a, 2, Val.NIL);
         rt.popTo(base);
         return Val.heap(a);
     }
-
-    // -----------------------------------------------------------------------
-    // Ranges, string seqs and LAZY seqs.
-
-    public static final int LS_THUNK = 0, LS_SEQ = 1;
-
-    /// `TY_RANGE [start, end, step, meta]`. A `nil` end means UNBOUNDED, which
-    /// is what makes `(range)` an infinite seq rather than an error.
+    static long strseq(Rt rt, long s, int i) {
+        int base = rt.mark();
+        int si = rt.push(s);
+        long a = rt.alloc(TY_STRSEQ, 3);
+        if (a == 0) {
+            rt.popTo(base);
+            return Val.NIL;
+        }
+        long sv = rt.r(si);
+        rt.setSlot(a, 0, sv);
+        rt.setSlot(a, 1, Val.fixnum(i));
+        rt.setSlot(a, 2, Val.NIL);
+        rt.popTo(base);
+        return Val.heap(a);
+    }
+    public static long lazySeq(Rt rt, long thunk) {
+        int base = rt.mark();
+        int t = rt.push(thunk);
+        long a = rt.alloc(TY_LAZYSEQ, 3);
+        if (a == 0) {
+            rt.popTo(base);
+            return Val.NIL;
+        }
+        long tv = rt.r(t);
+        rt.setSlot(a, LS_THUNK, tv);
+        rt.setSlot(a, LS_SEQ, Val.NIL);
+        rt.setSlot(a, 2, Val.NIL);
+        rt.popTo(base);
+        return Val.heap(a);
+    }
     public static long range(Rt rt, long start, long end, long step) {
         int base = rt.mark();
-        int s = rt.push(start), e = rt.push(end), st = rt.push(step);
+        int s = rt.push(start);
+        int e = rt.push(end);
+        int st = rt.push(step);
         long a = rt.alloc(TY_RANGE, 4);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(a, 0, rt.r(s));
-        rt.setSlot(a, 1, rt.r(e));
-        rt.setSlot(a, 2, rt.r(st));
+        if (a == 0) {
+            rt.popTo(base);
+            return Val.NIL;
+        }
+        long sv = rt.r(s);
+        rt.setSlot(a, 0, sv);
+        long ev = rt.r(e);
+        rt.setSlot(a, 1, ev);
+        long stv = rt.r(st);
+        rt.setSlot(a, 2, stv);
         rt.setSlot(a, 3, Val.NIL);
         rt.popTo(base);
         return Val.heap(a);
     }
-
-    // kin:begin kin/range.kin
     static boolean rangeEmpty(Rt rt, long v) {
         long e = rt.slot(v, 1);
         // An absent end is an UNBOUNDED range, which is never empty.
@@ -113,40 +156,8 @@ public final class Seqs {
         return true;
     }
 
-    // kin:end kin/range.kin
+    // kin:end kin/seqs.kin
 
-    static long strseq(Rt rt, long s, int i) {
-        int base = rt.mark();
-        int si = rt.push(s);
-        long a = rt.alloc(TY_STRSEQ, 3);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(a, 0, rt.r(si));
-        rt.setSlot(a, 1, Val.fixnum(i));
-        rt.setSlot(a, 2, Val.NIL);
-        rt.popTo(base);
-        return Val.heap(a);
-    }
-
-    /// `TY_LAZYSEQ [thunk, seq, meta]`. The thunk becomes NIL once forced,
-    /// which is both the memo and the "already forced" flag.
-    public static long lazySeq(Rt rt, long thunk) {
-        int base = rt.mark();
-        int t = rt.push(thunk);
-        long a = rt.alloc(TY_LAZYSEQ, 3);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(a, LS_THUNK, rt.r(t));
-        rt.setSlot(a, LS_SEQ, Val.NIL);
-        rt.setSlot(a, 2, Val.NIL);
-        rt.popTo(base);
-        return Val.heap(a);
-    }
-
-    /// Force a lazy seq, memoising the result.
-    ///
-    /// The LOOP is not an optimisation: a thunk may return another lazy seq,
-    /// and a chain of them is what `(take 1 (iterate f x))` builds. Recursing
-    /// instead would put that chain on the HOST stack, which is exactly what
-    /// the green-thread design keeps off it.
     public static long force(Rt rt, long ls) {
         long thunk = rt.slot(ls, LS_THUNK);
         if (Val.isNil(thunk)) return rt.slot(ls, LS_SEQ);
