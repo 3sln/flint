@@ -541,17 +541,22 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 1 conform | exit 0, 227 checks, 0 failures |
 | 2 runtime build | Rust `cargo check --features diagnostics` clean; JVM `javac` clean; CLR built by conform |
 | 3 `bin/test` | exit 0, 0 failures |
-| 4 coverage | **220 of 256 cold, against a 220-of-256 baseline over the same 17 images** -- and the cold SET matches, not merely the count |
+| 4 coverage | **220 of 256 cold, against a 220-of-256 baseline over the same 17 images**, re-measured after EVERY slice including the last -- and the cold SET matches, not merely the count |
 | 5 ships | substituted in-tree between markers, committed, declaration sets diffed against `HEAD` |
 
 | phase | file | what ships |
 | --- | --- | --- |
 | 2 | `Hash` | the murmur3 core |
 | 2 | `Eq` | `category` |
-| 2 | `Seqs` | `rangeEmpty` |
+| 2 | `Seqs` | `vecseq`, `strseq`, `lazySeq`, `range`, `rangeEmpty` |
 | 2 | `Interns` | `mask`, `insert_at`, `needs_grow`, `raw_insert` |
 | 3 | `Maps` | the eight CHAMP node accessors |
 | 3 | `Pike` | `word_cp`, `space_cp`, `pred_hit` |
+
+Comparing the SET and not only the count is the part that matters: a
+regeneration making one opcode unreachable while another became reachable
+would hold the total at 220 and change the membership. A number that agrees
+for the wrong reason is the failure this whole file keeps circling.
 
 `0x2d` is among the cold opcodes and correctly so: it is `set-local-w`, added
 this session, and no conformance program has more than 255 locals now that
