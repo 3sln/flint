@@ -360,6 +360,18 @@ public final class Builtins {
             long v = rt.vat(at);
             if (rt.isHeapTy(v, TY_VEC)) return Vec.transientOf(rt, v);
             if (Table.isTable(rt, v)) return Table.tableTransient(rt, v);
+            // A ROW REF is a map, so `isMap` sends it here -- and
+            // `transientOf` then read the ref's SLOTS as an array-map's,
+            // which is not a refusal but garbage: `(merge row {:z 9})`
+            // answered `{:z 9, 1 2}`. Native at least threw. It materialises,
+            // which is what every other map operation on a ref does.
+            if (rt.isHeapTy(v, Obj.TY_TABLEREF)) {
+                int rb = rt.mark();
+                int rmi = rt.push(Table.refToMap(rt, v));
+                long r = Maps.transientOf(rt, rt.r(rmi));
+                rt.popTo(rb);
+                return r;
+            }
             if (Maps.isMap(rt, v)) return Maps.transientOf(rt, v);
             if (Sets.isSet(rt, v)) return Sets.transientOf(rt, v);
             return rt.throwStr("ClassCastException",

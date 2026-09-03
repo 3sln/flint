@@ -426,6 +426,25 @@ impl Rt {
         match ty(&self.gc.sp, v.as_heap()) {
             TY_VEC => self.vec_transient(v),
             TY_ARRAYMAP | TY_HASHMAP => self.map_transient(v),
+            // A ROW REF is a map, so it is transientable -- by MATERIALISING.
+            // Without this arm it fell to the refusal below, and `merge`,
+            // which builds a transient of its first source, could not take a
+            // row as that source.
+            //
+            // The ports had it worse. They guard with `isMap`, which is true
+            // for a ref, and then read the ref's slots as an array-map's: no
+            // refusal, just garbage -- `(merge row {:z 9})` answered
+            // `{:z 9, 1 2}`. A wrong answer beats no answer only if it is
+            // right, and this one was neither.
+            crate::obj::TY_TABLEREF => {
+                let base = self.mark();
+                let m = self.ref_to_map(v);
+                let mi = self.push(m);
+                let mv = self.r(mi);
+                let out = self.map_transient(mv);
+                self.pop_to(base);
+                out
+            }
             TY_SET => self.set_transient(v),
             crate::obj::TY_TABLE => self.table_transient(v),
             _ => self.throw_str("ClassCastException", "not transientable"),

@@ -348,6 +348,18 @@ public static class Builtins {
             long v = rt.VAt(at);
             if (rt.IsHeapTy(v, Obj.TyVec)) return Vec.TransientOf(rt, v);
             if (Flint.Rt.Table.isTable(rt, v)) return Flint.Rt.Table.tableTransient(rt, v);
+            // A ROW REF is a map, so `IsMap` sends it here -- and
+            // `TransientOf` then read the ref's SLOTS as an array-map's,
+            // which is not a refusal but garbage: `(merge row {:z 9})`
+            // answered `{:z 9, 1 2}`. Native at least threw. It materialises,
+            // which is what every other map operation on a ref does.
+            if (rt.IsHeapTy(v, Obj.TyTableref)) {
+                int rb = rt.Mark();
+                int rmi = rt.Push(Flint.Rt.Table.refToMap(rt, v));
+                long r = Maps.TransientOf(rt, rt.R(rmi));
+                rt.PopTo(rb);
+                return r;
+            }
             if (Maps.IsMap(rt, v)) return Maps.TransientOf(rt, v);
             if (Sets.IsSet(rt, v)) return Sets.TransientOf(rt, v);
             return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not transientable");

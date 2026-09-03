@@ -72,3 +72,21 @@
     ;; dissoc twice: the first result is a plain map, so the second is the
     ;; ordinary path -- worth pinning that the materialised value behaves.
     (expect = {:a 1 :d 4 :e 5} (dissoc (dissoc row :b) :c))))
+
+(defn ^:flint.check/test a-row-ref-can-be-a-transient-source []
+  ;; `merge` builds a transient from its FIRST source, so merging onto a row
+  ;; required a row to be transientable. It was not, and the two answers were
+  ;; wrong in different ways: native threw "not transientable", while both
+  ;; ports guarded with `isMap` -- true for a ref -- and then read the ref's
+  ;; slots as an array-map's, answering `{:z 9, 1 2}`. Garbage rather than a
+  ;; refusal, which is the worse of the two failures.
+  (let [t (ft/table S [{:a 1 :b 2 :c 3 :d 4 :e 5}])
+        row (first (ft/rows t))]
+    (expect = {:a 1 :b 2 :c 3 :d 4 :e 5 :z 9} (merge row {:z 9}))
+    (expect = {:a 1 :b 2 :c 3 :d 4 :e 5} (merge row {}))
+    (expect = {:a 1 :b 2 :c 3 :d 4 :e 5 :z 9} (merge {} row {:z 9}))
+    ;; A value the row already has must be OVERWRITTEN by the later source,
+    ;; which is what `merge` means and what a wrong transient would lose.
+    (expect = 99 (:b (merge row {:b 99})))
+    (expect = {:a 1 :b 2 :c 3 :d 4 :e 5} (into {} row))
+    (expect = 15 (reduce-kv (fn [acc _ v] (+ acc v)) 0 row))))
