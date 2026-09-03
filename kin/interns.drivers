@@ -1,0 +1,58 @@
+--rust-head
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+struct InternTable { hashes: Vec<u32>, values: Vec<u64>, count: usize }
+impl InternTable {
+--rust
+}
+fn main() {
+    let mut t = InternTable { hashes: vec![0; 8], values: vec![0; 8], count: 0 };
+    let mut o = String::new();
+    o.push_str(&format!("{} ", t.mask()));
+    o.push_str(if t.needs_grow() { "1 " } else { "0 " });
+    t.insert_at(3, 0xAA, Value(77));
+    // Three hashes that collide mod 8, so the probe has to walk.
+    t.raw_insert(1, 101); t.raw_insert(9, 109); t.raw_insert(17, 117);
+    for i in 0..8 { o.push_str(&format!("{}:{} ", t.hashes[i], t.values[i])); }
+    o.push_str(&format!("n={} ", t.count));
+    o.push_str(if t.needs_grow() { "1" } else { "0" });
+    println!("{}", o);
+}
+--java-head
+    static final class Interns {
+        int[] hashes = new int[8];
+        long[] values = new long[8];
+        int count = 0;
+--java
+    }
+    public static void main(String[] args) {
+        Interns t = new Interns();
+        StringBuilder o = new StringBuilder();
+        o.append(t.mask()).append(' ');
+        o.append(t.needsGrow() ? "1 " : "0 ");
+        t.insertAt(3, 0xAA, 77L);
+        t.rawInsert(1, 101L); t.rawInsert(9, 109L); t.rawInsert(17, 117L);
+        for (int i = 0; i < 8; i++) o.append(t.hashes[i]).append(':').append(t.values[i]).append(' ');
+        o.append("n=").append(t.count).append(' ');
+        o.append(t.needsGrow() ? "1" : "0");
+        System.out.println(o);
+    }
+--csharp-head
+    internal sealed class Interns {
+        internal int[] hashes = new int[8];
+        internal long[] values = new long[8];
+        internal int count = 0;
+--csharp
+    }
+    static void Main() {
+        var t = new Interns();
+        var o = new StringBuilder();
+        o.Append(t.Mask()).Append(' ');
+        o.Append(t.NeedsGrow() ? "1 " : "0 ");
+        t.InsertAt(3, 0xAA, 77L);
+        t.RawInsert(1, 101L); t.RawInsert(9, 109L); t.RawInsert(17, 117L);
+        for (int i = 0; i < 8; i++) o.Append(t.hashes[i]).Append(':').Append(t.values[i]).Append(' ');
+        o.Append("n=").Append(t.count).Append(' ');
+        o.Append(t.NeedsGrow() ? "1" : "0");
+        Console.WriteLine(o.ToString());
+    }

@@ -1,0 +1,49 @@
+;; The intern table's slot arithmetic, written once.
+;;
+;; Phase 2 of `doc/goals/kin-port.md`, and the file that was nearly refused.
+;; It was moved to phase 5 on the grounds that its three differences from Rust
+;; were structural -- which used the divergence as its own evidence, inverting
+;; this project's rule. Measured, only the STORAGE difference was real, and it
+;; pointed at converging rather than refusing: parallel arrays are
+;; equal-or-better at every size AND the only layout the JVM can have, since
+;; Java has no value types. Rust converged onto them, and the file became
+;; portable.
+;;
+;; What is here is the arithmetic every probe and insert runs through. What is
+;; NOT here is `lookup` and `grow`: `lookup` returns "the value, or where to
+;; put one" -- `Result` in Rust, a mutable `slot` field on the others -- and
+;; takes a closure; `grow` allocates two arrays. Those are honest gaps, not
+;; drift.
+;;
+;; These are INSTANCE methods on all three, which `^:method` could not say:
+;; it means "Rust `self`, the others a static taking it", true of `Rt`'s
+;; methods and false of a table's own. `^:instance` is the second question.
+(ns runtime.interns
+  (:require [flint.impl.rt :refer [defn return while set let doc as-idx
+                                   aget aset alen bits of-bits
+                                   . + - * >= != bit-and
+                                   Interns Idx I32 Bits Value Bool]]))
+
+(defn ^:instance ^Idx mask [^Interns t]
+  (return (- (alen (. t values)) 1)))
+
+(defn ^:pub ^:instance insert-at [^:mut ^Interns t ^Idx idx ^I32 hash ^Value v]
+  (aset (. t hashes) idx hash)
+  (aset (. t values) idx (bits v))
+  (set (. t count) (+ (. t count) 1)))
+
+(defn ^:pub ^:instance ^Bool needs-grow [^Interns t]
+  (return (>= (* (. t count) 4) (* (alen (. t values)) 3))))
+
+(doc "Insert with no probe for equality: the caller already knows this hash"
+     "and value are not present. Used only by a rebuild, where every entry"
+     "came out of a table that had already established that.")
+
+(defn ^:instance raw-insert [^:mut ^Interns t ^I32 h ^Bits v]
+  (let [^Idx m (mask t)
+        ^:mut ^Idx i (bit-and (as-idx h) m)]
+    (while (!= (aget (. t values) i) 0)
+      (set i (bit-and (+ i 1) m)))
+    (aset (. t hashes) i h)
+    (aset (. t values) i v)
+    (set (. t count) (+ (. t count) 1))))

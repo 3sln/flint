@@ -46,6 +46,24 @@
   to answer the same question."
   {:name 'F64 :types {:rust "f64" :java "double" :csharp "double"} :methods {}})
 
+(def Idx
+  "An index into a host array. `usize` in Rust, `int` in the other two."
+  {:name 'Idx :types {:rust "usize" :java "int" :csharp "int"} :methods {}})
+
+(def Bits
+  "The raw 64 bits of a value, outside the `Value` newtype Rust wraps them in."
+  {:name 'Bits :types {:rust "u64" :java "long" :csharp "long"} :methods {}})
+
+(def U32s {:name 'U32s :types {:rust "Vec<u32>" :java "int[]" :csharp "int[]"} :methods {}})
+(def U64s {:name 'U64s :types {:rust "Vec<u64>" :java "long[]" :csharp "long[]"} :methods {}})
+
+(def Interns
+  "An intern table: open-addressed, linear-probed, weak. Parallel `hashes`
+  and `values` arrays plus a `count` -- one layout, on all three, since the
+  measurement that closed that divergence."
+  {:name 'Interns :types {:rust "InternTable" :java "Interns" :csharp "Interns"}
+   :methods {}})
+
 (def Addr
   "A raw heap address, BEFORE it becomes a `Value`.
 
@@ -56,7 +74,7 @@
   {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
 
 (def tags-for {'Rt Rt 'Value Value 'Cat Cat 'Bool Bool 'I32 I32 'RootIx RootIx
-               'F64 F64 'Addr Addr})
+               'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'U32s U32s 'U64s U64s 'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
 
@@ -155,6 +173,28 @@
                            :java "Val.asFixnum({0})"
                            :csharp "Val.AsFixnum({0})"})
     'to-i32 (core/call {:rust "({0} as u32)" :java "((int) {0})" :csharp "((int) {0})"})
+
+    ;; --- HOST ARRAYS ----------------------------------------------------
+    ;;
+    ;; NOT an array subject, which two analyses in a row said was the wrong
+    ;; shape for what phase 3 actually needs. Three templates: read, write,
+    ;; length. Indexing is spelled identically everywhere and only the length
+    ;; disagrees, which is the whole of what a host array costs.
+    'aget (core/call {:rust "{0}[{1}]" :java "{0}[{1}]" :csharp "{0}[{1}]"})
+    'aset (fn [ctx form]
+            (let [[_ a i v] form]
+              (sp/kin-emit! ctx (sp/indent-of ctx)
+                            (sp/kin-render ctx a) "[" (sp/kin-render ctx i) "] = "
+                            (core/strip-parens (sp/kin-render ctx v)) ";\n")))
+    ;; A hash widened to an index. Rust's index type is `usize` and its hash
+    ;; is `u32`, so mixing them is a compile error there and a no-op on the
+    ;; other two -- one target needs a word and the others need nothing, which
+    ;; is the ordinary shape of a divergence here.
+    'as-idx (core/call {:rust "{0} as usize" :java "{0}" :csharp "{0}"})
+    'alen (core/call {:rust "{0}.len()" :java "{0}.length" :csharp "{0}.Length"})
+    ;; The raw bits of a value. Rust wraps them in a newtype; the others do not.
+    'bits (core/call {:rust "{0}.0" :java "{0}" :csharp "{0}"})
+    'of-bits (core/call {:rust "Value({0})" :java "{0}" :csharp "{0}"})
 
     ;; --- CROSS-MODULE CALLS ---------------------------------------------
     ;;

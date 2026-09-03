@@ -51,9 +51,54 @@ public final class Interns {
         return new Interns[]{ new Interns(1024), new Interns(1024), new Interns(512), new Interns(4) };
     }
 
-    int mask() { return values.length - 1; }
-
+    /// The candidate test a probe runs against each occupant. A functional
+    /// interface here IS the closure Rust passes as `FnMut` -- one idea, two
+    /// spellings.
+    ///
+    /// It lives OUTSIDE the generated region deliberately: kin has no form
+    /// for a callback type, and a region that swallowed it silently deleted
+    /// it the first time this file was carved.
     public interface Match { boolean test(long v); }
+
+    /// What a rebuild maps each surviving entry through. Also outside the
+    /// region, and for the same reason.
+    public interface Refresh { long apply(long v); }
+
+    // kin:begin kin/interns.kin
+    int mask() {
+        return this.values.length - 1;
+    }
+    public void insertAt(int idx, int hash, long v) {
+        this.hashes[idx] = hash;
+        this.values[idx] = v;
+        this.count += 1;
+    }
+    public boolean needsGrow() {
+        return (this.count * 4) >= (this.values.length * 3);
+    }
+    /// Insert with no probe for equality: the caller already knows this hash
+    /// and value are not present. Used only by a rebuild, where every entry
+    /// came out of a table that had already established that.
+    void rawInsert(int h, long v) {
+        int m = this.mask();
+        int i = h & m;
+        while (this.values[i] != 0) {
+            i = (i + 1) & m;
+        }
+        this.hashes[i] = h;
+        this.values[i] = v;
+        this.count += 1;
+    }
+
+    // kin:end kin/interns.kin
+
+    public void grow() {
+        int[] oh = hashes; long[] ov = values;
+        hashes = new int[ov.length * 2];
+        values = new long[ov.length * 2];
+        count = 0;
+        for (int i = 0; i < ov.length; i++) if (ov[i] != 0) rawInsert(oh[i], ov[i]);
+    }
 
     /// The found value, or NOT_FOUND with `slot` left at where to insert.
     public int slot;
@@ -68,35 +113,6 @@ public final class Interns {
             i = (i + 1) & m;
         }
     }
-
-    public void insertAt(int idx, int hash, long v) {
-        hashes[idx] = hash;
-        values[idx] = v;
-        count++;
-    }
-
-    public boolean needsGrow() { return count * 4 >= values.length * 3; }
-
-    public void grow() {
-        int[] oh = hashes; long[] ov = values;
-        hashes = new int[ov.length * 2];
-        values = new long[ov.length * 2];
-        count = 0;
-        for (int i = 0; i < ov.length; i++) if (ov[i] != 0) rawInsert(oh[i], ov[i]);
-    }
-
-    void rawInsert(int h, long v) {
-        int m = mask();
-        int i = h & m;
-        while (values[i] != 0) i = (i + 1) & m;
-        hashes[i] = h;
-        values[i] = v;
-        count++;
-    }
-
-    /// What the collector calls. `f` answers the value's new address, or
-    /// NOT_FOUND if it died -- in which case the entry goes.
-    public interface Refresh { long apply(long v); }
 
     public void refresh(Refresh f) {
         int[] oh = hashes; long[] ov = values;

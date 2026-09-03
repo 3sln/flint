@@ -720,6 +720,18 @@ stay meaningful. 1 and 8 are done.
   refusing the alternative.** Two were checked; both looked principled, one had
   a comment explaining itself, and neither survived. kin's job here is to
   CONVERGE the runtimes, not to encode differences nobody chose.
+* **A region's boundary is a CLAIM about what lies between two functions, and
+  it must be checked against the previous commit rather than against a
+  compiler.** Carving `Interns` from `mask` to `grow` silently deleted four
+  declarations -- Java's `Match` and `Refresh` interfaces, C#'s `Match` and
+  `Rehome` delegates -- because they sat between functions and a region takes
+  everything in its span. Rust's region had no interleaved declarations, so
+  `cargo check` passed, and I read that as the carve being clean: ONE TARGET
+  VERIFIED AND THREE ASSUMED. `kin/verify` cannot catch it either -- it
+  compiles the GENERATED code against a mock, so a declaration deleted from
+  the HOST file is invisible to it. Verify proves the region is right; only
+  the host build proves the carve is. The check that works is a diff of the
+  declaration set against `HEAD`.
 * **Verified or reverted.** Four attempts at the park bug were written, measured,
   and reverted rather than left in the tree as unverified interpreter changes.
 * **Measure a generated function as a LIBRARY, never as a binary.** A `main`

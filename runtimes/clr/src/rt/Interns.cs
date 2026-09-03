@@ -51,9 +51,53 @@ public sealed class Interns {
         return new Interns[]{ new Interns(1024), new Interns(1024), new Interns(512), new Interns(4) };
     }
 
-    int Mask() { return values.Length - 1; }
-
+    /// The candidate test a probe runs against each occupant. A delegate
+    /// here IS the closure Rust passes as `FnMut` -- one idea, two spellings.
+    ///
+    /// Outside the generated region deliberately: kin has no form for a
+    /// callback type, and a region that swallowed it silently deleted it the
+    /// first time this file was carved.
     public delegate bool Match(long v);
+
+    /// What a rebuild maps each surviving entry through. Also outside the
+    /// region, and for the same reason.
+    public delegate long Rehome(long v);
+
+    // kin:begin kin/interns.kin
+    internal int Mask() {
+        return this.values.Length - 1;
+    }
+    public void InsertAt(int idx, int hash, long v) {
+        this.hashes[idx] = hash;
+        this.values[idx] = v;
+        this.count += 1;
+    }
+    public bool NeedsGrow() {
+        return (this.count * 4) >= (this.values.Length * 3);
+    }
+    /// Insert with no probe for equality: the caller already knows this hash
+    /// and value are not present. Used only by a rebuild, where every entry
+    /// came out of a table that had already established that.
+    internal void RawInsert(int h, long v) {
+        int m = this.Mask();
+        int i = h & m;
+        while (this.values[i] != 0) {
+            i = (i + 1) & m;
+        }
+        this.hashes[i] = h;
+        this.values[i] = v;
+        this.count += 1;
+    }
+
+    // kin:end kin/interns.kin
+
+    public void Grow() {
+        int[] oh = hashes; long[] ov = values;
+        hashes = new int[ov.Length * 2];
+        values = new long[ov.Length * 2];
+        count = 0;
+        for (int i = 0; i < ov.Length; i++) if (ov[i] != 0) RawInsert(oh[i], ov[i]);
+    }
 
     /// The found value, or NOT_FOUND with `slot` left at where to insert.
     public int slot;
@@ -68,35 +112,6 @@ public sealed class Interns {
             i = (i + 1) & m;
         }
     }
-
-    public void InsertAt(int idx, int hash, long v) {
-        hashes[idx] = hash;
-        values[idx] = v;
-        count++;
-    }
-
-    public bool NeedsGrow() { return count * 4 >= values.Length * 3; }
-
-    public void Grow() {
-        int[] oh = hashes; long[] ov = values;
-        hashes = new int[ov.Length * 2];
-        values = new long[ov.Length * 2];
-        count = 0;
-        for (int i = 0; i < ov.Length; i++) if (ov[i] != 0) RawInsert(oh[i], ov[i]);
-    }
-
-    void RawInsert(int h, long v) {
-        int m = Mask();
-        int i = h & m;
-        while (values[i] != 0) i = (i + 1) & m;
-        hashes[i] = h;
-        values[i] = v;
-        count++;
-    }
-
-    /// What the collector calls. `f` answers the value's new address, or
-    /// NOT_FOUND if it died -- in which case the entry goes.
-    public delegate long Rehome(long v);
 
     public void Refresh(Rehome f) {
         int[] oh = hashes; long[] ov = values;

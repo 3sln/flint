@@ -126,11 +126,34 @@ impl InternTable {
         self.values.len()
     }
     #[inline]
+    // kin:begin kin/interns.kin
     fn mask(&self) -> usize {
-        self.values.len() - 1
+        return self.values.len() - 1;
     }
-    /// Probe for `hash`; calls `eq` on each candidate. Returns the found value
-    /// or the index at which to insert.
+    pub fn insert_at(&mut self, idx: usize, hash: u32, v: Value) {
+        self.hashes[idx] = hash;
+        self.values[idx] = v.0;
+        self.count += 1;
+    }
+    pub fn needs_grow(&self) -> bool {
+        return (self.count * 4) >= (self.values.len() * 3);
+    }
+    /// Insert with no probe for equality: the caller already knows this hash
+    /// and value are not present. Used only by a rebuild, where every entry
+    /// came out of a table that had already established that.
+    fn raw_insert(&mut self, h: u32, v: u64) {
+        let m: usize = self.mask();
+        let mut i: usize = h as usize & m;
+        while self.values[i] != 0 {
+            i = (i + 1) & m;
+        }
+        self.hashes[i] = h;
+        self.values[i] = v;
+        self.count += 1;
+    }
+
+    // kin:end kin/interns.kin
+
     pub fn lookup<F: FnMut(Value) -> bool>(&self, hash: u32, mut eq: F) -> Result<Value, usize> {
         let mask = self.mask();
         let mut i = hash as usize & mask;
@@ -145,14 +168,6 @@ impl InternTable {
             i = (i + 1) & mask;
         }
     }
-    pub fn insert_at(&mut self, idx: usize, hash: u32, v: Value) {
-        self.hashes[idx] = hash;
-        self.values[idx] = v.0;
-        self.count += 1;
-    }
-    pub fn needs_grow(&self) -> bool {
-        self.count * 4 >= self.values.len() * 3
-    }
     pub fn grow(&mut self) {
         let n2 = self.values.len() * 2;
         let oh = core::mem::replace(&mut self.hashes, alloc::vec![0u32; n2]);
@@ -164,17 +179,6 @@ impl InternTable {
             }
         }
     }
-    fn raw_insert(&mut self, h: u32, v: u64) {
-        let mask = self.mask();
-        let mut i = h as usize & mask;
-        while self.values[i] != 0 {
-            i = (i + 1) & mask;
-        }
-        self.hashes[i] = h;
-        self.values[i] = v;
-        self.count += 1;
-    }
-    /// Rebuild, keeping only entries `f` maps to `Some`.
     fn refresh<F: FnMut(Value) -> Option<Value>>(&mut self, mut f: F) {
         let n = self.values.len();
         let oh = core::mem::replace(&mut self.hashes, alloc::vec![0u32; n]);
