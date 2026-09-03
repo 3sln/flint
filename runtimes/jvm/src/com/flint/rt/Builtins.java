@@ -268,6 +268,11 @@ public final class Builtins {
             if (Vec.isTransient(rt, v)) return Val.fixnum(Vec.tcount(rt, v));
             if (Bytes.isBytes(rt, v)) return Val.fixnum(Bytes.count(rt, v));
             if (rt.isSeq(v)) return Val.fixnum(Seqs.count(rt, v));
+            // A MAP ENTRY counts 2. `coll.rs` has had this since it was
+            // written; this port threw "needs more of the data structures"
+            // for a value that `(seq some-map)` hands out, so ordinary
+            // guest code could not count one.
+            if (rt.isHeapTy(v, TY_MAPENTRY)) return Val.fixnum(2);
             return rt.throwStr("UnsupportedOperationException",
 "count over " + rt.describe(v) + " needs more of the data structures");
         });
@@ -337,7 +342,10 @@ public final class Builtins {
             // `conj` on a SEQ prepends, where on a vector it appends. That
             // asymmetry is Clojure's and is about where the collection is cheap
             // to grow, not about consistency.
-            if (Val.isNil(v) || rt.isSeq(v)) {
+            // A MAP ENTRY conses, exactly as `coll.rs`'s default arm does.
+            // It is sequential -- the type-test switch says so now -- and
+            // `Seqs.seq` already knows how to walk one.
+            if (Val.isNil(v) || rt.isSeq(v) || rt.isHeapTy(v, TY_MAPENTRY)) {
                 long acc = Val.isNil(v) ? Seqs.emptyList(rt) : v;
                 for (int i = 1; i < n; i++) acc = Seqs.cons(rt, rt.vat(at + i), acc);
                 return acc;
@@ -517,6 +525,15 @@ rt.describe(v) + " is not a transient");
                 if (!Val.isFixnum(k)) return dflt;
                 long r = Table.tableRef(rt, coll, (int) Val.asFixnum(k));
                 return Val.isNil(r) ? dflt : r;
+            }
+            // A MAP ENTRY indexes 0 and 1, matching `coll.rs`. `nth` on one
+            // already worked in this port; `get` did not, which is the
+            // two-paths-one-wired shape the comment below describes.
+            if (rt.isHeapTy(coll, TY_MAPENTRY)) {
+                long k = rt.vat(at + 1);
+                if (!Val.isFixnum(k)) return dflt;
+                long i = Val.asFixnum(k);
+                return (i == 0 || i == 1) ? rt.slot(coll, (int) i) : dflt;
             }
             return rt.throwStr("UnsupportedOperationException",
 "get over " + rt.describe(coll) + " needs sets ported");

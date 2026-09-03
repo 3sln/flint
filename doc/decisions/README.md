@@ -204,8 +204,18 @@ what remains, and what each thing is waiting on.
 
    (b) is a LANGUAGE SURFACE change -- it alters what `pr-str` emits for a form
    people read in test output -- so it wants a decision rather than a quiet
-   fix, which is why this entry records it instead of changing it. (a) is
-   mechanical and blocked on nothing.
+   fix, which is why this entry records it instead of changing it.
+
+   **(a) IS DONE.** `count`, `conj` and `(get e 0)` now answer on both ports,
+   mirroring `coll.rs` rather than inventing anything: a map entry counts 2,
+   conses like the default arm, and indexes 0 and 1. Printing fixed itself
+   with the `sequential?` repair, because the printer dispatches on it -- one
+   cause behind two symptoms, which is why the `#<unprintable>` in the table
+   above is gone without anything touching the printer.
+
+   All four runtimes now give the same answer to every row of that table.
+   **(b) is still open**, and is now the only thing left in this item: all
+   four agree with each other and none of them agrees with Clojure.
 
    Found the same way as `0h` and `0j`: probing what a value can DO rather
    than reading what its type suggests.

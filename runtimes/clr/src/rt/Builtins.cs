@@ -262,6 +262,11 @@ public static class Builtins {
             if (Vec.IsTransient(rt, v)) return Val.Fixnum(Vec.TCount(rt, v));
             if (Bytes.IsBytes(rt, v)) return Val.Fixnum(Bytes.Count(rt, v));
             if (rt.IsSeq(v)) return Val.Fixnum(Seqs.Count(rt, v));
+            // A MAP ENTRY counts 2. `coll.rs` has had this since it was
+            // written; this port threw "needs more of the data structures"
+            // for a value that `(seq some-map)` hands out, so ordinary
+            // guest code could not count one.
+            if (rt.IsHeapTy(v, Obj.TyMapentry)) return Val.Fixnum(2);
             return rt.ThrowStr("UnsupportedOperationException", "count over " + rt.Describe(v) + " needs more of the data structures");
         });
         Def("nth", (rt, at, n) => {
@@ -326,7 +331,10 @@ public static class Builtins {
             // `conj` on a SEQ prepends, where on a vector it appends. That
             // asymmetry is Clojure's and is about where the collection is cheap
             // to grow, not about consistency.
-            if (Val.IsNil(v) || rt.IsSeq(v)) {
+            // A MAP ENTRY conses, exactly as `coll.rs`'s default arm does.
+            // It is sequential -- the type-test switch says so now -- and
+            // `Seqs.Seq` already knows how to walk one.
+            if (Val.IsNil(v) || rt.IsSeq(v) || rt.IsHeapTy(v, Obj.TyMapentry)) {
                 long acc = Val.IsNil(v) ? Seqs.EmptyList(rt) : v;
                 for (int i = 1; i < n; i++) acc = Seqs.Cons(rt, rt.VAt(at + i), acc);
                 return acc;
@@ -485,6 +493,15 @@ public static class Builtins {
                 if (!Val.IsFixnum(k2)) return dflt;
                 long r = Flint.Rt.Table.tableRef(rt, coll, (int) Val.AsFixnum(k2));
                 return Val.IsNil(r) ? dflt : r;
+            }
+            // A MAP ENTRY indexes 0 and 1, matching `coll.rs`. `nth` on one
+            // already worked in this port; `get` did not, which is the
+            // two-paths-one-wired shape the comment below describes.
+            if (rt.IsHeapTy(coll, Obj.TyMapentry)) {
+                long k3 = rt.VAt(at + 1);
+                if (!Val.IsFixnum(k3)) return dflt;
+                long i3 = Val.AsFixnum(k3);
+                return (i3 == 0 || i3 == 1) ? rt.Slot(coll, (int) i3) : dflt;
             }
             return rt.ThrowStr("UnsupportedOperationException", "get over " + rt.Describe(coll) + " needs sets ported");
         });
