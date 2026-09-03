@@ -135,6 +135,25 @@ become safe to port. Never port a test and its subject in the same change.
   opcode dispatch, so coverage cannot move" -- would have been true and would
   not have been a measurement.
 
+  The set is now fixed by `bin/opcov-gate` rather than reconstructed by hand
+  each time, because reconstructing it by hand went wrong twice in one sitting:
+
+  * `opcov` was pointed at `out/*.wasm`. That directory ACCUMULATES -- it held
+    260 images, most of them ad-hoc -- and `opcov` executes each one, so it sat
+    at 100% CPU on the first long-running program and printed nothing for 23
+    minutes. The number of images a build "leaves in `out/`" is not a set.
+  * `opcov` runs IMAGES (`--emit-image`, `.img`), not wasm modules, and it
+    needs `--features diagnostics` to record anything at all. Handed the wrong
+    artifact it rejected all sixteen, reported "256 of 256 slots cold", and the
+    first version of the gate script **still exited 0**.
+
+  That last one is the failure this whole file is about, reproduced inside the
+  tool built to detect it: a gate reporting total coverage loss and calling it
+  success. `bin/opcov-gate` now fails if any image is rejected, if fewer than
+  fifteen build, or if the census says nothing ran. The count moved from 220
+  over 17 images to 217 over 16 because the set is different and now written
+  down -- not because coverage fell.
+
 ## Phases
 
 Ordered by RATIO — how alike the mirrors already are — not by size.
@@ -541,7 +560,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 1 conform | exit 0, 227 checks, 0 failures |
 | 2 runtime build | Rust `cargo check --features diagnostics` clean; JVM `javac` clean; CLR built by conform |
 | 3 `bin/test` | exit 0, 0 failures |
-| 4 coverage | **220 of 256 cold, against a 220-of-256 baseline over the same 17 images**, re-measured after EVERY slice including the last -- and the cold SET matches, not merely the count |
+| 4 coverage | **217 of 256 cold, against a 217-of-256 baseline over the same 16 images**, re-measured after EVERY slice including the last -- and the cold SET matches, not merely the count. Run by `bin/opcov-gate` |
 | 5 ships | substituted in-tree between markers, committed, declaration sets diffed against `HEAD` |
 
 | phase | file | what ships |
@@ -554,6 +573,28 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Pike` | `word_cp`, `space_cp`, `pred_hit` |
 | 3 | `Maps` | `mergeTwo` -- the CHAMP insert's hard case |
 | 3 | `Maps` | all six structural copies -- insert, remove, set-value, set-node, inline-to-node, node-to-inline |
+| 3 | `Maps` | `nodeAssoc` -- the CHAMP insert itself |
+
+### `nodeAssoc` ADDS forty lines, and that is the honest number
+
+Every slice before this one removed hand-written lines. This one does not:
+
+    hand-written removed   100
+    generated added        140
+    net                    +40
+
+The reason is not a regression, it is what the two forms are for. The ports
+wrote `out = cond ? a : b` and declared three locals to a line; kin emits one
+statement per line, and the source's comments are duplicated into all three
+runtimes rather than living in one of them. So the generated file is longer
+than the C# it replaced even though it says the same thing.
+
+This is worth stating plainly because the "size of the prize" section above
+counts lines, and a reader who carries that framing forward would read this
+slice as a loss. The prize was never line count -- it is that `nodeAssoc` now
+has ONE definition instead of three that a person has to keep in step by hand.
+A slice that costs lines and buys that is still the trade this goal is making;
+a slice that saved lines and lost the single definition would not be.
 
 Comparing the SET and not only the count is the part that matters: a
 regeneration making one opcode unreachable while another became reachable
@@ -696,6 +737,19 @@ needed.
 | 6 | `Bytes`: two regions | hole 10 + a byte sink + the `(base, n)` convergence | **~880 net** |
 | 7 | `Maps`: `merge_two` + the six structural copies | **nothing new** -- 639 lines, algorithm line-for-line identical | 639 |
 | 8 | `Table`, `Str`'s rope half, the rest | hole 5, reorders | ~2,600 |
+
+Rows 1, 3 and 7 have shipped, and so has `nodeAssoc`, which this table never
+listed. The three analyses put it in a block -- `node_assoc`, `coll_assoc`,
+`node_dissoc`, `coll_dissoc` -- and gated the whole block on converging the
+hit/found sentinel, because `coll_assoc` returns `Option<u32>` in Rust where
+`coll_dissoc` uses `u32::MAX`. That gate is real for the other three. It is
+NOT real for `node_assoc`, which never names a sentinel: it calls `coll_assoc`
+and passes the result straight out.
+
+So the block was gated on its hardest member. Splitting it shipped the insert
+now and leaves the convergence to be paid by the functions that actually need
+it -- worth noting because the same shape (a block ranked by its worst
+function) is what put `and`/`or` four files late.
 
 `Vec` first among the big ones because it has **no host arrays at all** --
 its "arrays" are heap slots and the shadow stack, which `champ.kin` already

@@ -262,6 +262,35 @@
     'bn-set-node (own "bn_set_node" "bnSetNode" 3)
     'hash-mask (own-static "mask" "mask" 2)
     'index-of (own-static "index_of" "indexOf" 2)
+    'bitpos (own-static "bitpos" "bitpos" 2)
+
+    ;; Functions kin itself GENERATED, in `merge.kin` and `copies.kin`. A
+    ;; generated function is reachable from another source only through a
+    ;; declaration like any other -- `defn` registers a name for its own file's
+    ;; self-calls and nothing wider, which is what keeps one source from
+    ;; silently depending on another's internals.
+    'merge-two (own "merge_two" "mergeTwo" 8)
+    'bn-copy-set-value (own "bn_copy_set_value" "bnCopySetValue" 4)
+    'bn-copy-set-node (own "bn_copy_set_node" "bnCopySetNode" 4)
+    'bn-copy-insert-entry (own "bn_copy_insert_entry" "bnCopyInsertEntry" 5)
+    'bn-inline-to-node (own "bn_inline_to_node" "bnInlineToNode" 4)
+    'is-bmnode (own "is_bmnode" "isBmnode" 1)
+    'coll-assoc (own "coll_assoc" "collAssoc" 6)
+    ;; `eq` and `hash-value` live in Eq on the ports, not in Maps -- a
+    ;; SIBLING rather than one of our own, and the distinction is exactly what
+    ;; the two helpers exist to keep straight.
+    ;;
+    ;; Written out rather than through `sibling` because C# needs the class
+    ;; FULLY QUALIFIED here: `Maps` has its own `Eq` method, and inside the
+    ;; class that member name shadows the `Eq` class, so a bare `Eq.Equal`
+    ;; resolves to the wrong thing. `sibling` takes one class name for both
+    ;; ports and cannot say that.
+    'val-eq (core/call {:rust "{0}.eq({1}, {2})"
+                        :java "Eq.eq({0}, {1}, {2})"
+                        :csharp "Flint.Rt.Eq.Equal({0}, {1}, {2})"})
+    'hash-value (core/call {:rust "{0}.hash_value({1})"
+                            :java "Eq.hashValue({0}, {1})"
+                            :csharp "Flint.Rt.Eq.HashValue({0}, {1})"})
     'bn-datamap (own "bn_datamap" "bnDatamap" 1)
     'bn-nodemap (own "bn_nodemap" "bnNodemap" 1)
     'bn-key (own "bn_key" "bnKey" 2)

@@ -607,85 +607,77 @@ impl Rt {
 
     // kin:end kin/copies.kin
 
-    fn node_assoc(
-        &mut self,
-        n: Value,
-        shift: u32,
-        h: u32,
-        key: Value,
-        val: Value,
-        edit: Value,
-    ) -> Value {
-        let base = self.mark();
-        let ni = self.push(n);
-        let ki = self.push(key);
-        let vi = self.push(val);
-        let ei = self.push(edit);
-
+    // kin:begin kin/nodeassoc.kin
+    fn node_assoc(&mut self, n: Value, shift: u32, h: u32, key: Value, val: Value, edit: Value) -> Value {
+        let base: usize = self.mark();
+        let ni: usize = self.push(n);
+        let ki: usize = self.push(key);
+        let vi: usize = self.push(val);
+        let ei: usize = self.push(edit);
+        // A collision node has no bitmaps to consult, so it is not this
+        // function's shape at all -- hand it straight over.
+        // The result here is named `handed` and not `out`: C# forbids a
+        // local in an inner scope that reuses an enclosing scope's name,
+        // and `out` is declared at method scope just below.
         if !self.is_bmnode(n) {
-            let out = self.coll_assoc(self.r(ni), h, self.r(ki), self.r(vi), self.r(ei), shift);
+            let handed: Value = self.coll_assoc(self.r(ni), h, self.r(ki), self.r(vi), self.r(ei), shift);
             self.pop_to(base);
-            return out;
+            return handed;
         }
-
-        let bit = bitpos(h, shift);
-        let dm = self.bn_datamap(n);
-        let nm = self.bn_nodemap(n);
-
-        let out = if dm & bit != 0 {
-            let at = index_of(dm, bit);
-            let k0 = self.bn_key(self.r(ni), at);
-            let k0i = self.push(k0);
+        let bit: u32 = bitpos(h, shift);
+        let dm: u32 = self.bn_datamap(n);
+        let nm: u32 = self.bn_nodemap(n);
+        let out: Value;
+        if (dm & bit) != 0 {
+            let at: u32 = index_of(dm, bit);
+            let k0i: usize = self.push(self.bn_key(self.r(ni), at));
             if self.eq(self.r(k0i), self.r(ki)) {
+                // The key was already here, so the map's count does not
+                // move however the value changes.
                 self.champ_added = false;
-                let v0 = self.bn_val(self.r(ni), at);
+                let v0: Value = self.bn_val(self.r(ni), at);
                 if v0 == self.r(vi) {
-                    self.r(ni)
+                    out = self.r(ni);
                 } else {
-                    self.bn_copy_set_value(self.r(ni), at, self.r(vi), self.r(ei))
+                    out = self.bn_copy_set_value(self.r(ni), at, self.r(vi), self.r(ei));
                 }
             } else {
+                // A different key in the same slot: the two are pushed
+                // down into a sub-node, and the entry stops being an
+                // entry at this level.
                 self.champ_added = true;
-                let v0 = self.bn_val(self.r(ni), at);
-                let v0i = self.push(v0);
-                let h0 = self.hash_value(self.r(k0i));
-                let sub = self.merge_two(
-                    shift + HASH_BITS,
-                    self.r(k0i),
-                    self.r(v0i),
-                    h0,
-                    self.r(ki),
-                    self.r(vi),
-                    h,
-                    self.r(ei),
-                );
-                let si = self.push(sub);
-                let s = self.r(si);
-                self.bn_inline_to_node(self.r(ni), bit, s, self.r(ei))
+                let v0i: usize = self.push(self.bn_val(self.r(ni), at));
+                let h0: u32 = self.hash_value(self.r(k0i));
+                let sub: Value = self.merge_two(shift + HASH_BITS, self.r(k0i), self.r(v0i), h0, self.r(ki), self.r(vi), h, self.r(ei));
+                let si: usize = self.push(sub);
+                out = self.bn_inline_to_node(self.r(ni), bit, self.r(si), self.r(ei));
             }
-        } else if nm & bit != 0 {
-            let at = index_of(nm, bit);
-            let sub = self.bn_node(self.r(ni), at);
-            // Rooted, because the comparison below is what decides whether this
-            // node changed. `node_assoc` allocates, a collection can move `sub`,
-            // and a stale address that happens to match the new one would drop
-            // the whole subtree's update on the floor -- a key silently missing
+        } else if (nm & bit) != 0 {
+            let at: u32 = index_of(nm, bit);
+            // Rooted, because the comparison below is what decides
+            // whether this node changed. `node_assoc` allocates, a
+            // collection can move `sub`, and a stale address that
+            // happened to match the new one would drop the whole
+            // subtree's update on the floor -- a key silently missing
             // from a map whose count says it is there.
-            let subi = self.push(sub);
-            let newsub =
-                self.node_assoc(self.r(subi), shift + HASH_BITS, h, self.r(ki), self.r(vi), self.r(ei));
+            let subi: usize = self.push(self.bn_node(self.r(ni), at));
+            let newsub: Value = self.node_assoc(self.r(subi), shift + HASH_BITS, h, self.r(ki), self.r(vi), self.r(ei));
             if newsub == self.r(subi) {
-                self.r(ni)
+                out = self.r(ni);
             } else {
-                self.bn_copy_set_node(self.r(ni), at, newsub, self.r(ei))
+                out = self.bn_copy_set_node(self.r(ni), at, newsub, self.r(ei));
             }
         } else {
+            // An empty slot, which is the only branch that always
+            // grows the map.
             self.champ_added = true;
-            self.bn_copy_insert_entry(self.r(ni), bit, self.r(ki), self.r(vi), self.r(ei))
-        };
+            out = self.bn_copy_insert_entry(self.r(ni), bit, self.r(ki), self.r(vi), self.r(ei));
+        }
         self.pop_to(base);
-        out
+        return out;
     }
+
+    // kin:end kin/nodeassoc.kin
 
     fn coll_assoc(&mut self, n: Value, h: u32, key: Value, val: Value, edit: Value, shift: u32) -> Value {
         let nh = self.slot(n, CN_HASH).as_fixnum() as u32;

@@ -496,53 +496,77 @@ public final class Maps {
 
     // kin:end kin/copies.kin
 
+    // kin:begin kin/nodeassoc.kin
     static long nodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
         int base = rt.mark();
-        int ni = rt.push(n), ki = rt.push(key), vi = rt.push(val), ei = rt.push(edit);
-        long out;
+        int ni = rt.push(n);
+        int ki = rt.push(key);
+        int vi = rt.push(val);
+        int ei = rt.push(edit);
+        // A collision node has no bitmaps to consult, so it is not this
+        // function's shape at all -- hand it straight over.
+        // The result here is named `handed` and not `out`: C# forbids a
+        // local in an inner scope that reuses an enclosing scope's name,
+        // and `out` is declared at method scope just below.
         if (!isBmnode(rt, n)) {
-            out = collAssoc(rt, rt.r(ni), h, rt.r(ki), rt.r(vi), rt.r(ei), shift);
+            long handed = collAssoc(rt, rt.r(ni), h, rt.r(ki), rt.r(vi), rt.r(ei), shift);
             rt.popTo(base);
-            return out;
+            return handed;
         }
         int bit = bitpos(h, shift);
-        int dm = bnDatamap(rt, n), nm = bnNodemap(rt, n);
+        int dm = bnDatamap(rt, n);
+        int nm = bnNodemap(rt, n);
+        long out;
         if ((dm & bit) != 0) {
             int at = indexOf(dm, bit);
             int k0i = rt.push(bnKey(rt, rt.r(ni), at));
             if (Eq.eq(rt, rt.r(k0i), rt.r(ki))) {
+                // The key was already here, so the map's count does not
+                // move however the value changes.
                 rt.champAdded = false;
                 long v0 = bnVal(rt, rt.r(ni), at);
-                out = v0 == rt.r(vi) ? rt.r(ni)
-                    : bnCopySetValue(rt, rt.r(ni), at, rt.r(vi), rt.r(ei));
+                if (v0 == rt.r(vi)) {
+                    out = rt.r(ni);
+                } else {
+                    out = bnCopySetValue(rt, rt.r(ni), at, rt.r(vi), rt.r(ei));
+                }
             } else {
+                // A different key in the same slot: the two are pushed
+                // down into a sub-node, and the entry stops being an
+                // entry at this level.
                 rt.champAdded = true;
                 int v0i = rt.push(bnVal(rt, rt.r(ni), at));
                 int h0 = Eq.hashValue(rt, rt.r(k0i));
-                long sub = mergeTwo(rt, shift + HASH_BITS, rt.r(k0i), rt.r(v0i), h0,
-                                    rt.r(ki), rt.r(vi), h, rt.r(ei));
+                long sub = mergeTwo(rt, shift + HASH_BITS, rt.r(k0i), rt.r(v0i), h0, rt.r(ki), rt.r(vi), h, rt.r(ei));
                 int si = rt.push(sub);
                 out = bnInlineToNode(rt, rt.r(ni), bit, rt.r(si), rt.r(ei));
             }
         } else if ((nm & bit) != 0) {
             int at = indexOf(nm, bit);
-            // Rooted, because the comparison below is what decides whether this
-            // node changed. `nodeAssoc` allocates, a collection can move `sub`,
-            // and a stale address that happened to match the new one would drop
-            // the whole subtree's update on the floor -- a key silently missing
+            // Rooted, because the comparison below is what decides
+            // whether this node changed. `node_assoc` allocates, a
+            // collection can move `sub`, and a stale address that
+            // happened to match the new one would drop the whole
+            // subtree's update on the floor -- a key silently missing
             // from a map whose count says it is there.
             int subi = rt.push(bnNode(rt, rt.r(ni), at));
-            long newsub = nodeAssoc(rt, rt.r(subi), shift + HASH_BITS, h,
-                                    rt.r(ki), rt.r(vi), rt.r(ei));
-            out = newsub == rt.r(subi) ? rt.r(ni)
-                : bnCopySetNode(rt, rt.r(ni), at, newsub, rt.r(ei));
+            long newsub = nodeAssoc(rt, rt.r(subi), shift + HASH_BITS, h, rt.r(ki), rt.r(vi), rt.r(ei));
+            if (newsub == rt.r(subi)) {
+                out = rt.r(ni);
+            } else {
+                out = bnCopySetNode(rt, rt.r(ni), at, newsub, rt.r(ei));
+            }
         } else {
+            // An empty slot, which is the only branch that always
+            // grows the map.
             rt.champAdded = true;
             out = bnCopyInsertEntry(rt, rt.r(ni), bit, rt.r(ki), rt.r(vi), rt.r(ei));
         }
         rt.popTo(base);
         return out;
     }
+
+    // kin:end kin/nodeassoc.kin
 
     static long collAssoc(Rt rt, long n, int h, long key, long val, long edit, int shift) {
         int nh = cnHash(rt, n);
