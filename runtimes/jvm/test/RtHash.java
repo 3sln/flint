@@ -27,13 +27,13 @@ public class RtHash {
   }
 
   public static void main(String[] a) {
-    eq("(hash 0)", Hash.hashLong(0), 0);
-    eq("(hash 1)", Hash.hashLong(1), 1392991556);
-    eq("(hash -1)", Hash.hashLong(-1), 1651860712);
-    eq("(hash 42)", Hash.hashLong(42), 1871679806);
-    eq("(hash 12345678901234)", Hash.hashLong(12345678901234L), -1096982217);
-    eq("(hash Long/MAX_VALUE)", Hash.hashLong(Long.MAX_VALUE), -2106506049);
-    eq("(hash Long/MIN_VALUE)", Hash.hashLong(Long.MIN_VALUE), 1366273829);
+    eq("(hash 0)", flint.rt.Hash.hashLong(0), 0);
+    eq("(hash 1)", flint.rt.Hash.hashLong(1), 1392991556);
+    eq("(hash -1)", flint.rt.Hash.hashLong(-1), 1651860712);
+    eq("(hash 42)", flint.rt.Hash.hashLong(42), 1871679806);
+    eq("(hash 12345678901234)", flint.rt.Hash.hashLong(12345678901234L), -1096982217);
+    eq("(hash Long/MAX_VALUE)", flint.rt.Hash.hashLong(Long.MAX_VALUE), -2106506049);
+    eq("(hash Long/MIN_VALUE)", flint.rt.Hash.hashLong(Long.MIN_VALUE), 1366273829);
     System.out.println("  ok   longs hash as Clojure hashes them");
 
     eq("(hash 0.0)", Hash.hashDouble(0.0), 0);

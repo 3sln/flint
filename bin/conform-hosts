@@ -115,7 +115,8 @@ mkdir -p out/conform
 # must not leave a runnable tree behind.
 rm -rf runtimes/jvm/classes
 if ! "$JDK/bin/javac" -d runtimes/jvm/classes \
-     runtimes/jvm/src/com/flint/rt/*.java runtimes/jvm/test/*.java > /tmp/flint-javac.out 2>&1; then
+     runtimes/jvm/src/com/flint/rt/*.java runtimes/jvm/src/kingen/flint/rt/*.java \
+     runtimes/jvm/test/*.java > /tmp/flint-javac.out 2>&1; then
   head -20 /tmp/flint-javac.out
   # A JDK TOO OLD is a missing toolchain and skippable. Anything else is the
   # PORT NOT COMPILING, which is a failure -- and treating it as a skip is how
