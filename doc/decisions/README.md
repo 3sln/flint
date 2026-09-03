@@ -78,6 +78,29 @@ what remains, and what each thing is waiting on.
    flag could gate it -- while a GUEST-NAMED one is optional and should be
    declared. Splitting the two is what stops the next one going missing.
 
+0g. **Visibility is enforced, and `^:internal` is new** — three visibilities,
+   two boundaries: `^:private` (or `defn-`) is the defining NAMESPACE,
+   `^:internal` the defining WORKSPACE, neither is public. Checked at the
+   reference in `record-dep!`, beside `0036`'s capability guard, which sits on
+   symbol RESOLUTION and so covers a call, a local binding and a collection
+   literal alike.
+
+   `^:internal` reuses the boundary `0036` already draws, and the two compose
+   without interfering: internal asks WHO MAY NAME THIS, a guard asks WHAT MAY
+   THIS CODE DO.
+
+   **Still open:** the CLI emits `:workspaces` only for virtual and pod
+   namespaces, so `^:internal` is enforced where workspaces are declared and
+   behaves as public where none are -- which is most code today. Emitting
+   source workspaces from deps is part of `0036` steps 4-6, and finishing that
+   is what gives this mark its reach.
+
+   Also open, and NOT built: an INTERNAL NAMESPACE, which an outside workspace
+   could not `:require` at all. `refused-requires` is where it would live, but
+   that check is capability-shaped today rather than visibility-shaped. The
+   var-level mark is the useful half and is done; this is the natural next
+   question rather than an omission.
+
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old
    `jvm`-against-`clr` similarity table because BOTH ports share them. Two
