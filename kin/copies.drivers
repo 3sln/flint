@@ -55,8 +55,22 @@ fn main() {
     rt.h[(owned.0 + 18) as usize] = tok.0;
     rt.bn_set_key(owned, 0, Value(5)); rt.bn_set_val(owned, 0, Value(6));
     let s3 = rt.bn_copy_set_value(owned, 0, Value(66), tok);
-    o.push_str(&format!("| through {} {}:{} roots={}",
-                        s3.0 == owned.0, rt.bn_key(s3, 0).0, rt.bn_val(s3, 0).0, rt.roots.len()));
+    o.push_str(&format!("| through {} {}:{}",
+                        s3.0 == owned.0, rt.bn_key(s3, 0).0, rt.bn_val(s3, 0).0));
+    // Promote the pair at bit 8 into a sub-node: it leaves the entry half
+    // and joins the node half, so BOTH bitmaps and BOTH halves reindex.
+    let p = rt.bn_inline_to_node(m, 0b1000, Value(77), NIL);
+    o.push_str(&format!(" | promo dm={} nm={} ", rt.bn_datamap(p), rt.bn_nodemap(p)));
+    for i in 0..2 { o.push_str(&format!("{}:{} ", rt.bn_key(p, i).0, rt.bn_val(p, i).0)); }
+    for j in 0..2 { o.push_str(&format!("n{} ", rt.bn_node(p, j).0)); }
+    // And back the other way.
+    let q = rt.bn_node_to_inline(p, 0b1000, Value(80), Value(81), NIL);
+    o.push_str(&format!("| demo dm={} nm={} ", rt.bn_datamap(q), rt.bn_nodemap(q)));
+    for i in 0..3 { o.push_str(&format!("{}:{} ", rt.bn_key(q, i).0, rt.bn_val(q, i).0)); }
+    o.push_str(&format!("n{} ", rt.bn_node(q, 0).0));
+    // Set a sub-node in place, copying.
+    let z = rt.bn_copy_set_node(q, 0, Value(55), NIL);
+    o.push_str(&format!("| setnode n{} roots={}", rt.bn_node(z, 0).0, rt.roots.len()));
     println!("{}", o);
 }
 --java-head
@@ -109,8 +123,17 @@ fn main() {
         bnSetKey(rt, owned, 0, 5); bnSetVal(rt, owned, 0, 6);
         long s3 = bnCopySetValue(rt, owned, 0, 66, tok);
         o.append("| through ").append(s3 == owned).append(' ')
-         .append(bnKey(rt, s3, 0)).append(':').append(bnVal(rt, s3, 0))
-         .append(" roots=").append(rt.roots.size());
+         .append(bnKey(rt, s3, 0)).append(':').append(bnVal(rt, s3, 0));
+        long p = bnInlineToNode(rt, m, 0b1000, 77, NIL);
+        o.append(" | promo dm=").append(bnDatamap(rt, p)).append(" nm=").append(bnNodemap(rt, p)).append(' ');
+        for (int i = 0; i < 2; i++) o.append(bnKey(rt, p, i)).append(':').append(bnVal(rt, p, i)).append(' ');
+        for (int j = 0; j < 2; j++) o.append('n').append(bnNode(rt, p, j)).append(' ');
+        long q = bnNodeToInline(rt, p, 0b1000, 80, 81, NIL);
+        o.append("| demo dm=").append(bnDatamap(rt, q)).append(" nm=").append(bnNodemap(rt, q)).append(' ');
+        for (int i = 0; i < 3; i++) o.append(bnKey(rt, q, i)).append(':').append(bnVal(rt, q, i)).append(' ');
+        o.append('n').append(bnNode(rt, q, 0)).append(' ');
+        long z = bnCopySetNode(rt, q, 0, 55, NIL);
+        o.append("| setnode n").append(bnNode(rt, z, 0)).append(" roots=").append(rt.roots.size());
         System.out.println(o);
     }
 --csharp-head
@@ -165,7 +188,16 @@ fn main() {
         BnSetKey(rt, owned, 0, 5); BnSetVal(rt, owned, 0, 6);
         long s3 = BnCopySetValue(rt, owned, 0, 66, tok);
         o.Append("| through ").Append(s3 == owned ? "true" : "false").Append(' ')
-         .Append(BnKey(rt, s3, 0)).Append(':').Append(BnVal(rt, s3, 0))
-         .Append(" roots=").Append(rt.roots.Count);
+         .Append(BnKey(rt, s3, 0)).Append(':').Append(BnVal(rt, s3, 0));
+        long p = BnInlineToNode(rt, m, 0b1000, 77, NIL);
+        o.Append(" | promo dm=").Append(BnDatamap(rt, p)).Append(" nm=").Append(BnNodemap(rt, p)).Append(' ');
+        for (int i = 0; i < 2; i++) o.Append(BnKey(rt, p, i)).Append(':').Append(BnVal(rt, p, i)).Append(' ');
+        for (int j = 0; j < 2; j++) o.Append('n').Append(BnNode(rt, p, j)).Append(' ');
+        long q = BnNodeToInline(rt, p, 0b1000, 80, 81, NIL);
+        o.Append("| demo dm=").Append(BnDatamap(rt, q)).Append(" nm=").Append(BnNodemap(rt, q)).Append(' ');
+        for (int i = 0; i < 3; i++) o.Append(BnKey(rt, q, i)).Append(':').Append(BnVal(rt, q, i)).Append(' ');
+        o.Append('n').Append(BnNode(rt, q, 0)).Append(' ');
+        long z = BnCopySetNode(rt, q, 0, 55, NIL);
+        o.Append("| setnode n").Append(BnNode(rt, z, 0)).Append(" roots=").Append(rt.roots.Count);
         Console.WriteLine(o.ToString());
     }

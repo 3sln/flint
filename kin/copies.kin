@@ -20,7 +20,7 @@
 ;; off-by-one in the slot arithmetic here is a map that loses an entry, and
 ;; six near-copies in three languages is eighteen chances to make one.
 (ns runtime.copies
-  (:require [flint.impl.rt :refer [defn return if let local set do for continue comment
+  (:require [flint.impl.rt :refer [defn return if let local set do for continue comment doc
                                    mark push r pop-to nil? not
                                    bn-new bn-datamap bn-nodemap bn-key bn-val
                                    bn-node bn-set-key bn-set-val bn-set-node
@@ -139,3 +139,132 @@
         (let [^Value built (r rt oi)]
           (pop-to rt mk)
           (return built))))))
+
+(defn ^:method ^Value bn-copy-set-node
+  [^:mut ^Rt rt ^Value n ^I32 at ^Value sub ^Value edit]
+  (let [^RootIx mk (mark rt)
+        ^RootIx ni (push rt n)
+        ^RootIx si (push rt sub)
+        ^RootIx ei (push rt edit)]
+    (if (and (not (nil? rt (r rt ei)))
+             (== (slot rt (r rt ni) BN_EDIT) (r rt ei)))
+      (let [^Value own (r rt ni)
+            ^Value os (r rt si)]
+        (bn-set-node rt own at os)
+        (pop-to rt mk)
+        (return own)))
+    (let [^I32 dm (bn-datamap rt n)
+          ^I32 nm (bn-nodemap rt n)
+          ^Value res (bn-new rt dm nm (r rt ei))]
+      (if (nil? rt res)
+        (do (pop-to rt mk)
+            (return NIL)))
+      (let [^RootIx oi (push rt res)
+            ^I32 ne (popcount dm)
+            ^I32 nn (popcount nm)]
+        (for [^I32 k 0 ne]
+          (let [^Value ek (bn-key rt (r rt ni) k)]
+            (bn-set-key rt (r rt oi) k ek))
+          (let [^Value ev (bn-val rt (r rt ni) k)]
+            (bn-set-val rt (r rt oi) k ev)))
+        (for [^I32 j 0 nn]
+          (let [^Value js (bn-node rt (r rt ni) j)]
+            (bn-set-node rt (r rt oi) j js)))
+        (let [^Value fresh (r rt si)]
+          (bn-set-node rt (r rt oi) at fresh))
+        (let [^Value built (r rt oi)]
+          (pop-to rt mk)
+          (return built))))))
+
+(doc "An inline pair becomes a SUB-NODE: it leaves the entry half and joins"
+     "the node half, so both bitmaps change and both halves reindex. The two"
+     "positions are computed from the OLD bitmaps -- `at-node` is the index in"
+     "the new nodemap as well, because the bit being added is the one being"
+     "counted up to.")
+
+(defn ^:method ^Value bn-inline-to-node
+  [^:mut ^Rt rt ^Value n ^I32 bit ^Value sub ^Value edit]
+  (let [^RootIx mk (mark rt)
+        ^RootIx ni (push rt n)
+        ^RootIx si (push rt sub)
+        ^RootIx ei (push rt edit)
+        ^I32 dm (bn-datamap rt n)
+        ^I32 nm (bn-nodemap rt n)
+        ^I32 ne (popcount dm)
+        ^I32 nn (popcount nm)
+        ^I32 at-entry (index-of dm bit)
+        ^I32 at-node (index-of nm bit)
+        ^Value res (bn-new rt (bit-xor dm bit) (bit-or nm bit) (r rt ei))]
+    (if (nil? rt res)
+      (do (pop-to rt mk)
+          (return NIL)))
+    (let [^RootIx oi (push rt res)]
+      (for [^I32 k 0 ne]
+        (if (== k at-entry)
+          (continue))
+        (local ^I32 d)
+        (if (< k at-entry)
+          (set d k)
+          (set d (- k 1)))
+        (let [^Value ek (bn-key rt (r rt ni) k)]
+          (bn-set-key rt (r rt oi) d ek))
+        (let [^Value ev (bn-val rt (r rt ni) k)]
+          (bn-set-val rt (r rt oi) d ev)))
+      (for [^I32 j 0 nn]
+        (local ^I32 e)
+        (if (< j at-node)
+          (set e j)
+          (set e (+ j 1)))
+        (let [^Value js (bn-node rt (r rt ni) j)]
+          (bn-set-node rt (r rt oi) e js)))
+      (let [^Value fresh (r rt si)]
+        (bn-set-node rt (r rt oi) at-node fresh))
+      (let [^Value built (r rt oi)]
+        (pop-to rt mk)
+        (return built)))))
+
+(doc "And the reverse: a sub-node collapses back to an inline pair.")
+
+(defn ^:method ^Value bn-node-to-inline
+  [^:mut ^Rt rt ^Value n ^I32 bit ^Value key ^Value val ^Value edit]
+  (let [^RootIx mk (mark rt)
+        ^RootIx ni (push rt n)
+        ^RootIx ki (push rt key)
+        ^RootIx vi (push rt val)
+        ^RootIx ei (push rt edit)
+        ^I32 dm (bn-datamap rt n)
+        ^I32 nm (bn-nodemap rt n)
+        ^I32 ne (popcount dm)
+        ^I32 nn (popcount nm)
+        ^I32 at-entry (index-of dm bit)
+        ^I32 at-node (index-of nm bit)
+        ^Value res (bn-new rt (bit-or dm bit) (bit-xor nm bit) (r rt ei))]
+    (if (nil? rt res)
+      (do (pop-to rt mk)
+          (return NIL)))
+    (let [^RootIx oi (push rt res)]
+      (for [^I32 k 0 ne]
+        (local ^I32 d)
+        (if (< k at-entry)
+          (set d k)
+          (set d (+ k 1)))
+        (let [^Value ek (bn-key rt (r rt ni) k)]
+          (bn-set-key rt (r rt oi) d ek))
+        (let [^Value ev (bn-val rt (r rt ni) k)]
+          (bn-set-val rt (r rt oi) d ev)))
+      (let [^Value nk (r rt ki)]
+        (bn-set-key rt (r rt oi) at-entry nk))
+      (let [^Value nv (r rt vi)]
+        (bn-set-val rt (r rt oi) at-entry nv))
+      (for [^I32 j 0 nn]
+        (if (== j at-node)
+          (continue))
+        (local ^I32 e)
+        (if (< j at-node)
+          (set e j)
+          (set e (- j 1)))
+        (let [^Value js (bn-node rt (r rt ni) j)]
+          (bn-set-node rt (r rt oi) e js)))
+      (let [^Value built (r rt oi)]
+        (pop-to rt mk)
+        (return built)))))

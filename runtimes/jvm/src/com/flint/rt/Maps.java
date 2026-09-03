@@ -350,91 +350,152 @@ public final class Maps {
         rt.popTo(mk);
         return built;
     }
+    static long bnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
+        int mk = rt.mark();
+        int ni = rt.push(n);
+        int si = rt.push(sub);
+        int ei = rt.push(edit);
+        if (!Val.isNil(rt.r(ei)) && (rt.slot(rt.r(ni), BN_EDIT) == rt.r(ei))) {
+            long own = rt.r(ni);
+            long os = rt.r(si);
+            bnSetNode(rt, own, at, os);
+            rt.popTo(mk);
+            return own;
+        }
+        int dm = bnDatamap(rt, n);
+        int nm = bnNodemap(rt, n);
+        long res = bnNew(rt, dm, nm, rt.r(ei));
+        if (Val.isNil(res)) {
+            rt.popTo(mk);
+            return Val.NIL;
+        }
+        int oi = rt.push(res);
+        int ne = Integer.bitCount(dm);
+        int nn = Integer.bitCount(nm);
+        for (int k = 0; k < ne; k++) {
+            long ek = bnKey(rt, rt.r(ni), k);
+            bnSetKey(rt, rt.r(oi), k, ek);
+            long ev = bnVal(rt, rt.r(ni), k);
+            bnSetVal(rt, rt.r(oi), k, ev);
+        }
+        for (int j = 0; j < nn; j++) {
+            long js = bnNode(rt, rt.r(ni), j);
+            bnSetNode(rt, rt.r(oi), j, js);
+        }
+        long fresh = rt.r(si);
+        bnSetNode(rt, rt.r(oi), at, fresh);
+        long built = rt.r(oi);
+        rt.popTo(mk);
+        return built;
+    }
+    /// An inline pair becomes a SUB-NODE: it leaves the entry half and joins
+    /// the node half, so both bitmaps change and both halves reindex. The two
+    /// positions are computed from the OLD bitmaps -- `at-node` is the index in
+    /// the new nodemap as well, because the bit being added is the one being
+    /// counted up to.
+    static long bnInlineToNode(Rt rt, long n, int bit, long sub, long edit) {
+        int mk = rt.mark();
+        int ni = rt.push(n);
+        int si = rt.push(sub);
+        int ei = rt.push(edit);
+        int dm = bnDatamap(rt, n);
+        int nm = bnNodemap(rt, n);
+        int ne = Integer.bitCount(dm);
+        int nn = Integer.bitCount(nm);
+        int atEntry = indexOf(dm, bit);
+        int atNode = indexOf(nm, bit);
+        long res = bnNew(rt, dm ^ bit, nm | bit, rt.r(ei));
+        if (Val.isNil(res)) {
+            rt.popTo(mk);
+            return Val.NIL;
+        }
+        int oi = rt.push(res);
+        for (int k = 0; k < ne; k++) {
+            if (k == atEntry) {
+                continue;
+            }
+            int d;
+            if (k < atEntry) {
+                d = k;
+            } else {
+                d = k - 1;
+            }
+            long ek = bnKey(rt, rt.r(ni), k);
+            bnSetKey(rt, rt.r(oi), d, ek);
+            long ev = bnVal(rt, rt.r(ni), k);
+            bnSetVal(rt, rt.r(oi), d, ev);
+        }
+        for (int j = 0; j < nn; j++) {
+            int e;
+            if (j < atNode) {
+                e = j;
+            } else {
+                e = j + 1;
+            }
+            long js = bnNode(rt, rt.r(ni), j);
+            bnSetNode(rt, rt.r(oi), e, js);
+        }
+        long fresh = rt.r(si);
+        bnSetNode(rt, rt.r(oi), atNode, fresh);
+        long built = rt.r(oi);
+        rt.popTo(mk);
+        return built;
+    }
+    /// And the reverse: a sub-node collapses back to an inline pair.
+    static long bnNodeToInline(Rt rt, long n, int bit, long key, long val, long edit) {
+        int mk = rt.mark();
+        int ni = rt.push(n);
+        int ki = rt.push(key);
+        int vi = rt.push(val);
+        int ei = rt.push(edit);
+        int dm = bnDatamap(rt, n);
+        int nm = bnNodemap(rt, n);
+        int ne = Integer.bitCount(dm);
+        int nn = Integer.bitCount(nm);
+        int atEntry = indexOf(dm, bit);
+        int atNode = indexOf(nm, bit);
+        long res = bnNew(rt, dm | bit, nm ^ bit, rt.r(ei));
+        if (Val.isNil(res)) {
+            rt.popTo(mk);
+            return Val.NIL;
+        }
+        int oi = rt.push(res);
+        for (int k = 0; k < ne; k++) {
+            int d;
+            if (k < atEntry) {
+                d = k;
+            } else {
+                d = k + 1;
+            }
+            long ek = bnKey(rt, rt.r(ni), k);
+            bnSetKey(rt, rt.r(oi), d, ek);
+            long ev = bnVal(rt, rt.r(ni), k);
+            bnSetVal(rt, rt.r(oi), d, ev);
+        }
+        long nk = rt.r(ki);
+        bnSetKey(rt, rt.r(oi), atEntry, nk);
+        long nv = rt.r(vi);
+        bnSetVal(rt, rt.r(oi), atEntry, nv);
+        for (int j = 0; j < nn; j++) {
+            if (j == atNode) {
+                continue;
+            }
+            int e;
+            if (j < atNode) {
+                e = j;
+            } else {
+                e = j - 1;
+            }
+            long js = bnNode(rt, rt.r(ni), j);
+            bnSetNode(rt, rt.r(oi), e, js);
+        }
+        long built = rt.r(oi);
+        rt.popTo(mk);
+        return built;
+    }
 
     // kin:end kin/copies.kin
 
-    static long bnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
-        int base = rt.mark();
-        int ni = rt.push(n), si = rt.push(sub), ei = rt.push(edit);
-        if (!Val.isNil(rt.r(ei)) && rt.slot(rt.r(ni), BN_EDIT) == rt.r(ei)) {
-            long nn0 = rt.r(ni);
-            bnSetNode(rt, nn0, at, rt.r(si));
-            rt.popTo(base);
-            return nn0;
-        }
-        int dm = bnDatamap(rt, n), nm = bnNodemap(rt, n);
-        long out = bnNew(rt, dm, nm, rt.r(ei));
-        if (Val.isNil(out)) { rt.popTo(base); return Val.NIL; }
-        int oi = rt.push(out);
-        for (int k = 0; k < Integer.bitCount(dm); k++) {
-            bnSetKey(rt, rt.r(oi), k, bnKey(rt, rt.r(ni), k));
-            bnSetVal(rt, rt.r(oi), k, bnVal(rt, rt.r(ni), k));
-        }
-        for (int j = 0; j < Integer.bitCount(nm); j++) bnSetNode(rt, rt.r(oi), j, bnNode(rt, rt.r(ni), j));
-        bnSetNode(rt, rt.r(oi), at, rt.r(si));
-        long r = rt.r(oi);
-        rt.popTo(base);
-        return r;
-    }
-
-    /// An inline entry becomes a sub-node: 2 entry slots out, 1 node slot in.
-    static long bnInlineToNode(Rt rt, long n, int bit, long sub, long edit) {
-        int base = rt.mark();
-        int ni = rt.push(n), si = rt.push(sub), ei = rt.push(edit);
-        int dm = bnDatamap(rt, n), nm = bnNodemap(rt, n);
-        int ne = Integer.bitCount(dm), nn = Integer.bitCount(nm);
-        int atEntry = indexOf(dm, bit);
-        int atNode = indexOf(nm, bit);   // == the index in the NEW nodemap too
-        long out = bnNew(rt, dm ^ bit, nm | bit, rt.r(ei));
-        if (Val.isNil(out)) { rt.popTo(base); return Val.NIL; }
-        int oi = rt.push(out);
-        for (int k = 0; k < ne; k++) {
-            if (k == atEntry) continue;
-            int d = k < atEntry ? k : k - 1;
-            bnSetKey(rt, rt.r(oi), d, bnKey(rt, rt.r(ni), k));
-            bnSetVal(rt, rt.r(oi), d, bnVal(rt, rt.r(ni), k));
-        }
-        for (int j = 0; j < nn; j++) {
-            int d = j < atNode ? j : j + 1;
-            bnSetNode(rt, rt.r(oi), d, bnNode(rt, rt.r(ni), j));
-        }
-        bnSetNode(rt, rt.r(oi), atNode, rt.r(si));
-        long r = rt.r(oi);
-        rt.popTo(base);
-        return r;
-    }
-
-    /// A sub-node has shrunk to one entry and folds back inline. THIS is the
-    /// step Clojure's HAMT omits, and the reason CHAMP's form is canonical.
-    static long bnNodeToInline(Rt rt, long n, int bit, long key, long val, long edit) {
-        int base = rt.mark();
-        int ni = rt.push(n), ki = rt.push(key), vi = rt.push(val), ei = rt.push(edit);
-        int dm = bnDatamap(rt, n), nm = bnNodemap(rt, n);
-        int ne = Integer.bitCount(dm), nn = Integer.bitCount(nm);
-        int atEntry = indexOf(dm, bit), atNode = indexOf(nm, bit);
-        long out = bnNew(rt, dm | bit, nm ^ bit, rt.r(ei));
-        if (Val.isNil(out)) { rt.popTo(base); return Val.NIL; }
-        int oi = rt.push(out);
-        for (int k = 0; k < ne; k++) {
-            int d = k < atEntry ? k : k + 1;
-            bnSetKey(rt, rt.r(oi), d, bnKey(rt, rt.r(ni), k));
-            bnSetVal(rt, rt.r(oi), d, bnVal(rt, rt.r(ni), k));
-        }
-        bnSetKey(rt, rt.r(oi), atEntry, rt.r(ki));
-        bnSetVal(rt, rt.r(oi), atEntry, rt.r(vi));
-        for (int j = 0; j < nn; j++) {
-            if (j == atNode) continue;
-            int d = j < atNode ? j : j - 1;
-            bnSetNode(rt, rt.r(oi), d, bnNode(rt, rt.r(ni), j));
-        }
-        long r = rt.r(oi);
-        rt.popTo(base);
-        return r;
-    }
-
-    // --- assoc / dissoc on nodes ---------------------------------------------
-
-    /// Returns the new node. `rt.champAdded` says whether the count grew.
     static long nodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
         int base = rt.mark();
         int ni = rt.push(n), ki = rt.push(key), vi = rt.push(val), ei = rt.push(edit);

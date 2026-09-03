@@ -553,7 +553,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Maps` | the eight CHAMP node accessors |
 | 3 | `Pike` | `word_cp`, `space_cp`, `pred_hit` |
 | 3 | `Maps` | `mergeTwo` -- the CHAMP insert's hard case |
-| 3 | `Maps` | `bnCopyInsertEntry`, `bnCopyRemoveEntry`, `bnCopySetValue` |
+| 3 | `Maps` | all six structural copies -- insert, remove, set-value, set-node, inline-to-node, node-to-inline |
 
 Comparing the SET and not only the count is the part that matters: a
 regeneration making one opcode unreachable while another became reachable

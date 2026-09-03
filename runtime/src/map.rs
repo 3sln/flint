@@ -461,125 +461,152 @@ impl Rt {
         self.pop_to(mk);
         return built;
     }
-
-    // kin:end kin/copies.kin
-
     fn bn_copy_set_node(&mut self, n: Value, at: u32, sub: Value, edit: Value) -> Value {
-        let base = self.mark();
-        let ni = self.push(n);
-        let si = self.push(sub);
-        let ei = self.push(edit);
-        if !self.r(ei).is_nil() && self.slot(self.r(ni), BN_EDIT) == self.r(ei) {
-            let (n, s) = (self.r(ni), self.r(si));
-            self.bn_set_node(n, at, s);
-            self.pop_to(base);
-            return n;
+        let mk: usize = self.mark();
+        let ni: usize = self.push(n);
+        let si: usize = self.push(sub);
+        let ei: usize = self.push(edit);
+        if !self.r(ei).is_nil() && (self.slot(self.r(ni), BN_EDIT) == self.r(ei)) {
+            let own: Value = self.r(ni);
+            let os: Value = self.r(si);
+            self.bn_set_node(own, at, os);
+            self.pop_to(mk);
+            return own;
         }
-        let (dm, nm) = (self.bn_datamap(n), self.bn_nodemap(n));
-        let out = self.bn_new(dm, nm, self.r(ei));
-        if out.is_nil() {
-            self.pop_to(base);
+        let dm: u32 = self.bn_datamap(n);
+        let nm: u32 = self.bn_nodemap(n);
+        let res: Value = self.bn_new(dm, nm, self.r(ei));
+        if res.is_nil() {
+            self.pop_to(mk);
             return NIL;
         }
-        let oi = self.push(out);
-        for k in 0..dm.count_ones() {
-            let (kk, vv) = (self.bn_key(self.r(ni), k), self.bn_val(self.r(ni), k));
-            self.bn_set_key(self.r(oi), k, kk);
-            self.bn_set_val(self.r(oi), k, vv);
+        let oi: usize = self.push(res);
+        let ne: u32 = dm.count_ones();
+        let nn: u32 = nm.count_ones();
+        for k in 0..ne {
+            let ek: Value = self.bn_key(self.r(ni), k);
+            self.bn_set_key(self.r(oi), k, ek);
+            let ev: Value = self.bn_val(self.r(ni), k);
+            self.bn_set_val(self.r(oi), k, ev);
         }
-        for j in 0..nm.count_ones() {
-            let s = self.bn_node(self.r(ni), j);
-            self.bn_set_node(self.r(oi), j, s);
+        for j in 0..nn {
+            let js: Value = self.bn_node(self.r(ni), j);
+            self.bn_set_node(self.r(oi), j, js);
         }
-        let s = self.r(si);
-        self.bn_set_node(self.r(oi), at, s);
-        let out = self.r(oi);
-        self.pop_to(base);
-        out
+        let fresh: Value = self.r(si);
+        self.bn_set_node(self.r(oi), at, fresh);
+        let built: Value = self.r(oi);
+        self.pop_to(mk);
+        return built;
     }
-
-    /// An inline entry becomes a sub-node: 2 entry slots out, 1 node slot in.
+    /// An inline pair becomes a SUB-NODE: it leaves the entry half and joins
+    /// the node half, so both bitmaps change and both halves reindex. The two
+    /// positions are computed from the OLD bitmaps -- `at-node` is the index in
+    /// the new nodemap as well, because the bit being added is the one being
+    /// counted up to.
     fn bn_inline_to_node(&mut self, n: Value, bit: u32, sub: Value, edit: Value) -> Value {
-        let base = self.mark();
-        let ni = self.push(n);
-        let si = self.push(sub);
-        let ei = self.push(edit);
-        let (dm, nm) = (self.bn_datamap(n), self.bn_nodemap(n));
-        let ne = dm.count_ones();
-        let nn = nm.count_ones();
-        let at_entry = index_of(dm, bit);
-        let at_node = index_of(nm, bit); // == index in the NEW nodemap too
-        let out = self.bn_new(dm ^ bit, nm | bit, self.r(ei));
-        if out.is_nil() {
-            self.pop_to(base);
+        let mk: usize = self.mark();
+        let ni: usize = self.push(n);
+        let si: usize = self.push(sub);
+        let ei: usize = self.push(edit);
+        let dm: u32 = self.bn_datamap(n);
+        let nm: u32 = self.bn_nodemap(n);
+        let ne: u32 = dm.count_ones();
+        let nn: u32 = nm.count_ones();
+        let at_entry: u32 = index_of(dm, bit);
+        let at_node: u32 = index_of(nm, bit);
+        let res: Value = self.bn_new(dm ^ bit, nm | bit, self.r(ei));
+        if res.is_nil() {
+            self.pop_to(mk);
             return NIL;
         }
-        let oi = self.push(out);
+        let oi: usize = self.push(res);
         for k in 0..ne {
             if k == at_entry {
                 continue;
             }
-            let d = if k < at_entry { k } else { k - 1 };
-            let (kk, vv) = (self.bn_key(self.r(ni), k), self.bn_val(self.r(ni), k));
-            self.bn_set_key(self.r(oi), d, kk);
-            self.bn_set_val(self.r(oi), d, vv);
+            let d: u32;
+            if k < at_entry {
+                d = k;
+            } else {
+                d = k - 1;
+            }
+            let ek: Value = self.bn_key(self.r(ni), k);
+            self.bn_set_key(self.r(oi), d, ek);
+            let ev: Value = self.bn_val(self.r(ni), k);
+            self.bn_set_val(self.r(oi), d, ev);
         }
         for j in 0..nn {
-            let d = if j < at_node { j } else { j + 1 };
-            let s = self.bn_node(self.r(ni), j);
-            self.bn_set_node(self.r(oi), d, s);
+            let e: u32;
+            if j < at_node {
+                e = j;
+            } else {
+                e = j + 1;
+            }
+            let js: Value = self.bn_node(self.r(ni), j);
+            self.bn_set_node(self.r(oi), e, js);
         }
-        let s = self.r(si);
-        self.bn_set_node(self.r(oi), at_node, s);
-        let out = self.r(oi);
-        self.pop_to(base);
-        out
+        let fresh: Value = self.r(si);
+        self.bn_set_node(self.r(oi), at_node, fresh);
+        let built: Value = self.r(oi);
+        self.pop_to(mk);
+        return built;
     }
-
-    /// A sub-node has shrunk to one entry and folds back inline. This is the
-    /// step Clojure's HAMT omits, and the reason CHAMP's form is canonical.
+    /// And the reverse: a sub-node collapses back to an inline pair.
     fn bn_node_to_inline(&mut self, n: Value, bit: u32, key: Value, val: Value, edit: Value) -> Value {
-        let base = self.mark();
-        let ni = self.push(n);
-        let ki = self.push(key);
-        let vi = self.push(val);
-        let ei = self.push(edit);
-        let (dm, nm) = (self.bn_datamap(n), self.bn_nodemap(n));
-        let ne = dm.count_ones();
-        let nn = nm.count_ones();
-        let at_entry = index_of(dm, bit);
-        let at_node = index_of(nm, bit);
-        let out = self.bn_new(dm | bit, nm ^ bit, self.r(ei));
-        if out.is_nil() {
-            self.pop_to(base);
+        let mk: usize = self.mark();
+        let ni: usize = self.push(n);
+        let ki: usize = self.push(key);
+        let vi: usize = self.push(val);
+        let ei: usize = self.push(edit);
+        let dm: u32 = self.bn_datamap(n);
+        let nm: u32 = self.bn_nodemap(n);
+        let ne: u32 = dm.count_ones();
+        let nn: u32 = nm.count_ones();
+        let at_entry: u32 = index_of(dm, bit);
+        let at_node: u32 = index_of(nm, bit);
+        let res: Value = self.bn_new(dm | bit, nm ^ bit, self.r(ei));
+        if res.is_nil() {
+            self.pop_to(mk);
             return NIL;
         }
-        let oi = self.push(out);
+        let oi: usize = self.push(res);
         for k in 0..ne {
-            let d = if k < at_entry { k } else { k + 1 };
-            let (kk, vv) = (self.bn_key(self.r(ni), k), self.bn_val(self.r(ni), k));
-            self.bn_set_key(self.r(oi), d, kk);
-            self.bn_set_val(self.r(oi), d, vv);
+            let d: u32;
+            if k < at_entry {
+                d = k;
+            } else {
+                d = k + 1;
+            }
+            let ek: Value = self.bn_key(self.r(ni), k);
+            self.bn_set_key(self.r(oi), d, ek);
+            let ev: Value = self.bn_val(self.r(ni), k);
+            self.bn_set_val(self.r(oi), d, ev);
         }
-        let (kk, vv) = (self.r(ki), self.r(vi));
-        self.bn_set_key(self.r(oi), at_entry, kk);
-        self.bn_set_val(self.r(oi), at_entry, vv);
+        let nk: Value = self.r(ki);
+        self.bn_set_key(self.r(oi), at_entry, nk);
+        let nv: Value = self.r(vi);
+        self.bn_set_val(self.r(oi), at_entry, nv);
         for j in 0..nn {
             if j == at_node {
                 continue;
             }
-            let d = if j < at_node { j } else { j - 1 };
-            let s = self.bn_node(self.r(ni), j);
-            self.bn_set_node(self.r(oi), d, s);
+            let e: u32;
+            if j < at_node {
+                e = j;
+            } else {
+                e = j - 1;
+            }
+            let js: Value = self.bn_node(self.r(ni), j);
+            self.bn_set_node(self.r(oi), e, js);
         }
-        let out = self.r(oi);
-        self.pop_to(base);
-        out
+        let built: Value = self.r(oi);
+        self.pop_to(mk);
+        return built;
     }
 
-    // --- assoc / dissoc on nodes -------------------------------------------
+    // kin:end kin/copies.kin
 
-    /// Returns the new node. `self.champ_added` says whether the count grew.
     fn node_assoc(
         &mut self,
         n: Value,

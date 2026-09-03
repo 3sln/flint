@@ -348,91 +348,152 @@ public static class Maps {
         rt.PopTo(mk);
         return built;
     }
+    static long BnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
+        int mk = rt.Mark();
+        int ni = rt.Push(n);
+        int si = rt.Push(sub);
+        int ei = rt.Push(edit);
+        if (!Val.IsNil(rt.R(ei)) && (rt.Slot(rt.R(ni), BN_EDIT) == rt.R(ei))) {
+            long own = rt.R(ni);
+            long os = rt.R(si);
+            BnSetNode(rt, own, at, os);
+            rt.PopTo(mk);
+            return own;
+        }
+        int dm = BnDatamap(rt, n);
+        int nm = BnNodemap(rt, n);
+        long res = BnNew(rt, dm, nm, rt.R(ei));
+        if (Val.IsNil(res)) {
+            rt.PopTo(mk);
+            return Val.Nil;
+        }
+        int oi = rt.Push(res);
+        int ne = System.Numerics.BitOperations.PopCount((uint)(dm));
+        int nn = System.Numerics.BitOperations.PopCount((uint)(nm));
+        for (int k = 0; k < ne; k++) {
+            long ek = BnKey(rt, rt.R(ni), k);
+            BnSetKey(rt, rt.R(oi), k, ek);
+            long ev = BnVal(rt, rt.R(ni), k);
+            BnSetVal(rt, rt.R(oi), k, ev);
+        }
+        for (int j = 0; j < nn; j++) {
+            long js = BnNode(rt, rt.R(ni), j);
+            BnSetNode(rt, rt.R(oi), j, js);
+        }
+        long fresh = rt.R(si);
+        BnSetNode(rt, rt.R(oi), at, fresh);
+        long built = rt.R(oi);
+        rt.PopTo(mk);
+        return built;
+    }
+    /// An inline pair becomes a SUB-NODE: it leaves the entry half and joins
+    /// the node half, so both bitmaps change and both halves reindex. The two
+    /// positions are computed from the OLD bitmaps -- `at-node` is the index in
+    /// the new nodemap as well, because the bit being added is the one being
+    /// counted up to.
+    static long BnInlineToNode(Rt rt, long n, int bit, long sub, long edit) {
+        int mk = rt.Mark();
+        int ni = rt.Push(n);
+        int si = rt.Push(sub);
+        int ei = rt.Push(edit);
+        int dm = BnDatamap(rt, n);
+        int nm = BnNodemap(rt, n);
+        int ne = System.Numerics.BitOperations.PopCount((uint)(dm));
+        int nn = System.Numerics.BitOperations.PopCount((uint)(nm));
+        int atEntry = IndexOf(dm, bit);
+        int atNode = IndexOf(nm, bit);
+        long res = BnNew(rt, dm ^ bit, nm | bit, rt.R(ei));
+        if (Val.IsNil(res)) {
+            rt.PopTo(mk);
+            return Val.Nil;
+        }
+        int oi = rt.Push(res);
+        for (int k = 0; k < ne; k++) {
+            if (k == atEntry) {
+                continue;
+            }
+            int d;
+            if (k < atEntry) {
+                d = k;
+            } else {
+                d = k - 1;
+            }
+            long ek = BnKey(rt, rt.R(ni), k);
+            BnSetKey(rt, rt.R(oi), d, ek);
+            long ev = BnVal(rt, rt.R(ni), k);
+            BnSetVal(rt, rt.R(oi), d, ev);
+        }
+        for (int j = 0; j < nn; j++) {
+            int e;
+            if (j < atNode) {
+                e = j;
+            } else {
+                e = j + 1;
+            }
+            long js = BnNode(rt, rt.R(ni), j);
+            BnSetNode(rt, rt.R(oi), e, js);
+        }
+        long fresh = rt.R(si);
+        BnSetNode(rt, rt.R(oi), atNode, fresh);
+        long built = rt.R(oi);
+        rt.PopTo(mk);
+        return built;
+    }
+    /// And the reverse: a sub-node collapses back to an inline pair.
+    static long BnNodeToInline(Rt rt, long n, int bit, long key, long val, long edit) {
+        int mk = rt.Mark();
+        int ni = rt.Push(n);
+        int ki = rt.Push(key);
+        int vi = rt.Push(val);
+        int ei = rt.Push(edit);
+        int dm = BnDatamap(rt, n);
+        int nm = BnNodemap(rt, n);
+        int ne = System.Numerics.BitOperations.PopCount((uint)(dm));
+        int nn = System.Numerics.BitOperations.PopCount((uint)(nm));
+        int atEntry = IndexOf(dm, bit);
+        int atNode = IndexOf(nm, bit);
+        long res = BnNew(rt, dm | bit, nm ^ bit, rt.R(ei));
+        if (Val.IsNil(res)) {
+            rt.PopTo(mk);
+            return Val.Nil;
+        }
+        int oi = rt.Push(res);
+        for (int k = 0; k < ne; k++) {
+            int d;
+            if (k < atEntry) {
+                d = k;
+            } else {
+                d = k + 1;
+            }
+            long ek = BnKey(rt, rt.R(ni), k);
+            BnSetKey(rt, rt.R(oi), d, ek);
+            long ev = BnVal(rt, rt.R(ni), k);
+            BnSetVal(rt, rt.R(oi), d, ev);
+        }
+        long nk = rt.R(ki);
+        BnSetKey(rt, rt.R(oi), atEntry, nk);
+        long nv = rt.R(vi);
+        BnSetVal(rt, rt.R(oi), atEntry, nv);
+        for (int j = 0; j < nn; j++) {
+            if (j == atNode) {
+                continue;
+            }
+            int e;
+            if (j < atNode) {
+                e = j;
+            } else {
+                e = j - 1;
+            }
+            long js = BnNode(rt, rt.R(ni), j);
+            BnSetNode(rt, rt.R(oi), e, js);
+        }
+        long built = rt.R(oi);
+        rt.PopTo(mk);
+        return built;
+    }
 
     // kin:end kin/copies.kin
 
-    static long BnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
-        int bas = rt.Mark();
-        int ni = rt.Push(n), si = rt.Push(sub), ei = rt.Push(edit);
-        if (!Val.IsNil(rt.R(ei)) && rt.Slot(rt.R(ni), BN_EDIT) == rt.R(ei)) {
-            long nn0 = rt.R(ni);
-            BnSetNode(rt, nn0, at, rt.R(si));
-            rt.PopTo(bas);
-            return nn0;
-        }
-        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
-        long outv = BnNew(rt, dm, nm, rt.R(ei));
-        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
-        int oi = rt.Push(outv);
-        for (int k = 0; k < System.Numerics.BitOperations.PopCount((uint)(dm)); k++) {
-            BnSetKey(rt, rt.R(oi), k, BnKey(rt, rt.R(ni), k));
-            BnSetVal(rt, rt.R(oi), k, BnVal(rt, rt.R(ni), k));
-        }
-        for (int j = 0; j < System.Numerics.BitOperations.PopCount((uint)(nm)); j++) BnSetNode(rt, rt.R(oi), j, BnNode(rt, rt.R(ni), j));
-        BnSetNode(rt, rt.R(oi), at, rt.R(si));
-        long r = rt.R(oi);
-        rt.PopTo(bas);
-        return r;
-    }
-
-    /// An inline entry becomes a sub-node: 2 entry slots outv, 1 node slot in.
-    static long BnInlineToNode(Rt rt, long n, int bit, long sub, long edit) {
-        int bas = rt.Mark();
-        int ni = rt.Push(n), si = rt.Push(sub), ei = rt.Push(edit);
-        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
-        int ne = System.Numerics.BitOperations.PopCount((uint)(dm)), nn = System.Numerics.BitOperations.PopCount((uint)(nm));
-        int atEntry = IndexOf(dm, bit);
-        int atNode = IndexOf(nm, bit);   // == the index in the NEW nodemap too
-        long outv = BnNew(rt, dm ^ bit, nm | bit, rt.R(ei));
-        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
-        int oi = rt.Push(outv);
-        for (int k = 0; k < ne; k++) {
-            if (k == atEntry) continue;
-            int d = k < atEntry ? k : k - 1;
-            BnSetKey(rt, rt.R(oi), d, BnKey(rt, rt.R(ni), k));
-            BnSetVal(rt, rt.R(oi), d, BnVal(rt, rt.R(ni), k));
-        }
-        for (int j = 0; j < nn; j++) {
-            int d = j < atNode ? j : j + 1;
-            BnSetNode(rt, rt.R(oi), d, BnNode(rt, rt.R(ni), j));
-        }
-        BnSetNode(rt, rt.R(oi), atNode, rt.R(si));
-        long r = rt.R(oi);
-        rt.PopTo(bas);
-        return r;
-    }
-
-    /// A sub-node has shrunk to one entry and folds back inline. THIS is the
-    /// step Clojure's HAMT omits, and the reason CHAMP's form is canonical.
-    static long BnNodeToInline(Rt rt, long n, int bit, long key, long val, long edit) {
-        int bas = rt.Mark();
-        int ni = rt.Push(n), ki = rt.Push(key), vi = rt.Push(val), ei = rt.Push(edit);
-        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
-        int ne = System.Numerics.BitOperations.PopCount((uint)(dm)), nn = System.Numerics.BitOperations.PopCount((uint)(nm));
-        int atEntry = IndexOf(dm, bit), atNode = IndexOf(nm, bit);
-        long outv = BnNew(rt, dm | bit, nm ^ bit, rt.R(ei));
-        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
-        int oi = rt.Push(outv);
-        for (int k = 0; k < ne; k++) {
-            int d = k < atEntry ? k : k + 1;
-            BnSetKey(rt, rt.R(oi), d, BnKey(rt, rt.R(ni), k));
-            BnSetVal(rt, rt.R(oi), d, BnVal(rt, rt.R(ni), k));
-        }
-        BnSetKey(rt, rt.R(oi), atEntry, rt.R(ki));
-        BnSetVal(rt, rt.R(oi), atEntry, rt.R(vi));
-        for (int j = 0; j < nn; j++) {
-            if (j == atNode) continue;
-            int d = j < atNode ? j : j - 1;
-            BnSetNode(rt, rt.R(oi), d, BnNode(rt, rt.R(ni), j));
-        }
-        long r = rt.R(oi);
-        rt.PopTo(bas);
-        return r;
-    }
-
-    // --- assoc / dissoc on nodes ---------------------------------------------
-
-    /// Returns the new node. `rt.champAdded` says whether the count grew.
     static long NodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
         int bas = rt.Mark();
         int ni = rt.Push(n), ki = rt.Push(key), vi = rt.Push(val), ei = rt.Push(edit);
