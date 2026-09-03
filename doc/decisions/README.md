@@ -101,6 +101,76 @@ what remains, and what each thing is waiting on.
    var-level mark is the useful half and is done; this is the natural next
    question rather than an omission.
 
+0h. **A rooting bug in `eq`, in all four runtimes at once** — FIXED, with a
+   regression check. Comparing a row ref to a map materialises the ref with
+   `refToMap`, which allocates a map and assoc's every column into it, so it
+   COLLECTS part way through the comparison. The second operand was a host
+   local across that call, and `0031` is that a value in a host local does not
+   survive an allocation: the `isTableRef` immediately after was reading the
+   address the operand used to be at.
+
+   Measured before believed. On the wasm runtime, one miscompare in four
+   thousand comparisons of EQUAL values, deterministically, every run --
+   `wrong=1` with the bug, `wrong=0` with both operands rooted, A/B'd by
+   reverting and rebuilding rather than by reading the diff.
+
+   **Why nothing caught it.** `runtimes/conform/tables.cljc` diffs table
+   behaviour across the runtimes, and all four held the SAME bug, so all four
+   gave the same wrong answer and the diff had nothing to diverge from. That
+   is precisely the blind spot `test/common/README.md` was written about, now
+   demonstrated a second time. The check therefore went to `test/common`,
+   where the expected answer is written down.
+
+   **The test had to be made to fail first.** The first version passed with
+   AND without the fix on the native runtime -- 4,000 comparisons over a
+   5-column table never landed a collection inside `refToMap` there, though
+   the same source caught it on wasm. A regression test that passes either way
+   is not one. Widening the table to 24 columns makes the pressure per
+   comparison large enough to be near-certain rather than lucky, and the check
+   is now red without the fix and green with it on native as well.
+
+   Found by the kin port: `coll_assoc` was next in line, Rust roots the
+   scanned key across its `eq` call and the ports do not, and asking which
+   side was right is what led into `eq` itself.
+
+0i. **The CLR had not compiled since `seqs.kin` shipped, and every gate
+   passed anyway** — FIXED, both the break and the reason it was invisible.
+
+   `LS_THUNK` and `LS_SEQ` were not in the name table, so they passed through
+   VERBATIM. Rust and Java both spell them `LS_THUNK`; C# spells the constant
+   `LsThunk`. The generated C# named something that does not exist.
+
+   **`kin/verify` said ok the whole time.** The driver fixture declares its own
+   `const int LS_THUNK = 0` in the C# head, so the generated code compiled
+   against a harness that defined the name the way the source assumed. Verify
+   proves the three targets AGREE; it does not prove the output compiles where
+   it lands, because the fixture -- not the runtime -- supplies the
+   surroundings. `kin/seqs.drivers` now spells it as the runtime does, so the
+   fixture cannot paper over this again.
+
+   **And `bin/conform-hosts` exited 0.** A failed `dotnet build` was routed to
+   `missing`, which is skippable so that somebody without dotnet can still run
+   the suite -- and so it also absorbed "dotnet is right here and the C# does
+   not compile". Every CLR row skipped, a whole runtime unverified, green the
+   entire time. The two are now distinguished: no dotnet on PATH still skips, a
+   broken build is a hard FAIL that prints the errors. With the CLR live again
+   the run went from 0 CLR rows to 92.
+
+   Two of the four runtimes were unchecked for this stretch, which is worth
+   weighing against anything measured on "all four" in that window.
+
+0j. **A second rooting bug, in the ports' map equality** — FIXED. Found when
+   `0h`'s regression check passed on native and failed on the JVM, 18 wrong in
+   4,000. `Maps.eq` read the second operand across `refToMap(a)` and read the
+   entry VALUE across the `get` lookup; `refToMap`, `get` and `eq` all
+   allocate.
+
+   Rust's `map_eq` already roots the key and value before the lookup and says
+   why in a comment. The ports never picked that up. This is the standing rule
+   in practice: **a divergence between runtimes is not evidence they should
+   diverge** -- here one side had simply learned something the others had not,
+   and the fix is to carry it across, not to record a difference.
+
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old
    `jvm`-against-`clr` similarity table because BOTH ports share them. Two

@@ -95,7 +95,7 @@ fn main() {
     static class Obj {
         internal const int TyVecseq = 4, TyStrseq = 5, TyLazyseq = 3, TyRange = 6;
     }
-    const int LS_THUNK = 0, LS_SEQ = 1;
+    const int LsThunk = 0, LsSeq = 1;
     static class Num { internal static double F64(Rt rt, long v) { return (double) v; } }
     static class Val {
         internal const long Nil = 0xFFFFL;

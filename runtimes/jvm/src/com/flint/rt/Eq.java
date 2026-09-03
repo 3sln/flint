@@ -96,11 +96,22 @@ public final class Eq {
         // coherently so: a table is a distinct kind of thing, a row IS just a
         // map seen cheaply (`doc/decisions/0026`).
         if (Table.isTableRef(rt, a) || Table.isTableRef(rt, b)) {
-            long ma = Table.isTableRef(rt, a) ? Table.refToMap(rt, a) : a;
+            int base = rt.mark();
+            // BOTH operands are rooted before either is materialised.
+            // `refToMap` allocates a map and assoc's every column into it, so
+            // it collects -- and `0031` is that a value in a host local does
+            // not survive an allocation. Reading `b` after materialising `a`
+            // was reading the address `b` used to be at: measured on the
+            // native runtime, one miscompare in four thousand comparisons of
+            // EQUAL values, deterministically, and only when `b` is young
+            // enough for the nursery to move it.
+            int ai = rt.push(a), bi = rt.push(b);
+            long ma = Table.isTableRef(rt, rt.r(ai)) ? Table.refToMap(rt, rt.r(ai)) : rt.r(ai);
             int mi = rt.push(ma);
-            long mb = Table.isTableRef(rt, b) ? Table.refToMap(rt, b) : b;
-            boolean r = eq(rt, rt.r(mi), mb);
-            rt.popTo(mi);
+            long mb = Table.isTableRef(rt, rt.r(bi)) ? Table.refToMap(rt, rt.r(bi)) : rt.r(bi);
+            int mj = rt.push(mb);
+            boolean r = eq(rt, rt.r(mi), rt.r(mj));
+            rt.popTo(base);
             return r;
         }
         // A TABLE is NOT `=` to a vector of maps. Refusing that is what frees

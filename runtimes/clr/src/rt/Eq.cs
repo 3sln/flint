@@ -91,11 +91,22 @@ public static class Eq {
         // The opposite call to table-versus-vector below, and coherently so: a
         // table is a distinct kind of thing, a row IS a map seen cheaply.
         if (Table.isTableRef(rt, a) || Table.isTableRef(rt, b)) {
-            long ma = Table.isTableRef(rt, a) ? Table.refToMap(rt, a) : a;
+            int bas = rt.Mark();
+            // BOTH operands are rooted before either is materialised.
+            // `refToMap` allocates a map and assoc's every column into it, so
+            // it collects -- and `0031` is that a value in a host local does
+            // not survive an allocation. Reading `b` after materialising `a`
+            // was reading the address `b` used to be at: measured on the
+            // native runtime, one miscompare in four thousand comparisons of
+            // EQUAL values, deterministically, and only when `b` is young
+            // enough for the nursery to move it.
+            int ai = rt.Push(a), bi = rt.Push(b);
+            long ma = Table.isTableRef(rt, rt.R(ai)) ? Table.refToMap(rt, rt.R(ai)) : rt.R(ai);
             int mi = rt.Push(ma);
-            long mb = Table.isTableRef(rt, b) ? Table.refToMap(rt, b) : b;
-            bool same = Equal(rt, rt.R(mi), mb);
-            rt.PopTo(mi);
+            long mb = Table.isTableRef(rt, rt.R(bi)) ? Table.refToMap(rt, rt.R(bi)) : rt.R(bi);
+            int mj = rt.Push(mb);
+            bool same = Equal(rt, rt.R(mi), rt.R(mj));
+            rt.PopTo(bas);
             return same;
         }
         // A TABLE is NOT `=` to a vector of maps. Refusing that is what frees

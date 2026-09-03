@@ -88,9 +88,26 @@ impl Rt {
         // O(columns) either way.
         if self.is_table_ref(a) || self.is_table_ref(b) {
             let base = self.mark();
-            let ma = if self.is_table_ref(a) { self.ref_to_map(a) } else { a };
+            // BOTH operands are rooted before either is materialised.
+            // `ref_to_map` allocates a map and assoc's every column into it,
+            // so it collects -- and `0031` is that a value in a host local
+            // does not survive an allocation. Reading `b` after materialising
+            // `a` was reading the address `b` used to be at: measured, one
+            // miscompare in four thousand comparisons of equal values, every
+            // run, and only when `b` is young enough for the nursery to move.
+            let ai = self.push(a);
+            let bi = self.push(b);
+            let ma = if self.is_table_ref(self.r(ai)) {
+                self.ref_to_map(self.r(ai))
+            } else {
+                self.r(ai)
+            };
             let mi = self.push(ma);
-            let mb = if self.is_table_ref(b) { self.ref_to_map(b) } else { b };
+            let mb = if self.is_table_ref(self.r(bi)) {
+                self.ref_to_map(self.r(bi))
+            } else {
+                self.r(bi)
+            };
             let mj = self.push(mb);
             let out = self.eq(self.r(mi), self.r(mj));
             self.pop_to(base);

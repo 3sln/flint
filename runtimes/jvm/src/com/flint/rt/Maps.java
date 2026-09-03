@@ -1172,24 +1172,32 @@ public final class Maps {
         // A ROW REF materialises here rather than being read as an array-map:
         // `category` puts one in `CAT_MAP`, so this is where a map compared
         // against a row arrives.
-        if (Val.isHeap(a) && ty(rt.gc.sp, Val.asHeap(a)) == Obj.TY_TABLEREF)
-            a = Table.refToMap(rt, a);
-        if (Val.isHeap(b) && ty(rt.gc.sp, Val.asHeap(b)) == Obj.TY_TABLEREF) {
-            int mi = rt.push(a);
-            b = Table.refToMap(rt, b);
-            a = rt.r(mi);
-            rt.popTo(mi);
-        }
-        if (count(rt, a) != count(rt, b)) return false;
+        // BOTH operands are rooted before either is materialised, and the
+        // key and value are rooted before the lookup rather than read across
+        // it. `refToMap`, `get` and `eq` all allocate, and `0031` is that a
+        // value in a host local does not survive an allocation.
+        //
+        // Rust's `map_eq` already did this and carried the reason in a
+        // comment; the ports read `v` across `get` and `b` across
+        // `refToMap(a)`. Measured: 18 miscompares in 4,000 comparisons of
+        // EQUAL values on the JVM while the native runtime scored 0.
         int base = rt.mark();
         int ai = rt.push(a), bi = rt.push(b);
+        if (Val.isHeap(rt.r(ai)) && ty(rt.gc.sp, Val.asHeap(rt.r(ai))) == Obj.TY_TABLEREF)
+            rt.setR(ai, Table.refToMap(rt, rt.r(ai)));
+        if (Val.isHeap(rt.r(bi)) && ty(rt.gc.sp, Val.asHeap(rt.r(bi))) == Obj.TY_TABLEREF)
+            rt.setR(bi, Table.refToMap(rt, rt.r(bi)));
+        if (count(rt, rt.r(ai)) != count(rt, rt.r(bi))) { rt.popTo(base); return false; }
         int at = rt.mark();
         int n = entries(rt, rt.r(ai), at);
         boolean ok = true;
         for (int i = 0; i < n && ok; i++) {
-            long k = rt.r(at + 2 * i), v = rt.r(at + 2 * i + 1);
-            long got = get(rt, rt.r(bi), k, Val.NOT_FOUND);
-            ok = got != Val.NOT_FOUND && Eq.eq(rt, v, got);
+            int m = rt.mark();
+            int ki = rt.push(rt.r(at + 2 * i));
+            int vi = rt.push(rt.r(at + 2 * i + 1));
+            int oi = rt.push(get(rt, rt.r(bi), rt.r(ki), Val.NOT_FOUND));
+            ok = rt.r(oi) != Val.NOT_FOUND && Eq.eq(rt, rt.r(vi), rt.r(oi));
+            rt.popTo(m);
         }
         rt.popTo(base);
         return ok;

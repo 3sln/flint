@@ -150,7 +150,14 @@
   {'NIL {:rust "NIL" :java "Val.NIL" :csharp "Val.Nil"}
    'TRUE {:rust "TRUE" :java "Val.TRUE" :csharp "Val.True"}
    'FALSE {:rust "FALSE" :java "Val.FALSE" :csharp "Val.False"}
-   'NOT_FOUND {:rust "NOT_FOUND" :java "Val.NOT_FOUND" :csharp "Val.NotFound"}})
+   'NOT_FOUND {:rust "NOT_FOUND" :java "Val.NOT_FOUND" :csharp "Val.NotFound"}
+   ;; The lazy-seq slot indices. Rust and Java spell them SCREAMING_SNAKE and
+   ;; C# pascalises, so they are names -- and they were missing from this
+   ;; table, which meant they passed through VERBATIM and emitted `LS_THUNK`
+   ;; into a C# file whose constant is `LsThunk`. The CLR has not compiled
+   ;; since `seqs.kin` shipped.
+   'LS_THUNK {:rust "LS_THUNK" :java "LS_THUNK" :csharp "LsThunk"}
+   'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LsSeq"}})
 
 (def names-for
   "Every type tag, spelled three ways. A NAME rather than a form, because a

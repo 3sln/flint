@@ -1153,24 +1153,32 @@ public static class Maps {
     /// means and why it cannot just compare slots.
     public static bool Eq(Rt rt, long a, long b) {
         // A ROW REF materialises here rather than being read as an array-map.
-        if (Val.IsHeap(a) && Obj.Ty(rt.gc.sp, Val.AsHeap(a)) == Obj.TyTableref)
-            a = Table.refToMap(rt, a);
-        if (Val.IsHeap(b) && Obj.Ty(rt.gc.sp, Val.AsHeap(b)) == Obj.TyTableref) {
-            int mi = rt.Push(a);
-            b = Table.refToMap(rt, b);
-            a = rt.R(mi);
-            rt.PopTo(mi);
-        }
-        if (Count(rt, a) != Count(rt, b)) return false;
+        // BOTH operands are rooted before either is materialised, and the
+        // key and value are rooted before the lookup rather than read across
+        // it. `refToMap`, `Get` and `Equal` all allocate, and `0031` is that
+        // a value in a host local does not survive an allocation.
+        //
+        // Rust's `map_eq` already did this and carried the reason in a
+        // comment; the ports read `v` across `Get` and `b` across
+        // `refToMap(a)`. Measured: 18 miscompares in 4,000 comparisons of
+        // EQUAL values on the JVM while the native runtime scored 0.
         int bas = rt.Mark();
         int ai = rt.Push(a), bi = rt.Push(b);
+        if (Val.IsHeap(rt.R(ai)) && Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(ai))) == Obj.TyTableref)
+            rt.SetR(ai, Table.refToMap(rt, rt.R(ai)));
+        if (Val.IsHeap(rt.R(bi)) && Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(bi))) == Obj.TyTableref)
+            rt.SetR(bi, Table.refToMap(rt, rt.R(bi)));
+        if (Count(rt, rt.R(ai)) != Count(rt, rt.R(bi))) { rt.PopTo(bas); return false; }
         int at = rt.Mark();
         int n = Entries(rt, rt.R(ai), at);
         bool ok = true;
         for (int i = 0; i < n && ok; i++) {
-            long k = rt.R(at + 2 * i), v = rt.R(at + 2 * i + 1);
-            long got = Get(rt, rt.R(bi), k, Val.NotFound);
-            ok = got != Val.NotFound && Flint.Rt.Eq.Equal(rt, v, got);
+            int m = rt.Mark();
+            int ki = rt.Push(rt.R(at + 2 * i));
+            int vi = rt.Push(rt.R(at + 2 * i + 1));
+            int oi = rt.Push(Get(rt, rt.R(bi), rt.R(ki), Val.NotFound));
+            ok = rt.R(oi) != Val.NotFound && Flint.Rt.Eq.Equal(rt, rt.R(vi), rt.R(oi));
+            rt.PopTo(m);
         }
         rt.PopTo(bas);
         return ok;

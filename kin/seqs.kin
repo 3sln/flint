@@ -25,6 +25,7 @@
                                    mark push r alloc set-at heap fixnum
                                    nil? slot num-f64 not > < >= <= comment
                                    Rt Value Addr RootIx I32 F64 Bool NIL
+                                   LS_THUNK LS_SEQ
                                    TY_VECSEQ TY_STRSEQ TY_LAZYSEQ TY_RANGE]]))
 
 (defn ^:method ^Value vecseq [^:mut ^Rt rt ^Value v ^I32 i]

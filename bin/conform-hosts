@@ -41,11 +41,25 @@ fi
 export DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}"
 CLR=""
 if command -v dotnet >/dev/null 2>&1; then
-  (cd runtimes/clr/conform && dotnet build -v q --nologo -c Release) >/dev/null 2>&1 \
-    && CLR="runtimes/clr/conform/bin/Release/net10.0/Conform"
-  [ -x "$CLR" ] || CLR=""
+  # A BROKEN BUILD IS NOT A MISSING TOOLCHAIN, and this line used to say they
+  # were the same thing. `missing` is skippable on purpose -- somebody without
+  # dotnet should still be able to run the suite -- but it must not also
+  # absorb "dotnet is right here and the C# does not compile".
+  #
+  # That conflation hid a CLR that had not compiled since `seqs.kin` shipped:
+  # every CLR row skipped, the whole runtime unverified, and this script
+  # exiting 0 the entire time.
+  if (cd runtimes/clr/conform && dotnet build -v q --nologo -c Release) \
+       > /tmp/flint-clr-build.out 2>&1; then
+    CLR="runtimes/clr/conform/bin/Release/net10.0/Conform"
+    [ -x "$CLR" ] || { echo "  FAIL the CLR built but left no Conform binary"; exit 1; }
+  else
+    echo "  FAIL the CLR runtime does not compile"
+    grep -E "error" /tmp/flint-clr-build.out | sort -u | head -10
+    exit 1
+  fi
 fi
-[ -n "$CLR" ] || missing "no dotnet, or the conform project did not build; CLR rows"
+[ -n "$CLR" ] || missing "no dotnet on PATH; CLR rows"
 
 # A WALL-CLOCK BOUND on one runtime invocation, printed on its stdout.
 #

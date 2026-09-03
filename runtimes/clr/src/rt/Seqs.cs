@@ -97,8 +97,8 @@ public static class Seqs {
             return Val.Nil;
         }
         long tv = rt.R(t);
-        rt.SetSlot(a, LS_THUNK, tv);
-        rt.SetSlot(a, LS_SEQ, Val.Nil);
+        rt.SetSlot(a, LsThunk, tv);
+        rt.SetSlot(a, LsSeq, Val.Nil);
         rt.SetSlot(a, 2, Val.Nil);
         rt.PopTo(mk);
         return Val.Heap(a);
