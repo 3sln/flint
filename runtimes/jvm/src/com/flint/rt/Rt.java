@@ -1000,7 +1000,18 @@ public final class Rt {
             case 11 -> isSeq(v);
             case 12 -> isHeapTy(v, TY_CLOSURE) || isHeapTy(v, TY_NATIVEFN);
             case 13 -> Val.isNil(v);
-            default -> isHeapTy(v, TY_VEC) || isSeq(v);
+            // Calls `isSequential` rather than restating it. This line USED to
+            // say `isHeapTy(v, TY_VEC) || isSeq(v)`, which is that predicate
+            // minus map entries -- so `(sequential? (first (seq m)))` was
+            // false here while `isSequential` two methods below said true.
+            // `coll?` is built on it, so that was false too.
+            //
+            // The comment on `case 9` above records the SAME bug being fixed
+            // once already: `map?` goes through this table and not through
+            // `Maps.isMap`, so wiring only the latter left `(map? row)`
+            // false. A switch that restates predicates defined elsewhere
+            // will keep drifting from them; the fix is to stop restating.
+            default -> isSequential(v);
         };
     }
 

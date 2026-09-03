@@ -939,7 +939,18 @@ public sealed class Rt : System.IDisposable {
             case 11: return IsSeq(v);
             case 12: return IsHeapTy(v, TyClosure) || IsHeapTy(v, TyNativefn);
             case 13: return Val.IsNil(v);
-            default: return IsHeapTy(v, TyVec) || IsSeq(v);
+            // Calls `IsSequential` rather than restating it. This line USED to
+            // say `IsHeapTy(v, TyVec) || IsSeq(v)`, which is that predicate
+            // minus map entries -- so `(sequential? (first (seq m)))` was
+            // false here while `IsSequential` two methods below said true.
+            // `coll?` is built on it, so that was false too.
+            //
+            // The comment on `case 9` above records the SAME bug being fixed
+            // once already: `map?` goes through this table and not through
+            // `Maps.IsMap`, so wiring only the latter left `(map? row)`
+            // false. A switch that restates predicates defined elsewhere
+            // will keep drifting from them; the fix is to stop restating.
+            default: return IsSequential(v);
         }
     }
 

@@ -102,3 +102,34 @@
   (expect = {:a 1 :b 2} (reduce (fn [m [k v]] (assoc m k v)) {} [[:b 2] [:a 1]]))
   (expect = (hash {:a 1 :b 2})
           (hash (reduce (fn [m [k v]] (assoc m k v)) {} [[:b 2] [:a 1]]))))
+
+(defn ^:flint.check/test a-map-entry-is-sequential-and-so-is-a-coll []
+  ;; `sequential?` compiles to a TYPE-TEST OPCODE, not to a builtin call, so
+  ;; the runtimes answer it from a switch on the type code rather than from
+  ;; `isSequential`. Both ports' switches restated that predicate and left out
+  ;; map entries, so `(sequential? (first (seq m)))` was false on the JVM and
+  ;; CLR and true on native -- and `coll?`, which is built on it, went with it.
+  ;;
+  ;; The switch had already been fixed once for exactly this: the comment on
+  ;; its `map?` case records `(map? row)` being false because `Maps.isMap`
+  ;; was wired and the switch was not. Restating a predicate is what drifts;
+  ;; both now call the one definition.
+  (let [e (first (seq {:a 1}))]
+    (expect = true (map-entry? e))
+    (expect = true (sequential? e))
+    (expect = true (coll? e))
+    (expect = :a (key e))
+    (expect = 1 (val e))
+    (expect = :a (nth e 0))
+    (expect = 1 (nth e 1))
+    (expect = true (= e [:a 1])))
+  ;; The rest of the family, so a future edit to the switch has to keep them.
+  (expect = true (sequential? [1 2]))
+  (expect = true (sequential? (list 1 2)))
+  (expect = true (sequential? (seq [1 2])))
+  (expect = false (sequential? {:a 1}))
+  (expect = false (sequential? #{1 2}))
+  (expect = false (sequential? "ab"))
+  (expect = false (sequential? nil))
+  (expect = true (coll? {:a 1}))
+  (expect = true (coll? #{1 2})))
