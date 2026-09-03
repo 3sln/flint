@@ -931,6 +931,13 @@ So `map_get`, `map_assoc` and `map_dissoc` -- 209 lines, the three public
 entry points, and the largest single block of "blocked" work -- are portable
 today with conventions already established and already shipped.
 
+**THIS COUNT HAS AN EXPIRY, and it has already passed.** It was taken before
+promises, the link phase and the `:wrap`/`:declare`/`:generate` split landed in
+kin. Two censuses before it were wrong in the SAME direction -- over-stating
+what was blocked -- because each was taken before a capability shipped and
+never retaken after. Re-derive before quoting it; do not carry the number
+forward on the strength of having once been careful.
+
 CLOSURES ARE THE ONE REAL HOLE, and the five functions that need them are
 exactly the iteration ones: `map_for_each`, `node_for_each`, `hash_map_hash`,
 `map_eq`, `map_entry_vector`. A callback argument is a shape kin has nothing
