@@ -901,6 +901,46 @@ Measured with `0x80000001`:
 
 The second line cannot live in that file, because a source whose targets
 disagree cannot pass. It is the reason the first line is worth pinning.
+### Re-counted after the tag work: 133 lines are blocked, not 375
+
+The earlier count said 11 functions and 375 lines were blocked, split across
+`match` on a tag, an absent value, and closures. Two of those three were never
+blockers, and the count was produced by pattern-matching Rust syntax -- the
+same method that had already been wrong about `node_find` once.
+
+`runtime/src/map.rs`, hand-written and excluding tests:
+
+| | functions | lines |
+| --- | --- | --- |
+| genuinely blocked -- CLOSURES | 5 | 133 |
+| needs nothing kin lacks | 23 | 389 |
+
+**`match` on a runtime type was never a blocker.** It is `case`, which kin has
+had since `eq.kin` shipped `category`. Dispatching on `ty(...)` is exactly what
+that form is for. I labelled it a hole because a regex saw the word `match`.
+
+**An "absent value" was never a blocker either.** `am_index_of` returns
+`Option<u32>` in Rust and `-1` on the ports -- which is precisely the
+divergence `coll_assoc` and `coll_dissoc` already resolved, twice, by
+answering `n`. It also has the `eq_may_alloc` fast path that Rust has and the
+ports lack, which is the same convergence `node_find` already made and which
+was measured at about 6% of lookup time. Both problems are solved; the
+functions holding them were simply never re-examined.
+
+So `map_get`, `map_assoc` and `map_dissoc` -- 209 lines, the three public
+entry points, and the largest single block of "blocked" work -- are portable
+today with conventions already established and already shipped.
+
+CLOSURES ARE THE ONE REAL HOLE, and the five functions that need them are
+exactly the iteration ones: `map_for_each`, `node_for_each`, `hash_map_hash`,
+`map_eq`, `map_entry_vector`. A callback argument is a shape kin has nothing
+for, and unlike the other two this is not a naming difference or a sentinel
+convention -- it is a capability.
+
+The lesson is the one this file keeps recording: a capability census taken by
+grepping is a census of what the grep understood. Both false blockers survived
+because nothing re-ran the census after the capability that dissolved them
+shipped.
 ### Never, on evidence
 
 * **`Snap`** moves to phase 5. 785/449/456 lines of direct `Gc`, `Roots`,
