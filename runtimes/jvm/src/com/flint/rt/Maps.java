@@ -99,32 +99,63 @@ public final class Maps {
 
     // kin:end kin/champ.kin
 
+    // kin:begin kin/collnode.kin
     static long cnNew(Rt rt, int h, int npairs, long edit) {
+        // `edit` is rooted across the allocation and read back after it:
+        // `alloc` collects, and a host local does not survive that.
         int e = rt.push(edit);
-        long a = rt.alloc(TY_COLLNODE, CN_BASE + 2 * npairs);
+        long a = rt.alloc(TY_COLLNODE, CN_BASE + (2 * npairs));
         long ed = rt.r(e);
         rt.popTo(e);
-        if (a == 0) return Val.NIL;
+        if (a == 0) {
+            return Val.NIL;
+        }
         rt.setSlot(a, CN_EDIT, ed);
         rt.setSlot(a, CN_HASH, Val.fixnum(h & 0xFFFFFFFFL));
         return Val.heap(a);
     }
-    static int cnCount(Rt rt, long n) { return (olen(rt, n) - CN_BASE) / 2; }
-    static int cnHash(Rt rt, long n) { return (int) Val.asFixnum(rt.slot(n, CN_HASH)); }
-    static long cnKey(Rt rt, long n, int i) { return rt.slot(n, CN_BASE + 2 * i); }
-    static long cnVal(Rt rt, long n, int i) { return rt.slot(n, CN_BASE + 2 * i + 1); }
+    static int cnCount(Rt rt, long n) {
+        return (olen(rt, n) - CN_BASE) / 2;
+    }
+    static int cnHash(Rt rt, long n) {
+        return (int) Val.asFixnum(rt.slot(n, CN_HASH));
+    }
+    static long cnKey(Rt rt, long n, int i) {
+        return rt.slot(n, CN_BASE + (2 * i));
+    }
+    static long cnVal(Rt rt, long n, int i) {
+        return rt.slot(n, (CN_BASE + (2 * i)) + 1);
+    }
+
+    // kin:end kin/collnode.kin
     static void cnSet(Rt rt, long n, int i, long v) { rt.setSlot(Val.asHeap(n), i, v); }
 
-    static boolean isBmnode(Rt rt, long n) { return ty(rt.gc.sp, Val.asHeap(n)) == TY_BMNODE; }
-
+    // kin:begin kin/nodeclass.kin
+    static boolean isBmnode(Rt rt, long n) {
+        return ty(rt.gc.sp, Val.asHeap(n)) == TY_BMNODE;
+    }
     /// EMPTY / ONE / MORE, the CHAMP size predicate that drives collapsing.
     static int nodeSizeClass(Rt rt, long n) {
-        if (!isBmnode(rt, n)) return 2;   // a collision node always has two pairs
-        int dm = bnDatamap(rt, n), nm = bnNodemap(rt, n);
-        if (nm != 0) return 2;
+        // A collision node always holds at least two pairs.
+        if (!isBmnode(rt, n)) {
+            return 2;
+        }
+        int dm = bnDatamap(rt, n);
+        int nm = bnNodemap(rt, n);
+        if (nm != 0) {
+            return 2;
+        }
         int c = Integer.bitCount(dm);
-        return c == 0 ? 0 : c == 1 ? 1 : 2;
+        if (c == 0) {
+            return 0;
+        }
+        if (c == 1) {
+            return 1;
+        }
+        return 2;
     }
+
+    // kin:end kin/nodeclass.kin
 
     // --- lookup -------------------------------------------------------------
 

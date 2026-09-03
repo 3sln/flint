@@ -37,6 +37,7 @@
 
 use crate::hash;
 use crate::obj::*;
+use crate::mem::Addr;
 use crate::rt::Rt;
 use crate::value::{Value, NIL, NOT_FOUND};
 
@@ -136,61 +137,67 @@ impl Rt {
 
     // kin:end kin/champ.kin
 
+    // kin:begin kin/collnode.kin
     fn cn_new(&mut self, h: u32, npairs: u32, edit: Value) -> Value {
-        let e = self.push(edit);
-        let a = self.alloc(TY_COLLNODE, CN_BASE + 2 * npairs);
-        let edit = self.r(e);
+        // `edit` is rooted across the allocation and read back after it:
+        // `alloc` collects, and a host local does not survive that.
+        let e: usize = self.push(edit);
+        let a: Addr = self.alloc(TY_COLLNODE, CN_BASE + (2 * npairs));
+        let ed: Value = self.r(e);
         self.pop_to(e);
         if a == 0 {
             return NIL;
         }
-        self.set_slot(a, CN_EDIT, edit);
+        self.set_slot(a, CN_EDIT, ed);
         self.set_slot(a, CN_HASH, Value::fixnum(h as i64));
-        Value::heap(a)
+        return Value::heap(a);
     }
     #[inline]
     fn cn_count(&self, n: Value) -> u32 {
-        (self.olen(n) - CN_BASE) / 2
+        return (self.olen(n) - CN_BASE) / 2;
     }
-
-    // The ports have had this as a named helper all along; here the same
-    // three operations were written out at each use. Naming it is what lets
-    // one kin source serve all three, and it costs nothing -- the body is the
-    // expression it replaces.
     fn cn_hash(&self, n: Value) -> u32 {
-        self.slot(n, CN_HASH).as_fixnum() as u32
+        return self.slot(n, CN_HASH).as_fixnum() as u32;
     }
     #[inline]
     fn cn_key(&self, n: Value, i: u32) -> Value {
-        self.slot(n, CN_BASE + 2 * i)
+        return self.slot(n, CN_BASE + (2 * i));
     }
     #[inline]
     fn cn_val(&self, n: Value, i: u32) -> Value {
-        self.slot(n, CN_BASE + 2 * i + 1)
+        return self.slot(n, (CN_BASE + (2 * i)) + 1);
     }
+
+    // kin:end kin/collnode.kin
 
     #[inline]
+    // kin:begin kin/nodeclass.kin
+    #[inline]
     fn is_bmnode(&self, n: Value) -> bool {
-        ty(&self.gc.sp, n.as_heap()) == TY_BMNODE
+        return ty(&self.gc.sp, n.as_heap()) == TY_BMNODE;
+    }
+    /// EMPTY / ONE / MORE, the CHAMP size predicate that drives collapsing.
+    fn node_size_class(&self, n: Value) -> u32 {
+        // A collision node always holds at least two pairs.
+        if !self.is_bmnode(n) {
+            return 2;
+        }
+        let dm: u32 = self.bn_datamap(n);
+        let nm: u32 = self.bn_nodemap(n);
+        if nm != 0 {
+            return 2;
+        }
+        let c: u32 = dm.count_ones();
+        if c == 0 {
+            return 0;
+        }
+        if c == 1 {
+            return 1;
+        }
+        return 2;
     }
 
-    /// EMPTY / ONE / MORE, the CHAMP size predicate that drives collapsing.
-    fn node_size_class(&self, n: Value) -> u8 {
-        if self.is_bmnode(n) {
-            let (dm, nm) = (self.bn_datamap(n), self.bn_nodemap(n));
-            if nm == 0 {
-                match dm.count_ones() {
-                    0 => 0,
-                    1 => 1,
-                    _ => 2,
-                }
-            } else {
-                2
-            }
-        } else {
-            2 // a collision node always has at least two pairs
-        }
-    }
+    // kin:end kin/nodeclass.kin
 
     // --- lookup ------------------------------------------------------------
 

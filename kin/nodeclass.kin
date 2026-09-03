@@ -1,0 +1,35 @@
+;; `is_bmnode` and `node_size_class`: which kind of node, and how full.
+;;
+;; Split from `collnode.kin` because the ports keep a `cnSet` between `cnVal`
+;; and `isBmnode` that Rust does not have -- Rust writes through the general
+;; `Rt::set` -- and a region is a contiguous span of one file.
+;;
+;; `node_size_class` takes the PORTS' shape: early returns, then a flat
+;; two-comparison tail. Rust nested a `match` on `count_ones()` inside an `if`
+;; inside an `else`, and kin's `case` is for tags rather than for small integer
+;; ranges. The ports say the same thing in one less level of nesting, which is
+;; the tie-breaker whenever both spellings are correct.
+(ns runtime.nodeclass
+  (:require [flint.impl.rt :refer [defn return if let comment doc not
+                                   ty as-heap popcount == !=
+                                   bn-datamap bn-nodemap
+                                   Rt Value I32 Bool TY_BMNODE]]))
+
+(defn ^:inline ^:method ^Bool is-bmnode [^Rt rt ^Value n]
+  (return (== (ty rt (as-heap n)) TY_BMNODE)))
+
+(doc "EMPTY / ONE / MORE, the CHAMP size predicate that drives collapsing.")
+(defn ^:method ^I32 node-size-class [^Rt rt ^Value n]
+  (comment "A collision node always holds at least two pairs.")
+  (if (not (is-bmnode rt n))
+    (return 2))
+  (let [^I32 dm (bn-datamap rt n)
+        ^I32 nm (bn-nodemap rt n)]
+    (if (!= nm 0)
+      (return 2))
+    (let [^I32 c (popcount dm)]
+      (if (== c 0)
+        (return 0))
+      (if (== c 1)
+        (return 1))
+      (return 2))))

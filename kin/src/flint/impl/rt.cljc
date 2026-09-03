@@ -137,7 +137,7 @@
   call cannot."
   '[TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ TY_STRSEQ TY_RANGE TY_VEC
     TY_MAPENTRY TY_ARRAYMAP TY_HASHMAP TY_TABLEREF TY_SET TY_STR TY_KEYWORD
-    TY_SYMBOL])
+    TY_SYMBOL TY_BMNODE TY_COLLNODE])
 
 (defn- csharp-tag
   "`TY_EMPTY_LIST` -> `Obj.TyEmptyList`."
@@ -366,8 +366,20 @@
                         :java "{0}.setSlot({1}, {2}, {3})"
                         :csharp "{0}.SetSlot({1}, {2}, {3})"})
     'heap (core/call {:rust "Value::heap({0})" :java "Val.heap({0})" :csharp "Val.Heap({0})"})
+    ;; ZERO-EXTENDED on the ports, and that is not cosmetic. kin's `I32` is
+    ;; Rust's `u32`, so widening it to the 48-bit fixnum payload must not
+    ;; sign-extend -- but Java and C# spell it `int`, which is signed, and
+    ;; `Val.fixnum(h)` on a hash with the high bit set stores 48 bits of ones
+    ;; where Rust stores 32. The mask is what makes `{0}` mean the same
+    ;; number in all three.
+    ;;
+    ;; It went unnoticed because the only shipped use was a seq index, which
+    ;; is small and non-negative -- so the wrong widening was unreachable
+    ;; until `cn_new` came to store a 32-bit HASH. The hand-written ports had
+    ;; the mask; the generator did not.
     'fixnum (core/call {:rust "Value::fixnum({0} as i64)"
-                        :java "Val.fixnum({0})" :csharp "Val.Fixnum({0})"})
+                        :java "Val.fixnum({0} & 0xFFFFFFFFL)"
+                        :csharp "Val.Fixnum({0} & 0xFFFFFFFFL)"})
 
     ;; --- ROOTING --------------------------------------------------------
     ;;

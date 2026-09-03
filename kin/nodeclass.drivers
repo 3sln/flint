@@ -1,0 +1,166 @@
+--rust-head
+type Addr = u32;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const CN_BASE: u32 = 2;
+const CN_EDIT: u32 = 0;
+const CN_HASH: u32 = 1;
+const TY_COLLNODE: u32 = 18;
+const TY_BMNODE: u32 = 16;
+impl Value {
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn as_fixnum(self) -> i64 { (self.0 & 0xFFFFFFFFFFFF) as i64 }
+    fn fixnum(n: i64) -> Value { Value((n as u64) & 0xFFFFFFFFFFFF) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+}
+struct Gc { sp: Vec<u32> }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64,
+            roots: Vec<Value>, starve: bool }
+impl Rt {
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn alloc(&mut self, t: u32, n: u32) -> Addr {
+        if self.starve { return 0; }
+        let a = self.bump; self.bump += n as u64 + 1;
+        self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, n: Value) -> u32 { self.lens[n.0 as usize] }
+    fn bn_datamap(&self, n: Value) -> u32 { self.h[n.0 as usize] as u32 }
+    fn bn_nodemap(&self, n: Value) -> u32 { self.h[n.0 as usize + 1] as u32 }
+}
+fn ty(sp: &Vec<u32>, a: Addr) -> u32 { sp[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 400], gc: Gc { sp: vec![0; 400] }, lens: vec![0; 400],
+                      bump: 50, roots: Vec::new(), starve: false };
+    let mut o = String::new();
+    // A HASH WITH THE HIGH BIT SET: the case where sign- and zero-extension
+    // differ, and the reason `fixnum` masks on the ports.
+    // A collision node, built by hand: this source does not construct one.
+    let a0 = rt.alloc(TY_COLLNODE, 6);
+    let n = Value::heap(a0);
+    o.push_str(&format!("bm={} sz={} ", rt.is_bmnode(n) as u32, rt.node_size_class(n)));
+    // Bitmap nodes of each size class: empty, one entry, two, and one with a
+    // sub-node (which is MORE whatever the datamap says).
+    for (dm, nm) in [(0u64, 0u64), (2, 0), (6, 0), (0, 4)] {
+        let a = rt.alloc(TY_BMNODE, 8);
+        rt.h[a as usize] = dm; rt.h[a as usize + 1] = nm;
+        o.push_str(&format!("{},", rt.node_size_class(Value::heap(a))));
+    }
+    o.push_str(&format!(" roots={}", rt.roots.len()));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int CN_BASE = 2, CN_EDIT = 0, CN_HASH = 1;
+    static final int TY_COLLNODE = 18, TY_BMNODE = 16;
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v & 0xFFFFFFFFFFFFL; }
+        static long fixnum(long n) { return n & 0xFFFFFFFFFFFFL; }
+        static long heap(long a) { return a; }
+    }
+    static final class Rt {
+        long[] h = new long[400];
+        static final class Gc { int[] sp = new int[400]; }
+        Gc gc = new Gc();
+        int[] lens = new int[400];
+        long bump = 50;
+        boolean starve = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static int bnDatamap(Rt rt, long n) { return (int) rt.h[(int) n]; }
+    static int bnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long a0 = rt.alloc(TY_COLLNODE, 6);
+        long n = Val.heap(a0);
+        o.append("bm=").append(isBmnode(rt, n) ? 1 : 0)
+         .append(" sz=").append(nodeSizeClass(rt, n)).append(' ');
+        long[][] maps = {{0, 0}, {2, 0}, {6, 0}, {0, 4}};
+        for (long[] p : maps) {
+            long a = rt.alloc(TY_BMNODE, 8);
+            rt.h[(int) a] = p[0]; rt.h[(int) a + 1] = p[1];
+            o.append(nodeSizeClass(rt, Val.heap(a))).append(',');
+        }
+        o.append(" roots=").append(rt.roots.size());
+        System.out.println(o);
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    const int CN_BASE = 2, CN_EDIT = 0, CN_HASH = 1;
+    static class Obj {
+        internal const int TyCollnode = 18, TyBmnode = 16;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static long AsHeap(long v) { return v; }
+        internal static long AsFixnum(long v) { return v & 0xFFFFFFFFFFFFL; }
+        internal static long Fixnum(long n) { return n & 0xFFFFFFFFFFFFL; }
+        internal static long Heap(long a) { return a; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[400];
+        internal sealed class GcT { internal int[] sp = new int[400]; }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[400];
+        internal long bump = 50;
+        internal bool starve = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    static int BnDatamap(Rt rt, long n) { return (int) rt.h[(int) n]; }
+    static int BnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        var o = new StringBuilder();
+        long a0 = rt.Alloc(Obj.TyCollnode, 6);
+        long n = Val.Heap(a0);
+        o.Append("bm=").Append(IsBmnode(rt, n) ? 1 : 0)
+         .Append(" sz=").Append(NodeSizeClass(rt, n)).Append(' ');
+        long[][] maps = {new long[]{0, 0}, new long[]{2, 0}, new long[]{6, 0}, new long[]{0, 4}};
+        foreach (long[] p in maps) {
+            long a = rt.Alloc(Obj.TyBmnode, 8);
+            rt.h[(int) a] = p[0]; rt.h[(int) a + 1] = p[1];
+            o.Append(NodeSizeClass(rt, Val.Heap(a))).Append(',');
+        }
+        o.Append(" roots=").Append(rt.roots.Count);
+        Console.WriteLine(o.ToString());
+    }

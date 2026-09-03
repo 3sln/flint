@@ -576,6 +576,8 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Maps` | `nodeAssoc` -- the CHAMP insert itself |
 | 3 | `Maps` | `collAssoc` -- an entry into a collision node, closing the cycle |
 | 3 | `Maps` | `nodeDissoc` + `collDissoc` -- removal, and the shape invariant |
+| 3 | `Maps` | `nodeFind` + `nodeFindScalar`, and `eqMayAlloc` in `Eq` |
+| 3 | `Maps` | the collision-node accessors, and the size predicate |
 
 The assoc/dissoc block is complete: thirteen functions of `Maps`, one
 definition each. The three analyses had gated the whole block on converging
@@ -861,6 +863,28 @@ runs; a no-op program costs 1.67s of the 1.80s measured. The workload had to
 grow twentyfold before the thing under test was most of the number. A ratio
 taken without knowing the fixed cost is a ratio of the fixed cost.
 
+### `fixnum` was widening the wrong way on both ports
+
+kin's `I32` is Rust's `u32`. Java and C# spell it `int`, which is SIGNED, so
+`Val.fixnum(h)` on a value with the high bit set stores 48 bits of ones where
+Rust stores 32. The form now masks -- `Val.fixnum({0} & 0xFFFFFFFFL)` -- which
+is what the hand-written ports had all along.
+
+It survived thirteen shipped sources because the only use was a seq index,
+which is small and non-negative, so the wrong widening was unreachable. The
+first use that could reach it was `cn_new` storing a 32-bit HASH, and the
+driver names the case directly: it constructs a node with hash `0x80000001`
+and reads it back.
+
+**The same asymmetry bites `I32` more widely, and is not fixed.** A value with
+the high bit set prints as `2147483649` in Rust and `-2147483647` on the
+ports, and `<`, `>` and `quot` on it mean different things -- unsigned there,
+signed here. Equality, the bitwise operators and `>>>` (which the vocabulary
+already spells as `hash-mask`) are safe. Nothing shipped compares or divides a
+hash, so nothing is wrong today; but the vocabulary offers `<` on an `I32`
+without saying it is only sound below 2^31, and a driver that never builds a
+high-bit value will not notice. Worth a signed/unsigned split in the tag
+system rather than a comment, and it is not done.
 ### Never, on evidence
 
 * **`Snap`** moves to phase 5. 785/449/456 lines of direct `Gc`, `Roots`,

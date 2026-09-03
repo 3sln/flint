@@ -1,0 +1,48 @@
+;; The COLLISION-NODE accessors: the layout, said once.
+;;
+;; Phase 3 of `doc/goals/kin-port.md`, and the sibling of `champ.kin`, which
+;; did the same for bitmap nodes. A collision node holds every entry whose key
+;; hashes identically all the way down:
+;;
+;;     CN_EDIT | CN_HASH | k0 v0 | k1 v1 | ...
+;;
+;; `is_bmnode` and `node_size_class` are the SAME subject and ship next door
+;; in `nodeclass.kin` rather than here, because the ports put a `cnSet`
+;; between `cnVal` and `isBmnode` and Rust has no such function -- it writes
+;; through the general `Rt::set`. A region is a contiguous span of one file,
+;; so a helper that exists in two runtimes and not the third splits what
+;; would otherwise be one source. That is the honest cost of the divergence,
+;; and it is cheaper than inventing a `cn_set` for Rust that nothing calls.
+(ns runtime.collnode
+  (:require [flint.impl.rt :refer [defn return if let comment doc not
+                                   push r pop-to alloc set-at heap fixnum
+                                   slot olen as-fixnum to-i32
+                                   == quot - * +
+                                   Rt Value Addr RootIx I32 NIL
+                                   CN_BASE CN_EDIT CN_HASH TY_COLLNODE]]))
+
+(defn ^:method ^Value cn-new [^:mut ^Rt rt ^I32 h ^I32 npairs ^Value edit]
+  (comment "`edit` is rooted across the allocation and read back after it:"
+           "`alloc` collects, and a host local does not survive that.")
+  (let [^RootIx e (push rt edit)
+        ^Addr a (alloc rt TY_COLLNODE (+ CN_BASE (* 2 npairs)))
+        ^Value ed (r rt e)]
+    (pop-to rt e)
+    (if (== a 0)
+      (return NIL))
+    (set-at rt a CN_EDIT ed)
+    (set-at rt a CN_HASH (fixnum h))
+    (return (heap a))))
+
+(defn ^:inline ^:method ^I32 cn-count [^Rt rt ^Value n]
+  (return (quot (- (olen rt n) CN_BASE) 2)))
+
+(defn ^:method ^I32 cn-hash [^Rt rt ^Value n]
+  (return (to-i32 (as-fixnum (slot rt n CN_HASH)))))
+
+(defn ^:inline ^:method ^Value cn-key [^Rt rt ^Value n ^I32 i]
+  (return (slot rt n (+ CN_BASE (* 2 i)))))
+
+(defn ^:inline ^:method ^Value cn-val [^Rt rt ^Value n ^I32 i]
+  (return (slot rt n (+ (+ CN_BASE (* 2 i)) 1))))
+

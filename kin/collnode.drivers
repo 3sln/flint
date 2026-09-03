@@ -1,0 +1,165 @@
+--rust-head
+type Addr = u32;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const CN_BASE: u32 = 2;
+const CN_EDIT: u32 = 0;
+const CN_HASH: u32 = 1;
+const TY_COLLNODE: u32 = 18;
+const TY_BMNODE: u32 = 16;
+impl Value {
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn as_fixnum(self) -> i64 { (self.0 & 0xFFFFFFFFFFFF) as i64 }
+    fn fixnum(n: i64) -> Value { Value((n as u64) & 0xFFFFFFFFFFFF) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+}
+struct Gc { sp: Vec<u32> }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64,
+            roots: Vec<Value>, starve: bool }
+impl Rt {
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn alloc(&mut self, t: u32, n: u32) -> Addr {
+        if self.starve { return 0; }
+        let a = self.bump; self.bump += n as u64 + 1;
+        self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, n: Value) -> u32 { self.lens[n.0 as usize] }
+    fn bn_datamap(&self, n: Value) -> u32 { self.h[n.0 as usize] as u32 }
+    fn bn_nodemap(&self, n: Value) -> u32 { self.h[n.0 as usize + 1] as u32 }
+}
+fn ty(sp: &Vec<u32>, a: Addr) -> u32 { sp[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 400], gc: Gc { sp: vec![0; 400] }, lens: vec![0; 400],
+                      bump: 50, roots: Vec::new(), starve: false };
+    let mut o = String::new();
+    // A HASH WITH THE HIGH BIT SET: the case where sign- and zero-extension
+    // differ, and the reason `fixnum` masks on the ports.
+    let n = rt.cn_new(0x80000001, 2, NIL);
+    o.push_str(&format!("{} hash={} count={} ", n.0, rt.cn_hash(n) as u64, rt.cn_count(n)));
+    rt.set_slot(n.as_heap(), CN_BASE, Value(100));
+    rt.set_slot(n.as_heap(), CN_BASE + 1, Value(101));
+    rt.set_slot(n.as_heap(), CN_BASE + 2, Value(200));
+    rt.set_slot(n.as_heap(), CN_BASE + 3, Value(201));
+    o.push_str(&format!("k0={} v0={} k1={} v1={} ",
+                        rt.cn_key(n, 0).0, rt.cn_val(n, 0).0,
+                        rt.cn_key(n, 1).0, rt.cn_val(n, 1).0));
+    rt.starve = true;
+    o.push_str(&format!(" oom={} roots={}", rt.cn_new(1, 2, NIL).0, rt.roots.len()));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int CN_BASE = 2, CN_EDIT = 0, CN_HASH = 1;
+    static final int TY_COLLNODE = 18, TY_BMNODE = 16;
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v & 0xFFFFFFFFFFFFL; }
+        static long fixnum(long n) { return n & 0xFFFFFFFFFFFFL; }
+        static long heap(long a) { return a; }
+    }
+    static final class Rt {
+        long[] h = new long[400];
+        static final class Gc { int[] sp = new int[400]; }
+        Gc gc = new Gc();
+        int[] lens = new int[400];
+        long bump = 50;
+        boolean starve = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static int bnDatamap(Rt rt, long n) { return (int) rt.h[(int) n]; }
+    static int bnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long n = cnNew(rt, 0x80000001, 2, NIL);
+        o.append(n).append(" hash=").append(cnHash(rt, n) & 0xFFFFFFFFL)
+         .append(" count=").append(cnCount(rt, n)).append(' ');
+        rt.setSlot(Val.asHeap(n), CN_BASE, 100);
+        rt.setSlot(Val.asHeap(n), CN_BASE + 1, 101);
+        rt.setSlot(Val.asHeap(n), CN_BASE + 2, 200);
+        rt.setSlot(Val.asHeap(n), CN_BASE + 3, 201);
+        o.append("k0=").append(cnKey(rt, n, 0)).append(" v0=").append(cnVal(rt, n, 0))
+         .append(" k1=").append(cnKey(rt, n, 1)).append(" v1=").append(cnVal(rt, n, 1)).append(' ');
+        rt.starve = true;
+        o.append(" oom=").append(cnNew(rt, 1, 2, NIL)).append(" roots=").append(rt.roots.size());
+        System.out.println(o);
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    const int CN_BASE = 2, CN_EDIT = 0, CN_HASH = 1;
+    static class Obj {
+        internal const int TyCollnode = 18, TyBmnode = 16;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static long AsHeap(long v) { return v; }
+        internal static long AsFixnum(long v) { return v & 0xFFFFFFFFFFFFL; }
+        internal static long Fixnum(long n) { return n & 0xFFFFFFFFFFFFL; }
+        internal static long Heap(long a) { return a; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[400];
+        internal sealed class GcT { internal int[] sp = new int[400]; }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[400];
+        internal long bump = 50;
+        internal bool starve = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    static int BnDatamap(Rt rt, long n) { return (int) rt.h[(int) n]; }
+    static int BnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        var o = new StringBuilder();
+        long n = CnNew(rt, unchecked((int) 0x80000001), 2, NIL);
+        o.Append(n).Append(" hash=").Append(CnHash(rt, n) & 0xFFFFFFFFL)
+         .Append(" count=").Append(CnCount(rt, n)).Append(' ');
+        rt.SetSlot(Val.AsHeap(n), CN_BASE, 100);
+        rt.SetSlot(Val.AsHeap(n), CN_BASE + 1, 101);
+        rt.SetSlot(Val.AsHeap(n), CN_BASE + 2, 200);
+        rt.SetSlot(Val.AsHeap(n), CN_BASE + 3, 201);
+        o.Append("k0=").Append(CnKey(rt, n, 0)).Append(" v0=").Append(CnVal(rt, n, 0))
+         .Append(" k1=").Append(CnKey(rt, n, 1)).Append(" v1=").Append(CnVal(rt, n, 1)).Append(' ');
+        rt.starve = true;
+        o.Append(" oom=").Append(CnNew(rt, 1, 2, NIL)).Append(" roots=").Append(rt.roots.Count);
+        Console.WriteLine(o.ToString());
+    }

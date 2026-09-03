@@ -97,32 +97,63 @@ public static class Maps {
 
     // kin:end kin/champ.kin
 
+    // kin:begin kin/collnode.kin
     static long CnNew(Rt rt, int h, int npairs, long edit) {
+        // `edit` is rooted across the allocation and read back after it:
+        // `alloc` collects, and a host local does not survive that.
         int e = rt.Push(edit);
-        long a = rt.Alloc(Obj.TyCollnode, CN_BASE + 2 * npairs);
+        long a = rt.Alloc(Obj.TyCollnode, CN_BASE + (2 * npairs));
         long ed = rt.R(e);
         rt.PopTo(e);
-        if (a == 0) return Val.Nil;
+        if (a == 0) {
+            return Val.Nil;
+        }
         rt.SetSlot(a, CN_EDIT, ed);
         rt.SetSlot(a, CN_HASH, Val.Fixnum(h & 0xFFFFFFFFL));
         return Val.Heap(a);
     }
-    static int CnCount(Rt rt, long n) { return (Olen(rt, n) - CN_BASE) / 2; }
-    static int CnHash(Rt rt, long n) { return (int) Val.AsFixnum(rt.Slot(n, CN_HASH)); }
-    static long CnKey(Rt rt, long n, int i) { return rt.Slot(n, CN_BASE + 2 * i); }
-    static long CnVal(Rt rt, long n, int i) { return rt.Slot(n, CN_BASE + 2 * i + 1); }
+    static int CnCount(Rt rt, long n) {
+        return (Olen(rt, n) - CN_BASE) / 2;
+    }
+    static int CnHash(Rt rt, long n) {
+        return (int) Val.AsFixnum(rt.Slot(n, CN_HASH));
+    }
+    static long CnKey(Rt rt, long n, int i) {
+        return rt.Slot(n, CN_BASE + (2 * i));
+    }
+    static long CnVal(Rt rt, long n, int i) {
+        return rt.Slot(n, (CN_BASE + (2 * i)) + 1);
+    }
+
+    // kin:end kin/collnode.kin
     static void CnSet(Rt rt, long n, int i, long v) { rt.SetSlot(Val.AsHeap(n), i, v); }
 
-    static bool IsBmnode(Rt rt, long n) { return Obj.Ty(rt.gc.sp, Val.AsHeap(n)) == Obj.TyBmnode; }
-
+    // kin:begin kin/nodeclass.kin
+    static bool IsBmnode(Rt rt, long n) {
+        return Obj.Ty(rt.gc.sp, Val.AsHeap(n)) == Obj.TyBmnode;
+    }
     /// EMPTY / ONE / MORE, the CHAMP size predicate that drives collapsing.
     static int NodeSizeClass(Rt rt, long n) {
-        if (!IsBmnode(rt, n)) return 2;   // a collision node always has two pairs
-        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
-        if (nm != 0) return 2;
+        // A collision node always holds at least two pairs.
+        if (!IsBmnode(rt, n)) {
+            return 2;
+        }
+        int dm = BnDatamap(rt, n);
+        int nm = BnNodemap(rt, n);
+        if (nm != 0) {
+            return 2;
+        }
         int c = System.Numerics.BitOperations.PopCount((uint)(dm));
-        return c == 0 ? 0 : c == 1 ? 1 : 2;
+        if (c == 0) {
+            return 0;
+        }
+        if (c == 1) {
+            return 1;
+        }
+        return 2;
     }
+
+    // kin:end kin/nodeclass.kin
 
     // --- lookup -------------------------------------------------------------
 
