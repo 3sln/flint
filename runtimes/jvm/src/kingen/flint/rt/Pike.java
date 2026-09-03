@@ -8,29 +8,15 @@ import static com.flint.rt.Obj.*;
 import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
-import static flint.rt.Assoc.*;
-import static flint.rt.Champ.*;
-import static flint.rt.Collnode.*;
-import static flint.rt.Copies.*;
-import static flint.rt.Dissoc.*;
-import static flint.rt.Eq.*;
-import static flint.rt.Eqalloc.*;
-import static flint.rt.Find.*;
-import static flint.rt.Hash.*;
-import static flint.rt.Interns.*;
-import static flint.rt.Merge.*;
-import static flint.rt.Nodeclass.*;
-import static flint.rt.Seqs.*;
-import static flint.rt.Unsigned.*;
 
 public final class Pike {
-    static boolean wordCp(int v) {
+    public static boolean wordCp(int v) {
         return ((v >= 48) && (v <= 57)) || ((v >= 65) && (v <= 90)) || ((v >= 97) && (v <= 122)) || (v == 95);
     }
-    static boolean spaceCp(int v) {
+    public static boolean spaceCp(int v) {
         return (v == 32) || (v == 9) || (v == 10) || (v == 13) || (v == 12) || (v == 11);
     }
-    static boolean predHit(int code, int v) {
+    public static boolean predHit(int code, int v) {
         switch (code) {
             case 0:
                 return (v >= 48) && (v <= 57);

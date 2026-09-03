@@ -1392,9 +1392,9 @@ rt.describe(v) + " is not a transient");
         });
 
         // Lazy sequences and ranges.
-        def("flint/lazy-seq", (rt, at, n) -> Seqs.lazySeq(rt, rt.vat(at)));
+        def("flint/lazy-seq", (rt, at, n) -> flint.rt.Seqs.lazySeq(rt, rt.vat(at)));
         def("flint/range3", (rt, at, n) ->
-            Seqs.range(rt, rt.vat(at), rt.vat(at + 1), rt.vat(at + 2)));
+            flint.rt.Seqs.range(rt, rt.vat(at), rt.vat(at + 1), rt.vat(at + 2)));
 
         // Sets.
         def("disj", (rt, at, n) -> {

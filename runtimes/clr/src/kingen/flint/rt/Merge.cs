@@ -9,23 +9,11 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
-using static flint.rt.Assoc;
 using static flint.rt.Champ;
 using static flint.rt.Collnode;
-using static flint.rt.Copies;
-using static flint.rt.Dissoc;
-using static flint.rt.Eq;
-using static flint.rt.Eqalloc;
-using static flint.rt.Find;
-using static flint.rt.Hash;
-using static flint.rt.Interns;
-using static flint.rt.Nodeclass;
-using static flint.rt.Pike;
-using static flint.rt.Seqs;
-using static flint.rt.Unsigned;
 
 public static class Merge {
-    static long MergeTwo(Rt rt, int shift, long k0, long v0, int h0, long k1, long v1, int h1, long edit) {
+    internal static long MergeTwo(Rt rt, int shift, long k0, long v0, int h0, long k1, long v1, int h1, long edit) {
         int mk = rt.Mark();
         int ik0 = rt.Push(k0);
         int iv0 = rt.Push(v0);

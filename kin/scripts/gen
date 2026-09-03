@@ -1,5 +1,5 @@
 #!/usr/bin/env bb
-;; Print what each target would get for one kin source.
+;; Print the FUNCTIONS one kin source generates, for each target.
 ;;
 ;;     kin/scripts/gen kin/hash.kin
 ;;
@@ -7,16 +7,31 @@
 ;; and answers `{target text}` without opening or writing anything, so the
 ;; reading and the printing are both here, where a project's own conventions
 ;; belong.
+;;
+;; WITHOUT `:emit`, and that is the whole point of this script as against
+;; `kin/scripts/emit`. A target's `:emit` owns the file -- the package clause,
+;; the imports, the wrapper class -- and none of that can be compiled on its
+;; own, because it names `crate::rt::Rt` and `com.flint.rt.Obj` and other
+;; things that only exist inside the runtime. `kin/scripts/verify` wraps what
+;; this prints in a self-contained probe harness instead, so what it wants is
+;; the functions and nothing around them.
 (require '[kin.project :as kp] '[flint.impl.project :as fp])
+
+(defn- bare
+  "The project with every target's `:emit` removed, so `generate` renders the
+  forms and stops there."
+  [prj]
+  (update prj :targets update-vals #(dissoc % :emit)))
 
 (let [[path] *command-line-args*]
   (when-not path
     (println "usage: kin/gen <source.kin>")
     (System/exit 2))
-  (let [out (kp/generate @fp/project (kp/source-text @fp/project path) path)]
+  (let [prj (bare @fp/project)
+        out (kp/generate prj (kp/source-text prj path) path)]
     ;; The `====` banners are this project's format, not kin's. `kin/scripts/verify`
     ;; splits on them.
-    (doseq [t (:target-order @fp/project)
+    (doseq [t (:target-order prj)
             :when (contains? out t)]
       (println (str "==== " (name t) " ===================================="))
       (print (get out t))

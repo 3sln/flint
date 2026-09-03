@@ -3,6 +3,7 @@ package com.flint.rt;
 import java.nio.charset.StandardCharsets;
 
 import static com.flint.rt.Obj.*;
+import static flint.rt.Interns.*;
 
 /// Strings, ported from `runtime/src/strs.rs`.
 ///
@@ -194,13 +195,13 @@ public final class Str {
             long again = t.lookup(h, matches);
             if (again != Val.NOT_FOUND) return again;   // somebody got there first
             int idx = t.slot;
-            if (t.needsGrow()) {
+            if (needsGrow(t)) {
                 t.grow();
                 // `grow` invalidates the index, so re-probe for a slot.
                 t.lookup(h, x -> false);
                 idx = t.slot;
             }
-            t.insertAt(idx, h, rt.r(vi));
+            insertAt(t, idx, h, rt.r(vi));
             return rt.r(vi);
         } finally {
             rt.roots.shared.par.unlockIntern(table);

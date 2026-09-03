@@ -36,25 +36,3 @@
                 :match "*.kin"
                 :label #(str "kin/" %)
                 :unlabel #(str/replace % #"^kin/" "")}}))))
-
-(def module-project
-  "The same project, emitting WHOLE MODULES instead of regions.
-
-  TRANSITIONAL, and it exists to be diffed. The region tree and the module
-  tree are generated from the identical sources by the identical
-  vocabularies; the only thing that differs is the target's `:emit`. So
-  generating both and comparing them is a check that the scrub carried the
-  code across unchanged -- which is a thing to demonstrate rather than
-  assert, and cannot be demonstrated once the regions are gone.
-
-  It goes away with the regions, and `project` above becomes this."
-  (delay
-    (kp/resolve-exports
-     (kp/load-project
-      {:vocabularies '[flint.impl.rt flint.impl.hash flint.impl.host]
-       :targets targets/module-targets
-       :target-order [:rust :java :csharp]
-       :sources {:vfs (vfs/disk-vfs "kin")
-                 :match "*.kin"
-                 :label #(str "kin/" %)
-                 :unlabel #(str/replace % #"^kin/" "")}}))))

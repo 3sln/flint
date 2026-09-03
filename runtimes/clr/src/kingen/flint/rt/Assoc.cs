@@ -12,20 +12,11 @@ using static Flint.Rt.Seqs;
 using static flint.rt.Champ;
 using static flint.rt.Collnode;
 using static flint.rt.Copies;
-using static flint.rt.Dissoc;
-using static flint.rt.Eq;
-using static flint.rt.Eqalloc;
-using static flint.rt.Find;
-using static flint.rt.Hash;
-using static flint.rt.Interns;
 using static flint.rt.Merge;
 using static flint.rt.Nodeclass;
-using static flint.rt.Pike;
-using static flint.rt.Seqs;
-using static flint.rt.Unsigned;
 
 public static class Assoc {
-    static long NodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
+    internal static long NodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
         int @base = rt.Mark();
         int ni = rt.Push(n);
         int ki = rt.Push(key);
@@ -93,7 +84,7 @@ public static class Assoc {
         rt.PopTo(@base);
         return @out;
     }
-    static long CollAssoc(Rt rt, long n, int h, long key, long val, long edit, int shift) {
+    internal static long CollAssoc(Rt rt, long n, int h, long key, long val, long edit, int shift) {
         int nh = CnHash(rt, n);
         if (nh != h) {
             // A different hash at this depth: the node becomes a child of

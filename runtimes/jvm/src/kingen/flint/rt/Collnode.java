@@ -8,23 +8,9 @@ import static com.flint.rt.Obj.*;
 import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
-import static flint.rt.Assoc.*;
-import static flint.rt.Champ.*;
-import static flint.rt.Copies.*;
-import static flint.rt.Dissoc.*;
-import static flint.rt.Eq.*;
-import static flint.rt.Eqalloc.*;
-import static flint.rt.Find.*;
-import static flint.rt.Hash.*;
-import static flint.rt.Interns.*;
-import static flint.rt.Merge.*;
-import static flint.rt.Nodeclass.*;
-import static flint.rt.Pike.*;
-import static flint.rt.Seqs.*;
-import static flint.rt.Unsigned.*;
 
 public final class Collnode {
-    static long cnNew(Rt rt, int h, int npairs, long edit) {
+    public static long cnNew(Rt rt, int h, int npairs, long edit) {
         // `edit` is rooted across the allocation and read back after it:
         // `alloc` collects, and a host local does not survive that.
         int e = rt.push(edit);
@@ -38,16 +24,16 @@ public final class Collnode {
         rt.setSlot(a, CN_HASH, Val.fixnum(h & 0xFFFFFFFFL));
         return Val.heap(a);
     }
-    static int cnCount(Rt rt, long n) {
+    public static int cnCount(Rt rt, long n) {
         return (olen(rt, n) - CN_BASE) / 2;
     }
-    static int cnHash(Rt rt, long n) {
+    public static int cnHash(Rt rt, long n) {
         return (int) Val.asFixnum(rt.slot(n, CN_HASH));
     }
-    static long cnKey(Rt rt, long n, int i) {
+    public static long cnKey(Rt rt, long n, int i) {
         return rt.slot(n, CN_BASE + (2 * i));
     }
-    static long cnVal(Rt rt, long n, int i) {
+    public static long cnVal(Rt rt, long n, int i) {
         return rt.slot(n, (CN_BASE + (2 * i)) + 1);
     }
     /// A BITMAP NODE, allocated and stamped with its two maps.

@@ -9,20 +9,7 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
-using static flint.rt.Assoc;
-using static flint.rt.Champ;
-using static flint.rt.Collnode;
-using static flint.rt.Copies;
-using static flint.rt.Dissoc;
 using static flint.rt.Eq;
-using static flint.rt.Find;
-using static flint.rt.Hash;
-using static flint.rt.Interns;
-using static flint.rt.Merge;
-using static flint.rt.Nodeclass;
-using static flint.rt.Pike;
-using static flint.rt.Seqs;
-using static flint.rt.Unsigned;
 
 public static class Eqalloc {
     /// Can `=` or `hash` on this value allocate?

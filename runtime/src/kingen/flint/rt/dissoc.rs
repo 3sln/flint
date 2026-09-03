@@ -4,17 +4,19 @@
 #![allow(unused_imports)]
 use crate::gc::InternTable;
 use crate::hash;
+use crate::eq::*;
 use crate::map::*;
 use crate::mem::Addr;
 use crate::obj::*;
 use crate::rt::Rt;
+use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kingen::flint::rt::hash::*;
 use crate::kingen::flint::rt::pike::*;
 
 impl Rt {
-    fn node_dissoc(&mut self, n: Value, shift: u32, h: u32, key: Value, edit: Value) -> Value {
+    pub(crate) fn node_dissoc(&mut self, n: Value, shift: u32, h: u32, key: Value, edit: Value) -> Value {
         let base: usize = self.mark();
         let ni: usize = self.push(n);
         let ki: usize = self.push(key);
@@ -92,7 +94,7 @@ impl Rt {
         self.pop_to(base);
         return out;
     }
-    fn coll_dissoc(&mut self, n: Value, key: Value, edit: Value) -> Value {
+    pub(crate) fn coll_dissoc(&mut self, n: Value, key: Value, edit: Value) -> Value {
         let scan: usize = self.mark();
         let sni: usize = self.push(n);
         let ski: usize = self.push(key);

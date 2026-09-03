@@ -8,23 +8,11 @@ import static com.flint.rt.Obj.*;
 import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
-import static flint.rt.Assoc.*;
 import static flint.rt.Champ.*;
 import static flint.rt.Collnode.*;
-import static flint.rt.Dissoc.*;
-import static flint.rt.Eq.*;
-import static flint.rt.Eqalloc.*;
-import static flint.rt.Find.*;
-import static flint.rt.Hash.*;
-import static flint.rt.Interns.*;
-import static flint.rt.Merge.*;
-import static flint.rt.Nodeclass.*;
-import static flint.rt.Pike.*;
-import static flint.rt.Seqs.*;
-import static flint.rt.Unsigned.*;
 
 public final class Copies {
-    static long bnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {
+    public static long bnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {
         int mk = rt.mark();
         int ni = rt.push(n);
         int ki = rt.push(key);
@@ -68,7 +56,7 @@ public final class Copies {
         rt.popTo(mk);
         return built;
     }
-    static long bnCopyRemoveEntry(Rt rt, long n, int bit, long edit) {
+    public static long bnCopyRemoveEntry(Rt rt, long n, int bit, long edit) {
         int mk = rt.mark();
         int ni = rt.push(n);
         int ei = rt.push(edit);
@@ -108,7 +96,7 @@ public final class Copies {
         rt.popTo(mk);
         return built;
     }
-    static long bnCopySetValue(Rt rt, long n, int at, long val, long edit) {
+    public static long bnCopySetValue(Rt rt, long n, int at, long val, long edit) {
         int mk = rt.mark();
         int ni = rt.push(n);
         int vi = rt.push(val);
@@ -147,7 +135,7 @@ public final class Copies {
         rt.popTo(mk);
         return built;
     }
-    static long bnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
+    public static long bnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
         int mk = rt.mark();
         int ni = rt.push(n);
         int si = rt.push(sub);
@@ -190,7 +178,7 @@ public final class Copies {
     /// positions are computed from the OLD bitmaps -- `at-node` is the index in
     /// the new nodemap as well, because the bit being added is the one being
     /// counted up to.
-    static long bnInlineToNode(Rt rt, long n, int bit, long sub, long edit) {
+    public static long bnInlineToNode(Rt rt, long n, int bit, long sub, long edit) {
         int mk = rt.mark();
         int ni = rt.push(n);
         int si = rt.push(sub);
@@ -239,7 +227,7 @@ public final class Copies {
         return built;
     }
     /// And the reverse: a sub-node collapses back to an inline pair.
-    static long bnNodeToInline(Rt rt, long n, int bit, long key, long val, long edit) {
+    public static long bnNodeToInline(Rt rt, long n, int bit, long key, long val, long edit) {
         int mk = rt.mark();
         int ni = rt.push(n);
         int ki = rt.push(key);

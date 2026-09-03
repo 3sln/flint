@@ -4,27 +4,29 @@
 #![allow(unused_imports)]
 use crate::gc::InternTable;
 use crate::hash;
+use crate::eq::*;
 use crate::map::*;
 use crate::mem::Addr;
 use crate::obj::*;
 use crate::rt::Rt;
+use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kingen::flint::rt::pike::*;
 
-const C1: u32 = 0xcc9e2d51;
-const C2: u32 = 0x1b873593;
+pub(crate) const C1: u32 = 0xcc9e2d51;
+pub(crate) const C2: u32 = 0x1b873593;
 pub const SEED: u32 = 0;
 #[inline]
-fn mix_k1(k1: u32) -> u32 {
+pub(crate) fn mix_k1(k1: u32) -> u32 {
     return k1.wrapping_mul(C1).rotate_left(15).wrapping_mul(C2);
 }
 #[inline]
-fn mix_h1(h1: u32, k1: u32) -> u32 {
+pub(crate) fn mix_h1(h1: u32, k1: u32) -> u32 {
     return (h1 ^ k1).rotate_left(13).wrapping_mul(5).wrapping_add(0xe6546b64);
 }
 #[inline]
-fn fmix(mut h1: u32, len: u32) -> u32 {
+pub(crate) fn fmix(mut h1: u32, len: u32) -> u32 {
     h1 ^= len;
     h1 ^= h1 >> 16;
     h1 = h1.wrapping_mul(0x85ebca6b);

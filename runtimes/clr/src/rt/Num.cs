@@ -178,6 +178,6 @@ public static class Num {
     public static int Hash(Rt rt, long v) {
         if (Val.IsDouble(v)) return Flint.Rt.Hash.HashDouble(Val.AsDouble(v));
         long? n = AsI64(rt, v);
-        return Flint.Rt.Hash.HashLong(n == null ? 0 : n.Value);
+        return flint.rt.Hash.HashLong(n == null ? 0 : n.Value);
     }
 }

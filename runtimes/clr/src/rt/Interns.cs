@@ -1,5 +1,7 @@
 namespace Flint.Rt;
 
+using static flint.rt.Interns;
+
 /// The intern tables, ported from `runtime/src/gc.rs`.
 ///
 /// Open-addressed, linear-probed, and **WEAK**: an entry whose value is no
@@ -38,9 +40,12 @@ public sealed class Interns {
     /// `(hash, value)` pairs. A value of 0 is an empty slot, which is why no
     /// real value may be 0 -- and none is: 0 is the double `+0.0` only as a
     /// bit pattern nothing produces for an interned object.
-    int[] hashes;
-    long[] values;
-    int count;
+    // `internal` because the slot arithmetic that reads them is generated
+    // into namespace `flint.rt` now. Assembly scope is enough here, which is
+    // the one place C# costs less than Java.
+    internal int[] hashes;
+    internal long[] values;
+    internal int count;
 
     public Interns(int capPow2) {
         hashes = new int[capPow2];
@@ -63,47 +68,20 @@ public sealed class Interns {
     /// region, and for the same reason.
     public delegate long Rehome(long v);
 
-    // kin:begin kin/interns.kin
-    internal int Mask() {
-        return this.values.Length - 1;
-    }
-    public void InsertAt(int idx, int hash, long v) {
-        this.hashes[idx] = hash;
-        this.values[idx] = v;
-        this.count += 1;
-    }
-    public bool NeedsGrow() {
-        return (this.count * 4) >= (this.values.Length * 3);
-    }
-    /// Insert with no probe for equality: the caller already knows this hash
-    /// and value are not present. Used only by a rebuild, where every entry
-    /// came out of a table that had already established that.
-    internal void RawInsert(int h, long v) {
-        int m = this.Mask();
-        int i = h & m;
-        while (this.values[i] != 0) {
-            i = (i + 1) & m;
-        }
-        this.hashes[i] = h;
-        this.values[i] = v;
-        this.count += 1;
-    }
-
-    // kin:end kin/interns.kin
 
     public void Grow() {
         int[] oh = hashes; long[] ov = values;
         hashes = new int[ov.Length * 2];
         values = new long[ov.Length * 2];
         count = 0;
-        for (int i = 0; i < ov.Length; i++) if (ov[i] != 0) RawInsert(oh[i], ov[i]);
+        for (int i = 0; i < ov.Length; i++) if (ov[i] != 0) RawInsert(this, oh[i], ov[i]);
     }
 
     /// The found value, or NOT_FOUND with `slot` left at where to insert.
     public int slot;
 
     public long Lookup(int hash, Match eq) {
-        int m = Mask();
+        int m = Mask(this);
         int i = hash & m;
         for (;;) {
             long v = values[i];
@@ -121,7 +99,7 @@ public sealed class Interns {
         for (int i = 0; i < ov.Length; i++) {
             if (ov[i] == 0) continue;
             long nv = f(ov[i]);
-            if (nv != Val.NotFound) RawInsert(oh[i], nv);
+            if (nv != Val.NotFound) RawInsert(this, oh[i], nv);
         }
     }
 }

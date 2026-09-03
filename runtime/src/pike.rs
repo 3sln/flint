@@ -16,6 +16,13 @@
 //! cuts every LOWER-priority thread; the ones already carried forward have
 //! higher priority and may still beat it.
 
+// THE CONSUMING LINE. The character-class predicates are generated now,
+// `kingen/flint/rt/pike.rs`, and they are FREE FUNCTIONS rather than methods
+// -- so unlike an `impl Rt` block they have to be brought into scope. This
+// re-export puts them back under `crate::pike`, which is where every call
+// site in the runtime already looks for them.
+pub(crate) use crate::kingen::flint::rt::pike::*;
+
 use crate::obj::*;
 use crate::rt::Rt;
 use crate::value::{Value, NIL};
@@ -45,27 +52,6 @@ pub const RX_SOURCE: u32 = 0;
 pub const RX_PROG: u32 = 1;
 pub const RX_NGROUPS: u32 = 2;
 
-// kin:begin kin/pike.kin
-#[inline]
-fn word_cp(v: u32) -> bool {
-    return ((v >= 48) && (v <= 57)) || ((v >= 65) && (v <= 90)) || ((v >= 97) && (v <= 122)) || (v == 95);
-}
-#[inline]
-fn space_cp(v: u32) -> bool {
-    return (v == 32) || (v == 9) || (v == 10) || (v == 13) || (v == 12) || (v == 11);
-}
-fn pred_hit(code: u32, v: u32) -> bool {
-    return match code {
-        0 => (v >= 48) && (v <= 57),
-        1 => !((v >= 48) && (v <= 57)),
-        2 => word_cp(v),
-        3 => !word_cp(v),
-        4 => space_cp(v),
-        _ => !space_cp(v),
-    };
-}
-
-// kin:end kin/pike.kin
 
 fn class_hit(classes: &[u32], off: usize, v: u32) -> bool {
     let n = classes[off] as usize;

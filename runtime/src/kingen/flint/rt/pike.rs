@@ -4,23 +4,25 @@
 #![allow(unused_imports)]
 use crate::gc::InternTable;
 use crate::hash;
+use crate::eq::*;
 use crate::map::*;
 use crate::mem::Addr;
 use crate::obj::*;
 use crate::rt::Rt;
+use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kingen::flint::rt::hash::*;
 
 #[inline]
-fn word_cp(v: u32) -> bool {
+pub(crate) fn word_cp(v: u32) -> bool {
     return ((v >= 48) && (v <= 57)) || ((v >= 65) && (v <= 90)) || ((v >= 97) && (v <= 122)) || (v == 95);
 }
 #[inline]
-fn space_cp(v: u32) -> bool {
+pub(crate) fn space_cp(v: u32) -> bool {
     return (v == 32) || (v == 9) || (v == 10) || (v == 13) || (v == 12) || (v == 11);
 }
-fn pred_hit(code: u32, v: u32) -> bool {
+pub(crate) fn pred_hit(code: u32, v: u32) -> bool {
     return match code {
         0 => (v >= 48) && (v <= 57),
         1 => !((v >= 48) && (v <= 57)),

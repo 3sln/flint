@@ -1,5 +1,7 @@
 namespace Flint.Rt;
 
+using static flint.rt.Hash;
+
 using System.Numerics;
 
 /// Hashing, ported from `runtime/src/hash.rs` and bit-compatible with JVM
@@ -30,74 +32,6 @@ using System.Numerics;
 /// .NET's default is unchecked already -- saying so is for the reader, and
 /// because the arithmetic elsewhere in this runtime is deliberately checked.
 public static class Hash {
-    // kin:begin kin/hash.kin
-    const int C1 = unchecked((int) 0xcc9e2d51);
-    const int C2 = 0x1b873593;
-    public const int Seed = 0;
-    static int MixK1(int k1) {
-        unchecked {
-            return ((int) BitOperations.RotateLeft((uint) (k1 * C1), 15)) * C2;
-        }
-    }
-    static int MixH1(int h1, int k1) {
-        unchecked {
-            return (((int) BitOperations.RotateLeft((uint) (h1 ^ k1), 13)) * 5) + unchecked((int) 0xe6546b64);
-        }
-    }
-    static int Fmix(int h1, int len) {
-        unchecked {
-            h1 ^= len;
-            h1 ^= (int)((uint) h1 >> 16);
-            h1 *= unchecked((int) 0x85ebca6b);
-            h1 ^= (int)((uint) h1 >> 13);
-            h1 *= unchecked((int) 0xc2b2ae35);
-            return h1 ^ ((int)((uint) h1 >> 16));
-        }
-    }
-    public static int HashInt(int input) {
-        unchecked {
-            if (input == 0) {
-                return 0;
-            }
-            return Fmix(MixH1(Seed, MixK1(input)), 4);
-        }
-    }
-    public static int HashLong(long input) {
-        unchecked {
-            if (input == 0) {
-                return 0;
-            }
-            int low = (int) input;
-            int high = (int)((ulong) input >> 32);
-            int h1 = MixH1(Seed, MixK1(low));
-            int h2 = MixH1(h1, MixK1(high));
-            return Fmix(h2, 8);
-        }
-    }
-    public static int HashCombine(int seed, int h) {
-        unchecked {
-            return seed ^ (((h + unchecked((int) 0x9e3779b9)) + (seed << 6)) + (seed >> 2));
-        }
-    }
-    public static int MixCollHash(int hash, int count) {
-        unchecked {
-            return Fmix(MixH1(Seed, MixK1(hash)), count);
-        }
-    }
-    public static int OrderedStep(int acc, int itemHash) {
-        unchecked {
-            return (acc * 31) + itemHash;
-        }
-    }
-    public static int UnorderedStep(int acc, int itemHash) {
-        unchecked {
-            return acc + itemHash;
-        }
-    }
-    public const int HashTrue = 1231;
-    public const int HashFalse = 1237;
-
-    // kin:end kin/hash.kin
 
     public static int HashDouble(double d) {
         if (d == 0.0) return 0;   // both 0.0 and -0.0, matching Numbers.hasheq

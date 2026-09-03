@@ -8,27 +8,14 @@ import static com.flint.rt.Obj.*;
 import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
-import static flint.rt.Assoc.*;
 import static flint.rt.Champ.*;
-import static flint.rt.Collnode.*;
-import static flint.rt.Copies.*;
-import static flint.rt.Dissoc.*;
-import static flint.rt.Eq.*;
-import static flint.rt.Eqalloc.*;
-import static flint.rt.Find.*;
-import static flint.rt.Hash.*;
-import static flint.rt.Interns.*;
-import static flint.rt.Merge.*;
-import static flint.rt.Pike.*;
-import static flint.rt.Seqs.*;
-import static flint.rt.Unsigned.*;
 
 public final class Nodeclass {
-    static boolean isBmnode(Rt rt, long n) {
+    public static boolean isBmnode(Rt rt, long n) {
         return ty(rt.gc.sp, Val.asHeap(n)) == TY_BMNODE;
     }
     /// EMPTY / ONE / MORE, the CHAMP size predicate that drives collapsing.
-    static int nodeSizeClass(Rt rt, long n) {
+    public static int nodeSizeClass(Rt rt, long n) {
         // A collision node always holds at least two pairs.
         if (!isBmnode(rt, n)) {
             return 2;

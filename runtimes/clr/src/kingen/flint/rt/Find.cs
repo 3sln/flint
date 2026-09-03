@@ -9,23 +9,13 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
-using static flint.rt.Assoc;
 using static flint.rt.Champ;
 using static flint.rt.Collnode;
-using static flint.rt.Copies;
-using static flint.rt.Dissoc;
-using static flint.rt.Eq;
 using static flint.rt.Eqalloc;
-using static flint.rt.Hash;
-using static flint.rt.Interns;
-using static flint.rt.Merge;
 using static flint.rt.Nodeclass;
-using static flint.rt.Pike;
-using static flint.rt.Seqs;
-using static flint.rt.Unsigned;
 
 public static class Find {
-    static long NodeFindScalar(Rt rt, long n, int shift, int h, long key) {
+    internal static long NodeFindScalar(Rt rt, long n, int shift, int h, long key) {
         // No rooting anywhere in here: the key is a scalar, so `eq` cannot
         // allocate, so nothing can move while this walks.
         long node;
@@ -64,8 +54,8 @@ public static class Find {
         }
         return @out;
     }
-    static long NodeFind(Rt rt, long n, int shift, int h, long key) {
-        if (!Flint.Rt.Eq.EqMayAlloc(rt, key)) {
+    internal static long NodeFind(Rt rt, long n, int shift, int h, long key) {
+        if (!EqMayAlloc(rt, key)) {
             return NodeFindScalar(rt, n, shift, h, key);
         }
         // The node being walked and the key are rooted: `eq` on a compound

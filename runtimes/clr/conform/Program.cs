@@ -695,13 +695,13 @@ public static class Program {
     }
 
     private static int RtHash() {
-        HEq("(hash 0)", Flint.Rt.Hash.HashLong(0), 0);
-        HEq("(hash 1)", Flint.Rt.Hash.HashLong(1), 1392991556);
-        HEq("(hash -1)", Flint.Rt.Hash.HashLong(-1), 1651860712);
-        HEq("(hash 42)", Flint.Rt.Hash.HashLong(42), 1871679806);
-        HEq("(hash 12345678901234)", Flint.Rt.Hash.HashLong(12345678901234L), -1096982217);
-        HEq("(hash Long/MAX_VALUE)", Flint.Rt.Hash.HashLong(long.MaxValue), -2106506049);
-        HEq("(hash Long/MIN_VALUE)", Flint.Rt.Hash.HashLong(long.MinValue), 1366273829);
+        HEq("(hash 0)", flint.rt.Hash.HashLong(0), 0);
+        HEq("(hash 1)", flint.rt.Hash.HashLong(1), 1392991556);
+        HEq("(hash -1)", flint.rt.Hash.HashLong(-1), 1651860712);
+        HEq("(hash 42)", flint.rt.Hash.HashLong(42), 1871679806);
+        HEq("(hash 12345678901234)", flint.rt.Hash.HashLong(12345678901234L), -1096982217);
+        HEq("(hash Long/MAX_VALUE)", flint.rt.Hash.HashLong(long.MaxValue), -2106506049);
+        HEq("(hash Long/MIN_VALUE)", flint.rt.Hash.HashLong(long.MinValue), 1366273829);
         Console.WriteLine("  ok   longs hash as Clojure hashes them");
 
         HEq("(hash 0.0)", Flint.Rt.Hash.HashDouble(0.0), 0);

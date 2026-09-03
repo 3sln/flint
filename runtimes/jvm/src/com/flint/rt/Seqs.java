@@ -1,6 +1,7 @@
 package com.flint.rt;
 
 import static com.flint.rt.Obj.*;
+import static flint.rt.Seqs.*;
 
 /// Seqs, ported from `runtime/src/seqs.rs`.
 ///
@@ -70,93 +71,6 @@ public final class Seqs {
     /// span -- which is how this was silently deleted the first time.
     public static final int LS_THUNK = 0, LS_SEQ = 1;
 
-    // kin:begin kin/seqs.kin
-    static long vecseq(Rt rt, long v, int i) {
-        int mk = rt.mark();
-        int vi = rt.push(v);
-        long a = rt.alloc(TY_VECSEQ, 3);
-        if (a == 0) {
-            rt.popTo(mk);
-            return Val.NIL;
-        }
-        long vv = rt.r(vi);
-        rt.setSlot(a, 0, vv);
-        rt.setSlot(a, 1, Val.fixnum(i & 0xFFFFFFFFL));
-        rt.setSlot(a, 2, Val.NIL);
-        rt.popTo(mk);
-        return Val.heap(a);
-    }
-    static long strseq(Rt rt, long s, int i) {
-        int mk = rt.mark();
-        int si = rt.push(s);
-        long a = rt.alloc(TY_STRSEQ, 3);
-        if (a == 0) {
-            rt.popTo(mk);
-            return Val.NIL;
-        }
-        long sv = rt.r(si);
-        rt.setSlot(a, 0, sv);
-        rt.setSlot(a, 1, Val.fixnum(i & 0xFFFFFFFFL));
-        rt.setSlot(a, 2, Val.NIL);
-        rt.popTo(mk);
-        return Val.heap(a);
-    }
-    public static long lazySeq(Rt rt, long thunk) {
-        int mk = rt.mark();
-        int t = rt.push(thunk);
-        long a = rt.alloc(TY_LAZYSEQ, 3);
-        if (a == 0) {
-            rt.popTo(mk);
-            return Val.NIL;
-        }
-        long tv = rt.r(t);
-        rt.setSlot(a, LS_THUNK, tv);
-        rt.setSlot(a, LS_SEQ, Val.NIL);
-        rt.setSlot(a, 2, Val.NIL);
-        rt.popTo(mk);
-        return Val.heap(a);
-    }
-    public static long range(Rt rt, long start, long end, long step) {
-        int mk = rt.mark();
-        int s = rt.push(start);
-        int e = rt.push(end);
-        int st = rt.push(step);
-        long a = rt.alloc(TY_RANGE, 4);
-        if (a == 0) {
-            rt.popTo(mk);
-            return Val.NIL;
-        }
-        long sv = rt.r(s);
-        rt.setSlot(a, 0, sv);
-        long ev = rt.r(e);
-        rt.setSlot(a, 1, ev);
-        long stv = rt.r(st);
-        rt.setSlot(a, 2, stv);
-        rt.setSlot(a, 3, Val.NIL);
-        rt.popTo(mk);
-        return Val.heap(a);
-    }
-    static boolean rangeEmpty(Rt rt, long v) {
-        long e = rt.slot(v, 1);
-        // An absent end is an UNBOUNDED range, which is never empty.
-        if (Val.isNil(e)) {
-            return false;
-        }
-        double s = Num.f64(rt, rt.slot(v, 0));
-        double en = Num.f64(rt, e);
-        double st = Num.f64(rt, rt.slot(v, 2));
-        if (st > 0.0) {
-            return s >= en;
-        }
-        if (st < 0.0) {
-            return s <= en;
-        }
-        // A zero step never advances. Empty rather than infinite, which
-        // is what Clojure does and is the answer that terminates.
-        return true;
-    }
-
-    // kin:end kin/seqs.kin
 
     public static long force(Rt rt, long ls) {
         long thunk = rt.slot(ls, LS_THUNK);

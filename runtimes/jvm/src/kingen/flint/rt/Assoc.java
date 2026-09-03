@@ -11,20 +11,11 @@ import static com.flint.rt.Seqs.*;
 import static flint.rt.Champ.*;
 import static flint.rt.Collnode.*;
 import static flint.rt.Copies.*;
-import static flint.rt.Dissoc.*;
-import static flint.rt.Eq.*;
-import static flint.rt.Eqalloc.*;
-import static flint.rt.Find.*;
-import static flint.rt.Hash.*;
-import static flint.rt.Interns.*;
 import static flint.rt.Merge.*;
 import static flint.rt.Nodeclass.*;
-import static flint.rt.Pike.*;
-import static flint.rt.Seqs.*;
-import static flint.rt.Unsigned.*;
 
 public final class Assoc {
-    static long nodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
+    public static long nodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
         int base = rt.mark();
         int ni = rt.push(n);
         int ki = rt.push(key);
@@ -47,7 +38,7 @@ public final class Assoc {
         if ((dm & bit) != 0) {
             int at = indexOf(dm, bit);
             int k0i = rt.push(bnKey(rt, rt.r(ni), at));
-            if (Eq.eq(rt, rt.r(k0i), rt.r(ki))) {
+            if (com.flint.rt.Eq.eq(rt, rt.r(k0i), rt.r(ki))) {
                 // The key was already here, so the map's count does not
                 // move however the value changes.
                 rt.champAdded = false;
@@ -63,7 +54,7 @@ public final class Assoc {
                 // entry at this level.
                 rt.champAdded = true;
                 int v0i = rt.push(bnVal(rt, rt.r(ni), at));
-                int h0 = Eq.hashValue(rt, rt.r(k0i));
+                int h0 = com.flint.rt.Eq.hashValue(rt, rt.r(k0i));
                 long sub = mergeTwo(rt, shift + HASH_BITS, rt.r(k0i), rt.r(v0i), h0, rt.r(ki), rt.r(vi), h, rt.r(ei));
                 int si = rt.push(sub);
                 out = bnInlineToNode(rt, rt.r(ni), bit, rt.r(si), rt.r(ei));
@@ -92,7 +83,7 @@ public final class Assoc {
         rt.popTo(base);
         return out;
     }
-    static long collAssoc(Rt rt, long n, int h, long key, long val, long edit, int shift) {
+    public static long collAssoc(Rt rt, long n, int h, long key, long val, long edit, int shift) {
         int nh = cnHash(rt, n);
         if (nh != h) {
             // A different hash at this depth: the node becomes a child of
@@ -129,7 +120,7 @@ public final class Assoc {
             // The key is rooted across `eq`, which allocates when either
             // side is a row ref.
             int kk = rt.push(cnKey(rt, rt.r(sni), i));
-            boolean same = Eq.eq(rt, rt.r(kk), rt.r(ski));
+            boolean same = com.flint.rt.Eq.eq(rt, rt.r(kk), rt.r(ski));
             rt.popTo(kk);
             if (same) {
                 hit = i;

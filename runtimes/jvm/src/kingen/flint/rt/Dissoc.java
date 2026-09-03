@@ -8,23 +8,13 @@ import static com.flint.rt.Obj.*;
 import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
-import static flint.rt.Assoc.*;
 import static flint.rt.Champ.*;
 import static flint.rt.Collnode.*;
 import static flint.rt.Copies.*;
-import static flint.rt.Eq.*;
-import static flint.rt.Eqalloc.*;
-import static flint.rt.Find.*;
-import static flint.rt.Hash.*;
-import static flint.rt.Interns.*;
-import static flint.rt.Merge.*;
 import static flint.rt.Nodeclass.*;
-import static flint.rt.Pike.*;
-import static flint.rt.Seqs.*;
-import static flint.rt.Unsigned.*;
 
 public final class Dissoc {
-    static long nodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
+    public static long nodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
         int base = rt.mark();
         int ni = rt.push(n);
         int ki = rt.push(key);
@@ -43,7 +33,7 @@ public final class Dissoc {
         if ((dm & bit) != 0) {
             int at = indexOf(dm, bit);
             int k0i = rt.push(bnKey(rt, rt.r(ni), at));
-            boolean same0 = Eq.eq(rt, rt.r(k0i), rt.r(ki));
+            boolean same0 = com.flint.rt.Eq.eq(rt, rt.r(k0i), rt.r(ki));
             rt.popTo(k0i);
             if (!same0) {
                 rt.champAdded = false;
@@ -58,7 +48,7 @@ public final class Dissoc {
                     int other = 1 - at;
                     int oki = rt.push(bnKey(rt, rt.r(ni), other));
                     int ovi = rt.push(bnVal(rt, rt.r(ni), other));
-                    int oh = Eq.hashValue(rt, rt.r(oki));
+                    int oh = com.flint.rt.Eq.hashValue(rt, rt.r(oki));
                     int newdm;
                     if (shift == 0) {
                         newdm = dm ^ bit;
@@ -102,7 +92,7 @@ public final class Dissoc {
         rt.popTo(base);
         return out;
     }
-    static long collDissoc(Rt rt, long n, long key, long edit) {
+    public static long collDissoc(Rt rt, long n, long key, long edit) {
         int scan = rt.mark();
         int sni = rt.push(n);
         int ski = rt.push(key);
@@ -113,7 +103,7 @@ public final class Dissoc {
             // The key is rooted across `eq`, which allocates when either
             // side is a row ref.
             int kk = rt.push(cnKey(rt, rt.r(sni), i));
-            boolean same = Eq.eq(rt, rt.r(kk), rt.r(ski));
+            boolean same = com.flint.rt.Eq.eq(rt, rt.r(kk), rt.r(ski));
             rt.popTo(kk);
             if (same) {
                 found = i;
@@ -137,7 +127,7 @@ public final class Dissoc {
             int other = 1 - found;
             int cki = rt.push(cnKey(rt, rt.r(dni), other));
             int cvi = rt.push(cnVal(rt, rt.r(dni), other));
-            int kh = Eq.hashValue(rt, rt.r(cki));
+            int kh = com.flint.rt.Eq.hashValue(rt, rt.r(cki));
             long made = bnNew(rt, bitpos(kh, 0), 0, rt.r(dei));
             if (!Val.isNil(made)) {
                 bnSetKey(rt, made, 0, rt.r(cki));

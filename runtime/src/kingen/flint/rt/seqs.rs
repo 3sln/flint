@@ -4,17 +4,19 @@
 #![allow(unused_imports)]
 use crate::gc::InternTable;
 use crate::hash;
+use crate::eq::*;
 use crate::map::*;
 use crate::mem::Addr;
 use crate::obj::*;
 use crate::rt::Rt;
+use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kingen::flint::rt::hash::*;
 use crate::kingen::flint::rt::pike::*;
 
 impl Rt {
-    fn vecseq(&mut self, v: Value, i: u32) -> Value {
+    pub(crate) fn vecseq(&mut self, v: Value, i: u32) -> Value {
         let mk: usize = self.mark();
         let vi: usize = self.push(v);
         let a: Addr = self.alloc(TY_VECSEQ, 3);
@@ -29,7 +31,7 @@ impl Rt {
         self.pop_to(mk);
         return Value::heap(a);
     }
-    fn strseq(&mut self, s: Value, i: u32) -> Value {
+    pub(crate) fn strseq(&mut self, s: Value, i: u32) -> Value {
         let mk: usize = self.mark();
         let si: usize = self.push(s);
         let a: Addr = self.alloc(TY_STRSEQ, 3);
@@ -79,7 +81,7 @@ impl Rt {
         self.pop_to(mk);
         return Value::heap(a);
     }
-    fn range_empty(&self, v: Value) -> bool {
+    pub(crate) fn range_empty(&self, v: Value) -> bool {
         let e: Value = self.slot(v, 1);
         // An absent end is an UNBOUNDED range, which is never empty.
         if e.is_nil() {

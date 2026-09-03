@@ -4,17 +4,19 @@
 #![allow(unused_imports)]
 use crate::gc::InternTable;
 use crate::hash;
+use crate::eq::*;
 use crate::map::*;
 use crate::mem::Addr;
 use crate::obj::*;
 use crate::rt::Rt;
+use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kingen::flint::rt::hash::*;
 use crate::kingen::flint::rt::pike::*;
 
 impl Rt {
-    fn merge_two(&mut self, shift: u32, k0: Value, v0: Value, h0: u32, k1: Value, v1: Value, h1: u32, edit: Value) -> Value {
+    pub(crate) fn merge_two(&mut self, shift: u32, k0: Value, v0: Value, h0: u32, k1: Value, v1: Value, h1: u32, edit: Value) -> Value {
         let mk: usize = self.mark();
         let ik0: usize = self.push(k0);
         let iv0: usize = self.push(v0);

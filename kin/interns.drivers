@@ -19,40 +19,53 @@ fn main() {
     println!("{}", o);
 }
 --java-head
-    static final class Interns {
-        int[] hashes = new int[8];
-        long[] values = new long[8];
-        int count = 0;
+    // The table is a plain data holder now: the arithmetic is a STATIC that
+    // takes it, so the class closes here rather than around the generated
+    // block.
+    //
+    // NESTED to reproduce the port's FULLY QUALIFIED `com.flint.rt.Interns`.
+    // The tag names the type in full because `interns.kin` generates a class
+    // called `Interns` into package `flint.rt`, and inside a file of that
+    // package a bare `Interns` is the generated one rather than the table.
+    static final class com { static final class flint { static final class rt {
+        static final class Interns {
+            int[] hashes = new int[8];
+            long[] values = new long[8];
+            int count = 0;
+        }
+    } } }
 --java
-    }
     public static void main(String[] args) {
-        Interns t = new Interns();
+        com.flint.rt.Interns t = new com.flint.rt.Interns();
         StringBuilder o = new StringBuilder();
-        o.append(t.mask()).append(' ');
-        o.append(t.needsGrow() ? "1 " : "0 ");
-        t.insertAt(3, 0xAA, 77L);
-        t.rawInsert(1, 101L); t.rawInsert(9, 109L); t.rawInsert(17, 117L);
+        o.append(mask(t)).append(' ');
+        o.append(needsGrow(t) ? "1 " : "0 ");
+        insertAt(t, 3, 0xAA, 77L);
+        rawInsert(t, 1, 101L); rawInsert(t, 9, 109L); rawInsert(t, 17, 117L);
         for (int i = 0; i < 8; i++) o.append(t.hashes[i]).append(':').append(t.values[i]).append(' ');
         o.append("n=").append(t.count).append(' ');
-        o.append(t.needsGrow() ? "1" : "0");
+        o.append(needsGrow(t) ? "1" : "0");
         System.out.println(o);
     }
 --csharp-head
-    internal sealed class Interns {
-        internal int[] hashes = new int[8];
-        internal long[] values = new long[8];
-        internal int count = 0;
+    // Nested for the same reason as the Java side above.
+    internal static class Flint { internal static class Rt {
+        internal sealed class Interns {
+            internal int[] hashes = new int[8];
+            internal long[] values = new long[8];
+            internal int count = 0;
+        }
+    } }
 --csharp
-    }
     static void Main() {
-        var t = new Interns();
+        var t = new Flint.Rt.Interns();
         var o = new StringBuilder();
-        o.Append(t.Mask()).Append(' ');
-        o.Append(t.NeedsGrow() ? "1 " : "0 ");
-        t.InsertAt(3, 0xAA, 77L);
-        t.RawInsert(1, 101L); t.RawInsert(9, 109L); t.RawInsert(17, 117L);
+        o.Append(Mask(t)).Append(' ');
+        o.Append(NeedsGrow(t) ? "1 " : "0 ");
+        InsertAt(t, 3, 0xAA, 77L);
+        RawInsert(t, 1, 101L); RawInsert(t, 9, 109L); RawInsert(t, 17, 117L);
         for (int i = 0; i < 8; i++) o.Append(t.hashes[i]).Append(':').Append(t.values[i]).Append(' ');
         o.Append("n=").Append(t.count).Append(' ');
-        o.Append(t.NeedsGrow() ? "1" : "0");
+        o.Append(NeedsGrow(t) ? "1" : "0");
         Console.WriteLine(o.ToString());
     }

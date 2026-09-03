@@ -1,6 +1,7 @@
 package com.flint.rt;
 
 import static com.flint.rt.Obj.*;
+import static flint.rt.Eq.*;
 
 /// Structural equality and hashing, ported from `runtime/src/eq.rs`.
 ///
@@ -19,42 +20,7 @@ public final class Eq {
     /// elementwise, which is what makes `(= [1 2] '(1 2))` true.
     public static final int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1, CAT_MAP = 2, CAT_SET = 3;
 
-    // kin:begin kin/eq.kin
-    public static int category(Rt rt, long v) {
-        if (!Val.isHeap(v)) {
-            return CAT_SCALAR;
-        }
-        switch (ty(rt.gc.sp, Val.asHeap(v))) {
-            case TY_CONS: case TY_EMPTY_LIST: case TY_LAZYSEQ: case TY_VECSEQ:
-            case TY_STRSEQ: case TY_RANGE: case TY_VEC: case TY_MAPENTRY:
-                return CAT_SEQUENTIAL;
-            // A ROW REF is in the MAP category: it is `=` to a map with the
-            // same entries, and `category` is what decides that
-            // (`doc/decisions/0026`).
-            case TY_ARRAYMAP: case TY_HASHMAP: case TY_TABLEREF:
-                return CAT_MAP;
-            case TY_SET:
-                return CAT_SET;
-            default:
-                return CAT_SCALAR;
-        }
-    }
 
-    // kin:end kin/eq.kin
-
-    // kin:begin kin/eqalloc.kin
-    /// Can `=` or `hash` on this value allocate?
-    /// 
-    /// Only compound values: comparing or hashing a vector, list, map or set
-    /// walks it through `seq`/`first`/`next`, which allocates, which can run a
-    /// collection in the middle of a map lookup. Scalars -- numbers, strings,
-    /// keywords, symbols -- never do, and the lookup paths take a version with
-    /// no rooting at all when the key is one, because `get` is hot.
-    public static boolean eqMayAlloc(Rt rt, long v) {
-        return Val.isHeap(v) && (category(rt, v) != CAT_SCALAR);
-    }
-
-    // kin:end kin/eqalloc.kin
 
     public static boolean eq(Rt rt, long a, long b) {
         // Doubles FIRST: bit equality would wrongly make NaN equal to itself,
@@ -208,9 +174,9 @@ public final class Eq {
     public static int hashValue(Rt rt, long v) {
         if (Val.isDouble(v)) return Hash.hashDouble(Val.asDouble(v));
         if (Val.isNil(v)) return 0;
-        if (v == Val.TRUE) return Hash.HASH_TRUE;
-        if (v == Val.FALSE) return Hash.HASH_FALSE;
-        if (Val.isFixnum(v)) return Hash.hashLong(Val.asFixnum(v));
+        if (v == Val.TRUE) return flint.rt.Hash.HASH_TRUE;
+        if (v == Val.FALSE) return flint.rt.Hash.HASH_FALSE;
+        if (Val.isFixnum(v)) return flint.rt.Hash.hashLong(Val.asFixnum(v));
         if (Val.isInlineStr(v)) return Hash.hashString(Val.inlineBytes(v));
         if (Val.isInlineKw(v)) return Hash.hashKeyword(null, Val.inlineBytes(v));
         if (!Val.isHeap(v)) return 0;
@@ -225,8 +191,8 @@ public final class Eq {
             case TY_SYM: return Hash.hashSymbol(nsBytes(rt, v), Str.bytes(rt, rt.slot(v, 1)));
             case TY_VEC: {
                 int n = Vec.count(rt, v), acc = 1;
-                for (int i = 0; i < n; i++) acc = Hash.orderedStep(acc, hashValue(rt, Vec.nth(rt, v, i)));
-                return Hash.mixCollHash(acc, n);
+                for (int i = 0; i < n; i++) acc = flint.rt.Hash.orderedStep(acc, hashValue(rt, Vec.nth(rt, v, i)));
+                return flint.rt.Hash.mixCollHash(acc, n);
             }
             case TY_ARRAYMAP:
             case TY_HASHMAP: return Maps.hash(rt, v);
@@ -245,7 +211,7 @@ public final class Eq {
                     rt.popTo(ri);
                 }
                 rt.popTo(base);
-                return Hash.hashInt(acc ^ n);
+                return flint.rt.Hash.hashInt(acc ^ n);
             }
             case Obj.TY_TAGGED:
                 return hashValue(rt, rt.slot(v, 0)) * 31 + hashValue(rt, rt.slot(v, 1));
@@ -263,13 +229,13 @@ public final class Eq {
                         // A TICK: a seq's length is not known until it ends,
                         // and it may not end (`doc/decisions/0009`).
                         if (!rt.chargeTick(n, 1, "hash")) { rt.popTo(base); return 0; }
-                        acc = Hash.orderedStep(acc, hashValue(rt, Seqs.first(rt, rt.r(s))));
+                        acc = flint.rt.Hash.orderedStep(acc, hashValue(rt, Seqs.first(rt, rt.r(s))));
                         n++;
                         long nx = Seqs.next(rt, rt.r(s));
                         rt.setR(s, nx);
                     }
                     rt.popTo(base);
-                    return Hash.mixCollHash(acc, n);
+                    return flint.rt.Hash.mixCollHash(acc, n);
                 }
                 return 0;
             }

@@ -15,31 +15,49 @@
 ;; takes a closure; `grow` allocates two arrays. Those are honest gaps, not
 ;; drift.
 ;;
-;; These are INSTANCE methods on all three, which `^:method` could not say:
-;; it means "Rust `self`, the others a static taking it", true of `Rt`'s
-;; methods and false of a table's own. `^:instance` is the second question.
+;; THESE WERE `^:instance` -- instance methods on all three -- and they are
+;; not any more, because a whole-module emit and a Java instance method
+;; cannot both be had.
+;;
+;; `^:instance` emits `this.values` and `this.count`, which only compiles
+;; INSIDE the class that declares those fields. Rust can put an `impl
+;; InternTable` block in any module of the crate and C# has `partial class`,
+;; so both could still take it; Java has no partial class and no way to add
+;; an instance method to a class from another file. So the moment this
+;; source became `kingen/flint/rt/Interns.java` rather than a region spliced
+;; into `com.flint.rt.Interns`, `^:instance` stopped being expressible.
+;;
+;; `^:method` is what the other thirteen sources already use: Rust `self`,
+;; the others a static taking the receiver. Rust's output does not change at
+;; all. Java and C# gain a `t` parameter and lose a `this.`, and the table's
+;; three fields widen to match, which is the cost of the module boundary
+;; being a package boundary on the JVM.
+;;
+;; `^:instance` stays in kin -- it is the right answer for a vocabulary whose
+;; target can express it, and C# could still have it. flint cannot use it
+;; while it wants one source to serve all three.
 (ns flint.rt.interns
   (:require [flint.impl.rt :refer [defn return while set let doc as-idx
                                    aget aset alen bits of-bits
                                    . + - * >= != bit-and
                                    Interns Idx I32 Bits Value Bool]]))
 
-(defn ^:instance ^Idx mask [^Interns t]
+(defn ^:method ^Idx mask [^Interns t]
   (return (- (alen (. t values)) 1)))
 
-(defn ^:pub ^:instance insert-at [^:mut ^Interns t ^Idx idx ^I32 hash ^Value v]
+(defn ^:pub ^:method insert-at [^:mut ^Interns t ^Idx idx ^I32 hash ^Value v]
   (aset (. t hashes) idx hash)
   (aset (. t values) idx (bits v))
   (set (. t count) (+ (. t count) 1)))
 
-(defn ^:pub ^:instance ^Bool needs-grow [^Interns t]
+(defn ^:pub ^:method ^Bool needs-grow [^Interns t]
   (return (>= (* (. t count) 4) (* (alen (. t values)) 3))))
 
 (doc "Insert with no probe for equality: the caller already knows this hash"
      "and value are not present. Used only by a rebuild, where every entry"
      "came out of a table that had already established that.")
 
-(defn ^:instance raw-insert [^:mut ^Interns t ^I32 h ^Bits v]
+(defn ^:method raw-insert [^:mut ^Interns t ^I32 h ^Bits v]
   (let [^Idx m (mask t)
         ^:mut ^Idx i (bit-and (as-idx h) m)]
     (while (!= (aget (. t values) i) 0)

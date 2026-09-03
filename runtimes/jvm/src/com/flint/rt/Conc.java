@@ -1,6 +1,7 @@
 package com.flint.rt;
 
 import static com.flint.rt.Obj.*;
+import static flint.rt.Interns.*;
 
 /// Green threads, ports, and the scheduler. Ported from `runtime/src/conc.rs`
 /// (`doc/decisions/0005`).
@@ -659,8 +660,8 @@ public final class Conc {
         rt.roots.shared.par.lockIntern(Interns.PORT);
         try {
             t.lookup(id, v -> false);
-            if (t.needsGrow()) { t.grow(); t.lookup(id, v -> false); }
-            t.insertAt(t.slot, id, rt.r(pi));
+            if (needsGrow(t)) { t.grow(); t.lookup(id, v -> false); }
+            insertAt(t, t.slot, id, rt.r(pi));
         } finally {
             rt.roots.shared.par.unlockIntern(Interns.PORT);
         }

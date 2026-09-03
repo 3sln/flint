@@ -9,23 +9,9 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
-using static flint.rt.Assoc;
-using static flint.rt.Champ;
-using static flint.rt.Collnode;
-using static flint.rt.Copies;
-using static flint.rt.Dissoc;
-using static flint.rt.Eq;
-using static flint.rt.Eqalloc;
-using static flint.rt.Find;
-using static flint.rt.Hash;
-using static flint.rt.Interns;
-using static flint.rt.Merge;
-using static flint.rt.Nodeclass;
-using static flint.rt.Pike;
-using static flint.rt.Unsigned;
 
 public static class Seqs {
-    static long Vecseq(Rt rt, long v, int i) {
+    internal static long Vecseq(Rt rt, long v, int i) {
         int mk = rt.Mark();
         int vi = rt.Push(v);
         long a = rt.Alloc(Obj.TyVecseq, 3);
@@ -40,7 +26,7 @@ public static class Seqs {
         rt.PopTo(mk);
         return Val.Heap(a);
     }
-    static long Strseq(Rt rt, long s, int i) {
+    internal static long Strseq(Rt rt, long s, int i) {
         int mk = rt.Mark();
         int si = rt.Push(s);
         long a = rt.Alloc(Obj.TyStrseq, 3);
@@ -90,7 +76,7 @@ public static class Seqs {
         rt.PopTo(mk);
         return Val.Heap(a);
     }
-    static bool RangeEmpty(Rt rt, long v) {
+    internal static bool RangeEmpty(Rt rt, long v) {
         long e = rt.Slot(v, 1);
         // An absent end is an UNBOUNDED range, which is never empty.
         if (Val.IsNil(e)) {

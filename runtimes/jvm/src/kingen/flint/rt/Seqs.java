@@ -8,23 +8,9 @@ import static com.flint.rt.Obj.*;
 import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
-import static flint.rt.Assoc.*;
-import static flint.rt.Champ.*;
-import static flint.rt.Collnode.*;
-import static flint.rt.Copies.*;
-import static flint.rt.Dissoc.*;
-import static flint.rt.Eq.*;
-import static flint.rt.Eqalloc.*;
-import static flint.rt.Find.*;
-import static flint.rt.Hash.*;
-import static flint.rt.Interns.*;
-import static flint.rt.Merge.*;
-import static flint.rt.Nodeclass.*;
-import static flint.rt.Pike.*;
-import static flint.rt.Unsigned.*;
 
 public final class Seqs {
-    static long vecseq(Rt rt, long v, int i) {
+    public static long vecseq(Rt rt, long v, int i) {
         int mk = rt.mark();
         int vi = rt.push(v);
         long a = rt.alloc(TY_VECSEQ, 3);
@@ -39,7 +25,7 @@ public final class Seqs {
         rt.popTo(mk);
         return Val.heap(a);
     }
-    static long strseq(Rt rt, long s, int i) {
+    public static long strseq(Rt rt, long s, int i) {
         int mk = rt.mark();
         int si = rt.push(s);
         long a = rt.alloc(TY_STRSEQ, 3);
@@ -89,7 +75,7 @@ public final class Seqs {
         rt.popTo(mk);
         return Val.heap(a);
     }
-    static boolean rangeEmpty(Rt rt, long v) {
+    public static boolean rangeEmpty(Rt rt, long v) {
         long e = rt.slot(v, 1);
         // An absent end is an UNBOUNDED range, which is never empty.
         if (Val.isNil(e)) {

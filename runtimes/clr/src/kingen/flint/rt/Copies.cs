@@ -9,23 +9,11 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
-using static flint.rt.Assoc;
 using static flint.rt.Champ;
 using static flint.rt.Collnode;
-using static flint.rt.Dissoc;
-using static flint.rt.Eq;
-using static flint.rt.Eqalloc;
-using static flint.rt.Find;
-using static flint.rt.Hash;
-using static flint.rt.Interns;
-using static flint.rt.Merge;
-using static flint.rt.Nodeclass;
-using static flint.rt.Pike;
-using static flint.rt.Seqs;
-using static flint.rt.Unsigned;
 
 public static class Copies {
-    static long BnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {
+    internal static long BnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {
         int mk = rt.Mark();
         int ni = rt.Push(n);
         int ki = rt.Push(key);
@@ -69,7 +57,7 @@ public static class Copies {
         rt.PopTo(mk);
         return built;
     }
-    static long BnCopyRemoveEntry(Rt rt, long n, int bit, long edit) {
+    internal static long BnCopyRemoveEntry(Rt rt, long n, int bit, long edit) {
         int mk = rt.Mark();
         int ni = rt.Push(n);
         int ei = rt.Push(edit);
@@ -109,7 +97,7 @@ public static class Copies {
         rt.PopTo(mk);
         return built;
     }
-    static long BnCopySetValue(Rt rt, long n, int at, long val, long edit) {
+    internal static long BnCopySetValue(Rt rt, long n, int at, long val, long edit) {
         int mk = rt.Mark();
         int ni = rt.Push(n);
         int vi = rt.Push(val);
@@ -148,7 +136,7 @@ public static class Copies {
         rt.PopTo(mk);
         return built;
     }
-    static long BnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
+    internal static long BnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
         int mk = rt.Mark();
         int ni = rt.Push(n);
         int si = rt.Push(sub);
@@ -191,7 +179,7 @@ public static class Copies {
     /// positions are computed from the OLD bitmaps -- `at-node` is the index in
     /// the new nodemap as well, because the bit being added is the one being
     /// counted up to.
-    static long BnInlineToNode(Rt rt, long n, int bit, long sub, long edit) {
+    internal static long BnInlineToNode(Rt rt, long n, int bit, long sub, long edit) {
         int mk = rt.Mark();
         int ni = rt.Push(n);
         int si = rt.Push(sub);
@@ -240,7 +228,7 @@ public static class Copies {
         return built;
     }
     /// And the reverse: a sub-node collapses back to an inline pair.
-    static long BnNodeToInline(Rt rt, long n, int bit, long key, long val, long edit) {
+    internal static long BnNodeToInline(Rt rt, long n, int bit, long key, long val, long edit) {
         int mk = rt.Mark();
         int ni = rt.Push(n);
         int ki = rt.Push(key);

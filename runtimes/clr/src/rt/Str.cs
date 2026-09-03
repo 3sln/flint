@@ -2,6 +2,8 @@ using System.Text;
 
 namespace Flint.Rt;
 
+using static flint.rt.Interns;
+
 /// Strings, ported from `runtime/src/strs.rs`.
 ///
 /// Three tiers, and the first two are here (`doc/decisions/0011`'s ropes are
@@ -168,12 +170,12 @@ public static class Str {
             long again = t.Lookup(h, matches);
             if (again != Val.NotFound) return again;   // somebody got there first
             int idx = t.slot;
-            if (t.NeedsGrow()) {
+            if (NeedsGrow(t)) {
                 t.Grow();
                 t.Lookup(h, x => false);   // `Grow` invalidates the index
                 idx = t.slot;
             }
-            t.InsertAt(idx, h, rt.R(vi));
+            InsertAt(t, idx, h, rt.R(vi));
             return rt.R(vi);
         } finally {
             rt.roots.shared.par.UnlockIntern(table);

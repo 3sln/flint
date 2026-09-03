@@ -126,33 +126,6 @@ impl InternTable {
         self.values.len()
     }
     #[inline]
-    // kin:begin kin/interns.kin
-    fn mask(&self) -> usize {
-        return self.values.len() - 1;
-    }
-    pub fn insert_at(&mut self, idx: usize, hash: u32, v: Value) {
-        self.hashes[idx] = hash;
-        self.values[idx] = v.0;
-        self.count += 1;
-    }
-    pub fn needs_grow(&self) -> bool {
-        return (self.count * 4) >= (self.values.len() * 3);
-    }
-    /// Insert with no probe for equality: the caller already knows this hash
-    /// and value are not present. Used only by a rebuild, where every entry
-    /// came out of a table that had already established that.
-    fn raw_insert(&mut self, h: u32, v: u64) {
-        let m: usize = self.mask();
-        let mut i: usize = h as usize & m;
-        while self.values[i] != 0 {
-            i = (i + 1) & m;
-        }
-        self.hashes[i] = h;
-        self.values[i] = v;
-        self.count += 1;
-    }
-
-    // kin:end kin/interns.kin
 
     pub fn lookup<F: FnMut(Value) -> bool>(&self, hash: u32, mut eq: F) -> Result<Value, usize> {
         let mask = self.mask();

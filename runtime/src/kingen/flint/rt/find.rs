@@ -4,17 +4,19 @@
 #![allow(unused_imports)]
 use crate::gc::InternTable;
 use crate::hash;
+use crate::eq::*;
 use crate::map::*;
 use crate::mem::Addr;
 use crate::obj::*;
 use crate::rt::Rt;
+use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kingen::flint::rt::hash::*;
 use crate::kingen::flint::rt::pike::*;
 
 impl Rt {
-    fn node_find_scalar(&mut self, n: Value, mut shift: u32, h: u32, key: Value) -> Value {
+    pub(crate) fn node_find_scalar(&mut self, n: Value, mut shift: u32, h: u32, key: Value) -> Value {
         // No rooting anywhere in here: the key is a scalar, so `eq` cannot
         // allocate, so nothing can move while this walks.
         let mut node: Value;
@@ -53,7 +55,7 @@ impl Rt {
         }
         return out;
     }
-    fn node_find(&mut self, n: Value, mut shift: u32, h: u32, key: Value) -> Value {
+    pub(crate) fn node_find(&mut self, n: Value, mut shift: u32, h: u32, key: Value) -> Value {
         if !self.eq_may_alloc(key) {
             return self.node_find_scalar(n, shift, h, key);
         }

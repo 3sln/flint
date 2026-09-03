@@ -1,5 +1,7 @@
 namespace Flint.Rt;
 
+using static flint.rt.Eq;
+
 
 /// Structural equality and hashing, ported from `runtime/src/eq.rs`.
 ///
@@ -22,42 +24,7 @@ public static class Eq {
     /// elementwise, which is what makes `(= [1 2] '(1 2))` true.
     public const int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1, CAT_MAP = 2, CAT_SET = 3;
 
-    // kin:begin kin/eq.kin
-    public static int Category(Rt rt, long v) {
-        if (!Val.IsHeap(v)) {
-            return CAT_SCALAR;
-        }
-        switch (Obj.Ty(rt.gc.sp, Val.AsHeap(v))) {
-            case Obj.TyCons: case Obj.TyEmptyList: case Obj.TyLazyseq: case Obj.TyVecseq:
-            case Obj.TyStrseq: case Obj.TyRange: case Obj.TyVec: case Obj.TyMapentry:
-                return CAT_SEQUENTIAL;
-            // A ROW REF is in the MAP category: it is `=` to a map with the
-            // same entries, and `category` is what decides that
-            // (`doc/decisions/0026`).
-            case Obj.TyArraymap: case Obj.TyHashmap: case Obj.TyTableref:
-                return CAT_MAP;
-            case Obj.TySet:
-                return CAT_SET;
-            default:
-                return CAT_SCALAR;
-        }
-    }
 
-    // kin:end kin/eq.kin
-
-    // kin:begin kin/eqalloc.kin
-    /// Can `=` or `hash` on this value allocate?
-    /// 
-    /// Only compound values: comparing or hashing a vector, list, map or set
-    /// walks it through `seq`/`first`/`next`, which allocates, which can run a
-    /// collection in the middle of a map lookup. Scalars -- numbers, strings,
-    /// keywords, symbols -- never do, and the lookup paths take a version with
-    /// no rooting at all when the key is one, because `get` is hot.
-    public static bool EqMayAlloc(Rt rt, long v) {
-        return Val.IsHeap(v) && (Category(rt, v) != CAT_SCALAR);
-    }
-
-    // kin:end kin/eqalloc.kin
 
     public static bool Equal(Rt rt, long a, long b) {
         // Doubles FIRST: bit equality would wrongly make NaN equal to itself,
@@ -201,9 +168,9 @@ public static class Eq {
     public static int HashValue(Rt rt, long v) {
         if (Val.IsDouble(v)) return Hash.HashDouble(Val.AsDouble(v));
         if (Val.IsNil(v)) return 0;
-        if (v == Val.True) return Hash.HashTrue;
-        if (v == Val.False) return Hash.HashFalse;
-        if (Val.IsFixnum(v)) return Hash.HashLong(Val.AsFixnum(v));
+        if (v == Val.True) return flint.rt.Hash.HashTrue;
+        if (v == Val.False) return flint.rt.Hash.HashFalse;
+        if (Val.IsFixnum(v)) return flint.rt.Hash.HashLong(Val.AsFixnum(v));
         if (Val.IsInlineStr(v)) return Hash.HashString(Val.InlineBytes(v));
         if (Val.IsInlineKw(v)) return Hash.HashKeyword(null, Val.InlineBytes(v));
         if (!Val.IsHeap(v)) return 0;
@@ -221,8 +188,8 @@ public static class Eq {
             case Obj.TySym: return Hash.HashSymbol(NsBytes(rt, v), Str.Bytes(rt, rt.Slot(v, 1)));
             case Obj.TyVec: {
                 int n = Vec.Count(rt, v), acc = 1;
-                for (int i = 0; i < n; i++) acc = Hash.OrderedStep(acc, HashValue(rt, Vec.Nth(rt, v, i)));
-                return Hash.MixCollHash(acc, n);
+                for (int i = 0; i < n; i++) acc = flint.rt.Hash.OrderedStep(acc, HashValue(rt, Vec.Nth(rt, v, i)));
+                return flint.rt.Hash.MixCollHash(acc, n);
             }
             case Obj.TyArraymap:
             case Obj.TyHashmap: return Maps.Hash(rt, v);
@@ -240,7 +207,7 @@ public static class Eq {
                     rt.PopTo(ri);
                 }
                 rt.PopTo(bas);
-                return Hash.HashInt(acc ^ n);
+                return flint.rt.Hash.HashInt(acc ^ n);
             }
             case Obj.TyTagged:
                 return HashValue(rt, rt.Slot(v, 0)) * 31 + HashValue(rt, rt.Slot(v, 1));
@@ -253,13 +220,13 @@ public static class Eq {
                     while (!Val.IsNil(rt.R(s))) {
                         // A TICK: a seq's length is not known until it ends.
                         if (!rt.ChargeTick(n, 1, "hash")) { rt.PopTo(bas); return 0; }
-                        acc = Hash.OrderedStep(acc, HashValue(rt, Seqs.First(rt, rt.R(s))));
+                        acc = flint.rt.Hash.OrderedStep(acc, HashValue(rt, Seqs.First(rt, rt.R(s))));
                         n++;
                         long nx = Seqs.Next(rt, rt.R(s));
                         rt.SetR(s, nx);
                     }
                     rt.PopTo(bas);
-                    return Hash.MixCollHash(acc, n);
+                    return flint.rt.Hash.MixCollHash(acc, n);
                 }
                 return 0;
             }

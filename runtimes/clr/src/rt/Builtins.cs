@@ -1310,9 +1310,9 @@ public static class Builtins {
         });
 
         // Lazy sequences and ranges.
-        Def("flint/lazy-seq", (rt, at, n) => Seqs.LazySeq(rt, rt.VAt(at)));
+        Def("flint/lazy-seq", (rt, at, n) => flint.rt.Seqs.LazySeq(rt, rt.VAt(at)));
         Def("flint/range3", (rt, at, n) =>
-            Seqs.Range(rt, rt.VAt(at), rt.VAt(at + 1), rt.VAt(at + 2)));
+            flint.rt.Seqs.Range(rt, rt.VAt(at), rt.VAt(at + 1), rt.VAt(at + 2)));
 
         // Sets.
         Def("disj", (rt, at, n) => {

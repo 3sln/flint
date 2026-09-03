@@ -160,8 +160,8 @@ public static class Sets {
         int at = rt.Mark();
         int n = Maps.Entries(rt, rt.Slot(rt.R(si), S_MAP), at);
         int acc = 0;
-        for (int i = 0; i < n; i++) acc = Flint.Rt.Hash.UnorderedStep(acc, Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i)));
+        for (int i = 0; i < n; i++) acc = flint.rt.Hash.UnorderedStep(acc, Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i)));
         rt.PopTo(bas);
-        return Flint.Rt.Hash.MixCollHash(acc, n);
+        return flint.rt.Hash.MixCollHash(acc, n);
     }
 }

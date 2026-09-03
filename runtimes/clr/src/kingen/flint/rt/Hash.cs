@@ -9,36 +9,22 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
-using static flint.rt.Assoc;
-using static flint.rt.Champ;
-using static flint.rt.Collnode;
-using static flint.rt.Copies;
-using static flint.rt.Dissoc;
-using static flint.rt.Eq;
-using static flint.rt.Eqalloc;
-using static flint.rt.Find;
-using static flint.rt.Interns;
-using static flint.rt.Merge;
-using static flint.rt.Nodeclass;
-using static flint.rt.Pike;
-using static flint.rt.Seqs;
-using static flint.rt.Unsigned;
 
 public static class Hash {
-    const int C1 = unchecked((int) 0xcc9e2d51);
-    const int C2 = 0x1b873593;
+    internal const int C1 = unchecked((int) 0xcc9e2d51);
+    internal const int C2 = 0x1b873593;
     public const int Seed = 0;
-    static int MixK1(int k1) {
+    internal static int MixK1(int k1) {
         unchecked {
             return ((int) BitOperations.RotateLeft((uint) (k1 * C1), 15)) * C2;
         }
     }
-    static int MixH1(int h1, int k1) {
+    internal static int MixH1(int h1, int k1) {
         unchecked {
             return (((int) BitOperations.RotateLeft((uint) (h1 ^ k1), 13)) * 5) + unchecked((int) 0xe6546b64);
         }
     }
-    static int Fmix(int h1, int len) {
+    internal static int Fmix(int h1, int len) {
         unchecked {
             h1 ^= len;
             h1 ^= (int)((uint) h1 >> 16);

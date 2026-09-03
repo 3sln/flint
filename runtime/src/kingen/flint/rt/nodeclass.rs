@@ -4,10 +4,12 @@
 #![allow(unused_imports)]
 use crate::gc::InternTable;
 use crate::hash;
+use crate::eq::*;
 use crate::map::*;
 use crate::mem::Addr;
 use crate::obj::*;
 use crate::rt::Rt;
+use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kingen::flint::rt::hash::*;
@@ -15,11 +17,11 @@ use crate::kingen::flint::rt::pike::*;
 
 impl Rt {
     #[inline]
-    fn is_bmnode(&self, n: Value) -> bool {
+    pub(crate) fn is_bmnode(&self, n: Value) -> bool {
         return ty(&self.gc.sp, n.as_heap()) == TY_BMNODE;
     }
     /// EMPTY / ONE / MORE, the CHAMP size predicate that drives collapsing.
-    fn node_size_class(&self, n: Value) -> u32 {
+    pub(crate) fn node_size_class(&self, n: Value) -> u32 {
         // A collision node always holds at least two pairs.
         if !self.is_bmnode(n) {
             return 2;

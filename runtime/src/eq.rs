@@ -18,41 +18,11 @@ pub const CAT_MAP: u8 = 2;
 pub const CAT_SET: u8 = 3;
 
 impl Rt {
-    // kin:begin kin/eq.kin
-    pub fn category(&self, v: Value) -> u8 {
-        if !v.is_heap() {
-            return CAT_SCALAR;
-        }
-        return match ty(&self.gc.sp, v.as_heap()) {
-            TY_CONS | TY_EMPTY_LIST | TY_LAZYSEQ | TY_VECSEQ | TY_STRSEQ | TY_RANGE | TY_VEC | TY_MAPENTRY => CAT_SEQUENTIAL,
-            // A ROW REF is in the MAP category: it is `=` to a map with the
-            // same entries, and `category` is what decides that
-            // (`doc/decisions/0026`).
-            TY_ARRAYMAP | TY_HASHMAP | TY_TABLEREF => CAT_MAP,
-            TY_SET => CAT_SET,
-            _ => CAT_SCALAR,
-        };
-    }
-
-    // kin:end kin/eq.kin
 
     pub fn is_sequential(&self, v: Value) -> bool {
         self.category(v) == CAT_SEQUENTIAL
     }
 
-    // kin:begin kin/eqalloc.kin
-    /// Can `=` or `hash` on this value allocate?
-    /// 
-    /// Only compound values: comparing or hashing a vector, list, map or set
-    /// walks it through `seq`/`first`/`next`, which allocates, which can run a
-    /// collection in the middle of a map lookup. Scalars -- numbers, strings,
-    /// keywords, symbols -- never do, and the lookup paths take a version with
-    /// no rooting at all when the key is one, because `get` is hot.
-    pub fn eq_may_alloc(&self, v: Value) -> bool {
-        return v.is_heap() && (self.category(v) != CAT_SCALAR);
-    }
-
-    // kin:end kin/eqalloc.kin
 
     /// Byte-for-byte equality across tiers, without materialising either side
     /// into the flint heap. Lengths are O(1) on all three, and unequal lengths

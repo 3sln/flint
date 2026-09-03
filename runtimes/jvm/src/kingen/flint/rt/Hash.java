@@ -8,32 +8,18 @@ import static com.flint.rt.Obj.*;
 import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
-import static flint.rt.Assoc.*;
-import static flint.rt.Champ.*;
-import static flint.rt.Collnode.*;
-import static flint.rt.Copies.*;
-import static flint.rt.Dissoc.*;
-import static flint.rt.Eq.*;
-import static flint.rt.Eqalloc.*;
-import static flint.rt.Find.*;
-import static flint.rt.Interns.*;
-import static flint.rt.Merge.*;
-import static flint.rt.Nodeclass.*;
-import static flint.rt.Pike.*;
-import static flint.rt.Seqs.*;
-import static flint.rt.Unsigned.*;
 
 public final class Hash {
-    static final int C1 = 0xcc9e2d51;
-    static final int C2 = 0x1b873593;
+    public static final int C1 = 0xcc9e2d51;
+    public static final int C2 = 0x1b873593;
     public static final int SEED = 0;
-    static int mixK1(int k1) {
+    public static int mixK1(int k1) {
         return Integer.rotateLeft(k1 * C1, 15) * C2;
     }
-    static int mixH1(int h1, int k1) {
+    public static int mixH1(int h1, int k1) {
         return (Integer.rotateLeft(h1 ^ k1, 13) * 5) + 0xe6546b64;
     }
-    static int fmix(int h1, int len) {
+    public static int fmix(int h1, int len) {
         h1 ^= len;
         h1 ^= h1 >>> 16;
         h1 *= 0x85ebca6b;

@@ -2,6 +2,7 @@ package com.flint.rt;
 
 import static com.flint.rt.Obj.*;
 import java.util.ArrayList;
+import static flint.rt.Pike.*;
 
 /// The Pike VM, ported from `runtime/src/pike.rs` (`doc/decisions/0012`).
 ///
@@ -39,31 +40,6 @@ public final class Pike {
     /// `TY_REGEX` slots.
     public static final int RX_SOURCE = 0, RX_PROG = 1, RX_NGROUPS = 2;
 
-    // kin:begin kin/pike.kin
-    static boolean wordCp(int v) {
-        return ((v >= 48) && (v <= 57)) || ((v >= 65) && (v <= 90)) || ((v >= 97) && (v <= 122)) || (v == 95);
-    }
-    static boolean spaceCp(int v) {
-        return (v == 32) || (v == 9) || (v == 10) || (v == 13) || (v == 12) || (v == 11);
-    }
-    static boolean predHit(int code, int v) {
-        switch (code) {
-            case 0:
-                return (v >= 48) && (v <= 57);
-            case 1:
-                return !((v >= 48) && (v <= 57));
-            case 2:
-                return wordCp(v);
-            case 3:
-                return !wordCp(v);
-            case 4:
-                return spaceCp(v);
-            default:
-                return !spaceCp(v);
-        }
-    }
-
-    // kin:end kin/pike.kin
 
     static boolean classHit(int[] prog, int classBase, int off, int v) {
         int n = prog[classBase + off];

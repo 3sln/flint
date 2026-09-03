@@ -8,23 +8,11 @@ import static com.flint.rt.Obj.*;
 import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
-import static flint.rt.Assoc.*;
 import static flint.rt.Champ.*;
 import static flint.rt.Collnode.*;
-import static flint.rt.Copies.*;
-import static flint.rt.Dissoc.*;
-import static flint.rt.Eq.*;
-import static flint.rt.Eqalloc.*;
-import static flint.rt.Find.*;
-import static flint.rt.Hash.*;
-import static flint.rt.Interns.*;
-import static flint.rt.Nodeclass.*;
-import static flint.rt.Pike.*;
-import static flint.rt.Seqs.*;
-import static flint.rt.Unsigned.*;
 
 public final class Merge {
-    static long mergeTwo(Rt rt, int shift, long k0, long v0, int h0, long k1, long v1, int h1, long edit) {
+    public static long mergeTwo(Rt rt, int shift, long k0, long v0, int h0, long k1, long v1, int h1, long edit) {
         int mk = rt.mark();
         int ik0 = rt.push(k0);
         int iv0 = rt.push(v0);

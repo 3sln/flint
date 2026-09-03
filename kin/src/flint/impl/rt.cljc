@@ -83,7 +83,15 @@
   "An intern table: open-addressed, linear-probed, weak. Parallel `hashes`
   and `values` arrays plus a `count` -- one layout, on all three, since the
   measurement that closed that divergence."
-  {:name 'Interns :types {:rust "InternTable" :java "Interns" :csharp "Interns"}
+  ;; FULLY QUALIFIED on the two ports, and it has to be. The generated
+  ;; module for `interns.kin` is itself called `Interns` -- `flint.rt.Interns`
+  ;; on the JVM, `flint.rt.Interns` on the CLR -- and inside that file a bare
+  ;; `Interns` is the generated class, not the runtime's table. Naming the
+  ;; type in full is how a tag says which one it means, and it costs nothing
+  ;; anywhere else.
+  {:name 'Interns :types {:rust "InternTable"
+                          :java "com.flint.rt.Interns"
+                          :csharp "Flint.Rt.Interns"}
    :methods {}})
 
 (def Addr
@@ -448,11 +456,13 @@
     ;; `category` is itself generated, by `kin/eq.kin`, and is reached from
     ;; inside its own class on the ports -- so it is `own`, not `sibling`.
     'category (own "category" "category" 1)
-    ;; Fully qualified in C# for the same reason `val-eq` is: `Maps` has its
-    ;; own `Eq` member, which shadows the class inside it.
-    'eq-may-alloc (core/call {:rust "{0}.eq_may_alloc({1})"
-                              :java "Eq.eqMayAlloc({0}, {1})"
-                              :csharp "Flint.Rt.Eq.EqMayAlloc({0}, {1})"})
+    ;; `eq_may_alloc` is GENERATED, by `eqalloc.kin`, so it is `own` rather
+    ;; than a hand-written sibling -- and `own` is now exactly right for one:
+    ;; a bare call, with the static import derived from the fact that this
+    ;; source mentions the name. It used to be spelled `Eq.eqMayAlloc`,
+    ;; because the region was spliced into `Eq.java`; it lives in
+    ;; `flint.rt.Eqalloc` now and nothing needs to say so.
+    'eq-may-alloc (own "eq_may_alloc" "eqMayAlloc" 1)
     'node-find-scalar (own "node_find_scalar" "nodeFindScalar" 4)
     'node-size-class (own "node_size_class" "nodeSizeClass" 1)
     'bn-copy-remove-entry (own "bn_copy_remove_entry" "bnCopyRemoveEntry" 3)
@@ -468,16 +478,15 @@
     ;; SIBLING rather than one of our own, and the distinction is exactly what
     ;; the two helpers exist to keep straight.
     ;;
-    ;; Written out rather than through `sibling` because C# needs the class
-    ;; FULLY QUALIFIED here: `Maps` has its own `Eq` method, and inside the
-    ;; class that member name shadows the `Eq` class, so a bare `Eq.Equal`
-    ;; resolves to the wrong thing. `sibling` takes one class name for both
-    ;; ports and cannot say that.
+    ;; Written out rather than through `sibling` because both ports need the
+    ;; class FULLY QUALIFIED here, for different reasons -- see the note on
+    ;; `eq-may-alloc` above. `sibling` takes one class name for both ports
+    ;; and cannot say either of them.
     'val-eq (core/call {:rust "{0}.eq({1}, {2})"
-                        :java "Eq.eq({0}, {1}, {2})"
+                        :java "com.flint.rt.Eq.eq({0}, {1}, {2})"
                         :csharp "Flint.Rt.Eq.Equal({0}, {1}, {2})"})
     'hash-value (core/call {:rust "{0}.hash_value({1})"
-                            :java "Eq.hashValue({0}, {1})"
+                            :java "com.flint.rt.Eq.hashValue({0}, {1})"
                             :csharp "Flint.Rt.Eq.HashValue({0}, {1})"})
     'bn-datamap (own "bn_datamap" "bnDatamap" 1)
     'bn-nodemap (own "bn_nodemap" "bnNodemap" 1)

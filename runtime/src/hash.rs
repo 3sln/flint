@@ -23,62 +23,13 @@
 //! iterators below re-derive the UTF-16 view on the fly. Getting this wrong is
 //! invisible until the first astral-plane character.
 
-// kin:begin kin/hash.kin
-const C1: u32 = 0xcc9e2d51;
-const C2: u32 = 0x1b873593;
-pub const SEED: u32 = 0;
-#[inline]
-fn mix_k1(k1: u32) -> u32 {
-    return k1.wrapping_mul(C1).rotate_left(15).wrapping_mul(C2);
-}
-#[inline]
-fn mix_h1(h1: u32, k1: u32) -> u32 {
-    return (h1 ^ k1).rotate_left(13).wrapping_mul(5).wrapping_add(0xe6546b64);
-}
-#[inline]
-fn fmix(mut h1: u32, len: u32) -> u32 {
-    h1 ^= len;
-    h1 ^= h1 >> 16;
-    h1 = h1.wrapping_mul(0x85ebca6b);
-    h1 ^= h1 >> 13;
-    h1 = h1.wrapping_mul(0xc2b2ae35);
-    return h1 ^ (h1 >> 16);
-}
-pub fn hash_int(input: u32) -> u32 {
-    if input == 0 {
-        return 0;
-    }
-    return fmix(mix_h1(SEED, mix_k1(input)), 4);
-}
-pub fn hash_long(input: i64) -> u32 {
-    if input == 0 {
-        return 0;
-    }
-    let low: u32 = input as u32;
-    let high: u32 = ((input as u64) >> 32) as u32;
-    let h1: u32 = mix_h1(SEED, mix_k1(low));
-    let h2: u32 = mix_h1(h1, mix_k1(high));
-    return fmix(h2, 8);
-}
-#[inline]
-pub fn hash_combine(seed: u32, h: u32) -> u32 {
-    return seed ^ h.wrapping_add(0x9e3779b9).wrapping_add(seed << 6).wrapping_add(((seed as i32) >> 2) as u32);
-}
-pub fn mix_coll_hash(hash: u32, count: u32) -> u32 {
-    return fmix(mix_h1(SEED, mix_k1(hash)), count);
-}
-#[inline]
-pub fn ordered_step(acc: u32, item_hash: u32) -> u32 {
-    return acc.wrapping_mul(31).wrapping_add(item_hash);
-}
-#[inline]
-pub fn unordered_step(acc: u32, item_hash: u32) -> u32 {
-    return acc.wrapping_add(item_hash);
-}
-pub const HASH_TRUE: u32 = 1231;
-pub const HASH_FALSE: u32 = 1237;
 
-// kin:end kin/hash.kin
+// THE CONSUMING LINE. The Murmur3 primitives are generated now, into
+// `kingen/flint/rt/hash.rs`, and they are FREE FUNCTIONS rather than methods
+// -- so unlike an `impl Rt` block they have to be brought into scope. This
+// re-export puts them back under `crate::hash`, which is where every call
+// site in the runtime already looks for them.
+pub(crate) use crate::kingen::flint::rt::hash::*;
 
 pub fn hash_double(d: f64) -> u32 {
     if d == 0.0 {

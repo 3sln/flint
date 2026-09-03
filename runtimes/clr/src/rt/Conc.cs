@@ -1,5 +1,7 @@
 namespace Flint.Rt;
 
+using static flint.rt.Interns;
+
 
 /// Green threads, ports, and the scheduler. Ported from `runtime/src/conc.rs`
 /// (`doc/decisions/0005`).
@@ -651,8 +653,8 @@ public static class Conc {
         rt.roots.shared.par.LockIntern(Interns.PORT);
         try {
             t.Lookup(id, v => false);
-            if (t.NeedsGrow()) { t.Grow(); t.Lookup(id, v => false); }
-            t.InsertAt(t.slot, id, rt.R(pi));
+            if (NeedsGrow(t)) { t.Grow(); t.Lookup(id, v => false); }
+            InsertAt(t, t.slot, id, rt.R(pi));
         } finally {
             rt.roots.shared.par.UnlockIntern(Interns.PORT);
         }

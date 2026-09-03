@@ -17,7 +17,6 @@
 //! directly and never build the vector, so the materialising path is only hit by
 //! code that genuinely asks for a sequence view.
 
-use crate::mem::Addr;
 use crate::obj::*;
 use crate::rt::Rt;
 use crate::value::{Value, NIL};
@@ -105,93 +104,6 @@ impl Rt {
                 ))
     }
 
-    // kin:begin kin/seqs.kin
-    fn vecseq(&mut self, v: Value, i: u32) -> Value {
-        let mk: usize = self.mark();
-        let vi: usize = self.push(v);
-        let a: Addr = self.alloc(TY_VECSEQ, 3);
-        if a == 0 {
-            self.pop_to(mk);
-            return NIL;
-        }
-        let vv: Value = self.r(vi);
-        self.set_slot(a, 0, vv);
-        self.set_slot(a, 1, Value::fixnum(i as i64));
-        self.set_slot(a, 2, NIL);
-        self.pop_to(mk);
-        return Value::heap(a);
-    }
-    fn strseq(&mut self, s: Value, i: u32) -> Value {
-        let mk: usize = self.mark();
-        let si: usize = self.push(s);
-        let a: Addr = self.alloc(TY_STRSEQ, 3);
-        if a == 0 {
-            self.pop_to(mk);
-            return NIL;
-        }
-        let sv: Value = self.r(si);
-        self.set_slot(a, 0, sv);
-        self.set_slot(a, 1, Value::fixnum(i as i64));
-        self.set_slot(a, 2, NIL);
-        self.pop_to(mk);
-        return Value::heap(a);
-    }
-    pub fn lazy_seq(&mut self, thunk: Value) -> Value {
-        let mk: usize = self.mark();
-        let t: usize = self.push(thunk);
-        let a: Addr = self.alloc(TY_LAZYSEQ, 3);
-        if a == 0 {
-            self.pop_to(mk);
-            return NIL;
-        }
-        let tv: Value = self.r(t);
-        self.set_slot(a, LS_THUNK, tv);
-        self.set_slot(a, LS_SEQ, NIL);
-        self.set_slot(a, 2, NIL);
-        self.pop_to(mk);
-        return Value::heap(a);
-    }
-    pub fn range(&mut self, start: Value, end: Value, step: Value) -> Value {
-        let mk: usize = self.mark();
-        let s: usize = self.push(start);
-        let e: usize = self.push(end);
-        let st: usize = self.push(step);
-        let a: Addr = self.alloc(TY_RANGE, 4);
-        if a == 0 {
-            self.pop_to(mk);
-            return NIL;
-        }
-        let sv: Value = self.r(s);
-        self.set_slot(a, 0, sv);
-        let ev: Value = self.r(e);
-        self.set_slot(a, 1, ev);
-        let stv: Value = self.r(st);
-        self.set_slot(a, 2, stv);
-        self.set_slot(a, 3, NIL);
-        self.pop_to(mk);
-        return Value::heap(a);
-    }
-    fn range_empty(&self, v: Value) -> bool {
-        let e: Value = self.slot(v, 1);
-        // An absent end is an UNBOUNDED range, which is never empty.
-        if e.is_nil() {
-            return false;
-        }
-        let s: f64 = self.num_f64(self.slot(v, 0));
-        let en: f64 = self.num_f64(e);
-        let st: f64 = self.num_f64(self.slot(v, 2));
-        if st > 0.0 {
-            return s >= en;
-        }
-        if st < 0.0 {
-            return s <= en;
-        }
-        // A zero step never advances. Empty rather than infinite, which
-        // is what Clojure does and is the answer that terminates.
-        return true;
-    }
-
-    // kin:end kin/seqs.kin
 
     pub fn seq(&mut self, v: Value) -> Value {
         if v.is_nil() {

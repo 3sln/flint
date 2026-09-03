@@ -164,8 +164,8 @@ public final class Sets {
         int at = rt.mark();
         int n = Maps.entries(rt, rt.slot(rt.r(si), S_MAP), at);
         int acc = 0;
-        for (int i = 0; i < n; i++) acc = Hash.unorderedStep(acc, Eq.hashValue(rt, rt.r(at + 2 * i)));
+        for (int i = 0; i < n; i++) acc = flint.rt.Hash.unorderedStep(acc, Eq.hashValue(rt, rt.r(at + 2 * i)));
         rt.popTo(base);
-        return Hash.mixCollHash(acc, n);
+        return flint.rt.Hash.mixCollHash(acc, n);
     }
 }

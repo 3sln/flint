@@ -9,45 +9,31 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
-using static flint.rt.Assoc;
-using static flint.rt.Collnode;
-using static flint.rt.Copies;
-using static flint.rt.Dissoc;
-using static flint.rt.Eq;
-using static flint.rt.Eqalloc;
-using static flint.rt.Find;
-using static flint.rt.Hash;
-using static flint.rt.Interns;
-using static flint.rt.Merge;
-using static flint.rt.Nodeclass;
-using static flint.rt.Pike;
-using static flint.rt.Seqs;
-using static flint.rt.Unsigned;
 
 public static class Champ {
-    static int BnDatamap(Rt rt, long n) {
+    internal static int BnDatamap(Rt rt, long n) {
         return (int) Val.AsFixnum(rt.Slot(n, BN_DATAMAP));
     }
-    static int BnNodemap(Rt rt, long n) {
+    internal static int BnNodemap(Rt rt, long n) {
         return (int) Val.AsFixnum(rt.Slot(n, BN_NODEMAP));
     }
-    static long BnKey(Rt rt, long n, int i) {
+    internal static long BnKey(Rt rt, long n, int i) {
         return rt.Slot(n, BN_BASE + (2 * i));
     }
-    static long BnVal(Rt rt, long n, int i) {
+    internal static long BnVal(Rt rt, long n, int i) {
         return rt.Slot(n, BN_BASE + ((2 * i) + 1));
     }
-    static void BnSetKey(Rt rt, long n, int i, long v) {
+    internal static void BnSetKey(Rt rt, long n, int i, long v) {
         rt.SetSlot(Val.AsHeap(n), BN_BASE + (2 * i), v);
     }
-    static void BnSetVal(Rt rt, long n, int i, long v) {
+    internal static void BnSetVal(Rt rt, long n, int i, long v) {
         rt.SetSlot(Val.AsHeap(n), BN_BASE + ((2 * i) + 1), v);
     }
     /// Sub-nodes live at the END, in DESCENDING bit order.
-    static long BnNode(Rt rt, long n, int j) {
+    internal static long BnNode(Rt rt, long n, int j) {
         return rt.Slot(n, (Olen(rt, n) - 1) - j);
     }
-    static void BnSetNode(Rt rt, long n, int j, long v) {
+    internal static void BnSetNode(Rt rt, long n, int j, long v) {
         rt.SetSlot(Val.AsHeap(n), (Olen(rt, n) - 1) - j, v);
     }
 }

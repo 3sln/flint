@@ -9,23 +9,13 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
-using static flint.rt.Assoc;
 using static flint.rt.Champ;
 using static flint.rt.Collnode;
 using static flint.rt.Copies;
-using static flint.rt.Eq;
-using static flint.rt.Eqalloc;
-using static flint.rt.Find;
-using static flint.rt.Hash;
-using static flint.rt.Interns;
-using static flint.rt.Merge;
 using static flint.rt.Nodeclass;
-using static flint.rt.Pike;
-using static flint.rt.Seqs;
-using static flint.rt.Unsigned;
 
 public static class Dissoc {
-    static long NodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
+    internal static long NodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
         int @base = rt.Mark();
         int ni = rt.Push(n);
         int ki = rt.Push(key);
@@ -103,7 +93,7 @@ public static class Dissoc {
         rt.PopTo(@base);
         return @out;
     }
-    static long CollDissoc(Rt rt, long n, long key, long edit) {
+    internal static long CollDissoc(Rt rt, long n, long key, long edit) {
         int scan = rt.Mark();
         int sni = rt.Push(n);
         int ski = rt.Push(key);

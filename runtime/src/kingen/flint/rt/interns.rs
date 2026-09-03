@@ -4,17 +4,19 @@
 #![allow(unused_imports)]
 use crate::gc::InternTable;
 use crate::hash;
+use crate::eq::*;
 use crate::map::*;
 use crate::mem::Addr;
 use crate::obj::*;
 use crate::rt::Rt;
+use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kingen::flint::rt::hash::*;
 use crate::kingen::flint::rt::pike::*;
 
 impl InternTable {
-    fn mask(&self) -> usize {
+    pub(crate) fn mask(&self) -> usize {
         return self.values.len() - 1;
     }
     pub fn insert_at(&mut self, idx: usize, hash: u32, v: Value) {
@@ -28,7 +30,7 @@ impl InternTable {
     /// Insert with no probe for equality: the caller already knows this hash
     /// and value are not present. Used only by a rebuild, where every entry
     /// came out of a table that had already established that.
-    fn raw_insert(&mut self, h: u32, v: u64) {
+    pub(crate) fn raw_insert(&mut self, h: u32, v: u64) {
         let m: usize = self.mask();
         let mut i: usize = h as usize & m;
         while self.values[i] != 0 {

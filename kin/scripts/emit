@@ -1,18 +1,19 @@
 #!/usr/bin/env bb
-;; Write kin's output INTO the runtimes, between markers.
+;; Write kin's output into the generated tree.
 ;;
 ;;     kin/scripts/emit kin/hash.kin      one source
-;;     kin/emit                   every source
+;;     kin/scripts/emit                   every source
 ;;
 ;; The generated code is CHECKED IN. A runtime build must not need babashka --
 ;; somebody cloning this repo to build the JVM runtime should not have to
 ;; install a Clojure to do it, and a generator in the build path is a
-;; generator that breaks the build. So the tool is run by hand, its output is
-;; committed, and the markers make the next run a diff rather than a merge.
+;; generator that breaks the build. So the tool is run by hand and its output
+;; is committed.
 ;;
-;;     // kin:begin <source>       <- everything between these two lines
-;;     ...generated...                   is replaced wholesale
-;;     // kin:end <source>
+;; It writes WHOLE FILES, under `kingen/`, and creates them. There are no
+;; markers and nothing is spliced: a file kin writes is a file kin owns
+;; entirely, so re-emitting cannot disturb a hand edit because there is
+;; nowhere in one to put a hand edit.
 ;;
 ;; The scanning is kin's now, not this script's: `emit-all!` walks the source
 ;; vfs and emits every source ATOMICALLY -- all sixteen and all three targets,

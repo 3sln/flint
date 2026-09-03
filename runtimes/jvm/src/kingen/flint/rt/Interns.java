@@ -8,44 +8,30 @@ import static com.flint.rt.Obj.*;
 import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
-import static flint.rt.Assoc.*;
-import static flint.rt.Champ.*;
-import static flint.rt.Collnode.*;
-import static flint.rt.Copies.*;
-import static flint.rt.Dissoc.*;
-import static flint.rt.Eq.*;
-import static flint.rt.Eqalloc.*;
-import static flint.rt.Find.*;
-import static flint.rt.Hash.*;
-import static flint.rt.Merge.*;
-import static flint.rt.Nodeclass.*;
-import static flint.rt.Pike.*;
-import static flint.rt.Seqs.*;
-import static flint.rt.Unsigned.*;
 
 public final class Interns {
-    int mask() {
-        return this.values.length - 1;
+    public static int mask(com.flint.rt.Interns t) {
+        return t.values.length - 1;
     }
-    public void insertAt(int idx, int hash, long v) {
-        this.hashes[idx] = hash;
-        this.values[idx] = v;
-        this.count += 1;
+    public static void insertAt(com.flint.rt.Interns t, int idx, int hash, long v) {
+        t.hashes[idx] = hash;
+        t.values[idx] = v;
+        t.count += 1;
     }
-    public boolean needsGrow() {
-        return (this.count * 4) >= (this.values.length * 3);
+    public static boolean needsGrow(com.flint.rt.Interns t) {
+        return (t.count * 4) >= (t.values.length * 3);
     }
     /// Insert with no probe for equality: the caller already knows this hash
     /// and value are not present. Used only by a rebuild, where every entry
     /// came out of a table that had already established that.
-    void rawInsert(int h, long v) {
-        int m = this.mask();
+    public static void rawInsert(com.flint.rt.Interns t, int h, long v) {
+        int m = mask(t);
         int i = h & m;
-        while (this.values[i] != 0) {
+        while (t.values[i] != 0) {
             i = (i + 1) & m;
         }
-        this.hashes[i] = h;
-        this.values[i] = v;
-        this.count += 1;
+        t.hashes[i] = h;
+        t.values[i] = v;
+        t.count += 1;
     }
 }

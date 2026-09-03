@@ -9,27 +9,14 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
-using static flint.rt.Assoc;
 using static flint.rt.Champ;
-using static flint.rt.Collnode;
-using static flint.rt.Copies;
-using static flint.rt.Dissoc;
-using static flint.rt.Eq;
-using static flint.rt.Eqalloc;
-using static flint.rt.Find;
-using static flint.rt.Hash;
-using static flint.rt.Interns;
-using static flint.rt.Merge;
-using static flint.rt.Pike;
-using static flint.rt.Seqs;
-using static flint.rt.Unsigned;
 
 public static class Nodeclass {
-    static bool IsBmnode(Rt rt, long n) {
+    internal static bool IsBmnode(Rt rt, long n) {
         return Obj.Ty(rt.gc.sp, Val.AsHeap(n)) == Obj.TyBmnode;
     }
     /// EMPTY / ONE / MORE, the CHAMP size predicate that drives collapsing.
-    static int NodeSizeClass(Rt rt, long n) {
+    internal static int NodeSizeClass(Rt rt, long n) {
         // A collision node always holds at least two pairs.
         if (!IsBmnode(rt, n)) {
             return 2;

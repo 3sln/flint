@@ -1,4 +1,5 @@
 package com.flint.rt;
+import static flint.rt.Interns.*;
 
 /// The intern tables, ported from `runtime/src/gc.rs`.
 ///
@@ -38,9 +39,13 @@ public final class Interns {
     /// `(hash, value)` pairs. A value of 0 is an empty slot, which is why no
     /// real value may be 0 -- and none is: 0 is the double `+0.0` only as a
     /// bit pattern nothing produces for an interned object.
-    int[] hashes;
-    long[] values;
-    int count;
+    // PUBLIC because the slot arithmetic that reads them is generated into
+    // `flint.rt.Interns` now, and on the JVM a module boundary is a package
+    // boundary. Rust says `pub(crate)` and C# `internal`; Java has nothing
+    // between package-private and public.
+    public int[] hashes;
+    public long[] values;
+    public int count;
 
     public Interns(int capPow2) {
         hashes = new int[capPow2];
@@ -64,47 +69,20 @@ public final class Interns {
     /// region, and for the same reason.
     public interface Refresh { long apply(long v); }
 
-    // kin:begin kin/interns.kin
-    int mask() {
-        return this.values.length - 1;
-    }
-    public void insertAt(int idx, int hash, long v) {
-        this.hashes[idx] = hash;
-        this.values[idx] = v;
-        this.count += 1;
-    }
-    public boolean needsGrow() {
-        return (this.count * 4) >= (this.values.length * 3);
-    }
-    /// Insert with no probe for equality: the caller already knows this hash
-    /// and value are not present. Used only by a rebuild, where every entry
-    /// came out of a table that had already established that.
-    void rawInsert(int h, long v) {
-        int m = this.mask();
-        int i = h & m;
-        while (this.values[i] != 0) {
-            i = (i + 1) & m;
-        }
-        this.hashes[i] = h;
-        this.values[i] = v;
-        this.count += 1;
-    }
-
-    // kin:end kin/interns.kin
 
     public void grow() {
         int[] oh = hashes; long[] ov = values;
         hashes = new int[ov.length * 2];
         values = new long[ov.length * 2];
         count = 0;
-        for (int i = 0; i < ov.length; i++) if (ov[i] != 0) rawInsert(oh[i], ov[i]);
+        for (int i = 0; i < ov.length; i++) if (ov[i] != 0) rawInsert(this, oh[i], ov[i]);
     }
 
     /// The found value, or NOT_FOUND with `slot` left at where to insert.
     public int slot;
 
     public long lookup(int hash, Match eq) {
-        int m = mask();
+        int m = mask(this);
         int i = hash & m;
         for (;;) {
             long v = values[i];
@@ -122,7 +100,7 @@ public final class Interns {
         for (int i = 0; i < ov.length; i++) {
             if (ov[i] == 0) continue;
             long nv = f.apply(ov[i]);
-            if (nv != Val.NOT_FOUND) rawInsert(oh[i], nv);
+            if (nv != Val.NOT_FOUND) rawInsert(this, oh[i], nv);
         }
     }
 }

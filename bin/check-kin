@@ -1,25 +1,56 @@
 #!/bin/sh
-# Two questions about the kin sources, neither of which anything asked before.
+# Three questions about the kin sources, none of which anything asked before.
 #
 #   1. Does every source still produce IDENTICAL output for all three targets?
-#      That is what `kin/scripts/verify` answers, and it was being run by hand, once,
-#      when a source was written.
+#      That is what `kin/scripts/verify` answers, and it was being run by
+#      hand, once, when a source was written.
 #
 #   2. Does the CHECKED-IN generated code still match what its source
-#      produces? The generated regions are committed on purpose -- a runtime
-#      build must not need babashka -- and the cost of that choice is that the
-#      two can drift. A hand edit inside a region survives until someone
-#      happens to re-emit; a vocabulary change silently makes every committed
-#      region stale. Nothing noticed either.
+#      produces? The generated tree is committed on purpose -- a runtime build
+#      must not need babashka -- and the cost of that choice is that the two
+#      can drift. A hand edit survives until someone happens to re-emit; a
+#      vocabulary change silently makes every committed file stale. Nothing
+#      noticed either.
 #
-# The second is the one worth having. `fixnum` widened the wrong way on both
-# ports for thirteen sources, and when it was fixed the only thing that
-# re-emitted the affected files was me remembering to.
+#      `fixnum` widened the wrong way on both ports for thirteen sources, and
+#      when it was fixed the only thing that re-emitted the affected files was
+#      me remembering to.
+#
+#   3. IS EVERY GENERATED MODULE ACTUALLY REACHED? This one is new with the
+#      module layout. A missing `import static` in Java or `using static` in
+#      C# is a compile error at the call site; a missing `pub mod champ;` is
+#      a file that is simply never BUILT, and nothing has to complain.
+#
+#      MEASURED, because the obvious claim is too strong: deleting `pub mod
+#      champ;` and running `cargo check` gave 103 errors, not silence -- the
+#      eight functions in `champ.rs` are called from six other modules, so
+#      their absence is loud. The silence is waiting for the first generated
+#      module whose callers are all inside the generated tree, or that is
+#      added before its first caller. That is a normal thing to do and it
+#      would leave the build green with the code gone.
+#
+#      Decision I says kin REPORTS the consuming lines and a person applies
+#      them -- so the report has to be a check, not a courtesy.
+#
+#      It also catches the other direction: a file under `kingen/` that no
+#      source produces, which is what a renamed or deleted source leaves
+#      behind.
+#
+# WHAT THIS USED TO COMPARE, and it is worth saying because the answer
+# changed: regions. It snapshotted the eighteen hand-written files that had
+# `kin:begin`/`kin:end` markers in them and diffed the lines between the
+# markers. It now snapshots the forty-two files kin owns outright and diffs
+# them whole. Same question, larger unit, and nothing left that a hand edit
+# can hide in.
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
-work=${TMPDIR:-/tmp}/check-kin
-rm -rf "$work"; mkdir -p "$work/snap"
+# A PRIVATE WORK DIRECTORY PER RUN. A fixed one is deleted out from under a
+# concurrent run, and a gate that fails at random gets re-run until it passes
+# and then gets ignored.
+work=$(mktemp -d "${TMPDIR:-/tmp}/check-kin.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/snap"
 fails=0
 
 for src in kin/*.kin; do
@@ -38,14 +69,50 @@ for src in kin/*.kin; do
   fi
 done
 
-# Now the drift check. Snapshot every target file, re-emit everything, and
-# compare -- then put the snapshots back whatever happened.
-# ASK KIN WHERE IT WRITES. This used to `cat` the `<source>.targets` sidecars
-# and pull the second column out with awk. Destination is now computed from
-# the namespace by a function each target carries, so the only thing that
-# knows the answer is kin -- which is the point of the change, and the reason
-# a gate has to ask rather than read.
+# ASK KIN WHERE IT WRITES. Destination is computed from the namespace by a
+# function each target carries, so the only thing that knows the answer is
+# kin -- which is the point of the change, and the reason a gate has to ask
+# rather than read.
 targets=$(./kin/scripts/destinations)
+# Newline-separated from the script; the membership test below needs spaces.
+targets_sp=" $(echo $targets) "
+
+# --- 3. Reachability, before anything is re-emitted. ------------------------
+#
+# Rust is the one that needs it. Every generated module must have a line in
+# `kingen/flint/rt.rs`, and every file under a `kingen/` tree must be one kin
+# says it writes.
+modfile=runtime/src/kingen/flint/rt.rs
+for f in $targets; do
+  case $f in
+    runtime/src/kingen/*)
+      m=$(basename "$f" .rs)
+      if grep -q "^pub mod $m;\$" "$modfile"; then
+        echo "  ok   $m is declared in $modfile"
+      else
+        echo "  FAIL $f is generated and NOT declared in $modfile"
+        echo "       -- Rust will not compile it, and nothing else will say so."
+        echo "       Add:  pub mod $m;"
+        fails=$((fails + 1))
+      fi ;;
+  esac
+done
+
+for f in $(find runtime/src/kingen runtimes/jvm/src/kingen runtimes/clr/src/kingen \
+             -type f \( -name '*.rs' -o -name '*.java' -o -name '*.cs' \) 2>/dev/null); do
+  # The module declarations themselves are hand-written and belong here.
+  case $f in
+    runtime/src/kingen/flint/rt.rs|runtime/src/kingen/flint.rs) continue ;;
+  esac
+  case "$targets_sp" in
+    *" $f "*) ;;
+    *) echo "  FAIL $f is under kingen/ and no kin source generates it"
+       echo "       -- left behind by a renamed or deleted source."
+       fails=$((fails + 1)) ;;
+  esac
+done
+
+# --- 2. Drift. Snapshot everything, re-emit, compare, put it all back. ------
 i=0
 for f in $targets; do
   i=$((i + 1))
@@ -59,7 +126,7 @@ restore() {
     cp "$work/snap/$n" "$f"
   done < "$work/snap/list"
 }
-trap restore EXIT
+trap 'restore; rm -rf "$work"' EXIT
 
 # Every source, including the ones written nowhere -- kin reports those and
 # writes nothing, which is a legitimate answer rather than a case to skip.
@@ -78,6 +145,6 @@ while read -r f; do
 done < "$work/snap/list"
 
 restore
-trap - EXIT
+trap 'rm -rf "$work"' EXIT
 [ "$fails" -eq 0 ] || { echo "check-kin: $fails failure(s)"; exit 1; }
-echo "check-kin: all kin sources agree, and every generated region matches"
+echo "check-kin: all kin sources agree, every generated module matches, and every one is reached"

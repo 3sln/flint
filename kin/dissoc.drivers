@@ -165,10 +165,17 @@ fn main() {
             long a = bump; bump += 40; kind[(int) a] = bm ? 1 : 0; log.append(tag); return a;
         }
     }
-    static final class Eq {
-        static boolean eq(Rt rt, long a, long b) { return a == b; }
-        static int hashValue(Rt rt, long v) { return (int) ((v * 7) & 0xff); }
-    }
+    // Nested to reproduce the port's FULLY QUALIFIED `com.flint.rt.Eq`.
+    // The vocabulary spells it in full because `eq.kin` generates a
+    // class called `Eq` into package `flint.rt`, and inside a file of
+    // that package a bare `Eq` is the generated one. The C# side below
+    // nests `Flint.Rt.Eq` for its own version of the same shadowing.
+    static final class com { static final class flint { static final class rt {
+        static final class Eq {
+            static boolean eq(Rt rt, long a, long b) { return a == b; }
+            static int hashValue(Rt rt, long v) { return (int) ((v * 7) & 0xff); }
+        }
+    } } }
     static boolean isBmnode(Rt rt, long n) { return rt.kind[(int) n] == 1; }
     static int bnDatamap(Rt rt, long n) { return (int) rt.h[(int) n]; }
     static int bnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }

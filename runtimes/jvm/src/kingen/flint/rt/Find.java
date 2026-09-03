@@ -8,23 +8,13 @@ import static com.flint.rt.Obj.*;
 import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
-import static flint.rt.Assoc.*;
 import static flint.rt.Champ.*;
 import static flint.rt.Collnode.*;
-import static flint.rt.Copies.*;
-import static flint.rt.Dissoc.*;
-import static flint.rt.Eq.*;
 import static flint.rt.Eqalloc.*;
-import static flint.rt.Hash.*;
-import static flint.rt.Interns.*;
-import static flint.rt.Merge.*;
 import static flint.rt.Nodeclass.*;
-import static flint.rt.Pike.*;
-import static flint.rt.Seqs.*;
-import static flint.rt.Unsigned.*;
 
 public final class Find {
-    static long nodeFindScalar(Rt rt, long n, int shift, int h, long key) {
+    public static long nodeFindScalar(Rt rt, long n, int shift, int h, long key) {
         // No rooting anywhere in here: the key is a scalar, so `eq` cannot
         // allocate, so nothing can move while this walks.
         long node;
@@ -38,7 +28,7 @@ public final class Find {
                 }
                 int cnt = cnCount(rt, node);
                 for (int i = 0; i < cnt; i++) {
-                    if (Eq.eq(rt, cnKey(rt, node, i), key)) {
+                    if (com.flint.rt.Eq.eq(rt, cnKey(rt, node, i), key)) {
                         out = cnVal(rt, node, i);
                         break;
                     }
@@ -49,7 +39,7 @@ public final class Find {
             int dm = bnDatamap(rt, node);
             if ((dm & bit) != 0) {
                 int i = indexOf(dm, bit);
-                if (Eq.eq(rt, bnKey(rt, node, i), key)) {
+                if (com.flint.rt.Eq.eq(rt, bnKey(rt, node, i), key)) {
                     out = bnVal(rt, node, i);
                 }
                 break;
@@ -63,8 +53,8 @@ public final class Find {
         }
         return out;
     }
-    static long nodeFind(Rt rt, long n, int shift, int h, long key) {
-        if (!Eq.eqMayAlloc(rt, key)) {
+    public static long nodeFind(Rt rt, long n, int shift, int h, long key) {
+        if (!eqMayAlloc(rt, key)) {
             return nodeFindScalar(rt, n, shift, h, key);
         }
         // The node being walked and the key are rooted: `eq` on a compound
@@ -83,7 +73,7 @@ public final class Find {
                 int cnt = cnCount(rt, rt.r(ni));
                 for (int i = 0; i < cnt; i++) {
                     int kk = rt.push(cnKey(rt, rt.r(ni), i));
-                    boolean same = Eq.eq(rt, rt.r(kk), rt.r(ki));
+                    boolean same = com.flint.rt.Eq.eq(rt, rt.r(kk), rt.r(ki));
                     rt.popTo(kk);
                     if (same) {
                         out = cnVal(rt, rt.r(ni), i);
@@ -97,7 +87,7 @@ public final class Find {
             if ((dm & bit) != 0) {
                 int i = indexOf(dm, bit);
                 int kk = rt.push(bnKey(rt, rt.r(ni), i));
-                boolean same = Eq.eq(rt, rt.r(kk), rt.r(ki));
+                boolean same = com.flint.rt.Eq.eq(rt, rt.r(kk), rt.r(ki));
                 rt.popTo(kk);
                 if (same) {
                     out = bnVal(rt, rt.r(ni), i);

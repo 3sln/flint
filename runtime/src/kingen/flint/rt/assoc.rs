@@ -4,17 +4,19 @@
 #![allow(unused_imports)]
 use crate::gc::InternTable;
 use crate::hash;
+use crate::eq::*;
 use crate::map::*;
 use crate::mem::Addr;
 use crate::obj::*;
 use crate::rt::Rt;
+use crate::seqs::*;
 use crate::strs::INTERN_MAX;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kingen::flint::rt::hash::*;
 use crate::kingen::flint::rt::pike::*;
 
 impl Rt {
-    fn node_assoc(&mut self, n: Value, shift: u32, h: u32, key: Value, val: Value, edit: Value) -> Value {
+    pub(crate) fn node_assoc(&mut self, n: Value, shift: u32, h: u32, key: Value, val: Value, edit: Value) -> Value {
         let base: usize = self.mark();
         let ni: usize = self.push(n);
         let ki: usize = self.push(key);
@@ -82,7 +84,7 @@ impl Rt {
         self.pop_to(base);
         return out;
     }
-    fn coll_assoc(&mut self, n: Value, h: u32, key: Value, val: Value, edit: Value, shift: u32) -> Value {
+    pub(crate) fn coll_assoc(&mut self, n: Value, h: u32, key: Value, val: Value, edit: Value, shift: u32) -> Value {
         let nh: u32 = self.cn_hash(n);
         if nh != h {
             // A different hash at this depth: the node becomes a child of
