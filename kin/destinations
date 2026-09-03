@@ -1,0 +1,17 @@
+#!/usr/bin/env bb
+;; Every file kin would write, one per line, as a path from the repo root.
+;;
+;; `bin/check-kin` needs this: it snapshots each generated file, re-emits, and
+;; compares. Once destination is computed from the namespace by a function,
+;; the only thing that knows the list is kin.
+;;
+;; kin answers a path RELATIVE TO A VFS, because that is what a path means
+;; once every byte goes through a protocol. Turning one into a path a shell
+;; can `cmp` is ours, and `flint.impl.targets/resolve-path` does it from the
+;; same map that built the vfs.
+(require '[kin.project :as kp]
+         '[flint.impl.project :as fp]
+         '[flint.impl.targets :as targets])
+
+(doseq [[target path] (kp/destinations @fp/project (fp/sources))]
+  (println (targets/resolve-path target path)))

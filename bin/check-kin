@@ -45,7 +45,7 @@ done
 # the namespace by a function each target carries, so the only thing that
 # knows the answer is kin -- which is the point of the change, and the reason
 # a gate has to ask rather than read.
-targets=$(./kin/kin destinations)
+targets=$(./kin/destinations)
 i=0
 for f in $targets; do
   i=$((i + 1))

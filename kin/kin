@@ -1,14 +1,120 @@
-#!/bin/sh
-# The kin CLI, with this project's `kin.edn` and vocabularies.
-#
-#     kin/kin why kin/seqs.kin    where every symbol in a source comes from,
-#                                 which targets it generates for, and what an
-#                                 earlier require shadows
-#     kin/kin targets             every target, which sources reach it, and
-#                                 for those that do not, what ruled it out
-#
-# `kin/gen`, `kin/emit` and `kin/verify` are the ones in the build path; this
-# is the one you reach for when a generated file is wrong and nothing says why.
-set -e
-export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
-exec bb ../kin/bin/kin "$@"
+#!/usr/bin/env bb
+;; The diagnostic commands, printed.
+;;
+;;     kin/kin why kin/seqs.kin    where every symbol in a source comes from
+;;     kin/kin targets             every target, and what ruled the rest out
+;;
+;; kin answers both of these as DATA -- `kp/why` and `kp/targets-report`
+;; return maps -- and the FORMATTING is here. That is not an accident of
+;; layering: a report that prints is a report you can only use from a
+;; terminal, and these two exist to be read by whatever is asking.
+(require '[kin.project :as kp]
+         '[flint.impl.project :as fp]
+         '[clojure.string :as str])
+
+(defn- row [label xs]
+  (when (seq xs)
+    (println (format "    %-26s %s" label (str/join " " (sort (map str xs)))))))
+
+(defn- wrapped
+  "A list of names, indented and wrapped, because sixteen sources one per line
+  is a page and the same sixteen on three lines is a glance."
+  [indent xs]
+  (let [w (count indent)]
+    (loop [line indent xs (sort xs)]
+      (if-let [x (first xs)]
+        (if (and (< w (count line)) (< 76 (+ (count line) 1 (count (str x)))))
+          (do (println line) (recur (str indent x) (rest xs)))
+          (recur (str line (when (< w (count line)) " ") x) (rest xs)))
+        (when (< w (count line)) (println line))))))
+
+(defn- short-name [p] (str/replace (str/replace p #"^.*/" "") #"\.kin$" ""))
+
+(defn print-why [w]
+  (let [{:keys [report emit-for unconfigured failure by-vocab shadowed]} w]
+    (println)
+    (println (str "kin why " (:label w)))
+    (println)
+    (println "  targets")
+    (doseq [[v ts] (:spoken report)]
+      (println (format "    %-26s speaks %s" (str v)
+                       (str/join " " (sort (map name ts))))))
+    (when (:only report)
+      (println (format "    %-26s %s" ":kin/only"
+                       (str/join " " (sort (map name (:only report)))))))
+    (when (:exclude report)
+      (println (format "    %-26s %s" ":kin/exclude"
+                       (str/join " " (sort (map name (:exclude report)))))))
+    (println (format "    %-26s %s" "this project configures"
+                     (str/join " " (map name (:target-order @fp/project)))))
+    (println (format "    %-26s %s" "GENERATES FOR" (str/join " " (map name emit-for))))
+    (doseq [[t reasons] (:ruled-out report)]
+      (println (format "    %-26s %s" (str "not " (name t)) (str/join "; " reasons))))
+    (doseq [t unconfigured]
+      (println (format "    %-26s %s" (str "not " (name t))
+                       "this project has no target description for it")))
+    (println)
+    (when failure
+      (println "  THIS SOURCE DOES NOT GENERATE")
+      (println (str "    " failure))
+      (println "    -- the table below is what the render saw before it stopped")
+      (println))
+    (println "  symbols, by where they come from")
+    (doseq [[[v kind] syms] (sort-by (comp str first) by-vocab)]
+      (row (str v " (" (name kind) ")") syms))
+    (row "declared here" (:declared w))
+    (row "named here" (:named w))
+    (row "bound here (locals)" (:bound w))
+    (when (seq (:nowhere w))
+      (row "FROM NOWHERE" (:nowhere w))
+      (println)
+      (println "    A symbol from nowhere is spelled by the target's local")
+      (println "    namer and emitted as written. That is right for nothing")
+      (println "    but a binding this report failed to see -- and it is how")
+      (println "    LS_THUNK reached a C# file whose constant is LsThunk."))
+    (println)
+    (println "  shadowed by an earlier require")
+    (if (empty? shadowed)
+      (println "    nothing" (if (< 1 (count (:required report)))
+                               "-- the vocabularies do not overlap"
+                               "-- one vocabulary required"))
+      (doseq [[sym others] (sort-by (comp str key) shadowed)]
+        (println (format "    %-26s shadows %s" (str sym)
+                         (str/join ", " (map (comp str first) others))))))
+    (println)))
+
+(defn print-targets [r]
+  (println)
+  (doseq [[label msg] (:errors r)]
+    (println (str "  " label " -- DOES NOT READ"))
+    (println (str "    " msg))
+    (println))
+  (doseq [t (:order r)]
+    (let [{:keys [generates ruled-out]} (get (:by-target r) t)]
+      (println (format "  %s -- %d of %d source%s"
+                       (name t) (count generates) (:count r)
+                       (if (= 1 (:count r)) "" "s")))
+      (wrapped "    " (map short-name generates))
+      (doseq [[reasons ps] (sort-by (comp str key) ruled-out)]
+        (println (str "    NOT: " (str/join "; " reasons)))
+        (wrapped "      " (map short-name ps)))
+      (println))))
+
+(let [[cmd path] *command-line-args*]
+  (case cmd
+    ;; A DIAGNOSTIC MUST NOT ANSWER WITH A STACK TRACE. `why` is what you run
+    ;; when something is already wrong, so a source that will not even read
+    ;; gets its message and nothing else.
+    "why" (if-not path
+            (do (println "usage: kin/kin why <source.kin>") (System/exit 2))
+            (try (print-why (kp/why @fp/project (fp/source-text path) path))
+                 (catch Exception e
+                   (println)
+                   (println (str "kin why " path " -- THIS SOURCE DOES NOT READ"))
+                   (println (str "  " (ex-message e)))
+                   (println)
+                   (System/exit 1))))
+    "targets" (print-targets (kp/targets-report @fp/project (fp/sources)))
+    (do (println "usage: kin/kin why <source.kin>")
+        (println "       kin/kin targets")
+        (System/exit 2))))

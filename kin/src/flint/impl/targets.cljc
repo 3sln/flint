@@ -2,14 +2,16 @@
   "Where each target puts a namespace's generated code.
 
   kin computes a destination rather than reading one from a table: each
-  target carries `:dest`, a root, and `:path`, a function from namespace to
+  target carries a `:vfs`, a place, and `:path`, a function from namespace to
   file under it. That replaced sixteen `<source>.targets` sidecars, three
   columns each, which were sixteen restatements of a rule nobody had written
   down.
 
-  This file is CODE rather than `kin.edn` data for exactly one reason: a
-  function cannot be written in EDN. `kin.edn` names this namespace and kin
-  reads `targets` out of it.
+  This file is CODE rather than data for two reasons: a function cannot be
+  written in EDN, and neither can a `:vfs`. kin performs no I/O of its own --
+  every byte it reads or writes goes through the vfs a target carries -- so
+  `disk-vfs` here is the project saying `write to my actual directories`, and
+  a test can say something else.
 
   ## The table below is temporary, and it is the reason for the next commit
 
@@ -25,6 +27,7 @@
   and its eight neighbours become one `flint.rt.maps`, `unit` collapses to
   the namespace's own last segment and this map goes away."
   (:require [clojure.string :as str]
+            [kin.vfs :as vfs]
             [kin.target :as target]))
 
 (def unit
@@ -82,15 +85,47 @@
   column used to."
   '#{maps eq interns seqs})
 
+(def roots
+  "Where each target's tree lives, relative to the repository root.
+
+  Named ONCE and used twice: to build the disk vfs each target writes
+  through, and to turn a vfs-relative path back into something `cmp` can
+  read. A path kin answers is relative to a vfs, because that is what a path
+  means once I/O goes through a protocol -- so resolving one against a real
+  directory is OUR job, and doing it from the same map that built the vfs is
+  what keeps the two from drifting."
+  {:rust "runtime/src"
+   :java "runtimes/jvm/src/com/flint/rt"
+   :csharp "runtimes/clr/src/rt"})
+
+(defn resolve-path
+  "A vfs-relative path, as a path from the repository root."
+  [target path]
+  (str (get roots target) "/" path))
+
 (def targets
-  {:rust {:dest "runtime/src"
-          :path (fn [ns-name] (some-> (unit-of ns-name) rust-file))
-          :indent (fn [ns-name]
-                    (if (contains? deep-rust (unit-of ns-name)) 4 0))}
-   :java {:dest "runtimes/jvm/src/com/flint/rt"
-          :path (fn [ns-name] (some-> (unit-of ns-name) pascal (str ".java")))
-          ;; Every port region nests inside a class, so every one is indented.
-          :indent 4}
-   :csharp {:dest "runtimes/clr/src/rt"
-            :path (fn [ns-name] (some-> (unit-of ns-name) pascal (str ".cs")))
-            :indent 4}})
+  "The three, each one kin's shipped description MERGED WITH ours.
+
+  The merge is written out rather than done for us. `bin/kin` used to fold
+  `kin.target/defaults` into any target whose key happened to be `:rust`,
+  which is convenient and is also kin knowing something about a language --
+  the one thing this design says it must not. A project that names a target
+  `:rust` and means something else entirely should not inherit Rust's
+  identifier rules by accident, so inheriting them is a thing we SAY."
+  {:rust (merge
+          target/rust
+          {:vfs (vfs/disk-vfs (:rust roots))
+           :path (fn [ns-name] (some-> (unit-of ns-name) rust-file))
+           :indent (fn [ns-name]
+                     (if (contains? deep-rust (unit-of ns-name)) 4 0))})
+   :java (merge
+          target/java
+          {:vfs (vfs/disk-vfs (:java roots))
+           :path (fn [ns-name] (some-> (unit-of ns-name) pascal (str ".java")))
+           ;; Every port region nests inside a class, so every one is indented.
+           :indent 4})
+   :csharp (merge
+            target/csharp
+            {:vfs (vfs/disk-vfs (:csharp roots))
+             :path (fn [ns-name] (some-> (unit-of ns-name) pascal (str ".cs")))
+             :indent 4})})

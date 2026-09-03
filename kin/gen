@@ -1,6 +1,23 @@
-#!/bin/sh
-# Generate one kin source for every target, using the kin library from
-# `bb.edn`'s `:local/root` dep and this project's vocabularies from `kin.edn`.
-set -e
-export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
-exec bb ../kin/bin/kin gen "$@"
+#!/usr/bin/env bb
+;; Print what each target would get for one kin source.
+;;
+;;     kin/gen kin/hash.kin
+;;
+;; kin is a library; this is the script. `kp/generate` takes the source TEXT
+;; and answers `{target text}` without opening or writing anything, so the
+;; reading and the printing are both here, where a project's own conventions
+;; belong.
+(require '[kin.project :as kp] '[flint.impl.project :as fp])
+
+(let [[path] *command-line-args*]
+  (when-not path
+    (println "usage: kin/gen <source.kin>")
+    (System/exit 2))
+  (let [out (kp/generate @fp/project (fp/source-text path) path)]
+    ;; The `====` banners are this project's format, not kin's. `kin/verify`
+    ;; splits on them.
+    (doseq [t (:target-order @fp/project)
+            :when (contains? out t)]
+      (println (str "==== " (name t) " ===================================="))
+      (print (get out t))
+      (println))))

@@ -1,27 +1,34 @@
-#!/bin/sh
-# Write a kin source's output INTO the runtimes, between markers.
-#
-#     kin/emit kin/hash.kin      one source
-#     kin/emit                   every source
-#
-# The generated code is CHECKED IN. A runtime build must not need babashka --
-# somebody cloning this repo to build the JVM runtime should not have to
-# install a Clojure to do it, and a generator in the build path is a generator
-# that breaks the build. So the tool is run by hand, its output is committed,
-# and the markers make the next run a diff rather than a merge.
-#
-# Each target file carries, once per source:
-#
-#     // kin:begin <source>       <- everything between these two lines
-#     ...generated...                   is replaced wholesale
-#     // kin:end <source>
-#
-# THIS USED TO BE THE WHOLE PROGRAM: sixty lines of sed and awk reading a
-# `<source>.targets` sidecar with `while read -r target file indent`. Where a
-# namespace's code goes is now COMPUTED -- each target carries a root and a
-# function from namespace to file (`flint.impl.targets`) -- and a shell loop
-# cannot call a function, so the emit path moved into kin and this became the
-# wrapper it should always have been.
-set -e
-export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
-exec bb ../kin/bin/kin emit "$@"
+#!/usr/bin/env bb
+;; Write a kin source's output INTO the runtimes, between markers.
+;;
+;;     kin/emit kin/hash.kin      one source
+;;     kin/emit                   every source
+;;
+;; The generated code is CHECKED IN. A runtime build must not need babashka --
+;; somebody cloning this repo to build the JVM runtime should not have to
+;; install a Clojure to do it, and a generator in the build path is a
+;; generator that breaks the build. So the tool is run by hand, its output is
+;; committed, and the markers make the next run a diff rather than a merge.
+;;
+;;     // kin:begin <source>       <- everything between these two lines
+;;     ...generated...                   is replaced wholesale
+;;     // kin:end <source>
+;;
+;; kin does the splicing; the I/O is still OURS. `kp/emit!` reads and writes
+;; through the `:vfs` on each target in `flint.impl.targets`, which is a disk
+;; vfs rooted at our directories. kin itself opens nothing.
+(require '[kin.project :as kp]
+         '[flint.impl.project :as fp]
+         '[flint.impl.targets :as targets])
+
+(defn emit-one [path]
+  (doseq [{:keys [target] p :path} (kp/emit! @fp/project (fp/source-text path) path)]
+    (println (format "  %-8s %s" (name target)
+                     (if p
+                       (targets/resolve-path target p)
+                       "(no destination -- generated and not written)")))))
+
+(let [[path] *command-line-args*]
+  (if path
+    (emit-one path)
+    (doseq [[p _] (fp/sources)] (println p) (emit-one p))))

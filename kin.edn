@@ -1,9 +1,0 @@
-;; What kin needs to know about this project: which vocabularies to load, and
-;; where each target puts a namespace's generated code.
-;;
-;; `:targets` names a NAMESPACE rather than listing descriptors, because a
-;; target now carries `:path` -- a function from namespace to file -- and a
-;; function cannot be written in EDN. Everything else kin discovers from the
-;; sources themselves.
-{:vocabularies [flint.impl.rt flint.impl.hash]
- :targets flint.impl.targets}
