@@ -18,7 +18,7 @@
   Rust carries `u32` where the other two carry a signed `int`, which is why
   every shift and every constant needs a word from one of them and nothing
   from the others. The numbers are identical; only the types disagree."
-  (:require [kin :as sp]
+  (:require [kin]
             [kin.lang :as core]
             [clojure.string :as str]))
 
@@ -50,7 +50,7 @@
     :java (format "0x%x" n)
     :csharp (if (> n 0x7fffffff) (format "unchecked((int) 0x%x)" n) (format "0x%x" n))))
 
-(defn- hex-form [ctx form] (sp/kin-emit! ctx (hex ctx (second form))))
+(defn- hex-form [ctx form] (kin/emit! ctx (hex ctx (second form))))
 
 (defn forms []
   (merge
@@ -110,7 +110,7 @@
   Same three targets as `flint.impl.rt` and for the same reason -- every
   template in this file has exactly three entries. A source requiring both
   gets the intersection, which is these three."
-  (sp/vocabulary :namespace 'flint.impl.hash
+  (kin/vocabulary :namespace 'flint.impl.hash
                  :targets #{:rust :java :csharp}
                  :tags tags
                  :forms (forms)))

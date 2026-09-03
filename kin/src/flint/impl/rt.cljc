@@ -14,7 +14,7 @@
   `Obj.TyCons` in C#, which pascalises. There are a dozen of them and they
   appear all over the runtime, so they are named here once rather than at
   every use."
-  (:require [kin :as sp]
+  (:require [kin]
             [kin.lang :as core]
             [clojure.string :as str]))
 
@@ -219,17 +219,17 @@
   to get the text would hoist any temporary twice."
   [choose]
   (fn [ctx form]
-    (let [rs (mapv (fn [a] (sp/kin-render-tagged ctx a)) (rest form))
+    (let [rs (mapv (fn [a] (kin/render-tagged ctx a)) (rest form))
           {:keys [templates tag]} (choose (mapv :tag rs))
           tmpl (or (get templates (t ctx))
                    (throw (ex-info (str "kin: `" (first form) "` has no template for "
                                         (t ctx))
                                    {:form (first form) :target (t ctx)})))
           code (core/fill tmpl (mapv :text rs))]
-      (sp/kin-tagged! ctx tag)
-      (if (= :statement (sp/kin-position ctx))
-        (sp/kin-emit! ctx (sp/indent-of ctx) code ";\n")
-        (sp/kin-emit! ctx code)))))
+      (kin/tagged! ctx tag)
+      (if (= :statement (kin/position ctx))
+        (kin/emit! ctx (kin/indent-of ctx) code ";\n")
+        (kin/emit! ctx code)))))
 
 (defn- both-u32
   "The unsigned spelling when BOTH arguments are `U32`, the plain one
@@ -309,9 +309,9 @@
     'aget (core/call {:rust "{0}[{1}]" :java "{0}[{1}]" :csharp "{0}[{1}]"})
     'aset (fn [ctx form]
             (let [[_ a i v] form]
-              (sp/kin-emit! ctx (sp/indent-of ctx)
-                            (sp/kin-render ctx a) "[" (sp/kin-render ctx i) "] = "
-                            (core/strip-parens (sp/kin-render ctx v)) ";\n")))
+              (kin/emit! ctx (kin/indent-of ctx)
+                            (kin/render ctx a) "[" (kin/render ctx i) "] = "
+                            (core/strip-parens (kin/render ctx v)) ";\n")))
     ;; A hash widened to an index. Rust's index type is `usize` and its hash
     ;; is `u32`, so mixing them is a compile error there and a no-op on the
     ;; other two -- one target needs a word and the others need nothing, which
@@ -556,7 +556,7 @@
   `:csharp` entry and nothing else. A fourth runtime would be a fourth entry
   in every template here, and until that exists, saying so is what keeps kin
   from generating a plausible-looking file for a target nobody has written."
-  (sp/vocabulary :namespace 'flint.impl.rt
+  (kin/vocabulary :namespace 'flint.impl.rt
                  :targets #{:rust :java :csharp}
                  :tags tags
                  :names names
