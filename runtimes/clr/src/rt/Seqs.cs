@@ -59,58 +59,58 @@ public static class Seqs {
 
     // kin:begin kin/seqs.kin
     static long Vecseq(Rt rt, long v, int i) {
-        int @base = rt.Mark();
+        int mk = rt.Mark();
         int vi = rt.Push(v);
         long a = rt.Alloc(Obj.TyVecseq, 3);
         if (a == 0) {
-            rt.PopTo(@base);
+            rt.PopTo(mk);
             return Val.Nil;
         }
         long vv = rt.R(vi);
         rt.SetSlot(a, 0, vv);
         rt.SetSlot(a, 1, Val.Fixnum(i));
         rt.SetSlot(a, 2, Val.Nil);
-        rt.PopTo(@base);
+        rt.PopTo(mk);
         return Val.Heap(a);
     }
     static long Strseq(Rt rt, long s, int i) {
-        int @base = rt.Mark();
+        int mk = rt.Mark();
         int si = rt.Push(s);
         long a = rt.Alloc(Obj.TyStrseq, 3);
         if (a == 0) {
-            rt.PopTo(@base);
+            rt.PopTo(mk);
             return Val.Nil;
         }
         long sv = rt.R(si);
         rt.SetSlot(a, 0, sv);
         rt.SetSlot(a, 1, Val.Fixnum(i));
         rt.SetSlot(a, 2, Val.Nil);
-        rt.PopTo(@base);
+        rt.PopTo(mk);
         return Val.Heap(a);
     }
     public static long LazySeq(Rt rt, long thunk) {
-        int @base = rt.Mark();
+        int mk = rt.Mark();
         int t = rt.Push(thunk);
         long a = rt.Alloc(Obj.TyLazyseq, 3);
         if (a == 0) {
-            rt.PopTo(@base);
+            rt.PopTo(mk);
             return Val.Nil;
         }
         long tv = rt.R(t);
         rt.SetSlot(a, LS_THUNK, tv);
         rt.SetSlot(a, LS_SEQ, Val.Nil);
         rt.SetSlot(a, 2, Val.Nil);
-        rt.PopTo(@base);
+        rt.PopTo(mk);
         return Val.Heap(a);
     }
     public static long Range(Rt rt, long start, long end, long step) {
-        int @base = rt.Mark();
+        int mk = rt.Mark();
         int s = rt.Push(start);
         int e = rt.Push(end);
         int st = rt.Push(step);
         long a = rt.Alloc(Obj.TyRange, 4);
         if (a == 0) {
-            rt.PopTo(@base);
+            rt.PopTo(mk);
             return Val.Nil;
         }
         long sv = rt.R(s);
@@ -120,7 +120,7 @@ public static class Seqs {
         long stv = rt.R(st);
         rt.SetSlot(a, 2, stv);
         rt.SetSlot(a, 3, Val.Nil);
-        rt.PopTo(@base);
+        rt.PopTo(mk);
         return Val.Heap(a);
     }
     static bool RangeEmpty(Rt rt, long v) {

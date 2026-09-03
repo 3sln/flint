@@ -72,58 +72,58 @@ public final class Seqs {
 
     // kin:begin kin/seqs.kin
     static long vecseq(Rt rt, long v, int i) {
-        int base = rt.mark();
+        int mk = rt.mark();
         int vi = rt.push(v);
         long a = rt.alloc(TY_VECSEQ, 3);
         if (a == 0) {
-            rt.popTo(base);
+            rt.popTo(mk);
             return Val.NIL;
         }
         long vv = rt.r(vi);
         rt.setSlot(a, 0, vv);
         rt.setSlot(a, 1, Val.fixnum(i));
         rt.setSlot(a, 2, Val.NIL);
-        rt.popTo(base);
+        rt.popTo(mk);
         return Val.heap(a);
     }
     static long strseq(Rt rt, long s, int i) {
-        int base = rt.mark();
+        int mk = rt.mark();
         int si = rt.push(s);
         long a = rt.alloc(TY_STRSEQ, 3);
         if (a == 0) {
-            rt.popTo(base);
+            rt.popTo(mk);
             return Val.NIL;
         }
         long sv = rt.r(si);
         rt.setSlot(a, 0, sv);
         rt.setSlot(a, 1, Val.fixnum(i));
         rt.setSlot(a, 2, Val.NIL);
-        rt.popTo(base);
+        rt.popTo(mk);
         return Val.heap(a);
     }
     public static long lazySeq(Rt rt, long thunk) {
-        int base = rt.mark();
+        int mk = rt.mark();
         int t = rt.push(thunk);
         long a = rt.alloc(TY_LAZYSEQ, 3);
         if (a == 0) {
-            rt.popTo(base);
+            rt.popTo(mk);
             return Val.NIL;
         }
         long tv = rt.r(t);
         rt.setSlot(a, LS_THUNK, tv);
         rt.setSlot(a, LS_SEQ, Val.NIL);
         rt.setSlot(a, 2, Val.NIL);
-        rt.popTo(base);
+        rt.popTo(mk);
         return Val.heap(a);
     }
     public static long range(Rt rt, long start, long end, long step) {
-        int base = rt.mark();
+        int mk = rt.mark();
         int s = rt.push(start);
         int e = rt.push(end);
         int st = rt.push(step);
         long a = rt.alloc(TY_RANGE, 4);
         if (a == 0) {
-            rt.popTo(base);
+            rt.popTo(mk);
             return Val.NIL;
         }
         long sv = rt.r(s);
@@ -133,7 +133,7 @@ public final class Seqs {
         long stv = rt.r(st);
         rt.setSlot(a, 2, stv);
         rt.setSlot(a, 3, Val.NIL);
-        rt.popTo(base);
+        rt.popTo(mk);
         return Val.heap(a);
     }
     static boolean rangeEmpty(Rt rt, long v) {

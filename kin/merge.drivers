@@ -1,0 +1,120 @@
+--rust-head
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const CN_BASE: u32 = 2;
+const HASH_BITS: u32 = 5;
+impl Value { fn is_nil(self) -> bool { self.0 == 0xFFFF } }
+fn mask(h: u32, shift: u32) -> u32 { (h >> shift) & 0x1f }
+struct Rt { h: Vec<u64>, bump: u64, roots: Vec<Value>, log: String }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn obj(&mut self, tag: &str, n: u64) -> Value {
+        let a = self.bump; self.bump += n + 1;
+        self.log.push_str(tag);
+        Value(a)
+    }
+    fn cn_new(&mut self, h: u32, n: u32, _e: Value) -> Value { let _ = h; self.obj("C", (n * 2 + 2) as u64) }
+    fn bn_new(&mut self, dm: u32, nm: u32, _e: Value) -> Value { let _ = (dm, nm); self.obj("B", 8) }
+    fn set(&mut self, n: Value, i: u32, v: Value) { self.h[(n.0 + i as u64) as usize] = v.0; }
+    fn bn_set_key(&mut self, n: Value, i: u32, v: Value) { self.set(n, 2 + 2 * i, v); }
+    fn bn_set_val(&mut self, n: Value, i: u32, v: Value) { self.set(n, 3 + 2 * i, v); }
+    fn bn_set_node(&mut self, n: Value, j: u32, v: Value) { self.set(n, 7 - j, v); }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 200], bump: 1, roots: Vec::new(), log: String::new() };
+    let mut o = String::new();
+    // Two keys differing at the first level.
+    let a = rt.merge_two(0, Value(10), Value(11), 0x01, Value(20), Value(21), 0x02, NIL);
+    // Reversed, so the lower mask arrives second.
+    let b = rt.merge_two(0, Value(30), Value(31), 0x05, Value(40), Value(41), 0x03, NIL);
+    // Same hash all the way down: a collision node.
+    let c = rt.merge_two(32, Value(50), Value(51), 0x77, Value(60), Value(61), 0x77, NIL);
+    // Equal at this level, differing deeper: recursion.
+    let d = rt.merge_two(0, Value(70), Value(71), 0x21, Value(80), Value(81), 0x41, NIL);
+    o.push_str(&format!("{} {} {} {} log={} roots={} ", a.0, b.0, c.0, d.0, rt.log, rt.roots.len()));
+    for k in 1..40 { o.push_str(&format!("{},", rt.h[k])); }
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int CN_BASE = 2, HASH_BITS = 5;
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static int mask(int h, int shift) { return (h >>> shift) & 0x1f; }
+    static final class Rt {
+        long[] h = new long[200];
+        long bump = 1;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        StringBuilder log = new StringBuilder();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long obj(String tag, long n) { long a = bump; bump += n + 1; log.append(tag); return a; }
+    }
+    static long cnNew(Rt rt, int h, int n, long e) { return rt.obj("C", n * 2 + 2); }
+    static long bnNew(Rt rt, int dm, int nm, long e) { return rt.obj("B", 8); }
+    static void cnSet(Rt rt, long n, int i, long v) { rt.h[(int) n + i] = v; }
+    static void bnSetKey(Rt rt, long n, int i, long v) { cnSet(rt, n, 2 + 2 * i, v); }
+    static void bnSetVal(Rt rt, long n, int i, long v) { cnSet(rt, n, 3 + 2 * i, v); }
+    static void bnSetNode(Rt rt, long n, int j, long v) { cnSet(rt, n, 7 - j, v); }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long a = mergeTwo(rt, 0, 10, 11, 0x01, 20, 21, 0x02, NIL);
+        long b = mergeTwo(rt, 0, 30, 31, 0x05, 40, 41, 0x03, NIL);
+        long c = mergeTwo(rt, 32, 50, 51, 0x77, 60, 61, 0x77, NIL);
+        long d = mergeTwo(rt, 0, 70, 71, 0x21, 80, 81, 0x41, NIL);
+        o.append(a).append(' ').append(b).append(' ').append(c).append(' ').append(d);
+        o.append(" log=").append(rt.log).append(" roots=").append(rt.roots.size()).append(' ');
+        for (int k = 1; k < 40; k++) o.append(rt.h[k]).append(',');
+        System.out.println(o);
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    const int CN_BASE = 2, HASH_BITS = 5;
+    static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    static int Mask(int h, int shift) { return (int)((uint) h >> shift) & 0x1f; }
+    internal sealed class Rt {
+        internal long[] h = new long[200];
+        internal long bump = 1;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal System.Text.StringBuilder log = new System.Text.StringBuilder();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Obj(string tag, long n) { long a = bump; bump += n + 1; log.Append(tag); return a; }
+    }
+    static long CnNew(Rt rt, int h, int n, long e) { return rt.Obj("C", n * 2 + 2); }
+    static long BnNew(Rt rt, int dm, int nm, long e) { return rt.Obj("B", 8); }
+    static void CnSet(Rt rt, long n, int i, long v) { rt.h[(int) n + i] = v; }
+    static void BnSetKey(Rt rt, long n, int i, long v) { CnSet(rt, n, 2 + 2 * i, v); }
+    static void BnSetVal(Rt rt, long n, int i, long v) { CnSet(rt, n, 3 + 2 * i, v); }
+    static void BnSetNode(Rt rt, long n, int j, long v) { CnSet(rt, n, 7 - j, v); }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        var o = new StringBuilder();
+        long a = MergeTwo(rt, 0, 10, 11, 0x01, 20, 21, 0x02, NIL);
+        long b = MergeTwo(rt, 0, 30, 31, 0x05, 40, 41, 0x03, NIL);
+        long c = MergeTwo(rt, 32, 50, 51, 0x77, 60, 61, 0x77, NIL);
+        long d = MergeTwo(rt, 0, 70, 71, 0x21, 80, 81, 0x41, NIL);
+        o.Append(a).Append(' ').Append(b).Append(' ').Append(c).Append(' ').Append(d);
+        o.Append(" log=").Append(rt.log).Append(" roots=").Append(rt.roots.Count).Append(' ');
+        for (int k = 1; k < 40; k++) o.Append(rt.h[k]).Append(',');
+        Console.WriteLine(o.ToString());
+    }

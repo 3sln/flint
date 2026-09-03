@@ -78,6 +78,37 @@
 
 (defn- t [ctx] (:target ctx))
 
+(defn own
+  "A call to a function in the SAME class.
+
+  Distinct from `sibling`: Rust still reaches it through `self`, but the JVM
+  and CLR call it unqualified rather than through a class name, because it is
+  theirs. `Maps.java` says `bnSetKey(rt, n, i, v)`, not `Maps.bnSetKey(..)`.
+
+  `n` is how many arguments follow the receiver. `:static` means the function
+  takes no receiver at all on any target -- `mask(h, shift)` is arithmetic on
+  its arguments and reaches nothing."
+  ([rust-name java-name n] (own rust-name java-name
+                                (str (str/upper-case (subs java-name 0 1))
+                                     (subs java-name 1)) n))
+  ([rust-name java-name csharp-name n]
+   (let [args (fn [from] (str/join ", " (map #(str "{" % "}") (range from (inc n)))))
+         tail (fn [from] (if (zero? n) "" (str ", " (args from))))]
+     (core/call {:rust (str "{0}." rust-name "(" (args 1) ")")
+                 :java (str java-name "({0}" (tail 1) ")")
+                 :csharp (str csharp-name "({0}" (tail 1) ")")}))))
+
+(defn own-static
+  "A same-class function that takes NO receiver on any target."
+  ([rust-name java-name n] (own-static rust-name java-name
+                                       (str (str/upper-case (subs java-name 0 1))
+                                            (subs java-name 1)) n))
+  ([rust-name java-name csharp-name n]
+   (let [args (str/join ", " (map #(str "{" % "}") (range 0 n)))]
+     (core/call {:rust (str rust-name "(" args ")")
+                 :java (str java-name "(" args ")")
+                 :csharp (str csharp-name "(" args ")")}))))
+
 (defn sibling
   "A call into another module. `(sibling \"vec_count\" \"Vec\" \"count\")` gives
 
@@ -190,6 +221,11 @@
     ;; is `u32`, so mixing them is a compile error there and a no-op on the
     ;; other two -- one target needs a word and the others need nothing, which
     ;; is the ordinary shape of a divergence here.
+    ;; A left shift. Identical on all three, unlike the RIGHT shift, whose
+    ;; correctness depends on the tag's signedness -- which is why `kin.lang`
+    ;; refuses to carry a `bit-shift-right` at all and a subject names `ushr`
+    ;; and `sar` explicitly.
+    'shl (core/call {:rust "({0} << {1})" :java "({0} << {1})" :csharp "({0} << {1})"})
     'as-idx (core/call {:rust "{0} as usize" :java "{0}" :csharp "{0}"})
     'alen (core/call {:rust "{0}.len()" :java "{0}.length" :csharp "{0}.Length"})
     ;; The raw bits of a value. Rust wraps them in a newtype; the others do not.
@@ -215,6 +251,17 @@
     ;; `set-slot`: that one takes a `Value` and inserts `asHeap` on two
     ;; targets, which is right for reading an existing object and wrong here.
     ;; Two questions wearing one name is the mistake `^:method` already made.
+    ;; The map's own helpers. `bn-set-*` and `cn-set` are themselves
+    ;; generated, by `champ.kin`, which is what makes this a second layer
+    ;; rather than a second copy.
+    'cn-new (own "cn_new" "cnNew" 3)
+    'bn-new (own "bn_new" "bnNew" 3)
+    'cn-set (own "set" "cnSet" 3)
+    'bn-set-key (own "bn_set_key" "bnSetKey" 3)
+    'bn-set-val (own "bn_set_val" "bnSetVal" 3)
+    'bn-set-node (own "bn_set_node" "bnSetNode" 3)
+    'hash-mask (own-static "mask" "mask" 2)
+
     ;; The siblings these files actually reach for.
     'vec-count (sibling "vec_count" "Vec" "count" 1)
     'vec-nth (sibling "vec_nth" "Vec" "nth" 2)

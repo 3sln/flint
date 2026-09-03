@@ -10,6 +10,11 @@
 ;; `doc/decisions/0031`: a value in a host local does not survive an
 ;; allocation. Written once, that rule is obeyed once.
 ;;
+;; The shadow-stack mark is `mk`, not `base`: `base` is a keyword in C#, and
+;; while kin will escape it to `@base`, the hand-written C# in this tree
+;; renames instead. An escape is the right backstop and the wrong habit -- a
+;; reader should not meet two conventions in one file.
+;;
 ;; The read-then-write is hoisted into a local rather than nested, because
 ;; Rust will not take `self.set_slot(a, 0, self.r(vi))` -- an immutable borrow
 ;; inside a mutable one. Java and C# accept the nested form and lose nothing
@@ -23,55 +28,55 @@
                                    TY_VECSEQ TY_STRSEQ TY_LAZYSEQ TY_RANGE]]))
 
 (defn ^:method ^Value vecseq [^:mut ^Rt rt ^Value v ^I32 i]
-  (let [^RootIx base (mark rt)
+  (let [^RootIx mk (mark rt)
         ^RootIx vi (push rt v)
         ^Addr a (alloc rt TY_VECSEQ 3)]
     (if (== a 0)
-      (do (pop-to rt base)
+      (do (pop-to rt mk)
           (return NIL)))
     (let [^Value vv (r rt vi)]
       (set-at rt a 0 vv))
     (set-at rt a 1 (fixnum i))
     (set-at rt a 2 NIL)
-    (pop-to rt base)
+    (pop-to rt mk)
     (return (heap a))))
 
 (defn ^:method ^Value strseq [^:mut ^Rt rt ^Value s ^I32 i]
-  (let [^RootIx base (mark rt)
+  (let [^RootIx mk (mark rt)
         ^RootIx si (push rt s)
         ^Addr a (alloc rt TY_STRSEQ 3)]
     (if (== a 0)
-      (do (pop-to rt base)
+      (do (pop-to rt mk)
           (return NIL)))
     (let [^Value sv (r rt si)]
       (set-at rt a 0 sv))
     (set-at rt a 1 (fixnum i))
     (set-at rt a 2 NIL)
-    (pop-to rt base)
+    (pop-to rt mk)
     (return (heap a))))
 
 (defn ^:pub ^:method ^Value lazy-seq [^:mut ^Rt rt ^Value thunk]
-  (let [^RootIx base (mark rt)
+  (let [^RootIx mk (mark rt)
         ^RootIx t (push rt thunk)
         ^Addr a (alloc rt TY_LAZYSEQ 3)]
     (if (== a 0)
-      (do (pop-to rt base)
+      (do (pop-to rt mk)
           (return NIL)))
     (let [^Value tv (r rt t)]
       (set-at rt a LS_THUNK tv))
     (set-at rt a LS_SEQ NIL)
     (set-at rt a 2 NIL)
-    (pop-to rt base)
+    (pop-to rt mk)
     (return (heap a))))
 
 (defn ^:pub ^:method ^Value range [^:mut ^Rt rt ^Value start ^Value end ^Value step]
-  (let [^RootIx base (mark rt)
+  (let [^RootIx mk (mark rt)
         ^RootIx s (push rt start)
         ^RootIx e (push rt end)
         ^RootIx st (push rt step)
         ^Addr a (alloc rt TY_RANGE 4)]
     (if (== a 0)
-      (do (pop-to rt base)
+      (do (pop-to rt mk)
           (return NIL)))
     (let [^Value sv (r rt s)]
       (set-at rt a 0 sv))
@@ -80,7 +85,7 @@
     (let [^Value stv (r rt st)]
       (set-at rt a 2 stv))
     (set-at rt a 3 NIL)
-    (pop-to rt base)
+    (pop-to rt mk)
     (return (heap a))))
 
 (defn ^:method ^Bool range-empty [^Rt rt ^Value v]

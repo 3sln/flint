@@ -275,76 +275,65 @@ impl Rt {
 
     // --- construction of a two-entry subtree --------------------------------
 
-    fn merge_two(
-        &mut self,
-        shift: u32,
-        k0: Value,
-        v0: Value,
-        h0: u32,
-        k1: Value,
-        v1: Value,
-        h1: u32,
-        edit: Value,
-    ) -> Value {
-        let base = self.mark();
-        let ik0 = self.push(k0);
-        let iv0 = self.push(v0);
-        let ik1 = self.push(k1);
-        let iv1 = self.push(v1);
-        let ie = self.push(edit);
-        let out = if shift >= 32 {
-            let n = self.cn_new(h0, 2, self.r(ie));
-            if !n.is_nil() {
-                let (a, b, c, d) = (self.r(ik0), self.r(iv0), self.r(ik1), self.r(iv1));
-                self.set(n, CN_BASE, a);
-                self.set(n, CN_BASE + 1, b);
-                self.set(n, CN_BASE + 2, c);
-                self.set(n, CN_BASE + 3, d);
+    // kin:begin kin/merge.kin
+    fn merge_two(&mut self, shift: u32, k0: Value, v0: Value, h0: u32, k1: Value, v1: Value, h1: u32, edit: Value) -> Value {
+        let mk: usize = self.mark();
+        let ik0: usize = self.push(k0);
+        let iv0: usize = self.push(v0);
+        let ik1: usize = self.push(k1);
+        let iv1: usize = self.push(v1);
+        let ie: usize = self.push(edit);
+        // Declared, not initialised: every branch below assigns it exactly
+        // once, which Rust treats as the initialisation rather than as a
+        // mutation -- so no `mut`, and no dead store to warn about.
+        let res: Value;
+        if shift >= 32 {
+            // Two keys with the SAME 32-bit hash: a collision node, which
+            // is the only place equal hashes are stored side by side.
+            res = self.cn_new(h0, 2, self.r(ie));
+            if !res.is_nil() {
+                self.set(res, CN_BASE, self.r(ik0));
+                self.set(res, CN_BASE + 1, self.r(iv0));
+                self.set(res, CN_BASE + 2, self.r(ik1));
+                self.set(res, CN_BASE + 3, self.r(iv1));
             }
-            n
         } else {
-            let (m0, m1) = (mask(h0, shift), mask(h1, shift));
+            let m0: u32 = mask(h0, shift);
+            let m1: u32 = mask(h1, shift);
             if m0 != m1 {
-                let dm = (1u32 << m0) | (1u32 << m1);
-                let n = self.bn_new(dm, 0, self.r(ie));
-                if !n.is_nil() {
-                    let (a, b, c, d) = (self.r(ik0), self.r(iv0), self.r(ik1), self.r(iv1));
+                let dm: u32 = (1 << m0) | (1 << m1);
+                res = self.bn_new(dm, 0, self.r(ie));
+                if !res.is_nil() {
+                    // In BIT ORDER, not argument order: `index-of` derives
+                    // a slot from the bitmap, so the pair with the lower
+                    // mask must land first or every later lookup is off
+                    // by one.
                     if m0 < m1 {
-                        self.bn_set_key(n, 0, a);
-                        self.bn_set_val(n, 0, b);
-                        self.bn_set_key(n, 1, c);
-                        self.bn_set_val(n, 1, d);
+                        self.bn_set_key(res, 0, self.r(ik0));
+                        self.bn_set_val(res, 0, self.r(iv0));
+                        self.bn_set_key(res, 1, self.r(ik1));
+                        self.bn_set_val(res, 1, self.r(iv1));
                     } else {
-                        self.bn_set_key(n, 0, c);
-                        self.bn_set_val(n, 0, d);
-                        self.bn_set_key(n, 1, a);
-                        self.bn_set_val(n, 1, b);
+                        self.bn_set_key(res, 0, self.r(ik1));
+                        self.bn_set_val(res, 0, self.r(iv1));
+                        self.bn_set_key(res, 1, self.r(ik0));
+                        self.bn_set_val(res, 1, self.r(iv0));
                     }
                 }
-                n
             } else {
-                let sub = self.merge_two(
-                    shift + HASH_BITS,
-                    self.r(ik0),
-                    self.r(iv0),
-                    h0,
-                    self.r(ik1),
-                    self.r(iv1),
-                    h1,
-                    self.r(ie),
-                );
-                let si = self.push(sub);
-                let n = self.bn_new(0, 1u32 << m0, self.r(ie));
-                if !n.is_nil() {
-                    let sub = self.r(si);
-                    self.bn_set_node(n, 0, sub);
+                let sub: Value = self.merge_two(shift + HASH_BITS, self.r(ik0), self.r(iv0), h0, self.r(ik1), self.r(iv1), h1, self.r(ie));
+                let si: usize = self.push(sub);
+                res = self.bn_new(0, 1 << m0, self.r(ie));
+                if !res.is_nil() {
+                    self.bn_set_node(res, 0, self.r(si));
                 }
-                n
             }
-        };
-        self.pop_to(base);
-        out
+        }
+        self.pop_to(mk);
+        return res;
     }
+
+    // kin:end kin/merge.kin
 
     // --- structural copies --------------------------------------------------
 

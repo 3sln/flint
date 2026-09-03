@@ -164,50 +164,65 @@ public static class Maps {
 
     // --- structural copies ---------------------------------------------------
 
-    static long MergeTwo(Rt rt, int shift, long k0, long v0, int h0,
-                         long k1, long v1, int h1, long edit) {
-        int bas = rt.Mark();
-        int ik0 = rt.Push(k0), iv0 = rt.Push(v0), ik1 = rt.Push(k1), iv1 = rt.Push(v1);
+    // kin:begin kin/merge.kin
+    static long MergeTwo(Rt rt, int shift, long k0, long v0, int h0, long k1, long v1, int h1, long edit) {
+        int mk = rt.Mark();
+        int ik0 = rt.Push(k0);
+        int iv0 = rt.Push(v0);
+        int ik1 = rt.Push(k1);
+        int iv1 = rt.Push(v1);
         int ie = rt.Push(edit);
-        long outv;
+        // Declared, not initialised: every branch below assigns it exactly
+        // once, which Rust treats as the initialisation rather than as a
+        // mutation -- so no `mut`, and no dead store to warn about.
+        long res;
         if (shift >= 32) {
-            // Two keys with the SAME 32-bit hash: a collision node, which is
-            // the only place equal hashes are stored side by side.
-            outv = CnNew(rt, h0, 2, rt.R(ie));
-            if (!Val.IsNil(outv)) {
-                CnSet(rt, outv, CN_BASE, rt.R(ik0));
-                CnSet(rt, outv, CN_BASE + 1, rt.R(iv0));
-                CnSet(rt, outv, CN_BASE + 2, rt.R(ik1));
-                CnSet(rt, outv, CN_BASE + 3, rt.R(iv1));
+            // Two keys with the SAME 32-bit hash: a collision node, which
+            // is the only place equal hashes are stored side by side.
+            res = CnNew(rt, h0, 2, rt.R(ie));
+            if (!Val.IsNil(res)) {
+                CnSet(rt, res, CN_BASE, rt.R(ik0));
+                CnSet(rt, res, CN_BASE + 1, rt.R(iv0));
+                CnSet(rt, res, CN_BASE + 2, rt.R(ik1));
+                CnSet(rt, res, CN_BASE + 3, rt.R(iv1));
             }
         } else {
-            int m0 = Mask(h0, shift), m1 = Mask(h1, shift);
+            int m0 = Mask(h0, shift);
+            int m1 = Mask(h1, shift);
             if (m0 != m1) {
                 int dm = (1 << m0) | (1 << m1);
-                outv = BnNew(rt, dm, 0, rt.R(ie));
-                if (!Val.IsNil(outv)) {
-                    // In BIT ORDER, not argument order: `indexOf` derives a
-                    // slot from the bitmap, so the pair with the lower mask
-                    // must land first or every later lookup is off by one.
+                res = BnNew(rt, dm, 0, rt.R(ie));
+                if (!Val.IsNil(res)) {
+                    // In BIT ORDER, not argument order: `index-of` derives
+                    // a slot from the bitmap, so the pair with the lower
+                    // mask must land first or every later lookup is off
+                    // by one.
                     if (m0 < m1) {
-                        BnSetKey(rt, outv, 0, rt.R(ik0)); BnSetVal(rt, outv, 0, rt.R(iv0));
-                        BnSetKey(rt, outv, 1, rt.R(ik1)); BnSetVal(rt, outv, 1, rt.R(iv1));
+                        BnSetKey(rt, res, 0, rt.R(ik0));
+                        BnSetVal(rt, res, 0, rt.R(iv0));
+                        BnSetKey(rt, res, 1, rt.R(ik1));
+                        BnSetVal(rt, res, 1, rt.R(iv1));
                     } else {
-                        BnSetKey(rt, outv, 0, rt.R(ik1)); BnSetVal(rt, outv, 0, rt.R(iv1));
-                        BnSetKey(rt, outv, 1, rt.R(ik0)); BnSetVal(rt, outv, 1, rt.R(iv0));
+                        BnSetKey(rt, res, 0, rt.R(ik1));
+                        BnSetVal(rt, res, 0, rt.R(iv1));
+                        BnSetKey(rt, res, 1, rt.R(ik0));
+                        BnSetVal(rt, res, 1, rt.R(iv0));
                     }
                 }
             } else {
-                long sub = MergeTwo(rt, shift + HASH_BITS, rt.R(ik0), rt.R(iv0), h0,
-                                    rt.R(ik1), rt.R(iv1), h1, rt.R(ie));
+                long sub = MergeTwo(rt, shift + HASH_BITS, rt.R(ik0), rt.R(iv0), h0, rt.R(ik1), rt.R(iv1), h1, rt.R(ie));
                 int si = rt.Push(sub);
-                outv = BnNew(rt, 0, 1 << m0, rt.R(ie));
-                if (!Val.IsNil(outv)) BnSetNode(rt, outv, 0, rt.R(si));
+                res = BnNew(rt, 0, 1 << m0, rt.R(ie));
+                if (!Val.IsNil(res)) {
+                    BnSetNode(rt, res, 0, rt.R(si));
+                }
             }
         }
-        rt.PopTo(bas);
-        return outv;
+        rt.PopTo(mk);
+        return res;
     }
+
+    // kin:end kin/merge.kin
 
     static long BnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {
         int bas = rt.Mark();

@@ -552,6 +552,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 2 | `Interns` | `mask`, `insert_at`, `needs_grow`, `raw_insert` |
 | 3 | `Maps` | the eight CHAMP node accessors |
 | 3 | `Pike` | `word_cp`, `space_cp`, `pred_hit` |
+| 3 | `Maps` | `mergeTwo` -- the CHAMP insert's hard case |
 
 Comparing the SET and not only the count is the part that matters: a
 regeneration making one opcode unreachable while another became reachable
@@ -754,6 +755,12 @@ stay meaningful. 1 and 8 are done.
   refusing the alternative.** Two were checked; both looked principled, one had
   a comment explaining itself, and neither survived. kin's job here is to
   CONVERGE the runtimes, not to encode differences nobody chose.
+* **An escape is the right backstop and the wrong habit.** `base` and `out`
+  are keywords in C# and ordinary locals in Rust and Java. kin escapes them to
+  `@base`/`@out`, which compiles -- and shipped into `Seqs.cs` beside
+  hand-written code that renames to `bas` and `outv`, so a reader met two
+  conventions in one file. The sources now use names that collide nowhere.
+  Keep the escape for the case nobody foresaw; do not lean on it.
 * **Generated code can name a type the HOST file does not import.** The seq
   constructors emit `let a: Addr = ...`, and `seqs.rs` had no `use
   crate::mem::Addr`. `kin/verify` cannot see this -- its driver supplies its

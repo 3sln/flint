@@ -1,0 +1,73 @@
+;; `merge_two`: two entries that landed in the same slot, made into a node.
+;;
+;; Phase 3 of `doc/goals/kin-port.md`, and the first slice chosen because an
+;; analysis said it needed NOTHING new -- the algorithm is line-for-line
+;; identical in all three, and the only difference is that Rust writes
+;; `let res = if {} else {}` where the ports declare and assign. Measured, at
+;; `-O`, those compile to the same function: rustc emitted one body and
+;; aliased the other symbol to it. So the assign form is free to generate.
+;;
+;; What it does is the CHAMP insert's hard case. Two keys collide at this
+;; level of the trie, so either they differ deeper -- and this recurses to
+;; build the intermediate nodes -- or they have the same 32-bit hash all the
+;; way down, and go side by side in a collision node.
+(ns runtime.merge
+  (:require [flint.impl.rt :refer [defn return if let local set do comment
+                                   mark push r pop-to nil? not
+                                   cn-new bn-new cn-set bn-set-key bn-set-val
+                                   bn-set-node hash-mask
+                                   + >= != < shl bit-or
+                                   Rt Value RootIx I32 NIL]]))
+
+(defn ^:method ^Value merge-two
+  [^:mut ^Rt rt ^I32 shift ^Value k0 ^Value v0 ^I32 h0
+   ^Value k1 ^Value v1 ^I32 h1 ^Value edit]
+  (let [^RootIx mk (mark rt)
+        ^RootIx ik0 (push rt k0)
+        ^RootIx iv0 (push rt v0)
+        ^RootIx ik1 (push rt k1)
+        ^RootIx iv1 (push rt v1)
+        ^RootIx ie (push rt edit)]
+    (comment "Declared, not initialised: every branch below assigns it exactly"
+             "once, which Rust treats as the initialisation rather than as a"
+             "mutation -- so no `mut`, and no dead store to warn about.")
+    (local ^Value res)
+    (if (>= shift 32)
+      (do
+        (comment "Two keys with the SAME 32-bit hash: a collision node, which"
+                 "is the only place equal hashes are stored side by side.")
+        (set res (cn-new rt h0 2 (r rt ie)))
+        (if (not (nil? rt res))
+          (do (cn-set rt res CN_BASE (r rt ik0))
+              (cn-set rt res (+ CN_BASE 1) (r rt iv0))
+              (cn-set rt res (+ CN_BASE 2) (r rt ik1))
+              (cn-set rt res (+ CN_BASE 3) (r rt iv1)))))
+      (let [^I32 m0 (hash-mask h0 shift)
+            ^I32 m1 (hash-mask h1 shift)]
+        (if (!= m0 m1)
+          (let [^I32 dm (bit-or (shl 1 m0) (shl 1 m1))]
+            (set res (bn-new rt dm 0 (r rt ie)))
+            (if (not (nil? rt res))
+              (do
+                (comment "In BIT ORDER, not argument order: `index-of` derives"
+                         "a slot from the bitmap, so the pair with the lower"
+                         "mask must land first or every later lookup is off"
+                         "by one.")
+                (if (< m0 m1)
+                  (do (bn-set-key rt res 0 (r rt ik0))
+                      (bn-set-val rt res 0 (r rt iv0))
+                      (bn-set-key rt res 1 (r rt ik1))
+                      (bn-set-val rt res 1 (r rt iv1)))
+                  (do (bn-set-key rt res 0 (r rt ik1))
+                      (bn-set-val rt res 0 (r rt iv1))
+                      (bn-set-key rt res 1 (r rt ik0))
+                      (bn-set-val rt res 1 (r rt iv0)))))))
+          (let [^Value sub (merge-two rt (+ shift HASH_BITS)
+                                      (r rt ik0) (r rt iv0) h0
+                                      (r rt ik1) (r rt iv1) h1 (r rt ie))
+                ^RootIx si (push rt sub)]
+            (set res (bn-new rt 0 (shl 1 m0) (r rt ie)))
+            (if (not (nil? rt res))
+              (bn-set-node rt res 0 (r rt si)))))))
+    (pop-to rt mk)
+    (return res)))

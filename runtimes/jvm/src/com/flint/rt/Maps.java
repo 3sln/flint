@@ -166,50 +166,65 @@ public final class Maps {
 
     // --- structural copies ---------------------------------------------------
 
-    static long mergeTwo(Rt rt, int shift, long k0, long v0, int h0,
-                         long k1, long v1, int h1, long edit) {
-        int base = rt.mark();
-        int ik0 = rt.push(k0), iv0 = rt.push(v0), ik1 = rt.push(k1), iv1 = rt.push(v1);
+    // kin:begin kin/merge.kin
+    static long mergeTwo(Rt rt, int shift, long k0, long v0, int h0, long k1, long v1, int h1, long edit) {
+        int mk = rt.mark();
+        int ik0 = rt.push(k0);
+        int iv0 = rt.push(v0);
+        int ik1 = rt.push(k1);
+        int iv1 = rt.push(v1);
         int ie = rt.push(edit);
-        long out;
+        // Declared, not initialised: every branch below assigns it exactly
+        // once, which Rust treats as the initialisation rather than as a
+        // mutation -- so no `mut`, and no dead store to warn about.
+        long res;
         if (shift >= 32) {
-            // Two keys with the SAME 32-bit hash: a collision node, which is
-            // the only place equal hashes are stored side by side.
-            out = cnNew(rt, h0, 2, rt.r(ie));
-            if (!Val.isNil(out)) {
-                cnSet(rt, out, CN_BASE, rt.r(ik0));
-                cnSet(rt, out, CN_BASE + 1, rt.r(iv0));
-                cnSet(rt, out, CN_BASE + 2, rt.r(ik1));
-                cnSet(rt, out, CN_BASE + 3, rt.r(iv1));
+            // Two keys with the SAME 32-bit hash: a collision node, which
+            // is the only place equal hashes are stored side by side.
+            res = cnNew(rt, h0, 2, rt.r(ie));
+            if (!Val.isNil(res)) {
+                cnSet(rt, res, CN_BASE, rt.r(ik0));
+                cnSet(rt, res, CN_BASE + 1, rt.r(iv0));
+                cnSet(rt, res, CN_BASE + 2, rt.r(ik1));
+                cnSet(rt, res, CN_BASE + 3, rt.r(iv1));
             }
         } else {
-            int m0 = mask(h0, shift), m1 = mask(h1, shift);
+            int m0 = mask(h0, shift);
+            int m1 = mask(h1, shift);
             if (m0 != m1) {
                 int dm = (1 << m0) | (1 << m1);
-                out = bnNew(rt, dm, 0, rt.r(ie));
-                if (!Val.isNil(out)) {
-                    // In BIT ORDER, not argument order: `indexOf` derives a
-                    // slot from the bitmap, so the pair with the lower mask
-                    // must land first or every later lookup is off by one.
+                res = bnNew(rt, dm, 0, rt.r(ie));
+                if (!Val.isNil(res)) {
+                    // In BIT ORDER, not argument order: `index-of` derives
+                    // a slot from the bitmap, so the pair with the lower
+                    // mask must land first or every later lookup is off
+                    // by one.
                     if (m0 < m1) {
-                        bnSetKey(rt, out, 0, rt.r(ik0)); bnSetVal(rt, out, 0, rt.r(iv0));
-                        bnSetKey(rt, out, 1, rt.r(ik1)); bnSetVal(rt, out, 1, rt.r(iv1));
+                        bnSetKey(rt, res, 0, rt.r(ik0));
+                        bnSetVal(rt, res, 0, rt.r(iv0));
+                        bnSetKey(rt, res, 1, rt.r(ik1));
+                        bnSetVal(rt, res, 1, rt.r(iv1));
                     } else {
-                        bnSetKey(rt, out, 0, rt.r(ik1)); bnSetVal(rt, out, 0, rt.r(iv1));
-                        bnSetKey(rt, out, 1, rt.r(ik0)); bnSetVal(rt, out, 1, rt.r(iv0));
+                        bnSetKey(rt, res, 0, rt.r(ik1));
+                        bnSetVal(rt, res, 0, rt.r(iv1));
+                        bnSetKey(rt, res, 1, rt.r(ik0));
+                        bnSetVal(rt, res, 1, rt.r(iv0));
                     }
                 }
             } else {
-                long sub = mergeTwo(rt, shift + HASH_BITS, rt.r(ik0), rt.r(iv0), h0,
-                                    rt.r(ik1), rt.r(iv1), h1, rt.r(ie));
+                long sub = mergeTwo(rt, shift + HASH_BITS, rt.r(ik0), rt.r(iv0), h0, rt.r(ik1), rt.r(iv1), h1, rt.r(ie));
                 int si = rt.push(sub);
-                out = bnNew(rt, 0, 1 << m0, rt.r(ie));
-                if (!Val.isNil(out)) bnSetNode(rt, out, 0, rt.r(si));
+                res = bnNew(rt, 0, 1 << m0, rt.r(ie));
+                if (!Val.isNil(res)) {
+                    bnSetNode(rt, res, 0, rt.r(si));
+                }
             }
         }
-        rt.popTo(base);
-        return out;
+        rt.popTo(mk);
+        return res;
     }
+
+    // kin:end kin/merge.kin
 
     static long bnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {
         int base = rt.mark();

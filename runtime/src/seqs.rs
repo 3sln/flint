@@ -107,58 +107,58 @@ impl Rt {
 
     // kin:begin kin/seqs.kin
     fn vecseq(&mut self, v: Value, i: u32) -> Value {
-        let base: usize = self.mark();
+        let mk: usize = self.mark();
         let vi: usize = self.push(v);
         let a: Addr = self.alloc(TY_VECSEQ, 3);
         if a == 0 {
-            self.pop_to(base);
+            self.pop_to(mk);
             return NIL;
         }
         let vv: Value = self.r(vi);
         self.set_slot(a, 0, vv);
         self.set_slot(a, 1, Value::fixnum(i as i64));
         self.set_slot(a, 2, NIL);
-        self.pop_to(base);
+        self.pop_to(mk);
         return Value::heap(a);
     }
     fn strseq(&mut self, s: Value, i: u32) -> Value {
-        let base: usize = self.mark();
+        let mk: usize = self.mark();
         let si: usize = self.push(s);
         let a: Addr = self.alloc(TY_STRSEQ, 3);
         if a == 0 {
-            self.pop_to(base);
+            self.pop_to(mk);
             return NIL;
         }
         let sv: Value = self.r(si);
         self.set_slot(a, 0, sv);
         self.set_slot(a, 1, Value::fixnum(i as i64));
         self.set_slot(a, 2, NIL);
-        self.pop_to(base);
+        self.pop_to(mk);
         return Value::heap(a);
     }
     pub fn lazy_seq(&mut self, thunk: Value) -> Value {
-        let base: usize = self.mark();
+        let mk: usize = self.mark();
         let t: usize = self.push(thunk);
         let a: Addr = self.alloc(TY_LAZYSEQ, 3);
         if a == 0 {
-            self.pop_to(base);
+            self.pop_to(mk);
             return NIL;
         }
         let tv: Value = self.r(t);
         self.set_slot(a, LS_THUNK, tv);
         self.set_slot(a, LS_SEQ, NIL);
         self.set_slot(a, 2, NIL);
-        self.pop_to(base);
+        self.pop_to(mk);
         return Value::heap(a);
     }
     pub fn range(&mut self, start: Value, end: Value, step: Value) -> Value {
-        let base: usize = self.mark();
+        let mk: usize = self.mark();
         let s: usize = self.push(start);
         let e: usize = self.push(end);
         let st: usize = self.push(step);
         let a: Addr = self.alloc(TY_RANGE, 4);
         if a == 0 {
-            self.pop_to(base);
+            self.pop_to(mk);
             return NIL;
         }
         let sv: Value = self.r(s);
@@ -168,7 +168,7 @@ impl Rt {
         let stv: Value = self.r(st);
         self.set_slot(a, 2, stv);
         self.set_slot(a, 3, NIL);
-        self.pop_to(base);
+        self.pop_to(mk);
         return Value::heap(a);
     }
     fn range_empty(&self, v: Value) -> bool {
