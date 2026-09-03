@@ -128,20 +128,69 @@ public final class Maps {
 
     // --- lookup -------------------------------------------------------------
 
+    // kin:begin kin/find.kin
+    static long nodeFindScalar(Rt rt, long n, int shift, int h, long key) {
+        // No rooting anywhere in here: the key is a scalar, so `eq` cannot
+        // allocate, so nothing can move while this walks.
+        long node;
+        node = n;
+        long out;
+        out = Val.NOT_FOUND;
+        for (;;) {
+            if (!isBmnode(rt, node)) {
+                if (cnHash(rt, node) != h) {
+                    break;
+                }
+                int cnt = cnCount(rt, node);
+                for (int i = 0; i < cnt; i++) {
+                    if (Eq.eq(rt, cnKey(rt, node, i), key)) {
+                        out = cnVal(rt, node, i);
+                        break;
+                    }
+                }
+                break;
+            }
+            int bit = bitpos(h, shift);
+            int dm = bnDatamap(rt, node);
+            if ((dm & bit) != 0) {
+                int i = indexOf(dm, bit);
+                if (Eq.eq(rt, bnKey(rt, node, i), key)) {
+                    out = bnVal(rt, node, i);
+                }
+                break;
+            }
+            int nm = bnNodemap(rt, node);
+            if ((nm & bit) == 0) {
+                break;
+            }
+            node = bnNode(rt, node, indexOf(nm, bit));
+            shift += HASH_BITS;
+        }
+        return out;
+    }
     static long nodeFind(Rt rt, long n, int shift, int h, long key) {
-        // The node being walked and the key are rooted: `eq` on a compound key
-        // allocates (it seqs both sides), so a collection can happen in the
-        // middle of a lookup and move everything this walk is holding.
+        if (!Eq.eqMayAlloc(rt, key)) {
+            return nodeFindScalar(rt, n, shift, h, key);
+        }
+        // The node being walked and the key are rooted: `eq` on a compound
+        // key allocates (it seqs both sides), so a collection can happen in
+        // the middle of a lookup and move everything this walk is holding.
         int base = rt.mark();
         int ni = rt.push(n);
         int ki = rt.push(key);
-        long out = Val.NOT_FOUND;
+        long out;
+        out = Val.NOT_FOUND;
         for (;;) {
             if (!isBmnode(rt, rt.r(ni))) {
-                if (cnHash(rt, rt.r(ni)) != h) break;
+                if (cnHash(rt, rt.r(ni)) != h) {
+                    break;
+                }
                 int cnt = cnCount(rt, rt.r(ni));
                 for (int i = 0; i < cnt; i++) {
-                    if (Eq.eq(rt, cnKey(rt, rt.r(ni), i), rt.r(ki))) {
+                    int kk = rt.push(cnKey(rt, rt.r(ni), i));
+                    boolean same = Eq.eq(rt, rt.r(kk), rt.r(ki));
+                    rt.popTo(kk);
+                    if (same) {
                         out = cnVal(rt, rt.r(ni), i);
                         break;
                     }
@@ -152,17 +201,26 @@ public final class Maps {
             int dm = bnDatamap(rt, rt.r(ni));
             if ((dm & bit) != 0) {
                 int i = indexOf(dm, bit);
-                if (Eq.eq(rt, bnKey(rt, rt.r(ni), i), rt.r(ki))) out = bnVal(rt, rt.r(ni), i);
+                int kk = rt.push(bnKey(rt, rt.r(ni), i));
+                boolean same = Eq.eq(rt, rt.r(kk), rt.r(ki));
+                rt.popTo(kk);
+                if (same) {
+                    out = bnVal(rt, rt.r(ni), i);
+                }
                 break;
             }
             int nm = bnNodemap(rt, rt.r(ni));
-            if ((nm & bit) == 0) break;
+            if ((nm & bit) == 0) {
+                break;
+            }
             rt.setR(ni, bnNode(rt, rt.r(ni), indexOf(nm, bit)));
             shift += HASH_BITS;
         }
         rt.popTo(base);
         return out;
     }
+
+    // kin:end kin/find.kin
 
     // --- structural copies ---------------------------------------------------
 

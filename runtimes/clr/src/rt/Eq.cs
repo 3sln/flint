@@ -45,6 +45,20 @@ public static class Eq {
 
     // kin:end kin/eq.kin
 
+    // kin:begin kin/eqalloc.kin
+    /// Can `=` or `hash` on this value allocate?
+    /// 
+    /// Only compound values: comparing or hashing a vector, list, map or set
+    /// walks it through `seq`/`first`/`next`, which allocates, which can run a
+    /// collection in the middle of a map lookup. Scalars -- numbers, strings,
+    /// keywords, symbols -- never do, and the lookup paths take a version with
+    /// no rooting at all when the key is one, because `get` is hot.
+    public static bool EqMayAlloc(Rt rt, long v) {
+        return Val.IsHeap(v) && (Category(rt, v) != CAT_SCALAR);
+    }
+
+    // kin:end kin/eqalloc.kin
+
     public static bool Equal(Rt rt, long a, long b) {
         // Doubles FIRST: bit equality would wrongly make NaN equal to itself,
         // and would wrongly separate 0.0 from -0.0.

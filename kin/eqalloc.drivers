@@ -1,0 +1,47 @@
+--rust-head
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const CAT_SCALAR: u8 = 0;
+impl Value { fn is_heap(self) -> bool { self.0 >= 100 } }
+struct Rt { cats: Vec<u8> }
+impl Rt {
+    fn category(&self, v: Value) -> u8 { if v.is_heap() { self.cats[v.0 as usize - 100] } else { CAT_SCALAR } }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    // 0..99 are immediates; 100.. are heap values whose category is looked up.
+    let rt = Rt { cats: vec![0, 1, 2, 3] };
+    let mut o = String::new();
+    for v in [Value(5), Value(100), Value(101), Value(102), Value(103)] {
+        o.push_str(&format!("{},", rt.eq_may_alloc(v) as u32));
+    }
+    println!("{}", o);
+}
+--java-head
+    static final int CAT_SCALAR = 0;
+    static final class Val { static boolean isHeap(long v) { return v >= 100; } }
+    static final class Rt { int[] cats = {0, 1, 2, 3}; }
+    static int category(Rt rt, long v) { return Val.isHeap(v) ? rt.cats[(int) v - 100] : CAT_SCALAR; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long[] vs = {5, 100, 101, 102, 103};
+        for (long v : vs) o.append(eqMayAlloc(rt, v) ? 1 : 0).append(',');
+        System.out.println(o);
+    }
+--csharp-head
+    const int CAT_SCALAR = 0;
+    static class Val { internal static bool IsHeap(long v) { return v >= 100; } }
+    internal sealed class Rt { internal int[] cats = {0, 1, 2, 3}; }
+    static int Category(Rt rt, long v) { return Val.IsHeap(v) ? rt.cats[(int) v - 100] : CAT_SCALAR; }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        var o = new StringBuilder();
+        long[] vs = {5, 100, 101, 102, 103};
+        foreach (long v in vs) o.Append(EqMayAlloc(rt, v) ? 1 : 0).Append(',');
+        Console.WriteLine(o.ToString());
+    }

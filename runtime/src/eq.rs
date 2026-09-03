@@ -40,16 +40,19 @@ impl Rt {
         self.category(v) == CAT_SEQUENTIAL
     }
 
+    // kin:begin kin/eqalloc.kin
     /// Can `=` or `hash` on this value allocate?
-    ///
+    /// 
     /// Only compound values: comparing or hashing a vector, list, map or set
     /// walks it through `seq`/`first`/`next`, which allocates, which can run a
     /// collection in the middle of a map lookup. Scalars -- numbers, strings,
     /// keywords, symbols -- never do, and the lookup paths take a version with
     /// no rooting at all when the key is one, because `get` is hot.
     pub fn eq_may_alloc(&self, v: Value) -> bool {
-        v.is_heap() && self.category(v) != CAT_SCALAR
+        return v.is_heap() && (self.category(v) != CAT_SCALAR);
     }
+
+    // kin:end kin/eqalloc.kin
 
     /// Byte-for-byte equality across tiers, without materialising either side
     /// into the flint heap. Lengths are O(1) on all three, and unequal lengths

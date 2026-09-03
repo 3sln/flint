@@ -196,90 +196,99 @@ impl Rt {
 
     /// Lookup for a key whose `=` cannot allocate. No rooting, because nothing
     /// here can move: this is the shape `get` almost always has.
-    fn node_find_scalar(&mut self, n: Value, shift: u32, h: u32, key: Value) -> Value {
-        let mut node = n;
-        let mut shift = shift;
+    // kin:begin kin/find.kin
+    fn node_find_scalar(&mut self, n: Value, mut shift: u32, h: u32, key: Value) -> Value {
+        // No rooting anywhere in here: the key is a scalar, so `eq` cannot
+        // allocate, so nothing can move while this walks.
+        let mut node: Value;
+        node = n;
+        let mut out: Value;
+        out = NOT_FOUND;
         loop {
             if !self.is_bmnode(node) {
-                if self.slot(node, CN_HASH).as_fixnum() as u32 != h {
-                    return NOT_FOUND;
+                if self.cn_hash(node) != h {
+                    break;
                 }
-                let cnt = self.cn_count(node);
+                let cnt: u32 = self.cn_count(node);
                 for i in 0..cnt {
-                    let k = self.cn_key(node, i);
-                    if self.eq(k, key) {
-                        return self.cn_val(node, i);
+                    if self.eq(self.cn_key(node, i), key) {
+                        out = self.cn_val(node, i);
+                        break;
                     }
                 }
-                return NOT_FOUND;
+                break;
             }
-            let bit = bitpos(h, shift);
-            let dm = self.bn_datamap(node);
-            if dm & bit != 0 {
-                let i = index_of(dm, bit);
-                let k = self.bn_key(node, i);
-                return if self.eq(k, key) { self.bn_val(node, i) } else { NOT_FOUND };
+            let bit: u32 = bitpos(h, shift);
+            let dm: u32 = self.bn_datamap(node);
+            if (dm & bit) != 0 {
+                let i: u32 = index_of(dm, bit);
+                if self.eq(self.bn_key(node, i), key) {
+                    out = self.bn_val(node, i);
+                }
+                break;
             }
-            let nm = self.bn_nodemap(node);
-            if nm & bit == 0 {
-                return NOT_FOUND;
+            let nm: u32 = self.bn_nodemap(node);
+            if (nm & bit) == 0 {
+                break;
             }
             node = self.bn_node(node, index_of(nm, bit));
             shift += HASH_BITS;
         }
+        return out;
     }
-
-    fn node_find(&mut self, n: Value, shift: u32, h: u32, key: Value) -> Value {
+    fn node_find(&mut self, n: Value, mut shift: u32, h: u32, key: Value) -> Value {
         if !self.eq_may_alloc(key) {
             return self.node_find_scalar(n, shift, h, key);
         }
-        // The node being walked and the key are rooted: `eq` on a compound key
-        // allocates (it seqs both sides), so a collection can happen in the
-        // middle of a lookup and move everything this walk is holding.
-        let base = self.mark();
-        let ni = self.push(n);
-        let ki = self.push(key);
-        let mut shift = shift;
-        let out = loop {
+        // The node being walked and the key are rooted: `eq` on a compound
+        // key allocates (it seqs both sides), so a collection can happen in
+        // the middle of a lookup and move everything this walk is holding.
+        let base: usize = self.mark();
+        let ni: usize = self.push(n);
+        let ki: usize = self.push(key);
+        let mut out: Value;
+        out = NOT_FOUND;
+        loop {
             if !self.is_bmnode(self.r(ni)) {
-                if self.slot(self.r(ni), CN_HASH).as_fixnum() as u32 != h {
-                    break NOT_FOUND;
+                if self.cn_hash(self.r(ni)) != h {
+                    break;
                 }
-                let cnt = self.cn_count(self.r(ni));
-                let mut found = NOT_FOUND;
+                let cnt: u32 = self.cn_count(self.r(ni));
                 for i in 0..cnt {
-                    let k = self.cn_key(self.r(ni), i);
-                    let kk = self.push(k);
-                    let same = self.eq(self.r(kk), self.r(ki));
+                    let kk: usize = self.push(self.cn_key(self.r(ni), i));
+                    let same: bool = self.eq(self.r(kk), self.r(ki));
                     self.pop_to(kk);
                     if same {
-                        found = self.cn_val(self.r(ni), i);
+                        out = self.cn_val(self.r(ni), i);
                         break;
                     }
                 }
-                break found;
+                break;
             }
-            let bit = bitpos(h, shift);
-            let dm = self.bn_datamap(self.r(ni));
-            if dm & bit != 0 {
-                let i = index_of(dm, bit);
-                let k = self.bn_key(self.r(ni), i);
-                let kk = self.push(k);
-                let same = self.eq(self.r(kk), self.r(ki));
+            let bit: u32 = bitpos(h, shift);
+            let dm: u32 = self.bn_datamap(self.r(ni));
+            if (dm & bit) != 0 {
+                let i: u32 = index_of(dm, bit);
+                let kk: usize = self.push(self.bn_key(self.r(ni), i));
+                let same: bool = self.eq(self.r(kk), self.r(ki));
                 self.pop_to(kk);
-                break if same { self.bn_val(self.r(ni), i) } else { NOT_FOUND };
+                if same {
+                    out = self.bn_val(self.r(ni), i);
+                }
+                break;
             }
-            let nm = self.bn_nodemap(self.r(ni));
-            if nm & bit == 0 {
-                break NOT_FOUND;
+            let nm: u32 = self.bn_nodemap(self.r(ni));
+            if (nm & bit) == 0 {
+                break;
             }
-            let sub = self.bn_node(self.r(ni), index_of(nm, bit));
-            self.set_r(ni, sub);
+            self.set_r(ni, self.bn_node(self.r(ni), index_of(nm, bit)));
             shift += HASH_BITS;
-        };
+        }
         self.pop_to(base);
-        out
+        return out;
     }
+
+    // kin:end kin/find.kin
 
     // --- construction of a two-entry subtree --------------------------------
 

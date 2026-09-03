@@ -126,21 +126,70 @@ public static class Maps {
 
     // --- lookup -------------------------------------------------------------
 
+    // kin:begin kin/find.kin
+    static long NodeFindScalar(Rt rt, long n, int shift, int h, long key) {
+        // No rooting anywhere in here: the key is a scalar, so `eq` cannot
+        // allocate, so nothing can move while this walks.
+        long node;
+        node = n;
+        long @out;
+        @out = Val.NotFound;
+        for (;;) {
+            if (!IsBmnode(rt, node)) {
+                if (CnHash(rt, node) != h) {
+                    break;
+                }
+                int cnt = CnCount(rt, node);
+                for (int i = 0; i < cnt; i++) {
+                    if (Flint.Rt.Eq.Equal(rt, CnKey(rt, node, i), key)) {
+                        @out = CnVal(rt, node, i);
+                        break;
+                    }
+                }
+                break;
+            }
+            int bit = Bitpos(h, shift);
+            int dm = BnDatamap(rt, node);
+            if ((dm & bit) != 0) {
+                int i = IndexOf(dm, bit);
+                if (Flint.Rt.Eq.Equal(rt, BnKey(rt, node, i), key)) {
+                    @out = BnVal(rt, node, i);
+                }
+                break;
+            }
+            int nm = BnNodemap(rt, node);
+            if ((nm & bit) == 0) {
+                break;
+            }
+            node = BnNode(rt, node, IndexOf(nm, bit));
+            shift += HASH_BITS;
+        }
+        return @out;
+    }
     static long NodeFind(Rt rt, long n, int shift, int h, long key) {
-        // The node being walked and the key are rooted: `eq` on a compound key
-        // allocates (it seqs both sides), so a collection can happen in the
-        // middle of a lookup and move everything this walk is holding.
-        int bas = rt.Mark();
+        if (!Flint.Rt.Eq.EqMayAlloc(rt, key)) {
+            return NodeFindScalar(rt, n, shift, h, key);
+        }
+        // The node being walked and the key are rooted: `eq` on a compound
+        // key allocates (it seqs both sides), so a collection can happen in
+        // the middle of a lookup and move everything this walk is holding.
+        int @base = rt.Mark();
         int ni = rt.Push(n);
         int ki = rt.Push(key);
-        long outv = Val.NotFound;
+        long @out;
+        @out = Val.NotFound;
         for (;;) {
             if (!IsBmnode(rt, rt.R(ni))) {
-                if (CnHash(rt, rt.R(ni)) != h) break;
+                if (CnHash(rt, rt.R(ni)) != h) {
+                    break;
+                }
                 int cnt = CnCount(rt, rt.R(ni));
                 for (int i = 0; i < cnt; i++) {
-                    if (Flint.Rt.Eq.Equal(rt, CnKey(rt, rt.R(ni), i), rt.R(ki))) {
-                        outv = CnVal(rt, rt.R(ni), i);
+                    int kk = rt.Push(CnKey(rt, rt.R(ni), i));
+                    bool same = Flint.Rt.Eq.Equal(rt, rt.R(kk), rt.R(ki));
+                    rt.PopTo(kk);
+                    if (same) {
+                        @out = CnVal(rt, rt.R(ni), i);
                         break;
                     }
                 }
@@ -150,17 +199,26 @@ public static class Maps {
             int dm = BnDatamap(rt, rt.R(ni));
             if ((dm & bit) != 0) {
                 int i = IndexOf(dm, bit);
-                if (Flint.Rt.Eq.Equal(rt, BnKey(rt, rt.R(ni), i), rt.R(ki))) outv = BnVal(rt, rt.R(ni), i);
+                int kk = rt.Push(BnKey(rt, rt.R(ni), i));
+                bool same = Flint.Rt.Eq.Equal(rt, rt.R(kk), rt.R(ki));
+                rt.PopTo(kk);
+                if (same) {
+                    @out = BnVal(rt, rt.R(ni), i);
+                }
                 break;
             }
             int nm = BnNodemap(rt, rt.R(ni));
-            if ((nm & bit) == 0) break;
+            if ((nm & bit) == 0) {
+                break;
+            }
             rt.SetR(ni, BnNode(rt, rt.R(ni), IndexOf(nm, bit)));
             shift += HASH_BITS;
         }
-        rt.PopTo(bas);
-        return outv;
+        rt.PopTo(@base);
+        return @out;
     }
+
+    // kin:end kin/find.kin
 
     // --- structural copies ---------------------------------------------------
 

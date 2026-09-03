@@ -304,6 +304,15 @@
     'cn-copy-set-val (own "cn_copy_set_val" "cnCopySetVal" 4)
     'node-assoc (own "node_assoc" "nodeAssoc" 6)
     'coll-dissoc (own "coll_dissoc" "collDissoc" 3)
+    ;; `category` is itself generated, by `kin/eq.kin`, and is reached from
+    ;; inside its own class on the ports -- so it is `own`, not `sibling`.
+    'category (own "category" "category" 1)
+    ;; Fully qualified in C# for the same reason `val-eq` is: `Maps` has its
+    ;; own `Eq` member, which shadows the class inside it.
+    'eq-may-alloc (core/call {:rust "{0}.eq_may_alloc({1})"
+                              :java "Eq.eqMayAlloc({0}, {1})"
+                              :csharp "Flint.Rt.Eq.EqMayAlloc({0}, {1})"})
+    'node-find-scalar (own "node_find_scalar" "nodeFindScalar" 4)
     'node-size-class (own "node_size_class" "nodeSizeClass" 1)
     'bn-copy-remove-entry (own "bn_copy_remove_entry" "bnCopyRemoveEntry" 3)
     'bn-node-to-inline (own "bn_node_to_inline" "bnNodeToInline" 5)

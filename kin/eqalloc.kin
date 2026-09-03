@@ -1,0 +1,31 @@
+;; `eq_may_alloc`: can `=` or `hash` on this value allocate?
+;;
+;; Only compound values. Comparing or hashing a vector, list, map or set walks
+;; it through `seq`/`first`/`next`, which allocates, which can run a collection
+;; in the middle of a map lookup. Scalars -- numbers, strings, keywords,
+;; symbols -- never do, so the lookup paths take a version with no rooting at
+;; all when the key is one, because `get` is hot.
+;;
+;; It EXISTED IN RUST AND IN NEITHER PORT, along with the scalar walk it gates.
+;; Measured before porting rather than after: 20,000,000 scalar-key lookups
+;; into a 2,000-entry CHAMP, two binaries run interleaved with the compile cost
+;; subtracted, 2.05s against 2.18s. Six percent of the most common map
+;; operation, so it ports outward rather than being deleted from Rust.
+;;
+;; It ships as its own source rather than joining `eq.kin` because the three
+;; runtimes do not agree on where `is_sequential` lives -- Rust keeps it beside
+;; `category`, the ports keep it on `Rt` -- so a single region cannot span
+;; `category` through here in all three files.
+(ns runtime.eqalloc
+  (:require [flint.impl.rt :refer [defn doc return if and not != is-heap category
+                                   Rt Value Bool CAT_SCALAR]]))
+
+(doc "Can `=` or `hash` on this value allocate?"
+     ""
+     "Only compound values: comparing or hashing a vector, list, map or set"
+     "walks it through `seq`/`first`/`next`, which allocates, which can run a"
+     "collection in the middle of a map lookup. Scalars -- numbers, strings,"
+     "keywords, symbols -- never do, and the lookup paths take a version with"
+     "no rooting at all when the key is one, because `get` is hot.")
+(defn ^:pub ^:method ^Bool eq-may-alloc [^Rt rt ^Value v]
+  (return (and (is-heap v) (!= (category rt v) CAT_SCALAR))))
