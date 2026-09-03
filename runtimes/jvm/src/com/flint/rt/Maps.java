@@ -226,73 +226,132 @@ public final class Maps {
 
     // kin:end kin/merge.kin
 
+    // kin:begin kin/copies.kin
     static long bnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {
-        int base = rt.mark();
-        int ni = rt.push(n), ki = rt.push(key), vi = rt.push(val), ei = rt.push(edit);
-        int dm = bnDatamap(rt, n), nm = bnNodemap(rt, n);
-        int ne = Integer.bitCount(dm), nn = Integer.bitCount(nm);
+        int mk = rt.mark();
+        int ni = rt.push(n);
+        int ki = rt.push(key);
+        int vi = rt.push(val);
+        int ei = rt.push(edit);
+        int dm = bnDatamap(rt, n);
+        int nm = bnNodemap(rt, n);
+        int ne = Integer.bitCount(dm);
+        int nn = Integer.bitCount(nm);
         int at = indexOf(dm, bit);
-        long out = bnNew(rt, dm | bit, nm, rt.r(ei));
-        if (Val.isNil(out)) { rt.popTo(base); return Val.NIL; }
-        int oi = rt.push(out);
-        for (int k = 0; k < ne; k++) {
-            int d = k < at ? k : k + 1;
-            bnSetKey(rt, rt.r(oi), d, bnKey(rt, rt.r(ni), k));
-            bnSetVal(rt, rt.r(oi), d, bnVal(rt, rt.r(ni), k));
+        long res = bnNew(rt, dm | bit, nm, rt.r(ei));
+        if (Val.isNil(res)) {
+            rt.popTo(mk);
+            return Val.NIL;
         }
-        bnSetKey(rt, rt.r(oi), at, rt.r(ki));
-        bnSetVal(rt, rt.r(oi), at, rt.r(vi));
-        for (int j = 0; j < nn; j++) bnSetNode(rt, rt.r(oi), j, bnNode(rt, rt.r(ni), j));
-        long r = rt.r(oi);
-        rt.popTo(base);
-        return r;
+        int oi = rt.push(res);
+        // Everything at or after the insertion point shifts up one.
+        // `index-of` derives a slot from the bitmap, so a pair landing
+        // in the wrong order is a lookup that misses.
+        for (int k = 0; k < ne; k++) {
+            int d;
+            if (k < at) {
+                d = k;
+            } else {
+                d = k + 1;
+            }
+            long ek = bnKey(rt, rt.r(ni), k);
+            bnSetKey(rt, rt.r(oi), d, ek);
+            long ev = bnVal(rt, rt.r(ni), k);
+            bnSetVal(rt, rt.r(oi), d, ev);
+        }
+        long nk = rt.r(ki);
+        bnSetKey(rt, rt.r(oi), at, nk);
+        long nv = rt.r(vi);
+        bnSetVal(rt, rt.r(oi), at, nv);
+        for (int j = 0; j < nn; j++) {
+            long sub = bnNode(rt, rt.r(ni), j);
+            bnSetNode(rt, rt.r(oi), j, sub);
+        }
+        long built = rt.r(oi);
+        rt.popTo(mk);
+        return built;
     }
-
     static long bnCopyRemoveEntry(Rt rt, long n, int bit, long edit) {
-        int base = rt.mark();
-        int ni = rt.push(n), ei = rt.push(edit);
-        int dm = bnDatamap(rt, n), nm = bnNodemap(rt, n);
-        int ne = Integer.bitCount(dm), nn = Integer.bitCount(nm);
+        int mk = rt.mark();
+        int ni = rt.push(n);
+        int ei = rt.push(edit);
+        int dm = bnDatamap(rt, n);
+        int nm = bnNodemap(rt, n);
+        int ne = Integer.bitCount(dm);
+        int nn = Integer.bitCount(nm);
         int at = indexOf(dm, bit);
-        long out = bnNew(rt, dm ^ bit, nm, rt.r(ei));
-        if (Val.isNil(out)) { rt.popTo(base); return Val.NIL; }
-        int oi = rt.push(out);
-        for (int k = 0; k < ne; k++) {
-            if (k == at) continue;
-            int d = k < at ? k : k - 1;
-            bnSetKey(rt, rt.r(oi), d, bnKey(rt, rt.r(ni), k));
-            bnSetVal(rt, rt.r(oi), d, bnVal(rt, rt.r(ni), k));
+        long res = bnNew(rt, dm ^ bit, nm, rt.r(ei));
+        if (Val.isNil(res)) {
+            rt.popTo(mk);
+            return Val.NIL;
         }
-        for (int j = 0; j < nn; j++) bnSetNode(rt, rt.r(oi), j, bnNode(rt, rt.r(ni), j));
-        long r = rt.r(oi);
-        rt.popTo(base);
-        return r;
+        int oi = rt.push(res);
+        // Everything after the hole shifts DOWN one, and the removed
+        // slot is skipped rather than copied.
+        for (int k = 0; k < ne; k++) {
+            if (k == at) {
+                continue;
+            }
+            int d;
+            if (k < at) {
+                d = k;
+            } else {
+                d = k - 1;
+            }
+            long ek = bnKey(rt, rt.r(ni), k);
+            bnSetKey(rt, rt.r(oi), d, ek);
+            long ev = bnVal(rt, rt.r(ni), k);
+            bnSetVal(rt, rt.r(oi), d, ev);
+        }
+        for (int j = 0; j < nn; j++) {
+            long sub = bnNode(rt, rt.r(ni), j);
+            bnSetNode(rt, rt.r(oi), j, sub);
+        }
+        long built = rt.r(oi);
+        rt.popTo(mk);
+        return built;
+    }
+    static long bnCopySetValue(Rt rt, long n, int at, long val, long edit) {
+        int mk = rt.mark();
+        int ni = rt.push(n);
+        int vi = rt.push(val);
+        int ei = rt.push(edit);
+        // Owned by this transient? Then write through rather than copy.
+        if (!Val.isNil(rt.r(ei)) && (rt.slot(rt.r(ni), BN_EDIT) == rt.r(ei))) {
+            long own = rt.r(ni);
+            long nv = rt.r(vi);
+            bnSetVal(rt, own, at, nv);
+            rt.popTo(mk);
+            return own;
+        }
+        int dm = bnDatamap(rt, n);
+        int nm = bnNodemap(rt, n);
+        long res = bnNew(rt, dm, nm, rt.r(ei));
+        if (Val.isNil(res)) {
+            rt.popTo(mk);
+            return Val.NIL;
+        }
+        int oi = rt.push(res);
+        int ne = Integer.bitCount(dm);
+        int nn = Integer.bitCount(nm);
+        for (int k = 0; k < ne; k++) {
+            long ek = bnKey(rt, rt.r(ni), k);
+            bnSetKey(rt, rt.r(oi), k, ek);
+            long ev = bnVal(rt, rt.r(ni), k);
+            bnSetVal(rt, rt.r(oi), k, ev);
+        }
+        for (int j = 0; j < nn; j++) {
+            long sub = bnNode(rt, rt.r(ni), j);
+            bnSetNode(rt, rt.r(oi), j, sub);
+        }
+        long fresh = rt.r(vi);
+        bnSetVal(rt, rt.r(oi), at, fresh);
+        long built = rt.r(oi);
+        rt.popTo(mk);
+        return built;
     }
 
-    static long bnCopySetValue(Rt rt, long n, int at, long val, long edit) {
-        int base = rt.mark();
-        int ni = rt.push(n), vi = rt.push(val), ei = rt.push(edit);
-        // Owned by this transient? Then write through.
-        if (!Val.isNil(rt.r(ei)) && rt.slot(rt.r(ni), BN_EDIT) == rt.r(ei)) {
-            long nn0 = rt.r(ni);
-            bnSetVal(rt, nn0, at, rt.r(vi));
-            rt.popTo(base);
-            return nn0;
-        }
-        int dm = bnDatamap(rt, n), nm = bnNodemap(rt, n);
-        long out = bnNew(rt, dm, nm, rt.r(ei));
-        if (Val.isNil(out)) { rt.popTo(base); return Val.NIL; }
-        int oi = rt.push(out);
-        for (int k = 0; k < Integer.bitCount(dm); k++) {
-            bnSetKey(rt, rt.r(oi), k, bnKey(rt, rt.r(ni), k));
-            bnSetVal(rt, rt.r(oi), k, bnVal(rt, rt.r(ni), k));
-        }
-        for (int j = 0; j < Integer.bitCount(nm); j++) bnSetNode(rt, rt.r(oi), j, bnNode(rt, rt.r(ni), j));
-        bnSetVal(rt, rt.r(oi), at, rt.r(vi));
-        long r = rt.r(oi);
-        rt.popTo(base);
-        return r;
-    }
+    // kin:end kin/copies.kin
 
     static long bnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
         int base = rt.mark();

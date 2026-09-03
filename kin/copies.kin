@@ -1,0 +1,141 @@
+;; The CHAMP structural copies, written once.
+;;
+;; Phase 3. Six functions that all do the same thing: build a NEW bitmap node
+;; that differs from an old one in exactly one place. A persistent map has no
+;; other way to change -- every insert, every removal and every promotion of
+;; an inline pair into a sub-node goes through one of these.
+;;
+;; They are the largest slice in `Maps` that needs no new shape, and they were
+;; measured line-for-line identical across the three before being written. The
+;; only Rust-specific concession is hoisting a read out of a write, which the
+;; borrow checker requires and the other two do not notice.
+;;
+;; Every local in a function has a DISTINCT name, which is a source rule
+;; rather than a style: C# refuses a name reused in an enclosing scope
+;; (CS0136) where Rust shadows happily and Java allows sibling scopes. The
+;; strictest of the three sets the rule, and one name per value is clearer
+;; anyway.
+;;
+;; What makes them worth generating is not their length but their SAMENESS: an
+;; off-by-one in the slot arithmetic here is a map that loses an entry, and
+;; six near-copies in three languages is eighteen chances to make one.
+(ns runtime.copies
+  (:require [flint.impl.rt :refer [defn return if let local set do for continue comment
+                                   mark push r pop-to nil? not
+                                   bn-new bn-datamap bn-nodemap bn-key bn-val
+                                   bn-node bn-set-key bn-set-val bn-set-node
+                                   index-of popcount
+                                   + - < == and slot bit-or bit-xor bit-and
+                                   Rt Value RootIx I32 NIL]]))
+
+(defn ^:method ^Value bn-copy-insert-entry
+  [^:mut ^Rt rt ^Value n ^I32 bit ^Value key ^Value val ^Value edit]
+  (let [^RootIx mk (mark rt)
+        ^RootIx ni (push rt n)
+        ^RootIx ki (push rt key)
+        ^RootIx vi (push rt val)
+        ^RootIx ei (push rt edit)
+        ^I32 dm (bn-datamap rt n)
+        ^I32 nm (bn-nodemap rt n)
+        ^I32 ne (popcount dm)
+        ^I32 nn (popcount nm)
+        ^I32 at (index-of dm bit)
+        ^Value res (bn-new rt (bit-or dm bit) nm (r rt ei))]
+    (if (nil? rt res)
+      (do (pop-to rt mk)
+          (return NIL)))
+    (let [^RootIx oi (push rt res)]
+      (comment "Everything at or after the insertion point shifts up one."
+               "`index-of` derives a slot from the bitmap, so a pair landing"
+               "in the wrong order is a lookup that misses.")
+      (for [^I32 k 0 ne]
+        (local ^I32 d)
+        (if (< k at)
+          (set d k)
+          (set d (+ k 1)))
+        (let [^Value ek (bn-key rt (r rt ni) k)]
+          (bn-set-key rt (r rt oi) d ek))
+        (let [^Value ev (bn-val rt (r rt ni) k)]
+          (bn-set-val rt (r rt oi) d ev)))
+      (let [^Value nk (r rt ki)]
+        (bn-set-key rt (r rt oi) at nk))
+      (let [^Value nv (r rt vi)]
+        (bn-set-val rt (r rt oi) at nv))
+      (for [^I32 j 0 nn]
+        (let [^Value sub (bn-node rt (r rt ni) j)]
+          (bn-set-node rt (r rt oi) j sub)))
+      (let [^Value built (r rt oi)]
+        (pop-to rt mk)
+        (return built)))))
+
+(defn ^:method ^Value bn-copy-remove-entry
+  [^:mut ^Rt rt ^Value n ^I32 bit ^Value edit]
+  (let [^RootIx mk (mark rt)
+        ^RootIx ni (push rt n)
+        ^RootIx ei (push rt edit)
+        ^I32 dm (bn-datamap rt n)
+        ^I32 nm (bn-nodemap rt n)
+        ^I32 ne (popcount dm)
+        ^I32 nn (popcount nm)
+        ^I32 at (index-of dm bit)
+        ^Value res (bn-new rt (bit-xor dm bit) nm (r rt ei))]
+    (if (nil? rt res)
+      (do (pop-to rt mk)
+          (return NIL)))
+    (let [^RootIx oi (push rt res)]
+      (comment "Everything after the hole shifts DOWN one, and the removed"
+               "slot is skipped rather than copied.")
+      (for [^I32 k 0 ne]
+        (if (== k at)
+          (continue))
+        (local ^I32 d)
+        (if (< k at)
+          (set d k)
+          (set d (- k 1)))
+        (let [^Value ek (bn-key rt (r rt ni) k)]
+          (bn-set-key rt (r rt oi) d ek))
+        (let [^Value ev (bn-val rt (r rt ni) k)]
+          (bn-set-val rt (r rt oi) d ev)))
+      (for [^I32 j 0 nn]
+        (let [^Value sub (bn-node rt (r rt ni) j)]
+          (bn-set-node rt (r rt oi) j sub)))
+      (let [^Value built (r rt oi)]
+        (pop-to rt mk)
+        (return built)))))
+
+(defn ^:method ^Value bn-copy-set-value
+  [^:mut ^Rt rt ^Value n ^I32 at ^Value val ^Value edit]
+  (let [^RootIx mk (mark rt)
+        ^RootIx ni (push rt n)
+        ^RootIx vi (push rt val)
+        ^RootIx ei (push rt edit)]
+    (comment "Owned by this transient? Then write through rather than copy.")
+    (if (and (not (nil? rt (r rt ei)))
+             (== (slot rt (r rt ni) BN_EDIT) (r rt ei)))
+      (let [^Value own (r rt ni)
+            ^Value nv (r rt vi)]
+        (bn-set-val rt own at nv)
+        (pop-to rt mk)
+        (return own)))
+    (let [^I32 dm (bn-datamap rt n)
+          ^I32 nm (bn-nodemap rt n)
+          ^Value res (bn-new rt dm nm (r rt ei))]
+      (if (nil? rt res)
+        (do (pop-to rt mk)
+            (return NIL)))
+      (let [^RootIx oi (push rt res)
+            ^I32 ne (popcount dm)
+            ^I32 nn (popcount nm)]
+        (for [^I32 k 0 ne]
+          (let [^Value ek (bn-key rt (r rt ni) k)]
+            (bn-set-key rt (r rt oi) k ek))
+          (let [^Value ev (bn-val rt (r rt ni) k)]
+            (bn-set-val rt (r rt oi) k ev)))
+        (for [^I32 j 0 nn]
+          (let [^Value sub (bn-node rt (r rt ni) j)]
+            (bn-set-node rt (r rt oi) j sub)))
+        (let [^Value fresh (r rt vi)]
+          (bn-set-val rt (r rt oi) at fresh))
+        (let [^Value built (r rt oi)]
+          (pop-to rt mk)
+          (return built))))))

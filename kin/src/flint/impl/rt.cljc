@@ -261,6 +261,17 @@
     'bn-set-val (own "bn_set_val" "bnSetVal" 3)
     'bn-set-node (own "bn_set_node" "bnSetNode" 3)
     'hash-mask (own-static "mask" "mask" 2)
+    'index-of (own-static "index_of" "indexOf" 2)
+    'bn-datamap (own "bn_datamap" "bnDatamap" 1)
+    'bn-nodemap (own "bn_nodemap" "bnNodemap" 1)
+    'bn-key (own "bn_key" "bnKey" 2)
+    'bn-val (own "bn_val" "bnVal" 2)
+    'bn-node (own "bn_node" "bnNode" 2)
+    ;; Population count. Three intrinsics for one idea -- the shape a
+    ;; vocabulary exists for.
+    'popcount (core/call {:rust "{0}.count_ones()"
+                          :java "Integer.bitCount({0})"
+                          :csharp "System.Numerics.BitOperations.PopCount((uint)({0}))"})
 
     ;; The siblings these files actually reach for.
     'vec-count (sibling "vec_count" "Vec" "count" 1)

@@ -224,73 +224,132 @@ public static class Maps {
 
     // kin:end kin/merge.kin
 
+    // kin:begin kin/copies.kin
     static long BnCopyInsertEntry(Rt rt, long n, int bit, long key, long val, long edit) {
-        int bas = rt.Mark();
-        int ni = rt.Push(n), ki = rt.Push(key), vi = rt.Push(val), ei = rt.Push(edit);
-        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
-        int ne = System.Numerics.BitOperations.PopCount((uint)(dm)), nn = System.Numerics.BitOperations.PopCount((uint)(nm));
+        int mk = rt.Mark();
+        int ni = rt.Push(n);
+        int ki = rt.Push(key);
+        int vi = rt.Push(val);
+        int ei = rt.Push(edit);
+        int dm = BnDatamap(rt, n);
+        int nm = BnNodemap(rt, n);
+        int ne = System.Numerics.BitOperations.PopCount((uint)(dm));
+        int nn = System.Numerics.BitOperations.PopCount((uint)(nm));
         int at = IndexOf(dm, bit);
-        long outv = BnNew(rt, dm | bit, nm, rt.R(ei));
-        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
-        int oi = rt.Push(outv);
-        for (int k = 0; k < ne; k++) {
-            int d = k < at ? k : k + 1;
-            BnSetKey(rt, rt.R(oi), d, BnKey(rt, rt.R(ni), k));
-            BnSetVal(rt, rt.R(oi), d, BnVal(rt, rt.R(ni), k));
+        long res = BnNew(rt, dm | bit, nm, rt.R(ei));
+        if (Val.IsNil(res)) {
+            rt.PopTo(mk);
+            return Val.Nil;
         }
-        BnSetKey(rt, rt.R(oi), at, rt.R(ki));
-        BnSetVal(rt, rt.R(oi), at, rt.R(vi));
-        for (int j = 0; j < nn; j++) BnSetNode(rt, rt.R(oi), j, BnNode(rt, rt.R(ni), j));
-        long r = rt.R(oi);
-        rt.PopTo(bas);
-        return r;
+        int oi = rt.Push(res);
+        // Everything at or after the insertion point shifts up one.
+        // `index-of` derives a slot from the bitmap, so a pair landing
+        // in the wrong order is a lookup that misses.
+        for (int k = 0; k < ne; k++) {
+            int d;
+            if (k < at) {
+                d = k;
+            } else {
+                d = k + 1;
+            }
+            long ek = BnKey(rt, rt.R(ni), k);
+            BnSetKey(rt, rt.R(oi), d, ek);
+            long ev = BnVal(rt, rt.R(ni), k);
+            BnSetVal(rt, rt.R(oi), d, ev);
+        }
+        long nk = rt.R(ki);
+        BnSetKey(rt, rt.R(oi), at, nk);
+        long nv = rt.R(vi);
+        BnSetVal(rt, rt.R(oi), at, nv);
+        for (int j = 0; j < nn; j++) {
+            long sub = BnNode(rt, rt.R(ni), j);
+            BnSetNode(rt, rt.R(oi), j, sub);
+        }
+        long built = rt.R(oi);
+        rt.PopTo(mk);
+        return built;
     }
-
     static long BnCopyRemoveEntry(Rt rt, long n, int bit, long edit) {
-        int bas = rt.Mark();
-        int ni = rt.Push(n), ei = rt.Push(edit);
-        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
-        int ne = System.Numerics.BitOperations.PopCount((uint)(dm)), nn = System.Numerics.BitOperations.PopCount((uint)(nm));
+        int mk = rt.Mark();
+        int ni = rt.Push(n);
+        int ei = rt.Push(edit);
+        int dm = BnDatamap(rt, n);
+        int nm = BnNodemap(rt, n);
+        int ne = System.Numerics.BitOperations.PopCount((uint)(dm));
+        int nn = System.Numerics.BitOperations.PopCount((uint)(nm));
         int at = IndexOf(dm, bit);
-        long outv = BnNew(rt, dm ^ bit, nm, rt.R(ei));
-        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
-        int oi = rt.Push(outv);
-        for (int k = 0; k < ne; k++) {
-            if (k == at) continue;
-            int d = k < at ? k : k - 1;
-            BnSetKey(rt, rt.R(oi), d, BnKey(rt, rt.R(ni), k));
-            BnSetVal(rt, rt.R(oi), d, BnVal(rt, rt.R(ni), k));
+        long res = BnNew(rt, dm ^ bit, nm, rt.R(ei));
+        if (Val.IsNil(res)) {
+            rt.PopTo(mk);
+            return Val.Nil;
         }
-        for (int j = 0; j < nn; j++) BnSetNode(rt, rt.R(oi), j, BnNode(rt, rt.R(ni), j));
-        long r = rt.R(oi);
-        rt.PopTo(bas);
-        return r;
+        int oi = rt.Push(res);
+        // Everything after the hole shifts DOWN one, and the removed
+        // slot is skipped rather than copied.
+        for (int k = 0; k < ne; k++) {
+            if (k == at) {
+                continue;
+            }
+            int d;
+            if (k < at) {
+                d = k;
+            } else {
+                d = k - 1;
+            }
+            long ek = BnKey(rt, rt.R(ni), k);
+            BnSetKey(rt, rt.R(oi), d, ek);
+            long ev = BnVal(rt, rt.R(ni), k);
+            BnSetVal(rt, rt.R(oi), d, ev);
+        }
+        for (int j = 0; j < nn; j++) {
+            long sub = BnNode(rt, rt.R(ni), j);
+            BnSetNode(rt, rt.R(oi), j, sub);
+        }
+        long built = rt.R(oi);
+        rt.PopTo(mk);
+        return built;
+    }
+    static long BnCopySetValue(Rt rt, long n, int at, long val, long edit) {
+        int mk = rt.Mark();
+        int ni = rt.Push(n);
+        int vi = rt.Push(val);
+        int ei = rt.Push(edit);
+        // Owned by this transient? Then write through rather than copy.
+        if (!Val.IsNil(rt.R(ei)) && (rt.Slot(rt.R(ni), BN_EDIT) == rt.R(ei))) {
+            long own = rt.R(ni);
+            long nv = rt.R(vi);
+            BnSetVal(rt, own, at, nv);
+            rt.PopTo(mk);
+            return own;
+        }
+        int dm = BnDatamap(rt, n);
+        int nm = BnNodemap(rt, n);
+        long res = BnNew(rt, dm, nm, rt.R(ei));
+        if (Val.IsNil(res)) {
+            rt.PopTo(mk);
+            return Val.Nil;
+        }
+        int oi = rt.Push(res);
+        int ne = System.Numerics.BitOperations.PopCount((uint)(dm));
+        int nn = System.Numerics.BitOperations.PopCount((uint)(nm));
+        for (int k = 0; k < ne; k++) {
+            long ek = BnKey(rt, rt.R(ni), k);
+            BnSetKey(rt, rt.R(oi), k, ek);
+            long ev = BnVal(rt, rt.R(ni), k);
+            BnSetVal(rt, rt.R(oi), k, ev);
+        }
+        for (int j = 0; j < nn; j++) {
+            long sub = BnNode(rt, rt.R(ni), j);
+            BnSetNode(rt, rt.R(oi), j, sub);
+        }
+        long fresh = rt.R(vi);
+        BnSetVal(rt, rt.R(oi), at, fresh);
+        long built = rt.R(oi);
+        rt.PopTo(mk);
+        return built;
     }
 
-    static long BnCopySetValue(Rt rt, long n, int at, long val, long edit) {
-        int bas = rt.Mark();
-        int ni = rt.Push(n), vi = rt.Push(val), ei = rt.Push(edit);
-        // Owned by this transient? Then write through.
-        if (!Val.IsNil(rt.R(ei)) && rt.Slot(rt.R(ni), BN_EDIT) == rt.R(ei)) {
-            long nn0 = rt.R(ni);
-            BnSetVal(rt, nn0, at, rt.R(vi));
-            rt.PopTo(bas);
-            return nn0;
-        }
-        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
-        long outv = BnNew(rt, dm, nm, rt.R(ei));
-        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
-        int oi = rt.Push(outv);
-        for (int k = 0; k < System.Numerics.BitOperations.PopCount((uint)(dm)); k++) {
-            BnSetKey(rt, rt.R(oi), k, BnKey(rt, rt.R(ni), k));
-            BnSetVal(rt, rt.R(oi), k, BnVal(rt, rt.R(ni), k));
-        }
-        for (int j = 0; j < System.Numerics.BitOperations.PopCount((uint)(nm)); j++) BnSetNode(rt, rt.R(oi), j, BnNode(rt, rt.R(ni), j));
-        BnSetVal(rt, rt.R(oi), at, rt.R(vi));
-        long r = rt.R(oi);
-        rt.PopTo(bas);
-        return r;
-    }
+    // kin:end kin/copies.kin
 
     static long BnCopySetNode(Rt rt, long n, int at, long sub, long edit) {
         int bas = rt.Mark();

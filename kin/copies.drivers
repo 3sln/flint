@@ -1,0 +1,171 @@
+--rust-head
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+impl Value { fn is_nil(self) -> bool { self.0 == 0xFFFF } }
+fn index_of(bitmap: u32, bit: u32) -> u32 { (bitmap & (bit - 1)).count_ones() }
+const BN_EDIT: u32 = 18;
+struct Rt { h: Vec<u64>, bump: u64, roots: Vec<Value> }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn bn_new(&mut self, dm: u32, nm: u32, _e: Value) -> Value {
+        let a = self.bump; self.bump += 20;
+        self.h[a as usize] = dm as u64; self.h[(a + 1) as usize] = nm as u64;
+        Value(a)
+    }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[(n.0 + i as u64) as usize]) }
+    fn bn_datamap(&self, n: Value) -> u32 { self.h[n.0 as usize] as u32 }
+    fn bn_nodemap(&self, n: Value) -> u32 { self.h[(n.0 + 1) as usize] as u32 }
+    fn bn_key(&self, n: Value, i: u32) -> Value { Value(self.h[(n.0 + 2 + 2 * i as u64) as usize]) }
+    fn bn_val(&self, n: Value, i: u32) -> Value { Value(self.h[(n.0 + 3 + 2 * i as u64) as usize]) }
+    fn bn_set_key(&mut self, n: Value, i: u32, v: Value) { self.h[(n.0 + 2 + 2 * i as u64) as usize] = v.0; }
+    fn bn_set_val(&mut self, n: Value, i: u32, v: Value) { self.h[(n.0 + 3 + 2 * i as u64) as usize] = v.0; }
+    fn bn_node(&self, n: Value, j: u32) -> Value { Value(self.h[(n.0 + 19 - j as u64) as usize]) }
+    fn bn_set_node(&mut self, n: Value, j: u32, v: Value) { self.h[(n.0 + 19 - j as u64) as usize] = v.0; }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 200], bump: 1, roots: Vec::new() };
+    // A node holding entries at bits 1 and 8, and one sub-node at bit 4.
+    let n = rt.bn_new(0b1001, 0b0100, NIL);
+    rt.bn_set_key(n, 0, Value(10)); rt.bn_set_val(n, 0, Value(11));
+    rt.bn_set_key(n, 1, Value(80)); rt.bn_set_val(n, 1, Value(81));
+    rt.bn_set_node(n, 0, Value(44));
+    // Insert at bit 2, which sorts BETWEEN the two existing pairs.
+    let m = rt.bn_copy_insert_entry(n, 0b0010, Value(20), Value(21), NIL);
+    let mut o = String::new();
+    o.push_str(&format!("dm={} nm={} ", rt.bn_datamap(m), rt.bn_nodemap(m)));
+    for i in 0..3 { o.push_str(&format!("{}:{} ", rt.bn_key(m, i).0, rt.bn_val(m, i).0)); }
+    o.push_str(&format!("sub={} | ", rt.bn_node(m, 0).0));
+    // Remove the middle pair again: the later one must shift back DOWN.
+    let d = rt.bn_copy_remove_entry(m, 0b0010, NIL);
+    o.push_str(&format!("dm={} ", rt.bn_datamap(d)));
+    for i in 0..2 { o.push_str(&format!("{}:{} ", rt.bn_key(d, i).0, rt.bn_val(d, i).0)); }
+    // Replace a value, copying (edit is NIL, so not owned).
+    let s2 = rt.bn_copy_set_value(d, 1, Value(99), NIL);
+    o.push_str(&format!("| copy {}:{} ", rt.bn_key(s2, 1).0, rt.bn_val(s2, 1).0));
+    // Replace a value in a node this transient owns: written through, same node.
+    let tok = Value(7);
+    let owned = rt.bn_new(0b0001, 0, tok);
+    rt.h[(owned.0 + 18) as usize] = tok.0;
+    rt.bn_set_key(owned, 0, Value(5)); rt.bn_set_val(owned, 0, Value(6));
+    let s3 = rt.bn_copy_set_value(owned, 0, Value(66), tok);
+    o.push_str(&format!("| through {} {}:{} roots={}",
+                        s3.0 == owned.0, rt.bn_key(s3, 0).0, rt.bn_val(s3, 0).0, rt.roots.len()));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final class Val { static final long NIL = 0xFFFFL; static boolean isNil(long v) { return v == NIL; } }
+    static final int BN_EDIT = 18;
+    static int indexOf(int bitmap, int bit) { return Integer.bitCount(bitmap & (bit - 1)); }
+    static final class Rt {
+        long[] h = new long[200];
+        long bump = 1;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static long bnNew(Rt rt, int dm, int nm, long e) {
+        long a = rt.bump; rt.bump += 20;
+        rt.h[(int) a] = dm; rt.h[(int) a + 1] = nm; return a;
+    }
+    static int bnDatamap(Rt rt, long n) { return (int) rt.h[(int) n]; }
+    static int bnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    static long bnKey(Rt rt, long n, int i) { return rt.h[(int) n + 2 + 2 * i]; }
+    static long bnVal(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    static void bnSetKey(Rt rt, long n, int i, long v) { rt.h[(int) n + 2 + 2 * i] = v; }
+    static void bnSetVal(Rt rt, long n, int i, long v) { rt.h[(int) n + 3 + 2 * i] = v; }
+    static long bnNode(Rt rt, long n, int j) { return rt.h[(int) n + 19 - j]; }
+    static void bnSetNode(Rt rt, long n, int j, long v) { rt.h[(int) n + 19 - j] = v; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        long n = bnNew(rt, 0b1001, 0b0100, NIL);
+        bnSetKey(rt, n, 0, 10); bnSetVal(rt, n, 0, 11);
+        bnSetKey(rt, n, 1, 80); bnSetVal(rt, n, 1, 81);
+        bnSetNode(rt, n, 0, 44);
+        long m = bnCopyInsertEntry(rt, n, 0b0010, 20, 21, NIL);
+        StringBuilder o = new StringBuilder();
+        o.append("dm=").append(bnDatamap(rt, m)).append(" nm=").append(bnNodemap(rt, m)).append(' ');
+        for (int i = 0; i < 3; i++) o.append(bnKey(rt, m, i)).append(':').append(bnVal(rt, m, i)).append(' ');
+        o.append("sub=").append(bnNode(rt, m, 0)).append(" | ");
+        long d = bnCopyRemoveEntry(rt, m, 0b0010, NIL);
+        o.append("dm=").append(bnDatamap(rt, d)).append(' ');
+        for (int i = 0; i < 2; i++) o.append(bnKey(rt, d, i)).append(':').append(bnVal(rt, d, i)).append(' ');
+        long s2 = bnCopySetValue(rt, d, 1, 99, NIL);
+        o.append("| copy ").append(bnKey(rt, s2, 1)).append(':').append(bnVal(rt, s2, 1)).append(' ');
+        long tok = 7;
+        long owned = bnNew(rt, 0b0001, 0, tok);
+        rt.h[(int) owned + 18] = tok;
+        bnSetKey(rt, owned, 0, 5); bnSetVal(rt, owned, 0, 6);
+        long s3 = bnCopySetValue(rt, owned, 0, 66, tok);
+        o.append("| through ").append(s3 == owned).append(' ')
+         .append(bnKey(rt, s3, 0)).append(':').append(bnVal(rt, s3, 0))
+         .append(" roots=").append(rt.roots.size());
+        System.out.println(o);
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    static class Val { internal const long Nil = 0xFFFFL; internal static bool IsNil(long v) { return v == Nil; } }
+    const int BN_EDIT = 18;
+    static int IndexOf(int bitmap, int bit) {
+        return System.Numerics.BitOperations.PopCount((uint)(bitmap & (bit - 1)));
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[200];
+        internal long bump = 1;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static long BnNew(Rt rt, int dm, int nm, long e) {
+        long a = rt.bump; rt.bump += 20;
+        rt.h[(int) a] = dm; rt.h[(int) a + 1] = nm; return a;
+    }
+    static int BnDatamap(Rt rt, long n) { return (int) rt.h[(int) n]; }
+    static int BnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    static long BnKey(Rt rt, long n, int i) { return rt.h[(int) n + 2 + 2 * i]; }
+    static long BnVal(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    static void BnSetKey(Rt rt, long n, int i, long v) { rt.h[(int) n + 2 + 2 * i] = v; }
+    static void BnSetVal(Rt rt, long n, int i, long v) { rt.h[(int) n + 3 + 2 * i] = v; }
+    static long BnNode(Rt rt, long n, int j) { return rt.h[(int) n + 19 - j]; }
+    static void BnSetNode(Rt rt, long n, int j, long v) { rt.h[(int) n + 19 - j] = v; }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        long n = BnNew(rt, 0b1001, 0b0100, NIL);
+        BnSetKey(rt, n, 0, 10); BnSetVal(rt, n, 0, 11);
+        BnSetKey(rt, n, 1, 80); BnSetVal(rt, n, 1, 81);
+        BnSetNode(rt, n, 0, 44);
+        long m = BnCopyInsertEntry(rt, n, 0b0010, 20, 21, NIL);
+        var o = new StringBuilder();
+        o.Append("dm=").Append(BnDatamap(rt, m)).Append(" nm=").Append(BnNodemap(rt, m)).Append(' ');
+        for (int i = 0; i < 3; i++) o.Append(BnKey(rt, m, i)).Append(':').Append(BnVal(rt, m, i)).Append(' ');
+        o.Append("sub=").Append(BnNode(rt, m, 0)).Append(" | ");
+        long d = BnCopyRemoveEntry(rt, m, 0b0010, NIL);
+        o.Append("dm=").Append(BnDatamap(rt, d)).Append(' ');
+        for (int i = 0; i < 2; i++) o.Append(BnKey(rt, d, i)).Append(':').Append(BnVal(rt, d, i)).Append(' ');
+        long s2 = BnCopySetValue(rt, d, 1, 99, NIL);
+        o.Append("| copy ").Append(BnKey(rt, s2, 1)).Append(':').Append(BnVal(rt, s2, 1)).Append(' ');
+        long tok = 7;
+        long owned = BnNew(rt, 0b0001, 0, tok);
+        rt.h[(int) owned + 18] = tok;
+        BnSetKey(rt, owned, 0, 5); BnSetVal(rt, owned, 0, 6);
+        long s3 = BnCopySetValue(rt, owned, 0, 66, tok);
+        o.Append("| through ").Append(s3 == owned ? "true" : "false").Append(' ')
+         .Append(BnKey(rt, s3, 0)).Append(':').Append(BnVal(rt, s3, 0))
+         .Append(" roots=").Append(rt.roots.Count);
+        Console.WriteLine(o.ToString());
+    }

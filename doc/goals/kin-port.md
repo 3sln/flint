@@ -553,6 +553,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Maps` | the eight CHAMP node accessors |
 | 3 | `Pike` | `word_cp`, `space_cp`, `pred_hit` |
 | 3 | `Maps` | `mergeTwo` -- the CHAMP insert's hard case |
+| 3 | `Maps` | `bnCopyInsertEntry`, `bnCopyRemoveEntry`, `bnCopySetValue` |
 
 Comparing the SET and not only the count is the part that matters: a
 regeneration making one opcode unreachable while another became reachable
@@ -755,6 +756,11 @@ stay meaningful. 1 and 8 are done.
   refusing the alternative.** Two were checked; both looked principled, one had
   a comment explaining itself, and neither survived. kin's job here is to
   CONVERGE the runtimes, not to encode differences nobody chose.
+* **One distinct local name per function, because the strictest target sets
+  the rule.** C# refuses a name reused in an enclosing scope (CS0136) where
+  Rust shadows freely and Java allows sibling scopes. A `vv` inside a loop and
+  another outside it compiles twice and fails once. Distinct names read better
+  anyway, so this costs nothing to obey.
 * **An escape is the right backstop and the wrong habit.** `base` and `out`
   are keywords in C# and ordinary locals in Rust and Java. kin escapes them to
   `@base`/`@out`, which compiles -- and shipped into `Seqs.cs` beside

@@ -337,106 +337,132 @@ impl Rt {
 
     // --- structural copies --------------------------------------------------
 
+    // kin:begin kin/copies.kin
     fn bn_copy_insert_entry(&mut self, n: Value, bit: u32, key: Value, val: Value, edit: Value) -> Value {
-        let base = self.mark();
-        let ni = self.push(n);
-        let ki = self.push(key);
-        let vi = self.push(val);
-        let ei = self.push(edit);
-        let (dm, nm) = (self.bn_datamap(n), self.bn_nodemap(n));
-        let ne = dm.count_ones();
-        let nn = nm.count_ones();
-        let at = index_of(dm, bit);
-        let out = self.bn_new(dm | bit, nm, self.r(ei));
-        if out.is_nil() {
-            self.pop_to(base);
+        let mk: usize = self.mark();
+        let ni: usize = self.push(n);
+        let ki: usize = self.push(key);
+        let vi: usize = self.push(val);
+        let ei: usize = self.push(edit);
+        let dm: u32 = self.bn_datamap(n);
+        let nm: u32 = self.bn_nodemap(n);
+        let ne: u32 = dm.count_ones();
+        let nn: u32 = nm.count_ones();
+        let at: u32 = index_of(dm, bit);
+        let res: Value = self.bn_new(dm | bit, nm, self.r(ei));
+        if res.is_nil() {
+            self.pop_to(mk);
             return NIL;
         }
-        let oi = self.push(out);
+        let oi: usize = self.push(res);
+        // Everything at or after the insertion point shifts up one.
+        // `index-of` derives a slot from the bitmap, so a pair landing
+        // in the wrong order is a lookup that misses.
         for k in 0..ne {
-            let d = if k < at { k } else { k + 1 };
-            let (kk, vv) = (self.bn_key(self.r(ni), k), self.bn_val(self.r(ni), k));
-            self.bn_set_key(self.r(oi), d, kk);
-            self.bn_set_val(self.r(oi), d, vv);
+            let d: u32;
+            if k < at {
+                d = k;
+            } else {
+                d = k + 1;
+            }
+            let ek: Value = self.bn_key(self.r(ni), k);
+            self.bn_set_key(self.r(oi), d, ek);
+            let ev: Value = self.bn_val(self.r(ni), k);
+            self.bn_set_val(self.r(oi), d, ev);
         }
-        let (kk, vv) = (self.r(ki), self.r(vi));
-        self.bn_set_key(self.r(oi), at, kk);
-        self.bn_set_val(self.r(oi), at, vv);
+        let nk: Value = self.r(ki);
+        self.bn_set_key(self.r(oi), at, nk);
+        let nv: Value = self.r(vi);
+        self.bn_set_val(self.r(oi), at, nv);
         for j in 0..nn {
-            let sub = self.bn_node(self.r(ni), j);
+            let sub: Value = self.bn_node(self.r(ni), j);
             self.bn_set_node(self.r(oi), j, sub);
         }
-        let out = self.r(oi);
-        self.pop_to(base);
-        out
+        let built: Value = self.r(oi);
+        self.pop_to(mk);
+        return built;
     }
-
     fn bn_copy_remove_entry(&mut self, n: Value, bit: u32, edit: Value) -> Value {
-        let base = self.mark();
-        let ni = self.push(n);
-        let ei = self.push(edit);
-        let (dm, nm) = (self.bn_datamap(n), self.bn_nodemap(n));
-        let ne = dm.count_ones();
-        let nn = nm.count_ones();
-        let at = index_of(dm, bit);
-        let out = self.bn_new(dm ^ bit, nm, self.r(ei));
-        if out.is_nil() {
-            self.pop_to(base);
+        let mk: usize = self.mark();
+        let ni: usize = self.push(n);
+        let ei: usize = self.push(edit);
+        let dm: u32 = self.bn_datamap(n);
+        let nm: u32 = self.bn_nodemap(n);
+        let ne: u32 = dm.count_ones();
+        let nn: u32 = nm.count_ones();
+        let at: u32 = index_of(dm, bit);
+        let res: Value = self.bn_new(dm ^ bit, nm, self.r(ei));
+        if res.is_nil() {
+            self.pop_to(mk);
             return NIL;
         }
-        let oi = self.push(out);
+        let oi: usize = self.push(res);
+        // Everything after the hole shifts DOWN one, and the removed
+        // slot is skipped rather than copied.
         for k in 0..ne {
             if k == at {
                 continue;
             }
-            let d = if k < at { k } else { k - 1 };
-            let (kk, vv) = (self.bn_key(self.r(ni), k), self.bn_val(self.r(ni), k));
-            self.bn_set_key(self.r(oi), d, kk);
-            self.bn_set_val(self.r(oi), d, vv);
+            let d: u32;
+            if k < at {
+                d = k;
+            } else {
+                d = k - 1;
+            }
+            let ek: Value = self.bn_key(self.r(ni), k);
+            self.bn_set_key(self.r(oi), d, ek);
+            let ev: Value = self.bn_val(self.r(ni), k);
+            self.bn_set_val(self.r(oi), d, ev);
         }
         for j in 0..nn {
-            let sub = self.bn_node(self.r(ni), j);
+            let sub: Value = self.bn_node(self.r(ni), j);
             self.bn_set_node(self.r(oi), j, sub);
         }
-        let out = self.r(oi);
-        self.pop_to(base);
-        out
+        let built: Value = self.r(oi);
+        self.pop_to(mk);
+        return built;
     }
-
     fn bn_copy_set_value(&mut self, n: Value, at: u32, val: Value, edit: Value) -> Value {
-        let base = self.mark();
-        let ni = self.push(n);
-        let vi = self.push(val);
-        let ei = self.push(edit);
-        // Owned by this transient? Then write through.
-        if !self.r(ei).is_nil() && self.slot(self.r(ni), BN_EDIT) == self.r(ei) {
-            let (n, v) = (self.r(ni), self.r(vi));
-            self.bn_set_val(n, at, v);
-            self.pop_to(base);
-            return n;
+        let mk: usize = self.mark();
+        let ni: usize = self.push(n);
+        let vi: usize = self.push(val);
+        let ei: usize = self.push(edit);
+        // Owned by this transient? Then write through rather than copy.
+        if !self.r(ei).is_nil() && (self.slot(self.r(ni), BN_EDIT) == self.r(ei)) {
+            let own: Value = self.r(ni);
+            let nv: Value = self.r(vi);
+            self.bn_set_val(own, at, nv);
+            self.pop_to(mk);
+            return own;
         }
-        let (dm, nm) = (self.bn_datamap(n), self.bn_nodemap(n));
-        let out = self.bn_new(dm, nm, self.r(ei));
-        if out.is_nil() {
-            self.pop_to(base);
+        let dm: u32 = self.bn_datamap(n);
+        let nm: u32 = self.bn_nodemap(n);
+        let res: Value = self.bn_new(dm, nm, self.r(ei));
+        if res.is_nil() {
+            self.pop_to(mk);
             return NIL;
         }
-        let oi = self.push(out);
-        for k in 0..dm.count_ones() {
-            let (kk, vv) = (self.bn_key(self.r(ni), k), self.bn_val(self.r(ni), k));
-            self.bn_set_key(self.r(oi), k, kk);
-            self.bn_set_val(self.r(oi), k, vv);
+        let oi: usize = self.push(res);
+        let ne: u32 = dm.count_ones();
+        let nn: u32 = nm.count_ones();
+        for k in 0..ne {
+            let ek: Value = self.bn_key(self.r(ni), k);
+            self.bn_set_key(self.r(oi), k, ek);
+            let ev: Value = self.bn_val(self.r(ni), k);
+            self.bn_set_val(self.r(oi), k, ev);
         }
-        for j in 0..nm.count_ones() {
-            let sub = self.bn_node(self.r(ni), j);
+        for j in 0..nn {
+            let sub: Value = self.bn_node(self.r(ni), j);
             self.bn_set_node(self.r(oi), j, sub);
         }
-        let v = self.r(vi);
-        self.bn_set_val(self.r(oi), at, v);
-        let out = self.r(oi);
-        self.pop_to(base);
-        out
+        let fresh: Value = self.r(vi);
+        self.bn_set_val(self.r(oi), at, fresh);
+        let built: Value = self.r(oi);
+        self.pop_to(mk);
+        return built;
     }
+
+    // kin:end kin/copies.kin
 
     fn bn_copy_set_node(&mut self, n: Value, at: u32, sub: Value, edit: Value) -> Value {
         let base = self.mark();
