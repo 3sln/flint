@@ -251,7 +251,62 @@
                      {:var q :needs missing
                       :from-workspace w-here :to-workspace w-there})))))))))
 
+(defn- privacy-check!
+  "Refuse a reference to a var that is not visible from here.
+
+  Two marks, two boundaries, and both are checked at the REFERENCE for the
+  same reason `guard-check!` is: visibility is a compile-time construct that
+  costs a run nothing, and there is no callable behind it to route around.
+
+      ^:private    (or `defn-`)   only the defining NAMESPACE may name it
+      ^:internal                  only the defining WORKSPACE may name it
+      neither                     anyone may
+
+  `^:internal` exists because a namespace is too small a unit to build a
+  library out of and a workspace is the unit that ships. A library with six
+  namespaces has helpers that all six need and nobody outside should touch,
+  and before this the only way to say that was to make them public and hope.
+
+  A workspace is the same boundary `0036` guards capabilities across, and the
+  two questions compose without interfering: `^:internal` asks WHO MAY NAME
+  THIS, a guard asks WHAT MAY THIS CODE DO. A var can be both.
+
+  Namespaces with no workspace are all the anonymous one, so a program that
+  declares none is checked only for `:private` -- which is what it should be,
+  since a workspace boundary nobody drew cannot be crossed.
+
+  On macros: a macro body calling a private helper is safe, because that call
+  happens while the macro RUNS, in its own namespace, at expansion time. What
+  would be refused is a macro that EMITS a private var into its expansion,
+  where the reference really does land in the caller. Clojure refuses that
+  too, and the fix is the same: make the helper visible, or expand to
+  something public."
+  [env q]
+  (when (namespace q)
+    (let [c @(:cc env)
+          m (get (:var-meta c) q)
+          here (current-ns env)
+          there (symbol (namespace q))]
+      (when (not= here there)
+        (cond
+          (:private m)
+          (err (str q " is private to " there
+                    "; " here " may not name it")
+               {:var q :from here :defined-in there :visibility :private})
+
+          (:internal m)
+          (let [ws (:workspaces c)
+                w-here (get-in ws [here :workspace])
+                w-there (get-in ws [there :workspace])]
+            (when (not= w-here w-there)
+              (err (str q " is internal to " (or w-there "its workspace")
+                        "; " (or w-here "this program") " is outside it")
+                   {:var q :from here :defined-in there
+                    :from-workspace w-here :to-workspace w-there
+                    :visibility :internal}))))))))
+
 (defn- record-dep! [env q]
+  (privacy-check! env q)
   (guard-check! env q)
   (when-let [cur (:current-var env)]
     (vswap! (:cc env) update-in [:deps cur] (fnil conj #{}) q)))

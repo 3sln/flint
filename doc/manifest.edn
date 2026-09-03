@@ -247,6 +247,7 @@
     print-str
     println-str
     prn-str
+    protocol-miss
     qualified-ident?
     qualified-keyword?
     qualified-symbol?
@@ -406,7 +407,7 @@
     when-not
     when-some
     while},
-  :count 355,
+  :count 356,
   :absent
   #{*'
     *1
@@ -741,6 +742,7 @@
     print-data
     print-human
     println-str
+    protocol-miss
     re-quote-replacement
     repeat-forever
     repeat2

@@ -1606,7 +1606,16 @@
   [x]
   (flint.rt/kind x))
 
-(defn- protocol-miss [pname mname x]
+;; PUBLIC, and it has to be: `defprotocol` EMITS a call to this into its
+;; expansion, so the reference lands in whatever namespace used the macro. A
+;; var that appears in an expansion cannot be private, because the caller is
+;; the one who names it.
+;;
+;; It was `defn-` until privacy was actually enforced, at which point every
+;; namespace using `defprotocol` stopped compiling. That is the mark being
+;; wrong rather than the check: it had been documentation, and documentation
+;; can be wrong without anything noticing.
+(defn protocol-miss [pname mname x]
   (throw (ex-info (flint.rt/str-join
                    ["no implementation of " (str mname) " (protocol " (str pname)
                     ") for a value of kind " (str (kind x))

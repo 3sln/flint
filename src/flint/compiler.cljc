@@ -474,7 +474,19 @@
             ;; `flint.check` is the first client. A doc generator, a lint pass,
             ;; `^:deprecated` and `^:export` are all the same question asked of
             ;; the same map.
-            (vswap! cc assoc-in [:var-meta sym] (or (meta (first names)) {}))))
+            ;; `defn-` MEANS private, and saying so here is not a shortcut.
+            ;; The mark is added by `m-defn-` during macro expansion, and this
+            ;; map is built from the source form in a pass that runs BEFORE any
+            ;; macro is expanded -- the same ordering `def-form-names` documents
+            ;; as its own limit. So the metadata never arrived, and `defn-`
+            ;; across a namespace boundary was accepted while an explicit
+            ;; `^:private` on the same var would have been refused. Two
+            ;; spellings of one idea disagreeing is the shape this codebase
+            ;; keeps finding; the fix is to read the spelling that is actually
+            ;; in front of us.
+            (vswap! cc assoc-in [:var-meta sym]
+                    (cond-> (or (meta (first names)) {})
+                      (and (seq? f) (= 'defn- (first f))) (assoc :private true)))))
         (catch Throwable e
           ;; Say WHERE. A bare "unable to resolve symbol" halfway through
           ;; clojure.core is close to useless without the enclosing form.
