@@ -81,7 +81,7 @@ public final class Seqs {
         }
         long vv = rt.r(vi);
         rt.setSlot(a, 0, vv);
-        rt.setSlot(a, 1, Val.fixnum(i));
+        rt.setSlot(a, 1, Val.fixnum(i & 0xFFFFFFFFL));
         rt.setSlot(a, 2, Val.NIL);
         rt.popTo(mk);
         return Val.heap(a);
@@ -96,7 +96,7 @@ public final class Seqs {
         }
         long sv = rt.r(si);
         rt.setSlot(a, 0, sv);
-        rt.setSlot(a, 1, Val.fixnum(i));
+        rt.setSlot(a, 1, Val.fixnum(i & 0xFFFFFFFFL));
         rt.setSlot(a, 2, Val.NIL);
         rt.popTo(mk);
         return Val.heap(a);

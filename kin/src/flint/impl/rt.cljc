@@ -250,6 +250,43 @@
     ;; refuses to carry a `bit-shift-right` at all and a subject names `ushr`
     ;; and `sar` explicitly.
     'shl (core/call {:rust "({0} << {1})" :java "({0} << {1})" :csharp "({0} << {1})"})
+
+    ;; --- UNSIGNED COMPARISON AND DIVISION -------------------------------
+    ;;
+    ;; The same argument as `ushr`/`sar`, one operator family over. An `I32`
+    ;; is Rust's `u32` and the ports' signed `int`, so above 2^31 a value
+    ;; prints differently and -- worse -- ORDERS and DIVIDES differently:
+    ;; `0x80000001 < 5` is false in Rust and true on both ports.
+    ;;
+    ;; `kin.lang`'s generic `<`, `>` and `quot` stay available, because they
+    ;; are correct for indices, counts and shifts, which is nearly every use.
+    ;; These exist for the values that can actually carry the high bit -- a
+    ;; HASH, principally -- and naming them is what makes the choice visible
+    ;; at the use rather than assumed.
+    ;;
+    ;; Nothing in the port compares or divides a hash today. This is here so
+    ;; that the first source that needs to has the right tool, rather than
+    ;; reaching for `<` and getting three runtimes that disagree above 2^31 --
+    ;; which is exactly how `fixnum` shipped widening the wrong way for
+    ;; thirteen sources without a driver noticing.
+    'u< (core/call {:rust "({0} < {1})"
+                    :java "(Integer.compareUnsigned({0}, {1}) < 0)"
+                    :csharp "((uint) {0} < (uint) {1})"})
+    'u> (core/call {:rust "({0} > {1})"
+                    :java "(Integer.compareUnsigned({0}, {1}) > 0)"
+                    :csharp "((uint) {0} > (uint) {1})"})
+    'u<= (core/call {:rust "({0} <= {1})"
+                     :java "(Integer.compareUnsigned({0}, {1}) <= 0)"
+                     :csharp "((uint) {0} <= (uint) {1})"})
+    'u>= (core/call {:rust "({0} >= {1})"
+                     :java "(Integer.compareUnsigned({0}, {1}) >= 0)"
+                     :csharp "((uint) {0} >= (uint) {1})"})
+    'uquot (core/call {:rust "({0} / {1})"
+                       :java "Integer.divideUnsigned({0}, {1})"
+                       :csharp "((int)((uint) {0} / (uint) {1}))"})
+    'urem (core/call {:rust "({0} % {1})"
+                      :java "Integer.remainderUnsigned({0}, {1})"
+                      :csharp "((int)((uint) {0} % (uint) {1}))"})
     'as-idx (core/call {:rust "{0} as usize" :java "{0}" :csharp "{0}"})
     'alen (core/call {:rust "{0}.len()" :java "{0}.length" :csharp "{0}.Length"})
     ;; The raw bits of a value. Rust wraps them in a newtype; the others do not.

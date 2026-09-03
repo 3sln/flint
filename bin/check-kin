@@ -1,0 +1,80 @@
+#!/bin/sh
+# Two questions about the kin sources, neither of which anything asked before.
+#
+#   1. Does every source still produce IDENTICAL output for all three targets?
+#      That is what `kin/verify` answers, and it was being run by hand, once,
+#      when a source was written.
+#
+#   2. Does the CHECKED-IN generated code still match what its source
+#      produces? The generated regions are committed on purpose -- a runtime
+#      build must not need babashka -- and the cost of that choice is that the
+#      two can drift. A hand edit inside a region survives until someone
+#      happens to re-emit; a vocabulary change silently makes every committed
+#      region stale. Nothing noticed either.
+#
+# The second is the one worth having. `fixnum` widened the wrong way on both
+# ports for thirteen sources, and when it was fixed the only thing that
+# re-emitted the affected files was me remembering to.
+set -e
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+work=${TMPDIR:-/tmp}/check-kin
+rm -rf "$work"; mkdir -p "$work/snap"
+fails=0
+
+for src in kin/*.kin; do
+  name=$(basename "$src" .kin)
+  if [ ! -f "kin/$name.drivers" ]; then
+    echo "  FAIL $name has no drivers file"
+    fails=$((fails + 1))
+    continue
+  fi
+  if out=$(./kin/verify "$src" 2>&1); then
+    echo "  ok   $name agrees across three targets"
+  else
+    echo "  FAIL $name does not agree across targets"
+    echo "$out" | tail -5
+    fails=$((fails + 1))
+  fi
+done
+
+# Now the drift check. Snapshot every target file, re-emit everything, and
+# compare -- then put the snapshots back whatever happened.
+targets=$(cat kin/*.targets 2>/dev/null | awk '$1 !~ /^#/ && NF >= 2 {print $2}' | sort -u)
+i=0
+for f in $targets; do
+  i=$((i + 1))
+  cp "$f" "$work/snap/$i"
+  echo "$f" >> "$work/snap/list"
+done
+restore() {
+  n=0
+  while read -r f; do
+    n=$((n + 1))
+    cp "$work/snap/$n" "$f"
+  done < "$work/snap/list"
+}
+trap restore EXIT
+
+for src in kin/*.kin; do
+  name=$(basename "$src" .kin)
+  [ -f "kin/$name.targets" ] || continue
+  ./kin/emit "$src" > /dev/null
+done
+
+n=0
+while read -r f; do
+  n=$((n + 1))
+  if cmp -s "$work/snap/$n" "$f"; then
+    echo "  ok   $f matches its sources"
+  else
+    echo "  FAIL $f has drifted from the kin sources that generate it"
+    diff "$work/snap/$n" "$f" | head -20
+    fails=$((fails + 1))
+  fi
+done < "$work/snap/list"
+
+restore
+trap - EXIT
+[ "$fails" -eq 0 ] || { echo "check-kin: $fails failure(s)"; exit 1; }
+echo "check-kin: all kin sources agree, and every generated region matches"

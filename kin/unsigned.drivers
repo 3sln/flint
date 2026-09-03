@@ -1,0 +1,40 @@
+--rust-head
+struct Rt {}
+impl Rt {
+--rust
+}
+fn main() {
+    let rt = Rt {};
+    // The high bit set: the whole point. Below 2^31 signed and unsigned agree
+    // and the check would pass while proving nothing.
+    let hi: u32 = 0x80000001;
+    println!("{} {} {} {} {} {} | {} {} {}",
+             rt.ult(hi, 5) as u32, rt.ugt(hi, 5) as u32,
+             rt.ule(hi, hi) as u32, rt.uge(5, hi) as u32,
+             rt.udiv(hi, 3), rt.umod(hi, 3),
+             rt.ult(5, hi) as u32, rt.udiv(100, 7), rt.umod(100, 7));
+}
+--java-head
+    static final class Rt {}
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        int hi = 0x80000001;
+        System.out.println((ult(rt, hi, 5) ? 1 : 0) + " " + (ugt(rt, hi, 5) ? 1 : 0)
+            + " " + (ule(rt, hi, hi) ? 1 : 0) + " " + (uge(rt, 5, hi) ? 1 : 0)
+            + " " + (udiv(rt, hi, 3) & 0xFFFFFFFFL) + " " + (umod(rt, hi, 3) & 0xFFFFFFFFL)
+            + " | " + (ult(rt, 5, hi) ? 1 : 0)
+            + " " + (udiv(rt, 100, 7) & 0xFFFFFFFFL) + " " + (umod(rt, 100, 7) & 0xFFFFFFFFL));
+    }
+--csharp-head
+    internal sealed class Rt {}
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        int hi = unchecked((int) 0x80000001);
+        Console.WriteLine((Ult(rt, hi, 5) ? 1 : 0) + " " + (Ugt(rt, hi, 5) ? 1 : 0)
+            + " " + (Ule(rt, hi, hi) ? 1 : 0) + " " + (Uge(rt, 5, hi) ? 1 : 0)
+            + " " + (Udiv(rt, hi, 3) & 0xFFFFFFFFL) + " " + (Umod(rt, hi, 3) & 0xFFFFFFFFL)
+            + " | " + (Ult(rt, 5, hi) ? 1 : 0)
+            + " " + (Udiv(rt, 100, 7) & 0xFFFFFFFFL) + " " + (Umod(rt, 100, 7) & 0xFFFFFFFFL));
+    }

@@ -1,0 +1,28 @@
+;; The UNSIGNED comparison and division forms, and a standing check that they
+;; still mean one thing in three languages.
+;;
+;; This source ships NOWHERE -- it has no `.targets` -- and exists only to be
+;; verified. `kin/verify` compares the three outputs, so it is the natural
+;; place to pin a claim about what a form MEANS rather than about what some
+;; runtime function does.
+;;
+;; The claim: an `I32` is Rust's `u32` and the ports' signed `int`, so above
+;; 2^31 the generic `<`, `>` and `quot` order and divide differently. Measured
+;; with `0x80000001`:
+;;
+;;     (u< hi 5)     0 0 0     <- agrees, and is what Rust's `<` already meant
+;;     (< hi 5)      0 1 1     <- DISAGREES: negative on the ports
+;;
+;; The second line is why these forms exist and is not in this file, because a
+;; source that disagrees cannot pass. It is reproduced in
+;; `doc/goals/kin-port.md`; what is pinned here is that the fix stays fixed.
+(ns runtime.unsigned
+  (:require [flint.impl.rt :refer [defn return u< u> u<= u>= uquot urem
+                                   Rt I32 Bool]]))
+
+(defn ^:method ^Bool ult [^Rt rt ^I32 a ^I32 b] (return (u< a b)))
+(defn ^:method ^Bool ugt [^Rt rt ^I32 a ^I32 b] (return (u> a b)))
+(defn ^:method ^Bool ule [^Rt rt ^I32 a ^I32 b] (return (u<= a b)))
+(defn ^:method ^Bool uge [^Rt rt ^I32 a ^I32 b] (return (u>= a b)))
+(defn ^:method ^I32 udiv [^Rt rt ^I32 a ^I32 b] (return (uquot a b)))
+(defn ^:method ^I32 umod [^Rt rt ^I32 a ^I32 b] (return (urem a b)))

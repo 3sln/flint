@@ -68,7 +68,7 @@ public static class Seqs {
         }
         long vv = rt.R(vi);
         rt.SetSlot(a, 0, vv);
-        rt.SetSlot(a, 1, Val.Fixnum(i));
+        rt.SetSlot(a, 1, Val.Fixnum(i & 0xFFFFFFFFL));
         rt.SetSlot(a, 2, Val.Nil);
         rt.PopTo(mk);
         return Val.Heap(a);
@@ -83,7 +83,7 @@ public static class Seqs {
         }
         long sv = rt.R(si);
         rt.SetSlot(a, 0, sv);
-        rt.SetSlot(a, 1, Val.Fixnum(i));
+        rt.SetSlot(a, 1, Val.Fixnum(i & 0xFFFFFFFFL));
         rt.SetSlot(a, 2, Val.Nil);
         rt.PopTo(mk);
         return Val.Heap(a);
