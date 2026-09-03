@@ -669,40 +669,56 @@ public static class Maps {
         return r;
     }
 
+    // kin:begin kin/dissoc.kin
     static long NodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
-        int bas = rt.Mark();
-        int ni = rt.Push(n), ki = rt.Push(key), ei = rt.Push(edit);
-        long outv;
+        int @base = rt.Mark();
+        int ni = rt.Push(n);
+        int ki = rt.Push(key);
+        int ei = rt.Push(edit);
+        // A collision node has no bitmaps, so it is not this function's
+        // shape at all -- hand it over.
         if (!IsBmnode(rt, n)) {
-            outv = CollDissoc(rt, rt.R(ni), rt.R(ki), rt.R(ei));
-            rt.PopTo(bas);
-            return outv;
+            long handed = CollDissoc(rt, rt.R(ni), rt.R(ki), rt.R(ei));
+            rt.PopTo(@base);
+            return handed;
         }
         int bit = Bitpos(h, shift);
-        int dm = BnDatamap(rt, n), nm = BnNodemap(rt, n);
+        int dm = BnDatamap(rt, n);
+        int nm = BnNodemap(rt, n);
+        long @out;
         if ((dm & bit) != 0) {
             int at = IndexOf(dm, bit);
-            bool same0 = Flint.Rt.Eq.Equal(rt, BnKey(rt, rt.R(ni), at), rt.R(ki));
+            int k0i = rt.Push(BnKey(rt, rt.R(ni), at));
+            bool same0 = Flint.Rt.Eq.Equal(rt, rt.R(k0i), rt.R(ki));
+            rt.PopTo(k0i);
             if (!same0) {
                 rt.champAdded = false;
-                outv = rt.R(ni);
+                @out = rt.R(ni);
             } else {
-                rt.champAdded = true;   // "changed"
-                if (System.Numerics.BitOperations.PopCount((uint)(dm)) == 2 && nm == 0) {
-                    // Collapse to a single-entry node so the parent can inline it.
+                // `champ_added` reads as CHANGED on this path.
+                rt.champAdded = true;
+                if ((System.Numerics.BitOperations.PopCount((uint)(dm)) == 2) && (nm == 0)) {
+                    // One entry would be left, which a CHAMP never
+                    // stores as a node: collapse to a single-entry node
+                    // so the parent can fold it back inline.
                     int other = 1 - at;
                     int oki = rt.Push(BnKey(rt, rt.R(ni), other));
                     int ovi = rt.Push(BnVal(rt, rt.R(ni), other));
                     int oh = Flint.Rt.Eq.HashValue(rt, rt.R(oki));
-                    int newdm = shift == 0 ? (dm ^ bit) : Bitpos(oh, 0);
-                    long nn0 = BnNew(rt, newdm, 0, rt.R(ei));
-                    if (!Val.IsNil(nn0)) {
-                        BnSetKey(rt, nn0, 0, rt.R(oki));
-                        BnSetVal(rt, nn0, 0, rt.R(ovi));
+                    int newdm;
+                    if (shift == 0) {
+                        newdm = dm ^ bit;
+                    } else {
+                        newdm = Bitpos(oh, 0);
                     }
-                    outv = nn0;
+                    long nn = BnNew(rt, newdm, 0, rt.R(ei));
+                    if (!Val.IsNil(nn)) {
+                        BnSetKey(rt, nn, 0, rt.R(oki));
+                        BnSetVal(rt, nn, 0, rt.R(ovi));
+                    }
+                    @out = nn;
                 } else {
-                    outv = BnCopyRemoveEntry(rt, rt.R(ni), bit, rt.R(ei));
+                    @out = BnCopyRemoveEntry(rt, rt.R(ni), bit, rt.R(ei));
                 }
             }
         } else if ((nm & bit) != 0) {
@@ -710,71 +726,96 @@ public static class Maps {
             int subi = rt.Push(BnNode(rt, rt.R(ni), at));
             long newsub = NodeDissoc(rt, rt.R(subi), shift + HASH_BITS, h, rt.R(ki), rt.R(ei));
             if (newsub == rt.R(subi)) {
-                outv = rt.R(ni);
+                @out = rt.R(ni);
             } else if (NodeSizeClass(rt, newsub) == 1) {
                 int si = rt.Push(newsub);
-                if (dm == 0 && System.Numerics.BitOperations.PopCount((uint)(nm)) == 1) {
-                    // This node has nothing else: replace it with the child.
-                    outv = rt.R(si);
+                if ((dm == 0) && (System.Numerics.BitOperations.PopCount((uint)(nm)) == 1)) {
+                    // Nothing else lives here, so this node IS the
+                    // child now.
+                    @out = rt.R(si);
                 } else {
                     int ki2 = rt.Push(BnKey(rt, rt.R(si), 0));
                     int vi2 = rt.Push(BnVal(rt, rt.R(si), 0));
-                    outv = BnNodeToInline(rt, rt.R(ni), bit, rt.R(ki2), rt.R(vi2), rt.R(ei));
+                    @out = BnNodeToInline(rt, rt.R(ni), bit, rt.R(ki2), rt.R(vi2), rt.R(ei));
                 }
             } else {
-                outv = BnCopySetNode(rt, rt.R(ni), at, newsub, rt.R(ei));
+                @out = BnCopySetNode(rt, rt.R(ni), at, newsub, rt.R(ei));
             }
         } else {
             rt.champAdded = false;
-            outv = rt.R(ni);
+            @out = rt.R(ni);
         }
-        rt.PopTo(bas);
-        return outv;
+        rt.PopTo(@base);
+        return @out;
     }
-
     static long CollDissoc(Rt rt, long n, long key, long edit) {
         int scan = rt.Mark();
-        int sni = rt.Push(n), ski = rt.Push(key);
+        int sni = rt.Push(n);
+        int ski = rt.Push(key);
         int cnt = CnCount(rt, rt.R(sni));
-        int found = -1;
+        int found;
+        found = cnt;
         for (int i = 0; i < cnt; i++) {
-            if (Flint.Rt.Eq.Equal(rt, CnKey(rt, rt.R(sni), i), rt.R(ski))) { found = i; break; }
+            // The key is rooted across `eq`, which allocates when either
+            // side is a row ref.
+            int kk = rt.Push(CnKey(rt, rt.R(sni), i));
+            bool same = Flint.Rt.Eq.Equal(rt, rt.R(kk), rt.R(ski));
+            rt.PopTo(kk);
+            if (same) {
+                found = i;
+                break;
+            }
         }
         long nn = rt.R(sni);
         rt.PopTo(scan);
-        if (found < 0) { rt.champAdded = false; return nn; }
-        rt.champAdded = true;
-        int bas = rt.Mark();
-        int ni = rt.Push(nn), ei = rt.Push(edit);
-        long outv;
-        if (cnt == 2) {
-            // Down to one pair: become a single-entry bitmap node so the parent
-            // can fold it back inline.
-            int other = 1 - found;
-            int ki = rt.Push(CnKey(rt, rt.R(ni), other));
-            int vi = rt.Push(CnVal(rt, rt.R(ni), other));
-            int kh = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
-            outv = BnNew(rt, Bitpos(kh, 0), 0, rt.R(ei));
-            if (!Val.IsNil(outv)) {
-                BnSetKey(rt, outv, 0, rt.R(ki));
-                BnSetVal(rt, outv, 0, rt.R(vi));
-            }
-        } else {
-            long o = CnNew(rt, CnHash(rt, rt.R(ni)), cnt - 1, rt.R(ei));
-            if (Val.IsNil(o)) { rt.PopTo(bas); return Val.Nil; }
-            int oi = rt.Push(o);
-            int d = 0;
-            for (int i = 0; i < cnt; i++) {
-                if (i == found) continue;
-                CnSet(rt, rt.R(oi), CN_BASE + 2 * d, CnKey(rt, rt.R(ni), i));
-                CnSet(rt, rt.R(oi), CN_BASE + 2 * d + 1, CnVal(rt, rt.R(ni), i));
-                d++;
-            }
-            outv = rt.R(oi);
+        if (found == cnt) {
+            rt.champAdded = false;
+            return nn;
         }
-        rt.PopTo(bas);
-        return outv;
+        rt.champAdded = true;
+        int dbase = rt.Mark();
+        int dni = rt.Push(nn);
+        int dei = rt.Push(edit);
+        long res;
+        if (cnt == 2) {
+            // Down to one pair: become a single-entry bitmap node so
+            // the parent can fold it back inline.
+            int other = 1 - found;
+            int cki = rt.Push(CnKey(rt, rt.R(dni), other));
+            int cvi = rt.Push(CnVal(rt, rt.R(dni), other));
+            int kh = Flint.Rt.Eq.HashValue(rt, rt.R(cki));
+            long made = BnNew(rt, Bitpos(kh, 0), 0, rt.R(dei));
+            if (!Val.IsNil(made)) {
+                BnSetKey(rt, made, 0, rt.R(cki));
+                BnSetVal(rt, made, 0, rt.R(cvi));
+            }
+            res = made;
+        } else {
+            long o = CnNew(rt, CnHash(rt, rt.R(dni)), cnt - 1, rt.R(dei));
+            if (Val.IsNil(o)) {
+                rt.PopTo(dbase);
+                return Val.Nil;
+            }
+            int oi = rt.Push(o);
+            int d;
+            d = 0;
+            for (int i = 0; i < cnt; i++) {
+                if (i == found) {
+                    continue;
+                }
+                long ek = CnKey(rt, rt.R(dni), i);
+                long ev = CnVal(rt, rt.R(dni), i);
+                CnSet(rt, rt.R(oi), CN_BASE + (2 * d), ek);
+                CnSet(rt, rt.R(oi), (CN_BASE + (2 * d)) + 1, ev);
+                d += 1;
+            }
+            res = rt.R(oi);
+        }
+        rt.PopTo(dbase);
+        return res;
     }
+
+    // kin:end kin/dissoc.kin
 
     // --- the map objects -----------------------------------------------------
 

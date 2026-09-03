@@ -575,6 +575,17 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Maps` | all six structural copies -- insert, remove, set-value, set-node, inline-to-node, node-to-inline |
 | 3 | `Maps` | `nodeAssoc` -- the CHAMP insert itself |
 | 3 | `Maps` | `collAssoc` -- an entry into a collision node, closing the cycle |
+| 3 | `Maps` | `nodeDissoc` + `collDissoc` -- removal, and the shape invariant |
+
+The assoc/dissoc block is complete: thirteen functions of `Maps`, one
+definition each. The three analyses had gated the whole block on converging
+the hit/found sentinel; that turned out to be one line of thought (`cnt` is
+already outside the valid range) rather than the capability it was ranked as.
+
+`dissoc.kin` is the first source to ship TWO functions that call each other,
+which makes its driver the first that exercises a real interaction rather
+than a function against stubs -- `nodeDissoc` reaches the generated
+`collDissoc`, not a fixture's stand-in.
 
 ### `nodeAssoc` ADDS forty lines, and that is the honest number
 

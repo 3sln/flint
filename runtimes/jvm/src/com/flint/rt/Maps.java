@@ -671,38 +671,54 @@ public final class Maps {
         return r;
     }
 
+    // kin:begin kin/dissoc.kin
     static long nodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
         int base = rt.mark();
-        int ni = rt.push(n), ki = rt.push(key), ei = rt.push(edit);
-        long out;
+        int ni = rt.push(n);
+        int ki = rt.push(key);
+        int ei = rt.push(edit);
+        // A collision node has no bitmaps, so it is not this function's
+        // shape at all -- hand it over.
         if (!isBmnode(rt, n)) {
-            out = collDissoc(rt, rt.r(ni), rt.r(ki), rt.r(ei));
+            long handed = collDissoc(rt, rt.r(ni), rt.r(ki), rt.r(ei));
             rt.popTo(base);
-            return out;
+            return handed;
         }
         int bit = bitpos(h, shift);
-        int dm = bnDatamap(rt, n), nm = bnNodemap(rt, n);
+        int dm = bnDatamap(rt, n);
+        int nm = bnNodemap(rt, n);
+        long out;
         if ((dm & bit) != 0) {
             int at = indexOf(dm, bit);
-            boolean same0 = Eq.eq(rt, bnKey(rt, rt.r(ni), at), rt.r(ki));
+            int k0i = rt.push(bnKey(rt, rt.r(ni), at));
+            boolean same0 = Eq.eq(rt, rt.r(k0i), rt.r(ki));
+            rt.popTo(k0i);
             if (!same0) {
                 rt.champAdded = false;
                 out = rt.r(ni);
             } else {
-                rt.champAdded = true;   // "changed"
-                if (Integer.bitCount(dm) == 2 && nm == 0) {
-                    // Collapse to a single-entry node so the parent can inline it.
+                // `champ_added` reads as CHANGED on this path.
+                rt.champAdded = true;
+                if ((Integer.bitCount(dm) == 2) && (nm == 0)) {
+                    // One entry would be left, which a CHAMP never
+                    // stores as a node: collapse to a single-entry node
+                    // so the parent can fold it back inline.
                     int other = 1 - at;
                     int oki = rt.push(bnKey(rt, rt.r(ni), other));
                     int ovi = rt.push(bnVal(rt, rt.r(ni), other));
                     int oh = Eq.hashValue(rt, rt.r(oki));
-                    int newdm = shift == 0 ? (dm ^ bit) : bitpos(oh, 0);
-                    long nn0 = bnNew(rt, newdm, 0, rt.r(ei));
-                    if (!Val.isNil(nn0)) {
-                        bnSetKey(rt, nn0, 0, rt.r(oki));
-                        bnSetVal(rt, nn0, 0, rt.r(ovi));
+                    int newdm;
+                    if (shift == 0) {
+                        newdm = dm ^ bit;
+                    } else {
+                        newdm = bitpos(oh, 0);
                     }
-                    out = nn0;
+                    long nn = bnNew(rt, newdm, 0, rt.r(ei));
+                    if (!Val.isNil(nn)) {
+                        bnSetKey(rt, nn, 0, rt.r(oki));
+                        bnSetVal(rt, nn, 0, rt.r(ovi));
+                    }
+                    out = nn;
                 } else {
                     out = bnCopyRemoveEntry(rt, rt.r(ni), bit, rt.r(ei));
                 }
@@ -715,8 +731,9 @@ public final class Maps {
                 out = rt.r(ni);
             } else if (nodeSizeClass(rt, newsub) == 1) {
                 int si = rt.push(newsub);
-                if (dm == 0 && Integer.bitCount(nm) == 1) {
-                    // This node has nothing else: replace it with the child.
+                if ((dm == 0) && (Integer.bitCount(nm) == 1)) {
+                    // Nothing else lives here, so this node IS the
+                    // child now.
                     out = rt.r(si);
                 } else {
                     int ki2 = rt.push(bnKey(rt, rt.r(si), 0));
@@ -733,50 +750,74 @@ public final class Maps {
         rt.popTo(base);
         return out;
     }
-
     static long collDissoc(Rt rt, long n, long key, long edit) {
         int scan = rt.mark();
-        int sni = rt.push(n), ski = rt.push(key);
+        int sni = rt.push(n);
+        int ski = rt.push(key);
         int cnt = cnCount(rt, rt.r(sni));
-        int found = -1;
+        int found;
+        found = cnt;
         for (int i = 0; i < cnt; i++) {
-            if (Eq.eq(rt, cnKey(rt, rt.r(sni), i), rt.r(ski))) { found = i; break; }
+            // The key is rooted across `eq`, which allocates when either
+            // side is a row ref.
+            int kk = rt.push(cnKey(rt, rt.r(sni), i));
+            boolean same = Eq.eq(rt, rt.r(kk), rt.r(ski));
+            rt.popTo(kk);
+            if (same) {
+                found = i;
+                break;
+            }
         }
         long nn = rt.r(sni);
         rt.popTo(scan);
-        if (found < 0) { rt.champAdded = false; return nn; }
-        rt.champAdded = true;
-        int base = rt.mark();
-        int ni = rt.push(nn), ei = rt.push(edit);
-        long out;
-        if (cnt == 2) {
-            // Down to one pair: become a single-entry bitmap node so the parent
-            // can fold it back inline.
-            int other = 1 - found;
-            int ki = rt.push(cnKey(rt, rt.r(ni), other));
-            int vi = rt.push(cnVal(rt, rt.r(ni), other));
-            int kh = Eq.hashValue(rt, rt.r(ki));
-            out = bnNew(rt, bitpos(kh, 0), 0, rt.r(ei));
-            if (!Val.isNil(out)) {
-                bnSetKey(rt, out, 0, rt.r(ki));
-                bnSetVal(rt, out, 0, rt.r(vi));
-            }
-        } else {
-            long o = cnNew(rt, cnHash(rt, rt.r(ni)), cnt - 1, rt.r(ei));
-            if (Val.isNil(o)) { rt.popTo(base); return Val.NIL; }
-            int oi = rt.push(o);
-            int d = 0;
-            for (int i = 0; i < cnt; i++) {
-                if (i == found) continue;
-                cnSet(rt, rt.r(oi), CN_BASE + 2 * d, cnKey(rt, rt.r(ni), i));
-                cnSet(rt, rt.r(oi), CN_BASE + 2 * d + 1, cnVal(rt, rt.r(ni), i));
-                d++;
-            }
-            out = rt.r(oi);
+        if (found == cnt) {
+            rt.champAdded = false;
+            return nn;
         }
-        rt.popTo(base);
-        return out;
+        rt.champAdded = true;
+        int dbase = rt.mark();
+        int dni = rt.push(nn);
+        int dei = rt.push(edit);
+        long res;
+        if (cnt == 2) {
+            // Down to one pair: become a single-entry bitmap node so
+            // the parent can fold it back inline.
+            int other = 1 - found;
+            int cki = rt.push(cnKey(rt, rt.r(dni), other));
+            int cvi = rt.push(cnVal(rt, rt.r(dni), other));
+            int kh = Eq.hashValue(rt, rt.r(cki));
+            long made = bnNew(rt, bitpos(kh, 0), 0, rt.r(dei));
+            if (!Val.isNil(made)) {
+                bnSetKey(rt, made, 0, rt.r(cki));
+                bnSetVal(rt, made, 0, rt.r(cvi));
+            }
+            res = made;
+        } else {
+            long o = cnNew(rt, cnHash(rt, rt.r(dni)), cnt - 1, rt.r(dei));
+            if (Val.isNil(o)) {
+                rt.popTo(dbase);
+                return Val.NIL;
+            }
+            int oi = rt.push(o);
+            int d;
+            d = 0;
+            for (int i = 0; i < cnt; i++) {
+                if (i == found) {
+                    continue;
+                }
+                long ek = cnKey(rt, rt.r(dni), i);
+                long ev = cnVal(rt, rt.r(dni), i);
+                cnSet(rt, rt.r(oi), CN_BASE + (2 * d), ek);
+                cnSet(rt, rt.r(oi), (CN_BASE + (2 * d)) + 1, ev);
+                d += 1;
+            }
+            res = rt.r(oi);
+        }
+        rt.popTo(dbase);
+        return res;
     }
+
+    // kin:end kin/dissoc.kin
 
     // --- the map objects -----------------------------------------------------
 

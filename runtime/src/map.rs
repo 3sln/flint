@@ -797,148 +797,153 @@ impl Rt {
         out
     }
 
+    // kin:begin kin/dissoc.kin
     fn node_dissoc(&mut self, n: Value, shift: u32, h: u32, key: Value, edit: Value) -> Value {
-        let base = self.mark();
-        let ni = self.push(n);
-        let ki = self.push(key);
-        let ei = self.push(edit);
-
+        let base: usize = self.mark();
+        let ni: usize = self.push(n);
+        let ki: usize = self.push(key);
+        let ei: usize = self.push(edit);
+        // A collision node has no bitmaps, so it is not this function's
+        // shape at all -- hand it over.
         if !self.is_bmnode(n) {
-            let out = self.coll_dissoc(self.r(ni), self.r(ki), self.r(ei));
+            let handed: Value = self.coll_dissoc(self.r(ni), self.r(ki), self.r(ei));
             self.pop_to(base);
-            return out;
+            return handed;
         }
-
-        let bit = bitpos(h, shift);
-        let dm = self.bn_datamap(n);
-        let nm = self.bn_nodemap(n);
-
-        let out = if dm & bit != 0 {
-            let at = index_of(dm, bit);
-            let k0 = self.bn_key(self.r(ni), at);
-            let k0i = self.push(k0);
-            let same0 = self.eq(self.r(k0i), self.r(ki));
+        let bit: u32 = bitpos(h, shift);
+        let dm: u32 = self.bn_datamap(n);
+        let nm: u32 = self.bn_nodemap(n);
+        let out: Value;
+        if (dm & bit) != 0 {
+            let at: u32 = index_of(dm, bit);
+            let k0i: usize = self.push(self.bn_key(self.r(ni), at));
+            let same0: bool = self.eq(self.r(k0i), self.r(ki));
             self.pop_to(k0i);
             if !same0 {
                 self.champ_added = false;
-                self.r(ni)
+                out = self.r(ni);
             } else {
-                self.champ_added = true; // "changed"
-                if dm.count_ones() == 2 && nm == 0 {
-                    // Collapse to a single-entry node so the parent can inline it.
-                    let other = 1 - at;
-                    let (ok, ov) =
-                        (self.bn_key(self.r(ni), other), self.bn_val(self.r(ni), other));
-                    let oki = self.push(ok);
-                    let ovi = self.push(ov);
-                    let oh = self.hash_value(self.r(oki));
-                    let newdm = if shift == 0 { dm ^ bit } else { bitpos(oh, 0) };
-                    let nn = self.bn_new(newdm, 0, self.r(ei));
-                    if !nn.is_nil() {
-                        let (ok, ov) = (self.r(oki), self.r(ovi));
-                        self.bn_set_key(nn, 0, ok);
-                        self.bn_set_val(nn, 0, ov);
+                // `champ_added` reads as CHANGED on this path.
+                self.champ_added = true;
+                if (dm.count_ones() == 2) && (nm == 0) {
+                    // One entry would be left, which a CHAMP never
+                    // stores as a node: collapse to a single-entry node
+                    // so the parent can fold it back inline.
+                    let other: u32 = 1 - at;
+                    let oki: usize = self.push(self.bn_key(self.r(ni), other));
+                    let ovi: usize = self.push(self.bn_val(self.r(ni), other));
+                    let oh: u32 = self.hash_value(self.r(oki));
+                    let newdm: u32;
+                    if shift == 0 {
+                        newdm = dm ^ bit;
+                    } else {
+                        newdm = bitpos(oh, 0);
                     }
-                    nn
+                    let nn: Value = self.bn_new(newdm, 0, self.r(ei));
+                    if !nn.is_nil() {
+                        self.bn_set_key(nn, 0, self.r(oki));
+                        self.bn_set_val(nn, 0, self.r(ovi));
+                    }
+                    out = nn;
                 } else {
-                    self.bn_copy_remove_entry(self.r(ni), bit, self.r(ei))
+                    out = self.bn_copy_remove_entry(self.r(ni), bit, self.r(ei));
                 }
             }
-        } else if nm & bit != 0 {
-            let at = index_of(nm, bit);
-            let sub = self.bn_node(self.r(ni), at);
-            let subi = self.push(sub);
-            let newsub =
-                self.node_dissoc(self.r(subi), shift + HASH_BITS, h, self.r(ki), self.r(ei));
+        } else if (nm & bit) != 0 {
+            let at: u32 = index_of(nm, bit);
+            let subi: usize = self.push(self.bn_node(self.r(ni), at));
+            let newsub: Value = self.node_dissoc(self.r(subi), shift + HASH_BITS, h, self.r(ki), self.r(ei));
             if newsub == self.r(subi) {
-                self.r(ni)
+                out = self.r(ni);
             } else if self.node_size_class(newsub) == 1 {
-                let si = self.push(newsub);
-                let (k, v) = (self.bn_key(self.r(si), 0), self.bn_val(self.r(si), 0));
-                if dm == 0 && nm.count_ones() == 1 {
-                    // This node has nothing else: replace it with the child.
-                    self.r(si)
+                let si: usize = self.push(newsub);
+                if (dm == 0) && (nm.count_ones() == 1) {
+                    // Nothing else lives here, so this node IS the
+                    // child now.
+                    out = self.r(si);
                 } else {
-                    let ki2 = self.push(k);
-                    let vi2 = self.push(v);
-                    let (k, v) = (self.r(ki2), self.r(vi2));
-                    self.bn_node_to_inline(self.r(ni), bit, k, v, self.r(ei))
+                    let ki2: usize = self.push(self.bn_key(self.r(si), 0));
+                    let vi2: usize = self.push(self.bn_val(self.r(si), 0));
+                    out = self.bn_node_to_inline(self.r(ni), bit, self.r(ki2), self.r(vi2), self.r(ei));
                 }
             } else {
-                self.bn_copy_set_node(self.r(ni), at, newsub, self.r(ei))
+                out = self.bn_copy_set_node(self.r(ni), at, newsub, self.r(ei));
             }
         } else {
             self.champ_added = false;
-            self.r(ni)
-        };
+            out = self.r(ni);
+        }
         self.pop_to(base);
-        out
+        return out;
     }
-
     fn coll_dissoc(&mut self, n: Value, key: Value, edit: Value) -> Value {
-        let scan = self.mark();
-        let sni = self.push(n);
-        let ski = self.push(key);
-        let cnt = self.cn_count(self.r(sni));
-        let mut found = u32::MAX;
+        let scan: usize = self.mark();
+        let sni: usize = self.push(n);
+        let ski: usize = self.push(key);
+        let cnt: u32 = self.cn_count(self.r(sni));
+        let mut found: u32;
+        found = cnt;
         for i in 0..cnt {
-            let k = self.cn_key(self.r(sni), i);
-            let kk = self.push(k);
-            let same = self.eq(self.r(kk), self.r(ski));
+            // The key is rooted across `eq`, which allocates when either
+            // side is a row ref.
+            let kk: usize = self.push(self.cn_key(self.r(sni), i));
+            let same: bool = self.eq(self.r(kk), self.r(ski));
             self.pop_to(kk);
             if same {
                 found = i;
                 break;
             }
         }
-        let n = self.r(sni);
+        let nn: Value = self.r(sni);
         self.pop_to(scan);
-        if found == u32::MAX {
+        if found == cnt {
             self.champ_added = false;
-            return n;
+            return nn;
         }
         self.champ_added = true;
-        let base = self.mark();
-        let ni = self.push(n);
-        let ei = self.push(edit);
-        let out = if cnt == 2 {
-            // Down to one pair: become a single-entry bitmap node so the parent
-            // can fold it back inline.
-            let other = 1 - found;
-            let (k, v) = (self.cn_key(self.r(ni), other), self.cn_val(self.r(ni), other));
-            let ki = self.push(k);
-            let vi = self.push(v);
-            let kh = self.hash_value(self.r(ki));
-            let nn = self.bn_new(bitpos(kh, 0), 0, self.r(ei));
-            if !nn.is_nil() {
-                let (k, v) = (self.r(ki), self.r(vi));
-                self.bn_set_key(nn, 0, k);
-                self.bn_set_val(nn, 0, v);
+        let dbase: usize = self.mark();
+        let dni: usize = self.push(nn);
+        let dei: usize = self.push(edit);
+        let res: Value;
+        if cnt == 2 {
+            // Down to one pair: become a single-entry bitmap node so
+            // the parent can fold it back inline.
+            let other: u32 = 1 - found;
+            let cki: usize = self.push(self.cn_key(self.r(dni), other));
+            let cvi: usize = self.push(self.cn_val(self.r(dni), other));
+            let kh: u32 = self.hash_value(self.r(cki));
+            let made: Value = self.bn_new(bitpos(kh, 0), 0, self.r(dei));
+            if !made.is_nil() {
+                self.bn_set_key(made, 0, self.r(cki));
+                self.bn_set_val(made, 0, self.r(cvi));
             }
-            nn
+            res = made;
         } else {
-            let h = self.slot(self.r(ni), CN_HASH).as_fixnum() as u32;
-            let o = self.cn_new(h, cnt - 1, self.r(ei));
+            let o: Value = self.cn_new(self.cn_hash(self.r(dni)), cnt - 1, self.r(dei));
             if o.is_nil() {
-                self.pop_to(base);
+                self.pop_to(dbase);
                 return NIL;
             }
-            let oi = self.push(o);
-            let mut d = 0;
+            let oi: usize = self.push(o);
+            let mut d: u32;
+            d = 0;
             for i in 0..cnt {
                 if i == found {
                     continue;
                 }
-                let (k, v) = (self.cn_key(self.r(ni), i), self.cn_val(self.r(ni), i));
-                self.set(self.r(oi), CN_BASE + 2 * d, k);
-                self.set(self.r(oi), CN_BASE + 2 * d + 1, v);
+                let ek: Value = self.cn_key(self.r(dni), i);
+                let ev: Value = self.cn_val(self.r(dni), i);
+                self.set(self.r(oi), CN_BASE + (2 * d), ek);
+                self.set(self.r(oi), (CN_BASE + (2 * d)) + 1, ev);
                 d += 1;
             }
-            self.r(oi)
-        };
-        self.pop_to(base);
-        out
+            res = self.r(oi);
+        }
+        self.pop_to(dbase);
+        return res;
     }
+
+    // kin:end kin/dissoc.kin
 
     // --- the map objects ----------------------------------------------------
 

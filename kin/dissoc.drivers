@@ -1,0 +1,374 @@
+--rust-head
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const CN_BASE: u32 = 2;
+const HASH_BITS: u32 = 5;
+impl Value { fn is_nil(self) -> bool { self.0 == 0xFFFF } }
+fn mask(h: u32, shift: u32) -> u32 { (h >> shift) & 0x1f }
+fn bitpos(h: u32, shift: u32) -> u32 { 1 << mask(h, shift) }
+fn index_of(bm: u32, bit: u32) -> u32 { (bm & (bit - 1)).count_ones() }
+struct Rt { h: Vec<u64>, kind: Vec<u8>, bump: u64, roots: Vec<Value>,
+            log: String, champ_added: bool, starve: bool }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn obj(&mut self, tag: &str, bm: bool) -> Value {
+        let a = self.bump; self.bump += 40;
+        self.kind[a as usize] = if bm { 1 } else { 0 };
+        self.log.push_str(tag); Value(a)
+    }
+    // A node's KIND is a side table rather than a marker word, because both
+    // layouts use slot 0 for real data -- a datamap for one, a hash for the
+    // other -- and a marker would have to live somewhere that collides.
+    fn is_bmnode(&self, n: Value) -> bool { self.kind[n.0 as usize] == 1 }
+    fn bn_datamap(&self, n: Value) -> u32 { self.h[n.0 as usize] as u32 }
+    fn bn_nodemap(&self, n: Value) -> u32 { self.h[n.0 as usize + 1] as u32 }
+    fn bn_key(&self, n: Value, at: u32) -> Value { Value(self.h[n.0 as usize + 2 + 2 * at as usize]) }
+    fn bn_val(&self, n: Value, at: u32) -> Value { Value(self.h[n.0 as usize + 3 + 2 * at as usize]) }
+    fn bn_node(&self, n: Value, at: u32) -> Value { Value(self.h[n.0 as usize + 20 + at as usize]) }
+    fn bn_set_key(&mut self, n: Value, at: u32, v: Value) { self.h[n.0 as usize + 2 + 2 * at as usize] = v.0; }
+    fn bn_set_val(&mut self, n: Value, at: u32, v: Value) { self.h[n.0 as usize + 3 + 2 * at as usize] = v.0; }
+    fn node_size_class(&self, n: Value) -> u32 {
+        if self.is_bmnode(n) { self.bn_datamap(n).count_ones() + self.bn_nodemap(n).count_ones() }
+        else { self.cn_count(n) }
+    }
+    fn cn_hash(&self, n: Value) -> u32 { self.h[n.0 as usize] as u32 }
+    fn cn_count(&self, n: Value) -> u32 { self.h[n.0 as usize + 1] as u32 }
+    fn cn_key(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + 2 + 2 * i as usize]) }
+    fn cn_val(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + 3 + 2 * i as usize]) }
+    fn set(&mut self, n: Value, i: u32, v: Value) { self.h[(n.0 + i as u64) as usize] = v.0; }
+    fn eq(&self, a: Value, b: Value) -> bool { a == b }
+    fn hash_value(&self, v: Value) -> u32 { ((v.0 * 7) & 0xff) as u32 }
+    fn bn_new(&mut self, dm: u32, nm: u32, _e: Value) -> Value {
+        if self.starve { self.log.push_str("x"); return NIL; }
+        let a = self.obj("B", true);
+        self.h[a.0 as usize] = dm as u64; self.h[a.0 as usize + 1] = nm as u64;
+        a
+    }
+    fn cn_new(&mut self, hh: u32, npairs: u32, _e: Value) -> Value {
+        if self.starve { self.log.push_str("x"); return NIL; }
+        let a = self.obj("C", false);
+        self.h[a.0 as usize] = hh as u64; self.h[a.0 as usize + 1] = npairs as u64;
+        a
+    }
+    fn bn_copy_remove_entry(&mut self, _n: Value, _bit: u32, _e: Value) -> Value { self.obj("R", true) }
+    fn bn_copy_set_node(&mut self, _n: Value, _at: u32, _s: Value, _e: Value) -> Value { self.obj("N", true) }
+    fn bn_node_to_inline(&mut self, _n: Value, _bit: u32, _k: Value, _v: Value, _e: Value) -> Value { self.obj("I", true) }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 1600], kind: vec![0; 1600], bump: 300, roots: Vec::new(),
+                      log: String::new(), champ_added: false, starve: false };
+    // A at 1: a bitmap node with TWO entries and no sub-nodes -- the shape that
+    // must collapse when one is removed.
+    rt.kind[1] = 1; rt.h[1] = 6; rt.h[2] = 0;
+    rt.h[3] = 100; rt.h[4] = 101; rt.h[5] = 200; rt.h[6] = 201;
+    // B at 30: three entries, so removing one does NOT collapse.
+    rt.kind[30] = 1; rt.h[30] = 0x0E; rt.h[31] = 0;
+    rt.h[32] = 100; rt.h[33] = 101; rt.h[34] = 200; rt.h[35] = 201;
+    rt.h[36] = 300; rt.h[37] = 301;
+    // C at 60: no entries, ONE sub-node -- so a collapsed child replaces it.
+    rt.kind[60] = 1; rt.h[60] = 0; rt.h[61] = 2; rt.h[80] = 90;
+    // the child at 90: two entries, collapses to one when a key goes
+    rt.kind[90] = 1; rt.h[90] = 3; rt.h[91] = 0;
+    rt.h[92] = 100; rt.h[93] = 101; rt.h[94] = 200; rt.h[95] = 201;
+    // G at 120: one entry AND one sub-node, so a collapsed child gets folded
+    // back inline instead of replacing this node.
+    rt.kind[120] = 1; rt.h[120] = 2; rt.h[121] = 4;
+    rt.h[122] = 500; rt.h[123] = 501; rt.h[140] = 210;
+    rt.kind[210] = 1; rt.h[210] = 3; rt.h[211] = 0;
+    rt.h[212] = 100; rt.h[213] = 101; rt.h[214] = 400; rt.h[215] = 401;
+    // H at 240: one sub-node whose child has THREE entries, so the removal
+    // changes the child without collapsing it -- the common case, and the
+    // only path to `bn_copy_set_node`.
+    rt.kind[240] = 1; rt.h[240] = 0; rt.h[241] = 2; rt.h[260] = 270;
+    rt.kind[270] = 1; rt.h[270] = 7; rt.h[271] = 0;
+    rt.h[272] = 100; rt.h[273] = 101; rt.h[274] = 400; rt.h[275] = 401;
+    rt.h[276] = 600; rt.h[277] = 601;
+    // E at 150: a COLLISION node, hash 0x55, three pairs.
+    rt.kind[150] = 0; rt.h[150] = 0x55; rt.h[151] = 3;
+    rt.h[152] = 100; rt.h[153] = 101; rt.h[154] = 200; rt.h[155] = 201;
+    rt.h[156] = 300; rt.h[157] = 301;
+    // F at 180: a collision node with TWO pairs, which collapses.
+    rt.kind[180] = 0; rt.h[180] = 0x55; rt.h[181] = 2;
+    rt.h[182] = 100; rt.h[183] = 101; rt.h[184] = 200; rt.h[185] = 201;
+
+    let mut o = String::new();
+    // Entry present, two entries, no sub-nodes: collapse.
+    let a = rt.node_dissoc(Value(1), 0, 0x01, Value(100), NIL);
+    o.push_str(&format!("{}:{} ", a.0, rt.champ_added as u32));
+    // Entry present, three entries: a plain remove.
+    let b = rt.node_dissoc(Value(30), 0, 0x01, Value(100), NIL);
+    o.push_str(&format!("{}:{} ", b.0, rt.champ_added as u32));
+    // The slot holds a DIFFERENT key: nothing changes.
+    let c = rt.node_dissoc(Value(30), 0, 0x01, Value(999), NIL);
+    o.push_str(&format!("{}:{} ", c.0, rt.champ_added as u32));
+    // Recursive: the child collapses and, with nothing else here, replaces us.
+    let d = rt.node_dissoc(Value(60), 0, 0x01, Value(100), NIL);
+    o.push_str(&format!("{}:{} ", d.0, rt.champ_added as u32));
+    // The bit is in neither map.
+    // Recursive: the child collapses but this node has an entry of its own,
+    // so the child is folded back INLINE.
+    let g2 = rt.node_dissoc(Value(120), 0, 0x02, Value(100), NIL);
+    o.push_str(&format!("{}:{} ", g2.0, rt.champ_added as u32));
+    let h2 = rt.node_dissoc(Value(240), 0, 0x01, Value(100), NIL);
+    o.push_str(&format!("{}:{} ", h2.0, rt.champ_added as u32));
+    let e = rt.node_dissoc(Value(30), 0, 0x1F, Value(100), NIL);
+    o.push_str(&format!("{}:{} ", e.0, rt.champ_added as u32));
+    // A collision node reached through `node_dissoc`, key absent.
+    let f = rt.node_dissoc(Value(150), 0, 0x55, Value(999), NIL);
+    o.push_str(&format!("{}:{} ", f.0, rt.champ_added as u32));
+    // Collision node, key present, three pairs: a fresh node one pair shorter.
+    let g = rt.coll_dissoc(Value(150), Value(200), NIL);
+    o.push_str(&format!("{}:{} ", g.0, rt.champ_added as u32));
+    for k in (g.0 as usize)..(g.0 as usize + 6) { o.push_str(&format!("{},", rt.h[k])); }
+    // Collision node down to one pair: collapses to a bitmap node.
+    let i = rt.coll_dissoc(Value(180), Value(100), NIL);
+    o.push_str(&format!(" {}:{} ", i.0, rt.champ_added as u32));
+    for k in (i.0 as usize)..(i.0 as usize + 4) { o.push_str(&format!("{},", rt.h[k])); }
+    // The allocation fails.
+    rt.starve = true;
+    let j = rt.coll_dissoc(Value(150), Value(200), NIL);
+    o.push_str(&format!(" oom={} roots={} log={}", j.0, rt.roots.len(), rt.log));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int CN_BASE = 2, HASH_BITS = 5;
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static int mask(int h, int shift) { return (h >>> shift) & 0x1f; }
+    static int bitpos(int h, int shift) { return 1 << mask(h, shift); }
+    static int indexOf(int bm, int bit) { return Integer.bitCount(bm & (bit - 1)); }
+    static final class Rt {
+        long[] h = new long[1600];
+        int[] kind = new int[1600];
+        long bump = 300;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        StringBuilder log = new StringBuilder();
+        boolean champAdded = false;
+        boolean starve = false;
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long obj(String tag, boolean bm) {
+            long a = bump; bump += 40; kind[(int) a] = bm ? 1 : 0; log.append(tag); return a;
+        }
+    }
+    static final class Eq {
+        static boolean eq(Rt rt, long a, long b) { return a == b; }
+        static int hashValue(Rt rt, long v) { return (int) ((v * 7) & 0xff); }
+    }
+    static boolean isBmnode(Rt rt, long n) { return rt.kind[(int) n] == 1; }
+    static int bnDatamap(Rt rt, long n) { return (int) rt.h[(int) n]; }
+    static int bnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    static long bnKey(Rt rt, long n, int at) { return rt.h[(int) n + 2 + 2 * at]; }
+    static long bnVal(Rt rt, long n, int at) { return rt.h[(int) n + 3 + 2 * at]; }
+    static long bnNode(Rt rt, long n, int at) { return rt.h[(int) n + 20 + at]; }
+    static void bnSetKey(Rt rt, long n, int at, long v) { rt.h[(int) n + 2 + 2 * at] = v; }
+    static void bnSetVal(Rt rt, long n, int at, long v) { rt.h[(int) n + 3 + 2 * at] = v; }
+    static int nodeSizeClass(Rt rt, long n) {
+        if (isBmnode(rt, n)) return Integer.bitCount(bnDatamap(rt, n)) + Integer.bitCount(bnNodemap(rt, n));
+        return cnCount(rt, n);
+    }
+    static int cnHash(Rt rt, long n) { return (int) rt.h[(int) n]; }
+    static int cnCount(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    static long cnKey(Rt rt, long n, int i) { return rt.h[(int) n + 2 + 2 * i]; }
+    static long cnVal(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    static void cnSet(Rt rt, long n, int i, long v) { rt.h[(int) n + i] = v; }
+    static long bnNew(Rt rt, int dm, int nm, long e) {
+        if (rt.starve) { rt.log.append("x"); return NIL; }
+        long a = rt.obj("B", true);
+        rt.h[(int) a] = dm; rt.h[(int) a + 1] = nm;
+        return a;
+    }
+    static long cnNew(Rt rt, int hh, int npairs, long e) {
+        if (rt.starve) { rt.log.append("x"); return NIL; }
+        long a = rt.obj("C", false);
+        rt.h[(int) a] = hh; rt.h[(int) a + 1] = npairs;
+        return a;
+    }
+    static long bnCopyRemoveEntry(Rt rt, long n, int bit, long e) { return rt.obj("R", true); }
+    static long bnCopySetNode(Rt rt, long n, int at, long s, long e) { return rt.obj("N", true); }
+    static long bnNodeToInline(Rt rt, long n, int bit, long k, long v, long e) { return rt.obj("I", true); }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        rt.kind[1] = 1; rt.h[1] = 6; rt.h[2] = 0;
+        rt.h[3] = 100; rt.h[4] = 101; rt.h[5] = 200; rt.h[6] = 201;
+        rt.kind[30] = 1; rt.h[30] = 0x0E; rt.h[31] = 0;
+        rt.h[32] = 100; rt.h[33] = 101; rt.h[34] = 200; rt.h[35] = 201;
+        rt.h[36] = 300; rt.h[37] = 301;
+        rt.kind[60] = 1; rt.h[60] = 0; rt.h[61] = 2; rt.h[80] = 90;
+        rt.kind[90] = 1; rt.h[90] = 3; rt.h[91] = 0;
+        rt.h[92] = 100; rt.h[93] = 101; rt.h[94] = 200; rt.h[95] = 201;
+        rt.kind[120] = 1; rt.h[120] = 2; rt.h[121] = 4;
+        rt.h[122] = 500; rt.h[123] = 501; rt.h[140] = 210;
+        rt.kind[210] = 1; rt.h[210] = 3; rt.h[211] = 0;
+        rt.h[212] = 100; rt.h[213] = 101; rt.h[214] = 400; rt.h[215] = 401;
+        rt.kind[240] = 1; rt.h[240] = 0; rt.h[241] = 2; rt.h[260] = 270;
+        rt.kind[270] = 1; rt.h[270] = 7; rt.h[271] = 0;
+        rt.h[272] = 100; rt.h[273] = 101; rt.h[274] = 400; rt.h[275] = 401;
+        rt.h[276] = 600; rt.h[277] = 601;
+        rt.kind[150] = 0; rt.h[150] = 0x55; rt.h[151] = 3;
+        rt.h[152] = 100; rt.h[153] = 101; rt.h[154] = 200; rt.h[155] = 201;
+        rt.h[156] = 300; rt.h[157] = 301;
+        rt.kind[180] = 0; rt.h[180] = 0x55; rt.h[181] = 2;
+        rt.h[182] = 100; rt.h[183] = 101; rt.h[184] = 200; rt.h[185] = 201;
+        StringBuilder o = new StringBuilder();
+        long a = nodeDissoc(rt, 1, 0, 0x01, 100, NIL);
+        o.append(a).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        long b = nodeDissoc(rt, 30, 0, 0x01, 100, NIL);
+        o.append(b).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        long c = nodeDissoc(rt, 30, 0, 0x01, 999, NIL);
+        o.append(c).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        long d = nodeDissoc(rt, 60, 0, 0x01, 100, NIL);
+        o.append(d).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        long g2 = nodeDissoc(rt, 120, 0, 0x02, 100, NIL);
+        o.append(g2).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        long h2 = nodeDissoc(rt, 240, 0, 0x01, 100, NIL);
+        o.append(h2).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        long e = nodeDissoc(rt, 30, 0, 0x1F, 100, NIL);
+        o.append(e).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        long f = nodeDissoc(rt, 150, 0, 0x55, 999, NIL);
+        o.append(f).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        long g = collDissoc(rt, 150, 200, NIL);
+        o.append(g).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        for (int k = (int) g; k < (int) g + 6; k++) o.append(rt.h[k]).append(',');
+        long i = collDissoc(rt, 180, 100, NIL);
+        o.append(' ').append(i).append(':').append(rt.champAdded ? 1 : 0).append(' ');
+        for (int k = (int) i; k < (int) i + 4; k++) o.append(rt.h[k]).append(',');
+        rt.starve = true;
+        long j = collDissoc(rt, 150, 200, NIL);
+        o.append(" oom=").append(j).append(" roots=").append(rt.roots.size())
+         .append(" log=").append(rt.log);
+        System.out.println(o);
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    const int CN_BASE = 2, HASH_BITS = 5;
+    static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    static int Mask(int h, int shift) { return (int)((uint) h >> shift) & 0x1f; }
+    static int Bitpos(int h, int shift) { return 1 << Mask(h, shift); }
+    static int IndexOf(int bm, int bit) { return BitOperations.PopCount((uint)(bm & (bit - 1))); }
+    internal sealed class Rt {
+        internal long[] h = new long[1600];
+        internal int[] kind = new int[1600];
+        internal long bump = 300;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal StringBuilder log = new StringBuilder();
+        internal bool champAdded = false;
+        internal bool starve = false;
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Obj(string tag, bool bm) {
+            long a = bump; bump += 40; kind[(int) a] = bm ? 1 : 0; log.Append(tag); return a;
+        }
+    }
+    internal static class Flint {
+        internal static class Rt {
+            internal static class Eq {
+                internal static bool Equal(Probe.Rt rt, long a, long b) { return a == b; }
+                internal static int HashValue(Probe.Rt rt, long v) { return (int) ((v * 7) & 0xff); }
+            }
+        }
+    }
+    static bool IsBmnode(Rt rt, long n) { return rt.kind[(int) n] == 1; }
+    static int BnDatamap(Rt rt, long n) { return (int) rt.h[(int) n]; }
+    static int BnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    static long BnKey(Rt rt, long n, int at) { return rt.h[(int) n + 2 + 2 * at]; }
+    static long BnVal(Rt rt, long n, int at) { return rt.h[(int) n + 3 + 2 * at]; }
+    static long BnNode(Rt rt, long n, int at) { return rt.h[(int) n + 20 + at]; }
+    static void BnSetKey(Rt rt, long n, int at, long v) { rt.h[(int) n + 2 + 2 * at] = v; }
+    static void BnSetVal(Rt rt, long n, int at, long v) { rt.h[(int) n + 3 + 2 * at] = v; }
+    static int NodeSizeClass(Rt rt, long n) {
+        if (IsBmnode(rt, n)) return BitOperations.PopCount((uint) BnDatamap(rt, n))
+                                  + BitOperations.PopCount((uint) BnNodemap(rt, n));
+        return CnCount(rt, n);
+    }
+    static int CnHash(Rt rt, long n) { return (int) rt.h[(int) n]; }
+    static int CnCount(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    static long CnKey(Rt rt, long n, int i) { return rt.h[(int) n + 2 + 2 * i]; }
+    static long CnVal(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    static void CnSet(Rt rt, long n, int i, long v) { rt.h[(int) n + i] = v; }
+    static long BnNew(Rt rt, int dm, int nm, long e) {
+        if (rt.starve) { rt.log.Append("x"); return NIL; }
+        long a = rt.Obj("B", true);
+        rt.h[(int) a] = dm; rt.h[(int) a + 1] = nm;
+        return a;
+    }
+    static long CnNew(Rt rt, int hh, int npairs, long e) {
+        if (rt.starve) { rt.log.Append("x"); return NIL; }
+        long a = rt.Obj("C", false);
+        rt.h[(int) a] = hh; rt.h[(int) a + 1] = npairs;
+        return a;
+    }
+    static long BnCopyRemoveEntry(Rt rt, long n, int bit, long e) { return rt.Obj("R", true); }
+    static long BnCopySetNode(Rt rt, long n, int at, long s, long e) { return rt.Obj("N", true); }
+    static long BnNodeToInline(Rt rt, long n, int bit, long k, long v, long e) { return rt.Obj("I", true); }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        rt.kind[1] = 1; rt.h[1] = 6; rt.h[2] = 0;
+        rt.h[3] = 100; rt.h[4] = 101; rt.h[5] = 200; rt.h[6] = 201;
+        rt.kind[30] = 1; rt.h[30] = 0x0E; rt.h[31] = 0;
+        rt.h[32] = 100; rt.h[33] = 101; rt.h[34] = 200; rt.h[35] = 201;
+        rt.h[36] = 300; rt.h[37] = 301;
+        rt.kind[60] = 1; rt.h[60] = 0; rt.h[61] = 2; rt.h[80] = 90;
+        rt.kind[90] = 1; rt.h[90] = 3; rt.h[91] = 0;
+        rt.h[92] = 100; rt.h[93] = 101; rt.h[94] = 200; rt.h[95] = 201;
+        rt.kind[120] = 1; rt.h[120] = 2; rt.h[121] = 4;
+        rt.h[122] = 500; rt.h[123] = 501; rt.h[140] = 210;
+        rt.kind[210] = 1; rt.h[210] = 3; rt.h[211] = 0;
+        rt.h[212] = 100; rt.h[213] = 101; rt.h[214] = 400; rt.h[215] = 401;
+        rt.kind[240] = 1; rt.h[240] = 0; rt.h[241] = 2; rt.h[260] = 270;
+        rt.kind[270] = 1; rt.h[270] = 7; rt.h[271] = 0;
+        rt.h[272] = 100; rt.h[273] = 101; rt.h[274] = 400; rt.h[275] = 401;
+        rt.h[276] = 600; rt.h[277] = 601;
+        rt.kind[150] = 0; rt.h[150] = 0x55; rt.h[151] = 3;
+        rt.h[152] = 100; rt.h[153] = 101; rt.h[154] = 200; rt.h[155] = 201;
+        rt.h[156] = 300; rt.h[157] = 301;
+        rt.kind[180] = 0; rt.h[180] = 0x55; rt.h[181] = 2;
+        rt.h[182] = 100; rt.h[183] = 101; rt.h[184] = 200; rt.h[185] = 201;
+        var o = new StringBuilder();
+        long a = NodeDissoc(rt, 1, 0, 0x01, 100, NIL);
+        o.Append(a).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        long b = NodeDissoc(rt, 30, 0, 0x01, 100, NIL);
+        o.Append(b).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        long c = NodeDissoc(rt, 30, 0, 0x01, 999, NIL);
+        o.Append(c).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        long d = NodeDissoc(rt, 60, 0, 0x01, 100, NIL);
+        o.Append(d).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        long g2 = NodeDissoc(rt, 120, 0, 0x02, 100, NIL);
+        o.Append(g2).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        long h2 = NodeDissoc(rt, 240, 0, 0x01, 100, NIL);
+        o.Append(h2).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        long e = NodeDissoc(rt, 30, 0, 0x1F, 100, NIL);
+        o.Append(e).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        long f = NodeDissoc(rt, 150, 0, 0x55, 999, NIL);
+        o.Append(f).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        long g = CollDissoc(rt, 150, 200, NIL);
+        o.Append(g).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        for (int k = (int) g; k < (int) g + 6; k++) o.Append(rt.h[k]).Append(',');
+        long i = CollDissoc(rt, 180, 100, NIL);
+        o.Append(' ').Append(i).Append(':').Append(rt.champAdded ? 1 : 0).Append(' ');
+        for (int k = (int) i; k < (int) i + 4; k++) o.Append(rt.h[k]).Append(',');
+        rt.starve = true;
+        long j = CollDissoc(rt, 150, 200, NIL);
+        o.Append(" oom=").Append(j).Append(" roots=").Append(rt.roots.Count)
+         .Append(" log=").Append(rt.log);
+        Console.WriteLine(o.ToString());
+    }

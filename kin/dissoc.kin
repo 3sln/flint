@@ -1,0 +1,172 @@
+;; `node_dissoc` and `coll_dissoc`: taking a key back out of a CHAMP.
+;;
+;; Phase 3 of `doc/goals/kin-port.md`, and the last pair of the assoc/dissoc
+;; block. They are contiguous in all three runtimes and call each other, so
+;; they ship as one source.
+;;
+;; Removal is harder than insertion because a CHAMP has a SHAPE INVARIANT to
+;; maintain on the way out: a node must never be left holding one entry and
+;; nothing else, because the parent is supposed to store that entry inline
+;; instead. So both functions watch for the one-entry case and collapse --
+;; `coll_dissoc` when a collision node drops to a single pair, `node_dissoc`
+;; when a bitmap node does, and again when a recursive removal hands back a
+;; child that has collapsed.
+;;
+;; THE SENTINEL follows `collassoc.kin`: `found` sits at `cnt` when nothing
+;; matched. Rust said `u32::MAX` here and the ports said `-1`; both are ways
+;; of spelling "outside the valid range" in a type that cannot say it, and
+;; `cnt` is already outside the valid range. `champ_added` doubles as
+;; "changed" on this path, which is the ports' and Rust's shared shorthand.
+(ns runtime.dissoc
+  (:require [flint.impl.rt :refer [defn return if let local set do comment
+                                   for break continue
+                                   mark push r pop-to nil? not == != < ==
+                                   is-bmnode coll-dissoc bitpos index-of
+                                   bn-datamap bn-nodemap bn-key bn-val bn-node
+                                   bn-new bn-set-key bn-set-val
+                                   bn-copy-remove-entry bn-copy-set-node
+                                   bn-node-to-inline node-size-class
+                                   cn-hash cn-count cn-key cn-val cn-new cn-set
+                                   val-eq hash-value popcount
+                                   + - * bit-and bit-xor and .
+
+                                   Rt Value RootIx I32 Bool NIL
+                                   CN_BASE HASH_BITS]]))
+
+(defn ^:method ^Value node-dissoc
+  [^:mut ^Rt rt ^Value n ^I32 shift ^I32 h ^Value key ^Value edit]
+  (let [^RootIx base (mark rt)
+        ^RootIx ni (push rt n)
+        ^RootIx ki (push rt key)
+        ^RootIx ei (push rt edit)]
+    (comment "A collision node has no bitmaps, so it is not this function's"
+             "shape at all -- hand it over.")
+    (if (not (is-bmnode rt n))
+      (let [^Value handed (coll-dissoc rt (r rt ni) (r rt ki) (r rt ei))]
+        (pop-to rt base)
+        (return handed)))
+    (let [^I32 bit (bitpos h shift)
+          ^I32 dm (bn-datamap rt n)
+          ^I32 nm (bn-nodemap rt n)]
+      (local ^Value out)
+      (if (!= (bit-and dm bit) 0)
+        (let [^I32 at (index-of dm bit)
+              ^RootIx k0i (push rt (bn-key rt (r rt ni) at))
+              ^Bool same0 (val-eq rt (r rt k0i) (r rt ki))]
+          (pop-to rt k0i)
+          (if (not same0)
+            (do
+              (set (. rt champ-added) false)
+              (set out (r rt ni)))
+            (do
+              (comment "`champ_added` reads as CHANGED on this path.")
+              (set (. rt champ-added) true)
+              (if (and (== (popcount dm) 2) (== nm 0))
+                (do
+                  (comment "One entry would be left, which a CHAMP never"
+                           "stores as a node: collapse to a single-entry node"
+                           "so the parent can fold it back inline.")
+                  (let [^I32 other (- 1 at)
+                        ^RootIx oki (push rt (bn-key rt (r rt ni) other))
+                        ^RootIx ovi (push rt (bn-val rt (r rt ni) other))
+                        ^I32 oh (hash-value rt (r rt oki))]
+                    (local ^I32 newdm)
+                    (if (== shift 0)
+                      (set newdm (bit-xor dm bit))
+                      (set newdm (bitpos oh 0)))
+                    (let [^Value nn (bn-new rt newdm 0 (r rt ei))]
+                      (if (not (nil? rt nn))
+                        (do
+                          (bn-set-key rt nn 0 (r rt oki))
+                          (bn-set-val rt nn 0 (r rt ovi))))
+                      (set out nn))))
+                (set out (bn-copy-remove-entry rt (r rt ni) bit (r rt ei)))))))
+        (if (!= (bit-and nm bit) 0)
+          (let [^I32 at (index-of nm bit)
+                ^RootIx subi (push rt (bn-node rt (r rt ni) at))
+                ^Value newsub (node-dissoc rt (r rt subi) (+ shift HASH_BITS)
+                                           h (r rt ki) (r rt ei))]
+            (if (== newsub (r rt subi))
+              (set out (r rt ni))
+              (if (== (node-size-class rt newsub) 1)
+                (let [^RootIx si (push rt newsub)]
+                  (if (and (== dm 0) (== (popcount nm) 1))
+                    (do
+                      (comment "Nothing else lives here, so this node IS the"
+                               "child now.")
+                      (set out (r rt si)))
+                    (let [^RootIx ki2 (push rt (bn-key rt (r rt si) 0))
+                          ^RootIx vi2 (push rt (bn-val rt (r rt si) 0))]
+                      (set out (bn-node-to-inline rt (r rt ni) bit
+                                                  (r rt ki2) (r rt vi2)
+                                                  (r rt ei))))))
+                (set out (bn-copy-set-node rt (r rt ni) at newsub (r rt ei))))))
+          (do
+            (set (. rt champ-added) false)
+            (set out (r rt ni)))))
+      (pop-to rt base)
+      (return out))))
+
+(defn ^:method ^Value coll-dissoc
+  [^:mut ^Rt rt ^Value n ^Value key ^Value edit]
+  (let [^RootIx scan (mark rt)
+        ^RootIx sni (push rt n)
+        ^RootIx ski (push rt key)
+        ^I32 cnt (cn-count rt (r rt sni))]
+    (local ^:mut ^I32 found)
+    (set found cnt)
+    (for [^I32 i 0 cnt]
+      (comment "The key is rooted across `eq`, which allocates when either"
+               "side is a row ref.")
+      (let [^RootIx kk (push rt (cn-key rt (r rt sni) i))
+            ^Bool same (val-eq rt (r rt kk) (r rt ski))]
+        (pop-to rt kk)
+        (if same
+          (do
+            (set found i)
+            (break)))))
+    (let [^Value nn (r rt sni)]
+      (pop-to rt scan)
+      (if (== found cnt)
+        (do
+          (set (. rt champ-added) false)
+          (return nn)))
+      (set (. rt champ-added) true)
+      (let [^RootIx dbase (mark rt)
+            ^RootIx dni (push rt nn)
+            ^RootIx dei (push rt edit)]
+        (local ^Value res)
+        (if (== cnt 2)
+          (do
+            (comment "Down to one pair: become a single-entry bitmap node so"
+                     "the parent can fold it back inline.")
+            (let [^I32 other (- 1 found)
+                  ^RootIx cki (push rt (cn-key rt (r rt dni) other))
+                  ^RootIx cvi (push rt (cn-val rt (r rt dni) other))
+                  ^I32 kh (hash-value rt (r rt cki))
+                  ^Value made (bn-new rt (bitpos kh 0) 0 (r rt dei))]
+              (if (not (nil? rt made))
+                (do
+                  (bn-set-key rt made 0 (r rt cki))
+                  (bn-set-val rt made 0 (r rt cvi))))
+              (set res made)))
+          (let [^Value o (cn-new rt (cn-hash rt (r rt dni)) (- cnt 1)
+                                 (r rt dei))]
+            (if (nil? rt o)
+              (do
+                (pop-to rt dbase)
+                (return NIL)))
+            (let [^RootIx oi (push rt o)]
+              (local ^:mut ^I32 d)
+              (set d 0)
+              (for [^I32 i 0 cnt]
+                (if (== i found)
+                  (continue))
+                (let [^Value ek (cn-key rt (r rt dni) i)
+                      ^Value ev (cn-val rt (r rt dni) i)]
+                  (cn-set rt (r rt oi) (+ CN_BASE (* 2 d)) ek)
+                  (cn-set rt (r rt oi) (+ (+ CN_BASE (* 2 d)) 1) ev)
+                  (set d (+ d 1))))
+              (set res (r rt oi)))))
+        (pop-to rt dbase)
+        (return res)))))
