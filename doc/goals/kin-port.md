@@ -744,16 +744,30 @@ retires entries from reads exactly like a blocker list, which is how `and`/`or`
 went unnoticed in the other direction: this file is wrong in both directions
 for the same reason, and the fix is to write the closing down when it happens.
 
-**HOLE 5 IS NOW THE ONLY CAPABILITY GATE LEFT.** It blocks `Seqs.seq`, the 13
-sites in `Table`, and row 8 wholesale. Everything else below is either closed
-or refused.
+**HOLE 5 IS CLOSED TOO**, by `str-cat` in `flint/impl/rt.cljc` and
+`kin/nouns.kin` as its first user. It needed nothing from kin: a form is
+`(fn [ctx form] ...)`, the shape `for` and `while` already had, and the
+variadic Rust side builds its `format!` string from the argument count. The
+capability had simply never been written, which is a different thing from
+being blocked and was recorded as the second for four files.
+
+**NO CAPABILITY GATE REMAINS.** 9, 10, 11 and 5 are closed; 6 is refused on
+measurement; 2, 3 and 4 are small and were always mis-ranked. What is left in
+rows 6 and 8 is porting work, not waiting.
+
+One thing hole 5 did NOT buy, and the number is the reason. Rust's `seq`
+refusal still does not name the value: calling the new `describe` from it
+costs **2 935 bytes in every shipped module** against **1 220 bytes** of
+headroom under the 304 000 floor. Unused, `describe` costs nothing -- 302 780
+either way, the shaker removes it whole -- so the capability is in the tree at
+zero cost and only the CALL is a budget decision. It wants one.
 
 | hole | this file claimed | measured against Rust | now |
 | --- | --- | --- | --- |
 | **9 (new) `and` / `or`** | absent | **15 functions** in `Seqs`+`Eq`+`Pike` alone, plus every `&&` guard in `Maps`, `Vec`, `Str`. Cost: **one line** -- `'and "&&" 'or "\|\|"`, spelled identically on all three | **CLOSED** |
 | **10 (new) allocation** | absent | **~2,000 lines.** `alloc`, `heap`, `fixnum`, a `NIL` name, an `Addr` tag. Every constructor in every file | **CLOSED** |
 | **11 (new) cross-module calls** | absent | **11 functions.** Rust reaches a sibling through `self`; the ports through a class-qualified static taking `rt`. One pattern, not one decision per function | **CLOSED** |
-| 5 string building | mid | **13 in `Table`**, 0 in `Maps`, 0 blockers in `Seqs`/`Eq`/`Pike` | **THE ONE LEFT** |
+| 5 string building | mid | **13 in `Table`**, 0 in `Maps`, 0 blockers in `Seqs`/`Eq`/`Pike` | **CLOSED** |
 | 2 arrays | "the real gate on 4,500 lines" | **2 functions** in `Maps`+`Table`. And the array-of-`Value`s half **is not needed at all** -- converging node construction to `(base, n)` on the shadow stack removes it from eight functions, measured 5.5x faster in Rust at 2 kids | open |
 | 3 `case` statements | "every dispatch" | **1 function** in `Maps`+`Table`, **0** in `Str`/`Bytes`/`Vec`, 5 in `Seqs`+`Eq` | open |
 | 4 absence | "every partial function" | **1** in `Table` (the others are drift), 3 in `Seqs`+`Eq`+`Pike` after converging | open |
