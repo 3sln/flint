@@ -1,6 +1,6 @@
 namespace Flint.Rt;
 
-using static flint.rt.Eq;
+using static _3sln.Flint.Kgen.Rt.Eq;
 
 
 /// Structural equality and hashing, ported from `runtime/src/eq.rs`.
@@ -186,9 +186,9 @@ public static class Eq {
     public static int HashValue(Rt rt, long v) {
         if (Val.IsDouble(v)) return Hash.HashDouble(Val.AsDouble(v));
         if (Val.IsNil(v)) return 0;
-        if (v == Val.True) return flint.rt.Hash.HashTrue;
-        if (v == Val.False) return flint.rt.Hash.HashFalse;
-        if (Val.IsFixnum(v)) return flint.rt.Hash.HashLong(Val.AsFixnum(v));
+        if (v == Val.True) return _3sln.Flint.Kgen.Rt.Hash.HashTrue;
+        if (v == Val.False) return _3sln.Flint.Kgen.Rt.Hash.HashFalse;
+        if (Val.IsFixnum(v)) return _3sln.Flint.Kgen.Rt.Hash.HashLong(Val.AsFixnum(v));
         if (Val.IsInlineStr(v)) return Hash.HashString(Val.InlineBytes(v));
         if (Val.IsInlineKw(v)) return Hash.HashKeyword(null, Val.InlineBytes(v));
         if (!Val.IsHeap(v)) return 0;
@@ -216,9 +216,9 @@ public static class Eq {
                 int vi = rt.Push(v);
                 int n = Vec.Count(rt, rt.R(vi)), acc = 1;
                 for (int i = 0; i < n; i++) {
-                    acc = flint.rt.Hash.OrderedStep(acc, HashValue(rt, Vec.Nth(rt, rt.R(vi), i, Val.NotFound)));
+                    acc = _3sln.Flint.Kgen.Rt.Hash.OrderedStep(acc, HashValue(rt, Vec.Nth(rt, rt.R(vi), i, Val.NotFound)));
                 }
-                int h = flint.rt.Hash.MixCollHash(acc, n);
+                int h = _3sln.Flint.Kgen.Rt.Hash.MixCollHash(acc, n);
                 rt.SetSlot(Val.AsHeap(rt.R(vi)), Vec.V_HASH, Val.Fixnum(h));
                 rt.PopTo(bas);
                 return h;
@@ -239,7 +239,7 @@ public static class Eq {
                     rt.PopTo(ri);
                 }
                 rt.PopTo(bas);
-                return flint.rt.Hash.HashInt(acc ^ n);
+                return _3sln.Flint.Kgen.Rt.Hash.HashInt(acc ^ n);
             }
             case Obj.TyTagged:
                 return HashValue(rt, rt.Slot(v, 0)) * 31 + HashValue(rt, rt.Slot(v, 1));
@@ -252,13 +252,13 @@ public static class Eq {
                     while (!Val.IsNil(rt.R(s))) {
                         // A TICK: a seq's length is not known until it ends.
                         if (!rt.ChargeTick(n, 1, "hash")) { rt.PopTo(bas); return 0; }
-                        acc = flint.rt.Hash.OrderedStep(acc, HashValue(rt, Seqs.First(rt, rt.R(s))));
+                        acc = _3sln.Flint.Kgen.Rt.Hash.OrderedStep(acc, HashValue(rt, Seqs.First(rt, rt.R(s))));
                         n++;
                         long nx = Seqs.Next(rt, rt.R(s));
                         rt.SetR(s, nx);
                     }
                     rt.PopTo(bas);
-                    return flint.rt.Hash.MixCollHash(acc, n);
+                    return _3sln.Flint.Kgen.Rt.Hash.MixCollHash(acc, n);
                 }
                 return 0;
             }

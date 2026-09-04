@@ -1,7 +1,7 @@
 namespace Flint.Rt;
 
-using static flint.rt.Interns;
-using flint.rt;
+using static _3sln.Flint.Kgen.Rt.Interns;
+using _3sln.Flint.Kgen.Rt;
 
 
 /// Green threads, ports, and the scheduler. Ported from `runtime/src/conc.rs`

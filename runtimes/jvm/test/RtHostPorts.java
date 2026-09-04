@@ -1,4 +1,4 @@
-import flint.rt.Mapwrite;
+import com._3sln.flint.kgen.rt.Mapwrite;
 import com.flint.rt.*;
 import java.nio.file.*;
 import java.nio.charset.StandardCharsets;

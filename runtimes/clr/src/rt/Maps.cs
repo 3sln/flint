@@ -1,17 +1,17 @@
 namespace Flint.Rt;
 
-using flint.rt;
+using _3sln.Flint.Kgen.Rt;
 
-using static flint.rt.Assoc;
-using static flint.rt.Mapcore;
-using static flint.rt.Mapread;
-using static flint.rt.Mapwrite;
-using static flint.rt.Champ;
-using static flint.rt.Collnode;
-using static flint.rt.Dissoc;
-using static flint.rt.Find;
-using static flint.rt.Interns;
-using static flint.rt.Nodeclass;
+using static _3sln.Flint.Kgen.Rt.Assoc;
+using static _3sln.Flint.Kgen.Rt.Mapcore;
+using static _3sln.Flint.Kgen.Rt.Mapread;
+using static _3sln.Flint.Kgen.Rt.Mapwrite;
+using static _3sln.Flint.Kgen.Rt.Champ;
+using static _3sln.Flint.Kgen.Rt.Collnode;
+using static _3sln.Flint.Kgen.Rt.Dissoc;
+using static _3sln.Flint.Kgen.Rt.Find;
+using static _3sln.Flint.Kgen.Rt.Interns;
+using static _3sln.Flint.Kgen.Rt.Nodeclass;
 
 
 /// Maps: a small insertion-ordered array-map, and a **CHAMP** hash-array
@@ -339,10 +339,10 @@ public static class Maps {
         for (int i = 0; i < n; i++) {
             int kh = Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i));
             int vh = Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i + 1));
-            acc = flint.rt.Hash.UnorderedStep(acc, flint.rt.Hash.MixCollHash(
-                flint.rt.Hash.OrderedStep(flint.rt.Hash.OrderedStep(1, kh), vh), 2));
+            acc = _3sln.Flint.Kgen.Rt.Hash.UnorderedStep(acc, _3sln.Flint.Kgen.Rt.Hash.MixCollHash(
+                _3sln.Flint.Kgen.Rt.Hash.OrderedStep(_3sln.Flint.Kgen.Rt.Hash.OrderedStep(1, kh), vh), 2));
         }
         rt.PopTo(bas);
-        return flint.rt.Hash.MixCollHash(acc, n);
+        return _3sln.Flint.Kgen.Rt.Hash.MixCollHash(acc, n);
     }
 }

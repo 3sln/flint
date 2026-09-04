@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using flint.rt;
+using _3sln.Flint.Kgen.Rt;
 
 namespace Flint.Rt;
 
@@ -1037,7 +1037,7 @@ public sealed class Rt : System.IDisposable {
     /// GENERATED, as `Seqcore.IsSeq`. Kept as a method here because its call
     /// sites say `rt.IsSeq(v)` and a receiver is not something a static
     /// using can supply.
-    internal bool IsSeq(long v) { return flint.rt.Seqcore.IsSeq(this, v); }
+    internal bool IsSeq(long v) { return _3sln.Flint.Kgen.Rt.Seqcore.IsSeq(this, v); }
 
     public void Dispose() => gc.Dispose();
 

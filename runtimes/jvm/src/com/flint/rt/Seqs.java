@@ -1,11 +1,11 @@
 package com.flint.rt;
 
-import flint.rt.Mapcore;
+import com._3sln.flint.kgen.rt.Mapcore;
 
 import static com.flint.rt.Obj.*;
-import static flint.rt.Seqcore.*;
-import static flint.rt.Seqwalk.*;
-import static flint.rt.Seqs.*;
+import static com._3sln.flint.kgen.rt.Seqcore.*;
+import static com._3sln.flint.kgen.rt.Seqwalk.*;
+import static com._3sln.flint.kgen.rt.Seqs.*;
 
 /// Seqs, ported from `runtime/src/seqs.rs`.
 ///
@@ -24,13 +24,13 @@ public final class Seqs {
     /// `first` and `next`, under the names their callers already use. The
     /// bodies are GENERATED, as `Seqwalk`; some thirty call sites across this
     /// runtime say `Seqs.first`, in files that have nothing to do with seqs.
-    public static long first(Rt rt, long v) { return flint.rt.Seqwalk.first(rt, v); }
-    public static long next(Rt rt, long v) { return flint.rt.Seqwalk.next(rt, v); }
+    public static long first(Rt rt, long v) { return com._3sln.flint.kgen.rt.Seqwalk.first(rt, v); }
+    public static long next(Rt rt, long v) { return com._3sln.flint.kgen.rt.Seqwalk.next(rt, v); }
 
     /// `cons`, under the name its callers already use. The body is GENERATED,
     /// as `Seqcore.cons`; renaming ~20 call sites across this runtime for a
     /// naming win is the trade `doc/goals/kin-port.md` answered with "LAST".
-    public static long cons(Rt rt, long head, long tail) { return flint.rt.Seqcore.cons(rt, head, tail); }
+    public static long cons(Rt rt, long head, long tail) { return com._3sln.flint.kgen.rt.Seqcore.cons(rt, head, tail); }
     private Seqs() {}
 
     public static final int C_FIRST = 0, C_REST = 1, C_META = 2, C_COUNT = 3;

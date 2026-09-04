@@ -1,6 +1,6 @@
 namespace Flint.Rt;
 
-using static flint.rt.Hash;
+using static _3sln.Flint.Kgen.Rt.Hash;
 
 using System.Numerics;
 

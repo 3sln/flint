@@ -1,18 +1,18 @@
 package com.flint.rt;
 
-import flint.rt.Mapread;
+import com._3sln.flint.kgen.rt.Mapread;
 
 import static com.flint.rt.Obj.*;
-import static flint.rt.Assoc.*;
-import static flint.rt.Mapcore.*;
-import static flint.rt.Mapread.*;
-import static flint.rt.Mapwrite.*;
-import static flint.rt.Champ.*;
-import static flint.rt.Collnode.*;
-import static flint.rt.Dissoc.*;
-import static flint.rt.Find.*;
-import static flint.rt.Interns.*;
-import static flint.rt.Nodeclass.*;
+import static com._3sln.flint.kgen.rt.Assoc.*;
+import static com._3sln.flint.kgen.rt.Mapcore.*;
+import static com._3sln.flint.kgen.rt.Mapread.*;
+import static com._3sln.flint.kgen.rt.Mapwrite.*;
+import static com._3sln.flint.kgen.rt.Champ.*;
+import static com._3sln.flint.kgen.rt.Collnode.*;
+import static com._3sln.flint.kgen.rt.Dissoc.*;
+import static com._3sln.flint.kgen.rt.Find.*;
+import static com._3sln.flint.kgen.rt.Interns.*;
+import static com._3sln.flint.kgen.rt.Nodeclass.*;
 
 /// Maps: a small insertion-ordered array-map, and a **CHAMP** hash-array
 /// mapped trie above it. Ported from `runtime/src/map.rs`.
@@ -356,10 +356,10 @@ public final class Maps {
         for (int i = 0; i < n; i++) {
             int kh = Eq.hashValue(rt, rt.r(at + 2 * i));
             int vh = Eq.hashValue(rt, rt.r(at + 2 * i + 1));
-            acc = flint.rt.Hash.unorderedStep(acc, flint.rt.Hash.mixCollHash(
-                flint.rt.Hash.orderedStep(flint.rt.Hash.orderedStep(1, kh), vh), 2));
+            acc = com._3sln.flint.kgen.rt.Hash.unorderedStep(acc, com._3sln.flint.kgen.rt.Hash.mixCollHash(
+                com._3sln.flint.kgen.rt.Hash.orderedStep(com._3sln.flint.kgen.rt.Hash.orderedStep(1, kh), vh), 2));
         }
         rt.popTo(base);
-        return flint.rt.Hash.mixCollHash(acc, n);
+        return com._3sln.flint.kgen.rt.Hash.mixCollHash(acc, n);
     }
 }

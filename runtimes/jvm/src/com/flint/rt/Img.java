@@ -1,6 +1,6 @@
 package com.flint.rt;
 
-import flint.rt.Mapwrite;
+import com._3sln.flint.kgen.rt.Mapwrite;
 
 import static com.flint.rt.Obj.*;
 

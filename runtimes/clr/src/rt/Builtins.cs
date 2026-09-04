@@ -1,6 +1,6 @@
 namespace Flint.Rt;
 
-using flint.rt;
+using _3sln.Flint.Kgen.Rt;
 
 /// The builtins, ported from `runtime/src/builtins.rs`.
 ///
@@ -1317,9 +1317,9 @@ public static class Builtins {
         });
 
         // Lazy sequences and ranges.
-        Def("flint/lazy-seq", (rt, at, n) => flint.rt.Seqs.LazySeq(rt, rt.VAt(at)));
+        Def("flint/lazy-seq", (rt, at, n) => _3sln.Flint.Kgen.Rt.Seqs.LazySeq(rt, rt.VAt(at)));
         Def("flint/range3", (rt, at, n) =>
-            flint.rt.Seqs.Range(rt, rt.VAt(at), rt.VAt(at + 1), rt.VAt(at + 2)));
+            _3sln.Flint.Kgen.Rt.Seqs.Range(rt, rt.VAt(at), rt.VAt(at + 1), rt.VAt(at + 2)));
 
         // Sets.
         Def("disj", (rt, at, n) => {

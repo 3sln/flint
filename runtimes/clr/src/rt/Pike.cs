@@ -1,6 +1,6 @@
 namespace Flint.Rt;
 
-using static flint.rt.Pike;
+using static _3sln.Flint.Kgen.Rt.Pike;
 
 
 /// The Pike VM, ported from `runtime/src/pike.rs` (`doc/decisions/0012`).

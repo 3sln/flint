@@ -1,12 +1,12 @@
 package com.flint.rt;
 
 import static com.flint.rt.Obj.*;
-import static flint.rt.Vecnode.*;
-import static flint.rt.Vecread.*;
-import static flint.rt.Vecwrite.*;
-import static flint.rt.Vecassoc.*;
-import static flint.rt.Vectrans.*;
-import static flint.rt.Vectwrite.*;
+import static com._3sln.flint.kgen.rt.Vecnode.*;
+import static com._3sln.flint.kgen.rt.Vecread.*;
+import static com._3sln.flint.kgen.rt.Vecwrite.*;
+import static com._3sln.flint.kgen.rt.Vecassoc.*;
+import static com._3sln.flint.kgen.rt.Vectrans.*;
+import static com._3sln.flint.kgen.rt.Vectwrite.*;
 
 /// Persistent vectors, ported from `runtime/src/vector.rs`.
 ///
@@ -93,7 +93,7 @@ public final class Vec {
 
     /// The TRANSIENT surface, under the names its callers already use. Bodies
     /// generated -- `Vectrans` for the plumbing, `Vectwrite` for the writes.
-    public static long newEditToken(Rt rt) { return flint.rt.Vectrans.newEditToken(rt); }
+    public static long newEditToken(Rt rt) { return com._3sln.flint.kgen.rt.Vectrans.newEditToken(rt); }
     public static boolean isTransient(Rt rt, long v) { return isTransientVector(rt, v); }
     public static int tcount(Rt rt, long t) { return tvecCount(rt, t); }
     public static boolean alive(Rt rt, long t) { return tvecAlive(rt, t); }

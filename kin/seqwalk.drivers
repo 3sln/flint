@@ -273,15 +273,34 @@ fn main() {
          .append(Val.isNil(next(rt, NIL)) ? 1 : 0).append(' ');
         System.out.println(o.toString());
     }
+--csharp-pre
+// The hand-written runtime, as a REAL top-level namespace.
+//
+// The generated C# reaches it as `global::Flint.Rt.X`, because its own
+// namespace ends in `Rt` and a bare `Flint.Rt` would resolve against that
+// instead. `global::` needs a genuine root namespace, which a shim nested
+// inside `class Probe` cannot be -- so these live out here now.
+namespace Flint.Rt {
+    internal static class Seqs {
+        internal static long Seq(Probe.Rt rt, long v) {
+            if (!Probe.Val.IsHeap(v)) return Probe.Val.Nil;
+            int t = Probe.Obj.Ty(rt.gc.sp, Probe.Val.AsHeap(v));
+            if (t == Probe.Obj.TyCons || t == Probe.Obj.TyVecseq || t == Probe.Obj.TyStrseq) return v;
+            if (t == Probe.Obj.TyRange) return rt.Slot(v, 0) >= rt.Slot(v, 1) ? Probe.Val.Nil : v;
+            return Probe.Val.Nil;
+        }
+    }
+}
+
 --csharp-head
     const long NIL = 0xFFFFL;
     const int C_FIRST = 0, C_REST = 1;
-    static class Obj {
+    internal static class Obj {
         internal const int TyCons = 6, TyVecseq = 11, TyStrseq = 12, TyRange = 13;
         internal const int TyMapentry = 20, TyTable = 49, TyVec = 9, TyStr = 2;
         internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
     }
-    static class Val {
+    internal static class Val {
         internal const long Nil = 0xFFFFL;
         internal static bool IsHeap(long v) { return v >= 100 && v != Nil; }
         internal static long AsHeap(long v) { return v; }
@@ -349,22 +368,6 @@ fn main() {
         long a = rt.Alloc(t, vals.Length + 1);
         for (int k = 0; k < vals.Length; k++) rt.SetSlot(a, k, vals[k]);
         return Val.Heap(a);
-    }
-    // `Flint.Rt.Seqs` in the real emit; nested here so the qualified name the
-    // vocabulary produces resolves inside a single-class probe.
-    internal static class Flint {
-        internal static class Rt2 { }
-        internal static class Rt {
-            internal static class Seqs {
-                internal static long Seq(Probe.Rt rt, long v) {
-                    if (!Val.IsHeap(v)) return NIL;
-                    int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
-                    if (t == Obj.TyCons || t == Obj.TyVecseq || t == Obj.TyStrseq) return v;
-                    if (t == Obj.TyRange) return rt.Slot(v, 0) >= rt.Slot(v, 1) ? NIL : v;
-                    return NIL;
-                }
-            }
-        }
     }
 --csharp
     public static void Main(string[] args) {

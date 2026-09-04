@@ -53,7 +53,7 @@
 
 ;; PORTED from the hand-written runtimes, which is what takes flint's external
 ;; surface to zero. It was hand-written in all three and called from generated
-;; code -- the shape that has to work before `kingen` modules can stand alone,
+;; code -- the shape that has to work before generated modules can stand alone,
 ;; because `self.bn_new(..)` still resolves across files in Rust while an
 ;; unqualified `bnNew(..)` does not in Java.
 (defn ^:pub ^:method ^Value bn-new [^:mut ^Rt rt ^I32 datamap ^I32 nodemap ^Value edit]

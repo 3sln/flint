@@ -1,10 +1,10 @@
 package com.flint.rt;
 
-import flint.rt.Mapwrite;
+import com._3sln.flint.kgen.rt.Mapwrite;
 
-import flint.rt.Mapread;
+import com._3sln.flint.kgen.rt.Mapread;
 
-import flint.rt.Mapcore;
+import com._3sln.flint.kgen.rt.Mapcore;
 
 import java.util.ArrayList;
 
@@ -1135,7 +1135,7 @@ public final class Rt {
     /// GENERATED, as `Seqcore.isSeq`. Kept as a method here because ~20 call
     /// sites say `rt.isSeq(v)` and a receiver is not something a static
     /// import can supply.
-    boolean isSeq(long v) { return flint.rt.Seqcore.isSeq(this, v); }
+    boolean isSeq(long v) { return com._3sln.flint.kgen.rt.Seqcore.isSeq(this, v); }
 
     /// Sequential, which is WIDER than `isSeq`: a vector and a map entry are
     /// sequential without being seqs. `=` is over this, not over seq-ness.

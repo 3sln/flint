@@ -47,15 +47,22 @@ fn main() {
         o.append(needsGrow(t) ? "1" : "0");
         System.out.println(o);
     }
+--csharp-pre
+// The hand-written runtime, as a REAL top-level namespace.
+//
+// The generated C# reaches it as `global::Flint.Rt.X`, because its own
+// namespace ends in `Rt` and a bare `Flint.Rt` would resolve against that
+// instead. `global::` needs a genuine root namespace, which a shim nested
+// inside `class Probe` cannot be -- so these live out here now.
+namespace Flint.Rt {
+    internal sealed class Interns {
+        internal int[] hashes = new int[8];
+        internal long[] values = new long[8];
+        internal int count = 0;
+    }
+}
+
 --csharp-head
-    // Nested for the same reason as the Java side above.
-    internal static class Flint { internal static class Rt {
-        internal sealed class Interns {
-            internal int[] hashes = new int[8];
-            internal long[] values = new long[8];
-            internal int count = 0;
-        }
-    } }
 --csharp
     static void Main() {
         var t = new Flint.Rt.Interns();

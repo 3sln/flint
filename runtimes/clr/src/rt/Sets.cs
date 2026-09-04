@@ -1,6 +1,6 @@
 namespace Flint.Rt;
 
-using flint.rt;
+using _3sln.Flint.Kgen.Rt;
 
 
 /// Sets, ported from `runtime/src/set.rs`: a map from element to ITSELF.
@@ -162,8 +162,8 @@ public static class Sets {
         int at = rt.Mark();
         int n = Maps.Entries(rt, rt.Slot(rt.R(si), S_MAP));
         int acc = 0;
-        for (int i = 0; i < n; i++) acc = flint.rt.Hash.UnorderedStep(acc, Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i)));
+        for (int i = 0; i < n; i++) acc = _3sln.Flint.Kgen.Rt.Hash.UnorderedStep(acc, Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i)));
         rt.PopTo(bas);
-        return flint.rt.Hash.MixCollHash(acc, n);
+        return _3sln.Flint.Kgen.Rt.Hash.MixCollHash(acc, n);
     }
 }

@@ -17,11 +17,11 @@
 //! higher priority and may still beat it.
 
 // THE CONSUMING LINE. The character-class predicates are generated now,
-// `kingen/flint/rt/pike.rs`, and they are FREE FUNCTIONS rather than methods
+// `kgen/rt/pike.rs`, and they are FREE FUNCTIONS rather than methods
 // -- so unlike an `impl Rt` block they have to be brought into scope. This
 // re-export puts them back under `crate::pike`, which is where every call
 // site in the runtime already looks for them.
-pub(crate) use crate::kingen::flint::rt::pike::*;
+pub(crate) use crate::kgen::rt::pike::*;
 
 use crate::obj::*;
 use crate::rt::Rt;

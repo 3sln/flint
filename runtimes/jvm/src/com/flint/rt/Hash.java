@@ -1,5 +1,5 @@
 package com.flint.rt;
-import static flint.rt.Hash.*;
+import static com._3sln.flint.kgen.rt.Hash.*;
 
 /// Hashing, ported from `runtime/src/hash.rs` and bit-compatible with JVM
 /// Clojure's `hash`.

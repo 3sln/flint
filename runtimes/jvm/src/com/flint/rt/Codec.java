@@ -1,8 +1,8 @@
 package com.flint.rt;
 
-import flint.rt.Mapwrite;
+import com._3sln.flint.kgen.rt.Mapwrite;
 
-import flint.rt.Mapcore;
+import com._3sln.flint.kgen.rt.Mapcore;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;

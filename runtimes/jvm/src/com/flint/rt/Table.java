@@ -1,10 +1,10 @@
 package com.flint.rt;
 
-import flint.rt.Mapwrite;
+import com._3sln.flint.kgen.rt.Mapwrite;
 
-import flint.rt.Mapread;
+import com._3sln.flint.kgen.rt.Mapread;
 
-import flint.rt.Mapcore;
+import com._3sln.flint.kgen.rt.Mapcore;
 
 import static com.flint.rt.Obj.*;
 

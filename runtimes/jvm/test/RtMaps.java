@@ -1,6 +1,6 @@
-import flint.rt.Mapwrite;
-import flint.rt.Mapread;
-import flint.rt.Mapcore;
+import com._3sln.flint.kgen.rt.Mapwrite;
+import com._3sln.flint.kgen.rt.Mapread;
+import com._3sln.flint.kgen.rt.Mapcore;
 import com.flint.rt.*;
 
 /// Maps on the ported runtime: the array-map, the promotion to CHAMP, and the

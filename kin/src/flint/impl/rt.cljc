@@ -100,7 +100,7 @@
   ;; anywhere else.
   {:name 'Interns :types {:rust "InternTable"
                           :java "com.flint.rt.Interns"
-                          :csharp "Flint.Rt.Interns"}
+                          :csharp "global::Flint.Rt.Interns"}
    :methods {}})
 
 (def Addr
@@ -198,7 +198,7 @@
    ;; into a C# file whose constant is `LsThunk`. The CLR has not compiled
    ;; since `seqs.kin` shipped.
    'RF_SCHEMA {:rust "crate::table::RF_SCHEMA"
-               :java "Table.RF_SCHEMA" :csharp "Flint.Rt.Table.RF_SCHEMA"}
+               :java "Table.RF_SCHEMA" :csharp "global::Flint.Rt.Table.RF_SCHEMA"}
    'LS_THUNK {:rust "LS_THUNK" :java "LS_THUNK" :csharp "LsThunk"}
    'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LsSeq"}}
   ;; The node and category constants. All three targets spell these
@@ -540,7 +540,7 @@
     ;; `Maps` and reach it by a name that differs from Rust's.
     'empty-map (core/call {:rust "{0}.empty_map()"
                            :java "com.flint.rt.Maps.empty({0})"
-                           :csharp "Flint.Rt.Maps.Empty({0})"})
+                           :csharp "global::Flint.Rt.Maps.Empty({0})"})
     ;; The shared EMPTY VECTOR singleton, alongside `empty-map`. An empty
     ;; vector is three objects -- a root node, a tail node and the header --
     ;; so it is built once at startup and handed out, not rebuilt per `pop`
@@ -561,13 +561,13 @@
                            :csharp "Vec.Empty({0})"})
     'ref-to-map (core/call {:rust "{0}.ref_to_map({1})"
                             :java "Table.refToMap({0}, {1})"
-                            :csharp "Flint.Rt.Table.refToMap({0}, {1})"})
+                            :csharp "global::Flint.Rt.Table.refToMap({0}, {1})"})
     'ref-get (core/call {:rust "{0}.ref_get({1}, {2}, {3})"
                          :java "Table.refGet({0}, {1}, {2}, {3})"
-                         :csharp "Flint.Rt.Table.refGet({0}, {1}, {2}, {3})"})
+                         :csharp "global::Flint.Rt.Table.refGet({0}, {1}, {2}, {3})"})
     'schema-len (core/call {:rust "{0}.schema_len({1})"
                             :java "Table.schemaLen({0}, {1})"
-                            :csharp "Flint.Rt.Table.schemaLen({0}, {1})"})
+                            :csharp "global::Flint.Rt.Table.schemaLen({0}, {1})"})
     ;; `eq_may_alloc` is GENERATED, by `eqalloc.kin`, so it is `own` rather
     ;; than a hand-written sibling -- and `own` is now exactly right for one:
     ;; a bare call, with the static import derived from the fact that this
@@ -596,10 +596,10 @@
     ;; and cannot say either of them.
     'val-eq (core/call {:rust "{0}.eq({1}, {2})"
                         :java "com.flint.rt.Eq.eq({0}, {1}, {2})"
-                        :csharp "Flint.Rt.Eq.Equal({0}, {1}, {2})"})
+                        :csharp "global::Flint.Rt.Eq.Equal({0}, {1}, {2})"})
     'hash-value (core/call {:rust "{0}.hash_value({1})"
                             :java "com.flint.rt.Eq.hashValue({0}, {1})"
-                            :csharp "Flint.Rt.Eq.HashValue({0}, {1})"})
+                            :csharp "global::Flint.Rt.Eq.HashValue({0}, {1})"})
     'bn-datamap (own "bn_datamap" "bnDatamap" 1)
     'bn-nodemap (own "bn_nodemap" "bnNodemap" 1)
     'bn-key (own "bn_key" "bnKey" 2)
@@ -644,13 +644,13 @@
     ;; per target here and `sibling` varies only the method name.
     'seq-of (core/call {:rust "{0}.seq({1})"
                         :java "com.flint.rt.Seqs.seq({0}, {1})"
-                        :csharp "Flint.Rt.Seqs.Seq({0}, {1})"})
+                        :csharp "global::Flint.Rt.Seqs.Seq({0}, {1})"})
     'first-of (core/call {:rust "{0}.first({1})"
                           :java "com.flint.rt.Seqs.first({0}, {1})"
-                          :csharp "Flint.Rt.Seqs.First({0}, {1})"})
+                          :csharp "global::Flint.Rt.Seqs.First({0}, {1})"})
     'next-of (core/call {:rust "{0}.next({1})"
                          :java "com.flint.rt.Seqs.next({0}, {1})"
-                         :csharp "Flint.Rt.Seqs.Next({0}, {1})"})
+                         :csharp "global::Flint.Rt.Seqs.Next({0}, {1})"})
 
     'alloc (core/call {:rust "{0}.alloc({1}, {2})"
                        :java "{0}.alloc({1}, {2})"

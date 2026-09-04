@@ -2,7 +2,7 @@ using System.Text;
 
 namespace Flint.Rt;
 
-using static flint.rt.Interns;
+using static _3sln.Flint.Kgen.Rt.Interns;
 
 /// Strings, ported from `runtime/src/strs.rs`.
 ///

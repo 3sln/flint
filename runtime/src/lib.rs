@@ -22,9 +22,9 @@ pub mod err;
 pub mod fmath;
 pub mod gc;
 pub mod hash;
-// The generated subtree. See `kingen.rs` -- these `mod` lines are the one
+// The generated subtree. See `kgen.rs` -- these `mod` lines are the one
 // thing kin reports and does not write.
-pub mod kingen;
+pub mod kgen;
 pub mod mem;
 pub mod image;
 pub mod map;

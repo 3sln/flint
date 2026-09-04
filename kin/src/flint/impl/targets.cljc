@@ -22,7 +22,7 @@
   sidecar moved rather than removed.
 
   Each source is its own module now, so `:path` is `module-path` and nothing
-  else: `flint.rt.champ` names `kingen/flint/rt/champ.rs` and there is
+  else: `flint.rt.champ` names `kgen/rt/champ.rs` and there is
   nothing left to look up. `unit`, `rust-file` and `deep-rust` went with the
   regions."
   (:require [clojure.string :as str]
@@ -33,18 +33,69 @@
 (defn- pascal [s] (str/join (mapv str/capitalize (str/split (str s) #"-"))))
 
 ;; ---------------------------------------------------------------------------
-;; WHOLE MODULES, under `kingen/`.
+;; WHOLE MODULES, under each target's own generated root.
 ;;
 ;; Each target owns a whole file, which is what decision G says an `:emit`
 ;; means. There is no splicing left anywhere: kin writes files it creates and
 ;; never touches one somebody else wrote.
 
 (def generated-root
-  "The subtree every generated module lives under, PARALLEL to the human
-  source rather than mixed into it. `kingen/flint/rt/champ.rs` sits beside
-  `map.rs`, never contends with a hand-written name, and is obvious in a
-  diff."
-  "kingen")
+  "The generated subtree, PER TARGET, in that language's own convention.
+
+  It was one string -- `kingen` -- for all three, on the reasoning that Rust
+  mirrors module paths onto directories exactly as Java mirrors a package and
+  C# a namespace, so the shape could be shared. The shape is shared; the ROOT
+  is not, because what a root looks like is exactly where the three languages
+  differ:
+
+      rust     kgen/rt/seqs.rs                     crate::kgen::rt::seqs
+      java     com/_3sln/flint/kgen/rt/Seqs.java   com._3sln.flint.kgen.rt
+      csharp   _3sln/Flint/Kgen/Rt/Seqs.cs         _3sln.Flint.Kgen.Rt
+
+  Java is reverse-DNS and lower case; C# is PascalCase and does not use a
+  reverse-DNS prefix at all; Rust has neither, because the CRATE is already
+  the root and a second one inside it would say `flint` twice.
+
+  `_3sln` rather than `3sln`: an identifier cannot begin with a digit in
+  either Java or C#, and both compilers refuse it outright -- `javac` reports
+  `';' expected` and `csc` reports CS1514. The leading underscore is the
+  ordinary escape.
+
+  The leading `flint` of a namespace is DROPPED, because every root already
+  says it. `flint.rt.seqs` is `...kgen.rt.Seqs` and not `...kgen.flint.rt.Seqs`."
+  {:rust ["kgen"]
+   :java ["com" "_3sln" "flint" "kgen"]
+   :csharp ["_3sln" "Flint" "Kgen"]})
+
+(def ^:private ns-tail
+  "A namespace's segments with the leading `flint` dropped and the last
+  segment split off: `flint.rt.seqs` -> [[\"rt\"] \"seqs\"]."
+  (memoize
+   (fn [ns-name]
+     (let [segs (str/split (str ns-name) #"\.")
+           segs (if (= "flint" (first segs)) (rest segs) segs)]
+       [(vec (butlast segs)) (last segs)]))))
+
+(defn- generated-path
+  "Where a namespace's file goes for `target`, as path segments.
+
+  Not `kin.target/module-path`, which takes ONE root and one casing for all
+  three. That was true while the root was one string; it stopped being true
+  when each language got its own convention, and C# capitalises the
+  DIRECTORIES as well as the file."
+  [target ns-name {:keys [ext capitalise?]}]
+  (let [[dirs tail] (ns-tail ns-name)
+        dirs (if (= :csharp target) (mapv pascal dirs) dirs)
+        file (str (if capitalise? (pascal tail) tail) "." ext)]
+    (str/join "/" (concat (generated-root target) dirs [file]))))
+
+(defn- generated-ns
+  "The package or namespace a generated module declares, which MIRRORS the
+  directory it is written to -- that is the whole rule, in every target."
+  [target ns-name]
+  (let [[dirs _] (ns-tail ns-name)
+        dirs (if (= :csharp target) (mapv pascal dirs) dirs)]
+    (str/join "." (concat (generated-root target) dirs))))
 
 (def module-roots
   "Where each target's generated subtree is rooted.
@@ -223,7 +274,9 @@
           ;; calls unqualified; the rest are methods, and a method needs no
           ;; import in Rust at all.
           (str/join (for [s ["hash" "pike"] :when (not= s self)]
-                      (str "use crate::" generated-root "::flint::rt::" s "::*;\n"))))
+                      (str "use crate::" (str/join "::" (:rust generated-root))
+                           "::" (str/join "::" (first (ns-tail ns-name)))
+                           "::" s "::*;\n"))))
      (fn [c]
        (if ty
          (do (kin/emit! c "impl " ty " {\n")
@@ -250,7 +303,7 @@
   [ctx forms]
   (let [ns-name (second (ns-form-of forms))
         self (last (str/split (str ns-name) #"\."))
-        pkg (str/join "." (butlast (str/split (str ns-name) #"\.")))
+        pkg (generated-ns :java ns-name)
         cls (pascal self)
         siblings (siblings-used forms self)]
     (module-file
@@ -288,21 +341,37 @@
   [ctx forms]
   (let [ns-name (second (ns-form-of forms))
         self (last (str/split (str ns-name) #"\."))
-        ns-part (str/join "." (butlast (str/split (str ns-name) #"\.")))
+        ns-part (generated-ns :csharp ns-name)
         cls (pascal self)
         siblings (siblings-used forms self)]
     (module-file
      ctx ns-name "//"
      (str "namespace " ns-part ";\n\n"
           "using System.Numerics;\n"
-          "using Flint.Rt;\n"
-          "using static Flint.Rt.Obj;\n"
-          "using static Flint.Rt.Maps;\n"
-          "using static Flint.Rt.Eq;\n"
-          "using static Flint.Rt.Seqs;\n"
-          "using static Flint.Rt.Vec;\n"
+          ;; `global::`, and it is not decoration. The generated namespace is
+          ;; `_3sln.Flint.Kgen.Rt`, so a bare `Flint.Rt.Obj` resolves against
+          ;; the ENCLOSING namespaces first and finds `_3sln.Flint`, then looks
+          ;; for an `Rt` inside it and fails: CS0234, "the type or namespace
+          ;; name 'Rt' does not exist in the namespace '_3sln.Flint'".
+          ;;
+          ;; `global::` is what C# provides for exactly this, and it is why the
+          ;; alias below is needed too.
+          "using global::Flint.Rt;\n"
+          "using static global::Flint.Rt.Obj;\n"
+          "using static global::Flint.Rt.Maps;\n"
+          "using static global::Flint.Rt.Eq;\n"
+          "using static global::Flint.Rt.Seqs;\n"
+          "using static global::Flint.Rt.Vec;\n"
+          ;; THE RECEIVER'S TYPE, aliased. The last namespace segment is `Rt`
+          ;; -- it mirrors the `rt` directory -- and the runtime's main class
+          ;; is also `Rt`, so the simple name binds to the enclosing NAMESPACE
+          ;; and every signature reads "'Rt' is a namespace but is used like a
+          ;; type" (CS0118). The alias wins over the enclosing namespace;
+          ;; verified, because C# refuses an alias that collides with a type in
+          ;; the same namespace (CS0576) and it was not obvious this differs.
+          "using Rt = global::Flint.Rt.Rt;\n"
           (str/join (for [sib siblings]
-                      (str "using static " ns-part "." (pascal sib) ";\n"))))
+                      (str "using static global::" ns-part "." (pascal sib) ";\n"))))
      (fn [c]
        (kin/emit! c "public static class " cls " {\n")
        (kin/scoped c {:key :class :value cls :indent 1}
@@ -328,20 +397,20 @@
            ;; sidecar waiting to grow.
            :path (fn [ns-name]
                    (when-not (contains? ships-nowhere ns-name)
-                     (target/module-path generated-root ns-name {:ext "rs"})))})
+                     (generated-path :rust ns-name {:ext "rs"})))})
    :java (merge
           target/java
           {:vfs (vfs/disk-vfs (:java module-roots))
            :emit java-emit
            :path (fn [ns-name]
                    (when-not (contains? ships-nowhere ns-name)
-                     (target/module-path generated-root ns-name
-                                         {:ext "java" :capitalise? true})))})
+                     (generated-path :java ns-name
+                                     {:ext "java" :capitalise? true})))})
    :csharp (merge
             target/csharp
             {:vfs (vfs/disk-vfs (:csharp module-roots))
              :emit csharp-emit
              :path (fn [ns-name]
                      (when-not (contains? ships-nowhere ns-name)
-                       (target/module-path generated-root ns-name
-                                           {:ext "cs" :capitalise? true})))})})
+                       (generated-path :csharp ns-name
+                                       {:ext "cs" :capitalise? true})))})})

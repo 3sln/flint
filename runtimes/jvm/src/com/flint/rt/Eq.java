@@ -1,7 +1,7 @@
 package com.flint.rt;
 
 import static com.flint.rt.Obj.*;
-import static flint.rt.Eq.*;
+import static com._3sln.flint.kgen.rt.Eq.*;
 
 /// Structural equality and hashing, ported from `runtime/src/eq.rs`.
 ///
@@ -213,9 +213,9 @@ public final class Eq {
     public static int hashValue(Rt rt, long v) {
         if (Val.isDouble(v)) return Hash.hashDouble(Val.asDouble(v));
         if (Val.isNil(v)) return 0;
-        if (v == Val.TRUE) return flint.rt.Hash.HASH_TRUE;
-        if (v == Val.FALSE) return flint.rt.Hash.HASH_FALSE;
-        if (Val.isFixnum(v)) return flint.rt.Hash.hashLong(Val.asFixnum(v));
+        if (v == Val.TRUE) return com._3sln.flint.kgen.rt.Hash.HASH_TRUE;
+        if (v == Val.FALSE) return com._3sln.flint.kgen.rt.Hash.HASH_FALSE;
+        if (Val.isFixnum(v)) return com._3sln.flint.kgen.rt.Hash.hashLong(Val.asFixnum(v));
         if (Val.isInlineStr(v)) return Hash.hashString(Val.inlineBytes(v));
         if (Val.isInlineKw(v)) return Hash.hashKeyword(null, Val.inlineBytes(v));
         if (!Val.isHeap(v)) return 0;
@@ -240,9 +240,9 @@ public final class Eq {
                 int vi = rt.push(v);
                 int n = Vec.count(rt, rt.r(vi)), acc = 1;
                 for (int i = 0; i < n; i++) {
-                    acc = flint.rt.Hash.orderedStep(acc, hashValue(rt, Vec.nth(rt, rt.r(vi), i, Val.NOT_FOUND)));
+                    acc = com._3sln.flint.kgen.rt.Hash.orderedStep(acc, hashValue(rt, Vec.nth(rt, rt.r(vi), i, Val.NOT_FOUND)));
                 }
-                int h = flint.rt.Hash.mixCollHash(acc, n);
+                int h = com._3sln.flint.kgen.rt.Hash.mixCollHash(acc, n);
                 rt.setSlot(Val.asHeap(rt.r(vi)), Vec.V_HASH, Val.fixnum(h));
                 rt.popTo(base);
                 return h;
@@ -264,7 +264,7 @@ public final class Eq {
                     rt.popTo(ri);
                 }
                 rt.popTo(base);
-                return flint.rt.Hash.hashInt(acc ^ n);
+                return com._3sln.flint.kgen.rt.Hash.hashInt(acc ^ n);
             }
             case Obj.TY_TAGGED:
                 return hashValue(rt, rt.slot(v, 0)) * 31 + hashValue(rt, rt.slot(v, 1));
@@ -282,13 +282,13 @@ public final class Eq {
                         // A TICK: a seq's length is not known until it ends,
                         // and it may not end (`doc/decisions/0009`).
                         if (!rt.chargeTick(n, 1, "hash")) { rt.popTo(base); return 0; }
-                        acc = flint.rt.Hash.orderedStep(acc, hashValue(rt, Seqs.first(rt, rt.r(s))));
+                        acc = com._3sln.flint.kgen.rt.Hash.orderedStep(acc, hashValue(rt, Seqs.first(rt, rt.r(s))));
                         n++;
                         long nx = Seqs.next(rt, rt.r(s));
                         rt.setR(s, nx);
                     }
                     rt.popTo(base);
-                    return flint.rt.Hash.mixCollHash(acc, n);
+                    return com._3sln.flint.kgen.rt.Hash.mixCollHash(acc, n);
                 }
                 return 0;
             }

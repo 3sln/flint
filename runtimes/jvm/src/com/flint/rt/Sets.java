@@ -1,10 +1,10 @@
 package com.flint.rt;
 
-import flint.rt.Mapwrite;
+import com._3sln.flint.kgen.rt.Mapwrite;
 
-import flint.rt.Mapread;
+import com._3sln.flint.kgen.rt.Mapread;
 
-import flint.rt.Mapcore;
+import com._3sln.flint.kgen.rt.Mapcore;
 
 import static com.flint.rt.Obj.*;
 
@@ -170,8 +170,8 @@ public final class Sets {
         int at = rt.mark();
         int n = Maps.entries(rt, rt.slot(rt.r(si), S_MAP));
         int acc = 0;
-        for (int i = 0; i < n; i++) acc = flint.rt.Hash.unorderedStep(acc, Eq.hashValue(rt, rt.r(at + 2 * i)));
+        for (int i = 0; i < n; i++) acc = com._3sln.flint.kgen.rt.Hash.unorderedStep(acc, Eq.hashValue(rt, rt.r(at + 2 * i)));
         rt.popTo(base);
-        return flint.rt.Hash.mixCollHash(acc, n);
+        return com._3sln.flint.kgen.rt.Hash.mixCollHash(acc, n);
     }
 }

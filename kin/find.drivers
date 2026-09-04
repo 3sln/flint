@@ -138,6 +138,19 @@ fn main() {
          .append(" roots=").append(rt.roots.size());
         System.out.println(o);
     }
+--csharp-pre
+// The hand-written runtime, as a REAL top-level namespace.
+//
+// The generated C# reaches it as `global::Flint.Rt.X`, because its own
+// namespace ends in `Rt` and a bare `Flint.Rt` would resolve against that
+// instead. `global::` needs a genuine root namespace, which a shim nested
+// inside `class Probe` cannot be -- so these live out here now.
+namespace Flint.Rt {
+        internal static class Eq {
+            internal static bool Equal(Probe.Rt rt, long a, long b) { rt.eqs++; return a == b; }
+        }
+}
+
 --csharp-head
     const long NOT_FOUND = 0xFFFEL;
     const int HASH_BITS = 5;
@@ -161,13 +174,6 @@ fn main() {
         internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
     }
     static bool EqMayAlloc(Rt rt, long v) { return v >= 900; }
-    internal static class Flint {
-        internal static class Rt {
-            internal static class Eq {
-                internal static bool Equal(Probe.Rt rt, long a, long b) { rt.eqs++; return a == b; }
-            }
-        }
-    }
     static bool IsBmnode(Rt rt, long n) { return rt.kind[(int) n] == 1; }
     static int BnDatamap(Rt rt, long n) { return (int) rt.h[(int) n]; }
     static int BnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }

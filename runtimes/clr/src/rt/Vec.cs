@@ -1,11 +1,11 @@
 namespace Flint.Rt;
 
-using static flint.rt.Vecnode;
-using static flint.rt.Vecread;
-using static flint.rt.Vecwrite;
-using static flint.rt.Vecassoc;
-using static flint.rt.Vectrans;
-using static flint.rt.Vectwrite;
+using static _3sln.Flint.Kgen.Rt.Vecnode;
+using static _3sln.Flint.Kgen.Rt.Vecread;
+using static _3sln.Flint.Kgen.Rt.Vecwrite;
+using static _3sln.Flint.Kgen.Rt.Vecassoc;
+using static _3sln.Flint.Kgen.Rt.Vectrans;
+using static _3sln.Flint.Kgen.Rt.Vectwrite;
 
 /// Persistent vectors, ported from `runtime/src/vector.rs`.
 ///
@@ -74,7 +74,7 @@ public static class Vec {
     public static long TNth(Rt rt, long t, int i, long dflt) { return TvecNth(rt, t, i, dflt); }
 
     /// The TRANSIENT surface, under the names its callers already use.
-    public static long NewEditToken(Rt rt) { return flint.rt.Vectrans.NewEditToken(rt); }
+    public static long NewEditToken(Rt rt) { return _3sln.Flint.Kgen.Rt.Vectrans.NewEditToken(rt); }
     public static bool IsTransient(Rt rt, long v) { return IsTransientVector(rt, v); }
     public static int TCount(Rt rt, long t) { return TvecCount(rt, t); }
     public static bool Alive(Rt rt, long t) { return TvecAlive(rt, t); }

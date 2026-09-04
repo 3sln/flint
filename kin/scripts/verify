@@ -79,7 +79,17 @@ mv "$work/probe.rs" "$work/gen.rs"
 { echo 'import java.io.ByteArrayOutputStream; import java.nio.charset.StandardCharsets;'
   echo 'public class Probe {'; section java-head; cat "$work/gen.java"
   section java; echo '}'; } > "$work/Probe.java"
-{ echo 'using System; using System.IO; using System.Text; using System.Numerics;'; echo 'class Probe {'
+# A `--csharp-pre` section, emitted OUTSIDE the probe class.
+#
+# The generated C# reaches the runtime as `global::Flint.Rt.X`, because its own
+# namespace ends in `Rt` and a bare `Flint.Rt` would resolve against the
+# enclosing one. `global::` needs a REAL top-level namespace, and a fixture
+# nested inside `class Probe` cannot provide one -- so the shims for the
+# hand-written runtime go here, before the class, and the rest of the fixture
+# stays where it was.
+{ echo 'using System; using System.IO; using System.Text; using System.Numerics;'
+  section csharp-pre
+  echo 'class Probe {'
   section csharp-head; cat "$work/gen.cs"; section csharp; echo '}'; } > "$work/Program.cs"
 
 # Each present target is built, run, and its answer recorded. The comparison

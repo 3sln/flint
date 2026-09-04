@@ -25,11 +25,11 @@
 
 
 // THE CONSUMING LINE. The Murmur3 primitives are generated now, into
-// `kingen/flint/rt/hash.rs`, and they are FREE FUNCTIONS rather than methods
+// `kgen/rt/hash.rs`, and they are FREE FUNCTIONS rather than methods
 // -- so unlike an `impl Rt` block they have to be brought into scope. This
 // re-export puts them back under `crate::hash`, which is where every call
 // site in the runtime already looks for them.
-pub(crate) use crate::kingen::flint::rt::hash::*;
+pub(crate) use crate::kgen::rt::hash::*;
 
 pub fn hash_double(d: f64) -> u32 {
     if d == 0.0 {

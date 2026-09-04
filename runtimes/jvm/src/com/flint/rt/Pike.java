@@ -2,7 +2,7 @@ package com.flint.rt;
 
 import static com.flint.rt.Obj.*;
 import java.util.ArrayList;
-import static flint.rt.Pike.*;
+import static com._3sln.flint.kgen.rt.Pike.*;
 
 /// The Pike VM, ported from `runtime/src/pike.rs` (`doc/decisions/0012`).
 ///

@@ -1,10 +1,10 @@
 package com.flint.rt;
 
-import flint.rt.Mapwrite;
+import com._3sln.flint.kgen.rt.Mapwrite;
 
-import flint.rt.Mapread;
+import com._3sln.flint.kgen.rt.Mapread;
 
-import flint.rt.Mapcore;
+import com._3sln.flint.kgen.rt.Mapcore;
 
 import static com.flint.rt.Obj.*;
 
@@ -1405,9 +1405,9 @@ rt.describe(v) + " is not a transient vector");
         });
 
         // Lazy sequences and ranges.
-        def("flint/lazy-seq", (rt, at, n) -> flint.rt.Seqs.lazySeq(rt, rt.vat(at)));
+        def("flint/lazy-seq", (rt, at, n) -> com._3sln.flint.kgen.rt.Seqs.lazySeq(rt, rt.vat(at)));
         def("flint/range3", (rt, at, n) ->
-            flint.rt.Seqs.range(rt, rt.vat(at), rt.vat(at + 1), rt.vat(at + 2)));
+            com._3sln.flint.kgen.rt.Seqs.range(rt, rt.vat(at), rt.vat(at + 1), rt.vat(at + 2)));
 
         // Sets.
         def("disj", (rt, at, n) -> {

@@ -1,6 +1,6 @@
 namespace Flint.Rt;
 
-using static flint.rt.Interns;
+using static _3sln.Flint.Kgen.Rt.Interns;
 
 /// The intern tables, ported from `runtime/src/gc.rs`.
 ///

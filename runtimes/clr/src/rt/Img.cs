@@ -2,7 +2,7 @@ using System.Text;
 
 namespace Flint.Rt;
 
-using flint.rt;
+using _3sln.Flint.Kgen.Rt;
 
 /// The image loader, ported from `runtime/src/image.rs`.
 ///

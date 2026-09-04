@@ -176,6 +176,6 @@ public final class Num {
     public static int hash(Rt rt, long v) {
         if (Val.isDouble(v)) return Hash.hashDouble(Val.asDouble(v));
         Long n = asI64(rt, v);
-        return flint.rt.Hash.hashLong(n == null ? 0 : n);
+        return com._3sln.flint.kgen.rt.Hash.hashLong(n == null ? 0 : n);
     }
 }

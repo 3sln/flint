@@ -1,5 +1,5 @@
 package com.flint.rt;
-import static flint.rt.Interns.*;
+import static com._3sln.flint.kgen.rt.Interns.*;
 
 /// The intern tables, ported from `runtime/src/gc.rs`.
 ///
@@ -40,7 +40,7 @@ public final class Interns {
     /// real value may be 0 -- and none is: 0 is the double `+0.0` only as a
     /// bit pattern nothing produces for an interned object.
     // PUBLIC because the slot arithmetic that reads them is generated into
-    // `flint.rt.Interns` now, and on the JVM a module boundary is a package
+    // `com._3sln.flint.kgen.rt.Interns` now, and on the JVM a module boundary is a package
     // boundary. Rust says `pub(crate)` and C# `internal`; Java has nothing
     // between package-private and public.
     public int[] hashes;

@@ -24,7 +24,7 @@
 ;; InternTable` block in any module of the crate and C# has `partial class`,
 ;; so both could still take it; Java has no partial class and no way to add
 ;; an instance method to a class from another file. So the moment this
-;; source became `kingen/flint/rt/Interns.java` rather than a region spliced
+;; source became `com/_3sln/flint/kgen/rt/Interns.java` rather than a region spliced
 ;; into `com.flint.rt.Interns`, `^:instance` stopped being expressible.
 ;;
 ;; `^:method` is what the other thirteen sources already use: Rust `self`,

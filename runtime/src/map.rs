@@ -38,7 +38,7 @@
 use crate::hash;
 use crate::obj::*;
 // THE CONSUMING LINE. `map.rs`'s CHAMP functions live in the generated
-// subtree now -- `kingen/flint/rt/champ.rs` and seven neighbours -- and every
+// subtree now -- `kgen/rt/champ.rs` and seven neighbours -- and every
 // one of them is an `impl Rt` method, so nothing here needs importing to call
 // them. What DOES change is the other direction: the node-layout constants
 // and the three bit helpers below are read by the generated code, so they are

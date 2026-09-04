@@ -3,7 +3,7 @@ package com.flint.rt;
 import java.nio.charset.StandardCharsets;
 
 import static com.flint.rt.Obj.*;
-import static flint.rt.Interns.*;
+import static com._3sln.flint.kgen.rt.Interns.*;
 
 /// Strings, ported from `runtime/src/strs.rs`.
 ///

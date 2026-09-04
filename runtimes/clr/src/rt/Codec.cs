@@ -1,7 +1,7 @@
 namespace Flint.Rt;
 
 using System.IO;
-using flint.rt;
+using _3sln.Flint.Kgen.Rt;
 using System.Text;
 
 /// Values across a boundary (`doc/decisions/0025`), a MIRROR of the JVM port's

@@ -10,7 +10,8 @@
 ;; generator that breaks the build. So the tool is run by hand and its output
 ;; is committed.
 ;;
-;; It writes WHOLE FILES, under `kingen/`, and creates them. There are no
+;; It writes WHOLE FILES, under each target's generated root, and creates
+;; them. There are no
 ;; markers and nothing is spliced: a file kin writes is a file kin owns
 ;; entirely, so re-emitting cannot disturb a hand edit because there is
 ;; nowhere in one to put a hand edit.

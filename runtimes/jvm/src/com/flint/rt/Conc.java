@@ -1,9 +1,9 @@
 package com.flint.rt;
 
-import flint.rt.Mapcore;
+import com._3sln.flint.kgen.rt.Mapcore;
 
 import static com.flint.rt.Obj.*;
-import static flint.rt.Interns.*;
+import static com._3sln.flint.kgen.rt.Interns.*;
 
 /// Green threads, ports, and the scheduler. Ported from `runtime/src/conc.rs`
 /// (`doc/decisions/0005`).

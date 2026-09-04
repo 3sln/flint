@@ -32,7 +32,7 @@
 #      Decision I says kin REPORTS the consuming lines and a person applies
 #      them -- so the report has to be a check, not a courtesy.
 #
-#      It also catches the other direction: a file under `kingen/` that no
+#      It also catches the other direction: a generated file that no
 #      source produces, which is what a renamed or deleted source leaves
 #      behind.
 #
@@ -80,12 +80,12 @@ targets_sp=" $(echo $targets) "
 # --- 3. Reachability, before anything is re-emitted. ------------------------
 #
 # Rust is the one that needs it. Every generated module must have a line in
-# `kingen/flint/rt.rs`, and every file under a `kingen/` tree must be one kin
+# `kgen/rt.rs`, and every file under a generated tree must be one kin
 # says it writes.
-modfile=runtime/src/kingen/flint/rt.rs
+modfile=runtime/src/kgen/rt.rs
 for f in $targets; do
   case $f in
-    runtime/src/kingen/*)
+    runtime/src/kgen/*)
       m=$(basename "$f" .rs)
       if grep -q "^pub mod $m;\$" "$modfile"; then
         echo "  ok   $m is declared in $modfile"
@@ -98,15 +98,20 @@ for f in $targets; do
   esac
 done
 
-for f in $(find runtime/src/kingen runtimes/jvm/src/kingen runtimes/clr/src/kingen \
+# The three generated trees, each in its own language's convention:
+#   rust    runtime/src/kgen/                       crate::kgen::rt::*
+#   java    runtimes/jvm/src/com/_3sln/flint/kgen/  com._3sln.flint.kgen.rt
+#   csharp  runtimes/clr/src/_3sln/Flint/Kgen/      _3sln.Flint.Kgen.Rt
+for f in $(find runtime/src/kgen runtimes/jvm/src/com/_3sln/flint/kgen \
+             runtimes/clr/src/_3sln/Flint/Kgen \
              -type f \( -name '*.rs' -o -name '*.java' -o -name '*.cs' \) 2>/dev/null); do
   # The module declarations themselves are hand-written and belong here.
   case $f in
-    runtime/src/kingen/flint/rt.rs|runtime/src/kingen/flint.rs) continue ;;
+    runtime/src/kgen/rt.rs) continue ;;
   esac
   case "$targets_sp" in
     *" $f "*) ;;
-    *) echo "  FAIL $f is under kingen/ and no kin source generates it"
+    *) echo "  FAIL $f is in a generated tree and no kin source generates it"
        echo "       -- left behind by a renamed or deleted source."
        fails=$((fails + 1)) ;;
   esac

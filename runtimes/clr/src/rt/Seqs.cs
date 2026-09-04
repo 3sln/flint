@@ -1,11 +1,11 @@
 namespace Flint.Rt;
 
-using static flint.rt.Seqcore;
-using static flint.rt.Seqwalk;
+using static _3sln.Flint.Kgen.Rt.Seqcore;
+using static _3sln.Flint.Kgen.Rt.Seqwalk;
 
-using flint.rt;
+using _3sln.Flint.Kgen.Rt;
 
-using static flint.rt.Seqs;
+using static _3sln.Flint.Kgen.Rt.Seqs;
 
 /// Seqs, ported from `runtime/src/seqs.rs`.
 ///
@@ -21,12 +21,12 @@ public static class Seqs {
 
     /// `First` and `Next`, under the names their callers already use -- the
     /// bodies are generated, as `Seqwalk`.
-    public static long First(Rt rt, long v) { return flint.rt.Seqwalk.First(rt, v); }
-    public static long Next(Rt rt, long v) { return flint.rt.Seqwalk.Next(rt, v); }
+    public static long First(Rt rt, long v) { return _3sln.Flint.Kgen.Rt.Seqwalk.First(rt, v); }
+    public static long Next(Rt rt, long v) { return _3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, v); }
 
     /// `Cons`, under the name its callers already use -- the body is
     /// generated, as `Seqcore.Cons`.
-    public static long Cons(Rt rt, long head, long tail) { return flint.rt.Seqcore.Cons(rt, head, tail); }
+    public static long Cons(Rt rt, long head, long tail) { return _3sln.Flint.Kgen.Rt.Seqcore.Cons(rt, head, tail); }
     public const int C_FIRST = 0, C_REST = 1, C_META = 2, C_COUNT = 3;
 
 

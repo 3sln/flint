@@ -1,6 +1,6 @@
 namespace Flint.Rt;
 
-using flint.rt;
+using _3sln.Flint.Kgen.Rt;
 
 /// Tables: columnar storage that is a value, ported from `runtime/src/table.rs`
 /// (`doc/decisions/0026`).
