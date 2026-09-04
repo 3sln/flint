@@ -380,10 +380,20 @@ what remains, and what each thing is waiting on.
    an ASCII leaf into a non-ASCII one, which is where a byte offset and a
    code-point index diverge.
 
-   The strseq index shape is STILL divergent — byte offset against code point
-   — and still has to be converged before `first` and `next` can be generated
-   from one kin source. That is now a choice between two working designs
-   rather than a choice that would have entrenched a bug.
+   The index shape is CONVERGED too, onto the ports' code point. Both designs
+   were made to work first, so the choice was between two working ones, and
+   performance did not decide it: an 8 000-character rope walk measured
+   1 381 506 steps on native against 1 381 501 on the JVM, and after the
+   convergence native measured 1 381 506 again. Identical, three ways.
+
+   What decided it is the bug above. A byte offset has to reach past the
+   string abstraction to raw bytes, and that is exactly how the rope hole
+   appeared; a code-point index goes through `cp_bytes_at`, which knows all
+   three tiers in one place. The design that is harder to get wrong wins when
+   nothing else separates them.
+
+   `char_width_at` and `char_at_byte` are deleted -- 49 lines, and strseq was
+   their only caller.
 
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old

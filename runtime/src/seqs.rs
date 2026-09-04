@@ -40,7 +40,8 @@ impl Rt {
             return NIL;
         }
         if self.is_string(v) {
-            return if self.str_len(v) == 0 { NIL } else { self.strseq(v, 0) };
+            // CODE POINTS, matching the index the strseq now holds.
+            return if self.char_count(v) == 0 { NIL } else { self.strseq(v, 0) };
         }
         if !v.is_heap() {
             return NIL;
@@ -128,8 +129,14 @@ impl Rt {
                 }
             }
             TY_STRSEQ => {
+                // A CODE POINT index, converged onto what both ports held.
+                // `char_at` goes through `cp_bytes_at`, which knows all three
+                // string tiers -- inline, flat and rope -- in one place. The
+                // byte-offset version this replaces read a rope's header as
+                // text, silently, because it reached past that abstraction to
+                // raw bytes (`doc/decisions` item 0o).
                 let (st, i) = (self.slot(s, 0), self.slot(s, 1).as_fixnum() as u32);
-                self.char_at_byte(st, i)
+                self.char_at(st, i).unwrap_or(NIL)
             }
             TY_RANGE => self.slot(s, 0),
             _ => NIL,
@@ -173,12 +180,14 @@ impl Rt {
                 }
             }
             TY_STRSEQ => {
+                // `i + 1` and a CODE POINT bound, not a byte width and a byte
+                // length. One step is one character; the string's tiers are
+                // `char_count`'s problem and not this loop's.
                 let (st, i) = (self.slot(s, 0), self.slot(s, 1).as_fixnum() as u32);
-                let w = self.char_width_at(st, i);
-                if i + w >= self.str_len(st) {
+                if i + 1 >= self.char_count(st) {
                     NIL
                 } else {
-                    self.strseq(st, i + w)
+                    self.strseq(st, i + 1)
                 }
             }
             TY_RANGE => {
@@ -223,56 +232,7 @@ impl Rt {
 
     // --- string character access ------------------------------------------
 
-    /// How many bytes the code point at byte offset `byte` occupies.
-    ///
-    /// THE ROPE ARM IS NOT OPTIONAL. `is_string` is true for `TY_ROPE`, so
-    /// `seq` builds a strseq over one, and a rope's body is not string bytes
-    /// -- reading it as though it were returned the header fields as
-    /// characters. `(first (seq rope))` answered `" "` for `"x"` and a full
-    /// walk of an 8 000-character rope answered 5 386 characters, silently,
-    /// on the native runtime only. Both ports were right, because they index
-    /// by code point and go through `ropeByteOfCp`.
-    fn char_width_at(&mut self, s: Value, byte: u32) -> u32 {
-        if self.is_rope(s) {
-            let mut out = [0u8; 4];
-            return self.rope_bytes_at(s, byte, &mut out);
-        }
-        let mut buf = crate::rt::sbuf();
-        let b0 = if s.is_inline_str() {
-            s.inline_bytes(&mut buf)[byte as usize]
-        } else {
-            self.gc.sp.read_u8(s.as_heap() + STR_DATA + byte as crate::mem::Addr)
-        };
-        if b0 < 0x80 {
-            1
-        } else if b0 < 0xE0 {
-            2
-        } else if b0 < 0xF0 {
-            3
-        } else {
-            4
-        }
-    }
 
-    /// The one-character string at byte offset `byte`.
-    pub fn char_at_byte(&mut self, s: Value, byte: u32) -> Value {
-        if self.is_rope(s) {
-            let mut out = [0u8; 4];
-            let w = self.rope_bytes_at(s, byte, &mut out);
-            return Value::inline_str(&out[..w as usize]);
-        }
-        let w = self.char_width_at(s, byte);
-        let mut buf = crate::rt::sbuf();
-        if s.is_inline_str() {
-            let b = s.inline_bytes(&mut buf);
-            Value::inline_str(&b[byte as usize..(byte + w) as usize])
-        } else {
-            let b = self.gc.sp.bytes(s.as_heap() + STR_DATA + byte as crate::mem::Addr, w);
-            let mut tmp = [0u8; 4];
-            tmp[..w as usize].copy_from_slice(b);
-            Value::inline_str(&tmp[..w as usize])
-        }
-    }
 
     /// Walk a seq to its length. `count` on a counted collection does not use this.
     pub fn seq_count(&mut self, v: Value) -> u32 {
