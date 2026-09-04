@@ -1096,12 +1096,10 @@ public final class Rt {
         return Val.isHeap(v) && ty(gc.sp, Val.asHeap(v)) == t;
     }
 
-    boolean isSeq(long v) {
-        if (!Val.isHeap(v)) return false;
-        int t = ty(gc.sp, Val.asHeap(v));
-        return t == TY_CONS || t == TY_EMPTY_LIST || t == TY_LAZYSEQ
-            || t == TY_VECSEQ || t == TY_STRSEQ || t == TY_RANGE;
-    }
+    /// GENERATED, as `Seqcore.isSeq`. Kept as a method here because ~20 call
+    /// sites say `rt.isSeq(v)` and a receiver is not something a static
+    /// import can supply.
+    boolean isSeq(long v) { return flint.rt.Seqcore.isSeq(this, v); }
 
     /// Sequential, which is WIDER than `isSeq`: a vector and a map entry are
     /// sequential without being seqs. `=` is over this, not over seq-ness.

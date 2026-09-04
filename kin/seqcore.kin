@@ -20,8 +20,22 @@
                                    Rt Value Addr RootIx I32 Ty Bool NIL
                                    C_FIRST C_REST C_META C_COUNT
                                    TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ
-                                   TY_STRSEQ TY_RANGE TY_VEC TY_MAPENTRY
-                                   TY_ARRAYMAP TY_HASHMAP TY_SET]]))
+                                   TY_STRSEQ TY_RANGE TY_VEC]]))
+
+(doc "Is this a SEQ? Six heap tags and nothing else."
+     ""
+     "Narrower than `sequential?`, which also takes a vector and a map entry,"
+     "and narrower than what `seq` accepts, which takes those plus maps, sets"
+     "and strings. Three different questions that are easy to conflate: the"
+     "JVM's kind table once spelled `sequential?` as `is-vec or is-seq` --"
+     "that predicate minus map entries -- so `(sequential? (first (seq m)))`"
+     "was false while the method two below it said true.")
+(defn ^:pub ^:method ^Bool is-seq [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (let [^Ty t (ty rt (as-heap v))]
+    (return (or (== t TY_CONS) (== t TY_EMPTY_LIST) (== t TY_LAZYSEQ)
+                (== t TY_VECSEQ) (== t TY_STRSEQ) (== t TY_RANGE)))))
 
 (doc "The count of `v` if it is known WITHOUT walking, else nil."
      ""

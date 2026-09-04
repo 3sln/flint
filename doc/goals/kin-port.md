@@ -880,10 +880,23 @@ function cleanly -- `pub fn ... ()`, `static void`, `static void`.
 gate -- and the whole of it was four characters of mark.
 
 `vec-shift`, `tail-off` and `array-for` are private `fn`s in Rust. Marking them
-`^:pub` makes them `pub` where kin's default is already `pub(crate)`, and three
-extra public symbols are three the linker can no longer internalise. The
-runtime grew 283 bytes and the floor module 285. Dropping the mark recovered
+`^:pub` makes them `pub` where kin's default is already `pub(crate)`. The
+runtime grew 283 bytes and the floor module 285; dropping the mark recovered
 all of it and four bytes besides: 303 736, against 303 740 before the slice.
+
+**The effect is measured; the MECHANISM I first gave for it was wrong.** This
+file said "three extra public symbols are three the linker can no longer
+internalise". A later measurement refutes that: `is_seqable` was a `pub fn` on
+`Rt` with ZERO callers anywhere in the repo, and deleting it changed the floor
+module by exactly 0 bytes -- so an unreferenced public symbol is already being
+shaken out, and symbol retention cannot be what the 285 bytes were.
+
+What it actually is remains open. The likeliest candidate is cross-module
+inlining -- `pub(crate)` lets a call be inlined and folded where `pub` leaves
+a real call and a surviving body -- but `#[inline]` recovered zero bytes when
+tried, which does not fit that either. The rule stands on the A/B, which is
+reproducible; the explanation does not, and is recorded as unexplained rather
+than left as a plausible-sounding sentence that happens to be false.
 
 `^:pub` means part of the CRATE's public API. It does NOT mean "something
 outside this file calls it" -- kin's default already covers that, which is the
@@ -1183,6 +1196,41 @@ divergence its `Vec` constants had, renamed for the same reason.
 `is-fixnum` joins the vocabulary beside `nil?`. Needed wherever a slot holds
 "a number or nothing", which is a cons's cached count and a vector's cached
 hash, and it was missing.
+
+### `verify` called three crashed probes an agreement
+
+`is-seq` verified green with all three targets printing NOTHING. Every one of
+them threw, so every one printed an empty string, so all three "agreed" and
+the harness said `ok 3 targets, one source, identical output`.
+
+That is the same defect `bin/check-builtins` had and `conform` had: silence
+and success are indistinguishable unless something is built to tell them
+apart. `verify` now fails on an empty answer, naming the target, and the check
+runs BEFORE the comparison because after it the three are equal.
+
+Proved by breaking it on purpose -- a `panic!` in the Rust probe -- and
+checking the exit code, not just the message: 1 when a target crashes, 0 when
+green. A gate that has never been seen to fail is a gate nobody has checked.
+
+The crash itself was a fixture lie of the now-familiar kind: `is_heap` was
+`v >= 100`, and NIL is `0xFFFF`, so `is_seq(NIL)` read off the end of the type
+array. NIL is not a heap value in any real runtime.
+
+### `is_seqable` was dead on all three, and cost nothing
+
+Zero callers anywhere in the repo -- the only match for the name is a TEST's
+name -- and it does not exist on either port. Deleted.
+
+The measurement is the interesting part: removing it changed the shipped floor
+module by **0 bytes**. Which refutes the mechanism this file gave for the
+`^:pub` finding two slices ago. "Three extra public symbols are three the
+linker can no longer internalise" cannot be right, because an unreferenced
+public symbol is evidently shaken out. The 285 bytes are real and
+reproducible; the explanation was not, and has been corrected to say so.
+
+It is still deleted, on a different ground than cost: a function that exists
+on one of three runtimes and is called by none is a divergence with no
+benefit, and leaving it means the next capability census counts it as work.
 
 ### Port order, re-derived
 

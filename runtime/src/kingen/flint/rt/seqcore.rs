@@ -17,6 +17,21 @@ use crate::kingen::flint::rt::hash::*;
 use crate::kingen::flint::rt::pike::*;
 
 impl Rt {
+    /// Is this a SEQ? Six heap tags and nothing else.
+    /// 
+    /// Narrower than `sequential?`, which also takes a vector and a map entry,
+    /// and narrower than what `seq` accepts, which takes those plus maps, sets
+    /// and strings. Three different questions that are easy to conflate: the
+    /// JVM's kind table once spelled `sequential?` as `is-vec or is-seq` --
+    /// that predicate minus map entries -- so `(sequential? (first (seq m)))`
+    /// was false while the method two below it said true.
+    pub fn is_seq(&self, v: Value) -> bool {
+        if !v.is_heap() {
+            return false;
+        }
+        let t: u8 = ty(&self.gc.sp, v.as_heap());
+        return (t == TY_CONS) || (t == TY_EMPTY_LIST) || (t == TY_LAZYSEQ) || (t == TY_VECSEQ) || (t == TY_STRSEQ) || (t == TY_RANGE);
+    }
     /// The count of `v` if it is known WITHOUT walking, else nil.
     /// 
     /// A VALUE and not an absent one: the answer goes straight into a slot that

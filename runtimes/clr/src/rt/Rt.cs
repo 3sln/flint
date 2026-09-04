@@ -1034,12 +1034,10 @@ public sealed class Rt : System.IDisposable {
 
     internal bool IsHeapTy(long v, int t) => Val.IsHeap(v) && Ty(gc.sp, Val.AsHeap(v)) == t;
 
-    internal bool IsSeq(long v) {
-        if (!Val.IsHeap(v)) return false;
-        int t = Ty(gc.sp, Val.AsHeap(v));
-        return t == TyCons || t == TyEmptyList || t == TyLazyseq
-            || t == TyVecseq || t == TyStrseq || t == TyRange;
-    }
+    /// GENERATED, as `Seqcore.IsSeq`. Kept as a method here because its call
+    /// sites say `rt.IsSeq(v)` and a receiver is not something a static
+    /// using can supply.
+    internal bool IsSeq(long v) { return flint.rt.Seqcore.IsSeq(this, v); }
 
     public void Dispose() => gc.Dispose();
 

@@ -11,6 +11,21 @@ import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 
 public final class Seqcore {
+    /// Is this a SEQ? Six heap tags and nothing else.
+    /// 
+    /// Narrower than `sequential?`, which also takes a vector and a map entry,
+    /// and narrower than what `seq` accepts, which takes those plus maps, sets
+    /// and strings. Three different questions that are easy to conflate: the
+    /// JVM's kind table once spelled `sequential?` as `is-vec or is-seq` --
+    /// that predicate minus map entries -- so `(sequential? (first (seq m)))`
+    /// was false while the method two below it said true.
+    public static boolean isSeq(Rt rt, long v) {
+        if (!Val.isHeap(v)) {
+            return false;
+        }
+        int t = ty(rt.gc.sp, Val.asHeap(v));
+        return (t == TY_CONS) || (t == TY_EMPTY_LIST) || (t == TY_LAZYSEQ) || (t == TY_VECSEQ) || (t == TY_STRSEQ) || (t == TY_RANGE);
+    }
     /// The count of `v` if it is known WITHOUT walking, else nil.
     /// 
     /// A VALUE and not an absent one: the answer goes straight into a slot that

@@ -32,34 +32,7 @@ pub const LS_SEQ: u32 = 1;
 impl Rt {
 
 
-    pub fn is_seq(&self, v: Value) -> bool {
-        v.is_heap()
-            && matches!(
-                ty(&self.gc.sp, v.as_heap()),
-                TY_CONS | TY_EMPTY_LIST | TY_LAZYSEQ | TY_VECSEQ | TY_STRSEQ | TY_RANGE
-            )
-    }
 
-    /// True for anything `seq` accepts.
-    pub fn is_seqable(&self, v: Value) -> bool {
-        v.is_nil()
-            || self.is_string(v)
-            || (v.is_heap()
-                && matches!(
-                    ty(&self.gc.sp, v.as_heap()),
-                    TY_CONS
-                        | TY_EMPTY_LIST
-                        | TY_LAZYSEQ
-                        | TY_VECSEQ
-                        | TY_STRSEQ
-                        | TY_RANGE
-                        | TY_VEC
-                        | TY_MAPENTRY
-                        | TY_ARRAYMAP
-                        | TY_HASHMAP
-                        | TY_SET
-                ))
-    }
 
 
     pub fn seq(&mut self, v: Value) -> Value {

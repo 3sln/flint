@@ -112,6 +112,20 @@ for t in $present; do
 done
 
 while read -r t out; do echo "  $t   $out"; done < "$work/answers"
+
+# AN EMPTY ANSWER IS NOT AN ANSWER, and this check exists because the absence
+# of it produced a green run over three CRASHED probes. Every target threw, so
+# every target printed nothing, so all three "agreed" -- silence and success
+# being indistinguishable unless something is built to tell them apart, which
+# is the same defect `bin/check-builtins` and `conform` each had once.
+#
+# It is checked BEFORE the comparison, because after it the three are equal.
+while read -r t out; do
+  if [ -z "$out" ]; then
+    echo "  FAIL $t produced no output -- it did not build, or it crashed"; exit 1
+  fi
+done < "$work/answers"
+
 if [ "$(cut -d' ' -f2- < "$work/answers" | sort -u | wc -l | tr -d ' ')" = "1" ]; then
   echo "  ok   $n targets, one source, identical output"
 else

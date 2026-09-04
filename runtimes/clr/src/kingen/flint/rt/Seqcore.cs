@@ -12,6 +12,21 @@ using static Flint.Rt.Seqs;
 using static Flint.Rt.Vec;
 
 public static class Seqcore {
+    /// Is this a SEQ? Six heap tags and nothing else.
+    /// 
+    /// Narrower than `sequential?`, which also takes a vector and a map entry,
+    /// and narrower than what `seq` accepts, which takes those plus maps, sets
+    /// and strings. Three different questions that are easy to conflate: the
+    /// JVM's kind table once spelled `sequential?` as `is-vec or is-seq` --
+    /// that predicate minus map entries -- so `(sequential? (first (seq m)))`
+    /// was false while the method two below it said true.
+    public static bool IsSeq(Rt rt, long v) {
+        if (!Val.IsHeap(v)) {
+            return false;
+        }
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        return (t == Obj.TyCons) || (t == Obj.TyEmptyList) || (t == Obj.TyLazyseq) || (t == Obj.TyVecseq) || (t == Obj.TyStrseq) || (t == Obj.TyRange);
+    }
     /// The count of `v` if it is known WITHOUT walking, else nil.
     /// 
     /// A VALUE and not an absent one: the answer goes straight into a slot that
