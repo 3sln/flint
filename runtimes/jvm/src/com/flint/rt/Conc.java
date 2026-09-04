@@ -890,7 +890,7 @@ public final class Conc {
             // nursery flipped -- `doc/decisions/0031`, which is exactly the rule
             // a list of raw `long`s is invisible to.
             int at = rt.mark();
-            int n = Maps.entries(rt, rt.r(vi), at);
+            int n = Maps.entries(rt, rt.r(vi));
             for (int i = 0; i < 2 * n; i++) {
                 out = checkSendableAt(rt, rt.r(at + i), depth + 1, carry);
                 if (out != null) break;

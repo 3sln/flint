@@ -116,57 +116,63 @@ public final class Maps {
     /// Every key and value, flattened into the shadow stack above `at`, as
     /// `k,v,k,v,...`. Returns the number of PAIRS.
     ///
-    /// Materialised rather than a callback because the callers -- equality,
-    /// hashing, `seq` -- all want to walk twice or in another order, and a
-    /// callback that allocated mid-walk would need every node rooted anyway.
-    public static int entries(Rt rt, long m, int at) {
+    /// Materialised rather than a callback because kin cannot yet express a
+    /// callback, and this file is going to kin. It is not free: the callback
+    /// shape wins by 1.24x on a 200 000-entry `seq` and holds 8 roots where
+    /// this holds 400 001 (`runtime/examples/iterbench.rs`, both shapes
+    /// measured in one runtime). When kin grows closures this converges on
+    /// `map_for_each` and the cost goes away.
+    ///
+    /// NOTHING HERE ALLOCATES, which is why no node handle is rooted. A value
+    /// in a host local does not survive an allocation (`doc/decisions/0031`);
+    /// it survives fine when there is none, and no collection can happen
+    /// between the first push and the last. The earlier version rooted each
+    /// node and then slid the whole subtree down over it, and that slide was
+    /// about HALF this function's cost -- 1.97x against the callback with it,
+    /// 1.31x without.
+    ///
+    /// Writes from `rt.mark()` upward, so a caller takes its own mark first
+    /// and reads back from there.
+    public static int entries(Rt rt, long m) {
         if (!Val.isHeap(m)) return 0;
         int t = ty(rt.gc.sp, Val.asHeap(m));
         if (t == TY_ARRAYMAP) {
             int n = mapCount(rt, m);
-            int mi = rt.push(m);
             for (int i = 0; i < n; i++) {
-                rt.push(amKey(rt, rt.r(mi), i));
-                rt.push(amVal(rt, rt.r(mi), i));
+                rt.push(amKey(rt, m, i));
+                rt.push(amVal(rt, m, i));
             }
-            // The map itself was pushed first; slide the pairs down over it.
-            for (int i = 0; i < 2 * n; i++) rt.setR(at + i, rt.r(at + 1 + i));
-            rt.popTo(at + 2 * n);
             return n;
         }
         if (t == TY_HASHMAP) {
             long root = rt.slot(m, HM_ROOT);
             if (Val.isNil(root)) return 0;
-            return nodeEntries(rt, root, at);
+            return nodeEntries(rt, root);
         }
         return 0;
     }
 
-    static int nodeEntries(Rt rt, long node, int at) {
-        int ni = rt.push(node);
+    static int nodeEntries(Rt rt, long node) {
         int wrote = 0;
-        if (!isBmnode(rt, rt.r(ni))) {
-            int cnt = cnCount(rt, rt.r(ni));
+        if (!isBmnode(rt, node)) {
+            int cnt = cnCount(rt, node);
             for (int i = 0; i < cnt; i++) {
-                rt.push(cnKey(rt, rt.r(ni), i));
-                rt.push(cnVal(rt, rt.r(ni), i));
+                rt.push(cnKey(rt, node, i));
+                rt.push(cnVal(rt, node, i));
                 wrote++;
             }
         } else {
-            int ne = Integer.bitCount(bnDatamap(rt, rt.r(ni)));
-            int nn = Integer.bitCount(bnNodemap(rt, rt.r(ni)));
+            int ne = Integer.bitCount(bnDatamap(rt, node));
+            int nn = Integer.bitCount(bnNodemap(rt, node));
             for (int i = 0; i < ne; i++) {
-                rt.push(bnKey(rt, rt.r(ni), i));
-                rt.push(bnVal(rt, rt.r(ni), i));
+                rt.push(bnKey(rt, node, i));
+                rt.push(bnVal(rt, node, i));
                 wrote++;
             }
             for (int j = 0; j < nn; j++) {
-                wrote += nodeEntries(rt, bnNode(rt, rt.r(ni), j), rt.mark());
+                wrote += nodeEntries(rt, bnNode(rt, node, j));
             }
         }
-        // Slide down over the node handle, which was pushed first.
-        for (int i = 0; i < 2 * wrote; i++) rt.setR(at + i, rt.r(at + 1 + i));
-        rt.popTo(at + 2 * wrote);
         return wrote;
     }
 
@@ -288,7 +294,7 @@ public final class Maps {
         int base = rt.mark();
         int mi = rt.push(m);
         int at = rt.mark();
-        int n = entries(rt, rt.r(mi), at);
+        int n = entries(rt, rt.r(mi));
         int ai = rt.push(Vec.empty(rt));
         for (int i = 0; i < n; i++) {
             long e = mapEntry(rt, rt.r(at + 2 * i), rt.r(at + 2 * i + 1));
@@ -325,7 +331,7 @@ public final class Maps {
             rt.setR(bi, Table.refToMap(rt, rt.r(bi)));
         if (mapCount(rt, rt.r(ai)) != mapCount(rt, rt.r(bi))) { rt.popTo(base); return false; }
         int at = rt.mark();
-        int n = entries(rt, rt.r(ai), at);
+        int n = entries(rt, rt.r(ai));
         boolean ok = true;
         for (int i = 0; i < n && ok; i++) {
             int m = rt.mark();
@@ -345,7 +351,7 @@ public final class Maps {
         int base = rt.mark();
         int mi = rt.push(m);
         int at = rt.mark();
-        int n = entries(rt, rt.r(mi), at);
+        int n = entries(rt, rt.r(mi));
         int acc = 0;
         for (int i = 0; i < n; i++) {
             int kh = Eq.hashValue(rt, rt.r(at + 2 * i));

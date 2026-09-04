@@ -113,57 +113,63 @@ public static class Maps {
     /// Every key and value, flattened into the shadow stack above `at`, as
     /// `k,v,k,v,...`. Returns the number of PAIRS.
     ///
-    /// Materialised rather than a callback because the callers -- equality,
-    /// hashing, `seq` -- all want to walk twice or in another order, and a
-    /// callback that allocated mid-walk would need every node rooted anyway.
-    public static int Entries(Rt rt, long m, int at) {
+    /// Materialised rather than a callback because kin cannot yet express a
+    /// callback, and this file is going to kin. It is not free: the callback
+    /// shape wins by 1.24x on a 200 000-entry `seq` and holds 8 roots where
+    /// this holds 400 001 (`runtime/examples/iterbench.rs`, both shapes
+    /// measured in one runtime). When kin grows closures this converges on
+    /// `map_for_each` and the cost goes away.
+    ///
+    /// NOTHING HERE ALLOCATES, which is why no node handle is rooted. A value
+    /// in a host local does not survive an allocation (`doc/decisions/0031`);
+    /// it survives fine when there is none, and no collection can happen
+    /// between the first push and the last. The earlier version rooted each
+    /// node and then slid the whole subtree down over it, and that slide was
+    /// about HALF this function's cost -- 1.97x against the callback with it,
+    /// 1.31x without.
+    ///
+    /// Writes from `rt.Mark()` upward, so a caller takes its own mark first
+    /// and reads back from there.
+    public static int Entries(Rt rt, long m) {
         if (!Val.IsHeap(m)) return 0;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
         if (t == Obj.TyArraymap) {
             int n = MapCount(rt, m);
-            int mi = rt.Push(m);
             for (int i = 0; i < n; i++) {
-                rt.Push(AmKey(rt, rt.R(mi), i));
-                rt.Push(AmVal(rt, rt.R(mi), i));
+                rt.Push(AmKey(rt, m, i));
+                rt.Push(AmVal(rt, m, i));
             }
-            // The map itself was pushed first; slide the pairs down over it.
-            for (int i = 0; i < 2 * n; i++) rt.SetR(at + i, rt.R(at + 1 + i));
-            rt.PopTo(at + 2 * n);
             return n;
         }
         if (t == Obj.TyHashmap) {
             long root = rt.Slot(m, HM_ROOT);
             if (Val.IsNil(root)) return 0;
-            return NodeEntries(rt, root, at);
+            return NodeEntries(rt, root);
         }
         return 0;
     }
 
-    static int NodeEntries(Rt rt, long node, int at) {
-        int ni = rt.Push(node);
+    static int NodeEntries(Rt rt, long node) {
         int wrote = 0;
-        if (!IsBmnode(rt, rt.R(ni))) {
-            int cnt = CnCount(rt, rt.R(ni));
+        if (!IsBmnode(rt, node)) {
+            int cnt = CnCount(rt, node);
             for (int i = 0; i < cnt; i++) {
-                rt.Push(CnKey(rt, rt.R(ni), i));
-                rt.Push(CnVal(rt, rt.R(ni), i));
+                rt.Push(CnKey(rt, node, i));
+                rt.Push(CnVal(rt, node, i));
                 wrote++;
             }
         } else {
-            int ne = System.Numerics.BitOperations.PopCount((uint)(BnDatamap(rt, rt.R(ni))));
-            int nn = System.Numerics.BitOperations.PopCount((uint)(BnNodemap(rt, rt.R(ni))));
+            int ne = System.Numerics.BitOperations.PopCount((uint)(BnDatamap(rt, node)));
+            int nn = System.Numerics.BitOperations.PopCount((uint)(BnNodemap(rt, node)));
             for (int i = 0; i < ne; i++) {
-                rt.Push(BnKey(rt, rt.R(ni), i));
-                rt.Push(BnVal(rt, rt.R(ni), i));
+                rt.Push(BnKey(rt, node, i));
+                rt.Push(BnVal(rt, node, i));
                 wrote++;
             }
             for (int j = 0; j < nn; j++) {
-                wrote += NodeEntries(rt, BnNode(rt, rt.R(ni), j), rt.Mark());
+                wrote += NodeEntries(rt, BnNode(rt, node, j));
             }
         }
-        // Slide down over the node handle, which was pushed first.
-        for (int i = 0; i < 2 * wrote; i++) rt.SetR(at + i, rt.R(at + 1 + i));
-        rt.PopTo(at + 2 * wrote);
         return wrote;
     }
 
@@ -273,7 +279,7 @@ public static class Maps {
         int bas = rt.Mark();
         int mi = rt.Push(m);
         int at = rt.Mark();
-        int n = Entries(rt, rt.R(mi), at);
+        int n = Entries(rt, rt.R(mi));
         int ai = rt.Push(Vec.Empty(rt));
         for (int i = 0; i < n; i++) {
             long e = MapEntry(rt, rt.R(at + 2 * i), rt.R(at + 2 * i + 1));
@@ -308,7 +314,7 @@ public static class Maps {
             rt.SetR(bi, Table.refToMap(rt, rt.R(bi)));
         if (MapCount(rt, rt.R(ai)) != MapCount(rt, rt.R(bi))) { rt.PopTo(bas); return false; }
         int at = rt.Mark();
-        int n = Entries(rt, rt.R(ai), at);
+        int n = Entries(rt, rt.R(ai));
         bool ok = true;
         for (int i = 0; i < n && ok; i++) {
             int m = rt.Mark();
@@ -328,7 +334,7 @@ public static class Maps {
         int bas = rt.Mark();
         int mi = rt.Push(m);
         int at = rt.Mark();
-        int n = Entries(rt, rt.R(mi), at);
+        int n = Entries(rt, rt.R(mi));
         int acc = 0;
         for (int i = 0; i < n; i++) {
             int kh = Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i));

@@ -85,7 +85,7 @@ public static class Sets {
         int bas = rt.Mark();
         int si = rt.Push(s);
         int at = rt.Mark();
-        int n = Maps.Entries(rt, rt.Slot(rt.R(si), S_MAP), at);
+        int n = Maps.Entries(rt, rt.Slot(rt.R(si), S_MAP));
         int ai = rt.Push(Vec.Empty(rt));
         // The KEY of each pair; the value is the same object.
         for (int i = 0; i < n; i++) rt.SetR(ai, Vec.Conj(rt, rt.R(ai), rt.R(at + 2 * i)));
@@ -160,7 +160,7 @@ public static class Sets {
         int bas = rt.Mark();
         int si = rt.Push(s);
         int at = rt.Mark();
-        int n = Maps.Entries(rt, rt.Slot(rt.R(si), S_MAP), at);
+        int n = Maps.Entries(rt, rt.Slot(rt.R(si), S_MAP));
         int acc = 0;
         for (int i = 0; i < n; i++) acc = flint.rt.Hash.UnorderedStep(acc, Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i)));
         rt.PopTo(bas);

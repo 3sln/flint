@@ -91,7 +91,7 @@ public final class Sets {
         int base = rt.mark();
         int si = rt.push(s);
         int at = rt.mark();
-        int n = Maps.entries(rt, rt.slot(rt.r(si), S_MAP), at);
+        int n = Maps.entries(rt, rt.slot(rt.r(si), S_MAP));
         int ai = rt.push(Vec.empty(rt));
         // The KEY of each pair; the value is the same object.
         for (int i = 0; i < n; i++) rt.setR(ai, Vec.conj(rt, rt.r(ai), rt.r(at + 2 * i)));
@@ -168,7 +168,7 @@ public final class Sets {
         int base = rt.mark();
         int si = rt.push(s);
         int at = rt.mark();
-        int n = Maps.entries(rt, rt.slot(rt.r(si), S_MAP), at);
+        int n = Maps.entries(rt, rt.slot(rt.r(si), S_MAP));
         int acc = 0;
         for (int i = 0; i < n; i++) acc = flint.rt.Hash.unorderedStep(acc, Eq.hashValue(rt, rt.r(at + 2 * i)));
         rt.popTo(base);

@@ -160,7 +160,7 @@ public static class Codec {
     static void EncodeCollection(Rt rt, long v, MemoryStream outs, int depth) {
         if (Mapcore.IsMap(rt, v)) {
             int at = rt.Mark();
-            int mn = Maps.Entries(rt, v, at);
+            int mn = Maps.Entries(rt, v);
             outs.WriteByte(K_MAP);
             U32(outs, mn);
             for (int i = 0; i < 2 * mn; i++) EncodeInto(rt, rt.R(at + i), outs, depth + 1);

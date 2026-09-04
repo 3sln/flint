@@ -877,7 +877,7 @@ public static class Conc {
             // nursery flipped -- `doc/decisions/0031`, which is exactly the rule
             // a list of raw `long`s is invisible to.
             int at = rt.Mark();
-            int en = Maps.Entries(rt, rt.R(vi), at);
+            int en = Maps.Entries(rt, rt.R(vi));
             for (int i = 0; i < 2 * en; i++) {
                 outs = CheckSendableAt(rt, rt.R(at + i), depth + 1, carry);
                 if (outs != null) break;

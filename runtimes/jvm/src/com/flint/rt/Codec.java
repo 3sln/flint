@@ -163,7 +163,7 @@ public final class Codec {
     static void encodeCollection(Rt rt, long v, ByteArrayOutputStream out, int depth) {
         if (Mapcore.isMap(rt, v)) {
             int at = rt.mark();
-            int n = Maps.entries(rt, v, at);
+            int n = Maps.entries(rt, v);
             out.write(K_MAP);
             u32(out, n);
             for (int i = 0; i < 2 * n; i++) encodeInto(rt, rt.r(at + i), out, depth + 1);
