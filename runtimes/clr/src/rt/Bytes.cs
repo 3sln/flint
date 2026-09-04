@@ -454,21 +454,7 @@ public static class Bytes {
 
         public static bool IsTransient(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Bytecore.IsTbytes(rt, v); }
 
-    public static long TransientOf(Rt rt, long v) {
-        int bas = rt.Mark();
-        int vi = rt.Push(v);
-        long tail = rt.Alloc(Obj.TyBytes, TAIL_CAP);
-        if (tail == 0) { rt.PopTo(bas); return Val.Nil; }
-        int ti = rt.Push(Val.Heap(tail));
-        long a = rt.Alloc(Obj.TyTbytes, 4);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-        rt.SetSlot(a, TB_TREE, rt.R(vi));
-        rt.SetSlot(a, TB_TAIL, rt.R(ti));
-        rt.SetSlot(a, TB_FILL, Val.Fixnum(0));
-        rt.SetSlot(a, TB_LIVE, Val.True);
-        rt.PopTo(bas);
-        return Val.Heap(a);
-    }
+    public static long TransientOf(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Bytetrans.BTransient(rt, v); }
 
         static bool Live(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Bytecore.TbLive(rt, t); }
 

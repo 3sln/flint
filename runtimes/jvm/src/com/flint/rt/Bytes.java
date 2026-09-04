@@ -469,21 +469,7 @@ public final class Bytes {
 
         public static boolean isTransient(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytecore.isTbytes(rt, v); }
 
-    public static long transientOf(Rt rt, long v) {
-        int base = rt.mark();
-        int vi = rt.push(v);
-        long tail = rt.alloc(TY_BYTES, TAIL_CAP);
-        if (tail == 0) { rt.popTo(base); return Val.NIL; }
-        int ti = rt.push(Val.heap(tail));
-        long a = rt.alloc(TY_TBYTES, 4);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(a, TB_TREE, rt.r(vi));
-        rt.setSlot(a, TB_TAIL, rt.r(ti));
-        rt.setSlot(a, TB_FILL, Val.fixnum(0));
-        rt.setSlot(a, TB_LIVE, Val.TRUE);
-        rt.popTo(base);
-        return Val.heap(a);
-    }
+    public static long transientOf(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytetrans.bTransient(rt, v); }
 
         static boolean live(Rt rt, long t) { return com._3sln.flint.kgen.rt.Bytecore.tbLive(rt, t); }
 

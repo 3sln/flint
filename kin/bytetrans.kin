@@ -1,0 +1,49 @@
+;; The transient byte string: opening one.
+;;
+;; A TY_TBYTES is a sealed tree plus an OPEN TAIL and how full that tail is.
+;; Appending writes into the tail in place; when the tail fills, it is handed
+;; to the tree whole rather than copied, which is why `TAIL_CAP` is exactly
+;; `FLAT_MAX` -- a full tail is already the largest leaf the tree wants.
+;;
+;; THE TAIL IS ALLOCATED BEFORE THE HEADER, and both are rooted before either
+;; slot is written. That ordering is the whole of what makes this correct
+;; under `doc/decisions/0031`: `alloc` can collect, so `v` read into a host
+;; local before the first allocation would be stale by the second. Both ports
+;; already wrote it this way and Rust did too; what differed was only which
+;; spelling of "the slot I pushed it into" each used.
+(ns flint.rt.bytetrans
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == mark push r pop-to alloc set-at heap fixnum
+                                   Rt Value Addr RootIx TRUE NIL
+                                   TY_BYTES TY_TBYTES
+                                   TB_TREE TB_TAIL TB_FILL TB_LIVE TAIL_CAP]]))
+
+(doc "A transient over `v`, with an empty open tail."
+     ""
+     "Nil when either allocation fails, and the shadow stack is unwound before"
+     "answering it -- a refusal that left roots pushed would leak them into"
+     "whatever ran next.")
+(defn ^:pub ^:method ^Value b-transient [^:mut ^Rt rt ^Value v]
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^Addr tail (alloc rt TY_BYTES TAIL_CAP)]
+    (if (== tail 0)
+      (do (pop-to rt base)
+          (return NIL)))
+    (comment "HOISTED: `heap` is a plain conversion, but `push` takes `&mut"
+             "self` in Rust and so does the `alloc` above, so the value is"
+             "named before it is pushed.")
+    (let [^Value tailv (heap tail)
+          ^RootIx ti (push rt tailv)
+          ^Addr a (alloc rt TY_TBYTES 4)]
+      (if (== a 0)
+        (do (pop-to rt base)
+            (return NIL)))
+      (comment "READ BACK OUT OF THE ROOTS, not from the host locals above:"
+               "the second `alloc` may have moved both.")
+      (set-at rt a TB_TREE (r rt vi))
+      (set-at rt a TB_TAIL (r rt ti))
+      (set-at rt a TB_FILL (fixnum 0))
+      (set-at rt a TB_LIVE TRUE)
+      (pop-to rt base)
+      (return (heap a)))))

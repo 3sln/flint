@@ -685,28 +685,6 @@ pub const TAIL_CAP: u32 = FLAT_MAX;
 
 impl Rt {
 
-    pub fn b_transient(&mut self, v: Value) -> Value {
-        let base = self.mark();
-        self.push(v);
-        let tail = self.alloc(TY_BYTES, TAIL_CAP);
-        if tail == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        self.push(Value::heap(tail));
-        let a = self.alloc(TY_TBYTES, 4);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        let (v, tail) = (self.r(base), self.r(base + 1));
-        self.set_slot(a, TB_TREE, v);
-        self.set_slot(a, TB_TAIL, tail);
-        self.set_slot(a, TB_FILL, Value::fixnum(0));
-        self.set_slot(a, TB_LIVE, crate::value::TRUE);
-        self.pop_to(base);
-        Value::heap(a)
-    }
 
 
     /// Fold the full tail into the tree and start a fresh one. The old tail is

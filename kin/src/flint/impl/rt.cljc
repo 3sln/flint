@@ -239,7 +239,12 @@
    'BB_DEPTH {:rust "crate::bytes::BB_DEPTH" :java "Bytes.BB_DEPTH" :csharp "global::Flint.Rt.Bytes.BB_DEPTH"}
    'TB_TREE {:rust "crate::bytes::TB_TREE" :java "Bytes.TB_TREE" :csharp "global::Flint.Rt.Bytes.TB_TREE"}
    'TB_FILL {:rust "crate::bytes::TB_FILL" :java "Bytes.TB_FILL" :csharp "global::Flint.Rt.Bytes.TB_FILL"}
-   'TB_LIVE {:rust "crate::bytes::TB_LIVE" :java "Bytes.TB_LIVE" :csharp "global::Flint.Rt.Bytes.TB_LIVE"}}
+   'TB_LIVE {:rust "crate::bytes::TB_LIVE" :java "Bytes.TB_LIVE" :csharp "global::Flint.Rt.Bytes.TB_LIVE"}
+   'TB_TAIL {:rust "crate::bytes::TB_TAIL" :java "Bytes.TB_TAIL" :csharp "global::Flint.Rt.Bytes.TB_TAIL"}
+   ;; How big an open tail is. `FLAT_MAX` on all three -- the tail is exactly
+   ;; the largest flat leaf, so a full one is handed to the tree WHOLE rather
+   ;; than copied.
+   'TAIL_CAP {:rust "crate::bytes::TAIL_CAP" :java "Bytes.TAIL_CAP" :csharp "global::Flint.Rt.Bytes.TAIL_CAP"}}
   ;; The node and category constants. All three targets spell these
   ;; IDENTICALLY, so every entry below is three copies of one string -- and
   ;; they are written down anyway.
