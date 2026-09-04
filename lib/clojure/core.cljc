@@ -1467,7 +1467,7 @@
   ([a f x] (let [old @a] [old (reset! a (f old x))])))
 (defn reset-vals! [a v] (let [old @a] [old (reset! a v)]))
 
-(defn pop! [t] (flint.rt/pop t))
+(defn pop! [t] (flint.rt/pop! t))
 (defn disj! [t x] (flint.rt/dissoc! t x))
 
 (defn hash-ordered-coll [coll] (hash (vec coll)))

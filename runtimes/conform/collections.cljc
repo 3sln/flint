@@ -35,12 +35,21 @@
                     (let [t (transient [:a :b :c])]
                       [(count (persistent! (assoc! t 1 :B)))
                        (persistent! (transient [:x]))])]
-    ;; `pop!` is NOT here, and deliberately. It is wired to the persistent
-    ;; `pop` in `clojure.core`, so on a transient vector it falls through to
-    ;; the list branch and answers `()`; `tvec_pop` exists in all four runtimes
-    ;; and no builtin reaches it. Adding it to this suite would pass -- every
-    ;; runtime is wrong the same way -- and cement the answer. It is recorded
-    ;; in `doc/goals/kin-port.md` instead, and the row goes in when it works.
+
+    ;; POP, both kinds. `pop!` had no builtin on any runtime and answered `()`;
+    ;; the ports had no vector `pop` either and REBUILT the vector with a conj
+    ;; loop, O(n) against native's O(log n). Same answers, so nothing failed.
+    ;;
+    ;; The interesting inputs are the boundaries where the trie actually
+    ;; changes shape: 33 -> 32 empties the tail and pulls the previous leaf
+    ;; back out, and 1025 -> 1024 drops a whole level.
+    :pop-vec [(pop [1 2 3]) (pop [1])
+              (count (pop (vec (range 33))))
+              (count (pop (vec (range 1025))))]
+    :pop-transient [(persistent! (pop! (transient [:x])))
+                    (persistent! (pop! (reduce conj! (transient []) (range 3))))
+                    (count (persistent! (pop! (reduce conj! (transient []) (range 33)))))
+                    (count (persistent! (pop! (reduce conj! (transient []) (range 1025)))))]
 
     :transient-map [(persistent! (transient {}))
                     (persistent! (assoc! (transient {}) :a 1))

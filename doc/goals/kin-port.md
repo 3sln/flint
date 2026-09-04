@@ -806,16 +806,28 @@ The suite has transients now -- vector, map and set, the empty case first
 because it is the one that was wrong, then the boundaries the trie turns on
 (32, 33, 1025).
 
-**`pop!` does not work on a transient, on any runtime.** `clojure.core` has
-`(defn pop! [t] (flint.rt/pop t))` -- the PERSISTENT pop. On a transient
-vector it falls through to the list branch and answers `()`. `tvec_pop` is
-implemented in all four runtimes and referenced by nothing but its own unit
-test; no builtin reaches it.
+**`pop!` did not work on a transient, on any runtime -- and the ports had no
+vector `pop` at all.** `clojure.core` had `(defn pop! [t] (flint.rt/pop t))`,
+the PERSISTENT pop, so on a transient vector it fell through to the list
+branch and answered `()`. `tvec_pop` was implemented on native and reached by
+nothing but its own unit test.
 
-It is deliberately NOT in the new conformance rows. Every runtime is wrong the
-same way, so the row would pass and cement the answer -- which is the
-two-of-three problem again, one dimension over. Fixing it means a `pop!`
-builtin in four runtimes.
+Chasing it found the larger half. Neither port had `popTail`, `pop` or `tpop`
+in `Vec`: the `pop` builtin REBUILT the vector with a conj loop, O(n) where
+native unwinds the trie in O(log n). Same answer every time, so no gate could
+notice -- a conformance suite compares ANSWERS, and this divergence is only
+visible in the shape of the work.
+
+FIXED, all three runtimes: `popTail`, `pop` and `tpop` ported to both ports
+against the Rust, a `pop!` builtin added in four places (`builtins.rs`,
+`flint.rt`, `hostfns`, the unit manifest) and both ports' builtin tables, and
+`transient_pop` guarding the empty case -- `cnt` is a `u32`, so `cnt - 1` on
+an empty transient wraps to `u32::MAX` in release and gets written back as the
+count.
+
+The conformance rows are in now that they mean something, at the boundaries
+where the trie changes shape: 33 -> 32 empties the tail and pulls the previous
+leaf back out, 1025 -> 1024 drops a level.
 
 ### `ushr` and `sar` are named in three comments and defined by no subject
 

@@ -255,21 +255,19 @@ what remains, and what each thing is waiting on.
    Found the same way as `0h` and `0j`: probing what a value can DO rather
    than reading what its type suggests.
 
-0l. **`pop!` does not work on a transient, on any runtime** — `clojure.core`
-   has `(defn pop! [t] (flint.rt/pop t))`, the PERSISTENT pop, so on a
-   transient vector it falls through to the list branch and silently answers
-   `()` rather than the vector one shorter. `tvec_pop` is implemented in all
-   four runtimes and reached by nothing but its own unit test: no builtin
-   exposes it.
+0l. **The whole `pop` family was missing or wrong** — FIXED. `clojure.core`
+   had `(defn pop! [t] (flint.rt/pop t))`, the PERSISTENT pop, so `pop!` on a
+   transient vector silently answered `()`; there was no `pop!` builtin at all
+   and `tvec_pop` was reached by nothing but its own unit test. Chasing it
+   found the larger half: neither port had `popTail`, `pop` or `tpop` in
+   `Vec`, and the `pop` builtin rebuilt the vector with a conj loop — O(n)
+   where native unwinds the trie in O(log n). The answers matched every time,
+   which is why no gate saw it: a conformance suite compares answers, and this
+   was only visible in the shape of the work.
 
-   Found while adding transient coverage to `runtimes/conform/collections.cljc`
-   — which had none, and that gap had also been hiding a node-width divergence
+   Found while adding transient coverage to `runtimes/conform/collections.cljc`,
+   which had none — the same gap that had been hiding a node-width divergence
    between native and the ports.
-
-   Deliberately left OUT of the conformance suite until it is fixed. Every
-   runtime is wrong the same way, so the row would pass and cement the wrong
-   answer. The fix is a `pop!` builtin in four runtimes, plus the AOT export
-   tables.
 
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old

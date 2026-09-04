@@ -12,7 +12,7 @@
   (:refer-clojure :exclude [= conj get assoc dissoc disj count first rest next seq cons nth pop peek apply lazy-seq subs
                             empty contains? name namespace meta with-meta atom deref reset!
                             compare-and-set!
-                            transient persistent! conj! assoc! dissoc! hash compare quot rem
+                            transient persistent! conj! assoc! dissoc! pop! hash compare quot rem
                             nil? number? int? float? string? keyword? symbol? vector? map? set?
                             seq? fn? boolean? sequential? identical? bit-and bit-or bit-xor bit-not
                             bit-shift-left bit-shift-right unsigned-bit-shift-right bit-test])
@@ -91,6 +91,7 @@
 (def conj! clojure.core/conj!)
 (def assoc! clojure.core/assoc!)
 (def dissoc! clojure.core/dissoc!)
+(def pop! clojure.core/pop!)
 
 (defn str2 [a b] (clojure.core/str a b))
 (def name clojure.core/name)

@@ -767,19 +767,24 @@ public static class Builtins {
         Def("pop", (rt, at, n) => {
             long v = rt.VAt(at);
             if (rt.IsHeapTy(v, Obj.TyVec)) {
-                int c = Vec.Count(rt, v);
-                if (c == 0) return rt.ThrowStr("IllegalStateException", "cannot pop an empty vector");
-                int bas = rt.Mark();
-                int ai = rt.Push(Vec.Empty(rt));
-                int vi = rt.Push(v);
-                for (int i = 0; i < c - 1; i++)
-                    rt.SetR(ai, Vec.Conj(rt, rt.R(ai), Vec.Nth(rt, rt.R(vi), i)));
-                long outv = rt.R(ai);
-                rt.PopTo(bas);
+                // `Vec.Pop`, which unwinds the trie. This used to REBUILD the
+                // vector with a conj loop -- O(n) where the native runtime is
+                // O(log n), and the same answer, so nothing failed.
+                long outv = Vec.Pop(rt, v);
+                if (Val.IsNil(outv)) return rt.ThrowStr("IllegalStateException", "cannot pop an empty vector");
                 return outv;
             }
             if (Val.IsNil(v)) return rt.ThrowStr("IllegalStateException", "cannot pop nil");
             return Seqs.Rest(rt, v);
+        });
+        Def("pop!", (rt, at, n) => {
+            long v = rt.VAt(at);
+            if (Vec.IsTransient(rt, v)) {
+                long outv = Vec.TPop(rt, v);
+                if (Val.IsNil(outv)) return rt.ThrowStr("IllegalStateException", "cannot pop an empty vector");
+                return outv;
+            }
+            return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not a transient vector");
         });
         Def("empty", (rt, at, n) => {
             long v = rt.VAt(at);

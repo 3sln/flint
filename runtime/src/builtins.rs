@@ -467,6 +467,9 @@ builtins! {
     "dissoc!", flint_b_dissocbang, b_dissocbang, |rt, a, n| {
         let _ = n; let (t, k) = (arg(rt, a, 0), arg(rt, a, 1)); rt.transient_dissoc(t, k)
     };
+    "pop!", flint_b_popbang, b_popbang, |rt, a, n| {
+        let _ = n; let t = arg(rt, a, 0); rt.transient_pop(t)
+    };
 
     // --- strings, symbols, keywords -----------------------------------------
     "flint/str2", flint_b_str2, b_str2, |rt, a, n| {

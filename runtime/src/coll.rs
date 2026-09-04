@@ -564,6 +564,30 @@ impl Rt {
         }
     }
 
+    /// `pop!`: a transient vector one shorter.
+    ///
+    /// This had no builtin at all. `clojure.core` read `(defn pop! [t]
+    /// (flint.rt/pop t))` -- the PERSISTENT pop -- so a transient vector fell
+    /// through to the list branch and answered `()` rather than throwing or
+    /// working. `tvec_pop` has been implemented on all four runtimes the whole
+    /// time and nothing but its own unit test ever called it.
+    ///
+    /// Clojure's `pop!` is vector-only, so this does not dispatch further.
+    pub fn transient_pop(&mut self, t: Value) -> Value {
+        if t.is_heap() && ty(&self.gc.sp, t.as_heap()) == TY_TVEC {
+            // The empty case is checked HERE and not in `tvec_pop`, which
+            // only debug-asserts it. `cnt` is a `u32`, so `cnt - 1` on an
+            // empty transient wraps to `u32::MAX` in release and the count
+            // is written back as that.
+            if self.tvec_count(t) == 0 {
+                return self.throw_str("IllegalStateException", "cannot pop an empty vector");
+            }
+            self.tvec_pop(t)
+        } else {
+            self.throw_str("ClassCastException", "not a transient vector")
+        }
+    }
+
     // --- atoms ---------------------------------------------------------------
 
     pub fn new_atom(&mut self, v: Value) -> Value {

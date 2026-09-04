@@ -297,6 +297,77 @@ public final class Vec {
 
     /// Build a vector from `n` values already rooted at `base` on the shadow
     /// stack. What the `VECTOR` opcode uses.
+    /// Unwind one leaf out of the trie: the node `cnt - 2` lives under, with
+    /// the emptying branch removed, or NIL when the branch disappears.
+    ///
+    /// Ported late. Neither port had this, nor `pop`, nor `tpop` -- the `pop`
+    /// builtin REBUILT the vector with a conj loop, which is O(n) where this
+    /// is O(log n), and the transient pop had no implementation at all.
+    static long popTail(Rt rt, int level, long node, int cnt) {
+        int subidx = ((cnt - 2) >>> level) & MASK;
+        if (level > BITS) {
+            int base = rt.mark();
+            int ni = rt.push(node);
+            long child = nodeGet(rt, node, subidx);
+            long newchild = popTail(rt, level - BITS, child, cnt);
+            long out;
+            if (Val.isNil(newchild) && subidx == 0) {
+                out = Val.NIL;
+            } else {
+                int nc = rt.push(newchild);
+                long ret = nodeClone(rt, rt.r(ni), WIDTH, Val.NIL);
+                int ri = rt.push(ret);
+                nodeSet(rt, rt.r(ri), subidx, rt.r(nc));
+                out = rt.r(ri);
+            }
+            rt.popTo(base);
+            return out;
+        }
+        if (subidx == 0) return Val.NIL;
+        long ret = nodeClone(rt, node, WIDTH, Val.NIL);
+        nodeSet(rt, ret, subidx, Val.NIL);
+        return ret;
+    }
+
+    /// `pop`: the vector one shorter. NIL when it is empty -- the caller
+    /// raises, because an empty vector cannot be popped.
+    public static long pop(Rt rt, long v) {
+        int cnt = count(rt, v);
+        if (cnt == 0) return Val.NIL;
+        if (cnt == 1) return empty(rt);
+        int base = rt.mark();
+        int vi = rt.push(v);
+        long out;
+        if (cnt - 1 > tailOff(rt, v)) {
+            // Still inside the tail: copy it one shorter and keep the trie.
+            long tl = tail(rt, v);
+            int newlen = nodeLen(rt, tl) - 1;
+            long nt = nodeClone(rt, tl, newlen, Val.NIL);
+            int nti = rt.push(nt);
+            long vv = rt.r(vi);
+            out = newVec(rt, cnt - 1, shift(rt, vv), root(rt, vv), rt.r(nti),
+                         rt.slot(vv, V_META));
+        } else {
+            // The tail is emptying: pull the previous leaf back out.
+            long newtail = arrayFor(rt, v, cnt - 2);
+            int nt = rt.push(newtail);
+            long vv = rt.r(vi);
+            int sh = shift(rt, vv);
+            long newroot = popTail(rt, sh, root(rt, vv), cnt);
+            int newshift = sh;
+            if (Val.isNil(newroot)) newroot = newNode(rt, WIDTH, Val.NIL);
+            int nri = rt.push(newroot);
+            if (newshift > BITS && Val.isNil(nodeGet(rt, rt.r(nri), 1))) {
+                rt.setR(nri, nodeGet(rt, rt.r(nri), 0));
+                newshift -= BITS;
+            }
+            out = newVec(rt, cnt - 1, newshift, rt.r(nri), rt.r(nt),
+                         rt.slot(rt.r(vi), V_META));
+        }
+        rt.popTo(base);
+        return out;
+    }
+
     public static long fromRoots(Rt rt, int base, int n) {
         int mk = rt.mark();
         int vi = rt.push(empty(rt));
@@ -488,6 +559,49 @@ public final class Vec {
         long out = rt.r(ti);
         rt.popTo(base);
         return out;
+    }
+
+    /// `pop!`: the transient one shorter, IN PLACE.
+    ///
+    /// `clojure.core` had `(defn pop! [t] (flint.rt/pop t))` -- the persistent
+    /// pop -- so on a transient vector it fell through to the seq branch and
+    /// answered `()`. There was no builtin and, on either port, no
+    /// implementation for one to call.
+    public static long tpop(Rt rt, long t) {
+        int cnt = tcount(rt, t);
+        if (cnt == 0) return Val.NIL;   // the caller raises
+        if (cnt == 1) {
+            rt.setSlot(Val.asHeap(t), T_CNT, Val.fixnum(0));
+            return t;
+        }
+        if (((cnt - 1) & MASK) > 0) {
+            rt.setSlot(Val.asHeap(t), T_CNT, Val.fixnum(cnt - 1));
+            return t;
+        }
+        int base = rt.mark();
+        int ti = rt.push(t);
+        long newtail = tArrayFor(rt, t, cnt - 2);
+        int nt = rt.push(newtail);
+        long tv = rt.r(ti);
+        int sh = tshift(rt, tv);
+        long newroot = popTail(rt, sh, rt.slot(tv, T_ROOT), cnt);
+        int newshift = sh;
+        if (Val.isNil(newroot)) {
+            newroot = newNode(rt, WIDTH, rt.slot(rt.r(ti), T_EDIT));
+        }
+        int nri = rt.push(newroot);
+        if (newshift > BITS && Val.isNil(nodeGet(rt, rt.r(nri), 1))) {
+            rt.setR(nri, nodeGet(rt, rt.r(nri), 0));
+            newshift -= BITS;
+        }
+        tv = rt.r(ti);
+        long a = Val.asHeap(tv);
+        rt.setSlot(a, T_ROOT, rt.r(nri));
+        rt.setSlot(a, T_TAIL, rt.r(nt));
+        rt.setSlot(a, T_SHIFT, Val.fixnum(newshift));
+        rt.setSlot(a, T_CNT, Val.fixnum(cnt - 1));
+        rt.popTo(base);
+        return tv;
     }
 
     public static long tpersistent(Rt rt, long t) {

@@ -70,6 +70,7 @@
    "conj!" flint.rt/conj!
    "assoc!" flint.rt/assoc!
    "dissoc!" flint.rt/dissoc!
+   "pop!" flint.rt/pop!
    "flint/str2" flint.rt/str2
    "name" flint.rt/name
    "namespace" flint.rt/namespace

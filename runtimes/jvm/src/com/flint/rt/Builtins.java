@@ -520,6 +520,18 @@ rt.describe(v) + " is not a transient");
 rt.describe(v) + " is not a transient");
         });
 
+        def("pop!", (rt, at, n) -> {
+            long v = rt.vat(at);
+            if (Vec.isTransient(rt, v)) {
+                long out = Vec.tpop(rt, v);
+                if (Val.isNil(out)) return rt.throwStr("IllegalStateException",
+"cannot pop an empty vector");
+                return out;
+            }
+            return rt.throwStr("ClassCastException",
+rt.describe(v) + " is not a transient vector");
+        });
+
         // Maps.
         def("get", (rt, at, n) -> {
             long dflt = n > 2 ? rt.vat(at + 2) : Val.NIL;
@@ -828,17 +840,12 @@ rt.describe(v) + " is not a transient");
         def("pop", (rt, at, n) -> {
             long v = rt.vat(at);
             if (rt.isHeapTy(v, TY_VEC)) {
-                int c = Vec.count(rt, v);
-                if (c == 0) return rt.throwStr("IllegalStateException",
+                // `Vec.pop`, which unwinds the trie. This used to REBUILD the
+                // vector with a conj loop -- O(n) where the native runtime is
+                // O(log n), and the same answer, so nothing failed.
+                long out = Vec.pop(rt, v);
+                if (Val.isNil(out)) return rt.throwStr("IllegalStateException",
 "cannot pop an empty vector");
-                int base = rt.mark();
-                int ai = rt.push(Vec.empty(rt));
-                int vi = rt.push(v);
-                for (int i = 0; i < c - 1; i++) {
-                    rt.setR(ai, Vec.conj(rt, rt.r(ai), Vec.nth(rt, rt.r(vi), i)));
-                }
-                long out = rt.r(ai);
-                rt.popTo(base);
                 return out;
             }
             if (Val.isNil(v)) return rt.throwStr("IllegalStateException",

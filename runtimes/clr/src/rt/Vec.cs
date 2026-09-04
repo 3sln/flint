@@ -290,6 +290,77 @@ public static class Vec {
 
     /// Build a vector from `n` values already rooted at `bas` on the shadow
     /// stack. What the `VECTOR` opcode uses.
+    /// Unwind one leaf out of the trie: the node `cnt - 2` lives under, with
+    /// the emptying branch removed, or Nil when the branch disappears.
+    ///
+    /// Ported late. Neither port had this, nor `Pop`, nor `TPop` -- the `pop`
+    /// builtin REBUILT the vector with a conj loop, which is O(n) where this
+    /// is O(log n), and the transient pop had no implementation at all.
+    static long PopTail(Rt rt, int level, long node, int cnt) {
+        int subidx = (int)(((uint)(cnt - 2)) >> level) & Mask;
+        if (level > Bits) {
+            int bas = rt.Mark();
+            int ni = rt.Push(node);
+            long child = NodeGet(rt, node, subidx);
+            long newchild = PopTail(rt, level - Bits, child, cnt);
+            long outv;
+            if (Val.IsNil(newchild) && subidx == 0) {
+                outv = Val.Nil;
+            } else {
+                int nc = rt.Push(newchild);
+                long ret = NodeClone(rt, rt.R(ni), Width, Val.Nil);
+                int ri = rt.Push(ret);
+                NodeSet(rt, rt.R(ri), subidx, rt.R(nc));
+                outv = rt.R(ri);
+            }
+            rt.PopTo(bas);
+            return outv;
+        }
+        if (subidx == 0) return Val.Nil;
+        long ret2 = NodeClone(rt, node, Width, Val.Nil);
+        NodeSet(rt, ret2, subidx, Val.Nil);
+        return ret2;
+    }
+
+    /// `pop`: the vector one shorter. Nil when it is empty -- the caller
+    /// raises, because an empty vector cannot be popped.
+    public static long Pop(Rt rt, long v) {
+        int cnt = Count(rt, v);
+        if (cnt == 0) return Val.Nil;
+        if (cnt == 1) return Empty(rt);
+        int bas = rt.Mark();
+        int vi = rt.Push(v);
+        long outv;
+        if (cnt - 1 > TailOff(rt, v)) {
+            // Still inside the tail: copy it one shorter and keep the trie.
+            long tl = Tail(rt, v);
+            int newlen = NodeLen(rt, tl) - 1;
+            long nt = NodeClone(rt, tl, newlen, Val.Nil);
+            int nti = rt.Push(nt);
+            long vv = rt.R(vi);
+            outv = NewVec(rt, cnt - 1, Shift(rt, vv), Root(rt, vv), rt.R(nti),
+                          rt.Slot(vv, VMeta));
+        } else {
+            // The tail is emptying: pull the previous leaf back out.
+            long newtail = ArrayFor(rt, v, cnt - 2);
+            int nt = rt.Push(newtail);
+            long vv = rt.R(vi);
+            int sh = Shift(rt, vv);
+            long newroot = PopTail(rt, sh, Root(rt, vv), cnt);
+            int newshift = sh;
+            if (Val.IsNil(newroot)) newroot = NewNode(rt, Width, Val.Nil);
+            int nri = rt.Push(newroot);
+            if (newshift > Bits && Val.IsNil(NodeGet(rt, rt.R(nri), 1))) {
+                rt.SetR(nri, NodeGet(rt, rt.R(nri), 0));
+                newshift -= Bits;
+            }
+            outv = NewVec(rt, cnt - 1, newshift, rt.R(nri), rt.R(nt),
+                          rt.Slot(rt.R(vi), VMeta));
+        }
+        rt.PopTo(bas);
+        return outv;
+    }
+
     public static long FromRoots(Rt rt, int bas, int n) {
         int mk = rt.Mark();
         int vi = rt.Push(Empty(rt));
@@ -479,6 +550,49 @@ public static class Vec {
         long outv = rt.R(ti);
         rt.PopTo(bas);
         return outv;
+    }
+
+    /// `pop!`: the transient one shorter, IN PLACE.
+    ///
+    /// `clojure.core` had `(defn pop! [t] (flint.rt/pop t))` -- the persistent
+    /// pop -- so on a transient vector it fell through to the seq branch and
+    /// answered `()`. There was no builtin and, on either port, no
+    /// implementation for one to call.
+    public static long TPop(Rt rt, long t) {
+        int cnt = TCount(rt, t);
+        if (cnt == 0) return Val.Nil;   // the caller raises
+        if (cnt == 1) {
+            rt.SetSlot(Val.AsHeap(t), TCnt, Val.Fixnum(0));
+            return t;
+        }
+        if (((cnt - 1) & Mask) > 0) {
+            rt.SetSlot(Val.AsHeap(t), TCnt, Val.Fixnum(cnt - 1));
+            return t;
+        }
+        int bas = rt.Mark();
+        int ti = rt.Push(t);
+        long newtail = TArrayFor(rt, t, cnt - 2);
+        int nt = rt.Push(newtail);
+        long tv = rt.R(ti);
+        int sh = TShiftOf(rt, tv);
+        long newroot = PopTail(rt, sh, rt.Slot(tv, TRoot), cnt);
+        int newshift = sh;
+        if (Val.IsNil(newroot)) {
+            newroot = NewNode(rt, Width, rt.Slot(rt.R(ti), TEdit));
+        }
+        int nri = rt.Push(newroot);
+        if (newshift > Bits && Val.IsNil(NodeGet(rt, rt.R(nri), 1))) {
+            rt.SetR(nri, NodeGet(rt, rt.R(nri), 0));
+            newshift -= Bits;
+        }
+        tv = rt.R(ti);
+        long a = Val.AsHeap(tv);
+        rt.SetSlot(a, TRoot, rt.R(nri));
+        rt.SetSlot(a, TTail, rt.R(nt));
+        rt.SetSlot(a, TShift, Val.Fixnum(newshift));
+        rt.SetSlot(a, TCnt, Val.Fixnum(cnt - 1));
+        rt.PopTo(bas);
+        return tv;
     }
 
     public static long TPersistent(Rt rt, long t) {
