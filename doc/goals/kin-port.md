@@ -776,7 +776,11 @@ the conform gas row from `109292 native, 109291 jvm (within 1)` to `109292
 native, 109292 jvm (within 0)`. The one-step gap had been sitting under a
 tolerance the whole time, and it was this: native charged for one walk where
 the JVM charged for two. A within-1 tolerance is a place a real divergence can
-hide, and this one did.
+hide, and this one did -- so the tolerance is gone. The row was 1% of the
+native figure, about 1 090 steps of slack, held over from when the ports'
+map allocated more per entry than the Rust CHAMP did; the kin CHAMP closed
+that and nothing tightened the bound behind it. It is exact now, which is
+how the two ports have always been compared to each other.
 
 ### `ushr` and `sar` are named in three comments and defined by no subject
 

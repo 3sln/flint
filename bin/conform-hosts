@@ -275,11 +275,24 @@ GMJS
   jb="$("$JDK/bin/java" -cp runtimes/jvm/classes RtSteps out/gm-big.img)"
   jd=$((jb - ja))
   gap=$(( nd > jd ? nd - jd : jd - nd ))
-  # 1% of the native figure. Not exact, and the reason is named above rather
-  # than hidden in a loose bound.
-  lim=$(( nd / 100 ))
-  if [ "$gap" -le "$lim" ]; then
-    echo "  ok   the same program costs the same gas: $nd native, $jd jvm (within $gap) [jvm]"
+  # EXACT. This was 1% of the native figure -- about 1 090 steps of slack --
+  # for as long as the ports' map allocated more per entry than the Rust CHAMP
+  # did. The kin CHAMP closed that, and the row then sat at `within 1` and was
+  # read as agreement.
+  #
+  # It was not agreement. That one step was native caching a vector's hash in a
+  # header slot the ports did not allocate, so the ports hashed twice where
+  # native hashed once. A defect that had been in both ports since vectors were
+  # written was sitting inside the tolerance, and the tolerance is what let it
+  # sit there -- a bound wide enough to absorb an unexplained difference will
+  # absorb the next one too.
+  #
+  # So the bound is gone. The two ports have always been compared to the
+  # INSTRUCTION below; there was never a reason native should be held looser
+  # than the ports hold each other. If this row fails, a runtime is doing
+  # different work, and the number in the failure is where to start.
+  if [ "$gap" -eq 0 ]; then
+    echo "  ok   the same program costs the same gas, to the instruction: $nd [jvm]"
   else
     echo "  FAIL gas differs by $gap: $nd native against $jd [jvm]"; exit 1
   fi
