@@ -55,10 +55,10 @@ public static class Mapcore {
         }
         return 0;
     }
-    internal static long AmKey(Rt rt, long m, int i) {
+    public static long AmKey(Rt rt, long m, int i) {
         return rt.Slot(m, AM_BASE + (2 * i));
     }
-    internal static long AmVal(Rt rt, long m, int i) {
+    public static long AmVal(Rt rt, long m, int i) {
         return rt.Slot(m, (AM_BASE + (2 * i)) + 1);
     }
     /// A fresh array map with room for `n` entries, or NIL if the heap is full.

@@ -16,7 +16,7 @@ use crate::kingen::flint::rt::hash::*;
 use crate::kingen::flint::rt::pike::*;
 
 impl Rt {
-    pub(crate) fn node_find_scalar(&mut self, n: Value, mut shift: u32, h: u32, key: Value) -> Value {
+    pub fn node_find_scalar(&mut self, n: Value, mut shift: u32, h: u32, key: Value) -> Value {
         // No rooting anywhere in here: the key is a scalar, so `eq` cannot
         // allocate, so nothing can move while this walks.
         let mut node: Value;
@@ -55,7 +55,7 @@ impl Rt {
         }
         return out;
     }
-    pub(crate) fn node_find(&mut self, n: Value, mut shift: u32, h: u32, key: Value) -> Value {
+    pub fn node_find(&mut self, n: Value, mut shift: u32, h: u32, key: Value) -> Value {
         if !self.eq_may_alloc(key) {
             return self.node_find_scalar(n, shift, h, key);
         }

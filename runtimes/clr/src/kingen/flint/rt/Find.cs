@@ -15,7 +15,7 @@ using static flint.rt.Eqalloc;
 using static flint.rt.Nodeclass;
 
 public static class Find {
-    internal static long NodeFindScalar(Rt rt, long n, int shift, int h, long key) {
+    public static long NodeFindScalar(Rt rt, long n, int shift, int h, long key) {
         // No rooting anywhere in here: the key is a scalar, so `eq` cannot
         // allocate, so nothing can move while this walks.
         long node;
@@ -54,7 +54,7 @@ public static class Find {
         }
         return @out;
     }
-    internal static long NodeFind(Rt rt, long n, int shift, int h, long key) {
+    public static long NodeFind(Rt rt, long n, int shift, int h, long key) {
         if (!EqMayAlloc(rt, key)) {
             return NodeFindScalar(rt, n, shift, h, key);
         }

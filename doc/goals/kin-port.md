@@ -948,6 +948,40 @@ The lesson is the one this file keeps recording: a capability census taken by
 grepping is a census of what the grep understood. Both false blockers survived
 because nothing re-ran the census after the capability that dissolved them
 shipped.
+### A refer of a NON-EXPORTED name reports the wrong thing
+
+Found porting the read path, and it cost twenty minutes of bisecting.
+
+`mapread.kin` required `flint.rt.mapcore` and referred `am-key` and `am-val`,
+which were `^:inline ^:method` and NOT `^:pub`. A namespace's export
+vocabulary is built from its public definitions, so referring only private
+names produces an EMPTY vocabulary -- and an empty vocabulary has an empty
+target set, which intersects with everything to nothing.
+
+The message was:
+
+    flint.rt.mapread generates for NO target. Its vocabularies have no target
+    in common. A source that generates nothing is a source nothing checks.
+
+True, and about three steps downstream of the cause. The reader is sent to
+look at TARGET SETS when the fault is a name that is not exported.
+
+Two things make it worse than a bad message:
+
+* **bisecting does not isolate it.** Dropping any ONE of the three requires
+  still left no common target, because two of them were also referring private
+  names. Every subset failed, so the usual halving says nothing.
+* **`kin why` reports it for every source.** Asking about `find.kin` printed
+  mapread's error, because the project-wide scan fails before any single
+  source is answered. The one command built to explain a source cannot be
+  aimed at a working one while a broken one exists.
+
+What it should say: `am-key` is defined in `flint.rt.mapcore` but not `^:pub`,
+so it cannot be referred. That is a fact kin has at hand -- it knows the name,
+the namespace, and that the definition exists without the mark.
+
+Worth fixing in kin rather than remembering: this is the first source to
+require three kin namespaces at once, and there will be many more.
 ### Never, on evidence
 
 * **`Snap`** moves to phase 5. 785/449/456 lines of direct `Gc`, `Roots`,

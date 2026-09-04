@@ -33,7 +33,7 @@
                                    Rt Value RootIx I32 Bool
                                    NOT_FOUND HASH_BITS]]))
 
-(defn ^:method ^Value node-find-scalar
+(defn ^:pub ^:method ^Value node-find-scalar
   [^:mut ^Rt rt ^Value n ^:mut ^I32 shift ^I32 h ^Value key]
   (comment "No rooting anywhere in here: the key is a scalar, so `eq` cannot"
            "allocate, so nothing can move while this walks.")
@@ -68,7 +68,7 @@
         (set shift (+ shift HASH_BITS)))))
   (return out))
 
-(defn ^:method ^Value node-find
+(defn ^:pub ^:method ^Value node-find
   [^:mut ^Rt rt ^Value n ^:mut ^I32 shift ^I32 h ^Value key]
   (if (not (eq-may-alloc rt key))
     (return (node-find-scalar rt n shift h key)))

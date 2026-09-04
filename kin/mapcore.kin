@@ -67,10 +67,10 @@
       (return (to-i32 (as-fixnum (slot rt m HM_CNT)))))
     (return 0)))
 
-(defn ^:inline ^:method ^Value am-key [^Rt rt ^Value m ^I32 i]
+(defn ^:pub ^:inline ^:method ^Value am-key [^Rt rt ^Value m ^I32 i]
   (return (slot rt m (+ AM_BASE (* 2 i)))))
 
-(defn ^:inline ^:method ^Value am-val [^Rt rt ^Value m ^I32 i]
+(defn ^:pub ^:inline ^:method ^Value am-val [^Rt rt ^Value m ^I32 i]
   (return (slot rt m (+ (+ AM_BASE (* 2 i)) 1))))
 
 (doc "A fresh array map with room for `n` entries, or NIL if the heap is full.")

@@ -480,6 +480,9 @@
     ;; C# spells it `schemaLen`, not `SchemaLen`: the port kept the Java
     ;; casing here, and a name table records what a runtime DOES rather than
     ;; what its convention would predict.
+    'ref-get (core/call {:rust "{0}.ref_get({1}, {2}, {3})"
+                         :java "Table.refGet({0}, {1}, {2}, {3})"
+                         :csharp "Flint.Rt.Table.refGet({0}, {1}, {2}, {3})"})
     'schema-len (core/call {:rust "{0}.schema_len({1})"
                             :java "Table.schemaLen({0}, {1})"
                             :csharp "Flint.Rt.Table.schemaLen({0}, {1})"})

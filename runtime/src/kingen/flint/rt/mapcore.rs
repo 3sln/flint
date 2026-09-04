@@ -61,11 +61,11 @@ impl Rt {
         return 0;
     }
     #[inline]
-    pub(crate) fn am_key(&self, m: Value, i: u32) -> Value {
+    pub fn am_key(&self, m: Value, i: u32) -> Value {
         return self.slot(m, AM_BASE + (2 * i));
     }
     #[inline]
-    pub(crate) fn am_val(&self, m: Value, i: u32) -> Value {
+    pub fn am_val(&self, m: Value, i: u32) -> Value {
         return self.slot(m, (AM_BASE + (2 * i)) + 1);
     }
     /// A fresh array map with room for `n` entries, or NIL if the heap is full.
