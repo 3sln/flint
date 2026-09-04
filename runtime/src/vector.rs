@@ -22,26 +22,6 @@ pub const MASK: u32 = WIDTH - 1;
 // --- node helpers ----------------------------------------------------------
 
 impl Rt {
-    /// Copy a node, optionally resizing. Used for every persistent update.
-    pub fn node_clone(&mut self, n: Value, newlen: u32, edit: Value) -> Value {
-        let old = self.push(n);
-        let e = self.push(edit);
-        let fresh = self.new_node(newlen, self.r(e));
-        if fresh.is_nil() {
-            self.pop_to(old);
-            return NIL;
-        }
-        let f = self.push(fresh);
-        let src = self.r(old);
-        let copy = core::cmp::min(newlen, self.node_len(src));
-        for i in 0..copy {
-            let v = self.node_get(self.r(old), i);
-            self.node_set(self.r(f), i, v);
-        }
-        let out = self.r(f);
-        self.pop_to(old);
-        out
-    }
 }
 
 // --- vector ----------------------------------------------------------------
@@ -107,9 +87,6 @@ impl Rt {
         slot(&self.gc.sp, v.as_heap(), V_CNT).as_fixnum() as u32
     }
     #[inline]
-    fn vec_shift(&self, v: Value) -> u32 {
-        slot(&self.gc.sp, v.as_heap(), V_SHIFT).as_fixnum() as u32
-    }
     #[inline]
     fn vec_root(&self, v: Value) -> Value {
         slot(&self.gc.sp, v.as_heap(), V_ROOT)
@@ -119,15 +96,6 @@ impl Rt {
         slot(&self.gc.sp, v.as_heap(), V_TAIL)
     }
     #[inline]
-    fn tail_off(&self, v: Value) -> u32 {
-        let c = self.vec_count(v);
-        if c < WIDTH {
-            0
-        } else {
-            ((c - 1) >> BITS) << BITS
-        }
-    }
-
     fn new_vec(&mut self, cnt: u32, shift: u32, root: Value, tail: Value, meta: Value) -> Value {
         let base = self.mark();
         let r = self.push(root);
@@ -147,20 +115,6 @@ impl Rt {
         self.set_slot(a, V_META, meta);
         self.set_slot(a, V_HASH, NIL);
         Value::heap(a)
-    }
-
-    /// The 32-element leaf array containing index `i`.
-    fn array_for(&self, v: Value, i: u32) -> Value {
-        if i >= self.tail_off(v) {
-            return self.vec_tail(v);
-        }
-        let mut node = self.vec_root(v);
-        let mut level = self.vec_shift(v);
-        while level > 0 {
-            node = self.node_get(node, (i >> level) & MASK);
-            level -= BITS;
-        }
-        node
     }
 
     pub fn vec_nth(&self, v: Value, i: u32) -> Option<Value> {

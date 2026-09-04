@@ -9,6 +9,7 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
+using static Flint.Rt.Vec;
 using static flint.rt.Eqalloc;
 using static flint.rt.Find;
 using static flint.rt.Mapcore;

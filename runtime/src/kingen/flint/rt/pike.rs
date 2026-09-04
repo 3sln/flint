@@ -11,6 +11,7 @@ use crate::obj::*;
 use crate::rt::Rt;
 use crate::seqs::*;
 use crate::strs::INTERN_MAX;
+use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kingen::flint::rt::hash::*;
 

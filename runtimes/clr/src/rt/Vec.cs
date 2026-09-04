@@ -1,6 +1,7 @@
 namespace Flint.Rt;
 
 using static flint.rt.Vecnode;
+using static flint.rt.Vecread;
 
 /// Persistent vectors, ported from `runtime/src/vector.rs`.
 ///
@@ -32,15 +33,8 @@ public static class Vec {
     public const int V_HASH = 5;
 
     public static int Count(Rt rt, long v) => (int) Val.AsFixnum(rt.Slot(v, V_CNT));
-    static int Shift(Rt rt, long v) => (int) Val.AsFixnum(rt.Slot(v, V_SHIFT));
     static long Root(Rt rt, long v) => rt.Slot(v, V_ROOT);
     static long Tail(Rt rt, long v) => rt.Slot(v, V_TAIL);
-
-    /// Where the tail starts. Below 32 elements the whole vector IS the tail.
-    static int TailOff(Rt rt, long v) {
-        int c = Count(rt, v);
-        return c < WIDTH ? 0 : ((c - 1) >> BITS) << BITS;
-    }
 
     /// A NODE carries its OWNERSHIP TOKEN in slot 0 and its elements from 1.
     ///
@@ -53,44 +47,6 @@ public static class Vec {
     /// port carried plain nodes for a while and read perfectly; it was only not
     /// the Rust's layout, and an object of a different LENGTH is exactly the
     /// kind of divergence a snapshot would carry silently between runtimes.
-    /// A NODE carries its OWNERSHIP TOKEN in slot 0 and its elements from 1,
-    /// which is why `NodeLen` subtracts one and every accessor adds one.
-    ///
-    /// `NodeGet`, `NodeSet`, `NodeLen`, `NodeEdit` and `NewNode` are GENERATED
-    /// now, from `kin/vecnode.kin`, and reached through the static import at
-    /// the top of this file.
-    static long NodeClone(Rt rt, long src, int n, long edit) {
-        int bas = rt.Mark();
-        int si = rt.Push(src);
-        int ei = rt.Push(edit);
-        // `n`, NOT `Math.Max(n, 1)`. The floor made the ports allocate a
-        // two-slot node where native allocates one, for the tail of a vector
-        // produced by persisting an EMPTY transient -- `cnt - tailOff` is 0
-        // there, and it is the only caller that can ask for zero.
-        //
-        // Measured, not read: a probe on this line fired exactly once, on
-        // `(persistent! (transient []))`, and never across the whole
-        // conformance suite -- because the suite contained no transient at
-        // all. `NewEmpty` right above already builds a zero-length tail, so
-        // the two ways of reaching an empty vector disagreed with each other
-        // on the same runtime as well as with native.
-        long outv = NewNode(rt, n, rt.R(ei));
-        if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
-        int oi = rt.Push(outv);
-        if (!Val.IsNil(rt.R(si))) {
-            int have = NodeLen(rt, rt.R(si));
-            for (int i = 0; i < System.Math.Min(n, have); i++) {
-                // Read the source through the shadow stack: `SetSlot` cannot
-                // collect, but reading `src` from a host local across the
-                // `NewNode` above would already have been stale.
-                NodeSet(rt, rt.R(oi), i, NodeGet(rt, rt.R(si), i));
-            }
-        }
-        long r = rt.R(oi);
-        rt.PopTo(bas);
-        return r;
-    }
-
     static long NewVec(Rt rt, int cnt, int shift, long root, long tail, long meta) {
         int bas = rt.Mark();
         int ri = rt.Push(root);
@@ -129,19 +85,6 @@ public static class Vec {
     }
 
     /// The leaf array holding index `i`.
-    static long ArrayFor(Rt rt, long v, int i) {
-        if (i >= TailOff(rt, v)) return Tail(rt, v);
-        long node = Root(rt, v);
-        int level = Shift(rt, v);
-        while (level > 0) {
-            node = NodeGet(rt, node, (int)((uint) i >> level) & MASK);
-            level -= BITS;
-        }
-        return node;
-    }
-
-    /// `nth`, or NotFound when out of range -- distinguishable from a `nil`
-    /// that is genuinely stored there.
     public static long Nth(Rt rt, long v, int i) {
         if (i < 0 || i >= Count(rt, v)) return Val.NotFound;
         return NodeGet(rt, ArrayFor(rt, v, i), i & MASK);
@@ -202,11 +145,11 @@ public static class Vec {
             int nt = rt.Push(newtail);
             NodeSet(rt, rt.R(nt), tailLen, rt.R(xi));
             long vv = rt.R(vi);
-            outv = NewVec(rt, cnt + 1, Shift(rt, vv), Root(rt, vv), rt.R(nt), rt.Slot(vv, V_META));
+            outv = NewVec(rt, cnt + 1, VecShift(rt, vv), Root(rt, vv), rt.R(nt), rt.Slot(vv, V_META));
         } else {
             // The tail is full: it becomes a leaf in the trie.
             long vv = rt.R(vi);
-            int sh = Shift(rt, vv);
+            int sh = VecShift(rt, vv);
             int tn = rt.Push(Tail(rt, vv));
             bool overflow = ((int)((uint) cnt >> BITS)) > (1 << sh);
             long newroot;
@@ -266,10 +209,10 @@ public static class Vec {
             int nti = rt.Push(NodeClone(rt, tl0, tl, Val.Nil));
             NodeSet(rt, rt.R(nti), i - TailOff(rt, rt.R(vi)), rt.R(xi));
             long vv = rt.R(vi);
-            outv = NewVec(rt, cnt, Shift(rt, vv), Root(rt, vv), rt.R(nti), rt.Slot(vv, V_META));
+            outv = NewVec(rt, cnt, VecShift(rt, vv), Root(rt, vv), rt.R(nti), rt.Slot(vv, V_META));
         } else {
             long vv = rt.R(vi);
-            int sh = Shift(rt, vv);
+            int sh = VecShift(rt, vv);
             long nr = DoAssoc(rt, sh, Root(rt, vv), i, rt.R(xi));
             int nri = rt.Push(nr);
             vv = rt.R(vi);
@@ -329,14 +272,14 @@ public static class Vec {
             long nt = NodeClone(rt, tl, newlen, Val.Nil);
             int nti = rt.Push(nt);
             long vv = rt.R(vi);
-            outv = NewVec(rt, cnt - 1, Shift(rt, vv), Root(rt, vv), rt.R(nti),
+            outv = NewVec(rt, cnt - 1, VecShift(rt, vv), Root(rt, vv), rt.R(nti),
                           rt.Slot(vv, V_META));
         } else {
             // The tail is emptying: pull the previous leaf back out.
             long newtail = ArrayFor(rt, v, cnt - 2);
             int nt = rt.Push(newtail);
             long vv = rt.R(vi);
-            int sh = Shift(rt, vv);
+            int sh = VecShift(rt, vv);
             long newroot = PopTail(rt, sh, Root(rt, vv), cnt);
             int newshift = sh;
             if (Val.IsNil(newroot)) newroot = NewNode(rt, WIDTH, Val.Nil);
@@ -407,7 +350,7 @@ public static class Vec {
         long a = rt.Alloc(Obj.TyTvec, 5);
         if (a == 0) { rt.PopTo(bas); return Val.Nil; }
         long vv = rt.R(vi);
-        int cnt = Count(rt, vv), shift = Shift(rt, vv);
+        int cnt = Count(rt, vv), shift = VecShift(rt, vv);
         rt.SetSlot(a, T_CNT, Val.Fixnum(cnt));
         rt.SetSlot(a, T_SHIFT, Val.Fixnum(shift));
         rt.SetSlot(a, T_ROOT, rt.R(ri));

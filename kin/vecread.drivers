@@ -1,0 +1,303 @@
+--rust-head
+type Addr = u32;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_NODE: u8 = 10;
+const BITS: u32 = 5; const WIDTH: u32 = 32; const MASK: u32 = 31;
+const V_CNT: u32 = 0; const V_SHIFT: u32 = 1; const V_ROOT: u32 = 2; const V_TAIL: u32 = 3;
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+}
+struct Gc { sp: Vec<u8> }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, starve: bool }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        if self.starve { return 0; }
+        let a = self.bump; self.bump += n as u64 + 1;
+        self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.set_slot(v.as_heap(), i, x); }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, n: Value) -> u32 { self.lens[n.0 as usize] }
+    // A vector's count, which the subject reaches as a SIBLING rather than a
+    // template -- so the fixture has to supply it with the real signature.
+    fn vec_count(&self, v: Value) -> u32 { self.slot(v, V_CNT).as_fixnum() as u32 }
+    // `flint.rt.vecnode`, STUBBED. Each source is verified against stubs of
+    // what it requires; `vecnode.drivers` verifies the real ones. The
+    // signatures must match what kin generates for them, because that is the
+    // only thing being asserted here.
+    fn new_node(&mut self, n: u32, edit: Value) -> Value {
+        let a = self.alloc(TY_NODE, n + 1);
+        if a == 0 { return NIL; }
+        self.set_slot(a, 0, edit);
+        Value::heap(a)
+    }
+    fn node_len(&self, n: Value) -> u32 { self.olen(n) - 1 }
+    fn node_get(&self, n: Value, i: u32) -> Value { self.slot(n, i + 1) }
+    fn node_set(&mut self, n: Value, i: u32, v: Value) { self.set(n, i + 1, v); }
+}
+fn ty(sp: &Vec<u8>, a: Addr) -> u8 { sp[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 4000], gc: Gc { sp: vec![0u8; 4000] }, lens: vec![0; 4000],
+                      bump: 100, roots: Vec::new(), starve: false };
+    let mut o = String::new();
+
+    // --- node_clone: the three length relationships ------------------------
+    let src = rt.new_node(4, NIL);
+    for i in 0..4 { rt.node_set(src, i, Value(0x300 + i as u64)); }
+    let same = rt.node_clone(src, 4, NIL);
+    let wider = rt.node_clone(src, 6, NIL);
+    let narrow = rt.node_clone(src, 2, NIL);
+    o.push_str(&format!("same={},{},{},{} ", rt.node_get(same, 0).0, rt.node_get(same, 1).0,
+                        rt.node_get(same, 2).0, rt.node_get(same, 3).0));
+    o.push_str(&format!("wlen={} w4={} w5={} ", rt.node_len(wider), rt.node_get(wider, 3).0,
+                        rt.node_get(wider, 5).0));
+    o.push_str(&format!("nlen={} n0={} ", rt.node_len(narrow), rt.node_get(narrow, 0).0));
+    // ZERO, which is the case both ports used to floor at one.
+    let z = rt.node_clone(src, 0, NIL);
+    o.push_str(&format!("zlen={} ", rt.node_len(z)));
+    // The clone is a COPY: writing the original leaves it alone.
+    rt.node_set(src, 0, Value(0x999));
+    o.push_str(&format!("indep={} ", rt.node_get(same, 0).0));
+
+    // --- tail_off, over the boundary --------------------------------------
+    // A vector header built by hand: only cnt, shift, root and tail matter.
+    let mkvec = |rt: &mut Rt, cnt: u32, shift: u32, root: Value, tail: Value| -> Value {
+        let a = rt.alloc(6u8, 6);
+        rt.set_slot(a, V_CNT, Value(cnt as u64));
+        rt.set_slot(a, V_SHIFT, Value(shift as u64));
+        rt.set_slot(a, V_ROOT, root);
+        rt.set_slot(a, V_TAIL, tail);
+        Value::heap(a)
+    };
+    let leaf = rt.new_node(WIDTH, NIL);
+    for c in [0u32, 1, 31, 32, 33, 64, 1024, 1025] {
+        let v = mkvec(&mut rt, c, BITS, leaf, leaf);
+        o.push_str(&format!("{} ", rt.tail_off(v)));
+    }
+    o.push_str("| ");
+
+    // --- array_for: inside the tail, and down one level --------------------
+    // 33 elements: one full leaf in the trie, one element in the tail. A root
+    // whose child 0 is the leaf, at shift BITS.
+    let root = rt.new_node(WIDTH, NIL);
+    rt.node_set(root, 0, leaf);
+    let tail1 = rt.new_node(1, NIL);
+    let v33 = mkvec(&mut rt, 33, BITS, root, tail1);
+    o.push_str(&format!("toff33={} ", rt.tail_off(v33)));
+    // Index 0 is under the trie; index 32 is the tail.
+    o.push_str(&format!("a0={} a31={} a32={} ",
+        (rt.array_for(v33, 0) == leaf) as u32,
+        (rt.array_for(v33, 31) == leaf) as u32,
+        (rt.array_for(v33, 32) == tail1) as u32));
+    o.push_str(&format!("shift={} ", rt.vec_shift(v33)));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_NODE = 10;
+    static final int BITS = 5, WIDTH = 32, MASK = 31;
+    static final int V_CNT = 0, V_SHIFT = 1, V_ROOT = 2, V_TAIL = 3;
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static boolean isHeap(long v) { return v >= 100; }
+        static long asHeap(long v) { return v; }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+        static long asFixnum(long v) { return v; }
+    }
+    static final class Rt {
+        long[] h = new long[4000];
+        static final class Gc { int[] sp = new int[4000]; }
+        Gc gc = new Gc();
+        int[] lens = new int[4000];
+        long bump = 100;
+        boolean starve = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static final class Vec {
+        static int count(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
+    }
+    // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
+    static long newNode(Rt rt, int n, long edit) {
+        long a = rt.alloc(TY_NODE, n + 1);
+        if (a == 0) return NIL;
+        rt.setSlot(a, 0, edit);
+        return Val.heap(a);
+    }
+    static int nodeLen(Rt rt, long n) { return olen(rt, n) - 1; }
+    static long nodeGet(Rt rt, long n, int i) { return rt.slot(n, i + 1); }
+    static void nodeSet(Rt rt, long n, int i, long v) { rt.setSlot(Val.asHeap(n), i + 1, v); }
+    static long mkvec(Rt rt, int cnt, int shift, long root, long tail) {
+        long a = rt.alloc(6, 6);
+        rt.setSlot(a, V_CNT, cnt);
+        rt.setSlot(a, V_SHIFT, shift);
+        rt.setSlot(a, V_ROOT, root);
+        rt.setSlot(a, V_TAIL, tail);
+        return Val.heap(a);
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+
+        long src = newNode(rt, 4, NIL);
+        for (int i = 0; i < 4; i++) nodeSet(rt, src, i, 0x300 + i);
+        long same = nodeClone(rt, src, 4, NIL);
+        long wider = nodeClone(rt, src, 6, NIL);
+        long narrow = nodeClone(rt, src, 2, NIL);
+        o.append("same=").append(nodeGet(rt, same, 0)).append(',').append(nodeGet(rt, same, 1))
+         .append(',').append(nodeGet(rt, same, 2)).append(',').append(nodeGet(rt, same, 3)).append(' ');
+        o.append("wlen=").append(nodeLen(rt, wider)).append(" w4=").append(nodeGet(rt, wider, 3))
+         .append(" w5=").append(nodeGet(rt, wider, 5)).append(' ');
+        o.append("nlen=").append(nodeLen(rt, narrow)).append(" n0=").append(nodeGet(rt, narrow, 0)).append(' ');
+        long z = nodeClone(rt, src, 0, NIL);
+        o.append("zlen=").append(nodeLen(rt, z)).append(' ');
+        nodeSet(rt, src, 0, 0x999);
+        o.append("indep=").append(nodeGet(rt, same, 0)).append(' ');
+
+        long leaf = newNode(rt, WIDTH, NIL);
+        int[] counts = {0, 1, 31, 32, 33, 64, 1024, 1025};
+        for (int c : counts) {
+            long v = mkvec(rt, c, BITS, leaf, leaf);
+            o.append(tailOff(rt, v)).append(' ');
+        }
+        o.append("| ");
+
+        long root = newNode(rt, WIDTH, NIL);
+        nodeSet(rt, root, 0, leaf);
+        long tail1 = newNode(rt, 1, NIL);
+        long v33 = mkvec(rt, 33, BITS, root, tail1);
+        o.append("toff33=").append(tailOff(rt, v33)).append(' ');
+        o.append("a0=").append(arrayFor(rt, v33, 0) == leaf ? 1 : 0)
+         .append(" a31=").append(arrayFor(rt, v33, 31) == leaf ? 1 : 0)
+         .append(" a32=").append(arrayFor(rt, v33, 32) == tail1 ? 1 : 0).append(' ');
+        o.append("shift=").append(vecShift(rt, v33)).append(' ');
+        System.out.println(o.toString());
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    const int BITS = 5, WIDTH = 32, MASK = 31;
+    const int V_CNT = 0, V_SHIFT = 1, V_ROOT = 2, V_TAIL = 3;
+    static class Obj {
+        internal const int TyNode = 10;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+        internal static long AsFixnum(long v) { return v; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[4000];
+        internal sealed class GcT { internal int[] sp = new int[4000]; }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[4000];
+        internal long bump = 100;
+        internal bool starve = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    internal static class Vec {
+        internal static int Count(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_CNT)); }
+    }
+    // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
+    static long NewNode(Rt rt, int n, long edit) {
+        long a = rt.Alloc(Obj.TyNode, n + 1);
+        if (a == 0) return NIL;
+        rt.SetSlot(a, 0, edit);
+        return Val.Heap(a);
+    }
+    static int NodeLen(Rt rt, long n) { return Olen(rt, n) - 1; }
+    static long NodeGet(Rt rt, long n, int i) { return rt.Slot(n, i + 1); }
+    static void NodeSet(Rt rt, long n, int i, long v) { rt.SetSlot(Val.AsHeap(n), i + 1, v); }
+    static long MkVec(Rt rt, int cnt, int shift, long root, long tail) {
+        long a = rt.Alloc(6, 6);
+        rt.SetSlot(a, V_CNT, cnt);
+        rt.SetSlot(a, V_SHIFT, shift);
+        rt.SetSlot(a, V_ROOT, root);
+        rt.SetSlot(a, V_TAIL, tail);
+        return Val.Heap(a);
+    }
+--csharp
+    public static void Main(string[] args) {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+
+        long src = NewNode(rt, 4, NIL);
+        for (int i = 0; i < 4; i++) NodeSet(rt, src, i, 0x300 + i);
+        long same = NodeClone(rt, src, 4, NIL);
+        long wider = NodeClone(rt, src, 6, NIL);
+        long narrow = NodeClone(rt, src, 2, NIL);
+        o.Append("same=").Append(NodeGet(rt, same, 0)).Append(',').Append(NodeGet(rt, same, 1))
+         .Append(',').Append(NodeGet(rt, same, 2)).Append(',').Append(NodeGet(rt, same, 3)).Append(' ');
+        o.Append("wlen=").Append(NodeLen(rt, wider)).Append(" w4=").Append(NodeGet(rt, wider, 3))
+         .Append(" w5=").Append(NodeGet(rt, wider, 5)).Append(' ');
+        o.Append("nlen=").Append(NodeLen(rt, narrow)).Append(" n0=").Append(NodeGet(rt, narrow, 0)).Append(' ');
+        long z = NodeClone(rt, src, 0, NIL);
+        o.Append("zlen=").Append(NodeLen(rt, z)).Append(' ');
+        NodeSet(rt, src, 0, 0x999);
+        o.Append("indep=").Append(NodeGet(rt, same, 0)).Append(' ');
+
+        long leaf = NewNode(rt, WIDTH, NIL);
+        int[] counts = {0, 1, 31, 32, 33, 64, 1024, 1025};
+        foreach (int c in counts) {
+            long v = MkVec(rt, c, BITS, leaf, leaf);
+            o.Append(TailOff(rt, v)).Append(' ');
+        }
+        o.Append("| ");
+
+        long root = NewNode(rt, WIDTH, NIL);
+        NodeSet(rt, root, 0, leaf);
+        long tail1 = NewNode(rt, 1, NIL);
+        long v33 = MkVec(rt, 33, BITS, root, tail1);
+        o.Append("toff33=").Append(TailOff(rt, v33)).Append(' ');
+        o.Append("a0=").Append(ArrayFor(rt, v33, 0) == leaf ? 1 : 0)
+         .Append(" a31=").Append(ArrayFor(rt, v33, 31) == leaf ? 1 : 0)
+         .Append(" a32=").Append(ArrayFor(rt, v33, 32) == tail1 ? 1 : 0).Append(' ');
+        o.Append("shift=").Append(VecShift(rt, v33)).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }

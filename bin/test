@@ -73,6 +73,21 @@ tail -1 /tmp/flint-test.out
 
 echo
 echo "== threads: green threads, ports, protocols, dynamic vars"
+# THE RUNTIME FIRST, because `threads.clj` carries the module size budget and
+# the floor module links `dist/flint-runtime.wasm`. That artifact used to be
+# rebuilt at the "distributable" section a hundred lines below this one, so the
+# budget measured the runtime built by the PREVIOUS invocation of this script.
+#
+# Not theoretical: measured at 763 323 bytes on disk against 763 606 rebuilt
+# from the same tree, and the 283 bytes of drift were exactly the regression
+# the gate existed to report. A change that grows the module passed on the run
+# that introduced it and failed on the next, unrelated one -- which sent one
+# round of attribution at the wrong commit.
+#
+# It is rebuilt again below. That section tests the distributable itself and
+# has its own reason to be sure the artifacts are fresh; this one is about the
+# number `threads.clj` is going to print.
+./bin/build-dist > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "bin/build-dist (before the size budget)"; }
 bb test/threads.clj > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "test/threads.clj"; }
 
 echo "== catch: Exception means what it means in Clojure"

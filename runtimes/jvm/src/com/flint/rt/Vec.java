@@ -2,6 +2,7 @@ package com.flint.rt;
 
 import static com.flint.rt.Obj.*;
 import static flint.rt.Vecnode.*;
+import static flint.rt.Vecread.*;
 
 /// Persistent vectors, ported from `runtime/src/vector.rs`.
 ///
@@ -35,15 +36,8 @@ public final class Vec {
     public static final int V_HASH = 5;
 
     public static int count(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
-    static int shift(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_SHIFT)); }
     static long root(Rt rt, long v) { return rt.slot(v, V_ROOT); }
     static long tail(Rt rt, long v) { return rt.slot(v, V_TAIL); }
-
-    /// Where the tail starts. Below 32 elements the whole vector IS the tail.
-    static int tailOff(Rt rt, long v) {
-        int c = count(rt, v);
-        return c < WIDTH ? 0 : ((c - 1) >> BITS) << BITS;
-    }
 
     /// A NODE carries its OWNERSHIP TOKEN in slot 0 and its elements from 1.
     ///
@@ -57,40 +51,6 @@ public final class Vec {
     /// the top of this file. They were five one-line functions written three
     /// times; the offset-by-one that every one of them carries is the kind of
     /// thing that only has to be got right once.
-
-    /// Copy `src`'s first `n` slots into a fresh node of `n` slots, owned by
-    /// `edit` (NIL for a persistent node, which nothing owns).
-    static long nodeClone(Rt rt, long src, int n, long edit) {
-        int base = rt.mark();
-        int si = rt.push(src);
-        int ei = rt.push(edit);
-        // `n`, NOT `Math.max(n, 1)`. The floor made the ports allocate a
-        // two-slot node where native allocates one, for the tail of a vector
-        // produced by persisting an EMPTY transient -- `cnt - tailOff` is 0
-        // there, and it is the only caller that can ask for zero.
-        //
-        // Measured, not read: a probe on this line fired exactly once, on
-        // `(persistent! (transient []))`, and never across the whole
-        // conformance suite -- because the suite contained no transient at
-        // all. `newEmpty` right above already builds a zero-length tail, so
-        // the two ways of reaching an empty vector disagreed with each other
-        // on the same runtime as well as with native.
-        long out = newNode(rt, n, rt.r(ei));
-        if (Val.isNil(out)) { rt.popTo(base); return Val.NIL; }
-        int oi = rt.push(out);
-        if (!Val.isNil(rt.r(si))) {
-            int have = nodeLen(rt, rt.r(si));
-            for (int i = 0; i < Math.min(n, have); i++) {
-                // Read the source through the shadow stack: `setSlot` cannot
-                // collect, but reading `src` from a Java local across the
-                // `newNode` above would already have been stale.
-                nodeSet(rt, rt.r(oi), i, nodeGet(rt, rt.r(si), i));
-            }
-        }
-        long r = rt.r(oi);
-        rt.popTo(base);
-        return r;
-    }
 
     static long newVec(Rt rt, int cnt, int shift, long root, long tail, long meta) {
         int base = rt.mark();
@@ -132,20 +92,6 @@ public final class Vec {
         return out;
     }
 
-    /// The leaf array holding index `i`.
-    static long arrayFor(Rt rt, long v, int i) {
-        if (i >= tailOff(rt, v)) return tail(rt, v);
-        long node = root(rt, v);
-        int level = shift(rt, v);
-        while (level > 0) {
-            node = nodeGet(rt, node, (i >>> level) & MASK);
-            level -= BITS;
-        }
-        return node;
-    }
-
-    /// `nth`, or NOT_FOUND when out of range -- distinguishable from a `nil`
-    /// that is genuinely stored there.
     public static long nth(Rt rt, long v, int i) {
         if (i < 0 || i >= count(rt, v)) return Val.NOT_FOUND;
         return nodeGet(rt, arrayFor(rt, v, i), i & MASK);
@@ -206,11 +152,11 @@ public final class Vec {
             int nt = rt.push(newtail);
             nodeSet(rt, rt.r(nt), tailLen, rt.r(xi));
             long vv = rt.r(vi);
-            out = newVec(rt, cnt + 1, shift(rt, vv), root(rt, vv), rt.r(nt), rt.slot(vv, V_META));
+            out = newVec(rt, cnt + 1, vecShift(rt, vv), root(rt, vv), rt.r(nt), rt.slot(vv, V_META));
         } else {
             // The tail is full: it becomes a leaf in the trie.
             long vv = rt.r(vi);
-            int sh = shift(rt, vv);
+            int sh = vecShift(rt, vv);
             int tn = rt.push(tail(rt, vv));
             boolean overflow = (cnt >>> BITS) > (1 << sh);
             long newroot;
@@ -270,10 +216,10 @@ public final class Vec {
             int nti = rt.push(nodeClone(rt, tail, tl, Val.NIL));
             nodeSet(rt, rt.r(nti), i - tailOff(rt, rt.r(vi)), rt.r(xi));
             long vv = rt.r(vi);
-            out = newVec(rt, cnt, shift(rt, vv), root(rt, vv), rt.r(nti), rt.slot(vv, V_META));
+            out = newVec(rt, cnt, vecShift(rt, vv), root(rt, vv), rt.r(nti), rt.slot(vv, V_META));
         } else {
             long vv = rt.r(vi);
-            int sh = shift(rt, vv);
+            int sh = vecShift(rt, vv);
             long nr = doAssoc(rt, sh, root(rt, vv), i, rt.r(xi));
             int nri = rt.push(nr);
             vv = rt.r(vi);
@@ -333,14 +279,14 @@ public final class Vec {
             long nt = nodeClone(rt, tl, newlen, Val.NIL);
             int nti = rt.push(nt);
             long vv = rt.r(vi);
-            out = newVec(rt, cnt - 1, shift(rt, vv), root(rt, vv), rt.r(nti),
+            out = newVec(rt, cnt - 1, vecShift(rt, vv), root(rt, vv), rt.r(nti),
                          rt.slot(vv, V_META));
         } else {
             // The tail is emptying: pull the previous leaf back out.
             long newtail = arrayFor(rt, v, cnt - 2);
             int nt = rt.push(newtail);
             long vv = rt.r(vi);
-            int sh = shift(rt, vv);
+            int sh = vecShift(rt, vv);
             long newroot = popTail(rt, sh, root(rt, vv), cnt);
             int newshift = sh;
             if (Val.isNil(newroot)) newroot = newNode(rt, WIDTH, Val.NIL);
@@ -412,7 +358,7 @@ public final class Vec {
         long a = rt.alloc(TY_TVEC, 5);
         if (a == 0) { rt.popTo(base); return Val.NIL; }
         long vv = rt.r(vi);
-        int cnt = count(rt, vv), shift = shift(rt, vv);
+        int cnt = count(rt, vv), shift = vecShift(rt, vv);
         rt.setSlot(a, T_CNT, Val.fixnum(cnt));
         rt.setSlot(a, T_SHIFT, Val.fixnum(shift));
         rt.setSlot(a, T_ROOT, rt.r(ri));

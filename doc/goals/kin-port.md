@@ -874,6 +874,50 @@ Getting there needed three things that were not on the list:
 `node-set` is the one statement in the layer and confirmed kin emits a void
 function cleanly -- `pub fn ... ()`, `static void`, `static void`.
 
+### `^:pub` on a previously-private function costs bytes in every module
+
+`vecread` shipped 285 bytes over the floor budget -- 304 025 against a 304 000
+gate -- and the whole of it was four characters of mark.
+
+`vec-shift`, `tail-off` and `array-for` are private `fn`s in Rust. Marking them
+`^:pub` makes them `pub` where kin's default is already `pub(crate)`, and three
+extra public symbols are three the linker can no longer internalise. The
+runtime grew 283 bytes and the floor module 285. Dropping the mark recovered
+all of it and four bytes besides: 303 736, against 303 740 before the slice.
+
+`^:pub` means part of the CRATE's public API. It does NOT mean "something
+outside this file calls it" -- kin's default already covers that, which is the
+whole reason the default is `pub(crate)` and not `fn`. Nothing is lost on the
+ports: a generated module is its own package and Java has nothing between
+package-private and public, so Java emits `public` either way, and C# gets
+`internal` within one assembly.
+
+`#[inline]` was the first hypothesis and it was WRONG -- the two hot readers
+had carried it and this file had dropped it, so restoring it looked obviously
+right, and it recovered exactly zero bytes. It is kept because it is faithful
+to the original, not because it bought anything. Measuring the fix mattered as
+much as measuring the regression.
+
+**43 `^:pub` marks across the kin sources today**, and the rule was not known
+when most of them were written. Worth a sweep against what each function was
+before it was generated.
+
+### The module budget measures the PREVIOUS run's runtime
+
+`test/threads.clj` runs at `bin/test` line 76. `bin/build-dist`, which is what
+produces the `dist/flint-runtime.wasm` the floor module links against, runs at
+line 195. So the size gate measures the runtime built by the LAST invocation of
+`bin/test`, not the tree in front of it.
+
+MEASURED: the runtime on disk was 763 323 bytes and rebuilding it from the same
+tree gave 763 606 -- 283 bytes of drift, which is precisely the regression the
+gate was supposed to be reporting.
+
+The effect is that a change which grows the module passes on the run that
+introduces it and fails on the next, unrelated one. That happened here, and it
+sent the first round of attribution at the wrong commit: the failure surfaced
+during `vecread` while appearing to belong to `vecnode`.
+
 ### Port order, re-derived
 
 | # | region | gate | lines across 3 |

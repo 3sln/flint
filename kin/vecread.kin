@@ -1,0 +1,103 @@
+;; Finding an element: where the tail begins, and which leaf holds an index.
+;;
+;; A vector is a 32-way trie with a TAIL -- the last up-to-32 elements live in
+;; a flat node hanging off the header, which is what makes `conj` O(1)
+;; amortised and why `tail-off` appears in every access path. Below 32 elements
+;; the whole vector IS the tail and the trie is never touched.
+;;
+;; `node-clone` lives here rather than in `vecnode` because it is the first
+;; thing that needs a LENGTH as well as a node, and every persistent update
+;; goes through it.
+;;
+;; `nth` is deliberately NOT here. Rust answers `Option<Value>` and both ports
+;; answer `NOT_FOUND`, and converging that is a 95-call-site change in Rust
+;; alone -- 44 of them `.unwrap_or(NIL)`. It is a decision with a measured
+;; blast radius rather than a line of porting, and it gets made on its own.
+(ns flint.rt.vecread
+  (:require [flint.impl.rt :refer [defn return if let local set do comment doc
+                                   for while not == < > >= -
+                                   bit-and shl ushr
+                                   push r pop-to slot as-fixnum to-i32 nil?
+                                   vec-count
+                                   Rt Value RootIx I32 Bool NIL
+                                   BITS WIDTH MASK V_SHIFT V_ROOT V_TAIL]]
+            [flint.rt.vecnode :refer [new-node node-len node-get node-set]]))
+
+(doc "Copy `src` into a fresh node of `newlen` slots owned by `edit`, keeping"
+     "as many children as both lengths allow."
+     ""
+     "NO `max(newlen, 1)` FLOOR, and no nil-source arm. Both ports carried the"
+     "floor and native did not, so persisting an EMPTY transient built a"
+     "two-slot tail node on the ports and a one-slot one here -- the same value"
+     "at two different widths, which no gate could see. The only caller that"
+     "can ask for zero is that one, `cnt - tailOff` being 0 there."
+     ""
+     "The nil-source arm was the ports' too, and it is dead: a probe over the"
+     "whole conformance suite and over `(persistent! (transient []))` never"
+     "reached it, and native has run without it since vectors were written.")
+(defn ^:pub ^:method ^Value node-clone [^:mut ^Rt rt ^Value n ^I32 newlen ^Value edit]
+  (let [^RootIx old (push rt n)
+        ^RootIx e (push rt edit)
+        ^Value fresh (new-node rt newlen (r rt e))]
+    (if (nil? rt fresh)
+      (do (pop-to rt old)
+          (return NIL)))
+    (let [^RootIx f (push rt fresh)
+          ^I32 have (node-len rt (r rt old))]
+      (comment "The smaller of the two lengths, spelled with a local and an"
+               "`if` because kin has no `min` -- and a `min` form would be"
+               "three templates for what two lines say plainly.")
+      (local ^:mut ^I32 copy)
+      (set copy newlen)
+      (if (< have copy)
+        (set copy have))
+      (for [^I32 i 0 copy]
+        (node-set rt (r rt f) i (node-get rt (r rt old) i)))
+      (let [^Value out (r rt f)]
+        (pop-to rt old)
+        (return out)))))
+
+(doc "The shift of `v`'s root: how many bits an index is walked down by."
+     ""
+     "`^:inline`, which the hand-written Rust also carried and the first draft"
+     "of this file dropped. Moving a private module-local helper into a"
+     "generated module makes it PUBLIC and cross-crate-module, and Rust will"
+     "not inline across that on its own."
+     ""
+     "NOT `^:pub`, and that is the half that actually mattered. These three"
+     "were private `fn`s in Rust, and marking them `^:pub` made them `pub`"
+     "where kin's default is `pub(crate)` -- four symbols the linker could no"
+     "longer internalise, which grew the runtime 283 bytes and the floor"
+     "module 285 (303 740 to 304 025). `^:pub` means part of the CRATE's"
+     "public API, not `something outside this file calls it`; the default"
+     "already covers the second. Java emits `public` either way, because a"
+     "generated module is its own package and Java has nothing between"
+     "package-private and public, so nothing is lost on the ports.")
+(defn ^:inline ^:method ^I32 vec-shift [^Rt rt ^Value v]
+  (return (to-i32 (as-fixnum (slot rt v V_SHIFT)))))
+
+(doc "Where the tail starts. Below `WIDTH` elements the whole vector IS the"
+     "tail, so the answer is 0 and the trie is not consulted at all.")
+(defn ^:inline ^:method ^I32 tail-off [^Rt rt ^Value v]
+  (let [^I32 c (vec-count rt v)]
+    (if (< c WIDTH)
+      (return 0))
+    (return (shl (ushr (- c 1) BITS) BITS))))
+
+(doc "The leaf node holding index `i`."
+     ""
+     "`ushr` and not a bare right shift: `i` and `level` are both `I32`, so"
+     "the shift is logical on every target, but which shift a `>>` MEANS"
+     "depends on the host type -- Rust's is unsigned and the ports' is not."
+     "Naming the logical one is how that survives the trip.")
+(defn ^:method ^Value array-for [^Rt rt ^Value v ^I32 i]
+  (if (>= i (tail-off rt v))
+    (return (slot rt v V_TAIL)))
+  (local ^:mut ^Value node)
+  (set node (slot rt v V_ROOT))
+  (local ^:mut ^I32 level)
+  (set level (vec-shift rt v))
+  (while (> level 0)
+    (set node (node-get rt node (bit-and (ushr i level) MASK)))
+    (set level (- level BITS)))
+  (return node))

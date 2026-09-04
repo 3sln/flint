@@ -9,6 +9,7 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
+using static Flint.Rt.Vec;
 
 public static class Mapcore {
     /// Is this a map? A ROW REF answers yes, which is what lets code that does

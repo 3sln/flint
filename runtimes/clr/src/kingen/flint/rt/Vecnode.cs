@@ -9,6 +9,7 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
+using static Flint.Rt.Vec;
 
 public static class Vecnode {
     /// How many CHILD slots, which is one fewer than the object's length --

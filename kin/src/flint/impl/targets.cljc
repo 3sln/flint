@@ -214,6 +214,10 @@
           "use crate::rt::Rt;\n"
           "use crate::seqs::*;\n"
           "use crate::strs::INTERN_MAX;\n"
+          ;; The VECTOR's constants -- `BITS`, `WIDTH`, `MASK` and the slot
+          ;; names -- which are module-level in Rust and class-level on the
+          ;; ports. `vecread` is the first generated source to name one.
+          "use crate::vector::*;\n"
           "use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};\n"
           ;; Only the two free-function modules export anything a sibling
           ;; calls unqualified; the rest are methods, and a method needs no
@@ -256,10 +260,11 @@
           "import static com.flint.rt.Obj.*;\n"
           ;; The hand-written classes whose constants the generated code
           ;; reads bare: the node layout from Maps, `CAT_*` from Eq,
-          ;; `LS_*` from Seqs.
+          ;; `LS_*` from Seqs, the trie shape and slot names from Vec.
           "import static com.flint.rt.Maps.*;\n"
           "import static com.flint.rt.Eq.*;\n"
           "import static com.flint.rt.Seqs.*;\n"
+          "import static com.flint.rt.Vec.*;\n"
           (str/join (for [sib siblings]
                       (str "import static " pkg "." (pascal sib) ".*;\n"))))
      (fn [c]
@@ -295,6 +300,7 @@
           "using static Flint.Rt.Maps;\n"
           "using static Flint.Rt.Eq;\n"
           "using static Flint.Rt.Seqs;\n"
+          "using static Flint.Rt.Vec;\n"
           (str/join (for [sib siblings]
                       (str "using static " ns-part "." (pascal sib) ";\n"))))
      (fn [c]

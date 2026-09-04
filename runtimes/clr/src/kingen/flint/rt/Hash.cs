@@ -9,6 +9,7 @@ using static Flint.Rt.Obj;
 using static Flint.Rt.Maps;
 using static Flint.Rt.Eq;
 using static Flint.Rt.Seqs;
+using static Flint.Rt.Vec;
 
 public static class Hash {
     internal const int C1 = unchecked((int) 0xcc9e2d51);

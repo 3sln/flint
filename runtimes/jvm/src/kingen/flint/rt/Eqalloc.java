@@ -8,6 +8,7 @@ import static com.flint.rt.Obj.*;
 import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
+import static com.flint.rt.Vec.*;
 import static flint.rt.Eq.*;
 
 public final class Eqalloc {

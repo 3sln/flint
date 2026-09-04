@@ -8,6 +8,7 @@ import static com.flint.rt.Obj.*;
 import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
+import static com.flint.rt.Vec.*;
 
 public final class Eq {
     public static int category(Rt rt, long v) {
