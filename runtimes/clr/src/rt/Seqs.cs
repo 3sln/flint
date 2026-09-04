@@ -69,7 +69,8 @@ public static class Seqs {
             case Obj.TyCons:
             case Obj.TyVecseq: return v;
             case Obj.TyVec: return Vec.Count(rt, v) == 0 ? Val.Nil : Vecseq(rt, v, 0);
-            case Obj.TyMapentry: return Vecseq(rt, EntryAsVec(rt, v), 0);
+            // A vecseq over the ENTRY ITSELF -- see the JVM's `seq`.
+            case Obj.TyMapentry: return Vecseq(rt, v, 0);
             // Iterating a table hands back REFS, materialising nothing. It
             // rides on `Vecseq` because a table is indexed and counted exactly
             // as a vector is; only `First` differs (`doc/decisions/0026`).
@@ -110,18 +111,6 @@ public static class Seqs {
         }
     }
 
-    /// A map entry read as the two-element vector `[k v]`. Clojure's entries
-    /// ARE sequential, which is what lets `(first {:a 1})` destructure.
-    static long EntryAsVec(Rt rt, long e) {
-        int bas = rt.Mark();
-        int ei = rt.Push(e);
-        int vi = rt.Push(Vec.Empty(rt));
-        rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.Slot(rt.R(ei), 0)));
-        rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.Slot(rt.R(ei), 1)));
-        long outv = rt.R(vi);
-        rt.PopTo(bas);
-        return outv;
-    }
 
     public static long First(Rt rt, long v) {
         long s = Seq(rt, v);
@@ -133,6 +122,7 @@ public static class Seqs {
             int i = (int) Val.AsFixnum(rt.Slot(s, 1));
             // A TABLE rides on `TyVecseq`; only this differs, and it differs by
             // handing back a ref (`doc/decisions/0026`).
+            if (rt.IsHeapTy(coll, Obj.TyMapentry)) return rt.Slot(coll, i);
             if (Table.isTable(rt, coll)) return Table.tableRef(rt, coll, i);
             return Vec.Nth(rt, coll, i, Val.NotFound);
         }
@@ -151,7 +141,9 @@ public static class Seqs {
         if (t == Obj.TyVecseq) {
             long vec = rt.Slot(s, 0);
             int i = (int) Val.AsFixnum(rt.Slot(s, 1)) + 1;
-            int cnt = Table.isTable(rt, vec) ? Table.tableCount(rt, vec) : Vec.Count(rt, vec);
+            int cnt = rt.IsHeapTy(vec, Obj.TyMapentry) ? 2
+                    : Table.isTable(rt, vec) ? Table.tableCount(rt, vec)
+                    : Vec.Count(rt, vec);
             return i >= cnt ? Val.Nil : Vecseq(rt, vec, i);
         }
         if (t == Obj.TyStrseq) {

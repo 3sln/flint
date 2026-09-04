@@ -269,7 +269,7 @@ what remains, and what each thing is waiting on.
    which had none — the same gap that had been hiding a node-width divergence
    between native and the ports.
 
-0m. **`seq` of a map entry allocates a vector on both ports** — the native
+0m. **`seq` of a map entry allocated a vector on both ports** — FIXED — the native
    runtime makes a vecseq over the ENTRY itself and reads it directly; the
    ports copy the entry into a two-element vector first, on every entry of
    every map walked.
@@ -300,15 +300,19 @@ what remains, and what each thing is waiting on.
    all three were patched — so the difference is reached through something
    that does not go through them.
 
-   **RESOLVED, and it was not about map entries at all.** Turning on GC
-   STRESS — the ports had the field and nothing ever set it; it is
-   `-Dflint.gcstress=1` now — reproduced the failure in EIGHT ROWS, and then
-   showed it reproduces at HEAD with the map-entry convergence reverted
-   entirely. It is a pre-existing rooting bug in the ports that the
-   convergence only perturbed the timing of.
+   **DONE.** The convergence broke table equality when first tried, and that
+   turned out to be nothing to do with map entries: three pre-existing rooting
+   bugs in `Eq`, whose timing the change only perturbed. They are item 0n and
+   they are fixed, so this went in unchanged.
 
-   See item 0n. The map-entry convergence is still worth making and is still
-   blocked, but on 0n rather than on anything of its own.
+   MEASURED at 8 400 steps on a 200-entry walk — 60 531 against 52 131, 13.9%,
+   or 42 steps per entry. `Seqs.entryAsVec` is deleted on both ports, nothing
+   else having wanted it. (`Builtins.mapEntryAsVec` is a different function and
+   stays: it gives `conj` on a map entry vector semantics.)
+
+   The general lesson is the one 0n carries: an optimisation that "breaks
+   something unrelated" may be reporting a latent bug rather than causing one,
+   and the way to tell is a tool that makes the latent one deterministic.
 
    The saving is one allocation per map entry seq'd — every entry of every map
    walked — and the divergence blocks porting `first` and `next` to kin.
