@@ -1006,6 +1006,52 @@ The probe now tests six spellings of a callback rather than two, and lists
 them explicitly, so the next miss is a form nobody has written yet rather
 than one the pattern happened not to cover.
 
+### THE CLOSURE BLOCKER MAY NOT BE A BLOCKER: the ports do not use closures
+
+Found while scoping closures for kin, and it changes the plan.
+
+**Rust iterates a map with a CALLBACK.** `map_for_each(m, state, f)` where `f`
+is `&mut dyn FnMut(&mut Rt, Value, Value, &mut S)`, called from `codec.rs`,
+`coll.rs`, `conc.rs` and `map.rs`.
+
+**Both ports iterate with a BUFFER.** `entries(rt, m, at)` writes every key and
+value onto the shadow stack starting at `at` and returns the pair count; the
+caller then loops over `rt.r(at + 2*i)`. Used in `Maps`, `Sets`, `Codec` and
+`Conc`.
+
+So the same job is done two ways, and **the ports' way needs no callback at
+all** -- it is a loop and a push. If the convergence goes that way, the five
+functions holding 133 lines stop needing a capability kin does not have, and
+kin does not need closures for this at all.
+
+That is the third time in this port that a "capability gap" has turned out to
+be a divergence in approach: `match` was `case`, an absent value was a
+sentinel, and now a callback is a buffer.
+
+#### It is a real trade, not a free win, and it wants measuring
+
+`entries` on an N-entry map pushes 2N roots before the caller reads any of
+them. `map_for_each` visits in place and pushes nothing. On a large map that
+is the difference between a bounded walk and a shadow-stack spike proportional
+to the collection.
+
+Against that: the ports already do this, on every map operation that iterates,
+and they pass conformance including the gas-parity row. So the cost is being
+paid today by half the runtimes and has not shown up as a problem.
+
+What would settle it is a measurement -- peak root depth and time for both
+shapes over a large map -- rather than an argument from either side. That is
+worth doing BEFORE building closures into kin, because if the buffer shape
+wins, or ties, the capability is never needed and the 133 lines are portable
+now.
+
+#### And if closures do win
+
+They are still the right thing for kin eventually -- a code generator whose
+vocabulary is the user's should not be unable to express a callback. But it
+would be built because a measurement asked for it, not because a census said
+five functions were blocked.
+
 ### What is left in `Maps`, and it is one capability
 
     closure-blocked   5 fns  133 lines   map_for_each node_for_each
