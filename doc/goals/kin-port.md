@@ -782,6 +782,41 @@ map allocated more per entry than the Rust CHAMP did; the kin CHAMP closed
 that and nothing tightened the bound behind it. It is exact now, which is
 how the two ports have always been compared to each other.
 
+### The same defect class, twice more, both under the same coverage hole
+
+Looking for `Vec`'s prerequisites turned up two more divergences of exactly
+the `V_HASH` kind -- native and the ports disagreeing about an object's
+shape, with no gate able to see it.
+
+**`nodeClone` had a `max(n, 1)` floor on both ports and not on native.** The
+only caller that can ask for zero is persisting an EMPTY transient, where
+`cnt - tailOff` is 0, so the ports allocated a two-slot tail node where native
+allocates one. `newEmpty` on the same port already builds a zero-length tail,
+so the two ways of reaching an empty vector disagreed with each other on one
+runtime as well as across runtimes.
+
+MEASURED, not read: a probe on that line fired exactly once, on `(persistent!
+(transient []))`. It fired zero times across the entire conformance suite --
+**because the suite contained no transient at all.** `collections.cljc` had
+`conj`, `assoc`, `get`, `count`, `seq`, `nth` and not one `transient!`,
+`conj!` or `persistent!`. That zero was a zero of coverage, and taking it at
+face value is precisely the mistake the opcov census made twice.
+
+The suite has transients now -- vector, map and set, the empty case first
+because it is the one that was wrong, then the boundaries the trie turns on
+(32, 33, 1025).
+
+**`pop!` does not work on a transient, on any runtime.** `clojure.core` has
+`(defn pop! [t] (flint.rt/pop t))` -- the PERSISTENT pop. On a transient
+vector it falls through to the list branch and answers `()`. `tvec_pop` is
+implemented in all four runtimes and referenced by nothing but its own unit
+test; no builtin reaches it.
+
+It is deliberately NOT in the new conformance rows. Every runtime is wrong the
+same way, so the row would pass and cement the answer -- which is the
+two-of-three problem again, one dimension over. Fixing it means a `pop!`
+builtin in four runtimes.
+
 ### `ushr` and `sar` are named in three comments and defined by no subject
 
 `kin.lang` deliberately refuses to carry `bit-shift-right`, because which

@@ -72,7 +72,18 @@ public static class Vec {
         int bas = rt.Mark();
         int si = rt.Push(src);
         int ei = rt.Push(edit);
-        long outv = NewNode(rt, System.Math.Max(n, 1), rt.R(ei));
+        // `n`, NOT `Math.Max(n, 1)`. The floor made the ports allocate a
+        // two-slot node where native allocates one, for the tail of a vector
+        // produced by persisting an EMPTY transient -- `cnt - tailOff` is 0
+        // there, and it is the only caller that can ask for zero.
+        //
+        // Measured, not read: a probe on this line fired exactly once, on
+        // `(persistent! (transient []))`, and never across the whole
+        // conformance suite -- because the suite contained no transient at
+        // all. `NewEmpty` right above already builds a zero-length tail, so
+        // the two ways of reaching an empty vector disagreed with each other
+        // on the same runtime as well as with native.
+        long outv = NewNode(rt, n, rt.R(ei));
         if (Val.IsNil(outv)) { rt.PopTo(bas); return Val.Nil; }
         int oi = rt.Push(outv);
         if (!Val.IsNil(rt.R(si))) {
