@@ -2,9 +2,15 @@
   "An EDN reader with reader-tag support.
 
   Written fresh rather than reusing the compiler's reader: this one has no
-  syntax quote, no reader conditionals, no anonymous-fn literals and no metadata
-  on forms, so a program that reads EDN does not drag the compiler's reader in
-  behind it.
+  syntax quote, no reader conditionals and no anonymous-fn literals, so a
+  program that reads EDN does not drag the compiler's reader in behind it.
+
+  `^meta form` IS read, even though metadata is not in the EDN spec, because
+  `clojure.edn` reads it and a ported program must not find this reader
+  answering differently. Note what that costs a CONSUMER: metadata does not
+  print with `pr-str` and does not count for `=`, so a payload that carries
+  meaning in metadata loses it through any round trip through text. Say the
+  thing in the data itself.
 
   `#inst` and `#uuid` have **no** built-in reader, because flint has no date or
   UUID type. An unknown tag calls `:default` if you gave one, and otherwise
@@ -174,6 +180,42 @@
                 (apply-tag tag value opts)
                 (err "reader tag must be a symbol" {:tag tag}))))))
 
+(defn- meta-map
+  "Clojure's four spellings of a metadata form, normalised to the map they mean.
+
+  `^:kw x` is `{:kw true}`, `^sym x` and `^\"str\" x` are `{:tag ...}`, and
+  `^{...} x` is the map itself. Anything else is refused by name rather than
+  attached as-is, which is what Clojure does and is the difference between a
+  typo being reported and a typo becoming a key."
+  [m]
+  (cond
+    (keyword? m) {m true}
+    (symbol? m) {:tag m}
+    (string? m) {:tag m}
+    (map? m) m
+    :else (err "metadata must be a keyword, symbol, string or map" {:got m})))
+
+(defn- read-meta
+  "`^meta form`, which is NOT in the EDN spec but is what `clojure.edn` reads.
+
+  It is here for parity and for a sharper reason: `^` is neither whitespace nor
+  a delimiter, so without this branch `^:int a` read as the SYMBOL `^:int` and
+  the `a` after it was left for the next call. A form Clojure reads one way and
+  this reader reads another way in silence is worse than either supporting it
+  or refusing it, and supporting it is what a Clojure program expects.
+
+  Stacking is allowed -- `^:a ^:b x` merges, later keys winning -- because the
+  recursion falls out of reading the target with the same function."
+  [v opts]
+  (nx! v)
+  (let [m (read-form v opts)
+        _ (skip! v)
+        x (read-form v opts)]
+    (cond
+      (identical? m ::eof) (err "unexpected end of input after ^" {})
+      (identical? x ::eof) (err "metadata with no form after it" {:meta m})
+      :else (with-meta x (merge (meta-map m) (meta x))))))
+
 (defn- read-form [v opts]
   (skip! v)
   (let [c (pk v)]
@@ -187,7 +229,18 @@
       (= c "\"") (read-str v)
       (= c "\\") (read-char* v)
       (= c "#") (read-dispatch v opts)
+      (= c "^") (read-meta v opts)
       (or (= c ")") (= c "]") (= c "}")) (err "unexpected delimiter" {:char c})
+      ;; SYNTAX QUOTE, DEREF AND UNQUOTE ARE CLOJURE, NOT EDN, and refusing them
+      ;; by name is the point. None of these is whitespace or a delimiter, so
+      ;; without this branch they fall into the token reader and `@x` comes back
+      ;; as the SYMBOL `@x` -- a reference to a var read as a name, in silence.
+      ;; `clojure.edn` refuses all three, and agreeing with it is worth more than
+      ;; accepting text no EDN writer produces. (`'x` is NOT here: Clojure's own
+      ;; EDN reader also reads it as a symbol, so a symbol is the agreeing answer.)
+      (or (= c "`") (= c "~") (= c "@"))
+      (err "not EDN -- syntax quote, unquote and deref are reader macros of the language, not of the data format"
+           {:char c})
       :else (read-symbolic v opts))))
 
 (defn read-string
