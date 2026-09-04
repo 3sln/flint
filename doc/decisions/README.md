@@ -330,19 +330,26 @@ what remains, and what each thing is waiting on.
    * `long nx = next(x), ny = next(y)` holds `nx` across the allocation inside
      `next(y)`, and then stores the stale `nx` with `setR`.
 
-   A THIRD remains and is deeper. With those fixed, `=` still answers false,
-   and the reason is that `a` is ALREADY a forwarding pointer when `Eq.eq` is
-   entered — traced with a category-mismatch probe printing `a=object type 1
-   b=object type 50`. The `=` builtin reads both operands from the VALUE STACK
-   with `rt.vat`, so the argument slot holding `T` did not survive the
-   collections that evaluating `(ft/build ...)` triggers. That is interpreter
-   or GC-scan territory rather than a missing `push`, and wants its own slice.
+   The THIRD is fixed too, and it was not the value stack. Chasing "`a` is
+   already a forwarding pointer when `Eq.eq` is entered" through a stack trace
+   found `Eq.eq`'s TABLE branch:
 
-   The two tools that found all of this are new and stay: the stale-push
-   detector on `Rt.push` (`-Dflint.stale=1`) and the GC stress switch. Neither
-   existed on the ports; the native runtime has had both since `0031`. Note
-   the detector did NOT catch these — it fires at `push`, and a value that is
-   never pushed never reaches it. Stress is what found them.
+       int ri = rt.push(Table.tableRef(rt, rt.r(ai), i));
+       boolean same = eq(rt, rt.r(ri), Table.tableRef(rt, rt.r(bi), i));
+
+   The a-side ref is read into the argument slot BEFORE the b-side `tableRef`
+   allocates. The comment directly above that loop reads *"BOTH SIDES ROOTED.
+   `tableRef` allocates"* — it roots the two TABLES and then does the very
+   thing it warns about, one level down, with the two REFS.
+
+   ALL THREE FIXED, and every conformance program now passes under stress.
+
+   The tools that found them are new and stay: the stale-push detector on
+   `Rt.push` (`-Dflint.stale=1`) and the GC stress switch
+   (`-Dflint.gcstress=1`). Neither existed on the ports; the native runtime
+   has had both since `0031`. The detector did NOT catch any of the three — it
+   fires at `push`, and a value that is never pushed never reaches it. Stress
+   found all three, so `conform-hosts` runs every suite under it now.
 
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old

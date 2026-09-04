@@ -110,8 +110,20 @@ public final class Eq {
             int ai = rt.push(a);
             int bi = rt.push(b);
             for (int i = 0; i < na; i++) {
+                // BOTH REFS ROOTED, and this is the same rule as the tables
+                // above rather than a second one. The line used to read
+                //
+                //     eq(rt, rt.r(ri), Table.tableRef(rt, rt.r(bi), i))
+                //
+                // where the a-side ref is read into the argument slot BEFORE
+                // the b-side `tableRef` allocates -- so a collection between
+                // them left the first argument pointing at a moved object. The
+                // comment above already said `tableRef` allocates; the loop
+                // rooted the tables and then did the same thing again one
+                // level down with the refs.
                 int ri = rt.push(Table.tableRef(rt, rt.r(ai), i));
-                boolean same = eq(rt, rt.r(ri), Table.tableRef(rt, rt.r(bi), i));
+                int rj = rt.push(Table.tableRef(rt, rt.r(bi), i));
+                boolean same = eq(rt, rt.r(ri), rt.r(rj));
                 rt.popTo(ri);
                 if (!same) { rt.popTo(base); return false; }
             }

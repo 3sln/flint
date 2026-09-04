@@ -104,8 +104,12 @@ public static class Eq {
             int ai = rt.Push(a);
             int bi = rt.Push(b);
             for (int i = 0; i < na; i++) {
+                // BOTH REFS ROOTED -- the a-side ref was read into the
+                // argument slot before the b-side `tableRef` allocated. Same
+                // rule as the tables above, one level down. See the JVM.
                 int ri = rt.Push(Table.tableRef(rt, rt.R(ai), i));
-                bool same = Equal(rt, rt.R(ri), Table.tableRef(rt, rt.R(bi), i));
+                int rj = rt.Push(Table.tableRef(rt, rt.R(bi), i));
+                bool same = Equal(rt, rt.R(ri), rt.R(rj));
                 rt.PopTo(ri);
                 if (!same) { rt.PopTo(bas); return false; }
             }

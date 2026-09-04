@@ -480,6 +480,26 @@ for prog in churn collections control green hosted lazy maps numbers opcodes reg
     > /tmp/flint-c-jvm.out 2>&1 \
     || { tail -3 /tmp/flint-c-jvm.out; echo "  FAIL $prog disagrees with native [jvm]"; exit 1; }
   echo "  ok   $prog agrees with the native runtime [jvm]"
+  # AND AGAIN WITH THE COLLECTOR RUNNING AT EVERY ALLOCATION.
+  #
+  # A rooting bug -- a value read into a host local, held across a call that
+  # allocates, used after -- is invisible unless a collection lands in that
+  # exact window. Normal running almost never puts one there; `-Dflint.gcstress`
+  # puts one everywhere.
+  #
+  # It found three, all in `Eq`, all shipped: two in `seqEq` and one in the
+  # table loop whose own comment said "BOTH SIDES ROOTED" while rooting one.
+  # Before this row they were reachable only by noticing a 600-row conformance
+  # answer was wrong and bisecting it.
+  #
+  # It costs nothing measurable -- a suite that runs in a second still runs in
+  # a second -- because these programs allocate far less than the JVM's own
+  # startup costs.
+  "$JDK/bin/java" -Dflint.gcstress=1 -cp runtimes/jvm/classes RtImage "out/conform/$prog.img" "$want" \
+    > /tmp/flint-c-jvm-stress.out 2>&1 \
+    || { tail -3 /tmp/flint-c-jvm-stress.out
+         echo "  FAIL $prog disagrees under GC STRESS -- a rooting bug [jvm]"; exit 1; }
+  echo "  ok     ... and under a collection at every allocation [jvm]"
   if [ -n "$CLR" ]; then
     "$CLR" --rt-image "out/conform/$prog.img" "$want" > /tmp/flint-c-clr.out 2>&1 \
       || { tail -3 /tmp/flint-c-clr.out; echo "  FAIL $prog disagrees with native [clr]"; exit 1; }
