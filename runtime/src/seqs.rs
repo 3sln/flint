@@ -107,11 +107,14 @@ impl Rt {
             // reachable divergence, and the ports are the ones matching
             // Clojure, which refuses anything it cannot make an ISeq from.
             //
-            // The KIND matches the ports exactly, which is what a `catch`
-            // dispatches on. The MESSAGE does not: theirs names the value
-            // through `describe`, and saying that here needs string building,
-            // which is the capability `seq` is waiting on to be generated at
-            // all.
+            // The MESSAGE still does not name the value, and now that is a
+            // BUDGET decision rather than a missing capability. `describe`
+            // exists on all three targets as of `kin/describe.kin`, and the
+            // sentence is one `alloc::format!` away -- measured at 2 935 bytes
+            // in every shipped module, against 1 220 bytes of headroom under
+            // the 304 000 floor. Unused, `describe` costs nothing: the shaker
+            // removes it whole, measured at 302 780 either way. Calling it
+            // here is what makes every program carry it.
             _ => self.throw_str(
                 "UnsupportedOperationException",
                 "seq over this type needs more of the data structures",

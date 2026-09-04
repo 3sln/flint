@@ -7,6 +7,7 @@ pub mod assoc;
 pub mod champ;
 pub mod collnode;
 pub mod copies;
+pub mod nouns;
 pub mod dissoc;
 pub mod eq;
 pub mod eqalloc;

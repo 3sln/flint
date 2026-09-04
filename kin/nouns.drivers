@@ -1,0 +1,175 @@
+--rust-head
+// The runtime is `no_std` with `alloc`, so the generated code names
+// `alloc::string::String`. A probe binary is ordinary `std`, where that path
+// exists only once the crate is linked -- so link it, rather than let the
+// generated text be adjusted to suit the fixture.
+extern crate alloc;
+type Addr = u32;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TRUE: Value = Value(0xFFFE);
+const FALSE: Value = Value(0xFFFD);
+const TY_STR: u8 = 2; const TY_SYM: u8 = 4; const TY_KW: u8 = 5;
+const TY_CONS: u8 = 6; const TY_EMPTY_LIST: u8 = 7; const TY_LAZYSEQ: u8 = 8;
+const TY_VEC: u8 = 9; const TY_VECSEQ: u8 = 11; const TY_RANGE: u8 = 13;
+const TY_ARRAYMAP: u8 = 14; const TY_HASHMAP: u8 = 15; const TY_SET: u8 = 16;
+const TY_MAPENTRY: u8 = 20; const TY_CLOSURE: u8 = 21; const TY_NATIVEFN: u8 = 22;
+const TY_TVEC: u8 = 23; const TY_TMAP: u8 = 24; const TY_TSET: u8 = 25;
+const TY_ROPE: u8 = 26; const TY_BYTES: u8 = 27; const TY_RECORD: u8 = 28;
+const TY_ATOM: u8 = 29; const TY_VAR: u8 = 30; const TY_DELAY: u8 = 31;
+const TY_REGEX: u8 = 32; const TY_MULTIFN: u8 = 33; const TY_REDUCED: u8 = 34;
+const TY_EXINFO: u8 = 35;
+impl Value {
+    // The fixture's immediates, banded so each predicate is one range test.
+    // The REAL runtime NaN-boxes these; what matters to `describe` is only
+    // that the eight predicates are mutually exclusive and that `is_heap`
+    // excludes every one of them -- which is the property this encoding has
+    // and the tagging scheme is free to have differently.
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 < 0xD000 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn is_fixnum(self) -> bool { self.0 < 100 }
+    fn is_double(self) -> bool { self.0 >= 0xF000 && self.0 < 0xF100 }
+    fn is_inline_str(self) -> bool { self.0 >= 0xE000 && self.0 < 0xE100 }
+    fn is_inline_kw(self) -> bool { self.0 >= 0xD000 && self.0 < 0xD100 }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+struct Gc { sp: Vec<u8> }
+struct Rt { gc: Gc, bump: u64 }
+impl Rt {
+    fn mk(&mut self, t: u8) -> Value { let a = self.bump; self.bump += 1; self.gc.sp[a as usize] = t; Value(a) }
+}
+fn ty(sp: &Vec<u8>, a: Addr) -> u8 { sp[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { gc: Gc { sp: vec![0u8; 4000] }, bump: 100 };
+    let mut o = String::new();
+    let heaps: [(&str, u8); 30] = [
+        ("str", TY_STR), ("sym", TY_SYM), ("kw", TY_KW), ("cons", TY_CONS),
+        ("empty", TY_EMPTY_LIST), ("lazy", TY_LAZYSEQ), ("vec", TY_VEC),
+        ("vecseq", TY_VECSEQ), ("range", TY_RANGE), ("amap", TY_ARRAYMAP),
+        ("hmap", TY_HASHMAP), ("set", TY_SET), ("entry", TY_MAPENTRY),
+        ("closure", TY_CLOSURE), ("native", TY_NATIVEFN), ("tvec", TY_TVEC),
+        ("tmap", TY_TMAP), ("tset", TY_TSET), ("rope", TY_ROPE),
+        ("bytes", TY_BYTES), ("record", TY_RECORD), ("atom", TY_ATOM),
+        ("var", TY_VAR), ("delay", TY_DELAY), ("regex", TY_REGEX),
+        ("multi", TY_MULTIFN), ("reduced", TY_REDUCED), ("exinfo", TY_EXINFO),
+        ("unknown", 99), ("unknown2", 200),
+    ];
+    for (label, t) in heaps.iter() {
+        let v = rt.mk(*t);
+        o.push_str(&format!("{}={} ", label, rt.describe(v)));
+    }
+    for (label, v) in [("nil", NIL), ("true", TRUE), ("false", FALSE),
+                       ("int", Value(7)), ("dbl", Value(0xF001)),
+                       ("istr", Value(0xE001)), ("ikw", Value(0xD001)),
+                       ("odd", Value(0xF500))].iter() {
+        o.push_str(&format!("{}={} ", label, rt.describe(*v)));
+    }
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL, TRUE = 0xFFFEL, FALSE = 0xFFFDL;
+    static final int TY_STR = 2, TY_SYM = 4, TY_KW = 5, TY_CONS = 6;
+    static final int TY_EMPTY_LIST = 7, TY_LAZYSEQ = 8, TY_VEC = 9, TY_VECSEQ = 11;
+    static final int TY_RANGE = 13, TY_ARRAYMAP = 14, TY_HASHMAP = 15, TY_SET = 16;
+    static final int TY_MAPENTRY = 20, TY_CLOSURE = 21, TY_NATIVEFN = 22;
+    static final int TY_TVEC = 23, TY_TMAP = 24, TY_TSET = 25, TY_ROPE = 26;
+    static final int TY_BYTES = 27, TY_RECORD = 28, TY_ATOM = 29, TY_VAR = 30;
+    static final int TY_DELAY = 31, TY_REGEX = 32, TY_MULTIFN = 33;
+    static final int TY_REDUCED = 34, TY_EXINFO = 35;
+    static final class Val {
+        static boolean isHeap(long v) { return v >= 100 && v < 0xD000L; }
+        static long asHeap(long v) { return v; }
+        static boolean isNil(long v) { return v == NIL; }
+        static boolean isFixnum(long v) { return v < 100; }
+        static boolean isDouble(long v) { return v >= 0xF000L && v < 0xF100L; }
+        static boolean isInlineStr(long v) { return v >= 0xE000L && v < 0xE100L; }
+        static boolean isInlineKw(long v) { return v >= 0xD000L && v < 0xD100L; }
+        static final long TRUE = Probe.TRUE, FALSE = Probe.FALSE;
+    }
+    static final class Rt {
+        static final class GcT { int[] sp = new int[4000]; }
+        GcT gc = new GcT();
+        long bump = 100;
+        long mk(int t) { long a = bump; bump += 1; gc.sp[(int) a] = t; return a; }
+    }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        String[] labels = {"str","sym","kw","cons","empty","lazy","vec","vecseq",
+            "range","amap","hmap","set","entry","closure","native","tvec","tmap",
+            "tset","rope","bytes","record","atom","var","delay","regex","multi",
+            "reduced","exinfo","unknown","unknown2"};
+        int[] tags = {TY_STR,TY_SYM,TY_KW,TY_CONS,TY_EMPTY_LIST,TY_LAZYSEQ,TY_VEC,
+            TY_VECSEQ,TY_RANGE,TY_ARRAYMAP,TY_HASHMAP,TY_SET,TY_MAPENTRY,TY_CLOSURE,
+            TY_NATIVEFN,TY_TVEC,TY_TMAP,TY_TSET,TY_ROPE,TY_BYTES,TY_RECORD,TY_ATOM,
+            TY_VAR,TY_DELAY,TY_REGEX,TY_MULTIFN,TY_REDUCED,TY_EXINFO,99,200};
+        for (int i = 0; i < labels.length; i++) {
+            long v = rt.mk(tags[i]);
+            o.append(labels[i]).append('=').append(describe(rt, v)).append(' ');
+        }
+        String[] il = {"nil","true","false","int","dbl","istr","ikw","odd"};
+        long[] iv = {NIL, TRUE, FALSE, 7L, 0xF001L, 0xE001L, 0xD001L, 0xF500L};
+        for (int i = 0; i < il.length; i++) {
+            o.append(il[i]).append('=').append(describe(rt, iv[i])).append(' ');
+        }
+        System.out.println(o.toString());
+    }
+--csharp-head
+    internal static class Obj {
+        internal const int TyStr = 2, TySym = 4, TyKw = 5, TyCons = 6;
+        internal const int TyEmptyList = 7, TyLazyseq = 8, TyVec = 9, TyVecseq = 11;
+        internal const int TyRange = 13, TyArraymap = 14, TyHashmap = 15, TySet = 16;
+        internal const int TyMapentry = 20, TyClosure = 21, TyNativefn = 22;
+        internal const int TyTvec = 23, TyTmap = 24, TyTset = 25, TyRope = 26;
+        internal const int TyBytes = 27, TyRecord = 28, TyAtom = 29, TyVar = 30;
+        internal const int TyDelay = 31, TyRegex = 32, TyMultifn = 33;
+        internal const int TyReduced = 34, TyExinfo = 35;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL, True = 0xFFFEL, False = 0xFFFDL;
+        internal static bool IsHeap(long v) { return v >= 100 && v < 0xD000L; }
+        internal static long AsHeap(long v) { return v; }
+        internal static bool IsNil(long v) { return v == Nil; }
+        internal static bool IsFixnum(long v) { return v < 100; }
+        internal static bool IsDouble(long v) { return v >= 0xF000L && v < 0xF100L; }
+        internal static bool IsInlineStr(long v) { return v >= 0xE000L && v < 0xE100L; }
+        internal static bool IsInlineKw(long v) { return v >= 0xD000L && v < 0xD100L; }
+    }
+    internal sealed class Rt {
+        internal sealed class GcT { internal int[] sp = new int[4000]; }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal long Mk(int t) { long a = bump; bump += 1; gc.sp[(int) a] = t; return a; }
+    }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        string[] labels = {"str","sym","kw","cons","empty","lazy","vec","vecseq",
+            "range","amap","hmap","set","entry","closure","native","tvec","tmap",
+            "tset","rope","bytes","record","atom","var","delay","regex","multi",
+            "reduced","exinfo","unknown","unknown2"};
+        int[] tags = {Obj.TyStr,Obj.TySym,Obj.TyKw,Obj.TyCons,Obj.TyEmptyList,
+            Obj.TyLazyseq,Obj.TyVec,Obj.TyVecseq,Obj.TyRange,Obj.TyArraymap,
+            Obj.TyHashmap,Obj.TySet,Obj.TyMapentry,Obj.TyClosure,Obj.TyNativefn,
+            Obj.TyTvec,Obj.TyTmap,Obj.TyTset,Obj.TyRope,Obj.TyBytes,Obj.TyRecord,
+            Obj.TyAtom,Obj.TyVar,Obj.TyDelay,Obj.TyRegex,Obj.TyMultifn,
+            Obj.TyReduced,Obj.TyExinfo,99,200};
+        for (int i = 0; i < labels.Length; i++) {
+            long v = rt.Mk(tags[i]);
+            o.Append(labels[i]).Append('=').Append(Describe(rt, v)).Append(' ');
+        }
+        string[] il = {"nil","true","false","int","dbl","istr","ikw","odd"};
+        long[] iv = {Val.Nil, Val.True, Val.False, 7L, 0xF001L, 0xE001L, 0xD001L, 0xF500L};
+        for (int i = 0; i < il.Length; i++) {
+            o.Append(il[i]).Append('=').Append(Describe(rt, iv[i])).Append(' ');
+        }
+        System.Console.WriteLine(o.ToString());
+    }

@@ -70,6 +70,16 @@
 (def RootIx
   "An index into the shadow stack. `usize` in Rust, `int` in the other two."
   {:name 'RootIx :types {:rust "usize" :java "int" :csharp "int"} :methods {}})
+(def Text
+  "A HOST string, which is not a flint string VALUE.
+
+  The message an error carries, and nothing else -- `Value` is what a program
+  sees, and a `Text` never reaches one. The two are different types in all
+  three targets and mixing them would compile in Java and C#, where both are
+  objects, and not in Rust, which is the direction a divergence should fail."
+  {:name 'Text
+   :types {:rust "alloc::string::String" :java "String" :csharp "string"}
+   :methods {}})
 
 (def F64
   "A double. The one place `Value` is unwrapped to a host float -- `range`
@@ -113,6 +123,7 @@
   {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
 
 (def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'U32 U32 'RootIx RootIx
+               'Text Text
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'U32s U32s 'U64s U64s 'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
@@ -358,6 +369,12 @@
                          :java "Num.f64({0}, {1})"
                          :csharp "Num.F64({0}, {1})"})
     'nil? (core/call {:rust "{1}.is_nil()" :java "Val.isNil({1})" :csharp "Val.IsNil({1})"})
+    'is-double (core/call {:rust "{1}.is_double()"
+                           :java "Val.isDouble({1})" :csharp "Val.IsDouble({1})"})
+    'is-inline-str (core/call {:rust "{1}.is_inline_str()"
+                               :java "Val.isInlineStr({1})" :csharp "Val.IsInlineStr({1})"})
+    'is-inline-kw (core/call {:rust "{1}.is_inline_kw()"
+                              :java "Val.isInlineKw({1})" :csharp "Val.IsInlineKw({1})"})
     ;; Is this value a FIXNUM? The companion to `nil?`, and needed wherever a
     ;; slot holds "a number or nothing" -- a cons's cached count, a vector's
     ;; cached hash. Same receiver-first shape as `nil?`.
@@ -679,6 +696,57 @@
     'next-of (core/call {:rust "{0}.next({1})"
                          :java "com.flint.rt.Seqs.next({0}, {1})"
                          :csharp "global::Flint.Rt.Seqs.Next({0}, {1})"})
+
+    ;; --- STRING BUILDING, hole 5 -----------------------------------------
+    ;;
+    ;; THE FIRST FORM HERE WHOSE EMIT IS CODE RATHER THAN DATA, and that is the
+    ;; whole of what hole 5 was. Every other form is a template with numbered
+    ;; slots, which works because the arity is fixed. `str-cat` is VARIADIC,
+    ;; and Rust's `format!` needs a LITERAL format string -- so the Rust side
+    ;; has to build `"{}{}{}"` from the argument count, which no template can
+    ;; do. kin already allowed this: a form is `(fn [ctx form] ...)`, which is
+    ;; how `for` and `while` are written. Nothing in kin had to change.
+    ;;
+    ;; EVERY PIECE IS AN ARGUMENT, including the literals: Rust gets
+    ;; `format!("{}{}", "col :", x)` and never `format!("col :{}", x)`. Putting
+    ;; a literal into the format string would mean escaping every `{` a message
+    ;; happens to contain, and a message that says `{` is not hypothetical --
+    ;; `describe` prints map syntax. The inline form is prettier and the
+    ;; argument form cannot be wrong.
+    ;; A LITERAL as a `Text`. The ports return the literal itself -- both spell
+    ;; a string constant as a `String`/`string` already -- and Rust's literal is
+    ;; a `&'static str`, which is not the `String` the function returns. So the
+    ;; conversion lives on the Rust side only, and it allocates: `describe` is
+    ;; an error path, called when a program is already about to be told it did
+    ;; something wrong, and paying an allocation there to have ONE source is
+    ;; the trade this port makes everywhere.
+    'text (core/call {:rust "alloc::string::String::from({0})"
+                      :java "{0}" :csharp "{0}"}
+                     {:tag Text})
+
+    'str-cat
+    (fn [ctx form]
+      (let [args (mapv (fn [f] (kin/render ctx f)) (rest form))
+            code (if (= :rust (core/t ctx))
+                   (str "alloc::format!(\"" (str/join (repeat (count args) "{}"))
+                        "\", " (str/join ", " args) ")")
+                   ;; Java and C# concatenate, and the parens matter: this may
+                   ;; sit inside a larger expression, and `+` binds looser than
+                   ;; the call it might land in.
+                   (str "(" (str/join " + " args) ")"))]
+        (kin/tagged! ctx Text)
+        (if (= :statement (kin/position ctx))
+          (kin/emit! ctx (kin/indent-of ctx) code ";\n")
+          (kin/emit! ctx code))))
+
+    ;; `throw-str` takes a BUILT message, hoisted into a `let` by the source.
+    ;; Rust's `throw_str` wants `&str` and `str-cat` answers a `String`, so the
+    ;; `&` lives here; and the hoist is not optional there, because building
+    ;; the message calls `&mut self` methods and so does `throw_str`.
+    'throw-str (core/call {:rust "{0}.throw_str({1}, &{2})"
+                           :java "{0}.throwStr({1}, {2})"
+                           :csharp "{0}.ThrowStr({1}, {2})"}
+                          {:tag Value})
 
     'alloc (core/call {:rust "{0}.alloc({1}, {2})"
                        :java "{0}.alloc({1}, {2})"

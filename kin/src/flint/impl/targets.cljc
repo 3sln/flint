@@ -305,7 +305,28 @@
         self (last (str/split (str ns-name) #"\."))
         pkg (generated-ns :java ns-name)
         cls (pascal self)
-        siblings (siblings-used forms self)]
+        siblings (siblings-used forms self)
+        ;; CS0542: A C# MEMBER CANNOT SHARE ITS ENCLOSING TYPE'S NAME. This
+        ;; convention makes the collision reachable -- the class is the
+        ;; namespace's last segment pascalised, so `flint.rt.describe` holding
+        ;; a `describe` emits `static class Describe { string Describe(...) }`.
+        ;; Rust and Java accept it; only the CLR refuses, and it refuses in a
+        ;; GENERATED file, pointing at a line nobody wrote, during a build that
+        ;; runs long after the source was edited. Both names are known right
+        ;; here, so this says it in terms of the source instead.
+        _ (doseq [f (body-of forms)
+                  :when (and (seq? f) (= 'defn (first f)))
+                  :let [nm (pascal (second f))]
+                  :when (= nm cls)]
+            (throw (ex-info
+                    (str "kin/flint: C# would emit `" nm "` into a class also"
+                         " called `" cls "`, and a member cannot share its"
+                         " enclosing type's name (CS0542). The class name is the"
+                         " namespace's last segment, so rename the NAMESPACE"
+                         " `" ns-name "` or the function `" (second f) "`."
+                         " Rust and Java accept this, so nothing else will"
+                         " tell you.")
+                    {:function (second f) :class cls :ns ns-name :target :csharp})))]
     (module-file
      ctx ns-name "//"
      (str "package " pkg ";\n\n"
