@@ -1,0 +1,193 @@
+;; Writing to a map: `assoc`, `dissoc`, and the promotion between the two
+;; representations.
+;;
+;; A map starts FLAT -- `[meta, hash, k,v, ...]` scanned linearly -- and stays
+;; that way up to `ARRAY_MAP_MAX` entries. Past that it becomes a CHAMP, and
+;; `promote` is the one-way door between them. Small maps are the common case
+;; and a scan beats a hash on them, which is the whole reason for two shapes.
+;;
+;; `champ-added` is how a CHAMP write reports whether the count moved. It is a
+;; field on the runtime rather than a returned pair, because the return value
+;; is already the new node and neither port can return two values without
+;; allocating something to hold them.
+(ns flint.rt.mapwrite
+  (:require [flint.impl.rt :refer [defn return if let local set do comment doc
+                                   for not == != < .
+                                   mark push r set-r pop-to slot set-slot
+                                   ty as-heap
+                                   hash-value empty-map
+                                   + - *
+                                   Rt Value RootIx I32 Ty NIL
+                                   AM_BASE AM_META HM_ROOT HM_META
+                                   ARRAY_MAP_MAX TY_ARRAYMAP TY_HASHMAP
+                                   TY_TABLEREF ref-to-map]]
+            [flint.rt.mapcore :refer [map-count am-key am-val
+                                      new-array-map new-hash-map]]
+            [flint.rt.mapread :refer [am-index-of]]
+            [flint.rt.collnode :refer [bn-new]]
+            [flint.rt.assoc    :refer [node-assoc]]
+            [flint.rt.dissoc   :refer [node-dissoc]]))
+
+(doc "An array map rebuilt as a CHAMP. The one-way door between the two"
+     "representations, taken when a flat map outgrows ARRAY_MAP_MAX.")
+(defn ^:method ^Value promote [^:mut ^Rt rt ^Value m]
+  (let [^RootIx base (mark rt)
+        ^RootIx mi (push rt m)
+        ^I32 n (map-count rt m)
+        ^Value root (bn-new rt 0 0 NIL)
+        ^RootIx ri (push rt root)]
+    (local ^:mut ^I32 cnt)
+    (set cnt 0)
+    (for [^I32 i 0 n]
+      (comment "Each key is rooted before it is hashed: hashing a compound"
+               "key walks it, which allocates, which can move the map.")
+      (let [^Value pk (am-key rt (r rt mi) i)
+            ^RootIx ki (push rt pk)
+            ^Value pv (am-val rt (r rt mi) i)
+            ^RootIx vi (push rt pv)
+            ^I32 h (hash-value rt (r rt ki))
+            ^Value nr (node-assoc rt (r rt ri) 0 h (r rt ki) (r rt vi) NIL)]
+        (set-r rt ri nr)
+        (pop-to rt ki)
+        (if (. rt champ-added)
+          (set cnt (+ cnt 1)))))
+    (let [^Value rv (r rt ri)
+          ^Value out (new-hash-map rt cnt rv NIL)]
+      (pop-to rt base)
+      (return out))))
+
+(doc "`m` with `k` bound to `v`.")
+(defn ^:pub ^:method ^Value map-assoc [^:mut ^Rt rt ^Value m ^Value k ^Value v]
+  (let [^RootIx base (mark rt)
+        ^RootIx mi (push rt m)
+        ^RootIx ki (push rt k)
+        ^RootIx vi (push rt v)]
+    (local ^Value out)
+    (let [^Ty t (ty rt (as-heap m))]
+      (if (== t TY_ARRAYMAP)
+        (let [^I32 n (map-count rt m)
+              ^I32 found (am-index-of rt (r rt mi) (r rt ki))]
+          (if (!= found n)
+            (do
+              (comment "The key is already here: replace its value, or hand"
+                       "back the same map when the value is unchanged.")
+            (let [^Value old (am-val rt (r rt mi) found)]
+              (if (== old (r rt vi))
+                (set out (r rt mi))
+                (let [^Value fresh (new-array-map rt n)
+                      ^RootIx ni (push rt fresh)]
+                  (comment "HOISTED, and not written as one nested call: Rust"
+                           "refuses `self.set(.., self.am_key(..))` because"
+                           "`set` borrows mutably while `am_key` still borrows."
+                           "The ports do not care; one source obeys the stricter.")
+                  (for [^I32 j 0 n]
+                    (let [^Value kk (am-key rt (r rt mi) j)
+                          ^Value vv (am-val rt (r rt mi) j)]
+                      (set-slot rt (r rt ni) (+ AM_BASE (* 2 j)) kk)
+                      (set-slot rt (r rt ni) (+ (+ AM_BASE (* 2 j)) 1) vv)))
+                  (set-slot rt (r rt ni) (+ (+ AM_BASE (* 2 found)) 1) (r rt vi))
+                  (let [^Value mv (slot rt (r rt mi) AM_META)]
+                    (set-slot rt (r rt ni) AM_META mv))
+                  (set out (r rt ni))))))
+            (if (< n ARRAY_MAP_MAX)
+              (do
+                (comment "Room for one more, so it stays flat.")
+              (let [^Value fresh (new-array-map rt (+ n 1))
+                    ^RootIx ni (push rt fresh)]
+                (for [^I32 j 0 n]
+                  (let [^Value kk (am-key rt (r rt mi) j)
+                        ^Value vv (am-val rt (r rt mi) j)]
+                    (set-slot rt (r rt ni) (+ AM_BASE (* 2 j)) kk)
+                    (set-slot rt (r rt ni) (+ (+ AM_BASE (* 2 j)) 1) vv)))
+                (set-slot rt (r rt ni) (+ AM_BASE (* 2 n)) (r rt ki))
+                (set-slot rt (r rt ni) (+ (+ AM_BASE (* 2 n)) 1) (r rt vi))
+                (let [^Value mv (slot rt (r rt mi) AM_META)]
+                    (set-slot rt (r rt ni) AM_META mv))
+                (set out (r rt ni))))
+              (do
+                (comment "Full: promote and retry, which lands in the CHAMP"
+                         "arm because `promote` answers a hash map.")
+                (let [^Value grown2 (promote rt (r rt mi))
+                      ^RootIx pi (push rt grown2)]
+                  (set out (map-assoc rt (r rt pi) (r rt ki) (r rt vi))))))))
+        (if (== t TY_HASHMAP)
+          (let [^I32 cnt (map-count rt m)
+                ^I32 h (hash-value rt (r rt ki))
+                ^Value root (slot rt (r rt mi) HM_ROOT)
+                ^RootIx ri (push rt root)]
+            (set (. rt champ-added) false)
+            (let [^Value nr (node-assoc rt (r rt ri) 0 h (r rt ki) (r rt vi) NIL)]
+              (if (== nr (r rt ri))
+                (set out (r rt mi))
+                (let [^RootIx nri (push rt nr)]
+                  (local ^:mut ^I32 grown)
+                  (set grown cnt)
+                  (if (. rt champ-added)
+                    (set grown (+ cnt 1)))
+                  (let [^Value hmeta (slot rt (r rt mi) HM_META)]
+                    (set out (new-hash-map rt grown (r rt nri) hmeta)))))))
+          (set out NIL))))
+    (pop-to rt base)
+    (return out)))
+
+(doc "`m` without `k`.")
+(defn ^:pub ^:method ^Value map-dissoc [^:mut ^Rt rt ^Value m ^Value k]
+  (comment "A ROW REF answers here, as it does in `map-get`. `is-map` is true"
+           "for one and `dissoc`'s builtin guards on it, so a ref arrived here"
+           "and fell to the NIL below: `(dissoc row :b)` was nil on all four"
+           "runtimes while `assoc`, `get`, `count` and `=` all worked."
+           ""
+           "It MATERIALISES rather than removing a column, because the schema"
+           "is closed and there is no row ref with one column missing.")
+  (if (== (ty rt (as-heap m)) TY_TABLEREF)
+    (do
+      (let [^RootIx rbase (mark rt)
+            ^RootIx rki (push rt k)
+            ^Value asmap (ref-to-map rt m)
+            ^RootIx rmi (push rt asmap)
+            ^Value handed (map-dissoc rt (r rt rmi) (r rt rki))]
+        (pop-to rt rbase)
+        (return handed))))
+  (let [^RootIx base (mark rt)
+        ^RootIx mi (push rt m)
+        ^RootIx ki (push rt k)]
+    (local ^Value out)
+    (let [^Ty t (ty rt (as-heap m))]
+      (if (== t TY_ARRAYMAP)
+        (let [^I32 n (map-count rt (r rt mi))
+              ^I32 found (am-index-of rt (r rt mi) (r rt ki))]
+          (if (== found n)
+            (set out (r rt mi))
+            (let [^Value fresh (new-array-map rt (- n 1))
+                  ^RootIx ni (push rt fresh)]
+              (local ^:mut ^I32 d)
+              (set d 0)
+              (for [^I32 j 0 n]
+                (if (!= j found)
+                  (let [^Value kk (am-key rt (r rt mi) j)
+                        ^Value vv (am-val rt (r rt mi) j)]
+                    (set-slot rt (r rt ni) (+ AM_BASE (* 2 d)) kk)
+                    (set-slot rt (r rt ni) (+ (+ AM_BASE (* 2 d)) 1) vv)
+                    (set d (+ d 1)))))
+              (let [^Value mv (slot rt (r rt mi) AM_META)]
+                    (set-slot rt (r rt ni) AM_META mv))
+              (set out (r rt ni)))))
+        (if (== t TY_HASHMAP)
+          (let [^I32 h (hash-value rt (r rt ki))
+                ^Value root (slot rt (r rt mi) HM_ROOT)
+                ^RootIx ri (push rt root)]
+            (set (. rt champ-added) false)
+            (let [^Value nr (node-dissoc rt (r rt ri) 0 h (r rt ki) NIL)]
+              (if (not (. rt champ-added))
+                (set out (r rt mi))
+                (if (== nr (r rt ri))
+                  (set out (r rt mi))
+                  (let [^I32 cnt (- (map-count rt (r rt mi)) 1)
+                        ^RootIx nri (push rt nr)]
+                    (if (== cnt 0)
+                      (set out (empty-map rt))
+                      (let [^Value hmeta (slot rt (r rt mi) HM_META)]
+                        (set out (new-hash-map rt cnt (r rt nri) hmeta)))))))))
+          (set out NIL))))
+    (pop-to rt base)
+    (return out)))

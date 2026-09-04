@@ -316,7 +316,7 @@ public static class Codec {
                 for (int k = 0; k < n * 2; k++) rt.Push(DecodeAt(rt, r, live, depth + 1));
                 int acc = rt.Push(rt.roots.shared.Singletons[Rt.SingEmptyMap]);
                 for (int k = 0; k < n; k++) {
-                    rt.SetR(acc, Maps.Assoc(rt, rt.R(acc), rt.R(bas + k * 2), rt.R(bas + k * 2 + 1)));
+                    rt.SetR(acc, Mapwrite.MapAssoc(rt, rt.R(acc), rt.R(bas + k * 2), rt.R(bas + k * 2 + 1)));
                 }
                 long outv = rt.R(acc);
                 rt.PopTo(bas);

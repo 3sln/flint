@@ -486,6 +486,9 @@
     'empty-map (core/call {:rust "{0}.empty_map()"
                            :java "com.flint.rt.Maps.empty({0})"
                            :csharp "Flint.Rt.Maps.Empty({0})"})
+    'ref-to-map (core/call {:rust "{0}.ref_to_map({1})"
+                            :java "Table.refToMap({0}, {1})"
+                            :csharp "Flint.Rt.Table.refToMap({0}, {1})"})
     'ref-get (core/call {:rust "{0}.ref_get({1}, {2}, {3})"
                          :java "Table.refGet({0}, {1}, {2}, {3})"
                          :csharp "Flint.Rt.Table.refGet({0}, {1}, {2}, {3})"})

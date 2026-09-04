@@ -62,7 +62,7 @@ public static class Sets {
     public static long Conj(Rt rt, long s, long x) {
         int bas = rt.Mark();
         int si = rt.Push(s), xi = rt.Push(x);
-        long nm = Maps.Assoc(rt, rt.Slot(rt.R(si), S_MAP), rt.R(xi), rt.R(xi));
+        long nm = Mapwrite.MapAssoc(rt, rt.Slot(rt.R(si), S_MAP), rt.R(xi), rt.R(xi));
         int ni = rt.Push(nm);
         long outv = NewSet(rt, rt.R(ni), rt.Slot(rt.R(si), S_META));
         rt.PopTo(bas);
@@ -72,7 +72,7 @@ public static class Sets {
     public static long Disj(Rt rt, long s, long x) {
         int bas = rt.Mark();
         int si = rt.Push(s), xi = rt.Push(x);
-        long nm = Maps.Dissoc(rt, rt.Slot(rt.R(si), S_MAP), rt.R(xi));
+        long nm = Mapwrite.MapDissoc(rt, rt.Slot(rt.R(si), S_MAP), rt.R(xi));
         int ni = rt.Push(nm);
         long outv = NewSet(rt, rt.R(ni), rt.Slot(rt.R(si), S_META));
         rt.PopTo(bas);

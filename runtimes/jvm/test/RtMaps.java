@@ -1,3 +1,4 @@
+import flint.rt.Mapwrite;
 import flint.rt.Mapread;
 import flint.rt.Mapcore;
 import com.flint.rt.*;
@@ -42,32 +43,32 @@ public class RtMaps {
     int base = rt.mark();
     int m = rt.push(Maps.empty(rt));
     ok("an empty map counts 0", Mapcore.mapCount(rt, rt.r(m)) == 0);
-    for (int i = 0; i < 8; i++) rt.setR(m, Maps.assoc(rt, rt.r(m), k(rt, i), Val.fixnum(i * 10)));
+    for (int i = 0; i < 8; i++) rt.setR(m, Mapwrite.mapAssoc(rt, rt.r(m), k(rt, i), Val.fixnum(i * 10)));
     ok("8 entries is still a flat array-map", Mapcore.isArrayMap(rt, rt.r(m)));
     ok("  and every one reads back", allPresent(rt, rt.r(m), 0, 8));
-    rt.setR(m, Maps.assoc(rt, rt.r(m), k(rt, 8), Val.fixnum(80)));
+    rt.setR(m, Mapwrite.mapAssoc(rt, rt.r(m), k(rt, 8), Val.fixnum(80)));
     ok("the 9th promotes to a CHAMP trie", !Mapcore.isArrayMap(rt, rt.r(m)) && Mapcore.isMap(rt, rt.r(m)));
     ok("  and nothing was lost crossing the boundary", allPresent(rt, rt.r(m), 0, 9));
 
     // --- a big map, in and out.
     final int N = 2000;
     rt.setR(m, Maps.empty(rt));
-    for (int i = 0; i < N; i++) rt.setR(m, Maps.assoc(rt, rt.r(m), k(rt, i), Val.fixnum(i * 10)));
+    for (int i = 0; i < N; i++) rt.setR(m, Mapwrite.mapAssoc(rt, rt.r(m), k(rt, i), Val.fixnum(i * 10)));
     ok(N + " keys, all present, count agrees", Mapcore.mapCount(rt, rt.r(m)) == N && allPresent(rt, rt.r(m), 0, N));
     ok("a key that was never added is absent",
        Mapread.mapGet(rt, rt.r(m), Val.fixnum(-1), Val.NIL) == Val.NIL);
     // Re-assoc with the same value must not grow the map.
-    rt.setR(m, Maps.assoc(rt, rt.r(m), k(rt, 5), Val.fixnum(50)));
+    rt.setR(m, Mapwrite.mapAssoc(rt, rt.r(m), k(rt, 5), Val.fixnum(50)));
     ok("re-assoc with an identical value does not grow it", Mapcore.mapCount(rt, rt.r(m)) == N);
 
     // --- CANONICAL FORM: the property CHAMP is chosen for.
     int viaDelete = rt.push(rt.r(m));
     for (int i = 0; i < N; i += 2) {
-      rt.setR(viaDelete, Maps.dissoc(rt, rt.r(viaDelete), k(rt, i)));
+      rt.setR(viaDelete, Mapwrite.mapDissoc(rt, rt.r(viaDelete), k(rt, i)));
     }
     int direct = rt.push(Maps.empty(rt));
     for (int i = 1; i < N; i += 2) {
-      rt.setR(direct, Maps.assoc(rt, rt.r(direct), k(rt, i), Val.fixnum(i * 10)));
+      rt.setR(direct, Mapwrite.mapAssoc(rt, rt.r(direct), k(rt, i), Val.fixnum(i * 10)));
     }
     ok("built-by-deleting and built-directly have the same count",
        Mapcore.mapCount(rt, rt.r(viaDelete)) == Mapcore.mapCount(rt, rt.r(direct)));
@@ -97,16 +98,16 @@ public class RtMaps {
       int c = rt.push(Maps.empty(rt));
       // Padded past the array-map, or the collision never reaches a trie node
       // and the collision-node code is not what is being exercised.
-      for (int i = 0; i < 20; i++) rt.setR(c, Maps.assoc(rt, rt.r(c), Val.fixnum(1000000 + i), Val.fixnum(i)));
+      for (int i = 0; i < 20; i++) rt.setR(c, Mapwrite.mapAssoc(rt, rt.r(c), Val.fixnum(1000000 + i), Val.fixnum(i)));
       int ka = rt.push(Str.of(rt, "Aa"));
       int kb = rt.push(Str.of(rt, "BB"));
-      rt.setR(c, Maps.assoc(rt, rt.r(c), rt.r(ka), Val.fixnum(111)));
-      rt.setR(c, Maps.assoc(rt, rt.r(c), rt.r(kb), Val.fixnum(222)));
+      rt.setR(c, Mapwrite.mapAssoc(rt, rt.r(c), rt.r(ka), Val.fixnum(111)));
+      rt.setR(c, Mapwrite.mapAssoc(rt, rt.r(c), rt.r(kb), Val.fixnum(222)));
       ok("both colliding keys are stored and distinct",
          Val.asFixnum(Mapread.mapGet(rt, rt.r(c), rt.r(ka), Val.NIL)) == 111
          && Val.asFixnum(Mapread.mapGet(rt, rt.r(c), rt.r(kb), Val.NIL)) == 222);
       ok("  and the count counts them both", Mapcore.mapCount(rt, rt.r(c)) == 22);
-      rt.setR(c, Maps.dissoc(rt, rt.r(c), rt.r(ka)));
+      rt.setR(c, Mapwrite.mapDissoc(rt, rt.r(c), rt.r(ka)));
       ok("  removing one leaves the other",
          Mapread.mapGet(rt, rt.r(c), rt.r(ka), Val.NIL) == Val.NIL
          && Val.asFixnum(Mapread.mapGet(rt, rt.r(c), rt.r(kb), Val.NIL)) == 222);
@@ -116,11 +117,11 @@ public class RtMaps {
 
     // --- keys that are not fixnums, and a collection under collection.
     int s = rt.push(Maps.empty(rt));
-    rt.setR(s, Maps.assoc(rt, rt.r(s), Str.of(rt, "hello, world"), Val.fixnum(1)));
-    rt.setR(s, Maps.assoc(rt, rt.r(s), Str.keyword(rt, null, "kw"), Val.fixnum(2)));
+    rt.setR(s, Mapwrite.mapAssoc(rt, rt.r(s), Str.of(rt, "hello, world"), Val.fixnum(1)));
+    rt.setR(s, Mapwrite.mapAssoc(rt, rt.r(s), Str.keyword(rt, null, "kw"), Val.fixnum(2)));
     int vk = rt.push(Vec.empty(rt));
     rt.setR(vk, Vec.conj(rt, rt.r(vk), Val.fixnum(7)));
-    rt.setR(s, Maps.assoc(rt, rt.r(s), rt.r(vk), Val.fixnum(3)));
+    rt.setR(s, Mapwrite.mapAssoc(rt, rt.r(s), rt.r(vk), Val.fixnum(3)));
     // A SEPARATE but equal key must find the same entry -- that is the whole
     // difference between `=` and identity, and where interning would be a
     // shortcut rather than the answer.

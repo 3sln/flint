@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapwrite;
+
 import flint.rt.Mapread;
 
 import flint.rt.Mapcore;
@@ -66,7 +68,7 @@ public final class Sets {
     public static long conj(Rt rt, long s, long x) {
         int base = rt.mark();
         int si = rt.push(s), xi = rt.push(x);
-        long nm = Maps.assoc(rt, rt.slot(rt.r(si), S_MAP), rt.r(xi), rt.r(xi));
+        long nm = Mapwrite.mapAssoc(rt, rt.slot(rt.r(si), S_MAP), rt.r(xi), rt.r(xi));
         int ni = rt.push(nm);
         long out = newSet(rt, rt.r(ni), rt.slot(rt.r(si), S_META));
         rt.popTo(base);
@@ -76,7 +78,7 @@ public final class Sets {
     public static long disj(Rt rt, long s, long x) {
         int base = rt.mark();
         int si = rt.push(s), xi = rt.push(x);
-        long nm = Maps.dissoc(rt, rt.slot(rt.r(si), S_MAP), rt.r(xi));
+        long nm = Mapwrite.mapDissoc(rt, rt.slot(rt.r(si), S_MAP), rt.r(xi));
         int ni = rt.push(nm);
         long out = newSet(rt, rt.r(ni), rt.slot(rt.r(si), S_META));
         rt.popTo(base);

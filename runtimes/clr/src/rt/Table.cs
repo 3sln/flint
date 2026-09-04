@@ -133,7 +133,7 @@ public static class Table {
             }
             rt.SetR(ni, Vec.Conj(rt, rt.R(ni), nm));
             rt.SetR(ti, Vec.Conj(rt, rt.R(ti), tp));
-            rt.SetR(ii, Maps.Assoc(rt, rt.R(ii), nm, Val.Fixnum(i)));
+            rt.SetR(ii, Mapwrite.MapAssoc(rt, rt.R(ii), nm, Val.Fixnum(i)));
             rt.SetR(di, Vec.Conj(rt, rt.R(di), Val.Fixnum(i)));
         }
         long s = newObj(rt, Obj.TySchema, SC_LEN);
@@ -342,7 +342,7 @@ public static class Table {
             int nmi = rt.Push(name);
             long v = refGet(rt, rt.R(ri), rt.R(nmi), Val.Nil);
             int vi = rt.Push(v);
-            rt.SetR(mi, Maps.Assoc(rt, rt.R(mi), rt.R(nmi), rt.R(vi)));
+            rt.SetR(mi, Mapwrite.MapAssoc(rt, rt.R(mi), rt.R(nmi), rt.R(vi)));
             rt.PopTo(nmi);
         }
         long outv = rt.R(mi);
@@ -588,7 +588,7 @@ public static class Table {
         int vi = rt.Push(v);
         long m = refToMap(rt, rt.R(ri));
         int mi = rt.Push(m);
-        long outv = Maps.Assoc(rt, rt.R(mi), rt.R(ki), rt.R(vi));
+        long outv = Mapwrite.MapAssoc(rt, rt.R(mi), rt.R(ki), rt.R(vi));
         rt.PopTo(bas);
         return outv;
     }
@@ -625,7 +625,7 @@ public static class Table {
             int old = schemaId(rt, rt.R(hi), rt.R(nmi));
             int id = old >= 0 ? old : width++;
             rt.SetR(di, Vec.Conj(rt, rt.R(di), Val.Fixnum(id)));
-            rt.SetR(ii, Maps.Assoc(rt, rt.R(ii), rt.R(nmi), Val.Fixnum(id)));
+            rt.SetR(ii, Mapwrite.MapAssoc(rt, rt.R(ii), rt.R(nmi), Val.Fixnum(id)));
             rt.PopTo(nmi);
         }
         long sc = newObj(rt, Obj.TySchema, SC_LEN);

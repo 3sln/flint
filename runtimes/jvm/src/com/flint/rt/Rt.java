@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapwrite;
+
 import flint.rt.Mapread;
 
 import flint.rt.Mapcore;
@@ -800,7 +802,7 @@ public final class Rt {
                     int mi = push(Maps.empty(this));
                     int at = roots.stackTop - 2 * nv;
                     for (int i = 0; i < nv; i++) {
-                        long nm = Maps.assoc(this, r(mi), roots.stack[at + 2 * i],
+                        long nm = Mapwrite.mapAssoc(this, r(mi), roots.stack[at + 2 * i],
                                              roots.stack[at + 2 * i + 1]);
                         setR(mi, nm);
                     }

@@ -6,6 +6,7 @@ import static com.flint.rt.Obj.*;
 import static flint.rt.Assoc.*;
 import static flint.rt.Mapcore.*;
 import static flint.rt.Mapread.*;
+import static flint.rt.Mapwrite.*;
 import static flint.rt.Champ.*;
 import static flint.rt.Collnode.*;
 import static flint.rt.Dissoc.*;
@@ -107,143 +108,8 @@ public final class Maps {
 
 
 
-    static long promote(Rt rt, long m) {
-        int base = rt.mark();
-        int mi = rt.push(m);
-        int n = mapCount(rt, m);
-        int ri = rt.push(bnNew(rt, 0, 0, Val.NIL));
-        int cnt = 0;
-        for (int i = 0; i < n; i++) {
-            int ki = rt.push(amKey(rt, rt.r(mi), i));
-            int vi = rt.push(amVal(rt, rt.r(mi), i));
-            int h = Eq.hashValue(rt, rt.r(ki));
-            long nr = nodeAssoc(rt, rt.r(ri), 0, h, rt.r(ki), rt.r(vi), Val.NIL);
-            rt.setR(ri, nr);
-            rt.popTo(ki);
-            if (rt.champAdded) cnt++;
-        }
-        long out = newHashMap(rt, cnt, rt.r(ri), Val.NIL);
-        rt.popTo(base);
-        return out;
-    }
 
-    public static long assoc(Rt rt, long m, long k, long v) {
-        int base = rt.mark();
-        int mi = rt.push(m), ki = rt.push(k), vi = rt.push(v);
-        long out;
-        int t = ty(rt.gc.sp, Val.asHeap(m));
-        if (t == TY_ARRAYMAP) {
-            int n = mapCount(rt, m);
-            // `amIndexOf` answers `n` when absent -- the sentinel the CHAMP
-            // paths already use -- not `-1`.
-            int i = amIndexOf(rt, rt.r(mi), rt.r(ki));
-            if (i != n) {
-                long old = amVal(rt, rt.r(mi), i);
-                if (old == rt.r(vi)) {
-                    out = rt.r(mi);
-                } else {
-                    int ni = rt.push(newArrayMap(rt, n));
-                    for (int j = 0; j < n; j++) {
-                        amSet(rt, rt.r(ni), AM_BASE + 2 * j, amKey(rt, rt.r(mi), j));
-                        amSet(rt, rt.r(ni), AM_BASE + 2 * j + 1, amVal(rt, rt.r(mi), j));
-                    }
-                    amSet(rt, rt.r(ni), AM_BASE + 2 * i + 1, rt.r(vi));
-                    amSet(rt, rt.r(ni), AM_META, rt.slot(rt.r(mi), AM_META));
-                    out = rt.r(ni);
-                }
-            } else if (n < ARRAY_MAP_MAX) {
-                int ni = rt.push(newArrayMap(rt, n + 1));
-                for (int j = 0; j < n; j++) {
-                    amSet(rt, rt.r(ni), AM_BASE + 2 * j, amKey(rt, rt.r(mi), j));
-                    amSet(rt, rt.r(ni), AM_BASE + 2 * j + 1, amVal(rt, rt.r(mi), j));
-                }
-                amSet(rt, rt.r(ni), AM_BASE + 2 * n, rt.r(ki));
-                amSet(rt, rt.r(ni), AM_BASE + 2 * n + 1, rt.r(vi));
-                amSet(rt, rt.r(ni), AM_META, rt.slot(rt.r(mi), AM_META));
-                out = rt.r(ni);
-            } else {
-                int pi = rt.push(promote(rt, rt.r(mi)));
-                out = assoc(rt, rt.r(pi), rt.r(ki), rt.r(vi));
-            }
-        } else if (t == TY_HASHMAP) {
-            int cnt = mapCount(rt, m);
-            int h = Eq.hashValue(rt, rt.r(ki));
-            int ri = rt.push(rt.slot(rt.r(mi), HM_ROOT));
-            rt.champAdded = false;
-            long nr = nodeAssoc(rt, rt.r(ri), 0, h, rt.r(ki), rt.r(vi), Val.NIL);
-            if (nr == rt.r(ri)) {
-                out = rt.r(mi);
-            } else {
-                int nri = rt.push(nr);
-                boolean added = rt.champAdded;
-                long meta = rt.slot(rt.r(mi), HM_META);
-                out = newHashMap(rt, cnt + (added ? 1 : 0), rt.r(nri), meta);
-            }
-        } else {
-            out = Val.NIL;
-        }
-        rt.popTo(base);
-        return out;
-    }
 
-    public static long dissoc(Rt rt, long m, long k) {
-        // A ROW REF answers here, exactly as it does in `get`. `isMap` says
-        // true for one, and `dissoc`'s builtin guards on `isMap`, so a ref
-        // arrived here and fell through to the NIL at the bottom.
-        // `(dissoc row :b)` was nil on all four runtimes while `assoc`,
-        // `get`, `count` and `=` on the same ref all worked.
-        //
-        // It materialises rather than removing a column: the schema is CLOSED
-        // (`doc/decisions/0026`), so there is no such thing as a row ref with
-        // one column missing. `refAssoc` already takes the same way out.
-        if (ty(rt.gc.sp, Val.asHeap(m)) == Obj.TY_TABLEREF) {
-            int rb = rt.mark();
-            int rki = rt.push(k);
-            int rmi = rt.push(Table.refToMap(rt, m));
-            long r = dissoc(rt, rt.r(rmi), rt.r(rki));
-            rt.popTo(rb);
-            return r;
-        }
-        int base = rt.mark();
-        int mi = rt.push(m), ki = rt.push(k);
-        long out;
-        int t = ty(rt.gc.sp, Val.asHeap(m));
-        if (t == TY_ARRAYMAP) {
-            int i = amIndexOf(rt, rt.r(mi), rt.r(ki));
-            if (i == mapCount(rt, rt.r(mi))) {
-                out = rt.r(mi);
-            } else {
-                int n = mapCount(rt, rt.r(mi));
-                int ni = rt.push(newArrayMap(rt, n - 1));
-                int d = 0;
-                for (int j = 0; j < n; j++) {
-                    if (j == i) continue;
-                    amSet(rt, rt.r(ni), AM_BASE + 2 * d, amKey(rt, rt.r(mi), j));
-                    amSet(rt, rt.r(ni), AM_BASE + 2 * d + 1, amVal(rt, rt.r(mi), j));
-                    d++;
-                }
-                amSet(rt, rt.r(ni), AM_META, rt.slot(rt.r(mi), AM_META));
-                out = rt.r(ni);
-            }
-        } else if (t == TY_HASHMAP) {
-            int h = Eq.hashValue(rt, rt.r(ki));
-            int ri = rt.push(rt.slot(rt.r(mi), HM_ROOT));
-            rt.champAdded = false;
-            long nr = nodeDissoc(rt, rt.r(ri), 0, h, rt.r(ki), Val.NIL);
-            if (!rt.champAdded || nr == rt.r(ri)) {
-                out = rt.r(mi);
-            } else {
-                int cnt = mapCount(rt, rt.r(mi)) - 1;
-                int nri = rt.push(nr);
-                long meta = rt.slot(rt.r(mi), HM_META);
-                out = cnt == 0 ? empty(rt) : newHashMap(rt, cnt, rt.r(nri), meta);
-            }
-        } else {
-            out = Val.NIL;
-        }
-        rt.popTo(base);
-        return out;
-    }
 
     // --- traversal -----------------------------------------------------------
 

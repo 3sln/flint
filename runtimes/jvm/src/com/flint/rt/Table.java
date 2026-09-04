@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapwrite;
+
 import flint.rt.Mapread;
 
 import flint.rt.Mapcore;
@@ -138,7 +140,7 @@ public final class Table {
             }
             rt.setR(ni, Vec.conj(rt, rt.r(ni), nm));
             rt.setR(ti, Vec.conj(rt, rt.r(ti), tp));
-            rt.setR(ii, Maps.assoc(rt, rt.r(ii), nm, Val.fixnum(i)));
+            rt.setR(ii, Mapwrite.mapAssoc(rt, rt.r(ii), nm, Val.fixnum(i)));
             rt.setR(di, Vec.conj(rt, rt.r(di), Val.fixnum(i)));
         }
         long s = newObj(rt, TY_SCHEMA, SC_LEN);
@@ -347,7 +349,7 @@ public final class Table {
             int nmi = rt.push(name);
             long v = refGet(rt, rt.r(ri), rt.r(nmi), Val.NIL);
             int vi = rt.push(v);
-            rt.setR(mi, Maps.assoc(rt, rt.r(mi), rt.r(nmi), rt.r(vi)));
+            rt.setR(mi, Mapwrite.mapAssoc(rt, rt.r(mi), rt.r(nmi), rt.r(vi)));
             rt.popTo(nmi);
         }
         long out = rt.r(mi);
@@ -593,7 +595,7 @@ public final class Table {
         int vi = rt.push(v);
         long m = refToMap(rt, rt.r(ri));
         int mi = rt.push(m);
-        long out = Maps.assoc(rt, rt.r(mi), rt.r(ki), rt.r(vi));
+        long out = Mapwrite.mapAssoc(rt, rt.r(mi), rt.r(ki), rt.r(vi));
         rt.popTo(base);
         return out;
     }
@@ -630,7 +632,7 @@ public final class Table {
             int old = schemaId(rt, rt.r(hi), rt.r(nmi));
             int id = old >= 0 ? old : width++;
             rt.setR(di, Vec.conj(rt, rt.r(di), Val.fixnum(id)));
-            rt.setR(ii, Maps.assoc(rt, rt.r(ii), rt.r(nmi), Val.fixnum(id)));
+            rt.setR(ii, Mapwrite.mapAssoc(rt, rt.r(ii), rt.r(nmi), Val.fixnum(id)));
             rt.popTo(nmi);
         }
         long sc = newObj(rt, TY_SCHEMA, SC_LEN);

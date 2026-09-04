@@ -2,6 +2,8 @@ using System.Text;
 
 namespace Flint.Rt;
 
+using flint.rt;
+
 /// The image loader, ported from `runtime/src/image.rs`.
 ///
 ///   "FLINTIMG" u32 version
@@ -212,7 +214,7 @@ public static class Img {
                 for (int i = 0; i < 2 * n; i++) rt.Push(consts[(int) r.U32()]);
                 int mi = rt.Push(Maps.Empty(rt));
                 for (int i = 0; i < n; i++) {
-                    rt.SetR(mi, Maps.Assoc(rt, rt.R(mi), rt.R(bas + 2 * i), rt.R(bas + 2 * i + 1)));
+                    rt.SetR(mi, Mapwrite.MapAssoc(rt, rt.R(mi), rt.R(bas + 2 * i), rt.R(bas + 2 * i + 1)));
                 }
                 long outv = rt.R(mi);
                 rt.PopTo(bas);

@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapwrite;
+
 import flint.rt.Mapcore;
 
 import java.io.ByteArrayOutputStream;
@@ -318,7 +320,7 @@ public final class Codec {
                 for (int k = 0; k < n * 2; k++) rt.push(decodeAt(rt, r, live, depth + 1));
                 int acc = rt.push(rt.roots.shared.singletons[Rt.SING_EMPTY_MAP]);
                 for (int k = 0; k < n; k++) {
-                    rt.setR(acc, Maps.assoc(rt, rt.r(acc), rt.r(base + k * 2), rt.r(base + k * 2 + 1)));
+                    rt.setR(acc, Mapwrite.mapAssoc(rt, rt.r(acc), rt.r(base + k * 2), rt.r(base + k * 2 + 1)));
                 }
                 long out = rt.r(acc);
                 rt.popTo(base);

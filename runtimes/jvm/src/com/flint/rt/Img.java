@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapwrite;
+
 import static com.flint.rt.Obj.*;
 
 /// The image loader, ported from `runtime/src/image.rs`.
@@ -215,7 +217,7 @@ public final class Img {
                 for (int i = 0; i < 2 * n; i++) rt.push(consts[(int) r.u32()]);
                 int mi = rt.push(Maps.empty(rt));
                 for (int i = 0; i < n; i++) {
-                    rt.setR(mi, Maps.assoc(rt, rt.r(mi), rt.r(base + 2 * i), rt.r(base + 2 * i + 1)));
+                    rt.setR(mi, Mapwrite.mapAssoc(rt, rt.r(mi), rt.r(base + 2 * i), rt.r(base + 2 * i + 1)));
                 }
                 long out = rt.r(mi);
                 rt.popTo(base);

@@ -5,6 +5,7 @@ using flint.rt;
 using static flint.rt.Assoc;
 using static flint.rt.Mapcore;
 using static flint.rt.Mapread;
+using static flint.rt.Mapwrite;
 using static flint.rt.Champ;
 using static flint.rt.Collnode;
 using static flint.rt.Dissoc;
@@ -104,142 +105,8 @@ public static class Maps {
 
 
 
-    static long Promote(Rt rt, long m) {
-        int bas = rt.Mark();
-        int mi = rt.Push(m);
-        int n = MapCount(rt, m);
-        int ri = rt.Push(BnNew(rt, 0, 0, Val.Nil));
-        int cnt = 0;
-        for (int i = 0; i < n; i++) {
-            int ki = rt.Push(AmKey(rt, rt.R(mi), i));
-            int vi = rt.Push(AmVal(rt, rt.R(mi), i));
-            int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
-            long nr = NodeAssoc(rt, rt.R(ri), 0, h, rt.R(ki), rt.R(vi), Val.Nil);
-            rt.SetR(ri, nr);
-            rt.PopTo(ki);
-            if (rt.champAdded) cnt++;
-        }
-        long outv = NewHashMap(rt, cnt, rt.R(ri), Val.Nil);
-        rt.PopTo(bas);
-        return outv;
-    }
 
-    public static long Assoc(Rt rt, long m, long k, long v) {
-        int bas = rt.Mark();
-        int mi = rt.Push(m), ki = rt.Push(k), vi = rt.Push(v);
-        long outv;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
-        if (t == Obj.TyArraymap) {
-            int n = MapCount(rt, m);
-            // `AmIndexOf` answers `n` when absent, not -1.
-            int i = AmIndexOf(rt, rt.R(mi), rt.R(ki));
-            if (i != n) {
-                long old = AmVal(rt, rt.R(mi), i);
-                if (old == rt.R(vi)) {
-                    outv = rt.R(mi);
-                } else {
-                    int ni = rt.Push(NewArrayMap(rt, n));
-                    for (int j = 0; j < n; j++) {
-                        AmSet(rt, rt.R(ni), AM_BASE + 2 * j, AmKey(rt, rt.R(mi), j));
-                        AmSet(rt, rt.R(ni), AM_BASE + 2 * j + 1, AmVal(rt, rt.R(mi), j));
-                    }
-                    AmSet(rt, rt.R(ni), AM_BASE + 2 * i + 1, rt.R(vi));
-                    AmSet(rt, rt.R(ni), AM_META, rt.Slot(rt.R(mi), AM_META));
-                    outv = rt.R(ni);
-                }
-            } else if (n < ARRAY_MAP_MAX) {
-                int ni = rt.Push(NewArrayMap(rt, n + 1));
-                for (int j = 0; j < n; j++) {
-                    AmSet(rt, rt.R(ni), AM_BASE + 2 * j, AmKey(rt, rt.R(mi), j));
-                    AmSet(rt, rt.R(ni), AM_BASE + 2 * j + 1, AmVal(rt, rt.R(mi), j));
-                }
-                AmSet(rt, rt.R(ni), AM_BASE + 2 * n, rt.R(ki));
-                AmSet(rt, rt.R(ni), AM_BASE + 2 * n + 1, rt.R(vi));
-                AmSet(rt, rt.R(ni), AM_META, rt.Slot(rt.R(mi), AM_META));
-                outv = rt.R(ni);
-            } else {
-                int pi = rt.Push(Promote(rt, rt.R(mi)));
-                outv = Assoc(rt, rt.R(pi), rt.R(ki), rt.R(vi));
-            }
-        } else if (t == Obj.TyHashmap) {
-            int cnt = MapCount(rt, m);
-            int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
-            int ri = rt.Push(rt.Slot(rt.R(mi), HM_ROOT));
-            rt.champAdded = false;
-            long nr = NodeAssoc(rt, rt.R(ri), 0, h, rt.R(ki), rt.R(vi), Val.Nil);
-            if (nr == rt.R(ri)) {
-                outv = rt.R(mi);
-            } else {
-                int nri = rt.Push(nr);
-                bool added = rt.champAdded;
-                long meta = rt.Slot(rt.R(mi), HM_META);
-                outv = NewHashMap(rt, cnt + (added ? 1 : 0), rt.R(nri), meta);
-            }
-        } else {
-            outv = Val.Nil;
-        }
-        rt.PopTo(bas);
-        return outv;
-    }
 
-    public static long Dissoc(Rt rt, long m, long k) {
-        // A ROW REF answers here, exactly as it does in `get`. `IsMap` says
-        // true for one, and `dissoc`'s builtin guards on `IsMap`, so a ref
-        // arrived here and fell through to the NIL at the bottom.
-        // `(dissoc row :b)` was nil on all four runtimes while `assoc`,
-        // `get`, `count` and `=` on the same ref all worked.
-        //
-        // It materialises rather than removing a column: the schema is CLOSED
-        // (`doc/decisions/0026`), so there is no such thing as a row ref with
-        // one column missing. `RefAssoc` already takes the same way out.
-        if (Obj.Ty(rt.gc.sp, Val.AsHeap(m)) == Obj.TyTableref) {
-            int rb = rt.Mark();
-            int rki = rt.Push(k);
-            int rmi = rt.Push(Table.refToMap(rt, m));
-            long r = Dissoc(rt, rt.R(rmi), rt.R(rki));
-            rt.PopTo(rb);
-            return r;
-        }
-        int bas = rt.Mark();
-        int mi = rt.Push(m), ki = rt.Push(k);
-        long outv;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
-        if (t == Obj.TyArraymap) {
-            int i = AmIndexOf(rt, rt.R(mi), rt.R(ki));
-            if (i == MapCount(rt, rt.R(mi))) {
-                outv = rt.R(mi);
-            } else {
-                int n = MapCount(rt, rt.R(mi));
-                int ni = rt.Push(NewArrayMap(rt, n - 1));
-                int d = 0;
-                for (int j = 0; j < n; j++) {
-                    if (j == i) continue;
-                    AmSet(rt, rt.R(ni), AM_BASE + 2 * d, AmKey(rt, rt.R(mi), j));
-                    AmSet(rt, rt.R(ni), AM_BASE + 2 * d + 1, AmVal(rt, rt.R(mi), j));
-                    d++;
-                }
-                AmSet(rt, rt.R(ni), AM_META, rt.Slot(rt.R(mi), AM_META));
-                outv = rt.R(ni);
-            }
-        } else if (t == Obj.TyHashmap) {
-            int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
-            int ri = rt.Push(rt.Slot(rt.R(mi), HM_ROOT));
-            rt.champAdded = false;
-            long nr = NodeDissoc(rt, rt.R(ri), 0, h, rt.R(ki), Val.Nil);
-            if (!rt.champAdded || nr == rt.R(ri)) {
-                outv = rt.R(mi);
-            } else {
-                int cnt = MapCount(rt, rt.R(mi)) - 1;
-                int nri = rt.Push(nr);
-                long meta = rt.Slot(rt.R(mi), HM_META);
-                outv = cnt == 0 ? Empty(rt) : NewHashMap(rt, cnt, rt.R(nri), meta);
-            }
-        } else {
-            outv = Val.Nil;
-        }
-        rt.PopTo(bas);
-        return outv;
-    }
 
     // --- traversal -----------------------------------------------------------
 

@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapwrite;
+
 import flint.rt.Mapread;
 
 import flint.rt.Mapcore;
@@ -348,7 +350,7 @@ public final class Builtins {
                 int ai = rt.push(v);
                 for (int i = 1; i < n; i++) {
                     long e = rt.vat(at + i);
-                    rt.setR(ai, Maps.assoc(rt, rt.r(ai), Seqs.first(rt, e), Seqs.first(rt, Seqs.rest(rt, e))));
+                    rt.setR(ai, Mapwrite.mapAssoc(rt, rt.r(ai), Seqs.first(rt, e), Seqs.first(rt, Seqs.rest(rt, e))));
                 }
                 long out = rt.r(ai);
                 rt.popTo(base);
@@ -577,7 +579,7 @@ rt.describe(v) + " is not a transient");
                 int base = rt.mark();
                 int ai = rt.push(acc);
                 for (int i = 1; i + 1 < n; i += 2) {
-                    long nm = Maps.assoc(rt, rt.r(ai), rt.vat(at + i), rt.vat(at + i + 1));
+                    long nm = Mapwrite.mapAssoc(rt, rt.r(ai), rt.vat(at + i), rt.vat(at + i + 1));
                     rt.setR(ai, nm);
                 }
                 long out = rt.r(ai);
@@ -653,7 +655,7 @@ rt.describe(v) + " is not a transient");
             int base = rt.mark();
             int ai = rt.push(acc);
             for (int i = 1; i < n; i++) {
-                long nm = Maps.dissoc(rt, rt.r(ai), rt.vat(at + i));
+                long nm = Mapwrite.mapDissoc(rt, rt.r(ai), rt.vat(at + i));
                 rt.setR(ai, nm);
             }
             long out = rt.r(ai);
@@ -1387,7 +1389,7 @@ rt.describe(v) + " is not a transient");
                 // an allocation (`doc/decisions/0031`).
                 int ki = rt.push(Str.keyword(rt, null, GC_STAT_KEYS[i]));
                 long vv = Num.integer(rt, vals[i]);
-                rt.setR(mi, Maps.assoc(rt, rt.r(mi), rt.r(ki), vv));
+                rt.setR(mi, Mapwrite.mapAssoc(rt, rt.r(mi), rt.r(ki), vv));
                 rt.popTo(ki);
             }
             long out = rt.r(mi);

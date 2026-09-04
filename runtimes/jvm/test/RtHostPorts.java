@@ -1,3 +1,4 @@
+import flint.rt.Mapwrite;
 import com.flint.rt.*;
 import java.nio.file.*;
 import java.nio.charset.StandardCharsets;
@@ -157,7 +158,7 @@ public class RtHostPorts {
     int ki = rt.push(Str.keyword(rt, null, "fs"));
     int li = rt.push(Str.of(rt, "fs"));
     int oi = rt.push(rt.newOpaque(rt.r(li), 7));
-    rt.setR(mi, Maps.assoc(rt, rt.r(mi), rt.r(ki), rt.r(oi)));
+    rt.setR(mi, Mapwrite.mapAssoc(rt, rt.r(mi), rt.r(ki), rt.r(oi)));
     int vi = rt.push(Vec.empty(rt));
     rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(ai)));
     rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(mi)));

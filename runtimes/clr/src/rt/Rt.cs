@@ -742,7 +742,7 @@ public sealed class Rt : System.IDisposable {
                     int mi = Push(Maps.Empty(this));
                     int at2 = roots.StackTop - 2 * nv;
                     for (int i = 0; i < nv; i++) {
-                        long nm = Maps.Assoc(this, R(mi), roots.Stack[at2 + 2 * i],
+                        long nm = Mapwrite.MapAssoc(this, R(mi), roots.Stack[at2 + 2 * i],
                                              roots.Stack[at2 + 2 * i + 1]);
                         SetR(mi, nm);
                     }

@@ -335,7 +335,7 @@ public static class Builtins {
                 int ai = rt.Push(v);
                 for (int i = 1; i < n; i++) {
                     long e = rt.VAt(at + i);
-                    rt.SetR(ai, Maps.Assoc(rt, rt.R(ai), Seqs.First(rt, e), Seqs.First(rt, Seqs.Rest(rt, e))));
+                    rt.SetR(ai, Mapwrite.MapAssoc(rt, rt.R(ai), Seqs.First(rt, e), Seqs.First(rt, Seqs.Rest(rt, e))));
                 }
                 long outc = rt.R(ai);
                 rt.PopTo(bas);
@@ -541,7 +541,7 @@ public static class Builtins {
                 int bas = rt.Mark();
                 int ai = rt.Push(acc);
                 for (int i = 1; i + 1 < n; i += 2) {
-                    long nm = Maps.Assoc(rt, rt.R(ai), rt.VAt(at + i), rt.VAt(at + i + 1));
+                    long nm = Mapwrite.MapAssoc(rt, rt.R(ai), rt.VAt(at + i), rt.VAt(at + i + 1));
                     rt.SetR(ai, nm);
                 }
                 long outv = rt.R(ai);
@@ -615,7 +615,7 @@ public static class Builtins {
             int bas = rt.Mark();
             int ai = rt.Push(acc);
             for (int i = 1; i < n; i++) {
-                long nm = Maps.Dissoc(rt, rt.R(ai), rt.VAt(at + i));
+                long nm = Mapwrite.MapDissoc(rt, rt.R(ai), rt.VAt(at + i));
                 rt.SetR(ai, nm);
             }
             long o = rt.R(ai);
@@ -1303,7 +1303,7 @@ public static class Builtins {
                 // an allocation (`doc/decisions/0031`).
                 int ki = rt.Push(Str.Keyword(rt, null, GcStatKeys[i]));
                 long vv = Num.Integer(rt, vals[i]);
-                rt.SetR(mi, Maps.Assoc(rt, rt.R(mi), rt.R(ki), vv));
+                rt.SetR(mi, Mapwrite.MapAssoc(rt, rt.R(mi), rt.R(ki), vv));
                 rt.PopTo(ki);
             }
             long outv = rt.R(mi);

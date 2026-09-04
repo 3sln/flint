@@ -1,0 +1,324 @@
+--rust-head
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const AM_BASE: u32 = 2; const AM_META: u32 = 0;
+const HM_ROOT: u32 = 1; const HM_META: u32 = 2;
+const ARRAY_MAP_MAX: u32 = 8;
+const TY_ARRAYMAP: u8 = 14; const TY_HASHMAP: u8 = 15; const TY_TABLEREF: u8 = 50;
+impl Value { fn as_heap(self) -> u32 { self.0 as u32 } }
+struct Gc { sp: Vec<u8> }
+struct Rt { h: Vec<u64>, gc: Gc, counts: Vec<u32>, roots: Vec<Value>,
+            bump: u64, champ_added: bool, log: String, maxroots: usize }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize {
+        self.roots.push(v);
+        if self.roots.len() > self.maxroots { self.maxroots = self.roots.len(); }
+        self.roots.len() - 1
+    }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn set(&mut self, n: Value, i: u32, v: Value) { self.h[n.0 as usize + i as usize] = v.0; }
+    fn obj(&mut self, t: u8, tag: &str) -> Value {
+        let a = self.bump; self.bump += 24;
+        self.gc.sp[a as usize] = t; self.log.push_str(tag);
+        Value(a)
+    }
+    fn map_count(&self, m: Value) -> u32 { self.counts[m.0 as usize] }
+    fn am_key(&self, m: Value, i: u32) -> Value { Value(self.h[m.0 as usize + 2 + 2 * i as usize]) }
+    fn am_val(&self, m: Value, i: u32) -> Value { Value(self.h[m.0 as usize + 3 + 2 * i as usize]) }
+    fn new_array_map(&mut self, n: u32) -> Value {
+        let v = self.obj(TY_ARRAYMAP, "A"); self.counts[v.0 as usize] = n; v
+    }
+    fn new_hash_map(&mut self, cnt: u32, root: Value, meta: Value) -> Value {
+        let v = self.obj(TY_HASHMAP, "H");
+        self.counts[v.0 as usize] = cnt;
+        self.set(v, HM_ROOT, root); self.set(v, HM_META, meta);
+        v
+    }
+    fn am_index_of(&mut self, m: Value, k: Value) -> u32 {
+        let n = self.map_count(m);
+        for i in 0..n { if self.am_key(m, i) == k { return i; } }
+        n
+    }
+    fn hash_value(&mut self, v: Value) -> u32 { ((v.0 * 7) & 0xff) as u32 }
+    fn bn_new(&mut self, _d: u32, _n: u32, _e: Value) -> Value { self.obj(TY_HASHMAP, "B") }
+    fn node_assoc(&mut self, _n: Value, _s: u32, _h: u32, _k: Value, _v: Value, _e: Value) -> Value {
+        self.champ_added = true; self.obj(TY_HASHMAP, "N")
+    }
+    fn node_dissoc(&mut self, n: Value, _s: u32, h: u32, _k: Value, _e: Value) -> Value {
+        // h 0x77 means "found and removed"; anything else means untouched.
+        if h == 0x77 { self.champ_added = true; self.obj(TY_HASHMAP, "D") }
+        else { self.champ_added = false; n }
+    }
+    fn ref_to_map(&mut self, _r: Value) -> Value {
+        let v = self.obj(TY_ARRAYMAP, "M"); self.counts[v.0 as usize] = 0; v
+    }
+    fn empty_map(&self) -> Value { Value(0xE) }
+}
+fn ty(sp: &Vec<u8>, a: u32) -> u8 { sp[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 900], gc: Gc { sp: vec![0u8; 900] }, counts: vec![0; 900],
+                      roots: Vec::new(), bump: 100, champ_added: false,
+                      log: String::new(), maxroots: 0 };
+    // An array map at 60 with two entries, and a hash map at 80.
+    rt.gc.sp[60] = TY_ARRAYMAP; rt.counts[60] = 2;
+    rt.h[62] = 0x31; rt.h[63] = 0x32; rt.h[64] = 0x41; rt.h[65] = 0x42;
+    rt.gc.sp[80] = TY_HASHMAP; rt.counts[80] = 5; rt.h[81] = 90;
+    rt.gc.sp[70] = TY_TABLEREF;
+    let mut o = String::new();
+    // assoc: existing key with the SAME value hands the map straight back.
+    let a = rt.map_assoc(Value(60), Value(0x31), Value(0x32));
+    o.push_str(&format!("same={} ", (a == Value(60)) as u32));
+    // existing key, different value: a fresh flat map with the slot replaced.
+    let b = rt.map_assoc(Value(60), Value(0x31), Value(0x99));
+    o.push_str(&format!("repl={},{} ", rt.am_val(b, 0).0, rt.am_key(b, 1).0));
+    // a NEW key with room: appended, still flat.
+    let c = rt.map_assoc(Value(60), Value(0x51), Value(0x52));
+    o.push_str(&format!("grow={},{} ", rt.map_count(c), rt.am_key(c, 2).0));
+    // a new key with NO room: promotes, then takes the CHAMP arm.
+    rt.counts[60] = ARRAY_MAP_MAX;
+    let d = rt.map_assoc(Value(60), Value(0x61), Value(0x62));
+    o.push_str(&format!("promoted={} ", (ty(&rt.gc.sp, d.as_heap()) == TY_HASHMAP) as u32));
+    rt.counts[60] = 2;
+    // assoc into a hash map counts up when the key was new.
+    let e = rt.map_assoc(Value(80), Value(0x71), Value(0x72));
+    o.push_str(&format!("hcount={} ", rt.map_count(e)));
+    // dissoc: absent key hands the map back; present key shrinks it.
+    let f = rt.map_dissoc(Value(60), Value(0x99));
+    o.push_str(&format!("| miss={} ", (f == Value(60)) as u32));
+    let g = rt.map_dissoc(Value(60), Value(0x31));
+    o.push_str(&format!("shrunk={},{} ", rt.map_count(g), rt.am_key(g, 0).0));
+    // a ROW REF materialises rather than failing.
+    let refd = rt.map_dissoc(Value(70), Value(0x31));
+    o.push_str(&format!("ref={} ", (ty(&rt.gc.sp, refd.as_heap()) == TY_ARRAYMAP) as u32));
+    // dissoc from a hash map: untouched, then a real removal.
+    let h1 = rt.map_dissoc(Value(80), Value(0x01));
+    o.push_str(&format!("| huntouched={} ", (h1 == Value(80)) as u32));
+    let h2 = rt.map_dissoc(Value(80), Value(0x11));
+    o.push_str(&format!("hshrunk={} ", rt.map_count(h2)));
+    o.push_str(&format!("log={} roots={} max={}", rt.log, rt.roots.len(), rt.maxroots));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int AM_BASE = 2, AM_META = 0, HM_ROOT = 1, HM_META = 2;
+    static final int ARRAY_MAP_MAX = 8;
+    static final int TY_ARRAYMAP = 14, TY_HASHMAP = 15, TY_TABLEREF = 50;
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static long asHeap(long v) { return v; }
+    }
+    static final class Rt {
+        long[] h = new long[900];
+        static final class Gc { int[] sp = new int[900]; }
+        Gc gc = new Gc();
+        int[] counts = new int[900];
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        long bump = 100;
+        boolean champAdded = false;
+        StringBuilder log = new StringBuilder();
+        int maxroots = 0;
+        int mark() { return roots.size(); }
+        int push(long v) {
+            roots.add(v);
+            if (roots.size() > maxroots) maxroots = roots.size();
+            return roots.size() - 1;
+        }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long n, int i) { return h[(int) n + i]; }
+        void setSlot(long n, int i, long v) { h[(int) n + i] = v; }
+        long obj(int t, String tag) {
+            long a = bump; bump += 24; gc.sp[(int) a] = t; log.append(tag); return a;
+        }
+    }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+    // BARE: siblings come through `import static`.
+    static int mapCount(Rt rt, long m) { return rt.counts[(int) m]; }
+    static long amKey(Rt rt, long m, int i) { return rt.h[(int) m + 2 + 2 * i]; }
+    static long amVal(Rt rt, long m, int i) { return rt.h[(int) m + 3 + 2 * i]; }
+    static long newArrayMap(Rt rt, int n) {
+        long v = rt.obj(TY_ARRAYMAP, "A"); rt.counts[(int) v] = n; return v;
+    }
+    static long newHashMap(Rt rt, int cnt, long root, long meta) {
+        long v = rt.obj(TY_HASHMAP, "H");
+        rt.counts[(int) v] = cnt;
+        rt.setSlot(v, HM_ROOT, root); rt.setSlot(v, HM_META, meta);
+        return v;
+    }
+    static int amIndexOf(Rt rt, long m, long k) {
+        int n = mapCount(rt, m);
+        for (int i = 0; i < n; i++) if (amKey(rt, m, i) == k) return i;
+        return n;
+    }
+    static long bnNew(Rt rt, int d, int n, long e) { return rt.obj(TY_HASHMAP, "B"); }
+    static long nodeAssoc(Rt rt, long n, int s, int h, long k, long v, long e) {
+        rt.champAdded = true; return rt.obj(TY_HASHMAP, "N");
+    }
+    static long nodeDissoc(Rt rt, long n, int s, int h, long k, long e) {
+        if (h == 0x77) { rt.champAdded = true; return rt.obj(TY_HASHMAP, "D"); }
+        rt.champAdded = false; return n;
+    }
+    // Nested to reproduce the qualified names the vocabulary emits.
+    static final class com { static final class flint { static final class rt {
+        static final class Eq {
+            static int hashValue(Rt rt, long v) { return (int) ((v * 7) & 0xff); }
+        }
+        static final class Maps { static long empty(Rt rt) { return 0xEL; } }
+    } } }
+    static final class Table {
+        static long refToMap(Rt rt, long r) {
+            long v = rt.obj(TY_ARRAYMAP, "M"); rt.counts[(int) v] = 0; return v;
+        }
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        rt.gc.sp[60] = TY_ARRAYMAP; rt.counts[60] = 2;
+        rt.h[62] = 0x31; rt.h[63] = 0x32; rt.h[64] = 0x41; rt.h[65] = 0x42;
+        rt.gc.sp[80] = TY_HASHMAP; rt.counts[80] = 5; rt.h[81] = 90;
+        rt.gc.sp[70] = TY_TABLEREF;
+        StringBuilder o = new StringBuilder();
+        long a = mapAssoc(rt, 60, 0x31, 0x32);
+        o.append("same=").append(a == 60 ? 1 : 0).append(' ');
+        long b = mapAssoc(rt, 60, 0x31, 0x99);
+        o.append("repl=").append(amVal(rt, b, 0)).append(',').append(amKey(rt, b, 1)).append(' ');
+        long c = mapAssoc(rt, 60, 0x51, 0x52);
+        o.append("grow=").append(mapCount(rt, c)).append(',').append(amKey(rt, c, 2)).append(' ');
+        rt.counts[60] = ARRAY_MAP_MAX;
+        long d = mapAssoc(rt, 60, 0x61, 0x62);
+        o.append("promoted=").append(ty(rt.gc.sp, Val.asHeap(d)) == TY_HASHMAP ? 1 : 0).append(' ');
+        rt.counts[60] = 2;
+        long e = mapAssoc(rt, 80, 0x71, 0x72);
+        o.append("hcount=").append(mapCount(rt, e)).append(' ');
+        long f = mapDissoc(rt, 60, 0x99);
+        o.append("| miss=").append(f == 60 ? 1 : 0).append(' ');
+        long g = mapDissoc(rt, 60, 0x31);
+        o.append("shrunk=").append(mapCount(rt, g)).append(',').append(amKey(rt, g, 0)).append(' ');
+        long refd = mapDissoc(rt, 70, 0x31);
+        o.append("ref=").append(ty(rt.gc.sp, Val.asHeap(refd)) == TY_ARRAYMAP ? 1 : 0).append(' ');
+        long h1 = mapDissoc(rt, 80, 0x01);
+        o.append("| huntouched=").append(h1 == 80 ? 1 : 0).append(' ');
+        long h2 = mapDissoc(rt, 80, 0x11);
+        o.append("hshrunk=").append(mapCount(rt, h2)).append(' ');
+        o.append("log=").append(rt.log).append(" roots=").append(rt.roots.size())
+         .append(" max=").append(rt.maxroots);
+        System.out.println(o);
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    const int AM_BASE = 2, AM_META = 0, HM_ROOT = 1, HM_META = 2;
+    const int ARRAY_MAP_MAX = 8;
+    static class Obj {
+        internal const int TyArraymap = 14, TyHashmap = 15, TyTableref = 50;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static long AsHeap(long v) { return v; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[900];
+        internal sealed class GcT { internal int[] sp = new int[900]; }
+        internal GcT gc = new GcT();
+        internal int[] counts = new int[900];
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal long bump = 100;
+        internal bool champAdded = false;
+        internal StringBuilder log = new StringBuilder();
+        internal int maxroots = 0;
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) {
+            roots.Add(v);
+            if (roots.Count > maxroots) maxroots = roots.Count;
+            return roots.Count - 1;
+        }
+        internal long R(int i) { return roots[i]; }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+        internal void SetSlot(long n, int i, long v) { h[(int) n + i] = v; }
+        internal long ObjNew(int t, string tag) {
+            long a = bump; bump += 24; gc.sp[(int) a] = t; log.Append(tag); return a;
+        }
+    }
+    static int MapCount(Rt rt, long m) { return rt.counts[(int) m]; }
+    static long AmKey(Rt rt, long m, int i) { return rt.h[(int) m + 2 + 2 * i]; }
+    static long AmVal(Rt rt, long m, int i) { return rt.h[(int) m + 3 + 2 * i]; }
+    static long NewArrayMap(Rt rt, int n) {
+        long v = rt.ObjNew(Obj.TyArraymap, "A"); rt.counts[(int) v] = n; return v;
+    }
+    static long NewHashMap(Rt rt, int cnt, long root, long meta) {
+        long v = rt.ObjNew(Obj.TyHashmap, "H");
+        rt.counts[(int) v] = cnt;
+        rt.SetSlot(v, HM_ROOT, root); rt.SetSlot(v, HM_META, meta);
+        return v;
+    }
+    static int AmIndexOf(Rt rt, long m, long k) {
+        int n = MapCount(rt, m);
+        for (int i = 0; i < n; i++) if (AmKey(rt, m, i) == k) return i;
+        return n;
+    }
+    static long BnNew(Rt rt, int d, int n, long e) { return rt.ObjNew(Obj.TyHashmap, "B"); }
+    static long NodeAssoc(Rt rt, long n, int s, int h, long k, long v, long e) {
+        rt.champAdded = true; return rt.ObjNew(Obj.TyHashmap, "N");
+    }
+    static long NodeDissoc(Rt rt, long n, int s, int h, long k, long e) {
+        if (h == 0x77) { rt.champAdded = true; return rt.ObjNew(Obj.TyHashmap, "D"); }
+        rt.champAdded = false; return n;
+    }
+    internal static class Flint {
+        internal static class Rt {
+            internal static class Eq {
+                internal static int HashValue(Probe.Rt rt, long v) { return (int) ((v * 7) & 0xff); }
+            }
+            internal static class Maps { internal static long Empty(Probe.Rt rt) { return 0xEL; } }
+            internal static class Table {
+                internal static long refToMap(Probe.Rt rt, long r) {
+                    long v = rt.ObjNew(Obj.TyArraymap, "M"); rt.counts[(int) v] = 0; return v;
+                }
+            }
+        }
+    }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        rt.gc.sp[60] = Obj.TyArraymap; rt.counts[60] = 2;
+        rt.h[62] = 0x31; rt.h[63] = 0x32; rt.h[64] = 0x41; rt.h[65] = 0x42;
+        rt.gc.sp[80] = Obj.TyHashmap; rt.counts[80] = 5; rt.h[81] = 90;
+        rt.gc.sp[70] = Obj.TyTableref;
+        var o = new StringBuilder();
+        long a = MapAssoc(rt, 60, 0x31, 0x32);
+        o.Append("same=").Append(a == 60 ? 1 : 0).Append(' ');
+        long b = MapAssoc(rt, 60, 0x31, 0x99);
+        o.Append("repl=").Append(AmVal(rt, b, 0)).Append(',').Append(AmKey(rt, b, 1)).Append(' ');
+        long c = MapAssoc(rt, 60, 0x51, 0x52);
+        o.Append("grow=").Append(MapCount(rt, c)).Append(',').Append(AmKey(rt, c, 2)).Append(' ');
+        rt.counts[60] = ARRAY_MAP_MAX;
+        long d = MapAssoc(rt, 60, 0x61, 0x62);
+        o.Append("promoted=").Append(Obj.Ty(rt.gc.sp, Val.AsHeap(d)) == Obj.TyHashmap ? 1 : 0).Append(' ');
+        rt.counts[60] = 2;
+        long e = MapAssoc(rt, 80, 0x71, 0x72);
+        o.Append("hcount=").Append(MapCount(rt, e)).Append(' ');
+        long f = MapDissoc(rt, 60, 0x99);
+        o.Append("| miss=").Append(f == 60 ? 1 : 0).Append(' ');
+        long g = MapDissoc(rt, 60, 0x31);
+        o.Append("shrunk=").Append(MapCount(rt, g)).Append(',').Append(AmKey(rt, g, 0)).Append(' ');
+        long refd = MapDissoc(rt, 70, 0x31);
+        o.Append("ref=").Append(Obj.Ty(rt.gc.sp, Val.AsHeap(refd)) == Obj.TyArraymap ? 1 : 0).Append(' ');
+        long h1 = MapDissoc(rt, 80, 0x01);
+        o.Append("| huntouched=").Append(h1 == 80 ? 1 : 0).Append(' ');
+        long h2 = MapDissoc(rt, 80, 0x11);
+        o.Append("hshrunk=").Append(MapCount(rt, h2)).Append(' ');
+        o.Append("log=").Append(rt.log).Append(" roots=").Append(rt.roots.Count)
+         .Append(" max=").Append(rt.maxroots);
+        Console.WriteLine(o.ToString());
+    }

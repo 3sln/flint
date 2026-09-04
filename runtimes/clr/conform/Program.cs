@@ -437,7 +437,7 @@ public static class Program {
         int ki = rt.Push(Flint.Rt.Str.Keyword(rt, null, "fs"));
         int li = rt.Push(Flint.Rt.Str.Of(rt, "fs"));
         int oi = rt.Push(rt.NewOpaque(rt.R(li), 7));
-        rt.SetR(mi, Flint.Rt.Maps.Assoc(rt, rt.R(mi), rt.R(ki), rt.R(oi)));
+        rt.SetR(mi, flint.rt.Mapwrite.MapAssoc(rt, rt.R(mi), rt.R(ki), rt.R(oi)));
         int vi = rt.Push(Flint.Rt.Vec.Empty(rt));
         rt.SetR(vi, Flint.Rt.Vec.Conj(rt, rt.R(vi), rt.R(ai)));
         rt.SetR(vi, Flint.Rt.Vec.Conj(rt, rt.R(vi), rt.R(mi)));
@@ -770,32 +770,32 @@ public static class Program {
     int bas = rt.Mark();
     int m = rt.Push(Flint.Rt.Maps.Empty(rt));
     MOk("an empty map counts 0", flint.rt.Mapcore.MapCount(rt, rt.R(m)) == 0);
-    for (int i = 0; i < 8; i++) rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
+    for (int i = 0; i < 8; i++) rt.SetR(m, flint.rt.Mapwrite.MapAssoc(rt, rt.R(m), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
     MOk("8 entries is still a flat array-map", flint.rt.Mapcore.IsArrayMap(rt, rt.R(m)));
     MOk("  and every one reads back", AllPresent(rt, rt.R(m), 0, 8));
-    rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, 8), Flint.Rt.Val.Fixnum(80)));
+    rt.SetR(m, flint.rt.Mapwrite.MapAssoc(rt, rt.R(m), K(rt, 8), Flint.Rt.Val.Fixnum(80)));
     MOk("the 9th promotes to a CHAMP trie", !flint.rt.Mapcore.IsArrayMap(rt, rt.R(m)) && flint.rt.Mapcore.IsMap(rt, rt.R(m)));
     MOk("  and nothing was lost crossing the boundary", AllPresent(rt, rt.R(m), 0, 9));
 
     // --- a big map, in and out.
     const int N = 2000;
     rt.SetR(m, Flint.Rt.Maps.Empty(rt));
-    for (int i = 0; i < N; i++) rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
+    for (int i = 0; i < N; i++) rt.SetR(m, flint.rt.Mapwrite.MapAssoc(rt, rt.R(m), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
     MOk(N + " keys, all present, count agrees", flint.rt.Mapcore.MapCount(rt, rt.R(m)) == N && AllPresent(rt, rt.R(m), 0, N));
     MOk("a key that was never added is absent",
        flint.rt.Mapread.MapGet(rt, rt.R(m), Flint.Rt.Val.Fixnum(-1), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil);
     // Re-assoc with the same value must not grow the map.
-    rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, 5), Flint.Rt.Val.Fixnum(50)));
+    rt.SetR(m, flint.rt.Mapwrite.MapAssoc(rt, rt.R(m), K(rt, 5), Flint.Rt.Val.Fixnum(50)));
     MOk("re-assoc with an identical value does not grow it", flint.rt.Mapcore.MapCount(rt, rt.R(m)) == N);
 
     // --- CANONICAL FORM: the property CHAMP is chosen for.
     int viaDelete = rt.Push(rt.R(m));
     for (int i = 0; i < N; i += 2) {
-      rt.SetR(viaDelete, Flint.Rt.Maps.Dissoc(rt, rt.R(viaDelete), K(rt, i)));
+      rt.SetR(viaDelete, flint.rt.Mapwrite.MapDissoc(rt, rt.R(viaDelete), K(rt, i)));
     }
     int direct = rt.Push(Flint.Rt.Maps.Empty(rt));
     for (int i = 1; i < N; i += 2) {
-      rt.SetR(direct, Flint.Rt.Maps.Assoc(rt, rt.R(direct), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
+      rt.SetR(direct, flint.rt.Mapwrite.MapAssoc(rt, rt.R(direct), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
     }
     MOk("built-by-deleting and built-directly have the same count",
        flint.rt.Mapcore.MapCount(rt, rt.R(viaDelete)) == flint.rt.Mapcore.MapCount(rt, rt.R(direct)));
@@ -825,16 +825,16 @@ public static class Program {
       int c = rt.Push(Flint.Rt.Maps.Empty(rt));
       // Padded past the array-map, or the collision never reaches a trie node
       // and the collision-node code is not what is being exercised.
-      for (int i = 0; i < 20; i++) rt.SetR(c, Flint.Rt.Maps.Assoc(rt, rt.R(c), Flint.Rt.Val.Fixnum(1000000 + i), Flint.Rt.Val.Fixnum(i)));
+      for (int i = 0; i < 20; i++) rt.SetR(c, flint.rt.Mapwrite.MapAssoc(rt, rt.R(c), Flint.Rt.Val.Fixnum(1000000 + i), Flint.Rt.Val.Fixnum(i)));
       int ka = rt.Push(Flint.Rt.Str.Of(rt, "Aa"));
       int kb = rt.Push(Flint.Rt.Str.Of(rt, "BB"));
-      rt.SetR(c, Flint.Rt.Maps.Assoc(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Fixnum(111)));
-      rt.SetR(c, Flint.Rt.Maps.Assoc(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Fixnum(222)));
+      rt.SetR(c, flint.rt.Mapwrite.MapAssoc(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Fixnum(111)));
+      rt.SetR(c, flint.rt.Mapwrite.MapAssoc(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Fixnum(222)));
       MOk("both colliding keys are stored and distinct",
          Flint.Rt.Val.AsFixnum(flint.rt.Mapread.MapGet(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Nil)) == 111
          && Flint.Rt.Val.AsFixnum(flint.rt.Mapread.MapGet(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Nil)) == 222);
       MOk("  and the count counts them both", flint.rt.Mapcore.MapCount(rt, rt.R(c)) == 22);
-      rt.SetR(c, Flint.Rt.Maps.Dissoc(rt, rt.R(c), rt.R(ka)));
+      rt.SetR(c, flint.rt.Mapwrite.MapDissoc(rt, rt.R(c), rt.R(ka)));
       MOk("  removing one leaves the other",
          flint.rt.Mapread.MapGet(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil
          && Flint.Rt.Val.AsFixnum(flint.rt.Mapread.MapGet(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Nil)) == 222);
@@ -844,11 +844,11 @@ public static class Program {
 
     // --- keys that are not fixnums, and a collection under collection.
     int s = rt.Push(Flint.Rt.Maps.Empty(rt));
-    rt.SetR(s, Flint.Rt.Maps.Assoc(rt, rt.R(s), Flint.Rt.Str.Of(rt, "hello, world"), Flint.Rt.Val.Fixnum(1)));
-    rt.SetR(s, Flint.Rt.Maps.Assoc(rt, rt.R(s), Flint.Rt.Str.Keyword(rt, null, "kw"), Flint.Rt.Val.Fixnum(2)));
+    rt.SetR(s, flint.rt.Mapwrite.MapAssoc(rt, rt.R(s), Flint.Rt.Str.Of(rt, "hello, world"), Flint.Rt.Val.Fixnum(1)));
+    rt.SetR(s, flint.rt.Mapwrite.MapAssoc(rt, rt.R(s), Flint.Rt.Str.Keyword(rt, null, "kw"), Flint.Rt.Val.Fixnum(2)));
     int vk = rt.Push(Flint.Rt.Vec.Empty(rt));
     rt.SetR(vk, Flint.Rt.Vec.Conj(rt, rt.R(vk), Flint.Rt.Val.Fixnum(7)));
-    rt.SetR(s, Flint.Rt.Maps.Assoc(rt, rt.R(s), rt.R(vk), Flint.Rt.Val.Fixnum(3)));
+    rt.SetR(s, flint.rt.Mapwrite.MapAssoc(rt, rt.R(s), rt.R(vk), Flint.Rt.Val.Fixnum(3)));
     // A SEPARATE but equal key must find the same entry -- that is the whole
     // difference between `=` and identity, and where interning would be a
     // shortcut rather than the answer.
