@@ -24,7 +24,7 @@ impl Rt {
     /// could see -- and the hash is not carried from any source vector, because
     /// `new-vec` is called with new contents every time and a hash copied from
     /// the old one would be wrong rather than merely stale.
-    pub(crate) fn new_vec(&mut self, cnt: u32, shift: u32, root: Value, tail: Value, meta: Value) -> Value {
+    pub fn new_vec(&mut self, cnt: u32, shift: u32, root: Value, tail: Value, meta: Value) -> Value {
         let base: usize = self.mark();
         let ri: usize = self.push(root);
         let ti: usize = self.push(tail);

@@ -28,7 +28,7 @@
      "could see -- and the hash is not carried from any source vector, because"
      "`new-vec` is called with new contents every time and a hash copied from"
      "the old one would be wrong rather than merely stale.")
-(defn ^:method ^Value new-vec [^:mut ^Rt rt ^I32 cnt ^I32 shift
+(defn ^:pub ^:method ^Value new-vec [^:mut ^Rt rt ^I32 cnt ^I32 shift
                                ^Value root ^Value tail ^Value meta]
   (let [^RootIx base (mark rt)
         ^RootIx ri (push rt root)

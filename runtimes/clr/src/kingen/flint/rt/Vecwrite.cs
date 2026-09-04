@@ -21,7 +21,7 @@ public static class Vecwrite {
     /// could see -- and the hash is not carried from any source vector, because
     /// `new-vec` is called with new contents every time and a hash copied from
     /// the old one would be wrong rather than merely stale.
-    internal static long NewVec(Rt rt, int cnt, int shift, long root, long tail, long meta) {
+    public static long NewVec(Rt rt, int cnt, int shift, long root, long tail, long meta) {
         int @base = rt.Mark();
         int ri = rt.Push(root);
         int ti = rt.Push(tail);

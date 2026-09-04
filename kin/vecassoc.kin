@@ -1,0 +1,158 @@
+;; Replacing and removing: `assoc` at an index, and `pop`.
+;;
+;; Both are the same shape as `conj` one level down. Whether the index falls in
+;; the TAIL or in the trie decides everything: a tail hit copies one node of at
+;; most 32 slots and leaves the trie alone, and a trie hit copies the spine
+;; from the root down to the leaf -- `log32(n)` nodes, not `n`.
+;;
+;; `pop` unwinds that. When the tail empties, the previous leaf is pulled back
+;; out of the trie to become the new tail, and if the root is left with a
+;; single child the tree loses a level.
+;;
+;; Neither port had `popTail`, `pop` or `tpop` at all until recently: the `pop`
+;; builtin REBUILT the vector with a conj loop, O(n) against this O(log n),
+;; and the answers matched every time so nothing failed. They were ported by
+;; hand to get a conformance row, and this replaces all three copies.
+(ns flint.rt.vecassoc
+  (:require [flint.impl.rt :refer [defn return if let local set do comment doc
+                                   not and == != < > >= - + bit-and shl ushr
+                                   mark push r set-r pop-to slot nil?
+                                   vec-count empty-vec
+                                   Rt Value RootIx I32 Bool NIL
+                                   BITS WIDTH MASK
+                                   V_ROOT V_TAIL V_META]]
+            [flint.rt.vecnode  :refer [new-node node-len node-get node-set]]
+            [flint.rt.vecread  :refer [node-clone vec-shift tail-off array-for]]
+            [flint.rt.vecwrite :refer [new-vec vec-conj]]))
+
+(doc "Replace index `i` in the trie under `node`, copying the spine.")
+(defn ^:method ^Value do-assoc [^:mut ^Rt rt ^I32 level ^Value node ^I32 i ^Value val]
+  (let [^RootIx base (mark rt)
+        ^RootIx n (push rt node)
+        ^RootIx v (push rt val)
+        ^Value ret (node-clone rt (r rt n) WIDTH NIL)]
+    (if (nil? rt ret)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^RootIx ri (push rt ret)]
+      (if (== level 0)
+        (node-set rt (r rt ri) (bit-and i MASK) (r rt v))
+        (let [^I32 subidx (bit-and (ushr i level) MASK)
+              ^Value child (node-get rt (r rt n) subidx)
+              ^Value nc (do-assoc rt (- level BITS) child i (r rt v))]
+          (node-set rt (r rt ri) subidx nc)))
+      (let [^Value out (r rt ri)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "`assoc`: `v` with index `i` replaced by `x`."
+     ""
+     "`i` equal to the count APPENDS, which is the rule a vector follows in"
+     "Clojure and the reason this is not simply a bounds error.")
+(defn ^:pub ^:method ^Value vec-assoc [^:mut ^Rt rt ^Value v ^I32 i ^Value x]
+  (let [^I32 cnt (vec-count rt v)]
+    (if (== i cnt)
+      (return (vec-conj rt v x)))
+    (let [^RootIx base (mark rt)
+          ^RootIx vi (push rt v)
+          ^RootIx xi (push rt x)]
+      (local ^:mut ^Value out)
+      (if (>= i (tail-off rt v))
+        (do
+          (comment "In the TAIL: copy it at the same length and write one slot."
+                   "The trie is untouched.")
+          (let [^Value tail (slot rt (r rt vi) V_TAIL)
+                ^I32 tl (node-len rt tail)
+                ^Value nt (node-clone rt tail tl NIL)
+                ^RootIx nti (push rt nt)]
+            (node-set rt (r rt nti) (- i (tail-off rt (r rt vi))) (r rt xi))
+            (let [^Value vv (r rt vi)]
+              (set out (new-vec rt cnt (vec-shift rt vv) (slot rt vv V_ROOT)
+                                (r rt nti) (slot rt vv V_META))))))
+        (do
+          (let [^Value vv (r rt vi)
+                ^I32 sh (vec-shift rt vv)
+                ^Value nr (do-assoc rt sh (slot rt vv V_ROOT) i (r rt xi))
+                ^RootIx nri (push rt nr)
+                ^Value vv2 (r rt vi)]
+            (set out (new-vec rt cnt sh (r rt nri) (slot rt vv2 V_TAIL)
+                              (slot rt vv2 V_META))))))
+      (pop-to rt base)
+      (return out))))
+
+(doc "Unwind one leaf out of the trie: the node `cnt - 2` lives under, with"
+     "the emptying branch removed, or nil when the branch disappears.")
+(defn ^:method ^Value pop-tail [^:mut ^Rt rt ^I32 level ^Value node ^I32 cnt]
+  (let [^I32 subidx (bit-and (ushr (- cnt 2) level) MASK)]
+    (if (> level BITS)
+      (let [^RootIx base (mark rt)
+            ^RootIx ni (push rt node)
+            ^Value child (node-get rt node subidx)
+            ^Value newchild (pop-tail rt (- level BITS) child cnt)]
+        (local ^:mut ^Value out)
+        (comment "The branch emptied AND it was the first one, so this whole"
+                 "node goes with it rather than being copied without a child.")
+        (if (and (nil? rt newchild) (== subidx 0))
+          (set out NIL)
+          (let [^RootIx nc (push rt newchild)
+                ^Value ret (node-clone rt (r rt ni) WIDTH NIL)
+                ^RootIx ri (push rt ret)]
+            (node-set rt (r rt ri) subidx (r rt nc))
+            (set out (r rt ri))))
+        (pop-to rt base)
+        (return out))
+      (do
+        (if (== subidx 0)
+          (return NIL))
+        (let [^Value ret (node-clone rt node WIDTH NIL)]
+          (node-set rt ret subidx NIL)
+          (return ret))))))
+
+(doc "`pop`: `v` one shorter. NIL when it is empty -- the caller raises,"
+     "because an empty vector cannot be popped."
+     ""
+     "The interesting case is the second: when `cnt - 1` is back at the tail"
+     "offset the tail has emptied, so the previous leaf is pulled out of the"
+     "trie to become the new tail, and a root left holding a single child"
+     "means the tree loses a level.")
+(defn ^:pub ^:method ^Value vec-pop [^:mut ^Rt rt ^Value v]
+  (let [^I32 cnt (vec-count rt v)]
+    (if (== cnt 0)
+      (return NIL))
+    (if (== cnt 1)
+      (return (empty-vec rt)))
+    (let [^RootIx base (mark rt)
+          ^RootIx vi (push rt v)]
+      (local ^:mut ^Value out)
+      (if (> (- cnt 1) (tail-off rt v))
+        (do
+          (comment "Still inside the tail: copy it one shorter, keep the trie.")
+          (let [^Value tl (slot rt (r rt vi) V_TAIL)
+                ^I32 newlen (- (node-len rt tl) 1)
+                ^Value nt (node-clone rt tl newlen NIL)
+                ^RootIx nti (push rt nt)
+                ^Value vv (r rt vi)]
+            (set out (new-vec rt (- cnt 1) (vec-shift rt vv) (slot rt vv V_ROOT)
+                              (r rt nti) (slot rt vv V_META)))))
+        (do
+          (let [^Value newtail (array-for rt (r rt vi) (- cnt 2))
+                ^RootIx nt (push rt newtail)
+                ^Value vv (r rt vi)
+                ^I32 sh (vec-shift rt vv)]
+            (local ^:mut ^Value newroot)
+            (local ^:mut ^I32 newshift)
+            (set newroot (pop-tail rt sh (slot rt vv V_ROOT) cnt))
+            (set newshift sh)
+            (if (nil? rt newroot)
+              (set newroot (new-node rt WIDTH NIL)))
+            (let [^RootIx nri (push rt newroot)]
+              (comment "A root whose second child is gone is a root with one"
+                       "child, and a level of trie holding nothing.")
+              (if (and (> newshift BITS) (nil? rt (node-get rt (r rt nri) 1)))
+                (do
+                  (set-r rt nri (node-get rt (r rt nri) 0))
+                  (set newshift (- newshift BITS))))
+              (set out (new-vec rt (- cnt 1) newshift (r rt nri) (r rt nt)
+                                (slot rt (r rt vi) V_META)))))))
+      (pop-to rt base)
+      (return out))))

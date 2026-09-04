@@ -90,7 +90,7 @@ public static class Vecread {
     /// the shift is logical on every target, but which shift a `>>` MEANS
     /// depends on the host type -- Rust's is unsigned and the ports' is not.
     /// Naming the logical one is how that survives the trip.
-    internal static long ArrayFor(Rt rt, long v, int i) {
+    public static long ArrayFor(Rt rt, long v, int i) {
         if (i >= TailOff(rt, v)) {
             return rt.Slot(v, V_TAIL);
         }

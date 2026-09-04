@@ -25,7 +25,13 @@ impl Rt {
     fn alloc(&mut self, t: u8, n: u32) -> Addr {
         if self.starve { return 0; }
         let a = self.bump; self.bump += n as u64 + 1;
+        // NIL-FILLED, as the real allocator does (`gc.zero_body` fills value
+        // slots with NIL). Leaving them at 0 makes "this slot is absent" read
+        // as present, because NIL is 0xFFFF -- and every target agrees on the
+        // wrong answer, which is the one failure a three-way comparison cannot
+        // catch. It hid `vec_pop`'s level collapse entirely.
         self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
         a as Addr
     }
     fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
@@ -107,6 +113,7 @@ fn main() {
             if (starve) return 0;
             long a = bump; bump += n + 1;
             gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;   // see the Rust head
             return a;
         }
         void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
@@ -180,6 +187,7 @@ fn main() {
             if (starve) return 0;
             long a = bump; bump += n + 1;
             gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;   // see the Rust head
             return a;
         }
         internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }

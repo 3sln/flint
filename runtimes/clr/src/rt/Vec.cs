@@ -3,6 +3,7 @@ namespace Flint.Rt;
 using static flint.rt.Vecnode;
 using static flint.rt.Vecread;
 using static flint.rt.Vecwrite;
+using static flint.rt.Vecassoc;
 
 /// Persistent vectors, ported from `runtime/src/vector.rs`.
 ///
@@ -64,6 +65,9 @@ public static class Vec {
     /// win -- which is the trade `doc/goals/kin-port.md` already recorded
     /// against the `champ_*` wrappers and answered with "worth doing LAST".
     public static long Conj(Rt rt, long v, long x) { return VecConj(rt, v, x); }
+    /// `assoc` and `pop`, likewise delegating to their generated bodies.
+    public static long Assoc(Rt rt, long v, int i, long x) { return VecAssoc(rt, v, i, x); }
+    public static long Pop(Rt rt, long v) { return VecPop(rt, v); }
 
     public static long Nth(Rt rt, long v, int i) {
         if (i < 0 || i >= Count(rt, v)) return Val.NotFound;
@@ -73,124 +77,9 @@ public static class Vec {
 
 
 
-    static long DoAssoc(Rt rt, int level, long node, int i, long val) {
-        int bas = rt.Mark();
-        int n = rt.Push(node), v = rt.Push(val);
-        long ret = NodeClone(rt, rt.R(n), WIDTH, Val.Nil);
-        if (Val.IsNil(ret)) { rt.PopTo(bas); return Val.Nil; }
-        int ri = rt.Push(ret);
-        if (level == 0) {
-            NodeSet(rt, rt.R(ri), i & MASK, rt.R(v));
-        } else {
-            int subidx = (int)((uint) i >> level) & MASK;
-            long child = NodeGet(rt, rt.R(n), subidx);
-            long nc = DoAssoc(rt, level - BITS, child, i, rt.R(v));
-            NodeSet(rt, rt.R(ri), subidx, nc);
-        }
-        long outv = rt.R(ri);
-        rt.PopTo(bas);
-        return outv;
-    }
 
-    /// `assoc` at an index. `i == count` APPENDS, which is Clojure's rule and
-    /// the only index past the end that is legal.
-    public static long Assoc(Rt rt, long v, int i, long x) {
-        int cnt = Count(rt, v);
-        if (i == cnt) return VecConj(rt, v, x);
-        int bas = rt.Mark();
-        int vi = rt.Push(v), xi = rt.Push(x);
-        long outv;
-        if (i >= TailOff(rt, v)) {
-            long tl0 = Tail(rt, rt.R(vi));
-            int tl = NodeLen(rt, tl0);
-            int nti = rt.Push(NodeClone(rt, tl0, tl, Val.Nil));
-            NodeSet(rt, rt.R(nti), i - TailOff(rt, rt.R(vi)), rt.R(xi));
-            long vv = rt.R(vi);
-            outv = NewVec(rt, cnt, VecShift(rt, vv), Root(rt, vv), rt.R(nti), rt.Slot(vv, V_META));
-        } else {
-            long vv = rt.R(vi);
-            int sh = VecShift(rt, vv);
-            long nr = DoAssoc(rt, sh, Root(rt, vv), i, rt.R(xi));
-            int nri = rt.Push(nr);
-            vv = rt.R(vi);
-            outv = NewVec(rt, cnt, sh, rt.R(nri), Tail(rt, vv), rt.Slot(vv, V_META));
-        }
-        rt.PopTo(bas);
-        return outv;
-    }
 
-    /// Build a vector from `n` values already rooted at `bas` on the shadow
-    /// stack. What the `VECTOR` opcode uses.
-    /// Unwind one leaf out of the trie: the node `cnt - 2` lives under, with
-    /// the emptying branch removed, or Nil when the branch disappears.
-    ///
-    /// Ported late. Neither port had this, nor `Pop`, nor `TPop` -- the `pop`
-    /// builtin REBUILT the vector with a conj loop, which is O(n) where this
-    /// is O(log n), and the transient pop had no implementation at all.
-    static long PopTail(Rt rt, int level, long node, int cnt) {
-        int subidx = (int)(((uint)(cnt - 2)) >> level) & MASK;
-        if (level > BITS) {
-            int bas = rt.Mark();
-            int ni = rt.Push(node);
-            long child = NodeGet(rt, node, subidx);
-            long newchild = PopTail(rt, level - BITS, child, cnt);
-            long outv;
-            if (Val.IsNil(newchild) && subidx == 0) {
-                outv = Val.Nil;
-            } else {
-                int nc = rt.Push(newchild);
-                long ret = NodeClone(rt, rt.R(ni), WIDTH, Val.Nil);
-                int ri = rt.Push(ret);
-                NodeSet(rt, rt.R(ri), subidx, rt.R(nc));
-                outv = rt.R(ri);
-            }
-            rt.PopTo(bas);
-            return outv;
-        }
-        if (subidx == 0) return Val.Nil;
-        long ret2 = NodeClone(rt, node, WIDTH, Val.Nil);
-        NodeSet(rt, ret2, subidx, Val.Nil);
-        return ret2;
-    }
 
-    /// `pop`: the vector one shorter. Nil when it is empty -- the caller
-    /// raises, because an empty vector cannot be popped.
-    public static long Pop(Rt rt, long v) {
-        int cnt = Count(rt, v);
-        if (cnt == 0) return Val.Nil;
-        if (cnt == 1) return Empty(rt);
-        int bas = rt.Mark();
-        int vi = rt.Push(v);
-        long outv;
-        if (cnt - 1 > TailOff(rt, v)) {
-            // Still inside the tail: copy it one shorter and keep the trie.
-            long tl = Tail(rt, v);
-            int newlen = NodeLen(rt, tl) - 1;
-            long nt = NodeClone(rt, tl, newlen, Val.Nil);
-            int nti = rt.Push(nt);
-            long vv = rt.R(vi);
-            outv = NewVec(rt, cnt - 1, VecShift(rt, vv), Root(rt, vv), rt.R(nti),
-                          rt.Slot(vv, V_META));
-        } else {
-            // The tail is emptying: pull the previous leaf back out.
-            long newtail = ArrayFor(rt, v, cnt - 2);
-            int nt = rt.Push(newtail);
-            long vv = rt.R(vi);
-            int sh = VecShift(rt, vv);
-            long newroot = PopTail(rt, sh, Root(rt, vv), cnt);
-            int newshift = sh;
-            if (Val.IsNil(newroot)) newroot = NewNode(rt, WIDTH, Val.Nil);
-            int nri = rt.Push(newroot);
-            if (newshift > BITS && Val.IsNil(NodeGet(rt, rt.R(nri), 1))) {
-                rt.SetR(nri, NodeGet(rt, rt.R(nri), 0));
-                newshift -= BITS;
-            }
-            outv = NewVec(rt, cnt - 1, newshift, rt.R(nri), rt.R(nt),
-                          rt.Slot(rt.R(vi), V_META));
-        }
-        rt.PopTo(bas);
-        return outv;
-    }
 
     public static long FromRoots(Rt rt, int bas, int n) {
         int mk = rt.Mark();

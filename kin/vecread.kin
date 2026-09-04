@@ -96,7 +96,7 @@
      "the shift is logical on every target, but which shift a `>>` MEANS"
      "depends on the host type -- Rust's is unsigned and the ports' is not."
      "Naming the logical one is how that survives the trip.")
-(defn ^:method ^Value array-for [^Rt rt ^Value v ^I32 i]
+(defn ^:pub ^:method ^Value array-for [^Rt rt ^Value v ^I32 i]
   (if (>= i (tail-off rt v))
     (return (slot rt v V_TAIL)))
   (local ^:mut ^Value node)

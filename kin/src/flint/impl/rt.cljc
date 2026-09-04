@@ -528,6 +528,24 @@
     'empty-map (core/call {:rust "{0}.empty_map()"
                            :java "com.flint.rt.Maps.empty({0})"
                            :csharp "Flint.Rt.Maps.Empty({0})"})
+    ;; The shared EMPTY VECTOR singleton, alongside `empty-map`. An empty
+    ;; vector is three objects -- a root node, a tail node and the header --
+    ;; so it is built once at startup and handed out, not rebuilt per `pop`
+    ;; of a one-element vector.
+    ;; SHORT names, unlike `empty-map` next door, and the difference is worth
+    ;; stating. Every generated Java module imports `com.flint.rt.*` and every
+    ;; generated C# one has `using Flint.Rt;`, so `Vec` resolves in both --
+    ;; and a probe fixture in `kin/*.drivers` is one file in the default
+    ;; package, where a fully qualified `com.flint.rt.Vec` cannot be faked at
+    ;; all. `empty-map` is qualified because it was written that way, not
+    ;; because it has to be.
+    ;;
+    ;; The risk the qualification guards against is a kin source named `vec`
+    ;; generating a `flint.rt.Vec` that shadows this. There is none, and one
+    ;; would be a compile error rather than a silent wrong call.
+    'empty-vec (core/call {:rust "{0}.empty_vec()"
+                           :java "Vec.empty({0})"
+                           :csharp "Vec.Empty({0})"})
     'ref-to-map (core/call {:rust "{0}.ref_to_map({1})"
                             :java "Table.refToMap({0}, {1})"
                             :csharp "Flint.Rt.Table.refToMap({0}, {1})"})

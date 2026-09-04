@@ -96,7 +96,7 @@ impl Rt {
     /// the shift is logical on every target, but which shift a `>>` MEANS
     /// depends on the host type -- Rust's is unsigned and the ports' is not.
     /// Naming the logical one is how that survives the trip.
-    pub(crate) fn array_for(&self, v: Value, i: u32) -> Value {
+    pub fn array_for(&self, v: Value, i: u32) -> Value {
         if i >= self.tail_off(v) {
             return self.slot(v, V_TAIL);
         }

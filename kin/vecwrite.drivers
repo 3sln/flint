@@ -26,7 +26,13 @@ impl Rt {
     fn alloc(&mut self, t: u8, n: u32) -> Addr {
         if self.starve { return 0; }
         let a = self.bump; self.bump += n as u64 + 1;
+        // NIL-FILLED, as the real allocator does (`gc.zero_body` fills value
+        // slots with NIL). Leaving them at 0 makes "this slot is absent" read
+        // as present, because NIL is 0xFFFF -- and every target agrees on the
+        // wrong answer, which is the one failure a three-way comparison cannot
+        // catch. It hid `vec_pop`'s level collapse entirely.
         self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
         a as Addr
     }
     fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
@@ -76,7 +82,7 @@ impl Rt {
 --rust
 }
 fn main() {
-    let mut rt = Rt { h: vec![0; 200000], gc: Gc { sp: vec![0u8; 200000] }, lens: vec![0; 200000],
+    let mut rt = Rt { h: vec![0; 900000], gc: Gc { sp: vec![0u8; 900000] }, lens: vec![0; 900000],
                       bump: 100, roots: Vec::new(), starve: false };
     let mut o = String::new();
     // An empty vector, built the way `newEmpty` builds one: a WIDTH root, a
@@ -86,11 +92,15 @@ fn main() {
     let mut v = rt.new_vec(0, BITS, root, tail, NIL);
     let vi = rt.push(v);
     // Conj across every boundary the trie turns on: filling the first tail
-    // (32), pushing it into the trie (33), and the level change at 1025.
-    for i in 0..1100u32 {
+    // (32), pushing it into the trie (33), the level change at 1025, and PAST
+    // 2048 -- which is what reaches `push-tail`'s absent-child arm, where a
+    // fresh subtree has to be built with `new-path`. Stopping at 1100, as this
+    // driver first did, leaves every element under child 1 and never gets
+    // there.
+    for i in 0..2100u32 {
         let nv = rt.vec_conj(rt.r(vi), Value(0x1000 + i as u64));
         rt.set_r(vi, nv);
-        if i == 0 || i == 31 || i == 32 || i == 1023 || i == 1024 {
+        if i == 0 || i == 31 || i == 32 || i == 1023 || i == 1024 || i == 2047 || i == 2048 {
             let w = rt.r(vi);
             o.push_str(&format!("{}:cnt={},sh={},toff={} ",
                 i + 1, rt.vec_count(w), rt.vec_shift(w), rt.tail_off(w)));
@@ -100,7 +110,7 @@ fn main() {
     o.push_str(&format!("| final cnt={} shift={} ", rt.vec_count(v), rt.vec_shift(v)));
     // Every element readable, and at the right index.
     let mut bad = 0u32;
-    for i in 0..1100u32 {
+    for i in 0..2100u32 {
         let leaf = rt.array_for(v, i);
         if rt.node_get(leaf, i & MASK).0 != 0x1000 + i as u64 { bad += 1; }
     }
@@ -126,10 +136,10 @@ fn main() {
         static long asFixnum(long v) { return v; }
     }
     static final class Rt {
-        long[] h = new long[200000];
-        static final class Gc { int[] sp = new int[200000]; }
+        long[] h = new long[900000];
+        static final class Gc { int[] sp = new int[900000]; }
         Gc gc = new Gc();
-        int[] lens = new int[200000];
+        int[] lens = new int[900000];
         long bump = 100;
         boolean starve = false;
         java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
@@ -142,6 +152,7 @@ fn main() {
             if (starve) return 0;
             long a = bump; bump += n + 1;
             gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;   // see the Rust head
             return a;
         }
         void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
@@ -199,9 +210,9 @@ fn main() {
         long tail = newNode(rt, 0, NIL);
         long v = newVec(rt, 0, BITS, root, tail, NIL);
         int vi = rt.push(v);
-        for (int i = 0; i < 1100; i++) {
+        for (int i = 0; i < 2100; i++) {
             rt.setR(vi, vecConj(rt, rt.r(vi), 0x1000 + i));
-            if (i == 0 || i == 31 || i == 32 || i == 1023 || i == 1024) {
+            if (i == 0 || i == 31 || i == 32 || i == 1023 || i == 1024 || i == 2047 || i == 2048) {
                 long w = rt.r(vi);
                 o.append(i + 1).append(":cnt=").append(Vec.count(rt, w))
                  .append(",sh=").append(vecShift(rt, w))
@@ -211,7 +222,7 @@ fn main() {
         v = rt.r(vi);
         o.append("| final cnt=").append(Vec.count(rt, v)).append(" shift=").append(vecShift(rt, v)).append(' ');
         int bad = 0;
-        for (int i = 0; i < 1100; i++) {
+        for (int i = 0; i < 2100; i++) {
             long leaf = arrayFor(rt, v, i);
             if (nodeGet(rt, leaf, i & MASK) != 0x1000 + i) bad++;
         }
@@ -239,10 +250,10 @@ fn main() {
         internal static long AsFixnum(long v) { return v; }
     }
     internal sealed class Rt {
-        internal long[] h = new long[200000];
-        internal sealed class GcT { internal int[] sp = new int[200000]; }
+        internal long[] h = new long[900000];
+        internal sealed class GcT { internal int[] sp = new int[900000]; }
         internal GcT gc = new GcT();
-        internal int[] lens = new int[200000];
+        internal int[] lens = new int[900000];
         internal long bump = 100;
         internal bool starve = false;
         internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
@@ -255,6 +266,7 @@ fn main() {
             if (starve) return 0;
             long a = bump; bump += n + 1;
             gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;   // see the Rust head
             return a;
         }
         internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
@@ -311,9 +323,9 @@ fn main() {
         long tail = NewNode(rt, 0, NIL);
         long v = NewVec(rt, 0, BITS, root, tail, NIL);
         int vi = rt.Push(v);
-        for (int i = 0; i < 1100; i++) {
+        for (int i = 0; i < 2100; i++) {
             rt.SetR(vi, VecConj(rt, rt.R(vi), 0x1000 + i));
-            if (i == 0 || i == 31 || i == 32 || i == 1023 || i == 1024) {
+            if (i == 0 || i == 31 || i == 32 || i == 1023 || i == 1024 || i == 2047 || i == 2048) {
                 long w = rt.R(vi);
                 o.Append(i + 1).Append(":cnt=").Append(Vec.Count(rt, w))
                  .Append(",sh=").Append(VecShift(rt, w))
@@ -323,7 +335,7 @@ fn main() {
         v = rt.R(vi);
         o.Append("| final cnt=").Append(Vec.Count(rt, v)).Append(" shift=").Append(VecShift(rt, v)).Append(' ');
         int bad = 0;
-        for (int i = 0; i < 1100; i++) {
+        for (int i = 0; i < 2100; i++) {
             long leaf = ArrayFor(rt, v, i);
             if (NodeGet(rt, leaf, i & MASK) != 0x1000 + i) bad++;
         }

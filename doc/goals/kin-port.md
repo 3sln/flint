@@ -1032,6 +1032,53 @@ vocabularies have no target in common"* when what had happened is that
 "flint.rt.vecread has no node-clone to refer" -- so the bad message is
 specifically the case where a required namespace exports nothing at all.
 
+### Every probe fixture was lying about absent slots
+
+The real allocator NIL-fills a value slot: `gc.zero_body` writes `Value::NIL_`
+into every one. The fixtures in `kin/*.drivers` left them at 0, and NIL is
+`0xFFFF` -- so **"this slot is absent" never read as absent** in any probe.
+
+`vec_pop`'s level collapse is guarded by "the root's second child is nil".
+Under the old fixture that was never true, so the collapse silently never
+fired, `pop` of a 1025-element vector kept a shift of 10 instead of dropping
+to 5, and ALL THREE TARGETS AGREED. That is the one failure a three-way
+comparison cannot catch: a fixture that lies lies identically everywhere.
+
+Six fixtures had an allocator and none of them filled -- `collnode`,
+`mapcore`, `nodeclass`, `vecnode`, `vecread`, `vecwrite`. All six now do, and
+all six still verify with UNCHANGED output, which is worth stating: their
+conclusions were sound, they were just being reached for a weaker reason than
+they looked.
+
+It also exposed dead coverage. `vecwrite`'s driver conjed to 1100 elements,
+and every one of those lands under child 1 of the root, so `push-tail`'s
+absent-child arm -- the one that builds a fresh subtree with `new-path` -- was
+never reached. It could not have been: the arm tests for a nil child, and
+nothing read as nil. The driver goes past 2048 now, where a fresh subidx
+appears, and `wrong=0` still holds across all three.
+
+The general shape, and it is the third time this port has hit it: a fixture is
+a CLAIM about the runtime, and it is only as good as the last time somebody
+checked it against the runtime. `olen` took an `Addr` where the runtime takes
+a `Value`; `schema_len` took `&mut self` where the runtime takes `&self`; and
+now `alloc` left slots at zero where the runtime fills them with NIL. The
+first two were compile errors in the runtime and cost a cycle each. This one
+compiled everywhere and produced a green result that meant nothing.
+
+### `vecassoc.kin`: assoc and the pop family
+
+`do-assoc`, `vec-assoc`, `pop-tail`, `vec-pop`. 131 lines out of `vector.rs`
+and 115 out of each port.
+
+`vec-conj` is STUBBED AS A MARKER in the driver rather than reimplemented.
+`vec-assoc` routes `i == cnt` to conj, and that routing is what this source is
+responsible for; rebuilding conj in the fixture would have tested the fixture.
+The driver asserts the marker comes back.
+
+Vectors are built directly by the fixture rather than by conjing, for the same
+reason -- conj belongs to a required namespace. That is what made the level
+collapse testable at 1025 without depending on anything `vecwrite` does.
+
 ### Port order, re-derived
 
 | # | region | gate | lines across 3 |
