@@ -1232,6 +1232,43 @@ It is still deleted, on a different ground than cost: a function that exists
 on one of three runtimes and is called by none is a divergence with no
 benefit, and leaving it means the next capability census counts it as work.
 
+### `first` has FOUR divergences, and one of them resisted converging
+
+`first` is the next thing in `Seqs` and it is not one port away. Rust and the
+JVM differ in four places at once:
+
+| | Rust | the ports |
+| --- | --- | --- |
+| a map entry | `seq` makes a vecseq over the ENTRY, and `first` reads it | `seq` copies the entry into a two-element VECTOR first |
+| the default arm | answers nil | throws `UnsupportedOperationException` |
+| a string seq | `char_at_byte` | `Str.nth` |
+| out of range | `vec_nth(.., NIL)` | `Vec.nth(.., NOT_FOUND)` |
+
+The map-entry one looks like the clear win: the ports allocate a two-element
+vector on every `seq` of a map entry, which is every entry of every map
+walked, and the native runtime allocates nothing -- it rides the same vecseq
+and reads the entry directly, at the cost of one tag check in `first` and one
+in `next`.
+
+**It was tried, and REVERTED.** Converging both ports onto Rust's shape --
+`seq` of an entry makes a vecseq over the entry, `first` and `next` know the
+tag -- broke exactly one row of the `tables` suite: `build-eq`, which is
+`(= T (build S (range 600) row))`, false on the JVM where native says true.
+Deterministic across runs.
+
+It does not reproduce in isolation. A standalone program doing the same
+comparison at the same size passes on the JVM, and so does a trimmed copy of
+the conform program containing only `:build` and `:build-eq`. So it depends on
+state or allocation history built up by the rest of the suite, which is the
+signature of a rooting bug rather than a semantic one -- most likely somewhere
+that reads a vecseq's collection and assumes a vector, and which the copy was
+hiding.
+
+Reverted rather than left in, because a change I cannot localise is not a
+change I can defend, and the tree stays green. It wants its own slice with a
+probe on the vecseq readers, not a corner of a porting commit. The four-way
+divergence table above is the useful output of the attempt.
+
 ### Port order, re-derived
 
 | # | region | gate | lines across 3 |

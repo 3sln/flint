@@ -269,6 +269,22 @@ what remains, and what each thing is waiting on.
    which had none — the same gap that had been hiding a node-width divergence
    between native and the ports.
 
+0m. **`seq` of a map entry allocates a vector on both ports** — the native
+   runtime makes a vecseq over the ENTRY itself and reads it directly; the
+   ports copy the entry into a two-element vector first, on every entry of
+   every map walked.
+
+   Converging them onto the native shape was tried and REVERTED: it broke one
+   row of the `tables` conformance suite (`build-eq`, table equality at 600
+   rows) on the JVM, deterministically, and does not reproduce in a standalone
+   program or in a trimmed copy of the suite. That points at a rooting bug in
+   something that reads a vecseq's collection and assumes a vector, which the
+   copy was hiding rather than at a semantic difference.
+
+   Wants a probe over the vecseq readers on both ports. The saving is one
+   allocation per map entry seq'd, and the divergence blocks porting `first`
+   and `next` to kin.
+
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old
    `jvm`-against-`clr` similarity table because BOTH ports share them. Two
