@@ -549,7 +549,7 @@ mod tests {
         for x in xs {
             rt.push(Value::fixnum(*x));
         }
-        let l = rt.list_from_roots(base, xs.len());
+        let l = rt.list_from_roots(base, xs.len() as u32);
         rt.pop_to(base);
         l
     }

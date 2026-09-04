@@ -105,26 +105,7 @@ public static class Seqs {
 
 
 
-    public static int Count(Rt rt, long v) {
-        int n = 0;
-        long s = Seq(rt, v);
-        while (!Val.IsNil(s)) { n++; s = Next(rt, s); }
-        return n;
-    }
+    public static int Count(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Seqwalk.SeqCount(rt, v); }
 
-    /// A list from `n` values rooted at `bas`. What a variadic arity folds its
-    /// surplus arguments into -- and it must be a SEQ, not a vector:
-    /// `clojure.core/list` is `[& xs] xs`, so a vector here makes `(list 1 2)`
-    /// print as `[1 2]`, the right elements in the wrong shape.
-    public static long FromRoots(Rt rt, int bas, int n) {
-        int mk = rt.Mark();
-        int acc = rt.Push(EmptyList(rt));
-        for (int i = n - 1; i >= 0; i--) {
-            long c = Cons(rt, rt.R(bas + i), rt.R(acc));
-            rt.SetR(acc, c);
-        }
-        long outv = rt.R(acc);
-        rt.PopTo(mk);
-        return outv;
-    }
+    public static long FromRoots(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Seqcore.ListFromRoots(rt, bas, n); }
 }

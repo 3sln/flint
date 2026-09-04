@@ -83,4 +83,37 @@ public final class Seqcore {
         rt.popTo(base);
         return Val.heap(a);
     }
+    /// A list from `n` values rooted at `base`, last-first.
+    /// 
+    /// What a variadic arity folds its surplus arguments into -- and it must be
+    /// a SEQ, not a vector: `clojure.core/list` is `[& xs] xs`, so a vector here
+    /// makes `(list 1 2)` print as `[1 2]`, the right elements in the wrong
+    /// shape.
+    /// 
+    /// THE LOOP COUNTS UP AND THE INDEX COUNTS DOWN. Rust wrote this as
+    /// `for i in (0..n).rev()` and both ports as `for (i = n - 1; i >= 0; i--)`;
+    /// kin's `for` is half-open and ASCENDING only. Converging the source is
+    /// cheaper than a descending loop form -- one form, three targets, and the
+    /// conses happen in the same order they did before.
+    /// 
+    /// `n` is tagged `I32` and not `RootIx`. It is a COUNT, and `RootIx` means
+    /// an index into the shadow stack; borrowing it here would compile on all
+    /// three and tell a reader something false, which is the reason `Ty` and
+    /// `Cat` are two tags. The cast back to an index is `as-idx`, which is what
+    /// Rust needs and what the ports spell as nothing at all.
+    public static long listFromRoots(Rt rt, int base, int n) {
+        int mk = rt.mark();
+        long empty = com.flint.rt.Seqs.emptyList(rt);
+        int ai = rt.push(empty);
+        // HOISTED: `empty-list` and `push` both take `&mut self` in Rust,
+        // so nesting them is two mutable borrows at once.
+        for (int i = 0; i < n; i++) {
+            long x = rt.r(base + ((n - 1) - i));
+            long c = cons(rt, x, rt.r(ai));
+            rt.setR(ai, c);
+        }
+        long out = rt.r(ai);
+        rt.popTo(mk);
+        return out;
+    }
 }

@@ -8,11 +8,14 @@ const TY_RANGE: u8 = 13; const TY_MAPENTRY: u8 = 20; const TY_TABLE: u8 = 49;
 const TY_LAZYSEQ: u8 = 3; const TY_EMPTY_LIST: u8 = 7;
 const LS_THUNK: u32 = 0; const LS_SEQ: u32 = 1;
 const TY_VEC: u8 = 9; const TY_STR: u8 = 2;
-const C_FIRST: u32 = 0; const C_REST: u32 = 1;
+const C_FIRST: u32 = 0; const C_REST: u32 = 1; const C_COUNT: u32 = 3;
 impl Value {
     fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
     fn as_heap(self) -> Addr { self.0 as Addr }
     fn heap(a: Addr) -> Value { Value(a as u64) }
+    // A FIXNUM here is anything below the heap floor and not NIL, which is
+    // all `count-hint`'s answer needs to be discriminated by.
+    fn is_fixnum(self) -> bool { self.0 < 100 && self.0 != NIL.0 }
     fn is_nil(self) -> bool { self.0 == NIL.0 }
     fn as_fixnum(self) -> i64 { self.0 as i64 }
     fn fixnum(n: i64) -> Value { Value(n as u64) }
@@ -25,6 +28,17 @@ impl Rt {
     fn r(&self, i: usize) -> Value { self.roots[i] }
     fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
     fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    // `count-hint` lives in `seqcore` and is reached across units. The probe
+    // answers it the way the real one does for the shapes this driver builds:
+    // a cons carries its count in C_COUNT (nil when unknown), a vector knows
+    // its own, and everything else declines.
+    fn count_hint(&mut self, v: Value) -> Value {
+        if !v.is_heap() { return NIL; }
+        let t = ty(&self.gc.sp, v.as_heap());
+        if t == TY_CONS { return self.slot(v, C_COUNT); }
+        if t == TY_VEC { return Value::fixnum(self.vec_count(v) as i64); }
+        NIL
+    }
     fn alloc(&mut self, t: u8, n: u32) -> Addr {
         if self.starve { return 0; }
         let a = self.bump; self.bump += n as u64 + 1;
@@ -184,6 +198,19 @@ fn main() {
     // Nothing at all.
     let fn0 = rt.first(NIL); let nn0 = rt.next(NIL);
     o.push_str(&format!("nils={}{} ", fn0.is_nil() as u32, nn0.is_nil() as u32));
+
+    // SEQ-COUNT, both paths, and the counted chain LIES. It is two cells long
+    // and says nine, so `cnt_hint=9` proves the hint was read and `2` would
+    // prove it was walked instead. With a truthful count both paths answer the
+    // same number and the probe cannot tell the fast path from its absence --
+    // which is the failure this file exists to not have.
+    let ct2 = mk(&mut rt, TY_CONS, &[0x22, NIL.0, NIL.0, 8]);
+    let ct1 = mk(&mut rt, TY_CONS, &[0x11, ct2.0, NIL.0, 9]);
+    let un2 = mk(&mut rt, TY_CONS, &[0x44, NIL.0, NIL.0, NIL.0]);
+    let un1 = mk(&mut rt, TY_CONS, &[0x33, un2.0, NIL.0, NIL.0]);
+    o.push_str(&format!("cnt_hint={} cnt_walk={} cnt_vec={} cnt_nil={} ",
+                        rt.seq_count(ct1), rt.seq_count(un1),
+                        rt.seq_count(vec), rt.seq_count(NIL)));
     println!("{}", o);
 }
 --java-head
@@ -192,7 +219,7 @@ fn main() {
     static final int TY_MAPENTRY = 20, TY_TABLE = 49, TY_VEC = 9, TY_STR = 2;
     static final int TY_LAZYSEQ = 3, TY_EMPTY_LIST = 7;
     static final int LS_THUNK = 0, LS_SEQ = 1;
-    static final int C_FIRST = 0, C_REST = 1;
+    static final int C_FIRST = 0, C_REST = 1, C_COUNT = 3;
     static final class Val {
         static final long NIL = 0xFFFFL;
         static boolean isHeap(long v) { return v >= 100 && v != NIL; }
@@ -201,6 +228,7 @@ fn main() {
         static boolean isNil(long v) { return v == NIL; }
         static long asFixnum(long v) { return v; }
         static long fixnum(long n) { return n; }
+        static boolean isFixnum(long v) { return v < 100 && v != NIL; }
     }
     static final class Rt {
         long[] h = new long[4000];
@@ -246,6 +274,13 @@ fn main() {
         static long tableRef(Rt rt, long t, int i) { return 0x7000 + i; }
     }
     static final class Num { static long add(Rt rt, long a, long b) { return a + b; } }
+    static long countHint(Rt rt, long v) {
+        if (!Val.isHeap(v)) return NIL;
+        int t = ty(rt.gc.sp, Val.asHeap(v));
+        if (t == TY_CONS) return rt.slot(v, C_COUNT);
+        if (t == TY_VEC) return Val.fixnum(Vec.count(rt, v));
+        return NIL;
+    }
     static long emptyListOf(Rt rt) { return Val.heap(rt.alloc(TY_EMPTY_LIST, 1)); }
     static long vecseq(Rt rt, long v, int i) {
         long a = rt.alloc(TY_VECSEQ, 3);
@@ -333,6 +368,14 @@ fn main() {
         o.append("chain=").append(first(rt, force(rt, outer))).append(' ');
         o.append("nils=").append(Val.isNil(first(rt, NIL)) ? 1 : 0)
          .append(Val.isNil(next(rt, NIL)) ? 1 : 0).append(' ');
+        long ct2 = mk(rt, TY_CONS, new long[]{0x22, NIL, NIL, 8});
+        long ct1 = mk(rt, TY_CONS, new long[]{0x11, ct2, NIL, 9});
+        long un2 = mk(rt, TY_CONS, new long[]{0x44, NIL, NIL, NIL});
+        long un1 = mk(rt, TY_CONS, new long[]{0x33, un2, NIL, NIL});
+        o.append("cnt_hint=").append(seqCount(rt, ct1))
+         .append(" cnt_walk=").append(seqCount(rt, un1))
+         .append(" cnt_vec=").append(seqCount(rt, vec))
+         .append(" cnt_nil=").append(seqCount(rt, NIL)).append(' ');
         System.out.println(o.toString());
     }
 --csharp-pre
@@ -357,7 +400,7 @@ namespace Flint.Rt {
 
 --csharp-head
     const long NIL = 0xFFFFL;
-    const int C_FIRST = 0, C_REST = 1;
+    const int C_FIRST = 0, C_REST = 1, C_COUNT = 3;
     const int LS_THUNK = 0, LS_SEQ = 1;
     internal static class Obj {
         internal const int TyCons = 6, TyVecseq = 11, TyStrseq = 12, TyRange = 13;
@@ -373,6 +416,7 @@ namespace Flint.Rt {
         internal static bool IsNil(long v) { return v == Nil; }
         internal static long AsFixnum(long v) { return v; }
         internal static long Fixnum(long n) { return n; }
+        internal static bool IsFixnum(long v) { return v < 100 && v != Nil; }
     }
     internal sealed class Rt {
         internal long[] h = new long[4000];
@@ -417,6 +461,13 @@ namespace Flint.Rt {
         internal static long tableRef(Rt rt, long t, int i) { return 0x7000 + i; }
     }
     internal static class Num { internal static long Add(Rt rt, long a, long b) { return a + b; } }
+    internal static long CountHint(Rt rt, long v) {
+        if (!Val.IsHeap(v)) return Val.Nil;
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        if (t == Obj.TyCons) return rt.Slot(v, C_COUNT);
+        if (t == Obj.TyVec) return Val.Fixnum(Vec.Count(rt, v));
+        return Val.Nil;
+    }
     internal static long EmptyListOf(Rt rt) { return Val.Heap(rt.Alloc(Obj.TyEmptyList, 1)); }
     static long Vecseq(Rt rt, long v, int i) {
         long a = rt.Alloc(Obj.TyVecseq, 3);
@@ -486,5 +537,13 @@ namespace Flint.Rt {
         o.Append("chain=").Append(First(rt, Force(rt, outer))).Append(' ');
         o.Append("nils=").Append(Val.IsNil(First(rt, NIL)) ? 1 : 0)
          .Append(Val.IsNil(Next(rt, NIL)) ? 1 : 0).Append(' ');
+        long ct2 = Mk(rt, Obj.TyCons, new long[]{0x22, NIL, NIL, 8});
+        long ct1 = Mk(rt, Obj.TyCons, new long[]{0x11, ct2, NIL, 9});
+        long un2 = Mk(rt, Obj.TyCons, new long[]{0x44, NIL, NIL, NIL});
+        long un1 = Mk(rt, Obj.TyCons, new long[]{0x33, un2, NIL, NIL});
+        o.Append("cnt_hint=").Append(SeqCount(rt, ct1))
+         .Append(" cnt_walk=").Append(SeqCount(rt, un1))
+         .Append(" cnt_vec=").Append(SeqCount(rt, vec))
+         .Append(" cnt_nil=").Append(SeqCount(rt, NIL)).Append(' ');
         System.Console.WriteLine(o.ToString());
     }

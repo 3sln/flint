@@ -133,26 +133,7 @@ public final class Seqs {
 
 
 
-    public static int count(Rt rt, long v) {
-        int n = 0;
-        long s = seq(rt, v);
-        while (!Val.isNil(s)) { n++; s = next(rt, s); }
-        return n;
-    }
+    public static int count(Rt rt, long v) { return com._3sln.flint.kgen.rt.Seqwalk.seqCount(rt, v); }
 
-    /// A list from `n` values rooted at `base`. What a variadic arity folds its
-    /// surplus arguments into -- and it must be a SEQ, not a vector:
-    /// `clojure.core/list` is `[& xs] xs`, so a vector here makes `(list 1 2)`
-    /// print as `[1 2]`, the right elements in the wrong shape.
-    public static long fromRoots(Rt rt, int base, int n) {
-        int mk = rt.mark();
-        int acc = rt.push(emptyList(rt));
-        for (int i = n - 1; i >= 0; i--) {
-            long c = cons(rt, rt.r(base + i), rt.r(acc));
-            rt.setR(acc, c);
-        }
-        long out = rt.r(acc);
-        rt.popTo(mk);
-        return out;
-    }
+    public static long fromRoots(Rt rt, int base, int n) { return com._3sln.flint.kgen.rt.Seqcore.listFromRoots(rt, base, n); }
 }

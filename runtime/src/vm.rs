@@ -834,7 +834,7 @@ impl Rt {
                     let v = self.vat(rest_start + i);
                     self.push(v);
                 }
-                let l = self.list_from_roots(base, n);
+                let l = self.list_from_roots(base, n as u32);
                 self.pop_to(base);
                 l
             };

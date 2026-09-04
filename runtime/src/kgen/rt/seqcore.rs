@@ -89,4 +89,37 @@ impl Rt {
         self.pop_to(base);
         return Value::heap(a);
     }
+    /// A list from `n` values rooted at `base`, last-first.
+    /// 
+    /// What a variadic arity folds its surplus arguments into -- and it must be
+    /// a SEQ, not a vector: `clojure.core/list` is `[& xs] xs`, so a vector here
+    /// makes `(list 1 2)` print as `[1 2]`, the right elements in the wrong
+    /// shape.
+    /// 
+    /// THE LOOP COUNTS UP AND THE INDEX COUNTS DOWN. Rust wrote this as
+    /// `for i in (0..n).rev()` and both ports as `for (i = n - 1; i >= 0; i--)`;
+    /// kin's `for` is half-open and ASCENDING only. Converging the source is
+    /// cheaper than a descending loop form -- one form, three targets, and the
+    /// conses happen in the same order they did before.
+    /// 
+    /// `n` is tagged `I32` and not `RootIx`. It is a COUNT, and `RootIx` means
+    /// an index into the shadow stack; borrowing it here would compile on all
+    /// three and tell a reader something false, which is the reason `Ty` and
+    /// `Cat` are two tags. The cast back to an index is `as-idx`, which is what
+    /// Rust needs and what the ports spell as nothing at all.
+    pub fn list_from_roots(&mut self, base: usize, n: u32) -> Value {
+        let mk: usize = self.mark();
+        let empty: Value = self.empty_list();
+        let ai: usize = self.push(empty);
+        // HOISTED: `empty-list` and `push` both take `&mut self` in Rust,
+        // so nesting them is two mutable borrows at once.
+        for i in 0..n {
+            let x: Value = self.r(base + ((n - 1) - i) as usize);
+            let c: Value = self.cons(x, self.r(ai));
+            self.set_r(ai, c);
+        }
+        let out: Value = self.r(ai);
+        self.pop_to(mk);
+        return out;
+    }
 }

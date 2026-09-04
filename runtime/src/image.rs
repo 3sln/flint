@@ -256,7 +256,7 @@ impl Rt {
                     }
                     let out = match tag {
                         K_VECTOR => self.vec_from_roots(base, n),
-                        K_LIST => self.list_from_roots(base, n),
+                        K_LIST => self.list_from_roots(base, n as u32),
                         _ => {
                             let mut s = self.empty_set();
                             let si = self.push(s);

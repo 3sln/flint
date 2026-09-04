@@ -30,11 +30,6 @@ pub const LS_THUNK: u32 = 0;
 pub const LS_SEQ: u32 = 1;
 
 impl Rt {
-
-
-
-
-
     pub fn seq(&mut self, v: Value) -> Value {
         if v.is_nil() {
             return NIL;
@@ -129,41 +124,6 @@ impl Rt {
 
 
     // --- string character access ------------------------------------------
-
-
-
-    /// Walk a seq to its length. `count` on a counted collection does not use this.
-    pub fn seq_count(&mut self, v: Value) -> u32 {
-        let hint = self.count_hint(v);
-        if hint.is_fixnum() {
-            return hint.as_fixnum() as u32;
-        }
-        let base = self.mark();
-        let mut n = 0u32;
-        let cur = self.seq(v);
-        let ci = self.push(cur);
-        while !self.r(ci).is_nil() {
-            n += 1;
-            let nx = self.next(self.r(ci));
-            self.set_r(ci, nx);
-        }
-        self.pop_to(base);
-        n
-    }
-
-    /// Build a list from values already on the shadow stack, last-first.
-    pub fn list_from_roots(&mut self, base: usize, n: usize) -> Value {
-        let acc = self.empty_list();
-        let ai = self.push(acc);
-        for i in (0..n).rev() {
-            let x = self.r(base + i);
-            let c = self.cons(x, self.r(ai));
-            self.set_r(ai, c);
-        }
-        let out = self.r(ai);
-        self.pop_to(ai);
-        out
-    }
 }
 
 #[cfg(test)]

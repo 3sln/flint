@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Seqcore;
 using static global::_3sln.Flint.Kgen.Rt.Seqs;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;
 
@@ -147,5 +148,37 @@ public static class Seqwalk {
         rt.SetSlot(Val.AsHeap(l), LS_THUNK, Val.Nil);
         rt.SetSlot(Val.AsHeap(l), LS_SEQ, cur);
         return cur;
+    }
+    /// How many elements `v` has -- asking first, walking only if it must.
+    /// 
+    /// THE ASK IS THE POINT, and it is what both ports were missing. A vector,
+    /// a map, a counted cons chain all know their size without being walked,
+    /// and `count-hint` answers it; only when the answer is nil does this walk.
+    /// Rust had the fast path and the JVM and CLR did not, so `(count v)` was
+    /// O(1) on native and O(n) on both ports -- the same function, a different
+    /// complexity class, which is not a difference a conform diff can see
+    /// because both answers are right.
+    /// 
+    /// The cursor lives in the ROOT, not a host local: `next` forces a lazy
+    /// seq, forcing allocates, and `doc/decisions/0031` is that a value in a
+    /// host local does not survive an allocation.
+    public static int SeqCount(Rt rt, long v) {
+        long hint = CountHint(rt, v);
+        if (Val.IsFixnum(hint)) {
+            return (int) Val.AsFixnum(hint);
+        }
+        int @base = rt.Mark();
+        long s = global::Flint.Rt.Seqs.Seq(rt, v);
+        int ci = rt.Push(s);
+        // HOISTED: `seq-of` and `push` both take `&mut self` in Rust.
+        int n;
+        n = 0;
+        while (!Val.IsNil(rt.R(ci))) {
+            n += 1;
+            long nx = Next(rt, rt.R(ci));
+            rt.SetR(ci, nx);
+        }
+        rt.PopTo(@base);
+        return n;
     }
 }

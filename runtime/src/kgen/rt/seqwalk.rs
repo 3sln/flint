@@ -150,4 +150,36 @@ impl Rt {
         self.set(l, LS_SEQ, cur);
         return cur;
     }
+    /// How many elements `v` has -- asking first, walking only if it must.
+    /// 
+    /// THE ASK IS THE POINT, and it is what both ports were missing. A vector,
+    /// a map, a counted cons chain all know their size without being walked,
+    /// and `count-hint` answers it; only when the answer is nil does this walk.
+    /// Rust had the fast path and the JVM and CLR did not, so `(count v)` was
+    /// O(1) on native and O(n) on both ports -- the same function, a different
+    /// complexity class, which is not a difference a conform diff can see
+    /// because both answers are right.
+    /// 
+    /// The cursor lives in the ROOT, not a host local: `next` forces a lazy
+    /// seq, forcing allocates, and `doc/decisions/0031` is that a value in a
+    /// host local does not survive an allocation.
+    pub fn seq_count(&mut self, v: Value) -> u32 {
+        let hint: Value = self.count_hint(v);
+        if hint.is_fixnum() {
+            return hint.as_fixnum() as u32;
+        }
+        let base: usize = self.mark();
+        let s: Value = self.seq(v);
+        let ci: usize = self.push(s);
+        // HOISTED: `seq-of` and `push` both take `&mut self` in Rust.
+        let mut n: u32;
+        n = 0;
+        while !self.r(ci).is_nil() {
+            n += 1;
+            let nx: Value = self.next(self.r(ci));
+            self.set_r(ci, nx);
+        }
+        self.pop_to(base);
+        return n;
+    }
 }

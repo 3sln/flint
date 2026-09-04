@@ -13,7 +13,8 @@
 (ns flint.rt.seqcore
   (:require [flint.impl.rt :refer [defn return if let do comment doc
                                    not or == !=
-                                   mark push r pop-to alloc set-at slot heap
+                                   mark push r set-r pop-to alloc set-at slot heap
+                                   for as-idx empty-list
                                    fixnum as-fixnum nil? is-heap as-heap ty
                                    vec-count is-fixnum
                                    + -
@@ -85,3 +86,35 @@
         (set-at rt a C_COUNT NIL))
       (pop-to rt base)
       (return (heap a)))))
+
+(doc "A list from `n` values rooted at `base`, last-first."
+     ""
+     "What a variadic arity folds its surplus arguments into -- and it must be"
+     "a SEQ, not a vector: `clojure.core/list` is `[& xs] xs`, so a vector here"
+     "makes `(list 1 2)` print as `[1 2]`, the right elements in the wrong"
+     "shape."
+     ""
+     "THE LOOP COUNTS UP AND THE INDEX COUNTS DOWN. Rust wrote this as"
+     "`for i in (0..n).rev()` and both ports as `for (i = n - 1; i >= 0; i--)`;"
+     "kin's `for` is half-open and ASCENDING only. Converging the source is"
+     "cheaper than a descending loop form -- one form, three targets, and the"
+     "conses happen in the same order they did before."
+     ""
+     "`n` is tagged `I32` and not `RootIx`. It is a COUNT, and `RootIx` means"
+     "an index into the shadow stack; borrowing it here would compile on all"
+     "three and tell a reader something false, which is the reason `Ty` and"
+     "`Cat` are two tags. The cast back to an index is `as-idx`, which is what"
+     "Rust needs and what the ports spell as nothing at all.")
+(defn ^:pub ^:method ^Value list-from-roots [^:mut ^Rt rt ^RootIx base ^I32 n]
+  (let [^RootIx mk (mark rt)
+        ^Value empty (empty-list rt)
+        ^RootIx ai (push rt empty)]
+    (comment "HOISTED: `empty-list` and `push` both take `&mut self` in Rust,"
+             "so nesting them is two mutable borrows at once.")
+    (for [^I32 i 0 n]
+      (let [^Value x (r rt (+ base (as-idx (- (- n 1) i))))
+            ^Value c (cons rt x (r rt ai))]
+        (set-r rt ai c)))
+    (let [^Value out (r rt ai)]
+      (pop-to rt mk)
+      (return out))))

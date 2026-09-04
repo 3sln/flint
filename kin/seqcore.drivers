@@ -33,6 +33,13 @@ impl Rt {
     fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
     fn r(&self, i: usize) -> Value { self.roots[i] }
     fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    // `list-from-roots` builds onto one. Same shape as `seqwalk.drivers`'
+    // stub, because the two probes have to agree about what a list IS.
+    fn empty_list(&mut self) -> Value {
+        let a = self.alloc(TY_EMPTY_LIST, 1);
+        Value::heap(a)
+    }
     fn alloc(&mut self, t: u8, n: u32) -> Addr {
         if self.starve { return 0; }
         let a = self.bump; self.bump += n as u64 + 1;
@@ -102,6 +109,26 @@ fn main() {
 
     // A starved allocator answers nil rather than a half-built cell.
     rt.starve = true;
+    rt.starve = false;
+    // LIST-FROM-ROOTS, read back head-first. The values go on the shadow stack
+    // in order and must come back in that order: `base + n - 1 - i` counting up
+    // has to reproduce what `(0..n).rev()` did, and reversing it would still
+    // build a three-long list -- so the ELEMENTS are what is printed, not the
+    // length.
+    let b = rt.mark();
+    rt.push(Value(0x41)); rt.push(Value(0x42)); rt.push(Value(0x43));
+    let lst = rt.list_from_roots(b, 3);
+    let e0 = rt.slot(lst, C_FIRST);
+    let r1 = rt.slot(lst, C_REST); let e1 = rt.slot(r1, C_FIRST);
+    let r2 = rt.slot(r1, C_REST); let e2 = rt.slot(r2, C_FIRST);
+    let tail_empty = ty(&rt.gc.sp, rt.slot(r2, C_REST).as_heap()) == TY_EMPTY_LIST;
+    o.push_str(&format!("lfr={},{},{} lfrtail={} lfrcount={} ",
+                        e0.0, e1.0, e2.0, tail_empty as u32, rt.slot(lst, C_COUNT).0));
+    let empty_lst = rt.list_from_roots(b, 0);
+    o.push_str(&format!("lfr0={} ",
+                        (ty(&rt.gc.sp, empty_lst.as_heap()) == TY_EMPTY_LIST) as u32));
+    rt.pop_to(b);
+    rt.starve = true;
     o.push_str(&format!("starved={} ", rt.cons(Value(1), el).is_nil() as u32));
     println!("{}", o);
 }
@@ -135,6 +162,7 @@ fn main() {
         int push(long v) { roots.add(v); return roots.size() - 1; }
         long r(int i) { return roots.get(i); }
         void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void setR(int i, long v) { roots.set(i, v); }
         long alloc(int t, int n) {
             if (starve) return 0;
             long a = bump; bump += n + 1;
@@ -179,9 +207,46 @@ fn main() {
         long cv = cons(rt, 31, vv);
         o.append("onvec=").append(rt.slot(cv, C_COUNT)).append(' ');
         rt.starve = true;
+        rt.starve = false;
+        int b = rt.mark();
+        rt.push(0x41); rt.push(0x42); rt.push(0x43);
+        long lst = listFromRoots(rt, b, 3);
+        long r1 = rt.slot(lst, C_REST), r2 = rt.slot(r1, C_REST);
+        o.append("lfr=").append(rt.slot(lst, C_FIRST)).append(',')
+         .append(rt.slot(r1, C_FIRST)).append(',').append(rt.slot(r2, C_FIRST))
+         .append(" lfrtail=").append(ty(rt.gc.sp, Val.asHeap(rt.slot(r2, C_REST))) == TY_EMPTY_LIST ? 1 : 0)
+         .append(" lfrcount=").append(rt.slot(lst, C_COUNT)).append(' ');
+        long emptyLst = listFromRoots(rt, b, 0);
+        o.append("lfr0=").append(ty(rt.gc.sp, Val.asHeap(emptyLst)) == TY_EMPTY_LIST ? 1 : 0).append(' ');
+        rt.popTo(b);
+        rt.starve = true;
         o.append("starved=").append(Val.isNil(cons(rt, 1, el)) ? 1 : 0).append(' ');
         System.out.println(o.toString());
     }
+    // `empty-list` emits as `com.flint.rt.Seqs.emptyList` -- an ABSOLUTE name,
+    // because the definition lives in another unit. The probe has no such
+    // package, so it nests classes of those names. Same trick `seqwalk.drivers`
+    // uses, and it has to stay the same trick: two probes that disagree about
+    // what an empty list is would compare two different programs.
+    static long emptyListOf(Rt rt) { return Val.heap(rt.alloc(TY_EMPTY_LIST, 1)); }
+    static final class com {
+        static final class flint {
+            static final class rt {
+                static final class Seqs {
+                    static long emptyList(Rt rt2) { return emptyListOf(rt2); }
+                }
+            }
+        }
+    }
+--csharp-pre
+// The hand-written runtime as a REAL top-level namespace. The generated C#
+// reaches `empty-list` as `global::Flint.Rt.Seqs.EmptyList`, and `global::`
+// needs a genuine root -- a shim nested inside `class Probe` cannot be one.
+namespace Flint.Rt {
+    internal static class Seqs {
+        internal static long EmptyList(Probe.Rt rt) { return Probe.EmptyListOf(rt); }
+    }
+}
 --csharp-head
     const long NIL = 0xFFFFL;
     const int AM_BASE = 2, AM_META = 0, AM_HASH = 1;
@@ -193,6 +258,7 @@ fn main() {
         internal const int TyStrseq = 12, TyRange = 13, TyVec = 6, TySet = 16;
         internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
     }
+    internal static long EmptyListOf(Rt rt) { return Val.Heap(rt.Alloc(Obj.TyEmptyList, 1)); }
     static class Val {
         internal const long Nil = 0xFFFFL;
         internal static bool IsHeap(long v) { return v >= 100 && v != Nil; }
@@ -215,6 +281,7 @@ fn main() {
         internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
         internal long R(int i) { return roots[i]; }
         internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal void SetR(int i, long v) { roots[i] = v; }
         internal long Alloc(int t, int n) {
             if (starve) return 0;
             long a = bump; bump += n + 1;
@@ -263,6 +330,19 @@ fn main() {
         o.Append("uncounted=").Append(rt.Slot(u1, C_COUNT)).Append(',').Append(rt.Slot(u2, C_COUNT)).Append(' ');
         long cv = Cons(rt, 31, vv);
         o.Append("onvec=").Append(rt.Slot(cv, C_COUNT)).Append(' ');
+        rt.starve = true;
+        rt.starve = false;
+        int b = rt.Mark();
+        rt.Push(0x41); rt.Push(0x42); rt.Push(0x43);
+        long lst = ListFromRoots(rt, b, 3);
+        long r1 = rt.Slot(lst, C_REST), r2 = rt.Slot(r1, C_REST);
+        o.Append("lfr=").Append(rt.Slot(lst, C_FIRST)).Append(',')
+         .Append(rt.Slot(r1, C_FIRST)).Append(',').Append(rt.Slot(r2, C_FIRST))
+         .Append(" lfrtail=").Append(Obj.Ty(rt.gc.sp, Val.AsHeap(rt.Slot(r2, C_REST))) == Obj.TyEmptyList ? 1 : 0)
+         .Append(" lfrcount=").Append(rt.Slot(lst, C_COUNT)).Append(' ');
+        long emptyLst = ListFromRoots(rt, b, 0);
+        o.Append("lfr0=").Append(Obj.Ty(rt.gc.sp, Val.AsHeap(emptyLst)) == Obj.TyEmptyList ? 1 : 0).Append(' ');
+        rt.PopTo(b);
         rt.starve = true;
         o.Append("starved=").Append(Val.IsNil(Cons(rt, 1, el)) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
