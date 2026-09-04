@@ -37,8 +37,8 @@ fn two_executors_sending_into_one_end_lose_nothing() {
     let mut primary = Rt::with_heap(64 * 1024, 256 * 1024 * 1024);
     let label = primary.string("race");
     let pair = primary.make_channel(4 * n + 16, label);
-    let a = primary.vec_nth(pair, 0).unwrap();
-    let b = primary.vec_nth(pair, 1).unwrap();
+    let a = primary.vec_nth(pair, 0, flint_rt::value::NIL);
+    let b = primary.vec_nth(pair, 1, flint_rt::value::NIL);
     let (ai, bi) = (primary.push(a), primary.push(b));
     let mut secondary = unsafe { primary.executor() }.expect("a second executor");
 
@@ -91,8 +91,8 @@ fn a_full_ring_refuses_rather_than_growing() {
     let mut primary = Rt::with_heap(64 * 1024, 64 * 1024 * 1024);
     let label = primary.string("tiny");
     let pair = primary.make_channel(cap, label);
-    let a = primary.vec_nth(pair, 0).unwrap();
-    let b = primary.vec_nth(pair, 1).unwrap();
+    let a = primary.vec_nth(pair, 0, flint_rt::value::NIL);
+    let b = primary.vec_nth(pair, 1, flint_rt::value::NIL);
     let ai = primary.push(a);
     // Enqueued into THIS port's own ring, which is what `port_try_enqueue`
     // does -- `send` reaches across to the peer's, and mixing the two is what

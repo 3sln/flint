@@ -70,6 +70,8 @@ public static class Vec {
     /// `assoc` and `pop`, likewise delegating to their generated bodies.
     public static long Assoc(Rt rt, long v, int i, long x) { return VecAssoc(rt, v, i, x); }
     public static long Pop(Rt rt, long v) { return VecPop(rt, v); }
+    public static long Nth(Rt rt, long v, int i, long dflt) { return VecNth(rt, v, i, dflt); }
+    public static long TNth(Rt rt, long t, int i, long dflt) { return TvecNth(rt, t, i, dflt); }
 
     /// The TRANSIENT surface, under the names its callers already use.
     public static long NewEditToken(Rt rt) { return flint.rt.Vectrans.NewEditToken(rt); }
@@ -82,10 +84,6 @@ public static class Vec {
     public static long TPop(Rt rt, long t) { return TvecPop(rt, t); }
     public static long TPersistent(Rt rt, long t) { return TvecPersistent(rt, t); }
 
-    public static long Nth(Rt rt, long v, int i) {
-        if (i < 0 || i >= Count(rt, v)) return Val.NotFound;
-        return NodeGet(rt, ArrayFor(rt, v, i), i & MASK);
-    }
 
 
 
@@ -125,10 +123,6 @@ public static class Vec {
 
 
 
-    public static long TNth(Rt rt, long t, int i) {
-        if (i < 0 || i >= TCount(rt, t)) return Val.NotFound;
-        return NodeGet(rt, TArrayFor(rt, t, i), i & MASK);
-    }
 
 
 

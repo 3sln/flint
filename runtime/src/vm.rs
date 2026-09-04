@@ -698,9 +698,18 @@ impl Rt {
                 let r = if argc == 1 {
                     let k = self.vat(callee_at + 1);
                     match self.as_i64(k) {
-                        Some(i) if i >= 0 => self.vec_nth(callee, i as u32).unwrap_or_else(|| {
-                            self.throw_str("IndexOutOfBoundsException", "index out of range")
-                        }),
+                        Some(i) if i >= 0 => {
+                            // NOT_FOUND as the default, because out of range
+                            // has to RAISE here rather than answer nil, and
+                            // NOT_FOUND is the one value that cannot be an
+                            // element of a vector.
+                            let x = self.vec_nth(callee, i as u32, crate::value::NOT_FOUND);
+                            if x == crate::value::NOT_FOUND {
+                                self.throw_str("IndexOutOfBoundsException", "index out of range")
+                            } else {
+                                x
+                            }
+                        }
                         _ => self.throw_str("IllegalArgumentException", "vector index must be an integer"),
                     }
                 } else {

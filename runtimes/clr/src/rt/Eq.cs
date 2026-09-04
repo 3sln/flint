@@ -198,7 +198,7 @@ public static class Eq {
                 int vi = rt.Push(v);
                 int n = Vec.Count(rt, rt.R(vi)), acc = 1;
                 for (int i = 0; i < n; i++) {
-                    acc = flint.rt.Hash.OrderedStep(acc, HashValue(rt, Vec.Nth(rt, rt.R(vi), i)));
+                    acc = flint.rt.Hash.OrderedStep(acc, HashValue(rt, Vec.Nth(rt, rt.R(vi), i, Val.NotFound)));
                 }
                 int h = flint.rt.Hash.MixCollHash(acc, n);
                 rt.SetSlot(Val.AsHeap(rt.R(vi)), Vec.V_HASH, Val.Fixnum(h));

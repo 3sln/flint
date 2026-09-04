@@ -881,7 +881,7 @@ public sealed class Rt : System.IDisposable {
         }
         if (IsHeapTy(callee, TyVec)) {
             if (argc < 1) return ThrowStr("ArityException", "a vector takes 1 argument");
-            long got = Vec.Nth(this, callee, (int) Val.AsFixnum(roots.Stack[calleeAt + 1]));
+            long got = Vec.Nth(this, callee, (int) Val.AsFixnum(roots.Stack[calleeAt + 1]), Val.NotFound);
             return got == Val.NotFound ? Val.Nil : got;
         }
         // Say WHAT was called: "value is not a function" with no subject is
@@ -908,7 +908,7 @@ public sealed class Rt : System.IDisposable {
         }
         if (IsHeapTy(coll, TyVec)) {
             if (!Val.IsFixnum(k)) return dflt;
-            long got = Vec.Nth(this, coll, (int) Val.AsFixnum(k));
+            long got = Vec.Nth(this, coll, (int) Val.AsFixnum(k), Val.NotFound);
             return got == Val.NotFound ? dflt : got;
         }
         return dflt;   // `get` on a non-collection is nil, as Clojure's is

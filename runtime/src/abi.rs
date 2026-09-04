@@ -189,7 +189,7 @@ pub extern "C" fn flint_call(ptr: u32, len: u32) -> i32 {
         }
         let base = rt.mark();
         rt.push(call);
-        let namev = rt.vec_nth(rt.r(base), 0).unwrap_or(crate::value::NIL);
+        let namev = rt.vec_nth(rt.r(base), 0, crate::value::NIL);
         let mut b = crate::rt::sbuf();
         let name: alloc::string::String = match rt.as_str(namev, &mut b) {
             Some(s) => s.into(),
@@ -201,7 +201,7 @@ pub extern "C" fn flint_call(ptr: u32, len: u32) -> i32 {
         let n = rt.vec_count(rt.r(base)) as usize;
         let mut args = alloc::vec::Vec::with_capacity(n - 1);
         for i in 1..n {
-            args.push(rt.vec_nth(rt.r(base), i as u32).unwrap_or(crate::value::NIL));
+            args.push(rt.vec_nth(rt.r(base), i as u32, crate::value::NIL));
         }
         let out = rt.call_named(&name, &args);
         rt.pop_to(base);

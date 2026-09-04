@@ -111,6 +111,13 @@ fn main() {
         (rt.array_for(v33, 31) == leaf) as u32,
         (rt.array_for(v33, 32) == tail1) as u32));
     o.push_str(&format!("shift={} ", rt.vec_shift(v33)));
+    // `nth` with a DEFAULT: in range, in the tail, and past the end.
+    let leafv = Value(0x77);
+    rt.node_set(leaf, 3, leafv);
+    rt.node_set(tail1, 0, Value(0x88));
+    o.push_str(&format!("n3={} n32={} nover={} ",
+        rt.vec_nth(v33, 3, NIL).0, rt.vec_nth(v33, 32, NIL).0,
+        rt.vec_nth(v33, 33, Value(0xDEAD)).0));
     println!("{}", o);
 }
 --java-head
@@ -208,6 +215,11 @@ fn main() {
          .append(" a31=").append(arrayFor(rt, v33, 31) == leaf ? 1 : 0)
          .append(" a32=").append(arrayFor(rt, v33, 32) == tail1 ? 1 : 0).append(' ');
         o.append("shift=").append(vecShift(rt, v33)).append(' ');
+        nodeSet(rt, leaf, 3, 0x77);
+        nodeSet(rt, tail1, 0, 0x88);
+        o.append("n3=").append(vecNth(rt, v33, 3, NIL))
+         .append(" n32=").append(vecNth(rt, v33, 32, NIL))
+         .append(" nover=").append(vecNth(rt, v33, 33, 0xDEAD)).append(' ');
         System.out.println(o.toString());
     }
 --csharp-head
@@ -307,5 +319,10 @@ fn main() {
          .Append(" a31=").Append(ArrayFor(rt, v33, 31) == leaf ? 1 : 0)
          .Append(" a32=").Append(ArrayFor(rt, v33, 32) == tail1 ? 1 : 0).Append(' ');
         o.Append("shift=").Append(VecShift(rt, v33)).Append(' ');
+        NodeSet(rt, leaf, 3, 0x77);
+        NodeSet(rt, tail1, 0, 0x88);
+        o.Append("n3=").Append(VecNth(rt, v33, 3, NIL))
+         .Append(" n32=").Append(VecNth(rt, v33, 32, NIL))
+         .Append(" nover=").Append(VecNth(rt, v33, 33, 0xDEAD)).Append(' ');
         System.Console.WriteLine(o.ToString());
     }

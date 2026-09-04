@@ -817,7 +817,7 @@ mod tests {
         let evi = rt.push(ev);
         let mut seen = StdVec::new();
         for i in 0..50 {
-            let e = rt.vec_nth(rt.r(evi), i).unwrap();
+            let e = rt.vec_nth(rt.r(evi), i, crate::value::NIL);
             let (k, v) = (rt.slot(e, 0), rt.slot(e, 1));
             assert_eq!(v.as_fixnum(), k.as_fixnum() * 10);
             seen.push(k.as_fixnum());

@@ -221,7 +221,7 @@ fn park_a_string_and_collect(unhook: bool) -> (u64, bool) {
     // a shadow root here would keep the stack alive by a second path and the
     // control would prove nothing.
     let ts = rt.slot(rt.sched(), conc::SC_THREADS);
-    let th = rt.vec_nth(ts, 1).unwrap();
+    let th = rt.vec_nth(ts, 1, flint_rt::value::NIL);
     rt.save_thread_state(th);
     rt.roots.stack_top = 0;
     rt.pop_to(0);
@@ -236,7 +236,7 @@ fn park_a_string_and_collect(unhook: bool) -> (u64, bool) {
         return (copied, false);
     }
     let ts = rt.slot(rt.sched(), conc::SC_THREADS);
-    let th = rt.vec_nth(ts, 1).unwrap();
+    let th = rt.vec_nth(ts, 1, flint_rt::value::NIL);
     let saved = rt.thread_saved_stack(th);
     let back = rt.slot(saved, 0);
     let n = rt.str_len(back);

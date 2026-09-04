@@ -134,7 +134,7 @@ public static class Codec {
                     long nm = Table.schemaNameAt(rt, rt.R(si), c);
                     int ci = rt.Push(Table.tableColumn(rt, rt.R(vi), nm));
                     for (int i = 0; i < nrows; i++)
-                        EncodeInto(rt, Vec.Nth(rt, rt.R(ci), i), outs, depth + 1);
+                        EncodeInto(rt, Vec.Nth(rt, rt.R(ci), i, Val.NotFound), outs, depth + 1);
                     rt.PopTo(ci);
                 }
                 rt.PopTo(bas);

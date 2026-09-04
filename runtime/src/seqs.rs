@@ -194,7 +194,7 @@ impl Rt {
                 } else if self.ty(vec) == crate::obj::TY_TABLE {
                     self.table_ref(vec, i)
                 } else {
-                    self.vec_nth(vec, i).unwrap_or(NIL)
+                    self.vec_nth(vec, i, NIL)
                 }
             }
             TY_STRSEQ => {

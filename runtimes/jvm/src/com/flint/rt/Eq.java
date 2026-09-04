@@ -201,7 +201,7 @@ public final class Eq {
                 int vi = rt.push(v);
                 int n = Vec.count(rt, rt.r(vi)), acc = 1;
                 for (int i = 0; i < n; i++) {
-                    acc = flint.rt.Hash.orderedStep(acc, hashValue(rt, Vec.nth(rt, rt.r(vi), i)));
+                    acc = flint.rt.Hash.orderedStep(acc, hashValue(rt, Vec.nth(rt, rt.r(vi), i, Val.NOT_FOUND)));
                 }
                 int h = flint.rt.Hash.mixCollHash(acc, n);
                 rt.setSlot(Val.asHeap(rt.r(vi)), Vec.V_HASH, Val.fixnum(h));

@@ -107,13 +107,13 @@ public static class Table {
         int ii = rt.Push(emptyMap(rt));
         int di = rt.Push(emptyVec(rt));
         for (int i = 0; i < n; i++) {
-            long pair = Vec.Nth(rt, rt.R(pi), i);
+            long pair = Vec.Nth(rt, rt.R(pi), i, Val.NotFound);
             if (!rt.TypeP(8, pair) || Vec.Count(rt, pair) != 2) {
                 rt.PopTo(bas);
                 return rt.ThrowStr("IllegalArgumentException",
                     "a schema is [[name type] ...]; this entry is not a name and a type");
             }
-            long nm = Vec.Nth(rt, pair, 0), tp = Vec.Nth(rt, pair, 1);
+            long nm = Vec.Nth(rt, pair, 0, Val.NotFound), tp = Vec.Nth(rt, pair, 1, Val.NotFound);
             if (!rt.TypeP(5, nm)) {
                 rt.PopTo(bas);
                 return rt.ThrowStr("IllegalArgumentException", "a column name must be a keyword");
@@ -151,10 +151,10 @@ public static class Table {
     public static int schemaLen(Rt rt, long s) { return Vec.Count(rt, rt.Slot(s, SC_NAMES)); }
     public static int schemaWidth(Rt rt, long s) { return (int) Val.AsFixnum(rt.Slot(s, SC_WIDTH)); }
     public static int schemaIdAt(Rt rt, long s, int c) {
-        return (int) Val.AsFixnum(Vec.Nth(rt, rt.Slot(s, SC_IDS), c));
+        return (int) Val.AsFixnum(Vec.Nth(rt, rt.Slot(s, SC_IDS), c, Val.NotFound));
     }
-    public static long schemaNameAt(Rt rt, long s, int c) { return Vec.Nth(rt, rt.Slot(s, SC_NAMES), c); }
-    public static long schemaTypeAt(Rt rt, long s, int c) { return Vec.Nth(rt, rt.Slot(s, SC_TYPES), c); }
+    public static long schemaNameAt(Rt rt, long s, int c) { return Vec.Nth(rt, rt.Slot(s, SC_NAMES), c, Val.NotFound); }
+    public static long schemaTypeAt(Rt rt, long s, int c) { return Vec.Nth(rt, rt.Slot(s, SC_TYPES), c, Val.NotFound); }
 
     /// The column id of `name`, or -1.
     public static int schemaId(Rt rt, long s, long name) {
@@ -269,7 +269,7 @@ public static class Table {
                 long col = newObj(rt, Obj.TyNode, take);
                 int coli = rt.Push(col);
                 for (int k = 0; k < take; k++) {
-                    long rowv = Vec.Nth(rt, rt.R(ri), row + k);
+                    long rowv = Vec.Nth(rt, rt.R(ri), row + k, Val.NotFound);
                     int rvi = rt.Push(rowv);
                     long name = schemaNameAt(rt, rt.R(si), c);
                     long val = Mapread.MapGet(rt, rt.R(rvi), name, Val.Nil);
@@ -310,7 +310,7 @@ public static class Table {
         // row number becomes a chunk and a row within it, so a sliced table
         // needs no other arm to know it was sliced.
         int phys = i + tableOffset(rt, rt.R(ti));
-        long ch = Vec.Nth(rt, rt.Slot(rt.R(ti), TB_CHUNKS), phys >> CHUNK_SHIFT);
+        long ch = Vec.Nth(rt, rt.Slot(rt.R(ti), TB_CHUNKS), phys >> CHUNK_SHIFT, Val.NotFound);
         int chi = rt.Push(ch);
         long r = newObj(rt, Obj.TyTableref, RF_LEN);
         int ri = rt.Push(r);
@@ -555,7 +555,7 @@ public static class Table {
             rt.SetR(ci, Vec.Conj(rt, rt.R(ci), rt.R(chi)));
             rt.PopTo(chi);
         } else {
-            long ch = Vec.Nth(rt, rt.R(ci), which);
+            long ch = Vec.Nth(rt, rt.R(ci), which, Val.NotFound);
             int chi = rt.Push(ch);
             long nch = chunkWithRow(rt, rt.R(si), rt.R(chi), within, rt.R(ri), append);
             int nj = rt.Push(nch);
@@ -693,7 +693,7 @@ public static class Table {
         int oi = rt.Push(emptyVec(rt));
         for (int k = 0; k < nch; k++) {
             if (!rt.ChargeChecked(1, "migrate")) { rt.PopTo(bas); return Val.Nil; }
-            int chi = rt.Push(Vec.Nth(rt, rt.R(ci), k));
+            int chi = rt.Push(Vec.Nth(rt, rt.R(ci), k, Val.NotFound));
             int rows = chunkRows(rt, rt.R(chi));
             int ni = rt.Push(newChunk(rt, width, rows));
             for (int c = 0; c < n; c++) {
@@ -734,7 +734,7 @@ public static class Table {
     /// Cell `(row, column-id)`, straight out of the chunk. The scan path.
     static long tableCell(Rt rt, long t, int id, int i) {
         int phys = i + tableOffset(rt, t);
-        long ch = Vec.Nth(rt, rt.Slot(t, TB_CHUNKS), phys >> CHUNK_SHIFT);
+        long ch = Vec.Nth(rt, rt.Slot(t, TB_CHUNKS), phys >> CHUNK_SHIFT, Val.NotFound);
         return chunkGet(rt, ch, id, phys & (CHUNK - 1));
     }
 
@@ -761,7 +761,7 @@ public static class Table {
         int ci = rt.Push(rt.Slot(rt.R(ti), TB_CHUNKS));
         int ki = rt.Push(emptyVec(rt));
         for (int k = first; k <= last; k++)
-            rt.SetR(ki, Vec.Conj(rt, rt.R(ki), Vec.Nth(rt, rt.R(ci), k)));
+            rt.SetR(ki, Vec.Conj(rt, rt.R(ki), Vec.Nth(rt, rt.R(ci), k, Val.NotFound)));
         int si = rt.Push(rt.Slot(rt.R(ti), TB_SCHEMA));
         long nt = newObj(rt, Obj.TyTable, TB_LEN);
         int ni = rt.Push(nt);
@@ -845,11 +845,11 @@ public static class Table {
             int chi = rt.Push(newChunk(rt, width, take));
             for (int c = 0; c < ncols; c++) {
                 int id = schemaIdAt(rt, rt.R(si), c);
-                int sj = rt.Push(Vec.Nth(rt, rt.R(ci), c));
+                int sj = rt.Push(Vec.Nth(rt, rt.R(ci), c, Val.NotFound));
                 long tp = schemaTypeAt(rt, rt.R(si), c);
                 int cj = rt.Push(newObj(rt, Obj.TyNode, take));
                 for (int k = 0; k < take; k++) {
-                    long v = Vec.Nth(rt, rt.R(sj), row + k);
+                    long v = Vec.Nth(rt, rt.R(sj), row + k, Val.NotFound);
                     if (!typeOk(rt, tp, v)) {
                         string msg = columnTypeError(rt, schemaNameAt(rt, rt.R(si), c), tp, v, row + k);
                         rt.PopTo(bas);
@@ -911,7 +911,7 @@ public static class Table {
         int oi = rt.Push(openChunk(rt, rt.R(si)));
         int partial = count - full;
         if (partial > 0) {
-            int li = rt.Push(Vec.Nth(rt, rt.R(ci), full >> CHUNK_SHIFT));
+            int li = rt.Push(Vec.Nth(rt, rt.R(ci), full >> CHUNK_SHIFT, Val.NotFound));
             int ncols = schemaLen(rt, rt.R(si));
             rt.ChargeWork((long) partial * ncols);
             for (int c = 0; c < ncols; c++) {
@@ -925,7 +925,7 @@ public static class Table {
             int keep = Vec.Count(rt, rt.R(ci)) - 1;
             int pi = rt.Push(emptyVec(rt));
             for (int q = 0; q < keep; q++)
-                rt.SetR(pi, Vec.Conj(rt, rt.R(pi), Vec.Nth(rt, rt.R(ci), q)));
+                rt.SetR(pi, Vec.Conj(rt, rt.R(pi), Vec.Nth(rt, rt.R(ci), q, Val.NotFound)));
             rt.SetR(ci, rt.R(pi));
             rt.PopTo(li);
         }

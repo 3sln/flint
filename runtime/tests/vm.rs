@@ -123,7 +123,7 @@ fn arguments_arrive_as_a_vector_of_strings() {
     assert!(rt.is_vector(v));
     assert_eq!(rt.vec_count(v), 2);
     let mut b = sbuf();
-    let first = rt.vec_nth(v, 0).unwrap();
+    let first = rt.vec_nth(v, 0, flint_rt::value::NIL);
     assert_eq!(rt.as_str(first, &mut b), Some("alpha"));
 }
 
@@ -582,8 +582,8 @@ fn the_interpreter_survives_collection_at_every_allocation() {
     let v = rt.run_program(empty);
     assert!(rt.thrown.is_nil(), "threw under GC stress");
     assert_eq!(rt.vec_count(v), 300);
-    assert_eq!(rt.vec_nth(v, 0).unwrap().as_fixnum(), 300);
-    assert_eq!(rt.vec_nth(v, 299).unwrap().as_fixnum(), 1);
+    assert_eq!(rt.vec_nth(v, 0, flint_rt::value::NIL).as_fixnum(), 300);
+    assert_eq!(rt.vec_nth(v, 299, flint_rt::value::NIL).as_fixnum(), 1);
 }
 
 /// Regression: a frame used to cache its closure, and that copy was a root the
@@ -729,7 +729,11 @@ fn arguments_survive_the_module_initialisers() {
     assert!(!rt.failed(), "threw while running");
 
     // It came back intact rather than as whatever now occupies its old address.
-    let first = rt.vec_nth(r, 0).expect("argument vector should have one element");
+    // NOT_FOUND, then asserted: the point of the check is that the vector
+    // HAS an element, so an absent one must fail the test rather than become
+    // a nil that reads as a legitimate answer.
+    let first = rt.vec_nth(r, 0, flint_rt::value::NOT_FOUND);
+    assert_ne!(first, flint_rt::value::NOT_FOUND, "argument vector should have one element");
     let mut b = sbuf();
     assert_eq!(rt.as_str(first, &mut b), Some("the-one-argument"));
 

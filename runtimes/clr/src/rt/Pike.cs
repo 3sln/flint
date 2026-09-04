@@ -200,7 +200,7 @@ public static class Pike {
         int n = Vec.Count(rt, words);
         if (n < PROG_HDR) return rt.ThrowStr("IllegalArgumentException", "regex: malformed program");
         int[] raw = new int[n];
-        for (int k = 0; k < n; k++) raw[k] = (int) Val.AsFixnum(Vec.Nth(rt, words, k));
+        for (int k = 0; k < n; k++) raw[k] = (int) Val.AsFixnum(Vec.Nth(rt, words, k, Val.NotFound));
         int bas = rt.Mark();
         int si = rt.Push(source);
         long blob = rt.Alloc(Obj.TyRaw, raw.Length * 4);

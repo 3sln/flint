@@ -43,10 +43,10 @@ public class RtSnapshot {
     StringBuilder sb = new StringBuilder();
     int n = Vec.count(rt, v);
     for (int i = 0; i < n; i++) {
-      long inner = Vec.nth(rt, v, i);
-      sb.append(Val.asFixnum(Vec.nth(rt, inner, 0)));
+      long inner = Vec.nth(rt, v, i, Val.NOT_FOUND);
+      sb.append(Val.asFixnum(Vec.nth(rt, inner, 0, Val.NOT_FOUND)));
       sb.append('=');
-      sb.append(Str.text(rt, Vec.nth(rt, inner, 1)));
+      sb.append(Str.text(rt, Vec.nth(rt, inner, 1, Val.NOT_FOUND)));
       sb.append(';');
     }
     return sb.toString();

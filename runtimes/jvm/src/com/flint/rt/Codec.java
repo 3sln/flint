@@ -137,7 +137,7 @@ public final class Codec {
                     long nm = Table.schemaNameAt(rt, rt.r(si), c);
                     int ci = rt.push(Table.tableColumn(rt, rt.r(vi), nm));
                     for (int i = 0; i < nrows; i++)
-                        encodeInto(rt, Vec.nth(rt, rt.r(ci), i), out, depth + 1);
+                        encodeInto(rt, Vec.nth(rt, rt.r(ci), i, Val.NOT_FOUND), out, depth + 1);
                     rt.popTo(ci);
                 }
                 rt.popTo(base);

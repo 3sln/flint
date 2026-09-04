@@ -287,7 +287,7 @@ public static class Builtins {
             int i = (int) Val.AsFixnum(rt.VAt(at + 1));
             long got = Val.NotFound;
             if (rt.IsHeapTy(v, Obj.TyVec)) {
-                got = Vec.Nth(rt, v, i);
+                got = Vec.Nth(rt, v, i, Val.NotFound);
             } else if (Str.IsString(rt, v)) {
                 got = Str.Nth(rt, v, i);
             } else if (rt.IsHeapTy(v, Obj.TyMapentry)) {
@@ -500,13 +500,13 @@ public static class Builtins {
             if (Vec.IsTransient(rt, coll)) {
                 long k2 = rt.VAt(at + 1);
                 if (!Val.IsFixnum(k2)) return dflt;
-                long got2 = Vec.TNth(rt, coll, (int) Val.AsFixnum(k2));
+                long got2 = Vec.TNth(rt, coll, (int) Val.AsFixnum(k2), Val.NotFound);
                 return got2 == Val.NotFound ? dflt : got2;
             }
             if (rt.IsHeapTy(coll, Obj.TyVec)) {
                 long k = rt.VAt(at + 1);
                 if (!Val.IsFixnum(k)) return dflt;
-                long got = Vec.Nth(rt, coll, (int) Val.AsFixnum(k));
+                long got = Vec.Nth(rt, coll, (int) Val.AsFixnum(k), Val.NotFound);
                 return got == Val.NotFound ? dflt : got;
             }
             // A TABLE indexes by ROW. There are TWO `get` paths in this port
@@ -760,7 +760,7 @@ public static class Builtins {
             // takes the end that is cheap.
             if (rt.IsHeapTy(v, Obj.TyVec)) {
                 int c = Vec.Count(rt, v);
-                return c == 0 ? Val.Nil : Vec.Nth(rt, v, c - 1);
+                return c == 0 ? Val.Nil : Vec.Nth(rt, v, c - 1, Val.NotFound);
             }
             return Seqs.First(rt, v);
         });
@@ -902,7 +902,7 @@ public static class Builtins {
                 return rt.ThrowStr("ClassCastException", "bytes->str wants a vector of bytes");
             int c = Vec.Count(rt, v);
             byte[] b = new byte[c];
-            for (int i = 0; i < c; i++) b[i] = (byte) Val.AsFixnum(Vec.Nth(rt, v, i));
+            for (int i = 0; i < c; i++) b[i] = (byte) Val.AsFixnum(Vec.Nth(rt, v, i, Val.NotFound));
             return Str.Of(rt, System.Text.Encoding.UTF8.GetString(b));
         });
         Def("flint/bits->double", (rt, at, n) => {
@@ -1043,7 +1043,7 @@ public static class Builtins {
             long v = rt.VAt(at);
             int c = Vec.Count(rt, v);
             byte[] b = new byte[c];
-            for (int i = 0; i < c; i++) b[i] = (byte) Val.AsFixnum(Vec.Nth(rt, v, i));
+            for (int i = 0; i < c; i++) b[i] = (byte) Val.AsFixnum(Vec.Nth(rt, v, i, Val.NotFound));
             return Bytes.Of(rt, b);
         });
         Def("flint/b->vec", (rt, at, n) => {

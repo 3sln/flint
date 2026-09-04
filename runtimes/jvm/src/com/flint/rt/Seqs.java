@@ -173,7 +173,7 @@ public final class Seqs {
             // A TABLE rides on `TY_VECSEQ`; only `first` differs, and it
             // differs by handing back a ref (`doc/decisions/0026`).
             if (Table.isTable(rt, coll)) return Table.tableRef(rt, coll, i);
-            return Vec.nth(rt, coll, i);
+            return Vec.nth(rt, coll, i, Val.NOT_FOUND);
         }
         if (t == TY_STRSEQ) return Str.nth(rt, rt.slot(s, 0), (int) Val.asFixnum(rt.slot(s, 1)));
         if (t == TY_RANGE) return rt.slot(s, 0);

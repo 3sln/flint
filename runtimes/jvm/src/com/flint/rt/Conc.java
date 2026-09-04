@@ -215,7 +215,7 @@ public final class Conc {
     public static long currentThread(Rt rt) {
         long s = sched(rt);
         if (Val.isNil(s)) return Val.NIL;
-        return Vec.nth(rt, rt.slot(s, SC_THREADS), (int) fx(rt.slot(s, SC_CURRENT)));
+        return Vec.nth(rt, rt.slot(s, SC_THREADS), (int) fx(rt.slot(s, SC_CURRENT)), Val.NOT_FOUND);
     }
 
     // --- saving and restoring a VM state ------------------------------------
@@ -382,7 +382,7 @@ public final class Conc {
         long idx;
         int wi;
         if (free >= 0) {
-            long w = Vec.nth(rt, rt.slot(rt.r(si), SC_WAITERS), (int) free);
+            long w = Vec.nth(rt, rt.slot(rt.r(si), SC_WAITERS), (int) free, Val.NOT_FOUND);
             rt.setSlot(Val.asHeap(rt.r(si)), SC_WFREE, Val.fixnum(fx(rt.slot(w, W_NEXT))));
             idx = free;
             wi = rt.push(w);
@@ -410,7 +410,7 @@ public final class Conc {
         if (token <= 0 || (token & 0xFFFF) == 0) return Val.NIL;
         int idx = (int) (token & 0xFFFF) - 1;
         long gen = token >> 16;
-        long w = Vec.nth(rt, waiters(rt), idx);
+        long w = Vec.nth(rt, waiters(rt), idx, Val.NOT_FOUND);
         if (w == Val.NOT_FOUND || Val.isNil(w)) return Val.NIL;
         if (fx(rt.slot(w, W_GEN)) != gen || Val.isNil(rt.slot(w, W_THREAD))) return Val.NIL;
         return w;
@@ -439,7 +439,7 @@ public final class Conc {
         long ws = waiters(rt);
         int n = Vec.count(rt, ws), c = 0;
         for (int i = 0; i < n; i++) {
-            long w = Vec.nth(rt, ws, i);
+            long w = Vec.nth(rt, ws, i, Val.NOT_FOUND);
             if (!Val.isNil(w) && w != Val.NOT_FOUND && !Val.isNil(rt.slot(w, W_THREAD))) c++;
         }
         return c;
@@ -501,7 +501,7 @@ public final class Conc {
         long ws = waiters(rt);
         int n = Vec.count(rt, ws);
         for (int i = 0; i < n; i++) {
-            long w = Vec.nth(rt, ws, i);
+            long w = Vec.nth(rt, ws, i, Val.NOT_FOUND);
             if (Val.isNil(w) || Val.isNil(rt.slot(w, W_THREAD))) continue;
             if (rt.slot(w, W_PORT) == p) wakeWaiter(rt, w);
         }
@@ -722,8 +722,8 @@ public final class Conc {
         long ps = rt.slot(sched(rt), SC_PAIRS);
         int n = Vec.count(rt, ps);
         for (int i = 0; i < n; i++) {
-            long e = Vec.nth(rt, ps, i);
-            if (fx(Vec.nth(rt, e, 0)) == id) return fx(Vec.nth(rt, e, 1));
+            long e = Vec.nth(rt, ps, i, Val.NOT_FOUND);
+            if (fx(Vec.nth(rt, e, 0, Val.NOT_FOUND)) == id) return fx(Vec.nth(rt, e, 1, Val.NOT_FOUND));
         }
         return -1;
     }
@@ -900,7 +900,7 @@ public final class Conc {
             int ei = rt.push(Sets.elementVector(rt, rt.r(vi)));
             int n = Vec.count(rt, rt.r(ei));
             for (int i = 0; i < n; i++) {
-                out = checkSendableAt(rt, Vec.nth(rt, rt.r(ei), i), depth + 1, carry);
+                out = checkSendableAt(rt, Vec.nth(rt, rt.r(ei), i, Val.NOT_FOUND), depth + 1, carry);
                 if (out != null) break;
             }
         } else if (rt.isSequential(rt.r(vi))) {
@@ -1064,8 +1064,8 @@ public final class Conc {
                 // been charged, and once a bridge carried VALUES it walked a
                 // keyword as a string. On the Rust that was a segfault.
                 long item = rt.r(vi);
-                long n = fx(Vec.nth(rt, item, 0));
-                rt.setR(vi, Vec.nth(rt, item, 1));
+                long n = fx(Vec.nth(rt, item, 0, Val.NOT_FOUND));
+                rt.setR(vi, Vec.nth(rt, item, 1, Val.NOT_FOUND));
                 long queued = fx(rt.slot(rt.r(pi), PT_BYTES));
                 rt.setSlot(Val.asHeap(rt.r(pi)), PT_BYTES, Val.fixnum(queued > n ? queued - n : 0));
             }
@@ -1165,7 +1165,7 @@ public final class Conc {
         int n = Vec.count(rt, rt.r(bi));
         int ki = rt.push(Vec.empty(rt));
         for (int k = 0; k < n; k++) {
-            long x = fx(Vec.nth(rt, rt.r(bi), k));
+            long x = fx(Vec.nth(rt, rt.r(bi), k, Val.NOT_FOUND));
             if (x == id) continue;
             rt.setR(ki, Vec.conj(rt, rt.r(ki), Val.fixnum(x)));
         }
@@ -1238,7 +1238,7 @@ public final class Conc {
         rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(ni)));
         int an = rt.isHeapTy(rt.r(ai), TY_VEC) ? Vec.count(rt, rt.r(ai)) : 0;
         for (int k = 0; k < an; k++) {
-            rt.setR(vi, Vec.conj(rt, rt.r(vi), Vec.nth(rt, rt.r(ai), k)));
+            rt.setR(vi, Vec.conj(rt, rt.r(vi), Vec.nth(rt, rt.r(ai), k, Val.NOT_FOUND)));
         }
         byte[] call;
         try {
@@ -1283,7 +1283,7 @@ public final class Conc {
             // the way `portOpen` reads it off `isPort` -- a host answering nil
             // and a host refusing would be the same bits.
             if (rt.isHeapTy(pending, TY_VEC)) {
-                long v = Vec.count(rt, pending) > 0 ? Vec.nth(rt, pending, 0) : Val.NIL;
+                long v = Vec.count(rt, pending) > 0 ? Vec.nth(rt, pending, 0, Val.NOT_FOUND) : Val.NIL;
                 rt.popTo(base);
                 return v;
             }
@@ -1312,7 +1312,7 @@ public final class Conc {
         rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.r(ni)));
         int an = rt.isHeapTy(rt.r(ai), TY_VEC) ? Vec.count(rt, rt.r(ai)) : 0;
         for (int k = 0; k < an; k++) {
-            rt.setR(vi, Vec.conj(rt, rt.r(vi), Vec.nth(rt, rt.r(ai), k)));
+            rt.setR(vi, Vec.conj(rt, rt.r(vi), Vec.nth(rt, rt.r(ai), k, Val.NOT_FOUND)));
         }
         byte[] call;
         try {
@@ -1581,11 +1581,11 @@ public final class Conc {
         byte[] header = new byte[n * 20];
         out.write(header, 0, header.length);
         for (int i = 0; i < n; i++) {
-            long e = Vec.nth(rt, rt.r(ei), i);
-            long kind = fx(Vec.nth(rt, e, 0));
-            long a = fx(Vec.nth(rt, e, 1));
-            long b = fx(Vec.nth(rt, e, 2));
-            long payload = Vec.nth(rt, e, 3);
+            long e = Vec.nth(rt, rt.r(ei), i, Val.NOT_FOUND);
+            long kind = fx(Vec.nth(rt, e, 0, Val.NOT_FOUND));
+            long a = fx(Vec.nth(rt, e, 1, Val.NOT_FOUND));
+            long b = fx(Vec.nth(rt, e, 2, Val.NOT_FOUND));
+            long payload = Vec.nth(rt, e, 3, Val.NOT_FOUND);
             int off = out.size();   // the header is already in `out`
             int plen;
             if (Bytes.isBytes(rt, payload)) {
@@ -1594,7 +1594,7 @@ public final class Conc {
                 plen = bs.length;
             } else if (rt.isHeapTy(payload, TY_VEC)) {
                 int m = Vec.count(rt, payload);
-                for (int k = 0; k < m; k++) out.write((int) fx(Vec.nth(rt, payload, k)) & 0xFF);
+                for (int k = 0; k < m; k++) out.write((int) fx(Vec.nth(rt, payload, k, Val.NOT_FOUND)) & 0xFF);
                 plen = m;
             } else if (Str.isString(rt, payload)) {
                 byte[] bs = Str.text(rt, payload).getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -1657,7 +1657,7 @@ public final class Conc {
         int bn = Vec.count(rt, rt.r(bi));
         int hi = rt.push(Vec.empty(rt));
         for (int k = 0; k < bn; k++) {
-            long id = fx(Vec.nth(rt, rt.r(bi), k));
+            long id = fx(Vec.nth(rt, rt.r(bi), k, Val.NOT_FOUND));
             if (Val.isNil(portById(rt, id))) {
                 // CLOSED as well as released. `doc/decisions/0006`: an end the
                 // collector finds unreachable IS the script having called
@@ -1675,7 +1675,7 @@ public final class Conc {
         int n = Vec.count(rt, rt.r(ii));
         int li = rt.push(Vec.empty(rt));
         for (int k = 0; k < n; k++) {
-            long id = fx(Vec.nth(rt, rt.r(ii), k));
+            long id = fx(Vec.nth(rt, rt.r(ii), k, Val.NOT_FOUND));
             long p = portById(rt, id);
             if (!Val.isNil(p)) {
                 rt.setR(li, Vec.conj(rt, rt.r(li), Val.fixnum(id)));
@@ -1709,7 +1709,7 @@ public final class Conc {
         int wsi = rt.push(waiters(rt));
         int n = Vec.count(rt, rt.r(wsi));
         for (int i = 0; i < n; i++) {
-            long w = Vec.nth(rt, rt.r(wsi), i);
+            long w = Vec.nth(rt, rt.r(wsi), i, Val.NOT_FOUND);
             if (w == Val.NOT_FOUND || Val.isNil(w) || Val.isNil(rt.slot(w, W_THREAD))) continue;
             if (rt.slot(w, W_PORT) != rt.r(pi)) continue;
             int ti = rt.push(rt.slot(w, W_THREAD));
@@ -1734,7 +1734,7 @@ public final class Conc {
         int ii = rt.push(rt.slot(rt.r(si), SC_PORTS));
         int n = Vec.count(rt, rt.r(ii));
         for (int k = 0; k < n; k++) {
-            long p = portById(rt, fx(Vec.nth(rt, rt.r(ii), k)));
+            long p = portById(rt, fx(Vec.nth(rt, rt.r(ii), k, Val.NOT_FOUND)));
             if (Val.isNil(p)) continue;
             int pi = rt.push(p);
             if (crossesAHeap(fx(rt.slot(rt.r(pi), PT_KIND)))
@@ -1835,7 +1835,7 @@ public final class Conc {
         int cur = (int) fx(rt.slot(s, SC_CURRENT));
         for (int k = 1; k <= n; k++) {
             int i = (cur + k) % n;
-            long th = Vec.nth(rt, ts, i);
+            long th = Vec.nth(rt, ts, i, Val.NOT_FOUND);
             if (Val.isNil(th) || th == Val.NOT_FOUND) continue;
             long st = fx(rt.slot(th, TH_STATUS));
             if (st == ST_NEW || st == ST_RUNNABLE) return i;
@@ -1846,7 +1846,7 @@ public final class Conc {
     static void runOne(Rt rt, int i) {
         long s = sched(rt);
         rt.setSlot(Val.asHeap(s), SC_CURRENT, Val.fixnum(i));
-        long th = Vec.nth(rt, rt.slot(s, SC_THREADS), i);
+        long th = Vec.nth(rt, rt.slot(s, SC_THREADS), i, Val.NOT_FOUND);
         if (Val.isNil(th) || th == Val.NOT_FOUND) return;
         int base = rt.mark();
         int ti = rt.push(th);
@@ -1897,14 +1897,14 @@ public final class Conc {
     /// Defining completion any other way means a program that leaves a reader
     /// parked never terminates.
     static boolean mainFinished(Rt rt) {
-        long th = Vec.nth(rt, rt.slot(sched(rt), SC_THREADS), 0);
+        long th = Vec.nth(rt, rt.slot(sched(rt), SC_THREADS), 0, Val.NOT_FOUND);
         if (Val.isNil(th) || th == Val.NOT_FOUND) return true;
         long st = fx(rt.slot(th, TH_STATUS));
         return st == ST_DONE || st == ST_FAILED;
     }
 
     static long mainResult(Rt rt) {
-        long th = Vec.nth(rt, rt.slot(sched(rt), SC_THREADS), 0);
+        long th = Vec.nth(rt, rt.slot(sched(rt), SC_THREADS), 0, Val.NOT_FOUND);
         long r = (Val.isNil(th) || th == Val.NOT_FOUND) ? Val.NIL : rt.slot(th, TH_RESULT);
         return r;
     }
@@ -1941,7 +1941,7 @@ public final class Conc {
         long ts = rt.slot(sched(rt), SC_THREADS);
         int n = Vec.count(rt, ts);
         for (int i = 0; i < n; i++) {
-            long th = Vec.nth(rt, ts, i);
+            long th = Vec.nth(rt, ts, i, Val.NOT_FOUND);
             if (Val.isNil(th) || th == Val.NOT_FOUND) continue;
             if (fx(rt.slot(th, TH_STATUS)) != ST_PARKED) continue;
             long on = rt.slot(th, TH_PARK_ON);
@@ -1979,7 +1979,7 @@ public final class Conc {
             int stuck = 0;
             StringBuilder detail = new StringBuilder();
             for (int k = 0; k < n; k++) {
-                long th = Vec.nth(rt, ts, k);
+                long th = Vec.nth(rt, ts, k, Val.NOT_FOUND);
                 if (Val.isNil(th) || th == Val.NOT_FOUND) continue;
                 if (fx(rt.slot(th, TH_STATUS)) != ST_PARKED) continue;
                 stuck++;

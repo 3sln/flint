@@ -103,4 +103,23 @@ public final class Vecread {
         }
         return node;
     }
+    /// Element `i` of `v`, or `dflt` when `i` is out of range.
+    /// 
+    /// A DEFAULT and not an absent value, which is a CONVERGENCE rather than a
+    /// port. Rust answered `Option<Value>` and both ports answered a fixed
+    /// `NOT_FOUND`, and counting settled it: of 95 call sites in Rust, 70 were
+    /// `.unwrap_or(NIL)` and 19 were `.unwrap()` on an index the caller had
+    /// already bounds-checked. That is an `Option` being spelled out as a
+    /// default 89 times, not an `Option` being used as one.
+    /// 
+    /// It is `map-get`'s signature, which is the point of choosing it: the two
+    /// lookups in the runtime answer absence the same way instead of each
+    /// having its own idea. Every port call site passes `NOT_FOUND` and behaves
+    /// exactly as before; what changed is that absence is an argument.
+    public static long vecNth(Rt rt, long v, int i, long dflt) {
+        if (i >= Vec.count(rt, v)) {
+            return dflt;
+        }
+        return nodeGet(rt, arrayFor(rt, v, i), i & MASK);
+    }
 }

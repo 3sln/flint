@@ -364,7 +364,7 @@ impl Rt {
         self.charge_work(n as u64);
         let mut raw: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(n);
         for k in 0..n {
-            let v = self.vec_nth(words, k as u32).unwrap_or(NIL);
+            let v = self.vec_nth(words, k as u32, NIL);
             raw.push(v.as_fixnum() as u32);
         }
         let base = self.mark();

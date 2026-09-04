@@ -13,7 +13,7 @@
 
 use crate::obj::*;
 use crate::rt::Rt;
-use crate::value::{Value, NIL};
+use crate::value::{Value, NIL, NOT_FOUND};
 
 pub const BITS: u32 = 5;
 pub const WIDTH: u32 = 1 << BITS; // 32
@@ -96,13 +96,6 @@ impl Rt {
         slot(&self.gc.sp, v.as_heap(), V_TAIL)
     }
 
-    pub fn vec_nth(&self, v: Value, i: u32) -> Option<Value> {
-        if i >= self.vec_count(v) {
-            return None;
-        }
-        let arr = self.array_for(v, i);
-        Some(self.node_get(arr, i & MASK))
-    }
 
 
 
@@ -152,11 +145,6 @@ impl Rt {
 
 
 
-    pub fn tvec_nth(&self, t: Value, i: u32) -> Option<Value> {
-        if i >= self.tvec_count(t) { return None; }
-        let arr = self.t_array_for(t, i);
-        Some(self.node_get(arr, i & MASK))
-    }
 
 
 
@@ -181,7 +169,7 @@ mod tests {
     }
 
     fn to_vec(rt: &Rt, v: Value) -> StdVec<i64> {
-        (0..rt.vec_count(v)).map(|i| rt.vec_nth(v, i).unwrap().as_fixnum()).collect()
+        (0..rt.vec_count(v)).map(|i| rt.vec_nth(v, i, crate::value::NIL).as_fixnum()).collect()
     }
 
     #[test]
@@ -189,7 +177,7 @@ mod tests {
         let rt = Rt::new();
         assert_eq!(rt.vec_count(rt.empty_vec()), 0);
         assert!(rt.is_vector(rt.empty_vec()));
-        assert_eq!(rt.vec_nth(rt.empty_vec(), 0), None);
+        assert_eq!(rt.vec_nth(rt.empty_vec(), 0, NOT_FOUND), NOT_FOUND);
     }
 
     #[test]
@@ -200,9 +188,9 @@ mod tests {
             let v = build(&mut rt, n);
             assert_eq!(rt.vec_count(v), n, "count at n={n}");
             for i in 0..n {
-                assert_eq!(rt.vec_nth(v, i).map(|x| x.as_fixnum()), Some(i as i64), "nth {i} of {n}");
+                assert_eq!(rt.vec_nth(v, i, NOT_FOUND).as_fixnum(), i as i64, "nth {i} of {n}");
             }
-            assert_eq!(rt.vec_nth(v, n), None, "out of range at n={n}");
+            assert_eq!(rt.vec_nth(v, n, NOT_FOUND), NOT_FOUND, "out of range at n={n}");
         }
     }
 
@@ -214,8 +202,8 @@ mod tests {
         let b = rt.vec_conj(rt.r(ai), Value::fixnum(999));
         assert_eq!(rt.vec_count(rt.r(ai)), 40, "the original is untouched");
         assert_eq!(rt.vec_count(b), 41);
-        assert_eq!(rt.vec_nth(b, 40).unwrap().as_fixnum(), 999);
-        assert_eq!(rt.vec_nth(rt.r(ai), 39).unwrap().as_fixnum(), 39);
+        assert_eq!(rt.vec_nth(b, 40, crate::value::NIL).as_fixnum(), 999);
+        assert_eq!(rt.vec_nth(rt.r(ai), 39, crate::value::NIL).as_fixnum(), 39);
     }
 
     #[test]
@@ -226,13 +214,13 @@ mod tests {
             let ai = rt.push(a);
             for i in [0u32, n / 2, n - 1] {
                 let b = rt.vec_assoc(rt.r(ai), i, Value::fixnum(-1));
-                assert_eq!(rt.vec_nth(b, i).unwrap().as_fixnum(), -1, "n={n} i={i}");
+                assert_eq!(rt.vec_nth(b, i, crate::value::NIL).as_fixnum(), -1, "n={n} i={i}");
                 assert_eq!(rt.vec_count(b), n);
-                assert_eq!(rt.vec_nth(rt.r(ai), i).unwrap().as_fixnum(), i as i64, "original intact");
+                assert_eq!(rt.vec_nth(rt.r(ai), i, crate::value::NIL).as_fixnum(), i as i64, "original intact");
                 // every other index unchanged
                 for j in [0u32, n / 3, n - 1] {
                     if j != i {
-                        assert_eq!(rt.vec_nth(b, j).unwrap().as_fixnum(), j as i64);
+                        assert_eq!(rt.vec_nth(b, j, crate::value::NIL).as_fixnum(), j as i64);
                     }
                 }
             }
@@ -259,7 +247,7 @@ mod tests {
             rt.set_r(vi, nv);
             assert_eq!(rt.vec_count(rt.r(vi)), k, "after popping down to {k}");
             if k > 0 {
-                assert_eq!(rt.vec_nth(rt.r(vi), k - 1).unwrap().as_fixnum(), (k - 1) as i64);
+                assert_eq!(rt.vec_nth(rt.r(vi), k - 1, crate::value::NIL).as_fixnum(), (k - 1) as i64);
             }
         }
         v = rt.r(vi);
@@ -288,8 +276,8 @@ mod tests {
         let b = rt.vec_assoc(rt.r(vi), 200, Value::fixnum(-7));
         let bi = rt.push(b);
         rt.collect();
-        assert_eq!(rt.vec_nth(rt.r(bi), 200).unwrap().as_fixnum(), -7);
-        assert_eq!(rt.vec_nth(rt.r(vi), 200).unwrap().as_fixnum(), 200);
+        assert_eq!(rt.vec_nth(rt.r(bi), 200, crate::value::NIL).as_fixnum(), -7);
+        assert_eq!(rt.vec_nth(rt.r(vi), 200, crate::value::NIL).as_fixnum(), 200);
     }
 
     #[test]
@@ -306,7 +294,7 @@ mod tests {
         v = rt.r(vi);
         let mut b = crate::rt::sbuf();
         for i in [0u32, 999, 1999] {
-            let s = rt.vec_nth(v, i).unwrap();
+            let s = rt.vec_nth(v, i, crate::value::NIL);
             assert_eq!(rt.as_str(s, &mut b), Some(alloc::format!("element number {i}").as_str()));
             let mut b2 = crate::rt::sbuf();
             let _ = &mut b2;
@@ -320,10 +308,10 @@ mod transient_tests {
     use alloc::vec::Vec as StdVec;
 
     fn tv_to_vec(rt: &Rt, t: Value) -> StdVec<i64> {
-        (0..rt.tvec_count(t)).map(|i| rt.tvec_nth(t, i).unwrap().as_fixnum()).collect()
+        (0..rt.tvec_count(t)).map(|i| rt.tvec_nth(t, i, crate::value::NIL).as_fixnum()).collect()
     }
     fn to_vec(rt: &Rt, v: Value) -> StdVec<i64> {
-        (0..rt.vec_count(v)).map(|i| rt.vec_nth(v, i).unwrap().as_fixnum()).collect()
+        (0..rt.vec_count(v)).map(|i| rt.vec_nth(v, i, crate::value::NIL).as_fixnum()).collect()
     }
 
     #[test]
@@ -367,8 +355,8 @@ mod transient_tests {
         assert_eq!(to_vec(&rt, v), (0..100i64).collect::<StdVec<_>>(), "source contents unchanged");
         let out = rt.tvec_persistent(rt.r(ti));
         assert_eq!(rt.vec_count(out), 200);
-        assert_eq!(rt.vec_nth(out, 0).unwrap().as_fixnum(), -5);
-        assert_eq!(rt.vec_nth(out, 199).unwrap().as_fixnum(), 1099);
+        assert_eq!(rt.vec_nth(out, 0, crate::value::NIL).as_fixnum(), -5);
+        assert_eq!(rt.vec_nth(out, 199, crate::value::NIL).as_fixnum(), 1099);
     }
 
     #[test]
@@ -386,7 +374,7 @@ mod transient_tests {
             rt.set_r(ti, nt);
         }
         for i in (0..2000).step_by(37) {
-            assert_eq!(rt.tvec_nth(rt.r(ti), i as u32).unwrap().as_fixnum(), -i);
+            assert_eq!(rt.tvec_nth(rt.r(ti), i as u32, crate::value::NIL).as_fixnum(), -i);
         }
         for _ in 0..500 {
             let nt = rt.tvec_pop(rt.r(ti));
@@ -395,8 +383,8 @@ mod transient_tests {
         assert_eq!(rt.tvec_count(rt.r(ti)), 1500);
         let v = rt.tvec_persistent(rt.r(ti));
         assert_eq!(rt.vec_count(v), 1500);
-        assert_eq!(rt.vec_nth(v, 1499).unwrap().as_fixnum(), 1499);
-        assert_eq!(rt.vec_nth(v, 37).unwrap().as_fixnum(), -37);
+        assert_eq!(rt.vec_nth(v, 1499, crate::value::NIL).as_fixnum(), 1499);
+        assert_eq!(rt.vec_nth(v, 37, crate::value::NIL).as_fixnum(), -37);
     }
 
     #[test]

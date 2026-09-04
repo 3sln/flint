@@ -298,7 +298,7 @@ public final class Builtins {
             int i = (int) Val.asFixnum(rt.vat(at + 1));
             long got = Val.NOT_FOUND;
             if (rt.isHeapTy(v, TY_VEC)) {
-                got = Vec.nth(rt, v, i);
+                got = Vec.nth(rt, v, i, Val.NOT_FOUND);
             } else if (Str.isString(rt, v)) {
                 got = Str.nth(rt, v, i);
             } else if (rt.isHeapTy(v, TY_MAPENTRY)) {
@@ -546,13 +546,13 @@ rt.describe(v) + " is not a transient vector");
             if (Vec.isTransient(rt, coll)) {
                 long k = rt.vat(at + 1);
                 if (!Val.isFixnum(k)) return dflt;
-                long got = Vec.tnth(rt, coll, (int) Val.asFixnum(k));
+                long got = Vec.tnth(rt, coll, (int) Val.asFixnum(k), Val.NOT_FOUND);
                 return got == Val.NOT_FOUND ? dflt : got;
             }
             if (rt.isHeapTy(coll, TY_VEC)) {
                 long k = rt.vat(at + 1);
                 if (!Val.isFixnum(k)) return dflt;
-                long got = Vec.nth(rt, coll, (int) Val.asFixnum(k));
+                long got = Vec.nth(rt, coll, (int) Val.asFixnum(k), Val.NOT_FOUND);
                 return got == Val.NOT_FOUND ? dflt : got;
             }
             // A TABLE indexes by ROW and hands back a ref (`0026`). There are
@@ -833,7 +833,7 @@ rt.describe(v) + " is not a transient vector");
             // takes the end that is cheap.
             if (rt.isHeapTy(v, TY_VEC)) {
                 int c = Vec.count(rt, v);
-                return c == 0 ? Val.NIL : Vec.nth(rt, v, c - 1);
+                return c == 0 ? Val.NIL : Vec.nth(rt, v, c - 1, Val.NOT_FOUND);
             }
             return Seqs.first(rt, v);
         });
@@ -981,7 +981,7 @@ rt.describe(v) + " is not a transient vector");
             }
             int c = Vec.count(rt, v);
             byte[] b = new byte[c];
-            for (int i = 0; i < c; i++) b[i] = (byte) Val.asFixnum(Vec.nth(rt, v, i));
+            for (int i = 0; i < c; i++) b[i] = (byte) Val.asFixnum(Vec.nth(rt, v, i, Val.NOT_FOUND));
             return Str.of(rt, new String(b, java.nio.charset.StandardCharsets.UTF_8));
         });
         def("flint/bits->double", (rt, at, n) -> {
@@ -1131,7 +1131,7 @@ rt.describe(v) + " is not a transient vector");
             long v = rt.vat(at);
             int c = Vec.count(rt, v);
             byte[] b = new byte[c];
-            for (int i = 0; i < c; i++) b[i] = (byte) Val.asFixnum(Vec.nth(rt, v, i));
+            for (int i = 0; i < c; i++) b[i] = (byte) Val.asFixnum(Vec.nth(rt, v, i, Val.NOT_FOUND));
             return Bytes.of(rt, b);
         });
         def("flint/b->vec", (rt, at, n) -> {

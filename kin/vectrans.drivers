@@ -183,6 +183,11 @@ fn main() {
         (rt.t_array_for(t, 0) == leaf0) as u32,
         (rt.t_array_for(t, 32) == rt.slot(t, T_TAIL)) as u32));
 
+    // `tvec_nth` with a default: in the trie, in the tail, and past the end.
+    o.push_str(&format!("t0={} t32={} tover={} ",
+        rt.tvec_nth(t, 0, NIL).0, rt.tvec_nth(t, 32, NIL).0,
+        rt.tvec_nth(t, 33, Value(0xDEAD)).0));
+
     // A dead transient: the token cleared is what `persistent!` does.
     rt.set_slot(t.as_heap(), T_EDIT, NIL);
     o.push_str(&format!("dead={} ", rt.tvec_alive(t) as u32));
@@ -344,6 +349,9 @@ fn main() {
         long leaf0 = nodeGet(rt, root, 0);
         o.append("a0=").append(tArrayFor(rt, t, 0) == leaf0 ? 1 : 0)
          .append(" a32=").append(tArrayFor(rt, t, 32) == rt.slot(t, T_TAIL) ? 1 : 0).append(' ');
+        o.append("t0=").append(tvecNth(rt, t, 0, NIL))
+         .append(" t32=").append(tvecNth(rt, t, 32, NIL))
+         .append(" tover=").append(tvecNth(rt, t, 33, 0xDEAD)).append(' ');
         rt.setSlot(Val.asHeap(t), T_EDIT, NIL);
         o.append("dead=").append(tvecAlive(rt, t) ? 1 : 0).append(' ');
         System.out.println(o.toString());
@@ -507,6 +515,9 @@ fn main() {
         long leaf0 = NodeGet(rt, root, 0);
         o.Append("a0=").Append(TArrayFor(rt, t, 0) == leaf0 ? 1 : 0)
          .Append(" a32=").Append(TArrayFor(rt, t, 32) == rt.Slot(t, T_TAIL) ? 1 : 0).Append(' ');
+        o.Append("t0=").Append(TvecNth(rt, t, 0, NIL))
+         .Append(" t32=").Append(TvecNth(rt, t, 32, NIL))
+         .Append(" tover=").Append(TvecNth(rt, t, 33, 0xDEAD)).Append(' ');
         rt.SetSlot(Val.AsHeap(t), T_EDIT, NIL);
         o.Append("dead=").Append(TvecAlive(rt, t) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());

@@ -94,7 +94,7 @@ fn main() {
             let v = *rt.roots.singletons.last().unwrap();
             let mut acc = 0u64;
             for i in 0..N {
-                acc = acc.wrapping_add(rt.vec_nth(v, i as u32).unwrap().as_fixnum() as u64);
+                acc = acc.wrapping_add(rt.vec_nth(v, i as u32, crate::value::NIL).as_fixnum() as u64);
             }
             acc
         },

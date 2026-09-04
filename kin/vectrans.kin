@@ -14,10 +14,10 @@
 ;; TAIL, which is widened to a full 32 up front precisely so that `conj!` can
 ;; write into it without copying it one longer every time.
 ;;
-;; `tvec-nth` is NOT here, for the same reason `vec-nth` is not in `vecread`:
-;; it answers `Option<Value>` in Rust and a sentinel on the ports, and that
-;; convergence is a decision with a counted blast radius rather than a line of
-;; porting.
+;; `tvec-nth` is here, and takes a `dflt` for the same reason `vec-nth` does:
+;; Rust answered `Option<Value>` and the ports a fixed sentinel, and the count
+;; of what the call sites actually wanted settled it. One decision covered
+;; both, which is why they landed together.
 (ns flint.rt.vectrans
   (:require [flint.impl.rt :refer [defn return if let local set do comment doc
                                    not == != < > >= - + bit-and shl ushr while
@@ -118,3 +118,9 @@
     (set node (node-get rt node (bit-and (ushr i level) MASK)))
     (set level (- level BITS)))
   (return node))
+
+(doc "Element `i` of a transient, or `dflt`. Same convergence as `vec-nth`.")
+(defn ^:pub ^:method ^Value tvec-nth [^Rt rt ^Value t ^I32 i ^Value dflt]
+  (if (>= i (tvec-count rt t))
+    (return dflt))
+  (return (node-get rt (t-array-for rt t i) (bit-and i MASK))))

@@ -82,10 +82,10 @@ public static class Program {
         var sb = new System.Text.StringBuilder();
         int n = Flint.Rt.Vec.Count(rt, v);
         for (int i = 0; i < n; i++) {
-            long inner = Flint.Rt.Vec.Nth(rt, v, i);
-            sb.Append(Flint.Rt.Val.AsFixnum(Flint.Rt.Vec.Nth(rt, inner, 0)));
+            long inner = Flint.Rt.Vec.Nth(rt, v, i, Flint.Rt.Val.NotFound);
+            sb.Append(Flint.Rt.Val.AsFixnum(Flint.Rt.Vec.Nth(rt, inner, 0, Flint.Rt.Val.NotFound)));
             sb.Append('=');
-            sb.Append(Flint.Rt.Str.Text(rt, Flint.Rt.Vec.Nth(rt, inner, 1)));
+            sb.Append(Flint.Rt.Str.Text(rt, Flint.Rt.Vec.Nth(rt, inner, 1, Flint.Rt.Val.NotFound)));
             sb.Append(';');
         }
         return sb.ToString();

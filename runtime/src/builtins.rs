@@ -259,7 +259,11 @@ builtins! {
         let n = rt.vec_count(v);
         let mut out = alloc::vec::Vec::with_capacity(n as usize);
         for i in 0..n {
-            match rt.vec_nth(v, i).and_then(|x| rt.as_i64(x)) {
+            // `i` is bounded by the count above, so the default is
+            // unreachable; the failure this arm is about is a non-integer
+            // element, which is `as_i64` and not `nth`.
+            let x = rt.vec_nth(v, i, crate::value::NIL);
+            match rt.as_i64(x) {
                 Some(b) => out.push((b & 0xff) as u8),
                 None => return rt.throw_str("ClassCastException", "vec->b wants integers"),
             }
@@ -586,7 +590,7 @@ builtins! {
         let count = rt.vec_count(v);
         let mut bytes = alloc::vec::Vec::with_capacity(count as usize);
         for i in 0..count {
-            let b = rt.vec_nth(v, i).unwrap_or(NIL);
+            let b = rt.vec_nth(v, i, NIL);
             bytes.push(b.as_fixnum() as u8);
         }
         match core::str::from_utf8(&bytes) {

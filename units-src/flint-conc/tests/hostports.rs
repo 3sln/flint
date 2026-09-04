@@ -431,7 +431,7 @@ fn what_may_cross_depends_on_the_carrier() {
     rt.ensure_sched();
     let pair = rt.make_channel(4, NIL);
     let pi = rt.push(pair);
-    let a = rt.vec_nth(rt.r(pi), 0).unwrap();
+    let a = rt.vec_nth(rt.r(pi), 0, flint_rt::value::NIL);
     let ai = rt.push(a);
     // A CHANNEL end may cross a channel -- both ends are in this heap, so it is
     // a pointer move -- and may NOT cross a bridge: the host has never been told

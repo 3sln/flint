@@ -114,13 +114,13 @@ public final class Table {
         int ii = rt.push(emptyMap(rt));
         int di = rt.push(emptyVec(rt));
         for (int i = 0; i < n; i++) {
-            long pair = Vec.nth(rt, rt.r(pi), i);
+            long pair = Vec.nth(rt, rt.r(pi), i, Val.NOT_FOUND);
             if (!rt.typeP(8, pair) || Vec.count(rt, pair) != 2) {
                 rt.popTo(base);
                 return rt.throwStr("IllegalArgumentException",
                     "a schema is [[name type] ...]; this entry is not a name and a type");
             }
-            long nm = Vec.nth(rt, pair, 0), tp = Vec.nth(rt, pair, 1);
+            long nm = Vec.nth(rt, pair, 0, Val.NOT_FOUND), tp = Vec.nth(rt, pair, 1, Val.NOT_FOUND);
             if (!rt.typeP(5, nm)) {
                 rt.popTo(base);
                 return rt.throwStr("IllegalArgumentException", "a column name must be a keyword");
@@ -158,10 +158,10 @@ public final class Table {
     public static int schemaLen(Rt rt, long s) { return Vec.count(rt, rt.slot(s, SC_NAMES)); }
     public static int schemaWidth(Rt rt, long s) { return (int) Val.asFixnum(rt.slot(s, SC_WIDTH)); }
     public static int schemaIdAt(Rt rt, long s, int c) {
-        return (int) Val.asFixnum(Vec.nth(rt, rt.slot(s, SC_IDS), c));
+        return (int) Val.asFixnum(Vec.nth(rt, rt.slot(s, SC_IDS), c, Val.NOT_FOUND));
     }
-    public static long schemaNameAt(Rt rt, long s, int c) { return Vec.nth(rt, rt.slot(s, SC_NAMES), c); }
-    public static long schemaTypeAt(Rt rt, long s, int c) { return Vec.nth(rt, rt.slot(s, SC_TYPES), c); }
+    public static long schemaNameAt(Rt rt, long s, int c) { return Vec.nth(rt, rt.slot(s, SC_NAMES), c, Val.NOT_FOUND); }
+    public static long schemaTypeAt(Rt rt, long s, int c) { return Vec.nth(rt, rt.slot(s, SC_TYPES), c, Val.NOT_FOUND); }
 
     /// The column id of `name`, or -1.
     public static int schemaId(Rt rt, long s, long name) {
@@ -276,7 +276,7 @@ public final class Table {
                 long col = newObj(rt, TY_NODE, take);
                 int coli = rt.push(col);
                 for (int k = 0; k < take; k++) {
-                    long rowv = Vec.nth(rt, rt.r(ri), row + k);
+                    long rowv = Vec.nth(rt, rt.r(ri), row + k, Val.NOT_FOUND);
                     int rvi = rt.push(rowv);
                     long name = schemaNameAt(rt, rt.r(si), c);
                     long val = Mapread.mapGet(rt, rt.r(rvi), name, Val.NIL);
@@ -317,7 +317,7 @@ public final class Table {
         // row number becomes a chunk and a row within it, so a sliced table
         // needs no other arm to know it was sliced.
         int phys = i + tableOffset(rt, rt.r(ti));
-        long ch = Vec.nth(rt, rt.slot(rt.r(ti), TB_CHUNKS), phys >> CHUNK_SHIFT);
+        long ch = Vec.nth(rt, rt.slot(rt.r(ti), TB_CHUNKS), phys >> CHUNK_SHIFT, Val.NOT_FOUND);
         int chi = rt.push(ch);
         long r = newObj(rt, TY_TABLEREF, RF_LEN);
         int ri = rt.push(r);
@@ -562,7 +562,7 @@ public final class Table {
             rt.setR(ci, Vec.conj(rt, rt.r(ci), rt.r(chi)));
             rt.popTo(chi);
         } else {
-            long ch = Vec.nth(rt, rt.r(ci), which);
+            long ch = Vec.nth(rt, rt.r(ci), which, Val.NOT_FOUND);
             int chi = rt.push(ch);
             long nch = chunkWithRow(rt, rt.r(si), rt.r(chi), within, rt.r(ri), append);
             int nj = rt.push(nch);
@@ -700,7 +700,7 @@ public final class Table {
         int oi = rt.push(emptyVec(rt));
         for (int k = 0; k < nch; k++) {
             if (!rt.chargeChecked(1, "migrate")) { rt.popTo(base); return Val.NIL; }
-            int chi = rt.push(Vec.nth(rt, rt.r(ci), k));
+            int chi = rt.push(Vec.nth(rt, rt.r(ci), k, Val.NOT_FOUND));
             int rows = chunkRows(rt, rt.r(chi));
             int ni = rt.push(newChunk(rt, width, rows));
             for (int c = 0; c < n; c++) {
@@ -741,7 +741,7 @@ public final class Table {
     /// Cell `(row, column-id)`, straight out of the chunk. The scan path.
     static long tableCell(Rt rt, long t, int id, int i) {
         int phys = i + tableOffset(rt, t);
-        long ch = Vec.nth(rt, rt.slot(t, TB_CHUNKS), phys >> CHUNK_SHIFT);
+        long ch = Vec.nth(rt, rt.slot(t, TB_CHUNKS), phys >> CHUNK_SHIFT, Val.NOT_FOUND);
         return chunkGet(rt, ch, id, phys & (CHUNK - 1));
     }
 
@@ -768,7 +768,7 @@ public final class Table {
         int ci = rt.push(rt.slot(rt.r(ti), TB_CHUNKS));
         int ki = rt.push(emptyVec(rt));
         for (int k = first; k <= last; k++)
-            rt.setR(ki, Vec.conj(rt, rt.r(ki), Vec.nth(rt, rt.r(ci), k)));
+            rt.setR(ki, Vec.conj(rt, rt.r(ki), Vec.nth(rt, rt.r(ci), k, Val.NOT_FOUND)));
         int si = rt.push(rt.slot(rt.r(ti), TB_SCHEMA));
         long nt = newObj(rt, TY_TABLE, TB_LEN);
         int ni = rt.push(nt);
@@ -852,11 +852,11 @@ public final class Table {
             int chi = rt.push(newChunk(rt, width, take));
             for (int c = 0; c < ncols; c++) {
                 int id = schemaIdAt(rt, rt.r(si), c);
-                int sj = rt.push(Vec.nth(rt, rt.r(ci), c));
+                int sj = rt.push(Vec.nth(rt, rt.r(ci), c, Val.NOT_FOUND));
                 long tp = schemaTypeAt(rt, rt.r(si), c);
                 int cj = rt.push(newObj(rt, TY_NODE, take));
                 for (int k = 0; k < take; k++) {
-                    long v = Vec.nth(rt, rt.r(sj), row + k);
+                    long v = Vec.nth(rt, rt.r(sj), row + k, Val.NOT_FOUND);
                     if (!typeOk(rt, tp, v)) {
                         String msg = columnTypeError(rt, schemaNameAt(rt, rt.r(si), c), tp, v, row + k);
                         rt.popTo(base);
@@ -918,7 +918,7 @@ public final class Table {
         int oi = rt.push(openChunk(rt, rt.r(si)));
         int partial = count - full;
         if (partial > 0) {
-            int li = rt.push(Vec.nth(rt, rt.r(ci), full >> CHUNK_SHIFT));
+            int li = rt.push(Vec.nth(rt, rt.r(ci), full >> CHUNK_SHIFT, Val.NOT_FOUND));
             int ncols = schemaLen(rt, rt.r(si));
             rt.chargeWork((long) partial * ncols);
             for (int c = 0; c < ncols; c++) {
@@ -932,7 +932,7 @@ public final class Table {
             int keep = Vec.count(rt, rt.r(ci)) - 1;
             int pi = rt.push(emptyVec(rt));
             for (int q = 0; q < keep; q++)
-                rt.setR(pi, Vec.conj(rt, rt.r(pi), Vec.nth(rt, rt.r(ci), q)));
+                rt.setR(pi, Vec.conj(rt, rt.r(pi), Vec.nth(rt, rt.r(ci), q, Val.NOT_FOUND)));
             rt.setR(ci, rt.r(pi));
             rt.popTo(li);
         }

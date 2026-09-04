@@ -171,7 +171,7 @@ impl Rt {
         if ty(&self.gc.sp, v.as_heap()) == TY_MAPENTRY {
             self.slot(v, i)
         } else {
-            self.vec_nth(v, i).unwrap_or(NIL)
+            self.vec_nth(v, i, NIL)
         }
     }
 
@@ -265,7 +265,7 @@ impl Rt {
             TY_ARRAYMAP | TY_HASHMAP => self.map_get(coll, k, dflt),
             TY_SET => self.set_get(coll, k, dflt),
             TY_VEC => match self.as_i64(k) {
-                Some(i) if i >= 0 => self.vec_nth(coll, i as u32).unwrap_or(dflt),
+                Some(i) if i >= 0 => self.vec_nth(coll, i as u32, dflt),
                 _ => dflt,
             },
             TY_MAPENTRY => match self.as_i64(k) {
@@ -303,7 +303,7 @@ impl Rt {
                 _ => dflt,
             },
             TY_TVEC => match self.as_i64(k) {
-                Some(i) if i >= 0 => self.tvec_nth(coll, i as u32).unwrap_or(dflt),
+                Some(i) if i >= 0 => self.tvec_nth(coll, i as u32, dflt),
                 _ => dflt,
             },
             TY_TMAP => self.tmap_get(coll, k, dflt),
@@ -369,12 +369,16 @@ impl Rt {
             };
         }
         if coll.is_heap() && ty(&self.gc.sp, coll.as_heap()) == TY_VEC {
-            return match self.vec_nth(coll, i) {
-                Some(v) => v,
-                None => match dflt {
-                    Some(d) => d,
-                    None => self.throw_str("IndexOutOfBoundsException", "index out of range"),
-                },
+            // NOT_FOUND as the probe, because this arm has to tell "out of
+            // range" from "the element is nil" -- the caller's `dflt` may
+            // itself be nil, and with no `dflt` at all it must raise.
+            let x = self.vec_nth(coll, i, crate::value::NOT_FOUND);
+            if x != crate::value::NOT_FOUND {
+                return x;
+            }
+            return match dflt {
+                Some(d) => d,
+                None => self.throw_str("IndexOutOfBoundsException", "index out of range"),
             };
         }
         // Walk. O(n), as it is in Clojure for a seq.
@@ -427,7 +431,7 @@ impl Rt {
                 if n == 0 {
                     NIL
                 } else {
-                    self.vec_nth(coll, n - 1).unwrap_or(NIL)
+                    self.vec_nth(coll, n - 1, NIL)
                 }
             }
             _ => self.first(coll),

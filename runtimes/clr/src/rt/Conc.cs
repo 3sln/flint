@@ -213,7 +213,7 @@ public static class Conc {
     public static long CurrentThread(Rt rt) {
         long s = Sched(rt);
         if (Val.IsNil(s)) return Val.Nil;
-        return Vec.Nth(rt, rt.Slot(s, SC_THREADS), (int) Fx(rt.Slot(s, SC_CURRENT)));
+        return Vec.Nth(rt, rt.Slot(s, SC_THREADS), (int) Fx(rt.Slot(s, SC_CURRENT)), Val.NotFound);
     }
 
     // --- saving and restoring a VM state ------------------------------------
@@ -379,7 +379,7 @@ public static class Conc {
         long idx;
         int wi;
         if (free >= 0) {
-            long w = Vec.Nth(rt, rt.Slot(rt.R(si), SC_WAITERS), (int) free);
+            long w = Vec.Nth(rt, rt.Slot(rt.R(si), SC_WAITERS), (int) free, Val.NotFound);
             rt.SetSlot(Val.AsHeap(rt.R(si)), SC_WFREE, Val.Fixnum(Fx(rt.Slot(w, W_NEXT))));
             idx = free;
             wi = rt.Push(w);
@@ -407,7 +407,7 @@ public static class Conc {
         if (token <= 0 || (token & 0xFFFF) == 0) return Val.Nil;
         int idx = (int) (token & 0xFFFF) - 1;
         long gen = token >> 16;
-        long w = Vec.Nth(rt, Waiters(rt), idx);
+        long w = Vec.Nth(rt, Waiters(rt), idx, Val.NotFound);
         if (w == Val.NotFound || Val.IsNil(w)) return Val.Nil;
         if (Fx(rt.Slot(w, W_GEN)) != gen || Val.IsNil(rt.Slot(w, W_THREAD))) return Val.Nil;
         return w;
@@ -436,7 +436,7 @@ public static class Conc {
         long ws = Waiters(rt);
         int n = Vec.Count(rt, ws), c = 0;
         for (int i = 0; i < n; i++) {
-            long w = Vec.Nth(rt, ws, i);
+            long w = Vec.Nth(rt, ws, i, Val.NotFound);
             if (!Val.IsNil(w) && w != Val.NotFound && !Val.IsNil(rt.Slot(w, W_THREAD))) c++;
         }
         return c;
@@ -497,7 +497,7 @@ public static class Conc {
         long ws = Waiters(rt);
         int n = Vec.Count(rt, ws);
         for (int i = 0; i < n; i++) {
-            long w = Vec.Nth(rt, ws, i);
+            long w = Vec.Nth(rt, ws, i, Val.NotFound);
             if (Val.IsNil(w) || Val.IsNil(rt.Slot(w, W_THREAD))) continue;
             if (rt.Slot(w, W_PORT) == p) WakeWaiter(rt, w);
         }
@@ -715,8 +715,8 @@ public static class Conc {
         long ps = rt.Slot(Sched(rt), SC_PAIRS);
         int n = Vec.Count(rt, ps);
         for (int i = 0; i < n; i++) {
-            long e = Vec.Nth(rt, ps, i);
-            if (Fx(Vec.Nth(rt, e, 0)) == id) return Fx(Vec.Nth(rt, e, 1));
+            long e = Vec.Nth(rt, ps, i, Val.NotFound);
+            if (Fx(Vec.Nth(rt, e, 0, Val.NotFound)) == id) return Fx(Vec.Nth(rt, e, 1, Val.NotFound));
         }
         return -1;
     }
@@ -887,7 +887,7 @@ public static class Conc {
             int ei = rt.Push(Sets.ElementVector(rt, rt.R(vi)));
             int en = Vec.Count(rt, rt.R(ei));
             for (int i = 0; i < en; i++) {
-                outs = CheckSendableAt(rt, Vec.Nth(rt, rt.R(ei), i), depth + 1, carry);
+                outs = CheckSendableAt(rt, Vec.Nth(rt, rt.R(ei), i, Val.NotFound), depth + 1, carry);
                 if (outs != null) break;
             }
         } else if (rt.IsSequential(rt.R(vi))) {
@@ -1050,8 +1050,8 @@ public static class Conc {
                 // been charged, and once a bridge carried VALUES it walked a
                 // keyword as a string. On the Rust that was a segfault.
                 long item = rt.R(vi);
-                long n = Fx(Vec.Nth(rt, item, 0));
-                rt.SetR(vi, Vec.Nth(rt, item, 1));
+                long n = Fx(Vec.Nth(rt, item, 0, Val.NotFound));
+                rt.SetR(vi, Vec.Nth(rt, item, 1, Val.NotFound));
                 long queued = Fx(rt.Slot(rt.R(pi), PT_BYTES));
                 rt.SetSlot(Val.AsHeap(rt.R(pi)), PT_BYTES, Val.Fixnum(queued > n ? queued - n : 0));
             }
@@ -1122,7 +1122,7 @@ public static class Conc {
         int n = Vec.Count(rt, rt.R(bi));
         int ki = rt.Push(Vec.Empty(rt));
         for (int k = 0; k < n; k++) {
-            long x = Fx(Vec.Nth(rt, rt.R(bi), k));
+            long x = Fx(Vec.Nth(rt, rt.R(bi), k, Val.NotFound));
             if (x == id) continue;
             rt.SetR(ki, Vec.Conj(rt, rt.R(ki), Val.Fixnum(x)));
         }
@@ -1224,7 +1224,7 @@ public static class Conc {
         rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.R(ni)));
         int an = rt.IsHeapTy(rt.R(ai), Obj.TyVec) ? Vec.Count(rt, rt.R(ai)) : 0;
         for (int k = 0; k < an; k++) {
-            rt.SetR(vi, Vec.Conj(rt, rt.R(vi), Vec.Nth(rt, rt.R(ai), k)));
+            rt.SetR(vi, Vec.Conj(rt, rt.R(vi), Vec.Nth(rt, rt.R(ai), k, Val.NotFound)));
         }
         byte[] call;
         try {
@@ -1269,7 +1269,7 @@ public static class Conc {
             // the way `PortOpen` reads it off `IsPort` -- a host answering nil
             // and a host refusing would be the same bits.
             if (rt.IsHeapTy(pending, Obj.TyVec)) {
-                long v = Vec.Count(rt, pending) > 0 ? Vec.Nth(rt, pending, 0) : Val.Nil;
+                long v = Vec.Count(rt, pending) > 0 ? Vec.Nth(rt, pending, 0, Val.NotFound) : Val.Nil;
                 rt.PopTo(bas);
                 return v;
             }
@@ -1298,7 +1298,7 @@ public static class Conc {
         rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.R(ni)));
         int an = rt.IsHeapTy(rt.R(ai), Obj.TyVec) ? Vec.Count(rt, rt.R(ai)) : 0;
         for (int k = 0; k < an; k++) {
-            rt.SetR(vi, Vec.Conj(rt, rt.R(vi), Vec.Nth(rt, rt.R(ai), k)));
+            rt.SetR(vi, Vec.Conj(rt, rt.R(vi), Vec.Nth(rt, rt.R(ai), k, Val.NotFound)));
         }
         byte[] call;
         try {
@@ -1561,11 +1561,11 @@ public static class Conc {
         byte[] header = new byte[n * 20];
         outb.Write(header, 0, header.Length);
         for (int i = 0; i < n; i++) {
-            long e = Vec.Nth(rt, rt.R(ei), i);
-            long kind = Fx(Vec.Nth(rt, e, 0));
-            long a = Fx(Vec.Nth(rt, e, 1));
-            long b = Fx(Vec.Nth(rt, e, 2));
-            long payload = Vec.Nth(rt, e, 3);
+            long e = Vec.Nth(rt, rt.R(ei), i, Val.NotFound);
+            long kind = Fx(Vec.Nth(rt, e, 0, Val.NotFound));
+            long a = Fx(Vec.Nth(rt, e, 1, Val.NotFound));
+            long b = Fx(Vec.Nth(rt, e, 2, Val.NotFound));
+            long payload = Vec.Nth(rt, e, 3, Val.NotFound);
             int off = (int) outb.Length;   // the header is already in `outb`
             int plen;
             if (Bytes.IsBytes(rt, payload)) {
@@ -1574,7 +1574,7 @@ public static class Conc {
                 plen = bs.Length;
             } else if (rt.IsHeapTy(payload, Obj.TyVec)) {
                 int m = Vec.Count(rt, payload);
-                for (int k = 0; k < m; k++) outb.WriteByte((byte) Fx(Vec.Nth(rt, payload, k)));
+                for (int k = 0; k < m; k++) outb.WriteByte((byte) Fx(Vec.Nth(rt, payload, k, Val.NotFound)));
                 plen = m;
             } else if (Str.IsString(rt, payload)) {
                 byte[] bs = System.Text.Encoding.UTF8.GetBytes(Str.Text(rt, payload));
@@ -1637,7 +1637,7 @@ public static class Conc {
         int brn = Vec.Count(rt, rt.R(bri));
         int hli = rt.Push(Vec.Empty(rt));
         for (int k = 0; k < brn; k++) {
-            long bid = Fx(Vec.Nth(rt, rt.R(bri), k));
+            long bid = Fx(Vec.Nth(rt, rt.R(bri), k, Val.NotFound));
             if (Val.IsNil(PortById(rt, bid))) {
                 // CLOSED as well as released. `doc/decisions/0006`: an end the
                 // collector finds unreachable IS the script having called
@@ -1655,7 +1655,7 @@ public static class Conc {
         int n = Vec.Count(rt, rt.R(ii));
         int li = rt.Push(Vec.Empty(rt));
         for (int k = 0; k < n; k++) {
-            long id = Fx(Vec.Nth(rt, rt.R(ii), k));
+            long id = Fx(Vec.Nth(rt, rt.R(ii), k, Val.NotFound));
             long p = PortById(rt, id);
             if (!Val.IsNil(p)) {
                 rt.SetR(li, Vec.Conj(rt, rt.R(li), Val.Fixnum(id)));
@@ -1689,7 +1689,7 @@ public static class Conc {
         int wsi = rt.Push(Waiters(rt));
         int n = Vec.Count(rt, rt.R(wsi));
         for (int i = 0; i < n; i++) {
-            long w = Vec.Nth(rt, rt.R(wsi), i);
+            long w = Vec.Nth(rt, rt.R(wsi), i, Val.NotFound);
             if (w == Val.NotFound || Val.IsNil(w) || Val.IsNil(rt.Slot(w, W_THREAD))) continue;
             if (rt.Slot(w, W_PORT) != rt.R(pi)) continue;
             int ti = rt.Push(rt.Slot(w, W_THREAD));
@@ -1714,7 +1714,7 @@ public static class Conc {
         int ii = rt.Push(rt.Slot(rt.R(si), SC_PORTS));
         int n = Vec.Count(rt, rt.R(ii));
         for (int k = 0; k < n; k++) {
-            long p = PortById(rt, Fx(Vec.Nth(rt, rt.R(ii), k)));
+            long p = PortById(rt, Fx(Vec.Nth(rt, rt.R(ii), k, Val.NotFound)));
             if (Val.IsNil(p)) continue;
             int pi = rt.Push(p);
             if (CrossesAHeap(Fx(rt.Slot(rt.R(pi), PT_KIND)))
@@ -1815,7 +1815,7 @@ public static class Conc {
         int cur = (int) Fx(rt.Slot(s, SC_CURRENT));
         for (int k = 1; k <= n; k++) {
             int i = (cur + k) % n;
-            long th = Vec.Nth(rt, ts, i);
+            long th = Vec.Nth(rt, ts, i, Val.NotFound);
             if (Val.IsNil(th) || th == Val.NotFound) continue;
             long st = Fx(rt.Slot(th, TH_STATUS));
             if (st == ST_NEW || st == ST_RUNNABLE) return i;
@@ -1826,7 +1826,7 @@ public static class Conc {
     static void RunOne(Rt rt, int i) {
         long s = Sched(rt);
         rt.SetSlot(Val.AsHeap(s), SC_CURRENT, Val.Fixnum(i));
-        long th = Vec.Nth(rt, rt.Slot(s, SC_THREADS), i);
+        long th = Vec.Nth(rt, rt.Slot(s, SC_THREADS), i, Val.NotFound);
         if (Val.IsNil(th) || th == Val.NotFound) return;
         int bas = rt.Mark();
         int ti = rt.Push(th);
@@ -1877,14 +1877,14 @@ public static class Conc {
     /// Defining completion any other way means a program that leaves a reader
     /// parked never terminates.
     static bool MainFinished(Rt rt) {
-        long th = Vec.Nth(rt, rt.Slot(Sched(rt), SC_THREADS), 0);
+        long th = Vec.Nth(rt, rt.Slot(Sched(rt), SC_THREADS), 0, Val.NotFound);
         if (Val.IsNil(th) || th == Val.NotFound) return true;
         long st = Fx(rt.Slot(th, TH_STATUS));
         return st == ST_DONE || st == ST_FAILED;
     }
 
     static long MainResult(Rt rt) {
-        long th = Vec.Nth(rt, rt.Slot(Sched(rt), SC_THREADS), 0);
+        long th = Vec.Nth(rt, rt.Slot(Sched(rt), SC_THREADS), 0, Val.NotFound);
         long r = (Val.IsNil(th) || th == Val.NotFound) ? Val.Nil : rt.Slot(th, TH_RESULT);
         return r;
     }
@@ -1921,7 +1921,7 @@ public static class Conc {
         long ts = rt.Slot(Sched(rt), SC_THREADS);
         int n = Vec.Count(rt, ts);
         for (int i = 0; i < n; i++) {
-            long th = Vec.Nth(rt, ts, i);
+            long th = Vec.Nth(rt, ts, i, Val.NotFound);
             if (Val.IsNil(th) || th == Val.NotFound) continue;
             if (Fx(rt.Slot(th, TH_STATUS)) != ST_PARKED) continue;
             long on = rt.Slot(th, TH_PARK_ON);
@@ -1959,7 +1959,7 @@ public static class Conc {
             int stuck = 0;
             var detail = new System.Text.StringBuilder();
             for (int k = 0; k < n; k++) {
-                long th = Vec.Nth(rt, ts, k);
+                long th = Vec.Nth(rt, ts, k, Val.NotFound);
                 if (Val.IsNil(th) || th == Val.NotFound) continue;
                 if (Fx(rt.Slot(th, TH_STATUS)) != ST_PARKED) continue;
                 stuck++;

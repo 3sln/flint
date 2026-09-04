@@ -193,9 +193,9 @@ impl Rt {
                 put_u32(out, ncols);
                 for c in 0..ncols {
                     let names = self.slot(self.r(si), crate::table::SC_NAMES);
-                    let name = self.vec_nth(names, c).unwrap_or(NIL);
+                    let name = self.vec_nth(names, c, NIL);
                     let types = self.slot(self.r(si), crate::table::SC_TYPES);
-                    let tp = self.vec_nth(types, c).unwrap_or(NIL);
+                    let tp = self.vec_nth(types, c, NIL);
                     if let Err(e) = self.encode_into(name, out, depth + 1) {
                         self.pop_to(base);
                         return Err(e);
@@ -212,13 +212,13 @@ impl Rt {
                     let col = {
                         let nm = {
                             let names = self.slot(self.r(si), crate::table::SC_NAMES);
-                            self.vec_nth(names, c).unwrap_or(NIL)
+                            self.vec_nth(names, c, NIL)
                         };
                         self.table_column(self.r(vi), nm)
                     };
                     let ci = self.push(col);
                     for i in 0..nrows {
-                        let x = self.vec_nth(self.r(ci), i).unwrap_or(NIL);
+                        let x = self.vec_nth(self.r(ci), i, NIL);
                         if let Err(e) = self.encode_into(x, out, depth + 1) {
                             self.pop_to(base);
                             return Err(e);

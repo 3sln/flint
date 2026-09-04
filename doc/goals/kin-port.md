@@ -968,19 +968,61 @@ The first count of this was WRONG and worth recording as a hazard: the regex
 It reported a category of 31 "bare" uses that do not exist. Balanced-paren
 scanning gives the table above; the shape of the answer changed completely.
 
-So the convergence is the one `map-get` already made:
+So the convergence is the one `map-get` already made, and it is DONE:
 
     vec-nth(rt, v, i, dflt)   ->  the element, or `dflt` when out of range
 
 `map-get` is a shipped kin function with exactly this signature, and matching
-it means the two lookup functions in the runtime answer absence the same way
-rather than each having its own idea. It covers 89 sites mechanically, leaves
-6 to rewrite, and needs no new capability from kin -- absence stops being a
-hole and becomes an argument.
+it means the two lookups in the runtime answer absence the same way rather
+than each having its own idea. Absence stopped being a hole and became an
+argument, which is what let both `nth`s be ported at all.
 
-Not done yet, and deliberately: the write path (`new-vec`, `new-path`,
-`push-tail`, `conj`) is more code and needs no decision at all, so it goes
-first.
+**218 call sites across four runtimes**, and all but six were mechanical: 97
+in Rust rewritten by a balanced-paren transformer, 59 on the JVM and 62 on the
+CLR given an explicit `Val.NOT_FOUND` so that every one behaves exactly as it
+did before. `tvec_nth` came with it -- the same divergence one level down, and
+one decision covered both.
+
+The six that were not mechanical are the interesting ones, because each had a
+reason to be structural:
+
+* `vm.rs` and `coll.rs` must RAISE on an out-of-range index rather than answer
+  nil, and `coll.rs` additionally has to tell "out of range" from "the element
+  is nil" because the caller's own default may be nil. Both pass `NOT_FOUND`
+  as the probe -- the one value that cannot be an element -- and compare.
+* `builtins.rs`'s `vec->bytes` had an `and_then` that read as being about the
+  index and was actually about `as_i64` failing on a non-integer element. The
+  loop is bounded by the count, so the default is unreachable there.
+* Three test assertions of `None`.
+
+Two things the toolchain had to tell me, both about crate boundaries the
+transformer could not see:
+
+* `runtime/tests/vm.rs` is its OWN crate, so `crate::value::NIL` in a rewritten
+  call resolved to the test crate rather than the runtime.
+* `units-src/flint-conc` has its own tests calling `vec_nth`, and the sweep
+  had been scoped to `runtime/`. `cargo build` did not catch it -- again --
+  because integration tests of another workspace member are not built by it.
+  `bin/test` did.
+
+It took FOUR rounds to find them all, and each round was a different corner
+the previous sweep could not see:
+
+    cargo build             the runtime and its callers
+    cargo test              runtime/tests/vm.rs -- its own crate
+    bin/test                units-src/flint-conc/tests -- another member
+    --features diagnostics  runtime/tests/portrace.rs -- only built with it
+
+Plus one `.expect(...)` the transformer had no case for, which the compiler
+named. Rewritten as an explicit `assert_ne!` against `NOT_FOUND`, because the
+point of that check is that the vector HAS an element -- an absent one must
+fail the test rather than become a nil that reads as a legitimate answer.
+
+Worth stating as a rule, because it is the same rule three times now: a
+signature change is REPO-WIDE by default, `cargo build` is not the oracle for
+one, and a feature-gated test file is invisible until the feature is on. The
+way to find them is not a better grep, it is to make the change and let every
+gate object -- which works only because this one is a compile error.
 
 ### `verify` was killing the Rust compiler with its own log
 

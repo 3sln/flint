@@ -262,7 +262,7 @@ mod tests {
         let s = build(&mut rt, 300);
         let v = rt.set_element_vector(s);
         let mut got: StdVec<i64> = (0..rt.vec_count(v))
-            .map(|i| rt.vec_nth(v, i).unwrap().as_fixnum())
+            .map(|i| rt.vec_nth(v, i, crate::value::NIL).as_fixnum())
             .collect();
         got.sort();
         assert_eq!(got, (0..300i64).collect::<StdVec<_>>());

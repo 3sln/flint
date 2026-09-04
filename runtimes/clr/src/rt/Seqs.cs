@@ -160,7 +160,7 @@ public static class Seqs {
             // A TABLE rides on `TyVecseq`; only this differs, and it differs by
             // handing back a ref (`doc/decisions/0026`).
             if (Table.isTable(rt, coll)) return Table.tableRef(rt, coll, i);
-            return Vec.Nth(rt, coll, i);
+            return Vec.Nth(rt, coll, i, Val.NotFound);
         }
         if (t == Obj.TyStrseq) return Str.Nth(rt, rt.Slot(s, 0), (int) Val.AsFixnum(rt.Slot(s, 1)));
         if (t == Obj.TyRange) return rt.Slot(s, 0);

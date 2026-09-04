@@ -942,7 +942,7 @@ public final class Rt {
         }
         if (isHeapTy(callee, TY_VEC)) {
             if (argc < 1) return throwStr("ArityException", "a vector takes 1 argument");
-            long got = Vec.nth(this, callee, (int) Val.asFixnum(roots.stack[calleeAt + 1]));
+            long got = Vec.nth(this, callee, (int) Val.asFixnum(roots.stack[calleeAt + 1]), Val.NOT_FOUND);
             return got == Val.NOT_FOUND ? Val.NIL : got;
         }
         // Say WHAT was called: "value is not a function" with no subject is
@@ -971,7 +971,7 @@ public final class Rt {
         }
         if (isHeapTy(coll, TY_VEC)) {
             if (!Val.isFixnum(k)) return dflt;
-            long got = Vec.nth(this, coll, (int) Val.asFixnum(k));
+            long got = Vec.nth(this, coll, (int) Val.asFixnum(k), Val.NOT_FOUND);
             return got == Val.NOT_FOUND ? dflt : got;
         }
         return dflt;   // `get` on a non-collection is nil, as Clojure's is

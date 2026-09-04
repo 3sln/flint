@@ -261,7 +261,7 @@ impl Rt {
         let ids = self.empty_vec();
         let di = self.push(ids);
         for i in 0..n {
-            let pair = self.vec_nth(self.r(pi), i).unwrap_or(NIL);
+            let pair = self.vec_nth(self.r(pi), i, NIL);
             let pj = self.push(pair);
             if !self.is_vector(self.r(pj)) || self.vec_count(self.r(pj)) != 2 {
                 self.pop_to(base);
@@ -270,8 +270,8 @@ impl Rt {
                     "a schema is [[name type] ...]; this entry is not a name and a type",
                 );
             }
-            let nm = self.vec_nth(self.r(pj), 0).unwrap_or(NIL);
-            let tp = self.vec_nth(self.r(pj), 1).unwrap_or(NIL);
+            let nm = self.vec_nth(self.r(pj), 0, NIL);
+            let tp = self.vec_nth(self.r(pj), 1, NIL);
             if !self.is_keyword(nm) {
                 self.pop_to(base);
                 return self
@@ -375,7 +375,7 @@ impl Rt {
     /// The stable id of the `c`th column of the schema.
     pub fn schema_id_at(&mut self, s: Value, c: u32) -> u32 {
         let ids = self.slot(s, SC_IDS);
-        self.vec_nth(ids, c).unwrap_or(NIL).as_fixnum() as u32
+        self.vec_nth(ids, c, NIL).as_fixnum() as u32
     }
 
     /// The column id of `name`, or -1. The index is a map because a wide schema
@@ -447,16 +447,16 @@ impl Rt {
                 let col = self.new_obj(TY_NODE, take);
                 let coli = self.push(col);
                 for k in 0..take {
-                    let rowv = self.vec_nth(self.r(ri), row + k).unwrap_or(NIL);
+                    let rowv = self.vec_nth(self.r(ri), row + k, NIL);
                     let rvi = self.push(rowv);
                     let name = {
                         let names = self.slot(self.r(si), SC_NAMES);
-                        self.vec_nth(names, c).unwrap_or(NIL)
+                        self.vec_nth(names, c, NIL)
                     };
                     let val = self.map_get(self.r(rvi), name, NIL);
                     let tp = {
                         let types = self.slot(self.r(si), SC_TYPES);
-                        self.vec_nth(types, c).unwrap_or(NIL)
+                        self.vec_nth(types, c, NIL)
                     };
                     if !self.type_ok(tp, val) {
                         let msg = self.column_type_error(name, tp, val, row + k);
@@ -528,7 +528,7 @@ impl Rt {
         // table needs no other arm to know it was sliced.
         let i = i + self.table_offset(self.r(ti));
         let chunks = self.slot(self.r(ti), TB_CHUNKS);
-        let ch = self.vec_nth(chunks, i >> CHUNK_SHIFT).unwrap_or(NIL);
+        let ch = self.vec_nth(chunks, i >> CHUNK_SHIFT, NIL);
         let chi = self.push(ch);
         let a = self.alloc(TY_TABLEREF, RF_LEN);
         let r = Value::heap(a);
@@ -568,7 +568,7 @@ impl Rt {
         for c in 0..n {
             let name = {
                 let names = self.slot(self.r(siv), SC_NAMES);
-                self.vec_nth(names, c).unwrap_or(NIL)
+                self.vec_nth(names, c, NIL)
             };
             let nmi = self.push(name);
             let v = self.ref_get(self.r(ri), self.r(nmi), NIL);
@@ -595,7 +595,7 @@ impl Rt {
     /// being materialised first.
     fn row_column(&mut self, s: Value, row: Value, c: u32) -> Value {
         let names = self.slot(s, SC_NAMES);
-        let name = self.vec_nth(names, c).unwrap_or(NIL);
+        let name = self.vec_nth(names, c, NIL);
         if self.is_table_ref(row) {
             self.ref_get(row, name, NOT_FOUND)
         } else {
@@ -610,7 +610,7 @@ impl Rt {
         let mut out = alloc::string::String::new();
         for c in 0..n {
             let names = self.slot(s, SC_NAMES);
-            let name = self.vec_nth(names, c).unwrap_or(NIL);
+            let name = self.vec_nth(names, c, NIL);
             let mut b = crate::rt::sbuf();
             let nm = self.name_of(name);
             let shown: alloc::string::String = self.as_str(nm, &mut b).unwrap_or("?").into();
@@ -655,7 +655,7 @@ impl Rt {
             let vi = self.push(val);
             let name = {
                 let names = self.slot(self.r(si), SC_NAMES);
-                self.vec_nth(names, c).unwrap_or(NIL)
+                self.vec_nth(names, c, NIL)
             };
             let ni = self.push(name);
             if self.r(vi) == NOT_FOUND {
@@ -671,7 +671,7 @@ impl Rt {
             }
             let tp = {
                 let types = self.slot(self.r(si), SC_TYPES);
-                self.vec_nth(types, c).unwrap_or(NIL)
+                self.vec_nth(types, c, NIL)
             };
             if !self.type_ok(tp, self.r(vi)) {
                 let (nv, tv, vv) = (self.r(ni), tp, self.r(vi));
@@ -719,7 +719,7 @@ impl Rt {
             let n = self.schema_len(self.r(rsi));
             for c in 0..n {
                 let names = self.slot(self.r(rsi), SC_NAMES);
-                let name = self.vec_nth(names, c).unwrap_or(NIL);
+                let name = self.vec_nth(names, c, NIL);
                 if self.schema_id(self.r(si), name) < 0 {
                     self.pop_to(base);
                     return name;
@@ -898,7 +898,7 @@ impl Rt {
             self.set_r(ci, nv);
             self.pop_to(chi);
         } else {
-            let ch = self.vec_nth(self.r(ci), which).unwrap_or(NIL);
+            let ch = self.vec_nth(self.r(ci), which, NIL);
             let chi = self.push(ch);
             let (sv, chv, rv) = (self.r(si), self.r(chi), self.r(ri));
             let nch = self.chunk_with_row(sv, chv, within, rv, append);
@@ -955,12 +955,12 @@ impl Rt {
 
     fn schema_type_at(&mut self, s: Value, c: u32) -> Value {
         let types = self.slot(s, SC_TYPES);
-        self.vec_nth(types, c).unwrap_or(NIL)
+        self.vec_nth(types, c, NIL)
     }
 
     fn schema_name_at(&mut self, s: Value, c: u32) -> Value {
         let names = self.slot(s, SC_NAMES);
-        self.vec_nth(names, c).unwrap_or(NIL)
+        self.vec_nth(names, c, NIL)
     }
 
     /// `want` REBASED onto `have`'s column ids: a column both schemas name
@@ -1092,7 +1092,7 @@ impl Rt {
                 self.pop_to(base);
                 return NIL;
             }
-            let ch = self.vec_nth(self.r(ci), k).unwrap_or(NIL);
+            let ch = self.vec_nth(self.r(ci), k, NIL);
             let chi = self.push(ch);
             let rows = self.chunk_rows(self.r(chi));
             let nc = self.new_chunk(width, rows);
@@ -1209,7 +1209,7 @@ impl Rt {
         if partial > 0 {
             // The last chunk is not full, so its rows move into the open one
             // and the chunk itself is dropped from the carried list.
-            let last = self.vec_nth(self.r(ci), full >> CHUNK_SHIFT).unwrap_or(NIL);
+            let last = self.vec_nth(self.r(ci), full >> CHUNK_SHIFT, NIL);
             let li = self.push(last);
             let ncols = self.schema_len(self.r(si));
             self.charge_work((partial as u64) * (ncols as u64));
@@ -1416,7 +1416,7 @@ impl Rt {
         let kept = self.empty_vec();
         let ki = self.push(kept);
         for k in first..=last {
-            let ch = self.vec_nth(self.r(ci), k).unwrap_or(NIL);
+            let ch = self.vec_nth(self.r(ci), k, NIL);
             let nv = self.vec_conj(self.r(ki), ch);
             self.set_r(ki, nv);
         }
@@ -1475,7 +1475,7 @@ impl Rt {
     fn table_cell(&mut self, t: Value, id: u32, i: u32) -> Value {
         let phys = i + self.table_offset(t);
         let chunks = self.slot(t, TB_CHUNKS);
-        let ch = self.vec_nth(chunks, phys >> CHUNK_SHIFT).unwrap_or(NIL);
+        let ch = self.vec_nth(chunks, phys >> CHUNK_SHIFT, NIL);
         self.chunk_get(ch, id, phys & (CHUNK - 1))
     }
 
@@ -1550,16 +1550,16 @@ impl Rt {
             let chi = self.push(ch);
             for c in 0..ncols {
                 let id = self.schema_id_at(self.r(si), c);
-                let src = self.vec_nth(self.r(ci), c).unwrap_or(NIL);
+                let src = self.vec_nth(self.r(ci), c, NIL);
                 let sj = self.push(src);
                 let tp = {
                     let types = self.slot(self.r(si), SC_TYPES);
-                    self.vec_nth(types, c).unwrap_or(NIL)
+                    self.vec_nth(types, c, NIL)
                 };
                 let col = self.new_obj(TY_NODE, take);
                 let cj = self.push(col);
                 for k in 0..take {
-                    let v = self.vec_nth(self.r(sj), row + k).unwrap_or(NIL);
+                    let v = self.vec_nth(self.r(sj), row + k, NIL);
                     if !self.type_ok(tp, v) {
                         let name = self.schema_name_at(self.r(si), c);
                         let msg = self.column_type_error(name, tp, v, row + k);

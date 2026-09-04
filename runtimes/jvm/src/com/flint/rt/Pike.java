@@ -201,7 +201,7 @@ public final class Pike {
         int n = Vec.count(rt, words);
         if (n < PROG_HDR) return rt.throwStr("IllegalArgumentException", "regex: malformed program");
         int[] raw = new int[n];
-        for (int k = 0; k < n; k++) raw[k] = (int) Val.asFixnum(Vec.nth(rt, words, k));
+        for (int k = 0; k < n; k++) raw[k] = (int) Val.asFixnum(Vec.nth(rt, words, k, Val.NOT_FOUND));
         int base = rt.mark();
         int si = rt.push(source);
         long blob = rt.alloc(TY_RAW, raw.length * 4);

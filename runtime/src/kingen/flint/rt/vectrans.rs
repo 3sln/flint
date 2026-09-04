@@ -115,4 +115,11 @@ impl Rt {
         }
         return node;
     }
+    /// Element `i` of a transient, or `dflt`. Same convergence as `vec-nth`.
+    pub fn tvec_nth(&self, t: Value, i: u32, dflt: Value) -> Value {
+        if i >= self.tvec_count(t) {
+            return dflt;
+        }
+        return self.node_get(self.t_array_for(t, i), i & MASK);
+    }
 }

@@ -108,4 +108,11 @@ public static class Vectrans {
         }
         return node;
     }
+    /// Element `i` of a transient, or `dflt`. Same convergence as `vec-nth`.
+    public static long TvecNth(Rt rt, long t, int i, long dflt) {
+        if (i >= TvecCount(rt, t)) {
+            return dflt;
+        }
+        return NodeGet(rt, TArrayFor(rt, t, i), i & MASK);
+    }
 }

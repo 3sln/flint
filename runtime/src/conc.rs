@@ -420,7 +420,7 @@ impl Rt {
             return NIL;
         }
         let i = fx(self.slot(s, SC_CURRENT)) as u32;
-        self.vec_nth(self.slot(s, SC_THREADS), i).unwrap_or(NIL)
+        self.vec_nth(self.slot(s, SC_THREADS), i, NIL)
     }
 
     // --- saving and restoring a VM state -----------------------------------
@@ -1134,7 +1134,7 @@ impl Rt {
         let ti = self.push(th);
         let (idx, w) = if free >= 0 {
             let ws = self.slot(self.r(si), SC_WAITERS);
-            let w = self.vec_nth(ws, free as u32).unwrap_or(NIL);
+            let w = self.vec_nth(ws, free as u32, NIL);
             let next = fx(self.slot(w, W_NEXT));
             self.set(self.r(si), SC_WFREE, Value::fixnum(next));
             (free, w)
@@ -1175,7 +1175,7 @@ impl Rt {
         let idx = (token & 0xFFFF) as u32 - 1;
         let gen = token >> 16;
         let ws = self.waiters();
-        let w = self.vec_nth(ws, idx).unwrap_or(NIL);
+        let w = self.vec_nth(ws, idx, NIL);
         if w.is_nil() {
             return NIL;
         }
@@ -1210,7 +1210,7 @@ impl Rt {
         let n = self.vec_count(ws);
         let mut c = 0;
         for i in 0..n {
-            let w = self.vec_nth(ws, i).unwrap_or(NIL);
+            let w = self.vec_nth(ws, i, NIL);
             if !w.is_nil() && !self.slot(w, W_THREAD).is_nil() {
                 c += 1;
             }
@@ -1260,7 +1260,7 @@ impl Rt {
         let ws = self.waiters();
         let n = self.vec_count(ws);
         for i in 0..n {
-            let w = self.vec_nth(ws, i).unwrap_or(NIL);
+            let w = self.vec_nth(ws, i, NIL);
             if w.is_nil() || self.slot(w, W_THREAD).is_nil() {
                 continue;
             }
@@ -1280,7 +1280,7 @@ impl Rt {
         let wsi = self.push(ws);
         let n = self.vec_count(self.r(wsi));
         for i in 0..n {
-            let w = self.vec_nth(self.r(wsi), i).unwrap_or(NIL);
+            let w = self.vec_nth(self.r(wsi), i, NIL);
             if w.is_nil() || self.slot(w, W_THREAD).is_nil() {
                 continue;
             }
@@ -1576,7 +1576,7 @@ fn pick(rt: &mut Rt) -> Option<u32> {
     let cur = fx(rt.slot(s, SC_CURRENT)) as u32;
     for k in 1..=n {
         let i = (cur + k) % n;
-        let th = rt.vec_nth(ts, i).unwrap_or(NIL);
+        let th = rt.vec_nth(ts, i, NIL);
         if th.is_nil() {
             continue;
         }
@@ -1604,7 +1604,7 @@ fn needs_host(rt: &mut Rt) -> bool {
     let ts = rt.slot(s, SC_THREADS);
     let n = rt.vec_count(ts);
     for i in 0..n {
-        let th = rt.vec_nth(ts, i).unwrap_or(NIL);
+        let th = rt.vec_nth(ts, i, NIL);
         if th.is_nil() {
             continue;
         }
@@ -1622,7 +1622,7 @@ fn run_one(rt: &mut Rt, i: u32) {
     let s = rt.sched();
     rt.set(s, SC_CURRENT, Value::fixnum(i as i64));
     let ts = rt.slot(s, SC_THREADS);
-    let th = rt.vec_nth(ts, i).unwrap_or(NIL);
+    let th = rt.vec_nth(ts, i, NIL);
     if th.is_nil() {
         return;
     }
@@ -1685,7 +1685,7 @@ fn settled_answer(rt: &mut Rt) -> Value {
         return NIL;
     }
     let ts = rt.slot(s, SC_THREADS);
-    let th = rt.vec_nth(ts, 0).unwrap_or(NIL);
+    let th = rt.vec_nth(ts, 0, NIL);
     if th.is_nil() {
         return NIL;
     }
@@ -1711,7 +1711,7 @@ fn all_threads_settled(rt: &mut Rt) -> bool {
     let ts = rt.slot(s, SC_THREADS);
     let n = rt.vec_count(ts);
     for i in 0..n {
-        let th = rt.vec_nth(ts, i).unwrap_or(NIL);
+        let th = rt.vec_nth(ts, i, NIL);
         if th.is_nil() {
             continue;
         }
@@ -1795,7 +1795,7 @@ pub fn drive(rt: &mut Rt) -> Value {
                     let mut stuck = 0;
                     let mut detail = alloc::string::String::new();
                     for i in 0..n {
-                        let th = rt.vec_nth(ts, i).unwrap_or(NIL);
+                        let th = rt.vec_nth(ts, i, NIL);
                         if th.is_nil() {
                             continue;
                         }
@@ -1866,7 +1866,7 @@ impl Rt {
         let callee_at = self.roots.stack_top;
         self.vpush(f);
         for k in 0..n {
-            let a = self.vec_nth(args, k).unwrap_or(NIL);
+            let a = self.vec_nth(args, k, NIL);
             self.vpush(a);
         }
         if !self.enter(f, callee_at, n as usize) {
@@ -2091,8 +2091,8 @@ impl Rt {
                 // as a string and read off the end of the heap. `abcd` arriving
                 // on a port was a segfault.
                 let item = self.r(vi);
-                let n = fx(self.vec_nth(item, 0).unwrap_or(NIL));
-                let v = self.vec_nth(item, 1).unwrap_or(NIL);
+                let n = fx(self.vec_nth(item, 0, NIL));
+                let v = self.vec_nth(item, 1, NIL);
                 self.set_r(vi, v);
                 let queued = fx(self.slot(self.r(pi), PT_BYTES));
                 let left = if queued > n { queued - n } else { 0 };
@@ -2258,7 +2258,7 @@ impl Rt {
             let a = self.r(ai);
             let n = if self.is_vector(a) { self.vec_count(a) } else { 0 };
             for k in 0..n {
-                let x = self.vec_nth(self.r(ai), k).unwrap_or(NIL);
+                let x = self.vec_nth(self.r(ai), k, NIL);
                 let xi = self.push(x);
                 let nv = self.vec_conj(self.r(vi), self.r(xi));
                 self.set_r(vi, nv);
@@ -2319,7 +2319,7 @@ impl Rt {
             // the way `port_open` reads it off `is_port` -- a host answering nil
             // and a host refusing would be the same bits.
             if self.is_vector(pending) {
-                let v = self.vec_nth(pending, 0).unwrap_or(NIL);
+                let v = self.vec_nth(pending, 0, NIL);
                 self.pop_to(base);
                 return v;
             }
@@ -2361,7 +2361,7 @@ impl Rt {
             let a = self.r(ai);
             let n = if self.is_vector(a) { self.vec_count(a) } else { 0 };
             for k in 0..n {
-                let x = self.vec_nth(self.r(ai), k).unwrap_or(NIL);
+                let x = self.vec_nth(self.r(ai), k, NIL);
                 let xi = self.push(x);
                 let nv = self.vec_conj(self.r(vi), self.r(xi));
                 self.set_r(vi, nv);
@@ -2508,7 +2508,7 @@ impl Rt {
         let keep = self.empty_vec();
         let ki = self.push(keep);
         for k in 0..n {
-            let x = fx(self.vec_nth(self.r(bi), k).unwrap_or(NIL));
+            let x = fx(self.vec_nth(self.r(bi), k, NIL));
             if x == id {
                 continue;
             }
@@ -2979,11 +2979,11 @@ impl Rt {
         let header = (n as usize) * 20;
         out.resize(header, 0);
         for i in 0..n {
-            let e = self.vec_nth(self.r(ei), i).unwrap_or(NIL);
-            let kind = fx(self.vec_nth(e, 0).unwrap_or(NIL));
-            let a = fx(self.vec_nth(e, 1).unwrap_or(NIL));
-            let b = fx(self.vec_nth(e, 2).unwrap_or(NIL));
-            let payload = self.vec_nth(e, 3).unwrap_or(NIL);
+            let e = self.vec_nth(self.r(ei), i, NIL);
+            let kind = fx(self.vec_nth(e, 0, NIL));
+            let a = fx(self.vec_nth(e, 1, NIL));
+            let b = fx(self.vec_nth(e, 2, NIL));
+            let payload = self.vec_nth(e, 3, NIL);
             let off = out.len() as u32;
             let plen = if self.is_bytes(payload) {
                 let n = self.b_count(payload);
@@ -2992,7 +2992,7 @@ impl Rt {
             } else if self.is_vector(payload) {
                 let n = self.vec_count(payload);
                 for k in 0..n {
-                    let b = self.vec_nth(payload, k).unwrap_or(NIL);
+                    let b = self.vec_nth(payload, k, NIL);
                     out.push(b.as_fixnum() as u8);
                 }
                 n
@@ -3060,7 +3060,7 @@ impl Rt {
         let held = self.empty_vec();
         let hi = self.push(held);
         for k in 0..bn {
-            let id = fx(self.vec_nth(self.r(bi), k).unwrap_or(NIL));
+            let id = fx(self.vec_nth(self.r(bi), k, NIL));
             if self.port_by_id(id).is_nil() {
                 // CLOSED as well as released, and the two say different things.
                 // `doc/decisions/0006`: an end the collector finds unreachable
@@ -3086,7 +3086,7 @@ impl Rt {
         let mut live = self.empty_vec();
         let li = self.push(live);
         for k in 0..n {
-            let id = fx(self.vec_nth(self.r(ii), k).unwrap_or(NIL));
+            let id = fx(self.vec_nth(self.r(ii), k, NIL));
             let p = self.port_by_id(id);
             if !p.is_nil() {
                 let nl = self.vec_conj(self.r(li), Value::fixnum(id));
@@ -3127,9 +3127,9 @@ impl Rt {
         let pairs = self.slot(s, SC_PAIRS);
         let n = self.vec_count(pairs);
         for i in 0..n {
-            let e = self.vec_nth(pairs, i).unwrap_or(NIL);
-            if fx(self.vec_nth(e, 0).unwrap_or(NIL)) == id {
-                return fx(self.vec_nth(e, 1).unwrap_or(NIL));
+            let e = self.vec_nth(pairs, i, NIL);
+            if fx(self.vec_nth(e, 0, NIL)) == id {
+                return fx(self.vec_nth(e, 1, NIL));
             }
         }
         -1
@@ -3149,7 +3149,7 @@ impl Rt {
         let ii = self.push(ids);
         let n = self.vec_count(self.r(ii));
         for k in 0..n {
-            let id = fx(self.vec_nth(self.r(ii), k).unwrap_or(NIL));
+            let id = fx(self.vec_nth(self.r(ii), k, NIL));
             let p = self.port_by_id(id);
             if p.is_nil() {
                 continue;

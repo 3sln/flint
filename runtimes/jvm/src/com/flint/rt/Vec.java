@@ -88,6 +88,8 @@ public final class Vec {
     /// `assoc` and `pop`, likewise delegating to their generated bodies.
     public static long assoc(Rt rt, long v, int i, long x) { return vecAssoc(rt, v, i, x); }
     public static long pop(Rt rt, long v) { return vecPop(rt, v); }
+    public static long nth(Rt rt, long v, int i, long dflt) { return vecNth(rt, v, i, dflt); }
+    public static long tnth(Rt rt, long t, int i, long dflt) { return tvecNth(rt, t, i, dflt); }
 
     /// The TRANSIENT surface, under the names its callers already use. Bodies
     /// generated -- `Vectrans` for the plumbing, `Vectwrite` for the writes.
@@ -101,10 +103,6 @@ public final class Vec {
     public static long tpop(Rt rt, long t) { return tvecPop(rt, t); }
     public static long tpersistent(Rt rt, long t) { return tvecPersistent(rt, t); }
 
-    public static long nth(Rt rt, long v, int i) {
-        if (i < 0 || i >= count(rt, v)) return Val.NOT_FOUND;
-        return nodeGet(rt, arrayFor(rt, v, i), i & MASK);
-    }
 
 
 
@@ -144,10 +142,6 @@ public final class Vec {
 
 
 
-    public static long tnth(Rt rt, long t, int i) {
-        if (i < 0 || i >= tcount(rt, t)) return Val.NOT_FOUND;
-        return nodeGet(rt, tArrayFor(rt, t, i), i & MASK);
-    }
 
 
 

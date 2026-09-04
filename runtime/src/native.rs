@@ -628,7 +628,7 @@ pub fn call_on(rt: &mut Rt, encoded_call: &[u8]) -> Result<Vec<u8>, String> {
         let base = rt.mark();
         rt.push(call);
         let held = rt.r(base);
-        let namev = rt.vec_nth(held, 0).unwrap_or(crate::value::NIL);
+        let namev = rt.vec_nth(held, 0, crate::value::NIL);
         let mut b = crate::rt::sbuf();
         let name: String = match rt.as_str(namev, &mut b) {
             Some(s) => s.into(),
@@ -641,7 +641,7 @@ pub fn call_on(rt: &mut Rt, encoded_call: &[u8]) -> Result<Vec<u8>, String> {
         let mut args = Vec::with_capacity(n - 1);
         for i in 1..n {
             let held = rt.r(base);
-            args.push(rt.vec_nth(held, i as u32).unwrap_or(crate::value::NIL));
+            args.push(rt.vec_nth(held, i as u32, crate::value::NIL));
         }
         let out = rt.call_named(&name, &args);
         rt.pop_to(base);
