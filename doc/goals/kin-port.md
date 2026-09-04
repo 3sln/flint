@@ -982,6 +982,42 @@ the namespace, and that the definition exists without the mark.
 
 Worth fixing in kin rather than remembering: this is the first source to
 require three kin namespaces at once, and there will be many more.
+### The census has now been wrong three times, in both directions
+
+Recorded because the failures rhyme and the lesson is not "be careful".
+
+| when | said | was | what the regex missed |
+| --- | --- | --- | --- |
+| before the port | 375 blocked | 133 | `match` and `Option` are solved conventions, not blockers |
+| after `node_find` | "needs nothing" | needed a shape | `loop { ... break value }` yields a value |
+| after `mapwrite` | 75 portable | 21 | `&mut dyn FnMut` is a closure and the probe matched only `&mut |` |
+
+They go BOTH ways -- twice over-stating what was blocked, once under-stating
+it -- so the bias is not optimism or caution. It is that a census by pattern
+is a census of what the pattern understood, and the thing it does not
+understand is invisible in exactly the same way whichever direction it errs.
+
+The count that has held is the FIRST one: 133 lines, five functions, all of
+them needing a callback argument. Every re-count since has either reproduced
+it or been wrong. That is worth knowing before the next re-count is trusted
+more than it deserves.
+
+The probe now tests six spellings of a callback rather than two, and lists
+them explicitly, so the next miss is a form nobody has written yet rather
+than one the pattern happened not to cover.
+
+### What is left in `Maps`, and it is one capability
+
+    closure-blocked   5 fns  133 lines   map_for_each node_for_each
+                                         map_entry_vector map_eq hash_map_hash
+    portable          7 fns   21 lines   the champ_* wrappers, 3 lines each
+
+The portable remainder is seven delegating wrappers -- `champ_find` is
+`node_find(root, 0, h, key)` and the rest are the same shape. Porting them
+would buy one definition each and cost the usual boundary work at every call
+site. Worth doing, and worth doing LAST: it is the only work left here that
+does not need a new capability, and the capability is what actually unblocks
+the file.
 ### Never, on evidence
 
 * **`Snap`** moves to phase 5. 785/449/456 lines of direct `Gc`, `Roots`,
