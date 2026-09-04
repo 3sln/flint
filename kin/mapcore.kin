@@ -107,7 +107,7 @@
 
 (doc "A key/value pair as a value. It is a VECTOR, as in Clojure -- `vector?`"
      "is true of one, it prints `[:a 1]`, and `conj` appends.")
-(defn ^:pub ^:method ^Value map-entry [^:mut ^Rt rt ^Value k ^Value v]
+(defn ^:method ^Value map-entry [^:mut ^Rt rt ^Value k ^Value v]
   (let [^RootIx base (mark rt)
         ^RootIx ki (push rt k)
         ^RootIx vi (push rt v)

@@ -25,7 +25,7 @@ public static class Vecread {
     /// The nil-source arm was the ports' too, and it is dead: a probe over the
     /// whole conformance suite and over `(persistent! (transient []))` never
     /// reached it, and native has run without it since vectors were written.
-    public static long NodeClone(Rt rt, long n, int newlen, long edit) {
+    internal static long NodeClone(Rt rt, long n, int newlen, long edit) {
         int old = rt.Push(n);
         int e = rt.Push(edit);
         long fresh = NewNode(rt, newlen, rt.R(e));

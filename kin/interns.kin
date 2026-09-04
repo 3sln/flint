@@ -45,12 +45,12 @@
 (defn ^:method ^Idx mask [^Interns t]
   (return (- (alen (. t values)) 1)))
 
-(defn ^:pub ^:method insert-at [^:mut ^Interns t ^Idx idx ^I32 hash ^Value v]
+(defn ^:method insert-at [^:mut ^Interns t ^Idx idx ^I32 hash ^Value v]
   (aset (. t hashes) idx hash)
   (aset (. t values) idx (bits v))
   (set (. t count) (+ (. t count) 1)))
 
-(defn ^:pub ^:method ^Bool needs-grow [^Interns t]
+(defn ^:method ^Bool needs-grow [^Interns t]
   (return (>= (* (. t count) 4) (* (alen (. t values)) 3))))
 
 (doc "Insert with no probe for equality: the caller already knows this hash"

@@ -35,7 +35,7 @@ public static class Hash {
             return h1 ^ ((int)((uint) h1 >> 16));
         }
     }
-    public static int HashInt(int input) {
+    internal static int HashInt(int input) {
         unchecked {
             if (input == 0) {
                 return 0;
@@ -55,22 +55,22 @@ public static class Hash {
             return Fmix(h2, 8);
         }
     }
-    public static int HashCombine(int seed, int h) {
+    internal static int HashCombine(int seed, int h) {
         unchecked {
             return seed ^ (((h + unchecked((int) 0x9e3779b9)) + (seed << 6)) + (seed >> 2));
         }
     }
-    public static int MixCollHash(int hash, int count) {
+    internal static int MixCollHash(int hash, int count) {
         unchecked {
             return Fmix(MixH1(Seed, MixK1(hash)), count);
         }
     }
-    public static int OrderedStep(int acc, int itemHash) {
+    internal static int OrderedStep(int acc, int itemHash) {
         unchecked {
             return (acc * 31) + itemHash;
         }
     }
-    public static int UnorderedStep(int acc, int itemHash) {
+    internal static int UnorderedStep(int acc, int itemHash) {
         unchecked {
             return acc + itemHash;
         }

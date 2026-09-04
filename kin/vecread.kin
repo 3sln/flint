@@ -35,7 +35,7 @@
      "The nil-source arm was the ports' too, and it is dead: a probe over the"
      "whole conformance suite and over `(persistent! (transient []))` never"
      "reached it, and native has run without it since vectors were written.")
-(defn ^:pub ^:method ^Value node-clone [^:mut ^Rt rt ^Value n ^I32 newlen ^Value edit]
+(defn ^:method ^Value node-clone [^:mut ^Rt rt ^Value n ^I32 newlen ^Value edit]
   (let [^RootIx old (push rt n)
         ^RootIx e (push rt edit)
         ^Value fresh (new-node rt newlen (r rt e))]

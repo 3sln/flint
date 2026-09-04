@@ -12,7 +12,7 @@ using static Flint.Rt.Seqs;
 using static Flint.Rt.Vec;
 
 public static class Eq {
-    public static int Category(Rt rt, long v) {
+    internal static int Category(Rt rt, long v) {
         if (!Val.IsHeap(v)) {
             return CAT_SCALAR;
         }

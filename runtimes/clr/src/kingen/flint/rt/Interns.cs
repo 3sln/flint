@@ -15,12 +15,12 @@ public static class Interns {
     internal static int Mask(Flint.Rt.Interns t) {
         return t.values.Length - 1;
     }
-    public static void InsertAt(Flint.Rt.Interns t, int idx, int hash, long v) {
+    internal static void InsertAt(Flint.Rt.Interns t, int idx, int hash, long v) {
         t.hashes[idx] = hash;
         t.values[idx] = v;
         t.count += 1;
     }
-    public static bool NeedsGrow(Flint.Rt.Interns t) {
+    internal static bool NeedsGrow(Flint.Rt.Interns t) {
         return (t.count * 4) >= (t.values.Length * 3);
     }
     /// Insert with no probe for equality: the caller already knows this hash

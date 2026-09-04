@@ -898,9 +898,38 @@ right, and it recovered exactly zero bytes. It is kept because it is faithful
 to the original, not because it bought anything. Measuring the fix mattered as
 much as measuring the regression.
 
-**43 `^:pub` marks across the kin sources today**, and the rule was not known
-when most of them were written. Worth a sweep against what each function was
-before it was generated.
+**Swept, and the compiler answered the question better than reading would.**
+Of 43 marks, 17 are load-bearing because another kin namespace `:refer`s the
+name -- a require of a non-`^:pub` name does not resolve. The other 20 were
+candidates, so all 20 were dropped at once and the build was asked which it
+minded.
+
+It minded EIGHT, and it took three rounds to find them all, which is the more
+useful half of the result.
+
+* `cargo build` objected to one: `map-assoc`, from `units-src/flint-data-xml`
+  and `units-src/flint-data-html`, which are separate CRATES.
+* The gates found four more: `is-map`, `is-array-map` and `map-get` from
+  `runtime/tests/vm.rs`, `hash-long` from the CLR conform harness. Integration
+  tests are their own crate and `cargo build` does not compile them, and
+  `runtimes/clr/conform/Conform.csproj` is a second ASSEMBLY, so C#'s
+  `internal` does not reach it. The premise that the CLR was one assembly was
+  simply wrong.
+* A third round found three: `map-dissoc`, `lazy-seq` and `range`, the same
+  way. A compiler stops early, so each round only reveals the first few.
+
+The remaining 12 came off, 43 marks down to 31. The floor module went 303 736
+-> **303 605**: 131 bytes saved in every program that ships, on top of the 285
+the slice itself had cost.
+
+Three things worth keeping. Reading would not have sorted them -- twelve of
+twenty looked exactly like the eight. Dropping all of them and letting the
+toolchain object is a cheaper and more reliable oracle, and it is available
+only because the mistake is a compile error rather than a silent one. But
+`cargo build` is NOT that oracle: it caught one of eight. And iterating on
+compiler output converges slowly, because each round shows the first errors
+only -- reading the HARNESSES for every generated name they reach finished in
+one pass what three build rounds had not.
 
 ### The module budget measures the PREVIOUS run's runtime
 

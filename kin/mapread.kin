@@ -122,5 +122,5 @@
     (return out)))
 
 (doc "Is `k` in `m`?")
-(defn ^:pub ^:method ^Bool map-contains [^:mut ^Rt rt ^Value m ^Value k]
+(defn ^:method ^Bool map-contains [^:mut ^Rt rt ^Value m ^Value k]
   (return (!= (map-get rt m k NOT_FOUND) NOT_FOUND)))

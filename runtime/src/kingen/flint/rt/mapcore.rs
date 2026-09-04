@@ -104,7 +104,7 @@ impl Rt {
     }
     /// A key/value pair as a value. It is a VECTOR, as in Clojure -- `vector?`
     /// is true of one, it prints `[:a 1]`, and `conj` appends.
-    pub fn map_entry(&mut self, k: Value, v: Value) -> Value {
+    pub(crate) fn map_entry(&mut self, k: Value, v: Value) -> Value {
         let base: usize = self.mark();
         let ki: usize = self.push(k);
         let vi: usize = self.push(v);

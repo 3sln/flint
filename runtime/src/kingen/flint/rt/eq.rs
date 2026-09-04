@@ -17,7 +17,7 @@ use crate::kingen::flint::rt::hash::*;
 use crate::kingen::flint::rt::pike::*;
 
 impl Rt {
-    pub fn category(&self, v: Value) -> u8 {
+    pub(crate) fn category(&self, v: Value) -> u8 {
         if !v.is_heap() {
             return CAT_SCALAR;
         }

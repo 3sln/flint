@@ -17,7 +17,7 @@
                                    Rt Value Cat Bool
                                    CAT_SCALAR CAT_MAP CAT_SEQUENTIAL CAT_SET]]))
 
-(defn ^:pub ^:method ^Cat category [^Rt rt ^Value v]
+(defn ^:method ^Cat category [^Rt rt ^Value v]
   (if (not (is-heap v))
     (return CAT_SCALAR))
   (case (ty rt (as-heap v))

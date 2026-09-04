@@ -124,7 +124,7 @@ public static class Mapread {
         return @out;
     }
     /// Is `k` in `m`?
-    public static bool MapContains(Rt rt, long m, long k) {
+    internal static bool MapContains(Rt rt, long m, long k) {
         return MapGet(rt, m, k, Val.NotFound) != Val.NotFound;
     }
 }

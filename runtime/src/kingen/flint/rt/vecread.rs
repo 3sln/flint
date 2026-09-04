@@ -29,7 +29,7 @@ impl Rt {
     /// The nil-source arm was the ports' too, and it is dead: a probe over the
     /// whole conformance suite and over `(persistent! (transient []))` never
     /// reached it, and native has run without it since vectors were written.
-    pub fn node_clone(&mut self, n: Value, newlen: u32, edit: Value) -> Value {
+    pub(crate) fn node_clone(&mut self, n: Value, newlen: u32, edit: Value) -> Value {
         let old: usize = self.push(n);
         let e: usize = self.push(edit);
         let fresh: Value = self.new_node(newlen, self.r(e));

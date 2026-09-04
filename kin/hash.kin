@@ -38,7 +38,7 @@
   (set h1 (mul32 h1 (hex 0xc2b2ae35)))
   (return (bit-xor h1 (ushr h1 16))))
 
-(defn ^:pub ^:unchecked ^U32 hash-int [^U32 input]
+(defn ^:unchecked ^U32 hash-int [^U32 input]
   (if (== input 0)
     (return 0))
   (return (fmix (mix-h1 SEED (mix-k1 input)) 4)))
@@ -55,20 +55,20 @@
 ;; `boost::hash_combine`, as Clojure's `Util.hashCombine`. The `sar` is the
 ;; point of interest: an ARITHMETIC shift, which Rust can only reach by going
 ;; through `i32` and back.
-(defn ^:pub ^:inline ^:unchecked ^U32 hash-combine [^U32 seed ^U32 h]
+(defn ^:inline ^:unchecked ^U32 hash-combine [^U32 seed ^U32 h]
   (return (bit-xor seed (add32 (add32 (add32 h (hex 0x9e3779b9))
                                       (shl seed 6))
                                (sar seed 2)))))
 
-(defn ^:pub ^:unchecked ^U32 mix-coll-hash [^U32 hash ^U32 count]
+(defn ^:unchecked ^U32 mix-coll-hash [^U32 hash ^U32 count]
   (return (fmix (mix-h1 SEED (mix-k1 hash)) count)))
 
 ;; The running accumulators. Start ordered at 1 and unordered at 0, fold, then
 ;; `mix-coll-hash` with the count.
-(defn ^:pub ^:inline ^:unchecked ^U32 ordered-step [^U32 acc ^U32 item-hash]
+(defn ^:inline ^:unchecked ^U32 ordered-step [^U32 acc ^U32 item-hash]
   (return (add32 (mul32 acc 31) item-hash)))
 
-(defn ^:pub ^:inline ^:unchecked ^U32 unordered-step [^U32 acc ^U32 item-hash]
+(defn ^:inline ^:unchecked ^U32 unordered-step [^U32 acc ^U32 item-hash]
   (return (add32 acc item-hash)))
 
 (defconst ^:pub ^U32 HASH_TRUE 1231)

@@ -32,7 +32,7 @@ impl Rt {
         self.set(n, i + 1, v);
     }
     /// Who owns this node: the transient's token, or `nil` when nothing does.
-    pub fn node_edit(&self, n: Value) -> Value {
+    pub(crate) fn node_edit(&self, n: Value) -> Value {
         return self.slot(n, 0);
     }
     /// A trie node with `n` child slots, all nil, owned by `edit`.

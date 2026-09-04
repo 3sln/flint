@@ -20,12 +20,12 @@ impl InternTable {
     pub(crate) fn mask(&self) -> usize {
         return self.values.len() - 1;
     }
-    pub fn insert_at(&mut self, idx: usize, hash: u32, v: Value) {
+    pub(crate) fn insert_at(&mut self, idx: usize, hash: u32, v: Value) {
         self.hashes[idx] = hash;
         self.values[idx] = v.0;
         self.count += 1;
     }
-    pub fn needs_grow(&self) -> bool {
+    pub(crate) fn needs_grow(&self) -> bool {
         return (self.count * 4) >= (self.values.len() * 3);
     }
     /// Insert with no probe for equality: the caller already knows this hash
