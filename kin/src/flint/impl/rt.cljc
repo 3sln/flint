@@ -175,7 +175,7 @@
   the difference matters because a name can appear in a `case` label where a
   call cannot."
   '[TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ TY_STRSEQ TY_RANGE TY_VEC TY_NODE
-    TY_TVEC TY_VOLATILE
+    TY_TVEC TY_VOLATILE TY_TABLE
     TY_MAPENTRY TY_ARRAYMAP TY_HASHMAP TY_TABLEREF TY_SET TY_STR TY_KEYWORD
     TY_SYMBOL TY_BMNODE TY_COLLNODE])
 
@@ -613,13 +613,44 @@
 
     ;; The siblings these files actually reach for.
     'vec-count (sibling "vec_count" "Vec" "count" 1)
-    'vec-nth (sibling "vec_nth" "Vec" "nth" 2)
+    ;; THREE arguments after the receiver, not two. `nth` gained a `dflt`
+    ;; when absence stopped being a sentinel each caller had to know; this
+    ;; entry said 2 for a while after the function said 3, which would have
+    ;; generated a call that does not compile the moment a source used it.
+    'vec-nth (sibling "vec_nth" "Vec" "nth" 3)
+    ;; The CHARACTER lookup, with the same `dflt` shape. Rust calls it
+    ;; `char_at`; both ports call it `Str.nth`, camel on the JVM and Pascal on
+    ;; the CLR, which is what the four-argument `sibling` is for.
+    'char-at (sibling "char_at" "Str" "nth" "Nth" 3)
+    ;; TABLES. Both ports spell these camelCase -- `tableRef`, not `TableRef`
+    ;; -- so the C# name is given explicitly rather than pascalised.
+    'table-ref (sibling "table_ref" "Table" "tableRef" "tableRef" 2)
+    'table-count (sibling "table_count" "Table" "tableCount" "tableCount" 1)
+    'num-add (sibling "num_add" "Num" "add" "Add" 2)
     'str-len (sibling "str_len" "Str" "byteLen" "ByteLen" 1)
     'char-len (sibling "char_count" "Str" "charLen" "CharLen" 1)
     'maps-eq (sibling "map_eq" "Maps" "eq" "Eq" 2)
-    'seq-of (sibling "seq" "Seqs" "seq" 1)
-    'first-of (sibling "first" "Seqs" "first" 1)
-    'next-of (sibling "next" "Seqs" "next" 1)
+    ;; FULLY QUALIFIED, and this one is not optional. A generated module lives
+    ;; in `flint.rt`, and `seqs.kin` generates a `flint.rt.Seqs` there -- so a
+    ;; bare `Seqs.seq` inside another generated module binds to the GENERATED
+    ;; class, which has `vecseq` and `range` and no `seq` at all. C# said
+    ;; "'Seqs' does not contain a definition for 'Seq'" and was right.
+    ;;
+    ;; This is the collision `java-emit` already documents as the reason the
+    ;; generated package had to move; it reaches the call sites too, wherever a
+    ;; hand-written class and a generated one share a name. `Maps` has the same
+    ;; shape and `empty-map` was already written qualified for it.
+    ;; Written out rather than built by `sibling`, because the CLASS differs
+    ;; per target here and `sibling` varies only the method name.
+    'seq-of (core/call {:rust "{0}.seq({1})"
+                        :java "com.flint.rt.Seqs.seq({0}, {1})"
+                        :csharp "Flint.Rt.Seqs.Seq({0}, {1})"})
+    'first-of (core/call {:rust "{0}.first({1})"
+                          :java "com.flint.rt.Seqs.first({0}, {1})"
+                          :csharp "Flint.Rt.Seqs.First({0}, {1})"})
+    'next-of (core/call {:rust "{0}.next({1})"
+                         :java "com.flint.rt.Seqs.next({0}, {1})"
+                         :csharp "Flint.Rt.Seqs.Next({0}, {1})"})
 
     'alloc (core/call {:rust "{0}.alloc({1}, {2})"
                        :java "{0}.alloc({1}, {2})"

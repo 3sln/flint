@@ -17,7 +17,7 @@ use crate::kingen::flint::rt::hash::*;
 use crate::kingen::flint::rt::pike::*;
 
 impl Rt {
-    pub(crate) fn vecseq(&mut self, v: Value, i: u32) -> Value {
+    pub fn vecseq(&mut self, v: Value, i: u32) -> Value {
         let mk: usize = self.mark();
         let vi: usize = self.push(v);
         let a: Addr = self.alloc(TY_VECSEQ, 3);
@@ -32,7 +32,7 @@ impl Rt {
         self.pop_to(mk);
         return Value::heap(a);
     }
-    pub(crate) fn strseq(&mut self, s: Value, i: u32) -> Value {
+    pub fn strseq(&mut self, s: Value, i: u32) -> Value {
         let mk: usize = self.mark();
         let si: usize = self.push(s);
         let a: Addr = self.alloc(TY_STRSEQ, 3);

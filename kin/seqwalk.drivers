@@ -1,0 +1,401 @@
+--rust-head
+type Addr = u32;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_CONS: u8 = 6; const TY_VECSEQ: u8 = 11; const TY_STRSEQ: u8 = 12;
+const TY_RANGE: u8 = 13; const TY_MAPENTRY: u8 = 20; const TY_TABLE: u8 = 49;
+const TY_VEC: u8 = 9; const TY_STR: u8 = 2;
+const C_FIRST: u32 = 0; const C_REST: u32 = 1;
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+}
+struct Gc { sp: Vec<u8> }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, starve: bool }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        if self.starve { return 0; }
+        let a = self.bump; self.bump += n as u64 + 1;
+        self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+
+    // --- the stubs the source reaches -----------------------------------
+    //
+    // A "vector" here is slot 0 = count, then elements; a "string" is the
+    // same shape. Enough for `first` and `next` to be exercised over every
+    // seq tag without pulling in the real collections.
+    fn vec_count(&self, v: Value) -> u32 { self.slot(v, 0).0 as u32 }
+    fn vec_nth(&self, v: Value, i: u32, dflt: Value) -> Value {
+        if i >= self.vec_count(v) { dflt } else { self.slot(v, i + 1) }
+    }
+    fn char_count(&self, v: Value) -> u32 { self.slot(v, 0).0 as u32 }
+    fn char_at(&mut self, v: Value, i: u32, dflt: Value) -> Value {
+        if i >= self.char_count(v) { dflt } else { self.slot(v, i + 1) }
+    }
+    fn table_count(&mut self, t: Value) -> u32 { self.slot(t, 0).0 as u32 }
+    fn table_ref(&mut self, t: Value, i: u32) -> Value { Value(0x7000 + i as u64) }
+    fn num_add(&mut self, a: Value, b: Value) -> Value { Value(a.0 + b.0) }
+    // `seq` is the IDENTITY on a seq and nil on anything else, which is what
+    // the real one narrows to once a collection has been converted.
+    fn seq(&mut self, v: Value) -> Value {
+        if !v.is_heap() { return NIL; }
+        match ty(&self.gc.sp, v.as_heap()) {
+            TY_CONS | TY_VECSEQ | TY_STRSEQ => v,
+            TY_RANGE => if self.slot(v, 0).0 >= self.slot(v, 1).0 { NIL } else { v },
+            _ => NIL,
+        }
+    }
+    fn vecseq(&mut self, v: Value, i: u32) -> Value {
+        let a = self.alloc(TY_VECSEQ, 3);
+        self.set_slot(a, 0, v); self.set_slot(a, 1, Value::fixnum(i as i64));
+        Value::heap(a)
+    }
+    fn strseq(&mut self, v: Value, i: u32) -> Value {
+        let a = self.alloc(TY_STRSEQ, 3);
+        self.set_slot(a, 0, v); self.set_slot(a, 1, Value::fixnum(i as i64));
+        Value::heap(a)
+    }
+    fn range(&mut self, start: Value, end: Value, step: Value) -> Value {
+        let a = self.alloc(TY_RANGE, 3);
+        self.set_slot(a, 0, start); self.set_slot(a, 1, end); self.set_slot(a, 2, step);
+        Value::heap(a)
+    }
+}
+fn ty(sp: &Vec<u8>, a: Addr) -> u8 { sp[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 4000], gc: Gc { sp: vec![0u8; 4000] }, lens: vec![0; 4000],
+                      bump: 100, roots: Vec::new(), starve: false };
+    let mut o = String::new();
+    let mk = |rt: &mut Rt, t: u8, vals: &[u64]| -> Value {
+        let a = rt.alloc(t, vals.len() as u32 + 1);
+        for (k, v) in vals.iter().enumerate() { rt.set_slot(a, k as u32, Value(*v)); }
+        Value::heap(a)
+    };
+    // Every step HOISTED. `first` and `next` both take `&mut self`, so
+    // `rt.first(rt.next(x))` is two mutable borrows at once -- the same rule
+    // the generated sources hit, showing up in the probe that drives them.
+
+    // CONS: first is slot 0, next seqs slot 1.
+    let tailc = mk(&mut rt, TY_CONS, &[0x22, NIL.0]);
+    let cons = mk(&mut rt, TY_CONS, &[0x11, tailc.0]);
+    let c0 = rt.first(cons);
+    let cn = rt.next(cons); let c1 = rt.first(cn);
+    let ce = rt.next(tailc);
+    o.push_str(&format!("cons={} next1={} next2={} ", c0.0, c1.0, ce.is_nil() as u32));
+
+    // VECSEQ over a "vector": count in slot 0, elements after.
+    let vec = mk(&mut rt, TY_VEC, &[2, 0xA1, 0xA2]);
+    let vs = rt.vecseq(vec, 0);
+    let v0 = rt.first(vs);
+    let vn = rt.next(vs); let v1 = rt.first(vn);
+    let ve = rt.next(vn);
+    o.push_str(&format!("vec={} vecn={} vecend={} ", v0.0, v1.0, ve.is_nil() as u32));
+
+    // VECSEQ over a MAP ENTRY: read directly, and exactly two long.
+    let ent = mk(&mut rt, TY_MAPENTRY, &[0xE1, 0xE2]);
+    let es = rt.vecseq(ent, 0);
+    let e0 = rt.first(es);
+    let en = rt.next(es); let e1 = rt.first(en);
+    let ee = rt.next(en);
+    o.push_str(&format!("ent={} entn={} entend={} ", e0.0, e1.0, ee.is_nil() as u32));
+
+    // VECSEQ over a TABLE: answers a ROW REF, not the raw slot.
+    let tab = mk(&mut rt, TY_TABLE, &[2]);
+    let ts = rt.vecseq(tab, 0);
+    let t0 = rt.first(ts);
+    let tn = rt.next(ts); let t1 = rt.first(tn);
+    let te = rt.next(tn);
+    o.push_str(&format!("tab={} tabn={} tabend={} ", t0.0, t1.0, te.is_nil() as u32));
+
+    // STRSEQ, by CODE POINT.
+    let st = mk(&mut rt, TY_STR, &[3, 0xC1, 0xC2, 0xC3]);
+    let ss = rt.strseq(st, 0);
+    let s0 = rt.first(ss);
+    let sn = rt.next(ss); let s1 = rt.first(sn);
+    let sn2 = rt.next(sn); let s2 = rt.first(sn2);
+    let se = rt.next(sn2);
+    o.push_str(&format!("str={} strn={} strlast={} strend={} ",
+        s0.0, s1.0, s2.0, se.is_nil() as u32));
+
+    // RANGE: first is `start`, next is a FRESH range.
+    let rg = rt.range(Value(5), Value(9), Value(2));
+    let r0 = rt.first(rg);
+    let rn = rt.next(rg); let r1 = rt.first(rn);
+    let rn2 = rt.next(rn); let r2 = rt.first(rn2);
+    o.push_str(&format!("rng={} rngn={} rngn2={} ", r0.0, r1.0, r2.0));
+    // The original is UNDISTURBED, which is what makes a range a value.
+    let again = rt.first(rg);
+    o.push_str(&format!("rngsame={} ", again.0));
+
+    // Nothing at all.
+    let fn0 = rt.first(NIL); let nn0 = rt.next(NIL);
+    o.push_str(&format!("nils={}{} ", fn0.is_nil() as u32, nn0.is_nil() as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_CONS = 6, TY_VECSEQ = 11, TY_STRSEQ = 12, TY_RANGE = 13;
+    static final int TY_MAPENTRY = 20, TY_TABLE = 49, TY_VEC = 9, TY_STR = 2;
+    static final int C_FIRST = 0, C_REST = 1;
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+        static long asFixnum(long v) { return v; }
+        static long fixnum(long n) { return n; }
+    }
+    static final class Rt {
+        long[] h = new long[4000];
+        static final class Gc { int[] sp = new int[4000]; }
+        Gc gc = new Gc();
+        int[] lens = new int[4000];
+        long bump = 100;
+        boolean starve = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+    // The stubs -- see the Rust head for what each stands in for.
+    static final class Vec {
+        static int count(Rt rt, long v) { return (int) rt.slot(v, 0); }
+        static long nth(Rt rt, long v, int i, long dflt) {
+            return i >= count(rt, v) ? dflt : rt.slot(v, i + 1);
+        }
+    }
+    static final class Str {
+        static int charLen(Rt rt, long v) { return (int) rt.slot(v, 0); }
+        static long nth(Rt rt, long v, int i, long dflt) {
+            return i >= charLen(rt, v) ? dflt : rt.slot(v, i + 1);
+        }
+    }
+    static final class Table {
+        static int tableCount(Rt rt, long t) { return (int) rt.slot(t, 0); }
+        static long tableRef(Rt rt, long t, int i) { return 0x7000 + i; }
+    }
+    static final class Num { static long add(Rt rt, long a, long b) { return a + b; } }
+    static long vecseq(Rt rt, long v, int i) {
+        long a = rt.alloc(TY_VECSEQ, 3);
+        rt.setSlot(a, 0, v); rt.setSlot(a, 1, i);
+        return Val.heap(a);
+    }
+    static long strseq(Rt rt, long v, int i) {
+        long a = rt.alloc(TY_STRSEQ, 3);
+        rt.setSlot(a, 0, v); rt.setSlot(a, 1, i);
+        return Val.heap(a);
+    }
+    static long range(Rt rt, long s, long e, long st) {
+        long a = rt.alloc(TY_RANGE, 3);
+        rt.setSlot(a, 0, s); rt.setSlot(a, 1, e); rt.setSlot(a, 2, st);
+        return Val.heap(a);
+    }
+    static long mk(Rt rt, int t, long[] vals) {
+        long a = rt.alloc(t, vals.length + 1);
+        for (int k = 0; k < vals.length; k++) rt.setSlot(a, k, vals[k]);
+        return Val.heap(a);
+    }
+    // `com.flint.rt.Seqs` in the real emit; here the probe is one class, so
+    // the qualified name is faked with a nested one of the same shape.
+    static final class com {
+        static final class flint {
+            static final class rt {
+                static final class Seqs {
+                    static long seq(Rt rt2, long v) {
+                        if (!Val.isHeap(v)) return NIL;
+                        int t = ty(rt2.gc.sp, Val.asHeap(v));
+                        if (t == TY_CONS || t == TY_VECSEQ || t == TY_STRSEQ) return v;
+                        if (t == TY_RANGE) return rt2.slot(v, 0) >= rt2.slot(v, 1) ? NIL : v;
+                        return NIL;
+                    }
+                }
+            }
+        }
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long tailc = mk(rt, TY_CONS, new long[]{0x22, NIL});
+        long cons = mk(rt, TY_CONS, new long[]{0x11, tailc});
+        o.append("cons=").append(first(rt, cons)).append(" next1=").append(first(rt, next(rt, cons)))
+         .append(" next2=").append(Val.isNil(next(rt, tailc)) ? 1 : 0).append(' ');
+        long vec = mk(rt, TY_VEC, new long[]{2, 0xA1, 0xA2});
+        long vs = vecseq(rt, vec, 0);
+        o.append("vec=").append(first(rt, vs)).append(" vecn=").append(first(rt, next(rt, vs)))
+         .append(" vecend=").append(Val.isNil(next(rt, next(rt, vs))) ? 1 : 0).append(' ');
+        long ent = mk(rt, TY_MAPENTRY, new long[]{0xE1, 0xE2});
+        long es = vecseq(rt, ent, 0);
+        o.append("ent=").append(first(rt, es)).append(" entn=").append(first(rt, next(rt, es)))
+         .append(" entend=").append(Val.isNil(next(rt, next(rt, es))) ? 1 : 0).append(' ');
+        long tab = mk(rt, TY_TABLE, new long[]{2});
+        long ts = vecseq(rt, tab, 0);
+        o.append("tab=").append(first(rt, ts)).append(" tabn=").append(first(rt, next(rt, ts)))
+         .append(" tabend=").append(Val.isNil(next(rt, next(rt, ts))) ? 1 : 0).append(' ');
+        long st = mk(rt, TY_STR, new long[]{3, 0xC1, 0xC2, 0xC3});
+        long ss = strseq(rt, st, 0);
+        o.append("str=").append(first(rt, ss)).append(" strn=").append(first(rt, next(rt, ss)))
+         .append(" strlast=").append(first(rt, next(rt, next(rt, ss))))
+         .append(" strend=").append(Val.isNil(next(rt, next(rt, next(rt, ss)))) ? 1 : 0).append(' ');
+        long rg = range(rt, 5, 9, 2);
+        o.append("rng=").append(first(rt, rg)).append(" rngn=").append(first(rt, next(rt, rg)))
+         .append(" rngn2=").append(first(rt, next(rt, next(rt, rg)))).append(' ');
+        o.append("rngsame=").append(first(rt, rg)).append(' ');
+        o.append("nils=").append(Val.isNil(first(rt, NIL)) ? 1 : 0)
+         .append(Val.isNil(next(rt, NIL)) ? 1 : 0).append(' ');
+        System.out.println(o.toString());
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    const int C_FIRST = 0, C_REST = 1;
+    static class Obj {
+        internal const int TyCons = 6, TyVecseq = 11, TyStrseq = 12, TyRange = 13;
+        internal const int TyMapentry = 20, TyTable = 49, TyVec = 9, TyStr = 2;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+        internal static long AsFixnum(long v) { return v; }
+        internal static long Fixnum(long n) { return n; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[4000];
+        internal sealed class GcT { internal int[] sp = new int[4000]; }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[4000];
+        internal long bump = 100;
+        internal bool starve = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    // The stubs -- see the Rust head for what each stands in for.
+    internal static class Vec {
+        internal static int Count(Rt rt, long v) { return (int) rt.Slot(v, 0); }
+        internal static long Nth(Rt rt, long v, int i, long dflt) {
+            return i >= Count(rt, v) ? dflt : rt.Slot(v, i + 1);
+        }
+    }
+    internal static class Str {
+        internal static int CharLen(Rt rt, long v) { return (int) rt.Slot(v, 0); }
+        internal static long Nth(Rt rt, long v, int i, long dflt) {
+            return i >= CharLen(rt, v) ? dflt : rt.Slot(v, i + 1);
+        }
+    }
+    internal static class Table {
+        internal static int tableCount(Rt rt, long t) { return (int) rt.Slot(t, 0); }
+        internal static long tableRef(Rt rt, long t, int i) { return 0x7000 + i; }
+    }
+    internal static class Num { internal static long Add(Rt rt, long a, long b) { return a + b; } }
+    static long Vecseq(Rt rt, long v, int i) {
+        long a = rt.Alloc(Obj.TyVecseq, 3);
+        rt.SetSlot(a, 0, v); rt.SetSlot(a, 1, i);
+        return Val.Heap(a);
+    }
+    static long Strseq(Rt rt, long v, int i) {
+        long a = rt.Alloc(Obj.TyStrseq, 3);
+        rt.SetSlot(a, 0, v); rt.SetSlot(a, 1, i);
+        return Val.Heap(a);
+    }
+    static long Range(Rt rt, long s, long e, long st) {
+        long a = rt.Alloc(Obj.TyRange, 3);
+        rt.SetSlot(a, 0, s); rt.SetSlot(a, 1, e); rt.SetSlot(a, 2, st);
+        return Val.Heap(a);
+    }
+    static long Mk(Rt rt, int t, long[] vals) {
+        long a = rt.Alloc(t, vals.Length + 1);
+        for (int k = 0; k < vals.Length; k++) rt.SetSlot(a, k, vals[k]);
+        return Val.Heap(a);
+    }
+    // `Flint.Rt.Seqs` in the real emit; nested here so the qualified name the
+    // vocabulary produces resolves inside a single-class probe.
+    internal static class Flint {
+        internal static class Rt2 { }
+        internal static class Rt {
+            internal static class Seqs {
+                internal static long Seq(Probe.Rt rt, long v) {
+                    if (!Val.IsHeap(v)) return NIL;
+                    int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+                    if (t == Obj.TyCons || t == Obj.TyVecseq || t == Obj.TyStrseq) return v;
+                    if (t == Obj.TyRange) return rt.Slot(v, 0) >= rt.Slot(v, 1) ? NIL : v;
+                    return NIL;
+                }
+            }
+        }
+    }
+--csharp
+    public static void Main(string[] args) {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long tailc = Mk(rt, Obj.TyCons, new long[]{0x22, NIL});
+        long cons = Mk(rt, Obj.TyCons, new long[]{0x11, tailc});
+        o.Append("cons=").Append(First(rt, cons)).Append(" next1=").Append(First(rt, Next(rt, cons)))
+         .Append(" next2=").Append(Val.IsNil(Next(rt, tailc)) ? 1 : 0).Append(' ');
+        long vec = Mk(rt, Obj.TyVec, new long[]{2, 0xA1, 0xA2});
+        long vs = Vecseq(rt, vec, 0);
+        o.Append("vec=").Append(First(rt, vs)).Append(" vecn=").Append(First(rt, Next(rt, vs)))
+         .Append(" vecend=").Append(Val.IsNil(Next(rt, Next(rt, vs))) ? 1 : 0).Append(' ');
+        long ent = Mk(rt, Obj.TyMapentry, new long[]{0xE1, 0xE2});
+        long es = Vecseq(rt, ent, 0);
+        o.Append("ent=").Append(First(rt, es)).Append(" entn=").Append(First(rt, Next(rt, es)))
+         .Append(" entend=").Append(Val.IsNil(Next(rt, Next(rt, es))) ? 1 : 0).Append(' ');
+        long tab = Mk(rt, Obj.TyTable, new long[]{2});
+        long ts = Vecseq(rt, tab, 0);
+        o.Append("tab=").Append(First(rt, ts)).Append(" tabn=").Append(First(rt, Next(rt, ts)))
+         .Append(" tabend=").Append(Val.IsNil(Next(rt, Next(rt, ts))) ? 1 : 0).Append(' ');
+        long st = Mk(rt, Obj.TyStr, new long[]{3, 0xC1, 0xC2, 0xC3});
+        long ss = Strseq(rt, st, 0);
+        o.Append("str=").Append(First(rt, ss)).Append(" strn=").Append(First(rt, Next(rt, ss)))
+         .Append(" strlast=").Append(First(rt, Next(rt, Next(rt, ss))))
+         .Append(" strend=").Append(Val.IsNil(Next(rt, Next(rt, Next(rt, ss)))) ? 1 : 0).Append(' ');
+        long rg = Range(rt, 5, 9, 2);
+        o.Append("rng=").Append(First(rt, rg)).Append(" rngn=").Append(First(rt, Next(rt, rg)))
+         .Append(" rngn2=").Append(First(rt, Next(rt, Next(rt, rg)))).Append(' ');
+        o.Append("rngsame=").Append(First(rt, rg)).Append(' ');
+        o.Append("nils=").Append(Val.IsNil(First(rt, NIL)) ? 1 : 0)
+         .Append(Val.IsNil(Next(rt, NIL)) ? 1 : 0).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }

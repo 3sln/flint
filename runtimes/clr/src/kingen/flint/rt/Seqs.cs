@@ -12,7 +12,7 @@ using static Flint.Rt.Seqs;
 using static Flint.Rt.Vec;
 
 public static class Seqs {
-    internal static long Vecseq(Rt rt, long v, int i) {
+    public static long Vecseq(Rt rt, long v, int i) {
         int mk = rt.Mark();
         int vi = rt.Push(v);
         long a = rt.Alloc(Obj.TyVecseq, 3);
@@ -27,7 +27,7 @@ public static class Seqs {
         rt.PopTo(mk);
         return Val.Heap(a);
     }
-    internal static long Strseq(Rt rt, long s, int i) {
+    public static long Strseq(Rt rt, long s, int i) {
         int mk = rt.Mark();
         int si = rt.Push(s);
         long a = rt.Alloc(Obj.TyStrseq, 3);

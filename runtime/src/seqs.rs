@@ -111,37 +111,6 @@ impl Rt {
         }
     }
 
-    pub fn first(&mut self, v: Value) -> Value {
-        let s = self.seq(v);
-        if s.is_nil() {
-            return NIL;
-        }
-        match ty(&self.gc.sp, s.as_heap()) {
-            TY_CONS => self.slot(s, C_FIRST),
-            TY_VECSEQ => {
-                let (vec, i) = (self.slot(s, 0), self.slot(s, 1).as_fixnum() as u32);
-                if self.ty(vec) == TY_MAPENTRY {
-                    self.slot(vec, i)
-                } else if self.ty(vec) == crate::obj::TY_TABLE {
-                    self.table_ref(vec, i)
-                } else {
-                    self.vec_nth(vec, i, NIL)
-                }
-            }
-            TY_STRSEQ => {
-                // A CODE POINT index, converged onto what both ports held.
-                // `char_at` goes through `cp_bytes_at`, which knows all three
-                // string tiers -- inline, flat and rope -- in one place. The
-                // byte-offset version this replaces read a rope's header as
-                // text, silently, because it reached past that abstraction to
-                // raw bytes (`doc/decisions` item 0o).
-                let (st, i) = (self.slot(s, 0), self.slot(s, 1).as_fixnum() as u32);
-                self.char_at(st, i, NIL)
-            }
-            TY_RANGE => self.slot(s, 0),
-            _ => NIL,
-        }
-    }
 
     /// `rest`: always a seq-able, never nil (Clojure returns `()`).
     pub fn rest(&mut self, v: Value) -> Value {
@@ -153,52 +122,6 @@ impl Rt {
         }
     }
 
-    /// `next`: nil when exhausted.
-    pub fn next(&mut self, v: Value) -> Value {
-        let s = self.seq(v);
-        if s.is_nil() {
-            return NIL;
-        }
-        match ty(&self.gc.sp, s.as_heap()) {
-            TY_CONS => {
-                let r = self.slot(s, C_REST);
-                self.seq(r)
-            }
-            TY_VECSEQ => {
-                let (vec, i) = (self.slot(s, 0), self.slot(s, 1).as_fixnum() as u32);
-                let n = if self.ty(vec) == TY_MAPENTRY {
-                    2
-                } else if self.ty(vec) == crate::obj::TY_TABLE {
-                    self.table_count(vec)
-                } else {
-                    self.vec_count(vec)
-                };
-                if i + 1 >= n {
-                    NIL
-                } else {
-                    self.vecseq(vec, i + 1)
-                }
-            }
-            TY_STRSEQ => {
-                // `i + 1` and a CODE POINT bound, not a byte width and a byte
-                // length. One step is one character; the string's tiers are
-                // `char_count`'s problem and not this loop's.
-                let (st, i) = (self.slot(s, 0), self.slot(s, 1).as_fixnum() as u32);
-                if i + 1 >= self.char_count(st) {
-                    NIL
-                } else {
-                    self.strseq(st, i + 1)
-                }
-            }
-            TY_RANGE => {
-                let (st, e, step) = (self.slot(s, 0), self.slot(s, 1), self.slot(s, 2));
-                let nstart = self.num_add(st, step);
-                let r = self.range(nstart, e, step);
-                self.seq(r)
-            }
-            _ => NIL,
-        }
-    }
 
     /// Force a lazy seq. Requires the VM, so it is a no-op shell until the VM
     /// installs itself; see `vm::install_forcer`.

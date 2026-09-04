@@ -21,6 +21,7 @@ pub mod nodeclass;
 pub mod pike;
 pub mod seqcore;
 pub mod seqs;
+pub mod seqwalk;
 pub mod vecnode;
 pub mod vecread;
 pub mod vecassoc;

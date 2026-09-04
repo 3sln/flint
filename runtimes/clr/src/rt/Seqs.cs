@@ -1,6 +1,7 @@
 namespace Flint.Rt;
 
 using static flint.rt.Seqcore;
+using static flint.rt.Seqwalk;
 
 using flint.rt;
 
@@ -17,6 +18,11 @@ using static flint.rt.Seqs;
 /// `seq` over a vector is a VECSEQ -- a cursor, not a copy -- so walking one
 /// allocates a small object per step rather than materialising anything.
 public static class Seqs {
+
+    /// `First` and `Next`, under the names their callers already use -- the
+    /// bodies are generated, as `Seqwalk`.
+    public static long First(Rt rt, long v) { return flint.rt.Seqwalk.First(rt, v); }
+    public static long Next(Rt rt, long v) { return flint.rt.Seqwalk.Next(rt, v); }
 
     /// `Cons`, under the name its callers already use -- the body is
     /// generated, as `Seqcore.Cons`.
@@ -112,63 +118,7 @@ public static class Seqs {
     }
 
 
-    public static long First(Rt rt, long v) {
-        long s = Seq(rt, v);
-        if (Val.IsNil(s)) return Val.Nil;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(s));
-        if (t == Obj.TyCons) return rt.Slot(s, C_FIRST);
-        if (t == Obj.TyVecseq) {
-            long coll = rt.Slot(s, 0);
-            int i = (int) Val.AsFixnum(rt.Slot(s, 1));
-            // A TABLE rides on `TyVecseq`; only this differs, and it differs by
-            // handing back a ref (`doc/decisions/0026`).
-            if (rt.IsHeapTy(coll, Obj.TyMapentry)) return rt.Slot(coll, i);
-            if (Table.isTable(rt, coll)) return Table.tableRef(rt, coll, i);
-            // NIL, not NotFound, matching native -- and unreachable. See the
-            // JVM's `first`.
-            return Vec.Nth(rt, coll, i, Val.Nil);
-        }
-        if (t == Obj.TyStrseq) return Str.Nth(rt, rt.Slot(s, 0), (int) Val.AsFixnum(rt.Slot(s, 1)), Val.Nil);
-        if (t == Obj.TyRange) return rt.Slot(s, 0);
-        // NIL, matching native, and unreachable: `Seq` answers nil or a cons,
-        // vecseq, strseq or range. See the JVM's `first`.
-        return Val.Nil;
-    }
 
-    /// `next`: the rest, or NIL when there is none. `rest` differs -- it gives
-    /// an empty seq rather than nil -- and conflating them is a classic bug.
-    public static long Next(Rt rt, long v) {
-        long s = Seq(rt, v);
-        if (Val.IsNil(s)) return Val.Nil;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(s));
-        if (t == Obj.TyCons) return Seq(rt, rt.Slot(s, C_REST));
-        if (t == Obj.TyVecseq) {
-            long vec = rt.Slot(s, 0);
-            int i = (int) Val.AsFixnum(rt.Slot(s, 1)) + 1;
-            int cnt = rt.IsHeapTy(vec, Obj.TyMapentry) ? 2
-                    : Table.isTable(rt, vec) ? Table.tableCount(rt, vec)
-                    : Vec.Count(rt, vec);
-            return i >= cnt ? Val.Nil : Vecseq(rt, vec, i);
-        }
-        if (t == Obj.TyStrseq) {
-            long str = rt.Slot(s, 0);
-            int i = (int) Val.AsFixnum(rt.Slot(s, 1)) + 1;
-            return i >= Str.CharLen(rt, str) ? Val.Nil : Strseq(rt, str, i);
-        }
-        if (t == Obj.TyRange) {
-            // A fresh range, not a mutated cursor: a range IS a persistent
-            // value, so walking one must not disturb anything else holding it.
-            int bas = rt.Mark();
-            int ri = rt.Push(s);
-            int ni = rt.Push(Num.Add(rt, rt.Slot(rt.R(ri), 0), rt.Slot(rt.R(ri), 2)));
-            long nr = Range(rt, rt.R(ni), rt.Slot(rt.R(ri), 1), rt.Slot(rt.R(ri), 2));
-            int nri = rt.Push(nr);
-            long outv = RangeEmpty(rt, rt.R(nri)) ? Val.Nil : rt.R(nri);
-            rt.PopTo(bas);
-            return outv;
-        }
-        return rt.ThrowStr("UnsupportedOperationException", "next over " + rt.Describe(v));
-    }
 
     public static long Rest(Rt rt, long v) {
         long n = Next(rt, v);

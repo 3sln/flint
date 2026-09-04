@@ -28,7 +28,7 @@
                                    LS_THUNK LS_SEQ
                                    TY_VECSEQ TY_STRSEQ TY_LAZYSEQ TY_RANGE]]))
 
-(defn ^:method ^Value vecseq [^:mut ^Rt rt ^Value v ^I32 i]
+(defn ^:pub ^:method ^Value vecseq [^:mut ^Rt rt ^Value v ^I32 i]
   (let [^RootIx mk (mark rt)
         ^RootIx vi (push rt v)
         ^Addr a (alloc rt TY_VECSEQ 3)]
@@ -42,7 +42,7 @@
     (pop-to rt mk)
     (return (heap a))))
 
-(defn ^:method ^Value strseq [^:mut ^Rt rt ^Value s ^I32 i]
+(defn ^:pub ^:method ^Value strseq [^:mut ^Rt rt ^Value s ^I32 i]
   (let [^RootIx mk (mark rt)
         ^RootIx si (push rt s)
         ^Addr a (alloc rt TY_STRSEQ 3)]

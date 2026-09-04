@@ -1314,6 +1314,38 @@ Rust, a fixed sentinel on the ports, four call sites in Rust and two per port.
 It takes a `dflt` now, like `vec-nth` and `map-get`. Three lookups in this
 runtime, one way of answering absence.
 
+### `first` and `next` ship, and a NAME COLLISION reached the call sites
+
+`seqwalk.kin`. 77 lines out of `seqs.rs`, 66 out of the JVM, 56 out of the CLR.
+
+The interesting failure was not in the source. `seq-of` was a plain sibling
+emitting `Seqs.seq(...)`, and a generated module lives in `flint.rt` where
+`seqs.kin` generates a `flint.rt.Seqs` -- so inside another generated module
+the bare name binds to the GENERATED class, which has `vecseq` and `range` and
+no `seq` at all. The C# said *"'Seqs' does not contain a definition for
+'Seq'"* and was exactly right.
+
+`java-emit` already documents this collision as the reason the generated
+package had to move. What was missed is that it reaches the CALL SITES too,
+wherever a hand-written class and a generated one share a name -- and `Maps`
+has the same shape, which is why `empty-map` was already written qualified
+while nobody had said why.
+
+`seq-of`, `first-of` and `next-of` are written out with explicit templates
+now, because the CLASS differs per target -- `com.flint.rt.Seqs` against
+`Flint.Rt.Seqs` -- and `sibling` varies only the method name.
+
+Worth noting the shape of the bug: it is invisible until a generated module
+calls a hand-written class whose name a DIFFERENT generated module has taken.
+`seqcore.kin` and `seqs.kin` had both existed for a while without touching it.
+
+The ports keep `Seqs.first` and `Seqs.next` as one-line delegations -- some
+thirty call sites each, in files with nothing to do with seqs.
+
+Also in the vocabulary: `vec-nth` still said arity 2 after the function grew a
+`dflt` and became 3. Nothing had used it yet, so nothing broke; it would have
+generated a call that does not compile the first time a source did.
+
 ### Port order, re-derived
 
 | # | region | gate | lines across 3 |

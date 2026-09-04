@@ -4,6 +4,7 @@ import flint.rt.Mapcore;
 
 import static com.flint.rt.Obj.*;
 import static flint.rt.Seqcore.*;
+import static flint.rt.Seqwalk.*;
 import static flint.rt.Seqs.*;
 
 /// Seqs, ported from `runtime/src/seqs.rs`.
@@ -19,6 +20,12 @@ import static flint.rt.Seqs.*;
 /// `seq` over a vector is a VECSEQ -- a cursor, not a copy -- so walking one
 /// allocates a small object per step rather than materialising anything.
 public final class Seqs {
+
+    /// `first` and `next`, under the names their callers already use. The
+    /// bodies are GENERATED, as `Seqwalk`; some thirty call sites across this
+    /// runtime say `Seqs.first`, in files that have nothing to do with seqs.
+    public static long first(Rt rt, long v) { return flint.rt.Seqwalk.first(rt, v); }
+    public static long next(Rt rt, long v) { return flint.rt.Seqwalk.next(rt, v); }
 
     /// `cons`, under the name its callers already use. The body is GENERATED,
     /// as `Seqcore.cons`; renaming ~20 call sites across this runtime for a
@@ -139,73 +146,7 @@ public final class Seqs {
     }
 
 
-    public static long first(Rt rt, long v) {
-        long s = seq(rt, v);
-        if (Val.isNil(s)) return Val.NIL;
-        int t = ty(rt.gc.sp, Val.asHeap(s));
-        if (t == TY_CONS) return rt.slot(s, C_FIRST);
-        if (t == TY_VECSEQ) {
-            long coll = rt.slot(s, 0);
-            int i = (int) Val.asFixnum(rt.slot(s, 1));
-            // A TABLE rides on `TY_VECSEQ`; only `first` differs, and it
-            // differs by handing back a ref (`doc/decisions/0026`).
-            if (rt.isHeapTy(coll, TY_MAPENTRY)) return rt.slot(coll, i);
-            if (Table.isTable(rt, coll)) return Table.tableRef(rt, coll, i);
-            // NIL, not NOT_FOUND, matching the native runtime. A vecseq's
-            // index is always inside its collection -- `seq` starts at 0 with
-            // a non-empty one and `next` bounds-checks -- so this default is
-            // unreachable, and it was answering a sentinel the caller would
-            // have had to know about.
-            return Vec.nth(rt, coll, i, Val.NIL);
-        }
-        if (t == TY_STRSEQ) return Str.nth(rt, rt.slot(s, 0), (int) Val.asFixnum(rt.slot(s, 1)), Val.NIL);
-        if (t == TY_RANGE) return rt.slot(s, 0);
-        // NIL, matching the native runtime, and UNREACHABLE either way: `seq`
-        // answers nil or a cons, vecseq, strseq or range, and every one of
-        // those is handled above. Probed over twelve conformance suites and a
-        // deliberately adversarial set of non-seqs -- zero hits on both.
-        //
-        // The ports raised here. The diagnostic is not lost in practice, and
-        // keeping it would mean `^:throws` on `first`, which turns its Rust
-        // signature into `Result<Value, String>` at every call site for an arm
-        // nothing can reach.
-        return Val.NIL;
-    }
 
-    /// `next`: the rest, or NIL when there is none. `rest` differs -- it gives
-    /// an empty seq rather than nil -- and conflating them is a classic bug.
-    public static long next(Rt rt, long v) {
-        long s = seq(rt, v);
-        if (Val.isNil(s)) return Val.NIL;
-        int t = ty(rt.gc.sp, Val.asHeap(s));
-        if (t == TY_CONS) return seq(rt, rt.slot(s, C_REST));
-        if (t == TY_VECSEQ) {
-            long vec = rt.slot(s, 0);
-            int i = (int) Val.asFixnum(rt.slot(s, 1)) + 1;
-            int n = rt.isHeapTy(vec, TY_MAPENTRY) ? 2
-                  : Table.isTable(rt, vec) ? Table.tableCount(rt, vec)
-                  : Vec.count(rt, vec);
-            return i >= n ? Val.NIL : vecseq(rt, vec, i);
-        }
-        if (t == TY_STRSEQ) {
-            long str = rt.slot(s, 0);
-            int i = (int) Val.asFixnum(rt.slot(s, 1)) + 1;
-            return i >= Str.charLen(rt, str) ? Val.NIL : strseq(rt, str, i);
-        }
-        if (t == TY_RANGE) {
-            // A fresh range, not a mutated cursor: a range IS a persistent
-            // value, so walking one must not disturb anything else holding it.
-            int base = rt.mark();
-            int ri = rt.push(s);
-            int ni = rt.push(Num.add(rt, rt.slot(rt.r(ri), 0), rt.slot(rt.r(ri), 2)));
-            long nr = range(rt, rt.r(ni), rt.slot(rt.r(ri), 1), rt.slot(rt.r(ri), 2));
-            int nri = rt.push(nr);
-            long out = rangeEmpty(rt, rt.r(nri)) ? Val.NIL : rt.r(nri);
-            rt.popTo(base);
-            return out;
-        }
-        return rt.throwStr("UnsupportedOperationException", "next over " + rt.describe(v));
-    }
 
     public static long rest(Rt rt, long v) {
         long n = next(rt, v);

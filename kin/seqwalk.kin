@@ -1,0 +1,100 @@
+;; Walking a seq: `first`, `next` and `rest`.
+;;
+;; Both start by calling `seq`, so neither has to know what a collection is --
+;; only what a SEQ is, which is one of four heap shapes:
+;;
+;;     TY_CONS     a cell, with the value in slot 0
+;;     TY_VECSEQ   an indexed collection and a position
+;;     TY_STRSEQ   a string and a CODE POINT index
+;;     TY_RANGE    start, end, step -- computed, never stored
+;;
+;; `first` had FOUR divergences before it could be written once, and no two
+;; were settled the same way. A map entry rides `TY_VECSEQ` directly rather
+;; than being copied into a vector (measured: 13.9% off a map walk). The string
+;; index is code points, not bytes (the byte version read a rope's header as
+;; text). And the two sentinels below -- what `nth` answers past the end, and
+;; what the default arm answers -- were probed to be unreachable and then given
+;; the simpler answer.
+;;
+;; NO DEFAULT ARM WORTH RAISING FROM. `seq` answers nil or one of the four
+;; above, so nothing reaches the end of either dispatch. Both return nil, which
+;; is what a total `match` needs in Rust and what the probe says can never be
+;; seen.
+(ns flint.rt.seqwalk
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   not == + >= local set
+                                   slot as-fixnum to-i32 nil? as-heap ty
+                                   seq-of vec-nth vec-count char-at char-len
+                                   table-ref table-count num-add
+                                   Rt Value I32 Ty NIL
+                                   C_FIRST C_REST
+                                   TY_CONS TY_VECSEQ TY_STRSEQ TY_RANGE
+                                   TY_MAPENTRY TY_TABLE]]
+            [flint.rt.seqs :refer [vecseq strseq range]]))
+
+(doc "The first element of `v`, or nil when there is none.")
+(defn ^:pub ^:method ^Value first [^:mut ^Rt rt ^Value v]
+  (let [^Value s (seq-of rt v)]
+    (if (nil? rt s)
+      (return NIL))
+    (let [^Ty t (ty rt (as-heap s))]
+      (if (== t TY_CONS)
+        (return (slot rt s C_FIRST)))
+      (if (== t TY_VECSEQ)
+        (do
+          (let [^Value coll (slot rt s 0)
+                ^I32 i (to-i32 (as-fixnum (slot rt s 1)))]
+            (comment "A MAP ENTRY rides the same vecseq, read directly. A"
+                     "TABLE rides it too and answers a ROW REF, which is the"
+                     "one thing about a table seq that differs"
+                     "(`doc/decisions/0026`).")
+            (if (== (ty rt (as-heap coll)) TY_MAPENTRY)
+              (return (slot rt coll i)))
+            (if (== (ty rt (as-heap coll)) TY_TABLE)
+              (return (table-ref rt coll i)))
+            (return (vec-nth rt coll i NIL)))))
+      (if (== t TY_STRSEQ)
+        (return (char-at rt (slot rt s 0) (to-i32 (as-fixnum (slot rt s 1))) NIL)))
+      (if (== t TY_RANGE)
+        (return (slot rt s 0)))
+      (return NIL))))
+
+(doc "The seq after the first element, or nil when it is exhausted.")
+(defn ^:pub ^:method ^Value next [^:mut ^Rt rt ^Value v]
+  (let [^Value s (seq-of rt v)]
+    (if (nil? rt s)
+      (return NIL))
+    (let [^Ty t (ty rt (as-heap s))]
+      (if (== t TY_CONS)
+        (return (seq-of rt (slot rt s C_REST))))
+      (if (== t TY_VECSEQ)
+        (do
+          (let [^Value coll (slot rt s 0)
+                ^I32 i (to-i32 (as-fixnum (slot rt s 1)))]
+            (local ^:mut ^I32 n)
+            (if (== (ty rt (as-heap coll)) TY_MAPENTRY)
+              (set n 2)
+              (if (== (ty rt (as-heap coll)) TY_TABLE)
+                (set n (table-count rt coll))
+                (set n (vec-count rt coll))))
+            (if (>= (+ i 1) n)
+              (return NIL))
+            (return (vecseq rt coll (+ i 1))))))
+      (if (== t TY_STRSEQ)
+        (do
+          (let [^Value st (slot rt s 0)
+                ^I32 i (to-i32 (as-fixnum (slot rt s 1)))]
+            (if (>= (+ i 1) (char-len rt st))
+              (return NIL))
+            (return (strseq rt st (+ i 1))))))
+      (if (== t TY_RANGE)
+        (do
+          (comment "A FRESH range, not a mutated cursor: a range IS a value,"
+                   "so walking one must not disturb anything else holding it.")
+          (comment "HOISTED. `seq-of` and `range` both take `&mut self` in"
+                   "Rust, so nesting them is two mutable borrows at once. The"
+                   "other two targets read the hoisted form fine.")
+          (let [^Value nstart (num-add rt (slot rt s 0) (slot rt s 2))
+                ^Value r (range rt nstart (slot rt s 1) (slot rt s 2))]
+            (return (seq-of rt r)))))
+      (return NIL))))
