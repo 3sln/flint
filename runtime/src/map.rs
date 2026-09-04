@@ -272,6 +272,150 @@ impl Rt {
         h
     }
 
+    /// Every key and value onto the shadow stack from `at`, returning the
+    /// PAIR COUNT. The shape both ports use to walk a map, mirrored here so
+    /// the two approaches can be measured in one runtime rather than across
+    /// two -- see `runtime/examples/iterbench.rs`.
+    ///
+    /// Not the shape Rust uses in anger: `map_for_each` visits in place and
+    /// pushes nothing, where this pushes 2N roots before the caller reads any
+    /// of them. Which of those is right is what the measurement is for.
+    #[cfg(feature = "bench")]
+    pub fn map_entries(&mut self, m: Value, at: usize) -> u32 {
+        if !m.is_heap() {
+            return 0;
+        }
+        match ty(&self.gc.sp, m.as_heap()) {
+            TY_ARRAYMAP => {
+                let n = self.map_count(m);
+                let mi = self.push(m);
+                for i in 0..n {
+                    let k = self.am_key(self.r(mi), i);
+                    self.push(k);
+                    let v = self.am_val(self.r(mi), i);
+                    self.push(v);
+                }
+                // The map itself was pushed first; slide the pairs down over it.
+                for i in 0..(2 * n as usize) {
+                    let v = self.r(at + 1 + i);
+                    self.set_r(at + i, v);
+                }
+                self.pop_to(at + 2 * n as usize);
+                n
+            }
+            TY_HASHMAP => {
+                let root = self.slot(m, HM_ROOT);
+                if root.is_nil() {
+                    return 0;
+                }
+                self.node_entries(root, at)
+            }
+            _ => 0,
+        }
+    }
+
+    #[cfg(feature = "bench")]
+    fn node_entries(&mut self, node: Value, at: usize) -> u32 {
+        let ni = self.push(node);
+        let mut wrote: u32 = 0;
+        if !self.is_bmnode(self.r(ni)) {
+            let cnt = self.cn_count(self.r(ni));
+            for i in 0..cnt {
+                let k = self.cn_key(self.r(ni), i);
+                self.push(k);
+                let v = self.cn_val(self.r(ni), i);
+                self.push(v);
+                wrote += 1;
+            }
+        } else {
+            let ne = self.bn_datamap(self.r(ni)).count_ones();
+            let nn = self.bn_nodemap(self.r(ni)).count_ones();
+            for i in 0..ne {
+                let k = self.bn_key(self.r(ni), i);
+                self.push(k);
+                let v = self.bn_val(self.r(ni), i);
+                self.push(v);
+                wrote += 1;
+            }
+            for j in 0..nn {
+                let sub = self.bn_node(self.r(ni), j);
+                let m = self.mark();
+                wrote += self.node_entries(sub, m);
+            }
+        }
+        for i in 0..(2 * wrote as usize) {
+            let v = self.r(at + 1 + i);
+            self.set_r(at + i, v);
+        }
+        self.pop_to(at + 2 * wrote as usize);
+        wrote
+    }
+
+    /// The buffer shape WITHOUT the slide-down, for `iterbench`.
+    ///
+    /// The ports root each node handle and then slide the whole subtree down
+    /// over it. Iteration allocates nothing, so no collection can happen
+    /// mid-walk and the handle never needed rooting -- a host local is safe
+    /// here, which is the one case `0031` does not cover. This is the buffer
+    /// shape's honest best case, so that the comparison indicts the SHAPE and
+    /// not my transcription of it.
+    #[cfg(feature = "bench")]
+    pub fn map_entries_flat(&mut self, m: Value, at: usize) -> u32 {
+        if !m.is_heap() {
+            return 0;
+        }
+        match ty(&self.gc.sp, m.as_heap()) {
+            TY_ARRAYMAP => {
+                let n = self.map_count(m);
+                for i in 0..n {
+                    let k = self.am_key(m, i);
+                    self.push(k);
+                    let v = self.am_val(m, i);
+                    self.push(v);
+                }
+                n
+            }
+            TY_HASHMAP => {
+                let root = self.slot(m, HM_ROOT);
+                if root.is_nil() {
+                    return 0;
+                }
+                self.node_entries_flat(root)
+            }
+            _ => 0,
+        }
+    }
+
+    #[cfg(feature = "bench")]
+    fn node_entries_flat(&mut self, node: Value) -> u32 {
+        let mut wrote: u32 = 0;
+        if !self.is_bmnode(node) {
+            let cnt = self.cn_count(node);
+            for i in 0..cnt {
+                let k = self.cn_key(node, i);
+                self.push(k);
+                let v = self.cn_val(node, i);
+                self.push(v);
+                wrote += 1;
+            }
+        } else {
+            let ne = self.bn_datamap(node).count_ones();
+            let nn = self.bn_nodemap(node).count_ones();
+            for i in 0..ne {
+                let k = self.bn_key(node, i);
+                self.push(k);
+                let v = self.bn_val(node, i);
+                self.push(v);
+                wrote += 1;
+            }
+            for j in 0..nn {
+                let sub = self.bn_node(node, j);
+                wrote += self.node_entries_flat(sub);
+            }
+        }
+        wrote
+    }
+
     pub fn hash_map(&mut self, m: Value) -> u32 {
         self.hash_map_hash(m)
     }

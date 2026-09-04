@@ -36,6 +36,13 @@ aot = []
 # deterministic scheduler are NOT here: they are production features.
 diagnostics = []
 
+# The two map-iteration shapes side by side, for `examples/iterbench.rs`. The
+# runtime iterates with a callback; both ports iterate with a buffer, and
+# deciding between them needed both in ONE runtime rather than one per runtime.
+# ABSENT by default because the buffer shape LOST -- it is kept only so the
+# number stays re-runnable, and a benchmark you cannot re-run is a claim.
+bench = []
+
 [[bin]]
 name = "catalogue"
 required-features = ["host-tools"]
@@ -56,3 +63,7 @@ libm = { version = "0.2", default-features = false }
 [[example]]
 name = "opcov"
 required-features = ["diagnostics"]
+
+[[example]]
+name = "iterbench"
+required-features = ["bench"]

@@ -1006,7 +1006,7 @@ The probe now tests six spellings of a callback rather than two, and lists
 them explicitly, so the next miss is a form nobody has written yet rather
 than one the pattern happened not to cover.
 
-### THE CLOSURE BLOCKER MAY NOT BE A BLOCKER: the ports do not use closures
+### THE CLOSURE BLOCKER IS REAL: measured, and the buffer shape loses
 
 Found while scoping closures for kin, and it changes the plan.
 
@@ -1045,18 +1045,65 @@ worth doing BEFORE building closures into kin, because if the buffer shape
 wins, or ties, the capability is never needed and the 133 lines are portable
 now.
 
-#### And if closures do win
+#### The measurement: `runtime/examples/iterbench.rs`
 
-They are still the right thing for kin eventually -- a code generator whose
-vocabulary is the user's should not be unable to express a callback. But it
-would be built because a measurement asked for it, not because a census said
-five functions were blocked.
+Both shapes in ONE runtime, over one map. Comparing native-callback against
+JVM-buffer would have compared the approach and everything else about the two
+runtimes at once, so `map_entries` -- the ports' shape, transcribed -- was
+added to the Rust runtime beside the callback it competes with. Both are behind
+`--features bench`, ABSENT from the shipped runtime: the buffer shape lost, and
+the code is kept only so the number stays re-runnable.
+
+Three shapes, because the first mirror was unfair to the buffer. The ports root
+each node handle and slide the whole subtree down over it; iteration allocates
+nothing, so no collection can happen mid-walk and that handle never needed
+rooting at all. `buf/noslide` is the buffer's honest best case.
+
+A bare walk allocates nothing, so 2N live roots cost nothing there and the walk
+alone would have flattered the buffer. The row that decides is **entry-vector**
+-- `map_entry_vector`, which allocates an entry and a conj per key with the
+whole buffer live and scanned at every collection. That is where the roots are
+actually paid for.
+
+    map of 200 000 entries          time        peak roots
+    callback                      20.7 ms                8
+    buffer (as the ports write it) 40.7 ms          400 001
+    buffer, slide-free            29.1 ms          400 001
+
+    entry-vector, the allocating workload, 5 runs
+    via callback                 176.5 ms
+    via buffer                   223.5 ms   1.24x
+
+Stable across repeats (1.238 / 1.244 / 1.261 at 200 000; 1.061 / 1.070 / 1.073
+at 50 000). **The buffer does not win and does not tie.** It is 1.07x behind at
+50 000 and 1.24x at 200 000 -- and the gap WIDENING with size is the signature
+of the cost being looked for, since a constant-factor loss would not grow.
+
+So closures are load-bearing after all. The 133 lines stay hand-written until
+kin can express a callback, and kin should grow that capability -- now because
+a measurement asked for it, not because a census said five functions were
+blocked.
+
+Two things fell out of building it:
+
+* **The ports' slide-down is unnecessary ceremony.** Removing it took the bare
+  walk from 1.97x to 1.31x -- about half the buffer's overhead is the slide,
+  not the buffering. That is a portable improvement to `Maps`, `Sets`, `Codec`
+  and `Conc` on both ports, independent of kin and independent of this
+  decision, since the ports are going to keep the buffer shape until kin can
+  replace it.
+* **`0031` enforced itself.** The first draft left the map in a Rust local
+  across the entry-vector rounds, which allocate, and got an empty vector back.
+  The rule is not a style preference.
 
 ### What is left in `Maps`, and it is one capability
 
     closure-blocked   5 fns  133 lines   map_for_each node_for_each
                                          map_entry_vector map_eq hash_map_hash
     portable          7 fns   21 lines   the champ_* wrappers, 3 lines each
+
+The closure-blocked five are now blocked on MEASURED grounds, not census
+grounds -- see the iterbench section above.
 
 The portable remainder is seven delegating wrappers -- `champ_find` is
 `node_find(root, 0, h, key)` and the rest are the same shape. Porting them
