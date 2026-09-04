@@ -1256,18 +1256,34 @@ tag -- broke exactly one row of the `tables` suite: `build-eq`, which is
 `(= T (build S (range 600) row))`, false on the JVM where native says true.
 Deterministic across runs.
 
-It does not reproduce in isolation. A standalone program doing the same
-comparison at the same size passes on the JVM, and so does a trimmed copy of
-the conform program containing only `:build` and `:build-eq`. So it depends on
-state or allocation history built up by the rest of the suite, which is the
-signature of a rooting bug rather than a semantic one -- most likely somewhere
-that reads a vecseq's collection and assumes a vector, and which the copy was
-hiding.
+It does not reproduce in isolation, and any perturbation hides it. A
+standalone program doing the same comparison at the same size passes; so does
+a trimmed copy of the conform program holding only `:build` and `:build-eq`;
+so does the conform program itself once the expression is rewritten to bind
+the result in a `let` first.
 
-Reverted rather than left in, because a change I cannot localise is not a
-change I can defend, and the tree stays green. It wants its own slice with a
-probe on the vecseq readers, not a corner of a porting commit. The four-way
-divergence table above is the useful output of the attempt.
+**Two diagnoses were made and both were wrong, which is the part worth
+keeping.** The first was "a rooting bug, exposed by different allocation
+timing". Testing it meant building the ports a stale-push detector they did
+not have -- the native runtime has had one since `0031` and the ports had
+NOTHING equivalent, which is why a bug like this has to be found by bisecting
+a conformance suite rather than being named where it happens. It reports zero
+stale pushes on the failing run.
+
+The second diagnosis died faster: the CLR fails IDENTICALLY. Two
+independently written runtimes with different host GCs giving the same wrong
+answer is not a GC bug at all. It is semantic.
+
+Instrumentation then confirmed the new branches are reached exactly as
+designed -- 1 806 entry seqs, 3 612 firsts, 1 806 nexts over 600 rows of three
+columns -- so the mechanism works and something else observes the difference.
+Only `seq`, `first` and `next` read a vecseq's collection in either port, and
+all three were patched, so whatever distinguishes the two shapes does not go
+through them.
+
+Reverted, because a change I cannot localise is not a change I can defend, and
+the tree stays green. The detector STAYS: it was built to test a hypothesis
+that turned out to be wrong, and it is worth more than the hypothesis was.
 
 ### Port order, re-derived
 

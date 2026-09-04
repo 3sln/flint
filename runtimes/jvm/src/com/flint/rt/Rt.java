@@ -364,7 +364,43 @@ public final class Rt {
     public long slot(long v, int i) { return Obj.slot(gc.sp, Val.asHeap(v), i); }
 
     public int mark() { return roots.mark(); }
-    public int push(long v) { return roots.push(v); }
+    /// ROOT `v`, and in a diagnostic build check that it is not already stale.
+    ///
+    /// The native runtime has had this check since rooting bugs were first
+    /// hunted (`doc/decisions/0031`); the ports had NOTHING equivalent, which
+    /// is why a rooting bug here has to be found by bisecting a conformance
+    /// suite instead of being named at the moment it happens.
+    ///
+    /// A caller that read a heap value into a Java local, allocated, and then
+    /// pushed it lands here -- one step before the write that makes the
+    /// mistake visible, and while the frame that owns it is still on the
+    /// stack. That is the whole value of checking at PUSH rather than at use.
+    ///
+    /// Off by default and behind a system property, because it is two
+    /// comparisons on a method called at some hundreds of sites:
+    ///
+    ///     java -Dflint.stale=1 ...
+    public int push(long v) {
+        if (STALE_CHECK) checkPush(v);
+        return roots.push(v);
+    }
+
+    static final boolean STALE_CHECK = System.getProperty("flint.stale") != null;
+    /// How many stale pushes have been seen, and the first one's address.
+    public static int staleCount = 0;
+    public static long staleFirst = 0;
+
+    private void checkPush(long v) {
+        if (!Val.isHeap(v)) return;
+        long a = Val.asHeap(v);
+        if (gc.isYoung(a) && !gc.inLiveHalf(a)) {
+            if (staleCount == 0) staleFirst = a;
+            staleCount++;
+            // The stack trace is the point: it names the frame that read the
+            // value before allocating.
+            new Throwable("STALE PUSH of " + a + " (" + describe(v) + ")").printStackTrace();
+        }
+    }
     public long r(int i) { return roots.r(i); }
     public void setR(int i, long v) { roots.setR(i, v); }
     public void popTo(int n) { roots.popTo(n); }

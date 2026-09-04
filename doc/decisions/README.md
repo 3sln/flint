@@ -274,16 +274,35 @@ what remains, and what each thing is waiting on.
    ports copy the entry into a two-element vector first, on every entry of
    every map walked.
 
-   Converging them onto the native shape was tried and REVERTED: it broke one
-   row of the `tables` conformance suite (`build-eq`, table equality at 600
-   rows) on the JVM, deterministically, and does not reproduce in a standalone
-   program or in a trimmed copy of the suite. That points at a rooting bug in
-   something that reads a vecseq's collection and assumes a vector, which the
-   copy was hiding rather than at a semantic difference.
+   Converging them onto the native shape was tried and REVERTED: it breaks one
+   row of the `tables` conformance suite — `build-eq`, table equality at 600
+   rows — deterministically, and does not reproduce in a standalone program or
+   in any trimmed copy of the suite. Any perturbation hides it.
 
-   Wants a probe over the vecseq readers on both ports. The saving is one
-   allocation per map entry seq'd, and the divergence blocks porting `first`
-   and `next` to kin.
+   **It is NOT a rooting bug, and it is not a GC bug at all.** Two hypotheses
+   were tested and both are dead:
+
+   * A stale-push detector was built for the JVM for this (see `Rt.push`), and
+     it reports ZERO stale pushes on the failing run.
+   * The CLR fails IDENTICALLY — `build-eq false` on both ports. Two
+     independently written runtimes with different host GCs producing the same
+     wrong answer is not a GC bug; it is a semantic difference in the shared
+     logic.
+
+   Instrumentation confirms the new branches are reached exactly as designed:
+   over 600 rows × 3 columns, `seq` of an entry fires 1 806 times, `first` on
+   the resulting vecseq 3 612 (a key and a value each), `next` 1 806. So the
+   mechanism works and something ELSE observes the difference.
+
+   What is left to find is which reader distinguishes a vecseq over a map
+   entry from a vecseq over a two-element vector. Only `Seqs.first`,
+   `Seqs.next` and `Seqs.seq` read a vecseq's collection in either port, and
+   all three were patched — so the difference is reached through something
+   that does not go through them, or through a value that is no longer
+   independent now that the copy is gone.
+
+   The saving is one allocation per map entry seq'd — every entry of every map
+   walked — and the divergence blocks porting `first` and `next` to kin.
 
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old

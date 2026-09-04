@@ -57,6 +57,15 @@ public final class Gc {
     }
 
     public boolean isYoung(long addr) { return Long.compareUnsigned(addr - youngBase, half * 2) < 0; }
+
+    /// Is `addr` in the half that is currently live?
+    ///
+    /// The other half of the stale-value check below. A young address outside
+    /// `[from, bump)` is in the DEAD half: it was valid before the last
+    /// collection and is not now.
+    public boolean inLiveHalf(long addr) {
+        return Long.compareUnsigned(addr - from, bump - from) < 0;
+    }
     boolean inFrom(long addr) { return Long.compareUnsigned(addr - from, half) < 0; }
     public long youngUsed() { return bump - from; }
     public long heapUsed() { return youngUsed() + oldLive; }
