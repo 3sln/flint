@@ -41,7 +41,16 @@ public final class Gc {
     public boolean collecting, oom;
     /// Force a collection at every allocation. What turns a timing-dependent
     /// fault into a deterministic one.
-    public boolean stress;
+    /// Collect at EVERY allocation. The native runtime has had this since
+    /// rooting bugs were first hunted; here it was a field nothing ever set,
+    /// so the ports had the machinery and no way to switch it on.
+    ///
+    ///     java -Dflint.gcstress=1 ...
+    ///
+    /// It turns a timing-dependent rooting bug into a deterministic one that
+    /// reproduces in a small program, which is the difference between finding
+    /// one and bisecting a conformance suite.
+    public boolean stress = System.getProperty("flint.gcstress") != null;
 
     public Gc(long nurseryBytes, long maxHeap) {
         this.half = Space.alignUp(Math.max(nurseryBytes, 64 * 1024), Space.PAGE);

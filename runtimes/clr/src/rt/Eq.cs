@@ -149,16 +149,30 @@ public static class Eq {
     /// with the same elements are equal, which is what `Category` is for.
     static bool SeqEq(Rt rt, long a, long b) {
         int bas = rt.Mark();
-        int x = rt.Push(Seqs.Seq(rt, a)), y = rt.Push(Seqs.Seq(rt, b));
+        // `b` ROOTED FIRST -- `Seq` allocates, so holding `b` in a C# local
+        // across `Seq(a)` leaves it pointing at a moved object. See the JVM.
+        int bi = rt.Push(b);
+        int x = rt.Push(Seqs.Seq(rt, a));
+        int y = rt.Push(Seqs.Seq(rt, rt.R(bi)));
         bool ok = true;
         for (;;) {
             bool ex = Val.IsNil(rt.R(x)), ey = Val.IsNil(rt.R(y));
             if (ex || ey) { ok = ex && ey; break; }
             rt.ChargeWork(1);
-            if (!Equal(rt, Seqs.First(rt, rt.R(x)), Seqs.First(rt, rt.R(y)))) { ok = false; break; }
-            long nx = Seqs.Next(rt, rt.R(x)), ny = Seqs.Next(rt, rt.R(y));
-            rt.SetR(x, nx);
+            // BOTH sides ROOTED before the other is computed -- see the JVM's
+            // `seqEq` for the failure this shape produces. `First` and `Next`
+            // both allocate, so holding one side's result in a C# local across
+            // the other side's call leaves it pointing at a moved object.
+            int fx = rt.Push(Seqs.First(rt, rt.R(x)));
+            int fy = rt.Push(Seqs.First(rt, rt.R(y)));
+            bool same = Equal(rt, rt.R(fx), rt.R(fy));
+            rt.PopTo(fx);
+            if (!same) { ok = false; break; }
+            int nxi = rt.Push(Seqs.Next(rt, rt.R(x)));
+            long ny = Seqs.Next(rt, rt.R(y));
             rt.SetR(y, ny);
+            rt.SetR(x, rt.R(nxi));
+            rt.PopTo(nxi);
         }
         rt.PopTo(bas);
         return ok;

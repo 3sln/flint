@@ -298,11 +298,51 @@ what remains, and what each thing is waiting on.
    entry from a vecseq over a two-element vector. Only `Seqs.first`,
    `Seqs.next` and `Seqs.seq` read a vecseq's collection in either port, and
    all three were patched — so the difference is reached through something
-   that does not go through them, or through a value that is no longer
-   independent now that the copy is gone.
+   that does not go through them.
+
+   **RESOLVED, and it was not about map entries at all.** Turning on GC
+   STRESS — the ports had the field and nothing ever set it; it is
+   `-Dflint.gcstress=1` now — reproduced the failure in EIGHT ROWS, and then
+   showed it reproduces at HEAD with the map-entry convergence reverted
+   entirely. It is a pre-existing rooting bug in the ports that the
+   convergence only perturbed the timing of.
+
+   See item 0n. The map-entry convergence is still worth making and is still
+   blocked, but on 0n rather than on anything of its own.
 
    The saving is one allocation per map entry seq'd — every entry of every map
    walked — and the divergence blocks porting `first` and `next` to kin.
+
+0n. **The ports have pre-existing rooting bugs that GC stress exposes** —
+   found while chasing 0m, and independent of it. Under `-Dflint.gcstress=1`
+   (collect at every allocation) a two-column, EIGHT-ROW table comparison
+   fails on the JVM at HEAD:
+
+       (= T (ft/build S (range 8) row))     ; true native, false ported
+
+   Two are FIXED here, both in `Eq.seqEq`, both the same shape — a value held
+   in a host local across a call that allocates:
+
+   * `int x = push(seq(a)), y = push(seq(b))` holds `b` across the allocation
+     inside `seq(a)`. A collection there leaves `b` pointing at a moved object
+     and `seq` is handed a forwarding pointer: *"seq over object type 1"*, and
+     type 1 is `TY_FWD`.
+   * `long nx = next(x), ny = next(y)` holds `nx` across the allocation inside
+     `next(y)`, and then stores the stale `nx` with `setR`.
+
+   A THIRD remains and is deeper. With those fixed, `=` still answers false,
+   and the reason is that `a` is ALREADY a forwarding pointer when `Eq.eq` is
+   entered — traced with a category-mismatch probe printing `a=object type 1
+   b=object type 50`. The `=` builtin reads both operands from the VALUE STACK
+   with `rt.vat`, so the argument slot holding `T` did not survive the
+   collections that evaluating `(ft/build ...)` triggers. That is interpreter
+   or GC-scan territory rather than a missing `push`, and wants its own slice.
+
+   The two tools that found all of this are new and stay: the stale-push
+   detector on `Rt.push` (`-Dflint.stale=1`) and the GC stress switch. Neither
+   existed on the ports; the native runtime has had both since `0031`. Note
+   the detector did NOT catch these — it fires at `push`, and a value that is
+   never pushed never reaches it. Stress is what found them.
 
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old

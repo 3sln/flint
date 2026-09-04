@@ -155,16 +155,43 @@ public final class Eq {
     /// with the same elements are equal, which is what `category` is for.
     static boolean seqEq(Rt rt, long a, long b) {
         int base = rt.mark();
-        int x = rt.push(Seqs.seq(rt, a)), y = rt.push(Seqs.seq(rt, b));
+        // `b` IS ROOTED FIRST, and that is the whole bug this line used to
+        // have. `Seqs.seq` ALLOCATES -- a vecseq, a strseq, a row ref -- so
+        // `int x = push(seq(a)), y = push(seq(b))` holds `b` in a Java local
+        // across the allocation inside `seq(a)`. A collection there leaves `b`
+        // pointing at a moved object, and `seq` is then handed a forwarding
+        // pointer: `seq over object type 1`, and type 1 is TY_FWD.
+        //
+        // Invisible without GC stress, because it needs a collection between
+        // two adjacent calls.
+        int bi = rt.push(b);
+        int x = rt.push(Seqs.seq(rt, a));
+        int y = rt.push(Seqs.seq(rt, rt.r(bi)));
         boolean ok = true;
         for (;;) {
             boolean ex = Val.isNil(rt.r(x)), ey = Val.isNil(rt.r(y));
             if (ex || ey) { ok = ex && ey; break; }
             rt.chargeWork(1);
-            if (!eq(rt, Seqs.first(rt, rt.r(x)), Seqs.first(rt, rt.r(y)))) { ok = false; break; }
-            long nx = Seqs.next(rt, rt.r(x)), ny = Seqs.next(rt, rt.r(y));
-            rt.setR(x, nx);
+            // BOTH sides ROOTED before the other side is computed, and this is
+            // not defensive: `first` and `next` ALLOCATE -- a strseq's `first`
+            // builds a one-character string, a table's builds a row ref, and
+            // `next` builds a fresh vecseq every step.
+            //
+            // Written as `long nx = next(x), ny = next(y);` this holds `nx` in
+            // a Java local across the allocation inside `next(y)`, so a
+            // collection between them leaves `nx` pointing at a moved object
+            // and `setR` stores the forwarding address. Found with GC stress
+            // on: `seq over object type 1`, and type 1 is TY_FWD.
+            int fx = rt.push(Seqs.first(rt, rt.r(x)));
+            int fy = rt.push(Seqs.first(rt, rt.r(y)));
+            boolean same = eq(rt, rt.r(fx), rt.r(fy));
+            rt.popTo(fx);
+            if (!same) { ok = false; break; }
+            int nxi = rt.push(Seqs.next(rt, rt.r(x)));
+            long ny = Seqs.next(rt, rt.r(y));
             rt.setR(y, ny);
+            rt.setR(x, rt.r(nxi));
+            rt.popTo(nxi);
         }
         rt.popTo(base);
         return ok;
