@@ -982,6 +982,56 @@ Not done yet, and deliberately: the write path (`new-vec`, `new-path`,
 `push-tail`, `conj`) is more code and needs no decision at all, so it goes
 first.
 
+### `verify` was killing the Rust compiler with its own log
+
+`vecwrite` verified green on Java and C# and produced NOTHING on Rust -- no
+binary, no error text, an empty answer, and a "the targets disagree" failure
+that named no cause.
+
+The line is `rustc -O -o probe.rust gen.rs 2>&1 | head -20`. A probe fixture
+is deliberately partial, so it is full of unused-method and unused-mut
+warnings. Once those passed twenty lines, `head` closed the pipe, rustc took
+SIGPIPE, and it died before linking. The compiler was being killed by its own
+log, and the failure looked exactly like a source that does not compile.
+
+`-A warnings` fixes it, and `head` stays: it is a bound on a REAL error, and
+silencing the noise is what keeps a real error inside the bound. Worth noting
+the first diagnosis was wrong too -- "the error scrolled past" -- and the give
+away that it was not is that there was no error text at all.
+
+### The write path ships: `vecwrite.kin`
+
+`new-vec`, `new-path`, `push-tail`, `vec-conj`. 117 lines out of `vector.rs`,
+102 out of the JVM and 113 out of the CLR.
+
+`push-tail` takes NO `edit`. Rust carried one and threaded it through the
+recursion; every caller passed nil, because the transient half has its own
+`t-push-tail` that does the owned-node work. Both ports had already dropped
+it. A parameter with one possible value is not a parameter.
+
+One hoist for Rust's borrow checker: `node-set` takes `&mut self` and so does
+`new-path`, so nesting the call in the argument list is two mutable borrows.
+Every target reads the hoisted form fine.
+
+`conj` KEEPS its old name on the ports, as a one-line delegation to the
+generated `vecConj`. 53 call sites per port use `Vec.conj`, in files that have
+nothing to do with vectors, and renaming them is the same trade this file
+already recorded against the `champ_*` wrappers and answered with "worth doing
+LAST".
+
+`^:pub` came back on `vec-shift`, `tail-off` and `node-clone`, which the sweep
+two commits ago had taken off. `vecwrite` `:refer`s them, and a require of a
+non-`^:pub` name does not resolve. So the rule is not "these were private in
+Rust" -- it is "nothing outside this module needs the name", which is a fact
+about the port as it stands and changes as the port grows.
+
+That is also where kin's misleading diagnostic bit for the third time: the
+first attempt reported *"flint.rt.vecwrite generates for NO target. Its
+vocabularies have no target in common"* when what had happened is that
+`vecread` exported nothing being referred. The per-SYMBOL message is fine --
+"flint.rt.vecread has no node-clone to refer" -- so the bad message is
+specifically the case where a required namespace exports nothing at all.
+
 ### Port order, re-derived
 
 | # | region | gate | lines across 3 |

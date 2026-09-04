@@ -2,6 +2,7 @@ namespace Flint.Rt;
 
 using static flint.rt.Vecnode;
 using static flint.rt.Vecread;
+using static flint.rt.Vecwrite;
 
 /// Persistent vectors, ported from `runtime/src/vector.rs`.
 ///
@@ -36,36 +37,6 @@ public static class Vec {
     static long Root(Rt rt, long v) => rt.Slot(v, V_ROOT);
     static long Tail(Rt rt, long v) => rt.Slot(v, V_TAIL);
 
-    /// A NODE carries its OWNERSHIP TOKEN in slot 0 and its elements from 1.
-    ///
-    /// That extra slot is what makes transients possible: a node whose token is
-    /// this transient's is owned by it and is written IN PLACE, and any other
-    /// node is copied once and thereafter owned. Without it every `conj!` would
-    /// copy, which is the entire cost transients exist to avoid.
-    ///
-    /// It is also why `NodeLen` subtracts one and every accessor adds one. The
-    /// port carried plain nodes for a while and read perfectly; it was only not
-    /// the Rust's layout, and an object of a different LENGTH is exactly the
-    /// kind of divergence a snapshot would carry silently between runtimes.
-    static long NewVec(Rt rt, int cnt, int shift, long root, long tail, long meta) {
-        int bas = rt.Mark();
-        int ri = rt.Push(root);
-        int ti = rt.Push(tail);
-        int mi = rt.Push(meta);
-        long a = rt.Alloc(Obj.TyVec, 6);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-        rt.SetSlot(a, V_CNT, Val.Fixnum(cnt));
-        rt.SetSlot(a, V_SHIFT, Val.Fixnum(shift));
-        rt.SetSlot(a, V_ROOT, rt.R(ri));
-        rt.SetSlot(a, V_TAIL, rt.R(ti));
-        rt.SetSlot(a, V_META, rt.R(mi));
-        // Not carried from any source vector: `NewVec` is called with new
-        // contents every time, and a hash copied from the old one would be
-        // wrong rather than merely stale.
-        rt.SetSlot(a, V_HASH, Val.Nil);
-        rt.PopTo(bas);
-        return Val.Heap(a);
-    }
 
     public static long Empty(Rt rt) {
         long sg = rt.roots.shared.Singletons[Rt.SingEmptyVec];
@@ -85,96 +56,22 @@ public static class Vec {
     }
 
     /// The leaf array holding index `i`.
+    /// `conj`, under the name 53 call sites in this runtime already use.
+    ///
+    /// The body is GENERATED, as `Vecwrite.VecConj`, and Rust's callers say
+    /// `vec_conj` directly. Renaming these would be 53 edits here and 53 more
+    /// on the JVM, in files that have nothing to do with vectors, for a naming
+    /// win -- which is the trade `doc/goals/kin-port.md` already recorded
+    /// against the `champ_*` wrappers and answered with "worth doing LAST".
+    public static long Conj(Rt rt, long v, long x) { return VecConj(rt, v, x); }
+
     public static long Nth(Rt rt, long v, int i) {
         if (i < 0 || i >= Count(rt, v)) return Val.NotFound;
         return NodeGet(rt, ArrayFor(rt, v, i), i & MASK);
     }
 
-    static long NewPath(Rt rt, int level, long node, long edit) {
-        if (level == 0) return node;
-        int bas = rt.Mark();
-        int ni = rt.Push(node);
-        int ei = rt.Push(edit);
-        long child = NewPath(rt, level - BITS, rt.R(ni), rt.R(ei));
-        int ci = rt.Push(child);
-        long parent = NewNode(rt, WIDTH, rt.R(ei));
-        if (Val.IsNil(parent)) { rt.PopTo(bas); return Val.Nil; }
-        int pi = rt.Push(parent);
-        NodeSet(rt, rt.R(pi), 0, rt.R(ci));
-        long outv = rt.R(pi);
-        rt.PopTo(bas);
-        return outv;
-    }
 
-    /// Push `tailnode` into the trie at `level`, copying the spine.
-    static long PushTail(Rt rt, int cnt, int level, long parent, long tailnode) {
-        int bas = rt.Mark();
-        int pi = rt.Push(parent);
-        int ti = rt.Push(tailnode);
-        long ret = NodeClone(rt, rt.R(pi), WIDTH, Val.Nil);
-        if (Val.IsNil(ret)) { rt.PopTo(bas); return Val.Nil; }
-        int ri = rt.Push(ret);
-        int subidx = (int)((uint)(cnt - 1) >> level) & MASK;
-        long insert;
-        if (level == BITS) {
-            insert = rt.R(ti);
-        } else {
-            long child = NodeGet(rt, rt.R(pi), subidx);
-            insert = Val.IsNil(child)
-                ? NewPath(rt, level - BITS, rt.R(ti), Val.Nil)
-                : PushTail(rt, cnt, level - BITS, child, rt.R(ti));
-        }
-        int ii = rt.Push(insert);
-        NodeSet(rt, rt.R(ri), subidx, rt.R(ii));
-        long outv = rt.R(ri);
-        rt.PopTo(bas);
-        return outv;
-    }
 
-    public static long Conj(Rt rt, long v, long x) {
-        int bas = rt.Mark();
-        int vi = rt.Push(v);
-        int xi = rt.Push(x);
-        int cnt = Count(rt, v);
-        int tailLen = cnt - TailOff(rt, v);
-        long outv;
-        if (tailLen < WIDTH) {
-            // Room in the tail: copy it one longer. This is the common case and
-            // the reason `conj` is O(1) amortised.
-            long newtail = NodeClone(rt, Tail(rt, rt.R(vi)), tailLen + 1, Val.Nil);
-            int nt = rt.Push(newtail);
-            NodeSet(rt, rt.R(nt), tailLen, rt.R(xi));
-            long vv = rt.R(vi);
-            outv = NewVec(rt, cnt + 1, VecShift(rt, vv), Root(rt, vv), rt.R(nt), rt.Slot(vv, V_META));
-        } else {
-            // The tail is full: it becomes a leaf in the trie.
-            long vv = rt.R(vi);
-            int sh = VecShift(rt, vv);
-            int tn = rt.Push(Tail(rt, vv));
-            bool overflow = ((int)((uint) cnt >> BITS)) > (1 << sh);
-            long newroot;
-            int newshift;
-            if (overflow) {
-                long nr = NewNode(rt, WIDTH, Val.Nil);
-                int nri = rt.Push(nr);
-                NodeSet(rt, rt.R(nri), 0, Root(rt, rt.R(vi)));
-                long path = NewPath(rt, sh, rt.R(tn), Val.Nil);
-                NodeSet(rt, rt.R(nri), 1, path);
-                newroot = rt.R(nri);
-                newshift = sh + BITS;
-            } else {
-                newroot = PushTail(rt, cnt, sh, Root(rt, rt.R(vi)), rt.R(tn));
-                newshift = sh;
-            }
-            int nri2 = rt.Push(newroot);
-            long newtail = NewNode(rt, 1, Val.Nil);
-            int ntl = rt.Push(newtail);
-            NodeSet(rt, rt.R(ntl), 0, rt.R(xi));
-            outv = NewVec(rt, cnt + 1, newshift, rt.R(nri2), rt.R(ntl), rt.Slot(rt.R(vi), V_META));
-        }
-        rt.PopTo(bas);
-        return outv;
-    }
 
     static long DoAssoc(Rt rt, int level, long node, int i, long val) {
         int bas = rt.Mark();
@@ -199,7 +96,7 @@ public static class Vec {
     /// the only index past the end that is legal.
     public static long Assoc(Rt rt, long v, int i, long x) {
         int cnt = Count(rt, v);
-        if (i == cnt) return Conj(rt, v, x);
+        if (i == cnt) return VecConj(rt, v, x);
         int bas = rt.Mark();
         int vi = rt.Push(v), xi = rt.Push(x);
         long outv;
@@ -299,7 +196,7 @@ public static class Vec {
         int mk = rt.Mark();
         int vi = rt.Push(Empty(rt));
         for (int i = 0; i < n; i++) {
-            long nv = Conj(rt, rt.R(vi), rt.R(bas + i));
+            long nv = VecConj(rt, rt.R(vi), rt.R(bas + i));
             rt.SetR(vi, nv);
         }
         long outv = rt.R(vi);

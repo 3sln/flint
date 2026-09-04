@@ -35,7 +35,7 @@
      "The nil-source arm was the ports' too, and it is dead: a probe over the"
      "whole conformance suite and over `(persistent! (transient []))` never"
      "reached it, and native has run without it since vectors were written.")
-(defn ^:method ^Value node-clone [^:mut ^Rt rt ^Value n ^I32 newlen ^Value edit]
+(defn ^:pub ^:method ^Value node-clone [^:mut ^Rt rt ^Value n ^I32 newlen ^Value edit]
   (let [^RootIx old (push rt n)
         ^RootIx e (push rt edit)
         ^Value fresh (new-node rt newlen (r rt e))]
@@ -72,13 +72,19 @@
      "public API, not `something outside this file calls it`; the default"
      "already covers the second. Java emits `public` either way, because a"
      "generated module is its own package and Java has nothing between"
-     "package-private and public, so nothing is lost on the ports.")
-(defn ^:inline ^:method ^I32 vec-shift [^Rt rt ^Value v]
+     "package-private and public, so nothing is lost on the ports."
+     ""
+     "`vec-shift` and `tail-off` got the mark BACK when `vecwrite` arrived and"
+     "referred to them: a require of a non-`^:pub` name does not resolve. So"
+     "the rule is not `these were private in Rust` -- it is `nothing outside"
+     "this module needs the name`, and that is a fact about the port as it"
+     "stands rather than about the function. It changes as the port grows.")
+(defn ^:pub ^:inline ^:method ^I32 vec-shift [^Rt rt ^Value v]
   (return (to-i32 (as-fixnum (slot rt v V_SHIFT)))))
 
 (doc "Where the tail starts. Below `WIDTH` elements the whole vector IS the"
      "tail, so the answer is 0 and the trie is not consulted at all.")
-(defn ^:inline ^:method ^I32 tail-off [^Rt rt ^Value v]
+(defn ^:pub ^:inline ^:method ^I32 tail-off [^Rt rt ^Value v]
   (let [^I32 c (vec-count rt v)]
     (if (< c WIDTH)
       (return 0))

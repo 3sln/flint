@@ -88,7 +88,16 @@ mv "$work/probe.rs" "$work/gen.rs"
 for t in $present; do
   case $t in
     rust)
-      rustc -O -o "$work/probe.rust" "$work/gen.rs" 2>&1 | head -20
+      # `-A warnings`, and the reason is not tidiness. A probe fixture is
+      # deliberately partial, so it is full of unused-method and unused-mut
+      # noise. Once that noise passed twenty lines, `head` closed the pipe,
+      # rustc took SIGPIPE and DIED BEFORE LINKING -- so there was no binary,
+      # no error text, and an empty answer that read as "the targets
+      # disagree". The compiler was being killed by its own log.
+      #
+      # `head` stays, as a bound on a real error. Silencing warnings is what
+      # keeps a real error inside it.
+      rustc -O -A warnings -o "$work/probe.rust" "$work/gen.rs" 2>&1 | head -20
       echo "rust $("$work/probe.rust")" >> "$work/answers" ;;
     java)
       JDK=/opt/homebrew/opt/openjdk

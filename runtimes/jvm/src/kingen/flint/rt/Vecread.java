@@ -65,6 +65,12 @@ public final class Vecread {
     /// already covers the second. Java emits `public` either way, because a
     /// generated module is its own package and Java has nothing between
     /// package-private and public, so nothing is lost on the ports.
+    /// 
+    /// `vec-shift` and `tail-off` got the mark BACK when `vecwrite` arrived and
+    /// referred to them: a require of a non-`^:pub` name does not resolve. So
+    /// the rule is not `these were private in Rust` -- it is `nothing outside
+    /// this module needs the name`, and that is a fact about the port as it
+    /// stands rather than about the function. It changes as the port grows.
     public static int vecShift(Rt rt, long v) {
         return (int) Val.asFixnum(rt.slot(v, V_SHIFT));
     }

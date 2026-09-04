@@ -25,7 +25,7 @@ public static class Vecread {
     /// The nil-source arm was the ports' too, and it is dead: a probe over the
     /// whole conformance suite and over `(persistent! (transient []))` never
     /// reached it, and native has run without it since vectors were written.
-    internal static long NodeClone(Rt rt, long n, int newlen, long edit) {
+    public static long NodeClone(Rt rt, long n, int newlen, long edit) {
         int old = rt.Push(n);
         int e = rt.Push(edit);
         long fresh = NewNode(rt, newlen, rt.R(e));
@@ -66,12 +66,18 @@ public static class Vecread {
     /// already covers the second. Java emits `public` either way, because a
     /// generated module is its own package and Java has nothing between
     /// package-private and public, so nothing is lost on the ports.
-    internal static int VecShift(Rt rt, long v) {
+    /// 
+    /// `vec-shift` and `tail-off` got the mark BACK when `vecwrite` arrived and
+    /// referred to them: a require of a non-`^:pub` name does not resolve. So
+    /// the rule is not `these were private in Rust` -- it is `nothing outside
+    /// this module needs the name`, and that is a fact about the port as it
+    /// stands rather than about the function. It changes as the port grows.
+    public static int VecShift(Rt rt, long v) {
         return (int) Val.AsFixnum(rt.Slot(v, V_SHIFT));
     }
     /// Where the tail starts. Below `WIDTH` elements the whole vector IS the
     /// tail, so the answer is 0 and the trie is not consulted at all.
-    internal static int TailOff(Rt rt, long v) {
+    public static int TailOff(Rt rt, long v) {
         int c = Vec.Count(rt, v);
         if (c < WIDTH) {
             return 0;

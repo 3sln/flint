@@ -22,3 +22,4 @@ pub mod pike;
 pub mod seqs;
 pub mod vecnode;
 pub mod vecread;
+pub mod vecwrite;

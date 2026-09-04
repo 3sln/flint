@@ -3,6 +3,7 @@ package com.flint.rt;
 import static com.flint.rt.Obj.*;
 import static flint.rt.Vecnode.*;
 import static flint.rt.Vecread.*;
+import static flint.rt.Vecwrite.*;
 
 /// Persistent vectors, ported from `runtime/src/vector.rs`.
 ///
@@ -52,25 +53,6 @@ public final class Vec {
     /// times; the offset-by-one that every one of them carries is the kind of
     /// thing that only has to be got right once.
 
-    static long newVec(Rt rt, int cnt, int shift, long root, long tail, long meta) {
-        int base = rt.mark();
-        int ri = rt.push(root);
-        int ti = rt.push(tail);
-        int mi = rt.push(meta);
-        long a = rt.alloc(TY_VEC, 6);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(a, V_CNT, Val.fixnum(cnt));
-        rt.setSlot(a, V_SHIFT, Val.fixnum(shift));
-        rt.setSlot(a, V_ROOT, rt.r(ri));
-        rt.setSlot(a, V_TAIL, rt.r(ti));
-        rt.setSlot(a, V_META, rt.r(mi));
-        // Not carried from any source vector: `newVec` is called with new
-        // contents every time, and a hash copied from the old one would be
-        // wrong rather than merely stale.
-        rt.setSlot(a, V_HASH, Val.NIL);
-        rt.popTo(base);
-        return Val.heap(a);
-    }
 
     public static long empty(Rt rt) {
         long sg = rt.roots.shared.singletons[Rt.SING_EMPTY_VEC];
@@ -92,96 +74,22 @@ public final class Vec {
         return out;
     }
 
+    /// `conj`, under the name 53 call sites in this runtime already use.
+    ///
+    /// The body is GENERATED, as `Vecwrite.vecConj`, and Rust's callers say
+    /// `vec_conj` directly. Renaming these would be 53 edits here and 53 more
+    /// on the CLR, in files that have nothing to do with vectors, for a naming
+    /// win -- which is the trade `doc/goals/kin-port.md` already recorded
+    /// against the `champ_*` wrappers and answered with "worth doing LAST".
+    public static long conj(Rt rt, long v, long x) { return vecConj(rt, v, x); }
+
     public static long nth(Rt rt, long v, int i) {
         if (i < 0 || i >= count(rt, v)) return Val.NOT_FOUND;
         return nodeGet(rt, arrayFor(rt, v, i), i & MASK);
     }
 
-    static long newPath(Rt rt, int level, long node, long edit) {
-        if (level == 0) return node;
-        int base = rt.mark();
-        int ni = rt.push(node);
-        int ei = rt.push(edit);
-        long child = newPath(rt, level - BITS, rt.r(ni), rt.r(ei));
-        int ci = rt.push(child);
-        long parent = newNode(rt, WIDTH, rt.r(ei));
-        if (Val.isNil(parent)) { rt.popTo(base); return Val.NIL; }
-        int pi = rt.push(parent);
-        nodeSet(rt, rt.r(pi), 0, rt.r(ci));
-        long out = rt.r(pi);
-        rt.popTo(base);
-        return out;
-    }
 
-    /// Push `tailnode` into the trie at `level`, copying the spine.
-    static long pushTail(Rt rt, int cnt, int level, long parent, long tailnode) {
-        int base = rt.mark();
-        int pi = rt.push(parent);
-        int ti = rt.push(tailnode);
-        long ret = nodeClone(rt, rt.r(pi), WIDTH, Val.NIL);
-        if (Val.isNil(ret)) { rt.popTo(base); return Val.NIL; }
-        int ri = rt.push(ret);
-        int subidx = ((cnt - 1) >>> level) & MASK;
-        long insert;
-        if (level == BITS) {
-            insert = rt.r(ti);
-        } else {
-            long child = nodeGet(rt, rt.r(pi), subidx);
-            insert = Val.isNil(child)
-                ? newPath(rt, level - BITS, rt.r(ti), Val.NIL)
-                : pushTail(rt, cnt, level - BITS, child, rt.r(ti));
-        }
-        int ii = rt.push(insert);
-        nodeSet(rt, rt.r(ri), subidx, rt.r(ii));
-        long out = rt.r(ri);
-        rt.popTo(base);
-        return out;
-    }
 
-    public static long conj(Rt rt, long v, long x) {
-        int base = rt.mark();
-        int vi = rt.push(v);
-        int xi = rt.push(x);
-        int cnt = count(rt, v);
-        int tailLen = cnt - tailOff(rt, v);
-        long out;
-        if (tailLen < WIDTH) {
-            // Room in the tail: copy it one longer. This is the common case and
-            // the reason `conj` is O(1) amortised.
-            long newtail = nodeClone(rt, tail(rt, rt.r(vi)), tailLen + 1, Val.NIL);
-            int nt = rt.push(newtail);
-            nodeSet(rt, rt.r(nt), tailLen, rt.r(xi));
-            long vv = rt.r(vi);
-            out = newVec(rt, cnt + 1, vecShift(rt, vv), root(rt, vv), rt.r(nt), rt.slot(vv, V_META));
-        } else {
-            // The tail is full: it becomes a leaf in the trie.
-            long vv = rt.r(vi);
-            int sh = vecShift(rt, vv);
-            int tn = rt.push(tail(rt, vv));
-            boolean overflow = (cnt >>> BITS) > (1 << sh);
-            long newroot;
-            int newshift;
-            if (overflow) {
-                long nr = newNode(rt, WIDTH, Val.NIL);
-                int nri = rt.push(nr);
-                nodeSet(rt, rt.r(nri), 0, root(rt, rt.r(vi)));
-                long path = newPath(rt, sh, rt.r(tn), Val.NIL);
-                nodeSet(rt, rt.r(nri), 1, path);
-                newroot = rt.r(nri);
-                newshift = sh + BITS;
-            } else {
-                newroot = pushTail(rt, cnt, sh, root(rt, rt.r(vi)), rt.r(tn));
-                newshift = sh;
-            }
-            int nri2 = rt.push(newroot);
-            long newtail = newNode(rt, 1, Val.NIL);
-            int ntl = rt.push(newtail);
-            nodeSet(rt, rt.r(ntl), 0, rt.r(xi));
-            out = newVec(rt, cnt + 1, newshift, rt.r(nri2), rt.r(ntl), rt.slot(rt.r(vi), V_META));
-        }
-        rt.popTo(base);
-        return out;
-    }
 
     static long doAssoc(Rt rt, int level, long node, int i, long val) {
         int base = rt.mark();
@@ -206,7 +114,7 @@ public final class Vec {
     /// the only index past the end that is legal.
     public static long assoc(Rt rt, long v, int i, long x) {
         int cnt = count(rt, v);
-        if (i == cnt) return conj(rt, v, x);
+        if (i == cnt) return vecConj(rt, v, x);
         int base = rt.mark();
         int vi = rt.push(v), xi = rt.push(x);
         long out;
@@ -306,7 +214,7 @@ public final class Vec {
         int mk = rt.mark();
         int vi = rt.push(empty(rt));
         for (int i = 0; i < n; i++) {
-            long nv = conj(rt, rt.r(vi), rt.r(base + i));
+            long nv = vecConj(rt, rt.r(vi), rt.r(base + i));
             rt.setR(vi, nv);
         }
         long out = rt.r(vi);

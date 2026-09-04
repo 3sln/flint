@@ -1,0 +1,155 @@
+;; Appending: the header constructor, the trie spine, and `conj`.
+;;
+;; `conj` is O(1) amortised because of the TAIL. While there is room in it --
+;; which is 31 times out of 32 -- appending copies a node of at most 32 slots
+;; and the trie is not touched at all. On the thirty-second the tail becomes a
+;; leaf and is pushed into the trie, which is the only path that costs
+;; `log32(n)`.
+;;
+;; `push-tail` takes NO `edit`. Rust carried one and threaded it through the
+;; recursion; every caller passed `nil`, because the transient half has its own
+;; `t-push-tail` that does the owned-node work. Both ports had already dropped
+;; the parameter. A parameter with one possible value is not a parameter.
+(ns flint.rt.vecwrite
+  (:require [flint.impl.rt :refer [defn return if let local set do comment doc
+                                   not == < > -  + bit-and shl ushr
+                                   mark push r pop-to alloc set-at slot heap
+                                   fixnum nil? vec-count
+                                   Rt Value Addr RootIx I32 Bool NIL
+                                   BITS WIDTH MASK TY_VEC
+                                   V_CNT V_SHIFT V_ROOT V_TAIL V_META V_HASH]]
+            [flint.rt.vecnode :refer [new-node node-get node-set]]
+            [flint.rt.vecread :refer [node-clone vec-shift tail-off]]))
+
+(doc "A vector header over `root`, `tail` and `meta`."
+     ""
+     "SIX SLOTS, and `V_HASH` starts nil. It was five on both ports until"
+     "recently -- the same value at two widths across runtimes, which no gate"
+     "could see -- and the hash is not carried from any source vector, because"
+     "`new-vec` is called with new contents every time and a hash copied from"
+     "the old one would be wrong rather than merely stale.")
+(defn ^:method ^Value new-vec [^:mut ^Rt rt ^I32 cnt ^I32 shift
+                               ^Value root ^Value tail ^Value meta]
+  (let [^RootIx base (mark rt)
+        ^RootIx ri (push rt root)
+        ^RootIx ti (push rt tail)
+        ^RootIx mi (push rt meta)
+        ^Addr a (alloc rt TY_VEC 6)]
+    (if (== a 0)
+      (do (pop-to rt base)
+          (return NIL)))
+    (set-at rt a V_CNT (fixnum cnt))
+    (set-at rt a V_SHIFT (fixnum shift))
+    (set-at rt a V_ROOT (r rt ri))
+    (set-at rt a V_TAIL (r rt ti))
+    (set-at rt a V_META (r rt mi))
+    (set-at rt a V_HASH NIL)
+    (pop-to rt base)
+    (return (heap a))))
+
+(doc "A chain of single-child nodes `level` deep with `node` at the bottom."
+     ""
+     "What makes a tail that is being pushed into an EMPTY branch reachable at"
+     "the right depth: the trie is uniform, so a leaf arriving at level 15 has"
+     "to be wrapped three times to sit where an index expects it.")
+(defn ^:method ^Value new-path [^:mut ^Rt rt ^I32 level ^Value node ^Value edit]
+  (if (== level 0)
+    (return node))
+  (let [^RootIx base (mark rt)
+        ^RootIx ni (push rt node)
+        ^RootIx ei (push rt edit)
+        ^Value child (new-path rt (- level BITS) (r rt ni) (r rt ei))
+        ^RootIx ci (push rt child)
+        ^Value parent (new-node rt WIDTH (r rt ei))]
+    (if (nil? rt parent)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^RootIx pi (push rt parent)]
+      (node-set rt (r rt pi) 0 (r rt ci))
+      (let [^Value out (r rt pi)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "Insert `tailnode` into the trie under `parent`, copying the spine.")
+(defn ^:method ^Value push-tail [^:mut ^Rt rt ^I32 cnt ^I32 level
+                                 ^Value parent ^Value tailnode]
+  (let [^RootIx base (mark rt)
+        ^RootIx pi (push rt parent)
+        ^RootIx ti (push rt tailnode)
+        ^Value ret (node-clone rt (r rt pi) WIDTH NIL)]
+    (if (nil? rt ret)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^RootIx ri (push rt ret)
+          ^I32 subidx (bit-and (ushr (- cnt 1) level) MASK)]
+      (local ^:mut ^Value insert)
+      (if (== level BITS)
+        (set insert (r rt ti))
+        (let [^Value child (node-get rt (r rt pi) subidx)]
+          (if (nil? rt child)
+            (set insert (new-path rt (- level BITS) (r rt ti) NIL))
+            (set insert (push-tail rt cnt (- level BITS) child (r rt ti))))))
+      (comment "`insert` needs no root: `node-set` is a store and cannot"
+               "collect, so nothing moves between the call above and this line.")
+      (node-set rt (r rt ri) subidx insert)
+      (let [^Value out (r rt ri)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "`conj`: `v` with `x` appended.")
+(defn ^:pub ^:method ^Value vec-conj [^:mut ^Rt rt ^Value v ^Value x]
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^RootIx xi (push rt x)
+        ^I32 cnt (vec-count rt v)
+        ^I32 tail-len (- cnt (tail-off rt v))]
+    (local ^:mut ^Value out)
+    (if (< tail-len WIDTH)
+      (do
+        (comment "Room in the tail: copy it one longer. The common case, and"
+                 "the reason `conj` is O(1) amortised.")
+        (let [^Value newtail (node-clone rt (slot rt (r rt vi) V_TAIL)
+                                         (+ tail-len 1) NIL)
+              ^RootIx nt (push rt newtail)]
+          (node-set rt (r rt nt) tail-len (r rt xi))
+          (let [^Value vv (r rt vi)]
+            (set out (new-vec rt (+ cnt 1) (vec-shift rt vv)
+                              (slot rt vv V_ROOT) (r rt nt)
+                              (slot rt vv V_META))))))
+      (do
+        (comment "The tail is full: it becomes a leaf in the trie.")
+        (let [^Value vv (r rt vi)
+              ^I32 sh (vec-shift rt vv)
+              ^RootIx tn (push rt (slot rt vv V_TAIL))
+              ^Bool overflow (> (ushr cnt BITS) (shl 1 sh))]
+          (local ^:mut ^Value newroot)
+          (local ^:mut ^I32 newshift)
+          (if overflow
+            (do
+              (comment "The root is full too, so the tree gains a level: a new"
+                       "root whose child 0 is the old one and whose child 1 is"
+                       "a fresh path down to the tail.")
+              (let [^Value nr (new-node rt WIDTH NIL)
+                    ^RootIx nri (push rt nr)]
+                (node-set rt (r rt nri) 0 (slot rt (r rt vi) V_ROOT))
+                (comment "HOISTED. `node-set` takes `&mut self` in Rust and"
+                         "`new-path` does too, so nesting the call inside the"
+                         "argument list is two mutable borrows at once. Every"
+                         "target reads the hoisted form fine; only one needs"
+                         "it, which is the ordinary shape of a divergence.")
+                (let [^Value path (new-path rt sh (r rt tn) NIL)]
+                  (node-set rt (r rt nri) 1 path))
+                (set newroot (r rt nri))
+                (set newshift (+ sh BITS))))
+            (do
+              (set newroot (push-tail rt cnt sh (slot rt (r rt vi) V_ROOT)
+                                      (r rt tn)))
+              (set newshift sh)))
+          (let [^RootIx nri2 (push rt newroot)
+                ^Value newtail (new-node rt 1 NIL)
+                ^RootIx ntl (push rt newtail)]
+            (node-set rt (r rt ntl) 0 (r rt xi))
+            (set out (new-vec rt (+ cnt 1) newshift (r rt nri2) (r rt ntl)
+                              (slot rt (r rt vi) V_META)))))))
+    (pop-to rt base)
+    (return out)))

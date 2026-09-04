@@ -29,7 +29,7 @@ impl Rt {
     /// The nil-source arm was the ports' too, and it is dead: a probe over the
     /// whole conformance suite and over `(persistent! (transient []))` never
     /// reached it, and native has run without it since vectors were written.
-    pub(crate) fn node_clone(&mut self, n: Value, newlen: u32, edit: Value) -> Value {
+    pub fn node_clone(&mut self, n: Value, newlen: u32, edit: Value) -> Value {
         let old: usize = self.push(n);
         let e: usize = self.push(edit);
         let fresh: Value = self.new_node(newlen, self.r(e));
@@ -70,14 +70,20 @@ impl Rt {
     /// already covers the second. Java emits `public` either way, because a
     /// generated module is its own package and Java has nothing between
     /// package-private and public, so nothing is lost on the ports.
+    /// 
+    /// `vec-shift` and `tail-off` got the mark BACK when `vecwrite` arrived and
+    /// referred to them: a require of a non-`^:pub` name does not resolve. So
+    /// the rule is not `these were private in Rust` -- it is `nothing outside
+    /// this module needs the name`, and that is a fact about the port as it
+    /// stands rather than about the function. It changes as the port grows.
     #[inline]
-    pub(crate) fn vec_shift(&self, v: Value) -> u32 {
+    pub fn vec_shift(&self, v: Value) -> u32 {
         return self.slot(v, V_SHIFT).as_fixnum() as u32;
     }
     /// Where the tail starts. Below `WIDTH` elements the whole vector IS the
     /// tail, so the answer is 0 and the trie is not consulted at all.
     #[inline]
-    pub(crate) fn tail_off(&self, v: Value) -> u32 {
+    pub fn tail_off(&self, v: Value) -> u32 {
         let c: u32 = self.vec_count(v);
         if c < WIDTH {
             return 0;

@@ -95,27 +95,6 @@ impl Rt {
     fn vec_tail(&self, v: Value) -> Value {
         slot(&self.gc.sp, v.as_heap(), V_TAIL)
     }
-    #[inline]
-    fn new_vec(&mut self, cnt: u32, shift: u32, root: Value, tail: Value, meta: Value) -> Value {
-        let base = self.mark();
-        let r = self.push(root);
-        let t = self.push(tail);
-        let m = self.push(meta);
-        let a = self.alloc(TY_VEC, 6);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        let (root, tail, meta) = (self.r(r), self.r(t), self.r(m));
-        self.pop_to(base);
-        self.set_slot(a, V_CNT, Value::fixnum(cnt as i64));
-        self.set_slot(a, V_SHIFT, Value::fixnum(shift as i64));
-        self.set_slot(a, V_ROOT, root);
-        self.set_slot(a, V_TAIL, tail);
-        self.set_slot(a, V_META, meta);
-        self.set_slot(a, V_HASH, NIL);
-        Value::heap(a)
-    }
 
     pub fn vec_nth(&self, v: Value, i: u32) -> Option<Value> {
         if i >= self.vec_count(v) {
@@ -125,104 +104,8 @@ impl Rt {
         Some(self.node_get(arr, i & MASK))
     }
 
-    fn new_path(&mut self, level: u32, node: Value, edit: Value) -> Value {
-        if level == 0 {
-            return node;
-        }
-        let base = self.mark();
-        let n = self.push(node);
-        let e = self.push(edit);
-        let child = self.new_path(level - BITS, self.r(n), self.r(e));
-        let c = self.push(child);
-        let parent = self.new_node(WIDTH, self.r(e));
-        if parent.is_nil() {
-            self.pop_to(base);
-            return NIL;
-        }
-        let p = self.push(parent);
-        let child = self.r(c);
-        self.node_set(self.r(p), 0, child);
-        let out = self.r(p);
-        self.pop_to(base);
-        out
-    }
 
-    /// Push `tailnode` into the trie at `level`, copying the spine.
-    fn push_tail(&mut self, cnt: u32, level: u32, parent: Value, tailnode: Value, edit: Value) -> Value {
-        let base = self.mark();
-        let p = self.push(parent);
-        let t = self.push(tailnode);
-        let e = self.push(edit);
-        let subidx = ((cnt - 1) >> level) & MASK;
-        let ret = self.node_clone(self.r(p), WIDTH, self.r(e));
-        if ret.is_nil() {
-            self.pop_to(base);
-            return NIL;
-        }
-        let r = self.push(ret);
-        let to_insert = if level == BITS {
-            self.r(t)
-        } else {
-            let child = self.node_get(self.r(p), subidx);
-            if child.is_nil() {
-                self.new_path(level - BITS, self.r(t), self.r(e))
-            } else {
-                self.push_tail(cnt, level - BITS, child, self.r(t), self.r(e))
-            }
-        };
-        self.node_set(self.r(r), subidx, to_insert);
-        let out = self.r(r);
-        self.pop_to(base);
-        out
-    }
 
-    pub fn vec_conj(&mut self, v: Value, x: Value) -> Value {
-        let base = self.mark();
-        let vi = self.push(v);
-        let xi = self.push(x);
-        let cnt = self.vec_count(v);
-        let tail_len = cnt - self.tail_off(v);
-        let out = if tail_len < WIDTH {
-            // Room in the tail: copy it one longer.
-            let newtail = self.node_clone(self.vec_tail(self.r(vi)), tail_len + 1, NIL);
-            let nt = self.push(newtail);
-            let x = self.r(xi);
-            self.node_set(self.r(nt), tail_len, x);
-            let v = self.r(vi);
-            let (shift, root, meta) = (self.vec_shift(v), self.vec_root(v), self.slot(v, V_META));
-            let nt = self.r(nt);
-            self.new_vec(cnt + 1, shift, root, nt, meta)
-        } else {
-            // Tail is full: it becomes a leaf in the trie.
-            let v = self.r(vi);
-            let shift = self.vec_shift(v);
-            let tailnode = self.vec_tail(v);
-            let tn = self.push(tailnode);
-            let overflow = (cnt >> BITS) > (1u32 << shift);
-            let (newroot, newshift) = if overflow {
-                let nr = self.new_node(WIDTH, NIL);
-                let nri = self.push(nr);
-                let oldroot = self.vec_root(self.r(vi));
-                self.node_set(self.r(nri), 0, oldroot);
-                let path = self.new_path(shift, self.r(tn), NIL);
-                self.node_set(self.r(nri), 1, path);
-                (self.r(nri), shift + BITS)
-            } else {
-                let root = self.vec_root(self.r(vi));
-                (self.push_tail(cnt, shift, root, self.r(tn), NIL), shift)
-            };
-            let nr = self.push(newroot);
-            let newtail = self.new_node(1, NIL);
-            let ntl = self.push(newtail);
-            let x = self.r(xi);
-            self.node_set(self.r(ntl), 0, x);
-            let meta = self.slot(self.r(vi), V_META);
-            let (nr, ntl) = (self.r(nr), self.r(ntl));
-            self.new_vec(cnt + 1, newshift, nr, ntl, meta)
-        };
-        self.pop_to(base);
-        out
-    }
 
     fn do_assoc(&mut self, level: u32, node: Value, i: u32, val: Value) -> Value {
         let base = self.mark();
