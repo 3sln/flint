@@ -107,7 +107,20 @@ impl Rt {
                     self.vecseq(ents, 0)
                 }
             }
-            _ => NIL,
+            // REFUSED, not nil. This answered NIL and both ports threw, so
+            // `(seq (atom 1))` was nil here and an exception there -- a
+            // reachable divergence, and the ports are the ones matching
+            // Clojure, which refuses anything it cannot make an ISeq from.
+            //
+            // The KIND matches the ports exactly, which is what a `catch`
+            // dispatches on. The MESSAGE does not: theirs names the value
+            // through `describe`, and saying that here needs string building,
+            // which is the capability `seq` is waiting on to be generated at
+            // all.
+            _ => self.throw_str(
+                "UnsupportedOperationException",
+                "seq over this type needs more of the data structures",
+            ),
         }
     }
 
