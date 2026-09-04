@@ -52,7 +52,7 @@
      "What makes a tail that is being pushed into an EMPTY branch reachable at"
      "the right depth: the trie is uniform, so a leaf arriving at level 15 has"
      "to be wrapped three times to sit where an index expects it.")
-(defn ^:method ^Value new-path [^:mut ^Rt rt ^I32 level ^Value node ^Value edit]
+(defn ^:pub ^:method ^Value new-path [^:mut ^Rt rt ^I32 level ^Value node ^Value edit]
   (if (== level 0)
     (return node))
   (let [^RootIx base (mark rt)

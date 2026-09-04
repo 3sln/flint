@@ -82,7 +82,7 @@
 
 (doc "Unwind one leaf out of the trie: the node `cnt - 2` lives under, with"
      "the emptying branch removed, or nil when the branch disappears.")
-(defn ^:method ^Value pop-tail [^:mut ^Rt rt ^I32 level ^Value node ^I32 cnt]
+(defn ^:pub ^:method ^Value pop-tail [^:mut ^Rt rt ^I32 level ^Value node ^I32 cnt]
   (let [^I32 subidx (bit-and (ushr (- cnt 2) level) MASK)]
     (if (> level BITS)
       (let [^RootIx base (mark rt)

@@ -27,7 +27,7 @@ public static class Vecnode {
         rt.SetSlot(Val.AsHeap(n), i + 1, v);
     }
     /// Who owns this node: the transient's token, or `nil` when nothing does.
-    internal static long NodeEdit(Rt rt, long n) {
+    public static long NodeEdit(Rt rt, long n) {
         return rt.Slot(n, 0);
     }
     /// A trie node with `n` child slots, all nil, owned by `edit`.

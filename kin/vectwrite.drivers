@@ -1,0 +1,710 @@
+--rust-head
+type Addr = u32;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_NODE: u8 = 10; const TY_VEC: u8 = 6;
+const BITS: u32 = 5; const WIDTH: u32 = 32; const MASK: u32 = 31;
+const V_CNT: u32 = 0; const V_SHIFT: u32 = 1; const V_ROOT: u32 = 2; const V_TAIL: u32 = 3;
+const T_CNT: u32 = 0; const T_SHIFT: u32 = 1; const T_ROOT: u32 = 2; const T_TAIL: u32 = 3;
+const T_EDIT: u32 = 4;
+const TY_TVEC: u8 = 25; const TY_VOLATILE: u8 = 34;
+const V_META: u32 = 4; const V_HASH: u32 = 5;
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+}
+struct Gc { sp: Vec<u8> }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, starve: bool }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    // FILLED WITH NIL, as the real allocator does (`gc.zero_body`). The first
+    // version left the slots at 0 and NIL is 0xFFFF, so "this child is absent"
+    // never read as absent -- `vec_pop`'s level collapse silently never fired
+    // and every target agreed on the wrong answer, which is the one failure a
+    // three-way comparison cannot catch.
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        if self.starve { return 0; }
+        let a = self.bump; self.bump += n as u64 + 1;
+        self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.set_slot(v.as_heap(), i, x); }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, n: Value) -> u32 { self.lens[n.0 as usize] }
+    // A vector's count, which the subject reaches as a SIBLING rather than a
+    // template -- so the fixture has to supply it with the real signature.
+    fn vec_count(&self, v: Value) -> u32 { self.slot(v, V_CNT).as_fixnum() as u32 }
+    // `flint.rt.vecnode`, STUBBED. Each source is verified against stubs of
+    // what it requires; `vecnode.drivers` verifies the real ones. The
+    // signatures must match what kin generates for them, because that is the
+    // only thing being asserted here.
+    fn new_node(&mut self, n: u32, edit: Value) -> Value {
+        let a = self.alloc(TY_NODE, n + 1);
+        if a == 0 { return NIL; }
+        self.set_slot(a, 0, edit);
+        Value::heap(a)
+    }
+    fn node_len(&self, n: Value) -> u32 { self.olen(n) - 1 }
+    fn node_get(&self, n: Value, i: u32) -> Value { self.slot(n, i + 1) }
+    fn node_set(&mut self, n: Value, i: u32, v: Value) { self.set(n, i + 1, v); }
+    fn node_edit(&self, n: Value) -> Value { self.slot(n, 0) }
+    // `flint.rt.vecread`, STUBBED -- `vecread.drivers` verifies the real ones.
+    fn node_clone(&mut self, n: Value, newlen: u32, edit: Value) -> Value {
+        let fresh = self.new_node(newlen, edit);
+        if fresh.is_nil() { return NIL; }
+        let have = self.node_len(n);
+        let copy = if newlen < have { newlen } else { have };
+        for i in 0..copy { let x = self.node_get(n, i); self.node_set(fresh, i, x); }
+        fresh
+    }
+    fn vec_shift(&self, v: Value) -> u32 { self.slot(v, V_SHIFT).as_fixnum() as u32 }
+    fn tail_off(&self, v: Value) -> u32 {
+        let c = self.vec_count(v);
+        if c < WIDTH { 0 } else { ((c - 1) >> BITS) << BITS }
+    }
+    // `flint.rt.vecwrite`, STUBBED -- `vecwrite.drivers` verifies the real ones.
+    fn new_vec(&mut self, cnt: u32, shift: u32, root: Value, tail: Value, meta: Value) -> Value {
+        let a = self.alloc(TY_VEC, 6);
+        if a == 0 { return NIL; }
+        self.set_slot(a, V_CNT, Value::fixnum(cnt as i64));
+        self.set_slot(a, V_SHIFT, Value::fixnum(shift as i64));
+        self.set_slot(a, V_ROOT, root);
+        self.set_slot(a, V_TAIL, tail);
+        self.set_slot(a, V_META, meta);
+        self.set_slot(a, V_HASH, NIL);
+        Value::heap(a)
+    }
+    fn empty_vec(&mut self) -> Value {
+        let root = self.new_node(WIDTH, NIL);
+        let tail = self.new_node(0, NIL);
+        self.new_vec(0, BITS, root, tail, NIL)
+    }
+    // `vec_conj` is STUBBED as a MARKER, not reimplemented. `vec-assoc` routes
+    // `i == cnt` to it, and that routing is what this source is responsible
+    // for; rebuilding conj here would test the fixture instead.
+    fn vec_conj(&mut self, _v: Value, _x: Value) -> Value { Value(0xC0FFEE) }
+    // A vector of `n` elements built DIRECTLY, because conj is not available.
+    // Leaves hold 0x1000 + index so a wrong leaf is a wrong number.
+    fn build(&mut self, n: u32, shift: u32) -> Value {
+        let toff = if n < WIDTH { 0 } else { ((n - 1) >> BITS) << BITS };
+        let root = self.new_node(WIDTH, NIL);
+        let ri = self.push(root);
+        let mut i = 0u32;
+        while i < toff {
+            let leaf = self.new_node(WIDTH, NIL);
+            let li = self.push(leaf);
+            for k in 0..WIDTH { self.node_set(self.r(li), k, Value(0x1000 + (i + k) as u64)); }
+            if shift == BITS {
+                let l = self.r(li); self.node_set(self.r(ri), i >> BITS, l);
+            } else {
+                // Two levels: one shift-5 node per 1024 elements.
+                let outer = (i >> 10) & MASK;
+                let mut mid = self.node_get(self.r(ri), outer);
+                if mid.is_nil() { mid = self.new_node(WIDTH, NIL); self.node_set(self.r(ri), outer, mid); }
+                let l = self.r(li); self.node_set(mid, (i >> BITS) & MASK, l);
+            }
+            self.pop_to(li);
+            i += WIDTH;
+        }
+        let tailn = n - toff;
+        let tail = self.new_node(tailn, NIL);
+        let ti = self.push(tail);
+        for k in 0..tailn { self.node_set(self.r(ti), k, Value(0x1000 + (toff + k) as u64)); }
+        let (rr, tt) = (self.r(ri), self.r(ti));
+        let out = self.new_vec(n, shift, rr, tt, NIL);
+        self.pop_to(ri);
+        out
+    }
+    // `flint.rt.vectrans` and the two persistent modules, STUBBED. Each is
+    // verified by its own driver; here they only have to be faithful enough
+    // that the transient writes have something to write into.
+    fn tvec_count(&self, t: Value) -> u32 { self.slot(t, T_CNT).as_fixnum() as u32 }
+    fn tvec_shift(&self, t: Value) -> u32 { self.slot(t, T_SHIFT).as_fixnum() as u32 }
+    fn tvec_tail_off(&self, t: Value) -> u32 {
+        let c = self.tvec_count(t);
+        if c < WIDTH { 0 } else { ((c - 1) >> BITS) << BITS }
+    }
+    fn ensure_editable(&mut self, node: Value, edit: Value) -> Value {
+        if self.node_edit(node) == edit { node } else { self.node_clone(node, WIDTH, edit) }
+    }
+    fn t_array_for(&self, t: Value, i: u32) -> Value {
+        if i >= self.tvec_tail_off(t) { return self.slot(t, T_TAIL); }
+        let mut node = self.slot(t, T_ROOT);
+        let mut level = self.tvec_shift(t);
+        while level > 0 { node = self.node_get(node, (i >> level) & MASK); level -= BITS; }
+        node
+    }
+    fn new_path(&mut self, level: u32, node: Value, edit: Value) -> Value {
+        if level == 0 { return node; }
+        let child = self.new_path(level - BITS, node, edit);
+        let parent = self.new_node(WIDTH, edit);
+        if parent.is_nil() { return NIL; }
+        self.node_set(parent, 0, child);
+        parent
+    }
+    fn pop_tail(&mut self, level: u32, node: Value, cnt: u32) -> Value {
+        let subidx = ((cnt - 2) >> level) & MASK;
+        if level > BITS {
+            let child = self.node_get(node, subidx);
+            let newchild = self.pop_tail(level - BITS, child, cnt);
+            if newchild.is_nil() && subidx == 0 { return NIL; }
+            let ret = self.node_clone(node, WIDTH, NIL);
+            self.node_set(ret, subidx, newchild);
+            return ret;
+        }
+        if subidx == 0 { return NIL; }
+        let ret = self.node_clone(node, WIDTH, NIL);
+        self.node_set(ret, subidx, NIL);
+        ret
+    }
+    // A transient over a freshly built vector, so the driver has one to write to.
+    fn transient(&mut self, v: Value) -> Value {
+        let edit = self.new_edit_token();
+        let tail = self.node_clone(self.slot(v, V_TAIL), WIDTH, edit);
+        let root = self.slot(v, V_ROOT);
+        let a = self.alloc(TY_TVEC, 5);
+        self.set_slot(a, T_CNT, Value::fixnum(self.vec_count(v) as i64));
+        self.set_slot(a, T_SHIFT, Value::fixnum(self.vec_shift(v) as i64));
+        self.set_slot(a, T_ROOT, root);
+        self.set_slot(a, T_TAIL, tail);
+        self.set_slot(a, T_EDIT, edit);
+        Value::heap(a)
+    }
+    fn new_edit_token(&mut self) -> Value { let a = self.alloc(TY_VOLATILE, 1); Value::heap(a) }
+    fn array_for(&self, v: Value, i: u32) -> Value {
+        if i >= self.tail_off(v) { return self.slot(v, V_TAIL); }
+        let mut node = self.slot(v, V_ROOT);
+        let mut level = self.vec_shift(v);
+        while level > 0 { node = self.node_get(node, (i >> level) & MASK); level -= BITS; }
+        node
+    }
+}
+fn ty(sp: &Vec<u8>, a: Addr) -> u8 { sp[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 900000], gc: Gc { sp: vec![0u8; 900000] }, lens: vec![0; 900000],
+                      bump: 100, roots: Vec::new(), starve: false };
+    let mut o = String::new();
+    let tget = |rt: &Rt, t: Value, i: u32| -> u64 {
+        let leaf = rt.t_array_for(t, i); rt.node_get(leaf, i & MASK).0
+    };
+
+    // conj! from empty, past every boundary the trie turns on.
+    let v0 = rt.build(0, BITS);
+    let t = rt.transient(v0);
+    let ti = rt.push(t);
+    for i in 0..2100u32 {
+        let nt = rt.tvec_conj(rt.r(ti), Value(0x1000 + i as u64));
+        rt.set_r(ti, nt);
+    }
+    let t = rt.r(ti);
+    o.push_str(&format!("cnt={} sh={} ", rt.tvec_count(t), rt.tvec_shift(t)));
+    let mut bad = 0u32;
+    for i in 0..2100u32 { if tget(&rt, t, i) != 0x1000 + i as u64 { bad += 1; } }
+    o.push_str(&format!("wrong={} ", bad));
+
+    // conj! REUSES the handle rather than answering a new one, which is what
+    // makes it cheap: on the common path it allocates nothing at all.
+    let before = rt.r(ti);
+    let after = rt.tvec_conj(before, Value(0xDDD));
+    o.push_str(&format!("inplace={} ", (before == after) as u32));
+
+    // assoc! in the tail and in the trie, and at the count (which appends).
+    let a1 = rt.tvec_assoc(rt.r(ti), 5, Value(0xAAA));
+    o.push_str(&format!("as5={} keep6={} ", tget(&rt, a1, 5), tget(&rt, a1, 6)));
+    let n = rt.tvec_count(rt.r(ti));
+    let a2 = rt.tvec_assoc(rt.r(ti), n - 1, Value(0xBBB));
+    o.push_str(&format!("astail={} ", tget(&rt, a2, n - 1)));
+    let a3 = rt.tvec_assoc(rt.r(ti), rt.tvec_count(rt.r(ti)), Value(0xCCC));
+    o.push_str(&format!("append={} ", rt.tvec_count(a3)));
+
+    // pop! down across the leaf boundary and the level boundary.
+    let mut counts = String::new();
+    while rt.tvec_count(rt.r(ti)) > 1020 {
+        let np = rt.tvec_pop(rt.r(ti));
+        rt.set_r(ti, np);
+    }
+    counts.push_str(&format!("{}:{} ", rt.tvec_count(rt.r(ti)), rt.tvec_shift(rt.r(ti))));
+    while rt.tvec_count(rt.r(ti)) > 30 {
+        let np = rt.tvec_pop(rt.r(ti));
+        rt.set_r(ti, np);
+    }
+    counts.push_str(&format!("{}:{} ", rt.tvec_count(rt.r(ti)), rt.tvec_shift(rt.r(ti))));
+    o.push_str(&format!("pops={}", counts));
+    // From 6, because index 5 was deliberately overwritten by `assoc!` above.
+    let mut bad2 = 0u32;
+    for i in 6..30u32 { if tget(&rt, rt.r(ti), i) != 0x1000 + i as u64 { bad2 += 1; } }
+    o.push_str(&format!("popwrong={} ", bad2));
+
+    // persistent!: the tail is TRIMMED and the handle is invalidated.
+    let p = rt.tvec_persistent(rt.r(ti));
+    o.push_str(&format!("pcnt={} ptail={} dead={} ",
+        rt.vec_count(p), rt.node_len(rt.slot(p, V_TAIL)),
+        rt.slot(rt.r(ti), T_EDIT).is_nil() as u32));
+
+    // The empty edges.
+    let e0 = rt.build(0, BITS);
+    let te = rt.transient(e0);
+    o.push_str(&format!("pop0nil={} ", rt.tvec_pop(te).is_nil() as u32));
+    let e1v = rt.build(1, BITS);
+    let t1 = rt.transient(e1v);
+    let p1 = rt.tvec_pop(t1);
+    o.push_str(&format!("pop1={} ", rt.tvec_count(p1)));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_NODE = 10;
+    static final int BITS = 5, WIDTH = 32, MASK = 31;
+    static final int V_CNT = 0, V_SHIFT = 1, V_ROOT = 2, V_TAIL = 3, V_META = 4, V_HASH = 5;
+    static final int T_CNT = 0, T_SHIFT = 1, T_ROOT = 2, T_TAIL = 3, T_EDIT = 4;
+    static final int TY_TVEC = 25, TY_VOLATILE = 34;
+    static final int TY_VEC = 6;
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static boolean isHeap(long v) { return v >= 100; }
+        static long asHeap(long v) { return v; }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+        static long fixnum(long n) { return n; }
+        static long asFixnum(long v) { return v; }
+    }
+    static final class Rt {
+        long[] h = new long[200000];
+        static final class Gc { int[] sp = new int[200000]; }
+        Gc gc = new Gc();
+        int[] lens = new int[200000];
+        long bump = 100;
+        boolean starve = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void setR(int i, long v) { roots.set(i, v); }
+        long alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            // NIL-filled, as the real allocator does -- see the Rust head.
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static final class Vec {
+        static int count(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
+        static long empty(Rt rt) { return emptyVec(rt); }
+    }
+    // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
+    static long newNode(Rt rt, int n, long edit) {
+        long a = rt.alloc(TY_NODE, n + 1);
+        if (a == 0) return NIL;
+        rt.setSlot(a, 0, edit);
+        return Val.heap(a);
+    }
+    static int nodeLen(Rt rt, long n) { return olen(rt, n) - 1; }
+    static long nodeGet(Rt rt, long n, int i) { return rt.slot(n, i + 1); }
+    static void nodeSet(Rt rt, long n, int i, long v) { rt.setSlot(Val.asHeap(n), i + 1, v); }
+    static long nodeEdit(Rt rt, long n) { return rt.slot(n, 0); }
+    // `flint.rt.vecread`, STUBBED -- `vecread.drivers` verifies the real ones.
+    static long nodeClone(Rt rt, long n, int newlen, long edit) {
+        long fresh = newNode(rt, newlen, edit);
+        if (Val.isNil(fresh)) return NIL;
+        int have = nodeLen(rt, n);
+        int copy = Math.min(newlen, have);
+        for (int i = 0; i < copy; i++) nodeSet(rt, fresh, i, nodeGet(rt, n, i));
+        return fresh;
+    }
+    static int vecShift(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_SHIFT)); }
+    static int tailOff(Rt rt, long v) {
+        int c = Vec.count(rt, v);
+        return c < WIDTH ? 0 : ((c - 1) >>> BITS) << BITS;
+    }
+    // `flint.rt.vecwrite`, STUBBED -- see the Rust head.
+    static long newVec(Rt rt, int cnt, int shift, long root, long tail, long meta) {
+        long a = rt.alloc(TY_VEC, 6);
+        if (a == 0) return NIL;
+        rt.setSlot(a, V_CNT, cnt); rt.setSlot(a, V_SHIFT, shift);
+        rt.setSlot(a, V_ROOT, root); rt.setSlot(a, V_TAIL, tail);
+        rt.setSlot(a, V_META, meta); rt.setSlot(a, V_HASH, NIL);
+        return Val.heap(a);
+    }
+    static long emptyVec(Rt rt) {
+        return newVec(rt, 0, BITS, newNode(rt, WIDTH, NIL), newNode(rt, 0, NIL), NIL);
+    }
+    // `vecConj` is STUBBED as a MARKER, not reimplemented -- see the Rust head.
+    static long vecConj(Rt rt, long v, long x) { return 0xC0FFEE; }
+    static long build(Rt rt, int n, int shift) {
+        int toff = n < WIDTH ? 0 : ((n - 1) >>> BITS) << BITS;
+        long root = newNode(rt, WIDTH, NIL);
+        int ri = rt.push(root);
+        for (int i = 0; i < toff; i += WIDTH) {
+            long leaf = newNode(rt, WIDTH, NIL);
+            int li = rt.push(leaf);
+            for (int k = 0; k < WIDTH; k++) nodeSet(rt, rt.r(li), k, 0x1000 + i + k);
+            if (shift == BITS) {
+                nodeSet(rt, rt.r(ri), i >>> BITS, rt.r(li));
+            } else {
+                int outer = (i >>> 10) & MASK;
+                long mid = nodeGet(rt, rt.r(ri), outer);
+                if (Val.isNil(mid)) { mid = newNode(rt, WIDTH, NIL); nodeSet(rt, rt.r(ri), outer, mid); }
+                nodeSet(rt, mid, (i >>> BITS) & MASK, rt.r(li));
+            }
+            rt.popTo(li);
+        }
+        int tailn = n - toff;
+        long tail = newNode(rt, tailn, NIL);
+        int ti = rt.push(tail);
+        for (int k = 0; k < tailn; k++) nodeSet(rt, rt.r(ti), k, 0x1000 + toff + k);
+        long out = newVec(rt, n, shift, rt.r(ri), rt.r(ti), NIL);
+        rt.popTo(ri);
+        return out;
+    }
+    static long get(Rt rt, long v, int i) { return nodeGet(rt, arrayFor(rt, v, i), i & MASK); }
+    // STUBBED -- see the Rust head.
+    static int tvecCount(Rt rt, long t) { return (int) Val.asFixnum(rt.slot(t, T_CNT)); }
+    static int tvecShift(Rt rt, long t) { return (int) Val.asFixnum(rt.slot(t, T_SHIFT)); }
+    static int tvecTailOff(Rt rt, long t) {
+        int c = tvecCount(rt, t);
+        return c < WIDTH ? 0 : ((c - 1) >>> BITS) << BITS;
+    }
+    static long ensureEditable(Rt rt, long node, long edit) {
+        return nodeEdit(rt, node) == edit ? node : nodeClone(rt, node, WIDTH, edit);
+    }
+    static long tArrayFor(Rt rt, long t, int i) {
+        if (i >= tvecTailOff(rt, t)) return rt.slot(t, T_TAIL);
+        long node = rt.slot(t, T_ROOT);
+        int level = tvecShift(rt, t);
+        while (level > 0) { node = nodeGet(rt, node, (i >>> level) & MASK); level -= BITS; }
+        return node;
+    }
+    static long newPath(Rt rt, int level, long node, long edit) {
+        if (level == 0) return node;
+        long child = newPath(rt, level - BITS, node, edit);
+        long parent = newNode(rt, WIDTH, edit);
+        if (Val.isNil(parent)) return NIL;
+        nodeSet(rt, parent, 0, child);
+        return parent;
+    }
+    static long popTail(Rt rt, int level, long node, int cnt) {
+        int subidx = ((cnt - 2) >>> level) & MASK;
+        if (level > BITS) {
+            long child = nodeGet(rt, node, subidx);
+            long newchild = popTail(rt, level - BITS, child, cnt);
+            if (Val.isNil(newchild) && subidx == 0) return NIL;
+            long ret = nodeClone(rt, node, WIDTH, NIL);
+            nodeSet(rt, ret, subidx, newchild);
+            return ret;
+        }
+        if (subidx == 0) return NIL;
+        long ret = nodeClone(rt, node, WIDTH, NIL);
+        nodeSet(rt, ret, subidx, NIL);
+        return ret;
+    }
+    static long newEditToken(Rt rt) { return Val.heap(rt.alloc(TY_VOLATILE, 1)); }
+    static long transient_(Rt rt, long v) {
+        long edit = newEditToken(rt);
+        long tail = nodeClone(rt, rt.slot(v, V_TAIL), WIDTH, edit);
+        long root = rt.slot(v, V_ROOT);
+        long a = rt.alloc(TY_TVEC, 5);
+        rt.setSlot(a, T_CNT, Vec.count(rt, v)); rt.setSlot(a, T_SHIFT, vecShift(rt, v));
+        rt.setSlot(a, T_ROOT, root); rt.setSlot(a, T_TAIL, tail); rt.setSlot(a, T_EDIT, edit);
+        return Val.heap(a);
+    }
+    static long tget(Rt rt, long t, int i) { return nodeGet(rt, tArrayFor(rt, t, i), i & MASK); }
+    static long arrayFor(Rt rt, long v, int i) {
+        if (i >= tailOff(rt, v)) return rt.slot(v, V_TAIL);
+        long node = rt.slot(v, V_ROOT);
+        int level = vecShift(rt, v);
+        while (level > 0) { node = nodeGet(rt, node, (i >>> level) & MASK); level -= BITS; }
+        return node;
+    }
+    static long mkvec(Rt rt, int cnt, int shift, long root, long tail) {
+        long a = rt.alloc(6, 6);
+        rt.setSlot(a, V_CNT, cnt);
+        rt.setSlot(a, V_SHIFT, shift);
+        rt.setSlot(a, V_ROOT, root);
+        rt.setSlot(a, V_TAIL, tail);
+        return Val.heap(a);
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long v0 = build(rt, 0, BITS);
+        int ti = rt.push(transient_(rt, v0));
+        for (int i = 0; i < 2100; i++) rt.setR(ti, tvecConj(rt, rt.r(ti), 0x1000 + i));
+        long t = rt.r(ti);
+        o.append("cnt=").append(tvecCount(rt, t)).append(" sh=").append(tvecShift(rt, t)).append(' ');
+        int bad = 0;
+        for (int i = 0; i < 2100; i++) if (tget(rt, t, i) != 0x1000 + i) bad++;
+        o.append("wrong=").append(bad).append(' ');
+        long before = rt.r(ti);
+        long after = tvecConj(rt, before, 0xDDD);
+        o.append("inplace=").append(before == after ? 1 : 0).append(' ');
+        long a1 = tvecAssoc(rt, rt.r(ti), 5, 0xAAA);
+        o.append("as5=").append(tget(rt, a1, 5)).append(" keep6=").append(tget(rt, a1, 6)).append(' ');
+        int n = tvecCount(rt, rt.r(ti));
+        long a2 = tvecAssoc(rt, rt.r(ti), n - 1, 0xBBB);
+        o.append("astail=").append(tget(rt, a2, n - 1)).append(' ');
+        long a3 = tvecAssoc(rt, rt.r(ti), tvecCount(rt, rt.r(ti)), 0xCCC);
+        o.append("append=").append(tvecCount(rt, a3)).append(' ');
+        StringBuilder counts = new StringBuilder();
+        while (tvecCount(rt, rt.r(ti)) > 1020) rt.setR(ti, tvecPop(rt, rt.r(ti)));
+        counts.append(tvecCount(rt, rt.r(ti))).append(':').append(tvecShift(rt, rt.r(ti))).append(' ');
+        while (tvecCount(rt, rt.r(ti)) > 30) rt.setR(ti, tvecPop(rt, rt.r(ti)));
+        counts.append(tvecCount(rt, rt.r(ti))).append(':').append(tvecShift(rt, rt.r(ti))).append(' ');
+        o.append("pops=").append(counts);
+        int bad2 = 0;
+        for (int i = 6; i < 30; i++) if (tget(rt, rt.r(ti), i) != 0x1000 + i) bad2++;
+        o.append("popwrong=").append(bad2).append(' ');
+        long p = tvecPersistent(rt, rt.r(ti));
+        o.append("pcnt=").append(Vec.count(rt, p)).append(" ptail=").append(nodeLen(rt, rt.slot(p, V_TAIL)))
+         .append(" dead=").append(Val.isNil(rt.slot(rt.r(ti), T_EDIT)) ? 1 : 0).append(' ');
+        long te = transient_(rt, build(rt, 0, BITS));
+        o.append("pop0nil=").append(Val.isNil(tvecPop(rt, te)) ? 1 : 0).append(' ');
+        long t1 = transient_(rt, build(rt, 1, BITS));
+        o.append("pop1=").append(tvecCount(rt, tvecPop(rt, t1))).append(' ');
+        System.out.println(o.toString());
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    const int BITS = 5, WIDTH = 32, MASK = 31;
+    const int V_CNT = 0, V_SHIFT = 1, V_ROOT = 2, V_TAIL = 3, V_META = 4, V_HASH = 5;
+    const int T_CNT = 0, T_SHIFT = 1, T_ROOT = 2, T_TAIL = 3, T_EDIT = 4;
+    const int TY_TVEC = 25, TY_VOLATILE = 34;
+    const int TY_VEC = 6;
+    static class Obj {
+        internal const int TyNode = 10; internal const int TyVec = 6;
+        internal const int TyTvec = 25; internal const int TyVolatile = 34;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+        internal static long Fixnum(long n) { return n; }
+        internal static long AsFixnum(long v) { return v; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[200000];
+        internal sealed class GcT { internal int[] sp = new int[200000]; }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[200000];
+        internal long bump = 100;
+        internal bool starve = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal long Alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            // NIL-filled, as the real allocator does -- see the Rust head.
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    internal static class Vec {
+        internal static int Count(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_CNT)); }
+        internal static long Empty(Rt rt) { return EmptyVec(rt); }
+    }
+    // `flint.rt.vecnode`, STUBBED -- see the note in the Rust head.
+    static long NewNode(Rt rt, int n, long edit) {
+        long a = rt.Alloc(Obj.TyNode, n + 1);
+        if (a == 0) return NIL;
+        rt.SetSlot(a, 0, edit);
+        return Val.Heap(a);
+    }
+    static int NodeLen(Rt rt, long n) { return Olen(rt, n) - 1; }
+    static long NodeGet(Rt rt, long n, int i) { return rt.Slot(n, i + 1); }
+    static void NodeSet(Rt rt, long n, int i, long v) { rt.SetSlot(Val.AsHeap(n), i + 1, v); }
+    static long NodeEdit(Rt rt, long n) { return rt.Slot(n, 0); }
+    // `flint.rt.vecread`, STUBBED -- `vecread.drivers` verifies the real ones.
+    static long NodeClone(Rt rt, long n, int newlen, long edit) {
+        long fresh = NewNode(rt, newlen, edit);
+        if (Val.IsNil(fresh)) return NIL;
+        int have = NodeLen(rt, n);
+        int copy = System.Math.Min(newlen, have);
+        for (int i = 0; i < copy; i++) NodeSet(rt, fresh, i, NodeGet(rt, n, i));
+        return fresh;
+    }
+    static int VecShift(Rt rt, long v) { return (int) Val.AsFixnum(rt.Slot(v, V_SHIFT)); }
+    static int TailOff(Rt rt, long v) {
+        int c = Vec.Count(rt, v);
+        return c < WIDTH ? 0 : ((int)((uint)(c - 1) >> BITS)) << BITS;
+    }
+    // `flint.rt.vecwrite`, STUBBED -- see the Rust head.
+    static long NewVec(Rt rt, int cnt, int shift, long root, long tail, long meta) {
+        long a = rt.Alloc(TY_VEC, 6);
+        if (a == 0) return NIL;
+        rt.SetSlot(a, V_CNT, cnt); rt.SetSlot(a, V_SHIFT, shift);
+        rt.SetSlot(a, V_ROOT, root); rt.SetSlot(a, V_TAIL, tail);
+        rt.SetSlot(a, V_META, meta); rt.SetSlot(a, V_HASH, NIL);
+        return Val.Heap(a);
+    }
+    static long EmptyVec(Rt rt) {
+        return NewVec(rt, 0, BITS, NewNode(rt, WIDTH, NIL), NewNode(rt, 0, NIL), NIL);
+    }
+    // `VecConj` is STUBBED as a MARKER, not reimplemented -- see the Rust head.
+    static long VecConj(Rt rt, long v, long x) { return 0xC0FFEE; }
+    static long Build(Rt rt, int n, int shift) {
+        int toff = n < WIDTH ? 0 : ((int)((uint)(n - 1) >> BITS)) << BITS;
+        long root = NewNode(rt, WIDTH, NIL);
+        int ri = rt.Push(root);
+        for (int i = 0; i < toff; i += WIDTH) {
+            long leaf = NewNode(rt, WIDTH, NIL);
+            int li = rt.Push(leaf);
+            for (int k = 0; k < WIDTH; k++) NodeSet(rt, rt.R(li), k, 0x1000 + i + k);
+            if (shift == BITS) {
+                NodeSet(rt, rt.R(ri), (int)((uint) i >> BITS), rt.R(li));
+            } else {
+                int outer = ((int)((uint) i >> 10)) & MASK;
+                long mid = NodeGet(rt, rt.R(ri), outer);
+                if (Val.IsNil(mid)) { mid = NewNode(rt, WIDTH, NIL); NodeSet(rt, rt.R(ri), outer, mid); }
+                NodeSet(rt, mid, ((int)((uint) i >> BITS)) & MASK, rt.R(li));
+            }
+            rt.PopTo(li);
+        }
+        int tailn = n - toff;
+        long tail = NewNode(rt, tailn, NIL);
+        int ti = rt.Push(tail);
+        for (int k = 0; k < tailn; k++) NodeSet(rt, rt.R(ti), k, 0x1000 + toff + k);
+        long outv = NewVec(rt, n, shift, rt.R(ri), rt.R(ti), NIL);
+        rt.PopTo(ri);
+        return outv;
+    }
+    static long Get(Rt rt, long v, int i) { return NodeGet(rt, ArrayFor(rt, v, i), i & MASK); }
+    // STUBBED -- see the Rust head.
+    static int TvecCount(Rt rt, long t) { return (int) Val.AsFixnum(rt.Slot(t, T_CNT)); }
+    static int TvecShift(Rt rt, long t) { return (int) Val.AsFixnum(rt.Slot(t, T_SHIFT)); }
+    static int TvecTailOff(Rt rt, long t) {
+        int c = TvecCount(rt, t);
+        return c < WIDTH ? 0 : ((c - 1) >> BITS) << BITS;
+    }
+    static long EnsureEditable(Rt rt, long node, long edit) {
+        return NodeEdit(rt, node) == edit ? node : NodeClone(rt, node, WIDTH, edit);
+    }
+    static long TArrayFor(Rt rt, long t, int i) {
+        if (i >= TvecTailOff(rt, t)) return rt.Slot(t, T_TAIL);
+        long node = rt.Slot(t, T_ROOT);
+        int level = TvecShift(rt, t);
+        while (level > 0) { node = NodeGet(rt, node, (i >> level) & MASK); level -= BITS; }
+        return node;
+    }
+    static long NewPath(Rt rt, int level, long node, long edit) {
+        if (level == 0) return node;
+        long child = NewPath(rt, level - BITS, node, edit);
+        long parent = NewNode(rt, WIDTH, edit);
+        if (Val.IsNil(parent)) return NIL;
+        NodeSet(rt, parent, 0, child);
+        return parent;
+    }
+    static long PopTail(Rt rt, int level, long node, int cnt) {
+        int subidx = ((cnt - 2) >> level) & MASK;
+        if (level > BITS) {
+            long child = NodeGet(rt, node, subidx);
+            long newchild = PopTail(rt, level - BITS, child, cnt);
+            if (Val.IsNil(newchild) && subidx == 0) return NIL;
+            // `deep` and `flat`, not `ret` twice: C# refuses a local whose name
+            // is reused in an enclosing scope (CS0136).
+            long deep = NodeClone(rt, node, WIDTH, NIL);
+            NodeSet(rt, deep, subidx, newchild);
+            return deep;
+        }
+        if (subidx == 0) return NIL;
+        long flat = NodeClone(rt, node, WIDTH, NIL);
+        NodeSet(rt, flat, subidx, NIL);
+        return flat;
+    }
+    static long NewEditToken(Rt rt) { return Val.Heap(rt.Alloc(TY_VOLATILE, 1)); }
+    static long Transient_(Rt rt, long v) {
+        long edit = NewEditToken(rt);
+        long tail = NodeClone(rt, rt.Slot(v, V_TAIL), WIDTH, edit);
+        long root = rt.Slot(v, V_ROOT);
+        long a = rt.Alloc(TY_TVEC, 5);
+        rt.SetSlot(a, T_CNT, Vec.Count(rt, v)); rt.SetSlot(a, T_SHIFT, VecShift(rt, v));
+        rt.SetSlot(a, T_ROOT, root); rt.SetSlot(a, T_TAIL, tail); rt.SetSlot(a, T_EDIT, edit);
+        return Val.Heap(a);
+    }
+    static long TGet(Rt rt, long t, int i) { return NodeGet(rt, TArrayFor(rt, t, i), i & MASK); }
+    static long ArrayFor(Rt rt, long v, int i) {
+        if (i >= TailOff(rt, v)) return rt.Slot(v, V_TAIL);
+        long node = rt.Slot(v, V_ROOT);
+        int level = VecShift(rt, v);
+        while (level > 0) { node = NodeGet(rt, node, ((int)((uint) i >> level)) & MASK); level -= BITS; }
+        return node;
+    }
+    static long MkVec(Rt rt, int cnt, int shift, long root, long tail) {
+        long a = rt.Alloc(6, 6);
+        rt.SetSlot(a, V_CNT, cnt);
+        rt.SetSlot(a, V_SHIFT, shift);
+        rt.SetSlot(a, V_ROOT, root);
+        rt.SetSlot(a, V_TAIL, tail);
+        return Val.Heap(a);
+    }
+--csharp
+    public static void Main(string[] args) {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long v0 = Build(rt, 0, BITS);
+        int ti = rt.Push(Transient_(rt, v0));
+        for (int i = 0; i < 2100; i++) rt.SetR(ti, TvecConj(rt, rt.R(ti), 0x1000 + i));
+        long t = rt.R(ti);
+        o.Append("cnt=").Append(TvecCount(rt, t)).Append(" sh=").Append(TvecShift(rt, t)).Append(' ');
+        int bad = 0;
+        for (int i = 0; i < 2100; i++) if (TGet(rt, t, i) != 0x1000 + i) bad++;
+        o.Append("wrong=").Append(bad).Append(' ');
+        long before = rt.R(ti);
+        long after = TvecConj(rt, before, 0xDDD);
+        o.Append("inplace=").Append(before == after ? 1 : 0).Append(' ');
+        long a1 = TvecAssoc(rt, rt.R(ti), 5, 0xAAA);
+        o.Append("as5=").Append(TGet(rt, a1, 5)).Append(" keep6=").Append(TGet(rt, a1, 6)).Append(' ');
+        int n = TvecCount(rt, rt.R(ti));
+        long a2 = TvecAssoc(rt, rt.R(ti), n - 1, 0xBBB);
+        o.Append("astail=").Append(TGet(rt, a2, n - 1)).Append(' ');
+        long a3 = TvecAssoc(rt, rt.R(ti), TvecCount(rt, rt.R(ti)), 0xCCC);
+        o.Append("append=").Append(TvecCount(rt, a3)).Append(' ');
+        var counts = new System.Text.StringBuilder();
+        while (TvecCount(rt, rt.R(ti)) > 1020) rt.SetR(ti, TvecPop(rt, rt.R(ti)));
+        counts.Append(TvecCount(rt, rt.R(ti))).Append(':').Append(TvecShift(rt, rt.R(ti))).Append(' ');
+        while (TvecCount(rt, rt.R(ti)) > 30) rt.SetR(ti, TvecPop(rt, rt.R(ti)));
+        counts.Append(TvecCount(rt, rt.R(ti))).Append(':').Append(TvecShift(rt, rt.R(ti))).Append(' ');
+        o.Append("pops=").Append(counts);
+        int bad2 = 0;
+        for (int i = 6; i < 30; i++) if (TGet(rt, rt.R(ti), i) != 0x1000 + i) bad2++;
+        o.Append("popwrong=").Append(bad2).Append(' ');
+        long p = TvecPersistent(rt, rt.R(ti));
+        o.Append("pcnt=").Append(Vec.Count(rt, p)).Append(" ptail=").Append(NodeLen(rt, rt.Slot(p, V_TAIL)))
+         .Append(" dead=").Append(Val.IsNil(rt.Slot(rt.R(ti), T_EDIT)) ? 1 : 0).Append(' ');
+        long te = Transient_(rt, Build(rt, 0, BITS));
+        o.Append("pop0nil=").Append(Val.IsNil(TvecPop(rt, te)) ? 1 : 0).Append(' ');
+        long t1 = Transient_(rt, Build(rt, 1, BITS));
+        o.Append("pop1=").Append(TvecCount(rt, TvecPop(rt, t1))).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }

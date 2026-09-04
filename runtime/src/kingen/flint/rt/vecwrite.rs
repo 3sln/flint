@@ -48,7 +48,7 @@ impl Rt {
     /// What makes a tail that is being pushed into an EMPTY branch reachable at
     /// the right depth: the trie is uniform, so a leaf arriving at level 15 has
     /// to be wrapped three times to sit where an index expects it.
-    pub(crate) fn new_path(&mut self, level: u32, node: Value, edit: Value) -> Value {
+    pub fn new_path(&mut self, level: u32, node: Value, edit: Value) -> Value {
         if level == 0 {
             return node;
         }

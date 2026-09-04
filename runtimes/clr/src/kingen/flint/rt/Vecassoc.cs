@@ -74,7 +74,7 @@ public static class Vecassoc {
     }
     /// Unwind one leaf out of the trie: the node `cnt - 2` lives under, with
     /// the emptying branch removed, or nil when the branch disappears.
-    internal static long PopTail(Rt rt, int level, long node, int cnt) {
+    public static long PopTail(Rt rt, int level, long node, int cnt) {
         int subidx = ((int)((uint) (cnt - 2) >> level)) & MASK;
         if (level > BITS) {
             int @base = rt.Mark();

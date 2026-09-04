@@ -1079,6 +1079,41 @@ Vectors are built directly by the fixture rather than by conjing, for the same
 reason -- conj belongs to a required namespace. That is what made the level
 collapse testable at 1025 without depending on anything `vecwrite` does.
 
+### `Vec` is done bar the two `nth`s
+
+`vectrans.kin` (the transient's plumbing) and `vectwrite.kin` (`conj!`,
+`assoc!`, `pop!`, `persistent!`) take the last 256 lines out of `vector.rs`,
+211 out of the JVM and 209 out of the CLR.
+
+    file                      before   after
+    runtime/src/vector.rs      1 040     461   (and ~290 of that is tests)
+    jvm Vec.java                 478     155
+    clr Vec.cs                   469     136
+
+Seven kin sources, 802 generated lines across three targets, from one source
+each. What is left hand-written is small and named: `is-vector`,
+`is-vector-like`, `map-entry-as-vec`, `vec-count`, `vec-root`, `vec-tail`,
+`vec-from-roots`, and the two `nth`s.
+
+**Both `nth`s are the same blocked thing.** `vec_nth` and `tvec_nth` each
+answer `Option<Value>` in Rust and `NOT_FOUND` on the ports, and the
+convergence -- a `dflt` argument, as `map-get` already has -- is one decision
+covering both.
+
+The ports keep their old names as ONE-LINE DELEGATIONS to the generated
+bodies: `Vec.conj`, `Vec.assoc`, `Vec.pop`, `Vec.tconj`, `Vec.tassoc`,
+`Vec.tpop`, `Vec.tpersistent`, `Vec.transientOf`, `Vec.newEditToken` and the
+rest. That is 53 call sites for `conj` alone, in files that have nothing to do
+with vectors; renaming them is the trade this file already answered with
+"worth doing LAST".
+
+Two fixture notes, both the same lesson one more time. The C# probe hit CS0136
+-- a local named `ret` in two nested scopes -- which is the same rule that
+made `mapread` name its scalar count `sn`. And a chained rename in the script
+that builds the C# fixture turned `TvecShift` into `TVecShift` and then
+`tVecShift`; the compiler caught each one, which is the only reason
+generating fixtures by transformation is safe at all.
+
 ### Port order, re-derived
 
 | # | region | gate | lines across 3 |

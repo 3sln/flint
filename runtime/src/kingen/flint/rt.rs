@@ -24,3 +24,5 @@ pub mod vecnode;
 pub mod vecread;
 pub mod vecassoc;
 pub mod vecwrite;
+pub mod vectwrite;
+pub mod vectrans;

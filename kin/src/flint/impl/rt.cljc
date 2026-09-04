@@ -175,6 +175,7 @@
   the difference matters because a name can appear in a `case` label where a
   call cannot."
   '[TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ TY_STRSEQ TY_RANGE TY_VEC TY_NODE
+    TY_TVEC TY_VOLATILE
     TY_MAPENTRY TY_ARRAYMAP TY_HASHMAP TY_TABLEREF TY_SET TY_STR TY_KEYWORD
     TY_SYMBOL TY_BMNODE TY_COLLNODE])
 

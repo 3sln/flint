@@ -1,0 +1,203 @@
+;; Writing into a transient: `conj!`, `assoc!`, `pop!`, and `persistent!`.
+;;
+;; The same three shapes as the persistent half, with one difference that runs
+;; through all of them: a node this transient OWNS is written IN PLACE. That is
+;; the whole of the saving, and `ensure-editable` is where it is decided.
+;;
+;; So `conj!` on a tail that has room mutates the tail node and bumps the count
+;; and allocates NOTHING -- which is also why it can return `t` unchanged and
+;; why nothing can have moved underneath it on that path.
+;;
+;; `pop!` had no builtin on any runtime and answered `()` for the whole of this
+;; project's history, and neither port had a transient pop to call: the ports
+;; were given one by hand to get a conformance row. This replaces all three.
+(ns flint.rt.vectwrite
+  (:require [flint.impl.rt :refer [defn return if let local set do comment doc
+                                   not and == != < > >= - + bit-and shl ushr
+                                   mark push r set-r pop-to slot set-slot
+                                   fixnum nil? heap as-heap
+                                   Rt Value RootIx I32 Bool NIL
+                                   BITS WIDTH MASK
+                                   T_CNT T_SHIFT T_ROOT T_TAIL T_EDIT]]
+            [flint.rt.vecnode  :refer [new-node node-get node-set node-len]]
+            [flint.rt.vecread  :refer [node-clone]]
+            [flint.rt.vecwrite :refer [new-vec new-path]]
+            [flint.rt.vecassoc :refer [pop-tail]]
+            [flint.rt.vectrans :refer [tvec-count tvec-shift tvec-tail-off
+                                       ensure-editable t-array-for]]))
+
+(doc "Fold the tail into the trie, taking ownership of the spine as it goes."
+     ""
+     "The persistent `push-tail` CLONES every node on the way down; this one"
+     "calls `ensure-editable`, so a node already owned is written in place and"
+     "only a shared one is copied.")
+(defn ^:method ^Value t-push-tail [^:mut ^Rt rt ^I32 cnt ^I32 level
+                                   ^Value parent ^Value tailnode ^Value edit]
+  (let [^RootIx base (mark rt)
+        ^RootIx e (push rt edit)
+        ^RootIx t (push rt tailnode)
+        ^RootIx p (push rt parent)
+        ^Value ret (ensure-editable rt (r rt p) (r rt e))
+        ^RootIx ri (push rt ret)
+        ^I32 subidx (bit-and (ushr (- cnt 1) level) MASK)]
+    (local ^:mut ^Value insert)
+    (if (== level BITS)
+      (set insert (r rt t))
+      (let [^Value child (node-get rt (r rt ri) subidx)]
+        (if (nil? rt child)
+          (set insert (new-path rt (- level BITS) (r rt t) (r rt e)))
+          (set insert (t-push-tail rt cnt (- level BITS) child (r rt t) (r rt e))))))
+    (node-set rt (r rt ri) subidx insert)
+    (let [^Value out (r rt ri)]
+      (pop-to rt base)
+      (return out))))
+
+(doc "`conj!`: `x` appended, IN PLACE where it can be."
+     ""
+     "The common path allocates nothing at all -- it writes one slot of the"
+     "tail and bumps the count -- which is why it can hand back the same `t`"
+     "it was given without rooting it first: nothing can have moved.")
+(defn ^:pub ^:method ^Value tvec-conj [^:mut ^Rt rt ^Value t ^Value x]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^RootIx xi (push rt x)
+        ^I32 cnt (tvec-count rt t)]
+    (if (< (- cnt (tvec-tail-off rt t)) WIDTH)
+      (do
+        (node-set rt (slot rt t T_TAIL) (bit-and cnt MASK) (r rt xi))
+        (set-slot rt t T_CNT (fixnum (+ cnt 1)))
+        (pop-to rt base)
+        (return t)))
+    (comment "The tail is full: fold it into the trie and start a fresh one.")
+    (let [^RootIx ei (push rt (slot rt t T_EDIT))
+          ^RootIx tn (push rt (slot rt (r rt ti) T_TAIL))
+          ^Value newtail (new-node rt WIDTH (r rt ei))
+          ^RootIx nt (push rt newtail)]
+      (node-set rt (r rt nt) 0 (r rt xi))
+      (let [^Value tv (r rt ti)
+            ^I32 shift (tvec-shift rt tv)
+            ^Bool overflow (> (ushr cnt BITS) (shl 1 shift))]
+        (local ^:mut ^Value newroot)
+        (local ^:mut ^I32 newshift)
+        (if overflow
+          (do
+            (let [^Value nr (new-node rt WIDTH (r rt ei))
+                  ^RootIx nri (push rt nr)]
+              (node-set rt (r rt nri) 0 (slot rt (r rt ti) T_ROOT))
+              (comment "HOISTED for Rust: `node-set` and `new-path` both take"
+                       "`&mut self`, so nesting them is two mutable borrows.")
+              (let [^Value path (new-path rt shift (r rt tn) (r rt ei))]
+                (node-set rt (r rt nri) 1 path))
+              (set newroot (r rt nri))
+              (set newshift (+ shift BITS))))
+          (do
+            (set newroot (t-push-tail rt cnt shift (slot rt (r rt ti) T_ROOT)
+                                      (r rt tn) (r rt ei)))
+            (set newshift shift)))
+        (let [^Value tv2 (r rt ti)]
+          (set-slot rt tv2 T_ROOT newroot)
+          (set-slot rt tv2 T_SHIFT (fixnum newshift))
+          (set-slot rt tv2 T_TAIL (r rt nt))
+          (set-slot rt tv2 T_CNT (fixnum (+ cnt 1)))
+          (pop-to rt base)
+          (return tv2))))))
+
+(doc "Replace index `i` in an owned trie, taking ownership of the spine.")
+(defn ^:method ^Value t-do-assoc [^:mut ^Rt rt ^I32 level ^Value node ^I32 i
+                                  ^Value val ^Value edit]
+  (let [^RootIx base (mark rt)
+        ^RootIx e (push rt edit)
+        ^RootIx v (push rt val)
+        ^RootIx n (push rt node)
+        ^Value ret (ensure-editable rt (r rt n) (r rt e))
+        ^RootIx ri (push rt ret)]
+    (if (== level 0)
+      (node-set rt (r rt ri) (bit-and i MASK) (r rt v))
+      (let [^I32 subidx (bit-and (ushr i level) MASK)
+            ^Value child (node-get rt (r rt ri) subidx)
+            ^Value nc (t-do-assoc rt (- level BITS) child i (r rt v) (r rt e))]
+        (node-set rt (r rt ri) subidx nc)))
+    (let [^Value out (r rt ri)]
+      (pop-to rt base)
+      (return out))))
+
+(doc "`assoc!`: index `i` replaced, in place where it can be. `i` equal to the"
+     "count appends, the same rule a persistent vector follows.")
+(defn ^:pub ^:method ^Value tvec-assoc [^:mut ^Rt rt ^Value t ^I32 i ^Value x]
+  (let [^I32 cnt (tvec-count rt t)]
+    (if (== i cnt)
+      (return (tvec-conj rt t x)))
+    (let [^RootIx base (mark rt)
+          ^RootIx ti (push rt t)
+          ^RootIx xi (push rt x)]
+      (if (>= i (tvec-tail-off rt t))
+        (node-set rt (slot rt t T_TAIL) (bit-and i MASK) (r rt xi))
+        (let [^Value nr (t-do-assoc rt (tvec-shift rt t) (slot rt t T_ROOT) i
+                                    (r rt xi) (slot rt t T_EDIT))]
+          (set-slot rt (r rt ti) T_ROOT nr)))
+      (let [^Value out (r rt ti)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "`pop!`: one shorter, in place. NIL when it is empty -- the caller"
+     "raises, and the check is the CALLER's because `cnt` is unsigned and"
+     "`cnt - 1` on zero wraps rather than going negative.")
+(defn ^:pub ^:method ^Value tvec-pop [^:mut ^Rt rt ^Value t]
+  (let [^I32 cnt (tvec-count rt t)]
+    (if (== cnt 0)
+      (return NIL))
+    (if (== cnt 1)
+      (do (set-slot rt t T_CNT (fixnum 0))
+          (return t)))
+    (if (> (bit-and (- cnt 1) MASK) 0)
+      (do
+        (comment "Still inside the tail: the count is the whole of it.")
+        (set-slot rt t T_CNT (fixnum (- cnt 1)))
+        (return t)))
+    (comment "The tail is emptying: pull the previous leaf back out of the trie.")
+    (let [^RootIx base (mark rt)
+          ^RootIx ti (push rt t)
+          ^Value newtail (t-array-for rt t (- cnt 2))
+          ^RootIx nt (push rt newtail)
+          ^Value tv (r rt ti)
+          ^I32 sh (tvec-shift rt tv)]
+      (local ^:mut ^Value newroot)
+      (local ^:mut ^I32 newshift)
+      (set newroot (pop-tail rt sh (slot rt tv T_ROOT) cnt))
+      (set newshift sh)
+      (if (nil? rt newroot)
+        (set newroot (new-node rt WIDTH (slot rt (r rt ti) T_EDIT))))
+      (let [^RootIx nri (push rt newroot)]
+        (if (and (> newshift BITS) (nil? rt (node-get rt (r rt nri) 1)))
+          (do
+            (set-r rt nri (node-get rt (r rt nri) 0))
+            (set newshift (- newshift BITS))))
+        (let [^Value tv2 (r rt ti)]
+          (set-slot rt tv2 T_ROOT (r rt nri))
+          (set-slot rt tv2 T_TAIL (r rt nt))
+          (set-slot rt tv2 T_SHIFT (fixnum newshift))
+          (set-slot rt tv2 T_CNT (fixnum (- cnt 1)))
+          (pop-to rt base)
+          (return tv2))))))
+
+(doc "`persistent!`: the vector this transient was building."
+     ""
+     "Two things happen. The 32-wide working tail is TRIMMED to what is"
+     "actually used, because a persistent vector's tail length is part of its"
+     "shape. And the token is CLEARED, which invalidates the handle: using a"
+     "transient afterwards is a bug rather than a silent mutation of a value"
+     "somebody else now owns.")
+(defn ^:pub ^:method ^Value tvec-persistent [^:mut ^Rt rt ^Value t]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^I32 cnt (tvec-count rt t)
+        ^I32 shift (tvec-shift rt t)
+        ^I32 toff (tvec-tail-off rt t)
+        ^Value trimmed (node-clone rt (slot rt t T_TAIL) (- cnt toff) NIL)
+        ^RootIx tr (push rt trimmed)
+        ^Value tv (r rt ti)
+        ^RootIx ri (push rt (slot rt tv T_ROOT))]
+    (set-slot rt tv T_EDIT NIL)
+    (let [^Value out (new-vec rt cnt shift (r rt ri) (r rt tr) NIL)]
+      (pop-to rt base)
+      (return out))))

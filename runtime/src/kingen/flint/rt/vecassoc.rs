@@ -76,7 +76,7 @@ impl Rt {
     }
     /// Unwind one leaf out of the trie: the node `cnt - 2` lives under, with
     /// the emptying branch removed, or nil when the branch disappears.
-    pub(crate) fn pop_tail(&mut self, level: u32, node: Value, cnt: u32) -> Value {
+    pub fn pop_tail(&mut self, level: u32, node: Value, cnt: u32) -> Value {
         let subidx: u32 = ((cnt - 2) >> level) & MASK;
         if level > BITS {
             let base: usize = self.mark();
