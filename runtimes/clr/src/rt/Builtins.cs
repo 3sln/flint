@@ -289,7 +289,7 @@ public static class Builtins {
             if (rt.IsHeapTy(v, Obj.TyVec)) {
                 got = Vec.Nth(rt, v, i, Val.NotFound);
             } else if (Str.IsString(rt, v)) {
-                got = Str.Nth(rt, v, i);
+                got = Str.Nth(rt, v, i, Val.NotFound);
             } else if (rt.IsHeapTy(v, Obj.TyMapentry)) {
                 if (i == 0 || i == 1) got = rt.Slot(v, i);
             } else if (Val.IsNil(v)) {

@@ -334,10 +334,15 @@ public final class Str {
     /// The code point at index `i`, as a single-character string. NOT a char
     /// type: flint has no char, and `doc/decisions/0010` counts that among the
     /// documented divergences rather than a gap.
-    public static long nth(Rt rt, long v, int i) {
+    /// The one-character string at code point `i`, or `dflt` past the end.
+    ///
+    /// A DEFAULT rather than a fixed `NOT_FOUND`, matching `Vec.nth`,
+    /// `Maps.get` and the native runtime's `char_at`. Absence is an argument
+    /// in this runtime now, not a sentinel each caller has to know about.
+    public static long nth(Rt rt, long v, int i, long dflt) {
         byte[] out = new byte[4];
         int w = cpBytesAt(rt, v, i, out);
-        if (w < 0) return Val.NOT_FOUND;
+        if (w < 0) return dflt;
         byte[] one = new byte[w];
         System.arraycopy(out, 0, one, 0, w);
         return Val.inlineStr(one);

@@ -151,11 +151,25 @@ public final class Seqs {
             // differs by handing back a ref (`doc/decisions/0026`).
             if (rt.isHeapTy(coll, TY_MAPENTRY)) return rt.slot(coll, i);
             if (Table.isTable(rt, coll)) return Table.tableRef(rt, coll, i);
-            return Vec.nth(rt, coll, i, Val.NOT_FOUND);
+            // NIL, not NOT_FOUND, matching the native runtime. A vecseq's
+            // index is always inside its collection -- `seq` starts at 0 with
+            // a non-empty one and `next` bounds-checks -- so this default is
+            // unreachable, and it was answering a sentinel the caller would
+            // have had to know about.
+            return Vec.nth(rt, coll, i, Val.NIL);
         }
-        if (t == TY_STRSEQ) return Str.nth(rt, rt.slot(s, 0), (int) Val.asFixnum(rt.slot(s, 1)));
+        if (t == TY_STRSEQ) return Str.nth(rt, rt.slot(s, 0), (int) Val.asFixnum(rt.slot(s, 1)), Val.NIL);
         if (t == TY_RANGE) return rt.slot(s, 0);
-        return rt.throwStr("UnsupportedOperationException", "first over " + rt.describe(v));
+        // NIL, matching the native runtime, and UNREACHABLE either way: `seq`
+        // answers nil or a cons, vecseq, strseq or range, and every one of
+        // those is handled above. Probed over twelve conformance suites and a
+        // deliberately adversarial set of non-seqs -- zero hits on both.
+        //
+        // The ports raised here. The diagnostic is not lost in practice, and
+        // keeping it would mean `^:throws` on `first`, which turns its Rust
+        // signature into `Result<Value, String>` at every call site for an arm
+        // nothing can reach.
+        return Val.NIL;
     }
 
     /// `next`: the rest, or NIL when there is none. `rest` differs -- it gives

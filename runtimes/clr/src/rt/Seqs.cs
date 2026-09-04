@@ -124,11 +124,15 @@ public static class Seqs {
             // handing back a ref (`doc/decisions/0026`).
             if (rt.IsHeapTy(coll, Obj.TyMapentry)) return rt.Slot(coll, i);
             if (Table.isTable(rt, coll)) return Table.tableRef(rt, coll, i);
-            return Vec.Nth(rt, coll, i, Val.NotFound);
+            // NIL, not NotFound, matching native -- and unreachable. See the
+            // JVM's `first`.
+            return Vec.Nth(rt, coll, i, Val.Nil);
         }
-        if (t == Obj.TyStrseq) return Str.Nth(rt, rt.Slot(s, 0), (int) Val.AsFixnum(rt.Slot(s, 1)));
+        if (t == Obj.TyStrseq) return Str.Nth(rt, rt.Slot(s, 0), (int) Val.AsFixnum(rt.Slot(s, 1)), Val.Nil);
         if (t == Obj.TyRange) return rt.Slot(s, 0);
-        return rt.ThrowStr("UnsupportedOperationException", "first over " + rt.Describe(v));
+        // NIL, matching native, and unreachable: `Seq` answers nil or a cons,
+        // vecseq, strseq or range. See the JVM's `first`.
+        return Val.Nil;
     }
 
     /// `next`: the rest, or NIL when there is none. `rest` differs -- it gives

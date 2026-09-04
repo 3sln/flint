@@ -1285,6 +1285,35 @@ Reverted, because a change I cannot localise is not a change I can defend, and
 the tree stays green. The detector STAYS: it was built to test a hypothesis
 that turned out to be wrong, and it is worth more than the hypothesis was.
 
+### `first`'s four divergences, closed one at a time
+
+The table earlier in this file listed four. All four are gone, and the way
+each was settled is worth keeping because no two were settled the same way.
+
+| divergence | settled by |
+| --- | --- |
+| map entry: vecseq over the entry, or over a COPY | measurement -- 13.9% off a map walk, once the rooting bugs it exposed were fixed |
+| string index: BYTE offset or CODE POINT | a bug -- the byte design read a rope's header as text |
+| `nth` sentinel: `NIL` or `NOT_FOUND` | a proof of unreachability, then the simpler one |
+| default arm: nil or THROW | the same proof |
+
+The last two were probed rather than assumed. Over twelve conformance suites
+and a deliberately adversarial set of non-seqs -- `nil`, `[]`, `""`, `{}`,
+`#{}`, an empty range, an empty lazy-seq, a map entry -- both arms were hit
+ZERO times. That is a coverage zero on its own, so it is backed by a
+structural argument: `seq` answers nil, a cons, a vecseq, a strseq or a range,
+and `first` handles every one of those above the default. Nothing can reach
+it.
+
+Converged on nil, not on the throw. Keeping the throw would mean `^:throws` on
+`first`, and that turns its Rust signature into `Result<Value, String>` at
+every call site -- a real cost for an arm nothing can reach.
+
+`char_at` needed the `nth` convergence one function over: `Option<Value>` in
+Rust, a fixed sentinel on the ports, four call sites in Rust and two per port.
+It takes a `dflt` now, like `vec-nth` and `map-get`. Three lookups in this
+runtime, one way of answering absence.
+
 ### Port order, re-derived
 
 | # | region | gate | lines across 3 |

@@ -300,7 +300,7 @@ public final class Builtins {
             if (rt.isHeapTy(v, TY_VEC)) {
                 got = Vec.nth(rt, v, i, Val.NOT_FOUND);
             } else if (Str.isString(rt, v)) {
-                got = Str.nth(rt, v, i);
+                got = Str.nth(rt, v, i, Val.NOT_FOUND);
             } else if (rt.isHeapTy(v, TY_MAPENTRY)) {
                 if (i == 0 || i == 1) got = rt.slot(v, i);
             } else if (Val.isNil(v)) {

@@ -136,7 +136,7 @@ impl Rt {
                 // text, silently, because it reached past that abstraction to
                 // raw bytes (`doc/decisions` item 0o).
                 let (st, i) = (self.slot(s, 0), self.slot(s, 1).as_fixnum() as u32);
-                self.char_at(st, i).unwrap_or(NIL)
+                self.char_at(st, i, NIL)
             }
             TY_RANGE => self.slot(s, 0),
             _ => NIL,

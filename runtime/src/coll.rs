@@ -254,7 +254,7 @@ impl Rt {
         }
         if self.is_string(coll) {
             return match self.as_i64(k) {
-                Some(i) if i >= 0 => self.char_at(coll, i as u32).unwrap_or(dflt),
+                Some(i) if i >= 0 => self.char_at(coll, i as u32, dflt),
                 _ => dflt,
             };
         }
@@ -346,12 +346,16 @@ impl Rt {
             return dflt.unwrap_or(NIL);
         }
         if self.is_string(coll) {
-            return match self.char_at(coll, i) {
-                Some(c) => c,
-                None => match dflt {
-                    Some(d) => d,
-                    None => self.throw_str("IndexOutOfBoundsException", "string index out of range"),
-                },
+            // NOT_FOUND as the probe: this arm must tell "past the end" from
+            // "the caller's default is nil", and must RAISE when there is no
+            // default at all. NOT_FOUND is the one value a character cannot be.
+            let c = self.char_at(coll, i, crate::value::NOT_FOUND);
+            if c != crate::value::NOT_FOUND {
+                return c;
+            }
+            return match dflt {
+                Some(d) => d,
+                None => self.throw_str("IndexOutOfBoundsException", "string index out of range"),
             };
         }
         // A byte string indexes like a vector of small integers, which is
@@ -818,10 +822,17 @@ impl Rt {
     /// rope first, which threw away the per-node code-point counts
     /// `doc/decisions/0011` computes, stores and traces for exactly this
     /// question -- and then answered it by scanning.
-    pub fn char_at(&mut self, s: Value, i: u32) -> Option<Value> {
+    /// The one-character string at code point `i`, or `dflt` past the end.
+    ///
+    /// A DEFAULT rather than an `Option`, the same convergence `vec_nth` and
+    /// `map_get` already made: the ports answered a sentinel, Rust answered
+    /// `Option`, and every caller here was spelling a default out anyway.
+    pub fn char_at(&mut self, s: Value, i: u32, dflt: Value) -> Value {
         let mut out = [0u8; 4];
-        let w = self.cp_bytes_at(s, i, &mut out)?;
-        Some(Value::inline_str(&out[..w as usize]))
+        match self.cp_bytes_at(s, i, &mut out) {
+            Some(w) => Value::inline_str(&out[..w as usize]),
+            None => dflt,
+        }
     }
 
     pub fn code_point_at(&mut self, s: Value, i: Value) -> Value {

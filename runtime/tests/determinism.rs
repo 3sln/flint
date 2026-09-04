@@ -15,7 +15,7 @@ fn walk_cost(collect_at: Option<u32>) -> u64 {
             rt.gc.minor(&mut rt.roots);
         }
         let v = rt.r(si);
-        let _ = rt.char_at(v, i);
+        let _ = rt.char_at(v, i, flint_rt::value::NIL);
     }
     rt.steps - before
 }

@@ -217,10 +217,11 @@ public static class Str {
     /// The code point at index `i`, as a single-character string. NOT a char
     /// type: flint has no char, and `doc/decisions/0010` counts that among the
     /// documented divergences rather than a gap.
-    public static long Nth(Rt rt, long v, int i) {
+    /// The character at code point `i`, or `dflt`. See the JVM's `nth`.
+    public static long Nth(Rt rt, long v, int i, long dflt) {
         var outb = new byte[4];
         int w = CpBytesAt(rt, v, i, outb);
-        if (w < 0) return Val.NotFound;
+        if (w < 0) return dflt;
         var one = new byte[w];
         System.Array.Copy(outb, 0, one, 0, w);
         return Val.InlineStr(one);
