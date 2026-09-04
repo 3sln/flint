@@ -1156,6 +1156,34 @@ that builds the C# fixture turned `TvecShift` into `TVecShift` and then
 `tVecShift`; the compiler caught each one, which is the only reason
 generating fixtures by transformation is safe at all.
 
+### `count-hint`: the ports were right about the type and wrong about the name
+
+`seqcore.kin` ships `count-hint` and `cons`. The convergence in it is small
+and is a good example of the shape these keep taking.
+
+Rust answered `Option<u32>`; both ports answered a VALUE, fixnum or nil. The
+ports were right, and for a reason visible at the call site: the answer goes
+straight into a cons slot that holds a fixnum or nil, so the `Option` was
+being unwrapped into exactly that, one line later.
+
+But the ports also folded the `+ 1` in -- `countHint` answered the count of
+the cons being BUILT, not of the value handed to it. That reads fine while
+`cons` is the only caller, and it is wrong for `seq_count`, which wants the
+value's own count and is why Rust had not folded it. So the type came from
+the ports and the meaning from Rust: `count-hint` answers `v`'s own count, and
+`cons` adds one.
+
+Neither side had it right whole. That is worth recording because the previous
+convergences all went one way or the other; this is the first where the answer
+was a piece of each.
+
+The CLR's cons slots were `CFirst` .. `CCount` -- the same PascalCase
+divergence its `Vec` constants had, renamed for the same reason.
+
+`is-fixnum` joins the vocabulary beside `nil?`. Needed wherever a slot holds
+"a number or nothing", which is a cons's cached count and a vector's cached
+hash, and it was missing.
+
 ### Port order, re-derived
 
 | # | region | gate | lines across 3 |

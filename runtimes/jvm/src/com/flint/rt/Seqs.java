@@ -3,6 +3,7 @@ package com.flint.rt;
 import flint.rt.Mapcore;
 
 import static com.flint.rt.Obj.*;
+import static flint.rt.Seqcore.*;
 import static flint.rt.Seqs.*;
 
 /// Seqs, ported from `runtime/src/seqs.rs`.
@@ -18,43 +19,16 @@ import static flint.rt.Seqs.*;
 /// `seq` over a vector is a VECSEQ -- a cursor, not a copy -- so walking one
 /// allocates a small object per step rather than materialising anything.
 public final class Seqs {
+
+    /// `cons`, under the name its callers already use. The body is GENERATED,
+    /// as `Seqcore.cons`; renaming ~20 call sites across this runtime for a
+    /// naming win is the trade `doc/goals/kin-port.md` answered with "LAST".
+    public static long cons(Rt rt, long head, long tail) { return flint.rt.Seqcore.cons(rt, head, tail); }
     private Seqs() {}
 
     public static final int C_FIRST = 0, C_REST = 1, C_META = 2, C_COUNT = 3;
 
-    /// Rooted across the allocation and read back afterwards. `cons` is the
-    /// function the Rust's comment singles out as getting this right, and the
-    /// reason is that both arguments are live across an `alloc` that can move
-    /// them.
-    public static long cons(Rt rt, long head, long tail) {
-        int base = rt.mark();
-        int h = rt.push(head);
-        int t = rt.push(tail);
-        long a = rt.alloc(TY_CONS, 4);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        long cnt = countHint(rt, rt.r(t));
-        rt.setSlot(a, C_FIRST, rt.r(h));
-        rt.setSlot(a, C_REST, rt.r(t));
-        rt.setSlot(a, C_META, Val.NIL);
-        rt.setSlot(a, C_COUNT, cnt);
-        rt.popTo(base);
-        return Val.heap(a);
-    }
 
-    /// A count if it is known WITHOUT walking, else nil. Keeping it on the cons
-    /// is what makes `count` O(1) on a list built by consing.
-    static long countHint(Rt rt, long v) {
-        if (Val.isNil(v)) return Val.fixnum(1);
-        if (!Val.isHeap(v)) return Val.NIL;
-        int t = ty(rt.gc.sp, Val.asHeap(v));
-        if (t == TY_EMPTY_LIST) return Val.fixnum(1);
-        if (t == TY_CONS) {
-            long c = rt.slot(v, C_COUNT);
-            return Val.isFixnum(c) ? Val.fixnum(Val.asFixnum(c) + 1) : Val.NIL;
-        }
-        if (t == TY_VEC) return Val.fixnum(Vec.count(rt, v) + 1);
-        return Val.NIL;
-    }
 
     /// The ONE empty list, not a fresh one.
     ///

@@ -1,0 +1,246 @@
+--rust-head
+type Addr = u32;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const AM_BASE: u32 = 2; const AM_META: u32 = 0; const AM_HASH: u32 = 1;
+const HM_CNT: u32 = 0; const HM_ROOT: u32 = 1; const HM_META: u32 = 2; const HM_HASH: u32 = 3;
+const TY_ARRAYMAP: u8 = 14; const TY_HASHMAP: u8 = 15;
+const TY_CONS: u8 = 1; const TY_EMPTY_LIST: u8 = 7; const TY_LAZYSEQ: u8 = 3;
+const TY_VECSEQ: u8 = 11; const TY_STRSEQ: u8 = 12; const TY_RANGE: u8 = 13;
+const TY_VEC: u8 = 6; const TY_SET: u8 = 16;
+const C_FIRST: u32 = 0; const C_REST: u32 = 1; const C_META: u32 = 2; const C_COUNT: u32 = 3;
+const TY_TABLEREF: u8 = 50;
+mod table { pub const RF_SCHEMA: u32 = 0; } const TY_MAPENTRY: u8 = 20;
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    // A FIXNUM in the fixture is anything below the heap floor and not
+    // NIL, which is all `count_hint` needs to discriminate.
+    fn is_fixnum(self) -> bool { self.0 < 100 && self.0 != NIL.0 }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+struct Gc { sp: Vec<u8> }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, starve: bool }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        if self.starve { return 0; }
+        let a = self.bump; self.bump += n as u64 + 1;
+        // NIL-FILLED, as the real allocator does (`gc.zero_body` fills value
+        // slots with NIL). Leaving them at 0 makes "this slot is absent" read
+        // as present, because NIL is 0xFFFF -- and every target agrees on the
+        // wrong answer, which is the one failure a three-way comparison cannot
+        // catch. It hid `vec_pop`'s level collapse entirely.
+        self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, n: Value) -> u32 { self.lens[n.0 as usize] }
+    // A ref's schema is one slot away and its length is the column count.
+    fn schema_len(&self, s: Value) -> u32 { self.h[s.0 as usize] as u32 }
+    fn vec_count(&self, v: Value) -> u32 { self.h[v.0 as usize] as u32 }
+}
+// `ty` answers a u8 in the real runtime; the fixture says so too, because
+// a driver that widens it compiles here and does not compile there.
+fn ty(sp: &Vec<u8>, a: Addr) -> u8 { sp[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 4000], gc: Gc { sp: vec![0u8; 4000] }, lens: vec![0; 4000],
+                      bump: 100, roots: Vec::new(), starve: false };
+    let mut o = String::new();
+
+    // count_hint over every case it answers, and one it does not.
+    let el = { let a = rt.alloc(TY_EMPTY_LIST, 1); Value::heap(a) };
+    let vv = { let a = rt.alloc(TY_VEC, 6); rt.h[a as usize] = 7; Value::heap(a) };
+    let lz = { let a = rt.alloc(TY_LAZYSEQ, 2); Value::heap(a) };
+    o.push_str(&format!("hnil={} hel={} hvec={} hlazy={} ",
+        rt.count_hint(NIL).0, rt.count_hint(el).0,
+        rt.count_hint(vv).0, rt.count_hint(lz).0));
+
+    // cons onto a counted tail keeps counting; onto an uncounted one stops.
+    let c1 = rt.cons(Value(11), el);
+    let c2 = rt.cons(Value(12), c1);
+    let c3 = rt.cons(Value(13), c2);
+    o.push_str(&format!("counts={},{},{} ",
+        rt.slot(c1, C_COUNT).0, rt.slot(c2, C_COUNT).0, rt.slot(c3, C_COUNT).0));
+    o.push_str(&format!("firsts={},{},{} ",
+        rt.slot(c3, C_FIRST).0, rt.slot(c2, C_FIRST).0, rt.slot(c1, C_FIRST).0));
+    o.push_str(&format!("restis={} meta={} ",
+        (rt.slot(c3, C_REST) == c2) as u32, rt.slot(c3, C_META).0));
+
+    // Onto a LAZY tail: the count is unknown, so the cell holds nil and it
+    // stays nil however many cells are built on top.
+    let u1 = rt.cons(Value(21), lz);
+    let u2 = rt.cons(Value(22), u1);
+    o.push_str(&format!("uncounted={},{} ", rt.slot(u1, C_COUNT).0, rt.slot(u2, C_COUNT).0));
+
+    // Onto a VECTOR tail, which is counted without walking.
+    let cv = rt.cons(Value(31), vv);
+    o.push_str(&format!("onvec={} ", rt.slot(cv, C_COUNT).0));
+
+    // A starved allocator answers nil rather than a half-built cell.
+    rt.starve = true;
+    o.push_str(&format!("starved={} ", rt.cons(Value(1), el).is_nil() as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int AM_BASE = 2, AM_META = 0, AM_HASH = 1;
+    static final int HM_CNT = 0, HM_ROOT = 1, HM_META = 2, HM_HASH = 3;
+    static final int TY_ARRAYMAP = 14, TY_HASHMAP = 15, TY_TABLEREF = 50, TY_MAPENTRY = 20;
+    static final int TY_CONS = 1, TY_EMPTY_LIST = 7, TY_LAZYSEQ = 3, TY_VECSEQ = 11;
+    static final int TY_STRSEQ = 12, TY_RANGE = 13, TY_VEC = 6, TY_SET = 16;
+    static final int C_FIRST = 0, C_REST = 1, C_META = 2, C_COUNT = 3;
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static boolean isHeap(long v) { return v >= 100; }
+        static long asHeap(long v) { return v; }
+        static long fixnum(long n) { return n; }
+        static long heap(long a) { return a; }
+        static long asFixnum(long v) { return v; }
+        static boolean isFixnum(long v) { return v < 100 && v != NIL; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Rt {
+        long[] h = new long[400];
+        static final class Gc { int[] sp = new int[400]; }
+        Gc gc = new Gc();
+        int[] lens = new int[400];
+        long bump = 100;
+        boolean starve = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;   // see the Rust head
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    static final class Vec { static int count(Rt rt, long v) { return (int) rt.h[(int) v]; } }
+    static final class Table {
+        static final int RF_SCHEMA = 0;
+        static int schemaLen(Rt rt, long s) { return (int) rt.h[(int) s]; }
+    }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long el = Val.heap(rt.alloc(TY_EMPTY_LIST, 1));
+        long vv = Val.heap(rt.alloc(TY_VEC, 6)); rt.h[(int) vv] = 7;
+        long lz = Val.heap(rt.alloc(TY_LAZYSEQ, 2));
+        o.append("hnil=").append(countHint(rt, NIL)).append(" hel=").append(countHint(rt, el))
+         .append(" hvec=").append(countHint(rt, vv)).append(" hlazy=").append(countHint(rt, lz)).append(' ');
+        long c1 = cons(rt, 11, el), c2 = cons(rt, 12, c1), c3 = cons(rt, 13, c2);
+        o.append("counts=").append(rt.slot(c1, C_COUNT)).append(',').append(rt.slot(c2, C_COUNT))
+         .append(',').append(rt.slot(c3, C_COUNT)).append(' ');
+        o.append("firsts=").append(rt.slot(c3, C_FIRST)).append(',').append(rt.slot(c2, C_FIRST))
+         .append(',').append(rt.slot(c1, C_FIRST)).append(' ');
+        o.append("restis=").append(rt.slot(c3, C_REST) == c2 ? 1 : 0)
+         .append(" meta=").append(rt.slot(c3, C_META)).append(' ');
+        long u1 = cons(rt, 21, lz), u2 = cons(rt, 22, u1);
+        o.append("uncounted=").append(rt.slot(u1, C_COUNT)).append(',').append(rt.slot(u2, C_COUNT)).append(' ');
+        long cv = cons(rt, 31, vv);
+        o.append("onvec=").append(rt.slot(cv, C_COUNT)).append(' ');
+        rt.starve = true;
+        o.append("starved=").append(Val.isNil(cons(rt, 1, el)) ? 1 : 0).append(' ');
+        System.out.println(o.toString());
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    const int AM_BASE = 2, AM_META = 0, AM_HASH = 1;
+    const int C_FIRST = 0, C_REST = 1, C_META = 2, C_COUNT = 3;
+    const int HM_CNT = 0, HM_ROOT = 1, HM_META = 2, HM_HASH = 3;
+    static class Obj {
+        internal const int TyArraymap = 14, TyHashmap = 15, TyTableref = 50, TyMapentry = 20;
+        internal const int TyCons = 1, TyEmptyList = 7, TyLazyseq = 3, TyVecseq = 11;
+        internal const int TyStrseq = 12, TyRange = 13, TyVec = 6, TySet = 16;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long Fixnum(long n) { return n; }
+        internal static long Heap(long a) { return a; }
+        internal static long AsFixnum(long v) { return v; }
+        internal static bool IsFixnum(long v) { return v < 100 && v != Nil; }
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[400];
+        internal sealed class GcT { internal int[] sp = new int[400]; }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[400];
+        internal long bump = 100;
+        internal bool starve = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;   // see the Rust head
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    internal static class Vec { internal static int Count(Rt rt, long v) { return (int) rt.h[(int) v]; } }
+    // Nested to reproduce the port's FULLY QUALIFIED `Flint.Rt.Table`, which
+    // the real C# needs because a `Table` member would shadow the class.
+    internal static class Flint {
+        internal static class Rt {
+            internal static class Table {
+                internal const int RF_SCHEMA = 0;
+                internal static int schemaLen(Probe.Rt rt, long s) { return (int) rt.h[(int) s]; }
+            }
+        }
+    }
+--csharp
+    public static void Main(string[] args) {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long el = Val.Heap(rt.Alloc(Obj.TyEmptyList, 1));
+        long vv = Val.Heap(rt.Alloc(Obj.TyVec, 6)); rt.h[(int) vv] = 7;
+        long lz = Val.Heap(rt.Alloc(Obj.TyLazyseq, 2));
+        o.Append("hnil=").Append(CountHint(rt, NIL)).Append(" hel=").Append(CountHint(rt, el))
+         .Append(" hvec=").Append(CountHint(rt, vv)).Append(" hlazy=").Append(CountHint(rt, lz)).Append(' ');
+        long c1 = Cons(rt, 11, el), c2 = Cons(rt, 12, c1), c3 = Cons(rt, 13, c2);
+        o.Append("counts=").Append(rt.Slot(c1, C_COUNT)).Append(',').Append(rt.Slot(c2, C_COUNT))
+         .Append(',').Append(rt.Slot(c3, C_COUNT)).Append(' ');
+        o.Append("firsts=").Append(rt.Slot(c3, C_FIRST)).Append(',').Append(rt.Slot(c2, C_FIRST))
+         .Append(',').Append(rt.Slot(c1, C_FIRST)).Append(' ');
+        o.Append("restis=").Append(rt.Slot(c3, C_REST) == c2 ? 1 : 0)
+         .Append(" meta=").Append(rt.Slot(c3, C_META)).Append(' ');
+        long u1 = Cons(rt, 21, lz), u2 = Cons(rt, 22, u1);
+        o.Append("uncounted=").Append(rt.Slot(u1, C_COUNT)).Append(',').Append(rt.Slot(u2, C_COUNT)).Append(' ');
+        long cv = Cons(rt, 31, vv);
+        o.Append("onvec=").Append(rt.Slot(cv, C_COUNT)).Append(' ');
+        rt.starve = true;
+        o.Append("starved=").Append(Val.IsNil(Cons(rt, 1, el)) ? 1 : 0).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }

@@ -19,6 +19,7 @@ pub mod mapwrite;
 pub mod merge;
 pub mod nodeclass;
 pub mod pike;
+pub mod seqcore;
 pub mod seqs;
 pub mod vecnode;
 pub mod vecread;

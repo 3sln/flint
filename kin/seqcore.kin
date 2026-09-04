@@ -1,0 +1,73 @@
+;; What a SEQ is, what can become one, and how a list is built.
+;;
+;; `cons` keeps a COUNT on the cell when the tail's count is known without
+;; walking, which is what makes `count` O(1) on a list built by consing. When
+;; it is not known -- a lazy seq, a range, anything that has to be walked --
+;; the slot holds nil and `count` walks.
+;;
+;;     TY_CONS  [first, rest, meta, count]
+;;
+;; `is-seq` and `is-seqable` are different questions and the difference is the
+;; whole of why both exist: a vector is not a seq but `seq` accepts one, and a
+;; string is neither a heap seq nor excluded.
+(ns flint.rt.seqcore
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   not or == !=
+                                   mark push r pop-to alloc set-at slot heap
+                                   fixnum as-fixnum nil? is-heap as-heap ty
+                                   vec-count is-fixnum
+                                   + -
+                                   Rt Value Addr RootIx I32 Ty Bool NIL
+                                   C_FIRST C_REST C_META C_COUNT
+                                   TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ
+                                   TY_STRSEQ TY_RANGE TY_VEC TY_MAPENTRY
+                                   TY_ARRAYMAP TY_HASHMAP TY_SET]]))
+
+(doc "The count of `v` if it is known WITHOUT walking, else nil."
+     ""
+     "A VALUE and not an absent one: the answer goes straight into a slot that"
+     "holds a fixnum or nil, so Rust's `Option<u32>` was being unwrapped into"
+     "exactly that, one line later."
+     ""
+     "It answers `v`'s OWN count. Both ports folded the `+ 1` in here, which"
+     "reads fine while `cons` is the only caller and is wrong for `seq-count`,"
+     "which wants `v`'s own count -- so the `+ 1` moved to `cons`, and this is"
+     "named for what it answers.")
+(defn ^:pub ^:method ^Value count-hint [^Rt rt ^Value v]
+  (if (nil? rt v)
+    (return (fixnum 0)))
+  (if (not (is-heap v))
+    (return NIL))
+  (let [^Ty t (ty rt (as-heap v))]
+    (if (== t TY_EMPTY_LIST)
+      (return (fixnum 0)))
+    (if (== t TY_CONS)
+      (return (slot rt v C_COUNT)))
+    (if (== t TY_VEC)
+      (return (fixnum (vec-count rt v))))
+    (return NIL)))
+
+(doc "`(cons head tail)`: a cell, counted when the tail's count is known."
+     ""
+     "Named `cons` and not `cons-cell`: it is what every runtime already calls"
+     "it, and a generated name that differs from the one 40 call sites use is"
+     "a rename dressed up as a port.")
+(defn ^:pub ^:method ^Value cons [^:mut ^Rt rt ^Value head ^Value tail]
+  (let [^RootIx base (mark rt)
+        ^RootIx h (push rt head)
+        ^RootIx t (push rt tail)
+        ^Addr a (alloc rt TY_CONS 4)]
+    (if (== a 0)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^Value hint (count-hint rt (r rt t))]
+      (set-at rt a C_FIRST (r rt h))
+      (set-at rt a C_REST (r rt t))
+      (set-at rt a C_META NIL)
+      (comment "The count of the CELL, which is the tail's plus one. Nil when"
+               "the tail's is unknown, and then `count` walks.")
+      (if (is-fixnum rt hint)
+        (set-at rt a C_COUNT (fixnum (+ (as-fixnum hint) 1)))
+        (set-at rt a C_COUNT NIL))
+      (pop-to rt base)
+      (return (heap a)))))

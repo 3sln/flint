@@ -1019,7 +1019,7 @@ public sealed class Rt : System.IDisposable {
             case TyArraymap: return Maps.AM_META;
             case TyHashmap: return Maps.HM_META;
             case TySet: return Sets.S_META;
-            case TyCons: return Seqs.CMeta;
+            case TyCons: return Seqs.C_META;
             case TyEmptyList: return 0;
             case TyLazyseq: return 2;
             case TyAtom: return 1;

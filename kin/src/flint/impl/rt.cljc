@@ -237,7 +237,13 @@
             ;; somewhere to put it.
             BITS WIDTH MASK
             V_CNT V_SHIFT V_ROOT V_TAIL V_META V_HASH
-            T_CNT T_SHIFT T_ROOT T_TAIL T_EDIT])))
+            T_CNT T_SHIFT T_ROOT T_TAIL T_EDIT
+            ;; The CONS slots. The CLR spelled these `CFirst` .. `CCount`,
+            ;; the same PascalCase divergence its `Vec` constants had, and it
+            ;; was renamed to match for the same reason: one runtime
+            ;; disagreeing with the other two is worth less than casing
+            ;; convention.
+            C_FIRST C_REST C_META C_COUNT])))
 
 (def names
   "Every type tag, spelled three ways. A NAME rather than a form, because a
@@ -336,6 +342,12 @@
                          :java "Num.f64({0}, {1})"
                          :csharp "Num.F64({0}, {1})"})
     'nil? (core/call {:rust "{1}.is_nil()" :java "Val.isNil({1})" :csharp "Val.IsNil({1})"})
+    ;; Is this value a FIXNUM? The companion to `nil?`, and needed wherever a
+    ;; slot holds "a number or nothing" -- a cons's cached count, a vector's
+    ;; cached hash. Same receiver-first shape as `nil?`.
+    'is-fixnum (core/call {:rust "{1}.is_fixnum()"
+                           :java "Val.isFixnum({1})"
+                           :csharp "Val.IsFixnum({1})"})
     'as-fixnum (core/call {:rust "{0}.as_fixnum()"
                            :java "Val.asFixnum({0})"
                            :csharp "Val.AsFixnum({0})"})

@@ -30,50 +30,7 @@ pub const LS_THUNK: u32 = 0;
 pub const LS_SEQ: u32 = 1;
 
 impl Rt {
-    pub fn cons(&mut self, head: Value, tail: Value) -> Value {
-        let base = self.mark();
-        let h = self.push(head);
-        let t = self.push(tail);
-        let a = self.alloc(TY_CONS, 4);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        let (head, tail) = (self.r(h), self.r(t));
-        self.pop_to(base);
-        let cnt = match self.count_hint(tail) {
-            Some(n) => Value::fixnum(n as i64 + 1),
-            None => NIL,
-        };
-        self.set_slot(a, C_FIRST, head);
-        self.set_slot(a, C_REST, tail);
-        self.set_slot(a, C_META, NIL);
-        self.set_slot(a, C_COUNT, cnt);
-        Value::heap(a)
-    }
 
-    /// A count if it is known without walking, else `None`.
-    fn count_hint(&self, v: Value) -> Option<u32> {
-        if v.is_nil() {
-            return Some(0);
-        }
-        if !v.is_heap() {
-            return None;
-        }
-        match ty(&self.gc.sp, v.as_heap()) {
-            TY_EMPTY_LIST => Some(0),
-            TY_CONS => {
-                let c = slot(&self.gc.sp, v.as_heap(), C_COUNT);
-                if c.is_fixnum() {
-                    Some(c.as_fixnum() as u32)
-                } else {
-                    None
-                }
-            }
-            TY_VEC => Some(self.vec_count(v)),
-            _ => None,
-        }
-    }
 
     pub fn is_seq(&self, v: Value) -> bool {
         v.is_heap()
@@ -328,8 +285,9 @@ impl Rt {
 
     /// Walk a seq to its length. `count` on a counted collection does not use this.
     pub fn seq_count(&mut self, v: Value) -> u32 {
-        if let Some(n) = self.count_hint(v) {
-            return n;
+        let hint = self.count_hint(v);
+        if hint.is_fixnum() {
+            return hint.as_fixnum() as u32;
         }
         let base = self.mark();
         let mut n = 0u32;

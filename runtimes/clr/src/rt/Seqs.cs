@@ -1,5 +1,7 @@
 namespace Flint.Rt;
 
+using static flint.rt.Seqcore;
+
 using flint.rt;
 
 using static flint.rt.Seqs;
@@ -15,41 +17,13 @@ using static flint.rt.Seqs;
 /// `seq` over a vector is a VECSEQ -- a cursor, not a copy -- so walking one
 /// allocates a small object per step rather than materialising anything.
 public static class Seqs {
-    public const int CFirst = 0, CRest = 1, CMeta = 2, CCount = 3;
 
-    /// Rooted across the allocation and read back afterwards. `cons` is the
-    /// function the Rust's comment singles out as getting this right, and the
-    /// reason is that both arguments are live across an `Alloc` that can move
-    /// them.
-    public static long Cons(Rt rt, long head, long tail) {
-        int bas = rt.Mark();
-        int h = rt.Push(head);
-        int t = rt.Push(tail);
-        long a = rt.Alloc(Obj.TyCons, 4);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-        long cnt = CountHint(rt, rt.R(t));
-        rt.SetSlot(a, CFirst, rt.R(h));
-        rt.SetSlot(a, CRest, rt.R(t));
-        rt.SetSlot(a, CMeta, Val.Nil);
-        rt.SetSlot(a, CCount, cnt);
-        rt.PopTo(bas);
-        return Val.Heap(a);
-    }
+    /// `Cons`, under the name its callers already use -- the body is
+    /// generated, as `Seqcore.Cons`.
+    public static long Cons(Rt rt, long head, long tail) { return flint.rt.Seqcore.Cons(rt, head, tail); }
+    public const int C_FIRST = 0, C_REST = 1, C_META = 2, C_COUNT = 3;
 
-    /// A count if it is known WITHOUT walking, else nil. Keeping it on the cons
-    /// is what makes `count` O(1) on a list built by consing.
-    static long CountHint(Rt rt, long v) {
-        if (Val.IsNil(v)) return Val.Fixnum(1);
-        if (!Val.IsHeap(v)) return Val.Nil;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
-        if (t == Obj.TyEmptyList) return Val.Fixnum(1);
-        if (t == Obj.TyCons) {
-            long c = rt.Slot(v, CCount);
-            return Val.IsFixnum(c) ? Val.Fixnum(Val.AsFixnum(c) + 1) : Val.Nil;
-        }
-        if (t == Obj.TyVec) return Val.Fixnum(Vec.Count(rt, v) + 1);
-        return Val.Nil;   // a lazy seq or a range: walking it to count would force it
-    }
+
 
     /// The ONE empty list, not a fresh one. See `Seqs.java` for why this
     /// allocated for so long, and what it cost.
@@ -153,7 +127,7 @@ public static class Seqs {
         long s = Seq(rt, v);
         if (Val.IsNil(s)) return Val.Nil;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(s));
-        if (t == Obj.TyCons) return rt.Slot(s, CFirst);
+        if (t == Obj.TyCons) return rt.Slot(s, C_FIRST);
         if (t == Obj.TyVecseq) {
             long coll = rt.Slot(s, 0);
             int i = (int) Val.AsFixnum(rt.Slot(s, 1));
@@ -173,7 +147,7 @@ public static class Seqs {
         long s = Seq(rt, v);
         if (Val.IsNil(s)) return Val.Nil;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(s));
-        if (t == Obj.TyCons) return Seq(rt, rt.Slot(s, CRest));
+        if (t == Obj.TyCons) return Seq(rt, rt.Slot(s, C_REST));
         if (t == Obj.TyVecseq) {
             long vec = rt.Slot(s, 0);
             int i = (int) Val.AsFixnum(rt.Slot(s, 1)) + 1;
