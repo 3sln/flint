@@ -62,7 +62,7 @@ public static class Mapcore {
         return rt.Slot(m, (AM_BASE + (2 * i)) + 1);
     }
     /// A fresh array map with room for `n` entries, or NIL if the heap is full.
-    internal static long NewArrayMap(Rt rt, int n) {
+    public static long NewArrayMap(Rt rt, int n) {
         long a = rt.Alloc(Obj.TyArraymap, AM_BASE + (2 * n));
         if (a == 0) {
             return Val.Nil;
@@ -76,7 +76,7 @@ public static class Mapcore {
     /// `root` and `meta` are ROOTED across the allocation and read back after
     /// it: `alloc` collects, and a value in a host local does not survive that
     /// (`doc/decisions/0031`).
-    internal static long NewHashMap(Rt rt, int cnt, long root, long meta) {
+    public static long NewHashMap(Rt rt, int cnt, long root, long meta) {
         int @base = rt.Mark();
         int ri = rt.Push(root);
         int mi = rt.Push(meta);

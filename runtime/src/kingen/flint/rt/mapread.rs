@@ -20,7 +20,7 @@ impl Rt {
     /// 
     /// `n` rather than `-1` or an absent value: an index is `0..n-1`, so `n` is
     /// outside the range without needing a signed type to say so.
-    pub(crate) fn am_index_of(&mut self, m: Value, k: Value) -> u32 {
+    pub fn am_index_of(&mut self, m: Value, k: Value) -> u32 {
         // The SCALAR path first, and it roots nothing: `eq` on a scalar
         // cannot allocate, so no collection can move `m` mid-scan.
         // Named `sn` and not `n`: C# refuses a local whose name is reused in

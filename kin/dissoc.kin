@@ -34,7 +34,7 @@
                                    CN_BASE HASH_BITS]]
             [flint.rt.collnode :refer [bn-new]]))
 
-(defn ^:method ^Value node-dissoc
+(defn ^:pub ^:method ^Value node-dissoc
   [^:mut ^Rt rt ^Value n ^I32 shift ^I32 h ^Value key ^Value edit]
   (let [^RootIx base (mark rt)
         ^RootIx ni (push rt n)

@@ -16,7 +16,7 @@ use crate::kingen::flint::rt::hash::*;
 use crate::kingen::flint::rt::pike::*;
 
 impl Rt {
-    pub(crate) fn node_assoc(&mut self, n: Value, shift: u32, h: u32, key: Value, val: Value, edit: Value) -> Value {
+    pub fn node_assoc(&mut self, n: Value, shift: u32, h: u32, key: Value, val: Value, edit: Value) -> Value {
         let base: usize = self.mark();
         let ni: usize = self.push(n);
         let ki: usize = self.push(key);

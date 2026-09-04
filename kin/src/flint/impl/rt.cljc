@@ -221,7 +221,8 @@
             ;; the whole table exists: agreement is a fact about the runtimes,
             ;; not a property of the name, and `LS_THUNK` agreed on two of
             ;; three until it did not.
-            AM_BASE AM_META AM_HASH HM_CNT HM_ROOT HM_META HM_HASH])))
+            AM_BASE AM_META AM_HASH HM_CNT HM_ROOT HM_META HM_HASH
+            ARRAY_MAP_MAX])))
 
 (def names
   "Every type tag, spelled three ways. A NAME rather than a form, because a
@@ -480,6 +481,11 @@
     ;; C# spells it `schemaLen`, not `SchemaLen`: the port kept the Java
     ;; casing here, and a name table records what a runtime DOES rather than
     ;; what its convention would predict.
+    ;; The EMPTY MAP singleton. Rust keeps it on `Rt`; the ports keep it on
+    ;; `Maps` and reach it by a name that differs from Rust's.
+    'empty-map (core/call {:rust "{0}.empty_map()"
+                           :java "com.flint.rt.Maps.empty({0})"
+                           :csharp "Flint.Rt.Maps.Empty({0})"})
     'ref-get (core/call {:rust "{0}.ref_get({1}, {2}, {3})"
                          :java "Table.refGet({0}, {1}, {2}, {3})"
                          :csharp "Flint.Rt.Table.refGet({0}, {1}, {2}, {3})"})

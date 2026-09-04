@@ -84,7 +84,7 @@
                                    CN_BASE HASH_BITS]]
             [flint.rt.collnode :refer [bn-new cn-copy-set-val]]))
 
-(defn ^:method ^Value node-assoc
+(defn ^:pub ^:method ^Value node-assoc
   [^:mut ^Rt rt ^Value n ^I32 shift ^I32 h ^Value key ^Value val ^Value edit]
   (let [^RootIx base (mark rt)
         ^RootIx ni (push rt n)

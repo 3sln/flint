@@ -74,7 +74,7 @@
   (return (slot rt m (+ (+ AM_BASE (* 2 i)) 1))))
 
 (doc "A fresh array map with room for `n` entries, or NIL if the heap is full.")
-(defn ^:method ^Value new-array-map [^:mut ^Rt rt ^I32 n]
+(defn ^:pub ^:method ^Value new-array-map [^:mut ^Rt rt ^I32 n]
   (let [^Addr a (alloc rt TY_ARRAYMAP (+ AM_BASE (* 2 n)))]
     (if (== a 0)
       (return NIL))
@@ -87,7 +87,7 @@
      "`root` and `meta` are ROOTED across the allocation and read back after"
      "it: `alloc` collects, and a value in a host local does not survive that"
      "(`doc/decisions/0031`).")
-(defn ^:method ^Value new-hash-map [^:mut ^Rt rt ^I32 cnt ^Value root ^Value meta]
+(defn ^:pub ^:method ^Value new-hash-map [^:mut ^Rt rt ^I32 cnt ^Value root ^Value meta]
   (let [^RootIx base (mark rt)
         ^RootIx ri (push rt root)
         ^RootIx mi (push rt meta)

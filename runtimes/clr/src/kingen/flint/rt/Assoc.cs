@@ -16,7 +16,7 @@ using static flint.rt.Merge;
 using static flint.rt.Nodeclass;
 
 public static class Assoc {
-    internal static long NodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
+    public static long NodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
         int @base = rt.Mark();
         int ni = rt.Push(n);
         int ki = rt.Push(key);

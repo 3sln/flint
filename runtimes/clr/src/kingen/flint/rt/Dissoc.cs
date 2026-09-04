@@ -15,7 +15,7 @@ using static flint.rt.Copies;
 using static flint.rt.Nodeclass;
 
 public static class Dissoc {
-    internal static long NodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
+    public static long NodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
         int @base = rt.Mark();
         int ni = rt.Push(n);
         int ki = rt.Push(key);

@@ -69,7 +69,7 @@ impl Rt {
         return self.slot(m, (AM_BASE + (2 * i)) + 1);
     }
     /// A fresh array map with room for `n` entries, or NIL if the heap is full.
-    pub(crate) fn new_array_map(&mut self, n: u32) -> Value {
+    pub fn new_array_map(&mut self, n: u32) -> Value {
         let a: Addr = self.alloc(TY_ARRAYMAP, AM_BASE + (2 * n));
         if a == 0 {
             return NIL;
@@ -83,7 +83,7 @@ impl Rt {
     /// `root` and `meta` are ROOTED across the allocation and read back after
     /// it: `alloc` collects, and a value in a host local does not survive that
     /// (`doc/decisions/0031`).
-    pub(crate) fn new_hash_map(&mut self, cnt: u32, root: Value, meta: Value) -> Value {
+    pub fn new_hash_map(&mut self, cnt: u32, root: Value, meta: Value) -> Value {
         let base: usize = self.mark();
         let ri: usize = self.push(root);
         let mi: usize = self.push(meta);
