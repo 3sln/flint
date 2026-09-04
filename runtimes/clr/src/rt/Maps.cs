@@ -1,6 +1,7 @@
 namespace Flint.Rt;
 
 using static flint.rt.Assoc;
+using static flint.rt.Mapcore;
 using static flint.rt.Champ;
 using static flint.rt.Collnode;
 using static flint.rt.Dissoc;
@@ -82,17 +83,6 @@ public static class Maps {
 
     // --- the map objects -----------------------------------------------------
 
-    public static bool IsMap(Rt rt, long v) {
-        if (!Val.IsHeap(v)) return false;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
-        // A ROW REF is a map: `get`, keyword lookup, `count`, `keys`, `vals`
-        // and `=` against a map all work, so code that does not know it has a
-        // table keeps working (`doc/decisions/0026`).
-        return t == Obj.TyArraymap || t == Obj.TyHashmap || t == Obj.TyTableref;
-    }
-    public static bool IsArrayMap(Rt rt, long v) {
-        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyArraymap;
-    }
 
     public static int Count(Rt rt, long m) {
         // A ROW REF counts its COLUMNS -- `IsMap` says true for one, so map
@@ -105,13 +95,6 @@ public static class Maps {
         return 0;
     }
 
-    static long NewArrayMap(Rt rt, int n) {
-        long a = rt.Alloc(Obj.TyArraymap, AM_BASE + 2 * n);
-        if (a == 0) return Val.Nil;
-        rt.SetSlot(a, AM_META, Val.Nil);
-        rt.SetSlot(a, AM_HASH, Val.Nil);
-        return Val.Heap(a);
-    }
 
     /// The SINGLETON empty map: allocating a fresh one per call is what made
     /// this port bill more gas than the Rust runtime for the same program.
@@ -122,21 +105,7 @@ public static class Maps {
 
     internal static long NewEmpty(Rt rt) { return NewArrayMap(rt, 0); }
 
-    static long NewHashMap(Rt rt, int cnt, long root, long meta) {
-        int bas = rt.Mark();
-        int ri = rt.Push(root), mi = rt.Push(meta);
-        long a = rt.Alloc(Obj.TyHashmap, 4);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-        rt.SetSlot(a, HM_CNT, Val.Fixnum(cnt));
-        rt.SetSlot(a, HM_ROOT, rt.R(ri));
-        rt.SetSlot(a, HM_META, rt.R(mi));
-        rt.SetSlot(a, HM_HASH, Val.Nil);
-        rt.PopTo(bas);
-        return Val.Heap(a);
-    }
 
-    static long AmKey(Rt rt, long m, int i) { return rt.Slot(m, AM_BASE + 2 * i); }
-    static long AmVal(Rt rt, long m, int i) { return rt.Slot(m, AM_BASE + 2 * i + 1); }
     static void AmSet(Rt rt, long m, int i, long v) { rt.SetSlot(Val.AsHeap(m), i, v); }
 
     static int AmIndexOf(Rt rt, long m, long k) {
@@ -468,20 +437,6 @@ public static class Maps {
         return outv;
     }
 
-    /// `[k, v]`, the object a map's `seq` yields. A `TY_MAPENTRY` and not a
-    /// vector, so `key`/`val` are O(1) and the entry can still be read as a
-    /// two-element sequential -- which is what makes `(into {} (map ...))` and
-    /// destructuring `[[k v] ...]` both work over the same object.
-    public static long Entry(Rt rt, long k, long v) {
-        int bas = rt.Mark();
-        int ki = rt.Push(k), vi = rt.Push(v);
-        long a = rt.Alloc(Obj.TyMapentry, 2);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-        rt.SetSlot(a, 0, rt.R(ki));
-        rt.SetSlot(a, 1, rt.R(vi));
-        rt.PopTo(bas);
-        return Val.Heap(a);
-    }
 
     /// The entries as a VECTOR of map entries, which is what `seq` walks.
     ///
@@ -499,7 +454,7 @@ public static class Maps {
         int n = Entries(rt, rt.R(mi), at);
         int ai = rt.Push(Vec.Empty(rt));
         for (int i = 0; i < n; i++) {
-            long e = Entry(rt, rt.R(at + 2 * i), rt.R(at + 2 * i + 1));
+            long e = MapEntry(rt, rt.R(at + 2 * i), rt.R(at + 2 * i + 1));
             int ei = rt.Push(e);
             rt.SetR(ai, Vec.Conj(rt, rt.R(ai), rt.R(ei)));
             rt.PopTo(ei);

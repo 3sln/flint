@@ -1,0 +1,108 @@
+;; The MAP LAYER's plumbing: what a map is, how big it is, and how a fresh one
+;; is built.
+;;
+;; The first slice ported after the region scrub, and the first written the new
+;; way throughout -- one module per namespace, no regions, and cross-namespace
+;; references through a `:require` of the defining namespace rather than a
+;; declaration in the subject vocabulary.
+;;
+;; Two map representations live behind these:
+;;
+;;     ARRAY MAP    AM_META | AM_HASH | k0 v0 | k1 v1 | ...   linear, small
+;;     HASH MAP     HM_CNT | HM_ROOT | HM_META | HM_HASH      a CHAMP root
+;;
+;; and a ROW REF answers `map?` as well, which is why `is-map` names three tags
+;; and not two. Every map internal is reachable with a ref because of that, and
+;; forgetting it is what made `(dissoc row :b)` return nil on all four runtimes.
+(ns flint.rt.mapcore
+  (:require [flint.impl.rt :refer [defn return if let do comment doc not or ==
+                                   mark push r pop-to alloc set-at heap fixnum
+                                   slot ty as-heap is-heap
+                                   - * +
+                                   Rt Value Addr RootIx I32 Ty Bool NIL
+                                   AM_BASE AM_META AM_HASH
+                                   HM_CNT HM_ROOT HM_META HM_HASH
+                                   TY_ARRAYMAP TY_HASHMAP TY_TABLEREF
+                                   TY_MAPENTRY]]))
+
+(doc "Is this a map? A ROW REF answers yes, which is what lets code that does"
+     "not know it holds a table keep working (`doc/decisions/0026`).")
+(defn ^:pub ^:method ^Bool is-map [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (let [^Ty t (ty rt (as-heap v))]
+    (return (or (== t TY_ARRAYMAP)
+                (or (== t TY_HASHMAP) (== t TY_TABLEREF))))))
+
+(defn ^:pub ^:method ^Bool is-array-map [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_ARRAYMAP)))
+
+;; `map-count` IS NOT HERE, and the reason is a divergence found while writing
+;; it. Rust returns 0 for a ROW REF; both ports return the schema length,
+;; because `isMap` is true for a ref and every map internal is therefore
+;; reachable with one. Porting Rust's shape would have deleted the ports'
+;; defensive arm; porting the ports' shape needs `schemaLen` from the table
+;; unit, which is external work this slice does not carry.
+;;
+;; It is the same shape as the bug that made `(dissoc row :b)` return nil on
+;; all four runtimes -- a map internal reached with a ref it did not expect --
+;; so the defensive arm is the one to converge on, and it is worth doing
+;; deliberately rather than as a side effect of a port.
+
+(defn ^:inline ^:method ^Value am-key [^Rt rt ^Value m ^I32 i]
+  (return (slot rt m (+ AM_BASE (* 2 i)))))
+
+(defn ^:inline ^:method ^Value am-val [^Rt rt ^Value m ^I32 i]
+  (return (slot rt m (+ (+ AM_BASE (* 2 i)) 1))))
+
+(doc "A fresh array map with room for `n` entries, or NIL if the heap is full.")
+(defn ^:method ^Value new-array-map [^:mut ^Rt rt ^I32 n]
+  (let [^Addr a (alloc rt TY_ARRAYMAP (+ AM_BASE (* 2 n)))]
+    (if (== a 0)
+      (return NIL))
+    (set-at rt a AM_META NIL)
+    (set-at rt a AM_HASH NIL)
+    (return (heap a))))
+
+(doc "A fresh hash map over `root`."
+     ""
+     "`root` and `meta` are ROOTED across the allocation and read back after"
+     "it: `alloc` collects, and a value in a host local does not survive that"
+     "(`doc/decisions/0031`).")
+(defn ^:method ^Value new-hash-map [^:mut ^Rt rt ^I32 cnt ^Value root ^Value meta]
+  (let [^RootIx base (mark rt)
+        ^RootIx ri (push rt root)
+        ^RootIx mi (push rt meta)
+        ^Addr a (alloc rt TY_HASHMAP 4)]
+    (if (== a 0)
+      (do
+        (pop-to rt base)
+        (return NIL)))
+    (let [^Value rv (r rt ri)
+          ^Value mv (r rt mi)]
+      (pop-to rt base)
+      (set-at rt a HM_CNT (fixnum cnt))
+      (set-at rt a HM_ROOT rv)
+      (set-at rt a HM_META mv)
+      (set-at rt a HM_HASH NIL)
+      (return (heap a)))))
+
+(doc "A key/value pair as a value. It is a VECTOR, as in Clojure -- `vector?`"
+     "is true of one, it prints `[:a 1]`, and `conj` appends.")
+(defn ^:pub ^:method ^Value map-entry [^:mut ^Rt rt ^Value k ^Value v]
+  (let [^RootIx base (mark rt)
+        ^RootIx ki (push rt k)
+        ^RootIx vi (push rt v)
+        ^Addr a (alloc rt TY_MAPENTRY 2)]
+    (if (== a 0)
+      (do
+        (pop-to rt base)
+        (return NIL)))
+    (let [^Value kv (r rt ki)
+          ^Value vv (r rt vi)]
+      (pop-to rt base)
+      (set-at rt a 0 kv)
+      (set-at rt a 1 vv)
+      (return (heap a)))))

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using flint.rt;
 
 namespace Flint.Rt;
 
@@ -873,7 +874,7 @@ public sealed class Rt : System.IDisposable {
             if (argc < 1) return ThrowStr("ArityException", "a set takes 1 argument");
             return Sets.Get(this, callee, roots.Stack[calleeAt + 1], Val.Nil);
         }
-        if (Maps.IsMap(this, callee)) {
+        if (Mapcore.IsMap(this, callee)) {
             if (argc < 1) return ThrowStr("ArityException", "a map takes 1 or 2 arguments");
             long dflt2 = argc >= 2 ? roots.Stack[calleeAt + 2] : Val.Nil;
             return Maps.Get(this, callee, roots.Stack[calleeAt + 1], dflt2);
@@ -894,7 +895,7 @@ public sealed class Rt : System.IDisposable {
     /// `get`, for the collections that are ported.
     long Lookup(long coll, long k, long dflt) {
         if (Val.IsNil(coll)) return dflt;
-        if (Maps.IsMap(this, coll)) return Maps.Get(this, coll, k, dflt);
+        if (Mapcore.IsMap(this, coll)) return Maps.Get(this, coll, k, dflt);
         if (Sets.IsSet(this, coll)) return Sets.Get(this, coll, k, dflt);
         // `(:tag x)` and `(:form x)` (`doc/decisions/0034`). Without this
         // `(get x :tag)` answers and `(:tag x)` does not.

@@ -1,3 +1,4 @@
+import flint.rt.Mapcore;
 import com.flint.rt.*;
 
 /// Maps on the ported runtime: the array-map, the promotion to CHAMP, and the
@@ -41,10 +42,10 @@ public class RtMaps {
     int m = rt.push(Maps.empty(rt));
     ok("an empty map counts 0", Maps.count(rt, rt.r(m)) == 0);
     for (int i = 0; i < 8; i++) rt.setR(m, Maps.assoc(rt, rt.r(m), k(rt, i), Val.fixnum(i * 10)));
-    ok("8 entries is still a flat array-map", Maps.isArrayMap(rt, rt.r(m)));
+    ok("8 entries is still a flat array-map", Mapcore.isArrayMap(rt, rt.r(m)));
     ok("  and every one reads back", allPresent(rt, rt.r(m), 0, 8));
     rt.setR(m, Maps.assoc(rt, rt.r(m), k(rt, 8), Val.fixnum(80)));
-    ok("the 9th promotes to a CHAMP trie", !Maps.isArrayMap(rt, rt.r(m)) && Maps.isMap(rt, rt.r(m)));
+    ok("the 9th promotes to a CHAMP trie", !Mapcore.isArrayMap(rt, rt.r(m)) && Mapcore.isMap(rt, rt.r(m)));
     ok("  and nothing was lost crossing the boundary", allPresent(rt, rt.r(m), 0, 9));
 
     // --- a big map, in and out.

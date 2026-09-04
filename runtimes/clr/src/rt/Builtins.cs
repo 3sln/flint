@@ -1,5 +1,7 @@
 namespace Flint.Rt;
 
+using flint.rt;
+
 /// The builtins, ported from `runtime/src/builtins.rs`.
 ///
 /// A builtin reads its arguments STRAIGHT OFF the value stack -- `at` is the
@@ -266,7 +268,7 @@ public static class Builtins {
             if (rt.IsHeapTy(v, Obj.TyTableref))
                 return Val.Fixnum(Flint.Rt.Table.schemaLen(rt, rt.Slot(v, Flint.Rt.Table.RF_SCHEMA)));
             if (Str.IsString(rt, v)) return Val.Fixnum(Str.SCount(rt, v));
-            if (Maps.IsMap(rt, v)) return Val.Fixnum(Maps.Count(rt, v));
+            if (Mapcore.IsMap(rt, v)) return Val.Fixnum(Maps.Count(rt, v));
             if (Sets.IsSet(rt, v)) return Val.Fixnum(Sets.Count(rt, v));
             if (Maps.IsTransient(rt, v)) return Val.Fixnum(Maps.TCount(rt, v));
             if (Sets.IsTransient(rt, v)) return Val.Fixnum(Sets.TCount(rt, v));
@@ -327,7 +329,7 @@ public static class Builtins {
                 for (int i = 1; i < n; i++) acc2 = Sets.Conj(rt, acc2, rt.VAt(at + i));
                 return acc2;
             }
-            if (Maps.IsMap(rt, v)) {
+            if (Mapcore.IsMap(rt, v)) {
                 // `conj` onto a map takes an ENTRY or a two-element vector.
                 int bas = rt.Mark();
                 int ai = rt.Push(v);
@@ -390,7 +392,7 @@ public static class Builtins {
                 rt.PopTo(rb);
                 return r;
             }
-            if (Maps.IsMap(rt, v)) return Maps.TransientOf(rt, v);
+            if (Mapcore.IsMap(rt, v)) return Maps.TransientOf(rt, v);
             if (Sets.IsSet(rt, v)) return Sets.TransientOf(rt, v);
             return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not transientable");
         });
@@ -489,7 +491,7 @@ public static class Builtins {
             long dflt = n > 2 ? rt.VAt(at + 2) : Val.Nil;
             long coll = rt.VAt(at);
             if (Val.IsNil(coll)) return dflt;
-            if (Maps.IsMap(rt, coll)) return Maps.Get(rt, coll, rt.VAt(at + 1), dflt);
+            if (Mapcore.IsMap(rt, coll)) return Maps.Get(rt, coll, rt.VAt(at + 1), dflt);
             // A tagged literal reads like a two-key map (`0034`).
             if (rt.IsHeapTy(coll, Obj.TyTagged)) return TaggedGet(rt, coll, rt.VAt(at + 1), dflt);
             if (Sets.IsSet(rt, coll)) return Sets.Get(rt, coll, rt.VAt(at + 1), dflt);
@@ -535,7 +537,7 @@ public static class Builtins {
             if (Flint.Rt.Table.isTable(rt, acc)) return Flint.Rt.Table.tableAssoc(rt, acc, rt.VAt(at + 1), rt.VAt(at + 2));
             // A ref is a VIEW: changing it produces an independent MAP.
             if (Flint.Rt.Table.isTableRef(rt, acc)) return Flint.Rt.Table.refAssoc(rt, acc, rt.VAt(at + 1), rt.VAt(at + 2));
-            if (Maps.IsMap(rt, acc)) {
+            if (Mapcore.IsMap(rt, acc)) {
                 int bas = rt.Mark();
                 int ai = rt.Push(acc);
                 for (int i = 1; i + 1 < n; i += 2) {
@@ -623,7 +625,7 @@ public static class Builtins {
         Def("contains?", (rt, at, n) => {
             long coll = rt.VAt(at);
             if (Val.IsNil(coll)) return Val.False;
-            if (Maps.IsMap(rt, coll)) return Val.Bool(Maps.Contains(rt, coll, rt.VAt(at + 1)));
+            if (Mapcore.IsMap(rt, coll)) return Val.Bool(Maps.Contains(rt, coll, rt.VAt(at + 1)));
             if (Sets.IsSet(rt, coll)) return Val.Bool(Sets.Contains(rt, coll, rt.VAt(at + 1)));
             // The TRANSIENT forms too. A transient is a handle on the same
             // trie, so every reader that works on the persistent value works on
@@ -782,7 +784,7 @@ public static class Builtins {
         Def("empty", (rt, at, n) => {
             long v = rt.VAt(at);
             if (rt.IsHeapTy(v, Obj.TyVec)) return Vec.Empty(rt);
-            if (Maps.IsMap(rt, v)) return Maps.Empty(rt);
+            if (Mapcore.IsMap(rt, v)) return Maps.Empty(rt);
             if (Sets.IsSet(rt, v)) return Sets.Empty(rt);
             if (rt.IsSeq(v)) return Seqs.EmptyList(rt);
             return Val.Nil;

@@ -2,6 +2,7 @@ package com.flint.rt;
 
 import static com.flint.rt.Obj.*;
 import static flint.rt.Assoc.*;
+import static flint.rt.Mapcore.*;
 import static flint.rt.Champ.*;
 import static flint.rt.Collnode.*;
 import static flint.rt.Dissoc.*;
@@ -84,17 +85,6 @@ public final class Maps {
 
     // --- the map objects -----------------------------------------------------
 
-    public static boolean isMap(Rt rt, long v) {
-        if (!Val.isHeap(v)) return false;
-        int t = ty(rt.gc.sp, Val.asHeap(v));
-        // A ROW REF is a map: `get`, keyword lookup, `count`, `keys`, `vals`
-        // and `=` against a map all work, so code that does not know it has a
-        // table keeps working (`doc/decisions/0026`).
-        return t == TY_ARRAYMAP || t == TY_HASHMAP || t == Obj.TY_TABLEREF;
-    }
-    public static boolean isArrayMap(Rt rt, long v) {
-        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_ARRAYMAP;
-    }
 
     public static int count(Rt rt, long m) {
         int t = ty(rt.gc.sp, Val.asHeap(m));
@@ -108,13 +98,6 @@ public final class Maps {
         return 0;
     }
 
-    static long newArrayMap(Rt rt, int n) {
-        long a = rt.alloc(TY_ARRAYMAP, AM_BASE + 2 * n);
-        if (a == 0) return Val.NIL;
-        rt.setSlot(a, AM_META, Val.NIL);
-        rt.setSlot(a, AM_HASH, Val.NIL);
-        return Val.heap(a);
-    }
 
     /// The SINGLETON empty map. Allocating a fresh one per call is what made
     /// this port bill more gas than the Rust runtime for the same program.
@@ -126,21 +109,7 @@ public final class Maps {
     /// The one allocation `initSingletons` makes.
     static long newEmpty(Rt rt) { return newArrayMap(rt, 0); }
 
-    static long newHashMap(Rt rt, int cnt, long root, long meta) {
-        int base = rt.mark();
-        int ri = rt.push(root), mi = rt.push(meta);
-        long a = rt.alloc(TY_HASHMAP, 4);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(a, HM_CNT, Val.fixnum(cnt));
-        rt.setSlot(a, HM_ROOT, rt.r(ri));
-        rt.setSlot(a, HM_META, rt.r(mi));
-        rt.setSlot(a, HM_HASH, Val.NIL);
-        rt.popTo(base);
-        return Val.heap(a);
-    }
 
-    static long amKey(Rt rt, long m, int i) { return rt.slot(m, AM_BASE + 2 * i); }
-    static long amVal(Rt rt, long m, int i) { return rt.slot(m, AM_BASE + 2 * i + 1); }
     static void amSet(Rt rt, long m, int i, long v) { rt.setSlot(Val.asHeap(m), i, v); }
 
     static int amIndexOf(Rt rt, long m, long k) {
@@ -480,20 +449,6 @@ public final class Maps {
         return out;
     }
 
-    /// `[k, v]`, the object a map's `seq` yields. A `TY_MAPENTRY` and not a
-    /// vector, so `key`/`val` are O(1) and the entry can still be read as a
-    /// two-element sequential -- which is what makes `(into {} (map ...))` and
-    /// destructuring `[[k v] ...]` both work over the same object.
-    public static long entry(Rt rt, long k, long v) {
-        int base = rt.mark();
-        int ki = rt.push(k), vi = rt.push(v);
-        long a = rt.alloc(TY_MAPENTRY, 2);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(a, 0, rt.r(ki));
-        rt.setSlot(a, 1, rt.r(vi));
-        rt.popTo(base);
-        return Val.heap(a);
-    }
 
     /// The entries as a VECTOR of map entries, which is what `seq` walks.
     ///
@@ -516,7 +471,7 @@ public final class Maps {
         int n = entries(rt, rt.r(mi), at);
         int ai = rt.push(Vec.empty(rt));
         for (int i = 0; i < n; i++) {
-            long e = entry(rt, rt.r(at + 2 * i), rt.r(at + 2 * i + 1));
+            long e = mapEntry(rt, rt.r(at + 2 * i), rt.r(at + 2 * i + 1));
             int ei = rt.push(e);
             rt.setR(ai, Vec.conj(rt, rt.r(ai), rt.r(ei)));
             rt.popTo(ei);

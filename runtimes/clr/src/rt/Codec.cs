@@ -1,6 +1,7 @@
 namespace Flint.Rt;
 
 using System.IO;
+using flint.rt;
 using System.Text;
 
 /// Values across a boundary (`doc/decisions/0025`), a MIRROR of the JVM port's
@@ -157,7 +158,7 @@ public static class Codec {
     /// lazy seq forces the tail, which runs arbitrary flint code and can
     /// collect, so anything gathered into a host list has already gone stale.
     static void EncodeCollection(Rt rt, long v, MemoryStream outs, int depth) {
-        if (Maps.IsMap(rt, v)) {
+        if (Mapcore.IsMap(rt, v)) {
             int at = rt.Mark();
             int mn = Maps.Entries(rt, v, at);
             outs.WriteByte(K_MAP);

@@ -1,4 +1,5 @@
 using Flint;
+using flint.rt;
 
 /// Run an image and print what it returned.
 ///
@@ -770,10 +771,10 @@ public static class Program {
     int m = rt.Push(Flint.Rt.Maps.Empty(rt));
     MOk("an empty map counts 0", Flint.Rt.Maps.Count(rt, rt.R(m)) == 0);
     for (int i = 0; i < 8; i++) rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
-    MOk("8 entries is still a flat array-map", Flint.Rt.Maps.IsArrayMap(rt, rt.R(m)));
+    MOk("8 entries is still a flat array-map", flint.rt.Mapcore.IsArrayMap(rt, rt.R(m)));
     MOk("  and every one reads back", AllPresent(rt, rt.R(m), 0, 8));
     rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, 8), Flint.Rt.Val.Fixnum(80)));
-    MOk("the 9th promotes to a CHAMP trie", !Flint.Rt.Maps.IsArrayMap(rt, rt.R(m)) && Flint.Rt.Maps.IsMap(rt, rt.R(m)));
+    MOk("the 9th promotes to a CHAMP trie", !flint.rt.Mapcore.IsArrayMap(rt, rt.R(m)) && flint.rt.Mapcore.IsMap(rt, rt.R(m)));
     MOk("  and nothing was lost crossing the boundary", AllPresent(rt, rt.R(m), 0, 9));
 
     // --- a big map, in and out.

@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapcore;
+
 import static com.flint.rt.Obj.*;
 
 import java.util.HashMap;
@@ -272,7 +274,7 @@ public final class Builtins {
             if (rt.isHeapTy(v, Obj.TY_TABLEREF))
                 return Val.fixnum(Table.schemaLen(rt, rt.slot(v, Table.RF_SCHEMA)));
             if (Str.isString(rt, v)) return Val.fixnum(Str.charLen(rt, v));
-            if (Maps.isMap(rt, v)) return Val.fixnum(Maps.count(rt, v));
+            if (Mapcore.isMap(rt, v)) return Val.fixnum(Maps.count(rt, v));
             if (Sets.isSet(rt, v)) return Val.fixnum(Sets.count(rt, v));
             if (Maps.isTransient(rt, v)) return Val.fixnum(Maps.tcount(rt, v));
             if (Sets.isTransient(rt, v)) return Val.fixnum(Sets.tcount(rt, v));
@@ -338,7 +340,7 @@ public final class Builtins {
                 for (int i = 1; i < n; i++) acc = Sets.conj(rt, acc, rt.vat(at + i));
                 return acc;
             }
-            if (Maps.isMap(rt, v)) {
+            if (Mapcore.isMap(rt, v)) {
                 // `conj` onto a map takes an ENTRY or a two-element vector.
                 int base = rt.mark();
                 int ai = rt.push(v);
@@ -402,7 +404,7 @@ public final class Builtins {
                 rt.popTo(rb);
                 return r;
             }
-            if (Maps.isMap(rt, v)) return Maps.transientOf(rt, v);
+            if (Mapcore.isMap(rt, v)) return Maps.transientOf(rt, v);
             if (Sets.isSet(rt, v)) return Sets.transientOf(rt, v);
             return rt.throwStr("ClassCastException",
 rt.describe(v) + " is not transientable");
@@ -519,7 +521,7 @@ rt.describe(v) + " is not a transient");
             long dflt = n > 2 ? rt.vat(at + 2) : Val.NIL;
             long coll = rt.vat(at);
             if (Val.isNil(coll)) return dflt;
-            if (Maps.isMap(rt, coll)) return Maps.get(rt, coll, rt.vat(at + 1), dflt);
+            if (Mapcore.isMap(rt, coll)) return Maps.get(rt, coll, rt.vat(at + 1), dflt);
             // A tagged literal reads like a two-key map (`0034`).
             if (rt.isHeapTy(coll, Obj.TY_TAGGED)) return taggedGet(rt, coll, rt.vat(at + 1), dflt);
             if (Sets.isSet(rt, coll)) return Sets.get(rt, coll, rt.vat(at + 1), dflt);
@@ -569,7 +571,7 @@ rt.describe(v) + " is not a transient");
             // A ref is a VIEW: changing it produces an independent MAP, and
             // neither the chunk nor the table it came from moves.
             if (Table.isTableRef(rt, acc)) return Table.refAssoc(rt, acc, rt.vat(at + 1), rt.vat(at + 2));
-            if (Maps.isMap(rt, acc)) {
+            if (Mapcore.isMap(rt, acc)) {
                 int base = rt.mark();
                 int ai = rt.push(acc);
                 for (int i = 1; i + 1 < n; i += 2) {
@@ -659,7 +661,7 @@ rt.describe(v) + " is not a transient");
         def("contains?", (rt, at, n) -> {
             long coll = rt.vat(at);
             if (Val.isNil(coll)) return Val.FALSE;
-            if (Maps.isMap(rt, coll)) return Val.bool(Maps.contains(rt, coll, rt.vat(at + 1)));
+            if (Mapcore.isMap(rt, coll)) return Val.bool(Maps.contains(rt, coll, rt.vat(at + 1)));
             if (Sets.isSet(rt, coll)) return Val.bool(Sets.contains(rt, coll, rt.vat(at + 1)));
             // The TRANSIENT forms too. A transient is a handle on the same
             // trie, so every reader that works on the persistent value works on
@@ -842,7 +844,7 @@ rt.describe(v) + " is not a transient");
         def("empty", (rt, at, n) -> {
             long v = rt.vat(at);
             if (rt.isHeapTy(v, TY_VEC)) return Vec.empty(rt);
-            if (Maps.isMap(rt, v)) return Maps.empty(rt);
+            if (Mapcore.isMap(rt, v)) return Maps.empty(rt);
             if (Sets.isSet(rt, v)) return Sets.empty(rt);
             if (rt.isSeq(v)) return Seqs.emptyList(rt);
             return Val.NIL;

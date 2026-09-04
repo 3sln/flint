@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapcore;
+
 import static com.flint.rt.Obj.*;
 
 /// Tables: columnar storage that is a value, ported from `runtime/src/table.rs`
@@ -367,7 +369,7 @@ public final class Table {
         int base = rt.mark();
         int si = rt.push(s);
         int ri = rt.push(row);
-        if (!Maps.isMap(rt, rt.r(ri))) {
+        if (!Mapcore.isMap(rt, rt.r(ri))) {
             String kn = kwName(rt, rt.kindOf(rt.r(ri)));
             rt.popTo(base);
             rt.throwStr("IllegalArgumentException",

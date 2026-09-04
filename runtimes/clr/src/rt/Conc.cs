@@ -1,6 +1,7 @@
 namespace Flint.Rt;
 
 using static flint.rt.Interns;
+using flint.rt;
 
 
 /// Green threads, ports, and the scheduler. Ported from `runtime/src/conc.rs`
@@ -869,7 +870,7 @@ public static class Conc {
         int bas = rt.Mark();
         int vi = rt.Push(v);
         string outs = null;
-        if (Maps.IsMap(rt, rt.R(vi))) {
+        if (Mapcore.IsMap(rt, rt.R(vi))) {
             // Materialised ON THE SHADOW STACK, not into a host list. The walk
             // below allocates, so anything held in a host `List<long>` across
             // it comes back naming the address the object had before the

@@ -28,6 +28,15 @@
   in the other two."
   {:name 'Value :types {:rust "Value" :java "long" :csharp "long"} :methods {}})
 
+(def Ty
+  "A HEAP TYPE TAG, as `ty` answers one -- `TY_ARRAYMAP` and friends.
+
+  Same width as `Cat` on every target and a different thing: a category is one
+  of four kinds a value belongs to, a type tag is which of thirty-odd layouts
+  it has. Borrowing `Cat` for a `ty` result would have compiled everywhere and
+  told a reader something false."
+  {:name 'Ty :types {:rust "u8" :java "int" :csharp "int"} :methods {}})
+
 (def Cat
   "A category: `CAT_SCALAR` and friends. Rust made it a `u8` and the other two
   an `int`, and nothing depends on the width."
@@ -103,7 +112,7 @@
   pointer."
   {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
 
-(def tags {'Rt Rt 'Value Value 'Cat Cat 'Bool Bool 'I32 I32 'U32 U32 'RootIx RootIx
+(def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'U32 U32 'RootIx RootIx
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'U32s U32s 'U64s U64s 'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
@@ -204,7 +213,13 @@
           {}
           '[CAT_SCALAR CAT_MAP CAT_SEQUENTIAL CAT_SET
             BN_DATAMAP BN_NODEMAP BN_BASE BN_EDIT
-            CN_BASE CN_HASH CN_EDIT HASH_BITS])))
+            CN_BASE CN_HASH CN_EDIT HASH_BITS
+            ;; The ARRAY-MAP and HASH-MAP slot names, spelled identically by
+            ;; all three. Declared rather than passed through for the reason
+            ;; the whole table exists: agreement is a fact about the runtimes,
+            ;; not a property of the name, and `LS_THUNK` agreed on two of
+            ;; three until it did not.
+            AM_BASE AM_META AM_HASH HM_CNT HM_ROOT HM_META HM_HASH])))
 
 (def names
   "Every type tag, spelled three ways. A NAME rather than a form, because a

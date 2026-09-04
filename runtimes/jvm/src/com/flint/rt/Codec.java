@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapcore;
+
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 
@@ -157,7 +159,7 @@ public final class Codec {
     /// lazy seq forces the tail, which runs arbitrary flint code and can
     /// collect, so anything gathered into a host list has already gone stale.
     static void encodeCollection(Rt rt, long v, ByteArrayOutputStream out, int depth) {
-        if (Maps.isMap(rt, v)) {
+        if (Mapcore.isMap(rt, v)) {
             int at = rt.mark();
             int n = Maps.entries(rt, v, at);
             out.write(K_MAP);

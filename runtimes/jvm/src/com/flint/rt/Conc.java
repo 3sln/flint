@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapcore;
+
 import static com.flint.rt.Obj.*;
 import static flint.rt.Interns.*;
 
@@ -881,7 +883,7 @@ public final class Conc {
         int base = rt.mark();
         int vi = rt.push(v);
         String out = null;
-        if (Maps.isMap(rt, rt.r(vi))) {
+        if (Mapcore.isMap(rt, rt.r(vi))) {
             // Materialised ON THE SHADOW STACK, not into a host list. The walk
             // below allocates, so anything held in a host `ArrayList<Long>`
             // across it comes back naming the address the object had before the

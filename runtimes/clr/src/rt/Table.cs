@@ -1,5 +1,7 @@
 namespace Flint.Rt;
 
+using flint.rt;
+
 /// Tables: columnar storage that is a value, ported from `runtime/src/table.rs`
 /// (`doc/decisions/0026`).
 ///
@@ -364,7 +366,7 @@ public static class Table {
         int bas = rt.Mark();
         int si = rt.Push(s);
         int ri = rt.Push(row);
-        if (!Maps.IsMap(rt, rt.R(ri))) {
+        if (!Mapcore.IsMap(rt, rt.R(ri))) {
             string kn = kwName(rt, rt.KindOf(rt.R(ri)));
             rt.PopTo(bas);
             rt.ThrowStr("IllegalArgumentException",

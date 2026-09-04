@@ -117,20 +117,6 @@ impl Rt {
         self.roots.shared.singletons[crate::rt::SING_EMPTY_MAP] = Value::heap(a);
     }
 
-    /// A ROW REF counts, and that is deliberate (`doc/decisions/0026`): a table
-    /// is not a vector of maps, but a row IS a map -- seen cheaply. Code that
-    /// does not know it has a table keeps working only if the row half is
-    /// honest about being one.
-    pub fn is_map(&self, v: Value) -> bool {
-        v.is_heap()
-            && matches!(
-                ty(&self.gc.sp, v.as_heap()),
-                TY_ARRAYMAP | TY_HASHMAP | crate::obj::TY_TABLEREF
-            )
-    }
-    pub fn is_array_map(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_ARRAYMAP
-    }
 
     pub fn map_count(&self, m: Value) -> u32 {
         match ty(&self.gc.sp, m.as_heap()) {
@@ -140,42 +126,8 @@ impl Rt {
         }
     }
 
-    fn new_array_map(&mut self, n: u32) -> Value {
-        let a = self.alloc(TY_ARRAYMAP, AM_BASE + 2 * n);
-        if a == 0 {
-            return NIL;
-        }
-        self.set_slot(a, AM_META, NIL);
-        self.set_slot(a, AM_HASH, NIL);
-        Value::heap(a)
-    }
 
-    fn new_hash_map(&mut self, cnt: u32, root: Value, meta: Value) -> Value {
-        let base = self.mark();
-        let ri = self.push(root);
-        let mi = self.push(meta);
-        let a = self.alloc(TY_HASHMAP, 4);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        let (root, meta) = (self.r(ri), self.r(mi));
-        self.pop_to(base);
-        self.set_slot(a, HM_CNT, Value::fixnum(cnt as i64));
-        self.set_slot(a, HM_ROOT, root);
-        self.set_slot(a, HM_META, meta);
-        self.set_slot(a, HM_HASH, NIL);
-        Value::heap(a)
-    }
 
-    #[inline]
-    fn am_key(&self, m: Value, i: u32) -> Value {
-        self.slot(m, AM_BASE + 2 * i)
-    }
-    #[inline]
-    fn am_val(&self, m: Value, i: u32) -> Value {
-        self.slot(m, AM_BASE + 2 * i + 1)
-    }
 
     fn am_index_of(&mut self, m: Value, k: Value) -> Option<u32> {
         if !self.eq_may_alloc(k) {
@@ -510,21 +462,6 @@ impl Rt {
         self.pop_to(base);
     }
 
-    pub fn map_entry(&mut self, k: Value, v: Value) -> Value {
-        let base = self.mark();
-        let ki = self.push(k);
-        let vi = self.push(v);
-        let a = self.alloc(TY_MAPENTRY, 2);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        let (k, v) = (self.r(ki), self.r(vi));
-        self.pop_to(base);
-        self.set_slot(a, 0, k);
-        self.set_slot(a, 1, v);
-        Value::heap(a)
-    }
 
     /// Materialise the entries as a vector of map entries, for `seq`.
     pub fn map_entry_vector(&mut self, m: Value) -> Value {
