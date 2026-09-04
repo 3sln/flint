@@ -1,0 +1,171 @@
+--rust-head
+type Addr = u32;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_NODE: u8 = 10;
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+struct Gc { sp: Vec<u8> }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, starve: bool }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        if self.starve { return 0; }
+        let a = self.bump; self.bump += n as u64 + 1;
+        self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.set_slot(v.as_heap(), i, x); }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, n: Value) -> u32 { self.lens[n.0 as usize] }
+}
+fn ty(sp: &Vec<u8>, a: Addr) -> u8 { sp[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 400], gc: Gc { sp: vec![0u8; 400] }, lens: vec![0; 400],
+                      bump: 100, roots: Vec::new(), starve: false };
+    let mut o = String::new();
+    // A node of four children, owned by nothing.
+    let n4 = rt.new_node(4, NIL);
+    o.push_str(&format!("n4={} len={} tag={} ", n4.0, rt.node_len(n4), ty(&rt.gc.sp, n4.as_heap())));
+    // Slot 0 is the OWNERSHIP TOKEN, not a child, so `node_len` is one less
+    // than the object and child `i` lives at `i + 1`.
+    o.push_str(&format!("edit={} ", rt.node_edit(n4).0));
+    // Through `node_set`, not `set_slot`: the +1 offset is the thing under test.
+    for i in 0..4 { let v = Value(0x200 + i as u64); rt.node_set(n4, i, v); }
+    o.push_str(&format!("get={},{},{},{} ",
+        rt.node_get(n4, 0).0, rt.node_get(n4, 1).0, rt.node_get(n4, 2).0, rt.node_get(n4, 3).0));
+    // A node OWNED by a token reports it, which is what makes a transient able
+    // to tell its own nodes from everyone else's.
+    let tok = Value(0x777);
+    let owned = rt.new_node(2, tok);
+    o.push_str(&format!("owned={} ownlen={} ", rt.node_edit(owned).0, rt.node_len(owned)));
+    // A ZERO-length node. `newEmpty` builds one for the tail of an empty
+    // vector, and so does persisting an empty transient -- the case both ports
+    // used to floor at one.
+    let z = rt.new_node(0, NIL);
+    o.push_str(&format!("zlen={} ", rt.node_len(z)));
+    // A STARVED allocator answers nil rather than a half-built node.
+    rt.starve = true;
+    o.push_str(&format!("starved={} ", rt.new_node(4, NIL).is_nil() as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_NODE = 10;
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static boolean isHeap(long v) { return v >= 100; }
+        static long asHeap(long v) { return v; }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Rt {
+        long[] h = new long[400];
+        static final class Gc { int[] sp = new int[400]; }
+        Gc gc = new Gc();
+        int[] lens = new int[400];
+        long bump = 100;
+        boolean starve = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long n4 = newNode(rt, 4, NIL);
+        o.append("n4=").append(n4).append(" len=").append(nodeLen(rt, n4))
+         .append(" tag=").append(ty(rt.gc.sp, Val.asHeap(n4))).append(' ');
+        o.append("edit=").append(nodeEdit(rt, n4)).append(' ');
+        for (int i = 0; i < 4; i++) nodeSet(rt, n4, i, 0x200 + i);
+        o.append("get=").append(nodeGet(rt, n4, 0)).append(',').append(nodeGet(rt, n4, 1))
+         .append(',').append(nodeGet(rt, n4, 2)).append(',').append(nodeGet(rt, n4, 3)).append(' ');
+        long tok = 0x777L;
+        long owned = newNode(rt, 2, tok);
+        o.append("owned=").append(nodeEdit(rt, owned)).append(" ownlen=").append(nodeLen(rt, owned)).append(' ');
+        long z = newNode(rt, 0, NIL);
+        o.append("zlen=").append(nodeLen(rt, z)).append(' ');
+        rt.starve = true;
+        o.append("starved=").append(Val.isNil(newNode(rt, 4, NIL)) ? 1 : 0).append(' ');
+        System.out.println(o.toString());
+    }
+--csharp-head
+    const long NIL = 0xFFFFL;
+    static class Obj {
+        internal const int TyNode = 10;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[400];
+        internal sealed class GcT { internal int[] sp = new int[400]; }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[400];
+        internal long bump = 100;
+        internal bool starve = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
+--csharp
+    public static void Main(string[] args) {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long n4 = NewNode(rt, 4, NIL);
+        o.Append("n4=").Append(n4).Append(" len=").Append(NodeLen(rt, n4))
+         .Append(" tag=").Append(Obj.Ty(rt.gc.sp, Val.AsHeap(n4))).Append(' ');
+        o.Append("edit=").Append(NodeEdit(rt, n4)).Append(' ');
+        for (int i = 0; i < 4; i++) NodeSet(rt, n4, i, 0x200 + i);
+        o.Append("get=").Append(NodeGet(rt, n4, 0)).Append(',').Append(NodeGet(rt, n4, 1))
+         .Append(',').Append(NodeGet(rt, n4, 2)).Append(',').Append(NodeGet(rt, n4, 3)).Append(' ');
+        long tok = 0x777L;
+        long owned = NewNode(rt, 2, tok);
+        o.Append("owned=").Append(NodeEdit(rt, owned)).Append(" ownlen=").Append(NodeLen(rt, owned)).Append(' ');
+        long z = NewNode(rt, 0, NIL);
+        o.Append("zlen=").Append(NodeLen(rt, z)).Append(' ');
+        rt.starve = true;
+        o.Append("starved=").Append(Val.IsNil(NewNode(rt, 4, NIL)) ? 1 : 0).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }

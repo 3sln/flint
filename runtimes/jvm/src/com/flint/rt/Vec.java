@@ -1,6 +1,7 @@
 package com.flint.rt;
 
 import static com.flint.rt.Obj.*;
+import static flint.rt.Vecnode.*;
 
 /// Persistent vectors, ported from `runtime/src/vector.rs`.
 ///
@@ -51,24 +52,11 @@ public final class Vec {
     /// node is copied once and thereafter owned. Without it every `conj!` would
     /// copy, which is the entire cost transients exist to avoid.
     ///
-    /// It is also why `nodeLen` subtracts one and every accessor adds one. The
-    /// port carried plain nodes for a while and read perfectly; it was only not
-    /// the Rust's layout, and an object of a different LENGTH is exactly the
-    /// kind of divergence a snapshot would carry silently between runtimes.
-    static long nodeGet(Rt rt, long node, int i) { return rt.slot(node, i + 1); }
-    static void nodeSet(Rt rt, long node, int i, long v) { rt.setSlot(Val.asHeap(node), i + 1, v); }
-    static int nodeLen(Rt rt, long node) { return len(rt.gc.sp, Val.asHeap(node)) - 1; }
-    static long nodeEdit(Rt rt, long node) { return rt.slot(node, 0); }
-
-    static long newNode(Rt rt, int n, long edit) {
-        int e = rt.push(edit);
-        long a = rt.alloc(TY_NODE, n + 1);
-        long ed = rt.r(e);
-        rt.popTo(e);
-        if (a == 0) return Val.NIL;
-        rt.setSlot(a, 0, ed);
-        return Val.heap(a);
-    }
+    /// `nodeGet`, `nodeSet`, `nodeLen`, `nodeEdit` and `newNode` are GENERATED
+    /// now, from `kin/vecnode.kin`, and reached through the static import at
+    /// the top of this file. They were five one-line functions written three
+    /// times; the offset-by-one that every one of them carries is the kind of
+    /// thing that only has to be got right once.
 
     /// Copy `src`'s first `n` slots into a fresh node of `n` slots, owned by
     /// `edit` (NIL for a persistent node, which nothing owns).

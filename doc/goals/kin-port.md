@@ -842,8 +842,37 @@ were elsewhere. Nothing has needed a right shift yet, which is why it held --
 `Vec` needs one in `tailOff`, `arrayFor`, `newPath`, `pushTail` and `popTail`,
 which is nearly every path in the file.
 
-Being written when the first source needs it, so its shape is set by a use
-rather than guessed.
+WRITTEN, and its shape was set by a use rather than guessed. Neither takes a
+tag, which is worth saying because the comparisons beside them do: each
+template is already right for both tags. `ushr` is Rust's `>>` because its
+host type is `u32` for `I32` and `U32` alike, and Java's `>>>` whatever the
+high bit holds. `sar` is Java's and C#'s plain `>>` because they spell `int`,
+and in Rust has to go through `i32` and back because the OPERATOR does not
+choose there. So the tag decides nothing at the use; the target decides, once.
+
+### The first `Vec` slice ships: `vecnode.kin`
+
+The node layer -- `node-len`, `node-get`, `node-set`, `node-edit`, `new-node`
+-- five one-line functions that were written three times, each carrying the
+same off-by-one, because slot 0 of a node is the transient ownership token and
+the children start at 1. Generated once now.
+
+Getting there needed three things that were not on the list:
+
+* **`TY_NODE` was not in the tag table.** Every other vector-adjacent tag was.
+* **The CLR spelled `Vec`'s constants differently from its own `Maps`** --
+  `Bits`, `Width`, `Mask`, `VCnt` .. `VHash` against `HM_ROOT` and `AM_META`
+  two files away. One runtime disagreeing with the other two AND with itself
+  is worth less than C# casing convention, so the CLR was renamed and the
+  constants added to the agreement table.
+* **The driver fixture disagreed with the real `olen`.** It took an `Addr` in
+  the fixture and a `Value` in all three runtimes, so the source compiled in
+  the probe harness and did not compile in the runtime. Third time a
+  fixture/reality mismatch has cost a cycle; the fixture is a claim about the
+  runtime's signatures and is only as good as the last time it was checked.
+
+`node-set` is the one statement in the layer and confirmed kin emits a void
+function cleanly -- `pub fn ... ()`, `static void`, `static void`.
 
 ### Port order, re-derived
 

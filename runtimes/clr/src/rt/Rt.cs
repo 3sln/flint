@@ -1015,7 +1015,7 @@ public sealed class Rt : System.IDisposable {
         if (!Val.IsHeap(v)) return -1;
         switch (Ty(gc.sp, Val.AsHeap(v))) {
             case TySym: return 2;
-            case TyVec: return Vec.VMeta;
+            case TyVec: return Vec.V_META;
             case TyArraymap: return Maps.AM_META;
             case TyHashmap: return Maps.HM_META;
             case TySet: return Sets.S_META;

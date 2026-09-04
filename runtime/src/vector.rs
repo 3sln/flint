@@ -22,35 +22,6 @@ pub const MASK: u32 = WIDTH - 1;
 // --- node helpers ----------------------------------------------------------
 
 impl Rt {
-    /// A trie node with `n` child slots, all nil.
-    pub fn new_node(&mut self, n: u32, edit: Value) -> Value {
-        let e = self.push(edit);
-        let a = self.alloc(TY_NODE, n + 1);
-        let edit = self.r(e);
-        self.pop_to(e);
-        if a == 0 {
-            return NIL;
-        }
-        self.set_slot(a, 0, edit);
-        Value::heap(a)
-    }
-    #[inline]
-    pub fn node_len(&self, n: Value) -> u32 {
-        len(&self.gc.sp, n.as_heap()) - 1
-    }
-    #[inline]
-    pub fn node_get(&self, n: Value, i: u32) -> Value {
-        slot(&self.gc.sp, n.as_heap(), i + 1)
-    }
-    #[inline]
-    pub fn node_set(&mut self, n: Value, i: u32, v: Value) {
-        self.set_slot(n.as_heap(), i + 1, v);
-    }
-    #[inline]
-    pub fn node_edit(&self, n: Value) -> Value {
-        slot(&self.gc.sp, n.as_heap(), 0)
-    }
-
     /// Copy a node, optionally resizing. Used for every persistent update.
     pub fn node_clone(&mut self, n: Value, newlen: u32, edit: Value) -> Value {
         let old = self.push(n);

@@ -20,3 +20,4 @@ pub mod merge;
 pub mod nodeclass;
 pub mod pike;
 pub mod seqs;
+pub mod vecnode;

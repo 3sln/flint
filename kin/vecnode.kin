@@ -1,0 +1,67 @@
+;; The VECTOR's trie NODES: what one is, how one is made, and how one is copied.
+;;
+;; A vector is Clojure's 32-way trie with a tail, and the shape is Clojure's
+;; because Clojure's is right. What differs is bookkeeping: a node here is an
+;; ordinary GC object whose SLOT 0 is the transient ownership token, `nil` when
+;; the node is persistent, rather than a host array plus an atomic reference.
+;;
+;;     TY_VEC   [cnt, shift, root, tail, meta, hash]
+;;     TY_NODE  [edit, e0, e1, ...]        -- internal nodes are 32 wide
+;;
+;; That extra slot is what makes transients possible -- a node whose token is
+;; this transient's is owned by it and written IN PLACE, and any other node is
+;; copied once and thereafter owned -- and it is why `node-len` subtracts one
+;; and every accessor adds one.
+;;
+;; Two divergences were closed to get here, both of the same kind: the same
+;; value being a DIFFERENT SHAPE on different runtimes, with no gate able to
+;; see it, because a conformance suite compares answers and these were only
+;; visible in the object.
+;;
+;;   * `V_HASH` did not exist on either port. A vector was six slots on native
+;;     and five on the ports, so neither port could cache a vector's hash and
+;;     both walked the whole vector on every `hash`.
+;;   * `node-clone` had a `max(n, 1)` floor on both ports and not on native,
+;;     so persisting an EMPTY transient produced a two-slot tail node there and
+;;     a one-slot tail node here.
+(ns flint.rt.vecnode
+  (:require [flint.impl.rt :refer [defn return if let local set do comment doc
+                                   for not == <
+                                   mark push r pop-to alloc set-at set-slot heap
+                                   slot olen nil? as-heap
+                                   - +
+                                   Rt Value Addr RootIx I32 Bool NIL
+                                   TY_NODE]]))
+
+(doc "How many CHILD slots, which is one fewer than the object's length --"
+     "slot 0 is the ownership token and is not a child.")
+(defn ^:pub ^:method ^I32 node-len [^Rt rt ^Value n]
+  (return (- (olen rt n) 1)))
+
+(doc "Child `i`, which lives at slot `i + 1`.")
+(defn ^:pub ^:method ^Value node-get [^Rt rt ^Value n ^I32 i]
+  (return (slot rt n (+ i 1))))
+
+(doc "Write child `i`. No return: this is a store, and the one place in the"
+     "node layer that is a statement rather than an expression.")
+(defn ^:pub ^:method node-set [^:mut ^Rt rt ^Value n ^I32 i ^Value v]
+  (set-slot rt n (+ i 1) v))
+
+(doc "Who owns this node: the transient's token, or `nil` when nothing does.")
+(defn ^:pub ^:method ^Value node-edit [^Rt rt ^Value n]
+  (return (slot rt n 0)))
+
+(doc "A trie node with `n` child slots, all nil, owned by `edit`."
+     ""
+     "`edit` is rooted across the allocation and read back afterwards, because"
+     "a value in a host local does not survive an allocation"
+     "(`doc/decisions/0031`) -- and `alloc` is the allocation.")
+(defn ^:pub ^:method ^Value new-node [^:mut ^Rt rt ^I32 n ^Value edit]
+  (let [^RootIx e (push rt edit)
+        ^Addr a (alloc rt TY_NODE (+ n 1))
+        ^Value ed (r rt e)]
+    (pop-to rt e)
+    (if (== a 0)
+      (return NIL))
+    (set-at rt a 0 ed)
+    (return (heap a))))

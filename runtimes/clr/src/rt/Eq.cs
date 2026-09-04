@@ -192,7 +192,7 @@ public static class Eq {
                 // vector is ROOTED across the walk -- the write at the end would
                 // otherwise land on a stale address, which is not a wrong hash
                 // but a corrupted heap (`doc/decisions/0031`).
-                long cached = rt.Slot(v, Vec.VHash);
+                long cached = rt.Slot(v, Vec.V_HASH);
                 if (Val.IsFixnum(cached)) return (int) Val.AsFixnum(cached);
                 int bas = rt.Mark();
                 int vi = rt.Push(v);
@@ -201,7 +201,7 @@ public static class Eq {
                     acc = flint.rt.Hash.OrderedStep(acc, HashValue(rt, Vec.Nth(rt, rt.R(vi), i)));
                 }
                 int h = flint.rt.Hash.MixCollHash(acc, n);
-                rt.SetSlot(Val.AsHeap(rt.R(vi)), Vec.VHash, Val.Fixnum(h));
+                rt.SetSlot(Val.AsHeap(rt.R(vi)), Vec.V_HASH, Val.Fixnum(h));
                 rt.PopTo(bas);
                 return h;
             }

@@ -174,7 +174,7 @@
   is a NAME table rather than a form table -- they are values, not calls, and
   the difference matters because a name can appear in a `case` label where a
   call cannot."
-  '[TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ TY_STRSEQ TY_RANGE TY_VEC
+  '[TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ TY_STRSEQ TY_RANGE TY_VEC TY_NODE
     TY_MAPENTRY TY_ARRAYMAP TY_HASHMAP TY_TABLEREF TY_SET TY_STR TY_KEYWORD
     TY_SYMBOL TY_BMNODE TY_COLLNODE])
 
@@ -222,7 +222,21 @@
             ;; not a property of the name, and `LS_THUNK` agreed on two of
             ;; three until it did not.
             AM_BASE AM_META AM_HASH HM_CNT HM_ROOT HM_META HM_HASH
-            ARRAY_MAP_MAX])))
+            ARRAY_MAP_MAX
+            ;; THE VECTOR's trie shape and slot names. They did NOT agree when
+            ;; this entry was written: the CLR spelled them `Bits`, `Width`,
+            ;; `Mask`, `VCnt` .. `VHash` while its own `Maps` used `HM_ROOT`
+            ;; and `AM_META` two files away. One runtime disagreeing with the
+            ;; other two AND with itself is worth less than C# casing
+            ;; convention, so the CLR was renamed to match.
+            ;;
+            ;; `V_HASH` is here because it now exists everywhere. It was a
+            ;; native-only slot -- six slots on Rust, five on both ports --
+            ;; and the ports could not cache a vector's hash for want of
+            ;; somewhere to put it.
+            BITS WIDTH MASK
+            V_CNT V_SHIFT V_ROOT V_TAIL V_META V_HASH
+            T_CNT T_SHIFT T_ROOT T_TAIL T_EDIT])))
 
 (def names
   "Every type tag, spelled three ways. A NAME rather than a form, because a
@@ -347,6 +361,34 @@
     ;; refuses to carry a `bit-shift-right` at all and a subject names `ushr`
     ;; and `sar` explicitly.
     'shl (core/call {:rust "({0} << {1})" :java "({0} << {1})" :csharp "({0} << {1})"})
+
+    ;; THE RIGHT SHIFTS, which the comment above and two in `kin.lang` have
+    ;; been describing as though they existed. They did not. `shl` stood here
+    ;; alone, explaining the absence of its counterpart as though the
+    ;; counterpart were somewhere else, and nothing had needed a right shift
+    ;; yet -- `Vec` needs one in `tailOff`, `arrayFor`, `newPath`, `pushTail`
+    ;; and `popTail`, which is nearly every path in the file.
+    ;;
+    ;; NEITHER takes a tag, and that is worth saying because the comparisons
+    ;; above do. The reason the shifts are simpler is that each template is
+    ;; already right for both tags:
+    ;;
+    ;;   `ushr`  Rust's host type is `u32` for `I32` and `U32` alike, so `>>`
+    ;;           is already the logical shift. Java's `>>>` is logical whatever
+    ;;           the high bit holds, and agrees with `>>` when it is clear.
+    ;;   `sar`   Java and C# spell `int` and `>>` is already arithmetic. Rust
+    ;;           has to go through `i32` and come back, because its host type
+    ;;           is unsigned and the OPERATOR does not choose there.
+    ;;
+    ;; So the tag decides nothing at the use; the target does, once. Naming the
+    ;; two separately is still what makes a reader's intent survive the trip --
+    ;; a single `>>` would be three runtimes silently disagreeing above 2^31.
+    'ushr (core/call {:rust "({0} >> {1})"
+                      :java "({0} >>> {1})"
+                      :csharp "((int)((uint) {0} >> {1}))"})
+    'sar (core/call {:rust "((({0} as i32) >> {1}) as u32)"
+                     :java "({0} >> {1})"
+                     :csharp "({0} >> {1})"})
 
     ;; --- UNSIGNED COMPARISON AND DIVISION -------------------------------
     ;;
