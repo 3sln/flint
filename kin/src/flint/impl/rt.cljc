@@ -176,8 +176,18 @@
   call cannot."
   '[TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ TY_STRSEQ TY_RANGE TY_VEC TY_NODE
     TY_TVEC TY_VOLATILE TY_TABLE
-    TY_MAPENTRY TY_ARRAYMAP TY_HASHMAP TY_TABLEREF TY_SET TY_STR TY_KEYWORD
-    TY_SYMBOL TY_BMNODE TY_COLLNODE])
+    TY_MAPENTRY TY_ARRAYMAP TY_HASHMAP TY_TABLEREF TY_SET TY_STR
+    ;; `TY_SYM` and `TY_KW`, and they were listed here as `TY_SYMBOL` and
+    ;; `TY_KEYWORD` -- names NO target defines. Nothing had used them, so
+    ;; nothing broke; the first source to name a symbol's tag would have
+    ;; emitted an undefined constant into all three at once. Exactly the shape
+    ;; `LS_THUNK` had, and `vec-nth`'s stale arity, and the reason
+    ;; `kin/scripts/check-names` now refuses a name no target defines.
+    TY_SYM TY_KW
+    TY_BMNODE TY_COLLNODE
+    ;; What `describe` dispatches over, beyond the above.
+    TY_CLOSURE TY_NATIVEFN TY_TMAP TY_TSET TY_ROPE TY_BYTES TY_RECORD
+    TY_ATOM TY_VAR TY_DELAY TY_REGEX TY_MULTIFN TY_REDUCED TY_EXINFO])
 
 (defn- csharp-tag
   "`TY_EMPTY_LIST` -> `Obj.TyEmptyList`."

@@ -53,6 +53,21 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/snap"
 fails=0
 
+# --- 0. The NAME TABLE, before any source is asked to use one. --------------
+#
+# `type-tags` claimed `TY_SYMBOL` and `TY_KEYWORD` for the life of this port
+# and no target has ever defined either -- they are `TY_SYM` and `TY_KW`
+# everywhere. Nothing broke because no source had named one yet, which is
+# exactly why nothing found it: an entry nothing uses is an entry nothing
+# checks. This runs FIRST because it is the cheapest of the checks here and
+# the only one that can fail on a name no source mentions.
+if out=$(./kin/scripts/check-names 2>&1); then
+  echo "  ok   every name in the vocabulary is defined by the runtime that needs it"
+else
+  echo "$out" | sed -n 's/^  FAIL/  FAIL/p'
+  fails=$((fails + 1))
+fi
+
 for src in kin/*.kin; do
   name=$(basename "$src" .kin)
   if [ ! -f "kin/$name.drivers" ]; then

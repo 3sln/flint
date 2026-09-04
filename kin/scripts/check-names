@@ -1,0 +1,69 @@
+#!/usr/bin/env bb
+;; Every NAME in the vocabulary, checked against the runtime that has to define it.
+;;
+;;     kin/scripts/check-names
+;;
+;; A name table is an assertion that three runtimes agree about a spelling, and
+;; nothing was checking it. `TY_SYMBOL` and `TY_KEYWORD` sat in `type-tags` for
+;; the life of this port; no target has ever defined either -- they are `TY_SYM`
+;; and `TY_KW` everywhere. Nothing broke, because no source had named a symbol's
+;; type tag yet. The first one to do so would have emitted an undefined constant
+;; into all three targets at once.
+;;
+;; That is the third time this exact shape has been found: `LS_THUNK` spelled
+;; `LsThunk` on the CLR, `vec-nth` still claiming arity 2 after it grew a
+;; `dflt`, and now this. Each was invisible for the same reason -- an entry
+;; nothing used yet is an entry nothing checked -- and each was found by a
+;; source finally using it rather than by a gate. This is the gate.
+;;
+;; It asks the WEAKEST question that catches it: does the emitted spelling
+;; appear anywhere in that target's runtime sources? Not "is it a constant of
+;; the right type" -- that needs a parser per language, and the failure being
+;; caught here is a name that appears NOWHERE.
+(require '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[flint.impl.rt :as rt])
+
+(def trees
+  {:rust   ["runtime/src"]
+   :java   ["runtimes/jvm/src/com/flint/rt"]
+   :csharp ["runtimes/clr/src/rt"]})
+
+(defn sources [target]
+  (mapcat (fn [d] (filter #(re-find #"\.(rs|java|cs)$" (str %))
+                          (file-seq (java.io.File. d))))
+          (trees target)))
+
+(def text
+  (into {} (for [t (keys trees)]
+             [t (str/join "\n" (map slurp (sources t)))])))
+
+;; The bare identifier a spelling ends in: `Obj.TyCons` is defined as `TyCons`,
+;; `Val.NIL` as `NIL`. Qualification is the CALLER's business and says nothing
+;; about how the definition is written.
+(defn ident [s] (last (str/split s #"[.:]")))
+
+(def failures (atom 0))
+
+(defn check [what nm target spelling]
+  (let [id (ident spelling)]
+    (when-not (str/includes? (get text target) id)
+      (swap! failures inc)
+      (println (format "  FAIL %s `%s` emits `%s` for %s, and no file under %s defines `%s`"
+                       what nm spelling (name target)
+                       (str/join ", " (get trees target)) id)))))
+
+(println "\nkin/check-names: every name, against the runtime that defines it\n")
+
+(doseq [[nm per-target] (sort-by key rt/names)
+        :when (map? per-target)
+        [target spelling] per-target
+        :when (contains? trees target)]
+  (check "name" nm target spelling))
+
+(println (format "  %d names over %d targets" (count rt/names) (count trees)))
+(if (zero? @failures)
+  (do (println "\ncheck-names: every name is defined by the runtime that has to have it\n")
+      (System/exit 0))
+  (do (println (format "\ncheck-names: %d FAILURE(S)\n" @failures))
+      (System/exit 1)))
