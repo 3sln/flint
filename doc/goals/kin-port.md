@@ -947,6 +947,41 @@ introduces it and fails on the next, unrelated one. That happened here, and it
 sent the first round of attribution at the wrong commit: the failure surfaced
 during `vecread` while appearing to belong to `vecnode`.
 
+### `nth`'s absence: the convergence is `map-get`'s, and the census says so
+
+`vec_nth` answers `Option<Value>` in Rust and `NOT_FOUND` on both ports. It was
+left out of `vecread.kin` because converging it is a decision with a blast
+radius, not a line of porting. Here is the radius, counted rather than
+estimated -- 95 call sites in Rust:
+
+    70   .unwrap_or(NIL)     or .unwrap_or(dflt)
+    19   .unwrap()           the caller has already bounds-checked
+     2   assert ... == None  two unit tests
+     4   structural          .and_then, .map, .unwrap_or_else, one `match`
+
+**89 of 95 want "the value, or a default".** That is not an `Option` being
+used as an `Option`; it is a default spelled 89 times at the call site.
+
+The first count of this was WRONG and worth recording as a hazard: the regex
+`vec_nth\([^)]*\)` stops at the first `)`, so every nested call --
+`vec_nth(self.r(vi), i)`, which is most of them -- had its suffix mis-read.
+It reported a category of 31 "bare" uses that do not exist. Balanced-paren
+scanning gives the table above; the shape of the answer changed completely.
+
+So the convergence is the one `map-get` already made:
+
+    vec-nth(rt, v, i, dflt)   ->  the element, or `dflt` when out of range
+
+`map-get` is a shipped kin function with exactly this signature, and matching
+it means the two lookup functions in the runtime answer absence the same way
+rather than each having its own idea. It covers 89 sites mechanically, leaves
+6 to rewrite, and needs no new capability from kin -- absence stops being a
+hole and becomes an argument.
+
+Not done yet, and deliberately: the write path (`new-vec`, `new-path`,
+`push-tail`, `conj`) is more code and needs no decision at all, so it goes
+first.
+
 ### Port order, re-derived
 
 | # | region | gate | lines across 3 |
