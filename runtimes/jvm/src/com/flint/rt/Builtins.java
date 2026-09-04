@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapread;
+
 import flint.rt.Mapcore;
 
 import static com.flint.rt.Obj.*;
@@ -521,7 +523,7 @@ rt.describe(v) + " is not a transient");
             long dflt = n > 2 ? rt.vat(at + 2) : Val.NIL;
             long coll = rt.vat(at);
             if (Val.isNil(coll)) return dflt;
-            if (Mapcore.isMap(rt, coll)) return Maps.get(rt, coll, rt.vat(at + 1), dflt);
+            if (Mapcore.isMap(rt, coll)) return Mapread.mapGet(rt, coll, rt.vat(at + 1), dflt);
             // A tagged literal reads like a two-key map (`0034`).
             if (rt.isHeapTy(coll, Obj.TY_TAGGED)) return taggedGet(rt, coll, rt.vat(at + 1), dflt);
             if (Sets.isSet(rt, coll)) return Sets.get(rt, coll, rt.vat(at + 1), dflt);
@@ -661,7 +663,7 @@ rt.describe(v) + " is not a transient");
         def("contains?", (rt, at, n) -> {
             long coll = rt.vat(at);
             if (Val.isNil(coll)) return Val.FALSE;
-            if (Mapcore.isMap(rt, coll)) return Val.bool(Maps.contains(rt, coll, rt.vat(at + 1)));
+            if (Mapcore.isMap(rt, coll)) return Val.bool(Mapread.mapContains(rt, coll, rt.vat(at + 1)));
             if (Sets.isSet(rt, coll)) return Val.bool(Sets.contains(rt, coll, rt.vat(at + 1)));
             // The TRANSIENT forms too. A transient is a handle on the same
             // trie, so every reader that works on the persistent value works on
@@ -797,7 +799,7 @@ rt.describe(v) + " is not a transient");
         def("flint/dyn-get", (rt, at, n) -> {
             long binds = rt.roots.shared.singletons[Rt.SING_BINDINGS];
             if (Val.isNil(binds)) return rt.vat(at + 1);
-            return Maps.get(rt, binds, rt.vat(at), rt.vat(at + 1));
+            return Mapread.mapGet(rt, binds, rt.vat(at), rt.vat(at + 1));
         });
         def("flint/dyn-bindings", (rt, at, n) -> {
             long b = rt.roots.shared.singletons[Rt.SING_BINDINGS];

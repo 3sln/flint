@@ -243,7 +243,17 @@ fi
 # It is now within 0.1%, and the residue is one named thing: the ports' map
 # allocates more per entry than the Rust CHAMP does. A budget that fits on one
 # runtime has to fit on the others, or the mirror stops at the answers.
-if [ -f out/gm-small.img ] || ./bin/flint :src runtimes/conform :fn gasmeter/small --emit-image :out out/gm-small.img >/dev/null 2>&1; then
+# BOTH images are rebuilt every run, and the `[ -f ... ] ||` that used to skip
+# the small one is gone. It reused whatever was on disk, so `small` stayed
+# frozen at its first build while `big` was rebuilt every time -- and the check
+# then compared the gas of TWO DIFFERENT BUILDS of the runtime.
+#
+# That does not fail loudly. It produces a plausible number, and it produced
+# one for two days: a `small` image from September 1 against a `big` from
+# September 3, both answering 1881, difference zero. The whole point of this
+# row is that the difference cancels startup and leaves what the program did;
+# comparing across builds cancels nothing and means nothing.
+if ./bin/flint :src runtimes/conform :fn gasmeter/small --emit-image :out out/gm-small.img >/dev/null 2>&1; then
   ./bin/flint :src runtimes/conform :fn gasmeter/big --emit-image :out out/gm-big.img >/dev/null 2>&1
   ./bin/flint :src runtimes/conform :fn gasmeter/small :out out/gm-small.wasm >/dev/null 2>&1
   ./bin/flint :src runtimes/conform :fn gasmeter/big :out out/gm-big.wasm >/dev/null 2>&1

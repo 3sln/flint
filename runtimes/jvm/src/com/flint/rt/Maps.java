@@ -1,8 +1,11 @@
 package com.flint.rt;
 
+import flint.rt.Mapread;
+
 import static com.flint.rt.Obj.*;
 import static flint.rt.Assoc.*;
 import static flint.rt.Mapcore.*;
+import static flint.rt.Mapread.*;
 import static flint.rt.Champ.*;
 import static flint.rt.Collnode.*;
 import static flint.rt.Dissoc.*;
@@ -101,48 +104,8 @@ public final class Maps {
 
     static void amSet(Rt rt, long m, int i, long v) { rt.setSlot(Val.asHeap(m), i, v); }
 
-    static int amIndexOf(Rt rt, long m, long k) {
-        int base = rt.mark();
-        int mi = rt.push(m), ki = rt.push(k);
-        int n = mapCount(rt, rt.r(mi));
-        int out = -1;
-        for (int i = 0; i < n; i++) {
-            if (Eq.eq(rt, amKey(rt, rt.r(mi), i), rt.r(ki))) { out = i; break; }
-        }
-        rt.popTo(base);
-        return out;
-    }
 
-    public static long get(Rt rt, long m, long k, long notFound) {
-        // A ROW REF answers HERE rather than at every call site. `isMap` says
-        // true for one, so every path that asks "is this a map?" and then calls
-        // this would otherwise read a table row as an array-map and find
-        // nothing -- which is what `(:name row)` did.
-        if (Val.isHeap(m) && ty(rt.gc.sp, Val.asHeap(m)) == Obj.TY_TABLEREF)
-            return Table.refGet(rt, m, k, notFound);
-        if (!Val.isHeap(m)) return notFound;
-        int t = ty(rt.gc.sp, Val.asHeap(m));
-        if (t == TY_ARRAYMAP) {
-            int i = amIndexOf(rt, m, k);
-            return i < 0 ? notFound : amVal(rt, m, i);
-        }
-        if (t == TY_HASHMAP) {
-            int base = rt.mark();
-            int mi = rt.push(m), ki = rt.push(k);
-            // Hash FIRST, then read the root: hashing a compound key can
-            // allocate, and an address read before that would be stale.
-            int h = Eq.hashValue(rt, rt.r(ki));
-            long root = rt.slot(rt.r(mi), HM_ROOT);
-            long r = Val.isNil(root) ? Val.NOT_FOUND : nodeFind(rt, root, 0, h, rt.r(ki));
-            rt.popTo(base);
-            return r == Val.NOT_FOUND ? notFound : r;
-        }
-        return notFound;
-    }
 
-    public static boolean contains(Rt rt, long m, long k) {
-        return get(rt, m, k, Val.NOT_FOUND) != Val.NOT_FOUND;
-    }
 
     static long promote(Rt rt, long m) {
         int base = rt.mark();
@@ -171,8 +134,10 @@ public final class Maps {
         int t = ty(rt.gc.sp, Val.asHeap(m));
         if (t == TY_ARRAYMAP) {
             int n = mapCount(rt, m);
+            // `amIndexOf` answers `n` when absent -- the sentinel the CHAMP
+            // paths already use -- not `-1`.
             int i = amIndexOf(rt, rt.r(mi), rt.r(ki));
-            if (i >= 0) {
+            if (i != n) {
                 long old = amVal(rt, rt.r(mi), i);
                 if (old == rt.r(vi)) {
                     out = rt.r(mi);
@@ -245,7 +210,7 @@ public final class Maps {
         int t = ty(rt.gc.sp, Val.asHeap(m));
         if (t == TY_ARRAYMAP) {
             int i = amIndexOf(rt, rt.r(mi), rt.r(ki));
-            if (i < 0) {
+            if (i == mapCount(rt, rt.r(mi))) {
                 out = rt.r(mi);
             } else {
                 int n = mapCount(rt, rt.r(mi));
@@ -500,7 +465,7 @@ public final class Maps {
             int m = rt.mark();
             int ki = rt.push(rt.r(at + 2 * i));
             int vi = rt.push(rt.r(at + 2 * i + 1));
-            int oi = rt.push(get(rt, rt.r(bi), rt.r(ki), Val.NOT_FOUND));
+            int oi = rt.push(mapGet(rt, rt.r(bi), rt.r(ki), Val.NOT_FOUND));
             ok = rt.r(oi) != Val.NOT_FOUND && Eq.eq(rt, rt.r(vi), rt.r(oi));
             rt.popTo(m);
         }

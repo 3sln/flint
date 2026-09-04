@@ -14,6 +14,7 @@ pub mod find;
 pub mod hash;
 pub mod interns;
 pub mod mapcore;
+pub mod mapread;
 pub mod merge;
 pub mod nodeclass;
 pub mod pike;

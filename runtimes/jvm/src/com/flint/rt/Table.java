@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapread;
+
 import flint.rt.Mapcore;
 
 import static com.flint.rt.Obj.*;
@@ -128,7 +130,7 @@ public final class Table {
                     "no such column type :" + shown
                         + "; the types are :int :double :string :bool :keyword :any");
             }
-            if (!Val.isNil(Maps.get(rt, rt.r(ii), nm, Val.NIL))) {
+            if (!Val.isNil(Mapread.mapGet(rt, rt.r(ii), nm, Val.NIL))) {
                 String shown = kwName(rt, nm);
                 rt.popTo(base);
                 return rt.throwStr("IllegalArgumentException",
@@ -161,7 +163,7 @@ public final class Table {
 
     /// The column id of `name`, or -1.
     public static int schemaId(Rt rt, long s, long name) {
-        long p = Maps.get(rt, rt.slot(s, SC_INDEX), name, Val.NIL);
+        long p = Mapread.mapGet(rt, rt.slot(s, SC_INDEX), name, Val.NIL);
         return Val.isFixnum(p) ? (int) Val.asFixnum(p) : -1;
     }
 
@@ -275,7 +277,7 @@ public final class Table {
                     long rowv = Vec.nth(rt, rt.r(ri), row + k);
                     int rvi = rt.push(rowv);
                     long name = schemaNameAt(rt, rt.r(si), c);
-                    long val = Maps.get(rt, rt.r(rvi), name, Val.NIL);
+                    long val = Mapread.mapGet(rt, rt.r(rvi), name, Val.NIL);
                     long tp = schemaTypeAt(rt, rt.r(si), c);
                     if (!typeOk(rt, tp, val)) {
                         String msg = columnTypeError(rt, name, tp, val, row + k);
@@ -358,7 +360,7 @@ public final class Table {
     static long rowColumn(Rt rt, long s, long row, int c) {
         long name = schemaNameAt(rt, s, c);
         return isTableRef(rt, row) ? refGet(rt, row, name, Val.NOT_FOUND)
-                                   : Maps.get(rt, row, name, Val.NOT_FOUND);
+                                   : Mapread.mapGet(rt, row, name, Val.NOT_FOUND);
     }
 
     /// Does `row` fit `s`? The three refusals are separate because they are
@@ -671,7 +673,7 @@ public final class Table {
                         + " (migrate t s (fn [row] ...))");
                 }
             } else {
-                long dv = Maps.get(rt, rt.r(dfi), rt.r(nmi), Val.NOT_FOUND);
+                long dv = Mapread.mapGet(rt, rt.r(dfi), rt.r(nmi), Val.NOT_FOUND);
                 if (dv == Val.NOT_FOUND) {
                     String nm = kwName(rt, rt.r(nmi));
                     rt.popTo(base);
@@ -711,7 +713,7 @@ public final class Table {
                     set(rt, rt.r(ni), CH_BASE + id, rt.slot(rt.r(chi), CH_BASE + old));
                     set(rt, rt.slot(rt.r(ni), CH_ENC), id, Val.fixnum(chunkEnc(rt, rt.r(chi), old)));
                 } else {
-                    set(rt, rt.r(ni), CH_BASE + id, Maps.get(rt, rt.r(dfi), name, Val.NIL));
+                    set(rt, rt.r(ni), CH_BASE + id, Mapread.mapGet(rt, rt.r(dfi), name, Val.NIL));
                     set(rt, rt.slot(rt.r(ni), CH_ENC), id, Val.fixnum(ENC_CONST));
                 }
             }

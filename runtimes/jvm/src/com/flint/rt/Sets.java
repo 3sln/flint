@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapread;
+
 import flint.rt.Mapcore;
 
 import static com.flint.rt.Obj.*;
@@ -51,14 +53,14 @@ public final class Sets {
     public static int count(Rt rt, long s) { return Mapcore.mapCount(rt, rt.slot(s, S_MAP)); }
 
     public static boolean contains(Rt rt, long s, long x) {
-        return Maps.contains(rt, rt.slot(s, S_MAP), x);
+        return Mapread.mapContains(rt, rt.slot(s, S_MAP), x);
     }
 
     /// `get` on a set returns the STORED element, not the probe. That is what
     /// makes a set usable for canonicalisation -- `(get s x)` hands back the
     /// copy the set is holding, which may not be the object passed in.
     public static long get(Rt rt, long s, long x, long notFound) {
-        return Maps.get(rt, rt.slot(s, S_MAP), x, notFound);
+        return Mapread.mapGet(rt, rt.slot(s, S_MAP), x, notFound);
     }
 
     public static long conj(Rt rt, long s, long x) {

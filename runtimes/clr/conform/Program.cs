@@ -756,7 +756,7 @@ public static class Program {
 
     static bool AllPresent(Flint.Rt.Rt rt, long m, int from, int to) {
         for (int i = from; i < to; i++) {
-            long got = Flint.Rt.Maps.Get(rt, m, Flint.Rt.Val.Fixnum(i), Flint.Rt.Val.Nil);
+            long got = flint.rt.Mapread.MapGet(rt, m, Flint.Rt.Val.Fixnum(i), Flint.Rt.Val.Nil);
             if (!Flint.Rt.Val.IsFixnum(got) || Flint.Rt.Val.AsFixnum(got) != i * 10L) return false;
         }
         return true;
@@ -783,7 +783,7 @@ public static class Program {
     for (int i = 0; i < N; i++) rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
     MOk(N + " keys, all present, count agrees", flint.rt.Mapcore.MapCount(rt, rt.R(m)) == N && AllPresent(rt, rt.R(m), 0, N));
     MOk("a key that was never added is absent",
-       Flint.Rt.Maps.Get(rt, rt.R(m), Flint.Rt.Val.Fixnum(-1), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil);
+       flint.rt.Mapread.MapGet(rt, rt.R(m), Flint.Rt.Val.Fixnum(-1), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil);
     // Re-assoc with the same value must not grow the map.
     rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, 5), Flint.Rt.Val.Fixnum(50)));
     MOk("re-assoc with an identical value does not grow it", flint.rt.Mapcore.MapCount(rt, rt.R(m)) == N);
@@ -803,8 +803,8 @@ public static class Program {
     MOk("  ... and HASH ALIKE, which is what canonical form means",
        Flint.Rt.Eq.HashValue(rt, rt.R(viaDelete)) == Flint.Rt.Eq.HashValue(rt, rt.R(direct)));
     MOk("  ... and the deleted keys really are gone",
-       Flint.Rt.Maps.Get(rt, rt.R(viaDelete), K(rt, 0), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil
-       && Flint.Rt.Maps.Get(rt, rt.R(viaDelete), K(rt, 2), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil);
+       flint.rt.Mapread.MapGet(rt, rt.R(viaDelete), K(rt, 0), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil
+       && flint.rt.Mapread.MapGet(rt, rt.R(viaDelete), K(rt, 2), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil);
 
     // --- COLLISIONS. Not with integer keys: `hashLong` on a small long is a
     // BIJECTION on 32 bits -- `mixK1`, `mixH1` and `fmix` are each invertible,
@@ -831,13 +831,13 @@ public static class Program {
       rt.SetR(c, Flint.Rt.Maps.Assoc(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Fixnum(111)));
       rt.SetR(c, Flint.Rt.Maps.Assoc(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Fixnum(222)));
       MOk("both colliding keys are stored and distinct",
-         Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Nil)) == 111
-         && Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Nil)) == 222);
+         Flint.Rt.Val.AsFixnum(flint.rt.Mapread.MapGet(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Nil)) == 111
+         && Flint.Rt.Val.AsFixnum(flint.rt.Mapread.MapGet(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Nil)) == 222);
       MOk("  and the count counts them both", flint.rt.Mapcore.MapCount(rt, rt.R(c)) == 22);
       rt.SetR(c, Flint.Rt.Maps.Dissoc(rt, rt.R(c), rt.R(ka)));
       MOk("  removing one leaves the other",
-         Flint.Rt.Maps.Get(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil
-         && Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Nil)) == 222);
+         flint.rt.Mapread.MapGet(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil
+         && Flint.Rt.Val.AsFixnum(flint.rt.Mapread.MapGet(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Nil)) == 222);
       MOk("  and the collision node collapsed back to an inline entry",
          flint.rt.Mapcore.MapCount(rt, rt.R(c)) == 21);
     }
@@ -855,9 +855,9 @@ public static class Program {
     int vk2 = rt.Push(Flint.Rt.Vec.Empty(rt));
     rt.SetR(vk2, Flint.Rt.Vec.Conj(rt, rt.R(vk2), Flint.Rt.Val.Fixnum(7)));
     MOk("a string key reads back",
-       Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(s), Flint.Rt.Str.Of(rt, "hello, world"), Flint.Rt.Val.Nil)) == 1);
+       Flint.Rt.Val.AsFixnum(flint.rt.Mapread.MapGet(rt, rt.R(s), Flint.Rt.Str.Of(rt, "hello, world"), Flint.Rt.Val.Nil)) == 1);
     MOk("an equal-but-separate VECTOR key finds the same entry",
-       Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(s), rt.R(vk2), Flint.Rt.Val.Nil)) == 3);
+       Flint.Rt.Val.AsFixnum(flint.rt.Mapread.MapGet(rt, rt.R(s), rt.R(vk2), Flint.Rt.Val.Nil)) == 3);
 
     // --- the collector, over all of it.
     rt.gc.Major(rt.roots);

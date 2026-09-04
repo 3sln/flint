@@ -1,0 +1,126 @@
+;; Reading a key out of a map: the scan, the lookup, and the membership test.
+;;
+;; Two representations and a ref, each answered its own way:
+;;
+;;     ARRAY MAP    a linear scan, because a small map is faster scanned than
+;;                  hashed and `am-index-of` is the scan
+;;     HASH MAP     hash the key, then walk the CHAMP from its root
+;;     ROW REF      handed to the table unit, which knows its columns
+;;
+;; THE SENTINEL follows `assoc.kin`: `am-index-of` answers `n` when nothing
+;; matched. Rust said `Option<u32>` and both ports said `-1`; an index is
+;; `0..n-1`, so `n` is outside the range, unsigned everywhere, and needs no
+;; cast. The same convergence `coll-assoc` and `coll-dissoc` already made.
+;;
+;; THE SCALAR FAST PATH is why `eq-may-alloc` exists. A scalar key cannot
+;; allocate when compared, so nothing can move mid-lookup and the walk needs no
+;; rooting at all -- measured at about 6% of lookup time, which is why both
+;; ports gained it rather than Rust losing it.
+(ns flint.rt.mapread
+  (:require [flint.impl.rt :refer [defn return if let local set do comment doc
+                                   for break not == != <
+                                   mark push r pop-to slot nil?
+                                   val-eq hash-value ref-get
+                                   ty as-heap is-heap
+                                   Rt Value RootIx I32 Ty Bool
+                                   NIL NOT_FOUND HM_ROOT
+                                   TY_ARRAYMAP TY_HASHMAP TY_TABLEREF]]
+            [flint.rt.mapcore :refer [map-count am-key am-val]]
+            [flint.rt.eqalloc :refer [eq-may-alloc]]
+            [flint.rt.find    :refer [node-find node-find-scalar]]))
+
+(doc "Where `k` sits in an array map, or `n` when it is not there."
+     ""
+     "`n` rather than `-1` or an absent value: an index is `0..n-1`, so `n` is"
+     "outside the range without needing a signed type to say so.")
+(defn ^:method ^I32 am-index-of [^:mut ^Rt rt ^Value m ^Value k]
+  (comment "The SCALAR path first, and it roots nothing: `eq` on a scalar"
+           "cannot allocate, so no collection can move `m` mid-scan.")
+  (comment "Named `sn` and not `n`: C# refuses a local whose name is reused in"
+           "an enclosing scope (CS0136), and the rooted path below declares"
+           "`n` at method scope. One source satisfies the strictest target.")
+  (if (not (eq-may-alloc rt k))
+    (do
+      (let [^I32 sn (map-count rt m)]
+        (for [^I32 i 0 sn]
+          (if (val-eq rt (am-key rt m i) k)
+            (return i)))
+        (return sn))))
+  (let [^RootIx base (mark rt)
+        ^RootIx mi (push rt m)
+        ^RootIx ki (push rt k)
+        ^I32 n (map-count rt (r rt mi))]
+    (local ^:mut ^I32 out)
+    (set out n)
+    (for [^I32 i 0 n]
+      (let [^RootIx kk (push rt (am-key rt (r rt mi) i))
+            ^Bool same (val-eq rt (r rt kk) (r rt ki))]
+        (pop-to rt kk)
+        (if same
+          (do
+            (set out i)
+            (break)))))
+    (pop-to rt base)
+    (return out)))
+
+(doc "`k`'s value in `m`, or `dflt`.")
+(defn ^:pub ^:method ^Value map-get [^:mut ^Rt rt ^Value m ^Value k ^Value dflt]
+  (if (not (is-heap m))
+    (return dflt))
+  (comment "A ROW REF answers HERE rather than at every call site. `is-map`"
+           "says true for one, so every path that asks and then reaches a map"
+           "internal would otherwise read a ref as an array map and find"
+           "nothing -- which is what `(:name row)` once did.")
+  (if (== (ty rt (as-heap m)) TY_TABLEREF)
+    (return (ref-get rt m k dflt)))
+  (comment "The SCALAR path: no rooting, because nothing can move.")
+  (if (not (eq-may-alloc rt k))
+    (do
+      (let [^Ty ts (ty rt (as-heap m))]
+        (if (== ts TY_ARRAYMAP)
+          (do
+            (let [^I32 i (am-index-of rt m k)]
+              (if (== i (map-count rt m))
+                (return dflt))
+              (return (am-val rt m i)))))
+        (if (== ts TY_HASHMAP)
+          (do
+            (let [^Value root (slot rt m HM_ROOT)]
+              (if (nil? rt root)
+                (return dflt))
+              (let [^I32 h (hash-value rt k)
+                    ^Value got (node-find-scalar rt root 0 h k)]
+                (if (== got NOT_FOUND)
+                  (return dflt))
+                (return got)))))
+        (return dflt))))
+  (comment "The COMPOUND path. `hash-value` walks the key, which allocates, so"
+           "everything is rooted and the map is read back through its root"
+           "AFTER the hash rather than before it.")
+  (let [^RootIx base (mark rt)
+        ^RootIx mi (push rt m)
+        ^RootIx ki (push rt k)
+        ^RootIx di (push rt dflt)]
+    (local ^Value out)
+    (let [^Ty t (ty rt (as-heap m))]
+      (if (== t TY_ARRAYMAP)
+        (let [^I32 i (am-index-of rt (r rt mi) (r rt ki))]
+          (if (== i (map-count rt (r rt mi)))
+            (set out (r rt di))
+            (set out (am-val rt (r rt mi) i))))
+        (if (== t TY_HASHMAP)
+          (let [^I32 h (hash-value rt (r rt ki))
+                ^Value root (slot rt (r rt mi) HM_ROOT)]
+            (if (nil? rt root)
+              (set out (r rt di))
+              (let [^Value got (node-find rt root 0 h (r rt ki))]
+                (if (== got NOT_FOUND)
+                  (set out (r rt di))
+                  (set out got)))))
+          (set out (r rt di)))))
+    (pop-to rt base)
+    (return out)))
+
+(doc "Is `k` in `m`?")
+(defn ^:pub ^:method ^Bool map-contains [^:mut ^Rt rt ^Value m ^Value k]
+  (return (!= (map-get rt m k NOT_FOUND) NOT_FOUND)))

@@ -49,14 +49,14 @@ public static class Sets {
     public static int Count(Rt rt, long s) { return Mapcore.MapCount(rt, rt.Slot(s, S_MAP)); }
 
     public static bool Contains(Rt rt, long s, long x) {
-        return Maps.Contains(rt, rt.Slot(s, S_MAP), x);
+        return Mapread.MapContains(rt, rt.Slot(s, S_MAP), x);
     }
 
     /// `get` on a set returns the STORED element, not the probe. That is what
     /// makes a set usable for canonicalisation -- `(get s x)` hands back the
     /// copy the set is holding, which may not be the object passed in.
     public static long Get(Rt rt, long s, long x, long notFound) {
-        return Maps.Get(rt, rt.Slot(s, S_MAP), x, notFound);
+        return Mapread.MapGet(rt, rt.Slot(s, S_MAP), x, notFound);
     }
 
     public static long Conj(Rt rt, long s, long x) {

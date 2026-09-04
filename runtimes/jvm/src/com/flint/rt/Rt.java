@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapread;
+
 import flint.rt.Mapcore;
 
 import java.util.ArrayList;
@@ -934,7 +936,7 @@ public final class Rt {
         if (Mapcore.isMap(this, callee)) {
             if (argc < 1) return throwStr("ArityException", "a map takes 1 or 2 arguments");
             long dflt = argc >= 2 ? roots.stack[calleeAt + 2] : Val.NIL;
-            return Maps.get(this, callee, roots.stack[calleeAt + 1], dflt);
+            return Mapread.mapGet(this, callee, roots.stack[calleeAt + 1], dflt);
         }
         if (isHeapTy(callee, TY_VEC)) {
             if (argc < 1) return throwStr("ArityException", "a vector takes 1 argument");
@@ -952,7 +954,7 @@ public final class Rt {
     /// `get`, for the collections that are ported.
     long lookup(long coll, long k, long dflt) {
         if (Val.isNil(coll)) return dflt;
-        if (Mapcore.isMap(this, coll)) return Maps.get(this, coll, k, dflt);
+        if (Mapcore.isMap(this, coll)) return Mapread.mapGet(this, coll, k, dflt);
         if (Sets.isSet(this, coll)) return Sets.get(this, coll, k, dflt);
         // `(:tag x)` and `(:form x)` (`doc/decisions/0034`). Without this the
         // same lookup by two spellings disagrees: `(get x :tag)` answers and

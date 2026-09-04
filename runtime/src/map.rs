@@ -122,103 +122,8 @@ impl Rt {
 
 
 
-    fn am_index_of(&mut self, m: Value, k: Value) -> Option<u32> {
-        if !self.eq_may_alloc(k) {
-            let n = self.map_count(m);
-            for i in 0..n {
-                let kk = self.am_key(m, i);
-                if self.eq(kk, k) {
-                    return Some(i);
-                }
-            }
-            return None;
-        }
-        let base = self.mark();
-        let mi = self.push(m);
-        let ki = self.push(k);
-        let n = self.map_count(self.r(mi));
-        let mut out = None;
-        for i in 0..n {
-            let kk = self.am_key(self.r(mi), i);
-            let kki = self.push(kk);
-            let same = self.eq(self.r(kki), self.r(ki));
-            self.pop_to(kki);
-            if same {
-                out = Some(i);
-                break;
-            }
-        }
-        self.pop_to(base);
-        out
-    }
 
-    pub fn map_get(&mut self, m: Value, k: Value, not_found: Value) -> Value {
-        if !m.is_heap() {
-            return not_found;
-        }
-        // A ROW REF answers here rather than at every call site. `is_map` says
-        // true for one, so every path that asks "is this a map?" and then calls
-        // this would otherwise read a table row as an array-map and find
-        // nothing -- which is what `(:name row)` did.
-        if ty(&self.gc.sp, m.as_heap()) == crate::obj::TY_TABLEREF {
-            return self.ref_get(m, k, not_found);
-        }
-        if !self.eq_may_alloc(k) {
-            return match ty(&self.gc.sp, m.as_heap()) {
-                TY_ARRAYMAP => match self.am_index_of(m, k) {
-                    Some(i) => self.am_val(m, i),
-                    None => not_found,
-                },
-                TY_HASHMAP => {
-                    let root = self.slot(m, HM_ROOT);
-                    if root.is_nil() {
-                        return not_found;
-                    }
-                    let h = self.hash_value(k);
-                    let r = self.node_find_scalar(root, 0, h, k);
-                    if r == NOT_FOUND {
-                        not_found
-                    } else {
-                        r
-                    }
-                }
-                _ => not_found,
-            };
-        }
-        let base = self.mark();
-        let mi = self.push(m);
-        let ki = self.push(k);
-        let nfi = self.push(not_found);
-        let out = match ty(&self.gc.sp, m.as_heap()) {
-            TY_ARRAYMAP => match self.am_index_of(self.r(mi), self.r(ki)) {
-                Some(i) => self.am_val(self.r(mi), i),
-                None => self.r(nfi),
-            },
-            TY_HASHMAP => {
-                // Hash first, then read the root: hashing a compound key walks
-                // it, which allocates, which can move the map.
-                let h = self.hash_value(self.r(ki));
-                let root = self.slot(self.r(mi), HM_ROOT);
-                if root.is_nil() {
-                    self.r(nfi)
-                } else {
-                    let r = self.node_find(root, 0, h, self.r(ki));
-                    if r == NOT_FOUND {
-                        self.r(nfi)
-                    } else {
-                        r
-                    }
-                }
-            }
-            _ => self.r(nfi),
-        };
-        self.pop_to(base);
-        out
-    }
 
-    pub fn map_contains(&mut self, m: Value, k: Value) -> bool {
-        self.map_get(m, k, NOT_FOUND) != NOT_FOUND
-    }
 
     /// Convert an array-map to a hash-map, preserving contents.
     fn promote(&mut self, m: Value) -> Value {
@@ -255,7 +160,11 @@ impl Rt {
         let out = match ty(&self.gc.sp, m.as_heap()) {
             TY_ARRAYMAP => {
                 let n = self.map_count(m);
-                match self.am_index_of(self.r(mi), self.r(ki)) {
+                // `am_index_of` answers `n` when the key is absent -- the
+                // sentinel `coll_assoc` and `coll_dissoc` already use, and now
+                // what the generated `am_index_of` returns.
+                let found = self.am_index_of(self.r(mi), self.r(ki));
+                match if found == n { None } else { Some(found) } {
                     Some(i) => {
                         let old = self.am_val(self.r(mi), i);
                         if old == self.r(vi) {
@@ -348,10 +257,13 @@ impl Rt {
         let mi = self.push(m);
         let ki = self.push(k);
         let out = match ty(&self.gc.sp, m.as_heap()) {
-            TY_ARRAYMAP => match self.am_index_of(self.r(mi), self.r(ki)) {
+            TY_ARRAYMAP => {
+                // `n` when absent, per the sentinel convention.
+                let n = self.map_count(self.r(mi));
+                let found = self.am_index_of(self.r(mi), self.r(ki));
+                match if found == n { None } else { Some(found) } {
                 None => self.r(mi),
                 Some(i) => {
-                    let n = self.map_count(self.r(mi));
                     let nm = self.new_array_map(n - 1);
                     let ni = self.push(nm);
                     let mut d = 0;
@@ -368,7 +280,8 @@ impl Rt {
                     self.set(self.r(ni), AM_META, meta);
                     self.r(ni)
                 }
-            },
+                }
+            }
             TY_HASHMAP => {
                 let h = self.hash_value(self.r(ki));
                 let root = self.slot(self.r(mi), HM_ROOT);

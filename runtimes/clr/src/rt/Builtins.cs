@@ -491,7 +491,7 @@ public static class Builtins {
             long dflt = n > 2 ? rt.VAt(at + 2) : Val.Nil;
             long coll = rt.VAt(at);
             if (Val.IsNil(coll)) return dflt;
-            if (Mapcore.IsMap(rt, coll)) return Maps.Get(rt, coll, rt.VAt(at + 1), dflt);
+            if (Mapcore.IsMap(rt, coll)) return Mapread.MapGet(rt, coll, rt.VAt(at + 1), dflt);
             // A tagged literal reads like a two-key map (`0034`).
             if (rt.IsHeapTy(coll, Obj.TyTagged)) return TaggedGet(rt, coll, rt.VAt(at + 1), dflt);
             if (Sets.IsSet(rt, coll)) return Sets.Get(rt, coll, rt.VAt(at + 1), dflt);
@@ -625,7 +625,7 @@ public static class Builtins {
         Def("contains?", (rt, at, n) => {
             long coll = rt.VAt(at);
             if (Val.IsNil(coll)) return Val.False;
-            if (Mapcore.IsMap(rt, coll)) return Val.Bool(Maps.Contains(rt, coll, rt.VAt(at + 1)));
+            if (Mapcore.IsMap(rt, coll)) return Val.Bool(Mapread.MapContains(rt, coll, rt.VAt(at + 1)));
             if (Sets.IsSet(rt, coll)) return Val.Bool(Sets.Contains(rt, coll, rt.VAt(at + 1)));
             // The TRANSIENT forms too. A transient is a handle on the same
             // trie, so every reader that works on the persistent value works on
@@ -740,7 +740,7 @@ public static class Builtins {
         Def("flint/dyn-get", (rt, at, n) => {
             long binds = rt.roots.shared.Singletons[Rt.SingBindings];
             if (Val.IsNil(binds)) return rt.VAt(at + 1);
-            return Maps.Get(rt, binds, rt.VAt(at), rt.VAt(at + 1));
+            return Mapread.MapGet(rt, binds, rt.VAt(at), rt.VAt(at + 1));
         });
         Def("flint/dyn-bindings", (rt, at, n) => {
             long b = rt.roots.shared.Singletons[Rt.SingBindings];

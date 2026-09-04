@@ -125,7 +125,7 @@ public static class Table {
                     "no such column type :" + shown
                         + "; the types are :int :double :string :bool :keyword :any");
             }
-            if (!Val.IsNil(Maps.Get(rt, rt.R(ii), nm, Val.Nil))) {
+            if (!Val.IsNil(Mapread.MapGet(rt, rt.R(ii), nm, Val.Nil))) {
                 string shown = kwName(rt, nm);
                 rt.PopTo(bas);
                 return rt.ThrowStr("IllegalArgumentException",
@@ -158,7 +158,7 @@ public static class Table {
 
     /// The column id of `name`, or -1.
     public static int schemaId(Rt rt, long s, long name) {
-        long p = Maps.Get(rt, rt.Slot(s, SC_INDEX), name, Val.Nil);
+        long p = Mapread.MapGet(rt, rt.Slot(s, SC_INDEX), name, Val.Nil);
         return Val.IsFixnum(p) ? (int) Val.AsFixnum(p) : -1;
     }
 
@@ -272,7 +272,7 @@ public static class Table {
                     long rowv = Vec.Nth(rt, rt.R(ri), row + k);
                     int rvi = rt.Push(rowv);
                     long name = schemaNameAt(rt, rt.R(si), c);
-                    long val = Maps.Get(rt, rt.R(rvi), name, Val.Nil);
+                    long val = Mapread.MapGet(rt, rt.R(rvi), name, Val.Nil);
                     long tp = schemaTypeAt(rt, rt.R(si), c);
                     if (!typeOk(rt, tp, val)) {
                         string msg = columnTypeError(rt, name, tp, val, row + k);
@@ -355,7 +355,7 @@ public static class Table {
     static long rowColumn(Rt rt, long s, long row, int c) {
         long name = schemaNameAt(rt, s, c);
         return isTableRef(rt, row) ? refGet(rt, row, name, Val.NotFound)
-                                   : Maps.Get(rt, row, name, Val.NotFound);
+                                   : Mapread.MapGet(rt, row, name, Val.NotFound);
     }
 
     /// Does `row` fit `s`? The three refusals are separate because they are
@@ -668,7 +668,7 @@ public static class Table {
                         + " (migrate t s (fn [row] ...))");
                 }
             } else {
-                long dv = Maps.Get(rt, rt.R(dfi), rt.R(nmi), Val.NotFound);
+                long dv = Mapread.MapGet(rt, rt.R(dfi), rt.R(nmi), Val.NotFound);
                 if (dv == Val.NotFound) {
                     string nm = kwName(rt, rt.R(nmi));
                     rt.PopTo(bas);
@@ -708,7 +708,7 @@ public static class Table {
                     set(rt, rt.R(ni), CH_BASE + id, rt.Slot(rt.R(chi), CH_BASE + old));
                     set(rt, rt.Slot(rt.R(ni), CH_ENC), id, Val.Fixnum(chunkEnc(rt, rt.R(chi), old)));
                 } else {
-                    set(rt, rt.R(ni), CH_BASE + id, Maps.Get(rt, rt.R(dfi), name, Val.Nil));
+                    set(rt, rt.R(ni), CH_BASE + id, Mapread.MapGet(rt, rt.R(dfi), name, Val.Nil));
                     set(rt, rt.Slot(rt.R(ni), CH_ENC), id, Val.Fixnum(ENC_CONST));
                 }
             }

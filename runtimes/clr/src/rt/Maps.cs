@@ -1,7 +1,10 @@
 namespace Flint.Rt;
 
+using flint.rt;
+
 using static flint.rt.Assoc;
 using static flint.rt.Mapcore;
+using static flint.rt.Mapread;
 using static flint.rt.Champ;
 using static flint.rt.Collnode;
 using static flint.rt.Dissoc;
@@ -98,47 +101,8 @@ public static class Maps {
 
     static void AmSet(Rt rt, long m, int i, long v) { rt.SetSlot(Val.AsHeap(m), i, v); }
 
-    static int AmIndexOf(Rt rt, long m, long k) {
-        int bas = rt.Mark();
-        int mi = rt.Push(m), ki = rt.Push(k);
-        int n = MapCount(rt, rt.R(mi));
-        int outv = -1;
-        for (int i = 0; i < n; i++) {
-            if (Flint.Rt.Eq.Equal(rt, AmKey(rt, rt.R(mi), i), rt.R(ki))) { outv = i; break; }
-        }
-        rt.PopTo(bas);
-        return outv;
-    }
 
-    public static long Get(Rt rt, long m, long k, long notFound) {
-        // A ROW REF answers HERE rather than at every call site: `IsMap` says
-        // true for one, so every path that asks "is this a map?" and then calls
-        // this would read a table row as an array-map and find nothing.
-        if (Val.IsHeap(m) && Obj.Ty(rt.gc.sp, Val.AsHeap(m)) == Obj.TyTableref)
-            return Table.refGet(rt, m, k, notFound);
-        if (!Val.IsHeap(m)) return notFound;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
-        if (t == Obj.TyArraymap) {
-            int i = AmIndexOf(rt, m, k);
-            return i < 0 ? notFound : AmVal(rt, m, i);
-        }
-        if (t == Obj.TyHashmap) {
-            int bas = rt.Mark();
-            int mi = rt.Push(m), ki = rt.Push(k);
-            // Hash FIRST, then read the root: hashing a compound key can
-            // allocate, and an address read before that would be stale.
-            int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
-            long root = rt.Slot(rt.R(mi), HM_ROOT);
-            long r = Val.IsNil(root) ? Val.NotFound : NodeFind(rt, root, 0, h, rt.R(ki));
-            rt.PopTo(bas);
-            return r == Val.NotFound ? notFound : r;
-        }
-        return notFound;
-    }
 
-    public static bool Contains(Rt rt, long m, long k) {
-        return Get(rt, m, k, Val.NotFound) != Val.NotFound;
-    }
 
     static long Promote(Rt rt, long m) {
         int bas = rt.Mark();
@@ -167,8 +131,9 @@ public static class Maps {
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
         if (t == Obj.TyArraymap) {
             int n = MapCount(rt, m);
+            // `AmIndexOf` answers `n` when absent, not -1.
             int i = AmIndexOf(rt, rt.R(mi), rt.R(ki));
-            if (i >= 0) {
+            if (i != n) {
                 long old = AmVal(rt, rt.R(mi), i);
                 if (old == rt.R(vi)) {
                     outv = rt.R(mi);
@@ -241,7 +206,7 @@ public static class Maps {
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
         if (t == Obj.TyArraymap) {
             int i = AmIndexOf(rt, rt.R(mi), rt.R(ki));
-            if (i < 0) {
+            if (i == MapCount(rt, rt.R(mi))) {
                 outv = rt.R(mi);
             } else {
                 int n = MapCount(rt, rt.R(mi));
@@ -482,7 +447,7 @@ public static class Maps {
             int m = rt.Mark();
             int ki = rt.Push(rt.R(at + 2 * i));
             int vi = rt.Push(rt.R(at + 2 * i + 1));
-            int oi = rt.Push(Get(rt, rt.R(bi), rt.R(ki), Val.NotFound));
+            int oi = rt.Push(MapGet(rt, rt.R(bi), rt.R(ki), Val.NotFound));
             ok = rt.R(oi) != Val.NotFound && Flint.Rt.Eq.Equal(rt, rt.R(vi), rt.R(oi));
             rt.PopTo(m);
         }

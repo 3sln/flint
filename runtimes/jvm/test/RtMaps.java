@@ -1,3 +1,4 @@
+import flint.rt.Mapread;
 import flint.rt.Mapcore;
 import com.flint.rt.*;
 
@@ -54,7 +55,7 @@ public class RtMaps {
     for (int i = 0; i < N; i++) rt.setR(m, Maps.assoc(rt, rt.r(m), k(rt, i), Val.fixnum(i * 10)));
     ok(N + " keys, all present, count agrees", Mapcore.mapCount(rt, rt.r(m)) == N && allPresent(rt, rt.r(m), 0, N));
     ok("a key that was never added is absent",
-       Maps.get(rt, rt.r(m), Val.fixnum(-1), Val.NIL) == Val.NIL);
+       Mapread.mapGet(rt, rt.r(m), Val.fixnum(-1), Val.NIL) == Val.NIL);
     // Re-assoc with the same value must not grow the map.
     rt.setR(m, Maps.assoc(rt, rt.r(m), k(rt, 5), Val.fixnum(50)));
     ok("re-assoc with an identical value does not grow it", Mapcore.mapCount(rt, rt.r(m)) == N);
@@ -74,8 +75,8 @@ public class RtMaps {
     ok("  ... and HASH ALIKE, which is what canonical form means",
        Eq.hashValue(rt, rt.r(viaDelete)) == Eq.hashValue(rt, rt.r(direct)));
     ok("  ... and the deleted keys really are gone",
-       Maps.get(rt, rt.r(viaDelete), k(rt, 0), Val.NIL) == Val.NIL
-       && Maps.get(rt, rt.r(viaDelete), k(rt, 2), Val.NIL) == Val.NIL);
+       Mapread.mapGet(rt, rt.r(viaDelete), k(rt, 0), Val.NIL) == Val.NIL
+       && Mapread.mapGet(rt, rt.r(viaDelete), k(rt, 2), Val.NIL) == Val.NIL);
 
     // --- COLLISIONS. Not with integer keys: `hashLong` on a small long is a
     // BIJECTION on 32 bits -- `mixK1`, `mixH1` and `fmix` are each invertible,
@@ -102,13 +103,13 @@ public class RtMaps {
       rt.setR(c, Maps.assoc(rt, rt.r(c), rt.r(ka), Val.fixnum(111)));
       rt.setR(c, Maps.assoc(rt, rt.r(c), rt.r(kb), Val.fixnum(222)));
       ok("both colliding keys are stored and distinct",
-         Val.asFixnum(Maps.get(rt, rt.r(c), rt.r(ka), Val.NIL)) == 111
-         && Val.asFixnum(Maps.get(rt, rt.r(c), rt.r(kb), Val.NIL)) == 222);
+         Val.asFixnum(Mapread.mapGet(rt, rt.r(c), rt.r(ka), Val.NIL)) == 111
+         && Val.asFixnum(Mapread.mapGet(rt, rt.r(c), rt.r(kb), Val.NIL)) == 222);
       ok("  and the count counts them both", Mapcore.mapCount(rt, rt.r(c)) == 22);
       rt.setR(c, Maps.dissoc(rt, rt.r(c), rt.r(ka)));
       ok("  removing one leaves the other",
-         Maps.get(rt, rt.r(c), rt.r(ka), Val.NIL) == Val.NIL
-         && Val.asFixnum(Maps.get(rt, rt.r(c), rt.r(kb), Val.NIL)) == 222);
+         Mapread.mapGet(rt, rt.r(c), rt.r(ka), Val.NIL) == Val.NIL
+         && Val.asFixnum(Mapread.mapGet(rt, rt.r(c), rt.r(kb), Val.NIL)) == 222);
       ok("  and the collision node collapsed back to an inline entry",
          Mapcore.mapCount(rt, rt.r(c)) == 21);
     }
@@ -126,9 +127,9 @@ public class RtMaps {
     int vk2 = rt.push(Vec.empty(rt));
     rt.setR(vk2, Vec.conj(rt, rt.r(vk2), Val.fixnum(7)));
     ok("a string key reads back",
-       Val.asFixnum(Maps.get(rt, rt.r(s), Str.of(rt, "hello, world"), Val.NIL)) == 1);
+       Val.asFixnum(Mapread.mapGet(rt, rt.r(s), Str.of(rt, "hello, world"), Val.NIL)) == 1);
     ok("an equal-but-separate VECTOR key finds the same entry",
-       Val.asFixnum(Maps.get(rt, rt.r(s), rt.r(vk2), Val.NIL)) == 3);
+       Val.asFixnum(Mapread.mapGet(rt, rt.r(s), rt.r(vk2), Val.NIL)) == 3);
 
     // --- the collector, over all of it.
     rt.gc.major(rt.roots);
@@ -141,7 +142,7 @@ public class RtMaps {
 
   static boolean allPresent(Rt rt, long m, int from, int to) {
     for (int i = from; i < to; i++) {
-      long got = Maps.get(rt, m, Val.fixnum(i), Val.NIL);
+      long got = Mapread.mapGet(rt, m, Val.fixnum(i), Val.NIL);
       if (!Val.isFixnum(got) || Val.asFixnum(got) != i * 10L) return false;
     }
     return true;
