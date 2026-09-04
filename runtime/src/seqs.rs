@@ -223,7 +223,20 @@ impl Rt {
 
     // --- string character access ------------------------------------------
 
-    fn char_width_at(&self, s: Value, byte: u32) -> u32 {
+    /// How many bytes the code point at byte offset `byte` occupies.
+    ///
+    /// THE ROPE ARM IS NOT OPTIONAL. `is_string` is true for `TY_ROPE`, so
+    /// `seq` builds a strseq over one, and a rope's body is not string bytes
+    /// -- reading it as though it were returned the header fields as
+    /// characters. `(first (seq rope))` answered `" "` for `"x"` and a full
+    /// walk of an 8 000-character rope answered 5 386 characters, silently,
+    /// on the native runtime only. Both ports were right, because they index
+    /// by code point and go through `ropeByteOfCp`.
+    fn char_width_at(&mut self, s: Value, byte: u32) -> u32 {
+        if self.is_rope(s) {
+            let mut out = [0u8; 4];
+            return self.rope_bytes_at(s, byte, &mut out);
+        }
         let mut buf = crate::rt::sbuf();
         let b0 = if s.is_inline_str() {
             s.inline_bytes(&mut buf)[byte as usize]
@@ -243,6 +256,11 @@ impl Rt {
 
     /// The one-character string at byte offset `byte`.
     pub fn char_at_byte(&mut self, s: Value, byte: u32) -> Value {
+        if self.is_rope(s) {
+            let mut out = [0u8; 4];
+            let w = self.rope_bytes_at(s, byte, &mut out);
+            return Value::inline_str(&out[..w as usize]);
+        }
         let w = self.char_width_at(s, byte);
         let mut buf = crate::rt::sbuf();
         if s.is_inline_str() {

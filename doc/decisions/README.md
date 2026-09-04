@@ -355,6 +355,36 @@ what remains, and what each thing is waiting on.
    fires at `push`, and a value that is never pushed never reaches it. Stress
    found all three, so `conform-hosts` runs every suite under it now.
 
+0o. **`seq` over a ROPE was silently wrong on the NATIVE runtime** — FIXED,
+   and found by chasing a divergence that turned out to be pointing the other
+   way.
+
+   A string seq holds an index. Native's is a BYTE OFFSET; both ports' is a
+   CODE POINT index. Same answers on a flat string, so nothing noticed — and
+   the assumption while porting was that native's byte offset was the better
+   shape to converge on, because a code-point index has to be resolved.
+
+   It is the broken one. `is_string` is true for `TY_ROPE`, so `seq` builds a
+   strseq over a rope, and `char_width_at`/`char_at_byte` read
+   `STR_DATA + byte` — which for a rope is the header, not text. Measured on
+   an 8 000-character rope, native only:
+
+       (first (seq r))        " "     where both ports say "x"
+       (count (vec (seq r)))  5 386   where both ports say 8 000
+
+   Silent, not an error. Fixed by giving both helpers a rope arm through
+   `rope_bytes_at`, which existed and nothing called from here.
+
+   `runtimes/conform/strings.cljc` has `:rope-seq` and `:rope-seq-utf8` now.
+   The sizes matter: long enough to BE a rope, and the mixed case crosses from
+   an ASCII leaf into a non-ASCII one, which is where a byte offset and a
+   code-point index diverge.
+
+   The strseq index shape is STILL divergent — byte offset against code point
+   — and still has to be converged before `first` and `next` can be generated
+   from one kin source. That is now a choice between two working designs
+   rather than a choice that would have entrenched a bug.
+
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old
    `jvm`-against-`clr` similarity table because BOTH ports share them. Two
