@@ -187,9 +187,23 @@ public static class Eq {
             case Obj.TyKw: return Hash.HashKeyword(NsBytes(rt, v), Str.Bytes(rt, rt.Slot(v, 1)));
             case Obj.TySym: return Hash.HashSymbol(NsBytes(rt, v), Str.Bytes(rt, rt.Slot(v, 1)));
             case Obj.TyVec: {
-                int n = Vec.Count(rt, v), acc = 1;
-                for (int i = 0; i < n; i++) acc = flint.rt.Hash.OrderedStep(acc, HashValue(rt, Vec.Nth(rt, v, i)));
-                return flint.rt.Hash.MixCollHash(acc, n);
+                // Cached in the vector's own header, as the native runtime has
+                // always done. `HashValue` on the elements can allocate, so the
+                // vector is ROOTED across the walk -- the write at the end would
+                // otherwise land on a stale address, which is not a wrong hash
+                // but a corrupted heap (`doc/decisions/0031`).
+                long cached = rt.Slot(v, Vec.VHash);
+                if (Val.IsFixnum(cached)) return (int) Val.AsFixnum(cached);
+                int bas = rt.Mark();
+                int vi = rt.Push(v);
+                int n = Vec.Count(rt, rt.R(vi)), acc = 1;
+                for (int i = 0; i < n; i++) {
+                    acc = flint.rt.Hash.OrderedStep(acc, HashValue(rt, Vec.Nth(rt, rt.R(vi), i)));
+                }
+                int h = flint.rt.Hash.MixCollHash(acc, n);
+                rt.SetSlot(Val.AsHeap(rt.R(vi)), Vec.VHash, Val.Fixnum(h));
+                rt.PopTo(bas);
+                return h;
             }
             case Obj.TyArraymap:
             case Obj.TyHashmap: return Maps.Hash(rt, v);

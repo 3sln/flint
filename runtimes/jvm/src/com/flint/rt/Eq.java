@@ -190,9 +190,23 @@ public final class Eq {
             case TY_KW: return Hash.hashKeyword(nsBytes(rt, v), Str.bytes(rt, rt.slot(v, 1)));
             case TY_SYM: return Hash.hashSymbol(nsBytes(rt, v), Str.bytes(rt, rt.slot(v, 1)));
             case TY_VEC: {
-                int n = Vec.count(rt, v), acc = 1;
-                for (int i = 0; i < n; i++) acc = flint.rt.Hash.orderedStep(acc, hashValue(rt, Vec.nth(rt, v, i)));
-                return flint.rt.Hash.mixCollHash(acc, n);
+                // Cached in the vector's own header, as the native runtime has
+                // always done. `hashValue` on the elements can allocate, so the
+                // vector is ROOTED across the walk -- the write at the end would
+                // otherwise land on a stale address, which is not a wrong hash
+                // but a corrupted heap (`doc/decisions/0031`).
+                long cached = rt.slot(v, Vec.V_HASH);
+                if (Val.isFixnum(cached)) return (int) Val.asFixnum(cached);
+                int base = rt.mark();
+                int vi = rt.push(v);
+                int n = Vec.count(rt, rt.r(vi)), acc = 1;
+                for (int i = 0; i < n; i++) {
+                    acc = flint.rt.Hash.orderedStep(acc, hashValue(rt, Vec.nth(rt, rt.r(vi), i)));
+                }
+                int h = flint.rt.Hash.mixCollHash(acc, n);
+                rt.setSlot(Val.asHeap(rt.r(vi)), Vec.V_HASH, Val.fixnum(h));
+                rt.popTo(base);
+                return h;
             }
             case TY_ARRAYMAP:
             case TY_HASHMAP: return Maps.hash(rt, v);

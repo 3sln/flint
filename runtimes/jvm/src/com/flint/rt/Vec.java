@@ -19,6 +19,20 @@ public final class Vec {
 
     public static final int V_CNT = 0, V_SHIFT = 1, V_ROOT = 2, V_TAIL = 3, V_META = 4;
 
+    /// The CACHED HASH, `nil` until first asked for.
+    ///
+    /// The native runtime has had this slot since vectors were written; the
+    /// ports allocated a five-slot header and had nowhere to put it, so every
+    /// `hash` of a vector walked all of it, every time. The file next door
+    /// already makes the argument -- "a rope used as a map key must not rehash
+    /// every lookup" -- and then a vector used as a map key did exactly that.
+    ///
+    /// It is also a LAYOUT divergence, which is the more serious half: the same
+    /// value was six slots on one runtime and five on two, and no gate could
+    /// see it. The snapshot check compares the two ports against each other
+    /// and they agreed with each other while both disagreed with native.
+    public static final int V_HASH = 5;
+
     public static int count(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
     static int shift(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_SHIFT)); }
     static long root(Rt rt, long v) { return rt.slot(v, V_ROOT); }
@@ -84,13 +98,17 @@ public final class Vec {
         int ri = rt.push(root);
         int ti = rt.push(tail);
         int mi = rt.push(meta);
-        long a = rt.alloc(TY_VEC, 5);
+        long a = rt.alloc(TY_VEC, 6);
         if (a == 0) { rt.popTo(base); return Val.NIL; }
         rt.setSlot(a, V_CNT, Val.fixnum(cnt));
         rt.setSlot(a, V_SHIFT, Val.fixnum(shift));
         rt.setSlot(a, V_ROOT, rt.r(ri));
         rt.setSlot(a, V_TAIL, rt.r(ti));
         rt.setSlot(a, V_META, rt.r(mi));
+        // Not carried from any source vector: `newVec` is called with new
+        // contents every time, and a hash copied from the old one would be
+        // wrong rather than merely stale.
+        rt.setSlot(a, V_HASH, Val.NIL);
         rt.popTo(base);
         return Val.heap(a);
     }

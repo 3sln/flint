@@ -15,6 +15,20 @@ public static class Vec {
 
     public const int VCnt = 0, VShift = 1, VRoot = 2, VTail = 3, VMeta = 4;
 
+    /// The CACHED HASH, `nil` until first asked for.
+    ///
+    /// The native runtime has had this slot since vectors were written; the
+    /// ports allocated a five-slot header and had nowhere to put it, so every
+    /// `hash` of a vector walked all of it, every time. The file next door
+    /// already makes the argument -- "a rope used as a map key must not rehash
+    /// every lookup" -- and then a vector used as a map key did exactly that.
+    ///
+    /// It is also a LAYOUT divergence, which is the more serious half: the same
+    /// value was six slots on one runtime and five on two, and no gate could
+    /// see it. The snapshot check compares the two ports against each other
+    /// and they agreed with each other while both disagreed with native.
+    public const int VHash = 5;
+
     public static int Count(Rt rt, long v) => (int) Val.AsFixnum(rt.Slot(v, VCnt));
     static int Shift(Rt rt, long v) => (int) Val.AsFixnum(rt.Slot(v, VShift));
     static long Root(Rt rt, long v) => rt.Slot(v, VRoot);
@@ -80,13 +94,17 @@ public static class Vec {
         int ri = rt.Push(root);
         int ti = rt.Push(tail);
         int mi = rt.Push(meta);
-        long a = rt.Alloc(Obj.TyVec, 5);
+        long a = rt.Alloc(Obj.TyVec, 6);
         if (a == 0) { rt.PopTo(bas); return Val.Nil; }
         rt.SetSlot(a, VCnt, Val.Fixnum(cnt));
         rt.SetSlot(a, VShift, Val.Fixnum(shift));
         rt.SetSlot(a, VRoot, rt.R(ri));
         rt.SetSlot(a, VTail, rt.R(ti));
         rt.SetSlot(a, VMeta, rt.R(mi));
+        // Not carried from any source vector: `NewVec` is called with new
+        // contents every time, and a hash copied from the old one would be
+        // wrong rather than merely stale.
+        rt.SetSlot(a, VHash, Val.Nil);
         rt.PopTo(bas);
         return Val.Heap(a);
     }

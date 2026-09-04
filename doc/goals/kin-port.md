@@ -752,6 +752,48 @@ because none of them happened to need a boolean connective. A capability
 census taken from the files that DID ship is a census of what those files
 needed.
 
+### The `Vec` header convergence was a defect in both ports
+
+Row 4 lists "the header convergence" as a prerequisite. Looking at what it
+actually was, before writing any kin:
+
+**A vector was six slots on native and five on both ports.** Rust's `TY_VEC`
+has carried `V_HASH` -- a cached hash, `nil` until asked for -- since vectors
+were written. Neither port allocated the slot, so neither could cache, so
+`hash` of a vector walked all of it EVERY time. The ports' own `hashValue`
+makes the argument two cases above the one that ignored it: *"a rope used as a
+map key must not rehash every lookup"*.
+
+**No gate could see it.** The snapshot check compares the two ports against
+each other byte for byte, and native is not in that comparison -- so the two
+ports agreed with each other while both disagreed with native, which is
+exactly the reading a same-image baseline is supposed to prevent. The lesson
+is not about vectors: **a conformance check between two of three runtimes is a
+check that they were written from the same misreading.**
+
+Converging it -- slot 5 on all three, cached and read the same way -- moved
+the conform gas row from `109292 native, 109291 jvm (within 1)` to `109292
+native, 109292 jvm (within 0)`. The one-step gap had been sitting under a
+tolerance the whole time, and it was this: native charged for one walk where
+the JVM charged for two. A within-1 tolerance is a place a real divergence can
+hide, and this one did.
+
+### `ushr` and `sar` are named in three comments and defined by no subject
+
+`kin.lang` deliberately refuses to carry `bit-shift-right`, because which
+shift is correct depends on the tag's signedness in Rust, where the type
+chooses and the operator does not. It says a subject vocabulary names `ushr`
+and `sar` explicitly. `flint.impl.rt` says the same thing twice more.
+
+None of the three is true: neither form exists. `shl` is there alone, with a
+comment explaining the absence of its counterpart as though the counterpart
+were elsewhere. Nothing has needed a right shift yet, which is why it held --
+`Vec` needs one in `tailOff`, `arrayFor`, `newPath`, `pushTail` and `popTail`,
+which is nearly every path in the file.
+
+Being written when the first source needs it, so its shape is set by a use
+rather than guessed.
+
 ### Port order, re-derived
 
 | # | region | gate | lines across 3 |
