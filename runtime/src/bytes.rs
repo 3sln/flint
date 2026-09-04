@@ -47,26 +47,7 @@ pub const BB_HASH: u32 = 3;
 pub const BB_KIDS: u32 = 4;
 
 impl Rt {
-    #[inline]
-    pub fn is_bytes(&self, v: Value) -> bool {
-        if !v.is_heap() {
-            return false;
-        }
-        let t = ty(&self.gc.sp, v.as_heap());
-        t == TY_BYTES || t == TY_BROPE
-    }
 
-    /// How many bytes, whatever tier it is.
-    pub fn b_count(&self, v: Value) -> u32 {
-        if !v.is_heap() {
-            return 0;
-        }
-        match ty(&self.gc.sp, v.as_heap()) {
-            TY_BYTES => len(&self.gc.sp, v.as_heap()),
-            TY_BROPE => self.slot(v, BB_BYTES).as_fixnum() as u32,
-            _ => 0,
-        }
-    }
 
     /// A flat byte string of `n` bytes, uninitialised. The caller fills it
     /// before anything can collect, which is why this is not public.
@@ -152,13 +133,6 @@ impl Rt {
     }
 
     /// 0 for a leaf, otherwise the node's recorded depth.
-    pub fn b_depth(&self, v: Value) -> u32 {
-        if v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_BROPE {
-            self.slot(v, BB_DEPTH).as_fixnum() as u32
-        } else {
-            0
-        }
-    }
 
     /// `v`, wrapped in single-child nodes until it is `d` deep. A node's
     /// children must all be the same depth, so a leaf joining a deep node is
@@ -547,9 +521,6 @@ impl Rt {
         }
     }
 
-    pub fn is_brope(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_BROPE
-    }
 
     /// The byte-rope mirror of `tree_eq`, and it had the same defect twice
     /// over: it built a `Vec<u8>` of BOTH sides in full and then compared them,
@@ -713,10 +684,6 @@ pub const TB_LIVE: u32 = 3;
 pub const TAIL_CAP: u32 = FLAT_MAX;
 
 impl Rt {
-    #[inline]
-    pub fn is_tbytes(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_TBYTES
-    }
 
     pub fn b_transient(&mut self, v: Value) -> Value {
         let base = self.mark();
@@ -741,9 +708,6 @@ impl Rt {
         Value::heap(a)
     }
 
-    fn tb_live(&self, t: Value) -> bool {
-        self.is_tbytes(t) && self.slot(t, TB_LIVE) == crate::value::TRUE
-    }
 
     /// Fold the full tail into the tree and start a fresh one. The old tail is
     /// handed over WHOLE rather than copied -- it is exactly full, so it is
@@ -849,12 +813,6 @@ impl Rt {
         out
     }
 
-    pub fn b_tcount(&self, t: Value) -> u32 {
-        if !self.is_tbytes(t) {
-            return 0;
-        }
-        self.b_count(self.slot(t, TB_TREE)) + self.slot(t, TB_FILL).as_fixnum() as u32
-    }
 
     pub fn b_persistent(&mut self, t: Value) -> Value {
         if !self.tb_live(t) {

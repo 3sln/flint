@@ -1,0 +1,81 @@
+;; Byte strings: which tier a value is, and how long it is.
+;;
+;; Three heap shapes, the same argument `doc/decisions/0011` makes for string
+;; ropes applied to bytes:
+;;
+;;     TY_BYTES    a flat leaf -- the bytes, and the object's length IS the count
+;;     TY_BROPE    a B-tree node over leaves, carrying its own total and depth
+;;     TY_TBYTES   the transient: a tree, an open tail, and how full the tail is
+;;
+;; THE READING HALF ONLY. Everything here is `&self` in Rust and allocates
+;; nothing, which is why it is the first slice of `Bytes` to go: no byte sink,
+;; no host slice, no `Option`. What is left in that file needs all three.
+;;
+;; The names differ across the three and always did. Rust puts every function
+;; on one `impl Rt`, so it prefixes -- `b_count`, `is_tbytes` -- where both
+;; ports have a `Bytes` class to hold them and say `count` and `isTransient`.
+;; The source keeps Rust's spelling because it is the one a flat namespace
+;; forced, and the ports' existing names become one-line delegations, which is
+;; what `first`, `next` and `rest` already are there.
+(ns flint.rt.bytecore
+  (:require [flint.impl.rt :refer [defn return if let comment doc
+                                   not and or == + to-i32
+                                   is-heap as-heap ty slot olen as-fixnum
+                                   Rt Value Ty Bool I32 TRUE
+                                   TY_BYTES TY_BROPE TY_TBYTES
+                                   BB_BYTES BB_DEPTH TB_TREE TB_FILL TB_LIVE]]))
+
+(doc "Is `v` a byte string -- either tier?")
+(defn ^:pub ^:method ^Bool is-bytes [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (let [^Ty t (ty rt (as-heap v))]
+    (return (or (== t TY_BYTES) (== t TY_BROPE)))))
+
+(doc "How many bytes, whatever tier it is."
+     ""
+     "A LEAF DOES NOT STORE ITS COUNT: the object's own length is the count,"
+     "which is what makes the flat tier free. A node stores one, because"
+     "adding up its children's would be the walk the tier exists to avoid.")
+(defn ^:pub ^:method ^I32 b-count [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return 0))
+  (let [^Ty t (ty rt (as-heap v))]
+    (if (== t TY_BYTES)
+      (return (olen rt v)))
+    (if (== t TY_BROPE)
+      (return (to-i32 (as-fixnum (slot rt v BB_BYTES)))))
+    (comment "Not a byte string at all. Zero rather than a refusal, because"
+             "every caller here is already asking `how long is this` about a"
+             "value it has not checked.")
+    (return 0)))
+
+(doc "How deep the tree is; a leaf and a non-byte-string are both 0.")
+(defn ^:pub ^:method ^I32 b-depth [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return 0))
+  (if (== (ty rt (as-heap v)) TY_BROPE)
+    (return (to-i32 (as-fixnum (slot rt v BB_DEPTH)))))
+  (return 0))
+
+(doc "Is `v` the NODE tier specifically -- a tree rather than a leaf?")
+(defn ^:pub ^:method ^Bool is-brope [^Rt rt ^Value v]
+  (return (and (is-heap v) (== (ty rt (as-heap v)) TY_BROPE))))
+
+(doc "Is `v` a transient byte string?")
+(defn ^:pub ^:method ^Bool is-tbytes [^Rt rt ^Value v]
+  (return (and (is-heap v) (== (ty rt (as-heap v)) TY_TBYTES))))
+
+(doc "Is `t` a transient that has NOT been made persistent yet?"
+     ""
+     "A transient is invalidated by `persistent!` rather than freed, so the"
+     "check is a slot and not a liveness question about memory.")
+(defn ^:pub ^:method ^Bool tb-live [^Rt rt ^Value t]
+  (return (and (is-tbytes rt t) (== (slot rt t TB_LIVE) TRUE))))
+
+(doc "How many bytes a transient holds: the sealed tree plus the open tail.")
+(defn ^:pub ^:method ^I32 b-tcount [^Rt rt ^Value t]
+  (if (not (is-tbytes rt t))
+    (return 0))
+  (return (+ (b-count rt (slot rt t TB_TREE))
+             (to-i32 (as-fixnum (slot rt t TB_FILL))))))

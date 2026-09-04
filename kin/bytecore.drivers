@@ -1,0 +1,202 @@
+--rust-head
+extern crate alloc;
+type Addr = u32;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TRUE: Value = Value(0xFFFE);
+const TY_BYTES: u8 = 44; const TY_BROPE: u8 = 45; const TY_TBYTES: u8 = 46;
+const TY_VEC: u8 = 9;
+// The generated Rust reaches these as `crate::bytes::BB_BYTES`, because in the
+// real runtime they live on that module. A probe is its own crate, so it needs
+// a module of that name for the same path to resolve.
+pub mod bytes {
+    pub const BB_BYTES: u32 = 0; pub const BB_DEPTH: u32 = 2;
+    pub const TB_TREE: u32 = 0; pub const TB_FILL: u32 = 2; pub const TB_LIVE: u32 = 3;
+}
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 && self.0 != TRUE.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+}
+struct Gc { sp: Vec<u8> }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64 }
+impl Rt {
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        let a = self.bump; self.bump += n as u64 + 1;
+        self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+}
+fn ty(sp: &Vec<u8>, a: Addr) -> u8 { sp[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 4000], gc: Gc { sp: vec![0u8; 4000] },
+                      lens: vec![0; 4000], bump: 100 };
+    let mut o = String::new();
+    // A FLAT LEAF: the object's own length is the count, nothing stored.
+    let leaf = Value::heap(rt.alloc(TY_BYTES, 7));
+    // A NODE: total and depth in the header.
+    let node = { let a = rt.alloc(TY_BROPE, 5);
+                 rt.set_slot(a, bytes::BB_BYTES, Value::fixnum(300));
+                 rt.set_slot(a, bytes::BB_DEPTH, Value::fixnum(2));
+                 Value::heap(a) };
+    // A TRANSIENT over the node, with a partly-full tail.
+    let tr = { let a = rt.alloc(TY_TBYTES, 4);
+               rt.set_slot(a, bytes::TB_TREE, node);
+               rt.set_slot(a, bytes::TB_FILL, Value::fixnum(9));
+               rt.set_slot(a, bytes::TB_LIVE, TRUE);
+               Value::heap(a) };
+    // ... and a DEAD one, which differs only in that slot.
+    let dead = { let a = rt.alloc(TY_TBYTES, 4);
+                 rt.set_slot(a, bytes::TB_TREE, leaf);
+                 rt.set_slot(a, bytes::TB_FILL, Value::fixnum(1));
+                 rt.set_slot(a, bytes::TB_LIVE, NIL);
+                 Value::heap(a) };
+    let other = Value::heap(rt.alloc(TY_VEC, 2));
+    for (label, v) in [("leaf", leaf), ("node", node), ("tr", tr), ("dead", dead),
+                       ("other", other), ("nil", NIL), ("fix", Value(5))].iter() {
+        o.push_str(&format!("{}={}{}{}{}{},{},{} ", label,
+                            rt.is_bytes(*v) as u32, rt.is_brope(*v) as u32,
+                            rt.is_tbytes(*v) as u32, rt.tb_live(*v) as u32,
+                            0, rt.b_count(*v), rt.b_depth(*v)));
+        o.push_str(&format!("tc{}={} ", label, rt.b_tcount(*v)));
+    }
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL, TRUE = 0xFFFEL;
+    static final int TY_BYTES = 44, TY_BROPE = 45, TY_TBYTES = 46, TY_VEC = 9;
+    // Reached as `Bytes.BB_BYTES`, as in the real runtime.
+    static final class Bytes {
+        static final int BB_BYTES = 0, BB_DEPTH = 2;
+        static final int TB_TREE = 0, TB_FILL = 2, TB_LIVE = 3;
+    }
+    static final class Val {
+        static boolean isHeap(long v) { return v >= 100 && v != NIL && v != TRUE; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v; }
+        static long fixnum(long n) { return n; }
+        static long heap(long a) { return a; }
+        static final long TRUE = Probe.TRUE;
+    }
+    static final class Rt {
+        long[] h = new long[4000];
+        static final class GcT { int[] sp = new int[4000]; }
+        GcT gc = new GcT();
+        int[] lens = new int[4000];
+        long bump = 100;
+        long alloc(int t, int n) {
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long leaf = Val.heap(rt.alloc(TY_BYTES, 7));
+        long node = rt.alloc(TY_BROPE, 5);
+        rt.setSlot(node, Bytes.BB_BYTES, 300); rt.setSlot(node, Bytes.BB_DEPTH, 2);
+        long tr = rt.alloc(TY_TBYTES, 4);
+        rt.setSlot(tr, Bytes.TB_TREE, node); rt.setSlot(tr, Bytes.TB_FILL, 9);
+        rt.setSlot(tr, Bytes.TB_LIVE, TRUE);
+        long dead = rt.alloc(TY_TBYTES, 4);
+        rt.setSlot(dead, Bytes.TB_TREE, leaf); rt.setSlot(dead, Bytes.TB_FILL, 1);
+        rt.setSlot(dead, Bytes.TB_LIVE, NIL);
+        long other = Val.heap(rt.alloc(TY_VEC, 2));
+        String[] labels = {"leaf","node","tr","dead","other","nil","fix"};
+        long[] vs = {leaf, node, tr, dead, other, NIL, 5L};
+        for (int i = 0; i < labels.length; i++) {
+            long v = vs[i];
+            o.append(labels[i]).append('=')
+             .append(isBytes(rt, v) ? 1 : 0).append(isBrope(rt, v) ? 1 : 0)
+             .append(isTbytes(rt, v) ? 1 : 0).append(tbLive(rt, v) ? 1 : 0)
+             .append(0).append(',').append(bCount(rt, v)).append(',')
+             .append(bDepth(rt, v)).append(' ');
+            o.append("tc").append(labels[i]).append('=').append(bTcount(rt, v)).append(' ');
+        }
+        System.out.println(o.toString());
+    }
+--csharp-pre
+// `BB_BYTES` and friends are reached as `global::Flint.Rt.Bytes.X`, which needs
+// a REAL top-level namespace -- a shim nested in `class Probe` cannot be one.
+namespace Flint.Rt {
+    internal static class Bytes {
+        internal const int BB_BYTES = 0, BB_DEPTH = 2;
+        internal const int TB_TREE = 0, TB_FILL = 2, TB_LIVE = 3;
+    }
+}
+--csharp-head
+    internal static class Obj {
+        internal const int TyBytes = 44, TyBrope = 45, TyTbytes = 46, TyVec = 9;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL, True = 0xFFFEL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil && v != True; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long AsFixnum(long v) { return v; }
+        internal static long Fixnum(long n) { return n; }
+        internal static long Heap(long a) { return a; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[4000];
+        internal sealed class GcT { internal int[] sp = new int[4000]; }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[4000];
+        internal long bump = 100;
+        internal long Alloc(int t, int n) {
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Val.Nil;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long leaf = Val.Heap(rt.Alloc(Obj.TyBytes, 7));
+        long node = rt.Alloc(Obj.TyBrope, 5);
+        rt.SetSlot(node, global::Flint.Rt.Bytes.BB_BYTES, 300);
+        rt.SetSlot(node, global::Flint.Rt.Bytes.BB_DEPTH, 2);
+        long tr = rt.Alloc(Obj.TyTbytes, 4);
+        rt.SetSlot(tr, global::Flint.Rt.Bytes.TB_TREE, node);
+        rt.SetSlot(tr, global::Flint.Rt.Bytes.TB_FILL, 9);
+        rt.SetSlot(tr, global::Flint.Rt.Bytes.TB_LIVE, Val.True);
+        long dead = rt.Alloc(Obj.TyTbytes, 4);
+        rt.SetSlot(dead, global::Flint.Rt.Bytes.TB_TREE, leaf);
+        rt.SetSlot(dead, global::Flint.Rt.Bytes.TB_FILL, 1);
+        rt.SetSlot(dead, global::Flint.Rt.Bytes.TB_LIVE, Val.Nil);
+        long other = Val.Heap(rt.Alloc(Obj.TyVec, 2));
+        string[] labels = {"leaf","node","tr","dead","other","nil","fix"};
+        long[] vs = {leaf, node, tr, dead, other, Val.Nil, 5L};
+        for (int i = 0; i < labels.Length; i++) {
+            long v = vs[i];
+            o.Append(labels[i]).Append('=')
+             .Append(IsBytes(rt, v) ? 1 : 0).Append(IsBrope(rt, v) ? 1 : 0)
+             .Append(IsTbytes(rt, v) ? 1 : 0).Append(TbLive(rt, v) ? 1 : 0)
+             .Append(0).Append(',').Append(BCount(rt, v)).Append(',')
+             .Append(BDepth(rt, v)).Append(' ');
+            o.Append("tc").Append(labels[i]).Append('=').Append(BTcount(rt, v)).Append(' ');
+        }
+        System.Console.WriteLine(o.ToString());
+    }

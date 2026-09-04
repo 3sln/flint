@@ -42,19 +42,9 @@ public final class Bytes {
     public static final int BB_HASH = 3;
     public static final int BB_KIDS = 4;
 
-    public static boolean isBytes(Rt rt, long v) {
-        if (!Val.isHeap(v)) return false;
-        int t = ty(rt.gc.sp, Val.asHeap(v));
-        return t == TY_BYTES || t == TY_BROPE;
-    }
+        public static boolean isBytes(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytecore.isBytes(rt, v); }
 
-    public static int count(Rt rt, long v) {
-        if (!Val.isHeap(v)) return 0;
-        int t = ty(rt.gc.sp, Val.asHeap(v));
-        if (t == TY_BYTES) return len(rt.gc.sp, Val.asHeap(v));
-        if (t == TY_BROPE) return (int) Val.asFixnum(rt.slot(v, BB_BYTES));
-        return 0;
-    }
+        public static int count(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytecore.bCount(rt, v); }
 
     public static long of(Rt rt, byte[] b) {
         long a = rt.alloc(TY_BYTES, b.length);
@@ -114,12 +104,7 @@ public final class Bytes {
         }
     }
 
-    public static int depth(Rt rt, long v) {
-        if (Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_BROPE) {
-            return (int) Val.asFixnum(rt.slot(v, BB_DEPTH));
-        }
-        return 0;
-    }
+        public static int depth(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytecore.bDepth(rt, v); }
 
     /// A leaf joining a deeper node is PROMOTED rather than sitting beside
     /// subtrees: a node's children must all be the same depth.
@@ -306,9 +291,7 @@ public final class Bytes {
         }
     }
 
-    static boolean isBrope(Rt rt, long v) {
-        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_BROPE;
-    }
+        static boolean isBrope(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytecore.isBrope(rt, v); }
 
     /// SHARES, like `Str.ropeSlice`. This descended to the range -- which is
     /// what stopped it being quadratic -- and then COPIED it, so slicing a
@@ -484,9 +467,7 @@ public final class Bytes {
     /// into the copying tier and reintroduce the quadratic it removes.
     public static final int TAIL_CAP = FLAT_MAX;
 
-    public static boolean isTransient(Rt rt, long v) {
-        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_TBYTES;
-    }
+        public static boolean isTransient(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytecore.isTbytes(rt, v); }
 
     public static long transientOf(Rt rt, long v) {
         int base = rt.mark();
@@ -504,9 +485,7 @@ public final class Bytes {
         return Val.heap(a);
     }
 
-    static boolean live(Rt rt, long t) {
-        return isTransient(rt, t) && rt.slot(t, TB_LIVE) == Val.TRUE;
-    }
+        static boolean live(Rt rt, long t) { return com._3sln.flint.kgen.rt.Bytecore.tbLive(rt, t); }
 
     /// Fold the full tail into the tree and start a fresh one. A FULL tail is
     /// handed over WHOLE rather than copied -- it is exactly the leaf the tree
@@ -593,10 +572,7 @@ public final class Bytes {
         return outv;
     }
 
-    public static int tcount(Rt rt, long t) {
-        if (!isTransient(rt, t)) return 0;
-        return count(rt, rt.slot(t, TB_TREE)) + (int) Val.asFixnum(rt.slot(t, TB_FILL));
-    }
+        public static int tcount(Rt rt, long t) { return com._3sln.flint.kgen.rt.Bytecore.bTcount(rt, t); }
 
     public static long persistent(Rt rt, long t) {
         if (!live(rt, t)) {

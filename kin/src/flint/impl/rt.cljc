@@ -198,7 +198,10 @@
     TY_BMNODE TY_COLLNODE
     ;; What `describe` dispatches over, beyond the above.
     TY_CLOSURE TY_NATIVEFN TY_TMAP TY_TSET TY_ROPE TY_BYTES TY_RECORD
-    TY_ATOM TY_VAR TY_DELAY TY_REGEX TY_MULTIFN TY_REDUCED TY_EXINFO])
+    TY_ATOM TY_VAR TY_DELAY TY_REGEX TY_MULTIFN TY_REDUCED TY_EXINFO
+    ;; The byte-string tiers (`doc/decisions/0011`'s rope argument, applied to
+    ;; bytes): a flat leaf, a B-tree node over leaves, and the transient.
+    TY_BROPE TY_TBYTES])
 
 (defn- csharp-tag
   "`TY_EMPTY_LIST` -> `Obj.TyEmptyList`."
@@ -227,7 +230,16 @@
    'RF_SCHEMA {:rust "crate::table::RF_SCHEMA"
                :java "Table.RF_SCHEMA" :csharp "global::Flint.Rt.Table.RF_SCHEMA"}
    'LS_THUNK {:rust "LS_THUNK" :java "LS_THUNK" :csharp "LS_THUNK"}
-   'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LS_SEQ"}}
+   'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LS_SEQ"}
+   ;; A byte rope's header, and a transient byte string's. All three targets
+   ;; spell these identically -- Rust has them bare on `crate::bytes`, and both
+   ;; ports as constants on their `Bytes` class -- so each entry is three copies
+   ;; of one string, asserted rather than assumed.
+   'BB_BYTES {:rust "crate::bytes::BB_BYTES" :java "Bytes.BB_BYTES" :csharp "global::Flint.Rt.Bytes.BB_BYTES"}
+   'BB_DEPTH {:rust "crate::bytes::BB_DEPTH" :java "Bytes.BB_DEPTH" :csharp "global::Flint.Rt.Bytes.BB_DEPTH"}
+   'TB_TREE {:rust "crate::bytes::TB_TREE" :java "Bytes.TB_TREE" :csharp "global::Flint.Rt.Bytes.TB_TREE"}
+   'TB_FILL {:rust "crate::bytes::TB_FILL" :java "Bytes.TB_FILL" :csharp "global::Flint.Rt.Bytes.TB_FILL"}
+   'TB_LIVE {:rust "crate::bytes::TB_LIVE" :java "Bytes.TB_LIVE" :csharp "global::Flint.Rt.Bytes.TB_LIVE"}}
   ;; The node and category constants. All three targets spell these
   ;; IDENTICALLY, so every entry below is three copies of one string -- and
   ;; they are written down anyway.

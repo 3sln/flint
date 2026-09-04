@@ -4,6 +4,7 @@
 //! here, because a missing `pub mod` in Rust is not a compile error -- it is
 //! a module that quietly never gets built.
 pub mod assoc;
+pub mod bytecore;
 pub mod champ;
 pub mod collnode;
 pub mod copies;

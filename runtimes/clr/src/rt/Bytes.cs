@@ -39,19 +39,9 @@ public static class Bytes {
     public const int BB_HASH = 3;
     public const int BB_KIDS = 4;
 
-    public static bool IsBytes(Rt rt, long v) {
-        if (!Val.IsHeap(v)) return false;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
-        return t == Obj.TyBytes || t == Obj.TyBrope;
-    }
+        public static bool IsBytes(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Bytecore.IsBytes(rt, v); }
 
-    public static int Count(Rt rt, long v) {
-        if (!Val.IsHeap(v)) return 0;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
-        if (t == Obj.TyBytes) return Obj.Len(rt.gc.sp, Val.AsHeap(v));
-        if (t == Obj.TyBrope) return (int) Val.AsFixnum(rt.Slot(v, BB_BYTES));
-        return 0;
-    }
+        public static int Count(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Bytecore.BCount(rt, v); }
 
     public static long Of(Rt rt, byte[] b) {
         long a = rt.Alloc(Obj.TyBytes, b.Length);
@@ -111,12 +101,7 @@ public static class Bytes {
         }
     }
 
-    public static int Depth(Rt rt, long v) {
-        if (Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyBrope) {
-            return (int) Val.AsFixnum(rt.Slot(v, BB_DEPTH));
-        }
-        return 0;
-    }
+        public static int Depth(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Bytecore.BDepth(rt, v); }
 
     /// A leaf joining a deeper node is PROMOTED rather than sitting beside
     /// subtrees: a node's children must all be the same depth.
@@ -303,8 +288,7 @@ public static class Bytes {
         }
     }
 
-    public static bool IsBrope(Rt rt, long v) =>
-        Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyBrope;
+    public static bool IsBrope(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Bytecore.IsBrope(rt, v);
 
     /// SHARES, like `Str.RopeSlice`. This descended to the range and then
     /// COPIED it (`doc/decisions/0011`).
@@ -468,9 +452,7 @@ public static class Bytes {
     /// into the copying tier and reintroduce the quadratic it removes.
     public const int TAIL_CAP = FLAT_MAX;
 
-    public static bool IsTransient(Rt rt, long v) {
-        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTbytes;
-    }
+        public static bool IsTransient(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Bytecore.IsTbytes(rt, v); }
 
     public static long TransientOf(Rt rt, long v) {
         int bas = rt.Mark();
@@ -488,9 +470,7 @@ public static class Bytes {
         return Val.Heap(a);
     }
 
-    static bool Live(Rt rt, long t) {
-        return IsTransient(rt, t) && rt.Slot(t, TB_LIVE) == Val.True;
-    }
+        static bool Live(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Bytecore.TbLive(rt, t); }
 
     /// Fold the full tail into the tree and start a fresh one. A FULL tail is
     /// handed over WHOLE rather than copied -- it is exactly the leaf the tree
@@ -577,10 +557,7 @@ public static class Bytes {
         return outv;
     }
 
-    public static int Tcount(Rt rt, long t) {
-        if (!IsTransient(rt, t)) return 0;
-        return Count(rt, rt.Slot(t, TB_TREE)) + (int) Val.AsFixnum(rt.Slot(t, TB_FILL));
-    }
+        public static int Tcount(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Bytecore.BTcount(rt, t); }
 
     public static long Persistent(Rt rt, long t) {
         if (!Live(rt, t)) {
