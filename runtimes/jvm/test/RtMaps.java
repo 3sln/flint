@@ -40,7 +40,7 @@ public class RtMaps {
     // --- the array-map, and the boundary.
     int base = rt.mark();
     int m = rt.push(Maps.empty(rt));
-    ok("an empty map counts 0", Maps.count(rt, rt.r(m)) == 0);
+    ok("an empty map counts 0", Mapcore.mapCount(rt, rt.r(m)) == 0);
     for (int i = 0; i < 8; i++) rt.setR(m, Maps.assoc(rt, rt.r(m), k(rt, i), Val.fixnum(i * 10)));
     ok("8 entries is still a flat array-map", Mapcore.isArrayMap(rt, rt.r(m)));
     ok("  and every one reads back", allPresent(rt, rt.r(m), 0, 8));
@@ -52,12 +52,12 @@ public class RtMaps {
     final int N = 2000;
     rt.setR(m, Maps.empty(rt));
     for (int i = 0; i < N; i++) rt.setR(m, Maps.assoc(rt, rt.r(m), k(rt, i), Val.fixnum(i * 10)));
-    ok(N + " keys, all present, count agrees", Maps.count(rt, rt.r(m)) == N && allPresent(rt, rt.r(m), 0, N));
+    ok(N + " keys, all present, count agrees", Mapcore.mapCount(rt, rt.r(m)) == N && allPresent(rt, rt.r(m), 0, N));
     ok("a key that was never added is absent",
        Maps.get(rt, rt.r(m), Val.fixnum(-1), Val.NIL) == Val.NIL);
     // Re-assoc with the same value must not grow the map.
     rt.setR(m, Maps.assoc(rt, rt.r(m), k(rt, 5), Val.fixnum(50)));
-    ok("re-assoc with an identical value does not grow it", Maps.count(rt, rt.r(m)) == N);
+    ok("re-assoc with an identical value does not grow it", Mapcore.mapCount(rt, rt.r(m)) == N);
 
     // --- CANONICAL FORM: the property CHAMP is chosen for.
     int viaDelete = rt.push(rt.r(m));
@@ -69,7 +69,7 @@ public class RtMaps {
       rt.setR(direct, Maps.assoc(rt, rt.r(direct), k(rt, i), Val.fixnum(i * 10)));
     }
     ok("built-by-deleting and built-directly have the same count",
-       Maps.count(rt, rt.r(viaDelete)) == Maps.count(rt, rt.r(direct)));
+       Mapcore.mapCount(rt, rt.r(viaDelete)) == Mapcore.mapCount(rt, rt.r(direct)));
     ok("  ... and are =", Maps.eq(rt, rt.r(viaDelete), rt.r(direct)));
     ok("  ... and HASH ALIKE, which is what canonical form means",
        Eq.hashValue(rt, rt.r(viaDelete)) == Eq.hashValue(rt, rt.r(direct)));
@@ -104,13 +104,13 @@ public class RtMaps {
       ok("both colliding keys are stored and distinct",
          Val.asFixnum(Maps.get(rt, rt.r(c), rt.r(ka), Val.NIL)) == 111
          && Val.asFixnum(Maps.get(rt, rt.r(c), rt.r(kb), Val.NIL)) == 222);
-      ok("  and the count counts them both", Maps.count(rt, rt.r(c)) == 22);
+      ok("  and the count counts them both", Mapcore.mapCount(rt, rt.r(c)) == 22);
       rt.setR(c, Maps.dissoc(rt, rt.r(c), rt.r(ka)));
       ok("  removing one leaves the other",
          Maps.get(rt, rt.r(c), rt.r(ka), Val.NIL) == Val.NIL
          && Val.asFixnum(Maps.get(rt, rt.r(c), rt.r(kb), Val.NIL)) == 222);
       ok("  and the collision node collapsed back to an inline entry",
-         Maps.count(rt, rt.r(c)) == 21);
+         Mapcore.mapCount(rt, rt.r(c)) == 21);
     }
 
     // --- keys that are not fixnums, and a collection under collection.

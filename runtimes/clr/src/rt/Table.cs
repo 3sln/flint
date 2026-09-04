@@ -402,7 +402,7 @@ public static class Table {
         // hunt walks the row and the good path must not.
         bool extra = isTableRef(rt, rt.R(ri))
             ? schemaLen(rt, rt.Slot(rt.R(ri), RF_SCHEMA)) > n
-            : Maps.Count(rt, rt.R(ri)) > n;
+            : Mapcore.MapCount(rt, rt.R(ri)) > n;
         if (extra) {
             long bad = firstForeignKey(rt, rt.R(si), rt.R(ri));
             string nm = kwName(rt, bad), cols = columnList(rt, rt.R(si));

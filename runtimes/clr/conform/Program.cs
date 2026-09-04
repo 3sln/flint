@@ -769,7 +769,7 @@ public static class Program {
     // --- the array-map, and the boundary.
     int bas = rt.Mark();
     int m = rt.Push(Flint.Rt.Maps.Empty(rt));
-    MOk("an empty map counts 0", Flint.Rt.Maps.Count(rt, rt.R(m)) == 0);
+    MOk("an empty map counts 0", flint.rt.Mapcore.MapCount(rt, rt.R(m)) == 0);
     for (int i = 0; i < 8; i++) rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
     MOk("8 entries is still a flat array-map", flint.rt.Mapcore.IsArrayMap(rt, rt.R(m)));
     MOk("  and every one reads back", AllPresent(rt, rt.R(m), 0, 8));
@@ -781,12 +781,12 @@ public static class Program {
     const int N = 2000;
     rt.SetR(m, Flint.Rt.Maps.Empty(rt));
     for (int i = 0; i < N; i++) rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
-    MOk(N + " keys, all present, count agrees", Flint.Rt.Maps.Count(rt, rt.R(m)) == N && AllPresent(rt, rt.R(m), 0, N));
+    MOk(N + " keys, all present, count agrees", flint.rt.Mapcore.MapCount(rt, rt.R(m)) == N && AllPresent(rt, rt.R(m), 0, N));
     MOk("a key that was never added is absent",
        Flint.Rt.Maps.Get(rt, rt.R(m), Flint.Rt.Val.Fixnum(-1), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil);
     // Re-assoc with the same value must not grow the map.
     rt.SetR(m, Flint.Rt.Maps.Assoc(rt, rt.R(m), K(rt, 5), Flint.Rt.Val.Fixnum(50)));
-    MOk("re-assoc with an identical value does not grow it", Flint.Rt.Maps.Count(rt, rt.R(m)) == N);
+    MOk("re-assoc with an identical value does not grow it", flint.rt.Mapcore.MapCount(rt, rt.R(m)) == N);
 
     // --- CANONICAL FORM: the property CHAMP is chosen for.
     int viaDelete = rt.Push(rt.R(m));
@@ -798,7 +798,7 @@ public static class Program {
       rt.SetR(direct, Flint.Rt.Maps.Assoc(rt, rt.R(direct), K(rt, i), Flint.Rt.Val.Fixnum(i * 10)));
     }
     MOk("built-by-deleting and built-directly have the same count",
-       Flint.Rt.Maps.Count(rt, rt.R(viaDelete)) == Flint.Rt.Maps.Count(rt, rt.R(direct)));
+       flint.rt.Mapcore.MapCount(rt, rt.R(viaDelete)) == flint.rt.Mapcore.MapCount(rt, rt.R(direct)));
     MOk("  ... and are =", Flint.Rt.Maps.Eq(rt, rt.R(viaDelete), rt.R(direct)));
     MOk("  ... and HASH ALIKE, which is what canonical form means",
        Flint.Rt.Eq.HashValue(rt, rt.R(viaDelete)) == Flint.Rt.Eq.HashValue(rt, rt.R(direct)));
@@ -833,13 +833,13 @@ public static class Program {
       MOk("both colliding keys are stored and distinct",
          Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Nil)) == 111
          && Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Nil)) == 222);
-      MOk("  and the count counts them both", Flint.Rt.Maps.Count(rt, rt.R(c)) == 22);
+      MOk("  and the count counts them both", flint.rt.Mapcore.MapCount(rt, rt.R(c)) == 22);
       rt.SetR(c, Flint.Rt.Maps.Dissoc(rt, rt.R(c), rt.R(ka)));
       MOk("  removing one leaves the other",
          Flint.Rt.Maps.Get(rt, rt.R(c), rt.R(ka), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil
          && Flint.Rt.Val.AsFixnum(Flint.Rt.Maps.Get(rt, rt.R(c), rt.R(kb), Flint.Rt.Val.Nil)) == 222);
       MOk("  and the collision node collapsed back to an inline entry",
-         Flint.Rt.Maps.Count(rt, rt.R(c)) == 21);
+         flint.rt.Mapcore.MapCount(rt, rt.R(c)) == 21);
     }
 
     // --- keys that are not fixnums, and a collection under collection.

@@ -356,7 +356,11 @@ impl Rt {
         false
     }
 
-    pub fn schema_len(&mut self, s: Value) -> u32 {
+    /// `&self`, not `&mut self`. It reads a slot and counts a vector, and
+    /// neither mutates -- the mutable receiver was over-declared, and an
+    /// over-declared borrow is a real constraint on every caller: it made
+    /// `map_count` unable to take one when the map layer was ported.
+    pub fn schema_len(&self, s: Value) -> u32 {
         let names = self.slot(s, SC_NAMES);
         self.vec_count(names)
     }

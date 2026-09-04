@@ -268,7 +268,7 @@ public static class Builtins {
             if (rt.IsHeapTy(v, Obj.TyTableref))
                 return Val.Fixnum(Flint.Rt.Table.schemaLen(rt, rt.Slot(v, Flint.Rt.Table.RF_SCHEMA)));
             if (Str.IsString(rt, v)) return Val.Fixnum(Str.SCount(rt, v));
-            if (Mapcore.IsMap(rt, v)) return Val.Fixnum(Maps.Count(rt, v));
+            if (Mapcore.IsMap(rt, v)) return Val.Fixnum(Mapcore.MapCount(rt, v));
             if (Sets.IsSet(rt, v)) return Val.Fixnum(Sets.Count(rt, v));
             if (Maps.IsTransient(rt, v)) return Val.Fixnum(Maps.TCount(rt, v));
             if (Sets.IsTransient(rt, v)) return Val.Fixnum(Sets.TCount(rt, v));

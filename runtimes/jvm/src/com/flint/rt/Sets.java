@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapcore;
+
 import static com.flint.rt.Obj.*;
 
 /// Sets, ported from `runtime/src/set.rs`: a map from element to ITSELF.
@@ -46,7 +48,7 @@ public final class Sets {
         return out;
     }
 
-    public static int count(Rt rt, long s) { return Maps.count(rt, rt.slot(s, S_MAP)); }
+    public static int count(Rt rt, long s) { return Mapcore.mapCount(rt, rt.slot(s, S_MAP)); }
 
     public static boolean contains(Rt rt, long s, long x) {
         return Maps.contains(rt, rt.slot(s, S_MAP), x);

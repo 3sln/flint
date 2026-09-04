@@ -274,7 +274,7 @@ public final class Builtins {
             if (rt.isHeapTy(v, Obj.TY_TABLEREF))
                 return Val.fixnum(Table.schemaLen(rt, rt.slot(v, Table.RF_SCHEMA)));
             if (Str.isString(rt, v)) return Val.fixnum(Str.charLen(rt, v));
-            if (Mapcore.isMap(rt, v)) return Val.fixnum(Maps.count(rt, v));
+            if (Mapcore.isMap(rt, v)) return Val.fixnum(Mapcore.mapCount(rt, v));
             if (Sets.isSet(rt, v)) return Val.fixnum(Sets.count(rt, v));
             if (Maps.isTransient(rt, v)) return Val.fixnum(Maps.tcount(rt, v));
             if (Sets.isTransient(rt, v)) return Val.fixnum(Sets.tcount(rt, v));

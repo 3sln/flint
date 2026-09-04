@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import flint.rt.Mapcore;
+
 import static com.flint.rt.Obj.*;
 import static flint.rt.Seqs.*;
 
@@ -134,7 +136,7 @@ public final class Seqs {
             }
             case TY_ARRAYMAP:
             case TY_HASHMAP: {
-                if (Maps.count(rt, v) == 0) return Val.NIL;
+                if (Mapcore.mapCount(rt, v) == 0) return Val.NIL;
                 int base = rt.mark();
                 int ev = rt.push(Maps.entryVector(rt, v));
                 long out = vecseq(rt, rt.r(ev), 0);

@@ -84,16 +84,6 @@ public static class Maps {
     // --- the map objects -----------------------------------------------------
 
 
-    public static int Count(Rt rt, long m) {
-        // A ROW REF counts its COLUMNS -- `IsMap` says true for one, so map
-        // internals get called on one directly (`doc/decisions/0026`).
-        if (Val.IsHeap(m) && Obj.Ty(rt.gc.sp, Val.AsHeap(m)) == Obj.TyTableref)
-            return Table.schemaLen(rt, rt.Slot(m, Table.RF_SCHEMA));
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
-        if (t == Obj.TyArraymap) return (Olen(rt, m) - AM_BASE) / 2;
-        if (t == Obj.TyHashmap) return (int) Val.AsFixnum(rt.Slot(m, HM_CNT));
-        return 0;
-    }
 
 
     /// The SINGLETON empty map: allocating a fresh one per call is what made
@@ -111,7 +101,7 @@ public static class Maps {
     static int AmIndexOf(Rt rt, long m, long k) {
         int bas = rt.Mark();
         int mi = rt.Push(m), ki = rt.Push(k);
-        int n = Count(rt, rt.R(mi));
+        int n = MapCount(rt, rt.R(mi));
         int outv = -1;
         for (int i = 0; i < n; i++) {
             if (Flint.Rt.Eq.Equal(rt, AmKey(rt, rt.R(mi), i), rt.R(ki))) { outv = i; break; }
@@ -153,7 +143,7 @@ public static class Maps {
     static long Promote(Rt rt, long m) {
         int bas = rt.Mark();
         int mi = rt.Push(m);
-        int n = Count(rt, m);
+        int n = MapCount(rt, m);
         int ri = rt.Push(BnNew(rt, 0, 0, Val.Nil));
         int cnt = 0;
         for (int i = 0; i < n; i++) {
@@ -176,7 +166,7 @@ public static class Maps {
         long outv;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
         if (t == Obj.TyArraymap) {
-            int n = Count(rt, m);
+            int n = MapCount(rt, m);
             int i = AmIndexOf(rt, rt.R(mi), rt.R(ki));
             if (i >= 0) {
                 long old = AmVal(rt, rt.R(mi), i);
@@ -207,7 +197,7 @@ public static class Maps {
                 outv = Assoc(rt, rt.R(pi), rt.R(ki), rt.R(vi));
             }
         } else if (t == Obj.TyHashmap) {
-            int cnt = Count(rt, m);
+            int cnt = MapCount(rt, m);
             int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
             int ri = rt.Push(rt.Slot(rt.R(mi), HM_ROOT));
             rt.champAdded = false;
@@ -254,7 +244,7 @@ public static class Maps {
             if (i < 0) {
                 outv = rt.R(mi);
             } else {
-                int n = Count(rt, rt.R(mi));
+                int n = MapCount(rt, rt.R(mi));
                 int ni = rt.Push(NewArrayMap(rt, n - 1));
                 int d = 0;
                 for (int j = 0; j < n; j++) {
@@ -274,7 +264,7 @@ public static class Maps {
             if (!rt.champAdded || nr == rt.R(ri)) {
                 outv = rt.R(mi);
             } else {
-                int cnt = Count(rt, rt.R(mi)) - 1;
+                int cnt = MapCount(rt, rt.R(mi)) - 1;
                 int nri = rt.Push(nr);
                 long meta = rt.Slot(rt.R(mi), HM_META);
                 outv = cnt == 0 ? Empty(rt) : NewHashMap(rt, cnt, rt.R(nri), meta);
@@ -298,7 +288,7 @@ public static class Maps {
         if (!Val.IsHeap(m)) return 0;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(m));
         if (t == Obj.TyArraymap) {
-            int n = Count(rt, m);
+            int n = MapCount(rt, m);
             int mi = rt.Push(m);
             for (int i = 0; i < n; i++) {
                 rt.Push(AmKey(rt, rt.R(mi), i));
@@ -369,7 +359,7 @@ public static class Maps {
         long a = rt.Alloc(Obj.TyTmap, 3);
         if (a == 0) { rt.PopTo(bas); return Val.Nil; }
         long h = rt.R(hi);
-        rt.SetSlot(a, TM_CNT, Val.Fixnum(Count(rt, h)));
+        rt.SetSlot(a, TM_CNT, Val.Fixnum(MapCount(rt, h)));
         rt.SetSlot(a, TM_ROOT, rt.Slot(h, HM_ROOT));
         rt.SetSlot(a, TM_EDIT, rt.R(ei));
         rt.PopTo(bas);
@@ -445,7 +435,7 @@ public static class Maps {
     /// makes, and every one of those would need rooting.
     public static long EntryVector(Rt rt, long m) {
         // CHARGED UP FRONT: `n` is known, so this refuses rather than ticks.
-        if (!rt.ChargeChecked(Count(rt, m), "seq of a map")) return Val.Nil;
+        if (!rt.ChargeChecked(MapCount(rt, m), "seq of a map")) return Val.Nil;
         if (Val.IsHeap(m) && Obj.Ty(rt.gc.sp, Val.AsHeap(m)) == Obj.TyTableref)
             return EntryVector(rt, Table.refToMap(rt, m));
         int bas = rt.Mark();
@@ -484,7 +474,7 @@ public static class Maps {
             rt.SetR(ai, Table.refToMap(rt, rt.R(ai)));
         if (Val.IsHeap(rt.R(bi)) && Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(bi))) == Obj.TyTableref)
             rt.SetR(bi, Table.refToMap(rt, rt.R(bi)));
-        if (Count(rt, rt.R(ai)) != Count(rt, rt.R(bi))) { rt.PopTo(bas); return false; }
+        if (MapCount(rt, rt.R(ai)) != MapCount(rt, rt.R(bi))) { rt.PopTo(bas); return false; }
         int at = rt.Mark();
         int n = Entries(rt, rt.R(ai), at);
         bool ok = true;

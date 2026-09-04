@@ -25,6 +25,35 @@ public final class Mapcore {
         }
         return ty(rt.gc.sp, Val.asHeap(v)) == TY_ARRAYMAP;
     }
+    /// How many entries: an array map counts its slots, a hash map is told.
+    /// 
+    /// NO ROW-REF ARM, and that is a change from the ports, made on a
+    /// measurement. Both ports carried one -- a ref counting its COLUMNS -- on
+    /// the defensive reasoning that `isMap` is true for a ref, so anything
+    /// asking "is this a map?" could arrive here with one.
+    /// 
+    /// It is unreachable in all three. Every `count` builtin tests TY_TABLEREF
+    /// BEFORE it tests `isMap`, so a ref is answered before this is called, and
+    /// a probe of every map operation against a row ref showed no difference
+    /// with the arm or without it.
+    /// 
+    /// It cost 636 bytes in every shipped module -- 303 564 against 304 200,
+    /// measured by building the floor both ways -- and that is what the module
+    /// budget in `test/threads.clj` exists to catch. Dead defence is still
+    /// carried by every program that never uses a table.
+    public static int mapCount(Rt rt, long m) {
+        // Early returns rather than one match arm each: kin's `case` is for
+        // tags in statement position, and the ports already spell it this
+        // way. Both are correct and the flatter one is the tie-breaker.
+        int t = ty(rt.gc.sp, Val.asHeap(m));
+        if (t == TY_ARRAYMAP) {
+            return (olen(rt, m) - AM_BASE) / 2;
+        }
+        if (t == TY_HASHMAP) {
+            return (int) Val.asFixnum(rt.slot(m, HM_CNT));
+        }
+        return 0;
+    }
     public static long amKey(Rt rt, long m, int i) {
         return rt.slot(m, AM_BASE + (2 * i));
     }

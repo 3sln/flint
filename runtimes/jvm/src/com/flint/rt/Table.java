@@ -405,7 +405,7 @@ public final class Table {
         // hunt walks the row and the good path must not.
         boolean extra = isTableRef(rt, rt.r(ri))
             ? schemaLen(rt, rt.slot(rt.r(ri), RF_SCHEMA)) > n
-            : Maps.count(rt, rt.r(ri)) > n;
+            : Mapcore.mapCount(rt, rt.r(ri)) > n;
         if (extra) {
             long bad = firstForeignKey(rt, rt.r(si), rt.r(ri));
             String nm = kwName(rt, bad), cols = columnList(rt, rt.r(si));

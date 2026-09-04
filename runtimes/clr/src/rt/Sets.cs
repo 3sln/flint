@@ -1,5 +1,7 @@
 namespace Flint.Rt;
 
+using flint.rt;
+
 
 /// Sets, ported from `runtime/src/set.rs`: a map from element to ITSELF.
 ///
@@ -44,7 +46,7 @@ public static class Sets {
         return outv;
     }
 
-    public static int Count(Rt rt, long s) { return Maps.Count(rt, rt.Slot(s, S_MAP)); }
+    public static int Count(Rt rt, long s) { return Mapcore.MapCount(rt, rt.Slot(s, S_MAP)); }
 
     public static bool Contains(Rt rt, long s, long x) {
         return Maps.Contains(rt, rt.Slot(s, S_MAP), x);

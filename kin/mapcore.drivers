@@ -6,12 +6,14 @@ const NIL: Value = Value(0xFFFF);
 const AM_BASE: u32 = 2; const AM_META: u32 = 0; const AM_HASH: u32 = 1;
 const HM_CNT: u32 = 0; const HM_ROOT: u32 = 1; const HM_META: u32 = 2; const HM_HASH: u32 = 3;
 const TY_ARRAYMAP: u8 = 14; const TY_HASHMAP: u8 = 15;
-const TY_TABLEREF: u8 = 50; const TY_MAPENTRY: u8 = 20;
+const TY_TABLEREF: u8 = 50;
+mod table { pub const RF_SCHEMA: u32 = 0; } const TY_MAPENTRY: u8 = 20;
 impl Value {
     fn is_heap(self) -> bool { self.0 >= 100 }
     fn as_heap(self) -> Addr { self.0 as Addr }
     fn fixnum(n: i64) -> Value { Value(n as u64) }
     fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
 }
 struct Gc { sp: Vec<u8> }
 struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, starve: bool }
@@ -29,6 +31,8 @@ impl Rt {
     fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
     fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
     fn olen(&self, n: Value) -> u32 { self.lens[n.0 as usize] }
+    // A ref's schema is one slot away and its length is the column count.
+    fn schema_len(&self, s: Value) -> u32 { self.h[s.0 as usize] as u32 }
 }
 // `ty` answers a u8 in the real runtime; the fixture says so too, because
 // a driver that widens it compiles here and does not compile there.
@@ -52,7 +56,9 @@ fn main() {
         rt.is_array_map(am) as u32, rt.is_array_map(hm) as u32, rt.is_array_map(me) as u32));
     // A ROW REF answers `is_map` too, which is the whole point of the third tag.
     let refv = Value(300); rt.gc.sp[300] = TY_TABLEREF;
-    o.push_str(&format!("ref={} ", rt.is_map(refv) as u32));
+    rt.h[300] = 310; rt.h[310] = 4;          // ref -> schema -> 4 columns
+    o.push_str(&format!("ref={} refcount={} ", rt.is_map(refv) as u32, rt.map_count(refv)));
+    o.push_str(&format!("amcount={} hmcount={} ", rt.map_count(am), rt.map_count(hm)));
     // The constructors wrote what they should.
     o.push_str(&format!("ammeta={} amhash={} ", rt.slot(am, AM_META).0, rt.slot(am, AM_HASH).0));
     o.push_str(&format!("cnt={} root={} meta={} hash={} ",
@@ -83,6 +89,7 @@ fn main() {
         static long asHeap(long v) { return v; }
         static long fixnum(long n) { return n; }
         static long heap(long a) { return a; }
+        static long asFixnum(long v) { return v; }
     }
     static final class Rt {
         long[] h = new long[400];
@@ -106,6 +113,10 @@ fn main() {
         long slot(long n, int i) { return h[(int) n + i]; }
     }
     static int olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    static final class Table {
+        static final int RF_SCHEMA = 0;
+        static int schemaLen(Rt rt, long s) { return (int) rt.h[(int) s]; }
+    }
     static int ty(int[] sp, long a) { return sp[(int) a]; }
 --java
     public static void main(String[] args) {
@@ -119,7 +130,9 @@ fn main() {
         o.append(isMap(rt, am) ? 1 : 0).append(isMap(rt, hm) ? 1 : 0).append(isMap(rt, me) ? 1 : 0).append(' ');
         o.append(isArrayMap(rt, am) ? 1 : 0).append(isArrayMap(rt, hm) ? 1 : 0).append(isArrayMap(rt, me) ? 1 : 0).append(' ');
         rt.gc.sp[300] = TY_TABLEREF;
-        o.append("ref=").append(isMap(rt, 300) ? 1 : 0).append(' ');
+        rt.h[300] = 310; rt.h[310] = 4;
+        o.append("ref=").append(isMap(rt, 300) ? 1 : 0).append(" refcount=").append(mapCount(rt, 300)).append(' ');
+        o.append("amcount=").append(mapCount(rt, am)).append(" hmcount=").append(mapCount(rt, hm)).append(' ');
         o.append("ammeta=").append(rt.slot(am, AM_META)).append(" amhash=").append(rt.slot(am, AM_HASH)).append(' ');
         o.append("cnt=").append(rt.slot(hm, HM_CNT)).append(" root=").append(rt.slot(hm, HM_ROOT))
          .append(" meta=").append(rt.slot(hm, HM_META)).append(" hash=").append(rt.slot(hm, HM_HASH)).append(' ');
@@ -149,6 +162,7 @@ fn main() {
         internal static long AsHeap(long v) { return v; }
         internal static long Fixnum(long n) { return n; }
         internal static long Heap(long a) { return a; }
+        internal static long AsFixnum(long v) { return v; }
     }
     internal sealed class Rt {
         internal long[] h = new long[400];
@@ -172,6 +186,16 @@ fn main() {
         internal long Slot(long n, int i) { return h[(int) n + i]; }
     }
     static int Olen(Rt rt, long n) { return rt.lens[(int) n]; }
+    // Nested to reproduce the port's FULLY QUALIFIED `Flint.Rt.Table`, which
+    // the real C# needs because a `Table` member would shadow the class.
+    internal static class Flint {
+        internal static class Rt {
+            internal static class Table {
+                internal const int RF_SCHEMA = 0;
+                internal static int schemaLen(Probe.Rt rt, long s) { return (int) rt.h[(int) s]; }
+            }
+        }
+    }
 --csharp
     static void Main() {
         var rt = new Rt();
@@ -184,7 +208,9 @@ fn main() {
         o.Append(IsMap(rt, am) ? 1 : 0).Append(IsMap(rt, hm) ? 1 : 0).Append(IsMap(rt, me) ? 1 : 0).Append(' ');
         o.Append(IsArrayMap(rt, am) ? 1 : 0).Append(IsArrayMap(rt, hm) ? 1 : 0).Append(IsArrayMap(rt, me) ? 1 : 0).Append(' ');
         rt.gc.sp[300] = Obj.TyTableref;
-        o.Append("ref=").Append(IsMap(rt, 300) ? 1 : 0).Append(' ');
+        rt.h[300] = 310; rt.h[310] = 4;
+        o.Append("ref=").Append(IsMap(rt, 300) ? 1 : 0).Append(" refcount=").Append(MapCount(rt, 300)).Append(' ');
+        o.Append("amcount=").Append(MapCount(rt, am)).Append(" hmcount=").Append(MapCount(rt, hm)).Append(' ');
         o.Append("ammeta=").Append(rt.Slot(am, AM_META)).Append(" amhash=").Append(rt.Slot(am, AM_HASH)).Append(' ');
         o.Append("cnt=").Append(rt.Slot(hm, HM_CNT)).Append(" root=").Append(rt.Slot(hm, HM_ROOT))
          .Append(" meta=").Append(rt.Slot(hm, HM_META)).Append(" hash=").Append(rt.Slot(hm, HM_HASH)).Append(' ');

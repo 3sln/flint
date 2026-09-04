@@ -86,17 +86,6 @@ public final class Maps {
     // --- the map objects -----------------------------------------------------
 
 
-    public static int count(Rt rt, long m) {
-        int t = ty(rt.gc.sp, Val.asHeap(m));
-        // A ROW REF counts its COLUMNS. `isMap` says true for one, so anything
-        // that asks "is this a map?" and then calls a map internal lands here
-        // -- and reading a ref as an array-map is not a wrong answer, it is
-        // garbage that becomes a bogus pointer later (`doc/decisions/0026`).
-        if (t == Obj.TY_TABLEREF) return Table.schemaLen(rt, rt.slot(m, Table.RF_SCHEMA));
-        if (t == TY_ARRAYMAP) return (olen(rt, m) - AM_BASE) / 2;
-        if (t == TY_HASHMAP) return (int) Val.asFixnum(rt.slot(m, HM_CNT));
-        return 0;
-    }
 
 
     /// The SINGLETON empty map. Allocating a fresh one per call is what made
@@ -115,7 +104,7 @@ public final class Maps {
     static int amIndexOf(Rt rt, long m, long k) {
         int base = rt.mark();
         int mi = rt.push(m), ki = rt.push(k);
-        int n = count(rt, rt.r(mi));
+        int n = mapCount(rt, rt.r(mi));
         int out = -1;
         for (int i = 0; i < n; i++) {
             if (Eq.eq(rt, amKey(rt, rt.r(mi), i), rt.r(ki))) { out = i; break; }
@@ -158,7 +147,7 @@ public final class Maps {
     static long promote(Rt rt, long m) {
         int base = rt.mark();
         int mi = rt.push(m);
-        int n = count(rt, m);
+        int n = mapCount(rt, m);
         int ri = rt.push(bnNew(rt, 0, 0, Val.NIL));
         int cnt = 0;
         for (int i = 0; i < n; i++) {
@@ -181,7 +170,7 @@ public final class Maps {
         long out;
         int t = ty(rt.gc.sp, Val.asHeap(m));
         if (t == TY_ARRAYMAP) {
-            int n = count(rt, m);
+            int n = mapCount(rt, m);
             int i = amIndexOf(rt, rt.r(mi), rt.r(ki));
             if (i >= 0) {
                 long old = amVal(rt, rt.r(mi), i);
@@ -212,7 +201,7 @@ public final class Maps {
                 out = assoc(rt, rt.r(pi), rt.r(ki), rt.r(vi));
             }
         } else if (t == TY_HASHMAP) {
-            int cnt = count(rt, m);
+            int cnt = mapCount(rt, m);
             int h = Eq.hashValue(rt, rt.r(ki));
             int ri = rt.push(rt.slot(rt.r(mi), HM_ROOT));
             rt.champAdded = false;
@@ -259,7 +248,7 @@ public final class Maps {
             if (i < 0) {
                 out = rt.r(mi);
             } else {
-                int n = count(rt, rt.r(mi));
+                int n = mapCount(rt, rt.r(mi));
                 int ni = rt.push(newArrayMap(rt, n - 1));
                 int d = 0;
                 for (int j = 0; j < n; j++) {
@@ -279,7 +268,7 @@ public final class Maps {
             if (!rt.champAdded || nr == rt.r(ri)) {
                 out = rt.r(mi);
             } else {
-                int cnt = count(rt, rt.r(mi)) - 1;
+                int cnt = mapCount(rt, rt.r(mi)) - 1;
                 int nri = rt.push(nr);
                 long meta = rt.slot(rt.r(mi), HM_META);
                 out = cnt == 0 ? empty(rt) : newHashMap(rt, cnt, rt.r(nri), meta);
@@ -303,7 +292,7 @@ public final class Maps {
         if (!Val.isHeap(m)) return 0;
         int t = ty(rt.gc.sp, Val.asHeap(m));
         if (t == TY_ARRAYMAP) {
-            int n = count(rt, m);
+            int n = mapCount(rt, m);
             int mi = rt.push(m);
             for (int i = 0; i < n; i++) {
                 rt.push(amKey(rt, rt.r(mi), i));
@@ -375,7 +364,7 @@ public final class Maps {
         long a = rt.alloc(TY_TMAP, 3);
         if (a == 0) { rt.popTo(base); return Val.NIL; }
         long h = rt.r(hi);
-        rt.setSlot(a, TM_CNT, Val.fixnum(count(rt, h)));
+        rt.setSlot(a, TM_CNT, Val.fixnum(mapCount(rt, h)));
         rt.setSlot(a, TM_ROOT, rt.slot(h, HM_ROOT));
         rt.setSlot(a, TM_EDIT, rt.r(ei));
         rt.popTo(base);
@@ -460,7 +449,7 @@ public final class Maps {
         // CHARGED UP FRONT: `n` is known, so this refuses rather than ticks.
         // `seq`, `keys` and `vals` all come through here and build an entry per
         // key (`doc/decisions/0009`).
-        if (!rt.chargeChecked(count(rt, m), "seq of a map")) return Val.NIL;
+        if (!rt.chargeChecked(mapCount(rt, m), "seq of a map")) return Val.NIL;
         // Same choke point as `count`: a ref materialises here rather than
         // being read as an array-map.
         if (Val.isHeap(m) && ty(rt.gc.sp, Val.asHeap(m)) == Obj.TY_TABLEREF)
@@ -503,7 +492,7 @@ public final class Maps {
             rt.setR(ai, Table.refToMap(rt, rt.r(ai)));
         if (Val.isHeap(rt.r(bi)) && ty(rt.gc.sp, Val.asHeap(rt.r(bi))) == Obj.TY_TABLEREF)
             rt.setR(bi, Table.refToMap(rt, rt.r(bi)));
-        if (count(rt, rt.r(ai)) != count(rt, rt.r(bi))) { rt.popTo(base); return false; }
+        if (mapCount(rt, rt.r(ai)) != mapCount(rt, rt.r(bi))) { rt.popTo(base); return false; }
         int at = rt.mark();
         int n = entries(rt, rt.r(ai), at);
         boolean ok = true;

@@ -1,5 +1,7 @@
 namespace Flint.Rt;
 
+using flint.rt;
+
 using static flint.rt.Seqs;
 
 /// Seqs, ported from `runtime/src/seqs.rs`.
@@ -121,7 +123,7 @@ public static class Seqs {
             }
             case Obj.TyArraymap:
             case Obj.TyHashmap: {
-                if (Maps.Count(rt, v) == 0) return Val.Nil;
+                if (Mapcore.MapCount(rt, v) == 0) return Val.Nil;
                 int bas = rt.Mark();
                 int ev = rt.Push(Maps.EntryVector(rt, v));
                 long outv = Vecseq(rt, rt.R(ev), 0);

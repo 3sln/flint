@@ -118,13 +118,6 @@ impl Rt {
     }
 
 
-    pub fn map_count(&self, m: Value) -> u32 {
-        match ty(&self.gc.sp, m.as_heap()) {
-            TY_ARRAYMAP => (self.olen(m) - AM_BASE) / 2,
-            TY_HASHMAP => self.slot(m, HM_CNT).as_fixnum() as u32,
-            _ => 0,
-        }
-    }
 
 
 

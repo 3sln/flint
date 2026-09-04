@@ -196,6 +196,8 @@
    ;; table, which meant they passed through VERBATIM and emitted `LS_THUNK`
    ;; into a C# file whose constant is `LsThunk`. The CLR has not compiled
    ;; since `seqs.kin` shipped.
+   'RF_SCHEMA {:rust "crate::table::RF_SCHEMA"
+               :java "Table.RF_SCHEMA" :csharp "Flint.Rt.Table.RF_SCHEMA"}
    'LS_THUNK {:rust "LS_THUNK" :java "LS_THUNK" :csharp "LsThunk"}
    'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LsSeq"}}
   ;; The node and category constants. All three targets spell these
@@ -471,6 +473,16 @@
     ;; `category` is itself generated, by `kin/eq.kin`, and is reached from
     ;; inside its own class on the ports -- so it is `own`, not `sibling`.
     'category (own "category" "category" 1)
+    ;; The TABLE unit, reached from the map layer. `map_count` needs it for a
+    ;; ROW REF, which counts its COLUMNS -- the defensive arm both ports have
+    ;; and Rust does not.
+    ;;
+    ;; C# spells it `schemaLen`, not `SchemaLen`: the port kept the Java
+    ;; casing here, and a name table records what a runtime DOES rather than
+    ;; what its convention would predict.
+    'schema-len (core/call {:rust "{0}.schema_len({1})"
+                            :java "Table.schemaLen({0}, {1})"
+                            :csharp "Flint.Rt.Table.schemaLen({0}, {1})"})
     ;; `eq_may_alloc` is GENERATED, by `eqalloc.kin`, so it is `own` rather
     ;; than a hand-written sibling -- and `own` is now exactly right for one:
     ;; a bare call, with the static import derived from the fact that this
