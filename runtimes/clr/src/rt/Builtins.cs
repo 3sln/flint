@@ -957,7 +957,7 @@ public static class Builtins {
         Def("flint/realized?", (rt, at, n) => {
             long v = rt.VAt(at);
             if (rt.IsHeapTy(v, Obj.TyDelay)) return Val.Bool(Val.IsNil(rt.Slot(v, 0)));
-            if (rt.IsHeapTy(v, Obj.TyLazyseq)) return Val.Bool(Val.IsNil(rt.Slot(v, Seqs.LsThunk)));
+            if (rt.IsHeapTy(v, Obj.TyLazyseq)) return Val.Bool(Val.IsNil(rt.Slot(v, Seqs.LS_THUNK)));
             return Val.True;
         });
 

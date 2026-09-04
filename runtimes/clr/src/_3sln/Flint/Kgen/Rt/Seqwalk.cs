@@ -94,4 +94,58 @@ public static class Seqwalk {
         }
         return Val.Nil;
     }
+    /// `rest`: the seq after the first element, and NEVER nil.
+    /// 
+    /// Clojure's rule, and the difference from `next` is the whole of it: an
+    /// exhausted `rest` is the empty list, so `(rest (rest [1]))` is `()` and
+    /// keeps being seqable, where `next` answers nil and stops.
+    public static long Rest(Rt rt, long v) {
+        long n = Next(rt, v);
+        if (Val.IsNil(n)) {
+            return global::Flint.Rt.Seqs.EmptyList(rt);
+        }
+        return n;
+    }
+    /// Force a lazy seq to whatever it actually is, and CACHE that in it.
+    /// 
+    /// A thunk already run leaves `LS_THUNK` nil and the answer in `LS_SEQ`, so
+    /// forcing twice runs nothing twice -- which is what makes a lazy seq a
+    /// value rather than a generator.
+    /// 
+    /// The loop is for CHAINED lazy seqs: a thunk may answer another lazy seq,
+    /// and that one another, and only the end of the chain is concrete.
+    /// 
+    /// The cursor lives in the ROOT throughout. Rust used to hold it in a host
+    /// local with a `set_r` alongside -- correct, because the local was always
+    /// overwritten by the result of the call that could have moved it, but
+    /// correct by an argument the reader has to rebuild each time. Both ports
+    /// already did it this way.
+    public static long Force(Rt rt, long ls) {
+        long thunk = rt.Slot(ls, LS_THUNK);
+        if (Val.IsNil(thunk)) {
+            return rt.Slot(ls, LS_SEQ);
+        }
+        int @base = rt.Mark();
+        int li = rt.Push(ls);
+        long firstForced = rt.Call(thunk, System.Array.Empty<long>());
+        int vi = rt.Push(firstForced);
+        // HOISTED, both calls: `push`, `set-r` and `invoke-thunk` all
+        // take `&mut self` in Rust, so nesting an invoke inside either
+        // is two mutable borrows at once.
+        while (Val.IsHeap(rt.R(vi)) && (Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(vi))) == Obj.TyLazyseq)) {
+            long t2 = rt.Slot(rt.R(vi), LS_THUNK);
+            if (Val.IsNil(t2)) {
+                rt.SetR(vi, rt.Slot(rt.R(vi), LS_SEQ));
+                break;
+            }
+            long forced = rt.Call(t2, System.Array.Empty<long>());
+            rt.SetR(vi, forced);
+        }
+        long cur = rt.R(vi);
+        long l = rt.R(li);
+        rt.PopTo(@base);
+        rt.SetSlot(Val.AsHeap(l), LS_THUNK, Val.Nil);
+        rt.SetSlot(Val.AsHeap(l), LS_SEQ, cur);
+        return cur;
+    }
 }

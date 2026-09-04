@@ -192,15 +192,21 @@
    'TRUE {:rust "TRUE" :java "Val.TRUE" :csharp "Val.True"}
    'FALSE {:rust "FALSE" :java "Val.FALSE" :csharp "Val.False"}
    'NOT_FOUND {:rust "NOT_FOUND" :java "Val.NOT_FOUND" :csharp "Val.NotFound"}
-   ;; The lazy-seq slot indices. Rust and Java spell them SCREAMING_SNAKE and
-   ;; C# pascalises, so they are names -- and they were missing from this
-   ;; table, which meant they passed through VERBATIM and emitted `LS_THUNK`
-   ;; into a C# file whose constant is `LsThunk`. The CLR has not compiled
-   ;; since `seqs.kin` shipped.
+   ;; The lazy-seq slot indices. These USED to need an entry here: the CLR
+   ;; spelled them `LsThunk` and `LsSeq` while the other two spelled them
+   ;; SCREAMING_SNAKE, so passing them through verbatim emitted `LS_THUNK`
+   ;; into a file whose constant was `LsThunk` -- and the CLR did not compile
+   ;; for as long as that went unnoticed.
+   ;;
+   ;; The CLR is renamed now, as its `Vec` constants and its cons slots were,
+   ;; for the same reason each time: one runtime disagreeing with the other
+   ;; two is worth less than its own casing convention. They stay listed
+   ;; because the table is where agreement is ASSERTED, and an agreement
+   ;; nobody wrote down is one the next rename can quietly break.
    'RF_SCHEMA {:rust "crate::table::RF_SCHEMA"
                :java "Table.RF_SCHEMA" :csharp "global::Flint.Rt.Table.RF_SCHEMA"}
-   'LS_THUNK {:rust "LS_THUNK" :java "LS_THUNK" :csharp "LsThunk"}
-   'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LsSeq"}}
+   'LS_THUNK {:rust "LS_THUNK" :java "LS_THUNK" :csharp "LS_THUNK"}
+   'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LS_SEQ"}}
   ;; The node and category constants. All three targets spell these
   ;; IDENTICALLY, so every entry below is three copies of one string -- and
   ;; they are written down anyway.
@@ -556,6 +562,18 @@
     ;; The risk the qualification guards against is a kin source named `vec`
     ;; generating a `flint.rt.Vec` that shadows this. There is none, and one
     ;; would be a compile error rather than a silent wrong call.
+    ;; The EMPTY LIST singleton, and a zero-argument INVOKE.
+    ;;
+    ;; `invoke-thunk` is how generated code calls back into guest code -- a
+    ;; lazy seq's thunk, and nothing else so far. It takes no arguments, so
+    ;; each target spells its empty argument list its own way and the source
+    ;; says none of it.
+    'empty-list (core/call {:rust "{0}.empty_list()"
+                            :java "com.flint.rt.Seqs.emptyList({0})"
+                            :csharp "global::Flint.Rt.Seqs.EmptyList({0})"})
+    'invoke-thunk (core/call {:rust "{0}.invoke({1}, &[])"
+                              :java "{0}.call({1}, new long[0])"
+                              :csharp "{0}.Call({1}, System.Array.Empty<long>())"})
     'empty-vec (core/call {:rust "{0}.empty_vec()"
                            :java "Vec.empty({0})"
                            :csharp "Vec.Empty({0})"})

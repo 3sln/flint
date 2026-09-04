@@ -5,6 +5,8 @@ struct Value(u64);
 const NIL: Value = Value(0xFFFF);
 const TY_CONS: u8 = 6; const TY_VECSEQ: u8 = 11; const TY_STRSEQ: u8 = 12;
 const TY_RANGE: u8 = 13; const TY_MAPENTRY: u8 = 20; const TY_TABLE: u8 = 49;
+const TY_LAZYSEQ: u8 = 3; const TY_EMPTY_LIST: u8 = 7;
+const LS_THUNK: u32 = 0; const LS_SEQ: u32 = 1;
 const TY_VEC: u8 = 9; const TY_STR: u8 = 2;
 const C_FIRST: u32 = 0; const C_REST: u32 = 1;
 impl Value {
@@ -22,6 +24,7 @@ impl Rt {
     fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
     fn r(&self, i: usize) -> Value { self.roots[i] }
     fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
     fn alloc(&mut self, t: u8, n: u32) -> Addr {
         if self.starve { return 0; }
         let a = self.bump; self.bump += n as u64 + 1;
@@ -30,6 +33,7 @@ impl Rt {
         a as Addr
     }
     fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.set_slot(v.as_heap(), i, x); }
     fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
 
     // --- the stubs the source reaches -----------------------------------
@@ -48,6 +52,13 @@ impl Rt {
     fn table_count(&mut self, t: Value) -> u32 { self.slot(t, 0).0 as u32 }
     fn table_ref(&mut self, t: Value, i: u32) -> Value { Value(0x7000 + i as u64) }
     fn num_add(&mut self, a: Value, b: Value) -> Value { Value(a.0 + b.0) }
+    fn empty_list(&mut self) -> Value {
+        let a = self.alloc(TY_EMPTY_LIST, 1); Value::heap(a)
+    }
+    // A THUNK, stubbed: slot 0 says what it answers, so a chain can be built
+    // by hand and `force` walked over it. The real one calls back into guest
+    // code; what `force` needs from it is only that it returns a value.
+    fn invoke(&mut self, f: Value, _args: &[Value]) -> Value { self.slot(f, 0) }
     // `seq` is the IDENTITY on a seq and nil on anything else, which is what
     // the real one narrows to once a collection has been converted.
     fn seq(&mut self, v: Value) -> Value {
@@ -143,6 +154,33 @@ fn main() {
     let again = rt.first(rg);
     o.push_str(&format!("rngsame={} ", again.0));
 
+
+    // --- rest: never nil, and the empty list when exhausted ---------------
+    let r1 = rt.rest(cons);
+    let r1f = rt.first(r1);
+    let onec = mk(&mut rt, TY_CONS, &[0x33, NIL.0]);
+    let r2 = rt.rest(onec);
+    o.push_str(&format!("rest={} restend={} ", r1f.0,
+        (ty(&rt.gc.sp, r2.as_heap()) == TY_EMPTY_LIST) as u32));
+
+    // --- force: a thunk, a CHAIN of them, and the cache -------------------
+    // A thunk here answers whatever sits in its slot 0.
+    let answer = mk(&mut rt, TY_CONS, &[0x44, NIL.0]);
+    let th = mk(&mut rt, TY_CONS, &[answer.0]);
+    let lz = mk(&mut rt, TY_LAZYSEQ, &[th.0, NIL.0]);
+    let f1 = rt.force(lz);
+    o.push_str(&format!("force={} ", rt.first(f1).0));
+    // CACHED: the thunk slot is cleared and the answer kept, so forcing again
+    // runs nothing -- which is what makes a lazy seq a value.
+    o.push_str(&format!("cached={} thunkcleared={} ",
+        (rt.force(lz).0 == f1.0) as u32, rt.slot(lz, LS_THUNK).is_nil() as u32));
+    // A CHAIN: a thunk answering a lazy seq answering a lazy seq.
+    let inner = mk(&mut rt, TY_LAZYSEQ, &[th.0, NIL.0]);
+    let midt = mk(&mut rt, TY_CONS, &[inner.0]);
+    let outer = mk(&mut rt, TY_LAZYSEQ, &[midt.0, NIL.0]);
+    let fc = rt.force(outer);
+    o.push_str(&format!("chain={} ", rt.first(fc).0));
+
     // Nothing at all.
     let fn0 = rt.first(NIL); let nn0 = rt.next(NIL);
     o.push_str(&format!("nils={}{} ", fn0.is_nil() as u32, nn0.is_nil() as u32));
@@ -152,6 +190,8 @@ fn main() {
     static final long NIL = 0xFFFFL;
     static final int TY_CONS = 6, TY_VECSEQ = 11, TY_STRSEQ = 12, TY_RANGE = 13;
     static final int TY_MAPENTRY = 20, TY_TABLE = 49, TY_VEC = 9, TY_STR = 2;
+    static final int TY_LAZYSEQ = 3, TY_EMPTY_LIST = 7;
+    static final int LS_THUNK = 0, LS_SEQ = 1;
     static final int C_FIRST = 0, C_REST = 1;
     static final class Val {
         static final long NIL = 0xFFFFL;
@@ -174,6 +214,7 @@ fn main() {
         int push(long v) { roots.add(v); return roots.size() - 1; }
         long r(int i) { return roots.get(i); }
         void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void setR(int i, long v) { roots.set(i, v); }
         long alloc(int t, int n) {
             if (starve) return 0;
             long a = bump; bump += n + 1;
@@ -183,6 +224,8 @@ fn main() {
         }
         void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
         long slot(long n, int i) { return h[(int) n + i]; }
+        // A THUNK, stubbed -- see the Rust head.
+        long call(long f, long[] args) { return slot(f, 0); }
     }
     static int ty(int[] sp, long a) { return sp[(int) a]; }
     // The stubs -- see the Rust head for what each stands in for.
@@ -203,6 +246,7 @@ fn main() {
         static long tableRef(Rt rt, long t, int i) { return 0x7000 + i; }
     }
     static final class Num { static long add(Rt rt, long a, long b) { return a + b; } }
+    static long emptyListOf(Rt rt) { return Val.heap(rt.alloc(TY_EMPTY_LIST, 1)); }
     static long vecseq(Rt rt, long v, int i) {
         long a = rt.alloc(TY_VECSEQ, 3);
         rt.setSlot(a, 0, v); rt.setSlot(a, 1, i);
@@ -229,6 +273,7 @@ fn main() {
         static final class flint {
             static final class rt {
                 static final class Seqs {
+                    static long emptyList(Rt rt2) { return emptyListOf(rt2); }
                     static long seq(Rt rt2, long v) {
                         if (!Val.isHeap(v)) return NIL;
                         int t = ty(rt2.gc.sp, Val.asHeap(v));
@@ -269,6 +314,23 @@ fn main() {
         o.append("rng=").append(first(rt, rg)).append(" rngn=").append(first(rt, next(rt, rg)))
          .append(" rngn2=").append(first(rt, next(rt, next(rt, rg)))).append(' ');
         o.append("rngsame=").append(first(rt, rg)).append(' ');
+
+        long r1 = rest(rt, cons);
+        long onec = mk(rt, TY_CONS, new long[]{0x33, NIL});
+        long r2 = rest(rt, onec);
+        o.append("rest=").append(first(rt, r1))
+         .append(" restend=").append(ty(rt.gc.sp, Val.asHeap(r2)) == TY_EMPTY_LIST ? 1 : 0).append(' ');
+        long answer = mk(rt, TY_CONS, new long[]{0x44, NIL});
+        long th = mk(rt, TY_CONS, new long[]{answer});
+        long lz = mk(rt, TY_LAZYSEQ, new long[]{th, NIL});
+        long f1 = force(rt, lz);
+        o.append("force=").append(first(rt, f1)).append(' ');
+        o.append("cached=").append(force(rt, lz) == f1 ? 1 : 0)
+         .append(" thunkcleared=").append(Val.isNil(rt.slot(lz, LS_THUNK)) ? 1 : 0).append(' ');
+        long inner = mk(rt, TY_LAZYSEQ, new long[]{th, NIL});
+        long midt = mk(rt, TY_CONS, new long[]{inner});
+        long outer = mk(rt, TY_LAZYSEQ, new long[]{midt, NIL});
+        o.append("chain=").append(first(rt, force(rt, outer))).append(' ');
         o.append("nils=").append(Val.isNil(first(rt, NIL)) ? 1 : 0)
          .append(Val.isNil(next(rt, NIL)) ? 1 : 0).append(' ');
         System.out.println(o.toString());
@@ -282,6 +344,7 @@ fn main() {
 // inside `class Probe` cannot be -- so these live out here now.
 namespace Flint.Rt {
     internal static class Seqs {
+        internal static long EmptyList(Probe.Rt rt) { return Probe.EmptyListOf(rt); }
         internal static long Seq(Probe.Rt rt, long v) {
             if (!Probe.Val.IsHeap(v)) return Probe.Val.Nil;
             int t = Probe.Obj.Ty(rt.gc.sp, Probe.Val.AsHeap(v));
@@ -295,9 +358,11 @@ namespace Flint.Rt {
 --csharp-head
     const long NIL = 0xFFFFL;
     const int C_FIRST = 0, C_REST = 1;
+    const int LS_THUNK = 0, LS_SEQ = 1;
     internal static class Obj {
         internal const int TyCons = 6, TyVecseq = 11, TyStrseq = 12, TyRange = 13;
         internal const int TyMapentry = 20, TyTable = 49, TyVec = 9, TyStr = 2;
+        internal const int TyLazyseq = 3, TyEmptyList = 7;
         internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
     }
     internal static class Val {
@@ -321,6 +386,7 @@ namespace Flint.Rt {
         internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
         internal long R(int i) { return roots[i]; }
         internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal void SetR(int i, long v) { roots[i] = v; }
         internal long Alloc(int t, int n) {
             if (starve) return 0;
             long a = bump; bump += n + 1;
@@ -330,6 +396,8 @@ namespace Flint.Rt {
         }
         internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
         internal long Slot(long n, int i) { return h[(int) n + i]; }
+        // A THUNK, stubbed -- see the Rust head.
+        internal long Call(long f, long[] args) { return Slot(f, 0); }
     }
     // The stubs -- see the Rust head for what each stands in for.
     internal static class Vec {
@@ -349,6 +417,7 @@ namespace Flint.Rt {
         internal static long tableRef(Rt rt, long t, int i) { return 0x7000 + i; }
     }
     internal static class Num { internal static long Add(Rt rt, long a, long b) { return a + b; } }
+    internal static long EmptyListOf(Rt rt) { return Val.Heap(rt.Alloc(Obj.TyEmptyList, 1)); }
     static long Vecseq(Rt rt, long v, int i) {
         long a = rt.Alloc(Obj.TyVecseq, 3);
         rt.SetSlot(a, 0, v); rt.SetSlot(a, 1, i);
@@ -398,6 +467,23 @@ namespace Flint.Rt {
         o.Append("rng=").Append(First(rt, rg)).Append(" rngn=").Append(First(rt, Next(rt, rg)))
          .Append(" rngn2=").Append(First(rt, Next(rt, Next(rt, rg)))).Append(' ');
         o.Append("rngsame=").Append(First(rt, rg)).Append(' ');
+
+        long r1 = Rest(rt, cons);
+        long onec = Mk(rt, Obj.TyCons, new long[]{0x33, NIL});
+        long r2 = Rest(rt, onec);
+        o.Append("rest=").Append(First(rt, r1))
+         .Append(" restend=").Append(Obj.Ty(rt.gc.sp, Val.AsHeap(r2)) == Obj.TyEmptyList ? 1 : 0).Append(' ');
+        long answer = Mk(rt, Obj.TyCons, new long[]{0x44, NIL});
+        long th = Mk(rt, Obj.TyCons, new long[]{answer});
+        long lz = Mk(rt, Obj.TyLazyseq, new long[]{th, NIL});
+        long f1 = Force(rt, lz);
+        o.Append("force=").Append(First(rt, f1)).Append(' ');
+        o.Append("cached=").Append(Force(rt, lz) == f1 ? 1 : 0)
+         .Append(" thunkcleared=").Append(Val.IsNil(rt.Slot(lz, LS_THUNK)) ? 1 : 0).Append(' ');
+        long inner = Mk(rt, Obj.TyLazyseq, new long[]{th, NIL});
+        long midt = Mk(rt, Obj.TyCons, new long[]{inner});
+        long outer = Mk(rt, Obj.TyLazyseq, new long[]{midt, NIL});
+        o.Append("chain=").Append(First(rt, Force(rt, outer))).Append(' ');
         o.Append("nils=").Append(Val.IsNil(First(rt, NIL)) ? 1 : 0)
          .Append(Val.IsNil(Next(rt, NIL)) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());

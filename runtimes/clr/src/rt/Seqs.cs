@@ -23,6 +23,8 @@ public static class Seqs {
     /// bodies are generated, as `Seqwalk`.
     public static long First(Rt rt, long v) { return _3sln.Flint.Kgen.Rt.Seqwalk.First(rt, v); }
     public static long Next(Rt rt, long v) { return _3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, v); }
+    public static long Rest(Rt rt, long v) { return _3sln.Flint.Kgen.Rt.Seqwalk.Rest(rt, v); }
+    public static long Force(Rt rt, long ls) { return _3sln.Flint.Kgen.Rt.Seqwalk.Force(rt, ls); }
 
     /// `Cons`, under the name its callers already use -- the body is
     /// generated, as `Seqcore.Cons`.
@@ -39,27 +41,9 @@ public static class Seqs {
 
     /// A lazy seq's slots. Outside the generated region, for the same reason
     /// as in `Seqs.java`.
-    public const int LsThunk = 0, LsSeq = 1;
+    public const int LS_THUNK = 0, LS_SEQ = 1;
 
 
-    public static long Force(Rt rt, long ls) {
-        long thunk = rt.Slot(ls, LsThunk);
-        if (Val.IsNil(thunk)) return rt.Slot(ls, LsSeq);
-        int bas = rt.Mark();
-        int li = rt.Push(ls);
-        int vi = rt.Push(rt.Call(thunk, System.Array.Empty<long>()));
-        while (Val.IsHeap(rt.R(vi)) && Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(vi))) == Obj.TyLazyseq) {
-            long t2 = rt.Slot(rt.R(vi), LsThunk);
-            if (Val.IsNil(t2)) { rt.SetR(vi, rt.Slot(rt.R(vi), LsSeq)); break; }
-            rt.SetR(vi, rt.Call(t2, System.Array.Empty<long>()));
-        }
-        long cur = rt.R(vi);
-        long l = rt.R(li);
-        rt.PopTo(bas);
-        rt.SetSlot(Val.AsHeap(l), LsThunk, Val.Nil);
-        rt.SetSlot(Val.AsHeap(l), LsSeq, cur);
-        return cur;
-    }
 
     /// `seq`: nil for an empty collection, otherwise a seq object.
     ///
@@ -120,10 +104,6 @@ public static class Seqs {
 
 
 
-    public static long Rest(Rt rt, long v) {
-        long n = Next(rt, v);
-        return Val.IsNil(n) ? EmptyList(rt) : n;
-    }
 
     public static int Count(Rt rt, long v) {
         int n = 0;

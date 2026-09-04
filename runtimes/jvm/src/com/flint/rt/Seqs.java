@@ -26,6 +26,8 @@ public final class Seqs {
     /// runtime say `Seqs.first`, in files that have nothing to do with seqs.
     public static long first(Rt rt, long v) { return com._3sln.flint.kgen.rt.Seqwalk.first(rt, v); }
     public static long next(Rt rt, long v) { return com._3sln.flint.kgen.rt.Seqwalk.next(rt, v); }
+    public static long rest(Rt rt, long v) { return com._3sln.flint.kgen.rt.Seqwalk.rest(rt, v); }
+    public static long force(Rt rt, long ls) { return com._3sln.flint.kgen.rt.Seqwalk.force(rt, ls); }
 
     /// `cons`, under the name its callers already use. The body is GENERATED,
     /// as `Seqcore.cons`; renaming ~20 call sites across this runtime for a
@@ -55,24 +57,6 @@ public final class Seqs {
     public static final int LS_THUNK = 0, LS_SEQ = 1;
 
 
-    public static long force(Rt rt, long ls) {
-        long thunk = rt.slot(ls, LS_THUNK);
-        if (Val.isNil(thunk)) return rt.slot(ls, LS_SEQ);
-        int base = rt.mark();
-        int li = rt.push(ls);
-        int vi = rt.push(rt.call(thunk, new long[0]));
-        while (Val.isHeap(rt.r(vi)) && ty(rt.gc.sp, Val.asHeap(rt.r(vi))) == TY_LAZYSEQ) {
-            long t2 = rt.slot(rt.r(vi), LS_THUNK);
-            if (Val.isNil(t2)) { rt.setR(vi, rt.slot(rt.r(vi), LS_SEQ)); break; }
-            rt.setR(vi, rt.call(t2, new long[0]));
-        }
-        long cur = rt.r(vi);
-        long l = rt.r(li);
-        rt.popTo(base);
-        rt.setSlot(Val.asHeap(l), LS_THUNK, Val.NIL);
-        rt.setSlot(Val.asHeap(l), LS_SEQ, cur);
-        return cur;
-    }
 
     /// `seq`: nil for an empty collection, otherwise a seq object.
     ///
@@ -148,10 +132,6 @@ public final class Seqs {
 
 
 
-    public static long rest(Rt rt, long v) {
-        long n = next(rt, v);
-        return Val.isNil(n) ? emptyList(rt) : n;
-    }
 
     public static int count(Rt rt, long v) {
         int n = 0;

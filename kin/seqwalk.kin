@@ -22,10 +22,13 @@
 ;; seen.
 (ns flint.rt.seqwalk
   (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   not == + >= local set
+                                   not and == + >= local set while break set-slot
                                    slot as-fixnum to-i32 nil? as-heap ty
                                    seq-of vec-nth vec-count char-at char-len
                                    table-ref table-count num-add
+                                   empty-list invoke-thunk
+                                   mark push r set-r pop-to is-heap
+                                   TY_LAZYSEQ LS_THUNK LS_SEQ RootIx
                                    Rt Value I32 Ty NIL
                                    C_FIRST C_REST
                                    TY_CONS TY_VECSEQ TY_STRSEQ TY_RANGE
@@ -98,3 +101,54 @@
                 ^Value r (range rt nstart (slot rt s 1) (slot rt s 2))]
             (return (seq-of rt r)))))
       (return NIL))))
+
+(doc "`rest`: the seq after the first element, and NEVER nil."
+     ""
+     "Clojure's rule, and the difference from `next` is the whole of it: an"
+     "exhausted `rest` is the empty list, so `(rest (rest [1]))` is `()` and"
+     "keeps being seqable, where `next` answers nil and stops.")
+(defn ^:pub ^:method ^Value rest [^:mut ^Rt rt ^Value v]
+  (let [^Value n (next rt v)]
+    (if (nil? rt n)
+      (return (empty-list rt)))
+    (return n)))
+
+(doc "Force a lazy seq to whatever it actually is, and CACHE that in it."
+     ""
+     "A thunk already run leaves `LS_THUNK` nil and the answer in `LS_SEQ`, so"
+     "forcing twice runs nothing twice -- which is what makes a lazy seq a"
+     "value rather than a generator."
+     ""
+     "The loop is for CHAINED lazy seqs: a thunk may answer another lazy seq,"
+     "and that one another, and only the end of the chain is concrete."
+     ""
+     "The cursor lives in the ROOT throughout. Rust used to hold it in a host"
+     "local with a `set_r` alongside -- correct, because the local was always"
+     "overwritten by the result of the call that could have moved it, but"
+     "correct by an argument the reader has to rebuild each time. Both ports"
+     "already did it this way.")
+(defn ^:pub ^:method ^Value force [^:mut ^Rt rt ^Value ls]
+  (let [^Value thunk (slot rt ls LS_THUNK)]
+    (if (nil? rt thunk)
+      (return (slot rt ls LS_SEQ)))
+    (let [^RootIx base (mark rt)
+          ^RootIx li (push rt ls)
+          ^Value first-forced (invoke-thunk rt thunk)
+          ^RootIx vi (push rt first-forced)]
+      (comment "HOISTED, both calls: `push`, `set-r` and `invoke-thunk` all"
+               "take `&mut self` in Rust, so nesting an invoke inside either"
+               "is two mutable borrows at once.")
+      (while (and (is-heap (r rt vi))
+                  (== (ty rt (as-heap (r rt vi))) TY_LAZYSEQ))
+        (let [^Value t2 (slot rt (r rt vi) LS_THUNK)]
+          (if (nil? rt t2)
+            (do (set-r rt vi (slot rt (r rt vi) LS_SEQ))
+                (break)))
+          (let [^Value forced (invoke-thunk rt t2)]
+            (set-r rt vi forced))))
+      (let [^Value cur (r rt vi)
+            ^Value l (r rt li)]
+        (pop-to rt base)
+        (set-slot rt l LS_THUNK NIL)
+        (set-slot rt l LS_SEQ cur)
+        (return cur)))))

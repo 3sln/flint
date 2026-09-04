@@ -125,46 +125,8 @@ impl Rt {
     }
 
 
-    /// `rest`: always a seq-able, never nil (Clojure returns `()`).
-    pub fn rest(&mut self, v: Value) -> Value {
-        let n = self.next(v);
-        if n.is_nil() {
-            self.empty_list()
-        } else {
-            n
-        }
-    }
 
 
-    /// Force a lazy seq. Requires the VM, so it is a no-op shell until the VM
-    /// installs itself; see `vm::install_forcer`.
-    pub fn force(&mut self, ls: Value) -> Value {
-        let thunk = self.slot(ls, LS_THUNK);
-        if thunk.is_nil() {
-            return self.slot(ls, LS_SEQ);
-        }
-        let base = self.mark();
-        let li = self.push(ls);
-        let v = self.invoke(thunk, &[]);
-        let vi = self.push(v);
-        // Chained lazy seqs: keep forcing until we reach something concrete.
-        let mut cur = self.r(vi);
-        while cur.is_heap() && ty(&self.gc.sp, cur.as_heap()) == TY_LAZYSEQ {
-            let t2 = self.slot(cur, LS_THUNK);
-            if t2.is_nil() {
-                cur = self.slot(cur, LS_SEQ);
-                break;
-            }
-            self.set_r(vi, cur);
-            let nv = self.invoke(t2, &[]);
-            cur = nv;
-        }
-        let ls = self.r(li);
-        self.pop_to(base);
-        self.set_slot(ls.as_heap(), LS_THUNK, NIL);
-        self.set_slot(ls.as_heap(), LS_SEQ, cur);
-        cur
-    }
 
     // --- string character access ------------------------------------------
 

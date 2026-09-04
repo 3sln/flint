@@ -96,4 +96,58 @@ impl Rt {
         }
         return NIL;
     }
+    /// `rest`: the seq after the first element, and NEVER nil.
+    /// 
+    /// Clojure's rule, and the difference from `next` is the whole of it: an
+    /// exhausted `rest` is the empty list, so `(rest (rest [1]))` is `()` and
+    /// keeps being seqable, where `next` answers nil and stops.
+    pub fn rest(&mut self, v: Value) -> Value {
+        let n: Value = self.next(v);
+        if n.is_nil() {
+            return self.empty_list();
+        }
+        return n;
+    }
+    /// Force a lazy seq to whatever it actually is, and CACHE that in it.
+    /// 
+    /// A thunk already run leaves `LS_THUNK` nil and the answer in `LS_SEQ`, so
+    /// forcing twice runs nothing twice -- which is what makes a lazy seq a
+    /// value rather than a generator.
+    /// 
+    /// The loop is for CHAINED lazy seqs: a thunk may answer another lazy seq,
+    /// and that one another, and only the end of the chain is concrete.
+    /// 
+    /// The cursor lives in the ROOT throughout. Rust used to hold it in a host
+    /// local with a `set_r` alongside -- correct, because the local was always
+    /// overwritten by the result of the call that could have moved it, but
+    /// correct by an argument the reader has to rebuild each time. Both ports
+    /// already did it this way.
+    pub fn force(&mut self, ls: Value) -> Value {
+        let thunk: Value = self.slot(ls, LS_THUNK);
+        if thunk.is_nil() {
+            return self.slot(ls, LS_SEQ);
+        }
+        let base: usize = self.mark();
+        let li: usize = self.push(ls);
+        let first_forced: Value = self.invoke(thunk, &[]);
+        let vi: usize = self.push(first_forced);
+        // HOISTED, both calls: `push`, `set-r` and `invoke-thunk` all
+        // take `&mut self` in Rust, so nesting an invoke inside either
+        // is two mutable borrows at once.
+        while self.r(vi).is_heap() && (ty(&self.gc.sp, self.r(vi).as_heap()) == TY_LAZYSEQ) {
+            let t2: Value = self.slot(self.r(vi), LS_THUNK);
+            if t2.is_nil() {
+                self.set_r(vi, self.slot(self.r(vi), LS_SEQ));
+                break;
+            }
+            let forced: Value = self.invoke(t2, &[]);
+            self.set_r(vi, forced);
+        }
+        let cur: Value = self.r(vi);
+        let l: Value = self.r(li);
+        self.pop_to(base);
+        self.set(l, LS_THUNK, NIL);
+        self.set(l, LS_SEQ, cur);
+        return cur;
+    }
 }
