@@ -1,0 +1,73 @@
+;; Folding a run of rooted pieces into one byte string.
+;;
+;; LEVEL BY LEVEL, `FANOUT` at a time: the roots at `base` become nodes, those
+;; nodes become nodes, and so on until one is left. Building a spine instead --
+;; joining piece by piece into an accumulator -- is what makes depth linear in
+;; the number of pieces, and depth is what `b-at` and the recursive walks pay
+;; for. Twenty thousand pieces is depth four this way and depth 1 250 the
+;; other.
+;;
+;; This is portable now only because `b-node` takes `(base, n)`. The window it
+;; folds is already a contiguous run of roots, so the fold hands over a slice
+;; of the shadow stack by naming it -- where the array-taking version had to
+;; copy the window into a host array on every step of every level.
+(ns flint.rt.bytefold
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == < + - local set while forever as-idx
+                                   mark push r alloc heap nil?
+                                   Rt Value Addr RootIx I32 NIL
+                                   TY_BYTES FANOUT]]
+            [flint.rt.bytenode :refer [b-node]]))
+
+(doc "The empty byte string."
+     ""
+     "A leaf of no bytes, which is an allocation and nothing else -- there is"
+     "no sink to fill and no slice to copy. All three built this by asking for"
+     "a byte string OF an empty host array, which is the same allocation with"
+     "an empty copy after it and a host array to describe the emptiness.")
+(defn ^:pub ^:method ^Value b-empty [^:mut ^Rt rt]
+  (let [^Addr a (alloc rt TY_BYTES 0)]
+    (if (== a 0)
+      (return NIL))
+    (return (heap a))))
+
+(doc "The `n` values rooted at `base`, folded into one byte string."
+     ""
+     "Answers the single value unchanged when `n` is 1, and the empty byte"
+     "string when `n` is 0 -- so a caller that collected nothing gets a byte"
+     "string rather than nil, and does not have to test.")
+(defn ^:pub ^:method ^Value b-from-roots [^:mut ^Rt rt ^RootIx base ^I32 n]
+  (if (== n 0)
+    (return (b-empty rt)))
+  (if (== n 1)
+    (return (r rt base)))
+  (local ^:mut ^I32 level)
+  (local ^:mut ^RootIx from)
+  (set level n)
+  (set from base)
+  (comment "`forever`, not `while true`: Rust cannot see that a `while` with"
+           "a constant condition never falls out, so the function would have no"
+           "value on the path after it. `loop` is the one that types.")
+  (forever
+    (if (== level 1)
+      (return (r rt from)))
+    (comment "A FRESH WINDOW per level: the nodes made from this level are"
+             "pushed above it, and become the next level's run.")
+    (let [^RootIx out (mark rt)]
+      (local ^:mut ^I32 made)
+      (local ^:mut ^I32 i)
+      (set made 0)
+      (set i 0)
+      (while (< i level)
+        (local ^:mut ^I32 take)
+        (set take FANOUT)
+        (if (< (- level i) take)
+          (set take (- level i)))
+        (let [^Value node (b-node rt (+ from (as-idx i)) take)]
+          (if (nil? rt node)
+            (return NIL))
+          (push rt node))
+        (set made (+ made 1))
+        (set i (+ i take)))
+      (set from out)
+      (set level made))))

@@ -225,26 +225,7 @@ public final class Bytes {
 
     /// A balanced byte rope over `n` pieces on the shadow stack, the mirror of
     /// `Str.ropeFromRoots`.
-    static long fromRoots(Rt rt, int base, int n) {
-        if (n == 0) return of(rt, new byte[0]);
-        if (n == 1) return rt.r(base);
-        int level = n, from = base;
-        while (true) {
-            if (level == 1) return rt.r(from);
-            int out = rt.mark();
-            int made = 0, i = 0;
-            while (i < level) {
-                int take = Math.min(Str.FANOUT, level - i);
-                long nd = node(rt, from + i, take);
-                if (nd == Val.NIL) return Val.NIL;
-                rt.push(nd);
-                made++;
-                i += take;
-            }
-            from = out;
-            level = made;
-        }
-    }
+    static long fromRoots(Rt rt, int base, int n) { return com._3sln.flint.kgen.rt.Bytefold.bFromRoots(rt, base, n); }
 
     /// The mirror of `Str.ropeHash`: cached per node, `h(A.B) = h(A)*31^|B| +
     /// h(B)`. Hashing a byte rope used to FLATTEN it, buying the caching by

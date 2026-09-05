@@ -277,43 +277,11 @@ impl Rt {
                 break;
             }
         }
-        let r = self.b_from_roots(out, made);
+        let r = self.b_from_roots(out, made as u32);
         self.pop_to(base);
         r
     }
 
-    /// A balanced byte rope over `n` pieces on the shadow stack, the mirror of
-    /// `rope_from_roots`.
-    fn b_from_roots(&mut self, base: usize, n: usize) -> Value {
-        if n == 0 {
-            return self.new_bytes(&[]);
-        }
-        if n == 1 {
-            return self.r(base);
-        }
-        let mut level = n;
-        let mut from = base;
-        loop {
-            if level == 1 {
-                return self.r(from);
-            }
-            let out = self.mark();
-            let mut made = 0usize;
-            let mut i = 0usize;
-            while i < level {
-                let take = FANOUT.min((level - i) as u32) as usize;
-                let node = self.b_node(from + i, take as u32);
-                if node.is_nil() {
-                    return NIL;
-                }
-                self.push(node);
-                made += 1;
-                i += take;
-            }
-            from = out;
-            level = made;
-        }
-    }
 
 
     /// The byte-rope mirror of `tree_eq`, and it had the same defect twice

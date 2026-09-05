@@ -216,26 +216,7 @@ public static class Bytes {
         return r;
     }
 
-    static long FromRoots(Rt rt, int bas, int n) {
-        if (n == 0) return Of(rt, new byte[0]);
-        if (n == 1) return rt.R(bas);
-        int level = n, from = bas;
-        while (true) {
-            if (level == 1) return rt.R(from);
-            int outb = rt.Mark();
-            int made = 0, i = 0;
-            while (i < level) {
-                int take = System.Math.Min(Str.FANOUT, level - i);
-                long nd = Node(rt, from + i, take);
-                if (nd == Val.Nil) return Val.Nil;
-                rt.Push(nd);
-                made++;
-                i += take;
-            }
-            from = outb;
-            level = made;
-        }
-    }
+    static long FromRoots(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Bytefold.BFromRoots(rt, bas, n); }
 
     /// The mirror of `Str.RopeHash`, cached per node.
     public static int Hash(Rt rt, long v) {
