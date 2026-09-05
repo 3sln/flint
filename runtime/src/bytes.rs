@@ -172,8 +172,9 @@ impl Rt {
         // per append. The copy is bounded by `FLAT_MAX`, which is what makes
         // it worth doing at all.
         if self.b_count(b) <= FLAT_MAX / 2 {
-            if let Some(out) = self.b_merge_right(a, b) {
-                return out;
+            let merged = self.b_merge_right(a, b);
+            if !merged.is_nil() {
+                return merged;
             }
         }
         // Push `b` down the RIGHT SPINE into the deepest node that has room.
@@ -188,8 +189,9 @@ impl Rt {
         //
         // Descending first keeps it a B-tree: twenty thousand leaves is depth
         // four.
-        if let Some(out) = self.b_absorb(a, b) {
-            return out;
+        let absorbed = self.b_absorb(a, b);
+        if !absorbed.is_nil() {
+            return absorbed;
         }
         // Neither side had room, so a new level. BOTH sides are promoted to the
         // same depth first: a node's children must be uniform, and pairing a
@@ -211,18 +213,22 @@ impl Rt {
     }
 
     /// Replace `a`'s rightmost leaf with that leaf followed by `b`, if the two
-    /// fit in one leaf. None if they do not, or if there is no leaf to merge
+    /// fit in one leaf. NIL if they do not, or if there is no leaf to merge
     /// into.
-    fn b_merge_right(&mut self, a: Value, b: Value) -> Option<Value> {
+    /// NIL means DECLINED, and cannot be confused with a result: this answers
+    /// a merged node, and a merged node is never nil. Both ports already said
+    /// it this way; Rust said `Option<Value>`, which is the same information
+    /// in a shape only one of the three can spell.
+    fn b_merge_right(&mut self, a: Value, b: Value) -> Value {
         if !a.is_heap() {
-            return None;
+            return NIL;
         }
         match ty(&self.gc.sp, a.as_heap()) {
             TY_BYTES => {
                 if len(&self.gc.sp, a.as_heap()) + self.b_count(b) <= FLAT_MAX {
-                    Some(self.b_copy_concat(a, b))
+                    self.b_copy_concat(a, b)
                 } else {
-                    None
+                    NIL
                 }
             }
             TY_BROPE => {
@@ -231,43 +237,40 @@ impl Rt {
                 self.push(a);
                 self.push(b);
                 let last = self.slot(self.r(base), BB_KIDS + n - 1);
-                match self.b_merge_right(last, self.r(base + 1)) {
-                    Some(x) => {
-                        self.push(x);
-                        let kbase = self.mark();
-                        for i in 0..n - 1 {
-                            let k = self.slot(self.r(base), BB_KIDS + i);
-                            self.push(k);
-                        }
-                        let tail = self.r(base + 2);
-                        self.push(tail);
-                        let out = self.b_node(kbase, n);
-                        self.pop_to(base);
-                        Some(out)
-                    }
-                    None => {
-                        self.pop_to(base);
-                        None
-                    }
+                let merged = self.b_merge_right(last, self.r(base + 1));
+                if merged.is_nil() {
+                    self.pop_to(base);
+                    return NIL;
                 }
+                self.push(merged);
+                let kbase = self.mark();
+                for i in 0..n - 1 {
+                    let k = self.slot(self.r(base), BB_KIDS + i);
+                    self.push(k);
+                }
+                let tail = self.r(base + 2);
+                self.push(tail);
+                let out = self.b_node(kbase, n);
+                self.pop_to(base);
+                out
             }
-            _ => None,
+            _ => NIL,
         }
     }
 
     /// Put `b` in the deepest node on `a`'s right spine that has room for it,
-    /// or None if there is none. Depth is unchanged when this succeeds, which
+    /// or NIL if there is none. Depth is unchanged when this succeeds, which
     /// is the whole point.
-    fn b_absorb(&mut self, a: Value, b: Value) -> Option<Value> {
+    fn b_absorb(&mut self, a: Value, b: Value) -> Value {
         if !a.is_heap() || ty(&self.gc.sp, a.as_heap()) != TY_BROPE {
-            return None;
+            return NIL;
         }
         let n = len(&self.gc.sp, a.as_heap()) - BB_KIDS;
         let da = self.b_depth(a);
         // A node's children are all the same depth. Anything deeper than this
         // node cannot go inside it.
         if self.b_depth(b) >= da {
-            return None;
+            return NIL;
         }
         let base = self.mark();
         self.push(a);
@@ -277,8 +280,9 @@ impl Rt {
         // first is what keeps the tree log-deep -- absorbing at the top builds
         // a spine, and twenty thousand joins was depth 1,250.
         let last = self.slot(self.r(base), BB_KIDS + n - 1);
-        if let Some(x) = self.b_absorb(last, self.r(base + 1)) {
-            self.push(x);
+        let down = self.b_absorb(last, self.r(base + 1));
+        if !down.is_nil() {
+            self.push(down);
             let kbase = self.mark();
             for i in 0..n - 1 {
                 let k = self.slot(self.r(base), BB_KIDS + i);
@@ -288,7 +292,7 @@ impl Rt {
             self.push(tail);
             let out = self.b_node(kbase, n);
             self.pop_to(base);
-            return Some(out);
+            return out;
         }
         if n < FANOUT {
             // Promoted to this node's child depth, so every child stays the
@@ -304,10 +308,10 @@ impl Rt {
             self.push(tail);
             let out = self.b_node(kbase, n + 1);
             self.pop_to(base);
-            return Some(out);
+            return out;
         }
         self.pop_to(base);
-        None
+        NIL
     }
 
     /// A contiguous copy, cached on the node so a second walk is free.
