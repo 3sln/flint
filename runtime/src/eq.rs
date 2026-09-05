@@ -429,7 +429,9 @@ impl Rt {
         if self.is_sequential(a) && self.is_sequential(b) {
             return self.cmp_sequential(a, b);
         }
-        self.throw_str("ClassCastException", "cannot compare these values");
+        let msg = alloc::format!("cannot compare {} with {}",
+                                 self.describe(a), self.describe(b));
+        self.throw_str("ClassCastException", &msg);
         0
     }
 

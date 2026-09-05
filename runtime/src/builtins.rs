@@ -617,7 +617,10 @@ builtins! {
         let _ = n;
         let v = arg(rt, a, 0);
         if v.is_double() { rt.integer(v.as_f64().to_bits() as i64) }
-        else { rt.throw_str("ClassCastException", "not a double") }
+        else {
+            let msg = alloc::format!("not a double: {}", rt.describe(v));
+            rt.throw_str("ClassCastException", &msg)
+        }
     };
     // Build an insertion-ordered array-map of any size, without promoting to a
     // hash map. The reader uses this for map literals so that source order

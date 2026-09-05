@@ -115,10 +115,11 @@ impl Rt {
             // the 304 000 floor. Unused, `describe` costs nothing: the shaker
             // removes it whole, measured at 302 780 either way. Calling it
             // here is what makes every program carry it.
-            _ => self.throw_str(
-                "UnsupportedOperationException",
-                "seq over this type needs more of the data structures",
-            ),
+            _ => {
+                let msg = alloc::format!("seq over {} needs more of the data structures",
+                                         self.describe(v));
+                self.throw_str("UnsupportedOperationException", &msg)
+            }
         }
     }
 

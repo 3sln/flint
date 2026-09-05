@@ -106,8 +106,13 @@ impl Rt {
         NIL
     }
 
-    pub fn throw_not_a_number(&mut self, _a: Value, _b: Value) -> Value {
-        self.throw_str("ClassCastException", "argument is not a number")
+    /// Both operands NAMED. The arguments were `_a` and `_b` -- taken and
+    /// discarded -- so the message said "argument is not a number" about a
+    /// binary operation without saying which argument or what it was, while
+    /// both ports said "not a number: an integer and a keyword".
+    pub fn throw_not_a_number(&mut self, a: Value, b: Value) -> Value {
+        let msg = alloc::format!("not a number: {} and {}", self.describe(a), self.describe(b));
+        self.throw_str("ClassCastException", &msg)
     }
 
     pub fn ex_message(&self, e: Value) -> Value {

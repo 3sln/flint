@@ -427,7 +427,7 @@ rt.describe(v) + " is not transientable");
             if (Sets.isTransient(rt, v)) return Sets.tpersistent(rt, v);
             if (Bytes.isTransient(rt, v)) return Bytes.persistent(rt, v);
             return rt.throwStr("ClassCastException",
-rt.describe(v) + " is not a transient");
+                "persistent! wants a transient, got " + rt.describe(v));
         });
         def("conj!", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -481,7 +481,7 @@ rt.describe(v) + " is not a transient");
                 return out;
             }
             return rt.throwStr("ClassCastException",
-rt.describe(v) + " is not a transient");
+                "conj! wants a transient, got " + rt.describe(v));
         });
         def("assoc!", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -502,7 +502,7 @@ rt.describe(v) + " is not a transient");
                 return acc;
             }
             return rt.throwStr("ClassCastException",
-rt.describe(v) + " is not a transient");
+                "assoc! wants a transient, got " + rt.describe(v));
         });
         def("dissoc!", (rt, at, n) -> {
             long v = rt.vat(at);
@@ -517,7 +517,7 @@ rt.describe(v) + " is not a transient");
                 return acc;
             }
             return rt.throwStr("ClassCastException",
-rt.describe(v) + " is not a transient");
+                "disj! wants a transient, got " + rt.describe(v));
         });
 
         def("pop!", (rt, at, n) -> {
@@ -529,7 +529,7 @@ rt.describe(v) + " is not a transient");
                 return out;
             }
             return rt.throwStr("ClassCastException",
-rt.describe(v) + " is not a transient vector");
+                "pop! wants a transient, got " + rt.describe(v));
         });
 
         // Maps.

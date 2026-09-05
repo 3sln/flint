@@ -456,7 +456,8 @@ impl Rt {
 
     pub fn to_transient(&mut self, v: Value) -> Value {
         if !v.is_heap() {
-            return self.throw_str("ClassCastException", "not transientable");
+            let msg = alloc::format!("{} is not transientable", self.describe(v));
+            return self.throw_str("ClassCastException", &msg);
         }
         match ty(&self.gc.sp, v.as_heap()) {
             TY_VEC => self.vec_transient(v),
@@ -482,34 +483,29 @@ impl Rt {
             }
             TY_SET => self.set_transient(v),
             crate::obj::TY_TABLE => self.table_transient(v),
-            _ => self.throw_str("ClassCastException", "not transientable"),
+            _ => {
+                let msg = alloc::format!("{} is not transientable", self.describe(v));
+                self.throw_str("ClassCastException", &msg)
+            }
         }
     }
 
-    /// Refuse a non-transient, NAMING it. "not a transient" says what was
-    /// wanted and nothing about what arrived, and what arrived is the half that
-    /// locates the bug -- a wrong TYPE is a mixed-up value, while a fixnum or
-    /// nil is a stack slot read at the wrong depth.
+    /// Refuse a non-transient, NAMING it.
+    ///
+    /// What arrived is the half that locates the bug -- a wrong TYPE is a
+    /// mixed-up value, while a fixnum or nil is a stack slot read at the wrong
+    /// depth. This used to say so through a classifier of its own, hand-rolled
+    /// here: "a heap object with type tag 23" where `describe` says "a
+    /// transient vector". Two classifiers meant two answers to one question,
+    /// and the coarser one was on the path that needed it most.
+    ///
+    /// The `in <frames>` suffix is gone. It came from `where_am_i`, which is
+    /// Rust-only -- so the message a program could catch and read differed
+    /// between runtimes by more than the value. The frame trace is still
+    /// reachable through `frame_trace` for a debugger; it is not part of what
+    /// this says.
     pub fn not_a_transient(&mut self, op: &str, v: Value) -> Value {
-        // The TAG, not the printed value: printing allocates, and this is on a
-        // path where the value is already suspect.
-        let what: alloc::string::String = if v.is_nil() {
-            "nil".into()
-        } else if v.is_bool() {
-            "a boolean".into()
-        } else if v.is_fixnum() {
-            alloc::format!("the integer {}", v.as_fixnum())
-        } else if v.is_double() {
-            "a float".into()
-        } else if v.is_inline_str() || v.is_inline_kw() {
-            "an inline string or keyword".into()
-        } else if v.is_heap() {
-            alloc::format!("a heap object with type tag {}", ty(&self.gc.sp, v.as_heap()))
-        } else {
-            alloc::format!("a non-heap value with bits {:#x}", v.bits())
-        };
-        let w = self.where_am_i();
-        let msg = alloc::format!("{op} wants a transient, got {what} in {w}");
+        let msg = alloc::format!("{op} wants a transient, got {}", self.describe(v));
         self.throw_str("ClassCastException", &msg)
     }
 
@@ -566,7 +562,7 @@ impl Rt {
         } else if t.is_heap() && ty(&self.gc.sp, t.as_heap()) == TY_TSET {
             self.tset_disj(t, k)
         } else {
-            self.throw_str("ClassCastException", "not a transient map")
+            self.not_a_transient("dissoc!", t)
         }
     }
 
@@ -590,7 +586,7 @@ impl Rt {
             }
             self.tvec_pop(t)
         } else {
-            self.throw_str("ClassCastException", "not a transient vector")
+            self.not_a_transient("pop!", t)
         }
     }
 
@@ -631,7 +627,8 @@ impl Rt {
                 _ => {}
             }
         }
-        self.throw_str("ClassCastException", "cannot deref this value")
+        let msg = alloc::format!("cannot deref {}", self.describe(v));
+        self.throw_str("ClassCastException", &msg)
     }
 
     /// Set the atom to `next` only if it still holds `expect`. True when it
@@ -655,7 +652,8 @@ impl Rt {
             }
             crate::value::FALSE
         } else {
-            self.throw_str("ClassCastException", "not an atom")
+            let msg = alloc::format!("not an atom: {}", self.describe(at));
+            self.throw_str("ClassCastException", &msg)
         }
     }
 
@@ -664,7 +662,8 @@ impl Rt {
             self.set(at, 0, v);
             v
         } else {
-            self.throw_str("ClassCastException", "not an atom")
+            let msg = alloc::format!("not an atom: {}", self.describe(at));
+            self.throw_str("ClassCastException", &msg)
         }
     }
 
@@ -1011,7 +1010,8 @@ impl Rt {
             return self.string(s);
         }
         if !v.is_double() {
-            return self.throw_str("ClassCastException", "not a number");
+            let msg = alloc::format!("not a number: {}", self.describe(v));
+            return self.throw_str("ClassCastException", &msg);
         }
         let d = v.as_f64();
         if d.is_nan() {

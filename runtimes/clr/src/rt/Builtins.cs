@@ -407,7 +407,7 @@ public static class Builtins {
             if (Maps.IsTransient(rt, v)) return Maps.TPersistent(rt, v);
             if (Sets.IsTransient(rt, v)) return Sets.TPersistent(rt, v);
             if (Bytes.IsTransient(rt, v)) return Bytes.Persistent(rt, v);
-            return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not a transient");
+            return rt.ThrowStr("ClassCastException", "persistent! wants a transient, got " + rt.Describe(v));
         });
         Def("conj!", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -451,7 +451,7 @@ public static class Builtins {
                 rt.PopTo(bas);
                 return outv;
             }
-            return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not a transient");
+            return rt.ThrowStr("ClassCastException", "conj! wants a transient, got " + rt.Describe(v));
         });
         Def("assoc!", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -469,7 +469,7 @@ public static class Builtins {
                 for (int i = 1; i + 1 < n; i += 2) acc = Maps.TAssoc(rt, acc, rt.VAt(at + i), rt.VAt(at + i + 1));
                 return acc;
             }
-            return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not a transient");
+            return rt.ThrowStr("ClassCastException", "assoc! wants a transient, got " + rt.Describe(v));
         });
         Def("dissoc!", (rt, at, n) => {
             long v = rt.VAt(at);
@@ -483,7 +483,7 @@ public static class Builtins {
                 for (int i = 1; i < n; i++) acc = Sets.TDisj(rt, acc, rt.VAt(at + i));
                 return acc;
             }
-            return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not a transient");
+            return rt.ThrowStr("ClassCastException", "disj! wants a transient, got " + rt.Describe(v));
         });
 
         // Maps.
@@ -784,7 +784,7 @@ public static class Builtins {
                 if (Val.IsNil(outv)) return rt.ThrowStr("IllegalStateException", "cannot pop an empty vector");
                 return outv;
             }
-            return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not a transient vector");
+            return rt.ThrowStr("ClassCastException", "pop! wants a transient, got " + rt.Describe(v));
         });
         Def("empty", (rt, at, n) => {
             long v = rt.VAt(at);

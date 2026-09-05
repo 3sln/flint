@@ -2428,7 +2428,8 @@ impl Rt {
     /// never be answered.
     pub fn thread_join(&mut self, t: Value) -> Value {
         if !self.is_thread(t) {
-            return self.throw_str("ClassCastException", "join wants a thread");
+            let msg = alloc::format!("join wants a thread, got {}", self.describe(t));
+            return self.throw_str("ClassCastException", &msg);
         }
         let st = fx(self.slot(t, TH_STATUS));
         if st == ST_DONE {

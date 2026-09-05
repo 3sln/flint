@@ -49,3 +49,29 @@
   (expect = [[1 2] [3 4]] (mapv vec (partition 2 [1 2 3 4 5])))
   (expect = [[1 2] [3 4] [5]] (mapv vec (partition-all 2 [1 2 3 4 5])))
   (expect = [[1 2] [2 3]] (mapv vec (partition 2 1 [1 2 3]))))
+
+;; ------------------------------------------ the runtime names what it got
+;;
+;; THE MESSAGE IS PART OF THE ANSWER. Native named the value in NONE of its
+;; refusals and both ports named it in twenty-five, so a program that caught
+;; one and read it got different text depending on which runtime it ran on.
+;; Nothing caught that for the same reason nothing caught `b-at` past the end:
+;; `conform` diffs what it is given, and it was never given a message.
+;;
+;; So these are asserted EXACTLY, not by `some?`. An exact string is the only
+;; assertion that can tell "names the value" from "used to".
+
+(defn ^:flint.check/test a-refusal-names-the-value-it-got []
+  (expect = "seq over an atom needs more of the data structures"
+          (boom (fn [] (seq (atom 1)))))
+  (expect = "cannot deref an integer" (boom (fn [] (deref 1))))
+  (expect = "persistent! wants a transient, got a vector"
+          (boom (fn [] (persistent! [1 2])))))
+
+(defn ^:flint.check/test the-noun-phrases-carry-their-article []
+  ;; `describe` answers "an atom", not "atom", because every call site reads
+  ;; `"seq over " + it` and choosing the article at the call site would mean
+  ;; knowing what the noun begins with.
+  (expect = "cannot deref a keyword" (boom (fn [] (deref :k))))
+  (expect = "cannot deref a vector" (boom (fn [] (deref [1]))))
+  (expect = "cannot deref nil" (boom (fn [] (deref nil)))))

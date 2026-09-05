@@ -143,6 +143,22 @@
 ;; branches in `eq`, `hash`, `get`, `assoc` and `kind`, and those live in the
 ;; runtime where nothing shakes them out. A value type that only some programs
 ;; use still costs every program, which is the trade a language type is.
+
+;; RAISED 2026-09-05, from 304 000, for `describe` REACHING THE MESSAGES.
+;;
+;; Measured: 301 729 before, 304 481 after -- 2 752 bytes. What they buy is
+;; that the three runtimes tell a program the same thing when they refuse it.
+;; Native named the value in NONE of its refusals and both ports named it in
+;; twenty-five, so `(deref 1)` said "cannot deref this value" on one runtime
+;; and "cannot deref an integer" on the others: a difference a program could
+;; catch and read, and one no gate was asking about.
+;;
+;; The cost is nearly all FIXED rather than per-site. Linking `describe` and
+;; the first `format!` is 1 569 of it; the ten sites after that are 1 183
+;; between them, so naming the value at the remaining call sites is close to
+;; free. It was 2 935 for a SINGLE site until `describe` stopped building a
+;; `String` for each of its forty literals -- that shape change is what made
+;; this affordable, rather than the budget being generous.
 (check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
 ;; TABLES (`doc/decisions/0026`) cost 22 857 bytes here when they landed --
 ;; 287 854 shipped against 264 997 -- and then gave 15 832 of it back, which is
@@ -168,7 +184,7 @@
 ;; `hash`, `kind`, `get`, `count`, `map_get` and `seq`, which are Rust and do
 ;; not shake. A table remains a candidate for a UNIT (`doc/decisions/0023`); the
 ;; printer is no longer the thing standing in the way.
-            (< pure-size 304000))
+            (< pure-size 307000))
 
 ;; RE-BASELINED AGAIN, and this one is a decision rather than a drift:
 ;; 300 281 against 280 781, and 18 917 of it is ONE ARM IN THE WIRE CODEC.

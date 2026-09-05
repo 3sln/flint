@@ -38,10 +38,10 @@ public final class Nouns {
             return "a boolean";
         }
         if (Val.isInlineStr(v)) {
-            return "an inline string";
+            return "a string";
         }
         if (Val.isInlineKw(v)) {
-            return "an inline keyword";
+            return "a keyword";
         }
         if (!Val.isHeap(v)) {
             return "an unknown immediate";
@@ -148,6 +148,13 @@ public final class Nouns {
     /// than each built where it is named -- in Rust that is one `String::from`
     /// instead of forty, and in both ports it is nothing at all, because a
     /// literal there is already the type this returns.
+    /// 
+    /// THE TIER IS INVISIBLE, as it is everywhere else. An inline string and a
+    /// heap string are both `"a string"`, and an inline keyword and a heap one
+    /// are both `"a keyword"` -- these used to say `"an inline keyword"`, which
+    /// tells a reader about a representation they cannot see from the language
+    /// and cannot act on. `doc/decisions/0011` makes the tiers invisible to
+    /// every other operation; an error message is not the place to leak them.
     /// 
     /// The last arm names the NUMBER of a tag it does not know. A tag added to
     /// one runtime and not to this function still produces something a person
