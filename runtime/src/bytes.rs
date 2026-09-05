@@ -25,7 +25,7 @@
 //! copies so that a small slice cannot retain a large parent.
 
 use crate::obj::*;
-use crate::rope::{FANOUT, FLAT_MAX, SLICE_MIN};
+use crate::rope::{FLAT_MAX, SLICE_MIN};
 use crate::rt::Rt;
 use crate::value::{Value, NIL};
 
@@ -94,43 +94,6 @@ impl Rt {
         out
     }
 
-    /// The byte at `i`, descending rather than materialising. Depth is what
-    /// this pays, which is what `FANOUT` is chosen for.
-    pub fn b_at(&self, v: Value, i: u32) -> Option<u8> {
-        if !v.is_heap() || i >= self.b_count(v) {
-            return None;
-        }
-        let mut cur = v;
-        let mut idx = i;
-        loop {
-            match ty(&self.gc.sp, cur.as_heap()) {
-                TY_BYTES => return raw_bytes(&self.gc.sp, cur.as_heap()).get(idx as usize).copied(),
-                TY_BROPE => {
-                    let flat = self.slot(cur, BB_FLAT);
-                    if !flat.is_nil() {
-                        cur = flat;
-                        continue;
-                    }
-                    let n = len(&self.gc.sp, cur.as_heap()) - BB_KIDS;
-                    let mut k = 0;
-                    loop {
-                        if k == n {
-                            return None;
-                        }
-                        let kid = self.slot(cur, BB_KIDS + k);
-                        let kn = self.b_count(kid);
-                        if idx < kn {
-                            cur = kid;
-                            break;
-                        }
-                        idx -= kn;
-                        k += 1;
-                    }
-                }
-                _ => return None,
-            }
-        }
-    }
 
     /// 0 for a leaf, otherwise the node's recorded depth.
 
@@ -618,9 +581,9 @@ mod tests {
             let acc = rt.r(base);
             let n = (i + 1) * 512;
             assert_eq!(rt.b_count(acc), n, "count after {i}");
-            assert_eq!(rt.b_at(acc, 0), Some(0), "byte 0 after {i}");
-            assert_eq!(rt.b_at(acc, n - 1), Some(255), "last after {i}");
-            assert_eq!(rt.b_at(acc, i * 512), Some(0), "piece start after {i}");
+            assert_eq!(rt.b_at(acc, 0, NIL), Value::fixnum(0), "byte 0 after {i}");
+            assert_eq!(rt.b_at(acc, n - 1, NIL), Value::fixnum(255), "last after {i}");
+            assert_eq!(rt.b_at(acc, i * 512, NIL), Value::fixnum(0), "piece start after {i}");
         }
         let acc = rt.r(base);
         assert!(rt.b_depth(acc) <= 3, "depth {}", rt.b_depth(acc));
@@ -667,9 +630,9 @@ mod tests {
         let mut pos = 0u32;
         for i in 0..900u32 {
             let n = 1 + (i * 37) % 4096;
-            assert_eq!(rt.b_at(acc, pos), Some((n & 0xff) as u8), "prefix of piece {i}");
-            assert_eq!(rt.b_at(acc, pos + 1), Some(0), "first byte of piece {i}");
-            assert_eq!(rt.b_at(acc, pos + n), Some(((n - 1) % 256) as u8), "last byte of piece {i}");
+            assert_eq!(rt.b_at(acc, pos, NIL), Value::fixnum((n & 0xff) as i64), "prefix of piece {i}");
+            assert_eq!(rt.b_at(acc, pos + 1, NIL), Value::fixnum(0), "first byte of piece {i}");
+            assert_eq!(rt.b_at(acc, pos + n, NIL), Value::fixnum(((n - 1) % 256) as i64), "last byte of piece {i}");
             pos += n + 1;
         }
         rt.pop_to(base);
@@ -690,7 +653,7 @@ mod tests {
             rt.pop_to(base);
         }
         assert_eq!(rt.b_count(acc), 64 * 2048);
-        assert_eq!(rt.b_at(acc, 2048), Some(0));
-        assert_eq!(rt.b_at(acc, 64 * 2048 - 1), Some(((2047u32) % 256) as u8));
+        assert_eq!(rt.b_at(acc, 2048, NIL), Value::fixnum(0));
+        assert_eq!(rt.b_at(acc, 64 * 2048 - 1, NIL), Value::fixnum(((2047u32) % 256) as i64));
     }
 }

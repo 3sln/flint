@@ -1,0 +1,79 @@
+;; Reading one byte out of a byte string, whatever tier it is in.
+;;
+;; O(depth), and depth is four for twenty thousand pieces because `b-concat`
+;; keeps the tree balanced. That is the whole reason this can be a descent
+;; rather than a flatten.
+;;
+;; THE THREE DISAGREED ABOUT TWO THINGS and one of them was reachable. Rust
+;; answered `Option<u8>` where both ports answered `int` with -1 for absent;
+;; that is `doc/goals/kin-port.md`'s hole 4 and is settled here the way
+;; `vec-nth`, `map-get` and `char-at` were settled -- the CALLER says what
+;; absence should look like, by passing it in. And Rust took a shortcut through
+;; the cached flattening that neither port took, though all three write it.
+(ns flint.rt.byteat
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < >= not nil? is-heap as-heap ty
+                                   + - local set forever continue for
+                                   slot olen fixnum read-u8 to-addr
+                                   Rt Value Ty I32 Addr NIL HDR
+                                   TY_BYTES TY_BROPE BB_FLAT BB_KIDS]]
+            [flint.rt.bytecore :refer [b-count]]))
+
+(doc "The byte at `i`, as a fixnum, or `dflt` when there is no such byte."
+     ""
+     "`dflt` rather than a sentinel, because a byte is 0..255 and every value"
+     "in that range is a real answer -- there is no number left over to mean"
+     "`absent`. The ports used -1, which works in a signed `int` and does not"
+     "survive the trip to Rust, where this index type is unsigned."
+     ""
+     "THE RANGE CHECK IS UP FRONT and costs nothing: `b-count` is O(1) in both"
+     "tiers, so asking first is cheaper than descending and discovering."
+     ""
+     "`i` IS AN `I32`, whose contract is that the high bit is never set, and a"
+     "NEGATIVE INDEX IS THE CALLER'S TO REJECT. This cannot screen one: Rust"
+     "spells the type `u32`, where -1 arrives as four billion and the range"
+     "check above refuses it, and both ports spell it `int`, where -1 sails"
+     "past a `>=` test and indexes backwards out of the leaf. Writing `i < 0`"
+     "here would be dead code in Rust and the only live check in the ports,"
+     "which is a divergence wearing one spelling. The builtins screen it.")
+(defn ^:pub ^:method ^Value b-at [^Rt rt ^Value v ^I32 i ^Value dflt]
+  (if (not (is-heap v))
+    (return dflt))
+  (if (>= i (b-count rt v))
+    (return dflt))
+  (local ^:mut ^Value cur)
+  (local ^:mut ^I32 idx)
+  (set cur v)
+  (set idx i)
+  (forever
+    (let [^Ty t (ty rt (as-heap cur))]
+      (if (== t TY_BYTES)
+        (return (fixnum (read-u8 rt (+ (+ (as-heap cur) HDR) (to-addr idx))))))
+      (if (!= t TY_BROPE)
+        (return dflt))
+      (comment "THE CACHED FLATTENING, if this subtree has one. Rust took this"
+               "and neither port did, though all three WRITE it in `b-flatten`"
+               "-- so the ports walked a tree that had already been flattened"
+               "beside them. Same shape as the `count-hint` fast path that was"
+               "missing from `seq-count`.")
+      (let [^Value flat (slot rt cur BB_FLAT)]
+        (if (not (nil? rt flat))
+          (do (set cur flat)
+              (continue))))
+      (comment "Down the child that contains `idx`, subtracting the ones it is"
+               "past on the way. `next` staying nil means the counts do not add"
+               "up to the length -- unreachable while the tree is well formed,"
+               "and answered rather than asserted.")
+      (let [^I32 n (- (olen rt cur) BB_KIDS)]
+        (local ^:mut ^Value next)
+        (set next NIL)
+        (for [^I32 k 0 n]
+          (if (nil? rt next)
+            (let [^Value kid (slot rt cur (+ BB_KIDS k))
+                  ^I32 kn (b-count rt kid)]
+              (if (< idx kn)
+                (set next kid)
+                (set idx (- idx kn))))))
+        (if (nil? rt next)
+          (return dflt))
+        (set cur next)))))

@@ -1116,14 +1116,21 @@ rt.describe(v) + " is not a transient vector");
         // string holds a byte in a byte.
         def("flint/b-count", (rt, at, n) -> Val.fixnum(Bytes.count(rt, rt.vat(at))));
         def("flint/b-at", (rt, at, n) -> {
-            // REFUSED past either end, which is what native has always done and
-            // what `test/bytes.clj` has asserted since the type was written --
-            // against native only, so this answered nil here for as long as it
-            // has existed. `at` is `nth`-shaped, and `nth` past the end throws.
-            int b = Bytes.at(rt, rt.vat(at), (int) Val.asFixnum(rt.vat(at + 1)));
-            return b < 0
+            // REFUSED past either end. `NOT_FOUND` as the default rather than
+            // NIL, because this has to tell "no such byte" from a nil a caller
+            // could legitimately have asked for.
+            // NEGATIVE IS THE CALLER'S TO REJECT. `b-at`'s index is kin's `I32`,
+            // whose contract is that the high bit is never set -- it is `u32`
+            // in Rust, where -1 becomes huge and the range check catches it,
+            // and `int` here, where -1 sails past a `>=` test and indexes
+            // backwards out of the leaf. Rust's builtin has always screened it;
+            // this one used to lean on `Bytes.at` doing it instead.
+            long idx = Val.asFixnum(rt.vat(at + 1));
+            long b = idx < 0 ? Val.NOT_FOUND
+                             : Bytes.at(rt, rt.vat(at), (int) idx, Val.NOT_FOUND);
+            return b == Val.NOT_FOUND
                 ? rt.throwStr("IndexOutOfBoundsException", "byte index out of range")
-                : Val.fixnum(b);
+                : b;
         });
         def("flint/b-concat", (rt, at, n) -> Bytes.concat(rt, rt.vat(at), rt.vat(at + 1)));
         def("flint/b-slice", (rt, at, n) -> Bytes.slice(rt, rt.vat(at),

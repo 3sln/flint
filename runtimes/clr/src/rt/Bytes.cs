@@ -76,30 +76,7 @@ public static class Bytes {
 
     /// The byte at `i`, or -1. Descends rather than flattening, which is why
     /// depth is what random access pays and why `FANOUT` is 16.
-    public static int At(Rt rt, long v, int i) {
-        long cur = v;
-        int idx = i;
-        for (;;) {
-            if (!Val.IsHeap(cur)) return -1;
-            int t = Obj.Ty(rt.gc.sp, Val.AsHeap(cur));
-            if (t == Obj.TyBytes) {
-                int leafN = Obj.Len(rt.gc.sp, Val.AsHeap(cur));
-                return (idx < 0 || idx >= leafN) ? -1 : rt.gc.sp.ReadU8(Val.AsHeap(cur) + Obj.Hdr + idx);
-            }
-            if (t != Obj.TyBrope) return -1;
-            int n = Obj.Len(rt.gc.sp, Val.AsHeap(cur)) - BB_KIDS;
-            int pos = 0;
-            long next = Val.Nil;
-            for (int k = 0; k < n; k++) {
-                long child = rt.Slot(cur, BB_KIDS + k);
-                int cn = Count(rt, child);
-                if (idx < pos + cn) { next = child; idx -= pos; break; }
-                pos += cn;
-            }
-            if (Val.IsNil(next)) return -1;
-            cur = next;
-        }
-    }
+    public static long At(Rt rt, long v, int i, long dflt) { return global::_3sln.Flint.Kgen.Rt.Byteat.BAt(rt, v, i, dflt); }
 
         public static int Depth(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Bytecore.BDepth(rt, v); }
 

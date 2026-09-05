@@ -204,9 +204,16 @@ builtins! {
     "flint/b-at", flint_b_bat, b_bat, |rt, a, n| {
         let _ = n;
         let (v, i) = (arg(rt, a, 0), arg(rt, a, 1));
-        match rt.as_i64(i).and_then(|i| if i < 0 { None } else { rt.b_at(v, i as u32) }) {
-            Some(b) => Value::fixnum(b as i64),
-            None => rt.throw_str("IndexOutOfBoundsException", "byte index out of range"),
+        // `NOT_FOUND` as the default, because NIL is a value a caller could
+        // legitimately want back and this one needs to tell absent from nil.
+        let b = match rt.as_i64(i) {
+            Some(i) if i >= 0 => rt.b_at(v, i as u32, crate::value::NOT_FOUND),
+            _ => crate::value::NOT_FOUND,
+        };
+        if b == crate::value::NOT_FOUND {
+            rt.throw_str("IndexOutOfBoundsException", "byte index out of range")
+        } else {
+            b
         }
     };
     "flint/b-concat", flint_b_bconcat, b_bconcat, |rt, a, n| {

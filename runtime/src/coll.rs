@@ -296,10 +296,7 @@ impl Rt {
                 }
             }
             TY_BYTES | TY_BROPE => match self.as_i64(k) {
-                Some(i) if i >= 0 => match self.b_at(coll, i as u32) {
-                    Some(b) => Value::fixnum(b as i64),
-                    None => dflt,
-                },
+                Some(i) if i >= 0 => self.b_at(coll, i as u32, dflt),
                 _ => dflt,
             },
             TY_TVEC => match self.as_i64(k) {
@@ -364,12 +361,13 @@ impl Rt {
         // `IndexOutOfBoundsException` on a byte string that was plainly long
         // enough.
         if self.is_bytes(coll) {
-            return match self.b_at(coll, i) {
-                Some(b) => Value::fixnum(b as i64),
-                None => match dflt {
-                    Some(d) => d,
-                    None => self.throw_str("IndexOutOfBoundsException", "byte index out of range"),
-                },
+            let b = self.b_at(coll, i, crate::value::NOT_FOUND);
+            if b != crate::value::NOT_FOUND {
+                return b;
+            }
+            return match dflt {
+                Some(d) => d,
+                None => self.throw_str("IndexOutOfBoundsException", "byte index out of range"),
             };
         }
         if coll.is_heap() && ty(&self.gc.sp, coll.as_heap()) == TY_VEC {

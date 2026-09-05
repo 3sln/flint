@@ -5,6 +5,7 @@
 //! a module that quietly never gets built.
 pub mod assoc;
 pub mod byteconcat;
+pub mod byteat;
 pub mod bytecore;
 pub mod bytefold;
 pub mod bytenode;

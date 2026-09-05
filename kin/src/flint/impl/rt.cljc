@@ -253,7 +253,10 @@
    ;; copy on `Bytes`. That is a divergence in WHERE, not in what, so the name
    ;; table is exactly the right place for it -- one entry, three paths.
    'FLAT_MAX {:rust "crate::rope::FLAT_MAX" :java "Bytes.FLAT_MAX" :csharp "global::Flint.Rt.Bytes.FLAT_MAX"}
-   'FANOUT {:rust "crate::rope::FANOUT" :java "Bytes.FANOUT" :csharp "global::Flint.Rt.Bytes.FANOUT"}}
+   'FANOUT {:rust "crate::rope::FANOUT" :java "Bytes.FANOUT" :csharp "global::Flint.Rt.Bytes.FANOUT"}
+   ;; The object header's width. A leaf's bytes begin `HDR` past its address,
+   ;; which is the one place a generated source does address arithmetic.
+   'HDR {:rust "crate::obj::HDR" :java "Obj.HDR" :csharp "Obj.Hdr"}}
   ;; The node and category constants. All three targets spell these
   ;; IDENTICALLY, so every entry below is three copies of one string -- and
   ;; they are written down anyway.
@@ -779,6 +782,19 @@
     ;; of bytes -- and that is hole 5's other half, still open. So the tree
     ;; half calls across to it, which is what `sibling` is for.
     'b-copy-concat (sibling "b_copy_concat" "Bytes" "copyConcat" "CopyConcat" 2)
+
+    ;; ONE BYTE out of the heap, at an absolute address. Rust reads a leaf
+    ;; through `raw_bytes`, which hands back a borrowed slice -- hole 6, and
+    ;; REFUSED on measurement. Both ports already read the byte directly, and
+    ;; Rust has the same primitive one layer down, so this converges onto the
+    ;; spelling all three can say rather than the one only Rust can.
+    'read-u8 (core/call {:rust "({0}.gc.sp.read_u8({1}) as u32)"
+                         :java "{0}.gc.sp.readU8({1})"
+                         :csharp "{0}.gc.sp.ReadU8({1})"})
+    ;; An index widened to an ADDRESS. `Addr` is `u64` in Rust and `long` in
+    ;; both ports; `as-idx` widens to `usize`, which is 32 bits on wasm and
+    ;; would silently be the wrong type here.
+    'to-addr (core/call {:rust "({0} as Addr)" :java "{0}" :csharp "{0}"})
 
     'alloc (core/call {:rust "{0}.alloc({1}, {2})"
                        :java "{0}.alloc({1}, {2})"

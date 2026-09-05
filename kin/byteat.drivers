@@ -1,0 +1,273 @@
+--rust-head
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_BYTES: u8 = 44; const TY_BROPE: u8 = 45; const TY_VEC: u8 = 9;
+pub mod obj { pub const HDR: u64 = 8; }
+pub mod bytes {
+    pub const BB_BYTES: u32 = 0; pub const BB_FLAT: u32 = 1;
+    pub const BB_DEPTH: u32 = 2; pub const BB_HASH: u32 = 3; pub const BB_KIDS: u32 = 4;
+}
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+// A BYTE-ADDRESSABLE space, which the earlier byte fixtures did not need: they
+// modelled a leaf by its LENGTH alone. `b-at` reads the bytes themselves, so
+// this one stores them -- at `addr + HDR`, where the runtime puts them.
+struct Space { m: Vec<u8> }
+impl Space {
+    fn read_u8(&self, a: Addr) -> u8 { self.m[a as usize] }
+}
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64 }
+impl Rt {
+    // SPACED so a leaf's bytes cannot land on the next object's type tag:
+    // objects are `n + 16` apart and the bytes occupy `HDR .. HDR + n`.
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        let a = self.bump; self.bump += n as u64 + 16;
+        self.gc.sp.m[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn leaf(&mut self, bs: &[u8]) -> Value {
+        let a = self.alloc(TY_BYTES, bs.len() as u32);
+        for (i, b) in bs.iter().enumerate() { self.gc.sp.m[(a + obj::HDR) as usize + i] = *b; }
+        Value::heap(a)
+    }
+    fn b_count(&self, v: Value) -> u32 {
+        if !v.is_heap() { return 0; }
+        match ty(&self.gc.sp, v.as_heap()) {
+            TY_BYTES => self.olen(v),
+            TY_BROPE => self.slot(v, bytes::BB_BYTES).as_fixnum() as u32,
+            _ => 0,
+        }
+    }
+    fn node(&mut self, kids: &[Value]) -> Value {
+        let mut total = 0u32;
+        for k in kids { total += self.b_count(*k); }
+        let a = self.alloc(TY_BROPE, bytes::BB_KIDS + kids.len() as u32);
+        self.set_slot(a, bytes::BB_BYTES, Value::fixnum(total as i64));
+        self.set_slot(a, bytes::BB_FLAT, NIL);
+        self.set_slot(a, bytes::BB_HASH, NIL);
+        self.set_slot(a, bytes::BB_DEPTH, Value::fixnum(1));
+        for (i, k) in kids.iter().enumerate() { self.set_slot(a, bytes::BB_KIDS + i as u32, *k); }
+        Value::heap(a)
+    }
+}
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 40000], gc: Gc { sp: Space { m: vec![0u8; 40000] } },
+                      lens: vec![0; 40000], bump: 100 };
+    let mut o = String::new();
+    let l1 = rt.leaf(&[10, 11, 12]);
+    let l2 = rt.leaf(&[20, 21]);
+    let nd = rt.node(&[l1, l2]);
+    let show = |rt: &Rt, v: Value, i: u32| {
+        let x = rt.b_at(v, i, NIL);
+        if x.is_nil() { -1i64 } else { x.as_fixnum() }
+    };
+    // FLAT: every byte, then past the end and the empty case.
+    o.push_str(&format!("flat={},{},{},{} ", show(&rt, l1, 0), show(&rt, l1, 2),
+                        show(&rt, l1, 3), show(&rt, l1, 99)));
+    // TREE: across the child boundary, which is where the descent is tested.
+    o.push_str(&format!("tree={},{},{},{},{} ", show(&rt, nd, 0), show(&rt, nd, 2),
+                        show(&rt, nd, 3), show(&rt, nd, 4), show(&rt, nd, 5)));
+    // NOT A BYTE STRING, and nil rather than a wrong byte.
+    let other = Value::heap(rt.alloc(TY_VEC, 2));
+    o.push_str(&format!("other={} nil={} ", show(&rt, other, 0), show(&rt, NIL, 0)));
+    // THE `dflt` IS THE CALLER'S, not a fixed sentinel.
+    o.push_str(&format!("dflt={} ", rt.b_at(l1, 99, Value::fixnum(77)).as_fixnum()));
+    // THE CACHED FLATTENING is followed when present: point the node's
+    // BB_FLAT at a leaf whose bytes DIFFER, and the answer must come from it.
+    let lie = rt.leaf(&[90, 91, 92, 93, 94]);
+    rt.set_slot(nd.as_heap(), bytes::BB_FLAT, lie);
+    o.push_str(&format!("flat_used={},{} ", show(&rt, nd, 0), show(&rt, nd, 4)));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_BYTES = 44, TY_BROPE = 45, TY_VEC = 9;
+    static final class Obj { static final long HDR = 8; }
+    static final class Bytes {
+        static final int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
+    }
+    static final class Val {
+        static boolean isHeap(long v) { return v >= 100 && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v; }
+        static long fixnum(long n) { return n; }
+        static long heap(long a) { return a; }
+        static final long NIL = Probe.NIL;
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Space {
+        byte[] m = new byte[40000];
+        int readU8(long a) { return m[(int) a] & 0xFF; }
+    }
+    static final class Rt {
+        long[] h = new long[40000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        int[] lens = new int[40000];
+        long bump = 100;
+        long alloc(int t, int n) {
+            long a = bump; bump += n + 16;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    static long leaf(Rt rt, int[] bs) {
+        long a = rt.alloc(TY_BYTES, bs.length);
+        for (int i = 0; i < bs.length; i++) rt.gc.sp.m[(int) (a + Obj.HDR) + i] = (byte) bs[i];
+        return Val.heap(a);
+    }
+    static int bCount(Rt rt, long v) {
+        if (!Val.isHeap(v)) return 0;
+        int t = ty(rt.gc.sp, v);
+        if (t == TY_BYTES) return olen(rt, v);
+        if (t == TY_BROPE) return (int) rt.slot(v, Bytes.BB_BYTES);
+        return 0;
+    }
+    static long node(Rt rt, long[] kids) {
+        int total = 0;
+        for (long k : kids) total += bCount(rt, k);
+        long a = rt.alloc(TY_BROPE, Bytes.BB_KIDS + kids.length);
+        rt.setSlot(a, Bytes.BB_BYTES, total);
+        rt.setSlot(a, Bytes.BB_FLAT, NIL);
+        rt.setSlot(a, Bytes.BB_HASH, NIL);
+        rt.setSlot(a, Bytes.BB_DEPTH, 1);
+        for (int i = 0; i < kids.length; i++) rt.setSlot(a, Bytes.BB_KIDS + i, kids[i]);
+        return Val.heap(a);
+    }
+    static long show(Rt rt, long v, int i) {
+        long x = bAt(rt, v, i, NIL);
+        return Val.isNil(x) ? -1 : Val.asFixnum(x);
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long l1 = leaf(rt, new int[]{10, 11, 12});
+        long l2 = leaf(rt, new int[]{20, 21});
+        long nd = node(rt, new long[]{l1, l2});
+        o.append("flat=").append(show(rt, l1, 0)).append(',').append(show(rt, l1, 2))
+         .append(',').append(show(rt, l1, 3)).append(',').append(show(rt, l1, 99)).append(' ');
+        o.append("tree=").append(show(rt, nd, 0)).append(',').append(show(rt, nd, 2))
+         .append(',').append(show(rt, nd, 3)).append(',').append(show(rt, nd, 4))
+         .append(',').append(show(rt, nd, 5)).append(' ');
+        long other = Val.heap(rt.alloc(TY_VEC, 2));
+        o.append("other=").append(show(rt, other, 0))
+         .append(" nil=").append(show(rt, NIL, 0)).append(' ');
+        o.append("dflt=").append(Val.asFixnum(bAt(rt, l1, 99, Val.fixnum(77)))).append(' ');
+        long lie = leaf(rt, new int[]{90, 91, 92, 93, 94});
+        rt.setSlot(nd, Bytes.BB_FLAT, lie);
+        o.append("flat_used=").append(show(rt, nd, 0)).append(',').append(show(rt, nd, 4)).append(' ');
+        System.out.println(o.toString());
+    }
+--csharp-head
+    internal static class Obj {
+        internal const long Hdr = 8;
+        internal const int TyBytes = 44, TyBrope = 45, TyVec = 9;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long AsFixnum(long v) { return v; }
+        internal static long Fixnum(long n) { return n; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    internal sealed class Space {
+        internal byte[] m = new byte[40000];
+        internal int ReadU8(long a) { return m[(int) a]; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[40000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[40000];
+        internal long bump = 100;
+        internal long Alloc(int t, int n) {
+            long a = bump; bump += n + 16;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Val.Nil;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    internal static long Leaf(Rt rt, int[] bs) {
+        long a = rt.Alloc(Obj.TyBytes, bs.Length);
+        for (int i = 0; i < bs.Length; i++) rt.gc.sp.m[(int) (a + Obj.Hdr) + i] = (byte) bs[i];
+        return Val.Heap(a);
+    }
+    internal static int BCount(Rt rt, long v) {
+        if (!Val.IsHeap(v)) return 0;
+        int t = Obj.Ty(rt.gc.sp, v);
+        if (t == Obj.TyBytes) return Olen(rt, v);
+        if (t == Obj.TyBrope) return (int) rt.Slot(v, global::Flint.Rt.Bytes.BB_BYTES);
+        return 0;
+    }
+    internal static long Node(Rt rt, long[] kids) {
+        int total = 0;
+        foreach (long k in kids) total += BCount(rt, k);
+        long a = rt.Alloc(Obj.TyBrope, global::Flint.Rt.Bytes.BB_KIDS + kids.Length);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_BYTES, total);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_FLAT, Val.Nil);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_HASH, Val.Nil);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_DEPTH, 1);
+        for (int i = 0; i < kids.Length; i++) rt.SetSlot(a, global::Flint.Rt.Bytes.BB_KIDS + i, kids[i]);
+        return Val.Heap(a);
+    }
+    internal static long Show(Rt rt, long v, int i) {
+        long x = BAt(rt, v, i, Val.Nil);
+        return Val.IsNil(x) ? -1 : Val.AsFixnum(x);
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Bytes {
+        internal const int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
+    }
+}
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long l1 = Leaf(rt, new int[]{10, 11, 12});
+        long l2 = Leaf(rt, new int[]{20, 21});
+        long nd = Node(rt, new long[]{l1, l2});
+        o.Append("flat=").Append(Show(rt, l1, 0)).Append(',').Append(Show(rt, l1, 2))
+         .Append(',').Append(Show(rt, l1, 3)).Append(',').Append(Show(rt, l1, 99)).Append(' ');
+        o.Append("tree=").Append(Show(rt, nd, 0)).Append(',').Append(Show(rt, nd, 2))
+         .Append(',').Append(Show(rt, nd, 3)).Append(',').Append(Show(rt, nd, 4))
+         .Append(',').Append(Show(rt, nd, 5)).Append(' ');
+        long other = Val.Heap(rt.Alloc(Obj.TyVec, 2));
+        o.Append("other=").Append(Show(rt, other, 0))
+         .Append(" nil=").Append(Show(rt, Val.Nil, 0)).Append(' ');
+        o.Append("dflt=").Append(Val.AsFixnum(BAt(rt, l1, 99, Val.Fixnum(77)))).Append(' ');
+        long lie = Leaf(rt, new int[]{90, 91, 92, 93, 94});
+        rt.SetSlot(nd, global::Flint.Rt.Bytes.BB_FLAT, lie);
+        o.Append("flat_used=").Append(Show(rt, nd, 0)).Append(',').Append(Show(rt, nd, 4)).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }

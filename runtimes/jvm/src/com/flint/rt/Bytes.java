@@ -79,30 +79,7 @@ public final class Bytes {
 
     /// The byte at `i`, or -1. Descends rather than flattening, which is why
     /// depth is what random access pays and why `FANOUT` is 16.
-    public static int at(Rt rt, long v, int i) {
-        long cur = v;
-        int idx = i;
-        for (;;) {
-            if (!Val.isHeap(cur)) return -1;
-            int t = ty(rt.gc.sp, Val.asHeap(cur));
-            if (t == TY_BYTES) {
-                int n = len(rt.gc.sp, Val.asHeap(cur));
-                return (idx < 0 || idx >= n) ? -1 : rt.gc.sp.readU8(Val.asHeap(cur) + HDR + idx);
-            }
-            if (t != TY_BROPE) return -1;
-            int n = len(rt.gc.sp, Val.asHeap(cur)) - BB_KIDS;
-            int pos = 0;
-            long next = Val.NIL;
-            for (int k = 0; k < n; k++) {
-                long child = rt.slot(cur, BB_KIDS + k);
-                int cn = count(rt, child);
-                if (idx < pos + cn) { next = child; idx -= pos; break; }
-                pos += cn;
-            }
-            if (Val.isNil(next)) return -1;
-            cur = next;
-        }
-    }
+    public static long at(Rt rt, long v, int i, long dflt) { return com._3sln.flint.kgen.rt.Byteat.bAt(rt, v, i, dflt); }
 
         public static int depth(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytecore.bDepth(rt, v); }
 
