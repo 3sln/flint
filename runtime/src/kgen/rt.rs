@@ -29,6 +29,7 @@ pub mod nodeclass;
 pub mod pike;
 pub mod ropecat;
 pub mod ropenode;
+pub mod ropeslice;
 pub mod seqcore;
 pub mod seqs;
 pub mod seqwalk;

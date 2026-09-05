@@ -486,38 +486,7 @@ public static class Str {
 
     /// A slice that SHARES its interior: a child wholly inside the range comes
     /// back unchanged, and only the two edge children are cut.
-    public static long RopeSlice(Rt rt, long v, int from, int to) {
-        if (from >= to) return Of(rt, "");
-        int n = SBytes(rt, v);
-        if (to > n) to = n;
-        if (from == 0 && to == n) return v;
-        if (to - from < SLICE_MIN || !IsRope(rt, v)) {
-            var ms = new System.IO.MemoryStream();
-            AppendRange(rt, v, from, to, ms);
-            return Of(rt, System.Text.Encoding.UTF8.GetString(ms.ToArray()));
-        }
-        int bas = rt.Mark();
-        int vi = rt.Push(v);
-        int kids = RopeKids(rt, rt.R(vi));
-        int outb = rt.Mark();
-        int made = 0, at = 0;
-        for (int i = 0; i < kids; i++) {
-            long k = rt.Slot(rt.R(vi), RP_KIDS + i);
-            int w = SBytes(rt, k);
-            if (at + w > from && at < to) {
-                int lo = System.Math.Max(0, from - at);
-                int hi = System.Math.Min(to - at, w);
-                long piece = (lo == 0 && hi == w) ? k : RopeSlice(rt, k, lo, hi);
-                if (piece == Val.Nil) { rt.PopTo(bas); return Val.Nil; }
-                if (SBytes(rt, piece) > 0) { rt.Push(piece); made++; }
-            }
-            at += w;
-            if (at >= to) break;
-        }
-        long r = RopeFromRoots(rt, outb, made);
-        rt.PopTo(bas);
-        return r;
-    }
+    public static long RopeSlice(Rt rt, long v, int from, int to) { return global::_3sln.Flint.Kgen.Rt.Ropeslice.RopeSlice(rt, v, from, to); }
 
     public static int Pow31Public(int n) => Pow31(n);
 
@@ -638,6 +607,13 @@ public static class Str {
     /// Append `b` into the rightmost subtree of `a` that has room, rebuilding
     /// the spine above it. Nil when the right spine is full at every level.
     static long RopeAppend(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Ropecat.RopeAppend(rt, a, b); }
+
+    /// Copy the range out into a fresh string -- the SINK half.
+    public static long SCopyRange(Rt rt, long v, int from, int to) {
+        var ms = new System.IO.MemoryStream();
+        AppendRange(rt, v, from, to, ms);
+        return Of(rt, System.Text.Encoding.UTF8.GetString(ms.ToArray()));
+    }
 
     /// The empty string, interned -- see the Rust copy.
     public static long SEmpty(Rt rt) { return Of(rt, ""); }

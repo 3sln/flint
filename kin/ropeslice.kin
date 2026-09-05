@@ -1,0 +1,87 @@
+;; Taking a byte range out of a string, SHARING wherever it can.
+;;
+;; The text mirror of `byteslice`, and the same trade in both directions: a
+;; child wholly inside the range is handed over as itself, and a range below
+;; `SLICE_MIN` is COPIED on purpose so a three-byte slice cannot keep a 509 KB
+;; section alive.
+;;
+;; THE BOUNDS ARE BYTES, not code points. That is not a shortcut -- `subs` is
+;; code points and converts first, through `rope-byte-of-cp`, because the tree
+;; carries per-node code-point counts for exactly that descent. What arrives
+;; here has already been converted.
+(ns flint.rt.ropeslice
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == < > >= <= + - not nil?
+                                   for local set break slot
+                                   mark push r pop-to
+                                   s-bytes s-copy-range s-empty
+                                   Rt Value RootIx I32 NIL
+                                   RP_KIDS SLICE_MIN]]
+            [flint.rt.ropecat :refer [is-rope rope-kids]]
+            [flint.rt.ropenode :refer [rope-from-roots]]))
+
+(doc "`v` from byte `from` to byte `to`, exclusive."
+     ""
+     "An empty or inverted range is the empty string; `to` is clamped to the"
+     "length; the whole range answers `v` ITSELF and allocates nothing."
+     ""
+     "`from` is NOT clamped at zero -- it is an `I32`, whose contract is that"
+     "the high bit is never set, and a negative bound is refused before it"
+     "reaches here.")
+(defn ^:pub ^:method ^Value rope-slice [^:mut ^Rt rt ^Value v ^I32 from ^I32 to]
+  (if (>= from to)
+    (return (s-empty rt)))
+  (let [^I32 n (s-bytes rt v)]
+    (local ^:mut ^I32 hi)
+    (set hi to)
+    (if (> hi n) (set hi n))
+    (if (== from 0)
+      (if (== hi n)
+        (return v)))
+    (comment "SMALL, OR A LEAF: copy. A leaf's bytes are contiguous and there"
+             "is nothing to share below it; a small range is copied so it does"
+             "not retain the section it came from.")
+    (if (< (- hi from) SLICE_MIN)
+      (return (s-copy-range rt v from hi)))
+    (if (not (is-rope rt v))
+      (return (s-copy-range rt v from hi)))
+    (let [^RootIx base (mark rt)
+          ^RootIx vi (push rt v)
+          ^I32 kids (rope-kids rt (r rt vi))
+          ^RootIx out (mark rt)]
+      (local ^:mut ^I32 made)
+      (local ^:mut ^I32 at)
+      (set made 0)
+      (set at 0)
+      (for [^I32 i 0 kids]
+        (let [^Value k (slot rt (r rt vi) (+ RP_KIDS i))
+              ^I32 w (s-bytes rt k)]
+          (if (> (+ at w) from)
+            (if (< at hi)
+              (do
+                (local ^:mut ^I32 klo)
+                (local ^:mut ^I32 khi)
+                (set klo 0)
+                (if (> from at) (set klo (- from at)))
+                (set khi (- hi at))
+                (if (> khi w) (set khi w))
+                (local ^:mut ^Value piece)
+                (comment "WHOLLY INSIDE: shared, not copied. This is the whole"
+                         "difference between a slice and a substring.")
+                (if (== klo 0)
+                  (if (== khi w)
+                    (set piece k)
+                    (set piece (rope-slice rt k klo khi)))
+                  (set piece (rope-slice rt k klo khi)))
+                (if (nil? rt piece)
+                  (do (pop-to rt base)
+                      (return NIL)))
+                (if (> (s-bytes rt piece) 0)
+                  (do (push rt piece)
+                      (set made (+ made 1)))))))
+          (set at (+ at w))
+          (if (>= at hi)
+            (break))))
+      (let [^Value res (rope-from-roots rt out made)]
+        (pop-to rt base)
+        (return res)))))

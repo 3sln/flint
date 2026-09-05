@@ -224,82 +224,6 @@ impl Rt {
 
 
 
-    /// A slice that SHARES its interior.
-    ///
-    /// This is the half of `0011` that was designed, documented at the top of
-    /// this file, given a constant -- and never written. `SLICE_MIN` had one
-    /// reference in the tree, `let _ = SLICE_MIN;` in `bytes.rs`, whose only
-    /// job was to silence the unused-constant warning. The compiler was saying
-    /// the policy was not implemented and the message was turned off.
-    ///
-    /// Meanwhile BOTH `subs` paths copied every byte: the ASCII one flattened
-    /// first, and the careful non-ASCII one descended only far enough to find
-    /// the byte offsets and then copied the range. Sharing is half the point of
-    /// a rope, and `subs` is the operation that most wants it.
-    ///
-    /// What it does: a child wholly inside the range is returned UNCHANGED --
-    /// no copy, no allocation, the same object -- and only the two edge
-    /// children are cut. So slicing the middle out of a megabyte touches a
-    /// handful of nodes.
-    ///
-    /// `SLICE_MIN` is the retention fix and not a performance tweak: a slice
-    /// under it copies, so `(subs big 0 3)` cannot keep `big` alive through
-    /// three characters.
-    pub fn rope_slice(&mut self, v: Value, from: u32, to: u32) -> Value {
-        if from >= to {
-            return self.string("");
-        }
-        let n = self.s_bytes(v);
-        let to = to.min(n);
-        if from == 0 && to == n {
-            return v; // the whole thing: share it and allocate nothing
-        }
-        if to - from < SLICE_MIN || !self.is_rope(v) {
-            // Small, or a leaf: copy. A leaf's bytes are contiguous and there
-            // is nothing to share below it.
-            let base = self.mark();
-            let vi = self.push(v);
-            let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity((to - from) as usize);
-            self.append_range(self.r(vi), from, to, &mut out);
-            self.pop_to(base);
-            let t = core::str::from_utf8(&out).unwrap_or("");
-            return self.string(t);
-        }
-        let base = self.mark();
-        let vi = self.push(v);
-        let kids = self.rope_kids(self.r(vi));
-        let out = self.mark();
-        let mut made = 0usize;
-        let mut at = 0u32;
-        for i in 0..kids {
-            let k = self.slot(self.r(vi), RP_KIDS + i);
-            let w = self.s_bytes(k);
-            if at + w > from && at < to {
-                let lo = from.saturating_sub(at);
-                let hi = (to - at).min(w);
-                let piece = if lo == 0 && hi == w {
-                    k // WHOLLY INSIDE: shared, not copied
-                } else {
-                    self.rope_slice(k, lo, hi)
-                };
-                if piece.is_nil() {
-                    self.pop_to(base);
-                    return NIL;
-                }
-                if self.s_bytes(piece) > 0 {
-                    self.push(piece);
-                    made += 1;
-                }
-            }
-            at += w;
-            if at >= to {
-                break;
-            }
-        }
-        let r = self.rope_from_roots(out, made as u32);
-        self.pop_to(base);
-        r
-    }
 
     /// The next leaf of a tree walk, given a stack of `(node, next-child)`.
     /// Pushes down the left spine until it reaches something with bytes in it.
@@ -457,6 +381,23 @@ impl Rt {
 
 
 
+
+    /// Copy the range out into a fresh string.
+    ///
+    /// The SINK half: it needs a growable byte buffer AND a UTF-8 decode, so it
+    /// stays hand-written and the generated tree half reaches it here.
+    /// `SLICE_MIN` exists to force this path for a small range -- a three-byte
+    /// slice must not keep a 509 KB section alive -- so this is policy rather
+    /// than a fallback.
+    pub(crate) fn s_copy_range(&mut self, v: Value, from: u32, to: u32) -> Value {
+        let base = self.mark();
+        let vi = self.push(v);
+        let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity((to - from) as usize);
+        self.append_range(self.r(vi), from, to, &mut out);
+        self.pop_to(base);
+        let t = core::str::from_utf8(&out).unwrap_or("");
+        self.string(t)
+    }
 
     /// The empty string. INTERNED rather than allocated, unlike `b_empty`'s
     /// byte leaf: an empty string is an inline value here, so there is nothing

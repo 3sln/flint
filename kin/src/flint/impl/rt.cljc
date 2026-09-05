@@ -820,6 +820,9 @@
     ;; nothing on the heap -- so unlike `b-empty` the generated half cannot
     ;; build one and asks for it.
     's-empty (sibling "s_empty" "Str" "sEmpty" "SEmpty" 0)
+    ;; The other hand-written half: copying a RANGE out into a fresh string,
+    ;; which needs a byte sink AND a UTF-8 decode.
+    's-copy-range (sibling "s_copy_range" "Str" "sCopyRange" "SCopyRange" 3)
 
     ;; ONE BYTE out of the heap, at an absolute address. Rust reads a leaf
     ;; through `raw_bytes`, which hands back a borrowed slice -- hole 6, and

@@ -1,0 +1,426 @@
+--rust-head
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_ROPE: u8 = 26; const TY_STR: u8 = 2;
+pub mod obj {
+    pub const RP_BYTES: u32 = 0; pub const RP_CPS: u32 = 1;
+    pub const RP_FLAT: u32 = 2; pub const RP_HASH: u32 = 3; pub const RP_KIDS: u32 = 4;
+}
+pub mod rope { pub const FANOUT: u32 = 3; pub const FLAT_MAX: u32 = 8; pub const SLICE_MIN: u32 = 4; }
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+struct Gc { sp: Vec<u8> }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, starve: bool,
+            cps: Vec<u32>, asc: Vec<u8> }
+fn ty(sp: &Vec<u8>, a: Addr) -> u8 { sp[a as usize] }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        if self.starve { return 0; }
+        let a = self.bump; self.bump += n as u64 + 1;
+        self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    // A LEAF carries its own byte length, code-point count and ASCII bit, so
+    // the driver can build a non-ASCII leaf and watch the bit propagate.
+    fn leaf(&mut self, bytes: u32, cps: u32, ascii: bool) -> Value {
+        let a = self.alloc(TY_STR, bytes);
+        self.cps[a as usize] = cps; self.asc[a as usize] = ascii as u8;
+        Value::heap(a)
+    }
+    fn olen(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn rope_from_roots(&mut self, base: usize, n: u32) -> Value {
+        if n == 0 { return self.s_empty(); }
+        if n == 1 { return self.r(base); }
+        self.rope_node(base, n)
+    }
+    fn rope_kids(&self, v: Value) -> u32 { self.olen(v) - obj::RP_KIDS }
+    fn is_rope(&self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_ROPE
+    }
+    // The sink half: a leaf is modelled by its measurements, so a range of it
+    // is a leaf of that width. ASCII is inherited, which is what a real decode
+    // would find for the fixtures below.
+    fn s_copy_range(&mut self, v: Value, from: u32, to: u32) -> Value {
+        let asc = self.s_ascii(v);
+        self.leaf(to - from, to - from, asc)
+    }
+    fn rope_node(&mut self, base: usize, n: u32) -> Value {
+        let (mut bytes, mut cps, mut ascii) = (0u32, 0u32, true);
+        for i in 0..n {
+            let k = self.r(base + i as usize);
+            bytes += self.s_bytes(k); cps += self.s_count(k); ascii = ascii && self.s_ascii(k);
+        }
+        let a = self.alloc(TY_ROPE, obj::RP_KIDS + n);
+        if a == 0 { return NIL; }
+        self.set_slot(a, obj::RP_BYTES, Value::fixnum(bytes as i64));
+        self.set_slot(a, obj::RP_CPS, Value::fixnum(((cps << 1) | (ascii as u32)) as i64));
+        self.set_slot(a, obj::RP_FLAT, NIL);
+        self.set_slot(a, obj::RP_HASH, NIL);
+        for i in 0..n { let v = self.r(base + i as usize); self.set_slot(a, obj::RP_KIDS + i, v); }
+        Value::heap(a)
+    }
+    fn rope_lift(&mut self, v: Value, h: u32) -> Value {
+        let base = self.mark();
+        let ci = self.push(v);
+        for _ in 0..h {
+            let w = self.rope_node(ci, 1);
+            if w.is_nil() { self.pop_to(base); return NIL; }
+            self.set_r(ci, w);
+        }
+        let out = self.r(ci);
+        self.pop_to(base);
+        out
+    }
+    fn s_bytes(&self, v: Value) -> u32 {
+        if self.is_rope(v) { self.slot(v, obj::RP_BYTES).as_fixnum() as u32 }
+        else { self.lens[v.0 as usize] }
+    }
+    fn s_count(&self, v: Value) -> u32 {
+        if self.is_rope(v) { (self.slot(v, obj::RP_CPS).as_fixnum() as u32) >> 1 }
+        else { self.cps[v.0 as usize] }
+    }
+    fn s_ascii(&self, v: Value) -> bool {
+        if self.is_rope(v) { self.slot(v, obj::RP_CPS).as_fixnum() & 1 != 0 }
+        else { self.asc[v.0 as usize] != 0 }
+    }
+    fn s_empty(&mut self) -> Value { self.leaf(0, 0, true) }
+    // The hand-written sink half: two strings flattened into one leaf. A leaf
+    // is modelled by its measurements here, so joining two adds them.
+    fn copy_concat(&mut self, a: Value, b: Value) -> Value {
+        let (nb, nc) = (self.s_bytes(a) + self.s_bytes(b), self.s_count(a) + self.s_count(b));
+        let asc = self.s_ascii(a) && self.s_ascii(b);
+        self.leaf(nb, nc, asc)
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 40000], gc: Gc { sp: vec![0u8; 40000] },
+                      lens: vec![0; 40000], bump: 100, roots: Vec::new(), starve: false,
+                      cps: vec![0; 40000], asc: vec![0; 40000] };
+    let mut o = String::new();
+    // SLICE_MIN is 4 here, FANOUT 3. Four leaves of five bytes each.
+    let a = rt.leaf(5, 5, true); let b = rt.leaf(5, 5, true);
+    let c = rt.leaf(5, 5, true); let d = rt.leaf(5, 5, true);
+    let base = rt.mark();
+    rt.push(a); rt.push(b); rt.push(c); rt.push(d);
+    let tree = rt.rope_node(base, 4);
+    rt.pop_to(base);
+    // Whole range: the value ITSELF.
+    let whole = rt.rope_slice(tree, 0, 20);
+    o.push_str(&format!("whole={} ", (whole.0 == tree.0) as u32));
+    // Empty and inverted ranges.
+    let e1 = rt.rope_slice(tree, 3, 3); let e2 = rt.rope_slice(tree, 7, 2);
+    o.push_str(&format!("empty={},{} ", rt.s_bytes(e1), rt.s_bytes(e2)));
+    // Below SLICE_MIN: copied, so NOT the child even when it aligns.
+    let small = rt.rope_slice(tree, 5, 8);
+    o.push_str(&format!("small={},{} ", rt.s_bytes(small), (small.0 == b.0) as u32));
+    // At or above SLICE_MIN and covering whole children: they are SHARED.
+    let mid = rt.rope_slice(tree, 5, 15);
+    o.push_str(&format!("mid={} shares={}{} ", rt.s_bytes(mid),
+        (rt.slot(mid, obj::RP_KIDS).0 == b.0) as u32,
+        (rt.slot(mid, obj::RP_KIDS + 1).0 == c.0) as u32));
+    // Clamped past the end, and a ragged range.
+    let cl = rt.rope_slice(tree, 16, 99);
+    let rag = rt.rope_slice(tree, 3, 17);
+    o.push_str(&format!("clamp={} rag={} ", rt.s_bytes(cl), rt.s_bytes(rag)));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_ROPE = 26, TY_STR = 2;
+    static final class Str {
+        static final int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
+        static final int FANOUT = 3, FLAT_MAX = 8, SLICE_MIN = 4;
+        static int sBytes(Rt rt, long v) {
+            if (isRope(rt, v)) return (int) rt.slot(v, RP_BYTES);
+            return rt.lens[(int) v];
+        }
+        static int sCount(Rt rt, long v) {
+            if (isRope(rt, v)) return (int) (rt.slot(v, RP_CPS) >> 1);
+            return rt.cps[(int) v];
+        }
+        static boolean sAscii(Rt rt, long v) {
+            if (isRope(rt, v)) return (rt.slot(v, RP_CPS) & 1) != 0;
+            return rt.asc[(int) v] != 0;
+        }
+        static long sEmpty(Rt rt) { return leaf(rt, 0, 0, true); }
+        static long sCopyRange(Rt rt, long v, int from, int to) {
+            return leaf(rt, to - from, to - from, sAscii(rt, v));
+        }
+        static long copyConcat(Rt rt, long a, long b) {
+            return leaf(rt, sBytes(rt, a) + sBytes(rt, b),
+                        sCount(rt, a) + sCount(rt, b),
+                        sAscii(rt, a) && sAscii(rt, b));
+        }
+    }
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v; }
+        static long fixnum(long n) { return n; }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Rt {
+        long[] h = new long[40000];
+        static final class GcT { int[] sp = new int[40000]; }
+        GcT gc = new GcT();
+        int[] lens = new int[40000];
+        int[] cps = new int[40000];
+        int[] asc = new int[40000];
+        long bump = 100;
+        boolean starve = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void setR(int i, long v) { roots.set(i, v); }
+        long alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    static long ropeFromRoots(Rt rt, int base, int n) {
+        if (n == 0) return Str.sEmpty(rt);
+        if (n == 1) return rt.r(base);
+        return ropeNode(rt, base, n);
+    }
+    static int ropeKids(Rt rt, long v) { return olen(rt, v) - Str.RP_KIDS; }
+    static boolean isRope(Rt rt, long v) {
+        return Val.isHeap(v) && rt.gc.sp[(int) v] == TY_ROPE;
+    }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static long ropeNode(Rt rt, int base, int n) {
+        int bytes = 0, cps = 0; boolean ascii = true;
+        for (int i = 0; i < n; i++) {
+            long k = rt.r(base + i);
+            bytes += Str.sBytes(rt, k); cps += Str.sCount(rt, k); ascii = ascii && Str.sAscii(rt, k);
+        }
+        long a = rt.alloc(TY_ROPE, Str.RP_KIDS + n);
+        if (a == 0) return NIL;
+        rt.setSlot(a, Str.RP_BYTES, bytes);
+        rt.setSlot(a, Str.RP_CPS, ((cps << 1) | (ascii ? 1 : 0)));
+        rt.setSlot(a, Str.RP_FLAT, NIL);
+        rt.setSlot(a, Str.RP_HASH, NIL);
+        for (int i = 0; i < n; i++) rt.setSlot(a, Str.RP_KIDS + i, rt.r(base + i));
+        return Val.heap(a);
+    }
+    static long ropeLift(Rt rt, long v, int h) {
+        int base = rt.mark();
+        int ci = rt.push(v);
+        for (int i = 0; i < h; i++) {
+            long w = ropeNode(rt, ci, 1);
+            if (Val.isNil(w)) { rt.popTo(base); return NIL; }
+            rt.setR(ci, w);
+        }
+        long out = rt.r(ci);
+        rt.popTo(base);
+        return out;
+    }
+    static long leaf(Rt rt, int bytes, int cps, boolean ascii) {
+        long a = rt.alloc(TY_STR, bytes);
+        rt.cps[(int) a] = cps; rt.asc[(int) a] = ascii ? 1 : 0;
+        return Val.heap(a);
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long a = leaf(rt, 5, 5, true), b = leaf(rt, 5, 5, true);
+        long c = leaf(rt, 5, 5, true), d = leaf(rt, 5, 5, true);
+        int base = rt.mark();
+        rt.push(a); rt.push(b); rt.push(c); rt.push(d);
+        long tree = ropeNode(rt, base, 4);
+        rt.popTo(base);
+        o.append("whole=").append(ropeSlice(rt, tree, 0, 20) == tree ? 1 : 0).append(' ');
+        o.append("empty=").append(Str.sBytes(rt, ropeSlice(rt, tree, 3, 3))).append(',')
+         .append(Str.sBytes(rt, ropeSlice(rt, tree, 7, 2))).append(' ');
+        long small = ropeSlice(rt, tree, 5, 8);
+        o.append("small=").append(Str.sBytes(rt, small)).append(',')
+         .append(small == b ? 1 : 0).append(' ');
+        long mid = ropeSlice(rt, tree, 5, 15);
+        o.append("mid=").append(Str.sBytes(rt, mid)).append(" shares=")
+         .append(rt.slot(mid, Str.RP_KIDS) == b ? 1 : 0)
+         .append(rt.slot(mid, Str.RP_KIDS + 1) == c ? 1 : 0).append(' ');
+        o.append("clamp=").append(Str.sBytes(rt, ropeSlice(rt, tree, 16, 99)))
+         .append(" rag=").append(Str.sBytes(rt, ropeSlice(rt, tree, 3, 17))).append(' ');
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Str {
+        internal const int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
+        internal const int FANOUT = 3, FLAT_MAX = 8, SLICE_MIN = 4;
+        internal static int SBytes(Probe.Rt rt, long v) { return Probe.SBytesOf(rt, v); }
+        internal static int SCount(Probe.Rt rt, long v) { return Probe.SCountOf(rt, v); }
+        internal static bool SAscii(Probe.Rt rt, long v) { return Probe.SAsciiOf(rt, v); }
+        internal static long SEmpty(Probe.Rt rt) { return Probe.Leaf(rt, 0, 0, true); }
+        internal static long SCopyRange(Probe.Rt rt, long v, int from, int to) {
+            return Probe.Leaf(rt, to - from, to - from, Probe.SAsciiOf(rt, v));
+        }
+        internal static long CopyConcat(Probe.Rt rt, long a, long b) {
+            return Probe.Str.CopyConcat(rt, a, b);
+        }
+    }
+}
+--csharp-head
+    internal static class Obj {
+        internal const int TyRope = 26, TyStr = 2;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    // The siblings emit `Str.SBytes` unqualified; the shipped file gets that
+    // name from `using global::Flint.Rt;`, which a probe has no room for.
+    internal static class Str {
+        internal static int SBytes(Rt rt, long v) { return SBytesOf(rt, v); }
+        internal static int SCount(Rt rt, long v) { return SCountOf(rt, v); }
+        internal static bool SAscii(Rt rt, long v) { return SAsciiOf(rt, v); }
+        internal static long SEmpty(Rt rt) { return Leaf(rt, 0, 0, true); }
+        internal static long SCopyRange(Rt rt, long v, int from, int to) {
+            return Leaf(rt, to - from, to - from, SAsciiOf(rt, v));
+        }
+        internal static long CopyConcat(Rt rt, long a, long b) {
+            return Leaf(rt, SBytesOf(rt, a) + SBytesOf(rt, b),
+                        SCountOf(rt, a) + SCountOf(rt, b),
+                        SAsciiOf(rt, a) && SAsciiOf(rt, b));
+        }
+    }
+    internal static class Rope { internal const int FANOUT = 3; }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long AsFixnum(long v) { return v; }
+        internal static long Fixnum(long n) { return n; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[40000];
+        internal sealed class GcT { internal int[] sp = new int[40000]; }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[40000];
+        internal int[] cps = new int[40000];
+        internal int[] asc = new int[40000];
+        internal long bump = 100;
+        internal bool starve = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal long Alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Val.Nil;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    internal static long RopeFromRoots(Rt rt, int bas, int n) {
+        if (n == 0) return global::Flint.Rt.Str.SEmpty(rt);
+        if (n == 1) return rt.R(bas);
+        return RopeNode(rt, bas, n);
+    }
+    internal static int RopeKids(Rt rt, long v) { return Olen(rt, v) - global::Flint.Rt.Str.RP_KIDS; }
+    internal static bool IsRope(Rt rt, long v) {
+        return Val.IsHeap(v) && rt.gc.sp[(int) v] == Obj.TyRope;
+    }
+    internal static long RopeNode(Rt rt, int bas, int n) {
+        int bytes = 0, cps = 0; bool ascii = true;
+        for (int i = 0; i < n; i++) {
+            long k = rt.R(bas + i);
+            bytes += SBytesOf(rt, k); cps += SCountOf(rt, k); ascii = ascii && SAsciiOf(rt, k);
+        }
+        long a = rt.Alloc(Obj.TyRope, global::Flint.Rt.Str.RP_KIDS + n);
+        if (a == 0) return Val.Nil;
+        rt.SetSlot(a, global::Flint.Rt.Str.RP_BYTES, bytes);
+        rt.SetSlot(a, global::Flint.Rt.Str.RP_CPS, ((cps << 1) | (ascii ? 1 : 0)));
+        rt.SetSlot(a, global::Flint.Rt.Str.RP_FLAT, Val.Nil);
+        rt.SetSlot(a, global::Flint.Rt.Str.RP_HASH, Val.Nil);
+        for (int i = 0; i < n; i++) rt.SetSlot(a, global::Flint.Rt.Str.RP_KIDS + i, rt.R(bas + i));
+        return Val.Heap(a);
+    }
+    internal static long RopeLift(Rt rt, long v, int h) {
+        int bas = rt.Mark();
+        int ci = rt.Push(v);
+        for (int i = 0; i < h; i++) {
+            long w = RopeNode(rt, ci, 1);
+            if (Val.IsNil(w)) { rt.PopTo(bas); return Val.Nil; }
+            rt.SetR(ci, w);
+        }
+        long outv = rt.R(ci);
+        rt.PopTo(bas);
+        return outv;
+    }
+    internal static long Leaf(Rt rt, int bytes, int cps, bool ascii) {
+        long a = rt.Alloc(Obj.TyStr, bytes);
+        rt.cps[(int) a] = cps; rt.asc[(int) a] = ascii ? 1 : 0;
+        return Val.Heap(a);
+    }
+    internal static int SBytesOf(Rt rt, long v) {
+        if (IsRope(rt, v)) return (int) rt.Slot(v, global::Flint.Rt.Str.RP_BYTES);
+        return rt.lens[(int) v];
+    }
+    internal static int SCountOf(Rt rt, long v) {
+        if (IsRope(rt, v)) return (int) (rt.Slot(v, global::Flint.Rt.Str.RP_CPS) >> 1);
+        return rt.cps[(int) v];
+    }
+    internal static bool SAsciiOf(Rt rt, long v) {
+        if (IsRope(rt, v)) return (rt.Slot(v, global::Flint.Rt.Str.RP_CPS) & 1) != 0;
+        return rt.asc[(int) v] != 0;
+    }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long a = Leaf(rt, 5, 5, true), b = Leaf(rt, 5, 5, true);
+        long c = Leaf(rt, 5, 5, true), d = Leaf(rt, 5, 5, true);
+        int bas = rt.Mark();
+        rt.Push(a); rt.Push(b); rt.Push(c); rt.Push(d);
+        long tree = RopeNode(rt, bas, 4);
+        rt.PopTo(bas);
+        o.Append("whole=").Append(RopeSlice(rt, tree, 0, 20) == tree ? 1 : 0).Append(' ');
+        o.Append("empty=").Append(SBytesOf(rt, RopeSlice(rt, tree, 3, 3))).Append(',')
+         .Append(SBytesOf(rt, RopeSlice(rt, tree, 7, 2))).Append(' ');
+        long small = RopeSlice(rt, tree, 5, 8);
+        o.Append("small=").Append(SBytesOf(rt, small)).Append(',')
+         .Append(small == b ? 1 : 0).Append(' ');
+        long mid = RopeSlice(rt, tree, 5, 15);
+        o.Append("mid=").Append(SBytesOf(rt, mid)).Append(" shares=")
+         .Append(rt.Slot(mid, global::Flint.Rt.Str.RP_KIDS) == b ? 1 : 0)
+         .Append(rt.Slot(mid, global::Flint.Rt.Str.RP_KIDS + 1) == c ? 1 : 0).Append(' ');
+        o.Append("clamp=").Append(SBytesOf(rt, RopeSlice(rt, tree, 16, 99)))
+         .Append(" rag=").Append(SBytesOf(rt, RopeSlice(rt, tree, 3, 17))).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }

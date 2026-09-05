@@ -518,39 +518,7 @@ public final class Str {
     /// Both `subs` paths used to copy every byte and one flattened first, which
     /// spends the sharing that is half the point of a rope on the operation
     /// that most wants it (`doc/decisions/0011`).
-    public static long ropeSlice(Rt rt, long v, int from, int to) {
-        if (from >= to) return of(rt, "");
-        int n = sBytes(rt, v);
-        if (to > n) to = n;
-        if (from == 0 && to == n) return v; // the whole thing: share it
-        if (to - from < SLICE_MIN || !isRope(rt, v)) {
-            // Small, or a leaf: copy. `SLICE_MIN` is the retention fix.
-            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-            appendRange(rt, v, from, to, out);
-            return of(rt, new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8));
-        }
-        int base = rt.mark();
-        int vi = rt.push(v);
-        int kids = ropeKids(rt, rt.r(vi));
-        int out = rt.mark();
-        int made = 0, at = 0;
-        for (int i = 0; i < kids; i++) {
-            long k = rt.slot(rt.r(vi), RP_KIDS + i);
-            int w = sBytes(rt, k);
-            if (at + w > from && at < to) {
-                int lo = Math.max(0, from - at);
-                int hi = Math.min(to - at, w);
-                long piece = (lo == 0 && hi == w) ? k : ropeSlice(rt, k, lo, hi);
-                if (piece == Val.NIL) { rt.popTo(base); return Val.NIL; }
-                if (sBytes(rt, piece) > 0) { rt.push(piece); made++; }
-            }
-            at += w;
-            if (at >= to) break;
-        }
-        long r = ropeFromRoots(rt, out, made);
-        rt.popTo(base);
-        return r;
-    }
+    public static long ropeSlice(Rt rt, long v, int from, int to) { return com._3sln.flint.kgen.rt.Ropeslice.ropeSlice(rt, v, from, to); }
 
     /// `31^n`, by squaring: the multiplier that lets two cached hashes join.
     public static int pow31(int n) {
@@ -671,6 +639,13 @@ public final class Str {
     /// the spine above it. NIL when the right spine is full at every level,
     /// which is the only time the caller adds one.
     static long ropeAppend(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Ropecat.ropeAppend(rt, a, b); }
+
+    /// Copy the range out into a fresh string -- the SINK half, see the Rust copy.
+    public static long sCopyRange(Rt rt, long v, int from, int to) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        appendRange(rt, v, from, to, out);
+        return of(rt, new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8));
+    }
 
     /// The empty string, interned -- see the Rust copy.
     public static long sEmpty(Rt rt) { return of(rt, ""); }
