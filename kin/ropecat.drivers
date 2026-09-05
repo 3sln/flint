@@ -1,0 +1,400 @@
+--rust-head
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_ROPE: u8 = 26; const TY_STR: u8 = 2;
+pub mod obj {
+    pub const RP_BYTES: u32 = 0; pub const RP_CPS: u32 = 1;
+    pub const RP_FLAT: u32 = 2; pub const RP_HASH: u32 = 3; pub const RP_KIDS: u32 = 4;
+}
+pub mod rope { pub const FANOUT: u32 = 3; pub const FLAT_MAX: u32 = 8; }
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+struct Gc { sp: Vec<u8> }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, starve: bool,
+            cps: Vec<u32>, asc: Vec<u8> }
+fn ty(sp: &Vec<u8>, a: Addr) -> u8 { sp[a as usize] }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        if self.starve { return 0; }
+        let a = self.bump; self.bump += n as u64 + 1;
+        self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    // A LEAF carries its own byte length, code-point count and ASCII bit, so
+    // the driver can build a non-ASCII leaf and watch the bit propagate.
+    fn leaf(&mut self, bytes: u32, cps: u32, ascii: bool) -> Value {
+        let a = self.alloc(TY_STR, bytes);
+        self.cps[a as usize] = cps; self.asc[a as usize] = ascii as u8;
+        Value::heap(a)
+    }
+    fn olen(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn rope_node(&mut self, base: usize, n: u32) -> Value {
+        let (mut bytes, mut cps, mut ascii) = (0u32, 0u32, true);
+        for i in 0..n {
+            let k = self.r(base + i as usize);
+            bytes += self.s_bytes(k); cps += self.s_count(k); ascii = ascii && self.s_ascii(k);
+        }
+        let a = self.alloc(TY_ROPE, obj::RP_KIDS + n);
+        if a == 0 { return NIL; }
+        self.set_slot(a, obj::RP_BYTES, Value::fixnum(bytes as i64));
+        self.set_slot(a, obj::RP_CPS, Value::fixnum(((cps << 1) | (ascii as u32)) as i64));
+        self.set_slot(a, obj::RP_FLAT, NIL);
+        self.set_slot(a, obj::RP_HASH, NIL);
+        for i in 0..n { let v = self.r(base + i as usize); self.set_slot(a, obj::RP_KIDS + i, v); }
+        Value::heap(a)
+    }
+    fn rope_lift(&mut self, v: Value, h: u32) -> Value {
+        let base = self.mark();
+        let ci = self.push(v);
+        for _ in 0..h {
+            let w = self.rope_node(ci, 1);
+            if w.is_nil() { self.pop_to(base); return NIL; }
+            self.set_r(ci, w);
+        }
+        let out = self.r(ci);
+        self.pop_to(base);
+        out
+    }
+    fn s_bytes(&self, v: Value) -> u32 {
+        if self.is_rope(v) { self.slot(v, obj::RP_BYTES).as_fixnum() as u32 }
+        else { self.lens[v.0 as usize] }
+    }
+    fn s_count(&self, v: Value) -> u32 {
+        if self.is_rope(v) { (self.slot(v, obj::RP_CPS).as_fixnum() as u32) >> 1 }
+        else { self.cps[v.0 as usize] }
+    }
+    fn s_ascii(&self, v: Value) -> bool {
+        if self.is_rope(v) { self.slot(v, obj::RP_CPS).as_fixnum() & 1 != 0 }
+        else { self.asc[v.0 as usize] != 0 }
+    }
+    fn s_empty(&mut self) -> Value { self.leaf(0, 0, true) }
+    // The hand-written sink half: two strings flattened into one leaf. A leaf
+    // is modelled by its measurements here, so joining two adds them.
+    fn copy_concat(&mut self, a: Value, b: Value) -> Value {
+        let (nb, nc) = (self.s_bytes(a) + self.s_bytes(b), self.s_count(a) + self.s_count(b));
+        let asc = self.s_ascii(a) && self.s_ascii(b);
+        self.leaf(nb, nc, asc)
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 40000], gc: Gc { sp: vec![0u8; 40000] },
+                      lens: vec![0; 40000], bump: 100, roots: Vec::new(), starve: false,
+                      cps: vec![0; 40000], asc: vec![0; 40000] };
+    let mut o = String::new();
+    // FLAT_MAX is 8 here, FANOUT is 3.
+    let e = rt.leaf(0, 0, true);
+    let s3 = rt.leaf(3, 3, true);
+    // TIER 1: an empty side is the identity, both ways round.
+    let t1a = rt.s_concat(e, s3); let t1b = rt.s_concat(s3, e);
+    o.push_str(&format!("t1={}{} ", (t1a.0 == s3.0) as u32, (t1b.0 == s3.0) as u32));
+    // TIER 2: both fit one leaf, so no tree.
+    let small = rt.s_concat(s3, s3);
+    o.push_str(&format!("t2={},{} ", rt.is_rope(small) as u32, rt.s_bytes(small)));
+    // TIER 3: repeated joins past FLAT_MAX. Depth must stay LOG, not linear --
+    // this is the regression `scaling.clj` measured at 3.02x.
+    let mut acc = rt.leaf(6, 6, true);
+    for _ in 0..12 {
+        let piece = rt.leaf(6, 6, true);
+        let base = rt.mark();
+        rt.push(acc); rt.push(piece);
+        let out = rt.s_concat(rt.r(base), rt.r(base + 1));
+        rt.pop_to(base);
+        acc = out;
+    }
+    o.push_str(&format!("built={},{},{} ", rt.s_bytes(acc), rt.s_count(acc),
+                        rt.rope_height(acc)));
+    // The ASCII bit survives a join with a non-ASCII piece.
+    let u = rt.leaf(9, 4, false);
+    let mixed = rt.s_concat(acc, u);
+    o.push_str(&format!("mixed={},{},{} ", rt.s_bytes(mixed), rt.s_count(mixed),
+                        rt.s_ascii(mixed) as u32));
+    // A LEAF declines the append -- there is no spine to walk.
+    o.push_str(&format!("leafdecl={} ", rt.rope_append(s3, s3).is_nil() as u32));
+    o.push_str(&format!("kids={} ", rt.rope_kids(acc)));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_ROPE = 26, TY_STR = 2;
+    static final class Str {
+        static final int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
+        static final int FANOUT = 3, FLAT_MAX = 8;
+        static int sBytes(Rt rt, long v) {
+            if (isRope(rt, v)) return (int) rt.slot(v, RP_BYTES);
+            return rt.lens[(int) v];
+        }
+        static int sCount(Rt rt, long v) {
+            if (isRope(rt, v)) return (int) (rt.slot(v, RP_CPS) >> 1);
+            return rt.cps[(int) v];
+        }
+        static boolean sAscii(Rt rt, long v) {
+            if (isRope(rt, v)) return (rt.slot(v, RP_CPS) & 1) != 0;
+            return rt.asc[(int) v] != 0;
+        }
+        static long sEmpty(Rt rt) { return leaf(rt, 0, 0, true); }
+        static long copyConcat(Rt rt, long a, long b) {
+            return leaf(rt, sBytes(rt, a) + sBytes(rt, b),
+                        sCount(rt, a) + sCount(rt, b),
+                        sAscii(rt, a) && sAscii(rt, b));
+        }
+    }
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v; }
+        static long fixnum(long n) { return n; }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Rt {
+        long[] h = new long[40000];
+        static final class GcT { int[] sp = new int[40000]; }
+        GcT gc = new GcT();
+        int[] lens = new int[40000];
+        int[] cps = new int[40000];
+        int[] asc = new int[40000];
+        long bump = 100;
+        boolean starve = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void setR(int i, long v) { roots.set(i, v); }
+        long alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static long ropeNode(Rt rt, int base, int n) {
+        int bytes = 0, cps = 0; boolean ascii = true;
+        for (int i = 0; i < n; i++) {
+            long k = rt.r(base + i);
+            bytes += Str.sBytes(rt, k); cps += Str.sCount(rt, k); ascii = ascii && Str.sAscii(rt, k);
+        }
+        long a = rt.alloc(TY_ROPE, Str.RP_KIDS + n);
+        if (a == 0) return NIL;
+        rt.setSlot(a, Str.RP_BYTES, bytes);
+        rt.setSlot(a, Str.RP_CPS, ((cps << 1) | (ascii ? 1 : 0)));
+        rt.setSlot(a, Str.RP_FLAT, NIL);
+        rt.setSlot(a, Str.RP_HASH, NIL);
+        for (int i = 0; i < n; i++) rt.setSlot(a, Str.RP_KIDS + i, rt.r(base + i));
+        return Val.heap(a);
+    }
+    static long ropeLift(Rt rt, long v, int h) {
+        int base = rt.mark();
+        int ci = rt.push(v);
+        for (int i = 0; i < h; i++) {
+            long w = ropeNode(rt, ci, 1);
+            if (Val.isNil(w)) { rt.popTo(base); return NIL; }
+            rt.setR(ci, w);
+        }
+        long out = rt.r(ci);
+        rt.popTo(base);
+        return out;
+    }
+    static long leaf(Rt rt, int bytes, int cps, boolean ascii) {
+        long a = rt.alloc(TY_STR, bytes);
+        rt.cps[(int) a] = cps; rt.asc[(int) a] = ascii ? 1 : 0;
+        return Val.heap(a);
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long e = leaf(rt, 0, 0, true);
+        long s3 = leaf(rt, 3, 3, true);
+        o.append("t1=").append(sConcat(rt, e, s3) == s3 ? 1 : 0)
+         .append(sConcat(rt, s3, e) == s3 ? 1 : 0).append(' ');
+        long small = sConcat(rt, s3, s3);
+        o.append("t2=").append(isRope(rt, small) ? 1 : 0).append(',')
+         .append(Str.sBytes(rt, small)).append(' ');
+        long acc = leaf(rt, 6, 6, true);
+        for (int k = 0; k < 12; k++) {
+            long piece = leaf(rt, 6, 6, true);
+            int base = rt.mark();
+            rt.push(acc); rt.push(piece);
+            long out = sConcat(rt, rt.r(base), rt.r(base + 1));
+            rt.popTo(base);
+            acc = out;
+        }
+        o.append("built=").append(Str.sBytes(rt, acc)).append(',')
+         .append(Str.sCount(rt, acc)).append(',').append(ropeHeight(rt, acc)).append(' ');
+        long u = leaf(rt, 9, 4, false);
+        long mixed = sConcat(rt, acc, u);
+        o.append("mixed=").append(Str.sBytes(rt, mixed)).append(',')
+         .append(Str.sCount(rt, mixed)).append(',').append(Str.sAscii(rt, mixed) ? 1 : 0).append(' ');
+        o.append("leafdecl=").append(Val.isNil(ropeAppend(rt, s3, s3)) ? 1 : 0).append(' ');
+        o.append("kids=").append(ropeKids(rt, acc)).append(' ');
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Str {
+        internal const int RP_BYTES = 0, RP_CPS = 1, RP_FLAT = 2, RP_HASH = 3, RP_KIDS = 4;
+        internal const int FANOUT = 3, FLAT_MAX = 8;
+        internal static int SBytes(Probe.Rt rt, long v) { return Probe.SBytesOf(rt, v); }
+        internal static int SCount(Probe.Rt rt, long v) { return Probe.SCountOf(rt, v); }
+        internal static bool SAscii(Probe.Rt rt, long v) { return Probe.SAsciiOf(rt, v); }
+        internal static long SEmpty(Probe.Rt rt) { return Probe.Leaf(rt, 0, 0, true); }
+        internal static long CopyConcat(Probe.Rt rt, long a, long b) {
+            return Probe.Str.CopyConcat(rt, a, b);
+        }
+    }
+}
+--csharp-head
+    internal static class Obj {
+        internal const int TyRope = 26, TyStr = 2;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    // The siblings emit `Str.SBytes` unqualified; the shipped file gets that
+    // name from `using global::Flint.Rt;`, which a probe has no room for.
+    internal static class Str {
+        internal static int SBytes(Rt rt, long v) { return SBytesOf(rt, v); }
+        internal static int SCount(Rt rt, long v) { return SCountOf(rt, v); }
+        internal static bool SAscii(Rt rt, long v) { return SAsciiOf(rt, v); }
+        internal static long SEmpty(Rt rt) { return Leaf(rt, 0, 0, true); }
+        internal static long CopyConcat(Rt rt, long a, long b) {
+            return Leaf(rt, SBytesOf(rt, a) + SBytesOf(rt, b),
+                        SCountOf(rt, a) + SCountOf(rt, b),
+                        SAsciiOf(rt, a) && SAsciiOf(rt, b));
+        }
+    }
+    internal static class Rope { internal const int FANOUT = 3; }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long AsFixnum(long v) { return v; }
+        internal static long Fixnum(long n) { return n; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[40000];
+        internal sealed class GcT { internal int[] sp = new int[40000]; }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[40000];
+        internal int[] cps = new int[40000];
+        internal int[] asc = new int[40000];
+        internal long bump = 100;
+        internal bool starve = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal long Alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Val.Nil;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    internal static long RopeNode(Rt rt, int bas, int n) {
+        int bytes = 0, cps = 0; bool ascii = true;
+        for (int i = 0; i < n; i++) {
+            long k = rt.R(bas + i);
+            bytes += SBytesOf(rt, k); cps += SCountOf(rt, k); ascii = ascii && SAsciiOf(rt, k);
+        }
+        long a = rt.Alloc(Obj.TyRope, global::Flint.Rt.Str.RP_KIDS + n);
+        if (a == 0) return Val.Nil;
+        rt.SetSlot(a, global::Flint.Rt.Str.RP_BYTES, bytes);
+        rt.SetSlot(a, global::Flint.Rt.Str.RP_CPS, ((cps << 1) | (ascii ? 1 : 0)));
+        rt.SetSlot(a, global::Flint.Rt.Str.RP_FLAT, Val.Nil);
+        rt.SetSlot(a, global::Flint.Rt.Str.RP_HASH, Val.Nil);
+        for (int i = 0; i < n; i++) rt.SetSlot(a, global::Flint.Rt.Str.RP_KIDS + i, rt.R(bas + i));
+        return Val.Heap(a);
+    }
+    internal static long RopeLift(Rt rt, long v, int h) {
+        int bas = rt.Mark();
+        int ci = rt.Push(v);
+        for (int i = 0; i < h; i++) {
+            long w = RopeNode(rt, ci, 1);
+            if (Val.IsNil(w)) { rt.PopTo(bas); return Val.Nil; }
+            rt.SetR(ci, w);
+        }
+        long outv = rt.R(ci);
+        rt.PopTo(bas);
+        return outv;
+    }
+    internal static long Leaf(Rt rt, int bytes, int cps, bool ascii) {
+        long a = rt.Alloc(Obj.TyStr, bytes);
+        rt.cps[(int) a] = cps; rt.asc[(int) a] = ascii ? 1 : 0;
+        return Val.Heap(a);
+    }
+    internal static int SBytesOf(Rt rt, long v) {
+        if (IsRope(rt, v)) return (int) rt.Slot(v, global::Flint.Rt.Str.RP_BYTES);
+        return rt.lens[(int) v];
+    }
+    internal static int SCountOf(Rt rt, long v) {
+        if (IsRope(rt, v)) return (int) (rt.Slot(v, global::Flint.Rt.Str.RP_CPS) >> 1);
+        return rt.cps[(int) v];
+    }
+    internal static bool SAsciiOf(Rt rt, long v) {
+        if (IsRope(rt, v)) return (rt.Slot(v, global::Flint.Rt.Str.RP_CPS) & 1) != 0;
+        return rt.asc[(int) v] != 0;
+    }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long e = Leaf(rt, 0, 0, true);
+        long s3 = Leaf(rt, 3, 3, true);
+        o.Append("t1=").Append(SConcat(rt, e, s3) == s3 ? 1 : 0)
+         .Append(SConcat(rt, s3, e) == s3 ? 1 : 0).Append(' ');
+        long small = SConcat(rt, s3, s3);
+        o.Append("t2=").Append(IsRope(rt, small) ? 1 : 0).Append(',')
+         .Append(SBytesOf(rt, small)).Append(' ');
+        long acc = Leaf(rt, 6, 6, true);
+        for (int k = 0; k < 12; k++) {
+            long piece = Leaf(rt, 6, 6, true);
+            int bas = rt.Mark();
+            rt.Push(acc); rt.Push(piece);
+            long outv = SConcat(rt, rt.R(bas), rt.R(bas + 1));
+            rt.PopTo(bas);
+            acc = outv;
+        }
+        o.Append("built=").Append(SBytesOf(rt, acc)).Append(',')
+         .Append(SCountOf(rt, acc)).Append(',').Append(RopeHeight(rt, acc)).Append(' ');
+        long u = Leaf(rt, 9, 4, false);
+        long mixed = SConcat(rt, acc, u);
+        o.Append("mixed=").Append(SBytesOf(rt, mixed)).Append(',')
+         .Append(SCountOf(rt, mixed)).Append(',').Append(SAsciiOf(rt, mixed) ? 1 : 0).Append(' ');
+        o.Append("leafdecl=").Append(Val.IsNil(RopeAppend(rt, s3, s3)) ? 1 : 0).Append(' ');
+        o.Append("kids=").Append(RopeKids(rt, acc)).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }

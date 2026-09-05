@@ -480,9 +480,7 @@ public final class Str {
     /// and this is the bound on the scan inside one leaf.
     public static final int INDEX_LEAF = 128;
 
-    public static boolean isRope(Rt rt, long v) {
-        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_ROPE;
-    }
+    public static boolean isRope(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropecat.isRope(rt, v); }
 
     /// Byte length of any string, ALL THREE TIERS, O(1).
     public static int sBytes(Rt rt, long v) {
@@ -503,7 +501,7 @@ public final class Str {
         return isAscii(rt, v);
     }
 
-    static int ropeKids(Rt rt, long v) { return len(rt.gc.sp, Val.asHeap(v)) - RP_KIDS; }
+    static int ropeKids(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropecat.ropeKids(rt, v); }
 
     /// A node over `kids`, whose aggregates are SUMMED from them rather than
     /// derived from their bytes. That is what makes `count` O(1) on a tree.
@@ -660,43 +658,10 @@ public final class Str {
     }
 
     /// `str` of two strings. O(1) once the pieces are big enough to matter.
-    public static long concat(Rt rt, long a, long b) {
-        if (sBytes(rt, a) == 0) return b;
-        if (sBytes(rt, b) == 0) return a;
-        if (sBytes(rt, a) + sBytes(rt, b) <= FLAT_MAX) {
-            // Small enough that a tree would cost more than the copy. This is
-            // the tier that must not be skipped.
-            return copyConcat(rt, a, b);
-        }
-        // Append down the RIGHT SPINE, adding a level only when every node on
-        // it is full.
-        //
-        // This used to widen the root while it had room and otherwise make
-        // `[a, b]` -- which put the whole old tree back as kid 0 and grew the
-        // depth by one every FANOUT appends. Depth was therefore O(n), not
-        // O(log n), and `0011`'s "fanout 16-32, depth is what random access
-        // pays for" was a statement about a tree this did not build. It never
-        // showed because nothing indexed a rope: every path flattened first.
-        long appended = ropeAppend(rt, a, b);
-        if (!Val.isNil(appended)) return appended;
-        int base = rt.mark();
-        int ai = rt.push(a), bi = rt.push(b);
-        // A new level: `b` is lifted to stand as tall as the old root, so the
-        // leaves stay at one depth on this side too.
-        int h = ropeHeight(rt, rt.r(ai));
-        int li = rt.push(ropeLift(rt, rt.r(bi), h));
-        int kbase = rt.mark();
-        rt.push(rt.r(ai)); rt.push(rt.r(li));
-        long outv = ropeNode(rt, kbase, 2);
-        rt.popTo(base);
-        return outv;
-    }
+    public static long concat(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Ropecat.sConcat(rt, a, b); }
 
     /// How many levels of node sit above the leaves. A leaf is 0.
-    static int ropeHeight(Rt rt, long v) {
-        if (!isRope(rt, v)) return 0;
-        return 1 + ropeHeight(rt, rt.slot(v, RP_KIDS));
-    }
+    static int ropeHeight(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropecat.ropeHeight(rt, v); }
 
     /// Wrap `v` in single-kid nodes until it stands `h` levels tall, which is
     /// what keeps every leaf at the SAME depth.
@@ -705,38 +670,7 @@ public final class Str {
     /// Append `b` into the rightmost subtree of `a` that has room, rebuilding
     /// the spine above it. NIL when the right spine is full at every level,
     /// which is the only time the caller adds one.
-    static long ropeAppend(Rt rt, long a, long b) {
-        if (!isRope(rt, a)) return Val.NIL;
-        int n = ropeKids(rt, a);
-        int base = rt.mark();
-        int ai = rt.push(a), bi = rt.push(b);
-        int li = rt.push(rt.slot(rt.r(ai), RP_KIDS + n - 1));
-        // Deepest first: room further down costs no depth at all.
-        long deeper = isRope(rt, rt.r(li)) ? ropeAppend(rt, rt.r(li), rt.r(bi)) : Val.NIL;
-        long outv;
-        if (!Val.isNil(deeper)) {
-            int ni = rt.push(deeper);
-            int kbase = rt.mark();
-            for (int i = 0; i < n - 1; i++) rt.push(rt.slot(rt.r(ai), RP_KIDS + i));
-            rt.push(rt.r(ni));
-            outv = ropeNode(rt, kbase, n);
-        } else if (n < FANOUT) {
-            // Full below, room here: `b` joins as a sibling, LIFTED to the
-            // height its siblings stand at.
-            int h = ropeHeight(rt, rt.r(li));
-            long lifted = ropeLift(rt, rt.r(bi), h);
-            if (Val.isNil(lifted)) { rt.popTo(base); return Val.NIL; }
-            int ni = rt.push(lifted);
-            int kbase = rt.mark();
-            for (int i = 0; i < n; i++) rt.push(rt.slot(rt.r(ai), RP_KIDS + i));
-            rt.push(rt.r(ni));
-            outv = ropeNode(rt, kbase, n + 1);
-        } else {
-            outv = Val.NIL;
-        }
-        rt.popTo(base);
-        return outv;
-    }
+    static long ropeAppend(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Ropecat.ropeAppend(rt, a, b); }
 
     /// The empty string, interned -- see the Rust copy.
     public static long sEmpty(Rt rt) { return of(rt, ""); }

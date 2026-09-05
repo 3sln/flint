@@ -76,9 +76,6 @@ pub const F_UNFLAT_ASSTR: usize = 3;
 
 impl Rt {
     #[inline]
-    pub fn is_rope(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_ROPE
-    }
 
     /// Byte length of any string, all three tiers, O(1).
     pub fn s_bytes(&self, v: Value) -> u32 {
@@ -455,127 +452,10 @@ impl Rt {
         h
     }
 
-    fn rope_kids(&self, v: Value) -> u32 {
-        len(&self.gc.sp, v.as_heap()) - RP_KIDS
-    }
-
-    /// `str` of two strings. O(1) once the pieces are big enough to matter.
-    pub fn s_concat(&mut self, a: Value, b: Value) -> Value {
-        if self.s_bytes(a) == 0 {
-            return b;
-        }
-        if self.s_bytes(b) == 0 {
-            return a;
-        }
-        let total = self.s_bytes(a) + self.s_bytes(b);
-        if total <= FLAT_MAX {
-            // Small enough that a tree would cost more than the copy. This is
-            // the tier that must not be skipped.
-            return self.copy_concat(a, b);
-        }
-        // Append down the RIGHT SPINE, adding a level only when every node on
-        // it is full.
-        //
-        // This used to widen the root while it had room and otherwise make
-        // `[a, b]` -- which put the whole old tree back as kid 0 and grew the
-        // depth by one every FANOUT appends. Depth was therefore O(n), not
-        // O(log n), and `0011`'s "fanout 16-32, depth is what random access
-        // pays for" was a statement about a tree this did not build.
-        //
-        // It never showed because nothing indexed a rope: every path flattened
-        // first. The moment indexing descends instead -- which is the whole
-        // point of the per-node counts -- an O(n)-deep tree makes a walk
-        // quadratic again, in a new place. `test/scaling.clj` put it at 3.02x.
-        let appended = self.rope_append(a, b);
-        if !appended.is_nil() {
-            return appended;
-        }
-        // A new level. `b` is lifted to stand as tall as the old root, so the
-        // leaves stay at one depth on this side too.
-        let base = self.mark();
-        let ai = self.push(a);
-        let bi = self.push(b);
-        let h = self.rope_height(self.r(ai));
-        let lifted = self.rope_lift(self.r(bi), h);
-        let li = self.push(lifted);
-        let kbase = self.mark();
-        let (av, lv) = (self.r(ai), self.r(li));
-        self.push(av);
-        self.push(lv);
-        let out = self.rope_node(kbase, 2);
-        self.pop_to(base);
-        out
-    }
-
-    /// How many levels of node sit above the leaves. A leaf is 0.
-    fn rope_height(&self, v: Value) -> u32 {
-        if !self.is_rope(v) {
-            return 0;
-        }
-        let k = self.slot(v, RP_KIDS);
-        1 + self.rope_height(k)
-    }
 
 
-    /// Append `b` into the rightmost subtree of `a` that has room, rebuilding
-    /// the spine above it. NIL when the right spine is full at every level,
-    /// which is the only time the caller adds a level -- so depth grows
-    /// O(log n) times over n appends rather than O(n/FANOUT) times.
-    /// NIL means DECLINED, and cannot be confused with a result: this answers
-    /// a rebuilt node, and a node is never nil. Both ports already said it this
-    /// way -- Rust said `Option<Value>`, which is the same information in a
-    /// shape only one of the three can spell.
-    fn rope_append(&mut self, a: Value, b: Value) -> Value {
-        if !self.is_rope(a) {
-            return NIL;
-        }
-        let n = self.rope_kids(a);
-        let base = self.mark();
-        let ai = self.push(a);
-        let bi = self.push(b);
-        let last = self.slot(self.r(ai), RP_KIDS + n - 1);
-        let li = self.push(last);
-        // Deepest first: room further down costs no depth at all.
-        let deeper = if self.is_rope(self.r(li)) {
-            let (l, bv) = (self.r(li), self.r(bi));
-            self.rope_append(l, bv)
-        } else {
-            NIL
-        };
-        let out = if !deeper.is_nil() {
-            let ni = self.push(deeper);
-            let kbase = self.mark();
-            for i in 0..n - 1 {
-                let k = self.slot(self.r(ai), RP_KIDS + i);
-                self.push(k);
-            }
-            let tail = self.r(ni);
-            self.push(tail);
-            self.rope_node(kbase, n)
-        } else if n < FANOUT {
-            // The right spine is full below, but this node has room: `b` joins
-            // as a sibling, LIFTED to the height its siblings stand at.
-            let h = self.rope_height(self.r(li));
-            let lifted = self.rope_lift(self.r(bi), h);
-            if lifted.is_nil() {
-                self.pop_to(base);
-                return NIL;
-            }
-            let ni = self.push(lifted);
-            let kbase = self.mark();
-            for i in 0..n {
-                let k = self.slot(self.r(ai), RP_KIDS + i);
-                self.push(k);
-            }
-            let tail = self.r(ni);
-            self.push(tail);
-            self.rope_node(kbase, n + 1)
-        } else {
-            NIL
-        };
-        self.pop_to(base);
-        out
-    }
+
+
 
 
     /// The empty string. INTERNED rather than allocated, unlike `b_empty`'s

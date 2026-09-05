@@ -444,8 +444,7 @@ public static class Str {
     /// and this is the bound on the scan inside one leaf.
     public const int INDEX_LEAF = 128;
 
-    public static bool IsRope(Rt rt, long v) =>
-        Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyRope;
+    public static bool IsRope(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Ropecat.IsRope(rt, v);
 
     /// Byte length of any string, ALL THREE TIERS, O(1).
     public static int SBytes(Rt rt, long v) {
@@ -464,7 +463,7 @@ public static class Str {
         return IsAscii(rt, v);
     }
 
-    static int RopeKids(Rt rt, long v) => Obj.Len(rt.gc.sp, Val.AsHeap(v)) - RP_KIDS;
+    static int RopeKids(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Ropecat.RopeKids(rt, v);
 
     /// Bytes `[from, to)` appended WITHOUT materialising the tree.
     static void AppendRange(Rt rt, long v, int from, int to, System.IO.MemoryStream outv) {
@@ -627,37 +626,10 @@ public static class Str {
     static long RopeNode(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Ropenode.RopeNode(rt, bas, n); }
 
     /// `str` of two strings. O(1) once the pieces are big enough to matter.
-    public static long Concat(Rt rt, long a, long b) {
-        if (SBytes(rt, a) == 0) return b;
-        if (SBytes(rt, b) == 0) return a;
-        if (SBytes(rt, a) + SBytes(rt, b) <= FLAT_MAX) {
-            // Small enough that a tree would cost more than the copy. This is
-            // the tier that must not be skipped.
-            return CopyConcat(rt, a, b);
-        }
-        // Append down the RIGHT SPINE, adding a level only when every node on it
-        // is full. This used to widen the root while it had room and otherwise
-        // make `[a, b]` -- which put the whole old tree back as kid 0 and grew
-        // the depth by one every FANOUT appends, so depth was O(n) rather than
-        // O(log n). It never showed because nothing indexed a rope: every path
-        // flattened first.
-        long appended = RopeAppend(rt, a, b);
-        if (!Val.IsNil(appended)) return appended;
-        int bas2 = rt.Mark();
-        int a2 = rt.Push(a), b2 = rt.Push(b);
-        // A new level: `b` is lifted to stand as tall as the old root.
-        int h2 = RopeHeight(rt, rt.R(a2));
-        int l2 = rt.Push(RopeLift(rt, rt.R(b2), h2));
-        int kbas2 = rt.Mark();
-        rt.Push(rt.R(a2)); rt.Push(rt.R(l2));
-        long outv2 = RopeNode(rt, kbas2, 2);
-        rt.PopTo(bas2);
-        return outv2;
-    }
+    public static long Concat(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Ropecat.SConcat(rt, a, b); }
 
     /// How many levels of node sit above the leaves. A leaf is 0.
-    static int RopeHeight(Rt rt, long v) =>
-        IsRope(rt, v) ? 1 + RopeHeight(rt, rt.Slot(v, RP_KIDS)) : 0;
+    static int RopeHeight(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Ropecat.RopeHeight(rt, v);
 
     /// Wrap `v` in single-kid nodes until it stands `h` levels tall, which is
     /// what keeps every leaf at the SAME depth.
@@ -665,38 +637,7 @@ public static class Str {
 
     /// Append `b` into the rightmost subtree of `a` that has room, rebuilding
     /// the spine above it. Nil when the right spine is full at every level.
-    static long RopeAppend(Rt rt, long a, long b) {
-        if (!IsRope(rt, a)) return Val.Nil;
-        int n = RopeKids(rt, a);
-        int bas = rt.Mark();
-        int ai = rt.Push(a), bi = rt.Push(b);
-        int li = rt.Push(rt.Slot(rt.R(ai), RP_KIDS + n - 1));
-        // Deepest first: room further down costs no depth at all.
-        long deeper = IsRope(rt, rt.R(li)) ? RopeAppend(rt, rt.R(li), rt.R(bi)) : Val.Nil;
-        long outv;
-        if (!Val.IsNil(deeper)) {
-            int ni = rt.Push(deeper);
-            int kbas = rt.Mark();
-            for (int i = 0; i < n - 1; i++) rt.Push(rt.Slot(rt.R(ai), RP_KIDS + i));
-            rt.Push(rt.R(ni));
-            outv = RopeNode(rt, kbas, n);
-        } else if (n < FANOUT) {
-            // Full below, room here: `b` joins as a sibling, LIFTED to the
-            // height its siblings stand at.
-            int h = RopeHeight(rt, rt.R(li));
-            long lifted = RopeLift(rt, rt.R(bi), h);
-            if (Val.IsNil(lifted)) { rt.PopTo(bas); return Val.Nil; }
-            int ni = rt.Push(lifted);
-            int kbas = rt.Mark();
-            for (int i = 0; i < n; i++) rt.Push(rt.Slot(rt.R(ai), RP_KIDS + i));
-            rt.Push(rt.R(ni));
-            outv = RopeNode(rt, kbas, n + 1);
-        } else {
-            outv = Val.Nil;
-        }
-        rt.PopTo(bas);
-        return outv;
-    }
+    static long RopeAppend(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Ropecat.RopeAppend(rt, a, b); }
 
     /// The empty string, interned -- see the Rust copy.
     public static long SEmpty(Rt rt) { return Of(rt, ""); }

@@ -1,0 +1,125 @@
+;; Joining two strings, and the append that keeps the tree log-deep.
+;;
+;; THREE TIERS, in the order `s-concat` tries them:
+;;
+;;   1. either side empty  -- the other side, unchanged
+;;   2. small enough       -- COPY into one leaf, no tree at all
+;;   3. otherwise          -- append down the RIGHT SPINE, and only add a
+;;                            level when every node on it is full
+;;
+;; Tier 3 is the one with history. It used to widen the root while it had room
+;; and otherwise build `[old, new]`, which put the whole old tree back as child
+;; zero and grew the depth by one every `FANOUT` appends -- so depth was O(n),
+;; not O(log n), and `doc/decisions/0011`'s "fanout 16-32, depth is what random
+;; access pays for" described a tree this did not build. It never showed while
+;; nothing indexed a rope, because every path flattened first; the moment
+;; indexing descends instead, an O(n)-deep tree makes the walk quadratic in a
+;; new place. `test/scaling.clj` measured 3.02x.
+(ns flint.rt.ropecat
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == < <= + - not nil? is-heap as-heap ty
+                                   for local set olen slot
+                                   mark push r pop-to
+                                   s-bytes s-concat-copy
+                                   Rt Value RootIx I32 Bool NIL
+                                   TY_ROPE FLAT_MAX FANOUT RP_KIDS]]
+            [flint.rt.ropenode :refer [rope-node rope-lift]]))
+
+(doc "Is `v` the NODE tier -- a tree rather than a leaf or an inline string?")
+(defn ^:pub ^:method ^Bool is-rope [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_ROPE)))
+
+(doc "How many children this node has.")
+(defn ^:pub ^:method ^I32 rope-kids [^Rt rt ^Value v]
+  (return (- (olen rt v) RP_KIDS)))
+
+(doc "How many levels of node stand above the leaves, 0 for a leaf itself."
+     ""
+     "Reads CHILD ZERO and recurses, which is exact because a node's children"
+     "are all the same height -- the invariant `rope-lift` exists to keep.")
+(defn ^:pub ^:method ^I32 rope-height [^Rt rt ^Value v]
+  (if (not (is-rope rt v))
+    (return 0))
+  (return (+ 1 (rope-height rt (slot rt v RP_KIDS)))))
+
+(doc "Append `b` into the rightmost subtree of `a` that has room."
+     ""
+     "NIL when the right spine is full at every level, which is the ONLY time"
+     "the caller adds one -- so depth grows O(log n) times over n appends"
+     "rather than O(n/FANOUT) times."
+     ""
+     "DEEPEST FIRST: room further down costs no depth at all, and only when"
+     "nothing below has room does this node take `b` as a sibling.")
+(defn ^:pub ^:method ^Value rope-append [^:mut ^Rt rt ^Value a ^Value b]
+  (if (not (is-rope rt a))
+    (return NIL))
+  (let [^I32 n (rope-kids rt a)
+        ^RootIx base (mark rt)
+        ^RootIx ai (push rt a)
+        ^RootIx bi (push rt b)
+        ^Value last (slot rt (r rt ai) (+ RP_KIDS (- n 1)))
+        ^RootIx li (push rt last)]
+    (local ^:mut ^Value deeper)
+    (set deeper NIL)
+    (if (is-rope rt (r rt li))
+      (set deeper (rope-append rt (r rt li) (r rt bi))))
+    (if (not (nil? rt deeper))
+      (do
+        (let [^RootIx ni (push rt deeper)
+              ^RootIx kbase (mark rt)]
+          (for [^I32 i 0 (- n 1)]
+            (push rt (slot rt (r rt ai) (+ RP_KIDS i))))
+          (push rt (r rt ni))
+          (let [^Value out (rope-node rt kbase n)]
+            (pop-to rt base)
+            (return out)))))
+    (if (< n FANOUT)
+      (do
+        (comment "The spine is full below, but this node has room: `b` joins"
+                 "as a sibling, LIFTED to the height its siblings stand at, or"
+                 "the tree goes ragged and the depth grows linearly again.")
+        (let [^I32 h (rope-height rt (r rt li))
+              ^Value lifted (rope-lift rt (r rt bi) h)]
+          (if (nil? rt lifted)
+            (do (pop-to rt base)
+                (return NIL)))
+          (let [^RootIx ni (push rt lifted)
+                ^RootIx kbase (mark rt)]
+            (for [^I32 i 0 n]
+              (push rt (slot rt (r rt ai) (+ RP_KIDS i))))
+            (push rt (r rt ni))
+            (let [^Value out (rope-node rt kbase (+ n 1))]
+              (pop-to rt base)
+              (return out))))))
+    (pop-to rt base)
+    (return NIL)))
+
+(doc "`a` followed by `b`, as a string.")
+(defn ^:pub ^:method ^Value s-concat [^:mut ^Rt rt ^Value a ^Value b]
+  (if (== (s-bytes rt a) 0)
+    (return b))
+  (if (== (s-bytes rt b) 0)
+    (return a))
+  (comment "Small enough that a tree would cost more in metadata than the copy"
+           "saves. This is the tier that must NOT be skipped.")
+  (if (<= (+ (s-bytes rt a) (s-bytes rt b)) FLAT_MAX)
+    (return (s-concat-copy rt a b)))
+  (let [^Value appended (rope-append rt a b)]
+    (if (not (nil? rt appended))
+      (return appended)))
+  (comment "A NEW LEVEL, and `b` is lifted to stand as tall as the old root so"
+           "the leaves stay at one depth on this side too.")
+  (let [^RootIx base (mark rt)
+        ^RootIx ai (push rt a)
+        ^RootIx bi (push rt b)
+        ^I32 h (rope-height rt (r rt ai))
+        ^Value lifted (rope-lift rt (r rt bi) h)
+        ^RootIx li (push rt lifted)
+        ^RootIx kbase (mark rt)]
+    (push rt (r rt ai))
+    (push rt (r rt li))
+    (let [^Value out (rope-node rt kbase 2)]
+      (pop-to rt base)
+      (return out))))
