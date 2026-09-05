@@ -114,7 +114,7 @@ public final class Bytes {
     /// and the caller pops -- see the Rust and C# copies, which say the same.
     static long node(Rt rt, int base, int n) { return com._3sln.flint.kgen.rt.Bytenode.bNode(rt, base, n); }
 
-    static long copyConcat(Rt rt, long a, long b) {
+    public static long copyConcat(Rt rt, long a, long b) {
         byte[] x = toArray(rt, a), y = toArray(rt, b);
         byte[] both = new byte[x.length + y.length];
         System.arraycopy(x, 0, both, 0, x.length);
@@ -122,107 +122,15 @@ public final class Bytes {
         return of(rt, both);
     }
 
-    public static long concat(Rt rt, long a, long b) {
-        if (count(rt, a) == 0) return b;
-        if (count(rt, b) == 0) return a;
-        if (count(rt, a) + count(rt, b) <= FLAT_MAX) {
-            // Below the threshold a tree costs more in metadata than the copy
-            // saves. This tier must not be skipped -- and it is also what makes
-            // incremental building quadratic, which is what the transient is for.
-            return copyConcat(rt, a, b);
-        }
-        int base = rt.mark();
-        int ai = rt.push(a), bi = rt.push(b);
-        long outv;
-        // First: a small `b` is merged into the RIGHTMOST LEAF rather than
-        // given a leaf of its own. Without this, appending a byte at a time
-        // makes one heap object per byte and rebuilds the spine each time.
-        // Merging bounds the leaf count at `total / FLAT_MAX`.
-        if (count(rt, rt.r(bi)) <= FLAT_MAX / 2) {
-            long merged = mergeRight(rt, rt.r(ai), rt.r(bi));
-            if (!Val.isNil(merged)) { rt.popTo(base); return merged; }
-        }
-        // Then: push `b` down the RIGHT SPINE into the deepest node with room.
-        // Absorbing at the TOP instead builds a left spine -- the top fills
-        // after sixteen joins, wraps, and depth grows by one every sixteen.
-        // Twenty thousand joins was depth 1,250, and the recursive walk ran the
-        // shadow stack off the end. Descending first keeps it a B-tree: twenty
-        // thousand leaves is depth four.
-        long absorbed = absorb(rt, rt.r(ai), rt.r(bi));
-        if (!Val.isNil(absorbed)) { rt.popTo(base); return absorbed; }
-        // Neither side had room, so a new level. BOTH sides are promoted to the
-        // same depth first: a node reads its depth off child zero, so pairing a
-        // deep node with a bare leaf makes the node claim a depth one child
-        // does not have, and later appends descend into the wrong place.
-        int d = Math.max(depth(rt, rt.r(ai)), depth(rt, rt.r(bi)));
-        int pa = rt.push(wrapTo(rt, rt.r(ai), d));
-        int pb = rt.push(wrapTo(rt, rt.r(bi), d));
-        outv = node(rt, pa, 2);
-        rt.popTo(base);
-        return outv;
-    }
+    public static long concat(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Byteconcat.bConcat(rt, a, b); }
 
     /// `a`'s rightmost leaf followed by `b`, if the two fit in one leaf. NIL if
     /// they do not, or if there is no leaf to merge into.
-    static long mergeRight(Rt rt, long a, long b) {
-        if (!Val.isHeap(a)) return Val.NIL;
-        int t = ty(rt.gc.sp, Val.asHeap(a));
-        if (t == TY_BYTES) {
-            return len(rt.gc.sp, Val.asHeap(a)) + count(rt, b) <= FLAT_MAX
-                 ? copyConcat(rt, a, b) : Val.NIL;
-        }
-        if (t != TY_BROPE) return Val.NIL;
-        int n = len(rt.gc.sp, Val.asHeap(a)) - BB_KIDS;
-        int base = rt.mark();
-        int ai = rt.push(a), bi = rt.push(b);
-        long merged = mergeRight(rt, rt.slot(rt.r(ai), BB_KIDS + n - 1), rt.r(bi));
-        if (Val.isNil(merged)) { rt.popTo(base); return Val.NIL; }
-        int mi = rt.push(merged);
-        int kbase = rt.mark();
-        for (int i = 0; i < n - 1; i++) rt.push(rt.slot(rt.r(ai), BB_KIDS + i));
-        rt.push(rt.r(mi));
-        long outv = node(rt, kbase, n);
-        rt.popTo(base);
-        return outv;
-    }
+    static long mergeRight(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Byteconcat.bMergeRight(rt, a, b); }
 
     /// Put `b` in the deepest node on `a`'s right spine that has room, or NIL.
     /// Depth is UNCHANGED when this succeeds, which is the whole point.
-    static long absorb(Rt rt, long a, long b) {
-        if (!Val.isHeap(a) || ty(rt.gc.sp, Val.asHeap(a)) != TY_BROPE) return Val.NIL;
-        int n = len(rt.gc.sp, Val.asHeap(a)) - BB_KIDS;
-        int da = depth(rt, a);
-        // A node's children are all the same depth, so anything as deep as this
-        // node cannot go inside it.
-        if (depth(rt, b) >= da) return Val.NIL;
-        int base = rt.mark();
-        int ai = rt.push(a), bi = rt.push(b);
-        // Deepest FIRST: only if the last child cannot take it does this node
-        // take it, and only if neither can does the caller wrap.
-        long down = absorb(rt, rt.slot(rt.r(ai), BB_KIDS + n - 1), rt.r(bi));
-        if (!Val.isNil(down)) {
-            int di = rt.push(down);
-            int kbase = rt.mark();
-            for (int i = 0; i < n - 1; i++) rt.push(rt.slot(rt.r(ai), BB_KIDS + i));
-            rt.push(rt.r(di));
-            long outv = node(rt, kbase, n);
-            rt.popTo(base);
-            return outv;
-        }
-        if (n < FANOUT) {
-            // Promoted to this node's child depth, so every child stays the
-            // same depth and the next append can descend into it.
-            int wi = rt.push(wrapTo(rt, rt.r(bi), da - 1));
-            int kbase = rt.mark();
-            for (int i = 0; i < n; i++) rt.push(rt.slot(rt.r(ai), BB_KIDS + i));
-            rt.push(rt.r(wi));
-            long outv = node(rt, kbase, n + 1);
-            rt.popTo(base);
-            return outv;
-        }
-        rt.popTo(base);
-        return Val.NIL;
-    }
+    static long absorb(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Byteconcat.bAbsorb(rt, a, b); }
 
     /// A contiguous copy, CACHED on the node so a second walk is free.
     public static long flatten(Rt rt, long v) {

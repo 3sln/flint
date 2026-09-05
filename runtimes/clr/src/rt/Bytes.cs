@@ -111,7 +111,7 @@ public static class Bytes {
     /// and the caller pops -- see the Rust and Java copies, which say the same.
     static long Node(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Bytenode.BNode(rt, bas, n); }
 
-    static long CopyConcat(Rt rt, long a, long b) {
+    public static long CopyConcat(Rt rt, long a, long b) {
         byte[] x = ToArray(rt, a), y = ToArray(rt, b);
         byte[] both = new byte[x.Length + y.Length];
         System.Array.Copy(x, 0, both, 0, x.Length);
@@ -119,107 +119,15 @@ public static class Bytes {
         return Of(rt, both);
     }
 
-    public static long Concat(Rt rt, long a, long b) {
-        if (Count(rt, a) == 0) return b;
-        if (Count(rt, b) == 0) return a;
-        if (Count(rt, a) + Count(rt, b) <= FLAT_MAX) {
-            // Below the threshold a tree costs more in metadata than the copy
-            // saves. This tier must not be skipped -- and it is also what makes
-            // incremental building quadratic, which is what the transient is for.
-            return CopyConcat(rt, a, b);
-        }
-        int bas = rt.Mark();
-        int ai = rt.Push(a), bi = rt.Push(b);
-        long outv;
-        // First: a small `b` is merged into the RIGHTMOST LEAF rather than
-        // given a leaf of its own. Without this, appending a byte at a time
-        // makes one heap object per byte and rebuilds the spine each time.
-        // Merging bounds the leaf count at `total / FLAT_MAX`.
-        if (Count(rt, rt.R(bi)) <= FLAT_MAX / 2) {
-            long merged = MergeRight(rt, rt.R(ai), rt.R(bi));
-            if (!Val.IsNil(merged)) { rt.PopTo(bas); return merged; }
-        }
-        // Then: push `b` down the RIGHT SPINE into the deepest node with room.
-        // Absorbing at the TOP instead builds a left spine -- the top fills
-        // after sixteen joins, wraps, and depth grows by one every sixteen.
-        // Twenty thousand joins was depth 1,250, and the recursive walk ran the
-        // shadow stack off the end. Descending first keeps it a B-tree: twenty
-        // thousand leaves is depth four.
-        long absorbed = Absorb(rt, rt.R(ai), rt.R(bi));
-        if (!Val.IsNil(absorbed)) { rt.PopTo(bas); return absorbed; }
-        // Neither side had room, so a new level. BOTH sides are promoted to the
-        // same depth first: a node reads its depth off child zero, so pairing a
-        // deep node with a bare leaf makes the node claim a depth one child
-        // does not have, and later appends descend into the wrong place.
-        int d = System.Math.Max(Depth(rt, rt.R(ai)), Depth(rt, rt.R(bi)));
-        int pa = rt.Push(WrapTo(rt, rt.R(ai), d));
-        int pb = rt.Push(WrapTo(rt, rt.R(bi), d));
-        outv = Node(rt, pa, 2);
-        rt.PopTo(bas);
-        return outv;
-    }
+    public static long Concat(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Byteconcat.BConcat(rt, a, b); }
 
     /// `a`'s rightmost leaf followed by `b`, if the two fit in one leaf. NIL if
     /// they do not, or if there is no leaf to merge into.
-    static long MergeRight(Rt rt, long a, long b) {
-        if (!Val.IsHeap(a)) return Val.Nil;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(a));
-        if (t == Obj.TyBytes) {
-            return Obj.Len(rt.gc.sp, Val.AsHeap(a)) + Count(rt, b) <= FLAT_MAX
-                 ? CopyConcat(rt, a, b) : Val.Nil;
-        }
-        if (t != Obj.TyBrope) return Val.Nil;
-        int n = Obj.Len(rt.gc.sp, Val.AsHeap(a)) - BB_KIDS;
-        int bas = rt.Mark();
-        int ai = rt.Push(a), bi = rt.Push(b);
-        long merged = MergeRight(rt, rt.Slot(rt.R(ai), BB_KIDS + n - 1), rt.R(bi));
-        if (Val.IsNil(merged)) { rt.PopTo(bas); return Val.Nil; }
-        int mi = rt.Push(merged);
-        int kbase = rt.Mark();
-        for (int i = 0; i < n - 1; i++) rt.Push(rt.Slot(rt.R(ai), BB_KIDS + i));
-        rt.Push(rt.R(mi));
-        long outv = Node(rt, kbase, n);
-        rt.PopTo(bas);
-        return outv;
-    }
+    static long MergeRight(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Byteconcat.BMergeRight(rt, a, b); }
 
     /// Put `b` in the deepest node on `a`'s right spine that has room, or NIL.
     /// Depth is UNCHANGED when this succeeds, which is the whole point.
-    static long Absorb(Rt rt, long a, long b) {
-        if (!Val.IsHeap(a) || Obj.Ty(rt.gc.sp, Val.AsHeap(a)) != Obj.TyBrope) return Val.Nil;
-        int n = Obj.Len(rt.gc.sp, Val.AsHeap(a)) - BB_KIDS;
-        int da = Depth(rt, a);
-        // A node's children are all the same depth, so anything as deep as this
-        // node cannot go inside it.
-        if (Depth(rt, b) >= da) return Val.Nil;
-        int bas = rt.Mark();
-        int ai = rt.Push(a), bi = rt.Push(b);
-        // Deepest FIRST: only if the last child cannot take it does this node
-        // take it, and only if neither can does the caller wrap.
-        long down = Absorb(rt, rt.Slot(rt.R(ai), BB_KIDS + n - 1), rt.R(bi));
-        if (!Val.IsNil(down)) {
-            int di = rt.Push(down);
-            int kbase = rt.Mark();
-            for (int i = 0; i < n - 1; i++) rt.Push(rt.Slot(rt.R(ai), BB_KIDS + i));
-            rt.Push(rt.R(di));
-            long outv = Node(rt, kbase, n);
-            rt.PopTo(bas);
-            return outv;
-        }
-        if (n < FANOUT) {
-            // Promoted to this node's child depth, so every child stays the
-            // same depth and the next append can descend into it.
-            int wi = rt.Push(WrapTo(rt, rt.R(bi), da - 1));
-            int kbase = rt.Mark();
-            for (int i = 0; i < n; i++) rt.Push(rt.Slot(rt.R(ai), BB_KIDS + i));
-            rt.Push(rt.R(wi));
-            long outv = Node(rt, kbase, n + 1);
-            rt.PopTo(bas);
-            return outv;
-        }
-        rt.PopTo(bas);
-        return Val.Nil;
-    }
+    static long Absorb(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Byteconcat.BAbsorb(rt, a, b); }
 
     /// A contiguous copy, CACHED on the node so a second walk is free.
     public static long Flatten(Rt rt, long v) {

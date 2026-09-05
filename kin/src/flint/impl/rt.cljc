@@ -247,7 +247,13 @@
    'TAIL_CAP {:rust "crate::bytes::TAIL_CAP" :java "Bytes.TAIL_CAP" :csharp "global::Flint.Rt.Bytes.TAIL_CAP"}
    'BB_FLAT {:rust "crate::bytes::BB_FLAT" :java "Bytes.BB_FLAT" :csharp "global::Flint.Rt.Bytes.BB_FLAT"}
    'BB_HASH {:rust "crate::bytes::BB_HASH" :java "Bytes.BB_HASH" :csharp "global::Flint.Rt.Bytes.BB_HASH"}
-   'BB_KIDS {:rust "crate::bytes::BB_KIDS" :java "Bytes.BB_KIDS" :csharp "global::Flint.Rt.Bytes.BB_KIDS"}}
+   'BB_KIDS {:rust "crate::bytes::BB_KIDS" :java "Bytes.BB_KIDS" :csharp "global::Flint.Rt.Bytes.BB_KIDS"}
+   ;; The two tier numbers, which are `rope.rs`'s and are shared with `Str`.
+   ;; Rust defines them there and `Bytes` uses them; both ports keep their own
+   ;; copy on `Bytes`. That is a divergence in WHERE, not in what, so the name
+   ;; table is exactly the right place for it -- one entry, three paths.
+   'FLAT_MAX {:rust "crate::rope::FLAT_MAX" :java "Bytes.FLAT_MAX" :csharp "global::Flint.Rt.Bytes.FLAT_MAX"}
+   'FANOUT {:rust "crate::rope::FANOUT" :java "Bytes.FANOUT" :csharp "global::Flint.Rt.Bytes.FANOUT"}}
   ;; The node and category constants. All three targets spell these
   ;; IDENTICALLY, so every entry below is three copies of one string -- and
   ;; they are written down anyway.
@@ -767,6 +773,12 @@
                            :java "{0}.throwStr({1}, {2})"
                            :csharp "{0}.ThrowStr({1}, {2})"}
                           {:tag Value})
+
+    ;; THE HALF OF `Bytes` THAT IS NOT GENERATED. `b_copy_concat` flattens two
+    ;; values into one leaf, which needs a byte sink -- a growable host array
+    ;; of bytes -- and that is hole 5's other half, still open. So the tree
+    ;; half calls across to it, which is what `sibling` is for.
+    'b-copy-concat (sibling "b_copy_concat" "Bytes" "copyConcat" "CopyConcat" 2)
 
     'alloc (core/call {:rust "{0}.alloc({1}, {2})"
                        :java "{0}.alloc({1}, {2})"

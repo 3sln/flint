@@ -136,183 +136,18 @@ impl Rt {
 
 
 
-    fn b_copy_concat(&mut self, a: Value, b: Value) -> Value {
+    /// `pub(crate)` because `kgen::rt::bytenode` calls it: the tree half of
+    /// `Bytes` is generated and this half is not, so the boundary between
+    /// them is a module boundary now.
+    pub(crate) fn b_copy_concat(&mut self, a: Value, b: Value) -> Value {
         let mut out = alloc::vec::Vec::with_capacity((self.b_count(a) + self.b_count(b)) as usize);
         self.b_append(a, &mut out);
         self.b_append(b, &mut out);
         self.new_bytes(&out)
     }
 
-    pub fn b_concat(&mut self, a: Value, b: Value) -> Value {
-        if self.b_count(a) == 0 {
-            return b;
-        }
-        if self.b_count(b) == 0 {
-            return a;
-        }
-        if self.b_count(a) + self.b_count(b) <= FLAT_MAX {
-            // Below the threshold a tree costs more in metadata than the copy
-            // saves. This is the tier that must not be skipped -- and it is
-            // also the tier that makes incremental building quadratic, which
-            // is what the transient is for.
-            return self.b_copy_concat(a, b);
-        }
-        // First: if `b` is small, merge it into the RIGHTMOST LEAF rather than
-        // giving it a leaf of its own.
-        //
-        // Without this, appending a byte at a time makes one heap object per
-        // byte and rebuilds the spine each time -- measured at 6.8 allocations
-        // and 450 bytes of churn per append, with the live set growing
-        // linearly. Past about 45 000 bytes the live set outgrows the 2 MB
-        // nursery, every minor collection promotes, and the old generation's
-        // mark-sweep starts running over an ever-larger heap. It stops looking
-        // like a slow program and starts looking like a hung one.
-        //
-        // Merging bounds the leaf count at `total / FLAT_MAX` instead of one
-        // per append. The copy is bounded by `FLAT_MAX`, which is what makes
-        // it worth doing at all.
-        if self.b_count(b) <= FLAT_MAX / 2 {
-            let merged = self.b_merge_right(a, b);
-            if !merged.is_nil() {
-                return merged;
-            }
-        }
-        // Push `b` down the RIGHT SPINE into the deepest node that has room.
-        //
-        // The obvious version -- absorb into the top node while it has fewer
-        // than FANOUT children, otherwise wrap -- builds a left spine: the top
-        // fills after sixteen joins, wraps, fills again, and depth grows by one
-        // every sixteen. Twenty thousand joins is depth 1,250, `b_at` is
-        // O(depth), and the recursive walk in `b_append` runs the shadow stack
-        // off the end. It read back as `memory access out of bounds`, which
-        // names neither the tree nor the recursion.
-        //
-        // Descending first keeps it a B-tree: twenty thousand leaves is depth
-        // four.
-        let absorbed = self.b_absorb(a, b);
-        if !absorbed.is_nil() {
-            return absorbed;
-        }
-        // Neither side had room, so a new level. BOTH sides are promoted to the
-        // same depth first: a node's children must be uniform, and pairing a
-        // deep node with a bare leaf here is what broke the invariant the
-        // absorb above depends on -- `b_node` reads the depth off child zero,
-        // so the node claimed a depth one of its children did not have, and
-        // later appends descended into the wrong place.
-        let base = self.mark();
-        self.push(a);
-        self.push(b);
-        let d = self.b_depth(self.r(base)).max(self.b_depth(self.r(base + 1)));
-        let pa = self.b_wrap_to(self.r(base), d);
-        self.push(pa);
-        let pb = self.b_wrap_to(self.r(base + 1), d);
-        self.push(pb);
-        let out = self.b_node(base + 2, 2);
-        self.pop_to(base);
-        out
-    }
 
-    /// Replace `a`'s rightmost leaf with that leaf followed by `b`, if the two
-    /// fit in one leaf. NIL if they do not, or if there is no leaf to merge
-    /// into.
-    /// NIL means DECLINED, and cannot be confused with a result: this answers
-    /// a merged node, and a merged node is never nil. Both ports already said
-    /// it this way; Rust said `Option<Value>`, which is the same information
-    /// in a shape only one of the three can spell.
-    fn b_merge_right(&mut self, a: Value, b: Value) -> Value {
-        if !a.is_heap() {
-            return NIL;
-        }
-        match ty(&self.gc.sp, a.as_heap()) {
-            TY_BYTES => {
-                if len(&self.gc.sp, a.as_heap()) + self.b_count(b) <= FLAT_MAX {
-                    self.b_copy_concat(a, b)
-                } else {
-                    NIL
-                }
-            }
-            TY_BROPE => {
-                let n = len(&self.gc.sp, a.as_heap()) - BB_KIDS;
-                let base = self.mark();
-                self.push(a);
-                self.push(b);
-                let last = self.slot(self.r(base), BB_KIDS + n - 1);
-                let merged = self.b_merge_right(last, self.r(base + 1));
-                if merged.is_nil() {
-                    self.pop_to(base);
-                    return NIL;
-                }
-                self.push(merged);
-                let kbase = self.mark();
-                for i in 0..n - 1 {
-                    let k = self.slot(self.r(base), BB_KIDS + i);
-                    self.push(k);
-                }
-                let tail = self.r(base + 2);
-                self.push(tail);
-                let out = self.b_node(kbase, n);
-                self.pop_to(base);
-                out
-            }
-            _ => NIL,
-        }
-    }
 
-    /// Put `b` in the deepest node on `a`'s right spine that has room for it,
-    /// or NIL if there is none. Depth is unchanged when this succeeds, which
-    /// is the whole point.
-    fn b_absorb(&mut self, a: Value, b: Value) -> Value {
-        if !a.is_heap() || ty(&self.gc.sp, a.as_heap()) != TY_BROPE {
-            return NIL;
-        }
-        let n = len(&self.gc.sp, a.as_heap()) - BB_KIDS;
-        let da = self.b_depth(a);
-        // A node's children are all the same depth. Anything deeper than this
-        // node cannot go inside it.
-        if self.b_depth(b) >= da {
-            return NIL;
-        }
-        let base = self.mark();
-        self.push(a);
-        self.push(b);
-        // Deepest first: only if the last child cannot take it does this node
-        // take it, and only if neither can does the caller wrap. Descending
-        // first is what keeps the tree log-deep -- absorbing at the top builds
-        // a spine, and twenty thousand joins was depth 1,250.
-        let last = self.slot(self.r(base), BB_KIDS + n - 1);
-        let down = self.b_absorb(last, self.r(base + 1));
-        if !down.is_nil() {
-            self.push(down);
-            let kbase = self.mark();
-            for i in 0..n - 1 {
-                let k = self.slot(self.r(base), BB_KIDS + i);
-                self.push(k);
-            }
-            let tail = self.r(base + 2);
-            self.push(tail);
-            let out = self.b_node(kbase, n);
-            self.pop_to(base);
-            return out;
-        }
-        if n < FANOUT {
-            // Promoted to this node's child depth, so every child stays the
-            // same depth and the next append can descend into it.
-            let bb = self.b_wrap_to(self.r(base + 1), da - 1);
-            self.push(bb);
-            let kbase = self.mark();
-            for i in 0..n {
-                let k = self.slot(self.r(base), BB_KIDS + i);
-                self.push(k);
-            }
-            let tail = self.r(base + 2);
-            self.push(tail);
-            let out = self.b_node(kbase, n + 1);
-            self.pop_to(base);
-            return out;
-        }
-        self.pop_to(base);
-        NIL
-    }
 
     /// A contiguous copy, cached on the node so a second walk is free.
     pub fn b_flatten(&mut self, v: Value) -> Value {
