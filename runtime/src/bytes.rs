@@ -142,25 +142,28 @@ impl Rt {
         while self.b_depth(cur) < d {
             let base = self.mark();
             self.push(cur);
-            let kids = [self.r(base)];
-            cur = self.b_node(&kids);
+            cur = self.b_node(base, 1);
             self.pop_to(base);
         }
         cur
     }
 
-    fn b_node(&mut self, kids: &[Value]) -> Value {
+    /// A node over the `n` values ALREADY ROOTED at `base`.
+    ///
+    /// The caller pushes and the caller pops. This used to take a host slice
+    /// and push the kids itself, which meant every caller rooted them, handed
+    /// them over, and had them rooted a second time -- and it needed a growable
+    /// host array per call to say so. Taking `(base, n)` deletes both: the
+    /// shadow stack IS the argument list, and it is the one place the kids had
+    /// to be anyway.
+    fn b_node(&mut self, base: usize, n: u32) -> Value {
         let mut total = 0u32;
-        for k in kids {
-            total += self.b_count(*k);
+        for i in 0..n {
+            let k = self.r(base + i as usize);
+            total += self.b_count(k);
         }
-        let base = self.mark();
-        for k in kids {
-            self.push(*k);
-        }
-        let a = self.alloc(TY_BROPE, BB_KIDS + kids.len() as u32);
+        let a = self.alloc(TY_BROPE, BB_KIDS + n);
         if a == 0 {
-            self.pop_to(base);
             return NIL;
         }
         self.set_slot(a, BB_BYTES, Value::fixnum(total as i64));
@@ -171,11 +174,10 @@ impl Rt {
             self.b_depth(k0) + 1
         };
         self.set_slot(a, BB_DEPTH, Value::fixnum(d as i64));
-        for (i, _) in kids.iter().enumerate() {
-            let v = self.r(base + i);
-            self.set_slot(a, BB_KIDS + i as u32, v);
+        for i in 0..n {
+            let v = self.r(base + i as usize);
+            self.set_slot(a, BB_KIDS + i, v);
         }
-        self.pop_to(base);
         Value::heap(a)
     }
 
@@ -248,8 +250,7 @@ impl Rt {
         self.push(pa);
         let pb = self.b_wrap_to(self.r(base + 1), d);
         self.push(pb);
-        let kids = [self.r(base + 2), self.r(base + 3)];
-        let out = self.b_node(&kids);
+        let out = self.b_node(base + 2, 2);
         self.pop_to(base);
         out
     }
@@ -278,13 +279,14 @@ impl Rt {
                 match self.b_merge_right(last, self.r(base + 1)) {
                     Some(x) => {
                         self.push(x);
-                        let a = self.r(base);
-                        let mut kids = alloc::vec::Vec::with_capacity(n as usize);
+                        let kbase = self.mark();
                         for i in 0..n - 1 {
-                            kids.push(self.slot(a, BB_KIDS + i));
+                            let k = self.slot(self.r(base), BB_KIDS + i);
+                            self.push(k);
                         }
-                        kids.push(self.r(base + 2));
-                        let out = self.b_node(&kids);
+                        let tail = self.r(base + 2);
+                        self.push(tail);
+                        let out = self.b_node(kbase, n);
                         self.pop_to(base);
                         Some(out)
                     }
@@ -322,13 +324,14 @@ impl Rt {
         let last = self.slot(self.r(base), BB_KIDS + n - 1);
         if let Some(x) = self.b_absorb(last, self.r(base + 1)) {
             self.push(x);
-            let a = self.r(base);
-            let mut kids = alloc::vec::Vec::with_capacity(n as usize);
+            let kbase = self.mark();
             for i in 0..n - 1 {
-                kids.push(self.slot(a, BB_KIDS + i));
+                let k = self.slot(self.r(base), BB_KIDS + i);
+                self.push(k);
             }
-            kids.push(self.r(base + 2));
-            let out = self.b_node(&kids);
+            let tail = self.r(base + 2);
+            self.push(tail);
+            let out = self.b_node(kbase, n);
             self.pop_to(base);
             return Some(out);
         }
@@ -337,13 +340,14 @@ impl Rt {
             // same depth and the next append can descend into it.
             let bb = self.b_wrap_to(self.r(base + 1), da - 1);
             self.push(bb);
-            let a = self.r(base);
-            let mut kids = alloc::vec::Vec::with_capacity((n + 1) as usize);
+            let kbase = self.mark();
             for i in 0..n {
-                kids.push(self.slot(a, BB_KIDS + i));
+                let k = self.slot(self.r(base), BB_KIDS + i);
+                self.push(k);
             }
-            kids.push(self.r(base + 2));
-            let out = self.b_node(&kids);
+            let tail = self.r(base + 2);
+            self.push(tail);
+            let out = self.b_node(kbase, n + 1);
             self.pop_to(base);
             return Some(out);
         }
@@ -504,11 +508,7 @@ impl Rt {
             let mut i = 0usize;
             while i < level {
                 let take = FANOUT.min((level - i) as u32) as usize;
-                let mut kids: alloc::vec::Vec<Value> = alloc::vec::Vec::with_capacity(take);
-                for k in 0..take {
-                    kids.push(self.r(from + i + k));
-                }
-                let node = self.b_node(&kids);
+                let node = self.b_node(from + i, take as u32);
                 if node.is_nil() {
                     return NIL;
                 }

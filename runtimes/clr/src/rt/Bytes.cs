@@ -109,27 +109,25 @@ public static class Bytes {
         int bas = rt.Mark();
         int ci = rt.Push(v);
         while (Depth(rt, rt.R(ci)) < d) {
-            long[] kids = { rt.R(ci) };
-            rt.SetR(ci, Node(rt, kids));
+            rt.SetR(ci, Node(rt, ci, 1));
         }
         long outv = rt.R(ci);
         rt.PopTo(bas);
         return outv;
     }
 
-    static long Node(Rt rt, long[] kids) {
+    /// A node over the `n` values ALREADY ROOTED at `bas`. The caller pushes
+    /// and the caller pops -- see the Rust and Java copies, which say the same.
+    static long Node(Rt rt, int bas, int n) {
         int total = 0;
-        foreach (long k in kids) total += Count(rt, k);
-        int bas = rt.Mark();
-        foreach (long k in kids) rt.Push(k);
-        long a = rt.Alloc(Obj.TyBrope, BB_KIDS + kids.Length);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+        for (int i = 0; i < n; i++) total += Count(rt, rt.R(bas + i));
+        long a = rt.Alloc(Obj.TyBrope, BB_KIDS + n);
+        if (a == 0) return Val.Nil;
         rt.SetSlot(a, BB_BYTES, Val.Fixnum(total));
         rt.SetSlot(a, BB_FLAT, Val.Nil);
         rt.SetSlot(a, BB_HASH, Val.Nil);
         rt.SetSlot(a, BB_DEPTH, Val.Fixnum(Depth(rt, rt.R(bas)) + 1));
-        for (int i = 0; i < kids.Length; i++) rt.SetSlot(a, BB_KIDS + i, rt.R(bas + i));
-        rt.PopTo(bas);
+        for (int i = 0; i < n; i++) rt.SetSlot(a, BB_KIDS + i, rt.R(bas + i));
         return Val.Heap(a);
     }
 
@@ -176,7 +174,7 @@ public static class Bytes {
         int d = System.Math.Max(Depth(rt, rt.R(ai)), Depth(rt, rt.R(bi)));
         int pa = rt.Push(WrapTo(rt, rt.R(ai), d));
         int pb = rt.Push(WrapTo(rt, rt.R(bi), d));
-        outv = Node(rt, new long[]{ rt.R(pa), rt.R(pb) });
+        outv = Node(rt, pa, 2);
         rt.PopTo(bas);
         return outv;
     }
@@ -197,10 +195,10 @@ public static class Bytes {
         long merged = MergeRight(rt, rt.Slot(rt.R(ai), BB_KIDS + n - 1), rt.R(bi));
         if (Val.IsNil(merged)) { rt.PopTo(bas); return Val.Nil; }
         int mi = rt.Push(merged);
-        long[] kids = new long[n];
-        for (int i = 0; i < n - 1; i++) kids[i] = rt.Slot(rt.R(ai), BB_KIDS + i);
-        kids[n - 1] = rt.R(mi);
-        long outv = Node(rt, kids);
+        int kbase = rt.Mark();
+        for (int i = 0; i < n - 1; i++) rt.Push(rt.Slot(rt.R(ai), BB_KIDS + i));
+        rt.Push(rt.R(mi));
+        long outv = Node(rt, kbase, n);
         rt.PopTo(bas);
         return outv;
     }
@@ -221,10 +219,10 @@ public static class Bytes {
         long down = Absorb(rt, rt.Slot(rt.R(ai), BB_KIDS + n - 1), rt.R(bi));
         if (!Val.IsNil(down)) {
             int di = rt.Push(down);
-            long[] kids = new long[n];
-            for (int i = 0; i < n - 1; i++) kids[i] = rt.Slot(rt.R(ai), BB_KIDS + i);
-            kids[n - 1] = rt.R(di);
-            long outv = Node(rt, kids);
+            int kbase = rt.Mark();
+            for (int i = 0; i < n - 1; i++) rt.Push(rt.Slot(rt.R(ai), BB_KIDS + i));
+            rt.Push(rt.R(di));
+            long outv = Node(rt, kbase, n);
             rt.PopTo(bas);
             return outv;
         }
@@ -232,10 +230,10 @@ public static class Bytes {
             // Promoted to this node's child depth, so every child stays the
             // same depth and the next append can descend into it.
             int wi = rt.Push(WrapTo(rt, rt.R(bi), da - 1));
-            long[] kids = new long[n + 1];
-            for (int i = 0; i < n; i++) kids[i] = rt.Slot(rt.R(ai), BB_KIDS + i);
-            kids[n] = rt.R(wi);
-            long outv = Node(rt, kids);
+            int kbase = rt.Mark();
+            for (int i = 0; i < n; i++) rt.Push(rt.Slot(rt.R(ai), BB_KIDS + i));
+            rt.Push(rt.R(wi));
+            long outv = Node(rt, kbase, n + 1);
             rt.PopTo(bas);
             return outv;
         }
@@ -340,9 +338,7 @@ public static class Bytes {
             int made = 0, i = 0;
             while (i < level) {
                 int take = System.Math.Min(Str.FANOUT, level - i);
-                long[] kids = new long[take];
-                for (int k = 0; k < take; k++) kids[k] = rt.R(from + i + k);
-                long nd = Node(rt, kids);
+                long nd = Node(rt, from + i, take);
                 if (nd == Val.Nil) return Val.Nil;
                 rt.Push(nd);
                 made++;

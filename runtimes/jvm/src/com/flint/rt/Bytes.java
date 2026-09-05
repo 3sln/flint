@@ -112,27 +112,25 @@ public final class Bytes {
         int base = rt.mark();
         int ci = rt.push(v);
         while (depth(rt, rt.r(ci)) < d) {
-            long[] kids = { rt.r(ci) };
-            rt.setR(ci, node(rt, kids));
+            rt.setR(ci, node(rt, ci, 1));
         }
         long outv = rt.r(ci);
         rt.popTo(base);
         return outv;
     }
 
-    static long node(Rt rt, long[] kids) {
+    /// A node over the `n` values ALREADY ROOTED at `base`. The caller pushes
+    /// and the caller pops -- see the Rust and C# copies, which say the same.
+    static long node(Rt rt, int base, int n) {
         int total = 0;
-        for (long k : kids) total += count(rt, k);
-        int base = rt.mark();
-        for (long k : kids) rt.push(k);
-        long a = rt.alloc(TY_BROPE, BB_KIDS + kids.length);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
+        for (int i = 0; i < n; i++) total += count(rt, rt.r(base + i));
+        long a = rt.alloc(TY_BROPE, BB_KIDS + n);
+        if (a == 0) return Val.NIL;
         rt.setSlot(a, BB_BYTES, Val.fixnum(total));
         rt.setSlot(a, BB_FLAT, Val.NIL);
         rt.setSlot(a, BB_HASH, Val.NIL);
         rt.setSlot(a, BB_DEPTH, Val.fixnum(depth(rt, rt.r(base)) + 1));
-        for (int i = 0; i < kids.length; i++) rt.setSlot(a, BB_KIDS + i, rt.r(base + i));
-        rt.popTo(base);
+        for (int i = 0; i < n; i++) rt.setSlot(a, BB_KIDS + i, rt.r(base + i));
         return Val.heap(a);
     }
 
@@ -179,7 +177,7 @@ public final class Bytes {
         int d = Math.max(depth(rt, rt.r(ai)), depth(rt, rt.r(bi)));
         int pa = rt.push(wrapTo(rt, rt.r(ai), d));
         int pb = rt.push(wrapTo(rt, rt.r(bi), d));
-        outv = node(rt, new long[]{ rt.r(pa), rt.r(pb) });
+        outv = node(rt, pa, 2);
         rt.popTo(base);
         return outv;
     }
@@ -200,10 +198,10 @@ public final class Bytes {
         long merged = mergeRight(rt, rt.slot(rt.r(ai), BB_KIDS + n - 1), rt.r(bi));
         if (Val.isNil(merged)) { rt.popTo(base); return Val.NIL; }
         int mi = rt.push(merged);
-        long[] kids = new long[n];
-        for (int i = 0; i < n - 1; i++) kids[i] = rt.slot(rt.r(ai), BB_KIDS + i);
-        kids[n - 1] = rt.r(mi);
-        long outv = node(rt, kids);
+        int kbase = rt.mark();
+        for (int i = 0; i < n - 1; i++) rt.push(rt.slot(rt.r(ai), BB_KIDS + i));
+        rt.push(rt.r(mi));
+        long outv = node(rt, kbase, n);
         rt.popTo(base);
         return outv;
     }
@@ -224,10 +222,10 @@ public final class Bytes {
         long down = absorb(rt, rt.slot(rt.r(ai), BB_KIDS + n - 1), rt.r(bi));
         if (!Val.isNil(down)) {
             int di = rt.push(down);
-            long[] kids = new long[n];
-            for (int i = 0; i < n - 1; i++) kids[i] = rt.slot(rt.r(ai), BB_KIDS + i);
-            kids[n - 1] = rt.r(di);
-            long outv = node(rt, kids);
+            int kbase = rt.mark();
+            for (int i = 0; i < n - 1; i++) rt.push(rt.slot(rt.r(ai), BB_KIDS + i));
+            rt.push(rt.r(di));
+            long outv = node(rt, kbase, n);
             rt.popTo(base);
             return outv;
         }
@@ -235,10 +233,10 @@ public final class Bytes {
             // Promoted to this node's child depth, so every child stays the
             // same depth and the next append can descend into it.
             int wi = rt.push(wrapTo(rt, rt.r(bi), da - 1));
-            long[] kids = new long[n + 1];
-            for (int i = 0; i < n; i++) kids[i] = rt.slot(rt.r(ai), BB_KIDS + i);
-            kids[n] = rt.r(wi);
-            long outv = node(rt, kids);
+            int kbase = rt.mark();
+            for (int i = 0; i < n; i++) rt.push(rt.slot(rt.r(ai), BB_KIDS + i));
+            rt.push(rt.r(wi));
+            long outv = node(rt, kbase, n + 1);
             rt.popTo(base);
             return outv;
         }
@@ -349,9 +347,7 @@ public final class Bytes {
             int made = 0, i = 0;
             while (i < level) {
                 int take = Math.min(Str.FANOUT, level - i);
-                long[] kids = new long[take];
-                for (int k = 0; k < take; k++) kids[k] = rt.r(from + i + k);
-                long nd = node(rt, kids);
+                long nd = node(rt, from + i, take);
                 if (nd == Val.NIL) return Val.NIL;
                 rt.push(nd);
                 made++;
