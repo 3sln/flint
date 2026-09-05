@@ -28,6 +28,9 @@
       ;; --- flat tier ------------------------------------------------------
       :count         (b/size a)
       :at            [(b/at a 0) (b/at a 5)]
+      ;; OUT OF RANGE, both ends and both tiers. Nothing has ever asked this,
+      ;; which is why the three runtimes were free to disagree about it.
+      :at-past-end   [(caught (fn [] (b/at a 99))) (caught (fn [] (b/at a -1)))]
       :cat           (b/to-string c)
       :cat-count     (b/size c)
       :slice         (b/to-string (b/slice c 6 10))
@@ -38,6 +41,7 @@
       ;; Indexing has to descend, so a boundary between children is the case
       ;; that catches an off-by-one in the walk.
       :big-boundary  [(b/at b 15) (b/at b 16)]
+      :big-past-end  (caught (fn [] (b/at b 999999)))
       :big-slice     (b/to-string (b/slice b 16 32))
       ;; --- the tier is invisible ------------------------------------------
       :eq-across     (= (b/slice b 0 6) (b/of-string "012345"))

@@ -1028,8 +1028,11 @@ public static class Builtins {
         // --- byte strings (`doc/decisions/0024`) ------------------------------
         Def("flint/b-count", (rt, at, n) => Val.Fixnum(Bytes.Count(rt, rt.VAt(at))));
         Def("flint/b-at", (rt, at, n) => {
+            // REFUSED past either end -- see the Java copy and `test/bytes.clj`.
             int b = Bytes.At(rt, rt.VAt(at), (int) Val.AsFixnum(rt.VAt(at + 1)));
-            return b < 0 ? Val.Nil : Val.Fixnum(b);
+            return b < 0
+                ? rt.ThrowStr("IndexOutOfBoundsException", "byte index out of range")
+                : Val.Fixnum(b);
         });
         Def("flint/b-concat", (rt, at, n) => Bytes.Concat(rt, rt.VAt(at), rt.VAt(at + 1)));
         Def("flint/b-slice", (rt, at, n) => Bytes.Slice(rt, rt.VAt(at),

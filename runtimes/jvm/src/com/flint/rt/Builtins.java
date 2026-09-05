@@ -1116,8 +1116,14 @@ rt.describe(v) + " is not a transient vector");
         // string holds a byte in a byte.
         def("flint/b-count", (rt, at, n) -> Val.fixnum(Bytes.count(rt, rt.vat(at))));
         def("flint/b-at", (rt, at, n) -> {
+            // REFUSED past either end, which is what native has always done and
+            // what `test/bytes.clj` has asserted since the type was written --
+            // against native only, so this answered nil here for as long as it
+            // has existed. `at` is `nth`-shaped, and `nth` past the end throws.
             int b = Bytes.at(rt, rt.vat(at), (int) Val.asFixnum(rt.vat(at + 1)));
-            return b < 0 ? Val.NIL : Val.fixnum(b);
+            return b < 0
+                ? rt.throwStr("IndexOutOfBoundsException", "byte index out of range")
+                : Val.fixnum(b);
         });
         def("flint/b-concat", (rt, at, n) -> Bytes.concat(rt, rt.vat(at), rt.vat(at + 1)));
         def("flint/b-slice", (rt, at, n) -> Bytes.slice(rt, rt.vat(at),

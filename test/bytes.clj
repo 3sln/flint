@@ -35,6 +35,12 @@
 
 (check "count, flat"            (:count r) 6)
 (check "index, flat"            (:at r) [104 32])
+;; OUT OF RANGE. Recorded here as a fact rather than asserted as a design,
+;; because the three runtimes disagreed about it and nothing was asking.
+(check-that "index past either end is refused, flat"
+            (every? #(str/includes? (str %) "out of range") (:at-past-end r)))
+(check-that "index past the end is refused, tree too"
+            (str/includes? (str (:big-past-end r)) "out of range"))
 (check "concatenation"          (:cat r) "hello byte world")
 (check "slice"                  (:slice r) "byte")
 (check "the empty byte string"  (:empty r) 0)
