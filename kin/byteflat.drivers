@@ -26,8 +26,21 @@ impl Space {
     fn read_u8(&self, a: Addr) -> u8 { self.m[a as usize] }
 }
 struct Gc { sp: Space }
-struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, sinks: Vec<Vec<u8>> }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, sinks: Vec<Vec<u8>>, roots: Vec<Value> }
 impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn set(&mut self, n: Value, i: u32, v: Value) { self.h[n.0 as usize + i as usize] = v.0; }
+    fn b_count(&self, v: Value) -> u32 {
+        if !v.is_heap() { return 0; }
+        match ty(&self.gc.sp, v.as_heap()) {
+            TY_BYTES => self.lens[v.0 as usize],
+            TY_BROPE => self.slot(v, bytes::BB_BYTES).as_fixnum() as u32,
+            _ => 0,
+        }
+    }
     fn sink_open(&mut self) -> u32 { self.sinks.push(Vec::new()); (self.sinks.len() - 1) as u32 }
     fn sink_close(&mut self, s: u32) { self.sinks.truncate(s as usize); }
     fn sink_len(&self, s: u32) -> u32 { self.sinks[s as usize].len() as u32 }
@@ -55,14 +68,6 @@ impl Rt {
         for (i, b) in bs.iter().enumerate() { self.gc.sp.m[(a + obj::HDR) as usize + i] = *b; }
         Value::heap(a)
     }
-    fn b_count(&self, v: Value) -> u32 {
-        if !v.is_heap() { return 0; }
-        match ty(&self.gc.sp, v.as_heap()) {
-            TY_BYTES => self.olen(v),
-            TY_BROPE => self.slot(v, bytes::BB_BYTES).as_fixnum() as u32,
-            _ => 0,
-        }
-    }
     fn node(&mut self, kids: &[Value]) -> Value {
         let mut total = 0u32;
         for k in kids { total += self.b_count(*k); }
@@ -81,7 +86,7 @@ impl Rt {
 }
 fn main() {
     let mut rt = Rt { h: vec![0; 40000], gc: Gc { sp: Space { m: vec![0u8; 40000] } },
-                      lens: vec![0; 40000], bump: 100, sinks: Vec::new() };
+                      lens: vec![0; 40000], bump: 100, sinks: Vec::new(), roots: Vec::new() };
     let mut o = String::new();
     let show = |rt: &Rt, v: Value| -> String {
         let n = rt.lens[v.0 as usize];
@@ -137,6 +142,12 @@ fn main() {
     }
     static final class Rt {
         java.util.ArrayList<java.io.ByteArrayOutputStream> sinks = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void set(long n, int i, long v) { h[(int) n + i] = v; }
         int sinkOpen() { sinks.add(new java.io.ByteArrayOutputStream()); return sinks.size() - 1; }
         void sinkClose(int s) { while (sinks.size() > s) sinks.remove(sinks.size() - 1); }
         int sinkLen(int s) { return sinks.get(s).size(); }
@@ -166,17 +177,17 @@ fn main() {
     }
     static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
-    static long leaf(Rt rt, int[] bs) {
-        long a = rt.alloc(TY_BYTES, bs.length);
-        for (int i = 0; i < bs.length; i++) rt.gc.sp.m[(int) (a + Obj.HDR) + i] = (byte) bs[i];
-        return Val.heap(a);
-    }
     static int bCount(Rt rt, long v) {
         if (!Val.isHeap(v)) return 0;
         int t = ty(rt.gc.sp, v);
         if (t == TY_BYTES) return olen(rt, v);
         if (t == TY_BROPE) return (int) rt.slot(v, Bytes.BB_BYTES);
         return 0;
+    }
+    static long leaf(Rt rt, int[] bs) {
+        long a = rt.alloc(TY_BYTES, bs.length);
+        for (int i = 0; i < bs.length; i++) rt.gc.sp.m[(int) (a + Obj.HDR) + i] = (byte) bs[i];
+        return Val.heap(a);
     }
     static long node(Rt rt, long[] kids) {
         int total = 0;
@@ -245,6 +256,12 @@ fn main() {
     internal sealed class Rt {
         internal System.Collections.Generic.List<System.IO.MemoryStream> sinks =
             new System.Collections.Generic.List<System.IO.MemoryStream>();
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal void Set(long n, int i, long v) { h[(int) n + i] = v; }
         internal int SinkOpen() { sinks.Add(new System.IO.MemoryStream()); return sinks.Count - 1; }
         internal void SinkClose(int s) { while (sinks.Count > s) sinks.RemoveAt(sinks.Count - 1); }
         internal int SinkLen(int s) { return (int) sinks[s].Length; }
@@ -273,17 +290,17 @@ fn main() {
         internal long Slot(long n, int i) { return h[(int) n + i]; }
     }
     internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
-    internal static long Leaf(Rt rt, int[] bs) {
-        long a = rt.Alloc(Obj.TyBytes, bs.Length);
-        for (int i = 0; i < bs.Length; i++) rt.gc.sp.m[(int) (a + Obj.Hdr) + i] = (byte) bs[i];
-        return Val.Heap(a);
-    }
     internal static int BCount(Rt rt, long v) {
         if (!Val.IsHeap(v)) return 0;
         int t = Obj.Ty(rt.gc.sp, v);
         if (t == Obj.TyBytes) return Olen(rt, v);
         if (t == Obj.TyBrope) return (int) rt.Slot(v, global::Flint.Rt.Bytes.BB_BYTES);
         return 0;
+    }
+    internal static long Leaf(Rt rt, int[] bs) {
+        long a = rt.Alloc(Obj.TyBytes, bs.Length);
+        for (int i = 0; i < bs.Length; i++) rt.gc.sp.m[(int) (a + Obj.Hdr) + i] = (byte) bs[i];
+        return Val.Heap(a);
     }
     internal static long Node(Rt rt, long[] kids) {
         int total = 0;

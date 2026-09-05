@@ -14,9 +14,9 @@
                                    == < > >= <= + - not nil? as-heap
                                    local set for break olen slot
                                    mark push r pop-to to-i32
-                                   b-copy-range
                                    Rt Value RootIx I32 NIL
                                    BB_KIDS SLICE_MIN]]
+            [flint.rt.byteflat :refer [b-copy-range]]
             [flint.rt.bytecore :refer [b-count is-brope]]
             [flint.rt.bytefold :refer [b-from-roots]]))
 

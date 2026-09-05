@@ -10,6 +10,7 @@ import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Bytecore.*;
+import static com._3sln.flint.kgen.rt.Byteflat.*;
 import static com._3sln.flint.kgen.rt.Bytenode.*;
 
 public final class Byteconcat {
@@ -24,7 +25,7 @@ public final class Byteconcat {
         int t = ty(rt.gc.sp, Val.asHeap(a));
         if (t == TY_BYTES) {
             if ((olen(rt, a) + bCount(rt, b)) <= Str.FLAT_MAX) {
-                return Bytes.copyConcat(rt, a, b);
+                return bCopyConcat(rt, a, b);
             }
             return Val.NIL;
         }
@@ -121,7 +122,7 @@ public final class Byteconcat {
         // the tier that makes incremental building quadratic, which is what
         // the transient is for.
         if ((bCount(rt, a) + bCount(rt, b)) <= Str.FLAT_MAX) {
-            return Bytes.copyConcat(rt, a, b);
+            return bCopyConcat(rt, a, b);
         }
         if (bCount(rt, b) <= (Str.FLAT_MAX / 2)) {
             long merged = bMergeRight(rt, a, b);

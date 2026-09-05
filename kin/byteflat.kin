@@ -13,11 +13,13 @@
 ;; cheap rather than repeatedly quadratic.
 (ns flint.rt.byteflat
   (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == != not nil? is-heap as-heap ty
-                                   + - for olen slot
+                                   == != < > >= not nil? is-heap as-heap ty
+                                   + - for local set to-addr olen slot set-slot
+                                   mark push r pop-to
                                    sink-open sink-close sink-put-run sink-bytes
-                                   Rt Value Ty I32 Sink HDR
-                                   TY_BYTES TY_BROPE BB_FLAT BB_KIDS]]))
+                                   Rt Value Ty I32 RootIx Sink HDR
+                                   TY_BYTES TY_BROPE BB_FLAT BB_KIDS]]
+            [flint.rt.bytecore :refer [b-count]]))
 
 (doc "Append every byte of `v` to the sink `s`."
      ""
@@ -50,6 +52,121 @@
 (defn ^:pub ^:method ^Value b-to-flat [^:mut ^Rt rt ^Value v]
   (let [^Sink s (sink-open rt)]
     (b-append rt v s)
+    (let [^Value out (sink-bytes rt s)]
+      (sink-close rt s)
+      (return out))))
+
+(doc "Append bytes `[from, to)` of `v` to the sink `s`."
+     ""
+     "The range walk, and the reason it is not `b-append` over a slice: a slice"
+     "allocates nodes to describe what to copy, and every caller here is about"
+     "to copy anyway. Descending with the range instead costs nothing."
+     ""
+     "Both bounds are clamped INSIDE the leaf, because the descent narrows them"
+     "per child and the arithmetic that does it can land outside a leaf whose"
+     "recorded count disagrees with its length. That is a corrupt tree rather"
+     "than a reachable input, and clamping answers wrong bytes where indexing"
+     "off the end would answer whatever is next in the heap.")
+(defn ^:pub ^:method b-append-range [^:mut ^Rt rt ^Value v ^I32 from ^I32 to ^Sink s]
+  (if (not (is-heap v))
+    (return))
+  (if (>= from to)
+    (return))
+  (let [^Ty t (ty rt (as-heap v))]
+    (if (== t TY_BYTES)
+      (do
+        (comment "`leafn` and not `n`: C# refuses a local whose name is used in"
+                 "an enclosing scope, even from a sibling branch, where Rust and"
+                 "Java both allow it. One name per function is the portable"
+                 "rule, and the emitter cannot rename for you without changing"
+                 "what the source says.")
+        (let [^I32 leafn (olen rt v)]
+          (local ^:mut ^I32 hi)
+          (local ^:mut ^I32 lo)
+          (set hi to)
+          (if (> hi leafn) (set hi leafn))
+          (set lo from)
+          (if (> lo hi) (set lo hi))
+          (sink-put-run rt s (+ (+ (as-heap v) HDR) (to-addr lo)) (- hi lo))
+          (return))))
+    (if (!= t TY_BROPE)
+      (return))
+    (let [^Value flat (slot rt v BB_FLAT)]
+      (if (not (nil? rt flat))
+        (do (b-append-range rt flat from to s)
+            (return))))
+    (let [^I32 n (- (olen rt v) BB_KIDS)]
+      (local ^:mut ^I32 pos)
+      (set pos 0)
+      (for [^I32 i 0 n]
+        (if (< pos to)
+          (let [^Value k (slot rt v (+ BB_KIDS i))
+                ^I32 kn (b-count rt k)]
+            (if (> (+ pos kn) from)
+              (do
+                (local ^:mut ^I32 klo)
+                (local ^:mut ^I32 khi)
+                (set klo 0)
+                (if (> from pos) (set klo (- from pos)))
+                (set khi (- to pos))
+                (if (> khi kn) (set khi kn))
+                (b-append-range rt k klo khi s)))
+            (set pos (+ pos kn))))))))
+
+(doc "`v` as one flat leaf, CACHED in the node so the next ask is a slot read."
+     ""
+     "A leaf is already flat and answers itself. The cache is what makes"
+     "repeated reads of one rope cheap rather than repeatedly O(n) -- and it is"
+     "what `b-at` and `b-append` short-circuit through.")
+(defn ^:pub ^:method ^Value b-flatten [^:mut ^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return v))
+  (if (== (ty rt (as-heap v)) TY_BYTES)
+    (return v))
+  (let [^Value cached (slot rt v BB_FLAT)]
+    (if (not (nil? rt cached))
+      (return cached)))
+  (comment "`v` LIVES IN THE ROOT across the allocation: `sink-bytes` allocates"
+           "the leaf, and the node this is about to write into would be stale"
+           "if it had been read into a host local before that.")
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^Sink s (sink-open rt)]
+    (b-append rt (r rt vi) s)
+    (let [^Value flat (sink-bytes rt s)]
+      (sink-close rt s)
+      (if (is-heap flat)
+        (set-slot rt (r rt vi) BB_FLAT flat))
+      (pop-to rt base)
+      (return flat))))
+
+;; ------------------------------------------------ what the sink un-blocked
+;;
+;; These two were hand-written and reached as SIBLINGS, for one reason: they
+;; needed somewhere to put the bytes. They need nothing else, so the sink is
+;; the whole of what was keeping them out.
+
+(doc "`a` followed by `b`, copied into one flat leaf."
+     ""
+     "The tier below `FLAT_MAX`, where a tree costs more in metadata than the"
+     "copy saves -- and the tier that makes building a byte string one piece at"
+     "a time quadratic, which is what the transient is for.")
+(defn ^:pub ^:method ^Value b-copy-concat [^:mut ^Rt rt ^Value a ^Value b]
+  (let [^Sink s (sink-open rt)]
+    (b-append rt a s)
+    (b-append rt b s)
+    (let [^Value out (sink-bytes rt s)]
+      (sink-close rt s)
+      (return out))))
+
+(doc "Bytes `[from, to)` of `v`, copied into a fresh leaf."
+     ""
+     "What `SLICE_MIN` forces for a small range: a slice that SHARED would keep"
+     "the whole section it came from alive, so below the threshold the range is"
+     "copied on purpose. This is policy, not a fallback.")
+(defn ^:pub ^:method ^Value b-copy-range [^:mut ^Rt rt ^Value v ^I32 from ^I32 to]
+  (let [^Sink s (sink-open rt)]
+    (b-append-range rt v from to s)
     (let [^Value out (sink-bytes rt s)]
       (sink-close rt s)
       (return out))))

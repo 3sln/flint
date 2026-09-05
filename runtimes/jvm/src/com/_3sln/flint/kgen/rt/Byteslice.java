@@ -10,6 +10,7 @@ import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Bytecore.*;
+import static com._3sln.flint.kgen.rt.Byteflat.*;
 import static com._3sln.flint.kgen.rt.Bytefold.*;
 
 public final class Byteslice {
@@ -47,10 +48,10 @@ public final class Byteslice {
         // names. The copy needs a byte sink, so it lives in the
         // hand-written half.
         if ((hi - lo) < Str.SLICE_MIN) {
-            return Bytes.copyRange(rt, v, lo, hi);
+            return bCopyRange(rt, v, lo, hi);
         }
         if (!isBrope(rt, v)) {
-            return Bytes.copyRange(rt, v, lo, hi);
+            return bCopyRange(rt, v, lo, hi);
         }
         int base = rt.mark();
         int vi = rt.push(v);

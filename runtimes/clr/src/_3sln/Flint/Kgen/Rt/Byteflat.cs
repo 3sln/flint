@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Bytecore;
 
 public static class Byteflat {
     /// Append every byte of `v` to the sink `s`.
@@ -49,6 +50,133 @@ public static class Byteflat {
     public static long BToFlat(Rt rt, long v) {
         int s = rt.SinkOpen();
         BAppend(rt, v, s);
+        long @out = rt.SinkBytes(s);
+        rt.SinkClose(s);
+        return @out;
+    }
+    /// Append bytes `[from, to)` of `v` to the sink `s`.
+    /// 
+    /// The range walk, and the reason it is not `b-append` over a slice: a slice
+    /// allocates nodes to describe what to copy, and every caller here is about
+    /// to copy anyway. Descending with the range instead costs nothing.
+    /// 
+    /// Both bounds are clamped INSIDE the leaf, because the descent narrows them
+    /// per child and the arithmetic that does it can land outside a leaf whose
+    /// recorded count disagrees with its length. That is a corrupt tree rather
+    /// than a reachable input, and clamping answers wrong bytes where indexing
+    /// off the end would answer whatever is next in the heap.
+    public static void BAppendRange(Rt rt, long v, int from, int to, int s) {
+        if (!Val.IsHeap(v)) {
+            return;
+        }
+        if (from >= to) {
+            return;
+        }
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        if (t == Obj.TyBytes) {
+            // `leafn` and not `n`: C# refuses a local whose name is used in
+            // an enclosing scope, even from a sibling branch, where Rust and
+            // Java both allow it. One name per function is the portable
+            // rule, and the emitter cannot rename for you without changing
+            // what the source says.
+            int leafn = Olen(rt, v);
+            int hi;
+            int lo;
+            hi = to;
+            if (hi > leafn) {
+                hi = leafn;
+            }
+            lo = from;
+            if (lo > hi) {
+                lo = hi;
+            }
+            rt.SinkPutRun(s, (Val.AsHeap(v) + Obj.Hdr) + lo, hi - lo);
+            return;
+        }
+        if (t != Obj.TyBrope) {
+            return;
+        }
+        long flat = rt.Slot(v, global::Flint.Rt.Bytes.BB_FLAT);
+        if (!Val.IsNil(flat)) {
+            BAppendRange(rt, flat, from, to, s);
+            return;
+        }
+        int n = Olen(rt, v) - global::Flint.Rt.Bytes.BB_KIDS;
+        int pos;
+        pos = 0;
+        for (int i = 0; i < n; i++) {
+            if (pos < to) {
+                long k = rt.Slot(v, global::Flint.Rt.Bytes.BB_KIDS + i);
+                int kn = BCount(rt, k);
+                if ((pos + kn) > from) {
+                    int klo;
+                    int khi;
+                    klo = 0;
+                    if (from > pos) {
+                        klo = from - pos;
+                    }
+                    khi = to - pos;
+                    if (khi > kn) {
+                        khi = kn;
+                    }
+                    BAppendRange(rt, k, klo, khi, s);
+                }
+                pos += kn;
+            }
+        }
+    }
+    /// `v` as one flat leaf, CACHED in the node so the next ask is a slot read.
+    /// 
+    /// A leaf is already flat and answers itself. The cache is what makes
+    /// repeated reads of one rope cheap rather than repeatedly O(n) -- and it is
+    /// what `b-at` and `b-append` short-circuit through.
+    public static long BFlatten(Rt rt, long v) {
+        if (!Val.IsHeap(v)) {
+            return v;
+        }
+        if (Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyBytes) {
+            return v;
+        }
+        long cached = rt.Slot(v, global::Flint.Rt.Bytes.BB_FLAT);
+        if (!Val.IsNil(cached)) {
+            return cached;
+        }
+        // `v` LIVES IN THE ROOT across the allocation: `sink-bytes` allocates
+        // the leaf, and the node this is about to write into would be stale
+        // if it had been read into a host local before that.
+        int @base = rt.Mark();
+        int vi = rt.Push(v);
+        int s = rt.SinkOpen();
+        BAppend(rt, rt.R(vi), s);
+        long flat = rt.SinkBytes(s);
+        rt.SinkClose(s);
+        if (Val.IsHeap(flat)) {
+            rt.SetSlot(Val.AsHeap(rt.R(vi)), global::Flint.Rt.Bytes.BB_FLAT, flat);
+        }
+        rt.PopTo(@base);
+        return flat;
+    }
+    /// `a` followed by `b`, copied into one flat leaf.
+    /// 
+    /// The tier below `FLAT_MAX`, where a tree costs more in metadata than the
+    /// copy saves -- and the tier that makes building a byte string one piece at
+    /// a time quadratic, which is what the transient is for.
+    public static long BCopyConcat(Rt rt, long a, long b) {
+        int s = rt.SinkOpen();
+        BAppend(rt, a, s);
+        BAppend(rt, b, s);
+        long @out = rt.SinkBytes(s);
+        rt.SinkClose(s);
+        return @out;
+    }
+    /// Bytes `[from, to)` of `v`, copied into a fresh leaf.
+    /// 
+    /// What `SLICE_MIN` forces for a small range: a slice that SHARED would keep
+    /// the whole section it came from alive, so below the threshold the range is
+    /// copied on purpose. This is policy, not a fallback.
+    public static long BCopyRange(Rt rt, long v, int from, int to) {
+        int s = rt.SinkOpen();
+        BAppendRange(rt, v, from, to, s);
         long @out = rt.SinkBytes(s);
         rt.SinkClose(s);
         return @out;

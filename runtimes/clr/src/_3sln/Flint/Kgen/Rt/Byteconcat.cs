@@ -12,6 +12,7 @@ using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Bytecore;
+using static global::_3sln.Flint.Kgen.Rt.Byteflat;
 using static global::_3sln.Flint.Kgen.Rt.Bytenode;
 
 public static class Byteconcat {
@@ -26,7 +27,7 @@ public static class Byteconcat {
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(a));
         if (t == Obj.TyBytes) {
             if ((Olen(rt, a) + BCount(rt, b)) <= global::Flint.Rt.Str.FLAT_MAX) {
-                return Bytes.CopyConcat(rt, a, b);
+                return BCopyConcat(rt, a, b);
             }
             return Val.Nil;
         }
@@ -123,7 +124,7 @@ public static class Byteconcat {
         // the tier that makes incremental building quadratic, which is what
         // the transient is for.
         if ((BCount(rt, a) + BCount(rt, b)) <= global::Flint.Rt.Str.FLAT_MAX) {
-            return Bytes.CopyConcat(rt, a, b);
+            return BCopyConcat(rt, a, b);
         }
         if (BCount(rt, b) <= (global::Flint.Rt.Str.FLAT_MAX / 2)) {
             long merged = BMergeRight(rt, a, b);

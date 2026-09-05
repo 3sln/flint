@@ -75,24 +75,9 @@ public static class Bytes {
     static long Node(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Bytenode.BNode(rt, bas, n); }
 
     /// Copy the range out into a fresh leaf -- see the Java and Rust copies.
-    public static long CopyRange(Rt rt, long v, int from, int to) {
-        List<byte[]> parts = new List<byte[]>();
-        AppendRange(rt, v, from, to, parts);
-        int total = 0;
-        foreach (byte[] p in parts) total += p.Length;
-        byte[] outb = new byte[total];
-        int at0 = 0;
-        foreach (byte[] p in parts) { System.Array.Copy(p, 0, outb, at0, p.Length); at0 += p.Length; }
-        return Of(rt, outb);
-    }
+    public static long CopyRange(Rt rt, long v, int from, int to) { return global::_3sln.Flint.Kgen.Rt.Byteflat.BCopyRange(rt, v, from, to); }
 
-    public static long CopyConcat(Rt rt, long a, long b) {
-        byte[] x = ToArray(rt, a), y = ToArray(rt, b);
-        byte[] both = new byte[x.Length + y.Length];
-        System.Array.Copy(x, 0, both, 0, x.Length);
-        System.Array.Copy(y, 0, both, x.Length, y.Length);
-        return Of(rt, both);
-    }
+    public static long CopyConcat(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Byteflat.BCopyConcat(rt, a, b); }
 
     public static long Concat(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Byteconcat.BConcat(rt, a, b); }
 
@@ -105,19 +90,7 @@ public static class Bytes {
     static long Absorb(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Byteconcat.BAbsorb(rt, a, b); }
 
     /// A contiguous copy, CACHED on the node so a second walk is free.
-    public static long Flatten(Rt rt, long v) {
-        if (!Val.IsHeap(v)) return v;
-        if (Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyBytes) return v;
-        long cached = rt.Slot(v, BB_FLAT);
-        if (!Val.IsNil(cached)) return cached;
-        byte[] all = ToArray(rt, v);
-        int bas = rt.Mark();
-        int vi = rt.Push(v);
-        long flat = Of(rt, all);
-        if (Val.IsHeap(flat)) rt.SetSlot(Val.AsHeap(rt.R(vi)), BB_FLAT, flat);
-        rt.PopTo(bas);
-        return flat;
-    }
+    public static long Flatten(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Byteflat.BFlatten(rt, v); }
 
     /// Append only `[from, to)`, descending rather than materialising. A
     /// subtree entirely outside the range is skipped whole, which is what makes
@@ -125,29 +98,6 @@ public static class Bytes {
     /// quadratic in the caller: tree-shaking slices a thousand function bodies
     /// outv of one 509 KB code section, and materialising it per slice is half a
     /// gigabyte of copying.
-    static void AppendRange(Rt rt, long v, int from, int to, List<byte[]> outv) {
-        if (!Val.IsHeap(v) || from >= to) return;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
-        if (t == Obj.TyBytes) {
-            int leafN = Obj.Len(rt.gc.sp, Val.AsHeap(v));
-            int hi = System.Math.Min(to, leafN), lo = System.Math.Min(from, hi);
-            if (hi > lo) outv.Add(rt.gc.sp.Bytes(Val.AsHeap(v) + Obj.Hdr + lo, hi - lo));
-            return;
-        }
-        if (t != Obj.TyBrope) return;
-        long flat = rt.Slot(v, BB_FLAT);
-        if (!Val.IsNil(flat)) { AppendRange(rt, flat, from, to, outv); return; }
-        int n = Obj.Len(rt.gc.sp, Val.AsHeap(v)) - BB_KIDS;
-        int pos = 0;
-        for (int i = 0; i < n && pos < to; i++) {
-            long k = rt.Slot(v, BB_KIDS + i);
-            int kn = Count(rt, k);
-            if (pos + kn > from) {
-                AppendRange(rt, k, System.Math.Max(from - pos, 0), System.Math.Min(to - pos, kn), outv);
-            }
-            pos += kn;
-        }
-    }
 
     public static bool IsBrope(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Bytecore.IsBrope(rt, v);
 

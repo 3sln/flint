@@ -141,97 +141,12 @@ impl Rt {
         self.string(t)
     }
 
-    /// Copy the range out into a fresh leaf.
-    ///
-    /// `pub(crate)` for the same reason as `b_copy_range`'s neighbour below:
-    /// this is the SINK half of `Bytes`, still hand-written, and the generated
-    /// tree half reaches it across a module boundary. `SLICE_MIN` is the
-    /// retention fix -- a three-byte slice must not keep a 509 KB section
-    /// alive -- so this path exists to STOP sharing, deliberately.
-    pub(crate) fn b_copy_range(&mut self, v: Value, from: u32, to: u32) -> Value {
-        let mut out = alloc::vec::Vec::with_capacity((to - from) as usize);
-        self.b_append_range(v, from, to, &mut out);
-        self.new_bytes(&out)
-    }
-
-    /// `pub(crate)` because `kgen::rt::bytenode` calls it: the tree half of
-    /// `Bytes` is generated and this half is not, so the boundary between
-    /// them is a module boundary now.
-    pub(crate) fn b_copy_concat(&mut self, a: Value, b: Value) -> Value {
-        let s = self.sink_open();
-        self.b_append(a, s);
-        self.b_append(b, s);
-        let out = self.sink_bytes(s);
-        self.sink_close(s);
-        out
-    }
 
 
 
 
-    /// A contiguous copy, cached on the node so a second walk is free.
-    pub fn b_flatten(&mut self, v: Value) -> Value {
-        if !v.is_heap() {
-            return v;
-        }
-        if ty(&self.gc.sp, v.as_heap()) == TY_BYTES {
-            return v;
-        }
-        let cached = self.slot(v, BB_FLAT);
-        if !cached.is_nil() {
-            return cached;
-        }
-        let out = self.b_to_vec(v);
-        let base = self.mark();
-        self.push(v);
-        let flat = self.new_bytes(&out);
-        let v = self.r(base);
-        if flat.is_heap() {
-            self.set_slot(v.as_heap(), BB_FLAT, flat);
-        }
-        self.pop_to(base);
-        flat
-    }
 
-    /// Append only `[from, to)` of `v` to `out`, descending rather than
-    /// materialising. A subtree entirely outside the range is skipped whole,
-    /// which is what makes a slice cost the size of the SLICE.
-    fn b_append_range(&self, v: Value, from: u32, to: u32, out: &mut alloc::vec::Vec<u8>) {
-        if !v.is_heap() || from >= to {
-            return;
-        }
-        match ty(&self.gc.sp, v.as_heap()) {
-            TY_BYTES => {
-                let bs = raw_bytes(&self.gc.sp, v.as_heap());
-                let hi = (to as usize).min(bs.len());
-                let lo = (from as usize).min(hi);
-                out.extend_from_slice(&bs[lo..hi]);
-            }
-            TY_BROPE => {
-                let flat = self.slot(v, BB_FLAT);
-                if !flat.is_nil() {
-                    self.b_append_range(flat, from, to, out);
-                    return;
-                }
-                let n = len(&self.gc.sp, v.as_heap()) - BB_KIDS;
-                let mut pos = 0u32;
-                for i in 0..n {
-                    if pos >= to {
-                        break;
-                    }
-                    let k = self.slot(v, BB_KIDS + i);
-                    let kn = self.b_count(k);
-                    let end = pos + kn;
-                    if end > from {
-                        self.b_append_range(k, from.saturating_sub(pos),
-                                            (to - pos).min(kn), out);
-                    }
-                    pos = end;
-                }
-            }
-            _ => {}
-        }
-    }
+
 
 
 

@@ -57,4 +57,131 @@ impl Rt {
         self.sink_close(s);
         return out;
     }
+    /// Append bytes `[from, to)` of `v` to the sink `s`.
+    /// 
+    /// The range walk, and the reason it is not `b-append` over a slice: a slice
+    /// allocates nodes to describe what to copy, and every caller here is about
+    /// to copy anyway. Descending with the range instead costs nothing.
+    /// 
+    /// Both bounds are clamped INSIDE the leaf, because the descent narrows them
+    /// per child and the arithmetic that does it can land outside a leaf whose
+    /// recorded count disagrees with its length. That is a corrupt tree rather
+    /// than a reachable input, and clamping answers wrong bytes where indexing
+    /// off the end would answer whatever is next in the heap.
+    pub fn b_append_range(&mut self, v: Value, from: u32, to: u32, s: u32) {
+        if !v.is_heap() {
+            return;
+        }
+        if from >= to {
+            return;
+        }
+        let t: u8 = ty(&self.gc.sp, v.as_heap());
+        if t == TY_BYTES {
+            // `leafn` and not `n`: C# refuses a local whose name is used in
+            // an enclosing scope, even from a sibling branch, where Rust and
+            // Java both allow it. One name per function is the portable
+            // rule, and the emitter cannot rename for you without changing
+            // what the source says.
+            let leafn: u32 = self.olen(v);
+            let mut hi: u32;
+            let mut lo: u32;
+            hi = to;
+            if hi > leafn {
+                hi = leafn;
+            }
+            lo = from;
+            if lo > hi {
+                lo = hi;
+            }
+            self.sink_put_run(s, (v.as_heap() + crate::obj::HDR) + (lo as Addr), hi - lo);
+            return;
+        }
+        if t != TY_BROPE {
+            return;
+        }
+        let flat: Value = self.slot(v, crate::bytes::BB_FLAT);
+        if !flat.is_nil() {
+            self.b_append_range(flat, from, to, s);
+            return;
+        }
+        let n: u32 = self.olen(v) - crate::bytes::BB_KIDS;
+        let mut pos: u32;
+        pos = 0;
+        for i in 0..n {
+            if pos < to {
+                let k: Value = self.slot(v, crate::bytes::BB_KIDS + i);
+                let kn: u32 = self.b_count(k);
+                if (pos + kn) > from {
+                    let mut klo: u32;
+                    let mut khi: u32;
+                    klo = 0;
+                    if from > pos {
+                        klo = from - pos;
+                    }
+                    khi = to - pos;
+                    if khi > kn {
+                        khi = kn;
+                    }
+                    self.b_append_range(k, klo, khi, s);
+                }
+                pos += kn;
+            }
+        }
+    }
+    /// `v` as one flat leaf, CACHED in the node so the next ask is a slot read.
+    /// 
+    /// A leaf is already flat and answers itself. The cache is what makes
+    /// repeated reads of one rope cheap rather than repeatedly O(n) -- and it is
+    /// what `b-at` and `b-append` short-circuit through.
+    pub fn b_flatten(&mut self, v: Value) -> Value {
+        if !v.is_heap() {
+            return v;
+        }
+        if ty(&self.gc.sp, v.as_heap()) == TY_BYTES {
+            return v;
+        }
+        let cached: Value = self.slot(v, crate::bytes::BB_FLAT);
+        if !cached.is_nil() {
+            return cached;
+        }
+        // `v` LIVES IN THE ROOT across the allocation: `sink-bytes` allocates
+        // the leaf, and the node this is about to write into would be stale
+        // if it had been read into a host local before that.
+        let base: usize = self.mark();
+        let vi: usize = self.push(v);
+        let s: u32 = self.sink_open();
+        self.b_append(self.r(vi), s);
+        let flat: Value = self.sink_bytes(s);
+        self.sink_close(s);
+        if flat.is_heap() {
+            self.set(self.r(vi), crate::bytes::BB_FLAT, flat);
+        }
+        self.pop_to(base);
+        return flat;
+    }
+    /// `a` followed by `b`, copied into one flat leaf.
+    /// 
+    /// The tier below `FLAT_MAX`, where a tree costs more in metadata than the
+    /// copy saves -- and the tier that makes building a byte string one piece at
+    /// a time quadratic, which is what the transient is for.
+    pub fn b_copy_concat(&mut self, a: Value, b: Value) -> Value {
+        let s: u32 = self.sink_open();
+        self.b_append(a, s);
+        self.b_append(b, s);
+        let out: Value = self.sink_bytes(s);
+        self.sink_close(s);
+        return out;
+    }
+    /// Bytes `[from, to)` of `v`, copied into a fresh leaf.
+    /// 
+    /// What `SLICE_MIN` forces for a small range: a slice that SHARED would keep
+    /// the whole section it came from alive, so below the threshold the range is
+    /// copied on purpose. This is policy, not a fallback.
+    pub fn b_copy_range(&mut self, v: Value, from: u32, to: u32) -> Value {
+        let s: u32 = self.sink_open();
+        self.b_append_range(v, from, to, s);
+        let out: Value = self.sink_bytes(s);
+        self.sink_close(s);
+        return out;
+    }
 }

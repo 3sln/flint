@@ -842,14 +842,6 @@
                            :csharp "{0}.ThrowStr({1}, {2})"}
                           {:tag Value})
 
-    ;; THE HALF OF `Bytes` THAT IS NOT GENERATED. `b_copy_concat` flattens two
-    ;; values into one leaf, which needs a byte sink -- a growable host array
-    ;; of bytes -- and that is hole 5's other half, still open. So the tree
-    ;; half calls across to it, which is what `sibling` is for.
-    'b-copy-concat (sibling "b_copy_concat" "Bytes" "copyConcat" "CopyConcat" 2)
-    ;; The other half that stays hand-written: copying a RANGE out into a fresh
-    ;; leaf, which is what `SLICE_MIN` exists to force. Also a byte sink.
-    'b-copy-range (sibling "b_copy_range" "Bytes" "copyRange" "CopyRange" 3)
 
     ;; THE THREE STRING MEASUREMENTS, hand-written in all three and staying
     ;; that way. Each is O(1) for a rope -- the header carries it -- and each

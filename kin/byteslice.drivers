@@ -152,11 +152,12 @@ fn main() {
     static final class Str { static final int SLICE_MIN = 4; }
     static final class Bytes {
         static final int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
-        static long copyRange(Rt rt, long v, int from, int to) {
-            int[] out = new int[to - from];
-            for (int i = from; i < to; i++) out[i - from] = bAtProbe(rt, v, i);
-            return leaf(rt, out);
-        }
+    }
+    // `byteflat`'s now, reached across modules rather than as a `Bytes` sibling.
+    static long bCopyRange(Rt rt, long v, int from, int to) {
+        int[] out = new int[to - from];
+        for (int i = from; i < to; i++) out[i - from] = bAtProbe(rt, v, i);
+        return leaf(rt, out);
     }
     static final class Val {
         static boolean isHeap(long v) { return v >= 100 && v != NIL; }
@@ -270,12 +271,10 @@ fn main() {
         return s.toString();
     }
 --csharp-head
-    internal static class Bytes {
-        internal static long CopyRange(Rt rt, long v, int from, int to) {
-            int[] outb = new int[to - from];
-            for (int i = from; i < to; i++) outb[i - from] = BAtProbe(rt, v, i);
-            return Leaf(rt, outb);
-        }
+    internal static long BCopyRange(Rt rt, long v, int from, int to) {
+        int[] outb = new int[to - from];
+        for (int i = from; i < to; i++) outb[i - from] = BAtProbe(rt, v, i);
+        return Leaf(rt, outb);
     }
     internal static class Obj {
         internal const long Hdr = 8;

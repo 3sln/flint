@@ -12,6 +12,7 @@ using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Bytecore;
+using static global::_3sln.Flint.Kgen.Rt.Byteflat;
 using static global::_3sln.Flint.Kgen.Rt.Bytefold;
 
 public static class Byteslice {
@@ -49,10 +50,10 @@ public static class Byteslice {
         // names. The copy needs a byte sink, so it lives in the
         // hand-written half.
         if ((hi - lo) < global::Flint.Rt.Str.SLICE_MIN) {
-            return Bytes.CopyRange(rt, v, lo, hi);
+            return BCopyRange(rt, v, lo, hi);
         }
         if (!IsBrope(rt, v)) {
-            return Bytes.CopyRange(rt, v, lo, hi);
+            return BCopyRange(rt, v, lo, hi);
         }
         int @base = rt.Mark();
         int vi = rt.Push(v);

@@ -150,14 +150,14 @@ fn main() {
         static final int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
         static final int TB_TREE = 0, TB_TAIL = 1, TB_FILL = 2, TB_LIVE = 3;
         static final int TAIL_CAP = 8;
-        // The hand-written half, reached as a sibling. A leaf is modelled by
-        // its LENGTH alone here, so joining two is a leaf of the summed length.
-        static long copyConcat(Rt rt, long a, long b) {
-            int n = bCount(rt, a) + bCount(rt, b);
-            long x = rt.alloc(TY_BYTES, n);
-            if (x == 0) return NIL;
-            return Val.heap(x);
-        }
+    }
+    // `byteflat`'s now, reached across modules. A leaf is modelled by its
+    // LENGTH alone here, so joining two is a leaf of the summed length.
+    static long bCopyConcat(Rt rt, long a, long b) {
+        int n = bCount(rt, a) + bCount(rt, b);
+        long x = rt.alloc(TY_BYTES, n);
+        if (x == 0) return NIL;
+        return Val.heap(x);
     }
     static final class Val {
         static boolean isNil(long v) { return v == NIL; }
@@ -272,13 +272,11 @@ namespace Flint.Rt {
     }
 }
 --csharp-head
-    internal static class Bytes {
-        internal static long CopyConcat(Rt rt, long a, long b) {
-            int n = BCount(rt, a) + BCount(rt, b);
-            long x = rt.Alloc(Obj.TyBytes, n);
-            if (x == 0) return Val.Nil;
-            return Val.Heap(x);
-        }
+    internal static long BCopyConcat(Rt rt, long a, long b) {
+        int n = BCount(rt, a) + BCount(rt, b);
+        long x = rt.Alloc(Obj.TyBytes, n);
+        if (x == 0) return Val.Nil;
+        return Val.Heap(x);
     }
     internal static class Obj {
         internal const int TyBytes = 44, TyBrope = 45, TyTbytes = 46, TyVec = 9;

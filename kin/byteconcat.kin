@@ -24,9 +24,9 @@
                                    == != < <= >= + - not nil? is-heap as-heap ty
                                    for as-idx local set olen slot
                                    mark push r pop-to quot
-                                   b-copy-concat
                                    Rt Value RootIx I32 Ty NIL
                                    TY_BYTES TY_BROPE BB_KIDS FLAT_MAX FANOUT]]
+            [flint.rt.byteflat :refer [b-copy-concat]]
             [flint.rt.bytecore :refer [b-count b-depth]]
             [flint.rt.bytenode :refer [b-node b-wrap-to]]))
 

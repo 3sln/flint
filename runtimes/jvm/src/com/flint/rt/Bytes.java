@@ -82,24 +82,9 @@ public final class Bytes {
     /// reached from the generated tree half. `SLICE_MIN` is the retention fix --
     /// a three-byte slice must not keep a 509 KB section alive -- so this path
     /// exists to STOP sharing, deliberately.
-    public static long copyRange(Rt rt, long v, int from, int to) {
-        ArrayList<byte[]> parts = new ArrayList<>();
-        appendRange(rt, v, from, to, parts);
-        int total = 0;
-        for (byte[] p : parts) total += p.length;
-        byte[] outb = new byte[total];
-        int at = 0;
-        for (byte[] p : parts) { System.arraycopy(p, 0, outb, at, p.length); at += p.length; }
-        return of(rt, outb);
-    }
+    public static long copyRange(Rt rt, long v, int from, int to) { return com._3sln.flint.kgen.rt.Byteflat.bCopyRange(rt, v, from, to); }
 
-    public static long copyConcat(Rt rt, long a, long b) {
-        byte[] x = toArray(rt, a), y = toArray(rt, b);
-        byte[] both = new byte[x.length + y.length];
-        System.arraycopy(x, 0, both, 0, x.length);
-        System.arraycopy(y, 0, both, x.length, y.length);
-        return of(rt, both);
-    }
+    public static long copyConcat(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Byteflat.bCopyConcat(rt, a, b); }
 
     public static long concat(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Byteconcat.bConcat(rt, a, b); }
 
@@ -112,19 +97,7 @@ public final class Bytes {
     static long absorb(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Byteconcat.bAbsorb(rt, a, b); }
 
     /// A contiguous copy, CACHED on the node so a second walk is free.
-    public static long flatten(Rt rt, long v) {
-        if (!Val.isHeap(v)) return v;
-        if (ty(rt.gc.sp, Val.asHeap(v)) == TY_BYTES) return v;
-        long cached = rt.slot(v, BB_FLAT);
-        if (!Val.isNil(cached)) return cached;
-        byte[] all = toArray(rt, v);
-        int base = rt.mark();
-        int vi = rt.push(v);
-        long flat = of(rt, all);
-        if (Val.isHeap(flat)) rt.setSlot(Val.asHeap(rt.r(vi)), BB_FLAT, flat);
-        rt.popTo(base);
-        return flat;
-    }
+    public static long flatten(Rt rt, long v) { return com._3sln.flint.kgen.rt.Byteflat.bFlatten(rt, v); }
 
     /// Append only `[from, to)`, descending rather than materialising. A
     /// subtree entirely outside the range is skipped whole, which is what makes
@@ -132,29 +105,6 @@ public final class Bytes {
     /// quadratic in the caller: tree-shaking slices a thousand function bodies
     /// out of one 509 KB code section, and materialising it per slice is half a
     /// gigabyte of copying.
-    static void appendRange(Rt rt, long v, int from, int to, ArrayList<byte[]> out) {
-        if (!Val.isHeap(v) || from >= to) return;
-        int t = ty(rt.gc.sp, Val.asHeap(v));
-        if (t == TY_BYTES) {
-            int n = len(rt.gc.sp, Val.asHeap(v));
-            int hi = Math.min(to, n), lo = Math.min(from, hi);
-            if (hi > lo) out.add(rt.gc.sp.bytes(Val.asHeap(v) + HDR + lo, hi - lo));
-            return;
-        }
-        if (t != TY_BROPE) return;
-        long flat = rt.slot(v, BB_FLAT);
-        if (!Val.isNil(flat)) { appendRange(rt, flat, from, to, out); return; }
-        int n = len(rt.gc.sp, Val.asHeap(v)) - BB_KIDS;
-        int pos = 0;
-        for (int i = 0; i < n && pos < to; i++) {
-            long k = rt.slot(v, BB_KIDS + i);
-            int kn = count(rt, k);
-            if (pos + kn > from) {
-                appendRange(rt, k, Math.max(from - pos, 0), Math.min(to - pos, kn), out);
-            }
-            pos += kn;
-        }
-    }
 
         static boolean isBrope(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytecore.isBrope(rt, v); }
 
