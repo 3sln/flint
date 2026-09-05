@@ -50,6 +50,7 @@ pub mod merge;
 pub mod nodeclass;
 pub mod pike;
 pub mod ropecat;
+pub mod ropecp;
 pub mod ropeeq;
 pub mod ropeflat;
 pub mod ropenode;

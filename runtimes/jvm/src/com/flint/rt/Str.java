@@ -329,76 +329,6 @@ public final class Str {
         return Val.inlineStr(one);
     }
 
-    /// How many bytes the code point starting with `b0` occupies.
-    static int utf8Width(byte b0) {
-        int c = b0 & 0xFF;
-        if (c < 0x80) return 1;
-        if (c < 0xE0) return 2;
-        if (c < 0xF0) return 3;
-        return 4;
-    }
-
-    /// The byte offset of code point `k` in a rope, BY DESCENDING its per-node
-    /// code-point counts.
-    ///
-    /// `doc/decisions/0011` designed those counts for exactly this and nothing
-    /// used them: every indexing path flattened first, so the counts were
-    /// computed, stored, traced by the collector, and thrown away before the
-    /// one question they answer.
-    ///
-    /// -1 when `k` is past the end.
-    static int ropeByteOfCp(Rt rt, long v, int k) {
-        long node = v;
-        int want = k, byteAt = 0;
-        for (;;) {
-            if (!isRope(rt, node)) {
-                int n = sCount(rt, node);
-                if (want >= n) return -1;
-                if (sAscii(rt, node)) return byteAt + want;
-                byte[] b = bytes(rt, node);
-                int at = 0;
-                for (int i = 0; i < want; i++) at += utf8Width(b[at]);
-                rt.chargeBytes(at);
-                return byteAt + at;
-            }
-            int nk = ropeKids(rt, node), i = 0;
-            for (;;) {
-                if (i >= nk) return -1;
-                long kid = rt.slot(node, RP_KIDS + i);
-                int c = sCount(rt, kid);
-                if (want < c) { node = kid; break; }
-                want -= c;
-                byteAt += sBytes(rt, kid);
-                i++;
-            }
-            rt.chargeWork(i + 1);
-        }
-    }
-
-    /// The bytes of the code point at byte offset `byteAt`, from whichever leaf
-    /// holds it. Returns the width, with the bytes written into `out`.
-    static int ropeBytesAt(Rt rt, long v, int byteAt, byte[] out) {
-        long node = v;
-        int want = byteAt;
-        for (;;) {
-            if (!isRope(rt, node)) {
-                byte[] b = bytes(rt, node);
-                int w = utf8Width(b[want]);
-                System.arraycopy(b, want, out, 0, w);
-                return w;
-            }
-            int nk = ropeKids(rt, node), i = 0;
-            for (;;) {
-                if (i >= nk) return 0;
-                long kid = rt.slot(node, RP_KIDS + i);
-                int n = sBytes(rt, kid);
-                if (want < n) { node = kid; break; }
-                want -= n;
-                i++;
-            }
-        }
-    }
-
     /// The bytes of the code point at index `i`, or -1.
     ///
     /// WHICH MECHANISM, AND WHY -- `0011` calls them complementary and this is
@@ -416,9 +346,15 @@ public final class Str {
     static int cpBytesAt(Rt rt, long v, int i, byte[] out) {
         if (i < 0) return -1;
         if (isRope(rt, v) && !sAscii(rt, v)) {
+            // PAST THE END NEEDS NO CHECK HERE: `ropeByteOfCp` answers the
+            // byte length when there is no such code point, and `ropeBytesAt`
+            // answers 0 for an offset at or past the end.
             int at = ropeByteOfCp(rt, v, i);
-            if (at < 0) return -1;
-            int w = ropeBytesAt(rt, v, at, out);
+            int sk = rt.sinkOpen();
+            int w = ropeBytesAt(rt, v, at, sk);
+            byte[] got = rt.sinkArray(sk);
+            for (int j = 0; j < w; j++) out[j] = got[j];
+            rt.sinkClose(sk);
             return w == 0 ? -1 : w;
         }
         byte[] b = bytes(rt, flatten(rt, v));
@@ -431,12 +367,12 @@ public final class Str {
             at = 0;
             for (int k = 0; k < i; k++) {
                 if (at >= b.length) return -1;
-                at += utf8Width(b[at]);
+                at += utf8Width(rt, b[at] & 0xFF);
             }
             rt.chargeBytes(at);
         }
         if (at >= b.length) return -1;
-        int w = utf8Width(b[at]);
+        int w = utf8Width(rt, b[at] & 0xFF);
         System.arraycopy(b, at, out, 0, w);
         return w;
     }
@@ -599,6 +535,9 @@ public final class Str {
     public static long flatten(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropeflat.sFlatten(rt, v); }
     public static int ropeHash(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropeflat.ropeHash(rt, v); }
     public static boolean treeEq(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Ropeeq.treeEq(rt, a, b); }
+    static int utf8Width(Rt rt, int b0) { return com._3sln.flint.kgen.rt.Ropecp.utf8Width(rt, b0); }
+    public static int ropeByteOfCp(Rt rt, long v, int k) { return com._3sln.flint.kgen.rt.Ropecp.ropeByteOfCp(rt, v, k); }
+    static int ropeBytesAt(Rt rt, long v, int at, int s) { return com._3sln.flint.kgen.rt.Ropecp.ropeBytesAt(rt, v, at, s); }
 
     /// Byte length. NOT the code-point count -- see the class comment.
     public static int byteLen(Rt rt, long v) { return sBytes(rt, v); }

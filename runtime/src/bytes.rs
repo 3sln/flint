@@ -260,6 +260,13 @@ impl Rt {
 
     /// The sink's contents as a byte string. The sink is left alone -- the
     /// caller closes it, because the caller opened it.
+    /// The raw contents, for host code that wants an array rather than a
+    /// value. Both ports already had one; Rust reached into `sinks` instead,
+    /// which is the same thing spelled differently in one runtime.
+    pub fn sink_array(&self, s: u32) -> &[u8] {
+        &self.sinks[s as usize]
+    }
+
     pub fn sink_bytes(&mut self, s: u32) -> Value {
         let n = self.sinks[s as usize].len() as u32;
         let a = self.alloc_bytes(n);

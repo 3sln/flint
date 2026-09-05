@@ -810,10 +810,12 @@ public static class Builtins {
                     return rt.ThrowStr("IndexOutOfBoundsException",
                         "subs " + st + ".." + en + " of " + cps);
                 bool ascii = Str.SAscii(rt, v0);
-                int from = ascii ? st : Str.RopeByteOfCpPublic(rt, v0, st);
-                int to = (en == cps) ? Str.SBytes(rt, v0)
-                       : (ascii ? en : Str.RopeByteOfCpPublic(rt, v0, en));
-                if (from < 0 || to < 0)
+                int nb = Str.SBytes(rt, v0);
+                int from = ascii ? st : Str.RopeByteOfCp(rt, v0, st);
+                int to = (en == cps) ? nb : (ascii ? en : Str.RopeByteOfCp(rt, v0, en));
+                // ABSENT IS `nb` NOW, not -1: a real offset is 0..nb-1, so
+                // the byte length is free to mean "no such code point".
+                if (from >= nb)
                     return rt.ThrowStr("IndexOutOfBoundsException",
                         "subs " + st + ".." + en + " of " + cps);
                 return Str.RopeSlice(rt, v0, from, to);

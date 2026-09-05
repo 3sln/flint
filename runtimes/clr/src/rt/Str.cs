@@ -206,15 +206,6 @@ public static class Str {
         return Val.InlineStr(one);
     }
 
-    /// How many bytes the code point starting with `b0` occupies.
-    static int Utf8Width(byte b0) {
-        int c = b0 & 0xFF;
-        if (c < 0x80) return 1;
-        if (c < 0xE0) return 2;
-        if (c < 0xF0) return 3;
-        return 4;
-    }
-
     /// The byte offset of code point `k` in a rope, BY DESCENDING its per-node
     /// code-point counts.
     ///
@@ -222,59 +213,6 @@ public static class Str {
     /// used them: every indexing path flattened first, so the counts were
     /// computed, stored, traced by the collector, and thrown away before the
     /// one question they answer.
-    public static int RopeByteOfCpPublic(Rt rt, long v, int k) => RopeByteOfCp(rt, v, k);
-
-    static int RopeByteOfCp(Rt rt, long v, int k) {
-        long node = v;
-        int want = k, byteAt = 0;
-        for (;;) {
-            if (!IsRope(rt, node)) {
-                int n = SCount(rt, node);
-                if (want >= n) return -1;
-                if (SAscii(rt, node)) return byteAt + want;
-                byte[] b = Bytes(rt, node);
-                int at = 0;
-                for (int c2 = 0; c2 < want; c2++) at += Utf8Width(b[at]);
-                rt.ChargeBytes(at);
-                return byteAt + at;
-            }
-            int nk = RopeKids(rt, node), i = 0;
-            for (;;) {
-                if (i >= nk) return -1;
-                long kid = rt.Slot(node, RP_KIDS + i);
-                int c = SCount(rt, kid);
-                if (want < c) { node = kid; break; }
-                want -= c;
-                byteAt += SBytes(rt, kid);
-                i++;
-            }
-            rt.ChargeWork(i + 1);
-        }
-    }
-
-    /// The bytes of the code point at byte offset `byteAt`, from whichever leaf
-    /// holds it. Returns the width, with the bytes written into `outb`.
-    static int RopeBytesAt(Rt rt, long v, int byteAt, byte[] outb) {
-        long node = v;
-        int want = byteAt;
-        for (;;) {
-            if (!IsRope(rt, node)) {
-                byte[] b = Bytes(rt, node);
-                int w = Utf8Width(b[want]);
-                System.Array.Copy(b, want, outb, 0, w);
-                return w;
-            }
-            int nk = RopeKids(rt, node), i = 0;
-            for (;;) {
-                if (i >= nk) return 0;
-                long kid = rt.Slot(node, RP_KIDS + i);
-                int n = SBytes(rt, kid);
-                if (want < n) { node = kid; break; }
-                want -= n;
-                i++;
-            }
-        }
-    }
 
     /// The bytes of the code point at index `i`, or -1.
     ///
@@ -293,9 +231,13 @@ public static class Str {
     static int CpBytesAt(Rt rt, long v, int i, byte[] outb) {
         if (i < 0) return -1;
         if (IsRope(rt, v) && !SAscii(rt, v)) {
+            // PAST THE END NEEDS NO CHECK HERE -- see the Java and Rust copies.
             int at2 = RopeByteOfCp(rt, v, i);
-            if (at2 < 0) return -1;
-            int w2 = RopeBytesAt(rt, v, at2, outb);
+            int sk = rt.SinkOpen();
+            int w2 = RopeBytesAt(rt, v, at2, sk);
+            byte[] got = rt.SinkArray(sk);
+            for (int j = 0; j < w2; j++) outb[j] = got[j];
+            rt.SinkClose(sk);
             return w2 == 0 ? -1 : w2;
         }
         long flat = Flatten(rt, v);
@@ -309,12 +251,12 @@ public static class Str {
             at = 0;
             for (int k = 0; k < i; k++) {
                 if (at >= b.Length) return -1;
-                at += Utf8Width(b[at]);
+                at += Utf8Width(rt, b[at]);
             }
             rt.ChargeBytes(at);
         }
         if (at >= b.Length) return -1;
-        int w = Utf8Width(b[at]);
+        int w = Utf8Width(rt, b[at]);
         System.Array.Copy(b, at, outb, 0, w);
         return w;
     }
@@ -554,6 +496,9 @@ public static class Str {
     public static long Flatten(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropeflat.SFlatten(rt, v); }
     public static int RopeHash(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropeflat.RopeHash(rt, v); }
     public static bool TreeEq(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Ropeeq.TreeEq(rt, a, b); }
+    static int Utf8Width(Rt rt, int b0) { return global::_3sln.Flint.Kgen.Rt.Ropecp.Utf8Width(rt, b0); }
+    public static int RopeByteOfCp(Rt rt, long v, int k) { return global::_3sln.Flint.Kgen.Rt.Ropecp.RopeByteOfCp(rt, v, k); }
+    static int RopeBytesAt(Rt rt, long v, int at, int s) { return global::_3sln.Flint.Kgen.Rt.Ropecp.RopeBytesAt(rt, v, at, s); }
 
     /// Byte length. NOT the code-point count -- see the class comment.
     public static int ByteLen(Rt rt, long v) => SBytes(rt, v);

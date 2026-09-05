@@ -776,8 +776,15 @@ impl Rt {
             // to flatten here, which turns an O(log n) descent into an O(n)
             // copy AND caches the flat form, undoing the tree for every later
             // read (`doc/decisions/0011`).
-            let byte = if self.s_ascii(s) { i } else { self.rope_byte_of_cp(s, i)? };
-            let w = self.rope_bytes_at(s, byte, out);
+            // PAST THE END NEEDS NO CHECK HERE. `rope_byte_of_cp` answers the
+            // byte length when there is no such code point, and
+            // `rope_bytes_at` answers 0 for an offset at or past the end -- so
+            // the one test below catches both, where an `Option` needed two.
+            let byte = if self.s_ascii(s) { i } else { self.rope_byte_of_cp(s, i) };
+            let sk = self.sink_open();
+            let w = self.rope_bytes_at(s, byte, sk);
+            out[..w as usize].copy_from_slice(&self.sink_array(sk)[..w as usize]);
+            self.sink_close(sk);
             return if w == 0 { None } else { Some(w) };
         }
         let s = self.string_arg(s);
@@ -798,7 +805,7 @@ impl Rt {
                 if at as usize >= b.len() {
                     return None;
                 }
-                at += utf8_width(b[at as usize]);
+                at += self.utf8_width(b[at as usize] as u32);
             }
             scanned = at;
             at
@@ -806,7 +813,7 @@ impl Rt {
         if at as usize >= b.len() {
             return None;
         }
-        let w = utf8_width(b[at as usize]);
+        let w = self.utf8_width(b[at as usize] as u32);
         out[..w as usize].copy_from_slice(&b[at as usize..at as usize + w as usize]);
         // After the borrow of `b` ends: charged for what was walked.
         self.charge_bytes(scanned);
@@ -865,20 +872,16 @@ impl Rt {
         if start == e {
             return self.string("");
         }
-        let from = match self.rope_byte_of_cp(s, start as u32) {
-            Some(b) => b,
-            None => return self.throw_str("StringIndexOutOfBoundsException", "bad substring range"),
-        };
+        let n = self.s_bytes(s);
+        let from = self.rope_byte_of_cp(s, start as u32);
+        if from >= n {
+            return self.throw_str("StringIndexOutOfBoundsException", "bad substring range");
+        }
         // The END offset is the start of code point `e`, or the whole byte
         // length when `e` is the count -- there is no code point AT the end.
-        let to = if e as u32 == self.s_count(s) {
-            self.s_bytes(s)
-        } else {
-            match self.rope_byte_of_cp(s, e as u32) {
-                Some(b) => b,
-                None => self.s_bytes(s),
-            }
-        };
+        // Both branches now answer `n` for "past the end", so the second one
+        // has nothing left to decide.
+        let to = if e as u32 == self.s_count(s) { n } else { self.rope_byte_of_cp(s, e as u32) };
         self.rope_slice(s, from, to)
     }
 
@@ -1604,20 +1607,3 @@ impl Rt {
 
 /// A scratch buffer type used by string builtins.
 pub const SBUF_LEN: usize = INLINE_MAX;
-
-/// How many bytes the code point starting with `b0` occupies.
-///
-/// The same table `char_width_at` uses, as a free function so the cursor walk
-/// can read it straight off a byte slice rather than re-fetching per byte.
-#[inline]
-pub fn utf8_width(b0: u8) -> u32 {
-    if b0 < 0x80 {
-        1
-    } else if b0 < 0xE0 {
-        2
-    } else if b0 < 0xF0 {
-        3
-    } else {
-        4
-    }
-}

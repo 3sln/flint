@@ -942,6 +942,15 @@
     ;; length in the VALUE; a flat string keeps them at `STR_DATA`; a byte leaf
     ;; at `HDR`. One question, three places to look -- so it is asked once here
     ;; rather than branched on in every source that walks leaves.
+    ;; GAS. Charging is a mutation of the runtime, not of the value, and a
+    ;; generated source has to be able to do it: `0009` says gas is
+    ;; proportional to work, and a loop that scans a leaf has done work whether
+    ;; it was written by hand or not. `charge-bytes` is the same charge divided
+    ;; by eight, which every runtime already spells for itself.
+    'charge-work (core/call {:rust "{0}.charge_work({1} as u64)"
+                             :java "{0}.chargeWork({1})" :csharp "{0}.ChargeWork({1})"})
+    'charge-bytes (core/call {:rust "{0}.charge_bytes({1})"
+                              :java "{0}.chargeBytes({1})" :csharp "{0}.ChargeBytes({1})"})
     'leaf-len (core/call {:rust "{0}.leaf_len({1})"
                           :java "{0}.leafLen({1})" :csharp "{0}.LeafLen({1})"}
                          {:tag I32})

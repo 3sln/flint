@@ -1,0 +1,139 @@
+;; Code-point indexing over a string tree, WITHOUT flattening it.
+;;
+;; `doc/decisions/0011` designed the per-node code-point counts for exactly
+;; this and nothing ever used them: every indexing path called `string_arg`
+;; first, which flattens, so the counts were computed, stored, traced by the
+;; collector, and then thrown away before the one question they answer.
+;;
+;; THE WIDTH FUNCTION IS HERE TOO, and it moved. Rust kept it in `coll.rs` and
+;; both ports kept a copy in `Str` -- three copies of a four-way comparison
+;; that no test compared. It is four lines; it is also exactly the kind of
+;; thing that stays right by luck.
+(ns flint.rt.ropecp
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < > >= not
+                                   + - local set forever break
+                                   leaf-len leaf-byte s-bytes s-count s-ascii
+                                   slot charge-bytes charge-work sink-put
+                                   Rt Value I32 Bool Sink RP_KIDS]]
+            [flint.rt.ropecat :refer [is-rope rope-kids]]))
+
+(doc "How many bytes the code point starting with `b0` occupies."
+     ""
+     "`^:method` with a receiver it never reads: a receiverless call has no"
+     "portable spelling in Rust, where the generated tree is an `impl` block.")
+(defn ^:pub ^:method ^I32 utf8-width [^Rt rt ^I32 b0]
+  (if (< b0 0x80) (return 1))
+  (if (< b0 0xE0) (return 2))
+  (if (< b0 0xF0) (return 3))
+  (return 4))
+
+(doc "The byte offset of code point `k`, by DESCENDING rather than flattening."
+     ""
+     "PAST THE END ANSWERS `s-bytes`, the offset one past the last byte. A"
+     "real answer is always `0 .. n-1`, so `n` is free to mean absent and no"
+     "sentinel has to be invented -- the same trick `map-index-of` uses. Rust"
+     "returned `Option<u32>` and both ports returned -1, which is the same"
+     "question answered three ways, and -1 does not survive the trip to an"
+     "unsigned index.")
+(defn ^:pub ^:method ^I32 rope-byte-of-cp [^:mut ^Rt rt ^Value v ^I32 k]
+  (let [^I32 absent (s-bytes rt v)]
+    (local ^:mut ^Value node)
+    (local ^:mut ^I32 want)
+    (local ^:mut ^I32 base)
+    (set node v)
+    (set want k)
+    (set base 0)
+    (forever
+      (if (not (is-rope rt node))
+        (do
+          (comment "A LEAF. ASCII means the index IS the offset; otherwise"
+                   "scan, bounded by the leaf.")
+          (if (>= want (s-count rt node))
+            (return absent))
+          (if (s-ascii rt node)
+            (return (+ base want)))
+          (local ^:mut ^I32 at)
+          (local ^:mut ^I32 seen)
+          (set at 0)
+          (set seen 0)
+          (forever
+            (if (== seen want) (break))
+            (set at (+ at (utf8-width rt (leaf-byte rt node at))))
+            (set seen (+ seen 1)))
+          (comment "CHARGED FOR THE SCAN, bounded by the leaf. Gas is meant to"
+                   "be proportional to work (0009) -- and it has to be charged"
+                   "for a walk that is real, or `test/scaling.clj` is measuring"
+                   "nothing and a quadratic reads as linear. That is how the"
+                   "flat-string one hid.")
+          (charge-bytes rt at)
+          (return (+ base at))))
+      (let [^I32 nkids (rope-kids rt node)]
+        (local ^:mut ^I32 i)
+        (local ^:mut ^Bool found)
+        (set i 0)
+        (set found false)
+        (forever
+          (if (>= i nkids) (break))
+          (let [^Value kid (slot rt node (+ RP_KIDS i))
+                ^I32 c (s-count rt kid)]
+            (if (< want c)
+              (do (set node kid)
+                  (set found true)
+                  (break)))
+            (set want (- want c))
+            (set base (+ base (s-bytes rt kid)))
+            (set i (+ i 1))))
+        (comment "One step per node examined: the descent is work too, and a"
+                 "fanout scan that cost nothing would let a pathological tree"
+                 "hide.")
+        (charge-work rt (+ i 1))
+        (if (not found)
+          (return absent))))))
+
+(doc "The bytes of the code point at byte offset `at0`, put into the sink `s`."
+     ""
+     "Answers how many bytes it put, or 0 when the offset is past the end."
+     ""
+     "TAKES THE OFFSET `rope-byte-of-cp` RETURNED, so it walks the tree once"
+     "more rather than being handed the leaf. That is deliberate: handing back"
+     "a leaf would be handing back a `Value` the caller has to root, and the"
+     "second descent is O(depth) against a leaf scan that dominates it.")
+(defn ^:pub ^:method ^I32 rope-bytes-at [^:mut ^Rt rt ^Value v ^I32 at0 ^Sink s]
+  (local ^:mut ^Value node)
+  (local ^:mut ^I32 want)
+  (set node v)
+  (set want at0)
+  (forever
+    (if (not (is-rope rt node))
+      (do
+        (if (>= want (leaf-len rt node))
+          (return 0))
+        (comment "`put` and not `i`: C# refuses a local whose name is used in"
+                 "an enclosing scope, even from a sibling branch, and the node"
+                 "half of this loop already has an `i`.")
+        (let [^I32 w (utf8-width rt (leaf-byte rt node want))]
+          (local ^:mut ^I32 put)
+          (set put 0)
+          (forever
+            (if (== put w) (break))
+            (sink-put rt s (leaf-byte rt node (+ want put)))
+            (set put (+ put 1)))
+          (return w))))
+    (let [^I32 nkids (rope-kids rt node)]
+      (local ^:mut ^I32 i)
+      (local ^:mut ^Bool found)
+      (set i 0)
+      (set found false)
+      (forever
+        (if (>= i nkids) (break))
+        (let [^Value kid (slot rt node (+ RP_KIDS i))
+              ^I32 n (s-bytes rt kid)]
+          (if (< want n)
+            (do (set node kid)
+                (set found true)
+                (break)))
+          (set want (- want n))
+          (set i (+ i 1))))
+      (if (not found)
+        (return 0)))))

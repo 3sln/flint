@@ -880,10 +880,12 @@ rt.describe(v) + " is not transientable");
                 boolean ascii = Str.sAscii(rt, v0);
                 // For ASCII a code point IS a byte; otherwise descend for the
                 // byte offsets rather than scanning.
+                int nb = Str.sBytes(rt, v0);
                 int from = ascii ? st : Str.ropeByteOfCp(rt, v0, st);
-                int to = (en == cps) ? Str.sBytes(rt, v0)
-                        : (ascii ? en : Str.ropeByteOfCp(rt, v0, en));
-                if (from < 0 || to < 0) {
+                int to = (en == cps) ? nb : (ascii ? en : Str.ropeByteOfCp(rt, v0, en));
+                // ABSENT IS `nb` NOW, not -1: a real offset is 0..nb-1, so the
+                // byte length is free to mean "no such code point".
+                if (from >= nb) {
                     return rt.throwStr("IndexOutOfBoundsException",
                             "subs " + st + ".." + en + " of " + cps);
                 }
