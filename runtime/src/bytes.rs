@@ -226,44 +226,6 @@ impl Rt {
 
 
 
-    /// The content hash of a byte tree, cached per node. `rope_hash` with the
-    /// text dropped.
-    pub fn b_hash(&mut self, v: Value) -> u32 {
-        if !self.is_brope(v) {
-            // Read through the heap rather than through a borrowed slice.
-            // `b_leaf_bytes` handed back a `&[u8]` -- hole 6's shape, and the
-            // only thing still asking for it once `b_eq` was generated.
-            let mut h: u32 = 0;
-            if v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_BYTES {
-                let n = len(&self.gc.sp, v.as_heap());
-                for i in 0..n {
-                    let c = self.gc.sp.read_u8(v.as_heap() + HDR + i as crate::mem::Addr);
-                    h = h.wrapping_mul(31).wrapping_add(c as u32);
-                }
-            }
-            return h;
-        }
-        let cached = self.slot(v, BB_HASH);
-        if cached.is_fixnum() {
-            return cached.as_fixnum() as u32;
-        }
-        let base = self.mark();
-        let vi = self.push(v);
-        let kids = len(&self.gc.sp, self.r(vi).as_heap()) - BB_KIDS;
-        let mut h: u32 = 0;
-        for i in 0..kids {
-            let k = self.slot(self.r(vi), BB_KIDS + i);
-            let ki = self.push(k);
-            let kh = self.b_hash(self.r(ki));
-            let kb = self.b_count(self.r(ki));
-            h = h.wrapping_mul(Self::pow31(kb)).wrapping_add(kh);
-            self.pop_to(ki);
-        }
-        let vv = self.r(vi);
-        self.set_slot(vv.as_heap(), BB_HASH, Value::fixnum(h as i64));
-        self.pop_to(base);
-        h
-    }
 
 
 }

@@ -333,18 +333,6 @@ impl Rt {
             && self.rope_walk_next(&mut sb).is_none()
     }
 
-    /// `31^n`, by squaring. The multiplier that lets two cached hashes join.
-    pub(crate) fn pow31(mut n: u32) -> u32 {
-        let (mut base, mut acc) = (31u32, 1u32);
-        while n > 0 {
-            if n & 1 == 1 {
-                acc = acc.wrapping_mul(base);
-            }
-            base = base.wrapping_mul(base);
-            n >>= 1;
-        }
-        acc
-    }
 
     /// The content hash of a string tree, WITHOUT materialising it.
     ///
@@ -376,7 +364,7 @@ impl Rt {
             let kb = self.s_bytes(self.r(ki));
             // h(A·B) = h(A)·31^|B| + h(B). The bytes, not the code points:
             // this must agree with the flat hash, which steps per BYTE.
-            h = h.wrapping_mul(Self::pow31(kb)).wrapping_add(kh);
+            h = h.wrapping_mul(self.pow31(kb)).wrapping_add(kh);
             self.pop_to(ki);
         }
         let vv = self.r(vi);

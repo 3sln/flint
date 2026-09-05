@@ -1,0 +1,101 @@
+;; The content hash of a byte tree, cached per node.
+;;
+;; TWO TREES OVER THE SAME BYTES MUST HASH ALIKE, whatever shape they are in --
+;; that is what makes a byte string usable as a map key when slicing shares and
+;; concatenation nests. So the hash cannot be over the structure: it is the
+;; ordinary string hash of the bytes in order, combined so that a node's hash
+;; is what the flat leaf would have had.
+;;
+;; `h * 31 + c` per byte is the whole rule. Joining two subtrees is therefore
+;; `ha * 31^(length of b) + hb`, and `pow31` is that power -- computed by
+;; squaring rather than by looping over the length, because the length is the
+;; thing this exists to avoid walking.
+;;
+;; EVERY MULTIPLY WRAPS. Rust panics on overflow in a debug build, so a plain
+;; `*` here is correct in release and a crash in the build that runs the tests.
+(ns flint.rt.bytehash
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != > >= not is-heap as-heap ty
+                                   + - bit-and shl ushr wmul wadd
+                                   local set while for to-addr to-i32
+                                   olen slot set-slot is-fixnum as-fixnum fixnum
+                                   mark push r pop-to read-u8
+                                   Rt Value I32 RootIx HDR
+                                   TY_BYTES BB_HASH BB_KIDS]]
+            [flint.rt.bytecore :refer [b-count is-brope]]))
+
+(doc "31 to the power of `n`, wrapping."
+     ""
+     "`^:method` WITH THE RECEIVER UNUSED, and that is deliberate. Without it"
+     "this is a function with no receiver, which Java and C# put beside its"
+     "siblings in one class -- the bare name finds it -- while Rust puts it in"
+     "an `impl` block where the bare name is not in scope. Whether `Self::` is"
+     "right depends on whether the emitted unit opened an impl at all, which"
+     "the call site cannot know: `hash.kin` has no receiver anywhere and emits"
+     "at module level, where `Self::` does not compile. Taking the receiver"
+     "and ignoring it costs one unused parameter in the ports and is the same"
+     "in all three."
+     ""
+     "By SQUARING, not by looping `n` times: `n` is the byte length of a"
+     "subtree, and looping over it would make combining two hashes cost what"
+     "walking the bytes costs -- which is the walk the cached hash exists to"
+     "avoid.")
+(defn ^:pub ^:method ^I32 pow31 [^Rt rt ^I32 n]
+  (local ^:mut ^I32 left)
+  (local ^:mut ^I32 base)
+  (local ^:mut ^I32 acc)
+  (set left n)
+  (set base 31)
+  (set acc 1)
+  (while (> left 0)
+    (if (== (bit-and left 1) 1)
+      (set acc (wmul acc base)))
+    (set base (wmul base base))
+    (set left (ushr left 1)))
+  (return acc))
+
+(doc "The content hash of `v`, cached in every node it descends through."
+     ""
+     "A LEAF is hashed byte by byte. A node combines its children's hashes,"
+     "which are themselves cached -- so the second ask of a big tree is a slot"
+     "read, and the first is one pass over the bytes rather than one per node."
+     ""
+     "The cache is checked with `is-fixnum` rather than against nil, because"
+     "zero is a legitimate hash and `NIL` is what an uncomputed slot holds.")
+(defn ^:pub ^:method ^I32 b-hash [^:mut ^Rt rt ^Value v]
+  (if (not (is-brope rt v))
+    (do
+      (comment "`lh` and not `h`: C# refuses a local whose name is used in an"
+               "enclosing scope, even from a sibling branch. One name per"
+               "function is the portable rule.")
+      (local ^:mut ^I32 lh)
+      (set lh 0)
+      (if (is-heap v)
+        (if (== (ty rt (as-heap v)) TY_BYTES)
+          (let [^I32 n (olen rt v)]
+            (for [^I32 i 0 n]
+              (set lh (wadd (wmul lh 31)
+                            (read-u8 rt (+ (+ (as-heap v) HDR) (to-addr i)))))))))
+      (return lh)))
+  (let [^Value cached (slot rt v BB_HASH)]
+    (if (is-fixnum rt cached)
+      (return (to-i32 (as-fixnum cached)))))
+  (comment "`v` LIVES IN THE ROOT: hashing a child recurses and writes a cache"
+           "slot, and nothing here allocates -- but the child hash below does"
+           "root its own, and a host local held across that is the habit this"
+           "port is trying not to have.")
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^I32 kids (- (olen rt (r rt vi)) BB_KIDS)]
+    (local ^:mut ^I32 h)
+    (set h 0)
+    (for [^I32 i 0 kids]
+      (let [^Value k (slot rt (r rt vi) (+ BB_KIDS i))
+            ^RootIx ki (push rt k)
+            ^I32 kh (b-hash rt (r rt ki))
+            ^I32 kb (b-count rt (r rt ki))]
+        (set h (wadd (wmul h (pow31 rt kb)) kh))
+        (pop-to rt ki)))
+    (set-slot rt (r rt vi) BB_HASH (fixnum h))
+    (pop-to rt base)
+    (return h)))

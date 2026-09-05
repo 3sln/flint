@@ -521,15 +521,7 @@ public final class Str {
     public static long ropeSlice(Rt rt, long v, int from, int to) { return com._3sln.flint.kgen.rt.Ropeslice.ropeSlice(rt, v, from, to); }
 
     /// `31^n`, by squaring: the multiplier that lets two cached hashes join.
-    public static int pow31(int n) {
-        int base = 31, acc = 1;
-        while (n > 0) {
-            if ((n & 1) == 1) acc *= base;
-            base *= base;
-            n >>>= 1;
-        }
-        return acc;
-    }
+    public static int pow31(Rt rt, int n) { return com._3sln.flint.kgen.rt.Bytehash.pow31(rt, n); }
 
     /// The content hash of a string tree, WITHOUT materialising it, cached per
     /// node. After a sharing `subs` most of a tree is a subtree of something
@@ -554,7 +546,7 @@ public final class Str {
             int kb = sBytes(rt, rt.r(ki));
             // h(A.B) = h(A)*31^|B| + h(B). The BYTES, not the code points: this
             // must agree with the flat hash, which steps per byte.
-            h = h * pow31(kb) + kh;
+            h = h * pow31(rt, kb) + kh;
             rt.popTo(ki);
         }
         rt.setSlot(Val.asHeap(rt.r(vi)), RP_HASH, Val.fixnum(h));

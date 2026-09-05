@@ -10,6 +10,7 @@ pub mod byteslice;
 pub mod bytecore;
 pub mod byteeq;
 pub mod byteflat;
+pub mod bytehash;
 pub mod bytefold;
 pub mod bytetwrite;
 pub mod bytenode;

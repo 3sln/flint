@@ -1,0 +1,454 @@
+--rust-head
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_BYTES: u8 = 44; const TY_BROPE: u8 = 45; const TY_VEC: u8 = 9;
+pub mod obj { pub const HDR: u64 = 8; }
+pub mod bytes {
+    pub const BB_BYTES: u32 = 0; pub const BB_FLAT: u32 = 1;
+    pub const BB_DEPTH: u32 = 2; pub const BB_HASH: u32 = 3; pub const BB_KIDS: u32 = 4;
+}
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_fixnum(self) -> bool { self.0 < 100 && self.0 != NIL.0 }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+// A BYTE-ADDRESSABLE space, which the earlier byte fixtures did not need: they
+// modelled a leaf by its LENGTH alone. `b-at` reads the bytes themselves, so
+// this one stores them -- at `addr + HDR`, where the runtime puts them.
+struct Space { m: Vec<u8> }
+impl Space {
+    fn read_u8(&self, a: Addr) -> u8 { self.m[a as usize] }
+}
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, sinks: Vec<Vec<u8>>, roots: Vec<Value>, walks: Vec<Vec<(Value, u32)>> }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn set(&mut self, n: Value, i: u32, v: Value) { self.h[n.0 as usize + i as usize] = v.0; }
+    fn b_count(&self, v: Value) -> u32 {
+        if !v.is_heap() { return 0; }
+        match ty(&self.gc.sp, v.as_heap()) {
+            TY_BYTES => self.lens[v.0 as usize],
+            TY_BROPE => self.slot(v, bytes::BB_BYTES).as_fixnum() as u32,
+            _ => 0,
+        }
+    }
+    fn is_brope(&self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_BROPE
+    }
+    fn walk_open(&mut self, v: Value) -> u32 {
+        self.walks.push(vec![(v, 0u32)]); (self.walks.len() - 1) as u32
+    }
+    fn walk_close(&mut self, w: u32) { self.walks.truncate(w as usize); }
+    fn walk_dup(&mut self, w: u32) -> u32 {
+        let c = self.walks[w as usize].clone(); self.walks.push(c);
+        (self.walks.len() - 1) as u32
+    }
+    fn walk_take(&mut self, w: u32, src: u32) {
+        let c = self.walks[src as usize].clone(); self.walks[w as usize] = c;
+    }
+    fn walk_done(&self, w: u32) -> bool { self.walks[w as usize].is_empty() }
+    fn walk_next(&mut self, w: u32) -> Value {
+        loop {
+            let top = match self.walks[w as usize].last() { None => return NIL, Some(t) => *t };
+            let (node, i) = top;
+            if !self.is_brope(node) { self.walks[w as usize].pop(); return node; }
+            let kids = self.lens[node.0 as usize] - bytes::BB_KIDS;
+            if i >= kids { self.walks[w as usize].pop(); continue; }
+            if let Some(t) = self.walks[w as usize].last_mut() { t.1 = i + 1; }
+            let k = self.slot(node, bytes::BB_KIDS + i);
+            self.walks[w as usize].push((k, 0));
+        }
+    }
+    fn run_eq(&self, a: Addr, b: Addr, len: u32) -> bool {
+        (0..len).all(|i| self.gc.sp.read_u8(a + i as u64) == self.gc.sp.read_u8(b + i as u64))
+    }
+    fn sink_open(&mut self) -> u32 { self.sinks.push(Vec::new()); (self.sinks.len() - 1) as u32 }
+    fn sink_close(&mut self, s: u32) { self.sinks.truncate(s as usize); }
+    fn sink_len(&self, s: u32) -> u32 { self.sinks[s as usize].len() as u32 }
+    fn sink_put_run(&mut self, s: u32, addr: Addr, len: u32) {
+        let src: Vec<u8> = (0..len).map(|i| self.gc.sp.m[(addr + i as u64) as usize]).collect();
+        self.sinks[s as usize].extend_from_slice(&src);
+    }
+    fn sink_bytes(&mut self, s: u32) -> Value {
+        let bs = self.sinks[s as usize].clone();
+        self.leaf(&bs)
+    }
+    // SPACED so a leaf's bytes cannot land on the next object's type tag:
+    // objects are `n + 16` apart and the bytes occupy `HDR .. HDR + n`.
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        let a = self.bump; self.bump += n as u64 + 16;
+        self.gc.sp.m[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn leaf(&mut self, bs: &[u8]) -> Value {
+        let a = self.alloc(TY_BYTES, bs.len() as u32);
+        for (i, b) in bs.iter().enumerate() { self.gc.sp.m[(a + obj::HDR) as usize + i] = *b; }
+        Value::heap(a)
+    }
+    fn node(&mut self, kids: &[Value]) -> Value {
+        let mut total = 0u32;
+        for k in kids { total += self.b_count(*k); }
+        let a = self.alloc(TY_BROPE, bytes::BB_KIDS + kids.len() as u32);
+        self.set_slot(a, bytes::BB_BYTES, Value::fixnum(total as i64));
+        self.set_slot(a, bytes::BB_FLAT, NIL);
+        self.set_slot(a, bytes::BB_HASH, NIL);
+        self.set_slot(a, bytes::BB_DEPTH, Value::fixnum(1));
+        for (i, k) in kids.iter().enumerate() { self.set_slot(a, bytes::BB_KIDS + i as u32, *k); }
+        Value::heap(a)
+    }
+}
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 40000], gc: Gc { sp: Space { m: vec![0u8; 40000] } },
+                      lens: vec![0; 40000], bump: 100, sinks: Vec::new(),
+                      roots: Vec::new(), walks: Vec::new() };
+    let mut o = String::new();
+    // THE SAME BYTES IN DIFFERENT SHAPES must hash alike -- that is the whole
+    // requirement, and the only one a structural hash would fail.
+    let x = rt.leaf(&[1,2,3,4,5,6]);
+    let y = { let a = rt.leaf(&[1]); let b = rt.leaf(&[2,3]); let c = rt.leaf(&[4,5,6]);
+              rt.node(&[a, b, c]) };
+    let z = { let a = rt.leaf(&[1,2,3]); let b = rt.leaf(&[4,5,6]); rt.node(&[a, b]) };
+    let hx = rt.b_hash(x); let hy = rt.b_hash(y); let hz = rt.b_hash(z);
+    o.push_str(&format!("shapes={}{} ", (hx == hy) as u32, (hy == hz) as u32));
+    // AND DIFFERENT BYTES SHOULD NOT, or the check above passes with a
+    // constant.
+    let d = rt.leaf(&[1,2,3,4,5,7]);
+    o.push_str(&format!("differs={} ", (rt.b_hash(d) != hx) as u32));
+    // THE CACHE: asked twice, and the slot holds it after the first.
+    o.push_str(&format!("cached={} slot={} ", (rt.b_hash(y) == hy) as u32,
+                        (rt.slot(y, bytes::BB_HASH).as_fixnum() as u32 == hy) as u32));
+    // ORDER MATTERS: the same bytes reversed is a different hash.
+    let r = rt.leaf(&[6,5,4,3,2,1]);
+    o.push_str(&format!("order={} ", (rt.b_hash(r) != hx) as u32));
+    // EMPTY hashes to zero, and `pow31` of zero is one.
+    let e = rt.leaf(&[]);
+    o.push_str(&format!("empty={} p0={} p1={} p3={} ", rt.b_hash(e),
+                        rt.pow31(0), rt.pow31(1), rt.pow31(3)));
+    // A LONG one, to cross the point where the multiply wraps.
+    let long: Vec<u8> = (0..40u32).map(|i| (i * 7) as u8).collect();
+    let l1 = rt.leaf(&long);
+    let l2 = { let a = rt.leaf(&long[..17]); let b = rt.leaf(&long[17..]); rt.node(&[a, b]) };
+    o.push_str(&format!("wrap={} ", (rt.b_hash(l1) == rt.b_hash(l2)) as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_BYTES = 44, TY_BROPE = 45, TY_VEC = 9;
+    static final class Obj { static final long HDR = 8; }
+    static final class Bytes {
+        static final int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
+    }
+    static final class Val {
+        static boolean isHeap(long v) { return v >= 100 && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v; }
+        static long fixnum(long n) { return n; }
+        static long heap(long a) { return a; }
+        static final long NIL = Probe.NIL;
+        static boolean isFixnum(long v) { return v < 100 && v != NIL; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Space {
+        byte[] m = new byte[40000];
+        int readU8(long a) { return m[(int) a] & 0xFF; }
+    }
+    static final class Rt {
+        java.util.ArrayList<java.io.ByteArrayOutputStream> sinks = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void set(long n, int i, long v) { h[(int) n + i] = v; }
+        java.util.ArrayList<java.util.ArrayList<long[]>> walks = new java.util.ArrayList<>();
+        int walkOpen(long v) {
+            java.util.ArrayList<long[]> st = new java.util.ArrayList<>();
+            st.add(new long[]{v, 0}); walks.add(st); return walks.size() - 1;
+        }
+        void walkClose(int w) { while (walks.size() > w) walks.remove(walks.size() - 1); }
+        int walkDup(int w) {
+            java.util.ArrayList<long[]> c = new java.util.ArrayList<>();
+            for (long[] e : walks.get(w)) c.add(new long[]{e[0], e[1]});
+            walks.add(c); return walks.size() - 1;
+        }
+        void walkTake(int w, int src) {
+            java.util.ArrayList<long[]> c = new java.util.ArrayList<>();
+            for (long[] e : walks.get(src)) c.add(new long[]{e[0], e[1]});
+            walks.set(w, c);
+        }
+        boolean walkDone(int w) { return walks.get(w).isEmpty(); }
+        long walkNext(int w) {
+            java.util.ArrayList<long[]> st = walks.get(w);
+            for (;;) {
+                if (st.isEmpty()) return NIL;
+                long[] top = st.get(st.size() - 1);
+                long node = top[0]; int i = (int) top[1];
+                if (!(Val.isHeap(node) && ty(gc.sp, node) == TY_BROPE)) {
+                    st.remove(st.size() - 1); return node;
+                }
+                int kids = lens[(int) node] - Bytes.BB_KIDS;
+                if (i >= kids) { st.remove(st.size() - 1); continue; }
+                top[1] = i + 1;
+                st.add(new long[]{ h[(int) node + Bytes.BB_KIDS + i], 0 });
+            }
+        }
+        boolean runEq(long a, long b, int len) {
+            for (int i = 0; i < len; i++) if (gc.sp.readU8(a + i) != gc.sp.readU8(b + i)) return false;
+            return true;
+        }
+        int sinkOpen() { sinks.add(new java.io.ByteArrayOutputStream()); return sinks.size() - 1; }
+        void sinkClose(int s) { while (sinks.size() > s) sinks.remove(sinks.size() - 1); }
+        int sinkLen(int s) { return sinks.get(s).size(); }
+        byte[] sinkArr(int s) { return sinks.get(s).toByteArray(); }
+        long sinkBytes(int s) {
+            byte[] a = sinkArr(s);
+            int[] bs = new int[a.length];
+            for (int i = 0; i < a.length; i++) bs[i] = a[i] & 0xFF;
+            return leaf(this, bs);
+        }
+        void sinkPutRun(int s, long addr, int len) {
+            for (int i = 0; i < len; i++) sinks.get(s).write(gc.sp.m[(int) (addr + i)] & 0xFF);
+        }
+        long[] h = new long[40000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        int[] lens = new int[40000];
+        long bump = 100;
+        long alloc(int t, int n) {
+            long a = bump; bump += n + 16;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    static int bCount(Rt rt, long v) {
+        if (!Val.isHeap(v)) return 0;
+        int t = ty(rt.gc.sp, v);
+        if (t == TY_BYTES) return olen(rt, v);
+        if (t == TY_BROPE) return (int) rt.slot(v, Bytes.BB_BYTES);
+        return 0;
+    }
+    static boolean isBrope(Rt rt, long v) {
+        return Val.isHeap(v) && ty(rt.gc.sp, v) == TY_BROPE;
+    }
+    static long leaf(Rt rt, int[] bs) {
+        long a = rt.alloc(TY_BYTES, bs.length);
+        for (int i = 0; i < bs.length; i++) rt.gc.sp.m[(int) (a + Obj.HDR) + i] = (byte) bs[i];
+        return Val.heap(a);
+    }
+    static long node(Rt rt, long[] kids) {
+        int total = 0;
+        for (long k : kids) total += bCount(rt, k);
+        long a = rt.alloc(TY_BROPE, Bytes.BB_KIDS + kids.length);
+        rt.setSlot(a, Bytes.BB_BYTES, total);
+        rt.setSlot(a, Bytes.BB_FLAT, NIL);
+        rt.setSlot(a, Bytes.BB_HASH, NIL);
+        rt.setSlot(a, Bytes.BB_DEPTH, 1);
+        for (int i = 0; i < kids.length; i++) rt.setSlot(a, Bytes.BB_KIDS + i, kids[i]);
+        return Val.heap(a);
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long x = leaf(rt, new int[]{1,2,3,4,5,6});
+        long y = node(rt, new long[]{leaf(rt, new int[]{1}), leaf(rt, new int[]{2,3}),
+                                     leaf(rt, new int[]{4,5,6})});
+        long z = node(rt, new long[]{leaf(rt, new int[]{1,2,3}), leaf(rt, new int[]{4,5,6})});
+        int hx = bHash(rt, x), hy = bHash(rt, y), hz = bHash(rt, z);
+        o.append("shapes=").append(hx == hy ? 1 : 0).append(hy == hz ? 1 : 0).append(' ');
+        o.append("differs=").append(bHash(rt, leaf(rt, new int[]{1,2,3,4,5,7})) != hx ? 1 : 0).append(' ');
+        o.append("cached=").append(bHash(rt, y) == hy ? 1 : 0)
+         .append(" slot=").append((int) rt.slot(y, Bytes.BB_HASH) == hy ? 1 : 0).append(' ');
+        o.append("order=").append(bHash(rt, leaf(rt, new int[]{6,5,4,3,2,1})) != hx ? 1 : 0).append(' ');
+        long e = leaf(rt, new int[0]);
+        o.append("empty=").append(bHash(rt, e))
+         .append(" p0=").append(pow31(rt, 0)).append(" p1=").append(pow31(rt, 1))
+         .append(" p3=").append(pow31(rt, 3)).append(' ');
+        int[] lng = new int[40];
+        for (int i = 0; i < 40; i++) lng[i] = (i * 7) & 0xFF;
+        int[] head = new int[17], tail = new int[23];
+        System.arraycopy(lng, 0, head, 0, 17);
+        System.arraycopy(lng, 17, tail, 0, 23);
+        long l1 = leaf(rt, lng);
+        long l2 = node(rt, new long[]{leaf(rt, head), leaf(rt, tail)});
+        o.append("wrap=").append(bHash(rt, l1) == bHash(rt, l2) ? 1 : 0).append(' ');
+        System.out.println(o.toString());
+    }
+--csharp-head
+    internal static class Obj {
+        internal const long Hdr = 8;
+        internal const int TyBytes = 44, TyBrope = 45, TyVec = 9;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long AsFixnum(long v) { return v; }
+        internal static long Fixnum(long n) { return n; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsFixnum(long v) { return v < 100 && v != Nil; }
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    internal sealed class Space {
+        internal byte[] m = new byte[40000];
+        internal int ReadU8(long a) { return m[(int) a]; }
+    }
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<System.IO.MemoryStream> sinks =
+            new System.Collections.Generic.List<System.IO.MemoryStream>();
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal void Set(long n, int i, long v) { h[(int) n + i] = v; }
+        internal System.Collections.Generic.List<System.Collections.Generic.List<long[]>> walks =
+            new System.Collections.Generic.List<System.Collections.Generic.List<long[]>>();
+        internal int WalkOpen(long v) {
+            var st = new System.Collections.Generic.List<long[]>();
+            st.Add(new long[]{v, 0}); walks.Add(st); return walks.Count - 1;
+        }
+        internal void WalkClose(int w) { while (walks.Count > w) walks.RemoveAt(walks.Count - 1); }
+        internal int WalkDup(int w) {
+            var c = new System.Collections.Generic.List<long[]>();
+            foreach (long[] e in walks[w]) c.Add(new long[]{e[0], e[1]});
+            walks.Add(c); return walks.Count - 1;
+        }
+        internal void WalkTake(int w, int src) {
+            var c = new System.Collections.Generic.List<long[]>();
+            foreach (long[] e in walks[src]) c.Add(new long[]{e[0], e[1]});
+            walks[w] = c;
+        }
+        internal bool WalkDone(int w) { return walks[w].Count == 0; }
+        internal long WalkNext(int w) {
+            var st = walks[w];
+            for (;;) {
+                if (st.Count == 0) return Val.Nil;
+                long[] top = st[st.Count - 1];
+                long node = top[0]; int i = (int) top[1];
+                if (!(Val.IsHeap(node) && Obj.Ty(gc.sp, node) == Obj.TyBrope)) {
+                    st.RemoveAt(st.Count - 1); return node;
+                }
+                int kids = lens[(int) node] - global::Flint.Rt.Bytes.BB_KIDS;
+                if (i >= kids) { st.RemoveAt(st.Count - 1); continue; }
+                top[1] = i + 1;
+                st.Add(new long[]{ h[(int) node + global::Flint.Rt.Bytes.BB_KIDS + i], 0 });
+            }
+        }
+        internal bool RunEq(long a, long b, int len) {
+            for (int i = 0; i < len; i++) if (gc.sp.ReadU8(a + i) != gc.sp.ReadU8(b + i)) return false;
+            return true;
+        }
+        internal int SinkOpen() { sinks.Add(new System.IO.MemoryStream()); return sinks.Count - 1; }
+        internal void SinkClose(int s) { while (sinks.Count > s) sinks.RemoveAt(sinks.Count - 1); }
+        internal int SinkLen(int s) { return (int) sinks[s].Length; }
+        internal byte[] SinkArr(int s) { return sinks[s].ToArray(); }
+        internal long SinkBytes(int s) {
+            byte[] a = SinkArr(s);
+            int[] bs = new int[a.Length];
+            for (int i = 0; i < a.Length; i++) bs[i] = a[i];
+            return Leaf(this, bs);
+        }
+        internal void SinkPutRun(int s, long addr, int len) {
+            for (int i = 0; i < len; i++) sinks[s].WriteByte(gc.sp.m[(int) (addr + i)]);
+        }
+        internal long[] h = new long[40000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[40000];
+        internal long bump = 100;
+        internal long Alloc(int t, int n) {
+            long a = bump; bump += n + 16;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Val.Nil;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    internal static int BCount(Rt rt, long v) {
+        if (!Val.IsHeap(v)) return 0;
+        int t = Obj.Ty(rt.gc.sp, v);
+        if (t == Obj.TyBytes) return Olen(rt, v);
+        if (t == Obj.TyBrope) return (int) rt.Slot(v, global::Flint.Rt.Bytes.BB_BYTES);
+        return 0;
+    }
+    internal static bool IsBrope(Rt rt, long v) {
+        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyBrope;
+    }
+    internal static long Leaf(Rt rt, int[] bs) {
+        long a = rt.Alloc(Obj.TyBytes, bs.Length);
+        for (int i = 0; i < bs.Length; i++) rt.gc.sp.m[(int) (a + Obj.Hdr) + i] = (byte) bs[i];
+        return Val.Heap(a);
+    }
+    internal static long Node(Rt rt, long[] kids) {
+        int total = 0;
+        foreach (long k in kids) total += BCount(rt, k);
+        long a = rt.Alloc(Obj.TyBrope, global::Flint.Rt.Bytes.BB_KIDS + kids.Length);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_BYTES, total);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_FLAT, Val.Nil);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_HASH, Val.Nil);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_DEPTH, 1);
+        for (int i = 0; i < kids.Length; i++) rt.SetSlot(a, global::Flint.Rt.Bytes.BB_KIDS + i, kids[i]);
+        return Val.Heap(a);
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Bytes {
+        internal const int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
+    }
+}
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long x = Leaf(rt, new int[]{1,2,3,4,5,6});
+        long y = Node(rt, new long[]{Leaf(rt, new int[]{1}), Leaf(rt, new int[]{2,3}),
+                                     Leaf(rt, new int[]{4,5,6})});
+        long z = Node(rt, new long[]{Leaf(rt, new int[]{1,2,3}), Leaf(rt, new int[]{4,5,6})});
+        int hx = BHash(rt, x), hy = BHash(rt, y), hz = BHash(rt, z);
+        o.Append("shapes=").Append(hx == hy ? 1 : 0).Append(hy == hz ? 1 : 0).Append(' ');
+        o.Append("differs=").Append(BHash(rt, Leaf(rt, new int[]{1,2,3,4,5,7})) != hx ? 1 : 0).Append(' ');
+        o.Append("cached=").Append(BHash(rt, y) == hy ? 1 : 0)
+         .Append(" slot=").Append((int) rt.Slot(y, global::Flint.Rt.Bytes.BB_HASH) == hy ? 1 : 0)
+         .Append(' ');
+        o.Append("order=").Append(BHash(rt, Leaf(rt, new int[]{6,5,4,3,2,1})) != hx ? 1 : 0).Append(' ');
+        long e = Leaf(rt, new int[0]);
+        o.Append("empty=").Append(BHash(rt, e))
+         .Append(" p0=").Append(Pow31(rt, 0)).Append(" p1=").Append(Pow31(rt, 1))
+         .Append(" p3=").Append(Pow31(rt, 3)).Append(' ');
+        int[] lng = new int[40];
+        for (int i = 0; i < 40; i++) lng[i] = (i * 7) & 0xFF;
+        int[] head = new int[17], tail = new int[23];
+        System.Array.Copy(lng, 0, head, 0, 17);
+        System.Array.Copy(lng, 17, tail, 0, 23);
+        long l1 = Leaf(rt, lng);
+        long l2 = Node(rt, new long[]{Leaf(rt, head), Leaf(rt, tail)});
+        o.Append("wrap=").Append(BHash(rt, l1) == BHash(rt, l2) ? 1 : 0).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }

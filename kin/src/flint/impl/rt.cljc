@@ -466,6 +466,17 @@
                            :java "Val.asFixnum({0})"
                            :csharp "Val.AsFixnum({0})"})
     'to-i32 (core/call {:rust "({0} as u32)" :java "((int) {0})" :csharp "((int) {0})"})
+    ;; WRAPPING ARITHMETIC, which a hash needs and plain `*` cannot give: Rust
+    ;; PANICS on overflow in a debug build, so `h * 31` would be correct in
+    ;; release and a crash in the build that runs the tests. Java's `int` wraps
+    ;; on its own; C# is unchecked by default but says so here, because the
+    ;; default is a compiler setting and this must not depend on one.
+    'wmul (core/call {:rust "{0}.wrapping_mul({1})"
+                      :java "({0} * {1})"
+                      :csharp "unchecked({0} * {1})"})
+    'wadd (core/call {:rust "{0}.wrapping_add({1})"
+                      :java "({0} + {1})"
+                      :csharp "unchecked({0} + {1})"})
     ;; A BOOL AS ITS BIT, which is not the same form as `to-i32` and cannot be.
     ;; Rust casts a `bool` to an integer with `as`; Java and C# both REFUSE the
     ;; cast outright, so each needs a conditional. `to-i32` on a `Bool` emitted

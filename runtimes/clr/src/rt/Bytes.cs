@@ -108,29 +108,7 @@ public static class Bytes {
     static long FromRoots(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Bytefold.BFromRoots(rt, bas, n); }
 
     /// The mirror of `Str.RopeHash`, cached per node.
-    public static int Hash(Rt rt, long v) {
-        if (!IsBrope(rt, v)) {
-            byte[] bs = ToArray(rt, v);
-            int h0 = 0;
-            foreach (byte b in bs) h0 = h0 * 31 + b;
-            return h0;
-        }
-        long cached = rt.Slot(v, BB_HASH);
-        if (Val.IsFixnum(cached)) return (int) Val.AsFixnum(cached);
-        int bas = rt.Mark();
-        int vi = rt.Push(v);
-        int kids = Obj.Len(rt.gc.sp, Val.AsHeap(rt.R(vi))) - BB_KIDS;
-        int h = 0;
-        for (int i = 0; i < kids; i++) {
-            long k = rt.Slot(rt.R(vi), BB_KIDS + i);
-            int ki = rt.Push(k);
-            h = h * Str.Pow31Public(Count(rt, rt.R(ki))) + Hash(rt, rt.R(ki));
-            rt.PopTo(ki);
-        }
-        rt.SetSlot(Val.AsHeap(rt.R(vi)), BB_HASH, Val.Fixnum(h));
-        rt.PopTo(bas);
-        return h;
-    }
+    public static int Hash(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Bytehash.BHash(rt, v); }
 
     /// Content equality without materialising either side, short-circuiting on
     /// NODE IDENTITY -- which matters now that `Slice` shares.

@@ -488,17 +488,8 @@ public static class Str {
     /// back unchanged, and only the two edge children are cut.
     public static long RopeSlice(Rt rt, long v, int from, int to) { return global::_3sln.Flint.Kgen.Rt.Ropeslice.RopeSlice(rt, v, from, to); }
 
-    public static int Pow31Public(int n) => Pow31(n);
+    public static int Pow31Public(Rt rt, int n) => global::_3sln.Flint.Kgen.Rt.Bytehash.Pow31(rt, n);
 
-    static int Pow31(int n) {
-        int b = 31, acc = 1;
-        while (n > 0) {
-            if ((n & 1) == 1) acc *= b;
-            b *= b;
-            n >>= 1;
-        }
-        return acc;
-    }
 
     /// The content hash of a string tree without materialising it, cached per
     /// node. `h(A.B) = h(A)*31^|B| + h(B)`, over BYTES so it agrees with the
@@ -521,7 +512,7 @@ public static class Str {
             int ki = rt.Push(k);
             int kh = RopeHash(rt, rt.R(ki));
             int kb = SBytes(rt, rt.R(ki));
-            h = h * Pow31(kb) + kh;
+            h = unchecked(h * global::_3sln.Flint.Kgen.Rt.Bytehash.Pow31(rt, kb) + kh);
             rt.PopTo(ki);
         }
         rt.SetSlot(Val.AsHeap(rt.R(vi)), RP_HASH, Val.Fixnum(h));

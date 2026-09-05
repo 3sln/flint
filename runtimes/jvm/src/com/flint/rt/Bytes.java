@@ -121,29 +121,7 @@ public final class Bytes {
     /// The mirror of `Str.ropeHash`: cached per node, `h(A.B) = h(A)*31^|B| +
     /// h(B)`. Hashing a byte rope used to FLATTEN it, buying the caching by
     /// spending the sharing.
-    public static int hash(Rt rt, long v) {
-        if (!isBrope(rt, v)) {
-            byte[] bs = toArray(rt, v);
-            int h0 = 0;
-            for (byte b : bs) h0 = h0 * 31 + (b & 0xFF);
-            return h0;
-        }
-        long cached = rt.slot(v, BB_HASH);
-        if (Val.isFixnum(cached)) return (int) Val.asFixnum(cached);
-        int base = rt.mark();
-        int vi = rt.push(v);
-        int kids = len(rt.gc.sp, Val.asHeap(rt.r(vi))) - BB_KIDS;
-        int h = 0;
-        for (int i = 0; i < kids; i++) {
-            long k = rt.slot(rt.r(vi), BB_KIDS + i);
-            int ki = rt.push(k);
-            h = h * Str.pow31(count(rt, rt.r(ki))) + hash(rt, rt.r(ki));
-            rt.popTo(ki);
-        }
-        rt.setSlot(Val.asHeap(rt.r(vi)), BB_HASH, Val.fixnum(h));
-        rt.popTo(base);
-        return h;
-    }
+    public static int hash(Rt rt, long v) { return com._3sln.flint.kgen.rt.Bytehash.bHash(rt, v); }
 
     /// Content equality WITHOUT materialising either side, short-circuiting on
     /// NODE IDENTITY. This built a byte array of both sides in full, so two
