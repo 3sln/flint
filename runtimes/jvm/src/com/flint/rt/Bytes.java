@@ -150,57 +150,8 @@ public final class Bytes {
     /// 500 KB sections differing at byte 0 cost a megabyte to tell apart -- and
     /// now that `slice` SHARES, two slices of one section meet the same leaf
     /// over and over.
-    public static boolean eq(Rt rt, long a, long b) {
-        if (a == b) return true;
-        if (count(rt, a) != count(rt, b)) return false;
-        java.util.ArrayDeque<long[]> sa = new java.util.ArrayDeque<>();
-        java.util.ArrayDeque<long[]> sb = new java.util.ArrayDeque<>();
-        sa.push(new long[]{a, 0});
-        sb.push(new long[]{b, 0});
-        byte[] la = new byte[0], lb = new byte[0];
-        int pa = 0, pb = 0;
-        while (true) {
-            if (pa == la.length) {
-                long nv = walkNext(rt, sa);
-                if (nv == Val.NOT_FOUND) break;
-                if (pb == lb.length && !sb.isEmpty()) {
-                    java.util.ArrayDeque<long[]> peek = new java.util.ArrayDeque<>();
-                    for (long[] e : sb) peek.addLast(new long[]{e[0], e[1]});
-                    long w = walkNext(rt, peek);
-                    if (w != Val.NOT_FOUND && w == nv) {
-                        sb = peek; la = new byte[0]; lb = new byte[0]; pa = 0; pb = 0;
-                        continue;
-                    }
-                }
-                la = toArray(rt, nv); pa = 0;
-            }
-            if (pb == lb.length) {
-                long nv = walkNext(rt, sb);
-                if (nv == Val.NOT_FOUND) break;
-                lb = toArray(rt, nv); pb = 0;
-            }
-            int n = Math.min(la.length - pa, lb.length - pb);
-            if (n == 0) continue;
-            for (int i = 0; i < n; i++) if (la[pa + i] != lb[pb + i]) return false;
-            pa += n; pb += n;
-        }
-        return pa == la.length && pb == lb.length
-                && walkNext(rt, sa) == Val.NOT_FOUND && walkNext(rt, sb) == Val.NOT_FOUND;
-    }
+    public static boolean eq(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Byteeq.bEq(rt, a, b); }
 
-    private static long walkNext(Rt rt, java.util.ArrayDeque<long[]> stack) {
-        while (!stack.isEmpty()) {
-            long[] top = stack.peek();
-            long node = top[0];
-            int i = (int) top[1];
-            if (!isBrope(rt, node)) { stack.pop(); return node; }
-            int kids = len(rt.gc.sp, Val.asHeap(node)) - BB_KIDS;
-            if (i >= kids) { stack.pop(); continue; }
-            top[1] = i + 1;
-            stack.push(new long[]{rt.slot(node, BB_KIDS + i), 0});
-        }
-        return Val.NOT_FOUND;
-    }
 
     // --- the transient ------------------------------------------------------
     //

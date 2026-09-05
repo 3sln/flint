@@ -95,6 +95,15 @@ pub struct Rt {
     /// borrow's, and it is the same shape the shadow stack already uses for
     /// exactly the same reason. `sink_open`/`sink_close` are `mark`/`pop_to`.
     pub(crate) sinks: alloc::vec::Vec<alloc::vec::Vec<u8>>,
+    /// TREE WALKS IN PROGRESS, owned by the runtime and addressed by index.
+    ///
+    /// The sink's sibling, and for the same reason: comparing or hashing two
+    /// trees leaf by leaf needs an explicit stack, and `Vec<(Value, u32)>`,
+    /// `ArrayDeque<long[]>` and `Stack<(long, int)>` have nothing in common a
+    /// generated source could name. An index does.
+    ///
+    /// Each entry is a node and how many of its children have been taken.
+    pub(crate) walks: alloc::vec::Vec<alloc::vec::Vec<(crate::value::Value, u32)>>,
     /// The in-flight thrown value, or `nil`. Native builtins signal failure by
     /// setting this and returning `nil`; the VM checks it after every call.
     pub thrown: Value,
@@ -311,6 +320,7 @@ impl Rt {
             gc,
             roots: Roots::new(shared),
             sinks: alloc::vec::Vec::new(),
+            walks: alloc::vec::Vec::new(),
             thrown: NIL,
             frames: alloc::vec::Vec::new(),
             handlers: alloc::vec::Vec::new(),

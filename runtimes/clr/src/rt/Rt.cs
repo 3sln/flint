@@ -30,6 +30,57 @@ public sealed class Rt : System.IDisposable {
     private readonly System.Collections.Generic.List<System.IO.MemoryStream> sinks =
         new System.Collections.Generic.List<System.IO.MemoryStream>();
 
+    // -------------------------------------------------------------- the walk
+    //
+    // The sink's sibling -- see the Java and Rust copies.
+    private readonly System.Collections.Generic.List<System.Collections.Generic.List<long[]>> walks =
+        new System.Collections.Generic.List<System.Collections.Generic.List<long[]>>();
+
+    public int WalkOpen(long v) {
+        var st = new System.Collections.Generic.List<long[]>();
+        st.Add(new long[]{v, 0});
+        walks.Add(st);
+        return walks.Count - 1;
+    }
+    public void WalkClose(int w) {
+        while (walks.Count > w) walks.RemoveAt(walks.Count - 1);
+    }
+    public int WalkDup(int w) {
+        var c = new System.Collections.Generic.List<long[]>();
+        foreach (long[] e in walks[w]) c.Add(new long[]{e[0], e[1]});
+        walks.Add(c);
+        return walks.Count - 1;
+    }
+    public void WalkTake(int w, int src) {
+        var c = new System.Collections.Generic.List<long[]>();
+        foreach (long[] e in walks[src]) c.Add(new long[]{e[0], e[1]});
+        walks[w] = c;
+    }
+    public long WalkNext(int w) {
+        var st = walks[w];
+        for (;;) {
+            if (st.Count == 0) return Val.Nil;
+            long[] top = st[st.Count - 1];
+            long node = top[0];
+            int i = (int) top[1];
+            if (!Bytes.IsBrope(this, node) && !Str.IsRope(this, node)) {
+                st.RemoveAt(st.Count - 1);
+                return node;
+            }
+            int kids = Obj.Len(gc.sp, Val.AsHeap(node)) - Bytes.BB_KIDS;
+            if (i >= kids) { st.RemoveAt(st.Count - 1); continue; }
+            top[1] = i + 1;
+            st.Add(new long[]{ Slot(node, Bytes.BB_KIDS + i), 0 });
+        }
+    }
+    public bool WalkDone(int w) { return walks[w].Count == 0; }
+    public bool RunEq(long a, long b, int len) {
+        for (int i = 0; i < len; i++) {
+            if (gc.sp.ReadU8(a + i) != gc.sp.ReadU8(b + i)) return false;
+        }
+        return true;
+    }
+
     public int SinkOpen() {
         sinks.Add(new System.IO.MemoryStream());
         return sinks.Count - 1;

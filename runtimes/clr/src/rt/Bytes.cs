@@ -134,56 +134,8 @@ public static class Bytes {
 
     /// Content equality without materialising either side, short-circuiting on
     /// NODE IDENTITY -- which matters now that `Slice` shares.
-    public static bool Eq(Rt rt, long a, long b) {
-        if (a == b) return true;
-        if (Count(rt, a) != Count(rt, b)) return false;
-        var sa = new List<long[]>(); var sb = new List<long[]>();
-        sa.Add(new long[]{a, 0}); sb.Add(new long[]{b, 0});
-        byte[] la = System.Array.Empty<byte>(), lb = System.Array.Empty<byte>();
-        int pa = 0, pb = 0;
-        while (true) {
-            if (pa == la.Length) {
-                long nv = WalkNext(rt, sa);
-                if (nv == Val.NotFound) break;
-                if (pb == lb.Length && sb.Count > 0) {
-                    var peek = new List<long[]>();
-                    foreach (var e in sb) peek.Add(new long[]{e[0], e[1]});
-                    long w = WalkNext(rt, peek);
-                    if (w != Val.NotFound && w == nv) {
-                        sb = peek; la = System.Array.Empty<byte>(); lb = System.Array.Empty<byte>();
-                        pa = 0; pb = 0;
-                        continue;
-                    }
-                }
-                la = ToArray(rt, nv); pa = 0;
-            }
-            if (pb == lb.Length) {
-                long nv = WalkNext(rt, sb);
-                if (nv == Val.NotFound) break;
-                lb = ToArray(rt, nv); pb = 0;
-            }
-            int n2 = System.Math.Min(la.Length - pa, lb.Length - pb);
-            if (n2 == 0) continue;
-            for (int i = 0; i < n2; i++) if (la[pa + i] != lb[pb + i]) return false;
-            pa += n2; pb += n2;
-        }
-        return pa == la.Length && pb == lb.Length
-            && WalkNext(rt, sa) == Val.NotFound && WalkNext(rt, sb) == Val.NotFound;
-    }
+    public static bool Eq(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Byteeq.BEq(rt, a, b); }
 
-    static long WalkNext(Rt rt, List<long[]> stack) {
-        while (stack.Count > 0) {
-            var top = stack[stack.Count - 1];
-            long node = top[0];
-            int i = (int) top[1];
-            if (!IsBrope(rt, node)) { stack.RemoveAt(stack.Count - 1); return node; }
-            int kids = Obj.Len(rt.gc.sp, Val.AsHeap(node)) - BB_KIDS;
-            if (i >= kids) { stack.RemoveAt(stack.Count - 1); continue; }
-            top[1] = i + 1;
-            stack.Add(new long[]{rt.Slot(node, BB_KIDS + i), 0});
-        }
-        return Val.NotFound;
-    }
 
     // --- the transient ------------------------------------------------------
     //

@@ -97,6 +97,18 @@
   opened one closes it."
   {:name 'Sink :types {:rust "u32" :java "int" :csharp "int"} :methods {}})
 
+(def Walk
+  "A TREE WALK IN PROGRESS, named by an index into the runtime's own list.
+
+  The `Sink`'s sibling and the same argument: an explicit stack of (node, how
+  many children taken) is what walking two trees in step needs, and no two
+  runtimes spell a stack of pairs the same way. An index they do.
+
+  ONE WALK FOR BOTH TREES. A rope node and a byte-rope node put their children
+  at the same offset and count them the same way, so the only thing that
+  differed was which tag says `this is a node`."
+  {:name 'Walk :types {:rust "u32" :java "int" :csharp "int"} :methods {}})
+
 (def Text
   "A HOST string, which is not a flint string VALUE.
 
@@ -150,7 +162,7 @@
   {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
 
 (def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'U32 U32 'RootIx RootIx
-               'Text Text 'StaticText StaticText 'Sink Sink
+               'Text Text 'StaticText StaticText 'Sink Sink 'Walk Walk
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'U32s U32s 'U64s U64s 'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
@@ -865,6 +877,31 @@
     ;; REFUSED on measurement. Both ports already read the byte directly, and
     ;; Rust has the same primitive one layer down, so this converges onto the
     ;; spelling all three can say rather than the one only Rust can.
+    ;; --- THE WALK, the sink's sibling ---------------------------------
+    'walk-open (core/call {:rust "{0}.walk_open({1})"
+                           :java "{0}.walkOpen({1})" :csharp "{0}.WalkOpen({1})"}
+                          {:tag Walk})
+    'walk-close (core/call {:rust "{0}.walk_close({1})"
+                            :java "{0}.walkClose({1})" :csharp "{0}.WalkClose({1})"})
+    'walk-dup (core/call {:rust "{0}.walk_dup({1})"
+                          :java "{0}.walkDup({1})" :csharp "{0}.WalkDup({1})"}
+                         {:tag Walk})
+    'walk-take (core/call {:rust "{0}.walk_take({1}, {2})"
+                           :java "{0}.walkTake({1}, {2})" :csharp "{0}.WalkTake({1}, {2})"})
+    'walk-next (core/call {:rust "{0}.walk_next({1})"
+                           :java "{0}.walkNext({1})" :csharp "{0}.WalkNext({1})"}
+                          {:tag Value})
+    'walk-done (core/call {:rust "{0}.walk_done({1})"
+                            :java "{0}.walkDone({1})" :csharp "{0}.WalkDone({1})"}
+                           {:tag Bool})
+    ;; A RUN comparison rather than a byte loop: this is `b-eq`'s inner loop
+    ;; over two 500 KB sections, and one `memcmp` against half a million calls
+    ;; is the whole cost of the operation.
+    'run-eq (core/call {:rust "{0}.run_eq({1}, {2}, {3})"
+                        :java "{0}.runEq({1}, {2}, {3})"
+                        :csharp "{0}.RunEq({1}, {2}, {3})"}
+                       {:tag Bool})
+
     ;; --- THE SINK, hole 5's other half --------------------------------
     'sink-open (core/call {:rust "{0}.sink_open()"
                            :java "{0}.sinkOpen()" :csharp "{0}.SinkOpen()"}

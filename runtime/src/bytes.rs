@@ -88,6 +88,80 @@ impl Rt {
     // Hole 5's other half. See `Rt::sinks` for why a buffer the runtime owns
     // and an index that names it, rather than each target's own growable type.
 
+    // ---------------------------------------------------------- the walk
+    //
+    // The sink's sibling. See `Rt::walks`.
+
+    /// Start a walk at `v` and answer its index. `walk_close` releases it and
+    /// every walk opened after it -- `mark`/`pop_to` again.
+    pub fn walk_open(&mut self, v: Value) -> u32 {
+        self.walks.push(alloc::vec![(v, 0u32)]);
+        (self.walks.len() - 1) as u32
+    }
+
+    /// Release `w` and everything opened after it.
+    pub fn walk_close(&mut self, w: u32) {
+        self.walks.truncate(w as usize);
+    }
+
+    /// A COPY of `w`, so a caller can look ahead without consuming. `b_eq`
+    /// peeks the other side's next leaf to see whether the two trees share it.
+    pub fn walk_dup(&mut self, w: u32) -> u32 {
+        let c = self.walks[w as usize].clone();
+        self.walks.push(c);
+        (self.walks.len() - 1) as u32
+    }
+
+    /// Replace `w`'s position with `src`'s. What a peek that paid off does.
+    pub fn walk_take(&mut self, w: u32, src: u32) {
+        let c = self.walks[src as usize].clone();
+        self.walks[w as usize] = c;
+    }
+
+    /// The next LEAF, or NIL when the walk is finished.
+    ///
+    /// ONE WALK FOR BOTH TREES. A rope node and a byte-rope node put their
+    /// children at the same offset and count them the same way; the only thing
+    /// that differed was which tag says "this is a node". So this takes either,
+    /// and `rope.rs` no longer carries a second copy of the same loop.
+    pub fn walk_next(&mut self, w: u32) -> Value {
+        loop {
+            let top = match self.walks[w as usize].last() {
+                None => return NIL,
+                Some(t) => *t,
+            };
+            let (node, i) = top;
+            if !self.is_brope(node) && !self.is_rope(node) {
+                self.walks[w as usize].pop();
+                return node;
+            }
+            let kids = len(&self.gc.sp, node.as_heap()) - BB_KIDS;
+            if i >= kids {
+                self.walks[w as usize].pop();
+                continue;
+            }
+            if let Some(t) = self.walks[w as usize].last_mut() {
+                t.1 = i + 1;
+            }
+            let k = self.slot(node, BB_KIDS + i);
+            self.walks[w as usize].push((k, 0));
+        }
+    }
+
+    /// Is there nothing left on it?
+    pub fn walk_done(&self, w: u32) -> bool {
+        self.walks[w as usize].is_empty()
+    }
+
+    /// Are `len` bytes at `a` the same as `len` bytes at `b`?
+    ///
+    /// A RUN COMPARISON rather than a byte loop, because this is the inner
+    /// loop of `b_eq` over two 500 KB sections and the difference between one
+    /// `memcmp` and half a million calls is the whole cost of the operation.
+    pub fn run_eq(&self, a: crate::mem::Addr, b: crate::mem::Addr, len: u32) -> bool {
+        self.gc.sp.bytes(a, len) == self.gc.sp.bytes(b, len)
+    }
+
     /// Open a buffer and answer its index. `sink_close` releases it and every
     /// buffer opened after it, which is `pop_to`'s discipline exactly.
     pub fn sink_open(&mut self) -> u32 {
@@ -151,82 +225,21 @@ impl Rt {
 
 
 
-    /// The byte-rope mirror of `tree_eq`, and it had the same defect twice
-    /// over: it built a `Vec<u8>` of BOTH sides in full and then compared them,
-    /// so two 500 KB sections differing in their first byte cost a megabyte of
-    /// copying to tell apart.
-    ///
-    /// Now that `b_slice` SHARES, two slices of one section meet the same leaf
-    /// on both sides over and over, and each meeting is a pointer comparison.
-    pub fn b_eq(&self, a: Value, b: Value) -> bool {
-        if a.0 == b.0 {
-            return true;
-        }
-        if self.b_count(a) != self.b_count(b) {
-            return false;
-        }
-        let mut sa: alloc::vec::Vec<(Value, u32)> = alloc::vec::Vec::new();
-        let mut sb: alloc::vec::Vec<(Value, u32)> = alloc::vec::Vec::new();
-        sa.push((a, 0));
-        sb.push((b, 0));
-        let (mut la, mut lb): (&[u8], &[u8]) = (&[], &[]);
-        let (mut pa, mut pb) = (0usize, 0usize);
-        loop {
-            if pa == la.len() {
-                match self.b_walk_next(&mut sa) {
-                    None => break,
-                    Some(v) => {
-                        if pb == lb.len() && !sb.is_empty() {
-                            let mut peek = sb.clone();
-                            if let Some(w) = self.b_walk_next(&mut peek) {
-                                if w.0 == v.0 {
-                                    sb = peek;
-                                    la = &[];
-                                    lb = &[];
-                                    pa = 0;
-                                    pb = 0;
-                                    continue;
-                                }
-                            }
-                        }
-                        la = self.b_leaf_bytes(v);
-                        pa = 0;
-                    }
-                }
-            }
-            if pb == lb.len() {
-                match self.b_walk_next(&mut sb) {
-                    None => break,
-                    Some(v) => {
-                        lb = self.b_leaf_bytes(v);
-                        pb = 0;
-                    }
-                }
-            }
-            let n = (la.len() - pa).min(lb.len() - pb);
-            if n == 0 {
-                continue;
-            }
-            if la[pa..pa + n] != lb[pb..pb + n] {
-                return false;
-            }
-            pa += n;
-            pb += n;
-        }
-        pa == la.len()
-            && pb == lb.len()
-            && self.b_walk_next(&mut sa).is_none()
-            && self.b_walk_next(&mut sb).is_none()
-    }
 
     /// The content hash of a byte tree, cached per node. `rope_hash` with the
     /// text dropped.
     pub fn b_hash(&mut self, v: Value) -> u32 {
         if !self.is_brope(v) {
-            let bs: alloc::vec::Vec<u8> = self.b_leaf_bytes(v).to_vec();
+            // Read through the heap rather than through a borrowed slice.
+            // `b_leaf_bytes` handed back a `&[u8]` -- hole 6's shape, and the
+            // only thing still asking for it once `b_eq` was generated.
             let mut h: u32 = 0;
-            for c in bs {
-                h = h.wrapping_mul(31).wrapping_add(c as u32);
+            if v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_BYTES {
+                let n = len(&self.gc.sp, v.as_heap());
+                for i in 0..n {
+                    let c = self.gc.sp.read_u8(v.as_heap() + HDR + i as crate::mem::Addr);
+                    h = h.wrapping_mul(31).wrapping_add(c as u32);
+                }
             }
             return h;
         }
@@ -252,31 +265,7 @@ impl Rt {
         h
     }
 
-    fn b_walk_next(&self, stack: &mut alloc::vec::Vec<(Value, u32)>) -> Option<Value> {
-        loop {
-            let (node, i) = *stack.last()?;
-            if !self.is_brope(node) {
-                stack.pop();
-                return Some(node);
-            }
-            let kids = len(&self.gc.sp, node.as_heap()) - BB_KIDS;
-            if i >= kids {
-                stack.pop();
-                continue;
-            }
-            stack.last_mut().unwrap().1 = i + 1;
-            let k = self.slot(node, BB_KIDS + i);
-            stack.push((k, 0));
-        }
-    }
 
-    fn b_leaf_bytes(&self, v: Value) -> &[u8] {
-        if v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_BYTES {
-            raw_bytes(&self.gc.sp, v.as_heap())
-        } else {
-            &[]
-        }
-    }
 }
 
 // --- the transient ---------------------------------------------------------

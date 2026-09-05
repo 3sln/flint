@@ -227,7 +227,31 @@ impl Rt {
 
     /// The next leaf of a tree walk, given a stack of `(node, next-child)`.
     /// Pushes down the left spine until it reaches something with bytes in it.
-    fn walk_next(&self, stack: &mut alloc::vec::Vec<(Value, u32)>) -> Option<Value> {
+
+    /// Content equality over two string trees, WITHOUT materialising either.
+    ///
+    /// What it replaces copied both sides into Rust vectors in full and then
+    /// compared them -- so two megabyte strings differing in their first byte
+    /// cost two megabytes of copying to discover it.
+    ///
+    /// Two short circuits, and the first one matters much more since `subs`
+    /// started SHARING:
+    ///
+    ///  * **A node is equal to itself.** Sliced strings share their interior,
+    ///    so comparing two of them now meets the same leaf on both sides
+    ///    repeatedly, and each meeting is a pointer comparison rather than a
+    ///    byte scan.
+    ///  * **A mismatch stops where it happens**, not after both sides are
+    ///    copied.
+    /// `tree_eq`'s own walk, and the reason it is not the runtime's.
+    ///
+    /// A byte tree's leaves are always heap objects, so `walk_next` on `Rt`
+    /// serves `b_eq` and this file's node walk alike. A ROPE's leaf can be an
+    /// INLINE STRING -- bytes in the value itself, not in the heap -- so
+    /// comparing them needs somewhere to decode each side into, and that is a
+    /// second capability rather than the walk. Until it lands this keeps its
+    /// own stack, which is the honest version of "not ported yet".
+    fn rope_walk_next(&self, stack: &mut alloc::vec::Vec<(Value, u32)>) -> Option<Value> {
         loop {
             let (node, i) = *stack.last()?;
             if !self.is_rope(node) {
@@ -245,21 +269,6 @@ impl Rt {
         }
     }
 
-    /// Content equality over two string trees, WITHOUT materialising either.
-    ///
-    /// What it replaces copied both sides into Rust vectors in full and then
-    /// compared them -- so two megabyte strings differing in their first byte
-    /// cost two megabytes of copying to discover it.
-    ///
-    /// Two short circuits, and the first one matters much more since `subs`
-    /// started SHARING:
-    ///
-    ///  * **A node is equal to itself.** Sliced strings share their interior,
-    ///    so comparing two of them now meets the same leaf on both sides
-    ///    repeatedly, and each meeting is a pointer comparison rather than a
-    ///    byte scan.
-    ///  * **A mismatch stops where it happens**, not after both sides are
-    ///    copied.
     pub fn tree_eq(&self, a: Value, b: Value) -> bool {
         if a.0 == b.0 {
             return true;
@@ -273,7 +282,7 @@ impl Rt {
         let (mut pa, mut pb) = (0usize, 0usize);
         loop {
             if pa == la.len() {
-                match self.walk_next(&mut sa) {
+                match self.rope_walk_next(&mut sa) {
                     None => break,
                     Some(v) => {
                         // IDENTITY, at the leaf: if the other side is also at a
@@ -281,7 +290,7 @@ impl Rt {
                         // needs reading.
                         if pb == lb.len() && !sb.is_empty() {
                             let mut peek = sb.clone();
-                            if let Some(w) = self.walk_next(&mut peek) {
+                            if let Some(w) = self.rope_walk_next(&mut peek) {
                                 if w.0 == v.0 {
                                     sb = peek;
                                     la = &[];
@@ -298,7 +307,7 @@ impl Rt {
                 }
             }
             if pb == lb.len() {
-                match self.walk_next(&mut sb) {
+                match self.rope_walk_next(&mut sb) {
                     None => break,
                     Some(v) => {
                         lb = self.leaf_bytes(v, &mut bb);
@@ -320,8 +329,8 @@ impl Rt {
         // so reaching here with either side unfinished is not possible -- but
         // saying so costs one comparison and does not rely on that.
         pa == la.len() && pb == lb.len()
-            && self.walk_next(&mut sa).is_none()
-            && self.walk_next(&mut sb).is_none()
+            && self.rope_walk_next(&mut sa).is_none()
+            && self.rope_walk_next(&mut sb).is_none()
     }
 
     /// `31^n`, by squaring. The multiplier that lets two cached hashes join.

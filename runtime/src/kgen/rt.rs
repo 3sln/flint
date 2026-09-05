@@ -8,6 +8,7 @@ pub mod byteconcat;
 pub mod byteat;
 pub mod byteslice;
 pub mod bytecore;
+pub mod byteeq;
 pub mod byteflat;
 pub mod bytefold;
 pub mod bytetwrite;

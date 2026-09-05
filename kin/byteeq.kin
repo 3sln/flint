@@ -1,0 +1,105 @@
+;; Comparing two byte trees without flattening either.
+;;
+;; THE DEFECT THIS REPLACED, twice over: it built a byte array of BOTH sides in
+;; full and then compared them, so two 500 KB sections differing in their first
+;; byte cost a megabyte of copying to tell apart. Walking instead stops at the
+;; first difference.
+;;
+;; AND SHARED LEAVES COST NOTHING. Now that slicing SHARES, two slices of one
+;; section meet the same leaf on both sides over and over -- so when both walks
+;; are at a leaf boundary, the other side is PEEKED, and if it is about to
+;; produce the same object both walks skip it without a byte being read. That
+;; is what the `Walk` needs `dup` and `take` for: look ahead, and keep the look
+;; only if it paid.
+(ns flint.rt.byteeq
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < > not and nil? is-heap as-heap
+                                   + - local set forever break continue to-addr
+                                   olen slot run-eq
+                                   walk-open walk-close walk-dup walk-take
+                                   walk-next walk-done
+                                   Rt Value I32 Bool Walk NIL HDR]]
+            [flint.rt.bytecore :refer [b-count]]))
+
+(doc "Do `a` and `b` hold the same bytes, whatever shape they are in?"
+     ""
+     "Two trees built differently over the same bytes are EQUAL, which is why"
+     "this cannot compare structure and has to walk leaves. The leaf"
+     "boundaries do not line up, so each side carries how far into its current"
+     "leaf it has read.")
+(defn ^:pub ^:method ^Bool b-eq [^:mut ^Rt rt ^Value a ^Value b]
+  (comment "The same object is the same bytes, and the commonest case.")
+  (if (== a b)
+    (return true))
+  (if (!= (b-count rt a) (b-count rt b))
+    (return false))
+  (let [^Walk wa (walk-open rt a)
+        ^Walk wb (walk-open rt b)]
+    (comment "The current leaf of each side, and how far into it. NIL means"
+             "`ask the walk for the next one`.")
+    (local ^:mut ^Value la)
+    (local ^:mut ^Value lb)
+    (local ^:mut ^I32 pa)
+    (local ^:mut ^I32 pb)
+    (local ^:mut ^I32 na)
+    (local ^:mut ^I32 nb)
+    (local ^:mut ^Bool same)
+    (set la NIL) (set lb NIL)
+    (set pa 0) (set pb 0)
+    (set na 0) (set nb 0)
+    (set same true)
+    (forever
+      (if (== pa na)
+        (do
+          (let [^Value v (walk-next rt wa)]
+            (if (nil? rt v)
+              (break))
+            (comment "BOTH AT A BOUNDARY: peek the other side, and if it is"
+                     "about to hand over the same object, skip it on both"
+                     "without reading a byte. Only keep the peek if it paid.")
+            (if (== pb nb)
+              (if (not (walk-done rt wb))
+                (let [^Walk peek (walk-dup rt wb)
+                      ^Value w (walk-next rt peek)]
+                  (if (== w v)
+                    (do (comment "IT PAID: both sides skip the leaf without a"
+                                 "byte being read, and the loop starts over."
+                                 "Falling through here instead would take the"
+                                 "leaf on this side and not the other.")
+                        (walk-take rt wb peek)
+                        (walk-close rt peek)
+                        (continue))
+                    (walk-close rt peek)))))
+            (set la v)
+            (set pa 0)
+            (set na (olen rt v)))))
+      (if (== pb nb)
+        (do
+          (let [^Value v (walk-next rt wb)]
+            (if (nil? rt v)
+              (break))
+            (set lb v)
+            (set pb 0)
+            (set nb (olen rt v)))))
+      (let [^I32 ra (- na pa)
+            ^I32 rb (- nb pb)]
+        (local ^:mut ^I32 n)
+        (set n ra)
+        (if (< rb n) (set n rb))
+        (if (> n 0)
+          (do
+            (if (not (run-eq rt (+ (+ (as-heap la) HDR) (to-addr pa))
+                             (+ (+ (as-heap lb) HDR) (to-addr pb))
+                             n))
+              (do (set same false)
+                  (break)))
+            (set pa (+ pa n))
+            (set pb (+ pb n))))))
+    (comment "EQUAL means both ran out together AND neither has a leaf part"
+             "left over. Stopping early on one side is a length difference the"
+             "count check above cannot see when the trees are ragged.")
+    (let [^Bool ended (and (== pa na) (== pb nb))
+          ^Bool drya (nil? rt (walk-next rt wa))
+          ^Bool dryb (nil? rt (walk-next rt wb))]
+      (walk-close rt wa)
+      (return (and same (and ended (and drya dryb)))))))

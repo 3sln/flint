@@ -42,6 +42,73 @@ public final class Rt {
     private final java.util.ArrayList<java.io.ByteArrayOutputStream> sinks =
         new java.util.ArrayList<>();
 
+    // -------------------------------------------------------------- the walk
+    //
+    // The sink's sibling. Comparing or hashing two trees leaf by leaf needs an
+    // explicit stack, and `Vec<(Value, u32)>`, an `ArrayDeque` and a
+    // `Stack<(long, int)>` have nothing in common a generated source could
+    // name. An index does.
+    //
+    // ONE WALK FOR BOTH TREES: a rope node and a byte-rope node put their
+    // children at the same offset and count them the same way, so the only
+    // thing that differed was which tag says "this is a node".
+    private final java.util.ArrayList<java.util.ArrayList<long[]>> walks =
+        new java.util.ArrayList<>();
+
+    public int walkOpen(long v) {
+        java.util.ArrayList<long[]> st = new java.util.ArrayList<>();
+        st.add(new long[]{v, 0});
+        walks.add(st);
+        return walks.size() - 1;
+    }
+
+    public void walkClose(int w) {
+        while (walks.size() > w) walks.remove(walks.size() - 1);
+    }
+
+    /// A COPY, so a caller can look ahead without consuming.
+    public int walkDup(int w) {
+        java.util.ArrayList<long[]> c = new java.util.ArrayList<>();
+        for (long[] e : walks.get(w)) c.add(new long[]{e[0], e[1]});
+        walks.add(c);
+        return walks.size() - 1;
+    }
+
+    /// Replace `w`'s position with `src`'s -- what a peek that paid off does.
+    public void walkTake(int w, int src) {
+        java.util.ArrayList<long[]> c = new java.util.ArrayList<>();
+        for (long[] e : walks.get(src)) c.add(new long[]{e[0], e[1]});
+        walks.set(w, c);
+    }
+
+    public long walkNext(int w) {
+        java.util.ArrayList<long[]> st = walks.get(w);
+        for (;;) {
+            if (st.isEmpty()) return Val.NIL;
+            long[] top = st.get(st.size() - 1);
+            long node = top[0];
+            int i = (int) top[1];
+            if (!Bytes.isBrope(this, node) && !Str.isRope(this, node)) {
+                st.remove(st.size() - 1);
+                return node;
+            }
+            int kids = Obj.len(gc.sp, Val.asHeap(node)) - Bytes.BB_KIDS;
+            if (i >= kids) { st.remove(st.size() - 1); continue; }
+            top[1] = i + 1;
+            st.add(new long[]{ slot(node, Bytes.BB_KIDS + i), 0 });
+        }
+    }
+
+    public boolean walkDone(int w) { return walks.get(w).isEmpty(); }
+
+    /// Are `len` bytes at `a` the same as `len` bytes at `b`?
+    public boolean runEq(long a, long b, int len) {
+        for (int i = 0; i < len; i++) {
+            if (gc.sp.readU8(a + i) != gc.sp.readU8(b + i)) return false;
+        }
+        return true;
+    }
+
     /// Open a buffer and answer its index.
     public int sinkOpen() {
         sinks.add(new java.io.ByteArrayOutputStream());
