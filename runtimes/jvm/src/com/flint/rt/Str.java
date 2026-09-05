@@ -202,9 +202,11 @@ public final class Str {
     public static byte[] bytes(Rt rt, long v) {
         if (Val.isInlineStr(v)) return Val.inlineBytes(v);
         if (isRope(rt, v)) {
-            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(sBytes(rt, v));
-            appendBytes(rt, v, out);
-            return out.toByteArray();
+            int sk = rt.sinkOpen();
+            com._3sln.flint.kgen.rt.Ropeflat.sAppend(rt, v, sk);
+            byte[] out = rt.sinkArray(sk);
+            rt.sinkClose(sk);
+            return out;
         }
         long a = Val.asHeap(v);
         return rt.gc.sp.bytes(a + STR_DATA, len(rt.gc.sp, a));
@@ -674,44 +676,13 @@ public final class Str {
         }
     }
 
-    static void appendBytes(Rt rt, long v, java.io.ByteArrayOutputStream out) {
-        if (Val.isInlineStr(v)) { out.writeBytes(Val.inlineBytes(v)); return; }
-        if (!Val.isHeap(v)) return;
-        int t = ty(rt.gc.sp, Val.asHeap(v));
-        if (t == TY_STR) {
-            out.writeBytes(rt.gc.sp.bytes(Val.asHeap(v) + STR_DATA, len(rt.gc.sp, Val.asHeap(v))));
-        } else if (t == TY_ROPE) {
-            long cached = rt.slot(v, RP_FLAT);
-            if (!Val.isNil(cached)) { appendBytes(rt, cached, out); return; }
-            int n = ropeKids(rt, v);
-            for (int i = 0; i < n; i++) appendBytes(rt, rt.slot(v, RP_KIDS + i), out);
-        }
-    }
 
     /// Contiguous bytes for a string of any tier. Identity for inline and flat;
     /// materialises a rope ONCE and remembers it. `0011`: count the flattens,
     /// do not hope about them -- a rope that flattens on every `index-of`
     /// passes every correctness test and is slower than the flat string it
     /// replaced.
-    public static long flatten(Rt rt, long v) {
-        if (!isRope(rt, v)) return v;
-        long cached = rt.slot(v, RP_FLAT);
-        if (!Val.isNil(cached)) return cached;
-        // Flattening is a copy of the whole tree, and it REFUSES when the
-        // budget cannot cover it: `n` is known, so the charge goes up front.
-        if (!rt.chargeChecked((sBytes(rt, v) / 8) + 1, "flatten")) return Val.NIL;
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(sBytes(rt, v));
-        int base = rt.mark();
-        int vi = rt.push(v);
-        appendBytes(rt, rt.r(vi), out);
-        // CONTIGUOUS, not `of`: `of` tiers, and a flatten that produced a tree
-        // would put a tree in `RP_FLAT`.
-        long flat = contiguous(rt, out.toByteArray());
-        long vv = rt.r(vi);
-        rt.popTo(base);
-        if (Val.isHeap(vv) && !Val.isNil(flat)) rt.setSlot(Val.asHeap(vv), RP_FLAT, flat);
-        return flat;
-    }
+    public static long flatten(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropeflat.sFlatten(rt, v); }
 
     /// Byte length. NOT the code-point count -- see the class comment.
     public static int byteLen(Rt rt, long v) { return sBytes(rt, v); }

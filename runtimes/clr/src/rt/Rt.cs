@@ -95,11 +95,20 @@ public sealed class Rt : System.IDisposable {
         sinks[s].Write(run, 0, len);
     }
     public byte[] SinkArray(int s) { return sinks[s].ToArray(); }
+    /// Append an INLINE string's bytes -- see the Java and Rust copies.
+    public void SinkPutInline(int s, long v) {
+        byte[] src = Val.InlineBytes(v);
+        sinks[s].Write(src, 0, src.Length);
+    }
     public void SinkCopyOut(int s, int from, int len, long addr) {
         byte[] src = sinks[s].ToArray();
         for (int i = 0; i < len; i++) gc.sp.WriteU8(addr + i, src[from + i]);
     }
     public long SinkBytes(int s) { return Bytes.Of(this, sinks[s].ToArray()); }
+    /// The contents as a CONTIGUOUS string -- never a tree.
+    public long SinkContiguous(int s) {
+        return Str.Contiguous(this, sinks[s].ToArray());
+    }
     public long SinkString(int s) {
         return Str.Of(this, System.Text.Encoding.UTF8.GetString(sinks[s].ToArray()));
     }

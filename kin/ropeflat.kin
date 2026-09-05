@@ -1,0 +1,76 @@
+;; Flattening a string tree into a sink, and remembering the result.
+;;
+;; The text mirror of `byteflat`, and it waited on one thing the byte side
+;; never needed: a rope's leaf can be an INLINE STRING, whose bytes live in the
+;; value rather than the heap. There is no address to copy from, so
+;; `sink-put-run` cannot reach it and `sink-put-inline` is what does.
+;;
+;; That is the whole difference between the two trees. Everything else here --
+;; the cached flattening, the descent, the one-pass copy -- is what `byteflat`
+;; already does.
+(ns flint.rt.ropeflat
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != not nil? is-heap as-heap ty
+                                   is-inline-str + - for olen slot set-slot
+                                   mark push r pop-to
+                                   sink-open sink-close sink-put-run sink-put-inline
+                                   sink-contiguous
+                                   Rt Value Ty I32 RootIx Sink HDR STR_DATA
+                                   TY_STR TY_ROPE RP_FLAT RP_KIDS]]
+            [flint.rt.ropecat :refer [is-rope rope-kids]]))
+
+(doc "Append every byte of the string `v` to the sink `s`."
+     ""
+     "THREE TIERS AND ONE OF THEM HAS NO ADDRESS. An inline string keeps its"
+     "bytes in the value; a flat string keeps them at `STR_DATA`, which is not"
+     "`HDR` -- a `TY_STR` carries a header of its own first; and a rope holds"
+     "children. Anything else appends nothing, because every caller has already"
+     "decided what `v` is.")
+(defn ^:pub ^:method s-append [^:mut ^Rt rt ^Value v ^Sink s]
+  (if (is-inline-str rt v)
+    (do (sink-put-inline rt s v)
+        (return)))
+  (if (not (is-heap v))
+    (return))
+  (let [^Ty t (ty rt (as-heap v))]
+    (if (== t TY_STR)
+      (do (sink-put-run rt s (+ (as-heap v) STR_DATA) (olen rt v))
+          (return)))
+    (if (!= t TY_ROPE)
+      (return))
+    (comment "ALREADY FLATTENED: one run rather than a descent, which is what"
+             "makes repeated reads of one rope cheap.")
+    (let [^Value cached (slot rt v RP_FLAT)]
+      (if (not (nil? rt cached))
+        (do (s-append rt cached s)
+            (return))))
+    (let [^I32 n (rope-kids rt v)]
+      (for [^I32 i 0 n]
+        (s-append rt (slot rt v (+ RP_KIDS i)) s)))))
+
+(doc "`v` as one contiguous string, CACHED in the node."
+     ""
+     "Identity for a leaf, which is why this is safe to call at the door of"
+     "every operation that wants bytes. The cache is what stopped `subs`,"
+     "`str-index-of` and `str-bytes` each walking the whole rope before their"
+     "own charge got a say -- they were paying at the door of a room they had"
+     "already been through.")
+(defn ^:pub ^:method ^Value s-flatten [^:mut ^Rt rt ^Value v]
+  (if (not (is-rope rt v))
+    (return v))
+  (let [^Value cached (slot rt v RP_FLAT)]
+    (if (not (nil? rt cached))
+      (return cached)))
+  (comment "`v` LIVES IN THE ROOT across the allocation: `sink-contiguous` interns"
+           "a string, and the node this is about to write into would be stale"
+           "if it had been read into a host local before that.")
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^Sink s (sink-open rt)]
+    (s-append rt (r rt vi) s)
+    (let [^Value flat (sink-contiguous rt s)]
+      (sink-close rt s)
+      (if (is-heap flat)
+        (set-slot rt (r rt vi) RP_FLAT flat))
+      (pop-to rt base)
+      (return flat))))

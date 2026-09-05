@@ -194,6 +194,19 @@ impl Rt {
         self.sinks[s as usize].extend_from_slice(src);
     }
 
+    /// Append an INLINE string's bytes to the sink.
+    ///
+    /// An inline string keeps its bytes in the VALUE, not the heap, so there
+    /// is no address to hand to `sink_put_run` -- and that is the whole of why
+    /// a rope's leaves could not be walked by a generated source while a byte
+    /// rope's could. Unpacking one is per-target work; putting the result
+    /// somewhere is not.
+    pub fn sink_put_inline(&mut self, s: u32, v: Value) {
+        let mut b = crate::rt::sbuf();
+        let src: alloc::vec::Vec<u8> = v.inline_bytes(&mut b).to_vec();
+        self.sinks[s as usize].extend_from_slice(&src);
+    }
+
     /// Copy `len` bytes from the sink at `from` INTO the heap at `addr`.
     ///
     /// The other direction from `sink_put_run`, and the only way bytes leave a
@@ -217,6 +230,20 @@ impl Rt {
         let src = &self.sinks[s as usize];
         self.gc.sp.bytes_mut(a + HDR, n).copy_from_slice(src);
         Value::heap(a)
+    }
+
+    /// The sink's contents as a CONTIGUOUS string -- inline or one flat run,
+    /// never a tree.
+    ///
+    /// NOT the same as `sink_string`, and the difference is not cosmetic:
+    /// `string` TIERS, so a big enough result comes back as a rope. A flatten
+    /// that answered a rope would put a rope in `RP_FLAT`, and every caller
+    /// that flattened in order to get contiguous bytes would be handed a tree
+    /// -- which is what it was flattening to escape.
+    pub fn sink_contiguous(&mut self, s: u32) -> Value {
+        let owned: alloc::vec::Vec<u8> = self.sinks[s as usize].clone();
+        let t = core::str::from_utf8(&owned).unwrap_or("");
+        self.contiguous_string(t)
     }
 
     /// The sink's contents as a string. Invalid UTF-8 answers the empty

@@ -134,6 +134,13 @@ public final class Rt {
     /// The raw contents, for host code that wants an array rather than a value.
     public byte[] sinkArray(int s) { return sinks.get(s).toByteArray(); }
 
+    /// Append an INLINE string's bytes -- they live in the value, not the
+    /// heap, so there is no address to hand to `sinkPutRun`. See the Rust copy.
+    public void sinkPutInline(int s, long v) {
+        byte[] src = Val.inlineBytes(v);
+        sinks.get(s).write(src, 0, src.length);
+    }
+
     /// Copy `len` bytes from the sink at `from` INTO the heap at `addr` --
     /// the other direction from `sinkPutRun`. See the Rust copy.
     public void sinkCopyOut(int s, int from, int len, long addr) {
@@ -145,6 +152,12 @@ public final class Rt {
     /// closes it, because the caller opened it.
     public long sinkBytes(int s) {
         return Bytes.of(this, sinks.get(s).toByteArray());
+    }
+
+    /// The contents as a CONTIGUOUS string -- never a tree. See the Rust copy
+    /// for why this is not `sinkString`.
+    public long sinkContiguous(int s) {
+        return Str.contiguous(this, sinks.get(s).toByteArray());
     }
 
     /// The contents as a string. Invalid UTF-8 answers the empty string.

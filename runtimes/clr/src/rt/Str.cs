@@ -335,7 +335,11 @@ public static class Str {
         if (Val.IsInlineStr(v)) return Val.InlineBytes(v);
         if (IsRope(rt, v)) {
             var ms = new System.IO.MemoryStream(SBytes(rt, v));
-            AppendBytes(rt, v, ms);
+            int sk0 = rt.SinkOpen();
+            global::_3sln.Flint.Kgen.Rt.Ropeflat.SAppend(rt, v, sk0);
+            byte[] got = rt.SinkArray(sk0);
+            rt.SinkClose(sk0);
+            ms.Write(got, 0, got.Length);
             return ms.ToArray();
         }
         long a = Val.AsHeap(v);
@@ -620,44 +624,12 @@ public static class Str {
     }
 
     /// Walk the leaves in order, appending their bytes.
-    static void AppendBytes(Rt rt, long v, System.IO.MemoryStream outv) {
-        if (Val.IsInlineStr(v)) { byte[] ib = Val.InlineBytes(v); outv.Write(ib, 0, ib.Length); return; }
-        if (!Val.IsHeap(v)) return;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
-        if (t == Obj.TyStr) {
-            byte[] sb = rt.gc.sp.Bytes(Val.AsHeap(v) + Obj.StrData, Obj.Len(rt.gc.sp, Val.AsHeap(v)));
-            outv.Write(sb, 0, sb.Length);
-        } else if (t == Obj.TyRope) {
-            long cached = rt.Slot(v, RP_FLAT);
-            if (!Val.IsNil(cached)) { AppendBytes(rt, cached, outv); return; }
-            int n = RopeKids(rt, v);
-            for (int i = 0; i < n; i++) AppendBytes(rt, rt.Slot(v, RP_KIDS + i), outv);
-        }
-    }
 
     /// Contiguous bytes for a string of any tier. Materialises a rope ONCE and
     /// remembers it: `0011`'s rule is to count the flattens rather than hope
     /// about them, because a rope that flattens on every `index-of` passes
     /// every correctness test and is slower than the flat string it replaced.
-    public static long Flatten(Rt rt, long v) {
-        if (!IsRope(rt, v)) return v;
-        long cached = rt.Slot(v, RP_FLAT);
-        if (!Val.IsNil(cached)) return cached;
-        // Flattening copies the whole tree, and REFUSES when the budget cannot
-        // cover it: `n` is known, so the charge goes up front.
-        if (!rt.ChargeChecked((SBytes(rt, v) / 8) + 1, "flatten")) return Val.Nil;
-        var ms = new System.IO.MemoryStream(SBytes(rt, v));
-        int bas = rt.Mark();
-        int vi = rt.Push(v);
-        AppendBytes(rt, rt.R(vi), ms);
-        // CONTIGUOUS, not `Of`: `Of` tiers, and a flatten that produced a tree
-        // would put a tree in `RP_FLAT`.
-        long flat = Contiguous(rt, ms.ToArray());
-        long vv = rt.R(vi);
-        rt.PopTo(bas);
-        if (Val.IsHeap(vv) && !Val.IsNil(flat)) rt.SetSlot(Val.AsHeap(vv), RP_FLAT, flat);
-        return flat;
-    }
+    public static long Flatten(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropeflat.SFlatten(rt, v); }
 
     /// Byte length. NOT the code-point count -- see the class comment.
     public static int ByteLen(Rt rt, long v) => SBytes(rt, v);

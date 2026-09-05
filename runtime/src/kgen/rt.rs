@@ -32,6 +32,7 @@ pub mod merge;
 pub mod nodeclass;
 pub mod pike;
 pub mod ropecat;
+pub mod ropeflat;
 pub mod ropenode;
 pub mod ropeslice;
 pub mod seqcore;

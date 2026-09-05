@@ -298,6 +298,9 @@
    ;; The object header's width. A leaf's bytes begin `HDR` past its address,
    ;; which is the one place a generated source does address arithmetic.
    'HDR {:rust "crate::obj::HDR" :java "Obj.HDR" :csharp "Obj.Hdr"}
+   ;; Where a FLAT STRING's bytes begin, which is not `HDR`: a `TY_STR` carries
+   ;; a header of its own before them.
+   'STR_DATA {:rust "crate::obj::STR_DATA" :java "Obj.STR_DATA" :csharp "Obj.StrData"}
    ;; A slice smaller than this COPIES rather than shares. It is `Str`'s
    ;; constant in both ports and `rope`'s in Rust -- the same number in a
    ;; different home, which is what this table is for.
@@ -932,12 +935,25 @@
                               :csharp "{0}.SinkPutRun({1}, {2}, {3})"})
     ;; The other direction: bytes OUT of a sink and into the heap, which is
     ;; how a whole byte string is appended into a transient's open tail.
+    ;; An INLINE string's bytes, which live in the value rather than the heap
+    ;; -- so there is no address for `sink-put-run` and unpacking one is
+    ;; per-target work.
+    'sink-put-inline (core/call {:rust "{0}.sink_put_inline({1}, {2})"
+                                 :java "{0}.sinkPutInline({1}, {2})"
+                                 :csharp "{0}.SinkPutInline({1}, {2})"})
     'sink-copy-out (core/call {:rust "{0}.sink_copy_out({1}, {2}, {3}, {4})"
                                :java "{0}.sinkCopyOut({1}, {2}, {3}, {4})"
                                :csharp "{0}.SinkCopyOut({1}, {2}, {3}, {4})"})
     'sink-bytes (core/call {:rust "{0}.sink_bytes({1})"
                             :java "{0}.sinkBytes({1})" :csharp "{0}.SinkBytes({1})"}
                            {:tag Value})
+    ;; CONTIGUOUS, not tiered. `sink-string` may answer a rope for a big
+    ;; enough result; a flatten that did would put a rope in `RP_FLAT` and hand
+    ;; every caller a tree in place of the contiguous bytes it asked for.
+    'sink-contiguous (core/call {:rust "{0}.sink_contiguous({1})"
+                                 :java "{0}.sinkContiguous({1})"
+                                 :csharp "{0}.SinkContiguous({1})"}
+                                {:tag Value})
     'sink-string (core/call {:rust "{0}.sink_string({1})"
                              :java "{0}.sinkString({1})" :csharp "{0}.SinkString({1})"}
                             {:tag Value})

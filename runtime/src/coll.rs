@@ -1087,8 +1087,7 @@ impl Rt {
             // rope, joining its results stopped working. The tier is supposed
             // to be invisible, so walk it.
             if self.is_rope(x) {
-                let mut bs: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
-                self.append_bytes(x, &mut bs);
+                let bs = self.s_to_vec(x);
                 out.push_str(core::str::from_utf8(&bs).unwrap_or(""));
             } else {
                 let mut b = crate::rt::sbuf();
@@ -1207,9 +1206,7 @@ impl Rt {
         let owned: alloc::vec::Vec<u8> = if self.is_rope(s) {
             // WALK, do not flatten. Both produce the same bytes; only one of
             // them replaces the tree with a copy that every later read uses.
-            let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
-            self.append_bytes(s, &mut out);
-            out
+            self.s_to_vec(s)
         } else {
             let b: &[u8] = if s.is_inline_str() {
                 s.inline_bytes(&mut buf)

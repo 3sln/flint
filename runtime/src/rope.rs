@@ -412,16 +412,18 @@ impl Rt {
         // -- it was quadratic in both.
         let n = self.s_bytes(a) + self.s_bytes(b);
         self.charge_bytes(n);
-        let mut out: alloc::vec::Vec<u8> =
-            alloc::vec::Vec::with_capacity((self.s_bytes(a) + self.s_bytes(b)) as usize);
         let base = self.mark();
         let ai = self.push(a);
         let bi = self.push(b);
-        self.append_bytes(self.r(ai), &mut out);
-        self.append_bytes(self.r(bi), &mut out);
+        let sk = self.sink_open();
+        let av = self.r(ai);
+        self.s_append(av, sk);
+        let bv = self.r(bi);
+        self.s_append(bv, sk);
+        let out = self.sink_string(sk);
+        self.sink_close(sk);
         self.pop_to(base);
-        let s = core::str::from_utf8(&out).unwrap_or("");
-        self.string(s)
+        out
     }
 
     /// Walk the leaves in order, appending their bytes. Never allocates in the
@@ -476,42 +478,33 @@ impl Rt {
         }
     }
 
-    pub fn append_bytes(&self, v: Value, out: &mut alloc::vec::Vec<u8>) {
-        if v.is_inline_str() {
-            let mut b = crate::rt::sbuf();
-            out.extend_from_slice(v.inline_bytes(&mut b));
-            return;
-        }
-        if !v.is_heap() {
-            return;
-        }
-        match ty(&self.gc.sp, v.as_heap()) {
-            TY_STR => out.extend_from_slice(str_bytes(&self.gc.sp, v.as_heap())),
-            TY_ROPE => {
-                let cached = self.slot(v, RP_FLAT);
-                if !cached.is_nil() {
-                    self.append_bytes(cached, out);
-                    return;
-                }
-                let n = self.rope_kids(v);
-                for i in 0..n {
-                    let k = self.slot(v, RP_KIDS + i);
-                    self.append_bytes(k, out);
-                }
-            }
-            _ => {}
-        }
+
+    /// The string's bytes as a HOST vector, for host code outside the port --
+    /// the printer and `str_bytes`'s builtin. Inside, everything goes through a
+    /// sink; this is the door, as `b_to_vec` is for byte strings.
+    pub fn s_to_vec(&mut self, v: Value) -> alloc::vec::Vec<u8> {
+        let s = self.sink_open();
+        self.s_append(v, s);
+        let out = self.sinks[s as usize].clone();
+        self.sink_close(s);
+        out
     }
 
-    /// Contiguous bytes for a string of any tier. Identity for inline and flat;
-    /// materialises a rope ONCE and remembers it.
+    /// Contiguous bytes for a string of any tier, COUNTED.
+    ///
+    /// The flattening itself is generated -- `s_flatten` -- and this is the
+    /// diagnostics wrapper around it. `bin/check-flattens` gates on these
+    /// counters: every materialisation site has to justify itself, and a
+    /// counter that stopped incrementing would report zero sites and pass.
+    /// So the count stays hand-written and Rust-only, because `--diagnostics`
+    /// is a Rust build and the ports have no equivalent to keep in step with.
     pub fn flatten(&mut self, v: Value) -> Value {
-        if !self.is_rope(v) {
-            return v;
-        }
         #[cfg(feature = "diagnostics")]
         unsafe {
             FLATTENS[F_CALLS] += 1;
+        }
+        if !self.is_rope(v) {
+            return v;
         }
         let cached = self.slot(v, RP_FLAT);
         if !cached.is_nil() {
@@ -522,32 +515,15 @@ impl Rt {
             FLATTENS[F_MATERIALISED] += 1;
             FLATTENS[F_BYTES] += self.s_bytes(v) as u64;
         }
+        // CHARGED FOR WHAT IT MATERIALISES, before doing it. `str-index-of`,
+        // `subs` and `str-bytes` all reach bytes through here, so a rope
+        // flattened at the door is work none of their own charges can see --
+        // and without this one a search ran 48 190 steps past an exhausted
+        // budget. The gas gate found that within a minute of it being dropped.
         let n = self.s_bytes(v);
-        // FLATTENING IS THE SHARED CULPRIT. `subs`, `str-index-of` and
-        // `str-bytes` each call `string_arg` first, which lands here, so all
-        // three walked and copied the whole rope BEFORE their own charge got a
-        // say. Fixing them one at a time moved nothing; they were paying at the
-        // door of a room they had already been through.
-        //
-        // `n` is known -- a rope carries its own byte count -- so this refuses
-        // rather than ticks, and never begins a copy it cannot pay for.
         if !self.charge_checked((n as u64 / 8) + 1, "flatten") {
             return crate::value::NIL;
         }
-        let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity(n as usize);
-        let base = self.mark();
-        let vi = self.push(v);
-        self.append_bytes(self.r(vi), &mut out);
-        let s = core::str::from_utf8(&out).unwrap_or("");
-        // CONTIGUOUS, not `string`: `string` tiers, and a flatten that produced
-        // a tree would put a tree in `RP_FLAT` -- so every caller that
-        // flattened in order to get contiguous bytes would be handed a rope.
-        let flat = self.contiguous_string(s);
-        let v = self.r(vi);
-        self.pop_to(base);
-        if v.is_heap() && !flat.is_nil() {
-            self.set_slot(v.as_heap(), RP_FLAT, flat);
-        }
-        flat
+        self.s_flatten(v)
     }
 }
