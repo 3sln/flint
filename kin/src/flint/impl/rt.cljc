@@ -951,6 +951,14 @@
                              :java "{0}.chargeWork({1})" :csharp "{0}.ChargeWork({1})"})
     'charge-bytes (core/call {:rust "{0}.charge_bytes({1})"
                               :java "{0}.chargeBytes({1})" :csharp "{0}.ChargeBytes({1})"})
+    ;; THE ASCII BIT a flat string carries in its header. Set once when the
+    ;; string is built, so `s-ascii` is a read rather than a scan -- and each
+    ;; runtime spells the header differently enough that this cannot be
+    ;; expressed as a `read-u8`.
+    'str-is-ascii (core/call {:rust "crate::obj::str_is_ascii(&{0}.gc.sp, {1})"
+                              :java "Obj.strIsAscii({0}.gc.sp, {1})"
+                              :csharp "Obj.StrIsAscii({0}.gc.sp, {1})"}
+                             {:tag Bool})
     'leaf-len (core/call {:rust "{0}.leaf_len({1})"
                           :java "{0}.leafLen({1})" :csharp "{0}.LeafLen({1})"}
                          {:tag I32})

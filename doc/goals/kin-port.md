@@ -1386,6 +1386,14 @@ generated a call that does not compile the first time a source did.
 | 7 | `Maps`: `merge_two` + the six structural copies | **nothing new** -- 639 lines, algorithm line-for-line identical | 639 |
 | 8 | `Table`, `Str`'s rope half, the rest | hole 5, reorders | ~2,600 |
 
+`Str`'S ROPE HALF IS DONE. Row 8's string share shipped across five sources --
+`ropenode`, `ropecat`, `ropeslice`, `ropeflat`, `ropeeq`, `ropecp`,
+`ropemeas` -- taking `Str` from 2,462 to 1,196 lines across the three runtimes.
+What is left in `rope.rs` is five functions and every one of them is a host
+boundary rather than a blocker: `s_copy_range` and `copy_concat` are a UTF-8
+decode, `s_empty` interns, `s_to_vec` answers a host vector, and `flatten` is
+the gas-and-counter wrapper `0011` asks for. `Table` is what remains of row 8.
+
 Rows 1, 3 and 7 have shipped, and so has `nodeAssoc`, which this table never
 listed. The three analyses put it in a block -- `node_assoc`, `coll_assoc`,
 `node_dissoc`, `coll_dissoc` -- and gated the whole block on converging the
@@ -1756,7 +1764,7 @@ stay meaningful. 1 and 8 are done.
 | 2 | no array subject | `grow`, and any file that allocates or copies an array |
 | 3 | `case` arms cannot be statements | `decodeAt`'s fourteen arms, the opcode switch, `Pike` |
 | 4 | no test for absence (`Option` against null) | `Interns::lookup`, and every partial function in `Maps`, `Vec`, `Table` |
-| 5 | no string building | every error message, and most of `Str` |
+| 5 | no string building | every error message, and most of `Str` -- **CLOSED**: `str-cat` for messages, `Sink` for bytes |
 | 6 | no type parameter on a generated type | anything holding a borrow: `Reader<'a>`, and the same shape in `Str`/`Bytes`/`Snap` |
 | 7 | `^:method` cannot say "instance method on all three" | `Rt.isSeq`, and most of what lives on `Rt` in the ports. Also wants per-target visibility, `pub` in Rust against package-private on the JVM |
 

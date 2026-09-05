@@ -77,49 +77,6 @@ pub const F_UNFLAT_ASSTR: usize = 3;
 impl Rt {
     #[inline]
 
-    /// Byte length of any string, all three tiers, O(1).
-    pub fn s_bytes(&self, v: Value) -> u32 {
-        if v.is_inline_str() {
-            v.inline_len() as u32
-        } else if self.is_rope(v) {
-            self.slot(v, RP_BYTES).as_fixnum() as u32
-        } else {
-            len(&self.gc.sp, v.as_heap())
-        }
-    }
-
-    /// Code-point count of any string, all three tiers, O(1).
-    pub fn s_count(&self, v: Value) -> u32 {
-        if v.is_inline_str() {
-            let mut b = crate::rt::sbuf();
-            let bs = v.inline_bytes(&mut b);
-            if bs.is_ascii() {
-                bs.len() as u32
-            } else {
-                core::str::from_utf8(bs).map(|s| s.chars().count() as u32).unwrap_or(0)
-            }
-        } else if self.is_rope(v) {
-            (self.slot(v, RP_CPS).as_fixnum() as u32) >> 1
-        } else if str_is_ascii(&self.gc.sp, v.as_heap()) {
-            len(&self.gc.sp, v.as_heap())
-        } else {
-            let b = str_bytes(&self.gc.sp, v.as_heap());
-            core::str::from_utf8(b).map(|s| s.chars().count() as u32).unwrap_or(0)
-        }
-    }
-
-    /// Is every byte below 0x80? All three tiers, O(1).
-    pub fn s_ascii(&self, v: Value) -> bool {
-        if v.is_inline_str() {
-            let mut b = crate::rt::sbuf();
-            v.inline_bytes(&mut b).is_ascii()
-        } else if self.is_rope(v) {
-            self.slot(v, RP_CPS).as_fixnum() & 1 != 0
-        } else {
-            str_is_ascii(&self.gc.sp, v.as_heap())
-        }
-    }
-
     /// Copy the range out into a fresh string.
     ///
     /// The UTF-8 DECODE is the whole of what is left here. The walk that

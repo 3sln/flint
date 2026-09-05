@@ -9,6 +9,7 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Ropemeas.*;
 
 public final class Ropeeq {
     /// Do `a` and `b` hold the same bytes, whatever shape they are in?

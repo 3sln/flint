@@ -13,6 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Bytehash;
 using static global::_3sln.Flint.Kgen.Rt.Ropecat;
+using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 
 public static class Ropeflat {
     /// Append every byte of the string `v` to the sink `s`.

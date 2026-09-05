@@ -11,6 +11,7 @@ import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Bytehash.*;
 import static com._3sln.flint.kgen.rt.Ropecat.*;
+import static com._3sln.flint.kgen.rt.Ropemeas.*;
 
 public final class Ropeflat {
     /// Append every byte of the string `v` to the sink `s`.

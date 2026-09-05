@@ -1,0 +1,63 @@
+;; What a string MEASURES: its bytes, its code points, and whether it is ASCII.
+;;
+;; ALL THREE ARE O(1) FOR A ROPE and that is the whole design of `0011`. A node
+;; keeps its byte count in `RP_BYTES` and its code-point count and ascii flag
+;; PACKED into `RP_CPS` -- count in the high bits, the flag in bit 0 -- so
+;; asking any of the three is a slot read rather than a walk.
+;;
+;; A LEAF IS THE OTHER HALF OF THE ANSWER, and it is not free in the same way:
+;; a flat string caches its ascii-ness in a header bit, so `s-ascii` is O(1)
+;; there too, but a NON-ASCII leaf has to be scanned to be counted. That scan
+;; is bounded by the leaf, and `FLAT_MAX` bounds the leaf.
+(ns flint.rt.ropemeas
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < > >= not bit-and ushr
+                                   + local set for is-inline-str is-heap as-heap
+                                   leaf-len leaf-byte slot as-fixnum to-i32
+                                   str-is-ascii
+                                   Rt Value I32 Bool RP_BYTES RP_CPS]]
+            [flint.rt.ropecat :refer [is-rope]]))
+
+(doc "How many BYTES the string holds. O(1) on all three tiers.")
+(defn ^:pub ^:method ^I32 s-bytes [^Rt rt ^Value v]
+  (if (is-inline-str rt v)
+    (return (leaf-len rt v)))
+  (if (is-rope rt v)
+    (return (to-i32 (as-fixnum (slot rt v RP_BYTES)))))
+  (return (leaf-len rt v)))
+
+(doc "Is every byte below 0x80? All three tiers, O(1)."
+     ""
+     "A ROPE READS BIT 0 of `RP_CPS`, where the count sits above it. A flat"
+     "string reads the header bit the allocator set. Only an inline string is"
+     "scanned, and it is at most seven bytes.")
+(defn ^:pub ^:method ^Bool s-ascii [^Rt rt ^Value v]
+  (if (is-inline-str rt v)
+    (do
+      (let [^I32 n (leaf-len rt v)]
+        (for [^I32 i 0 n]
+          (if (>= (leaf-byte rt v i) 0x80)
+            (return false))))
+      (return true)))
+  (if (is-rope rt v)
+    (return (!= (bit-and (to-i32 (as-fixnum (slot rt v RP_CPS))) 1) 0)))
+  (return (str-is-ascii rt (as-heap v))))
+
+(doc "How many CODE POINTS the string holds."
+     ""
+     "O(1) for a rope and for an ASCII leaf; a scan bounded by the leaf"
+     "otherwise. COUNTING NON-CONTINUATION BYTES rather than decoding: a"
+     "continuation byte is exactly `10xxxxxx`, so every other byte starts a"
+     "code point and nothing has to be assembled to be counted.")
+(defn ^:pub ^:method ^I32 s-count [^Rt rt ^Value v]
+  (if (is-rope rt v)
+    (return (ushr (to-i32 (as-fixnum (slot rt v RP_CPS))) 1)))
+  (let [^I32 n (leaf-len rt v)]
+    (if (s-ascii rt v)
+      (return n))
+    (local ^:mut ^I32 c)
+    (set c 0)
+    (for [^I32 i 0 n]
+      (if (!= (bit-and (leaf-byte rt v i) 0xC0) 0x80)
+        (set c (+ c 1))))
+    (return c)))

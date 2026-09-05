@@ -392,23 +392,6 @@ public static class Str {
 
     public static bool IsRope(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Ropecat.IsRope(rt, v);
 
-    /// Byte length of any string, ALL THREE TIERS, O(1).
-    public static int SBytes(Rt rt, long v) {
-        if (Val.IsInlineStr(v)) return Val.InlineLen(v);
-        if (IsRope(rt, v)) return (int) Val.AsFixnum(rt.Slot(v, RP_BYTES));
-        return Obj.Len(rt.gc.sp, Val.AsHeap(v));
-    }
-
-    public static int SCount(Rt rt, long v) {
-        if (IsRope(rt, v)) return (int) (Val.AsFixnum(rt.Slot(v, RP_CPS)) >> 1);
-        return CharLen(rt, v);
-    }
-
-    public static bool SAscii(Rt rt, long v) {
-        if (IsRope(rt, v)) return (Val.AsFixnum(rt.Slot(v, RP_CPS)) & 1) != 0;
-        return IsAscii(rt, v);
-    }
-
     static int RopeKids(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Ropecat.RopeKids(rt, v);
 
     /// A slice that SHARES its interior: a child wholly inside the range comes
@@ -497,6 +480,9 @@ public static class Str {
     public static int RopeHash(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropeflat.RopeHash(rt, v); }
     public static bool TreeEq(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Ropeeq.TreeEq(rt, a, b); }
     static int Utf8Width(Rt rt, int b0) { return global::_3sln.Flint.Kgen.Rt.Ropecp.Utf8Width(rt, b0); }
+    public static int SBytes(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropemeas.SBytes(rt, v); }
+    public static int SCount(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropemeas.SCount(rt, v); }
+    public static bool SAscii(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropemeas.SAscii(rt, v); }
     public static int RopeByteOfCp(Rt rt, long v, int k) { return global::_3sln.Flint.Kgen.Rt.Ropecp.RopeByteOfCp(rt, v, k); }
     static int RopeBytesAt(Rt rt, long v, int at, int s) { return global::_3sln.Flint.Kgen.Rt.Ropecp.RopeBytesAt(rt, v, at, s); }
 

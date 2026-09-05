@@ -12,6 +12,7 @@ using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Ropecat;
+using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 
 public static class Ropecp {
     /// How many bytes the code point starting with `b0` occupies.

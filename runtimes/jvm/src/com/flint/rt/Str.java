@@ -420,25 +420,6 @@ public final class Str {
 
     public static boolean isRope(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropecat.isRope(rt, v); }
 
-    /// Byte length of any string, ALL THREE TIERS, O(1).
-    public static int sBytes(Rt rt, long v) {
-        if (Val.isInlineStr(v)) return Val.inlineLen(v);
-        if (isRope(rt, v)) return (int) Val.asFixnum(rt.slot(v, RP_BYTES));
-        return len(rt.gc.sp, Val.asHeap(v));
-    }
-
-    /// Code-point count of any string, all three tiers, O(1).
-    public static int sCount(Rt rt, long v) {
-        if (isRope(rt, v)) return (int) (Val.asFixnum(rt.slot(v, RP_CPS)) >> 1);
-        return charLen(rt, v);
-    }
-
-    /// Is every byte below 0x80? All three tiers, O(1).
-    public static boolean sAscii(Rt rt, long v) {
-        if (isRope(rt, v)) return (Val.asFixnum(rt.slot(v, RP_CPS)) & 1) != 0;
-        return isAscii(rt, v);
-    }
-
     static int ropeKids(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropecat.ropeKids(rt, v); }
 
     /// A node over `kids`, whose aggregates are SUMMED from them rather than
@@ -536,6 +517,9 @@ public final class Str {
     public static int ropeHash(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropeflat.ropeHash(rt, v); }
     public static boolean treeEq(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Ropeeq.treeEq(rt, a, b); }
     static int utf8Width(Rt rt, int b0) { return com._3sln.flint.kgen.rt.Ropecp.utf8Width(rt, b0); }
+    public static int sBytes(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropemeas.sBytes(rt, v); }
+    public static int sCount(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropemeas.sCount(rt, v); }
+    public static boolean sAscii(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropemeas.sAscii(rt, v); }
     public static int ropeByteOfCp(Rt rt, long v, int k) { return com._3sln.flint.kgen.rt.Ropecp.ropeByteOfCp(rt, v, k); }
     static int ropeBytesAt(Rt rt, long v, int at, int s) { return com._3sln.flint.kgen.rt.Ropecp.ropeBytesAt(rt, v, at, s); }
 

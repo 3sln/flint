@@ -10,6 +10,7 @@ import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Ropecat.*;
+import static com._3sln.flint.kgen.rt.Ropemeas.*;
 
 public final class Ropecp {
     /// How many bytes the code point starting with `b0` occupies.
