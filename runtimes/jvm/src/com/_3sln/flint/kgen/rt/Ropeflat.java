@@ -9,6 +9,7 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Bytehash.*;
 import static com._3sln.flint.kgen.rt.Ropecat.*;
 
 public final class Ropeflat {
@@ -76,5 +77,125 @@ public final class Ropeflat {
         }
         rt.popTo(base);
         return flat;
+    }
+    /// The content hash of a string tree, cached per node.
+    /// 
+    /// TWO ROPES OVER THE SAME BYTES MUST HASH ALIKE, whatever shape they are
+    /// in, or a string stops working as a map key the moment `str` nests or
+    /// `subs` shares. So a node's hash is what the flat string would have had:
+    /// `h(A then B) = h(A) * 31^|B| + h(B)`.
+    /// 
+    /// THE BYTES, NOT THE CODE POINTS. This has to agree with the flat hash,
+    /// which steps per byte -- so a two-byte character counts twice here as it
+    /// does there, and `pow31` is raised to the BYTE length.
+    public static int ropeHash(Rt rt, long v) {
+        if (!isRope(rt, v)) {
+            int lh;
+            lh = 0;
+            int n = rt.leafLen(v);
+            for (int i = 0; i < n; i++) {
+                lh = (lh * 31) + rt.leafByte(v, i);
+            }
+            return lh;
+        }
+        long cached = rt.slot(v, Str.RP_HASH);
+        if (Val.isFixnum(cached)) {
+            return (int) Val.asFixnum(cached);
+        }
+        int base = rt.mark();
+        int vi = rt.push(v);
+        int kids = ropeKids(rt, rt.r(vi));
+        int h;
+        h = 0;
+        for (int i = 0; i < kids; i++) {
+            long k = rt.slot(rt.r(vi), Str.RP_KIDS + i);
+            int ki = rt.push(k);
+            int kh = ropeHash(rt, rt.r(ki));
+            int kb = Str.sBytes(rt, rt.r(ki));
+            h = (h * pow31(rt, kb)) + kh;
+            rt.popTo(ki);
+        }
+        rt.setSlot(Val.asHeap(rt.r(vi)), Str.RP_HASH, Val.fixnum(h & 0xFFFFFFFFL));
+        rt.popTo(base);
+        return h;
+    }
+    /// Append the byte range [from, to) of the string `v` to the sink `s`.
+    /// 
+    /// THE `at < to` HALF OF THE TEST IS WHAT MAKES A SLICE CHEAP. A child
+    /// wholly before the range is skipped, and once the walk has passed `to` it
+    /// returns rather than finishing the row -- so taking three bytes from the
+    /// front of a megabyte does not walk the megabyte.
+    /// 
+    /// The inline tier goes a byte at a time. It has no address for a run copy,
+    /// and it is at most seven bytes long, so the loop is the cheaper answer
+    /// rather than a second primitive.
+    public static void sAppendRange(Rt rt, long v, int from, int to, int s) {
+        if (from >= to) {
+            return;
+        }
+        if (Val.isInlineStr(v)) {
+            int ihi;
+            int ilo;
+            ihi = to;
+            int iln = rt.leafLen(v);
+            if (ihi > iln) {
+                ihi = iln;
+            }
+            ilo = from;
+            if (ilo > ihi) {
+                ilo = ihi;
+            }
+            for (int i = ilo; i < ihi; i++) {
+                rt.sinkPut(s, rt.leafByte(v, i));
+            }
+            return;
+        }
+        if (!Val.isHeap(v)) {
+            return;
+        }
+        int t = ty(rt.gc.sp, Val.asHeap(v));
+        if (t == TY_STR) {
+            int leafn = olen(rt, v);
+            int hi;
+            int lo;
+            hi = to;
+            if (hi > leafn) {
+                hi = leafn;
+            }
+            lo = from;
+            if (lo > hi) {
+                lo = hi;
+            }
+            rt.sinkPutRun(s, (Val.asHeap(v) + Obj.STR_DATA) + lo, hi - lo);
+            return;
+        }
+        if (t != TY_ROPE) {
+            return;
+        }
+        int n = ropeKids(rt, v);
+        int at;
+        at = 0;
+        for (int i = 0; i < n; i++) {
+            long k = rt.slot(v, Str.RP_KIDS + i);
+            int w = Str.sBytes(rt, k);
+            if (((at + w) > from) && (at < to)) {
+                // GUARDED, not clamped after the fact. `I32` is `u32` in
+                // Rust, where `(- from at)` wraps to a huge number and a
+                // later `(< klo 0)` is dead code, and `int` in the ports,
+                // where it does not. Subtract only when the result is
+                // known non-negative -- the same shape `b-append-range`
+                // and `s-slice` already use.
+                int klo;
+                klo = 0;
+                if (from > at) {
+                    klo = from - at;
+                }
+                sAppendRange(rt, k, klo, to - at, s);
+            }
+            at += w;
+            if (at >= to) {
+                return;
+            }
+        }
     }
 }

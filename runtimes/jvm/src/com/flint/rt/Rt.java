@@ -134,6 +134,25 @@ public final class Rt {
     /// The raw contents, for host code that wants an array rather than a value.
     public byte[] sinkArray(int s) { return sinks.get(s).toByteArray(); }
 
+    /// How many bytes a LEAF holds, whichever tier it is. See the Rust copy.
+    public int leafLen(long v) {
+        if (Val.isInlineStr(v)) return Val.inlineLen(v);
+        if (Val.isHeap(v)) return Obj.len(gc.sp, Val.asHeap(v));
+        return 0;
+    }
+
+    /// Byte `i` of a LEAF, whichever tier it is.
+    public int leafByte(long v, int i) {
+        if (Val.isInlineStr(v)) {
+            byte[] bs = Val.inlineBytes(v);
+            return i < bs.length ? (bs[i] & 0xFF) : 0;
+        }
+        if (!Val.isHeap(v)) return 0;
+        long a = Val.asHeap(v);
+        long base = Obj.ty(gc.sp, a) == Obj.TY_STR ? a + Obj.STR_DATA : a + Obj.HDR;
+        return gc.sp.readU8(base + i);
+    }
+
     /// Append an INLINE string's bytes -- they live in the value, not the
     /// heap, so there is no address to hand to `sinkPutRun`. See the Rust copy.
     public void sinkPutInline(int s, long v) {

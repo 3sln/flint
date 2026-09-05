@@ -938,6 +938,16 @@
     ;; An INLINE string's bytes, which live in the value rather than the heap
     ;; -- so there is no address for `sink-put-run` and unpacking one is
     ;; per-target work.
+    ;; A LEAF, whichever tier it is. An inline string keeps its bytes and its
+    ;; length in the VALUE; a flat string keeps them at `STR_DATA`; a byte leaf
+    ;; at `HDR`. One question, three places to look -- so it is asked once here
+    ;; rather than branched on in every source that walks leaves.
+    'leaf-len (core/call {:rust "{0}.leaf_len({1})"
+                          :java "{0}.leafLen({1})" :csharp "{0}.LeafLen({1})"}
+                         {:tag I32})
+    'leaf-byte (core/call {:rust "{0}.leaf_byte({1}, {2})"
+                           :java "{0}.leafByte({1}, {2})" :csharp "{0}.LeafByte({1}, {2})"}
+                          {:tag I32})
     'sink-put-inline (core/call {:rust "{0}.sink_put_inline({1}, {2})"
                                  :java "{0}.sinkPutInline({1}, {2})"
                                  :csharp "{0}.SinkPutInline({1}, {2})"})

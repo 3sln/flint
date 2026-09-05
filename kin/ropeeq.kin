@@ -1,0 +1,117 @@
+;; Comparing two string trees without flattening either.
+;;
+;; THE SIBLING OF `b-eq`, and deliberately the same algorithm: walk both sides'
+;; leaves, compare the overlapping run, stop at the first difference. Two trees
+;; built differently over the same bytes are EQUAL, so structure cannot be
+;; compared and the leaf boundaries do not line up.
+;;
+;; WHAT IS NOT IN `b-eq`: THE INLINE TIER. A short string keeps its bytes in
+;; the value and has no address, so `run-eq` -- which is a memcmp -- cannot see
+;; it. When either side's leaf is inline the run goes a byte at a time instead.
+;; An inline string is at most seven bytes, so the slow path is both rare and
+;; short, and the fast path stays a memcmp for every pair of real leaves.
+;;
+;; AND SHARED LEAVES STILL COST NOTHING: when both walks sit at a boundary the
+;; other side is peeked, and two slices of one string skip the shared leaf
+;; without a byte being read.
+(ns flint.rt.ropeeq
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < > not and nil? is-heap as-heap
+                                   is-inline-str leaf-len leaf-byte
+                                   + - local set forever break continue to-addr
+                                   run-eq s-bytes
+                                   walk-open walk-close walk-dup walk-take
+                                   walk-next walk-done
+                                   Rt Value I32 Bool Walk NIL STR_DATA]]))
+
+(doc "Do `a` and `b` hold the same bytes, whatever shape they are in?")
+(defn ^:pub ^:method ^Bool tree-eq [^:mut ^Rt rt ^Value a ^Value b]
+  (comment "The same object is the same bytes, and the commonest case.")
+  (if (== a b)
+    (return true))
+  (if (!= (s-bytes rt a) (s-bytes rt b))
+    (return false))
+  (let [^Walk wa (walk-open rt a)
+        ^Walk wb (walk-open rt b)]
+    (comment "The current leaf of each side, and how far into it.")
+    (local ^:mut ^Value la)
+    (local ^:mut ^Value lb)
+    (local ^:mut ^I32 pa)
+    (local ^:mut ^I32 pb)
+    (local ^:mut ^I32 na)
+    (local ^:mut ^I32 nb)
+    (local ^:mut ^Bool same)
+    (set la NIL) (set lb NIL)
+    (set pa 0) (set pb 0)
+    (set na 0) (set nb 0)
+    (set same true)
+    (forever
+      (if (== pa na)
+        (do
+          (let [^Value v (walk-next rt wa)]
+            (if (nil? rt v)
+              (break))
+            (comment "BOTH AT A BOUNDARY: peek the other side, and if it is"
+                     "about to hand over the same object, skip it on both"
+                     "without reading a byte. Only keep the peek if it paid.")
+            (if (== pb nb)
+              (if (not (walk-done rt wb))
+                (let [^Walk peek (walk-dup rt wb)
+                      ^Value w (walk-next rt peek)]
+                  (if (== w v)
+                    (do (comment "IT PAID. Falling through here instead would"
+                                 "take the leaf on this side and not the other,"
+                                 "and two trees sharing a leaf would compare"
+                                 "unequal -- which is how `b-eq` was wrong.")
+                        (walk-take rt wb peek)
+                        (walk-close rt peek)
+                        (continue))
+                    (walk-close rt peek)))))
+            (set la v)
+            (set pa 0)
+            (set na (leaf-len rt v)))))
+      (if (== pb nb)
+        (do
+          (let [^Value v (walk-next rt wb)]
+            (if (nil? rt v)
+              (break))
+            (set lb v)
+            (set pb 0)
+            (set nb (leaf-len rt v)))))
+      (let [^I32 ra (- na pa)
+            ^I32 rb (- nb pb)]
+        (local ^:mut ^I32 n)
+        (set n ra)
+        (if (< rb n) (set n rb))
+        (if (> n 0)
+          (do
+            (local ^:mut ^Bool run)
+            (set run true)
+            (comment "THE MEMCMP NEEDS TWO ADDRESSES. An inline leaf has none,"
+                     "so a pair with one on either side goes a byte at a time.")
+            (if (and (is-heap la) (is-heap lb))
+              (set run (run-eq rt (+ (+ (as-heap la) STR_DATA) (to-addr pa))
+                               (+ (+ (as-heap lb) STR_DATA) (to-addr pb))
+                               n))
+              (do
+                (local ^:mut ^I32 i)
+                (set i 0)
+                (forever
+                  (if (== i n) (break))
+                  (if (!= (leaf-byte rt la (+ pa i)) (leaf-byte rt lb (+ pb i)))
+                    (do (set run false)
+                        (break)))
+                  (set i (+ i 1)))))
+            (if (not run)
+              (do (set same false)
+                  (break)))
+            (set pa (+ pa n))
+            (set pb (+ pb n))))))
+    (comment "EQUAL means both ran out together AND neither has a leaf part"
+             "left over. Stopping early on one side is a length difference the"
+             "count check above cannot see when the trees are ragged.")
+    (let [^Bool ended (and (== pa na) (== pb nb))
+          ^Bool drya (nil? rt (walk-next rt wa))
+          ^Bool dryb (nil? rt (walk-next rt wb))]
+      (walk-close rt wa)
+      (return (and same (and ended (and drya dryb)))))))

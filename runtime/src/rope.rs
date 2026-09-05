@@ -225,175 +225,23 @@ impl Rt {
 
 
 
-    /// The next leaf of a tree walk, given a stack of `(node, next-child)`.
-    /// Pushes down the left spine until it reaches something with bytes in it.
-
-    /// Content equality over two string trees, WITHOUT materialising either.
-    ///
-    /// What it replaces copied both sides into Rust vectors in full and then
-    /// compared them -- so two megabyte strings differing in their first byte
-    /// cost two megabytes of copying to discover it.
-    ///
-    /// Two short circuits, and the first one matters much more since `subs`
-    /// started SHARING:
-    ///
-    ///  * **A node is equal to itself.** Sliced strings share their interior,
-    ///    so comparing two of them now meets the same leaf on both sides
-    ///    repeatedly, and each meeting is a pointer comparison rather than a
-    ///    byte scan.
-    ///  * **A mismatch stops where it happens**, not after both sides are
-    ///    copied.
-    /// `tree_eq`'s own walk, and the reason it is not the runtime's.
-    ///
-    /// A byte tree's leaves are always heap objects, so `walk_next` on `Rt`
-    /// serves `b_eq` and this file's node walk alike. A ROPE's leaf can be an
-    /// INLINE STRING -- bytes in the value itself, not in the heap -- so
-    /// comparing them needs somewhere to decode each side into, and that is a
-    /// second capability rather than the walk. Until it lands this keeps its
-    /// own stack, which is the honest version of "not ported yet".
-    fn rope_walk_next(&self, stack: &mut alloc::vec::Vec<(Value, u32)>) -> Option<Value> {
-        loop {
-            let (node, i) = *stack.last()?;
-            if !self.is_rope(node) {
-                stack.pop();
-                return Some(node);
-            }
-            let kids = self.rope_kids(node);
-            if i >= kids {
-                stack.pop();
-                continue;
-            }
-            stack.last_mut().unwrap().1 = i + 1;
-            let k = self.slot(node, RP_KIDS + i);
-            stack.push((k, 0));
-        }
-    }
-
-    pub fn tree_eq(&self, a: Value, b: Value) -> bool {
-        if a.0 == b.0 {
-            return true;
-        }
-        let mut sa: alloc::vec::Vec<(Value, u32)> = alloc::vec::Vec::new();
-        let mut sb: alloc::vec::Vec<(Value, u32)> = alloc::vec::Vec::new();
-        sa.push((a, 0));
-        sb.push((b, 0));
-        let (mut ba, mut bb) = (crate::rt::sbuf(), crate::rt::sbuf());
-        let (mut la, mut lb): (&[u8], &[u8]) = (&[], &[]);
-        let (mut pa, mut pb) = (0usize, 0usize);
-        loop {
-            if pa == la.len() {
-                match self.rope_walk_next(&mut sa) {
-                    None => break,
-                    Some(v) => {
-                        // IDENTITY, at the leaf: if the other side is also at a
-                        // leaf boundary and holding the same object, neither
-                        // needs reading.
-                        if pb == lb.len() && !sb.is_empty() {
-                            let mut peek = sb.clone();
-                            if let Some(w) = self.rope_walk_next(&mut peek) {
-                                if w.0 == v.0 {
-                                    sb = peek;
-                                    la = &[];
-                                    lb = &[];
-                                    pa = 0;
-                                    pb = 0;
-                                    continue;
-                                }
-                            }
-                        }
-                        la = self.leaf_bytes(v, &mut ba);
-                        pa = 0;
-                    }
-                }
-            }
-            if pb == lb.len() {
-                match self.rope_walk_next(&mut sb) {
-                    None => break,
-                    Some(v) => {
-                        lb = self.leaf_bytes(v, &mut bb);
-                        pb = 0;
-                    }
-                }
-            }
-            let n = (la.len() - pa).min(lb.len() - pb);
-            if n == 0 {
-                continue;
-            }
-            if la[pa..pa + n] != lb[pb..pb + n] {
-                return false;
-            }
-            pa += n;
-            pb += n;
-        }
-        // Both must have ended together. The caller checks the lengths first,
-        // so reaching here with either side unfinished is not possible -- but
-        // saying so costs one comparison and does not rely on that.
-        pa == la.len() && pb == lb.len()
-            && self.rope_walk_next(&mut sa).is_none()
-            && self.rope_walk_next(&mut sb).is_none()
-    }
-
-
-    /// The content hash of a string tree, WITHOUT materialising it.
-    ///
-    /// Cached per node, so a subtree already hashed costs a slot read. After a
-    /// sharing `subs` most of the tree is a subtree of something else, so this
-    /// is the case that matters rather than a corner.
-    pub fn rope_hash(&mut self, v: Value) -> u32 {
-        if !self.is_rope(v) {
-            let mut b = crate::rt::sbuf();
-            let bs: alloc::vec::Vec<u8> = self.leaf_bytes(v, &mut b).to_vec();
-            let mut h: u32 = 0;
-            for c in bs {
-                h = h.wrapping_mul(31).wrapping_add(c as u32);
-            }
-            return h;
-        }
-        let cached = self.slot(v, RP_HASH);
-        if cached.is_fixnum() {
-            return cached.as_fixnum() as u32;
-        }
-        let base = self.mark();
-        let vi = self.push(v);
-        let kids = self.rope_kids(self.r(vi));
-        let mut h: u32 = 0;
-        for i in 0..kids {
-            let k = self.slot(self.r(vi), RP_KIDS + i);
-            let ki = self.push(k);
-            let kh = self.rope_hash(self.r(ki));
-            let kb = self.s_bytes(self.r(ki));
-            // h(A·B) = h(A)·31^|B| + h(B). The bytes, not the code points:
-            // this must agree with the flat hash, which steps per BYTE.
-            h = h.wrapping_mul(self.pow31(kb)).wrapping_add(kh);
-            self.pop_to(ki);
-        }
-        let vv = self.r(vi);
-        self.set_slot(vv.as_heap(), RP_HASH, Value::fixnum(h as i64));
-        self.pop_to(base);
-        h
-    }
-
-
-
-
-
-
-
     /// Copy the range out into a fresh string.
     ///
-    /// The SINK half: it needs a growable byte buffer AND a UTF-8 decode, so it
-    /// stays hand-written and the generated tree half reaches it here.
+    /// The UTF-8 DECODE is the whole of what is left here. The walk that
+    /// gathers the bytes is generated -- `s_append_range` -- and everything
+    /// this adds is `sink_string`, which is host work in all three runtimes.
     /// `SLICE_MIN` exists to force this path for a small range -- a three-byte
     /// slice must not keep a 509 KB section alive -- so this is policy rather
     /// than a fallback.
     pub(crate) fn s_copy_range(&mut self, v: Value, from: u32, to: u32) -> Value {
         let base = self.mark();
         let vi = self.push(v);
-        let mut out: alloc::vec::Vec<u8> = alloc::vec::Vec::with_capacity((to - from) as usize);
-        self.append_range(self.r(vi), from, to, &mut out);
+        let s = self.sink_open();
+        self.s_append_range(self.r(vi), from, to, s);
+        let out = self.sink_string(s);
+        self.sink_close(s);
         self.pop_to(base);
-        let t = core::str::from_utf8(&out).unwrap_or("");
-        self.string(t)
+        out
     }
 
     /// The empty string. INTERNED rather than allocated, unlike `b_empty`'s
@@ -424,58 +272,6 @@ impl Rt {
         self.sink_close(sk);
         self.pop_to(base);
         out
-    }
-
-    /// Walk the leaves in order, appending their bytes. Never allocates in the
-    /// flint heap, so a caller may hold raw references across it.
-    /// The bytes in `[from, to)` only, skipping subtrees that fall outside.
-    ///
-    /// The point of the tree, applied to slicing: a `subs` near the end of a
-    /// large string touches the leaves it needs and the spine above them, not
-    /// every byte before it. `append_bytes` collects everything, which is what
-    /// makes it the wrong primitive for `subs` however cheap each step is.
-    pub fn append_range(&self, v: Value, from: u32, to: u32, out: &mut alloc::vec::Vec<u8>) {
-        if from >= to {
-            return;
-        }
-        if v.is_inline_str() {
-            let mut b = crate::rt::sbuf();
-            let bs = v.inline_bytes(&mut b);
-            let hi = (to as usize).min(bs.len());
-            let lo = (from as usize).min(hi);
-            out.extend_from_slice(&bs[lo..hi]);
-            return;
-        }
-        if !v.is_heap() {
-            return;
-        }
-        match ty(&self.gc.sp, v.as_heap()) {
-            TY_STR => {
-                let bs = str_bytes(&self.gc.sp, v.as_heap());
-                let hi = (to as usize).min(bs.len());
-                let lo = (from as usize).min(hi);
-                out.extend_from_slice(&bs[lo..hi]);
-            }
-            TY_ROPE => {
-                let n = self.rope_kids(v);
-                let mut at = 0u32;
-                for i in 0..n {
-                    let k = self.slot(v, RP_KIDS + i);
-                    let w = self.s_bytes(k);
-                    // Wholly before the range, or wholly after it: skip. The
-                    // "after" case is what stops a slice near the start from
-                    // walking the whole tail.
-                    if at + w > from && at < to {
-                        self.append_range(k, from.saturating_sub(at), to - at, out);
-                    }
-                    at += w;
-                    if at >= to {
-                        return;
-                    }
-                }
-            }
-            _ => {}
-        }
     }
 
 

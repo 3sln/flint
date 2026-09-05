@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Bytehash;
 using static global::_3sln.Flint.Kgen.Rt.Ropecat;
 
 public static class Ropeflat {
@@ -78,5 +79,125 @@ public static class Ropeflat {
         }
         rt.PopTo(@base);
         return flat;
+    }
+    /// The content hash of a string tree, cached per node.
+    /// 
+    /// TWO ROPES OVER THE SAME BYTES MUST HASH ALIKE, whatever shape they are
+    /// in, or a string stops working as a map key the moment `str` nests or
+    /// `subs` shares. So a node's hash is what the flat string would have had:
+    /// `h(A then B) = h(A) * 31^|B| + h(B)`.
+    /// 
+    /// THE BYTES, NOT THE CODE POINTS. This has to agree with the flat hash,
+    /// which steps per byte -- so a two-byte character counts twice here as it
+    /// does there, and `pow31` is raised to the BYTE length.
+    public static int RopeHash(Rt rt, long v) {
+        if (!IsRope(rt, v)) {
+            int lh;
+            lh = 0;
+            int n = rt.LeafLen(v);
+            for (int i = 0; i < n; i++) {
+                lh = unchecked(unchecked(lh * 31) + rt.LeafByte(v, i));
+            }
+            return lh;
+        }
+        long cached = rt.Slot(v, global::Flint.Rt.Str.RP_HASH);
+        if (Val.IsFixnum(cached)) {
+            return (int) Val.AsFixnum(cached);
+        }
+        int @base = rt.Mark();
+        int vi = rt.Push(v);
+        int kids = RopeKids(rt, rt.R(vi));
+        int h;
+        h = 0;
+        for (int i = 0; i < kids; i++) {
+            long k = rt.Slot(rt.R(vi), global::Flint.Rt.Str.RP_KIDS + i);
+            int ki = rt.Push(k);
+            int kh = RopeHash(rt, rt.R(ki));
+            int kb = Str.SBytes(rt, rt.R(ki));
+            h = unchecked(unchecked(h * Pow31(rt, kb)) + kh);
+            rt.PopTo(ki);
+        }
+        rt.SetSlot(Val.AsHeap(rt.R(vi)), global::Flint.Rt.Str.RP_HASH, Val.Fixnum(h & 0xFFFFFFFFL));
+        rt.PopTo(@base);
+        return h;
+    }
+    /// Append the byte range [from, to) of the string `v` to the sink `s`.
+    /// 
+    /// THE `at < to` HALF OF THE TEST IS WHAT MAKES A SLICE CHEAP. A child
+    /// wholly before the range is skipped, and once the walk has passed `to` it
+    /// returns rather than finishing the row -- so taking three bytes from the
+    /// front of a megabyte does not walk the megabyte.
+    /// 
+    /// The inline tier goes a byte at a time. It has no address for a run copy,
+    /// and it is at most seven bytes long, so the loop is the cheaper answer
+    /// rather than a second primitive.
+    public static void SAppendRange(Rt rt, long v, int from, int to, int s) {
+        if (from >= to) {
+            return;
+        }
+        if (Val.IsInlineStr(v)) {
+            int ihi;
+            int ilo;
+            ihi = to;
+            int iln = rt.LeafLen(v);
+            if (ihi > iln) {
+                ihi = iln;
+            }
+            ilo = from;
+            if (ilo > ihi) {
+                ilo = ihi;
+            }
+            for (int i = ilo; i < ihi; i++) {
+                rt.SinkPut(s, rt.LeafByte(v, i));
+            }
+            return;
+        }
+        if (!Val.IsHeap(v)) {
+            return;
+        }
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        if (t == Obj.TyStr) {
+            int leafn = Olen(rt, v);
+            int hi;
+            int lo;
+            hi = to;
+            if (hi > leafn) {
+                hi = leafn;
+            }
+            lo = from;
+            if (lo > hi) {
+                lo = hi;
+            }
+            rt.SinkPutRun(s, (Val.AsHeap(v) + Obj.StrData) + lo, hi - lo);
+            return;
+        }
+        if (t != Obj.TyRope) {
+            return;
+        }
+        int n = RopeKids(rt, v);
+        int at;
+        at = 0;
+        for (int i = 0; i < n; i++) {
+            long k = rt.Slot(v, global::Flint.Rt.Str.RP_KIDS + i);
+            int w = Str.SBytes(rt, k);
+            if (((at + w) > from) && (at < to)) {
+                // GUARDED, not clamped after the fact. `I32` is `u32` in
+                // Rust, where `(- from at)` wraps to a huge number and a
+                // later `(< klo 0)` is dead code, and `int` in the ports,
+                // where it does not. Subtract only when the result is
+                // known non-negative -- the same shape `b-append-range`
+                // and `s-slice` already use.
+                int klo;
+                klo = 0;
+                if (from > at) {
+                    klo = from - at;
+                }
+                SAppendRange(rt, k, klo, to - at, s);
+            }
+            at += w;
+            if (at >= to) {
+                return;
+            }
+        }
     }
 }

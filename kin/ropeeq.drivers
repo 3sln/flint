@@ -31,7 +31,7 @@ impl Space {
 }
 struct Gc { sp: Space }
 struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64,
-            roots: Vec<Value>, sinks: Vec<Vec<u8>> }
+            roots: Vec<Value>, sinks: Vec<Vec<u8>>, walks: Vec<Vec<(Value, u32)>> }
 impl Rt {
     fn mark(&self) -> usize { self.roots.len() }
     fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
@@ -87,6 +87,37 @@ impl Rt {
         for (i, k) in kids.iter().enumerate() { self.set(Value::heap(a), obj::RP_KIDS + i as u32, *k); }
         Value::heap(a)
     }
+    // THE WALK, and `run_eq` -- the memcmp `tree_eq` uses for a pair of
+    // addressable leaves. The real ones live in `bytes.rs`; these are the
+    // smallest thing that has the same behaviour.
+    fn walks_of(&mut self) -> &mut Vec<Vec<(Value, u32)>> { &mut self.walks }
+    fn walk_open(&mut self, v: Value) -> u32 {
+        self.walks.push(vec![(v, 0u32)]); (self.walks.len() - 1) as u32
+    }
+    fn walk_close(&mut self, w: u32) { self.walks.truncate(w as usize); }
+    fn walk_dup(&mut self, w: u32) -> u32 {
+        let c = self.walks[w as usize].clone(); self.walks.push(c);
+        (self.walks.len() - 1) as u32
+    }
+    fn walk_take(&mut self, w: u32, src: u32) {
+        let c = self.walks[src as usize].clone(); self.walks[w as usize] = c;
+    }
+    fn walk_done(&self, w: u32) -> bool { self.walks[w as usize].is_empty() }
+    fn walk_next(&mut self, w: u32) -> Value {
+        loop {
+            let top = match self.walks[w as usize].last() { None => return NIL, Some(t) => *t };
+            let (node, i) = top;
+            if !self.is_rope(node) { self.walks[w as usize].pop(); return node; }
+            let kids = self.rope_kids(node);
+            if i >= kids { self.walks[w as usize].pop(); continue; }
+            if let Some(t) = self.walks[w as usize].last_mut() { t.1 = i + 1; }
+            let k = self.slot(node, obj::RP_KIDS + i);
+            self.walks[w as usize].push((k, 0));
+        }
+    }
+    fn run_eq(&self, a: Addr, b: Addr, len: u32) -> bool {
+        (0..len).all(|i| self.gc.sp.read_u8(a + i as u64) == self.gc.sp.read_u8(b + i as u64))
+    }
     fn sink_open(&mut self) -> u32 { self.sinks.push(Vec::new()); (self.sinks.len() - 1) as u32 }
     fn sink_close(&mut self, s: u32) { self.sinks.truncate(s as usize); }
     fn sink_put_run(&mut self, s: u32, addr: Addr, len: u32) {
@@ -111,73 +142,61 @@ impl Rt {
 }
 fn main() {
     let mut rt = Rt { h: vec![0; 40000], gc: Gc { sp: Space { m: vec![0u8; 40000] } },
-                      lens: vec![0; 40000], bump: 100, roots: Vec::new(), sinks: Vec::new() };
+                      lens: vec![0; 40000], bump: 100, roots: Vec::new(),
+                      sinks: Vec::new(), walks: Vec::new() };
     let mut o = String::new();
-    let show = |rt: &Rt, v: Value| -> String {
-        (0..rt.lens[v.0 as usize])
-            .map(|i| rt.gc.sp.read_u8(v.as_heap() + obj::STR_DATA + i as u64).to_string())
-            .collect::<Vec<_>>().join(".")
-    };
-    let f1 = rt.flat(&[1,2,3]);
-    let inl = rt.inline_of(&[7,8]);
-    let f2 = rt.flat(&[4,5]);
-    // A TREE MIXING AN INLINE LEAF WITH FLAT ONES -- the case the byte side
-    // never has, and the only reason this file waited.
-    let tree = rt.node(&[f1, inl, f2]);
-    let flatv = rt.s_flatten(tree);
-    o.push_str(&format!("mixed={} ", show(&rt, flatv)));
-    // A LEAF is the identity, both tiers.
-    let idf = rt.s_flatten(f1); let idi = rt.s_flatten(inl);
-    o.push_str(&format!("flatid={} inlineid={} ",
-                        (idf.0 == f1.0) as u32, (idi.0 == inl.0) as u32));
-    // NESTED, and the cache: asked twice, and the slot holds it after.
-    let tail = rt.flat(&[9]);
-    let outer = rt.node(&[tree, tail]);
-    let a1 = rt.s_flatten(outer);
-    let s1 = show(&rt, a1);
-    let again = rt.s_flatten(outer);
-    o.push_str(&format!("nested={} cached={} ", s1, (again.0 == a1.0) as u32));
-    // THE CACHE IS USED, not merely written: point RP_FLAT at a string whose
-    // bytes DIFFER and the answer must come from it.
-    let lie = rt.flat(&[99]);
-    let t2 = rt.node(&[f1, f2]);
-    rt.set(t2, obj::RP_FLAT, lie);
-    let cachedv = rt.s_flatten(t2);
-    o.push_str(&format!("usescache={} ", show(&rt, cachedv)));
-    // THE HASH OF A TREE IS THE HASH OF ITS BYTES. The mixed tree and the
-    // flat string it flattens to must agree, or a string stops working as a
-    // map key the moment `str` nests.
-    let ht = rt.rope_hash(tree);
-    let hf = rt.rope_hash(flatv);
-    o.push_str(&format!("hash={} agrees={} ", ht, (ht == hf) as u32));
-    // RESHAPED: the same bytes split differently still hash alike.
-    let l = rt.flat(&[1,2]);
-    let li = rt.inline_of(&[3,7]);
-    let lf = rt.flat(&[8,4,5]);
-    let rr = rt.node(&[li, lf]);
-    let other = rt.node(&[l, rr]);
-    o.push_str(&format!("reshaped={} ", (rt.rope_hash(other) == ht) as u32));
-    // CACHED, and the cache is USED: a lie in RP_HASH must come back.
-    rt.set(other, obj::RP_HASH, Value::fixnum(4242));
-    o.push_str(&format!("usescached={} ", rt.rope_hash(other)));
-    // A RANGE ACROSS ALL THREE TIERS. `tree` is flat.inline.flat over
-    // 1.2.3.7.8.4.5, so a window starting inside the first leaf and ending
-    // inside the last has to cut both, and read the inline one whole.
-    let range = |rt: &mut Rt, v: Value, a: u32, b: u32| -> String {
-        let s = rt.sink_open();
-        rt.s_append_range(v, a, b, s);
-        let out = rt.sinks[s as usize].iter().map(|b| b.to_string())
-                                      .collect::<Vec<_>>().join(".");
-        rt.sink_close(s);
-        out
-    };
-    o.push_str(&format!("cut={} whole={} inner={} ",
-                        range(&mut rt, tree, 2, 6), range(&mut rt, tree, 0, 7),
-                        range(&mut rt, inl, 1, 2)));
-    // EMPTY AND OUT OF RANGE answer nothing rather than refusing, and a range
-    // past the end is clamped to what there is.
-    o.push_str(&format!("empty=[{}] past=[{}] ",
-                        range(&mut rt, tree, 3, 3), range(&mut rt, tree, 5, 99)));
+    // THE SAME BYTES IN DIFFERENT SHAPES. `x` is one flat leaf of six; `y` is
+    // 1+2+3 over three flat leaves; `z` is 3+3.
+    let x = rt.flat(&[1,2,3,4,5,6]);
+    let y = { let a = rt.flat(&[1]); let b = rt.flat(&[2,3]); let c = rt.flat(&[4,5,6]);
+              rt.node(&[a, b, c]) };
+    let z = { let a = rt.flat(&[1,2,3]); let b = rt.flat(&[4,5,6]); rt.node(&[a, b]) };
+    o.push_str(&format!("shapes={}{}{} ", rt.tree_eq(x, y) as u32, rt.tree_eq(y, z) as u32,
+                        rt.tree_eq(z, x) as u32));
+    // IDENTITY is the commonest case and must not walk at all.
+    o.push_str(&format!("same={} ", rt.tree_eq(y, y) as u32));
+    // THE INLINE TIER, which is the whole reason this is not `b-eq`. `w` puts
+    // the same six bytes behind an inline leaf in the middle, so every pairing
+    // below crosses a leaf with no address.
+    let w = { let a = rt.flat(&[1]); let b = rt.inline_of(&[2,3,4]); let c = rt.flat(&[5,6]);
+              rt.node(&[a, b, c]) };
+    o.push_str(&format!("inline={}{}{} ", rt.tree_eq(x, w) as u32, rt.tree_eq(w, y) as u32,
+                        rt.tree_eq(w, z) as u32));
+    // INLINE ON BOTH SIDES, and inline against itself.
+    let w2 = { let a = rt.inline_of(&[1,2]); let b = rt.inline_of(&[3,4]);
+               let c = rt.inline_of(&[5,6]); rt.node(&[a, b, c]) };
+    let i1 = rt.inline_of(&[1,2,3]);
+    let i2 = rt.inline_of(&[1,2,3]);
+    let i3 = rt.inline_of(&[1,2,4]);
+    o.push_str(&format!("bothinline={} inlineleaf={}{} ",
+                        rt.tree_eq(w, w2) as u32, rt.tree_eq(i1, i2) as u32,
+                        rt.tree_eq(i1, i3) as u32));
+    // A DIFFERENCE IN THE LAST BYTE, which the run comparison has to reach --
+    // once with the difference inside an inline leaf.
+    let e = { let a = rt.flat(&[1,2,3]); let b = rt.flat(&[4,5,9]); rt.node(&[a, b]) };
+    let e2 = { let a = rt.flat(&[1]); let b = rt.inline_of(&[2,3,4]); let c = rt.inline_of(&[5,9]);
+               rt.node(&[a, b, c]) };
+    o.push_str(&format!("last={}{} ", rt.tree_eq(x, e) as u32, rt.tree_eq(x, e2) as u32));
+    // DIFFERENT LENGTHS are refused by the count, before any walking.
+    let short = rt.flat(&[1,2,3]);
+    o.push_str(&format!("len={} ", rt.tree_eq(x, short) as u32));
+    // A SHARED LEAF on both sides: the peek should skip it without reading a
+    // byte. Both trees hold the SAME object, and once that object is INLINE --
+    // the case where taking one side and not the other used to go wrong.
+    let shared = rt.flat(&[4,5,6]);
+    let p = { let a = rt.flat(&[1,2,3]); rt.node(&[a, shared]) };
+    let q = { let a = rt.flat(&[1,2,3]); rt.node(&[a, shared]) };
+    let si = rt.inline_of(&[4,5,6]);
+    let pi = { let a = rt.flat(&[1,2,3]); rt.node(&[a, si]) };
+    let qi = { let a = rt.flat(&[1,2,3]); rt.node(&[a, si]) };
+    o.push_str(&format!("shared={}{} ", rt.tree_eq(p, q) as u32, rt.tree_eq(pi, qi) as u32));
+    // RAGGED, deeply: the leaf boundaries line up nowhere.
+    let deep = { let a = rt.flat(&[1,2]); let b = rt.inline_of(&[3]);
+                 let inner = rt.node(&[a, b]);
+                 let c = rt.inline_of(&[4,5]); let d = rt.flat(&[6]);
+                 let inner2 = rt.node(&[c, d]);
+                 rt.node(&[inner, inner2]) };
+    o.push_str(&format!("deep={}{} ", rt.tree_eq(deep, x) as u32, rt.tree_eq(deep, w) as u32));
     println!("{}", o);
 }
 --java-head
@@ -243,6 +262,41 @@ fn main() {
             for (int i = 0; i < ropeKids(this, v); i++) n += sBytes(slot(v, Str.RP_KIDS + i));
             return n;
         }
+        java.util.ArrayList<java.util.ArrayList<long[]>> walks = new java.util.ArrayList<>();
+        int walkOpen(long v) {
+            java.util.ArrayList<long[]> st = new java.util.ArrayList<>();
+            st.add(new long[]{v, 0}); walks.add(st); return walks.size() - 1;
+        }
+        void walkClose(int w) { while (walks.size() > w) walks.remove(walks.size() - 1); }
+        int walkDup(int w) {
+            java.util.ArrayList<long[]> c = new java.util.ArrayList<>();
+            for (long[] e : walks.get(w)) c.add(new long[]{e[0], e[1]});
+            walks.add(c); return walks.size() - 1;
+        }
+        void walkTake(int w, int src) {
+            java.util.ArrayList<long[]> c = new java.util.ArrayList<>();
+            for (long[] e : walks.get(src)) c.add(new long[]{e[0], e[1]});
+            walks.set(w, c);
+        }
+        boolean walkDone(int w) { return walks.get(w).isEmpty(); }
+        long walkNext(int w) {
+            while (true) {
+                java.util.ArrayList<long[]> st = walks.get(w);
+                if (st.isEmpty()) return NIL;
+                long[] top = st.get(st.size() - 1);
+                long node = top[0];
+                if (!isRope(this, node)) { st.remove(st.size() - 1); return node; }
+                int kids = ropeKids(this, node);
+                if (top[1] >= kids) { st.remove(st.size() - 1); continue; }
+                int i = (int) top[1];
+                top[1] = i + 1;
+                st.add(new long[]{slot(node, Str.RP_KIDS + i), 0});
+            }
+        }
+        boolean runEq(long a, long b, int len) {
+            for (int i = 0; i < len; i++) if (gc.sp.readU8(a + i) != gc.sp.readU8(b + i)) return false;
+            return true;
+        }
         int sinkOpen() { sinks.add(new java.io.ByteArrayOutputStream()); return sinks.size() - 1; }
         void sinkClose(int s) { while (sinks.size() > s) sinks.remove(sinks.size() - 1); }
         void sinkPutRun(int s, long addr, int len) {
@@ -283,15 +337,6 @@ fn main() {
         for (int i = 0; i < kids.length; i++) rt.set(a, Str.RP_KIDS + i, kids[i]);
         return Val.heap(a);
     }
-    static String range(Rt rt, long v, int a, int b) {
-        int s = rt.sinkOpen();
-        sAppendRange(rt, v, a, b, s);
-        byte[] bs = rt.sinks.get(s).toByteArray();
-        StringBuilder o = new StringBuilder();
-        for (int i = 0; i < bs.length; i++) { if (i > 0) o.append('.'); o.append(bs[i] & 0xFF); }
-        rt.sinkClose(s);
-        return o.toString();
-    }
     static String show(Rt rt, long v) {
         StringBuilder s = new StringBuilder();
         for (int i = 0; i < olen(rt, v); i++) {
@@ -304,37 +349,43 @@ fn main() {
     public static void main(String[] args) {
         Rt rt = new Rt();
         StringBuilder o = new StringBuilder();
-        long f1 = flat(rt, new int[]{1,2,3});
-        long inl = inlineOf(new int[]{7,8});
-        long f2 = flat(rt, new int[]{4,5});
-        long tree = node(rt, new long[]{f1, inl, f2});
-        o.append("mixed=").append(show(rt, sFlatten(rt, tree))).append(' ');
-        o.append("flatid=").append(sFlatten(rt, f1) == f1 ? 1 : 0)
-         .append(" inlineid=").append(sFlatten(rt, inl) == inl ? 1 : 0).append(' ');
-        long outer = node(rt, new long[]{tree, flat(rt, new int[]{9})});
-        long a1 = sFlatten(rt, outer);
-        o.append("nested=").append(show(rt, a1))
-         .append(" cached=").append(sFlatten(rt, outer) == a1 ? 1 : 0).append(' ');
-        long lie = flat(rt, new int[]{99});
-        long t2 = node(rt, new long[]{f1, f2});
-        rt.set(t2, Str.RP_FLAT, lie);
-        o.append("usescache=").append(show(rt, sFlatten(rt, t2))).append(' ');
-        int ht = ropeHash(rt, tree);
-        o.append("hash=").append(ht)
-         .append(" agrees=").append(ht == ropeHash(rt, sFlatten(rt, tree)) ? 1 : 0).append(' ');
-        long other = node(rt, new long[]{flat(rt, new int[]{1,2}),
-                                         node(rt, new long[]{inlineOf(new int[]{3,7}),
-                                                             flat(rt, new int[]{8,4,5})})});
-        o.append("reshaped=").append(ropeHash(rt, other) == ht ? 1 : 0).append(' ');
-        rt.set(other, Str.RP_HASH, Val.fixnum(4242));
-        o.append("usescached=").append(ropeHash(rt, other)).append(' ');
-        o.append("cut=").append(range(rt, tree, 2, 6))
-         .append(" whole=").append(range(rt, tree, 0, 7))
-         .append(" inner=").append(range(rt, inl, 1, 2)).append(' ');
-        o.append("empty=[").append(range(rt, tree, 3, 3))
-         .append("] past=[").append(range(rt, tree, 5, 99)).append("] ");
+        long x = flat(rt, new int[]{1,2,3,4,5,6});
+        long y = node(rt, new long[]{flat(rt, new int[]{1}), flat(rt, new int[]{2,3}),
+                                     flat(rt, new int[]{4,5,6})});
+        long z = node(rt, new long[]{flat(rt, new int[]{1,2,3}), flat(rt, new int[]{4,5,6})});
+        o.append("shapes=").append(b(treeEq(rt, x, y))).append(b(treeEq(rt, y, z)))
+         .append(b(treeEq(rt, z, x))).append(' ');
+        o.append("same=").append(b(treeEq(rt, y, y))).append(' ');
+        long w = node(rt, new long[]{flat(rt, new int[]{1}), inlineOf(new int[]{2,3,4}),
+                                     flat(rt, new int[]{5,6})});
+        o.append("inline=").append(b(treeEq(rt, x, w))).append(b(treeEq(rt, w, y)))
+         .append(b(treeEq(rt, w, z))).append(' ');
+        long w2 = node(rt, new long[]{inlineOf(new int[]{1,2}), inlineOf(new int[]{3,4}),
+                                      inlineOf(new int[]{5,6})});
+        long i1 = inlineOf(new int[]{1,2,3}), i2 = inlineOf(new int[]{1,2,3});
+        long i3 = inlineOf(new int[]{1,2,4});
+        o.append("bothinline=").append(b(treeEq(rt, w, w2)))
+         .append(" inlineleaf=").append(b(treeEq(rt, i1, i2))).append(b(treeEq(rt, i1, i3)))
+         .append(' ');
+        long e = node(rt, new long[]{flat(rt, new int[]{1,2,3}), flat(rt, new int[]{4,5,9})});
+        long e2 = node(rt, new long[]{flat(rt, new int[]{1}), inlineOf(new int[]{2,3,4}),
+                                      inlineOf(new int[]{5,9})});
+        o.append("last=").append(b(treeEq(rt, x, e))).append(b(treeEq(rt, x, e2))).append(' ');
+        o.append("len=").append(b(treeEq(rt, x, flat(rt, new int[]{1,2,3})))).append(' ');
+        long shared = flat(rt, new int[]{4,5,6});
+        long p = node(rt, new long[]{flat(rt, new int[]{1,2,3}), shared});
+        long q = node(rt, new long[]{flat(rt, new int[]{1,2,3}), shared});
+        long si = inlineOf(new int[]{4,5,6});
+        long pi = node(rt, new long[]{flat(rt, new int[]{1,2,3}), si});
+        long qi = node(rt, new long[]{flat(rt, new int[]{1,2,3}), si});
+        o.append("shared=").append(b(treeEq(rt, p, q))).append(b(treeEq(rt, pi, qi))).append(' ');
+        long deep = node(rt, new long[]{
+            node(rt, new long[]{flat(rt, new int[]{1,2}), inlineOf(new int[]{3})}),
+            node(rt, new long[]{inlineOf(new int[]{4,5}), flat(rt, new int[]{6})})});
+        o.append("deep=").append(b(treeEq(rt, deep, x))).append(b(treeEq(rt, deep, w))).append(' ');
         System.out.println(o.toString());
     }
+    static int b(boolean v) { return v ? 1 : 0; }
 --csharp-pre
 namespace Flint.Rt {
     internal static class Str {
@@ -400,6 +451,42 @@ namespace Flint.Rt {
             for (int i = 0; i < RopeKids(this, v); i++) n += SBytes(Slot(v, global::Flint.Rt.Str.RP_KIDS + i));
             return n;
         }
+        internal System.Collections.Generic.List<System.Collections.Generic.List<long[]>> walks =
+            new System.Collections.Generic.List<System.Collections.Generic.List<long[]>>();
+        internal int WalkOpen(long v) {
+            var st = new System.Collections.Generic.List<long[]>();
+            st.Add(new long[]{v, 0}); walks.Add(st); return walks.Count - 1;
+        }
+        internal void WalkClose(int w) { while (walks.Count > w) walks.RemoveAt(walks.Count - 1); }
+        internal int WalkDup(int w) {
+            var c = new System.Collections.Generic.List<long[]>();
+            foreach (var e in walks[w]) c.Add(new long[]{e[0], e[1]});
+            walks.Add(c); return walks.Count - 1;
+        }
+        internal void WalkTake(int w, int src) {
+            var c = new System.Collections.Generic.List<long[]>();
+            foreach (var e in walks[src]) c.Add(new long[]{e[0], e[1]});
+            walks[w] = c;
+        }
+        internal bool WalkDone(int w) { return walks[w].Count == 0; }
+        internal long WalkNext(int w) {
+            while (true) {
+                var st = walks[w];
+                if (st.Count == 0) return Val.Nil;
+                long[] top = st[st.Count - 1];
+                long nd = top[0];
+                if (!IsRope(this, nd)) { st.RemoveAt(st.Count - 1); return nd; }
+                int kids = RopeKids(this, nd);
+                if (top[1] >= kids) { st.RemoveAt(st.Count - 1); continue; }
+                int i = (int) top[1];
+                top[1] = i + 1;
+                st.Add(new long[]{Slot(nd, global::Flint.Rt.Str.RP_KIDS + i), 0});
+            }
+        }
+        internal bool RunEq(long a, long b, int len) {
+            for (int i = 0; i < len; i++) if (gc.sp.ReadU8(a + i) != gc.sp.ReadU8(b + i)) return false;
+            return true;
+        }
         internal int SinkOpen() { sinks.Add(new System.IO.MemoryStream()); return sinks.Count - 1; }
         internal void SinkClose(int s) { while (sinks.Count > s) sinks.RemoveAt(sinks.Count - 1); }
         internal void SinkPutRun(int s, long addr, int len) {
@@ -446,15 +533,6 @@ namespace Flint.Rt {
         for (int i = 0; i < kids.Length; i++) rt.Set(a, global::Flint.Rt.Str.RP_KIDS + i, kids[i]);
         return Val.Heap(a);
     }
-    internal static string Range(Rt rt, long v, int a, int b) {
-        int s = rt.SinkOpen();
-        SAppendRange(rt, v, a, b, s);
-        byte[] bs = rt.sinks[s].ToArray();
-        var o = new System.Text.StringBuilder();
-        for (int i = 0; i < bs.Length; i++) { if (i > 0) o.Append('.'); o.Append(bs[i]); }
-        rt.SinkClose(s);
-        return o.ToString();
-    }
     internal static string Show(Rt rt, long v) {
         var s = new System.Text.StringBuilder();
         for (int i = 0; i < Olen(rt, v); i++) {
@@ -467,34 +545,40 @@ namespace Flint.Rt {
     internal static void Main() {
         Rt rt = new Rt();
         var o = new System.Text.StringBuilder();
-        long f1 = Flat(rt, new int[]{1,2,3});
-        long inl = InlineOf(new int[]{7,8});
-        long f2 = Flat(rt, new int[]{4,5});
-        long tree = Node(rt, new long[]{f1, inl, f2});
-        o.Append("mixed=").Append(Show(rt, SFlatten(rt, tree))).Append(' ');
-        o.Append("flatid=").Append(SFlatten(rt, f1) == f1 ? 1 : 0)
-         .Append(" inlineid=").Append(SFlatten(rt, inl) == inl ? 1 : 0).Append(' ');
-        long outer = Node(rt, new long[]{tree, Flat(rt, new int[]{9})});
-        long a1 = SFlatten(rt, outer);
-        o.Append("nested=").Append(Show(rt, a1))
-         .Append(" cached=").Append(SFlatten(rt, outer) == a1 ? 1 : 0).Append(' ');
-        long lie = Flat(rt, new int[]{99});
-        long t2 = Node(rt, new long[]{f1, f2});
-        rt.Set(t2, global::Flint.Rt.Str.RP_FLAT, lie);
-        o.Append("usescache=").Append(Show(rt, SFlatten(rt, t2))).Append(' ');
-        int ht = RopeHash(rt, tree);
-        o.Append("hash=").Append(ht)
-         .Append(" agrees=").Append(ht == RopeHash(rt, SFlatten(rt, tree)) ? 1 : 0).Append(' ');
-        long other = Node(rt, new long[]{Flat(rt, new int[]{1,2}),
-                                         Node(rt, new long[]{InlineOf(new int[]{3,7}),
-                                                             Flat(rt, new int[]{8,4,5})})});
-        o.Append("reshaped=").Append(RopeHash(rt, other) == ht ? 1 : 0).Append(' ');
-        rt.Set(other, global::Flint.Rt.Str.RP_HASH, Val.Fixnum(4242));
-        o.Append("usescached=").Append(RopeHash(rt, other)).Append(' ');
-        o.Append("cut=").Append(Range(rt, tree, 2, 6))
-         .Append(" whole=").Append(Range(rt, tree, 0, 7))
-         .Append(" inner=").Append(Range(rt, inl, 1, 2)).Append(' ');
-        o.Append("empty=[").Append(Range(rt, tree, 3, 3))
-         .Append("] past=[").Append(Range(rt, tree, 5, 99)).Append("] ");
+        long x = Flat(rt, new int[]{1,2,3,4,5,6});
+        long y = Node(rt, new long[]{Flat(rt, new int[]{1}), Flat(rt, new int[]{2,3}),
+                                     Flat(rt, new int[]{4,5,6})});
+        long z = Node(rt, new long[]{Flat(rt, new int[]{1,2,3}), Flat(rt, new int[]{4,5,6})});
+        o.Append("shapes=").Append(B(TreeEq(rt, x, y))).Append(B(TreeEq(rt, y, z)))
+         .Append(B(TreeEq(rt, z, x))).Append(' ');
+        o.Append("same=").Append(B(TreeEq(rt, y, y))).Append(' ');
+        long w = Node(rt, new long[]{Flat(rt, new int[]{1}), InlineOf(new int[]{2,3,4}),
+                                     Flat(rt, new int[]{5,6})});
+        o.Append("inline=").Append(B(TreeEq(rt, x, w))).Append(B(TreeEq(rt, w, y)))
+         .Append(B(TreeEq(rt, w, z))).Append(' ');
+        long w2 = Node(rt, new long[]{InlineOf(new int[]{1,2}), InlineOf(new int[]{3,4}),
+                                      InlineOf(new int[]{5,6})});
+        long i1 = InlineOf(new int[]{1,2,3}), i2 = InlineOf(new int[]{1,2,3});
+        long i3 = InlineOf(new int[]{1,2,4});
+        o.Append("bothinline=").Append(B(TreeEq(rt, w, w2)))
+         .Append(" inlineleaf=").Append(B(TreeEq(rt, i1, i2))).Append(B(TreeEq(rt, i1, i3)))
+         .Append(' ');
+        long e = Node(rt, new long[]{Flat(rt, new int[]{1,2,3}), Flat(rt, new int[]{4,5,9})});
+        long e2 = Node(rt, new long[]{Flat(rt, new int[]{1}), InlineOf(new int[]{2,3,4}),
+                                      InlineOf(new int[]{5,9})});
+        o.Append("last=").Append(B(TreeEq(rt, x, e))).Append(B(TreeEq(rt, x, e2))).Append(' ');
+        o.Append("len=").Append(B(TreeEq(rt, x, Flat(rt, new int[]{1,2,3})))).Append(' ');
+        long shared = Flat(rt, new int[]{4,5,6});
+        long p = Node(rt, new long[]{Flat(rt, new int[]{1,2,3}), shared});
+        long q = Node(rt, new long[]{Flat(rt, new int[]{1,2,3}), shared});
+        long si = InlineOf(new int[]{4,5,6});
+        long pi = Node(rt, new long[]{Flat(rt, new int[]{1,2,3}), si});
+        long qi = Node(rt, new long[]{Flat(rt, new int[]{1,2,3}), si});
+        o.Append("shared=").Append(B(TreeEq(rt, p, q))).Append(B(TreeEq(rt, pi, qi))).Append(' ');
+        long deep = Node(rt, new long[]{
+            Node(rt, new long[]{Flat(rt, new int[]{1,2}), InlineOf(new int[]{3})}),
+            Node(rt, new long[]{InlineOf(new int[]{4,5}), Flat(rt, new int[]{6})})});
+        o.Append("deep=").Append(B(TreeEq(rt, deep, x))).Append(B(TreeEq(rt, deep, w))).Append(' ');
         System.Console.WriteLine(o.ToString());
     }
+    internal static int B(bool v) { return v ? 1 : 0; }

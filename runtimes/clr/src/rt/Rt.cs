@@ -95,6 +95,23 @@ public sealed class Rt : System.IDisposable {
         sinks[s].Write(run, 0, len);
     }
     public byte[] SinkArray(int s) { return sinks[s].ToArray(); }
+    /// How many bytes a LEAF holds, whichever tier it is.
+    public int LeafLen(long v) {
+        if (Val.IsInlineStr(v)) return Val.InlineLen(v);
+        if (Val.IsHeap(v)) return Obj.Len(gc.sp, Val.AsHeap(v));
+        return 0;
+    }
+    /// Byte `i` of a LEAF, whichever tier it is.
+    public int LeafByte(long v, int i) {
+        if (Val.IsInlineStr(v)) {
+            byte[] bs = Val.InlineBytes(v);
+            return i < bs.Length ? bs[i] : 0;
+        }
+        if (!Val.IsHeap(v)) return 0;
+        long a = Val.AsHeap(v);
+        long bas = Obj.Ty(gc.sp, a) == Obj.TyStr ? a + Obj.StrData : a + Obj.Hdr;
+        return gc.sp.ReadU8(bas + i);
+    }
     /// Append an INLINE string's bytes -- see the Java and Rust copies.
     public void SinkPutInline(int s, long v) {
         byte[] src = Val.InlineBytes(v);

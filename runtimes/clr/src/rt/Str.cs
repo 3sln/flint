@@ -469,99 +469,12 @@ public static class Str {
 
     static int RopeKids(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Ropecat.RopeKids(rt, v);
 
-    /// Bytes `[from, to)` appended WITHOUT materialising the tree.
-    static void AppendRange(Rt rt, long v, int from, int to, System.IO.MemoryStream outv) {
-        if (from >= to) return;
-        if (!IsRope(rt, v)) {
-            byte[] bs = Bytes(rt, v);
-            int hi = System.Math.Min(to, bs.Length), lo = System.Math.Min(from, hi);
-            outv.Write(bs, lo, hi - lo);
-            return;
-        }
-        int n = RopeKids(rt, v), at = 0;
-        for (int i = 0; i < n; i++) {
-            long k = rt.Slot(v, RP_KIDS + i);
-            int w = SBytes(rt, k);
-            if (at + w > from && at < to) AppendRange(rt, k, System.Math.Max(0, from - at), to - at, outv);
-            at += w;
-            if (at >= to) return;
-        }
-    }
-
     /// A slice that SHARES its interior: a child wholly inside the range comes
     /// back unchanged, and only the two edge children are cut.
     public static long RopeSlice(Rt rt, long v, int from, int to) { return global::_3sln.Flint.Kgen.Rt.Ropeslice.RopeSlice(rt, v, from, to); }
 
     public static int Pow31Public(Rt rt, int n) => global::_3sln.Flint.Kgen.Rt.Bytehash.Pow31(rt, n);
 
-
-    /// The content hash of a string tree without materialising it, cached per
-    /// node. `h(A.B) = h(A)*31^|B| + h(B)`, over BYTES so it agrees with the
-    /// flat hash.
-    public static int RopeHash(Rt rt, long v) {
-        if (!IsRope(rt, v)) {
-            byte[] bs = Bytes(rt, v);
-            int h0 = 0;
-            foreach (byte b in bs) h0 = h0 * 31 + b;
-            return h0;
-        }
-        long cached = rt.Slot(v, RP_HASH);
-        if (Val.IsFixnum(cached)) return (int) Val.AsFixnum(cached);
-        int bas = rt.Mark();
-        int vi = rt.Push(v);
-        int kids = RopeKids(rt, rt.R(vi));
-        int h = 0;
-        for (int i = 0; i < kids; i++) {
-            long k = rt.Slot(rt.R(vi), RP_KIDS + i);
-            int ki = rt.Push(k);
-            int kh = RopeHash(rt, rt.R(ki));
-            int kb = SBytes(rt, rt.R(ki));
-            h = unchecked(h * global::_3sln.Flint.Kgen.Rt.Bytehash.Pow31(rt, kb) + kh);
-            rt.PopTo(ki);
-        }
-        rt.SetSlot(Val.AsHeap(rt.R(vi)), RP_HASH, Val.Fixnum(h));
-        rt.PopTo(bas);
-        return h;
-    }
-
-    /// Content equality over two trees without materialising either: stops at
-    /// the first mismatch, and short-circuits on NODE IDENTITY.
-    public static bool TreeEq(Rt rt, long a, long b) {
-        if (a == b) return true;
-        var sa = new System.Collections.Generic.List<long[]>();
-        var sb = new System.Collections.Generic.List<long[]>();
-        sa.Add(new long[]{a, 0});
-        sb.Add(new long[]{b, 0});
-        byte[] la = System.Array.Empty<byte>(), lb = System.Array.Empty<byte>();
-        int pa = 0, pb = 0;
-        while (true) {
-            if (pa == la.Length) {
-                long nv = WalkNext(rt, sa);
-                if (nv == Val.NotFound) break;
-                if (pb == lb.Length && sb.Count > 0) {
-                    var peek = CopyStack(sb);
-                    long w = WalkNext(rt, peek);
-                    if (w != Val.NotFound && w == nv) {
-                        sb = peek; la = System.Array.Empty<byte>(); lb = System.Array.Empty<byte>();
-                        pa = 0; pb = 0;
-                        continue;
-                    }
-                }
-                la = Bytes(rt, nv); pa = 0;
-            }
-            if (pb == lb.Length) {
-                long nv = WalkNext(rt, sb);
-                if (nv == Val.NotFound) break;
-                lb = Bytes(rt, nv); pb = 0;
-            }
-            int n = System.Math.Min(la.Length - pa, lb.Length - pb);
-            if (n == 0) continue;
-            for (int i = 0; i < n; i++) if (la[pa + i] != lb[pb + i]) return false;
-            pa += n; pb += n;
-        }
-        return pa == la.Length && pb == lb.Length
-            && WalkNext(rt, sa) == Val.NotFound && WalkNext(rt, sb) == Val.NotFound;
-    }
 
     static System.Collections.Generic.List<long[]> CopyStack(System.Collections.Generic.List<long[]> s) {
         var o = new System.Collections.Generic.List<long[]>();
@@ -603,11 +516,20 @@ public static class Str {
     /// the spine above it. Nil when the right spine is full at every level.
     static long RopeAppend(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Ropecat.RopeAppend(rt, a, b); }
 
-    /// Copy the range out into a fresh string -- the SINK half.
+    /// Copy the range out into a fresh string -- the DECODE half.
     public static long SCopyRange(Rt rt, long v, int from, int to) {
-        var ms = new System.IO.MemoryStream();
-        AppendRange(rt, v, from, to, ms);
-        return Of(rt, System.Text.Encoding.UTF8.GetString(ms.ToArray()));
+        int bas = rt.Mark();
+        int vi = rt.Push(v);
+        int s = rt.SinkOpen();
+        global::_3sln.Flint.Kgen.Rt.Ropeflat.SAppendRange(rt, rt.R(vi), from, to, s);
+        long outv = rt.SinkString(s);
+        rt.SinkClose(s);
+        rt.PopTo(bas);
+        return outv;
+    }
+
+    static void SAppendRange(Rt rt, long v, int from, int to, int s) {
+        global::_3sln.Flint.Kgen.Rt.Ropeflat.SAppendRange(rt, v, from, to, s);
     }
 
     /// The empty string, interned -- see the Rust copy.
@@ -630,6 +552,8 @@ public static class Str {
     /// about them, because a rope that flattens on every `index-of` passes
     /// every correctness test and is slower than the flat string it replaced.
     public static long Flatten(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropeflat.SFlatten(rt, v); }
+    public static int RopeHash(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Ropeflat.RopeHash(rt, v); }
+    public static bool TreeEq(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Ropeeq.TreeEq(rt, a, b); }
 
     /// Byte length. NOT the code-point count -- see the class comment.
     public static int ByteLen(Rt rt, long v) => SBytes(rt, v);

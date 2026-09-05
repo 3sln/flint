@@ -27,7 +27,12 @@ impl Rt {
     /// Byte-for-byte equality across tiers, without materialising either side
     /// into the flint heap. Lengths are O(1) on all three, and unequal lengths
     /// are the common case, so the walk is reached rarely.
-    fn string_eq(&self, a: Value, b: Value) -> bool {
+    ///
+    /// `&mut` ONLY BECAUSE THE WALK IS A RUNTIME RESOURCE. `tree_eq` is
+    /// generated now, and a generated source cannot hold a host stack -- it
+    /// asks the runtime to open one, which is a mutation of `walks`. Nothing
+    /// about the string is touched.
+    fn string_eq(&mut self, a: Value, b: Value) -> bool {
         if self.str_len(a) != self.str_len(b) {
             return false;
         }

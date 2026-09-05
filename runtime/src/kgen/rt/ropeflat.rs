@@ -82,4 +82,124 @@ impl Rt {
         self.pop_to(base);
         return flat;
     }
+    /// The content hash of a string tree, cached per node.
+    /// 
+    /// TWO ROPES OVER THE SAME BYTES MUST HASH ALIKE, whatever shape they are
+    /// in, or a string stops working as a map key the moment `str` nests or
+    /// `subs` shares. So a node's hash is what the flat string would have had:
+    /// `h(A then B) = h(A) * 31^|B| + h(B)`.
+    /// 
+    /// THE BYTES, NOT THE CODE POINTS. This has to agree with the flat hash,
+    /// which steps per byte -- so a two-byte character counts twice here as it
+    /// does there, and `pow31` is raised to the BYTE length.
+    pub fn rope_hash(&mut self, v: Value) -> u32 {
+        if !self.is_rope(v) {
+            let mut lh: u32;
+            lh = 0;
+            let n: u32 = self.leaf_len(v);
+            for i in 0..n {
+                lh = lh.wrapping_mul(31).wrapping_add(self.leaf_byte(v, i));
+            }
+            return lh;
+        }
+        let cached: Value = self.slot(v, crate::obj::RP_HASH);
+        if cached.is_fixnum() {
+            return cached.as_fixnum() as u32;
+        }
+        let base: usize = self.mark();
+        let vi: usize = self.push(v);
+        let kids: u32 = self.rope_kids(self.r(vi));
+        let mut h: u32;
+        h = 0;
+        for i in 0..kids {
+            let k: Value = self.slot(self.r(vi), crate::obj::RP_KIDS + i);
+            let ki: usize = self.push(k);
+            let kh: u32 = self.rope_hash(self.r(ki));
+            let kb: u32 = self.s_bytes(self.r(ki));
+            h = h.wrapping_mul(self.pow31(kb)).wrapping_add(kh);
+            self.pop_to(ki);
+        }
+        self.set(self.r(vi), crate::obj::RP_HASH, Value::fixnum(h as i64));
+        self.pop_to(base);
+        return h;
+    }
+    /// Append the byte range [from, to) of the string `v` to the sink `s`.
+    /// 
+    /// THE `at < to` HALF OF THE TEST IS WHAT MAKES A SLICE CHEAP. A child
+    /// wholly before the range is skipped, and once the walk has passed `to` it
+    /// returns rather than finishing the row -- so taking three bytes from the
+    /// front of a megabyte does not walk the megabyte.
+    /// 
+    /// The inline tier goes a byte at a time. It has no address for a run copy,
+    /// and it is at most seven bytes long, so the loop is the cheaper answer
+    /// rather than a second primitive.
+    pub fn s_append_range(&mut self, v: Value, from: u32, to: u32, s: u32) {
+        if from >= to {
+            return;
+        }
+        if v.is_inline_str() {
+            let mut ihi: u32;
+            let mut ilo: u32;
+            ihi = to;
+            let iln: u32 = self.leaf_len(v);
+            if ihi > iln {
+                ihi = iln;
+            }
+            ilo = from;
+            if ilo > ihi {
+                ilo = ihi;
+            }
+            for i in ilo..ihi {
+                self.sink_put(s, self.leaf_byte(v, i));
+            }
+            return;
+        }
+        if !v.is_heap() {
+            return;
+        }
+        let t: u8 = ty(&self.gc.sp, v.as_heap());
+        if t == TY_STR {
+            let leafn: u32 = self.olen(v);
+            let mut hi: u32;
+            let mut lo: u32;
+            hi = to;
+            if hi > leafn {
+                hi = leafn;
+            }
+            lo = from;
+            if lo > hi {
+                lo = hi;
+            }
+            self.sink_put_run(s, (v.as_heap() + crate::obj::STR_DATA) + (lo as Addr), hi - lo);
+            return;
+        }
+        if t != TY_ROPE {
+            return;
+        }
+        let n: u32 = self.rope_kids(v);
+        let mut at: u32;
+        at = 0;
+        for i in 0..n {
+            let k: Value = self.slot(v, crate::obj::RP_KIDS + i);
+            let w: u32 = self.s_bytes(k);
+            if ((at + w) > from) && (at < to) {
+                // GUARDED, not clamped after the fact. `I32` is `u32` in
+                // Rust, where `(- from at)` wraps to a huge number and a
+                // later `(< klo 0)` is dead code, and `int` in the ports,
+                // where it does not. Subtract only when the result is
+                // known non-negative -- the same shape `b-append-range`
+                // and `s-slice` already use.
+                let mut klo: u32;
+                klo = 0;
+                if from > at {
+                    klo = from - at;
+                }
+                self.s_append_range(k, klo, to - at, s);
+            }
+            at += w;
+            if at >= to {
+                return;
+            }
+        }
+    }
 }

@@ -194,6 +194,45 @@ impl Rt {
         self.sinks[s as usize].extend_from_slice(src);
     }
 
+    /// How many bytes a LEAF holds, whichever tier it is.
+    ///
+    /// An inline string keeps its length in the value, a flat string in its
+    /// object header, and a byte leaf in the object's length. One question,
+    /// three places to look, and a generated source cannot branch on which
+    /// without knowing all three.
+    pub fn leaf_len(&self, v: Value) -> u32 {
+        if v.is_inline_str() {
+            v.inline_len() as u32
+        } else if v.is_heap() {
+            len(&self.gc.sp, v.as_heap())
+        } else {
+            0
+        }
+    }
+
+    /// Byte `i` of a LEAF, whichever tier it is.
+    ///
+    /// The companion to `leaf_len`, and what lets a walk read leaves without
+    /// caring that one of the tiers has no address. Out of range answers zero
+    /// rather than refusing: every caller here has already bounded `i` by
+    /// `leaf_len`.
+    pub fn leaf_byte(&self, v: Value, i: u32) -> u32 {
+        if v.is_inline_str() {
+            let mut b = crate::rt::sbuf();
+            let bs = v.inline_bytes(&mut b);
+            if (i as usize) < bs.len() { bs[i as usize] as u32 } else { 0 }
+        } else if v.is_heap() {
+            let base = if ty(&self.gc.sp, v.as_heap()) == crate::obj::TY_STR {
+                v.as_heap() + crate::obj::STR_DATA
+            } else {
+                v.as_heap() + HDR
+            };
+            self.gc.sp.read_u8(base + i as crate::mem::Addr) as u32
+        } else {
+            0
+        }
+    }
+
     /// Append an INLINE string's bytes to the sink.
     ///
     /// An inline string keeps its bytes in the VALUE, not the heap, so there

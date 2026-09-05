@@ -525,79 +525,6 @@ public final class Str {
     /// `31^n`, by squaring: the multiplier that lets two cached hashes join.
     public static int pow31(Rt rt, int n) { return com._3sln.flint.kgen.rt.Bytehash.pow31(rt, n); }
 
-    /// The content hash of a string tree, WITHOUT materialising it, cached per
-    /// node. After a sharing `subs` most of a tree is a subtree of something
-    /// else, so the cache is the case that matters rather than a corner.
-    public static int ropeHash(Rt rt, long v) {
-        if (!isRope(rt, v)) {
-            byte[] bs = bytes(rt, v);
-            int h = 0;
-            for (byte b : bs) h = h * 31 + (b & 0xFF);
-            return h;
-        }
-        long cached = rt.slot(v, RP_HASH);
-        if (Val.isFixnum(cached)) return (int) Val.asFixnum(cached);
-        int base = rt.mark();
-        int vi = rt.push(v);
-        int kids = ropeKids(rt, rt.r(vi));
-        int h = 0;
-        for (int i = 0; i < kids; i++) {
-            long k = rt.slot(rt.r(vi), RP_KIDS + i);
-            int ki = rt.push(k);
-            int kh = ropeHash(rt, rt.r(ki));
-            int kb = sBytes(rt, rt.r(ki));
-            // h(A.B) = h(A)*31^|B| + h(B). The BYTES, not the code points: this
-            // must agree with the flat hash, which steps per byte.
-            h = h * pow31(rt, kb) + kh;
-            rt.popTo(ki);
-        }
-        rt.setSlot(Val.asHeap(rt.r(vi)), RP_HASH, Val.fixnum(h));
-        rt.popTo(base);
-        return h;
-    }
-
-    /// Content equality over two string trees WITHOUT materialising either.
-    ///
-    /// Two short circuits, and the first matters much more since `subs` began
-    /// SHARING: a node is equal to itself, so two slices meeting the same leaf
-    /// cost a pointer comparison; and a mismatch stops where it happens rather
-    /// than after both sides are copied in full, which is what this replaced.
-    public static boolean treeEq(Rt rt, long a, long b) {
-        if (a == b) return true;
-        java.util.ArrayDeque<long[]> sa = new java.util.ArrayDeque<>();
-        java.util.ArrayDeque<long[]> sb = new java.util.ArrayDeque<>();
-        sa.push(new long[]{a, 0});
-        sb.push(new long[]{b, 0});
-        byte[] la = new byte[0], lb = new byte[0];
-        int pa = 0, pb = 0;
-        while (true) {
-            if (pa == la.length) {
-                long nv = walkNext(rt, sa);
-                if (nv == Val.NOT_FOUND) break;
-                if (pb == lb.length && !sb.isEmpty()) {
-                    java.util.ArrayDeque<long[]> peek = copyStack(sb);
-                    long w = walkNext(rt, peek);
-                    if (w != Val.NOT_FOUND && w == nv) {
-                        sb = peek; la = new byte[0]; lb = new byte[0]; pa = 0; pb = 0;
-                        continue;
-                    }
-                }
-                la = bytes(rt, nv); pa = 0;
-            }
-            if (pb == lb.length) {
-                long nv = walkNext(rt, sb);
-                if (nv == Val.NOT_FOUND) break;
-                lb = bytes(rt, nv); pb = 0;
-            }
-            int n = Math.min(la.length - pa, lb.length - pb);
-            if (n == 0) continue;
-            for (int i = 0; i < n; i++) if (la[pa + i] != lb[pb + i]) return false;
-            pa += n; pb += n;
-        }
-        return pa == la.length && pb == lb.length
-                && walkNext(rt, sa) == Val.NOT_FOUND && walkNext(rt, sb) == Val.NOT_FOUND;
-    }
-
     private static java.util.ArrayDeque<long[]> copyStack(java.util.ArrayDeque<long[]> s) {
         java.util.ArrayDeque<long[]> out = new java.util.ArrayDeque<>();
         for (long[] e : s) out.addLast(new long[]{e[0], e[1]});
@@ -634,11 +561,20 @@ public final class Str {
     /// which is the only time the caller adds one.
     static long ropeAppend(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Ropecat.ropeAppend(rt, a, b); }
 
-    /// Copy the range out into a fresh string -- the SINK half, see the Rust copy.
+    /// Copy the range out into a fresh string -- the DECODE half, see the Rust copy.
     public static long sCopyRange(Rt rt, long v, int from, int to) {
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        appendRange(rt, v, from, to, out);
-        return of(rt, new String(out.toByteArray(), java.nio.charset.StandardCharsets.UTF_8));
+        int base = rt.mark();
+        int vi = rt.push(v);
+        int s = rt.sinkOpen();
+        com._3sln.flint.kgen.rt.Ropeflat.sAppendRange(rt, rt.r(vi), from, to, s);
+        long out = rt.sinkString(s);
+        rt.sinkClose(s);
+        rt.popTo(base);
+        return out;
+    }
+
+    static void sAppendRange(Rt rt, long v, int from, int to, int s) {
+        com._3sln.flint.kgen.rt.Ropeflat.sAppendRange(rt, v, from, to, s);
     }
 
     /// The empty string, interned -- see the Rust copy.
@@ -654,28 +590,6 @@ public final class Str {
         return of(rt, new String(both, StandardCharsets.UTF_8));
     }
 
-    /// Walk the leaves in order, appending their bytes.
-    /// Bytes `[from, to)` of a string tree, appended WITHOUT materialising it.
-    /// A child wholly before or after the range is skipped -- the "after" case
-    /// is what stops a slice near the start walking the whole tail.
-    static void appendRange(Rt rt, long v, int from, int to, java.io.ByteArrayOutputStream out) {
-        if (from >= to) return;
-        if (!isRope(rt, v)) {
-            byte[] bs = bytes(rt, v);
-            int hi = Math.min(to, bs.length), lo = Math.min(from, hi);
-            out.write(bs, lo, hi - lo);
-            return;
-        }
-        int n = ropeKids(rt, v), at = 0;
-        for (int i = 0; i < n; i++) {
-            long k = rt.slot(v, RP_KIDS + i);
-            int w = sBytes(rt, k);
-            if (at + w > from && at < to) appendRange(rt, k, Math.max(0, from - at), to - at, out);
-            at += w;
-            if (at >= to) return;
-        }
-    }
-
 
     /// Contiguous bytes for a string of any tier. Identity for inline and flat;
     /// materialises a rope ONCE and remembers it. `0011`: count the flattens,
@@ -683,6 +597,8 @@ public final class Str {
     /// passes every correctness test and is slower than the flat string it
     /// replaced.
     public static long flatten(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropeflat.sFlatten(rt, v); }
+    public static int ropeHash(Rt rt, long v) { return com._3sln.flint.kgen.rt.Ropeflat.ropeHash(rt, v); }
+    public static boolean treeEq(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Ropeeq.treeEq(rt, a, b); }
 
     /// Byte length. NOT the code-point count -- see the class comment.
     public static int byteLen(Rt rt, long v) { return sBytes(rt, v); }
