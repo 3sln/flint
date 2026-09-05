@@ -889,6 +889,12 @@
                              :java "{0}.sinkString({1})" :csharp "{0}.SinkString({1})"}
                             {:tag Value})
 
+    ;; ONE BYTE INTO THE HEAP, at an absolute address. The mirror of `read-u8`,
+    ;; and the whole of what appending to a transient's open tail is.
+    'write-u8 (core/call {:rust "{0}.gc.sp.write_u8({1}, {2} as u8)"
+                          :java "{0}.gc.sp.writeU8({1}, {2})"
+                          :csharp "{0}.gc.sp.WriteU8({1}, {2})"})
+
     'read-u8 (core/call {:rust "({0}.gc.sp.read_u8({1}) as u32)"
                          :java "{0}.gc.sp.readU8({1})"
                          :csharp "{0}.gc.sp.ReadU8({1})"})

@@ -232,29 +232,7 @@ public final class Bytes {
     /// Fold the full tail into the tree and start a fresh one. A FULL tail is
     /// handed over WHOLE rather than copied -- it is exactly the leaf the tree
     /// wants.
-    static boolean flush(Rt rt, long t, int fill) {
-        int base = rt.mark();
-        int ti = rt.push(t);
-        int tl = rt.push(rt.slot(rt.r(ti), TB_TAIL));
-        long piece;
-        if (fill == TAIL_CAP) {
-            piece = rt.r(tl);
-        } else {
-            piece = of(rt, rt.gc.sp.bytes(Val.asHeap(rt.r(tl)) + HDR, fill));
-        }
-        int pi = rt.push(piece);
-        int tr = rt.push(rt.slot(rt.r(ti), TB_TREE));
-        long joined = Val.isNil(rt.r(tr)) ? rt.r(pi) : concat(rt, rt.r(tr), rt.r(pi));
-        int ji = rt.push(joined);
-        long fresh = rt.alloc(TY_BYTES, TAIL_CAP);
-        if (fresh == 0) { rt.popTo(base); return false; }
-        long tv = rt.r(ti);
-        rt.setSlot(Val.asHeap(tv), TB_TREE, rt.r(ji));
-        rt.setSlot(Val.asHeap(tv), TB_TAIL, Val.heap(fresh));
-        rt.setSlot(Val.asHeap(tv), TB_FILL, Val.fixnum(0));
-        rt.popTo(base);
-        return true;
-    }
+    static boolean flush(Rt rt, long t, int fill) { return com._3sln.flint.kgen.rt.Bytetwrite.tbFlush(rt, t, fill); }
 
     /// Append one byte: no allocation and no copy until the tail fills.
     ///
@@ -262,25 +240,7 @@ public final class Bytes {
     /// allocates, allocating can collect, and the nursery is a COPYING
     /// collector -- so a value held in a host local across it comes back
     /// holding the address the object had BEFORE the flip.
-    public static long conj(Rt rt, long t, int b) {
-        if (!live(rt, t)) {
-            return rt.throwStr("IllegalStateException", "this transient byte string is no longer usable");
-        }
-        int fill = (int) Val.asFixnum(rt.slot(t, TB_FILL));
-        if (fill == TAIL_CAP) {
-            int base = rt.mark();
-            int ti = rt.push(t);
-            boolean ok = flush(rt, rt.r(ti), fill);
-            long tv = rt.r(ti);
-            rt.popTo(base);
-            if (!ok) return Val.NIL;
-            return conj(rt, tv, b);
-        }
-        long tail = rt.slot(t, TB_TAIL);
-        rt.gc.sp.writeU8(Val.asHeap(tail) + HDR + fill, b & 0xFF);
-        rt.setSlot(Val.asHeap(t), TB_FILL, Val.fixnum(fill + 1));
-        return t;
-    }
+    public static long conj(Rt rt, long t, int b) { return com._3sln.flint.kgen.rt.Bytetwrite.bConj(rt, t, b); }
 
     /// Append a whole byte string. BULK, because appending a 1 KB piece one
     /// byte at a time is the thing this type exists to stop doing.
@@ -316,18 +276,5 @@ public final class Bytes {
 
         public static int tcount(Rt rt, long t) { return com._3sln.flint.kgen.rt.Bytecore.bTcount(rt, t); }
 
-    public static long persistent(Rt rt, long t) {
-        if (!live(rt, t)) {
-            return rt.throwStr("IllegalStateException", "this transient byte string is no longer usable");
-        }
-        int fill = (int) Val.asFixnum(rt.slot(t, TB_FILL));
-        int base = rt.mark();
-        int ti = rt.push(t);
-        if (fill > 0 && !flush(rt, rt.r(ti), fill)) { rt.popTo(base); return Val.NIL; }
-        long tv = rt.r(ti);
-        rt.setSlot(Val.asHeap(tv), TB_LIVE, Val.FALSE);
-        long outv = rt.slot(tv, TB_TREE);
-        rt.popTo(base);
-        return Val.isNil(outv) ? of(rt, new byte[0]) : outv;
-    }
+    public static long persistent(Rt rt, long t) { return com._3sln.flint.kgen.rt.Bytetwrite.bPersistent(rt, t); }
 }

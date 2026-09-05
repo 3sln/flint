@@ -316,70 +316,7 @@ impl Rt {
 
 
 
-    /// Fold the full tail into the tree and start a fresh one. The old tail is
-    /// handed over WHOLE rather than copied -- it is exactly full, so it is
-    /// already the leaf the tree wants.
-    fn tb_flush(&mut self, t: Value, fill: u32) -> bool {
-        let base = self.mark();
-        self.push(t);
-        let tail = self.slot(t, TB_TAIL);
-        self.push(tail);
-        let piece = if fill == TAIL_CAP {
-            self.r(base + 1)
-        } else {
-            let bs = raw_bytes(&self.gc.sp, self.r(base + 1).as_heap())[..fill as usize].to_vec();
-            self.new_bytes(&bs)
-        };
-        self.push(piece);
-        let tree = self.slot(self.r(base), TB_TREE);
-        self.push(tree);
-        let joined = self.b_concat(self.r(base + 3), self.r(base + 2));
-        self.push(joined);
-        let fresh = self.alloc(TY_BYTES, TAIL_CAP);
-        if fresh == 0 {
-            self.pop_to(base);
-            return false;
-        }
-        let t = self.r(base);
-        let joined = self.r(base + 4);
-        self.set_slot(t.as_heap(), TB_TREE, joined);
-        self.set_slot(t.as_heap(), TB_TAIL, Value::heap(fresh));
-        self.set_slot(t.as_heap(), TB_FILL, Value::fixnum(0));
-        self.pop_to(base);
-        true
-    }
 
-    /// Append one byte. The whole point: no allocation and no copy until the
-    /// tail fills.
-    ///
-    /// `t` is ROOTED across the flush, and that is not caution. `tb_flush`
-    /// allocates, allocating can collect, and the nursery is a copying
-    /// collector -- so a `Value` held in a Rust local across it comes back
-    /// holding the address the object had BEFORE the flip. That is the exact
-    /// shape `../HANDOFF.md` was written about, and it is why `stat_stale_push`
-    /// exists.
-    pub fn b_conj(&mut self, t: Value, byte: u8) -> Value {
-        if !self.tb_live(t) {
-            return self.throw_str("IllegalStateException",
-                                  "this transient byte string is no longer usable");
-        }
-        let fill = self.slot(t, TB_FILL).as_fixnum() as u32;
-        if fill == TAIL_CAP {
-            let base = self.mark();
-            self.push(t);
-            let ok = self.tb_flush(self.r(base), fill);
-            let t = self.r(base);
-            self.pop_to(base);
-            if !ok {
-                return NIL;
-            }
-            return self.b_conj(t, byte);
-        }
-        let tail = self.slot(t, TB_TAIL);
-        self.gc.sp.bytes_mut(tail.as_heap() + HDR, TAIL_CAP)[fill as usize] = byte;
-        self.set_slot(t.as_heap(), TB_FILL, Value::fixnum(fill as i64 + 1));
-        t
-    }
 
     /// Append a whole byte string. Bulk, because appending a 1 KB piece one
     /// byte at a time is the thing this type exists to stop doing.
@@ -421,27 +358,6 @@ impl Rt {
     }
 
 
-    pub fn b_persistent(&mut self, t: Value) -> Value {
-        if !self.tb_live(t) {
-            return self.throw_str("IllegalStateException",
-                                  "this transient byte string is no longer usable");
-        }
-        let fill = self.slot(t, TB_FILL).as_fixnum() as u32;
-        let base = self.mark();
-        self.push(t);
-        if fill > 0 && !self.tb_flush(self.r(base), fill) {
-            self.pop_to(base);
-            return NIL;
-        }
-        let t = self.r(base);
-        self.set_slot(t.as_heap(), TB_LIVE, crate::value::FALSE);
-        let out = self.slot(t, TB_TREE);
-        self.pop_to(base);
-        if out.is_nil() {
-            return self.new_bytes(&[]);
-        }
-        out
-    }
 }
 
 #[cfg(test)]
@@ -514,7 +430,7 @@ mod tests {
             // A length prefix by BYTE and then the payload in bulk, which is
             // exactly what the wasm writer does for every section and body.
             let tv = rt.r(base);
-            let out = rt.b_conj(tv, (n & 0xff) as u8);
+            let out = rt.b_conj(tv, n & 0xff);
             rt.set_r(base, out);
             let p = rt.new_bytes(&piece);
             rt.push(p);

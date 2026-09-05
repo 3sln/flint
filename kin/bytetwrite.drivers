@@ -1,0 +1,452 @@
+--rust-head
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_BYTES: u8 = 44; const TY_BROPE: u8 = 45; const TY_VEC: u8 = 9;
+const TY_TBYTES: u8 = 46;
+const TRUE: Value = Value(0xFFFE);
+const FALSE: Value = Value(0xFFFD);
+pub mod obj { pub const HDR: u64 = 8; }
+pub mod bytes {
+    pub const TB_TREE: u32 = 0; pub const TB_TAIL: u32 = 1;
+    pub const TB_FILL: u32 = 2; pub const TB_LIVE: u32 = 3;
+    pub const TAIL_CAP: u32 = 4;
+    pub const BB_BYTES: u32 = 0; pub const BB_FLAT: u32 = 1;
+    pub const BB_DEPTH: u32 = 2; pub const BB_HASH: u32 = 3; pub const BB_KIDS: u32 = 4;
+}
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+// A BYTE-ADDRESSABLE space, which the earlier byte fixtures did not need: they
+// modelled a leaf by its LENGTH alone. `b-at` reads the bytes themselves, so
+// this one stores them -- at `addr + HDR`, where the runtime puts them.
+struct Space { m: Vec<u8> }
+impl Space {
+    fn read_u8(&self, a: Addr) -> u8 { self.m[a as usize] }
+    fn write_u8(&mut self, a: Addr, v: u8) { self.m[a as usize] = v; }
+}
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, sinks: Vec<Vec<u8>>, roots: Vec<Value> }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn set(&mut self, n: Value, i: u32, v: Value) { self.h[n.0 as usize + i as usize] = v.0; }
+    fn b_count(&self, v: Value) -> u32 {
+        if !v.is_heap() { return 0; }
+        match ty(&self.gc.sp, v.as_heap()) {
+            TY_BYTES => self.lens[v.0 as usize],
+            TY_BROPE => self.slot(v, bytes::BB_BYTES).as_fixnum() as u32,
+            _ => 0,
+        }
+    }
+    // A refusal is modelled as NIL plus a flag, which is all the probe needs
+    // to tell "refused" from "answered".
+    fn throw_str(&mut self, _kind: &str, _msg: &str) -> Value { NIL }
+    fn tb_live(&self, t: Value) -> bool {
+        t.is_heap() && ty(&self.gc.sp, t.as_heap()) == TY_TBYTES
+            && self.slot(t, bytes::TB_LIVE).0 == TRUE.0
+    }
+    fn b_empty(&mut self) -> Value { self.leaf(&[]) }
+    fn b_copy_range(&mut self, v: Value, from: u32, to: u32) -> Value {
+        let bs: Vec<u8> = (from..to)
+            .map(|i| self.gc.sp.read_u8(v.as_heap() + obj::HDR + i as u64)).collect();
+        self.leaf(&bs)
+    }
+    fn b_concat(&mut self, a: Value, b: Value) -> Value {
+        if !a.is_heap() { return b; }
+        if !b.is_heap() { return a; }
+        let mut bs: Vec<u8> = (0..self.lens[a.0 as usize])
+            .map(|i| self.gc.sp.read_u8(a.as_heap() + obj::HDR + i as u64)).collect();
+        let more: Vec<u8> = (0..self.lens[b.0 as usize])
+            .map(|i| self.gc.sp.read_u8(b.as_heap() + obj::HDR + i as u64)).collect();
+        bs.extend_from_slice(&more);
+        self.leaf(&bs)
+    }
+    fn sink_open(&mut self) -> u32 { self.sinks.push(Vec::new()); (self.sinks.len() - 1) as u32 }
+    fn sink_close(&mut self, s: u32) { self.sinks.truncate(s as usize); }
+    fn sink_len(&self, s: u32) -> u32 { self.sinks[s as usize].len() as u32 }
+    fn sink_put_run(&mut self, s: u32, addr: Addr, len: u32) {
+        let src: Vec<u8> = (0..len).map(|i| self.gc.sp.m[(addr + i as u64) as usize]).collect();
+        self.sinks[s as usize].extend_from_slice(&src);
+    }
+    fn sink_bytes(&mut self, s: u32) -> Value {
+        let bs = self.sinks[s as usize].clone();
+        self.leaf(&bs)
+    }
+    // SPACED so a leaf's bytes cannot land on the next object's type tag:
+    // objects are `n + 16` apart and the bytes occupy `HDR .. HDR + n`.
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        let a = self.bump; self.bump += n as u64 + 16;
+        self.gc.sp.m[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn leaf(&mut self, bs: &[u8]) -> Value {
+        let a = self.alloc(TY_BYTES, bs.len() as u32);
+        for (i, b) in bs.iter().enumerate() { self.gc.sp.m[(a + obj::HDR) as usize + i] = *b; }
+        Value::heap(a)
+    }
+    fn node(&mut self, kids: &[Value]) -> Value {
+        let mut total = 0u32;
+        for k in kids { total += self.b_count(*k); }
+        let a = self.alloc(TY_BROPE, bytes::BB_KIDS + kids.len() as u32);
+        self.set_slot(a, bytes::BB_BYTES, Value::fixnum(total as i64));
+        self.set_slot(a, bytes::BB_FLAT, NIL);
+        self.set_slot(a, bytes::BB_HASH, NIL);
+        self.set_slot(a, bytes::BB_DEPTH, Value::fixnum(1));
+        for (i, k) in kids.iter().enumerate() { self.set_slot(a, bytes::BB_KIDS + i as u32, *k); }
+        Value::heap(a)
+    }
+}
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 40000], gc: Gc { sp: Space { m: vec![0u8; 40000] } },
+                      lens: vec![0; 40000], bump: 100, sinks: Vec::new(), roots: Vec::new() };
+    let mut o = String::new();
+    // TAIL_CAP is 4 here, so the flush boundary is reachable by hand.
+    let mk = |rt: &mut Rt| {
+        let tail = rt.leaf(&[0, 0, 0, 0]);
+        let a = rt.alloc(TY_TBYTES, 4);
+        rt.set(Value::heap(a), bytes::TB_TREE, NIL);
+        rt.set(Value::heap(a), bytes::TB_TAIL, tail);
+        rt.set(Value::heap(a), bytes::TB_FILL, Value::fixnum(0));
+        rt.set(Value::heap(a), bytes::TB_LIVE, TRUE);
+        Value::heap(a)
+    };
+    let show = |rt: &Rt, v: Value| -> String {
+        (0..rt.lens[v.0 as usize])
+            .map(|i| rt.gc.sp.read_u8(v.as_heap() + obj::HDR + i as u64).to_string())
+            .collect::<Vec<_>>().join(".")
+    };
+    // BELOW CAPACITY: the tail fills in place, and the tree stays nil.
+    let t = mk(&mut rt);
+    for b in 1..4u32 { rt.b_conj(t, b); }
+    o.push_str(&format!("fill={} tree={} ", rt.slot(t, bytes::TB_FILL).as_fixnum(),
+                        (rt.slot(t, bytes::TB_TREE).0 == NIL.0) as u32));
+    // PAST CAPACITY: the fourth fits, the fifth flushes and starts over.
+    rt.b_conj(t, 4); rt.b_conj(t, 5);
+    o.push_str(&format!("after={} flushed={} ", rt.slot(t, bytes::TB_FILL).as_fixnum(),
+                        show(&rt, rt.slot(t, bytes::TB_TREE))));
+    // SEALED: the partial tail joins, and the transient goes dead.
+    let out = rt.b_persistent(t);
+    o.push_str(&format!("out={} live={} ", show(&rt, out), rt.tb_live(t) as u32));
+    // A DEAD one refuses rather than answering.
+    let again = rt.b_persistent(t);
+    o.push_str(&format!("reuse={} ", again.is_nil() as u32));
+    // NOTHING APPENDED is the empty byte string, not nil.
+    let t2 = mk(&mut rt);
+    let e = rt.b_persistent(t2);
+    o.push_str(&format!("empty={},{} ", rt.lens[e.0 as usize], e.is_nil() as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_BYTES = 44, TY_BROPE = 45, TY_VEC = 9, TY_TBYTES = 46;
+    static final long TRUE = 0xFFFEL, FALSE = 0xFFFDL;
+    static final class Obj { static final long HDR = 8; }
+    static final class Bytes {
+        static final int TB_TREE = 0, TB_TAIL = 1, TB_FILL = 2, TB_LIVE = 3;
+        static final int TAIL_CAP = 4;
+        static final int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
+    }
+    static final class Val {
+        static boolean isHeap(long v) { return v >= 100 && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v; }
+        static long fixnum(long n) { return n; }
+        static long heap(long a) { return a; }
+        static final long NIL = Probe.NIL, TRUE = Probe.TRUE, FALSE = Probe.FALSE;
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Space {
+        byte[] m = new byte[40000];
+        int readU8(long a) { return m[(int) a] & 0xFF; }
+        void writeU8(long a, int v) { m[(int) a] = (byte) v; }
+    }
+    static final class Rt {
+        java.util.ArrayList<java.io.ByteArrayOutputStream> sinks = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        long throwStr(String kind, String msg) { return NIL; }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void set(long n, int i, long v) { h[(int) n + i] = v; }
+        int sinkOpen() { sinks.add(new java.io.ByteArrayOutputStream()); return sinks.size() - 1; }
+        void sinkClose(int s) { while (sinks.size() > s) sinks.remove(sinks.size() - 1); }
+        int sinkLen(int s) { return sinks.get(s).size(); }
+        byte[] sinkArr(int s) { return sinks.get(s).toByteArray(); }
+        long sinkBytes(int s) {
+            byte[] a = sinkArr(s);
+            int[] bs = new int[a.length];
+            for (int i = 0; i < a.length; i++) bs[i] = a[i] & 0xFF;
+            return leaf(this, bs);
+        }
+        void sinkPutRun(int s, long addr, int len) {
+            for (int i = 0; i < len; i++) sinks.get(s).write(gc.sp.m[(int) (addr + i)] & 0xFF);
+        }
+        long[] h = new long[40000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        int[] lens = new int[40000];
+        long bump = 100;
+        long alloc(int t, int n) {
+            long a = bump; bump += n + 16;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    static int bCount(Rt rt, long v) {
+        if (!Val.isHeap(v)) return 0;
+        int t = ty(rt.gc.sp, v);
+        if (t == TY_BYTES) return olen(rt, v);
+        if (t == TY_BROPE) return (int) rt.slot(v, Bytes.BB_BYTES);
+        return 0;
+    }
+    static boolean tbLive(Rt rt, long t) {
+        return Val.isHeap(t) && ty(rt.gc.sp, t) == TY_TBYTES
+            && rt.slot(t, Bytes.TB_LIVE) == TRUE;
+    }
+    static long bEmpty(Rt rt) { return leaf(rt, new int[0]); }
+    static int[] bytesOfLeaf(Rt rt, long v, int from, int to) {
+        int[] bs = new int[to - from];
+        for (int i = from; i < to; i++) bs[i - from] = rt.gc.sp.readU8(v + Obj.HDR + i);
+        return bs;
+    }
+    static long bCopyRange(Rt rt, long v, int from, int to) {
+        return leaf(rt, bytesOfLeaf(rt, v, from, to));
+    }
+    static long bConcat(Rt rt, long a, long b) {
+        if (!Val.isHeap(a)) return b;
+        if (!Val.isHeap(b)) return a;
+        int[] x = bytesOfLeaf(rt, a, 0, olen(rt, a));
+        int[] y = bytesOfLeaf(rt, b, 0, olen(rt, b));
+        int[] both = new int[x.length + y.length];
+        System.arraycopy(x, 0, both, 0, x.length);
+        System.arraycopy(y, 0, both, x.length, y.length);
+        return leaf(rt, both);
+    }
+    static long leaf(Rt rt, int[] bs) {
+        long a = rt.alloc(TY_BYTES, bs.length);
+        for (int i = 0; i < bs.length; i++) rt.gc.sp.m[(int) (a + Obj.HDR) + i] = (byte) bs[i];
+        return Val.heap(a);
+    }
+    static long node(Rt rt, long[] kids) {
+        int total = 0;
+        for (long k : kids) total += bCount(rt, k);
+        long a = rt.alloc(TY_BROPE, Bytes.BB_KIDS + kids.length);
+        rt.setSlot(a, Bytes.BB_BYTES, total);
+        rt.setSlot(a, Bytes.BB_FLAT, NIL);
+        rt.setSlot(a, Bytes.BB_HASH, NIL);
+        rt.setSlot(a, Bytes.BB_DEPTH, 1);
+        for (int i = 0; i < kids.length; i++) rt.setSlot(a, Bytes.BB_KIDS + i, kids[i]);
+        return Val.heap(a);
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long t = mk(rt);
+        for (int b = 1; b < 4; b++) bConj(rt, t, b);
+        o.append("fill=").append(rt.slot(t, Bytes.TB_FILL))
+         .append(" tree=").append(rt.slot(t, Bytes.TB_TREE) == NIL ? 1 : 0).append(' ');
+        bConj(rt, t, 4); bConj(rt, t, 5);
+        o.append("after=").append(rt.slot(t, Bytes.TB_FILL))
+         .append(" flushed=").append(show(rt, rt.slot(t, Bytes.TB_TREE))).append(' ');
+        long out = bPersistent(rt, t);
+        o.append("out=").append(show(rt, out))
+         .append(" live=").append(tbLive(rt, t) ? 1 : 0).append(' ');
+        o.append("reuse=").append(Val.isNil(bPersistent(rt, t)) ? 1 : 0).append(' ');
+        long t2 = mk(rt);
+        long e = bPersistent(rt, t2);
+        o.append("empty=").append(olen(rt, e)).append(',').append(Val.isNil(e) ? 1 : 0).append(' ');
+        System.out.println(o.toString());
+    }
+    static long mk(Rt rt) {
+        long tail = leaf(rt, new int[]{0,0,0,0});
+        long a = rt.alloc(TY_TBYTES, 4);
+        rt.set(a, Bytes.TB_TREE, NIL);
+        rt.set(a, Bytes.TB_TAIL, tail);
+        rt.set(a, Bytes.TB_FILL, 0);
+        rt.set(a, Bytes.TB_LIVE, TRUE);
+        return Val.heap(a);
+    }
+    static String show(Rt rt, long v) {
+        StringBuilder s = new StringBuilder();
+        for (int i = 0; i < olen(rt, v); i++) {
+            if (i > 0) s.append('.');
+            s.append(rt.gc.sp.readU8(v + Obj.HDR + i));
+        }
+        return s.toString();
+    }
+--csharp-head
+    internal static class Obj {
+        internal const long Hdr = 8;
+        internal const int TyBytes = 44, TyBrope = 45, TyVec = 9, TyTbytes = 46;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL, True = 0xFFFEL, False = 0xFFFDL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long AsFixnum(long v) { return v; }
+        internal static long Fixnum(long n) { return n; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    internal sealed class Space {
+        internal byte[] m = new byte[40000];
+        internal int ReadU8(long a) { return m[(int) a]; }
+        internal void WriteU8(long a, int v) { m[(int) a] = (byte) v; }
+    }
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<System.IO.MemoryStream> sinks =
+            new System.Collections.Generic.List<System.IO.MemoryStream>();
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal long ThrowStr(string kind, string msg) { return Val.Nil; }
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal void Set(long n, int i, long v) { h[(int) n + i] = v; }
+        internal int SinkOpen() { sinks.Add(new System.IO.MemoryStream()); return sinks.Count - 1; }
+        internal void SinkClose(int s) { while (sinks.Count > s) sinks.RemoveAt(sinks.Count - 1); }
+        internal int SinkLen(int s) { return (int) sinks[s].Length; }
+        internal byte[] SinkArr(int s) { return sinks[s].ToArray(); }
+        internal long SinkBytes(int s) {
+            byte[] a = SinkArr(s);
+            int[] bs = new int[a.Length];
+            for (int i = 0; i < a.Length; i++) bs[i] = a[i];
+            return Leaf(this, bs);
+        }
+        internal void SinkPutRun(int s, long addr, int len) {
+            for (int i = 0; i < len; i++) sinks[s].WriteByte(gc.sp.m[(int) (addr + i)]);
+        }
+        internal long[] h = new long[40000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[40000];
+        internal long bump = 100;
+        internal long Alloc(int t, int n) {
+            long a = bump; bump += n + 16;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Val.Nil;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    internal static int BCount(Rt rt, long v) {
+        if (!Val.IsHeap(v)) return 0;
+        int t = Obj.Ty(rt.gc.sp, v);
+        if (t == Obj.TyBytes) return Olen(rt, v);
+        if (t == Obj.TyBrope) return (int) rt.Slot(v, global::Flint.Rt.Bytes.BB_BYTES);
+        return 0;
+    }
+    internal static bool TbLive(Rt rt, long t) {
+        return Val.IsHeap(t) && Obj.Ty(rt.gc.sp, t) == Obj.TyTbytes
+            && rt.Slot(t, global::Flint.Rt.Bytes.TB_LIVE) == Val.True;
+    }
+    internal static long BEmpty(Rt rt) { return Leaf(rt, new int[0]); }
+    internal static int[] BytesOfLeaf(Rt rt, long v, int from, int to) {
+        int[] bs = new int[to - from];
+        for (int i = from; i < to; i++) bs[i - from] = rt.gc.sp.ReadU8(v + Obj.Hdr + i);
+        return bs;
+    }
+    internal static long BCopyRange(Rt rt, long v, int from, int to) {
+        return Leaf(rt, BytesOfLeaf(rt, v, from, to));
+    }
+    internal static long BConcat(Rt rt, long a, long b) {
+        if (!Val.IsHeap(a)) return b;
+        if (!Val.IsHeap(b)) return a;
+        int[] x = BytesOfLeaf(rt, a, 0, Olen(rt, a));
+        int[] y = BytesOfLeaf(rt, b, 0, Olen(rt, b));
+        int[] both = new int[x.Length + y.Length];
+        System.Array.Copy(x, 0, both, 0, x.Length);
+        System.Array.Copy(y, 0, both, x.Length, y.Length);
+        return Leaf(rt, both);
+    }
+    internal static long Leaf(Rt rt, int[] bs) {
+        long a = rt.Alloc(Obj.TyBytes, bs.Length);
+        for (int i = 0; i < bs.Length; i++) rt.gc.sp.m[(int) (a + Obj.Hdr) + i] = (byte) bs[i];
+        return Val.Heap(a);
+    }
+    internal static long Node(Rt rt, long[] kids) {
+        int total = 0;
+        foreach (long k in kids) total += BCount(rt, k);
+        long a = rt.Alloc(Obj.TyBrope, global::Flint.Rt.Bytes.BB_KIDS + kids.Length);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_BYTES, total);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_FLAT, Val.Nil);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_HASH, Val.Nil);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_DEPTH, 1);
+        for (int i = 0; i < kids.Length; i++) rt.SetSlot(a, global::Flint.Rt.Bytes.BB_KIDS + i, kids[i]);
+        return Val.Heap(a);
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Bytes {
+        internal const int TB_TREE = 0, TB_TAIL = 1, TB_FILL = 2, TB_LIVE = 3;
+        internal const int TAIL_CAP = 4;
+        internal const int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
+    }
+}
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long t = Mk(rt);
+        for (int b = 1; b < 4; b++) BConj(rt, t, b);
+        o.Append("fill=").Append(rt.Slot(t, global::Flint.Rt.Bytes.TB_FILL))
+         .Append(" tree=").Append(rt.Slot(t, global::Flint.Rt.Bytes.TB_TREE) == Val.Nil ? 1 : 0)
+         .Append(' ');
+        BConj(rt, t, 4); BConj(rt, t, 5);
+        o.Append("after=").Append(rt.Slot(t, global::Flint.Rt.Bytes.TB_FILL))
+         .Append(" flushed=").Append(Show(rt, rt.Slot(t, global::Flint.Rt.Bytes.TB_TREE)))
+         .Append(' ');
+        long outv = BPersistent(rt, t);
+        o.Append("out=").Append(Show(rt, outv))
+         .Append(" live=").Append(TbLive(rt, t) ? 1 : 0).Append(' ');
+        o.Append("reuse=").Append(Val.IsNil(BPersistent(rt, t)) ? 1 : 0).Append(' ');
+        long t2 = Mk(rt);
+        long e = BPersistent(rt, t2);
+        o.Append("empty=").Append(Olen(rt, e)).Append(',').Append(Val.IsNil(e) ? 1 : 0).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }
+    internal static long Mk(Rt rt) {
+        long tail = Leaf(rt, new int[]{0,0,0,0});
+        long a = rt.Alloc(Obj.TyTbytes, 4);
+        rt.Set(a, global::Flint.Rt.Bytes.TB_TREE, Val.Nil);
+        rt.Set(a, global::Flint.Rt.Bytes.TB_TAIL, tail);
+        rt.Set(a, global::Flint.Rt.Bytes.TB_FILL, 0);
+        rt.Set(a, global::Flint.Rt.Bytes.TB_LIVE, Val.True);
+        return Val.Heap(a);
+    }
+    internal static string Show(Rt rt, long v) {
+        var s = new System.Text.StringBuilder();
+        for (int i = 0; i < Olen(rt, v); i++) {
+            if (i > 0) s.Append('.');
+            s.Append(rt.gc.sp.ReadU8(v + Obj.Hdr + i));
+        }
+        return s.ToString();
+    }

@@ -320,7 +320,7 @@ builtins! {
         let _ = n;
         let (t, x) = (arg(rt, a, 0), arg(rt, a, 1));
         match rt.as_i64(x) {
-            Some(b) => rt.b_conj(t, (b & 0xff) as u8),
+            Some(b) => rt.b_conj(t, (b & 0xff) as u32),
             None => rt.throw_str("ClassCastException", "b-conj! wants an integer"),
         }
     };

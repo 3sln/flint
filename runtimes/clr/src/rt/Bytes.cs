@@ -215,29 +215,7 @@ public static class Bytes {
     /// Fold the full tail into the tree and start a fresh one. A FULL tail is
     /// handed over WHOLE rather than copied -- it is exactly the leaf the tree
     /// wants.
-    static bool Flush(Rt rt, long t, int fill) {
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        int tl = rt.Push(rt.Slot(rt.R(ti), TB_TAIL));
-        long piece;
-        if (fill == TAIL_CAP) {
-            piece = rt.R(tl);
-        } else {
-            piece = Of(rt, rt.gc.sp.Bytes(Val.AsHeap(rt.R(tl)) + Obj.Hdr, fill));
-        }
-        int pi = rt.Push(piece);
-        int tr = rt.Push(rt.Slot(rt.R(ti), TB_TREE));
-        long joined = Val.IsNil(rt.R(tr)) ? rt.R(pi) : Concat(rt, rt.R(tr), rt.R(pi));
-        int ji = rt.Push(joined);
-        long fresh = rt.Alloc(Obj.TyBytes, TAIL_CAP);
-        if (fresh == 0) { rt.PopTo(bas); return false; }
-        long tv = rt.R(ti);
-        rt.SetSlot(Val.AsHeap(tv), TB_TREE, rt.R(ji));
-        rt.SetSlot(Val.AsHeap(tv), TB_TAIL, Val.Heap(fresh));
-        rt.SetSlot(Val.AsHeap(tv), TB_FILL, Val.Fixnum(0));
-        rt.PopTo(bas);
-        return true;
-    }
+    static bool Flush(Rt rt, long t, int fill) { return global::_3sln.Flint.Kgen.Rt.Bytetwrite.TbFlush(rt, t, fill); }
 
     /// Append one byte: no allocation and no copy until the tail fills.
     ///
@@ -245,25 +223,7 @@ public static class Bytes {
     /// allocates, allocating can collect, and the nursery is a COPYING
     /// collector -- so a value held in a host local across it comes back
     /// holding the address the object had BEFORE the flip.
-    public static long Conj(Rt rt, long t, int b) {
-        if (!Live(rt, t)) {
-            return rt.ThrowStr("IllegalStateException", "this transient byte string is no longer usable");
-        }
-        int fill = (int) Val.AsFixnum(rt.Slot(t, TB_FILL));
-        if (fill == TAIL_CAP) {
-            int bas = rt.Mark();
-            int ti = rt.Push(t);
-            bool ok = Flush(rt, rt.R(ti), fill);
-            long tv = rt.R(ti);
-            rt.PopTo(bas);
-            if (!ok) return Val.Nil;
-            return Conj(rt, tv, b);
-        }
-        long tail = rt.Slot(t, TB_TAIL);
-        rt.gc.sp.WriteU8(Val.AsHeap(tail) + Obj.Hdr + fill, b & 0xFF);
-        rt.SetSlot(Val.AsHeap(t), TB_FILL, Val.Fixnum(fill + 1));
-        return t;
-    }
+    public static long Conj(Rt rt, long t, int b) { return global::_3sln.Flint.Kgen.Rt.Bytetwrite.BConj(rt, t, b); }
 
     /// Append a whole byte string. BULK, because appending a 1 KB piece one
     /// byte at a time is the thing this type exists to stop doing.
@@ -299,18 +259,5 @@ public static class Bytes {
 
         public static int Tcount(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Bytecore.BTcount(rt, t); }
 
-    public static long Persistent(Rt rt, long t) {
-        if (!Live(rt, t)) {
-            return rt.ThrowStr("IllegalStateException", "this transient byte string is no longer usable");
-        }
-        int fill = (int) Val.AsFixnum(rt.Slot(t, TB_FILL));
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        if (fill > 0 && !Flush(rt, rt.R(ti), fill)) { rt.PopTo(bas); return Val.Nil; }
-        long tv = rt.R(ti);
-        rt.SetSlot(Val.AsHeap(tv), TB_LIVE, Val.False);
-        long outv = rt.Slot(tv, TB_TREE);
-        rt.PopTo(bas);
-        return Val.IsNil(outv) ? Of(rt, new byte[0]) : outv;
-    }
+    public static long Persistent(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Bytetwrite.BPersistent(rt, t); }
 }

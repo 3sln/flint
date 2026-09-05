@@ -1,0 +1,115 @@
+;; Writing into a transient byte string: the tail, the flush, and sealing it.
+;;
+;; A transient is a sealed TREE plus an OPEN TAIL and how full that tail is.
+;; Appending writes into the tail in place, which is the whole point -- no
+;; allocation and no copy until it fills. When it does fill, the tail is handed
+;; to the tree WHOLE rather than copied, which is why `TAIL_CAP` is exactly
+;; `FLAT_MAX`: a full tail is already the largest leaf the tree wants.
+;;
+;; This is the half of `Bytes` that hole 5 was blocking last. A PARTIAL tail
+;; has to be copied out to its real length before it can join the tree, and
+;; copying bytes out is what there was nowhere to put until the sink existed.
+(ns flint.rt.bytetwrite
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < > >= not nil? is-heap as-heap
+                                   + - local set forever to-addr
+                                   mark push r pop-to alloc slot set-slot heap
+                                   fixnum as-fixnum to-i32 write-u8 throw-str text
+                                   Rt Value Addr RootIx I32 Bool NIL FALSE HDR
+                                   TY_BYTES TB_TREE TB_TAIL TB_FILL TB_LIVE TAIL_CAP]]
+            [flint.rt.bytecore :refer [tb-live]]
+            [flint.rt.byteconcat :refer [b-concat]]
+            [flint.rt.byteflat :refer [b-copy-range]]
+            [flint.rt.bytefold :refer [b-empty]]))
+
+(doc "Fold the full tail into the tree and start a fresh one."
+     ""
+     "A FULL tail is handed over WHOLE -- it is exactly the leaf the tree"
+     "wants, so there is nothing to copy. A partial one is copied out to its"
+     "real length first, because a leaf's length IS its byte count and handing"
+     "over a half-filled buffer would say it holds `TAIL_CAP` bytes."
+     ""
+     "False when the fresh tail cannot be allocated, and the shadow stack is"
+     "unwound before answering it.")
+(defn ^:pub ^:method ^Bool tb-flush [^:mut ^Rt rt ^Value t ^I32 fill]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^Value tail (slot rt (r rt ti) TB_TAIL)
+        ^RootIx tli (push rt tail)]
+    (local ^:mut ^Value piece)
+    (if (== fill TAIL_CAP)
+      (set piece (r rt tli))
+      (set piece (b-copy-range rt (r rt tli) 0 fill)))
+    (let [^RootIx pi (push rt piece)
+          ^Value tree (slot rt (r rt ti) TB_TREE)
+          ^RootIx tri (push rt tree)
+          ^Value joined (b-concat rt (r rt tri) (r rt pi))
+          ^RootIx ji (push rt joined)
+          ^Addr fresh (alloc rt TY_BYTES TAIL_CAP)]
+      (if (== fresh 0)
+        (do (pop-to rt base)
+            (return false)))
+      (comment "READ BACK OUT OF THE ROOTS: `b-concat` and `alloc` both"
+               "allocate, and a copying collector moves the transient out from"
+               "under anything held in a host local across them.")
+      (set-slot rt (r rt ti) TB_TREE (r rt ji))
+      (set-slot rt (r rt ti) TB_TAIL (heap fresh))
+      (set-slot rt (r rt ti) TB_FILL (fixnum 0))
+      (pop-to rt base)
+      (return true))))
+
+(doc "Append one byte. No allocation and no copy until the tail fills."
+     ""
+     "The parameter is `bv` and not `byte` because `byte` is a JAVA KEYWORD"
+     "and Java has no verbatim identifier to escape one with -- Rust would"
+     "take `r#byte` and C# `@byte`, and the refusal is the right answer rather"
+     "than two targets spelling it one way and one another."
+     ""
+     "`t` is ROOTED across the flush, and that is not caution: `tb-flush`"
+     "allocates, allocating can collect, and the nursery is a copying"
+     "collector -- so the transient moves and a host local pointing at it is"
+     "reading where it used to be.")
+(defn ^:pub ^:method ^Value b-conj [^:mut ^Rt rt ^Value t ^I32 bv]
+  (if (not (tb-live rt t))
+    (return (throw-str rt "IllegalStateException"
+                       (text "this transient byte string is no longer usable"))))
+  (let [^I32 fill (to-i32 (as-fixnum (slot rt t TB_FILL)))]
+    (if (== fill TAIL_CAP)
+      (do
+        (let [^RootIx base (mark rt)
+              ^RootIx ti (push rt t)
+              ^Bool ok (tb-flush rt (r rt ti) fill)
+              ^Value t2 (r rt ti)]
+          (pop-to rt base)
+          (if (not ok)
+            (return NIL))
+          (return (b-conj rt t2 bv)))))
+    (let [^Value tail (slot rt t TB_TAIL)]
+      (write-u8 rt (+ (+ (as-heap tail) HDR) (to-addr fill)) bv)
+      (set-slot rt t TB_FILL (fixnum (+ fill 1)))
+      (return t))))
+
+(doc "Seal the transient and answer the byte string it built."
+     ""
+     "The transient is INVALIDATED rather than freed -- `TB_LIVE` goes false --"
+     "so a program that keeps using one is told so rather than reading a"
+     "structure somebody else now owns.")
+(defn ^:pub ^:method ^Value b-persistent [^:mut ^Rt rt ^Value t]
+  (if (not (tb-live rt t))
+    (return (throw-str rt "IllegalStateException"
+                       (text "this transient byte string is no longer usable"))))
+  (let [^I32 fill (to-i32 (as-fixnum (slot rt t TB_FILL)))
+        ^RootIx base (mark rt)
+        ^RootIx ti (push rt t)]
+    (if (> fill 0)
+      (if (not (tb-flush rt (r rt ti) fill))
+        (do (pop-to rt base)
+            (return NIL))))
+    (set-slot rt (r rt ti) TB_LIVE FALSE)
+    (let [^Value out (slot rt (r rt ti) TB_TREE)]
+      (pop-to rt base)
+      (comment "NOTHING WAS EVER APPENDED, so the tree slot is still nil and"
+               "the answer is the empty byte string rather than nil.")
+      (if (nil? rt out)
+        (return (b-empty rt)))
+      (return out))))
