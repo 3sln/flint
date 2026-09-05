@@ -486,8 +486,9 @@ impl Rt {
         // first. The moment indexing descends instead -- which is the whole
         // point of the per-node counts -- an O(n)-deep tree makes a walk
         // quadratic again, in a new place. `test/scaling.clj` put it at 3.02x.
-        if let Some(out) = self.rope_append(a, b) {
-            return out;
+        let appended = self.rope_append(a, b);
+        if !appended.is_nil() {
+            return appended;
         }
         // A new level. `b` is lifted to stand as tall as the old root, so the
         // leaves stay at one depth on this side too.
@@ -517,12 +518,16 @@ impl Rt {
 
 
     /// Append `b` into the rightmost subtree of `a` that has room, rebuilding
-    /// the spine above it. `None` when the right spine is full at every level,
+    /// the spine above it. NIL when the right spine is full at every level,
     /// which is the only time the caller adds a level -- so depth grows
     /// O(log n) times over n appends rather than O(n/FANOUT) times.
-    fn rope_append(&mut self, a: Value, b: Value) -> Option<Value> {
+    /// NIL means DECLINED, and cannot be confused with a result: this answers
+    /// a rebuilt node, and a node is never nil. Both ports already said it this
+    /// way -- Rust said `Option<Value>`, which is the same information in a
+    /// shape only one of the three can spell.
+    fn rope_append(&mut self, a: Value, b: Value) -> Value {
         if !self.is_rope(a) {
-            return None;
+            return NIL;
         }
         let n = self.rope_kids(a);
         let base = self.mark();
@@ -535,40 +540,38 @@ impl Rt {
             let (l, bv) = (self.r(li), self.r(bi));
             self.rope_append(l, bv)
         } else {
-            None
+            NIL
         };
-        let out = match deeper {
-            Some(newlast) => {
-                let ni = self.push(newlast);
-                let kbase = self.mark();
-                for i in 0..n - 1 {
-                    let k = self.slot(self.r(ai), RP_KIDS + i);
-                    self.push(k);
-                }
-                let tail = self.r(ni);
-                self.push(tail);
-                Some(self.rope_node(kbase, n))
+        let out = if !deeper.is_nil() {
+            let ni = self.push(deeper);
+            let kbase = self.mark();
+            for i in 0..n - 1 {
+                let k = self.slot(self.r(ai), RP_KIDS + i);
+                self.push(k);
             }
+            let tail = self.r(ni);
+            self.push(tail);
+            self.rope_node(kbase, n)
+        } else if n < FANOUT {
             // The right spine is full below, but this node has room: `b` joins
             // as a sibling, LIFTED to the height its siblings stand at.
-            None if n < FANOUT => {
-                let h = self.rope_height(self.r(li));
-                let lifted = self.rope_lift(self.r(bi), h);
-                if lifted.is_nil() {
-                    self.pop_to(base);
-                    return None;
-                }
-                let ni = self.push(lifted);
-                let kbase = self.mark();
-                for i in 0..n {
-                    let k = self.slot(self.r(ai), RP_KIDS + i);
-                    self.push(k);
-                }
-                let tail = self.r(ni);
-                self.push(tail);
-                Some(self.rope_node(kbase, n + 1))
+            let h = self.rope_height(self.r(li));
+            let lifted = self.rope_lift(self.r(bi), h);
+            if lifted.is_nil() {
+                self.pop_to(base);
+                return NIL;
             }
-            None => None,
+            let ni = self.push(lifted);
+            let kbase = self.mark();
+            for i in 0..n {
+                let k = self.slot(self.r(ai), RP_KIDS + i);
+                self.push(k);
+            }
+            let tail = self.r(ni);
+            self.push(tail);
+            self.rope_node(kbase, n + 1)
+        } else {
+            NIL
         };
         self.pop_to(base);
         out
