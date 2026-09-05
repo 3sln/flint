@@ -6,6 +6,7 @@
 pub mod assoc;
 pub mod byteconcat;
 pub mod byteat;
+pub mod byteslice;
 pub mod bytecore;
 pub mod bytefold;
 pub mod bytenode;

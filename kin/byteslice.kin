@@ -1,0 +1,93 @@
+;; Taking a range out of a byte string, SHARING wherever it can.
+;;
+;; A child wholly inside the range is handed over as itself -- not copied, not
+;; re-noded. That is the whole difference between this and a substring: slicing
+;; a 509 KB section used to descend to the range and then copy it, so the
+;; sharing the tree exists for was thrown away at the last step.
+;;
+;; `SLICE_MIN` IS POLICY, NOT A FALLBACK. Below it the range is copied on
+;; purpose, because a three-byte slice that shares would keep the whole section
+;; alive -- the retention half of the same trade. That branch needs a byte sink
+;; and stays hand-written; this file reaches it as a sibling.
+(ns flint.rt.byteslice
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == < > >= <= + - not nil? as-heap
+                                   local set for break olen slot
+                                   mark push r pop-to to-i32
+                                   b-copy-range
+                                   Rt Value RootIx I32 NIL
+                                   BB_KIDS SLICE_MIN]]
+            [flint.rt.bytecore :refer [b-count is-brope]]
+            [flint.rt.bytefold :refer [b-from-roots]]))
+
+(doc "`v` from `from` to `to`, exclusive."
+     ""
+     "Bounds are CLAMPED to the value's length, which is what a caller asking"
+     "for more than there is means. They are not clamped at zero: `from` and"
+     "`to` are `I32`, whose contract is that the high bit is never set, and a"
+     "negative bound is refused by the builtin before it reaches here."
+     ""
+     "The whole range answers `v` ITSELF, which is worth stating because it is"
+     "the case a caller hits most and the one that must not allocate.")
+(defn ^:pub ^:method ^Value b-slice [^:mut ^Rt rt ^Value v ^I32 from ^I32 to]
+  (let [^I32 n (b-count rt v)]
+    (local ^:mut ^I32 lo)
+    (local ^:mut ^I32 hi)
+    (set lo from)
+    (if (> lo n) (set lo n))
+    (set hi to)
+    (if (> hi n) (set hi n))
+    (if (< hi lo) (set hi lo))
+    (if (== lo 0)
+      (if (== hi n)
+        (return v)))
+    (comment "SMALL, OR A LEAF: copy. Sharing a three-byte slice would keep"
+             "the section it came from alive, which is the leak `SLICE_MIN`"
+             "names. The copy needs a byte sink, so it lives in the"
+             "hand-written half.")
+    (if (< (- hi lo) SLICE_MIN)
+      (return (b-copy-range rt v lo hi)))
+    (if (not (is-brope rt v))
+      (return (b-copy-range rt v lo hi)))
+    (let [^RootIx base (mark rt)
+          ^RootIx vi (push rt v)
+          ^I32 kids (- (olen rt (r rt vi)) BB_KIDS)
+          ^RootIx out (mark rt)]
+      (local ^:mut ^I32 made)
+      (local ^:mut ^I32 at)
+      (set made 0)
+      (set at 0)
+      (for [^I32 i 0 kids]
+        (let [^Value k (slot rt (r rt vi) (+ BB_KIDS i))
+              ^I32 w (b-count rt k)]
+          (if (> (+ at w) lo)
+            (if (< at hi)
+              (do
+                (comment "The part of this child the range covers. `klo` is 0"
+                         "when the range began before it, `khi` its whole width"
+                         "when the range runs past it -- and when both, the"
+                         "child is WHOLLY INSIDE and is shared as itself.")
+                (local ^:mut ^I32 klo)
+                (local ^:mut ^I32 khi)
+                (set klo 0)
+                (if (> lo at) (set klo (- lo at)))
+                (set khi (- hi at))
+                (if (> khi w) (set khi w))
+                (local ^:mut ^Value piece)
+                (if (== klo 0)
+                  (if (== khi w)
+                    (set piece k)
+                    (set piece (b-slice rt k klo khi)))
+                  (set piece (b-slice rt k klo khi)))
+                (if (nil? rt piece)
+                  (do (pop-to rt base)
+                      (return NIL)))
+                (if (> (b-count rt piece) 0)
+                  (do (push rt piece)
+                      (set made (+ made 1)))))))
+          (set at (+ at w))
+          (if (>= at hi)
+            (break))))
+      (let [^Value out-v (b-from-roots rt out made)]
+        (pop-to rt base)
+        (return out-v)))))

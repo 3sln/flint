@@ -167,36 +167,7 @@ public static class Bytes {
 
     /// SHARES, like `Str.RopeSlice`. This descended to the range and then
     /// COPIED it (`doc/decisions/0011`).
-    public static long Slice(Rt rt, long v, int from, int to) {
-        int n = Count(rt, v);
-        int lo = System.Math.Min(System.Math.Max(from, 0), n);
-        int hi = System.Math.Min(System.Math.Max(to, lo), n);
-        if (lo == 0 && hi == n) return v;
-        if (hi - lo < Str.SLICE_MIN || !IsBrope(rt, v)) {
-            return CopyRange(rt, v, lo, hi);
-        }
-        int bas = rt.Mark();
-        int vi = rt.Push(v);
-        int kids = Obj.Len(rt.gc.sp, Val.AsHeap(rt.R(vi))) - BB_KIDS;
-        int outb2 = rt.Mark();
-        int made = 0, at = 0;
-        for (int i = 0; i < kids; i++) {
-            long k = rt.Slot(rt.R(vi), BB_KIDS + i);
-            int w = Count(rt, k);
-            if (at + w > lo && at < hi) {
-                int l2 = System.Math.Max(0, lo - at);
-                int h2 = System.Math.Min(hi - at, w);
-                long piece = (l2 == 0 && h2 == w) ? k : Slice(rt, k, l2, h2);
-                if (piece == Val.Nil) { rt.PopTo(bas); return Val.Nil; }
-                if (Count(rt, piece) > 0) { rt.Push(piece); made++; }
-            }
-            at += w;
-            if (at >= hi) break;
-        }
-        long r = FromRoots(rt, outb2, made);
-        rt.PopTo(bas);
-        return r;
-    }
+    public static long Slice(Rt rt, long v, int from, int to) { return global::_3sln.Flint.Kgen.Rt.Byteslice.BSlice(rt, v, from, to); }
 
     static long FromRoots(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Bytefold.BFromRoots(rt, bas, n); }
 

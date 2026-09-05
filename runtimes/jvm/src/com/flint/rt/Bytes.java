@@ -175,36 +175,7 @@ public final class Bytes {
     /// what stopped it being quadratic -- and then COPIED it, so slicing a
     /// 509 KB code section allocated a fresh 509 KB minus the trim
     /// (`doc/decisions/0011`).
-    public static long slice(Rt rt, long v, int from, int to) {
-        int n = count(rt, v);
-        int lo = Math.min(Math.max(from, 0), n);
-        int hi = Math.min(Math.max(to, lo), n);
-        if (lo == 0 && hi == n) return v;
-        if (hi - lo < Str.SLICE_MIN || !isBrope(rt, v)) {
-            return copyRange(rt, v, lo, hi);
-        }
-        int base = rt.mark();
-        int vi = rt.push(v);
-        int kids = len(rt.gc.sp, Val.asHeap(rt.r(vi))) - BB_KIDS;
-        int out = rt.mark();
-        int made = 0, at = 0;
-        for (int i = 0; i < kids; i++) {
-            long k = rt.slot(rt.r(vi), BB_KIDS + i);
-            int w = count(rt, k);
-            if (at + w > lo && at < hi) {
-                int l2 = Math.max(0, lo - at);
-                int h2 = Math.min(hi - at, w);
-                long piece = (l2 == 0 && h2 == w) ? k : slice(rt, k, l2, h2);
-                if (piece == Val.NIL) { rt.popTo(base); return Val.NIL; }
-                if (count(rt, piece) > 0) { rt.push(piece); made++; }
-            }
-            at += w;
-            if (at >= hi) break;
-        }
-        long r = fromRoots(rt, out, made);
-        rt.popTo(base);
-        return r;
-    }
+    public static long slice(Rt rt, long v, int from, int to) { return com._3sln.flint.kgen.rt.Byteslice.bSlice(rt, v, from, to); }
 
     /// A balanced byte rope over `n` pieces on the shadow stack, the mirror of
     /// `Str.ropeFromRoots`.

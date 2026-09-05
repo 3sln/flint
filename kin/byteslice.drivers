@@ -1,0 +1,401 @@
+--rust-head
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_BYTES: u8 = 44; const TY_BROPE: u8 = 45; const TY_VEC: u8 = 9;
+pub mod obj { pub const HDR: u64 = 8; }
+pub mod rope { pub const SLICE_MIN: u32 = 4; }
+pub mod bytes {
+    pub const BB_BYTES: u32 = 0; pub const BB_FLAT: u32 = 1;
+    pub const BB_DEPTH: u32 = 2; pub const BB_HASH: u32 = 3; pub const BB_KIDS: u32 = 4;
+}
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+// A BYTE-ADDRESSABLE space, which the earlier byte fixtures did not need: they
+// modelled a leaf by its LENGTH alone. `b-at` reads the bytes themselves, so
+// this one stores them -- at `addr + HDR`, where the runtime puts them.
+struct Space { m: Vec<u8> }
+impl Space {
+    fn read_u8(&self, a: Addr) -> u8 { self.m[a as usize] }
+}
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value> }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    // SPACED so a leaf's bytes cannot land on the next object's type tag:
+    // objects are `n + 16` apart and the bytes occupy `HDR .. HDR + n`.
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        let a = self.bump; self.bump += n as u64 + 16;
+        self.gc.sp.m[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn leaf(&mut self, bs: &[u8]) -> Value {
+        let a = self.alloc(TY_BYTES, bs.len() as u32);
+        for (i, b) in bs.iter().enumerate() { self.gc.sp.m[(a + obj::HDR) as usize + i] = *b; }
+        Value::heap(a)
+    }
+    fn b_count(&self, v: Value) -> u32 {
+        if !v.is_heap() { return 0; }
+        match ty(&self.gc.sp, v.as_heap()) {
+            TY_BYTES => self.olen(v),
+            TY_BROPE => self.slot(v, bytes::BB_BYTES).as_fixnum() as u32,
+            _ => 0,
+        }
+    }
+    // `bytefold`'s and the hand-written sink half's, reproduced faithfully.
+    fn b_from_roots(&mut self, base: usize, n: u32) -> Value {
+        if n == 0 { return self.leaf(&[]); }
+        if n == 1 { return self.r(base); }
+        let kids: Vec<Value> = (0..n).map(|i| self.r(base + i as usize)).collect();
+        self.node(&kids)
+    }
+    fn b_copy_range(&mut self, v: Value, from: u32, to: u32) -> Value {
+        let mut out: Vec<u8> = Vec::new();
+        for i in from..to {
+            let x = self.b_at_probe(v, i);
+            out.push(x);
+        }
+        self.leaf(&out)
+    }
+    fn b_at_probe(&self, v: Value, i: u32) -> u8 {
+        match ty(&self.gc.sp, v.as_heap()) {
+            TY_BYTES => self.gc.sp.read_u8(v.as_heap() + obj::HDR + i as u64),
+            _ => {
+                let kids = self.olen(v) - bytes::BB_KIDS;
+                let mut idx = i;
+                for k in 0..kids {
+                    let kid = self.slot(v, bytes::BB_KIDS + k);
+                    let w = self.b_count(kid);
+                    if idx < w { return self.b_at_probe(kid, idx); }
+                    idx -= w;
+                }
+                0
+            }
+        }
+    }
+    fn is_brope(&self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_BROPE
+    }
+    fn node(&mut self, kids: &[Value]) -> Value {
+        let mut total = 0u32;
+        for k in kids { total += self.b_count(*k); }
+        let a = self.alloc(TY_BROPE, bytes::BB_KIDS + kids.len() as u32);
+        self.set_slot(a, bytes::BB_BYTES, Value::fixnum(total as i64));
+        self.set_slot(a, bytes::BB_FLAT, NIL);
+        self.set_slot(a, bytes::BB_HASH, NIL);
+        self.set_slot(a, bytes::BB_DEPTH, Value::fixnum(1));
+        for (i, k) in kids.iter().enumerate() { self.set_slot(a, bytes::BB_KIDS + i as u32, *k); }
+        Value::heap(a)
+    }
+}
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 40000], gc: Gc { sp: Space { m: vec![0u8; 40000] } },
+                      lens: vec![0; 40000], bump: 100, roots: Vec::new() };
+    let mut o = String::new();
+    // Four leaves of five bytes: 0..4, 10..14, 20..24, 30..34.
+    let mk = |rt: &mut Rt, base: u8| rt.leaf(&[base, base+1, base+2, base+3, base+4]);
+    let a = mk(&mut rt, 0); let b = mk(&mut rt, 10);
+    let c = mk(&mut rt, 20); let d = mk(&mut rt, 30);
+    let tree = rt.node(&[a, b, c, d]);
+    fn bytes_of(rt: &Rt, v: Value) -> String {
+        (0..rt.b_count(v)).map(|i| rt.b_at_probe(v, i).to_string())
+                          .collect::<Vec<_>>().join(".")
+    }
+    // EVERY SLICE HOISTED: `b_slice` takes `&mut self` and printing borrows
+    // `&self`, so nesting them is two borrows at once -- the same rule the
+    // generated sources hit, showing up in the probe that drives them.
+    let whole = rt.b_slice(tree, 0, 20);
+    o.push_str(&format!("whole={} ", (whole.0 == tree.0) as u32));
+    let clamped = rt.b_slice(tree, 15, 99);
+    let cl = bytes_of(&rt, clamped);
+    let emptied = rt.b_slice(tree, 3, 3);
+    o.push_str(&format!("clamp={} empty={} ", cl, rt.b_count(emptied)));
+    // BELOW SLICE_MIN (4 here): copied, so NOT the child even when aligned.
+    let small = rt.b_slice(tree, 5, 8);
+    let sm = bytes_of(&rt, small);
+    o.push_str(&format!("small={},{} ", sm, (small.0 == b.0) as u32));
+    // AT OR ABOVE SLICE_MIN and covering a whole child: that child is SHARED.
+    let mid = rt.b_slice(tree, 5, 15);
+    let md = bytes_of(&rt, mid);
+    o.push_str(&format!("mid={} shares={}{} ", md,
+        (rt.slot(mid, bytes::BB_KIDS).0 == b.0) as u32,
+        (rt.slot(mid, bytes::BB_KIDS + 1).0 == c.0) as u32));
+    // A RAGGED range: the end children are cut, the middle one is shared.
+    let rag = rt.b_slice(tree, 3, 17);
+    let rg = bytes_of(&rt, rag);
+    o.push_str(&format!("rag={} ", rg));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_BYTES = 44, TY_BROPE = 45, TY_VEC = 9;
+    static final class Obj { static final long HDR = 8; }
+    static final class Str { static final int SLICE_MIN = 4; }
+    static final class Bytes {
+        static final int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
+        static long copyRange(Rt rt, long v, int from, int to) {
+            int[] out = new int[to - from];
+            for (int i = from; i < to; i++) out[i - from] = bAtProbe(rt, v, i);
+            return leaf(rt, out);
+        }
+    }
+    static final class Val {
+        static boolean isHeap(long v) { return v >= 100 && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v; }
+        static long fixnum(long n) { return n; }
+        static long heap(long a) { return a; }
+        static final long NIL = Probe.NIL;
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Space {
+        byte[] m = new byte[40000];
+        int readU8(long a) { return m[(int) a] & 0xFF; }
+    }
+    static final class Rt {
+        long[] h = new long[40000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        int[] lens = new int[40000];
+        long bump = 100;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long alloc(int t, int n) {
+            long a = bump; bump += n + 16;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    static long leaf(Rt rt, int[] bs) {
+        long a = rt.alloc(TY_BYTES, bs.length);
+        for (int i = 0; i < bs.length; i++) rt.gc.sp.m[(int) (a + Obj.HDR) + i] = (byte) bs[i];
+        return Val.heap(a);
+    }
+    static int bCount(Rt rt, long v) {
+        if (!Val.isHeap(v)) return 0;
+        int t = ty(rt.gc.sp, v);
+        if (t == TY_BYTES) return olen(rt, v);
+        if (t == TY_BROPE) return (int) rt.slot(v, Bytes.BB_BYTES);
+        return 0;
+    }
+    static long bFromRoots(Rt rt, int base, int n) {
+        if (n == 0) return leaf(rt, new int[0]);
+        if (n == 1) return rt.r(base);
+        long[] kids = new long[n];
+        for (int i = 0; i < n; i++) kids[i] = rt.r(base + i);
+        return node(rt, kids);
+    }
+    static int bAtProbe(Rt rt, long v, int i) {
+        if (ty(rt.gc.sp, v) == TY_BYTES) return rt.gc.sp.readU8(v + Obj.HDR + i);
+        int kids = olen(rt, v) - Bytes.BB_KIDS;
+        int idx = i;
+        for (int k = 0; k < kids; k++) {
+            long kid = rt.slot(v, Bytes.BB_KIDS + k);
+            int w = bCount(rt, kid);
+            if (idx < w) return bAtProbe(rt, kid, idx);
+            idx -= w;
+        }
+        return 0;
+    }
+    static boolean isBrope(Rt rt, long v) {
+        return Val.isHeap(v) && ty(rt.gc.sp, v) == TY_BROPE;
+    }
+    static long node(Rt rt, long[] kids) {
+        int total = 0;
+        for (long k : kids) total += bCount(rt, k);
+        long a = rt.alloc(TY_BROPE, Bytes.BB_KIDS + kids.length);
+        rt.setSlot(a, Bytes.BB_BYTES, total);
+        rt.setSlot(a, Bytes.BB_FLAT, NIL);
+        rt.setSlot(a, Bytes.BB_HASH, NIL);
+        rt.setSlot(a, Bytes.BB_DEPTH, 1);
+        for (int i = 0; i < kids.length; i++) rt.setSlot(a, Bytes.BB_KIDS + i, kids[i]);
+        return Val.heap(a);
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long a = leaf(rt, new int[]{0,1,2,3,4});
+        long b = leaf(rt, new int[]{10,11,12,13,14});
+        long c = leaf(rt, new int[]{20,21,22,23,24});
+        long d = leaf(rt, new int[]{30,31,32,33,34});
+        long tree = node(rt, new long[]{a, b, c, d});
+        o.append("whole=").append(bSlice(rt, tree, 0, 20) == tree ? 1 : 0).append(' ');
+        o.append("clamp=").append(bytesOf(rt, bSlice(rt, tree, 15, 99)))
+         .append(" empty=").append(bCount(rt, bSlice(rt, tree, 3, 3))).append(' ');
+        long small = bSlice(rt, tree, 5, 8);
+        o.append("small=").append(bytesOf(rt, small)).append(',')
+         .append(small == b ? 1 : 0).append(' ');
+        long mid = bSlice(rt, tree, 5, 15);
+        o.append("mid=").append(bytesOf(rt, mid)).append(" shares=")
+         .append(rt.slot(mid, Bytes.BB_KIDS) == b ? 1 : 0)
+         .append(rt.slot(mid, Bytes.BB_KIDS + 1) == c ? 1 : 0).append(' ');
+        long rag = bSlice(rt, tree, 3, 17);
+        o.append("rag=").append(bytesOf(rt, rag)).append(' ');
+        System.out.println(o.toString());
+    }
+    static String bytesOf(Rt rt, long v) {
+        StringBuilder s = new StringBuilder();
+        for (int i = 0; i < bCount(rt, v); i++) {
+            if (i > 0) s.append('.');
+            s.append(bAtProbe(rt, v, i));
+        }
+        return s.toString();
+    }
+--csharp-head
+    internal static class Bytes {
+        internal static long CopyRange(Rt rt, long v, int from, int to) {
+            int[] outb = new int[to - from];
+            for (int i = from; i < to; i++) outb[i - from] = BAtProbe(rt, v, i);
+            return Leaf(rt, outb);
+        }
+    }
+    internal static class Obj {
+        internal const long Hdr = 8;
+        internal const int TyBytes = 44, TyBrope = 45, TyVec = 9;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long AsFixnum(long v) { return v; }
+        internal static long Fixnum(long n) { return n; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    internal sealed class Space {
+        internal byte[] m = new byte[40000];
+        internal int ReadU8(long a) { return m[(int) a]; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[40000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[40000];
+        internal long bump = 100;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Alloc(int t, int n) {
+            long a = bump; bump += n + 16;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Val.Nil;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    internal static long Leaf(Rt rt, int[] bs) {
+        long a = rt.Alloc(Obj.TyBytes, bs.Length);
+        for (int i = 0; i < bs.Length; i++) rt.gc.sp.m[(int) (a + Obj.Hdr) + i] = (byte) bs[i];
+        return Val.Heap(a);
+    }
+    internal static int BCount(Rt rt, long v) {
+        if (!Val.IsHeap(v)) return 0;
+        int t = Obj.Ty(rt.gc.sp, v);
+        if (t == Obj.TyBytes) return Olen(rt, v);
+        if (t == Obj.TyBrope) return (int) rt.Slot(v, global::Flint.Rt.Bytes.BB_BYTES);
+        return 0;
+    }
+    internal static long BFromRoots(Rt rt, int bas, int n) {
+        if (n == 0) return Leaf(rt, new int[0]);
+        if (n == 1) return rt.R(bas);
+        long[] kids = new long[n];
+        for (int i = 0; i < n; i++) kids[i] = rt.R(bas + i);
+        return Node(rt, kids);
+    }
+    internal static int BAtProbe(Rt rt, long v, int i) {
+        if (Obj.Ty(rt.gc.sp, v) == Obj.TyBytes) return rt.gc.sp.ReadU8(v + Obj.Hdr + i);
+        int kids = Olen(rt, v) - global::Flint.Rt.Bytes.BB_KIDS;
+        int idx = i;
+        for (int k = 0; k < kids; k++) {
+            long kid = rt.Slot(v, global::Flint.Rt.Bytes.BB_KIDS + k);
+            int w = BCount(rt, kid);
+            if (idx < w) return BAtProbe(rt, kid, idx);
+            idx -= w;
+        }
+        return 0;
+    }
+    internal static bool IsBrope(Rt rt, long v) {
+        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyBrope;
+    }
+    internal static long Node(Rt rt, long[] kids) {
+        int total = 0;
+        foreach (long k in kids) total += BCount(rt, k);
+        long a = rt.Alloc(Obj.TyBrope, global::Flint.Rt.Bytes.BB_KIDS + kids.Length);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_BYTES, total);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_FLAT, Val.Nil);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_HASH, Val.Nil);
+        rt.SetSlot(a, global::Flint.Rt.Bytes.BB_DEPTH, 1);
+        for (int i = 0; i < kids.Length; i++) rt.SetSlot(a, global::Flint.Rt.Bytes.BB_KIDS + i, kids[i]);
+        return Val.Heap(a);
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Str { internal const int SLICE_MIN = 4; }
+    internal static class Bytes {
+        internal const int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
+    }
+}
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long a = Leaf(rt, new int[]{0,1,2,3,4});
+        long b = Leaf(rt, new int[]{10,11,12,13,14});
+        long c = Leaf(rt, new int[]{20,21,22,23,24});
+        long d = Leaf(rt, new int[]{30,31,32,33,34});
+        long tree = Node(rt, new long[]{a, b, c, d});
+        o.Append("whole=").Append(BSlice(rt, tree, 0, 20) == tree ? 1 : 0).Append(' ');
+        o.Append("clamp=").Append(BytesOf(rt, BSlice(rt, tree, 15, 99)))
+         .Append(" empty=").Append(BCount(rt, BSlice(rt, tree, 3, 3))).Append(' ');
+        long small = BSlice(rt, tree, 5, 8);
+        o.Append("small=").Append(BytesOf(rt, small)).Append(',')
+         .Append(small == b ? 1 : 0).Append(' ');
+        long mid = BSlice(rt, tree, 5, 15);
+        o.Append("mid=").Append(BytesOf(rt, mid)).Append(" shares=")
+         .Append(rt.Slot(mid, global::Flint.Rt.Bytes.BB_KIDS) == b ? 1 : 0)
+         .Append(rt.Slot(mid, global::Flint.Rt.Bytes.BB_KIDS + 1) == c ? 1 : 0).Append(' ');
+        long rag = BSlice(rt, tree, 3, 17);
+        o.Append("rag=").Append(BytesOf(rt, rag)).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }
+    internal static string BytesOf(Rt rt, long v) {
+        var s = new System.Text.StringBuilder();
+        for (int i = 0; i < BCount(rt, v); i++) {
+            if (i > 0) s.Append('.');
+            s.Append(BAtProbe(rt, v, i));
+        }
+        return s.ToString();
+    }

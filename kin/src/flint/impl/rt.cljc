@@ -256,7 +256,11 @@
    'FANOUT {:rust "crate::rope::FANOUT" :java "Bytes.FANOUT" :csharp "global::Flint.Rt.Bytes.FANOUT"}
    ;; The object header's width. A leaf's bytes begin `HDR` past its address,
    ;; which is the one place a generated source does address arithmetic.
-   'HDR {:rust "crate::obj::HDR" :java "Obj.HDR" :csharp "Obj.Hdr"}}
+   'HDR {:rust "crate::obj::HDR" :java "Obj.HDR" :csharp "Obj.Hdr"}
+   ;; A slice smaller than this COPIES rather than shares. It is `Str`'s
+   ;; constant in both ports and `rope`'s in Rust -- the same number in a
+   ;; different home, which is what this table is for.
+   'SLICE_MIN {:rust "crate::rope::SLICE_MIN" :java "Str.SLICE_MIN" :csharp "global::Flint.Rt.Str.SLICE_MIN"}}
   ;; The node and category constants. All three targets spell these
   ;; IDENTICALLY, so every entry below is three copies of one string -- and
   ;; they are written down anyway.
@@ -782,6 +786,9 @@
     ;; of bytes -- and that is hole 5's other half, still open. So the tree
     ;; half calls across to it, which is what `sibling` is for.
     'b-copy-concat (sibling "b_copy_concat" "Bytes" "copyConcat" "CopyConcat" 2)
+    ;; The other half that stays hand-written: copying a RANGE out into a fresh
+    ;; leaf, which is what `SLICE_MIN` exists to force. Also a byte sink.
+    'b-copy-range (sibling "b_copy_range" "Bytes" "copyRange" "CopyRange" 3)
 
     ;; ONE BYTE out of the heap, at an absolute address. Rust reads a leaf
     ;; through `raw_bytes`, which hands back a borrowed slice -- hole 6, and
