@@ -105,9 +105,7 @@ public static class Str {
             int made = 0, i = 0;
             while (i < level) {
                 int take = System.Math.Min(FANOUT, level - i);
-                long[] kids = new long[take];
-                for (int k = 0; k < take; k++) kids[k] = rt.R(from + i + k);
-                long node = RopeNode(rt, kids);
+                long node = RopeNode(rt, from + i, take);
                 if (Val.IsNil(node)) return Val.Nil;
                 rt.Push(node);
                 made++;
@@ -643,24 +641,24 @@ public static class Str {
 
     /// A node over `kids`, whose aggregates are SUMMED from them rather than
     /// derived from their bytes. That is what makes `count` O(1) on a tree.
-    static long RopeNode(Rt rt, long[] kids) {
+    /// A node over the `n` values ALREADY ROOTED at `bas`. The caller pushes
+    /// and the caller pops -- see the Rust and Java copies, which say the same.
+    static long RopeNode(Rt rt, int bas, int n) {
         int bytes = 0, cps = 0;
         bool ascii = true;
-        foreach (long k in kids) {
+        for (int i = 0; i < n; i++) {
+            long k = rt.R(bas + i);
             bytes += SBytes(rt, k);
             cps += SCount(rt, k);
             ascii &= SAscii(rt, k);
         }
-        int bas = rt.Mark();
-        foreach (long k in kids) rt.Push(k);
-        long a = rt.Alloc(Obj.TyRope, RP_KIDS + kids.Length);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
+        long a = rt.Alloc(Obj.TyRope, RP_KIDS + n);
+        if (a == 0) return Val.Nil;
         rt.SetSlot(a, RP_BYTES, Val.Fixnum(bytes));
         rt.SetSlot(a, RP_CPS, Val.Fixnum(((long) cps << 1) | (ascii ? 1L : 0L)));
         rt.SetSlot(a, RP_FLAT, Val.Nil);
         rt.SetSlot(a, RP_HASH, Val.Nil);
-        for (int i = 0; i < kids.Length; i++) rt.SetSlot(a, RP_KIDS + i, rt.R(bas + i));
-        rt.PopTo(bas);
+        for (int i = 0; i < n; i++) rt.SetSlot(a, RP_KIDS + i, rt.R(bas + i));
         return Val.Heap(a);
     }
 
@@ -686,7 +684,9 @@ public static class Str {
         // A new level: `b` is lifted to stand as tall as the old root.
         int h2 = RopeHeight(rt, rt.R(a2));
         int l2 = rt.Push(RopeLift(rt, rt.R(b2), h2));
-        long outv2 = RopeNode(rt, new long[]{ rt.R(a2), rt.R(l2) });
+        int kbas2 = rt.Mark();
+        rt.Push(rt.R(a2)); rt.Push(rt.R(l2));
+        long outv2 = RopeNode(rt, kbas2, 2);
         rt.PopTo(bas2);
         return outv2;
     }
@@ -701,7 +701,7 @@ public static class Str {
         int bas = rt.Mark();
         int vi = rt.Push(v);
         for (int i = 0; i < h; i++) {
-            long n = RopeNode(rt, new long[]{ rt.R(vi) });
+            long n = RopeNode(rt, vi, 1);
             if (Val.IsNil(n)) { rt.PopTo(bas); return Val.Nil; }
             rt.SetR(vi, n);
         }
@@ -723,10 +723,10 @@ public static class Str {
         long outv;
         if (!Val.IsNil(deeper)) {
             int ni = rt.Push(deeper);
-            long[] kids = new long[n];
-            for (int i = 0; i < n - 1; i++) kids[i] = rt.Slot(rt.R(ai), RP_KIDS + i);
-            kids[n - 1] = rt.R(ni);
-            outv = RopeNode(rt, kids);
+            int kbas = rt.Mark();
+            for (int i = 0; i < n - 1; i++) rt.Push(rt.Slot(rt.R(ai), RP_KIDS + i));
+            rt.Push(rt.R(ni));
+            outv = RopeNode(rt, kbas, n);
         } else if (n < FANOUT) {
             // Full below, room here: `b` joins as a sibling, LIFTED to the
             // height its siblings stand at.
@@ -734,10 +734,10 @@ public static class Str {
             long lifted = RopeLift(rt, rt.R(bi), h);
             if (Val.IsNil(lifted)) { rt.PopTo(bas); return Val.Nil; }
             int ni = rt.Push(lifted);
-            long[] kids = new long[n + 1];
-            for (int i = 0; i < n; i++) kids[i] = rt.Slot(rt.R(ai), RP_KIDS + i);
-            kids[n] = rt.R(ni);
-            outv = RopeNode(rt, kids);
+            int kbas = rt.Mark();
+            for (int i = 0; i < n; i++) rt.Push(rt.Slot(rt.R(ai), RP_KIDS + i));
+            rt.Push(rt.R(ni));
+            outv = RopeNode(rt, kbas, n + 1);
         } else {
             outv = Val.Nil;
         }

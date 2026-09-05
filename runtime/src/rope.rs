@@ -227,31 +227,32 @@ impl Rt {
 
     /// A rope node over `kids`, whose aggregates are summed from them rather
     /// than derived from their bytes.
-    fn rope_node(&mut self, kids: &[Value]) -> Value {
+    /// A node over the `n` values ALREADY ROOTED at `base`.
+    ///
+    /// The caller pushes and the caller pops -- the same convergence `b_node`
+    /// took, and for the same reason: every caller rooted the kids, built a
+    /// host array to hand them over, and had them rooted a SECOND time inside.
+    /// The shadow stack was already the place they had to be.
+    fn rope_node(&mut self, base: usize, n: u32) -> Value {
         let (mut bytes, mut cps, mut ascii) = (0u32, 0u32, true);
-        for k in kids {
-            bytes += self.s_bytes(*k);
-            cps += self.s_count(*k);
-            ascii &= self.s_ascii(*k);
+        for i in 0..n {
+            let k = self.r(base + i as usize);
+            bytes += self.s_bytes(k);
+            cps += self.s_count(k);
+            ascii &= self.s_ascii(k);
         }
-        let base = self.mark();
-        for k in kids {
-            self.push(*k);
-        }
-        let a = self.alloc(TY_ROPE, RP_KIDS + kids.len() as u32);
+        let a = self.alloc(TY_ROPE, RP_KIDS + n);
         if a == 0 {
-            self.pop_to(base);
             return NIL;
         }
         self.set_slot(a, RP_BYTES, Value::fixnum(bytes as i64));
         self.set_slot(a, RP_CPS, Value::fixnum(((cps as i64) << 1) | ascii as i64));
         self.set_slot(a, RP_FLAT, NIL);
         self.set_slot(a, RP_HASH, NIL);
-        for (i, _) in kids.iter().enumerate() {
-            let v = self.r(base + i);
-            self.set_slot(a, RP_KIDS + i as u32, v);
+        for i in 0..n {
+            let v = self.r(base + i as usize);
+            self.set_slot(a, RP_KIDS + i, v);
         }
-        self.pop_to(base);
         Value::heap(a)
     }
 
@@ -278,11 +279,7 @@ impl Rt {
             let mut i = 0usize;
             while i < level {
                 let take = FANOUT.min((level - i) as u32) as usize;
-                let mut kids: alloc::vec::Vec<Value> = alloc::vec::Vec::with_capacity(take);
-                for k in 0..take {
-                    kids.push(self.r(from + i + k));
-                }
-                let node = self.rope_node(&kids);
+                let node = self.rope_node(from + i, take as u32);
                 if node.is_nil() {
                     return NIL;
                 }
@@ -565,8 +562,11 @@ impl Rt {
         let h = self.rope_height(self.r(ai));
         let lifted = self.rope_lift(self.r(bi), h);
         let li = self.push(lifted);
-        let kids = [self.r(ai), self.r(li)];
-        let out = self.rope_node(&kids);
+        let kbase = self.mark();
+        let (av, lv) = (self.r(ai), self.r(li));
+        self.push(av);
+        self.push(lv);
+        let out = self.rope_node(kbase, 2);
         self.pop_to(base);
         out
     }
@@ -587,14 +587,18 @@ impl Rt {
     /// how the depth grew linearly here before: the root filled with leaves,
     /// then the whole thing became kid 0 of a new root, every FANOUT appends.
     fn rope_lift(&mut self, v: Value, h: u32) -> Value {
-        let mut out = v;
+        let base = self.mark();
+        let ci = self.push(v);
         for _ in 0..h {
-            let kids = [out];
-            out = self.rope_node(&kids);
-            if out.is_nil() {
+            let w = self.rope_node(ci, 1);
+            if w.is_nil() {
+                self.pop_to(base);
                 return NIL;
             }
+            self.set_r(ci, w);
         }
+        let out = self.r(ci);
+        self.pop_to(base);
         out
     }
 
@@ -622,12 +626,14 @@ impl Rt {
         let out = match deeper {
             Some(newlast) => {
                 let ni = self.push(newlast);
-                let mut kids: alloc::vec::Vec<Value> = alloc::vec::Vec::with_capacity(n as usize);
+                let kbase = self.mark();
                 for i in 0..n - 1 {
-                    kids.push(self.slot(self.r(ai), RP_KIDS + i));
+                    let k = self.slot(self.r(ai), RP_KIDS + i);
+                    self.push(k);
                 }
-                kids.push(self.r(ni));
-                Some(self.rope_node(&kids))
+                let tail = self.r(ni);
+                self.push(tail);
+                Some(self.rope_node(kbase, n))
             }
             // The right spine is full below, but this node has room: `b` joins
             // as a sibling, LIFTED to the height its siblings stand at.
@@ -639,13 +645,14 @@ impl Rt {
                     return None;
                 }
                 let ni = self.push(lifted);
-                let mut kids: alloc::vec::Vec<Value> =
-                    alloc::vec::Vec::with_capacity(n as usize + 1);
+                let kbase = self.mark();
                 for i in 0..n {
-                    kids.push(self.slot(self.r(ai), RP_KIDS + i));
+                    let k = self.slot(self.r(ai), RP_KIDS + i);
+                    self.push(k);
                 }
-                kids.push(self.r(ni));
-                Some(self.rope_node(&kids))
+                let tail = self.r(ni);
+                self.push(tail);
+                Some(self.rope_node(kbase, n + 1))
             }
             None => None,
         };

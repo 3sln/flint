@@ -124,9 +124,7 @@ public final class Str {
             int made = 0, i = 0;
             while (i < level) {
                 int take = Math.min(FANOUT, level - i);
-                long[] kids = new long[take];
-                for (int k = 0; k < take; k++) kids[k] = rt.r(from + i + k);
-                long node = ropeNode(rt, kids);
+                long node = ropeNode(rt, from + i, take);
                 if (Val.isNil(node)) return Val.NIL;
                 rt.push(node);
                 made++;
@@ -528,24 +526,24 @@ public final class Str {
 
     /// A node over `kids`, whose aggregates are SUMMED from them rather than
     /// derived from their bytes. That is what makes `count` O(1) on a tree.
-    static long ropeNode(Rt rt, long[] kids) {
+    /// A node over the `n` values ALREADY ROOTED at `base`. The caller pushes
+    /// and the caller pops -- see the Rust and C# copies, which say the same.
+    static long ropeNode(Rt rt, int base, int n) {
         int bytes = 0, cps = 0;
         boolean ascii = true;
-        for (long k : kids) {
+        for (int i = 0; i < n; i++) {
+            long k = rt.r(base + i);
             bytes += sBytes(rt, k);
             cps += sCount(rt, k);
             ascii &= sAscii(rt, k);
         }
-        int base = rt.mark();
-        for (long k : kids) rt.push(k);
-        long a = rt.alloc(TY_ROPE, RP_KIDS + kids.length);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
+        long a = rt.alloc(TY_ROPE, RP_KIDS + n);
+        if (a == 0) return Val.NIL;
         rt.setSlot(a, RP_BYTES, Val.fixnum(bytes));
         rt.setSlot(a, RP_CPS, Val.fixnum(((long) cps << 1) | (ascii ? 1 : 0)));
         rt.setSlot(a, RP_FLAT, Val.NIL);
         rt.setSlot(a, RP_HASH, Val.NIL);
-        for (int i = 0; i < kids.length; i++) rt.setSlot(a, RP_KIDS + i, rt.r(base + i));
-        rt.popTo(base);
+        for (int i = 0; i < n; i++) rt.setSlot(a, RP_KIDS + i, rt.r(base + i));
         return Val.heap(a);
     }
 
@@ -723,7 +721,9 @@ public final class Str {
         // leaves stay at one depth on this side too.
         int h = ropeHeight(rt, rt.r(ai));
         int li = rt.push(ropeLift(rt, rt.r(bi), h));
-        long outv = ropeNode(rt, new long[]{ rt.r(ai), rt.r(li) });
+        int kbase = rt.mark();
+        rt.push(rt.r(ai)); rt.push(rt.r(li));
+        long outv = ropeNode(rt, kbase, 2);
         rt.popTo(base);
         return outv;
     }
@@ -740,7 +740,7 @@ public final class Str {
         int base = rt.mark();
         int vi = rt.push(v);
         for (int i = 0; i < h; i++) {
-            long n = ropeNode(rt, new long[]{ rt.r(vi) });
+            long n = ropeNode(rt, vi, 1);
             if (Val.isNil(n)) { rt.popTo(base); return Val.NIL; }
             rt.setR(vi, n);
         }
@@ -763,10 +763,10 @@ public final class Str {
         long outv;
         if (!Val.isNil(deeper)) {
             int ni = rt.push(deeper);
-            long[] kids = new long[n];
-            for (int i = 0; i < n - 1; i++) kids[i] = rt.slot(rt.r(ai), RP_KIDS + i);
-            kids[n - 1] = rt.r(ni);
-            outv = ropeNode(rt, kids);
+            int kbase = rt.mark();
+            for (int i = 0; i < n - 1; i++) rt.push(rt.slot(rt.r(ai), RP_KIDS + i));
+            rt.push(rt.r(ni));
+            outv = ropeNode(rt, kbase, n);
         } else if (n < FANOUT) {
             // Full below, room here: `b` joins as a sibling, LIFTED to the
             // height its siblings stand at.
@@ -774,10 +774,10 @@ public final class Str {
             long lifted = ropeLift(rt, rt.r(bi), h);
             if (Val.isNil(lifted)) { rt.popTo(base); return Val.NIL; }
             int ni = rt.push(lifted);
-            long[] kids = new long[n + 1];
-            for (int i = 0; i < n; i++) kids[i] = rt.slot(rt.r(ai), RP_KIDS + i);
-            kids[n] = rt.r(ni);
-            outv = ropeNode(rt, kids);
+            int kbase = rt.mark();
+            for (int i = 0; i < n; i++) rt.push(rt.slot(rt.r(ai), RP_KIDS + i));
+            rt.push(rt.r(ni));
+            outv = ropeNode(rt, kbase, n + 1);
         } else {
             outv = Val.NIL;
         }
