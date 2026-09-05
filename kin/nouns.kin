@@ -29,8 +29,8 @@
   (:require [flint.impl.rt :refer [defn return if let comment doc
                                    not == nil? is-heap is-fixnum is-double
                                    is-inline-str is-inline-kw as-heap ty
-                                   text str-cat
-                                   Rt Value Ty Text TRUE FALSE
+                                   static-text own-text text-empty str-cat
+                                   Rt Value Ty Text StaticText TRUE FALSE
                                    TY_STR TY_SYM TY_KW TY_CONS TY_EMPTY_LIST
                                    TY_LAZYSEQ TY_VEC TY_VECSEQ TY_RANGE
                                    TY_ARRAYMAP TY_HASHMAP TY_SET TY_MAPENTRY
@@ -39,56 +39,79 @@
                                    TY_VAR TY_DELAY TY_REGEX TY_MULTIFN
                                    TY_REDUCED TY_EXINFO]]))
 
+(doc "The literal noun phrase for `v`, or the empty one when there is none."
+     ""
+     "BORROWED, not built. Every answer here is a string literal, which is a"
+     "`&'"'"'static str` in Rust and already a `String` in both ports, so naming"
+     "one costs nothing anywhere -- the conversion happens once, in `describe`."
+     ""
+     "The empty answer means `no literal fits`, which only a heap value with a"
+     "tag this function does not know can produce.")
+(defn ^:method ^StaticText describe-literal [^Rt rt ^Value v]
+  (if (nil? rt v) (return (static-text "nil")))
+  (if (is-fixnum rt v) (return (static-text "an integer")))
+  (if (is-double rt v) (return (static-text "a double")))
+  (if (== v TRUE) (return (static-text "a boolean")))
+  (if (== v FALSE) (return (static-text "a boolean")))
+  (if (is-inline-str rt v) (return (static-text "an inline string")))
+  (if (is-inline-kw rt v) (return (static-text "an inline keyword")))
+  (if (not (is-heap v)) (return (static-text "an unknown immediate")))
+  (let [^Ty t (ty rt (as-heap v))]
+    (if (== t TY_STR) (return (static-text "a string")))
+    (if (== t TY_SYM) (return (static-text "a symbol")))
+    (if (== t TY_KW) (return (static-text "a keyword")))
+    (if (== t TY_CONS) (return (static-text "a list")))
+    (if (== t TY_EMPTY_LIST) (return (static-text "an empty list")))
+    (if (== t TY_LAZYSEQ) (return (static-text "a lazy seq")))
+    (if (== t TY_VEC) (return (static-text "a vector")))
+    (if (== t TY_VECSEQ) (return (static-text "a vector seq")))
+    (if (== t TY_RANGE) (return (static-text "a range")))
+    (if (== t TY_ARRAYMAP) (return (static-text "an array-map")))
+    (if (== t TY_HASHMAP) (return (static-text "a hash-map")))
+    (if (== t TY_SET) (return (static-text "a set")))
+    (if (== t TY_MAPENTRY) (return (static-text "a map entry")))
+    (if (== t TY_CLOSURE) (return (static-text "a function")))
+    (if (== t TY_NATIVEFN) (return (static-text "a builtin")))
+    (if (== t TY_TVEC) (return (static-text "a transient vector")))
+    (if (== t TY_TMAP) (return (static-text "a transient map")))
+    (if (== t TY_TSET) (return (static-text "a transient set")))
+    (if (== t TY_ROPE) (return (static-text "a rope")))
+    (if (== t TY_BYTES) (return (static-text "a byte string")))
+    (if (== t TY_RECORD) (return (static-text "a record")))
+    (if (== t TY_ATOM) (return (static-text "an atom")))
+    (if (== t TY_VAR) (return (static-text "a var")))
+    (if (== t TY_DELAY) (return (static-text "a delay")))
+    (if (== t TY_REGEX) (return (static-text "a regex")))
+    (if (== t TY_MULTIFN) (return (static-text "a multimethod")))
+    (if (== t TY_REDUCED) (return (static-text "a reduced")))
+    (if (== t TY_EXINFO) (return (static-text "an ex-info")))
+    (comment "NO LITERAL FOR THIS ONE, which is the single case that has to"
+             "BUILD a string. Answering the empty literal says so without"
+             "needing an `Option`, and the empty string is not a noun phrase"
+             "any other arm could return.")
+    (return (static-text ""))))
+
 (doc "What `v` is, as the noun phrase an error message needs."
      ""
      "`\"a keyword\"`, `\"an empty list\"` -- with the article, because every"
      "call site reads `\"seq over \" + describe(v) + \" ...\"` and an article"
      "chosen at the call site would have to know what the noun begins with."
      ""
+     "ONE ALLOCATION, AND USUALLY NONE OF THE STRING. Forty of the forty-one"
+     "answers are literals, so they are borrowed and converted once here rather"
+     "than each built where it is named -- in Rust that is one `String::from`"
+     "instead of forty, and in both ports it is nothing at all, because a"
+     "literal there is already the type this returns."
+     ""
      "The last arm names the NUMBER of a tag it does not know. A tag added to"
      "one runtime and not to this function still produces something a person"
      "can act on, which is the only arm here that could ever be reached by a"
      "correct program and the reason it builds a string instead of refusing.")
 (defn ^:pub ^:method ^Text describe [^Rt rt ^Value v]
-  (if (nil? rt v) (return (text "nil")))
-  (if (is-fixnum rt v) (return (text "an integer")))
-  (if (is-double rt v) (return (text "a double")))
-  (if (== v TRUE) (return (text "a boolean")))
-  (if (== v FALSE) (return (text "a boolean")))
-  (if (is-inline-str rt v) (return (text "an inline string")))
-  (if (is-inline-kw rt v) (return (text "an inline keyword")))
-  (if (not (is-heap v)) (return (text "an unknown immediate")))
-  (let [^Ty t (ty rt (as-heap v))]
-    (if (== t TY_STR) (return (text "a string")))
-    (if (== t TY_SYM) (return (text "a symbol")))
-    (if (== t TY_KW) (return (text "a keyword")))
-    (if (== t TY_CONS) (return (text "a list")))
-    (if (== t TY_EMPTY_LIST) (return (text "an empty list")))
-    (if (== t TY_LAZYSEQ) (return (text "a lazy seq")))
-    (if (== t TY_VEC) (return (text "a vector")))
-    (if (== t TY_VECSEQ) (return (text "a vector seq")))
-    (if (== t TY_RANGE) (return (text "a range")))
-    (if (== t TY_ARRAYMAP) (return (text "an array-map")))
-    (if (== t TY_HASHMAP) (return (text "a hash-map")))
-    (if (== t TY_SET) (return (text "a set")))
-    (if (== t TY_MAPENTRY) (return (text "a map entry")))
-    (if (== t TY_CLOSURE) (return (text "a function")))
-    (if (== t TY_NATIVEFN) (return (text "a builtin")))
-    (if (== t TY_TVEC) (return (text "a transient vector")))
-    (if (== t TY_TMAP) (return (text "a transient map")))
-    (if (== t TY_TSET) (return (text "a transient set")))
-    (if (== t TY_ROPE) (return (text "a rope")))
-    (if (== t TY_BYTES) (return (text "a byte string")))
-    (if (== t TY_RECORD) (return (text "a record")))
-    (if (== t TY_ATOM) (return (text "an atom")))
-    (if (== t TY_VAR) (return (text "a var")))
-    (if (== t TY_DELAY) (return (text "a delay")))
-    (if (== t TY_REGEX) (return (text "a regex")))
-    (if (== t TY_MULTIFN) (return (text "a multimethod")))
-    (if (== t TY_REDUCED) (return (text "a reduced")))
-    (if (== t TY_EXINFO) (return (text "an ex-info")))
-    (comment "THE ONLY ARM THAT BUILDS. Hole 5, and the reason this file is"
-             "the one that closes it: `str-cat` is variadic, so its Rust side"
-             "constructs the format string from the argument count -- which no"
-             "template can do, and which is all hole 5 ever was.")
-    (return (str-cat "object type " t))))
+  (let [^StaticText lit (describe-literal rt v)]
+    (if (not (text-empty rt lit))
+      (return (own-text lit)))
+    (comment "HOLE 5's one live use in this file: `str-cat` is variadic, so its"
+             "Rust side constructs the format string from the argument count,"
+             "which no template can do.")
+    (return (str-cat "object type " (ty rt (as-heap v))))))

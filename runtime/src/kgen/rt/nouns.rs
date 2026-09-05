@@ -17,130 +17,156 @@ use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
 
 impl Rt {
+    /// The literal noun phrase for `v`, or the empty one when there is none.
+    /// 
+    /// BORROWED, not built. Every answer here is a string literal, which is a
+    /// `&'
+    /// '
+    /// 'static str` in Rust and already a `String` in both ports, so naming
+    /// one costs nothing anywhere -- the conversion happens once, in `describe`.
+    /// 
+    /// The empty answer means `no literal fits`, which only a heap value with a
+    /// tag this function does not know can produce.
+    pub(crate) fn describe_literal(&self, v: Value) -> &'static str {
+        if v.is_nil() {
+            return "nil";
+        }
+        if v.is_fixnum() {
+            return "an integer";
+        }
+        if v.is_double() {
+            return "a double";
+        }
+        if v == TRUE {
+            return "a boolean";
+        }
+        if v == FALSE {
+            return "a boolean";
+        }
+        if v.is_inline_str() {
+            return "an inline string";
+        }
+        if v.is_inline_kw() {
+            return "an inline keyword";
+        }
+        if !v.is_heap() {
+            return "an unknown immediate";
+        }
+        let t: u8 = ty(&self.gc.sp, v.as_heap());
+        if t == TY_STR {
+            return "a string";
+        }
+        if t == TY_SYM {
+            return "a symbol";
+        }
+        if t == TY_KW {
+            return "a keyword";
+        }
+        if t == TY_CONS {
+            return "a list";
+        }
+        if t == TY_EMPTY_LIST {
+            return "an empty list";
+        }
+        if t == TY_LAZYSEQ {
+            return "a lazy seq";
+        }
+        if t == TY_VEC {
+            return "a vector";
+        }
+        if t == TY_VECSEQ {
+            return "a vector seq";
+        }
+        if t == TY_RANGE {
+            return "a range";
+        }
+        if t == TY_ARRAYMAP {
+            return "an array-map";
+        }
+        if t == TY_HASHMAP {
+            return "a hash-map";
+        }
+        if t == TY_SET {
+            return "a set";
+        }
+        if t == TY_MAPENTRY {
+            return "a map entry";
+        }
+        if t == TY_CLOSURE {
+            return "a function";
+        }
+        if t == TY_NATIVEFN {
+            return "a builtin";
+        }
+        if t == TY_TVEC {
+            return "a transient vector";
+        }
+        if t == TY_TMAP {
+            return "a transient map";
+        }
+        if t == TY_TSET {
+            return "a transient set";
+        }
+        if t == TY_ROPE {
+            return "a rope";
+        }
+        if t == TY_BYTES {
+            return "a byte string";
+        }
+        if t == TY_RECORD {
+            return "a record";
+        }
+        if t == TY_ATOM {
+            return "an atom";
+        }
+        if t == TY_VAR {
+            return "a var";
+        }
+        if t == TY_DELAY {
+            return "a delay";
+        }
+        if t == TY_REGEX {
+            return "a regex";
+        }
+        if t == TY_MULTIFN {
+            return "a multimethod";
+        }
+        if t == TY_REDUCED {
+            return "a reduced";
+        }
+        if t == TY_EXINFO {
+            return "an ex-info";
+        }
+        // NO LITERAL FOR THIS ONE, which is the single case that has to
+        // BUILD a string. Answering the empty literal says so without
+        // needing an `Option`, and the empty string is not a noun phrase
+        // any other arm could return.
+        return "";
+    }
     /// What `v` is, as the noun phrase an error message needs.
     /// 
     /// `"a keyword"`, `"an empty list"` -- with the article, because every
     /// call site reads `"seq over " + describe(v) + " ..."` and an article
     /// chosen at the call site would have to know what the noun begins with.
     /// 
+    /// ONE ALLOCATION, AND USUALLY NONE OF THE STRING. Forty of the forty-one
+    /// answers are literals, so they are borrowed and converted once here rather
+    /// than each built where it is named -- in Rust that is one `String::from`
+    /// instead of forty, and in both ports it is nothing at all, because a
+    /// literal there is already the type this returns.
+    /// 
     /// The last arm names the NUMBER of a tag it does not know. A tag added to
     /// one runtime and not to this function still produces something a person
     /// can act on, which is the only arm here that could ever be reached by a
     /// correct program and the reason it builds a string instead of refusing.
     pub fn describe(&self, v: Value) -> alloc::string::String {
-        if v.is_nil() {
-            return alloc::string::String::from("nil");
+        let lit: &'static str = self.describe_literal(v);
+        if !lit.is_empty() {
+            return alloc::string::String::from(lit);
         }
-        if v.is_fixnum() {
-            return alloc::string::String::from("an integer");
-        }
-        if v.is_double() {
-            return alloc::string::String::from("a double");
-        }
-        if v == TRUE {
-            return alloc::string::String::from("a boolean");
-        }
-        if v == FALSE {
-            return alloc::string::String::from("a boolean");
-        }
-        if v.is_inline_str() {
-            return alloc::string::String::from("an inline string");
-        }
-        if v.is_inline_kw() {
-            return alloc::string::String::from("an inline keyword");
-        }
-        if !v.is_heap() {
-            return alloc::string::String::from("an unknown immediate");
-        }
-        let t: u8 = ty(&self.gc.sp, v.as_heap());
-        if t == TY_STR {
-            return alloc::string::String::from("a string");
-        }
-        if t == TY_SYM {
-            return alloc::string::String::from("a symbol");
-        }
-        if t == TY_KW {
-            return alloc::string::String::from("a keyword");
-        }
-        if t == TY_CONS {
-            return alloc::string::String::from("a list");
-        }
-        if t == TY_EMPTY_LIST {
-            return alloc::string::String::from("an empty list");
-        }
-        if t == TY_LAZYSEQ {
-            return alloc::string::String::from("a lazy seq");
-        }
-        if t == TY_VEC {
-            return alloc::string::String::from("a vector");
-        }
-        if t == TY_VECSEQ {
-            return alloc::string::String::from("a vector seq");
-        }
-        if t == TY_RANGE {
-            return alloc::string::String::from("a range");
-        }
-        if t == TY_ARRAYMAP {
-            return alloc::string::String::from("an array-map");
-        }
-        if t == TY_HASHMAP {
-            return alloc::string::String::from("a hash-map");
-        }
-        if t == TY_SET {
-            return alloc::string::String::from("a set");
-        }
-        if t == TY_MAPENTRY {
-            return alloc::string::String::from("a map entry");
-        }
-        if t == TY_CLOSURE {
-            return alloc::string::String::from("a function");
-        }
-        if t == TY_NATIVEFN {
-            return alloc::string::String::from("a builtin");
-        }
-        if t == TY_TVEC {
-            return alloc::string::String::from("a transient vector");
-        }
-        if t == TY_TMAP {
-            return alloc::string::String::from("a transient map");
-        }
-        if t == TY_TSET {
-            return alloc::string::String::from("a transient set");
-        }
-        if t == TY_ROPE {
-            return alloc::string::String::from("a rope");
-        }
-        if t == TY_BYTES {
-            return alloc::string::String::from("a byte string");
-        }
-        if t == TY_RECORD {
-            return alloc::string::String::from("a record");
-        }
-        if t == TY_ATOM {
-            return alloc::string::String::from("an atom");
-        }
-        if t == TY_VAR {
-            return alloc::string::String::from("a var");
-        }
-        if t == TY_DELAY {
-            return alloc::string::String::from("a delay");
-        }
-        if t == TY_REGEX {
-            return alloc::string::String::from("a regex");
-        }
-        if t == TY_MULTIFN {
-            return alloc::string::String::from("a multimethod");
-        }
-        if t == TY_REDUCED {
-            return alloc::string::String::from("a reduced");
-        }
-        if t == TY_EXINFO {
-            return alloc::string::String::from("an ex-info");
-        }
-        // THE ONLY ARM THAT BUILDS. Hole 5, and the reason this file is
-        // the one that closes it: `str-cat` is variadic, so its Rust side
-        // constructs the format string from the argument count -- which no
-        // template can do, and which is all hole 5 ever was.
-        return alloc::format!("{}{}", "object type ", t);
+        // HOLE 5's one live use in this file: `str-cat` is variadic, so its
+        // Rust side constructs the format string from the argument count,
+        // which no template can do.
+        return alloc::format!("{}{}", "object type ", ty(&self.gc.sp, v.as_heap()));
     }
 }

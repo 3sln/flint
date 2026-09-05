@@ -11,17 +11,17 @@ import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 
 public final class Nouns {
-    /// What `v` is, as the noun phrase an error message needs.
+    /// The literal noun phrase for `v`, or the empty one when there is none.
     /// 
-    /// `"a keyword"`, `"an empty list"` -- with the article, because every
-    /// call site reads `"seq over " + describe(v) + " ..."` and an article
-    /// chosen at the call site would have to know what the noun begins with.
+    /// BORROWED, not built. Every answer here is a string literal, which is a
+    /// `&'
+    /// '
+    /// 'static str` in Rust and already a `String` in both ports, so naming
+    /// one costs nothing anywhere -- the conversion happens once, in `describe`.
     /// 
-    /// The last arm names the NUMBER of a tag it does not know. A tag added to
-    /// one runtime and not to this function still produces something a person
-    /// can act on, which is the only arm here that could ever be reached by a
-    /// correct program and the reason it builds a string instead of refusing.
-    public static String describe(Rt rt, long v) {
+    /// The empty answer means `no literal fits`, which only a heap value with a
+    /// tag this function does not know can produce.
+    public static String describeLiteral(Rt rt, long v) {
         if (Val.isNil(v)) {
             return "nil";
         }
@@ -131,10 +131,36 @@ public final class Nouns {
         if (t == TY_EXINFO) {
             return "an ex-info";
         }
-        // THE ONLY ARM THAT BUILDS. Hole 5, and the reason this file is
-        // the one that closes it: `str-cat` is variadic, so its Rust side
-        // constructs the format string from the argument count -- which no
-        // template can do, and which is all hole 5 ever was.
-        return "object type " + t;
+        // NO LITERAL FOR THIS ONE, which is the single case that has to
+        // BUILD a string. Answering the empty literal says so without
+        // needing an `Option`, and the empty string is not a noun phrase
+        // any other arm could return.
+        return "";
+    }
+    /// What `v` is, as the noun phrase an error message needs.
+    /// 
+    /// `"a keyword"`, `"an empty list"` -- with the article, because every
+    /// call site reads `"seq over " + describe(v) + " ..."` and an article
+    /// chosen at the call site would have to know what the noun begins with.
+    /// 
+    /// ONE ALLOCATION, AND USUALLY NONE OF THE STRING. Forty of the forty-one
+    /// answers are literals, so they are borrowed and converted once here rather
+    /// than each built where it is named -- in Rust that is one `String::from`
+    /// instead of forty, and in both ports it is nothing at all, because a
+    /// literal there is already the type this returns.
+    /// 
+    /// The last arm names the NUMBER of a tag it does not know. A tag added to
+    /// one runtime and not to this function still produces something a person
+    /// can act on, which is the only arm here that could ever be reached by a
+    /// correct program and the reason it builds a string instead of refusing.
+    public static String describe(Rt rt, long v) {
+        String lit = describeLiteral(rt, v);
+        if (!lit.isEmpty()) {
+            return lit;
+        }
+        // HOLE 5's one live use in this file: `str-cat` is variadic, so its
+        // Rust side constructs the format string from the argument count,
+        // which no template can do.
+        return "object type " + ty(rt.gc.sp, Val.asHeap(v));
     }
 }

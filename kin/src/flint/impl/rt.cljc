@@ -70,6 +70,19 @@
 (def RootIx
   "An index into the shadow stack. `usize` in Rust, `int` in the other two."
   {:name 'RootIx :types {:rust "usize" :java "int" :csharp "int"} :methods {}})
+(def StaticText
+  "A BORROWED host string that outlives everything: a literal, and only ever a
+  literal.
+
+  Rust spells it `&'static str` and both ports spell it `String`/`string`, the
+  same as `Text` -- so this tag costs the ports nothing and saves Rust an
+  allocation and a copy per literal. It is NOT hole 6's borrowed type: a
+  `&'static` borrows from the binary, not from `self`, so it carries no
+  lifetime a generated signature would have to name."
+  {:name 'StaticText
+   :types {:rust "&'static str" :java "String" :csharp "string"}
+   :methods {}})
+
 (def Text
   "A HOST string, which is not a flint string VALUE.
 
@@ -123,7 +136,7 @@
   {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
 
 (def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'U32 U32 'RootIx RootIx
-               'Text Text
+               'Text Text 'StaticText StaticText
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'U32s U32s 'U64s U64s 'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
@@ -770,6 +783,23 @@
     ;; an error path, called when a program is already about to be told it did
     ;; something wrong, and paying an allocation there to have ONE source is
     ;; the trade this port makes everywhere.
+    ;; A LITERAL, kept borrowed. Every target passes it straight through --
+    ;; Rust's string literal already IS a `&'static str`, and the ports' already
+    ;; is a `String`. The point is what does NOT happen: no allocation and no
+    ;; copy at each of the forty places a literal is answered.
+    'static-text (core/call {:rust "{0}" :java "{0}" :csharp "{0}"}
+                            {:tag StaticText})
+    ;; ... and the ONE conversion, where a borrowed literal becomes the owned
+    ;; string a caller can keep.
+    'own-text (core/call {:rust "alloc::string::String::from({0})"
+                          :java "{0}" :csharp "{0}"}
+                         {:tag Text})
+    ;; Is a borrowed literal the empty one? Used as "I have no literal for
+    ;; this", which is the only case that has to build a string.
+    'text-empty (core/call {:rust "{1}.is_empty()"
+                            :java "{1}.isEmpty()"
+                            :csharp "({1}.Length == 0)"})
+
     'text (core/call {:rust "alloc::string::String::from({0})"
                       :java "{0}" :csharp "{0}"}
                      {:tag Text})
