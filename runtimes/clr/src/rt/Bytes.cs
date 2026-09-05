@@ -88,6 +88,18 @@ public static class Bytes {
     /// and the caller pops -- see the Rust and Java copies, which say the same.
     static long Node(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Bytenode.BNode(rt, bas, n); }
 
+    /// Copy the range out into a fresh leaf -- see the Java and Rust copies.
+    public static long CopyRange(Rt rt, long v, int from, int to) {
+        List<byte[]> parts = new List<byte[]>();
+        AppendRange(rt, v, from, to, parts);
+        int total = 0;
+        foreach (byte[] p in parts) total += p.Length;
+        byte[] outb = new byte[total];
+        int at0 = 0;
+        foreach (byte[] p in parts) { System.Array.Copy(p, 0, outb, at0, p.Length); at0 += p.Length; }
+        return Of(rt, outb);
+    }
+
     public static long CopyConcat(Rt rt, long a, long b) {
         byte[] x = ToArray(rt, a), y = ToArray(rt, b);
         byte[] both = new byte[x.Length + y.Length];
@@ -161,14 +173,7 @@ public static class Bytes {
         int hi = System.Math.Min(System.Math.Max(to, lo), n);
         if (lo == 0 && hi == n) return v;
         if (hi - lo < Str.SLICE_MIN || !IsBrope(rt, v)) {
-            List<byte[]> parts = new List<byte[]>();
-            AppendRange(rt, v, lo, hi, parts);
-            int total = 0;
-            foreach (byte[] p in parts) total += p.Length;
-            byte[] outb = new byte[total];
-            int at0 = 0;
-            foreach (byte[] p in parts) { System.Array.Copy(p, 0, outb, at0, p.Length); at0 += p.Length; }
-            return Of(rt, outb);
+            return CopyRange(rt, v, lo, hi);
         }
         int bas = rt.Mark();
         int vi = rt.Push(v);

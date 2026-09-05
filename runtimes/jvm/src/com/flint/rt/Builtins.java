@@ -1133,9 +1133,20 @@ rt.describe(v) + " is not a transient vector");
                 : b;
         });
         def("flint/b-concat", (rt, at, n) -> Bytes.concat(rt, rt.vat(at), rt.vat(at + 1)));
-        def("flint/b-slice", (rt, at, n) -> Bytes.slice(rt, rt.vat(at),
-            (int) Val.asFixnum(rt.vat(at + 1)),
-            n > 2 ? (int) Val.asFixnum(rt.vat(at + 2)) : Bytes.count(rt, rt.vat(at))));
+        def("flint/b-slice", (rt, at, n) -> {
+            // REFUSED, not clamped. This used to lean on `Bytes.slice` doing
+            // `Math.max(from, 0)`, so a negative bound quietly became a slice
+            // from zero here and `IllegalArgumentException` on native. The
+            // bounds are kin's `I32` now, whose contract is that the high bit
+            // is never set, so screening them is the caller's job -- and the
+            // caller is this.
+            long f = Val.asFixnum(rt.vat(at + 1));
+            long t = n > 2 ? Val.asFixnum(rt.vat(at + 2)) : Bytes.count(rt, rt.vat(at));
+            if (!Val.isFixnum(rt.vat(at + 1)) || (n > 2 && !Val.isFixnum(rt.vat(at + 2)))
+                || f < 0 || t < 0)
+                return rt.throwStr("IllegalArgumentException", "b-slice wants two integers");
+            return Bytes.slice(rt, rt.vat(at), (int) f, (int) t);
+        });
         def("flint/b-depth", (rt, at, n) -> Val.fixnum(Bytes.depth(rt, rt.vat(at))));
         def("flint/str->b", (rt, at, n) -> Bytes.of(rt, Str.bytes(rt, rt.vat(at))));
         def("flint/b->str", (rt, at, n) -> Str.of(rt,

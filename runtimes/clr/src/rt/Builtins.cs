@@ -1038,9 +1038,15 @@ public static class Builtins {
                 : b;
         });
         Def("flint/b-concat", (rt, at, n) => Bytes.Concat(rt, rt.VAt(at), rt.VAt(at + 1)));
-        Def("flint/b-slice", (rt, at, n) => Bytes.Slice(rt, rt.VAt(at),
-            (int) Val.AsFixnum(rt.VAt(at + 1)),
-            n > 2 ? (int) Val.AsFixnum(rt.VAt(at + 2)) : Bytes.Count(rt, rt.VAt(at))));
+        Def("flint/b-slice", (rt, at, n) => {
+            // Refused, not clamped -- see the Java copy.
+            long f = Val.AsFixnum(rt.VAt(at + 1));
+            long t = n > 2 ? Val.AsFixnum(rt.VAt(at + 2)) : Bytes.Count(rt, rt.VAt(at));
+            if (!Val.IsFixnum(rt.VAt(at + 1)) || (n > 2 && !Val.IsFixnum(rt.VAt(at + 2)))
+                || f < 0 || t < 0)
+                return rt.ThrowStr("IllegalArgumentException", "b-slice wants two integers");
+            return Bytes.Slice(rt, rt.VAt(at), (int) f, (int) t);
+        });
         Def("flint/b-depth", (rt, at, n) => Val.Fixnum(Bytes.Depth(rt, rt.VAt(at))));
         Def("flint/str->b", (rt, at, n) => Bytes.Of(rt, Str.Bytes(rt, rt.VAt(at))));
         Def("flint/b->str", (rt, at, n) =>

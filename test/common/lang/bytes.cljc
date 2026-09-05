@@ -53,3 +53,19 @@
     (expect bytes? e)
     (expect = e (b/of-string ""))
     (expect = 0 (b/depth e))))
+
+(defn ^:flint.check/test slice-bounds-agree []
+  ;; A SECOND DIVERGENCE OF THE SAME FAMILY as `at` past the end. Native
+  ;; refused a negative bound -- `b-slice wants two integers` -- and both ports
+  ;; clamped it to zero and answered a slice. Reachable through
+  ;; `flint.bytes/slice`, which is the only arity the library exposes.
+  (let [b (b/of-string "hello")]
+    (expect = "ell" (b/to-string (b/slice b 1 4)))
+    ;; Whole-range is the identity, and shares rather than copies.
+    (expect = "hello" (b/to-string (b/slice b 0 5)))
+    (expect = "" (b/to-string (b/slice b 2 2)))
+    ;; Past the end clamps -- both sides always agreed about THIS one.
+    (expect = "llo" (b/to-string (b/slice b 2 99)))
+    ;; And a negative bound is refused, which is what native has always done.
+    (expect = :refused
+            (try (b/slice b -1 3) :no-throw (catch Throwable _ :refused)))))

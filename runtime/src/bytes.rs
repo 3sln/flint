@@ -99,6 +99,19 @@ impl Rt {
 
 
 
+    /// Copy the range out into a fresh leaf.
+    ///
+    /// `pub(crate)` for the same reason as `b_copy_range`'s neighbour below:
+    /// this is the SINK half of `Bytes`, still hand-written, and the generated
+    /// tree half reaches it across a module boundary. `SLICE_MIN` is the
+    /// retention fix -- a three-byte slice must not keep a 509 KB section
+    /// alive -- so this path exists to STOP sharing, deliberately.
+    pub(crate) fn b_copy_range(&mut self, v: Value, from: u32, to: u32) -> Value {
+        let mut out = alloc::vec::Vec::with_capacity((to - from) as usize);
+        self.b_append_range(v, from, to, &mut out);
+        self.new_bytes(&out)
+    }
+
     /// `pub(crate)` because `kgen::rt::bytenode` calls it: the tree half of
     /// `Bytes` is generated and this half is not, so the boundary between
     /// them is a module boundary now.
@@ -203,11 +216,7 @@ impl Rt {
         // no code-point count, no ASCII bit -- so this is `rope_slice` with the
         // metadata dropped.
         if to - from < SLICE_MIN || !self.is_brope(v) {
-            // Small, or a leaf: copy. `SLICE_MIN` is the retention fix -- a
-            // three-byte slice must not keep the section alive.
-            let mut out = alloc::vec::Vec::with_capacity((to - from) as usize);
-            self.b_append_range(v, from, to, &mut out);
-            return self.new_bytes(&out);
+            return self.b_copy_range(v, from, to);
         }
         let base = self.mark();
         let vi = self.push(v);

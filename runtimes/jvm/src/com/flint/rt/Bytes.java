@@ -91,6 +91,21 @@ public final class Bytes {
     /// and the caller pops -- see the Rust and C# copies, which say the same.
     static long node(Rt rt, int base, int n) { return com._3sln.flint.kgen.rt.Bytenode.bNode(rt, base, n); }
 
+    /// Copy the range out into a fresh leaf. The SINK half, still hand-written,
+    /// reached from the generated tree half. `SLICE_MIN` is the retention fix --
+    /// a three-byte slice must not keep a 509 KB section alive -- so this path
+    /// exists to STOP sharing, deliberately.
+    public static long copyRange(Rt rt, long v, int from, int to) {
+        ArrayList<byte[]> parts = new ArrayList<>();
+        appendRange(rt, v, from, to, parts);
+        int total = 0;
+        for (byte[] p : parts) total += p.length;
+        byte[] outb = new byte[total];
+        int at = 0;
+        for (byte[] p : parts) { System.arraycopy(p, 0, outb, at, p.length); at += p.length; }
+        return of(rt, outb);
+    }
+
     public static long copyConcat(Rt rt, long a, long b) {
         byte[] x = toArray(rt, a), y = toArray(rt, b);
         byte[] both = new byte[x.length + y.length];
@@ -166,16 +181,7 @@ public final class Bytes {
         int hi = Math.min(Math.max(to, lo), n);
         if (lo == 0 && hi == n) return v;
         if (hi - lo < Str.SLICE_MIN || !isBrope(rt, v)) {
-            // Small, or a leaf: copy. `SLICE_MIN` is the retention fix -- a
-            // three-byte slice must not keep the section alive.
-            ArrayList<byte[]> parts = new ArrayList<>();
-            appendRange(rt, v, lo, hi, parts);
-            int total = 0;
-            for (byte[] p : parts) total += p.length;
-            byte[] outb = new byte[total];
-            int at = 0;
-            for (byte[] p : parts) { System.arraycopy(p, 0, outb, at, p.length); at += p.length; }
-            return of(rt, outb);
+            return copyRange(rt, v, lo, hi);
         }
         int base = rt.mark();
         int vi = rt.push(v);
