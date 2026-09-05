@@ -50,27 +50,13 @@ public static class Bytes {
         return Val.Heap(a);
     }
 
-    static void Append(Rt rt, long v, List<byte[]> outv) {
-        if (!Val.IsHeap(v)) return;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
-        if (t == Obj.TyBytes) {
-            outv.Add(rt.gc.sp.Bytes(Val.AsHeap(v) + Obj.Hdr, Obj.Len(rt.gc.sp, Val.AsHeap(v))));
-        } else if (t == Obj.TyBrope) {
-            long flat = rt.Slot(v, BB_FLAT);
-            if (!Val.IsNil(flat)) { Append(rt, flat, outv); return; }
-            int n = Obj.Len(rt.gc.sp, Val.AsHeap(v)) - BB_KIDS;
-            for (int i = 0; i < n; i++) Append(rt, rt.Slot(v, BB_KIDS + i), outv);
-        }
-    }
 
+    /// The bytes as a HOST array -- see the Java copy.
     public static byte[] ToArray(Rt rt, long v) {
-        List<byte[]> parts = new List<byte[]>();
-        Append(rt, v, parts);
-        int total = 0;
-        foreach (byte[] p in parts) total += p.Length;
-        byte[] outb = new byte[total];
-        int at = 0;
-        foreach (byte[] p in parts) { System.Array.Copy(p, 0, outb, at, p.Length); at += p.Length; }
+        int s = rt.SinkOpen();
+        global::_3sln.Flint.Kgen.Rt.Byteflat.BAppend(rt, v, s);
+        byte[] outb = rt.SinkArray(s);
+        rt.SinkClose(s);
         return outb;
     }
 

@@ -82,6 +82,19 @@ pub struct Rt {
     running: bool,
     pub gc: crate::gc::GcPtr,
     pub roots: Roots,
+    /// GROWABLE BYTE BUFFERS, owned by the runtime and addressed by index.
+    ///
+    /// `doc/goals/kin-port.md`'s hole 5: every operation that flattens a tree
+    /// needs somewhere to put the bytes, and each runtime reached for its own
+    /// host type -- `Vec<u8>`, `ByteArrayOutputStream`, `MemoryStream`. Those
+    /// have nothing in common a generated source could name, so the operations
+    /// that used one could not be written once.
+    ///
+    /// A buffer HELD BY THE RUNTIME and named by an index has: an index is an
+    /// integer in all three, the lifetime is the runtime's rather than a
+    /// borrow's, and it is the same shape the shadow stack already uses for
+    /// exactly the same reason. `sink_open`/`sink_close` are `mark`/`pop_to`.
+    pub(crate) sinks: alloc::vec::Vec<alloc::vec::Vec<u8>>,
     /// The in-flight thrown value, or `nil`. Native builtins signal failure by
     /// setting this and returning `nil`; the VM checks it after every call.
     pub thrown: Value,
@@ -297,6 +310,7 @@ impl Rt {
             running: false,
             gc,
             roots: Roots::new(shared),
+            sinks: alloc::vec::Vec::new(),
             thrown: NIL,
             frames: alloc::vec::Vec::new(),
             handlers: alloc::vec::Vec::new(),

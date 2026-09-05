@@ -1,0 +1,55 @@
+;; Flattening a byte tree into a sink.
+;;
+;; `b-append` is the one walk every other byte operation is written in terms
+;; of, and it is the reason hole 5 was the last thing standing: it needs
+;; somewhere to put the bytes, and until the runtimes agreed on what that is
+;; there was nothing for a generated source to name. `Sink` is that agreement
+;; -- a buffer the runtime owns, named by an index, because an index is an
+;; integer in all three where their growable byte types have nothing in common.
+;;
+;; THE CACHED FLATTENING SHORT-CIRCUITS THE WALK. A node that has already been
+;; flattened once holds the result in `BB_FLAT`, and copying that is one run
+;; instead of a descent -- which is what makes repeated reads of the same rope
+;; cheap rather than repeatedly quadratic.
+(ns flint.rt.byteflat
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != not nil? is-heap as-heap ty
+                                   + - for olen slot
+                                   sink-open sink-close sink-put-run sink-bytes
+                                   Rt Value Ty I32 Sink HDR
+                                   TY_BYTES TY_BROPE BB_FLAT BB_KIDS]]))
+
+(doc "Append every byte of `v` to the sink `s`."
+     ""
+     "Answers nothing: the bytes are the answer, and they go where the caller"
+     "said. A value that is not a byte string appends nothing rather than"
+     "refusing -- every caller here has already decided what `v` is.")
+(defn ^:pub ^:method b-append [^:mut ^Rt rt ^Value v ^Sink s]
+  (if (not (is-heap v))
+    (return))
+  (let [^Ty t (ty rt (as-heap v))]
+    (if (== t TY_BYTES)
+      (do (sink-put-run rt s (+ (as-heap v) HDR) (olen rt v))
+          (return)))
+    (if (!= t TY_BROPE)
+      (return))
+    (comment "ALREADY FLATTENED: one run rather than a descent.")
+    (let [^Value flat (slot rt v BB_FLAT)]
+      (if (not (nil? rt flat))
+        (do (sink-put-run rt s (+ (as-heap flat) HDR) (olen rt flat))
+            (return))))
+    (let [^I32 n (- (olen rt v) BB_KIDS)]
+      (for [^I32 i 0 n]
+        (b-append rt (slot rt v (+ BB_KIDS i)) s)))))
+
+(doc "`v` as one flat byte string, whatever tier it was."
+     ""
+     "The sink is opened and closed HERE, which is the shape every user of one"
+     "should have: whoever opens it closes it, and nothing else can be holding"
+     "an index into it by the time it goes.")
+(defn ^:pub ^:method ^Value b-to-flat [^:mut ^Rt rt ^Value v]
+  (let [^Sink s (sink-open rt)]
+    (b-append rt v s)
+    (let [^Value out (sink-bytes rt s)]
+      (sink-close rt s)
+      (return out))))

@@ -53,28 +53,15 @@ public final class Bytes {
         return Val.heap(a);
     }
 
-    static void append(Rt rt, long v, ArrayList<byte[]> out) {
-        if (!Val.isHeap(v)) return;
-        int t = ty(rt.gc.sp, Val.asHeap(v));
-        if (t == TY_BYTES) {
-            out.add(rt.gc.sp.bytes(Val.asHeap(v) + HDR, len(rt.gc.sp, Val.asHeap(v))));
-        } else if (t == TY_BROPE) {
-            long flat = rt.slot(v, BB_FLAT);
-            if (!Val.isNil(flat)) { append(rt, flat, out); return; }
-            int n = len(rt.gc.sp, Val.asHeap(v)) - BB_KIDS;
-            for (int i = 0; i < n; i++) append(rt, rt.slot(v, BB_KIDS + i), out);
-        }
-    }
 
+    /// The bytes as a HOST array, for host code outside the port. Inside it
+    /// everything goes through a sink; this is the one place that leaves.
     public static byte[] toArray(Rt rt, long v) {
-        ArrayList<byte[]> parts = new ArrayList<>();
-        append(rt, v, parts);
-        int total = 0;
-        for (byte[] p : parts) total += p.length;
-        byte[] outb = new byte[total];
-        int at = 0;
-        for (byte[] p : parts) { System.arraycopy(p, 0, outb, at, p.length); at += p.length; }
-        return outb;
+        int s = rt.sinkOpen();
+        com._3sln.flint.kgen.rt.Byteflat.bAppend(rt, v, s);
+        byte[] out = rt.sinkArray(s);
+        rt.sinkClose(s);
+        return out;
     }
 
     /// The byte at `i`, or -1. Descends rather than flattening, which is why

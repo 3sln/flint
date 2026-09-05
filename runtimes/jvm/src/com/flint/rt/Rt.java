@@ -25,6 +25,59 @@ import static com.flint.rt.Obj.*;
 /// The frame stack is DATA, so a green thread is a saved copy of it and a
 /// snapshot carries it. Neither is bolted on afterwards; both fall out.
 public final class Rt {
+
+    // ------------------------------------------------------------- the sink
+    //
+    // `doc/goals/kin-port.md`'s hole 5. Every operation that flattens a tree
+    // needs somewhere to put the bytes, and each runtime reached for its own
+    // host type -- `Vec<u8>` there, `ByteArrayOutputStream` here,
+    // `MemoryStream` on the CLR. Those have nothing in common a generated
+    // source could name, so the operations that used one could not be written
+    // once.
+    //
+    // A buffer HELD BY THE RUNTIME and named by an index has: an index is an
+    // integer in all three, the lifetime is the runtime's rather than a
+    // borrow's, and it is the same shape the shadow stack already uses for the
+    // same reason. `sinkOpen`/`sinkClose` are `mark`/`popTo`.
+    private final java.util.ArrayList<java.io.ByteArrayOutputStream> sinks =
+        new java.util.ArrayList<>();
+
+    /// Open a buffer and answer its index.
+    public int sinkOpen() {
+        sinks.add(new java.io.ByteArrayOutputStream());
+        return sinks.size() - 1;
+    }
+
+    /// Release `s` and everything opened after it.
+    public void sinkClose(int s) {
+        while (sinks.size() > s) sinks.remove(sinks.size() - 1);
+    }
+
+    /// How many bytes are in it.
+    public int sinkLen(int s) { return sinks.get(s).size(); }
+
+    /// One byte.
+    public void sinkPut(int s, int b) { sinks.get(s).write(b & 0xFF); }
+
+    /// A run of `len` heap bytes from `addr`.
+    public void sinkPutRun(int s, long addr, int len) {
+        sinks.get(s).write(gc.sp.bytes(addr, len), 0, len);
+    }
+
+    /// The raw contents, for host code that wants an array rather than a value.
+    public byte[] sinkArray(int s) { return sinks.get(s).toByteArray(); }
+
+    /// The contents as a byte string. The sink is left alone -- the caller
+    /// closes it, because the caller opened it.
+    public long sinkBytes(int s) {
+        return Bytes.of(this, sinks.get(s).toByteArray());
+    }
+
+    /// The contents as a string. Invalid UTF-8 answers the empty string.
+    public long sinkString(int s) {
+        return Str.of(this, new String(sinks.get(s).toByteArray(),
+                                       java.nio.charset.StandardCharsets.UTF_8));
+    }
     public final Gc gc;
     public final Roots roots = new Roots();
 

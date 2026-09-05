@@ -66,31 +66,15 @@ impl Rt {
 
     /// Append this byte string's contents to `out`. The one walk every other
     /// operation is written in terms of.
-    pub fn b_append(&self, v: Value, out: &mut alloc::vec::Vec<u8>) {
-        if !v.is_heap() {
-            return;
-        }
-        match ty(&self.gc.sp, v.as_heap()) {
-            TY_BYTES => out.extend_from_slice(raw_bytes(&self.gc.sp, v.as_heap())),
-            TY_BROPE => {
-                let flat = self.slot(v, BB_FLAT);
-                if !flat.is_nil() {
-                    out.extend_from_slice(raw_bytes(&self.gc.sp, flat.as_heap()));
-                    return;
-                }
-                let n = len(&self.gc.sp, v.as_heap()) - BB_KIDS;
-                for i in 0..n {
-                    let k = self.slot(v, BB_KIDS + i);
-                    self.b_append(k, out);
-                }
-            }
-            _ => {}
-        }
-    }
 
-    pub fn b_to_vec(&self, v: Value) -> alloc::vec::Vec<u8> {
-        let mut out = alloc::vec::Vec::with_capacity(self.b_count(v) as usize);
-        self.b_append(v, &mut out);
+    /// The bytes as a HOST vector, for host code outside the port -- the
+    /// codec, the builtins that hand bytes to a caller. Inside the port
+    /// everything goes through a sink; this is the one place that leaves.
+    pub fn b_to_vec(&mut self, v: Value) -> alloc::vec::Vec<u8> {
+        let s = self.sink_open();
+        self.b_append(v, s);
+        let out = self.sinks[s as usize].clone();
+        self.sink_close(s);
         out
     }
 
@@ -98,6 +82,64 @@ impl Rt {
     /// 0 for a leaf, otherwise the node's recorded depth.
 
 
+
+    // ---------------------------------------------------------- the sink
+    //
+    // Hole 5's other half. See `Rt::sinks` for why a buffer the runtime owns
+    // and an index that names it, rather than each target's own growable type.
+
+    /// Open a buffer and answer its index. `sink_close` releases it and every
+    /// buffer opened after it, which is `pop_to`'s discipline exactly.
+    pub fn sink_open(&mut self) -> u32 {
+        self.sinks.push(alloc::vec::Vec::new());
+        (self.sinks.len() - 1) as u32
+    }
+
+    /// Release `s` and everything opened after it.
+    pub fn sink_close(&mut self, s: u32) {
+        self.sinks.truncate(s as usize);
+    }
+
+    /// How many bytes are in it.
+    pub fn sink_len(&self, s: u32) -> u32 {
+        self.sinks[s as usize].len() as u32
+    }
+
+    /// One byte.
+    pub fn sink_put(&mut self, s: u32, b: u32) {
+        self.sinks[s as usize].push(b as u8);
+    }
+
+    /// A RUN OF HEAP BYTES, `len` of them from `addr`.
+    ///
+    /// The heap and the sinks are separate fields, so the read borrows one
+    /// while the write borrows the other -- which is why this is a method on
+    /// `Rt` rather than something a caller could assemble from `read_u8`.
+    pub fn sink_put_run(&mut self, s: u32, addr: crate::mem::Addr, len: u32) {
+        let src = self.gc.sp.bytes(addr, len);
+        self.sinks[s as usize].extend_from_slice(src);
+    }
+
+    /// The sink's contents as a byte string. The sink is left alone -- the
+    /// caller closes it, because the caller opened it.
+    pub fn sink_bytes(&mut self, s: u32) -> Value {
+        let n = self.sinks[s as usize].len() as u32;
+        let a = self.alloc_bytes(n);
+        if a == 0 {
+            return NIL;
+        }
+        let src = &self.sinks[s as usize];
+        self.gc.sp.bytes_mut(a + HDR, n).copy_from_slice(src);
+        Value::heap(a)
+    }
+
+    /// The sink's contents as a string. Invalid UTF-8 answers the empty
+    /// string, which is what `rope_slice` did before this existed.
+    pub fn sink_string(&mut self, s: u32) -> Value {
+        let owned: alloc::vec::Vec<u8> = self.sinks[s as usize].clone();
+        let t = core::str::from_utf8(&owned).unwrap_or("");
+        self.string(t)
+    }
 
     /// Copy the range out into a fresh leaf.
     ///
@@ -116,10 +158,12 @@ impl Rt {
     /// `Bytes` is generated and this half is not, so the boundary between
     /// them is a module boundary now.
     pub(crate) fn b_copy_concat(&mut self, a: Value, b: Value) -> Value {
-        let mut out = alloc::vec::Vec::with_capacity((self.b_count(a) + self.b_count(b)) as usize);
-        self.b_append(a, &mut out);
-        self.b_append(b, &mut out);
-        self.new_bytes(&out)
+        let s = self.sink_open();
+        self.b_append(a, s);
+        self.b_append(b, s);
+        let out = self.sink_bytes(s);
+        self.sink_close(s);
+        out
     }
 
 

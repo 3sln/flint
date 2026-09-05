@@ -83,6 +83,20 @@
    :types {:rust "&'static str" :java "String" :csharp "string"}
    :methods {}})
 
+(def Sink
+  "A GROWABLE BYTE BUFFER, named by an index into the runtime's own list.
+
+  `doc/goals/kin-port.md`'s hole 5. Each runtime already had a growable byte
+  type and no two were the same -- `Vec<u8>`, `ByteArrayOutputStream`,
+  `MemoryStream` -- so the operations that used one could not be written once.
+  What they DO have in common is an integer, so the buffer lives on the runtime
+  and this names which one. The lifetime is the runtime's rather than a
+  borrow's, which is also what keeps it clear of hole 6.
+
+  `sink-open`/`sink-close` are `mark`/`pop-to` for buffers, and the caller that
+  opened one closes it."
+  {:name 'Sink :types {:rust "u32" :java "int" :csharp "int"} :methods {}})
+
 (def Text
   "A HOST string, which is not a flint string VALUE.
 
@@ -136,7 +150,7 @@
   {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
 
 (def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'U32 U32 'RootIx RootIx
-               'Text Text 'StaticText StaticText
+               'Text Text 'StaticText StaticText 'Sink Sink
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'U32s U32s 'U64s U64s 'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
@@ -859,6 +873,30 @@
     ;; REFUSED on measurement. Both ports already read the byte directly, and
     ;; Rust has the same primitive one layer down, so this converges onto the
     ;; spelling all three can say rather than the one only Rust can.
+    ;; --- THE SINK, hole 5's other half --------------------------------
+    'sink-open (core/call {:rust "{0}.sink_open()"
+                           :java "{0}.sinkOpen()" :csharp "{0}.SinkOpen()"}
+                          {:tag Sink})
+    'sink-close (core/call {:rust "{0}.sink_close({1})"
+                            :java "{0}.sinkClose({1})" :csharp "{0}.SinkClose({1})"})
+    'sink-len (core/call {:rust "{0}.sink_len({1})"
+                          :java "{0}.sinkLen({1})" :csharp "{0}.SinkLen({1})"}
+                         {:tag I32})
+    'sink-put (core/call {:rust "{0}.sink_put({1}, {2})"
+                          :java "{0}.sinkPut({1}, {2})" :csharp "{0}.SinkPut({1}, {2})"})
+    ;; A RUN of heap bytes. The read and the write touch different fields of
+    ;; the runtime, which is why this is one operation rather than a loop over
+    ;; `read-u8` -- and why it is the only one that has to know an address.
+    'sink-put-run (core/call {:rust "{0}.sink_put_run({1}, {2}, {3})"
+                              :java "{0}.sinkPutRun({1}, {2}, {3})"
+                              :csharp "{0}.SinkPutRun({1}, {2}, {3})"})
+    'sink-bytes (core/call {:rust "{0}.sink_bytes({1})"
+                            :java "{0}.sinkBytes({1})" :csharp "{0}.SinkBytes({1})"}
+                           {:tag Value})
+    'sink-string (core/call {:rust "{0}.sink_string({1})"
+                             :java "{0}.sinkString({1})" :csharp "{0}.SinkString({1})"}
+                            {:tag Value})
+
     'read-u8 (core/call {:rust "({0}.gc.sp.read_u8({1}) as u32)"
                          :java "{0}.gc.sp.readU8({1})"
                          :csharp "{0}.gc.sp.ReadU8({1})"})

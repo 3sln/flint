@@ -2988,7 +2988,8 @@ impl Rt {
             let off = out.len() as u32;
             let plen = if self.is_bytes(payload) {
                 let n = self.b_count(payload);
-                self.b_append(payload, out);
+                let bs = self.b_to_vec(payload);
+                out.extend_from_slice(&bs);
                 n
             } else if self.is_vector(payload) {
                 let n = self.vec_count(payload);

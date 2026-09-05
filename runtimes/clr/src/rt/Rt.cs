@@ -20,6 +20,34 @@ using static Flint.Rt.Obj;
 /// The frame stack is DATA, so a green thread is a saved copy of it and a
 /// snapshot carries it. Neither is bolted on afterwards; both fall out.
 public sealed class Rt : System.IDisposable {
+
+    // ------------------------------------------------------------- the sink
+    //
+    // Hole 5 -- see the Java and Rust copies, which say the same. A buffer the
+    // runtime owns and an index that names it, because an index is an integer
+    // in all three where `MemoryStream`, `ByteArrayOutputStream` and
+    // `Vec<u8>` have nothing in common a generated source could name.
+    private readonly System.Collections.Generic.List<System.IO.MemoryStream> sinks =
+        new System.Collections.Generic.List<System.IO.MemoryStream>();
+
+    public int SinkOpen() {
+        sinks.Add(new System.IO.MemoryStream());
+        return sinks.Count - 1;
+    }
+    public void SinkClose(int s) {
+        while (sinks.Count > s) sinks.RemoveAt(sinks.Count - 1);
+    }
+    public int SinkLen(int s) { return (int) sinks[s].Length; }
+    public void SinkPut(int s, int b) { sinks[s].WriteByte((byte) (b & 0xFF)); }
+    public void SinkPutRun(int s, long addr, int len) {
+        byte[] run = gc.sp.Bytes(addr, len);
+        sinks[s].Write(run, 0, len);
+    }
+    public byte[] SinkArray(int s) { return sinks[s].ToArray(); }
+    public long SinkBytes(int s) { return Bytes.Of(this, sinks[s].ToArray()); }
+    public long SinkString(int s) {
+        return Str.Of(this, System.Text.Encoding.UTF8.GetString(sinks[s].ToArray()));
+    }
     public readonly Gc gc;
     public readonly Roots roots = new();
 
