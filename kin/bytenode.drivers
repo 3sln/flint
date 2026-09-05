@@ -1,0 +1,276 @@
+--rust-head
+extern crate alloc;
+type Addr = u32;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TRUE: Value = Value(0xFFFE);
+const TY_BYTES: u8 = 44; const TY_BROPE: u8 = 45; const TY_TBYTES: u8 = 46;
+const TY_VEC: u8 = 9;
+// The generated Rust reaches these as `crate::bytes::BB_BYTES`, because in the
+// real runtime they live on that module. A probe is its own crate, so it needs
+// a module of that name for the same path to resolve.
+pub mod bytes {
+    pub const BB_BYTES: u32 = 0; pub const BB_FLAT: u32 = 1;
+    pub const BB_DEPTH: u32 = 2; pub const BB_HASH: u32 = 3; pub const BB_KIDS: u32 = 4;
+    pub const TB_TREE: u32 = 0; pub const TB_TAIL: u32 = 1;
+    pub const TB_FILL: u32 = 2; pub const TB_LIVE: u32 = 3;
+    pub const TAIL_CAP: u32 = 8;
+}
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 && self.0 != TRUE.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn as_fixnum(self) -> i64 { self.0 as i64 }
+    fn fixnum(n: i64) -> Value { Value(n as u64) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+}
+struct Gc { sp: Vec<u8> }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, starve: bool }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        if self.starve { return 0; }
+        let a = self.bump; self.bump += n as u64 + 1;
+        self.gc.sp[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn olen(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+}
+fn ty(sp: &Vec<u8>, a: Addr) -> u8 { sp[a as usize] }
+// `b_count` and `b_depth` are `bytecore`'s, reached across modules. The probe
+// answers them the way the shipped ones do for the shapes this driver builds.
+impl Rt {
+    fn b_count(&self, v: Value) -> u32 {
+        if !v.is_heap() { return 0; }
+        match ty(&self.gc.sp, v.as_heap()) {
+            TY_BYTES => self.olen(v),
+            TY_BROPE => self.slot(v, bytes::BB_BYTES).as_fixnum() as u32,
+            _ => 0,
+        }
+    }
+    fn b_depth(&self, v: Value) -> u32 {
+        if v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_BROPE {
+            self.slot(v, bytes::BB_DEPTH).as_fixnum() as u32
+        } else { 0 }
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 4000], gc: Gc { sp: vec![0u8; 4000] },
+                      lens: vec![0; 4000], bump: 100, roots: Vec::new(), starve: false };
+    let mut o = String::new();
+    let l1 = Value::heap(rt.alloc(TY_BYTES, 3));
+    let l2 = Value::heap(rt.alloc(TY_BYTES, 5));
+    // TWO KIDS, pushed by the caller, which is the whole convergence.
+    let base = rt.mark();
+    rt.push(l1); rt.push(l2);
+    let nd = rt.b_node(base, 2);
+    o.push_str(&format!("ty={} bytes={} depth={} flat={} hash={} k0={} k1={} olen={} ",
+        ty(&rt.gc.sp, nd.as_heap()),
+        rt.slot(nd, bytes::BB_BYTES).as_fixnum(),
+        rt.slot(nd, bytes::BB_DEPTH).as_fixnum(),
+        (rt.slot(nd, bytes::BB_FLAT).0 == NIL.0) as u32,
+        (rt.slot(nd, bytes::BB_HASH).0 == NIL.0) as u32,
+        (rt.slot(nd, bytes::BB_KIDS).0 == l1.0) as u32,
+        (rt.slot(nd, bytes::BB_KIDS + 1).0 == l2.0) as u32,
+        rt.olen(nd)));
+    rt.pop_to(base);
+    // WRAP: a leaf is 0 deep, so wrapping to 2 makes two single-child nodes.
+    let w = rt.b_wrap_to(l1, 2);
+    o.push_str(&format!("wd={} wbytes={} inner={} noop={} ",
+        rt.b_depth(w), rt.b_count(w),
+        rt.b_depth(rt.slot(w, bytes::BB_KIDS)),
+        (rt.b_wrap_to(w, 1).0 == w.0) as u32));
+    // STARVED: the node is refused and nothing is left rooted.
+    let before = rt.mark();
+    rt.push(l1);
+    rt.starve = true;
+    let n2 = rt.b_node(before, 1);
+    o.push_str(&format!("starved={} roots={} ", (n2.0 == NIL.0) as u32,
+                        (rt.mark() == before + 1) as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL, TRUE = 0xFFFEL;
+    static final int TY_BYTES = 44, TY_BROPE = 45, TY_TBYTES = 46, TY_VEC = 9;
+    // Reached as `Bytes.BB_BYTES`, as in the real runtime.
+    static final class Bytes {
+        static final int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
+        static final int TB_TREE = 0, TB_TAIL = 1, TB_FILL = 2, TB_LIVE = 3;
+        static final int TAIL_CAP = 8;
+    }
+    static final class Val {
+        static boolean isHeap(long v) { return v >= 100 && v != NIL && v != TRUE; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v; }
+        static long fixnum(long n) { return n; }
+        static long heap(long a) { return a; }
+        static final long TRUE = Probe.TRUE, NIL = Probe.NIL;
+    }
+    static final class Rt {
+        long[] h = new long[4000];
+        static final class GcT { int[] sp = new int[4000]; }
+        GcT gc = new GcT();
+        int[] lens = new int[4000];
+        long bump = 100;
+        boolean starve = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void setR(int i, long v) { roots.set(i, v); }
+        long alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int ty(int[] sp, long a) { return sp[(int) a]; }
+    static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    // `bytecore`'s, reached through `import static` in the shipped file.
+    static int bCount(Rt rt, long v) {
+        if (!Val.isHeap(v)) return 0;
+        int t = ty(rt.gc.sp, v);
+        if (t == TY_BYTES) return olen(rt, v);
+        if (t == TY_BROPE) return (int) rt.slot(v, Bytes.BB_BYTES);
+        return 0;
+    }
+    static int bDepth(Rt rt, long v) {
+        if (Val.isHeap(v) && ty(rt.gc.sp, v) == TY_BROPE) return (int) rt.slot(v, Bytes.BB_DEPTH);
+        return 0;
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long l1 = Val.heap(rt.alloc(TY_BYTES, 3));
+        long l2 = Val.heap(rt.alloc(TY_BYTES, 5));
+        int base = rt.mark();
+        rt.push(l1); rt.push(l2);
+        long nd = bNode(rt, base, 2);
+        o.append("ty=").append(ty(rt.gc.sp, nd))
+         .append(" bytes=").append(rt.slot(nd, Bytes.BB_BYTES))
+         .append(" depth=").append(rt.slot(nd, Bytes.BB_DEPTH))
+         .append(" flat=").append(rt.slot(nd, Bytes.BB_FLAT) == NIL ? 1 : 0)
+         .append(" hash=").append(rt.slot(nd, Bytes.BB_HASH) == NIL ? 1 : 0)
+         .append(" k0=").append(rt.slot(nd, Bytes.BB_KIDS) == l1 ? 1 : 0)
+         .append(" k1=").append(rt.slot(nd, Bytes.BB_KIDS + 1) == l2 ? 1 : 0)
+         .append(" olen=").append(olen(rt, nd)).append(' ');
+        rt.popTo(base);
+        long w = bWrapTo(rt, l1, 2);
+        o.append("wd=").append(bDepth(rt, w))
+         .append(" wbytes=").append(bCount(rt, w))
+         .append(" inner=").append(bDepth(rt, rt.slot(w, Bytes.BB_KIDS)))
+         .append(" noop=").append(bWrapTo(rt, w, 1) == w ? 1 : 0).append(' ');
+        int before = rt.mark();
+        rt.push(l1);
+        rt.starve = true;
+        long n2 = bNode(rt, before, 1);
+        o.append("starved=").append(n2 == NIL ? 1 : 0)
+         .append(" roots=").append(rt.mark() == before + 1 ? 1 : 0).append(' ');
+        System.out.println(o.toString());
+    }
+--csharp-pre
+// `BB_BYTES` and friends are reached as `global::Flint.Rt.Bytes.X`, which needs
+// a REAL top-level namespace -- a shim nested in `class Probe` cannot be one.
+namespace Flint.Rt {
+    internal static class Bytes {
+        internal const int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
+        internal const int TB_TREE = 0, TB_TAIL = 1, TB_FILL = 2, TB_LIVE = 3;
+        internal const int TAIL_CAP = 8;
+    }
+}
+--csharp-head
+    internal static class Obj {
+        internal const int TyBytes = 44, TyBrope = 45, TyTbytes = 46, TyVec = 9;
+        internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL, True = 0xFFFEL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil && v != True; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long AsFixnum(long v) { return v; }
+        internal static long Fixnum(long n) { return n; }
+        internal static long Heap(long a) { return a; }
+    }
+    internal sealed class Rt {
+        internal long[] h = new long[4000];
+        internal sealed class GcT { internal int[] sp = new int[4000]; }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[4000];
+        internal long bump = 100;
+        internal bool starve = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal long Alloc(int t, int n) {
+            if (starve) return 0;
+            long a = bump; bump += n + 1;
+            gc.sp[(int) a] = t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Val.Nil;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    internal static int BCount(Rt rt, long v) {
+        if (!Val.IsHeap(v)) return 0;
+        int t = Obj.Ty(rt.gc.sp, v);
+        if (t == Obj.TyBytes) return Olen(rt, v);
+        if (t == Obj.TyBrope) return (int) rt.Slot(v, global::Flint.Rt.Bytes.BB_BYTES);
+        return 0;
+    }
+    internal static int BDepth(Rt rt, long v) {
+        if (Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyBrope)
+            return (int) rt.Slot(v, global::Flint.Rt.Bytes.BB_DEPTH);
+        return 0;
+    }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long l1 = Val.Heap(rt.Alloc(Obj.TyBytes, 3));
+        long l2 = Val.Heap(rt.Alloc(Obj.TyBytes, 5));
+        int bas = rt.Mark();
+        rt.Push(l1); rt.Push(l2);
+        long nd = BNode(rt, bas, 2);
+        o.Append("ty=").Append(Obj.Ty(rt.gc.sp, nd))
+         .Append(" bytes=").Append(rt.Slot(nd, global::Flint.Rt.Bytes.BB_BYTES))
+         .Append(" depth=").Append(rt.Slot(nd, global::Flint.Rt.Bytes.BB_DEPTH))
+         .Append(" flat=").Append(rt.Slot(nd, global::Flint.Rt.Bytes.BB_FLAT) == Val.Nil ? 1 : 0)
+         .Append(" hash=").Append(rt.Slot(nd, global::Flint.Rt.Bytes.BB_HASH) == Val.Nil ? 1 : 0)
+         .Append(" k0=").Append(rt.Slot(nd, global::Flint.Rt.Bytes.BB_KIDS) == l1 ? 1 : 0)
+         .Append(" k1=").Append(rt.Slot(nd, global::Flint.Rt.Bytes.BB_KIDS + 1) == l2 ? 1 : 0)
+         .Append(" olen=").Append(Olen(rt, nd)).Append(' ');
+        rt.PopTo(bas);
+        long w = BWrapTo(rt, l1, 2);
+        o.Append("wd=").Append(BDepth(rt, w))
+         .Append(" wbytes=").Append(BCount(rt, w))
+         .Append(" inner=").Append(BDepth(rt, rt.Slot(w, global::Flint.Rt.Bytes.BB_KIDS)))
+         .Append(" noop=").Append(BWrapTo(rt, w, 1) == w ? 1 : 0).Append(' ');
+        int before = rt.Mark();
+        rt.Push(l1);
+        rt.starve = true;
+        long n2 = BNode(rt, before, 1);
+        o.Append("starved=").Append(n2 == Val.Nil ? 1 : 0)
+         .Append(" roots=").Append(rt.Mark() == before + 1 ? 1 : 0).Append(' ');
+        System.Console.WriteLine(o.ToString());
+    }

@@ -108,31 +108,11 @@ public final class Bytes {
 
     /// A leaf joining a deeper node is PROMOTED rather than sitting beside
     /// subtrees: a node's children must all be the same depth.
-    static long wrapTo(Rt rt, long v, int d) {
-        int base = rt.mark();
-        int ci = rt.push(v);
-        while (depth(rt, rt.r(ci)) < d) {
-            rt.setR(ci, node(rt, ci, 1));
-        }
-        long outv = rt.r(ci);
-        rt.popTo(base);
-        return outv;
-    }
+    static long wrapTo(Rt rt, long v, int d) { return com._3sln.flint.kgen.rt.Bytenode.bWrapTo(rt, v, d); }
 
     /// A node over the `n` values ALREADY ROOTED at `base`. The caller pushes
     /// and the caller pops -- see the Rust and C# copies, which say the same.
-    static long node(Rt rt, int base, int n) {
-        int total = 0;
-        for (int i = 0; i < n; i++) total += count(rt, rt.r(base + i));
-        long a = rt.alloc(TY_BROPE, BB_KIDS + n);
-        if (a == 0) return Val.NIL;
-        rt.setSlot(a, BB_BYTES, Val.fixnum(total));
-        rt.setSlot(a, BB_FLAT, Val.NIL);
-        rt.setSlot(a, BB_HASH, Val.NIL);
-        rt.setSlot(a, BB_DEPTH, Val.fixnum(depth(rt, rt.r(base)) + 1));
-        for (int i = 0; i < n; i++) rt.setSlot(a, BB_KIDS + i, rt.r(base + i));
-        return Val.heap(a);
-    }
+    static long node(Rt rt, int base, int n) { return com._3sln.flint.kgen.rt.Bytenode.bNode(rt, base, n); }
 
     static long copyConcat(Rt rt, long a, long b) {
         byte[] x = toArray(rt, a), y = toArray(rt, b);

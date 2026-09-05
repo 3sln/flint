@@ -134,52 +134,7 @@ impl Rt {
 
     /// 0 for a leaf, otherwise the node's recorded depth.
 
-    /// `v`, wrapped in single-child nodes until it is `d` deep. A node's
-    /// children must all be the same depth, so a leaf joining a deep node is
-    /// promoted rather than sitting beside subtrees.
-    fn b_wrap_to(&mut self, v: Value, d: u32) -> Value {
-        let mut cur = v;
-        while self.b_depth(cur) < d {
-            let base = self.mark();
-            self.push(cur);
-            cur = self.b_node(base, 1);
-            self.pop_to(base);
-        }
-        cur
-    }
 
-    /// A node over the `n` values ALREADY ROOTED at `base`.
-    ///
-    /// The caller pushes and the caller pops. This used to take a host slice
-    /// and push the kids itself, which meant every caller rooted them, handed
-    /// them over, and had them rooted a second time -- and it needed a growable
-    /// host array per call to say so. Taking `(base, n)` deletes both: the
-    /// shadow stack IS the argument list, and it is the one place the kids had
-    /// to be anyway.
-    fn b_node(&mut self, base: usize, n: u32) -> Value {
-        let mut total = 0u32;
-        for i in 0..n {
-            let k = self.r(base + i as usize);
-            total += self.b_count(k);
-        }
-        let a = self.alloc(TY_BROPE, BB_KIDS + n);
-        if a == 0 {
-            return NIL;
-        }
-        self.set_slot(a, BB_BYTES, Value::fixnum(total as i64));
-        self.set_slot(a, BB_FLAT, NIL);
-        self.set_slot(a, BB_HASH, NIL);
-        let d = {
-            let k0 = self.r(base);
-            self.b_depth(k0) + 1
-        };
-        self.set_slot(a, BB_DEPTH, Value::fixnum(d as i64));
-        for i in 0..n {
-            let v = self.r(base + i as usize);
-            self.set_slot(a, BB_KIDS + i, v);
-        }
-        Value::heap(a)
-    }
 
     fn b_copy_concat(&mut self, a: Value, b: Value) -> Value {
         let mut out = alloc::vec::Vec::with_capacity((self.b_count(a) + self.b_count(b)) as usize);

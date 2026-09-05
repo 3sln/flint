@@ -1,0 +1,65 @@
+;; Building byte-rope NODES, and promoting a value to a depth.
+;;
+;; A node's children must ALL BE THE SAME DEPTH. The node reads its own depth
+;; off child zero, so pairing a deep node with a bare leaf would make it claim a
+;; depth one child does not have, and a later append would descend into the
+;; wrong place. `b-wrap-to` is what stops that: a shallow value is wrapped in
+;; single-child nodes until it is deep enough to stand beside its sibling.
+;;
+;; THE KIDS ARRIVE ON THE SHADOW STACK, as `(base, n)`. They used to arrive as
+;; a host array which `b-node` then pushed itself, so every caller rooted them
+;; twice and allocated an array to describe what the roots already described.
+;; That convergence is what made this file portable at all: a growable array of
+;; `Value` is `doc/goals/kin-port.md`'s hole 2, and this shape does not need
+;; one.
+(ns flint.rt.bytenode
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == < + for as-idx local set while
+                                   mark push r set-r pop-to alloc set-at heap fixnum
+                                   Rt Value Addr RootIx I32 NIL
+                                   TY_BROPE
+                                   BB_BYTES BB_FLAT BB_HASH BB_DEPTH BB_KIDS]]
+            [flint.rt.bytecore :refer [b-count b-depth]]))
+
+(doc "A node over the `n` values already rooted at `base`."
+     ""
+     "THE CALLER PUSHES AND THE CALLER POPS. This roots nothing of its own, so"
+     "the kids stay live across the allocation below because the caller's mark"
+     "is holding them, not because this function pushed them again."
+     ""
+     "Depth comes off CHILD ZERO and the total is the children's counts added"
+     "up -- the one walk a node exists to avoid doing later.")
+(defn ^:pub ^:method ^Value b-node [^:mut ^Rt rt ^RootIx base ^I32 n]
+  (local ^:mut ^I32 total)
+  (set total 0)
+  (for [^I32 i 0 n]
+    (set total (+ total (b-count rt (r rt (+ base (as-idx i)))))))
+  (let [^Addr a (alloc rt TY_BROPE (+ BB_KIDS n))]
+    (if (== a 0)
+      (return NIL))
+    (set-at rt a BB_BYTES (fixnum total))
+    (comment "NIL, not absent: `BB_FLAT` is the cached flattening and"
+             "`BB_HASH` the cached content hash, and both are computed on"
+             "demand. A slot left at whatever the allocator had is the bug"
+             "the probe fixtures were changed to make visible.")
+    (set-at rt a BB_FLAT NIL)
+    (set-at rt a BB_HASH NIL)
+    (set-at rt a BB_DEPTH (fixnum (+ (b-depth rt (r rt base)) 1)))
+    (for [^I32 i 0 n]
+      (set-at rt a (+ BB_KIDS i) (r rt (+ base (as-idx i)))))
+    (return (heap a))))
+
+(doc "`v`, wrapped in single-child nodes until it is `d` deep."
+     ""
+     "A leaf joining a deeper node is PROMOTED rather than sitting beside"
+     "subtrees, because a node's children must all be the same depth.")
+(defn ^:pub ^:method ^Value b-wrap-to [^:mut ^Rt rt ^Value v ^I32 d]
+  (let [^RootIx base (mark rt)
+        ^RootIx ci (push rt v)]
+    (while (< (b-depth rt (r rt ci)) d)
+      (comment "The cursor lives in the ROOT across `b-node`, which allocates.")
+      (let [^Value wrapped (b-node rt ci 1)]
+        (set-r rt ci wrapped)))
+    (let [^Value out (r rt ci)]
+      (pop-to rt base)
+      (return out))))

@@ -105,31 +105,11 @@ public static class Bytes {
 
     /// A leaf joining a deeper node is PROMOTED rather than sitting beside
     /// subtrees: a node's children must all be the same depth.
-    static long WrapTo(Rt rt, long v, int d) {
-        int bas = rt.Mark();
-        int ci = rt.Push(v);
-        while (Depth(rt, rt.R(ci)) < d) {
-            rt.SetR(ci, Node(rt, ci, 1));
-        }
-        long outv = rt.R(ci);
-        rt.PopTo(bas);
-        return outv;
-    }
+    static long WrapTo(Rt rt, long v, int d) { return global::_3sln.Flint.Kgen.Rt.Bytenode.BWrapTo(rt, v, d); }
 
     /// A node over the `n` values ALREADY ROOTED at `bas`. The caller pushes
     /// and the caller pops -- see the Rust and Java copies, which say the same.
-    static long Node(Rt rt, int bas, int n) {
-        int total = 0;
-        for (int i = 0; i < n; i++) total += Count(rt, rt.R(bas + i));
-        long a = rt.Alloc(Obj.TyBrope, BB_KIDS + n);
-        if (a == 0) return Val.Nil;
-        rt.SetSlot(a, BB_BYTES, Val.Fixnum(total));
-        rt.SetSlot(a, BB_FLAT, Val.Nil);
-        rt.SetSlot(a, BB_HASH, Val.Nil);
-        rt.SetSlot(a, BB_DEPTH, Val.Fixnum(Depth(rt, rt.R(bas)) + 1));
-        for (int i = 0; i < n; i++) rt.SetSlot(a, BB_KIDS + i, rt.R(bas + i));
-        return Val.Heap(a);
-    }
+    static long Node(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Bytenode.BNode(rt, bas, n); }
 
     static long CopyConcat(Rt rt, long a, long b) {
         byte[] x = ToArray(rt, a), y = ToArray(rt, b);
