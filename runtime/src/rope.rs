@@ -225,72 +225,7 @@ impl Rt {
         }
     }
 
-    /// A rope node over `kids`, whose aggregates are summed from them rather
-    /// than derived from their bytes.
-    /// A node over the `n` values ALREADY ROOTED at `base`.
-    ///
-    /// The caller pushes and the caller pops -- the same convergence `b_node`
-    /// took, and for the same reason: every caller rooted the kids, built a
-    /// host array to hand them over, and had them rooted a SECOND time inside.
-    /// The shadow stack was already the place they had to be.
-    fn rope_node(&mut self, base: usize, n: u32) -> Value {
-        let (mut bytes, mut cps, mut ascii) = (0u32, 0u32, true);
-        for i in 0..n {
-            let k = self.r(base + i as usize);
-            bytes += self.s_bytes(k);
-            cps += self.s_count(k);
-            ascii &= self.s_ascii(k);
-        }
-        let a = self.alloc(TY_ROPE, RP_KIDS + n);
-        if a == 0 {
-            return NIL;
-        }
-        self.set_slot(a, RP_BYTES, Value::fixnum(bytes as i64));
-        self.set_slot(a, RP_CPS, Value::fixnum(((cps as i64) << 1) | ascii as i64));
-        self.set_slot(a, RP_FLAT, NIL);
-        self.set_slot(a, RP_HASH, NIL);
-        for i in 0..n {
-            let v = self.r(base + i as usize);
-            self.set_slot(a, RP_KIDS + i, v);
-        }
-        Value::heap(a)
-    }
 
-    /// A balanced tree over `n` leaves sitting on the shadow stack from `base`.
-    ///
-    /// Built bottom-up in `FANOUT` groups, so the result is balanced by
-    /// construction rather than by rebalancing afterwards -- which matters
-    /// because the depth is what every index pays.
-    pub fn rope_from_roots(&mut self, base: usize, n: usize) -> Value {
-        if n == 0 {
-            return self.string("");
-        }
-        if n == 1 {
-            return self.r(base);
-        }
-        let mut level = n;
-        let mut from = base;
-        loop {
-            if level == 1 {
-                return self.r(from);
-            }
-            let out = self.mark();
-            let mut made = 0usize;
-            let mut i = 0usize;
-            while i < level {
-                let take = FANOUT.min((level - i) as u32) as usize;
-                let node = self.rope_node(from + i, take as u32);
-                if node.is_nil() {
-                    return NIL;
-                }
-                self.push(node);
-                made += 1;
-                i += take;
-            }
-            from = out;
-            level = made;
-        }
-    }
 
     /// A slice that SHARES its interior.
     ///
@@ -364,7 +299,7 @@ impl Rt {
                 break;
             }
         }
-        let r = self.rope_from_roots(out, made);
+        let r = self.rope_from_roots(out, made as u32);
         self.pop_to(base);
         r
     }
@@ -580,27 +515,6 @@ impl Rt {
         1 + self.rope_height(k)
     }
 
-    /// Wrap `v` in single-kid nodes until it stands `h` levels tall.
-    ///
-    /// This is what keeps every leaf at the SAME depth. Appending a bare leaf
-    /// beside a full subtree would make the tree ragged, and a ragged tree is
-    /// how the depth grew linearly here before: the root filled with leaves,
-    /// then the whole thing became kid 0 of a new root, every FANOUT appends.
-    fn rope_lift(&mut self, v: Value, h: u32) -> Value {
-        let base = self.mark();
-        let ci = self.push(v);
-        for _ in 0..h {
-            let w = self.rope_node(ci, 1);
-            if w.is_nil() {
-                self.pop_to(base);
-                return NIL;
-            }
-            self.set_r(ci, w);
-        }
-        let out = self.r(ci);
-        self.pop_to(base);
-        out
-    }
 
     /// Append `b` into the rightmost subtree of `a` that has room, rebuilding
     /// the spine above it. `None` when the right spine is full at every level,
@@ -661,7 +575,17 @@ impl Rt {
     }
 
 
-    fn copy_concat(&mut self, a: Value, b: Value) -> Value {
+    /// The empty string. INTERNED rather than allocated, unlike `b_empty`'s
+    /// byte leaf: an empty string is an inline value here, so there is nothing
+    /// to allocate and the generated half cannot build one itself.
+    pub(crate) fn s_empty(&mut self) -> Value {
+        self.string("")
+    }
+
+    /// `pub(crate)` because the generated rope half calls it: flattening two
+    /// strings into one leaf needs a byte sink, so it stays hand-written and
+    /// the boundary between the halves is a module boundary.
+    pub(crate) fn copy_concat(&mut self, a: Value, b: Value) -> Value {
         // Charged where the bytes actually move. A tree join moves none, which
         // is what makes repeated concatenation linear in gas as well as in time
         // -- it was quadratic in both.

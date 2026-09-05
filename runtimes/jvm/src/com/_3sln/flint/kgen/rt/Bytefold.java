@@ -57,7 +57,7 @@ public final class Bytefold {
             i = 0;
             while (i < level) {
                 int take;
-                take = Bytes.FANOUT;
+                take = Str.FANOUT;
                 if ((level - i) < take) {
                     take = level - i;
                 }

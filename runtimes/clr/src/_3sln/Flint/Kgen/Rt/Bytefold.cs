@@ -59,7 +59,7 @@ public static class Bytefold {
             i = 0;
             while (i < level) {
                 int take;
-                take = global::Flint.Rt.Bytes.FANOUT;
+                take = global::Flint.Rt.Str.FANOUT;
                 if ((level - i) < take) {
                     take = level - i;
                 }

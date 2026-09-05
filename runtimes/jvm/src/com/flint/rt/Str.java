@@ -114,26 +114,7 @@ public final class Str {
     /// Built bottom-up in `FANOUT` groups, so the result is balanced by
     /// construction rather than by rebalancing afterwards -- which matters
     /// because the depth is what every index pays.
-    static long ropeFromRoots(Rt rt, int base, int n) {
-        if (n == 0) return of(rt, "");
-        if (n == 1) return rt.r(base);
-        int level = n, from = base;
-        for (;;) {
-            if (level == 1) return rt.r(from);
-            int outAt = rt.mark();
-            int made = 0, i = 0;
-            while (i < level) {
-                int take = Math.min(FANOUT, level - i);
-                long node = ropeNode(rt, from + i, take);
-                if (Val.isNil(node)) return Val.NIL;
-                rt.push(node);
-                made++;
-                i += take;
-            }
-            from = outAt;
-            level = made;
-        }
-    }
+    static long ropeFromRoots(Rt rt, int base, int n) { return com._3sln.flint.kgen.rt.Ropenode.ropeFromRoots(rt, base, n); }
 
     /// The CANONICAL value for a string.
     ///
@@ -528,24 +509,7 @@ public final class Str {
     /// derived from their bytes. That is what makes `count` O(1) on a tree.
     /// A node over the `n` values ALREADY ROOTED at `base`. The caller pushes
     /// and the caller pops -- see the Rust and C# copies, which say the same.
-    static long ropeNode(Rt rt, int base, int n) {
-        int bytes = 0, cps = 0;
-        boolean ascii = true;
-        for (int i = 0; i < n; i++) {
-            long k = rt.r(base + i);
-            bytes += sBytes(rt, k);
-            cps += sCount(rt, k);
-            ascii &= sAscii(rt, k);
-        }
-        long a = rt.alloc(TY_ROPE, RP_KIDS + n);
-        if (a == 0) return Val.NIL;
-        rt.setSlot(a, RP_BYTES, Val.fixnum(bytes));
-        rt.setSlot(a, RP_CPS, Val.fixnum(((long) cps << 1) | (ascii ? 1 : 0)));
-        rt.setSlot(a, RP_FLAT, Val.NIL);
-        rt.setSlot(a, RP_HASH, Val.NIL);
-        for (int i = 0; i < n; i++) rt.setSlot(a, RP_KIDS + i, rt.r(base + i));
-        return Val.heap(a);
-    }
+    static long ropeNode(Rt rt, int base, int n) { return com._3sln.flint.kgen.rt.Ropenode.ropeNode(rt, base, n); }
 
     /// A slice that SHARES its interior.
     ///
@@ -736,18 +700,7 @@ public final class Str {
 
     /// Wrap `v` in single-kid nodes until it stands `h` levels tall, which is
     /// what keeps every leaf at the SAME depth.
-    static long ropeLift(Rt rt, long v, int h) {
-        int base = rt.mark();
-        int vi = rt.push(v);
-        for (int i = 0; i < h; i++) {
-            long n = ropeNode(rt, vi, 1);
-            if (Val.isNil(n)) { rt.popTo(base); return Val.NIL; }
-            rt.setR(vi, n);
-        }
-        long outv = rt.r(vi);
-        rt.popTo(base);
-        return outv;
-    }
+    static long ropeLift(Rt rt, long v, int h) { return com._3sln.flint.kgen.rt.Ropenode.ropeLift(rt, v, h); }
 
     /// Append `b` into the rightmost subtree of `a` that has room, rebuilding
     /// the spine above it. NIL when the right spine is full at every level,
@@ -785,7 +738,10 @@ public final class Str {
         return outv;
     }
 
-    static long copyConcat(Rt rt, long a, long b) {
+    /// The empty string, interned -- see the Rust copy.
+    public static long sEmpty(Rt rt) { return of(rt, ""); }
+
+    public static long copyConcat(Rt rt, long a, long b) {
         byte[] x = bytes(rt, a), y = bytes(rt, b);
         // Copying is work, and it is charged at the same rate everywhere.
         rt.chargeBytes(x.length + y.length);

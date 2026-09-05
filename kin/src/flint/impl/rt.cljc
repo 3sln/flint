@@ -248,19 +248,28 @@
    'BB_FLAT {:rust "crate::bytes::BB_FLAT" :java "Bytes.BB_FLAT" :csharp "global::Flint.Rt.Bytes.BB_FLAT"}
    'BB_HASH {:rust "crate::bytes::BB_HASH" :java "Bytes.BB_HASH" :csharp "global::Flint.Rt.Bytes.BB_HASH"}
    'BB_KIDS {:rust "crate::bytes::BB_KIDS" :java "Bytes.BB_KIDS" :csharp "global::Flint.Rt.Bytes.BB_KIDS"}
-   ;; The two tier numbers, which are `rope.rs`'s and are shared with `Str`.
-   ;; Rust defines them there and `Bytes` uses them; both ports keep their own
-   ;; copy on `Bytes`. That is a divergence in WHERE, not in what, so the name
-   ;; table is exactly the right place for it -- one entry, three paths.
-   'FLAT_MAX {:rust "crate::rope::FLAT_MAX" :java "Bytes.FLAT_MAX" :csharp "global::Flint.Rt.Bytes.FLAT_MAX"}
-   'FANOUT {:rust "crate::rope::FANOUT" :java "Bytes.FANOUT" :csharp "global::Flint.Rt.Bytes.FANOUT"}
+   ;; The two tier numbers. Rust keeps ONE copy, on `rope`, and `Bytes` uses
+   ;; it from there; both ports keep a second copy on `Bytes` beside the one on
+   ;; `Str`. So there are two homes in the ports for one number, and this table
+   ;; has to pick -- it picks `Str`, which is where Rust's lives, so the name
+   ;; means the same thing in all three. Pointing it at `Bytes` compiled for as
+   ;; long as only byte sources used it and broke the first time a rope one did.
+   'FLAT_MAX {:rust "crate::rope::FLAT_MAX" :java "Str.FLAT_MAX" :csharp "global::Flint.Rt.Str.FLAT_MAX"}
+   'FANOUT {:rust "crate::rope::FANOUT" :java "Str.FANOUT" :csharp "global::Flint.Rt.Str.FANOUT"}
    ;; The object header's width. A leaf's bytes begin `HDR` past its address,
    ;; which is the one place a generated source does address arithmetic.
    'HDR {:rust "crate::obj::HDR" :java "Obj.HDR" :csharp "Obj.Hdr"}
    ;; A slice smaller than this COPIES rather than shares. It is `Str`'s
    ;; constant in both ports and `rope`'s in Rust -- the same number in a
    ;; different home, which is what this table is for.
-   'SLICE_MIN {:rust "crate::rope::SLICE_MIN" :java "Str.SLICE_MIN" :csharp "global::Flint.Rt.Str.SLICE_MIN"}}
+   'SLICE_MIN {:rust "crate::rope::SLICE_MIN" :java "Str.SLICE_MIN" :csharp "global::Flint.Rt.Str.SLICE_MIN"}
+   ;; A rope's header. Rust keeps these on `obj` with every other layout
+   ;; constant; both ports keep them on `Str`. Same numbers, different home.
+   'RP_BYTES {:rust "crate::obj::RP_BYTES" :java "Str.RP_BYTES" :csharp "global::Flint.Rt.Str.RP_BYTES"}
+   'RP_CPS {:rust "crate::obj::RP_CPS" :java "Str.RP_CPS" :csharp "global::Flint.Rt.Str.RP_CPS"}
+   'RP_FLAT {:rust "crate::obj::RP_FLAT" :java "Str.RP_FLAT" :csharp "global::Flint.Rt.Str.RP_FLAT"}
+   'RP_HASH {:rust "crate::obj::RP_HASH" :java "Str.RP_HASH" :csharp "global::Flint.Rt.Str.RP_HASH"}
+   'RP_KIDS {:rust "crate::obj::RP_KIDS" :java "Str.RP_KIDS" :csharp "global::Flint.Rt.Str.RP_KIDS"}}
   ;; The node and category constants. All three targets spell these
   ;; IDENTICALLY, so every entry below is three copies of one string -- and
   ;; they are written down anyway.
@@ -418,6 +427,14 @@
                            :java "Val.asFixnum({0})"
                            :csharp "Val.AsFixnum({0})"})
     'to-i32 (core/call {:rust "({0} as u32)" :java "((int) {0})" :csharp "((int) {0})"})
+    ;; A BOOL AS ITS BIT, which is not the same form as `to-i32` and cannot be.
+    ;; Rust casts a `bool` to an integer with `as`; Java and C# both REFUSE the
+    ;; cast outright, so each needs a conditional. `to-i32` on a `Bool` emitted
+    ;; `((int) ascii)` into both ports -- code that does not compile in either,
+    ;; and that no name check can see because every name in it exists.
+    'bool-bit (core/call {:rust "({0} as u32)"
+                          :java "({0} ? 1 : 0)"
+                          :csharp "({0} ? 1 : 0)"})
 
     ;; --- HOST ARRAYS ----------------------------------------------------
     ;;
@@ -789,6 +806,20 @@
     ;; The other half that stays hand-written: copying a RANGE out into a fresh
     ;; leaf, which is what `SLICE_MIN` exists to force. Also a byte sink.
     'b-copy-range (sibling "b_copy_range" "Bytes" "copyRange" "CopyRange" 3)
+
+    ;; THE THREE STRING MEASUREMENTS, hand-written in all three and staying
+    ;; that way. Each is O(1) for a rope -- the header carries it -- and each
+    ;; has to decode UTF-8 for the other two tiers, which needs a host slice.
+    ;; `s-count` and `s-ascii` are exactly the numbers a rope node caches, so a
+    ;; generated `rope-node` asks for them rather than recomputing them.
+    's-bytes (sibling "s_bytes" "Str" "sBytes" "SBytes" 1)
+    's-count (sibling "s_count" "Str" "sCount" "SCount" 1)
+    's-ascii (sibling "s_ascii" "Str" "sAscii" "SAscii" 1)
+    's-concat-copy (sibling "copy_concat" "Str" "copyConcat" "CopyConcat" 2)
+    ;; The empty string is INTERNED, not allocated -- an inline value with
+    ;; nothing on the heap -- so unlike `b-empty` the generated half cannot
+    ;; build one and asks for it.
+    's-empty (sibling "s_empty" "Str" "sEmpty" "SEmpty" 0)
 
     ;; ONE BYTE out of the heap, at an absolute address. Rust reads a leaf
     ;; through `raw_bytes`, which hands back a borrowed slice -- hole 6, and

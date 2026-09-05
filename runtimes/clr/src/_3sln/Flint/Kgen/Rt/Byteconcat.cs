@@ -25,7 +25,7 @@ public static class Byteconcat {
         }
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(a));
         if (t == Obj.TyBytes) {
-            if ((Olen(rt, a) + BCount(rt, b)) <= global::Flint.Rt.Bytes.FLAT_MAX) {
+            if ((Olen(rt, a) + BCount(rt, b)) <= global::Flint.Rt.Str.FLAT_MAX) {
                 return Bytes.CopyConcat(rt, a, b);
             }
             return Val.Nil;
@@ -93,7 +93,7 @@ public static class Byteconcat {
             rt.PopTo(@base);
             return @out;
         }
-        if (n < global::Flint.Rt.Bytes.FANOUT) {
+        if (n < global::Flint.Rt.Str.FANOUT) {
             // Promoted to this node's CHILD depth, so every child
             // stays the same depth and the next append can descend.
             long bb = BWrapTo(rt, rt.R(@base + 1), da - 1);
@@ -122,10 +122,10 @@ public static class Byteconcat {
         // saves. This is the tier that must NOT be skipped -- and it is also
         // the tier that makes incremental building quadratic, which is what
         // the transient is for.
-        if ((BCount(rt, a) + BCount(rt, b)) <= global::Flint.Rt.Bytes.FLAT_MAX) {
+        if ((BCount(rt, a) + BCount(rt, b)) <= global::Flint.Rt.Str.FLAT_MAX) {
             return Bytes.CopyConcat(rt, a, b);
         }
-        if (BCount(rt, b) <= (global::Flint.Rt.Bytes.FLAT_MAX / 2)) {
+        if (BCount(rt, b) <= (global::Flint.Rt.Str.FLAT_MAX / 2)) {
             long merged = BMergeRight(rt, a, b);
             if (!Val.IsNil(merged)) {
                 return merged;

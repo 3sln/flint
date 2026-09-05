@@ -27,6 +27,7 @@ pub mod mapwrite;
 pub mod merge;
 pub mod nodeclass;
 pub mod pike;
+pub mod ropenode;
 pub mod seqcore;
 pub mod seqs;
 pub mod seqwalk;

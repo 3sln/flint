@@ -129,6 +129,7 @@ fn main() {
     static final long NIL = 0xFFFFL, TRUE = 0xFFFEL;
     static final int TY_BYTES = 44, TY_BROPE = 45, TY_TBYTES = 46, TY_VEC = 9;
     // Reached as `Bytes.BB_BYTES`, as in the real runtime.
+    static final class Str { static final int FLAT_MAX = 8, FANOUT = 3; }
     static final class Bytes {
         static final int FLAT_MAX = 8, FANOUT = 3;
         static final int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;
@@ -236,6 +237,7 @@ fn main() {
 // `BB_BYTES` and friends are reached as `global::Flint.Rt.Bytes.X`, which needs
 // a REAL top-level namespace -- a shim nested in `class Probe` cannot be one.
 namespace Flint.Rt {
+    internal static class Str { internal const int FLAT_MAX = 8, FANOUT = 3; }
     internal static class Bytes {
         internal const int FLAT_MAX = 8, FANOUT = 3;
         internal const int BB_BYTES = 0, BB_FLAT = 1, BB_DEPTH = 2, BB_HASH = 3, BB_KIDS = 4;

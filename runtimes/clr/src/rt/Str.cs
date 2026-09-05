@@ -95,26 +95,7 @@ public static class Str {
 
     /// A balanced tree over `n` leaves on the shadow stack from `bas`, built
     /// bottom-up in `FANOUT` groups so it is balanced by construction.
-    static long RopeFromRoots(Rt rt, int bas, int n) {
-        if (n == 0) return Of(rt, "");
-        if (n == 1) return rt.R(bas);
-        int level = n, from = bas;
-        for (;;) {
-            if (level == 1) return rt.R(from);
-            int outAt = rt.Mark();
-            int made = 0, i = 0;
-            while (i < level) {
-                int take = System.Math.Min(FANOUT, level - i);
-                long node = RopeNode(rt, from + i, take);
-                if (Val.IsNil(node)) return Val.Nil;
-                rt.Push(node);
-                made++;
-                i += take;
-            }
-            from = outAt;
-            level = made;
-        }
-    }
+    static long RopeFromRoots(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Ropenode.RopeFromRoots(rt, bas, n); }
 
     /// The CANONICAL value for a string.
     ///
@@ -643,24 +624,7 @@ public static class Str {
     /// derived from their bytes. That is what makes `count` O(1) on a tree.
     /// A node over the `n` values ALREADY ROOTED at `bas`. The caller pushes
     /// and the caller pops -- see the Rust and Java copies, which say the same.
-    static long RopeNode(Rt rt, int bas, int n) {
-        int bytes = 0, cps = 0;
-        bool ascii = true;
-        for (int i = 0; i < n; i++) {
-            long k = rt.R(bas + i);
-            bytes += SBytes(rt, k);
-            cps += SCount(rt, k);
-            ascii &= SAscii(rt, k);
-        }
-        long a = rt.Alloc(Obj.TyRope, RP_KIDS + n);
-        if (a == 0) return Val.Nil;
-        rt.SetSlot(a, RP_BYTES, Val.Fixnum(bytes));
-        rt.SetSlot(a, RP_CPS, Val.Fixnum(((long) cps << 1) | (ascii ? 1L : 0L)));
-        rt.SetSlot(a, RP_FLAT, Val.Nil);
-        rt.SetSlot(a, RP_HASH, Val.Nil);
-        for (int i = 0; i < n; i++) rt.SetSlot(a, RP_KIDS + i, rt.R(bas + i));
-        return Val.Heap(a);
-    }
+    static long RopeNode(Rt rt, int bas, int n) { return global::_3sln.Flint.Kgen.Rt.Ropenode.RopeNode(rt, bas, n); }
 
     /// `str` of two strings. O(1) once the pieces are big enough to matter.
     public static long Concat(Rt rt, long a, long b) {
@@ -697,18 +661,7 @@ public static class Str {
 
     /// Wrap `v` in single-kid nodes until it stands `h` levels tall, which is
     /// what keeps every leaf at the SAME depth.
-    static long RopeLift(Rt rt, long v, int h) {
-        int bas = rt.Mark();
-        int vi = rt.Push(v);
-        for (int i = 0; i < h; i++) {
-            long n = RopeNode(rt, vi, 1);
-            if (Val.IsNil(n)) { rt.PopTo(bas); return Val.Nil; }
-            rt.SetR(vi, n);
-        }
-        long outv = rt.R(vi);
-        rt.PopTo(bas);
-        return outv;
-    }
+    static long RopeLift(Rt rt, long v, int h) { return global::_3sln.Flint.Kgen.Rt.Ropenode.RopeLift(rt, v, h); }
 
     /// Append `b` into the rightmost subtree of `a` that has room, rebuilding
     /// the spine above it. Nil when the right spine is full at every level.
@@ -745,7 +698,10 @@ public static class Str {
         return outv;
     }
 
-    static long CopyConcat(Rt rt, long a, long b) {
+    /// The empty string, interned -- see the Rust copy.
+    public static long SEmpty(Rt rt) { return Of(rt, ""); }
+
+    public static long CopyConcat(Rt rt, long a, long b) {
         // Copying is work, charged at the same rate everywhere.
         rt.ChargeBytes(SBytes(rt, a) + SBytes(rt, b));
         byte[] x = Bytes(rt, a), y = Bytes(rt, b);

@@ -23,7 +23,7 @@ public final class Byteconcat {
         }
         int t = ty(rt.gc.sp, Val.asHeap(a));
         if (t == TY_BYTES) {
-            if ((olen(rt, a) + bCount(rt, b)) <= Bytes.FLAT_MAX) {
+            if ((olen(rt, a) + bCount(rt, b)) <= Str.FLAT_MAX) {
                 return Bytes.copyConcat(rt, a, b);
             }
             return Val.NIL;
@@ -91,7 +91,7 @@ public final class Byteconcat {
             rt.popTo(base);
             return out;
         }
-        if (n < Bytes.FANOUT) {
+        if (n < Str.FANOUT) {
             // Promoted to this node's CHILD depth, so every child
             // stays the same depth and the next append can descend.
             long bb = bWrapTo(rt, rt.r(base + 1), da - 1);
@@ -120,10 +120,10 @@ public final class Byteconcat {
         // saves. This is the tier that must NOT be skipped -- and it is also
         // the tier that makes incremental building quadratic, which is what
         // the transient is for.
-        if ((bCount(rt, a) + bCount(rt, b)) <= Bytes.FLAT_MAX) {
+        if ((bCount(rt, a) + bCount(rt, b)) <= Str.FLAT_MAX) {
             return Bytes.copyConcat(rt, a, b);
         }
-        if (bCount(rt, b) <= (Bytes.FLAT_MAX / 2)) {
+        if (bCount(rt, b) <= (Str.FLAT_MAX / 2)) {
             long merged = bMergeRight(rt, a, b);
             if (!Val.isNil(merged)) {
                 return merged;

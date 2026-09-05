@@ -1,0 +1,120 @@
+;; Building rope NODES, promoting a string to a height, and folding a run.
+;;
+;; The text mirror of `bytenode` and `bytefold`, and deliberately the same
+;; shapes: `doc/decisions/0011` designed one tree and `0024` applied it to
+;; bytes with less to carry. What a rope node carries and a byte node does not
+;; is the CODE-POINT COUNT and the ASCII bit, packed into one slot -- the count
+;; shifted up by one and the bit in the low position, because a string that is
+;; all ASCII can be indexed by byte and one that is not cannot.
+;;
+;; THE THREE MEASUREMENTS ARE ASKED FOR, not recomputed. `s-bytes`, `s-count`
+;; and `s-ascii` are O(1) on a rope and have to decode UTF-8 on the other two
+;; tiers, which needs a host slice -- so they stay hand-written and this file
+;; calls across to them.
+(ns flint.rt.ropenode
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == < + - and for as-idx local set forever while
+                                   mark push r set-r pop-to alloc set-at heap
+                                   fixnum nil? shl bit-or bool-bit
+                                   s-bytes s-count s-ascii s-empty
+                                   Rt Value Addr RootIx I32 Bool NIL
+                                   TY_ROPE FANOUT
+                                   RP_BYTES RP_CPS RP_FLAT RP_HASH RP_KIDS]]))
+
+(doc "A node over the `n` values already rooted at `base`."
+     ""
+     "THE CALLER PUSHES AND THE CALLER POPS. This roots nothing of its own, so"
+     "the kids stay live across the allocation because the caller's mark holds"
+     "them -- not because this pushed them a second time."
+     ""
+     "`RP_CPS` packs two answers into one slot: the code-point count shifted up"
+     "by one, and the all-ASCII bit at the bottom. A node is ASCII only when"
+     "every child is, which is why the fold is an `and` rather than a sum.")
+(defn ^:pub ^:method ^Value rope-node [^:mut ^Rt rt ^RootIx base ^I32 n]
+  (local ^:mut ^I32 bytes)
+  (local ^:mut ^I32 cps)
+  (local ^:mut ^Bool ascii)
+  (set bytes 0)
+  (set cps 0)
+  (set ascii true)
+  (for [^I32 i 0 n]
+    (let [^Value k (r rt (+ base (as-idx i)))]
+      (set bytes (+ bytes (s-bytes rt k)))
+      (set cps (+ cps (s-count rt k)))
+      (set ascii (and ascii (s-ascii rt k)))))
+  (let [^Addr a (alloc rt TY_ROPE (+ RP_KIDS n))]
+    (if (== a 0)
+      (return NIL))
+    (set-at rt a RP_BYTES (fixnum bytes))
+    (set-at rt a RP_CPS (fixnum (bit-or (shl cps 1) (bool-bit ascii))))
+    (comment "NIL, not absent: both are computed on demand -- `RP_FLAT` the"
+             "cached flattening, `RP_HASH` the cached content hash.")
+    (set-at rt a RP_FLAT NIL)
+    (set-at rt a RP_HASH NIL)
+    (for [^I32 i 0 n]
+      (set-at rt a (+ RP_KIDS i) (r rt (+ base (as-idx i)))))
+    (return (heap a))))
+
+(doc "`v`, wrapped in single-child nodes until it stands `h` levels up."
+     ""
+     "A leaf beside a full subtree would make the tree RAGGED, and a ragged"
+     "tree is how the depth grew linearly here before: the root filled with"
+     "leaves, then the whole thing became child zero of a new root, every"
+     "`FANOUT` appends."
+     ""
+     "The cursor lives in the ROOT. Rust used to carry it in a host local --"
+     "correct, because the local was always overwritten by the result of the"
+     "call that could have moved it, but correct by an argument the reader has"
+     "to rebuild each time. Both ports already did it this way.")
+(defn ^:pub ^:method ^Value rope-lift [^:mut ^Rt rt ^Value v ^I32 h]
+  (let [^RootIx base (mark rt)
+        ^RootIx ci (push rt v)]
+    (for [^I32 i 0 h]
+      (let [^Value w (rope-node rt ci 1)]
+        (if (nil? rt w)
+          (do (pop-to rt base)
+              (return NIL)))
+        (set-r rt ci w)))
+    (let [^Value out (r rt ci)]
+      (pop-to rt base)
+      (return out))))
+
+(doc "A balanced tree over the `n` values rooted at `base`."
+     ""
+     "Bottom-up in `FANOUT` groups, so the result is balanced BY CONSTRUCTION"
+     "rather than by rebalancing afterwards -- which matters because the depth"
+     "is what every index pays.")
+(defn ^:pub ^:method ^Value rope-from-roots [^:mut ^Rt rt ^RootIx base ^I32 n]
+  (comment "Nothing collected is the EMPTY STRING, so a caller that folded"
+           "zero pieces gets a string rather than nil and does not have to"
+           "test. It is interned rather than allocated, which is the one way"
+           "this differs from the byte fold.")
+  (if (== n 0)
+    (return (s-empty rt)))
+  (if (== n 1)
+    (return (r rt base)))
+  (local ^:mut ^I32 level)
+  (local ^:mut ^RootIx from)
+  (set level n)
+  (set from base)
+  (forever
+    (if (== level 1)
+      (return (r rt from)))
+    (let [^RootIx out (mark rt)]
+      (local ^:mut ^I32 made)
+      (local ^:mut ^I32 i)
+      (set made 0)
+      (set i 0)
+      (while (< i level)
+        (local ^:mut ^I32 take)
+        (set take FANOUT)
+        (if (< (- level i) take)
+          (set take (- level i)))
+        (let [^Value node (rope-node rt (+ from (as-idx i)) take)]
+          (if (nil? rt node)
+            (return NIL))
+          (push rt node))
+        (set made (+ made 1))
+        (set i (+ i take)))
+      (set from out)
+      (set level made))))

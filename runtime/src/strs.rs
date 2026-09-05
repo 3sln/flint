@@ -114,7 +114,7 @@ impl Rt {
             n += 1;
             start = end;
         }
-        let v = self.rope_from_roots(base, n);
+        let v = self.rope_from_roots(base, n as u32);
         self.pop_to(base);
         v
     }
