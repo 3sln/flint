@@ -12,15 +12,17 @@
 (ns flint.rt.bytetwrite
   (:require [flint.impl.rt :refer [defn return if let do comment doc
                                    == != < > >= not nil? is-heap as-heap
-                                   + - local set forever to-addr
+                                   + - local set forever while continue to-addr
                                    mark push r pop-to alloc slot set-slot heap
                                    fixnum as-fixnum to-i32 write-u8 throw-str text
-                                   Rt Value Addr RootIx I32 Bool NIL FALSE HDR
+                                   sink-open sink-close sink-len sink-copy-out
+                                   Rt Value Addr RootIx I32 Bool Sink NIL FALSE HDR
                                    TY_BYTES TB_TREE TB_TAIL TB_FILL TB_LIVE TAIL_CAP]]
             [flint.rt.bytecore :refer [tb-live]]
             [flint.rt.byteconcat :refer [b-concat]]
             [flint.rt.byteflat :refer [b-copy-range]]
-            [flint.rt.bytefold :refer [b-empty]]))
+            [flint.rt.bytefold :refer [b-empty]]
+            [flint.rt.byteflat :refer [b-append]]))
 
 (doc "Fold the full tail into the tree and start a fresh one."
      ""
@@ -113,3 +115,48 @@
       (if (nil? rt out)
         (return (b-empty rt)))
       (return out))))
+
+(doc "Append a whole byte string into the transient."
+     ""
+     "BULK, because appending a 1 KB piece one byte at a time is the thing"
+     "this type exists to stop doing. The source is copied into a sink FIRST"
+     "and then moved into the tail in runs -- so nothing holds a position in"
+     "the source's heap while the loop below allocates, and a flush in the"
+     "middle cannot invalidate what is left to copy."
+     ""
+     "The sink is closed on EVERY exit, including the refusal: a caller that"
+     "opened one and answered nil without closing it would leak the buffer"
+     "into whatever ran next.")
+(defn ^:pub ^:method ^Value b-append-bytes [^:mut ^Rt rt ^Value t ^Value v]
+  (if (not (tb-live rt t))
+    (return (throw-str rt "IllegalStateException"
+                       (text "this transient byte string is no longer usable"))))
+  (let [^Sink s (sink-open rt)]
+    (b-append rt v s)
+    (let [^I32 total (sink-len rt s)
+          ^RootIx base (mark rt)
+          ^RootIx ti (push rt t)]
+      (local ^:mut ^I32 i)
+      (set i 0)
+      (while (< i total)
+        (let [^I32 fill (to-i32 (as-fixnum (slot rt (r rt ti) TB_FILL)))]
+          (if (== fill TAIL_CAP)
+            (do
+              (if (not (tb-flush rt (r rt ti) fill))
+                (do (pop-to rt base)
+                    (sink-close rt s)
+                    (return NIL)))
+              (continue)))
+          (comment "As much as the tail has room for, or as much as is left.")
+          (local ^:mut ^I32 n)
+          (set n (- TAIL_CAP fill))
+          (if (> n (- total i))
+            (set n (- total i)))
+          (let [^Value tail (slot rt (r rt ti) TB_TAIL)]
+            (sink-copy-out rt s i n (+ (+ (as-heap tail) HDR) (to-addr fill)))
+            (set-slot rt (r rt ti) TB_FILL (fixnum (+ fill n)))
+            (set i (+ i n)))))
+      (let [^Value out (r rt ti)]
+        (pop-to rt base)
+        (sink-close rt s)
+        (return out)))))

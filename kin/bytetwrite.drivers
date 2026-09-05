@@ -51,6 +51,19 @@ impl Rt {
     // A refusal is modelled as NIL plus a flag, which is all the probe needs
     // to tell "refused" from "answered".
     fn throw_str(&mut self, _kind: &str, _msg: &str) -> Value { NIL }
+    fn sink_len(&self, s: u32) -> u32 { self.sinks[s as usize].len() as u32 }
+    fn sink_copy_out(&mut self, s: u32, from: u32, len: u32, addr: Addr) {
+        let src: Vec<u8> = self.sinks[s as usize][from as usize..(from + len) as usize].to_vec();
+        for (i, b) in src.iter().enumerate() { self.gc.sp.m[addr as usize + i] = *b; }
+    }
+    fn b_append(&mut self, v: Value, s: u32) {
+        if !v.is_heap() { return; }
+        if ty(&self.gc.sp, v.as_heap()) != TY_BYTES { return; }
+        let n = self.lens[v.0 as usize];
+        let run: Vec<u8> = (0..n)
+            .map(|i| self.gc.sp.read_u8(v.as_heap() + obj::HDR + i as u64)).collect();
+        self.sinks[s as usize].extend_from_slice(&run);
+    }
     fn tb_live(&self, t: Value) -> bool {
         t.is_heap() && ty(&self.gc.sp, t.as_heap()) == TY_TBYTES
             && self.slot(t, bytes::TB_LIVE).0 == TRUE.0
@@ -73,7 +86,6 @@ impl Rt {
     }
     fn sink_open(&mut self) -> u32 { self.sinks.push(Vec::new()); (self.sinks.len() - 1) as u32 }
     fn sink_close(&mut self, s: u32) { self.sinks.truncate(s as usize); }
-    fn sink_len(&self, s: u32) -> u32 { self.sinks[s as usize].len() as u32 }
     fn sink_put_run(&mut self, s: u32, addr: Addr, len: u32) {
         let src: Vec<u8> = (0..len).map(|i| self.gc.sp.m[(addr + i as u64) as usize]).collect();
         self.sinks[s as usize].extend_from_slice(&src);
@@ -148,6 +160,13 @@ fn main() {
     // A DEAD one refuses rather than answering.
     let again = rt.b_persistent(t);
     o.push_str(&format!("reuse={} ", again.is_nil() as u32));
+    // BULK APPEND, crossing the flush boundary twice: nine bytes into a
+    // four-byte tail is two flushes and a partial remainder.
+    let t3 = mk(&mut rt);
+    let piece = rt.leaf(&[10,11,12,13,14,15,16,17,18]);
+    rt.b_append_bytes(t3, piece);
+    let bulk = rt.b_persistent(t3);
+    o.push_str(&format!("bulk={} ", show(&rt, bulk)));
     // NOTHING APPENDED is the empty byte string, not nil.
     let t2 = mk(&mut rt);
     let e = rt.b_persistent(t2);
@@ -190,6 +209,10 @@ fn main() {
         int sinkOpen() { sinks.add(new java.io.ByteArrayOutputStream()); return sinks.size() - 1; }
         void sinkClose(int s) { while (sinks.size() > s) sinks.remove(sinks.size() - 1); }
         int sinkLen(int s) { return sinks.get(s).size(); }
+        void sinkCopyOut(int s, int from, int len, long addr) {
+            byte[] src = sinks.get(s).toByteArray();
+            for (int i = 0; i < len; i++) gc.sp.writeU8(addr + i, src[from + i] & 0xFF);
+        }
         byte[] sinkArr(int s) { return sinks.get(s).toByteArray(); }
         long sinkBytes(int s) {
             byte[] a = sinkArr(s);
@@ -222,6 +245,12 @@ fn main() {
         if (t == TY_BYTES) return olen(rt, v);
         if (t == TY_BROPE) return (int) rt.slot(v, Bytes.BB_BYTES);
         return 0;
+    }
+    static void bAppend(Rt rt, long v, int s) {
+        if (!Val.isHeap(v)) return;
+        if (ty(rt.gc.sp, v) != TY_BYTES) return;
+        int n = olen(rt, v);
+        for (int i = 0; i < n; i++) rt.sinks.get(s).write(rt.gc.sp.readU8(v + Obj.HDR + i));
     }
     static boolean tbLive(Rt rt, long t) {
         return Val.isHeap(t) && ty(rt.gc.sp, t) == TY_TBYTES
@@ -277,6 +306,9 @@ fn main() {
         o.append("out=").append(show(rt, out))
          .append(" live=").append(tbLive(rt, t) ? 1 : 0).append(' ');
         o.append("reuse=").append(Val.isNil(bPersistent(rt, t)) ? 1 : 0).append(' ');
+        long t3 = mk(rt);
+        bAppendBytes(rt, t3, leaf(rt, new int[]{10,11,12,13,14,15,16,17,18}));
+        o.append("bulk=").append(show(rt, bPersistent(rt, t3))).append(' ');
         long t2 = mk(rt);
         long e = bPersistent(rt, t2);
         o.append("empty=").append(olen(rt, e)).append(',').append(Val.isNil(e) ? 1 : 0).append(' ');
@@ -332,6 +364,10 @@ fn main() {
         internal int SinkOpen() { sinks.Add(new System.IO.MemoryStream()); return sinks.Count - 1; }
         internal void SinkClose(int s) { while (sinks.Count > s) sinks.RemoveAt(sinks.Count - 1); }
         internal int SinkLen(int s) { return (int) sinks[s].Length; }
+        internal void SinkCopyOut(int s, int from, int len, long addr) {
+            byte[] src = sinks[s].ToArray();
+            for (int i = 0; i < len; i++) gc.sp.WriteU8(addr + i, src[from + i]);
+        }
         internal byte[] SinkArr(int s) { return sinks[s].ToArray(); }
         internal long SinkBytes(int s) {
             byte[] a = SinkArr(s);
@@ -363,6 +399,12 @@ fn main() {
         if (t == Obj.TyBytes) return Olen(rt, v);
         if (t == Obj.TyBrope) return (int) rt.Slot(v, global::Flint.Rt.Bytes.BB_BYTES);
         return 0;
+    }
+    internal static void BAppend(Rt rt, long v, int s) {
+        if (!Val.IsHeap(v)) return;
+        if (Obj.Ty(rt.gc.sp, v) != Obj.TyBytes) return;
+        int n = Olen(rt, v);
+        for (int i = 0; i < n; i++) rt.sinks[s].WriteByte((byte) rt.gc.sp.ReadU8(v + Obj.Hdr + i));
     }
     internal static bool TbLive(Rt rt, long t) {
         return Val.IsHeap(t) && Obj.Ty(rt.gc.sp, t) == Obj.TyTbytes
@@ -428,6 +470,9 @@ namespace Flint.Rt {
         o.Append("out=").Append(Show(rt, outv))
          .Append(" live=").Append(TbLive(rt, t) ? 1 : 0).Append(' ');
         o.Append("reuse=").Append(Val.IsNil(BPersistent(rt, t)) ? 1 : 0).Append(' ');
+        long t3 = Mk(rt);
+        BAppendBytes(rt, t3, Leaf(rt, new int[]{10,11,12,13,14,15,16,17,18}));
+        o.Append("bulk=").Append(Show(rt, BPersistent(rt, t3))).Append(' ');
         long t2 = Mk(rt);
         long e = BPersistent(rt, t2);
         o.Append("empty=").Append(Olen(rt, e)).Append(',').Append(Val.IsNil(e) ? 1 : 0).Append(' ');

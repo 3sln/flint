@@ -157,35 +157,7 @@ public static class Bytes {
 
     /// Append a whole byte string. BULK, because appending a 1 KB piece one
     /// byte at a time is the thing this type exists to stop doing.
-    public static long AppendBytes(Rt rt, long t, long v) {
-        if (!Live(rt, t)) {
-            return rt.ThrowStr("IllegalStateException", "this transient byte string is no longer usable");
-        }
-        // The source is copied outv FIRST, so nothing holds a reference into the
-        // heap while the loop below allocates.
-        byte[] src = ToArray(rt, v);
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        int i = 0;
-        while (i < src.Length) {
-            int fill = (int) Val.AsFixnum(rt.Slot(rt.R(ti), TB_FILL));
-            if (fill == TAIL_CAP) {
-                if (!Flush(rt, rt.R(ti), fill)) { rt.PopTo(bas); return Val.Nil; }
-                continue;
-            }
-            int room = TAIL_CAP - fill;
-            int n = System.Math.Min(room, src.Length - i);
-            long tail = rt.Slot(rt.R(ti), TB_TAIL);
-            byte[] chunk = new byte[n];
-            System.Array.Copy(src, i, chunk, 0, n);
-            rt.gc.sp.WriteBytes(Val.AsHeap(tail) + Obj.Hdr + fill, chunk);
-            rt.SetSlot(Val.AsHeap(rt.R(ti)), TB_FILL, Val.Fixnum(fill + n));
-            i += n;
-        }
-        long outv = rt.R(ti);
-        rt.PopTo(bas);
-        return outv;
-    }
+    public static long AppendBytes(Rt rt, long t, long v) { return global::_3sln.Flint.Kgen.Rt.Bytetwrite.BAppendBytes(rt, t, v); }
 
         public static int Tcount(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Bytecore.BTcount(rt, t); }
 

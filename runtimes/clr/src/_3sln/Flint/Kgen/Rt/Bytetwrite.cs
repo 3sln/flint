@@ -116,4 +116,52 @@ public static class Bytetwrite {
         }
         return @out;
     }
+    /// Append a whole byte string into the transient.
+    /// 
+    /// BULK, because appending a 1 KB piece one byte at a time is the thing
+    /// this type exists to stop doing. The source is copied into a sink FIRST
+    /// and then moved into the tail in runs -- so nothing holds a position in
+    /// the source's heap while the loop below allocates, and a flush in the
+    /// middle cannot invalidate what is left to copy.
+    /// 
+    /// The sink is closed on EVERY exit, including the refusal: a caller that
+    /// opened one and answered nil without closing it would leak the buffer
+    /// into whatever ran next.
+    public static long BAppendBytes(Rt rt, long t, long v) {
+        if (!TbLive(rt, t)) {
+            return rt.ThrowStr("IllegalStateException", "this transient byte string is no longer usable");
+        }
+        int s = rt.SinkOpen();
+        BAppend(rt, v, s);
+        int total = rt.SinkLen(s);
+        int @base = rt.Mark();
+        int ti = rt.Push(t);
+        int i;
+        i = 0;
+        while (i < total) {
+            int fill = (int) Val.AsFixnum(rt.Slot(rt.R(ti), global::Flint.Rt.Bytes.TB_FILL));
+            if (fill == global::Flint.Rt.Bytes.TAIL_CAP) {
+                if (!TbFlush(rt, rt.R(ti), fill)) {
+                    rt.PopTo(@base);
+                    rt.SinkClose(s);
+                    return Val.Nil;
+                }
+                continue;
+            }
+            // As much as the tail has room for, or as much as is left.
+            int n;
+            n = global::Flint.Rt.Bytes.TAIL_CAP - fill;
+            if (n > (total - i)) {
+                n = total - i;
+            }
+            long tail = rt.Slot(rt.R(ti), global::Flint.Rt.Bytes.TB_TAIL);
+            rt.SinkCopyOut(s, i, n, (Val.AsHeap(tail) + Obj.Hdr) + fill);
+            rt.SetSlot(Val.AsHeap(rt.R(ti)), global::Flint.Rt.Bytes.TB_FILL, Val.Fixnum((fill + n) & 0xFFFFFFFFL));
+            i += n;
+        }
+        long @out = rt.R(ti);
+        rt.PopTo(@base);
+        rt.SinkClose(s);
+        return @out;
+    }
 }

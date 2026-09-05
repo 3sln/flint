@@ -114,4 +114,52 @@ public final class Bytetwrite {
         }
         return out;
     }
+    /// Append a whole byte string into the transient.
+    /// 
+    /// BULK, because appending a 1 KB piece one byte at a time is the thing
+    /// this type exists to stop doing. The source is copied into a sink FIRST
+    /// and then moved into the tail in runs -- so nothing holds a position in
+    /// the source's heap while the loop below allocates, and a flush in the
+    /// middle cannot invalidate what is left to copy.
+    /// 
+    /// The sink is closed on EVERY exit, including the refusal: a caller that
+    /// opened one and answered nil without closing it would leak the buffer
+    /// into whatever ran next.
+    public static long bAppendBytes(Rt rt, long t, long v) {
+        if (!tbLive(rt, t)) {
+            return rt.throwStr("IllegalStateException", "this transient byte string is no longer usable");
+        }
+        int s = rt.sinkOpen();
+        bAppend(rt, v, s);
+        int total = rt.sinkLen(s);
+        int base = rt.mark();
+        int ti = rt.push(t);
+        int i;
+        i = 0;
+        while (i < total) {
+            int fill = (int) Val.asFixnum(rt.slot(rt.r(ti), Bytes.TB_FILL));
+            if (fill == Bytes.TAIL_CAP) {
+                if (!tbFlush(rt, rt.r(ti), fill)) {
+                    rt.popTo(base);
+                    rt.sinkClose(s);
+                    return Val.NIL;
+                }
+                continue;
+            }
+            // As much as the tail has room for, or as much as is left.
+            int n;
+            n = Bytes.TAIL_CAP - fill;
+            if (n > (total - i)) {
+                n = total - i;
+            }
+            long tail = rt.slot(rt.r(ti), Bytes.TB_TAIL);
+            rt.sinkCopyOut(s, i, n, (Val.asHeap(tail) + Obj.HDR) + fill);
+            rt.setSlot(Val.asHeap(rt.r(ti)), Bytes.TB_FILL, Val.fixnum((fill + n) & 0xFFFFFFFFL));
+            i += n;
+        }
+        long out = rt.r(ti);
+        rt.popTo(base);
+        rt.sinkClose(s);
+        return out;
+    }
 }

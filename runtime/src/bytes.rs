@@ -194,6 +194,18 @@ impl Rt {
         self.sinks[s as usize].extend_from_slice(src);
     }
 
+    /// Copy `len` bytes from the sink at `from` INTO the heap at `addr`.
+    ///
+    /// The other direction from `sink_put_run`, and the only way bytes leave a
+    /// sink without becoming a value: appending a whole byte string into a
+    /// transient's open tail copies it in runs, and the tail is heap the
+    /// transient already owns.
+    pub fn sink_copy_out(&mut self, s: u32, from: u32, len: u32, addr: crate::mem::Addr) {
+        let src: alloc::vec::Vec<u8> =
+            self.sinks[s as usize][from as usize..(from + len) as usize].to_vec();
+        self.gc.sp.bytes_mut(addr, len).copy_from_slice(&src);
+    }
+
     /// The sink's contents as a byte string. The sink is left alone -- the
     /// caller closes it, because the caller opened it.
     pub fn sink_bytes(&mut self, s: u32) -> Value {
@@ -269,44 +281,6 @@ impl Rt {
 
 
 
-    /// Append a whole byte string. Bulk, because appending a 1 KB piece one
-    /// byte at a time is the thing this type exists to stop doing.
-    pub fn b_append_bytes(&mut self, t: Value, v: Value) -> Value {
-        if !self.tb_live(t) {
-            return self.throw_str("IllegalStateException",
-                                  "this transient byte string is no longer usable");
-        }
-        // The source is copied out FIRST, so nothing here holds a reference
-        // into the heap while the loop below allocates. `t` is rooted for the
-        // same reason `b_conj` roots it: a flush collects, and a copying
-        // collector moves the transient out from under a Rust local.
-        let src = self.b_to_vec(v);
-        let base = self.mark();
-        self.push(t);
-        let mut i = 0usize;
-        while i < src.len() {
-            let t = self.r(base);
-            let fill = self.slot(t, TB_FILL).as_fixnum() as u32;
-            if fill == TAIL_CAP {
-                if !self.tb_flush(t, fill) {
-                    self.pop_to(base);
-                    return NIL;
-                }
-                continue;
-            }
-            let room = (TAIL_CAP - fill) as usize;
-            let n = room.min(src.len() - i);
-            let tail = self.slot(t, TB_TAIL);
-            self.gc.sp.bytes_mut(tail.as_heap() + HDR, TAIL_CAP)
-                [fill as usize..fill as usize + n]
-                .copy_from_slice(&src[i..i + n]);
-            self.set_slot(t.as_heap(), TB_FILL, Value::fixnum(fill as i64 + n as i64));
-            i += n;
-        }
-        let out = self.r(base);
-        self.pop_to(base);
-        out
-    }
 
 
 }

@@ -95,6 +95,10 @@ public sealed class Rt : System.IDisposable {
         sinks[s].Write(run, 0, len);
     }
     public byte[] SinkArray(int s) { return sinks[s].ToArray(); }
+    public void SinkCopyOut(int s, int from, int len, long addr) {
+        byte[] src = sinks[s].ToArray();
+        for (int i = 0; i < len; i++) gc.sp.WriteU8(addr + i, src[from + i]);
+    }
     public long SinkBytes(int s) { return Bytes.Of(this, sinks[s].ToArray()); }
     public long SinkString(int s) {
         return Str.Of(this, System.Text.Encoding.UTF8.GetString(sinks[s].ToArray()));

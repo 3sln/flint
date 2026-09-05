@@ -116,4 +116,52 @@ impl Rt {
         }
         return out;
     }
+    /// Append a whole byte string into the transient.
+    /// 
+    /// BULK, because appending a 1 KB piece one byte at a time is the thing
+    /// this type exists to stop doing. The source is copied into a sink FIRST
+    /// and then moved into the tail in runs -- so nothing holds a position in
+    /// the source's heap while the loop below allocates, and a flush in the
+    /// middle cannot invalidate what is left to copy.
+    /// 
+    /// The sink is closed on EVERY exit, including the refusal: a caller that
+    /// opened one and answered nil without closing it would leak the buffer
+    /// into whatever ran next.
+    pub fn b_append_bytes(&mut self, t: Value, v: Value) -> Value {
+        if !self.tb_live(t) {
+            return self.throw_str("IllegalStateException", &alloc::string::String::from("this transient byte string is no longer usable"));
+        }
+        let s: u32 = self.sink_open();
+        self.b_append(v, s);
+        let total: u32 = self.sink_len(s);
+        let base: usize = self.mark();
+        let ti: usize = self.push(t);
+        let mut i: u32;
+        i = 0;
+        while i < total {
+            let fill: u32 = self.slot(self.r(ti), crate::bytes::TB_FILL).as_fixnum() as u32;
+            if fill == crate::bytes::TAIL_CAP {
+                if !self.tb_flush(self.r(ti), fill) {
+                    self.pop_to(base);
+                    self.sink_close(s);
+                    return NIL;
+                }
+                continue;
+            }
+            // As much as the tail has room for, or as much as is left.
+            let mut n: u32;
+            n = crate::bytes::TAIL_CAP - fill;
+            if n > (total - i) {
+                n = total - i;
+            }
+            let tail: Value = self.slot(self.r(ti), crate::bytes::TB_TAIL);
+            self.sink_copy_out(s, i, n, (tail.as_heap() + crate::obj::HDR) + (fill as Addr));
+            self.set(self.r(ti), crate::bytes::TB_FILL, Value::fixnum((fill + n) as i64));
+            i += n;
+        }
+        let out: Value = self.r(ti);
+        self.pop_to(base);
+        self.sink_close(s);
+        return out;
+    }
 }

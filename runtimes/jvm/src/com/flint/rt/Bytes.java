@@ -173,35 +173,7 @@ public final class Bytes {
 
     /// Append a whole byte string. BULK, because appending a 1 KB piece one
     /// byte at a time is the thing this type exists to stop doing.
-    public static long appendBytes(Rt rt, long t, long v) {
-        if (!live(rt, t)) {
-            return rt.throwStr("IllegalStateException", "this transient byte string is no longer usable");
-        }
-        // The source is copied out FIRST, so nothing holds a reference into the
-        // heap while the loop below allocates.
-        byte[] src = toArray(rt, v);
-        int base = rt.mark();
-        int ti = rt.push(t);
-        int i = 0;
-        while (i < src.length) {
-            int fill = (int) Val.asFixnum(rt.slot(rt.r(ti), TB_FILL));
-            if (fill == TAIL_CAP) {
-                if (!flush(rt, rt.r(ti), fill)) { rt.popTo(base); return Val.NIL; }
-                continue;
-            }
-            int room = TAIL_CAP - fill;
-            int n = Math.min(room, src.length - i);
-            long tail = rt.slot(rt.r(ti), TB_TAIL);
-            byte[] chunk = new byte[n];
-            System.arraycopy(src, i, chunk, 0, n);
-            rt.gc.sp.writeBytes(Val.asHeap(tail) + HDR + fill, chunk);
-            rt.setSlot(Val.asHeap(rt.r(ti)), TB_FILL, Val.fixnum(fill + n));
-            i += n;
-        }
-        long outv = rt.r(ti);
-        rt.popTo(base);
-        return outv;
-    }
+    public static long appendBytes(Rt rt, long t, long v) { return com._3sln.flint.kgen.rt.Bytetwrite.bAppendBytes(rt, t, v); }
 
         public static int tcount(Rt rt, long t) { return com._3sln.flint.kgen.rt.Bytecore.bTcount(rt, t); }
 

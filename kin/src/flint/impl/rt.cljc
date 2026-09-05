@@ -930,6 +930,11 @@
     'sink-put-run (core/call {:rust "{0}.sink_put_run({1}, {2}, {3})"
                               :java "{0}.sinkPutRun({1}, {2}, {3})"
                               :csharp "{0}.SinkPutRun({1}, {2}, {3})"})
+    ;; The other direction: bytes OUT of a sink and into the heap, which is
+    ;; how a whole byte string is appended into a transient's open tail.
+    'sink-copy-out (core/call {:rust "{0}.sink_copy_out({1}, {2}, {3}, {4})"
+                               :java "{0}.sinkCopyOut({1}, {2}, {3}, {4})"
+                               :csharp "{0}.SinkCopyOut({1}, {2}, {3}, {4})"})
     'sink-bytes (core/call {:rust "{0}.sink_bytes({1})"
                             :java "{0}.sinkBytes({1})" :csharp "{0}.SinkBytes({1})"}
                            {:tag Value})

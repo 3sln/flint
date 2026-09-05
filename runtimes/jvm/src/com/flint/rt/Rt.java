@@ -134,6 +134,13 @@ public final class Rt {
     /// The raw contents, for host code that wants an array rather than a value.
     public byte[] sinkArray(int s) { return sinks.get(s).toByteArray(); }
 
+    /// Copy `len` bytes from the sink at `from` INTO the heap at `addr` --
+    /// the other direction from `sinkPutRun`. See the Rust copy.
+    public void sinkCopyOut(int s, int from, int len, long addr) {
+        byte[] src = sinks.get(s).toByteArray();
+        for (int i = 0; i < len; i++) gc.sp.writeU8(addr + i, src[from + i] & 0xFF);
+    }
+
     /// The contents as a byte string. The sink is left alone -- the caller
     /// closes it, because the caller opened it.
     public long sinkBytes(int s) {
