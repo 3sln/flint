@@ -697,40 +697,11 @@ public static class Builtins {
         // be written this plainly.
         Def("atom", (rt, at, n) => NewCell(rt, Obj.TyAtom, rt.VAt(at)));
         Def("flint/volatile", (rt, at, n) => NewCell(rt, Obj.TyVolatile, rt.VAt(at)));
-        Def("deref", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (rt.IsHeapTy(v, Obj.TyAtom) || rt.IsHeapTy(v, Obj.TyVolatile)) return rt.Slot(v, 0);
-            if (rt.IsHeapTy(v, Obj.TyDelay)) {
-                long thunk = rt.Slot(v, 0);
-                if (Val.IsNil(thunk)) return rt.Slot(v, 1);
-                int bas = rt.Mark();
-                int di = rt.Push(v);
-                long r = rt.Invoke(thunk, System.Array.Empty<long>());
-                int ri = rt.Push(r);
-                long d = rt.R(di);
-                rt.SetSlot(Val.AsHeap(d), 0, Val.Nil);   // forced: drop the thunk
-                rt.SetSlot(Val.AsHeap(d), 1, rt.R(ri));
-                long outv = rt.R(ri);
-                rt.PopTo(bas);
-                return outv;
-            }
-            return rt.ThrowStr("ClassCastException", "cannot deref " + rt.Describe(v));
-        });
-        Def("reset!", (rt, at, n) => {
-            long a = rt.VAt(at);
-            if (!rt.IsHeapTy(a, Obj.TyAtom) && !rt.IsHeapTy(a, Obj.TyVolatile))
-                return rt.ThrowStr("ClassCastException", "not an atom: " + rt.Describe(a));
-            rt.SetSlot(Val.AsHeap(a), 0, rt.VAt(at + 1));
-            return rt.VAt(at + 1);
-        });
-        Def("compare-and-set!", (rt, at, n) => {
-            long a = rt.VAt(at);
-            if (!rt.IsHeapTy(a, Obj.TyAtom) && !rt.IsHeapTy(a, Obj.TyVolatile))
-                return rt.ThrowStr("ClassCastException", "not an atom: " + rt.Describe(a));
-            if (rt.Slot(a, 0) != rt.VAt(at + 1)) return Val.False;
-            rt.SetSlot(Val.AsHeap(a), 0, rt.VAt(at + 2));
-            return Val.True;
-        });
+        // GENERATED, from `kin/atoms.kin` -- see the Java copy for the delay
+        // bug both ports carried.
+        Def("deref", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Atoms.Deref(rt, rt.VAt(at)));
+        Def("reset!", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Atoms.ResetAtom(rt, rt.VAt(at), rt.VAt(at + 1)));
+        Def("compare-and-set!", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Atoms.CompareAndSetAtom(rt, rt.VAt(at), rt.VAt(at + 1), rt.VAt(at + 2)));
 
         // --- dynamic bindings -------------------------------------------------
         //

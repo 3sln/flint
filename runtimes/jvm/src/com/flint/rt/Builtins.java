@@ -765,45 +765,13 @@ rt.describe(v) + " is not transientable");
         // be written this plainly.
         def("atom", (rt, at, n) -> newCell(rt, TY_ATOM, rt.vat(at)));
         def("flint/volatile", (rt, at, n) -> newCell(rt, TY_VOLATILE, rt.vat(at)));
-        def("deref", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (rt.isHeapTy(v, TY_ATOM) || rt.isHeapTy(v, TY_VOLATILE)) return rt.slot(v, 0);
-            if (rt.isHeapTy(v, TY_DELAY)) {
-                long thunk = rt.slot(v, 0);
-                if (Val.isNil(thunk)) return rt.slot(v, 1);
-                int base = rt.mark();
-                int di = rt.push(v);
-                long r = rt.invoke(thunk, new long[0]);
-                int ri = rt.push(r);
-                long d = rt.r(di);
-                rt.setSlot(Val.asHeap(d), 0, Val.NIL);   // forced: drop the thunk
-                rt.setSlot(Val.asHeap(d), 1, rt.r(ri));
-                long out = rt.r(ri);
-                rt.popTo(base);
-                return out;
-            }
-            return rt.throwStr("ClassCastException",
-"cannot deref " + rt.describe(v));
-        });
-        def("reset!", (rt, at, n) -> {
-            long a = rt.vat(at);
-            if (!rt.isHeapTy(a, TY_ATOM) && !rt.isHeapTy(a, TY_VOLATILE)) {
-                return rt.throwStr("ClassCastException",
-"not an atom: " + rt.describe(a));
-            }
-            rt.setSlot(Val.asHeap(a), 0, rt.vat(at + 1));
-            return rt.vat(at + 1);
-        });
-        def("compare-and-set!", (rt, at, n) -> {
-            long a = rt.vat(at);
-            if (!rt.isHeapTy(a, TY_ATOM) && !rt.isHeapTy(a, TY_VOLATILE)) {
-                return rt.throwStr("ClassCastException",
-"not an atom: " + rt.describe(a));
-            }
-            if (rt.slot(a, 0) != rt.vat(at + 1)) return Val.FALSE;
-            rt.setSlot(Val.asHeap(a), 0, rt.vat(at + 2));
-            return Val.TRUE;
-        });
+        // GENERATED, from `kin/atoms.kin`. The hand-written body here stored the
+        // thunk's result WITHOUT asking whether it threw, so a delay whose
+        // thunk failed cached nil forever; Rust checked and left it unforced,
+        // so the next deref could try again. Both ports had the bug.
+        def("deref", (rt, at, n) -> com._3sln.flint.kgen.rt.Atoms.deref(rt, rt.vat(at)));
+        def("reset!", (rt, at, n) -> com._3sln.flint.kgen.rt.Atoms.resetAtom(rt, rt.vat(at), rt.vat(at + 1)));
+        def("compare-and-set!", (rt, at, n) -> com._3sln.flint.kgen.rt.Atoms.compareAndSetAtom(rt, rt.vat(at), rt.vat(at + 1), rt.vat(at + 2)));
 
         // --- dynamic bindings -------------------------------------------------
         //

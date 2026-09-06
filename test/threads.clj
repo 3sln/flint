@@ -184,7 +184,33 @@
 ;; `hash`, `kind`, `get`, `count`, `map_get` and `seq`, which are Rust and do
 ;; not shake. A table remains a candidate for a UNIT (`doc/decisions/0023`); the
 ;; printer is no longer the thing standing in the way.
-            (< pure-size 307000))
+;; RAISED 2026-09-06, from 307 000, for the ATOM OPERATIONS becoming generated.
+;;
+;; MEASURED by building the shipped module with `kin/atoms.kin` applied and
+;; again with the hand-written `coll.rs` bodies, same units both times:
+;; 307 239 against 305 515, so 1 724 bytes.
+;;
+;; The first attempt at that measurement was WRONG and the way it was wrong is
+;; worth recording: `bb test/threads.clj` on its own reuses whatever units
+;; `bin/build-units` last produced, so both arms read the SAME stale artefact
+;; and agreed to the byte. A measurement that cannot tell the two arms apart is
+;; not evidence that they are equal.
+;;
+;; What the bytes buy is three fixes and one convergence. Both ports' `deref`
+;; stored a delay's thunk result WITHOUT asking whether it threw, so a delay
+;; whose thunk failed cached nil forever where native left it unforced and
+;; retryable. Native's own `deref` held the delay in a HOST LOCAL across the
+;; thunk call and then wrote through it -- and running a thunk can collect, so
+;; the box it wrote to may have moved (`doc/decisions/0031`). And both ports
+;; implemented atoms inline in `Builtins` as lambdas, which is why neither bug
+;; was visible next to the other two runtimes.
+;;
+;; Roughly half the cost is `invoke_roots` being linked: the generated `deref`
+;; calls the thunk through a run of shadow-stack roots rather than a host
+;; slice, which is what makes the rooting above expressible in all three at
+;; once. It is a fixed cost, and the next generated caller of a value pays none
+;; of it.
+            (< pure-size 310000))
 
 ;; RE-BASELINED AGAIN, and this one is a decision rather than a drift:
 ;; 300 281 against 280 781, and 18 917 of it is ONE ARM IN THE WIRE CODEC.

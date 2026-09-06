@@ -1,0 +1,108 @@
+;; ATOMS, VOLATILES and DELAYS -- the three boxes a value can be read out of.
+;;
+;; `deref` TAKES ALL THREE because a program says `@x` without caring which it
+;; holds, and the difference is what happens the FIRST time: an atom and a
+;; volatile just answer, a delay runs its thunk once and remembers.
+(ns flint.rt.atoms
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == or not is-heap as-heap ty nil?
+                                   new-obj slot set-slot mark push r pop-to
+                                   invoke-roots is-thrown
+                                   throw-str str-cat static-text
+                                   Rt Value Bool RootIx Ty Text NIL TRUE FALSE
+                                   TY_ATOM TY_VOLATILE TY_DELAY]]
+            [flint.rt.nouns :refer [describe]]))
+
+(doc "A fresh atom holding `v`.")
+(defn ^:pub ^:method ^Value new-atom [^:mut ^Rt rt ^Value v]
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^Value a (new-obj rt TY_ATOM 2)]
+    (if (nil? rt a)
+      (do (pop-to rt base)
+          (return NIL)))
+    (comment "READ BACK FROM THE ROOT: the allocation may have moved it (0031).")
+    (set-slot rt a 0 (r rt vi))
+    (set-slot rt a 1 NIL)
+    (pop-to rt base)
+    (return a)))
+
+(doc "Is `at` a box that can be reset -- an atom or a volatile?"
+     ""
+     "A DELAY IS NOT. It has no set operation: the whole point is that it is"
+     "computed once and then fixed, so `reset!` on one would be undoing the"
+     "only guarantee it makes.")
+(defn ^:inline ^:method ^Bool is-resettable [^Rt rt ^Value at]
+  (if (not (is-heap at))
+    (return false))
+  (let [^Ty t (ty rt (as-heap at))]
+    (return (or (== t TY_ATOM) (== t TY_VOLATILE)))))
+
+(doc "Read the box."
+     ""
+     "A DELAY RUNS ITS THUNK ONCE. The thunk slot is cleared BEFORE the result"
+     "is stored, so a delay that has run holds no reference to the code that"
+     "produced it -- and the cleared slot is also how the next `deref` knows"
+     "not to run it again.")
+(defn ^:pub ^:method ^Value deref [^:mut ^Rt rt ^Value v]
+  (if (is-heap v)
+    (do
+      (let [^Ty t (ty rt (as-heap v))]
+        (if (or (== t TY_ATOM) (== t TY_VOLATILE))
+          (return (slot rt v 0)))
+        (if (== t TY_DELAY)
+          (do
+            (let [^Value thunk (slot rt v 0)]
+              (if (nil? rt thunk)
+                (return (slot rt v 1)))
+              (let [^RootIx base (mark rt)
+                    ^RootIx vi (push rt v)
+                    ^RootIx ti (push rt thunk)
+                    ^Value res (invoke-roots rt (r rt ti) ti 0)]
+                (if (is-thrown rt)
+                  (do (pop-to rt base)
+                      (return NIL)))
+                (comment "THE DELAY IS RE-READ FROM ITS ROOT: running the"
+                         "thunk may have collected, and the box could have"
+                         "moved under a host local.")
+                (set-slot rt (r rt vi) 0 NIL)
+                (set-slot rt (r rt vi) 1 res)
+                (pop-to rt base)
+                (return res))))))))
+  (let [^Text what (describe rt v)]
+    (return (throw-str rt "ClassCastException"
+                       (str-cat (static-text "cannot deref ") what)))))
+
+(doc "Set the atom to `next` only if it still holds `expect`."
+     ""
+     "THE PRIMITIVE `swap!` IS BUILT FROM. `swap!` used to be `(reset! a (f"
+     "(deref a)))` -- a read-modify-write with no atomicity, which loses"
+     "updates the moment two threads are inside it at once, and loses them"
+     "SILENTLY: the counter is simply smaller than it should be. That was"
+     "invisible while one thread ran a sandbox and became reachable the day two"
+     "could (`0028`)."
+     ""
+     "COMPARES BY IDENTITY, as Clojure's does. A value-equal but distinct"
+     "object means someone else has been here, and the retry is cheaper than a"
+     "deep comparison on every attempt.")
+(defn ^:pub ^:method ^Value compare-and-set-atom
+  [^:mut ^Rt rt ^Value at ^Value expect ^Value next]
+  (if (not (is-resettable rt at))
+    (do
+      (let [^Text what (describe rt at)]
+        (return (throw-str rt "ClassCastException"
+                           (str-cat (static-text "not an atom: ") what))))))
+  (if (== (slot rt at 0) expect)
+    (do (set-slot rt at 0 next)
+        (return TRUE)))
+  (return FALSE))
+
+(doc "Set the atom, and answer what was set.")
+(defn ^:pub ^:method ^Value reset-atom [^:mut ^Rt rt ^Value at ^Value v]
+  (if (not (is-resettable rt at))
+    (do
+      (let [^Text what (describe rt at)]
+        (return (throw-str rt "ClassCastException"
+                           (str-cat (static-text "not an atom: ") what))))))
+  (set-slot rt at 0 v)
+  (return v))

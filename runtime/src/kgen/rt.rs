@@ -21,6 +21,7 @@
 //! only when the result is known non-negative -- is what the sources use, and
 //! this makes the unguarded one impossible to leave in by accident.
 pub mod assoc;
+pub mod atoms;
 pub mod byteconcat;
 pub mod byteat;
 pub mod byteslice;

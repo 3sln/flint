@@ -100,10 +100,15 @@
 ;; program, rather than native naming no value and both ports naming one.
 ;; `test/threads.clj` carries the measurement and the accounting.
 ;;
+;; Raised again by 1 724 bytes, 2026-09-06, for the atom operations becoming
+;; generated -- which fixed a delay that cached nil forever on both ports and a
+;; delay held in a host local across its own thunk on native. Again,
+;; `test/threads.clj` carries the measurement and the accounting.
+;;
 ;; Two places tracking one number is how a number stops meaning anything. The
 ;; budget is duplicated because the two files measure at different moments and
 ;; both need a bound; the REASONS are not, and this is the pointer instead.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 307000))
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 310000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

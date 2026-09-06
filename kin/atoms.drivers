@@ -1,0 +1,329 @@
+--rust-head
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TRUE: Value = Value(0xFFFD); const FALSE: Value = Value(0xFFFC);
+const TY_ATOM: u8 = 32; const TY_VOLATILE: u8 = 39; const TY_DELAY: u8 = 38;
+const TY_STR: u8 = 2;
+impl Value {
+    fn is_heap(self) -> bool {
+        self.0 >= 100 && self.0 != NIL.0 && self.0 != TRUE.0 && self.0 != FALSE.0
+    }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, bump: u64, roots: Vec<Value>,
+            thrown: Value, msg: alloc::string::String,
+            starve: bool, ran: u32, throw_in_thunk: bool }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn slot(&self, v: Value, i: u32) -> Value { Value(self.h[v.0 as usize + i as usize]) }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.h[v.0 as usize + i as usize] = x.0; }
+    fn new_obj(&mut self, t: u8, n: u32) -> Value {
+        if self.starve { return NIL; }
+        let a = self.bump; self.bump += n as u64 + 8;
+        self.gc.sp.m[a as usize] = t;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        Value::heap(a)
+    }
+    // THE THUNK COUNTS ITS CALLS, which is how the fixture sees that a delay
+    // runs ONCE. It answers a fixed value, or throws when asked to.
+    fn invoke_roots(&mut self, _f: Value, _base: usize, _n: u32) -> Value {
+        self.ran += 1;
+        if self.throw_in_thunk {
+            self.thrown = Value(0x11);
+            return NIL;
+        }
+        Value(0x7777)
+    }
+    fn is_thrown(&self) -> bool { !self.thrown.is_nil() }
+    fn describe(&mut self, v: Value) -> alloc::string::String {
+        if v.is_nil() { return alloc::string::String::from("nil"); }
+        if !v.is_heap() { return alloc::string::String::from("a number"); }
+        alloc::string::String::from(match ty(&self.gc.sp, v.as_heap()) {
+            TY_STR => "a string",
+            TY_DELAY => "a delay",
+            _ => "something else",
+        })
+    }
+    fn throw_str(&mut self, _kind: &str, m: &alloc::string::String) -> Value {
+        self.msg = m.clone();
+        NIL
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 4000], gc: Gc { sp: Space { m: vec![0u8; 4000] } },
+                      bump: 100, roots: Vec::new(), thrown: NIL,
+                      msg: alloc::string::String::new(), starve: false,
+                      ran: 0, throw_in_thunk: false };
+    let mut o = String::new();
+    let a = rt.new_atom(Value(0x11));
+    o.push_str(&format!("atom={} ", rt.deref(a).0));
+    // RESET answers what it set, and the atom holds it.
+    let r = rt.reset_atom(a, Value(0x22));
+    o.push_str(&format!("reset={}/{} ", r.0, rt.deref(a).0));
+    // COMPARE-AND-SET BY IDENTITY: the right expectation wins, a stale one
+    // loses and changes nothing. That is what makes `swap!` safe under two
+    // threads, where read-modify-write silently lost updates (`0028`).
+    let ok = rt.compare_and_set_atom(a, Value(0x22), Value(0x33));
+    let stale = rt.compare_and_set_atom(a, Value(0x22), Value(0x44));
+    o.push_str(&format!("cas={}{}/{} ", (ok.0 == TRUE.0) as u32,
+                        (stale.0 == FALSE.0) as u32, rt.deref(a).0));
+    // A VOLATILE is the same three operations.
+    let vol = rt.new_obj(TY_VOLATILE, 1);
+    rt.set(vol, 0, Value(0x55));
+    rt.reset_atom(vol, Value(0x66));
+    o.push_str(&format!("vol={} ", rt.deref(vol).0));
+    // A DELAY RUNS ITS THUNK ONCE. Two derefs, one call -- and the thunk slot
+    // is cleared, so the delay holds no reference to the code afterwards.
+    let d = rt.new_obj(TY_DELAY, 2);
+    rt.set(d, 0, Value(0x99));
+    let d1 = rt.deref(d);
+    let d2 = rt.deref(d);
+    o.push_str(&format!("delay={}/{}/ran={}/cleared={} ", d1.0, d2.0, rt.ran,
+                        rt.slot(d, 0).is_nil() as u32));
+    // A THUNK THAT THROWS answers nil and leaves the delay UNFORCED, so the
+    // next deref tries again rather than caching the failure.
+    let d3 = rt.new_obj(TY_DELAY, 2);
+    rt.set(d3, 0, Value(0x99));
+    rt.throw_in_thunk = true;
+    let bad = rt.deref(d3);
+    rt.throw_in_thunk = false;
+    rt.thrown = NIL;
+    o.push_str(&format!("threw={}/unforced={} ", bad.is_nil() as u32,
+                        (!rt.slot(d3, 0).is_nil()) as u32));
+    // AND THE REFUSALS, each naming what arrived.
+    let s = rt.new_obj(TY_STR, 1);
+    rt.deref(s);
+    let m1 = rt.msg.clone();
+    rt.reset_atom(s, Value(1));
+    let m2 = rt.msg.clone();
+    rt.compare_and_set_atom(d, Value(1), Value(2));
+    let m3 = rt.msg.clone();
+    o.push_str(&format!("bad=[{}][{}][{}] ", m1, m2, m3));
+    // A REFUSED HEAP gives nil rather than a half-built atom.
+    rt.starve = true;
+    o.push_str(&format!("starved={}", rt.new_atom(Value(1)).is_nil() as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL, TRUE = 0xFFFDL, FALSE = 0xFFFCL;
+    static final int TY_ATOM = 32, TY_VOLATILE = 39, TY_DELAY = 38, TY_STR = 2;
+    static final class Val {
+        static final long NIL = Probe.NIL, TRUE = Probe.TRUE, FALSE = Probe.FALSE;
+        static boolean isHeap(long v) {
+            return v >= 100 && v != NIL && v != TRUE && v != FALSE;
+        }
+        static long asHeap(long v) { return v; }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Space { byte[] m = new byte[4000]; }
+    static final class Rt {
+        long[] h = new long[4000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        long bump = 100;
+        long thrown = NIL;
+        String msg = "";
+        boolean starve = false, throwInThunk = false;
+        int ran = 0;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long v, int i) { return h[(int) v + i]; }
+        void setSlot(long v, int i, long x) { h[(int) v + i] = x; }
+        long invokeRoots(long f, int base, int n) {
+            ran++;
+            if (throwInThunk) { thrown = 0x11; return NIL; }
+            return 0x7777;
+        }
+        long throwStr(String kind, String m) { msg = m; return NIL; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static final class Conc {
+        static long newObj(Rt rt, int t, int n) {
+            if (rt.starve) return NIL;
+            long a = rt.bump; rt.bump += n + 8;
+            rt.gc.sp.m[(int) a] = (byte) t;
+            for (int i = 0; i < n; i++) rt.h[(int) a + i] = NIL;
+            return Val.heap(a);
+        }
+    }
+    static final class com { static final class flint { static final class rt {
+        static final class Nouns {
+            static String describe(Rt rt, long v) {
+                if (Val.isNil(v)) return "nil";
+                if (!Val.isHeap(v)) return "a number";
+                switch (ty(rt.gc.sp, v)) {
+                    case TY_STR: return "a string";
+                    case TY_DELAY: return "a delay";
+                    default: return "something else";
+                }
+            }
+        }
+    } } }
+    static String describe(Rt rt, long v) { return com.flint.rt.Nouns.describe(rt, v); }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long a = newAtom(rt, 0x11);
+        o.append("atom=").append(deref(rt, a)).append(' ');
+        o.append("reset=").append(resetAtom(rt, a, 0x22)).append('/')
+         .append(deref(rt, a)).append(' ');
+        long ok = compareAndSetAtom(rt, a, 0x22, 0x33);
+        long stale = compareAndSetAtom(rt, a, 0x22, 0x44);
+        o.append("cas=").append(ok == TRUE ? 1 : 0).append(stale == FALSE ? 1 : 0)
+         .append('/').append(deref(rt, a)).append(' ');
+        long vol = Conc.newObj(rt, TY_VOLATILE, 1);
+        rt.setSlot(vol, 0, 0x55);
+        resetAtom(rt, vol, 0x66);
+        o.append("vol=").append(deref(rt, vol)).append(' ');
+        long d = Conc.newObj(rt, TY_DELAY, 2);
+        rt.setSlot(d, 0, 0x99);
+        long d1 = deref(rt, d), d2 = deref(rt, d);
+        o.append("delay=").append(d1).append('/').append(d2).append("/ran=").append(rt.ran)
+         .append("/cleared=").append(Val.isNil(rt.slot(d, 0)) ? 1 : 0).append(' ');
+        long d3 = Conc.newObj(rt, TY_DELAY, 2);
+        rt.setSlot(d3, 0, 0x99);
+        rt.throwInThunk = true;
+        long bad = deref(rt, d3);
+        rt.throwInThunk = false;
+        rt.thrown = NIL;
+        o.append("threw=").append(Val.isNil(bad) ? 1 : 0)
+         .append("/unforced=").append(!Val.isNil(rt.slot(d3, 0)) ? 1 : 0).append(' ');
+        long s = Conc.newObj(rt, TY_STR, 1);
+        deref(rt, s);
+        String m1 = rt.msg;
+        resetAtom(rt, s, 1);
+        String m2 = rt.msg;
+        compareAndSetAtom(rt, d, 1, 2);
+        String m3 = rt.msg;
+        o.append("bad=[").append(m1).append("][").append(m2).append("][").append(m3).append("] ");
+        rt.starve = true;
+        o.append("starved=").append(Val.isNil(newAtom(rt, 1)) ? 1 : 0);
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Nouns {
+        internal static string Describe(Probe.Rt rt, long v) {
+            if (Probe.Val.IsNil(v)) return "nil";
+            if (!Probe.Val.IsHeap(v)) return "a number";
+            switch (Probe.Obj.Ty(rt.gc.sp, v)) {
+                case Probe.Obj.TyStr: return "a string";
+                case Probe.Obj.TyDelay: return "a delay";
+                default: return "something else";
+            }
+        }
+    }
+}
+--csharp-head
+    internal const long NIL = 0xFFFFL, TRUE = 0xFFFDL, FALSE = 0xFFFCL;
+    internal static class Obj {
+        internal const int TyAtom = 32, TyVolatile = 39, TyDelay = 38, TyStr = 2;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL, True = 0xFFFDL, False = 0xFFFCL;
+        internal static bool IsHeap(long v) {
+            return v >= 100 && v != Nil && v != True && v != False;
+        }
+        internal static long AsHeap(long v) { return v; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    internal sealed class Space { internal byte[] m = new byte[4000]; }
+    internal sealed class Rt {
+        internal long[] h = new long[4000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal long thrown = Val.Nil;
+        internal string msg = "";
+        internal bool starve = false, throwInThunk = false;
+        internal int ran = 0;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Slot(long v, int i) { return h[(int) v + i]; }
+        internal void SetSlot(long v, int i, long x) { h[(int) v + i] = x; }
+        internal long InvokeRoots(long f, int bas, int n) {
+            ran++;
+            if (throwInThunk) { thrown = 0x11; return Val.Nil; }
+            return 0x7777;
+        }
+        internal long ThrowStr(string kind, string m) { msg = m; return Val.Nil; }
+    }
+    // `describe` is a SIBLING, so it lands unqualified; the namespace copy
+    // above is what `global::Flint.Rt.Nouns` needs to exist for.
+    internal static string Describe(Rt rt, long v) {
+        return global::Flint.Rt.Nouns.Describe(rt, v);
+    }
+    internal static class Conc {
+        internal static long NewObj(Rt rt, int t, int n) {
+            if (rt.starve) return Val.Nil;
+            long a = rt.bump; rt.bump += n + 8;
+            rt.gc.sp.m[(int) a] = (byte) t;
+            for (int i = 0; i < n; i++) rt.h[(int) a + i] = Val.Nil;
+            return Val.Heap(a);
+        }
+    }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long a = NewAtom(rt, 0x11);
+        o.Append("atom=").Append(Deref(rt, a)).Append(' ');
+        o.Append("reset=").Append(ResetAtom(rt, a, 0x22)).Append('/')
+         .Append(Deref(rt, a)).Append(' ');
+        long ok = CompareAndSetAtom(rt, a, 0x22, 0x33);
+        long stale = CompareAndSetAtom(rt, a, 0x22, 0x44);
+        o.Append("cas=").Append(ok == TRUE ? 1 : 0).Append(stale == FALSE ? 1 : 0)
+         .Append('/').Append(Deref(rt, a)).Append(' ');
+        long vol = Conc.NewObj(rt, Obj.TyVolatile, 1);
+        rt.SetSlot(vol, 0, 0x55);
+        ResetAtom(rt, vol, 0x66);
+        o.Append("vol=").Append(Deref(rt, vol)).Append(' ');
+        long d = Conc.NewObj(rt, Obj.TyDelay, 2);
+        rt.SetSlot(d, 0, 0x99);
+        long d1 = Deref(rt, d), d2 = Deref(rt, d);
+        o.Append("delay=").Append(d1).Append('/').Append(d2).Append("/ran=").Append(rt.ran)
+         .Append("/cleared=").Append(Val.IsNil(rt.Slot(d, 0)) ? 1 : 0).Append(' ');
+        long d3 = Conc.NewObj(rt, Obj.TyDelay, 2);
+        rt.SetSlot(d3, 0, 0x99);
+        rt.throwInThunk = true;
+        long bad = Deref(rt, d3);
+        rt.throwInThunk = false;
+        rt.thrown = Val.Nil;
+        o.Append("threw=").Append(Val.IsNil(bad) ? 1 : 0)
+         .Append("/unforced=").Append(!Val.IsNil(rt.Slot(d3, 0)) ? 1 : 0).Append(' ');
+        long s = Conc.NewObj(rt, Obj.TyStr, 1);
+        Deref(rt, s);
+        string m1 = rt.msg;
+        ResetAtom(rt, s, 1);
+        string m2 = rt.msg;
+        CompareAndSetAtom(rt, d, 1, 2);
+        string m3 = rt.msg;
+        o.Append("bad=[").Append(m1).Append("][").Append(m2).Append("][").Append(m3).Append("] ");
+        rt.starve = true;
+        o.Append("starved=").Append(Val.IsNil(NewAtom(rt, 1)) ? 1 : 0);
+        System.Console.WriteLine(o.ToString());
+    }
