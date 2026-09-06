@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
 using static global::_3sln.Flint.Kgen.Rt.Tablebuild;
 using static global::_3sln.Flint.Kgen.Rt.Tablecell;
 using static global::_3sln.Flint.Kgen.Rt.Tablefill;
@@ -109,5 +110,63 @@ public static class Tablerow {
     public static long TableConj(Rt rt, long t, long row) {
         int n = TableCount(rt, t);
         return TableAssoc(rt, t, Val.Fixnum(n & 0xFFFFFFFFL), row);
+    }
+    /// Rows `[from, to)` as a table of their own.
+    /// 
+    /// A SLICE SHARES ITS CHUNKS. Only the ones the range touches are carried,
+    /// and the offset within the first of them is where the slice begins -- so
+    /// slicing costs a head, not a copy, and `table-ref` is the single place
+    /// that has to know about it.
+    /// 
+    /// `from` AND `to` ARE `I64`s for the same reason `assoc`'s index is: a
+    /// program supplies them, and a negative one is a thing to refuse rather
+    /// than a thing that cannot be represented.
+    public static long TableSlice(Rt rt, long t, long from, long to) {
+        long n = (long) TableCount(rt, t);
+        if ((from < 0) || ((to > n) || (from > to))) {
+            return rt.ThrowStr("IndexOutOfBoundsException", ("slice [" + from + " " + to + ") is outside a table of " + n + " rows"));
+        }
+        int @base = rt.Mark();
+        int ti = rt.Push(t);
+        if (from == to) {
+            // AN EMPTY SLICE IS A FRESH EMPTY TABLE, not a window of no
+            // rows onto the old chunks: keeping them would hold a whole
+            // table alive to say nothing.
+            long sch0 = rt.Slot(rt.R(ti), global::Flint.Rt.Table.TB_SCHEMA);
+            int ei = rt.Push(sch0);
+            long none = Vec.Empty(rt);
+            long fresh = NewTable(rt, rt.R(ei), none);
+            // `fresh`, `ei` and `sch0` rather than `out`, `si` and
+            // `sch`: C# refuses a local whose name is used in an
+            // enclosing scope, even from a SIBLING branch, and the main
+            // path below binds all three. One name per function is the
+            // portable rule.
+            rt.PopTo(@base);
+            return fresh;
+        }
+        int off = TableOffset(rt, rt.R(ti));
+        int lo = (int) from;
+        int hi = (int) to;
+        int first = (int)((uint) (off + lo) >> global::Flint.Rt.Table.CHUNK_SHIFT);
+        int last = (int)((uint) ((off + hi) - 1) >> global::Flint.Rt.Table.CHUNK_SHIFT);
+        int ci = rt.Push(rt.Slot(rt.R(ti), global::Flint.Rt.Table.TB_CHUNKS));
+        long kept0 = Vec.Empty(rt);
+        int ki = rt.Push(kept0);
+        for (int k = first; k < last + 1; k++) {
+            long ch = Vec.Nth(rt, rt.R(ci), k, Val.Nil);
+            long nv = Vec.Conj(rt, rt.R(ki), ch);
+            rt.SetR(ki, nv);
+        }
+        long sch = rt.Slot(rt.R(ti), global::Flint.Rt.Table.TB_SCHEMA);
+        int si = rt.Push(sch);
+        long nt = Val.Heap(rt.Alloc(Obj.TyTable, global::Flint.Rt.Table.TB_LEN));
+        int ni = rt.Push(nt);
+        rt.SetSlot(Val.AsHeap(rt.R(ni)), global::Flint.Rt.Table.TB_SCHEMA, rt.R(si));
+        rt.SetSlot(Val.AsHeap(rt.R(ni)), global::Flint.Rt.Table.TB_CHUNKS, rt.R(ki));
+        rt.SetSlot(Val.AsHeap(rt.R(ni)), global::Flint.Rt.Table.TB_COUNT, Val.Fixnum(((int) (to - from)) & 0xFFFFFFFFL));
+        rt.SetSlot(Val.AsHeap(rt.R(ni)), global::Flint.Rt.Table.TB_OFFSET, Val.Fixnum(((off + lo) & (global::Flint.Rt.Table.CHUNK - 1)) & 0xFFFFFFFFL));
+        long @out = rt.R(ni);
+        rt.PopTo(@base);
+        return @out;
     }
 }

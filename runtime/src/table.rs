@@ -134,60 +134,6 @@ impl Rt {
     // a row: a scan of one field of a million-row table should touch a million
     // values and nothing else.
 
-    /// `(slice t from to)` -- rows `[from, to)`, SHARING every chunk it spans.
-    ///
-    /// Chunks outside the range are dropped, so a slice does not retain the
-    /// table; chunks inside it are the same objects. The row offset in the head
-    /// is what lets the range start anywhere without rebuilding a chunk.
-    pub fn table_slice(&mut self, t: Value, from: i64, to: i64) -> Value {
-        let n = self.table_count(t) as i64;
-        if from < 0 || to > n || from > to {
-            let msg = alloc::format!(
-                "slice [{from} {to}) is outside a table of {n} rows"
-            );
-            return self.throw_str("IndexOutOfBoundsException", &msg);
-        }
-        let base = self.mark();
-        let ti = self.push(t);
-        if from == to {
-            let s = self.slot(self.r(ti), TB_SCHEMA);
-            let si = self.push(s);
-            let sv = self.r(si);
-            let out = self.new_table(sv, self.empty_vec());
-            self.pop_to(base);
-            return out;
-        }
-        let off = self.table_offset(self.r(ti));
-        let first = (off + from as u32) >> CHUNK_SHIFT;
-        let last = (off + to as u32 - 1) >> CHUNK_SHIFT;
-        let chunks = self.slot(self.r(ti), TB_CHUNKS);
-        let ci = self.push(chunks);
-        let kept = self.empty_vec();
-        let ki = self.push(kept);
-        for k in first..=last {
-            let ch = self.vec_nth(self.r(ci), k, NIL);
-            let nv = self.vec_conj(self.r(ki), ch);
-            self.set_r(ki, nv);
-        }
-        let s = self.slot(self.r(ti), TB_SCHEMA);
-        let si = self.push(s);
-        let a = self.alloc(TY_TABLE, TB_LEN);
-        let nt = Value::heap(a);
-        let ni = self.push(nt);
-        let (sv, kv) = (self.r(si), self.r(ki));
-        self.set(self.r(ni), TB_SCHEMA, sv);
-        self.set(self.r(ni), TB_CHUNKS, kv);
-        self.set(self.r(ni), TB_COUNT, Value::fixnum(to - from));
-        self.set(
-            self.r(ni),
-            TB_OFFSET,
-            Value::fixnum(((off + from as u32) & (CHUNK - 1)) as i64),
-        );
-        let out = self.r(ni);
-        self.pop_to(base);
-        out
-    }
-
     /// `(reduce-column t :col f init)` -- `f` over one column, without building
     /// a row or a ref for any of them. This is the operation the type exists
     /// for: scanning one field should cost one field.

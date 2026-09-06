@@ -105,4 +105,62 @@ impl Rt {
         let n: u32 = self.table_count(t);
         return self.table_assoc(t, Value::fixnum(n as i64), row);
     }
+    /// Rows `[from, to)` as a table of their own.
+    /// 
+    /// A SLICE SHARES ITS CHUNKS. Only the ones the range touches are carried,
+    /// and the offset within the first of them is where the slice begins -- so
+    /// slicing costs a head, not a copy, and `table-ref` is the single place
+    /// that has to know about it.
+    /// 
+    /// `from` AND `to` ARE `I64`s for the same reason `assoc`'s index is: a
+    /// program supplies them, and a negative one is a thing to refuse rather
+    /// than a thing that cannot be represented.
+    pub fn table_slice(&mut self, t: Value, from: i64, to: i64) -> Value {
+        let n: i64 = self.table_count(t) as i64;
+        if (from < 0) || ((to > n) || (from > to)) {
+            return self.throw_str("IndexOutOfBoundsException", &alloc::format!("{}{}{}{}{}{}{}", "slice [", from, " ", to, ") is outside a table of ", n, " rows"));
+        }
+        let base: usize = self.mark();
+        let ti: usize = self.push(t);
+        if from == to {
+            // AN EMPTY SLICE IS A FRESH EMPTY TABLE, not a window of no
+            // rows onto the old chunks: keeping them would hold a whole
+            // table alive to say nothing.
+            let sch0: Value = self.slot(self.r(ti), crate::table::TB_SCHEMA);
+            let ei: usize = self.push(sch0);
+            let none: Value = self.empty_vec();
+            let fresh: Value = self.new_table(self.r(ei), none);
+            // `fresh`, `ei` and `sch0` rather than `out`, `si` and
+            // `sch`: C# refuses a local whose name is used in an
+            // enclosing scope, even from a SIBLING branch, and the main
+            // path below binds all three. One name per function is the
+            // portable rule.
+            self.pop_to(base);
+            return fresh;
+        }
+        let off: u32 = self.table_offset(self.r(ti));
+        let lo: u32 = from as u32;
+        let hi: u32 = to as u32;
+        let first: u32 = (off + lo) >> crate::table::CHUNK_SHIFT;
+        let last: u32 = ((off + hi) - 1) >> crate::table::CHUNK_SHIFT;
+        let ci: usize = self.push(self.slot(self.r(ti), crate::table::TB_CHUNKS));
+        let kept0: Value = self.empty_vec();
+        let ki: usize = self.push(kept0);
+        for k in first..last + 1 {
+            let ch: Value = self.vec_nth(self.r(ci), k, NIL);
+            let nv: Value = self.vec_conj(self.r(ki), ch);
+            self.set_r(ki, nv);
+        }
+        let sch: Value = self.slot(self.r(ti), crate::table::TB_SCHEMA);
+        let si: usize = self.push(sch);
+        let nt: Value = Value::heap(self.alloc(TY_TABLE, crate::table::TB_LEN));
+        let ni: usize = self.push(nt);
+        self.set(self.r(ni), crate::table::TB_SCHEMA, self.r(si));
+        self.set(self.r(ni), crate::table::TB_CHUNKS, self.r(ki));
+        self.set(self.r(ni), crate::table::TB_COUNT, Value::fixnum(((to - from) as u32) as i64));
+        self.set(self.r(ni), crate::table::TB_OFFSET, Value::fixnum(((off + lo) & (crate::table::CHUNK - 1)) as i64));
+        let out: Value = self.r(ni);
+        self.pop_to(base);
+        return out;
+    }
 }

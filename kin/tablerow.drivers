@@ -536,7 +536,36 @@ fn main() {
     let m2 = rt.thrown.clone();
     rt.table_assoc(t, Value::fixnum(7), r0);
     let m3 = rt.thrown.clone();
-    o.push_str(&format!("bad=[{}][{}][{}]", m1, m2, m3));
+    o.push_str(&format!("bad=[{}][{}][{}] ", m1, m2, m3));
+    // A SLICE SHARES ITS CHUNKS. Rows 1..5 of a six-row table span both
+    // chunks; the offset within the first is where it begins.
+    let sl = rt.table_slice(t, 1, 5);
+    let sshow = rt.show_rows(sl, 2);
+    let skept = rt.vec_count(rt.slot(sl, table::TB_CHUNKS));
+    let soff = rt.slot(sl, table::TB_OFFSET).as_fixnum();
+    o.push_str(&format!("slice={}|{}|{} ", sshow, skept, soff));
+    // ONE CHUNK'S WORTH from inside the second chunk carries ONE chunk.
+    let sl2 = rt.table_slice(t, 4, 6);
+    let s2show = rt.show_rows(sl2, 2);
+    let s2kept = rt.vec_count(rt.slot(sl2, table::TB_CHUNKS));
+    o.push_str(&format!("slice2={}|{} ", s2show, s2kept));
+    // AND THE CHUNK IS THE SAME OBJECT, not a copy.
+    let orig = rt.vec_nth(rt.slot(t, table::TB_CHUNKS), 1, NIL);
+    let kept = rt.vec_nth(rt.slot(sl2, table::TB_CHUNKS), 0, NIL);
+    o.push_str(&format!("shared={} ", (orig.0 == kept.0) as u32));
+    // AN EMPTY SLICE keeps nothing alive.
+    let e = rt.table_slice(t, 3, 3);
+    let ekept = rt.vec_count(rt.slot(e, table::TB_CHUNKS));
+    let ecount = rt.slot(e, table::TB_COUNT).as_fixnum();
+    o.push_str(&format!("empty={}/{} ", ekept, ecount));
+    // AND THE THREE WAYS A RANGE CAN BE WRONG.
+    rt.table_slice(t, -1, 3);
+    let s1 = rt.thrown.clone();
+    rt.table_slice(t, 0, 7);
+    let s2 = rt.thrown.clone();
+    rt.table_slice(t, 4, 2);
+    let s3 = rt.thrown.clone();
+    o.push_str(&format!("badslice=[{}][{}][{}]", s1, s2, s3));
     println!("{}", o);
 }
 --java-head
@@ -969,7 +998,27 @@ fn main() {
         String m2 = rt.thrown;
         tableAssoc(rt, t, Val.fixnum(7), r0);
         String m3 = rt.thrown;
-        o.append("bad=[").append(m1).append("][").append(m2).append("][").append(m3).append("]");
+        o.append("bad=[").append(m1).append("][").append(m2).append("][").append(m3).append("] ");
+        long sl = tableSlice(rt, t, 1, 5);
+        o.append("slice=").append(showRows(rt, sl, 2)).append('|')
+         .append(Vec.count(rt, rt.slot(sl, Table.TB_CHUNKS))).append('|')
+         .append(Val.asFixnum(rt.slot(sl, Table.TB_OFFSET))).append(' ');
+        long sl2 = tableSlice(rt, t, 4, 6);
+        o.append("slice2=").append(showRows(rt, sl2, 2)).append('|')
+         .append(Vec.count(rt, rt.slot(sl2, Table.TB_CHUNKS))).append(' ');
+        o.append("shared=")
+         .append(Vec.nth(rt, rt.slot(t, Table.TB_CHUNKS), 1, NIL)
+                 == Vec.nth(rt, rt.slot(sl2, Table.TB_CHUNKS), 0, NIL) ? 1 : 0).append(' ');
+        long e = tableSlice(rt, t, 3, 3);
+        o.append("empty=").append(Vec.count(rt, rt.slot(e, Table.TB_CHUNKS))).append('/')
+         .append(Val.asFixnum(rt.slot(e, Table.TB_COUNT))).append(' ');
+        tableSlice(rt, t, -1, 3);
+        String s1 = rt.thrown;
+        tableSlice(rt, t, 0, 7);
+        String s2 = rt.thrown;
+        tableSlice(rt, t, 4, 2);
+        String s3 = rt.thrown;
+        o.append("badslice=[").append(s1).append("][").append(s2).append("][").append(s3).append("]");
         System.out.println(o.toString());
     }
 --csharp-pre
@@ -1405,6 +1454,27 @@ namespace Flint.Rt {
         string m2 = rt.thrown;
         TableAssoc(rt, t, Val.Fixnum(7), r0);
         string m3 = rt.thrown;
-        o.Append("bad=[").Append(m1).Append("][").Append(m2).Append("][").Append(m3).Append("]");
+        o.Append("bad=[").Append(m1).Append("][").Append(m2).Append("][").Append(m3).Append("] ");
+        long sl = TableSlice(rt, t, 1, 5);
+        o.Append("slice=").Append(ShowRows(rt, sl, 2)).Append('|')
+         .Append(Vec.Count(rt, rt.Slot(sl, global::Flint.Rt.Table.TB_CHUNKS))).Append('|')
+         .Append(Val.AsFixnum(rt.Slot(sl, global::Flint.Rt.Table.TB_OFFSET))).Append(' ');
+        long sl2 = TableSlice(rt, t, 4, 6);
+        o.Append("slice2=").Append(ShowRows(rt, sl2, 2)).Append('|')
+         .Append(Vec.Count(rt, rt.Slot(sl2, global::Flint.Rt.Table.TB_CHUNKS))).Append(' ');
+        o.Append("shared=")
+         .Append(Vec.Nth(rt, rt.Slot(t, global::Flint.Rt.Table.TB_CHUNKS), 1, Val.Nil)
+                 == Vec.Nth(rt, rt.Slot(sl2, global::Flint.Rt.Table.TB_CHUNKS), 0, Val.Nil) ? 1 : 0)
+         .Append(' ');
+        long e = TableSlice(rt, t, 3, 3);
+        o.Append("empty=").Append(Vec.Count(rt, rt.Slot(e, global::Flint.Rt.Table.TB_CHUNKS))).Append('/')
+         .Append(Val.AsFixnum(rt.Slot(e, global::Flint.Rt.Table.TB_COUNT))).Append(' ');
+        TableSlice(rt, t, -1, 3);
+        string s1 = rt.thrown;
+        TableSlice(rt, t, 0, 7);
+        string s2 = rt.thrown;
+        TableSlice(rt, t, 4, 2);
+        string s3 = rt.thrown;
+        o.Append("badslice=[").Append(s1).Append("][").Append(s2).Append("][").Append(s3).Append("]");
         System.Console.WriteLine(o.ToString());
     }

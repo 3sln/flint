@@ -9,6 +9,7 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Seqwalk.*;
 import static com._3sln.flint.kgen.rt.Tablebuild.*;
 import static com._3sln.flint.kgen.rt.Tablecell.*;
 import static com._3sln.flint.kgen.rt.Tablefill.*;
@@ -107,5 +108,63 @@ public final class Tablerow {
     public static long tableConj(Rt rt, long t, long row) {
         int n = tableCount(rt, t);
         return tableAssoc(rt, t, Val.fixnum(n & 0xFFFFFFFFL), row);
+    }
+    /// Rows `[from, to)` as a table of their own.
+    /// 
+    /// A SLICE SHARES ITS CHUNKS. Only the ones the range touches are carried,
+    /// and the offset within the first of them is where the slice begins -- so
+    /// slicing costs a head, not a copy, and `table-ref` is the single place
+    /// that has to know about it.
+    /// 
+    /// `from` AND `to` ARE `I64`s for the same reason `assoc`'s index is: a
+    /// program supplies them, and a negative one is a thing to refuse rather
+    /// than a thing that cannot be represented.
+    public static long tableSlice(Rt rt, long t, long from, long to) {
+        long n = (long) tableCount(rt, t);
+        if ((from < 0) || ((to > n) || (from > to))) {
+            return rt.throwStr("IndexOutOfBoundsException", ("slice [" + from + " " + to + ") is outside a table of " + n + " rows"));
+        }
+        int base = rt.mark();
+        int ti = rt.push(t);
+        if (from == to) {
+            // AN EMPTY SLICE IS A FRESH EMPTY TABLE, not a window of no
+            // rows onto the old chunks: keeping them would hold a whole
+            // table alive to say nothing.
+            long sch0 = rt.slot(rt.r(ti), Table.TB_SCHEMA);
+            int ei = rt.push(sch0);
+            long none = Vec.empty(rt);
+            long fresh = newTable(rt, rt.r(ei), none);
+            // `fresh`, `ei` and `sch0` rather than `out`, `si` and
+            // `sch`: C# refuses a local whose name is used in an
+            // enclosing scope, even from a SIBLING branch, and the main
+            // path below binds all three. One name per function is the
+            // portable rule.
+            rt.popTo(base);
+            return fresh;
+        }
+        int off = tableOffset(rt, rt.r(ti));
+        int lo = (int) from;
+        int hi = (int) to;
+        int first = (off + lo) >>> Table.CHUNK_SHIFT;
+        int last = ((off + hi) - 1) >>> Table.CHUNK_SHIFT;
+        int ci = rt.push(rt.slot(rt.r(ti), Table.TB_CHUNKS));
+        long kept0 = Vec.empty(rt);
+        int ki = rt.push(kept0);
+        for (int k = first; k < last + 1; k++) {
+            long ch = Vec.nth(rt, rt.r(ci), k, Val.NIL);
+            long nv = Vec.conj(rt, rt.r(ki), ch);
+            rt.setR(ki, nv);
+        }
+        long sch = rt.slot(rt.r(ti), Table.TB_SCHEMA);
+        int si = rt.push(sch);
+        long nt = Val.heap(rt.alloc(TY_TABLE, Table.TB_LEN));
+        int ni = rt.push(nt);
+        rt.setSlot(Val.asHeap(rt.r(ni)), Table.TB_SCHEMA, rt.r(si));
+        rt.setSlot(Val.asHeap(rt.r(ni)), Table.TB_CHUNKS, rt.r(ki));
+        rt.setSlot(Val.asHeap(rt.r(ni)), Table.TB_COUNT, Val.fixnum(((int) (to - from)) & 0xFFFFFFFFL));
+        rt.setSlot(Val.asHeap(rt.r(ni)), Table.TB_OFFSET, Val.fixnum(((off + lo) & (Table.CHUNK - 1)) & 0xFFFFFFFFL));
+        long out = rt.r(ni);
+        rt.popTo(base);
+        return out;
     }
 }

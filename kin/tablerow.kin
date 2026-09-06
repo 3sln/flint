@@ -113,3 +113,62 @@
 (defn ^:pub ^:method ^Value table-conj [^:mut ^Rt rt ^Value t ^Value row]
   (let [^I32 n (table-count rt t)]
     (return (table-assoc rt t (fixnum n) row))))
+
+(doc "Rows `[from, to)` as a table of their own."
+     ""
+     "A SLICE SHARES ITS CHUNKS. Only the ones the range touches are carried,"
+     "and the offset within the first of them is where the slice begins -- so"
+     "slicing costs a head, not a copy, and `table-ref` is the single place"
+     "that has to know about it."
+     ""
+     "`from` AND `to` ARE `I64`s for the same reason `assoc`'s index is: a"
+     "program supplies them, and a negative one is a thing to refuse rather"
+     "than a thing that cannot be represented.")
+(defn ^:pub ^:method ^Value table-slice [^:mut ^Rt rt ^Value t ^I64 from ^I64 to]
+  (let [^I64 n (to-i64 (table-count rt t))]
+    (if (or (< from 0) (or (> to n) (> from to)))
+      (return (throw-str rt "IndexOutOfBoundsException"
+                         (str-cat (static-text "slice [") from (static-text " ") to
+                                  (static-text ") is outside a table of ") n
+                                  (static-text " rows")))))
+    (let [^RootIx base (mark rt)
+          ^RootIx ti (push rt t)]
+      (if (== from to)
+        (do
+          (comment "AN EMPTY SLICE IS A FRESH EMPTY TABLE, not a window of no"
+                   "rows onto the old chunks: keeping them would hold a whole"
+                   "table alive to say nothing.")
+          (let [^Value sch0 (slot rt (r rt ti) TB_SCHEMA)
+                ^RootIx ei (push rt sch0)
+                ^Value none (empty-vec rt)
+                ^Value fresh (new-table rt (r rt ei) none)]
+            (comment "`fresh`, `ei` and `sch0` rather than `out`, `si` and"
+                     "`sch`: C# refuses a local whose name is used in an"
+                     "enclosing scope, even from a SIBLING branch, and the main"
+                     "path below binds all three. One name per function is the"
+                     "portable rule.")
+            (pop-to rt base)
+            (return fresh))))
+      (let [^I32 off (table-offset rt (r rt ti))
+            ^I32 lo (to-i32 from)
+            ^I32 hi (to-i32 to)
+            ^I32 first (ushr (+ off lo) CHUNK_SHIFT)
+            ^I32 last (ushr (- (+ off hi) 1) CHUNK_SHIFT)
+            ^RootIx ci (push rt (slot rt (r rt ti) TB_CHUNKS))
+            ^Value kept0 (empty-vec rt)
+            ^RootIx ki (push rt kept0)]
+        (for [^I32 k first (+ last 1)]
+          (let [^Value ch (vec-nth rt (r rt ci) k NIL)
+                ^Value nv (vec-conj rt (r rt ki) ch)]
+            (set-r rt ki nv)))
+        (let [^Value sch (slot rt (r rt ti) TB_SCHEMA)
+              ^RootIx si (push rt sch)
+              ^Value nt (heap (alloc rt TY_TABLE TB_LEN))
+              ^RootIx ni (push rt nt)]
+          (set-slot rt (r rt ni) TB_SCHEMA (r rt si))
+          (set-slot rt (r rt ni) TB_CHUNKS (r rt ki))
+          (set-slot rt (r rt ni) TB_COUNT (fixnum (to-i32 (- to from))))
+          (set-slot rt (r rt ni) TB_OFFSET (fixnum (bit-and (+ off lo) (- CHUNK 1))))
+          (let [^Value out (r rt ni)]
+            (pop-to rt base)
+            (return out)))))))

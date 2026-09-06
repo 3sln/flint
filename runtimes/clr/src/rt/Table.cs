@@ -50,6 +50,7 @@ public static class Table {
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
     // ROWS IN AND OUT, generated from `kin/tablerow.kin`.
+    public static long tableSlice(Rt rt, long t, long from, long to) { return global::_3sln.Flint.Kgen.Rt.Tablerow.TableSlice(rt, t, from, to); }
     public static long tableAssoc(Rt rt, long t, long k, long row) { return global::_3sln.Flint.Kgen.Rt.Tablerow.TableAssoc(rt, t, k, row); }
     public static long tableConj(Rt rt, long t, long row) { return global::_3sln.Flint.Kgen.Rt.Tablerow.TableConj(rt, t, row); }
 
@@ -140,42 +141,6 @@ public static class Table {
     //
     // The half that makes a column store worth having rather than merely
     // compact: everything here reaches the COLUMN and never builds a row.
-
-    /// `(slice t from to)` -- rows `[from, to)`, SHARING every chunk it spans.
-    /// Chunks outside the range are dropped, so a slice does not retain the
-    /// table; the row offset in the head is what lets the range start anywhere
-    /// without rebuilding a chunk.
-    public static long tableSlice(Rt rt, long t, long from, long to) {
-        int n = tableCount(rt, t);
-        if (from < 0 || to > n || from > to) {
-            return rt.ThrowStr("IndexOutOfBoundsException",
-                "slice [" + from + " " + to + ") is outside a table of " + n + " rows");
-        }
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        if (from == to) {
-            long empty = newTable(rt, rt.Slot(rt.R(ti), TB_SCHEMA), emptyVec(rt));
-            rt.PopTo(bas);
-            return empty;
-        }
-        int off = tableOffset(rt, rt.R(ti));
-        int first = (off + (int) from) >> CHUNK_SHIFT;
-        int last = (off + (int) to - 1) >> CHUNK_SHIFT;
-        int ci = rt.Push(rt.Slot(rt.R(ti), TB_CHUNKS));
-        int ki = rt.Push(emptyVec(rt));
-        for (int k = first; k <= last; k++)
-            rt.SetR(ki, Vec.Conj(rt, rt.R(ki), Vec.Nth(rt, rt.R(ci), k, Val.NotFound)));
-        int si = rt.Push(rt.Slot(rt.R(ti), TB_SCHEMA));
-        long nt = Conc.NewObj(rt, Obj.TyTable, TB_LEN);
-        int ni = rt.Push(nt);
-        set(rt, rt.R(ni), TB_SCHEMA, rt.R(si));
-        set(rt, rt.R(ni), TB_CHUNKS, rt.R(ki));
-        set(rt, rt.R(ni), TB_COUNT, Val.Fixnum(to - from));
-        set(rt, rt.R(ni), TB_OFFSET, Val.Fixnum((off + (int) from) & (CHUNK - 1)));
-        long outv = rt.R(ni);
-        rt.PopTo(bas);
-        return outv;
-    }
 
     /// `(reduce-column t :col f init)` -- `f` over one column, without building
     /// a row or a ref for any of them. This is the operation the type exists

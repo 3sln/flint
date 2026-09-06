@@ -57,6 +57,7 @@ public final class Table {
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
     // ROWS IN AND OUT, generated from `kin/tablerow.kin`.
+    public static long tableSlice(Rt rt, long t, long from, long to) { return com._3sln.flint.kgen.rt.Tablerow.tableSlice(rt, t, from, to); }
     public static long tableAssoc(Rt rt, long t, long k, long row) { return com._3sln.flint.kgen.rt.Tablerow.tableAssoc(rt, t, k, row); }
     public static long tableConj(Rt rt, long t, long row) { return com._3sln.flint.kgen.rt.Tablerow.tableConj(rt, t, row); }
 
@@ -149,42 +150,6 @@ public final class Table {
     //
     // The half that makes a column store worth having rather than merely
     // compact: everything here reaches the COLUMN and never builds a row.
-
-    /// `(slice t from to)` -- rows `[from, to)`, SHARING every chunk it spans.
-    /// Chunks outside the range are dropped, so a slice does not retain the
-    /// table; the row offset in the head is what lets the range start anywhere
-    /// without rebuilding a chunk.
-    public static long tableSlice(Rt rt, long t, long from, long to) {
-        int n = tableCount(rt, t);
-        if (from < 0 || to > n || from > to) {
-            return rt.throwStr("IndexOutOfBoundsException",
-                "slice [" + from + " " + to + ") is outside a table of " + n + " rows");
-        }
-        int base = rt.mark();
-        int ti = rt.push(t);
-        if (from == to) {
-            long out = newTable(rt, rt.slot(rt.r(ti), TB_SCHEMA), emptyVec(rt));
-            rt.popTo(base);
-            return out;
-        }
-        int off = tableOffset(rt, rt.r(ti));
-        int first = (off + (int) from) >> CHUNK_SHIFT;
-        int last = (off + (int) to - 1) >> CHUNK_SHIFT;
-        int ci = rt.push(rt.slot(rt.r(ti), TB_CHUNKS));
-        int ki = rt.push(emptyVec(rt));
-        for (int k = first; k <= last; k++)
-            rt.setR(ki, Vec.conj(rt, rt.r(ki), Vec.nth(rt, rt.r(ci), k, Val.NOT_FOUND)));
-        int si = rt.push(rt.slot(rt.r(ti), TB_SCHEMA));
-        long nt = Conc.newObj(rt, TY_TABLE, TB_LEN);
-        int ni = rt.push(nt);
-        set(rt, rt.r(ni), TB_SCHEMA, rt.r(si));
-        set(rt, rt.r(ni), TB_CHUNKS, rt.r(ki));
-        set(rt, rt.r(ni), TB_COUNT, Val.fixnum(to - from));
-        set(rt, rt.r(ni), TB_OFFSET, Val.fixnum((off + (int) from) & (CHUNK - 1)));
-        long out = rt.r(ni);
-        rt.popTo(base);
-        return out;
-    }
 
     /// `(reduce-column t :col f init)` -- `f` over one column, without building
     /// a row or a ref for any of them. This is the operation the type exists
