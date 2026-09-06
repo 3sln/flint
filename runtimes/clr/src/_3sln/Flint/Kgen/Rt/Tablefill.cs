@@ -13,6 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Tablecell;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
+using static global::_3sln.Flint.Kgen.Rt.Valeq;
 
 public static class Tablefill {
     /// Write row `k` of `ch` from `row`, column by column.
@@ -96,7 +97,7 @@ public static class Tablefill {
             int id = SchemaIdAt(rt, rt.R(si), c);
             long newv = RowColumn(rt, rt.R(si), rt.R(ri), c);
             int vi = rt.Push(newv);
-            bool stays = (ChunkEnc(rt, rt.R(ci), id) == global::Flint.Rt.Table.ENC_CONST) && global::Flint.Rt.Eq.Equal(rt, rt.Slot(rt.R(ci), global::Flint.Rt.Table.CH_BASE + id), rt.R(vi));
+            bool stays = (ChunkEnc(rt, rt.R(ci), id) == global::Flint.Rt.Table.ENC_CONST) && ValEq(rt, rt.Slot(rt.R(ci), global::Flint.Rt.Table.CH_BASE + id), rt.R(vi));
             if (stays) {
                 // THE SLOT IS RE-READ, not carried across `val-eq`.
                 // Equality may allocate -- comparing two ropes can

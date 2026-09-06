@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Valeq;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;
 
 public static class Tablemeta {
@@ -91,10 +92,10 @@ public static class Tablemeta {
     /// Position matters: a table of `[[:a :int] [:b :int]]` is not one of
     /// `[[:b :int] [:a :int]]`, because the rows would read differently.
     public static bool SchemaEq(Rt rt, long a, long b) {
-        if (!global::Flint.Rt.Eq.Equal(rt, rt.Slot(a, global::Flint.Rt.Table.SC_NAMES), rt.Slot(b, global::Flint.Rt.Table.SC_NAMES))) {
+        if (!ValEq(rt, rt.Slot(a, global::Flint.Rt.Table.SC_NAMES), rt.Slot(b, global::Flint.Rt.Table.SC_NAMES))) {
             return false;
         }
-        return global::Flint.Rt.Eq.Equal(rt, rt.Slot(a, global::Flint.Rt.Table.SC_TYPES), rt.Slot(b, global::Flint.Rt.Table.SC_TYPES));
+        return ValEq(rt, rt.Slot(a, global::Flint.Rt.Table.SC_TYPES), rt.Slot(b, global::Flint.Rt.Table.SC_TYPES));
     }
     /// The first row's index within the first chunk. Non-zero only for a slice.
     public static int TableOffset(Rt rt, long t) {

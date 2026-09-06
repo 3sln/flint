@@ -618,7 +618,7 @@ mod tests {
         };
         for v in cases {
             let out = round(&mut rt, v);
-            assert!(rt.eq(v, out), "a value did not survive the round trip");
+            assert!(rt.val_eq(v, out), "a value did not survive the round trip");
         }
     }
 
@@ -640,7 +640,7 @@ mod tests {
         let out = round(&mut rt, held);
         assert!(rt.is_vector(out), "a vector came back as something else");
         let want = rt.r(base);
-        assert!(rt.eq(want, out));
+        assert!(rt.val_eq(want, out));
 
         // A map, whose keys are keywords -- the case the host cares about.
         let empty = rt.roots.shared.singletons[crate::rt::SING_EMPTY_MAP];
@@ -652,7 +652,7 @@ mod tests {
         let out = round(&mut rt, held);
         assert!(rt.is_map(out), "a map came back as something else");
         let want = rt.r(m);
-        assert!(rt.eq(want, out));
+        assert!(rt.val_eq(want, out));
         rt.pop_to(base);
     }
 
@@ -671,7 +671,7 @@ mod tests {
         let held = rt.r(base);
         let out = round(&mut rt, held);
         let want = rt.r(base);
-        assert!(rt.eq(want, out), "a nested vector did not survive");
+        assert!(rt.val_eq(want, out), "a nested vector did not survive");
         rt.pop_to(base);
     }
 
@@ -799,8 +799,8 @@ mod tests {
         let r0 = rt.table_ref(back, 0);
         let v0 = rt.ref_get(r0, nm, NIL);
         let want = rt.string("a");
-        assert!(rt.eq(v0, want), "and its values survived");
-        assert!(rt.eq(t, back), "and it is EQUAL to what was sent");
+        assert!(rt.val_eq(v0, want), "and its values survived");
+        assert!(rt.val_eq(t, back), "and it is EQUAL to what was sent");
     }
 
     /// A tagged literal crosses too, which is the point of it being a type
@@ -827,7 +827,7 @@ mod tests {
         assert_eq!(out[0], K_TAGGED);
         let back = rt.decode(&out).expect("decodes");
         assert!(rt.is_tagged(back), "comes back TAGGED, not as a map");
-        assert!(rt.eq(t, back));
+        assert!(rt.val_eq(t, back));
     }
 }
 

@@ -237,7 +237,7 @@ impl Rt {
             let vi = rt.push(v);
             let other = rt.map_get(rt.r(st.0), rt.r(ki), NOT_FOUND);
             let oi = rt.push(other);
-            let same = other != NOT_FOUND && rt.eq(rt.r(vi), rt.r(oi));
+            let same = other != NOT_FOUND && rt.val_eq(rt.r(vi), rt.r(oi));
             rt.pop_to(m);
             if !same {
                 st.1 = false;
@@ -784,7 +784,7 @@ mod tests {
         let a = kw(&mut rt, "a");
         let n = rt.map_assoc(rt.r(ni), a, Value::fixnum(1));
         let ni2 = rt.push(n);
-        assert!(rt.eq(rt.r(m2i), rt.r(ni2)));
+        assert!(rt.val_eq(rt.r(m2i), rt.r(ni2)));
         assert_eq!(rt.hash_value(rt.r(ni2)), rt.hash_value(rt.r(m2i)));
 
         // A big map equals itself rebuilt in reverse, and differs by one entry.
@@ -796,11 +796,11 @@ mod tests {
             let nm = rt.map_assoc(rt.r(qi), Value::fixnum(i), Value::fixnum(i * 10));
             rt.set_r(qi, nm);
         }
-        assert!(rt.eq(rt.r(pi), rt.r(qi)));
+        assert!(rt.val_eq(rt.r(pi), rt.r(qi)));
         let q2 = rt.map_assoc(rt.r(qi), Value::fixnum(499), Value::fixnum(0));
-        assert!(!rt.eq(rt.r(pi), q2));
+        assert!(!rt.val_eq(rt.r(pi), q2));
         let q3 = rt.map_dissoc(rt.r(qi), Value::fixnum(0));
-        assert!(!rt.eq(rt.r(pi), q3), "differing counts are not equal");
+        assert!(!rt.val_eq(rt.r(pi), q3), "differing counts are not equal");
     }
 
     #[cfg(feature = "diagnostics")]

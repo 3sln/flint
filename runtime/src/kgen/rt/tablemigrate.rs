@@ -87,7 +87,7 @@ impl Rt {
                 // is a different operation and says so.
                 let hc: u32 = self.schema_pos_of(self.r(hi), self.r(nmi));
                 let have_ty: Value = self.schema_type_at(self.r(hi), hc);
-                if !self.eq(have_ty, want_ty) {
+                if !self.val_eq(have_ty, want_ty) {
                     let nm: alloc::string::String = self.kw_name(self.r(nmi));
                     let ht: alloc::string::String = self.kw_name(have_ty);
                     let wt: alloc::string::String = self.kw_name(want_ty);

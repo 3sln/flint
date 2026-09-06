@@ -15,6 +15,7 @@ using static global::_3sln.Flint.Kgen.Rt.Champ;
 using static global::_3sln.Flint.Kgen.Rt.Collnode;
 using static global::_3sln.Flint.Kgen.Rt.Copies;
 using static global::_3sln.Flint.Kgen.Rt.Nodeclass;
+using static global::_3sln.Flint.Kgen.Rt.Valeq;
 
 public static class Dissoc {
     public static long NodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
@@ -36,7 +37,7 @@ public static class Dissoc {
         if ((dm & bit) != 0) {
             int at = IndexOf(dm, bit);
             int k0i = rt.Push(BnKey(rt, rt.R(ni), at));
-            bool same0 = global::Flint.Rt.Eq.Equal(rt, rt.R(k0i), rt.R(ki));
+            bool same0 = ValEq(rt, rt.R(k0i), rt.R(ki));
             rt.PopTo(k0i);
             if (!same0) {
                 rt.champAdded = false;
@@ -106,7 +107,7 @@ public static class Dissoc {
             // The key is rooted across `eq`, which allocates when either
             // side is a row ref.
             int kk = rt.Push(CnKey(rt, rt.R(sni), i));
-            bool same = global::Flint.Rt.Eq.Equal(rt, rt.R(kk), rt.R(ski));
+            bool same = ValEq(rt, rt.R(kk), rt.R(ski));
             rt.PopTo(kk);
             if (same) {
                 found = i;

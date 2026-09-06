@@ -15,6 +15,7 @@ using static global::_3sln.Flint.Kgen.Rt.Champ;
 using static global::_3sln.Flint.Kgen.Rt.Collnode;
 using static global::_3sln.Flint.Kgen.Rt.Eqalloc;
 using static global::_3sln.Flint.Kgen.Rt.Nodeclass;
+using static global::_3sln.Flint.Kgen.Rt.Valeq;
 
 public static class Find {
     public static long NodeFindScalar(Rt rt, long n, int shift, int h, long key) {
@@ -31,7 +32,7 @@ public static class Find {
                 }
                 int cnt = CnCount(rt, node);
                 for (int i = 0; i < cnt; i++) {
-                    if (global::Flint.Rt.Eq.Equal(rt, CnKey(rt, node, i), key)) {
+                    if (ValEq(rt, CnKey(rt, node, i), key)) {
                         @out = CnVal(rt, node, i);
                         break;
                     }
@@ -42,7 +43,7 @@ public static class Find {
             int dm = BnDatamap(rt, node);
             if ((dm & bit) != 0) {
                 int i = IndexOf(dm, bit);
-                if (global::Flint.Rt.Eq.Equal(rt, BnKey(rt, node, i), key)) {
+                if (ValEq(rt, BnKey(rt, node, i), key)) {
                     @out = BnVal(rt, node, i);
                 }
                 break;
@@ -76,7 +77,7 @@ public static class Find {
                 int cnt = CnCount(rt, rt.R(ni));
                 for (int i = 0; i < cnt; i++) {
                     int kk = rt.Push(CnKey(rt, rt.R(ni), i));
-                    bool same = global::Flint.Rt.Eq.Equal(rt, rt.R(kk), rt.R(ki));
+                    bool same = ValEq(rt, rt.R(kk), rt.R(ki));
                     rt.PopTo(kk);
                     if (same) {
                         @out = CnVal(rt, rt.R(ni), i);
@@ -90,7 +91,7 @@ public static class Find {
             if ((dm & bit) != 0) {
                 int i = IndexOf(dm, bit);
                 int kk = rt.Push(BnKey(rt, rt.R(ni), i));
-                bool same = global::Flint.Rt.Eq.Equal(rt, rt.R(kk), rt.R(ki));
+                bool same = ValEq(rt, rt.R(kk), rt.R(ki));
                 rt.PopTo(kk);
                 if (same) {
                     @out = BnVal(rt, rt.R(ni), i);

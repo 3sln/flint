@@ -14,6 +14,7 @@ import static com._3sln.flint.kgen.rt.Collnode.*;
 import static com._3sln.flint.kgen.rt.Copies.*;
 import static com._3sln.flint.kgen.rt.Merge.*;
 import static com._3sln.flint.kgen.rt.Nodeclass.*;
+import static com._3sln.flint.kgen.rt.Valeq.*;
 
 public final class Assoc {
     public static long nodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
@@ -39,7 +40,7 @@ public final class Assoc {
         if ((dm & bit) != 0) {
             int at = indexOf(dm, bit);
             int k0i = rt.push(bnKey(rt, rt.r(ni), at));
-            if (com.flint.rt.Eq.eq(rt, rt.r(k0i), rt.r(ki))) {
+            if (valEq(rt, rt.r(k0i), rt.r(ki))) {
                 // The key was already here, so the map's count does not
                 // move however the value changes.
                 rt.champAdded = false;
@@ -121,7 +122,7 @@ public final class Assoc {
             // The key is rooted across `eq`, which allocates when either
             // side is a row ref.
             int kk = rt.push(cnKey(rt, rt.r(sni), i));
-            boolean same = com.flint.rt.Eq.eq(rt, rt.r(kk), rt.r(ski));
+            boolean same = valEq(rt, rt.r(kk), rt.r(ski));
             rt.popTo(kk);
             if (same) {
                 hit = i;

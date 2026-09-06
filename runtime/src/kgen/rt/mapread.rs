@@ -30,7 +30,7 @@ impl Rt {
         if !self.eq_may_alloc(k) {
             let sn: u32 = self.map_count(m);
             for i in 0..sn {
-                if self.eq(self.am_key(m, i), k) {
+                if self.val_eq(self.am_key(m, i), k) {
                     return i;
                 }
             }
@@ -44,7 +44,7 @@ impl Rt {
         out = n;
         for i in 0..n {
             let kk: usize = self.push(self.am_key(self.r(mi), i));
-            let same: bool = self.eq(self.r(kk), self.r(ki));
+            let same: bool = self.val_eq(self.r(kk), self.r(ki));
             self.pop_to(kk);
             if same {
                 out = i;

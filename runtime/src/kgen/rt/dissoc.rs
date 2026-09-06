@@ -36,7 +36,7 @@ impl Rt {
         if (dm & bit) != 0 {
             let at: u32 = index_of(dm, bit);
             let k0i: usize = self.push(self.bn_key(self.r(ni), at));
-            let same0: bool = self.eq(self.r(k0i), self.r(ki));
+            let same0: bool = self.val_eq(self.r(k0i), self.r(ki));
             self.pop_to(k0i);
             if !same0 {
                 self.champ_added = false;
@@ -106,7 +106,7 @@ impl Rt {
             // The key is rooted across `eq`, which allocates when either
             // side is a row ref.
             let kk: usize = self.push(self.cn_key(self.r(sni), i));
-            let same: bool = self.eq(self.r(kk), self.r(ski));
+            let same: bool = self.val_eq(self.r(kk), self.r(ski));
             self.pop_to(kk);
             if same {
                 found = i;

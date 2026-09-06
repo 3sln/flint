@@ -13,6 +13,7 @@ import static com._3sln.flint.kgen.rt.Mapread.*;
 import static com._3sln.flint.kgen.rt.Seqwalk.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
 import static com._3sln.flint.kgen.rt.Tableref.*;
+import static com._3sln.flint.kgen.rt.Valeq.*;
 import static com._3sln.flint.kgen.rt.Vecread.*;
 
 public final class Tablecell {
@@ -65,7 +66,7 @@ public final class Tablecell {
         boolean same;
         same = true;
         for (int k = 1; k < n; k++) {
-            if (!com.flint.rt.Eq.eq(rt, rt.r(fi), rt.slot(rt.r(coli), k))) {
+            if (!valEq(rt, rt.r(fi), rt.slot(rt.r(coli), k))) {
                 same = false;
                 break;
             }
@@ -102,7 +103,7 @@ public final class Tablecell {
         // written in the one that works everywhere.
         for (int c = 0; c < n; c++) {
             long nm = schemaNameAt(rt, s, c);
-            if (com.flint.rt.Eq.eq(rt, nm, name)) {
+            if (valEq(rt, nm, name)) {
                 return c;
             }
         }

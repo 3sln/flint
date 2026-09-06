@@ -257,7 +257,7 @@ public final class Maps {
             int ki = rt.push(rt.r(at + 2 * i));
             int vi = rt.push(rt.r(at + 2 * i + 1));
             int oi = rt.push(mapGet(rt, rt.r(bi), rt.r(ki), Val.NOT_FOUND));
-            ok = rt.r(oi) != Val.NOT_FOUND && Eq.eq(rt, rt.r(vi), rt.r(oi));
+            ok = rt.r(oi) != Val.NOT_FOUND && com._3sln.flint.kgen.rt.Valeq.valEq(rt, rt.r(vi), rt.r(oi));
             rt.popTo(m);
         }
         rt.popTo(base);

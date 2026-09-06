@@ -31,7 +31,7 @@ impl Rt {
                 }
                 let cnt: u32 = self.cn_count(node);
                 for i in 0..cnt {
-                    if self.eq(self.cn_key(node, i), key) {
+                    if self.val_eq(self.cn_key(node, i), key) {
                         out = self.cn_val(node, i);
                         break;
                     }
@@ -42,7 +42,7 @@ impl Rt {
             let dm: u32 = self.bn_datamap(node);
             if (dm & bit) != 0 {
                 let i: u32 = index_of(dm, bit);
-                if self.eq(self.bn_key(node, i), key) {
+                if self.val_eq(self.bn_key(node, i), key) {
                     out = self.bn_val(node, i);
                 }
                 break;
@@ -76,7 +76,7 @@ impl Rt {
                 let cnt: u32 = self.cn_count(self.r(ni));
                 for i in 0..cnt {
                     let kk: usize = self.push(self.cn_key(self.r(ni), i));
-                    let same: bool = self.eq(self.r(kk), self.r(ki));
+                    let same: bool = self.val_eq(self.r(kk), self.r(ki));
                     self.pop_to(kk);
                     if same {
                         out = self.cn_val(self.r(ni), i);
@@ -90,7 +90,7 @@ impl Rt {
             if (dm & bit) != 0 {
                 let i: u32 = index_of(dm, bit);
                 let kk: usize = self.push(self.bn_key(self.r(ni), i));
-                let same: bool = self.eq(self.r(kk), self.r(ki));
+                let same: bool = self.val_eq(self.r(kk), self.r(ki));
                 self.pop_to(kk);
                 if same {
                     out = self.bn_val(self.r(ni), i);

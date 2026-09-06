@@ -13,6 +13,7 @@ import static com._3sln.flint.kgen.rt.Champ.*;
 import static com._3sln.flint.kgen.rt.Collnode.*;
 import static com._3sln.flint.kgen.rt.Copies.*;
 import static com._3sln.flint.kgen.rt.Nodeclass.*;
+import static com._3sln.flint.kgen.rt.Valeq.*;
 
 public final class Dissoc {
     public static long nodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
@@ -34,7 +35,7 @@ public final class Dissoc {
         if ((dm & bit) != 0) {
             int at = indexOf(dm, bit);
             int k0i = rt.push(bnKey(rt, rt.r(ni), at));
-            boolean same0 = com.flint.rt.Eq.eq(rt, rt.r(k0i), rt.r(ki));
+            boolean same0 = valEq(rt, rt.r(k0i), rt.r(ki));
             rt.popTo(k0i);
             if (!same0) {
                 rt.champAdded = false;
@@ -104,7 +105,7 @@ public final class Dissoc {
             // The key is rooted across `eq`, which allocates when either
             // side is a row ref.
             int kk = rt.push(cnKey(rt, rt.r(sni), i));
-            boolean same = com.flint.rt.Eq.eq(rt, rt.r(kk), rt.r(ski));
+            boolean same = valEq(rt, rt.r(kk), rt.r(ski));
             rt.popTo(kk);
             if (same) {
                 found = i;

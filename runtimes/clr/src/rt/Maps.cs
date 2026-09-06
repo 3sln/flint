@@ -246,7 +246,7 @@ public static class Maps {
             int ki = rt.Push(rt.R(at + 2 * i));
             int vi = rt.Push(rt.R(at + 2 * i + 1));
             int oi = rt.Push(MapGet(rt, rt.R(bi), rt.R(ki), Val.NotFound));
-            ok = rt.R(oi) != Val.NotFound && Flint.Rt.Eq.Equal(rt, rt.R(vi), rt.R(oi));
+            ok = rt.R(oi) != Val.NotFound && global::_3sln.Flint.Kgen.Rt.Valeq.ValEq(rt, rt.R(vi), rt.R(oi));
             rt.PopTo(m);
         }
         rt.PopTo(bas);

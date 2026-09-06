@@ -49,7 +49,7 @@ impl Rt {
     }
     // STRUCTURAL equality over the probe's vectors, because `schema-eq` is
     // about what two schemas SAY and not about which objects they are.
-    fn eq(&mut self, a: Value, b: Value) -> bool {
+    fn val_eq(&mut self, a: Value, b: Value) -> bool {
         if a.0 == b.0 { return true; }
         if !a.is_heap() || !b.is_heap() { return false; }
         if ty(&self.gc.sp, a.as_heap()) != TY_VEC || ty(&self.gc.sp, b.as_heap()) != TY_VEC {
@@ -59,7 +59,7 @@ impl Rt {
         if n != self.vec_count(b) { return false; }
         for i in 0..n {
             let (x, y) = (self.slot(a, i), self.slot(b, i));
-            if !self.eq(x, y) { return false; }
+            if !self.val_eq(x, y) { return false; }
         }
         true
     }
@@ -252,6 +252,10 @@ fn main() {
     println!("{}", o);
 }
 --java-head
+    // `val-eq` IS `valeq`'s OWN now, so it is called BARE. The nested
+    // `com.flint.rt.Eq.eq` below stays for `hash-value`'s sake and this
+    // forwards to it, which keeps whatever counting each probe does.
+    static boolean valEq(Rt rt, long a, long b) { return com.flint.rt.Eq.eq(rt, a, b); }
     static final long NIL = 0xFFFFL;
     static final int TY_SCHEMA = 48, TY_TABLE = 49, TY_TABLEREF = 50,
                      TY_VEC = 9, TY_NODE = 12, TY_MAP = 14, TY_TTABLE = 51;
@@ -322,7 +326,7 @@ fn main() {
             if (ty(rt.gc.sp, a) != TY_VEC || ty(rt.gc.sp, b) != TY_VEC) return false;
             int n = Vec.count(rt, a);
             if (n != Vec.count(rt, b)) return false;
-            for (int i = 0; i < n; i++) if (!eq(rt, rt.slot(a, i), rt.slot(b, i))) return false;
+            for (int i = 0; i < n; i++) if (!valEq(rt, rt.slot(a, i), rt.slot(b, i))) return false;
             return true;
         }
     }
@@ -503,6 +507,8 @@ namespace Flint.Rt {
     }
 }
 --csharp-head
+    // `val-eq` IS `valeq`'s OWN now, so it is called BARE.
+    internal static bool ValEq(Rt rt, long a, long b) { return global::Flint.Rt.Eq.Equal(rt, a, b); }
     internal static class Obj {
         internal const int TySchema = 48, TyTable = 49, TyTableref = 50,
                            TyVec = 9, TyNode = 12, TyMap = 14, TyTtable = 51;

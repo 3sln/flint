@@ -13,6 +13,7 @@ import static com._3sln.flint.kgen.rt.Champ.*;
 import static com._3sln.flint.kgen.rt.Collnode.*;
 import static com._3sln.flint.kgen.rt.Eqalloc.*;
 import static com._3sln.flint.kgen.rt.Nodeclass.*;
+import static com._3sln.flint.kgen.rt.Valeq.*;
 
 public final class Find {
     public static long nodeFindScalar(Rt rt, long n, int shift, int h, long key) {
@@ -29,7 +30,7 @@ public final class Find {
                 }
                 int cnt = cnCount(rt, node);
                 for (int i = 0; i < cnt; i++) {
-                    if (com.flint.rt.Eq.eq(rt, cnKey(rt, node, i), key)) {
+                    if (valEq(rt, cnKey(rt, node, i), key)) {
                         out = cnVal(rt, node, i);
                         break;
                     }
@@ -40,7 +41,7 @@ public final class Find {
             int dm = bnDatamap(rt, node);
             if ((dm & bit) != 0) {
                 int i = indexOf(dm, bit);
-                if (com.flint.rt.Eq.eq(rt, bnKey(rt, node, i), key)) {
+                if (valEq(rt, bnKey(rt, node, i), key)) {
                     out = bnVal(rt, node, i);
                 }
                 break;
@@ -74,7 +75,7 @@ public final class Find {
                 int cnt = cnCount(rt, rt.r(ni));
                 for (int i = 0; i < cnt; i++) {
                     int kk = rt.push(cnKey(rt, rt.r(ni), i));
-                    boolean same = com.flint.rt.Eq.eq(rt, rt.r(kk), rt.r(ki));
+                    boolean same = valEq(rt, rt.r(kk), rt.r(ki));
                     rt.popTo(kk);
                     if (same) {
                         out = cnVal(rt, rt.r(ni), i);
@@ -88,7 +89,7 @@ public final class Find {
             if ((dm & bit) != 0) {
                 int i = indexOf(dm, bit);
                 int kk = rt.push(bnKey(rt, rt.r(ni), i));
-                boolean same = com.flint.rt.Eq.eq(rt, rt.r(kk), rt.r(ki));
+                boolean same = valEq(rt, rt.r(kk), rt.r(ki));
                 rt.popTo(kk);
                 if (same) {
                     out = bnVal(rt, rt.r(ni), i);

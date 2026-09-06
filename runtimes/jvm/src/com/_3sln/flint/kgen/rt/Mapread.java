@@ -13,6 +13,7 @@ import static com._3sln.flint.kgen.rt.Eqalloc.*;
 import static com._3sln.flint.kgen.rt.Find.*;
 import static com._3sln.flint.kgen.rt.Mapcore.*;
 import static com._3sln.flint.kgen.rt.Tableref.*;
+import static com._3sln.flint.kgen.rt.Valeq.*;
 
 public final class Mapread {
     /// Where `k` sits in an array map, or `n` when it is not there.
@@ -28,7 +29,7 @@ public final class Mapread {
         if (!eqMayAlloc(rt, k)) {
             int sn = mapCount(rt, m);
             for (int i = 0; i < sn; i++) {
-                if (com.flint.rt.Eq.eq(rt, amKey(rt, m, i), k)) {
+                if (valEq(rt, amKey(rt, m, i), k)) {
                     return i;
                 }
             }
@@ -42,7 +43,7 @@ public final class Mapread {
         out = n;
         for (int i = 0; i < n; i++) {
             int kk = rt.push(amKey(rt, rt.r(mi), i));
-            boolean same = com.flint.rt.Eq.eq(rt, rt.r(kk), rt.r(ki));
+            boolean same = valEq(rt, rt.r(kk), rt.r(ki));
             rt.popTo(kk);
             if (same) {
                 out = i;

@@ -26,7 +26,7 @@ impl Rt {
         let a = self.bump; self.bump += n + 1; self.log.push_str(tag); Value(a)
     }
     fn set(&mut self, n: Value, i: u32, v: Value) { self.h[(n.0 + i as u64) as usize] = v.0; }
-    fn eq(&self, a: Value, b: Value) -> bool { a == b }
+    fn val_eq(&self, a: Value, b: Value) -> bool { a == b }
     fn hash_value(&self, v: Value) -> u32 { ((v.0 * 7) & 0xff) as u32 }
     // A collision node is marked by 0xDEAD in its first slot; everything else
     // is a bitmap node. That is what lets one heap hold both shapes.
@@ -118,6 +118,10 @@ fn main() {
     println!("{}", o);
 }
 --java-head
+    // `val-eq` IS `valeq`'s OWN now, so it is called BARE. The nested
+    // `com.flint.rt.Eq.eq` below stays for `hash-value`'s sake and this
+    // forwards to it, which keeps whatever counting each probe does.
+    static boolean valEq(Rt rt, long a, long b) { return com.flint.rt.Eq.eq(rt, a, b); }
     static final long NIL = 0xFFFFL;
     static final int CN_BASE = 2;
     static final int HASH_BITS = 5;
@@ -241,6 +245,8 @@ namespace Flint.Rt {
 }
 
 --csharp-head
+    // `val-eq` IS `valeq`'s OWN now, so it is called BARE.
+    internal static bool ValEq(Rt rt, long a, long b) { return global::Flint.Rt.Eq.Equal(rt, a, b); }
     const long NIL = 0xFFFFL;
     const int CN_BASE = 2;
     const int HASH_BITS = 5;

@@ -303,7 +303,7 @@ impl Rt {
         }
         0
     }
-    fn eq(&mut self, a: Value, b: Value) -> bool { a.0 == b.0 }
+    fn val_eq(&mut self, a: Value, b: Value) -> bool { a.0 == b.0 }
     fn chunk_rows(&mut self, ch: Value) -> u32 { self.slot(ch, table::CH_ROWS).as_fixnum() as u32 }
     // A SCHEMA WITH EXPLICIT IDS, which is what a migrated one has: the ids
     // are not the positions any more.
@@ -569,6 +569,10 @@ fn main() {
     println!("{}", o);
 }
 --java-head
+    // `val-eq` IS `valeq`'s OWN now, so it is called BARE. The nested
+    // `com.flint.rt.Eq.eq` below stays for `hash-value`'s sake and this
+    // forwards to it, which keeps whatever counting each probe does.
+    static boolean valEq(Rt rt, long a, long b) { return com.flint.rt.Eq.eq(rt, a, b); }
     static final long NIL = 0xFFFFL, NOT_FOUND = 0xFFFEL;
     static final int TY_SCHEMA = 48, TY_TABLEREF = 50, TY_TABLE = 49,
                      TY_NODE = 12, TY_VEC = 9, TY_MAP = 14, TY_MAPENTRY = 15;
@@ -1046,6 +1050,8 @@ namespace Flint.Rt {
     }
 }
 --csharp-head
+    // `val-eq` IS `valeq`'s OWN now, so it is called BARE.
+    internal static bool ValEq(Rt rt, long a, long b) { return global::Flint.Rt.Eq.Equal(rt, a, b); }
     internal static class Obj {
         internal const int TySchema = 48, TyTableref = 50, TyTable = 49,
                            TyNode = 12, TyVec = 9, TyMap = 14, TyMapentry = 15;

@@ -24,224 +24,9 @@ impl Rt {
     }
 
 
-    /// Byte-for-byte equality across tiers, without materialising either side
-    /// into the flint heap. Lengths are O(1) on all three, and unequal lengths
-    /// are the common case, so the walk is reached rarely.
-    ///
-    /// `&mut` ONLY BECAUSE THE WALK IS A RUNTIME RESOURCE. `tree_eq` is
-    /// generated now, and a generated source cannot hold a host stack -- it
-    /// asks the runtime to open one, which is a mutation of `walks`. Nothing
-    /// about the string is touched.
-    fn string_eq(&mut self, a: Value, b: Value) -> bool {
-        if self.str_len(a) != self.str_len(b) {
-            return false;
-        }
-        self.tree_eq(a, b)
-    }
-
-    pub fn eq(&mut self, a: Value, b: Value) -> bool {
-        // Doubles first: bit equality would wrongly make NaN equal to itself,
-        // and would wrongly separate 0.0 from -0.0.
-        if a.is_double() || b.is_double() {
-            return a.is_double() && b.is_double() && a.as_f64() == b.as_f64();
-        }
-        if a.0 == b.0 {
-            return true;
-        }
-        if self.is_int(a) || self.is_int(b) {
-            // Integers are canonical, so the only way two are equal without
-            // being bit-equal is two distinct boxes.
-            return match (self.as_i64(a), self.as_i64(b)) {
-                (Some(x), Some(y)) => x == y,
-                _ => false,
-            };
-        }
-        if !a.is_heap() || !b.is_heap() {
-            // Immediates are canonical: an inline string can only equal another
-            // inline string, and that would have been bit equality.
-            return false;
-        }
-        // A ROW REF is compared as the map it is. Materialising here rather
-        // than in `map_eq` keeps one place that knows, and equality is
-        // O(columns) either way.
-        if self.is_table_ref(a) || self.is_table_ref(b) {
-            let base = self.mark();
-            // BOTH operands are rooted before either is materialised.
-            // `ref_to_map` allocates a map and assoc's every column into it,
-            // so it collects -- and `0031` is that a value in a host local
-            // does not survive an allocation. Reading `b` after materialising
-            // `a` was reading the address `b` used to be at: measured, one
-            // miscompare in four thousand comparisons of equal values, every
-            // run, and only when `b` is young enough for the nursery to move.
-            let ai = self.push(a);
-            let bi = self.push(b);
-            let ma = if self.is_table_ref(self.r(ai)) {
-                self.ref_to_map(self.r(ai))
-            } else {
-                self.r(ai)
-            };
-            let mi = self.push(ma);
-            let mb = if self.is_table_ref(self.r(bi)) {
-                self.ref_to_map(self.r(bi))
-            } else {
-                self.r(bi)
-            };
-            let mj = self.push(mb);
-            let out = self.eq(self.r(mi), self.r(mj));
-            self.pop_to(base);
-            return out;
-        }
-        let (ca, cb) = (self.category(a), self.category(b));
-        if ca != cb {
-            return false;
-        }
-        match ca {
-            CAT_SEQUENTIAL => self.seq_eq(a, b),
-            CAT_MAP => self.map_eq(a, b),
-            CAT_SET => self.set_eq(a, b),
-            _ => {
-                let (ta, tb) = (ty(&self.gc.sp, a.as_heap()), ty(&self.gc.sp, b.as_heap()));
-                // A string is a string whatever tier it is in: `(str a b)` and a
-                // flat string of the same bytes must be `=` and must hash the
-                // same, or a map keyed by one is not found by the other
-                // (doc/decisions/0011). This is BEFORE the tag comparison,
-                // because the tags differ and the values do not.
-                // Byte strings compare by content across both tiers, exactly
-                // as text ropes do: a flat and a tree holding the same bytes
-                // are the same value.
-                if (ta == crate::obj::TY_BYTES || ta == crate::obj::TY_BROPE)
-                    && (tb == crate::obj::TY_BYTES || tb == crate::obj::TY_BROPE)
-                {
-                    return self.b_eq(a, b);
-                }
-                if ta == crate::obj::TY_ROPE || tb == crate::obj::TY_ROPE {
-                    return self.is_string(a) && self.is_string(b) && self.string_eq(a, b);
-                }
-                // Two tagged literals are equal when both halves are
-                // (`doc/decisions/0034`). Structural, like the collections, and
-                // NOT equal to a two-key map -- which is the whole reason it is
-                // a type: a codec has to be able to tell them apart.
-                // A TABLE is not a vector of maps (`doc/decisions/0026`).
-                // Refusing that equality is what frees `hash` to be columnar --
-                // it no longer has to agree with what a vector of maps would
-                // produce -- and it is why a table prints as its own literal.
-                if ta == crate::obj::TY_TABLE || tb == crate::obj::TY_TABLE {
-                    if ta != tb {
-                        return false;
-                    }
-                    let (na, nb) = (self.table_count(a), self.table_count(b));
-                    if na != nb {
-                        return false;
-                    }
-                    let sa = self.slot(a, crate::table::TB_SCHEMA);
-                    let sb = self.slot(b, crate::table::TB_SCHEMA);
-                    if !self.schema_eq(sa, sb) {
-                        return false;
-                    }
-                    // BOTH SIDES ROOTED. `table_ref` allocates, and `a` and
-                    // `b` are Rust locals: `doc/decisions/0031` -- a value in a
-                    // host local does not survive an allocation. This was
-                    // latent here and surfaced on the JVM as "object type 1 is
-                    // not a transient", type 1 being `TY_FWD`, because that
-                    // runtime's nursery happened to fill during the compare.
-                    // Same defect, and only one of three runtimes was unlucky
-                    // enough to show it.
-                    let base = self.mark();
-                    let ai = self.push(a);
-                    let bi = self.push(b);
-                    for i in 0..na {
-                        let ra = self.table_ref(self.r(ai), i);
-                        let ri = self.push(ra);
-                        let rb = self.table_ref(self.r(bi), i);
-                        let same = self.eq(self.r(ri), rb);
-                        self.pop_to(ri);
-                        if !same {
-                            self.pop_to(base);
-                            return false;
-                        }
-                    }
-                    self.pop_to(base);
-                    return true;
-                }
-                if ta == crate::obj::TY_TAGGED || tb == crate::obj::TY_TAGGED {
-                    if ta != tb {
-                        return false;
-                    }
-                    let (t1, t2) = (self.slot(a, 0), self.slot(b, 0));
-                    if !self.eq(t1, t2) {
-                        return false;
-                    }
-                    let (f1, f2) = (self.slot(a, 1), self.slot(b, 1));
-                    return self.eq(f1, f2);
-                }
-                if ta != tb {
-                    return false;
-                }
-                match ta {
-                    TY_STR => {
-                        let (la, lb) = (len(&self.gc.sp, a.as_heap()), len(&self.gc.sp, b.as_heap()));
-                        if la != lb {
-                            return false;
-                        }
-                        // Both interned and not bit-equal means not equal, with
-                        // no need to look at the bytes at all.
-                        if la <= INTERN_MAX {
-                            return false;
-                        }
-                        str_bytes(&self.gc.sp, a.as_heap()) == str_bytes(&self.gc.sp, b.as_heap())
-                    }
-                    // Symbols compare by (ns, name): with-meta makes a distinct
-                    // object that must still be `=`.
-                    TY_SYM => {
-                        self.slot(a, 0) == self.slot(b, 0) && self.slot(a, 1) == self.slot(b, 1)
-                    }
-                    _ => false,
-                }
-            }
-        }
-    }
-
-    fn seq_eq(&mut self, a: Value, b: Value) -> bool {
-        // Both counted and cheap? Then a length mismatch is an early out.
-        if self.is_vector(a) && self.is_vector(b) && self.vec_count(a) != self.vec_count(b) {
-            return false;
-        }
-        // Everything here is rooted, because seq/first/next allocate: `=` on a
-        // compound value is one of the few places a collection can run in the
-        // middle of a comparison, and a raw address held across it is stale.
-        let base = self.mark();
-        let ai = self.push(a);
-        let bi = self.push(b);
-        let sa = self.seq(self.r(ai));
-        let ia = self.push(sa);
-        let sb = self.seq(self.r(bi));
-        let ib = self.push(sb);
-        let result = loop {
-            // Charged per element: `=` on two big vectors is ONE bytecode
-            // instruction and O(n) work, and a budget that does not see that
-            // does not bound the thing worth bounding (doc/decisions/0009).
-            self.charge_work(1);
-            let (x, y) = (self.r(ia), self.r(ib));
-            if x.is_nil() || y.is_nil() {
-                break x.is_nil() && y.is_nil();
-            }
-            let fa = self.first(self.r(ia));
-            let fi = self.push(fa);
-            let fb = self.first(self.r(ib));
-            let fbi = self.push(fb);
-            let same = self.eq(self.r(fi), self.r(fbi));
-            self.pop_to(fi);
-            if !same {
-                break false;
-            }
-            let na = self.next(self.r(ia));
-            self.set_r(ia, na);
-            let nb = self.next(self.r(ib));
-            self.set_r(ib, nb);
-        };
-        self.pop_to(base);
-        result
-    }
+    // `eq` and `seq_eq` are GENERATED, from `kin/valeq.kin`, under the names
+    // `val_eq` and `seq_eq`. `string_eq` went with them: the byte-length
+    // check and the interning shortcut are both in the generated arm now.
 
     // --- hashing -----------------------------------------------------------
 
@@ -495,7 +280,7 @@ impl Rt {
     }
 
     pub fn eq_value(&mut self, a: Value, b: Value) -> Value {
-        if self.eq(a, b) {
+        if self.val_eq(a, b) {
             TRUE
         } else {
             FALSE
@@ -564,15 +349,15 @@ mod tests {
     #[test]
     fn scalars() {
         let mut rt = Rt::new();
-        assert!(rt.eq(NIL, NIL));
-        assert!(!rt.eq(NIL, FALSE), "nil is not false");
-        assert!(rt.eq(TRUE, TRUE));
-        assert!(rt.eq(Value::fixnum(1), Value::fixnum(1)));
-        assert!(!rt.eq(Value::fixnum(1), Value::from_f64(1.0)), "(= 1 1.0) is false");
-        assert!(rt.eq(Value::from_f64(1.0), Value::from_f64(1.0)));
+        assert!(rt.val_eq(NIL, NIL));
+        assert!(!rt.val_eq(NIL, FALSE), "nil is not false");
+        assert!(rt.val_eq(TRUE, TRUE));
+        assert!(rt.val_eq(Value::fixnum(1), Value::fixnum(1)));
+        assert!(!rt.val_eq(Value::fixnum(1), Value::from_f64(1.0)), "(= 1 1.0) is false");
+        assert!(rt.val_eq(Value::from_f64(1.0), Value::from_f64(1.0)));
         let nan = Value::from_f64(f64::NAN);
-        assert!(!rt.eq(nan, nan), "NaN is not equal to itself");
-        assert!(rt.eq(Value::from_f64(0.0), Value::from_f64(-0.0)), "0.0 == -0.0");
+        assert!(!rt.val_eq(nan, nan), "NaN is not equal to itself");
+        assert!(rt.val_eq(Value::from_f64(0.0), Value::from_f64(-0.0)), "0.0 == -0.0");
     }
 
     #[test]
@@ -581,9 +366,9 @@ mod tests {
         let a = rt.integer(1 << 50);
         let b = rt.integer(1 << 50);
         assert_ne!(a, b, "two distinct boxes");
-        assert!(rt.eq(a, b), "but equal");
+        assert!(rt.val_eq(a, b), "but equal");
         let c = rt.integer((1 << 50) + 1);
-        assert!(!rt.eq(a, c));
+        assert!(!rt.val_eq(a, c));
     }
 
     #[test]
@@ -591,29 +376,29 @@ mod tests {
         let mut rt = Rt::new();
         let short = rt.string("abc");
         let again = rt.string("abc");
-        assert!(rt.eq(short, again));
+        assert!(rt.val_eq(short, again));
         let long_a = rt.string(&"x".repeat(100));
         let long_b = rt.string(&"x".repeat(100));
         assert_ne!(long_a, long_b, "beyond the intern limit these are distinct objects");
-        assert!(rt.eq(long_a, long_b), "and still equal, by bytes");
+        assert!(rt.val_eq(long_a, long_b), "and still equal, by bytes");
         let long_c = rt.string(&("x".repeat(99) + "y"));
-        assert!(!rt.eq(long_a, long_c));
+        assert!(!rt.val_eq(long_a, long_c));
 
         let k = rt.keyword(None, "a");
         let k2 = rt.keyword(None, "a");
-        assert!(rt.eq(k, k2));
+        assert!(rt.val_eq(k, k2));
         let sa = rt.string("a");
-        assert!(!rt.eq(k, sa), "a keyword is not its name");
+        assert!(!rt.val_eq(k, sa), "a keyword is not its name");
         let s = rt.symbol(Some("ns"), "n");
         let s2a = rt.symbol(Some("ns"), "n");
-        assert!(rt.eq(s, s2a));
+        assert!(rt.val_eq(s, s2a));
         let s3 = rt.symbol(None, "n");
-        assert!(!rt.eq(s, s3));
+        assert!(!rt.val_eq(s, s3));
         // with-meta makes a distinct object that is still =
         let m = rt.empty_map();
         let s2 = rt.with_meta(s, m);
         assert_ne!(s, s2);
-        assert!(rt.eq(s, s2), "metadata is not part of equality");
+        assert!(rt.val_eq(s, s2), "metadata is not part of equality");
     }
 
     #[test]
@@ -624,13 +409,13 @@ mod tests {
         let l = list_of(&mut rt, &[1, 2, 3]);
         let li = rt.push(l);
         let (a0, b0) = (rt.r(vi), rt.r(li));
-        assert!(rt.eq(a0, b0), "a vector equals a list of the same items");
+        assert!(rt.val_eq(a0, b0), "a vector equals a list of the same items");
         let shorter = vec_of(&mut rt, &[1, 2]);
         let a0 = rt.r(vi);
-        assert!(!rt.eq(a0, shorter));
+        assert!(!rt.val_eq(a0, shorter));
         let different = vec_of(&mut rt, &[1, 2, 4]);
         let a0 = rt.r(vi);
-        assert!(!rt.eq(a0, different));
+        assert!(!rt.val_eq(a0, different));
         // ...but a set is a different partition
         let mut s = rt.empty_set();
         let si = rt.push(s);
@@ -640,10 +425,10 @@ mod tests {
         }
         s = rt.r(si);
         let a0 = rt.r(vi);
-        assert!(!rt.eq(a0, s), "a vector is not a set");
+        assert!(!rt.val_eq(a0, s), "a vector is not a set");
         let m = rt.empty_map();
         let ev = rt.empty_vec();
-        assert!(!rt.eq(m, ev), "an empty map is not an empty vector");
+        assert!(!rt.val_eq(m, ev), "an empty map is not an empty vector");
     }
 
     #[test]
@@ -665,7 +450,7 @@ mod tests {
         let ai = rt.push(a);
         let b = build(&mut rt);
         let a0 = rt.r(ai);
-        assert!(rt.eq(a0, b));
+        assert!(rt.val_eq(a0, b));
         let a0 = rt.r(ai);
         let (ha, hb) = (rt.hash_value(a0), rt.hash_value(b));
         assert_eq!(ha, hb, "equal implies equal hash");
@@ -678,7 +463,7 @@ mod tests {
         let vi = rt.push(v);
         let l = list_of(&mut rt, &[1, 2, 3]);
         let a0 = rt.r(vi);
-        assert!(rt.eq(a0, l));
+        assert!(rt.val_eq(a0, l));
         let a0 = rt.r(vi);
         let hv = rt.hash_value(a0);
         let hl = rt.hash_value(l);

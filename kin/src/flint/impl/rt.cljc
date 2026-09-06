@@ -355,6 +355,16 @@
            :java "Sets.S_META" :csharp "global::Flint.Rt.Sets.S_META"}
    'S_HASH {:rust "crate::set::S_HASH"
            :java "Sets.S_HASH" :csharp "global::Flint.Rt.Sets.S_HASH"}
+   ;; THE LONGEST STRING THAT IS INTERNED, 32 bytes in all three. Two interned
+   ;; strings that are not bit-equal are not equal, and that is the whole of
+   ;; the fast path -- no bytes are looked at at all.
+   ;; FULLY QUALIFIED ON THE JVM, and not optional: a GENERATED `Interns`
+   ;; lives in `com._3sln.flint.kgen.rt`, so a bare `Interns` inside another
+   ;; generated module binds to that one and not to the runtime's. The same
+   ;; shadowing `seq-of` is qualified against.
+   'INTERN_MAX {:rust "crate::strs::INTERN_MAX"
+                :java "com.flint.rt.Interns.INTERN_MAX"
+                :csharp "global::Flint.Rt.Interns.InternMax"}
    ;; The TRANSIENT map and set slots. Written out rather than declared bare
    ;; because they do NOT share a home: both ports hang them off `Maps` and
    ;; `Sets`, and native had no names for them at all until this entry wanted
@@ -902,9 +912,11 @@
     ;; class FULLY QUALIFIED here, for different reasons -- see the note on
     ;; `eq-may-alloc` above. `sibling` takes one class name for both ports
     ;; and cannot say either of them.
-    'val-eq (core/call {:rust "{0}.eq({1}, {2})"
-                        :java "com.flint.rt.Eq.eq({0}, {1}, {2})"
-                        :csharp "global::Flint.Rt.Eq.Equal({0}, {1}, {2})"})
+    ;; `val-eq` IS `flint.rt.valeq`'s OWN, which is what lets `seq-eq` call it
+    ;; from above its definition: kin resolves a file's `defn`s in order, so
+    ;; the two halves of a mutual recursion meet through the vocabulary. That
+    ;; is the same shape `coll-assoc` has, and for the same reason.
+    'val-eq (own "val_eq" "valEq" 2)
     'hash-value (core/call {:rust "{0}.hash_value({1})"
                             :java "com.flint.rt.Eq.hashValue({0}, {1})"
                             :csharp "global::Flint.Rt.Eq.HashValue({0}, {1})"})
@@ -942,6 +954,10 @@
     'str-len (sibling "str_len" "Str" "byteLen" "ByteLen" 1)
     'char-len (sibling "char_count" "Str" "charLen" "CharLen" 1)
     'maps-eq (sibling "map_eq" "Maps" "eq" "Eq" 2)
+    ;; `set-eq` STAYS HAND-WRITTEN because it walks the set's elements, and
+    ;; walking needs a callback -- the closure hole. `map-eq` is here for the
+    ;; same reason and neither is a candidate until that is answered.
+    'set-eq (sibling "set_eq" "Sets" "eq" "Eq" 2)
     ;; FULLY QUALIFIED, and this one is not optional. A generated module lives
     ;; in `flint.rt`, and `seqs.kin` generates a `flint.rt.Seqs` there -- so a
     ;; bare `Seqs.seq` inside another generated module binds to the GENERATED

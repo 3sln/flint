@@ -15,6 +15,7 @@ using static global::_3sln.Flint.Kgen.Rt.Eqalloc;
 using static global::_3sln.Flint.Kgen.Rt.Find;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;
+using static global::_3sln.Flint.Kgen.Rt.Valeq;
 
 public static class Mapread {
     /// Where `k` sits in an array map, or `n` when it is not there.
@@ -30,7 +31,7 @@ public static class Mapread {
         if (!EqMayAlloc(rt, k)) {
             int sn = MapCount(rt, m);
             for (int i = 0; i < sn; i++) {
-                if (global::Flint.Rt.Eq.Equal(rt, AmKey(rt, m, i), k)) {
+                if (ValEq(rt, AmKey(rt, m, i), k)) {
                     return i;
                 }
             }
@@ -44,7 +45,7 @@ public static class Mapread {
         @out = n;
         for (int i = 0; i < n; i++) {
             int kk = rt.Push(AmKey(rt, rt.R(mi), i));
-            bool same = global::Flint.Rt.Eq.Equal(rt, rt.R(kk), rt.R(ki));
+            bool same = ValEq(rt, rt.R(kk), rt.R(ki));
             rt.PopTo(kk);
             if (same) {
                 @out = i;

@@ -94,10 +94,10 @@ impl Rt {
     /// Position matters: a table of `[[:a :int] [:b :int]]` is not one of
     /// `[[:b :int] [:a :int]]`, because the rows would read differently.
     pub fn schema_eq(&mut self, a: Value, b: Value) -> bool {
-        if !self.eq(self.slot(a, crate::table::SC_NAMES), self.slot(b, crate::table::SC_NAMES)) {
+        if !self.val_eq(self.slot(a, crate::table::SC_NAMES), self.slot(b, crate::table::SC_NAMES)) {
             return false;
         }
-        return self.eq(self.slot(a, crate::table::SC_TYPES), self.slot(b, crate::table::SC_TYPES));
+        return self.val_eq(self.slot(a, crate::table::SC_TYPES), self.slot(b, crate::table::SC_TYPES));
     }
     /// The first row's index within the first chunk. Non-zero only for a slice.
     pub fn table_offset(&mut self, t: Value) -> u32 {

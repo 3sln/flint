@@ -1,0 +1,236 @@
+;; `=`, and the two walks it needs.
+;;
+;; THE HOTTEST FUNCTION IN THE RUNTIME, and the one where a disagreement does
+;; the most damage: two values that are `=` must hash alike, or a map keyed by
+;; one is not found by the other. It was hand-written three times.
+;;
+;; THE ROW REF ARM MOVES ABOVE `category`, which is where native already had it
+;; and where both ports did NOT. `category` puts a ref in `CAT_MAP`, so on the
+;; ports the ref arm below the category switch could never run: any ref reached
+;; `map-eq` first, and any non-map counterpart was refused by `ca != cb`. Dead
+;; code that looked live, and it worked only because their `map-eq` materialises
+;; refs itself -- which native's does NOT. One arm, one place, and `map-eq` no
+;; longer has to know.
+;;
+;; THE INTERNING FAST PATH IS KEPT AND THE TREE WALK IS KEPT. Native shortcut a
+;; pair of interned flat strings -- both short, not bit-equal, therefore not
+;; equal, no bytes read -- and both ports walked them. Both ports compared byte
+;; LENGTHS first and native compared code-point counts. This has all three:
+;; lengths, then the interning answer, then the walk.
+(ns flint.rt.valeq
+  (:require [flint.impl.rt :refer [defn return if let do comment doc local set
+                                   == != <= < + not or and is-heap as-heap ty
+                                   nil? mark push r set-r pop-to while break
+                                   forever
+                                   slot is-double num-f64 is-int i64-of
+                                   is-string s-bytes str-len charge-work
+                                   vec-count ref-to-map table-ref table-count
+                                   set-eq maps-eq val-eq
+                                   Rt Value I32 I64 Ty Bool Cat RootIx F64
+                                   NIL INTERN_MAX
+                                   CAT_SEQUENTIAL CAT_MAP CAT_SET
+                                   TY_VEC TY_STR TY_ROPE TY_SYM
+                                   TY_BYTES TY_BROPE TY_TABLE TY_TAGGED
+                                   TB_SCHEMA]]
+            [flint.rt.eq :refer [category]]
+            [flint.rt.seqwalk :refer [seq first next]]
+            [flint.rt.byteeq :refer [b-eq]]
+            [flint.rt.ropeeq :refer [tree-eq]]
+            [flint.rt.tablemeta :refer [is-table-ref schema-eq]]))
+
+(doc "Is `v` a VECTOR, strictly -- not a map entry, which is vector-LIKE."
+     ""
+     "`seq-eq` wants the strict one: a length mismatch is only an early out"
+     "when both sides actually carry a count.")
+(defn ^:method ^Bool is-plain-vector [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_VEC)))
+
+(doc "Two sequentials, element by element."
+     ""
+     "EVERYTHING IS ROOTED, because `seq`, `first` and `next` allocate: `=` on"
+     "a compound value is one of the few places a collection can run in the"
+     "middle of a comparison, and a raw address held across it is stale."
+     ""
+     "CHARGED PER ELEMENT. `=` on two big vectors is ONE bytecode instruction"
+     "and O(n) work, and a budget that does not see that does not bound the"
+     "thing worth bounding (`0009`).")
+(defn ^:method ^Bool seq-eq [^:mut ^Rt rt ^Value a ^Value b]
+  (if (and (is-plain-vector rt a) (is-plain-vector rt b))
+    (if (!= (vec-count rt a) (vec-count rt b))
+      (return false)))
+  (let [^RootIx base (mark rt)
+        ^RootIx ai (push rt a)
+        ^RootIx bi (push rt b)
+        ^Value sa (seq rt (r rt ai))
+        ^RootIx ia (push rt sa)
+        ^Value sb (seq rt (r rt bi))
+        ^RootIx ib (push rt sb)]
+    (local ^:mut ^Bool out)
+    (set out false)
+    (forever
+      (do (charge-work rt 1)
+          (if (or (nil? rt (r rt ia)) (nil? rt (r rt ib)))
+            (do (set out (and (nil? rt (r rt ia)) (nil? rt (r rt ib))))
+                (break)))
+          (let [^Value fa (first rt (r rt ia))
+                ^RootIx fi (push rt fa)
+                ^Value fb (first rt (r rt ib))
+                ^RootIx fbi (push rt fb)
+                ^Bool same (val-eq rt (r rt fi) (r rt fbi))]
+            (pop-to rt fi)
+            (if (not same)
+              (do (set out false)
+                  (break))))
+          (let [^Value na (next rt (r rt ia))]
+            (set-r rt ia na))
+          (let [^Value nb (next rt (r rt ib))]
+            (set-r rt ib nb))))
+    (pop-to rt base)
+    (return out)))
+
+(doc "`=`."
+     ""
+     "DOUBLES FIRST: bit equality would wrongly make NaN equal to itself, and"
+     "would wrongly separate 0.0 from -0.0."
+     ""
+     "INTEGERS ARE CANONICAL, so the only way two are equal without being"
+     "bit-equal is two distinct boxes -- which is what a bigint is."
+     ""
+     "IMMEDIATES ARE CANONICAL TOO: an inline string can only equal another"
+     "inline string, and that would have been bit equality. So a boolean and a"
+     "list are simply NOT EQUAL, which is Clojure's answer; refusing here"
+     "instead was a runtime error where a `false` belonged.")
+(defn ^:pub ^:method ^Bool val-eq [^:mut ^Rt rt ^Value a ^Value b]
+  (if (or (is-double rt a) (is-double rt b))
+    (return (and (and (is-double rt a) (is-double rt b))
+                 (== (num-f64 rt a) (num-f64 rt b)))))
+  (if (== a b)
+    (return true))
+  (if (or (is-int rt a) (is-int rt b))
+    (return (and (and (is-int rt a) (is-int rt b))
+                 (== (i64-of rt a) (i64-of rt b)))))
+  (if (or (not (is-heap a)) (not (is-heap b)))
+    (return false))
+  (comment "A ROW REF IS COMPARED AS THE MAP IT IS, and BOTH operands are"
+           "rooted before either is materialised. `ref-to-map` allocates a map"
+           "and assocs every column into it, so it collects -- and `0031` is"
+           "that a value in a host local does not survive an allocation."
+           "Reading `b` after materialising `a` was reading the address `b`"
+           "used to be at: measured, one miscompare in four thousand"
+           "comparisons of equal values, and only when `b` is young enough for"
+           "the nursery to move it.")
+  (if (or (is-table-ref rt a) (is-table-ref rt b))
+    (let [^RootIx base (mark rt)
+          ^RootIx ai (push rt a)
+          ^RootIx bi (push rt b)]
+      (local ^:mut ^Value ma)
+      (set ma (r rt ai))
+      (if (is-table-ref rt (r rt ai))
+        (let [^Value m (ref-to-map rt (r rt ai))]
+          (set ma m)))
+      (let [^RootIx mi (push rt ma)]
+        (local ^:mut ^Value mb)
+        (set mb (r rt bi))
+        (if (is-table-ref rt (r rt bi))
+          (let [^Value m (ref-to-map rt (r rt bi))]
+            (set mb m)))
+        (let [^RootIx mj (push rt mb)
+              ^Bool out (val-eq rt (r rt mi) (r rt mj))]
+          (pop-to rt base)
+          (return out)))))
+  (let [^Cat ca (category rt a)
+        ^Cat cb (category rt b)]
+    (if (!= ca cb)
+      (return false))
+    (if (== ca CAT_SEQUENTIAL)
+      (return (seq-eq rt a b)))
+    (if (== ca CAT_MAP)
+      (return (maps-eq rt a b)))
+    (if (== ca CAT_SET)
+      (return (set-eq rt a b))))
+  (let [^Ty ta (ty rt (as-heap a))
+        ^Ty tb (ty rt (as-heap b))]
+    (comment "A STRING IS A STRING WHATEVER TIER IT IS IN: `(str a b)` and a"
+             "flat string of the same bytes must be `=` and must hash alike,"
+             "or a map keyed by one is not found by the other (`0011`). This"
+             "is BEFORE the tag comparison, because the tags differ and the"
+             "values do not. Byte strings compare by content across both tiers"
+             "for the same reason.")
+    (if (and (or (== ta TY_STR) (== ta TY_ROPE))
+             (or (== tb TY_STR) (== tb TY_ROPE)))
+      (do (if (!= (s-bytes rt a) (s-bytes rt b))
+            (return false))
+          (comment "BOTH INTERNED AND NOT BIT-EQUAL MEANS NOT EQUAL, with no"
+                   "need to look at the bytes at all. Only flat strings are"
+                   "interned, so a rope on either side has to be walked.")
+          (if (and (and (== ta TY_STR) (== tb TY_STR))
+                   (<= (s-bytes rt a) INTERN_MAX))
+            (return false))
+          (comment "WALKED, not copied. Building a byte array of both sides"
+                   "first cost two megabytes to tell two megabyte strings"
+                   "apart that differ at byte 0. `tree-eq` stops at the first"
+                   "mismatch and short-circuits on NODE IDENTITY, which"
+                   "matters more now that `subs` shares (`0011`).")
+          (return (tree-eq rt a b))))
+    (if (and (or (== ta TY_BYTES) (== ta TY_BROPE))
+             (or (== tb TY_BYTES) (== tb TY_BROPE)))
+      (return (b-eq rt a b)))
+    (comment "A TABLE IS NOT A VECTOR OF MAPS (`0026`). Refusing that equality"
+             "is what frees `hash` to be columnar -- it no longer has to agree"
+             "with what a vector of maps would produce -- and it is why a"
+             "table prints as its own literal.")
+    (if (or (== ta TY_TABLE) (== tb TY_TABLE))
+      (do (if (!= ta tb)
+            (return false))
+          (let [^I32 na (table-count rt a)
+                ^I32 nb (table-count rt b)]
+            (if (!= na nb)
+              (return false))
+            (let [^Value sa (slot rt a TB_SCHEMA)
+                  ^Value sb (slot rt b TB_SCHEMA)]
+              (if (not (schema-eq rt sa sb))
+                (return false)))
+            (comment "BOTH SIDES ROOTED. `table-ref` allocates, and `a` and"
+                     "`b` are host locals (`0031`). This was latent and"
+                     "surfaced on the JVM as \"object type 1 is not a"
+                     "transient\" -- type 1 being `TY_FWD` -- because that"
+                     "runtime's nursery happened to fill during the compare.")
+            (let [^RootIx base (mark rt)
+                  ^RootIx ai (push rt a)
+                  ^RootIx bi (push rt b)]
+              (local ^:mut ^I32 i)
+              (local ^:mut ^Bool same)
+              (set i 0)
+              (set same true)
+              (while (< i na)
+                (do (let [^Value ra (table-ref rt (r rt ai) i)
+                          ^RootIx ri (push rt ra)
+                          ^Value rb (table-ref rt (r rt bi) i)
+                          ^Bool one (val-eq rt (r rt ri) rb)]
+                      (pop-to rt ri)
+                      (if (not one)
+                        (do (set same false)
+                            (break))))
+                    (set i (+ i 1))))
+              (pop-to rt base)
+              (return same)))))
+    (comment "TWO TAGGED LITERALS ARE EQUAL WHEN BOTH HALVES ARE (`0034`)."
+             "Structural, like the collections, and NOT equal to a two-key"
+             "map -- which is the whole reason it is a type: a codec has to be"
+             "able to tell them apart.")
+    (if (or (== ta TY_TAGGED) (== tb TY_TAGGED))
+      (do (if (!= ta tb)
+            (return false))
+          (if (not (val-eq rt (slot rt a 0) (slot rt b 0)))
+            (return false))
+          (return (val-eq rt (slot rt a 1) (slot rt b 1)))))
+    (if (!= ta tb)
+      (return false))
+    (comment "SYMBOLS COMPARE BY (ns, name): `with-meta` makes a distinct"
+             "object that must still be `=`.")
+    (if (== ta TY_SYM)
+      (return (and (== (slot rt a 0) (slot rt b 0))
+                   (== (slot rt a 1) (slot rt b 1))))))
+  (return false))

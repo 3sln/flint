@@ -18,6 +18,7 @@ using static global::_3sln.Flint.Kgen.Rt.Tablekind;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;
 using static global::_3sln.Flint.Kgen.Rt.Tablesay;
+using static global::_3sln.Flint.Kgen.Rt.Valeq;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;
 using static global::_3sln.Flint.Kgen.Rt.Vecwrite;
 
@@ -92,7 +93,7 @@ public static class Tablemigrate {
                 // is a different operation and says so.
                 int hc = SchemaPosOf(rt, rt.R(hi), rt.R(nmi));
                 long haveTy = SchemaTypeAt(rt, rt.R(hi), hc);
-                if (!global::Flint.Rt.Eq.Equal(rt, haveTy, wantTy)) {
+                if (!ValEq(rt, haveTy, wantTy)) {
                     string nm = KwName(rt, rt.R(nmi));
                     string ht = KwName(rt, haveTy);
                     string wt = KwName(rt, wantTy);

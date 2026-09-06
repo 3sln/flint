@@ -11,6 +11,7 @@ import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Tablecell.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
+import static com._3sln.flint.kgen.rt.Valeq.*;
 
 public final class Tablefill {
     /// Write row `k` of `ch` from `row`, column by column.
@@ -94,7 +95,7 @@ public final class Tablefill {
             int id = schemaIdAt(rt, rt.r(si), c);
             long newv = rowColumn(rt, rt.r(si), rt.r(ri), c);
             int vi = rt.push(newv);
-            boolean stays = (chunkEnc(rt, rt.r(ci), id) == Table.ENC_CONST) && com.flint.rt.Eq.eq(rt, rt.slot(rt.r(ci), Table.CH_BASE + id), rt.r(vi));
+            boolean stays = (chunkEnc(rt, rt.r(ci), id) == Table.ENC_CONST) && valEq(rt, rt.slot(rt.r(ci), Table.CH_BASE + id), rt.r(vi));
             if (stays) {
                 // THE SLOT IS RE-READ, not carried across `val-eq`.
                 // Equality may allocate -- comparing two ropes can

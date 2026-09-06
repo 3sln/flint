@@ -98,7 +98,7 @@ impl Rt {
             let id: u32 = self.schema_id_at(self.r(si), c);
             let newv: Value = self.row_column(self.r(si), self.r(ri), c);
             let vi: usize = self.push(newv);
-            let stays: bool = (self.chunk_enc(self.r(ci), id) == crate::table::ENC_CONST) && self.eq(self.slot(self.r(ci), crate::table::CH_BASE + id), self.r(vi));
+            let stays: bool = (self.chunk_enc(self.r(ci), id) == crate::table::ENC_CONST) && self.val_eq(self.slot(self.r(ci), crate::table::CH_BASE + id), self.r(vi));
             if stays {
                 // THE SLOT IS RE-READ, not carried across `val-eq`.
                 // Equality may allocate -- comparing two ropes can

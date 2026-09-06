@@ -25,7 +25,7 @@ impl Rt {
     fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
     // A key of 900 or more is "compound", so the rooted path is taken.
     fn eq_may_alloc(&self, v: Value) -> bool { v.0 >= 900 }
-    fn eq(&mut self, a: Value, b: Value) -> bool { self.eqs += 1; a == b }
+    fn val_eq(&mut self, a: Value, b: Value) -> bool { self.eqs += 1; a == b }
     fn hash_value(&mut self, v: Value) -> u32 { ((v.0 * 7) & 0xff) as u32 }
     fn map_count(&self, m: Value) -> u32 { self.counts[m.0 as usize] }
     fn am_key(&self, m: Value, i: u32) -> Value { Value(self.h[m.0 as usize + 2 + 2 * i as usize]) }
@@ -82,6 +82,10 @@ fn main() {
     println!("{}", o);
 }
 --java-head
+    // `val-eq` IS `valeq`'s OWN now, so it is called BARE. The nested
+    // `com.flint.rt.Eq.eq` below stays for `hash-value`'s sake and this
+    // forwards to it, which keeps whatever counting each probe does.
+    static boolean valEq(Rt rt, long a, long b) { return com.flint.rt.Eq.eq(rt, a, b); }
     static final long NIL = 0xFFFFL, NOT_FOUND = 0xFFFEL;
     static final int HM_ROOT = 1;
     static final int TY_ARRAYMAP = 14, TY_HASHMAP = 15, TY_TABLEREF = 50;
@@ -177,6 +181,8 @@ namespace Flint.Rt {
 }
 
 --csharp-head
+    // `val-eq` IS `valeq`'s OWN now, so it is called BARE.
+    internal static bool ValEq(Rt rt, long a, long b) { return global::Flint.Rt.Eq.Equal(rt, a, b); }
     const long NIL = 0xFFFFL, NOT_FOUND = 0xFFFEL;
     const int HM_ROOT = 1;
     static class Obj {

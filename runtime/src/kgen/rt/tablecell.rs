@@ -66,7 +66,7 @@ impl Rt {
         let mut same: bool;
         same = true;
         for k in 1..n {
-            if !self.eq(self.r(fi), self.slot(self.r(coli), k)) {
+            if !self.val_eq(self.r(fi), self.slot(self.r(coli), k)) {
                 same = false;
                 break;
             }
@@ -103,7 +103,7 @@ impl Rt {
         // written in the one that works everywhere.
         for c in 0..n {
             let nm: Value = self.schema_name_at(s, c);
-            if self.eq(nm, name) {
+            if self.val_eq(nm, name) {
                 return c;
             }
         }

@@ -9,6 +9,7 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Valeq.*;
 import static com._3sln.flint.kgen.rt.Vecread.*;
 
 public final class Tablemeta {
@@ -89,10 +90,10 @@ public final class Tablemeta {
     /// Position matters: a table of `[[:a :int] [:b :int]]` is not one of
     /// `[[:b :int] [:a :int]]`, because the rows would read differently.
     public static boolean schemaEq(Rt rt, long a, long b) {
-        if (!com.flint.rt.Eq.eq(rt, rt.slot(a, Table.SC_NAMES), rt.slot(b, Table.SC_NAMES))) {
+        if (!valEq(rt, rt.slot(a, Table.SC_NAMES), rt.slot(b, Table.SC_NAMES))) {
             return false;
         }
-        return com.flint.rt.Eq.eq(rt, rt.slot(a, Table.SC_TYPES), rt.slot(b, Table.SC_TYPES));
+        return valEq(rt, rt.slot(a, Table.SC_TYPES), rt.slot(b, Table.SC_TYPES));
     }
     /// The first row's index within the first chunk. Non-zero only for a slice.
     public static int tableOffset(Rt rt, long t) {

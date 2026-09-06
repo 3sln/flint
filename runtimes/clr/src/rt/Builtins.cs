@@ -1161,7 +1161,7 @@ public static class Builtins {
     /// Equality lives in `Eq` now, because maps need it and it needs maps --
     /// a map's `=` compares entries and an entry's key can be a map. One
     /// implementation, not two that drift.
-    static bool Eq(Rt rt, long a, long b) => Flint.Rt.Eq.Equal(rt, a, b);
+    static bool Eq(Rt rt, long a, long b) => global::_3sln.Flint.Kgen.Rt.Valeq.ValEq(rt, a, b);
 
     /// A CHAIN, as Clojure's comparisons are: `(< 1 2 3)` is one call, not two.
     static long Cmp(Rt rt, int at, int n, int want, bool orEqual) {

@@ -77,7 +77,7 @@ builtins! {
             // collector updates, so this is the address that stays correct.
             let first = arg(rt, a, 0);
             let x = arg(rt, a, i);
-            if !rt.eq(first, x) { return FALSE; }
+            if !rt.val_eq(first, x) { return FALSE; }
         }
         TRUE
     };

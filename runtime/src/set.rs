@@ -182,10 +182,10 @@ mod tests {
             let nt = rt.set_conj(rt.r(ti), Value::fixnum(i));
             rt.set_r(ti, nt);
         }
-        assert!(rt.eq(rt.r(s3i), rt.r(ti)));
+        assert!(rt.val_eq(rt.r(s3i), rt.r(ti)));
         assert_eq!(rt.hash_value(rt.r(ti)) as i32, 439094965);
         let u = rt.set_disj(rt.r(ti), Value::fixnum(1));
-        assert!(!rt.eq(rt.r(s3i), u));
+        assert!(!rt.val_eq(rt.r(s3i), u));
     }
 
     #[test]

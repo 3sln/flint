@@ -1235,7 +1235,7 @@ public final class Builtins {
     /// Equality lives in `Eq` now, because maps need it and it needs maps --
     /// a map's `=` compares entries and an entry's key can be a map. One
     /// implementation, not two that drift.
-    static boolean eq(Rt rt, long a, long b) { return Eq.eq(rt, a, b); }
+    static boolean eq(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Valeq.valEq(rt, a, b); }
 
     /// A CHAIN, as Clojure's comparisons are: `(< 1 2 3)` is one call, not two.
     private static long cmp(Rt rt, int at, int n, int want, boolean orEqual) {

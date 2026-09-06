@@ -1,0 +1,633 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const CAT_SCALAR: u8 = 0; const CAT_SEQUENTIAL: u8 = 1; const CAT_MAP: u8 = 2;
+const CAT_SET: u8 = 3;
+const TY_VEC: u8 = 10; const TY_STR: u8 = 11; const TY_ROPE: u8 = 12;
+const TY_SYM: u8 = 13; const TY_BYTES: u8 = 14; const TY_BROPE: u8 = 15;
+const TY_TABLE: u8 = 16; const TY_TAGGED: u8 = 17; const TY_TABLEREF: u8 = 18;
+const TY_MAP: u8 = 19; const TY_SET: u8 = 20; const TY_CONS: u8 = 21;
+const TY_OTHER: u8 = 22;
+pub mod strs { pub const INTERN_MAX: u32 = 32; }
+pub mod table { pub const TB_SCHEMA: u32 = 0; }
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+// A DOUBLE and an INT are tagged in the value's high bits, and a heap object
+// is a bare address. The three ranges must not overlap, because every arm
+// below turns on telling them apart.
+struct Rt { gc: Gc, bump: u64, roots: Vec<Value>, work: u32,
+            slots: Vec<[u64; 4]>, treeq: bool, beq: bool, seqn: u32,
+            mapeq: bool, seteq: bool, scheq: bool, tabn: u32, doubles: Vec<f64> }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 < 0x100_0000_0000 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn is_double(self) -> bool { (self.0 >> 40) == 2 }
+}
+fn int(n: i64) -> Value { Value(0x100_0000_0000u64 | (n as u64 & 0xFFFF_FFFF)) }
+fn dbl(i: u64) -> Value { Value(0x200_0000_0000u64 | i) }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn charge_work(&mut self, n: u64) { self.work += n as u32; }
+    fn slot(&self, v: Value, i: u32) -> Value { Value(self.slots[v.0 as usize][i as usize]) }
+    fn obj(&mut self, t: u8) -> Value {
+        let a = self.bump; self.bump += 1;
+        self.gc.sp.m[a as usize] = t;
+        Value(a)
+    }
+    fn set_slot_(&mut self, v: Value, i: usize, x: Value) { self.slots[v.0 as usize][i] = x.0; }
+    fn is_int(&mut self, v: Value) -> bool { (v.0 >> 40) == 1 }
+    fn i64_of(&mut self, v: Value) -> i64 { ((v.0 & 0xFFFF_FFFF) as u32) as i32 as i64 }
+    // NaN is NOT equal to itself and -0.0 IS equal to 0.0, which is the whole
+    // reason doubles are the first arm rather than falling to bit equality.
+    fn num_f64(&mut self, v: Value) -> f64 { self.doubles[(v.0 & 0xFF) as usize] }
+    fn category(&mut self, v: Value) -> u8 {
+        if !v.is_heap() { return CAT_SCALAR; }
+        match ty(&self.gc.sp, v.as_heap()) {
+            TY_VEC | TY_CONS => CAT_SEQUENTIAL,
+            TY_MAP | TY_TABLEREF => CAT_MAP,
+            TY_SET => CAT_SET,
+            _ => CAT_SCALAR,
+        }
+    }
+    fn is_table_ref(&mut self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_TABLEREF
+    }
+    // Materialising ALLOCATES, which is the whole point of rooting both sides
+    // first -- so the stub allocates too, and the bump moves.
+    fn ref_to_map(&mut self, r: Value) -> Value {
+        let m = self.obj(TY_MAP);
+        let s = self.slot(r, 0);
+        self.set_slot_(m, 0, s);
+        m
+    }
+    fn s_bytes(&mut self, v: Value) -> u32 { self.slot(v, 0).0 as u32 }
+    fn tree_eq(&mut self, _a: Value, _b: Value) -> bool { self.treeq }
+    fn b_eq(&mut self, _a: Value, _b: Value) -> bool { self.beq }
+    fn map_eq(&mut self, _a: Value, _b: Value) -> bool { self.mapeq }
+    fn set_eq(&mut self, _a: Value, _b: Value) -> bool { self.seteq }
+    fn schema_eq(&mut self, _a: Value, _b: Value) -> bool { self.scheq }
+    fn table_count(&mut self, _t: Value) -> u32 { self.tabn }
+    // Row `i` of a table is `0xD000 + i`, so two tables agree exactly when
+    // their rows do -- and `table_ref` ALLOCATES, which is what the rooting
+    // in the table arm exists for.
+    fn table_ref(&mut self, t: Value, i: u32) -> Value {
+        self.bump += 1;
+        int((self.slot(t, 1).0 * 100 + i as u64) as i64)
+    }
+    fn vec_count(&mut self, v: Value) -> u32 { self.slot(v, 0).0 as u32 }
+    // A seq is a COUNTDOWN in the value: `0xC000 + k` has `k` left, and its
+    // first element is `0xE000 + k` so two seqs of the same length agree.
+    fn seq(&mut self, c: Value) -> Value {
+        let n = if c.is_heap() && ty(&self.gc.sp, c.as_heap()) == TY_VEC {
+            self.slot(c, 0).0 as u32
+        } else { self.seqn };
+        if n == 0 { NIL } else { Value(0xC000 + n as u64) }
+    }
+    fn first(&mut self, s: Value) -> Value { Value(0xE000 + (s.0 - 0xC000)) }
+    fn next(&mut self, s: Value) -> Value {
+        if s.0 == 0xC001 { NIL } else { Value(s.0 - 1) }
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { gc: Gc { sp: Space { m: vec![0u8; 600] } }, bump: 100,
+                      roots: Vec::new(), work: 0, slots: vec![[0u64; 4]; 600],
+                      treeq: true, beq: true, seqn: 3, mapeq: true, seteq: true,
+                      scheq: true, tabn: 2,
+                      doubles: vec![f64::NAN, 0.0, -0.0, 1.0, 1.0] };
+    let mut o = String::new();
+
+    // DOUBLES FIRST. NaN is not equal to itself; -0.0 is equal to 0.0; and a
+    // double is never equal to an integer of the same value.
+    // NaN IS NOT EQUAL TO ITSELF and -0.0 IS equal to 0.0, which is the whole
+    // reason doubles come before bit equality. Index 0 is NaN, 1 is 0.0, 2 is
+    // -0.0, and 3 and 4 are both 1.0 -- distinct values that must be equal.
+    let (nan, zero, negzero, one, one2) = (dbl(0), dbl(1), dbl(2), dbl(3), dbl(4));
+    o.push_str(&format!("d={}{}{}{}{} ", rt.val_eq(nan, nan) as u32,
+                        rt.val_eq(zero, negzero) as u32, rt.val_eq(one, one2) as u32,
+                        rt.val_eq(one, zero) as u32, rt.val_eq(one, int(1)) as u32));
+    // INTEGERS ARE CANONICAL, so two equal ones are bit-equal -- unless one is
+    // a distinct box, which is what a bigint is.
+    o.push_str(&format!("i={}{}{} ", rt.val_eq(int(5), int(5)) as u32,
+                        rt.val_eq(int(5), int(6)) as u32,
+                        rt.val_eq(int(5), NIL) as u32));
+    // IMMEDIATES: not equal rather than a refusal.
+    o.push_str(&format!("im={}{} ", rt.val_eq(NIL, NIL) as u32,
+                        rt.val_eq(NIL, int(0)) as u32));
+
+    // A ROW REF IS COMPARED AS THE MAP IT IS, in both directions and both ways
+    // round -- and the map arm is a stub, so what is under test is that the
+    // ref arm runs BEFORE `category` sends it to `map-eq` unmaterialised.
+    let m1 = rt.obj(TY_MAP);
+    let r1 = rt.obj(TY_TABLEREF);
+    rt.set_slot_(r1, 0, Value(0x77));
+    rt.mapeq = true;
+    o.push_str(&format!("ref={}{}{} ", rt.val_eq(r1, m1) as u32,
+                        rt.val_eq(m1, r1) as u32, rt.val_eq(r1, r1) as u32));
+    rt.mapeq = false;
+    o.push_str(&format!("ref0={}{} ", rt.val_eq(r1, m1) as u32,
+                        rt.val_eq(m1, r1) as u32));
+    rt.mapeq = true;
+
+    // CATEGORY GATES THE REST. Different categories are simply not equal.
+    let v1 = rt.obj(TY_VEC);
+    rt.set_slot_(v1, 0, Value(3));
+    let s1 = rt.obj(TY_SET);
+    o.push_str(&format!("cat={}{}{} ", rt.val_eq(v1, m1) as u32,
+                        rt.val_eq(m1, s1) as u32, rt.val_eq(s1, v1) as u32));
+
+    // SEQUENTIAL: two vectors of different counts are out before any walk.
+    let v2 = rt.obj(TY_VEC);
+    rt.set_slot_(v2, 0, Value(3));
+    let v3 = rt.obj(TY_VEC);
+    rt.set_slot_(v3, 0, Value(4));
+    let c1 = rt.obj(TY_CONS);
+    let c2 = rt.obj(TY_CONS);
+    rt.work = 0;
+    o.push_str(&format!("seq={}{} ", rt.val_eq(v1, v2) as u32,
+                        rt.val_eq(v1, v3) as u32));
+    o.push_str(&format!("work={} ", rt.work));
+    // Two conses walk, and the walk is CHARGED per element.
+    rt.work = 0;
+    o.push_str(&format!("cons={} work={} ", rt.val_eq(c1, c2) as u32, rt.work));
+    // A vector and a cons are BOTH sequential, so they compare element by
+    // element rather than by type.
+    rt.seqn = 3;
+    o.push_str(&format!("mix={} ", rt.val_eq(v1, c1) as u32));
+
+    // MAP and SET delegate, and the stub is what says so.
+    rt.seteq = false;
+    let m2 = rt.obj(TY_MAP);
+    let s2 = rt.obj(TY_SET);
+    let (d1, d2) = (rt.val_eq(m1, m2), rt.val_eq(s1, s2));
+    o.push_str(&format!("del={}{} ", d1 as u32, d2 as u32));
+    rt.seteq = true;
+
+    // STRINGS ACROSS TIERS. Byte lengths first; then the interning answer for
+    // two SHORT FLAT strings; then the walk.
+    let f1 = rt.obj(TY_STR); rt.set_slot_(f1, 0, Value(8));
+    let f2 = rt.obj(TY_STR); rt.set_slot_(f2, 0, Value(8));
+    let f3 = rt.obj(TY_STR); rt.set_slot_(f3, 0, Value(9));
+    let big1 = rt.obj(TY_STR); rt.set_slot_(big1, 0, Value(64));
+    let big2 = rt.obj(TY_STR); rt.set_slot_(big2, 0, Value(64));
+    let rp1 = rt.obj(TY_ROPE); rt.set_slot_(rp1, 0, Value(8));
+    let rp2 = rt.obj(TY_ROPE); rt.set_slot_(rp2, 0, Value(8));
+    rt.treeq = true;
+    o.push_str(&format!("s={}{}{}{}{} ", rt.val_eq(f1, f3) as u32,
+                        rt.val_eq(f1, f2) as u32, rt.val_eq(big1, big2) as u32,
+                        rt.val_eq(rp1, rp2) as u32, rt.val_eq(f1, rp1) as u32));
+    rt.treeq = false;
+    o.push_str(&format!("s0={}{}{} ", rt.val_eq(big1, big2) as u32,
+                        rt.val_eq(rp1, rp2) as u32, rt.val_eq(f1, rp1) as u32));
+    rt.treeq = true;
+
+    // BYTE STRINGS compare by content across both tiers, like text ropes.
+    let b1 = rt.obj(TY_BYTES);
+    let b2 = rt.obj(TY_BROPE);
+    o.push_str(&format!("b={} ", rt.val_eq(b1, b2) as u32));
+    rt.beq = false;
+    o.push_str(&format!("b0={} ", rt.val_eq(b1, b2) as u32));
+    rt.beq = true;
+
+    // TABLES: same tag, same count, same schema, then row by row.
+    let t1 = rt.obj(TY_TABLE); rt.set_slot_(t1, 1, Value(1));
+    let t2 = rt.obj(TY_TABLE); rt.set_slot_(t2, 1, Value(1));
+    let t3 = rt.obj(TY_TABLE); rt.set_slot_(t3, 1, Value(2));
+    o.push_str(&format!("t={}{} ", rt.val_eq(t1, t2) as u32, rt.val_eq(t1, t3) as u32));
+    rt.scheq = false;
+    o.push_str(&format!("tsch={} ", rt.val_eq(t1, t2) as u32));
+    rt.scheq = true;
+    rt.tabn = 2;
+    // A table is NOT a vector, whichever side it is on.
+    o.push_str(&format!("tv={}{} ", rt.val_eq(t1, v1) as u32, rt.val_eq(v1, t1) as u32));
+
+    // TAGGED literals: both halves, and never equal to anything else.
+    let g1 = rt.obj(TY_TAGGED);
+    rt.set_slot_(g1, 0, int(1)); rt.set_slot_(g1, 1, int(2));
+    let g2 = rt.obj(TY_TAGGED);
+    rt.set_slot_(g2, 0, int(1)); rt.set_slot_(g2, 1, int(2));
+    let g3 = rt.obj(TY_TAGGED);
+    rt.set_slot_(g3, 0, int(1)); rt.set_slot_(g3, 1, int(9));
+    o.push_str(&format!("g={}{}{} ", rt.val_eq(g1, g2) as u32,
+                        rt.val_eq(g1, g3) as u32, rt.val_eq(g1, m1) as u32));
+
+    // SYMBOLS compare by (ns, name): with-meta makes a distinct object that
+    // must still be `=`.
+    let y1 = rt.obj(TY_SYM);
+    rt.set_slot_(y1, 0, Value(0x41)); rt.set_slot_(y1, 1, Value(0x42));
+    let y2 = rt.obj(TY_SYM);
+    rt.set_slot_(y2, 0, Value(0x41)); rt.set_slot_(y2, 1, Value(0x42));
+    let y3 = rt.obj(TY_SYM);
+    rt.set_slot_(y3, 0, Value(0x41)); rt.set_slot_(y3, 1, Value(0x43));
+    let z1 = rt.obj(TY_OTHER);
+    let z2 = rt.obj(TY_OTHER);
+    o.push_str(&format!("y={}{}{}", rt.val_eq(y1, y2) as u32,
+                        rt.val_eq(y1, y3) as u32, rt.val_eq(z1, z2) as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1, CAT_MAP = 2, CAT_SET = 3;
+    static final int TY_VEC = 10, TY_STR = 11, TY_ROPE = 12;
+    static final int TY_SYM = 13, TY_BYTES = 14, TY_BROPE = 15;
+    static final int TY_TABLE = 16, TY_TAGGED = 17, TY_TABLEREF = 18;
+    static final int TY_MAP = 19, TY_SET = 20, TY_CONS = 21, TY_OTHER = 22;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isHeap(long v) { return v >= 100 && v < 0x10000000000L && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static boolean isNil(long v) { return v == NIL; }
+        static boolean isDouble(long v) { return (v >>> 40) == 2; }
+    }
+    static long anInt(long n) { return 0x10000000000L | (n & 0xFFFFFFFFL); }
+    static long dbl(long i) { return 0x20000000000L | i; }
+    static final class Space { byte[] m = new byte[600]; }
+    static final class Rt {
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        long bump = 100;
+        int work = 0;
+        long[][] slots = new long[600][4];
+        boolean treeq = true, beq = true, mapeq = true, seteq = true, scheq = true;
+        int seqn = 3, tabn = 2;
+        double[] doubles = { Double.NaN, 0.0, -0.0, 1.0, 1.0 };
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void chargeWork(long n) { work += (int) n; }
+        long slot(long v, int i) { return slots[(int) v][i]; }
+        long obj(int t) { long a = bump; bump += 1; gc.sp.m[(int) a] = (byte) t; return a; }
+        void setSlot_(long v, int i, long x) { slots[(int) v][i] = x; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    // `INTERN_MAX` is FULLY QUALIFIED on the JVM, so the probe declares that
+    // path rather than a bare `Interns`.
+    static final class com { static final class flint { static final class rt {
+        static final class Interns { static final int INTERN_MAX = 32; }
+    } } }
+    static final class Num {
+        static boolean isInt(Rt rt, long v) { return (v >>> 40) == 1; }
+        static long i64Of(Rt rt, long v) { return (int) (v & 0xFFFFFFFFL); }
+        static double f64(Rt rt, long v) { return rt.doubles[(int) (v & 0xFF)]; }
+    }
+    static int category(Rt rt, long v) {
+        if (!Val.isHeap(v)) return CAT_SCALAR;
+        int t = ty(rt.gc.sp, Val.asHeap(v));
+        if (t == TY_VEC || t == TY_CONS) return CAT_SEQUENTIAL;
+        if (t == TY_MAP || t == TY_TABLEREF) return CAT_MAP;
+        if (t == TY_SET) return CAT_SET;
+        return CAT_SCALAR;
+    }
+    static boolean isTableRef(Rt rt, long v) {
+        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_TABLEREF;
+    }
+    static final class Table {
+        static final int TB_SCHEMA = 0;
+        static long refToMap(Rt rt, long r) {
+            long m = rt.obj(TY_MAP);
+            rt.setSlot_(m, 0, rt.slot(r, 0));
+            return m;
+        }
+        static int tableCount(Rt rt, long t) { return rt.tabn; }
+        static long tableRef(Rt rt, long t, int i) {
+            rt.bump += 1;
+            return anInt(rt.slot(t, 1) * 100 + i);
+        }
+    }
+    static final class Str { static int sBytes(Rt rt, long v) { return (int) rt.slot(v, 0); } }
+    static boolean treeEq(Rt rt, long a, long b) { return rt.treeq; }
+    static boolean bEq(Rt rt, long a, long b) { return rt.beq; }
+    static final class Maps { static boolean eq(Rt rt, long a, long b) { return rt.mapeq; } }
+    static final class Sets { static boolean eq(Rt rt, long a, long b) { return rt.seteq; } }
+    static boolean schemaEq(Rt rt, long a, long b) { return rt.scheq; }
+    static final class Vec { static int count(Rt rt, long v) { return (int) rt.slot(v, 0); } }
+    static long seq(Rt rt, long c) {
+        int n = (Val.isHeap(c) && ty(rt.gc.sp, Val.asHeap(c)) == TY_VEC)
+                ? (int) rt.slot(c, 0) : rt.seqn;
+        return n == 0 ? NIL : 0xC000L + n;
+    }
+    static long first(Rt rt, long s) { return 0xE000L + (s - 0xC000L); }
+    static long next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+
+        long nan = dbl(0), zero = dbl(1), negzero = dbl(2), one = dbl(3), one2 = dbl(4);
+        o.append("d=").append(valEq(rt, nan, nan) ? 1 : 0)
+         .append(valEq(rt, zero, negzero) ? 1 : 0).append(valEq(rt, one, one2) ? 1 : 0)
+         .append(valEq(rt, one, zero) ? 1 : 0)
+         .append(valEq(rt, one, anInt(1)) ? 1 : 0).append(' ');
+        o.append("i=").append(valEq(rt, anInt(5), anInt(5)) ? 1 : 0)
+         .append(valEq(rt, anInt(5), anInt(6)) ? 1 : 0)
+         .append(valEq(rt, anInt(5), NIL) ? 1 : 0).append(' ');
+        o.append("im=").append(valEq(rt, NIL, NIL) ? 1 : 0)
+         .append(valEq(rt, NIL, anInt(0)) ? 1 : 0).append(' ');
+
+        long m1 = rt.obj(TY_MAP);
+        long r1 = rt.obj(TY_TABLEREF);
+        rt.setSlot_(r1, 0, 0x77L);
+        rt.mapeq = true;
+        o.append("ref=").append(valEq(rt, r1, m1) ? 1 : 0).append(valEq(rt, m1, r1) ? 1 : 0)
+         .append(valEq(rt, r1, r1) ? 1 : 0).append(' ');
+        rt.mapeq = false;
+        o.append("ref0=").append(valEq(rt, r1, m1) ? 1 : 0)
+         .append(valEq(rt, m1, r1) ? 1 : 0).append(' ');
+        rt.mapeq = true;
+
+        long v1 = rt.obj(TY_VEC);
+        rt.setSlot_(v1, 0, 3L);
+        long s1 = rt.obj(TY_SET);
+        o.append("cat=").append(valEq(rt, v1, m1) ? 1 : 0).append(valEq(rt, m1, s1) ? 1 : 0)
+         .append(valEq(rt, s1, v1) ? 1 : 0).append(' ');
+
+        long v2 = rt.obj(TY_VEC); rt.setSlot_(v2, 0, 3L);
+        long v3 = rt.obj(TY_VEC); rt.setSlot_(v3, 0, 4L);
+        long c1 = rt.obj(TY_CONS);
+        long c2 = rt.obj(TY_CONS);
+        rt.work = 0;
+        o.append("seq=").append(valEq(rt, v1, v2) ? 1 : 0)
+         .append(valEq(rt, v1, v3) ? 1 : 0).append(' ');
+        o.append("work=").append(rt.work).append(' ');
+        rt.work = 0;
+        o.append("cons=").append(valEq(rt, c1, c2) ? 1 : 0)
+         .append(" work=").append(rt.work).append(' ');
+        rt.seqn = 3;
+        o.append("mix=").append(valEq(rt, v1, c1) ? 1 : 0).append(' ');
+
+        rt.seteq = false;
+        long m2 = rt.obj(TY_MAP);
+        long s2 = rt.obj(TY_SET);
+        o.append("del=").append(valEq(rt, m1, m2) ? 1 : 0)
+         .append(valEq(rt, s1, s2) ? 1 : 0).append(' ');
+        rt.seteq = true;
+
+        long f1 = rt.obj(TY_STR); rt.setSlot_(f1, 0, 8L);
+        long f2 = rt.obj(TY_STR); rt.setSlot_(f2, 0, 8L);
+        long f3 = rt.obj(TY_STR); rt.setSlot_(f3, 0, 9L);
+        long big1 = rt.obj(TY_STR); rt.setSlot_(big1, 0, 64L);
+        long big2 = rt.obj(TY_STR); rt.setSlot_(big2, 0, 64L);
+        long rp1 = rt.obj(TY_ROPE); rt.setSlot_(rp1, 0, 8L);
+        long rp2 = rt.obj(TY_ROPE); rt.setSlot_(rp2, 0, 8L);
+        rt.treeq = true;
+        o.append("s=").append(valEq(rt, f1, f3) ? 1 : 0).append(valEq(rt, f1, f2) ? 1 : 0)
+         .append(valEq(rt, big1, big2) ? 1 : 0).append(valEq(rt, rp1, rp2) ? 1 : 0)
+         .append(valEq(rt, f1, rp1) ? 1 : 0).append(' ');
+        rt.treeq = false;
+        o.append("s0=").append(valEq(rt, big1, big2) ? 1 : 0)
+         .append(valEq(rt, rp1, rp2) ? 1 : 0).append(valEq(rt, f1, rp1) ? 1 : 0).append(' ');
+        rt.treeq = true;
+
+        long b1 = rt.obj(TY_BYTES);
+        long b2 = rt.obj(TY_BROPE);
+        o.append("b=").append(valEq(rt, b1, b2) ? 1 : 0).append(' ');
+        rt.beq = false;
+        o.append("b0=").append(valEq(rt, b1, b2) ? 1 : 0).append(' ');
+        rt.beq = true;
+
+        long t1 = rt.obj(TY_TABLE); rt.setSlot_(t1, 1, 1L);
+        long t2 = rt.obj(TY_TABLE); rt.setSlot_(t2, 1, 1L);
+        long t3 = rt.obj(TY_TABLE); rt.setSlot_(t3, 1, 2L);
+        o.append("t=").append(valEq(rt, t1, t2) ? 1 : 0).append(valEq(rt, t1, t3) ? 1 : 0).append(' ');
+        rt.scheq = false;
+        o.append("tsch=").append(valEq(rt, t1, t2) ? 1 : 0).append(' ');
+        rt.scheq = true;
+        rt.tabn = 2;
+        o.append("tv=").append(valEq(rt, t1, v1) ? 1 : 0).append(valEq(rt, v1, t1) ? 1 : 0).append(' ');
+
+        long g1 = rt.obj(TY_TAGGED);
+        rt.setSlot_(g1, 0, anInt(1)); rt.setSlot_(g1, 1, anInt(2));
+        long g2 = rt.obj(TY_TAGGED);
+        rt.setSlot_(g2, 0, anInt(1)); rt.setSlot_(g2, 1, anInt(2));
+        long g3 = rt.obj(TY_TAGGED);
+        rt.setSlot_(g3, 0, anInt(1)); rt.setSlot_(g3, 1, anInt(9));
+        o.append("g=").append(valEq(rt, g1, g2) ? 1 : 0).append(valEq(rt, g1, g3) ? 1 : 0)
+         .append(valEq(rt, g1, m1) ? 1 : 0).append(' ');
+
+        long y1 = rt.obj(TY_SYM);
+        rt.setSlot_(y1, 0, 0x41L); rt.setSlot_(y1, 1, 0x42L);
+        long y2 = rt.obj(TY_SYM);
+        rt.setSlot_(y2, 0, 0x41L); rt.setSlot_(y2, 1, 0x42L);
+        long y3 = rt.obj(TY_SYM);
+        rt.setSlot_(y3, 0, 0x41L); rt.setSlot_(y3, 1, 0x43L);
+        long z1 = rt.obj(TY_OTHER);
+        long z2 = rt.obj(TY_OTHER);
+        o.append("y=").append(valEq(rt, y1, y2) ? 1 : 0).append(valEq(rt, y1, y3) ? 1 : 0)
+         .append(valEq(rt, z1, z2) ? 1 : 0);
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    // `ref-to-map` is FULLY QUALIFIED in the vocabulary and `table-ref` and
+    // `table-count` are bare siblings, so the probe declares a `Table` in each
+    // place. That the three are spelled differently is a wart, not a rule.
+    internal static class Table {
+        internal const int TB_SCHEMA = 0;
+        internal static long refToMap(Probe.Rt rt, long r) {
+            long m = rt.Obj_(Probe.Obj.TyMap);
+            rt.SetSlot_(m, 0, rt.Slot(r, 0));
+            return m;
+        }
+    }
+    internal static class Interns { internal const int InternMax = 32; }
+}
+--csharp-head
+    internal const long NIL = 0xFFFFL;
+    internal const int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1, CAT_MAP = 2, CAT_SET = 3;
+    internal static class Obj {
+        internal const int TyVec = 10, TyStr = 11, TyRope = 12;
+        internal const int TySym = 13, TyBytes = 14, TyBrope = 15;
+        internal const int TyTable = 16, TyTagged = 17, TyTableref = 18;
+        internal const int TyMap = 19, TySet = 20, TyCons = 21, TyOther = 22;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = Probe.NIL;
+        internal static bool IsHeap(long v) { return v >= 100 && v < 0x10000000000L && v != NIL; }
+        internal static long AsHeap(long v) { return v; }
+        internal static bool IsNil(long v) { return v == NIL; }
+        internal static bool IsDouble(long v) { return (v >> 40) == 2; }
+    }
+    internal static long AnInt(long n) { return 0x10000000000L | (n & 0xFFFFFFFFL); }
+    internal static long Dbl(long i) { return 0x20000000000L | i; }
+    internal sealed class Space { internal byte[] m = new byte[600]; }
+    internal sealed class Rt {
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal int work = 0;
+        internal long[,] slots = new long[600, 4];
+        internal bool treeq = true, beq = true, mapeq = true, seteq = true, scheq = true;
+        internal int seqn = 3, tabn = 2;
+        internal double[] doubles = { double.NaN, 0.0, -0.0, 1.0, 1.0 };
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal void PopTo(int n) { while (roots.Count > n) roots.RemoveAt(roots.Count - 1); }
+        internal void ChargeWork(long n) { work += (int) n; }
+        internal long Slot(long v, int i) { return slots[(int) v, i]; }
+        internal long Obj_(int t) { long a = bump; bump += 1; gc.sp.m[(int) a] = (byte) t; return a; }
+        internal void SetSlot_(long v, int i, long x) { slots[(int) v, i] = x; }
+    }
+    internal static class Num {
+        internal static bool IsInt(Rt rt, long v) { return (v >> 40) == 1; }
+        internal static long I64Of(Rt rt, long v) { return (int) (v & 0xFFFFFFFFL); }
+        internal static double F64(Rt rt, long v) { return rt.doubles[(int) (v & 0xFF)]; }
+    }
+    internal static int Category(Rt rt, long v) {
+        if (!Val.IsHeap(v)) return CAT_SCALAR;
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        if (t == Obj.TyVec || t == Obj.TyCons) return CAT_SEQUENTIAL;
+        if (t == Obj.TyMap || t == Obj.TyTableref) return CAT_MAP;
+        if (t == Obj.TySet) return CAT_SET;
+        return CAT_SCALAR;
+    }
+    internal static bool IsTableRef(Rt rt, long v) {
+        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTableref;
+    }
+    internal static class Table {
+        internal const int TB_SCHEMA = 0;
+        internal static int tableCount(Rt rt, long t) { return rt.tabn; }
+        internal static long tableRef(Rt rt, long t, int i) {
+            rt.bump += 1;
+            return AnInt(rt.Slot(t, 1) * 100 + i);
+        }
+    }
+    internal static class Str { internal static int SBytes(Rt rt, long v) { return (int) rt.Slot(v, 0); } }
+    // `maps-eq` and `set-eq` are BARE siblings, so these sit inside `Probe`.
+    internal static class Maps { internal static bool Eq(Rt rt, long a, long b) { return rt.mapeq; } }
+    internal static class Sets { internal static bool Eq(Rt rt, long a, long b) { return rt.seteq; } }
+    internal static bool TreeEq(Rt rt, long a, long b) { return rt.treeq; }
+    internal static bool BEq(Rt rt, long a, long b) { return rt.beq; }
+    internal static bool SchemaEq(Rt rt, long a, long b) { return rt.scheq; }
+    internal static class Vec { internal static int Count(Rt rt, long v) { return (int) rt.Slot(v, 0); } }
+    internal static long Seq(Rt rt, long c) {
+        int n = (Val.IsHeap(c) && Obj.Ty(rt.gc.sp, Val.AsHeap(c)) == Obj.TyVec)
+                ? (int) rt.Slot(c, 0) : rt.seqn;
+        return n == 0 ? NIL : 0xC000L + n;
+    }
+    internal static long First(Rt rt, long s) { return 0xE000L + (s - 0xC000L); }
+    internal static long Next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+--csharp
+    public static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+
+        long nan = Dbl(0), zero = Dbl(1), negzero = Dbl(2), one = Dbl(3), one2 = Dbl(4);
+        o.Append("d=").Append(ValEq(rt, nan, nan) ? 1 : 0)
+         .Append(ValEq(rt, zero, negzero) ? 1 : 0).Append(ValEq(rt, one, one2) ? 1 : 0)
+         .Append(ValEq(rt, one, zero) ? 1 : 0)
+         .Append(ValEq(rt, one, AnInt(1)) ? 1 : 0).Append(' ');
+        o.Append("i=").Append(ValEq(rt, AnInt(5), AnInt(5)) ? 1 : 0)
+         .Append(ValEq(rt, AnInt(5), AnInt(6)) ? 1 : 0)
+         .Append(ValEq(rt, AnInt(5), NIL) ? 1 : 0).Append(' ');
+        o.Append("im=").Append(ValEq(rt, NIL, NIL) ? 1 : 0)
+         .Append(ValEq(rt, NIL, AnInt(0)) ? 1 : 0).Append(' ');
+
+        long m1 = rt.Obj_(Obj.TyMap);
+        long r1 = rt.Obj_(Obj.TyTableref);
+        rt.SetSlot_(r1, 0, 0x77L);
+        rt.mapeq = true;
+        o.Append("ref=").Append(ValEq(rt, r1, m1) ? 1 : 0).Append(ValEq(rt, m1, r1) ? 1 : 0)
+         .Append(ValEq(rt, r1, r1) ? 1 : 0).Append(' ');
+        rt.mapeq = false;
+        o.Append("ref0=").Append(ValEq(rt, r1, m1) ? 1 : 0)
+         .Append(ValEq(rt, m1, r1) ? 1 : 0).Append(' ');
+        rt.mapeq = true;
+
+        long v1 = rt.Obj_(Obj.TyVec);
+        rt.SetSlot_(v1, 0, 3L);
+        long s1 = rt.Obj_(Obj.TySet);
+        o.Append("cat=").Append(ValEq(rt, v1, m1) ? 1 : 0).Append(ValEq(rt, m1, s1) ? 1 : 0)
+         .Append(ValEq(rt, s1, v1) ? 1 : 0).Append(' ');
+
+        long v2 = rt.Obj_(Obj.TyVec); rt.SetSlot_(v2, 0, 3L);
+        long v3 = rt.Obj_(Obj.TyVec); rt.SetSlot_(v3, 0, 4L);
+        long c1 = rt.Obj_(Obj.TyCons);
+        long c2 = rt.Obj_(Obj.TyCons);
+        rt.work = 0;
+        o.Append("seq=").Append(ValEq(rt, v1, v2) ? 1 : 0)
+         .Append(ValEq(rt, v1, v3) ? 1 : 0).Append(' ');
+        o.Append("work=").Append(rt.work).Append(' ');
+        rt.work = 0;
+        o.Append("cons=").Append(ValEq(rt, c1, c2) ? 1 : 0)
+         .Append(" work=").Append(rt.work).Append(' ');
+        rt.seqn = 3;
+        o.Append("mix=").Append(ValEq(rt, v1, c1) ? 1 : 0).Append(' ');
+
+        rt.seteq = false;
+        long m2 = rt.Obj_(Obj.TyMap);
+        long s2 = rt.Obj_(Obj.TySet);
+        o.Append("del=").Append(ValEq(rt, m1, m2) ? 1 : 0)
+         .Append(ValEq(rt, s1, s2) ? 1 : 0).Append(' ');
+        rt.seteq = true;
+
+        long f1 = rt.Obj_(Obj.TyStr); rt.SetSlot_(f1, 0, 8L);
+        long f2 = rt.Obj_(Obj.TyStr); rt.SetSlot_(f2, 0, 8L);
+        long f3 = rt.Obj_(Obj.TyStr); rt.SetSlot_(f3, 0, 9L);
+        long big1 = rt.Obj_(Obj.TyStr); rt.SetSlot_(big1, 0, 64L);
+        long big2 = rt.Obj_(Obj.TyStr); rt.SetSlot_(big2, 0, 64L);
+        long rp1 = rt.Obj_(Obj.TyRope); rt.SetSlot_(rp1, 0, 8L);
+        long rp2 = rt.Obj_(Obj.TyRope); rt.SetSlot_(rp2, 0, 8L);
+        rt.treeq = true;
+        o.Append("s=").Append(ValEq(rt, f1, f3) ? 1 : 0).Append(ValEq(rt, f1, f2) ? 1 : 0)
+         .Append(ValEq(rt, big1, big2) ? 1 : 0).Append(ValEq(rt, rp1, rp2) ? 1 : 0)
+         .Append(ValEq(rt, f1, rp1) ? 1 : 0).Append(' ');
+        rt.treeq = false;
+        o.Append("s0=").Append(ValEq(rt, big1, big2) ? 1 : 0)
+         .Append(ValEq(rt, rp1, rp2) ? 1 : 0).Append(ValEq(rt, f1, rp1) ? 1 : 0).Append(' ');
+        rt.treeq = true;
+
+        long b1 = rt.Obj_(Obj.TyBytes);
+        long b2 = rt.Obj_(Obj.TyBrope);
+        o.Append("b=").Append(ValEq(rt, b1, b2) ? 1 : 0).Append(' ');
+        rt.beq = false;
+        o.Append("b0=").Append(ValEq(rt, b1, b2) ? 1 : 0).Append(' ');
+        rt.beq = true;
+
+        long t1 = rt.Obj_(Obj.TyTable); rt.SetSlot_(t1, 1, 1L);
+        long t2 = rt.Obj_(Obj.TyTable); rt.SetSlot_(t2, 1, 1L);
+        long t3 = rt.Obj_(Obj.TyTable); rt.SetSlot_(t3, 1, 2L);
+        o.Append("t=").Append(ValEq(rt, t1, t2) ? 1 : 0).Append(ValEq(rt, t1, t3) ? 1 : 0).Append(' ');
+        rt.scheq = false;
+        o.Append("tsch=").Append(ValEq(rt, t1, t2) ? 1 : 0).Append(' ');
+        rt.scheq = true;
+        rt.tabn = 2;
+        o.Append("tv=").Append(ValEq(rt, t1, v1) ? 1 : 0).Append(ValEq(rt, v1, t1) ? 1 : 0).Append(' ');
+
+        long g1 = rt.Obj_(Obj.TyTagged);
+        rt.SetSlot_(g1, 0, AnInt(1)); rt.SetSlot_(g1, 1, AnInt(2));
+        long g2 = rt.Obj_(Obj.TyTagged);
+        rt.SetSlot_(g2, 0, AnInt(1)); rt.SetSlot_(g2, 1, AnInt(2));
+        long g3 = rt.Obj_(Obj.TyTagged);
+        rt.SetSlot_(g3, 0, AnInt(1)); rt.SetSlot_(g3, 1, AnInt(9));
+        o.Append("g=").Append(ValEq(rt, g1, g2) ? 1 : 0).Append(ValEq(rt, g1, g3) ? 1 : 0)
+         .Append(ValEq(rt, g1, m1) ? 1 : 0).Append(' ');
+
+        long y1 = rt.Obj_(Obj.TySym);
+        rt.SetSlot_(y1, 0, 0x41L); rt.SetSlot_(y1, 1, 0x42L);
+        long y2 = rt.Obj_(Obj.TySym);
+        rt.SetSlot_(y2, 0, 0x41L); rt.SetSlot_(y2, 1, 0x42L);
+        long y3 = rt.Obj_(Obj.TySym);
+        rt.SetSlot_(y3, 0, 0x41L); rt.SetSlot_(y3, 1, 0x43L);
+        long z1 = rt.Obj_(Obj.TyOther);
+        long z2 = rt.Obj_(Obj.TyOther);
+        o.Append("y=").Append(ValEq(rt, y1, y2) ? 1 : 0).Append(ValEq(rt, y1, y3) ? 1 : 0)
+         .Append(ValEq(rt, z1, z2) ? 1 : 0);
+        System.Console.WriteLine(o.ToString());
+    }

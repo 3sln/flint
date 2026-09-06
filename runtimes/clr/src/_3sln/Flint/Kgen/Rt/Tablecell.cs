@@ -15,6 +15,7 @@ using static global::_3sln.Flint.Kgen.Rt.Mapread;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;
+using static global::_3sln.Flint.Kgen.Rt.Valeq;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;
 
 public static class Tablecell {
@@ -67,7 +68,7 @@ public static class Tablecell {
         bool same;
         same = true;
         for (int k = 1; k < n; k++) {
-            if (!global::Flint.Rt.Eq.Equal(rt, rt.R(fi), rt.Slot(rt.R(coli), k))) {
+            if (!ValEq(rt, rt.R(fi), rt.Slot(rt.R(coli), k))) {
                 same = false;
                 break;
             }
@@ -104,7 +105,7 @@ public static class Tablecell {
         // written in the one that works everywhere.
         for (int c = 0; c < n; c++) {
             long nm = SchemaNameAt(rt, s, c);
-            if (global::Flint.Rt.Eq.Equal(rt, nm, name)) {
+            if (ValEq(rt, nm, name)) {
                 return c;
             }
         }

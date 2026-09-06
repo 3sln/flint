@@ -16,6 +16,7 @@ import static com._3sln.flint.kgen.rt.Tablekind.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
 import static com._3sln.flint.kgen.rt.Tableref.*;
 import static com._3sln.flint.kgen.rt.Tablesay.*;
+import static com._3sln.flint.kgen.rt.Valeq.*;
 import static com._3sln.flint.kgen.rt.Vecread.*;
 import static com._3sln.flint.kgen.rt.Vecwrite.*;
 
@@ -90,7 +91,7 @@ public final class Tablemigrate {
                 // is a different operation and says so.
                 int hc = schemaPosOf(rt, rt.r(hi), rt.r(nmi));
                 long haveTy = schemaTypeAt(rt, rt.r(hi), hc);
-                if (!com.flint.rt.Eq.eq(rt, haveTy, wantTy)) {
+                if (!valEq(rt, haveTy, wantTy)) {
                     String nm = kwName(rt, rt.r(nmi));
                     String ht = kwName(rt, haveTy);
                     String wt = kwName(rt, wantTy);

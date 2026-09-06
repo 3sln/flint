@@ -17,7 +17,7 @@ use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
 
 impl Rt {
-    pub(crate) fn category(&self, v: Value) -> u8 {
+    pub fn category(&self, v: Value) -> u8 {
         if !v.is_heap() {
             return CAT_SCALAR;
         }

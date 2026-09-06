@@ -16,6 +16,7 @@ using static global::_3sln.Flint.Kgen.Rt.Collnode;
 using static global::_3sln.Flint.Kgen.Rt.Copies;
 using static global::_3sln.Flint.Kgen.Rt.Merge;
 using static global::_3sln.Flint.Kgen.Rt.Nodeclass;
+using static global::_3sln.Flint.Kgen.Rt.Valeq;
 
 public static class Assoc {
     public static long NodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
@@ -41,7 +42,7 @@ public static class Assoc {
         if ((dm & bit) != 0) {
             int at = IndexOf(dm, bit);
             int k0i = rt.Push(BnKey(rt, rt.R(ni), at));
-            if (global::Flint.Rt.Eq.Equal(rt, rt.R(k0i), rt.R(ki))) {
+            if (ValEq(rt, rt.R(k0i), rt.R(ki))) {
                 // The key was already here, so the map's count does not
                 // move however the value changes.
                 rt.champAdded = false;
@@ -123,7 +124,7 @@ public static class Assoc {
             // The key is rooted across `eq`, which allocates when either
             // side is a row ref.
             int kk = rt.Push(CnKey(rt, rt.R(sni), i));
-            bool same = global::Flint.Rt.Eq.Equal(rt, rt.R(kk), rt.R(ski));
+            bool same = ValEq(rt, rt.R(kk), rt.R(ski));
             rt.PopTo(kk);
             if (same) {
                 hit = i;

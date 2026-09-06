@@ -29,7 +29,7 @@ impl Rt {
     fn cn_val(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + 3 + 2 * i as usize]) }
     // Counted, so the driver can show that the two walks do the SAME
     // comparisons -- the fast path must be an optimisation, not a shortcut.
-    fn eq(&mut self, a: Value, b: Value) -> bool { self.eqs += 1; a == b }
+    fn val_eq(&mut self, a: Value, b: Value) -> bool { self.eqs += 1; a == b }
     // A key of 900 or more is "compound", so `node_find` takes the rooted walk.
     fn eq_may_alloc(&self, v: Value) -> bool { v.0 >= 900 }
 }
@@ -70,6 +70,10 @@ fn main() {
     println!("{}", o);
 }
 --java-head
+    // `val-eq` IS `valeq`'s OWN now, so it is called BARE. The nested
+    // `com.flint.rt.Eq.eq` below stays for `hash-value`'s sake and this
+    // forwards to it, which keeps whatever counting each probe does.
+    static boolean valEq(Rt rt, long a, long b) { return com.flint.rt.Eq.eq(rt, a, b); }
     static final long NOT_FOUND = 0xFFFEL;
     static final int HASH_BITS = 5;
     static final class Val { static final long NOT_FOUND = 0xFFFEL; }
@@ -152,6 +156,8 @@ namespace Flint.Rt {
 }
 
 --csharp-head
+    // `val-eq` IS `valeq`'s OWN now, so it is called BARE.
+    internal static bool ValEq(Rt rt, long a, long b) { return global::Flint.Rt.Eq.Equal(rt, a, b); }
     const long NOT_FOUND = 0xFFFEL;
     const int HASH_BITS = 5;
     static class Val { internal const long NotFound = 0xFFFEL; }

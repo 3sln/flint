@@ -13,7 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 
 public static class Eq {
-    internal static int Category(Rt rt, long v) {
+    public static int Category(Rt rt, long v) {
         if (!Val.IsHeap(v)) {
             return CAT_SCALAR;
         }
