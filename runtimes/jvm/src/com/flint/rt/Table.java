@@ -56,6 +56,10 @@ public final class Table {
     // Row-ref slots, and the transient's.
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // BUILDING IN BULK, generated from `kin/tablebuild.kin`.
+    public static long newTable(Rt rt, long schema, long rows) { return com._3sln.flint.kgen.rt.Tablebuild.newTable(rt, schema, rows); }
+    public static long tableFromColumns(Rt rt, long schema, long cols, int nrows) { return com._3sln.flint.kgen.rt.Tablebuild.tableFromColumns(rt, schema, cols, nrows); }
+
     // MAKING A SCHEMA and reading a column, generated from `kin/tablemake.kin`.
     public static long newSchema(Rt rt, long pairs) { return com._3sln.flint.kgen.rt.Tablemake.newSchema(rt, pairs); }
     public static long refAssoc(Rt rt, long r, long k, long v) { return com._3sln.flint.kgen.rt.Tablemake.refAssoc(rt, r, k, v); }
@@ -126,60 +130,6 @@ public final class Table {
     static long emptyVec(Rt rt) { return Vec.empty(rt); }
     static long emptyMap(Rt rt) { return Maps.empty(rt); }
     static void set(Rt rt, long obj, int i, long v) { rt.setSlot(Val.asHeap(obj), i, v); }
-
-    /// Build a table from `rows`, a vector of maps.
-    public static long newTable(Rt rt, long schema, long rows) {
-        int base = rt.mark();
-        int si = rt.push(schema);
-        int ri = rt.push(rows);
-        int ncols = schemaLen(rt, rt.r(si));
-        int width = schemaWidth(rt, rt.r(si));
-        int nrows = Vec.count(rt, rt.r(ri));
-        int ci = rt.push(emptyVec(rt));
-        int row = 0;
-        while (row < nrows) {
-            // Per CHUNK rather than per row: a chunk is 256 rows of bounded
-            // work, so the overshoot is bounded at 256 rows.
-            if (!rt.chargeChecked(1, "table")) { rt.popTo(base); return Val.NIL; }
-            int take = Math.min(CHUNK, nrows - row);
-            long ch = newChunk(rt, width, take);
-            int chi = rt.push(ch);
-            for (int c = 0; c < ncols; c++) {
-                int id = schemaIdAt(rt, rt.r(si), c);
-                long col = Conc.newObj(rt, TY_NODE, take);
-                int coli = rt.push(col);
-                for (int k = 0; k < take; k++) {
-                    long rowv = Vec.nth(rt, rt.r(ri), row + k, Val.NOT_FOUND);
-                    int rvi = rt.push(rowv);
-                    long name = schemaNameAt(rt, rt.r(si), c);
-                    long val = Mapread.mapGet(rt, rt.r(rvi), name, Val.NIL);
-                    long tp = schemaTypeAt(rt, rt.r(si), c);
-                    if (!typeOk(rt, tp, val)) {
-                        String msg = columnTypeError(rt, name, tp, val, row + k);
-                        rt.popTo(base);
-                        return rt.throwStr("IllegalArgumentException", msg);
-                    }
-                    set(rt, rt.r(coli), k, val);
-                    rt.popTo(rvi);
-                }
-                set(rt, rt.r(chi), CH_BASE + id, rt.r(coli));
-                collapse(rt, rt.r(chi), id);
-                rt.popTo(coli);
-            }
-            rt.setR(ci, Vec.conj(rt, rt.r(ci), rt.r(chi)));
-            rt.popTo(chi);
-            row += take;
-        }
-        long t = Conc.newObj(rt, TY_TABLE, TB_LEN);
-        int ti = rt.push(t);
-        set(rt, rt.r(ti), TB_SCHEMA, rt.r(si));
-        set(rt, rt.r(ti), TB_CHUNKS, rt.r(ci));
-        set(rt, rt.r(ti), TB_COUNT, Val.fixnum(nrows));
-        set(rt, rt.r(ti), TB_OFFSET, Val.fixnum(0));
-        long out = rt.r(ti);
-        rt.popTo(base);
-        return out;
-    }
 
     /// `(assoc table i row)`. `i` may be `count`, which appends -- the same
     /// rule a vector follows, so nothing new has to be learned to grow one.
@@ -448,55 +398,6 @@ public final class Table {
             rt.popTo(vi);
         }
         long out = rt.r(acc);
-        rt.popTo(base);
-        return out;
-    }
-
-    /// A table from COLUMNS rather than rows -- what the wire decoder builds
-    /// into. Going through rows would build a map per row only to take it apart
-    /// again. The values are still CHECKED: a decoder that skipped that would
-    /// be a way to make a table that is not closed.
-    public static long tableFromColumns(Rt rt, long schema, long cols, int nrows) {
-        int base = rt.mark();
-        int si = rt.push(schema);
-        int ci = rt.push(cols);
-        int ncols = schemaLen(rt, rt.r(si));
-        int width = schemaWidth(rt, rt.r(si));
-        int ki = rt.push(emptyVec(rt));
-        int row = 0;
-        while (row < nrows) {
-            if (!rt.chargeChecked(1, "table")) { rt.popTo(base); return Val.NIL; }
-            int take = Math.min(CHUNK, nrows - row);
-            int chi = rt.push(newChunk(rt, width, take));
-            for (int c = 0; c < ncols; c++) {
-                int id = schemaIdAt(rt, rt.r(si), c);
-                int sj = rt.push(Vec.nth(rt, rt.r(ci), c, Val.NOT_FOUND));
-                long tp = schemaTypeAt(rt, rt.r(si), c);
-                int cj = rt.push(Conc.newObj(rt, TY_NODE, take));
-                for (int k = 0; k < take; k++) {
-                    long v = Vec.nth(rt, rt.r(sj), row + k, Val.NOT_FOUND);
-                    if (!typeOk(rt, tp, v)) {
-                        String msg = columnTypeError(rt, schemaNameAt(rt, rt.r(si), c), tp, v, row + k);
-                        rt.popTo(base);
-                        return rt.throwStr("IllegalArgumentException", msg);
-                    }
-                    set(rt, rt.r(cj), k, v);
-                }
-                set(rt, rt.r(chi), CH_BASE + id, rt.r(cj));
-                collapse(rt, rt.r(chi), id);
-                rt.popTo(sj);
-            }
-            rt.setR(ki, Vec.conj(rt, rt.r(ki), rt.r(chi)));
-            rt.popTo(chi);
-            row += take;
-        }
-        long t = Conc.newObj(rt, TY_TABLE, TB_LEN);
-        int ti = rt.push(t);
-        set(rt, rt.r(ti), TB_SCHEMA, rt.r(si));
-        set(rt, rt.r(ti), TB_CHUNKS, rt.r(ki));
-        set(rt, rt.r(ti), TB_COUNT, Val.fixnum(nrows));
-        set(rt, rt.r(ti), TB_OFFSET, Val.fixnum(0));
-        long out = rt.r(ti);
         rt.popTo(base);
         return out;
     }

@@ -1,0 +1,144 @@
+;; Building a table in bulk: from ROWS, and from COLUMNS.
+;;
+;; TWO SHAPES OF THE SAME LOOP. Both fill one chunk of at most `CHUNK` rows at
+;; a time, collapse each column as it is finished, and refuse a value that does
+;; not match its declared type -- naming the row and the column, because `0032`
+;; says "bad row" is the message this codebase keeps replacing.
+;;
+;; THE COLUMN FORM IS WHAT THE WIRE DECODER BUILDS INTO (`0026` step 9). Going
+;; through rows would mean building a map per row only to take it apart again,
+;; which is the shape the type exists to avoid -- and on the decode path it
+;; would be the receiver paying for the sender's compactness. The values are
+;; still CHECKED: a decoder that skipped that would be a way to make a table
+;; that is not closed, which is the one property everything else rests on.
+(ns flint.rt.tablebuild
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == < > + - not
+                                   alloc heap slot set-slot fixnum
+                                   vec-count vec-nth vec-conj empty-vec new-obj
+                                   mark push r set-r pop-to for local set while
+                                   charge-checked throw-str static-text
+                                   Rt Value I32 RootIx Text NIL
+                                   TY_NODE TY_TABLE CHUNK CH_BASE SC_TYPES
+                                   TB_SCHEMA TB_CHUNKS TB_COUNT TB_OFFSET TB_LEN]]
+            [flint.rt.tablemeta :refer [schema-len schema-width schema-id-at
+                                        schema-name-at]]
+            [flint.rt.tablecell :refer [new-chunk collapse]]
+            [flint.rt.tablekind :refer [type-ok]]
+            [flint.rt.tablesay :refer [column-type-error]]
+            [flint.rt.mapread :refer [map-get]]))
+
+(doc "A table from `rows`, a vector of maps."
+     ""
+     "CHARGED PER CHUNK RATHER THAN PER ROW. A chunk is 256 rows of bounded"
+     "work, so checking every chunk bounds the overshoot at 256 rows and costs"
+     "one branch per 256. Charging `rows * cols` up front is what this used to"
+     "do, and it ran 637 379 steps past an exhausted budget.")
+(defn ^:pub ^:method ^Value new-table [^:mut ^Rt rt ^Value schema ^Value rows]
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt schema)
+        ^RootIx ri (push rt rows)
+        ^I32 ncols (schema-len rt (r rt si))
+        ^I32 width (schema-width rt (r rt si))
+        ^I32 nrows (vec-count rt (r rt ri))
+        ^Value chunks0 (empty-vec rt)
+        ^RootIx ci (push rt chunks0)]
+    (local ^:mut ^I32 row)
+    (set row 0)
+    (while (< row nrows)
+      (if (not (charge-checked rt 1 (static-text "table")))
+        (do (pop-to rt base)
+            (return NIL)))
+      (local ^:mut ^I32 take)
+      (set take (- nrows row))
+      (if (> take CHUNK) (set take CHUNK))
+      (let [^Value ch (new-chunk rt width take)
+            ^RootIx chi (push rt ch)]
+        (for [^I32 c 0 ncols]
+          (let [^I32 id (schema-id-at rt (r rt si) c)
+                ^Value col (new-obj rt TY_NODE take)
+                ^RootIx coli (push rt col)
+                ^Value name (schema-name-at rt (r rt si) c)
+                ^Value types (slot rt (r rt si) SC_TYPES)
+                ^Value tp (vec-nth rt types c NIL)]
+            (for [^I32 k 0 take]
+              (let [^Value rowv (vec-nth rt (r rt ri) (+ row k) NIL)
+                    ^Value val (map-get rt rowv name NIL)]
+                (if (not (type-ok rt tp val))
+                  (do
+                    (let [^Text msg (column-type-error rt name tp val (+ row k))]
+                      (pop-to rt base)
+                      (return (throw-str rt "IllegalArgumentException" msg)))))
+                (set-slot rt (r rt coli) k val)))
+            (set-slot rt (r rt chi) (+ CH_BASE id) (r rt coli))
+            (collapse rt (r rt chi) id)
+            (pop-to rt coli)))
+        (let [^Value nv (vec-conj rt (r rt ci) (r rt chi))]
+          (set-r rt ci nv))
+        (pop-to rt chi))
+      (set row (+ row take)))
+    (let [^Value t (heap (alloc rt TY_TABLE TB_LEN))
+          ^RootIx ti (push rt t)]
+      (set-slot rt (r rt ti) TB_SCHEMA (r rt si))
+      (set-slot rt (r rt ti) TB_CHUNKS (r rt ci))
+      (set-slot rt (r rt ti) TB_COUNT (fixnum nrows))
+      (set-slot rt (r rt ti) TB_OFFSET (fixnum 0))
+      (let [^Value out (r rt ti)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "A table from COLUMNS -- `cols` is a vector of column vectors, in schema"
+     "order.")
+(defn ^:pub ^:method ^Value table-from-columns
+  [^:mut ^Rt rt ^Value schema ^Value cols ^I32 nrows]
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt schema)
+        ^RootIx ci (push rt cols)
+        ^I32 ncols (schema-len rt (r rt si))
+        ^I32 width (schema-width rt (r rt si))
+        ^Value chunks0 (empty-vec rt)
+        ^RootIx ki (push rt chunks0)]
+    (local ^:mut ^I32 row)
+    (set row 0)
+    (while (< row nrows)
+      (if (not (charge-checked rt 1 (static-text "table")))
+        (do (pop-to rt base)
+            (return NIL)))
+      (local ^:mut ^I32 take)
+      (set take (- nrows row))
+      (if (> take CHUNK) (set take CHUNK))
+      (let [^Value ch (new-chunk rt width take)
+            ^RootIx chi (push rt ch)]
+        (for [^I32 c 0 ncols]
+          (let [^I32 id (schema-id-at rt (r rt si) c)
+                ^Value src (vec-nth rt (r rt ci) c NIL)
+                ^RootIx sj (push rt src)
+                ^Value types (slot rt (r rt si) SC_TYPES)
+                ^Value tp (vec-nth rt types c NIL)
+                ^Value col (new-obj rt TY_NODE take)
+                ^RootIx cj (push rt col)]
+            (for [^I32 k 0 take]
+              (let [^Value v (vec-nth rt (r rt sj) (+ row k) NIL)]
+                (if (not (type-ok rt tp v))
+                  (do
+                    (let [^Value name (schema-name-at rt (r rt si) c)
+                          ^Text msg (column-type-error rt name tp v (+ row k))]
+                      (pop-to rt base)
+                      (return (throw-str rt "IllegalArgumentException" msg)))))
+                (set-slot rt (r rt cj) k v)))
+            (set-slot rt (r rt chi) (+ CH_BASE id) (r rt cj))
+            (collapse rt (r rt chi) id)
+            (pop-to rt sj)))
+        (let [^Value nv (vec-conj rt (r rt ki) (r rt chi))]
+          (set-r rt ki nv))
+        (pop-to rt chi))
+      (set row (+ row take)))
+    (let [^Value t (heap (alloc rt TY_TABLE TB_LEN))
+          ^RootIx ti (push rt t)]
+      (set-slot rt (r rt ti) TB_SCHEMA (r rt si))
+      (set-slot rt (r rt ti) TB_CHUNKS (r rt ki))
+      (set-slot rt (r rt ti) TB_COUNT (fixnum nrows))
+      (set-slot rt (r rt ti) TB_OFFSET (fixnum 0))
+      (let [^Value out (r rt ti)]
+        (pop-to rt base)
+        (return out)))))

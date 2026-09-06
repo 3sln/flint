@@ -49,6 +49,10 @@ public static class Table {
     // Row-ref slots, and the transient's.
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // BUILDING IN BULK, generated from `kin/tablebuild.kin`.
+    public static long newTable(Rt rt, long schema, long rows) { return global::_3sln.Flint.Kgen.Rt.Tablebuild.NewTable(rt, schema, rows); }
+    public static long tableFromColumns(Rt rt, long schema, long cols, int nrows) { return global::_3sln.Flint.Kgen.Rt.Tablebuild.TableFromColumns(rt, schema, cols, nrows); }
+
     // MAKING A SCHEMA and reading a column -- see the Java copy.
     public static long newSchema(Rt rt, long pairs) { return global::_3sln.Flint.Kgen.Rt.Tablemake.NewSchema(rt, pairs); }
     public static long refAssoc(Rt rt, long r, long k, long v) { return global::_3sln.Flint.Kgen.Rt.Tablemake.RefAssoc(rt, r, k, v); }
@@ -117,60 +121,6 @@ public static class Table {
     static long emptyVec(Rt rt) { return Vec.Empty(rt); }
     static long emptyMap(Rt rt) { return Maps.Empty(rt); }
     static void set(Rt rt, long obj, int i, long v) { rt.SetSlot(Val.AsHeap(obj), i, v); }
-
-    /// Build a table from `rows`, a vector of maps.
-    public static long newTable(Rt rt, long schema, long rows) {
-        int bas = rt.Mark();
-        int si = rt.Push(schema);
-        int ri = rt.Push(rows);
-        int ncols = schemaLen(rt, rt.R(si));
-        int width = schemaWidth(rt, rt.R(si));
-        int nrows = Vec.Count(rt, rt.R(ri));
-        int ci = rt.Push(emptyVec(rt));
-        int row = 0;
-        while (row < nrows) {
-            // Per CHUNK rather than per row: a chunk is 256 rows of bounded
-            // work, so the overshoot is bounded at 256 rows.
-            if (!rt.ChargeChecked(1, "table")) { rt.PopTo(bas); return Val.Nil; }
-            int take = System.Math.Min(CHUNK, nrows - row);
-            long ch = newChunk(rt, width, take);
-            int chi = rt.Push(ch);
-            for (int c = 0; c < ncols; c++) {
-                int id = schemaIdAt(rt, rt.R(si), c);
-                long col = Conc.NewObj(rt, Obj.TyNode, take);
-                int coli = rt.Push(col);
-                for (int k = 0; k < take; k++) {
-                    long rowv = Vec.Nth(rt, rt.R(ri), row + k, Val.NotFound);
-                    int rvi = rt.Push(rowv);
-                    long name = schemaNameAt(rt, rt.R(si), c);
-                    long val = Mapread.MapGet(rt, rt.R(rvi), name, Val.Nil);
-                    long tp = schemaTypeAt(rt, rt.R(si), c);
-                    if (!typeOk(rt, tp, val)) {
-                        string msg = columnTypeError(rt, name, tp, val, row + k);
-                        rt.PopTo(bas);
-                        return rt.ThrowStr("IllegalArgumentException", msg);
-                    }
-                    set(rt, rt.R(coli), k, val);
-                    rt.PopTo(rvi);
-                }
-                set(rt, rt.R(chi), CH_BASE + id, rt.R(coli));
-                collapse(rt, rt.R(chi), id);
-                rt.PopTo(coli);
-            }
-            rt.SetR(ci, Vec.Conj(rt, rt.R(ci), rt.R(chi)));
-            rt.PopTo(chi);
-            row += take;
-        }
-        long t = Conc.NewObj(rt, Obj.TyTable, TB_LEN);
-        int ti = rt.Push(t);
-        set(rt, rt.R(ti), TB_SCHEMA, rt.R(si));
-        set(rt, rt.R(ti), TB_CHUNKS, rt.R(ci));
-        set(rt, rt.R(ti), TB_COUNT, Val.Fixnum(nrows));
-        set(rt, rt.R(ti), TB_OFFSET, Val.Fixnum(0));
-        long outv = rt.R(ti);
-        rt.PopTo(bas);
-        return outv;
-    }
 
     /// `(assoc table i row)`. `i` may be `count`, which appends -- the same
     /// rule a vector follows, so nothing new has to be learned to grow one.
@@ -439,55 +389,6 @@ public static class Table {
             rt.PopTo(vi);
         }
         long outv = rt.R(acc);
-        rt.PopTo(bas);
-        return outv;
-    }
-
-    /// A table from COLUMNS rather than rows -- what the wire decoder builds
-    /// into. Going through rows would build a map per row only to take it apart
-    /// again. The values are still CHECKED: a decoder that skipped that would
-    /// be a way to make a table that is not closed.
-    public static long tableFromColumns(Rt rt, long schema, long cols, int nrows) {
-        int bas = rt.Mark();
-        int si = rt.Push(schema);
-        int ci = rt.Push(cols);
-        int ncols = schemaLen(rt, rt.R(si));
-        int width = schemaWidth(rt, rt.R(si));
-        int ki = rt.Push(emptyVec(rt));
-        int row = 0;
-        while (row < nrows) {
-            if (!rt.ChargeChecked(1, "table")) { rt.PopTo(bas); return Val.Nil; }
-            int take = System.Math.Min(CHUNK, nrows - row);
-            int chi = rt.Push(newChunk(rt, width, take));
-            for (int c = 0; c < ncols; c++) {
-                int id = schemaIdAt(rt, rt.R(si), c);
-                int sj = rt.Push(Vec.Nth(rt, rt.R(ci), c, Val.NotFound));
-                long tp = schemaTypeAt(rt, rt.R(si), c);
-                int cj = rt.Push(Conc.NewObj(rt, Obj.TyNode, take));
-                for (int k = 0; k < take; k++) {
-                    long v = Vec.Nth(rt, rt.R(sj), row + k, Val.NotFound);
-                    if (!typeOk(rt, tp, v)) {
-                        string msg = columnTypeError(rt, schemaNameAt(rt, rt.R(si), c), tp, v, row + k);
-                        rt.PopTo(bas);
-                        return rt.ThrowStr("IllegalArgumentException", msg);
-                    }
-                    set(rt, rt.R(cj), k, v);
-                }
-                set(rt, rt.R(chi), CH_BASE + id, rt.R(cj));
-                collapse(rt, rt.R(chi), id);
-                rt.PopTo(sj);
-            }
-            rt.SetR(ki, Vec.Conj(rt, rt.R(ki), rt.R(chi)));
-            rt.PopTo(chi);
-            row += take;
-        }
-        long t = Conc.NewObj(rt, Obj.TyTable, TB_LEN);
-        int ti = rt.Push(t);
-        set(rt, rt.R(ti), TB_SCHEMA, rt.R(si));
-        set(rt, rt.R(ti), TB_CHUNKS, rt.R(ki));
-        set(rt, rt.R(ti), TB_COUNT, Val.Fixnum(nrows));
-        set(rt, rt.R(ti), TB_OFFSET, Val.Fixnum(0));
-        long outv = rt.R(ti);
         rt.PopTo(bas);
         return outv;
     }
