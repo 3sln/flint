@@ -99,7 +99,7 @@ public static class Mapcore {
     }
     /// A key/value pair as a value. It is a VECTOR, as in Clojure -- `vector?`
     /// is true of one, it prints `[:a 1]`, and `conj` appends.
-    internal static long MapEntry(Rt rt, long k, long v) {
+    public static long MapEntry(Rt rt, long k, long v) {
         int @base = rt.Mark();
         int ki = rt.Push(k);
         int vi = rt.Push(v);

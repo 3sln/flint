@@ -280,6 +280,28 @@ impl Rt {
     /// Not the shape Rust uses in anger: `map_for_each` visits in place and
     /// pushes nothing, where this pushes 2N roots before the caller reads any
     /// of them. Which of those is right is what the measurement is for.
+    ///
+    /// MEASURED, and the callback wins on both axes. 50 000 entries, 20 walks:
+    ///
+    ///     callback      4.673 ms   peak roots        8
+    ///     buffer        8.089 ms   peak roots  100 001
+    ///     buf/noslide   4.924 ms   peak roots  100 001
+    ///
+    /// 1.73x the time and 12 500x the peak roots; even with the slide removed
+    /// it is 1.054x slower for the same 12 500x. The roots number is the one
+    /// that decides it: the collector scans the shadow stack, so 100 001 live
+    /// roots is 100 001 words to trace at every collection DURING the walk,
+    /// and a walk is exactly when a program is most likely to allocate.
+    ///
+    /// Where allocation meets live roots -- building the entry vector, five
+    /// times -- it is 29.715 ms against 31.656 ms, 1.065x.
+    ///
+    /// SO THE CLOSURE HOLE IS A REAL HOLE. `doc/goals/kin-port.md` lists five
+    /// functions blocked on a callback argument, and the obvious workaround --
+    /// hand the roots over as a `(base, n)` run, which is what `invoke-roots`
+    /// and `list_from_roots` do elsewhere -- is measurably the wrong shape
+    /// HERE, because those pass a handful of arguments and this would pass the
+    /// whole map. `runtime/examples/iterbench.rs` is the measurement.
     #[cfg(feature = "bench")]
     pub fn map_entries(&mut self, m: Value, at: usize) -> u32 {
         if !m.is_heap() {

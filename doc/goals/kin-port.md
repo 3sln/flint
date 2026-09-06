@@ -1605,6 +1605,28 @@ what was blocked -- because each was taken before a capability shipped and
 never retaken after. Re-derive before quoting it; do not carry the number
 forward on the strength of having once been careful.
 
+THE CLOSURE HOLE IS REAL, AND NOW MEASURED. The obvious workaround is the
+`(base, n)` convergence used everywhere else in this port -- push the entries
+onto the shadow stack and hand over a run. `runtime/examples/iterbench.rs`
+says no, on 50 000 entries and 20 walks:
+
+    callback      4.673 ms   peak roots        8
+    buffer        8.089 ms   peak roots  100 001
+    buf/noslide   4.924 ms   peak roots  100 001
+
+1.73x the time and 12 500x the peak roots. THE ROOTS NUMBER DECIDES IT: the
+collector scans the shadow stack, so 100 001 live roots is 100 001 words to
+trace at every collection during the walk -- and a walk is exactly when a
+program is most likely to allocate. Where allocation meets live roots, building
+the entry vector five times, it is 29.715 ms against 31.656 ms.
+
+`(base, n)` is right where it is used because those calls pass a HANDFUL of
+arguments. This would pass the whole map. Same shape, different size, opposite
+answer -- and the difference is a measurement rather than a judgement.
+
+(The harness had stopped compiling: `map_entry` went private when `mapcore`
+was generated. One `^:pub` restored it.)
+
 CLOSURES ARE THE ONE REAL HOLE, and the five functions that need them are
 exactly the iteration ones: `map_for_each`, `node_for_each`, `hash_map_hash`,
 `map_eq`, `map_entry_vector`. A callback argument is a shape kin has nothing
