@@ -788,8 +788,13 @@ public static class Builtins {
         });
         Def("flint/b-depth", (rt, at, n) => Val.Fixnum(Bytes.Depth(rt, rt.VAt(at))));
         Def("flint/str->b", (rt, at, n) => Bytes.Of(rt, Str.Bytes(rt, rt.VAt(at))));
-        Def("flint/b->str", (rt, at, n) =>
-            Str.Of(rt, System.Text.Encoding.UTF8.GetString(Bytes.ToArray(rt, rt.VAt(at)))));
+        Def("flint/b->str", (rt, at, n) => {
+            // CHARGED UP FRONT, as native now is: this walks the byte tree and
+            // decodes UTF-8, both O(n), and charged for neither.
+            long v = rt.VAt(at);
+            if (!rt.ChargeChecked((Bytes.Count(rt, v) / 8) + 1, "b->str")) return Val.Nil;
+            return Str.Of(rt, System.Text.Encoding.UTF8.GetString(Bytes.ToArray(rt, v)));
+        });
         Def("flint/vec->b", (rt, at, n) => {
             long v = rt.VAt(at);
             int c = Vec.Count(rt, v);

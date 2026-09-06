@@ -234,20 +234,32 @@ builtins! {
     "flint/str->b", flint_b_strtob, b_strtob, |rt, a, n| {
         let _ = n;
         let v = arg(rt, a, 0);
-        let mut buf = crate::rt::sbuf();
-        match rt.as_str(v, &mut buf) {
-            Some(s) => {
-                let owned: alloc::vec::Vec<u8> = s.as_bytes().to_vec();
-                rt.new_bytes(&owned)
-            }
-            None => rt.throw_str("ClassCastException", "str->b wants a string"),
+        // A ROPE IS A STRING, and this asked `as_str` -- which BORROWS and so
+        // cannot materialise one, returning `None` by design. So `string?`
+        // said true and this said "not a string": `(str->b (str a b))` threw
+        // the moment the concatenation passed `FLAT_MAX`. Both ports use
+        // their general accessor and were right. `join_strings` documents
+        // this exact trap and was fixed for it; this call site was not.
+        if !rt.is_string(v) {
+            return rt.throw_str("ClassCastException", "str->b wants a string");
         }
+        let owned = rt.s_to_vec(v);
+        rt.new_bytes(&owned)
     };
     "flint/b->str", flint_b_btostr, b_btostr, |rt, a, n| {
         let _ = n;
         let v = arg(rt, a, 0);
         if !rt.is_bytes(v) {
             return rt.throw_str("ClassCastException", "b->str wants a byte string");
+        }
+        // CHARGED UP FRONT, because the length is known: this walks the byte
+        // tree and then decodes UTF-8, both O(n), and it charged for neither.
+        // `test/gas.clj` has always had a case for it and the case never ran
+        // -- its SETUP threw, because building the input needed `str->b` on a
+        // rope. Two bugs hiding each other, and fixing the first exposed the
+        // second: 48 163 steps past an exhausted budget.
+        if !rt.charge_checked((rt.b_count(v) as u64 / 8) + 1, "b->str") {
+            return NIL;
         }
         let bs = rt.b_to_vec(v);
         match core::str::from_utf8(&bs) {

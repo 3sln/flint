@@ -873,8 +873,14 @@ public final class Builtins {
         });
         def("flint/b-depth", (rt, at, n) -> Val.fixnum(Bytes.depth(rt, rt.vat(at))));
         def("flint/str->b", (rt, at, n) -> Bytes.of(rt, Str.bytes(rt, rt.vat(at))));
-        def("flint/b->str", (rt, at, n) -> Str.of(rt,
-            new String(Bytes.toArray(rt, rt.vat(at)), java.nio.charset.StandardCharsets.UTF_8)));
+        def("flint/b->str", (rt, at, n) -> {
+            // CHARGED UP FRONT, as native now is: this walks the byte tree and
+            // decodes UTF-8, both O(n), and charged for neither.
+            long v = rt.vat(at);
+            if (!rt.chargeChecked((Bytes.count(rt, v) / 8) + 1, "b->str")) return Val.NIL;
+            return Str.of(rt, new String(Bytes.toArray(rt, v),
+                                         java.nio.charset.StandardCharsets.UTF_8));
+        });
         def("flint/vec->b", (rt, at, n) -> {
             long v = rt.vat(at);
             int c = Vec.count(rt, v);
