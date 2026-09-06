@@ -77,12 +77,12 @@ pub const CH_ENC: u32 = 1;
 pub const CH_BASE: u32 = 2;
 
 /// A value per row, in a flat `TY_NODE`.
-pub const ENC_FLAT: i64 = 0;
+pub const ENC_FLAT: u32 = 0;
 /// ONE value for every row: the column slot holds the value itself rather than
 /// a run. Adding a column with a constant default to a million-row table
 /// therefore writes one value per chunk, which is what makes that migration
 /// cheap (`doc/decisions/0026`).
-pub const ENC_CONST: i64 = 1;
+pub const ENC_CONST: u32 = 1;
 
 // Transient-table slots.
 pub const TT_SCHEMA: u32 = 0;
@@ -159,26 +159,6 @@ impl Rt {
         self.keyword(None, name)
     }
 
-    pub fn chunk_rows(&mut self, ch: Value) -> u32 {
-        self.slot(ch, CH_ROWS).as_fixnum() as u32
-    }
-
-    fn chunk_enc(&mut self, ch: Value, id: u32) -> i64 {
-        let e = self.slot(ch, CH_ENC);
-        self.slot(e, id).as_fixnum()
-    }
-
-    /// One cell. The ONLY place that knows how a column is encoded, which is
-    /// what lets an encoding be added without touching anything above.
-    pub fn chunk_get(&mut self, ch: Value, id: u32, row: u32) -> Value {
-        let col = self.slot(ch, CH_BASE + id);
-        if self.chunk_enc(ch, id) == ENC_CONST {
-            col
-        } else {
-            self.slot(col, row)
-        }
-    }
-
     /// A chunk of `rows` rows and `width` column slots, every column flat and
     /// empty. The caller fills it and may then collapse columns.
     fn new_chunk(&mut self, width: u32, rows: u32) -> Value {
@@ -189,7 +169,7 @@ impl Rt {
         let enc = self.new_obj(TY_NODE, width.max(1));
         let ei = self.push(enc);
         for id in 0..width {
-            self.set(self.r(ei), id, Value::fixnum(ENC_FLAT));
+            self.set(self.r(ei), id, Value::fixnum(ENC_FLAT as i64));
         }
         let ev = self.r(ei);
         self.set(self.r(ci), CH_ENC, ev);
@@ -231,19 +211,9 @@ impl Rt {
             let fv = self.r(fi);
             self.set(self.r(ci), CH_BASE + id, fv);
             let e = self.slot(self.r(ci), CH_ENC);
-            self.set(e, id, Value::fixnum(ENC_CONST));
+            self.set(e, id, Value::fixnum(ENC_CONST as i64));
         }
         self.pop_to(base);
-    }
-
-    pub fn is_schema(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_SCHEMA
-    }
-    pub fn is_table(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_TABLE
-    }
-    pub fn is_table_ref(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_TABLEREF
     }
 
     /// `[[name type] …]` -> a schema. The names must be keywords and distinct;
@@ -356,28 +326,6 @@ impl Rt {
         false
     }
 
-    /// `&self`, not `&mut self`. It reads a slot and counts a vector, and
-    /// neither mutates -- the mutable receiver was over-declared, and an
-    /// over-declared borrow is a real constraint on every caller: it made
-    /// `map_count` unable to take one when the map layer was ported.
-    pub fn schema_len(&self, s: Value) -> u32 {
-        let names = self.slot(s, SC_NAMES);
-        self.vec_count(names)
-    }
-
-    /// How many column slots a chunk of this schema carries. Not the same as
-    /// `schema_len` once a migration has dropped a column: the slot stays, the
-    /// name does not.
-    pub fn schema_width(&mut self, s: Value) -> u32 {
-        self.slot(s, SC_WIDTH).as_fixnum() as u32
-    }
-
-    /// The stable id of the `c`th column of the schema.
-    pub fn schema_id_at(&mut self, s: Value, c: u32) -> u32 {
-        let ids = self.slot(s, SC_IDS);
-        self.vec_nth(ids, c, NIL).as_fixnum() as u32
-    }
-
     /// The column id of `name`, or -1. The index is a map because a wide schema
     /// wants one; a narrow one would be as fast scanned, and is not worth two
     /// code paths.
@@ -389,26 +337,6 @@ impl Rt {
         } else {
             -1
         }
-    }
-
-    /// Two schemas are the same when the names and the types are, in order.
-    /// Position matters: a table of `[[:a :int] [:b :int]]` is not one of
-    /// `[[:b :int] [:a :int]]`, because the rows would read differently.
-    pub fn schema_eq(&mut self, a: Value, b: Value) -> bool {
-        let (na, nb) = (self.slot(a, SC_NAMES), self.slot(b, SC_NAMES));
-        if !self.eq(na, nb) {
-            return false;
-        }
-        let (ta, tb) = (self.slot(a, SC_TYPES), self.slot(b, SC_TYPES));
-        self.eq(ta, tb)
-    }
-
-    pub fn table_offset(&mut self, t: Value) -> u32 {
-        self.slot(t, TB_OFFSET).as_fixnum() as u32
-    }
-
-    pub fn table_count(&mut self, t: Value) -> u32 {
-        self.slot(t, TB_COUNT).as_fixnum() as u32
     }
 
     /// Build a table from `rows`, a vector of maps. Every row must have exactly
@@ -801,7 +729,7 @@ impl Rt {
                 let cv = self.slot(self.r(ci), CH_BASE + id);
                 self.set(self.r(ni), CH_BASE + id, cv);
                 let e = self.slot(self.r(ni), CH_ENC);
-                self.set(e, id, Value::fixnum(ENC_CONST));
+                self.set(e, id, Value::fixnum(ENC_CONST as i64));
                 self.pop_to(vi);
                 continue;
             }
@@ -953,16 +881,6 @@ impl Rt {
     // its columns by stable id, so a column the new schema keeps is the SAME
     // COLUMN OBJECT, shared rather than copied.
 
-    fn schema_type_at(&mut self, s: Value, c: u32) -> Value {
-        let types = self.slot(s, SC_TYPES);
-        self.vec_nth(types, c, NIL)
-    }
-
-    fn schema_name_at(&mut self, s: Value, c: u32) -> Value {
-        let names = self.slot(s, SC_NAMES);
-        self.vec_nth(names, c, NIL)
-    }
-
     /// `want` REBASED onto `have`'s column ids: a column both schemas name
     /// keeps its id, so the chunks that hold it can be shared unchanged; a
     /// column only `want` has gets a fresh one past the end.
@@ -1110,12 +1028,12 @@ impl Rt {
                     self.set(self.r(ni), CH_BASE + id, col);
                     let e = self.chunk_enc(self.r(chi), old as u32);
                     let ne = self.slot(self.r(ni), CH_ENC);
-                    self.set(ne, id, Value::fixnum(e));
+                    self.set(ne, id, Value::fixnum(e as i64));
                 } else {
                     let dv = self.map_get(self.r(dfi), name, NIL);
                     self.set(self.r(ni), CH_BASE + id, dv);
                     let ne = self.slot(self.r(ni), CH_ENC);
-                    self.set(ne, id, Value::fixnum(ENC_CONST));
+                    self.set(ne, id, Value::fixnum(ENC_CONST as i64));
                 }
             }
             let nv = self.r(ni);

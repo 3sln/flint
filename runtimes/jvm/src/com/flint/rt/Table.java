@@ -55,6 +55,22 @@ public final class Table {
 
     // Row-ref slots, and the transient's.
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
+
+    // The ACCESSOR HALF, generated from `kin/tablemeta.kin`.
+    public static boolean isSchema(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablemeta.isSchema(rt, v); }
+    public static boolean isTable(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablemeta.isTable(rt, v); }
+    public static boolean isTableRef(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablemeta.isTableRef(rt, v); }
+    public static int schemaLen(Rt rt, long s) { return com._3sln.flint.kgen.rt.Tablemeta.schemaLen(rt, s); }
+    public static int schemaWidth(Rt rt, long s) { return com._3sln.flint.kgen.rt.Tablemeta.schemaWidth(rt, s); }
+    public static int schemaIdAt(Rt rt, long s, int c) { return com._3sln.flint.kgen.rt.Tablemeta.schemaIdAt(rt, s, c); }
+    public static long schemaNameAt(Rt rt, long s, int c) { return com._3sln.flint.kgen.rt.Tablemeta.schemaNameAt(rt, s, c); }
+    public static long schemaTypeAt(Rt rt, long s, int c) { return com._3sln.flint.kgen.rt.Tablemeta.schemaTypeAt(rt, s, c); }
+    public static boolean schemaEq(Rt rt, long a, long b) { return com._3sln.flint.kgen.rt.Tablemeta.schemaEq(rt, a, b); }
+    public static int tableCount(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tablemeta.tableCount(rt, t); }
+    public static int tableOffset(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tablemeta.tableOffset(rt, t); }
+    public static int chunkRows(Rt rt, long ch) { return com._3sln.flint.kgen.rt.Tablemeta.chunkRows(rt, ch); }
+    static int chunkEnc(Rt rt, long ch, int id) { return com._3sln.flint.kgen.rt.Tablemeta.chunkEnc(rt, ch, id); }
+    public static long chunkGet(Rt rt, long ch, int id, int row) { return com._3sln.flint.kgen.rt.Tablemeta.chunkGet(rt, ch, id, row); }
     public static final int TT_SCHEMA = 0, TT_CHUNKS = 1, TT_COUNT = 2, TT_OPEN = 3,
         TT_LIVE = 4, TT_LEN = 5;
 
@@ -71,15 +87,6 @@ public final class Table {
     }
     static void set(Rt rt, long obj, int i, long v) { rt.setSlot(Val.asHeap(obj), i, v); }
 
-    public static boolean isSchema(Rt rt, long v) {
-        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_SCHEMA;
-    }
-    public static boolean isTable(Rt rt, long v) {
-        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_TABLE;
-    }
-    public static boolean isTableRef(Rt rt, long v) {
-        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_TABLEREF;
-    }
     public static boolean isTtable(Rt rt, long v) {
         return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_TTABLE;
     }
@@ -155,40 +162,10 @@ public final class Table {
         return out;
     }
 
-    public static int schemaLen(Rt rt, long s) { return Vec.count(rt, rt.slot(s, SC_NAMES)); }
-    public static int schemaWidth(Rt rt, long s) { return (int) Val.asFixnum(rt.slot(s, SC_WIDTH)); }
-    public static int schemaIdAt(Rt rt, long s, int c) {
-        return (int) Val.asFixnum(Vec.nth(rt, rt.slot(s, SC_IDS), c, Val.NOT_FOUND));
-    }
-    public static long schemaNameAt(Rt rt, long s, int c) { return Vec.nth(rt, rt.slot(s, SC_NAMES), c, Val.NOT_FOUND); }
-    public static long schemaTypeAt(Rt rt, long s, int c) { return Vec.nth(rt, rt.slot(s, SC_TYPES), c, Val.NOT_FOUND); }
-
     /// The column id of `name`, or -1.
     public static int schemaId(Rt rt, long s, long name) {
         long p = Mapread.mapGet(rt, rt.slot(s, SC_INDEX), name, Val.NIL);
         return Val.isFixnum(p) ? (int) Val.asFixnum(p) : -1;
-    }
-
-    /// Two schemas are the same when the names and the types are, IN ORDER:
-    /// position matters, because the rows would read differently.
-    public static boolean schemaEq(Rt rt, long a, long b) {
-        return Eq.eq(rt, rt.slot(a, SC_NAMES), rt.slot(b, SC_NAMES))
-            && Eq.eq(rt, rt.slot(a, SC_TYPES), rt.slot(b, SC_TYPES));
-    }
-
-    public static int tableCount(Rt rt, long t) { return (int) Val.asFixnum(rt.slot(t, TB_COUNT)); }
-    public static int tableOffset(Rt rt, long t) { return (int) Val.asFixnum(rt.slot(t, TB_OFFSET)); }
-    public static int chunkRows(Rt rt, long ch) { return (int) Val.asFixnum(rt.slot(ch, CH_ROWS)); }
-
-    static int chunkEnc(Rt rt, long ch, int id) {
-        return (int) Val.asFixnum(rt.slot(rt.slot(ch, CH_ENC), id));
-    }
-
-    /// One cell. The ONLY place that knows how a column is encoded, which is
-    /// what lets an encoding be added without touching anything above.
-    public static long chunkGet(Rt rt, long ch, int id, int row) {
-        long col = rt.slot(ch, CH_BASE + id);
-        return chunkEnc(rt, ch, id) == ENC_CONST ? col : rt.slot(col, row);
     }
 
     static long newChunk(Rt rt, int width, int rows) {

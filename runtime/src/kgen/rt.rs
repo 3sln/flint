@@ -54,6 +54,7 @@ pub mod ropecp;
 pub mod ropeeq;
 pub mod ropeflat;
 pub mod ropemeas;
+pub mod tablemeta;
 pub mod ropenode;
 pub mod ropeslice;
 pub mod seqcore;

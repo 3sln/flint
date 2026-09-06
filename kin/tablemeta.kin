@@ -1,0 +1,104 @@
+;; What a schema, a table and a chunk SAY about themselves.
+;;
+;; The accessor half of `Table` -- every one of these is a slot read or a
+;; vector index, and between them they are what the rest of the file is written
+;; in terms of. Nothing here allocates, so nothing here needs rooting.
+;;
+;; THE ENCODING IS ASKED IN EXACTLY ONE PLACE. `chunk-get` is the only thing
+;; that knows a column may be a single shared value rather than a vector, which
+;; is what lets an encoding be added without touching anything above it.
+(ns flint.rt.tablemeta
+  (:require [flint.impl.rt :refer [defn return if let comment doc
+                                   == != >= + not is-heap as-heap ty
+                                   slot as-fixnum to-i32 vec-count vec-nth
+                                   val-eq NIL
+                                   Rt Value I32 Bool
+                                   TY_SCHEMA TY_TABLE TY_TABLEREF
+                                   SC_NAMES SC_TYPES SC_IDS SC_WIDTH
+                                   TB_COUNT TB_OFFSET
+                                   CH_ROWS CH_ENC CH_BASE ENC_CONST]]))
+
+(doc "Is `v` a schema, a table, a row ref?"
+     ""
+     "Three one-line questions rather than one taking a tag, because every"
+     "caller knows which it is asking and a tag argument would only give it a"
+     "way to ask the wrong one.")
+(defn ^:pub ^:method ^Bool is-schema [^Rt rt ^Value v]
+  (comment "TWO STATEMENTS AND NOT ONE EXPRESSION. `if` is an expression in"
+           "Rust and a statement in both ports, so an `if` inside a `return`"
+           "renders as valid Rust and as nothing at all on the JVM.")
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_SCHEMA)))
+
+(defn ^:pub ^:method ^Bool is-table [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_TABLE)))
+
+(defn ^:pub ^:method ^Bool is-table-ref [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_TABLEREF)))
+
+(doc "How many rows a chunk holds.")
+(defn ^:pub ^:method ^I32 chunk-rows [^:mut ^Rt rt ^Value ch]
+  (return (to-i32 (as-fixnum (slot rt ch CH_ROWS)))))
+
+(doc "How column `id` of this chunk is encoded.")
+(defn ^:pub ^:method ^I32 chunk-enc [^:mut ^Rt rt ^Value ch ^I32 id]
+  (let [^Value e (slot rt ch CH_ENC)]
+    (return (to-i32 (as-fixnum (slot rt e id))))))
+
+(doc "One cell."
+     ""
+     "THE ONLY PLACE THAT KNOWS HOW A COLUMN IS ENCODED. A collapsed column is"
+     "one shared value standing for every row, so there is nothing to index"
+     "into -- the value IS the answer, whatever the row.")
+(defn ^:pub ^:method ^Value chunk-get [^:mut ^Rt rt ^Value ch ^I32 id ^I32 row]
+  (let [^Value col (slot rt ch (+ CH_BASE id))]
+    (if (== (chunk-enc rt ch id) ENC_CONST)
+      (return col))
+    (return (slot rt col row))))
+
+(doc "How many columns the schema NAMES.")
+(defn ^:pub ^:method ^I32 schema-len [^Rt rt ^Value s]
+  (return (vec-count rt (slot rt s SC_NAMES))))
+
+(doc "How many column slots a chunk of this schema carries."
+     ""
+     "NOT THE SAME AS `schema-len` once a migration has dropped a column: the"
+     "slot stays, the name does not. Ids are stable so that the chunks holding"
+     "a column can be shared unchanged across a migration, and the price of"
+     "that is a width that only ever grows.")
+(defn ^:pub ^:method ^I32 schema-width [^:mut ^Rt rt ^Value s]
+  (return (to-i32 (as-fixnum (slot rt s SC_WIDTH)))))
+
+(doc "The stable id of the `c`th column.")
+(defn ^:pub ^:method ^I32 schema-id-at [^:mut ^Rt rt ^Value s ^I32 c]
+  (return (to-i32 (as-fixnum (vec-nth rt (slot rt s SC_IDS) c NIL)))))
+
+(doc "The name of the `c`th column.")
+(defn ^:pub ^:method ^Value schema-name-at [^:mut ^Rt rt ^Value s ^I32 c]
+  (return (vec-nth rt (slot rt s SC_NAMES) c NIL)))
+
+(doc "The declared type of the `c`th column.")
+(defn ^:pub ^:method ^Value schema-type-at [^:mut ^Rt rt ^Value s ^I32 c]
+  (return (vec-nth rt (slot rt s SC_TYPES) c NIL)))
+
+(doc "Two schemas are the same when the names and the types are, IN ORDER."
+     ""
+     "Position matters: a table of `[[:a :int] [:b :int]]` is not one of"
+     "`[[:b :int] [:a :int]]`, because the rows would read differently.")
+(defn ^:pub ^:method ^Bool schema-eq [^:mut ^Rt rt ^Value a ^Value b]
+  (if (not (val-eq rt (slot rt a SC_NAMES) (slot rt b SC_NAMES)))
+    (return false))
+  (return (val-eq rt (slot rt a SC_TYPES) (slot rt b SC_TYPES))))
+
+(doc "The first row's index within the first chunk. Non-zero only for a slice.")
+(defn ^:pub ^:method ^I32 table-offset [^:mut ^Rt rt ^Value t]
+  (return (to-i32 (as-fixnum (slot rt t TB_OFFSET)))))
+
+(doc "How many rows the table has.")
+(defn ^:pub ^:method ^I32 table-count [^:mut ^Rt rt ^Value t]
+  (return (to-i32 (as-fixnum (slot rt t TB_COUNT)))))

@@ -225,7 +225,7 @@
   the difference matters because a name can appear in a `case` label where a
   call cannot."
   '[TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ TY_STRSEQ TY_RANGE TY_VEC TY_NODE
-    TY_TVEC TY_VOLATILE TY_TABLE
+    TY_TVEC TY_VOLATILE TY_TABLE TY_SCHEMA
     TY_MAPENTRY TY_ARRAYMAP TY_HASHMAP TY_TABLEREF TY_SET TY_STR
     ;; `TY_SYM` and `TY_KW`, and they were listed here as `TY_SYMBOL` and
     ;; `TY_KEYWORD` -- names NO target defines. Nothing had used them, so
@@ -268,6 +268,55 @@
    ;; nobody wrote down is one the next rename can quietly break.
    'RF_SCHEMA {:rust "crate::table::RF_SCHEMA"
                :java "Table.RF_SCHEMA" :csharp "global::Flint.Rt.Table.RF_SCHEMA"}
+
+   ;; THE TABLE'S SLOT LAYOUT. All three targets spell these identically --
+   ;; Rust bare on `crate::table`, both ports as constants on their `Table`
+   ;; class -- so each entry is three copies of one word. They are listed
+   ;; anyway, for the reason `RF_SCHEMA` above is: the table is where
+   ;; agreement is ASSERTED, and an agreement nobody wrote down is one the
+   ;; next rename can quietly break.
+   'SC_NAMES {:rust "crate::table::SC_NAMES"
+             :java "Table.SC_NAMES" :csharp "global::Flint.Rt.Table.SC_NAMES"}
+   'SC_TYPES {:rust "crate::table::SC_TYPES"
+             :java "Table.SC_TYPES" :csharp "global::Flint.Rt.Table.SC_TYPES"}
+   'SC_INDEX {:rust "crate::table::SC_INDEX"
+             :java "Table.SC_INDEX" :csharp "global::Flint.Rt.Table.SC_INDEX"}
+   'SC_IDS {:rust "crate::table::SC_IDS"
+           :java "Table.SC_IDS" :csharp "global::Flint.Rt.Table.SC_IDS"}
+   'SC_WIDTH {:rust "crate::table::SC_WIDTH"
+             :java "Table.SC_WIDTH" :csharp "global::Flint.Rt.Table.SC_WIDTH"}
+   'SC_LEN {:rust "crate::table::SC_LEN"
+           :java "Table.SC_LEN" :csharp "global::Flint.Rt.Table.SC_LEN"}
+   'TB_SCHEMA {:rust "crate::table::TB_SCHEMA"
+              :java "Table.TB_SCHEMA" :csharp "global::Flint.Rt.Table.TB_SCHEMA"}
+   'TB_CHUNKS {:rust "crate::table::TB_CHUNKS"
+              :java "Table.TB_CHUNKS" :csharp "global::Flint.Rt.Table.TB_CHUNKS"}
+   'TB_COUNT {:rust "crate::table::TB_COUNT"
+             :java "Table.TB_COUNT" :csharp "global::Flint.Rt.Table.TB_COUNT"}
+   'TB_OFFSET {:rust "crate::table::TB_OFFSET"
+              :java "Table.TB_OFFSET" :csharp "global::Flint.Rt.Table.TB_OFFSET"}
+   'TB_LEN {:rust "crate::table::TB_LEN"
+           :java "Table.TB_LEN" :csharp "global::Flint.Rt.Table.TB_LEN"}
+   'CH_ROWS {:rust "crate::table::CH_ROWS"
+            :java "Table.CH_ROWS" :csharp "global::Flint.Rt.Table.CH_ROWS"}
+   'CH_ENC {:rust "crate::table::CH_ENC"
+           :java "Table.CH_ENC" :csharp "global::Flint.Rt.Table.CH_ENC"}
+   'CH_BASE {:rust "crate::table::CH_BASE"
+            :java "Table.CH_BASE" :csharp "global::Flint.Rt.Table.CH_BASE"}
+   'ENC_FLAT {:rust "crate::table::ENC_FLAT"
+             :java "Table.ENC_FLAT" :csharp "global::Flint.Rt.Table.ENC_FLAT"}
+   'ENC_CONST {:rust "crate::table::ENC_CONST"
+              :java "Table.ENC_CONST" :csharp "global::Flint.Rt.Table.ENC_CONST"}
+   'RF_CHUNK {:rust "crate::table::RF_CHUNK"
+             :java "Table.RF_CHUNK" :csharp "global::Flint.Rt.Table.RF_CHUNK"}
+   'RF_ROW {:rust "crate::table::RF_ROW"
+           :java "Table.RF_ROW" :csharp "global::Flint.Rt.Table.RF_ROW"}
+   'RF_LEN {:rust "crate::table::RF_LEN"
+           :java "Table.RF_LEN" :csharp "global::Flint.Rt.Table.RF_LEN"}
+   'CHUNK {:rust "crate::table::CHUNK"
+          :java "Table.CHUNK" :csharp "global::Flint.Rt.Table.CHUNK"}
+   'CHUNK_SHIFT {:rust "crate::table::CHUNK_SHIFT"
+                :java "Table.CHUNK_SHIFT" :csharp "global::Flint.Rt.Table.CHUNK_SHIFT"}
    'LS_THUNK {:rust "LS_THUNK" :java "LS_THUNK" :csharp "LS_THUNK"}
    'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LS_SEQ"}
    ;; A byte rope's header, and a transient byte string's. All three targets

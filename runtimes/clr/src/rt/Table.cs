@@ -48,6 +48,22 @@ public static class Table {
 
     // Row-ref slots, and the transient's.
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
+
+    // The ACCESSOR HALF, generated from `kin/tablemeta.kin`.
+    public static bool isSchema(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.IsSchema(rt, v); }
+    public static bool isTable(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.IsTable(rt, v); }
+    public static bool isTableRef(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.IsTableRef(rt, v); }
+    public static int schemaLen(Rt rt, long s) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.SchemaLen(rt, s); }
+    public static int schemaWidth(Rt rt, long s) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.SchemaWidth(rt, s); }
+    public static int schemaIdAt(Rt rt, long s, int c) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.SchemaIdAt(rt, s, c); }
+    public static long schemaNameAt(Rt rt, long s, int c) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.SchemaNameAt(rt, s, c); }
+    public static long schemaTypeAt(Rt rt, long s, int c) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.SchemaTypeAt(rt, s, c); }
+    public static bool schemaEq(Rt rt, long a, long b) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.SchemaEq(rt, a, b); }
+    public static int tableCount(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.TableCount(rt, t); }
+    public static int tableOffset(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.TableOffset(rt, t); }
+    public static int chunkRows(Rt rt, long ch) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.ChunkRows(rt, ch); }
+    static int chunkEnc(Rt rt, long ch, int id) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.ChunkEnc(rt, ch, id); }
+    public static long chunkGet(Rt rt, long ch, int id, int row) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.ChunkGet(rt, ch, id, row); }
     public const int TT_SCHEMA = 0, TT_CHUNKS = 1, TT_COUNT = 2, TT_OPEN = 3,
         TT_LIVE = 4, TT_LEN = 5;
 
@@ -64,15 +80,6 @@ public static class Table {
     }
     static void set(Rt rt, long obj, int i, long v) { rt.SetSlot(Val.AsHeap(obj), i, v); }
 
-    public static bool isSchema(Rt rt, long v) {
-        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TySchema;
-    }
-    public static bool isTable(Rt rt, long v) {
-        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTable;
-    }
-    public static bool isTableRef(Rt rt, long v) {
-        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTableref;
-    }
     public static bool isTtable(Rt rt, long v) {
         return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTtable;
     }
@@ -148,40 +155,10 @@ public static class Table {
         return outv;
     }
 
-    public static int schemaLen(Rt rt, long s) { return Vec.Count(rt, rt.Slot(s, SC_NAMES)); }
-    public static int schemaWidth(Rt rt, long s) { return (int) Val.AsFixnum(rt.Slot(s, SC_WIDTH)); }
-    public static int schemaIdAt(Rt rt, long s, int c) {
-        return (int) Val.AsFixnum(Vec.Nth(rt, rt.Slot(s, SC_IDS), c, Val.NotFound));
-    }
-    public static long schemaNameAt(Rt rt, long s, int c) { return Vec.Nth(rt, rt.Slot(s, SC_NAMES), c, Val.NotFound); }
-    public static long schemaTypeAt(Rt rt, long s, int c) { return Vec.Nth(rt, rt.Slot(s, SC_TYPES), c, Val.NotFound); }
-
     /// The column id of `name`, or -1.
     public static int schemaId(Rt rt, long s, long name) {
         long p = Mapread.MapGet(rt, rt.Slot(s, SC_INDEX), name, Val.Nil);
         return Val.IsFixnum(p) ? (int) Val.AsFixnum(p) : -1;
-    }
-
-    /// Two schemas are the same when the names and the types are, IN ORDER:
-    /// position matters, because the rows would read differently.
-    public static bool schemaEq(Rt rt, long a, long b) {
-        return Eq.Equal(rt, rt.Slot(a, SC_NAMES), rt.Slot(b, SC_NAMES))
-            && Eq.Equal(rt, rt.Slot(a, SC_TYPES), rt.Slot(b, SC_TYPES));
-    }
-
-    public static int tableCount(Rt rt, long t) { return (int) Val.AsFixnum(rt.Slot(t, TB_COUNT)); }
-    public static int tableOffset(Rt rt, long t) { return (int) Val.AsFixnum(rt.Slot(t, TB_OFFSET)); }
-    public static int chunkRows(Rt rt, long ch) { return (int) Val.AsFixnum(rt.Slot(ch, CH_ROWS)); }
-
-    static int chunkEnc(Rt rt, long ch, int id) {
-        return (int) Val.AsFixnum(rt.Slot(rt.Slot(ch, CH_ENC), id));
-    }
-
-    /// One cell. The ONLY place that knows how a column is encoded, which is
-    /// what lets an encoding be added without touching anything above.
-    public static long chunkGet(Rt rt, long ch, int id, int row) {
-        long col = rt.Slot(ch, CH_BASE + id);
-        return chunkEnc(rt, ch, id) == ENC_CONST ? col : rt.Slot(col, row);
     }
 
     static long newChunk(Rt rt, int width, int rows) {
