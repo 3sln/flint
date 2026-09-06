@@ -6,6 +6,7 @@ import com._3sln.flint.kgen.rt.Mapread;
 
 import com._3sln.flint.kgen.rt.Mapcore;
 import com._3sln.flint.kgen.rt.Maptrans;
+import com._3sln.flint.kgen.rt.Transients;
 
 import static com.flint.rt.Obj.*;
 
@@ -393,43 +394,11 @@ public final class Builtins {
         // and the whole contract is that the persistent one it came from is
         // untouched -- so `persistent!` invalidates the handle rather than
         // leaving two owners of the same nodes.
-        def("transient", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (rt.isHeapTy(v, TY_VEC)) return Vec.transientOf(rt, v);
-            if (Table.isTable(rt, v)) return Table.tableTransient(rt, v);
-            // A ROW REF is a map, so `isMap` sends it here -- and
-            // `transientOf` then read the ref's SLOTS as an array-map's,
-            // which is not a refusal but garbage: `(merge row {:z 9})`
-            // answered `{:z 9, 1 2}`. Native at least threw. It materialises,
-            // which is what every other map operation on a ref does.
-            if (rt.isHeapTy(v, Obj.TY_TABLEREF)) {
-                int rb = rt.mark();
-                int rmi = rt.push(Table.refToMap(rt, v));
-                long r = Maptrans.mapTransient(rt, rt.r(rmi));
-                rt.popTo(rb);
-                return r;
-            }
-            if (Mapcore.isMap(rt, v)) return Maptrans.mapTransient(rt, v);
-            if (Sets.isSet(rt, v)) return Maptrans.setTransient(rt, v);
-            return rt.throwStr("ClassCastException",
-rt.describe(v) + " is not transientable");
-        });
-        def("persistent!", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (Table.isTtable(rt, v)) return Table.ttablePersistent(rt, v);
-            if (Vec.isTransient(rt, v)) {
-                if (!Vec.alive(rt, v)) {
-                    return rt.throwStr("IllegalStateException",
-"persistent! called twice on one transient");
-                }
-                return Vec.tpersistent(rt, v);
-            }
-            if (Maps.isTransient(rt, v)) return Maptrans.tmapPersistent(rt, v);
-            if (Sets.isTransient(rt, v)) return Maptrans.tsetPersistent(rt, v);
-            if (Bytes.isTransient(rt, v)) return Bytes.persistent(rt, v);
-            return rt.throwStr("ClassCastException",
-                "persistent! wants a transient, got " + rt.describe(v));
-        });
+        // GENERATED, from `kin/transients.kin`. The arms are the same set the
+        // hand-written body had; what moved is that all three runtimes now
+        // choose between them in one place.
+        def("transient", (rt, at, n) -> Transients.toTransient(rt, rt.vat(at)));
+        def("persistent!", (rt, at, n) -> Transients.toPersistent(rt, rt.vat(at)));
         def("conj!", (rt, at, n) -> {
             long v = rt.vat(at);
             if (Table.isTtable(rt, v)) {
@@ -521,17 +490,7 @@ rt.describe(v) + " is not transientable");
                 "disj! wants a transient, got " + rt.describe(v));
         });
 
-        def("pop!", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (Vec.isTransient(rt, v)) {
-                long out = Vec.tpop(rt, v);
-                if (Val.isNil(out)) return rt.throwStr("IllegalStateException",
-"cannot pop an empty vector");
-                return out;
-            }
-            return rt.throwStr("ClassCastException",
-                "pop! wants a transient, got " + rt.describe(v));
-        });
+        def("pop!", (rt, at, n) -> Transients.transientPop(rt, rt.vat(at)));
 
         // Maps.
         def("get", (rt, at, n) -> {

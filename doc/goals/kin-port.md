@@ -1916,3 +1916,45 @@ stay meaningful. 1 and 8 are done.
   `kin-emit-anchor!` and nothing else. Untested beyond hoisting.
 * **The generated snippet in `vm.rs` is a snapshot.** Regenerate with
   `bb kin/run.clj` when the vocabulary changes; nothing does it automatically.
+
+## Divergences the port found and did NOT close
+
+Generating a function is the moment the three runtimes get compared, so the
+port keeps turning up disagreements that are wider than the function being
+ported. These are recorded rather than fixed, because closing them is a
+decision about what a builtin MEANS and not about where its body lives.
+
+* **`conj!`, `assoc!` and `dissoc!` are VARIADIC on both ports and unary on
+  native.** The ports loop over `n` arguments; native's builtin reads exactly
+  two and drops the rest, so `(conj! t a b)` keeps `b` on the JVM and the CLR
+  and loses it on wasm. Clojure's are variadic, so the ports are right and the
+  fix belongs in `builtins.rs` -- `kin/transients.kin` supplies the single step
+  all three fold, and the folding is the part that is still three copies.
+* **`conj!` onto a transient map takes any two-element SEQ on the ports** --
+  they use `first`/`rest` -- where native takes a map entry or a vector, which
+  is what `slot-or-nth` reaches. `(conj! m '(:a 1))` is a list, and Clojure
+  accepts it.
+* **The ports' `assoc!` on a transient vector does not check the index sign.**
+  `Val.asFixnum` of `-1` is passed straight to `tassoc`. Native refuses, and
+  `kin/transients.kin` now refuses on all three -- but only through the
+  DISPATCHER, which the ports' variadic loop bypasses.
+* **`dissoc!`'s refusal on both ports says `disj!`.** One message for two
+  builtins, and the one it names is the other one.
+
+One divergence in that batch WAS closed, and toward native rather than toward
+the ports, which is worth writing down because the ports were the permissive
+side. Both ports let the generic `persistent!` take a BYTE transient. Adding
+that arm to the shared dispatcher MEASURED at 8 186 bytes in the linked module
+and dropped the shaker's recovery from 46% to 44%, because `persistent!` is
+reachable from anything and the arm drags the whole byte builder in behind it
+-- the same shape as the table branch in `pr-str*` that `test/threads.clj`
+records. Nothing routes a byte transient through the generic: `selfhost` and
+`wasm` both name `flint/b-persistent!`. So the arm is gone from all three, and
+the whole dispatcher port costs 131 bytes.
+
+That measurement was WRONG twice before it was right. `bb test/shake.clj` reads
+`dist/flint-runtime.wasm` and the prebuilt units, and neither `bb` alone nor
+`bin/build-units` regenerates the dist -- so the first two attempts compared a
+fresh `linked` against a stale `prebuilt` and `shaken`. **`./bin/build-dist &&
+./bin/build-units` before `bb test/shake.clj`**, or the ratio is arithmetic on
+numbers from two different builds.

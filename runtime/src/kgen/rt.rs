@@ -68,6 +68,7 @@ pub mod tablemeta;
 pub mod tablemigrate;
 pub mod tablerow;
 pub mod tablesay;
+pub mod transients;
 pub mod tabletrans;
 pub mod tableref;
 pub mod ropenode;

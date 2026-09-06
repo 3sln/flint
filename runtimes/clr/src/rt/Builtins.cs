@@ -376,39 +376,11 @@ public static class Builtins {
         // and the whole contract is that the persistent one it came from is
         // untouched -- so `persistent!` invalidates the handle rather than
         // leaving two owners of the same nodes.
-        Def("transient", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (rt.IsHeapTy(v, Obj.TyVec)) return Vec.TransientOf(rt, v);
-            if (Flint.Rt.Table.isTable(rt, v)) return Flint.Rt.Table.tableTransient(rt, v);
-            // A ROW REF is a map, so `IsMap` sends it here -- and
-            // `TransientOf` then read the ref's SLOTS as an array-map's,
-            // which is not a refusal but garbage: `(merge row {:z 9})`
-            // answered `{:z 9, 1 2}`. Native at least threw. It materialises,
-            // which is what every other map operation on a ref does.
-            if (rt.IsHeapTy(v, Obj.TyTableref)) {
-                int rb = rt.Mark();
-                int rmi = rt.Push(Flint.Rt.Table.refToMap(rt, v));
-                long r = Maptrans.MapTransient(rt, rt.R(rmi));
-                rt.PopTo(rb);
-                return r;
-            }
-            if (Mapcore.IsMap(rt, v)) return Maptrans.MapTransient(rt, v);
-            if (Sets.IsSet(rt, v)) return Maptrans.SetTransient(rt, v);
-            return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not transientable");
-        });
-        Def("persistent!", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (Flint.Rt.Table.isTtable(rt, v)) return Flint.Rt.Table.ttablePersistent(rt, v);
-            if (Vec.IsTransient(rt, v)) {
-                if (!Vec.Alive(rt, v))
-                    return rt.ThrowStr("IllegalStateException", "persistent! called twice on one transient");
-                return Vec.TPersistent(rt, v);
-            }
-            if (Maps.IsTransient(rt, v)) return Maptrans.TmapPersistent(rt, v);
-            if (Sets.IsTransient(rt, v)) return Maptrans.TsetPersistent(rt, v);
-            if (Bytes.IsTransient(rt, v)) return Bytes.Persistent(rt, v);
-            return rt.ThrowStr("ClassCastException", "persistent! wants a transient, got " + rt.Describe(v));
-        });
+        // GENERATED, from `kin/transients.kin`. The arms are the same set the
+        // hand-written body had; what moved is that all three runtimes now
+        // choose between them in one place.
+        Def("transient", (rt, at, n) => Transients.ToTransient(rt, rt.VAt(at)));
+        Def("persistent!", (rt, at, n) => Transients.ToPersistent(rt, rt.VAt(at)));
         Def("conj!", (rt, at, n) => {
             long v = rt.VAt(at);
             if (Flint.Rt.Table.isTtable(rt, v)) {
@@ -748,15 +720,7 @@ public static class Builtins {
             if (Val.IsNil(v)) return rt.ThrowStr("IllegalStateException", "cannot pop nil");
             return Seqs.Rest(rt, v);
         });
-        Def("pop!", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (Vec.IsTransient(rt, v)) {
-                long outv = Vec.TPop(rt, v);
-                if (Val.IsNil(outv)) return rt.ThrowStr("IllegalStateException", "cannot pop an empty vector");
-                return outv;
-            }
-            return rt.ThrowStr("ClassCastException", "pop! wants a transient, got " + rt.Describe(v));
-        });
+        Def("pop!", (rt, at, n) => Transients.TransientPop(rt, rt.VAt(at)));
         Def("empty", (rt, at, n) => {
             long v = rt.VAt(at);
             if (rt.IsHeapTy(v, Obj.TyVec)) return Vec.Empty(rt);

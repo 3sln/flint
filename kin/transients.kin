@@ -1,0 +1,192 @@
+;; TRANSIENTS, dispatched. `transient`, `persistent!`, `conj!`, `assoc!`,
+;; `dissoc!` and `pop!` are all one shape: look at the tag, hand off to the
+;; implementation that owns it, and refuse by NAME when there is none.
+;;
+;; Nothing here does any work of its own. That is the point -- the five
+;; collections each have their own transient, and what a program calls is a
+;; single generic that has to agree across four runtimes about which value each
+;; of them accepts and what it says when it does not.
+;;
+;; A ROW REF IS A MAP, so it is transientable -- by MATERIALISING. Without that
+;; arm it fell to the refusal below and `merge`, which builds a transient of
+;; its first source, could not take a row as that source. The ports had it
+;; worse: they guarded with `is-map`, which is true for a ref, and then read
+;; the ref's slots as an array-map's -- no refusal, just garbage, so
+;; `(merge row {:z 9})` answered `{:z 9, 1 2}`. A wrong answer beats no answer
+;; only if it is right, and that one was neither.
+(ns flint.rt.transients
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != >= not or mark push r pop-to
+                                   slot ty is-heap as-heap to-i32
+                                   throw-str str-cat static-text own-text
+                                   slot-or-nth is-int i64-of ref-to-map
+                                   Rt Value I32 I64 Ty Bool RootIx StaticText Text NIL
+                                   TY_VEC TY_ARRAYMAP TY_HASHMAP TY_TABLEREF
+                                   TY_SET TY_TABLE TY_MAPENTRY
+                                   TY_TVEC TY_TMAP TY_TSET TY_TTABLE]]
+            [flint.rt.nouns :refer [describe]]
+            [flint.rt.maptrans :refer [map-transient set-transient
+                                       tmap-assoc tmap-dissoc tmap-persistent
+                                       tset-conj tset-disj tset-persistent]]
+            [flint.rt.vectrans :refer [vec-transient tvec-count tvec-alive]]
+            [flint.rt.vectwrite :refer [tvec-conj tvec-assoc tvec-pop
+                                        tvec-persistent]]
+            [flint.rt.tabletrans :refer [table-transient ttable-conj
+                                         ttable-persistent]]
+))
+
+(doc "Refuse a non-transient, NAMING it."
+     ""
+     "What arrived is the half that locates the bug -- a wrong TYPE is a"
+     "mixed-up value, while a fixnum or nil is a stack slot read at the wrong"
+     "depth. This used to say so through a classifier of its own: \"a heap"
+     "object with type tag 23\" where `describe` says \"a transient vector\"."
+     "Two classifiers meant two answers to one question, and the coarser one"
+     "was on the path that needed it most."
+     ""
+     "The `in <frames>` suffix is gone. It came from `where-am-i`, which is"
+     "native-only -- so the message a program could catch and read differed"
+     "between runtimes by more than the value.")
+(comment "`describe` IS BOUND FIRST. Rust takes `&mut self` for both it and"
+         "`throw-str`, and will not have the nested form; both ports accept"
+         "it, and the two-statement shape reads the same on all three.")
+(defn ^:pub ^:method ^Value not-a-transient [^:mut ^Rt rt ^StaticText op ^Value v]
+  (let [^Text what (describe rt v)]
+    (return (throw-str rt "ClassCastException"
+                       (str-cat op (static-text " wants a transient, got ") what)))))
+
+(doc "A transient over `v`, whichever collection it is.")
+(defn ^:pub ^:method ^Value to-transient [^:mut ^Rt rt ^Value v]
+  (if (is-heap v)
+    (let [^Ty t (ty rt (as-heap v))]
+      (if (== t TY_VEC)
+        (return (vec-transient rt v)))
+      (if (or (== t TY_ARRAYMAP) (== t TY_HASHMAP))
+        (return (map-transient rt v)))
+      (if (== t TY_TABLEREF)
+        (let [^RootIx base (mark rt)
+              ^Value m (ref-to-map rt v)
+              ^RootIx mi (push rt m)
+              ^Value mv (r rt mi)
+              ^Value out (map-transient rt mv)]
+          (pop-to rt base)
+          (return out)))
+      (if (== t TY_SET)
+        (return (set-transient rt v)))
+      (if (== t TY_TABLE)
+        (return (table-transient rt v)))))
+  (let [^Text what (describe rt v)]
+    (return (throw-str rt "ClassCastException"
+                       (str-cat what (static-text " is not transientable"))))))
+
+(doc "Freeze a transient into the value it was building."
+     ""
+     "A TRANSIENT IS TAKEN ONCE, and a second `persistent!` says so. Native"
+     "had `tvec-alive` and called it from nothing but a unit test, so a"
+     "double `persistent!` there re-cleared the edit token and built a vector"
+     "out of the emptied handle -- a wrong answer where both ports threw."
+     ""
+     "A BYTE TRANSIENT IS NOT ONE OF THESE, and the arm both ports had for it"
+     "is gone rather than copied to native. MEASURED: it cost 8 317 bytes in"
+     "every module that can be CALLED, because `persistent!` is reachable from"
+     "anything and the arm drags the whole byte builder in behind it -- the"
+     "same shape as the table branch in `pr-str*` that `test/threads.clj`"
+     "records. Nothing routes a byte transient here: `selfhost` and `wasm` both"
+     "name `flint/b-persistent!`, which is the entry point that knows the type."
+     "A generic that every module links is the wrong place to be generous.")
+(defn ^:pub ^:method ^Value to-persistent [^:mut ^Rt rt ^Value v]
+  (if (is-heap v)
+    (let [^Ty t (ty rt (as-heap v))]
+      (if (== t TY_TVEC)
+        (do (if (not (tvec-alive rt v))
+              (return (throw-str rt "IllegalStateException"
+                                 "persistent! called twice on one transient")))
+            (return (tvec-persistent rt v))))
+      (if (== t TY_TMAP)
+        (return (tmap-persistent rt v)))
+      (if (== t TY_TSET)
+        (return (tset-persistent rt v)))
+      (if (== t TY_TTABLE)
+        (return (ttable-persistent rt v)))))
+  (return (not-a-transient rt (static-text "persistent!") v)))
+
+(doc "`conj!`, which on a transient MAP wants a map entry."
+     ""
+     "A two-element vector counts as one, which is what `(into {} pairs)`"
+     "hands it.")
+(defn ^:pub ^:method ^Value transient-conj [^:mut ^Rt rt ^Value t ^Value x]
+  (if (is-heap t)
+    (let [^Ty tt (ty rt (as-heap t))]
+      (if (== tt TY_TVEC)
+        (return (tvec-conj rt t x)))
+      (if (== tt TY_TSET)
+        (return (tset-conj rt t x)))
+      (if (== tt TY_TTABLE)
+        (return (ttable-conj rt t x)))
+      (if (== tt TY_TMAP)
+        (do (if (is-heap x)
+              (let [^Ty xt (ty rt (as-heap x))]
+                (if (or (== xt TY_MAPENTRY) (== xt TY_VEC))
+                  (let [^RootIx base (mark rt)
+                        ^RootIx ti (push rt t)
+                        ^RootIx xi (push rt x)
+                        ^Value k (slot-or-nth rt (r rt xi) 0)
+                        ^RootIx ki (push rt k)
+                        ^Value v (slot-or-nth rt (r rt xi) 1)
+                        ^RootIx vi (push rt v)
+                        ^Value out (tmap-assoc rt (r rt ti) (r rt ki) (r rt vi))]
+                    (pop-to rt base)
+                    (return out)))))
+            (return (throw-str rt "IllegalArgumentException"
+                               "conj! on a map wants a map entry"))))))
+  (return (not-a-transient rt (static-text "conj!") t)))
+
+(doc "`assoc!`, on a transient map by key and on a transient vector by index.")
+(defn ^:pub ^:method ^Value transient-assoc [^:mut ^Rt rt ^Value t ^Value k ^Value v]
+  (if (is-heap t)
+    (let [^Ty tt (ty rt (as-heap t))]
+      (if (== tt TY_TMAP)
+        (return (tmap-assoc rt t k v)))
+      (if (== tt TY_TVEC)
+        (do (comment "THE INDEX IS HELD AS A SIGNED 64-BIT VALUE. A program"
+                     "may hand over -1, and refusing it means being able to"
+                     "hold it -- `to-i32` of that is not the same number.")
+            (if (is-int rt k)
+              (let [^I64 i (i64-of rt k)]
+                (if (>= i 0)
+                  (return (tvec-assoc rt t (to-i32 i) v)))))
+            (return (throw-str rt "IndexOutOfBoundsException"
+                               "assoc! index out of range"))))))
+  (return (throw-str rt "ClassCastException" "not an associative transient")))
+
+(doc "`dissoc!` on a transient map, and `disj!` on a transient set.")
+(defn ^:pub ^:method ^Value transient-dissoc [^:mut ^Rt rt ^Value t ^Value k]
+  (if (is-heap t)
+    (let [^Ty tt (ty rt (as-heap t))]
+      (if (== tt TY_TMAP)
+        (return (tmap-dissoc rt t k)))
+      (if (== tt TY_TSET)
+        (return (tset-disj rt t k)))))
+  (return (not-a-transient rt (static-text "dissoc!") t)))
+
+(doc "`pop!`: a transient vector one shorter."
+     ""
+     "This had no builtin at all. `clojure.core` read `(defn pop! [t]"
+     "(flint.rt/pop t))` -- the PERSISTENT pop -- so a transient vector fell"
+     "through to the list branch and answered `()` rather than throwing or"
+     "working. `tvec-pop` has been implemented on all four runtimes the whole"
+     "time and nothing but its own unit test ever called it."
+     ""
+     "Clojure's `pop!` is vector-only, so this does not dispatch further.")
+(defn ^:pub ^:method ^Value transient-pop [^:mut ^Rt rt ^Value t]
+  (if (is-heap t)
+    (if (== (ty rt (as-heap t)) TY_TVEC)
+      (do (comment "THE EMPTY CASE IS CHECKED HERE and not in `tvec-pop`,"
+                   "which only debug-asserts it. The count is a `u32` on"
+                   "native, so `cnt - 1` on an empty transient wraps to four"
+                   "billion and is written back as that.")
+          (if (== (tvec-count rt t) 0)
+            (return (throw-str rt "IllegalStateException"
+                               "cannot pop an empty vector")))
+          (return (tvec-pop rt t)))))
+  (return (not-a-transient rt (static-text "pop!") t)))

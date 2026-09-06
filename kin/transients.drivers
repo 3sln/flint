@@ -1,0 +1,477 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_VEC: u8 = 9; const TY_MAPENTRY: u8 = 15; const TY_ARRAYMAP: u8 = 16;
+const TY_HASHMAP: u8 = 17; const TY_SET: u8 = 18; const TY_TABLEREF: u8 = 19;
+const TY_TABLE: u8 = 20; const TY_TVEC: u8 = 23; const TY_TMAP: u8 = 24;
+const TY_TSET: u8 = 25; const TY_TTABLE: u8 = 27; const TY_TBYTES: u8 = 28;
+const TY_OTHER: u8 = 30;
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { gc: Gc, bump: u64, roots: Vec<Value>, thrown: String, kv: (u64, u64), tvn: u32, alive: bool }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 && (self.0 >> 40) == 0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+}
+// EVERY CALLEE IS A STUB THAT NAMES ITSELF. What this source does is choose
+// one of them, so what the probe has to compare is WHICH -- not what any of
+// them computes. A stub that answered a plausible value would hide a branch
+// landing on the wrong one.
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn slot(&self, _v: Value, _i: u32) -> Value { NIL }
+    fn throw_str(&mut self, class: &str, msg: &str) -> Value {
+        self.thrown = format!("{}/{}", class, msg); NIL
+    }
+    fn describe(&mut self, v: Value) -> alloc::string::String {
+        if !v.is_heap() { return alloc::string::String::from("a fixnum"); }
+        alloc::format!("a #{}", ty(&self.gc.sp, v.as_heap()))
+    }
+    fn obj(&mut self, t: u8) -> Value {
+        let a = self.bump; self.bump += 8;
+        self.gc.sp.m[a as usize] = t;
+        Value(a)
+    }
+    fn vec_transient(&mut self, _v: Value) -> Value { Value(0x901) }
+    fn map_transient(&mut self, _v: Value) -> Value { Value(0x902) }
+    fn set_transient(&mut self, _v: Value) -> Value { Value(0x903) }
+    fn table_transient(&mut self, _v: Value) -> Value { Value(0x904) }
+    fn ref_to_map(&mut self, _v: Value) -> Value { Value(0x905) }
+    fn tvec_persistent(&mut self, _v: Value) -> Value { Value(0x911) }
+    fn tmap_persistent(&mut self, _v: Value) -> Value { Value(0x912) }
+    fn tset_persistent(&mut self, _v: Value) -> Value { Value(0x913) }
+    fn ttable_persistent(&mut self, _v: Value) -> Value { Value(0x914) }
+    fn tvec_conj(&mut self, _t: Value, _x: Value) -> Value { Value(0x921) }
+    fn tset_conj(&mut self, _t: Value, _x: Value) -> Value { Value(0x922) }
+    fn ttable_conj(&mut self, _t: Value, _x: Value) -> Value { Value(0x923) }
+    // `tmap_assoc` RECORDS ITS KEY AND VALUE. `conj!` of a pair has to take
+    // them apart in the right order, and a stub that only named itself would
+    // pass whether it got them backwards.
+    fn tmap_assoc(&mut self, _t: Value, k: Value, v: Value) -> Value {
+        self.kv = (k.0, v.0); Value(0x931)
+    }
+    fn tmap_dissoc(&mut self, _t: Value, _k: Value) -> Value { Value(0x932) }
+    fn tset_disj(&mut self, _t: Value, _k: Value) -> Value { Value(0x933) }
+    fn tvec_assoc(&mut self, _t: Value, i: u32, _v: Value) -> Value { Value(0x940 + i as u64) }
+    fn tvec_pop(&mut self, _t: Value) -> Value { Value(0x951) }
+    fn b_persistent(&mut self, _t: Value) -> Value { Value(0x915) }
+    fn tvec_alive(&mut self, _t: Value) -> bool { self.alive }
+    fn tvec_count(&mut self, _t: Value) -> u32 { self.tvn }
+    fn slot_or_nth_pub(&mut self, _v: Value, i: u32) -> Value { Value(0x960 + i as u64) }
+    fn is_int(&mut self, v: Value) -> bool { (v.0 >> 40) == 1 }
+    fn i64_of(&mut self, v: Value) -> i64 { ((v.0 & 0xFFFF_FFFF) as u32) as i32 as i64 }
+}
+impl Rt {
+--rust
+}
+extern crate alloc;
+fn main() {
+    let mut rt = Rt { gc: Gc { sp: Space { m: vec![0u8; 4000] } }, bump: 100,
+                      roots: Vec::new(), thrown: String::new(), kv: (0, 0), tvn: 3, alive: true };
+    let mut o = String::new();
+    // `transient` over every tag it takes, then one it does not.
+    for t in [TY_VEC, TY_ARRAYMAP, TY_HASHMAP, TY_TABLEREF, TY_SET, TY_TABLE, TY_OTHER] {
+        let v = rt.obj(t);
+        rt.thrown.clear();
+        let got = rt.to_transient(v);
+        o.push_str(&format!("{:x}", got.0));
+        if !rt.thrown.is_empty() { o.push_str(&format!("[{}]", rt.thrown)); }
+        o.push(' ');
+    }
+    // ... and over a NON-HEAP value, which is the arm that says which half of
+    // the mistake it was.
+    rt.thrown.clear();
+    let _ = rt.to_transient(Value(7));
+    o.push_str(&format!("|{}| ", rt.thrown));
+
+    // `persistent!` over every transient tag, then a persistent one.
+    for t in [TY_TVEC, TY_TMAP, TY_TSET, TY_TTABLE, TY_VEC] {
+        let v = rt.obj(t);
+        rt.thrown.clear();
+        let got = rt.to_persistent(v);
+        o.push_str(&format!("{:x}", got.0));
+        if !rt.thrown.is_empty() { o.push_str("!"); }
+        o.push(' ');
+    }
+    o.push_str(&format!("|{}| ", rt.thrown));
+    // A TRANSIENT IS TAKEN ONCE.
+    rt.alive = false;
+    rt.thrown.clear();
+    let dead = rt.obj(TY_TVEC);
+    let _ = rt.to_persistent(dead);
+    o.push_str(&format!("|{}| ", rt.thrown));
+    rt.alive = true;
+
+    // `conj!`. The map arm wants a PAIR, and the two shapes that count as one.
+    let x = rt.obj(TY_VEC);
+    for t in [TY_TVEC, TY_TSET, TY_TTABLE] {
+        let tv = rt.obj(t);
+        o.push_str(&format!("{:x} ", rt.transient_conj(tv, x).0));
+    }
+    let tm = rt.obj(TY_TMAP);
+    let pair = rt.obj(TY_MAPENTRY);
+    rt.kv = (0, 0);
+    let got = rt.transient_conj(tm, pair);
+    o.push_str(&format!("{:x}/{:x},{:x} ", got.0, rt.kv.0, rt.kv.1));
+    let vpair = rt.obj(TY_VEC);
+    o.push_str(&format!("{:x} ", rt.transient_conj(tm, vpair).0));
+    rt.thrown.clear();
+    let bad = rt.obj(TY_SET);
+    let _ = rt.transient_conj(tm, bad);
+    o.push_str(&format!("|{}| ", rt.thrown));
+    rt.thrown.clear();
+    let notrans = rt.obj(TY_VEC);
+    let _ = rt.transient_conj(notrans, x);
+    o.push_str(&format!("|{}| ", rt.thrown));
+
+    // `assoc!`. A TRANSIENT VECTOR TAKES AN INDEX, and -1 is a thing to
+    // REFUSE -- which means being able to hold it rather than widening it
+    // into four billion.
+    let tv = rt.obj(TY_TVEC);
+    let two = Value(0x100_0000_0002);
+    let neg = Value(0x100_FFFF_FFFF);
+    let notint = rt.obj(TY_SET);
+    o.push_str(&format!("{:x} ", rt.transient_assoc(tm, notint, x).0));
+    o.push_str(&format!("{:x} ", rt.transient_assoc(tv, two, x).0));
+    rt.thrown.clear();
+    let _ = rt.transient_assoc(tv, neg, x);
+    o.push_str(&format!("|{}| ", rt.thrown));
+    rt.thrown.clear();
+    let _ = rt.transient_assoc(tv, notint, x);
+    o.push_str(&format!("|{}| ", rt.thrown));
+    rt.thrown.clear();
+    let ats = rt.obj(TY_TSET);
+    let _ = rt.transient_assoc(ats, two, x);
+    o.push_str(&format!("|{}| ", rt.thrown));
+
+    // `dissoc!` and `disj!`, which are one entry point.
+    let dts = rt.obj(TY_TSET);
+    let d1 = rt.transient_dissoc(tm, x).0;
+    let d2 = rt.transient_dissoc(dts, x).0;
+    o.push_str(&format!("{:x} {:x} ", d1, d2));
+    rt.thrown.clear();
+    let _ = rt.transient_dissoc(tv, x);
+    o.push_str(&format!("|{}| ", rt.thrown));
+
+    // `pop!`, vector-only, and the EMPTY case is refused here.
+    o.push_str(&format!("{:x} ", rt.transient_pop(tv).0));
+    rt.tvn = 0;
+    rt.thrown.clear();
+    let _ = rt.transient_pop(tv);
+    o.push_str(&format!("|{}| ", rt.thrown));
+    rt.tvn = 3;
+    rt.thrown.clear();
+    let _ = rt.transient_pop(tm);
+    o.push_str(&format!("|{}|", rt.thrown));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_VEC = 9, TY_MAPENTRY = 15, TY_ARRAYMAP = 16;
+    static final int TY_HASHMAP = 17, TY_SET = 18, TY_TABLEREF = 19;
+    static final int TY_TABLE = 20, TY_TVEC = 23, TY_TMAP = 24;
+    static final int TY_TSET = 25, TY_TTABLE = 27, TY_TBYTES = 28, TY_OTHER = 30;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL && (v >>> 40) == 0; }
+        static long asHeap(long v) { return v; }
+    }
+    static final class Space { byte[] m = new byte[4000]; }
+    static final class Rt {
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        long bump = 100;
+        String thrown = "";
+        long kvK = 0, kvV = 0;
+        int tvn = 3;
+        boolean alive = true;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long v, int i) { return NIL; }
+        long throwStr(String cls, String msg) { thrown = cls + "/" + msg; return NIL; }
+        long obj(int t) { long a = bump; bump += 8; gc.sp.m[(int) a] = (byte) t; return a; }
+        long slotOrNth(long v, int i) { return 0x960L + i; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static String describe(Rt rt, long v) {
+        if (!Val.isHeap(v)) return "a fixnum";
+        return "a #" + ty(rt.gc.sp, Val.asHeap(v));
+    }
+    static long vecTransient(Rt rt, long v) { return 0x901L; }
+    static long mapTransient(Rt rt, long v) { return 0x902L; }
+    static long setTransient(Rt rt, long v) { return 0x903L; }
+    static long tableTransient(Rt rt, long v) { return 0x904L; }
+    static final class Table { static long refToMap(Rt rt, long v) { return 0x905L; } }
+    static final class Num {
+        static boolean isInt(Rt r, long v) { return (v >>> 40) == 1; }
+        static long i64Of(Rt r, long v) { return (int) (v & 0xFFFFFFFFL); }
+    }
+    static long tvecPersistent(Rt rt, long v) { return 0x911L; }
+    static long tmapPersistent(Rt rt, long v) { return 0x912L; }
+    static long tsetPersistent(Rt rt, long v) { return 0x913L; }
+    static long ttablePersistent(Rt rt, long v) { return 0x914L; }
+    static long tvecConj(Rt rt, long t, long x) { return 0x921L; }
+    static long tsetConj(Rt rt, long t, long x) { return 0x922L; }
+    static long ttableConj(Rt rt, long t, long x) { return 0x923L; }
+    static long tmapAssoc(Rt rt, long t, long k, long v) { rt.kvK = k; rt.kvV = v; return 0x931L; }
+    static long tmapDissoc(Rt rt, long t, long k) { return 0x932L; }
+    static long tsetDisj(Rt rt, long t, long k) { return 0x933L; }
+    static long tvecAssoc(Rt rt, long t, int i, long v) { return 0x940L + i; }
+    static long tvecPop(Rt rt, long t) { return 0x951L; }
+    static long bPersistent(Rt rt, long t) { return 0x915L; }
+    static boolean tvecAlive(Rt rt, long t) { return rt.alive; }
+    static int tvecCount(Rt rt, long t) { return rt.tvn; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        int[] ins = { TY_VEC, TY_ARRAYMAP, TY_HASHMAP, TY_TABLEREF, TY_SET, TY_TABLE, TY_OTHER };
+        for (int t : ins) {
+            long v = rt.obj(t);
+            rt.thrown = "";
+            long got = toTransient(rt, v);
+            o.append(Long.toHexString(got));
+            if (!rt.thrown.isEmpty()) o.append("[").append(rt.thrown).append("]");
+            o.append(' ');
+        }
+        rt.thrown = "";
+        toTransient(rt, 7L);
+        o.append("|").append(rt.thrown).append("| ");
+
+        int[] outs = { TY_TVEC, TY_TMAP, TY_TSET, TY_TTABLE, TY_VEC };
+        for (int t : outs) {
+            long v = rt.obj(t);
+            rt.thrown = "";
+            long got = toPersistent(rt, v);
+            o.append(Long.toHexString(got));
+            if (!rt.thrown.isEmpty()) o.append("!");
+            o.append(' ');
+        }
+        o.append("|").append(rt.thrown).append("| ");
+        rt.alive = false;
+        rt.thrown = "";
+        long dead = rt.obj(TY_TVEC);
+        toPersistent(rt, dead);
+        o.append("|").append(rt.thrown).append("| ");
+        rt.alive = true;
+
+        long x = rt.obj(TY_VEC);
+        int[] conjs = { TY_TVEC, TY_TSET, TY_TTABLE };
+        for (int t : conjs) {
+            long tv0 = rt.obj(t);
+            o.append(Long.toHexString(transientConj(rt, tv0, x))).append(' ');
+        }
+        long tm = rt.obj(TY_TMAP);
+        long pair = rt.obj(TY_MAPENTRY);
+        rt.kvK = 0; rt.kvV = 0;
+        long got = transientConj(rt, tm, pair);
+        o.append(Long.toHexString(got)).append("/").append(Long.toHexString(rt.kvK))
+         .append(",").append(Long.toHexString(rt.kvV)).append(' ');
+        long vpair = rt.obj(TY_VEC);
+        o.append(Long.toHexString(transientConj(rt, tm, vpair))).append(' ');
+        rt.thrown = "";
+        long bad = rt.obj(TY_SET);
+        transientConj(rt, tm, bad);
+        o.append("|").append(rt.thrown).append("| ");
+        rt.thrown = "";
+        transientConj(rt, rt.obj(TY_VEC), x);
+        o.append("|").append(rt.thrown).append("| ");
+
+        long tv = rt.obj(TY_TVEC);
+        long two = 0x10000000002L;
+        long neg = 0x100FFFFFFFFL;
+        long notint = rt.obj(TY_SET);
+        o.append(Long.toHexString(transientAssoc(rt, tm, notint, x))).append(' ');
+        o.append(Long.toHexString(transientAssoc(rt, tv, two, x))).append(' ');
+        rt.thrown = "";
+        transientAssoc(rt, tv, neg, x);
+        o.append("|").append(rt.thrown).append("| ");
+        rt.thrown = "";
+        transientAssoc(rt, tv, notint, x);
+        o.append("|").append(rt.thrown).append("| ");
+        rt.thrown = "";
+        transientAssoc(rt, rt.obj(TY_TSET), two, x);
+        o.append("|").append(rt.thrown).append("| ");
+
+        o.append(Long.toHexString(transientDissoc(rt, tm, x))).append(' ')
+         .append(Long.toHexString(transientDissoc(rt, rt.obj(TY_TSET), x))).append(' ');
+        rt.thrown = "";
+        transientDissoc(rt, tv, x);
+        o.append("|").append(rt.thrown).append("| ");
+
+        o.append(Long.toHexString(transientPop(rt, tv))).append(' ');
+        rt.tvn = 0;
+        rt.thrown = "";
+        transientPop(rt, tv);
+        o.append("|").append(rt.thrown).append("| ");
+        rt.tvn = 3;
+        rt.thrown = "";
+        transientPop(rt, tm);
+        o.append("|").append(rt.thrown).append("|");
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Table {
+        internal static long refToMap(Probe.Rt rt, long v) { return 0x905L; }
+    }
+}
+--csharp-head
+    internal const long NIL = 0xFFFFL;
+    internal static class Obj {
+        internal const int TyVec = 9, TyMapentry = 15, TyArraymap = 16;
+        internal const int TyHashmap = 17, TySet = 18, TyTableref = 19;
+        internal const int TyTable = 20, TyTvec = 23, TyTmap = 24;
+        internal const int TyTset = 25, TyTtable = 27, TyTbytes = 28, TyOther = 30;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = Probe.NIL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != NIL && (v >> 40) == 0; }
+        internal static long AsHeap(long v) { return v; }
+    }
+    internal sealed class Space { internal byte[] m = new byte[4000]; }
+    internal sealed class Rt {
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal string thrown = "";
+        internal long kvK = 0, kvV = 0;
+        internal int tvn = 3;
+        internal bool alive = true;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { while (roots.Count > n) roots.RemoveAt(roots.Count - 1); }
+        internal long Slot(long v, int i) { return NIL; }
+        internal long ThrowStr(string cls, string msg) { thrown = cls + "/" + msg; return NIL; }
+        internal long Obj_(int t) { long a = bump; bump += 8; gc.sp.m[(int) a] = (byte) t; return a; }
+        internal long SlotOrNth(long v, int i) { return 0x960L + i; }
+    }
+    internal static string Describe(Rt rt, long v) {
+        if (!Val.IsHeap(v)) return "a fixnum";
+        return "a #" + Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+    }
+    internal static long VecTransient(Rt rt, long v) { return 0x901L; }
+    internal static long MapTransient(Rt rt, long v) { return 0x902L; }
+    internal static long SetTransient(Rt rt, long v) { return 0x903L; }
+    internal static long TableTransient(Rt rt, long v) { return 0x904L; }
+    internal static class Num {
+        internal static bool IsInt(Rt r, long v) { return (v >> 40) == 1; }
+        internal static long I64Of(Rt r, long v) { return (int) (v & 0xFFFFFFFFL); }
+    }
+    internal static long TvecPersistent(Rt rt, long v) { return 0x911L; }
+    internal static long TmapPersistent(Rt rt, long v) { return 0x912L; }
+    internal static long TsetPersistent(Rt rt, long v) { return 0x913L; }
+    internal static long TtablePersistent(Rt rt, long v) { return 0x914L; }
+    internal static long TvecConj(Rt rt, long t, long x) { return 0x921L; }
+    internal static long TsetConj(Rt rt, long t, long x) { return 0x922L; }
+    internal static long TtableConj(Rt rt, long t, long x) { return 0x923L; }
+    internal static long TmapAssoc(Rt rt, long t, long k, long v) { rt.kvK = k; rt.kvV = v; return 0x931L; }
+    internal static long TmapDissoc(Rt rt, long t, long k) { return 0x932L; }
+    internal static long TsetDisj(Rt rt, long t, long k) { return 0x933L; }
+    internal static long TvecAssoc(Rt rt, long t, int i, long v) { return 0x940L + i; }
+    internal static long TvecPop(Rt rt, long t) { return 0x951L; }
+    internal static long BPersistent(Rt rt, long t) { return 0x915L; }
+    internal static bool TvecAlive(Rt rt, long t) { return rt.alive; }
+    internal static int TvecCount(Rt rt, long t) { return rt.tvn; }
+--csharp
+    public static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        int[] ins = { Obj.TyVec, Obj.TyArraymap, Obj.TyHashmap, Obj.TyTableref,
+                      Obj.TySet, Obj.TyTable, Obj.TyOther };
+        foreach (int t in ins) {
+            long v = rt.Obj_(t);
+            rt.thrown = "";
+            long g = ToTransient(rt, v);
+            o.Append(g.ToString("x"));
+            if (rt.thrown.Length != 0) o.Append("[").Append(rt.thrown).Append("]");
+            o.Append(' ');
+        }
+        rt.thrown = "";
+        ToTransient(rt, 7L);
+        o.Append("|").Append(rt.thrown).Append("| ");
+
+        int[] outs = { Obj.TyTvec, Obj.TyTmap, Obj.TyTset, Obj.TyTtable, Obj.TyVec };
+        foreach (int t in outs) {
+            long v = rt.Obj_(t);
+            rt.thrown = "";
+            long g = ToPersistent(rt, v);
+            o.Append(g.ToString("x"));
+            if (rt.thrown.Length != 0) o.Append("!");
+            o.Append(' ');
+        }
+        o.Append("|").Append(rt.thrown).Append("| ");
+        rt.alive = false;
+        rt.thrown = "";
+        long dead = rt.Obj_(Obj.TyTvec);
+        ToPersistent(rt, dead);
+        o.Append("|").Append(rt.thrown).Append("| ");
+        rt.alive = true;
+
+        long x = rt.Obj_(Obj.TyVec);
+        int[] conjs = { Obj.TyTvec, Obj.TyTset, Obj.TyTtable };
+        foreach (int t in conjs) {
+            long tv0 = rt.Obj_(t);
+            o.Append(TransientConj(rt, tv0, x).ToString("x")).Append(' ');
+        }
+        long tm = rt.Obj_(Obj.TyTmap);
+        long pair = rt.Obj_(Obj.TyMapentry);
+        rt.kvK = 0; rt.kvV = 0;
+        long got = TransientConj(rt, tm, pair);
+        o.Append(got.ToString("x")).Append("/").Append(rt.kvK.ToString("x"))
+         .Append(",").Append(rt.kvV.ToString("x")).Append(' ');
+        long vpair = rt.Obj_(Obj.TyVec);
+        o.Append(TransientConj(rt, tm, vpair).ToString("x")).Append(' ');
+        rt.thrown = "";
+        long bad = rt.Obj_(Obj.TySet);
+        TransientConj(rt, tm, bad);
+        o.Append("|").Append(rt.thrown).Append("| ");
+        rt.thrown = "";
+        TransientConj(rt, rt.Obj_(Obj.TyVec), x);
+        o.Append("|").Append(rt.thrown).Append("| ");
+
+        long tv = rt.Obj_(Obj.TyTvec);
+        long two = 0x10000000002L;
+        long neg = 0x100FFFFFFFFL;
+        long notint = rt.Obj_(Obj.TySet);
+        o.Append(TransientAssoc(rt, tm, notint, x).ToString("x")).Append(' ');
+        o.Append(TransientAssoc(rt, tv, two, x).ToString("x")).Append(' ');
+        rt.thrown = "";
+        TransientAssoc(rt, tv, neg, x);
+        o.Append("|").Append(rt.thrown).Append("| ");
+        rt.thrown = "";
+        TransientAssoc(rt, tv, notint, x);
+        o.Append("|").Append(rt.thrown).Append("| ");
+        rt.thrown = "";
+        TransientAssoc(rt, rt.Obj_(Obj.TyTset), two, x);
+        o.Append("|").Append(rt.thrown).Append("| ");
+
+        o.Append(TransientDissoc(rt, tm, x).ToString("x")).Append(' ')
+         .Append(TransientDissoc(rt, rt.Obj_(Obj.TyTset), x).ToString("x")).Append(' ');
+        rt.thrown = "";
+        TransientDissoc(rt, tv, x);
+        o.Append("|").Append(rt.thrown).Append("| ");
+
+        o.Append(TransientPop(rt, tv).ToString("x")).Append(' ');
+        rt.tvn = 0;
+        rt.thrown = "";
+        TransientPop(rt, tv);
+        o.Append("|").Append(rt.thrown).Append("| ");
+        rt.tvn = 3;
+        rt.thrown = "";
+        TransientPop(rt, tm);
+        o.Append("|").Append(rt.thrown).Append("|");
+        System.Console.WriteLine(o.ToString());
+    }
