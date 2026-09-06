@@ -1,0 +1,115 @@
+;; Replacing a row, appending one, and taking a slice.
+;;
+;; `assoc` MAY APPEND AT `count`, the same rule a vector follows, so nothing
+;; new has to be learned to grow a table. Anything else in range replaces.
+;;
+;; THE INDEX IS AN `I64` AND NOT AN `I32`, and that is the whole reason these
+;; two waited. `I32` promises its high bit is clear, which is what lets Rust
+;; spell it `u32`; a row index a PROGRAM supplied has made no such promise.
+;; `(assoc t -1 row)` is a thing to refuse, and refusing it means being able to
+;; hold it.
+(ns flint.rt.tablerow
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < > >= + - not and or bit-and ushr
+                                   alloc heap slot set-slot fixnum to-i32 to-i64
+                                   vec-count vec-nth vec-conj vec-assoc empty-vec
+                                   new-obj is-int i64-of kind-of check-row
+                                   mark push r set-r pop-to for local set
+                                   throw-str str-cat static-text
+                                   Rt Value I32 I64 RootIx Text Bool NIL
+                                   TY_NODE TY_TABLE CHUNK CHUNK_SHIFT CH_BASE
+                                   TB_SCHEMA TB_CHUNKS TB_COUNT TB_OFFSET TB_LEN]]
+            [flint.rt.tablemeta :refer [schema-len schema-width schema-id-at
+                                        table-count table-offset]]
+            [flint.rt.tablecell :refer [new-chunk collapse]]
+            [flint.rt.tablefill :refer [write-row chunk-with-row]]
+            [flint.rt.tablesay :refer [kw-name]]
+            [flint.rt.tablebuild :refer [new-table]]))
+
+(doc "`(assoc table i row)`. `i` may be `count`, which appends.")
+(defn ^:pub ^:method ^Value table-assoc [^:mut ^Rt rt ^Value t ^Value k ^Value row]
+  (if (not (is-int rt k))
+    (do
+      (comment "NOT A ROW NUMBER AT ALL. The message says what the key WAS and"
+               "what to write instead, because reaching for a column by name is"
+               "the mistake this refusal is almost always catching.")
+      (let [^Value kind (kind-of rt k)
+            ^Text kn (kw-name rt kind)]
+        (return (throw-str rt "IllegalArgumentException"
+                           (str-cat (static-text "a table is indexed by row number and this key is a ")
+                                    kn
+                                    (static-text "; to reach a column, index the row first: (assoc-in t [row :column] v)")))))))
+  (let [^I64 i (i64-of rt k)
+        ^I64 n (to-i64 (table-count rt t))]
+    (comment "`i < 0` IS A LIVE TEST HERE and not the dead one the `I32` trap"
+             "makes of it: `i` is an `I64`, signed in all three runtimes, and"
+             "a program may genuinely hand over -1.")
+    (if (or (< i 0) (> i n))
+      (return (throw-str rt "IndexOutOfBoundsException"
+                         (str-cat (static-text "row ") i
+                                  (static-text " is out of range for a table of ") n
+                                  (static-text " rows; assoc may replace any row or append at ") n))))
+    (let [^RootIx base (mark rt)
+          ^RootIx ti (push rt t)
+          ^RootIx ri (push rt row)
+          ^Value sch (slot rt (r rt ti) TB_SCHEMA)
+          ^RootIx si (push rt sch)]
+      (if (not (check-row rt (r rt si) (r rt ri) (to-i32 i)))
+        (do (pop-to rt base)
+            (return NIL)))
+      (let [^I32 idx (to-i32 i)
+            ^Value chunks (slot rt (r rt ti) TB_CHUNKS)
+            ^RootIx ci (push rt chunks)
+            ^I32 phys (+ idx (table-offset rt (r rt ti)))
+            ^I32 which (ushr phys CHUNK_SHIFT)
+            ^I32 within (bit-and phys (- CHUNK 1))
+            ^Bool append (== idx (table-count rt (r rt ti)))
+            ^I32 nchunks (vec-count rt (r rt ci))]
+        (if (and append (>= which nchunks))
+          (do
+            (comment "A NEW CHUNK, one row wide. `chunk-with-row` grows an"
+                     "existing one; an empty table has none to grow.")
+            (let [^I32 w (schema-width rt (r rt si))
+                  ^Value ch (new-chunk rt w 1)
+                  ^RootIx chi (push rt ch)
+                  ^I32 ncols (schema-len rt (r rt si))]
+              (for [^I32 c 0 ncols]
+                (let [^I32 id (schema-id-at rt (r rt si) c)
+                      ^Value col (new-obj rt TY_NODE 1)]
+                  (set-slot rt (r rt chi) (+ CH_BASE id) col)))
+              (write-row rt (r rt si) (r rt chi) 0 (r rt ri))
+              (comment "A ONE-ROW COLUMN IS TRIVIALLY CONSTANT, so a table grown"
+                       "row by row starts every chunk collapsed and expands only"
+                       "where the rows actually differ. Skipping this would make"
+                       "the append path the one path that never encodes.")
+              (for [^I32 c 0 ncols]
+                (let [^I32 id (schema-id-at rt (r rt si) c)]
+                  (collapse rt (r rt chi) id)))
+              (let [^Value nv (vec-conj rt (r rt ci) (r rt chi))]
+                (set-r rt ci nv))
+              (pop-to rt chi)))
+          (do
+            (let [^Value ch (vec-nth rt (r rt ci) which NIL)
+                  ^RootIx chi (push rt ch)
+                  ^Value nch (chunk-with-row rt (r rt si) (r rt chi) within (r rt ri) append)
+                  ^RootIx nj (push rt nch)
+                  ^Value nv (vec-assoc rt (r rt ci) which (r rt nj))]
+              (set-r rt ci nv)
+              (pop-to rt chi))))
+        (local ^:mut ^I32 count)
+        (set count (table-count rt (r rt ti)))
+        (if append (set count (+ count 1)))
+        (let [^Value nt (heap (alloc rt TY_TABLE TB_LEN))
+              ^RootIx ni (push rt nt)]
+          (set-slot rt (r rt ni) TB_SCHEMA (r rt si))
+          (set-slot rt (r rt ni) TB_CHUNKS (r rt ci))
+          (set-slot rt (r rt ni) TB_COUNT (fixnum count))
+          (set-slot rt (r rt ni) TB_OFFSET (slot rt (r rt ti) TB_OFFSET))
+          (let [^Value out (r rt ni)]
+            (pop-to rt base)
+            (return out)))))))
+
+(doc "`(conj table row)` -- appending is `assoc` at `count`.")
+(defn ^:pub ^:method ^Value table-conj [^:mut ^Rt rt ^Value t ^Value row]
+  (let [^I32 n (table-count rt t)]
+    (return (table-assoc rt t (fixnum n) row))))

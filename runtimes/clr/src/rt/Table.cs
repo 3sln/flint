@@ -49,6 +49,10 @@ public static class Table {
     // Row-ref slots, and the transient's.
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // ROWS IN AND OUT, generated from `kin/tablerow.kin`.
+    public static long tableAssoc(Rt rt, long t, long k, long row) { return global::_3sln.Flint.Kgen.Rt.Tablerow.TableAssoc(rt, t, k, row); }
+    public static long tableConj(Rt rt, long t, long row) { return global::_3sln.Flint.Kgen.Rt.Tablerow.TableConj(rt, t, row); }
+
     // MIGRATION, generated from `kin/tablemigrate.kin`.
     static long rebaseSchema(Rt rt, long have, long want) { return global::_3sln.Flint.Kgen.Rt.Tablemigrate.RebaseSchema(rt, have, want); }
     public static long tableMigrate(Rt rt, long t, long want, long defaults) { return global::_3sln.Flint.Kgen.Rt.Tablemigrate.TableMigrate(rt, t, want, defaults); }
@@ -125,79 +129,6 @@ public static class Table {
     static long emptyVec(Rt rt) { return Vec.Empty(rt); }
     static long emptyMap(Rt rt) { return Maps.Empty(rt); }
     static void set(Rt rt, long obj, int i, long v) { rt.SetSlot(Val.AsHeap(obj), i, v); }
-
-    /// `(assoc table i row)`. `i` may be `count`, which appends -- the same
-    /// rule a vector follows, so nothing new has to be learned to grow one.
-    public static long tableAssoc(Rt rt, long t, long k, long row) {
-        long? ix = Num.IsInt(rt, k) ? Val.AsFixnum(k) : (long?) null;
-        if (ix == null) {
-            string kn = kwName(rt, rt.KindOf(k));
-            return rt.ThrowStr("IllegalArgumentException",
-                "a table is indexed by row number and this key is a " + kn
-                + "; to reach a column, index the row first: (assoc-in t [row :column] v)");
-        }
-        long i = ix.Value;
-        int n = tableCount(rt, t);
-        if (i < 0 || i > n) {
-            return rt.ThrowStr("IndexOutOfBoundsException", "row " + i
-                + " is out of range for a table of " + n
-                + " rows; assoc may replace any row or append at " + n);
-        }
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        int ri = rt.Push(row);
-        int si = rt.Push(rt.Slot(rt.R(ti), TB_SCHEMA));
-        if (!checkRow(rt, rt.R(si), rt.R(ri), (int) i)) { rt.PopTo(bas); return Val.Nil; }
-        int idx = (int) i;
-        int ci = rt.Push(rt.Slot(rt.R(ti), TB_CHUNKS));
-        int phys = idx + tableOffset(rt, rt.R(ti));
-        int which = phys >> CHUNK_SHIFT, within = phys & (CHUNK - 1);
-        bool append = idx == tableCount(rt, rt.R(ti));
-        int nchunks = Vec.Count(rt, rt.R(ci));
-        if (append && which >= nchunks) {
-            // A new chunk, one row wide: `chunkWithRow` grows an existing one,
-            // and an empty table has none to grow.
-            int width = schemaWidth(rt, rt.R(si));
-            long ch = newChunk(rt, width, 1);
-            int chi = rt.Push(ch);
-            int ncols = schemaLen(rt, rt.R(si));
-            for (int c = 0; c < ncols; c++)
-                {
-                    // HOISTED: the allocation must happen before the object's
-                    // address is read, or the write lands on a forwarded copy.
-                    long col1 = Conc.NewObj(rt, Obj.TyNode, 1);
-                    set(rt, rt.R(chi), CH_BASE + schemaIdAt(rt, rt.R(si), c), col1);
-                }
-            writeRow(rt, rt.R(si), rt.R(chi), 0, rt.R(ri));
-            // A one-row column is trivially constant, so a table grown row by
-            // row starts every chunk collapsed.
-            for (int c = 0; c < ncols; c++) collapse(rt, rt.R(chi), schemaIdAt(rt, rt.R(si), c));
-            rt.SetR(ci, Vec.Conj(rt, rt.R(ci), rt.R(chi)));
-            rt.PopTo(chi);
-        } else {
-            long ch = Vec.Nth(rt, rt.R(ci), which, Val.NotFound);
-            int chi = rt.Push(ch);
-            long nch = chunkWithRow(rt, rt.R(si), rt.R(chi), within, rt.R(ri), append);
-            int nj = rt.Push(nch);
-            rt.SetR(ci, Vec.Assoc(rt, rt.R(ci), which, rt.R(nj)));
-            rt.PopTo(chi);
-        }
-        int count = tableCount(rt, rt.R(ti)) + (append ? 1 : 0);
-        long nt = Conc.NewObj(rt, Obj.TyTable, TB_LEN);
-        int ni = rt.Push(nt);
-        set(rt, rt.R(ni), TB_SCHEMA, rt.R(si));
-        set(rt, rt.R(ni), TB_CHUNKS, rt.R(ci));
-        set(rt, rt.R(ni), TB_COUNT, Val.Fixnum(count));
-        set(rt, rt.R(ni), TB_OFFSET, rt.Slot(rt.R(ti), TB_OFFSET));
-        long outv = rt.R(ni);
-        rt.PopTo(bas);
-        return outv;
-    }
-
-    /// `(conj table row)` -- append, which is `assoc` at the end.
-    public static long tableConj(Rt rt, long t, long row) {
-        return tableAssoc(rt, t, Val.Fixnum(tableCount(rt, t)), row);
-    }
 
     // --- migration ----------------------------------------------------------
     //

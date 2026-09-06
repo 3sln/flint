@@ -47,6 +47,17 @@ public final class Num {
     /// The integer value, or `null` if this is not an integer. Boxed because
     /// "not an integer" and "the integer 0" must be distinguishable, and that
     /// distinction is what drives every promotion below.
+    /// The integer value, or 0 when `v` is not an integer.
+    ///
+    /// The TOTAL form, for callers that have already asked `isInt`. They were
+    /// reaching for `Val.asFixnum` instead, which reads the tagged payload and
+    /// is simply the wrong bits for a BIGINT -- `Table.tableAssoc` did exactly
+    /// that with the row index it then put in an error message.
+    public static long i64Of(Rt rt, long v) {
+        Long n = asI64(rt, v);
+        return n == null ? 0L : n;
+    }
+
     public static Long asI64(Rt rt, long v) {
         if (Val.isFixnum(v)) return Val.asFixnum(v);
         if (Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_BIGINT) {

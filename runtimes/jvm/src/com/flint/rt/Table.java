@@ -56,6 +56,10 @@ public final class Table {
     // Row-ref slots, and the transient's.
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // ROWS IN AND OUT, generated from `kin/tablerow.kin`.
+    public static long tableAssoc(Rt rt, long t, long k, long row) { return com._3sln.flint.kgen.rt.Tablerow.tableAssoc(rt, t, k, row); }
+    public static long tableConj(Rt rt, long t, long row) { return com._3sln.flint.kgen.rt.Tablerow.tableConj(rt, t, row); }
+
     // MIGRATION, generated from `kin/tablemigrate.kin`.
     static long rebaseSchema(Rt rt, long have, long want) { return com._3sln.flint.kgen.rt.Tablemigrate.rebaseSchema(rt, have, want); }
     public static long tableMigrate(Rt rt, long t, long want, long defaults) { return com._3sln.flint.kgen.rt.Tablemigrate.tableMigrate(rt, t, want, defaults); }
@@ -134,79 +138,6 @@ public final class Table {
     static long emptyVec(Rt rt) { return Vec.empty(rt); }
     static long emptyMap(Rt rt) { return Maps.empty(rt); }
     static void set(Rt rt, long obj, int i, long v) { rt.setSlot(Val.asHeap(obj), i, v); }
-
-    /// `(assoc table i row)`. `i` may be `count`, which appends -- the same
-    /// rule a vector follows, so nothing new has to be learned to grow one.
-    public static long tableAssoc(Rt rt, long t, long k, long row) {
-        Long ix = Num.isInt(rt, k) ? Val.asFixnum(k) : null;
-        if (ix == null) {
-            String kn = kwName(rt, rt.kindOf(k));
-            return rt.throwStr("IllegalArgumentException",
-                "a table is indexed by row number and this key is a " + kn
-                + "; to reach a column, index the row first: (assoc-in t [row :column] v)");
-        }
-        long i = ix;
-        int n = tableCount(rt, t);
-        if (i < 0 || i > n) {
-            return rt.throwStr("IndexOutOfBoundsException", "row " + i
-                + " is out of range for a table of " + n
-                + " rows; assoc may replace any row or append at " + n);
-        }
-        int base = rt.mark();
-        int ti = rt.push(t);
-        int ri = rt.push(row);
-        int si = rt.push(rt.slot(rt.r(ti), TB_SCHEMA));
-        if (!checkRow(rt, rt.r(si), rt.r(ri), (int) i)) { rt.popTo(base); return Val.NIL; }
-        int idx = (int) i;
-        int ci = rt.push(rt.slot(rt.r(ti), TB_CHUNKS));
-        int phys = idx + tableOffset(rt, rt.r(ti));
-        int which = phys >> CHUNK_SHIFT, within = phys & (CHUNK - 1);
-        boolean append = idx == tableCount(rt, rt.r(ti));
-        int nchunks = Vec.count(rt, rt.r(ci));
-        if (append && which >= nchunks) {
-            // A new chunk, one row wide: `chunkWithRow` grows an existing one,
-            // and an empty table has none to grow.
-            int width = schemaWidth(rt, rt.r(si));
-            long ch = newChunk(rt, width, 1);
-            int chi = rt.push(ch);
-            int ncols = schemaLen(rt, rt.r(si));
-            for (int c = 0; c < ncols; c++)
-                {
-                    // HOISTED: the allocation must happen before the object's
-                    // address is read, or the write lands on a forwarded copy.
-                    long col1 = Conc.newObj(rt, TY_NODE, 1);
-                    set(rt, rt.r(chi), CH_BASE + schemaIdAt(rt, rt.r(si), c), col1);
-                }
-            writeRow(rt, rt.r(si), rt.r(chi), 0, rt.r(ri));
-            // A one-row column is trivially constant, so a table grown row by
-            // row starts every chunk collapsed.
-            for (int c = 0; c < ncols; c++) collapse(rt, rt.r(chi), schemaIdAt(rt, rt.r(si), c));
-            rt.setR(ci, Vec.conj(rt, rt.r(ci), rt.r(chi)));
-            rt.popTo(chi);
-        } else {
-            long ch = Vec.nth(rt, rt.r(ci), which, Val.NOT_FOUND);
-            int chi = rt.push(ch);
-            long nch = chunkWithRow(rt, rt.r(si), rt.r(chi), within, rt.r(ri), append);
-            int nj = rt.push(nch);
-            rt.setR(ci, Vec.assoc(rt, rt.r(ci), which, rt.r(nj)));
-            rt.popTo(chi);
-        }
-        int count = tableCount(rt, rt.r(ti)) + (append ? 1 : 0);
-        long nt = Conc.newObj(rt, TY_TABLE, TB_LEN);
-        int ni = rt.push(nt);
-        set(rt, rt.r(ni), TB_SCHEMA, rt.r(si));
-        set(rt, rt.r(ni), TB_CHUNKS, rt.r(ci));
-        set(rt, rt.r(ni), TB_COUNT, Val.fixnum(count));
-        set(rt, rt.r(ni), TB_OFFSET, rt.slot(rt.r(ti), TB_OFFSET));
-        long out = rt.r(ni);
-        rt.popTo(base);
-        return out;
-    }
-
-    /// `(conj table row)` -- append, which is `assoc` at the end.
-    public static long tableConj(Rt rt, long t, long row) {
-        return tableAssoc(rt, t, Val.fixnum(tableCount(rt, t)), row);
-    }
 
     // --- migration ----------------------------------------------------------
     //

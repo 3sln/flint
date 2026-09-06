@@ -43,6 +43,16 @@
   {:name 'Cat :types {:rust "u8" :java "int" :csharp "int"} :methods {}})
 
 (def Bool {:name 'Bool :types {:rust "bool" :java "boolean" :csharp "bool"} :methods {}})
+
+(def I64
+  "A SIGNED 64-bit integer, and the only signed number type here.
+
+  `I32` promises its high bit is clear, which is what lets Rust spell it `u32`
+  where the ports say `int`. A row index that a program supplied has made no
+  such promise: `(assoc t -1 row)` is a thing to REFUSE, and refusing it means
+  being able to hold it. Rust `i64`, both ports `long`, and the three agree
+  about ordering, division and printing over the whole range."
+  {:name 'I64 :types {:rust "i64" :java "long" :csharp "long"} :methods {}})
 (def I32
   "A 32-bit integer whose high bit is never set: an index, a count, a shift.
 
@@ -161,7 +171,7 @@
   pointer."
   {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
 
-(def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'U32 U32 'RootIx RootIx
+(def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'I64 I64 'U32 U32 'RootIx RootIx
                'Text Text 'StaticText StaticText 'Sink Sink 'Walk Walk
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'U32s U32s 'U64s U64s 'Interns Interns})
 
@@ -529,6 +539,15 @@
     ;; printer dispatches on this, and with `is-fixnum` the bits of 1.5 printed
     ;; as `#<unprintable>` rather than as 4609434218613702656, because a bigint
     ;; fell through every arm.
+    ;; THE INTEGER VALUE, given it IS one. `as-i64` answers `Option`/`Long` in
+    ;; the three runtimes and the shapes do not converge; this is the total
+    ;; form its callers actually want, and it answers 0 for a non-integer
+    ;; because every one of them has asked `is-int` first.
+    'i64-of (core/call {:rust "{0}.i64_of({1})"
+                        :java "Num.i64Of({0}, {1})" :csharp "Num.I64Of({0}, {1})"}
+                       {:tag I64})
+    'to-i64 (core/call {:rust "({0} as i64)" :java "((long) {0})" :csharp "((long) {0})"}
+                       {:tag I64})
     'is-int (core/call {:rust "{0}.is_int({1})"
                         :java "Num.isInt({0}, {1})" :csharp "Num.IsInt({0}, {1})"}
                        {:tag Bool})
@@ -864,6 +883,7 @@
     ;; generated a call that does not compile the moment a source used it.
     'vec-nth (sibling "vec_nth" "Vec" "nth" 3)
     'vec-conj (sibling "vec_conj" "Vec" "conj" 2)
+    'vec-assoc (sibling "vec_assoc" "Vec" "assoc" 3)
     'is-vector-like (sibling "is_vector_like" "Vec" "isVectorLike" "IsVectorLike" 1)
     'vec-pop (sibling "vec_pop" "Vec" "pop" 1)
     ;; The CHARACTER lookup, with the same `dflt` shape. Rust calls it

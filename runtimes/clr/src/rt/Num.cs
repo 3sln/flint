@@ -45,6 +45,12 @@ public static class Num {
     /// The integer value, or `null` if this is not an integer. Boxed because
     /// "not an integer" and "the integer 0" must be distinguishable, and that
     /// distinction is what drives every promotion below.
+    /// The integer value, or 0 when `v` is not an integer -- see the Java copy.
+    public static long I64Of(Rt rt, long v) {
+        long? n = AsI64(rt, v);
+        return n.HasValue ? n.Value : 0L;
+    }
+
     public static long? AsI64(Rt rt, long v) {
         if (Val.IsFixnum(v)) return Val.AsFixnum(v);
         if (Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyBigint) {

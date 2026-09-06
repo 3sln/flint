@@ -45,6 +45,13 @@ impl Rt {
     }
 
     #[inline]
+    /// The integer value, or 0 when `v` is not an integer. The TOTAL form,
+    /// for callers that have already asked `is_int` -- see the Java copy for
+    /// what the ports were doing instead.
+    pub fn i64_of(&self, v: Value) -> i64 {
+        self.as_i64(v).unwrap_or(0)
+    }
+
     pub fn as_i64(&self, v: Value) -> Option<i64> {
         if v.is_fixnum() {
             Some(v.as_fixnum())
