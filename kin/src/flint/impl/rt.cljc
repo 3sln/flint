@@ -864,6 +864,7 @@
     ;; generated a call that does not compile the moment a source used it.
     'vec-nth (sibling "vec_nth" "Vec" "nth" 3)
     'vec-conj (sibling "vec_conj" "Vec" "conj" 2)
+    'is-vector-like (sibling "is_vector_like" "Vec" "isVectorLike" "IsVectorLike" 1)
     'vec-pop (sibling "vec_pop" "Vec" "pop" 1)
     ;; The CHARACTER lookup, with the same `dflt` shape. Rust calls it
     ;; `char_at`; both ports call it `Str.nth`, camel on the JVM and Pascal on
@@ -1078,6 +1079,14 @@
     ;; proportional to work, and a loop that scans a leaf has done work whether
     ;; it was written by hand or not. `charge-bytes` is the same charge divided
     ;; by eight, which every runtime already spells for itself.
+    ;; CHARGE AND REFUSE. `charge-work` cannot fail; this one answers false
+    ;; when the budget is gone, and the caller unwinds. `0009` wants the two
+    ;; kept apart: a scan that is bounded charges, and one that is not has to
+    ;; be stoppable.
+    'charge-checked (core/call {:rust "{0}.charge_checked({1} as u64, {2})"
+                                :java "{0}.chargeChecked({1}, {2})"
+                                :csharp "{0}.ChargeChecked({1}, {2})"}
+                               {:tag Bool})
     'charge-work (core/call {:rust "{0}.charge_work({1} as u64)"
                              :java "{0}.chargeWork({1})" :csharp "{0}.ChargeWork({1})"})
     'charge-bytes (core/call {:rust "{0}.charge_bytes({1})"

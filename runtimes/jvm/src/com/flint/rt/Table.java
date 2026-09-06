@@ -56,6 +56,11 @@ public final class Table {
     // Row-ref slots, and the transient's.
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // MAKING A SCHEMA and reading a column, generated from `kin/tablemake.kin`.
+    public static long newSchema(Rt rt, long pairs) { return com._3sln.flint.kgen.rt.Tablemake.newSchema(rt, pairs); }
+    public static long refAssoc(Rt rt, long r, long k, long v) { return com._3sln.flint.kgen.rt.Tablemake.refAssoc(rt, r, k, v); }
+    public static long tableColumn(Rt rt, long t, long name) { return com._3sln.flint.kgen.rt.Tablemake.tableColumn(rt, t, name); }
+
     // THE CLOSED SET of `0005`, generated from `kin/tablekind.kin`.
     static boolean knownType(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tablekind.knownType(rt, t); }
     public static boolean typeOk(Rt rt, long t, long v) { return com._3sln.flint.kgen.rt.Tablekind.typeOk(rt, t, v); }
@@ -121,59 +126,6 @@ public final class Table {
     static long emptyVec(Rt rt) { return Vec.empty(rt); }
     static long emptyMap(Rt rt) { return Maps.empty(rt); }
     static void set(Rt rt, long obj, int i, long v) { rt.setSlot(Val.asHeap(obj), i, v); }
-
-    /// `[[name type] ...]` -> a schema. Names must be keywords and DISTINCT --
-    /// two columns of one name would make `get` ambiguous and the index would
-    /// silently keep the later one.
-    public static long newSchema(Rt rt, long pairs) {
-        int base = rt.mark();
-        int pi = rt.push(pairs);
-        int n = Vec.count(rt, rt.r(pi));
-        int ni = rt.push(emptyVec(rt));
-        int ti = rt.push(emptyVec(rt));
-        int ii = rt.push(emptyMap(rt));
-        int di = rt.push(emptyVec(rt));
-        for (int i = 0; i < n; i++) {
-            long pair = Vec.nth(rt, rt.r(pi), i, Val.NOT_FOUND);
-            if (!rt.typeP(8, pair) || Vec.count(rt, pair) != 2) {
-                rt.popTo(base);
-                return rt.throwStr("IllegalArgumentException",
-                    "a schema is [[name type] ...]; this entry is not a name and a type");
-            }
-            long nm = Vec.nth(rt, pair, 0, Val.NOT_FOUND), tp = Vec.nth(rt, pair, 1, Val.NOT_FOUND);
-            if (!rt.typeP(5, nm)) {
-                rt.popTo(base);
-                return rt.throwStr("IllegalArgumentException", "a column name must be a keyword");
-            }
-            if (!knownType(rt, tp)) {
-                String shown = kwName(rt, tp);
-                rt.popTo(base);
-                return rt.throwStr("IllegalArgumentException",
-                    "no such column type :" + shown
-                        + "; the types are :int :double :string :bool :keyword :any");
-            }
-            if (!Val.isNil(Mapread.mapGet(rt, rt.r(ii), nm, Val.NIL))) {
-                String shown = kwName(rt, nm);
-                rt.popTo(base);
-                return rt.throwStr("IllegalArgumentException",
-                    "the column :" + shown + " is named twice");
-            }
-            rt.setR(ni, Vec.conj(rt, rt.r(ni), nm));
-            rt.setR(ti, Vec.conj(rt, rt.r(ti), tp));
-            rt.setR(ii, Mapwrite.mapAssoc(rt, rt.r(ii), nm, Val.fixnum(i)));
-            rt.setR(di, Vec.conj(rt, rt.r(di), Val.fixnum(i)));
-        }
-        long s = Conc.newObj(rt, TY_SCHEMA, SC_LEN);
-        int si = rt.push(s);
-        set(rt, rt.r(si), SC_NAMES, rt.r(ni));
-        set(rt, rt.r(si), SC_TYPES, rt.r(ti));
-        set(rt, rt.r(si), SC_INDEX, rt.r(ii));
-        set(rt, rt.r(si), SC_IDS, rt.r(di));
-        set(rt, rt.r(si), SC_WIDTH, Val.fixnum(n));
-        long out = rt.r(si);
-        rt.popTo(base);
-        return out;
-    }
 
     /// Build a table from `rows`, a vector of maps.
     public static long newTable(Rt rt, long schema, long rows) {
@@ -302,19 +254,6 @@ public final class Table {
         return tableAssoc(rt, t, Val.fixnum(tableCount(rt, t)), row);
     }
 
-    /// `(assoc row-ref k v)` -> a MAP. A ref is a VIEW; changing it makes an
-    /// independent value and neither the chunk nor the table moves.
-    public static long refAssoc(Rt rt, long r, long k, long v) {
-        int base = rt.mark();
-        int ri = rt.push(r);
-        int ki = rt.push(k);
-        int vi = rt.push(v);
-        long m = refToMap(rt, rt.r(ri));
-        int mi = rt.push(m);
-        long out = Mapwrite.mapAssoc(rt, rt.r(mi), rt.r(ki), rt.r(vi));
-        rt.popTo(base);
-        return out;
-    }
     // --- migration ----------------------------------------------------------
     //
     // A schema change makes a NEW TABLE. What makes it cheap is that a chunk
@@ -479,29 +418,6 @@ public final class Table {
         set(rt, rt.r(ni), TB_COUNT, Val.fixnum(to - from));
         set(rt, rt.r(ni), TB_OFFSET, Val.fixnum((off + (int) from) & (CHUNK - 1)));
         long out = rt.r(ni);
-        rt.popTo(base);
-        return out;
-    }
-
-    /// One column, as a vector. Reads the column runs directly -- no row is
-    /// built and no ref is made.
-    public static long tableColumn(Rt rt, long t, long name) {
-        int base = rt.mark();
-        int ti = rt.push(t);
-        long s = rt.slot(rt.r(ti), TB_SCHEMA);
-        int id = schemaId(rt, s, name);
-        if (id >= schemaWidth(rt, s)) {
-            String nm = kwName(rt, name), cols = columnList(rt, s);
-            rt.popTo(base);
-            return rt.throwStr("IllegalArgumentException",
-                "no column :" + nm + "; the columns are " + cols);
-        }
-        int n = tableCount(rt, rt.r(ti));
-        if (!rt.chargeChecked(n, "column")) { rt.popTo(base); return Val.NIL; }
-        int oi = rt.push(emptyVec(rt));
-        for (int i = 0; i < n; i++)
-            rt.setR(oi, Vec.conj(rt, rt.r(oi), tableCell(rt, rt.r(ti), id, i)));
-        long out = rt.r(oi);
         rt.popTo(base);
         return out;
     }

@@ -57,6 +57,18 @@ public final class Vec {
     /// thing that only has to be got right once.
 
 
+    /// `vector?` AS THE GUEST SEES IT, which includes a MAP ENTRY.
+    ///
+    /// The ports had this only as `rt.typeP(8, v)` -- a magic number in a
+    /// dispatch switch -- and `new_schema` in Rust used the STRICTER
+    /// `is_vector`, so a schema whose pairs came from a map's `seq` was
+    /// accepted here and refused there.
+    public static boolean isVectorLike(Rt rt, long v) {
+        if (!Val.isHeap(v)) return false;
+        int t = Obj.ty(rt.gc.sp, Val.asHeap(v));
+        return t == Obj.TY_VEC || t == Obj.TY_MAPENTRY;
+    }
+
     public static long empty(Rt rt) {
         long sg = rt.roots.shared.singletons[Rt.SING_EMPTY_VEC];
         if (!Val.isNil(sg)) return sg;

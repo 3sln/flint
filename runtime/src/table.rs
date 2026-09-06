@@ -99,83 +99,6 @@ pub const RF_ROW: u32 = 2;
 pub const RF_LEN: u32 = 3;
 
 impl Rt {
-    /// `[[name type] …]` -> a schema. The names must be keywords and distinct;
-    /// the types must be ones `type_ok` knows.
-    pub fn new_schema(&mut self, pairs: Value) -> Value {
-        let base = self.mark();
-        let pi = self.push(pairs);
-        let n = self.vec_count(self.r(pi));
-        let names = self.empty_vec();
-        let ni = self.push(names);
-        let types = self.empty_vec();
-        let ti = self.push(types);
-        let idx = self.empty_map();
-        let ii = self.push(idx);
-        let ids = self.empty_vec();
-        let di = self.push(ids);
-        for i in 0..n {
-            let pair = self.vec_nth(self.r(pi), i, NIL);
-            let pj = self.push(pair);
-            if !self.is_vector(self.r(pj)) || self.vec_count(self.r(pj)) != 2 {
-                self.pop_to(base);
-                return self.throw_str(
-                    "IllegalArgumentException",
-                    "a schema is [[name type] ...]; this entry is not a name and a type",
-                );
-            }
-            let nm = self.vec_nth(self.r(pj), 0, NIL);
-            let tp = self.vec_nth(self.r(pj), 1, NIL);
-            if !self.is_keyword(nm) {
-                self.pop_to(base);
-                return self
-                    .throw_str("IllegalArgumentException", "a column name must be a keyword");
-            }
-            if !self.known_type(tp) {
-                let mut b = crate::rt::sbuf();
-                let shown: alloc::string::String =
-                    { let __n = self.name_of(tp); self.as_str(__n, &mut b) }.unwrap_or("?").into();
-                self.pop_to(base);
-                let msg = alloc::format!(
-                    "no such column type :{shown}; the types are \
-                     :int :double :string :bool :keyword :any"
-                );
-                return self.throw_str("IllegalArgumentException", &msg);
-            }
-            // DISTINCT, because two columns of one name would make `get`
-            // ambiguous and the index silently keep only the later one.
-            let seen = self.map_get(self.r(ii), nm, NIL);
-            if !seen.is_nil() {
-                let mut b = crate::rt::sbuf();
-                let shown: alloc::string::String =
-                    { let __n = self.name_of(nm); self.as_str(__n, &mut b) }.unwrap_or("?").into();
-                self.pop_to(base);
-                let msg = alloc::format!("the column :{shown} is named twice");
-                return self.throw_str("IllegalArgumentException", &msg);
-            }
-            let nv = self.vec_conj(self.r(ni), nm);
-            self.set_r(ni, nv);
-            let tv = self.vec_conj(self.r(ti), tp);
-            self.set_r(ti, tv);
-            let m = self.map_assoc(self.r(ii), nm, Value::fixnum(i as i64));
-            self.set_r(ii, m);
-            let dv = self.vec_conj(self.r(di), Value::fixnum(i as i64));
-            self.set_r(di, dv);
-            self.pop_to(pj);
-        }
-        let a = self.alloc(TY_SCHEMA, SC_LEN);
-        let s = Value::heap(a);
-        let si = self.push(s);
-        let (nv, tv, iv, dv) = (self.r(ni), self.r(ti), self.r(ii), self.r(di));
-        self.set(self.r(si), SC_NAMES, nv);
-        self.set(self.r(si), SC_TYPES, tv);
-        self.set(self.r(si), SC_INDEX, iv);
-        self.set(self.r(si), SC_IDS, dv);
-        self.set(self.r(si), SC_WIDTH, Value::fixnum(n as i64));
-        let out = self.r(si);
-        self.pop_to(base);
-        out
-    }
-
     /// Build a table from `rows`, a vector of maps. Every row must have exactly
     /// the schema's columns, with values of the declared types -- and the
     /// refusal NAMES what was wrong, because "bad row" is the message this
@@ -364,23 +287,6 @@ impl Rt {
     pub fn table_conj(&mut self, t: Value, row: Value) -> Value {
         let n = self.table_count(t) as i64;
         self.table_assoc(t, Value::fixnum(n), row)
-    }
-
-    /// `(assoc row-ref k v)` -> a MAP. A ref is a VIEW; changing it makes an
-    /// independent value and neither the chunk nor the table it came from
-    /// moves (`doc/decisions/0026`). The schema does not constrain the result,
-    /// because the result is no longer a row.
-    pub fn ref_assoc(&mut self, r: Value, k: Value, v: Value) -> Value {
-        let base = self.mark();
-        let ri = self.push(r);
-        let ki = self.push(k);
-        let vi = self.push(v);
-        let m = self.ref_to_map(self.r(ri));
-        let mi = self.push(m);
-        let (mv, kv, vv) = (self.r(mi), self.r(ki), self.r(vi));
-        let out = self.map_assoc(mv, kv, vv);
-        self.pop_to(base);
-        out
     }
 
     // ---------------------------------------------------------------- step 6
@@ -637,38 +543,6 @@ impl Rt {
         let out = self.r(ni);
         self.pop_to(base);
         out
-    }
-
-    /// One column, as a vector. Reads the column runs directly -- no row is
-    /// built and no ref is made.
-    pub fn table_column(&mut self, t: Value, name: Value) -> Value {
-        let base = self.mark();
-        let ti = self.push(t);
-        let s = self.slot(self.r(ti), TB_SCHEMA);
-        let id = self.schema_id(s, name);
-        if id >= self.schema_width(s) {
-            let nm = self.kw_name(name);
-            let cols = self.column_list(s);
-            self.pop_to(base);
-            let msg = alloc::format!("no column :{nm}; the columns are {cols}");
-            return self.throw_str("IllegalArgumentException", &msg);
-        }
-        let id = id as u32;
-        let n = self.table_count(self.r(ti));
-        if !self.charge_checked(n as u64, "column") {
-            self.pop_to(base);
-            return NIL;
-        }
-        let out = self.empty_vec();
-        let oi = self.push(out);
-        for i in 0..n {
-            let v = self.table_cell(self.r(ti), id, i);
-            let nv = self.vec_conj(self.r(oi), v);
-            self.set_r(oi, nv);
-        }
-        let r = self.r(oi);
-        self.pop_to(base);
-        r
     }
 
     /// `(reduce-column t :col f init)` -- `f` over one column, without building

@@ -49,6 +49,11 @@ public static class Table {
     // Row-ref slots, and the transient's.
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // MAKING A SCHEMA and reading a column -- see the Java copy.
+    public static long newSchema(Rt rt, long pairs) { return global::_3sln.Flint.Kgen.Rt.Tablemake.NewSchema(rt, pairs); }
+    public static long refAssoc(Rt rt, long r, long k, long v) { return global::_3sln.Flint.Kgen.Rt.Tablemake.RefAssoc(rt, r, k, v); }
+    public static long tableColumn(Rt rt, long t, long name) { return global::_3sln.Flint.Kgen.Rt.Tablemake.TableColumn(rt, t, name); }
+
     // THE CLOSED SET of `0005`, generated from `kin/tablekind.kin`.
     static bool knownType(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tablekind.KnownType(rt, t); }
     public static bool typeOk(Rt rt, long t, long v) { return global::_3sln.Flint.Kgen.Rt.Tablekind.TypeOk(rt, t, v); }
@@ -112,59 +117,6 @@ public static class Table {
     static long emptyVec(Rt rt) { return Vec.Empty(rt); }
     static long emptyMap(Rt rt) { return Maps.Empty(rt); }
     static void set(Rt rt, long obj, int i, long v) { rt.SetSlot(Val.AsHeap(obj), i, v); }
-
-    /// `[[name type] ...]` -> a schema. Names must be keywords and DISTINCT --
-    /// two columns of one name would make `get` ambiguous and the index would
-    /// silently keep the later one.
-    public static long newSchema(Rt rt, long pairs) {
-        int bas = rt.Mark();
-        int pi = rt.Push(pairs);
-        int n = Vec.Count(rt, rt.R(pi));
-        int ni = rt.Push(emptyVec(rt));
-        int ti = rt.Push(emptyVec(rt));
-        int ii = rt.Push(emptyMap(rt));
-        int di = rt.Push(emptyVec(rt));
-        for (int i = 0; i < n; i++) {
-            long pair = Vec.Nth(rt, rt.R(pi), i, Val.NotFound);
-            if (!rt.TypeP(8, pair) || Vec.Count(rt, pair) != 2) {
-                rt.PopTo(bas);
-                return rt.ThrowStr("IllegalArgumentException",
-                    "a schema is [[name type] ...]; this entry is not a name and a type");
-            }
-            long nm = Vec.Nth(rt, pair, 0, Val.NotFound), tp = Vec.Nth(rt, pair, 1, Val.NotFound);
-            if (!rt.TypeP(5, nm)) {
-                rt.PopTo(bas);
-                return rt.ThrowStr("IllegalArgumentException", "a column name must be a keyword");
-            }
-            if (!knownType(rt, tp)) {
-                string shown = kwName(rt, tp);
-                rt.PopTo(bas);
-                return rt.ThrowStr("IllegalArgumentException",
-                    "no such column type :" + shown
-                        + "; the types are :int :double :string :bool :keyword :any");
-            }
-            if (!Val.IsNil(Mapread.MapGet(rt, rt.R(ii), nm, Val.Nil))) {
-                string shown = kwName(rt, nm);
-                rt.PopTo(bas);
-                return rt.ThrowStr("IllegalArgumentException",
-                    "the column :" + shown + " is named twice");
-            }
-            rt.SetR(ni, Vec.Conj(rt, rt.R(ni), nm));
-            rt.SetR(ti, Vec.Conj(rt, rt.R(ti), tp));
-            rt.SetR(ii, Mapwrite.MapAssoc(rt, rt.R(ii), nm, Val.Fixnum(i)));
-            rt.SetR(di, Vec.Conj(rt, rt.R(di), Val.Fixnum(i)));
-        }
-        long s = Conc.NewObj(rt, Obj.TySchema, SC_LEN);
-        int si = rt.Push(s);
-        set(rt, rt.R(si), SC_NAMES, rt.R(ni));
-        set(rt, rt.R(si), SC_TYPES, rt.R(ti));
-        set(rt, rt.R(si), SC_INDEX, rt.R(ii));
-        set(rt, rt.R(si), SC_IDS, rt.R(di));
-        set(rt, rt.R(si), SC_WIDTH, Val.Fixnum(n));
-        long outv = rt.R(si);
-        rt.PopTo(bas);
-        return outv;
-    }
 
     /// Build a table from `rows`, a vector of maps.
     public static long newTable(Rt rt, long schema, long rows) {
@@ -293,19 +245,6 @@ public static class Table {
         return tableAssoc(rt, t, Val.Fixnum(tableCount(rt, t)), row);
     }
 
-    /// `(assoc row-ref k v)` -> a MAP. A ref is a VIEW; changing it makes an
-    /// independent value and neither the chunk nor the table moves.
-    public static long refAssoc(Rt rt, long r, long k, long v) {
-        int bas = rt.Mark();
-        int ri = rt.Push(r);
-        int ki = rt.Push(k);
-        int vi = rt.Push(v);
-        long m = refToMap(rt, rt.R(ri));
-        int mi = rt.Push(m);
-        long outv = Mapwrite.MapAssoc(rt, rt.R(mi), rt.R(ki), rt.R(vi));
-        rt.PopTo(bas);
-        return outv;
-    }
     // --- migration ----------------------------------------------------------
     //
     // A schema change makes a NEW TABLE. What makes it cheap is that a chunk
@@ -470,29 +409,6 @@ public static class Table {
         set(rt, rt.R(ni), TB_COUNT, Val.Fixnum(to - from));
         set(rt, rt.R(ni), TB_OFFSET, Val.Fixnum((off + (int) from) & (CHUNK - 1)));
         long outv = rt.R(ni);
-        rt.PopTo(bas);
-        return outv;
-    }
-
-    /// One column, as a vector. Reads the column runs directly -- no row is
-    /// built and no ref is made.
-    public static long tableColumn(Rt rt, long t, long name) {
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        long s = rt.Slot(rt.R(ti), TB_SCHEMA);
-        int id = schemaId(rt, s, name);
-        if (id >= schemaWidth(rt, s)) {
-            string nm = kwName(rt, name), cols = columnList(rt, s);
-            rt.PopTo(bas);
-            return rt.ThrowStr("IllegalArgumentException",
-                "no column :" + nm + "; the columns are " + cols);
-        }
-        int n = tableCount(rt, rt.R(ti));
-        if (!rt.ChargeChecked(n, "column")) { rt.PopTo(bas); return Val.Nil; }
-        int oi = rt.Push(emptyVec(rt));
-        for (int i = 0; i < n; i++)
-            rt.SetR(oi, Vec.Conj(rt, rt.R(oi), tableCell(rt, rt.R(ti), id, i)));
-        long outv = rt.R(oi);
         rt.PopTo(bas);
         return outv;
     }

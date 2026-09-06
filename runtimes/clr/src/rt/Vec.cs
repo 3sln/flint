@@ -41,6 +41,14 @@ public static class Vec {
     static long Tail(Rt rt, long v) => rt.Slot(v, V_TAIL);
 
 
+    /// `vector?` as the GUEST sees it, which includes a MAP ENTRY -- see the
+    /// Java copy for the divergence this closed.
+    public static bool IsVectorLike(Rt rt, long v) {
+        if (!Val.IsHeap(v)) return false;
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        return t == Obj.TyVec || t == Obj.TyMapentry;
+    }
+
     public static long Empty(Rt rt) {
         long sg = rt.roots.shared.Singletons[Rt.SingEmptyVec];
         if (!Val.IsNil(sg)) return sg;

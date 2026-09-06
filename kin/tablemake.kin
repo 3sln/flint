@@ -1,0 +1,145 @@
+;; Making a schema, and the reads that answer a whole column.
+;;
+;; A SCHEMA IS CHECKED ONCE, HERE, and everything downstream may then assume it:
+;; the names are keywords, they are DISTINCT, and the types are ones `type-ok`
+;; knows. Two columns of one name would make `get` ambiguous and the index
+;; would silently keep only the later one.
+(ns flint.rt.tablemake
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != >= not nil? is-keyword is-vector-like
+                                   alloc heap slot set-slot fixnum
+                                   vec-count vec-nth vec-conj empty-vec empty-map
+                                   mark push r set-r pop-to for
+                                   charge-checked throw-str str-cat static-text
+                                   own-text
+                                   Rt Value I32 RootIx Text NIL
+                                   TY_SCHEMA SC_NAMES SC_TYPES SC_INDEX SC_IDS
+                                   SC_WIDTH SC_LEN TB_SCHEMA]]
+            [flint.rt.tablemeta :refer [schema-width table-count]]
+            [flint.rt.tableref :refer [schema-id ref-to-map]]
+            [flint.rt.tablecell :refer [table-cell]]
+            [flint.rt.tablekind :refer [known-type]]
+            [flint.rt.tablesay :refer [kw-name column-list]]
+            [flint.rt.mapread :refer [map-get]]
+            [flint.rt.mapwrite :refer [map-assoc]]))
+
+(doc "`[[name type] ...]` -> a schema."
+     ""
+     "`is-vector-like` AND NOT `is-vector`: a MAP ENTRY is a two-element vector"
+     "as the guest sees it -- `vector?` says so -- and a schema whose pairs came"
+     "from a map's `seq` is made of map entries. Rust used the stricter test"
+     "and both ports the looser one, so the same schema was accepted by two"
+     "runtimes and refused by the third.")
+(defn ^:pub ^:method ^Value new-schema [^:mut ^Rt rt ^Value pairs]
+  (let [^RootIx base (mark rt)
+        ^RootIx pi (push rt pairs)
+        ^I32 n (vec-count rt (r rt pi))
+        ^Value names0 (empty-vec rt)
+        ^RootIx ni (push rt names0)
+        ^Value types0 (empty-vec rt)
+        ^RootIx ti (push rt types0)
+        ^Value idx0 (empty-map rt)
+        ^RootIx ii (push rt idx0)
+        ^Value ids0 (empty-vec rt)
+        ^RootIx di (push rt ids0)]
+    (for [^I32 i 0 n]
+      (let [^Value pair (vec-nth rt (r rt pi) i NIL)
+            ^RootIx pj (push rt pair)]
+        (if (not (is-vector-like rt (r rt pj)))
+          (do (pop-to rt base)
+              (return (throw-str rt "IllegalArgumentException"
+                                 (own-text (static-text "a schema is [[name type] ...]; this entry is not a name and a type"))))))
+        (if (!= (vec-count rt (r rt pj)) 2)
+          (do (pop-to rt base)
+              (return (throw-str rt "IllegalArgumentException"
+                                 (own-text (static-text "a schema is [[name type] ...]; this entry is not a name and a type"))))))
+        (let [^Value nm (vec-nth rt (r rt pj) 0 NIL)
+              ^Value tp (vec-nth rt (r rt pj) 1 NIL)]
+          (if (not (is-keyword rt nm))
+            (do (pop-to rt base)
+                (return (throw-str rt "IllegalArgumentException"
+                                   (own-text (static-text "a column name must be a keyword"))))))
+          (if (not (known-type rt tp))
+            (do
+              (let [^Text shown (kw-name rt tp)]
+                (pop-to rt base)
+                (return (throw-str rt "IllegalArgumentException"
+                                   (str-cat (static-text "no such column type :") shown
+                                            (static-text "; the types are :int :double :string :bool :keyword :any")))))))
+          (comment "DISTINCT, because two columns of one name would make `get`"
+                   "ambiguous and the index silently keep only the later one.")
+          (let [^Value seen (map-get rt (r rt ii) nm NIL)]
+            (if (not (nil? rt seen))
+              (do
+                (let [^Text shown (kw-name rt nm)]
+                  (pop-to rt base)
+                  (return (throw-str rt "IllegalArgumentException"
+                                     (str-cat (static-text "the column :") shown
+                                              (static-text " is named twice"))))))))
+          (let [^Value nv (vec-conj rt (r rt ni) nm)]
+            (set-r rt ni nv))
+          (let [^Value tv (vec-conj rt (r rt ti) tp)]
+            (set-r rt ti tv))
+          (let [^Value m (map-assoc rt (r rt ii) nm (fixnum i))]
+            (set-r rt ii m))
+          (let [^Value dv (vec-conj rt (r rt di) (fixnum i))]
+            (set-r rt di dv)))
+        (pop-to rt pj)))
+    (let [^Value s (heap (alloc rt TY_SCHEMA SC_LEN))
+          ^RootIx si (push rt s)]
+      (set-slot rt (r rt si) SC_NAMES (r rt ni))
+      (set-slot rt (r rt si) SC_TYPES (r rt ti))
+      (set-slot rt (r rt si) SC_INDEX (r rt ii))
+      (set-slot rt (r rt si) SC_IDS (r rt di))
+      (set-slot rt (r rt si) SC_WIDTH (fixnum n))
+      (let [^Value out (r rt si)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "`(assoc row-ref k v)` -> a MAP."
+     ""
+     "A REF IS A VIEW. Changing it makes an independent value, and neither the"
+     "chunk nor the table it came from moves (`0026`). The schema does not"
+     "constrain the result, because the result is no longer a row.")
+(defn ^:pub ^:method ^Value ref-assoc [^:mut ^Rt rt ^Value rf ^Value k ^Value v]
+  (let [^RootIx base (mark rt)
+        ^RootIx ri (push rt rf)
+        ^RootIx ki (push rt k)
+        ^RootIx vi (push rt v)
+        ^Value m (ref-to-map rt (r rt ri))
+        ^RootIx mi (push rt m)
+        ^Value out (map-assoc rt (r rt mi) (r rt ki) (r rt vi))]
+    (pop-to rt base)
+    (return out)))
+
+(doc "One column, as a vector."
+     ""
+     "READS THE COLUMN RUNS DIRECTLY -- no row is built and no ref is made."
+     "This is the operation the type exists for: scanning one field should cost"
+     "one field.")
+(defn ^:pub ^:method ^Value table-column [^:mut ^Rt rt ^Value t ^Value name]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^Value s (slot rt (r rt ti) TB_SCHEMA)
+        ^I32 id (schema-id rt s name)]
+    (if (>= id (schema-width rt s))
+      (do
+        (let [^Text nm (kw-name rt name)
+              ^Text cols (column-list rt s)]
+          (pop-to rt base)
+          (return (throw-str rt "IllegalArgumentException"
+                             (str-cat (static-text "no column :") nm
+                                      (static-text "; the columns are ") cols))))))
+    (let [^I32 n (table-count rt (r rt ti))]
+      (if (not (charge-checked rt n (static-text "column")))
+        (do (pop-to rt base)
+            (return NIL)))
+      (let [^Value out0 (empty-vec rt)
+            ^RootIx oi (push rt out0)]
+        (for [^I32 i 0 n]
+          (let [^Value v (table-cell rt (r rt ti) id i)
+                ^Value nv (vec-conj rt (r rt oi) v)]
+            (set-r rt oi nv)))
+        (let [^Value out (r rt oi)]
+          (pop-to rt base)
+          (return out))))))
