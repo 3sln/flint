@@ -44,7 +44,7 @@ public class RtParallel {
     // NUMBER here, rather than crashing. That is the failure worth catching: a
     // crash would at least be obvious.
     for (int i = 0; i < n; i++) {
-      long got = Seqs.first(rt, rt.r(base + i));
+      long got = com._3sln.flint.kgen.rt.Seqwalk.first(rt, rt.r(base + i));
       if (!Val.isFixnum(got) || Val.asFixnum(got) != tag * 1_000_000 + i) {
         throw new IllegalStateException(
           "thread " + tag + ": slot " + i + " came back wrong: " + rt.describe(got));

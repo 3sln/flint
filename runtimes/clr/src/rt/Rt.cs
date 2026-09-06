@@ -725,7 +725,7 @@ public sealed class Rt : System.IDisposable {
                             // The same tick the Rust runtime charges: a spread
                             // walks a whole sequence under one instruction.
                             if (!ChargeTick(cspread, 1, "apply")) { PopTo(csi); break; }
-                            VPush(Seqs.First(this, R(csi)));
+                            VPush(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(this, R(csi)));
                             cspread++;
                             SetR(csi, Seqs.Next(this, R(csi)));
                         }
@@ -751,7 +751,7 @@ public sealed class Rt : System.IDisposable {
                     SetR(nsi, Seqs.Seq(this, R(nsi)));
                     while (!Val.IsNil(R(nsi))) {
                         if (!ChargeTick(nspread, 1, "apply")) { PopTo(nsi); break; }
-                        VPush(Seqs.First(this, R(nsi)));
+                        VPush(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(this, R(nsi)));
                         nspread++;
                         SetR(nsi, Seqs.Next(this, R(nsi)));
                     }

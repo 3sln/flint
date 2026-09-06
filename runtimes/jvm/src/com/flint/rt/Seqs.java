@@ -24,9 +24,7 @@ public final class Seqs {
     /// `first` and `next`, under the names their callers already use. The
     /// bodies are GENERATED, as `Seqwalk`; some thirty call sites across this
     /// runtime say `Seqs.first`, in files that have nothing to do with seqs.
-    public static long first(Rt rt, long v) { return com._3sln.flint.kgen.rt.Seqwalk.first(rt, v); }
     public static long next(Rt rt, long v) { return com._3sln.flint.kgen.rt.Seqwalk.next(rt, v); }
-    public static long rest(Rt rt, long v) { return com._3sln.flint.kgen.rt.Seqwalk.rest(rt, v); }
     public static long force(Rt rt, long ls) { return com._3sln.flint.kgen.rt.Seqwalk.force(rt, ls); }
     public static long seq(Rt rt, long v) { return com._3sln.flint.kgen.rt.Seqwalk.seq(rt, v); }
 

@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import com._3sln.flint.kgen.rt.Seqwalk;
+
 import com._3sln.flint.kgen.rt.Mapwrite;
 
 import com._3sln.flint.kgen.rt.Mapread;
@@ -876,7 +878,7 @@ public final class Rt {
                             // The same tick the Rust runtime charges: a spread
                             // walks a whole sequence under one instruction.
                             if (!chargeTick(spread, 1, "apply")) { popTo(si); break; }
-                            vpush(Seqs.first(this, r(si)));
+                            vpush(Seqwalk.first(this, r(si)));
                             spread++;
                             setR(si, Seqs.next(this, r(si)));
                         }
@@ -902,7 +904,7 @@ public final class Rt {
                     setR(si, Seqs.seq(this, r(si)));
                     while (!Val.isNil(r(si))) {
                         if (!chargeTick(spread, 1, "apply")) { popTo(si); break; }
-                        vpush(Seqs.first(this, r(si)));
+                        vpush(Seqwalk.first(this, r(si)));
                         spread++;
                         setR(si, Seqs.next(this, r(si)));
                     }

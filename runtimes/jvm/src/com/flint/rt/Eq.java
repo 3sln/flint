@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import com._3sln.flint.kgen.rt.Seqwalk;
+
 import static com.flint.rt.Obj.*;
 import static com._3sln.flint.kgen.rt.Eq.*;
 
@@ -194,8 +196,8 @@ public final class Eq {
             // collection between them leaves `nx` pointing at a moved object
             // and `setR` stores the forwarding address. Found with GC stress
             // on: `seq over object type 1`, and type 1 is TY_FWD.
-            int fx = rt.push(Seqs.first(rt, rt.r(x)));
-            int fy = rt.push(Seqs.first(rt, rt.r(y)));
+            int fx = rt.push(Seqwalk.first(rt, rt.r(x)));
+            int fy = rt.push(Seqwalk.first(rt, rt.r(y)));
             boolean same = eq(rt, rt.r(fx), rt.r(fy));
             rt.popTo(fx);
             if (!same) { ok = false; break; }
@@ -282,7 +284,7 @@ public final class Eq {
                         // A TICK: a seq's length is not known until it ends,
                         // and it may not end (`doc/decisions/0009`).
                         if (!rt.chargeTick(n, 1, "hash")) { rt.popTo(base); return 0; }
-                        acc = com._3sln.flint.kgen.rt.Hash.orderedStep(acc, hashValue(rt, Seqs.first(rt, rt.r(s))));
+                        acc = com._3sln.flint.kgen.rt.Hash.orderedStep(acc, hashValue(rt, Seqwalk.first(rt, rt.r(s))));
                         n++;
                         long nx = Seqs.next(rt, rt.r(s));
                         rt.setR(s, nx);
@@ -360,7 +362,7 @@ public final class Eq {
         for (;;) {
             boolean ex = Val.isNil(rt.r(x)), ey = Val.isNil(rt.r(y));
             if (ex || ey) { out = ex && ey ? 0 : (ex ? -1 : 1); break; }
-            int c = compare(rt, Seqs.first(rt, rt.r(x)), Seqs.first(rt, rt.r(y)));
+            int c = compare(rt, Seqwalk.first(rt, rt.r(x)), Seqwalk.first(rt, rt.r(y)));
             if (c != 0) { out = c; break; }
             long nx = Seqs.next(rt, rt.r(x)), ny = Seqs.next(rt, rt.r(y));
             rt.setR(x, nx); rt.setR(y, ny);

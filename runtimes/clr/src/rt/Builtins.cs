@@ -259,29 +259,10 @@ public static class Builtins {
             return idx < 0 ? Val.Nil : rt.Slot(v, idx);
         });
 
-        Def("count", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (Val.IsNil(v)) return Val.Fixnum(0);
-            if (rt.IsHeapTy(v, Obj.TyVec)) return Val.Fixnum(Vec.Count(rt, v));
-            if (rt.IsHeapTy(v, Obj.TyTagged)) return Val.Fixnum(2);
-            if (rt.IsHeapTy(v, Obj.TyTable)) return Val.Fixnum(Flint.Rt.Table.tableCount(rt, v));
-            if (rt.IsHeapTy(v, Obj.TyTableref))
-                return Val.Fixnum(Flint.Rt.Table.schemaLen(rt, rt.Slot(v, Flint.Rt.Table.RF_SCHEMA)));
-            if (Str.IsString(rt, v)) return Val.Fixnum(Str.SCount(rt, v));
-            if (Mapcore.IsMap(rt, v)) return Val.Fixnum(Mapcore.MapCount(rt, v));
-            if (Sets.IsSet(rt, v)) return Val.Fixnum(Sets.Count(rt, v));
-            if (Maps.IsTransient(rt, v)) return Val.Fixnum(Maptrans.TmapCount(rt, v));
-            if (Sets.IsTransient(rt, v)) return Val.Fixnum(Maptrans.TsetCount(rt, v));
-            if (Vec.IsTransient(rt, v)) return Val.Fixnum(Vec.TCount(rt, v));
-            if (Bytes.IsBytes(rt, v)) return Val.Fixnum(Bytes.Count(rt, v));
-            if (rt.IsSeq(v)) return Val.Fixnum(Seqs.Count(rt, v));
-            // A MAP ENTRY counts 2. `coll.rs` has had this since it was
-            // written; this port threw "needs more of the data structures"
-            // for a value that `(seq some-map)` hands out, so ordinary
-            // guest code could not count one.
-            if (rt.IsHeapTy(v, Obj.TyMapentry)) return Val.Fixnum(2);
-            return rt.ThrowStr("UnsupportedOperationException", "count over " + rt.Describe(v) + " needs more of the data structures");
-        });
+        // GENERATED, from `kin/collgen.kin`. The hand-written body had no
+        // arm for a TRANSIENT TABLE, so `(count (transient t))` threw here
+        // and answered on wasm.
+        Def("count", (rt, at, n) => Val.Fixnum(Collgen.CountOf(rt, rt.VAt(at))));
         Def("nth", (rt, at, n) => {
             long v = rt.VAt(at);
             int i = (int) Val.AsFixnum(rt.VAt(at + 1));
@@ -301,7 +282,7 @@ public static class Builtins {
                 int bas = rt.Mark();
                 int sq = rt.Push(Seqs.Seq(rt, v));
                 for (int k = 0; k < i && !Val.IsNil(rt.R(sq)); k++) rt.SetR(sq, Seqs.Next(rt, rt.R(sq)));
-                if (!Val.IsNil(rt.R(sq))) got = Seqs.First(rt, rt.R(sq));
+                if (!Val.IsNil(rt.R(sq))) got = global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(sq));
                 rt.PopTo(bas);
             } else {
                 return rt.ThrowStr("UnsupportedOperationException", 
@@ -335,7 +316,7 @@ public static class Builtins {
                 int ai = rt.Push(v);
                 for (int i = 1; i < n; i++) {
                     long e = rt.VAt(at + i);
-                    rt.SetR(ai, Mapwrite.MapAssoc(rt, rt.R(ai), Seqs.First(rt, e), Seqs.First(rt, Seqs.Rest(rt, e))));
+                    rt.SetR(ai, Mapwrite.MapAssoc(rt, rt.R(ai), global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, e), global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.Rest(rt, e))));
                 }
                 long outc = rt.R(ai);
                 rt.PopTo(bas);
@@ -367,9 +348,9 @@ public static class Builtins {
         });
 
         Def("seq", (rt, at, n) => Seqs.Seq(rt, rt.VAt(at)));
-        Def("first", (rt, at, n) => Seqs.First(rt, rt.VAt(at)));
+        Def("first", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.VAt(at)));
         Def("next", (rt, at, n) => Seqs.Next(rt, rt.VAt(at)));
-        Def("rest", (rt, at, n) => Seqs.Rest(rt, rt.VAt(at)));
+        Def("rest", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Seqwalk.Rest(rt, rt.VAt(at)));
         Def("cons", (rt, at, n) => Seqs.Cons(rt, rt.VAt(at), rt.VAt(at + 1)));
 
         // Transients. A transient is a MUTABLE handle on a persistent value,
@@ -412,9 +393,9 @@ public static class Builtins {
                 int ai = rt.Push(v);
                 for (int i = 1; i < n; i++) {
                     int ei = rt.Push(rt.VAt(at + i));
-                    long k = Seqs.First(rt, rt.R(ei));
+                    long k = global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(ei));
                     int ki = rt.Push(k);
-                    long val = Seqs.First(rt, Seqs.Rest(rt, rt.R(ei)));
+                    long val = global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.Rest(rt, rt.R(ei)));
                     int vi2 = rt.Push(val);
                     rt.SetR(ai, Maptrans.TmapAssoc(rt, rt.R(ai), rt.R(ki), rt.R(vi2)));
                     rt.PopTo(ei);
@@ -695,40 +676,12 @@ public static class Builtins {
         });
 
         // --- vectors as stacks ------------------------------------------------
-        Def("peek", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (Val.IsNil(v)) return Val.Nil;
-            // A VECTOR peeks at its LAST element and a seq at its FIRST. That
-            // asymmetry is Clojure's, and it is the same one `conj` has: each
-            // takes the end that is cheap.
-            if (rt.IsHeapTy(v, Obj.TyVec)) {
-                int c = Vec.Count(rt, v);
-                return c == 0 ? Val.Nil : Vec.Nth(rt, v, c - 1, Val.NotFound);
-            }
-            return Seqs.First(rt, v);
-        });
-        Def("pop", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (rt.IsHeapTy(v, Obj.TyVec)) {
-                // `Vec.Pop`, which unwinds the trie. This used to REBUILD the
-                // vector with a conj loop -- O(n) where the native runtime is
-                // O(log n), and the same answer, so nothing failed.
-                long outv = Vec.Pop(rt, v);
-                if (Val.IsNil(outv)) return rt.ThrowStr("IllegalStateException", "cannot pop an empty vector");
-                return outv;
-            }
-            if (Val.IsNil(v)) return rt.ThrowStr("IllegalStateException", "cannot pop nil");
-            return Seqs.Rest(rt, v);
-        });
+        Def("peek", (rt, at, n) => Collgen.PeekOf(rt, rt.VAt(at)));
+        // The hand-written `pop` had no EMPTY LIST arm: `(pop ())` fell to
+        // `Rest` and answered `()` where wasm refused it.
+        Def("pop", (rt, at, n) => Collgen.PopOf(rt, rt.VAt(at)));
         Def("pop!", (rt, at, n) => Transients.TransientPop(rt, rt.VAt(at)));
-        Def("empty", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (rt.IsHeapTy(v, Obj.TyVec)) return Vec.Empty(rt);
-            if (Mapcore.IsMap(rt, v)) return Maps.Empty(rt);
-            if (Sets.IsSet(rt, v)) return Sets.Empty(rt);
-            if (rt.IsSeq(v)) return Seqs.EmptyList(rt);
-            return Val.Nil;
-        });
+        Def("empty", (rt, at, n) => Collgen.EmptyOf(rt, rt.VAt(at)));
 
         // --- strings ----------------------------------------------------------
         Def("flint/subs", (rt, at, n) => {
@@ -794,7 +747,7 @@ public static class Builtins {
                 // CHARGED AND CHECKED INSIDE THE LOOP: the length is not known
                 // until the walk ends (`doc/decisions/0009`).
                 if (!rt.ChargeTick(ticks++, 1, "str-join")) { rt.PopTo(bas); return Val.Nil; }
-                sb.Append(Str.Text(rt, Seqs.First(rt, rt.R(s))));
+                sb.Append(Str.Text(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(s))));
                 rt.SetR(s, Seqs.Next(rt, rt.R(s)));
             }
             rt.PopTo(bas);
@@ -928,7 +881,7 @@ public static class Builtins {
             int valsAt = rt.Mark();
             int count = 0;
             while (!Val.IsNil(rt.R(si))) {
-                rt.Push(Seqs.First(rt, rt.R(si)));
+                rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(si)));
                 count++;
                 rt.SetR(si, Seqs.Next(rt, rt.R(si)));
             }
@@ -1183,7 +1136,7 @@ public static class Builtins {
             int si = rt.Push(Seqs.Seq(rt, rt.VAt(at + 1)));
             int count = 0;
             while (!Val.IsNil(rt.R(si))) {
-                rt.Push(Seqs.First(rt, rt.R(si)));
+                rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(si)));
                 count++;
                 rt.SetR(si, Seqs.Next(rt, rt.R(si)));
             }

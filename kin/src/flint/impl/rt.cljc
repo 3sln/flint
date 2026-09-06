@@ -848,6 +848,18 @@
     'empty-vec (core/call {:rust "{0}.empty_vec()"
                            :java "Vec.empty({0})"
                            :csharp "Vec.Empty({0})"})
+    ;; The shared EMPTY SET, alongside `empty-map` and `empty-vec`.
+    'empty-set (core/call {:rust "{0}.empty_set()"
+                           :java "Sets.empty({0})"
+                           :csharp "global::Flint.Rt.Sets.Empty({0})"})
+    ;; `count` ON A STRING IS IN CODE POINTS, not UTF-16 code units. Clojure
+    ;; counts UTF-16, so an astral character counts 2 there and 1 here -- a
+    ;; deliberate divergence, recorded in the README. The body stays host-side:
+    ;; it decodes, and decoding is where each runtime's own string lives.
+    'char-count (core/call {:rust "{0}.char_count({1})"
+                            :java "Str.charLen({0}, {1})"
+                            :csharp "Str.CharLen({0}, {1})"}
+                           {:tag I32})
     'ref-to-map (core/call {:rust "{0}.ref_to_map({1})"
                             :java "Table.refToMap({0}, {1})"
                             :csharp "global::Flint.Rt.Table.refToMap({0}, {1})"})
@@ -945,9 +957,13 @@
     'seq-of (core/call {:rust "{0}.seq({1})"
                         :java "com.flint.rt.Seqs.seq({0}, {1})"
                         :csharp "global::Flint.Rt.Seqs.Seq({0}, {1})"})
+    ;; `first-of` NAMES THE GENERATED CLASS, not the port's `Seqs`. The shim
+    ;; there existed only so this entry could keep its old spelling -- and a
+    ;; second definition under a name generated code also reaches is not free:
+    ;; the CLR refused to compile a generated file that had both in scope.
     'first-of (core/call {:rust "{0}.first({1})"
-                          :java "com.flint.rt.Seqs.first({0}, {1})"
-                          :csharp "global::Flint.Rt.Seqs.First({0}, {1})"})
+                          :java "com._3sln.flint.kgen.rt.Seqwalk.first({0}, {1})"
+                          :csharp "global::_3sln.Flint.Kgen.Rt.Seqwalk.First({0}, {1})"})
     'next-of (core/call {:rust "{0}.next({1})"
                          :java "com.flint.rt.Seqs.next({0}, {1})"
                          :csharp "global::Flint.Rt.Seqs.Next({0}, {1})"})

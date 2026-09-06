@@ -167,8 +167,8 @@ public static class Eq {
             // `seqEq` for the failure this shape produces. `First` and `Next`
             // both allocate, so holding one side's result in a C# local across
             // the other side's call leaves it pointing at a moved object.
-            int fx = rt.Push(Seqs.First(rt, rt.R(x)));
-            int fy = rt.Push(Seqs.First(rt, rt.R(y)));
+            int fx = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(x)));
+            int fy = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(y)));
             bool same = Equal(rt, rt.R(fx), rt.R(fy));
             rt.PopTo(fx);
             if (!same) { ok = false; break; }
@@ -252,7 +252,7 @@ public static class Eq {
                     while (!Val.IsNil(rt.R(s))) {
                         // A TICK: a seq's length is not known until it ends.
                         if (!rt.ChargeTick(n, 1, "hash")) { rt.PopTo(bas); return 0; }
-                        acc = _3sln.Flint.Kgen.Rt.Hash.OrderedStep(acc, HashValue(rt, Seqs.First(rt, rt.R(s))));
+                        acc = _3sln.Flint.Kgen.Rt.Hash.OrderedStep(acc, HashValue(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(s))));
                         n++;
                         long nx = Seqs.Next(rt, rt.R(s));
                         rt.SetR(s, nx);
@@ -337,7 +337,7 @@ public static class Eq {
         for (;;) {
             bool ex = Val.IsNil(rt.R(x)), ey = Val.IsNil(rt.R(y));
             if (ex || ey) { outv = ex && ey ? 0 : (ex ? -1 : 1); break; }
-            int c = Compare(rt, Seqs.First(rt, rt.R(x)), Seqs.First(rt, rt.R(y)));
+            int c = Compare(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(x)), global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(y)));
             if (c != 0) { outv = c; break; }
             long nx = Seqs.Next(rt, rt.R(x)), ny = Seqs.Next(rt, rt.R(y));
             rt.SetR(x, nx); rt.SetR(y, ny);

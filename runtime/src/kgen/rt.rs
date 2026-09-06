@@ -35,6 +35,7 @@ pub mod bytenode;
 pub mod bytetrans;
 pub mod champ;
 pub mod collnode;
+pub mod collgen;
 pub mod copies;
 pub mod names;
 pub mod nouns;

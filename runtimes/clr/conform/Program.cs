@@ -1060,7 +1060,7 @@ public static class Program {
         // NUMBER here, rather than crashing. That is the failure worth
         // catching: a crash would at least be obvious.
         for (int i = 0; i < n; i++) {
-            long got = Flint.Rt.Seqs.First(rt, rt.R(bas + i));
+            long got = global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(bas + i));
             if (!Flint.Rt.Val.IsFixnum(got) || Flint.Rt.Val.AsFixnum(got) != tag * 1_000_000 + i)
                 throw new System.InvalidOperationException(
                     "thread " + tag + ": slot " + i + " came back wrong: " + rt.Describe(got));

@@ -1,0 +1,158 @@
+;; THE COLLECTION GENERICS that do not read a key: `count`, `peek`, `pop` and
+;; `empty`. Each is a tag dispatch onto the implementation that owns the value,
+;; and each is called by every program, which is why it matters that the four
+;; runtimes were choosing separately.
+;;
+;; `count` IS THE ONE THAT DIVERGED. Native had an arm for a transient table
+;; and both ports did not, so `(count (transient t))` answered on wasm and
+;; threw on the JVM and the CLR. And where native met a heap value it did not
+;; recognise it fell into `seq-count`, which walks a `first`/`rest` chain that
+;; is not there; the ports asked `is-seq` first and refused by name. The ports
+;; were right about the refusal and native was right about the transient, so
+;; this has both.
+;;
+;; `pop` AND `peek` NOW ASK WHETHER THE VALUE IS ON THE HEAP. Native checked
+;; only for nil and then read the type byte at `as-heap` of whatever arrived,
+;; so `(pop 7)` indexed the type array with a fixnum's bits -- reading a byte
+;; that means nothing, at an address that may not be mapped. The guard costs a
+;; comparison on a path that was already branching.
+;;
+;; `count` ON A STRING IS IN CODE POINTS. Clojure counts UTF-16 code units, so
+;; an astral character counts 2 there and 1 here -- deliberate, and recorded in
+;; the README rather than here.
+(ns flint.rt.collgen
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == not or nil? is-heap as-heap ty -
+                                   slot throw-str str-cat static-text own-text
+                                   is-string char-count
+                                   vec-count vec-nth vec-pop schema-len
+                                   empty-vec empty-map empty-set empty-list
+                                   Rt Value I32 Ty Bool Text NIL
+                                   RF_SCHEMA TY_VEC TY_MAPENTRY TY_TAGGED
+                                   TY_TABLE TY_TTABLE TY_TABLEREF
+                                   TY_ARRAYMAP TY_HASHMAP TY_SET
+                                   TY_BYTES TY_BROPE TY_TVEC TY_TMAP TY_TSET
+                                   TY_EMPTY_LIST]]
+            [flint.rt.nouns :refer [describe]]
+            [flint.rt.seqcore :refer [is-seq]]
+            [flint.rt.mapcore :refer [map-count]]
+            [flint.rt.setcore :refer [set-count]]
+            [flint.rt.bytecore :refer [b-count]]
+            [flint.rt.vectrans :refer [tvec-count]]
+            [flint.rt.maptrans :refer [tmap-count tset-count]]
+            [flint.rt.seqwalk :refer [seq-count first rest]]
+            [flint.rt.tablemeta :refer [table-count]]
+            [flint.rt.tabletrans :refer [ttable-count]]))
+
+(doc "How many things are in it."
+     ""
+     "NIL COUNTS 0, which is the first arm because it is the common one and"
+     "because nil is not a heap value: everything below would have to say so"
+     "again.")
+(defn ^:pub ^:method ^I32 count-of [^:mut ^Rt rt ^Value v]
+  (if (nil? rt v)
+    (return 0))
+  (if (is-string rt v)
+    (return (char-count rt v)))
+  (if (is-heap v)
+    (let [^Ty t (ty rt (as-heap v))]
+      (if (== t TY_VEC)
+        (return (vec-count rt v)))
+      (comment "A MAP ENTRY COUNTS 2, and so does a tagged literal, which"
+               "reads like a two-key map (`0034`). The ports threw for a map"
+               "entry -- a value `(seq some-map)` hands out -- so ordinary"
+               "guest code could not count one.")
+      (if (or (== t TY_MAPENTRY) (== t TY_TAGGED))
+        (return 2))
+      (if (== t TY_TABLE)
+        (return (table-count rt v)))
+      (if (== t TY_TTABLE)
+        (return (ttable-count rt v)))
+      (comment "A REF COUNTS ITS COLUMNS, because it is a map of them.")
+      (if (== t TY_TABLEREF)
+        (return (schema-len rt (slot rt v RF_SCHEMA))))
+      (if (or (== t TY_ARRAYMAP) (== t TY_HASHMAP))
+        (return (map-count rt v)))
+      (if (== t TY_SET)
+        (return (set-count rt v)))
+      (if (or (== t TY_BYTES) (== t TY_BROPE))
+        (return (b-count rt v)))
+      (if (== t TY_TVEC)
+        (return (tvec-count rt v)))
+      (if (== t TY_TMAP)
+        (return (tmap-count rt v)))
+      (if (== t TY_TSET)
+        (return (tset-count rt v)))
+      (if (== t TY_EMPTY_LIST)
+        (return 0))
+      (if (is-seq rt v)
+        (return (seq-count rt v)))))
+  (let [^Text what (describe rt v)]
+    (throw-str rt "UnsupportedOperationException"
+               (str-cat (static-text "count over ") what
+                        (static-text " needs more of the data structures"))))
+  (return 0))
+
+(doc "The collection one shorter at the end it is written from."
+     ""
+     "A VECTOR POPS ITS LAST and a list its first, which is the same word for"
+     "two ends because it is the same word in Clojure: `pop` takes off"
+     "whichever end `conj` puts on.")
+(defn ^:pub ^:method ^Value pop-of [^:mut ^Rt rt ^Value coll]
+  (if (nil? rt coll)
+    (return (throw-str rt "IllegalStateException" "cannot pop nil")))
+  (if (is-heap coll)
+    (let [^Ty t (ty rt (as-heap coll))]
+      (if (== t TY_VEC)
+        (do (if (== (vec-count rt coll) 0)
+              (return (throw-str rt "IllegalStateException"
+                                 "cannot pop an empty vector")))
+            (return (vec-pop rt coll))))
+      (if (== t TY_EMPTY_LIST)
+        (return (throw-str rt "IllegalStateException" "cannot pop an empty list")))))
+  (return (rest rt coll)))
+
+(doc "The thing `pop` would take off, without taking it."
+     ""
+     "ANSWERS NIL RATHER THAN THROWING on an empty collection, which is the"
+     "difference between it and `pop`: peeking at nothing is a question with"
+     "an answer.")
+(defn ^:pub ^:method ^Value peek-of [^:mut ^Rt rt ^Value coll]
+  (if (nil? rt coll)
+    (return NIL))
+  (if (is-heap coll)
+    (if (== (ty rt (as-heap coll)) TY_VEC)
+      (let [^I32 n (vec-count rt coll)]
+        (if (== n 0)
+          (return NIL))
+        (return (vec-nth rt coll (- n 1) NIL)))))
+  (return (first rt coll)))
+
+(doc "An empty collection of the same KIND, and NIL when there is no kind."
+     ""
+     "The shared singleton in each case, not a fresh allocation: an empty"
+     "vector is three objects, and `(empty v)` is asked for exactly when a"
+     "program is about to build something else."
+     ""
+     "A ROW REF ANSWERS THE EMPTY MAP, because a ref is a map. Native sent it"
+     "to the empty LIST -- its arm named the two map tags and a ref is"
+     "neither -- so `(empty row)` was `{}` on both ports and `()` on wasm."
+     ""
+     "AND THE LIST IS ONLY FOR A SEQ. Native answered `()` for any heap value"
+     "it did not otherwise name, so `(empty \"abc\")` was `()` there and nil"
+     "on both ports. Clojure answers nil, which is what a value with no empty"
+     "of its own has.")
+(defn ^:pub ^:method ^Value empty-of [^:mut ^Rt rt ^Value coll]
+  (if (is-heap coll)
+    (let [^Ty t (ty rt (as-heap coll))]
+      (if (== t TY_VEC)
+        (return (empty-vec rt)))
+      (if (or (== t TY_ARRAYMAP) (== t TY_HASHMAP))
+        (return (empty-map rt)))
+      (if (== t TY_TABLEREF)
+        (return (empty-map rt)))
+      (if (== t TY_SET)
+        (return (empty-set rt)))
+      (if (is-seq rt coll)
+        (return (empty-list rt)))))
+  (return NIL))

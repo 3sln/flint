@@ -96,7 +96,7 @@ public static class Tablesay {
         long q0 = global::Flint.Rt.Seqs.Seq(rt, row);
         int qi = rt.Push(q0);
         while (!Val.IsNil(rt.R(qi))) {
-            long e0 = global::Flint.Rt.Seqs.First(rt, rt.R(qi));
+            long e0 = global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(qi));
             int ei = rt.Push(e0);
             long k = rt.SlotOrNth(rt.R(ei), 0);
             if (SchemaId(rt, rt.R(si), k) >= SchemaWidth(rt, rt.R(si))) {

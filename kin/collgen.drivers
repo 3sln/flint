@@ -1,0 +1,355 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_VEC: u8 = 9; const TY_MAPENTRY: u8 = 15; const TY_TAGGED: u8 = 16;
+const TY_TABLE: u8 = 17; const TY_TTABLE: u8 = 18; const TY_TABLEREF: u8 = 19;
+const TY_ARRAYMAP: u8 = 20; const TY_HASHMAP: u8 = 21; const TY_SET: u8 = 22;
+const TY_BYTES: u8 = 23; const TY_BROPE: u8 = 24; const TY_TVEC: u8 = 25;
+const TY_TMAP: u8 = 26; const TY_TSET: u8 = 27; const TY_EMPTY_LIST: u8 = 28;
+const TY_CONS: u8 = 29; const TY_OTHER: u8 = 30; const TY_STR: u8 = 31;
+pub mod table { pub const RF_SCHEMA: u32 = 0; }
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { gc: Gc, bump: u64, thrown: String, vn: u32 }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+// STUBS THAT NAME THEMSELVES, and a `vec_count` that does not: `pop` and
+// `peek` both branch on whether the vector is EMPTY, so that one number has to
+// be settable rather than announced.
+impl Rt {
+    fn slot(&self, _v: Value, _i: u32) -> Value { Value(0x500) }
+    fn throw_str(&mut self, class: &str, msg: &str) -> Value {
+        self.thrown = format!("{}/{}", class, msg); NIL
+    }
+    fn describe(&mut self, v: Value) -> alloc::string::String {
+        if !v.is_heap() { return alloc::string::String::from("a fixnum"); }
+        alloc::format!("a #{}", ty(&self.gc.sp, v.as_heap()))
+    }
+    fn obj(&mut self, t: u8) -> Value {
+        let a = self.bump; self.bump += 8;
+        self.gc.sp.m[a as usize] = t;
+        Value(a)
+    }
+    fn is_string(&mut self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_STR
+    }
+    fn is_seq(&mut self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_CONS
+    }
+    fn char_count(&mut self, _v: Value) -> u32 { 71 }
+    fn vec_count(&mut self, _v: Value) -> u32 { self.vn }
+    fn table_count(&mut self, _v: Value) -> u32 { 72 }
+    fn ttable_count(&mut self, _v: Value) -> u32 { 73 }
+    fn schema_len(&mut self, _s: Value) -> u32 { 74 }
+    fn map_count(&mut self, _v: Value) -> u32 { 75 }
+    fn set_count(&mut self, _v: Value) -> u32 { 76 }
+    fn b_count(&mut self, _v: Value) -> u32 { 77 }
+    fn tvec_count(&mut self, _v: Value) -> u32 { 78 }
+    fn tmap_count(&mut self, _v: Value) -> u32 { 79 }
+    fn tset_count(&mut self, _v: Value) -> u32 { 80 }
+    fn seq_count(&mut self, _v: Value) -> u32 { 81 }
+    fn vec_pop(&mut self, _v: Value) -> Value { Value(0x901) }
+    fn vec_nth(&mut self, _v: Value, i: u32, _d: Value) -> Value { Value(0x910 + i as u64) }
+    fn rest(&mut self, _v: Value) -> Value { Value(0x902) }
+    fn first(&mut self, _v: Value) -> Value { Value(0x903) }
+    fn empty_vec(&mut self) -> Value { Value(0x921) }
+    fn empty_map(&mut self) -> Value { Value(0x922) }
+    fn empty_set(&mut self) -> Value { Value(0x923) }
+    fn empty_list(&mut self) -> Value { Value(0x924) }
+}
+impl Rt {
+--rust
+}
+extern crate alloc;
+fn main() {
+    let mut rt = Rt { gc: Gc { sp: Space { m: vec![0u8; 4000] } }, bump: 100,
+                      thrown: String::new(), vn: 5 };
+    let mut o = String::new();
+    o.push_str(&format!("nil={} ", rt.count_of(NIL)));
+    let s = rt.obj(TY_STR);
+    o.push_str(&format!("str={} ", rt.count_of(s)));
+    for t in [TY_VEC, TY_MAPENTRY, TY_TAGGED, TY_TABLE, TY_TTABLE, TY_TABLEREF,
+              TY_ARRAYMAP, TY_HASHMAP, TY_SET, TY_BYTES, TY_BROPE, TY_TVEC,
+              TY_TMAP, TY_TSET, TY_EMPTY_LIST, TY_CONS] {
+        let v = rt.obj(t);
+        o.push_str(&format!("{} ", rt.count_of(v)));
+    }
+    // A HEAP VALUE IT DOES NOT KNOW, and a value that is not on the heap:
+    // both refuse, and the message names what arrived.
+    rt.thrown.clear();
+    let unknown = rt.obj(TY_OTHER);
+    o.push_str(&format!("unk={}|{}| ", rt.count_of(unknown), rt.thrown));
+    rt.thrown.clear();
+    o.push_str(&format!("fix={}|{}| ", rt.count_of(Value(7)), rt.thrown));
+
+    // POP: the vector arm branches on empty, and everything else is `rest`.
+    let v = rt.obj(TY_VEC);
+    o.push_str(&format!("pop={:x} ", rt.pop_of(v).0));
+    rt.vn = 0;
+    rt.thrown.clear();
+    let _ = rt.pop_of(v);
+    o.push_str(&format!("|{}| ", rt.thrown));
+    rt.vn = 5;
+    rt.thrown.clear();
+    let el = rt.obj(TY_EMPTY_LIST);
+    let _ = rt.pop_of(el);
+    o.push_str(&format!("|{}| ", rt.thrown));
+    let c = rt.obj(TY_CONS);
+    o.push_str(&format!("popc={:x} ", rt.pop_of(c).0));
+    rt.thrown.clear();
+    let _ = rt.pop_of(NIL);
+    o.push_str(&format!("|{}| ", rt.thrown));
+
+    // PEEK: the same two ends, and NIL rather than a refusal when empty.
+    o.push_str(&format!("peek={:x} ", rt.peek_of(v).0));
+    rt.vn = 0;
+    o.push_str(&format!("peek0={:x} ", rt.peek_of(v).0));
+    rt.vn = 5;
+    o.push_str(&format!("peekc={:x} peekn={:x} ", rt.peek_of(c).0, rt.peek_of(NIL).0));
+
+    // EMPTY: the shared singleton for each kind, and nil for a non-collection.
+    for t in [TY_VEC, TY_ARRAYMAP, TY_HASHMAP, TY_TABLEREF, TY_SET, TY_CONS, TY_STR] {
+        let e = rt.obj(t);
+        o.push_str(&format!("{:x} ", rt.empty_of(e).0));
+    }
+    o.push_str(&format!("{:x}", rt.empty_of(Value(7)).0));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_VEC = 9, TY_MAPENTRY = 15, TY_TAGGED = 16;
+    static final int TY_TABLE = 17, TY_TTABLE = 18, TY_TABLEREF = 19;
+    static final int TY_ARRAYMAP = 20, TY_HASHMAP = 21, TY_SET = 22;
+    static final int TY_BYTES = 23, TY_BROPE = 24, TY_TVEC = 25;
+    static final int TY_TMAP = 26, TY_TSET = 27, TY_EMPTY_LIST = 28;
+    static final int TY_CONS = 29, TY_OTHER = 30, TY_STR = 31;
+    static final class Table { static final int RF_SCHEMA = 0;
+        static int tableCount(Rt rt, long v) { return 72; }
+        static int schemaLen(Rt rt, long s) { return 74; } }
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Space { byte[] m = new byte[4000]; }
+    static final class Rt {
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        long bump = 100;
+        String thrown = "";
+        int vn = 5;
+        long slot(long v, int i) { return 0x500L; }
+        long throwStr(String cls, String msg) { thrown = cls + "/" + msg; return NIL; }
+        long obj(int t) { long a = bump; bump += 8; gc.sp.m[(int) a] = (byte) t; return a; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static String describe(Rt rt, long v) {
+        if (!Val.isHeap(v)) return "a fixnum";
+        return "a #" + ty(rt.gc.sp, Val.asHeap(v));
+    }
+    static final class Str {
+        static boolean isString(Rt rt, long v) {
+            return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR;
+        }
+        static int charLen(Rt rt, long v) { return 71; }
+    }
+    static boolean isSeq(Rt rt, long v) {
+        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_CONS;
+    }
+    static final class Vec {
+        static int count(Rt rt, long v) { return rt.vn; }
+        static long pop(Rt rt, long v) { return 0x901L; }
+        static long nth(Rt rt, long v, int i, long d) { return 0x910L + i; }
+        static long empty(Rt rt) { return 0x921L; }
+    }
+    static int tableCount(Rt rt, long v) { return 72; }
+    static int ttableCount(Rt rt, long v) { return 73; }
+    static int mapCount(Rt rt, long v) { return 75; }
+    static int setCount(Rt rt, long v) { return 76; }
+    static int bCount(Rt rt, long v) { return 77; }
+    static int tvecCount(Rt rt, long v) { return 78; }
+    static int tmapCount(Rt rt, long v) { return 79; }
+    static int tsetCount(Rt rt, long v) { return 80; }
+    static int seqCount(Rt rt, long v) { return 81; }
+    static long rest(Rt rt, long v) { return 0x902L; }
+    static long first(Rt rt, long v) { return 0x903L; }
+    static final class com { static final class flint { static final class rt {
+        static final class Maps { static long empty(Rt rt) { return 0x922L; } }
+        static final class Seqs { static long emptyList(Rt rt) { return 0x924L; } }
+    } } }
+    static final class Sets { static long empty(Rt rt) { return 0x923L; } }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        o.append("nil=").append(countOf(rt, NIL)).append(' ');
+        long s = rt.obj(TY_STR);
+        o.append("str=").append(countOf(rt, s)).append(' ');
+        int[] tags = { TY_VEC, TY_MAPENTRY, TY_TAGGED, TY_TABLE, TY_TTABLE, TY_TABLEREF,
+                       TY_ARRAYMAP, TY_HASHMAP, TY_SET, TY_BYTES, TY_BROPE, TY_TVEC,
+                       TY_TMAP, TY_TSET, TY_EMPTY_LIST, TY_CONS };
+        for (int t : tags) o.append(countOf(rt, rt.obj(t))).append(' ');
+        rt.thrown = "";
+        long unknown = rt.obj(TY_OTHER);
+        o.append("unk=").append(countOf(rt, unknown)).append("|").append(rt.thrown).append("| ");
+        rt.thrown = "";
+        o.append("fix=").append(countOf(rt, 7L)).append("|").append(rt.thrown).append("| ");
+
+        long v = rt.obj(TY_VEC);
+        o.append("pop=").append(Long.toHexString(popOf(rt, v))).append(' ');
+        rt.vn = 0;
+        rt.thrown = "";
+        popOf(rt, v);
+        o.append("|").append(rt.thrown).append("| ");
+        rt.vn = 5;
+        rt.thrown = "";
+        long el = rt.obj(TY_EMPTY_LIST);
+        popOf(rt, el);
+        o.append("|").append(rt.thrown).append("| ");
+        long c = rt.obj(TY_CONS);
+        o.append("popc=").append(Long.toHexString(popOf(rt, c))).append(' ');
+        rt.thrown = "";
+        popOf(rt, NIL);
+        o.append("|").append(rt.thrown).append("| ");
+
+        o.append("peek=").append(Long.toHexString(peekOf(rt, v))).append(' ');
+        rt.vn = 0;
+        o.append("peek0=").append(Long.toHexString(peekOf(rt, v))).append(' ');
+        rt.vn = 5;
+        o.append("peekc=").append(Long.toHexString(peekOf(rt, c)))
+         .append(" peekn=").append(Long.toHexString(peekOf(rt, NIL))).append(' ');
+
+        int[] empties = { TY_VEC, TY_ARRAYMAP, TY_HASHMAP, TY_TABLEREF, TY_SET, TY_CONS, TY_STR };
+        for (int t : empties) o.append(Long.toHexString(emptyOf(rt, rt.obj(t)))).append(' ');
+        o.append(Long.toHexString(emptyOf(rt, 7L)));
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Sets {
+        internal static long Empty(Probe.Rt rt) { return 0x923L; }
+    }
+    internal static class Maps {
+        internal static long Empty(Probe.Rt rt) { return 0x922L; }
+    }
+    internal static class Seqs {
+        internal static long EmptyList(Probe.Rt rt) { return 0x924L; }
+    }
+    internal static class Table {
+        internal const int RF_SCHEMA = 0;
+        internal static int tableCount(Probe.Rt rt, long v) { return 72; }
+        internal static int schemaLen(Probe.Rt rt, long s) { return 74; }
+    }
+}
+--csharp-head
+    internal const long NIL = 0xFFFFL;
+    internal static class Obj {
+        internal const int TyVec = 9, TyMapentry = 15, TyTagged = 16;
+        internal const int TyTable = 17, TyTtable = 18, TyTableref = 19;
+        internal const int TyArraymap = 20, TyHashmap = 21, TySet = 22;
+        internal const int TyBytes = 23, TyBrope = 24, TyTvec = 25;
+        internal const int TyTmap = 26, TyTset = 27, TyEmptyList = 28;
+        internal const int TyCons = 29, TyOther = 30, TyStr = 31;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = Probe.NIL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != NIL; }
+        internal static long AsHeap(long v) { return v; }
+        internal static bool IsNil(long v) { return v == NIL; }
+    }
+    internal sealed class Space { internal byte[] m = new byte[4000]; }
+    internal sealed class Rt {
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal string thrown = "";
+        internal int vn = 5;
+        internal long Slot(long v, int i) { return 0x500L; }
+        internal long ThrowStr(string cls, string msg) { thrown = cls + "/" + msg; return NIL; }
+        internal long Obj_(int t) { long a = bump; bump += 8; gc.sp.m[(int) a] = (byte) t; return a; }
+    }
+    internal static string Describe(Rt rt, long v) {
+        if (!Val.IsHeap(v)) return "a fixnum";
+        return "a #" + Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+    }
+    internal static class Str {
+        internal static bool IsString(Rt rt, long v) {
+            return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr;
+        }
+        internal static int CharLen(Rt rt, long v) { return 71; }
+    }
+    internal static bool IsSeq(Rt rt, long v) {
+        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyCons;
+    }
+    internal static class Vec {
+        internal static int Count(Rt rt, long v) { return rt.vn; }
+        internal static long Pop(Rt rt, long v) { return 0x901L; }
+        internal static long Nth(Rt rt, long v, int i, long d) { return 0x910L + i; }
+        internal static long Empty(Rt rt) { return 0x921L; }
+    }
+    internal static int TableCount(Rt rt, long v) { return 72; }
+    internal static int TtableCount(Rt rt, long v) { return 73; }
+    internal static int MapCount(Rt rt, long v) { return 75; }
+    internal static int SetCount(Rt rt, long v) { return 76; }
+    internal static int BCount(Rt rt, long v) { return 77; }
+    internal static int TvecCount(Rt rt, long v) { return 78; }
+    internal static int TmapCount(Rt rt, long v) { return 79; }
+    internal static int TsetCount(Rt rt, long v) { return 80; }
+    internal static int SeqCount(Rt rt, long v) { return 81; }
+    internal static long Rest(Rt rt, long v) { return 0x902L; }
+    internal static long First(Rt rt, long v) { return 0x903L; }
+--csharp
+    public static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        o.Append("nil=").Append(CountOf(rt, NIL)).Append(' ');
+        long s = rt.Obj_(Obj.TyStr);
+        o.Append("str=").Append(CountOf(rt, s)).Append(' ');
+        int[] tags = { Obj.TyVec, Obj.TyMapentry, Obj.TyTagged, Obj.TyTable, Obj.TyTtable,
+                       Obj.TyTableref, Obj.TyArraymap, Obj.TyHashmap, Obj.TySet, Obj.TyBytes,
+                       Obj.TyBrope, Obj.TyTvec, Obj.TyTmap, Obj.TyTset, Obj.TyEmptyList,
+                       Obj.TyCons };
+        foreach (int t in tags) o.Append(CountOf(rt, rt.Obj_(t))).Append(' ');
+        rt.thrown = "";
+        long unknown = rt.Obj_(Obj.TyOther);
+        o.Append("unk=").Append(CountOf(rt, unknown)).Append("|").Append(rt.thrown).Append("| ");
+        rt.thrown = "";
+        o.Append("fix=").Append(CountOf(rt, 7L)).Append("|").Append(rt.thrown).Append("| ");
+
+        long v = rt.Obj_(Obj.TyVec);
+        o.Append("pop=").Append(PopOf(rt, v).ToString("x")).Append(' ');
+        rt.vn = 0;
+        rt.thrown = "";
+        PopOf(rt, v);
+        o.Append("|").Append(rt.thrown).Append("| ");
+        rt.vn = 5;
+        rt.thrown = "";
+        long el = rt.Obj_(Obj.TyEmptyList);
+        PopOf(rt, el);
+        o.Append("|").Append(rt.thrown).Append("| ");
+        long c = rt.Obj_(Obj.TyCons);
+        o.Append("popc=").Append(PopOf(rt, c).ToString("x")).Append(' ');
+        rt.thrown = "";
+        PopOf(rt, NIL);
+        o.Append("|").Append(rt.thrown).Append("| ");
+
+        o.Append("peek=").Append(PeekOf(rt, v).ToString("x")).Append(' ');
+        rt.vn = 0;
+        o.Append("peek0=").Append(PeekOf(rt, v).ToString("x")).Append(' ');
+        rt.vn = 5;
+        o.Append("peekc=").Append(PeekOf(rt, c).ToString("x"))
+         .Append(" peekn=").Append(PeekOf(rt, NIL).ToString("x")).Append(' ');
+
+        int[] empties = { Obj.TyVec, Obj.TyArraymap, Obj.TyHashmap, Obj.TyTableref, Obj.TySet, Obj.TyCons, Obj.TyStr };
+        foreach (int t in empties) o.Append(EmptyOf(rt, rt.Obj_(t)).ToString("x")).Append(' ');
+        o.Append(EmptyOf(rt, 7L).ToString("x"));
+        System.Console.WriteLine(o.ToString());
+    }

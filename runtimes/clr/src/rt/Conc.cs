@@ -894,7 +894,7 @@ public static class Conc {
         } else if (rt.IsSequential(rt.R(vi))) {
             int si = rt.Push(Seqs.Seq(rt, rt.R(vi)));
             while (!Val.IsNil(rt.R(si))) {
-                int fi = rt.Push(Seqs.First(rt, rt.R(si)));
+                int fi = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(si)));
                 outs = CheckSendableAt(rt, rt.R(fi), depth + 1, carry);
                 rt.PopTo(fi);
                 if (outs != null) break;

@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import com._3sln.flint.kgen.rt.Seqwalk;
+
 import com._3sln.flint.kgen.rt.Mapwrite;
 
 import com._3sln.flint.kgen.rt.Mapcore;
@@ -180,7 +182,7 @@ public final class Codec {
         int si = rt.push(Seqs.seq(rt, v));
         int n = 0;
         while (!Val.isNil(rt.r(si))) {
-            rt.push(Seqs.first(rt, rt.r(si)));
+            rt.push(Seqwalk.first(rt, rt.r(si)));
             n++;
             rt.setR(si, Seqs.next(rt, rt.r(si)));
         }

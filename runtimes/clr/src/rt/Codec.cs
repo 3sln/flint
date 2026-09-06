@@ -177,7 +177,7 @@ public static class Codec {
         int si = rt.Push(Seqs.Seq(rt, v));
         int n = 0;
         while (!Val.IsNil(rt.R(si))) {
-            rt.Push(Seqs.First(rt, rt.R(si)));
+            rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(si)));
             n++;
             rt.SetR(si, Seqs.Next(rt, rt.R(si)));
         }

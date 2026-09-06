@@ -31,41 +31,7 @@ fn find_bytes(h: &[u8], n: &[u8]) -> Option<usize> {
 impl Rt {
     // --- count -------------------------------------------------------------
 
-    pub fn count_of(&mut self, v: Value) -> u32 {
-        if v.is_nil() {
-            return 0;
-        }
-        if self.is_string(v) {
-            return self.char_count(v);
-        }
-        if !v.is_heap() {
-            self.throw_str("UnsupportedOperationException", "count not supported on this type");
-            return 0;
-        }
-        match ty(&self.gc.sp, v.as_heap()) {
-            TY_VEC => self.vec_count(v),
-            TY_MAPENTRY => 2,
-            crate::obj::TY_TAGGED => 2,
-            crate::obj::TY_TABLE => self.table_count(v),
-            crate::obj::TY_TTABLE => self.ttable_count(v),
-            // A ref counts its COLUMNS, because it is a map of them.
-            crate::obj::TY_TABLEREF => {
-                let s = self.slot(v, crate::table::RF_SCHEMA);
-                self.schema_len(s)
-            }
-            TY_ARRAYMAP | TY_HASHMAP => self.map_count(v),
-            TY_SET => self.set_count(v),
-            TY_BYTES | TY_BROPE => self.b_count(v),
-            TY_TVEC => self.tvec_count(v),
-            TY_TMAP => self.slot(v, 0).as_fixnum() as u32,
-            TY_TSET => {
-                let m = self.slot(v, 0);
-                self.slot(m, 0).as_fixnum() as u32
-            }
-            TY_EMPTY_LIST => 0,
-            _ => self.seq_count(v),
-        }
-    }
+    // `count_of` is GENERATED, from `kin/collgen.kin`.
 
     /// `count` on a string is in **code points**, not UTF-16 code units.
     /// Clojure counts UTF-16, so an astral character counts 2 there and 1 here.
@@ -402,53 +368,8 @@ impl Rt {
         out
     }
 
-    pub fn pop_of(&mut self, coll: Value) -> Value {
-        if coll.is_nil() {
-            return self.throw_str("IllegalStateException", "cannot pop nil");
-        }
-        match ty(&self.gc.sp, coll.as_heap()) {
-            TY_VEC => {
-                if self.vec_count(coll) == 0 {
-                    self.throw_str("IllegalStateException", "cannot pop an empty vector")
-                } else {
-                    self.vec_pop(coll)
-                }
-            }
-            TY_EMPTY_LIST => self.throw_str("IllegalStateException", "cannot pop an empty list"),
-            _ => self.rest(coll),
-        }
-    }
-
-    pub fn peek_of(&mut self, coll: Value) -> Value {
-        if coll.is_nil() {
-            return NIL;
-        }
-        match ty(&self.gc.sp, coll.as_heap()) {
-            TY_VEC => {
-                let n = self.vec_count(coll);
-                if n == 0 {
-                    NIL
-                } else {
-                    self.vec_nth(coll, n - 1, NIL)
-                }
-            }
-            _ => self.first(coll),
-        }
-    }
-
-    pub fn empty_of(&mut self, coll: Value) -> Value {
-        if !coll.is_heap() {
-            return NIL;
-        }
-        match ty(&self.gc.sp, coll.as_heap()) {
-            TY_VEC => self.empty_vec(),
-            TY_ARRAYMAP | TY_HASHMAP => self.empty_map(),
-            TY_SET => self.empty_set(),
-            _ => self.empty_list(),
-        }
-    }
-
-    // --- transients ---------------------------------------------------------
+    // `pop_of`, `peek_of` and `empty_of` are GENERATED, from
+    // `kin/collgen.kin`.
 
     // `to_transient`, `not_a_transient`, `to_persistent`, `transient_conj`,
     // `transient_assoc`, `transient_dissoc` and `transient_pop` are

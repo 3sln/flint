@@ -94,7 +94,7 @@ public final class Tablesay {
         long q0 = com.flint.rt.Seqs.seq(rt, row);
         int qi = rt.push(q0);
         while (!Val.isNil(rt.r(qi))) {
-            long e0 = com.flint.rt.Seqs.first(rt, rt.r(qi));
+            long e0 = com._3sln.flint.kgen.rt.Seqwalk.first(rt, rt.r(qi));
             int ei = rt.push(e0);
             long k = rt.slotOrNth(rt.r(ei), 0);
             if (schemaId(rt, rt.r(si), k) >= schemaWidth(rt, rt.r(si))) {

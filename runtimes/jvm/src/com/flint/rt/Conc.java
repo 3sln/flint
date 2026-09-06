@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import com._3sln.flint.kgen.rt.Seqwalk;
+
 import com._3sln.flint.kgen.rt.Mapcore;
 
 import static com.flint.rt.Obj.*;
@@ -908,7 +910,7 @@ public final class Conc {
         } else if (rt.isSequential(rt.r(vi))) {
             int si = rt.push(Seqs.seq(rt, rt.r(vi)));
             while (!Val.isNil(rt.r(si))) {
-                int fi = rt.push(Seqs.first(rt, rt.r(si)));
+                int fi = rt.push(Seqwalk.first(rt, rt.r(si)));
                 out = checkSendableAt(rt, rt.r(fi), depth + 1, carry);
                 rt.popTo(fi);
                 if (out != null) break;

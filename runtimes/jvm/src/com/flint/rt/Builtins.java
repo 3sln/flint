@@ -1,5 +1,7 @@
 package com.flint.rt;
 
+import com._3sln.flint.kgen.rt.Seqwalk;
+
 import com._3sln.flint.kgen.rt.Mapwrite;
 
 import com._3sln.flint.kgen.rt.Mapread;
@@ -7,6 +9,7 @@ import com._3sln.flint.kgen.rt.Mapread;
 import com._3sln.flint.kgen.rt.Mapcore;
 import com._3sln.flint.kgen.rt.Maptrans;
 import com._3sln.flint.kgen.rt.Transients;
+import com._3sln.flint.kgen.rt.Collgen;
 
 import static com.flint.rt.Obj.*;
 
@@ -271,30 +274,10 @@ public final class Builtins {
             return idx < 0 ? Val.NIL : rt.slot(v, idx);
         });
 
-        def("count", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (Val.isNil(v)) return Val.fixnum(0);
-            if (rt.isHeapTy(v, TY_VEC)) return Val.fixnum(Vec.count(rt, v));
-            if (rt.isHeapTy(v, Obj.TY_TAGGED)) return Val.fixnum(2);
-            if (rt.isHeapTy(v, Obj.TY_TABLE)) return Val.fixnum(Table.tableCount(rt, v));
-            if (rt.isHeapTy(v, Obj.TY_TABLEREF))
-                return Val.fixnum(Table.schemaLen(rt, rt.slot(v, Table.RF_SCHEMA)));
-            if (Str.isString(rt, v)) return Val.fixnum(Str.charLen(rt, v));
-            if (Mapcore.isMap(rt, v)) return Val.fixnum(Mapcore.mapCount(rt, v));
-            if (Sets.isSet(rt, v)) return Val.fixnum(Sets.count(rt, v));
-            if (Maps.isTransient(rt, v)) return Val.fixnum(Maptrans.tmapCount(rt, v));
-            if (Sets.isTransient(rt, v)) return Val.fixnum(Maptrans.tsetCount(rt, v));
-            if (Vec.isTransient(rt, v)) return Val.fixnum(Vec.tcount(rt, v));
-            if (Bytes.isBytes(rt, v)) return Val.fixnum(Bytes.count(rt, v));
-            if (rt.isSeq(v)) return Val.fixnum(Seqs.count(rt, v));
-            // A MAP ENTRY counts 2. `coll.rs` has had this since it was
-            // written; this port threw "needs more of the data structures"
-            // for a value that `(seq some-map)` hands out, so ordinary
-            // guest code could not count one.
-            if (rt.isHeapTy(v, TY_MAPENTRY)) return Val.fixnum(2);
-            return rt.throwStr("UnsupportedOperationException",
-"count over " + rt.describe(v) + " needs more of the data structures");
-        });
+        // GENERATED, from `kin/collgen.kin`. The hand-written body had no
+        // arm for a TRANSIENT TABLE, so `(count (transient t))` threw here
+        // and answered on wasm.
+        def("count", (rt, at, n) -> Val.fixnum(Collgen.countOf(rt, rt.vat(at))));
         def("nth", (rt, at, n) -> {
             long v = rt.vat(at);
             int i = (int) Val.asFixnum(rt.vat(at + 1));
@@ -316,7 +299,7 @@ public final class Builtins {
                 for (int k = 0; k < i && !Val.isNil(rt.r(s)); k++) {
                     rt.setR(s, Seqs.next(rt, rt.r(s)));
                 }
-                if (!Val.isNil(rt.r(s))) got = Seqs.first(rt, rt.r(s));
+                if (!Val.isNil(rt.r(s))) got = Seqwalk.first(rt, rt.r(s));
                 rt.popTo(base);
             } else {
                 return rt.throwStr("UnsupportedOperationException",
@@ -352,7 +335,7 @@ public final class Builtins {
                 int ai = rt.push(v);
                 for (int i = 1; i < n; i++) {
                     long e = rt.vat(at + i);
-                    rt.setR(ai, Mapwrite.mapAssoc(rt, rt.r(ai), Seqs.first(rt, e), Seqs.first(rt, Seqs.rest(rt, e))));
+                    rt.setR(ai, Mapwrite.mapAssoc(rt, rt.r(ai), Seqwalk.first(rt, e), Seqwalk.first(rt, Seqwalk.rest(rt, e))));
                 }
                 long out = rt.r(ai);
                 rt.popTo(base);
@@ -385,9 +368,9 @@ public final class Builtins {
         });
 
         def("seq", (rt, at, n) -> Seqs.seq(rt, rt.vat(at)));
-        def("first", (rt, at, n) -> Seqs.first(rt, rt.vat(at)));
+        def("first", (rt, at, n) -> Seqwalk.first(rt, rt.vat(at)));
         def("next", (rt, at, n) -> Seqs.next(rt, rt.vat(at)));
-        def("rest", (rt, at, n) -> Seqs.rest(rt, rt.vat(at)));
+        def("rest", (rt, at, n) -> Seqwalk.rest(rt, rt.vat(at)));
         def("cons", (rt, at, n) -> Seqs.cons(rt, rt.vat(at), rt.vat(at + 1)));
 
         // Transients. A transient is a MUTABLE handle on a persistent value,
@@ -439,9 +422,9 @@ public final class Builtins {
                 int ai = rt.push(v);
                 for (int i = 1; i < n; i++) {
                     int ei = rt.push(rt.vat(at + i));
-                    long k = Seqs.first(rt, rt.r(ei));
+                    long k = Seqwalk.first(rt, rt.r(ei));
                     int ki = rt.push(k);
-                    long val = Seqs.first(rt, Seqs.rest(rt, rt.r(ei)));
+                    long val = Seqwalk.first(rt, Seqwalk.rest(rt, rt.r(ei)));
                     int vi2 = rt.push(val);
                     rt.setR(ai, Maptrans.tmapAssoc(rt, rt.r(ai), rt.r(ki), rt.r(vi2)));
                     rt.popTo(ei);
@@ -753,41 +736,11 @@ public final class Builtins {
         });
 
         // --- vectors as stacks ------------------------------------------------
-        def("peek", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (Val.isNil(v)) return Val.NIL;
-            // A VECTOR peeks at its LAST element and a seq at its FIRST. That
-            // asymmetry is Clojure's, and it is the same one `conj` has: each
-            // takes the end that is cheap.
-            if (rt.isHeapTy(v, TY_VEC)) {
-                int c = Vec.count(rt, v);
-                return c == 0 ? Val.NIL : Vec.nth(rt, v, c - 1, Val.NOT_FOUND);
-            }
-            return Seqs.first(rt, v);
-        });
-        def("pop", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (rt.isHeapTy(v, TY_VEC)) {
-                // `Vec.pop`, which unwinds the trie. This used to REBUILD the
-                // vector with a conj loop -- O(n) where the native runtime is
-                // O(log n), and the same answer, so nothing failed.
-                long out = Vec.pop(rt, v);
-                if (Val.isNil(out)) return rt.throwStr("IllegalStateException",
-"cannot pop an empty vector");
-                return out;
-            }
-            if (Val.isNil(v)) return rt.throwStr("IllegalStateException",
-"cannot pop nil");
-            return Seqs.rest(rt, v);
-        });
-        def("empty", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (rt.isHeapTy(v, TY_VEC)) return Vec.empty(rt);
-            if (Mapcore.isMap(rt, v)) return Maps.empty(rt);
-            if (Sets.isSet(rt, v)) return Sets.empty(rt);
-            if (rt.isSeq(v)) return Seqs.emptyList(rt);
-            return Val.NIL;
-        });
+        def("peek", (rt, at, n) -> Collgen.peekOf(rt, rt.vat(at)));
+        // The hand-written `pop` had no EMPTY LIST arm: `(pop ())` fell to
+        // `rest` and answered `()` where wasm refused it.
+        def("pop", (rt, at, n) -> Collgen.popOf(rt, rt.vat(at)));
+        def("empty", (rt, at, n) -> Collgen.emptyOf(rt, rt.vat(at)));
 
         // --- strings ----------------------------------------------------------
         def("flint/subs", (rt, at, n) -> {
@@ -861,7 +814,7 @@ public final class Builtins {
                 // CHARGED AND CHECKED INSIDE THE LOOP: the length is not known
                 // until the walk ends (`doc/decisions/0009`).
                 if (!rt.chargeTick(ticks++, 1, "str-join")) { rt.popTo(base); return Val.NIL; }
-                sb.append(Str.text(rt, Seqs.first(rt, rt.r(s))));
+                sb.append(Str.text(rt, Seqwalk.first(rt, rt.r(s))));
                 rt.setR(s, Seqs.next(rt, rt.r(s)));
             }
             rt.popTo(base);
@@ -1006,7 +959,7 @@ public final class Builtins {
             int valsAt = rt.mark();
             int count = 0;
             while (!Val.isNil(rt.r(si))) {
-                rt.push(Seqs.first(rt, rt.r(si)));
+                rt.push(Seqwalk.first(rt, rt.r(si)));
                 count++;
                 rt.setR(si, Seqs.next(rt, rt.r(si)));
             }
@@ -1276,7 +1229,7 @@ public final class Builtins {
             int si = rt.push(Seqs.seq(rt, rt.vat(at + 1)));
             int count = 0;
             while (!Val.isNil(rt.r(si))) {
-                rt.push(Seqs.first(rt, rt.r(si)));
+                rt.push(Seqwalk.first(rt, rt.r(si)));
                 count++;
                 rt.setR(si, Seqs.next(rt, rt.r(si)));
             }
