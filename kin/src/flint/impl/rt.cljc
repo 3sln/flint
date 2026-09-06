@@ -1107,6 +1107,18 @@
     ;; shadow-stack roots. The `(base, n)` convergence again: a generated source
     ;; cannot hold a host array, and the callers that would have built one were
     ;; building it once per iteration.
+    ;; STILL HAND-WRITTEN. `map-entry-vector` is one of the five functions the
+    ;; closure hole genuinely blocks -- it walks a CHAMP with a host callback --
+    ;; and `set-element-vector` is its twin. Reached as calls until that hole
+    ;; closes.
+    'map-entry-vector (core/call {:rust "{0}.map_entry_vector({1})"
+                                  :java "Maps.entryVector({0}, {1})"
+                                  :csharp "Maps.EntryVector({0}, {1})"}
+                                 {:tag Value})
+    'set-element-vector (core/call {:rust "{0}.set_element_vector({1})"
+                                    :java "Sets.elementVector({0}, {1})"
+                                    :csharp "Sets.ElementVector({0}, {1})"}
+                                   {:tag Value})
     'invoke-roots (core/call {:rust "{0}.invoke_roots({1}, {2}, {3})"
                               :java "{0}.invokeRoots({1}, {2}, {3})"
                               :csharp "{0}.InvokeRoots({1}, {2}, {3})"}

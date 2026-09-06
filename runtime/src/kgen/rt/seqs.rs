@@ -82,7 +82,7 @@ impl Rt {
         self.pop_to(mk);
         return Value::heap(a);
     }
-    pub(crate) fn range_empty(&self, v: Value) -> bool {
+    pub fn range_empty(&self, v: Value) -> bool {
         let e: Value = self.slot(v, 1);
         // An absent end is an UNBOUNDED range, which is never empty.
         if e.is_nil() {

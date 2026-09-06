@@ -1384,7 +1384,21 @@ generated a call that does not compile the first time a source did.
 | 5 | `Seqs`: the constructors | hole 10 + convergences | 247 | **SHIPPED** bar `seq`, which waits on hole 5 |
 | 6 | `Bytes`: two regions | hole 10 + a byte sink + the `(base, n)` convergence | **~880 net** |
 | 7 | `Maps`: `merge_two` + the six structural copies | **nothing new** -- 639 lines, algorithm line-for-line identical | 639 |
-| 8 | `Table`, `Str`'s rope half, the rest | hole 5, reorders | ~2,600 |
+| 8 | `Table`, `Str`'s rope half, the rest | hole 5, reorders | ~2,600 | **SHIPPED** |
+
+ROW 8 IS DONE. `Table` holds NO hand-written functions in any runtime --
+`table.rs` is 137 lines of constants and module wiring, from 1,595, and the
+three runtimes together are 454 lines from 3,700, in eleven kin sources.
+
+THE LAST FUNCTION WAS FILED UNDER THE CLOSURE HOLE AND DID NOT NEED IT.
+`table_reduce_column` takes a callback, so the census counted it with
+`map_for_each`. But its callback is a FLINT closure invoked through the
+runtime's own `invoke`; what was missing was a way to hand it its ARGUMENTS,
+which is the `(base, n)` convergence `list_from_roots` already established.
+`invoke-roots` takes them from a contiguous run of shadow-stack roots and
+allocates nothing, where all three runtimes had been building a host argument
+array once per row. The five `map_for_each` functions remain a real hole; this
+was the census reading its own warning back at it.
 
 `Str`'S ROPE HALF IS DONE. Row 8's string share shipped across five sources --
 `ropenode`, `ropecat`, `ropeslice`, `ropeflat`, `ropeeq`, `ropecp`,

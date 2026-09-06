@@ -25,6 +25,7 @@ public static class Seqs {
     public static long Next(Rt rt, long v) { return _3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, v); }
     public static long Rest(Rt rt, long v) { return _3sln.Flint.Kgen.Rt.Seqwalk.Rest(rt, v); }
     public static long Force(Rt rt, long ls) { return _3sln.Flint.Kgen.Rt.Seqwalk.Force(rt, ls); }
+    public static long Seq(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, v); }
 
     /// `Cons`, under the name its callers already use -- the body is
     /// generated, as `Seqcore.Cons`.
@@ -42,66 +43,6 @@ public static class Seqs {
     /// A lazy seq's slots. Outside the generated region, for the same reason
     /// as in `Seqs.java`.
     public const int LS_THUNK = 0, LS_SEQ = 1;
-
-
-
-    /// `seq`: nil for an empty collection, otherwise a seq object.
-    ///
-    /// NIL rather than an empty seq is the whole convention -- `(seq [])` is
-    /// nil, and every `while (s)` loop in the library depends on it.
-    public static long Seq(Rt rt, long v) {
-        if (Val.IsNil(v)) return Val.Nil;
-        if (Str.IsString(rt, v)) return Str.CharLen(rt, v) == 0 ? Val.Nil : Strseq(rt, v, 0);
-        if (!Val.IsHeap(v)) return Val.Nil;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
-        switch (t) {
-            case Obj.TyEmptyList: return Val.Nil;
-            case Obj.TyCons:
-            case Obj.TyVecseq: return v;
-            case Obj.TyVec: return Vec.Count(rt, v) == 0 ? Val.Nil : Vecseq(rt, v, 0);
-            // A vecseq over the ENTRY ITSELF -- see the JVM's `seq`.
-            case Obj.TyMapentry: return Vecseq(rt, v, 0);
-            // Iterating a table hands back REFS, materialising nothing. It
-            // rides on `Vecseq` because a table is indexed and counted exactly
-            // as a vector is; only `First` differs (`doc/decisions/0026`).
-            case Obj.TyTable:
-                return Table.tableCount(rt, v) == 0 ? Val.Nil : Vecseq(rt, v, 0);
-            // A ref materialises HERE and only here: `seq`, `=` and `hash` all
-            // want the whole row and each is O(columns) anyway.
-            case Obj.TyTableref: return Seq(rt, Table.refToMap(rt, v));
-            case Obj.TyStrseq: return v;
-            case Obj.TyRange: return RangeEmpty(rt, v) ? Val.Nil : v;
-            case Obj.TyLazyseq: {
-                int bas = rt.Mark();
-                int fi = rt.Push(Force(rt, v));
-                long outv = Val.IsNil(rt.R(fi)) ? Val.Nil : Seq(rt, rt.R(fi));
-                rt.PopTo(bas);
-                return outv;
-            }
-            case Obj.TySet: {
-                if (Sets.Count(rt, v) == 0) return Val.Nil;
-                int bas = rt.Mark();
-                int ev = rt.Push(Sets.ElementVector(rt, v));
-                long outv = Vecseq(rt, rt.R(ev), 0);
-                rt.PopTo(bas);
-                return outv;
-            }
-            case Obj.TyArraymap:
-            case Obj.TyHashmap: {
-                if (Mapcore.MapCount(rt, v) == 0) return Val.Nil;
-                int bas = rt.Mark();
-                int ev = rt.Push(Maps.EntryVector(rt, v));
-                long outv = Vecseq(rt, rt.R(ev), 0);
-                rt.PopTo(bas);
-                return outv;
-            }
-            default:
-                return rt.ThrowStr("UnsupportedOperationException", 
-                    "seq over " + rt.Describe(v) + " needs more of the data structures");
-        }
-    }
-
-
 
 
 

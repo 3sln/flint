@@ -89,7 +89,7 @@
     (pop-to rt mk)
     (return (heap a))))
 
-(defn ^:method ^Bool range-empty [^Rt rt ^Value v]
+(defn ^:pub ^:method ^Bool range-empty [^Rt rt ^Value v]
   (let [^Value e (slot rt v 1)]
     (comment "An absent end is an UNBOUNDED range, which is never empty.")
     (if (nil? rt e)

@@ -182,4 +182,98 @@ impl Rt {
         self.pop_to(base);
         return n;
     }
+    /// The seq of `v`, or NIL when there is nothing to walk.
+    /// 
+    /// NO `case`, for the reason `nouns.kin` gives: hole 3 is open, and these
+    /// arms are mutually exclusive so an early `return` leaves nothing to fall
+    /// through to.
+    /// 
+    /// ITERATING A TABLE HANDS BACK REFS, one per row, materialising nothing --
+    /// which is the point of the ref type and not a detail of it (`0026`). It
+    /// rides on `TY_VECSEQ` because a table is indexed and counted exactly as a
+    /// vector is; only `first` differs, and it differs by calling `table-ref`.
+    /// 
+    /// A REF MATERIALISES HERE AND ONLY HERE. `seq`, `=` and `hash` all want the
+    /// whole row and each is O(columns) anyway; the paths that must stay cheap --
+    /// `get` and `(:name row)` -- never come through.
+    pub fn seq(&mut self, v: Value) -> Value {
+        if v.is_nil() {
+            return NIL;
+        }
+        if self.is_string(v) {
+            // CODE POINTS, matching the index the strseq holds.
+            if self.char_count(v) == 0 {
+                return NIL;
+            }
+            return self.strseq(v, 0);
+        }
+        if !v.is_heap() {
+            return NIL;
+        }
+        let t: u8 = ty(&self.gc.sp, v.as_heap());
+        if t == TY_EMPTY_LIST {
+            return NIL;
+        }
+        if (t == TY_CONS) || ((t == TY_VECSEQ) || (t == TY_STRSEQ)) {
+            return v;
+        }
+        if t == TY_RANGE {
+            if self.range_empty(v) {
+                return NIL;
+            }
+            return v;
+        }
+        if t == TY_LAZYSEQ {
+            let s: Value = self.force(v);
+            if s.is_nil() {
+                return NIL;
+            }
+            return self.seq(s);
+        }
+        if t == TY_VEC {
+            if self.vec_count(v) == 0 {
+                return NIL;
+            }
+            return self.vecseq(v, 0);
+        }
+        if t == TY_MAPENTRY {
+            return self.vecseq(v, 0);
+        }
+        if t == TY_TABLE {
+            if self.table_count(v) == 0 {
+                return NIL;
+            }
+            return self.vecseq(v, 0);
+        }
+        if t == TY_TABLEREF {
+            let m: Value = self.ref_to_map(v);
+            return self.seq(m);
+        }
+        if (t == TY_ARRAYMAP) || (t == TY_HASHMAP) {
+            let ents: Value = self.map_entry_vector(v);
+            if ents.is_nil() {
+                return NIL;
+            }
+            if self.vec_count(ents) == 0 {
+                return NIL;
+            }
+            return self.vecseq(ents, 0);
+        }
+        if t == TY_SET {
+            let ents: Value = self.set_element_vector(v);
+            if ents.is_nil() {
+                return NIL;
+            }
+            if self.vec_count(ents) == 0 {
+                return NIL;
+            }
+            return self.vecseq(ents, 0);
+        }
+        // REFUSED, NOT NIL. This answered NIL and both ports threw, so
+        // `(seq (atom 1))` was nil here and an exception there -- a reachable
+        // divergence, and the ports are the ones matching Clojure, which
+        // refuses anything it cannot make an ISeq from.
+        let what: alloc::string::String = self.describe(v);
+        return self.throw_str("IllegalArgumentException", &alloc::format!("{}{}{}", "seq over ", what, " needs more of the data structures"));
+    }
 }

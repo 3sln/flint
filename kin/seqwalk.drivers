@@ -1,4 +1,5 @@
 --rust-head
+extern crate alloc;
 type Addr = u32;
 #[derive(Clone, Copy, PartialEq)]
 struct Value(u64);
@@ -8,6 +9,11 @@ const TY_RANGE: u8 = 13; const TY_MAPENTRY: u8 = 20; const TY_TABLE: u8 = 49;
 const TY_LAZYSEQ: u8 = 3; const TY_EMPTY_LIST: u8 = 7;
 const LS_THUNK: u32 = 0; const LS_SEQ: u32 = 1;
 const TY_VEC: u8 = 9; const TY_STR: u8 = 2;
+// THE TYPES `seq` DISPATCHES OVER beyond the walk's own. Each has to exist for
+// the fixture to hand `seq` one of it, which is the whole point: an arm that
+// nothing is ever built for is an arm nothing checks.
+const TY_ARRAYMAP: u8 = 16; const TY_HASHMAP: u8 = 17; const TY_SET: u8 = 18;
+const TY_TABLEREF: u8 = 50; const TY_ATOM: u8 = 32;
 const C_FIRST: u32 = 0; const C_REST: u32 = 1; const C_COUNT: u32 = 3;
 impl Value {
     fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
@@ -21,8 +27,35 @@ impl Value {
     fn fixnum(n: i64) -> Value { Value(n as u64) }
 }
 struct Gc { sp: Vec<u8> }
-struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, starve: bool }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, starve: bool,
+           thrown: alloc::string::String }
 impl Rt {
+    // `seq`'s COLLABORATORS. `map-entry-vector` and `set-element-vector` are
+    // still hand-written -- they walk a CHAMP with a host callback, which is
+    // the closure hole -- so the probe answers a plain vector.
+    fn is_string(&self, v: Value) -> bool {
+        v.is_heap() && self.ty_of(v) == TY_STR
+    }
+    fn char_len(&mut self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn range_empty(&mut self, v: Value) -> bool {
+        self.slot(v, 0).0 >= self.slot(v, 1).0
+    }
+    fn map_entry_vector(&mut self, m: Value) -> Value { self.slot(m, 0) }
+    fn set_element_vector(&mut self, m: Value) -> Value { self.slot(m, 0) }
+    fn ref_to_map(&mut self, r: Value) -> Value { self.slot(r, 0) }
+    fn describe(&mut self, v: Value) -> alloc::string::String {
+        if v.is_nil() { return alloc::string::String::from("nil"); }
+        if !v.is_heap() { return alloc::string::String::from("a number"); }
+        alloc::string::String::from(match self.ty_of(v) {
+            TY_ATOM => "an atom",
+            _ => "something else",
+        })
+    }
+    fn throw_str(&mut self, _kind: &str, msg: &alloc::string::String) -> Value {
+        self.thrown = msg.clone();
+        NIL
+    }
+    fn ty_of(&self, v: Value) -> u8 { self.gc.sp[v.0 as usize] }
     fn mark(&self) -> usize { self.roots.len() }
     fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
     fn r(&self, i: usize) -> Value { self.roots[i] }
@@ -75,14 +108,6 @@ impl Rt {
     fn invoke(&mut self, f: Value, _args: &[Value]) -> Value { self.slot(f, 0) }
     // `seq` is the IDENTITY on a seq and nil on anything else, which is what
     // the real one narrows to once a collection has been converted.
-    fn seq(&mut self, v: Value) -> Value {
-        if !v.is_heap() { return NIL; }
-        match ty(&self.gc.sp, v.as_heap()) {
-            TY_CONS | TY_VECSEQ | TY_STRSEQ => v,
-            TY_RANGE => if self.slot(v, 0).0 >= self.slot(v, 1).0 { NIL } else { v },
-            _ => NIL,
-        }
-    }
     fn vecseq(&mut self, v: Value, i: u32) -> Value {
         let a = self.alloc(TY_VECSEQ, 3);
         self.set_slot(a, 0, v); self.set_slot(a, 1, Value::fixnum(i as i64));
@@ -105,7 +130,8 @@ impl Rt {
 }
 fn main() {
     let mut rt = Rt { h: vec![0; 4000], gc: Gc { sp: vec![0u8; 4000] }, lens: vec![0; 4000],
-                      bump: 100, roots: Vec::new(), starve: false };
+                      bump: 100, roots: Vec::new(), starve: false,
+                      thrown: alloc::string::String::new() };
     let mut o = String::new();
     let mk = |rt: &mut Rt, t: u8, vals: &[u64]| -> Value {
         let a = rt.alloc(t, vals.len() as u32 + 1);
@@ -211,12 +237,46 @@ fn main() {
     o.push_str(&format!("cnt_hint={} cnt_walk={} cnt_vec={} cnt_nil={} ",
                         rt.seq_count(ct1), rt.seq_count(un1),
                         rt.seq_count(vec), rt.seq_count(NIL)));
+
+    // SEQ ITSELF, over everything it dispatches on. `1` means "a seq came
+    // back", `0` means NIL -- and the EMPTY cases must answer NIL, because
+    // `(seq [])` being a truthy empty seq is the bug that makes every `when
+    // (seq ...)` in a program wrong.
+    let empty_vec = mk(&mut rt, TY_VEC, &[0]);
+    let empty_str = mk(&mut rt, TY_STR, &[0]);
+    let el = rt.empty_list();
+    let inner_v = mk(&mut rt, TY_VEC, &[2, 0xA1, 0xA2]);
+    let amap = mk(&mut rt, TY_ARRAYMAP, &[inner_v.0]);
+    let hmap = mk(&mut rt, TY_HASHMAP, &[inner_v.0]);
+    let set = mk(&mut rt, TY_SET, &[inner_v.0]);
+    let empty_map = mk(&mut rt, TY_ARRAYMAP, &[empty_vec.0]);
+    let tref = mk(&mut rt, TY_TABLEREF, &[amap.0]);
+    let ment = mk(&mut rt, TY_MAPENTRY, &[2, 0xB1, 0xB2]);
+    let some = |rt: &mut Rt, v: Value| -> u32 { (!rt.seq(v).is_nil()) as u32 };
+    o.push_str(&format!("seq={}{}{}{}{}{}{}{}{}{}{} ",
+                        some(&mut rt, NIL), some(&mut rt, el),
+                        some(&mut rt, st), some(&mut rt, empty_str),
+                        some(&mut rt, vec), some(&mut rt, empty_vec),
+                        some(&mut rt, amap), some(&mut rt, hmap),
+                        some(&mut rt, empty_map), some(&mut rt, set),
+                        some(&mut rt, ment)));
+    // A TABLE, A REF and a LAZY SEQ all come back as seqs; a ref goes through
+    // its map, which is the one place a row materialises.
+    o.push_str(&format!("seq2={}{}{} ", some(&mut rt, tab), some(&mut rt, tref),
+                        some(&mut rt, outer)));
+    // AND THE REFUSAL. This answered NIL here and threw on both ports, so
+    // `(seq (atom 1))` was nil in one runtime and an exception in two.
+    let atom = mk(&mut rt, TY_ATOM, &[0]);
+    let bad = rt.seq(atom);
+    o.push_str(&format!("refused={}|{}", bad.is_nil() as u32, rt.thrown));
     println!("{}", o);
 }
 --java-head
     static final long NIL = 0xFFFFL;
     static final int TY_CONS = 6, TY_VECSEQ = 11, TY_STRSEQ = 12, TY_RANGE = 13;
     static final int TY_MAPENTRY = 20, TY_TABLE = 49, TY_VEC = 9, TY_STR = 2;
+    static final int TY_ARRAYMAP = 16, TY_HASHMAP = 17, TY_SET = 18,
+                     TY_TABLEREF = 50, TY_ATOM = 32;
     static final int TY_LAZYSEQ = 3, TY_EMPTY_LIST = 7;
     static final int LS_THUNK = 0, LS_SEQ = 1;
     static final int C_FIRST = 0, C_REST = 1, C_COUNT = 3;
@@ -237,6 +297,8 @@ fn main() {
         int[] lens = new int[4000];
         long bump = 100;
         boolean starve = false;
+        String thrown = "";
+        long throwStr(String kind, String msg) { thrown = msg; return NIL; }
         java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
         int mark() { return roots.size(); }
         int push(long v) { roots.add(v); return roots.size() - 1; }
@@ -264,16 +326,31 @@ fn main() {
         }
     }
     static final class Str {
+        static boolean isString(Rt rt, long v) {
+            return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR;
+        }
         static int charLen(Rt rt, long v) { return (int) rt.slot(v, 0); }
         static long nth(Rt rt, long v, int i, long dflt) {
             return i >= charLen(rt, v) ? dflt : rt.slot(v, i + 1);
         }
     }
     static final class Table {
+        static long refToMap(Rt rt, long r) { return rt.slot(r, 0); }
         static int tableCount(Rt rt, long t) { return (int) rt.slot(t, 0); }
         static long tableRef(Rt rt, long t, int i) { return 0x7000 + i; }
     }
     static final class Num { static long add(Rt rt, long a, long b) { return a + b; } }
+    // `seq`'s COLLABORATORS. `entryVector` and `elementVector` are still
+    // hand-written -- the closure hole -- so the probe answers a plain vector.
+    static final class Maps { static long entryVector(Rt rt, long m) { return rt.slot(m, 0); } }
+    static final class Sets { static long elementVector(Rt rt, long m) { return rt.slot(m, 0); } }
+    static boolean rangeEmpty(Rt rt, long v) { return rt.slot(v, 0) >= rt.slot(v, 1); }
+    static String THROWN = "";
+    static String describe(Rt rt, long v) {
+        if (Val.isNil(v)) return "nil";
+        if (!Val.isHeap(v)) return "a number";
+        return ty(rt.gc.sp, Val.asHeap(v)) == TY_ATOM ? "an atom" : "something else";
+    }
     static long countHint(Rt rt, long v) {
         if (!Val.isHeap(v)) return NIL;
         int t = ty(rt.gc.sp, Val.asHeap(v));
@@ -297,6 +374,7 @@ fn main() {
         rt.setSlot(a, 0, s); rt.setSlot(a, 1, e); rt.setSlot(a, 2, st);
         return Val.heap(a);
     }
+    static int some(Rt rt, long v) { return Val.isNil(seq(rt, v)) ? 0 : 1; }
     static long mk(Rt rt, int t, long[] vals) {
         long a = rt.alloc(t, vals.length + 1);
         for (int k = 0; k < vals.length; k++) rt.setSlot(a, k, vals[k]);
@@ -309,13 +387,10 @@ fn main() {
             static final class rt {
                 static final class Seqs {
                     static long emptyList(Rt rt2) { return emptyListOf(rt2); }
-                    static long seq(Rt rt2, long v) {
-                        if (!Val.isHeap(v)) return NIL;
-                        int t = ty(rt2.gc.sp, Val.asHeap(v));
-                        if (t == TY_CONS || t == TY_VECSEQ || t == TY_STRSEQ) return v;
-                        if (t == TY_RANGE) return rt2.slot(v, 0) >= rt2.slot(v, 1) ? NIL : v;
-                        return NIL;
-                    }
+                    // `seq-of` NOW ROUTES TO THE GENERATED ONE -- see the C#
+                    // copy. A second hand-written `seq` here would be the
+                    // fixture testing itself.
+                    static long seq(Rt rt2, long v) { return Probe.seq(rt2, v); }
                 }
             }
         }
@@ -375,7 +450,28 @@ fn main() {
         o.append("cnt_hint=").append(seqCount(rt, ct1))
          .append(" cnt_walk=").append(seqCount(rt, un1))
          .append(" cnt_vec=").append(seqCount(rt, vec))
-         .append(" cnt_nil=").append(seqCount(rt, NIL)).append(' ');
+         .append(" cnt_nil=").append(seqCount(rt, NIL));
+        long emptyVec = mk(rt, TY_VEC, new long[]{0});
+        long emptyStr = mk(rt, TY_STR, new long[]{0});
+        long el = emptyListOf(rt);
+        long innerV = mk(rt, TY_VEC, new long[]{2, 0xA1, 0xA2});
+        long amap = mk(rt, TY_ARRAYMAP, new long[]{innerV});
+        long hmap = mk(rt, TY_HASHMAP, new long[]{innerV});
+        long set = mk(rt, TY_SET, new long[]{innerV});
+        long emptyMap = mk(rt, TY_ARRAYMAP, new long[]{emptyVec});
+        long tref = mk(rt, TY_TABLEREF, new long[]{amap});
+        long ment = mk(rt, TY_MAPENTRY, new long[]{2, 0xB1, 0xB2});
+        o.append(" seq=").append(some(rt, NIL)).append(some(rt, el))
+         .append(some(rt, st)).append(some(rt, emptyStr))
+         .append(some(rt, vec)).append(some(rt, emptyVec))
+         .append(some(rt, amap)).append(some(rt, hmap))
+         .append(some(rt, emptyMap)).append(some(rt, set))
+         .append(some(rt, ment)).append(' ');
+        o.append("seq2=").append(some(rt, tab)).append(some(rt, tref))
+         .append(some(rt, outer)).append(' ');
+        long atom = mk(rt, TY_ATOM, new long[]{0});
+        o.append("refused=").append(Val.isNil(seq(rt, atom)) ? 1 : 0)
+         .append('|').append(rt.thrown);
         System.out.println(o.toString());
     }
 --csharp-pre
@@ -388,13 +484,14 @@ fn main() {
 namespace Flint.Rt {
     internal static class Seqs {
         internal static long EmptyList(Probe.Rt rt) { return Probe.EmptyListOf(rt); }
-        internal static long Seq(Probe.Rt rt, long v) {
-            if (!Probe.Val.IsHeap(v)) return Probe.Val.Nil;
-            int t = Probe.Obj.Ty(rt.gc.sp, Probe.Val.AsHeap(v));
-            if (t == Probe.Obj.TyCons || t == Probe.Obj.TyVecseq || t == Probe.Obj.TyStrseq) return v;
-            if (t == Probe.Obj.TyRange) return rt.Slot(v, 0) >= rt.Slot(v, 1) ? Probe.Val.Nil : v;
-            return Probe.Val.Nil;
-        }
+        // `seq-of` NOW ROUTES TO THE GENERATED ONE. `seq` used to be
+        // hand-written and the probe carried its own copy; it is generated
+        // into this very module now, so a second copy here would be the
+        // fixture testing itself.
+        internal static long Seq(Probe.Rt rt, long v) { return Probe.Seq(rt, v); }
+    }
+    internal static class Table {
+        internal static long refToMap(Probe.Rt rt, long r) { return rt.Slot(r, 0); }
     }
 }
 
@@ -406,6 +503,8 @@ namespace Flint.Rt {
         internal const int TyCons = 6, TyVecseq = 11, TyStrseq = 12, TyRange = 13;
         internal const int TyMapentry = 20, TyTable = 49, TyVec = 9, TyStr = 2;
         internal const int TyLazyseq = 3, TyEmptyList = 7;
+        internal const int TyArraymap = 16, TyHashmap = 17, TySet = 18,
+                           TyTableref = 50, TyAtom = 32;
         internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
     }
     internal static class Val {
@@ -425,6 +524,8 @@ namespace Flint.Rt {
         internal int[] lens = new int[4000];
         internal long bump = 100;
         internal bool starve = false;
+        internal string thrown = "";
+        internal long ThrowStr(string kind, string msg) { thrown = msg; return Val.Nil; }
         internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
         internal int Mark() { return roots.Count; }
         internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
@@ -451,6 +552,9 @@ namespace Flint.Rt {
         }
     }
     internal static class Str {
+        internal static bool IsString(Rt rt, long v) {
+            return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr;
+        }
         internal static int CharLen(Rt rt, long v) { return (int) rt.Slot(v, 0); }
         internal static long Nth(Rt rt, long v, int i, long dflt) {
             return i >= CharLen(rt, v) ? dflt : rt.Slot(v, i + 1);
@@ -461,6 +565,15 @@ namespace Flint.Rt {
         internal static long tableRef(Rt rt, long t, int i) { return 0x7000 + i; }
     }
     internal static class Num { internal static long Add(Rt rt, long a, long b) { return a + b; } }
+    // `seq`'s collaborators -- see the Java copy.
+    internal static class Maps { internal static long EntryVector(Rt rt, long m) { return rt.Slot(m, 0); } }
+    internal static class Sets { internal static long ElementVector(Rt rt, long m) { return rt.Slot(m, 0); } }
+    internal static bool RangeEmpty(Rt rt, long v) { return rt.Slot(v, 0) >= rt.Slot(v, 1); }
+    internal static string Describe(Rt rt, long v) {
+        if (Val.IsNil(v)) return "nil";
+        if (!Val.IsHeap(v)) return "a number";
+        return Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyAtom ? "an atom" : "something else";
+    }
     internal static long CountHint(Rt rt, long v) {
         if (!Val.IsHeap(v)) return Val.Nil;
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
@@ -484,6 +597,7 @@ namespace Flint.Rt {
         rt.SetSlot(a, 0, s); rt.SetSlot(a, 1, e); rt.SetSlot(a, 2, st);
         return Val.Heap(a);
     }
+    static int Some(Rt rt, long v) { return Val.IsNil(Seq(rt, v)) ? 0 : 1; }
     static long Mk(Rt rt, int t, long[] vals) {
         long a = rt.Alloc(t, vals.Length + 1);
         for (int k = 0; k < vals.Length; k++) rt.SetSlot(a, k, vals[k]);
@@ -544,6 +658,27 @@ namespace Flint.Rt {
         o.Append("cnt_hint=").Append(SeqCount(rt, ct1))
          .Append(" cnt_walk=").Append(SeqCount(rt, un1))
          .Append(" cnt_vec=").Append(SeqCount(rt, vec))
-         .Append(" cnt_nil=").Append(SeqCount(rt, NIL)).Append(' ');
+         .Append(" cnt_nil=").Append(SeqCount(rt, NIL));
+        long emptyVec = Mk(rt, Obj.TyVec, new long[]{0});
+        long emptyStr = Mk(rt, Obj.TyStr, new long[]{0});
+        long el = EmptyListOf(rt);
+        long innerV = Mk(rt, Obj.TyVec, new long[]{2, 0xA1, 0xA2});
+        long amap = Mk(rt, Obj.TyArraymap, new long[]{innerV});
+        long hmap = Mk(rt, Obj.TyHashmap, new long[]{innerV});
+        long set = Mk(rt, Obj.TySet, new long[]{innerV});
+        long emptyMap = Mk(rt, Obj.TyArraymap, new long[]{emptyVec});
+        long tref = Mk(rt, Obj.TyTableref, new long[]{amap});
+        long ment = Mk(rt, Obj.TyMapentry, new long[]{2, 0xB1, 0xB2});
+        o.Append(" seq=").Append(Some(rt, Val.Nil)).Append(Some(rt, el))
+         .Append(Some(rt, st)).Append(Some(rt, emptyStr))
+         .Append(Some(rt, vec)).Append(Some(rt, emptyVec))
+         .Append(Some(rt, amap)).Append(Some(rt, hmap))
+         .Append(Some(rt, emptyMap)).Append(Some(rt, set))
+         .Append(Some(rt, ment)).Append(' ');
+        o.Append("seq2=").Append(Some(rt, tab)).Append(Some(rt, tref))
+         .Append(Some(rt, outer)).Append(' ');
+        long atom = Mk(rt, Obj.TyAtom, new long[]{0});
+        o.Append("refused=").Append(Val.IsNil(Seq(rt, atom)) ? 1 : 0)
+         .Append('|').Append(rt.thrown);
         System.Console.WriteLine(o.ToString());
     }

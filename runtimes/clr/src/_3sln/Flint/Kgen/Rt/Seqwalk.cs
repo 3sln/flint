@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Nouns;
 using static global::_3sln.Flint.Kgen.Rt.Seqcore;
 using static global::_3sln.Flint.Kgen.Rt.Seqs;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
@@ -182,5 +183,99 @@ public static class Seqwalk {
         }
         rt.PopTo(@base);
         return n;
+    }
+    /// The seq of `v`, or NIL when there is nothing to walk.
+    /// 
+    /// NO `case`, for the reason `nouns.kin` gives: hole 3 is open, and these
+    /// arms are mutually exclusive so an early `return` leaves nothing to fall
+    /// through to.
+    /// 
+    /// ITERATING A TABLE HANDS BACK REFS, one per row, materialising nothing --
+    /// which is the point of the ref type and not a detail of it (`0026`). It
+    /// rides on `TY_VECSEQ` because a table is indexed and counted exactly as a
+    /// vector is; only `first` differs, and it differs by calling `table-ref`.
+    /// 
+    /// A REF MATERIALISES HERE AND ONLY HERE. `seq`, `=` and `hash` all want the
+    /// whole row and each is O(columns) anyway; the paths that must stay cheap --
+    /// `get` and `(:name row)` -- never come through.
+    public static long Seq(Rt rt, long v) {
+        if (Val.IsNil(v)) {
+            return Val.Nil;
+        }
+        if (Str.IsString(rt, v)) {
+            // CODE POINTS, matching the index the strseq holds.
+            if (Str.CharLen(rt, v) == 0) {
+                return Val.Nil;
+            }
+            return Strseq(rt, v, 0);
+        }
+        if (!Val.IsHeap(v)) {
+            return Val.Nil;
+        }
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        if (t == Obj.TyEmptyList) {
+            return Val.Nil;
+        }
+        if ((t == Obj.TyCons) || ((t == Obj.TyVecseq) || (t == Obj.TyStrseq))) {
+            return v;
+        }
+        if (t == Obj.TyRange) {
+            if (RangeEmpty(rt, v)) {
+                return Val.Nil;
+            }
+            return v;
+        }
+        if (t == Obj.TyLazyseq) {
+            long s = Force(rt, v);
+            if (Val.IsNil(s)) {
+                return Val.Nil;
+            }
+            return Seq(rt, s);
+        }
+        if (t == Obj.TyVec) {
+            if (Vec.Count(rt, v) == 0) {
+                return Val.Nil;
+            }
+            return Vecseq(rt, v, 0);
+        }
+        if (t == Obj.TyMapentry) {
+            return Vecseq(rt, v, 0);
+        }
+        if (t == Obj.TyTable) {
+            if (Table.tableCount(rt, v) == 0) {
+                return Val.Nil;
+            }
+            return Vecseq(rt, v, 0);
+        }
+        if (t == Obj.TyTableref) {
+            long m = global::Flint.Rt.Table.refToMap(rt, v);
+            return Seq(rt, m);
+        }
+        if ((t == Obj.TyArraymap) || (t == Obj.TyHashmap)) {
+            long ents = Maps.EntryVector(rt, v);
+            if (Val.IsNil(ents)) {
+                return Val.Nil;
+            }
+            if (Vec.Count(rt, ents) == 0) {
+                return Val.Nil;
+            }
+            return Vecseq(rt, ents, 0);
+        }
+        if (t == Obj.TySet) {
+            long ents = Sets.ElementVector(rt, v);
+            if (Val.IsNil(ents)) {
+                return Val.Nil;
+            }
+            if (Vec.Count(rt, ents) == 0) {
+                return Val.Nil;
+            }
+            return Vecseq(rt, ents, 0);
+        }
+        // REFUSED, NOT NIL. This answered NIL and both ports threw, so
+        // `(seq (atom 1))` was nil here and an exception there -- a reachable
+        // divergence, and the ports are the ones matching Clojure, which
+        // refuses anything it cannot make an ISeq from.
+        string what = Describe(rt, v);
+        return rt.ThrowStr("IllegalArgumentException", "seq over " + what + " needs more of the data structures");
     }
 }

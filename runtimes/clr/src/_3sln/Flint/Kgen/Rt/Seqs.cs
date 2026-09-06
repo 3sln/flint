@@ -78,7 +78,7 @@ public static class Seqs {
         rt.PopTo(mk);
         return Val.Heap(a);
     }
-    internal static bool RangeEmpty(Rt rt, long v) {
+    public static bool RangeEmpty(Rt rt, long v) {
         long e = rt.Slot(v, 1);
         // An absent end is an UNBOUNDED range, which is never empty.
         if (Val.IsNil(e)) {

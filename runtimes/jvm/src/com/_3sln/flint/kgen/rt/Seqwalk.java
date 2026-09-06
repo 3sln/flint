@@ -9,6 +9,7 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Nouns.*;
 import static com._3sln.flint.kgen.rt.Seqcore.*;
 import static com._3sln.flint.kgen.rt.Seqs.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
@@ -180,5 +181,99 @@ public final class Seqwalk {
         }
         rt.popTo(base);
         return n;
+    }
+    /// The seq of `v`, or NIL when there is nothing to walk.
+    /// 
+    /// NO `case`, for the reason `nouns.kin` gives: hole 3 is open, and these
+    /// arms are mutually exclusive so an early `return` leaves nothing to fall
+    /// through to.
+    /// 
+    /// ITERATING A TABLE HANDS BACK REFS, one per row, materialising nothing --
+    /// which is the point of the ref type and not a detail of it (`0026`). It
+    /// rides on `TY_VECSEQ` because a table is indexed and counted exactly as a
+    /// vector is; only `first` differs, and it differs by calling `table-ref`.
+    /// 
+    /// A REF MATERIALISES HERE AND ONLY HERE. `seq`, `=` and `hash` all want the
+    /// whole row and each is O(columns) anyway; the paths that must stay cheap --
+    /// `get` and `(:name row)` -- never come through.
+    public static long seq(Rt rt, long v) {
+        if (Val.isNil(v)) {
+            return Val.NIL;
+        }
+        if (Str.isString(rt, v)) {
+            // CODE POINTS, matching the index the strseq holds.
+            if (Str.charLen(rt, v) == 0) {
+                return Val.NIL;
+            }
+            return strseq(rt, v, 0);
+        }
+        if (!Val.isHeap(v)) {
+            return Val.NIL;
+        }
+        int t = ty(rt.gc.sp, Val.asHeap(v));
+        if (t == TY_EMPTY_LIST) {
+            return Val.NIL;
+        }
+        if ((t == TY_CONS) || ((t == TY_VECSEQ) || (t == TY_STRSEQ))) {
+            return v;
+        }
+        if (t == TY_RANGE) {
+            if (rangeEmpty(rt, v)) {
+                return Val.NIL;
+            }
+            return v;
+        }
+        if (t == TY_LAZYSEQ) {
+            long s = force(rt, v);
+            if (Val.isNil(s)) {
+                return Val.NIL;
+            }
+            return seq(rt, s);
+        }
+        if (t == TY_VEC) {
+            if (Vec.count(rt, v) == 0) {
+                return Val.NIL;
+            }
+            return vecseq(rt, v, 0);
+        }
+        if (t == TY_MAPENTRY) {
+            return vecseq(rt, v, 0);
+        }
+        if (t == TY_TABLE) {
+            if (Table.tableCount(rt, v) == 0) {
+                return Val.NIL;
+            }
+            return vecseq(rt, v, 0);
+        }
+        if (t == TY_TABLEREF) {
+            long m = Table.refToMap(rt, v);
+            return seq(rt, m);
+        }
+        if ((t == TY_ARRAYMAP) || (t == TY_HASHMAP)) {
+            long ents = Maps.entryVector(rt, v);
+            if (Val.isNil(ents)) {
+                return Val.NIL;
+            }
+            if (Vec.count(rt, ents) == 0) {
+                return Val.NIL;
+            }
+            return vecseq(rt, ents, 0);
+        }
+        if (t == TY_SET) {
+            long ents = Sets.elementVector(rt, v);
+            if (Val.isNil(ents)) {
+                return Val.NIL;
+            }
+            if (Vec.count(rt, ents) == 0) {
+                return Val.NIL;
+            }
+            return vecseq(rt, ents, 0);
+        }
+        // REFUSED, NOT NIL. This answered NIL and both ports threw, so
+        // `(seq (atom 1))` was nil here and an exception there -- a reachable
+        // divergence, and the ports are the ones matching Clojure, which
+        // refuses anything it cannot make an ISeq from.
+        String what = describe(rt, v);
+        return rt.throwStr("IllegalArgumentException", "seq over " + what + " needs more of the data structures");
     }
 }

@@ -33,9 +33,15 @@
                                    Rt Value I32 Ty NIL
                                    C_FIRST C_REST
                                    TY_CONS TY_VECSEQ TY_STRSEQ TY_RANGE
-                                   TY_MAPENTRY TY_TABLE]]
-            [flint.rt.seqs :refer [vecseq strseq range]]
-            [flint.rt.seqcore :refer [count-hint]]))
+                                   TY_MAPENTRY TY_TABLE
+                                   or is-string vec-count ref-to-map
+                                   map-entry-vector set-element-vector
+                                   throw-str str-cat static-text Text
+                                   TY_EMPTY_LIST TY_VEC TY_LAZYSEQ
+                                   TY_ARRAYMAP TY_HASHMAP TY_SET TY_TABLEREF]]
+            [flint.rt.seqs :refer [vecseq strseq range range-empty]]
+            [flint.rt.seqcore :refer [count-hint]]
+            [flint.rt.nouns :refer [describe]]))
 
 (doc "The first element of `v`, or nil when there is none.")
 (defn ^:pub ^:method ^Value first [^:mut ^Rt rt ^Value v]
@@ -184,3 +190,85 @@
           (set-r rt ci nx)))
       (pop-to rt base)
       (return n))))
+
+(doc "The seq of `v`, or NIL when there is nothing to walk."
+     ""
+     "NO `case`, for the reason `nouns.kin` gives: hole 3 is open, and these"
+     "arms are mutually exclusive so an early `return` leaves nothing to fall"
+     "through to."
+     ""
+     "ITERATING A TABLE HANDS BACK REFS, one per row, materialising nothing --"
+     "which is the point of the ref type and not a detail of it (`0026`). It"
+     "rides on `TY_VECSEQ` because a table is indexed and counted exactly as a"
+     "vector is; only `first` differs, and it differs by calling `table-ref`."
+     ""
+     "A REF MATERIALISES HERE AND ONLY HERE. `seq`, `=` and `hash` all want the"
+     "whole row and each is O(columns) anyway; the paths that must stay cheap --"
+     "`get` and `(:name row)` -- never come through.")
+(defn ^:pub ^:method ^Value seq [^:mut ^Rt rt ^Value v]
+  (if (nil? rt v)
+    (return NIL))
+  (if (is-string rt v)
+    (do
+      (comment "CODE POINTS, matching the index the strseq holds.")
+      (if (== (char-len rt v) 0)
+        (return NIL))
+      (return (strseq rt v 0))))
+  (if (not (is-heap v))
+    (return NIL))
+  (let [^Ty t (ty rt (as-heap v))]
+    (if (== t TY_EMPTY_LIST)
+      (return NIL))
+    (if (or (== t TY_CONS) (or (== t TY_VECSEQ) (== t TY_STRSEQ)))
+      (return v))
+    (if (== t TY_RANGE)
+      (do
+        (if (range-empty rt v)
+          (return NIL))
+        (return v)))
+    (if (== t TY_LAZYSEQ)
+      (do
+        (let [^Value s (force rt v)]
+          (if (nil? rt s)
+            (return NIL))
+          (return (seq rt s)))))
+    (if (== t TY_VEC)
+      (do
+        (if (== (vec-count rt v) 0)
+          (return NIL))
+        (return (vecseq rt v 0))))
+    (if (== t TY_MAPENTRY)
+      (return (vecseq rt v 0)))
+    (if (== t TY_TABLE)
+      (do
+        (if (== (table-count rt v) 0)
+          (return NIL))
+        (return (vecseq rt v 0))))
+    (if (== t TY_TABLEREF)
+      (do
+        (let [^Value m (ref-to-map rt v)]
+          (return (seq rt m)))))
+    (if (or (== t TY_ARRAYMAP) (== t TY_HASHMAP))
+      (do
+        (let [^Value ents (map-entry-vector rt v)]
+          (if (nil? rt ents)
+            (return NIL))
+          (if (== (vec-count rt ents) 0)
+            (return NIL))
+          (return (vecseq rt ents 0)))))
+    (if (== t TY_SET)
+      (do
+        (let [^Value ents (set-element-vector rt v)]
+          (if (nil? rt ents)
+            (return NIL))
+          (if (== (vec-count rt ents) 0)
+            (return NIL))
+          (return (vecseq rt ents 0))))))
+  (comment "REFUSED, NOT NIL. This answered NIL and both ports threw, so"
+           "`(seq (atom 1))` was nil here and an exception there -- a reachable"
+           "divergence, and the ports are the ones matching Clojure, which"
+           "refuses anything it cannot make an ISeq from.")
+  (let [^Text what (describe rt v)]
+    (return (throw-str rt "IllegalArgumentException"
+                       (str-cat (static-text "seq over ") what
+                                (static-text " needs more of the data structures"))))))
