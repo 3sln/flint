@@ -1386,6 +1386,30 @@ generated a call that does not compile the first time a source did.
 | 7 | `Maps`: `merge_two` + the six structural copies | **nothing new** -- 639 lines, algorithm line-for-line identical | 639 |
 | 8 | `Table`, `Str`'s rope half, the rest | hole 5, reorders | ~2,600 | **SHIPPED** |
 
+WHERE THE PORT STANDS, measured rather than estimated (re-derive before
+quoting; this file keeps recording that a stale count is worse than none):
+
+| file | lines | `pub fn` left | what they are |
+| --- | --- | --- | --- |
+| `table.rs` | 137 | **0** | constants and module wiring |
+| `seqs.rs` | 189 | **0** | constants and the tests |
+| `bytes.rs` | 477 | 22 | ALL PRIMITIVES: sinks, walks, `new_bytes`/`b_to_vec` |
+| `rope.rs` | 190 | 6 | the UTF-8 decode, interning, the gas wrapper |
+| `strs.rs` | 824 | 16 | interning, and functions taking a host `&str` |
+| `map.rs` | 828 | 14 | the CHAMP, incl. the five the closure hole blocks |
+| `coll.rs` | 1609 | 54 | not surveyed for this row |
+
+`bytes.rs` IS DONE IN THE SENSE THAT MATTERS. Every function left in it is a
+VOCABULARY PRIMITIVE -- something a generated source names and cannot express,
+because it holds a host `Vec`. The byte data structure itself is generated.
+
+WHAT IS LEFT IN `strs.rs` IS MOSTLY NOT PORTABLE. `raw_string`,
+`contiguous_string`, `flat_string`, `indexed_string`, `string`, `keyword`,
+`symbol` and `string_from_parts` all take a host `&str`; the intern probe and
+publish are the intern table. `ns_of`, `symbol_hash` and `is_symbol` are
+portable and small; `name_of` and the two hashes need a bit-level
+keyword-to-string primitive and a host hash respectively.
+
 ROW 8 IS DONE. `Table` holds NO hand-written functions in any runtime --
 `table.rs` is 137 lines of constants and module wiring, from 1,595, and the
 three runtimes together are 454 lines from 3,700, in eleven kin sources.
