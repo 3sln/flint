@@ -1,0 +1,112 @@
+;; DIVISION AND NEGATION: the four integer operations with an edge, written
+;; once because all three runtimes got the edge wrong and each in its own way.
+;;
+;; `(quot MIN -1)` IS THE EDGE. The true answer is 2^63 and the widest integer
+;; here is 2^63-1, so it OVERFLOWS -- and MEASURED, before this:
+;;
+;;     native   panicked: "attempt to calculate the remainder with overflow"
+;;     JVM      answered MIN, silently, because Java's `/` wraps there
+;;     CLR      raised a host `OverflowException`, which is not a flint value
+;;
+;; Three runtimes, three answers, and nothing asked. Clojure throws
+;; `ArithmeticException` "integer overflow", which is what all three say now.
+;;
+;; NATIVE PANICKED BEFORE IT EVEN DIVIDED. `num-div` asks `x % y == 0` to
+;; decide whether the result is exact, and `MIN % -1` overflows too -- so the
+;; guard has to come before the remainder rather than before the division.
+;;
+;; DIVIDE BY ZERO IS A DIFFERENT REFUSAL and comes first: it is a question
+;; about the divisor, not about the width of the answer.
+(ns flint.rt.numdiv
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < and or not
+                                   is-int i64-of is-number num-f64 is-double
+                                   integer of-double f-trunc throw-str quot rem
+                                   to-f64 throw-not-a-number - * fdiv
+                                   Rt Value I64 F64 Bool NIL I64_MIN]]))
+
+(doc "Both integers? Then the pair is the integer path."
+     ""
+     "`is-int` covers a BIGINT as well as a fixnum, and `i64-of` reads the"
+     "real number out of either -- which is the pair that replaced an"
+     "`Option<i64>` neither port has.")
+(defn ^:method ^Bool both-ints [^:mut ^Rt rt ^Value a ^Value b]
+  (return (and (is-int rt a) (is-int rt b))))
+
+(doc "Does `x / y` overflow? Only for the most negative integer over -1."
+     ""
+     "There is exactly one such pair, so the guard is a comparison rather"
+     "than a host's checked-arithmetic idiom -- and the three hosts' idioms"
+     "are what disagreed.")
+(defn ^:method ^Bool div-overflows [^:mut ^Rt rt ^I64 x ^I64 y]
+  (return (and (== x I64_MIN) (== y -1))))
+
+(doc "`/`. Integer division that divides EVENLY yields an integer; one that"
+     "does not yields a double."
+     ""
+     "That is a documented divergence from Clojure, which yields a Ratio."
+     "`doc/goals` records it; this is only where it happens.")
+(defn ^:pub ^:method ^Value num-div [^:mut ^Rt rt ^Value a ^Value b]
+  (if (both-ints rt a b)
+    (let [^I64 x (i64-of rt a)
+          ^I64 y (i64-of rt b)]
+      (if (== y 0)
+        (return (throw-str rt "ArithmeticException" "Divide by zero")))
+      (comment "BEFORE THE REMAINDER, because `MIN % -1` overflows as surely"
+               "as `MIN / -1` does. Native asked the remainder first and"
+               "panicked.")
+      (if (div-overflows rt x y)
+        (return (throw-str rt "ArithmeticException" "integer overflow")))
+      (if (== (rem x y) 0)
+        (return (integer rt (quot x y))))
+      (return (of-double (fdiv (to-f64 x) (to-f64 y))))))
+  (if (and (is-number rt a) (is-number rt b))
+    (return (of-double (fdiv (num-f64 rt a) (num-f64 rt b)))))
+  (return (throw-not-a-number rt a b)))
+
+(doc "`quot`: integer division TOWARD ZERO, and no promotion to a double.")
+(defn ^:pub ^:method ^Value num-quot [^:mut ^Rt rt ^Value a ^Value b]
+  (if (both-ints rt a b)
+    (let [^I64 x (i64-of rt a)
+          ^I64 y (i64-of rt b)]
+      (if (== y 0)
+        (return (throw-str rt "ArithmeticException" "Divide by zero")))
+      (if (div-overflows rt x y)
+        (return (throw-str rt "ArithmeticException" "integer overflow")))
+      (return (integer rt (quot x y)))))
+  (if (and (is-number rt a) (is-number rt b))
+    (let [^F64 x (num-f64 rt a)
+          ^F64 y (num-f64 rt b)]
+      (return (of-double (f-trunc (fdiv x y))))))
+  (return (throw-not-a-number rt a b)))
+
+(doc "`rem`: what `quot` leaves, with the sign of the DIVIDEND."
+     ""
+     "`MIN % -1` IS 0 and does not overflow as a value -- but computing it"
+     "does on a host that checks, so the same guard stands and answers 0"
+     "directly.")
+(defn ^:pub ^:method ^Value num-rem [^:mut ^Rt rt ^Value a ^Value b]
+  (if (both-ints rt a b)
+    (let [^I64 x (i64-of rt a)
+          ^I64 y (i64-of rt b)]
+      (if (== y 0)
+        (return (throw-str rt "ArithmeticException" "Divide by zero")))
+      (if (div-overflows rt x y)
+        (return (integer rt 0)))
+      (return (integer rt (rem x y)))))
+  (if (and (is-number rt a) (is-number rt b))
+    (let [^F64 x (num-f64 rt a)
+          ^F64 y (num-f64 rt b)]
+      (return (of-double (- x (* (f-trunc (fdiv x y)) y))))))
+  (return (throw-not-a-number rt a b)))
+
+(doc "Unary minus. The most negative integer has no positive counterpart.")
+(defn ^:pub ^:method ^Value num-neg [^:mut ^Rt rt ^Value a]
+  (if (is-int rt a)
+    (let [^I64 x (i64-of rt a)]
+      (if (== x I64_MIN)
+        (return (throw-str rt "ArithmeticException" "integer overflow")))
+      (return (integer rt (- 0 x)))))
+  (if (is-double rt a)
+    (return (of-double (- 0.0 (num-f64 rt a)))))
+  (return (throw-not-a-number rt a a)))

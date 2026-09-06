@@ -155,7 +155,13 @@ public static class Img {
             case KNil: return Val.Nil;
             case KTrue: return Val.True;
             case KFalse: return Val.False;
-            case KInt: return Val.Fixnum(r.I64());
+            // `Num.Integer`, NOT `Val.Fixnum`. A literal outside the fixnum
+            // range has to be BOXED, and this truncated it instead: `2^62`
+            // read back as 0, `long.MaxValue` as -1. Native has always called
+            // `integer` here. An integer COMPUTED at runtime was fine, so the
+            // bug only ever showed for a literal -- which is exactly the
+            // value nobody thinks to test.
+            case KInt: return Num.Integer(rt, r.I64());
             case KDouble: return Val.OfDouble(System.BitConverter.Int64BitsToDouble(r.U64()));
             case KString: {
                 int n = (int) r.U32();

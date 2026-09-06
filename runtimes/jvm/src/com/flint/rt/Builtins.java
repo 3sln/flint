@@ -88,7 +88,7 @@ public final class Builtins {
         });
         def("+", (rt, at, n) -> byName("flint/add").apply(rt, at, n));
         def("flint/sub", (rt, at, n) -> {
-            if (n == 1) return Num.neg(rt, rt.vat(at));
+            if (n == 1) return com._3sln.flint.kgen.rt.Numdiv.numNeg(rt, rt.vat(at));
             long acc = rt.vat(at);
             for (int i = 1; i < n; i++) acc = Num.sub(rt, acc, rt.vat(at + i));
             return acc;
@@ -136,15 +136,15 @@ public final class Builtins {
         def("pos?", (rt, at, n) -> Val.bool(Num.cmp(rt, rt.vat(at), Val.fixnum(0)) > 0));
         def("neg?", (rt, at, n) -> Val.bool(Num.cmp(rt, rt.vat(at), Val.fixnum(0)) < 0));
 
-        def("quot", (rt, at, n) -> Num.quot(rt, rt.vat(at), rt.vat(at + 1)));
-        def("rem", (rt, at, n) -> Num.rem(rt, rt.vat(at), rt.vat(at + 1)));
+        def("quot", (rt, at, n) -> com._3sln.flint.kgen.rt.Numdiv.numQuot(rt, rt.vat(at), rt.vat(at + 1)));
+        def("rem", (rt, at, n) -> com._3sln.flint.kgen.rt.Numdiv.numRem(rt, rt.vat(at), rt.vat(at + 1)));
         // `/` on two integers that do not divide evenly is a DOUBLE here, not a
         // Ratio: flint has no rational type, and `doc/decisions/0010` counts
         // this among the documented divergences from Clojure rather than a bug.
         def("flint/div", (rt, at, n) -> {
-            if (n == 1) return Num.div(rt, Val.fixnum(1), rt.vat(at));
+            if (n == 1) return com._3sln.flint.kgen.rt.Numdiv.numDiv(rt, Val.fixnum(1), rt.vat(at));
             long acc = rt.vat(at);
-            for (int i = 1; i < n; i++) acc = Num.div(rt, acc, rt.vat(at + i));
+            for (int i = 1; i < n; i++) acc = com._3sln.flint.kgen.rt.Numdiv.numDiv(rt, acc, rt.vat(at + i));
             return acc;
         });
         def("/", (rt, at, n) -> byName("flint/div").apply(rt, at, n));

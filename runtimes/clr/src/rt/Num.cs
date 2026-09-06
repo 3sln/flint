@@ -28,6 +28,11 @@ namespace Flint.Rt;
 public static class Num {
 
     /// Canonical integer: fixnum when it fits, boxed otherwise.
+    /// TOWARD ZERO. The CLR has `Math.Ceiling` and `Math.Floor` and no
+    /// `Truncate` on the path these took, so `Quot` and `Rem` each spelled the
+    /// branch out; it is a name now because the generated arm needs one.
+    public static double Trunc(double d) { return d < 0 ? System.Math.Ceiling(d) : System.Math.Floor(d); }
+
     public static long Integer(Rt rt, long n) {
         if (n >= -(1L << 47) && n < (1L << 47)) return Val.Fixnum(n);
         long a = rt.Alloc(Obj.TyBigint, 8);
@@ -71,7 +76,7 @@ public static class Num {
     // at all, and `(try (/ 1 0) (catch ...))` could not work however correct
     // the opcode handling was.
     static long Overflow(Rt rt) => rt.ThrowStr("ArithmeticException", "integer overflow");
-    static long NotNumber(Rt rt, long a, long b) =>
+    public static long NotNumber(Rt rt, long a, long b) =>
         rt.ThrowStr("ClassCastException",
                     "not a number: " + rt.Describe(a) + " and " + rt.Describe(b));
     static long DivByZero(Rt rt) => rt.ThrowStr("ArithmeticException", "Divide by zero");
@@ -115,52 +120,10 @@ public static class Num {
 
     /// `/`. See the class note: integer division that does not divide evenly
     /// yields a DOUBLE here, where Clojure would yield a Ratio.
-    public static long Div(Rt rt, long a, long b) {
-        long? x = AsI64(rt, a), y = AsI64(rt, b);
-        if (x != null && y != null) {
-            if (y == 0) return DivByZero(rt);
-            if (x.Value % y.Value == 0) return Integer(rt, x.Value / y.Value);
-            return Val.OfDouble((double) x.Value / (double) y.Value);
-        }
-        if (IsNumber(rt, a) && IsNumber(rt, b)) return Val.OfDouble(F64(rt, a) / F64(rt, b));
-        return NotNumber(rt, a, b);
-    }
-
-    public static long Quot(Rt rt, long a, long b) {
-        long? x = AsI64(rt, a), y = AsI64(rt, b);
-        if (x != null && y != null) {
-            if (y == 0) return DivByZero(rt);
-            return Integer(rt, x.Value / y.Value);
-        }
-        if (IsNumber(rt, a) && IsNumber(rt, b)) {
-            double q = F64(rt, a) / F64(rt, b);
-            return Val.OfDouble(q < 0 ? System.Math.Ceiling(q) : System.Math.Floor(q));
-        }
-        return NotNumber(rt, a, b);
-    }
-
-    public static long Rem(Rt rt, long a, long b) {
-        long? x = AsI64(rt, a), y = AsI64(rt, b);
-        if (x != null && y != null) {
-            if (y == 0) return DivByZero(rt);
-            return Integer(rt, x.Value % y.Value);
-        }
-        if (IsNumber(rt, a) && IsNumber(rt, b)) {
-            double p = F64(rt, a), q = F64(rt, b), t = p / q;
-            return Val.OfDouble(p - (t < 0 ? System.Math.Ceiling(t) : System.Math.Floor(t)) * q);
-        }
-        return NotNumber(rt, a, b);
-    }
-
-    public static long Neg(Rt rt, long a) {
-        long? x = AsI64(rt, a);
-        if (x != null) {
-            try { return Integer(rt, NegExact(x.Value)); }
-            catch (System.OverflowException) { return Overflow(rt); }
-        }
-        if (Val.IsDouble(a)) return Val.OfDouble(-Val.AsDouble(a));
-        return NotNumber(rt, a, a);
-    }
+    // `Div`, `Quot`, `Rem` and `Neg` are GENERATED, from `kin/numdiv.kin`.
+    // `(quot MIN -1)` overflows and this port raised a host
+    // `OverflowException` -- not a flint value at all, so a program could not
+    // catch it. Native panicked and the JVM answered MIN silently.
 
     /// Numeric equality (`==`): compares ACROSS int and float, unlike `=`.
     public static bool NumEq(Rt rt, long a, long b) {

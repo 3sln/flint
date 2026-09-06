@@ -162,7 +162,13 @@ public final class Img {
             case K_NIL: return Val.NIL;
             case K_TRUE: return Val.TRUE;
             case K_FALSE: return Val.FALSE;
-            case K_INT: return Val.fixnum(r.i64());
+            // `Num.integer`, NOT `Val.fixnum`. A literal outside the fixnum
+            // range has to be BOXED, and this truncated it instead: `2^62`
+            // read back as 0, `Long.MAX_VALUE` as -1. Native has always
+            // called `integer` here. An integer COMPUTED at runtime was fine,
+            // so the bug only ever showed for a literal -- which is exactly
+            // the value nobody thinks to test.
+            case K_INT: return Num.integer(rt, r.i64());
             case K_DOUBLE: return Val.ofDouble(Double.longBitsToDouble(r.u64()));
             case K_STRING: {
                 int n = (int) r.u32();

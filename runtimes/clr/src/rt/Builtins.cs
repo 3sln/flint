@@ -71,7 +71,7 @@ public static class Builtins {
         });
         Def("+", (rt, at, n) => ByName("flint/add")(rt, at, n));
         Def("flint/sub", (rt, at, n) => {
-            if (n == 1) return Num.Neg(rt, rt.VAt(at));
+            if (n == 1) return global::_3sln.Flint.Kgen.Rt.Numdiv.NumNeg(rt, rt.VAt(at));
             long acc = rt.VAt(at);
             for (int i = 1; i < n; i++) acc = Num.Sub(rt, acc, rt.VAt(at + i));
             return acc;
@@ -119,15 +119,15 @@ public static class Builtins {
         Def("pos?", (rt, at, n) => Val.Bool(Num.Cmp(rt, rt.VAt(at), Val.Fixnum(0)) > 0));
         Def("neg?", (rt, at, n) => Val.Bool(Num.Cmp(rt, rt.VAt(at), Val.Fixnum(0)) < 0));
 
-        Def("quot", (rt, at, n) => Num.Quot(rt, rt.VAt(at), rt.VAt(at + 1)));
-        Def("rem", (rt, at, n) => Num.Rem(rt, rt.VAt(at), rt.VAt(at + 1)));
+        Def("quot", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Numdiv.NumQuot(rt, rt.VAt(at), rt.VAt(at + 1)));
+        Def("rem", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Numdiv.NumRem(rt, rt.VAt(at), rt.VAt(at + 1)));
         // `/` on two integers that do not divide evenly is a DOUBLE here, not a
         // Ratio: flint has no rational type, and `doc/decisions/0010` counts
         // this among the documented divergences from Clojure rather than a bug.
         Def("flint/div", (rt, at, n) => {
-            if (n == 1) return Num.Div(rt, Val.Fixnum(1), rt.VAt(at));
+            if (n == 1) return global::_3sln.Flint.Kgen.Rt.Numdiv.NumDiv(rt, Val.Fixnum(1), rt.VAt(at));
             long acc = rt.VAt(at);
-            for (int i = 1; i < n; i++) acc = Num.Div(rt, acc, rt.VAt(at + i));
+            for (int i = 1; i < n; i++) acc = global::_3sln.Flint.Kgen.Rt.Numdiv.NumDiv(rt, acc, rt.VAt(at + i));
             return acc;
         });
         Def("/", (rt, at, n) => ByName("flint/div")(rt, at, n));

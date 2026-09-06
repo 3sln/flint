@@ -30,6 +30,11 @@ public final class Num {
     private Num() {}
 
     /// Canonical integer: fixnum when it fits, boxed otherwise.
+    /// TOWARD ZERO. Java has `Math.ceil` and `Math.floor` and no `trunc`, so
+    /// `quot` and `rem` each spelled the branch out; it is a name now because
+    /// the generated arm needs one.
+    public static double trunc(double d) { return d < 0 ? Math.ceil(d) : Math.floor(d); }
+
     public static long integer(Rt rt, long n) {
         if (n >= -(1L << 47) && n < (1L << 47)) return Val.fixnum(n);
         long a = rt.alloc(TY_BIGINT, 8);
@@ -80,7 +85,7 @@ public final class Num {
     static long overflow(Rt rt) {
         return rt.throwStr("ArithmeticException", "integer overflow");
     }
-    static long notNumber(Rt rt, long a, long b) {
+    public static long notNumber(Rt rt, long a, long b) {
         return rt.throwStr("ClassCastException",
             "not a number: " + rt.describe(a) + " and " + rt.describe(b));
     }
@@ -120,52 +125,10 @@ public final class Num {
 
     /// `/`. See the class note: integer division that does not divide evenly
     /// yields a DOUBLE here, where Clojure would yield a Ratio.
-    public static long div(Rt rt, long a, long b) {
-        Long x = asI64(rt, a), y = asI64(rt, b);
-        if (x != null && y != null) {
-            if (y == 0) return divByZero(rt);
-            if (x % y == 0) return integer(rt, x / y);
-            return Val.ofDouble((double) x / (double) y);
-        }
-        if (isNumber(rt, a) && isNumber(rt, b)) return Val.ofDouble(f64(rt, a) / f64(rt, b));
-        return notNumber(rt, a, b);
-    }
-
-    public static long quot(Rt rt, long a, long b) {
-        Long x = asI64(rt, a), y = asI64(rt, b);
-        if (x != null && y != null) {
-            if (y == 0) return divByZero(rt);
-            return integer(rt, x / y);
-        }
-        if (isNumber(rt, a) && isNumber(rt, b)) {
-            double q = f64(rt, a) / f64(rt, b);
-            return Val.ofDouble(q < 0 ? Math.ceil(q) : Math.floor(q));
-        }
-        return notNumber(rt, a, b);
-    }
-
-    public static long rem(Rt rt, long a, long b) {
-        Long x = asI64(rt, a), y = asI64(rt, b);
-        if (x != null && y != null) {
-            if (y == 0) return divByZero(rt);
-            return integer(rt, x % y);
-        }
-        if (isNumber(rt, a) && isNumber(rt, b)) {
-            double p = f64(rt, a), q = f64(rt, b), t = p / q;
-            return Val.ofDouble(p - (t < 0 ? Math.ceil(t) : Math.floor(t)) * q);
-        }
-        return notNumber(rt, a, b);
-    }
-
-    public static long neg(Rt rt, long a) {
-        Long x = asI64(rt, a);
-        if (x != null) {
-            try { return integer(rt, Math.negateExact(x)); }
-            catch (ArithmeticException e) { return overflow(rt); }
-        }
-        if (Val.isDouble(a)) return Val.ofDouble(-Val.asDouble(a));
-        return notNumber(rt, a, a);
-    }
+    // `div`, `quot`, `rem` and `neg` are GENERATED, from `kin/numdiv.kin`.
+    // `(quot MIN -1)` overflows and this port answered MIN SILENTLY, because
+    // Java's `/` wraps there rather than throwing. Native panicked and the
+    // CLR raised a host `OverflowException`; three runtimes, three answers.
 
     /// Numeric equality (`==`): compares ACROSS int and float, unlike `=`.
     public static boolean numEq(Rt rt, long a, long b) {

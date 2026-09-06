@@ -370,6 +370,10 @@
    ;; lives in `com._3sln.flint.kgen.rt`, so a bare `Interns` inside another
    ;; generated module binds to that one and not to the runtime's. The same
    ;; shadowing `seq-of` is qualified against.
+   ;; THE MOST NEGATIVE INTEGER. Its negation and its division by -1 are the
+   ;; two integer operations that OVERFLOW, and naming the bound is how the
+   ;; guard gets written once instead of three host idioms deep.
+   'I64_MIN {:rust "i64::MIN" :java "Long.MIN_VALUE" :csharp "long.MinValue"}
    'INTERN_MAX {:rust "crate::strs::INTERN_MAX"
                 :java "com.flint.rt.Interns.INTERN_MAX"
                 :csharp "global::Flint.Rt.Interns.InternMax"}
@@ -960,6 +964,37 @@
     'table-ref (sibling "table_ref" "Table" "tableRef" "tableRef" 2)
     'table-count (sibling "table_count" "Table" "tableCount" "tableCount" 1)
     'num-add (sibling "num_add" "Num" "add" "Add" 2)
+    ;; A TAGGED INTEGER from a host `i64`: a fixnum when it fits and a boxed
+    ;; bigint when it does not, which is what makes integers CANONICAL.
+    'integer (sibling "integer" "Num" "integer" "Integer" 1)
+    ;; A DOUBLE as a value. Takes the `f64` and not a value, so it is a `call`
+    ;; rather than a sibling: there is no receiver.
+    'of-double (core/call {:rust "Value::from_f64({0})"
+                           :java "Val.ofDouble({0})"
+                           :csharp "Val.OfDouble({0})"}
+                          {:tag Value})
+    ;; TOWARD ZERO. Native has it in `fmath`; both ports spelled the
+    ;; `ceil`-or-`floor` branch out at each of two call sites.
+    'f-trunc (core/call {:rust "crate::fmath::trunc({0})"
+                         :java "Num.trunc({0})"
+                         :csharp "Num.Trunc({0})"}
+                        {:tag F64})
+    ;; A HOST INTEGER AS A DOUBLE, for the arms that promote.
+    'to-f64 (core/call {:rust "({0} as f64)" :java "((double) {0})"
+                        :csharp "((double) {0})"}
+                       {:tag F64})
+    ;; FLOAT DIVISION. `quot` and `rem` in this vocabulary are the INTEGER
+    ;; ones, and on two `U32`s they are the unsigned pair -- so the float
+    ;; operator gets its own name rather than overloading either.
+    'fdiv (core/call {:rust "({0} / {1})" :java "({0} / {1})"
+                      :csharp "({0} / {1})"}
+                     {:tag F64})
+    ;; "not a number: X and Y", naming BOTH sides -- the refusal every
+    ;; arithmetic operation shares.
+    'throw-not-a-number (core/call {:rust "{0}.throw_not_a_number({1}, {2})"
+                                    :java "Num.notNumber({0}, {1}, {2})"
+                                    :csharp "Num.NotNumber({0}, {1}, {2})"}
+                                   {:tag Value})
     'str-len (sibling "str_len" "Str" "byteLen" "ByteLen" 1)
     'char-len (sibling "char_count" "Str" "charLen" "CharLen" 1)
     'maps-eq (sibling "map_eq" "Maps" "eq" "Eq" 2)

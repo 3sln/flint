@@ -115,71 +115,10 @@ impl Rt {
         }
     }
 
-    /// `/`. See the module note: integer division that does not divide evenly
-    /// yields a double here, where Clojure would yield a Ratio.
-    pub fn num_div(&mut self, a: Value, b: Value) -> Value {
-        if let (Some(x), Some(y)) = (self.as_i64(a), self.as_i64(b)) {
-            if y == 0 {
-                return self.throw_str("ArithmeticException", "Divide by zero");
-            }
-            if x % y == 0 {
-                return match x.checked_div(y) {
-                    Some(r) => self.integer(r),
-                    None => self.overflow(),
-                };
-            }
-            return Value::from_f64(x as f64 / y as f64);
-        }
-        if self.is_number(a) && self.is_number(b) {
-            Value::from_f64(self.num_f64(a) / self.num_f64(b))
-        } else {
-            self.throw_not_a_number(a, b)
-        }
-    }
-
-    pub fn num_quot(&mut self, a: Value, b: Value) -> Value {
-        if let (Some(x), Some(y)) = (self.as_i64(a), self.as_i64(b)) {
-            if y == 0 {
-                return self.throw_str("ArithmeticException", "Divide by zero");
-            }
-            match x.checked_div(y) {
-                Some(r) => self.integer(r),
-                None => self.overflow(),
-            }
-        } else if self.is_number(a) && self.is_number(b) {
-            let (x, y) = (self.num_f64(a), self.num_f64(b));
-            Value::from_f64(crate::fmath::trunc(x / y))
-        } else {
-            self.throw_not_a_number(a, b)
-        }
-    }
-
-    pub fn num_rem(&mut self, a: Value, b: Value) -> Value {
-        if let (Some(x), Some(y)) = (self.as_i64(a), self.as_i64(b)) {
-            if y == 0 {
-                return self.throw_str("ArithmeticException", "Divide by zero");
-            }
-            self.integer(x.wrapping_rem(y))
-        } else if self.is_number(a) && self.is_number(b) {
-            let (x, y) = (self.num_f64(a), self.num_f64(b));
-            Value::from_f64(x - crate::fmath::trunc(x / y) * y)
-        } else {
-            self.throw_not_a_number(a, b)
-        }
-    }
-
-    pub fn num_neg(&mut self, a: Value) -> Value {
-        if let Some(x) = self.as_i64(a) {
-            match x.checked_neg() {
-                Some(r) => self.integer(r),
-                None => self.overflow(),
-            }
-        } else if a.is_double() {
-            Value::from_f64(-a.as_f64())
-        } else {
-            self.throw_not_a_number(a, a)
-        }
-    }
+    // `num_div`, `num_quot`, `num_rem` and `num_neg` are GENERATED, from
+    // `kin/numdiv.kin`. `(quot MIN -1)` overflows, and all three runtimes got
+    // it wrong differently: this one PANICKED -- `MIN % -1` overflows before
+    // the division does, so the guard has to precede the remainder.
 
     /// Numeric equality (`==`): compares across int/float, unlike `=`.
     pub fn num_eq(&self, a: Value, b: Value) -> bool {

@@ -96,3 +96,33 @@
   (expect = [1 3] (filterv int? [1 :a 2.5 "s" 3]))
   (expect = [2.5] (filterv double? [1 :a 2.5 "s" 3]))
   (expect = [1 2.5 3] (filterv number? [1 :a 2.5 "s" 3])))
+
+(defn ^:flint.check/test a-large-literal-survives-the-image []
+  ;; A literal OUTSIDE the fixnum range has to be BOXED when the image loads
+  ;; it. Both ports called `fixnum` and truncated instead, so `2^62` read back
+  ;; as 0 and `Long.MAX_VALUE` as -1 -- while the same number COMPUTED at
+  ;; runtime was fine. That is why nothing caught it: every arithmetic test
+  ;; built its big values rather than writing them down.
+  (expect = "4611686018427387904" (str 4611686018427387904))
+  (expect = "9223372036854775807" (str 9223372036854775807))
+  (expect = "-9223372036854775807" (str -9223372036854775807))
+  (expect = 4611686018427387904 (* 2305843009213693952 2))
+  (expect = 0 (- 4611686018427387904 4611686018427387904)))
+
+(defn ^:flint.check/test dividing-the-most-negative-integer []
+  ;; `(quot MIN -1)` is the one integer division that OVERFLOWS: the true
+  ;; answer is 2^63 and the widest integer here is 2^63-1. Native guarded it
+  ;; and both ports used the host's `/` -- which on the JVM answers MIN
+  ;; SILENTLY and on the CLR raises a host `OverflowException` that is not a
+  ;; flint value at all. Three runtimes, three answers, and nothing asked.
+  (let [most-negative (- -9223372036854775807 1)]
+    (expect = "integer overflow"
+            (try (quot most-negative -1) nil (catch Throwable e (ex-message e))))
+    (expect = "integer overflow"
+            (try (/ most-negative -1) nil (catch Throwable e (ex-message e))))
+    (expect = "integer overflow"
+            (try (- most-negative) nil (catch Throwable e (ex-message e))))
+    ;; And the ordinary cases still divide.
+    (expect = 3 (quot 7 2))
+    (expect = -3 (quot -7 2))
+    (expect = 1 (rem 7 2))))

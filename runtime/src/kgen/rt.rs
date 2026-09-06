@@ -41,6 +41,7 @@ pub mod collwrite;
 pub mod copies;
 pub mod names;
 pub mod nouns;
+pub mod numdiv;
 pub mod opaque;
 pub mod dissoc;
 pub mod eq;
