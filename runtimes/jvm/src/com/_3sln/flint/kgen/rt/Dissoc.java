@@ -14,6 +14,7 @@ import static com._3sln.flint.kgen.rt.Collnode.*;
 import static com._3sln.flint.kgen.rt.Copies.*;
 import static com._3sln.flint.kgen.rt.Nodeclass.*;
 import static com._3sln.flint.kgen.rt.Valeq.*;
+import static com._3sln.flint.kgen.rt.Valhash.*;
 
 public final class Dissoc {
     public static long nodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
@@ -50,7 +51,7 @@ public final class Dissoc {
                     int other = 1 - at;
                     int oki = rt.push(bnKey(rt, rt.r(ni), other));
                     int ovi = rt.push(bnVal(rt, rt.r(ni), other));
-                    int oh = com.flint.rt.Eq.hashValue(rt, rt.r(oki));
+                    int oh = hashValue(rt, rt.r(oki));
                     int newdm;
                     if (shift == 0) {
                         newdm = dm ^ bit;
@@ -129,7 +130,7 @@ public final class Dissoc {
             int other = 1 - found;
             int cki = rt.push(cnKey(rt, rt.r(dni), other));
             int cvi = rt.push(cnVal(rt, rt.r(dni), other));
-            int kh = com.flint.rt.Eq.hashValue(rt, rt.r(cki));
+            int kh = hashValue(rt, rt.r(cki));
             long made = bnNew(rt, bitpos(kh, 0), 0, rt.r(dei));
             if (!Val.isNil(made)) {
                 bnSetKey(rt, made, 0, rt.r(cki));

@@ -34,73 +34,11 @@ public static class Eq {
     // because `Maps.Eq` materialises refs itself, which native's does not.
 
     /// The hash of a value, agreeing with `eq` above and with Clojure's.
-    public static int HashValue(Rt rt, long v) {
-        if (Val.IsDouble(v)) return Hash.HashDouble(Val.AsDouble(v));
-        if (Val.IsNil(v)) return 0;
-        if (v == Val.True) return _3sln.Flint.Kgen.Rt.Hash.HashTrue;
-        if (v == Val.False) return _3sln.Flint.Kgen.Rt.Hash.HashFalse;
-        if (Val.IsFixnum(v)) return _3sln.Flint.Kgen.Rt.Hash.HashLong(Val.AsFixnum(v));
-        if (Val.IsInlineStr(v)) return Hash.HashString(Val.InlineBytes(v));
-        if (Val.IsInlineKw(v)) return Hash.HashKeyword(null, Val.InlineBytes(v));
-        if (!Val.IsHeap(v)) return 0;
-        switch (Obj.Ty(rt.gc.sp, Val.AsHeap(v))) {
-            case Obj.TyStr: return Hash.HashString(Str.Bytes(rt, v));
-            // WALKED and cached per node, not flattened. Flattening was here
-            // for the caching, which is real; `RP_HASH` gives the same caching
-            // without spending the tree (`doc/decisions/0011`).
-            case Obj.TyRope: return Str.RopeHash(rt, v);
-            // Byte strings hash by CONTENT across both tiers, walked and cached
-            // per node rather than flattened (`doc/decisions/0011`).
-            case Obj.TyBytes:
-            case Obj.TyBrope: return Bytes.Hash(rt, v);
-            case Obj.TyKw: return Hash.HashKeyword(NsBytes(rt, v), Str.Bytes(rt, rt.Slot(v, 1)));
-            case Obj.TySym: return Hash.HashSymbol(NsBytes(rt, v), Str.Bytes(rt, rt.Slot(v, 1)));
-            // GENERATED, from `kin/valhash.kin`. There were TWO ordered
-            // walks here: this one, which cached and charged NOTHING, and the
-            // seq walk below, which charged and did not cache. The uncharged
-            // half is `0009`'s unbounded walk, still live for the shape most
-            // likely to be big.
-            case Obj.TyVec:
-            case Obj.TyMapentry:
-            case Obj.TyCons:
-            case Obj.TyEmptyList:
-            case Obj.TyLazyseq:
-            case Obj.TyVecseq:
-            case Obj.TyStrseq:
-            case Obj.TyRange:
-                return global::_3sln.Flint.Kgen.Rt.Valhash.HashOrdered(rt, v);
-            case Obj.TyArraymap:
-            case Obj.TyHashmap: return Maps.Hash(rt, v);
-            // Both halves, so two equal tagged literals share a bucket.
-            // A ROW REF hashes as the map it is, so it lands in the same
-            // bucket as an equal map.
-            case Obj.TyTableref: return HashValue(rt, Table.refToMap(rt, v));
-            case Obj.TyTable: {
-                int bas = rt.Mark();
-                int vi = rt.Push(v);
-                int n = Table.tableCount(rt, rt.R(vi)), acc = 1;
-                for (int i = 0; i < n; i++) {
-                    int ri = rt.Push(Table.tableRef(rt, rt.R(vi), i));
-                    acc = acc * 31 + HashValue(rt, rt.R(ri));
-                    rt.PopTo(ri);
-                }
-                rt.PopTo(bas);
-                return _3sln.Flint.Kgen.Rt.Hash.HashInt(acc ^ n);
-            }
-            // THE FINAL MIX WAS MISSING. Native wraps this in `HashInt` and
-            // both ports did not -- so a tagged literal hashed differently on
-            // wasm, and these two apply the mix for a TABLE two arms up. The
-            // ports were inconsistent with themselves as well as with native.
-            case Obj.TyTagged:
-                return global::_3sln.Flint.Kgen.Rt.Hash.HashInt(
-                    HashValue(rt, rt.Slot(v, 0)) * 31 + HashValue(rt, rt.Slot(v, 1)));
-            case Obj.TySet: return Sets.Hash(rt, v);
-            default: {
-                if (rt.IsSeq(v)) return global::_3sln.Flint.Kgen.Rt.Valhash.HashOrdered(rt, v);
-                return 0;
-            }
-        }
-    }
+    // `HashValue` is GENERATED, from `kin/valhash.kin`, as
+    // `Valhash.ValueHash`. Two caches this port HAD and never used are live
+    // now: `StrHash` was written during interning and never read, and a
+    // keyword's slot 2 was set to nil rather than to its hash -- so the two
+    // commonest map keys there are each paid their content per lookup.
 
     static bool SameBytes(byte[] x, byte[] y) {
         if (x.Length != y.Length) return false;

@@ -327,6 +327,35 @@ public static class Str {
         return SameBytes(Bytes(rt, rt.Slot(v, 1)), nb);
     }
 
+    static int HashKeywordOf(Rt rt, string ns, string name) {
+        return Hash.HashKeyword(ns == null ? null : System.Text.Encoding.UTF8.GetBytes(ns),
+                                System.Text.Encoding.UTF8.GetBytes(name));
+    }
+
+    /// The hash of a STRING value, cached in the object for a heap string.
+    ///
+    /// The cache is `StrHash`, which this port WROTE during interning and
+    /// never read: every `Hash` of a heap string rehashed its whole content,
+    /// where native reads the slot. A long string used as a map key paid its
+    /// length per lookup.
+    public static int StringHash(Rt rt, long v) {
+        if (Val.IsInlineStr(v)) return Hash.HashString(Val.InlineBytes(v));
+        long a = Val.AsHeap(v);
+        int cached = Obj.StrHash(rt.gc.sp, a);
+        if (cached != 0) return cached;
+        int h = Hash.HashString(Bytes(rt, v));
+        if (h == 0) h = 1;
+        Obj.SetStrHash(rt.gc.sp, a, h);
+        return h;
+    }
+
+    /// The hash of a KEYWORD, read from slot 2 where it was stored when the
+    /// keyword was built.
+    public static int KeywordHash(Rt rt, long v) {
+        if (Val.IsInlineKw(v)) return Hash.HashKeyword(null, Val.InlineBytes(v));
+        return (int) Val.AsFixnum(rt.Slot(v, 2));
+    }
+
     static long BuildKeyword(Rt rt, string ns, string name) {
         int bas = rt.Mark();
         int nsi = rt.Push(ns == null ? Val.Nil : Of(rt, ns));
@@ -335,7 +364,11 @@ public static class Str {
         if (a == 0) { rt.PopTo(bas); return Val.Nil; }
         rt.SetSlot(a, 0, rt.R(nsi));
         rt.SetSlot(a, 1, rt.R(nmi));
-        rt.SetSlot(a, 2, Val.Nil);
+        // THE HASH, and it used to be Nil. Native has stored it here since the
+        // slot existed and reads it back in `HashValue`; this port left the
+        // slot empty and recomputed from the ns and name bytes on EVERY hash.
+        // A keyword is the commonest map key there is.
+        rt.SetSlot(a, 2, Val.Fixnum(HashKeywordOf(rt, ns, name)));
         rt.PopTo(bas);
         return Val.Heap(a);
     }
@@ -364,8 +397,13 @@ public static class Str {
         if (a == 0) { rt.PopTo(bas); return Val.Nil; }
         rt.SetSlot(a, 0, rt.R(nsi));
         rt.SetSlot(a, 1, rt.R(nmi));
-        rt.SetSlot(a, 2, Val.Nil);
-        rt.SetSlot(a, 3, Val.Nil);
+        rt.SetSlot(a, 2, Val.Nil);  // meta
+        // THE HASH, and it used to be Nil -- the same empty cache the keyword
+        // slot had. `SymbolHash` reads it; this port recomputed from the ns
+        // and name bytes on every hash instead.
+        rt.SetSlot(a, 3, Val.Fixnum(Hash.HashSymbol(
+            ns == null ? null : System.Text.Encoding.UTF8.GetBytes(ns),
+            System.Text.Encoding.UTF8.GetBytes(name))));
         rt.PopTo(bas);
         return Val.Heap(a);
     }

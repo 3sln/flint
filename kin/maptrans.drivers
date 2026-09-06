@@ -207,6 +207,10 @@ fn main() {
     println!("{}", o);
 }
 --java-head
+    // `hash-value` IS `valhash`'s OWN now, so it is called BARE. The nested
+    // `com.flint.rt.Eq.hashValue` below stays where other entries reach it,
+    // and this forwards to it.
+    static int hashValue(Rt rt, long v) { return com.flint.rt.Eq.hashValue(rt, v); }
     static final long NIL = 0xFFFFL;
     static final long NOT_FOUND = 0xFFFEL;
     static final int TY_ARRAYMAP = 12, TY_HASHMAP = 13, TY_TMAP = 24, TY_TSET = 25;
@@ -407,6 +411,8 @@ namespace Flint.Rt {
     }
 }
 --csharp-head
+    // `hash-value` IS `valhash`'s OWN now, so it is called BARE.
+    internal static int HashValue(Rt rt, long v) { return global::Flint.Rt.Eq.HashValue(rt, v); }
     internal const long NIL = 0xFFFFL;
     internal const long NOT_FOUND = 0xFFFEL;
     internal const int TY_ARRAYMAP = 12, TY_HASHMAP = 13;

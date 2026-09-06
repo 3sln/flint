@@ -15,6 +15,7 @@ import static com._3sln.flint.kgen.rt.Find.*;
 import static com._3sln.flint.kgen.rt.Mapcore.*;
 import static com._3sln.flint.kgen.rt.Mapwrite.*;
 import static com._3sln.flint.kgen.rt.Setcore.*;
+import static com._3sln.flint.kgen.rt.Valhash.*;
 import static com._3sln.flint.kgen.rt.Vectrans.*;
 
 public final class Maptrans {
@@ -61,7 +62,7 @@ public final class Maptrans {
         int ti = rt.push(t);
         int ki = rt.push(k);
         int ni = rt.push(notFound);
-        int h = com.flint.rt.Eq.hashValue(rt, rt.r(ki));
+        int h = hashValue(rt, rt.r(ki));
         long root = rt.slot(rt.r(ti), Maps.TM_ROOT);
         long found;
         found = Val.NOT_FOUND;
@@ -89,7 +90,7 @@ public final class Maptrans {
         int ki = rt.push(k);
         int vi = rt.push(v);
         int ei = rt.push(rt.slot(rt.r(ti), Maps.TM_EDIT));
-        int h = com.flint.rt.Eq.hashValue(rt, rt.r(ki));
+        int h = hashValue(rt, rt.r(ki));
         int ri = rt.push(rt.slot(rt.r(ti), Maps.TM_ROOT));
         rt.champAdded = false;
         long nr = nodeAssoc(rt, rt.r(ri), 0, h, rt.r(ki), rt.r(vi), rt.r(ei));
@@ -111,7 +112,7 @@ public final class Maptrans {
         int ti = rt.push(t);
         int ki = rt.push(k);
         int ei = rt.push(rt.slot(rt.r(ti), Maps.TM_EDIT));
-        int h = com.flint.rt.Eq.hashValue(rt, rt.r(ki));
+        int h = hashValue(rt, rt.r(ki));
         int ri = rt.push(rt.slot(rt.r(ti), Maps.TM_ROOT));
         rt.champAdded = false;
         long nr = nodeDissoc(rt, rt.r(ri), 0, h, rt.r(ki), rt.r(ei));

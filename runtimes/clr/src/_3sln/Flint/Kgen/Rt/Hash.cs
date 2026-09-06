@@ -36,7 +36,7 @@ public static class Hash {
             return h1 ^ ((int)((uint) h1 >> 16));
         }
     }
-    internal static int HashInt(int input) {
+    public static int HashInt(int input) {
         unchecked {
             if (input == 0) {
                 return 0;

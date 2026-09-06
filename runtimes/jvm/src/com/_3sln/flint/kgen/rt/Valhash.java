@@ -9,8 +9,13 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Bytehash.*;
 import static com._3sln.flint.kgen.rt.Hash.*;
+import static com._3sln.flint.kgen.rt.Names.*;
+import static com._3sln.flint.kgen.rt.Ropeflat.*;
 import static com._3sln.flint.kgen.rt.Seqwalk.*;
+import static com._3sln.flint.kgen.rt.Tablemeta.*;
+import static com._3sln.flint.kgen.rt.Tableref.*;
 
 public final class Valhash {
     /// Is `v` a VECTOR, strictly? Only a vector has a slot to cache in.
@@ -53,7 +58,7 @@ public final class Valhash {
             }
             long f = first(rt, rt.r(si));
             int fi = rt.push(f);
-            int h = com.flint.rt.Eq.hashValue(rt, rt.r(fi));
+            int h = hashValue(rt, rt.r(fi));
             rt.popTo(fi);
             acc = orderedStep(acc, h);
             n += 1;
@@ -70,5 +75,137 @@ public final class Valhash {
         }
         rt.popTo(base);
         return out;
+    }
+    /// The hash of any value.
+    /// 
+    /// TWO VALUES THAT ARE `=` MUST HASH ALIKE, or a map keyed by one is not
+    /// found by the other. That is the contract this shares with `val-eq`, and
+    /// it is why the two are read together: every arm here has a matching arm
+    /// there, and a tier that is invisible to one must be invisible to both.
+    /// 
+    /// A BYTE STRING GOES THROUGH `b-hash` WHATEVER TIER IT IS IN. Native had
+    /// an inline byte walk for the flat case and called `b-hash` for the tree,
+    /// which is the same walk written twice; both ports already routed both.
+    /// 
+    /// FUNCTIONS, ATOMS AND VARS hash to a PER-TYPE CONSTANT. They are only
+    /// ever `=` to themselves, so it is correct if unhelpful -- and a moving
+    /// collector rules out using the address.
+    public static int hashValue(Rt rt, long v) {
+        if (Val.isDouble(v)) {
+            return com.flint.rt.Hash.hashDouble(Num.f64(rt, v));
+        }
+        if (Val.isNil(v)) {
+            return 0;
+        }
+        if (v == Val.TRUE) {
+            return HASH_TRUE;
+        }
+        if (v == Val.FALSE) {
+            return HASH_FALSE;
+        }
+        if (Val.isFixnum(v)) {
+            return hashLong(Val.asFixnum(v));
+        }
+        if (Val.isInlineStr(v)) {
+            return Str.stringHash(rt, v);
+        }
+        if (Val.isInlineKw(v)) {
+            return Str.keywordHash(rt, v);
+        }
+        if (!Val.isHeap(v)) {
+            return 0;
+        }
+        int t = ty(rt.gc.sp, Val.asHeap(v));
+        if (t == TY_STR) {
+            return Str.stringHash(rt, v);
+        }
+        // HASH THE CONTENT, so `"abc"` inline, flat and as a rope are
+        // one key -- but WALK it rather than flattening. Flattening was
+        // here for the caching, which is real: a rope used as a map key
+        // must not rehash every lookup. `RP_HASH` gives the same caching
+        // per node and keeps the tree, so the trade is gone rather than
+        // chosen (`0011`).
+        if (t == TY_ROPE) {
+            return (int) ((long) ropeHash(rt, v));
+        }
+        if ((t == TY_BYTES) || (t == TY_BROPE)) {
+            return (int) ((long) bHash(rt, v));
+        }
+        if (t == TY_KW) {
+            return Str.keywordHash(rt, v);
+        }
+        if (t == TY_SYM) {
+            return symbolHash(rt, v);
+        }
+        if (t == TY_BIGINT) {
+            return hashLong(Num.i64Of(rt, v));
+        }
+        if ((((t == TY_VEC) || (t == TY_MAPENTRY)) || ((t == TY_CONS) || (t == TY_EMPTY_LIST))) || (((t == TY_LAZYSEQ) || (t == TY_VECSEQ)) || ((t == TY_STRSEQ) || (t == TY_RANGE)))) {
+            return hashOrdered(rt, v);
+        }
+        if ((t == TY_ARRAYMAP) || (t == TY_HASHMAP)) {
+            return Maps.hash(rt, v);
+        }
+        if (t == TY_SET) {
+            return Sets.hash(rt, v);
+        }
+        // AN OPAQUE VALUE CARRIES ITS OWN IDENTITY, assigned at creation
+        // and STORED (`0022`). The per-type constant below would be
+        // correct -- equality is identity, so collisions only cost time --
+        // but it would put every opaque value in one bucket, and the whole
+        // point of the type is to be a distinct key.
+        if (t == TY_OPAQUE) {
+            long id = rt.slot(v, 1);
+            if (Val.isFixnum(id)) {
+                return hashLong(Val.asFixnum(id));
+            }
+            return hashLong(0);
+        }
+        // COLUMNAR is available precisely because a table is not `=` to a
+        // vector of maps, so this need not agree with what one would
+        // hash. ROOTED for the reason the equality arm is: `table-ref`
+        // allocates and `v` is a host local (`0031`).
+        if (t == TY_TABLE) {
+            int base = rt.mark();
+            int vi = rt.push(v);
+            int n = Table.tableCount(rt, rt.r(vi));
+            int acc;
+            int i;
+            acc = 1;
+            i = 0;
+            while (i < n) {
+                long row = Table.tableRef(rt, rt.r(vi), i);
+                int ri = rt.push(row);
+                int h = hashValue(rt, rt.r(ri));
+                rt.popTo(ri);
+                acc = (acc * 31) + h;
+                i += 1;
+            }
+            rt.popTo(base);
+            return hashInt(acc ^ n);
+        }
+        // A REF HASHES AS THE MAP IT IS, or a map keyed by a row would
+        // not find it.
+        if (t == TY_TABLEREF) {
+            int base = rt.mark();
+            long m = Table.refToMap(rt, v);
+            int mi = rt.push(m);
+            int h = hashValue(rt, rt.r(mi));
+            rt.popTo(base);
+            return h;
+        }
+        // BOTH HALVES, so a tagged literal hashes like the pair it is and
+        // two equal ones land in the same bucket. The final `hash-int` is
+        // the mix both ports dropped, which made a tagged literal hash
+        // differently on wasm than on the JVM and the CLR.
+        if (t == TY_TAGGED) {
+            int base = rt.mark();
+            int vi = rt.push(v);
+            int th = hashValue(rt, rt.slot(rt.r(vi), 0));
+            int fh = hashValue(rt, rt.slot(rt.r(vi), 1));
+            rt.popTo(base);
+            return hashInt((th * 31) + fh);
+        }
+        return hashInt(1374486528 | ((int) ((long) t)));
     }
 }

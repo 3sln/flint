@@ -35,7 +35,7 @@ pub(crate) fn fmix(mut h1: u32, len: u32) -> u32 {
     h1 = h1.wrapping_mul(0xc2b2ae35);
     return h1 ^ (h1 >> 16);
 }
-pub(crate) fn hash_int(input: u32) -> u32 {
+pub fn hash_int(input: u32) -> u32 {
     if input == 0 {
         return 0;
     }

@@ -17,6 +17,7 @@ using static global::_3sln.Flint.Kgen.Rt.Copies;
 using static global::_3sln.Flint.Kgen.Rt.Merge;
 using static global::_3sln.Flint.Kgen.Rt.Nodeclass;
 using static global::_3sln.Flint.Kgen.Rt.Valeq;
+using static global::_3sln.Flint.Kgen.Rt.Valhash;
 
 public static class Assoc {
     public static long NodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
@@ -58,7 +59,7 @@ public static class Assoc {
                 // entry at this level.
                 rt.champAdded = true;
                 int v0i = rt.Push(BnVal(rt, rt.R(ni), at));
-                int h0 = global::Flint.Rt.Eq.HashValue(rt, rt.R(k0i));
+                int h0 = HashValue(rt, rt.R(k0i));
                 long sub = MergeTwo(rt, shift + HASH_BITS, rt.R(k0i), rt.R(v0i), h0, rt.R(ki), rt.R(vi), h, rt.R(ei));
                 int si = rt.Push(sub);
                 @out = BnInlineToNode(rt, rt.R(ni), bit, rt.R(si), rt.R(ei));

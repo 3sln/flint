@@ -801,7 +801,7 @@ public static class Program {
        _3sln.Flint.Kgen.Rt.Mapcore.MapCount(rt, rt.R(viaDelete)) == _3sln.Flint.Kgen.Rt.Mapcore.MapCount(rt, rt.R(direct)));
     MOk("  ... and are =", Flint.Rt.Maps.Eq(rt, rt.R(viaDelete), rt.R(direct)));
     MOk("  ... and HASH ALIKE, which is what canonical form means",
-       Flint.Rt.Eq.HashValue(rt, rt.R(viaDelete)) == Flint.Rt.Eq.HashValue(rt, rt.R(direct)));
+       global::_3sln.Flint.Kgen.Rt.Valhash.HashValue(rt, rt.R(viaDelete)) == global::_3sln.Flint.Kgen.Rt.Valhash.HashValue(rt, rt.R(direct)));
     MOk("  ... and the deleted keys really are gone",
        _3sln.Flint.Kgen.Rt.Mapread.MapGet(rt, rt.R(viaDelete), K(rt, 0), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil
        && _3sln.Flint.Kgen.Rt.Mapread.MapGet(rt, rt.R(viaDelete), K(rt, 2), Flint.Rt.Val.Nil) == Flint.Rt.Val.Nil);

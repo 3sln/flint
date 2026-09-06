@@ -38,7 +38,7 @@
   (set h1 (mul32 h1 (hex 0xc2b2ae35)))
   (return (bit-xor h1 (ushr h1 16))))
 
-(defn ^:unchecked ^U32 hash-int [^U32 input]
+(defn ^:pub ^:unchecked ^U32 hash-int [^U32 input]
   (if (== input 0)
     (return 0))
   (return (fmix (mix-h1 SEED (mix-k1 input)) 4)))

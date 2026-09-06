@@ -262,8 +262,8 @@ public static class Maps {
         int n = Entries(rt, rt.R(mi));
         int acc = 0;
         for (int i = 0; i < n; i++) {
-            int kh = Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i));
-            int vh = Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i + 1));
+            int kh = global::_3sln.Flint.Kgen.Rt.Valhash.HashValue(rt, rt.R(at + 2 * i));
+            int vh = global::_3sln.Flint.Kgen.Rt.Valhash.HashValue(rt, rt.R(at + 2 * i + 1));
             acc = _3sln.Flint.Kgen.Rt.Hash.UnorderedStep(acc, _3sln.Flint.Kgen.Rt.Hash.MixCollHash(
                 _3sln.Flint.Kgen.Rt.Hash.OrderedStep(_3sln.Flint.Kgen.Rt.Hash.OrderedStep(1, kh), vh), 2));
         }

@@ -74,7 +74,7 @@ public class RtMaps {
        Mapcore.mapCount(rt, rt.r(viaDelete)) == Mapcore.mapCount(rt, rt.r(direct)));
     ok("  ... and are =", Maps.eq(rt, rt.r(viaDelete), rt.r(direct)));
     ok("  ... and HASH ALIKE, which is what canonical form means",
-       Eq.hashValue(rt, rt.r(viaDelete)) == Eq.hashValue(rt, rt.r(direct)));
+       com._3sln.flint.kgen.rt.Valhash.hashValue(rt, rt.r(viaDelete)) == com._3sln.flint.kgen.rt.Valhash.hashValue(rt, rt.r(direct)));
     ok("  ... and the deleted keys really are gone",
        Mapread.mapGet(rt, rt.r(viaDelete), k(rt, 0), Val.NIL) == Val.NIL
        && Mapread.mapGet(rt, rt.r(viaDelete), k(rt, 2), Val.NIL) == Val.NIL);

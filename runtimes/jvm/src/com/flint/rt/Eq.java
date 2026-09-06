@@ -32,74 +32,11 @@ public final class Eq {
     // because `Maps.eq` materialises refs itself, which native's does not.
 
     /// The hash of a value, agreeing with `eq` above and with Clojure's.
-    public static int hashValue(Rt rt, long v) {
-        if (Val.isDouble(v)) return Hash.hashDouble(Val.asDouble(v));
-        if (Val.isNil(v)) return 0;
-        if (v == Val.TRUE) return com._3sln.flint.kgen.rt.Hash.HASH_TRUE;
-        if (v == Val.FALSE) return com._3sln.flint.kgen.rt.Hash.HASH_FALSE;
-        if (Val.isFixnum(v)) return com._3sln.flint.kgen.rt.Hash.hashLong(Val.asFixnum(v));
-        if (Val.isInlineStr(v)) return Hash.hashString(Val.inlineBytes(v));
-        if (Val.isInlineKw(v)) return Hash.hashKeyword(null, Val.inlineBytes(v));
-        if (!Val.isHeap(v)) return 0;
-        switch (ty(rt.gc.sp, Val.asHeap(v))) {
-            case TY_STR: return Hash.hashString(Str.bytes(rt, v));
-            // WALKED and cached per node, not flattened. Flattening was here
-            // for the caching, which is real -- a rope used as a map key must
-            // not rehash every lookup -- and `RP_HASH` gives the same caching
-            // without spending the tree (`doc/decisions/0011`).
-            case TY_ROPE: return Str.ropeHash(rt, v);
-            case TY_KW: return Hash.hashKeyword(nsBytes(rt, v), Str.bytes(rt, rt.slot(v, 1)));
-            case TY_SYM: return Hash.hashSymbol(nsBytes(rt, v), Str.bytes(rt, rt.slot(v, 1)));
-            // GENERATED, from `kin/valhash.kin`. There were TWO ordered
-            // walks here: this one, which cached and charged NOTHING, and the
-            // seq walk below, which charged and did not cache. The uncharged
-            // half is `0009`'s unbounded walk, still live for the shape most
-            // likely to be big.
-            case TY_VEC: return com._3sln.flint.kgen.rt.Valhash.hashOrdered(rt, v);
-            case TY_MAPENTRY:
-            case TY_CONS:
-            case TY_EMPTY_LIST:
-            case TY_LAZYSEQ:
-            case TY_VECSEQ:
-            case TY_STRSEQ:
-            case TY_RANGE: return com._3sln.flint.kgen.rt.Valhash.hashOrdered(rt, v);
-            case TY_ARRAYMAP:
-            case TY_HASHMAP: return Maps.hash(rt, v);
-            // Both halves, so two equal tagged literals land in one bucket.
-            // A ROW REF hashes as the map it is, so it lands in the same
-            // bucket as an equal map.
-            case Obj.TY_TABLEREF: return hashValue(rt, Table.refToMap(rt, v));
-            case Obj.TY_TABLE: {
-                // ROOTED, for the reason the equality arm is.
-                int base = rt.mark();
-                int vi = rt.push(v);
-                int n = Table.tableCount(rt, rt.r(vi)), acc = 1;
-                for (int i = 0; i < n; i++) {
-                    int ri = rt.push(Table.tableRef(rt, rt.r(vi), i));
-                    acc = acc * 31 + hashValue(rt, rt.r(ri));
-                    rt.popTo(ri);
-                }
-                rt.popTo(base);
-                return com._3sln.flint.kgen.rt.Hash.hashInt(acc ^ n);
-            }
-            // THE FINAL MIX WAS MISSING. Native wraps this in `hashInt` and
-            // both ports did not -- so a tagged literal hashed differently on
-            // wasm, and these two apply the mix for a TABLE two arms up. The
-            // ports were inconsistent with themselves as well as with native.
-            case Obj.TY_TAGGED:
-                return com._3sln.flint.kgen.rt.Hash.hashInt(
-                    hashValue(rt, rt.slot(v, 0)) * 31 + hashValue(rt, rt.slot(v, 1)));
-            case TY_SET: return Sets.hash(rt, v);
-            // A byte string hashes by CONTENT across both tiers, walked and
-            // cached per node rather than flattened (`doc/decisions/0011`).
-            case TY_BYTES:
-            case TY_BROPE: return Bytes.hash(rt, v);
-            default: {
-                if (rt.isSeq(v)) return com._3sln.flint.kgen.rt.Valhash.hashOrdered(rt, v);
-                return 0;
-            }
-        }
-    }
+    // `hashValue` is GENERATED, from `kin/valhash.kin`, as
+    // `Valhash.valueHash`. Two caches this port HAD and never used are live
+    // now: `strHash` was written during interning and never read, and a
+    // keyword's slot 2 was set to nil rather than to its hash -- so the two
+    // commonest map keys there are each paid their content per lookup.
 
     /// Clojure's `compare`: -1, 0 or 1, and a THROW for values that have no
     /// ordering. Refusing is the right answer -- a `sort` over mixed types

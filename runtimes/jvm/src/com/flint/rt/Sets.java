@@ -87,7 +87,7 @@ public final class Sets {
         int at = rt.mark();
         int n = Maps.entries(rt, rt.slot(rt.r(si), S_MAP));
         int acc = 0;
-        for (int i = 0; i < n; i++) acc = com._3sln.flint.kgen.rt.Hash.unorderedStep(acc, Eq.hashValue(rt, rt.r(at + 2 * i)));
+        for (int i = 0; i < n; i++) acc = com._3sln.flint.kgen.rt.Hash.unorderedStep(acc, com._3sln.flint.kgen.rt.Valhash.hashValue(rt, rt.r(at + 2 * i)));
         rt.popTo(base);
         return com._3sln.flint.kgen.rt.Hash.mixCollHash(acc, n);
     }

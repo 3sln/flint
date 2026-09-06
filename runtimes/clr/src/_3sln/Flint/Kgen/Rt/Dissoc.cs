@@ -16,6 +16,7 @@ using static global::_3sln.Flint.Kgen.Rt.Collnode;
 using static global::_3sln.Flint.Kgen.Rt.Copies;
 using static global::_3sln.Flint.Kgen.Rt.Nodeclass;
 using static global::_3sln.Flint.Kgen.Rt.Valeq;
+using static global::_3sln.Flint.Kgen.Rt.Valhash;
 
 public static class Dissoc {
     public static long NodeDissoc(Rt rt, long n, int shift, int h, long key, long edit) {
@@ -52,7 +53,7 @@ public static class Dissoc {
                     int other = 1 - at;
                     int oki = rt.Push(BnKey(rt, rt.R(ni), other));
                     int ovi = rt.Push(BnVal(rt, rt.R(ni), other));
-                    int oh = global::Flint.Rt.Eq.HashValue(rt, rt.R(oki));
+                    int oh = HashValue(rt, rt.R(oki));
                     int newdm;
                     if (shift == 0) {
                         newdm = dm ^ bit;
@@ -131,7 +132,7 @@ public static class Dissoc {
             int other = 1 - found;
             int cki = rt.Push(CnKey(rt, rt.R(dni), other));
             int cvi = rt.Push(CnVal(rt, rt.R(dni), other));
-            int kh = global::Flint.Rt.Eq.HashValue(rt, rt.R(cki));
+            int kh = HashValue(rt, rt.R(cki));
             long made = BnNew(rt, Bitpos(kh, 0), 0, rt.R(dei));
             if (!Val.IsNil(made)) {
                 BnSetKey(rt, made, 0, rt.R(cki));

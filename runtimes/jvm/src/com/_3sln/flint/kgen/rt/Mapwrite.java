@@ -15,6 +15,7 @@ import static com._3sln.flint.kgen.rt.Dissoc.*;
 import static com._3sln.flint.kgen.rt.Mapcore.*;
 import static com._3sln.flint.kgen.rt.Mapread.*;
 import static com._3sln.flint.kgen.rt.Tableref.*;
+import static com._3sln.flint.kgen.rt.Valhash.*;
 
 public final class Mapwrite {
     /// An array map rebuilt as a CHAMP. The one-way door between the two
@@ -34,7 +35,7 @@ public final class Mapwrite {
             int ki = rt.push(pk);
             long pv = amVal(rt, rt.r(mi), i);
             int vi = rt.push(pv);
-            int h = com.flint.rt.Eq.hashValue(rt, rt.r(ki));
+            int h = hashValue(rt, rt.r(ki));
             long nr = nodeAssoc(rt, rt.r(ri), 0, h, rt.r(ki), rt.r(vi), Val.NIL);
             rt.setR(ri, nr);
             rt.popTo(ki);
@@ -106,7 +107,7 @@ public final class Mapwrite {
             }
         } else if (t == TY_HASHMAP) {
             int cnt = mapCount(rt, m);
-            int h = com.flint.rt.Eq.hashValue(rt, rt.r(ki));
+            int h = hashValue(rt, rt.r(ki));
             long root = rt.slot(rt.r(mi), HM_ROOT);
             int ri = rt.push(root);
             rt.champAdded = false;
@@ -176,7 +177,7 @@ public final class Mapwrite {
                 out = rt.r(ni);
             }
         } else if (t == TY_HASHMAP) {
-            int h = com.flint.rt.Eq.hashValue(rt, rt.r(ki));
+            int h = hashValue(rt, rt.r(ki));
             long root = rt.slot(rt.r(mi), HM_ROOT);
             int ri = rt.push(root);
             rt.champAdded = false;

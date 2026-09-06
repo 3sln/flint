@@ -16,6 +16,7 @@ using static global::_3sln.Flint.Kgen.Rt.Find;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;
 using static global::_3sln.Flint.Kgen.Rt.Valeq;
+using static global::_3sln.Flint.Kgen.Rt.Valhash;
 
 public static class Mapread {
     /// Where `k` sits in an array map, or `n` when it is not there.
@@ -82,7 +83,7 @@ public static class Mapread {
                 if (Val.IsNil(root)) {
                     return dflt;
                 }
-                int h = global::Flint.Rt.Eq.HashValue(rt, k);
+                int h = HashValue(rt, k);
                 long got = NodeFindScalar(rt, root, 0, h, k);
                 if (got == Val.NotFound) {
                     return dflt;
@@ -108,7 +109,7 @@ public static class Mapread {
                 @out = AmVal(rt, rt.R(mi), i);
             }
         } else if (t == Obj.TyHashmap) {
-            int h = global::Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+            int h = HashValue(rt, rt.R(ki));
             long root = rt.Slot(rt.R(mi), HM_ROOT);
             if (Val.IsNil(root)) {
                 @out = rt.R(di);

@@ -448,7 +448,7 @@ public static class Builtins {
         // here and was true there. Clojure agrees with wasm on the string.
         Def("contains?", (rt, at, n) =>
             Val.Bool(Collread.CollContains(rt, rt.VAt(at), rt.VAt(at + 1))));
-        Def("hash", (rt, at, n) => Val.Fixnum(Flint.Rt.Eq.HashValue(rt, rt.VAt(at))));
+        Def("hash", (rt, at, n) => Val.Fixnum(global::_3sln.Flint.Kgen.Rt.Valhash.HashValue(rt, rt.VAt(at))));
 
         // The math builtins. `fmath.rs` implements these itself because wasm
         // has no libm; on a host they go to the platform, which is where the

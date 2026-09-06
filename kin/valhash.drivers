@@ -4,24 +4,41 @@ type Addr = u64;
 struct Value(u64);
 const NIL: Value = Value(0xFFFF);
 const TY_VEC: u8 = 10; const TY_CONS: u8 = 11; const TY_OTHER: u8 = 12;
+const TY_STR: u8 = 13; const TY_ROPE: u8 = 14; const TY_KW: u8 = 15;
+const TY_SYM: u8 = 16; const TY_BIGINT: u8 = 17; const TY_MAPENTRY: u8 = 18;
+const TY_EMPTY_LIST: u8 = 19; const TY_LAZYSEQ: u8 = 20; const TY_VECSEQ: u8 = 21;
+const TY_STRSEQ: u8 = 22; const TY_RANGE: u8 = 23; const TY_ARRAYMAP: u8 = 24;
+const TY_HASHMAP: u8 = 25; const TY_SET: u8 = 26; const TY_BYTES: u8 = 27;
+const TY_BROPE: u8 = 28; const TY_OPAQUE: u8 = 29; const TY_TABLE: u8 = 30;
+const TY_TABLEREF: u8 = 31; const TY_TAGGED: u8 = 32;
+const TRUE: Value = Value(0x2001); const FALSE: Value = Value(0x2002);
+const HASH_TRUE: u32 = 1231; const HASH_FALSE: u32 = 1237;
 const V_HASH: u32 = 0;
 struct Space { m: Vec<u8> }
 struct Gc { sp: Space }
 // `budget` is how many ticks the walk may take before it starves, which is
 // the half both ports were missing for a vector: they charged nothing there.
 struct Rt { gc: Gc, bump: u64, roots: Vec<Value>, slots: Vec<[u64; 2]>,
-            budget: i32, ticks: u32, seqn: u32 }
+            budget: i32, ticks: u32, seqn: u32, doubles: Vec<f64> }
 fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
 impl Value {
     fn is_heap(self) -> bool { self.0 >= 100 && self.0 < 0x1000_0000 && self.0 != NIL.0 }
     fn as_heap(self) -> Addr { self.0 as Addr }
     fn is_nil(self) -> bool { self.0 == NIL.0 }
     fn is_fixnum(self) -> bool { (self.0 >> 32) == 1 }
+    fn is_double(self) -> bool { (self.0 >> 32) == 2 }
+    fn is_inline_str(self) -> bool { (self.0 >> 32) == 3 }
+    fn is_inline_kw(self) -> bool { (self.0 >> 32) == 4 }
     fn as_fixnum(self) -> i64 { (self.0 & 0xFFFF_FFFF) as i64 }
     fn fixnum(n: i64) -> Value { Value(0x1_0000_0000u64 | (n as u64 & 0xFFFF_FFFF)) }
 }
 fn ordered_step(acc: u32, h: u32) -> u32 { acc.wrapping_mul(31).wrapping_add(h) }
 fn mix_coll_hash(acc: u32, n: u32) -> u32 { acc ^ (n.wrapping_mul(0x9E37_79B9)) }
+fn hash_long(n: i64) -> u32 { (n as u64 ^ ((n as u64) >> 32)) as u32 }
+fn hash_int(h: u32) -> u32 { h ^ (h >> 16) }
+// `hash-double` resolves to `crate::hash::hash_double`, so the probe declares
+// that module rather than a bare function.
+pub mod hash { pub fn hash_double(d: f64) -> u32 { if d.is_nan() { 7 } else { (d as i64) as u32 } } }
 impl Rt {
     fn mark(&self) -> usize { self.roots.len() }
     fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
@@ -43,14 +60,34 @@ impl Rt {
     }
     // Each element hashes to its own position, so a walk that stops early or
     // charges differently shows up in the answer rather than only the count.
-    fn hash_value(&mut self, v: Value) -> u32 { (v.0 & 0xFF) as u32 }
+    // Each stub NAMES ITSELF in the high bits, so which arm ran is visible in
+    // the answer rather than only in whether it was right.
+    fn num_f64(&mut self, v: Value) -> f64 { self.doubles[(v.0 & 0xFF) as usize] }
+    fn string_hash(&mut self, v: Value) -> u32 { 0x5100 | (v.0 & 0xFF) as u32 }
+    fn keyword_hash(&mut self, v: Value) -> u32 { 0x5200 | (v.0 & 0xFF) as u32 }
+    fn symbol_hash(&mut self, v: Value) -> u32 { 0x5300 | (v.0 & 0xFF) as u32 }
+    fn rope_hash(&mut self, v: Value) -> u32 { 0x5400 | (v.0 & 0xFF) as u32 }
+    fn b_hash(&mut self, v: Value) -> u32 { 0x5500 | (v.0 & 0xFF) as u32 }
+    fn hash_map(&mut self, v: Value) -> u32 { 0x5600 | (v.0 & 0xFF) as u32 }
+    fn hash_set(&mut self, v: Value) -> u32 { 0x5700 | (v.0 & 0xFF) as u32 }
+    fn i64_of(&mut self, v: Value) -> i64 { (v.0 & 0xFFFF) as i64 }
+    fn table_count(&mut self, _t: Value) -> u32 { 2 }
+    fn table_ref(&mut self, t: Value, i: u32) -> Value {
+        self.bump += 1;
+        Value::fixnum((self.slots[t.0 as usize][1] * 100 + i as u64) as i64)
+    }
+    fn ref_to_map(&mut self, r: Value) -> Value {
+        let m = self.obj(TY_ARRAYMAP);
+        self.slots[m.0 as usize][1] = self.slots[r.0 as usize][1];
+        m
+    }
     fn seq(&mut self, c: Value) -> Value {
         let n = if c.is_heap() && ty(&self.gc.sp, c.as_heap()) == TY_VEC {
             self.slots[c.0 as usize][1] as u32
         } else { self.seqn };
         if n == 0 { NIL } else { Value(0xC000 + n as u64) }
     }
-    fn first(&mut self, s: Value) -> Value { Value(0xE000 + (s.0 - 0xC000)) }
+    fn first(&mut self, s: Value) -> Value { Value::fixnum((s.0 - 0xC000) as i64) }
     fn next(&mut self, s: Value) -> Value {
         if s.0 == 0xC001 { NIL } else { Value(s.0 - 1) }
     }
@@ -61,7 +98,8 @@ impl Rt {
 fn main() {
     let mut rt = Rt { gc: Gc { sp: Space { m: vec![0u8; 400] } }, bump: 100,
                       roots: Vec::new(), slots: vec![[0u64; 2]; 400],
-                      budget: 1000, ticks: 0, seqn: 3 };
+                      budget: 1000, ticks: 0, seqn: 3,
+                      doubles: vec![1.5, f64::NAN, 0.0] };
     let mut o = String::new();
 
     // A VECTOR IS WALKED, CHARGED and CACHED. The charge is the half both
@@ -114,19 +152,89 @@ fn main() {
     let big = rt.obj(TY_VEC);
     rt.slots[big.0 as usize][1] = 0;
     rt.set(big, V_HASH, Value::fixnum(0xFFFF_FFFFu32 as i64));
-    o.push_str(&format!("hi={:x}", rt.hash_ordered(big)));
+    o.push_str(&format!("hi={:x} ", rt.hash_ordered(big)));
+
+    // --- `value-hash`: every arm, and each stub names itself. -------------
+    // The IMMEDIATES first: a double by its NUMBER (so NaN is not its bits),
+    // nil, the two booleans, a fixnum, and the two inline tiers.
+    o.push_str(&format!("d={:x}/{:x} ", rt.hash_value(Value(0x2_0000_0000)),
+                        rt.hash_value(Value(0x2_0000_0001))));
+    o.push_str(&format!("n={:x} t={:x} f={:x} ", rt.hash_value(NIL),
+                        rt.hash_value(TRUE), rt.hash_value(FALSE)));
+    o.push_str(&format!("fx={:x} ", rt.hash_value(Value::fixnum(7))));
+    o.push_str(&format!("is={:x} ik={:x} ", rt.hash_value(Value(0x3_0000_0041)),
+                        rt.hash_value(Value(0x4_0000_0042))));
+    o.push_str(&format!("other={:x} ", rt.hash_value(Value(0x9_0000_0000))));
+
+    // The HEAP tags, each to its own stub.
+    let mut tags = String::new();
+    for t in [TY_STR, TY_ROPE, TY_BYTES, TY_BROPE, TY_KW, TY_SYM, TY_BIGINT,
+              TY_ARRAYMAP, TY_HASHMAP, TY_SET, TY_OTHER] {
+        let x = rt.obj(t);
+        tags.push_str(&format!("{:x},", rt.hash_value(x)));
+    }
+    o.push_str(&format!("tags={} ", tags));
+
+    // EVERY SEQUENTIAL TAG goes to the ordered walk, which is the agreement
+    // `val-eq` needs: `=` treats them as one category, so `hash` must too.
+    let mut seqs = String::new();
+    for t in [TY_VEC, TY_MAPENTRY, TY_CONS, TY_EMPTY_LIST, TY_LAZYSEQ,
+              TY_VECSEQ, TY_STRSEQ, TY_RANGE] {
+        let x = rt.obj(t);
+        rt.slots[x.0 as usize][1] = 2;
+        seqs.push_str(&format!("{:x},", rt.hash_value(x)));
+    }
+    o.push_str(&format!("seqs={} ", seqs));
+
+    // AN OPAQUE VALUE hashes its stored id, and one without falls back to 0
+    // rather than to the per-type constant -- the whole point is a distinct
+    // key per value.
+    let op = rt.obj(TY_OPAQUE);
+    rt.slots[op.0 as usize][1] = Value::fixnum(99).0;
+    let op2 = rt.obj(TY_OPAQUE);
+    rt.slots[op2.0 as usize][1] = NIL.0;
+    o.push_str(&format!("op={:x}/{:x} ", rt.hash_value(op), rt.hash_value(op2)));
+
+    // A TABLE is columnar and a REF hashes as the map it is.
+    let tb = rt.obj(TY_TABLE);
+    rt.slots[tb.0 as usize][1] = 1;
+    let tb2 = rt.obj(TY_TABLE);
+    rt.slots[tb2.0 as usize][1] = 2;
+    o.push_str(&format!("tb={:x}/{:x} ", rt.hash_value(tb), rt.hash_value(tb2)));
+    let rf = rt.obj(TY_TABLEREF);
+    rt.slots[rf.0 as usize][1] = 7;
+    o.push_str(&format!("rf={:x} ", rt.hash_value(rf)));
+
+    // A TAGGED literal hashes BOTH HALVES through the final mix -- the mix
+    // both ports dropped.
+    let tg = rt.obj(TY_TAGGED);
+    rt.slots[tg.0 as usize][0] = Value::fixnum(3).0;
+    rt.slots[tg.0 as usize][1] = Value::fixnum(4).0;
+    o.push_str(&format!("tg={:x}", rt.hash_value(tg)));
     println!("{}", o);
 }
 --java-head
     static final long NIL = 0xFFFFL;
     static final int TY_VEC = 10, TY_CONS = 11, TY_OTHER = 12;
+    static final int TY_STR = 13, TY_ROPE = 14, TY_KW = 15, TY_SYM = 16;
+    static final int TY_BIGINT = 17, TY_MAPENTRY = 18, TY_EMPTY_LIST = 19;
+    static final int TY_LAZYSEQ = 20, TY_VECSEQ = 21, TY_STRSEQ = 22;
+    static final int TY_RANGE = 23, TY_ARRAYMAP = 24, TY_HASHMAP = 25;
+    static final int TY_SET = 26, TY_BYTES = 27, TY_BROPE = 28;
+    static final int TY_OPAQUE = 29, TY_TABLE = 30, TY_TABLEREF = 31;
+    static final int TY_TAGGED = 32;
+    static final int HASH_TRUE = 1231, HASH_FALSE = 1237;
     static final int V_HASH = 0;
     static final class Val {
         static final long NIL = Probe.NIL;
         static boolean isHeap(long v) { return v >= 100 && v < 0x10000000L && v != NIL; }
         static long asHeap(long v) { return v; }
         static boolean isNil(long v) { return v == NIL; }
+        static final long TRUE = 0x2001L, FALSE = 0x2002L;
         static boolean isFixnum(long v) { return (v >>> 32) == 1; }
+        static boolean isDouble(long v) { return (v >>> 32) == 2; }
+        static boolean isInlineStr(long v) { return (v >>> 32) == 3; }
+        static boolean isInlineKw(long v) { return (v >>> 32) == 4; }
         static long asFixnum(long v) { return v & 0xFFFFFFFFL; }
         static long fixnum(long n) { return 0x100000000L | (n & 0xFFFFFFFFL); }
     }
@@ -137,6 +245,7 @@ fn main() {
         long bump = 100;
         long[][] slots = new long[400][2];
         int budget = 1000, ticks = 0, seqn = 3;
+        double[] doubles = { 1.5, Double.NaN, 0.0 };
         java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
         int mark() { return roots.size(); }
         int push(long v) { roots.add(v); return roots.size() - 1; }
@@ -158,15 +267,43 @@ fn main() {
     static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     static int orderedStep(int acc, int h) { return acc * 31 + h; }
     static int mixCollHash(int acc, int n) { return acc ^ (n * 0x9E3779B9); }
+    static int hashLong(long n) { return (int) (n ^ (n >>> 32)); }
+    static int hashInt(int h) { return h ^ (h >>> 16); }
+    // `hash-double` is fully qualified, so the probe declares that path.
     static final class com { static final class flint { static final class rt {
-        static final class Eq { static int hashValue(Rt rt, long v) { return (int) (v & 0xFF); } }
+        static final class Hash { static int hashDouble(double d) { return Double.isNaN(d) ? 7 : (int) (long) d; } }
     } } }
+    static final class Str {
+        static int stringHash(Rt rt, long v) { return 0x5100 | (int) (v & 0xFF); }
+        static int keywordHash(Rt rt, long v) { return 0x5200 | (int) (v & 0xFF); }
+    }
+    static int symbolHash(Rt rt, long v) { return 0x5300 | (int) (v & 0xFF); }
+    static int ropeHash(Rt rt, long v) { return 0x5400 | (int) (v & 0xFF); }
+    static int bHash(Rt rt, long v) { return 0x5500 | (int) (v & 0xFF); }
+    static final class Maps { static int hash(Rt rt, long v) { return 0x5600 | (int) (v & 0xFF); } }
+    static final class Sets { static int hash(Rt rt, long v) { return 0x5700 | (int) (v & 0xFF); } }
+    static final class Num {
+        static double f64(Rt rt, long v) { return rt.doubles[(int) (v & 0xFF)]; }
+        static long i64Of(Rt rt, long v) { return v & 0xFFFF; }
+    }
+    static final class Table {
+        static int tableCount(Rt rt, long t) { return 2; }
+        static long tableRef(Rt rt, long t, int i) {
+            rt.bump += 1;
+            return Val.fixnum(rt.slots[(int) t][1] * 100 + i);
+        }
+        static long refToMap(Rt rt, long r) {
+            long m = rt.obj(TY_ARRAYMAP);
+            rt.slots[(int) m][1] = rt.slots[(int) r][1];
+            return m;
+        }
+    }
     static long seq(Rt rt, long c) {
         int n = (Val.isHeap(c) && ty(rt.gc.sp, Val.asHeap(c)) == TY_VEC)
                 ? (int) rt.slots[(int) c][1] : rt.seqn;
         return n == 0 ? NIL : 0xC000L + n;
     }
-    static long first(Rt rt, long s) { return 0xE000L + (s - 0xC000L); }
+    static long first(Rt rt, long s) { return Val.fixnum(s - 0xC000L); }
     static long next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
 --java
     public static void main(String[] args) {
@@ -215,18 +352,83 @@ fn main() {
         rt.slots[(int) big][1] = 0;
         rt.setSlot(big, V_HASH, Val.fixnum(0xFFFFFFFFL));
         o.append("hi=").append(Integer.toHexString(hashOrdered(rt, big)));
+        o.append(' ');
+        // --- `value-hash`: every arm, and each stub names itself. ---------
+        o.append("d=").append(Integer.toHexString(hashValue(rt, 0x200000000L))).append("/")
+         .append(Integer.toHexString(hashValue(rt, 0x200000001L))).append(' ');
+        o.append("n=").append(Integer.toHexString(hashValue(rt, NIL)))
+         .append(" t=").append(Integer.toHexString(hashValue(rt, Val.TRUE)))
+         .append(" f=").append(Integer.toHexString(hashValue(rt, Val.FALSE))).append(' ');
+        o.append("fx=").append(Integer.toHexString(hashValue(rt, Val.fixnum(7)))).append(' ');
+        o.append("is=").append(Integer.toHexString(hashValue(rt, 0x300000041L)))
+         .append(" ik=").append(Integer.toHexString(hashValue(rt, 0x400000042L))).append(' ');
+        o.append("other=").append(Integer.toHexString(hashValue(rt, 0x900000000L))).append(' ');
+
+        int[] htags = { TY_STR, TY_ROPE, TY_BYTES, TY_BROPE, TY_KW, TY_SYM, TY_BIGINT,
+                        TY_ARRAYMAP, TY_HASHMAP, TY_SET, TY_OTHER };
+        StringBuilder tags = new StringBuilder();
+        for (int t : htags) tags.append(Integer.toHexString(hashValue(rt, rt.obj(t)))).append(',');
+        o.append("tags=").append(tags).append(' ');
+
+        int[] stags = { TY_VEC, TY_MAPENTRY, TY_CONS, TY_EMPTY_LIST, TY_LAZYSEQ,
+                        TY_VECSEQ, TY_STRSEQ, TY_RANGE };
+        StringBuilder seqs = new StringBuilder();
+        for (int t : stags) {
+            long x = rt.obj(t);
+            rt.slots[(int) x][1] = 2;
+            seqs.append(Integer.toHexString(hashValue(rt, x))).append(',');
+        }
+        o.append("seqs=").append(seqs).append(' ');
+
+        long op = rt.obj(TY_OPAQUE);
+        rt.slots[(int) op][1] = Val.fixnum(99);
+        long op2 = rt.obj(TY_OPAQUE);
+        rt.slots[(int) op2][1] = NIL;
+        o.append("op=").append(Integer.toHexString(hashValue(rt, op))).append("/")
+         .append(Integer.toHexString(hashValue(rt, op2))).append(' ');
+
+        long tb = rt.obj(TY_TABLE);
+        rt.slots[(int) tb][1] = 1;
+        long tb2 = rt.obj(TY_TABLE);
+        rt.slots[(int) tb2][1] = 2;
+        o.append("tb=").append(Integer.toHexString(hashValue(rt, tb))).append("/")
+         .append(Integer.toHexString(hashValue(rt, tb2))).append(' ');
+        long rf = rt.obj(TY_TABLEREF);
+        rt.slots[(int) rf][1] = 7;
+        o.append("rf=").append(Integer.toHexString(hashValue(rt, rf))).append(' ');
+
+        long tg = rt.obj(TY_TAGGED);
+        rt.slots[(int) tg][0] = Val.fixnum(3);
+        rt.slots[(int) tg][1] = Val.fixnum(4);
+        o.append("tg=").append(Integer.toHexString(hashValue(rt, tg)));
         System.out.println(o.toString());
     }
 --csharp-pre
 namespace Flint.Rt {
-    internal static class Eq {
-        internal static int HashValue(Probe.Rt rt, long v) { return (int) (v & 0xFF); }
+    internal static class Hash {
+        internal static int HashDouble(double d) { return double.IsNaN(d) ? 7 : (int) (long) d; }
+    }
+    // `ref-to-map` is fully qualified in the vocabulary; `table-ref` and
+    // `table-count` are bare siblings, so the probe needs a `Table` in each.
+    internal static class Table {
+        internal static long refToMap(Probe.Rt rt, long r) {
+            long m = rt.Obj_(Probe.Obj.TyArraymap);
+            rt.slots[(int) m, 1] = rt.slots[(int) r, 1];
+            return m;
+        }
     }
 }
 --csharp-head
     internal const long NIL = 0xFFFFL;
     internal static class Obj {
         internal const int TyVec = 10, TyCons = 11, TyOther = 12;
+        internal const int TyStr = 13, TyRope = 14, TyKw = 15, TySym = 16;
+        internal const int TyBigint = 17, TyMapentry = 18, TyEmptyList = 19;
+        internal const int TyLazyseq = 20, TyVecseq = 21, TyStrseq = 22;
+        internal const int TyRange = 23, TyArraymap = 24, TyHashmap = 25;
+        internal const int TySet = 26, TyBytes = 27, TyBrope = 28;
+        internal const int TyOpaque = 29, TyTable = 30, TyTableref = 31;
+        internal const int TyTagged = 32;
         internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     }
     internal const int V_HASH = 0;
@@ -235,7 +437,11 @@ namespace Flint.Rt {
         internal static bool IsHeap(long v) { return v >= 100 && v < 0x10000000L && v != NIL; }
         internal static long AsHeap(long v) { return v; }
         internal static bool IsNil(long v) { return v == NIL; }
+        internal const long True = 0x2001L, False = 0x2002L;
         internal static bool IsFixnum(long v) { return (v >> 32) == 1; }
+        internal static bool IsDouble(long v) { return (v >> 32) == 2; }
+        internal static bool IsInlineStr(long v) { return (v >> 32) == 3; }
+        internal static bool IsInlineKw(long v) { return (v >> 32) == 4; }
         internal static long AsFixnum(long v) { return v & 0xFFFFFFFFL; }
         internal static long Fixnum(long n) { return 0x100000000L | (n & 0xFFFFFFFFL); }
     }
@@ -246,6 +452,7 @@ namespace Flint.Rt {
         internal long bump = 100;
         internal long[,] slots = new long[400, 2];
         internal int budget = 1000, ticks = 0, seqn = 3;
+        internal double[] doubles = { 1.5, double.NaN, 0.0 };
         internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
         internal int Mark() { return roots.Count; }
         internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
@@ -266,12 +473,36 @@ namespace Flint.Rt {
     }
     internal static int OrderedStep(int acc, int h) { return acc * 31 + h; }
     internal static int MixCollHash(int acc, int n) { return acc ^ unchecked(n * (int) 0x9E3779B9); }
+    internal static string HEX(int h) { return h.ToString("x"); }
+    internal static int HashLong(long n) { return (int) (n ^ (long) ((ulong) n >> 32)); }
+    internal static int HashInt(int h) { return h ^ (int) ((uint) h >> 16); }
+    internal const int HashTrue = 1231, HashFalse = 1237;
+    internal static class Str {
+        internal static int StringHash(Rt rt, long v) { return 0x5100 | (int) (v & 0xFF); }
+        internal static int KeywordHash(Rt rt, long v) { return 0x5200 | (int) (v & 0xFF); }
+    }
+    internal static int SymbolHash(Rt rt, long v) { return 0x5300 | (int) (v & 0xFF); }
+    internal static int RopeHash(Rt rt, long v) { return 0x5400 | (int) (v & 0xFF); }
+    internal static int BHash(Rt rt, long v) { return 0x5500 | (int) (v & 0xFF); }
+    internal static class Maps { internal static int Hash(Rt rt, long v) { return 0x5600 | (int) (v & 0xFF); } }
+    internal static class Sets { internal static int Hash(Rt rt, long v) { return 0x5700 | (int) (v & 0xFF); } }
+    internal static class Num {
+        internal static double F64(Rt rt, long v) { return rt.doubles[(int) (v & 0xFF)]; }
+        internal static long I64Of(Rt rt, long v) { return v & 0xFFFF; }
+    }
+    internal static class Table {
+        internal static int tableCount(Rt rt, long t) { return 2; }
+        internal static long tableRef(Rt rt, long t, int i) {
+            rt.bump += 1;
+            return Val.Fixnum(rt.slots[(int) t, 1] * 100 + i);
+        }
+    }
     internal static long Seq(Rt rt, long c) {
         int n = (Val.IsHeap(c) && Obj.Ty(rt.gc.sp, Val.AsHeap(c)) == Obj.TyVec)
                 ? (int) rt.slots[(int) c, 1] : rt.seqn;
         return n == 0 ? NIL : 0xC000L + n;
     }
-    internal static long First(Rt rt, long s) { return 0xE000L + (s - 0xC000L); }
+    internal static long First(Rt rt, long s) { return Val.Fixnum(s - 0xC000L); }
     internal static long Next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
 --csharp
     public static void Main() {
@@ -320,5 +551,54 @@ namespace Flint.Rt {
         rt.slots[(int) big, 1] = 0;
         rt.SetSlot(big, V_HASH, Val.Fixnum(0xFFFFFFFFL));
         o.Append("hi=").Append(HashOrdered(rt, big).ToString("x"));
+        o.Append(' ');
+        // --- `value-hash`: every arm, and each stub names itself. ---------
+        o.Append("d=").Append(HEX(HashValue(rt, 0x200000000L))).Append("/")
+         .Append(HEX(HashValue(rt, 0x200000001L))).Append(' ');
+        o.Append("n=").Append(HEX(HashValue(rt, NIL)))
+         .Append(" t=").Append(HEX(HashValue(rt, Val.True)))
+         .Append(" f=").Append(HEX(HashValue(rt, Val.False))).Append(' ');
+        o.Append("fx=").Append(HEX(HashValue(rt, Val.Fixnum(7)))).Append(' ');
+        o.Append("is=").Append(HEX(HashValue(rt, 0x300000041L)))
+         .Append(" ik=").Append(HEX(HashValue(rt, 0x400000042L))).Append(' ');
+        o.Append("other=").Append(HEX(HashValue(rt, 0x900000000L))).Append(' ');
+
+        int[] htags = { Obj.TyStr, Obj.TyRope, Obj.TyBytes, Obj.TyBrope, Obj.TyKw, Obj.TySym, Obj.TyBigint,
+                        Obj.TyArraymap, Obj.TyHashmap, Obj.TySet, Obj.TyOther };
+        var tags = new System.Text.StringBuilder();
+        foreach (int t in htags) tags.Append(HEX(HashValue(rt, rt.Obj_(t)))).Append(',');
+        o.Append("tags=").Append(tags).Append(' ');
+
+        int[] stags = { Obj.TyVec, Obj.TyMapentry, Obj.TyCons, Obj.TyEmptyList, Obj.TyLazyseq,
+                        Obj.TyVecseq, Obj.TyStrseq, Obj.TyRange };
+        var seqs = new System.Text.StringBuilder();
+        foreach (int t in stags) {
+            long x = rt.Obj_(t);
+            rt.slots[(int) x, 1] = 2;
+            seqs.Append(HEX(HashValue(rt, x))).Append(',');
+        }
+        o.Append("seqs=").Append(seqs).Append(' ');
+
+        long op = rt.Obj_(Obj.TyOpaque);
+        rt.slots[(int) op, 1] = Val.Fixnum(99);
+        long op2 = rt.Obj_(Obj.TyOpaque);
+        rt.slots[(int) op2, 1] = NIL;
+        o.Append("op=").Append(HEX(HashValue(rt, op))).Append("/")
+         .Append(HEX(HashValue(rt, op2))).Append(' ');
+
+        long tb = rt.Obj_(Obj.TyTable);
+        rt.slots[(int) tb, 1] = 1;
+        long tb2 = rt.Obj_(Obj.TyTable);
+        rt.slots[(int) tb2, 1] = 2;
+        o.Append("tb=").Append(HEX(HashValue(rt, tb))).Append("/")
+         .Append(HEX(HashValue(rt, tb2))).Append(' ');
+        long rf = rt.Obj_(Obj.TyTableref);
+        rt.slots[(int) rf, 1] = 7;
+        o.Append("rf=").Append(HEX(HashValue(rt, rf))).Append(' ');
+
+        long tg = rt.Obj_(Obj.TyTagged);
+        rt.slots[(int) tg, 0] = Val.Fixnum(3);
+        rt.slots[(int) tg, 1] = Val.Fixnum(4);
+        o.Append("tg=").Append(HEX(HashValue(rt, tg)));
         System.Console.WriteLine(o.ToString());
     }

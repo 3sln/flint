@@ -483,7 +483,7 @@ public final class Builtins {
         // here and was true there. Clojure agrees with wasm on the string.
         def("contains?", (rt, at, n) ->
             Val.bool(Collread.collContains(rt, rt.vat(at), rt.vat(at + 1))));
-        def("hash", (rt, at, n) -> Val.fixnum(Eq.hashValue(rt, rt.vat(at))));
+        def("hash", (rt, at, n) -> Val.fixnum(com._3sln.flint.kgen.rt.Valhash.hashValue(rt, rt.vat(at))));
 
         // The math builtins. `fmath.rs` implements these itself because wasm
         // has no libm; on a host they go to the platform, which is where the

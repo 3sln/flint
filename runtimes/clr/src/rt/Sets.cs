@@ -79,7 +79,7 @@ public static class Sets {
         int at = rt.Mark();
         int n = Maps.Entries(rt, rt.Slot(rt.R(si), S_MAP));
         int acc = 0;
-        for (int i = 0; i < n; i++) acc = _3sln.Flint.Kgen.Rt.Hash.UnorderedStep(acc, Flint.Rt.Eq.HashValue(rt, rt.R(at + 2 * i)));
+        for (int i = 0; i < n; i++) acc = _3sln.Flint.Kgen.Rt.Hash.UnorderedStep(acc, global::_3sln.Flint.Kgen.Rt.Valhash.HashValue(rt, rt.R(at + 2 * i)));
         rt.PopTo(bas);
         return _3sln.Flint.Kgen.Rt.Hash.MixCollHash(acc, n);
     }

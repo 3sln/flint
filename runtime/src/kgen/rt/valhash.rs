@@ -75,4 +75,136 @@ impl Rt {
         self.pop_to(base);
         return out;
     }
+    /// The hash of any value.
+    /// 
+    /// TWO VALUES THAT ARE `=` MUST HASH ALIKE, or a map keyed by one is not
+    /// found by the other. That is the contract this shares with `val-eq`, and
+    /// it is why the two are read together: every arm here has a matching arm
+    /// there, and a tier that is invisible to one must be invisible to both.
+    /// 
+    /// A BYTE STRING GOES THROUGH `b-hash` WHATEVER TIER IT IS IN. Native had
+    /// an inline byte walk for the flat case and called `b-hash` for the tree,
+    /// which is the same walk written twice; both ports already routed both.
+    /// 
+    /// FUNCTIONS, ATOMS AND VARS hash to a PER-TYPE CONSTANT. They are only
+    /// ever `=` to themselves, so it is correct if unhelpful -- and a moving
+    /// collector rules out using the address.
+    pub fn hash_value(&mut self, v: Value) -> u32 {
+        if v.is_double() {
+            return crate::hash::hash_double(self.num_f64(v));
+        }
+        if v.is_nil() {
+            return 0;
+        }
+        if v == TRUE {
+            return HASH_TRUE;
+        }
+        if v == FALSE {
+            return HASH_FALSE;
+        }
+        if v.is_fixnum() {
+            return hash_long(v.as_fixnum());
+        }
+        if v.is_inline_str() {
+            return self.string_hash(v);
+        }
+        if v.is_inline_kw() {
+            return self.keyword_hash(v);
+        }
+        if !v.is_heap() {
+            return 0;
+        }
+        let t: u8 = ty(&self.gc.sp, v.as_heap());
+        if t == TY_STR {
+            return self.string_hash(v);
+        }
+        // HASH THE CONTENT, so `"abc"` inline, flat and as a rope are
+        // one key -- but WALK it rather than flattening. Flattening was
+        // here for the caching, which is real: a rope used as a map key
+        // must not rehash every lookup. `RP_HASH` gives the same caching
+        // per node and keeps the tree, so the trade is gone rather than
+        // chosen (`0011`).
+        if t == TY_ROPE {
+            return (self.rope_hash(v) as i64) as u32;
+        }
+        if (t == TY_BYTES) || (t == TY_BROPE) {
+            return (self.b_hash(v) as i64) as u32;
+        }
+        if t == TY_KW {
+            return self.keyword_hash(v);
+        }
+        if t == TY_SYM {
+            return self.symbol_hash(v);
+        }
+        if t == TY_BIGINT {
+            return hash_long(self.i64_of(v));
+        }
+        if (((t == TY_VEC) || (t == TY_MAPENTRY)) || ((t == TY_CONS) || (t == TY_EMPTY_LIST))) || (((t == TY_LAZYSEQ) || (t == TY_VECSEQ)) || ((t == TY_STRSEQ) || (t == TY_RANGE))) {
+            return self.hash_ordered(v);
+        }
+        if (t == TY_ARRAYMAP) || (t == TY_HASHMAP) {
+            return self.hash_map(v);
+        }
+        if t == TY_SET {
+            return self.hash_set(v);
+        }
+        // AN OPAQUE VALUE CARRIES ITS OWN IDENTITY, assigned at creation
+        // and STORED (`0022`). The per-type constant below would be
+        // correct -- equality is identity, so collisions only cost time --
+        // but it would put every opaque value in one bucket, and the whole
+        // point of the type is to be a distinct key.
+        if t == TY_OPAQUE {
+            let id: Value = self.slot(v, 1);
+            if id.is_fixnum() {
+                return hash_long(id.as_fixnum());
+            }
+            return hash_long(0);
+        }
+        // COLUMNAR is available precisely because a table is not `=` to a
+        // vector of maps, so this need not agree with what one would
+        // hash. ROOTED for the reason the equality arm is: `table-ref`
+        // allocates and `v` is a host local (`0031`).
+        if t == TY_TABLE {
+            let base: usize = self.mark();
+            let vi: usize = self.push(v);
+            let n: u32 = self.table_count(self.r(vi));
+            let mut acc: u32;
+            let mut i: u32;
+            acc = 1;
+            i = 0;
+            while i < n {
+                let row: Value = self.table_ref(self.r(vi), i);
+                let ri: usize = self.push(row);
+                let h: u32 = self.hash_value(self.r(ri));
+                self.pop_to(ri);
+                acc = acc.wrapping_mul(31).wrapping_add(h);
+                i += 1;
+            }
+            self.pop_to(base);
+            return hash_int(acc ^ n);
+        }
+        // A REF HASHES AS THE MAP IT IS, or a map keyed by a row would
+        // not find it.
+        if t == TY_TABLEREF {
+            let base: usize = self.mark();
+            let m: Value = self.ref_to_map(v);
+            let mi: usize = self.push(m);
+            let h: u32 = self.hash_value(self.r(mi));
+            self.pop_to(base);
+            return h;
+        }
+        // BOTH HALVES, so a tagged literal hashes like the pair it is and
+        // two equal ones land in the same bucket. The final `hash-int` is
+        // the mix both ports dropped, which made a tagged literal hash
+        // differently on wasm than on the JVM and the CLR.
+        if t == TY_TAGGED {
+            let base: usize = self.mark();
+            let vi: usize = self.push(v);
+            let th: u32 = self.hash_value(self.slot(self.r(vi), 0));
+            let fh: u32 = self.hash_value(self.slot(self.r(vi), 1));
+            self.pop_to(base);
+            return hash_int(th.wrapping_mul(31).wrapping_add(fh));
+        }
+        return hash_int(1374486528 | ((t as i64) as u32));
+    }
 }

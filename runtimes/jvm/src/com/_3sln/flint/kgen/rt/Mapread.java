@@ -14,6 +14,7 @@ import static com._3sln.flint.kgen.rt.Find.*;
 import static com._3sln.flint.kgen.rt.Mapcore.*;
 import static com._3sln.flint.kgen.rt.Tableref.*;
 import static com._3sln.flint.kgen.rt.Valeq.*;
+import static com._3sln.flint.kgen.rt.Valhash.*;
 
 public final class Mapread {
     /// Where `k` sits in an array map, or `n` when it is not there.
@@ -80,7 +81,7 @@ public final class Mapread {
                 if (Val.isNil(root)) {
                     return dflt;
                 }
-                int h = com.flint.rt.Eq.hashValue(rt, k);
+                int h = hashValue(rt, k);
                 long got = nodeFindScalar(rt, root, 0, h, k);
                 if (got == Val.NOT_FOUND) {
                     return dflt;
@@ -106,7 +107,7 @@ public final class Mapread {
                 out = amVal(rt, rt.r(mi), i);
             }
         } else if (t == TY_HASHMAP) {
-            int h = com.flint.rt.Eq.hashValue(rt, rt.r(ki));
+            int h = hashValue(rt, rt.r(ki));
             long root = rt.slot(rt.r(mi), HM_ROOT);
             if (Val.isNil(root)) {
                 out = rt.r(di);

@@ -17,11 +17,25 @@
   (:require [flint.impl.rt :refer [defn return if let do comment doc local set
                                    == not nil? is-heap as-heap ty is-fixnum
                                    as-fixnum to-i32 fixnum slot set-slot
-                                   mark push r set-r pop-to forever break +
-                                   charge-tick hash-value to-i64
-                                   Rt Value I32 U32 Ty Bool RootIx NIL
-                                   TY_VEC V_HASH]]
-            [flint.rt.hash :refer [ordered-step mix-coll-hash]]
+                                   mark push r set-r pop-to forever break while + *
+                                   charge-tick hash-value to-i64 bit-or bit-xor
+                                   is-double num-f64 is-fixnum <
+                                   is-inline-str is-inline-kw
+                                   i64-of hash-double string-hash keyword-hash
+                                   hash-map hash-set ref-to-map table-ref
+                                   table-count wadd wmul or
+                                   Rt Value I32 U32 Ty Bool RootIx NIL F64 TRUE FALSE
+                                   TY_VEC TY_STR TY_ROPE TY_KW TY_SYM
+                                   TY_BIGINT TY_MAPENTRY TY_CONS TY_EMPTY_LIST
+                                   TY_LAZYSEQ TY_VECSEQ TY_STRSEQ TY_RANGE
+                                   TY_ARRAYMAP TY_HASHMAP TY_SET TY_BYTES
+                                   TY_BROPE TY_OPAQUE TY_TABLE TY_TABLEREF
+                                   TY_TAGGED V_HASH]]
+            [flint.rt.hash :refer [ordered-step mix-coll-hash hash-long hash-int
+                                   HASH_TRUE HASH_FALSE]]
+            [flint.rt.names :refer [symbol-hash]]
+            [flint.rt.bytehash :refer [b-hash]]
+            [flint.rt.ropeflat :refer [rope-hash]]
             [flint.rt.seqwalk :refer [seq first next]]))
 
 (doc "Is `v` a VECTOR, strictly? Only a vector has a slot to cache in.")
@@ -73,3 +87,115 @@
         (set-slot rt (r rt vi) V_HASH (fixnum (to-i64 out))))
       (pop-to rt base)
       (return out))))
+
+(doc "The hash of any value."
+     ""
+     "TWO VALUES THAT ARE `=` MUST HASH ALIKE, or a map keyed by one is not"
+     "found by the other. That is the contract this shares with `val-eq`, and"
+     "it is why the two are read together: every arm here has a matching arm"
+     "there, and a tier that is invisible to one must be invisible to both."
+     ""
+     "A BYTE STRING GOES THROUGH `b-hash` WHATEVER TIER IT IS IN. Native had"
+     "an inline byte walk for the flat case and called `b-hash` for the tree,"
+     "which is the same walk written twice; both ports already routed both."
+     ""
+     "FUNCTIONS, ATOMS AND VARS hash to a PER-TYPE CONSTANT. They are only"
+     "ever `=` to themselves, so it is correct if unhelpful -- and a moving"
+     "collector rules out using the address.")
+(defn ^:pub ^:method ^U32 hash-value [^:mut ^Rt rt ^Value v]
+  (if (is-double rt v)
+    (return (hash-double (num-f64 rt v))))
+  (if (nil? rt v)
+    (return 0))
+  (if (== v TRUE)
+    (return HASH_TRUE))
+  (if (== v FALSE)
+    (return HASH_FALSE))
+  (if (is-fixnum rt v)
+    (return (hash-long (as-fixnum v))))
+  (if (is-inline-str rt v)
+    (return (string-hash rt v)))
+  (if (is-inline-kw rt v)
+    (return (keyword-hash rt v)))
+  (if (not (is-heap v))
+    (return 0))
+  (let [^Ty t (ty rt (as-heap v))]
+    (if (== t TY_STR)
+      (return (string-hash rt v)))
+    (comment "HASH THE CONTENT, so `\"abc\"` inline, flat and as a rope are"
+             "one key -- but WALK it rather than flattening. Flattening was"
+             "here for the caching, which is real: a rope used as a map key"
+             "must not rehash every lookup. `RP_HASH` gives the same caching"
+             "per node and keeps the tree, so the trade is gone rather than"
+             "chosen (`0011`).")
+    (if (== t TY_ROPE)
+      (return (to-i32 (to-i64 (rope-hash rt v)))))
+    (if (or (== t TY_BYTES) (== t TY_BROPE))
+      (return (to-i32 (to-i64 (b-hash rt v)))))
+    (if (== t TY_KW)
+      (return (keyword-hash rt v)))
+    (if (== t TY_SYM)
+      (return (symbol-hash rt v)))
+    (if (== t TY_BIGINT)
+      (return (hash-long (i64-of rt v))))
+    (if (or (or (or (== t TY_VEC) (== t TY_MAPENTRY))
+                (or (== t TY_CONS) (== t TY_EMPTY_LIST)))
+            (or (or (== t TY_LAZYSEQ) (== t TY_VECSEQ))
+                (or (== t TY_STRSEQ) (== t TY_RANGE))))
+      (return (hash-ordered rt v)))
+    (if (or (== t TY_ARRAYMAP) (== t TY_HASHMAP))
+      (return (hash-map rt v)))
+    (if (== t TY_SET)
+      (return (hash-set rt v)))
+    (comment "AN OPAQUE VALUE CARRIES ITS OWN IDENTITY, assigned at creation"
+             "and STORED (`0022`). The per-type constant below would be"
+             "correct -- equality is identity, so collisions only cost time --"
+             "but it would put every opaque value in one bucket, and the whole"
+             "point of the type is to be a distinct key.")
+    (if (== t TY_OPAQUE)
+      (let [^Value id (slot rt v 1)]
+        (if (is-fixnum rt id)
+          (return (hash-long (as-fixnum id))))
+        (return (hash-long 0))))
+    (comment "COLUMNAR is available precisely because a table is not `=` to a"
+             "vector of maps, so this need not agree with what one would"
+             "hash. ROOTED for the reason the equality arm is: `table-ref`"
+             "allocates and `v` is a host local (`0031`).")
+    (if (== t TY_TABLE)
+      (let [^RootIx base (mark rt)
+            ^RootIx vi (push rt v)
+            ^I32 n (table-count rt (r rt vi))]
+        (local ^:mut ^U32 acc)
+        (local ^:mut ^I32 i)
+        (set acc 1)
+        (set i 0)
+        (while (< i n)
+          (do (let [^Value row (table-ref rt (r rt vi) i)
+                    ^RootIx ri (push rt row)
+                    ^U32 h (hash-value rt (r rt ri))]
+                (pop-to rt ri)
+                (set acc (wadd (wmul acc 31) h)))
+              (set i (+ i 1))))
+        (pop-to rt base)
+        (return (hash-int (bit-xor acc n)))))
+    (comment "A REF HASHES AS THE MAP IT IS, or a map keyed by a row would"
+             "not find it.")
+    (if (== t TY_TABLEREF)
+      (let [^RootIx base (mark rt)
+            ^Value m (ref-to-map rt v)
+            ^RootIx mi (push rt m)
+            ^U32 h (hash-value rt (r rt mi))]
+        (pop-to rt base)
+        (return h)))
+    (comment "BOTH HALVES, so a tagged literal hashes like the pair it is and"
+             "two equal ones land in the same bucket. The final `hash-int` is"
+             "the mix both ports dropped, which made a tagged literal hash"
+             "differently on wasm than on the JVM and the CLR.")
+    (if (== t TY_TAGGED)
+      (let [^RootIx base (mark rt)
+            ^RootIx vi (push rt v)
+            ^U32 th (hash-value rt (slot rt (r rt vi) 0))
+            ^U32 fh (hash-value rt (slot rt (r rt vi) 1))]
+        (pop-to rt base)
+        (return (hash-int (wadd (wmul th 31) fh)))))
+    (return (hash-int (bit-or 0x51ed0000 (to-i32 (to-i64 t)))))))

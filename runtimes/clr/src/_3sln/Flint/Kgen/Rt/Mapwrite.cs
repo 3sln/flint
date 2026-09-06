@@ -17,6 +17,7 @@ using static global::_3sln.Flint.Kgen.Rt.Dissoc;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
 using static global::_3sln.Flint.Kgen.Rt.Mapread;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;
+using static global::_3sln.Flint.Kgen.Rt.Valhash;
 
 public static class Mapwrite {
     /// An array map rebuilt as a CHAMP. The one-way door between the two
@@ -36,7 +37,7 @@ public static class Mapwrite {
             int ki = rt.Push(pk);
             long pv = AmVal(rt, rt.R(mi), i);
             int vi = rt.Push(pv);
-            int h = global::Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+            int h = HashValue(rt, rt.R(ki));
             long nr = NodeAssoc(rt, rt.R(ri), 0, h, rt.R(ki), rt.R(vi), Val.Nil);
             rt.SetR(ri, nr);
             rt.PopTo(ki);
@@ -108,7 +109,7 @@ public static class Mapwrite {
             }
         } else if (t == Obj.TyHashmap) {
             int cnt = MapCount(rt, m);
-            int h = global::Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+            int h = HashValue(rt, rt.R(ki));
             long root = rt.Slot(rt.R(mi), HM_ROOT);
             int ri = rt.Push(root);
             rt.champAdded = false;
@@ -178,7 +179,7 @@ public static class Mapwrite {
                 @out = rt.R(ni);
             }
         } else if (t == Obj.TyHashmap) {
-            int h = global::Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+            int h = HashValue(rt, rt.R(ki));
             long root = rt.Slot(rt.R(mi), HM_ROOT);
             int ri = rt.Push(root);
             rt.champAdded = false;

@@ -273,8 +273,8 @@ public final class Maps {
         int n = entries(rt, rt.r(mi));
         int acc = 0;
         for (int i = 0; i < n; i++) {
-            int kh = Eq.hashValue(rt, rt.r(at + 2 * i));
-            int vh = Eq.hashValue(rt, rt.r(at + 2 * i + 1));
+            int kh = com._3sln.flint.kgen.rt.Valhash.hashValue(rt, rt.r(at + 2 * i));
+            int vh = com._3sln.flint.kgen.rt.Valhash.hashValue(rt, rt.r(at + 2 * i + 1));
             acc = com._3sln.flint.kgen.rt.Hash.unorderedStep(acc, com._3sln.flint.kgen.rt.Hash.mixCollHash(
                 com._3sln.flint.kgen.rt.Hash.orderedStep(com._3sln.flint.kgen.rt.Hash.orderedStep(1, kh), vh), 2));
         }

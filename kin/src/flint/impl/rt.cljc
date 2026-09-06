@@ -917,9 +917,10 @@
     ;; the two halves of a mutual recursion meet through the vocabulary. That
     ;; is the same shape `coll-assoc` has, and for the same reason.
     'val-eq (own "val_eq" "valEq" 2)
-    'hash-value (core/call {:rust "{0}.hash_value({1})"
-                            :java "com.flint.rt.Eq.hashValue({0}, {1})"
-                            :csharp "global::Flint.Rt.Eq.HashValue({0}, {1})"})
+    ;; `hash-value` IS `flint.rt.valhash`'s OWN, for the reason `val-eq` is
+    ;; `valeq`'s: `hash-ordered` calls it from above its definition, and kin
+    ;; resolves a file's `defn`s in order.
+    'hash-value (own "hash_value" "hashValue" 1)
     'bn-datamap (own "bn_datamap" "bnDatamap" 1)
     'bn-nodemap (own "bn_nodemap" "bnNodemap" 1)
     'bn-key (own "bn_key" "bnKey" 2)
@@ -958,6 +959,28 @@
     ;; walking needs a callback -- the closure hole. `map-eq` is here for the
     ;; same reason and neither is a candidate until that is answered.
     'set-eq (sibling "set_eq" "Sets" "eq" "Eq" 2)
+    ;; `hash-map` and `hash-set` walk their contents through a callback, so
+    ;; they stay hand-written for the same reason `map-eq` and `set-eq` do.
+    'hash-map (sibling "hash_map" "Maps" "hash" "Hash" 1)
+    'hash-set (sibling "hash_set" "Sets" "hash" "Hash" 1)
+    ;; THE STRING AND KEYWORD HASHES, each of which READS A CACHE. Both ports
+    ;; had the cache and used neither: `strHash` was written during interning
+    ;; and never read, and a keyword's slot 2 was set to nil rather than to the
+    ;; hash. So a heap string paid its length per lookup and a keyword paid its
+    ;; ns and name -- on the two commonest map keys there are. The bodies are
+    ;; host work (UTF-8 decode); reading the cache is not, and now all three do.
+    'string-hash (sibling "string_hash" "Str" "stringHash" "StringHash" 1)
+    'keyword-hash (sibling "keyword_hash" "Str" "keywordHash" "KeywordHash" 1)
+    ;; `hash-double` takes the DOUBLE, not the value: the bit pattern of a NaN
+    ;; is not the question, the number is.
+    ;; FULLY QUALIFIED, and not optional: a GENERATED `Hash` lives beside
+    ;; every other generated module, so a bare `Hash` inside one binds to that
+    ;; and not to the runtime's. The third time this shadowing has bitten --
+    ;; see `seq-of` and `INTERN_MAX`.
+    'hash-double (core/call {:rust "crate::hash::hash_double({0})"
+                             :java "com.flint.rt.Hash.hashDouble({0})"
+                             :csharp "global::Flint.Rt.Hash.HashDouble({0})"}
+                            {:tag U32})
     ;; FULLY QUALIFIED, and this one is not optional. A generated module lives
     ;; in `flint.rt`, and `seqs.kin` generates a `flint.rt.Seqs` there -- so a
     ;; bare `Seqs.seq` inside another generated module binds to the GENERATED

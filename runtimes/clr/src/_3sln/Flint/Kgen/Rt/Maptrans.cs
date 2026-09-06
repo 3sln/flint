@@ -17,6 +17,7 @@ using static global::_3sln.Flint.Kgen.Rt.Find;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
 using static global::_3sln.Flint.Kgen.Rt.Mapwrite;
 using static global::_3sln.Flint.Kgen.Rt.Setcore;
+using static global::_3sln.Flint.Kgen.Rt.Valhash;
 using static global::_3sln.Flint.Kgen.Rt.Vectrans;
 
 public static class Maptrans {
@@ -63,7 +64,7 @@ public static class Maptrans {
         int ti = rt.Push(t);
         int ki = rt.Push(k);
         int ni = rt.Push(notFound);
-        int h = global::Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+        int h = HashValue(rt, rt.R(ki));
         long root = rt.Slot(rt.R(ti), global::Flint.Rt.Maps.TM_ROOT);
         long found;
         found = Val.NotFound;
@@ -91,7 +92,7 @@ public static class Maptrans {
         int ki = rt.Push(k);
         int vi = rt.Push(v);
         int ei = rt.Push(rt.Slot(rt.R(ti), global::Flint.Rt.Maps.TM_EDIT));
-        int h = global::Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+        int h = HashValue(rt, rt.R(ki));
         int ri = rt.Push(rt.Slot(rt.R(ti), global::Flint.Rt.Maps.TM_ROOT));
         rt.champAdded = false;
         long nr = NodeAssoc(rt, rt.R(ri), 0, h, rt.R(ki), rt.R(vi), rt.R(ei));
@@ -113,7 +114,7 @@ public static class Maptrans {
         int ti = rt.Push(t);
         int ki = rt.Push(k);
         int ei = rt.Push(rt.Slot(rt.R(ti), global::Flint.Rt.Maps.TM_EDIT));
-        int h = global::Flint.Rt.Eq.HashValue(rt, rt.R(ki));
+        int h = HashValue(rt, rt.R(ki));
         int ri = rt.Push(rt.Slot(rt.R(ti), global::Flint.Rt.Maps.TM_ROOT));
         rt.champAdded = false;
         long nr = NodeDissoc(rt, rt.R(ri), 0, h, rt.R(ki), rt.R(ei));

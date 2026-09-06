@@ -15,6 +15,7 @@ import static com._3sln.flint.kgen.rt.Copies.*;
 import static com._3sln.flint.kgen.rt.Merge.*;
 import static com._3sln.flint.kgen.rt.Nodeclass.*;
 import static com._3sln.flint.kgen.rt.Valeq.*;
+import static com._3sln.flint.kgen.rt.Valhash.*;
 
 public final class Assoc {
     public static long nodeAssoc(Rt rt, long n, int shift, int h, long key, long val, long edit) {
@@ -56,7 +57,7 @@ public final class Assoc {
                 // entry at this level.
                 rt.champAdded = true;
                 int v0i = rt.push(bnVal(rt, rt.r(ni), at));
-                int h0 = com.flint.rt.Eq.hashValue(rt, rt.r(k0i));
+                int h0 = hashValue(rt, rt.r(k0i));
                 long sub = mergeTwo(rt, shift + HASH_BITS, rt.r(k0i), rt.r(v0i), h0, rt.r(ki), rt.r(vi), h, rt.r(ei));
                 int si = rt.push(sub);
                 out = bnInlineToNode(rt, rt.r(ni), bit, rt.r(si), rt.r(ei));

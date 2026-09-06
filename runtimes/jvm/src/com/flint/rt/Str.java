@@ -259,6 +259,35 @@ public final class Str {
         return sameBytes(bytes(rt, rt.slot(v, 1)), nb);
     }
 
+    static int hashKeywordOf(Rt rt, String ns, String name) {
+        return Hash.hashKeyword(ns == null ? null : ns.getBytes(StandardCharsets.UTF_8),
+                                name.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /// The hash of a STRING value, cached in the object for a heap string.
+    ///
+    /// The cache is `strHash`, which this port WROTE during interning and
+    /// never read: every `hash` of a heap string rehashed its whole content,
+    /// where native reads the slot. A long string used as a map key paid its
+    /// length per lookup.
+    public static int stringHash(Rt rt, long v) {
+        if (Val.isInlineStr(v)) return Hash.hashString(Val.inlineBytes(v));
+        long a = Val.asHeap(v);
+        int cached = Obj.strHash(rt.gc.sp, a);
+        if (cached != 0) return cached;
+        int h = Hash.hashString(bytes(rt, v));
+        if (h == 0) h = 1;
+        Obj.setStrHash(rt.gc.sp, a, h);
+        return h;
+    }
+
+    /// The hash of a KEYWORD, read from slot 2 where it was stored when the
+    /// keyword was built.
+    public static int keywordHash(Rt rt, long v) {
+        if (Val.isInlineKw(v)) return Hash.hashKeyword(null, Val.inlineBytes(v));
+        return (int) Val.asFixnum(rt.slot(v, 2));
+    }
+
     static long buildKeyword(Rt rt, String ns, String name) {
         int base = rt.mark();
         int nsi = rt.push(ns == null ? Val.NIL : of(rt, ns));
@@ -267,7 +296,11 @@ public final class Str {
         if (a == 0) { rt.popTo(base); return Val.NIL; }
         rt.setSlot(a, 0, rt.r(nsi));
         rt.setSlot(a, 1, rt.r(nmi));
-        rt.setSlot(a, 2, Val.NIL);
+        // THE HASH, and it used to be NIL. Native has stored it here since the
+        // slot existed and reads it back in `hashValue`; this port left the
+        // slot empty and recomputed from the ns and name bytes on EVERY hash.
+        // A keyword is the commonest map key there is.
+        rt.setSlot(a, 2, Val.fixnum(hashKeywordOf(rt, ns, name)));
         rt.popTo(base);
         return Val.heap(a);
     }
@@ -296,8 +329,13 @@ public final class Str {
         if (a == 0) { rt.popTo(base); return Val.NIL; }
         rt.setSlot(a, 0, rt.r(nsi));
         rt.setSlot(a, 1, rt.r(nmi));
-        rt.setSlot(a, 2, Val.NIL);
-        rt.setSlot(a, 3, Val.NIL);
+        rt.setSlot(a, 2, Val.NIL);  // meta
+        // THE HASH, and it used to be NIL -- the same empty cache the keyword
+        // slot had. `symbolHash` reads it; this port recomputed from the ns
+        // and name bytes on every hash instead.
+        rt.setSlot(a, 3, Val.fixnum(Hash.hashSymbol(
+            ns == null ? null : ns.getBytes(StandardCharsets.UTF_8),
+            name.getBytes(StandardCharsets.UTF_8))));
         rt.popTo(base);
         return Val.heap(a);
     }

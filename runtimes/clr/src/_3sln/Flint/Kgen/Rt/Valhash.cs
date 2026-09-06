@@ -11,8 +11,13 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Bytehash;
 using static global::_3sln.Flint.Kgen.Rt.Hash;
+using static global::_3sln.Flint.Kgen.Rt.Names;
+using static global::_3sln.Flint.Kgen.Rt.Ropeflat;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
+using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
+using static global::_3sln.Flint.Kgen.Rt.Tableref;
 
 public static class Valhash {
     /// Is `v` a VECTOR, strictly? Only a vector has a slot to cache in.
@@ -55,7 +60,7 @@ public static class Valhash {
             }
             long f = First(rt, rt.R(si));
             int fi = rt.Push(f);
-            int h = global::Flint.Rt.Eq.HashValue(rt, rt.R(fi));
+            int h = HashValue(rt, rt.R(fi));
             rt.PopTo(fi);
             acc = OrderedStep(acc, h);
             n += 1;
@@ -72,5 +77,137 @@ public static class Valhash {
         }
         rt.PopTo(@base);
         return @out;
+    }
+    /// The hash of any value.
+    /// 
+    /// TWO VALUES THAT ARE `=` MUST HASH ALIKE, or a map keyed by one is not
+    /// found by the other. That is the contract this shares with `val-eq`, and
+    /// it is why the two are read together: every arm here has a matching arm
+    /// there, and a tier that is invisible to one must be invisible to both.
+    /// 
+    /// A BYTE STRING GOES THROUGH `b-hash` WHATEVER TIER IT IS IN. Native had
+    /// an inline byte walk for the flat case and called `b-hash` for the tree,
+    /// which is the same walk written twice; both ports already routed both.
+    /// 
+    /// FUNCTIONS, ATOMS AND VARS hash to a PER-TYPE CONSTANT. They are only
+    /// ever `=` to themselves, so it is correct if unhelpful -- and a moving
+    /// collector rules out using the address.
+    public static int HashValue(Rt rt, long v) {
+        if (Val.IsDouble(v)) {
+            return global::Flint.Rt.Hash.HashDouble(Num.F64(rt, v));
+        }
+        if (Val.IsNil(v)) {
+            return 0;
+        }
+        if (v == Val.True) {
+            return HashTrue;
+        }
+        if (v == Val.False) {
+            return HashFalse;
+        }
+        if (Val.IsFixnum(v)) {
+            return HashLong(Val.AsFixnum(v));
+        }
+        if (Val.IsInlineStr(v)) {
+            return Str.StringHash(rt, v);
+        }
+        if (Val.IsInlineKw(v)) {
+            return Str.KeywordHash(rt, v);
+        }
+        if (!Val.IsHeap(v)) {
+            return 0;
+        }
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        if (t == Obj.TyStr) {
+            return Str.StringHash(rt, v);
+        }
+        // HASH THE CONTENT, so `"abc"` inline, flat and as a rope are
+        // one key -- but WALK it rather than flattening. Flattening was
+        // here for the caching, which is real: a rope used as a map key
+        // must not rehash every lookup. `RP_HASH` gives the same caching
+        // per node and keeps the tree, so the trade is gone rather than
+        // chosen (`0011`).
+        if (t == Obj.TyRope) {
+            return (int) ((long) RopeHash(rt, v));
+        }
+        if ((t == Obj.TyBytes) || (t == Obj.TyBrope)) {
+            return (int) ((long) BHash(rt, v));
+        }
+        if (t == Obj.TyKw) {
+            return Str.KeywordHash(rt, v);
+        }
+        if (t == Obj.TySym) {
+            return SymbolHash(rt, v);
+        }
+        if (t == Obj.TyBigint) {
+            return HashLong(Num.I64Of(rt, v));
+        }
+        if ((((t == Obj.TyVec) || (t == Obj.TyMapentry)) || ((t == Obj.TyCons) || (t == Obj.TyEmptyList))) || (((t == Obj.TyLazyseq) || (t == Obj.TyVecseq)) || ((t == Obj.TyStrseq) || (t == Obj.TyRange)))) {
+            return HashOrdered(rt, v);
+        }
+        if ((t == Obj.TyArraymap) || (t == Obj.TyHashmap)) {
+            return Maps.Hash(rt, v);
+        }
+        if (t == Obj.TySet) {
+            return Sets.Hash(rt, v);
+        }
+        // AN OPAQUE VALUE CARRIES ITS OWN IDENTITY, assigned at creation
+        // and STORED (`0022`). The per-type constant below would be
+        // correct -- equality is identity, so collisions only cost time --
+        // but it would put every opaque value in one bucket, and the whole
+        // point of the type is to be a distinct key.
+        if (t == Obj.TyOpaque) {
+            long id = rt.Slot(v, 1);
+            if (Val.IsFixnum(id)) {
+                return HashLong(Val.AsFixnum(id));
+            }
+            return HashLong(0);
+        }
+        // COLUMNAR is available precisely because a table is not `=` to a
+        // vector of maps, so this need not agree with what one would
+        // hash. ROOTED for the reason the equality arm is: `table-ref`
+        // allocates and `v` is a host local (`0031`).
+        if (t == Obj.TyTable) {
+            int @base = rt.Mark();
+            int vi = rt.Push(v);
+            int n = Table.tableCount(rt, rt.R(vi));
+            int acc;
+            int i;
+            acc = 1;
+            i = 0;
+            while (i < n) {
+                long row = Table.tableRef(rt, rt.R(vi), i);
+                int ri = rt.Push(row);
+                int h = HashValue(rt, rt.R(ri));
+                rt.PopTo(ri);
+                acc = unchecked(unchecked(acc * 31) + h);
+                i += 1;
+            }
+            rt.PopTo(@base);
+            return HashInt(acc ^ n);
+        }
+        // A REF HASHES AS THE MAP IT IS, or a map keyed by a row would
+        // not find it.
+        if (t == Obj.TyTableref) {
+            int @base = rt.Mark();
+            long m = global::Flint.Rt.Table.refToMap(rt, v);
+            int mi = rt.Push(m);
+            int h = HashValue(rt, rt.R(mi));
+            rt.PopTo(@base);
+            return h;
+        }
+        // BOTH HALVES, so a tagged literal hashes like the pair it is and
+        // two equal ones land in the same bucket. The final `hash-int` is
+        // the mix both ports dropped, which made a tagged literal hash
+        // differently on wasm than on the JVM and the CLR.
+        if (t == Obj.TyTagged) {
+            int @base = rt.Mark();
+            int vi = rt.Push(v);
+            int th = HashValue(rt, rt.Slot(rt.R(vi), 0));
+            int fh = HashValue(rt, rt.Slot(rt.R(vi), 1));
+            rt.PopTo(@base);
+            return HashInt(unchecked(unchecked(th * 31) + fh));
+        }
+        return HashInt(1374486528 | ((int) ((long) t)));
     }
 }
