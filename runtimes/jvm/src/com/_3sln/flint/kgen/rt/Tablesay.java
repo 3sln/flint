@@ -10,6 +10,7 @@ import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Mapcore.*;
+import static com._3sln.flint.kgen.rt.Names.*;
 import static com._3sln.flint.kgen.rt.Tablecell.*;
 import static com._3sln.flint.kgen.rt.Tablekind.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;

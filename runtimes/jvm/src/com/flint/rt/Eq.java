@@ -345,14 +345,11 @@ public final class Eq {
         return compare(rt, nameOf(rt, a), nameOf(rt, b));
     }
 
-    static long nsOf(Rt rt, long v) {
-        if (Val.isInlineKw(v)) return Val.NIL;
-        return rt.slot(v, 0);
-    }
-    static long nameOf(Rt rt, long v) {
-        if (Val.isInlineKw(v)) return Val.inlineStr(Val.inlineBytes(v));
-        return rt.slot(v, 1);
-    }
+    static long nsOf(Rt rt, long v) { return com._3sln.flint.kgen.rt.Names.nsOf(rt, v); }
+    /// THE SECOND COPY IS GONE. `Eq` had its own `nameOf` that skipped the
+    /// type check -- fine for the values it was handed, and one more place to
+    /// keep in step.
+    static long nameOf(Rt rt, long v) { return com._3sln.flint.kgen.rt.Names.nameOf(rt, v); }
 
     /// Length first is WRONG for sequences: `[1 2]` is less than `[1 3]`, and
     /// both are less than `[1 2 3]`. So shorter-is-less only decides a tie.

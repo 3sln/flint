@@ -1,0 +1,59 @@
+;; What a KEYWORD or a SYMBOL says about itself.
+;;
+;; The accessor layer, and it answers for a STRING too: `name-of` of a string
+;; is the string. That is not a convenience -- `(name :a)`, `(name 'a)` and
+;; `(name "a")` are all `"a"` in Clojure, and a caller that had to ask which it
+;; held first would be doing the dispatch this exists to do.
+;;
+;; AN INLINE KEYWORD HAS NO NAMESPACE, by construction: the inline tier is
+;; exactly the bare short ones, so `ns-of` can answer nil without looking.
+(ns flint.rt.names
+  (:require [flint.impl.rt :refer [defn return if let comment doc
+                                   == not is-heap as-heap ty is-inline-kw
+                                   kw-to-str slot as-fixnum to-i32
+                                   Rt Value U32 Bool Ty NIL TY_KW TY_SYM]]))
+
+(doc "Is `v` a symbol?"
+     ""
+     "NO INLINE TIER, unlike a keyword. A symbol carries a hash it cannot"
+     "recompute cheaply, so it is always a heap object.")
+(defn ^:pub ^:method ^Bool is-symbol [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_SYM)))
+
+(doc "The `name` part of a string, keyword or symbol, as a string.")
+(defn ^:pub ^:method ^Value name-of [^:mut ^Rt rt ^Value v]
+  (if (is-inline-kw rt v)
+    (return (kw-to-str rt v)))
+  (if (is-heap v)
+    (let [^Ty t (ty rt (as-heap v))]
+      (if (== t TY_KW)
+        (return (slot rt v 1)))
+      (if (== t TY_SYM)
+        (return (slot rt v 1)))))
+  (comment "A STRING IS ITS OWN NAME, and so is anything else: this is asked"
+           "while building a message about a value whose shape is already in"
+           "question, and a refusal here would replace that message with one"
+           "about the message.")
+  (return v))
+
+(doc "The `namespace` part, or nil.")
+(defn ^:pub ^:method ^Value ns-of [^Rt rt ^Value v]
+  (if (is-inline-kw rt v)
+    (return NIL))
+  (if (is-heap v)
+    (let [^Ty t (ty rt (as-heap v))]
+      (if (== t TY_KW)
+        (return (slot rt v 0)))
+      (if (== t TY_SYM)
+        (return (slot rt v 0)))))
+  (return NIL))
+
+(doc "A symbol's hash, which it carries."
+     ""
+     "COMPUTED ONCE at construction and read here. A symbol's hash combines"
+     "its namespace and its name, and recomputing it would mean walking two"
+     "strings on every map lookup.")
+(defn ^:pub ^:method ^U32 symbol-hash [^Rt rt ^Value v]
+  (return (to-i32 (as-fixnum (slot rt v 3)))))

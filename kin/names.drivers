@@ -1,0 +1,222 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFB_0000_0000_0000);
+const TY_KW: u8 = 7; const TY_SYM: u8 = 8; const TY_STR: u8 = 2;
+// THE REAL TAGS, because `kw-to-str` is a bit operation and a probe that
+// invented its own encoding would be checking its own arithmetic.
+const TAG_STR: u64 = 0xFFFC; const TAG_KW: u64 = 0xFFFD;
+const TAG_HEAP: u64 = 0xFFF9; const TAG_FIXNUM: u64 = 0xFFFA;
+impl Value {
+    fn tag(self) -> u64 { self.0 >> 48 }
+    fn is_inline_kw(self) -> bool { self.tag() == TAG_KW }
+    fn is_inline_str(self) -> bool { self.tag() == TAG_STR }
+    fn is_heap(self) -> bool { self.tag() == TAG_HEAP }
+    fn as_heap(self) -> Addr { self.0 & 0x0000_FFFF_FFFF_FFFF }
+    fn as_fixnum(self) -> i64 { (self.0 & 0x0000_FFFF_FFFF_FFFF) as i64 }
+    fn fixnum(n: i64) -> Value { Value((TAG_FIXNUM << 48) | (n as u64 & 0xFFFF_FFFF_FFFF)) }
+    fn heap(a: Addr) -> Value { Value((TAG_HEAP << 48) | a) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn inline_of(tag: u64, bytes: &[u8]) -> Value {
+        let mut w: u64 = (tag << 48) | ((bytes.len() as u64) << 40);
+        for (i, b) in bytes.iter().enumerate() { w |= (*b as u64) << (8 * (4 - i)); }
+        Value(w)
+    }
+    fn kw_to_str(self) -> Value {
+        Value((self.0 & 0x0000_FFFF_FFFF_FFFF) | (TAG_STR << 48))
+    }
+}
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, bump: u64 }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+    fn slot(&self, v: Value, i: u32) -> Value {
+        Value(self.h[v.as_heap() as usize + i as usize])
+    }
+    fn obj(&mut self, t: u8, vals: &[Value]) -> Value {
+        let a = self.bump; self.bump += vals.len() as u64 + 8;
+        self.gc.sp.m[a as usize] = t;
+        for (i, v) in vals.iter().enumerate() { self.h[a as usize + i] = v.0; }
+        Value::heap(a)
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 4000], gc: Gc { sp: Space { m: vec![0u8; 4000] } }, bump: 100 };
+    let mut o = String::new();
+    // AN INLINE KEYWORD, and the tag swap that makes its name. The payload
+    // and the length must survive untouched -- only the tag differs.
+    let ik = Value::inline_of(TAG_KW, b"ab");
+    let nm = rt.name_of(ik);
+    o.push_str(&format!("inline={}/{}/{} ",
+                        nm.is_inline_str() as u32,
+                        (nm.0 & 0x0000_FFFF_FFFF_FFFF) == (ik.0 & 0x0000_FFFF_FFFF_FFFF),
+                        rt.ns_of(ik).is_nil() as u32));
+    // A HEAP KEYWORD and a SYMBOL: name in slot 1, namespace in slot 0.
+    let nsv = Value::inline_of(TAG_STR, b"my");
+    let namev = Value::inline_of(TAG_STR, b"x");
+    let kw = rt.obj(TY_KW, &[nsv, namev, Value::fixnum(0)]);
+    let sym = rt.obj(TY_SYM, &[nsv, namev, Value::fixnum(0), Value::fixnum(4242)]);
+    o.push_str(&format!("kw={}{} sym={}{} ",
+                        (rt.name_of(kw).0 == namev.0) as u32,
+                        (rt.ns_of(kw).0 == nsv.0) as u32,
+                        (rt.name_of(sym).0 == namev.0) as u32,
+                        (rt.ns_of(sym).0 == nsv.0) as u32));
+    // A BARE heap keyword has NIL where its namespace would be, and that has
+    // to come back as nil rather than as the slot's contents.
+    let bare = rt.obj(TY_KW, &[NIL, namev, Value::fixnum(0)]);
+    o.push_str(&format!("bare={} ", rt.ns_of(bare).is_nil() as u32));
+    // A STRING IS ITS OWN NAME, and so is a number. `(name "a")` is `"a"`.
+    let s = Value::inline_of(TAG_STR, b"q");
+    let n = Value::fixnum(7);
+    o.push_str(&format!("self={}{} nsnone={}{} ",
+                        (rt.name_of(s).0 == s.0) as u32, (rt.name_of(n).0 == n.0) as u32,
+                        rt.ns_of(s).is_nil() as u32, rt.ns_of(n).is_nil() as u32));
+    // IS-SYMBOL: no inline tier, so an inline keyword is not one.
+    o.push_str(&format!("sym?={}{}{}{} ", rt.is_symbol(sym) as u32,
+                        rt.is_symbol(kw) as u32, rt.is_symbol(ik) as u32,
+                        rt.is_symbol(n) as u32));
+    // AND THE CARRIED HASH.
+    o.push_str(&format!("hash={}", rt.symbol_hash(sym)));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFB000000000000L;
+    static final int TY_KW = 7, TY_SYM = 8, TY_STR = 2;
+    static final long TAG_STR = 0xFFFCL, TAG_KW = 0xFFFDL,
+                      TAG_HEAP = 0xFFF9L, TAG_FIXNUM = 0xFFFAL;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static long tag(long v) { return v >>> 48; }
+        static boolean isInlineKw(long v) { return tag(v) == TAG_KW; }
+        static boolean isInlineStr(long v) { return tag(v) == TAG_STR; }
+        static boolean isHeap(long v) { return tag(v) == TAG_HEAP; }
+        static long asHeap(long v) { return v & 0x0000FFFFFFFFFFFFL; }
+        static long asFixnum(long v) { return v & 0x0000FFFFFFFFFFFFL; }
+        static long fixnum(long n) { return (TAG_FIXNUM << 48) | (n & 0xFFFFFFFFFFFFL); }
+        static long heap(long a) { return (TAG_HEAP << 48) | a; }
+        static boolean isNil(long v) { return v == NIL; }
+        static long kwToStr(long v) { return (v & 0x0000FFFFFFFFFFFFL) | (TAG_STR << 48); }
+    }
+    static final class Space { byte[] m = new byte[4000]; }
+    static final class Rt {
+        long[] h = new long[4000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        long bump = 100;
+        long slot(long v, int i) { return h[(int) Val.asHeap(v) + i]; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static long inlineOf(long tg, int[] bytes) {
+        long w = (tg << 48) | ((long) bytes.length << 40);
+        for (int i = 0; i < bytes.length; i++) w |= ((long) bytes[i]) << (8 * (4 - i));
+        return w;
+    }
+    static long obj(Rt rt, int t, long[] vals) {
+        long a = rt.bump; rt.bump += vals.length + 8;
+        rt.gc.sp.m[(int) a] = (byte) t;
+        for (int i = 0; i < vals.length; i++) rt.h[(int) a + i] = vals[i];
+        return Val.heap(a);
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long ik = inlineOf(TAG_KW, new int[]{'a', 'b'});
+        long nm = nameOf(rt, ik);
+        o.append("inline=").append(Val.isInlineStr(nm) ? 1 : 0).append('/')
+         .append((nm & 0x0000FFFFFFFFFFFFL) == (ik & 0x0000FFFFFFFFFFFFL) ? "true" : "false")
+         .append('/').append(Val.isNil(nsOf(rt, ik)) ? 1 : 0).append(' ');
+        long nsv = inlineOf(TAG_STR, new int[]{'m', 'y'});
+        long namev = inlineOf(TAG_STR, new int[]{'x'});
+        long kw = obj(rt, TY_KW, new long[]{nsv, namev, Val.fixnum(0)});
+        long sym = obj(rt, TY_SYM, new long[]{nsv, namev, Val.fixnum(0), Val.fixnum(4242)});
+        o.append("kw=").append(nameOf(rt, kw) == namev ? 1 : 0)
+         .append(nsOf(rt, kw) == nsv ? 1 : 0)
+         .append(" sym=").append(nameOf(rt, sym) == namev ? 1 : 0)
+         .append(nsOf(rt, sym) == nsv ? 1 : 0).append(' ');
+        long bare = obj(rt, TY_KW, new long[]{NIL, namev, Val.fixnum(0)});
+        o.append("bare=").append(Val.isNil(nsOf(rt, bare)) ? 1 : 0).append(' ');
+        long s = inlineOf(TAG_STR, new int[]{'q'});
+        long n = Val.fixnum(7);
+        o.append("self=").append(nameOf(rt, s) == s ? 1 : 0).append(nameOf(rt, n) == n ? 1 : 0)
+         .append(" nsnone=").append(Val.isNil(nsOf(rt, s)) ? 1 : 0)
+         .append(Val.isNil(nsOf(rt, n)) ? 1 : 0).append(' ');
+        o.append("sym?=").append(isSymbol(rt, sym) ? 1 : 0).append(isSymbol(rt, kw) ? 1 : 0)
+         .append(isSymbol(rt, ik) ? 1 : 0).append(isSymbol(rt, n) ? 1 : 0).append(' ');
+        o.append("hash=").append(symbolHash(rt, sym));
+        System.out.println(o.toString());
+    }
+--csharp-head
+    internal const long NIL = unchecked((long) 0xFFFB000000000000UL);
+    internal const long TAG_STR = 0xFFFCL, TAG_KW = 0xFFFDL,
+                        TAG_HEAP = 0xFFF9L, TAG_FIXNUM = 0xFFFAL;
+    internal static class Obj {
+        internal const int TyKw = 7, TySym = 8, TyStr = 2;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = unchecked((long) 0xFFFB000000000000UL);
+        internal static long Tag(long v) { return (long) ((ulong) v >> 48); }
+        internal static bool IsInlineKw(long v) { return Tag(v) == TAG_KW; }
+        internal static bool IsInlineStr(long v) { return Tag(v) == TAG_STR; }
+        internal static bool IsHeap(long v) { return Tag(v) == TAG_HEAP; }
+        internal static long AsHeap(long v) { return v & 0x0000FFFFFFFFFFFFL; }
+        internal static long AsFixnum(long v) { return v & 0x0000FFFFFFFFFFFFL; }
+        internal static long Fixnum(long n) { return (TAG_FIXNUM << 48) | (n & 0xFFFFFFFFFFFFL); }
+        internal static long Heap(long a) { return (TAG_HEAP << 48) | a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+        internal static long KwToStr(long v) { return (v & 0x0000FFFFFFFFFFFFL) | (TAG_STR << 48); }
+    }
+    internal sealed class Space { internal byte[] m = new byte[4000]; }
+    internal sealed class Rt {
+        internal long[] h = new long[4000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal long Slot(long v, int i) { return h[(int) Val.AsHeap(v) + i]; }
+    }
+    internal static long InlineOf(long tg, int[] bytes) {
+        long w = (tg << 48) | ((long) bytes.Length << 40);
+        for (int i = 0; i < bytes.Length; i++) w |= ((long) bytes[i]) << (8 * (4 - i));
+        return w;
+    }
+    internal static long Obj2(Rt rt, int t, long[] vals) {
+        long a = rt.bump; rt.bump += vals.Length + 8;
+        rt.gc.sp.m[(int) a] = (byte) t;
+        for (int i = 0; i < vals.Length; i++) rt.h[(int) a + i] = vals[i];
+        return Val.Heap(a);
+    }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long ik = InlineOf(TAG_KW, new int[]{'a', 'b'});
+        long nm = NameOf(rt, ik);
+        o.Append("inline=").Append(Val.IsInlineStr(nm) ? 1 : 0).Append('/')
+         .Append((nm & 0x0000FFFFFFFFFFFFL) == (ik & 0x0000FFFFFFFFFFFFL) ? "true" : "false")
+         .Append('/').Append(Val.IsNil(NsOf(rt, ik)) ? 1 : 0).Append(' ');
+        long nsv = InlineOf(TAG_STR, new int[]{'m', 'y'});
+        long namev = InlineOf(TAG_STR, new int[]{'x'});
+        long kw = Obj2(rt, Obj.TyKw, new long[]{nsv, namev, Val.Fixnum(0)});
+        long sym = Obj2(rt, Obj.TySym, new long[]{nsv, namev, Val.Fixnum(0), Val.Fixnum(4242)});
+        o.Append("kw=").Append(NameOf(rt, kw) == namev ? 1 : 0)
+         .Append(NsOf(rt, kw) == nsv ? 1 : 0)
+         .Append(" sym=").Append(NameOf(rt, sym) == namev ? 1 : 0)
+         .Append(NsOf(rt, sym) == nsv ? 1 : 0).Append(' ');
+        long bare = Obj2(rt, Obj.TyKw, new long[]{Val.Nil, namev, Val.Fixnum(0)});
+        o.Append("bare=").Append(Val.IsNil(NsOf(rt, bare)) ? 1 : 0).Append(' ');
+        long s = InlineOf(TAG_STR, new int[]{'q'});
+        long n = Val.Fixnum(7);
+        o.Append("self=").Append(NameOf(rt, s) == s ? 1 : 0).Append(NameOf(rt, n) == n ? 1 : 0)
+         .Append(" nsnone=").Append(Val.IsNil(NsOf(rt, s)) ? 1 : 0)
+         .Append(Val.IsNil(NsOf(rt, n)) ? 1 : 0).Append(' ');
+        o.Append("sym?=").Append(IsSymbol(rt, sym) ? 1 : 0).Append(IsSymbol(rt, kw) ? 1 : 0)
+         .Append(IsSymbol(rt, ik) ? 1 : 0).Append(IsSymbol(rt, n) ? 1 : 0).Append(' ');
+        o.Append("hash=").Append(SymbolHash(rt, sym));
+        System.Console.WriteLine(o.ToString());
+    }

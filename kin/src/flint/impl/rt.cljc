@@ -531,6 +531,11 @@
                          :java "Num.f64({0}, {1})"
                          :csharp "Num.F64({0}, {1})"})
     'nil? (core/call {:rust "{1}.is_nil()" :java "Val.isNil({1})" :csharp "Val.IsNil({1})"})
+    ;; AN INLINE KEYWORD AS THE INLINE STRING OF ITS NAME. A tag swap: the
+    ;; payload and the length are already in the right places.
+    'kw-to-str (core/call {:rust "{1}.kw_to_str()"
+                           :java "Val.kwToStr({1})" :csharp "Val.KwToStr({1})"}
+                          {:tag Value})
     'is-keyword (core/call {:rust "{0}.is_keyword({1})"
                             :java "Str.isKeyword({0}, {1})"
                             :csharp "Str.IsKeyword({0}, {1})"}

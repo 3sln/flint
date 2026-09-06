@@ -12,6 +12,7 @@ using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
+using static global::_3sln.Flint.Kgen.Rt.Names;
 using static global::_3sln.Flint.Kgen.Rt.Tablecell;
 using static global::_3sln.Flint.Kgen.Rt.Tablekind;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;

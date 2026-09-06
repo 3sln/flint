@@ -208,6 +208,18 @@ impl Value {
         Self::inline_of(TAG_KW, bytes)
     }
 
+    /// An inline KEYWORD as the inline STRING of its name.
+    ///
+    /// A TAG SWAP, not a rebuild. The payload and the length are already in
+    /// the right places -- only the three bits saying which of the two this is
+    /// differ -- and every runtime was going through `inline_str(inline_bytes
+    /// (v))`, which on both ports allocates a byte array to copy eight bytes
+    /// onto themselves.
+    #[inline(always)]
+    pub const fn kw_to_str(self) -> Value {
+        Value((self.0 & 0x0000_FFFF_FFFF_FFFF) | (TAG_STR << 48))
+    }
+
     /// Length in bytes of an inline string/keyword payload.
     #[inline(always)]
     pub const fn inline_len(self) -> usize {

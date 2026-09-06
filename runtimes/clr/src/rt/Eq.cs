@@ -322,9 +322,11 @@ public static class Eq {
         return Compare(rt, NameOf(rt, a), NameOf(rt, b));
     }
 
-    static long NsOf(Rt rt, long v) => Val.IsInlineKw(v) ? Val.Nil : rt.Slot(v, 0);
-    static long NameOf(Rt rt, long v) =>
-        Val.IsInlineKw(v) ? Val.InlineStr(Val.InlineBytes(v)) : rt.Slot(v, 1);
+    // THE SECOND COPIES ARE GONE. `Eq` had its own `NameOf` and `NsOf` that
+    // skipped the type check -- fine for the values it was handed, and two
+    // more places to keep in step.
+    static long NsOf(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Names.NsOf(rt, v);
+    static long NameOf(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Names.NameOf(rt, v);
 
     /// Length first is WRONG for sequences: `[1 2]` is less than `[1 3]`, and
     /// both are less than `[1 2 3]`. So shorter-is-less only decides a tie.

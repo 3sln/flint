@@ -108,6 +108,13 @@ public final class Val {
     public static boolean isInlineStr(long v) { return tag(v) == TAG_STR; }
     public static boolean isInlineKw(long v) { return tag(v) == TAG_KW; }
 
+    /// An inline KEYWORD as the inline STRING of its name -- a TAG SWAP, not a
+    /// rebuild. See the Rust copy: `inlineStr(inlineBytes(v))` allocates a byte
+    /// array to copy eight bytes onto themselves.
+    public static long kwToStr(long v) {
+        return (v & 0x0000FFFFFFFFFFFFL) | (TAG_STR << 48);
+    }
+
     public static long inlineStr(byte[] b) { return inlineOf(TAG_STR, b); }
     public static long inlineKw(byte[] b) { return inlineOf(TAG_KW, b); }
 

@@ -429,39 +429,6 @@ impl Rt {
     pub fn is_keyword(&self, v: Value) -> bool {
         v.is_inline_kw() || (v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_KW)
     }
-    pub fn is_symbol(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_SYM
-    }
-
-    /// The `name` part of a string, keyword or symbol, as a string `Value`.
-    pub fn name_of(&mut self, v: Value) -> Value {
-        if v.is_inline_kw() {
-            let mut b = [0u8; INLINE_MAX];
-            return Value::inline_str(v.inline_bytes(&mut b));
-        }
-        if v.is_heap() {
-            match ty(&self.gc.sp, v.as_heap()) {
-                TY_KW | TY_SYM => return slot(&self.gc.sp, v.as_heap(), 1),
-                _ => {}
-            }
-        }
-        v
-    }
-
-    /// The `namespace` part, or `nil`.
-    pub fn ns_of(&self, v: Value) -> Value {
-        if v.is_inline_kw() {
-            return NIL;
-        }
-        if v.is_heap() {
-            match ty(&self.gc.sp, v.as_heap()) {
-                TY_KW | TY_SYM => return slot(&self.gc.sp, v.as_heap(), 0),
-                _ => {}
-            }
-        }
-        NIL
-    }
-
     pub fn keyword_hash(&self, v: Value) -> u32 {
         if v.is_inline_kw() {
             let mut b = [0u8; INLINE_MAX];
@@ -471,10 +438,6 @@ impl Rt {
             slot(&self.gc.sp, v.as_heap(), 2).as_fixnum() as i32 as u32
         }
     }
-    pub fn symbol_hash(&self, v: Value) -> u32 {
-        slot(&self.gc.sp, v.as_heap(), 3).as_fixnum() as i32 as u32
-    }
-
     /// Build a string from pieces without an intermediate allocation on the
     /// flint heap. Used by `str`, `subs`, and the printer.
     pub fn string_from_parts(&mut self, parts: &[&str]) -> Value {

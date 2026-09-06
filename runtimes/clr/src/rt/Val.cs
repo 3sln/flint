@@ -78,6 +78,10 @@ public static class Val {
     public static bool IsInlineStr(long v) => Tag(v) == TagStr;
     public static bool IsInlineKw(long v) => Tag(v) == TagKw;
 
+    /// An inline KEYWORD as the inline STRING of its name -- a tag swap. See
+    /// the Rust copy.
+    public static long KwToStr(long v) => (v & 0x0000FFFFFFFFFFFFL) | (TagStr << 48);
+
     public static long InlineStr(byte[] b) => InlineOf(TagStr, b);
     public static long InlineKw(byte[] b) => InlineOf(TagKw, b);
 

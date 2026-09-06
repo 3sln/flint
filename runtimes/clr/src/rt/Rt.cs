@@ -1638,11 +1638,8 @@ public sealed class Rt : System.IDisposable {
         return v;
     }
     /// The bare name of a keyword, symbol or string -- what `name` returns.
-    public long NameOf(long v) {
-        if (Val.IsInlineKw(v)) return Val.InlineStr(Val.InlineBytes(v));
-        if (IsHeapTy(v, Obj.TyKw) || IsHeapTy(v, Obj.TySym)) return Slot(v, 1);
-        return v;
-    }
+    /// Generated from `kin/names.kin`.
+    public long NameOf(long v) { return global::_3sln.Flint.Kgen.Rt.Names.NameOf(this, v); }
 
     /// The empty collections, allocated ONCE per sandbox. This port allocated a
     /// fresh empty every time, where the Rust runtime returns a singleton --

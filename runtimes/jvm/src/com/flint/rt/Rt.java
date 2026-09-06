@@ -1858,10 +1858,7 @@ public final class Rt {
         return v;
     }
     /// The bare name of a keyword, symbol or string -- what `name` returns.
-    public long nameOf(long v) {
-        if (Val.isInlineKw(v)) return Val.inlineStr(Val.inlineBytes(v));
-        if (isHeapTy(v, Obj.TY_KW) || isHeapTy(v, Obj.TY_SYM)) return slot(v, 1);
-        return v;
-    }
+    /// Generated from `kin/names.kin`.
+    public long nameOf(long v) { return com._3sln.flint.kgen.rt.Names.nameOf(this, v); }
 
 }
