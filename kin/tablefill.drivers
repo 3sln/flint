@@ -1,0 +1,725 @@
+--rust-head
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const NOT_FOUND: Value = Value(0xFFFE);
+const TY_SCHEMA: u8 = 48; const TY_TABLE: u8 = 49; const TY_TABLEREF: u8 = 50;
+const TY_VEC: u8 = 9; const TY_NODE: u8 = 12; const TY_MAP: u8 = 14;
+const TY_TTABLE: u8 = 51;
+pub mod table {
+    pub const SC_NAMES: u32 = 0; pub const SC_TYPES: u32 = 1; pub const SC_INDEX: u32 = 2;
+    pub const SC_IDS: u32 = 3; pub const SC_WIDTH: u32 = 4; pub const SC_LEN: u32 = 5;
+    pub const TB_SCHEMA: u32 = 0; pub const TB_CHUNKS: u32 = 1; pub const TB_COUNT: u32 = 2;
+    pub const TB_OFFSET: u32 = 3; pub const TB_LEN: u32 = 4;
+    pub const CH_ROWS: u32 = 0; pub const CH_ENC: u32 = 1; pub const CH_BASE: u32 = 2;
+    pub const ENC_FLAT: u32 = 0; pub const ENC_CONST: u32 = 1;
+    pub const RF_SCHEMA: u32 = 0; pub const RF_CHUNK: u32 = 1; pub const RF_ROW: u32 = 2;
+    pub const RF_LEN: u32 = 3;
+    pub const CHUNK: u32 = 256; pub const CHUNK_SHIFT: u32 = 8;
+}
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 && (self.0 >> 60) != 0xD }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn as_fixnum(self) -> i64 { (self.0 & 0xFFFF_FFFF) as i64 }
+    fn fixnum(n: i64) -> Value { Value((0xDu64 << 60) | (n as u64 & 0xFFFF_FFFF)) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn is_fixnum(self) -> bool { (self.0 >> 60) == 0xD }
+}
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, steps: u64 }
+impl Rt {
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        let a = self.bump; self.bump += n as u64 + 16;
+        self.gc.sp.m[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set(&mut self, n: Value, i: u32, v: Value) { self.h[n.0 as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    // A VECTOR flat enough for a schema: the probe never builds one big enough
+    // to need a trie, and `vec_count`/`vec_nth` are what the source asks for.
+    fn vec_count(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn olen(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn vec_nth(&mut self, v: Value, i: u32, dflt: Value) -> Value {
+        if i >= self.vec_count(v) { dflt } else { self.slot(v, i) }
+    }
+    // STRUCTURAL equality over the probe's vectors, because `schema-eq` is
+    // about what two schemas SAY and not about which objects they are.
+    fn eq(&mut self, a: Value, b: Value) -> bool {
+        if a.0 == b.0 { return true; }
+        if !a.is_heap() || !b.is_heap() { return false; }
+        if ty(&self.gc.sp, a.as_heap()) != TY_VEC || ty(&self.gc.sp, b.as_heap()) != TY_VEC {
+            return false;
+        }
+        let n = self.vec_count(a);
+        if n != self.vec_count(b) { return false; }
+        for i in 0..n {
+            let (x, y) = (self.slot(a, i), self.slot(b, i));
+            if !self.eq(x, y) { return false; }
+        }
+        true
+    }
+    fn vector(&mut self, xs: &[Value]) -> Value {
+        let a = self.alloc(TY_VEC, xs.len().max(1) as u32);
+        self.lens[a as usize] = xs.len() as u32;
+        for (i, x) in xs.iter().enumerate() { self.h[a as usize + i] = x.0; }
+        Value::heap(a)
+    }
+    // ROOTS. `table-ref` and `ref-to-map` allocate, so the shadow stack is the
+    // one thing the probe cannot leave out: `0031` says a value in a host
+    // local does not survive an allocation.
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn set_slot(&mut self, a: Value, i: u32, v: Value) { self.set(a, i, v); }
+    // A MAP as alternating key/value slots. Small, ordered, and enough: the
+    // schema index is the only map here and it holds one entry per column.
+    fn empty_map(&mut self) -> Value { let a = self.alloc(TY_MAP, 0); Value::heap(a) }
+    fn map_get(&mut self, m: Value, k: Value, dflt: Value) -> Value {
+        let n = self.lens[m.0 as usize];
+        let mut i = 0;
+        while i < n {
+            if self.slot(m, i).0 == k.0 { return self.slot(m, i + 1); }
+            i += 2;
+        }
+        dflt
+    }
+    fn map_assoc(&mut self, m: Value, k: Value, v: Value) -> Value {
+        let n = self.lens[m.0 as usize];
+        let a = self.alloc(TY_MAP, n + 2);
+        let out = Value::heap(a);
+        for i in 0..n { let x = self.slot(m, i); self.set(out, i, x); }
+        self.set(out, n, k);
+        self.set(out, n + 1, v);
+        self.lens[a as usize] = n + 2;
+        out
+    }
+    fn map_pairs(&self, m: Value) -> u32 { self.lens[m.0 as usize] / 2 }
+    fn obj(&mut self, t: u8, n: u32) -> Value { let a = self.alloc(t, n); Value::heap(a) }
+    // `new-obj` answers NIL when the heap refuses. The probe's heap never
+    // does, but the wrapper is what the source calls.
+    fn new_obj(&mut self, t: u8, n: u32) -> Value { self.obj(t, n) }
+    fn charge_work(&mut self, n: u64) { self.steps += n; }
+}
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+// THE ACCESSORS THIS SOURCE CONSUMES AS SIBLINGS -- `tablemeta` generates
+// them, so the probe supplies its own.
+impl Rt {
+    fn schema_len(&self, s: Value) -> u32 { self.vec_count(self.slot(s, table::SC_NAMES)) }
+    fn schema_name_at(&mut self, s: Value, c: u32) -> Value {
+        let names = self.slot(s, table::SC_NAMES);
+        self.vec_nth(names, c, NIL)
+    }
+    fn table_count(&mut self, t: Value) -> u32 { self.slot(t, table::TB_COUNT).as_fixnum() as u32 }
+    fn is_table_ref(&self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_TABLEREF
+    }
+    fn schema_width(&mut self, s: Value) -> u32 {
+        self.slot(s, table::SC_WIDTH).as_fixnum() as u32
+    }
+    fn schema_id(&mut self, s: Value, name: Value) -> u32 {
+        let p = self.map_get(self.slot(s, table::SC_INDEX), name, NIL);
+        if p.is_fixnum() { p.as_fixnum() as u32 } else { self.schema_width(s) }
+    }
+    fn ref_get(&mut self, rf: Value, name: Value, dflt: Value) -> Value {
+        let s = self.slot(rf, table::RF_SCHEMA);
+        let id = self.schema_id(s, name);
+        if id >= self.schema_width(s) { return dflt; }
+        let ch = self.slot(rf, table::RF_CHUNK);
+        let row = self.slot(rf, table::RF_ROW).as_fixnum() as u32;
+        self.chunk_get(ch, id, row)
+    }
+    fn table_offset(&mut self, t: Value) -> u32 { self.slot(t, table::TB_OFFSET).as_fixnum() as u32 }
+    fn chunk_get(&mut self, ch: Value, id: u32, row: u32) -> Value {
+        let col = self.slot(ch, table::CH_BASE + id);
+        let e = self.slot(ch, table::CH_ENC);
+        if self.slot(e, id).as_fixnum() as u32 == table::ENC_CONST { col } else { self.slot(col, row) }
+    }
+}
+impl Rt {
+    // The siblings this source consumes: `tablemeta` and `tablecell` generate
+    // them, so the probe brings its own.
+    fn schema_id_at(&mut self, s: Value, c: u32) -> u32 {
+        let ids = self.slot(s, table::SC_IDS);
+        self.vec_nth(ids, c, NIL).as_fixnum() as u32
+    }
+    fn chunk_rows(&mut self, ch: Value) -> u32 { self.slot(ch, table::CH_ROWS).as_fixnum() as u32 }
+    fn chunk_enc(&mut self, ch: Value, id: u32) -> u32 {
+        let e = self.slot(ch, table::CH_ENC);
+        self.slot(e, id).as_fixnum() as u32
+    }
+    fn new_chunk(&mut self, width: u32, rows: u32) -> Value {
+        let ch = self.new_obj(TY_NODE, table::CH_BASE + width);
+        self.set(ch, table::CH_ROWS, Value::fixnum(rows as i64));
+        let enc = self.new_obj(TY_NODE, if width < 1 { 1 } else { width });
+        for id in 0..width { self.set(enc, id, Value::fixnum(table::ENC_FLAT as i64)); }
+        self.set(ch, table::CH_ENC, enc);
+        ch
+    }
+    fn collapse(&mut self, ch: Value, id: u32) {
+        let col = self.slot(ch, table::CH_BASE + id);
+        let n = self.olen(col);
+        if n == 0 { return; }
+        let first = self.slot(col, 0);
+        for k in 1..n { if self.slot(col, k).0 != first.0 { return; } }
+        self.set(ch, table::CH_BASE + id, first);
+        let e = self.slot(ch, table::CH_ENC);
+        self.set(e, id, Value::fixnum(table::ENC_CONST as i64));
+    }
+    fn row_column(&mut self, s: Value, row: Value, c: u32) -> Value {
+        let names = self.slot(s, table::SC_NAMES);
+        let name = self.vec_nth(names, c, NIL);
+        if self.is_table_ref(row) { self.ref_get(row, name, NOT_FOUND) }
+        else { self.map_get(row, name, NOT_FOUND) }
+    }
+    // A SCHEMA whose ids are its positions, which is what an unmigrated one
+    // looks like. `col` reads a column out whatever its encoding.
+    fn schema(&mut self, names: &[Value]) -> Value {
+        let s = self.obj(TY_SCHEMA, table::SC_LEN);
+        let nv = self.vector(names);
+        self.set(s, table::SC_NAMES, nv);
+        let ids: alloc::vec::Vec<Value> = (0..names.len()).map(|i| Value::fixnum(i as i64)).collect();
+        let iv = self.vector(&ids);
+        self.set(s, table::SC_IDS, iv);
+        self.set(s, table::SC_WIDTH, Value::fixnum(names.len() as i64));
+        let mut idx = self.empty_map();
+        for (i, n) in names.iter().enumerate() { idx = self.map_assoc(idx, *n, Value::fixnum(i as i64)); }
+        self.set(s, table::SC_INDEX, idx);
+        s
+    }
+    fn show_chunk(&mut self, ch: Value, ids: u32, rows: u32) -> alloc::string::String {
+        let mut out = alloc::vec::Vec::new();
+        for id in 0..ids {
+            let e = self.chunk_enc(ch, id);
+            let mut cells = alloc::vec::Vec::new();
+            for r in 0..rows { cells.push(self.chunk_get(ch, id, r).as_fixnum().to_string()); }
+            out.push(alloc::format!("{}[{}]", e, cells.join(".")));
+        }
+        out.join(",")
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 200000], gc: Gc { sp: Space { m: vec![0u8; 200000] } },
+                      lens: vec![0; 200000], bump: 100, roots: Vec::new(), steps: 0 };
+    let mut o = String::new();
+    let na = Value::fixnum(101); let nb = Value::fixnum(102);
+    let sch = rt.schema(&[na, nb]);
+    let mkrow = |rt: &mut Rt, a: i64, b: i64| -> Value {
+        let mut m = rt.empty_map();
+        m = rt.map_assoc(m, na, Value::fixnum(a));
+        m = rt.map_assoc(m, nb, Value::fixnum(b));
+        m
+    };
+    // WRITE-ROW fills a chunk that is already the right shape.
+    let ch = rt.new_chunk(2, 3);
+    for id in 0..2u32 { let col = rt.obj(TY_NODE, 3); rt.set(ch, table::CH_BASE + id, col); }
+    for k in 0..3u32 {
+        let row = mkrow(&mut rt, 10 + k as i64, 7);
+        rt.write_row(sch, ch, k, row);
+    }
+    let w = rt.show_chunk(ch, 2, 3);
+    o.push_str(&format!("write={} ", w));
+    // OPEN-CHUNK is full width and CHUNK long, whatever gets written.
+    let open = rt.open_chunk(sch);
+    let ocol = rt.slot(open, table::CH_BASE);
+    let olen = rt.lens[ocol.0 as usize];
+    let orows = rt.chunk_rows(open);
+    o.push_str(&format!("open={}/{} ", olen, orows));
+    // SEAL copies out only the rows written, and collapses on the way: column
+    // 1 is all sevens and becomes constant, column 0 is not.
+    for k in 0..3u32 {
+        let row = mkrow(&mut rt, 20 + k as i64, 7);
+        rt.write_row(sch, open, k, row);
+    }
+    let sealed = rt.seal(sch, open, 3);
+    let sc = rt.slot(sealed, table::CH_BASE);
+    let sclen = rt.lens[sc.0 as usize];
+    let s1 = rt.show_chunk(sealed, 2, 3);
+    o.push_str(&format!("seal={}/{} ", sclen, s1));
+    // CHUNK-WITH-ROW, replacing row 1 without growing. Column 1 stays
+    // constant because the new value is the same value.
+    let r1 = mkrow(&mut rt, 99, 7);
+    let rep = rt.chunk_with_row(sch, sealed, 1, r1, false);
+    let reprows = rt.chunk_rows(rep);
+    let s2 = rt.show_chunk(rep, 2, 3);
+    o.push_str(&format!("replace={}/{} ", reprows, s2));
+    // A CONSTANT COLUMN GIVEN A DIFFERENT VALUE has to expand back to flat.
+    let r2 = mkrow(&mut rt, 99, 8);
+    let broke = rt.chunk_with_row(sch, sealed, 1, r2, false);
+    let s3 = rt.show_chunk(broke, 2, 3);
+    o.push_str(&format!("broke={} ", s3));
+    // AND GROWING: one row longer, written at the end.
+    let r3 = mkrow(&mut rt, 40, 7);
+    let grown = rt.chunk_with_row(sch, sealed, 3, r3, true);
+    let growrows = rt.chunk_rows(grown);
+    let s4 = rt.show_chunk(grown, 2, 4);
+    o.push_str(&format!("grow={}/{} ", growrows, s4));
+    // COLLAPSING ON THE WAY OUT: a flat column whose one differing row is
+    // replaced becomes constant again. Without that check a table would only
+    // ever LOSE encodings.
+    let r4 = mkrow(&mut rt, 99, 8);
+    let flat = rt.chunk_with_row(sch, sealed, 1, r4, false);
+    let r5 = mkrow(&mut rt, 99, 7);
+    let refolded = rt.chunk_with_row(sch, flat, 1, r5, false);
+    let s5 = rt.show_chunk(refolded, 2, 3);
+    o.push_str(&format!("refold={}", s5));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_SCHEMA = 48, TY_TABLE = 49, TY_TABLEREF = 50,
+                     TY_VEC = 9, TY_NODE = 12, TY_MAP = 14, TY_TTABLE = 51;
+    static final class Table {
+        static final int SC_NAMES = 0, SC_TYPES = 1, SC_INDEX = 2, SC_IDS = 3,
+                         SC_WIDTH = 4, SC_LEN = 5;
+        static final int TB_SCHEMA = 0, TB_CHUNKS = 1, TB_COUNT = 2, TB_OFFSET = 3, TB_LEN = 4;
+        static final int CH_ROWS = 0, CH_ENC = 1, CH_BASE = 2;
+        static final int ENC_FLAT = 0, ENC_CONST = 1;
+        static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
+        static final int CHUNK = 256, CHUNK_SHIFT = 8;
+    }
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL && (v >>> 60) != 0xDL; }
+        static long asHeap(long v) { return v; }
+        static long asFixnum(long v) { return v & 0xFFFFFFFFL; }
+        static long fixnum(long n) { return (0xDL << 60) | (n & 0xFFFFFFFFL); }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+        static boolean isFixnum(long v) { return (v >>> 60) == 0xDL; }
+        static final long NOT_FOUND = 0xFFFEL;
+    }
+    static final class Space { byte[] m = new byte[40000]; }
+    static final class Rt {
+        long[] h = new long[40000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        int[] lens = new int[40000];
+        long bump = 100;
+        long alloc(int t, int n) {
+            long a = bump; bump += n + 16;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long steps = 0;
+        void chargeWork(long n) { steps += n; }
+        void set(long n, int i, long v) { h[(int) n + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    static final class Vec {
+        static int count(Rt rt, long v) { return rt.lens[(int) v]; }
+        static long nth(Rt rt, long v, int i, long dflt) {
+            return i >= count(rt, v) ? dflt : rt.slot(v, i);
+        }
+    }
+    // Nested to reproduce the port's FULLY QUALIFIED `com.flint.rt.Eq` --
+    // the vocabulary spells it in full because a bare `Eq` inside the
+    // generated package would resolve to the GENERATED one.
+    static final class com { static final class flint { static final class rt {
+    static final class Maps {
+        static long empty(Rt rt) { return Val.heap(rt.alloc(TY_MAP, 0)); }
+    }
+    static final class Eq {
+        static boolean eq(Rt rt, long a, long b) {
+            if (a == b) return true;
+            if (!Val.isHeap(a) || !Val.isHeap(b)) return false;
+            if (ty(rt.gc.sp, a) != TY_VEC || ty(rt.gc.sp, b) != TY_VEC) return false;
+            int n = Vec.count(rt, a);
+            if (n != Vec.count(rt, b)) return false;
+            for (int i = 0; i < n; i++) if (!eq(rt, rt.slot(a, i), rt.slot(b, i))) return false;
+            return true;
+        }
+    }
+    } } }
+    static long vector(Rt rt, long[] xs) {
+        long a = rt.alloc(TY_VEC, Math.max(1, xs.length));
+        rt.lens[(int) a] = xs.length;
+        for (int i = 0; i < xs.length; i++) rt.h[(int) a + i] = xs[i];
+        return Val.heap(a);
+    }
+    static long obj(Rt rt, int t, int n) { return Val.heap(rt.alloc(t, n)); }
+    static final class Conc {
+        static long newObj(Rt rt, int t, int n) { return obj(rt, t, n); }
+    }
+    // `empty-map` is spelled FULLY QUALIFIED on `Maps`, for the same reason
+    // `Eq` is: inside the generated package a bare name would resolve to the
+    // generated class.
+    static long emptyMap(Rt rt) { return com.flint.rt.Maps.empty(rt); }
+    static long mapGet(Rt rt, long m, long k, long dflt) {
+        int n = rt.lens[(int) m];
+        for (int i = 0; i < n; i += 2) if (rt.slot(m, i) == k) return rt.slot(m, i + 1);
+        return dflt;
+    }
+    static long mapAssoc(Rt rt, long m, long k, long v) {
+        int n = rt.lens[(int) m];
+        long a = rt.alloc(TY_MAP, n + 2);
+        long out = Val.heap(a);
+        for (int i = 0; i < n; i++) rt.set(out, i, rt.slot(m, i));
+        rt.set(out, n, k);
+        rt.set(out, n + 1, v);
+        rt.lens[(int) a] = n + 2;
+        return out;
+    }
+    static int mapPairs(Rt rt, long m) { return rt.lens[(int) m] / 2; }
+    static int schemaLen(Rt rt, long s) { return Vec.count(rt, rt.slot(s, Table.SC_NAMES)); }
+    static long schemaNameAt(Rt rt, long s, int c) {
+        return Vec.nth(rt, rt.slot(s, Table.SC_NAMES), c, NIL);
+    }
+    static int tableCount(Rt rt, long t) { return (int) Val.asFixnum(rt.slot(t, Table.TB_COUNT)); }
+    static boolean isTableRef(Rt rt, long v) {
+        return Val.isHeap(v) && ty(rt.gc.sp, v) == TY_TABLEREF;
+    }
+    static int schemaWidth(Rt rt, long s) { return (int) Val.asFixnum(rt.slot(s, Table.SC_WIDTH)); }
+    static int schemaId(Rt rt, long s, long name) {
+        long p = mapGet(rt, rt.slot(s, Table.SC_INDEX), name, NIL);
+        return Val.isFixnum(p) ? (int) Val.asFixnum(p) : schemaWidth(rt, s);
+    }
+    static long refGet(Rt rt, long rf, long name, long dflt) {
+        long s = rt.slot(rf, Table.RF_SCHEMA);
+        int id = schemaId(rt, s, name);
+        if (id >= schemaWidth(rt, s)) return dflt;
+        return chunkGet(rt, rt.slot(rf, Table.RF_CHUNK), id,
+                        (int) Val.asFixnum(rt.slot(rf, Table.RF_ROW)));
+    }
+    static int tableOffset(Rt rt, long t) { return (int) Val.asFixnum(rt.slot(t, Table.TB_OFFSET)); }
+    static long chunkGet(Rt rt, long ch, int id, int row) {
+        long col = rt.slot(ch, Table.CH_BASE + id);
+        long e = rt.slot(ch, Table.CH_ENC);
+        return (int) Val.asFixnum(rt.slot(e, id)) == Table.ENC_CONST ? col : rt.slot(col, row);
+    }
+    static int schemaIdAt(Rt rt, long s, int c) {
+        return (int) Val.asFixnum(Vec.nth(rt, rt.slot(s, Table.SC_IDS), c, NIL));
+    }
+    static int chunkRows(Rt rt, long ch) { return (int) Val.asFixnum(rt.slot(ch, Table.CH_ROWS)); }
+    static int chunkEnc(Rt rt, long ch, int id) {
+        return (int) Val.asFixnum(rt.slot(rt.slot(ch, Table.CH_ENC), id));
+    }
+    static long newChunk(Rt rt, int width, int rows) {
+        long ch = Conc.newObj(rt, TY_NODE, Table.CH_BASE + width);
+        rt.set(ch, Table.CH_ROWS, Val.fixnum(rows));
+        long enc = Conc.newObj(rt, TY_NODE, width < 1 ? 1 : width);
+        for (int id = 0; id < width; id++) rt.set(enc, id, Val.fixnum(Table.ENC_FLAT));
+        rt.set(ch, Table.CH_ENC, enc);
+        return ch;
+    }
+    static void collapse(Rt rt, long ch, int id) {
+        long col = rt.slot(ch, Table.CH_BASE + id);
+        int n = olen(rt, col);
+        if (n == 0) return;
+        long first = rt.slot(col, 0);
+        for (int k = 1; k < n; k++) if (rt.slot(col, k) != first) return;
+        rt.set(ch, Table.CH_BASE + id, first);
+        rt.set(rt.slot(ch, Table.CH_ENC), id, Val.fixnum(Table.ENC_CONST));
+    }
+    static long rowColumn(Rt rt, long s, long row, int c) {
+        long name = Vec.nth(rt, rt.slot(s, Table.SC_NAMES), c, NIL);
+        return isTableRef(rt, row) ? refGet(rt, row, name, Val.NOT_FOUND)
+                                   : mapGet(rt, row, name, Val.NOT_FOUND);
+    }
+    static long schema(Rt rt, long[] names) {
+        long s = obj(rt, TY_SCHEMA, Table.SC_LEN);
+        rt.set(s, Table.SC_NAMES, vector(rt, names));
+        long[] ids = new long[names.length];
+        for (int i = 0; i < names.length; i++) ids[i] = Val.fixnum(i);
+        rt.set(s, Table.SC_IDS, vector(rt, ids));
+        rt.set(s, Table.SC_WIDTH, Val.fixnum(names.length));
+        long idx = emptyMap(rt);
+        for (int i = 0; i < names.length; i++) idx = mapAssoc(rt, idx, names[i], Val.fixnum(i));
+        rt.set(s, Table.SC_INDEX, idx);
+        return s;
+    }
+    static String showChunk(Rt rt, long ch, int ids, int rows) {
+        StringBuilder o = new StringBuilder();
+        for (int id = 0; id < ids; id++) {
+            if (id > 0) o.append(',');
+            o.append(chunkEnc(rt, ch, id)).append('[');
+            for (int r = 0; r < rows; r++) {
+                if (r > 0) o.append('.');
+                o.append(Val.asFixnum(chunkGet(rt, ch, id, r)));
+            }
+            o.append(']');
+        }
+        return o.toString();
+    }
+    static long NA, NB, SCH;
+    static long mkrow(Rt rt, long a, long b) {
+        long m = emptyMap(rt);
+        m = mapAssoc(rt, m, NA, Val.fixnum(a));
+        m = mapAssoc(rt, m, NB, Val.fixnum(b));
+        return m;
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        NA = Val.fixnum(101); NB = Val.fixnum(102);
+        SCH = schema(rt, new long[]{NA, NB});
+        long ch = newChunk(rt, 2, 3);
+        for (int id = 0; id < 2; id++) rt.set(ch, Table.CH_BASE + id, obj(rt, TY_NODE, 3));
+        for (int k = 0; k < 3; k++) writeRow(rt, SCH, ch, k, mkrow(rt, 10 + k, 7));
+        o.append("write=").append(showChunk(rt, ch, 2, 3)).append(' ');
+        long open = openChunk(rt, SCH);
+        o.append("open=").append(olen(rt, rt.slot(open, Table.CH_BASE))).append('/')
+         .append(chunkRows(rt, open)).append(' ');
+        for (int k = 0; k < 3; k++) writeRow(rt, SCH, open, k, mkrow(rt, 20 + k, 7));
+        long sealed = seal(rt, SCH, open, 3);
+        o.append("seal=").append(olen(rt, rt.slot(sealed, Table.CH_BASE))).append('/')
+         .append(showChunk(rt, sealed, 2, 3)).append(' ');
+        long rep = chunkWithRow(rt, SCH, sealed, 1, mkrow(rt, 99, 7), false);
+        o.append("replace=").append(chunkRows(rt, rep)).append('/')
+         .append(showChunk(rt, rep, 2, 3)).append(' ');
+        long broke = chunkWithRow(rt, SCH, sealed, 1, mkrow(rt, 99, 8), false);
+        o.append("broke=").append(showChunk(rt, broke, 2, 3)).append(' ');
+        long grown = chunkWithRow(rt, SCH, sealed, 3, mkrow(rt, 40, 7), true);
+        o.append("grow=").append(chunkRows(rt, grown)).append('/')
+         .append(showChunk(rt, grown, 2, 4)).append(' ');
+        long flat = chunkWithRow(rt, SCH, sealed, 1, mkrow(rt, 99, 8), false);
+        long refolded = chunkWithRow(rt, SCH, flat, 1, mkrow(rt, 99, 7), false);
+        o.append("refold=").append(showChunk(rt, refolded, 2, 3));
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Table {
+        internal const int SC_NAMES = 0, SC_TYPES = 1, SC_INDEX = 2, SC_IDS = 3,
+                           SC_WIDTH = 4, SC_LEN = 5;
+        internal const int TB_SCHEMA = 0, TB_CHUNKS = 1, TB_COUNT = 2, TB_OFFSET = 3, TB_LEN = 4;
+        internal const int CH_ROWS = 0, CH_ENC = 1, CH_BASE = 2;
+        internal const int ENC_FLAT = 0, ENC_CONST = 1;
+        internal const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
+        internal const int CHUNK = 256, CHUNK_SHIFT = 8;
+    }
+    // A REAL top-level namespace: the generated C# reaches this as
+    // `global::Flint.Rt.Eq`, and `global::` needs a genuine root.
+    // The generated C# reaches these as `global::Flint.Rt.X`, and `global::`
+    // needs a genuine root namespace -- a shim nested in `class Probe` is not
+    // one.
+    internal static class Maps {
+        internal static long Empty(Probe.Rt rt) { return Probe.Val.Heap(rt.Alloc(Probe.Obj.TyMap, 0)); }
+    }
+    internal static class Eq {
+        internal static bool Equal(Probe.Rt rt, long a, long b) {
+            if (a == b) return true;
+            if (!Probe.Val.IsHeap(a) || !Probe.Val.IsHeap(b)) return false;
+            if (Probe.Obj.Ty(rt.gc.sp, a) != Probe.Obj.TyVec
+                || Probe.Obj.Ty(rt.gc.sp, b) != Probe.Obj.TyVec) return false;
+            int n = Probe.Vec.Count(rt, a);
+            if (n != Probe.Vec.Count(rt, b)) return false;
+            for (int i = 0; i < n; i++) if (!Equal(rt, rt.Slot(a, i), rt.Slot(b, i))) return false;
+            return true;
+        }
+    }
+}
+--csharp-head
+    internal static class Obj {
+        internal const int TySchema = 48, TyTable = 49, TyTableref = 50,
+                           TyVec = 9, TyNode = 12, TyMap = 14, TyTtable = 51;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil && (long)((ulong) v >> 60) != 0xDL; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long AsFixnum(long v) { return v & 0xFFFFFFFFL; }
+        internal static long Fixnum(long n) { return (0xDL << 60) | (n & 0xFFFFFFFFL); }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+        internal static bool IsFixnum(long v) { return (long)((ulong) v >> 60) == 0xDL; }
+        internal const long NotFound = 0xFFFEL;
+    }
+    internal sealed class Space { internal byte[] m = new byte[40000]; }
+    internal sealed class Rt {
+        internal long[] h = new long[40000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[40000];
+        internal long bump = 100;
+        internal long Alloc(int t, int n) {
+            long a = bump; bump += n + 16;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Val.Nil;
+            return a;
+        }
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long steps = 0;
+        internal void ChargeWork(long n) { steps += n; }
+        internal void Set(long n, int i, long v) { h[(int) n + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+    }
+    internal static class Vec {
+        internal static int Count(Rt rt, long v) { return rt.lens[(int) v]; }
+        internal static long Nth(Rt rt, long v, int i, long dflt) {
+            return i >= Count(rt, v) ? dflt : rt.Slot(v, i);
+        }
+    }
+    internal static long Vector(Rt rt, long[] xs) {
+        long a = rt.Alloc(Obj.TyVec, System.Math.Max(1, xs.Length));
+        rt.lens[(int) a] = xs.Length;
+        for (int i = 0; i < xs.Length; i++) rt.h[(int) a + i] = xs[i];
+        return Val.Heap(a);
+    }
+    internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    internal static long Obj2(Rt rt, int t, int n) { return Val.Heap(rt.Alloc(t, n)); }
+    internal static class Conc {
+        internal static long NewObj(Rt rt, int t, int n) { return Obj2(rt, t, n); }
+    }
+    internal static long EmptyMap(Rt rt) { return global::Flint.Rt.Maps.Empty(rt); }
+    internal static long MapGet(Rt rt, long m, long k, long dflt) {
+        int n = rt.lens[(int) m];
+        for (int i = 0; i < n; i += 2) if (rt.Slot(m, i) == k) return rt.Slot(m, i + 1);
+        return dflt;
+    }
+    internal static long MapAssoc(Rt rt, long m, long k, long v) {
+        int n = rt.lens[(int) m];
+        long a = rt.Alloc(Obj.TyMap, n + 2);
+        long outv = Val.Heap(a);
+        for (int i = 0; i < n; i++) rt.Set(outv, i, rt.Slot(m, i));
+        rt.Set(outv, n, k);
+        rt.Set(outv, n + 1, v);
+        rt.lens[(int) a] = n + 2;
+        return outv;
+    }
+    internal static int MapPairs(Rt rt, long m) { return rt.lens[(int) m] / 2; }
+    internal static int SchemaLen(Rt rt, long s) { return Vec.Count(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES)); }
+    internal static long SchemaNameAt(Rt rt, long s, int c) {
+        return Vec.Nth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES), c, Val.Nil);
+    }
+    internal static int TableCount(Rt rt, long t) { return (int) Val.AsFixnum(rt.Slot(t, global::Flint.Rt.Table.TB_COUNT)); }
+    internal static bool IsTableRef(Rt rt, long v) {
+        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyTableref;
+    }
+    internal static int SchemaWidth(Rt rt, long s) { return (int) Val.AsFixnum(rt.Slot(s, global::Flint.Rt.Table.SC_WIDTH)); }
+    internal static int SchemaId(Rt rt, long s, long name) {
+        long p = MapGet(rt, rt.Slot(s, global::Flint.Rt.Table.SC_INDEX), name, Val.Nil);
+        return Val.IsFixnum(p) ? (int) Val.AsFixnum(p) : SchemaWidth(rt, s);
+    }
+    internal static long RefGet(Rt rt, long rf, long name, long dflt) {
+        long s = rt.Slot(rf, global::Flint.Rt.Table.RF_SCHEMA);
+        int id = SchemaId(rt, s, name);
+        if (id >= SchemaWidth(rt, s)) return dflt;
+        return ChunkGet(rt, rt.Slot(rf, global::Flint.Rt.Table.RF_CHUNK), id,
+                        (int) Val.AsFixnum(rt.Slot(rf, global::Flint.Rt.Table.RF_ROW)));
+    }
+    internal static int TableOffset(Rt rt, long t) { return (int) Val.AsFixnum(rt.Slot(t, global::Flint.Rt.Table.TB_OFFSET)); }
+    internal static long ChunkGet(Rt rt, long ch, int id, int row) {
+        long col = rt.Slot(ch, global::Flint.Rt.Table.CH_BASE + id);
+        long e = rt.Slot(ch, global::Flint.Rt.Table.CH_ENC);
+        return (int) Val.AsFixnum(rt.Slot(e, id)) == global::Flint.Rt.Table.ENC_CONST ? col : rt.Slot(col, row);
+    }
+    internal static int SchemaIdAt(Rt rt, long s, int c) {
+        return (int) Val.AsFixnum(Vec.Nth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_IDS), c, Val.Nil));
+    }
+    internal static int ChunkRows(Rt rt, long ch) { return (int) Val.AsFixnum(rt.Slot(ch, global::Flint.Rt.Table.CH_ROWS)); }
+    internal static int ChunkEnc(Rt rt, long ch, int id) {
+        return (int) Val.AsFixnum(rt.Slot(rt.Slot(ch, global::Flint.Rt.Table.CH_ENC), id));
+    }
+    internal static long NewChunk(Rt rt, int width, int rows) {
+        long ch = Conc.NewObj(rt, Obj.TyNode, global::Flint.Rt.Table.CH_BASE + width);
+        rt.Set(ch, global::Flint.Rt.Table.CH_ROWS, Val.Fixnum(rows));
+        long enc = Conc.NewObj(rt, Obj.TyNode, width < 1 ? 1 : width);
+        for (int id = 0; id < width; id++) rt.Set(enc, id, Val.Fixnum(global::Flint.Rt.Table.ENC_FLAT));
+        rt.Set(ch, global::Flint.Rt.Table.CH_ENC, enc);
+        return ch;
+    }
+    internal static void Collapse(Rt rt, long ch, int id) {
+        long col = rt.Slot(ch, global::Flint.Rt.Table.CH_BASE + id);
+        int n = Olen(rt, col);
+        if (n == 0) return;
+        long first = rt.Slot(col, 0);
+        for (int k = 1; k < n; k++) if (rt.Slot(col, k) != first) return;
+        rt.Set(ch, global::Flint.Rt.Table.CH_BASE + id, first);
+        rt.Set(rt.Slot(ch, global::Flint.Rt.Table.CH_ENC), id, Val.Fixnum(global::Flint.Rt.Table.ENC_CONST));
+    }
+    internal static long RowColumn(Rt rt, long s, long row, int c) {
+        long name = Vec.Nth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES), c, Val.Nil);
+        return IsTableRef(rt, row) ? RefGet(rt, row, name, Val.NotFound)
+                                   : MapGet(rt, row, name, Val.NotFound);
+    }
+    internal static long Schema(Rt rt, long[] names) {
+        long s = Obj2(rt, Obj.TySchema, global::Flint.Rt.Table.SC_LEN);
+        rt.Set(s, global::Flint.Rt.Table.SC_NAMES, Vector(rt, names));
+        long[] ids = new long[names.Length];
+        for (int i = 0; i < names.Length; i++) ids[i] = Val.Fixnum(i);
+        rt.Set(s, global::Flint.Rt.Table.SC_IDS, Vector(rt, ids));
+        rt.Set(s, global::Flint.Rt.Table.SC_WIDTH, Val.Fixnum(names.Length));
+        long idx = EmptyMap(rt);
+        for (int i = 0; i < names.Length; i++) idx = MapAssoc(rt, idx, names[i], Val.Fixnum(i));
+        rt.Set(s, global::Flint.Rt.Table.SC_INDEX, idx);
+        return s;
+    }
+    internal static string ShowChunk(Rt rt, long ch, int ids, int rows) {
+        var o = new System.Text.StringBuilder();
+        for (int id = 0; id < ids; id++) {
+            if (id > 0) o.Append(',');
+            o.Append(ChunkEnc(rt, ch, id)).Append('[');
+            for (int r = 0; r < rows; r++) {
+                if (r > 0) o.Append('.');
+                o.Append(Val.AsFixnum(ChunkGet(rt, ch, id, r)));
+            }
+            o.Append(']');
+        }
+        return o.ToString();
+    }
+    internal static long NA, NB, SCH;
+    internal static long Mkrow(Rt rt, long a, long b) {
+        long m = EmptyMap(rt);
+        m = MapAssoc(rt, m, NA, Val.Fixnum(a));
+        m = MapAssoc(rt, m, NB, Val.Fixnum(b));
+        return m;
+    }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        NA = Val.Fixnum(101); NB = Val.Fixnum(102);
+        SCH = Schema(rt, new long[]{NA, NB});
+        long ch = NewChunk(rt, 2, 3);
+        for (int id = 0; id < 2; id++)
+            rt.Set(ch, global::Flint.Rt.Table.CH_BASE + id, Obj2(rt, Obj.TyNode, 3));
+        for (int k = 0; k < 3; k++) WriteRow(rt, SCH, ch, k, Mkrow(rt, 10 + k, 7));
+        o.Append("write=").Append(ShowChunk(rt, ch, 2, 3)).Append(' ');
+        long open = OpenChunk(rt, SCH);
+        o.Append("open=").Append(Olen(rt, rt.Slot(open, global::Flint.Rt.Table.CH_BASE))).Append('/')
+         .Append(ChunkRows(rt, open)).Append(' ');
+        for (int k = 0; k < 3; k++) WriteRow(rt, SCH, open, k, Mkrow(rt, 20 + k, 7));
+        long sealed_ = Seal(rt, SCH, open, 3);
+        o.Append("seal=").Append(Olen(rt, rt.Slot(sealed_, global::Flint.Rt.Table.CH_BASE))).Append('/')
+         .Append(ShowChunk(rt, sealed_, 2, 3)).Append(' ');
+        long rep = ChunkWithRow(rt, SCH, sealed_, 1, Mkrow(rt, 99, 7), false);
+        o.Append("replace=").Append(ChunkRows(rt, rep)).Append('/')
+         .Append(ShowChunk(rt, rep, 2, 3)).Append(' ');
+        long broke = ChunkWithRow(rt, SCH, sealed_, 1, Mkrow(rt, 99, 8), false);
+        o.Append("broke=").Append(ShowChunk(rt, broke, 2, 3)).Append(' ');
+        long grown = ChunkWithRow(rt, SCH, sealed_, 3, Mkrow(rt, 40, 7), true);
+        o.Append("grow=").Append(ChunkRows(rt, grown)).Append('/')
+         .Append(ShowChunk(rt, grown, 2, 4)).Append(' ');
+        long flat = ChunkWithRow(rt, SCH, sealed_, 1, Mkrow(rt, 99, 8), false);
+        long refolded = ChunkWithRow(rt, SCH, flat, 1, Mkrow(rt, 99, 7), false);
+        o.Append("refold=").Append(ShowChunk(rt, refolded, 2, 3));
+        System.Console.WriteLine(o.ToString());
+    }

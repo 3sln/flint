@@ -49,6 +49,12 @@ public static class Table {
     // Row-ref slots, and the transient's.
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // THE FILL HALF, generated from `kin/tablefill.kin`.
+    static void writeRow(Rt rt, long s, long ch, int k, long row) { global::_3sln.Flint.Kgen.Rt.Tablefill.WriteRow(rt, s, ch, k, row); }
+    static long openChunk(Rt rt, long s) { return global::_3sln.Flint.Kgen.Rt.Tablefill.OpenChunk(rt, s); }
+    static long chunkWithRow(Rt rt, long s, long ch, int k, long row, bool grow) { return global::_3sln.Flint.Kgen.Rt.Tablefill.ChunkWithRow(rt, s, ch, k, row, grow); }
+    static long seal(Rt rt, long s, long open, int rows) { return global::_3sln.Flint.Kgen.Rt.Tablefill.Seal(rt, s, open, rows); }
+
     // THE CHUNK HALF, generated from `kin/tablecell.kin` -- see the Java copy.
     static long newChunk(Rt rt, int width, int rows) { return global::_3sln.Flint.Kgen.Rt.Tablecell.NewChunk(rt, width, rows); }
     static void collapse(Rt rt, long ch, int id) { global::_3sln.Flint.Kgen.Rt.Tablecell.Collapse(rt, ch, id); }
@@ -328,69 +334,6 @@ public static class Table {
         }
         rt.PopTo(bas);
         return Val.Nil;
-    }
-
-    static void writeRow(Rt rt, long s, long ch, int k, long row) {
-        int bas = rt.Mark();
-        int si = rt.Push(s);
-        int ci = rt.Push(ch);
-        int ri = rt.Push(row);
-        int n = schemaLen(rt, rt.R(si));
-        rt.ChargeWork(n);
-        for (int c = 0; c < n; c++) {
-            int id = schemaIdAt(rt, rt.R(si), c);
-            long v = rowColumn(rt, rt.R(si), rt.R(ri), c);
-            set(rt, rt.Slot(rt.R(ci), CH_BASE + id), k, v);
-        }
-        rt.PopTo(bas);
-    }
-
-    /// A copy of chunk `ch` with row `k` replaced, and optionally one more row
-    /// of room. The chunk and every column it holds are copied, which is what
-    /// keeps a ref looking at the old one valid: a persistent structure does
-    /// not edit what somebody else can see.
-    static long chunkWithRow(Rt rt, long s, long ch, int k, long row, bool grow) {
-        int bas = rt.Mark();
-        int si = rt.Push(s);
-        int ci = rt.Push(ch);
-        int ri = rt.Push(row);
-        int old = chunkRows(rt, rt.R(ci));
-        int take = grow ? old + 1 : old;
-        int width = schemaWidth(rt, rt.R(si));
-        long nch = newChunk(rt, width, take);
-        int ni = rt.Push(nch);
-        int ncols = schemaLen(rt, rt.R(si));
-        // Only the columns the schema NAMES are carried over: a slot the schema
-        // has dropped is left empty, which is where the "data stays resident
-        // until a chunk is next rewritten" trade is paid back.
-        for (int c = 0; c < ncols; c++) {
-            int id = schemaIdAt(rt, rt.R(si), c);
-            long newv = rowColumn(rt, rt.R(si), rt.R(ri), c);
-            int vi = rt.Push(newv);
-            // A CONSTANT column whose new value is the same value stays
-            // constant, and costs nothing to carry.
-            bool stays = chunkEnc(rt, rt.R(ci), id) == ENC_CONST
-                && Eq.Equal(rt, rt.Slot(rt.R(ci), CH_BASE + id), rt.R(vi));
-            if (stays) {
-                set(rt, rt.R(ni), CH_BASE + id, rt.Slot(rt.R(ci), CH_BASE + id));
-                set(rt, rt.Slot(rt.R(ni), CH_ENC), id, Val.Fixnum(ENC_CONST));
-                rt.PopTo(vi);
-                continue;
-            }
-            long col = Conc.NewObj(rt, Obj.TyNode, System.Math.Max(take, 1));
-            int cj = rt.Push(col);
-            for (int j = 0; j < System.Math.Min(old, take); j++)
-                set(rt, rt.R(cj), j, chunkGet(rt, rt.R(ci), id, j));
-            set(rt, rt.R(cj), k, rt.R(vi));
-            set(rt, rt.R(ni), CH_BASE + id, rt.R(cj));
-            // Replacing the one row that differed can make a column constant
-            // again, so the collapse is checked on the way out as well as in.
-            collapse(rt, rt.R(ni), id);
-            rt.PopTo(vi);
-        }
-        long outv = rt.R(ni);
-        rt.PopTo(bas);
-        return outv;
     }
 
     /// `(assoc table i row)`. `i` may be `count`, which appends -- the same
@@ -755,22 +698,6 @@ public static class Table {
     // 256 copies per chunk: 49 061 464 bytes to build 20 000 rows against
     // 3 082 984 through here (`doc/decisions/0026` step 7).
 
-    static long openChunk(Rt rt, long s) {
-        int bas = rt.Mark();
-        int si = rt.Push(s);
-        int width = schemaWidth(rt, rt.R(si));
-        int ci = rt.Push(newChunk(rt, width, 0));
-        int ncols = schemaLen(rt, rt.R(si));
-        for (int c = 0; c < ncols; c++)
-            {
-                long colN = Conc.NewObj(rt, Obj.TyNode, CHUNK);
-                set(rt, rt.R(ci), CH_BASE + schemaIdAt(rt, rt.R(si), c), colN);
-            }
-        long outv = rt.R(ci);
-        rt.PopTo(bas);
-        return outv;
-    }
-
     /// `(transient t)`. The table's own chunks are carried over UNCHANGED --
     /// they are persistent and shared, and a transient must never write into
     /// something a table can still see.
@@ -821,30 +748,6 @@ public static class Table {
             + " on a transient table that persistent! has already taken; a transient is used"
             + " once and the table it produced is the value");
         return false;
-    }
-
-    /// A chunk holding exactly `rows` rows, copied out of the open one -- and
-    /// the moment the encodings are decided, because it is the first moment a
-    /// column is complete.
-    static long seal(Rt rt, long s, long open, int rows) {
-        int bas = rt.Mark();
-        int si = rt.Push(s);
-        int oi = rt.Push(open);
-        int width = schemaWidth(rt, rt.R(si));
-        int ci = rt.Push(newChunk(rt, width, rows));
-        int ncols = schemaLen(rt, rt.R(si));
-        for (int c = 0; c < ncols; c++) {
-            int id = schemaIdAt(rt, rt.R(si), c);
-            int cj = rt.Push(Conc.NewObj(rt, Obj.TyNode, System.Math.Max(rows, 1)));
-            int sj = rt.Push(rt.Slot(rt.R(oi), CH_BASE + id));
-            for (int k = 0; k < rows; k++) set(rt, rt.R(cj), k, rt.Slot(rt.R(sj), k));
-            set(rt, rt.R(ci), CH_BASE + id, rt.R(cj));
-            collapse(rt, rt.R(ci), id);
-            rt.PopTo(cj);
-        }
-        long outv = rt.R(ci);
-        rt.PopTo(bas);
-        return outv;
     }
 
     /// `(conj! tt row)`. The row is CHECKED exactly as the persistent path

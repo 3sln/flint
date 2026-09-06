@@ -56,6 +56,12 @@ public final class Table {
     // Row-ref slots, and the transient's.
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // THE FILL HALF, generated from `kin/tablefill.kin`.
+    static void writeRow(Rt rt, long s, long ch, int k, long row) { com._3sln.flint.kgen.rt.Tablefill.writeRow(rt, s, ch, k, row); }
+    static long openChunk(Rt rt, long s) { return com._3sln.flint.kgen.rt.Tablefill.openChunk(rt, s); }
+    static long chunkWithRow(Rt rt, long s, long ch, int k, long row, boolean grow) { return com._3sln.flint.kgen.rt.Tablefill.chunkWithRow(rt, s, ch, k, row, grow); }
+    static long seal(Rt rt, long s, long open, int rows) { return com._3sln.flint.kgen.rt.Tablefill.seal(rt, s, open, rows); }
+
     // THE CHUNK HALF, generated from `kin/tablecell.kin`. `newObj` is gone
     // rather than shimmed: it was a second copy of `Conc.newObj`, and the
     // vocabulary now points at that one.
@@ -338,69 +344,6 @@ public final class Table {
         }
         rt.popTo(base);
         return Val.NIL;
-    }
-
-    static void writeRow(Rt rt, long s, long ch, int k, long row) {
-        int base = rt.mark();
-        int si = rt.push(s);
-        int ci = rt.push(ch);
-        int ri = rt.push(row);
-        int n = schemaLen(rt, rt.r(si));
-        rt.chargeWork(n);
-        for (int c = 0; c < n; c++) {
-            int id = schemaIdAt(rt, rt.r(si), c);
-            long v = rowColumn(rt, rt.r(si), rt.r(ri), c);
-            set(rt, rt.slot(rt.r(ci), CH_BASE + id), k, v);
-        }
-        rt.popTo(base);
-    }
-
-    /// A copy of chunk `ch` with row `k` replaced, and optionally one more row
-    /// of room. The chunk and every column it holds are copied, which is what
-    /// keeps a ref looking at the old one valid: a persistent structure does
-    /// not edit what somebody else can see.
-    static long chunkWithRow(Rt rt, long s, long ch, int k, long row, boolean grow) {
-        int base = rt.mark();
-        int si = rt.push(s);
-        int ci = rt.push(ch);
-        int ri = rt.push(row);
-        int old = chunkRows(rt, rt.r(ci));
-        int take = grow ? old + 1 : old;
-        int width = schemaWidth(rt, rt.r(si));
-        long nch = newChunk(rt, width, take);
-        int ni = rt.push(nch);
-        int ncols = schemaLen(rt, rt.r(si));
-        // Only the columns the schema NAMES are carried over: a slot the schema
-        // has dropped is left empty, which is where the "data stays resident
-        // until a chunk is next rewritten" trade is paid back.
-        for (int c = 0; c < ncols; c++) {
-            int id = schemaIdAt(rt, rt.r(si), c);
-            long newv = rowColumn(rt, rt.r(si), rt.r(ri), c);
-            int vi = rt.push(newv);
-            // A CONSTANT column whose new value is the same value stays
-            // constant, and costs nothing to carry.
-            boolean stays = chunkEnc(rt, rt.r(ci), id) == ENC_CONST
-                && Eq.eq(rt, rt.slot(rt.r(ci), CH_BASE + id), rt.r(vi));
-            if (stays) {
-                set(rt, rt.r(ni), CH_BASE + id, rt.slot(rt.r(ci), CH_BASE + id));
-                set(rt, rt.slot(rt.r(ni), CH_ENC), id, Val.fixnum(ENC_CONST));
-                rt.popTo(vi);
-                continue;
-            }
-            long col = Conc.newObj(rt, TY_NODE, Math.max(take, 1));
-            int cj = rt.push(col);
-            for (int j = 0; j < Math.min(old, take); j++)
-                set(rt, rt.r(cj), j, chunkGet(rt, rt.r(ci), id, j));
-            set(rt, rt.r(cj), k, rt.r(vi));
-            set(rt, rt.r(ni), CH_BASE + id, rt.r(cj));
-            // Replacing the one row that differed can make a column constant
-            // again, so the collapse is checked on the way out as well as in.
-            collapse(rt, rt.r(ni), id);
-            rt.popTo(vi);
-        }
-        long out = rt.r(ni);
-        rt.popTo(base);
-        return out;
     }
 
     /// `(assoc table i row)`. `i` may be `count`, which appends -- the same
@@ -765,22 +708,6 @@ public final class Table {
     // 256 copies per chunk: 49 061 464 bytes to build 20 000 rows against
     // 3 082 984 through here (`doc/decisions/0026` step 7).
 
-    static long openChunk(Rt rt, long s) {
-        int base = rt.mark();
-        int si = rt.push(s);
-        int width = schemaWidth(rt, rt.r(si));
-        int ci = rt.push(newChunk(rt, width, 0));
-        int ncols = schemaLen(rt, rt.r(si));
-        for (int c = 0; c < ncols; c++)
-            {
-                long colN = Conc.newObj(rt, TY_NODE, CHUNK);
-                set(rt, rt.r(ci), CH_BASE + schemaIdAt(rt, rt.r(si), c), colN);
-            }
-        long out = rt.r(ci);
-        rt.popTo(base);
-        return out;
-    }
-
     /// `(transient t)`. The table's own chunks are carried over UNCHANGED --
     /// they are persistent and shared, and a transient must never write into
     /// something a table can still see.
@@ -831,30 +758,6 @@ public final class Table {
             + " on a transient table that persistent! has already taken; a transient is used"
             + " once and the table it produced is the value");
         return false;
-    }
-
-    /// A chunk holding exactly `rows` rows, copied out of the open one -- and
-    /// the moment the encodings are decided, because it is the first moment a
-    /// column is complete.
-    static long seal(Rt rt, long s, long open, int rows) {
-        int base = rt.mark();
-        int si = rt.push(s);
-        int oi = rt.push(open);
-        int width = schemaWidth(rt, rt.r(si));
-        int ci = rt.push(newChunk(rt, width, rows));
-        int ncols = schemaLen(rt, rt.r(si));
-        for (int c = 0; c < ncols; c++) {
-            int id = schemaIdAt(rt, rt.r(si), c);
-            int cj = rt.push(Conc.newObj(rt, TY_NODE, Math.max(rows, 1)));
-            int sj = rt.push(rt.slot(rt.r(oi), CH_BASE + id));
-            for (int k = 0; k < rows; k++) set(rt, rt.r(cj), k, rt.slot(rt.r(sj), k));
-            set(rt, rt.r(ci), CH_BASE + id, rt.r(cj));
-            collapse(rt, rt.r(ci), id);
-            rt.popTo(cj);
-        }
-        long out = rt.r(ci);
-        rt.popTo(base);
-        return out;
     }
 
     /// `(conj! tt row)`. The row is CHECKED exactly as the persistent path

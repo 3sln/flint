@@ -526,87 +526,6 @@ impl Rt {
         NIL
     }
 
-    /// One row of `rows` (a vector) written into chunk `ch` at `k`, column by
-    /// column. Shared by `new_table` and the assoc path so the two cannot drift
-    /// on what a row is allowed to be.
-    fn write_row(&mut self, s: Value, ch: Value, k: u32, row: Value) {
-        let base = self.mark();
-        let si = self.push(s);
-        let ci = self.push(ch);
-        let ri = self.push(row);
-        let n = self.schema_len(self.r(si));
-        self.charge_work(n as u64);
-        for c in 0..n {
-            let id = self.schema_id_at(self.r(si), c);
-            let v = self.row_column(self.r(si), self.r(ri), c);
-            let col = self.slot(self.r(ci), CH_BASE + id);
-            self.set(col, k, v);
-        }
-        self.pop_to(base);
-    }
-
-    /// A copy of chunk `ch` with row `k` replaced by `row`, and optionally one
-    /// more row of room. The chunk and every column it holds are copied, which
-    /// is what makes the ref that was looking at the old one still valid: a
-    /// persistent structure does not edit what someone else can see.
-    fn chunk_with_row(&mut self, s: Value, ch: Value, k: u32, row: Value, grow: bool) -> Value {
-        let base = self.mark();
-        let si = self.push(s);
-        let ci = self.push(ch);
-        let ri = self.push(row);
-        let old = self.chunk_rows(self.r(ci));
-        let take = if grow { old + 1 } else { old };
-        let width = self.schema_width(self.r(si));
-        let nch = self.new_chunk(width, take);
-        let ni = self.push(nch);
-        let ncols = self.schema_len(self.r(si));
-        // Only the columns the schema NAMES are carried over. A slot the schema
-        // has dropped is left empty, which is where the "data stays resident and
-        // invisible until a chunk is next rewritten" trade in `0026` is paid
-        // back -- a migration is head-only, and the first write to a chunk after
-        // it is what actually reclaims.
-        for c in 0..ncols {
-            let id = self.schema_id_at(self.r(si), c);
-            let newv = self.row_column(self.r(si), self.r(ri), c);
-            let vi = self.push(newv);
-            // A CONSTANT column whose new value is the same value stays
-            // constant, and costs nothing to carry: this is the case that makes
-            // appending to a table with a constant column cheap rather than the
-            // case that un-does the encoding.
-            let stays = self.chunk_enc(self.r(ci), id) == ENC_CONST && {
-                let cv = self.slot(self.r(ci), CH_BASE + id);
-                self.eq(cv, self.r(vi))
-            };
-            if stays {
-                let cv = self.slot(self.r(ci), CH_BASE + id);
-                self.set(self.r(ni), CH_BASE + id, cv);
-                let e = self.slot(self.r(ni), CH_ENC);
-                self.set(e, id, Value::fixnum(ENC_CONST as i64));
-                self.pop_to(vi);
-                continue;
-            }
-            let col = self.new_obj(TY_NODE, take.max(1));
-            let cj = self.push(col);
-            for j in 0..core::cmp::min(old, take) {
-                let v = self.chunk_get(self.r(ci), id, j);
-                self.set(self.r(cj), j, v);
-            }
-            let vv = self.r(vi);
-            self.set(self.r(cj), k, vv);
-            let cv = self.r(cj);
-            self.set(self.r(ni), CH_BASE + id, cv);
-            // Replacing the one row that differed can make a column constant
-            // again, so the collapse is checked on the way out as well as on
-            // the way in. Without it a table would only ever lose encodings.
-            let nv = self.r(ni);
-            self.collapse(nv, id);
-            self.pop_to(vi);
-        }
-        let out = self.r(ni);
-        self.pop_to(base);
-        out
-    }
-
     /// `(assoc table i row)`. `i` may be `count`, which appends -- the same
     /// rule a vector follows, so nothing new has to be learned to grow one.
     pub fn table_assoc(&mut self, t: Value, k: Value, row: Value) -> Value {
@@ -921,26 +840,6 @@ impl Rt {
     // does. Worth knowing before trusting gas as a proxy for work: it measures
     // the program, not the runtime underneath it.
 
-    /// A fresh open chunk: full width, `CHUNK` rows of room, every column flat.
-    /// Rows are written into it in place; nothing else can see it until it is
-    /// sealed, which is what makes the mutation sound.
-    fn open_chunk(&mut self, s: Value) -> Value {
-        let base = self.mark();
-        let si = self.push(s);
-        let width = self.schema_width(self.r(si));
-        let ch = self.new_chunk(width, 0);
-        let ci = self.push(ch);
-        let ncols = self.schema_len(self.r(si));
-        for c in 0..ncols {
-            let id = self.schema_id_at(self.r(si), c);
-            let col = self.new_obj(TY_NODE, CHUNK);
-            self.set(self.r(ci), CH_BASE + id, col);
-        }
-        let out = self.r(ci);
-        self.pop_to(base);
-        out
-    }
-
     /// `(transient t)`. The table's own chunks are carried over UNCHANGED --
     /// they are persistent and shared, and a transient must never write into
     /// something a table can still see. A partial last chunk is copied into the
@@ -1001,39 +900,6 @@ impl Rt {
         );
         self.throw_str("IllegalStateException", &msg);
         false
-    }
-
-    /// A chunk holding exactly `rows` rows, copied out of the open one. The
-    /// open chunk is `CHUNK` wide whatever it holds, so the last one has to be
-    /// cut down -- and that is the moment the encodings are decided, because it
-    /// is the first moment the column is complete.
-    fn seal(&mut self, s: Value, open: Value, rows: u32) -> Value {
-        let base = self.mark();
-        let si = self.push(s);
-        let oi = self.push(open);
-        let width = self.schema_width(self.r(si));
-        let ch = self.new_chunk(width, rows);
-        let ci = self.push(ch);
-        let ncols = self.schema_len(self.r(si));
-        for c in 0..ncols {
-            let id = self.schema_id_at(self.r(si), c);
-            let col = self.new_obj(TY_NODE, rows.max(1));
-            let cj = self.push(col);
-            let src = self.slot(self.r(oi), CH_BASE + id);
-            let sj = self.push(src);
-            for k in 0..rows {
-                let v = self.slot(self.r(sj), k);
-                self.set(self.r(cj), k, v);
-            }
-            let cv = self.r(cj);
-            self.set(self.r(ci), CH_BASE + id, cv);
-            let chv = self.r(ci);
-            self.collapse(chv, id);
-            self.pop_to(cj);
-        }
-        let out = self.r(ci);
-        self.pop_to(base);
-        out
     }
 
     /// `(conj! tt row)`. The row is checked against the schema exactly as the

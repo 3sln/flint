@@ -1,0 +1,156 @@
+;; Filling a chunk, and rewriting one with a row replaced or appended.
+;;
+;; A CHUNK IS COPIED PER WRITE on the persistent path, which is why the
+;; transient exists: `0026` measured filling 20 000 rows this way at 49 MB and
+;; 23 collections against 3.2 MB and 4 for the bulk path. What is here is the
+;; correct-and-slow half; `seal` is the fast half's last step.
+(ns flint.rt.tablefill
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == < > + and not
+                                   slot set-slot fixnum new-obj charge-work
+                                   val-eq local set for continue
+                                   mark push r pop-to
+                                   Rt Value I32 Bool RootIx
+                                   TY_NODE CHUNK CH_BASE CH_ENC ENC_CONST]]
+            [flint.rt.tablemeta :refer [schema-len schema-width schema-id-at
+                                        chunk-rows chunk-enc chunk-get]]
+            [flint.rt.tablecell :refer [new-chunk collapse row-column]]))
+
+(doc "Write row `k` of `ch` from `row`, column by column."
+     ""
+     "The chunk is already the right shape; this only fills it.")
+(defn ^:pub ^:method write-row [^:mut ^Rt rt ^Value s ^Value ch ^I32 k ^Value row]
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt s)
+        ^RootIx ci (push rt ch)
+        ^RootIx ri (push rt row)
+        ^I32 n (schema-len rt (r rt si))]
+    (charge-work rt n)
+    (for [^I32 c 0 n]
+      (let [^I32 id (schema-id-at rt (r rt si) c)
+            ^Value v (row-column rt (r rt si) (r rt ri) c)
+            ^Value col (slot rt (r rt ci) (+ CH_BASE id))]
+        (set-slot rt col k v)))
+    (pop-to rt base)))
+
+(doc "An OPEN chunk: full-width columns and no rows written yet."
+     ""
+     "The transient fills one of these in place and `seal` copies out only the"
+     "rows that were actually written.")
+(defn ^:pub ^:method ^Value open-chunk [^:mut ^Rt rt ^Value s]
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt s)
+        ^I32 width (schema-width rt (r rt si))
+        ^Value ch (new-chunk rt width 0)
+        ^RootIx ci (push rt ch)
+        ^I32 ncols (schema-len rt (r rt si))]
+    (for [^I32 c 0 ncols]
+      (let [^I32 id (schema-id-at rt (r rt si) c)
+            ^Value col (new-obj rt TY_NODE CHUNK)]
+        (set-slot rt (r rt ci) (+ CH_BASE id) col)))
+    (let [^Value out (r rt ci)]
+      (pop-to rt base)
+      (return out))))
+
+(doc "A copy of `ch` with row `k` set from `row`, one row longer when `grow`."
+     ""
+     "ONLY THE COLUMNS THE SCHEMA NAMES ARE CARRIED OVER. A slot the schema has"
+     "dropped is left empty, which is where the `data stays resident and"
+     "invisible until a chunk is next rewritten` trade in `0026` is paid back:"
+     "a migration is head-only, and the first write to a chunk after it is what"
+     "actually reclaims."
+     ""
+     "A CONSTANT COLUMN WHOSE NEW VALUE IS THE SAME VALUE STAYS CONSTANT, and"
+     "costs nothing to carry. That is the case that makes appending to a table"
+     "with a constant column cheap -- not the case that un-does the encoding.")
+(defn ^:pub ^:method ^Value chunk-with-row
+  [^:mut ^Rt rt ^Value s ^Value ch ^I32 k ^Value row ^Bool grow]
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt s)
+        ^RootIx ci (push rt ch)
+        ^RootIx ri (push rt row)
+        ^I32 old (chunk-rows rt (r rt ci))]
+    (local ^:mut ^I32 take)
+    (set take old)
+    (if grow (set take (+ old 1)))
+    (comment "`carry` is how many of the OLD rows survive: the smaller of the"
+             "two lengths, because a shrinking rewrite must not read past the"
+             "new column's end.")
+    (local ^:mut ^I32 carry)
+    (set carry old)
+    (if (> carry take) (set carry take))
+    (local ^:mut ^I32 coln)
+    (set coln take)
+    (if (< coln 1) (set coln 1))
+    (let [^I32 width (schema-width rt (r rt si))
+          ^Value nch (new-chunk rt width take)
+          ^RootIx ni (push rt nch)
+          ^I32 ncols (schema-len rt (r rt si))]
+      (for [^I32 c 0 ncols]
+        (let [^I32 id (schema-id-at rt (r rt si) c)
+              ^Value newv (row-column rt (r rt si) (r rt ri) c)
+              ^RootIx vi (push rt newv)
+              ^Bool stays (and (== (chunk-enc rt (r rt ci) id) ENC_CONST)
+                               (val-eq rt (slot rt (r rt ci) (+ CH_BASE id))
+                                       (r rt vi)))]
+          (if stays
+            (do
+              (comment "THE SLOT IS RE-READ, not carried across `val-eq`."
+                       "Equality may allocate -- comparing two ropes can"
+                       "flatten one -- and 0031 says a value in a host local"
+                       "does not survive an allocation. The chunk itself is"
+                       "rooted, so reading through it again is always safe.")
+              (set-slot rt (r rt ni) (+ CH_BASE id)
+                        (slot rt (r rt ci) (+ CH_BASE id)))
+              (set-slot rt (slot rt (r rt ni) CH_ENC) id (fixnum ENC_CONST))
+              (pop-to rt vi)
+              (continue)))
+          (let [^Value col (new-obj rt TY_NODE coln)
+                ^RootIx cj (push rt col)]
+            (comment "`v` is HOISTED: `set-slot` and `chunk-get` both take"
+                     "`&mut self` in Rust, and an argument is evaluated while"
+                     "the receiver is already borrowed.")
+            (for [^I32 j 0 carry]
+              (let [^Value v (chunk-get rt (r rt ci) id j)]
+                (set-slot rt (r rt cj) j v)))
+            (set-slot rt (r rt cj) k (r rt vi))
+            (set-slot rt (r rt ni) (+ CH_BASE id) (r rt cj))
+            (comment "REPLACING THE ONE ROW THAT DIFFERED can make a column"
+                     "constant again, so the collapse is checked on the way out"
+                     "as well as on the way in. Without it a table would only"
+                     "ever lose encodings.")
+            (collapse rt (r rt ni) id))
+          (pop-to rt vi)))
+      (let [^Value out (r rt ni)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "Copy the first `rows` rows out of an open chunk into a sealed one."
+     ""
+     "The open chunk's columns are `CHUNK` long whatever was written; the"
+     "sealed copy is exactly `rows`, and each column is collapsed on the way.")
+(defn ^:pub ^:method ^Value seal [^:mut ^Rt rt ^Value s ^Value open ^I32 rows]
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt s)
+        ^RootIx oi (push rt open)
+        ^I32 width (schema-width rt (r rt si))
+        ^Value ch (new-chunk rt width rows)
+        ^RootIx ci (push rt ch)
+        ^I32 ncols (schema-len rt (r rt si))]
+    (local ^:mut ^I32 coln)
+    (set coln rows)
+    (if (< coln 1) (set coln 1))
+    (for [^I32 c 0 ncols]
+      (let [^I32 id (schema-id-at rt (r rt si) c)
+            ^Value col (new-obj rt TY_NODE coln)
+            ^RootIx cj (push rt col)
+            ^Value src (slot rt (r rt oi) (+ CH_BASE id))
+            ^RootIx sj (push rt src)]
+        (for [^I32 k 0 rows]
+          (set-slot rt (r rt cj) k (slot rt (r rt sj) k)))
+        (set-slot rt (r rt ci) (+ CH_BASE id) (r rt cj))
+        (collapse rt (r rt ci) id)
+        (pop-to rt cj)))
+    (let [^Value out (r rt ci)]
+      (pop-to rt base)
+      (return out))))
