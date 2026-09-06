@@ -46,15 +46,6 @@ public static class Builtins {
 
     /// A MAP ENTRY as a real two-element vector, for the operations Clojure
     /// gives vector semantics: `conj` appends, `assoc` replaces.
-    static long MapEntryAsVec(Rt rt, long e) {
-        int bas = rt.Mark();
-        rt.Push(rt.Slot(e, 0));
-        rt.Push(rt.Slot(e, 1));
-        long outv = Vec.FromRoots(rt, bas, 2);
-        rt.PopTo(bas);
-        return outv;
-    }
-
     public static Fn ByName(string n) => Table.TryGetValue(n, out var f) ? f : null;
     static void Def(string n, Fn f) => Table[n] = f;
 
@@ -263,35 +254,13 @@ public static class Builtins {
         // arm for a TRANSIENT TABLE, so `(count (transient t))` threw here
         // and answered on wasm.
         Def("count", (rt, at, n) => Val.Fixnum(Collgen.CountOf(rt, rt.VAt(at))));
-        Def("nth", (rt, at, n) => {
-            long v = rt.VAt(at);
-            int i = (int) Val.AsFixnum(rt.VAt(at + 1));
-            long got = Val.NotFound;
-            if (rt.IsHeapTy(v, Obj.TyVec)) {
-                got = Vec.Nth(rt, v, i, Val.NotFound);
-            } else if (Str.IsString(rt, v)) {
-                got = Str.Nth(rt, v, i, Val.NotFound);
-            } else if (rt.IsHeapTy(v, Obj.TyMapentry)) {
-                if (i == 0 || i == 1) got = rt.Slot(v, i);
-            } else if (Val.IsNil(v)) {
-                got = Val.NotFound;
-            } else if (rt.IsSeq(v)) {
-                // O(n), as Clojure's `nth` on a seq is. Walking rather than
-                // refusing, because `nth` over a seq is ordinary code and the
-                // cost is the caller's to know about.
-                int bas = rt.Mark();
-                int sq = rt.Push(Seqs.Seq(rt, v));
-                for (int k = 0; k < i && !Val.IsNil(rt.R(sq)); k++) rt.SetR(sq, Seqs.Next(rt, rt.R(sq)));
-                if (!Val.IsNil(rt.R(sq))) got = global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(sq));
-                rt.PopTo(bas);
-            } else {
-                return rt.ThrowStr("UnsupportedOperationException", 
-                    "nth over " + rt.Describe(v) + " needs more of the data structures");
-            }
-            if (got != Val.NotFound) return got;
-            if (n > 2) return rt.VAt(at + 2);
-            return rt.ThrowStr("IndexOutOfBoundsException", "index " + i + " out of range");
-        });
+        // The hand-written body read the index with `AsFixnum` and no check,
+        // so a keyword index was garbage rather than a refusal and a BIGINT
+        // index was a different number. It also had no arm for BYTES, which
+        // `count` and `get` both have -- so `(nth bs 1)` said the index was
+        // out of range on a byte string plainly long enough.
+        Def("nth", (rt, at, n) => Collwrite.CollNth(rt, rt.VAt(at), rt.VAt(at + 1),
+                                                    n > 2 ? rt.VAt(at + 2) : Val.NotFound));
         Def("conj", (rt, at, n) => {
             long v = rt.VAt(at);
             // `conj` on a table APPENDS A ROW.
@@ -333,7 +302,7 @@ public static class Builtins {
             // -- both readings exist and Clojure picks the vector one.
             if (rt.IsHeapTy(v, Obj.TyMapentry)) {
                 int mb = rt.Mark();
-                int vi = rt.Push(MapEntryAsVec(rt, v));
+                int vi = rt.Push(Vec.MapEntryAsVec(rt, v));
                 for (int i = 1; i < n; i++) rt.SetR(vi, Vec.Conj(rt, rt.R(vi), rt.VAt(at + i)));
                 long o2 = rt.R(vi);
                 rt.PopTo(mb);
@@ -347,9 +316,9 @@ public static class Builtins {
             return rt.ThrowStr("UnsupportedOperationException", "conj onto " + rt.Describe(v) + " needs more of the data structures");
         });
 
-        Def("seq", (rt, at, n) => Seqs.Seq(rt, rt.VAt(at)));
+        Def("seq", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, rt.VAt(at)));
         Def("first", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.VAt(at)));
-        Def("next", (rt, at, n) => Seqs.Next(rt, rt.VAt(at)));
+        Def("next", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.VAt(at)));
         Def("rest", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Seqwalk.Rest(rt, rt.VAt(at)));
         Def("cons", (rt, at, n) => Seqs.Cons(rt, rt.VAt(at), rt.VAt(at + 1)));
 
@@ -447,85 +416,19 @@ public static class Builtins {
         // fixnum was a miss rather than an out-of-range index.
         Def("get", (rt, at, n) => Collread.CollGet(rt, rt.VAt(at), rt.VAt(at + 1),
                                                    n > 2 ? rt.VAt(at + 2) : Val.Nil));
+        // GENERATED, from `kin/collwrite.kin`. The hand-written body returned
+        // after ONE pair for a table or a ref, so `(assoc t 0 r 1 r2)` dropped
+        // the second -- the loop only wrapped the map arm. One step, folded.
         Def("assoc", (rt, at, n) => {
-            long acc = rt.VAt(at);
-            if (Val.IsNil(acc)) acc = Maps.Empty(rt);
-            // A table is indexed by ROW and its schema is CLOSED, so the
-            // refusals live where the schema is (`doc/decisions/0026`).
-            if (Flint.Rt.Table.isTable(rt, acc)) return Flint.Rt.Table.tableAssoc(rt, acc, rt.VAt(at + 1), rt.VAt(at + 2));
-            // A ref is a VIEW: changing it produces an independent MAP.
-            if (Flint.Rt.Table.isTableRef(rt, acc)) return Flint.Rt.Table.refAssoc(rt, acc, rt.VAt(at + 1), rt.VAt(at + 2));
-            if (Mapcore.IsMap(rt, acc)) {
-                int bas = rt.Mark();
-                int ai = rt.Push(acc);
-                for (int i = 1; i + 1 < n; i += 2) {
-                    long nm = Mapwrite.MapAssoc(rt, rt.R(ai), rt.VAt(at + i), rt.VAt(at + i + 1));
-                    rt.SetR(ai, nm);
-                }
-                long outv = rt.R(ai);
-                rt.PopTo(bas);
-                return outv;
+            int bas = rt.Mark();
+            int ai = rt.Push(rt.VAt(at));
+            for (int i = 1; i + 1 < n; i += 2) {
+                long nm = Collwrite.CollAssocGen(rt, rt.R(ai), rt.VAt(at + i), rt.VAt(at + i + 1));
+                rt.SetR(ai, nm);
             }
-            // Two slots and nowhere for a third, so `assoc` on either key keeps
-            // the type and anything else is refused, NAMING the key
-            // (`doc/decisions/0034`).
-            if (rt.IsHeapTy(acc, Obj.TyTagged)) {
-                int bas = rt.Mark();
-                int ai = rt.Push(acc);
-                for (int i = 1; i + 1 < n; i += 2) {
-                    long k = rt.VAt(at + i), v = rt.VAt(at + i + 1);
-                    long cur = rt.R(ai);
-                    if (k == Str.Keyword(rt, null, "tag")) {
-                        if (!rt.IsHeapTy(v, Obj.TySym)) {
-                            rt.PopTo(bas);
-                            return rt.ThrowStr("IllegalArgumentException",
-                                "a tagged literal's :tag must be a symbol");
-                        }
-                        rt.SetR(ai, rt.NewTagged(v, rt.Slot(cur, 1)));
-                    } else if (k == Str.Keyword(rt, null, "form")) {
-                        rt.SetR(ai, rt.NewTagged(rt.Slot(cur, 0), v));
-                    } else {
-                        rt.PopTo(bas);
-                        return rt.ThrowStr("IllegalArgumentException",
-                            "a tagged literal has :tag and :form and nothing else, so it "
-                            + "cannot take :" + Str.Text(rt, KwName(rt, k)));
-                    }
-                }
-                long outt = rt.R(ai);
-                rt.PopTo(bas);
-                return outt;
-            }
-            if (rt.IsHeapTy(acc, Obj.TyVec)) {
-                int bas = rt.Mark();
-                int ai = rt.Push(acc);
-                for (int i = 1; i + 1 < n; i += 2) {
-                    rt.SetR(ai, Vec.Assoc(rt, rt.R(ai),
-                                          (int) Val.AsFixnum(rt.VAt(at + i)), rt.VAt(at + i + 1)));
-                }
-                long outv = rt.R(ai);
-                rt.PopTo(bas);
-                return outv;
-            }
-            // A MAP ENTRY is a vector, so it is associative and `assoc`
-            // indexes it. Without this it would answer `associative?` true --
-            // that is `(or map? vector?)` -- and then refuse.
-            if (rt.IsHeapTy(acc, Obj.TyMapentry)) {
-                int ab = rt.Mark();
-                int avi = rt.Push(MapEntryAsVec(rt, acc));
-                for (int i = 1; i + 1 < n; i += 2) {
-                    long k4 = rt.VAt(at + i);
-                    if (!Val.IsFixnum(k4)) {
-                        rt.PopTo(ab);
-                        return rt.ThrowStr("IllegalArgumentException",
-                                           "a map entry is indexed by 0 and 1");
-                    }
-                    rt.SetR(avi, Vec.Assoc(rt, rt.R(avi), (int) Val.AsFixnum(k4), rt.VAt(at + i + 1)));
-                }
-                long o3 = rt.R(avi);
-                rt.PopTo(ab);
-                return o3;
-            }
-            return rt.ThrowStr("UnsupportedOperationException", "assoc onto " + rt.Describe(acc) + " needs more of the data structures");
+            long outv = rt.R(ai);
+            rt.PopTo(bas);
+            return outv;
         });
         Def("dissoc", (rt, at, n) => {
             long acc = rt.VAt(at);
@@ -687,14 +590,14 @@ public static class Builtins {
         Def("flint/str-join", (rt, at, n) => {
             var sb = new System.Text.StringBuilder();
             int bas = rt.Mark();
-            int s = rt.Push(Seqs.Seq(rt, rt.VAt(at)));
+            int s = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, rt.VAt(at)));
             long ticks = 0;
             while (!Val.IsNil(rt.R(s))) {
                 // CHARGED AND CHECKED INSIDE THE LOOP: the length is not known
                 // until the walk ends (`doc/decisions/0009`).
                 if (!rt.ChargeTick(ticks++, 1, "str-join")) { rt.PopTo(bas); return Val.Nil; }
                 sb.Append(Str.Text(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(s))));
-                rt.SetR(s, Seqs.Next(rt, rt.R(s)));
+                rt.SetR(s, global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(s)));
             }
             rt.PopTo(bas);
             rt.ChargeBytes(sb.Length);
@@ -823,13 +726,13 @@ public static class Builtins {
         /// `doc/decisions/0031`.
         Def("flint/array-map", (rt, at, n) => {
             int bas = rt.Mark();
-            int si = rt.Push(Seqs.Seq(rt, rt.VAt(at)));
+            int si = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, rt.VAt(at)));
             int valsAt = rt.Mark();
             int count = 0;
             while (!Val.IsNil(rt.R(si))) {
                 rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(si)));
                 count++;
-                rt.SetR(si, Seqs.Next(rt, rt.R(si)));
+                rt.SetR(si, global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(si)));
             }
             if (count % 2 != 0) {
                 rt.PopTo(bas);
@@ -1079,12 +982,12 @@ public static class Builtins {
         Def("flint/apply", (rt, at, n) => {
             int bas = rt.Mark();
             int fi = rt.Push(rt.VAt(at));
-            int si = rt.Push(Seqs.Seq(rt, rt.VAt(at + 1)));
+            int si = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, rt.VAt(at + 1)));
             int count = 0;
             while (!Val.IsNil(rt.R(si))) {
                 rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(si)));
                 count++;
-                rt.SetR(si, Seqs.Next(rt, rt.R(si)));
+                rt.SetR(si, global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(si)));
             }
             long[] argv = new long[count];
             for (int i = 0; i < count; i++) argv[i] = rt.R(si + 1 + i);

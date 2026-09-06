@@ -1,0 +1,452 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const NOT_FOUND: Value = Value(0xFFFE);
+const TY_ARRAYMAP: u8 = 10; const TY_HASHMAP: u8 = 11; const TY_VEC: u8 = 12;
+const TY_TAGGED: u8 = 13; const TY_TABLE: u8 = 14; const TY_TABLEREF: u8 = 15;
+const TY_MAPENTRY: u8 = 16; const TY_STR: u8 = 17; const TY_BYTES: u8 = 18;
+const TY_CONS: u8 = 19; const TY_OTHER: u8 = 20; const TY_SYM: u8 = 21;
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+// `seqn` is how long the walked seq is, and `strn`/`bytn`/`vecn` are the
+// bounds the three indexed arms probe against. Each arm has to tell PAST THE
+// END from "the element is nil", so each needs a length it can be past.
+struct Rt { gc: Gc, bump: u64, roots: Vec<Value>, thrown: String,
+            vecn: u32, strn: u32, bytn: u32, seqn: u32, sym: bool }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 && self.0 != NOT_FOUND.0 && (self.0 >> 40) == 0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+fn int(n: i64) -> Value { Value(0x100_0000_0000u64 | (n as u64 & 0xFFFF_FFFF)) }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn slot(&self, _v: Value, i: u32) -> Value { Value(0x700 + i as u64) }
+    fn throw_str(&mut self, class: &str, msg: &str) -> Value {
+        self.thrown = format!("{}/{}", class, msg); NIL
+    }
+    fn obj(&mut self, t: u8) -> Value {
+        let a = self.bump; self.bump += 8;
+        self.gc.sp.m[a as usize] = t;
+        Value(a)
+    }
+    fn is_string(&mut self, v: Value) -> bool { v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_STR }
+    fn is_bytes(&mut self, v: Value) -> bool { v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_BYTES }
+    fn is_symbol(&mut self, v: Value) -> bool { let _ = v; self.sym }
+    fn is_int(&mut self, v: Value) -> bool { (v.0 >> 40) == 1 }
+    fn i64_of(&mut self, v: Value) -> i64 { ((v.0 & 0xFFFF_FFFF) as u32) as i32 as i64 }
+    fn keyword(&mut self, _ns: Option<&str>, n: &str) -> Value {
+        if n == "tag" { Value(0x8A) } else { Value(0x8B) }
+    }
+    fn name_of(&mut self, _k: Value) -> Value { Value(0x8D) }
+    fn value_text(&mut self, _v: Value) -> alloc::string::String { alloc::string::String::from("zz") }
+    fn empty_map(&self) -> Value { Value(0x900) }
+    fn map_assoc(&mut self, _m: Value, _k: Value, _v: Value) -> Value { Value(0x901) }
+    fn vec_assoc(&mut self, _v: Value, i: u32, _x: Value) -> Value { Value(0x910 + i as u64) }
+    fn vec_count(&mut self, _v: Value) -> u32 { self.vecn }
+    fn new_tagged(&mut self, _t: Value, _f: Value) -> Value { Value(0x902) }
+    fn table_assoc(&mut self, _t: Value, _k: Value, _v: Value) -> Value { Value(0x903) }
+    fn ref_assoc(&mut self, _r: Value, _k: Value, _v: Value) -> Value { Value(0x904) }
+    fn map_entry_as_vec(&mut self, _e: Value) -> Value { self.obj(TY_VEC) }
+    fn char_at(&mut self, _s: Value, i: u32, d: Value) -> Value {
+        if i < self.strn { Value(0x920 + i as u64) } else { d }
+    }
+    fn b_at(&mut self, _b: Value, i: u32, d: Value) -> Value {
+        if i < self.bytn { Value(0x930 + i as u64) } else { d }
+    }
+    fn vec_nth(&mut self, _v: Value, i: u32, d: Value) -> Value {
+        if i < self.vecn { Value(0x940 + i as u64) } else { d }
+    }
+    // The seq is modelled as a COUNTDOWN in the value itself, so `next` needs
+    // no cells: `0xC000 + k` is a seq with `k` elements left.
+    fn seq(&mut self, _c: Value) -> Value {
+        if self.seqn == 0 { NIL } else { Value(0xC000 + self.seqn as u64) }
+    }
+    fn first(&mut self, s: Value) -> Value { Value(0x950 + (s.0 - 0xC000)) }
+    fn next(&mut self, s: Value) -> Value {
+        if s.0 == 0xC001 { NIL } else { Value(s.0 - 1) }
+    }
+}
+impl Rt {
+--rust
+}
+extern crate alloc;
+fn main() {
+    let mut rt = Rt { gc: Gc { sp: Space { m: vec![0u8; 4000] } }, bump: 100,
+                      roots: Vec::new(), thrown: String::new(),
+                      vecn: 3, strn: 3, bytn: 3, seqn: 3, sym: true };
+    let mut o = String::new();
+    let k = Value(0x8C);
+    let v = Value(0x8E);
+
+    // ASSOC. nil makes a map; every tag has its own arm; the rest refuse.
+    o.push_str(&format!("nil={:x} ", rt.coll_assoc_gen(NIL, k, v).0));
+    rt.thrown.clear();
+    let fx = rt.coll_assoc_gen(Value(7), k, v);
+    o.push_str(&format!("fix={:x}|{}| ", fx.0, rt.thrown));
+    for t in [TY_ARRAYMAP, TY_HASHMAP, TY_TABLE, TY_TABLEREF, TY_MAPENTRY] {
+        let c = rt.obj(t);
+        o.push_str(&format!("{:x} ", rt.coll_assoc_gen(c, k, v).0));
+    }
+    rt.thrown.clear();
+    let ot = rt.obj(TY_OTHER);
+    let bad = rt.coll_assoc_gen(ot, k, v);
+    o.push_str(&format!("oth={:x}|{}| ", bad.0, rt.thrown));
+
+    // A VECTOR takes an index, and ONE PAST THE END APPENDS.
+    let vc = rt.obj(TY_VEC);
+    o.push_str(&format!("v={:x}/{:x} ", rt.coll_assoc_gen(vc, int(1), v).0,
+                        rt.coll_assoc_gen(vc, int(3), v).0));
+    rt.thrown.clear();
+    let _ = rt.coll_assoc_gen(vc, int(4), v);
+    o.push_str(&format!("|{}| ", rt.thrown));
+    rt.thrown.clear();
+    let _ = rt.coll_assoc_gen(vc, int(-1), v);
+    o.push_str(&format!("|{}| ", rt.thrown));
+    rt.thrown.clear();
+    let _ = rt.coll_assoc_gen(vc, k, v);
+    o.push_str(&format!("|{}| ", rt.thrown));
+
+    // A MAP ENTRY becomes a VECTOR and recurses, so an INDEX lands in the
+    // vector arm rather than being refused as a key.
+    let me = rt.obj(TY_MAPENTRY);
+    o.push_str(&format!("me={:x} ", rt.coll_assoc_gen(me, int(1), v).0));
+
+    // A TAGGED literal takes :tag and :form and refuses by NAME otherwise.
+    let tg = rt.obj(TY_TAGGED);
+    o.push_str(&format!("t={:x}/{:x} ", rt.coll_assoc_gen(tg, Value(0x8A), v).0,
+                        rt.coll_assoc_gen(tg, Value(0x8B), v).0));
+    rt.sym = false;
+    rt.thrown.clear();
+    let _ = rt.coll_assoc_gen(tg, Value(0x8A), v);
+    o.push_str(&format!("|{}| ", rt.thrown));
+    rt.sym = true;
+    rt.thrown.clear();
+    let _ = rt.coll_assoc_gen(tg, k, v);
+    o.push_str(&format!("|{}| ", rt.thrown));
+
+    // NTH. NOT_FOUND for `dflt` means THERE IS NONE, and every arm raises.
+    let d = Value(0x22);
+    rt.thrown.clear();
+    let _ = rt.coll_nth(vc, k, d);
+    o.push_str(&format!("n|{}| ", rt.thrown));
+    o.push_str(&format!("neg={:x} ", rt.coll_nth(vc, int(-1), d).0));
+    rt.thrown.clear();
+    let _ = rt.coll_nth(vc, int(-1), NOT_FOUND);
+    o.push_str(&format!("|{}| ", rt.thrown));
+    o.push_str(&format!("nil={:x}/{:x} ", rt.coll_nth(NIL, int(0), d).0,
+                        rt.coll_nth(NIL, int(0), NOT_FOUND).0));
+    let s = rt.obj(TY_STR);
+    let b = rt.obj(TY_BYTES);
+    let c = rt.obj(TY_CONS);
+    o.push_str(&format!("in={:x}/{:x}/{:x}/{:x} ", rt.coll_nth(s, int(1), d).0,
+                        rt.coll_nth(b, int(1), d).0, rt.coll_nth(vc, int(1), d).0,
+                        rt.coll_nth(c, int(1), d).0));
+    o.push_str(&format!("out={:x}/{:x}/{:x}/{:x} ", rt.coll_nth(s, int(9), d).0,
+                        rt.coll_nth(b, int(9), d).0, rt.coll_nth(vc, int(9), d).0,
+                        rt.coll_nth(c, int(9), d).0));
+    for (label, coll) in [("s", s), ("b", b), ("v", vc), ("c", c)] {
+        rt.thrown.clear();
+        let _ = rt.coll_nth(coll, int(9), NOT_FOUND);
+        o.push_str(&format!("{}|{}| ", label, rt.thrown));
+    }
+    // AN EMPTY SEQ, which is the walk that never enters its body.
+    rt.seqn = 0;
+    o.push_str(&format!("e={:x}", rt.coll_nth(c, int(0), d).0));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final long NOT_FOUND = 0xFFFEL;
+    static final int TY_ARRAYMAP = 10, TY_HASHMAP = 11, TY_VEC = 12;
+    static final int TY_TAGGED = 13, TY_TABLE = 14, TY_TABLEREF = 15;
+    static final int TY_MAPENTRY = 16, TY_STR = 17, TY_BYTES = 18;
+    static final int TY_CONS = 19, TY_OTHER = 20, TY_SYM = 21;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static final long NOT_FOUND = Probe.NOT_FOUND;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL && v != NOT_FOUND && (v >>> 40) == 0; }
+        static long asHeap(long v) { return v; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static long anInt(long n) { return 0x10000000000L | (n & 0xFFFFFFFFL); }
+    static final class Space { byte[] m = new byte[4000]; }
+    static final class Rt {
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        long bump = 100;
+        String thrown = "";
+        int vecn = 3, strn = 3, bytn = 3, seqn = 3;
+        boolean sym = true;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long v, int i) { return 0x700L + i; }
+        long throwStr(String cls, String msg) { thrown = cls + "/" + msg; return NIL; }
+        long obj(int t) { long a = bump; bump += 8; gc.sp.m[(int) a] = (byte) t; return a; }
+        long nameOf(long k) { return 0x8DL; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static final class Str {
+        static boolean isString(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR; }
+        static long keyword(Rt rt, String ns, String n) { return n.equals("tag") ? 0x8AL : 0x8BL; }
+        static long nth(Rt rt, long s, int i, long d) { return i < rt.strn ? 0x920L + i : d; }
+        static String text(Rt rt, long v) { return "zz"; }
+    }
+    static final class Num {
+        static boolean isInt(Rt rt, long v) { return (v >>> 40) == 1; }
+        static long i64Of(Rt rt, long v) { return (int) (v & 0xFFFFFFFFL); }
+    }
+    static boolean isBytes(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_BYTES; }
+    static boolean isSymbol(Rt rt, long v) { return rt.sym; }
+    static long mapAssoc(Rt rt, long m, long k, long v) { return 0x901L; }
+    static final class Vec {
+        static long assoc(Rt rt, long v, int i, long x) { return 0x910L + i; }
+        static int count(Rt rt, long v) { return rt.vecn; }
+        static long nth(Rt rt, long v, int i, long d) { return i < rt.vecn ? 0x940L + i : d; }
+        static long mapEntryAsVec(Rt rt, long e) { return rt.obj(TY_VEC); }
+    }
+    static long seq(Rt rt, long c) { return rt.seqn == 0 ? NIL : 0xC000L + rt.seqn; }
+    static long first(Rt rt, long s) { return 0x950L + (s - 0xC000L); }
+    static long next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+    static long newTagged(Rt rt, long t, long f) { return 0x902L; }
+    static long tableAssoc(Rt rt, long t, long k, long v) { return 0x903L; }
+    static long refAssoc(Rt rt, long r, long k, long v) { return 0x904L; }
+    static long bAt(Rt rt, long b, int i, long d) { return i < rt.bytn ? 0x930L + i : d; }
+    static final class com { static final class flint { static final class rt {
+        static final class Maps { static long empty(Rt rt) { return 0x900L; } }
+    } } }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long k = 0x8CL, v = 0x8EL;
+
+        o.append("nil=").append(Long.toHexString(collAssocGen(rt, NIL, k, v))).append(' ');
+        rt.thrown = "";
+        long fx = collAssocGen(rt, 7L, k, v);
+        o.append("fix=").append(Long.toHexString(fx)).append("|").append(rt.thrown).append("| ");
+        int[] tags = { TY_ARRAYMAP, TY_HASHMAP, TY_TABLE, TY_TABLEREF, TY_MAPENTRY };
+        for (int t : tags) o.append(Long.toHexString(collAssocGen(rt, rt.obj(t), k, v))).append(' ');
+        rt.thrown = "";
+        long ot = rt.obj(TY_OTHER);
+        long bad = collAssocGen(rt, ot, k, v);
+        o.append("oth=").append(Long.toHexString(bad)).append("|").append(rt.thrown).append("| ");
+
+        long vc = rt.obj(TY_VEC);
+        o.append("v=").append(Long.toHexString(collAssocGen(rt, vc, anInt(1), v))).append("/")
+         .append(Long.toHexString(collAssocGen(rt, vc, anInt(3), v))).append(' ');
+        rt.thrown = "";
+        collAssocGen(rt, vc, anInt(4), v);
+        o.append("|").append(rt.thrown).append("| ");
+        rt.thrown = "";
+        collAssocGen(rt, vc, anInt(-1), v);
+        o.append("|").append(rt.thrown).append("| ");
+        rt.thrown = "";
+        collAssocGen(rt, vc, k, v);
+        o.append("|").append(rt.thrown).append("| ");
+
+        long me = rt.obj(TY_MAPENTRY);
+        o.append("me=").append(Long.toHexString(collAssocGen(rt, me, anInt(1), v))).append(' ');
+
+        long tg = rt.obj(TY_TAGGED);
+        o.append("t=").append(Long.toHexString(collAssocGen(rt, tg, 0x8AL, v))).append("/")
+         .append(Long.toHexString(collAssocGen(rt, tg, 0x8BL, v))).append(' ');
+        rt.sym = false;
+        rt.thrown = "";
+        collAssocGen(rt, tg, 0x8AL, v);
+        o.append("|").append(rt.thrown).append("| ");
+        rt.sym = true;
+        rt.thrown = "";
+        collAssocGen(rt, tg, k, v);
+        o.append("|").append(rt.thrown).append("| ");
+
+        long d = 0x22L;
+        rt.thrown = "";
+        collNth(rt, vc, k, d);
+        o.append("n|").append(rt.thrown).append("| ");
+        o.append("neg=").append(Long.toHexString(collNth(rt, vc, anInt(-1), d))).append(' ');
+        rt.thrown = "";
+        collNth(rt, vc, anInt(-1), NOT_FOUND);
+        o.append("|").append(rt.thrown).append("| ");
+        o.append("nil=").append(Long.toHexString(collNth(rt, NIL, anInt(0), d))).append("/")
+         .append(Long.toHexString(collNth(rt, NIL, anInt(0), NOT_FOUND))).append(' ');
+        long s = rt.obj(TY_STR);
+        long b = rt.obj(TY_BYTES);
+        long c = rt.obj(TY_CONS);
+        o.append("in=").append(Long.toHexString(collNth(rt, s, anInt(1), d))).append("/")
+         .append(Long.toHexString(collNth(rt, b, anInt(1), d))).append("/")
+         .append(Long.toHexString(collNth(rt, vc, anInt(1), d))).append("/")
+         .append(Long.toHexString(collNth(rt, c, anInt(1), d))).append(' ');
+        o.append("out=").append(Long.toHexString(collNth(rt, s, anInt(9), d))).append("/")
+         .append(Long.toHexString(collNth(rt, b, anInt(9), d))).append("/")
+         .append(Long.toHexString(collNth(rt, vc, anInt(9), d))).append("/")
+         .append(Long.toHexString(collNth(rt, c, anInt(9), d))).append(' ');
+        String[] labels = { "s", "b", "v", "c" };
+        long[] colls = { s, b, vc, c };
+        for (int j = 0; j < 4; j++) {
+            rt.thrown = "";
+            collNth(rt, colls[j], anInt(9), NOT_FOUND);
+            o.append(labels[j]).append("|").append(rt.thrown).append("| ");
+        }
+        rt.seqn = 0;
+        o.append("e=").append(Long.toHexString(collNth(rt, c, anInt(0), d)));
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Maps {
+        internal static long Empty(Probe.Rt rt) { return 0x900L; }
+    }
+}
+--csharp-head
+#pragma warning disable CS8625
+    internal const long NIL = 0xFFFFL;
+    internal const long NOT_FOUND = 0xFFFEL;
+    internal static class Obj {
+        internal const int TyArraymap = 10, TyHashmap = 11, TyVec = 12;
+        internal const int TyTagged = 13, TyTable = 14, TyTableref = 15;
+        internal const int TyMapentry = 16, TyStr = 17, TyBytes = 18;
+        internal const int TyCons = 19, TyOther = 20, TySym = 21;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = Probe.NIL;
+        internal const long NotFound = Probe.NOT_FOUND;
+        internal static bool IsHeap(long v) { return v >= 100 && v != NIL && v != NOT_FOUND && (v >> 40) == 0; }
+        internal static long AsHeap(long v) { return v; }
+        internal static bool IsNil(long v) { return v == NIL; }
+    }
+    internal static long AnInt(long n) { return 0x10000000000L | (n & 0xFFFFFFFFL); }
+    internal sealed class Space { internal byte[] m = new byte[4000]; }
+    internal sealed class Rt {
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal string thrown = "";
+        internal int vecn = 3, strn = 3, bytn = 3, seqn = 3;
+        internal bool sym = true;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal void PopTo(int n) { while (roots.Count > n) roots.RemoveAt(roots.Count - 1); }
+        internal long Slot(long v, int i) { return 0x700L + i; }
+        internal long ThrowStr(string cls, string msg) { thrown = cls + "/" + msg; return NIL; }
+        internal long Obj_(int t) { long a = bump; bump += 8; gc.sp.m[(int) a] = (byte) t; return a; }
+        internal long NameOf(long k) { return 0x8DL; }
+    }
+    internal static class Str {
+        internal static bool IsString(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr; }
+        internal static long Keyword(Rt rt, string ns, string n) { return n == "tag" ? 0x8AL : 0x8BL; }
+        internal static long Nth(Rt rt, long s, int i, long d) { return i < rt.strn ? 0x920L + i : d; }
+        internal static string Text(Rt rt, long v) { return "zz"; }
+    }
+    internal static class Num {
+        internal static bool IsInt(Rt rt, long v) { return (v >> 40) == 1; }
+        internal static long I64Of(Rt rt, long v) { return (int) (v & 0xFFFFFFFFL); }
+    }
+    internal static bool IsBytes(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyBytes; }
+    internal static bool IsSymbol(Rt rt, long v) { return rt.sym; }
+    internal static long MapAssoc(Rt rt, long m, long k, long v) { return 0x901L; }
+    internal static class Vec {
+        internal static long Assoc(Rt rt, long v, int i, long x) { return 0x910L + i; }
+        internal static int Count(Rt rt, long v) { return rt.vecn; }
+        internal static long Nth(Rt rt, long v, int i, long d) { return i < rt.vecn ? 0x940L + i : d; }
+        internal static long MapEntryAsVec(Rt rt, long e) { return rt.Obj_(Obj.TyVec); }
+    }
+    internal static long Seq(Rt rt, long c) { return rt.seqn == 0 ? NIL : 0xC000L + rt.seqn; }
+    internal static long First(Rt rt, long s) { return 0x950L + (s - 0xC000L); }
+    internal static long Next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+    internal static long NewTagged(Rt rt, long t, long f) { return 0x902L; }
+    internal static long BAt(Rt rt, long b, int i, long d) { return i < rt.bytn ? 0x930L + i : d; }
+    internal static long TableAssoc(Rt rt, long t, long k, long v) { return 0x903L; }
+    internal static long RefAssoc(Rt rt, long r, long k, long v) { return 0x904L; }
+--csharp
+    public static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long k = 0x8CL, v = 0x8EL;
+
+        o.Append("nil=").Append(CollAssocGen(rt, NIL, k, v).ToString("x")).Append(' ');
+        rt.thrown = "";
+        long fx = CollAssocGen(rt, 7L, k, v);
+        o.Append("fix=").Append(fx.ToString("x")).Append("|").Append(rt.thrown).Append("| ");
+        int[] tags = { Obj.TyArraymap, Obj.TyHashmap, Obj.TyTable, Obj.TyTableref, Obj.TyMapentry };
+        foreach (int t in tags) o.Append(CollAssocGen(rt, rt.Obj_(t), k, v).ToString("x")).Append(' ');
+        rt.thrown = "";
+        long ot = rt.Obj_(Obj.TyOther);
+        long bad = CollAssocGen(rt, ot, k, v);
+        o.Append("oth=").Append(bad.ToString("x")).Append("|").Append(rt.thrown).Append("| ");
+
+        long vc = rt.Obj_(Obj.TyVec);
+        o.Append("v=").Append(CollAssocGen(rt, vc, AnInt(1), v).ToString("x")).Append("/")
+         .Append(CollAssocGen(rt, vc, AnInt(3), v).ToString("x")).Append(' ');
+        rt.thrown = "";
+        CollAssocGen(rt, vc, AnInt(4), v);
+        o.Append("|").Append(rt.thrown).Append("| ");
+        rt.thrown = "";
+        CollAssocGen(rt, vc, AnInt(-1), v);
+        o.Append("|").Append(rt.thrown).Append("| ");
+        rt.thrown = "";
+        CollAssocGen(rt, vc, k, v);
+        o.Append("|").Append(rt.thrown).Append("| ");
+
+        long me = rt.Obj_(Obj.TyMapentry);
+        o.Append("me=").Append(CollAssocGen(rt, me, AnInt(1), v).ToString("x")).Append(' ');
+
+        long tg = rt.Obj_(Obj.TyTagged);
+        o.Append("t=").Append(CollAssocGen(rt, tg, 0x8AL, v).ToString("x")).Append("/")
+         .Append(CollAssocGen(rt, tg, 0x8BL, v).ToString("x")).Append(' ');
+        rt.sym = false;
+        rt.thrown = "";
+        CollAssocGen(rt, tg, 0x8AL, v);
+        o.Append("|").Append(rt.thrown).Append("| ");
+        rt.sym = true;
+        rt.thrown = "";
+        CollAssocGen(rt, tg, k, v);
+        o.Append("|").Append(rt.thrown).Append("| ");
+
+        long d = 0x22L;
+        rt.thrown = "";
+        CollNth(rt, vc, k, d);
+        o.Append("n|").Append(rt.thrown).Append("| ");
+        o.Append("neg=").Append(CollNth(rt, vc, AnInt(-1), d).ToString("x")).Append(' ');
+        rt.thrown = "";
+        CollNth(rt, vc, AnInt(-1), NOT_FOUND);
+        o.Append("|").Append(rt.thrown).Append("| ");
+        o.Append("nil=").Append(CollNth(rt, NIL, AnInt(0), d).ToString("x")).Append("/")
+         .Append(CollNth(rt, NIL, AnInt(0), NOT_FOUND).ToString("x")).Append(' ');
+        long s = rt.Obj_(Obj.TyStr);
+        long b = rt.Obj_(Obj.TyBytes);
+        long c = rt.Obj_(Obj.TyCons);
+        o.Append("in=").Append(CollNth(rt, s, AnInt(1), d).ToString("x")).Append("/")
+         .Append(CollNth(rt, b, AnInt(1), d).ToString("x")).Append("/")
+         .Append(CollNth(rt, vc, AnInt(1), d).ToString("x")).Append("/")
+         .Append(CollNth(rt, c, AnInt(1), d).ToString("x")).Append(' ');
+        o.Append("out=").Append(CollNth(rt, s, AnInt(9), d).ToString("x")).Append("/")
+         .Append(CollNth(rt, b, AnInt(9), d).ToString("x")).Append("/")
+         .Append(CollNth(rt, vc, AnInt(9), d).ToString("x")).Append("/")
+         .Append(CollNth(rt, c, AnInt(9), d).ToString("x")).Append(' ');
+        string[] labels = { "s", "b", "v", "c" };
+        long[] colls = { s, b, vc, c };
+        for (int j = 0; j < 4; j++) {
+            rt.thrown = "";
+            CollNth(rt, colls[j], AnInt(9), NOT_FOUND);
+            o.Append(labels[j]).Append("|").Append(rt.thrown).Append("| ");
+        }
+        rt.seqn = 0;
+        o.Append("e=").Append(CollNth(rt, c, AnInt(0), d).ToString("x"));
+        System.Console.WriteLine(o.ToString());
+    }

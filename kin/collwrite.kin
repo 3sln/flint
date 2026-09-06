@@ -1,0 +1,169 @@
+;; `assoc` AND `nth`: the two generics that write by key and read by position.
+;;
+;; `nth` TAKES NOT_FOUND AS "NO DEFAULT". Native spelled that `Option<Value>`,
+;; which neither port has -- and the arms need to tell three cases apart: the
+;; element is nil, the caller's default IS nil, and there is no default so this
+;; must raise. `NOT_FOUND` is the one value none of those can be, and `vec-nth`
+;; and `char-at` already use it as their probe for exactly this reason.
+;;
+;; `conj` IS NOT HERE. Its map arm merges another map by walking its entries,
+;; and walking entries needs a callback -- the closure hole, which is measured
+;; in `runtime/src/map.rs` and is real: the buffer alternative costs 1.7x the
+;; time and 12 500x the peak roots.
+(ns flint.rt.collwrite
+  (:require [flint.impl.rt :refer [defn return if let do comment doc local set
+                                   == != >= <= < not or nil? is-heap as-heap ty
+                                   mark push r set-r pop-to while break + to-i32
+                                   slot is-string char-at vec-nth vec-assoc
+                                   vec-count is-int i64-of bare-kw name-of
+                                   value-text throw-str str-cat static-text
+                                   empty-map map-entry-as-vec
+                                   Rt Value I32 I64 Ty Bool RootIx Text
+                                   NIL NOT_FOUND
+                                   TY_ARRAYMAP TY_HASHMAP TY_VEC TY_TAGGED
+                                   TY_TABLE TY_TABLEREF TY_MAPENTRY]]
+            [flint.rt.mapwrite :refer [map-assoc]]
+            [flint.rt.names :refer [is-symbol]]
+            [flint.rt.opaque :refer [new-tagged]]
+            [flint.rt.tablerow :refer [table-assoc]]
+            [flint.rt.tablemake :refer [ref-assoc]]
+            [flint.rt.bytecore :refer [is-bytes]]
+            [flint.rt.byteat :refer [b-at]]
+            [flint.rt.seqwalk :refer [seq first next]]))
+
+(doc "`(assoc coll k v)`, whichever associative thing `coll` is."
+     ""
+     "NIL ASSOCS INTO AN EMPTY MAP, which is what makes `(assoc nil :a 1)` a"
+     "map and `(update m :k f)` work on a key that was not there.")
+(defn ^:pub ^:method ^Value coll-assoc-gen [^:mut ^Rt rt ^Value coll ^Value k ^Value v]
+  (if (nil? rt coll)
+    (let [^Value e (empty-map rt)]
+      (return (map-assoc rt e k v))))
+  (if (not (is-heap coll))
+    (return (throw-str rt "ClassCastException" "assoc needs an associative collection")))
+  (let [^Ty t (ty rt (as-heap coll))]
+    (if (or (== t TY_ARRAYMAP) (== t TY_HASHMAP))
+      (return (map-assoc rt coll k v)))
+    (comment "A VECTOR TAKES AN INDEX, and one PAST THE END appends -- which"
+             "is why the bound is `<=` and not `<`.")
+    (if (== t TY_VEC)
+      (do (if (is-int rt k)
+            (let [^I64 i (i64-of rt k)]
+              (if (>= i 0)
+                (if (<= (to-i32 i) (vec-count rt coll))
+                  (return (vec-assoc rt coll (to-i32 i) v))))))
+          (return (throw-str rt "IndexOutOfBoundsException" "assoc index out of range"))))
+    (comment "A TAGGED LITERAL HAS EXACTLY TWO SLOTS and there is nowhere for"
+             "a third, so `assoc` on either key PRESERVES the type and"
+             "anything else is refused (`0034`). The alternative is silently"
+             "promoting to a map and losing the taggedness, which is the quiet"
+             "coercion this codebase refuses elsewhere.")
+    (if (== t TY_TAGGED)
+      (do (if (== k (bare-kw rt (static-text "tag")))
+            (do (if (not (is-symbol rt v))
+                  (return (throw-str rt "IllegalArgumentException"
+                                     "a tagged literal's :tag must be a symbol")))
+                (let [^Value form (slot rt coll 1)]
+                  (return (new-tagged rt v form)))))
+          (if (== k (bare-kw rt (static-text "form")))
+            (let [^Value tag (slot rt coll 0)]
+              (return (new-tagged rt tag v))))
+          (comment "THE KEY IS NAMED. \"wrong key\" without saying which one"
+                   "is the error message this codebase keeps replacing"
+                   "(`0032`).")
+          (let [^Value nm (name-of rt k)
+                ^Text shown (value-text rt nm)]
+            (return (throw-str rt "IllegalArgumentException"
+                               (str-cat (static-text "a tagged literal has :tag and :form and nothing else, so it cannot take :")
+                                        shown))))))
+    (comment "A TABLE IS INDEXED BY ROW and its schema is CLOSED, so the"
+             "refusals live in `table-assoc` where the schema is (`0026`).")
+    (if (== t TY_TABLE)
+      (return (table-assoc rt coll k v)))
+    (comment "A REF IS A VIEW. Changing it produces an independent MAP, and"
+             "neither the chunk nor the table it came from moves -- so the"
+             "schema does not constrain the result, because the result is no"
+             "longer a row.")
+    (if (== t TY_TABLEREF)
+      (return (ref-assoc rt coll k v)))
+    (comment "A MAP ENTRY IS A VECTOR, so it is associative and `assoc`"
+             "indexes it. Without this it would claim `associative?` -- which"
+             "is `(or map? vector?)` -- and then refuse.")
+    (if (== t TY_MAPENTRY)
+      (let [^RootIx base (mark rt)
+            ^RootIx ki (push rt k)
+            ^RootIx vi (push rt v)
+            ^Value ev (map-entry-as-vec rt coll)
+            ^RootIx ei (push rt ev)
+            ^Value out (coll-assoc-gen rt (r rt ei) (r rt ki) (r rt vi))]
+        (pop-to rt base)
+        (return out))))
+  (return (throw-str rt "ClassCastException" "assoc needs an associative collection")))
+
+(doc "`(nth coll i)`, and `(nth coll i dflt)` when `dflt` is not NOT_FOUND."
+     ""
+     "PASS `NOT_FOUND` FOR `dflt` TO MEAN THERE IS NONE, and every arm then"
+     "RAISES rather than answering. Native spelled this `Option<Value>`; the"
+     "sentinel is the shape all three can say, and it is sound because"
+     "`NOT_FOUND` is the one value a collection cannot be holding.")
+(defn ^:pub ^:method ^Value coll-nth [^:mut ^Rt rt ^Value coll ^Value idx ^Value dflt]
+  (if (not (is-int rt idx))
+    (return (throw-str rt "IllegalArgumentException" "nth index must be an integer")))
+  (let [^I64 i64 (i64-of rt idx)]
+    (if (< i64 0)
+      (do (if (!= dflt NOT_FOUND)
+            (return dflt))
+          (return (throw-str rt "IndexOutOfBoundsException" "negative index"))))
+    (let [^I32 i (to-i32 i64)]
+      (if (nil? rt coll)
+        (do (if (!= dflt NOT_FOUND)
+              (return dflt))
+            (return NIL)))
+      (if (is-string rt coll)
+        (do (let [^Value c (char-at rt coll i NOT_FOUND)]
+              (if (!= c NOT_FOUND)
+                (return c)))
+            (if (!= dflt NOT_FOUND)
+              (return dflt))
+            (return (throw-str rt "IndexOutOfBoundsException" "string index out of range"))))
+      (comment "A BYTE STRING INDEXES LIKE A VECTOR of small integers, which"
+               "is what it is. `count` and `get` learned this; `nth` is a"
+               "separate path, and forgetting it here read back as"
+               "`IndexOutOfBoundsException` on a byte string plainly long"
+               "enough.")
+      (if (is-bytes rt coll)
+        (do (let [^Value b (b-at rt coll i NOT_FOUND)]
+              (if (!= b NOT_FOUND)
+                (return b)))
+            (if (!= dflt NOT_FOUND)
+              (return dflt))
+            (return (throw-str rt "IndexOutOfBoundsException" "byte index out of range"))))
+      (if (is-heap coll)
+        (if (== (ty rt (as-heap coll)) TY_VEC)
+          (do (let [^Value x (vec-nth rt coll i NOT_FOUND)]
+                (if (!= x NOT_FOUND)
+                  (return x)))
+              (if (!= dflt NOT_FOUND)
+                (return dflt))
+              (return (throw-str rt "IndexOutOfBoundsException" "index out of range")))))
+      (comment "WALK. O(n), as it is in Clojure for a seq.")
+      (let [^RootIx base (mark rt)
+            ^Value s0 (seq rt coll)
+            ^RootIx si (push rt s0)]
+        (local ^:mut ^I32 at)
+        (local ^:mut ^Value out)
+        (set at 0)
+        (set out NOT_FOUND)
+        (while (not (nil? rt (r rt si)))
+          (do (if (== at i)
+                (do (set out (first rt (r rt si)))
+                    (break)))
+              (let [^Value nx (next rt (r rt si))]
+                (set-r rt si nx))
+              (set at (+ at 1))))
+        (pop-to rt base)
+        (if (!= out NOT_FOUND)
+          (return out))
+        (if (!= dflt NOT_FOUND)
+          (return dflt))
+        (return (throw-str rt "IndexOutOfBoundsException" "index out of range"))))))

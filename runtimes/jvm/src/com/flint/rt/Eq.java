@@ -179,8 +179,8 @@ public final class Eq {
         // Invisible without GC stress, because it needs a collection between
         // two adjacent calls.
         int bi = rt.push(b);
-        int x = rt.push(Seqs.seq(rt, a));
-        int y = rt.push(Seqs.seq(rt, rt.r(bi)));
+        int x = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, a));
+        int y = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, rt.r(bi)));
         boolean ok = true;
         for (;;) {
             boolean ex = Val.isNil(rt.r(x)), ey = Val.isNil(rt.r(y));
@@ -201,8 +201,8 @@ public final class Eq {
             boolean same = eq(rt, rt.r(fx), rt.r(fy));
             rt.popTo(fx);
             if (!same) { ok = false; break; }
-            int nxi = rt.push(Seqs.next(rt, rt.r(x)));
-            long ny = Seqs.next(rt, rt.r(y));
+            int nxi = rt.push(com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(x)));
+            long ny = com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(y));
             rt.setR(y, ny);
             rt.setR(x, rt.r(nxi));
             rt.popTo(nxi);
@@ -278,7 +278,7 @@ public final class Eq {
             default: {
                 if (rt.isSeq(v)) {
                     int base = rt.mark();
-                    int s = rt.push(Seqs.seq(rt, v));
+                    int s = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, v));
                     int acc = 1, n = 0;
                     while (!Val.isNil(rt.r(s))) {
                         // A TICK: a seq's length is not known until it ends,
@@ -286,7 +286,7 @@ public final class Eq {
                         if (!rt.chargeTick(n, 1, "hash")) { rt.popTo(base); return 0; }
                         acc = com._3sln.flint.kgen.rt.Hash.orderedStep(acc, hashValue(rt, Seqwalk.first(rt, rt.r(s))));
                         n++;
-                        long nx = Seqs.next(rt, rt.r(s));
+                        long nx = com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(s));
                         rt.setR(s, nx);
                     }
                     rt.popTo(base);
@@ -357,14 +357,14 @@ public final class Eq {
     /// both are less than `[1 2 3]`. So shorter-is-less only decides a tie.
     static int cmpSequential(Rt rt, long a, long b) {
         int base = rt.mark();
-        int x = rt.push(Seqs.seq(rt, a)), y = rt.push(Seqs.seq(rt, b));
+        int x = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, a)), y = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, b));
         int out = 0;
         for (;;) {
             boolean ex = Val.isNil(rt.r(x)), ey = Val.isNil(rt.r(y));
             if (ex || ey) { out = ex && ey ? 0 : (ex ? -1 : 1); break; }
             int c = compare(rt, Seqwalk.first(rt, rt.r(x)), Seqwalk.first(rt, rt.r(y)));
             if (c != 0) { out = c; break; }
-            long nx = Seqs.next(rt, rt.r(x)), ny = Seqs.next(rt, rt.r(y));
+            long nx = com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(x)), ny = com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(y));
             rt.setR(x, nx); rt.setR(y, ny);
         }
         rt.popTo(base);

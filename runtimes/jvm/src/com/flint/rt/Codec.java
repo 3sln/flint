@@ -179,12 +179,12 @@ public final class Codec {
         else throw new Refused("this value cannot cross a boundary (object type "
                                + Obj.ty(rt.gc.sp, Val.asHeap(v)) + ")");
         int base = rt.mark();
-        int si = rt.push(Seqs.seq(rt, v));
+        int si = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, v));
         int n = 0;
         while (!Val.isNil(rt.r(si))) {
             rt.push(Seqwalk.first(rt, rt.r(si)));
             n++;
-            rt.setR(si, Seqs.next(rt, rt.r(si)));
+            rt.setR(si, com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(si)));
         }
         out.write(tag);
         u32(out, n);

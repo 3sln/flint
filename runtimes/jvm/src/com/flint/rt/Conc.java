@@ -908,13 +908,13 @@ public final class Conc {
                 if (out != null) break;
             }
         } else if (rt.isSequential(rt.r(vi))) {
-            int si = rt.push(Seqs.seq(rt, rt.r(vi)));
+            int si = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, rt.r(vi)));
             while (!Val.isNil(rt.r(si))) {
                 int fi = rt.push(Seqwalk.first(rt, rt.r(si)));
                 out = checkSendableAt(rt, rt.r(fi), depth + 1, carry);
                 rt.popTo(fi);
                 if (out != null) break;
-                rt.setR(si, Seqs.next(rt, rt.r(si)));
+                rt.setR(si, com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(si)));
             }
         }
         rt.popTo(base);

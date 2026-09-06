@@ -418,9 +418,13 @@ builtins! {
         let mut acc = arg(rt, a, 0);
         let ai = rt.push(acc);
         let mut i = 1;
-        while i + 1 < n + 1 && i + 1 <= n {
+        // `i + 1 < n`, and it used to be `i + 1 <= n` -- which permits
+        // `i + 1 == n`, an index one PAST the last argument. `arg` is
+        // `rt.vat(a + i)` with no bound, so `(assoc m :k)` read whatever the
+        // value stack held above the call. Both ports had the right condition.
+        while i + 1 < n {
             let (k, v) = (arg(rt, a, i), arg(rt, a, i + 1));
-            let nv = rt.assoc(rt.r(ai), k, v);
+            let nv = rt.coll_assoc_gen(rt.r(ai), k, v);
             rt.set_r(ai, nv);
             i += 2;
         }
@@ -453,8 +457,10 @@ builtins! {
     };
     "nth", flint_b_nth, b_nth, |rt, a, n| {
         let (c, i) = (arg(rt, a, 0), arg(rt, a, 1));
-        let d = if n > 2 { Some(arg(rt, a, 2)) } else { None };
-        rt.nth(c, i, d)
+        // NOT_FOUND MEANS "no default", which is what `Option<Value>` used to
+        // say. `coll_nth` then raises rather than answering.
+        let d = if n > 2 { arg(rt, a, 2) } else { crate::value::NOT_FOUND };
+        rt.coll_nth(c, i, d)
     };
     "pop", flint_b_pop, b_pop, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); rt.pop_of(v) };
     "peek", flint_b_peek, b_peek, |rt, a, n| { let _ = n; let v = arg(rt, a, 0); rt.peek_of(v) };

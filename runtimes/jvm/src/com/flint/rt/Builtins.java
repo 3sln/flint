@@ -11,6 +11,7 @@ import com._3sln.flint.kgen.rt.Maptrans;
 import com._3sln.flint.kgen.rt.Transients;
 import com._3sln.flint.kgen.rt.Collgen;
 import com._3sln.flint.kgen.rt.Collread;
+import com._3sln.flint.kgen.rt.Collwrite;
 
 import static com.flint.rt.Obj.*;
 
@@ -70,15 +71,6 @@ public final class Builtins {
 
     /// A MAP ENTRY as a real two-element vector, for the operations Clojure
     /// gives vector semantics: `conj` appends, `assoc` replaces.
-    static long mapEntryAsVec(Rt rt, long e) {
-        int base = rt.mark();
-        rt.push(rt.slot(e, 0));
-        rt.push(rt.slot(e, 1));
-        long out = Vec.fromRoots(rt, base, 2);
-        rt.popTo(base);
-        return out;
-    }
-
     static {
         // Arithmetic. flint's integers OVERFLOW rather than wrap, which
         // `doc/decisions/0010` names as one of the ways two hosts quietly
@@ -279,38 +271,13 @@ public final class Builtins {
         // arm for a TRANSIENT TABLE, so `(count (transient t))` threw here
         // and answered on wasm.
         def("count", (rt, at, n) -> Val.fixnum(Collgen.countOf(rt, rt.vat(at))));
-        def("nth", (rt, at, n) -> {
-            long v = rt.vat(at);
-            int i = (int) Val.asFixnum(rt.vat(at + 1));
-            long got = Val.NOT_FOUND;
-            if (rt.isHeapTy(v, TY_VEC)) {
-                got = Vec.nth(rt, v, i, Val.NOT_FOUND);
-            } else if (Str.isString(rt, v)) {
-                got = Str.nth(rt, v, i, Val.NOT_FOUND);
-            } else if (rt.isHeapTy(v, TY_MAPENTRY)) {
-                if (i == 0 || i == 1) got = rt.slot(v, i);
-            } else if (Val.isNil(v)) {
-                got = Val.NOT_FOUND;
-            } else if (rt.isSeq(v)) {
-                // O(n), as Clojure's `nth` on a seq is. Walking rather than
-                // refusing, because `nth` over a seq is ordinary code and the
-                // cost is the caller's to know about.
-                int base = rt.mark();
-                int s = rt.push(Seqs.seq(rt, v));
-                for (int k = 0; k < i && !Val.isNil(rt.r(s)); k++) {
-                    rt.setR(s, Seqs.next(rt, rt.r(s)));
-                }
-                if (!Val.isNil(rt.r(s))) got = Seqwalk.first(rt, rt.r(s));
-                rt.popTo(base);
-            } else {
-                return rt.throwStr("UnsupportedOperationException",
-"nth over " + rt.describe(v) + " needs more of the data structures");
-            }
-            if (got != Val.NOT_FOUND) return got;
-            if (n > 2) return rt.vat(at + 2);
-            return rt.throwStr("IndexOutOfBoundsException",
-"index " + i + " out of range");
-        });
+        // The hand-written body read the index with `asFixnum` and no check,
+        // so a keyword index was garbage rather than a refusal and a BIGINT
+        // index was a different number. It also had no arm for BYTES, which
+        // `count` and `get` both have -- so `(nth bs 1)` said the index was
+        // out of range on a byte string plainly long enough.
+        def("nth", (rt, at, n) -> Collwrite.collNth(rt, rt.vat(at), rt.vat(at + 1),
+                                                    n > 2 ? rt.vat(at + 2) : Val.NOT_FOUND));
         def("conj", (rt, at, n) -> {
             long v = rt.vat(at);
             // `conj` on a table APPENDS A ROW, which is what conj means on
@@ -353,7 +320,7 @@ public final class Builtins {
             // -- both readings exist and Clojure picks the vector one.
             if (rt.isHeapTy(v, TY_MAPENTRY)) {
                 int mb = rt.mark();
-                int vi = rt.push(mapEntryAsVec(rt, v));
+                int vi = rt.push(Vec.mapEntryAsVec(rt, v));
                 for (int i = 1; i < n; i++) rt.setR(vi, Vec.conj(rt, rt.r(vi), rt.vat(at + i)));
                 long out = rt.r(vi);
                 rt.popTo(mb);
@@ -368,9 +335,9 @@ public final class Builtins {
 "conj onto " + rt.describe(v) + " needs more of the data structures");
         });
 
-        def("seq", (rt, at, n) -> Seqs.seq(rt, rt.vat(at)));
+        def("seq", (rt, at, n) -> com._3sln.flint.kgen.rt.Seqwalk.seq(rt, rt.vat(at)));
         def("first", (rt, at, n) -> Seqwalk.first(rt, rt.vat(at)));
-        def("next", (rt, at, n) -> Seqs.next(rt, rt.vat(at)));
+        def("next", (rt, at, n) -> com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.vat(at)));
         def("rest", (rt, at, n) -> Seqwalk.rest(rt, rt.vat(at)));
         def("cons", (rt, at, n) -> Seqs.cons(rt, rt.vat(at), rt.vat(at + 1)));
 
@@ -484,88 +451,19 @@ public final class Builtins {
         // fixnum was a miss rather than an out-of-range index.
         def("get", (rt, at, n) -> Collread.collGet(rt, rt.vat(at), rt.vat(at + 1),
                                                    n > 2 ? rt.vat(at + 2) : Val.NIL));
+        // GENERATED, from `kin/collwrite.kin`. The hand-written body returned
+        // after ONE pair for a table or a ref, so `(assoc t 0 r 1 r2)` dropped
+        // the second -- the loop only wrapped the map arm. One step, folded.
         def("assoc", (rt, at, n) -> {
-            long acc = rt.vat(at);
-            if (Val.isNil(acc)) acc = Maps.empty(rt);
-            // A table is indexed by ROW and its schema is CLOSED, so the
-            // refusals live where the schema is (`doc/decisions/0026`).
-            if (Table.isTable(rt, acc)) return Table.tableAssoc(rt, acc, rt.vat(at + 1), rt.vat(at + 2));
-            // A ref is a VIEW: changing it produces an independent MAP, and
-            // neither the chunk nor the table it came from moves.
-            if (Table.isTableRef(rt, acc)) return Table.refAssoc(rt, acc, rt.vat(at + 1), rt.vat(at + 2));
-            if (Mapcore.isMap(rt, acc)) {
-                int base = rt.mark();
-                int ai = rt.push(acc);
-                for (int i = 1; i + 1 < n; i += 2) {
-                    long nm = Mapwrite.mapAssoc(rt, rt.r(ai), rt.vat(at + i), rt.vat(at + i + 1));
-                    rt.setR(ai, nm);
-                }
-                long out = rt.r(ai);
-                rt.popTo(base);
-                return out;
+            int base = rt.mark();
+            int ai = rt.push(rt.vat(at));
+            for (int i = 1; i + 1 < n; i += 2) {
+                long nm = Collwrite.collAssocGen(rt, rt.r(ai), rt.vat(at + i), rt.vat(at + i + 1));
+                rt.setR(ai, nm);
             }
-            // Two slots and nowhere for a third, so `assoc` on either key keeps
-            // the type and anything else is refused, NAMING the key
-            // (`doc/decisions/0034`). Promoting to a map would lose the
-            // taggedness silently.
-            if (rt.isHeapTy(acc, Obj.TY_TAGGED)) {
-                int base = rt.mark();
-                int ai = rt.push(acc);
-                for (int i = 1; i + 1 < n; i += 2) {
-                    long k = rt.vat(at + i), v = rt.vat(at + i + 1);
-                    long cur = rt.r(ai);
-                    if (k == Str.keyword(rt, null, "tag")) {
-                        if (!rt.isHeapTy(v, Obj.TY_SYM)) {
-                            rt.popTo(base);
-                            return rt.throwStr("IllegalArgumentException",
-                                "a tagged literal's :tag must be a symbol");
-                        }
-                        rt.setR(ai, rt.newTagged(v, rt.slot(cur, 1)));
-                    } else if (k == Str.keyword(rt, null, "form")) {
-                        rt.setR(ai, rt.newTagged(rt.slot(cur, 0), v));
-                    } else {
-                        rt.popTo(base);
-                        return rt.throwStr("IllegalArgumentException",
-                            "a tagged literal has :tag and :form and nothing else, so it "
-                            + "cannot take :" + Str.text(rt, kwName(rt, k)));
-                    }
-                }
-                long out = rt.r(ai);
-                rt.popTo(base);
-                return out;
-            }
-            if (rt.isHeapTy(acc, TY_VEC)) {
-                int base = rt.mark();
-                int ai = rt.push(acc);
-                for (int i = 1; i + 1 < n; i += 2) {
-                    rt.setR(ai, Vec.assoc(rt, rt.r(ai),
-                                          (int) Val.asFixnum(rt.vat(at + i)), rt.vat(at + i + 1)));
-                }
-                long out = rt.r(ai);
-                rt.popTo(base);
-                return out;
-            }
-            // A MAP ENTRY is a vector, so it is associative and `assoc`
-            // indexes it. Without this it would answer `associative?` true --
-            // that is `(or map? vector?)` -- and then refuse.
-            if (rt.isHeapTy(acc, TY_MAPENTRY)) {
-                int ab = rt.mark();
-                int vi = rt.push(mapEntryAsVec(rt, acc));
-                for (int i = 1; i + 1 < n; i += 2) {
-                    long k = rt.vat(at + i);
-                    if (!Val.isFixnum(k)) {
-                        rt.popTo(ab);
-                        return rt.throwStr("IllegalArgumentException",
-                                           "a map entry is indexed by 0 and 1");
-                    }
-                    rt.setR(vi, Vec.assoc(rt, rt.r(vi), (int) Val.asFixnum(k), rt.vat(at + i + 1)));
-                }
-                long out = rt.r(vi);
-                rt.popTo(ab);
-                return out;
-            }
-            return rt.throwStr("UnsupportedOperationException",
-"assoc onto " + rt.describe(acc) + " needs more of the data structures");
+            long out = rt.r(ai);
+            rt.popTo(base);
+            return out;
         });
         def("dissoc", (rt, at, n) -> {
             long acc = rt.vat(at);
@@ -751,14 +649,14 @@ public final class Builtins {
         def("flint/str-join", (rt, at, n) -> {
             StringBuilder sb = new StringBuilder();
             int base = rt.mark();
-            int s = rt.push(Seqs.seq(rt, rt.vat(at)));
+            int s = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, rt.vat(at)));
             long ticks = 0;
             while (!Val.isNil(rt.r(s))) {
                 // CHARGED AND CHECKED INSIDE THE LOOP: the length is not known
                 // until the walk ends (`doc/decisions/0009`).
                 if (!rt.chargeTick(ticks++, 1, "str-join")) { rt.popTo(base); return Val.NIL; }
                 sb.append(Str.text(rt, Seqwalk.first(rt, rt.r(s))));
-                rt.setR(s, Seqs.next(rt, rt.r(s)));
+                rt.setR(s, com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(s)));
             }
             rt.popTo(base);
             rt.chargeBytes(sb.length());
@@ -898,13 +796,13 @@ public final class Builtins {
         /// big enough to span a collection, which is why it survived so long.
         def("flint/array-map", (rt, at, n) -> {
             int base = rt.mark();
-            int si = rt.push(Seqs.seq(rt, rt.vat(at)));
+            int si = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, rt.vat(at)));
             int valsAt = rt.mark();
             int count = 0;
             while (!Val.isNil(rt.r(si))) {
                 rt.push(Seqwalk.first(rt, rt.r(si)));
                 count++;
-                rt.setR(si, Seqs.next(rt, rt.r(si)));
+                rt.setR(si, com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(si)));
             }
             if (count % 2 != 0) {
                 rt.popTo(base);
@@ -1169,12 +1067,12 @@ public final class Builtins {
         def("flint/apply", (rt, at, n) -> {
             int base = rt.mark();
             int fi = rt.push(rt.vat(at));
-            int si = rt.push(Seqs.seq(rt, rt.vat(at + 1)));
+            int si = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, rt.vat(at + 1)));
             int count = 0;
             while (!Val.isNil(rt.r(si))) {
                 rt.push(Seqwalk.first(rt, rt.r(si)));
                 count++;
-                rt.setR(si, Seqs.next(rt, rt.r(si)));
+                rt.setR(si, com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(si)));
             }
             long[] argv = new long[count];
             for (int i = 0; i < count; i++) argv[i] = rt.r(si + 1 + i);

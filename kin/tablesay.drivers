@@ -313,10 +313,6 @@ fn main() {
         static String text(Rt rt, long v) { return rt.names.get(Val.idx(v)); }
     }
     static final class com { static final class flint { static final class rt {
-        static final class Seqs {
-            static long seq(Rt rt, long m) { return Probe.seqOf(rt, m); }
-            static long next(Rt rt, long q) { return Probe.nextOf(rt, q); }
-        }
     } }
     // `first-of` NAMES THE GENERATED CLASS. The port's `Seqs.first` was a
     // shim over exactly this, and a second definition under a name generated
@@ -325,6 +321,8 @@ fn main() {
         static final class rt {
             static final class Seqwalk {
                 static long first(Rt rt, long q) { return Vec.nth(rt, q, 0, NIL); }
+                static long seq(Rt rt, long m) { return Probe.seqOf(rt, m); }
+                static long next(Rt rt, long q) { return Probe.nextOf(rt, q); }
             }
         }
     } } } }
@@ -453,14 +451,12 @@ namespace Flint.Rt {
         internal const int RF_SCHEMA = 0, RF_LEN = 3;
         internal static bool typeOk(Probe.Rt rt, long t, long v) { return Probe.TypeOk(rt, t, v); }
     }
-    internal static class Seqs {
-        internal static long Seq(Probe.Rt rt, long m) { return Probe.SeqOf(rt, m); }
-        internal static long Next(Probe.Rt rt, long q) { return Probe.NextOf(rt, q); }
-    }
 }
 namespace _3sln.Flint.Kgen.Rt {
     internal static class Seqwalk {
         internal static long First(Probe.Rt rt, long q) { return Probe.Vec.Nth(rt, q, 0, Probe.Val.Nil); }
+        internal static long Seq(Probe.Rt rt, long m) { return Probe.SeqOf(rt, m); }
+        internal static long Next(Probe.Rt rt, long q) { return Probe.NextOf(rt, q); }
     }
 }
 --csharp-head

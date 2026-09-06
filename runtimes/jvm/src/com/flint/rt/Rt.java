@@ -873,14 +873,14 @@ public final class Rt {
                         long seq = vpop();
                         int si = push(seq);
                         int spread = 0;
-                        setR(si, Seqs.seq(this, r(si)));
+                        setR(si, com._3sln.flint.kgen.rt.Seqwalk.seq(this, r(si)));
                         while (!Val.isNil(r(si))) {
                             // The same tick the Rust runtime charges: a spread
                             // walks a whole sequence under one instruction.
                             if (!chargeTick(spread, 1, "apply")) { popTo(si); break; }
                             vpush(Seqwalk.first(this, r(si)));
                             spread++;
-                            setR(si, Seqs.next(this, r(si)));
+                            setR(si, com._3sln.flint.kgen.rt.Seqwalk.next(this, r(si)));
                         }
                         if (failed()) {
                             popTo(si);
@@ -901,12 +901,12 @@ public final class Rt {
                     for (int i = 0; i < argc; i++) vpush(roots.stack[operandsAt + i]);
                     int si = push(seq);
                     int spread = 0;
-                    setR(si, Seqs.seq(this, r(si)));
+                    setR(si, com._3sln.flint.kgen.rt.Seqwalk.seq(this, r(si)));
                     while (!Val.isNil(r(si))) {
                         if (!chargeTick(spread, 1, "apply")) { popTo(si); break; }
                         vpush(Seqwalk.first(this, r(si)));
                         spread++;
-                        setR(si, Seqs.next(this, r(si)));
+                        setR(si, com._3sln.flint.kgen.rt.Seqwalk.next(this, r(si)));
                     }
                     if (failed()) {
                         popTo(si);

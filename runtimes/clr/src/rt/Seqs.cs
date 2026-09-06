@@ -21,9 +21,7 @@ public static class Seqs {
 
     /// `First` and `Next`, under the names their callers already use -- the
     /// bodies are generated, as `Seqwalk`.
-    public static long Next(Rt rt, long v) { return _3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, v); }
     public static long Force(Rt rt, long ls) { return _3sln.Flint.Kgen.Rt.Seqwalk.Force(rt, ls); }
-    public static long Seq(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, v); }
 
     /// `Cons`, under the name its callers already use -- the body is
     /// generated, as `Seqcore.Cons`.

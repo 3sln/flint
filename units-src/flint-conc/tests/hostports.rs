@@ -225,7 +225,7 @@ fn presented(rt: &mut Rt, payload: &[u8]) -> Option<u64> {
     let n = rt.count_of(v);
     for k in 1..n {
         let idx = rt.integer(k as i64);
-        let arg = rt.nth(v, idx, None);
+        let arg = rt.coll_nth(v, idx, flint_rt::value::NOT_FOUND);
         if rt.is_opaque(arg) {
             return Some(rt.opaque_host_id(arg) as u64);
         }

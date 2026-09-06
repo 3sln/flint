@@ -99,6 +99,18 @@ public static class Vec {
 
 
 
+    /// A MAP ENTRY AS A TWO-ELEMENT VECTOR. It was a private helper in
+    /// `Builtins` here and lives on `Vec` in the native runtime; `assoc` and
+    /// `conj` both reach it, and generated code needs one home.
+    public static long MapEntryAsVec(Rt rt, long e) {
+        int bas = rt.Mark();
+        rt.Push(rt.Slot(e, 0));
+        rt.Push(rt.Slot(e, 1));
+        long outv = FromRoots(rt, bas, 2);
+        rt.PopTo(bas);
+        return outv;
+    }
+
     public static long FromRoots(Rt rt, int bas, int n) {
         int mk = rt.Mark();
         int vi = rt.Push(Empty(rt));

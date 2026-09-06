@@ -892,13 +892,13 @@ public static class Conc {
                 if (outs != null) break;
             }
         } else if (rt.IsSequential(rt.R(vi))) {
-            int si = rt.Push(Seqs.Seq(rt, rt.R(vi)));
+            int si = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, rt.R(vi)));
             while (!Val.IsNil(rt.R(si))) {
                 int fi = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(si)));
                 outs = CheckSendableAt(rt, rt.R(fi), depth + 1, carry);
                 rt.PopTo(fi);
                 if (outs != null) break;
-                rt.SetR(si, Seqs.Next(rt, rt.R(si)));
+                rt.SetR(si, global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(si)));
             }
         }
         rt.PopTo(bas);

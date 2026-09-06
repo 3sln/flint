@@ -156,8 +156,8 @@ public static class Eq {
         // `b` ROOTED FIRST -- `Seq` allocates, so holding `b` in a C# local
         // across `Seq(a)` leaves it pointing at a moved object. See the JVM.
         int bi = rt.Push(b);
-        int x = rt.Push(Seqs.Seq(rt, a));
-        int y = rt.Push(Seqs.Seq(rt, rt.R(bi)));
+        int x = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, a));
+        int y = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, rt.R(bi)));
         bool ok = true;
         for (;;) {
             bool ex = Val.IsNil(rt.R(x)), ey = Val.IsNil(rt.R(y));
@@ -172,8 +172,8 @@ public static class Eq {
             bool same = Equal(rt, rt.R(fx), rt.R(fy));
             rt.PopTo(fx);
             if (!same) { ok = false; break; }
-            int nxi = rt.Push(Seqs.Next(rt, rt.R(x)));
-            long ny = Seqs.Next(rt, rt.R(y));
+            int nxi = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(x)));
+            long ny = global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(y));
             rt.SetR(y, ny);
             rt.SetR(x, rt.R(nxi));
             rt.PopTo(nxi);
@@ -247,14 +247,14 @@ public static class Eq {
             default: {
                 if (rt.IsSeq(v)) {
                     int bas = rt.Mark();
-                    int s = rt.Push(Seqs.Seq(rt, v));
+                    int s = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, v));
                     int acc = 1, n = 0;
                     while (!Val.IsNil(rt.R(s))) {
                         // A TICK: a seq's length is not known until it ends.
                         if (!rt.ChargeTick(n, 1, "hash")) { rt.PopTo(bas); return 0; }
                         acc = _3sln.Flint.Kgen.Rt.Hash.OrderedStep(acc, HashValue(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(s))));
                         n++;
-                        long nx = Seqs.Next(rt, rt.R(s));
+                        long nx = global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(s));
                         rt.SetR(s, nx);
                     }
                     rt.PopTo(bas);
@@ -332,14 +332,14 @@ public static class Eq {
     /// both are less than `[1 2 3]`. So shorter-is-less only decides a tie.
     static int CmpSequential(Rt rt, long a, long b) {
         int bas = rt.Mark();
-        int x = rt.Push(Seqs.Seq(rt, a)), y = rt.Push(Seqs.Seq(rt, b));
+        int x = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, a)), y = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, b));
         int outv = 0;
         for (;;) {
             bool ex = Val.IsNil(rt.R(x)), ey = Val.IsNil(rt.R(y));
             if (ex || ey) { outv = ex && ey ? 0 : (ex ? -1 : 1); break; }
             int c = Compare(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(x)), global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(y)));
             if (c != 0) { outv = c; break; }
-            long nx = Seqs.Next(rt, rt.R(x)), ny = Seqs.Next(rt, rt.R(y));
+            long nx = global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(x)), ny = global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(y));
             rt.SetR(x, nx); rt.SetR(y, ny);
         }
         rt.PopTo(bas);

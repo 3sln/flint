@@ -19,7 +19,7 @@ import static com._3sln.flint.kgen.rt.Vecread.*;
 public final class Seqwalk {
     /// The first element of `v`, or nil when there is none.
     public static long first(Rt rt, long v) {
-        long s = com.flint.rt.Seqs.seq(rt, v);
+        long s = com._3sln.flint.kgen.rt.Seqwalk.seq(rt, v);
         if (Val.isNil(s)) {
             return Val.NIL;
         }
@@ -52,13 +52,13 @@ public final class Seqwalk {
     }
     /// The seq after the first element, or nil when it is exhausted.
     public static long next(Rt rt, long v) {
-        long s = com.flint.rt.Seqs.seq(rt, v);
+        long s = com._3sln.flint.kgen.rt.Seqwalk.seq(rt, v);
         if (Val.isNil(s)) {
             return Val.NIL;
         }
         int t = ty(rt.gc.sp, Val.asHeap(s));
         if (t == TY_CONS) {
-            return com.flint.rt.Seqs.seq(rt, rt.slot(s, C_REST));
+            return com._3sln.flint.kgen.rt.Seqwalk.seq(rt, rt.slot(s, C_REST));
         }
         if (t == TY_VECSEQ) {
             long coll = rt.slot(s, 0);
@@ -92,7 +92,7 @@ public final class Seqwalk {
             // other two targets read the hoisted form fine.
             long nstart = Num.add(rt, rt.slot(s, 0), rt.slot(s, 2));
             long r = range(rt, nstart, rt.slot(s, 1), rt.slot(s, 2));
-            return com.flint.rt.Seqs.seq(rt, r);
+            return com._3sln.flint.kgen.rt.Seqwalk.seq(rt, r);
         }
         return Val.NIL;
     }
@@ -169,7 +169,7 @@ public final class Seqwalk {
             return (int) Val.asFixnum(hint);
         }
         int base = rt.mark();
-        long s = com.flint.rt.Seqs.seq(rt, v);
+        long s = com._3sln.flint.kgen.rt.Seqwalk.seq(rt, v);
         int ci = rt.push(s);
         // HOISTED: `seq-of` and `push` both take `&mut self` in Rust.
         int n;

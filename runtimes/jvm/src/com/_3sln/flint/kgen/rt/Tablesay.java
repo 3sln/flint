@@ -91,7 +91,7 @@ public final class Tablesay {
         }
         // HOISTED for Rust's borrow checker: `push` and `seq-of` both take
         // `&mut self`.
-        long q0 = com.flint.rt.Seqs.seq(rt, row);
+        long q0 = com._3sln.flint.kgen.rt.Seqwalk.seq(rt, row);
         int qi = rt.push(q0);
         while (!Val.isNil(rt.r(qi))) {
             long e0 = com._3sln.flint.kgen.rt.Seqwalk.first(rt, rt.r(qi));
@@ -102,7 +102,7 @@ public final class Tablesay {
                 return k;
             }
             rt.popTo(ei);
-            long nx = com.flint.rt.Seqs.next(rt, rt.r(qi));
+            long nx = com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(qi));
             rt.setR(qi, nx);
         }
         rt.popTo(base);

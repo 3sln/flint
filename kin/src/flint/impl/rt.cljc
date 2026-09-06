@@ -954,9 +954,13 @@
     ;; shape and `empty-map` was already written qualified for it.
     ;; Written out rather than built by `sibling`, because the CLASS differs
     ;; per target here and `sibling` varies only the method name.
+    ;; `seq-of` and `next-of` NAME THE GENERATED CLASS, for the reason
+    ;; `first-of` does: the port's `Seqs` copies were shims over exactly these,
+    ;; and a second definition under a name generated code reaches stops the
+    ;; CLR compiling the moment one generated file has both in scope.
     'seq-of (core/call {:rust "{0}.seq({1})"
-                        :java "com.flint.rt.Seqs.seq({0}, {1})"
-                        :csharp "global::Flint.Rt.Seqs.Seq({0}, {1})"})
+                        :java "com._3sln.flint.kgen.rt.Seqwalk.seq({0}, {1})"
+                        :csharp "global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq({0}, {1})"})
     ;; `first-of` NAMES THE GENERATED CLASS, not the port's `Seqs`. The shim
     ;; there existed only so this entry could keep its old spelling -- and a
     ;; second definition under a name generated code also reaches is not free:
@@ -965,8 +969,8 @@
                           :java "com._3sln.flint.kgen.rt.Seqwalk.first({0}, {1})"
                           :csharp "global::_3sln.Flint.Kgen.Rt.Seqwalk.First({0}, {1})"})
     'next-of (core/call {:rust "{0}.next({1})"
-                         :java "com.flint.rt.Seqs.next({0}, {1})"
-                         :csharp "global::Flint.Rt.Seqs.Next({0}, {1})"})
+                         :java "com._3sln.flint.kgen.rt.Seqwalk.next({0}, {1})"
+                         :csharp "global::_3sln.Flint.Kgen.Rt.Seqwalk.Next({0}, {1})"})
 
     ;; --- STRING BUILDING, hole 5 -----------------------------------------
     ;;
@@ -1162,6 +1166,15 @@
     'map-entry-vector (core/call {:rust "{0}.map_entry_vector({1})"
                                   :java "Maps.entryVector({0}, {1})"
                                   :csharp "Maps.EntryVector({0}, {1})"}
+                                 {:tag Value})
+    ;; A MAP ENTRY AS A TWO-ELEMENT VECTOR -- which is NOT `map-entry-vector`
+    ;; above, and the two are one letter apart in use. That one turns a MAP
+    ;; into a vector OF entries; this one turns ONE entry into a vector of its
+    ;; key and value. Reaching for the wrong one gave `(assoc [:a 1] 0 :z)` the
+    ;; answer `[:z]` on the JVM, which is what named the confusion.
+    'map-entry-as-vec (core/call {:rust "{0}.map_entry_as_vec({1})"
+                                  :java "Vec.mapEntryAsVec({0}, {1})"
+                                  :csharp "Vec.MapEntryAsVec({0}, {1})"}
                                  {:tag Value})
     'set-element-vector (core/call {:rust "{0}.set_element_vector({1})"
                                     :java "Sets.elementVector({0}, {1})"

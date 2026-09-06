@@ -122,6 +122,18 @@ public final class Vec {
 
 
 
+    /// A MAP ENTRY AS A TWO-ELEMENT VECTOR. It was a private helper in
+    /// `Builtins` here and lives on `Vec` in the native runtime; `assoc` and
+    /// `conj` both reach it, and generated code needs one home.
+    public static long mapEntryAsVec(Rt rt, long e) {
+        int base = rt.mark();
+        rt.push(rt.slot(e, 0));
+        rt.push(rt.slot(e, 1));
+        long out = fromRoots(rt, base, 2);
+        rt.popTo(base);
+        return out;
+    }
+
     public static long fromRoots(Rt rt, int base, int n) {
         int mk = rt.mark();
         int vi = rt.push(empty(rt));

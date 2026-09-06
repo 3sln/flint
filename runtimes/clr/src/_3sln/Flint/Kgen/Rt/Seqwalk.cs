@@ -21,7 +21,7 @@ using static global::_3sln.Flint.Kgen.Rt.Vecread;
 public static class Seqwalk {
     /// The first element of `v`, or nil when there is none.
     public static long First(Rt rt, long v) {
-        long s = global::Flint.Rt.Seqs.Seq(rt, v);
+        long s = global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, v);
         if (Val.IsNil(s)) {
             return Val.Nil;
         }
@@ -54,13 +54,13 @@ public static class Seqwalk {
     }
     /// The seq after the first element, or nil when it is exhausted.
     public static long Next(Rt rt, long v) {
-        long s = global::Flint.Rt.Seqs.Seq(rt, v);
+        long s = global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, v);
         if (Val.IsNil(s)) {
             return Val.Nil;
         }
         int t = Obj.Ty(rt.gc.sp, Val.AsHeap(s));
         if (t == Obj.TyCons) {
-            return global::Flint.Rt.Seqs.Seq(rt, rt.Slot(s, C_REST));
+            return global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, rt.Slot(s, C_REST));
         }
         if (t == Obj.TyVecseq) {
             long coll = rt.Slot(s, 0);
@@ -94,7 +94,7 @@ public static class Seqwalk {
             // other two targets read the hoisted form fine.
             long nstart = Num.Add(rt, rt.Slot(s, 0), rt.Slot(s, 2));
             long r = Range(rt, nstart, rt.Slot(s, 1), rt.Slot(s, 2));
-            return global::Flint.Rt.Seqs.Seq(rt, r);
+            return global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, r);
         }
         return Val.Nil;
     }
@@ -171,7 +171,7 @@ public static class Seqwalk {
             return (int) Val.AsFixnum(hint);
         }
         int @base = rt.Mark();
-        long s = global::Flint.Rt.Seqs.Seq(rt, v);
+        long s = global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, v);
         int ci = rt.Push(s);
         // HOISTED: `seq-of` and `push` both take `&mut self` in Rust.
         int n;

@@ -37,6 +37,7 @@ pub mod champ;
 pub mod collnode;
 pub mod collgen;
 pub mod collread;
+pub mod collwrite;
 pub mod copies;
 pub mod names;
 pub mod nouns;

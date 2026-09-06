@@ -383,14 +383,19 @@ fn main() {
     // `com.flint.rt.Seqs` in the real emit; here the probe is one class, so
     // the qualified name is faked with a nested one of the same shape.
     static final class com {
+        // `seq-of` NOW NAMES THE GENERATED CLASS, so the probe declares that
+        // path too -- and it is `com._3sln`, nested here rather than beside
+        // `com`. A second hand-written `seq` would be the fixture testing
+        // itself, so it routes straight back into the generated one.
+        static final class _3sln { static final class flint { static final class kgen {
+            static final class rt { static final class Seqwalk {
+                static long seq(Rt rt2, long v) { return Probe.seq(rt2, v); }
+            } }
+        } } }
         static final class flint {
             static final class rt {
                 static final class Seqs {
                     static long emptyList(Rt rt2) { return emptyListOf(rt2); }
-                    // `seq-of` NOW ROUTES TO THE GENERATED ONE -- see the C#
-                    // copy. A second hand-written `seq` here would be the
-                    // fixture testing itself.
-                    static long seq(Rt rt2, long v) { return Probe.seq(rt2, v); }
                 }
             }
         }
@@ -481,14 +486,17 @@ fn main() {
 // namespace ends in `Rt` and a bare `Flint.Rt` would resolve against that
 // instead. `global::` needs a genuine root namespace, which a shim nested
 // inside `class Probe` cannot be -- so these live out here now.
+// `seq-of` NOW NAMES THE GENERATED CLASS. `seq` is generated into this very
+// module, so the shim routes straight back into it rather than carrying a
+// second copy that the fixture would then be testing against itself.
+namespace _3sln.Flint.Kgen.Rt {
+    internal static class Seqwalk {
+        internal static long Seq(Probe.Rt rt, long v) { return Probe.Seq(rt, v); }
+    }
+}
 namespace Flint.Rt {
     internal static class Seqs {
         internal static long EmptyList(Probe.Rt rt) { return Probe.EmptyListOf(rt); }
-        // `seq-of` NOW ROUTES TO THE GENERATED ONE. `seq` used to be
-        // hand-written and the probe carried its own copy; it is generated
-        // into this very module now, so a second copy here would be the
-        // fixture testing itself.
-        internal static long Seq(Probe.Rt rt, long v) { return Probe.Seq(rt, v); }
     }
     internal static class Table {
         internal static long refToMap(Probe.Rt rt, long r) { return rt.Slot(r, 0); }

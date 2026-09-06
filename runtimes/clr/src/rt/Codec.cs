@@ -174,12 +174,12 @@ public static class Codec {
         else throw new Refused("this value cannot cross a boundary (object type "
                                + Obj.Ty(rt.gc.sp, Val.AsHeap(v)) + ")");
         int bas = rt.Mark();
-        int si = rt.Push(Seqs.Seq(rt, v));
+        int si = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, v));
         int n = 0;
         while (!Val.IsNil(rt.R(si))) {
             rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(si)));
             n++;
-            rt.SetR(si, Seqs.Next(rt, rt.R(si)));
+            rt.SetR(si, global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(si)));
         }
         outs.WriteByte((byte) tag);
         U32(outs, n);

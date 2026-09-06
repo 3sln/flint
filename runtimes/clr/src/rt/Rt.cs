@@ -720,14 +720,14 @@ public sealed class Rt : System.IDisposable {
                         long cseq = VPop();
                         int csi = Push(cseq);
                         int cspread = 0;
-                        SetR(csi, Seqs.Seq(this, R(csi)));
+                        SetR(csi, global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(this, R(csi)));
                         while (!Val.IsNil(R(csi))) {
                             // The same tick the Rust runtime charges: a spread
                             // walks a whole sequence under one instruction.
                             if (!ChargeTick(cspread, 1, "apply")) { PopTo(csi); break; }
                             VPush(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(this, R(csi)));
                             cspread++;
-                            SetR(csi, Seqs.Next(this, R(csi)));
+                            SetR(csi, global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(this, R(csi)));
                         }
                         if (Failed()) {
                             PopTo(csi);
@@ -748,12 +748,12 @@ public sealed class Rt : System.IDisposable {
                     for (int i = 0; i < argc; i++) VPush(roots.Stack[operandsAt + i]);
                     int nsi = Push(nseq);
                     int nspread = 0;
-                    SetR(nsi, Seqs.Seq(this, R(nsi)));
+                    SetR(nsi, global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(this, R(nsi)));
                     while (!Val.IsNil(R(nsi))) {
                         if (!ChargeTick(nspread, 1, "apply")) { PopTo(nsi); break; }
                         VPush(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(this, R(nsi)));
                         nspread++;
-                        SetR(nsi, Seqs.Next(this, R(nsi)));
+                        SetR(nsi, global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(this, R(nsi)));
                     }
                     if (Failed()) {
                         PopTo(nsi);
