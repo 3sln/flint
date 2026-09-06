@@ -154,7 +154,8 @@ public static class Conc {
 
     static long Fx(long v) { return Val.AsFixnum(v); }
 
-    static long NewObj(Rt rt, int ty, int len) {
+    /// `public` because the generated tree calls it -- see the Java copy.
+    public static long NewObj(Rt rt, int ty, int len) {
         long a = rt.Alloc(ty, len);
         return a == 0 ? Val.Nil : Val.Heap(a);
     }

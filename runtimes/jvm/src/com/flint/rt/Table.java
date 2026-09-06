@@ -56,6 +56,16 @@ public final class Table {
     // Row-ref slots, and the transient's.
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // THE CHUNK HALF, generated from `kin/tablecell.kin`. `newObj` is gone
+    // rather than shimmed: it was a second copy of `Conc.newObj`, and the
+    // vocabulary now points at that one.
+    static long newChunk(Rt rt, int width, int rows) { return com._3sln.flint.kgen.rt.Tablecell.newChunk(rt, width, rows); }
+    static void collapse(Rt rt, long ch, int id) { com._3sln.flint.kgen.rt.Tablecell.collapse(rt, ch, id); }
+    static long rowColumn(Rt rt, long s, long row, int c) { return com._3sln.flint.kgen.rt.Tablecell.rowColumn(rt, s, row, c); }
+    static int schemaPosOf(Rt rt, long s, long name) { return com._3sln.flint.kgen.rt.Tablecell.schemaPosOf(rt, s, name); }
+    static long tableCell(Rt rt, long t, int id, int i) { return com._3sln.flint.kgen.rt.Tablecell.tableCell(rt, t, id, i); }
+    public static boolean isTtable(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablecell.isTtable(rt, v); }
+
     // The ROW-REF HALF, generated from `kin/tableref.kin`.
     public static int schemaId(Rt rt, long s, long name) { return com._3sln.flint.kgen.rt.Tableref.schemaId(rt, s, name); }
     public static long tableRef(Rt rt, long t, int i) { return com._3sln.flint.kgen.rt.Tableref.tableRef(rt, t, i); }
@@ -87,15 +97,7 @@ public final class Table {
     // which is a message that contradicts itself and says so.
     static long emptyVec(Rt rt) { return Vec.empty(rt); }
     static long emptyMap(Rt rt) { return Maps.empty(rt); }
-    static long newObj(Rt rt, int ty, int n) {
-        long a = rt.alloc(ty, n);
-        return a == 0 ? Val.NIL : Val.heap(a);
-    }
     static void set(Rt rt, long obj, int i, long v) { rt.setSlot(Val.asHeap(obj), i, v); }
-
-    public static boolean isTtable(Rt rt, long v) {
-        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_TTABLE;
-    }
 
     static boolean knownType(Rt rt, long t) {
         for (String n : new String[]{"int", "double", "string", "bool", "keyword", "any"})
@@ -156,7 +158,7 @@ public final class Table {
             rt.setR(ii, Mapwrite.mapAssoc(rt, rt.r(ii), nm, Val.fixnum(i)));
             rt.setR(di, Vec.conj(rt, rt.r(di), Val.fixnum(i)));
         }
-        long s = newObj(rt, TY_SCHEMA, SC_LEN);
+        long s = Conc.newObj(rt, TY_SCHEMA, SC_LEN);
         int si = rt.push(s);
         set(rt, rt.r(si), SC_NAMES, rt.r(ni));
         set(rt, rt.r(si), SC_TYPES, rt.r(ti));
@@ -166,44 +168,6 @@ public final class Table {
         long out = rt.r(si);
         rt.popTo(base);
         return out;
-    }
-
-    static long newChunk(Rt rt, int width, int rows) {
-        int base = rt.mark();
-        long ch = newObj(rt, TY_NODE, CH_BASE + width);
-        int ci = rt.push(ch);
-        set(rt, rt.r(ci), CH_ROWS, Val.fixnum(rows));
-        long enc = newObj(rt, TY_NODE, Math.max(width, 1));
-        int ei = rt.push(enc);
-        for (int id = 0; id < width; id++) set(rt, rt.r(ei), id, Val.fixnum(ENC_FLAT));
-        set(rt, rt.r(ci), CH_ENC, rt.r(ei));
-        long out = rt.r(ci);
-        rt.popTo(base);
-        return out;
-    }
-
-    /// Collapse column `id` to a single value if every row holds the same one.
-    /// Run over the COLUMN rather than the rows: the values are already
-    /// gathered, so this is a scan of the thing being collapsed.
-    static void collapse(Rt rt, long ch, int id) {
-        int base = rt.mark();
-        int ci = rt.push(ch);
-        long col = rt.slot(rt.r(ci), CH_BASE + id);
-        int coli = rt.push(col);
-        int n = Obj.len(rt.gc.sp, Val.asHeap(rt.r(coli)));
-        // A SCAN that allocates nothing charges nothing unless it says so.
-        rt.chargeWork(n);
-        if (n == 0) { rt.popTo(base); return; }
-        int fi = rt.push(rt.slot(rt.r(coli), 0));
-        boolean same = true;
-        for (int k = 1; k < n; k++) {
-            if (!Eq.eq(rt, rt.r(fi), rt.slot(rt.r(coli), k))) { same = false; break; }
-        }
-        if (same) {
-            set(rt, rt.r(ci), CH_BASE + id, rt.r(fi));
-            set(rt, rt.slot(rt.r(ci), CH_ENC), id, Val.fixnum(ENC_CONST));
-        }
-        rt.popTo(base);
     }
 
     static String kwName(Rt rt, long v) {
@@ -250,7 +214,7 @@ public final class Table {
             int chi = rt.push(ch);
             for (int c = 0; c < ncols; c++) {
                 int id = schemaIdAt(rt, rt.r(si), c);
-                long col = newObj(rt, TY_NODE, take);
+                long col = Conc.newObj(rt, TY_NODE, take);
                 int coli = rt.push(col);
                 for (int k = 0; k < take; k++) {
                     long rowv = Vec.nth(rt, rt.r(ri), row + k, Val.NOT_FOUND);
@@ -274,7 +238,7 @@ public final class Table {
             rt.popTo(chi);
             row += take;
         }
-        long t = newObj(rt, TY_TABLE, TB_LEN);
+        long t = Conc.newObj(rt, TY_TABLE, TB_LEN);
         int ti = rt.push(t);
         set(rt, rt.r(ti), TB_SCHEMA, rt.r(si));
         set(rt, rt.r(ti), TB_CHUNKS, rt.r(ci));
@@ -283,14 +247,6 @@ public final class Table {
         long out = rt.r(ti);
         rt.popTo(base);
         return out;
-    }
-
-    /// The value of column `c` in `row`, or `NOT_FOUND`. `row` may be a map or
-    /// another table's row ref.
-    static long rowColumn(Rt rt, long s, long row, int c) {
-        long name = schemaNameAt(rt, s, c);
-        return isTableRef(rt, row) ? refGet(rt, row, name, Val.NOT_FOUND)
-                                   : Mapread.mapGet(rt, row, name, Val.NOT_FOUND);
     }
 
     /// Does `row` fit `s`? The three refusals are separate because they are
@@ -431,7 +387,7 @@ public final class Table {
                 rt.popTo(vi);
                 continue;
             }
-            long col = newObj(rt, TY_NODE, Math.max(take, 1));
+            long col = Conc.newObj(rt, TY_NODE, Math.max(take, 1));
             int cj = rt.push(col);
             for (int j = 0; j < Math.min(old, take); j++)
                 set(rt, rt.r(cj), j, chunkGet(rt, rt.r(ci), id, j));
@@ -486,7 +442,7 @@ public final class Table {
                 {
                     // HOISTED: the allocation must happen before the object's
                     // address is read, or the write lands on a forwarded copy.
-                    long col1 = newObj(rt, TY_NODE, 1);
+                    long col1 = Conc.newObj(rt, TY_NODE, 1);
                     set(rt, rt.r(chi), CH_BASE + schemaIdAt(rt, rt.r(si), c), col1);
                 }
             writeRow(rt, rt.r(si), rt.r(chi), 0, rt.r(ri));
@@ -504,7 +460,7 @@ public final class Table {
             rt.popTo(chi);
         }
         int count = tableCount(rt, rt.r(ti)) + (append ? 1 : 0);
-        long nt = newObj(rt, TY_TABLE, TB_LEN);
+        long nt = Conc.newObj(rt, TY_TABLE, TB_LEN);
         int ni = rt.push(nt);
         set(rt, rt.r(ni), TB_SCHEMA, rt.r(si));
         set(rt, rt.r(ni), TB_CHUNKS, rt.r(ci));
@@ -539,13 +495,6 @@ public final class Table {
     // addresses its columns by stable id, so a column the new schema keeps is
     // the SAME COLUMN OBJECT, shared rather than copied.
 
-    static int schemaPosOf(Rt rt, long s, long name) {
-        int n = schemaLen(rt, s);
-        rt.chargeWork(n);
-        for (int c = 0; c < n; c++) if (Eq.eq(rt, schemaNameAt(rt, s, c), name)) return c;
-        return 0;
-    }
-
     /// `want` REBASED onto `have`'s column ids: a column both schemas name
     /// keeps its id, so the chunks holding it can be shared unchanged.
     ///
@@ -569,7 +518,7 @@ public final class Table {
             rt.setR(ii, Mapwrite.mapAssoc(rt, rt.r(ii), rt.r(nmi), Val.fixnum(id)));
             rt.popTo(nmi);
         }
-        long sc = newObj(rt, TY_SCHEMA, SC_LEN);
+        long sc = Conc.newObj(rt, TY_SCHEMA, SC_LEN);
         int si = rt.push(sc);
         set(rt, rt.r(si), SC_NAMES, rt.slot(rt.r(wi), SC_NAMES));
         set(rt, rt.r(si), SC_TYPES, rt.slot(rt.r(wi), SC_TYPES));
@@ -656,7 +605,7 @@ public final class Table {
             rt.setR(oi, Vec.conj(rt, rt.r(oi), rt.r(ni)));
             rt.popTo(chi);
         }
-        long nt = newObj(rt, TY_TABLE, TB_LEN);
+        long nt = Conc.newObj(rt, TY_TABLE, TB_LEN);
         int nti = rt.push(nt);
         set(rt, rt.r(nti), TB_SCHEMA, rt.r(ri));
         set(rt, rt.r(nti), TB_CHUNKS, rt.r(oi));
@@ -671,13 +620,6 @@ public final class Table {
     //
     // The half that makes a column store worth having rather than merely
     // compact: everything here reaches the COLUMN and never builds a row.
-
-    /// Cell `(row, column-id)`, straight out of the chunk. The scan path.
-    static long tableCell(Rt rt, long t, int id, int i) {
-        int phys = i + tableOffset(rt, t);
-        long ch = Vec.nth(rt, rt.slot(t, TB_CHUNKS), phys >> CHUNK_SHIFT, Val.NOT_FOUND);
-        return chunkGet(rt, ch, id, phys & (CHUNK - 1));
-    }
 
     /// `(slice t from to)` -- rows `[from, to)`, SHARING every chunk it spans.
     /// Chunks outside the range are dropped, so a slice does not retain the
@@ -704,7 +646,7 @@ public final class Table {
         for (int k = first; k <= last; k++)
             rt.setR(ki, Vec.conj(rt, rt.r(ki), Vec.nth(rt, rt.r(ci), k, Val.NOT_FOUND)));
         int si = rt.push(rt.slot(rt.r(ti), TB_SCHEMA));
-        long nt = newObj(rt, TY_TABLE, TB_LEN);
+        long nt = Conc.newObj(rt, TY_TABLE, TB_LEN);
         int ni = rt.push(nt);
         set(rt, rt.r(ni), TB_SCHEMA, rt.r(si));
         set(rt, rt.r(ni), TB_CHUNKS, rt.r(ki));
@@ -788,7 +730,7 @@ public final class Table {
                 int id = schemaIdAt(rt, rt.r(si), c);
                 int sj = rt.push(Vec.nth(rt, rt.r(ci), c, Val.NOT_FOUND));
                 long tp = schemaTypeAt(rt, rt.r(si), c);
-                int cj = rt.push(newObj(rt, TY_NODE, take));
+                int cj = rt.push(Conc.newObj(rt, TY_NODE, take));
                 for (int k = 0; k < take; k++) {
                     long v = Vec.nth(rt, rt.r(sj), row + k, Val.NOT_FOUND);
                     if (!typeOk(rt, tp, v)) {
@@ -806,7 +748,7 @@ public final class Table {
             rt.popTo(chi);
             row += take;
         }
-        long t = newObj(rt, TY_TABLE, TB_LEN);
+        long t = Conc.newObj(rt, TY_TABLE, TB_LEN);
         int ti = rt.push(t);
         set(rt, rt.r(ti), TB_SCHEMA, rt.r(si));
         set(rt, rt.r(ti), TB_CHUNKS, rt.r(ki));
@@ -831,7 +773,7 @@ public final class Table {
         int ncols = schemaLen(rt, rt.r(si));
         for (int c = 0; c < ncols; c++)
             {
-                long colN = newObj(rt, TY_NODE, CHUNK);
+                long colN = Conc.newObj(rt, TY_NODE, CHUNK);
                 set(rt, rt.r(ci), CH_BASE + schemaIdAt(rt, rt.r(si), c), colN);
             }
         long out = rt.r(ci);
@@ -871,7 +813,7 @@ public final class Table {
             rt.popTo(li);
         }
         set(rt, rt.r(oi), CH_ROWS, Val.fixnum(partial));
-        long tt = newObj(rt, TY_TTABLE, TT_LEN);
+        long tt = Conc.newObj(rt, TY_TTABLE, TT_LEN);
         int tti = rt.push(tt);
         set(rt, rt.r(tti), TT_SCHEMA, rt.r(si));
         set(rt, rt.r(tti), TT_CHUNKS, rt.r(ci));
@@ -903,7 +845,7 @@ public final class Table {
         int ncols = schemaLen(rt, rt.r(si));
         for (int c = 0; c < ncols; c++) {
             int id = schemaIdAt(rt, rt.r(si), c);
-            int cj = rt.push(newObj(rt, TY_NODE, Math.max(rows, 1)));
+            int cj = rt.push(Conc.newObj(rt, TY_NODE, Math.max(rows, 1)));
             int sj = rt.push(rt.slot(rt.r(oi), CH_BASE + id));
             for (int k = 0; k < rows; k++) set(rt, rt.r(cj), k, rt.slot(rt.r(sj), k));
             set(rt, rt.r(ci), CH_BASE + id, rt.r(cj));
@@ -972,7 +914,7 @@ public final class Table {
         }
         long count = rt.slot(rt.r(ti), TT_COUNT);
         set(rt, rt.r(ti), TT_LIVE, Val.FALSE);
-        long nt = newObj(rt, TY_TABLE, TB_LEN);
+        long nt = Conc.newObj(rt, TY_TABLE, TB_LEN);
         int ni = rt.push(nt);
         set(rt, rt.r(ni), TB_SCHEMA, rt.r(si));
         set(rt, rt.r(ni), TB_CHUNKS, rt.r(ci));

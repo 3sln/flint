@@ -159,63 +159,6 @@ impl Rt {
         self.keyword(None, name)
     }
 
-    /// A chunk of `rows` rows and `width` column slots, every column flat and
-    /// empty. The caller fills it and may then collapse columns.
-    fn new_chunk(&mut self, width: u32, rows: u32) -> Value {
-        let base = self.mark();
-        let ch = self.new_obj(TY_NODE, CH_BASE + width);
-        let ci = self.push(ch);
-        self.set(self.r(ci), CH_ROWS, Value::fixnum(rows as i64));
-        let enc = self.new_obj(TY_NODE, width.max(1));
-        let ei = self.push(enc);
-        for id in 0..width {
-            self.set(self.r(ei), id, Value::fixnum(ENC_FLAT as i64));
-        }
-        let ev = self.r(ei);
-        self.set(self.r(ci), CH_ENC, ev);
-        let out = self.r(ci);
-        self.pop_to(base);
-        out
-    }
-
-    /// Collapse column `id` to a single value if every row holds the same one.
-    ///
-    /// Run over the COLUMN rather than over the rows: the values are already
-    /// gathered, so this is a scan of the thing being collapsed and not a
-    /// second pass through the map lookups that built it.
-    fn collapse(&mut self, ch: Value, id: u32) {
-        let base = self.mark();
-        let ci = self.push(ch);
-        let col = self.slot(self.r(ci), CH_BASE + id);
-        let coli = self.push(col);
-        let n = self.olen(self.r(coli));
-        // A SCAN that allocates nothing charges nothing unless it says so.
-        // Allocation charging covers the copying paths; this one is pure
-        // comparison over `n` values (`doc/decisions/0009`).
-        self.charge_work(n as u64);
-        if n == 0 {
-            self.pop_to(base);
-            return;
-        }
-        let first = self.slot(self.r(coli), 0);
-        let fi = self.push(first);
-        let mut same = true;
-        for k in 1..n {
-            let v = self.slot(self.r(coli), k);
-            if !self.eq(self.r(fi), v) {
-                same = false;
-                break;
-            }
-        }
-        if same {
-            let fv = self.r(fi);
-            self.set(self.r(ci), CH_BASE + id, fv);
-            let e = self.slot(self.r(ci), CH_ENC);
-            self.set(e, id, Value::fixnum(ENC_CONST as i64));
-        }
-        self.pop_to(base);
-    }
-
     /// `[[name type] …]` -> a schema. The names must be keywords and distinct;
     /// the types must be ones `type_ok` knows.
     pub fn new_schema(&mut self, pairs: Value) -> Value {
@@ -436,19 +379,6 @@ impl Rt {
     // release build would not be closed (`doc/decisions/0026`). What they take
     // from `0032` is the quality of the message -- expected, actual, and the
     // column -- rather than the mechanism.
-
-    /// The value of column `c` in `row`, or `NOT_FOUND`. `row` may be a map or
-    /// another table's row ref, so a row can be moved between tables without
-    /// being materialised first.
-    fn row_column(&mut self, s: Value, row: Value, c: u32) -> Value {
-        let names = self.slot(s, SC_NAMES);
-        let name = self.vec_nth(names, c, NIL);
-        if self.is_table_ref(row) {
-            self.ref_get(row, name, NOT_FOUND)
-        } else {
-            self.map_get(row, name, NOT_FOUND)
-        }
-    }
 
     /// The schema's column names as `:a :b :c`, for a message that has to say
     /// what the columns ARE rather than only that the key was not one.
@@ -978,21 +908,6 @@ impl Rt {
         out
     }
 
-    /// The POSITION of `name` in the schema's own order -- which is not its
-    /// column id once a migration has moved things. Used only to read the
-    /// parallel `SC_TYPES`.
-    fn schema_pos_of(&mut self, s: Value, name: Value) -> u32 {
-        let n = self.schema_len(s);
-        self.charge_work(n as u64);
-        for c in 0..n {
-            let nm = self.schema_name_at(s, c);
-            if self.eq(nm, name) {
-                return c;
-            }
-        }
-        0
-    }
-
     // ---------------------------------------------------------------- step 7
     //
     // THE TRANSIENT. Appending through the persistent path copies the whole
@@ -1005,10 +920,6 @@ impl Rt {
     // happens INSIDE a builtin, where one step is charged however much work it
     // does. Worth knowing before trusting gas as a proxy for work: it measures
     // the program, not the runtime underneath it.
-
-    pub fn is_ttable(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_TTABLE
-    }
 
     /// A fresh open chunk: full width, `CHUNK` rows of room, every column flat.
     /// Rows are written into it in place; nothing else can see it until it is
@@ -1309,14 +1220,6 @@ impl Rt {
         let r = self.r(oi);
         self.pop_to(base);
         r
-    }
-
-    /// Cell `(row, column-id)`, straight out of the chunk. The scan path.
-    fn table_cell(&mut self, t: Value, id: u32, i: u32) -> Value {
-        let phys = i + self.table_offset(t);
-        let chunks = self.slot(t, TB_CHUNKS);
-        let ch = self.vec_nth(chunks, phys >> CHUNK_SHIFT, NIL);
-        self.chunk_get(ch, id, phys & (CHUNK - 1))
     }
 
     /// `(reduce-column t :col f init)` -- `f` over one column, without building

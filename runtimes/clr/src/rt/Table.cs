@@ -49,6 +49,14 @@ public static class Table {
     // Row-ref slots, and the transient's.
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // THE CHUNK HALF, generated from `kin/tablecell.kin` -- see the Java copy.
+    static long newChunk(Rt rt, int width, int rows) { return global::_3sln.Flint.Kgen.Rt.Tablecell.NewChunk(rt, width, rows); }
+    static void collapse(Rt rt, long ch, int id) { global::_3sln.Flint.Kgen.Rt.Tablecell.Collapse(rt, ch, id); }
+    static long rowColumn(Rt rt, long s, long row, int c) { return global::_3sln.Flint.Kgen.Rt.Tablecell.RowColumn(rt, s, row, c); }
+    static int schemaPosOf(Rt rt, long s, long name) { return global::_3sln.Flint.Kgen.Rt.Tablecell.SchemaPosOf(rt, s, name); }
+    static long tableCell(Rt rt, long t, int id, int i) { return global::_3sln.Flint.Kgen.Rt.Tablecell.TableCell(rt, t, id, i); }
+    public static bool isTtable(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Tablecell.IsTtable(rt, v); }
+
     // The ROW-REF HALF, generated from `kin/tableref.kin`.
     public static int schemaId(Rt rt, long s, long name) { return global::_3sln.Flint.Kgen.Rt.Tableref.SchemaId(rt, s, name); }
     public static long tableRef(Rt rt, long t, int i) { return global::_3sln.Flint.Kgen.Rt.Tableref.TableRef(rt, t, i); }
@@ -80,15 +88,7 @@ public static class Table {
     // which is a message that contradicts itself and says so.
     static long emptyVec(Rt rt) { return Vec.Empty(rt); }
     static long emptyMap(Rt rt) { return Maps.Empty(rt); }
-    static long newObj(Rt rt, int ty, int n) {
-        long a = rt.Alloc(ty, n);
-        return a == 0 ? Val.Nil : Val.Heap(a);
-    }
     static void set(Rt rt, long obj, int i, long v) { rt.SetSlot(Val.AsHeap(obj), i, v); }
-
-    public static bool isTtable(Rt rt, long v) {
-        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTtable;
-    }
 
     static bool knownType(Rt rt, long t) {
         foreach (string n in new string[]{"int", "double", "string", "bool", "keyword", "any"})
@@ -149,7 +149,7 @@ public static class Table {
             rt.SetR(ii, Mapwrite.MapAssoc(rt, rt.R(ii), nm, Val.Fixnum(i)));
             rt.SetR(di, Vec.Conj(rt, rt.R(di), Val.Fixnum(i)));
         }
-        long s = newObj(rt, Obj.TySchema, SC_LEN);
+        long s = Conc.NewObj(rt, Obj.TySchema, SC_LEN);
         int si = rt.Push(s);
         set(rt, rt.R(si), SC_NAMES, rt.R(ni));
         set(rt, rt.R(si), SC_TYPES, rt.R(ti));
@@ -159,44 +159,6 @@ public static class Table {
         long outv = rt.R(si);
         rt.PopTo(bas);
         return outv;
-    }
-
-    static long newChunk(Rt rt, int width, int rows) {
-        int bas = rt.Mark();
-        long ch = newObj(rt, Obj.TyNode, CH_BASE + width);
-        int ci = rt.Push(ch);
-        set(rt, rt.R(ci), CH_ROWS, Val.Fixnum(rows));
-        long enc = newObj(rt, Obj.TyNode, System.Math.Max(width, 1));
-        int ei = rt.Push(enc);
-        for (int id = 0; id < width; id++) set(rt, rt.R(ei), id, Val.Fixnum(ENC_FLAT));
-        set(rt, rt.R(ci), CH_ENC, rt.R(ei));
-        long outv = rt.R(ci);
-        rt.PopTo(bas);
-        return outv;
-    }
-
-    /// Collapse column `id` to a single value if every row holds the same one.
-    /// Run over the COLUMN rather than the rows: the values are already
-    /// gathered, so this is a scan of the thing being collapsed.
-    static void collapse(Rt rt, long ch, int id) {
-        int bas = rt.Mark();
-        int ci = rt.Push(ch);
-        long col = rt.Slot(rt.R(ci), CH_BASE + id);
-        int coli = rt.Push(col);
-        int n = Obj.Len(rt.gc.sp, Val.AsHeap(rt.R(coli)));
-        // A SCAN that allocates nothing charges nothing unless it says so.
-        rt.ChargeWork(n);
-        if (n == 0) { rt.PopTo(bas); return; }
-        int fi = rt.Push(rt.Slot(rt.R(coli), 0));
-        bool same = true;
-        for (int k = 1; k < n; k++) {
-            if (!Eq.Equal(rt, rt.R(fi), rt.Slot(rt.R(coli), k))) { same = false; break; }
-        }
-        if (same) {
-            set(rt, rt.R(ci), CH_BASE + id, rt.R(fi));
-            set(rt, rt.Slot(rt.R(ci), CH_ENC), id, Val.Fixnum(ENC_CONST));
-        }
-        rt.PopTo(bas);
     }
 
     static string kwName(Rt rt, long v) {
@@ -243,7 +205,7 @@ public static class Table {
             int chi = rt.Push(ch);
             for (int c = 0; c < ncols; c++) {
                 int id = schemaIdAt(rt, rt.R(si), c);
-                long col = newObj(rt, Obj.TyNode, take);
+                long col = Conc.NewObj(rt, Obj.TyNode, take);
                 int coli = rt.Push(col);
                 for (int k = 0; k < take; k++) {
                     long rowv = Vec.Nth(rt, rt.R(ri), row + k, Val.NotFound);
@@ -267,7 +229,7 @@ public static class Table {
             rt.PopTo(chi);
             row += take;
         }
-        long t = newObj(rt, Obj.TyTable, TB_LEN);
+        long t = Conc.NewObj(rt, Obj.TyTable, TB_LEN);
         int ti = rt.Push(t);
         set(rt, rt.R(ti), TB_SCHEMA, rt.R(si));
         set(rt, rt.R(ti), TB_CHUNKS, rt.R(ci));
@@ -276,14 +238,6 @@ public static class Table {
         long outv = rt.R(ti);
         rt.PopTo(bas);
         return outv;
-    }
-
-    /// The value of column `c` in `row`, or `NOT_FOUND`. `row` may be a map or
-    /// another table's row ref.
-    static long rowColumn(Rt rt, long s, long row, int c) {
-        long name = schemaNameAt(rt, s, c);
-        return isTableRef(rt, row) ? refGet(rt, row, name, Val.NotFound)
-                                   : Mapread.MapGet(rt, row, name, Val.NotFound);
     }
 
     /// Does `row` fit `s`? The three refusals are separate because they are
@@ -423,7 +377,7 @@ public static class Table {
                 rt.PopTo(vi);
                 continue;
             }
-            long col = newObj(rt, Obj.TyNode, System.Math.Max(take, 1));
+            long col = Conc.NewObj(rt, Obj.TyNode, System.Math.Max(take, 1));
             int cj = rt.Push(col);
             for (int j = 0; j < System.Math.Min(old, take); j++)
                 set(rt, rt.R(cj), j, chunkGet(rt, rt.R(ci), id, j));
@@ -478,7 +432,7 @@ public static class Table {
                 {
                     // HOISTED: the allocation must happen before the object's
                     // address is read, or the write lands on a forwarded copy.
-                    long col1 = newObj(rt, Obj.TyNode, 1);
+                    long col1 = Conc.NewObj(rt, Obj.TyNode, 1);
                     set(rt, rt.R(chi), CH_BASE + schemaIdAt(rt, rt.R(si), c), col1);
                 }
             writeRow(rt, rt.R(si), rt.R(chi), 0, rt.R(ri));
@@ -496,7 +450,7 @@ public static class Table {
             rt.PopTo(chi);
         }
         int count = tableCount(rt, rt.R(ti)) + (append ? 1 : 0);
-        long nt = newObj(rt, Obj.TyTable, TB_LEN);
+        long nt = Conc.NewObj(rt, Obj.TyTable, TB_LEN);
         int ni = rt.Push(nt);
         set(rt, rt.R(ni), TB_SCHEMA, rt.R(si));
         set(rt, rt.R(ni), TB_CHUNKS, rt.R(ci));
@@ -531,13 +485,6 @@ public static class Table {
     // addresses its columns by stable id, so a column the new schema keeps is
     // the SAME COLUMN OBJECT, shared rather than copied.
 
-    static int schemaPosOf(Rt rt, long s, long name) {
-        int n = schemaLen(rt, s);
-        rt.ChargeWork(n);
-        for (int c = 0; c < n; c++) if (Eq.Equal(rt, schemaNameAt(rt, s, c), name)) return c;
-        return 0;
-    }
-
     /// `want` REBASED onto `have`'s column ids: a column both schemas name
     /// keeps its id, so the chunks holding it can be shared unchanged.
     ///
@@ -561,7 +508,7 @@ public static class Table {
             rt.SetR(ii, Mapwrite.MapAssoc(rt, rt.R(ii), rt.R(nmi), Val.Fixnum(id)));
             rt.PopTo(nmi);
         }
-        long sc = newObj(rt, Obj.TySchema, SC_LEN);
+        long sc = Conc.NewObj(rt, Obj.TySchema, SC_LEN);
         int si = rt.Push(sc);
         set(rt, rt.R(si), SC_NAMES, rt.Slot(rt.R(wi), SC_NAMES));
         set(rt, rt.R(si), SC_TYPES, rt.Slot(rt.R(wi), SC_TYPES));
@@ -648,7 +595,7 @@ public static class Table {
             rt.SetR(oi, Vec.Conj(rt, rt.R(oi), rt.R(ni)));
             rt.PopTo(chi);
         }
-        long nt = newObj(rt, Obj.TyTable, TB_LEN);
+        long nt = Conc.NewObj(rt, Obj.TyTable, TB_LEN);
         int nti = rt.Push(nt);
         set(rt, rt.R(nti), TB_SCHEMA, rt.R(ri));
         set(rt, rt.R(nti), TB_CHUNKS, rt.R(oi));
@@ -663,13 +610,6 @@ public static class Table {
     //
     // The half that makes a column store worth having rather than merely
     // compact: everything here reaches the COLUMN and never builds a row.
-
-    /// Cell `(row, column-id)`, straight out of the chunk. The scan path.
-    static long tableCell(Rt rt, long t, int id, int i) {
-        int phys = i + tableOffset(rt, t);
-        long ch = Vec.Nth(rt, rt.Slot(t, TB_CHUNKS), phys >> CHUNK_SHIFT, Val.NotFound);
-        return chunkGet(rt, ch, id, phys & (CHUNK - 1));
-    }
 
     /// `(slice t from to)` -- rows `[from, to)`, SHARING every chunk it spans.
     /// Chunks outside the range are dropped, so a slice does not retain the
@@ -696,7 +636,7 @@ public static class Table {
         for (int k = first; k <= last; k++)
             rt.SetR(ki, Vec.Conj(rt, rt.R(ki), Vec.Nth(rt, rt.R(ci), k, Val.NotFound)));
         int si = rt.Push(rt.Slot(rt.R(ti), TB_SCHEMA));
-        long nt = newObj(rt, Obj.TyTable, TB_LEN);
+        long nt = Conc.NewObj(rt, Obj.TyTable, TB_LEN);
         int ni = rt.Push(nt);
         set(rt, rt.R(ni), TB_SCHEMA, rt.R(si));
         set(rt, rt.R(ni), TB_CHUNKS, rt.R(ki));
@@ -780,7 +720,7 @@ public static class Table {
                 int id = schemaIdAt(rt, rt.R(si), c);
                 int sj = rt.Push(Vec.Nth(rt, rt.R(ci), c, Val.NotFound));
                 long tp = schemaTypeAt(rt, rt.R(si), c);
-                int cj = rt.Push(newObj(rt, Obj.TyNode, take));
+                int cj = rt.Push(Conc.NewObj(rt, Obj.TyNode, take));
                 for (int k = 0; k < take; k++) {
                     long v = Vec.Nth(rt, rt.R(sj), row + k, Val.NotFound);
                     if (!typeOk(rt, tp, v)) {
@@ -798,7 +738,7 @@ public static class Table {
             rt.PopTo(chi);
             row += take;
         }
-        long t = newObj(rt, Obj.TyTable, TB_LEN);
+        long t = Conc.NewObj(rt, Obj.TyTable, TB_LEN);
         int ti = rt.Push(t);
         set(rt, rt.R(ti), TB_SCHEMA, rt.R(si));
         set(rt, rt.R(ti), TB_CHUNKS, rt.R(ki));
@@ -823,7 +763,7 @@ public static class Table {
         int ncols = schemaLen(rt, rt.R(si));
         for (int c = 0; c < ncols; c++)
             {
-                long colN = newObj(rt, Obj.TyNode, CHUNK);
+                long colN = Conc.NewObj(rt, Obj.TyNode, CHUNK);
                 set(rt, rt.R(ci), CH_BASE + schemaIdAt(rt, rt.R(si), c), colN);
             }
         long outv = rt.R(ci);
@@ -863,7 +803,7 @@ public static class Table {
             rt.PopTo(li);
         }
         set(rt, rt.R(oi), CH_ROWS, Val.Fixnum(partial));
-        long tt = newObj(rt, Obj.TyTtable, TT_LEN);
+        long tt = Conc.NewObj(rt, Obj.TyTtable, TT_LEN);
         int tti = rt.Push(tt);
         set(rt, rt.R(tti), TT_SCHEMA, rt.R(si));
         set(rt, rt.R(tti), TT_CHUNKS, rt.R(ci));
@@ -895,7 +835,7 @@ public static class Table {
         int ncols = schemaLen(rt, rt.R(si));
         for (int c = 0; c < ncols; c++) {
             int id = schemaIdAt(rt, rt.R(si), c);
-            int cj = rt.Push(newObj(rt, Obj.TyNode, System.Math.Max(rows, 1)));
+            int cj = rt.Push(Conc.NewObj(rt, Obj.TyNode, System.Math.Max(rows, 1)));
             int sj = rt.Push(rt.Slot(rt.R(oi), CH_BASE + id));
             for (int k = 0; k < rows; k++) set(rt, rt.R(cj), k, rt.Slot(rt.R(sj), k));
             set(rt, rt.R(ci), CH_BASE + id, rt.R(cj));
@@ -964,7 +904,7 @@ public static class Table {
         }
         long count = rt.Slot(rt.R(ti), TT_COUNT);
         set(rt, rt.R(ti), TT_LIVE, Val.False);
-        long nt = newObj(rt, Obj.TyTable, TB_LEN);
+        long nt = Conc.NewObj(rt, Obj.TyTable, TB_LEN);
         int ni = rt.Push(nt);
         set(rt, rt.R(ni), TB_SCHEMA, rt.R(si));
         set(rt, rt.R(ni), TB_CHUNKS, rt.R(ci));

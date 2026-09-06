@@ -156,7 +156,9 @@ public final class Conc {
 
     static long fx(long v) { return Val.asFixnum(v); }
 
-    static long newObj(Rt rt, int ty, int len) {
+    /// `public` because the generated tree calls it: `new-obj` is in the
+    /// vocabulary and points here, so `Table` no longer keeps a second copy.
+    public static long newObj(Rt rt, int ty, int len) {
         long a = rt.alloc(ty, len);
         return a == 0 ? Val.NIL : Val.heap(a);
     }

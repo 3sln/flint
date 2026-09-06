@@ -225,7 +225,7 @@
   the difference matters because a name can appear in a `case` label where a
   call cannot."
   '[TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ TY_STRSEQ TY_RANGE TY_VEC TY_NODE
-    TY_TVEC TY_VOLATILE TY_TABLE TY_SCHEMA
+    TY_TVEC TY_VOLATILE TY_TABLE TY_SCHEMA TY_TTABLE
     TY_MAPENTRY TY_ARRAYMAP TY_HASHMAP TY_TABLEREF TY_SET TY_STR
     ;; `TY_SYM` and `TY_KW`, and they were listed here as `TY_SYMBOL` and
     ;; `TY_KEYWORD` -- names NO target defines. Nothing had used them, so
@@ -1048,6 +1048,14 @@
     ;; would silently be the wrong type here.
     'to-addr (core/call {:rust "({0} as Addr)" :java "{0}" :csharp "{0}"})
 
+    ;; ALLOCATE AND WRAP, answering NIL when the heap refused. `alloc` hands
+    ;; back a raw address and 0 for a failure, which every caller then has to
+    ;; test and wrap identically -- so they do it here instead. Both ports kept
+    ;; TWO copies of this, one on `Conc` and one on `Table`.
+    'new-obj (core/call {:rust "{0}.new_obj({1}, {2})"
+                         :java "Conc.newObj({0}, {1}, {2})"
+                         :csharp "Conc.NewObj({0}, {1}, {2})"}
+                        {:tag Value})
     'alloc (core/call {:rust "{0}.alloc({1}, {2})"
                        :java "{0}.alloc({1}, {2})"
                        :csharp "{0}.Alloc({1}, {2})"})

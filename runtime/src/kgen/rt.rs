@@ -53,6 +53,7 @@ pub mod ropecp;
 pub mod ropeeq;
 pub mod ropeflat;
 pub mod ropemeas;
+pub mod tablecell;
 pub mod tablemeta;
 pub mod tableref;
 pub mod ropenode;

@@ -1,0 +1,116 @@
+;; Chunks: making one, collapsing a column of one, and reading a cell.
+;;
+;; A CHUNK IS COLUMNS, and that is the whole representation. `table-cell` is
+;; the read path that never builds a row -- scanning one field should cost one
+;; field -- and `collapse` is what makes a column of one repeated value cost
+;; one slot instead of 256.
+(ns flint.rt.tablecell
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != >= > < + - ushr bit-and not nil?
+                                   is-heap as-heap ty olen slot set-slot
+                                   fixnum vec-nth val-eq new-obj charge-work
+                                   local set for break
+                                   mark push r pop-to
+                                   Rt Value I32 Bool RootIx Ty NIL NOT_FOUND
+                                   TY_NODE TY_TTABLE
+                                   SC_NAMES TB_CHUNKS CHUNK CHUNK_SHIFT
+                                   CH_ROWS CH_ENC CH_BASE ENC_FLAT ENC_CONST]]
+            [flint.rt.tablemeta :refer [schema-len schema-name-at is-table-ref
+                                        table-offset chunk-get]]
+            [flint.rt.tableref :refer [ref-get]]
+            [flint.rt.mapread :refer [map-get]]))
+
+(doc "A chunk of `rows` rows and `width` column slots, every column flat and"
+     "empty. The caller fills it and may then collapse columns.")
+(defn ^:pub ^:method ^Value new-chunk [^:mut ^Rt rt ^I32 width ^I32 rows]
+  (let [^RootIx base (mark rt)
+        ^Value ch (new-obj rt TY_NODE (+ CH_BASE width))
+        ^RootIx ci (push rt ch)]
+    (set-slot rt (r rt ci) CH_ROWS (fixnum rows))
+    (comment "AT LEAST ONE SLOT. A zero-width schema is legal -- a table of no"
+             "columns and many rows counts rows and nothing else -- and an"
+             "object of length zero is not something the allocator hands back.")
+    (local ^:mut ^I32 encn)
+    (set encn width)
+    (if (< encn 1) (set encn 1))
+    (let [^Value enc (new-obj rt TY_NODE encn)
+          ^RootIx ei (push rt enc)]
+      (for [^I32 id 0 width]
+        (set-slot rt (r rt ei) id (fixnum ENC_FLAT)))
+      (set-slot rt (r rt ci) CH_ENC (r rt ei)))
+    (let [^Value out (r rt ci)]
+      (pop-to rt base)
+      (return out))))
+
+(doc "Collapse column `id` to a single value if every row holds the same one."
+     ""
+     "RUN OVER THE COLUMN rather than over the rows: the values are already"
+     "gathered, so this is a scan of the thing being collapsed and not a"
+     "second pass through the map lookups that built it.")
+(defn ^:pub ^:method collapse [^:mut ^Rt rt ^Value ch ^I32 id]
+  (let [^RootIx base (mark rt)
+        ^RootIx ci (push rt ch)
+        ^Value col (slot rt (r rt ci) (+ CH_BASE id))
+        ^RootIx coli (push rt col)
+        ^I32 n (olen rt (r rt coli))]
+    (comment "A SCAN THAT ALLOCATES NOTHING CHARGES NOTHING unless it says so."
+             "Allocation charging covers the copying paths; this one is pure"
+             "comparison over `n` values (0009).")
+    (charge-work rt n)
+    (if (== n 0)
+      (do (pop-to rt base)
+          (return)))
+    (let [^Value first (slot rt (r rt coli) 0)
+          ^RootIx fi (push rt first)]
+      (local ^:mut ^Bool same)
+      (set same true)
+      (for [^I32 k 1 n]
+        (if (not (val-eq rt (r rt fi) (slot rt (r rt coli) k)))
+          (do (set same false)
+              (break))))
+      (if same
+        (do
+          (set-slot rt (r rt ci) (+ CH_BASE id) (r rt fi))
+          (set-slot rt (slot rt (r rt ci) CH_ENC) id (fixnum ENC_CONST)))))
+    (pop-to rt base)))
+
+(doc "The value of column `c` in `row`, or `NOT_FOUND`."
+     ""
+     "`row` MAY BE ANOTHER TABLE'S ROW REF, so a row can be moved between"
+     "tables without being materialised into a map first.")
+(defn ^:pub ^:method ^Value row-column [^:mut ^Rt rt ^Value s ^Value row ^I32 c]
+  (let [^Value name (vec-nth rt (slot rt s SC_NAMES) c NIL)]
+    (if (is-table-ref rt row)
+      (return (ref-get rt row name NOT_FOUND)))
+    (return (map-get rt row name NOT_FOUND))))
+
+(doc "The POSITION of the column named `name`, or 0."
+     ""
+     "Not its id: a position is where it sits in this schema's name vector,"
+     "which is what indexes the parallel type vector. `schema-id` answers the"
+     "other question.")
+(defn ^:pub ^:method ^I32 schema-pos-of [^:mut ^Rt rt ^Value s ^Value name]
+  (let [^I32 n (schema-len rt s)]
+    (charge-work rt n)
+    (comment "`nm` is HOISTED for Rust's borrow checker: `eq` and"
+             "`schema_name_at` both take `&mut self`, and an argument is"
+             "evaluated while the receiver is already borrowed. Both ports"
+             "accept the nested form, which is why the source has to be"
+             "written in the one that works everywhere.")
+    (for [^I32 c 0 n]
+      (let [^Value nm (schema-name-at rt s c)]
+        (if (val-eq rt nm name)
+          (return c))))
+    (return 0)))
+
+(doc "One cell of a table, by column id and row. No row and no ref is built.")
+(defn ^:pub ^:method ^Value table-cell [^:mut ^Rt rt ^Value t ^I32 id ^I32 i]
+  (let [^I32 phys (+ i (table-offset rt t))
+        ^Value ch (vec-nth rt (slot rt t TB_CHUNKS) (ushr phys CHUNK_SHIFT) NIL)]
+    (return (chunk-get rt ch id (bit-and phys (- CHUNK 1))))))
+
+(doc "Is `v` a transient table?")
+(defn ^:pub ^:method ^Bool is-ttable [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_TTABLE)))
