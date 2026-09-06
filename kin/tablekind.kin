@@ -1,0 +1,122 @@
+;; The CLOSED SET protocol dispatch runs on (`doc/decisions/0005`), and the
+;; schema type check written in the same words.
+;;
+;; `kind-of` is lifted out of the `flint/kind` builtin so an error message can
+;; name a value's kind in the SAME words a program would. That is the whole
+;; reason it is here rather than in the builtin: `column-type-error` says
+;; "was given a string", and `string` has to be the word a guest would get.
+;;
+;; WHY IT WAITED. Every arm of both functions builds a keyword from a literal,
+;; and the vocabulary could not spell one until `bare-kw`.
+(ns flint.rt.tablekind
+  (:require [flint.impl.rt :refer [defn return if let comment doc
+                                   == or not is-heap as-heap ty
+                                   nil? is-bool is-double is-int
+                                   is-inline-str is-inline-kw is-string
+                                   is-keyword is-fixnum
+                                   bare-kw static-text
+                                   Rt Value Bool Ty
+                                   TY_STR TY_ROPE TY_KW TY_SYM TY_BIGINT
+                                   TY_VEC TY_MAPENTRY TY_ARRAYMAP TY_HASHMAP
+                                   TY_SET TY_CONS TY_EMPTY_LIST TY_LAZYSEQ
+                                   TY_VECSEQ TY_STRSEQ TY_RANGE TY_ITERSEQ
+                                   TY_CHUNKSEQ TY_CLOSURE TY_NATIVEFN
+                                   TY_MULTIFN TY_PORT TY_THREAD TY_ATOM TY_VAR
+                                   TY_REGEX TY_EXINFO TY_TAGGED TY_OPAQUE
+                                   TY_BYTES TY_BROPE TY_TBYTES TY_DELAY
+                                   TY_VOLATILE TY_SCHEMA TY_TABLE
+                                   TY_TABLEREF]]))
+
+(doc "The kind of a value, as the keyword protocol dispatch uses."
+     ""
+     "A CLOSED SET. `0005` says a value a guest can hold needs a kind of its"
+     "own or it cannot be dispatched on at all -- so `:other` is not a kind,"
+     "it is the ABSENCE of one, and four types answered it until the printer"
+     "moved onto a protocol and the hole showed. An `extend-protocol :other`"
+     "written for one of them would have caught all of them, and every future"
+     "type besides.")
+(defn ^:pub ^:method ^Value kind-of [^:mut ^Rt rt ^Value v]
+  (if (nil? rt v) (return (bare-kw rt (static-text "nil"))))
+  (if (is-bool rt v) (return (bare-kw rt (static-text "boolean"))))
+  (if (is-double rt v) (return (bare-kw rt (static-text "number"))))
+  (if (is-fixnum rt v) (return (bare-kw rt (static-text "number"))))
+  (if (is-inline-str rt v) (return (bare-kw rt (static-text "string"))))
+  (if (is-inline-kw rt v) (return (bare-kw rt (static-text "keyword"))))
+  (if (not (is-heap v)) (return (bare-kw rt (static-text "other"))))
+  (comment "NO `case`, and for the reason `nouns.kin` gives: hole 3 is still"
+           "open, and the chain costs nothing here. These arms are mutually"
+           "exclusive, so an early `return` leaves nothing to fall through"
+           "to -- and a `case` whose arms are `return` statements renders as"
+           "a Rust `match` whose arms are statements, which is not Rust.")
+  (let [^Ty t (ty rt (as-heap v))]
+    (if (or (== t TY_STR) (== t TY_ROPE))
+      (return (bare-kw rt (static-text "string"))))
+    (if (== t TY_KW)
+      (return (bare-kw rt (static-text "keyword"))))
+    (if (== t TY_SYM)
+      (return (bare-kw rt (static-text "symbol"))))
+    (if (== t TY_BIGINT)
+      (return (bare-kw rt (static-text "number"))))
+    (if (or (== t TY_VEC) (== t TY_MAPENTRY))
+      (return (bare-kw rt (static-text "vector"))))
+    (if (or (== t TY_ARRAYMAP) (== t TY_HASHMAP) (== t TY_TABLEREF))
+      (return (bare-kw rt (static-text "map"))))
+    (if (== t TY_SET)
+      (return (bare-kw rt (static-text "set"))))
+    (if (or (== t TY_CONS) (== t TY_EMPTY_LIST) (== t TY_LAZYSEQ) (== t TY_VECSEQ) (== t TY_STRSEQ) (== t TY_RANGE) (== t TY_ITERSEQ) (== t TY_CHUNKSEQ))
+      (return (bare-kw rt (static-text "list"))))
+    (if (or (== t TY_CLOSURE) (== t TY_NATIVEFN) (== t TY_MULTIFN))
+      (return (bare-kw rt (static-text "fn"))))
+    (if (== t TY_PORT)
+      (return (bare-kw rt (static-text "port"))))
+    (if (== t TY_THREAD)
+      (return (bare-kw rt (static-text "thread"))))
+    (if (== t TY_ATOM)
+      (return (bare-kw rt (static-text "atom"))))
+    (if (== t TY_VAR)
+      (return (bare-kw rt (static-text "var"))))
+    (if (== t TY_REGEX)
+      (return (bare-kw rt (static-text "regex"))))
+    (if (== t TY_EXINFO)
+      (return (bare-kw rt (static-text "exception"))))
+    (if (== t TY_TAGGED)
+      (return (bare-kw rt (static-text "tagged"))))
+    (if (== t TY_OPAQUE)
+      (return (bare-kw rt (static-text "opaque"))))
+    (if (or (== t TY_BYTES) (== t TY_BROPE) (== t TY_TBYTES))
+      (return (bare-kw rt (static-text "bytes"))))
+    (if (== t TY_DELAY)
+      (return (bare-kw rt (static-text "delay"))))
+    (if (== t TY_VOLATILE)
+      (return (bare-kw rt (static-text "volatile"))))
+    (if (== t TY_SCHEMA)
+      (return (bare-kw rt (static-text "schema"))))
+    (if (== t TY_TABLE)
+      (return (bare-kw rt (static-text "table")))))
+  (return (bare-kw rt (static-text "other"))))
+
+(doc "Is `t` a type a schema may declare?")
+(defn ^:pub ^:method ^Bool known-type [^:mut ^Rt rt ^Value t]
+  (if (== t (bare-kw rt (static-text "int"))) (return true))
+  (if (== t (bare-kw rt (static-text "double"))) (return true))
+  (if (== t (bare-kw rt (static-text "string"))) (return true))
+  (if (== t (bare-kw rt (static-text "bool"))) (return true))
+  (if (== t (bare-kw rt (static-text "keyword"))) (return true))
+  (if (== t (bare-kw rt (static-text "any"))) (return true))
+  (return false))
+
+(doc "Does `v` belong in a column of type `t`?"
+     ""
+     "`:any` TAKES ANYTHING, which is the escape hatch a closed schema needs to"
+     "stay usable: a column that genuinely holds mixed values should say so"
+     "rather than force the table open.")
+(defn ^:pub ^:method ^Bool type-ok [^:mut ^Rt rt ^Value t ^Value v]
+  (if (== t (bare-kw rt (static-text "any"))) (return true))
+  (comment "`is-int` and NOT `is-fixnum`: a big integer is an integer, and a"
+           "column declared `:int` has to take one.")
+  (if (== t (bare-kw rt (static-text "int"))) (return (is-int rt v)))
+  (if (== t (bare-kw rt (static-text "double"))) (return (is-double rt v)))
+  (if (== t (bare-kw rt (static-text "string"))) (return (is-string rt v)))
+  (if (== t (bare-kw rt (static-text "bool"))) (return (is-bool rt v)))
+  (if (== t (bare-kw rt (static-text "keyword"))) (return (is-keyword rt v)))
+  (return false))

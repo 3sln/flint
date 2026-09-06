@@ -99,66 +99,6 @@ pub const RF_ROW: u32 = 2;
 pub const RF_LEN: u32 = 3;
 
 impl Rt {
-    /// The CLOSED SET protocol dispatch runs on (`doc/decisions/0005`), lifted
-    /// out of the `flint/kind` builtin so an error message can name a value's
-    /// kind in the same words a program would.
-    pub fn kind_of(&mut self, v: Value) -> Value {
-        let name = if v.is_nil() {
-            "nil"
-        } else if v.is_bool() {
-            "boolean"
-        } else if v.is_double() || v.is_fixnum() {
-            "number"
-        } else if v.is_inline_str() {
-            "string"
-        } else if v.is_inline_kw() {
-            "keyword"
-        } else if !v.is_heap() {
-            "other"
-        } else {
-            match ty(&self.gc.sp, v.as_heap()) {
-                crate::obj::TY_STR | crate::obj::TY_ROPE => "string",
-                crate::obj::TY_KW => "keyword",
-                crate::obj::TY_SYM => "symbol",
-                crate::obj::TY_BIGINT => "number",
-                crate::obj::TY_VEC | crate::obj::TY_MAPENTRY => "vector",
-                crate::obj::TY_ARRAYMAP | crate::obj::TY_HASHMAP => "map",
-                crate::obj::TY_SET => "set",
-                crate::obj::TY_CONS
-                | crate::obj::TY_EMPTY_LIST
-                | crate::obj::TY_LAZYSEQ
-                | crate::obj::TY_VECSEQ
-                | crate::obj::TY_STRSEQ
-                | crate::obj::TY_RANGE
-                | crate::obj::TY_ITERSEQ
-                | crate::obj::TY_CHUNKSEQ => "list",
-                crate::obj::TY_CLOSURE | crate::obj::TY_NATIVEFN | crate::obj::TY_MULTIFN => "fn",
-                crate::obj::TY_PORT => "port",
-                crate::obj::TY_THREAD => "thread",
-                crate::obj::TY_ATOM => "atom",
-                crate::obj::TY_VAR => "var",
-                crate::obj::TY_REGEX => "regex",
-                crate::obj::TY_EXINFO => "exception",
-                crate::obj::TY_TAGGED => "tagged",
-                // These four answered `:other` until the printer was moved onto
-                // a protocol and the hole showed. `:other` is not a kind, it is
-                // the ABSENCE of one -- and an `extend-protocol :other` written
-                // for one of them would have caught all of them and every future
-                // type besides. A value a guest can hold needs a kind of its own
-                // or it cannot be dispatched on at all (`doc/decisions/0005`).
-                crate::obj::TY_OPAQUE => "opaque",
-                crate::obj::TY_BYTES | crate::obj::TY_BROPE | crate::obj::TY_TBYTES => "bytes",
-                crate::obj::TY_DELAY => "delay",
-                crate::obj::TY_VOLATILE => "volatile",
-                TY_SCHEMA => "schema",
-                TY_TABLE => "table",
-                TY_TABLEREF => "map",
-                _ => "other",
-            }
-        };
-        self.keyword(None, name)
-    }
-
     /// `[[name type] …]` -> a schema. The names must be keywords and distinct;
     /// the types must be ones `type_ok` knows.
     pub fn new_schema(&mut self, pairs: Value) -> Value {
@@ -234,39 +174,6 @@ impl Rt {
         let out = self.r(si);
         self.pop_to(base);
         out
-    }
-
-    fn known_type(&mut self, t: Value) -> bool {
-        for n in ["int", "double", "string", "bool", "keyword", "any"] {
-            if t == self.keyword(None, n) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Does `v` belong in a column of type `t`? `:any` takes anything, which is
-    /// the escape hatch a closed schema needs to stay usable.
-    pub fn type_ok(&mut self, t: Value, v: Value) -> bool {
-        if t == self.keyword(None, "any") {
-            return true;
-        }
-        if t == self.keyword(None, "int") {
-            return self.is_int(v);
-        }
-        if t == self.keyword(None, "double") {
-            return v.is_double();
-        }
-        if t == self.keyword(None, "string") {
-            return self.is_string(v);
-        }
-        if t == self.keyword(None, "bool") {
-            return v.is_bool();
-        }
-        if t == self.keyword(None, "keyword") {
-            return self.is_keyword(v);
-        }
-        false
     }
 
     /// Build a table from `rows`, a vector of maps. Every row must have exactly

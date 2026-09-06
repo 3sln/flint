@@ -417,6 +417,9 @@ public sealed class Rt : System.IDisposable {
     public void SetSlot(long obj, int i, long v) { gc.SetSlot(obj, i, v, roots); }
     public long Slot(long v, int i) { return Obj.Slot(gc.sp, Val.AsHeap(v), i); }
 
+    /// The CLOSED SET of `0005`, generated from `kin/tablekind.kin`.
+    public long KindOf(long v) { return global::_3sln.Flint.Kgen.Rt.Tablekind.KindOf(this, v); }
+
     /// Slot `i` of a MAP ENTRY, or element `i` of anything else -- see the
     /// Java copy for why both ports needed this.
     public long SlotOrNth(long v, int i) {
@@ -1626,55 +1629,6 @@ public sealed class Rt : System.IDisposable {
         if (!Parked()) roots.StackTop = save;
         return v;
     }
-    /// The CLOSED SET protocol dispatch runs on (`doc/decisions/0005`), lifted
-    /// out of the `flint/kind` builtin so an ERROR MESSAGE can name a value's
-    /// kind in the same words a program would.
-    public long KindOf(long v) {
-        string k;
-                                    if (Val.IsNil(v)) k = "nil";
-            else if (v == Val.True || v == Val.False) k = "boolean";
-            else if (Val.IsDouble(v) || Val.IsFixnum(v)) k = "number";
-            else if (Val.IsInlineStr(v)) k = "string";
-            else if (Val.IsInlineKw(v)) k = "keyword";
-            else if (!Val.IsHeap(v)) k = "other";
-            else switch (Obj.Ty(gc.sp, Val.AsHeap(v))) {
-                case Obj.TyStr: case Obj.TyRope: k = "string"; break;
-                case Obj.TyKw: k = "keyword"; break;
-                case Obj.TySym: k = "symbol"; break;
-                case Obj.TyBigint: k = "number"; break;
-                case Obj.TyVec: case Obj.TyMapentry: k = "vector"; break;
-                case Obj.TyArraymap: case Obj.TyHashmap: k = "map"; break;
-                case Obj.TySet: k = "set"; break;
-                case Obj.TyCons: case Obj.TyEmptyList: case Obj.TyLazyseq:
-                case Obj.TyVecseq: case Obj.TyStrseq: case Obj.TyRange:
-                case Obj.TyIterseq: case Obj.TyChunkseq: k = "list"; break;
-                case Obj.TyClosure: case Obj.TyNativefn: case Obj.TyMultifn: k = "fn"; break;
-                case Obj.TyPort: k = "port"; break;
-                case Obj.TyThread: k = "thread"; break;
-                case Obj.TyAtom: k = "atom"; break;
-                case Obj.TyVar: k = "var"; break;
-                case Obj.TyRegex: k = "regex"; break;
-                case Obj.TyExinfo: k = "exception"; break;
-                case Obj.TyTagged: k = "tagged"; break;
-                case Obj.TySchema: k = "schema"; break;
-                case Obj.TyTable: k = "table"; break;
-                // A ROW REF answers `:map`: it IS a map seen cheaply, and
-                // `kind` being many-to-one is not new (`doc/decisions/0026`).
-                case Obj.TyTableref: k = "map"; break;
-                // These four answered "other" until the printer moved onto a
-                // protocol and the hole showed. "other" is not a kind, it is
-                // the ABSENCE of one, and a value that answers it cannot be
-                // dispatched on at all (`doc/decisions/0005`).
-                case Obj.TyOpaque: k = "opaque"; break;
-                case Obj.TyBytes: case Obj.TyBrope: case Obj.TyTbytes:
-                    k = "bytes"; break;
-                case Obj.TyDelay: k = "delay"; break;
-                case Obj.TyVolatile: k = "volatile"; break;
-                default: k = "other"; break;
-            }
-        return Str.Keyword(this, null, k);
-    }
-
     /// The bare name of a keyword, symbol or string -- what `name` returns.
     public long NameOf(long v) {
         if (Val.IsInlineKw(v)) return Val.InlineStr(Val.InlineBytes(v));

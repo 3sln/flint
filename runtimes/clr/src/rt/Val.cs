@@ -92,6 +92,9 @@ public static class Val {
 
     public static bool IsNil(long v) => v == Nil;
     public static bool IsTrue(long v) => v == True;
+
+    /// Is `v` either boolean? See the Java copy.
+    public static bool IsBool(long v) => v == True || v == False;
     public static bool IsFalse(long v) => v == False;
     /// Only `nil` and `false` are false.
     public static bool Truthy(long v) => v != Nil && v != False;

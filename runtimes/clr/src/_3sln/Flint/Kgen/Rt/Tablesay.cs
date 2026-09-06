@@ -13,6 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
 using static global::_3sln.Flint.Kgen.Rt.Tablecell;
+using static global::_3sln.Flint.Kgen.Rt.Tablekind;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;

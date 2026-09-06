@@ -49,6 +49,10 @@ public static class Table {
     // Row-ref slots, and the transient's.
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // THE CLOSED SET of `0005`, generated from `kin/tablekind.kin`.
+    static bool knownType(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tablekind.KnownType(rt, t); }
+    public static bool typeOk(Rt rt, long t, long v) { return global::_3sln.Flint.Kgen.Rt.Tablekind.TypeOk(rt, t, v); }
+
     // THE REFUSALS, generated from `kin/tablesay.kin` -- `0032`.
     static string kwName(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Tablesay.KwName(rt, v); }
     static string columnList(Rt rt, long s) { return global::_3sln.Flint.Kgen.Rt.Tablesay.ColumnList(rt, s); }
@@ -108,24 +112,6 @@ public static class Table {
     static long emptyVec(Rt rt) { return Vec.Empty(rt); }
     static long emptyMap(Rt rt) { return Maps.Empty(rt); }
     static void set(Rt rt, long obj, int i, long v) { rt.SetSlot(Val.AsHeap(obj), i, v); }
-
-    static bool knownType(Rt rt, long t) {
-        foreach (string n in new string[]{"int", "double", "string", "bool", "keyword", "any"})
-            if (t == Str.Keyword(rt, null, n)) return true;
-        return false;
-    }
-
-    /// Does `v` belong in a column of type `t`? `:any` takes anything, which is
-    /// the escape hatch a closed schema needs to stay usable.
-    public static bool typeOk(Rt rt, long t, long v) {
-        if (t == Str.Keyword(rt, null, "any")) return true;
-        if (t == Str.Keyword(rt, null, "int")) return Num.IsInt(rt, v);
-        if (t == Str.Keyword(rt, null, "double")) return Val.IsDouble(v);
-        if (t == Str.Keyword(rt, null, "string")) return Str.IsString(rt, v);
-        if (t == Str.Keyword(rt, null, "bool")) return v == Val.True || v == Val.False;
-        if (t == Str.Keyword(rt, null, "keyword")) return rt.TypeP(5, v);
-        return false;
-    }
 
     /// `[[name type] ...]` -> a schema. Names must be keywords and DISTINCT --
     /// two columns of one name would make `get` ambiguous and the index would

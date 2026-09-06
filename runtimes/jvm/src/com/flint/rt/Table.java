@@ -56,6 +56,10 @@ public final class Table {
     // Row-ref slots, and the transient's.
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // THE CLOSED SET of `0005`, generated from `kin/tablekind.kin`.
+    static boolean knownType(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tablekind.knownType(rt, t); }
+    public static boolean typeOk(Rt rt, long t, long v) { return com._3sln.flint.kgen.rt.Tablekind.typeOk(rt, t, v); }
+
     // THE REFUSALS, generated from `kin/tablesay.kin` -- `0032`.
     static String kwName(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablesay.kwName(rt, v); }
     static String columnList(Rt rt, long s) { return com._3sln.flint.kgen.rt.Tablesay.columnList(rt, s); }
@@ -117,24 +121,6 @@ public final class Table {
     static long emptyVec(Rt rt) { return Vec.empty(rt); }
     static long emptyMap(Rt rt) { return Maps.empty(rt); }
     static void set(Rt rt, long obj, int i, long v) { rt.setSlot(Val.asHeap(obj), i, v); }
-
-    static boolean knownType(Rt rt, long t) {
-        for (String n : new String[]{"int", "double", "string", "bool", "keyword", "any"})
-            if (t == Str.keyword(rt, null, n)) return true;
-        return false;
-    }
-
-    /// Does `v` belong in a column of type `t`? `:any` takes anything, which is
-    /// the escape hatch a closed schema needs to stay usable.
-    public static boolean typeOk(Rt rt, long t, long v) {
-        if (t == Str.keyword(rt, null, "any")) return true;
-        if (t == Str.keyword(rt, null, "int")) return Num.isInt(rt, v);
-        if (t == Str.keyword(rt, null, "double")) return Val.isDouble(v);
-        if (t == Str.keyword(rt, null, "string")) return Str.isString(rt, v);
-        if (t == Str.keyword(rt, null, "bool")) return v == Val.TRUE || v == Val.FALSE;
-        if (t == Str.keyword(rt, null, "keyword")) return rt.typeP(5, v);
-        return false;
-    }
 
     /// `[[name type] ...]` -> a schema. Names must be keywords and DISTINCT --
     /// two columns of one name would make `get` ambiguous and the index would

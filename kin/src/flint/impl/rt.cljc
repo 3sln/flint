@@ -240,7 +240,12 @@
     TY_ATOM TY_VAR TY_DELAY TY_REGEX TY_MULTIFN TY_REDUCED TY_EXINFO
     ;; The byte-string tiers (`doc/decisions/0011`'s rope argument, applied to
     ;; bytes): a flat leaf, a B-tree node over leaves, and the transient.
-    TY_BROPE TY_TBYTES])
+    TY_BROPE TY_TBYTES
+    ;; The rest of what `kind-of` dispatches over. `0005` says a value a guest
+    ;; can hold needs a KIND of its own or it cannot be dispatched on at all,
+    ;; so the closed set has to name every tag -- these are the ones no source
+    ;; had needed until it.
+    TY_BIGINT TY_ITERSEQ TY_CHUNKSEQ TY_PORT TY_THREAD TY_TAGGED TY_OPAQUE])
 
 (defn- csharp-tag
   "`TY_EMPTY_LIST` -> `Obj.TyEmptyList`."
@@ -516,6 +521,28 @@
                          :java "Num.f64({0}, {1})"
                          :csharp "Num.F64({0}, {1})"})
     'nil? (core/call {:rust "{1}.is_nil()" :java "Val.isNil({1})" :csharp "Val.IsNil({1})"})
+    'is-keyword (core/call {:rust "{0}.is_keyword({1})"
+                            :java "Str.isKeyword({0}, {1})"
+                            :csharp "Str.IsKeyword({0}, {1})"}
+                           {:tag Bool})
+    ;; `is-int` AND NOT `is-fixnum`: a big integer is an integer. The library's
+    ;; printer dispatches on this, and with `is-fixnum` the bits of 1.5 printed
+    ;; as `#<unprintable>` rather than as 4609434218613702656, because a bigint
+    ;; fell through every arm.
+    'is-int (core/call {:rust "{0}.is_int({1})"
+                        :java "Num.isInt({0}, {1})" :csharp "Num.IsInt({0}, {1})"}
+                       {:tag Bool})
+    'is-bool (core/call {:rust "{1}.is_bool()"
+                         :java "Val.isBool({1})" :csharp "Val.IsBool({1})"}
+                        {:tag Bool})
+    ;; A KEYWORD FROM A LITERAL, with no namespace. `kind-of` and `type-ok` are
+    ;; written entirely in these, and until now the vocabulary could not spell
+    ;; one -- which is why both stayed hand-written while everything around
+    ;; them was generated.
+    'bare-kw (core/call {:rust "{0}.keyword(None, {1})"
+                         :java "Str.keyword({0}, null, {1})"
+                         :csharp "Str.Keyword({0}, null, {1})"}
+                        {:tag Value})
     'is-double (core/call {:rust "{1}.is_double()"
                            :java "Val.isDouble({1})" :csharp "Val.IsDouble({1})"})
     'is-inline-str (core/call {:rust "{1}.is_inline_str()"

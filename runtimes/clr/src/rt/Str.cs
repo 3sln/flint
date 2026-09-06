@@ -297,6 +297,12 @@ public static class Str {
     /// same object -- which is what makes `=` a pointer compare and keeps map
     /// lookups cheap. The rooting in `BuildKeyword` must not be simplified:
     /// both strings are live across the `Alloc` that can move them.
+    /// Is `v` a keyword, either tier? See the Java copy.
+    public static bool IsKeyword(Rt rt, long v) {
+        return Val.IsInlineKw(v)
+            || (Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyKw);
+    }
+
     public static long Keyword(Rt rt, string ns, string name) {
         byte[] nb = Encoding.UTF8.GetBytes(name);
         if (ns == null && nb.Length > 0 && nb.Length <= Val.InlineMax) return Val.InlineKw(nb);

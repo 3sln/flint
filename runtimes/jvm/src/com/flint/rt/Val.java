@@ -122,6 +122,10 @@ public final class Val {
 
     public static boolean isNil(long v) { return v == NIL; }
     public static boolean isTrue(long v) { return v == TRUE; }
+
+    /// Is `v` either boolean? Rust has `is_bool` on the value; both ports had
+    /// only `v == TRUE || v == FALSE` spelled out at each site.
+    public static boolean isBool(long v) { return v == TRUE || v == FALSE; }
     public static boolean isFalse(long v) { return v == FALSE; }
 
     /// Only `nil` and `false` are false. Zero, the empty string and the empty

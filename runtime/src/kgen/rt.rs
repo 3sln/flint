@@ -55,6 +55,7 @@ pub mod ropeflat;
 pub mod ropemeas;
 pub mod tablecell;
 pub mod tablefill;
+pub mod tablekind;
 pub mod tablemeta;
 pub mod tablesay;
 pub mod tabletrans;
