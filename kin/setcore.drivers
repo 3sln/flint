@@ -1,0 +1,305 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_SET: u8 = 18; const TY_MAP: u8 = 14;
+pub mod set { pub const S_MAP: u32 = 0; pub const S_META: u32 = 1; pub const S_HASH: u32 = 2; }
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value> }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        let a = self.bump; self.bump += n as u64 + 8;
+        self.gc.sp.m[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot(&self, v: Value, i: u32) -> Value { Value(self.h[v.0 as usize + i as usize]) }
+    // A MAP AS A SORTED RUN OF KEY/VALUE PAIRS, and the one property the set
+    // relies on: `assoc` of a key already present answers THE SAME MAP, and
+    // `dissoc` of one absent does too. Without that the identity tests below
+    // would be testing nothing.
+    fn new_map(&mut self, pairs: &[Value]) -> Value {
+        let a = self.alloc(TY_MAP, pairs.len().max(1) as u32);
+        self.lens[a as usize] = pairs.len() as u32;
+        for (i, p) in pairs.iter().enumerate() { self.h[a as usize + i] = p.0; }
+        Value::heap(a)
+    }
+    fn map_count(&mut self, m: Value) -> u32 { self.lens[m.0 as usize] / 2 }
+    fn map_find(&mut self, m: Value, k: Value) -> i32 {
+        let n = self.lens[m.0 as usize];
+        let mut i = 0;
+        while i < n {
+            if self.slot(m, i).0 == k.0 { return i as i32; }
+            i += 2;
+        }
+        -1
+    }
+    fn map_contains(&mut self, m: Value, k: Value) -> bool { self.map_find(m, k) >= 0 }
+    fn map_get(&mut self, m: Value, k: Value, dflt: Value) -> Value {
+        let at = self.map_find(m, k);
+        if at < 0 { dflt } else { self.slot(m, at as u32 + 1) }
+    }
+    fn map_assoc(&mut self, m: Value, k: Value, v: Value) -> Value {
+        if self.map_find(m, k) >= 0 { return m; }
+        let n = self.lens[m.0 as usize];
+        let mut pairs: alloc::vec::Vec<Value> = (0..n).map(|i| self.slot(m, i)).collect();
+        pairs.push(k); pairs.push(v);
+        self.new_map(&pairs)
+    }
+    fn map_dissoc(&mut self, m: Value, k: Value) -> Value {
+        let at = self.map_find(m, k);
+        if at < 0 { return m; }
+        let n = self.lens[m.0 as usize];
+        let mut pairs = alloc::vec::Vec::new();
+        for i in 0..n {
+            if i != at as u32 && i != at as u32 + 1 { pairs.push(self.slot(m, i)); }
+        }
+        self.new_map(&pairs)
+    }
+}
+impl Rt {
+--rust
+}
+extern crate alloc;
+fn main() {
+    let mut rt = Rt { h: vec![0; 9000], gc: Gc { sp: Space { m: vec![0u8; 9000] } },
+                      lens: vec![0; 9000], bump: 100, roots: Vec::new() };
+    let mut o = String::new();
+    let empty = rt.new_map(&[]);
+    let meta = Value(0x77);
+    let s0 = rt.new_set(empty, meta);
+    o.push_str(&format!("set?={}{} count0={} ", rt.is_set(s0) as u32,
+                        rt.is_set(empty) as u32, rt.set_count(s0)));
+    // CONJ, and the ELEMENT IS ITS OWN VALUE -- which is what makes `get`
+    // answer the stored one.
+    let a = Value(0xA1); let b = Value(0xB2); let c = Value(0xC3);
+    let s1 = rt.set_conj(s0, a);
+    let s2 = rt.set_conj(s1, b);
+    o.push_str(&format!("count2={} has={}{}{} ", rt.set_count(s2),
+                        rt.set_contains(s2, a) as u32, rt.set_contains(s2, b) as u32,
+                        rt.set_contains(s2, c) as u32));
+    o.push_str(&format!("get={}/{} ", rt.set_get(s2, a, NIL).0,
+                        rt.set_get(s2, c, Value(0xDD)).0));
+    // CONJ OF SOMETHING ALREADY THERE IS THE SET ITSELF, not a copy. The map
+    // answers the same map, and the identity test saves the allocation.
+    let again = rt.set_conj(s2, a);
+    o.push_str(&format!("same={} ", (again.0 == s2.0) as u32));
+    // DISJ, and DISJ OF SOMETHING ABSENT is likewise the set itself.
+    let s3 = rt.set_disj(s2, a);
+    let nodisj = rt.set_disj(s2, c);
+    o.push_str(&format!("disj={}/{} disjsame={} ", rt.set_count(s3),
+                        rt.set_contains(s3, a) as u32, (nodisj.0 == s2.0) as u32));
+    // THE METADATA RIDES ALONG, and the hash slot starts empty on every new
+    // set -- a set that inherited a stale hash would answer the old one.
+    o.push_str(&format!("meta={} hash={}",
+                        (rt.slot(s3, set::S_META).0 == meta.0) as u32,
+                        rt.slot(s3, set::S_HASH).is_nil() as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_SET = 18, TY_MAP = 14;
+    static final class Sets { static final int S_MAP = 0, S_META = 1, S_HASH = 2; }
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Space { byte[] m = new byte[9000]; }
+    static final class Rt {
+        long[] h = new long[9000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        int[] lens = new int[9000];
+        long bump = 100;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long alloc(int t, int n) {
+            long a = bump; bump += n + 8;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot(long v, int i) { return h[(int) v + i]; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static long newMap(Rt rt, long[] pairs) {
+        long a = rt.alloc(TY_MAP, Math.max(1, pairs.length));
+        rt.lens[(int) a] = pairs.length;
+        for (int i = 0; i < pairs.length; i++) rt.h[(int) a + i] = pairs[i];
+        return Val.heap(a);
+    }
+    static int mapFind(Rt rt, long m, long k) {
+        int n = rt.lens[(int) m];
+        for (int i = 0; i < n; i += 2) if (rt.slot(m, i) == k) return i;
+        return -1;
+    }
+        static int mapCount(Rt rt, long m) { return rt.lens[(int) m] / 2; }
+        static boolean mapContains(Rt rt, long m, long k) { return mapFind(rt, m, k) >= 0; }
+        static long mapGet(Rt rt, long m, long k, long dflt) {
+            int at = mapFind(rt, m, k);
+            return at < 0 ? dflt : rt.slot(m, at + 1);
+        }
+        static long mapAssoc(Rt rt, long m, long k, long v) {
+            if (mapFind(rt, m, k) >= 0) return m;
+            int n = rt.lens[(int) m];
+            long[] pairs = new long[n + 2];
+            for (int i = 0; i < n; i++) pairs[i] = rt.slot(m, i);
+            pairs[n] = k; pairs[n + 1] = v;
+            return newMap(rt, pairs);
+        }
+        static long mapDissoc(Rt rt, long m, long k) {
+            int at = mapFind(rt, m, k);
+            if (at < 0) return m;
+            int n = rt.lens[(int) m];
+            long[] pairs = new long[n - 2];
+            int j = 0;
+            for (int i = 0; i < n; i++) if (i != at && i != at + 1) pairs[j++] = rt.slot(m, i);
+            return newMap(rt, pairs);
+        }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long empty = newMap(rt, new long[]{});
+        long meta = 0x77;
+        long s0 = newSet(rt, empty, meta);
+        o.append("set?=").append(isSet(rt, s0) ? 1 : 0).append(isSet(rt, empty) ? 1 : 0)
+         .append(" count0=").append(setCount(rt, s0)).append(' ');
+        long a = 0xA1, b = 0xB2, c = 0xC3;
+        long s2 = setConj(rt, setConj(rt, s0, a), b);
+        o.append("count2=").append(setCount(rt, s2))
+         .append(" has=").append(setContains(rt, s2, a) ? 1 : 0)
+         .append(setContains(rt, s2, b) ? 1 : 0).append(setContains(rt, s2, c) ? 1 : 0)
+         .append(' ');
+        o.append("get=").append(setGet(rt, s2, a, NIL)).append('/')
+         .append(setGet(rt, s2, c, 0xDD)).append(' ');
+        o.append("same=").append(setConj(rt, s2, a) == s2 ? 1 : 0).append(' ');
+        long s3 = setDisj(rt, s2, a);
+        o.append("disj=").append(setCount(rt, s3)).append('/')
+         .append(setContains(rt, s3, a) ? 1 : 0)
+         .append(" disjsame=").append(setDisj(rt, s2, c) == s2 ? 1 : 0).append(' ');
+        o.append("meta=").append(rt.slot(s3, Sets.S_META) == meta ? 1 : 0)
+         .append(" hash=").append(Val.isNil(rt.slot(s3, Sets.S_HASH)) ? 1 : 0);
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Sets {
+        internal const int S_MAP = 0, S_META = 1, S_HASH = 2;
+    }
+}
+--csharp-head
+    internal const long NIL = 0xFFFFL;
+    internal static class Obj {
+        internal const int TySet = 18, TyMap = 14;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    internal sealed class Space { internal byte[] m = new byte[9000]; }
+    internal sealed class Rt {
+        internal long[] h = new long[9000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[9000];
+        internal long bump = 100;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Alloc(int t, int n) {
+            long a = bump; bump += n + 8;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Val.Nil;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot(long v, int i) { return h[(int) v + i]; }
+    }
+    internal static long NewMap(Rt rt, long[] pairs) {
+        long a = rt.Alloc(Obj.TyMap, System.Math.Max(1, pairs.Length));
+        rt.lens[(int) a] = pairs.Length;
+        for (int i = 0; i < pairs.Length; i++) rt.h[(int) a + i] = pairs[i];
+        return Val.Heap(a);
+    }
+    internal static int MapFind(Rt rt, long m, long k) {
+        int n = rt.lens[(int) m];
+        for (int i = 0; i < n; i += 2) if (rt.Slot(m, i) == k) return i;
+        return -1;
+    }
+        internal static int MapCount(Rt rt, long m) { return rt.lens[(int) m] / 2; }
+        internal static bool MapContains(Rt rt, long m, long k) { return MapFind(rt, m, k) >= 0; }
+        internal static long MapGet(Rt rt, long m, long k, long dflt) {
+            int at = MapFind(rt, m, k);
+            return at < 0 ? dflt : rt.Slot(m, at + 1);
+        }
+        internal static long MapAssoc(Rt rt, long m, long k, long v) {
+            if (MapFind(rt, m, k) >= 0) return m;
+            int n = rt.lens[(int) m];
+            long[] pairs = new long[n + 2];
+            for (int i = 0; i < n; i++) pairs[i] = rt.Slot(m, i);
+            pairs[n] = k; pairs[n + 1] = v;
+            return NewMap(rt, pairs);
+        }
+        internal static long MapDissoc(Rt rt, long m, long k) {
+            int at = MapFind(rt, m, k);
+            if (at < 0) return m;
+            int n = rt.lens[(int) m];
+            long[] pairs = new long[n - 2];
+            int j = 0;
+            for (int i = 0; i < n; i++) if (i != at && i != at + 1) pairs[j++] = rt.Slot(m, i);
+            return NewMap(rt, pairs);
+        }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long empty = NewMap(rt, new long[]{});
+        long meta = 0x77;
+        long s0 = NewSet(rt, empty, meta);
+        o.Append("set?=").Append(IsSet(rt, s0) ? 1 : 0).Append(IsSet(rt, empty) ? 1 : 0)
+         .Append(" count0=").Append(SetCount(rt, s0)).Append(' ');
+        long a = 0xA1, b = 0xB2, c = 0xC3;
+        long s2 = SetConj(rt, SetConj(rt, s0, a), b);
+        o.Append("count2=").Append(SetCount(rt, s2))
+         .Append(" has=").Append(SetContains(rt, s2, a) ? 1 : 0)
+         .Append(SetContains(rt, s2, b) ? 1 : 0).Append(SetContains(rt, s2, c) ? 1 : 0)
+         .Append(' ');
+        o.Append("get=").Append(SetGet(rt, s2, a, Val.Nil)).Append('/')
+         .Append(SetGet(rt, s2, c, 0xDD)).Append(' ');
+        o.Append("same=").Append(SetConj(rt, s2, a) == s2 ? 1 : 0).Append(' ');
+        long s3 = SetDisj(rt, s2, a);
+        o.Append("disj=").Append(SetCount(rt, s3)).Append('/')
+         .Append(SetContains(rt, s3, a) ? 1 : 0)
+         .Append(" disjsame=").Append(SetDisj(rt, s2, c) == s2 ? 1 : 0).Append(' ');
+        o.Append("meta=").Append(rt.Slot(s3, global::Flint.Rt.Sets.S_META) == meta ? 1 : 0)
+         .Append(" hash=").Append(Val.IsNil(rt.Slot(s3, global::Flint.Rt.Sets.S_HASH)) ? 1 : 0);
+        System.Console.WriteLine(o.ToString());
+    }

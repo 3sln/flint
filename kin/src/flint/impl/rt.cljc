@@ -346,6 +346,15 @@
             :java "Table.TT_LIVE" :csharp "global::Flint.Rt.Table.TT_LIVE"}
    'TT_LEN {:rust "crate::table::TT_LEN"
            :java "Table.TT_LEN" :csharp "global::Flint.Rt.Table.TT_LEN"}
+
+   ;; A SET's slots. A set IS a map whose values are its keys, so the map
+   ;; is a slot rather than the object.
+   'S_MAP {:rust "crate::set::S_MAP"
+          :java "Sets.S_MAP" :csharp "global::Flint.Rt.Sets.S_MAP"}
+   'S_META {:rust "crate::set::S_META"
+           :java "Sets.S_META" :csharp "global::Flint.Rt.Sets.S_META"}
+   'S_HASH {:rust "crate::set::S_HASH"
+           :java "Sets.S_HASH" :csharp "global::Flint.Rt.Sets.S_HASH"}
    'LS_THUNK {:rust "LS_THUNK" :java "LS_THUNK" :csharp "LS_THUNK"}
    'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LS_SEQ"}
    ;; A byte rope's header, and a transient byte string's. All three targets

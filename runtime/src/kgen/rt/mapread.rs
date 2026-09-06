@@ -126,7 +126,7 @@ impl Rt {
         return out;
     }
     /// Is `k` in `m`?
-    pub(crate) fn map_contains(&mut self, m: Value, k: Value) -> bool {
+    pub fn map_contains(&mut self, m: Value, k: Value) -> bool {
         return self.map_get(m, k, NOT_FOUND) != NOT_FOUND;
     }
 }

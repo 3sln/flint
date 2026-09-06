@@ -1,0 +1,100 @@
+;; A SET IS A MAP WHOSE VALUES ARE ITS KEYS.
+;;
+;; That is not an implementation detail to hide -- it is what makes `get` on a
+;; set answer the STORED element rather than the probe, which is the property
+;; `(get #{[1 2]} [1 2])` depends on: the vector that comes back is the one in
+;; the set, and `identical?` says so.
+;;
+;; THE SLOT IS THE MAP, not the object: a set carries its own metadata and its
+;; own cached hash, so it wraps a map rather than being one.
+(ns flint.rt.setcore
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != not is-heap as-heap ty
+                                   alloc heap slot set-at
+                                   mark push r pop-to
+                                   Rt Value I32 Bool RootIx Addr NIL
+                                   TY_SET S_MAP S_META S_HASH]]
+            [flint.rt.mapcore :refer [map-count]]
+            [flint.rt.mapread :refer [map-get map-contains]]
+            [flint.rt.mapwrite :refer [map-assoc map-dissoc]]))
+
+(doc "Is `v` a set?")
+(defn ^:pub ^:method ^Bool is-set [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_SET)))
+
+(doc "A set over `m`, carrying `meta`."
+     ""
+     "REFUSES BY ANSWERING NIL when the heap does, which is what every caller"
+     "here checks -- a set that half-exists would be worse than none.")
+(defn ^:pub ^:method ^Value new-set [^:mut ^Rt rt ^Value m ^Value meta]
+  (let [^RootIx base (mark rt)
+        ^RootIx mi (push rt m)
+        ^RootIx mt (push rt meta)
+        ^Addr a (alloc rt TY_SET 3)]
+    (comment "THE MAP AND THE META ARE RE-READ FROM THE ROOTS after the"
+             "allocation, and that is the whole reason they were pushed: 0031"
+             "says a value in a host local does not survive one.")
+    (set-at rt a S_MAP (r rt mi))
+    (set-at rt a S_META (r rt mt))
+    (set-at rt a S_HASH NIL)
+    (pop-to rt base)
+    (return (heap a))))
+
+(doc "How many elements the set holds.")
+(defn ^:pub ^:method ^I32 set-count [^:mut ^Rt rt ^Value s]
+  (return (map-count rt (slot rt s S_MAP))))
+
+(doc "Is `x` in `s`?")
+(defn ^:pub ^:method ^Bool set-contains [^:mut ^Rt rt ^Value s ^Value x]
+  (return (map-contains rt (slot rt s S_MAP) x)))
+
+(doc "`get` on a set answers the STORED element, not the probe."
+     ""
+     "The element is its own key AND its own value, so the map's `get` hands"
+     "back the one that is in the set. `(get #{[1 2]} [1 2])` is the vector"
+     "that was put there, and code that relies on identity gets what it asked"
+     "for rather than an equal stranger.")
+(defn ^:pub ^:method ^Value set-get [^:mut ^Rt rt ^Value s ^Value x ^Value not-found]
+  (return (map-get rt (slot rt s S_MAP) x not-found)))
+
+(doc "`conj` -- and the SET ITSELF when the element was already there."
+     ""
+     "The map answers the same map when nothing changed, so the identity test"
+     "here is one comparison and saves an allocation. `(conj s x)` on a set"
+     "that already has `x` is `s`, not a copy of it.")
+(defn ^:pub ^:method ^Value set-conj [^:mut ^Rt rt ^Value s ^Value x]
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt s)
+        ^RootIx xi (push rt x)
+        ^Value m (slot rt (r rt si) S_MAP)
+        ^Value nm (map-assoc rt m (r rt xi) (r rt xi))]
+    (if (== nm (slot rt (r rt si) S_MAP))
+      (do
+        (let [^Value same (r rt si)]
+          (pop-to rt base)
+          (return same))))
+    (let [^RootIx ni (push rt nm)
+          ^Value meta (slot rt (r rt si) S_META)
+          ^Value out (new-set rt (r rt ni) meta)]
+      (pop-to rt base)
+      (return out))))
+
+(doc "`disj` -- and the SET ITSELF when the element was not there.")
+(defn ^:pub ^:method ^Value set-disj [^:mut ^Rt rt ^Value s ^Value x]
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt s)
+        ^RootIx xi (push rt x)
+        ^Value m (slot rt (r rt si) S_MAP)
+        ^Value nm (map-dissoc rt m (r rt xi))]
+    (if (== nm (slot rt (r rt si) S_MAP))
+      (do
+        (let [^Value same (r rt si)]
+          (pop-to rt base)
+          (return same))))
+    (let [^RootIx ni (push rt nm)
+          ^Value meta (slot rt (r rt si) S_META)
+          ^Value out (new-set rt (r rt ni) meta)]
+      (pop-to rt base)
+      (return out))))

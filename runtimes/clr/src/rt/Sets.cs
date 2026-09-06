@@ -16,21 +16,14 @@ public static class Sets {
 
     public const int S_MAP = 0, S_META = 1, S_HASH = 2;
 
-    public static bool IsSet(Rt rt, long v) {
-        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TySet;
-    }
-
-    static long NewSet(Rt rt, long m, long meta) {
-        int bas = rt.Mark();
-        int mi = rt.Push(m), mt = rt.Push(meta);
-        long a = rt.Alloc(Obj.TySet, 3);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-        rt.SetSlot(a, S_MAP, rt.R(mi));
-        rt.SetSlot(a, S_META, rt.R(mt));
-        rt.SetSlot(a, S_HASH, Val.Nil);
-        rt.PopTo(bas);
-        return Val.Heap(a);
-    }
+    // A SET IS A MAP WHOSE VALUES ARE ITS KEYS -- see the Java copy.
+    public static bool IsSet(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Setcore.IsSet(rt, v); }
+    static long NewSet(Rt rt, long m, long meta) { return global::_3sln.Flint.Kgen.Rt.Setcore.NewSet(rt, m, meta); }
+    public static int Count(Rt rt, long s) { return global::_3sln.Flint.Kgen.Rt.Setcore.SetCount(rt, s); }
+    public static bool Contains(Rt rt, long s, long x) { return global::_3sln.Flint.Kgen.Rt.Setcore.SetContains(rt, s, x); }
+    public static long Get(Rt rt, long s, long x, long notFound) { return global::_3sln.Flint.Kgen.Rt.Setcore.SetGet(rt, s, x, notFound); }
+    public static long Conj(Rt rt, long s, long x) { return global::_3sln.Flint.Kgen.Rt.Setcore.SetConj(rt, s, x); }
+    public static long Disj(Rt rt, long s, long x) { return global::_3sln.Flint.Kgen.Rt.Setcore.SetDisj(rt, s, x); }
 
     public static long Empty(Rt rt) {
         long sg = rt.roots.shared.Singletons[Rt.SingEmptySet];
@@ -42,39 +35,6 @@ public static class Sets {
         int bas = rt.Mark();
         int mi = rt.Push(Maps.Empty(rt));
         long outv = NewSet(rt, rt.R(mi), Val.Nil);
-        rt.PopTo(bas);
-        return outv;
-    }
-
-    public static int Count(Rt rt, long s) { return Mapcore.MapCount(rt, rt.Slot(s, S_MAP)); }
-
-    public static bool Contains(Rt rt, long s, long x) {
-        return Mapread.MapContains(rt, rt.Slot(s, S_MAP), x);
-    }
-
-    /// `get` on a set returns the STORED element, not the probe. That is what
-    /// makes a set usable for canonicalisation -- `(get s x)` hands back the
-    /// copy the set is holding, which may not be the object passed in.
-    public static long Get(Rt rt, long s, long x, long notFound) {
-        return Mapread.MapGet(rt, rt.Slot(s, S_MAP), x, notFound);
-    }
-
-    public static long Conj(Rt rt, long s, long x) {
-        int bas = rt.Mark();
-        int si = rt.Push(s), xi = rt.Push(x);
-        long nm = Mapwrite.MapAssoc(rt, rt.Slot(rt.R(si), S_MAP), rt.R(xi), rt.R(xi));
-        int ni = rt.Push(nm);
-        long outv = NewSet(rt, rt.R(ni), rt.Slot(rt.R(si), S_META));
-        rt.PopTo(bas);
-        return outv;
-    }
-
-    public static long Disj(Rt rt, long s, long x) {
-        int bas = rt.Mark();
-        int si = rt.Push(s), xi = rt.Push(x);
-        long nm = Mapwrite.MapDissoc(rt, rt.Slot(rt.R(si), S_MAP), rt.R(xi));
-        int ni = rt.Push(nm);
-        long outv = NewSet(rt, rt.R(ni), rt.Slot(rt.R(si), S_META));
         rt.PopTo(bas);
         return outv;
     }

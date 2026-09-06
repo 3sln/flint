@@ -22,21 +22,15 @@ public final class Sets {
 
     public static final int S_MAP = 0, S_META = 1, S_HASH = 2;
 
-    public static boolean isSet(Rt rt, long v) {
-        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_SET;
-    }
-
-    static long newSet(Rt rt, long m, long meta) {
-        int base = rt.mark();
-        int mi = rt.push(m), mt = rt.push(meta);
-        long a = rt.alloc(TY_SET, 3);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(a, S_MAP, rt.r(mi));
-        rt.setSlot(a, S_META, rt.r(mt));
-        rt.setSlot(a, S_HASH, Val.NIL);
-        rt.popTo(base);
-        return Val.heap(a);
-    }
+    // A SET IS A MAP WHOSE VALUES ARE ITS KEYS, generated from
+    // `kin/setcore.kin`.
+    public static boolean isSet(Rt rt, long v) { return com._3sln.flint.kgen.rt.Setcore.isSet(rt, v); }
+    static long newSet(Rt rt, long m, long meta) { return com._3sln.flint.kgen.rt.Setcore.newSet(rt, m, meta); }
+    public static int count(Rt rt, long s) { return com._3sln.flint.kgen.rt.Setcore.setCount(rt, s); }
+    public static boolean contains(Rt rt, long s, long x) { return com._3sln.flint.kgen.rt.Setcore.setContains(rt, s, x); }
+    public static long get(Rt rt, long s, long x, long notFound) { return com._3sln.flint.kgen.rt.Setcore.setGet(rt, s, x, notFound); }
+    public static long conj(Rt rt, long s, long x) { return com._3sln.flint.kgen.rt.Setcore.setConj(rt, s, x); }
+    public static long disj(Rt rt, long s, long x) { return com._3sln.flint.kgen.rt.Setcore.setDisj(rt, s, x); }
 
     public static long empty(Rt rt) {
         long sg = rt.roots.shared.singletons[Rt.SING_EMPTY_SET];
@@ -48,39 +42,6 @@ public final class Sets {
         int base = rt.mark();
         int mi = rt.push(Maps.empty(rt));
         long out = newSet(rt, rt.r(mi), Val.NIL);
-        rt.popTo(base);
-        return out;
-    }
-
-    public static int count(Rt rt, long s) { return Mapcore.mapCount(rt, rt.slot(s, S_MAP)); }
-
-    public static boolean contains(Rt rt, long s, long x) {
-        return Mapread.mapContains(rt, rt.slot(s, S_MAP), x);
-    }
-
-    /// `get` on a set returns the STORED element, not the probe. That is what
-    /// makes a set usable for canonicalisation -- `(get s x)` hands back the
-    /// copy the set is holding, which may not be the object passed in.
-    public static long get(Rt rt, long s, long x, long notFound) {
-        return Mapread.mapGet(rt, rt.slot(s, S_MAP), x, notFound);
-    }
-
-    public static long conj(Rt rt, long s, long x) {
-        int base = rt.mark();
-        int si = rt.push(s), xi = rt.push(x);
-        long nm = Mapwrite.mapAssoc(rt, rt.slot(rt.r(si), S_MAP), rt.r(xi), rt.r(xi));
-        int ni = rt.push(nm);
-        long out = newSet(rt, rt.r(ni), rt.slot(rt.r(si), S_META));
-        rt.popTo(base);
-        return out;
-    }
-
-    public static long disj(Rt rt, long s, long x) {
-        int base = rt.mark();
-        int si = rt.push(s), xi = rt.push(x);
-        long nm = Mapwrite.mapDissoc(rt, rt.slot(rt.r(si), S_MAP), rt.r(xi));
-        int ni = rt.push(nm);
-        long out = newSet(rt, rt.r(ni), rt.slot(rt.r(si), S_META));
         rt.popTo(base);
         return out;
     }

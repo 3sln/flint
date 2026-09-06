@@ -69,6 +69,7 @@ pub mod tableref;
 pub mod ropenode;
 pub mod ropeslice;
 pub mod seqcore;
+pub mod setcore;
 pub mod seqs;
 pub mod seqwalk;
 pub mod vecnode;
