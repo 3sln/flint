@@ -1,0 +1,633 @@
+--rust-head
+extern crate alloc;
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const NOT_FOUND: Value = Value(0xFFFE);
+const TY_SCHEMA: u8 = 48; const TY_TABLEREF: u8 = 50;
+const TY_VEC: u8 = 9; const TY_MAP: u8 = 14; const TY_MAPENTRY: u8 = 15;
+pub mod table {
+    pub const SC_NAMES: u32 = 0; pub const SC_TYPES: u32 = 1; pub const SC_INDEX: u32 = 2;
+    pub const SC_IDS: u32 = 3; pub const SC_WIDTH: u32 = 4; pub const SC_LEN: u32 = 5;
+    pub const RF_SCHEMA: u32 = 0; pub const RF_LEN: u32 = 3;
+}
+// A KEYWORD IS A TAGGED INDEX into a host name table, and the "string" that is
+// its name is the same index under a different tag. The probe never needs
+// string BYTES -- `kw-name` asks a keyword for its name and a name for its
+// text, and both are one lookup -- so modelling them as heap objects would be
+// machinery the fixture does not exercise.
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 && self.0 != NOT_FOUND.0
+                               && (self.0 >> 60) == 0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn is_fixnum(self) -> bool { (self.0 >> 60) == 0xD }
+    fn as_fixnum(self) -> i64 { (self.0 & 0xFFFF_FFFF) as i64 }
+    fn fixnum(n: i64) -> Value { Value((0xDu64 << 60) | (n as u64 & 0xFFFF_FFFF)) }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn kw(i: u32) -> Value { Value((0xAu64 << 60) | i as u64) }
+    fn is_kw(self) -> bool { (self.0 >> 60) == 0xA }
+    fn name(i: u32) -> Value { Value((0xBu64 << 60) | i as u64) }
+    fn is_name(self) -> bool { (self.0 >> 60) == 0xB }
+    fn idx(self) -> u32 { (self.0 & 0xFFFF) as u32 }
+}
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>,
+            names: Vec<alloc::string::String>, thrown: alloc::string::String }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        let a = self.bump; self.bump += n as u64 + 16;
+        self.gc.sp.m[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set(&mut self, n: Value, i: u32, v: Value) { self.h[n.0 as usize + i as usize] = v.0; }
+    fn slot(&self, n: Value, i: u32) -> Value { Value(self.h[n.0 as usize + i as usize]) }
+    fn obj(&mut self, t: u8, n: u32) -> Value { let a = self.alloc(t, n); Value::heap(a) }
+    fn vec_count(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn vec_nth(&mut self, v: Value, i: u32, dflt: Value) -> Value {
+        if i >= self.vec_count(v) { dflt } else { self.slot(v, i) }
+    }
+    fn vector(&mut self, xs: &[Value]) -> Value {
+        let a = self.alloc(TY_VEC, xs.len().max(1) as u32);
+        self.lens[a as usize] = xs.len() as u32;
+        for (i, x) in xs.iter().enumerate() { self.h[a as usize + i] = x.0; }
+        Value::heap(a)
+    }
+    fn keyword(&mut self, t: &str) -> Value {
+        self.names.push(alloc::string::String::from(t));
+        Value::kw(self.names.len() as u32 - 1)
+    }
+    fn name_of(&mut self, v: Value) -> Value {
+        if v.is_kw() { Value::name(v.idx()) } else { NIL }
+    }
+    fn is_string(&self, v: Value) -> bool { v.is_name() }
+    fn value_text(&mut self, v: Value) -> alloc::string::String {
+        self.names[v.idx() as usize].clone()
+    }
+    // THE PROBE'S CLOSED SET, small enough to see: the words a message uses.
+    fn kind_of(&mut self, v: Value) -> Value {
+        if v.is_fixnum() { return self.keyword("number"); }
+        if v.is_kw() { return self.keyword("keyword"); }
+        if v.is_name() { return self.keyword("string"); }
+        if !v.is_heap() { return self.keyword("other"); }
+        match ty(&self.gc.sp, v.as_heap()) {
+            TY_VEC => self.keyword("vector"),
+            TY_MAP => self.keyword("map"),
+            _ => self.keyword("other"),
+        }
+    }
+    fn type_ok(&mut self, t: Value, v: Value) -> bool {
+        let nm = self.name_of(t);
+        let s = self.value_text(nm);
+        match s.as_str() {
+            "any" => true,
+            "int" => v.is_fixnum(),
+            "string" => self.is_string(v),
+            _ => false,
+        }
+    }
+    fn slot_or_nth_pub(&mut self, v: Value, i: u32) -> Value {
+        if ty(&self.gc.sp, v.as_heap()) == TY_MAPENTRY { self.slot(v, i) }
+        else { self.vec_nth(v, i, NIL) }
+    }
+    fn empty_map(&mut self) -> Value { let a = self.alloc(TY_MAP, 1); self.lens[a as usize] = 0; Value::heap(a) }
+    fn map_assoc(&mut self, m: Value, k: Value, v: Value) -> Value {
+        let n = self.lens[m.0 as usize];
+        let a = self.alloc(TY_MAP, n + 2);
+        self.lens[a as usize] = n + 2;
+        for i in 0..n { self.h[a as usize + i as usize] = self.h[m.0 as usize + i as usize]; }
+        self.h[a as usize + n as usize] = k.0;
+        self.h[a as usize + n as usize + 1] = v.0;
+        Value::heap(a)
+    }
+    fn is_map(&self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_MAP
+    }
+    fn map_count(&self, m: Value) -> u32 { self.lens[m.0 as usize] / 2 }
+    // A MAP AS A SEQ of entries: a vector of `[k v]` MAP ENTRIES, and `next`
+    // drops the head. `first-foreign-key` walks one.
+    fn entry(&mut self, k: Value, v: Value) -> Value {
+        let a = self.alloc(TY_MAPENTRY, 2);
+        self.h[a as usize] = k.0; self.h[a as usize + 1] = v.0;
+        Value::heap(a)
+    }
+    fn seq(&mut self, m: Value) -> Value {
+        let n = self.lens[m.0 as usize];
+        if n == 0 { return NIL; }
+        let mut es = alloc::vec::Vec::new();
+        let mut i = 0;
+        while i < n {
+            let (k, v) = (self.slot(m, i), self.slot(m, i + 1));
+            let e = self.entry(k, v);
+            es.push(e);
+            i += 2;
+        }
+        self.vector(&es)
+    }
+    fn first(&mut self, q: Value) -> Value { self.vec_nth(q, 0, NIL) }
+    fn next(&mut self, q: Value) -> Value {
+        let n = self.vec_count(q);
+        if n <= 1 { return NIL; }
+        let rest: alloc::vec::Vec<Value> = (1..n).map(|i| self.slot(q, i)).collect();
+        self.vector(&rest)
+    }
+    fn throw_str(&mut self, _kind: &str, msg: &alloc::string::String) -> Value {
+        self.thrown = msg.clone();
+        NIL
+    }
+    fn charge_work(&mut self, _n: u64) {}
+    // The siblings from `tablemeta`, `tableref` and `tablecell`.
+    fn schema_len(&self, s: Value) -> u32 { self.vec_count(self.slot(s, table::SC_NAMES)) }
+    fn schema_width(&mut self, s: Value) -> u32 { self.slot(s, table::SC_WIDTH).as_fixnum() as u32 }
+    fn schema_name_at(&mut self, s: Value, c: u32) -> Value {
+        let names = self.slot(s, table::SC_NAMES);
+        self.vec_nth(names, c, NIL)
+    }
+    fn schema_id(&mut self, s: Value, name: Value) -> u32 {
+        let idx = self.slot(s, table::SC_INDEX);
+        let n = self.lens[idx.0 as usize];
+        let mut i = 0;
+        while i < n {
+            if self.slot(idx, i).0 == name.0 { return self.slot(idx, i + 1).as_fixnum() as u32; }
+            i += 2;
+        }
+        self.schema_width(s)
+    }
+    fn is_table_ref(&self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_TABLEREF
+    }
+    fn row_column(&mut self, s: Value, row: Value, c: u32) -> Value {
+        let name = self.schema_name_at(s, c);
+        let n = self.lens[row.0 as usize];
+        let mut i = 0;
+        while i < n {
+            if self.slot(row, i).0 == name.0 { return self.slot(row, i + 1); }
+            i += 2;
+        }
+        NOT_FOUND
+    }
+    fn schema(&mut self, names: &[Value], types: &[Value]) -> Value {
+        let s = self.obj(TY_SCHEMA, table::SC_LEN);
+        let nv = self.vector(names);
+        self.set(s, table::SC_NAMES, nv);
+        let tv = self.vector(types);
+        self.set(s, table::SC_TYPES, tv);
+        self.set(s, table::SC_WIDTH, Value::fixnum(names.len() as i64));
+        let mut idx = self.empty_map();
+        for (i, n) in names.iter().enumerate() { idx = self.map_assoc(idx, *n, Value::fixnum(i as i64)); }
+        self.set(s, table::SC_INDEX, idx);
+        s
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 40000], gc: Gc { sp: Space { m: vec![0u8; 40000] } },
+                      lens: vec![0; 40000], bump: 100, roots: Vec::new(),
+                      names: Vec::new(), thrown: alloc::string::String::new() };
+    let mut o = String::new();
+    let ka = rt.keyword("a"); let kb = rt.keyword("b"); let kz = rt.keyword("z");
+    let tint = rt.keyword("int"); let tstr = rt.keyword("string");
+    let sch = rt.schema(&[ka, kb], &[tint, tstr]);
+    let n1 = rt.kw_name(ka);
+    let n2 = rt.kw_name(Value::fixnum(3));
+    o.push_str(&format!("kw={}/{} ", n1, n2));
+    let cl = rt.column_list(sch);
+    o.push_str(&format!("cols=[{}] ", cl));
+    let hello = Value::name(rt.names.len() as u32);
+    rt.names.push(alloc::string::String::from("hi"));
+    let mut good = rt.empty_map();
+    good = rt.map_assoc(good, ka, Value::fixnum(1));
+    good = rt.map_assoc(good, kb, hello);
+    let ok = rt.check_row(sch, good, 0);
+    o.push_str(&format!("good={} ", ok as u32));
+    // NOT A MAP AT ALL.
+    let notmap = rt.check_row(sch, Value::fixnum(7), 3);
+    let m1 = rt.thrown.clone();
+    o.push_str(&format!("notmap={}|{} ", notmap as u32, m1));
+    // A MISSING COLUMN, and the message lists what the columns ARE.
+    let mut short = rt.empty_map();
+    short = rt.map_assoc(short, ka, Value::fixnum(1));
+    let miss = rt.check_row(sch, short, 4);
+    let m2 = rt.thrown.clone();
+    o.push_str(&format!("missing={}|{} ", miss as u32, m2));
+    // THE WRONG TYPE, and the message says what ARRIVED.
+    let mut wrong = rt.empty_map();
+    wrong = rt.map_assoc(wrong, ka, hello);
+    wrong = rt.map_assoc(wrong, kb, hello);
+    let bad = rt.check_row(sch, wrong, 5);
+    let m3 = rt.thrown.clone();
+    o.push_str(&format!("type={}|{} ", bad as u32, m3));
+    // A KEY THAT IS NOT A COLUMN.
+    let mut wide = rt.empty_map();
+    wide = rt.map_assoc(wide, ka, Value::fixnum(1));
+    wide = rt.map_assoc(wide, kb, hello);
+    wide = rt.map_assoc(wide, kz, Value::fixnum(9));
+    let ex = rt.check_row(sch, wide, 6);
+    let m4 = rt.thrown.clone();
+    o.push_str(&format!("extra={}|{} ", ex as u32, m4));
+    // AND THE HUNT, which is only reached when the count disagrees.
+    let foreign = rt.first_foreign_key(sch, wide);
+    let fname = rt.kw_name(foreign);
+    let none = rt.first_foreign_key(sch, good).is_nil() as u32;
+    o.push_str(&format!("foreign={} none={}", fname, none));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL, NOT_FOUND = 0xFFFEL;
+    static final int TY_SCHEMA = 48, TY_TABLEREF = 50, TY_VEC = 9, TY_MAP = 14,
+                     TY_MAPENTRY = 15;
+    static final class Table {
+        static final int SC_NAMES = 0, SC_TYPES = 1, SC_INDEX = 2, SC_IDS = 3,
+                         SC_WIDTH = 4, SC_LEN = 5;
+        static final int RF_SCHEMA = 0, RF_LEN = 3;
+        static boolean typeOk(Rt rt, long t, long v) { return Probe.typeOk(rt, t, v); }
+    }
+    static final class Val {
+        static final long NIL = Probe.NIL, NOT_FOUND = Probe.NOT_FOUND;
+        static boolean isHeap(long v) {
+            return v >= 100 && v != NIL && v != NOT_FOUND && (v >>> 60) == 0;
+        }
+        static long asHeap(long v) { return v; }
+        static boolean isFixnum(long v) { return (v >>> 60) == 0xDL; }
+        static long asFixnum(long v) { return v & 0xFFFFFFFFL; }
+        static long fixnum(long n) { return (0xDL << 60) | (n & 0xFFFFFFFFL); }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+        static long kw(int i) { return (0xAL << 60) | i; }
+        static boolean isKw(long v) { return (v >>> 60) == 0xAL; }
+        static long name(int i) { return (0xBL << 60) | i; }
+        static boolean isName(long v) { return (v >>> 60) == 0xBL; }
+        static int idx(long v) { return (int) (v & 0xFFFFL); }
+    }
+    static final class Space { byte[] m = new byte[40000]; }
+    static final class Rt {
+        long[] h = new long[40000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        int[] lens = new int[40000];
+        long bump = 100;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        java.util.ArrayList<String> names = new java.util.ArrayList<>();
+        String thrown = "";
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long alloc(int t, int n) {
+            long a = bump; bump += n + 16;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void set(long n, int i, long v) { h[(int) n + i] = v; }
+        long slot(long n, int i) { return h[(int) n + i]; }
+        long nameOf(long v) { return Val.isKw(v) ? Val.name(Val.idx(v)) : NIL; }
+        long slotOrNth(long v, int i) {
+            return ty(gc.sp, v) == TY_MAPENTRY ? slot(v, i) : Vec.nth(this, v, i, NIL);
+        }
+        void chargeWork(long n) { }
+        long kindOf(long v) { return Probe.kindOf(this, v); }
+        long throwStr(String kind, String msg) { thrown = msg; return NIL; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static final class Vec {
+        static int count(Rt rt, long v) { return rt.lens[(int) v]; }
+        static long nth(Rt rt, long v, int i, long dflt) {
+            return i >= count(rt, v) ? dflt : rt.slot(v, i);
+        }
+    }
+    static final class Str {
+        static boolean isString(Rt rt, long v) { return Val.isName(v); }
+        static String text(Rt rt, long v) { return rt.names.get(Val.idx(v)); }
+    }
+    static final class com { static final class flint { static final class rt {
+        static final class Seqs {
+            static long seq(Rt rt, long m) { return Probe.seqOf(rt, m); }
+            static long first(Rt rt, long q) { return Vec.nth(rt, q, 0, NIL); }
+            static long next(Rt rt, long q) { return Probe.nextOf(rt, q); }
+        }
+    } } }
+    static long obj(Rt rt, int t, int n) { return Val.heap(rt.alloc(t, n)); }
+    static long vector(Rt rt, long[] xs) {
+        long a = rt.alloc(TY_VEC, Math.max(1, xs.length));
+        rt.lens[(int) a] = xs.length;
+        for (int i = 0; i < xs.length; i++) rt.h[(int) a + i] = xs[i];
+        return Val.heap(a);
+    }
+    static long keyword(Rt rt, String t) { rt.names.add(t); return Val.kw(rt.names.size() - 1); }
+    static long kindOf(Rt rt, long v) {
+        if (Val.isFixnum(v)) return keyword(rt, "number");
+        if (Val.isKw(v)) return keyword(rt, "keyword");
+        if (Val.isName(v)) return keyword(rt, "string");
+        if (!Val.isHeap(v)) return keyword(rt, "other");
+        switch (ty(rt.gc.sp, v)) {
+            case TY_VEC: return keyword(rt, "vector");
+            case TY_MAP: return keyword(rt, "map");
+            default: return keyword(rt, "other");
+        }
+    }
+    static boolean typeOk(Rt rt, long t, long v) {
+        String s = Str.text(rt, rt.nameOf(t));
+        if (s.equals("any")) return true;
+        if (s.equals("int")) return Val.isFixnum(v);
+        if (s.equals("string")) return Str.isString(rt, v);
+        return false;
+    }
+    static long emptyMap(Rt rt) { long a = rt.alloc(TY_MAP, 1); rt.lens[(int) a] = 0; return Val.heap(a); }
+    static long mapAssoc(Rt rt, long m, long k, long v) {
+        int n = rt.lens[(int) m];
+        long a = rt.alloc(TY_MAP, n + 2);
+        rt.lens[(int) a] = n + 2;
+        for (int i = 0; i < n; i++) rt.h[(int) a + i] = rt.h[(int) m + i];
+        rt.h[(int) a + n] = k; rt.h[(int) a + n + 1] = v;
+        return Val.heap(a);
+    }
+    static boolean isMap(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, v) == TY_MAP; }
+    static int mapCount(Rt rt, long m) { return rt.lens[(int) m] / 2; }
+    static long entry(Rt rt, long k, long v) {
+        long a = rt.alloc(TY_MAPENTRY, 2);
+        rt.h[(int) a] = k; rt.h[(int) a + 1] = v;
+        return Val.heap(a);
+    }
+    static long seqOf(Rt rt, long m) {
+        int n = rt.lens[(int) m];
+        if (n == 0) return NIL;
+        long[] es = new long[n / 2];
+        for (int i = 0; i < n; i += 2) es[i / 2] = entry(rt, rt.slot(m, i), rt.slot(m, i + 1));
+        return vector(rt, es);
+    }
+    static long nextOf(Rt rt, long q) {
+        int n = Vec.count(rt, q);
+        if (n <= 1) return NIL;
+        long[] rest = new long[n - 1];
+        for (int i = 1; i < n; i++) rest[i - 1] = rt.slot(q, i);
+        return vector(rt, rest);
+    }
+    static int schemaLen(Rt rt, long s) { return Vec.count(rt, rt.slot(s, Table.SC_NAMES)); }
+    static int schemaWidth(Rt rt, long s) { return (int) Val.asFixnum(rt.slot(s, Table.SC_WIDTH)); }
+    static long schemaNameAt(Rt rt, long s, int c) {
+        return Vec.nth(rt, rt.slot(s, Table.SC_NAMES), c, NIL);
+    }
+    static int schemaId(Rt rt, long s, long name) {
+        long idx = rt.slot(s, Table.SC_INDEX);
+        int n = rt.lens[(int) idx];
+        for (int i = 0; i < n; i += 2)
+            if (rt.slot(idx, i) == name) return (int) Val.asFixnum(rt.slot(idx, i + 1));
+        return schemaWidth(rt, s);
+    }
+    static boolean isTableRef(Rt rt, long v) {
+        return Val.isHeap(v) && ty(rt.gc.sp, v) == TY_TABLEREF;
+    }
+    static long rowColumn(Rt rt, long s, long row, int c) {
+        long name = schemaNameAt(rt, s, c);
+        int n = rt.lens[(int) row];
+        for (int i = 0; i < n; i += 2) if (rt.slot(row, i) == name) return rt.slot(row, i + 1);
+        return NOT_FOUND;
+    }
+    static long schema(Rt rt, long[] names, long[] types) {
+        long s = obj(rt, TY_SCHEMA, Table.SC_LEN);
+        rt.set(s, Table.SC_NAMES, vector(rt, names));
+        rt.set(s, Table.SC_TYPES, vector(rt, types));
+        rt.set(s, Table.SC_WIDTH, Val.fixnum(names.length));
+        long idx = emptyMap(rt);
+        for (int i = 0; i < names.length; i++) idx = mapAssoc(rt, idx, names[i], Val.fixnum(i));
+        rt.set(s, Table.SC_INDEX, idx);
+        return s;
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long ka = keyword(rt, "a"), kb = keyword(rt, "b"), kz = keyword(rt, "z");
+        long tint = keyword(rt, "int"), tstr = keyword(rt, "string");
+        long sch = schema(rt, new long[]{ka, kb}, new long[]{tint, tstr});
+        o.append("kw=").append(kwName(rt, ka)).append('/').append(kwName(rt, Val.fixnum(3)))
+         .append(' ');
+        o.append("cols=[").append(columnList(rt, sch)).append("] ");
+        rt.names.add("hi");
+        long hello = Val.name(rt.names.size() - 1);
+        long good = mapAssoc(rt, mapAssoc(rt, emptyMap(rt), ka, Val.fixnum(1)), kb, hello);
+        o.append("good=").append(checkRow(rt, sch, good, 0) ? 1 : 0).append(' ');
+        o.append("notmap=").append(checkRow(rt, sch, Val.fixnum(7), 3) ? 1 : 0)
+         .append('|').append(rt.thrown).append(' ');
+        long shortr = mapAssoc(rt, emptyMap(rt), ka, Val.fixnum(1));
+        o.append("missing=").append(checkRow(rt, sch, shortr, 4) ? 1 : 0)
+         .append('|').append(rt.thrown).append(' ');
+        long wrong = mapAssoc(rt, mapAssoc(rt, emptyMap(rt), ka, hello), kb, hello);
+        o.append("type=").append(checkRow(rt, sch, wrong, 5) ? 1 : 0)
+         .append('|').append(rt.thrown).append(' ');
+        long wide = mapAssoc(rt, mapAssoc(rt, mapAssoc(rt, emptyMap(rt), ka, Val.fixnum(1)),
+                                          kb, hello), kz, Val.fixnum(9));
+        o.append("extra=").append(checkRow(rt, sch, wide, 6) ? 1 : 0)
+         .append('|').append(rt.thrown).append(' ');
+        o.append("foreign=").append(kwName(rt, firstForeignKey(rt, sch, wide)))
+         .append(" none=").append(firstForeignKey(rt, sch, good) == NIL ? 1 : 0);
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Table {
+        internal const int SC_NAMES = 0, SC_TYPES = 1, SC_INDEX = 2, SC_IDS = 3,
+                           SC_WIDTH = 4, SC_LEN = 5;
+        internal const int RF_SCHEMA = 0, RF_LEN = 3;
+        internal static bool typeOk(Probe.Rt rt, long t, long v) { return Probe.TypeOk(rt, t, v); }
+    }
+    internal static class Seqs {
+        internal static long Seq(Probe.Rt rt, long m) { return Probe.SeqOf(rt, m); }
+        internal static long First(Probe.Rt rt, long q) { return Probe.Vec.Nth(rt, q, 0, Probe.Val.Nil); }
+        internal static long Next(Probe.Rt rt, long q) { return Probe.NextOf(rt, q); }
+    }
+}
+--csharp-head
+    internal static class Obj {
+        internal const int TySchema = 48, TyTableref = 50, TyVec = 9, TyMap = 14,
+                           TyMapentry = 15;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL, NotFound = 0xFFFEL;
+        internal static bool IsHeap(long v) {
+            return v >= 100 && v != Nil && v != NotFound && (long)((ulong) v >> 60) == 0;
+        }
+        internal static long AsHeap(long v) { return v; }
+        internal static bool IsFixnum(long v) { return (long)((ulong) v >> 60) == 0xDL; }
+        internal static long AsFixnum(long v) { return v & 0xFFFFFFFFL; }
+        internal static long Fixnum(long n) { return (0xDL << 60) | (n & 0xFFFFFFFFL); }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+        internal static long Kw(int i) { return (0xAL << 60) | (long) i; }
+        internal static bool IsKw(long v) { return (long)((ulong) v >> 60) == 0xAL; }
+        internal static long Name(int i) { return (0xBL << 60) | (long) i; }
+        internal static bool IsName(long v) { return (long)((ulong) v >> 60) == 0xBL; }
+        internal static int Idx(long v) { return (int) (v & 0xFFFFL); }
+    }
+    internal sealed class Space { internal byte[] m = new byte[40000]; }
+    internal sealed class Rt {
+        internal long[] h = new long[40000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[40000];
+        internal long bump = 100;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal System.Collections.Generic.List<string> names = new System.Collections.Generic.List<string>();
+        internal string thrown = "";
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Alloc(int t, int n) {
+            long a = bump; bump += n + 16;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = Val.Nil;
+            return a;
+        }
+        internal void Set(long n, int i, long v) { h[(int) n + i] = v; }
+        internal long Slot(long n, int i) { return h[(int) n + i]; }
+        internal long NameOf(long v) { return Val.IsKw(v) ? Val.Name(Val.Idx(v)) : Val.Nil; }
+        internal long SlotOrNth(long v, int i) {
+            return Obj.Ty(gc.sp, v) == Obj.TyMapentry ? Slot(v, i) : Vec.Nth(this, v, i, Val.Nil);
+        }
+        internal void ChargeWork(long n) { }
+        internal long KindOf(long v) { return Probe.KindOf(this, v); }
+        internal long ThrowStr(string kind, string msg) { thrown = msg; return Val.Nil; }
+    }
+    internal static class Vec {
+        internal static int Count(Rt rt, long v) { return rt.lens[(int) v]; }
+        internal static long Nth(Rt rt, long v, int i, long dflt) {
+            return i >= Count(rt, v) ? dflt : rt.Slot(v, i);
+        }
+    }
+    internal static class Str {
+        internal static bool IsString(Rt rt, long v) { return Val.IsName(v); }
+        internal static string Text(Rt rt, long v) { return rt.names[Val.Idx(v)]; }
+    }
+    internal static long Obj2(Rt rt, int t, int n) { return Val.Heap(rt.Alloc(t, n)); }
+    internal static long Vector(Rt rt, long[] xs) {
+        long a = rt.Alloc(Obj.TyVec, System.Math.Max(1, xs.Length));
+        rt.lens[(int) a] = xs.Length;
+        for (int i = 0; i < xs.Length; i++) rt.h[(int) a + i] = xs[i];
+        return Val.Heap(a);
+    }
+    internal static long Keyword(Rt rt, string t) { rt.names.Add(t); return Val.Kw(rt.names.Count - 1); }
+    internal static long KindOf(Rt rt, long v) {
+        if (Val.IsFixnum(v)) return Keyword(rt, "number");
+        if (Val.IsKw(v)) return Keyword(rt, "keyword");
+        if (Val.IsName(v)) return Keyword(rt, "string");
+        if (!Val.IsHeap(v)) return Keyword(rt, "other");
+        switch (Obj.Ty(rt.gc.sp, v)) {
+            case Obj.TyVec: return Keyword(rt, "vector");
+            case Obj.TyMap: return Keyword(rt, "map");
+            default: return Keyword(rt, "other");
+        }
+    }
+    internal static bool TypeOk(Rt rt, long t, long v) {
+        string s = Str.Text(rt, rt.NameOf(t));
+        if (s == "any") return true;
+        if (s == "int") return Val.IsFixnum(v);
+        if (s == "string") return Str.IsString(rt, v);
+        return false;
+    }
+    internal static long EmptyMap(Rt rt) { long a = rt.Alloc(Obj.TyMap, 1); rt.lens[(int) a] = 0; return Val.Heap(a); }
+    internal static long MapAssoc(Rt rt, long m, long k, long v) {
+        int n = rt.lens[(int) m];
+        long a = rt.Alloc(Obj.TyMap, n + 2);
+        rt.lens[(int) a] = n + 2;
+        for (int i = 0; i < n; i++) rt.h[(int) a + i] = rt.h[(int) m + i];
+        rt.h[(int) a + n] = k; rt.h[(int) a + n + 1] = v;
+        return Val.Heap(a);
+    }
+    internal static bool IsMap(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyMap; }
+    internal static int MapCount(Rt rt, long m) { return rt.lens[(int) m] / 2; }
+    internal static long Entry(Rt rt, long k, long v) {
+        long a = rt.Alloc(Obj.TyMapentry, 2);
+        rt.h[(int) a] = k; rt.h[(int) a + 1] = v;
+        return Val.Heap(a);
+    }
+    internal static long SeqOf(Rt rt, long m) {
+        int n = rt.lens[(int) m];
+        if (n == 0) return Val.Nil;
+        long[] es = new long[n / 2];
+        for (int i = 0; i < n; i += 2) es[i / 2] = Entry(rt, rt.Slot(m, i), rt.Slot(m, i + 1));
+        return Vector(rt, es);
+    }
+    internal static long NextOf(Rt rt, long q) {
+        int n = Vec.Count(rt, q);
+        if (n <= 1) return Val.Nil;
+        long[] rest = new long[n - 1];
+        for (int i = 1; i < n; i++) rest[i - 1] = rt.Slot(q, i);
+        return Vector(rt, rest);
+    }
+    internal static int SchemaLen(Rt rt, long s) { return Vec.Count(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES)); }
+    internal static int SchemaWidth(Rt rt, long s) { return (int) Val.AsFixnum(rt.Slot(s, global::Flint.Rt.Table.SC_WIDTH)); }
+    internal static long SchemaNameAt(Rt rt, long s, int c) {
+        return Vec.Nth(rt, rt.Slot(s, global::Flint.Rt.Table.SC_NAMES), c, Val.Nil);
+    }
+    internal static int SchemaId(Rt rt, long s, long name) {
+        long idx = rt.Slot(s, global::Flint.Rt.Table.SC_INDEX);
+        int n = rt.lens[(int) idx];
+        for (int i = 0; i < n; i += 2)
+            if (rt.Slot(idx, i) == name) return (int) Val.AsFixnum(rt.Slot(idx, i + 1));
+        return SchemaWidth(rt, s);
+    }
+    internal static bool IsTableRef(Rt rt, long v) {
+        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyTableref;
+    }
+    internal static long RowColumn(Rt rt, long s, long row, int c) {
+        long name = SchemaNameAt(rt, s, c);
+        int n = rt.lens[(int) row];
+        for (int i = 0; i < n; i += 2) if (rt.Slot(row, i) == name) return rt.Slot(row, i + 1);
+        return Val.NotFound;
+    }
+    internal static long Schema(Rt rt, long[] names, long[] types) {
+        long s = Obj2(rt, Obj.TySchema, global::Flint.Rt.Table.SC_LEN);
+        rt.Set(s, global::Flint.Rt.Table.SC_NAMES, Vector(rt, names));
+        rt.Set(s, global::Flint.Rt.Table.SC_TYPES, Vector(rt, types));
+        rt.Set(s, global::Flint.Rt.Table.SC_WIDTH, Val.Fixnum(names.Length));
+        long idx = EmptyMap(rt);
+        for (int i = 0; i < names.Length; i++) idx = MapAssoc(rt, idx, names[i], Val.Fixnum(i));
+        rt.Set(s, global::Flint.Rt.Table.SC_INDEX, idx);
+        return s;
+    }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long ka = Keyword(rt, "a"), kb = Keyword(rt, "b"), kz = Keyword(rt, "z");
+        long tint = Keyword(rt, "int"), tstr = Keyword(rt, "string");
+        long sch = Schema(rt, new long[]{ka, kb}, new long[]{tint, tstr});
+        o.Append("kw=").Append(KwName(rt, ka)).Append('/').Append(KwName(rt, Val.Fixnum(3)))
+         .Append(' ');
+        o.Append("cols=[").Append(ColumnList(rt, sch)).Append("] ");
+        rt.names.Add("hi");
+        long hello = Val.Name(rt.names.Count - 1);
+        long good = MapAssoc(rt, MapAssoc(rt, EmptyMap(rt), ka, Val.Fixnum(1)), kb, hello);
+        o.Append("good=").Append(CheckRow(rt, sch, good, 0) ? 1 : 0).Append(' ');
+        o.Append("notmap=").Append(CheckRow(rt, sch, Val.Fixnum(7), 3) ? 1 : 0)
+         .Append('|').Append(rt.thrown).Append(' ');
+        long shortr = MapAssoc(rt, EmptyMap(rt), ka, Val.Fixnum(1));
+        o.Append("missing=").Append(CheckRow(rt, sch, shortr, 4) ? 1 : 0)
+         .Append('|').Append(rt.thrown).Append(' ');
+        long wrong = MapAssoc(rt, MapAssoc(rt, EmptyMap(rt), ka, hello), kb, hello);
+        o.Append("type=").Append(CheckRow(rt, sch, wrong, 5) ? 1 : 0)
+         .Append('|').Append(rt.thrown).Append(' ');
+        long wide = MapAssoc(rt, MapAssoc(rt, MapAssoc(rt, EmptyMap(rt), ka, Val.Fixnum(1)),
+                                          kb, hello), kz, Val.Fixnum(9));
+        o.Append("extra=").Append(CheckRow(rt, sch, wide, 6) ? 1 : 0)
+         .Append('|').Append(rt.thrown).Append(' ');
+        o.Append("foreign=").Append(KwName(rt, FirstForeignKey(rt, sch, wide)))
+         .Append(" none=").Append(FirstForeignKey(rt, sch, good) == Val.Nil ? 1 : 0);
+        System.Console.WriteLine(o.ToString());
+    }

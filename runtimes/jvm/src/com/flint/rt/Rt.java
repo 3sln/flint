@@ -522,6 +522,18 @@ public final class Rt {
     public void setSlot(long obj, int i, long v) { gc.setSlot(obj, i, v, roots); }
     public long slot(long v, int i) { return Obj.slot(gc.sp, Val.asHeap(v), i); }
 
+    /// Slot `i` of a MAP ENTRY, or element `i` of anything else.
+    ///
+    /// A `seq` over a map yields map entries, but a row may also be written as
+    /// `[[:a 1] [:b 2]]`, where the pairs are VECTORS. Rust handled both and
+    /// both ports read slot 0 unconditionally, which is a garbage key for the
+    /// vector form -- unreachable through `seq` over a map, and a divergence
+    /// all the same.
+    public long slotOrNth(long v, int i) {
+        return Obj.ty(gc.sp, Val.asHeap(v)) == Obj.TY_MAPENTRY ? slot(v, i)
+                                                               : Vec.nth(this, v, i, Val.NIL);
+    }
+
     public int mark() { return roots.mark(); }
     /// ROOT `v`, and in a diagnostic build check that it is not already stale.
     ///

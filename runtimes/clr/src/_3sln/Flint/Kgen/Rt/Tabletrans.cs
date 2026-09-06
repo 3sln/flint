@@ -14,6 +14,7 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Tablecell;
 using static global::_3sln.Flint.Kgen.Rt.Tablefill;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
+using static global::_3sln.Flint.Kgen.Rt.Tablesay;
 using static global::_3sln.Flint.Kgen.Rt.Vecassoc;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;
 using static global::_3sln.Flint.Kgen.Rt.Vecwrite;

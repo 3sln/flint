@@ -130,6 +130,19 @@ impl Rt {
     /// The string's bytes as a HOST vector, for host code outside the port --
     /// the printer and `str_bytes`'s builtin. Inside, everything goes through a
     /// sink; this is the door, as `b_to_vec` is for byte strings.
+    /// The string as a HOST string.
+    ///
+    /// Rust had no such thing: `as_str` borrows, so it cannot flatten, and it
+    /// answered `None` for a rope nobody had materialised -- which both ports'
+    /// `Str.text` handles by flattening. Every message builder then wrote
+    /// `.unwrap_or("?")` and got a different answer from the ports for a
+    /// string long enough to be a tree. Unreachable for a keyword's name,
+    /// which is what asked; a divergence all the same.
+    pub fn value_text(&mut self, v: Value) -> alloc::string::String {
+        let bs = self.s_to_vec(v);
+        alloc::string::String::from_utf8(bs).unwrap_or_default()
+    }
+
     pub fn s_to_vec(&mut self, v: Value) -> alloc::vec::Vec<u8> {
         let s = self.sink_open();
         self.s_append(v, s);

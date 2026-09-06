@@ -1,0 +1,178 @@
+;; Saying what was wrong with a row.
+;;
+;; `0032` IS THE WHOLE POINT OF THIS FILE. A closed table refuses ordinary
+;; rows for ordinary reasons, and "bad row" is the message this codebase keeps
+;; replacing: what a caller needs is which ROW, which COLUMN, what the column
+;; HOLDS and what it was GIVEN. Every refusal here names all four.
+;;
+;; These are ORDINARY errors and not `#?(:flint/check ...)`: a closed table
+;; that accepted a bad row in a release build would not be closed (`0026`).
+(ns flint.rt.tablesay
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != > >= < not nil?
+                                   slot vec-nth mark push r set-r pop-to
+                                   local set for while
+                                   value-text name-of is-string kind-of type-ok own-text
+                                   seq-of first-of next-of slot-or-nth
+                                   charge-work throw-str str-cat static-text
+                                   Rt Value I32 Bool Text RootIx
+                                   NIL NOT_FOUND SC_NAMES SC_TYPES RF_SCHEMA]]
+            [flint.rt.tablemeta :refer [schema-len schema-width schema-name-at
+                                        is-table-ref]]
+            [flint.rt.tableref :refer [schema-id]]
+            [flint.rt.tablecell :refer [row-column]]
+            [flint.rt.mapcore :refer [is-map map-count]]))
+
+(doc "A keyword's name as host text, or `?` when it has none."
+     ""
+     "`?` RATHER THAN A REFUSAL: this is only ever called while building a"
+     "message about something else that has already gone wrong, and a second"
+     "failure there would replace the message the caller needs with one about"
+     "the message.")
+(defn ^:pub ^:method ^Text kw-name [^:mut ^Rt rt ^Value v]
+  (let [^Value n (name-of rt v)]
+    (comment "`own-text` and not `static-text`: a `StaticText` is `&'static"
+             "str` in Rust and this function answers an owned `Text`. Both"
+             "ports spell the two the same, so the conversion costs them"
+             "nothing and costs Rust one literal copy on a path that is"
+             "already building a message about a failure.")
+    (if (not (is-string rt n))
+      (return (own-text (static-text "?"))))
+    (return (value-text rt n))))
+
+(doc "The schema's column names as `:a :b :c`."
+     ""
+     "For a message that has to say what the columns ARE, rather than only"
+     "that the key was not one of them.")
+(defn ^:pub ^:method ^Text column-list [^:mut ^Rt rt ^Value s]
+  (let [^I32 n (schema-len rt s)]
+    (local ^:mut ^Text out)
+    (set out (own-text (static-text "")))
+    (for [^I32 c 0 n]
+      (let [^Value names (slot rt s SC_NAMES)
+            ^Value name (vec-nth rt names c NIL)
+            ^Text shown (kw-name rt name)]
+        (if (> c 0)
+          (set out (str-cat out (static-text " "))))
+        (set out (str-cat out (static-text ":") shown))))
+    (return out)))
+
+(doc "Why a value does not belong in its column."
+     ""
+     "THE KIND OF WHAT ARRIVED, not just that it was wrong: `holds :int and was"
+     "given a string` is the difference between a message you can act on and"
+     "one you have to reproduce first. `kind-of` is the same closed set"
+     "protocol dispatch uses, so the word is one the reader has already met.")
+(defn ^:pub ^:method ^Text column-type-error
+  [^:mut ^Rt rt ^Value name ^Value want ^Value got ^I32 row]
+  (let [^Text nm (kw-name rt name)
+        ^Text wt (kw-name rt want)
+        ^Value gk (kind-of rt got)
+        ^Text gt (kw-name rt gk)]
+    (return (str-cat (static-text "row ") row (static-text ", column :") nm
+                     (static-text " holds :") wt
+                     (static-text " and was given a ") gt))))
+
+(doc "The first key in `row` that the schema does not name, or NIL."
+     ""
+     "Only reached when the COUNT already disagrees. The hunt walks the row,"
+     "and the good path must not.")
+(defn ^:pub ^:method ^Value first-foreign-key [^:mut ^Rt rt ^Value s ^Value row]
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt s)]
+    (if (is-table-ref rt row)
+      (do
+        (let [^Value rs (slot rt row RF_SCHEMA)
+              ^RootIx rsi (push rt rs)
+              ^I32 n (schema-len rt (r rt rsi))]
+          (for [^I32 c 0 n]
+            (let [^Value name (schema-name-at rt (r rt rsi) c)]
+              (if (>= (schema-id rt (r rt si) name) (schema-width rt (r rt si)))
+                (do (pop-to rt base)
+                    (return name)))))
+          (pop-to rt base)
+          (return NIL))))
+    (comment "HOISTED for Rust's borrow checker: `push` and `seq-of` both take"
+             "`&mut self`.")
+    (let [^Value q0 (seq-of rt row)
+          ^RootIx qi (push rt q0)]
+      (while (not (nil? rt (r rt qi)))
+        (let [^Value e0 (first-of rt (r rt qi))
+              ^RootIx ei (push rt e0)
+              ^Value k (slot-or-nth rt (r rt ei) 0)]
+          (if (>= (schema-id rt (r rt si) k) (schema-width rt (r rt si)))
+            (do (pop-to rt base)
+                (return k)))
+          (pop-to rt ei))
+        (let [^Value nx (next-of rt (r rt qi))]
+          (set-r rt qi nx)))
+      (pop-to rt base)
+      (return NIL))))
+
+(doc "Does `row` belong in a table of schema `s`? Refuse BY NAME if not."
+     ""
+     "FOUR WAYS A ROW CAN BE WRONG, and each says which: it is not a map at"
+     "all; a column is missing; a column holds the wrong type; or there is a"
+     "key that is not a column. A table is CLOSED -- every row has every"
+     "column and no others -- so all four are refusals rather than coercions.")
+(defn ^:pub ^:method ^Bool check-row [^:mut ^Rt rt ^Value s ^Value row ^I32 rowno]
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt s)
+        ^RootIx ri (push rt row)]
+    (if (not (is-map rt (r rt ri)))
+      (do
+        (let [^Value k (kind-of rt (r rt ri))
+              ^Text kn (kw-name rt k)]
+          (pop-to rt base)
+          (throw-str rt "IllegalArgumentException"
+                     (str-cat (static-text "a table row is a map, and row ") rowno
+                              (static-text " is a ") kn))
+          (return false))))
+    (let [^I32 n (schema-len rt (r rt si))]
+      (charge-work rt n)
+      (for [^I32 c 0 n]
+        (let [^Value val (row-column rt (r rt si) (r rt ri) c)
+              ^RootIx vi (push rt val)
+              ^Value names (slot rt (r rt si) SC_NAMES)
+              ^Value name (vec-nth rt names c NIL)
+              ^RootIx ni (push rt name)]
+          (if (== (r rt vi) NOT_FOUND)
+            (do
+              (let [^Text nm (kw-name rt (r rt ni))
+                    ^Text cols (column-list rt (r rt si))]
+                (pop-to rt base)
+                (throw-str rt "IllegalArgumentException"
+                           (str-cat (static-text "row ") rowno (static-text " has no :") nm
+                                    (static-text "; a table is closed, so every row has every column, and the columns are ")
+                                    cols))
+                (return false))))
+          (let [^Value types (slot rt (r rt si) SC_TYPES)
+                ^Value tp (vec-nth rt types c NIL)]
+            (if (not (type-ok rt tp (r rt vi)))
+              (do
+                (let [^Text msg (column-type-error rt (r rt ni) tp (r rt vi) rowno)]
+                  (pop-to rt base)
+                  (throw-str rt "IllegalArgumentException" msg)
+                  (return false)))))
+          (pop-to rt vi)))
+      (comment "EVERY COLUMN IS PRESENT, so a wider row has a key that is not"
+               "one. COUNTED first and hunted only when the count disagrees,"
+               "because the hunt walks the row and the good path must not.")
+      (local ^:mut ^Bool extra)
+      (if (is-table-ref rt (r rt ri))
+        (set extra (> (schema-len rt (slot rt (r rt ri) RF_SCHEMA)) n))
+        (set extra (> (map-count rt (r rt ri)) n)))
+      (if extra
+        (do
+          (let [^Value bad (first-foreign-key rt (r rt si) (r rt ri))
+                ^RootIx bi (push rt bad)
+                ^Text nm (kw-name rt (r rt bi))
+                ^Text cols (column-list rt (r rt si))]
+            (pop-to rt base)
+            (throw-str rt "IllegalArgumentException"
+                       (str-cat (static-text "row ") rowno (static-text " has :") nm
+                                (static-text ", which is not a column; a table is closed, and the columns are ")
+                                cols))
+            (return false))))
+      (pop-to rt base)
+      (return true))))

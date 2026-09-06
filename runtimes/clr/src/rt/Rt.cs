@@ -417,6 +417,13 @@ public sealed class Rt : System.IDisposable {
     public void SetSlot(long obj, int i, long v) { gc.SetSlot(obj, i, v, roots); }
     public long Slot(long v, int i) { return Obj.Slot(gc.sp, Val.AsHeap(v), i); }
 
+    /// Slot `i` of a MAP ENTRY, or element `i` of anything else -- see the
+    /// Java copy for why both ports needed this.
+    public long SlotOrNth(long v, int i) {
+        return Obj.Ty(gc.sp, Val.AsHeap(v)) == Obj.TyMapentry ? Slot(v, i)
+                                                              : Vec.Nth(this, v, i, Val.Nil);
+    }
+
     public int Mark() { return roots.Mark(); }
     public int Push(long v) { return roots.Push(v); }
     public long R(int i) { return roots.R(i); }

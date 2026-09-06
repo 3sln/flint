@@ -56,6 +56,7 @@ pub mod ropemeas;
 pub mod tablecell;
 pub mod tablefill;
 pub mod tablemeta;
+pub mod tablesay;
 pub mod tabletrans;
 pub mod tableref;
 pub mod ropenode;

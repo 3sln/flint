@@ -49,6 +49,13 @@ public static class Table {
     // Row-ref slots, and the transient's.
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // THE REFUSALS, generated from `kin/tablesay.kin` -- `0032`.
+    static string kwName(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Tablesay.KwName(rt, v); }
+    static string columnList(Rt rt, long s) { return global::_3sln.Flint.Kgen.Rt.Tablesay.ColumnList(rt, s); }
+    static string columnTypeError(Rt rt, long name, long want, long got, int row) { return global::_3sln.Flint.Kgen.Rt.Tablesay.ColumnTypeError(rt, name, want, got, row); }
+    static long firstForeignKey(Rt rt, long s, long row) { return global::_3sln.Flint.Kgen.Rt.Tablesay.FirstForeignKey(rt, s, row); }
+    public static bool checkRow(Rt rt, long s, long row, int rowno) { return global::_3sln.Flint.Kgen.Rt.Tablesay.CheckRow(rt, s, row, rowno); }
+
     // THE TRANSIENT, generated from `kin/tabletrans.kin`.
     public static long tableTransient(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tabletrans.TableTransient(rt, t); }
     public static long ttableConj(Rt rt, long t, long row) { return global::_3sln.Flint.Kgen.Rt.Tabletrans.TtableConj(rt, t, row); }
@@ -173,31 +180,6 @@ public static class Table {
         return outv;
     }
 
-    static string kwName(Rt rt, long v) {
-        long n = rt.NameOf(v);
-        return Str.IsString(rt, n) ? Str.Text(rt, n) : "?";
-    }
-
-    /// The schema's column names as `:a :b :c`, for a message that has to say
-    /// what the columns ARE rather than only that the key was not one.
-    static string columnList(Rt rt, long s) {
-        var b = new System.Text.StringBuilder();
-        int n = schemaLen(rt, s);
-        for (int c = 0; c < n; c++) {
-            if (c > 0) b.Append(' ');
-            b.Append(':').Append(kwName(rt, schemaNameAt(rt, s, c)));
-        }
-        return b.ToString();
-    }
-
-    /// The KIND of what arrived, not just that it was wrong: "holds :int and
-    /// was given a string" is the difference between a message you can act on
-    /// and one you have to reproduce first.
-    static string columnTypeError(Rt rt, long name, long want, long got, int row) {
-        return "row " + row + ", column :" + kwName(rt, name) + " holds :" + kwName(rt, want)
-            + " and was given a " + kwName(rt, rt.KindOf(got));
-    }
-
     /// Build a table from `rows`, a vector of maps.
     public static long newTable(Rt rt, long schema, long rows) {
         int bas = rt.Mark();
@@ -250,96 +232,6 @@ public static class Table {
         long outv = rt.R(ti);
         rt.PopTo(bas);
         return outv;
-    }
-
-    /// Does `row` fit `s`? The three refusals are separate because they are
-    /// three different mistakes: a column you forgot, a key that is not a
-    /// column, and a value of the wrong type. One "invalid row" for all three
-    /// is the message this codebase keeps replacing.
-    public static bool checkRow(Rt rt, long s, long row, int rowno) {
-        int bas = rt.Mark();
-        int si = rt.Push(s);
-        int ri = rt.Push(row);
-        if (!Mapcore.IsMap(rt, rt.R(ri))) {
-            string kn = kwName(rt, rt.KindOf(rt.R(ri)));
-            rt.PopTo(bas);
-            rt.ThrowStr("IllegalArgumentException",
-                "a table row is a map, and row " + rowno + " is a " + kn);
-            return false;
-        }
-        int n = schemaLen(rt, rt.R(si));
-        rt.ChargeWork(n);
-        for (int c = 0; c < n; c++) {
-            long val = rowColumn(rt, rt.R(si), rt.R(ri), c);
-            int vi = rt.Push(val);
-            long name = schemaNameAt(rt, rt.R(si), c);
-            int nmi = rt.Push(name);
-            if (rt.R(vi) == Val.NotFound) {
-                string nm = kwName(rt, rt.R(nmi)), cols = columnList(rt, rt.R(si));
-                rt.PopTo(bas);
-                rt.ThrowStr("IllegalArgumentException", "row " + rowno + " has no :" + nm
-                    + "; a table is closed, so every row has every column, and the columns are "
-                    + cols);
-                return false;
-            }
-            long tp = schemaTypeAt(rt, rt.R(si), c);
-            if (!typeOk(rt, tp, rt.R(vi))) {
-                string msg = columnTypeError(rt, rt.R(nmi), tp, rt.R(vi), rowno);
-                rt.PopTo(bas);
-                rt.ThrowStr("IllegalArgumentException", msg);
-                return false;
-            }
-            rt.PopTo(vi);
-        }
-        // Every column is present, so a wider row has a key that is not one.
-        // Counted first and hunted only when the count disagrees, because the
-        // hunt walks the row and the good path must not.
-        bool extra = isTableRef(rt, rt.R(ri))
-            ? schemaLen(rt, rt.Slot(rt.R(ri), RF_SCHEMA)) > n
-            : Mapcore.MapCount(rt, rt.R(ri)) > n;
-        if (extra) {
-            long bad = firstForeignKey(rt, rt.R(si), rt.R(ri));
-            string nm = kwName(rt, bad), cols = columnList(rt, rt.R(si));
-            rt.PopTo(bas);
-            rt.ThrowStr("IllegalArgumentException", "row " + rowno + " has :" + nm
-                + ", which is not a column; a table is closed, and the columns are " + cols);
-            return false;
-        }
-        rt.PopTo(bas);
-        return true;
-    }
-
-    /// The first key of `row` the schema does not name. Only called once a
-    /// count has already proved there is one.
-    static long firstForeignKey(Rt rt, long s, long row) {
-        int bas = rt.Mark();
-        int si = rt.Push(s);
-        if (isTableRef(rt, row)) {
-            int rsi = rt.Push(rt.Slot(row, RF_SCHEMA));
-            int n = schemaLen(rt, rt.R(rsi));
-            for (int c = 0; c < n; c++) {
-                long name = schemaNameAt(rt, rt.R(rsi), c);
-                // ABSENT IS THE WIDTH -- see the Java and Rust copies.
-                if (schemaId(rt, rt.R(si), name) >= schemaWidth(rt, rt.R(si))) {
-                    rt.PopTo(bas); return name;
-                }
-            }
-            rt.PopTo(bas);
-            return Val.Nil;
-        }
-        int qi = rt.Push(Seqs.Seq(rt, row));
-        while (!Val.IsNil(rt.R(qi))) {
-            long e = Seqs.First(rt, rt.R(qi));
-            int ei = rt.Push(e);
-            long k = rt.Slot(rt.R(ei), 0);
-            if (schemaId(rt, rt.R(si), k) >= schemaWidth(rt, rt.R(si))) {
-                rt.PopTo(bas); return k;
-            }
-            rt.PopTo(ei);
-            rt.SetR(qi, Seqs.Next(rt, rt.R(qi)));
-        }
-        rt.PopTo(bas);
-        return Val.Nil;
     }
 
     /// `(assoc table i row)`. `i` may be `count`, which appends -- the same

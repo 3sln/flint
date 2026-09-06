@@ -12,6 +12,7 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Tablecell.*;
 import static com._3sln.flint.kgen.rt.Tablefill.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
+import static com._3sln.flint.kgen.rt.Tablesay.*;
 import static com._3sln.flint.kgen.rt.Vecassoc.*;
 import static com._3sln.flint.kgen.rt.Vecread.*;
 import static com._3sln.flint.kgen.rt.Vecwrite.*;

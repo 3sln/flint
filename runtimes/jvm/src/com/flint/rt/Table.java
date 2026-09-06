@@ -56,6 +56,13 @@ public final class Table {
     // Row-ref slots, and the transient's.
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // THE REFUSALS, generated from `kin/tablesay.kin` -- `0032`.
+    static String kwName(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablesay.kwName(rt, v); }
+    static String columnList(Rt rt, long s) { return com._3sln.flint.kgen.rt.Tablesay.columnList(rt, s); }
+    static String columnTypeError(Rt rt, long name, long want, long got, int row) { return com._3sln.flint.kgen.rt.Tablesay.columnTypeError(rt, name, want, got, row); }
+    static long firstForeignKey(Rt rt, long s, long row) { return com._3sln.flint.kgen.rt.Tablesay.firstForeignKey(rt, s, row); }
+    public static boolean checkRow(Rt rt, long s, long row, int rowno) { return com._3sln.flint.kgen.rt.Tablesay.checkRow(rt, s, row, rowno); }
+
     // THE TRANSIENT, generated from `kin/tabletrans.kin`.
     public static long tableTransient(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tabletrans.tableTransient(rt, t); }
     public static long ttableConj(Rt rt, long t, long row) { return com._3sln.flint.kgen.rt.Tabletrans.ttableConj(rt, t, row); }
@@ -182,31 +189,6 @@ public final class Table {
         return out;
     }
 
-    static String kwName(Rt rt, long v) {
-        long n = rt.nameOf(v);
-        return Str.isString(rt, n) ? Str.text(rt, n) : "?";
-    }
-
-    /// The schema's column names as `:a :b :c`, for a message that has to say
-    /// what the columns ARE rather than only that the key was not one.
-    static String columnList(Rt rt, long s) {
-        StringBuilder b = new StringBuilder();
-        int n = schemaLen(rt, s);
-        for (int c = 0; c < n; c++) {
-            if (c > 0) b.append(' ');
-            b.append(':').append(kwName(rt, schemaNameAt(rt, s, c)));
-        }
-        return b.toString();
-    }
-
-    /// The KIND of what arrived, not just that it was wrong: "holds :int and
-    /// was given a string" is the difference between a message you can act on
-    /// and one you have to reproduce first.
-    static String columnTypeError(Rt rt, long name, long want, long got, int row) {
-        return "row " + row + ", column :" + kwName(rt, name) + " holds :" + kwName(rt, want)
-            + " and was given a " + kwName(rt, rt.kindOf(got));
-    }
-
     /// Build a table from `rows`, a vector of maps.
     public static long newTable(Rt rt, long schema, long rows) {
         int base = rt.mark();
@@ -259,97 +241,6 @@ public final class Table {
         long out = rt.r(ti);
         rt.popTo(base);
         return out;
-    }
-
-    /// Does `row` fit `s`? The three refusals are separate because they are
-    /// three different mistakes: a column you forgot, a key that is not a
-    /// column, and a value of the wrong type. One "invalid row" for all three
-    /// is the message this codebase keeps replacing.
-    public static boolean checkRow(Rt rt, long s, long row, int rowno) {
-        int base = rt.mark();
-        int si = rt.push(s);
-        int ri = rt.push(row);
-        if (!Mapcore.isMap(rt, rt.r(ri))) {
-            String kn = kwName(rt, rt.kindOf(rt.r(ri)));
-            rt.popTo(base);
-            rt.throwStr("IllegalArgumentException",
-                "a table row is a map, and row " + rowno + " is a " + kn);
-            return false;
-        }
-        int n = schemaLen(rt, rt.r(si));
-        rt.chargeWork(n);
-        for (int c = 0; c < n; c++) {
-            long val = rowColumn(rt, rt.r(si), rt.r(ri), c);
-            int vi = rt.push(val);
-            long name = schemaNameAt(rt, rt.r(si), c);
-            int nmi = rt.push(name);
-            if (rt.r(vi) == Val.NOT_FOUND) {
-                String nm = kwName(rt, rt.r(nmi)), cols = columnList(rt, rt.r(si));
-                rt.popTo(base);
-                rt.throwStr("IllegalArgumentException", "row " + rowno + " has no :" + nm
-                    + "; a table is closed, so every row has every column, and the columns are "
-                    + cols);
-                return false;
-            }
-            long tp = schemaTypeAt(rt, rt.r(si), c);
-            if (!typeOk(rt, tp, rt.r(vi))) {
-                String msg = columnTypeError(rt, rt.r(nmi), tp, rt.r(vi), rowno);
-                rt.popTo(base);
-                rt.throwStr("IllegalArgumentException", msg);
-                return false;
-            }
-            rt.popTo(vi);
-        }
-        // Every column is present, so a wider row has a key that is not one.
-        // Counted first and hunted only when the count disagrees, because the
-        // hunt walks the row and the good path must not.
-        boolean extra = isTableRef(rt, rt.r(ri))
-            ? schemaLen(rt, rt.slot(rt.r(ri), RF_SCHEMA)) > n
-            : Mapcore.mapCount(rt, rt.r(ri)) > n;
-        if (extra) {
-            long bad = firstForeignKey(rt, rt.r(si), rt.r(ri));
-            String nm = kwName(rt, bad), cols = columnList(rt, rt.r(si));
-            rt.popTo(base);
-            rt.throwStr("IllegalArgumentException", "row " + rowno + " has :" + nm
-                + ", which is not a column; a table is closed, and the columns are " + cols);
-            return false;
-        }
-        rt.popTo(base);
-        return true;
-    }
-
-    /// The first key of `row` the schema does not name. Only called once a
-    /// count has already proved there is one.
-    static long firstForeignKey(Rt rt, long s, long row) {
-        int base = rt.mark();
-        int si = rt.push(s);
-        if (isTableRef(rt, row)) {
-            int rsi = rt.push(rt.slot(row, RF_SCHEMA));
-            int n = schemaLen(rt, rt.r(rsi));
-            for (int c = 0; c < n; c++) {
-                long name = schemaNameAt(rt, rt.r(rsi), c);
-                // ABSENT IS THE WIDTH: a real id is 0..width-1. `< 0` was
-                // the old spelling, and it is dead on an unsigned id in Rust.
-                if (schemaId(rt, rt.r(si), name) >= schemaWidth(rt, rt.r(si))) {
-                    rt.popTo(base); return name;
-                }
-            }
-            rt.popTo(base);
-            return Val.NIL;
-        }
-        int qi = rt.push(Seqs.seq(rt, row));
-        while (!Val.isNil(rt.r(qi))) {
-            long e = Seqs.first(rt, rt.r(qi));
-            int ei = rt.push(e);
-            long k = rt.slot(rt.r(ei), 0);
-            if (schemaId(rt, rt.r(si), k) >= schemaWidth(rt, rt.r(si))) {
-                rt.popTo(base); return k;
-            }
-            rt.popTo(ei);
-            rt.setR(qi, Seqs.next(rt, rt.r(qi)));
-        }
-        rt.popTo(base);
-        return Val.NIL;
     }
 
     /// `(assoc table i row)`. `i` may be `count`, which appends -- the same

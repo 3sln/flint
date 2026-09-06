@@ -912,6 +912,38 @@
                             :java "{1}.isEmpty()"
                             :csharp "({1}.Length == 0)"})
 
+    ;; A STRING VALUE as a host string. Both ports spell it `Str.text`; Rust
+    ;; grew `value_text` for it, because `as_str` borrows and so cannot flatten
+    ;; a rope nobody has materialised.
+    'value-text (core/call {:rust "{0}.value_text({1})"
+                            :java "Str.text({0}, {1})"
+                            :csharp "Str.Text({0}, {1})"}
+                           {:tag Text})
+    ;; SLOT `i` OF A MAP ENTRY, or element `i` of anything else. Rust had it
+    ;; and both ports read slot 0 unconditionally, which is a garbage key when
+    ;; a row is written as `[[:a 1] [:b 2]]`.
+    'slot-or-nth (core/call {:rust "{0}.slot_or_nth_pub({1}, {2})"
+                             :java "{0}.slotOrNth({1}, {2})"
+                             :csharp "{0}.SlotOrNth({1}, {2})"}
+                            {:tag Value})
+    'name-of (core/call {:rust "{0}.name_of({1})"
+                         :java "{0}.nameOf({1})" :csharp "{0}.NameOf({1})"}
+                        {:tag Value})
+    'is-string (core/call {:rust "{0}.is_string({1})"
+                           :java "Str.isString({0}, {1})"
+                           :csharp "Str.IsString({0}, {1})"}
+                          {:tag Bool})
+    ;; STILL HAND-WRITTEN, and reached as calls until they are not. `kind-of`
+    ;; is the closed set of `0005` and `type-ok` the schema's type check; both
+    ;; want a keyword built from a literal, which the vocabulary cannot spell
+    ;; yet.
+    'kind-of (core/call {:rust "{0}.kind_of({1})"
+                         :java "{0}.kindOf({1})" :csharp "{0}.KindOf({1})"}
+                        {:tag Value})
+    'type-ok (core/call {:rust "{0}.type_ok({1}, {2})"
+                         :java "Table.typeOk({0}, {1}, {2})"
+                         :csharp "global::Flint.Rt.Table.typeOk({0}, {1}, {2})"}
+                        {:tag Bool})
     'text (core/call {:rust "alloc::string::String::from({0})"
                       :java "{0}" :csharp "{0}"}
                      {:tag Text})
