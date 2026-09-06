@@ -1,0 +1,96 @@
+;; METADATA: which slot holds it, reading it, and replacing it.
+;;
+;; NOT EVERY VALUE CAN CARRY METADATA, and the ones that can keep it in
+;; different places -- a vector at `V_META`, a cons at `C_META`, a closure in
+;; its LAST slot. So the question "where" is asked once, here, and the two
+;; operations are written in terms of it.
+;;
+;; A CLOSURE'S IS THE LAST SLOT, and that is deliberate: see `make-closure` --
+;; putting it at the end leaves every `UPVAL` index as it was, in both
+;; interpreters and all three AOT emitters. It is what lets a protocol be
+;; implemented for one FUNCTION rather than for a whole kind, since dispatch
+;; looks at metadata before it looks at kind.
+(ns flint.rt.meta
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == - not is-heap as-heap ty olen
+                                   new-obj slot set-slot nil?
+                                   mark push r pop-to for
+                                   Rt Value I32 Bool RootIx Ty NIL
+                                   TY_SYM TY_VEC TY_ARRAYMAP TY_HASHMAP TY_SET
+                                   TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_ATOM
+                                   TY_CLOSURE
+                                   V_META AM_META HM_META S_META C_META]]))
+
+(doc "Can `v` carry metadata at all?"
+     ""
+     "A PREDICATE AND A TOTAL ACCESSOR rather than an optional slot index, the"
+     "same shape `is-int` and `i64-of` take. Rust answered `Option<u32>` and"
+     "there is no slot number free to mean `nowhere` -- slot 0 is a real slot"
+     "for an empty list.")
+(defn ^:pub ^:method ^Bool has-meta [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (let [^Ty t (ty rt (as-heap v))]
+    (if (== t TY_SYM) (return true))
+    (if (== t TY_VEC) (return true))
+    (if (== t TY_ARRAYMAP) (return true))
+    (if (== t TY_HASHMAP) (return true))
+    (if (== t TY_SET) (return true))
+    (if (== t TY_CONS) (return true))
+    (if (== t TY_EMPTY_LIST) (return true))
+    (if (== t TY_LAZYSEQ) (return true))
+    (if (== t TY_ATOM) (return true))
+    (if (== t TY_CLOSURE) (return true)))
+  (return false))
+
+(doc "WHICH slot holds `v`'s metadata. Ask `has-meta` first.")
+(defn ^:pub ^:method ^I32 meta-slot [^:mut ^Rt rt ^Value v]
+  (let [^Ty t (ty rt (as-heap v))]
+    (if (== t TY_SYM) (return 2))
+    (if (== t TY_VEC) (return V_META))
+    (if (== t TY_ARRAYMAP) (return AM_META))
+    (if (== t TY_HASHMAP) (return HM_META))
+    (if (== t TY_SET) (return S_META))
+    (if (== t TY_CONS) (return C_META))
+    (if (== t TY_EMPTY_LIST) (return 0))
+    (if (== t TY_LAZYSEQ) (return 2))
+    (if (== t TY_ATOM) (return 1))
+    (comment "THE LAST SLOT for a closure -- see the header.")
+    (if (== t TY_CLOSURE) (return (- (olen rt v) 1))))
+  (return 0))
+
+(doc "The metadata, or nil when the value cannot carry any.")
+(defn ^:pub ^:method ^Value meta-of [^:mut ^Rt rt ^Value v]
+  (if (not (has-meta rt v))
+    (return NIL))
+  (comment "HOISTED: `slot` borrows and `meta-slot` takes `&mut self`, so"
+           "nesting them is an immutable and a mutable borrow at once.")
+  (let [^I32 at (meta-slot rt v)]
+    (return (slot rt v at))))
+
+(doc "A COPY of `v` with `m` as its metadata, or `v` unchanged when it cannot"
+     "carry any."
+     ""
+     "A COPY, because metadata is part of the value: two vectors that differ"
+     "only in their metadata are still `=`, but they are not the same object,"
+     "and changing one must not change the other.")
+(defn ^:pub ^:method ^Value with-meta [^:mut ^Rt rt ^Value v ^Value m]
+  (if (not (has-meta rt v))
+    (return v))
+  (let [^I32 idx (meta-slot rt v)
+        ^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^RootIx mi (push rt m)
+        ^Ty t (ty rt (as-heap v))
+        ^I32 n (olen rt v)
+        ^Value out (new-obj rt t n)]
+    (if (nil? rt out)
+      (do (pop-to rt base)
+          (return NIL)))
+    (comment "COPIED FROM THE ROOT, not from the host local: the allocation"
+             "may have moved `v` (0031).")
+    (for [^I32 i 0 n]
+      (set-slot rt out i (slot rt (r rt vi) i)))
+    (set-slot rt out idx (r rt mi))
+    (pop-to rt base)
+    (return out)))

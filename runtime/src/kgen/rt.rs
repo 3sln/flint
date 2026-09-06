@@ -48,6 +48,7 @@ pub mod mapcore;
 pub mod mapread;
 pub mod mapwrite;
 pub mod merge;
+pub mod meta;
 pub mod nodeclass;
 pub mod pike;
 pub mod ropecat;

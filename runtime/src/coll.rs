@@ -669,64 +669,6 @@ impl Rt {
 
     // --- metadata -------------------------------------------------------------
 
-    fn meta_slot(&self, v: Value) -> Option<u32> {
-        if !v.is_heap() {
-            return None;
-        }
-        match ty(&self.gc.sp, v.as_heap()) {
-            TY_SYM => Some(2),
-            TY_VEC => Some(V_META),
-            TY_ARRAYMAP => Some(AM_META),
-            TY_HASHMAP => Some(HM_META),
-            TY_SET => Some(S_META),
-            TY_CONS => Some(C_META),
-            TY_EMPTY_LIST => Some(0),
-            TY_LAZYSEQ => Some(2),
-            TY_ATOM => Some(1),
-            // THE LAST SLOT. See `make_closure`: at the end, every `UPVAL`
-            // index stays as it was, in both interpreters and all three AOT
-            // emitters. This is what lets a protocol be implemented for one
-            // FUNCTION rather than for a whole kind, since dispatch looks at
-            // metadata before it looks at kind.
-            TY_CLOSURE => Some(self.olen(v) - 1),
-            _ => None,
-        }
-    }
-
-    pub fn meta_of(&self, v: Value) -> Value {
-        match self.meta_slot(v) {
-            Some(i) => self.slot(v, i),
-            None => NIL,
-        }
-    }
-
-    /// Copy the object with new metadata. Metadata is not part of equality, so
-    /// the copy is still `=` to the original.
-    pub fn with_meta(&mut self, v: Value, m: Value) -> Value {
-        let idx = match self.meta_slot(v) {
-            Some(i) => i,
-            None => return v,
-        };
-        let base = self.mark();
-        let vi = self.push(v);
-        let mi = self.push(m);
-        let t = ty(&self.gc.sp, v.as_heap());
-        let n = self.olen(v);
-        let a = self.alloc(t, n);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        let (v, m) = (self.r(vi), self.r(mi));
-        for i in 0..n {
-            let s = self.slot(v, i);
-            self.set_slot(a, i, s);
-        }
-        self.set_slot(a, idx, m);
-        self.pop_to(base);
-        Value::heap(a)
-    }
-
     // --- strings ---------------------------------------------------------------
 
     pub fn str_concat2(&mut self, x: Value, y: Value) -> Value {

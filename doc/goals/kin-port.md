@@ -1848,6 +1848,14 @@ stay meaningful. 1 and 8 are done.
   had been carrying the precedence. An aesthetic rule silently changed the
   semantics. Paren-stripping is now allowed only on a whole assignment
   right-hand side, where there is nothing to bind with.
+* **`cargo check --workspace --all-targets` is the build oracle, and nothing
+  narrower is.** This has now bitten twice. `cargo check` does not build TESTS,
+  so a signature change compiled while the tests that call it did not. Then
+  `--all-targets` run inside `runtime/` did not build the OTHER CRATES, so
+  converging `opaque_host_id` from `u64` to `i64` left `flint-conc`'s
+  host-ports test broken with a clean check in front of me. Each time the
+  narrower command answered "fine" and `bin/test` answered otherwise twenty
+  minutes later. The cost of the wide one is seconds.
 * **Coverage before regeneration.** Ask what would notice a mistake before
   making it. `list` — the opcode with the most interesting divergence — had zero
   cross-runtime coverage.

@@ -1242,25 +1242,13 @@ public final class Rt {
 
     /// Which slot holds this object's metadata, or -1. Metadata is not part
     /// of equality, so `with-meta` copies and the copy is still `=`.
+    /// WHICH slot holds `v`'s metadata, or -1 when it can carry none.
+    ///
+    /// The `-1` is this method's contract, not the generated one's: `Meta`
+    /// answers a PREDICATE and a total accessor, because no slot number is
+    /// free to mean "nowhere" -- slot 0 is a real slot for an empty list.
     public int metaSlot(long v) {
-        if (!Val.isHeap(v)) return -1;
-        switch (ty(gc.sp, Val.asHeap(v))) {
-            case TY_SYM: return 2;
-            case TY_VEC: return Vec.V_META;
-            case TY_ARRAYMAP: return Maps.AM_META;
-            case TY_HASHMAP: return Maps.HM_META;
-            case TY_SET: return Sets.S_META;
-            case TY_CONS: return Seqs.C_META;
-            case TY_EMPTY_LIST: return 0;
-            case TY_LAZYSEQ: return 2;
-            case TY_ATOM: return 1;
-            // THE LAST SLOT. A closure could not carry metadata at all before,
-            // and `with-meta` answered by SILENTLY returning the value
-            // unchanged -- which made a per-FUNCTION protocol implementation
-            // impossible, since dispatch looks at metadata before kind.
-            case TY_CLOSURE: return len(gc.sp, Val.asHeap(v)) - 1;
-            default: return -1;
-        }
+        return com._3sln.flint.kgen.rt.Meta.hasMeta(this, v) ? com._3sln.flint.kgen.rt.Meta.metaSlot(this, v) : -1;
     }
 
     boolean isHeapTy(long v, int t) {

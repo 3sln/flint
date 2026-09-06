@@ -1090,25 +1090,10 @@ public sealed class Rt : System.IDisposable {
 
     /// Which slot holds this object's metadata, or -1. Metadata is not part
     /// of equality, so `with-meta` copies and the copy is still `=`.
+    /// WHICH slot holds `v`'s metadata, or -1 when it can carry none -- see
+    /// the Java copy for why the generated pair does not use a sentinel.
     public int MetaSlot(long v) {
-        if (!Val.IsHeap(v)) return -1;
-        switch (Ty(gc.sp, Val.AsHeap(v))) {
-            case TySym: return 2;
-            case TyVec: return Vec.V_META;
-            case TyArraymap: return Maps.AM_META;
-            case TyHashmap: return Maps.HM_META;
-            case TySet: return Sets.S_META;
-            case TyCons: return Seqs.C_META;
-            case TyEmptyList: return 0;
-            case TyLazyseq: return 2;
-            case TyAtom: return 1;
-            // THE LAST SLOT. A closure could not carry metadata at all before,
-            // and `with-meta` answered by SILENTLY returning the value
-            // unchanged -- which made a per-FUNCTION protocol implementation
-            // impossible, since dispatch looks at metadata before kind.
-            case TyClosure: return Obj.Len(gc.sp, Val.AsHeap(v)) - 1;
-            default: return -1;
-        }
+        return global::_3sln.Flint.Kgen.Rt.Meta.HasMeta(this, v) ? global::_3sln.Flint.Kgen.Rt.Meta.MetaSlot(this, v) : -1;
     }
 
     internal bool IsHeapTy(long v, int t) => Val.IsHeap(v) && Ty(gc.sp, Val.AsHeap(v)) == t;

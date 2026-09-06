@@ -1,0 +1,279 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+// EVERY TYPE THAT CAN CARRY METADATA, and one that cannot. The point of the
+// fixture is that each keeps it in a DIFFERENT slot, so a table of them is the
+// only way to see that the right one is read.
+const TY_SYM: u8 = 8; const TY_VEC: u8 = 9; const TY_ARRAYMAP: u8 = 16;
+const TY_HASHMAP: u8 = 17; const TY_SET: u8 = 18; const TY_CONS: u8 = 6;
+const TY_EMPTY_LIST: u8 = 7; const TY_LAZYSEQ: u8 = 3; const TY_ATOM: u8 = 32;
+const TY_CLOSURE: u8 = 27; const TY_STR: u8 = 2;
+const V_META: u32 = 3; const AM_META: u32 = 1; const HM_META: u32 = 2;
+const C_META: u32 = 2;
+pub mod set { pub const S_META: u32 = 1; }
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>, starve: bool }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn olen(&self, v: Value) -> u32 { self.lens[v.0 as usize] }
+    fn slot(&self, v: Value, i: u32) -> Value { Value(self.h[v.0 as usize + i as usize]) }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.h[v.0 as usize + i as usize] = x.0; }
+    fn new_obj(&mut self, t: u8, n: u32) -> Value {
+        if self.starve { return NIL; }
+        let a = self.bump; self.bump += n as u64 + 8;
+        self.gc.sp.m[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        Value::heap(a)
+    }
+    fn obj(&mut self, t: u8, n: u32, fill: &[Value]) -> Value {
+        let v = self.new_obj(t, n);
+        for (i, x) in fill.iter().enumerate() { self.set(v, i as u32, *x); }
+        v
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 4000], gc: Gc { sp: Space { m: vec![0u8; 4000] } },
+                      lens: vec![0; 4000], bump: 100, roots: Vec::new(), starve: false };
+    let mut o = String::new();
+    let m = Value(0x55);
+    // ONE OF EVERY TYPE, each with its metadata slot filled by hand, so
+    // `meta-of` has to read the RIGHT slot to find it.
+    let mk = |rt: &mut Rt, t: u8, n: u32, at: u32| -> Value {
+        let v = rt.obj(t, n, &[]);
+        for i in 0..n { rt.set(v, i, Value(0x900 + i as u64)); }
+        rt.set(v, at, m);
+        v
+    };
+    let cases: [(u8, u32, u32); 10] = [
+        (TY_SYM, 4, 2), (TY_VEC, 5, V_META), (TY_ARRAYMAP, 4, AM_META),
+        (TY_HASHMAP, 4, HM_META), (TY_SET, 3, set::S_META),
+        (TY_CONS, 4, C_META), (TY_EMPTY_LIST, 1, 0), (TY_LAZYSEQ, 3, 2),
+        (TY_ATOM, 2, 1), (TY_CLOSURE, 6, 5)];
+    let mut found = String::new();
+    for (t, n, at) in &cases {
+        let v = mk(&mut rt, *t, *n, *at);
+        found.push(if rt.meta_of(v).0 == m.0 { '1' } else { '0' });
+    }
+    o.push_str(&format!("meta={} ", found));
+    // A CLOSURE'S IS THE LAST SLOT, whatever its length -- the property that
+    // keeps every UPVAL index where it was.
+    let c8 = mk(&mut rt, TY_CLOSURE, 8, 7);
+    o.push_str(&format!("closure={}/{} ", (rt.meta_of(c8).0 == m.0) as u32,
+                        rt.meta_slot(c8)));
+    // WHAT CANNOT CARRY ANY answers nil, and `with-meta` answers it UNCHANGED
+    // rather than refusing or copying.
+    let s = rt.obj(TY_STR, 2, &[]);
+    let wm = rt.with_meta(s, m);
+    o.push_str(&format!("none={}{}/{} ", rt.has_meta(s) as u32,
+                        rt.meta_of(s).is_nil() as u32, (wm.0 == s.0) as u32));
+    o.push_str(&format!("nonheap={}{} ", rt.has_meta(NIL) as u32,
+                        rt.meta_of(NIL).is_nil() as u32));
+    // `with-meta` COPIES. Two vectors differing only in metadata are still
+    // `=`, but they are not the same object, and changing one must not change
+    // the other.
+    let v = mk(&mut rt, TY_VEC, 5, V_META);
+    let m2 = Value(0x66);
+    let v2 = rt.with_meta(v, m2);
+    o.push_str(&format!("copy={}/{}/{} ", (v2.0 != v.0) as u32,
+                        (rt.meta_of(v).0 == m.0) as u32, (rt.meta_of(v2).0 == m2.0) as u32));
+    // AND THE OTHER SLOTS COME ACROSS.
+    let mut same = true;
+    for i in 0..rt.olen(v) {
+        if i != V_META && rt.slot(v, i).0 != rt.slot(v2, i).0 { same = false; }
+    }
+    o.push_str(&format!("carried={} ", same as u32));
+    // WHEN THE HEAP REFUSES, nil rather than a half-copy.
+    rt.starve = true;
+    o.push_str(&format!("starved={}", rt.with_meta(v, m2).is_nil() as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_SYM = 8, TY_VEC = 9, TY_ARRAYMAP = 16, TY_HASHMAP = 17,
+                     TY_SET = 18, TY_CONS = 6, TY_EMPTY_LIST = 7, TY_LAZYSEQ = 3,
+                     TY_ATOM = 32, TY_CLOSURE = 27, TY_STR = 2;
+    static final int V_META = 3, AM_META = 1, HM_META = 2, C_META = 2;
+    static final class Sets { static final int S_META = 1; }
+    static final int S_META = Sets.S_META;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static final class Space { byte[] m = new byte[4000]; }
+    static final class Rt {
+        long[] h = new long[4000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        int[] lens = new int[4000];
+        long bump = 100;
+        boolean starve = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long v, int i) { return h[(int) v + i]; }
+        void setSlot(long v, int i, long x) { h[(int) v + i] = x; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static int olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    static final class Conc {
+        static long newObj(Rt rt, int t, int n) {
+            if (rt.starve) return NIL;
+            long a = rt.bump; rt.bump += n + 8;
+            rt.gc.sp.m[(int) a] = (byte) t; rt.lens[(int) a] = n;
+            for (int i = 0; i < n; i++) rt.h[(int) a + i] = NIL;
+            return Val.heap(a);
+        }
+    }
+    static long META = 0x55;
+    static long mk(Rt rt, int t, int n, int at) {
+        long v = Conc.newObj(rt, t, n);
+        for (int i = 0; i < n; i++) rt.setSlot(v, i, 0x900 + i);
+        rt.setSlot(v, at, META);
+        return v;
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        int[][] cases = {
+            {TY_SYM, 4, 2}, {TY_VEC, 5, V_META}, {TY_ARRAYMAP, 4, AM_META},
+            {TY_HASHMAP, 4, HM_META}, {TY_SET, 3, S_META}, {TY_CONS, 4, C_META},
+            {TY_EMPTY_LIST, 1, 0}, {TY_LAZYSEQ, 3, 2}, {TY_ATOM, 2, 1},
+            {TY_CLOSURE, 6, 5}};
+        StringBuilder found = new StringBuilder();
+        for (int[] c : cases) found.append(metaOf(rt, mk(rt, c[0], c[1], c[2])) == META ? 1 : 0);
+        o.append("meta=").append(found).append(' ');
+        long c8 = mk(rt, TY_CLOSURE, 8, 7);
+        o.append("closure=").append(metaOf(rt, c8) == META ? 1 : 0).append('/')
+         .append(metaSlot(rt, c8)).append(' ');
+        long s = Conc.newObj(rt, TY_STR, 2);
+        o.append("none=").append(hasMeta(rt, s) ? 1 : 0)
+         .append(Val.isNil(metaOf(rt, s)) ? 1 : 0).append('/')
+         .append(withMeta(rt, s, META) == s ? 1 : 0).append(' ');
+        o.append("nonheap=").append(hasMeta(rt, NIL) ? 1 : 0)
+         .append(Val.isNil(metaOf(rt, NIL)) ? 1 : 0).append(' ');
+        long v = mk(rt, TY_VEC, 5, V_META);
+        long m2 = 0x66;
+        long v2 = withMeta(rt, v, m2);
+        o.append("copy=").append(v2 != v ? 1 : 0).append('/')
+         .append(metaOf(rt, v) == META ? 1 : 0).append('/')
+         .append(metaOf(rt, v2) == m2 ? 1 : 0).append(' ');
+        boolean same = true;
+        for (int i = 0; i < olen(rt, v); i++)
+            if (i != V_META && rt.slot(v, i) != rt.slot(v2, i)) same = false;
+        o.append("carried=").append(same ? 1 : 0).append(' ');
+        rt.starve = true;
+        o.append("starved=").append(Val.isNil(withMeta(rt, v, m2)) ? 1 : 0);
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Sets { internal const int S_META = 1; }
+}
+--csharp-head
+    internal const long NIL = 0xFFFFL;
+    internal static class Obj {
+        internal const int TySym = 8, TyVec = 9, TyArraymap = 16, TyHashmap = 17,
+                           TySet = 18, TyCons = 6, TyEmptyList = 7, TyLazyseq = 3,
+                           TyAtom = 32, TyClosure = 27, TyStr = 2;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal const int V_META = 3, AM_META = 1, HM_META = 2, C_META = 2;
+    internal const int S_META = global::Flint.Rt.Sets.S_META;
+    internal static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) { return v >= 100 && v != Nil; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+    }
+    internal sealed class Space { internal byte[] m = new byte[4000]; }
+    internal sealed class Rt {
+        internal long[] h = new long[4000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[4000];
+        internal long bump = 100;
+        internal bool starve = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Slot(long v, int i) { return h[(int) v + i]; }
+        internal void SetSlot(long v, int i, long x) { h[(int) v + i] = x; }
+    }
+    internal static int Olen(Rt rt, long v) { return rt.lens[(int) v]; }
+    internal static class Conc {
+        internal static long NewObj(Rt rt, int t, int n) {
+            if (rt.starve) return Val.Nil;
+            long a = rt.bump; rt.bump += n + 8;
+            rt.gc.sp.m[(int) a] = (byte) t; rt.lens[(int) a] = n;
+            for (int i = 0; i < n; i++) rt.h[(int) a + i] = Val.Nil;
+            return Val.Heap(a);
+        }
+    }
+    internal static long META = 0x55;
+    internal static long Mk(Rt rt, int t, int n, int at) {
+        long v = Conc.NewObj(rt, t, n);
+        for (int i = 0; i < n; i++) rt.SetSlot(v, i, 0x900 + i);
+        rt.SetSlot(v, at, META);
+        return v;
+    }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        int[][] cases = {
+            new int[]{Obj.TySym, 4, 2}, new int[]{Obj.TyVec, 5, V_META},
+            new int[]{Obj.TyArraymap, 4, AM_META}, new int[]{Obj.TyHashmap, 4, HM_META},
+            new int[]{Obj.TySet, 3, S_META}, new int[]{Obj.TyCons, 4, C_META},
+            new int[]{Obj.TyEmptyList, 1, 0}, new int[]{Obj.TyLazyseq, 3, 2},
+            new int[]{Obj.TyAtom, 2, 1}, new int[]{Obj.TyClosure, 6, 5}};
+        var found = new System.Text.StringBuilder();
+        foreach (int[] c in cases) found.Append(MetaOf(rt, Mk(rt, c[0], c[1], c[2])) == META ? 1 : 0);
+        o.Append("meta=").Append(found).Append(' ');
+        long c8 = Mk(rt, Obj.TyClosure, 8, 7);
+        o.Append("closure=").Append(MetaOf(rt, c8) == META ? 1 : 0).Append('/')
+         .Append(MetaSlot(rt, c8)).Append(' ');
+        long s = Conc.NewObj(rt, Obj.TyStr, 2);
+        o.Append("none=").Append(HasMeta(rt, s) ? 1 : 0)
+         .Append(Val.IsNil(MetaOf(rt, s)) ? 1 : 0).Append('/')
+         .Append(WithMeta(rt, s, META) == s ? 1 : 0).Append(' ');
+        o.Append("nonheap=").Append(HasMeta(rt, Val.Nil) ? 1 : 0)
+         .Append(Val.IsNil(MetaOf(rt, Val.Nil)) ? 1 : 0).Append(' ');
+        long v = Mk(rt, Obj.TyVec, 5, V_META);
+        long m2 = 0x66;
+        long v2 = WithMeta(rt, v, m2);
+        o.Append("copy=").Append(v2 != v ? 1 : 0).Append('/')
+         .Append(MetaOf(rt, v) == META ? 1 : 0).Append('/')
+         .Append(MetaOf(rt, v2) == m2 ? 1 : 0).Append(' ');
+        bool same = true;
+        for (int i = 0; i < Olen(rt, v); i++)
+            if (i != V_META && rt.Slot(v, i) != rt.Slot(v2, i)) same = false;
+        o.Append("carried=").Append(same ? 1 : 0).Append(' ');
+        rt.starve = true;
+        o.Append("starved=").Append(Val.IsNil(WithMeta(rt, v, m2)) ? 1 : 0);
+        System.Console.WriteLine(o.ToString());
+    }
