@@ -270,8 +270,8 @@ public static class Builtins {
             if (Str.IsString(rt, v)) return Val.Fixnum(Str.SCount(rt, v));
             if (Mapcore.IsMap(rt, v)) return Val.Fixnum(Mapcore.MapCount(rt, v));
             if (Sets.IsSet(rt, v)) return Val.Fixnum(Sets.Count(rt, v));
-            if (Maps.IsTransient(rt, v)) return Val.Fixnum(Maps.TCount(rt, v));
-            if (Sets.IsTransient(rt, v)) return Val.Fixnum(Sets.TCount(rt, v));
+            if (Maps.IsTransient(rt, v)) return Val.Fixnum(Maptrans.TmapCount(rt, v));
+            if (Sets.IsTransient(rt, v)) return Val.Fixnum(Maptrans.TsetCount(rt, v));
             if (Vec.IsTransient(rt, v)) return Val.Fixnum(Vec.TCount(rt, v));
             if (Bytes.IsBytes(rt, v)) return Val.Fixnum(Bytes.Count(rt, v));
             if (rt.IsSeq(v)) return Val.Fixnum(Seqs.Count(rt, v));
@@ -388,12 +388,12 @@ public static class Builtins {
             if (rt.IsHeapTy(v, Obj.TyTableref)) {
                 int rb = rt.Mark();
                 int rmi = rt.Push(Flint.Rt.Table.refToMap(rt, v));
-                long r = Maps.TransientOf(rt, rt.R(rmi));
+                long r = Maptrans.MapTransient(rt, rt.R(rmi));
                 rt.PopTo(rb);
                 return r;
             }
-            if (Mapcore.IsMap(rt, v)) return Maps.TransientOf(rt, v);
-            if (Sets.IsSet(rt, v)) return Sets.TransientOf(rt, v);
+            if (Mapcore.IsMap(rt, v)) return Maptrans.MapTransient(rt, v);
+            if (Sets.IsSet(rt, v)) return Maptrans.SetTransient(rt, v);
             return rt.ThrowStr("ClassCastException", rt.Describe(v) + " is not transientable");
         });
         Def("persistent!", (rt, at, n) => {
@@ -404,8 +404,8 @@ public static class Builtins {
                     return rt.ThrowStr("IllegalStateException", "persistent! called twice on one transient");
                 return Vec.TPersistent(rt, v);
             }
-            if (Maps.IsTransient(rt, v)) return Maps.TPersistent(rt, v);
-            if (Sets.IsTransient(rt, v)) return Sets.TPersistent(rt, v);
+            if (Maps.IsTransient(rt, v)) return Maptrans.TmapPersistent(rt, v);
+            if (Sets.IsTransient(rt, v)) return Maptrans.TsetPersistent(rt, v);
             if (Bytes.IsTransient(rt, v)) return Bytes.Persistent(rt, v);
             return rt.ThrowStr("ClassCastException", "persistent! wants a transient, got " + rt.Describe(v));
         });
@@ -425,7 +425,7 @@ public static class Builtins {
             }
             if (Sets.IsTransient(rt, v)) {
                 long acc = v;
-                for (int i = 1; i < n; i++) acc = Sets.TConj(rt, acc, rt.VAt(at + i));
+                for (int i = 1; i < n; i++) acc = Maptrans.TsetConj(rt, acc, rt.VAt(at + i));
                 return acc;
             }
             if (Maps.IsTransient(rt, v)) {
@@ -444,7 +444,7 @@ public static class Builtins {
                     int ki = rt.Push(k);
                     long val = Seqs.First(rt, Seqs.Rest(rt, rt.R(ei)));
                     int vi2 = rt.Push(val);
-                    rt.SetR(ai, Maps.TAssoc(rt, rt.R(ai), rt.R(ki), rt.R(vi2)));
+                    rt.SetR(ai, Maptrans.TmapAssoc(rt, rt.R(ai), rt.R(ki), rt.R(vi2)));
                     rt.PopTo(ei);
                 }
                 long outv = rt.R(ai);
@@ -466,7 +466,7 @@ public static class Builtins {
             }
             if (Maps.IsTransient(rt, v)) {
                 long acc = v;
-                for (int i = 1; i + 1 < n; i += 2) acc = Maps.TAssoc(rt, acc, rt.VAt(at + i), rt.VAt(at + i + 1));
+                for (int i = 1; i + 1 < n; i += 2) acc = Maptrans.TmapAssoc(rt, acc, rt.VAt(at + i), rt.VAt(at + i + 1));
                 return acc;
             }
             return rt.ThrowStr("ClassCastException", "assoc! wants a transient, got " + rt.Describe(v));
@@ -475,12 +475,12 @@ public static class Builtins {
             long v = rt.VAt(at);
             if (Maps.IsTransient(rt, v)) {
                 long acc = v;
-                for (int i = 1; i < n; i++) acc = Maps.TDissoc(rt, acc, rt.VAt(at + i));
+                for (int i = 1; i < n; i++) acc = Maptrans.TmapDissoc(rt, acc, rt.VAt(at + i));
                 return acc;
             }
             if (Sets.IsTransient(rt, v)) {
                 long acc = v;
-                for (int i = 1; i < n; i++) acc = Sets.TDisj(rt, acc, rt.VAt(at + i));
+                for (int i = 1; i < n; i++) acc = Maptrans.TsetDisj(rt, acc, rt.VAt(at + i));
                 return acc;
             }
             return rt.ThrowStr("ClassCastException", "disj! wants a transient, got " + rt.Describe(v));
@@ -495,8 +495,8 @@ public static class Builtins {
             // A tagged literal reads like a two-key map (`0034`).
             if (rt.IsHeapTy(coll, Obj.TyTagged)) return TaggedGet(rt, coll, rt.VAt(at + 1), dflt);
             if (Sets.IsSet(rt, coll)) return Sets.Get(rt, coll, rt.VAt(at + 1), dflt);
-            if (Maps.IsTransient(rt, coll)) return Maps.TGet(rt, coll, rt.VAt(at + 1), dflt);
-            if (Sets.IsTransient(rt, coll)) return Sets.TGet(rt, coll, rt.VAt(at + 1), dflt);
+            if (Maps.IsTransient(rt, coll)) return Maptrans.TmapGet(rt, coll, rt.VAt(at + 1), dflt);
+            if (Sets.IsTransient(rt, coll)) return Maptrans.TsetGet(rt, coll, rt.VAt(at + 1), dflt);
             if (Vec.IsTransient(rt, coll)) {
                 long k2 = rt.VAt(at + 1);
                 if (!Val.IsFixnum(k2)) return dflt;
@@ -631,9 +631,9 @@ public static class Builtins {
             // trie, so every reader that works on the persistent value works on
             // it -- and the library reaches for exactly that while building.
             if (Maps.IsTransient(rt, coll))
-                return Val.Bool(Maps.TGet(rt, coll, rt.VAt(at + 1), Val.NotFound) != Val.NotFound);
+                return Val.Bool(Maptrans.TmapGet(rt, coll, rt.VAt(at + 1), Val.NotFound) != Val.NotFound);
             if (Sets.IsTransient(rt, coll))
-                return Val.Bool(Sets.TGet(rt, coll, rt.VAt(at + 1), Val.NotFound) != Val.NotFound);
+                return Val.Bool(Maptrans.TsetGet(rt, coll, rt.VAt(at + 1), Val.NotFound) != Val.NotFound);
             if (Vec.IsTransient(rt, coll)) {
                 long k3 = rt.VAt(at + 1);
                 return Val.Bool(Val.IsFixnum(k3) && Val.AsFixnum(k3) >= 0

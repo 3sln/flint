@@ -25,7 +25,7 @@
 //! copies so that a small slice cannot retain a large parent.
 
 use crate::obj::*;
-use crate::rope::{FLAT_MAX, SLICE_MIN};
+use crate::rope::FLAT_MAX;
 use crate::rt::Rt;
 use crate::value::{Value, NIL};
 

@@ -47,6 +47,7 @@ pub mod hash;
 pub mod interns;
 pub mod mapcore;
 pub mod mapread;
+pub mod maptrans;
 pub mod mapwrite;
 pub mod merge;
 pub mod meta;

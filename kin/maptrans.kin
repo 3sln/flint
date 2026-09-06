@@ -1,0 +1,217 @@
+;; The TRANSIENT map and set: the same CHAMP trie, written in place.
+;;
+;;     TY_TMAP  [cnt, root, edit]
+;;     TY_TSET  [map, edit]
+;;
+;; A transient set is a transient map wearing a different tag, and every one of
+;; its operations is the map operation on the map in slot 0. That is not an
+;; implementation shortcut -- a persistent set is a map too (`S_MAP`), so the
+;; transient is the same shape as the thing it came from.
+;;
+;; AN ARRAY-MAP IS PROMOTED FIRST. There is one transient implementation and it
+;; is the trie's, which costs a small map a promotion it may not need -- and
+;; the workload that reaches for a transient at all is the one with many
+;; entries, so the map was going to be promoted anyway.
+;;
+;; THE EDIT TOKEN IS ALSO THE VALIDITY BIT. `persistent!` nils it, so a handle
+;; used afterwards is refused rather than quietly mutating a value somebody
+;; else now owns. Native never nilled the SET's token -- only the inner map's
+;; -- so the two runtimes refused the same program through different slots.
+(ns flint.rt.maptrans
+  (:require [flint.impl.rt :refer [defn return if let local set do comment doc
+                                   not == != nil? mark push r pop-to
+                                   alloc set-at set-slot slot heap fixnum
+                                   as-fixnum to-i32 local + - .
+                                   hash-value throw-str empty-map
+                                   Rt Value Addr RootIx I32 Bool NIL NOT_FOUND
+                                   TY_TMAP TY_TSET HM_ROOT S_MAP
+                                   TM_CNT TM_ROOT TM_EDIT TS_MAP TS_EDIT]]
+            [flint.rt.mapcore :refer [is-array-map map-count new-hash-map]]
+            [flint.rt.mapwrite :refer [promote]]
+            [flint.rt.setcore :refer [new-set]]
+            [flint.rt.vectrans :refer [new-edit-token]]
+            [flint.rt.find :refer [node-find]]
+            [flint.rt.assoc :refer [node-assoc]]
+            [flint.rt.dissoc :refer [node-dissoc]]))
+
+(doc "A transient view of `m`."
+     ""
+     "The count and the root are LIFTED OUT of the map rather than referenced"
+     "through it: a transient owns its count, and the map it came from must"
+     "keep the one it had.")
+(defn ^:pub ^:method ^Value map-transient [^:mut ^Rt rt ^Value m]
+  (let [^RootIx base (mark rt)
+        ^RootIx mi (push rt m)]
+    (local ^:mut ^Value hm)
+    (set hm (r rt mi))
+    (if (is-array-map rt hm)
+      (let [^Value pr (promote rt (r rt mi))]
+        (set hm pr)))
+    (let [^RootIx hi (push rt hm)
+          ^Value tok (new-edit-token rt)
+          ^RootIx ei (push rt tok)
+          ^Addr a (alloc rt TY_TMAP 3)]
+      (if (== a 0)
+        (do (pop-to rt base)
+            (return NIL)))
+      (comment "READ BACK FROM THE ROOTS: the token allocated, and the"
+               "allocation of the transient itself allocated again (0031).")
+      (let [^Value h (r rt hi)
+            ^I32 cnt (map-count rt h)]
+        (set-at rt a TM_CNT (fixnum cnt))
+        (set-at rt a TM_ROOT (slot rt h HM_ROOT))
+        (set-at rt a TM_EDIT (r rt ei)))
+      (pop-to rt base)
+      (return (heap a)))))
+
+(doc "Read a key out of a transient map."
+     ""
+     "`not-found` IS ROOTED, and both ports failed to root it. Hashing a"
+     "compound key allocates and so does the descent, so a heap `not-found`"
+     "held in a host local across either one is a value that may have moved --"
+     "and the path that returns it is exactly the path that ran them.")
+(defn ^:pub ^:method ^Value tmap-get [^:mut ^Rt rt ^Value t ^Value k ^Value not-found]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^RootIx ki (push rt k)
+        ^RootIx ni (push rt not-found)
+        ^I32 h (hash-value rt (r rt ki))
+        ^Value root (slot rt (r rt ti) TM_ROOT)]
+    (local ^:mut ^Value found)
+    (set found NOT_FOUND)
+    (if (not (nil? rt root))
+      (set found (node-find rt root 0 h (r rt ki))))
+    (let [^Value dflt (r rt ni)]
+      (pop-to rt base)
+      (if (== found NOT_FOUND)
+        (return dflt))
+      (return found))))
+
+(doc "Add or replace an entry, ANSWERING THE SAME TRANSIENT."
+     ""
+     "The handle is returned rather than a new one because the whole point is"
+     "that there is only ever one. `champ-added` is how the descent reports"
+     "whether the count moved.")
+(defn ^:pub ^:method ^Value tmap-assoc [^:mut ^Rt rt ^Value t ^Value k ^Value v]
+  (if (nil? rt (slot rt t TM_EDIT))
+    (return (throw-str rt "IllegalStateException" "transient used after persistent!")))
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^RootIx ki (push rt k)
+        ^RootIx vi (push rt v)
+        ^RootIx ei (push rt (slot rt (r rt ti) TM_EDIT))
+        ^I32 h (hash-value rt (r rt ki))
+        ^RootIx ri (push rt (slot rt (r rt ti) TM_ROOT))]
+    (set (. rt champ-added) false)
+    (let [^Value nr (node-assoc rt (r rt ri) 0 h (r rt ki) (r rt vi) (r rt ei))
+          ^Bool added (. rt champ-added)
+          ^Value tv (r rt ti)]
+      (set-slot rt tv TM_ROOT nr)
+      (if added
+        (set-slot rt tv TM_CNT (fixnum (+ (as-fixnum (slot rt tv TM_CNT)) 1))))
+      (pop-to rt base)
+      (return tv))))
+
+(doc "Drop an entry, ANSWERING THE SAME TRANSIENT.")
+(defn ^:pub ^:method ^Value tmap-dissoc [^:mut ^Rt rt ^Value t ^Value k]
+  (if (nil? rt (slot rt t TM_EDIT))
+    (return (throw-str rt "IllegalStateException" "transient used after persistent!")))
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^RootIx ki (push rt k)
+        ^RootIx ei (push rt (slot rt (r rt ti) TM_EDIT))
+        ^I32 h (hash-value rt (r rt ki))
+        ^RootIx ri (push rt (slot rt (r rt ti) TM_ROOT))]
+    (set (. rt champ-added) false)
+    (let [^Value nr (node-dissoc rt (r rt ri) 0 h (r rt ki) (r rt ei))
+          ^Bool removed (. rt champ-added)
+          ^Value tv (r rt ti)]
+      (set-slot rt tv TM_ROOT nr)
+      (if removed
+        (set-slot rt tv TM_CNT (fixnum (- (as-fixnum (slot rt tv TM_CNT)) 1))))
+      (pop-to rt base)
+      (return tv))))
+
+(doc "How many entries a transient map holds.")
+(defn ^:pub ^:method ^I32 tmap-count [^:mut ^Rt rt ^Value t]
+  (return (to-i32 (as-fixnum (slot rt t TM_CNT)))))
+
+(doc "Freeze a transient map, INVALIDATING the handle."
+     ""
+     "An empty one answers the shared empty map rather than a wrapper around"
+     "an empty root, so `(persistent! (transient {}))` is `{}` by identity.")
+(defn ^:pub ^:method ^Value tmap-persistent [^:mut ^Rt rt ^Value t]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^I32 cnt (tmap-count rt (r rt ti))
+        ^RootIx ri (push rt (slot rt (r rt ti) TM_ROOT))]
+    (local ^:mut ^Value out)
+    (set-slot rt (r rt ti) TM_EDIT NIL)
+    (if (== cnt 0)
+      (set out (empty-map rt))
+      (set out (new-hash-map rt cnt (r rt ri) NIL)))
+    (pop-to rt base)
+    (return out)))
+
+(doc "A transient view of the set `s`, which is a transient of its map.")
+(defn ^:pub ^:method ^Value set-transient [^:mut ^Rt rt ^Value s]
+  (let [^RootIx base (mark rt)
+        ^Value tm0 (map-transient rt (slot rt s S_MAP))
+        ^RootIx ti (push rt tm0)
+        ^Addr a (alloc rt TY_TSET 2)]
+    (if (== a 0)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^Value tm (r rt ti)]
+      (set-at rt a TS_MAP tm)
+      (set-at rt a TS_EDIT (slot rt tm TM_EDIT)))
+    (pop-to rt base)
+    (return (heap a))))
+
+(doc "Add an element, ANSWERING THE SAME TRANSIENT SET."
+     ""
+     "The inner map is read back THROUGH THE ROOT rather than before the"
+     "pushes. Native read it first and passed the host local on, which held"
+     "across a descent that allocates.")
+(defn ^:pub ^:method ^Value tset-conj [^:mut ^Rt rt ^Value t ^Value x]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^RootIx xi (push rt x)
+        ^Value m (slot rt (r rt ti) TS_MAP)]
+    (tmap-assoc rt m (r rt xi) (r rt xi))
+    (let [^Value out (r rt ti)]
+      (pop-to rt base)
+      (return out))))
+
+(doc "Drop an element, ANSWERING THE SAME TRANSIENT SET.")
+(defn ^:pub ^:method ^Value tset-disj [^:mut ^Rt rt ^Value t ^Value x]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^RootIx xi (push rt x)
+        ^Value m (slot rt (r rt ti) TS_MAP)]
+    (tmap-dissoc rt m (r rt xi))
+    (let [^Value out (r rt ti)]
+      (pop-to rt base)
+      (return out))))
+
+(doc "How many elements a transient set holds.")
+(defn ^:pub ^:method ^I32 tset-count [^:mut ^Rt rt ^Value t]
+  (return (tmap-count rt (slot rt t TS_MAP))))
+
+(doc "Read an element out of a transient set, answering the STORED one."
+     ""
+     "The same reason the persistent `get` on a set does: two values that are"
+     "`=` are not the same object, and the one the set holds is the answer.")
+(defn ^:pub ^:method ^Value tset-get [^:mut ^Rt rt ^Value t ^Value x ^Value not-found]
+  (return (tmap-get rt (slot rt t TS_MAP) x not-found)))
+
+(doc "Freeze a transient set, INVALIDATING both handles.")
+(defn ^:pub ^:method ^Value tset-persistent [^:mut ^Rt rt ^Value t]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^Value pm (tmap-persistent rt (slot rt (r rt ti) TS_MAP))
+        ^RootIx mi (push rt pm)]
+    (set-slot rt (r rt ti) TS_EDIT NIL)
+    (let [^Value out (new-set rt (r rt mi) NIL)]
+      (pop-to rt base)
+      (return out))))

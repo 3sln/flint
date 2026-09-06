@@ -30,7 +30,7 @@
 
 (doc "An array map rebuilt as a CHAMP. The one-way door between the two"
      "representations, taken when a flat map outgrows ARRAY_MAP_MAX.")
-(defn ^:method ^Value promote [^:mut ^Rt rt ^Value m]
+(defn ^:pub ^:method ^Value promote [^:mut ^Rt rt ^Value m]
   (let [^RootIx base (mark rt)
         ^RootIx mi (push rt m)
         ^I32 n (map-count rt m)

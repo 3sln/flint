@@ -119,7 +119,7 @@ fn arguments_arrive_as_a_vector_of_strings() {
         a.done()
     };
     w.entry = w.add_fn(name, 1, false, 1, &body);
-    let (mut rt, v) = run(&mut w, vec!["alpha", "beta"]);
+    let (rt, v) = run(&mut w, vec!["alpha", "beta"]);
     assert!(rt.is_vector(v));
     assert_eq!(rt.vec_count(v), 2);
     let mut b = sbuf();
@@ -295,7 +295,7 @@ fn runaway_recursion_throws_instead_of_crashing() {
         a.done()
     };
     w.entry = w.add_fn(main_name, 1, false, 1, &body);
-    let (mut rt, _v) = run(&mut w, vec![]);
+    let (rt, _v) = run(&mut w, vec![]);
     assert!(!rt.thrown.is_nil(), "unbounded recursion must throw, not crash");
     let kind = rt.ex_kind(rt.thrown);
     let mut b = sbuf();
@@ -422,7 +422,7 @@ fn a_throw_from_a_nested_frame_unwinds_to_the_handler() {
         a.done()
     };
     w.entry = w.add_fn(main_name, 1, false, 1, &body);
-    let (mut rt, v) = run(&mut w, vec![]);
+    let (rt, v) = run(&mut w, vec![]);
     let mut b = sbuf();
     assert_eq!(rt.as_str(v, &mut b), Some("deep"));
 }

@@ -105,7 +105,6 @@ public final class Vec {
 
     /// The TRANSIENT surface, under the names its callers already use. Bodies
     /// generated -- `Vectrans` for the plumbing, `Vectwrite` for the writes.
-    public static long newEditToken(Rt rt) { return com._3sln.flint.kgen.rt.Vectrans.newEditToken(rt); }
     public static boolean isTransient(Rt rt, long v) { return isTransientVector(rt, v); }
     public static int tcount(Rt rt, long t) { return tvecCount(rt, t); }
     public static boolean alive(Rt rt, long t) { return tvecAlive(rt, t); }

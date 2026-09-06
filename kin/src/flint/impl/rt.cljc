@@ -355,6 +355,20 @@
            :java "Sets.S_META" :csharp "global::Flint.Rt.Sets.S_META"}
    'S_HASH {:rust "crate::set::S_HASH"
            :java "Sets.S_HASH" :csharp "global::Flint.Rt.Sets.S_HASH"}
+   ;; The TRANSIENT map and set slots. Written out rather than declared bare
+   ;; because they do NOT share a home: both ports hang them off `Maps` and
+   ;; `Sets`, and native had no names for them at all until this entry wanted
+   ;; some.
+   'TM_CNT {:rust "crate::map::TM_CNT"
+            :java "Maps.TM_CNT" :csharp "global::Flint.Rt.Maps.TM_CNT"}
+   'TM_ROOT {:rust "crate::map::TM_ROOT"
+             :java "Maps.TM_ROOT" :csharp "global::Flint.Rt.Maps.TM_ROOT"}
+   'TM_EDIT {:rust "crate::map::TM_EDIT"
+             :java "Maps.TM_EDIT" :csharp "global::Flint.Rt.Maps.TM_EDIT"}
+   'TS_MAP {:rust "crate::set::TS_MAP"
+            :java "Sets.TS_MAP" :csharp "global::Flint.Rt.Sets.TS_MAP"}
+   'TS_EDIT {:rust "crate::set::TS_EDIT"
+             :java "Sets.TS_EDIT" :csharp "global::Flint.Rt.Sets.TS_EDIT"}
    'LS_THUNK {:rust "LS_THUNK" :java "LS_THUNK" :csharp "LS_THUNK"}
    'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LS_SEQ"}
    ;; A byte rope's header, and a transient byte string's. All three targets

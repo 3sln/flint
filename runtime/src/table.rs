@@ -21,9 +21,7 @@
 //! Unboxed column runs and the constant/RLE encodings are step 5; this is the
 //! shape they slot into, and nothing above the chunk can tell the difference.
 
-use crate::obj::{ty, TY_SCHEMA, TY_TABLE, TY_TABLEREF, TY_TTABLE, TY_NODE};
 use crate::rt::Rt;
-use crate::value::{Value, NIL, NOT_FOUND};
 
 /// Rows per chunk. A power of two so the row-to-chunk split is a shift and a
 /// mask rather than a division.

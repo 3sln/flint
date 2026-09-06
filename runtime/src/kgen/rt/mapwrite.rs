@@ -19,7 +19,7 @@ use crate::kgen::rt::pike::*;
 impl Rt {
     /// An array map rebuilt as a CHAMP. The one-way door between the two
     /// representations, taken when a flat map outgrows ARRAY_MAP_MAX.
-    pub(crate) fn promote(&mut self, m: Value) -> Value {
+    pub fn promote(&mut self, m: Value) -> Value {
         let base: usize = self.mark();
         let mi: usize = self.push(m);
         let n: u32 = self.map_count(m);

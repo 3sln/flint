@@ -87,7 +87,7 @@ impl Rt {
         slot(&self.gc.sp, v.as_heap(), V_CNT).as_fixnum() as u32
     }
     #[inline]
-    #[inline]
+    
     fn vec_root(&self, v: Value) -> Value {
         slot(&self.gc.sp, v.as_heap(), V_ROOT)
     }

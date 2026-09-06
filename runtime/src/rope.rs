@@ -30,7 +30,7 @@
 
 use crate::obj::*;
 use crate::rt::Rt;
-use crate::value::{Value, NIL};
+use crate::value::Value;
 
 /// A concatenation at or below this copies into a flat string instead of
 /// building a node.

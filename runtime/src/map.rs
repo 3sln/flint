@@ -59,6 +59,12 @@ pub const HM_ROOT: u32 = 1;
 pub const HM_META: u32 = 2;
 pub const HM_HASH: u32 = 3;
 
+// transient-map layout. Both ports name these; native read `0`, `1` and `2`
+// at every site, so `self.slot(t, 2)` said nothing about what slot 2 held.
+pub const TM_CNT: u32 = 0;
+pub const TM_ROOT: u32 = 1;
+pub const TM_EDIT: u32 = 2;
+
 // CHAMP bitmap node layout
 pub(crate) const BN_EDIT: u32 = 0;
 pub(crate) const BN_DATAMAP: u32 = 1;

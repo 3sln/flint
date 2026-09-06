@@ -273,7 +273,6 @@ pub fn set_len(sp: &Space, a: Addr, n: u32) {
 ///
 /// The two live together so the packing cannot drift; splitting them is how a
 /// reader ends up with half the address.
-#[inline]
 pub fn set_forward(sp: &Space, a: Addr, dest: Addr) {
     let hi = ((dest >> 32) & 0x00FF_FFFF) as u32;
     sp.write_u32(a, ((TY_FWD as u32) << 24) | hi);

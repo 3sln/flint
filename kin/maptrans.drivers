@@ -1,0 +1,587 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const NOT_FOUND: Value = Value(0xFFFE);
+const TY_ARRAYMAP: u8 = 12; const TY_HASHMAP: u8 = 13;
+const TY_TMAP: u8 = 24; const TY_TSET: u8 = 25;
+const TY_SET: u8 = 18; const TY_VOLATILE: u8 = 20; const TY_NODE: u8 = 26;
+const HM_CNT: u32 = 0; const HM_ROOT: u32 = 1; const HM_META: u32 = 2;
+pub mod map { pub const TM_CNT: u32 = 0; pub const TM_ROOT: u32 = 1; pub const TM_EDIT: u32 = 2; }
+pub mod set { pub const S_MAP: u32 = 0; pub const S_META: u32 = 1; pub const S_HASH: u32 = 2;
+              pub const TS_MAP: u32 = 0; pub const TS_EDIT: u32 = 1; }
+// A FIXNUM IS TAGGED and sign-extends. An untagged small integer falls inside
+// the probe's `is_heap` range and gets walked as an address; one that does not
+// sign-extend prints a count of -1 as four billion. Both have happened.
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 && self.0 != NOT_FOUND.0 && (self.0 >> 44) == 0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn fixnum(n: i64) -> Value { Value(0x2000_0000_0000u64 | (n as u64 & 0xFFFF_FFFF)) }
+    fn as_fixnum(self) -> i64 { ((self.0 & 0xFFFF_FFFF) as u32) as i32 as i64 }
+}
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, lens: Vec<u32>, bump: u64, roots: Vec<Value>,
+            champ_added: bool, empty: Value, thrown: String }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+// THE NODE'S CAPACITY, fixed. A real CHAMP grows; what this models is only the
+// property the transient layer depends on -- a node whose edit token matches
+// is written IN PLACE, and one whose does not is copied.
+const CAP: u32 = 8;
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        let a = self.bump; self.bump += n as u64 + 8;
+        self.gc.sp.m[a as usize] = t; self.lens[a as usize] = n;
+        for i in 0..n { self.h[a as usize + i as usize] = NIL.0; }
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.h[v.0 as usize + i as usize] = x.0; }
+    fn slot(&self, v: Value, i: u32) -> Value { Value(self.h[v.0 as usize + i as usize]) }
+    fn throw_str(&mut self, class: &str, msg: &str) -> Value {
+        self.thrown = format!("{}: {}", class, msg); NIL
+    }
+    fn hash_value(&mut self, k: Value) -> u32 { (k.0 & 0xFF) as u32 }
+    fn empty_map(&self) -> Value { self.empty }
+    fn new_edit_token(&mut self) -> Value { let a = self.alloc(TY_VOLATILE, 1); Value::heap(a) }
+    fn is_array_map(&self, m: Value) -> bool { m.is_heap() && ty(&self.gc.sp, m.as_heap()) == TY_ARRAYMAP }
+    fn map_count(&mut self, m: Value) -> u32 { self.slot(m, HM_CNT).as_fixnum() as u32 }
+    fn new_hash_map(&mut self, cnt: u32, root: Value, meta: Value) -> Value {
+        let a = self.alloc(TY_HASHMAP, 4);
+        self.set_slot(a, HM_CNT, Value::fixnum(cnt as i64));
+        self.set_slot(a, HM_ROOT, root);
+        self.set_slot(a, HM_META, meta);
+        Value::heap(a)
+    }
+    fn new_set(&mut self, m: Value, meta: Value) -> Value {
+        let a = self.alloc(TY_SET, 3);
+        self.set_slot(a, set::S_MAP, m);
+        self.set_slot(a, set::S_META, meta);
+        Value::heap(a)
+    }
+    // slot 0 is the node's EDIT TOKEN; pairs run from slot 1.
+    fn new_node(&mut self, edit: Value) -> Value {
+        let a = self.alloc(TY_NODE, 1 + 2 * CAP);
+        self.set_slot(a, 0, edit);
+        Value::heap(a)
+    }
+    fn node_at(&mut self, n: Value, k: Value) -> i32 {
+        for i in 0..CAP {
+            if self.slot(n, 1 + 2 * i).0 == k.0 { return i as i32; }
+        }
+        -1
+    }
+    fn node_free(&mut self, n: Value) -> i32 {
+        for i in 0..CAP {
+            if self.slot(n, 1 + 2 * i).is_nil() { return i as i32; }
+        }
+        -1
+    }
+    fn node_find(&mut self, n: Value, _shift: u32, _h: u32, k: Value) -> Value {
+        let at = self.node_at(n, k);
+        if at < 0 { NOT_FOUND } else { self.slot(n, 2 + 2 * at as u32) }
+    }
+    fn node_copy(&mut self, n: Value, edit: Value) -> Value {
+        let out = self.new_node(edit);
+        for i in 0..2 * CAP { let v = self.slot(n, 1 + i); self.set(out, 1 + i, v); }
+        out
+    }
+    fn node_assoc(&mut self, n: Value, _shift: u32, _h: u32, k: Value, v: Value, edit: Value) -> Value {
+        let mine = self.slot(n, 0).0 == edit.0;
+        let t = if mine { n } else { self.node_copy(n, edit) };
+        let at = self.node_at(t, k);
+        if at >= 0 {
+            self.champ_added = false;
+            self.set(t, 2 + 2 * at as u32, v);
+            return t;
+        }
+        self.champ_added = true;
+        let f = self.node_free(t);
+        self.set(t, 1 + 2 * f as u32, k);
+        self.set(t, 2 + 2 * f as u32, v);
+        t
+    }
+    fn node_dissoc(&mut self, n: Value, _shift: u32, _h: u32, k: Value, edit: Value) -> Value {
+        let at = self.node_at(n, k);
+        if at < 0 { self.champ_added = false; return n; }
+        let mine = self.slot(n, 0).0 == edit.0;
+        let t = if mine { n } else { self.node_copy(n, edit) };
+        let at = self.node_at(t, k);
+        self.champ_added = true;
+        self.set(t, 1 + 2 * at as u32, NIL);
+        self.set(t, 2 + 2 * at as u32, NIL);
+        t
+    }
+    fn promote(&mut self, m: Value) -> Value {
+        let n = self.lens[m.0 as usize] / 2;
+        let edit = self.new_edit_token();
+        let root = self.new_node(edit);
+        for i in 0..n {
+            let (k, v) = (self.slot(m, 2 * i), self.slot(m, 2 * i + 1));
+            self.set(root, 1 + 2 * i, k);
+            self.set(root, 2 + 2 * i, v);
+        }
+        self.new_hash_map(n, root, NIL)
+    }
+    fn new_array_map(&mut self, pairs: &[Value]) -> Value {
+        let a = self.alloc(TY_ARRAYMAP, pairs.len().max(1) as u32);
+        self.lens[a as usize] = pairs.len() as u32;
+        for (i, p) in pairs.iter().enumerate() { self.h[a as usize + i] = p.0; }
+        Value::heap(a)
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 20000], gc: Gc { sp: Space { m: vec![0u8; 20000] } },
+                      lens: vec![0; 20000], bump: 100, roots: Vec::new(),
+                      champ_added: false, empty: NIL, thrown: String::new() };
+    let root0 = rt.new_node(NIL);
+    rt.empty = rt.new_hash_map(0, root0, NIL);
+    let mut o = String::new();
+    let (k1, k2, k3) = (Value(0xA1), Value(0xB2), Value(0xC3));
+    let (v1, v2, v3) = (Value(0xD4), Value(0xE5), Value(0xF6));
+
+    // AN ARRAY MAP IS PROMOTED. The transient's count comes from the promoted
+    // map, not from the array map it was handed.
+    let am = rt.new_array_map(&[k1, v1, k2, v2]);
+    let t = rt.map_transient(am);
+    o.push_str(&format!("cnt={} edit={} ", rt.tmap_count(t),
+                        (!rt.slot(t, map::TM_EDIT).is_nil()) as u32));
+    o.push_str(&format!("get={}/{}/{} ", rt.tmap_get(t, k1, NIL).0,
+                        rt.tmap_get(t, k2, NIL).0, rt.tmap_get(t, k3, Value(0x11)).0));
+
+    // ASSOC ANSWERS THE SAME HANDLE, and only a NEW key moves the count.
+    let t2 = rt.tmap_assoc(t, k3, v3);
+    let t3 = rt.tmap_assoc(t2, k1, v3);
+    o.push_str(&format!("same={}{} cnt3={} k1={} ", (t2.0 == t.0) as u32,
+                        (t3.0 == t.0) as u32, rt.tmap_count(t3), rt.tmap_get(t3, k1, NIL).0));
+
+    // DISSOC of an absent key leaves the count alone.
+    let t4 = rt.tmap_dissoc(t3, k2);
+    let t5 = rt.tmap_dissoc(t4, k2);
+    o.push_str(&format!("cnt5={} gone={} ", rt.tmap_count(t5),
+                        (rt.tmap_get(t5, k2, Value(0x22)).0 == 0x22) as u32));
+
+    // PERSISTENT! FREEZES IT, and the handle is refused afterwards.
+    let p = rt.tmap_persistent(t5);
+    o.push_str(&format!("pcnt={} ", rt.map_count(p)));
+    rt.thrown.clear();
+    let after = rt.tmap_assoc(t5, k1, v1);
+    o.push_str(&format!("after={}/{} ", after.is_nil() as u32, rt.thrown.len()));
+
+    // AN EMPTY TRANSIENT FREEZES TO THE SHARED EMPTY MAP, by identity.
+    let em = rt.new_array_map(&[]);
+    let e = rt.map_transient(em);
+    let ep = rt.tmap_persistent(e);
+    o.push_str(&format!("empty={} ", (ep.0 == rt.empty.0) as u32));
+
+    // THE SET SIDE, which is the map side wearing a different tag.
+    let sm = rt.new_array_map(&[k1, k1]);
+    let s = rt.new_set(sm, NIL);
+    let ts = rt.set_transient(s);
+    o.push_str(&format!("scnt={} sedit={} ", rt.tset_count(ts),
+                        (rt.slot(ts, set::TS_EDIT).0 == rt.slot(rt.slot(ts, set::TS_MAP), map::TM_EDIT).0) as u32));
+    let ts2 = rt.tset_conj(ts, k2);
+    let ts3 = rt.tset_conj(ts2, k2);
+    o.push_str(&format!("ssame={}{} scnt3={} sget={}/{} ", (ts2.0 == ts.0) as u32,
+                        (ts3.0 == ts.0) as u32, rt.tset_count(ts3),
+                        rt.tset_get(ts3, k2, NIL).0, rt.tset_get(ts3, k3, Value(0x33)).0));
+    let ts4 = rt.tset_disj(ts3, k1);
+    o.push_str(&format!("sdisj={} ", rt.tset_count(ts4)));
+    let sp = rt.tset_persistent(ts4);
+    // BOTH HANDLES ARE INVALIDATED. Native nilled only the inner map's token,
+    // so the set's own said it was still live.
+    o.push_str(&format!("sp={} sedit2={} smedit={}",
+                        rt.map_count(rt.slot(sp, set::S_MAP)),
+                        rt.slot(ts4, set::TS_EDIT).is_nil() as u32,
+                        rt.slot(rt.slot(ts4, set::TS_MAP), map::TM_EDIT).is_nil() as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final long NOT_FOUND = 0xFFFEL;
+    static final int TY_ARRAYMAP = 12, TY_HASHMAP = 13, TY_TMAP = 24, TY_TSET = 25;
+    static final int TY_SET = 18, TY_VOLATILE = 20, TY_NODE = 26;
+    static final int HM_CNT = 0, HM_ROOT = 1, HM_META = 2;
+    static final int CAP = 8;
+    static final class Maps { static final int TM_CNT = 0, TM_ROOT = 1, TM_EDIT = 2; }
+    static final class Sets { static final int S_MAP = 0, S_META = 1, S_HASH = 2;
+                              static final int TS_MAP = 0, TS_EDIT = 1; }
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL && v != NOT_FOUND && (v >>> 44) == 0; }
+        static long asHeap(long v) { return v; }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+        static final long NOT_FOUND = Probe.NOT_FOUND;
+        static long fixnum(long n) { return 0x200000000000L | (n & 0xFFFFFFFFL); }
+        static long asFixnum(long v) { return (int) (v & 0xFFFFFFFFL); }
+    }
+    static final class Space { byte[] m = new byte[20000]; }
+    static final class Rt {
+        long[] h = new long[20000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        int[] lens = new int[20000];
+        long bump = 100;
+        boolean champAdded = false;
+        long empty = NIL;
+        String thrown = "";
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long alloc(int t, int n) {
+            long a = bump; bump += n + 8;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        void set(long v, int i, long x) { h[(int) v + i] = x; }
+        long slot(long v, int i) { return h[(int) v + i]; }
+        long throwStr(String cls, String msg) { thrown = cls + ": " + msg; return NIL; }
+        long emptyMap() { return empty; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    // `hash-value` resolves to `com.flint.rt.Eq.hashValue`, and a probe has no
+    // such package -- so it declares one, the way `assoc.drivers` does.
+    static final class com { static final class flint { static final class rt {
+        static final class Eq {
+            static int hashValue(Rt rt, long k) { return (int) (k & 0xFF); }
+        }
+        static final class Maps { static long empty(Rt rt) { return rt.empty; } }
+    } } }
+    static long newEditToken(Rt rt) { return Val.heap(rt.alloc(TY_VOLATILE, 1)); }
+    static boolean isArrayMap(Rt rt, long m) { return Val.isHeap(m) && ty(rt.gc.sp, Val.asHeap(m)) == TY_ARRAYMAP; }
+    static int mapCount(Rt rt, long m) { return (int) Val.asFixnum(rt.slot(m, HM_CNT)); }
+    static long newHashMap(Rt rt, int cnt, long root, long meta) {
+        long a = rt.alloc(TY_HASHMAP, 4);
+        rt.setSlot(a, HM_CNT, Val.fixnum(cnt));
+        rt.setSlot(a, HM_ROOT, root);
+        rt.setSlot(a, HM_META, meta);
+        return Val.heap(a);
+    }
+    static long newSet(Rt rt, long m, long meta) {
+        long a = rt.alloc(TY_SET, 3);
+        rt.setSlot(a, Sets.S_MAP, m);
+        rt.setSlot(a, Sets.S_META, meta);
+        return Val.heap(a);
+    }
+    static long newNode(Rt rt, long edit) {
+        long a = rt.alloc(TY_NODE, 1 + 2 * CAP);
+        rt.setSlot(a, 0, edit);
+        return Val.heap(a);
+    }
+    static int nodeAt(Rt rt, long n, long k) {
+        for (int i = 0; i < CAP; i++) if (rt.slot(n, 1 + 2 * i) == k) return i;
+        return -1;
+    }
+    static int nodeFree(Rt rt, long n) {
+        for (int i = 0; i < CAP; i++) if (Val.isNil(rt.slot(n, 1 + 2 * i))) return i;
+        return -1;
+    }
+    static long nodeFind(Rt rt, long n, int shift, int h, long k) {
+        int at = nodeAt(rt, n, k);
+        return at < 0 ? NOT_FOUND : rt.slot(n, 2 + 2 * at);
+    }
+    static long nodeCopy(Rt rt, long n, long edit) {
+        long out = newNode(rt, edit);
+        for (int i = 0; i < 2 * CAP; i++) rt.set(out, 1 + i, rt.slot(n, 1 + i));
+        return out;
+    }
+    static long nodeAssoc(Rt rt, long n, int shift, int h, long k, long v, long edit) {
+        long t = rt.slot(n, 0) == edit ? n : nodeCopy(rt, n, edit);
+        int at = nodeAt(rt, t, k);
+        if (at >= 0) { rt.champAdded = false; rt.set(t, 2 + 2 * at, v); return t; }
+        rt.champAdded = true;
+        int f = nodeFree(rt, t);
+        rt.set(t, 1 + 2 * f, k);
+        rt.set(t, 2 + 2 * f, v);
+        return t;
+    }
+    static long nodeDissoc(Rt rt, long n, int shift, int h, long k, long edit) {
+        if (nodeAt(rt, n, k) < 0) { rt.champAdded = false; return n; }
+        long t = rt.slot(n, 0) == edit ? n : nodeCopy(rt, n, edit);
+        int at = nodeAt(rt, t, k);
+        rt.champAdded = true;
+        rt.set(t, 1 + 2 * at, NIL);
+        rt.set(t, 2 + 2 * at, NIL);
+        return t;
+    }
+    static long promote(Rt rt, long m) {
+        int n = rt.lens[(int) m] / 2;
+        long root = newNode(rt, newEditToken(rt));
+        for (int i = 0; i < n; i++) {
+            rt.set(root, 1 + 2 * i, rt.slot(m, 2 * i));
+            rt.set(root, 2 + 2 * i, rt.slot(m, 2 * i + 1));
+        }
+        return newHashMap(rt, n, root, NIL);
+    }
+    static long newArrayMap(Rt rt, long[] pairs) {
+        long a = rt.alloc(TY_ARRAYMAP, Math.max(pairs.length, 1));
+        rt.lens[(int) a] = pairs.length;
+        for (int i = 0; i < pairs.length; i++) rt.h[(int) a + i] = pairs[i];
+        return Val.heap(a);
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        rt.empty = newHashMap(rt, 0, newNode(rt, NIL), NIL);
+        StringBuilder o = new StringBuilder();
+        long k1 = 0xA1L, k2 = 0xB2L, k3 = 0xC3L;
+        long v1 = 0xD4L, v2 = 0xE5L, v3 = 0xF6L;
+
+        long am = newArrayMap(rt, new long[]{k1, v1, k2, v2});
+        long t = mapTransient(rt, am);
+        o.append("cnt=").append(tmapCount(rt, t))
+         .append(" edit=").append(Val.isNil(rt.slot(t, Maps.TM_EDIT)) ? 0 : 1).append(" ");
+        o.append("get=").append(tmapGet(rt, t, k1, NIL)).append("/")
+         .append(tmapGet(rt, t, k2, NIL)).append("/")
+         .append(tmapGet(rt, t, k3, 0x11L)).append(" ");
+
+        long t2 = tmapAssoc(rt, t, k3, v3);
+        long t3 = tmapAssoc(rt, t2, k1, v3);
+        o.append("same=").append(t2 == t ? 1 : 0).append(t3 == t ? 1 : 0)
+         .append(" cnt3=").append(tmapCount(rt, t3))
+         .append(" k1=").append(tmapGet(rt, t3, k1, NIL)).append(" ");
+
+        long t4 = tmapDissoc(rt, t3, k2);
+        long t5 = tmapDissoc(rt, t4, k2);
+        o.append("cnt5=").append(tmapCount(rt, t5))
+         .append(" gone=").append(tmapGet(rt, t5, k2, 0x22L) == 0x22L ? 1 : 0).append(" ");
+
+        long p = tmapPersistent(rt, t5);
+        o.append("pcnt=").append(mapCount(rt, p)).append(" ");
+        rt.thrown = "";
+        long after = tmapAssoc(rt, t5, k1, v1);
+        o.append("after=").append(Val.isNil(after) ? 1 : 0).append("/")
+         .append(rt.thrown.length()).append(" ");
+
+        long e = mapTransient(rt, newArrayMap(rt, new long[]{}));
+        long ep = tmapPersistent(rt, e);
+        o.append("empty=").append(ep == rt.empty ? 1 : 0).append(" ");
+
+        long sm = newArrayMap(rt, new long[]{k1, k1});
+        long s = newSet(rt, sm, NIL);
+        long ts = setTransient(rt, s);
+        o.append("scnt=").append(tsetCount(rt, ts))
+         .append(" sedit=").append(rt.slot(ts, Sets.TS_EDIT)
+                 == rt.slot(rt.slot(ts, Sets.TS_MAP), Maps.TM_EDIT) ? 1 : 0).append(" ");
+        long ts2 = tsetConj(rt, ts, k2);
+        long ts3 = tsetConj(rt, ts2, k2);
+        o.append("ssame=").append(ts2 == ts ? 1 : 0).append(ts3 == ts ? 1 : 0)
+         .append(" scnt3=").append(tsetCount(rt, ts3))
+         .append(" sget=").append(tsetGet(rt, ts3, k2, NIL)).append("/")
+         .append(tsetGet(rt, ts3, k3, 0x33L)).append(" ");
+        long ts4 = tsetDisj(rt, ts3, k1);
+        o.append("sdisj=").append(tsetCount(rt, ts4)).append(" ");
+        long sp = tsetPersistent(rt, ts4);
+        o.append("sp=").append(mapCount(rt, rt.slot(sp, Sets.S_MAP)))
+         .append(" sedit2=").append(Val.isNil(rt.slot(ts4, Sets.TS_EDIT)) ? 1 : 0)
+         .append(" smedit=").append(Val.isNil(rt.slot(rt.slot(ts4, Sets.TS_MAP), Maps.TM_EDIT)) ? 1 : 0);
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Eq {
+        internal static int HashValue(Probe.Rt rt, long k) { return (int) (k & 0xFF); }
+    }
+    internal static class Maps {
+        internal const int TM_CNT = 0, TM_ROOT = 1, TM_EDIT = 2;
+        internal static long Empty(Probe.Rt rt) { return rt.empty; }
+    }
+    internal static class Sets {
+        internal const int S_MAP = 0, S_META = 1, S_HASH = 2;
+        internal const int TS_MAP = 0, TS_EDIT = 1;
+    }
+}
+--csharp-head
+    internal const long NIL = 0xFFFFL;
+    internal const long NOT_FOUND = 0xFFFEL;
+    internal const int TY_ARRAYMAP = 12, TY_HASHMAP = 13;
+    internal const int TY_SET = 18, TY_VOLATILE = 20, TY_NODE = 26;
+    internal const int HM_CNT = 0, HM_ROOT = 1, HM_META = 2;
+    internal const int CAP = 8;
+    internal static class Val {
+        internal const long Nil = Probe.NIL;
+        internal const long NotFound = Probe.NOT_FOUND;
+        internal static bool IsHeap(long v) { return v >= 100 && v != NIL && v != NOT_FOUND && (v >> 44) == 0; }
+        internal static long AsHeap(long v) { return v; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == NIL; }
+        internal static long Fixnum(long n) { return 0x200000000000L | (n & 0xFFFFFFFFL); }
+        internal static long AsFixnum(long v) { return (int) (v & 0xFFFFFFFFL); }
+    }
+    internal sealed class Space { internal byte[] m = new byte[20000]; }
+    internal sealed class Rt {
+        internal long[] h = new long[20000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal int[] lens = new int[20000];
+        internal long bump = 100;
+        internal bool champAdded = false;
+        internal long empty = NIL;
+        internal string thrown = "";
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { while (roots.Count > n) roots.RemoveAt(roots.Count - 1); }
+        internal long Alloc(int t, int n) {
+            long a = bump; bump += n + 8;
+            gc.sp.m[(int) a] = (byte) t; lens[(int) a] = n;
+            for (int i = 0; i < n; i++) h[(int) a + i] = NIL;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal void Set(long v, int i, long x) { h[(int) v + i] = x; }
+        internal long Slot(long v, int i) { return h[(int) v + i]; }
+        internal long ThrowStr(string cls, string msg) { thrown = cls + ": " + msg; return NIL; }
+        internal long EmptyMap() { return empty; }
+    }
+    internal static class Obj {
+        internal const int TyTmap = 24, TyTset = 25;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static int Ty(Space sp, long a) { return Obj.Ty(sp, a); }
+    internal static long NewEditToken(Rt rt) { return Val.Heap(rt.Alloc(TY_VOLATILE, 1)); }
+    internal static bool IsArrayMap(Rt rt, long m) { return Val.IsHeap(m) && Ty(rt.gc.sp, Val.AsHeap(m)) == TY_ARRAYMAP; }
+    internal static int MapCount(Rt rt, long m) { return (int) Val.AsFixnum(rt.Slot(m, HM_CNT)); }
+    internal static long NewHashMap(Rt rt, int cnt, long root, long meta) {
+        long a = rt.Alloc(TY_HASHMAP, 4);
+        rt.SetSlot(a, HM_CNT, Val.Fixnum(cnt));
+        rt.SetSlot(a, HM_ROOT, root);
+        rt.SetSlot(a, HM_META, meta);
+        return Val.Heap(a);
+    }
+    internal static long NewSet(Rt rt, long m, long meta) {
+        long a = rt.Alloc(TY_SET, 3);
+        rt.SetSlot(a, global::Flint.Rt.Sets.S_MAP, m);
+        rt.SetSlot(a, global::Flint.Rt.Sets.S_META, meta);
+        return Val.Heap(a);
+    }
+    internal static long NewNode(Rt rt, long edit) {
+        long a = rt.Alloc(TY_NODE, 1 + 2 * CAP);
+        rt.SetSlot(a, 0, edit);
+        return Val.Heap(a);
+    }
+    internal static int NodeAt(Rt rt, long n, long k) {
+        for (int i = 0; i < CAP; i++) if (rt.Slot(n, 1 + 2 * i) == k) return i;
+        return -1;
+    }
+    internal static int NodeFree(Rt rt, long n) {
+        for (int i = 0; i < CAP; i++) if (Val.IsNil(rt.Slot(n, 1 + 2 * i))) return i;
+        return -1;
+    }
+    internal static long NodeFind(Rt rt, long n, int shift, int h, long k) {
+        int at = NodeAt(rt, n, k);
+        return at < 0 ? NOT_FOUND : rt.Slot(n, 2 + 2 * at);
+    }
+    internal static long NodeCopy(Rt rt, long n, long edit) {
+        long outn = NewNode(rt, edit);
+        for (int i = 0; i < 2 * CAP; i++) rt.Set(outn, 1 + i, rt.Slot(n, 1 + i));
+        return outn;
+    }
+    internal static long NodeAssoc(Rt rt, long n, int shift, int h, long k, long v, long edit) {
+        long t = rt.Slot(n, 0) == edit ? n : NodeCopy(rt, n, edit);
+        int at = NodeAt(rt, t, k);
+        if (at >= 0) { rt.champAdded = false; rt.Set(t, 2 + 2 * at, v); return t; }
+        rt.champAdded = true;
+        int f = NodeFree(rt, t);
+        rt.Set(t, 1 + 2 * f, k);
+        rt.Set(t, 2 + 2 * f, v);
+        return t;
+    }
+    internal static long NodeDissoc(Rt rt, long n, int shift, int h, long k, long edit) {
+        if (NodeAt(rt, n, k) < 0) { rt.champAdded = false; return n; }
+        long t = rt.Slot(n, 0) == edit ? n : NodeCopy(rt, n, edit);
+        int at = NodeAt(rt, t, k);
+        rt.champAdded = true;
+        rt.Set(t, 1 + 2 * at, NIL);
+        rt.Set(t, 2 + 2 * at, NIL);
+        return t;
+    }
+    internal static long Promote(Rt rt, long m) {
+        int n = rt.lens[(int) m] / 2;
+        long root = NewNode(rt, NewEditToken(rt));
+        for (int i = 0; i < n; i++) {
+            rt.Set(root, 1 + 2 * i, rt.Slot(m, 2 * i));
+            rt.Set(root, 2 + 2 * i, rt.Slot(m, 2 * i + 1));
+        }
+        return NewHashMap(rt, n, root, NIL);
+    }
+    internal static long NewArrayMap(Rt rt, long[] pairs) {
+        long a = rt.Alloc(TY_ARRAYMAP, System.Math.Max(pairs.Length, 1));
+        rt.lens[(int) a] = pairs.Length;
+        for (int i = 0; i < pairs.Length; i++) rt.h[(int) a + i] = pairs[i];
+        return Val.Heap(a);
+    }
+--csharp
+    public static void Main() {
+        Rt rt = new Rt();
+        rt.empty = NewHashMap(rt, 0, NewNode(rt, NIL), NIL);
+        var o = new System.Text.StringBuilder();
+        long k1 = 0xA1L, k2 = 0xB2L, k3 = 0xC3L;
+        long v1 = 0xD4L, v3 = 0xF6L;
+
+        long am = NewArrayMap(rt, new long[]{k1, v1, k2, 0xE5L});
+        long t = MapTransient(rt, am);
+        o.Append("cnt=").Append(TmapCount(rt, t))
+         .Append(" edit=").Append(Val.IsNil(rt.Slot(t, global::Flint.Rt.Maps.TM_EDIT)) ? 0 : 1).Append(" ");
+        o.Append("get=").Append(TmapGet(rt, t, k1, NIL)).Append("/")
+         .Append(TmapGet(rt, t, k2, NIL)).Append("/")
+         .Append(TmapGet(rt, t, k3, 0x11L)).Append(" ");
+
+        long t2 = TmapAssoc(rt, t, k3, v3);
+        long t3 = TmapAssoc(rt, t2, k1, v3);
+        o.Append("same=").Append(t2 == t ? 1 : 0).Append(t3 == t ? 1 : 0)
+         .Append(" cnt3=").Append(TmapCount(rt, t3))
+         .Append(" k1=").Append(TmapGet(rt, t3, k1, NIL)).Append(" ");
+
+        long t4 = TmapDissoc(rt, t3, k2);
+        long t5 = TmapDissoc(rt, t4, k2);
+        o.Append("cnt5=").Append(TmapCount(rt, t5))
+         .Append(" gone=").Append(TmapGet(rt, t5, k2, 0x22L) == 0x22L ? 1 : 0).Append(" ");
+
+        long p = TmapPersistent(rt, t5);
+        o.Append("pcnt=").Append(MapCount(rt, p)).Append(" ");
+        rt.thrown = "";
+        long after = TmapAssoc(rt, t5, k1, v1);
+        o.Append("after=").Append(Val.IsNil(after) ? 1 : 0).Append("/")
+         .Append(rt.thrown.Length).Append(" ");
+
+        long e = MapTransient(rt, NewArrayMap(rt, new long[]{}));
+        long ep = TmapPersistent(rt, e);
+        o.Append("empty=").Append(ep == rt.empty ? 1 : 0).Append(" ");
+
+        long sm = NewArrayMap(rt, new long[]{k1, k1});
+        long s = NewSet(rt, sm, NIL);
+        long ts = SetTransient(rt, s);
+        o.Append("scnt=").Append(TsetCount(rt, ts))
+         .Append(" sedit=").Append(rt.Slot(ts, global::Flint.Rt.Sets.TS_EDIT)
+                 == rt.Slot(rt.Slot(ts, global::Flint.Rt.Sets.TS_MAP), global::Flint.Rt.Maps.TM_EDIT) ? 1 : 0).Append(" ");
+        long ts2 = TsetConj(rt, ts, k2);
+        long ts3 = TsetConj(rt, ts2, k2);
+        o.Append("ssame=").Append(ts2 == ts ? 1 : 0).Append(ts3 == ts ? 1 : 0)
+         .Append(" scnt3=").Append(TsetCount(rt, ts3))
+         .Append(" sget=").Append(TsetGet(rt, ts3, k2, NIL)).Append("/")
+         .Append(TsetGet(rt, ts3, k3, 0x33L)).Append(" ");
+        long ts4 = TsetDisj(rt, ts3, k1);
+        o.Append("sdisj=").Append(TsetCount(rt, ts4)).Append(" ");
+        long sp = TsetPersistent(rt, ts4);
+        o.Append("sp=").Append(MapCount(rt, rt.Slot(sp, global::Flint.Rt.Sets.S_MAP)))
+         .Append(" sedit2=").Append(Val.IsNil(rt.Slot(ts4, global::Flint.Rt.Sets.TS_EDIT)) ? 1 : 0)
+         .Append(" smedit=").Append(Val.IsNil(rt.Slot(rt.Slot(ts4, global::Flint.Rt.Sets.TS_MAP), global::Flint.Rt.Maps.TM_EDIT)) ? 1 : 0);
+        System.Console.WriteLine(o.ToString());
+    }

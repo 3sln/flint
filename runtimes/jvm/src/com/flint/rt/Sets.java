@@ -72,52 +72,8 @@ public final class Sets {
         return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_TSET;
     }
 
-    public static long transientOf(Rt rt, long s) {
-        int base = rt.mark();
-        int ti = rt.push(Maps.transientOf(rt, rt.slot(s, S_MAP)));
-        long a = rt.alloc(TY_TSET, 2);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        rt.setSlot(a, TS_MAP, rt.r(ti));
-        rt.setSlot(a, TS_EDIT, rt.slot(rt.r(ti), Maps.TM_EDIT));
-        rt.popTo(base);
-        return Val.heap(a);
-    }
-
-    public static long tconj(Rt rt, long t, long x) {
-        int base = rt.mark();
-        int ti = rt.push(t), xi = rt.push(x);
-        Maps.tassoc(rt, rt.slot(rt.r(ti), TS_MAP), rt.r(xi), rt.r(xi));
-        long out = rt.r(ti);
-        rt.popTo(base);
-        return out;
-    }
-
-    public static long tdisj(Rt rt, long t, long x) {
-        int base = rt.mark();
-        int ti = rt.push(t), xi = rt.push(x);
-        Maps.tdissoc(rt, rt.slot(rt.r(ti), TS_MAP), rt.r(xi));
-        long out = rt.r(ti);
-        rt.popTo(base);
-        return out;
-    }
-
-    public static int tcount(Rt rt, long t) { return Maps.tcount(rt, rt.slot(t, TS_MAP)); }
-
-    /// `get` on a transient set, which answers the STORED element for the same
-    /// reason the persistent one does.
-    public static long tget(Rt rt, long t, long x, long notFound) {
-        return Maps.tget(rt, rt.slot(t, TS_MAP), x, notFound);
-    }
-
-    public static long tpersistent(Rt rt, long t) {
-        int base = rt.mark();
-        int ti = rt.push(t);
-        int mi = rt.push(Maps.tpersistent(rt, rt.slot(rt.r(ti), TS_MAP)));
-        rt.setSlot(Val.asHeap(rt.r(ti)), TS_EDIT, Val.NIL);
-        long out = newSet(rt, rt.r(mi), Val.NIL);
-        rt.popTo(base);
-        return out;
-    }
+    // `transientOf`, `tconj`, `tdisj`, `tcount`, `tget` and `tpersistent` are
+    // GENERATED, from `kin/maptrans.kin`.
 
     public static boolean eq(Rt rt, long a, long b) {
         if (count(rt, a) != count(rt, b)) return false;

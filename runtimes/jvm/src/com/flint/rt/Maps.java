@@ -190,91 +190,10 @@ public final class Maps {
         return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_TMAP;
     }
 
-    public static long transientOf(Rt rt, long m) {
-        int base = rt.mark();
-        int mi = rt.push(m);
-        // An array-map becomes a CHAMP FIRST: one transient implementation, and
-        // the workload that uses transients is the one with many entries.
-        long hm = isArrayMap(rt, rt.r(mi)) ? promote(rt, rt.r(mi)) : rt.r(mi);
-        int hi = rt.push(hm);
-        int ei = rt.push(Vec.newEditToken(rt));
-        long a = rt.alloc(TY_TMAP, 3);
-        if (a == 0) { rt.popTo(base); return Val.NIL; }
-        long h = rt.r(hi);
-        rt.setSlot(a, TM_CNT, Val.fixnum(mapCount(rt, h)));
-        rt.setSlot(a, TM_ROOT, rt.slot(h, HM_ROOT));
-        rt.setSlot(a, TM_EDIT, rt.r(ei));
-        rt.popTo(base);
-        return Val.heap(a);
-    }
-
-    public static long tget(Rt rt, long t, long k, long notFound) {
-        int base = rt.mark();
-        int ti = rt.push(t), ki = rt.push(k);
-        int h = Eq.hashValue(rt, rt.r(ki));
-        long root = rt.slot(rt.r(ti), TM_ROOT);
-        long r = Val.isNil(root) ? Val.NOT_FOUND : nodeFind(rt, root, 0, h, rt.r(ki));
-        rt.popTo(base);
-        return r == Val.NOT_FOUND ? notFound : r;
-    }
-
-    public static long tassoc(Rt rt, long t, long k, long v) {
-        if (Val.isNil(rt.slot(t, TM_EDIT))) {
-            return rt.throwStr("IllegalStateException", "transient used after persistent!");
-        }
-        int base = rt.mark();
-        int ti = rt.push(t), ki = rt.push(k), vi = rt.push(v);
-        int ei = rt.push(rt.slot(rt.r(ti), TM_EDIT));
-        int h = Eq.hashValue(rt, rt.r(ki));
-        int ri = rt.push(rt.slot(rt.r(ti), TM_ROOT));
-        rt.champAdded = false;
-        long nr = nodeAssoc(rt, rt.r(ri), 0, h, rt.r(ki), rt.r(vi), rt.r(ei));
-        boolean added = rt.champAdded;
-        long tv = rt.r(ti);
-        rt.setSlot(Val.asHeap(tv), TM_ROOT, nr);
-        if (added) {
-            rt.setSlot(Val.asHeap(tv), TM_CNT, Val.fixnum(Val.asFixnum(rt.slot(tv, TM_CNT)) + 1));
-        }
-        rt.popTo(base);
-        return tv;
-    }
-
-    public static long tdissoc(Rt rt, long t, long k) {
-        if (Val.isNil(rt.slot(t, TM_EDIT))) {
-            return rt.throwStr("IllegalStateException", "transient used after persistent!");
-        }
-        int base = rt.mark();
-        int ti = rt.push(t), ki = rt.push(k);
-        int ei = rt.push(rt.slot(rt.r(ti), TM_EDIT));
-        int h = Eq.hashValue(rt, rt.r(ki));
-        int ri = rt.push(rt.slot(rt.r(ti), TM_ROOT));
-        rt.champAdded = false;
-        long nr = nodeDissoc(rt, rt.r(ri), 0, h, rt.r(ki), rt.r(ei));
-        boolean removed = rt.champAdded;
-        long tv = rt.r(ti);
-        rt.setSlot(Val.asHeap(tv), TM_ROOT, nr);
-        if (removed) {
-            rt.setSlot(Val.asHeap(tv), TM_CNT, Val.fixnum(Val.asFixnum(rt.slot(tv, TM_CNT)) - 1));
-        }
-        rt.popTo(base);
-        return tv;
-    }
-
-    public static int tcount(Rt rt, long t) { return (int) Val.asFixnum(rt.slot(t, TM_CNT)); }
-
-    public static long tpersistent(Rt rt, long t) {
-        int base = rt.mark();
-        int ti = rt.push(t);
-        int cnt = tcount(rt, rt.r(ti));
-        int ri = rt.push(rt.slot(rt.r(ti), TM_ROOT));
-        // Invalidate: using the handle afterwards is a bug, not a silent
-        // mutation of a value somebody else now owns.
-        rt.setSlot(Val.asHeap(rt.r(ti)), TM_EDIT, Val.NIL);
-        long out = cnt == 0 ? empty(rt) : newHashMap(rt, cnt, rt.r(ri), Val.NIL);
-        rt.popTo(base);
-        return out;
-    }
-
+    // `transientOf`, `tget`, `tassoc`, `tdissoc`, `tcount` and `tpersistent`
+    // are GENERATED, from `kin/maptrans.kin`, and callers name `Maptrans`
+    // directly. The bodies here rooted neither `notFound` nor the inner map
+    // across a descent that allocates; the generated one does.
 
     /// The entries as a VECTOR of map entries, which is what `seq` walks.
     ///

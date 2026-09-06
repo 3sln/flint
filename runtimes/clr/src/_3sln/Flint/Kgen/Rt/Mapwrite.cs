@@ -21,7 +21,7 @@ using static global::_3sln.Flint.Kgen.Rt.Tableref;
 public static class Mapwrite {
     /// An array map rebuilt as a CHAMP. The one-way door between the two
     /// representations, taken when a flat map outgrows ARRAY_MAP_MAX.
-    internal static long Promote(Rt rt, long m) {
+    public static long Promote(Rt rt, long m) {
         int @base = rt.Mark();
         int mi = rt.Push(m);
         int n = MapCount(rt, m);

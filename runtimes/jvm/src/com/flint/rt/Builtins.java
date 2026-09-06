@@ -5,6 +5,7 @@ import com._3sln.flint.kgen.rt.Mapwrite;
 import com._3sln.flint.kgen.rt.Mapread;
 
 import com._3sln.flint.kgen.rt.Mapcore;
+import com._3sln.flint.kgen.rt.Maptrans;
 
 import static com.flint.rt.Obj.*;
 
@@ -280,8 +281,8 @@ public final class Builtins {
             if (Str.isString(rt, v)) return Val.fixnum(Str.charLen(rt, v));
             if (Mapcore.isMap(rt, v)) return Val.fixnum(Mapcore.mapCount(rt, v));
             if (Sets.isSet(rt, v)) return Val.fixnum(Sets.count(rt, v));
-            if (Maps.isTransient(rt, v)) return Val.fixnum(Maps.tcount(rt, v));
-            if (Sets.isTransient(rt, v)) return Val.fixnum(Sets.tcount(rt, v));
+            if (Maps.isTransient(rt, v)) return Val.fixnum(Maptrans.tmapCount(rt, v));
+            if (Sets.isTransient(rt, v)) return Val.fixnum(Maptrans.tsetCount(rt, v));
             if (Vec.isTransient(rt, v)) return Val.fixnum(Vec.tcount(rt, v));
             if (Bytes.isBytes(rt, v)) return Val.fixnum(Bytes.count(rt, v));
             if (rt.isSeq(v)) return Val.fixnum(Seqs.count(rt, v));
@@ -404,12 +405,12 @@ public final class Builtins {
             if (rt.isHeapTy(v, Obj.TY_TABLEREF)) {
                 int rb = rt.mark();
                 int rmi = rt.push(Table.refToMap(rt, v));
-                long r = Maps.transientOf(rt, rt.r(rmi));
+                long r = Maptrans.mapTransient(rt, rt.r(rmi));
                 rt.popTo(rb);
                 return r;
             }
-            if (Mapcore.isMap(rt, v)) return Maps.transientOf(rt, v);
-            if (Sets.isSet(rt, v)) return Sets.transientOf(rt, v);
+            if (Mapcore.isMap(rt, v)) return Maptrans.mapTransient(rt, v);
+            if (Sets.isSet(rt, v)) return Maptrans.setTransient(rt, v);
             return rt.throwStr("ClassCastException",
 rt.describe(v) + " is not transientable");
         });
@@ -423,8 +424,8 @@ rt.describe(v) + " is not transientable");
                 }
                 return Vec.tpersistent(rt, v);
             }
-            if (Maps.isTransient(rt, v)) return Maps.tpersistent(rt, v);
-            if (Sets.isTransient(rt, v)) return Sets.tpersistent(rt, v);
+            if (Maps.isTransient(rt, v)) return Maptrans.tmapPersistent(rt, v);
+            if (Sets.isTransient(rt, v)) return Maptrans.tsetPersistent(rt, v);
             if (Bytes.isTransient(rt, v)) return Bytes.persistent(rt, v);
             return rt.throwStr("ClassCastException",
                 "persistent! wants a transient, got " + rt.describe(v));
@@ -447,7 +448,7 @@ rt.describe(v) + " is not transientable");
             }
             if (Sets.isTransient(rt, v)) {
                 long acc = v;
-                for (int i = 1; i < n; i++) acc = Sets.tconj(rt, acc, rt.vat(at + i));
+                for (int i = 1; i < n; i++) acc = Maptrans.tsetConj(rt, acc, rt.vat(at + i));
                 return acc;
             }
             if (Maps.isTransient(rt, v)) {
@@ -473,7 +474,7 @@ rt.describe(v) + " is not transientable");
                     int ki = rt.push(k);
                     long val = Seqs.first(rt, Seqs.rest(rt, rt.r(ei)));
                     int vi2 = rt.push(val);
-                    rt.setR(ai, Maps.tassoc(rt, rt.r(ai), rt.r(ki), rt.r(vi2)));
+                    rt.setR(ai, Maptrans.tmapAssoc(rt, rt.r(ai), rt.r(ki), rt.r(vi2)));
                     rt.popTo(ei);
                 }
                 long out = rt.r(ai);
@@ -498,7 +499,7 @@ rt.describe(v) + " is not transientable");
             }
             if (Maps.isTransient(rt, v)) {
                 long acc = v;
-                for (int i = 1; i + 1 < n; i += 2) acc = Maps.tassoc(rt, acc, rt.vat(at + i), rt.vat(at + i + 1));
+                for (int i = 1; i + 1 < n; i += 2) acc = Maptrans.tmapAssoc(rt, acc, rt.vat(at + i), rt.vat(at + i + 1));
                 return acc;
             }
             return rt.throwStr("ClassCastException",
@@ -508,12 +509,12 @@ rt.describe(v) + " is not transientable");
             long v = rt.vat(at);
             if (Maps.isTransient(rt, v)) {
                 long acc = v;
-                for (int i = 1; i < n; i++) acc = Maps.tdissoc(rt, acc, rt.vat(at + i));
+                for (int i = 1; i < n; i++) acc = Maptrans.tmapDissoc(rt, acc, rt.vat(at + i));
                 return acc;
             }
             if (Sets.isTransient(rt, v)) {
                 long acc = v;
-                for (int i = 1; i < n; i++) acc = Sets.tdisj(rt, acc, rt.vat(at + i));
+                for (int i = 1; i < n; i++) acc = Maptrans.tsetDisj(rt, acc, rt.vat(at + i));
                 return acc;
             }
             return rt.throwStr("ClassCastException",
@@ -541,8 +542,8 @@ rt.describe(v) + " is not transientable");
             // A tagged literal reads like a two-key map (`0034`).
             if (rt.isHeapTy(coll, Obj.TY_TAGGED)) return taggedGet(rt, coll, rt.vat(at + 1), dflt);
             if (Sets.isSet(rt, coll)) return Sets.get(rt, coll, rt.vat(at + 1), dflt);
-            if (Maps.isTransient(rt, coll)) return Maps.tget(rt, coll, rt.vat(at + 1), dflt);
-            if (Sets.isTransient(rt, coll)) return Sets.tget(rt, coll, rt.vat(at + 1), dflt);
+            if (Maps.isTransient(rt, coll)) return Maptrans.tmapGet(rt, coll, rt.vat(at + 1), dflt);
+            if (Sets.isTransient(rt, coll)) return Maptrans.tsetGet(rt, coll, rt.vat(at + 1), dflt);
             if (Vec.isTransient(rt, coll)) {
                 long k = rt.vat(at + 1);
                 if (!Val.isFixnum(k)) return dflt;
@@ -683,9 +684,9 @@ rt.describe(v) + " is not transientable");
             // trie, so every reader that works on the persistent value works on
             // it -- and the library reaches for exactly that while building.
             if (Maps.isTransient(rt, coll))
-                return Val.bool(Maps.tget(rt, coll, rt.vat(at + 1), Val.NOT_FOUND) != Val.NOT_FOUND);
+                return Val.bool(Maptrans.tmapGet(rt, coll, rt.vat(at + 1), Val.NOT_FOUND) != Val.NOT_FOUND);
             if (Sets.isTransient(rt, coll))
-                return Val.bool(Sets.tget(rt, coll, rt.vat(at + 1), Val.NOT_FOUND) != Val.NOT_FOUND);
+                return Val.bool(Maptrans.tsetGet(rt, coll, rt.vat(at + 1), Val.NOT_FOUND) != Val.NOT_FOUND);
             if (Vec.isTransient(rt, coll)) {
                 long k = rt.vat(at + 1);
                 return Val.bool(Val.isFixnum(k) && Val.asFixnum(k) >= 0

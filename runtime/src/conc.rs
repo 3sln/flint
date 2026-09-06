@@ -510,7 +510,7 @@ impl Rt {
         unsafe {
             use crate::aotstat::*;
             for f in &self.frames {
-                note_segment(f.instrs, (f.flags & crate::vm::FRAME_RESUMED != 0));
+                note_segment(f.instrs, f.flags & crate::vm::FRAME_RESUMED != 0);
             }
             COUNTS[if self.park_on.bits() == PARK_YIELD.bits() {
                 C_SAVES_YIELD

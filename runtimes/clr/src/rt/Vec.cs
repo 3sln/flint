@@ -82,7 +82,6 @@ public static class Vec {
     public static long TNth(Rt rt, long t, int i, long dflt) { return TvecNth(rt, t, i, dflt); }
 
     /// The TRANSIENT surface, under the names its callers already use.
-    public static long NewEditToken(Rt rt) { return _3sln.Flint.Kgen.Rt.Vectrans.NewEditToken(rt); }
     public static bool IsTransient(Rt rt, long v) { return IsTransientVector(rt, v); }
     public static int TCount(Rt rt, long t) { return TvecCount(rt, t); }
     public static bool Alive(Rt rt, long t) { return TvecAlive(rt, t); }

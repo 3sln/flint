@@ -17,9 +17,8 @@
 //! directly and never build the vector, so the materialising path is only hit by
 //! code that genuinely asks for a sequence view.
 
-use crate::obj::*;
 use crate::rt::Rt;
-use crate::value::{Value, NIL};
+use crate::value::Value;
 
 pub const C_FIRST: u32 = 0;
 pub const C_REST: u32 = 1;

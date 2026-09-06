@@ -1229,7 +1229,7 @@ impl Rt {
                         // constant-space.
                         let f = self.frames.pop().unwrap();
                         #[cfg(feature = "diagnostics")]
-                        crate::aotstat::note_frame(f.instrs, (f.flags & FRAME_RESUMED != 0));
+                        crate::aotstat::note_frame(f.instrs, f.flags & FRAME_RESUMED != 0);
                         self.handlers.truncate(f.handlers as usize);
                         let dest = f.ret_to as usize;
                         for i in 0..=argc {
@@ -1273,7 +1273,7 @@ impl Rt {
                             self.vpush(r);
                             let f = self.frames.pop().unwrap();
                             #[cfg(feature = "diagnostics")]
-                            crate::aotstat::note_frame(f.instrs, (f.flags & FRAME_RESUMED != 0));
+                            crate::aotstat::note_frame(f.instrs, f.flags & FRAME_RESUMED != 0);
                             self.handlers.truncate(f.handlers as usize);
                             let v = self.vpop();
                             self.roots.stack_top = f.ret_to as usize;
@@ -1289,7 +1289,7 @@ impl Rt {
                     let v = self.vpop();
                     let f = self.frames.pop().unwrap();
                     #[cfg(feature = "diagnostics")]
-                    crate::aotstat::note_frame(f.instrs, (f.flags & FRAME_RESUMED != 0));
+                    crate::aotstat::note_frame(f.instrs, f.flags & FRAME_RESUMED != 0);
                     self.handlers.truncate(f.handlers as usize);
                     self.roots.stack_top = f.ret_to as usize;
                     self.vpush(v);
@@ -1796,7 +1796,7 @@ impl Rt {
             }
             #[cfg(feature = "diagnostics")]
             for f in &self.frames[h.frame + 1..] {
-                crate::aotstat::note_frame(f.instrs, (f.flags & FRAME_RESUMED != 0));
+                crate::aotstat::note_frame(f.instrs, f.flags & FRAME_RESUMED != 0);
             }
             self.frames.truncate(h.frame + 1);
             self.roots.stack_top = h.stack_top;

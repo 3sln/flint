@@ -17,6 +17,12 @@ pub const S_MAP: u32 = 0;
 pub const S_META: u32 = 1;
 pub const S_HASH: u32 = 2;
 
+/// A TRANSIENT set's slots. Both ports have spelled these `TS_MAP` and
+/// `TS_EDIT` all along; native read `0` and `1` directly, which is the same
+/// layout written down nowhere.
+pub const TS_MAP: u32 = 0;
+pub const TS_EDIT: u32 = 1;
+
 impl Rt {
     pub(crate) fn init_set(&mut self) {
         let m = self.empty_map();

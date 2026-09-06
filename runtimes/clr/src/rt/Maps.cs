@@ -186,85 +186,10 @@ public static class Maps {
     public static bool IsTransient(Rt rt, long v) =>
         Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyTmap;
 
-    public static long TransientOf(Rt rt, long m) {
-        int bas = rt.Mark();
-        int mi = rt.Push(m);
-        // An array-map becomes a CHAMP FIRST: one transient implementation, and
-        // the workload that uses transients is the one with many entries.
-        long hm = IsArrayMap(rt, rt.R(mi)) ? Promote(rt, rt.R(mi)) : rt.R(mi);
-        int hi = rt.Push(hm);
-        int ei = rt.Push(Vec.NewEditToken(rt));
-        long a = rt.Alloc(Obj.TyTmap, 3);
-        if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-        long h = rt.R(hi);
-        rt.SetSlot(a, TM_CNT, Val.Fixnum(MapCount(rt, h)));
-        rt.SetSlot(a, TM_ROOT, rt.Slot(h, HM_ROOT));
-        rt.SetSlot(a, TM_EDIT, rt.R(ei));
-        rt.PopTo(bas);
-        return Val.Heap(a);
-    }
-
-    public static long TGet(Rt rt, long t, long k, long notFound) {
-        int bas = rt.Mark();
-        int ti = rt.Push(t), ki = rt.Push(k);
-        int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
-        long root = rt.Slot(rt.R(ti), TM_ROOT);
-        long r = Val.IsNil(root) ? Val.NotFound : NodeFind(rt, root, 0, h, rt.R(ki));
-        rt.PopTo(bas);
-        return r == Val.NotFound ? notFound : r;
-    }
-
-    public static long TAssoc(Rt rt, long t, long k, long v) {
-        if (Val.IsNil(rt.Slot(t, TM_EDIT)))
-            return rt.ThrowStr("IllegalStateException", "transient used after persistent!");
-        int bas = rt.Mark();
-        int ti = rt.Push(t), ki = rt.Push(k), vi = rt.Push(v);
-        int ei = rt.Push(rt.Slot(rt.R(ti), TM_EDIT));
-        int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
-        int ri = rt.Push(rt.Slot(rt.R(ti), TM_ROOT));
-        rt.champAdded = false;
-        long nr = NodeAssoc(rt, rt.R(ri), 0, h, rt.R(ki), rt.R(vi), rt.R(ei));
-        bool added = rt.champAdded;
-        long tv = rt.R(ti);
-        rt.SetSlot(Val.AsHeap(tv), TM_ROOT, nr);
-        if (added) rt.SetSlot(Val.AsHeap(tv), TM_CNT, Val.Fixnum(Val.AsFixnum(rt.Slot(tv, TM_CNT)) + 1));
-        rt.PopTo(bas);
-        return tv;
-    }
-
-    public static long TDissoc(Rt rt, long t, long k) {
-        if (Val.IsNil(rt.Slot(t, TM_EDIT)))
-            return rt.ThrowStr("IllegalStateException", "transient used after persistent!");
-        int bas = rt.Mark();
-        int ti = rt.Push(t), ki = rt.Push(k);
-        int ei = rt.Push(rt.Slot(rt.R(ti), TM_EDIT));
-        int h = Flint.Rt.Eq.HashValue(rt, rt.R(ki));
-        int ri = rt.Push(rt.Slot(rt.R(ti), TM_ROOT));
-        rt.champAdded = false;
-        long nr = NodeDissoc(rt, rt.R(ri), 0, h, rt.R(ki), rt.R(ei));
-        bool removed = rt.champAdded;
-        long tv = rt.R(ti);
-        rt.SetSlot(Val.AsHeap(tv), TM_ROOT, nr);
-        if (removed) rt.SetSlot(Val.AsHeap(tv), TM_CNT, Val.Fixnum(Val.AsFixnum(rt.Slot(tv, TM_CNT)) - 1));
-        rt.PopTo(bas);
-        return tv;
-    }
-
-    public static int TCount(Rt rt, long t) => (int) Val.AsFixnum(rt.Slot(t, TM_CNT));
-
-    public static long TPersistent(Rt rt, long t) {
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        int cnt = TCount(rt, rt.R(ti));
-        int ri = rt.Push(rt.Slot(rt.R(ti), TM_ROOT));
-        // Invalidate: using the handle afterwards is a bug, not a silent
-        // mutation of a value somebody else now owns.
-        rt.SetSlot(Val.AsHeap(rt.R(ti)), TM_EDIT, Val.Nil);
-        long outv = cnt == 0 ? Empty(rt) : NewHashMap(rt, cnt, rt.R(ri), Val.Nil);
-        rt.PopTo(bas);
-        return outv;
-    }
-
+    // `TransientOf`, `TGet`, `TAssoc`, `TDissoc`, `TCount` and `TPersistent`
+    // are GENERATED, from `kin/maptrans.kin`, and callers name `Maptrans`
+    // directly. The bodies here rooted neither `notFound` nor the inner map
+    // across a descent that allocates; the generated one does.
 
     /// The entries as a VECTOR of map entries, which is what `seq` walks.
     ///

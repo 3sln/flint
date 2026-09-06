@@ -3,13 +3,9 @@
 //! atoms, metadata and number formatting.
 
 use crate::hash;
-use crate::map::{AM_META, HM_META, HM_ROOT};
 use crate::obj::*;
 use crate::rt::Rt;
-use crate::seqs::C_META;
-use crate::set::{S_MAP, S_META};
 use crate::value::{Value, INLINE_MAX, NIL, NOT_FOUND};
-use crate::vector::V_META;
 
 /// Substring search over bytes. Naive, which is what the gas charge above is
 /// priced for, and enough for the one-character separators that dominate.
@@ -1235,183 +1231,11 @@ fn fmt_i64(mut n: i64, buf: &mut [u8; 24]) -> &str {
 // --- transient maps and sets -------------------------------------------------
 
 impl Rt {
-    pub fn map_transient(&mut self, m: Value) -> Value {
-        let base = self.mark();
-        let mi = self.push(m);
-        // An array-map becomes a CHAMP first: one transient implementation, and
-        // the workload that uses transients is the one with many entries.
-        let hm = if self.is_array_map(m) { self.array_map_to_hash(m) } else { m };
-        let hi = self.push(hm);
-        let edit = self.new_edit_token();
-        let ei = self.push(edit);
-        let a = self.alloc(TY_TMAP, 3);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        let hm = self.r(hi);
-        let cnt = self.map_count(hm);
-        let root = self.slot(hm, HM_ROOT);
-        let edit = self.r(ei);
-        self.pop_to(base);
-        let _ = mi;
-        self.set_slot(a, 0, Value::fixnum(cnt as i64));
-        self.set_slot(a, 1, root);
-        self.set_slot(a, 2, edit);
-        Value::heap(a)
-    }
+    // `map_transient`, `tmap_get`, `tmap_assoc`, `tmap_dissoc`, `tmap_count`,
+    // `tmap_persistent`, `set_transient`, `tset_conj`, `tset_disj`,
+    // `tset_count`, `tset_get` and `tset_persistent` are GENERATED, from
+    // `kin/maptrans.kin`.
 
-    pub fn tmap_get(&mut self, t: Value, k: Value, dflt: Value) -> Value {
-        if !self.eq_may_alloc(k) {
-            let root = self.slot(t, 1);
-            if root.is_nil() {
-                return dflt;
-            }
-            let h = self.hash_value(k);
-            let r = self.champ_find(root, h, k);
-            return if r == NOT_FOUND { dflt } else { r };
-        }
-        let base = self.mark();
-        let ti = self.push(t);
-        let ki = self.push(k);
-        let di = self.push(dflt);
-        // Hash before reading the root: hashing a compound key allocates.
-        let h = self.hash_value(self.r(ki));
-        let root = self.slot(self.r(ti), 1);
-        if root.is_nil() {
-            let d = self.r(di);
-            self.pop_to(base);
-            return d;
-        }
-        let r = self.champ_find(root, h, self.r(ki));
-        let dflt = self.r(di);
-        self.pop_to(base);
-        if r == NOT_FOUND {
-            dflt
-        } else {
-            r
-        }
-    }
-
-    pub fn tmap_assoc(&mut self, t: Value, k: Value, v: Value) -> Value {
-        let edit = self.slot(t, 2);
-        if edit.is_nil() {
-            return self.throw_str("IllegalStateException", "transient used after persistent!");
-        }
-        let base = self.mark();
-        let ti = self.push(t);
-        let ki = self.push(k);
-        let vi = self.push(v);
-        let ei = self.push(edit);
-        let h = self.hash_value(self.r(ki));
-        let root = self.slot(self.r(ti), 1);
-        let ri = self.push(root);
-        self.champ_added = false;
-        let nr = self.champ_assoc(self.r(ri), h, self.r(ki), self.r(vi), self.r(ei));
-        let added = self.champ_added;
-        let t = self.r(ti);
-        self.set(t, 1, nr);
-        if added {
-            let c = self.slot(t, 0).as_fixnum();
-            self.set(t, 0, Value::fixnum(c + 1));
-        }
-        self.pop_to(base);
-        t
-    }
-
-    pub fn tmap_dissoc(&mut self, t: Value, k: Value) -> Value {
-        let edit = self.slot(t, 2);
-        if edit.is_nil() {
-            return self.throw_str("IllegalStateException", "transient used after persistent!");
-        }
-        let base = self.mark();
-        let ti = self.push(t);
-        let ki = self.push(k);
-        let ei = self.push(edit);
-        let h = self.hash_value(self.r(ki));
-        let root = self.slot(self.r(ti), 1);
-        let ri = self.push(root);
-        self.champ_added = false;
-        let nr = self.champ_dissoc(self.r(ri), h, self.r(ki), self.r(ei));
-        let removed = self.champ_added;
-        let t = self.r(ti);
-        self.set(t, 1, nr);
-        if removed {
-            let c = self.slot(t, 0).as_fixnum();
-            self.set(t, 0, Value::fixnum(c - 1));
-        }
-        self.pop_to(base);
-        t
-    }
-
-    pub fn tmap_persistent(&mut self, t: Value) -> Value {
-        let base = self.mark();
-        let ti = self.push(t);
-        let cnt = self.slot(t, 0).as_fixnum() as u32;
-        let root = self.slot(t, 1);
-        let ri = self.push(root);
-        let tv = self.r(ti);
-        self.set(tv, 2, NIL); // invalidate
-        let root = self.r(ri);
-        let out = if cnt == 0 { self.empty_map() } else { self.champ_wrap(cnt, root) };
-        self.pop_to(base);
-        out
-    }
-
-    pub fn set_transient(&mut self, s: Value) -> Value {
-        let base = self.mark();
-        let m = self.slot(s, S_MAP);
-        let tm = self.map_transient(m);
-        let ti = self.push(tm);
-        let a = self.alloc(TY_TSET, 2);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        let tm = self.r(ti);
-        let edit = self.slot(tm, 2);
-        self.pop_to(base);
-        self.set_slot(a, 0, tm);
-        self.set_slot(a, 1, edit);
-        Value::heap(a)
-    }
-
-    pub fn tset_conj(&mut self, t: Value, x: Value) -> Value {
-        let m = self.slot(t, 0);
-        let base = self.mark();
-        let ti = self.push(t);
-        let xi = self.push(x);
-        let (a, b) = (self.r(xi), self.r(xi));
-        let _ = self.tmap_assoc(m, a, b);
-        let out = self.r(ti);
-        self.pop_to(base);
-        out
-    }
-
-    pub fn tset_disj(&mut self, t: Value, x: Value) -> Value {
-        let m = self.slot(t, 0);
-        let base = self.mark();
-        let ti = self.push(t);
-        let xi = self.push(x);
-        let x = self.r(xi);
-        let _ = self.tmap_dissoc(m, x);
-        let out = self.r(ti);
-        self.pop_to(base);
-        out
-    }
-
-    pub fn tset_persistent(&mut self, t: Value) -> Value {
-        let base = self.mark();
-        let m = self.slot(t, 0);
-        let pm = self.tmap_persistent(m);
-        let pi = self.push(pm);
-        let tv = self.r(pi);
-        self.pop_to(base);
-        self.set_from_map(tv)
-    }
-}
-
-impl Rt {
     pub fn hash_of_str(&mut self, s: &str) -> u32 {
         hash::hash_string(s)
     }

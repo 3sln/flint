@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn space_reports_exhaustion_rather_than_crashing() {
         let mut s = Space::new(2 * PAGE);
-        assert_ne!(s.take((PAGE as Addr)), 0);
+        assert_ne!(s.take(PAGE as Addr), 0);
         assert_eq!(s.take(64 * (PAGE as Addr)), 0);
     }
 
