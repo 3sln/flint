@@ -61,12 +61,12 @@ public static class Hash {
             return seed ^ (((h + unchecked((int) 0x9e3779b9)) + (seed << 6)) + (seed >> 2));
         }
     }
-    internal static int MixCollHash(int hash, int count) {
+    public static int MixCollHash(int hash, int count) {
         unchecked {
             return Fmix(MixH1(Seed, MixK1(hash)), count);
         }
     }
-    internal static int OrderedStep(int acc, int itemHash) {
+    public static int OrderedStep(int acc, int itemHash) {
         unchecked {
             return (acc * 31) + itemHash;
         }

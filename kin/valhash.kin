@@ -1,0 +1,75 @@
+;; THE ORDERED HASH: what a vector, a list, a seq and a map entry all hash as.
+;;
+;; ONE WALK, and both ports had TWO. Their `hashValue` hashed a VECTOR with an
+;; indexed loop that CACHED but charged nothing, and everything else sequential
+;; with a seq walk that CHARGED but did not cache. Native had this, which does
+;; both -- and the uncharged half is the defect `0009` records costing 998 068
+;; steps past an exhausted budget, still live on the JVM and the CLR for the
+;; one shape most likely to be big.
+;;
+;; A TICK AND NOT A PRE-CHARGE, because this walks a SEQ: its length is not
+;; known until it ends, and it may not end at all.
+;;
+;; `v` IS ROOTED FOR THE WHOLE WALK. `seq`, `first` and `next` allocate, and
+;; the cache write at the end would otherwise land on a stale address -- which
+;; is not a wrong hash, it is a corrupted heap (`0031`).
+(ns flint.rt.valhash
+  (:require [flint.impl.rt :refer [defn return if let do comment doc local set
+                                   == not nil? is-heap as-heap ty is-fixnum
+                                   as-fixnum to-i32 fixnum slot set-slot
+                                   mark push r set-r pop-to forever break +
+                                   charge-tick hash-value to-i64
+                                   Rt Value I32 U32 Ty Bool RootIx NIL
+                                   TY_VEC V_HASH]]
+            [flint.rt.hash :refer [ordered-step mix-coll-hash]]
+            [flint.rt.seqwalk :refer [seq first next]]))
+
+(doc "Is `v` a VECTOR, strictly? Only a vector has a slot to cache in.")
+(defn ^:method ^Bool has-hash-slot [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_VEC)))
+
+(doc "The hash of a sequential value, in order."
+     ""
+     "CACHED IN THE VECTOR'S OWN HEADER when there is one. A vector used as a"
+     "map key must not rehash on every lookup, and a seq has nowhere to put"
+     "the answer -- so the cache is asked for and written only where it"
+     "exists.")
+(defn ^:pub ^:method ^U32 hash-ordered [^:mut ^Rt rt ^Value v]
+  (if (has-hash-slot rt v)
+    (let [^Value cached (slot rt v V_HASH)]
+      (if (is-fixnum rt cached)
+        (return (to-i32 (as-fixnum cached))))))
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^Value s0 (seq rt (r rt vi))
+        ^RootIx si (push rt s0)]
+    (local ^:mut ^U32 acc)
+    (local ^:mut ^I32 n)
+    (local ^:mut ^Bool starved)
+    (set acc 1)
+    (set n 0)
+    (set starved false)
+    (forever
+      (do (if (nil? rt (r rt si))
+            (break))
+          (if (not (charge-tick rt (to-i64 n) 1 "hash"))
+            (do (set starved true)
+                (break)))
+          (let [^Value f (first rt (r rt si))
+                ^RootIx fi (push rt f)
+                ^U32 h (hash-value rt (r rt fi))]
+            (pop-to rt fi)
+            (set acc (ordered-step acc h)))
+          (set n (+ n 1))
+          (let [^Value nx (next rt (r rt si))]
+            (set-r rt si nx))))
+    (if starved
+      (do (pop-to rt base)
+          (return 0)))
+    (let [^U32 out (mix-coll-hash acc n)]
+      (if (has-hash-slot rt (r rt vi))
+        (set-slot rt (r rt vi) V_HASH (fixnum (to-i64 out))))
+      (pop-to rt base)
+      (return out))))

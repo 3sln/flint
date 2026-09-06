@@ -55,11 +55,11 @@ pub fn hash_long(input: i64) -> u32 {
 pub(crate) fn hash_combine(seed: u32, h: u32) -> u32 {
     return seed ^ h.wrapping_add(0x9e3779b9).wrapping_add(seed << 6).wrapping_add(((seed as i32) >> 2) as u32);
 }
-pub(crate) fn mix_coll_hash(hash: u32, count: u32) -> u32 {
+pub fn mix_coll_hash(hash: u32, count: u32) -> u32 {
     return fmix(mix_h1(SEED, mix_k1(hash)), count);
 }
 #[inline]
-pub(crate) fn ordered_step(acc: u32, item_hash: u32) -> u32 {
+pub fn ordered_step(acc: u32, item_hash: u32) -> u32 {
     return acc.wrapping_mul(31).wrapping_add(item_hash);
 }
 #[inline]

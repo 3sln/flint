@@ -55,25 +55,20 @@ public static class Eq {
             case Obj.TyBrope: return Bytes.Hash(rt, v);
             case Obj.TyKw: return Hash.HashKeyword(NsBytes(rt, v), Str.Bytes(rt, rt.Slot(v, 1)));
             case Obj.TySym: return Hash.HashSymbol(NsBytes(rt, v), Str.Bytes(rt, rt.Slot(v, 1)));
-            case Obj.TyVec: {
-                // Cached in the vector's own header, as the native runtime has
-                // always done. `HashValue` on the elements can allocate, so the
-                // vector is ROOTED across the walk -- the write at the end would
-                // otherwise land on a stale address, which is not a wrong hash
-                // but a corrupted heap (`doc/decisions/0031`).
-                long cached = rt.Slot(v, Vec.V_HASH);
-                if (Val.IsFixnum(cached)) return (int) Val.AsFixnum(cached);
-                int bas = rt.Mark();
-                int vi = rt.Push(v);
-                int n = Vec.Count(rt, rt.R(vi)), acc = 1;
-                for (int i = 0; i < n; i++) {
-                    acc = _3sln.Flint.Kgen.Rt.Hash.OrderedStep(acc, HashValue(rt, Vec.Nth(rt, rt.R(vi), i, Val.NotFound)));
-                }
-                int h = _3sln.Flint.Kgen.Rt.Hash.MixCollHash(acc, n);
-                rt.SetSlot(Val.AsHeap(rt.R(vi)), Vec.V_HASH, Val.Fixnum(h));
-                rt.PopTo(bas);
-                return h;
-            }
+            // GENERATED, from `kin/valhash.kin`. There were TWO ordered
+            // walks here: this one, which cached and charged NOTHING, and the
+            // seq walk below, which charged and did not cache. The uncharged
+            // half is `0009`'s unbounded walk, still live for the shape most
+            // likely to be big.
+            case Obj.TyVec:
+            case Obj.TyMapentry:
+            case Obj.TyCons:
+            case Obj.TyEmptyList:
+            case Obj.TyLazyseq:
+            case Obj.TyVecseq:
+            case Obj.TyStrseq:
+            case Obj.TyRange:
+                return global::_3sln.Flint.Kgen.Rt.Valhash.HashOrdered(rt, v);
             case Obj.TyArraymap:
             case Obj.TyHashmap: return Maps.Hash(rt, v);
             // Both halves, so two equal tagged literals share a bucket.
@@ -92,25 +87,16 @@ public static class Eq {
                 rt.PopTo(bas);
                 return _3sln.Flint.Kgen.Rt.Hash.HashInt(acc ^ n);
             }
+            // THE FINAL MIX WAS MISSING. Native wraps this in `HashInt` and
+            // both ports did not -- so a tagged literal hashed differently on
+            // wasm, and these two apply the mix for a TABLE two arms up. The
+            // ports were inconsistent with themselves as well as with native.
             case Obj.TyTagged:
-                return HashValue(rt, rt.Slot(v, 0)) * 31 + HashValue(rt, rt.Slot(v, 1));
+                return global::_3sln.Flint.Kgen.Rt.Hash.HashInt(
+                    HashValue(rt, rt.Slot(v, 0)) * 31 + HashValue(rt, rt.Slot(v, 1)));
             case Obj.TySet: return Sets.Hash(rt, v);
             default: {
-                if (rt.IsSeq(v)) {
-                    int bas = rt.Mark();
-                    int s = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, v));
-                    int acc = 1, n = 0;
-                    while (!Val.IsNil(rt.R(s))) {
-                        // A TICK: a seq's length is not known until it ends.
-                        if (!rt.ChargeTick(n, 1, "hash")) { rt.PopTo(bas); return 0; }
-                        acc = _3sln.Flint.Kgen.Rt.Hash.OrderedStep(acc, HashValue(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(s))));
-                        n++;
-                        long nx = global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(s));
-                        rt.SetR(s, nx);
-                    }
-                    rt.PopTo(bas);
-                    return _3sln.Flint.Kgen.Rt.Hash.MixCollHash(acc, n);
-                }
+                if (rt.IsSeq(v)) return global::_3sln.Flint.Kgen.Rt.Valhash.HashOrdered(rt, v);
                 return 0;
             }
         }

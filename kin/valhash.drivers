@@ -1,0 +1,324 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_VEC: u8 = 10; const TY_CONS: u8 = 11; const TY_OTHER: u8 = 12;
+const V_HASH: u32 = 0;
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+// `budget` is how many ticks the walk may take before it starves, which is
+// the half both ports were missing for a vector: they charged nothing there.
+struct Rt { gc: Gc, bump: u64, roots: Vec<Value>, slots: Vec<[u64; 2]>,
+            budget: i32, ticks: u32, seqn: u32 }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 < 0x1000_0000 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn is_fixnum(self) -> bool { (self.0 >> 32) == 1 }
+    fn as_fixnum(self) -> i64 { (self.0 & 0xFFFF_FFFF) as i64 }
+    fn fixnum(n: i64) -> Value { Value(0x1_0000_0000u64 | (n as u64 & 0xFFFF_FFFF)) }
+}
+fn ordered_step(acc: u32, h: u32) -> u32 { acc.wrapping_mul(31).wrapping_add(h) }
+fn mix_coll_hash(acc: u32, n: u32) -> u32 { acc ^ (n.wrapping_mul(0x9E37_79B9)) }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn slot(&self, v: Value, i: u32) -> Value { Value(self.slots[v.0 as usize][i as usize]) }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.slots[v.0 as usize][i as usize] = x.0; }
+    fn obj(&mut self, t: u8) -> Value {
+        let a = self.bump; self.bump += 1;
+        self.gc.sp.m[a as usize] = t;
+        self.slots[a as usize] = [0u64; 2];
+        Value(a)
+    }
+    fn charge_tick(&mut self, _n: u64, _c: u64, _why: &str) -> bool {
+        self.ticks += 1;
+        self.budget -= 1;
+        self.budget >= 0
+    }
+    // Each element hashes to its own position, so a walk that stops early or
+    // charges differently shows up in the answer rather than only the count.
+    fn hash_value(&mut self, v: Value) -> u32 { (v.0 & 0xFF) as u32 }
+    fn seq(&mut self, c: Value) -> Value {
+        let n = if c.is_heap() && ty(&self.gc.sp, c.as_heap()) == TY_VEC {
+            self.slots[c.0 as usize][1] as u32
+        } else { self.seqn };
+        if n == 0 { NIL } else { Value(0xC000 + n as u64) }
+    }
+    fn first(&mut self, s: Value) -> Value { Value(0xE000 + (s.0 - 0xC000)) }
+    fn next(&mut self, s: Value) -> Value {
+        if s.0 == 0xC001 { NIL } else { Value(s.0 - 1) }
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { gc: Gc { sp: Space { m: vec![0u8; 400] } }, bump: 100,
+                      roots: Vec::new(), slots: vec![[0u64; 2]; 400],
+                      budget: 1000, ticks: 0, seqn: 3 };
+    let mut o = String::new();
+
+    // A VECTOR IS WALKED, CHARGED and CACHED. The charge is the half both
+    // ports were missing for this shape.
+    let v = rt.obj(TY_VEC);
+    rt.slots[v.0 as usize][1] = 3;
+    rt.ticks = 0;
+    let h1 = rt.hash_ordered(v);
+    o.push_str(&format!("v={:x} ticks={} ", h1, rt.ticks));
+    // ... and the SECOND call reads the cache: no ticks at all.
+    rt.ticks = 0;
+    let h2 = rt.hash_ordered(v);
+    o.push_str(&format!("again={:x} ticks={} cached={} ", h2, rt.ticks,
+                        rt.slot(v, V_HASH).is_fixnum() as u32));
+
+    // A SEQ has nowhere to cache, so it walks and charges every time.
+    let c = rt.obj(TY_CONS);
+    rt.ticks = 0;
+    let h3 = rt.hash_ordered(c);
+    o.push_str(&format!("c={:x} ticks={} ", h3, rt.ticks));
+    rt.ticks = 0;
+    let h4 = rt.hash_ordered(c);
+    o.push_str(&format!("cagain={:x} ticks={} nocache={} ", h4, rt.ticks,
+                        rt.slot(c, V_HASH).is_fixnum() as u32));
+
+    // AN EMPTY ONE is the walk that never enters its body.
+    let e = rt.obj(TY_VEC);
+    rt.slots[e.0 as usize][1] = 0;
+    rt.ticks = 0;
+    o.push_str(&format!("e={:x} ticks={} ", rt.hash_ordered(e), rt.ticks));
+
+    // STARVED: the tick refuses and the answer is 0, with nothing cached.
+    let s = rt.obj(TY_VEC);
+    rt.slots[s.0 as usize][1] = 5;
+    rt.budget = 2;
+    rt.ticks = 0;
+    let hs = rt.hash_ordered(s);
+    o.push_str(&format!("starve={:x} ticks={} uncached={} ", hs, rt.ticks,
+                        rt.slot(s, V_HASH).is_fixnum() as u32));
+    rt.budget = 1000;
+
+    // A NON-HEAP value has no slot to ask about and no seq: it must not index
+    // the type array with something that is not an address.
+    rt.seqn = 0;
+    o.push_str(&format!("nil={:x} ", rt.hash_ordered(NIL)));
+    rt.seqn = 3;
+
+    // THE CACHE ROUND-TRIPS A HIGH BIT. A hash with bit 31 set is stored and
+    // read back as the same 32 bits, whichever way the target spells it.
+    let big = rt.obj(TY_VEC);
+    rt.slots[big.0 as usize][1] = 0;
+    rt.set(big, V_HASH, Value::fixnum(0xFFFF_FFFFu32 as i64));
+    o.push_str(&format!("hi={:x}", rt.hash_ordered(big)));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_VEC = 10, TY_CONS = 11, TY_OTHER = 12;
+    static final int V_HASH = 0;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isHeap(long v) { return v >= 100 && v < 0x10000000L && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static boolean isNil(long v) { return v == NIL; }
+        static boolean isFixnum(long v) { return (v >>> 32) == 1; }
+        static long asFixnum(long v) { return v & 0xFFFFFFFFL; }
+        static long fixnum(long n) { return 0x100000000L | (n & 0xFFFFFFFFL); }
+    }
+    static final class Space { byte[] m = new byte[400]; }
+    static final class Rt {
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        long bump = 100;
+        long[][] slots = new long[400][2];
+        int budget = 1000, ticks = 0, seqn = 3;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long v, int i) { return slots[(int) v][i]; }
+        void setSlot(long a, int i, long x) { slots[(int) a][i] = x; }
+        long obj(int t) {
+            long a = bump; bump += 1;
+            gc.sp.m[(int) a] = (byte) t;
+            slots[(int) a] = new long[2];
+            return a;
+        }
+        boolean chargeTick(long n, long c, String why) {
+            ticks++; budget--; return budget >= 0;
+        }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static int orderedStep(int acc, int h) { return acc * 31 + h; }
+    static int mixCollHash(int acc, int n) { return acc ^ (n * 0x9E3779B9); }
+    static final class com { static final class flint { static final class rt {
+        static final class Eq { static int hashValue(Rt rt, long v) { return (int) (v & 0xFF); } }
+    } } }
+    static long seq(Rt rt, long c) {
+        int n = (Val.isHeap(c) && ty(rt.gc.sp, Val.asHeap(c)) == TY_VEC)
+                ? (int) rt.slots[(int) c][1] : rt.seqn;
+        return n == 0 ? NIL : 0xC000L + n;
+    }
+    static long first(Rt rt, long s) { return 0xE000L + (s - 0xC000L); }
+    static long next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+
+        long v = rt.obj(TY_VEC);
+        rt.slots[(int) v][1] = 3;
+        rt.ticks = 0;
+        int h1 = hashOrdered(rt, v);
+        o.append("v=").append(Integer.toHexString(h1)).append(" ticks=").append(rt.ticks).append(' ');
+        rt.ticks = 0;
+        int h2 = hashOrdered(rt, v);
+        o.append("again=").append(Integer.toHexString(h2)).append(" ticks=").append(rt.ticks)
+         .append(" cached=").append(Val.isFixnum(rt.slot(v, V_HASH)) ? 1 : 0).append(' ');
+
+        long c = rt.obj(TY_CONS);
+        rt.ticks = 0;
+        int h3 = hashOrdered(rt, c);
+        o.append("c=").append(Integer.toHexString(h3)).append(" ticks=").append(rt.ticks).append(' ');
+        rt.ticks = 0;
+        int h4 = hashOrdered(rt, c);
+        o.append("cagain=").append(Integer.toHexString(h4)).append(" ticks=").append(rt.ticks)
+         .append(" nocache=").append(Val.isFixnum(rt.slot(c, V_HASH)) ? 1 : 0).append(' ');
+
+        long e = rt.obj(TY_VEC);
+        rt.slots[(int) e][1] = 0;
+        rt.ticks = 0;
+        o.append("e=").append(Integer.toHexString(hashOrdered(rt, e)))
+         .append(" ticks=").append(rt.ticks).append(' ');
+
+        long s = rt.obj(TY_VEC);
+        rt.slots[(int) s][1] = 5;
+        rt.budget = 2;
+        rt.ticks = 0;
+        int hs = hashOrdered(rt, s);
+        o.append("starve=").append(Integer.toHexString(hs)).append(" ticks=").append(rt.ticks)
+         .append(" uncached=").append(Val.isFixnum(rt.slot(s, V_HASH)) ? 1 : 0).append(' ');
+        rt.budget = 1000;
+
+        rt.seqn = 0;
+        o.append("nil=").append(Integer.toHexString(hashOrdered(rt, NIL))).append(' ');
+        rt.seqn = 3;
+
+        long big = rt.obj(TY_VEC);
+        rt.slots[(int) big][1] = 0;
+        rt.setSlot(big, V_HASH, Val.fixnum(0xFFFFFFFFL));
+        o.append("hi=").append(Integer.toHexString(hashOrdered(rt, big)));
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Eq {
+        internal static int HashValue(Probe.Rt rt, long v) { return (int) (v & 0xFF); }
+    }
+}
+--csharp-head
+    internal const long NIL = 0xFFFFL;
+    internal static class Obj {
+        internal const int TyVec = 10, TyCons = 11, TyOther = 12;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal const int V_HASH = 0;
+    internal static class Val {
+        internal const long Nil = Probe.NIL;
+        internal static bool IsHeap(long v) { return v >= 100 && v < 0x10000000L && v != NIL; }
+        internal static long AsHeap(long v) { return v; }
+        internal static bool IsNil(long v) { return v == NIL; }
+        internal static bool IsFixnum(long v) { return (v >> 32) == 1; }
+        internal static long AsFixnum(long v) { return v & 0xFFFFFFFFL; }
+        internal static long Fixnum(long n) { return 0x100000000L | (n & 0xFFFFFFFFL); }
+    }
+    internal sealed class Space { internal byte[] m = new byte[400]; }
+    internal sealed class Rt {
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal long[,] slots = new long[400, 2];
+        internal int budget = 1000, ticks = 0, seqn = 3;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal void PopTo(int n) { while (roots.Count > n) roots.RemoveAt(roots.Count - 1); }
+        internal long Slot(long v, int i) { return slots[(int) v, i]; }
+        internal void SetSlot(long a, int i, long x) { slots[(int) a, i] = x; }
+        internal long Obj_(int t) {
+            long a = bump; bump += 1;
+            gc.sp.m[(int) a] = (byte) t;
+            slots[(int) a, 0] = 0; slots[(int) a, 1] = 0;
+            return a;
+        }
+        internal bool ChargeTick(long n, long c, string why) {
+            ticks++; budget--; return budget >= 0;
+        }
+    }
+    internal static int OrderedStep(int acc, int h) { return acc * 31 + h; }
+    internal static int MixCollHash(int acc, int n) { return acc ^ unchecked(n * (int) 0x9E3779B9); }
+    internal static long Seq(Rt rt, long c) {
+        int n = (Val.IsHeap(c) && Obj.Ty(rt.gc.sp, Val.AsHeap(c)) == Obj.TyVec)
+                ? (int) rt.slots[(int) c, 1] : rt.seqn;
+        return n == 0 ? NIL : 0xC000L + n;
+    }
+    internal static long First(Rt rt, long s) { return 0xE000L + (s - 0xC000L); }
+    internal static long Next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+--csharp
+    public static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+
+        long v = rt.Obj_(Obj.TyVec);
+        rt.slots[(int) v, 1] = 3;
+        rt.ticks = 0;
+        int h1 = HashOrdered(rt, v);
+        o.Append("v=").Append(h1.ToString("x")).Append(" ticks=").Append(rt.ticks).Append(' ');
+        rt.ticks = 0;
+        int h2 = HashOrdered(rt, v);
+        o.Append("again=").Append(h2.ToString("x")).Append(" ticks=").Append(rt.ticks)
+         .Append(" cached=").Append(Val.IsFixnum(rt.Slot(v, V_HASH)) ? 1 : 0).Append(' ');
+
+        long c = rt.Obj_(Obj.TyCons);
+        rt.ticks = 0;
+        int h3 = HashOrdered(rt, c);
+        o.Append("c=").Append(h3.ToString("x")).Append(" ticks=").Append(rt.ticks).Append(' ');
+        rt.ticks = 0;
+        int h4 = HashOrdered(rt, c);
+        o.Append("cagain=").Append(h4.ToString("x")).Append(" ticks=").Append(rt.ticks)
+         .Append(" nocache=").Append(Val.IsFixnum(rt.Slot(c, V_HASH)) ? 1 : 0).Append(' ');
+
+        long e = rt.Obj_(Obj.TyVec);
+        rt.slots[(int) e, 1] = 0;
+        rt.ticks = 0;
+        o.Append("e=").Append(HashOrdered(rt, e).ToString("x"))
+         .Append(" ticks=").Append(rt.ticks).Append(' ');
+
+        long s = rt.Obj_(Obj.TyVec);
+        rt.slots[(int) s, 1] = 5;
+        rt.budget = 2;
+        rt.ticks = 0;
+        int hs = HashOrdered(rt, s);
+        o.Append("starve=").Append(hs.ToString("x")).Append(" ticks=").Append(rt.ticks)
+         .Append(" uncached=").Append(Val.IsFixnum(rt.Slot(s, V_HASH)) ? 1 : 0).Append(' ');
+        rt.budget = 1000;
+
+        rt.seqn = 0;
+        o.Append("nil=").Append(HashOrdered(rt, NIL).ToString("x")).Append(' ');
+        rt.seqn = 3;
+
+        long big = rt.Obj_(Obj.TyVec);
+        rt.slots[(int) big, 1] = 0;
+        rt.SetSlot(big, V_HASH, Val.Fixnum(0xFFFFFFFFL));
+        o.Append("hi=").Append(HashOrdered(rt, big).ToString("x"));
+        System.Console.WriteLine(o.ToString());
+    }

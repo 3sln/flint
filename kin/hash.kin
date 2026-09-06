@@ -60,12 +60,12 @@
                                       (shl seed 6))
                                (sar seed 2)))))
 
-(defn ^:unchecked ^U32 mix-coll-hash [^U32 hash ^U32 count]
+(defn ^:pub ^:unchecked ^U32 mix-coll-hash [^U32 hash ^U32 count]
   (return (fmix (mix-h1 SEED (mix-k1 hash)) count)))
 
 ;; The running accumulators. Start ordered at 1 and unordered at 0, fold, then
 ;; `mix-coll-hash` with the count.
-(defn ^:inline ^:unchecked ^U32 ordered-step [^U32 acc ^U32 item-hash]
+(defn ^:pub ^:inline ^:unchecked ^U32 ordered-step [^U32 acc ^U32 item-hash]
   (return (add32 (mul32 acc 31) item-hash)))
 
 (defn ^:inline ^:unchecked ^U32 unordered-step [^U32 acc ^U32 item-hash]

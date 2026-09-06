@@ -131,48 +131,7 @@ impl Rt {
         }
     }
 
-    pub fn hash_ordered(&mut self, v: Value) -> u32 {
-        if self.is_vector(v) {
-            let cached = self.slot(v, crate::vector::V_HASH);
-            if cached.is_fixnum() {
-                return cached.as_fixnum() as i32 as u32;
-            }
-        }
-        // `v` is rooted for the whole walk: seq/first/next allocate, and the
-        // cache write at the end would otherwise land on a stale address --
-        // which is not a wrong hash, it is a corrupted heap.
-        let base = self.mark();
-        let vi = self.push(v);
-        let s = self.seq(self.r(vi));
-        let si = self.push(s);
-        let mut acc = 1u32;
-        let mut n = 0u32;
-        while !self.r(si).is_nil() {
-            // A TICK and not a pre-charge: this walks a SEQ, whose length is not
-            // known until it ends, and which may not end at all. `charge_work`
-            // billed each element and stopped nothing -- 998 068 steps past an
-            // exhausted budget.
-            if !self.charge_tick(n as u64, 1, "hash") {
-                self.pop_to(base);
-                return 0;
-            }
-            let f = self.first(self.r(si));
-            let fi = self.push(f);
-            let h = self.hash_value(self.r(fi));
-            self.pop_to(fi);
-            acc = hash::ordered_step(acc, h);
-            n += 1;
-            let nx = self.next(self.r(si));
-            self.set_r(si, nx);
-        }
-        let h = hash::mix_coll_hash(acc, n);
-        if self.is_vector(self.r(vi)) {
-            let vv = self.r(vi);
-            self.set(vv, crate::vector::V_HASH, Value::fixnum(h as i32 as i64));
-        }
-        self.pop_to(base);
-        h
-    }
+    // `hash_ordered` is GENERATED, from `kin/valhash.kin`.
 
     // --- compare -----------------------------------------------------------
 

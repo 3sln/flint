@@ -50,25 +50,19 @@ public final class Eq {
             case TY_ROPE: return Str.ropeHash(rt, v);
             case TY_KW: return Hash.hashKeyword(nsBytes(rt, v), Str.bytes(rt, rt.slot(v, 1)));
             case TY_SYM: return Hash.hashSymbol(nsBytes(rt, v), Str.bytes(rt, rt.slot(v, 1)));
-            case TY_VEC: {
-                // Cached in the vector's own header, as the native runtime has
-                // always done. `hashValue` on the elements can allocate, so the
-                // vector is ROOTED across the walk -- the write at the end would
-                // otherwise land on a stale address, which is not a wrong hash
-                // but a corrupted heap (`doc/decisions/0031`).
-                long cached = rt.slot(v, Vec.V_HASH);
-                if (Val.isFixnum(cached)) return (int) Val.asFixnum(cached);
-                int base = rt.mark();
-                int vi = rt.push(v);
-                int n = Vec.count(rt, rt.r(vi)), acc = 1;
-                for (int i = 0; i < n; i++) {
-                    acc = com._3sln.flint.kgen.rt.Hash.orderedStep(acc, hashValue(rt, Vec.nth(rt, rt.r(vi), i, Val.NOT_FOUND)));
-                }
-                int h = com._3sln.flint.kgen.rt.Hash.mixCollHash(acc, n);
-                rt.setSlot(Val.asHeap(rt.r(vi)), Vec.V_HASH, Val.fixnum(h));
-                rt.popTo(base);
-                return h;
-            }
+            // GENERATED, from `kin/valhash.kin`. There were TWO ordered
+            // walks here: this one, which cached and charged NOTHING, and the
+            // seq walk below, which charged and did not cache. The uncharged
+            // half is `0009`'s unbounded walk, still live for the shape most
+            // likely to be big.
+            case TY_VEC: return com._3sln.flint.kgen.rt.Valhash.hashOrdered(rt, v);
+            case TY_MAPENTRY:
+            case TY_CONS:
+            case TY_EMPTY_LIST:
+            case TY_LAZYSEQ:
+            case TY_VECSEQ:
+            case TY_STRSEQ:
+            case TY_RANGE: return com._3sln.flint.kgen.rt.Valhash.hashOrdered(rt, v);
             case TY_ARRAYMAP:
             case TY_HASHMAP: return Maps.hash(rt, v);
             // Both halves, so two equal tagged literals land in one bucket.
@@ -88,30 +82,20 @@ public final class Eq {
                 rt.popTo(base);
                 return com._3sln.flint.kgen.rt.Hash.hashInt(acc ^ n);
             }
+            // THE FINAL MIX WAS MISSING. Native wraps this in `hashInt` and
+            // both ports did not -- so a tagged literal hashed differently on
+            // wasm, and these two apply the mix for a TABLE two arms up. The
+            // ports were inconsistent with themselves as well as with native.
             case Obj.TY_TAGGED:
-                return hashValue(rt, rt.slot(v, 0)) * 31 + hashValue(rt, rt.slot(v, 1));
+                return com._3sln.flint.kgen.rt.Hash.hashInt(
+                    hashValue(rt, rt.slot(v, 0)) * 31 + hashValue(rt, rt.slot(v, 1)));
             case TY_SET: return Sets.hash(rt, v);
             // A byte string hashes by CONTENT across both tiers, walked and
             // cached per node rather than flattened (`doc/decisions/0011`).
             case TY_BYTES:
             case TY_BROPE: return Bytes.hash(rt, v);
             default: {
-                if (rt.isSeq(v)) {
-                    int base = rt.mark();
-                    int s = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, v));
-                    int acc = 1, n = 0;
-                    while (!Val.isNil(rt.r(s))) {
-                        // A TICK: a seq's length is not known until it ends,
-                        // and it may not end (`doc/decisions/0009`).
-                        if (!rt.chargeTick(n, 1, "hash")) { rt.popTo(base); return 0; }
-                        acc = com._3sln.flint.kgen.rt.Hash.orderedStep(acc, hashValue(rt, Seqwalk.first(rt, rt.r(s))));
-                        n++;
-                        long nx = com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(s));
-                        rt.setR(s, nx);
-                    }
-                    rt.popTo(base);
-                    return com._3sln.flint.kgen.rt.Hash.mixCollHash(acc, n);
-                }
+                if (rt.isSeq(v)) return com._3sln.flint.kgen.rt.Valhash.hashOrdered(rt, v);
                 return 0;
             }
         }
