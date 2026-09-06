@@ -56,6 +56,10 @@ public final class Table {
     // Row-ref slots, and the transient's.
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // MIGRATION, generated from `kin/tablemigrate.kin`.
+    static long rebaseSchema(Rt rt, long have, long want) { return com._3sln.flint.kgen.rt.Tablemigrate.rebaseSchema(rt, have, want); }
+    public static long tableMigrate(Rt rt, long t, long want, long defaults) { return com._3sln.flint.kgen.rt.Tablemigrate.tableMigrate(rt, t, want, defaults); }
+
     // BUILDING IN BULK, generated from `kin/tablebuild.kin`.
     public static long newTable(Rt rt, long schema, long rows) { return com._3sln.flint.kgen.rt.Tablebuild.newTable(rt, schema, rows); }
     public static long tableFromColumns(Rt rt, long schema, long cols, int nrows) { return com._3sln.flint.kgen.rt.Tablebuild.tableFromColumns(rt, schema, cols, nrows); }
@@ -209,127 +213,6 @@ public final class Table {
     // A schema change makes a NEW TABLE. What makes it cheap is that a chunk
     // addresses its columns by stable id, so a column the new schema keeps is
     // the SAME COLUMN OBJECT, shared rather than copied.
-
-    /// `want` REBASED onto `have`'s column ids: a column both schemas name
-    /// keeps its id, so the chunks holding it can be shared unchanged.
-    ///
-    /// This is the whole reason ids are stable. With positional columns, adding
-    /// one in front would move every existing column and every chunk would have
-    /// to be rewritten to say what it already said.
-    static long rebaseSchema(Rt rt, long have, long want) {
-        int base = rt.mark();
-        int hi = rt.push(have);
-        int wi = rt.push(want);
-        int n = schemaLen(rt, rt.r(wi));
-        int width = schemaWidth(rt, rt.r(hi));
-        int di = rt.push(emptyVec(rt));
-        int ii = rt.push(emptyMap(rt));
-        for (int c = 0; c < n; c++) {
-            long name = schemaNameAt(rt, rt.r(wi), c);
-            int nmi = rt.push(name);
-            int old = schemaId(rt, rt.r(hi), rt.r(nmi));
-            int id = old < schemaWidth(rt, rt.r(hi)) ? old : width++;
-            rt.setR(di, Vec.conj(rt, rt.r(di), Val.fixnum(id)));
-            rt.setR(ii, Mapwrite.mapAssoc(rt, rt.r(ii), rt.r(nmi), Val.fixnum(id)));
-            rt.popTo(nmi);
-        }
-        long sc = Conc.newObj(rt, TY_SCHEMA, SC_LEN);
-        int si = rt.push(sc);
-        set(rt, rt.r(si), SC_NAMES, rt.slot(rt.r(wi), SC_NAMES));
-        set(rt, rt.r(si), SC_TYPES, rt.slot(rt.r(wi), SC_TYPES));
-        set(rt, rt.r(si), SC_INDEX, rt.r(ii));
-        set(rt, rt.r(si), SC_IDS, rt.r(di));
-        set(rt, rt.r(si), SC_WIDTH, Val.fixnum(width));
-        long out = rt.r(si);
-        rt.popTo(base);
-        return out;
-    }
-
-    /// `t` under `want`, sharing every column both schemas keep. `defaults`
-    /// supplies a value for each column `want` adds, stored ONCE PER CHUNK as a
-    /// constant column.
-    public static long tableMigrate(Rt rt, long t, long want, long defaults) {
-        int base = rt.mark();
-        int ti = rt.push(t);
-        int wi = rt.push(want);
-        int dfi = rt.push(defaults);
-        int hi = rt.push(rt.slot(rt.r(ti), TB_SCHEMA));
-        int n = schemaLen(rt, rt.r(wi));
-        // Refuse first, and completely, before anything is built.
-        for (int c = 0; c < n; c++) {
-            long name = schemaNameAt(rt, rt.r(wi), c);
-            int nmi = rt.push(name);
-            long wantTy = schemaTypeAt(rt, rt.r(wi), c);
-            int old = schemaId(rt, rt.r(hi), rt.r(nmi));
-            if (old < schemaWidth(rt, rt.r(hi))) {
-                // A carried column keeps its VALUES, so it must keep its type.
-                long haveTy = schemaTypeAt(rt, rt.r(hi), schemaPosOf(rt, rt.r(hi), rt.r(nmi)));
-                if (!Eq.eq(rt, haveTy, wantTy)) {
-                    String nm = kwName(rt, rt.r(nmi)), ht = kwName(rt, haveTy), wt = kwName(rt, wantTy);
-                    rt.popTo(base);
-                    return rt.throwStr("IllegalArgumentException", "column :" + nm + " holds :" + ht
-                        + " and the new schema declares :" + wt
-                        + "; a type change needs a value per row, so migrate with a function:"
-                        + " (migrate t s (fn [row] ...))");
-                }
-            } else {
-                long dv = Mapread.mapGet(rt, rt.r(dfi), rt.r(nmi), Val.NOT_FOUND);
-                if (dv == Val.NOT_FOUND) {
-                    String nm = kwName(rt, rt.r(nmi));
-                    rt.popTo(base);
-                    return rt.throwStr("IllegalArgumentException", "the new schema adds :" + nm
-                        + " and the table has no values for it; give it a default -- (migrate t s {:"
-                        + nm + " v}) -- or compute one per row: (migrate t s (fn [row] ...))");
-                }
-                if (!typeOk(rt, wantTy, dv)) {
-                    String nm = kwName(rt, rt.r(nmi)), wt = kwName(rt, wantTy),
-                           gt = kwName(rt, rt.kindOf(dv));
-                    rt.popTo(base);
-                    return rt.throwStr("IllegalArgumentException",
-                        "the default for :" + nm + " is a " + gt + " and the column holds :" + wt);
-                }
-            }
-            rt.popTo(nmi);
-        }
-        int ri = rt.push(rebaseSchema(rt, rt.r(hi), rt.r(wi)));
-        int width = schemaWidth(rt, rt.r(ri));
-        int ci = rt.push(rt.slot(rt.r(ti), TB_CHUNKS));
-        int nch = Vec.count(rt, rt.r(ci));
-        int oi = rt.push(emptyVec(rt));
-        for (int k = 0; k < nch; k++) {
-            if (!rt.chargeChecked(1, "migrate")) { rt.popTo(base); return Val.NIL; }
-            int chi = rt.push(Vec.nth(rt, rt.r(ci), k, Val.NOT_FOUND));
-            int rows = chunkRows(rt, rt.r(chi));
-            int ni = rt.push(newChunk(rt, width, rows));
-            for (int c = 0; c < n; c++) {
-                int id = schemaIdAt(rt, rt.r(ri), c);
-                long name = schemaNameAt(rt, rt.r(ri), c);
-                int old = schemaId(rt, rt.r(hi), name);
-                if (old < schemaWidth(rt, rt.r(hi))) {
-                    // SHARED, column object and encoding both. Nothing is
-                    // copied and nothing is scanned: this is the head-only
-                    // edit, and dropping a column is the loop simply never
-                    // reaching the old slot.
-                    set(rt, rt.r(ni), CH_BASE + id, rt.slot(rt.r(chi), CH_BASE + old));
-                    set(rt, rt.slot(rt.r(ni), CH_ENC), id, Val.fixnum(chunkEnc(rt, rt.r(chi), old)));
-                } else {
-                    set(rt, rt.r(ni), CH_BASE + id, Mapread.mapGet(rt, rt.r(dfi), name, Val.NIL));
-                    set(rt, rt.slot(rt.r(ni), CH_ENC), id, Val.fixnum(ENC_CONST));
-                }
-            }
-            rt.setR(oi, Vec.conj(rt, rt.r(oi), rt.r(ni)));
-            rt.popTo(chi);
-        }
-        long nt = Conc.newObj(rt, TY_TABLE, TB_LEN);
-        int nti = rt.push(nt);
-        set(rt, rt.r(nti), TB_SCHEMA, rt.r(ri));
-        set(rt, rt.r(nti), TB_CHUNKS, rt.r(oi));
-        set(rt, rt.r(nti), TB_COUNT, Val.fixnum(tableCount(rt, rt.r(ti))));
-        set(rt, rt.r(nti), TB_OFFSET, rt.slot(rt.r(ti), TB_OFFSET));
-        long out = rt.r(nti);
-        rt.popTo(base);
-        return out;
-    }
 
     // --- the column API -----------------------------------------------------
     //

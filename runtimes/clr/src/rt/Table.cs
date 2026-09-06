@@ -49,6 +49,10 @@ public static class Table {
     // Row-ref slots, and the transient's.
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // MIGRATION, generated from `kin/tablemigrate.kin`.
+    static long rebaseSchema(Rt rt, long have, long want) { return global::_3sln.Flint.Kgen.Rt.Tablemigrate.RebaseSchema(rt, have, want); }
+    public static long tableMigrate(Rt rt, long t, long want, long defaults) { return global::_3sln.Flint.Kgen.Rt.Tablemigrate.TableMigrate(rt, t, want, defaults); }
+
     // BUILDING IN BULK, generated from `kin/tablebuild.kin`.
     public static long newTable(Rt rt, long schema, long rows) { return global::_3sln.Flint.Kgen.Rt.Tablebuild.NewTable(rt, schema, rows); }
     public static long tableFromColumns(Rt rt, long schema, long cols, int nrows) { return global::_3sln.Flint.Kgen.Rt.Tablebuild.TableFromColumns(rt, schema, cols, nrows); }
@@ -200,127 +204,6 @@ public static class Table {
     // A schema change makes a NEW TABLE. What makes it cheap is that a chunk
     // addresses its columns by stable id, so a column the new schema keeps is
     // the SAME COLUMN OBJECT, shared rather than copied.
-
-    /// `want` REBASED onto `have`'s column ids: a column both schemas name
-    /// keeps its id, so the chunks holding it can be shared unchanged.
-    ///
-    /// This is the whole reason ids are stable. With positional columns, adding
-    /// one in front would move every existing column and every chunk would have
-    /// to be rewritten to say what it already said.
-    static long rebaseSchema(Rt rt, long have, long want) {
-        int bas = rt.Mark();
-        int hi = rt.Push(have);
-        int wi = rt.Push(want);
-        int n = schemaLen(rt, rt.R(wi));
-        int width = schemaWidth(rt, rt.R(hi));
-        int di = rt.Push(emptyVec(rt));
-        int ii = rt.Push(emptyMap(rt));
-        for (int c = 0; c < n; c++) {
-            long name = schemaNameAt(rt, rt.R(wi), c);
-            int nmi = rt.Push(name);
-            int old = schemaId(rt, rt.R(hi), rt.R(nmi));
-            int id = old < schemaWidth(rt, rt.R(hi)) ? old : width++;
-            rt.SetR(di, Vec.Conj(rt, rt.R(di), Val.Fixnum(id)));
-            rt.SetR(ii, Mapwrite.MapAssoc(rt, rt.R(ii), rt.R(nmi), Val.Fixnum(id)));
-            rt.PopTo(nmi);
-        }
-        long sc = Conc.NewObj(rt, Obj.TySchema, SC_LEN);
-        int si = rt.Push(sc);
-        set(rt, rt.R(si), SC_NAMES, rt.Slot(rt.R(wi), SC_NAMES));
-        set(rt, rt.R(si), SC_TYPES, rt.Slot(rt.R(wi), SC_TYPES));
-        set(rt, rt.R(si), SC_INDEX, rt.R(ii));
-        set(rt, rt.R(si), SC_IDS, rt.R(di));
-        set(rt, rt.R(si), SC_WIDTH, Val.Fixnum(width));
-        long outv = rt.R(si);
-        rt.PopTo(bas);
-        return outv;
-    }
-
-    /// `t` under `want`, sharing every column both schemas keep. `defaults`
-    /// supplies a value for each column `want` adds, stored ONCE PER CHUNK as a
-    /// constant column.
-    public static long tableMigrate(Rt rt, long t, long want, long defaults) {
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        int wi = rt.Push(want);
-        int dfi = rt.Push(defaults);
-        int hi = rt.Push(rt.Slot(rt.R(ti), TB_SCHEMA));
-        int n = schemaLen(rt, rt.R(wi));
-        // Refuse first, and completely, before anything is built.
-        for (int c = 0; c < n; c++) {
-            long name = schemaNameAt(rt, rt.R(wi), c);
-            int nmi = rt.Push(name);
-            long wantTy = schemaTypeAt(rt, rt.R(wi), c);
-            int old = schemaId(rt, rt.R(hi), rt.R(nmi));
-            if (old < schemaWidth(rt, rt.R(hi))) {
-                // A carried column keeps its VALUES, so it must keep its type.
-                long haveTy = schemaTypeAt(rt, rt.R(hi), schemaPosOf(rt, rt.R(hi), rt.R(nmi)));
-                if (!Eq.Equal(rt, haveTy, wantTy)) {
-                    string nm = kwName(rt, rt.R(nmi)), ht = kwName(rt, haveTy), wt = kwName(rt, wantTy);
-                    rt.PopTo(bas);
-                    return rt.ThrowStr("IllegalArgumentException", "column :" + nm + " holds :" + ht
-                        + " and the new schema declares :" + wt
-                        + "; a type change needs a value per row, so migrate with a function:"
-                        + " (migrate t s (fn [row] ...))");
-                }
-            } else {
-                long dv = Mapread.MapGet(rt, rt.R(dfi), rt.R(nmi), Val.NotFound);
-                if (dv == Val.NotFound) {
-                    string nm = kwName(rt, rt.R(nmi));
-                    rt.PopTo(bas);
-                    return rt.ThrowStr("IllegalArgumentException", "the new schema adds :" + nm
-                        + " and the table has no values for it; give it a default -- (migrate t s {:"
-                        + nm + " v}) -- or compute one per row: (migrate t s (fn [row] ...))");
-                }
-                if (!typeOk(rt, wantTy, dv)) {
-                    string nm = kwName(rt, rt.R(nmi)), wt = kwName(rt, wantTy),
-                           gt = kwName(rt, rt.KindOf(dv));
-                    rt.PopTo(bas);
-                    return rt.ThrowStr("IllegalArgumentException",
-                        "the default for :" + nm + " is a " + gt + " and the column holds :" + wt);
-                }
-            }
-            rt.PopTo(nmi);
-        }
-        int ri = rt.Push(rebaseSchema(rt, rt.R(hi), rt.R(wi)));
-        int width = schemaWidth(rt, rt.R(ri));
-        int ci = rt.Push(rt.Slot(rt.R(ti), TB_CHUNKS));
-        int nch = Vec.Count(rt, rt.R(ci));
-        int oi = rt.Push(emptyVec(rt));
-        for (int k = 0; k < nch; k++) {
-            if (!rt.ChargeChecked(1, "migrate")) { rt.PopTo(bas); return Val.Nil; }
-            int chi = rt.Push(Vec.Nth(rt, rt.R(ci), k, Val.NotFound));
-            int rows = chunkRows(rt, rt.R(chi));
-            int ni = rt.Push(newChunk(rt, width, rows));
-            for (int c = 0; c < n; c++) {
-                int id = schemaIdAt(rt, rt.R(ri), c);
-                long name = schemaNameAt(rt, rt.R(ri), c);
-                int old = schemaId(rt, rt.R(hi), name);
-                if (old < schemaWidth(rt, rt.R(hi))) {
-                    // SHARED, column object and encoding both. Nothing is
-                    // copied and nothing is scanned: this is the head-only
-                    // edit, and dropping a column is the loop simply never
-                    // reaching the old slot.
-                    set(rt, rt.R(ni), CH_BASE + id, rt.Slot(rt.R(chi), CH_BASE + old));
-                    set(rt, rt.Slot(rt.R(ni), CH_ENC), id, Val.Fixnum(chunkEnc(rt, rt.R(chi), old)));
-                } else {
-                    set(rt, rt.R(ni), CH_BASE + id, Mapread.MapGet(rt, rt.R(dfi), name, Val.Nil));
-                    set(rt, rt.Slot(rt.R(ni), CH_ENC), id, Val.Fixnum(ENC_CONST));
-                }
-            }
-            rt.SetR(oi, Vec.Conj(rt, rt.R(oi), rt.R(ni)));
-            rt.PopTo(chi);
-        }
-        long nt = Conc.NewObj(rt, Obj.TyTable, TB_LEN);
-        int nti = rt.Push(nt);
-        set(rt, rt.R(nti), TB_SCHEMA, rt.R(ri));
-        set(rt, rt.R(nti), TB_CHUNKS, rt.R(oi));
-        set(rt, rt.R(nti), TB_COUNT, Val.Fixnum(tableCount(rt, rt.R(ti))));
-        set(rt, rt.R(nti), TB_OFFSET, rt.Slot(rt.R(ti), TB_OFFSET));
-        long outv = rt.R(nti);
-        rt.PopTo(bas);
-        return outv;
-    }
 
     // --- the column API -----------------------------------------------------
     //

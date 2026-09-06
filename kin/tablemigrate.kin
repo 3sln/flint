@@ -1,0 +1,186 @@
+;; MIGRATION. A schema change makes a NEW TABLE -- there is no in-place
+;; evolution and no inference.
+;;
+;; WHAT MAKES IT CHEAP is that a chunk addresses its columns by STABLE ID, so a
+;; column the new schema keeps is the SAME COLUMN OBJECT, shared rather than
+;; copied. That is the whole reason ids are stable: with positional columns,
+;; adding `:a` in front would move every existing column and every chunk in the
+;; table would have to be rewritten to say the same thing it already said.
+;;
+;; DROPPING A COLUMN IS FREE AND INVISIBLE. The new chunk simply never reaches
+;; the old slot, so the data stays resident until that chunk is next rewritten
+;; -- the trade `0026` names, and `chunk-with-row` is where it is paid back.
+(ns flint.rt.tablemigrate
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != < + not val-eq
+                                   alloc heap slot set-slot fixnum
+                                   vec-count vec-nth vec-conj empty-vec empty-map
+                                   mark push r set-r pop-to for local set
+                                   charge-checked throw-str str-cat static-text
+                                   kind-of type-ok
+                                   Rt Value I32 RootIx Text NIL NOT_FOUND
+                                   TY_SCHEMA TY_TABLE
+                                   SC_NAMES SC_TYPES SC_INDEX SC_IDS SC_WIDTH
+                                   SC_LEN CH_BASE CH_ENC ENC_CONST
+                                   TB_SCHEMA TB_CHUNKS TB_COUNT TB_OFFSET TB_LEN]]
+            [flint.rt.tablemeta :refer [schema-len schema-width schema-id-at
+                                        schema-name-at schema-type-at
+                                        table-count chunk-rows chunk-enc]]
+            [flint.rt.tableref :refer [schema-id]]
+            [flint.rt.tablecell :refer [new-chunk schema-pos-of]]
+            [flint.rt.tablesay :refer [kw-name]]
+            [flint.rt.mapread :refer [map-get]]
+            [flint.rt.mapwrite :refer [map-assoc]]))
+
+(doc "`want` REBASED onto `have`'s column ids."
+     ""
+     "A column both schemas name KEEPS ITS ID, so the chunks that hold it can"
+     "be shared unchanged; a column only `want` has gets a fresh one past the"
+     "end. The width therefore only ever grows -- a dropped column's slot stays"
+     "spoken for, which is what keeps every other column's id stable.")
+(defn ^:pub ^:method ^Value rebase-schema [^:mut ^Rt rt ^Value have ^Value want]
+  (let [^RootIx base (mark rt)
+        ^RootIx hi (push rt have)
+        ^RootIx wi (push rt want)
+        ^I32 n (schema-len rt (r rt wi))
+        ^Value ids0 (empty-vec rt)
+        ^RootIx di (push rt ids0)
+        ^Value idx0 (empty-map rt)
+        ^RootIx ii (push rt idx0)]
+    (local ^:mut ^I32 width)
+    (set width (schema-width rt (r rt hi)))
+    (for [^I32 c 0 n]
+      (let [^Value name (schema-name-at rt (r rt wi) c)
+            ^RootIx ni (push rt name)
+            ^I32 old (schema-id rt (r rt hi) (r rt ni))]
+        (local ^:mut ^I32 id)
+        (if (< old (schema-width rt (r rt hi)))
+          (set id old)
+          (do (set id width)
+              (set width (+ width 1))))
+        (let [^Value dv (vec-conj rt (r rt di) (fixnum id))]
+          (set-r rt di dv))
+        (let [^Value m (map-assoc rt (r rt ii) (r rt ni) (fixnum id))]
+          (set-r rt ii m))
+        (pop-to rt ni)))
+    (let [^Value sc (heap (alloc rt TY_SCHEMA SC_LEN))
+          ^RootIx si (push rt sc)]
+      (set-slot rt (r rt si) SC_NAMES (slot rt (r rt wi) SC_NAMES))
+      (set-slot rt (r rt si) SC_TYPES (slot rt (r rt wi) SC_TYPES))
+      (set-slot rt (r rt si) SC_INDEX (r rt ii))
+      (set-slot rt (r rt si) SC_IDS (r rt di))
+      (set-slot rt (r rt si) SC_WIDTH (fixnum width))
+      (let [^Value out (r rt si)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "The table under a new schema, with `defaults` for the columns it adds."
+     ""
+     "REFUSED FIRST, AND COMPLETELY, before anything is built. A migration that"
+     "half-happened would leave a table nobody asked for, and the three ways it"
+     "can be refused each say what to do instead: a type change needs a value"
+     "per row, an added column needs a default, and a default has to be of the"
+     "declared type.")
+(defn ^:pub ^:method ^Value table-migrate
+  [^:mut ^Rt rt ^Value t ^Value want ^Value defaults]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^RootIx wi (push rt want)
+        ^RootIx dfi (push rt defaults)
+        ^RootIx hi (push rt (slot rt (r rt ti) TB_SCHEMA))
+        ^I32 n (schema-len rt (r rt wi))]
+    (for [^I32 c 0 n]
+      (let [^Value name (schema-name-at rt (r rt wi) c)
+            ^RootIx nmi (push rt name)
+            ^Value want-ty (schema-type-at rt (r rt wi) c)
+            ^I32 old (schema-id rt (r rt hi) (r rt nmi))]
+        (if (< old (schema-width rt (r rt hi)))
+          (do
+            (comment "A CARRIED COLUMN KEEPS ITS VALUES, so it must keep its"
+                     "type. Changing one means computing a value per row, which"
+                     "is a different operation and says so.")
+            (let [^I32 hc (schema-pos-of rt (r rt hi) (r rt nmi))
+                  ^Value have-ty (schema-type-at rt (r rt hi) hc)]
+              (if (not (val-eq rt have-ty want-ty))
+                (do
+                  (let [^Text nm (kw-name rt (r rt nmi))
+                        ^Text ht (kw-name rt have-ty)
+                        ^Text wt (kw-name rt want-ty)]
+                    (pop-to rt base)
+                    (return (throw-str rt "IllegalArgumentException"
+                                       (str-cat (static-text "column :") nm
+                                                (static-text " holds :") ht
+                                                (static-text " and the new schema declares :") wt
+                                                (static-text "; a type change needs a value per row, so migrate with a function: (migrate t s (fn [row] ...))")))))))))
+          (do
+            (let [^Value dv (map-get rt (r rt dfi) (r rt nmi) NOT_FOUND)]
+              (if (== dv NOT_FOUND)
+                (do
+                  (let [^Text nm (kw-name rt (r rt nmi))]
+                    (pop-to rt base)
+                    (return (throw-str rt "IllegalArgumentException"
+                                       (str-cat (static-text "the new schema adds :") nm
+                                                (static-text " and the table has no values for it; give it a default -- (migrate t s {:") nm
+                                                (static-text " v}) -- or compute one per row: (migrate t s (fn [row] ...))")))))))
+              (if (not (type-ok rt want-ty dv))
+                (do
+                  (let [^Text nm (kw-name rt (r rt nmi))
+                        ^Text wt (kw-name rt want-ty)
+                        ^Value gk (kind-of rt dv)
+                        ^Text gt (kw-name rt gk)]
+                    (pop-to rt base)
+                    (return (throw-str rt "IllegalArgumentException"
+                                       (str-cat (static-text "the default for :") nm
+                                                (static-text " is a ") gt
+                                                (static-text " and the column holds :") wt)))))))))
+        (pop-to rt nmi)))
+    (let [^Value rebased (rebase-schema rt (r rt hi) (r rt wi))
+          ^RootIx ri (push rt rebased)
+          ^I32 width (schema-width rt (r rt ri))
+          ^RootIx ci (push rt (slot rt (r rt ti) TB_CHUNKS))
+          ^I32 nch (vec-count rt (r rt ci))
+          ^Value out0 (empty-vec rt)
+          ^RootIx oi (push rt out0)]
+      (for [^I32 k 0 nch]
+        (if (not (charge-checked rt 1 (static-text "migrate")))
+          (do (pop-to rt base)
+              (return NIL)))
+        (let [^Value ch (vec-nth rt (r rt ci) k NIL)
+              ^RootIx chi (push rt ch)
+              ^I32 rows (chunk-rows rt (r rt chi))
+              ^Value nc (new-chunk rt width rows)
+              ^RootIx ni (push rt nc)]
+          (for [^I32 c 0 n]
+            (let [^I32 id (schema-id-at rt (r rt ri) c)
+                  ^Value name (schema-name-at rt (r rt ri) c)
+                  ^I32 old (schema-id rt (r rt hi) name)]
+              (if (< old (schema-width rt (r rt hi)))
+                (do
+                  (comment "SHARED, column object and encoding both. Nothing is"
+                           "copied and nothing is scanned: this is the head-only"
+                           "edit, and dropping a column is the case where the"
+                           "loop simply never reaches the old slot.")
+                  (set-slot rt (r rt ni) (+ CH_BASE id)
+                            (slot rt (r rt chi) (+ CH_BASE old)))
+                  (let [^I32 e (chunk-enc rt (r rt chi) old)]
+                    (set-slot rt (slot rt (r rt ni) CH_ENC) id (fixnum e))))
+                (do
+                  (comment "AN ADDED COLUMN IS ONE SHARED VALUE for the whole"
+                           "chunk, so a migration that adds a column costs a"
+                           "slot per chunk rather than a value per row.")
+                  (let [^Value dv (map-get rt (r rt dfi) name NIL)]
+                    (set-slot rt (r rt ni) (+ CH_BASE id) dv))
+                  (set-slot rt (slot rt (r rt ni) CH_ENC) id (fixnum ENC_CONST))))))
+          (let [^Value ov (vec-conj rt (r rt oi) (r rt ni))]
+            (set-r rt oi ov))
+          (pop-to rt chi)))
+      (let [^I32 count (table-count rt (r rt ti))
+            ^Value nt (heap (alloc rt TY_TABLE TB_LEN))
+            ^RootIx nti (push rt nt)]
+        (set-slot rt (r rt nti) TB_SCHEMA (r rt ri))
+        (set-slot rt (r rt nti) TB_CHUNKS (r rt oi))
+        (set-slot rt (r rt nti) TB_COUNT (fixnum count))
+        (set-slot rt (r rt nti) TB_OFFSET (slot rt (r rt ti) TB_OFFSET))
+        (let [^Value out (r rt nti)]
+          (pop-to rt base)
+          (return out))))))

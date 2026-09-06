@@ -59,6 +59,7 @@ pub mod tablefill;
 pub mod tablekind;
 pub mod tablemake;
 pub mod tablemeta;
+pub mod tablemigrate;
 pub mod tablesay;
 pub mod tabletrans;
 pub mod tableref;
