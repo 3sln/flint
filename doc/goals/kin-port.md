@@ -1391,13 +1391,34 @@ quoting; this file keeps recording that a stale count is worse than none):
 
 | file | lines | `pub fn` left | what they are |
 | --- | --- | --- | --- |
-| `table.rs` | 137 | **0** | constants and module wiring |
-| `seqs.rs` | 189 | **0** | constants and the tests |
+| `table.rs` | 135 | **0** | constants and module wiring |
+| `seqs.rs` | 188 | **0** | constants and the tests |
 | `bytes.rs` | 477 | 22 | ALL PRIMITIVES: sinks, walks, `new_bytes`/`b_to_vec` |
 | `rope.rs` | 190 | 6 | the UTF-8 decode, interning, the gas wrapper |
-| `strs.rs` | 824 | 16 | interning, and functions taking a host `&str` |
-| `map.rs` | 828 | 14 | the CHAMP, incl. the five the closure hole blocks |
-| `coll.rs` | 1609 | 54 | not surveyed for this row |
+| `strs.rs` | 787 | 12 | interning, and functions taking a host `&str` |
+| `map.rs` | 856 | 14 | the CHAMP, incl. the five the closure hole blocks |
+| `coll.rs` | 812 | 19 | the string ops, `conj`, and two that are portable |
+| `vector.rs` | 449 | 5 | predicates and `vec_from_roots` |
+| `set.rs` | 222 | 5 | `set_for_each` and the four it blocks |
+| `eq.rs` | 718 | 7 | not surveyed for this row |
+
+`coll.rs` WAS 1,609 LINES AND IS 812. What went is the whole GENERIC DISPATCH
+layer -- `count`, `pop`, `peek`, `empty`, `get`, `contains?`, `assoc`, `nth`,
+the six transient entry points, the transient map and set, and the atoms --
+across `collgen`, `collread`, `collwrite`, `transients`, `maptrans` and
+`atoms`. Nineteen functions remain and they sort into three piles:
+
+* **ELEVEN ARE HOST STRING WORK.** `char_count`, `str_concat2`, `char_at`,
+  `code_point_at`, `substring`, `keyword_from_values`, `symbol_from_values`,
+  `number_to_string`, `string_to_number`, `join_strings`, `str_index_of` and
+  `string_bytes_vector` all reach `as_str`, `sbuf()` or a raw `&[u8]`. That is
+  the same wall `strs.rs` is against, and it is the right wall.
+* **`conj` IS BLOCKED ON THE CLOSURE HOLE**, and only in one arm: merging
+  another map means walking its entries. Every other arm is a tag dispatch of
+  the kind now generated six times over.
+* **`ordered_map` AND `new_volatile` ARE PORTABLE AND NOT PORTED.** Both ports
+  already say them line for line, so generating them consolidates three copies
+  and finds nothing. Worth doing; worth doing after something that does.
 
 `bytes.rs` IS DONE IN THE SENSE THAT MATTERS. Every function left in it is a
 VOCABULARY PRIMITIVE -- something a generated source names and cannot express,
@@ -1940,6 +1961,16 @@ decision about what a builtin MEANS and not about where its body lives.
   DISPATCHER, which the ports' variadic loop bypasses.
 * **`dissoc!`'s refusal on both ports says `disj!`.** One message for two
   builtins, and the one it names is the other one.
+* **`(contains? '(1 2) 0)` answers false on all three and THROWS in Clojure.**
+  That was wasm's behaviour before the generic was generated and is its
+  behaviour after -- `contains?` falls through to `get` against `NOT_FOUND`,
+  and a seq answers no rather than refusing. The same fallback is what makes
+  `(contains? "abc" 1)` true, which Clojure agrees with, so the arm is right
+  and only the seq case is wrong. Making it throw is a decision about the
+  builtin.
+* **`dissoc` on native only acts on maps** -- `if rt.is_map(m)` and otherwise
+  the accumulator is passed through unchanged, so `(dissoc 5 :k)` is `5`.
+  Unsurveyed on the ports.
 
 One divergence in that batch WAS closed, and toward native rather than toward
 the ports, which is worth writing down because the ports were the permissive
