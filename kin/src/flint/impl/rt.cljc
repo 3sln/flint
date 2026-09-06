@@ -53,6 +53,14 @@
   being able to hold it. Rust `i64`, both ports `long`, and the three agree
   about ordering, division and printing over the whole range."
   {:name 'I64 :types {:rust "i64" :java "long" :csharp "long"} :methods {}})
+(def Cmp
+  "THE RESULT OF A COMPARISON: negative, zero or positive.
+
+  Rust `i32` and both ports `int`. It is NOT `I32`, which promises its high bit
+  is clear and so is spelled `u32` on Rust -- and a comparison that can answer
+  -1 has made no such promise. `compare` returning `u32` is how -1 becomes four
+  billion, which is a sort order rather than an error."
+  {:name 'Cmp :types {:rust "i32" :java "int" :csharp "int"} :methods {}})
 (def I32
   "A 32-bit integer whose high bit is never set: an index, a count, a shift.
 
@@ -171,7 +179,7 @@
   pointer."
   {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
 
-(def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'I64 I64 'U32 U32 'RootIx RootIx
+(def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'I64 I64 'Cmp Cmp 'U32 U32 'RootIx RootIx
                'Text Text 'StaticText StaticText 'Sink Sink 'Walk Walk
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'U32s U32s 'U64s U64s 'Interns Interns})
 
@@ -969,6 +977,29 @@
     ;; hash. So a heap string paid its length per lookup and a keyword paid its
     ;; ns and name -- on the two commonest map keys there are. The bodies are
     ;; host work (UTF-8 decode); reading the cache is not, and now all three do.
+    ;; TWO STRINGS IN UTF-16 CODE UNIT ORDER, across all three tiers. Native
+    ;; read `str_bytes` inline, which debug-asserts `TY_STR` -- so in a release
+    ;; build comparing anything past `FLAT_MAX` read a rope's SLOTS as UTF-8.
+    ;; Measured: two unequal 1 400-byte strings compared as 0, and `sort` over
+    ;; them was silently wrong on wasm.
+    ;; `val-cmp` IS `flint.rt.valcmp`'s OWN, for the reason `val-eq` and
+    ;; `hash-value` are theirs: its two helpers call it from above its
+    ;; definition. The RUST spelling stays `compare`, which is what every
+    ;; native caller already says.
+    'val-cmp (own "val_cmp" "valCmp" 2)
+    'str-cmp (core/call {:rust "{0}.str_cmp({1}, {2})"
+                         :java "Str.compareUtf16({0}, {1}, {2})"
+                         :csharp "Str.CompareUtf16({0}, {1}, {2})"}
+                        {:tag Cmp})
+    ;; NUMBERS: `is-number` is either tier, and `num-cmp` orders across them.
+    'is-number (core/call {:rust "{0}.is_number({1})"
+                           :java "Num.isNumber({0}, {1})"
+                           :csharp "Num.IsNumber({0}, {1})"}
+                          {:tag Bool})
+    'num-cmp (core/call {:rust "{0}.num_cmp({1}, {2})"
+                         :java "Num.cmp({0}, {1}, {2})"
+                         :csharp "Num.Cmp({0}, {1}, {2})"}
+                        {:tag Cmp})
     'string-hash (sibling "string_hash" "Str" "stringHash" "StringHash" 1)
     'keyword-hash (sibling "keyword_hash" "Str" "keywordHash" "KeywordHash" 1)
     ;; `hash-double` takes the DOUBLE, not the value: the bit pattern of a NaN

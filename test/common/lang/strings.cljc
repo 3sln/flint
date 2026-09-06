@@ -60,6 +60,25 @@
     (expect = \e (nth big 1504))
     (expect = \j (nth big 2999))))
 
+(defn ^:flint.check/test comparing-crosses-tiers []
+  ;; `compare` HAS TO SEE THE CONTENT, whatever tier holds it. The native
+  ;; runtime read a flat string's bytes straight out of the object -- and a
+  ;; rope's `len` is its SLOT COUNT and its body is Values, so past FLAT_MAX
+  ;; it compared the slots as UTF-8 and answered 0 for two strings it agreed
+  ;; were not equal. `sort` over long strings was silently wrong on wasm and
+  ;; right on both ports, and nothing here asked.
+  (let [a (long-string 300)
+        b (str (long-string 299) "aaaaaaaaaa")]
+    (expect = false (= a b))
+    (expect = true (neg? (compare b a)))
+    (expect = true (pos? (compare a b)))
+    (expect = 0 (compare a (str "" a))))
+  ;; And the short tiers still order, so a fix that flattened everything to
+  ;; one path would still have to get these right.
+  (expect = true (neg? (compare "aaa" "ccc")))
+  (expect = true (pos? (compare "ccc" "aaa")))
+  (expect = 0 (compare "abc" "abc")))
+
 (defn ^:flint.check/test subs-boundaries []
   (expect = "" (subs "abc" 0 0))
   (expect = "abc" (subs "abc" 0 3))

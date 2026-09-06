@@ -1,0 +1,438 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TRUE: Value = Value(0x2001); const FALSE: Value = Value(0x2002);
+const CAT_SCALAR: u8 = 0; const CAT_SEQUENTIAL: u8 = 1;
+const TY_STR: u8 = 10; const TY_KW: u8 = 11; const TY_SYM: u8 = 12;
+const TY_VEC: u8 = 13; const TY_CONS: u8 = 14; const TY_OTHER: u8 = 15;
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { gc: Gc, bump: u64, roots: Vec<Value>, slots: Vec<[u64; 2]>,
+            work: u32, thrown: String }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 < 0x1_0000_0000 && self.0 != NIL.0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn is_double(self) -> bool { (self.0 >> 32) == 2 }
+    fn is_bool(self) -> bool { self.0 == TRUE.0 || self.0 == FALSE.0 }
+}
+fn num(n: i64) -> Value { Value(0x1_0000_0000u64 | (n as u64 & 0xFFFF_FFFF)) }
+fn dbl(i: u64) -> Value { Value(0x2_0000_0000u64 | i) }
+fn sgn(n: i32) -> i32 { if n < 0 { -1 } else if n > 0 { 1 } else { 0 } }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn charge_work(&mut self, n: u64) { self.work += n as u32; }
+    fn slot_(&self, v: Value, i: usize) -> Value { Value(self.slots[v.0 as usize][i]) }
+    fn obj(&mut self, t: u8) -> Value {
+        let a = self.bump; self.bump += 1;
+        self.gc.sp.m[a as usize] = t;
+        self.slots[a as usize] = [NIL.0, NIL.0];
+        Value(a)
+    }
+    fn throw_str(&mut self, class: &str, msg: &str) -> Value {
+        self.thrown = format!("{}/{}", class, msg); NIL
+    }
+    fn describe(&mut self, v: Value) -> alloc::string::String {
+        if !v.is_heap() { return alloc::string::String::from("a scalar"); }
+        alloc::format!("a #{}", ty(&self.gc.sp, v.as_heap()))
+    }
+    fn is_number(&mut self, v: Value) -> bool { (v.0 >> 32) == 1 || v.is_double() }
+    // Ordered by the PAYLOAD, so the probe can assert a real order rather than
+    // only that something was called.
+    fn num_cmp(&mut self, a: Value, b: Value) -> i32 {
+        sgn((a.0 & 0xFFFF_FFFF) as i64 as i32 - (b.0 & 0xFFFF_FFFF) as i64 as i32)
+    }
+    fn is_string(&mut self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_STR
+    }
+    // A STRING'S ORDER IS ITS SLOT, which is what lets the probe show that a
+    // rope and a flat string of the same content compare equal -- the case
+    // native got wrong by reading a rope's slots as UTF-8.
+    fn str_cmp(&mut self, a: Value, b: Value) -> i32 {
+        sgn(self.slot_(a, 0).0 as i32 - self.slot_(b, 0).0 as i32)
+    }
+    fn is_keyword(&mut self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_KW
+    }
+    fn is_symbol(&mut self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_SYM
+    }
+    // A named thing's ns is slot 0 and its name slot 1, each a STRING object.
+    fn ns_of(&mut self, v: Value) -> Value { self.slot_(v, 0) }
+    fn name_of(&mut self, v: Value) -> Value { self.slot_(v, 1) }
+    fn category(&mut self, v: Value) -> u8 {
+        if v.is_heap() {
+            let t = ty(&self.gc.sp, v.as_heap());
+            if t == TY_VEC || t == TY_CONS { return CAT_SEQUENTIAL; }
+        }
+        CAT_SCALAR
+    }
+    // Two seqs of settable length whose elements are NUMBERS, so a walk that
+    // stops at the wrong place shows up as the wrong sign.
+    fn seq(&mut self, c: Value) -> Value {
+        let n = self.slot_(c, 0).0 as u32;
+        if n == 0 { NIL } else { Value(0xC000 + n as u64) }
+    }
+    fn first(&mut self, s: Value) -> Value { num((s.0 - 0xC000) as i64) }
+    fn next(&mut self, s: Value) -> Value {
+        if s.0 == 0xC001 { NIL } else { Value(s.0 - 1) }
+    }
+}
+impl Rt {
+--rust
+}
+extern crate alloc;
+fn main() {
+    let mut rt = Rt { gc: Gc { sp: Space { m: vec![0u8; 400] } }, bump: 100,
+                      roots: Vec::new(), slots: vec![[0u64; 2]; 400],
+                      work: 0, thrown: String::new() };
+    let mut o = String::new();
+
+    // IDENTITY IS ZERO, EXCEPT FOR A DOUBLE: `compare` must agree with `=`
+    // about NaN, which is not equal to itself.
+    let d = dbl(1);
+    o.push_str(&format!("id={}{} ", sgn(rt.val_cmp(num(5), num(5))),
+                        sgn(rt.val_cmp(d, d))));
+    // NIL SORTS FIRST.
+    o.push_str(&format!("nil={}{}{} ", sgn(rt.val_cmp(NIL, num(1))),
+                        sgn(rt.val_cmp(num(1), NIL)), sgn(rt.val_cmp(NIL, NIL))));
+    // NUMBERS.
+    o.push_str(&format!("num={}{}{} ", sgn(rt.val_cmp(num(1), num(2))),
+                        sgn(rt.val_cmp(num(2), num(1))), sgn(rt.val_cmp(num(2), num(2)))));
+    // BOOLEANS, and FALSE SORTS FIRST -- the arm that used to subtract two
+    // unsigned bits and answer four billion for `false` against `true`.
+    o.push_str(&format!("bool={}{}{}{} ", sgn(rt.val_cmp(FALSE, TRUE)),
+                        sgn(rt.val_cmp(TRUE, FALSE)), sgn(rt.val_cmp(TRUE, TRUE)),
+                        sgn(rt.val_cmp(FALSE, FALSE))));
+    // STRINGS across tiers: equal content is 0 whichever objects they are.
+    let s1 = rt.obj(TY_STR); rt.slots[s1.0 as usize][0] = 5;
+    let s2 = rt.obj(TY_STR); rt.slots[s2.0 as usize][0] = 9;
+    let s3 = rt.obj(TY_STR); rt.slots[s3.0 as usize][0] = 5;
+    o.push_str(&format!("str={}{}{} ", sgn(rt.val_cmp(s1, s2)),
+                        sgn(rt.val_cmp(s2, s1)), sgn(rt.val_cmp(s1, s3))));
+
+    // NAMED THINGS: a BARE name sorts before a QUALIFIED one, then ns, then
+    // name. The parts are strings, so this exercises the recursion.
+    let nsa = rt.obj(TY_STR); rt.slots[nsa.0 as usize][0] = 1;
+    let nsb = rt.obj(TY_STR); rt.slots[nsb.0 as usize][0] = 2;
+    let na = rt.obj(TY_STR); rt.slots[na.0 as usize][0] = 3;
+    let nb = rt.obj(TY_STR); rt.slots[nb.0 as usize][0] = 4;
+    let bare = rt.obj(TY_KW); rt.slots[bare.0 as usize] = [NIL.0, na.0];
+    let bare2 = rt.obj(TY_KW); rt.slots[bare2.0 as usize] = [NIL.0, nb.0];
+    let qual = rt.obj(TY_KW); rt.slots[qual.0 as usize] = [nsa.0, na.0];
+    let qual2 = rt.obj(TY_KW); rt.slots[qual2.0 as usize] = [nsb.0, na.0];
+    o.push_str(&format!("kw={}{}{}{}{} ", sgn(rt.val_cmp(bare, qual)),
+                        sgn(rt.val_cmp(qual, bare)), sgn(rt.val_cmp(bare, bare2)),
+                        sgn(rt.val_cmp(qual, qual2)), sgn(rt.val_cmp(qual, qual))));
+    let sym = rt.obj(TY_SYM); rt.slots[sym.0 as usize] = [NIL.0, na.0];
+    let sym2 = rt.obj(TY_SYM); rt.slots[sym2.0 as usize] = [NIL.0, nb.0];
+    o.push_str(&format!("sym={} ", sgn(rt.val_cmp(sym, sym2))));
+
+    // SEQUENTIALS: element by element, and the SHORTER one first when one
+    // runs out. Charged per element.
+    // The LENGTH lives in the object, so `seq` reads it and two vectors can
+    // differ in length without inventing addresses that are not objects.
+    let sa = rt.obj(TY_VEC);
+    let sb = rt.obj(TY_VEC);
+    rt.slots[sa.0 as usize][0] = 3; rt.slots[sb.0 as usize][0] = 3;
+    rt.work = 0;
+    o.push_str(&format!("seq={} work={} ", sgn(rt.val_cmp(sa, sb)), rt.work));
+    rt.slots[sa.0 as usize][0] = 2; rt.slots[sb.0 as usize][0] = 3;
+    o.push_str(&format!("short={} ", sgn(rt.val_cmp(sa, sb))));
+    rt.slots[sa.0 as usize][0] = 3; rt.slots[sb.0 as usize][0] = 2;
+    o.push_str(&format!("long={} ", sgn(rt.val_cmp(sa, sb))));
+    rt.slots[sa.0 as usize][0] = 0; rt.slots[sb.0 as usize][0] = 0;
+    o.push_str(&format!("empty={} ", sgn(rt.val_cmp(sa, sb))));
+
+    // ACROSS TYPES IT REFUSES, naming both sides, and answers 0 because there
+    // is no failure value in an `int`.
+    rt.thrown.clear();
+    let k = rt.obj(TY_KW);
+    let x = rt.obj(TY_OTHER);
+    let c = rt.val_cmp(k, x);
+    o.push_str(&format!("bad={}|{}|", c, rt.thrown));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final long TRUE = 0x2001L, FALSE = 0x2002L;
+    static final int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1;
+    static final int TY_STR = 10, TY_KW = 11, TY_SYM = 12;
+    static final int TY_VEC = 13, TY_CONS = 14, TY_OTHER = 15;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static final long TRUE = Probe.TRUE, FALSE = Probe.FALSE;
+        static boolean isHeap(long v) { return v >= 100 && v < 0x100000000L && v != NIL; }
+        static long asHeap(long v) { return v; }
+        static boolean isNil(long v) { return v == NIL; }
+        static boolean isDouble(long v) { return (v >>> 32) == 2; }
+        static boolean isBool(long v) { return v == TRUE || v == FALSE; }
+    }
+    static long num(long n) { return 0x100000000L | (n & 0xFFFFFFFFL); }
+    static long dbl(long i) { return 0x200000000L | i; }
+    static int sgn(int n) { return n < 0 ? -1 : n > 0 ? 1 : 0; }
+    static final class Space { byte[] m = new byte[400]; }
+    static final class Rt {
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        long bump = 100;
+        long[][] slots = new long[400][2];
+        int work = 0;
+        String thrown = "";
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void chargeWork(long n) { work += (int) n; }
+        long slot_(long v, int i) { return slots[(int) v][i]; }
+        long obj(int t) {
+            long a = bump; bump += 1;
+            gc.sp.m[(int) a] = (byte) t;
+            slots[(int) a] = new long[]{ NIL, NIL };
+            return a;
+        }
+        long throwStr(String cls, String msg) { thrown = cls + "/" + msg; return NIL; }
+        long nameOf(long v) { return slot_(v, 1); }
+        String describe(long v) {
+            if (!Val.isHeap(v)) return "a scalar";
+            return "a #" + ty(gc.sp, Val.asHeap(v));
+        }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static String describe(Rt rt, long v) { return rt.describe(v); }
+    static final class Num {
+        static boolean isNumber(Rt rt, long v) { return (v >>> 32) == 1 || Val.isDouble(v); }
+        static int cmp(Rt rt, long a, long b) {
+            return sgn((int) (a & 0xFFFFFFFFL) - (int) (b & 0xFFFFFFFFL));
+        }
+    }
+    static final class Str {
+        static boolean isString(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR; }
+        static int compareUtf16(Rt rt, long a, long b) {
+            return sgn((int) rt.slot_(a, 0) - (int) rt.slot_(b, 0));
+        }
+        static boolean isKeyword(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_KW; }
+    }
+    static boolean isSymbol(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_SYM; }
+    static long nsOf(Rt rt, long v) { return rt.slot_(v, 0); }
+    static int category(Rt rt, long v) {
+        if (Val.isHeap(v)) {
+            int t = ty(rt.gc.sp, Val.asHeap(v));
+            if (t == TY_VEC || t == TY_CONS) return CAT_SEQUENTIAL;
+        }
+        return CAT_SCALAR;
+    }
+    static long seq(Rt rt, long c) {
+        int n = (int) rt.slot_(c, 0);
+        return n == 0 ? NIL : 0xC000L + n;
+    }
+    static long first(Rt rt, long s) { return num(s - 0xC000L); }
+    static long next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+
+        long d = dbl(1);
+        o.append("id=").append(sgn(valCmp(rt, num(5), num(5))))
+         .append(sgn(valCmp(rt, d, d))).append(' ');
+        o.append("nil=").append(sgn(valCmp(rt, NIL, num(1))))
+         .append(sgn(valCmp(rt, num(1), NIL))).append(sgn(valCmp(rt, NIL, NIL))).append(' ');
+        o.append("num=").append(sgn(valCmp(rt, num(1), num(2))))
+         .append(sgn(valCmp(rt, num(2), num(1)))).append(sgn(valCmp(rt, num(2), num(2)))).append(' ');
+        o.append("bool=").append(sgn(valCmp(rt, FALSE, TRUE)))
+         .append(sgn(valCmp(rt, TRUE, FALSE))).append(sgn(valCmp(rt, TRUE, TRUE)))
+         .append(sgn(valCmp(rt, FALSE, FALSE))).append(' ');
+
+        long s1 = rt.obj(TY_STR); rt.slots[(int) s1][0] = 5;
+        long s2 = rt.obj(TY_STR); rt.slots[(int) s2][0] = 9;
+        long s3 = rt.obj(TY_STR); rt.slots[(int) s3][0] = 5;
+        o.append("str=").append(sgn(valCmp(rt, s1, s2)))
+         .append(sgn(valCmp(rt, s2, s1))).append(sgn(valCmp(rt, s1, s3))).append(' ');
+
+        long nsa = rt.obj(TY_STR); rt.slots[(int) nsa][0] = 1;
+        long nsb = rt.obj(TY_STR); rt.slots[(int) nsb][0] = 2;
+        long na = rt.obj(TY_STR); rt.slots[(int) na][0] = 3;
+        long nb = rt.obj(TY_STR); rt.slots[(int) nb][0] = 4;
+        long bare = rt.obj(TY_KW); rt.slots[(int) bare] = new long[]{ NIL, na };
+        long bare2 = rt.obj(TY_KW); rt.slots[(int) bare2] = new long[]{ NIL, nb };
+        long qual = rt.obj(TY_KW); rt.slots[(int) qual] = new long[]{ nsa, na };
+        long qual2 = rt.obj(TY_KW); rt.slots[(int) qual2] = new long[]{ nsb, na };
+        o.append("kw=").append(sgn(valCmp(rt, bare, qual)))
+         .append(sgn(valCmp(rt, qual, bare))).append(sgn(valCmp(rt, bare, bare2)))
+         .append(sgn(valCmp(rt, qual, qual2))).append(sgn(valCmp(rt, qual, qual))).append(' ');
+        long sym = rt.obj(TY_SYM); rt.slots[(int) sym] = new long[]{ NIL, na };
+        long sym2 = rt.obj(TY_SYM); rt.slots[(int) sym2] = new long[]{ NIL, nb };
+        o.append("sym=").append(sgn(valCmp(rt, sym, sym2))).append(' ');
+
+        long sa = rt.obj(TY_VEC);
+        long sb = rt.obj(TY_VEC);
+        rt.slots[(int) sa][0] = 3; rt.slots[(int) sb][0] = 3;
+        rt.work = 0;
+        o.append("seq=").append(sgn(valCmp(rt, sa, sb)))
+         .append(" work=").append(rt.work).append(' ');
+        rt.slots[(int) sa][0] = 2; rt.slots[(int) sb][0] = 3;
+        o.append("short=").append(sgn(valCmp(rt, sa, sb))).append(' ');
+        rt.slots[(int) sa][0] = 3; rt.slots[(int) sb][0] = 2;
+        o.append("long=").append(sgn(valCmp(rt, sa, sb))).append(' ');
+        rt.slots[(int) sa][0] = 0; rt.slots[(int) sb][0] = 0;
+        o.append("empty=").append(sgn(valCmp(rt, sa, sb))).append(' ');
+
+        rt.thrown = "";
+        long k = rt.obj(TY_KW);
+        long x = rt.obj(TY_OTHER);
+        int c = valCmp(rt, k, x);
+        o.append("bad=").append(c).append("|").append(rt.thrown).append("|");
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Eq {
+        internal static int Category(Probe.Rt rt, long v) { return Probe.Category(rt, v); }
+    }
+}
+--csharp-head
+    internal const long NIL = 0xFFFFL;
+    internal const long TRUE = 0x2001L, FALSE = 0x2002L;
+    internal const int CAT_SCALAR = 0, CAT_SEQUENTIAL = 1;
+    internal static class Obj {
+        internal const int TyStr = 10, TyKw = 11, TySym = 12;
+        internal const int TyVec = 13, TyCons = 14, TyOther = 15;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = Probe.NIL;
+        internal const long True = Probe.TRUE, False = Probe.FALSE;
+        internal static bool IsHeap(long v) { return v >= 100 && v < 0x100000000L && v != NIL; }
+        internal static long AsHeap(long v) { return v; }
+        internal static bool IsNil(long v) { return v == NIL; }
+        internal static bool IsDouble(long v) { return (v >> 32) == 2; }
+        internal static bool IsBool(long v) { return v == TRUE || v == FALSE; }
+    }
+    internal static long Num_(long n) { return 0x100000000L | (n & 0xFFFFFFFFL); }
+    internal static long Dbl(long i) { return 0x200000000L | i; }
+    internal static int Sgn(int n) { return n < 0 ? -1 : n > 0 ? 1 : 0; }
+    internal sealed class Space { internal byte[] m = new byte[400]; }
+    internal sealed class Rt {
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal long[,] slots = new long[400, 2];
+        internal int work = 0;
+        internal string thrown = "";
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal void PopTo(int n) { while (roots.Count > n) roots.RemoveAt(roots.Count - 1); }
+        internal void ChargeWork(long n) { work += (int) n; }
+        internal long Slot_(long v, int i) { return slots[(int) v, i]; }
+        internal long Obj_(int t) {
+            long a = bump; bump += 1;
+            gc.sp.m[(int) a] = (byte) t;
+            slots[(int) a, 0] = NIL; slots[(int) a, 1] = NIL;
+            return a;
+        }
+        internal long ThrowStr(string cls, string msg) { thrown = cls + "/" + msg; return NIL; }
+        internal long NameOf(long v) { return Slot_(v, 1); }
+        internal string Describe(long v) {
+            if (!Val.IsHeap(v)) return "a scalar";
+            return "a #" + Obj.Ty(gc.sp, Val.AsHeap(v));
+        }
+    }
+    internal static string Describe(Rt rt, long v) { return rt.Describe(v); }
+    internal static class Num {
+        internal static bool IsNumber(Rt rt, long v) { return (v >> 32) == 1 || Val.IsDouble(v); }
+        internal static int Cmp(Rt rt, long a, long b) {
+            return Sgn((int) (a & 0xFFFFFFFFL) - (int) (b & 0xFFFFFFFFL));
+        }
+    }
+    internal static class Str {
+        internal static bool IsString(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr; }
+        internal static int CompareUtf16(Rt rt, long a, long b) {
+            return Sgn((int) rt.Slot_(a, 0) - (int) rt.Slot_(b, 0));
+        }
+        internal static bool IsKeyword(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyKw; }
+    }
+    internal static bool IsSymbol(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TySym; }
+    internal static long NsOf(Rt rt, long v) { return rt.Slot_(v, 0); }
+    internal static int Category(Rt rt, long v) {
+        if (Val.IsHeap(v)) {
+            int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+            if (t == Obj.TyVec || t == Obj.TyCons) return CAT_SEQUENTIAL;
+        }
+        return CAT_SCALAR;
+    }
+    internal static long Seq(Rt rt, long c) {
+        int n = (int) rt.Slot_(c, 0);
+        return n == 0 ? NIL : 0xC000L + n;
+    }
+    internal static long First(Rt rt, long s) { return Num_(s - 0xC000L); }
+    internal static long Next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+--csharp
+    public static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+
+        long d = Dbl(1);
+        o.Append("id=").Append(Sgn(ValCmp(rt, Num_(5), Num_(5))))
+         .Append(Sgn(ValCmp(rt, d, d))).Append(' ');
+        o.Append("nil=").Append(Sgn(ValCmp(rt, NIL, Num_(1))))
+         .Append(Sgn(ValCmp(rt, Num_(1), NIL))).Append(Sgn(ValCmp(rt, NIL, NIL))).Append(' ');
+        o.Append("num=").Append(Sgn(ValCmp(rt, Num_(1), Num_(2))))
+         .Append(Sgn(ValCmp(rt, Num_(2), Num_(1)))).Append(Sgn(ValCmp(rt, Num_(2), Num_(2)))).Append(' ');
+        o.Append("bool=").Append(Sgn(ValCmp(rt, Val.False, Val.True)))
+         .Append(Sgn(ValCmp(rt, Val.True, Val.False))).Append(Sgn(ValCmp(rt, Val.True, Val.True)))
+         .Append(Sgn(ValCmp(rt, Val.False, Val.False))).Append(' ');
+
+        long s1 = rt.Obj_(Obj.TyStr); rt.slots[(int) s1, 0] = 5;
+        long s2 = rt.Obj_(Obj.TyStr); rt.slots[(int) s2, 0] = 9;
+        long s3 = rt.Obj_(Obj.TyStr); rt.slots[(int) s3, 0] = 5;
+        o.Append("str=").Append(Sgn(ValCmp(rt, s1, s2)))
+         .Append(Sgn(ValCmp(rt, s2, s1))).Append(Sgn(ValCmp(rt, s1, s3))).Append(' ');
+
+        long nsa = rt.Obj_(Obj.TyStr); rt.slots[(int) nsa, 0] = 1;
+        long nsb = rt.Obj_(Obj.TyStr); rt.slots[(int) nsb, 0] = 2;
+        long na = rt.Obj_(Obj.TyStr); rt.slots[(int) na, 0] = 3;
+        long nb = rt.Obj_(Obj.TyStr); rt.slots[(int) nb, 0] = 4;
+        long bare = rt.Obj_(Obj.TyKw); rt.slots[(int) bare, 0] = NIL; rt.slots[(int) bare, 1] = na;
+        long bare2 = rt.Obj_(Obj.TyKw); rt.slots[(int) bare2, 0] = NIL; rt.slots[(int) bare2, 1] = nb;
+        long qual = rt.Obj_(Obj.TyKw); rt.slots[(int) qual, 0] = nsa; rt.slots[(int) qual, 1] = na;
+        long qual2 = rt.Obj_(Obj.TyKw); rt.slots[(int) qual2, 0] = nsb; rt.slots[(int) qual2, 1] = na;
+        o.Append("kw=").Append(Sgn(ValCmp(rt, bare, qual)))
+         .Append(Sgn(ValCmp(rt, qual, bare))).Append(Sgn(ValCmp(rt, bare, bare2)))
+         .Append(Sgn(ValCmp(rt, qual, qual2))).Append(Sgn(ValCmp(rt, qual, qual))).Append(' ');
+        long sym = rt.Obj_(Obj.TySym); rt.slots[(int) sym, 0] = NIL; rt.slots[(int) sym, 1] = na;
+        long sym2 = rt.Obj_(Obj.TySym); rt.slots[(int) sym2, 0] = NIL; rt.slots[(int) sym2, 1] = nb;
+        o.Append("sym=").Append(Sgn(ValCmp(rt, sym, sym2))).Append(' ');
+
+        long sa = rt.Obj_(Obj.TyVec);
+        long sb = rt.Obj_(Obj.TyVec);
+        rt.slots[(int) sa, 0] = 3; rt.slots[(int) sb, 0] = 3;
+        rt.work = 0;
+        o.Append("seq=").Append(Sgn(ValCmp(rt, sa, sb)))
+         .Append(" work=").Append(rt.work).Append(' ');
+        rt.slots[(int) sa, 0] = 2; rt.slots[(int) sb, 0] = 3;
+        o.Append("short=").Append(Sgn(ValCmp(rt, sa, sb))).Append(' ');
+        rt.slots[(int) sa, 0] = 3; rt.slots[(int) sb, 0] = 2;
+        o.Append("long=").Append(Sgn(ValCmp(rt, sa, sb))).Append(' ');
+        rt.slots[(int) sa, 0] = 0; rt.slots[(int) sb, 0] = 0;
+        o.Append("empty=").Append(Sgn(ValCmp(rt, sa, sb))).Append(' ');
+
+        rt.thrown = "";
+        long k = rt.Obj_(Obj.TyKw);
+        long x = rt.Obj_(Obj.TyOther);
+        int c = ValCmp(rt, k, x);
+        o.Append("bad=").Append(c).Append("|").Append(rt.thrown).Append("|");
+        System.Console.WriteLine(o.ToString());
+    }

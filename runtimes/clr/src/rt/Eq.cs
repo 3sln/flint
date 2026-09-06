@@ -49,33 +49,10 @@ public static class Eq {
     /// Clojure's `compare`: -1, 0 or 1, and a THROW for values that have no
     /// ordering. Refusing is the right answer -- a `sort` over mixed types
     /// silently ordered by type tag would be stable, plausible and wrong.
-    public static int Compare(Rt rt, long a, long b) {
-        if (a == b && !Val.IsDouble(a)) return 0;
-        if (Val.IsNil(a)) return -1;
-        if (Val.IsNil(b)) return 1;
-        if (Num.IsNumber(rt, a) && Num.IsNumber(rt, b)) return Num.Cmp(rt, a, b);
-        bool ba = a == Val.True || a == Val.False, bb = b == Val.True || b == Val.False;
-        if (ba && bb) return (a == Val.True ? 1 : 0) - (b == Val.True ? 1 : 0);
-        if (Str.IsString(rt, a) && Str.IsString(rt, b))
-            return Utf16Cmp(Str.Text(rt, a), Str.Text(rt, b));
-        bool ka = Val.IsInlineKw(a) || rt.IsHeapTy(a, Obj.TyKw);
-        bool kb = Val.IsInlineKw(b) || rt.IsHeapTy(b, Obj.TyKw);
-        if (ka && kb) return CmpNamed(rt, a, b);
-        if (rt.IsHeapTy(a, Obj.TySym) && rt.IsHeapTy(b, Obj.TySym)) return CmpNamed(rt, a, b);
-        if (rt.IsSequential(a) && rt.IsSequential(b)) return CmpSequential(rt, a, b);
-        // Sets `thrown` and answers 0, as the Rust does: `Compare` returns an
-        // int, so there is no failure value to hand back -- the pending throw
-        // is the answer, and the interpreter unwinds on the way out.
-        rt.ThrowStr("ClassCastException",
-            "cannot compare " + rt.Describe(a) + " with " + rt.Describe(b));
-        return 0;
-    }
-
-    /// By UTF-16 CODE UNIT, as Java's `compareTo` is -- not by code point. The
-    /// two orders differ above U+FFFF, and Clojure's is the UTF-16 one.
-    /// `string.CompareOrdinal` is that comparison; the loop says so out loud
-    /// because the culture-sensitive default would be a silent divergence.
-    static int Utf16Cmp(string x, string y) {
+    /// By UTF-16 CODE UNIT, as `string.CompareTo` is -- not by code point.
+    /// The two orders differ above U+FFFF, and Clojure's is the UTF-16 one.
+    /// `Str.CompareUtf16` is what the generated `compare` reaches this by.
+    public static int Utf16Cmp(string x, string y) {
         int n = System.Math.Min(x.Length, y.Length);
         for (int i = 0; i < n; i++) {
             int d = x[i] - y[i];
@@ -84,43 +61,16 @@ public static class Eq {
         return x.Length.CompareTo(y.Length);
     }
 
-    /// Namespace first, then name -- and a value WITHOUT a namespace sorts
-    /// before one with, which is Clojure's rule and not alphabetical order.
-    static int CmpNamed(Rt rt, long a, long b) {
-        long na = NsOf(rt, a), nb = NsOf(rt, b);
-        if (Val.IsNil(na) && !Val.IsNil(nb)) return -1;
-        if (!Val.IsNil(na) && Val.IsNil(nb)) return 1;
-        if (!Val.IsNil(na)) {
-            int c = Compare(rt, na, nb);
-            if (c != 0) return c;
-        }
-        return Compare(rt, NameOf(rt, a), NameOf(rt, b));
-    }
+    // `Compare`, `CmpNamed` and `CmpSequential` are GENERATED, from
+    // `kin/valcmp.kin`. `Utf16Cmp` stays, and `Str.CompareUtf16` is the name
+    // the generated arm reaches it by -- native was reading a rope's SLOTS as
+    // UTF-8 where this port materialised and was right.
 
-    // THE SECOND COPIES ARE GONE. `Eq` had its own `NameOf` and `NsOf` that
-    // skipped the type check -- fine for the values it was handed, and two
-    // more places to keep in step.
     static long NsOf(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Names.NsOf(rt, v);
     static long NameOf(Rt rt, long v) => global::_3sln.Flint.Kgen.Rt.Names.NameOf(rt, v);
 
     /// Length first is WRONG for sequences: `[1 2]` is less than `[1 3]`, and
     /// both are less than `[1 2 3]`. So shorter-is-less only decides a tie.
-    static int CmpSequential(Rt rt, long a, long b) {
-        int bas = rt.Mark();
-        int x = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, a)), y = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, b));
-        int outv = 0;
-        for (;;) {
-            bool ex = Val.IsNil(rt.R(x)), ey = Val.IsNil(rt.R(y));
-            if (ex || ey) { outv = ex && ey ? 0 : (ex ? -1 : 1); break; }
-            int c = Compare(rt, global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(x)), global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(y)));
-            if (c != 0) { outv = c; break; }
-            long nx = global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(x)), ny = global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(y));
-            rt.SetR(x, nx); rt.SetR(y, ny);
-        }
-        rt.PopTo(bas);
-        return outv;
-    }
-
     static byte[] NsBytes(Rt rt, long v) {
         long ns = rt.Slot(v, 0);
         return Val.IsNil(ns) ? null : Str.Bytes(rt, ns);

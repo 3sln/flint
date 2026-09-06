@@ -738,7 +738,7 @@ public final class Builtins {
         def("flint/volatile?", (rt, at, n) -> Val.bool(rt.isHeapTy(rt.vat(at), TY_VOLATILE)));
         def("flint/delay?", (rt, at, n) -> Val.bool(rt.isHeapTy(rt.vat(at), TY_DELAY)));
 
-        def("compare", (rt, at, n) -> Val.fixnum(Eq.compare(rt, rt.vat(at), rt.vat(at + 1))));
+        def("compare", (rt, at, n) -> Val.fixnum(com._3sln.flint.kgen.rt.Valcmp.valCmp(rt, rt.vat(at), rt.vat(at + 1))));
 
         // --- metadata ---------------------------------------------------------
         def("with-meta", (rt, at, n) -> {

@@ -1,0 +1,134 @@
+;; `compare`: the total order `sort` runs on.
+;;
+;; NATIVE COMPARED ROPES AS GARBAGE. Its string arm read `str_bytes`, which
+;; debug-asserts `TY_STR` because a rope's `len` is its SLOT COUNT and its body
+;; is Values -- and in a release build the assert is off. MEASURED with a
+;; running program: two unequal 1 400-byte strings compared as 0, `(= a b)` was
+;; false, and `sort` over them was silently wrong. Both ports materialised and
+;; were right. `str-cmp` is the name that decision now has.
+;;
+;; IT COMPARES WITHIN A TYPE and REFUSES ACROSS. There is no order between a
+;; keyword and a vector, and inventing one is worse than saying so -- which is
+;; Clojure's rule too.
+;;
+;; IT ANSWERS AN `I32` AND SO HAS NO FAILURE VALUE. The refusal sets `thrown`
+;; and answers 0; the interpreter unwinds on the way out, which is how every
+;; `int`-returning refusal in this runtime works.
+(ns flint.rt.valcmp
+  (:require [flint.impl.rt :refer [defn return if let do comment doc local set
+                                   == != < not or and nil? is-heap as-heap ty
+                                   mark push r set-r pop-to forever break +
+                                   charge-work is-double is-bool is-number
+                                   num-cmp is-string str-cmp is-keyword
+                                   name-of throw-str str-cat - val-cmp
+                                   static-text to-i32
+                                   Rt Value I32 Cmp Ty Cat Bool RootIx Text NIL CAT_SEQUENTIAL
+                                   TRUE TY_SYM]]
+            [flint.rt.nouns :refer [describe]]
+            [flint.rt.names :refer [ns-of is-symbol]]
+            [flint.rt.seqcore :refer [is-seq]]
+            [flint.rt.seqwalk :refer [seq first next]]
+            [flint.rt.eq :refer [category]]))
+
+(doc "Two NAMED things -- keywords or symbols -- by namespace then name."
+     ""
+     "A BARE NAME SORTS BEFORE A QUALIFIED ONE, which is Clojure's order and"
+     "the reason the nil checks come before the comparison rather than being"
+     "folded into it.")
+(defn ^:method ^Cmp cmp-named [^:mut ^Rt rt ^Value a ^Value b]
+  (let [^Value na (ns-of rt a)
+        ^Value nb (ns-of rt b)]
+    (if (and (nil? rt na) (not (nil? rt nb)))
+      (return -1))
+    (if (and (not (nil? rt na)) (nil? rt nb))
+      (return 1))
+    (if (not (nil? rt na))
+      (let [^Cmp c (val-cmp rt na nb)]
+        (if (!= c 0)
+          (return c))))
+    (comment "HOISTED: Rust takes `&mut self` for both `name-of` and"
+             "`val-cmp`, and will not have the nested form.")
+    (let [^Value ma (name-of rt a)
+          ^Value mb (name-of rt b)]
+      (return (val-cmp rt ma mb)))))
+
+(doc "Two sequentials, element by element, and the SHORTER one first when one"
+     "runs out."
+     ""
+     "The same rooting discipline `seq-eq` has, and for the same reason: seq,"
+     "first and next allocate. CHARGED per element, because `compare` on two"
+     "big vectors is one bytecode instruction and O(n) work.")
+(defn ^:method ^Cmp cmp-sequential [^:mut ^Rt rt ^Value a ^Value b]
+  (let [^RootIx base (mark rt)
+        ^RootIx ai (push rt a)
+        ^RootIx bi (push rt b)
+        ^Value sa (seq rt (r rt ai))
+        ^RootIx ia (push rt sa)
+        ^Value sb (seq rt (r rt bi))
+        ^RootIx ib (push rt sb)]
+    (local ^:mut ^Cmp out)
+    (set out 0)
+    (forever
+      (do (charge-work rt 1)
+          (if (nil? rt (r rt ia))
+            (do (if (not (nil? rt (r rt ib)))
+                  (set out -1))
+                (break)))
+          (if (nil? rt (r rt ib))
+            (do (set out 1)
+                (break)))
+          (let [^Value fa (first rt (r rt ia))
+                ^RootIx fi (push rt fa)
+                ^Value fb (first rt (r rt ib))
+                ^RootIx fbi (push rt fb)
+                ^Cmp c (val-cmp rt (r rt fi) (r rt fbi))]
+            (pop-to rt fi)
+            (if (!= c 0)
+              (do (set out c)
+                  (break))))
+          (let [^Value na (next rt (r rt ia))]
+            (set-r rt ia na))
+          (let [^Value nb (next rt (r rt ib))]
+            (set-r rt ib nb))))
+    (pop-to rt base)
+    (return out)))
+
+(doc "`compare`."
+     ""
+     "IDENTITY IS ZERO, EXCEPT FOR A DOUBLE. Bit equality would make NaN"
+     "compare equal to itself, and `compare` has to agree with `=` about that."
+     ""
+     "NIL SORTS FIRST, before anything, including before another nil -- which"
+     "the identity check above has already answered.")
+(defn ^:pub ^:method ^Cmp val-cmp [^:mut ^Rt rt ^Value a ^Value b]
+  (if (and (== a b) (not (is-double rt a)))
+    (return 0))
+  (if (nil? rt a)
+    (return -1))
+  (if (nil? rt b)
+    (return 1))
+  (if (and (is-number rt a) (is-number rt b))
+    (return (num-cmp rt a b)))
+  (comment "BRANCHED rather than subtracted. `bool-bit` is UNSIGNED, so"
+           "`false - true` is not -1 but four billion -- and this function"
+           "answers a SIGN. False sorts before true.")
+  (if (and (is-bool rt a) (is-bool rt b))
+    (do (if (== a b)
+          (return 0))
+        (if (== a TRUE)
+          (return 1))
+        (return -1)))
+  (if (and (is-string rt a) (is-string rt b))
+    (return (str-cmp rt a b)))
+  (if (and (is-keyword rt a) (is-keyword rt b))
+    (return (cmp-named rt a b)))
+  (if (and (is-symbol rt a) (is-symbol rt b))
+    (return (cmp-named rt a b)))
+  (if (and (== (category rt a) CAT_SEQUENTIAL) (== (category rt b) CAT_SEQUENTIAL))
+    (return (cmp-sequential rt a b)))
+  (let [^Text wa (describe rt a)
+        ^Text wb (describe rt b)]
+    (throw-str rt "ClassCastException"
+               (str-cat (static-text "cannot compare ") wa
+                        (static-text " with ") wb)))
+  (return 0))

@@ -332,6 +332,14 @@ public static class Str {
                                 System.Text.Encoding.UTF8.GetBytes(name));
     }
 
+    /// Two strings in UTF-16 CODE UNIT order, across all three tiers.
+    /// `Eq.Compare` did this inline; it is a name now because the generated
+    /// `compare` needs one, and because native was reading a rope's SLOTS as
+    /// UTF-8 where this materialises.
+    public static int CompareUtf16(Rt rt, long a, long b) {
+        return Eq.Utf16Cmp(Text(rt, a), Text(rt, b));
+    }
+
     /// The hash of a STRING value, cached in the object for a heap string.
     ///
     /// The cache is `StrHash`, which this port WROTE during interning and

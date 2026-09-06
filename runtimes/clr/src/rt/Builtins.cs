@@ -672,7 +672,7 @@ public static class Builtins {
         Def("flint/delay?", (rt, at, n) => Val.Bool(rt.IsHeapTy(rt.VAt(at), Obj.TyDelay)));
 
         Def("compare", (rt, at, n) =>
-            Val.Fixnum(Flint.Rt.Eq.Compare(rt, rt.VAt(at), rt.VAt(at + 1))));
+            Val.Fixnum(global::_3sln.Flint.Kgen.Rt.Valcmp.ValCmp(rt, rt.VAt(at), rt.VAt(at + 1))));
 
         // --- metadata ---------------------------------------------------------
         Def("with-meta", (rt, at, n) => {

@@ -41,32 +41,10 @@ public final class Eq {
     /// Clojure's `compare`: -1, 0 or 1, and a THROW for values that have no
     /// ordering. Refusing is the right answer -- a `sort` over mixed types
     /// silently ordered by type tag would be stable, plausible and wrong.
-    public static int compare(Rt rt, long a, long b) {
-        if (a == b && !Val.isDouble(a)) return 0;
-        if (Val.isNil(a)) return -1;
-        if (Val.isNil(b)) return 1;
-        if (Num.isNumber(rt, a) && Num.isNumber(rt, b)) return Num.cmp(rt, a, b);
-        boolean ba = a == Val.TRUE || a == Val.FALSE, bb = b == Val.TRUE || b == Val.FALSE;
-        if (ba && bb) return (a == Val.TRUE ? 1 : 0) - (b == Val.TRUE ? 1 : 0);
-        if (Str.isString(rt, a) && Str.isString(rt, b)) {
-            return utf16Cmp(Str.text(rt, a), Str.text(rt, b));
-        }
-        boolean ka = Val.isInlineKw(a) || rt.isHeapTy(a, TY_KW);
-        boolean kb = Val.isInlineKw(b) || rt.isHeapTy(b, TY_KW);
-        if (ka && kb) return cmpNamed(rt, a, b);
-        if (rt.isHeapTy(a, TY_SYM) && rt.isHeapTy(b, TY_SYM)) return cmpNamed(rt, a, b);
-        if (rt.isSequential(a) && rt.isSequential(b)) return cmpSequential(rt, a, b);
-        // Sets `thrown` and answers 0, as the Rust does: `compare` returns an
-        // int, so there is no failure value to hand back -- the pending throw
-        // is the answer, and the interpreter unwinds on the way out.
-        rt.throwStr("ClassCastException",
-            "cannot compare " + rt.describe(a) + " with " + rt.describe(b));
-        return 0;
-    }
-
     /// By UTF-16 CODE UNIT, as `String.compareTo` is -- not by code point.
     /// The two orders differ above U+FFFF, and Clojure's is the UTF-16 one.
-    static int utf16Cmp(String x, String y) {
+    /// `Str.compareUtf16` is what the generated `compare` reaches this by.
+    public static int utf16Cmp(String x, String y) {
         int n = Math.min(x.length(), y.length());
         for (int i = 0; i < n; i++) {
             int d = x.charAt(i) - y.charAt(i);
@@ -75,18 +53,10 @@ public final class Eq {
         return Integer.compare(x.length(), y.length());
     }
 
-    /// Namespace first, then name -- and a value WITHOUT a namespace sorts
-    /// before one with, which is Clojure's rule and not alphabetical order.
-    static int cmpNamed(Rt rt, long a, long b) {
-        long na = nsOf(rt, a), nb = nsOf(rt, b);
-        if (Val.isNil(na) && !Val.isNil(nb)) return -1;
-        if (!Val.isNil(na) && Val.isNil(nb)) return 1;
-        if (!Val.isNil(na)) {
-            int c = compare(rt, na, nb);
-            if (c != 0) return c;
-        }
-        return compare(rt, nameOf(rt, a), nameOf(rt, b));
-    }
+    // `compare`, `cmpNamed` and `cmpSequential` are GENERATED, from
+    // `kin/valcmp.kin`. `utf16Cmp` stays, and `Str.compareUtf16` is the name
+    // the generated arm reaches it by -- native was reading a rope's SLOTS as
+    // UTF-8 where this port materialised and was right.
 
     static long nsOf(Rt rt, long v) { return com._3sln.flint.kgen.rt.Names.nsOf(rt, v); }
     /// THE SECOND COPY IS GONE. `Eq` had its own `nameOf` that skipped the
@@ -96,22 +66,6 @@ public final class Eq {
 
     /// Length first is WRONG for sequences: `[1 2]` is less than `[1 3]`, and
     /// both are less than `[1 2 3]`. So shorter-is-less only decides a tie.
-    static int cmpSequential(Rt rt, long a, long b) {
-        int base = rt.mark();
-        int x = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, a)), y = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, b));
-        int out = 0;
-        for (;;) {
-            boolean ex = Val.isNil(rt.r(x)), ey = Val.isNil(rt.r(y));
-            if (ex || ey) { out = ex && ey ? 0 : (ex ? -1 : 1); break; }
-            int c = compare(rt, Seqwalk.first(rt, rt.r(x)), Seqwalk.first(rt, rt.r(y)));
-            if (c != 0) { out = c; break; }
-            long nx = com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(x)), ny = com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(y));
-            rt.setR(x, nx); rt.setR(y, ny);
-        }
-        rt.popTo(base);
-        return out;
-    }
-
     static byte[] nsBytes(Rt rt, long v) {
         long ns = rt.slot(v, 0);
         return Val.isNil(ns) ? null : Str.bytes(rt, ns);

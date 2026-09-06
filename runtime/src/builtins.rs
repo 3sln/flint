@@ -93,7 +93,7 @@ builtins! {
     "compare", flint_b_compare, b_compare, |rt, a, n| {
         let _ = n;
         let (x, y) = (arg(rt, a, 0), arg(rt, a, 1));
-        Value::fixnum(rt.compare(x, y) as i64)
+        Value::fixnum(rt.val_cmp(x, y) as i64)
     };
 
     // --- arithmetic ---------------------------------------------------------

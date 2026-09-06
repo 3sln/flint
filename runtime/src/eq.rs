@@ -41,106 +41,26 @@ impl Rt {
 
     /// `compare`. Total within a type; ordering across unrelated types is an
     /// error in Clojure and returns 0 here after setting `thrown`.
-    pub fn compare(&mut self, a: Value, b: Value) -> i32 {
-        if a.0 == b.0 && !a.is_double() {
-            return 0;
-        }
-        if a.is_nil() {
-            return -1;
-        }
-        if b.is_nil() {
-            return 1;
-        }
-        if self.is_number(a) && self.is_number(b) {
-            return self.num_cmp(a, b);
-        }
-        if a.is_bool() && b.is_bool() {
-            return (a.is_true() as i32) - (b.is_true() as i32);
-        }
-        if self.is_string(a) && self.is_string(b) {
-            let mut ba = crate::rt::sbuf();
-            let mut bb = crate::rt::sbuf();
-            // Two borrows of self at once is fine: both are immutable.
-            let sa = if a.is_inline_str() {
-                core::str::from_utf8(a.inline_bytes(&mut ba)).unwrap_or("")
-            } else {
-                core::str::from_utf8(str_bytes(&self.gc.sp, a.as_heap())).unwrap_or("")
-            };
-            let sb = if b.is_inline_str() {
-                core::str::from_utf8(b.inline_bytes(&mut bb)).unwrap_or("")
-            } else {
-                core::str::from_utf8(str_bytes(&self.gc.sp, b.as_heap())).unwrap_or("")
-            };
-            return utf16_cmp(sa, sb);
-        }
-        if self.is_keyword(a) && self.is_keyword(b) {
-            return self.cmp_named(a, b);
-        }
-        if self.is_symbol(a) && self.is_symbol(b) {
-            return self.cmp_named(a, b);
-        }
-        if self.is_sequential(a) && self.is_sequential(b) {
-            return self.cmp_sequential(a, b);
-        }
-        let msg = alloc::format!("cannot compare {} with {}",
-                                 self.describe(a), self.describe(b));
-        self.throw_str("ClassCastException", &msg);
-        0
+    /// Two strings in UTF-16 CODE UNIT order, ACROSS ALL THREE TIERS.
+    ///
+    /// This used to be inline in `compare`, reading `str_bytes` -- and
+    /// `str_bytes` debug-asserts `TY_STR` because a rope's `len` is its SLOT
+    /// COUNT and its body is Values. In a release build the assert is off, so
+    /// comparing anything longer than `FLAT_MAX` read the rope's slots as
+    /// UTF-8: MEASURED, two unequal 1 400-byte strings compared as 0 and
+    /// `sort` over them was silently wrong. Both ports materialise and were
+    /// right; this does the same, and now one body decides for all three.
+    pub fn str_cmp(&mut self, a: Value, b: Value) -> i32 {
+        let sa = self.value_text(a);
+        let sb = self.value_text(b);
+        utf16_cmp(&sa, &sb)
     }
 
-    fn cmp_named(&mut self, a: Value, b: Value) -> i32 {
-        let (na, nb) = (self.ns_of(a), self.ns_of(b));
-        if na.is_nil() && !nb.is_nil() {
-            return -1;
-        }
-        if !na.is_nil() && nb.is_nil() {
-            return 1;
-        }
-        if !na.is_nil() {
-            let c = self.compare(na, nb);
-            if c != 0 {
-                return c;
-            }
-        }
-        let (ma, mb) = (self.name_of(a), self.name_of(b));
-        self.compare(ma, mb)
-    }
-
-    fn cmp_sequential(&mut self, a: Value, b: Value) -> i32 {
-        // Same rooting discipline as `seq_eq`: seq/first/next allocate.
-        let base = self.mark();
-        let ai = self.push(a);
-        let bi = self.push(b);
-        let sa = self.seq(self.r(ai));
-        let ia = self.push(sa);
-        let sb = self.seq(self.r(bi));
-        let ib = self.push(sb);
-        let r = loop {
-            self.charge_work(1);
-            let (x, y) = (self.r(ia), self.r(ib));
-            match (x.is_nil(), y.is_nil()) {
-                (true, true) => break 0,
-                (true, false) => break -1,
-                (false, true) => break 1,
-                _ => {}
-            }
-            let fa = self.first(self.r(ia));
-            let fi = self.push(fa);
-            let fb = self.first(self.r(ib));
-            let fbi = self.push(fb);
-            let c = self.compare(self.r(fi), self.r(fbi));
-            self.pop_to(fi);
-            if c != 0 {
-                break c;
-            }
-            let na = self.next(self.r(ia));
-            self.set_r(ia, na);
-            let nb = self.next(self.r(ib));
-            self.set_r(ib, nb);
-        };
-        self.pop_to(base);
-        r
-    }
+    // `compare`, `cmp_named` and `cmp_sequential` are GENERATED, from
+    // `kin/valcmp.kin`, under the names `val_cmp`, `cmp_named` and
+    // `cmp_sequential`. What went with them is the ROPE BUG: the string arm
+    // read `str_bytes`, which debug-asserts `TY_STR`, so a release build
+    // compared a rope's slots as UTF-8.
 
     pub fn eq_value(&mut self, a: Value, b: Value) -> Value {
         if self.val_eq(a, b) {
@@ -337,30 +257,30 @@ mod tests {
     #[test]
     fn compare_orders_within_a_type() {
         let mut rt = Rt::new();
-        assert_eq!(rt.compare(Value::fixnum(1), Value::fixnum(2)), -1);
-        assert_eq!(rt.compare(Value::fixnum(2), Value::fixnum(2)), 0);
-        assert_eq!(rt.compare(Value::from_f64(2.5), Value::fixnum(2)), 1);
-        assert_eq!(rt.compare(NIL, Value::fixnum(1)), -1, "nil sorts first");
-        assert_eq!(rt.compare(Value::fixnum(1), NIL), 1);
+        assert_eq!(rt.val_cmp(Value::fixnum(1), Value::fixnum(2)), -1);
+        assert_eq!(rt.val_cmp(Value::fixnum(2), Value::fixnum(2)), 0);
+        assert_eq!(rt.val_cmp(Value::from_f64(2.5), Value::fixnum(2)), 1);
+        assert_eq!(rt.val_cmp(NIL, Value::fixnum(1)), -1, "nil sorts first");
+        assert_eq!(rt.val_cmp(Value::fixnum(1), NIL), 1);
         let a = rt.string("a");
         let b = rt.string("b");
-        assert_eq!(rt.compare(a, b), -1);
-        assert!(rt.compare(b, a) > 0);
+        assert_eq!(rt.val_cmp(a, b), -1);
+        assert!(rt.val_cmp(b, a) > 0);
         let ka = rt.keyword(None, "a");
         let kb = rt.keyword(Some("z"), "a");
-        assert_eq!(rt.compare(ka, kb), -1, "an unqualified keyword sorts first");
+        assert_eq!(rt.val_cmp(ka, kb), -1, "an unqualified keyword sorts first");
         let v1 = vec_of(&mut rt, &[1]);
         let vi = rt.push(v1);
         let v2 = vec_of(&mut rt, &[1, 2]);
         let a0 = rt.r(vi);
-        assert_eq!(rt.compare(a0, v2), -1, "shorter sorts first when a prefix");
+        assert_eq!(rt.val_cmp(a0, v2), -1, "shorter sorts first when a prefix");
     }
 
     #[test]
     fn comparing_unrelated_types_throws_rather_than_guessing() {
         let mut rt = Rt::new();
         let s = rt.string("a");
-        let _ = rt.compare(s, Value::fixnum(1));
+        let _ = rt.val_cmp(s, Value::fixnum(1));
         assert!(!rt.thrown.is_nil(), "no total order across unrelated types");
     }
 }

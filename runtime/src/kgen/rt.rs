@@ -47,6 +47,7 @@ pub mod eq;
 pub mod eqalloc;
 pub mod valeq;
 pub mod valhash;
+pub mod valcmp;
 pub mod find;
 pub mod hash;
 pub mod interns;
