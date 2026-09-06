@@ -1,0 +1,69 @@
+;; Folding one column, without building a row or a ref for any of it.
+;;
+;; THIS IS THE OPERATION THE TYPE EXISTS FOR. A table is columns; scanning one
+;; field should cost one field. Going through rows would build a map per row
+;; only to read one key out of it, which is the shape a table is meant to
+;; replace.
+;;
+;; THE CALLBACK IS A FLINT CLOSURE, not a host one. `invoke-roots` takes its
+;; arguments from a contiguous run of shadow-stack roots -- the accumulator and
+;; the cell, which are already rooted and already adjacent -- so the call
+;; allocates nothing per row. A host argument array would have been built once
+;; per iteration, and a generated source cannot hold one anyway.
+(ns flint.rt.tablefold
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   >= not
+                                   slot mark push r set-r pop-to for
+                                   charge-tick throw-str str-cat static-text
+                                   invoke-roots is-thrown
+                                   Rt Value I32 RootIx Text NIL TB_SCHEMA]]
+            [flint.rt.tablemeta :refer [schema-width table-count]]
+            [flint.rt.tableref :refer [schema-id]]
+            [flint.rt.tablecell :refer [table-cell]]
+            [flint.rt.tablesay :refer [kw-name column-list]]))
+
+(doc "`(reduce-column t :col f init)` -- `f` over one column."
+     ""
+     "CHARGED PER ROW, and stoppable: `charge-tick` refuses when the budget is"
+     "gone, and the fold answers NIL rather than running on."
+     ""
+     "AND ASKED AFTER EVERY CALL WHETHER SOMETHING WAS THROWN. A flint throw"
+     "does not unwind the host stack -- it sets a field (`0026`) -- so a native"
+     "caller that invokes guest code and then keeps going would be running"
+     "inside an exception that has already happened.")
+(defn ^:pub ^:method ^Value table-reduce-column
+  [^:mut ^Rt rt ^Value t ^Value name ^Value f ^Value init]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^RootIx fi (push rt f)
+        ^RootIx acc (push rt init)
+        ^Value s (slot rt (r rt ti) TB_SCHEMA)
+        ^I32 id (schema-id rt s name)]
+    (if (>= id (schema-width rt s))
+      (do
+        (let [^Text nm (kw-name rt name)
+              ^Text cols (column-list rt s)]
+          (pop-to rt base)
+          (return (throw-str rt "IllegalArgumentException"
+                             (str-cat (static-text "no column :") nm
+                                      (static-text "; the columns are ") cols))))))
+    (let [^I32 n (table-count rt (r rt ti))]
+      (for [^I32 i 0 n]
+        (if (not (charge-tick rt i 1 (static-text "reduce-column")))
+          (do (pop-to rt base)
+              (return NIL)))
+        (comment "THE ACCUMULATOR AND THE CELL ARE ADJACENT ON THE SHADOW"
+                 "STACK, which is what lets `invoke-roots` take them as a run"
+                 "rather than a host array. `acc` was pushed first and the cell"
+                 "goes on top of it.")
+        (let [^Value cell (table-cell rt (r rt ti) id i)
+              ^RootIx vi (push rt cell)
+              ^Value nv (invoke-roots rt (r rt fi) acc 2)]
+          (if (is-thrown rt)
+            (do (pop-to rt base)
+                (return NIL)))
+          (set-r rt acc nv)
+          (pop-to rt vi)))
+      (let [^Value out (r rt acc)]
+        (pop-to rt base)
+        (return out)))))

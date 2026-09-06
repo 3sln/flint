@@ -1831,6 +1831,15 @@ public final class Rt {
     }
 
     /// Call `closure` with `args` from outside the interpreter.
+    /// `call`, with the arguments taken from a CONTIGUOUS RUN of shadow-stack
+    /// roots rather than a host array -- see the Rust copy. The array this
+    /// avoids was being built once per iteration.
+    public long invokeRoots(long f, int base, int n) {
+        long[] args = new long[n];
+        for (int i = 0; i < n; i++) args[i] = r(base + i);
+        return call(f, args);
+    }
+
     public long call(long closure, long[] args) {
         int save = roots.stackTop;
         vreserve(args.length + 1);

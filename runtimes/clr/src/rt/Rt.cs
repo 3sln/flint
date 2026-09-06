@@ -1613,6 +1613,14 @@ public sealed class Rt : System.IDisposable {
     }
 
     /// Call `closure` with `args` from outside the interpreter.
+    /// `Call`, with the arguments taken from a CONTIGUOUS RUN of shadow-stack
+    /// roots rather than a host array -- see the Rust copy.
+    public long InvokeRoots(long f, int bas, int n) {
+        long[] args = new long[n];
+        for (int i = 0; i < n; i++) args[i] = R(bas + i);
+        return Call(f, args);
+    }
+
     public long Call(long closure, long[] args) {
         int save = roots.StackTop;
         VReserve(args.Length + 1);

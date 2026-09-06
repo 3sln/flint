@@ -558,6 +558,34 @@ impl Rt {
     /// Call `f` with `args`, running a nested interpreter loop. Native code uses
     /// this for lazy-seq forcing, comparators and higher-order builtins; it is
     /// safe to re-enter because all VM state lives in `Rt`.
+    /// `invoke`, with the arguments taken from a CONTIGUOUS RUN of shadow-stack
+    /// roots rather than a host slice.
+    ///
+    /// The `(base, n)` convergence `list_from_roots` already uses, and here it
+    /// buys more than portability: a generated source cannot hold a host array
+    /// at all, and the callers that would have built one are building it PER
+    /// ITERATION. `table_reduce_column` calls this once per row, and its
+    /// arguments -- the accumulator and the cell -- are already rooted and
+    /// already adjacent, so there is nothing left to allocate.
+    ///
+    /// The body is `invoke`'s with the loop reading roots instead of a slice.
+    /// Sharing more than that would mean an iterator generic over both, which
+    /// is a bigger thing than the six lines it would save.
+    pub fn invoke_roots(&mut self, f: Value, base: usize, n: u32) -> Value {
+        let save = self.roots.stack_top;
+        self.vreserve(n as usize + 1);
+        self.vpush(f);
+        for i in 0..n {
+            let a = self.r(base + i as usize);
+            self.vpush(a);
+        }
+        let r = self.call_value(n as usize);
+        if self.park_on.is_nil() {
+            self.roots.stack_top = save;
+        }
+        r
+    }
+
     pub fn invoke(&mut self, f: Value, args: &[Value]) -> Value {
         let save = self.roots.stack_top;
         self.vreserve(args.len() + 1);

@@ -56,6 +56,7 @@ pub mod ropemeas;
 pub mod tablebuild;
 pub mod tablecell;
 pub mod tablefill;
+pub mod tablefold;
 pub mod tablekind;
 pub mod tablemake;
 pub mod tablemeta;

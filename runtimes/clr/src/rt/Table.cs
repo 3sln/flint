@@ -49,6 +49,9 @@ public static class Table {
     // Row-ref slots, and the transient's.
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // FOLDING A COLUMN, generated from `kin/tablefold.kin`.
+    public static long tableReduceColumn(Rt rt, long t, long name, long f, long init) { return global::_3sln.Flint.Kgen.Rt.Tablefold.TableReduceColumn(rt, t, name, f, init); }
+
     // ROWS IN AND OUT, generated from `kin/tablerow.kin`.
     public static long tableSlice(Rt rt, long t, long from, long to) { return global::_3sln.Flint.Kgen.Rt.Tablerow.TableSlice(rt, t, from, to); }
     public static long tableAssoc(Rt rt, long t, long k, long row) { return global::_3sln.Flint.Kgen.Rt.Tablerow.TableAssoc(rt, t, k, row); }
@@ -141,36 +144,6 @@ public static class Table {
     //
     // The half that makes a column store worth having rather than merely
     // compact: everything here reaches the COLUMN and never builds a row.
-
-    /// `(reduce-column t :col f init)` -- `f` over one column, without building
-    /// a row or a ref for any of them. This is the operation the type exists
-    /// for: scanning one field should cost one field.
-    public static long tableReduceColumn(Rt rt, long t, long name, long f, long init) {
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        int fi = rt.Push(f);
-        int acc = rt.Push(init);
-        long s = rt.Slot(rt.R(ti), TB_SCHEMA);
-        int id = schemaId(rt, s, name);
-        if (id >= schemaWidth(rt, s)) {
-            string nm = kwName(rt, name), cols = columnList(rt, s);
-            rt.PopTo(bas);
-            return rt.ThrowStr("IllegalArgumentException",
-                "no column :" + nm + "; the columns are " + cols);
-        }
-        int n = tableCount(rt, rt.R(ti));
-        for (int i = 0; i < n; i++) {
-            if (!rt.ChargeTick(i, 1, "reduce-column")) { rt.PopTo(bas); return Val.Nil; }
-            int vi = rt.Push(tableCell(rt, rt.R(ti), id, i));
-            long nv = rt.Call(rt.R(fi), new long[]{ rt.R(acc), rt.R(vi) });
-            if (!Val.IsNil(rt.thrown)) { rt.PopTo(bas); return Val.Nil; }
-            rt.SetR(acc, nv);
-            rt.PopTo(vi);
-        }
-        long outv = rt.R(acc);
-        rt.PopTo(bas);
-        return outv;
-    }
 
     // --- the transient ------------------------------------------------------
     //

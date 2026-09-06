@@ -1103,6 +1103,25 @@
     ;; when the budget is gone, and the caller unwinds. `0009` wants the two
     ;; kept apart: a scan that is bounded charges, and one that is not has to
     ;; be stoppable.
+    ;; CALL A FLINT CLOSURE, with the arguments taken from a contiguous run of
+    ;; shadow-stack roots. The `(base, n)` convergence again: a generated source
+    ;; cannot hold a host array, and the callers that would have built one were
+    ;; building it once per iteration.
+    'invoke-roots (core/call {:rust "{0}.invoke_roots({1}, {2}, {3})"
+                              :java "{0}.invokeRoots({1}, {2}, {3})"
+                              :csharp "{0}.InvokeRoots({1}, {2}, {3})"}
+                             {:tag Value})
+    ;; IS AN EXCEPTION IN FLIGHT? A native caller that invokes guest code has to
+    ;; ask after every call: the throw does not unwind the host stack, it sets
+    ;; a field (`0026`).
+    'is-thrown (core/call {:rust "!{0}.thrown.is_nil()"
+                           :java "!Val.isNil({0}.thrown)"
+                           :csharp "!Val.IsNil({0}.thrown)"}
+                          {:tag Bool})
+    'charge-tick (core/call {:rust "{0}.charge_tick({1} as u64, {2} as u64, {3})"
+                             :java "{0}.chargeTick({1}, {2}, {3})"
+                             :csharp "{0}.ChargeTick({1}, {2}, {3})"}
+                            {:tag Bool})
     'charge-checked (core/call {:rust "{0}.charge_checked({1} as u64, {2})"
                                 :java "{0}.chargeChecked({1}, {2})"
                                 :csharp "{0}.ChargeChecked({1}, {2})"}

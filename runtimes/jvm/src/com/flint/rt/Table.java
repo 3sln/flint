@@ -56,6 +56,9 @@ public final class Table {
     // Row-ref slots, and the transient's.
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // FOLDING A COLUMN, generated from `kin/tablefold.kin`.
+    public static long tableReduceColumn(Rt rt, long t, long name, long f, long init) { return com._3sln.flint.kgen.rt.Tablefold.tableReduceColumn(rt, t, name, f, init); }
+
     // ROWS IN AND OUT, generated from `kin/tablerow.kin`.
     public static long tableSlice(Rt rt, long t, long from, long to) { return com._3sln.flint.kgen.rt.Tablerow.tableSlice(rt, t, from, to); }
     public static long tableAssoc(Rt rt, long t, long k, long row) { return com._3sln.flint.kgen.rt.Tablerow.tableAssoc(rt, t, k, row); }
@@ -150,36 +153,6 @@ public final class Table {
     //
     // The half that makes a column store worth having rather than merely
     // compact: everything here reaches the COLUMN and never builds a row.
-
-    /// `(reduce-column t :col f init)` -- `f` over one column, without building
-    /// a row or a ref for any of them. This is the operation the type exists
-    /// for: scanning one field should cost one field.
-    public static long tableReduceColumn(Rt rt, long t, long name, long f, long init) {
-        int base = rt.mark();
-        int ti = rt.push(t);
-        int fi = rt.push(f);
-        int acc = rt.push(init);
-        long s = rt.slot(rt.r(ti), TB_SCHEMA);
-        int id = schemaId(rt, s, name);
-        if (id >= schemaWidth(rt, s)) {
-            String nm = kwName(rt, name), cols = columnList(rt, s);
-            rt.popTo(base);
-            return rt.throwStr("IllegalArgumentException",
-                "no column :" + nm + "; the columns are " + cols);
-        }
-        int n = tableCount(rt, rt.r(ti));
-        for (int i = 0; i < n; i++) {
-            if (!rt.chargeTick(i, 1, "reduce-column")) { rt.popTo(base); return Val.NIL; }
-            int vi = rt.push(tableCell(rt, rt.r(ti), id, i));
-            long nv = rt.call(rt.r(fi), new long[]{ rt.r(acc), rt.r(vi) });
-            if (!Val.isNil(rt.thrown)) { rt.popTo(base); return Val.NIL; }
-            rt.setR(acc, nv);
-            rt.popTo(vi);
-        }
-        long out = rt.r(acc);
-        rt.popTo(base);
-        return out;
-    }
 
     // --- the transient ------------------------------------------------------
     //

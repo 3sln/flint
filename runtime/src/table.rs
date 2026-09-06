@@ -134,44 +134,4 @@ impl Rt {
     // a row: a scan of one field of a million-row table should touch a million
     // values and nothing else.
 
-    /// `(reduce-column t :col f init)` -- `f` over one column, without building
-    /// a row or a ref for any of them. This is the operation the type exists
-    /// for: scanning one field should cost one field.
-    pub fn table_reduce_column(&mut self, t: Value, name: Value, f: Value, init: Value) -> Value {
-        let base = self.mark();
-        let ti = self.push(t);
-        let fi = self.push(f);
-        let acc = self.push(init);
-        let s = self.slot(self.r(ti), TB_SCHEMA);
-        let id = self.schema_id(s, name);
-        if id >= self.schema_width(s) {
-            let nm = self.kw_name(name);
-            let cols = self.column_list(s);
-            self.pop_to(base);
-            let msg = alloc::format!("no column :{nm}; the columns are {cols}");
-            return self.throw_str("IllegalArgumentException", &msg);
-        }
-        let n = self.table_count(self.r(ti));
-        for i in 0..n {
-            if !self.charge_tick(i as u64, 1, "reduce-column") {
-                self.pop_to(base);
-                return NIL;
-            }
-            let v = self.table_cell(self.r(ti), id, i);
-            let vi = self.push(v);
-            let argv = [self.r(acc), self.r(vi)];
-            let fv = self.r(fi);
-            let nv = self.invoke(fv, &argv);
-            if !self.thrown.is_nil() {
-                self.pop_to(base);
-                return NIL;
-            }
-            self.set_r(acc, nv);
-            self.pop_to(vi);
-        }
-        let out = self.r(acc);
-        self.pop_to(base);
-        out
-    }
-
 }
