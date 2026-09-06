@@ -1255,46 +1255,23 @@ public sealed class Rt : System.IDisposable {
 
     public long nextOpaque = 1;
 
+    /// The next opaque identity, and step the counter -- see the Rust copy.
+    public long TakeOpaqueId() { return nextOpaque++; }
+
     /// `[label, id, host-id]`. Guest code can mint one only with host id 0, and
     /// there is deliberately no builtin that reads an id back -- so a host id is
     /// a thing the HOST wrote and only the host can read.
     /// `#my.ns/thing v` (`doc/decisions/0034`): `[tag, form]`.
-    public long NewTagged(long tag, long form) {
-        int bas = Mark();
-        int ti = Push(tag), fi = Push(form);
-        long a = Alloc(Obj.TyTagged, 2);
-        if (a == 0) { PopTo(bas); return Val.Nil; }
-        long t = R(ti), f = R(fi);
-        PopTo(bas);
-        SetSlot(a, 0, t);
-        SetSlot(a, 1, f);
-        return Val.Heap(a);
-    }
+        public long NewTagged(long tag, long form) { return global::_3sln.Flint.Kgen.Rt.Opaque.NewTagged(this, tag, form); }
 
-    public long NewOpaque(long label, long hostId) {
-        int bas = Mark();
-        int li = Push(label);
-        long a = Alloc(Obj.TyOpaque, 3);
-        if (a == 0) { PopTo(bas); return Val.Nil; }
-        long l = R(li);
-        PopTo(bas);
-        long id = nextOpaque++;
-        SetSlot(a, 0, l);
-        SetSlot(a, 1, Val.Fixnum(id));
-        SetSlot(a, 2, Val.Fixnum(hostId));
-        return Val.Heap(a);
-    }
+        public long NewOpaque(long label, long hostId) { return global::_3sln.Flint.Kgen.Rt.Opaque.NewOpaque(this, label, hostId); }
 
-    public bool IsOpaque(long v) => IsHeapTy(v, Obj.TyOpaque);
+    public bool IsOpaque(long v) => global::_3sln.Flint.Kgen.Rt.Opaque.IsOpaque(this, v);
 
     /// The host id a capability was issued with, or 0 for a guest-minted one.
-    public long OpaqueHostId(long v) {
-        if (!IsOpaque(v)) return 0;
-        long s = Slot(v, 2);
-        return Val.IsFixnum(s) ? Val.AsFixnum(s) : 0;
-    }
+        public long OpaqueHostId(long v) { return global::_3sln.Flint.Kgen.Rt.Opaque.OpaqueHostId(this, v); }
 
-    public long OpaqueLabel(long v) => IsOpaque(v) ? Slot(v, 0) : Val.Nil;
+    public long OpaqueLabel(long v) => global::_3sln.Flint.Kgen.Rt.Opaque.OpaqueLabel(this, v);
 
 
     /// Gas for work that is not O(1) (`doc/decisions/0009`).

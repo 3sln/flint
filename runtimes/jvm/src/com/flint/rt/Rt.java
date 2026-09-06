@@ -1363,46 +1363,23 @@ public final class Rt {
 
     public long nextOpaque = 1;
 
+    /// The next opaque identity, and step the counter -- see the Rust copy.
+    public long takeOpaqueId() { return nextOpaque++; }
+
     /// `[label, id, host-id]`. Guest code can mint one only with host id 0, and
     /// there is deliberately no builtin that reads an id back -- so a host id is
     /// a thing the HOST wrote and only the host can read.
     /// `#my.ns/thing v` (`doc/decisions/0034`): `[tag, form]`, tag a symbol.
-    public long newTagged(long tag, long form) {
-        int base = mark();
-        int ti = push(tag), fi = push(form);
-        long a = alloc(Obj.TY_TAGGED, 2);
-        if (a == 0) { popTo(base); return Val.NIL; }
-        long t = r(ti), f = r(fi);
-        popTo(base);
-        setSlot(a, 0, t);
-        setSlot(a, 1, f);
-        return Val.heap(a);
-    }
+    public long newTagged(long tag, long form) { return com._3sln.flint.kgen.rt.Opaque.newTagged(this, tag, form); }
 
-    public long newOpaque(long label, long hostId) {
-        int base = mark();
-        int li = push(label);
-        long a = alloc(Obj.TY_OPAQUE, 3);
-        if (a == 0) { popTo(base); return Val.NIL; }
-        long l = r(li);
-        popTo(base);
-        long id = nextOpaque++;
-        setSlot(a, 0, l);
-        setSlot(a, 1, Val.fixnum(id));
-        setSlot(a, 2, Val.fixnum(hostId));
-        return Val.heap(a);
-    }
+    public long newOpaque(long label, long hostId) { return com._3sln.flint.kgen.rt.Opaque.newOpaque(this, label, hostId); }
 
-    public boolean isOpaque(long v) { return isHeapTy(v, Obj.TY_OPAQUE); }
+    public boolean isOpaque(long v) { return com._3sln.flint.kgen.rt.Opaque.isOpaque(this, v); }
 
     /// The host id a capability was issued with, or 0 for a guest-minted one.
-    public long opaqueHostId(long v) {
-        if (!isOpaque(v)) return 0;
-        long s = slot(v, 2);
-        return Val.isFixnum(s) ? Val.asFixnum(s) : 0;
-    }
+    public long opaqueHostId(long v) { return com._3sln.flint.kgen.rt.Opaque.opaqueHostId(this, v); }
 
-    public long opaqueLabel(long v) { return isOpaque(v) ? slot(v, 0) : Val.NIL; }
+    public long opaqueLabel(long v) { return com._3sln.flint.kgen.rt.Opaque.opaqueLabel(this, v); }
 
 
     /// Gas for work that is not O(1) (`doc/decisions/0009`).

@@ -234,7 +234,9 @@ impl Rt {
                 let mut b = crate::rt::sbuf();
                 let l: String = self.as_str(label, &mut b).unwrap_or("").into();
                 out.push(K_SENTINEL);
-                put_u64(out, self.opaque_host_id(v));
+                // SIGNED across the port now, and the wire is unsigned. The
+                // bits are the same; only the name for them differs.
+                put_u64(out, self.opaque_host_id(v) as u64);
                 put_str(out, &l);
                 Ok(())
             }
@@ -573,7 +575,7 @@ impl Rt {
                 let base = self.mark();
                 let l = self.string(&label);
                 self.push(l);
-                let out = self.new_opaque(self.r(base), host_id);
+                let out = self.new_opaque(self.r(base), host_id as i64);
                 self.pop_to(base);
                 Ok(out)
             }

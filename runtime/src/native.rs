@@ -395,7 +395,7 @@ impl Program {
             let ki = rt.push(k);
             let l = rt.string(name);
             let li = rt.push(l);
-            let o = rt.new_opaque(rt.r(li), *id);
+            let o = rt.new_opaque(rt.r(li), *id as i64);
             let oi = rt.push(o);
             m = rt.map_assoc(rt.r(mi), rt.r(ki), rt.r(oi));
             rt.set_r(mi, m);

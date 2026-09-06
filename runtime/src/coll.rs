@@ -1295,71 +1295,16 @@ impl Rt {
 
     // --- opaque values (doc/decisions/0022) -------------------------------------
 
-    /// Mint an opaque value: identity without structure.
+    /// The next opaque identity, and step the counter.
     ///
-    /// `host_id` is 0 for anything guest code asked for. A non-zero one marks a
-    /// value only the host could have made -- but that is a RECORD of
-    /// provenance, not a permission. 0022 is explicit about the hazard the
-    /// guest-minted kind introduces: because a program can mint its own,
-    /// authority can never be "is it opaque", only the host recognising this
-    /// specific object in its own grant table.
-    /// `#my.ns/thing v`. `tag` is a namespaced symbol; `form` is any value.
-    pub fn new_tagged(&mut self, tag: Value, form: Value) -> Value {
-        let base = self.mark();
-        let ti = self.push(tag);
-        let fi = self.push(form);
-        let a = self.alloc(crate::obj::TY_TAGGED, 2);
-        let v = Value::heap(a);
-        let vi = self.push(v);
-        let (t, f) = (self.r(ti), self.r(fi));
-        self.set(self.r(vi), 0, t);
-        self.set(self.r(vi), 1, f);
-        let out = self.r(vi);
-        self.pop_to(base);
-        out
-    }
-
-    pub fn is_tagged(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == crate::obj::TY_TAGGED
-    }
-
-    pub fn new_opaque(&mut self, label: Value, host_id: u64) -> Value {
-        let base = self.mark();
-        let li = self.push(label);
-        let a = self.alloc(TY_OPAQUE, 3);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        let label = self.r(li);
-        self.pop_to(base);
+    /// A generated source can neither hold the counter nor increment it in
+    /// place, so it asks for one. Identities are never reused: `0022` says an
+    /// opaque value IS its identity, and a recycled id would make two of them
+    /// equal.
+    pub fn take_opaque_id(&mut self) -> i64 {
         let id = self.next_opaque;
         self.next_opaque = self.next_opaque.wrapping_add(1);
-        self.set_slot(a, 0, label);
-        // STORED, not derived from `a`: the nursery is a copying collector, so
-        // an address-derived hash would change under collection and a value in
-        // a map would stop being findable by the key that put it there.
-        self.set_slot(a, 1, Value::fixnum(id as i64));
-        self.set_slot(a, 2, Value::fixnum(host_id as i64));
-        Value::heap(a)
-    }
-
-    pub fn is_opaque(&self, v: Value) -> bool {
-        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_OPAQUE
-    }
-
-    /// The host id, or 0 for a guest-minted value. Not reachable from guest
-    /// code -- there is no builtin that returns it.
-    pub fn opaque_host_id(&self, v: Value) -> u64 {
-        if !self.is_opaque(v) {
-            return 0;
-        }
-        let s = slot(&self.gc.sp, v.as_heap(), 2);
-        if s.is_fixnum() { s.as_fixnum() as u64 } else { 0 }
-    }
-
-    pub fn opaque_label(&self, v: Value) -> Value {
-        if self.is_opaque(v) { slot(&self.gc.sp, v.as_heap(), 0) } else { NIL }
+        id as i64
     }
 
     // --- diagnostics ------------------------------------------------------------

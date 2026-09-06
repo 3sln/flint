@@ -166,7 +166,7 @@ fn opener(cap_host_id: Option<u64>) -> Rt {
     let arg = match cap_host_id {
         Some(id) => {
             let l = rt.string("fs");
-            rt.new_opaque(l, id)
+            rt.new_opaque(l, id as i64)
         }
         None => NIL,
     };
@@ -227,7 +227,7 @@ fn presented(rt: &mut Rt, payload: &[u8]) -> Option<u64> {
         let idx = rt.integer(k as i64);
         let arg = rt.nth(v, idx, None);
         if rt.is_opaque(arg) {
-            return Some(rt.opaque_host_id(arg));
+            return Some(rt.opaque_host_id(arg) as u64);
         }
     }
     None

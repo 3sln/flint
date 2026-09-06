@@ -542,6 +542,10 @@
     'nil? (core/call {:rust "{1}.is_nil()" :java "Val.isNil({1})" :csharp "Val.IsNil({1})"})
     ;; AN INLINE KEYWORD AS THE INLINE STRING OF ITS NAME. A tag swap: the
     ;; payload and the length are already in the right places.
+    'take-opaque-id (core/call {:rust "{0}.take_opaque_id()"
+                                :java "{0}.takeOpaqueId()"
+                                :csharp "{0}.TakeOpaqueId()"}
+                               {:tag I64})
     'kw-to-str (core/call {:rust "{1}.kw_to_str()"
                            :java "Val.kwToStr({1})" :csharp "Val.KwToStr({1})"}
                           {:tag Value})

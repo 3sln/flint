@@ -1,0 +1,86 @@
+;; TAGGED forms and OPAQUE values -- the two wrappers a guest can hold but not
+;; look inside.
+;;
+;; `0022`: AN OPAQUE VALUE IS ITS IDENTITY. A host hands one out to stand for
+;; something the guest has no representation for -- a file, a socket, a handle
+;; -- and the only thing the guest may do with it is pass it back. So the one
+;; property that has to hold is that it stays the same value: equal to itself,
+;; findable in a map by the key that put it there, across any number of
+;; collections.
+(ns flint.rt.opaque
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == not is-heap as-heap ty is-fixnum
+                                   new-obj slot set-slot fixnum as-fixnum nil?
+                                   mark push r pop-to take-opaque-id
+                                   Rt Value I64 Bool RootIx NIL
+                                   TY_TAGGED TY_OPAQUE]]))
+
+(doc "A tagged form: a reader tag and the form it wrapped.")
+(defn ^:pub ^:method ^Value new-tagged [^:mut ^Rt rt ^Value tag ^Value form]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt tag)
+        ^RootIx fi (push rt form)
+        ^Value v (new-obj rt TY_TAGGED 2)]
+    (comment "`new-obj` AND NOT `alloc`: it answers NIL when the heap refused."
+             "BOTH PORTS CHECKED AND RUST DID NOT -- Rust's `new_opaque`"
+             "checked and its `new_tagged` did not, so the odd one out was a"
+             "single function in a single runtime. A half-allocated tagged"
+             "form is worse than a refusal.")
+    (if (nil? rt v)
+      (do (pop-to rt base)
+          (return NIL)))
+    (comment "THE TAG AND THE FORM ARE RE-READ FROM THE ROOTS. The allocation"
+             "may have moved them, and 0031 says a value in a host local does"
+             "not survive one.")
+    (set-slot rt v 0 (r rt ti))
+    (set-slot rt v 1 (r rt fi))
+    (pop-to rt base)
+    (return v)))
+
+(defn ^:pub ^:method ^Bool is-tagged [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_TAGGED)))
+
+(doc "An opaque value: a label, an identity, and the host's own id."
+     ""
+     "THE IDENTITY IS STORED, NOT DERIVED FROM THE ADDRESS. The nursery is a"
+     "COPYING collector, so an address-derived hash would change under"
+     "collection -- and a value in a map would stop being findable by the key"
+     "that put it there. That is the whole reason there is a slot for it.")
+(defn ^:pub ^:method ^Value new-opaque [^:mut ^Rt rt ^Value label ^I64 host-id]
+  (let [^RootIx base (mark rt)
+        ^RootIx li (push rt label)
+        ^Value v (new-obj rt TY_OPAQUE 3)]
+    (if (nil? rt v)
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^I64 id (take-opaque-id rt)]
+      (set-slot rt v 0 (r rt li))
+      (set-slot rt v 1 (fixnum id))
+      (set-slot rt v 2 (fixnum host-id))
+      (pop-to rt base)
+      (return v))))
+
+(defn ^:pub ^:method ^Bool is-opaque [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_OPAQUE)))
+
+(doc "The host's id, or 0 for a GUEST-MINTED value."
+     ""
+     "Not reachable from guest code -- there is no builtin that answers it. A"
+     "host uses it to recognise its own.")
+(defn ^:pub ^:method ^I64 opaque-host-id [^Rt rt ^Value v]
+  (if (not (is-opaque rt v))
+    (return 0))
+  (let [^Value s (slot rt v 2)]
+    (if (not (is-fixnum rt s))
+      (return 0))
+    (return (as-fixnum s))))
+
+(doc "The label, or nil.")
+(defn ^:pub ^:method ^Value opaque-label [^Rt rt ^Value v]
+  (if (not (is-opaque rt v))
+    (return NIL))
+  (return (slot rt v 0)))

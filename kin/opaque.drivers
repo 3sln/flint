@@ -1,0 +1,215 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_TAGGED: u8 = 36; const TY_OPAQUE: u8 = 37; const TY_VEC: u8 = 9;
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 && (self.0 >> 60) != 0xD }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn is_fixnum(self) -> bool { (self.0 >> 60) == 0xD }
+    fn as_fixnum(self) -> i64 { (self.0 & 0xFFFF_FFFF) as i64 }
+    fn fixnum(n: i64) -> Value { Value((0xDu64 << 60) | (n as u64 & 0xFFFF_FFFF)) }
+}
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { h: Vec<u64>, gc: Gc, bump: u64, roots: Vec<Value>,
+            next_opaque: i64, starve: bool }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn slot(&self, v: Value, i: u32) -> Value { Value(self.h[v.0 as usize + i as usize]) }
+    fn set(&mut self, v: Value, i: u32, x: Value) { self.h[v.0 as usize + i as usize] = x.0; }
+    // `starve` MAKES THE HEAP REFUSE, which is the branch neither `new_tagged`
+    // nor `new_opaque` had a test for.
+    fn new_obj(&mut self, t: u8, n: u32) -> Value {
+        if self.starve { return NIL; }
+        let a = self.bump; self.bump += n as u64 + 8;
+        self.gc.sp.m[a as usize] = t;
+        Value::heap(a)
+    }
+    fn take_opaque_id(&mut self) -> i64 {
+        let id = self.next_opaque;
+        self.next_opaque += 1;
+        id
+    }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { h: vec![0; 4000], gc: Gc { sp: Space { m: vec![0u8; 4000] } },
+                      bump: 100, roots: Vec::new(), next_opaque: 1, starve: false };
+    let mut o = String::new();
+    let tag = Value::fixnum(11);
+    let form = Value::fixnum(22);
+    let t = rt.new_tagged(tag, form);
+    o.push_str(&format!("tagged={}{}/{}.{} ", rt.is_tagged(t) as u32,
+                        rt.is_opaque(t) as u32,
+                        rt.slot(t, 0).as_fixnum(), rt.slot(t, 1).as_fixnum()));
+    // AN OPAQUE VALUE IS ITS IDENTITY: every one gets a FRESH id, and no id is
+    // ever reused. Two opaques of the same label are two values.
+    let label = Value::fixnum(55);
+    let o1 = rt.new_opaque(label, 900);
+    let o2 = rt.new_opaque(label, 901);
+    o.push_str(&format!("opaque={}{} ids={}.{} distinct={} ",
+                        rt.is_opaque(o1) as u32, rt.is_tagged(o1) as u32,
+                        rt.slot(o1, 1).as_fixnum(), rt.slot(o2, 1).as_fixnum(),
+                        (rt.slot(o1, 1).0 != rt.slot(o2, 1).0) as u32));
+    o.push_str(&format!("host={}.{} label={}.{} ",
+                        rt.opaque_host_id(o1), rt.opaque_host_id(o2),
+                        rt.opaque_label(o1).as_fixnum(), rt.opaque_label(o2).as_fixnum()));
+    // ASKED OF SOMETHING THAT IS NOT ONE: 0 and nil, not garbage read out of
+    // whatever slots happened to be there.
+    o.push_str(&format!("notopaque={}/{} nonheap={}/{} ",
+                        rt.opaque_host_id(t), rt.opaque_label(t).is_nil() as u32,
+                        rt.opaque_host_id(tag), rt.opaque_label(tag).is_nil() as u32));
+    // AND WHEN THE HEAP REFUSES, both answer NIL. `new_tagged` did not check
+    // and `new_opaque` did -- the same question answered two ways in one file.
+    rt.starve = true;
+    let ft = rt.new_tagged(tag, form);
+    let fo = rt.new_opaque(label, 1);
+    o.push_str(&format!("starved={}{}", ft.is_nil() as u32, fo.is_nil() as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_TAGGED = 36, TY_OPAQUE = 37, TY_VEC = 9;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL && (v >>> 60) != 0xDL; }
+        static long asHeap(long v) { return v; }
+        static long heap(long a) { return a; }
+        static boolean isNil(long v) { return v == NIL; }
+        static boolean isFixnum(long v) { return (v >>> 60) == 0xDL; }
+        static long asFixnum(long v) { return v & 0xFFFFFFFFL; }
+        static long fixnum(long n) { return (0xDL << 60) | (n & 0xFFFFFFFFL); }
+    }
+    static final class Space { byte[] m = new byte[4000]; }
+    static final class Rt {
+        long[] h = new long[4000];
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        long bump = 100;
+        long nextOpaque = 1;
+        boolean starve = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long v, int i) { return h[(int) v + i]; }
+        void setSlot(long a, int i, long x) { h[(int) a + i] = x; }
+        long takeOpaqueId() { return nextOpaque++; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static final class Conc {
+        static long newObj(Rt rt, int t, int n) {
+            if (rt.starve) return NIL;
+            long a = rt.bump; rt.bump += n + 8;
+            rt.gc.sp.m[(int) a] = (byte) t;
+            return Val.heap(a);
+        }
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long tag = Val.fixnum(11), form = Val.fixnum(22);
+        long t = newTagged(rt, tag, form);
+        o.append("tagged=").append(isTagged(rt, t) ? 1 : 0).append(isOpaque(rt, t) ? 1 : 0)
+         .append('/').append(Val.asFixnum(rt.slot(t, 0))).append('.')
+         .append(Val.asFixnum(rt.slot(t, 1))).append(' ');
+        long label = Val.fixnum(55);
+        long o1 = newOpaque(rt, label, 900), o2 = newOpaque(rt, label, 901);
+        o.append("opaque=").append(isOpaque(rt, o1) ? 1 : 0).append(isTagged(rt, o1) ? 1 : 0)
+         .append(" ids=").append(Val.asFixnum(rt.slot(o1, 1))).append('.')
+         .append(Val.asFixnum(rt.slot(o2, 1)))
+         .append(" distinct=").append(rt.slot(o1, 1) != rt.slot(o2, 1) ? 1 : 0).append(' ');
+        o.append("host=").append(opaqueHostId(rt, o1)).append('.').append(opaqueHostId(rt, o2))
+         .append(" label=").append(Val.asFixnum(opaqueLabel(rt, o1))).append('.')
+         .append(Val.asFixnum(opaqueLabel(rt, o2))).append(' ');
+        o.append("notopaque=").append(opaqueHostId(rt, t)).append('/')
+         .append(Val.isNil(opaqueLabel(rt, t)) ? 1 : 0)
+         .append(" nonheap=").append(opaqueHostId(rt, tag)).append('/')
+         .append(Val.isNil(opaqueLabel(rt, tag)) ? 1 : 0).append(' ');
+        rt.starve = true;
+        o.append("starved=").append(Val.isNil(newTagged(rt, tag, form)) ? 1 : 0)
+         .append(Val.isNil(newOpaque(rt, label, 1)) ? 1 : 0);
+        System.out.println(o.toString());
+    }
+--csharp-head
+    internal const long NIL = 0xFFFFL;
+    internal static class Obj {
+        internal const int TyTagged = 36, TyOpaque = 37, TyVec = 9;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsHeap(long v) {
+            return v >= 100 && v != Nil && (long)((ulong) v >> 60) != 0xDL;
+        }
+        internal static long AsHeap(long v) { return v; }
+        internal static long Heap(long a) { return a; }
+        internal static bool IsNil(long v) { return v == Nil; }
+        internal static bool IsFixnum(long v) { return (long)((ulong) v >> 60) == 0xDL; }
+        internal static long AsFixnum(long v) { return v & 0xFFFFFFFFL; }
+        internal static long Fixnum(long n) { return (0xDL << 60) | (n & 0xFFFFFFFFL); }
+    }
+    internal sealed class Space { internal byte[] m = new byte[4000]; }
+    internal sealed class Rt {
+        internal long[] h = new long[4000];
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal long nextOpaque = 1;
+        internal bool starve = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { roots.RemoveRange(n, roots.Count - n); }
+        internal long Slot(long v, int i) { return h[(int) v + i]; }
+        internal void SetSlot(long a, int i, long x) { h[(int) a + i] = x; }
+        internal long TakeOpaqueId() { return nextOpaque++; }
+    }
+    internal static class Conc {
+        internal static long NewObj(Rt rt, int t, int n) {
+            if (rt.starve) return Val.Nil;
+            long a = rt.bump; rt.bump += n + 8;
+            rt.gc.sp.m[(int) a] = (byte) t;
+            return Val.Heap(a);
+        }
+    }
+--csharp
+    internal static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long tag = Val.Fixnum(11), form = Val.Fixnum(22);
+        long t = NewTagged(rt, tag, form);
+        o.Append("tagged=").Append(IsTagged(rt, t) ? 1 : 0).Append(IsOpaque(rt, t) ? 1 : 0)
+         .Append('/').Append(Val.AsFixnum(rt.Slot(t, 0))).Append('.')
+         .Append(Val.AsFixnum(rt.Slot(t, 1))).Append(' ');
+        long label = Val.Fixnum(55);
+        long o1 = NewOpaque(rt, label, 900), o2 = NewOpaque(rt, label, 901);
+        o.Append("opaque=").Append(IsOpaque(rt, o1) ? 1 : 0).Append(IsTagged(rt, o1) ? 1 : 0)
+         .Append(" ids=").Append(Val.AsFixnum(rt.Slot(o1, 1))).Append('.')
+         .Append(Val.AsFixnum(rt.Slot(o2, 1)))
+         .Append(" distinct=").Append(rt.Slot(o1, 1) != rt.Slot(o2, 1) ? 1 : 0).Append(' ');
+        o.Append("host=").Append(OpaqueHostId(rt, o1)).Append('.').Append(OpaqueHostId(rt, o2))
+         .Append(" label=").Append(Val.AsFixnum(OpaqueLabel(rt, o1))).Append('.')
+         .Append(Val.AsFixnum(OpaqueLabel(rt, o2))).Append(' ');
+        o.Append("notopaque=").Append(OpaqueHostId(rt, t)).Append('/')
+         .Append(Val.IsNil(OpaqueLabel(rt, t)) ? 1 : 0)
+         .Append(" nonheap=").Append(OpaqueHostId(rt, tag)).Append('/')
+         .Append(Val.IsNil(OpaqueLabel(rt, tag)) ? 1 : 0).Append(' ');
+        rt.starve = true;
+        o.Append("starved=").Append(Val.IsNil(NewTagged(rt, tag, form)) ? 1 : 0)
+         .Append(Val.IsNil(NewOpaque(rt, label, 1)) ? 1 : 0);
+        System.Console.WriteLine(o.ToString());
+    }

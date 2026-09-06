@@ -37,6 +37,7 @@ pub mod collnode;
 pub mod copies;
 pub mod names;
 pub mod nouns;
+pub mod opaque;
 pub mod dissoc;
 pub mod eq;
 pub mod eqalloc;
