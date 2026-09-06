@@ -440,48 +440,13 @@ public static class Builtins {
         });
 
         // Maps.
-        Def("get", (rt, at, n) => {
-            long dflt = n > 2 ? rt.VAt(at + 2) : Val.Nil;
-            long coll = rt.VAt(at);
-            if (Val.IsNil(coll)) return dflt;
-            if (Mapcore.IsMap(rt, coll)) return Mapread.MapGet(rt, coll, rt.VAt(at + 1), dflt);
-            // A tagged literal reads like a two-key map (`0034`).
-            if (rt.IsHeapTy(coll, Obj.TyTagged)) return TaggedGet(rt, coll, rt.VAt(at + 1), dflt);
-            if (Sets.IsSet(rt, coll)) return Sets.Get(rt, coll, rt.VAt(at + 1), dflt);
-            if (Maps.IsTransient(rt, coll)) return Maptrans.TmapGet(rt, coll, rt.VAt(at + 1), dflt);
-            if (Sets.IsTransient(rt, coll)) return Maptrans.TsetGet(rt, coll, rt.VAt(at + 1), dflt);
-            if (Vec.IsTransient(rt, coll)) {
-                long k2 = rt.VAt(at + 1);
-                if (!Val.IsFixnum(k2)) return dflt;
-                long got2 = Vec.TNth(rt, coll, (int) Val.AsFixnum(k2), Val.NotFound);
-                return got2 == Val.NotFound ? dflt : got2;
-            }
-            if (rt.IsHeapTy(coll, Obj.TyVec)) {
-                long k = rt.VAt(at + 1);
-                if (!Val.IsFixnum(k)) return dflt;
-                long got = Vec.Nth(rt, coll, (int) Val.AsFixnum(k), Val.NotFound);
-                return got == Val.NotFound ? dflt : got;
-            }
-            // A TABLE indexes by ROW. There are TWO `get` paths in this port
-            // -- this one and `Rt.Lookup` -- and a type wired into only one
-            // works through `(:k x)` and throws through `(get x k)`.
-            if (Flint.Rt.Table.isTable(rt, coll)) {
-                long k2 = rt.VAt(at + 1);
-                if (!Val.IsFixnum(k2)) return dflt;
-                long r = Flint.Rt.Table.tableRef(rt, coll, (int) Val.AsFixnum(k2));
-                return Val.IsNil(r) ? dflt : r;
-            }
-            // A MAP ENTRY indexes 0 and 1, matching `coll.rs`. `nth` on one
-            // already worked in this port; `get` did not, which is the
-            // two-paths-one-wired shape the comment below describes.
-            if (rt.IsHeapTy(coll, Obj.TyMapentry)) {
-                long k3 = rt.VAt(at + 1);
-                if (!Val.IsFixnum(k3)) return dflt;
-                long i3 = Val.AsFixnum(k3);
-                return (i3 == 0 || i3 == 1) ? rt.Slot(coll, (int) i3) : dflt;
-            }
-            return rt.ThrowStr("UnsupportedOperationException", "get over " + rt.Describe(coll) + " needs sets ported");
-        });
+        // GENERATED, from `kin/collread.kin`. The hand-written body had no
+        // arm for a STRING, for BYTES, or for a ROPE OF BYTES, so `(get "abc"
+        // 1)` threw here and answered on wasm. And it tested the key with
+        // `IsFixnum`, which is false of a BIGINT -- so a key too large for a
+        // fixnum was a miss rather than an out-of-range index.
+        Def("get", (rt, at, n) => Collread.CollGet(rt, rt.VAt(at), rt.VAt(at + 1),
+                                                   n > 2 ? rt.VAt(at + 2) : Val.Nil));
         Def("assoc", (rt, at, n) => {
             long acc = rt.VAt(at);
             if (Val.IsNil(acc)) acc = Maps.Empty(rt);
@@ -575,30 +540,11 @@ public static class Builtins {
             rt.PopTo(bas);
             return o;
         });
-        Def("contains?", (rt, at, n) => {
-            long coll = rt.VAt(at);
-            if (Val.IsNil(coll)) return Val.False;
-            if (Mapcore.IsMap(rt, coll)) return Val.Bool(Mapread.MapContains(rt, coll, rt.VAt(at + 1)));
-            if (Sets.IsSet(rt, coll)) return Val.Bool(Sets.Contains(rt, coll, rt.VAt(at + 1)));
-            // The TRANSIENT forms too. A transient is a handle on the same
-            // trie, so every reader that works on the persistent value works on
-            // it -- and the library reaches for exactly that while building.
-            if (Maps.IsTransient(rt, coll))
-                return Val.Bool(Maptrans.TmapGet(rt, coll, rt.VAt(at + 1), Val.NotFound) != Val.NotFound);
-            if (Sets.IsTransient(rt, coll))
-                return Val.Bool(Maptrans.TsetGet(rt, coll, rt.VAt(at + 1), Val.NotFound) != Val.NotFound);
-            if (Vec.IsTransient(rt, coll)) {
-                long k3 = rt.VAt(at + 1);
-                return Val.Bool(Val.IsFixnum(k3) && Val.AsFixnum(k3) >= 0
-                                && Val.AsFixnum(k3) < Vec.TCount(rt, coll));
-            }
-            if (rt.IsHeapTy(coll, Obj.TyVec)) {
-                long k = rt.VAt(at + 1);
-                return Val.Bool(Val.IsFixnum(k) && Val.AsFixnum(k) >= 0
-                                && Val.AsFixnum(k) < Vec.Count(rt, coll));
-            }
-            return rt.ThrowStr("UnsupportedOperationException", "contains? over " + rt.Describe(coll) + " needs sets ported");
-        });
+        // The hand-written body REFUSED anything it did not name, where wasm
+        // answered `Get` against NotFound -- so `(contains? "abc" 1)` threw
+        // here and was true there. Clojure agrees with wasm on the string.
+        Def("contains?", (rt, at, n) =>
+            Val.Bool(Collread.CollContains(rt, rt.VAt(at), rt.VAt(at + 1))));
         Def("hash", (rt, at, n) => Val.Fixnum(Flint.Rt.Eq.HashValue(rt, rt.VAt(at))));
 
         // The math builtins. `fmath.rs` implements these itself because wasm

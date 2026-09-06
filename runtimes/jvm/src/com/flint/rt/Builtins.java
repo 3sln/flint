@@ -10,6 +10,7 @@ import com._3sln.flint.kgen.rt.Mapcore;
 import com._3sln.flint.kgen.rt.Maptrans;
 import com._3sln.flint.kgen.rt.Transients;
 import com._3sln.flint.kgen.rt.Collgen;
+import com._3sln.flint.kgen.rt.Collread;
 
 import static com.flint.rt.Obj.*;
 
@@ -476,51 +477,13 @@ public final class Builtins {
         def("pop!", (rt, at, n) -> Transients.transientPop(rt, rt.vat(at)));
 
         // Maps.
-        def("get", (rt, at, n) -> {
-            long dflt = n > 2 ? rt.vat(at + 2) : Val.NIL;
-            long coll = rt.vat(at);
-            if (Val.isNil(coll)) return dflt;
-            if (Mapcore.isMap(rt, coll)) return Mapread.mapGet(rt, coll, rt.vat(at + 1), dflt);
-            // A tagged literal reads like a two-key map (`0034`).
-            if (rt.isHeapTy(coll, Obj.TY_TAGGED)) return taggedGet(rt, coll, rt.vat(at + 1), dflt);
-            if (Sets.isSet(rt, coll)) return Sets.get(rt, coll, rt.vat(at + 1), dflt);
-            if (Maps.isTransient(rt, coll)) return Maptrans.tmapGet(rt, coll, rt.vat(at + 1), dflt);
-            if (Sets.isTransient(rt, coll)) return Maptrans.tsetGet(rt, coll, rt.vat(at + 1), dflt);
-            if (Vec.isTransient(rt, coll)) {
-                long k = rt.vat(at + 1);
-                if (!Val.isFixnum(k)) return dflt;
-                long got = Vec.tnth(rt, coll, (int) Val.asFixnum(k), Val.NOT_FOUND);
-                return got == Val.NOT_FOUND ? dflt : got;
-            }
-            if (rt.isHeapTy(coll, TY_VEC)) {
-                long k = rt.vat(at + 1);
-                if (!Val.isFixnum(k)) return dflt;
-                long got = Vec.nth(rt, coll, (int) Val.asFixnum(k), Val.NOT_FOUND);
-                return got == Val.NOT_FOUND ? dflt : got;
-            }
-            // A TABLE indexes by ROW and hands back a ref (`0026`). There are
-            // two `get` paths in this port -- this one and `Rt.lookup` -- and a
-            // type wired into only one of them works through `(:k x)` and
-            // throws through `(get x k)`, which is the shape of the keyword-vs-
-            // `get` disagreement `0034` already had to fix once.
-            if (Table.isTable(rt, coll)) {
-                long k = rt.vat(at + 1);
-                if (!Val.isFixnum(k)) return dflt;
-                long r = Table.tableRef(rt, coll, (int) Val.asFixnum(k));
-                return Val.isNil(r) ? dflt : r;
-            }
-            // A MAP ENTRY indexes 0 and 1, matching `coll.rs`. `nth` on one
-            // already worked in this port; `get` did not, which is the
-            // two-paths-one-wired shape the comment below describes.
-            if (rt.isHeapTy(coll, TY_MAPENTRY)) {
-                long k = rt.vat(at + 1);
-                if (!Val.isFixnum(k)) return dflt;
-                long i = Val.asFixnum(k);
-                return (i == 0 || i == 1) ? rt.slot(coll, (int) i) : dflt;
-            }
-            return rt.throwStr("UnsupportedOperationException",
-"get over " + rt.describe(coll) + " needs sets ported");
-        });
+        // GENERATED, from `kin/collread.kin`. The hand-written body had no
+        // arm for a STRING, for BYTES, or for a ROPE OF BYTES, so `(get "abc"
+        // 1)` threw here and answered on wasm. And it tested the key with
+        // `isFixnum`, which is false of a BIGINT -- so a key too large for a
+        // fixnum was a miss rather than an out-of-range index.
+        def("get", (rt, at, n) -> Collread.collGet(rt, rt.vat(at), rt.vat(at + 1),
+                                                   n > 2 ? rt.vat(at + 2) : Val.NIL));
         def("assoc", (rt, at, n) -> {
             long acc = rt.vat(at);
             if (Val.isNil(acc)) acc = Maps.empty(rt);
@@ -617,31 +580,11 @@ public final class Builtins {
             rt.popTo(base);
             return out;
         });
-        def("contains?", (rt, at, n) -> {
-            long coll = rt.vat(at);
-            if (Val.isNil(coll)) return Val.FALSE;
-            if (Mapcore.isMap(rt, coll)) return Val.bool(Mapread.mapContains(rt, coll, rt.vat(at + 1)));
-            if (Sets.isSet(rt, coll)) return Val.bool(Sets.contains(rt, coll, rt.vat(at + 1)));
-            // The TRANSIENT forms too. A transient is a handle on the same
-            // trie, so every reader that works on the persistent value works on
-            // it -- and the library reaches for exactly that while building.
-            if (Maps.isTransient(rt, coll))
-                return Val.bool(Maptrans.tmapGet(rt, coll, rt.vat(at + 1), Val.NOT_FOUND) != Val.NOT_FOUND);
-            if (Sets.isTransient(rt, coll))
-                return Val.bool(Maptrans.tsetGet(rt, coll, rt.vat(at + 1), Val.NOT_FOUND) != Val.NOT_FOUND);
-            if (Vec.isTransient(rt, coll)) {
-                long k = rt.vat(at + 1);
-                return Val.bool(Val.isFixnum(k) && Val.asFixnum(k) >= 0
-                                && Val.asFixnum(k) < Vec.tcount(rt, coll));
-            }
-            if (rt.isHeapTy(coll, TY_VEC)) {
-                long k = rt.vat(at + 1);
-                return Val.bool(Val.isFixnum(k) && Val.asFixnum(k) >= 0
-                                && Val.asFixnum(k) < Vec.count(rt, coll));
-            }
-            return rt.throwStr("UnsupportedOperationException",
-"contains? over " + rt.describe(coll) + " needs sets ported");
-        });
+        // The hand-written body REFUSED anything it did not name, where wasm
+        // answered `get` against NOT_FOUND -- so `(contains? "abc" 1)` threw
+        // here and was true there. Clojure agrees with wasm on the string.
+        def("contains?", (rt, at, n) ->
+            Val.bool(Collread.collContains(rt, rt.vat(at), rt.vat(at + 1))));
         def("hash", (rt, at, n) -> Val.fixnum(Eq.hashValue(rt, rt.vat(at))));
 
         // The math builtins. `fmath.rs` implements these itself because wasm

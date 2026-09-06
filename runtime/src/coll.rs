@@ -210,84 +210,8 @@ impl Rt {
         }
     }
 
-    pub fn get(&mut self, coll: Value, k: Value, dflt: Value) -> Value {
-        if coll.is_nil() {
-            return dflt;
-        }
-        if self.is_string(coll) {
-            return match self.as_i64(k) {
-                Some(i) if i >= 0 => self.char_at(coll, i as u32, dflt),
-                _ => dflt,
-            };
-        }
-        if !coll.is_heap() {
-            return dflt;
-        }
-        match ty(&self.gc.sp, coll.as_heap()) {
-            TY_ARRAYMAP | TY_HASHMAP => self.map_get(coll, k, dflt),
-            TY_SET => self.set_get(coll, k, dflt),
-            TY_VEC => match self.as_i64(k) {
-                Some(i) if i >= 0 => self.vec_nth(coll, i as u32, dflt),
-                _ => dflt,
-            },
-            TY_MAPENTRY => match self.as_i64(k) {
-                Some(0) => self.slot(coll, 0),
-                Some(1) => self.slot(coll, 1),
-                _ => dflt,
-            },
-            // A tagged literal reads like a two-key map, so `(:tag x)` and
-            // `(get x :form)` work and nothing treating one as a map has to
-            // learn a different way in (`doc/decisions/0034`).
-            // A table indexes by ROW and hands back a ref, which materialises
-            // nothing (`doc/decisions/0026`).
-            crate::obj::TY_TABLE => match self.as_i64(k) {
-                Some(i) if i >= 0 => {
-                    let r = self.table_ref(coll, i as u32);
-                    if r.is_nil() { dflt } else { r }
-                }
-                _ => dflt,
-            },
-            crate::obj::TY_TABLEREF => self.ref_get(coll, k, dflt),
-            crate::obj::TY_TAGGED => {
-                if k == self.keyword(None, "tag") {
-                    self.slot(coll, 0)
-                } else if k == self.keyword(None, "form") {
-                    self.slot(coll, 1)
-                } else {
-                    dflt
-                }
-            }
-            TY_BYTES | TY_BROPE => match self.as_i64(k) {
-                Some(i) if i >= 0 => self.b_at(coll, i as u32, dflt),
-                _ => dflt,
-            },
-            TY_TVEC => match self.as_i64(k) {
-                Some(i) if i >= 0 => self.tvec_nth(coll, i as u32, dflt),
-                _ => dflt,
-            },
-            TY_TMAP => self.tmap_get(coll, k, dflt),
-            TY_TSET => {
-                let m = self.slot(coll, 0);
-                self.tmap_get(m, k, dflt)
-            }
-            _ => dflt,
-        }
-    }
-
-    pub fn contains(&mut self, coll: Value, k: Value) -> bool {
-        if coll.is_nil() {
-            return false;
-        }
-        match ty(&self.gc.sp, coll.as_heap()) {
-            TY_ARRAYMAP | TY_HASHMAP => self.map_contains(coll, k),
-            TY_SET => self.set_contains(coll, k),
-            TY_VEC => match self.as_i64(k) {
-                Some(i) => i >= 0 && (i as u32) < self.vec_count(coll),
-                None => false,
-            },
-            _ => self.get(coll, k, NOT_FOUND) != NOT_FOUND,
-        }
-    }
+    // `get` and `contains` are GENERATED, from `kin/collread.kin`, under the
+    // names `coll_get` and `coll_contains`.
 
     pub fn nth(&mut self, coll: Value, idx: Value, dflt: Option<Value>) -> Value {
         let i = match self.as_i64(idx) {

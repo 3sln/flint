@@ -1,0 +1,132 @@
+;; `get` AND `contains?`: the two generics that read by key.
+;;
+;; Every collection answers `get`, and the ones that are indexed answer it for
+;; an integer key -- so this is one dispatch with a second, smaller one inside
+;; it for whether the key is an index at all. A key that is not an integer on
+;; an indexed collection is not an error; it is a MISS, and the default comes
+;; back. That is Clojure's rule and it is what makes `(get v :nope)` safe.
+;;
+;; THE INDEX IS TAKEN AS A SIGNED 64-BIT VALUE. `is-int` is true of a bigint
+;; too, and `i64-of` reads the real number out of one -- reading it with the
+;; fixnum accessor instead is what made `assoc` on a table compare garbage
+;; against its row count on both ports.
+;;
+;; `contains?` ON AN INDEXED COLLECTION ASKS ABOUT THE INDEX, not the value.
+;; `(contains? [:a :b] :a)` is false and `(contains? [:a :b] 1)` is true, which
+;; surprises everyone once and is the only reading that makes it agree with the
+;; map case.
+(ns flint.rt.collread
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != >= < or not nil? is-heap as-heap ty
+                                   slot is-string char-at to-i32 u<
+                                   is-int i64-of bare-kw static-text
+                                   vec-nth vec-count table-ref ref-get
+                                   Rt Value I32 I64 Ty Bool NIL NOT_FOUND
+                                   TY_ARRAYMAP TY_HASHMAP TY_SET TY_VEC
+                                   TY_MAPENTRY TY_TABLE TY_TABLEREF TY_TAGGED
+                                   TY_BYTES TY_BROPE TY_TVEC TY_TMAP TY_TSET]]
+            [flint.rt.mapread :refer [map-get map-contains]]
+            [flint.rt.setcore :refer [set-get set-contains]]
+            [flint.rt.byteat :refer [b-at]]
+            [flint.rt.vectrans :refer [tvec-nth]]
+            [flint.rt.maptrans :refer [tmap-get tset-get]]))
+
+(doc "The value `k` maps to, or `dflt`."
+     ""
+     "A STRING IS INDEXED BY CODE POINT, so `(get \"abc\" 1)` is `\\b`. It is"
+     "checked before the tag dispatch because a string is not always a heap"
+     "value: a short one lives INLINE in the value's bits.")
+(defn ^:pub ^:method ^Value coll-get [^:mut ^Rt rt ^Value coll ^Value k ^Value dflt]
+  (if (is-string rt coll)
+    (do (if (is-int rt k)
+          (let [^I64 i (i64-of rt k)]
+            (if (>= i 0)
+              (return (char-at rt coll (to-i32 i) dflt)))))
+        (return dflt)))
+  (if (not (is-heap coll))
+    (return dflt))
+  (let [^Ty t (ty rt (as-heap coll))]
+    (if (or (== t TY_ARRAYMAP) (== t TY_HASHMAP))
+      (return (map-get rt coll k dflt)))
+    (if (== t TY_SET)
+      (return (set-get rt coll k dflt)))
+    (if (== t TY_VEC)
+      (do (if (is-int rt k)
+            (let [^I64 i (i64-of rt k)]
+              (if (>= i 0)
+                (return (vec-nth rt coll (to-i32 i) dflt)))))
+          (return dflt)))
+    (comment "A MAP ENTRY IS INDEXED 0 AND 1, and nothing else -- it is a"
+             "pair, not a vector that happens to be two long.")
+    (if (== t TY_MAPENTRY)
+      (do (if (is-int rt k)
+            (let [^I64 i (i64-of rt k)]
+              (if (== i 0)
+                (return (slot rt coll 0)))
+              (if (== i 1)
+                (return (slot rt coll 1)))))
+          (return dflt)))
+    (comment "A TABLE INDEXES BY ROW and hands back a REF, which materialises"
+             "nothing (`0026`).")
+    (if (== t TY_TABLE)
+      (do (if (is-int rt k)
+            (let [^I64 i (i64-of rt k)]
+              (if (>= i 0)
+                (let [^Value row (table-ref rt coll (to-i32 i))]
+                  (if (nil? rt row)
+                    (return dflt))
+                  (return row)))))
+          (return dflt)))
+    (if (== t TY_TABLEREF)
+      (return (ref-get rt coll k dflt)))
+    (comment "A TAGGED LITERAL READS LIKE A TWO-KEY MAP, so `(:tag x)` and"
+             "`(get x :form)` work and nothing treating one as a map has to"
+             "learn a different way in (`0034`).")
+    (if (== t TY_TAGGED)
+      (do (if (== k (bare-kw rt (static-text "tag")))
+            (return (slot rt coll 0)))
+          (if (== k (bare-kw rt (static-text "form")))
+            (return (slot rt coll 1)))
+          (return dflt)))
+    (if (or (== t TY_BYTES) (== t TY_BROPE))
+      (do (if (is-int rt k)
+            (let [^I64 i (i64-of rt k)]
+              (if (>= i 0)
+                (return (b-at rt coll (to-i32 i) dflt)))))
+          (return dflt)))
+    (if (== t TY_TVEC)
+      (do (if (is-int rt k)
+            (let [^I64 i (i64-of rt k)]
+              (if (>= i 0)
+                (return (tvec-nth rt coll (to-i32 i) dflt)))))
+          (return dflt)))
+    (if (== t TY_TMAP)
+      (return (tmap-get rt coll k dflt)))
+    (if (== t TY_TSET)
+      (return (tset-get rt coll k dflt))))
+  (return dflt))
+
+(doc "Is there something under `k`?"
+     ""
+     "ASKS ABOUT THE KEY, and on an indexed collection the key is the INDEX."
+     "`(contains? [:a :b] :a)` is false."
+     ""
+     "The general case is `get` against `NOT_FOUND`, which is the one value a"
+     "collection cannot be holding -- so a stored nil is still `contains?`.")
+(defn ^:pub ^:method ^Bool coll-contains [^:mut ^Rt rt ^Value coll ^Value k]
+  (if (nil? rt coll)
+    (return false))
+  (if (is-heap coll)
+    (let [^Ty t (ty rt (as-heap coll))]
+      (if (or (== t TY_ARRAYMAP) (== t TY_HASHMAP))
+        (return (map-contains rt coll k)))
+      (if (== t TY_SET)
+        (return (set-contains rt coll k)))
+      (if (== t TY_VEC)
+        (do (if (is-int rt k)
+              (let [^I64 i (i64-of rt k)]
+                (if (< i 0)
+                  (return false))
+                (return (u< (to-i32 i) (vec-count rt coll)))))
+            (return false)))))
+  (return (!= (coll-get rt coll k NOT_FOUND) NOT_FOUND)))

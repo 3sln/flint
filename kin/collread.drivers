@@ -1,0 +1,335 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const NOT_FOUND: Value = Value(0xFFFE);
+const TY_ARRAYMAP: u8 = 10; const TY_HASHMAP: u8 = 11; const TY_SET: u8 = 12;
+const TY_VEC: u8 = 13; const TY_MAPENTRY: u8 = 14; const TY_TABLE: u8 = 15;
+const TY_TABLEREF: u8 = 16; const TY_TAGGED: u8 = 17; const TY_BYTES: u8 = 18;
+const TY_BROPE: u8 = 19; const TY_TVEC: u8 = 20; const TY_TMAP: u8 = 21;
+const TY_TSET: u8 = 22; const TY_STR: u8 = 23; const TY_OTHER: u8 = 24;
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+struct Rt { gc: Gc, bump: u64, vn: u32, rowmiss: bool }
+fn ty(sp: &Space, a: Addr) -> u8 { sp.m[a as usize] }
+// A KEY IS AN INTEGER WHEN ITS TOP BITS SAY SO, and the payload sign-extends.
+// An index of -1 that does not sign-extend prints as four billion, and every
+// `>= 0` guard below is exactly what that would walk past.
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 100 && self.0 != NIL.0 && self.0 != NOT_FOUND.0 && (self.0 >> 40) == 0 }
+    fn as_heap(self) -> Addr { self.0 as Addr }
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+}
+fn int(n: i64) -> Value { Value(0x100_0000_0000u64 | (n as u64 & 0xFFFF_FFFF)) }
+impl Rt {
+    fn slot(&self, _v: Value, i: u32) -> Value { Value(0x700 + i as u64) }
+    fn obj(&mut self, t: u8) -> Value {
+        let a = self.bump; self.bump += 8;
+        self.gc.sp.m[a as usize] = t;
+        Value(a)
+    }
+    fn is_string(&mut self, v: Value) -> bool {
+        v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_STR
+    }
+    fn is_int(&mut self, v: Value) -> bool { (v.0 >> 40) == 1 }
+    fn i64_of(&mut self, v: Value) -> i64 { ((v.0 & 0xFFFF_FFFF) as u32) as i32 as i64 }
+    fn keyword(&mut self, _ns: Option<&str>, n: &str) -> Value {
+        if n == "tag" { Value(0x8A) } else { Value(0x8B) }
+    }
+    fn char_at(&mut self, _s: Value, i: u32, _d: Value) -> Value { Value(0x910 + i as u64) }
+    fn map_get(&mut self, _m: Value, _k: Value, _d: Value) -> Value { Value(0x921) }
+    fn set_get(&mut self, _s: Value, _k: Value, _d: Value) -> Value { Value(0x922) }
+    fn vec_nth(&mut self, _v: Value, i: u32, _d: Value) -> Value { Value(0x930 + i as u64) }
+    fn table_ref(&mut self, _t: Value, i: u32) -> Value {
+        if self.rowmiss { NIL } else { Value(0x940 + i as u64) }
+    }
+    fn ref_get(&mut self, _r: Value, _k: Value, _d: Value) -> Value { Value(0x923) }
+    fn b_at(&mut self, _b: Value, i: u32, _d: Value) -> Value { Value(0x950 + i as u64) }
+    fn tvec_nth(&mut self, _t: Value, i: u32, _d: Value) -> Value { Value(0x960 + i as u64) }
+    fn tmap_get(&mut self, _t: Value, _k: Value, _d: Value) -> Value { Value(0x924) }
+    fn tset_get(&mut self, _t: Value, _k: Value, _d: Value) -> Value { Value(0x925) }
+    fn map_contains(&mut self, _m: Value, _k: Value) -> bool { true }
+    fn set_contains(&mut self, _s: Value, _k: Value) -> bool { true }
+    fn vec_count(&mut self, _v: Value) -> u32 { self.vn }
+}
+impl Rt {
+--rust
+}
+fn main() {
+    let mut rt = Rt { gc: Gc { sp: Space { m: vec![0u8; 4000] } }, bump: 100, vn: 3,
+                      rowmiss: false };
+    let mut o = String::new();
+    let d = Value(0x11);
+    let kw = Value(0x8C);
+    let two = int(2);
+    let neg = int(-1);
+
+    // A STRING is indexed by code point, and only by an index.
+    let s = rt.obj(TY_STR);
+    o.push_str(&format!("s={:x}/{:x}/{:x} ", rt.coll_get(s, two, d).0,
+                        rt.coll_get(s, neg, d).0, rt.coll_get(s, kw, d).0));
+    // Every tag, with an INTEGER key and then with one that is not.
+    for t in [TY_ARRAYMAP, TY_HASHMAP, TY_SET, TY_VEC, TY_MAPENTRY, TY_TABLE,
+              TY_TABLEREF, TY_BYTES, TY_BROPE, TY_TVEC, TY_TMAP, TY_TSET, TY_OTHER] {
+        let v = rt.obj(t);
+        o.push_str(&format!("{:x}/{:x}/{:x} ", rt.coll_get(v, two, d).0,
+                            rt.coll_get(v, neg, d).0, rt.coll_get(v, kw, d).0));
+    }
+    // A MAP ENTRY is 0 and 1 and nothing else.
+    let me = rt.obj(TY_MAPENTRY);
+    o.push_str(&format!("me={:x}/{:x}/{:x} ", rt.coll_get(me, int(0), d).0,
+                        rt.coll_get(me, int(1), d).0, rt.coll_get(me, int(2), d).0));
+    // A TAGGED literal answers two keywords and nothing else.
+    let tg = rt.obj(TY_TAGGED);
+    o.push_str(&format!("tag={:x}/{:x}/{:x} ", rt.coll_get(tg, Value(0x8A), d).0,
+                        rt.coll_get(tg, Value(0x8B), d).0, rt.coll_get(tg, kw, d).0));
+    // A ROW PAST THE END is a miss, not a nil row.
+    rt.rowmiss = true;
+    let tb = rt.obj(TY_TABLE);
+    o.push_str(&format!("row={:x} ", rt.coll_get(tb, two, d).0));
+    rt.rowmiss = false;
+    // NIL and a fixnum are both misses.
+    o.push_str(&format!("n={:x}/{:x} ", rt.coll_get(NIL, two, d).0,
+                        rt.coll_get(Value(7), two, d).0));
+
+    // CONTAINS. The map and set arms delegate; the vector arm asks about the
+    // INDEX; everything else is `get` against NOT_FOUND.
+    let am = rt.obj(TY_ARRAYMAP);
+    let st = rt.obj(TY_SET);
+    let vc = rt.obj(TY_VEC);
+    o.push_str(&format!("c={}{}{}{}{}{} ", rt.coll_contains(am, kw) as u32,
+                        rt.coll_contains(st, kw) as u32,
+                        rt.coll_contains(vc, two) as u32,
+                        rt.coll_contains(vc, int(3)) as u32,
+                        rt.coll_contains(vc, neg) as u32,
+                        rt.coll_contains(vc, kw) as u32));
+    let tm = rt.obj(TY_TMAP);
+    let ot = rt.obj(TY_OTHER);
+    let (c1, c2, c3) = (rt.coll_contains(NIL, kw), rt.coll_contains(tm, kw),
+                        rt.coll_contains(ot, kw));
+    o.push_str(&format!("c2={}{}{}", c1 as u32, c2 as u32, c3 as u32));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final long NOT_FOUND = 0xFFFEL;
+    static final int TY_ARRAYMAP = 10, TY_HASHMAP = 11, TY_SET = 12;
+    static final int TY_VEC = 13, TY_MAPENTRY = 14, TY_TABLE = 15;
+    static final int TY_TABLEREF = 16, TY_TAGGED = 17, TY_BYTES = 18;
+    static final int TY_BROPE = 19, TY_TVEC = 20, TY_TMAP = 21;
+    static final int TY_TSET = 22, TY_STR = 23, TY_OTHER = 24;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static final long NOT_FOUND = Probe.NOT_FOUND;
+        static boolean isHeap(long v) { return v >= 100 && v != NIL && v != NOT_FOUND && (v >>> 40) == 0; }
+        static long asHeap(long v) { return v; }
+        static boolean isNil(long v) { return v == NIL; }
+    }
+    static long anInt(long n) { return 0x10000000000L | (n & 0xFFFFFFFFL); }
+    static final class Space { byte[] m = new byte[4000]; }
+    static final class Rt {
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        long bump = 100;
+        int vn = 3;
+        boolean rowmiss = false;
+        long slot(long v, int i) { return 0x700L + i; }
+        long obj(int t) { long a = bump; bump += 8; gc.sp.m[(int) a] = (byte) t; return a; }
+    }
+    static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    static final class Str {
+        static boolean isString(Rt rt, long v) {
+            return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR;
+        }
+        static long keyword(Rt rt, String ns, String n) { return n.equals("tag") ? 0x8AL : 0x8BL; }
+        static long nth(Rt rt, long s, int i, long d) { return 0x910L + i; }
+    }
+    static final class Num {
+        static boolean isInt(Rt rt, long v) { return (v >>> 40) == 1; }
+        static long i64Of(Rt rt, long v) { return (int) (v & 0xFFFFFFFFL); }
+    }
+    static long mapGet(Rt rt, long m, long k, long d) { return 0x921L; }
+    static long setGet(Rt rt, long s, long k, long d) { return 0x922L; }
+    static final class Vec {
+        static long nth(Rt rt, long v, int i, long d) { return 0x930L + i; }
+        static int count(Rt rt, long v) { return rt.vn; }
+    }
+    static final class Table {
+        static long tableRef(Rt rt, long t, int i) { return rt.rowmiss ? NIL : 0x940L + i; }
+        static long refGet(Rt rt, long r, long k, long d) { return 0x923L; }
+    }
+    static long bAt(Rt rt, long b, int i, long d) { return 0x950L + i; }
+    static long tvecNth(Rt rt, long t, int i, long d) { return 0x960L + i; }
+    static long tmapGet(Rt rt, long t, long k, long d) { return 0x924L; }
+    static long tsetGet(Rt rt, long t, long k, long d) { return 0x925L; }
+    static boolean mapContains(Rt rt, long m, long k) { return true; }
+    static boolean setContains(Rt rt, long s, long k) { return true; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long d = 0x11L, kw = 0x8CL;
+        long two = anInt(2), neg = anInt(-1);
+
+        long s = rt.obj(TY_STR);
+        o.append("s=").append(Long.toHexString(collGet(rt, s, two, d))).append("/")
+         .append(Long.toHexString(collGet(rt, s, neg, d))).append("/")
+         .append(Long.toHexString(collGet(rt, s, kw, d))).append(' ');
+        int[] tags = { TY_ARRAYMAP, TY_HASHMAP, TY_SET, TY_VEC, TY_MAPENTRY, TY_TABLE,
+                       TY_TABLEREF, TY_BYTES, TY_BROPE, TY_TVEC, TY_TMAP, TY_TSET, TY_OTHER };
+        for (int t : tags) {
+            long v = rt.obj(t);
+            o.append(Long.toHexString(collGet(rt, v, two, d))).append("/")
+             .append(Long.toHexString(collGet(rt, v, neg, d))).append("/")
+             .append(Long.toHexString(collGet(rt, v, kw, d))).append(' ');
+        }
+        long me = rt.obj(TY_MAPENTRY);
+        o.append("me=").append(Long.toHexString(collGet(rt, me, anInt(0), d))).append("/")
+         .append(Long.toHexString(collGet(rt, me, anInt(1), d))).append("/")
+         .append(Long.toHexString(collGet(rt, me, anInt(2), d))).append(' ');
+        long tg = rt.obj(TY_TAGGED);
+        o.append("tag=").append(Long.toHexString(collGet(rt, tg, 0x8AL, d))).append("/")
+         .append(Long.toHexString(collGet(rt, tg, 0x8BL, d))).append("/")
+         .append(Long.toHexString(collGet(rt, tg, kw, d))).append(' ');
+        rt.rowmiss = true;
+        long tb = rt.obj(TY_TABLE);
+        o.append("row=").append(Long.toHexString(collGet(rt, tb, two, d))).append(' ');
+        rt.rowmiss = false;
+        o.append("n=").append(Long.toHexString(collGet(rt, NIL, two, d))).append("/")
+         .append(Long.toHexString(collGet(rt, 7L, two, d))).append(' ');
+
+        long am = rt.obj(TY_ARRAYMAP);
+        long st = rt.obj(TY_SET);
+        long vc = rt.obj(TY_VEC);
+        o.append("c=").append(collContains(rt, am, kw) ? 1 : 0)
+         .append(collContains(rt, st, kw) ? 1 : 0)
+         .append(collContains(rt, vc, two) ? 1 : 0)
+         .append(collContains(rt, vc, anInt(3)) ? 1 : 0)
+         .append(collContains(rt, vc, neg) ? 1 : 0)
+         .append(collContains(rt, vc, kw) ? 1 : 0).append(' ');
+        long tm = rt.obj(TY_TMAP);
+        long ot = rt.obj(TY_OTHER);
+        o.append("c2=").append(collContains(rt, NIL, kw) ? 1 : 0)
+         .append(collContains(rt, tm, kw) ? 1 : 0)
+         .append(collContains(rt, ot, kw) ? 1 : 0);
+        System.out.println(o.toString());
+    }
+--csharp-pre
+// `table-ref` resolves to a BARE `Table` and `ref-get` to a fully qualified
+// `global::Flint.Rt.Table`, so the probe needs one of each. That the two are
+// spelled differently in the vocabulary is a wart, not a rule.
+namespace Flint.Rt {
+    internal static class Table {
+        internal static long refGet(Probe.Rt rt, long r, long k, long d) { return 0x923L; }
+    }
+}
+--csharp-head
+#pragma warning disable CS8625 // the probe hands  a null namespace, as  does
+    internal const long NIL = 0xFFFFL;
+    internal const long NOT_FOUND = 0xFFFEL;
+    internal static class Obj {
+        internal const int TyArraymap = 10, TyHashmap = 11, TySet = 12;
+        internal const int TyVec = 13, TyMapentry = 14, TyTable = 15;
+        internal const int TyTableref = 16, TyTagged = 17, TyBytes = 18;
+        internal const int TyBrope = 19, TyTvec = 20, TyTmap = 21;
+        internal const int TyTset = 22, TyStr = 23, TyOther = 24;
+        internal static int Ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
+    }
+    internal static class Val {
+        internal const long Nil = Probe.NIL;
+        internal const long NotFound = Probe.NOT_FOUND;
+        internal static bool IsHeap(long v) { return v >= 100 && v != NIL && v != NOT_FOUND && (v >> 40) == 0; }
+        internal static long AsHeap(long v) { return v; }
+        internal static bool IsNil(long v) { return v == NIL; }
+    }
+    internal static long AnInt(long n) { return 0x10000000000L | (n & 0xFFFFFFFFL); }
+    internal sealed class Space { internal byte[] m = new byte[4000]; }
+    internal sealed class Rt {
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal int vn = 3;
+        internal bool rowmiss = false;
+        internal long Slot(long v, int i) { return 0x700L + i; }
+        internal long Obj_(int t) { long a = bump; bump += 8; gc.sp.m[(int) a] = (byte) t; return a; }
+    }
+    internal static class Str {
+        internal static bool IsString(Rt rt, long v) {
+            return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr;
+        }
+        internal static long Keyword(Rt rt, string ns, string n) { return n == "tag" ? 0x8AL : 0x8BL; }
+        internal static long Nth(Rt rt, long s, int i, long d) { return 0x910L + i; }
+    }
+    internal static class Num {
+        internal static bool IsInt(Rt rt, long v) { return (v >> 40) == 1; }
+        internal static long I64Of(Rt rt, long v) { return (int) (v & 0xFFFFFFFFL); }
+    }
+    internal static long MapGet(Rt rt, long m, long k, long d) { return 0x921L; }
+    internal static long SetGet(Rt rt, long s, long k, long d) { return 0x922L; }
+    internal static class Vec {
+        internal static long Nth(Rt rt, long v, int i, long d) { return 0x930L + i; }
+        internal static int Count(Rt rt, long v) { return rt.vn; }
+    }
+    // `table-ref` and `ref-get` resolve to a BARE `Table`, so the probe puts
+    // one inside itself rather than in the runtime's namespace.
+    internal static class Table {
+        internal static long tableRef(Rt rt, long t, int i) { return rt.rowmiss ? NIL : 0x940L + i; }
+    }
+    internal static long BAt(Rt rt, long b, int i, long d) { return 0x950L + i; }
+    internal static long TvecNth(Rt rt, long t, int i, long d) { return 0x960L + i; }
+    internal static long TmapGet(Rt rt, long t, long k, long d) { return 0x924L; }
+    internal static long TsetGet(Rt rt, long t, long k, long d) { return 0x925L; }
+    internal static bool MapContains(Rt rt, long m, long k) { return true; }
+    internal static bool SetContains(Rt rt, long s, long k) { return true; }
+--csharp
+    public static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+        long d = 0x11L, kw = 0x8CL;
+        long two = AnInt(2), neg = AnInt(-1);
+
+        long s = rt.Obj_(Obj.TyStr);
+        o.Append("s=").Append(CollGet(rt, s, two, d).ToString("x")).Append("/")
+         .Append(CollGet(rt, s, neg, d).ToString("x")).Append("/")
+         .Append(CollGet(rt, s, kw, d).ToString("x")).Append(' ');
+        int[] tags = { Obj.TyArraymap, Obj.TyHashmap, Obj.TySet, Obj.TyVec, Obj.TyMapentry,
+                       Obj.TyTable, Obj.TyTableref, Obj.TyBytes, Obj.TyBrope, Obj.TyTvec,
+                       Obj.TyTmap, Obj.TyTset, Obj.TyOther };
+        foreach (int t in tags) {
+            long v = rt.Obj_(t);
+            o.Append(CollGet(rt, v, two, d).ToString("x")).Append("/")
+             .Append(CollGet(rt, v, neg, d).ToString("x")).Append("/")
+             .Append(CollGet(rt, v, kw, d).ToString("x")).Append(' ');
+        }
+        long me = rt.Obj_(Obj.TyMapentry);
+        o.Append("me=").Append(CollGet(rt, me, AnInt(0), d).ToString("x")).Append("/")
+         .Append(CollGet(rt, me, AnInt(1), d).ToString("x")).Append("/")
+         .Append(CollGet(rt, me, AnInt(2), d).ToString("x")).Append(' ');
+        long tg = rt.Obj_(Obj.TyTagged);
+        o.Append("tag=").Append(CollGet(rt, tg, 0x8AL, d).ToString("x")).Append("/")
+         .Append(CollGet(rt, tg, 0x8BL, d).ToString("x")).Append("/")
+         .Append(CollGet(rt, tg, kw, d).ToString("x")).Append(' ');
+        rt.rowmiss = true;
+        long tb = rt.Obj_(Obj.TyTable);
+        o.Append("row=").Append(CollGet(rt, tb, two, d).ToString("x")).Append(' ');
+        rt.rowmiss = false;
+        o.Append("n=").Append(CollGet(rt, NIL, two, d).ToString("x")).Append("/")
+         .Append(CollGet(rt, 7L, two, d).ToString("x")).Append(' ');
+
+        long am = rt.Obj_(Obj.TyArraymap);
+        long st = rt.Obj_(Obj.TySet);
+        long vc = rt.Obj_(Obj.TyVec);
+        o.Append("c=").Append(CollContains(rt, am, kw) ? 1 : 0)
+         .Append(CollContains(rt, st, kw) ? 1 : 0)
+         .Append(CollContains(rt, vc, two) ? 1 : 0)
+         .Append(CollContains(rt, vc, AnInt(3)) ? 1 : 0)
+         .Append(CollContains(rt, vc, neg) ? 1 : 0)
+         .Append(CollContains(rt, vc, kw) ? 1 : 0).Append(' ');
+        long tm = rt.Obj_(Obj.TyTmap);
+        long ot = rt.Obj_(Obj.TyOther);
+        o.Append("c2=").Append(CollContains(rt, NIL, kw) ? 1 : 0)
+         .Append(CollContains(rt, tm, kw) ? 1 : 0)
+         .Append(CollContains(rt, ot, kw) ? 1 : 0);
+        System.Console.WriteLine(o.ToString());
+    }

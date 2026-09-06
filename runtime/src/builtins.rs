@@ -412,7 +412,7 @@ builtins! {
     "get", flint_b_get, b_get, |rt, a, n| {
         let (c, k) = (arg(rt, a, 0), arg(rt, a, 1));
         let d = if n > 2 { arg(rt, a, 2) } else { NIL };
-        rt.get(c, k, d)
+        rt.coll_get(c, k, d)
     };
     "assoc", flint_b_assoc, b_assoc, |rt, a, n| {
         let mut acc = arg(rt, a, 0);
@@ -449,7 +449,7 @@ builtins! {
     "contains?", flint_b_containsp, b_containsp, |rt, a, n| {
         let _ = n;
         let (c, k) = (arg(rt, a, 0), arg(rt, a, 1));
-        Value::boolean(rt.contains(c, k))
+        Value::boolean(rt.coll_contains(c, k))
     };
     "nth", flint_b_nth, b_nth, |rt, a, n| {
         let (c, i) = (arg(rt, a, 0), arg(rt, a, 1));

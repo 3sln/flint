@@ -771,14 +771,14 @@ impl Rt {
                 self.set_get(coll, kw, dflt)
             } else if self.is_table_ref(coll) {
                 // `(:name row)` on a row ref, which is how a table is read.
-                self.get(coll, kw, dflt)
+                self.coll_get(coll, kw, dflt)
             } else if self.is_tagged(coll) {
                 // `(:tag x)` and `(:form x)`, which is how anyone actually
                 // reads one (`doc/decisions/0034`). This arm used to fall to
                 // `dflt` for everything that was not a map or a set, so
                 // `(get x :tag)` answered and `(:tag x)` did not -- the same
                 // lookup by two spellings disagreeing.
-                self.get(coll, kw, dflt)
+                self.coll_get(coll, kw, dflt)
             } else {
                 dflt
             }
