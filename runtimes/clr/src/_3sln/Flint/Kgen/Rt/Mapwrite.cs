@@ -16,6 +16,7 @@ using static global::_3sln.Flint.Kgen.Rt.Collnode;
 using static global::_3sln.Flint.Kgen.Rt.Dissoc;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
 using static global::_3sln.Flint.Kgen.Rt.Mapread;
+using static global::_3sln.Flint.Kgen.Rt.Tableref;
 
 public static class Mapwrite {
     /// An array map rebuilt as a CHAMP. The one-way door between the two

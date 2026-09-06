@@ -56,6 +56,12 @@ public final class Table {
     // Row-ref slots, and the transient's.
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // The ROW-REF HALF, generated from `kin/tableref.kin`.
+    public static int schemaId(Rt rt, long s, long name) { return com._3sln.flint.kgen.rt.Tableref.schemaId(rt, s, name); }
+    public static long tableRef(Rt rt, long t, int i) { return com._3sln.flint.kgen.rt.Tableref.tableRef(rt, t, i); }
+    public static long refGet(Rt rt, long r, long name, long dflt) { return com._3sln.flint.kgen.rt.Tableref.refGet(rt, r, name, dflt); }
+    public static long refToMap(Rt rt, long r) { return com._3sln.flint.kgen.rt.Tableref.refToMap(rt, r); }
+
     // The ACCESSOR HALF, generated from `kin/tablemeta.kin`.
     public static boolean isSchema(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablemeta.isSchema(rt, v); }
     public static boolean isTable(Rt rt, long v) { return com._3sln.flint.kgen.rt.Tablemeta.isTable(rt, v); }
@@ -160,12 +166,6 @@ public final class Table {
         long out = rt.r(si);
         rt.popTo(base);
         return out;
-    }
-
-    /// The column id of `name`, or -1.
-    public static int schemaId(Rt rt, long s, long name) {
-        long p = Mapread.mapGet(rt, rt.slot(s, SC_INDEX), name, Val.NIL);
-        return Val.isFixnum(p) ? (int) Val.asFixnum(p) : -1;
     }
 
     static long newChunk(Rt rt, int width, int rows) {
@@ -285,55 +285,6 @@ public final class Table {
         return out;
     }
 
-    /// Row `i` as a REF into its chunk. Materialises nothing.
-    public static long tableRef(Rt rt, long t, int i) {
-        if (i >= tableCount(rt, t)) return Val.NIL;
-        int base = rt.mark();
-        int ti = rt.push(t);
-        // THE OFFSET IS ADDED HERE, and only here: this is the single place a
-        // row number becomes a chunk and a row within it, so a sliced table
-        // needs no other arm to know it was sliced.
-        int phys = i + tableOffset(rt, rt.r(ti));
-        long ch = Vec.nth(rt, rt.slot(rt.r(ti), TB_CHUNKS), phys >> CHUNK_SHIFT, Val.NOT_FOUND);
-        int chi = rt.push(ch);
-        long r = newObj(rt, TY_TABLEREF, RF_LEN);
-        int ri = rt.push(r);
-        set(rt, rt.r(ri), RF_SCHEMA, rt.slot(rt.r(ti), TB_SCHEMA));
-        set(rt, rt.r(ri), RF_CHUNK, rt.r(chi));
-        set(rt, rt.r(ri), RF_ROW, Val.fixnum(phys & (CHUNK - 1)));
-        long out = rt.r(ri);
-        rt.popTo(base);
-        return out;
-    }
-
-    /// A column of a row ref, by name. One map lookup for the position, then
-    /// two indexes -- no map is built and no row is copied.
-    public static long refGet(Rt rt, long r, long name, long dflt) {
-        int id = schemaId(rt, rt.slot(r, RF_SCHEMA), name);
-        if (id < 0) return dflt;
-        return chunkGet(rt, rt.slot(r, RF_CHUNK), id, (int) Val.asFixnum(rt.slot(r, RF_ROW)));
-    }
-
-    /// A row ref as a map, built only when somebody actually asks for one.
-    public static long refToMap(Rt rt, long r) {
-        int base = rt.mark();
-        int ri = rt.push(r);
-        int si = rt.push(rt.slot(rt.r(ri), RF_SCHEMA));
-        int n = schemaLen(rt, rt.r(si));
-        int mi = rt.push(emptyMap(rt));
-        for (int c = 0; c < n; c++) {
-            long name = schemaNameAt(rt, rt.r(si), c);
-            int nmi = rt.push(name);
-            long v = refGet(rt, rt.r(ri), rt.r(nmi), Val.NIL);
-            int vi = rt.push(v);
-            rt.setR(mi, Mapwrite.mapAssoc(rt, rt.r(mi), rt.r(nmi), rt.r(vi)));
-            rt.popTo(nmi);
-        }
-        long out = rt.r(mi);
-        rt.popTo(base);
-        return out;
-    }
-
     /// The value of column `c` in `row`, or `NOT_FOUND`. `row` may be a map or
     /// another table's row ref.
     static long rowColumn(Rt rt, long s, long row, int c) {
@@ -409,7 +360,11 @@ public final class Table {
             int n = schemaLen(rt, rt.r(rsi));
             for (int c = 0; c < n; c++) {
                 long name = schemaNameAt(rt, rt.r(rsi), c);
-                if (schemaId(rt, rt.r(si), name) < 0) { rt.popTo(base); return name; }
+                // ABSENT IS THE WIDTH: a real id is 0..width-1. `< 0` was
+                // the old spelling, and it is dead on an unsigned id in Rust.
+                if (schemaId(rt, rt.r(si), name) >= schemaWidth(rt, rt.r(si))) {
+                    rt.popTo(base); return name;
+                }
             }
             rt.popTo(base);
             return Val.NIL;
@@ -419,7 +374,9 @@ public final class Table {
             long e = Seqs.first(rt, rt.r(qi));
             int ei = rt.push(e);
             long k = rt.slot(rt.r(ei), 0);
-            if (schemaId(rt, rt.r(si), k) < 0) { rt.popTo(base); return k; }
+            if (schemaId(rt, rt.r(si), k) >= schemaWidth(rt, rt.r(si))) {
+                rt.popTo(base); return k;
+            }
             rt.popTo(ei);
             rt.setR(qi, Seqs.next(rt, rt.r(qi)));
         }
@@ -607,7 +564,7 @@ public final class Table {
             long name = schemaNameAt(rt, rt.r(wi), c);
             int nmi = rt.push(name);
             int old = schemaId(rt, rt.r(hi), rt.r(nmi));
-            int id = old >= 0 ? old : width++;
+            int id = old < schemaWidth(rt, rt.r(hi)) ? old : width++;
             rt.setR(di, Vec.conj(rt, rt.r(di), Val.fixnum(id)));
             rt.setR(ii, Mapwrite.mapAssoc(rt, rt.r(ii), rt.r(nmi), Val.fixnum(id)));
             rt.popTo(nmi);
@@ -640,7 +597,7 @@ public final class Table {
             int nmi = rt.push(name);
             long wantTy = schemaTypeAt(rt, rt.r(wi), c);
             int old = schemaId(rt, rt.r(hi), rt.r(nmi));
-            if (old >= 0) {
+            if (old < schemaWidth(rt, rt.r(hi))) {
                 // A carried column keeps its VALUES, so it must keep its type.
                 long haveTy = schemaTypeAt(rt, rt.r(hi), schemaPosOf(rt, rt.r(hi), rt.r(nmi)));
                 if (!Eq.eq(rt, haveTy, wantTy)) {
@@ -684,7 +641,7 @@ public final class Table {
                 int id = schemaIdAt(rt, rt.r(ri), c);
                 long name = schemaNameAt(rt, rt.r(ri), c);
                 int old = schemaId(rt, rt.r(hi), name);
-                if (old >= 0) {
+                if (old < schemaWidth(rt, rt.r(hi))) {
                     // SHARED, column object and encoding both. Nothing is
                     // copied and nothing is scanned: this is the head-only
                     // edit, and dropping a column is the loop simply never
@@ -765,7 +722,7 @@ public final class Table {
         int ti = rt.push(t);
         long s = rt.slot(rt.r(ti), TB_SCHEMA);
         int id = schemaId(rt, s, name);
-        if (id < 0) {
+        if (id >= schemaWidth(rt, s)) {
             String nm = kwName(rt, name), cols = columnList(rt, s);
             rt.popTo(base);
             return rt.throwStr("IllegalArgumentException",
@@ -791,7 +748,7 @@ public final class Table {
         int acc = rt.push(init);
         long s = rt.slot(rt.r(ti), TB_SCHEMA);
         int id = schemaId(rt, s, name);
-        if (id < 0) {
+        if (id >= schemaWidth(rt, s)) {
             String nm = kwName(rt, name), cols = columnList(rt, s);
             rt.popTo(base);
             return rt.throwStr("IllegalArgumentException",

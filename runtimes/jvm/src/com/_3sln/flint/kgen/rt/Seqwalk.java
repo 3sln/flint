@@ -12,6 +12,7 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Seqcore.*;
 import static com._3sln.flint.kgen.rt.Seqs.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
+import static com._3sln.flint.kgen.rt.Tableref.*;
 import static com._3sln.flint.kgen.rt.Vecread.*;
 
 public final class Seqwalk {

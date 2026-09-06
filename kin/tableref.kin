@@ -1,0 +1,102 @@
+;; Reading a ROW of a table without materialising it.
+;;
+;; A row ref is three slots -- schema, chunk, row -- and every column read
+;; through it is one map lookup and two indexes. Nothing is copied, which is
+;; the point: a table is columns, and turning a row back into a map to read one
+;; field of it would undo the whole representation.
+;;
+;; `ref-to-map` is the escape hatch, built ONLY when someone actually asks for
+;; a map.
+(ns flint.rt.tableref
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == >= < + - ushr bit-and not nil?
+                                   alloc heap slot set-slot as-fixnum to-i32
+                                   fixnum vec-nth is-fixnum empty-map
+                                   mark push r set-r pop-to for
+                                   Rt Value I32 RootIx NIL
+                                   TY_TABLEREF CHUNK CHUNK_SHIFT
+                                   SC_INDEX TB_SCHEMA TB_CHUNKS
+                                   RF_SCHEMA RF_CHUNK RF_ROW RF_LEN]]
+            [flint.rt.tablemeta :refer [schema-len schema-width schema-name-at
+                                        table-count table-offset chunk-get]]
+            [flint.rt.mapread :refer [map-get]]
+            [flint.rt.mapwrite :refer [map-assoc]]))
+
+(doc "The stable id of the column named `name`, or `schema-width` when the"
+     "schema has no such column."
+     ""
+     "THE WIDTH IS THE ABSENT VALUE. A real id is `0 .. width-1`, so the width"
+     "is free to mean `no such column` and no sentinel has to be invented."
+     "Rust answered `-1` in an `i64` and both ports `-1` in an `int`; that"
+     "happened to agree, but only because the type was signed -- every other"
+     "index in the runtime is an `I32`, which is `u32` in Rust, and `-1` there"
+     "is four billion."
+     ""
+     "The index is a MAP because a wide schema wants one; a narrow one would"
+     "be as fast scanned, and is not worth two code paths.")
+(defn ^:pub ^:method ^I32 schema-id [^:mut ^Rt rt ^Value s ^Value name]
+  (let [^Value p (map-get rt (slot rt s SC_INDEX) name NIL)]
+    (if (is-fixnum rt p)
+      (return (to-i32 (as-fixnum p))))
+    (return (schema-width rt s))))
+
+(doc "Row `i` of the table, as a ref."
+     ""
+     "THE OFFSET IS ADDED HERE, AND ONLY HERE. This is the single place a row"
+     "number becomes a chunk and a row within it, so a sliced table needs no"
+     "other arm anywhere that knows it was sliced.")
+(defn ^:pub ^:method ^Value table-ref [^:mut ^Rt rt ^Value t ^I32 i]
+  (if (>= i (table-count rt t))
+    (return NIL))
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^I32 at (+ i (table-offset rt (r rt ti)))
+        ^Value chunks (slot rt (r rt ti) TB_CHUNKS)
+        ^Value ch (vec-nth rt chunks (ushr at CHUNK_SHIFT) NIL)
+        ^RootIx chi (push rt ch)
+        ^Value rf (heap (alloc rt TY_TABLEREF RF_LEN))
+        ^RootIx ri (push rt rf)]
+    (set-slot rt (r rt ri) RF_SCHEMA (slot rt (r rt ti) TB_SCHEMA))
+    (set-slot rt (r rt ri) RF_CHUNK (r rt chi))
+    (set-slot rt (r rt ri) RF_ROW (fixnum (bit-and at (- CHUNK 1))))
+    (let [^Value out (r rt ri)]
+      (pop-to rt base)
+      (return out))))
+
+(doc "A column of a row ref, by name."
+     ""
+     "One map lookup for the position, then two indexes -- no map is built and"
+     "no row is copied.")
+(defn ^:pub ^:method ^Value ref-get [^:mut ^Rt rt ^Value rf ^Value name ^Value dflt]
+  (let [^Value s (slot rt rf RF_SCHEMA)
+        ^I32 id (schema-id rt s name)]
+    (if (>= id (schema-width rt s))
+      (return dflt))
+    (let [^Value ch (slot rt rf RF_CHUNK)
+          ^I32 row (to-i32 (as-fixnum (slot rt rf RF_ROW)))]
+      (return (chunk-get rt ch id row)))))
+
+(doc "A row ref as a map, built only when someone actually asks for one.")
+(defn ^:pub ^:method ^Value ref-to-map [^:mut ^Rt rt ^Value rf]
+  (let [^RootIx base (mark rt)
+        ^RootIx ri (push rt rf)
+        ^RootIx si (push rt (slot rt (r rt ri) RF_SCHEMA))
+        ^I32 n (schema-len rt (r rt si))
+        ^Value m0 (empty-map rt)
+        ^RootIx mi (push rt m0)]
+    (comment "`m0` and `nm0` are HOISTED, and not for style: Rust's borrow"
+             "checker refuses `push(empty_map())` -- both take `&mut self`, and"
+             "an argument is evaluated while the receiver is already borrowed."
+             "Both ports accept the nested form, which is exactly why the"
+             "source has to say the one that works everywhere.")
+    (for [^I32 c 0 n]
+      (let [^Value nm0 (schema-name-at rt (r rt si) c)
+            ^RootIx nmi (push rt nm0)
+            ^Value v (ref-get rt (r rt ri) (r rt nmi) NIL)
+            ^RootIx vi (push rt v)
+            ^Value nm (map-assoc rt (r rt mi) (r rt nmi) (r rt vi))]
+        (set-r rt mi nm)
+        (pop-to rt nmi)))
+    (let [^Value out (r rt mi)]
+      (pop-to rt base)
+      (return out))))

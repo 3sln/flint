@@ -326,19 +326,6 @@ impl Rt {
         false
     }
 
-    /// The column id of `name`, or -1. The index is a map because a wide schema
-    /// wants one; a narrow one would be as fast scanned, and is not worth two
-    /// code paths.
-    pub fn schema_id(&mut self, s: Value, name: Value) -> i64 {
-        let idx = self.slot(s, SC_INDEX);
-        let p = self.map_get(idx, name, NIL);
-        if p.is_fixnum() {
-            p.as_fixnum()
-        } else {
-            -1
-        }
-    }
-
     /// Build a table from `rows`, a vector of maps. Every row must have exactly
     /// the schema's columns, with values of the declared types -- and the
     /// refusal NAMES what was wrong, because "bad row" is the message this
@@ -440,74 +427,6 @@ impl Rt {
         let gt: alloc::string::String =
             { let __n = self.name_of(gk); self.as_str(__n, &mut b3) }.unwrap_or("?").into();
         alloc::format!("row {row}, column :{nm} holds :{wt} and was given a {gt}")
-    }
-
-    /// Row `i` as a REF into its chunk. Materialises nothing: `0026` used to
-    /// require `get-in` not to build a map, and with a ref the general path is
-    /// already the fast one.
-    pub fn table_ref(&mut self, t: Value, i: u32) -> Value {
-        if i >= self.table_count(t) {
-            return NIL;
-        }
-        let base = self.mark();
-        let ti = self.push(t);
-        // THE OFFSET IS ADDED HERE, and only here: `table_ref` is the single
-        // place a row number becomes a chunk and a row within it, so a sliced
-        // table needs no other arm to know it was sliced.
-        let i = i + self.table_offset(self.r(ti));
-        let chunks = self.slot(self.r(ti), TB_CHUNKS);
-        let ch = self.vec_nth(chunks, i >> CHUNK_SHIFT, NIL);
-        let chi = self.push(ch);
-        let a = self.alloc(TY_TABLEREF, RF_LEN);
-        let r = Value::heap(a);
-        let ri = self.push(r);
-        let sv = self.slot(self.r(ti), TB_SCHEMA);
-        self.set(self.r(ri), RF_SCHEMA, sv);
-        let cv = self.r(chi);
-        self.set(self.r(ri), RF_CHUNK, cv);
-        self.set(self.r(ri), RF_ROW, Value::fixnum((i & (CHUNK - 1)) as i64));
-        let out = self.r(ri);
-        self.pop_to(base);
-        out
-    }
-
-    /// A column of a row ref, by name. One map lookup for the position, then
-    /// two indexes -- no map is built and no row is copied.
-    pub fn ref_get(&mut self, r: Value, name: Value, dflt: Value) -> Value {
-        let s = self.slot(r, RF_SCHEMA);
-        let id = self.schema_id(s, name);
-        if id < 0 {
-            return dflt;
-        }
-        let ch = self.slot(r, RF_CHUNK);
-        let row = self.slot(r, RF_ROW).as_fixnum() as u32;
-        self.chunk_get(ch, id as u32, row)
-    }
-
-    /// A row ref as a map, built only when someone actually asks for one.
-    pub fn ref_to_map(&mut self, r: Value) -> Value {
-        let base = self.mark();
-        let ri = self.push(r);
-        let s = self.slot(self.r(ri), RF_SCHEMA);
-        let siv = self.push(s);
-        let n = self.schema_len(self.r(siv));
-        let m = self.empty_map();
-        let mi = self.push(m);
-        for c in 0..n {
-            let name = {
-                let names = self.slot(self.r(siv), SC_NAMES);
-                self.vec_nth(names, c, NIL)
-            };
-            let nmi = self.push(name);
-            let v = self.ref_get(self.r(ri), self.r(nmi), NIL);
-            let vi = self.push(v);
-            let nm = self.map_assoc(self.r(mi), self.r(nmi), self.r(vi));
-            self.set_r(mi, nm);
-            self.pop_to(nmi);
-        }
-        let out = self.r(mi);
-        self.pop_to(base);
-        out
     }
 
     // ---------------------------------------------------------------- step 4
@@ -648,7 +567,10 @@ impl Rt {
             for c in 0..n {
                 let names = self.slot(self.r(rsi), SC_NAMES);
                 let name = self.vec_nth(names, c, NIL);
-                if self.schema_id(self.r(si), name) < 0 {
+                // ABSENT IS THE WIDTH: a real id is `0 .. width-1`, so the
+                // width is free to mean "no such column". `< 0` was the old
+                // spelling and is DEAD on an unsigned id.
+                if self.schema_id(self.r(si), name) >= self.schema_width(self.r(si)) {
                     self.pop_to(base);
                     return name;
                 }
@@ -662,7 +584,7 @@ impl Rt {
             let e = self.first(self.r(qi));
             let ei = self.push(e);
             let k = self.slot_or_nth_pub(self.r(ei), 0);
-            if self.schema_id(self.r(si), k) < 0 {
+            if self.schema_id(self.r(si), k) >= self.schema_width(self.r(si)) {
                 self.pop_to(base);
                 return k;
             }
@@ -902,8 +824,8 @@ impl Rt {
             let name = self.schema_name_at(self.r(wi), c);
             let ni = self.push(name);
             let old = self.schema_id(self.r(hi), self.r(ni));
-            let id = if old >= 0 {
-                old as u32
+            let id = if old < self.schema_width(self.r(hi)) {
+                old
             } else {
                 let fresh = width;
                 width += 1;
@@ -954,7 +876,7 @@ impl Rt {
             let nmi = self.push(name);
             let want_ty = self.schema_type_at(self.r(wi), c);
             let old = self.schema_id(self.r(hi), self.r(nmi));
-            if old >= 0 {
+            if old < self.schema_width(self.r(hi)) {
                 // A carried column keeps its VALUES, so it must keep its type.
                 let hc = self.schema_pos_of(self.r(hi), self.r(nmi));
                 let have_ty = self.schema_type_at(self.r(hi), hc);
@@ -1019,7 +941,7 @@ impl Rt {
                 let id = self.schema_id_at(self.r(ri), c);
                 let name = self.schema_name_at(self.r(ri), c);
                 let old = self.schema_id(self.r(hi), name);
-                if old >= 0 {
+                if old < self.schema_width(self.r(hi)) {
                     // SHARED, column object and encoding both. Nothing is
                     // copied and nothing is scanned; this is the head-only
                     // edit, and dropping a column is the case where the loop
@@ -1364,7 +1286,7 @@ impl Rt {
         let ti = self.push(t);
         let s = self.slot(self.r(ti), TB_SCHEMA);
         let id = self.schema_id(s, name);
-        if id < 0 {
+        if id >= self.schema_width(s) {
             let nm = self.kw_name(name);
             let cols = self.column_list(s);
             self.pop_to(base);
@@ -1407,14 +1329,13 @@ impl Rt {
         let acc = self.push(init);
         let s = self.slot(self.r(ti), TB_SCHEMA);
         let id = self.schema_id(s, name);
-        if id < 0 {
+        if id >= self.schema_width(s) {
             let nm = self.kw_name(name);
             let cols = self.column_list(s);
             self.pop_to(base);
             let msg = alloc::format!("no column :{nm}; the columns are {cols}");
             return self.throw_str("IllegalArgumentException", &msg);
         }
-        let id = id as u32;
         let n = self.table_count(self.r(ti));
         for i in 0..n {
             if !self.charge_tick(i as u64, 1, "reduce-column") {

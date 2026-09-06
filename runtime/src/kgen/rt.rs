@@ -4,7 +4,8 @@
 //! here, because a missing `pub mod` in Rust is not a compile error -- it is
 //! a module that quietly never gets built.
 //!
-//! `unused_comparisons` IS AN ERROR HERE, AND ONLY HERE. `I32` is `u32` in
+//! `unused_comparisons` IS AN ERROR, and since `schema_id` it is denied for
+//! the WHOLE CRATE at `lib.rs` rather than only here. `I32` is `u32` in
 //! Rust and `int` in the ports, so `(if (< x 0) ...)` after a subtraction
 //! reads as a clamp in two targets and is dead code in the third -- where the
 //! subtraction has already wrapped to a huge number instead of going
@@ -12,15 +13,13 @@
 //! `s-append-range`, both caught downstream by a probe rather than here.
 //!
 //! rustc already sees it -- "comparison is useless due to type limits" -- but
-//! as one warning among forty. Denying it in the generated tree turns the
-//! tell into a build failure at the file that has the bug, and costs
-//! hand-written code nothing, because the attribute stops at this module.
+//! as one warning among forty. Denying it turns the tell into a build failure
+//! at the file that has the bug.
 //!
 //! It catches the TELL, not the underflow. A source that subtracts into the
 //! negative and never guards it stays silent. The guarded form -- subtract
 //! only when the result is known non-negative -- is what the sources use, and
 //! this makes the unguarded one impossible to leave in by accident.
-#![deny(unused_comparisons)]
 pub mod assoc;
 pub mod byteconcat;
 pub mod byteat;
@@ -55,6 +54,7 @@ pub mod ropeeq;
 pub mod ropeflat;
 pub mod ropemeas;
 pub mod tablemeta;
+pub mod tableref;
 pub mod ropenode;
 pub mod ropeslice;
 pub mod seqcore;

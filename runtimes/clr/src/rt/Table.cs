@@ -49,6 +49,12 @@ public static class Table {
     // Row-ref slots, and the transient's.
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // The ROW-REF HALF, generated from `kin/tableref.kin`.
+    public static int schemaId(Rt rt, long s, long name) { return global::_3sln.Flint.Kgen.Rt.Tableref.SchemaId(rt, s, name); }
+    public static long tableRef(Rt rt, long t, int i) { return global::_3sln.Flint.Kgen.Rt.Tableref.TableRef(rt, t, i); }
+    public static long refGet(Rt rt, long r, long name, long dflt) { return global::_3sln.Flint.Kgen.Rt.Tableref.RefGet(rt, r, name, dflt); }
+    public static long refToMap(Rt rt, long r) { return global::_3sln.Flint.Kgen.Rt.Tableref.RefToMap(rt, r); }
+
     // The ACCESSOR HALF, generated from `kin/tablemeta.kin`.
     public static bool isSchema(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.IsSchema(rt, v); }
     public static bool isTable(Rt rt, long v) { return global::_3sln.Flint.Kgen.Rt.Tablemeta.IsTable(rt, v); }
@@ -153,12 +159,6 @@ public static class Table {
         long outv = rt.R(si);
         rt.PopTo(bas);
         return outv;
-    }
-
-    /// The column id of `name`, or -1.
-    public static int schemaId(Rt rt, long s, long name) {
-        long p = Mapread.MapGet(rt, rt.Slot(s, SC_INDEX), name, Val.Nil);
-        return Val.IsFixnum(p) ? (int) Val.AsFixnum(p) : -1;
     }
 
     static long newChunk(Rt rt, int width, int rows) {
@@ -278,55 +278,6 @@ public static class Table {
         return outv;
     }
 
-    /// Row `i` as a REF into its chunk. Materialises nothing.
-    public static long tableRef(Rt rt, long t, int i) {
-        if (i >= tableCount(rt, t)) return Val.Nil;
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        // THE OFFSET IS ADDED HERE, and only here: this is the single place a
-        // row number becomes a chunk and a row within it, so a sliced table
-        // needs no other arm to know it was sliced.
-        int phys = i + tableOffset(rt, rt.R(ti));
-        long ch = Vec.Nth(rt, rt.Slot(rt.R(ti), TB_CHUNKS), phys >> CHUNK_SHIFT, Val.NotFound);
-        int chi = rt.Push(ch);
-        long r = newObj(rt, Obj.TyTableref, RF_LEN);
-        int ri = rt.Push(r);
-        set(rt, rt.R(ri), RF_SCHEMA, rt.Slot(rt.R(ti), TB_SCHEMA));
-        set(rt, rt.R(ri), RF_CHUNK, rt.R(chi));
-        set(rt, rt.R(ri), RF_ROW, Val.Fixnum(phys & (CHUNK - 1)));
-        long outv = rt.R(ri);
-        rt.PopTo(bas);
-        return outv;
-    }
-
-    /// A column of a row ref, by name. One map lookup for the position, then
-    /// two indexes -- no map is built and no row is copied.
-    public static long refGet(Rt rt, long r, long name, long dflt) {
-        int id = schemaId(rt, rt.Slot(r, RF_SCHEMA), name);
-        if (id < 0) return dflt;
-        return chunkGet(rt, rt.Slot(r, RF_CHUNK), id, (int) Val.AsFixnum(rt.Slot(r, RF_ROW)));
-    }
-
-    /// A row ref as a map, built only when somebody actually asks for one.
-    public static long refToMap(Rt rt, long r) {
-        int bas = rt.Mark();
-        int ri = rt.Push(r);
-        int si = rt.Push(rt.Slot(rt.R(ri), RF_SCHEMA));
-        int n = schemaLen(rt, rt.R(si));
-        int mi = rt.Push(emptyMap(rt));
-        for (int c = 0; c < n; c++) {
-            long name = schemaNameAt(rt, rt.R(si), c);
-            int nmi = rt.Push(name);
-            long v = refGet(rt, rt.R(ri), rt.R(nmi), Val.Nil);
-            int vi = rt.Push(v);
-            rt.SetR(mi, Mapwrite.MapAssoc(rt, rt.R(mi), rt.R(nmi), rt.R(vi)));
-            rt.PopTo(nmi);
-        }
-        long outv = rt.R(mi);
-        rt.PopTo(bas);
-        return outv;
-    }
-
     /// The value of column `c` in `row`, or `NOT_FOUND`. `row` may be a map or
     /// another table's row ref.
     static long rowColumn(Rt rt, long s, long row, int c) {
@@ -402,7 +353,10 @@ public static class Table {
             int n = schemaLen(rt, rt.R(rsi));
             for (int c = 0; c < n; c++) {
                 long name = schemaNameAt(rt, rt.R(rsi), c);
-                if (schemaId(rt, rt.R(si), name) < 0) { rt.PopTo(bas); return name; }
+                // ABSENT IS THE WIDTH -- see the Java and Rust copies.
+                if (schemaId(rt, rt.R(si), name) >= schemaWidth(rt, rt.R(si))) {
+                    rt.PopTo(bas); return name;
+                }
             }
             rt.PopTo(bas);
             return Val.Nil;
@@ -412,7 +366,9 @@ public static class Table {
             long e = Seqs.First(rt, rt.R(qi));
             int ei = rt.Push(e);
             long k = rt.Slot(rt.R(ei), 0);
-            if (schemaId(rt, rt.R(si), k) < 0) { rt.PopTo(bas); return k; }
+            if (schemaId(rt, rt.R(si), k) >= schemaWidth(rt, rt.R(si))) {
+                rt.PopTo(bas); return k;
+            }
             rt.PopTo(ei);
             rt.SetR(qi, Seqs.Next(rt, rt.R(qi)));
         }
@@ -600,7 +556,7 @@ public static class Table {
             long name = schemaNameAt(rt, rt.R(wi), c);
             int nmi = rt.Push(name);
             int old = schemaId(rt, rt.R(hi), rt.R(nmi));
-            int id = old >= 0 ? old : width++;
+            int id = old < schemaWidth(rt, rt.R(hi)) ? old : width++;
             rt.SetR(di, Vec.Conj(rt, rt.R(di), Val.Fixnum(id)));
             rt.SetR(ii, Mapwrite.MapAssoc(rt, rt.R(ii), rt.R(nmi), Val.Fixnum(id)));
             rt.PopTo(nmi);
@@ -633,7 +589,7 @@ public static class Table {
             int nmi = rt.Push(name);
             long wantTy = schemaTypeAt(rt, rt.R(wi), c);
             int old = schemaId(rt, rt.R(hi), rt.R(nmi));
-            if (old >= 0) {
+            if (old < schemaWidth(rt, rt.R(hi))) {
                 // A carried column keeps its VALUES, so it must keep its type.
                 long haveTy = schemaTypeAt(rt, rt.R(hi), schemaPosOf(rt, rt.R(hi), rt.R(nmi)));
                 if (!Eq.Equal(rt, haveTy, wantTy)) {
@@ -677,7 +633,7 @@ public static class Table {
                 int id = schemaIdAt(rt, rt.R(ri), c);
                 long name = schemaNameAt(rt, rt.R(ri), c);
                 int old = schemaId(rt, rt.R(hi), name);
-                if (old >= 0) {
+                if (old < schemaWidth(rt, rt.R(hi))) {
                     // SHARED, column object and encoding both. Nothing is
                     // copied and nothing is scanned: this is the head-only
                     // edit, and dropping a column is the loop simply never
@@ -758,7 +714,7 @@ public static class Table {
         int ti = rt.Push(t);
         long s = rt.Slot(rt.R(ti), TB_SCHEMA);
         int id = schemaId(rt, s, name);
-        if (id < 0) {
+        if (id >= schemaWidth(rt, s)) {
             string nm = kwName(rt, name), cols = columnList(rt, s);
             rt.PopTo(bas);
             return rt.ThrowStr("IllegalArgumentException",
@@ -784,7 +740,7 @@ public static class Table {
         int acc = rt.Push(init);
         long s = rt.Slot(rt.R(ti), TB_SCHEMA);
         int id = schemaId(rt, s, name);
-        if (id < 0) {
+        if (id >= schemaWidth(rt, s)) {
             string nm = kwName(rt, name), cols = columnList(rt, s);
             rt.PopTo(bas);
             return rt.ThrowStr("IllegalArgumentException",

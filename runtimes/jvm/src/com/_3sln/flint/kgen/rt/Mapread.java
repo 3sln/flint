@@ -12,6 +12,7 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Eqalloc.*;
 import static com._3sln.flint.kgen.rt.Find.*;
 import static com._3sln.flint.kgen.rt.Mapcore.*;
+import static com._3sln.flint.kgen.rt.Tableref.*;
 
 public final class Mapread {
     /// Where `k` sits in an array map, or `n` when it is not there.

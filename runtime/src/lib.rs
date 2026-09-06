@@ -7,6 +7,18 @@
 
 #![no_std]
 #![allow(clippy::missing_safety_doc)]
+// `unused_comparisons` IS AN ERROR IN THIS CRATE, and it is here rather than
+// only on `kgen` because the trap is not confined to generated code. kin's
+// `I32` is `u32` in Rust and `int` in both ports, so a guard written `x < 0`
+// reads as a clamp in two runtimes and is DEAD CODE in the third -- either
+// hiding an underflow that already happened, or, when a sentinel converges
+// from `-1` to a positive value, silently turning a live test into `false`.
+//
+// It was denied on `kgen` first, for two generated bugs. Converging
+// `schema_id` then produced SEVEN more, all in hand-written `table.rs`, none
+// of them errors -- rustc had been reporting each one as one warning among
+// forty since the moment it appeared. Warnings nobody reads are not a gate.
+#![deny(unused_comparisons)]
 
 extern crate alloc;
 

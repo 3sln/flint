@@ -14,6 +14,7 @@ import static com._3sln.flint.kgen.rt.Collnode.*;
 import static com._3sln.flint.kgen.rt.Dissoc.*;
 import static com._3sln.flint.kgen.rt.Mapcore.*;
 import static com._3sln.flint.kgen.rt.Mapread.*;
+import static com._3sln.flint.kgen.rt.Tableref.*;
 
 public final class Mapwrite {
     /// An array map rebuilt as a CHAMP. The one-way door between the two

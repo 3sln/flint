@@ -14,6 +14,7 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Eqalloc;
 using static global::_3sln.Flint.Kgen.Rt.Find;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
+using static global::_3sln.Flint.Kgen.Rt.Tableref;
 
 public static class Mapread {
     /// Where `k` sits in an array map, or `n` when it is not there.

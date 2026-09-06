@@ -14,6 +14,7 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Seqcore;
 using static global::_3sln.Flint.Kgen.Rt.Seqs;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
+using static global::_3sln.Flint.Kgen.Rt.Tableref;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;
 
 public static class Seqwalk {
