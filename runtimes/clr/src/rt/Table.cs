@@ -49,6 +49,12 @@ public static class Table {
     // Row-ref slots, and the transient's.
     public const int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // THE TRANSIENT, generated from `kin/tabletrans.kin`.
+    public static long tableTransient(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tabletrans.TableTransient(rt, t); }
+    public static long ttableConj(Rt rt, long t, long row) { return global::_3sln.Flint.Kgen.Rt.Tabletrans.TtableConj(rt, t, row); }
+    public static long ttablePersistent(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tabletrans.TtablePersistent(rt, t); }
+    public static int ttableCount(Rt rt, long t) { return global::_3sln.Flint.Kgen.Rt.Tabletrans.TtableCount(rt, t); }
+
     // THE FILL HALF, generated from `kin/tablefill.kin`.
     static void writeRow(Rt rt, long s, long ch, int k, long row) { global::_3sln.Flint.Kgen.Rt.Tablefill.WriteRow(rt, s, ch, k, row); }
     static long openChunk(Rt rt, long s) { return global::_3sln.Flint.Kgen.Rt.Tablefill.OpenChunk(rt, s); }
@@ -697,129 +703,5 @@ public static class Table {
     // Appending through the persistent path copies the chunk per row, which is
     // 256 copies per chunk: 49 061 464 bytes to build 20 000 rows against
     // 3 082 984 through here (`doc/decisions/0026` step 7).
-
-    /// `(transient t)`. The table's own chunks are carried over UNCHANGED --
-    /// they are persistent and shared, and a transient must never write into
-    /// something a table can still see.
-    public static long tableTransient(Rt rt, long t) {
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        int si = rt.Push(rt.Slot(rt.R(ti), TB_SCHEMA));
-        int count = tableCount(rt, rt.R(ti));
-        int full = count & ~(CHUNK - 1);
-        int ci = rt.Push(rt.Slot(rt.R(ti), TB_CHUNKS));
-        int oi = rt.Push(openChunk(rt, rt.R(si)));
-        int partial = count - full;
-        if (partial > 0) {
-            int li = rt.Push(Vec.Nth(rt, rt.R(ci), full >> CHUNK_SHIFT, Val.NotFound));
-            int ncols = schemaLen(rt, rt.R(si));
-            rt.ChargeWork((long) partial * ncols);
-            for (int c = 0; c < ncols; c++) {
-                int id = schemaIdAt(rt, rt.R(si), c);
-                long col = rt.Slot(rt.R(oi), CH_BASE + id);
-                for (int k = 0; k < partial; k++)
-                    set(rt, col, k, chunkGet(rt, rt.R(li), id, k));
-            }
-            // Drop the partial chunk from the carried list: its rows are in
-            // the open chunk now, and keeping both would double them.
-            int keep = Vec.Count(rt, rt.R(ci)) - 1;
-            int pi = rt.Push(emptyVec(rt));
-            for (int q = 0; q < keep; q++)
-                rt.SetR(pi, Vec.Conj(rt, rt.R(pi), Vec.Nth(rt, rt.R(ci), q, Val.NotFound)));
-            rt.SetR(ci, rt.R(pi));
-            rt.PopTo(li);
-        }
-        set(rt, rt.R(oi), CH_ROWS, Val.Fixnum(partial));
-        long tt = Conc.NewObj(rt, Obj.TyTtable, TT_LEN);
-        int tti = rt.Push(tt);
-        set(rt, rt.R(tti), TT_SCHEMA, rt.R(si));
-        set(rt, rt.R(tti), TT_CHUNKS, rt.R(ci));
-        set(rt, rt.R(tti), TT_COUNT, Val.Fixnum(count));
-        set(rt, rt.R(tti), TT_OPEN, rt.R(oi));
-        set(rt, rt.R(tti), TT_LIVE, Val.True);
-        long outv = rt.R(tti);
-        rt.PopTo(bas);
-        return outv;
-    }
-
-    static bool ttableLive(Rt rt, long t, string op) {
-        if (rt.Slot(t, TT_LIVE) == Val.True) return true;
-        rt.ThrowStr("IllegalStateException", op
-            + " on a transient table that persistent! has already taken; a transient is used"
-            + " once and the table it produced is the value");
-        return false;
-    }
-
-    /// `(conj! tt row)`. The row is CHECKED exactly as the persistent path
-    /// checks it: a transient is a faster way to build a table, not a way to
-    /// build one that is not closed.
-    public static long ttableConj(Rt rt, long t, long row) {
-        if (!ttableLive(rt, t, "conj!")) return Val.Nil;
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        int ri = rt.Push(row);
-        int si = rt.Push(rt.Slot(rt.R(ti), TT_SCHEMA));
-        int count = (int) Val.AsFixnum(rt.Slot(rt.R(ti), TT_COUNT));
-        if (!checkRow(rt, rt.R(si), rt.R(ri), count)) { rt.PopTo(bas); return Val.Nil; }
-        int oi = rt.Push(rt.Slot(rt.R(ti), TT_OPEN));
-        int fill = chunkRows(rt, rt.R(oi));
-        writeRow(rt, rt.R(si), rt.R(oi), fill, rt.R(ri));
-        set(rt, rt.R(oi), CH_ROWS, Val.Fixnum(fill + 1));
-        if (fill + 1 == CHUNK) {
-            // A FULL open chunk is already exactly the chunk it wants to be, so
-            // it is collapsed and handed over as-is. Sealing here copies, and
-            // copying made the transient allocate MORE than the bulk path it
-            // was supposed to beat -- which only a measurement found.
-            int ncols = schemaLen(rt, rt.R(si));
-            for (int c = 0; c < ncols; c++) collapse(rt, rt.R(oi), schemaIdAt(rt, rt.R(si), c));
-            // HOISTED, both of them. C# evaluates arguments left to right, so
-            // `set(rt, rt.R(ti), ..., Vec.Conj(...))` reads the object's ADDRESS
-            // before the allocation that may move it -- and the write then lands
-            // on a forwarded object. It surfaced as "object type 1 is not a
-            // transient", type 1 being `TY_FWD`, which is the tidiest possible
-            // report of `doc/decisions/0031`'s defect: a value in a host local
-            // does not survive an allocation.
-            long sealedCh = Vec.Conj(rt, rt.Slot(rt.R(ti), TT_CHUNKS), rt.R(oi));
-            set(rt, rt.R(ti), TT_CHUNKS, sealedCh);
-            long fresh = openChunk(rt, rt.R(si));
-            set(rt, rt.R(ti), TT_OPEN, fresh);
-        }
-        set(rt, rt.R(ti), TT_COUNT, Val.Fixnum(count + 1));
-        long outv = rt.R(ti);
-        rt.PopTo(bas);
-        return outv;
-    }
-
-    /// `(persistent! tt)`. Seals whatever the open chunk holds. The transient
-    /// is dead afterwards, and says so if used again.
-    public static long ttablePersistent(Rt rt, long t) {
-        if (!ttableLive(rt, t, "persistent!")) return Val.Nil;
-        int bas = rt.Mark();
-        int ti = rt.Push(t);
-        int si = rt.Push(rt.Slot(rt.R(ti), TT_SCHEMA));
-        int ci = rt.Push(rt.Slot(rt.R(ti), TT_CHUNKS));
-        int oi = rt.Push(rt.Slot(rt.R(ti), TT_OPEN));
-        int fill = chunkRows(rt, rt.R(oi));
-        if (fill > 0) {
-            int sj = rt.Push(seal(rt, rt.R(si), rt.R(oi), fill));
-            rt.SetR(ci, Vec.Conj(rt, rt.R(ci), rt.R(sj)));
-            rt.PopTo(sj);
-        }
-        long count = rt.Slot(rt.R(ti), TT_COUNT);
-        set(rt, rt.R(ti), TT_LIVE, Val.False);
-        long nt = Conc.NewObj(rt, Obj.TyTable, TB_LEN);
-        int ni = rt.Push(nt);
-        set(rt, rt.R(ni), TB_SCHEMA, rt.R(si));
-        set(rt, rt.R(ni), TB_CHUNKS, rt.R(ci));
-        set(rt, rt.R(ni), TB_COUNT, count);
-        set(rt, rt.R(ni), TB_OFFSET, Val.Fixnum(0));
-        long outv = rt.R(ni);
-        rt.PopTo(bas);
-        return outv;
-    }
-
-    public static int ttableCount(Rt rt, long t) {
-        return (int) Val.AsFixnum(rt.Slot(t, TT_COUNT));
-    }
 
 }

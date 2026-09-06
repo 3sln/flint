@@ -317,6 +317,20 @@
           :java "Table.CHUNK" :csharp "global::Flint.Rt.Table.CHUNK"}
    'CHUNK_SHIFT {:rust "crate::table::CHUNK_SHIFT"
                 :java "Table.CHUNK_SHIFT" :csharp "global::Flint.Rt.Table.CHUNK_SHIFT"}
+
+   ;; A TRANSIENT table's slots, spelled the same by all three.
+   'TT_SCHEMA {:rust "crate::table::TT_SCHEMA"
+              :java "Table.TT_SCHEMA" :csharp "global::Flint.Rt.Table.TT_SCHEMA"}
+   'TT_CHUNKS {:rust "crate::table::TT_CHUNKS"
+              :java "Table.TT_CHUNKS" :csharp "global::Flint.Rt.Table.TT_CHUNKS"}
+   'TT_COUNT {:rust "crate::table::TT_COUNT"
+             :java "Table.TT_COUNT" :csharp "global::Flint.Rt.Table.TT_COUNT"}
+   'TT_OPEN {:rust "crate::table::TT_OPEN"
+            :java "Table.TT_OPEN" :csharp "global::Flint.Rt.Table.TT_OPEN"}
+   'TT_LIVE {:rust "crate::table::TT_LIVE"
+            :java "Table.TT_LIVE" :csharp "global::Flint.Rt.Table.TT_LIVE"}
+   'TT_LEN {:rust "crate::table::TT_LEN"
+           :java "Table.TT_LEN" :csharp "global::Flint.Rt.Table.TT_LEN"}
    'LS_THUNK {:rust "LS_THUNK" :java "LS_THUNK" :csharp "LS_THUNK"}
    'LS_SEQ {:rust "LS_SEQ" :java "LS_SEQ" :csharp "LS_SEQ"}
    ;; A byte rope's header, and a transient byte string's. All three targets
@@ -762,6 +776,13 @@
     'ref-get (core/call {:rust "{0}.ref_get({1}, {2}, {3})"
                          :java "Table.refGet({0}, {1}, {2}, {3})"
                          :csharp "global::Flint.Rt.Table.refGet({0}, {1}, {2}, {3})"})
+    ;; STILL HAND-WRITTEN, and reached as a call rather than a sibling until
+    ;; it is not: `check-row` builds the refusal messages that `0032` is about,
+    ;; and those are the last part of `Table` to port.
+    'check-row (core/call {:rust "{0}.check_row({1}, {2}, {3})"
+                           :java "Table.checkRow({0}, {1}, {2}, {3})"
+                           :csharp "global::Flint.Rt.Table.checkRow({0}, {1}, {2}, {3})"}
+                          {:tag Bool})
     'schema-len (core/call {:rust "{0}.schema_len({1})"
                             :java "Table.schemaLen({0}, {1})"
                             :csharp "global::Flint.Rt.Table.schemaLen({0}, {1})"})
@@ -815,6 +836,8 @@
     ;; entry said 2 for a while after the function said 3, which would have
     ;; generated a call that does not compile the moment a source used it.
     'vec-nth (sibling "vec_nth" "Vec" "nth" 3)
+    'vec-conj (sibling "vec_conj" "Vec" "conj" 2)
+    'vec-pop (sibling "vec_pop" "Vec" "pop" 1)
     ;; The CHARACTER lookup, with the same `dflt` shape. Rust calls it
     ;; `char_at`; both ports call it `Str.nth`, camel on the JVM and Pascal on
     ;; the CLR, which is what the four-argument `sibling` is for.

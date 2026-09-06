@@ -56,6 +56,12 @@ public final class Table {
     // Row-ref slots, and the transient's.
     public static final int RF_SCHEMA = 0, RF_CHUNK = 1, RF_ROW = 2, RF_LEN = 3;
 
+    // THE TRANSIENT, generated from `kin/tabletrans.kin`.
+    public static long tableTransient(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tabletrans.tableTransient(rt, t); }
+    public static long ttableConj(Rt rt, long t, long row) { return com._3sln.flint.kgen.rt.Tabletrans.ttableConj(rt, t, row); }
+    public static long ttablePersistent(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tabletrans.ttablePersistent(rt, t); }
+    public static int ttableCount(Rt rt, long t) { return com._3sln.flint.kgen.rt.Tabletrans.ttableCount(rt, t); }
+
     // THE FILL HALF, generated from `kin/tablefill.kin`.
     static void writeRow(Rt rt, long s, long ch, int k, long row) { com._3sln.flint.kgen.rt.Tablefill.writeRow(rt, s, ch, k, row); }
     static long openChunk(Rt rt, long s) { return com._3sln.flint.kgen.rt.Tablefill.openChunk(rt, s); }
@@ -707,129 +713,5 @@ public final class Table {
     // Appending through the persistent path copies the chunk per row, which is
     // 256 copies per chunk: 49 061 464 bytes to build 20 000 rows against
     // 3 082 984 through here (`doc/decisions/0026` step 7).
-
-    /// `(transient t)`. The table's own chunks are carried over UNCHANGED --
-    /// they are persistent and shared, and a transient must never write into
-    /// something a table can still see.
-    public static long tableTransient(Rt rt, long t) {
-        int base = rt.mark();
-        int ti = rt.push(t);
-        int si = rt.push(rt.slot(rt.r(ti), TB_SCHEMA));
-        int count = tableCount(rt, rt.r(ti));
-        int full = count & ~(CHUNK - 1);
-        int ci = rt.push(rt.slot(rt.r(ti), TB_CHUNKS));
-        int oi = rt.push(openChunk(rt, rt.r(si)));
-        int partial = count - full;
-        if (partial > 0) {
-            int li = rt.push(Vec.nth(rt, rt.r(ci), full >> CHUNK_SHIFT, Val.NOT_FOUND));
-            int ncols = schemaLen(rt, rt.r(si));
-            rt.chargeWork((long) partial * ncols);
-            for (int c = 0; c < ncols; c++) {
-                int id = schemaIdAt(rt, rt.r(si), c);
-                long col = rt.slot(rt.r(oi), CH_BASE + id);
-                for (int k = 0; k < partial; k++)
-                    set(rt, col, k, chunkGet(rt, rt.r(li), id, k));
-            }
-            // Drop the partial chunk from the carried list: its rows are in
-            // the open chunk now, and keeping both would double them.
-            int keep = Vec.count(rt, rt.r(ci)) - 1;
-            int pi = rt.push(emptyVec(rt));
-            for (int q = 0; q < keep; q++)
-                rt.setR(pi, Vec.conj(rt, rt.r(pi), Vec.nth(rt, rt.r(ci), q, Val.NOT_FOUND)));
-            rt.setR(ci, rt.r(pi));
-            rt.popTo(li);
-        }
-        set(rt, rt.r(oi), CH_ROWS, Val.fixnum(partial));
-        long tt = Conc.newObj(rt, TY_TTABLE, TT_LEN);
-        int tti = rt.push(tt);
-        set(rt, rt.r(tti), TT_SCHEMA, rt.r(si));
-        set(rt, rt.r(tti), TT_CHUNKS, rt.r(ci));
-        set(rt, rt.r(tti), TT_COUNT, Val.fixnum(count));
-        set(rt, rt.r(tti), TT_OPEN, rt.r(oi));
-        set(rt, rt.r(tti), TT_LIVE, Val.TRUE);
-        long out = rt.r(tti);
-        rt.popTo(base);
-        return out;
-    }
-
-    static boolean ttableLive(Rt rt, long t, String op) {
-        if (rt.slot(t, TT_LIVE) == Val.TRUE) return true;
-        rt.throwStr("IllegalStateException", op
-            + " on a transient table that persistent! has already taken; a transient is used"
-            + " once and the table it produced is the value");
-        return false;
-    }
-
-    /// `(conj! tt row)`. The row is CHECKED exactly as the persistent path
-    /// checks it: a transient is a faster way to build a table, not a way to
-    /// build one that is not closed.
-    public static long ttableConj(Rt rt, long t, long row) {
-        if (!ttableLive(rt, t, "conj!")) return Val.NIL;
-        int base = rt.mark();
-        int ti = rt.push(t);
-        int ri = rt.push(row);
-        int si = rt.push(rt.slot(rt.r(ti), TT_SCHEMA));
-        int count = (int) Val.asFixnum(rt.slot(rt.r(ti), TT_COUNT));
-        if (!checkRow(rt, rt.r(si), rt.r(ri), count)) { rt.popTo(base); return Val.NIL; }
-        int oi = rt.push(rt.slot(rt.r(ti), TT_OPEN));
-        int fill = chunkRows(rt, rt.r(oi));
-        writeRow(rt, rt.r(si), rt.r(oi), fill, rt.r(ri));
-        set(rt, rt.r(oi), CH_ROWS, Val.fixnum(fill + 1));
-        if (fill + 1 == CHUNK) {
-            // A FULL open chunk is already exactly the chunk it wants to be, so
-            // it is collapsed and handed over as-is. Sealing here copies, and
-            // copying made the transient allocate MORE than the bulk path it
-            // was supposed to beat -- which only a measurement found.
-            int ncols = schemaLen(rt, rt.r(si));
-            for (int c = 0; c < ncols; c++) collapse(rt, rt.r(oi), schemaIdAt(rt, rt.r(si), c));
-            // HOISTED, both of them. Java evaluates arguments left to right, so
-            // `set(rt, rt.r(ti), ..., Vec.conj(...))` reads the object's ADDRESS
-            // before the allocation that may move it -- and the write then lands
-            // on a forwarded object. It surfaced as "object type 1 is not a
-            // transient", type 1 being `TY_FWD`, which is the tidiest possible
-            // report of `doc/decisions/0031`'s defect: a value in a host local
-            // does not survive an allocation.
-            long sealed = Vec.conj(rt, rt.slot(rt.r(ti), TT_CHUNKS), rt.r(oi));
-            set(rt, rt.r(ti), TT_CHUNKS, sealed);
-            long fresh = openChunk(rt, rt.r(si));
-            set(rt, rt.r(ti), TT_OPEN, fresh);
-        }
-        set(rt, rt.r(ti), TT_COUNT, Val.fixnum(count + 1));
-        long out = rt.r(ti);
-        rt.popTo(base);
-        return out;
-    }
-
-    /// `(persistent! tt)`. Seals whatever the open chunk holds. The transient
-    /// is dead afterwards, and says so if used again.
-    public static long ttablePersistent(Rt rt, long t) {
-        if (!ttableLive(rt, t, "persistent!")) return Val.NIL;
-        int base = rt.mark();
-        int ti = rt.push(t);
-        int si = rt.push(rt.slot(rt.r(ti), TT_SCHEMA));
-        int ci = rt.push(rt.slot(rt.r(ti), TT_CHUNKS));
-        int oi = rt.push(rt.slot(rt.r(ti), TT_OPEN));
-        int fill = chunkRows(rt, rt.r(oi));
-        if (fill > 0) {
-            int sj = rt.push(seal(rt, rt.r(si), rt.r(oi), fill));
-            rt.setR(ci, Vec.conj(rt, rt.r(ci), rt.r(sj)));
-            rt.popTo(sj);
-        }
-        long count = rt.slot(rt.r(ti), TT_COUNT);
-        set(rt, rt.r(ti), TT_LIVE, Val.FALSE);
-        long nt = Conc.newObj(rt, TY_TABLE, TB_LEN);
-        int ni = rt.push(nt);
-        set(rt, rt.r(ni), TB_SCHEMA, rt.r(si));
-        set(rt, rt.r(ni), TB_CHUNKS, rt.r(ci));
-        set(rt, rt.r(ni), TB_COUNT, count);
-        set(rt, rt.r(ni), TB_OFFSET, Val.fixnum(0));
-        long out = rt.r(ni);
-        rt.popTo(base);
-        return out;
-    }
-
-    public static int ttableCount(Rt rt, long t) {
-        return (int) Val.asFixnum(rt.slot(t, TT_COUNT));
-    }
 
 }

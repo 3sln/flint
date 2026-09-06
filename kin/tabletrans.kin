@@ -1,0 +1,167 @@
+;; The TRANSIENT table: filling one open chunk in place instead of copying.
+;;
+;; WHY IT EXISTS, measured. Appending through the persistent path copies the
+;; whole chunk for every row, so filling one 256-row chunk copies it 256 times.
+;; On 20 000 rows that was 49 061 192 bytes allocated and 23 collections,
+;; against 3 254 584 and 4 for the bulk path.
+;;
+;; AND GAS SAID THE OPPOSITE -- 381 220 for the appends against 741 240 for the
+;; bulk build -- because gas counts interpreter steps and the copying happens
+;; INSIDE a builtin, where one step is charged however much work it does. Worth
+;; knowing before trusting gas as a proxy for work: it measures the program,
+;; not the runtime underneath it.
+(ns flint.rt.tabletrans
+  (:require [flint.impl.rt :refer [defn return if let do comment doc
+                                   == != > + - * bit-and bit-or not ushr
+                                   slot set-slot fixnum as-fixnum to-i32 heap
+                                   alloc vec-nth vec-conj vec-pop charge-work
+                                   check-row throw-str str-cat static-text
+                                   local set for mark push r set-r pop-to
+                                   Rt Value I32 Bool RootIx StaticText NIL TRUE FALSE
+                                   TY_TABLE TY_TTABLE CHUNK CHUNK_SHIFT
+                                   CH_ROWS CH_BASE
+                                   TB_SCHEMA TB_CHUNKS TB_COUNT TB_OFFSET TB_LEN
+                                   TT_SCHEMA TT_CHUNKS TT_COUNT TT_OPEN
+                                   TT_LIVE TT_LEN]]
+            [flint.rt.tablemeta :refer [schema-len schema-id-at table-count
+                                        chunk-rows chunk-get]]
+            [flint.rt.tablecell :refer [collapse]]
+            [flint.rt.tablefill :refer [open-chunk write-row seal]]))
+
+(doc "How many rows the transient holds.")
+(defn ^:pub ^:method ^I32 ttable-count [^:mut ^Rt rt ^Value t]
+  (return (to-i32 (as-fixnum (slot rt t TT_COUNT)))))
+
+(doc "Is the transient still usable, and refuse by NAME if it is not."
+     ""
+     "A TRANSIENT IS USED ONCE. `persistent!` takes it, and the table it"
+     "produced is the value from then on -- so a second operation on the"
+     "transient is a mistake about ownership, and the message says which"
+     "operation rather than only that something was wrong.")
+(comment "`op` IS A `StaticText`, not a `Text`: every caller hands it a"
+         "literal, and Rust spells that `&'static str` where an owned `String`"
+         "would cost an allocation on a path that is about to throw. Both"
+         "ports spell both the same, so the tag costs them nothing.")
+(defn ^:pub ^:method ^Bool ttable-live [^:mut ^Rt rt ^Value t ^StaticText op]
+  (if (== (slot rt t TT_LIVE) TRUE)
+    (return true))
+  (throw-str rt "IllegalStateException"
+             (str-cat op (static-text " on a transient table that persistent! has already taken; a transient is used once and the table it produced is the value")))
+  (return false))
+
+(doc "A transient over `t`: the full chunks carried, the partial one reopened."
+     ""
+     "THE LAST CHUNK IS THE ONLY ONE THAT MOVES. A full chunk is already"
+     "exactly what it wants to be, so it is carried by reference; a partial one"
+     "has its rows copied into the open chunk and is dropped from the list."
+     ""
+     "THE REMAINDER IS TAKEN FIRST, and `full` is the subtraction. The other"
+     "order -- mask off the low bits with `count & -CHUNK` -- is what all three"
+     "runtimes said, and in Rust `-CHUNK` on an unsigned constant is a"
+     "compile-time overflow. Same answer, and it survives the trip.")
+(defn ^:pub ^:method ^Value table-transient [^:mut ^Rt rt ^Value t]
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^RootIx si (push rt (slot rt (r rt ti) TB_SCHEMA))
+        ^I32 count (table-count rt (r rt ti))
+        ^I32 partial (bit-and count (- CHUNK 1))
+        ^I32 full (- count partial)
+        ^RootIx ci (push rt (slot rt (r rt ti) TB_CHUNKS))
+        ^Value open0 (open-chunk rt (r rt si))
+        ^RootIx oi (push rt open0)]
+    (if (> partial 0)
+      (do
+        (let [^Value last (vec-nth rt (r rt ci) (ushr full CHUNK_SHIFT) NIL)
+              ^RootIx li (push rt last)
+              ^I32 ncols (schema-len rt (r rt si))]
+          (charge-work rt (* partial ncols))
+          (for [^I32 c 0 ncols]
+            (let [^I32 id (schema-id-at rt (r rt si) c)
+                  ^Value col (slot rt (r rt oi) (+ CH_BASE id))]
+              (for [^I32 k 0 partial]
+                (let [^Value v (chunk-get rt (r rt li) id k)]
+                  (set-slot rt col k v)))))
+          (let [^Value popped (vec-pop rt (r rt ci))]
+            (set-r rt ci popped))
+          (pop-to rt li))))
+    (set-slot rt (r rt oi) CH_ROWS (fixnum partial))
+    (let [^Value tt (heap (alloc rt TY_TTABLE TT_LEN))
+          ^RootIx tti (push rt tt)]
+      (set-slot rt (r rt tti) TT_SCHEMA (r rt si))
+      (set-slot rt (r rt tti) TT_CHUNKS (r rt ci))
+      (set-slot rt (r rt tti) TT_COUNT (fixnum count))
+      (set-slot rt (r rt tti) TT_OPEN (r rt oi))
+      (set-slot rt (r rt tti) TT_LIVE TRUE)
+      (let [^Value out (r rt tti)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "Append a row to the transient, in place."
+     ""
+     "A FULL OPEN CHUNK IS ALREADY EXACTLY THE CHUNK IT WANTS TO BE -- its"
+     "columns are `CHUNK` long and every slot is written -- so it is collapsed"
+     "and handed over as-is. `seal` copies, and copying here made the transient"
+     "allocate MORE than the bulk path it was supposed to beat (3 408 712"
+     "against 3 254 832), which is the sort of thing only a measurement finds.")
+(defn ^:pub ^:method ^Value ttable-conj [^:mut ^Rt rt ^Value t ^Value row]
+  (if (not (ttable-live rt t (static-text "conj!")))
+    (return NIL))
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^RootIx ri (push rt row)
+        ^RootIx si (push rt (slot rt (r rt ti) TT_SCHEMA))
+        ^I32 count (to-i32 (as-fixnum (slot rt (r rt ti) TT_COUNT)))]
+    (if (not (check-row rt (r rt si) (r rt ri) count))
+      (do (pop-to rt base)
+          (return NIL)))
+    (let [^RootIx oi (push rt (slot rt (r rt ti) TT_OPEN))
+          ^I32 fill (chunk-rows rt (r rt oi))]
+      (write-row rt (r rt si) (r rt oi) fill (r rt ri))
+      (set-slot rt (r rt oi) CH_ROWS (fixnum (+ fill 1)))
+      (if (== (+ fill 1) CHUNK)
+        (do
+          (let [^I32 ncols (schema-len rt (r rt si))]
+            (for [^I32 c 0 ncols]
+              (let [^I32 id (schema-id-at rt (r rt si) c)]
+                (collapse rt (r rt oi) id))))
+          (let [^Value chunks (slot rt (r rt ti) TT_CHUNKS)
+                ^Value grown (vec-conj rt chunks (r rt oi))]
+            (set-slot rt (r rt ti) TT_CHUNKS grown))
+          (let [^Value fresh (open-chunk rt (r rt si))]
+            (set-slot rt (r rt ti) TT_OPEN fresh))))
+      (set-slot rt (r rt ti) TT_COUNT (fixnum (+ count 1)))
+      (let [^Value out (r rt ti)]
+        (pop-to rt base)
+        (return out)))))
+
+(doc "Take the table out of the transient, and kill the transient."
+     ""
+     "The open chunk is sealed to exactly the rows written; a transient that"
+     "landed on a chunk boundary has nothing left to seal.")
+(defn ^:pub ^:method ^Value ttable-persistent [^:mut ^Rt rt ^Value t]
+  (if (not (ttable-live rt t (static-text "persistent!")))
+    (return NIL))
+  (let [^RootIx base (mark rt)
+        ^RootIx ti (push rt t)
+        ^RootIx si (push rt (slot rt (r rt ti) TT_SCHEMA))
+        ^RootIx ci (push rt (slot rt (r rt ti) TT_CHUNKS))
+        ^RootIx oi (push rt (slot rt (r rt ti) TT_OPEN))
+        ^I32 fill (chunk-rows rt (r rt oi))]
+    (if (> fill 0)
+      (do
+        (let [^Value sealed (seal rt (r rt si) (r rt oi) fill)
+              ^RootIx sj (push rt sealed)
+              ^Value grown (vec-conj rt (r rt ci) (r rt sj))]
+          (set-r rt ci grown)
+          (pop-to rt sj))))
+    (let [^Value count (slot rt (r rt ti) TT_COUNT)]
+      (set-slot rt (r rt ti) TT_LIVE FALSE)
+      (let [^Value nt (heap (alloc rt TY_TABLE TB_LEN))
+            ^RootIx ni (push rt nt)]
+        (set-slot rt (r rt ni) TB_SCHEMA (r rt si))
+        (set-slot rt (r rt ni) TB_CHUNKS (r rt ci))
+        (set-slot rt (r rt ni) TB_COUNT count)
+        (set-slot rt (r rt ni) TB_OFFSET (fixnum 0))
+        (let [^Value out (r rt ni)]
+          (pop-to rt base)
+          (return out))))))
