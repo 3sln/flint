@@ -2037,6 +2037,42 @@ stay meaningful. 1 and 8 are done.
   entry measured `HostReader`, which no port would touch, instead of the guest
   `Reader` that a port would.
 
+### The other two GC checks: attempted, unsound, NOT shipped
+
+The stale-push check is on in both ports now. `doc/HANDOFF.md` names two more
+that native asserts and neither port has: every old-to-young edge is
+remembered, and no live object points into the half just abandoned. Both were
+written for the JVM, and both were **thrown away**. What the attempt
+established is worth more than the code was:
+
+**A port-side audit that walks old space is UNSOUND between majors.** Old
+space holds unreachable objects that have not been swept yet. The collector
+correctly never scans them, so their slots keep pre-collection addresses --
+and an audit walking the chunk arrays cannot tell a corpse from a live
+object, because `marked` is only meaningful during a major.
+
+Measured, not reasoned: on a CLEAN collector the audit reported two
+violations, one of them an old `TY_SET` pointing at a young `TY_FWD`, which
+is exactly the shape of a real missed edge. Forcing a major and re-running
+gave **zero** across the next nineteen collections, including deliberate
+write-barrier traffic. They were garbage.
+
+**The first version could not fail at all.** It asked the remset question at
+the END of a minor, where anything young that an old object points at has
+already been promoted, so old-to-young edges are structurally zero -- it
+survived a deliberately broken write barrier without a murmur. Native asks at
+BOTH ends and counts the end violations separately (`remset_end_violations`),
+which is the detail that makes its end-of-minor check mean something.
+
+**Where a sound version goes:** immediately after `sweepOld()`, when old
+space contains only live objects and TY_FREE. That is a small change and it
+is the next person's, not a guess left in the tree.
+
+The instrument caught a real rooting bug on the way: the probe written to
+exercise it read `rt.r(vi)` before `Str.of(...)` allocated, because Java
+evaluates arguments left to right. `0031` in the test rather than the
+runtime, found one step before it mattered.
+
 ## Known hazards
 
 * **Rust carries more rules than the other two.** Hoisting, `mut` inference,
