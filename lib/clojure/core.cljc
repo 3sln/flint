@@ -1093,16 +1093,27 @@
 (defn filterv [pred coll]
   (persistent! (reduce (fn [acc x] (if (pred x) (conj! acc x) acc)) (transient []) coll)))
 
-(defn map-indexed [f coll]
-  (loop [acc [] i 0 s (seq coll)]
-    (if s (recur (conj acc (f i (first s))) (inc i) (next s)) (seq acc))))
+;; LAZY, like `map` and `keep` next door and like Clojure. These two built the
+;; whole answer into a vector and handed back its seq, so
+;; `(take 3 (map-indexed f (iterate inc 0)))` did not return -- while the same
+;; expression with plain `map` did. Nothing recorded that as a divergence
+;; because nothing asked it.
+(defn- map-indexed2 [f i coll]
+  (lazy-seq (let [s (seq coll)]
+              (when s
+                (cons (f i (first s)) (map-indexed2 f (inc i) (rest s)))))))
 
-(defn keep-indexed [f coll]
-  (loop [acc [] i 0 s (seq coll)]
-    (if s
-      (let [v (f i (first s))]
-        (recur (if (nil? v) acc (conj acc v)) (inc i) (next s)))
-      (seq acc))))
+(defn map-indexed [f coll] (map-indexed2 f 0 coll))
+
+(defn- keep-indexed2 [f i coll]
+  (lazy-seq (let [s (seq coll)]
+              (when s
+                (let [v (f i (first s))]
+                  (if (nil? v)
+                    (keep-indexed2 f (inc i) (rest s))
+                    (cons v (keep-indexed2 f (inc i) (rest s)))))))))
+
+(defn keep-indexed [f coll] (keep-indexed2 f 0 coll))
 
 (defn reduce-kv [f init m]
   (reduce (fn [acc e] (f acc (key e) (val e))) init m))
@@ -1144,14 +1155,19 @@
         (recur (if (= x prev) acc (conj! acc x)) x (next s)))
       (seq (persistent! acc)))))
 
+;; LAZY, and one run at a time. The eager version walked the whole input
+;; before returning anything, so an infinite seq never came back.
+;;
+;; The run is taken with `take-while` and dropped with `drop`, which is how
+;; Clojure writes it -- and it means only the run being asked for is forced.
 (defn partition-by [f coll]
-  (loop [acc [] cur [] k ::none s (seq coll)]
-    (if s
-      (let [x (first s) nk (f x)]
-        (if (or (= k ::none) (= nk k))
-          (recur acc (conj cur x) nk (next s))
-          (recur (conj acc (seq cur)) [x] nk (next s))))
-      (seq (if (empty? cur) acc (conj acc (seq cur)))))))
+  (lazy-seq
+    (let [s (seq coll)]
+      (when s
+        (let [fst (first s)
+              fv (f fst)
+              run (cons fst (take-while (fn [x] (= fv (f x))) (next s)))]
+          (cons run (partition-by f (drop (count run) s))))))))
 
 (defn flatten [x]
   (filter (fn [e] (not (sequential? e)))

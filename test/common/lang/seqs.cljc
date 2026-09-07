@@ -60,3 +60,26 @@
   (expect = [3 2 1] (vec (into '() [1 2 3])))
   (expect = #{1 2 3} (into #{} [1 2 3 1]))
   (expect = {:a 1 :b 2} (into {} [[:a 1] [:b 2]])))
+
+;; LAZY MEANS LAZY ON AN INFINITE SEQ, which is the only test that can tell.
+;;
+;; `map-indexed`, `keep-indexed` and `partition-by` built their whole answer
+;; into a vector and handed back its seq. Every finite test passed and every
+;; one of them hung on `(iterate inc 0)`, while `map` and `filter` beside them
+;; did not. Nothing recorded it as a divergence because nothing asked.
+(defn ^:flint.check/test the-indexed-and-grouping-seqs-are-lazy []
+  (expect = [[0 0] [1 1] [2 2]]
+          (vec (take 3 (map-indexed (fn [i x] [i x]) (iterate inc 0)))))
+  (expect = [0 2 4]
+          (vec (take 3 (keep-indexed (fn [i x] (if (even? x) x nil)) (iterate inc 0)))))
+  (expect = [(list 0 1 2) (list 3 4 5)]
+          (vec (take 2 (partition-by (fn [x] (quot x 3)) (iterate inc 0)))))
+  ;; the finite answers are the ones they always gave
+  (expect = [[0 :a] [1 :b]] (vec (map-indexed (fn [i x] [i x]) [:a :b])))
+  (expect = [1] (vec (keep-indexed (fn [i x] (if (= x :b) i nil)) [:a :b :c])))
+  (expect = [(list 1 3) (list 2 4) (list 5)] (vec (partition-by odd? [1 3 2 4 5])))
+  ;; and an empty input gives an empty seq, as Clojure does -- these used to
+  ;; answer nil, because they ended in `(seq [])`
+  (expect = 0 (count (map-indexed vector [])))
+  (expect = 0 (count (keep-indexed vector [])))
+  (expect = 0 (count (partition-by odd? []))))

@@ -48,6 +48,21 @@ The cause is worth keeping: native's comment still described the OLD policy
 stopped doing that, and both ports were written from the comment. A conform
 diff cannot see it, because both answers are right.
 
+### Three seq functions were eager where Clojure is lazy
+
+`map-indexed`, `keep-indexed` and `partition-by` built their whole answer into
+a vector with a persistent `conj` and handed back its seq. Every finite test
+passed. All three hung on `(iterate inc 0)`, while `map`, `filter`, `keep` and
+`mapcat` beside them in the same file did not.
+
+Nothing in the README recorded it -- the divergence list covers transducers,
+sorted collections, hierarchies and `eval`, and says of the rest that "the
+eager and lazy forms all work".
+
+All three are lazy now, and an empty input gives an empty seq rather than nil,
+which is also what Clojure gives. `lang.seqs` asks it of an infinite seq,
+which is the only test that can tell.
+
 ## Open, in the order I would take them
 
 ### 1. Chunked seqs are declared and never built
