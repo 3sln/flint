@@ -446,3 +446,47 @@
     (expect = (hash flat) (hash down))
     (expect = (count flat) (count down))
     (expect = (compare flat down) 0)))
+
+;; Two ropes with the same characters but DIFFERENT TREE SHAPES. `str` builds
+;; a tree, so `(str (str a b) c)` and `(str a (str b c))` hold the same text
+;; in different trees, and a walk that depends on shape rather than content
+;; answers differently for the two. `compare` already did exactly that once,
+;; reading a rope's slots as if they were UTF-8.
+;;
+;; The same question as the tier boundaries above, asked of shape instead of
+;; size: the value is the characters, and nothing about the tree may show.
+(defn ^:flint.check/test rope-shape-does-not-show []
+  (let [a (rep 700 "a") b (rep 700 "b") c (rep 700 "c")
+        left  (str (str a b) c)
+        right (str a (str b c))
+        many  (reduce str "" [a b c])
+        one   (str a b c)]
+    (expect = left right)
+    (expect = (hash left) (hash right))
+    (expect = (compare left right) 0)
+    (expect = left many)
+    (expect = (hash left) (hash many))
+    (expect = left one)
+    (expect = (hash left) (hash one))
+    (expect = (count left) (count right))
+    (expect = (subs left 0 10) (subs right 0 10))
+    (expect = (subs left 1000 1010) (subs many 1000 1010))
+    (expect = (str left) (str right)))
+  ;; A DEEP rope, grown one character at a time, against a shallow one.
+  (let [a (rep 700 "a")
+        deep (reduce (fn [s _] (str s "x")) a (range 300))
+        shallow (str a (rep 300 "x"))]
+    (expect = deep shallow)
+    (expect = (hash deep) (hash shallow))
+    (expect = (compare deep shallow) 0)
+    (expect = (count deep) (count shallow)))
+  ;; BYTE strings have their own tree and their own walk.
+  (let [x (b/of-string (rep 700 "a"))
+        y (b/of-string (rep 700 "b"))
+        z (b/of-string (rep 700 "c"))
+        bleft (b/cat (b/cat x y) z)
+        bright (b/cat x (b/cat y z))]
+    (expect = bleft bright)
+    (expect = (hash bleft) (hash bright))
+    (expect = (b/size bleft) (b/size bright))
+    (expect = (b/to-string bleft) (b/to-string bright))))
