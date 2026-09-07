@@ -44,6 +44,24 @@
   (expect some?
           (try (nth [1 2] 99) nil (catch Throwable e (ex-message e)))))
 
+(defn ^:flint.check/test calling-a-non-function-unwinds-where-it-happened []
+  ;; A CALL POSITION fault is the third entrance, and both ports let it walk
+  ;; past its own `try`. `callValue` sets `thrown` and answers nil exactly as
+  ;; a builtin does, and the interpreter checked only whether it had PARKED --
+  ;; so execution continued with the nil, this `try` saw nothing, and the
+  ;; pending throw aborted an unrelated expression two operations later.
+  ;;
+  ;; Measured before the fix: `caught` was `:no-throw` and a later
+  ;; `(count [1 2 3])` raised instead.
+  (let [not-a-fn (first {:a 1})
+        caught (try (not-a-fn 0) :no-throw (catch Throwable e (ex-message e)))
+        after  (try (+ 1 2) (catch Throwable e :LEAKED))
+        after2 (try (count [1 2 3]) (catch Throwable e :LEAKED))]
+    (expect some? caught)
+    (expect not= :no-throw caught)
+    (expect = 3 after)
+    (expect = 3 after2)))
+
 (defn ^:flint.check/test finally-runs-on-both-paths []
   (let [normal (let [a (atom [])]
                  (try (swap! a conj :body) (finally (swap! a conj :finally)))

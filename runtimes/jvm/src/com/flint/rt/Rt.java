@@ -850,6 +850,20 @@ public final class Rt {
                         thrown = Val.PARK;
                         return Val.NIL;
                     }
+                    // A CALLED VALUE THAT FAILED. `callValue` sets `thrown`
+                    // and answers nil, exactly as a builtin does -- and this
+                    // checked only `parked()`, so the failure did not unwind.
+                    // Execution CONTINUED with the nil, the `try` around the
+                    // bad call saw no exception, and the pending throw aborted
+                    // an unrelated expression two operations later. Measured:
+                    // `(try (me 0) :no-throw (catch ...))` answered `:no-throw`
+                    // and a later `(count [1 2 3])` raised instead.
+                    if (failed()) {
+                        roots.stackTop = calleeAt;
+                        f.ip = ip;
+                        if (!unwind()) return Val.NIL;
+                        continue;
+                    }
                     roots.stackTop = calleeAt;
                     vpush(cv);
                 }
@@ -928,6 +942,13 @@ public final class Rt {
                         thrown = Val.PARK;
                         return Val.NIL;
                     }
+                    // The same check the CALL path needs, on the APPLY path.
+                    if (failed()) {
+                        roots.stackTop = operandsAt;
+                        f.ip = ip;
+                        if (!unwind()) return Val.NIL;
+                        continue;
+                    }
                     roots.stackTop = operandsAt;
                     vpush(cv);
                 }
@@ -969,6 +990,13 @@ public final class Rt {
                         }
                         thrown = Val.PARK;
                         return Val.NIL;
+                    }
+                    // The same check the CALL path needs, on the TAIL path.
+                    if (failed()) {
+                        roots.stackTop = calleeAt;
+                        f.ip = opAt;
+                        if (!unwind()) return Val.NIL;
+                        continue;
                     }
                     roots.stackTop = calleeAt;
                     vpush(cv);

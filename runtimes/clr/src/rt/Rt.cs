@@ -697,6 +697,18 @@ public sealed class Rt : System.IDisposable {
                         thrown = Val.Park;
                         return Val.Nil;
                     }
+                    // A CALLED VALUE THAT FAILED. `CallValue` sets `thrown`
+                    // and answers nil, exactly as a builtin does -- and this
+                    // checked only `Parked()`, so the failure did not unwind.
+                    // Execution CONTINUED with the nil, the `try` around the
+                    // bad call saw no exception, and the pending throw aborted
+                    // an unrelated expression two operations later.
+                    if (Failed()) {
+                        roots.StackTop = calleeAt;
+                        f.Ip = ip;
+                        if (!Unwind()) return Val.Nil;
+                        continue;
+                    }
                     roots.StackTop = calleeAt;
                     VPush(cv);
                 } break;
@@ -775,6 +787,13 @@ public sealed class Rt : System.IDisposable {
                         thrown = Val.Park;
                         return Val.Nil;
                     }
+                    // The same check the CALL path needs, on the APPLY path.
+                    if (Failed()) {
+                        roots.StackTop = operandsAt;
+                        f.Ip = ip;
+                        if (!Unwind()) return Val.Nil;
+                        continue;
+                    }
                     roots.StackTop = operandsAt;
                     VPush(ncv);
                 } break;
@@ -816,6 +835,13 @@ public sealed class Rt : System.IDisposable {
                         }
                         thrown = Val.Park;
                         return Val.Nil;
+                    }
+                    // The same check the CALL path needs, on the TAIL path.
+                    if (Failed()) {
+                        roots.StackTop = calleeAt;
+                        f.Ip = opAt;
+                        if (!Unwind()) return Val.Nil;
+                        continue;
                     }
                     roots.StackTop = calleeAt;
                     VPush(cv);
