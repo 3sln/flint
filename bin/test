@@ -531,6 +531,15 @@ echo "== the language itself: checks that hold on every runtime"
   || { cat /tmp/flint-test.out; fail "flint test :src test/common"; }
 grep -E "FAIL" /tmp/flint-test.out || true
 tail -2 /tmp/flint-test.out | head -1
+# A FLOOR UNDER THE PASS. A suite with NO tests fails to compile, so the empty
+# case is loud -- but a suite that SHRINKS is silent. One namespace failing to
+# load takes its checks with it and everything still reports "all passed",
+# which is how a corpus quietly stops covering what it was written for.
+common_n=$(sed -n 's/^\([0-9][0-9]*\)\/[0-9][0-9]* checks passed$/\1/p' /tmp/flint-test.out)
+case "$common_n" in
+  ''|*[!0-9]*) fail "test/common did not report a check count" ;;
+esac
+[ "$common_n" -ge 110 ] || fail "test/common ran only $common_n checks, and at least 110 are expected"
 
 # Leave the tree in the production configuration, so anything built afterwards
 # is what would ship.
