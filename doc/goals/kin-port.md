@@ -2045,11 +2045,37 @@ remembered, and no live object points into the half just abandoned. Both were
 written for the JVM, and both were **thrown away**. What the attempt
 established is worth more than the code was:
 
-**A port-side audit that walks old space is UNSOUND between majors.** Old
-space holds unreachable objects that have not been swept yet. The collector
-correctly never scans them, so their slots keep pre-collection addresses --
-and an audit walking the chunk arrays cannot tell a corpse from a live
-object, because `marked` is only meaningful during a major.
+**The JVM's old space holds something native's does not, and that is the
+finding.** The audit walks old chunks and the live young half, which is
+exactly what native's `check_remset` walks, at exactly the same point -- the
+start of a minor. Native reports zero. The JVM reported two.
+
+The first reading of that was "walking old space is unsound between majors,
+because unreachable objects keep pre-collection slots and `marked` only means
+anything during a major". That explanation does not survive: it would make
+NATIVE's check report false positives too, and native's does not. Measured
+rather than assumed -- `gcstress` was rebuilt with the workload that tripped
+the JVM (an 80,000-element vector grown by `conj`, and a 40,000-element set)
+and run under `set_gc_verify_remset(1)`:
+
+    {"start":0,"end":0,"dead":0,"collections":233}
+
+Zero, over 233 collections, on the workload that gave the JVM two.
+
+What IS established about the JVM's two: they are unreachable. Forcing a
+major and re-running gives zero across the next nineteen collections with
+deliberate write-barrier traffic. So they are corpses, not a live object
+missing from the remembered set, and there is no correctness bug here.
+
+What is NOT established is why native has no such corpses at the moment it
+looks. The obvious candidates were checked and eliminated: the drain clears
+the remset flag identically in both (`set_in_remset(..., false)` over the
+drained list, before scanning), and both zero an object's body on
+ALLOCATION rather than on free. The difference is somewhere in old-space
+reclamation or in the promote path, and it has not been found.
+
+That is a divergence between the runtimes that nobody had looked at, and the
+reason nobody had is that the ports never ran the check.
 
 Measured, not reasoned: on a CLEAN collector the audit reported two
 violations, one of them an old `TY_SET` pointing at a young `TY_FWD`, which
@@ -2064,9 +2090,15 @@ survived a deliberately broken write barrier without a murmur. Native asks at
 BOTH ends and counts the end violations separately (`remset_end_violations`),
 which is the detail that makes its end-of-minor check mean something.
 
-**Where a sound version goes:** immediately after `sweepOld()`, when old
-space contains only live objects and TY_FREE. That is a small change and it
-is the next person's, not a guess left in the tree.
+**Not after `sweepOld()`, which was the first idea.** Old space is live-only
+there, so the check would be sound -- and nearly empty. Measured over the
+same workload: 110 sweeps, 238,310 live old objects walked, and **one**
+old-to-young edge in total, correctly remembered. A check with nothing to
+check reads as a pass forever.
+
+The place to audit is where native audits, at the start of a minor. What
+stops that being shippable in the ports today is the unexplained corpses
+above, not the placement.
 
 The instrument caught a real rooting bug on the way: the probe written to
 exercise it read `rt.r(vi)` before `Str.of(...)` allocated, because Java
