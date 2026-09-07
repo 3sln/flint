@@ -56,6 +56,13 @@
                  " staleRoot: i.exports.stat_stale_root(0),"
                  " rootWalks: i.exports.stat_stale_root(5),"
                  " rootSlots: i.exports.stat_stale_root(6),"
+                 ;; COVERAGE OF THE INVARIANT WALK. `check_remset` BREAKS out
+                 ;; of a span it cannot parse, so a walk that aborted on its
+                 ;; first object reports the same clean zero as one that
+                 ;; visited every object in the heap. These counters have been
+                 ;; exported since the walk was written and nothing read them.
+                 " walked: i.exports.stat_remset_cover(0),"
+                 " walkErrors: i.exports.stat_remset_cover(1),"
                  " collections: Number(i.exports.stat_collections())}));})"))
       out (str/trim (str (:out r) (:err r)))
       ]
@@ -63,6 +70,19 @@
   (if (and (str/includes? out "\"start\":0") (str/includes? out "\"end\":0"))
     (println "  ok   no old object points at a young one without being remembered")
     (do (println "  FAIL the generational invariant was violated") (System/exit 1)))
+  ;; A ZERO IS ONLY WORTH THE WALK BEHIND IT. Asserted rather than assumed:
+  ;; the JVM port's equivalent audit reported two violations on a comparable
+  ;; workload, and establishing that THIS zero covers the heap is what makes
+  ;; the two answers comparable at all. Measured here: 36,773,094 objects
+  ;; visited over 233 collections, no unparsable span.
+  (if (str/includes? out "\"walkErrors\":0")
+    (println "  ok   every span the invariant walk entered, it finished")
+    (do (println "  FAIL the invariant walk could not parse a span, so its zero means nothing")
+        (System/exit 1)))
+  (if (re-find #"\"walked\":([1-9]\d{5,})" out)
+    (println "  ok   the walk visited" (second (re-find #"\"walked\":(\d+)" out)) "objects")
+    (do (println "  FAIL the invariant walk visited almost nothing, so its zero means nothing")
+        (System/exit 1)))
   ;; The second half of the same idea, and the one that took a dozen sessions to
   ;; need: `is_young` spans BOTH semispaces, so a pointer left from before a flip
   ;; still tests young. Nothing that only asks `is_young` -- not the write
