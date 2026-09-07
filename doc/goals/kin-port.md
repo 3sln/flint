@@ -1399,9 +1399,23 @@ quoting; this file keeps recording that a stale count is worse than none):
 | `map.rs` | 856 | 14 | the CHAMP, incl. the five the closure hole blocks |
 | `coll.rs` | 812 | 19 | the string ops, `conj`, and two that are portable |
 | `vector.rs` | 449 | 6 | predicates and `vec_from_roots` |
-| `set.rs` | 222 | 6 | `set_for_each` and the four it blocks |
+| `set.rs` | 223 | 5 | `set_for_each` and the TWO it still blocks |
 | `eq.rs` | 286 | 4 | `is_sequential`, `eq_value`, `nil_or` -- and TESTS |
 | `num.rs` | 293 | 13 | the predicates, `add`/`sub`/`mul`, `integer` |
+
+`set.rs` lost one to a re-reading rather than to a new capability. A set IS
+its backing map here -- element to itself -- so set equality IS map equality,
+which is how BOTH PORTS had always written it while native walked the
+elements one at a time probing the other set. That walk needed a callback, so
+`set_eq` counted against the closure hole for no reason: it was never a walk
+that had to happen. What is left behind `set_for_each` is `hash_set`, whose
+sum over element hashes genuinely differs from a map's, and
+`set_element_vector`, which is the buffer shape the measurement says loses.
+
+The lesson is not "one down". It is that a function can sit on a blocked list
+because of how it was written, not because of what it does, and the way to
+tell is to look at how the OTHER runtimes wrote it. Both ports had the
+answer in three lines the whole time.
 
 `eq.rs` WAS 718 LINES AND IS 286, of which everything past line 190 is tests.
 `=`, `hash`, the ordered hash and `compare` are generated, and the four

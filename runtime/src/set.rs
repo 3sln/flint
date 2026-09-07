@@ -64,22 +64,23 @@ impl Rt {
         out
     }
 
+    /// A set IS its backing map, so set equality IS map equality -- which is
+    /// how both ports have always written it, and this walked the elements
+    /// one at a time probing the other set instead.
+    ///
+    /// The element is its own value here (see the module note), so equal keys
+    /// carry equal values and `map_eq` cannot answer differently.
+    ///
+    /// It also cost a CALLBACK, and `set_for_each` is one of the two closures
+    /// blocking these functions from being generated. One of the six turns
+    /// out not to have needed a walk at all.
     pub fn set_eq(&mut self, a: Value, b: Value) -> bool {
         if self.set_count(a) != self.set_count(b) {
             return false;
         }
-        let base = self.mark();
-        let ai = self.push(a);
-        let bi = self.push(b);
-        let mut st = (bi, true);
-        let av = self.r(ai);
-        self.set_for_each(av, &mut st, &mut |rt, k, st| {
-            if st.1 && rt.set_get(rt.r(st.0), k, NOT_FOUND) == NOT_FOUND {
-                st.1 = false;
-            }
-        });
-        self.pop_to(base);
-        st.1
+        let am = self.slot(a, S_MAP);
+        let bm = self.slot(b, S_MAP);
+        self.map_eq(am, bm)
     }
 
     pub fn hash_set(&mut self, s: Value) -> u32 {
