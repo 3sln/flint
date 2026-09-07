@@ -504,7 +504,8 @@ if ./bin/flint :src runtimes/conform-host :fn hostport/main --emit-image \
     echo "  ok   and so does the clr port"
   fi
 else
-  echo "  .. hostport does not compile; skipped"
+  echo "  FAIL the hostport fixture does not compile"
+  exit 1
 fi
 
 # MAPS: the array-map, the promotion to CHAMP at 9 entries, and the two
@@ -581,9 +582,21 @@ fi
 # `maps` prints its keys in trie order, so matching means the ported CHAMP
 # ITERATES the way the Rust's does, which nothing asserts directly.
 for prog in churn collections control green hosted lazy maps numbers opcodes regex strings tables threads; do
+  # A FIXTURE THAT DOES NOT COMPILE IS A FAILURE, NOT A SKIP. This used to
+  # `continue`, so a broken fixture removed its own checks and the gate still
+  # exited 0 -- thirteen programs, each worth several checks on two hosts. It
+  # fooled me once already: a concurrent `bin/test` rebuilt `out/` underneath a
+  # run of this, four fixtures stopped compiling, and the summary went from 246
+  # checks to 213 without a single FAIL line.
+  #
+  # `missing` exists for a toolchain that is genuinely absent. A fixture that
+  # will not build is the other thing, and `doc/decisions/0010` is that the
+  # bytecode makes a port cheap and does nothing to make two ports AGREE --
+  # which is only true while the fixtures actually run.
   ./bin/flint :src runtimes/conform :fn "$prog/main" --emit-image \
-    :out "out/conform/$prog.img" >/dev/null 2>&1 || {
-      echo "  .. $prog does not compile; skipped"; continue; }
+    :out "out/conform/$prog.img" > /tmp/flint-c-build.out 2>&1 || {
+      tail -5 /tmp/flint-c-build.out
+      echo "  FAIL the conform fixture $prog does not compile"; exit 1; }
   want="$(./target/release/flint run :path runtimes/conform :fn "$prog/main" 2>&1 || true)"
   "$JDK/bin/java" -cp runtimes/jvm/classes RtImage "out/conform/$prog.img" "$want" \
     > /tmp/flint-c-jvm.out 2>&1 \
