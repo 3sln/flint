@@ -498,7 +498,8 @@ public static class Builtins {
         // property of the scheduler and not of this code, and it is why it can
         // be written this plainly.
         Def("atom", (rt, at, n) => NewCell(rt, Obj.TyAtom, rt.VAt(at)));
-        Def("flint/volatile", (rt, at, n) => NewCell(rt, Obj.TyVolatile, rt.VAt(at)));
+        Def("flint/volatile", (rt, at, n) =>
+            global::_3sln.Flint.Kgen.Rt.Mapmake.NewVolatile(rt, rt.VAt(at)));
         // GENERATED, from `kin/atoms.kin` -- see the Java copy for the delay
         // bug both ports carried.
         Def("deref", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Atoms.Deref(rt, rt.VAt(at)));
@@ -724,36 +725,11 @@ public static class Builtins {
         /// lazy seq and `next` forces the tail -- so anything already gathered
         /// would go stale at the first collection. That is
         /// `doc/decisions/0031`.
-        Def("flint/array-map", (rt, at, n) => {
-            int bas = rt.Mark();
-            int si = rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.Seq(rt, rt.VAt(at)));
-            int valsAt = rt.Mark();
-            int count = 0;
-            while (!Val.IsNil(rt.R(si))) {
-                rt.Push(global::_3sln.Flint.Kgen.Rt.Seqwalk.First(rt, rt.R(si)));
-                count++;
-                rt.SetR(si, global::_3sln.Flint.Kgen.Rt.Seqwalk.Next(rt, rt.R(si)));
-            }
-            if (count % 2 != 0) {
-                rt.PopTo(bas);
-                return rt.ThrowStr("IllegalArgumentException", "array-map needs an even number of forms");
-            }
-            int pairs = count / 2;
-            long a = rt.Alloc(Obj.TyArraymap, Maps.AM_BASE + 2 * pairs);
-            if (a == 0) { rt.PopTo(bas); return Val.Nil; }
-            rt.SetSlot(a, Maps.AM_META, Val.Nil);
-            rt.SetSlot(a, Maps.AM_HASH, Val.Nil);
-            for (int i = 0; i < 2 * pairs; i++) rt.SetSlot(a, Maps.AM_BASE + i, rt.R(valsAt + i));
-            rt.PopTo(bas);
-            return Val.Heap(a);
-        });
-
-        // --- unchecked arithmetic ---------------------------------------------
-        //
-        // WRAPS rather than throwing, which is the point of asking for it:
-        // `hash` and the bit-mixing in `map.rs` are made of wrapping
-        // arithmetic, and the checked forms refuse the very operations those
-        // are. `unchecked` is the .NET spelling of "I meant this".
+        // GENERATED, from `kin/mapmake.kin`. This port already said it line
+        // for line, which is why generating it found nothing -- the value is
+        // that the next change to it lands in one place.
+        Def("flint/array-map", (rt, at, n) =>
+            global::_3sln.Flint.Kgen.Rt.Mapmake.OrderedMap(rt, rt.VAt(at)));
         Def("flint/unchecked-add", (rt, at, n) => {
             unchecked { return Num.Integer(rt, Val.AsFixnum(rt.VAt(at)) + Val.AsFixnum(rt.VAt(at + 1))); }
         });

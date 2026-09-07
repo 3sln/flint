@@ -1,0 +1,248 @@
+--rust-head
+type Addr = u64;
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const TY_ARRAYMAP: u8 = 10; const TY_VOLATILE: u8 = 11;
+const AM_META: u32 = 0; const AM_HASH: u32 = 1; const AM_BASE: u32 = 2;
+struct Space { m: Vec<u8> }
+struct Gc { sp: Space }
+// `seqn` is how many elements the walked seq has; `refuse` makes the next
+// allocation fail, which is the arm every constructor needs and few probes
+// reach.
+struct Rt { gc: Gc, bump: u64, h: Vec<u64>, roots: Vec<Value>,
+            thrown: String, seqn: u32, refuse: bool }
+impl Value {
+    fn is_nil(self) -> bool { self.0 == NIL.0 }
+    fn heap(a: Addr) -> Value { Value(a as u64) }
+}
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn alloc(&mut self, t: u8, n: u32) -> Addr {
+        if self.refuse { return 0; }
+        let a = self.bump; self.bump += n as u64 + 4;
+        self.gc.sp.m[a as usize] = t;
+        a as Addr
+    }
+    fn set_slot(&mut self, a: Addr, i: u32, v: Value) { self.h[a as usize + i as usize] = v.0; }
+    fn slot_(&self, v: Value, i: u32) -> Value { Value(self.h[v.0 as usize + i as usize]) }
+    fn throw_str(&mut self, class: &str, msg: &str) -> Value {
+        self.thrown = format!("{}/{}", class, msg); NIL
+    }
+    // A seq is a COUNTDOWN and its elements are `0xE000 + k`, so the ORDER the
+    // map keeps is visible in the answer rather than only its length.
+    fn seq(&mut self, _c: Value) -> Value {
+        if self.seqn == 0 { NIL } else { Value(0xC000 + self.seqn as u64) }
+    }
+    fn first(&mut self, s: Value) -> Value { Value(0xE000 + (s.0 - 0xC000)) }
+    fn next(&mut self, s: Value) -> Value {
+        if s.0 == 0xC001 { NIL } else { Value(s.0 - 1) }
+    }
+}
+impl Rt {
+--rust
+}
+extern crate alloc;
+fn main() {
+    let mut rt = Rt { gc: Gc { sp: Space { m: vec![0u8; 4000] } }, bump: 100,
+                      h: vec![0; 4000], roots: Vec::new(), thrown: String::new(),
+                      seqn: 4, refuse: false };
+    let mut o = String::new();
+
+    // FOUR ELEMENTS is two pairs, and the ORDER has to be the one given.
+    rt.seqn = 4;
+    let m = rt.ordered_map(NIL);
+    o.push_str(&format!("m={:x} ", m.0));
+    o.push_str(&format!("slots={:x},{:x},{:x},{:x} ",
+                        rt.slot_(m, AM_BASE).0, rt.slot_(m, AM_BASE + 1).0,
+                        rt.slot_(m, AM_BASE + 2).0, rt.slot_(m, AM_BASE + 3).0));
+    o.push_str(&format!("meta={} hash={} ", rt.slot_(m, AM_META).is_nil() as u32,
+                        rt.slot_(m, AM_HASH).is_nil() as u32));
+
+    // AN EMPTY ONE is still a map.
+    rt.seqn = 0;
+    let e = rt.ordered_map(NIL);
+    o.push_str(&format!("empty={} ", (e.0 != NIL.0) as u32));
+
+    // AN ODD COUNT is refused, and the roots are released before the throw.
+    rt.seqn = 3;
+    rt.thrown.clear();
+    let odd = rt.ordered_map(NIL);
+    o.push_str(&format!("odd={}|{}| roots={} ", odd.is_nil() as u32, rt.thrown,
+                        rt.roots.len()));
+
+    // A REFUSED ALLOCATION answers nil and releases too.
+    rt.seqn = 4;
+    rt.refuse = true;
+    rt.thrown.clear();
+    let no = rt.ordered_map(NIL);
+    o.push_str(&format!("norm={} roots={} ", no.is_nil() as u32, rt.roots.len()));
+
+    // A VOLATILE holds what it was given, and refuses the same way.
+    let vv = rt.new_volatile(Value(0x77));
+    o.push_str(&format!("volno={} ", vv.is_nil() as u32));
+    rt.refuse = false;
+    let v = rt.new_volatile(Value(0x77));
+    o.push_str(&format!("vol={:x} roots={}", rt.slot_(v, 0).0, rt.roots.len()));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int TY_ARRAYMAP = 10, TY_VOLATILE = 11;
+    static final int AM_META = 0, AM_HASH = 1, AM_BASE = 2;
+    static final class Val {
+        static final long NIL = Probe.NIL;
+        static boolean isNil(long v) { return v == NIL; }
+        static long heap(long a) { return a; }
+    }
+    static final class Space { byte[] m = new byte[4000]; }
+    static final class Rt {
+        static final class GcT { Space sp = new Space(); }
+        GcT gc = new GcT();
+        long bump = 100;
+        long[] h = new long[4000];
+        String thrown = "";
+        int seqn = 4;
+        boolean refuse = false;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void setR(int i, long v) { roots.set(i, v); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long alloc(int t, int n) {
+            if (refuse) return 0;
+            long a = bump; bump += n + 4;
+            gc.sp.m[(int) a] = (byte) t;
+            return a;
+        }
+        void setSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        long slot_(long v, int i) { return h[(int) v + i]; }
+        long throwStr(String cls, String msg) { thrown = cls + "/" + msg; return NIL; }
+    }
+    static long seq(Rt rt, long c) { return rt.seqn == 0 ? NIL : 0xC000L + rt.seqn; }
+    static long first(Rt rt, long s) { return 0xE000L + (s - 0xC000L); }
+    static long next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+
+        rt.seqn = 4;
+        long m = orderedMap(rt, NIL);
+        o.append("m=").append(Long.toHexString(m)).append(' ');
+        o.append("slots=").append(Long.toHexString(rt.slot_(m, AM_BASE))).append(",")
+         .append(Long.toHexString(rt.slot_(m, AM_BASE + 1))).append(",")
+         .append(Long.toHexString(rt.slot_(m, AM_BASE + 2))).append(",")
+         .append(Long.toHexString(rt.slot_(m, AM_BASE + 3))).append(' ');
+        o.append("meta=").append(Val.isNil(rt.slot_(m, AM_META)) ? 1 : 0)
+         .append(" hash=").append(Val.isNil(rt.slot_(m, AM_HASH)) ? 1 : 0).append(' ');
+
+        rt.seqn = 0;
+        long e = orderedMap(rt, NIL);
+        o.append("empty=").append(e != NIL ? 1 : 0).append(' ');
+
+        rt.seqn = 3;
+        rt.thrown = "";
+        long odd = orderedMap(rt, NIL);
+        o.append("odd=").append(Val.isNil(odd) ? 1 : 0).append("|").append(rt.thrown)
+         .append("| roots=").append(rt.roots.size()).append(' ');
+
+        rt.seqn = 4;
+        rt.refuse = true;
+        rt.thrown = "";
+        long no = orderedMap(rt, NIL);
+        o.append("norm=").append(Val.isNil(no) ? 1 : 0)
+         .append(" roots=").append(rt.roots.size()).append(' ');
+
+        long vv = newVolatile(rt, 0x77L);
+        o.append("volno=").append(Val.isNil(vv) ? 1 : 0).append(' ');
+        rt.refuse = false;
+        long v = newVolatile(rt, 0x77L);
+        o.append("vol=").append(Long.toHexString(rt.slot_(v, 0)))
+         .append(" roots=").append(rt.roots.size());
+        System.out.println(o.toString());
+    }
+--csharp-pre
+--csharp-head
+    internal const long NIL = 0xFFFFL;
+    internal const int AM_META = 0, AM_HASH = 1, AM_BASE = 2;
+    internal static class Obj { internal const int TyArraymap = 10, TyVolatile = 11; }
+    internal static class Val {
+        internal const long Nil = Probe.NIL;
+        internal static bool IsNil(long v) { return v == NIL; }
+        internal static long Heap(long a) { return a; }
+    }
+    internal sealed class Space { internal byte[] m = new byte[4000]; }
+    internal sealed class Rt {
+        internal sealed class GcT { internal Space sp = new Space(); }
+        internal GcT gc = new GcT();
+        internal long bump = 100;
+        internal long[] h = new long[4000];
+        internal string thrown = "";
+        internal int seqn = 4;
+        internal bool refuse = false;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal void PopTo(int n) { while (roots.Count > n) roots.RemoveAt(roots.Count - 1); }
+        internal long Alloc(int t, int n) {
+            if (refuse) return 0;
+            long a = bump; bump += n + 4;
+            gc.sp.m[(int) a] = (byte) t;
+            return a;
+        }
+        internal void SetSlot(long a, int i, long v) { h[(int) a + i] = v; }
+        internal long Slot_(long v, int i) { return h[(int) v + i]; }
+        internal long ThrowStr(string cls, string msg) { thrown = cls + "/" + msg; return NIL; }
+    }
+    internal static long Seq(Rt rt, long c) { return rt.seqn == 0 ? NIL : 0xC000L + rt.seqn; }
+    internal static long First(Rt rt, long s) { return 0xE000L + (s - 0xC000L); }
+    internal static long Next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
+    internal static string HEX(long v) { return v.ToString("x"); }
+--csharp
+    public static void Main() {
+        Rt rt = new Rt();
+        var o = new System.Text.StringBuilder();
+
+        rt.seqn = 4;
+        long m = OrderedMap(rt, NIL);
+        o.Append("m=").Append(HEX(m)).Append(' ');
+        o.Append("slots=").Append(HEX(rt.Slot_(m, AM_BASE))).Append(",")
+         .Append(HEX(rt.Slot_(m, AM_BASE + 1))).Append(",")
+         .Append(HEX(rt.Slot_(m, AM_BASE + 2))).Append(",")
+         .Append(HEX(rt.Slot_(m, AM_BASE + 3))).Append(' ');
+        o.Append("meta=").Append(Val.IsNil(rt.Slot_(m, AM_META)) ? 1 : 0)
+         .Append(" hash=").Append(Val.IsNil(rt.Slot_(m, AM_HASH)) ? 1 : 0).Append(' ');
+
+        rt.seqn = 0;
+        long e = OrderedMap(rt, NIL);
+        o.Append("empty=").Append(e != NIL ? 1 : 0).Append(' ');
+
+        rt.seqn = 3;
+        rt.thrown = "";
+        long odd = OrderedMap(rt, NIL);
+        o.Append("odd=").Append(Val.IsNil(odd) ? 1 : 0).Append("|").Append(rt.thrown)
+         .Append("| roots=").Append(rt.roots.Count).Append(' ');
+
+        rt.seqn = 4;
+        rt.refuse = true;
+        rt.thrown = "";
+        long no = OrderedMap(rt, NIL);
+        o.Append("norm=").Append(Val.IsNil(no) ? 1 : 0)
+         .Append(" roots=").Append(rt.roots.Count).Append(' ');
+
+        long vv = NewVolatile(rt, 0x77L);
+        o.Append("volno=").Append(Val.IsNil(vv) ? 1 : 0).Append(' ');
+        rt.refuse = false;
+        long v = NewVolatile(rt, 0x77L);
+        o.Append("vol=").Append(HEX(rt.Slot_(v, 0)))
+         .Append(" roots=").Append(rt.roots.Count);
+        System.Console.WriteLine(o.ToString());
+    }

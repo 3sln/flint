@@ -548,7 +548,8 @@ public final class Builtins {
         // property of the scheduler and not of this code, and it is why it can
         // be written this plainly.
         def("atom", (rt, at, n) -> newCell(rt, TY_ATOM, rt.vat(at)));
-        def("flint/volatile", (rt, at, n) -> newCell(rt, TY_VOLATILE, rt.vat(at)));
+        def("flint/volatile", (rt, at, n) ->
+            com._3sln.flint.kgen.rt.Mapmake.newVolatile(rt, rt.vat(at)));
         // GENERATED, from `kin/atoms.kin`. The hand-written body here stored the
         // thunk's result WITHOUT asking whether it threw, so a delay whose
         // thunk failed cached nil forever; Rust checked and left it unforced,
@@ -794,32 +795,11 @@ public final class Builtins {
         /// collection and be written into the map as an address in a space that
         /// has been reused. That is `doc/decisions/0031`, and it needed a map
         /// big enough to span a collection, which is why it survived so long.
-        def("flint/array-map", (rt, at, n) -> {
-            int base = rt.mark();
-            int si = rt.push(com._3sln.flint.kgen.rt.Seqwalk.seq(rt, rt.vat(at)));
-            int valsAt = rt.mark();
-            int count = 0;
-            while (!Val.isNil(rt.r(si))) {
-                rt.push(Seqwalk.first(rt, rt.r(si)));
-                count++;
-                rt.setR(si, com._3sln.flint.kgen.rt.Seqwalk.next(rt, rt.r(si)));
-            }
-            if (count % 2 != 0) {
-                rt.popTo(base);
-                return rt.throwStr("IllegalArgumentException",
-"array-map needs an even number of forms");
-            }
-            int pairs = count / 2;
-            long a = rt.alloc(TY_ARRAYMAP, Maps.AM_BASE + 2 * pairs);
-            if (a == 0) { rt.popTo(base); return Val.NIL; }
-            rt.setSlot(a, Maps.AM_META, Val.NIL);
-            rt.setSlot(a, Maps.AM_HASH, Val.NIL);
-            for (int i = 0; i < 2 * pairs; i++) {
-                rt.setSlot(a, Maps.AM_BASE + i, rt.r(valsAt + i));
-            }
-            rt.popTo(base);
-            return Val.heap(a);
-        });
+        // GENERATED, from `kin/mapmake.kin`. This port already said it line
+        // for line, which is why generating it found nothing -- the value is
+        // that the next change to it lands in one place.
+        def("flint/array-map", (rt, at, n) ->
+            com._3sln.flint.kgen.rt.Mapmake.orderedMap(rt, rt.vat(at)));
 
         // --- unchecked arithmetic ---------------------------------------------
         //

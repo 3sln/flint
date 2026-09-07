@@ -664,64 +664,9 @@ impl Rt {
 
     /// An array-map built from a flat k,v collection, preserving order and not
     /// promoting whatever its size.
-    pub fn ordered_map(&mut self, kvs: Value) -> Value {
-        let base = self.mark();
-        let s = self.seq(kvs);
-        let si = self.push(s);
-        // Rooted AS THEY ARE TAKEN, not accumulated first.
-        //
-        // These used to go into a Rust `Vec<Value>` and get pushed afterwards.
-        // The collector does not scan Rust vectors, and BOTH calls in this loop
-        // can collect: `first` forces a lazy seq, and `next` forces the tail,
-        // which runs arbitrary flint code. So every value already gathered went
-        // stale at the first collection inside the loop, and the stale ones were
-        // then rooted and written into the map -- a map whose contents are
-        // addresses in a space that has been reused.
-        //
-        // It needed a map big enough to span a collection, which is why it
-        // survived: the reader builds map literals with this (source order has
-        // to survive, or the self-hosting fixpoint breaks), and the compiler's
-        // own literals are the big ones. `doc/decisions/0031` has the hunt.
-        let vals_at = self.mark();
-        let mut count = 0usize;
-        while !self.r(si).is_nil() {
-            let x = self.first(self.r(si));
-            self.push(x);
-            count += 1;
-            let nx = self.next(self.r(si));
-            self.set_r(si, nx);
-        }
-        if count % 2 != 0 {
-            self.pop_to(base);
-            return self.throw_str("IllegalArgumentException", "array-map needs an even number of forms");
-        }
-        let n = (count / 2) as u32;
-        let a = self.alloc(TY_ARRAYMAP, crate::map::AM_BASE + 2 * n);
-        if a == 0 {
-            self.pop_to(base);
-            return NIL;
-        }
-        let m = Value::heap(a);
-        self.set_slot(a, crate::map::AM_META, NIL);
-        self.set_slot(a, crate::map::AM_HASH, NIL);
-        for i in 0..(2 * n) as usize {
-            let v = self.r(vals_at + i);
-            self.set_slot(a, crate::map::AM_BASE + i as u32, v);
-        }
-        self.pop_to(base);
-        m
-    }
-
-    pub fn new_volatile(&mut self, v: Value) -> Value {
-        let base = self.mark();
-        let vi = self.push(v);
-        let a = self.alloc(TY_VOLATILE, 1);
-        if a == 0 { self.pop_to(base); return NIL; }
-        let v = self.r(vi);
-        self.pop_to(base);
-        self.set_slot(a, 0, v);
-        Value::heap(a)
-    }
+    // `ordered_map` and `new_volatile` are GENERATED, from `kin/mapmake.kin`.
+    // Both ports already said these line for line, so generating them found
+    // nothing -- which is the point of doing it last rather than not at all.
 
     // --- opaque values (doc/decisions/0022) -------------------------------------
 

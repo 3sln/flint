@@ -1,0 +1,80 @@
+;; TWO CONSTRUCTORS the reader and the library reach for: an array map built in
+;; SOURCE ORDER, and a volatile box.
+;;
+;; `array-map` KEEPS THE ORDER IT WAS GIVEN, which is the whole reason it is
+;; not `into {}`: the reader builds map literals with it, and the self-hosting
+;; fixpoint breaks if the order does not survive.
+;;
+;; THE VALUES ARE ROOTED AS THEY ARE TAKEN, not gathered first. They used to go
+;; into a host vector and get pushed afterwards -- and the collector does not
+;; scan a host vector, while BOTH calls in the loop can collect: `first` forces
+;; a lazy seq and `next` forces the tail, which runs arbitrary flint code. So
+;; every value already gathered went stale at the first collection inside the
+;; loop, and the stale ones were then written into the map: a map whose
+;; contents are addresses in a space that has been reused.
+;;
+;; It needed a map big enough to span a collection, which is why it survived --
+;; and the compiler's own literals are the big ones (`doc/decisions/0031`).
+(ns flint.rt.mapmake
+  (:require [flint.impl.rt :refer [defn return if let do comment doc local set
+                                   == != < + - * quot rem forever break while
+                                   mark push r set-r pop-to nil? alloc set-at
+                                   heap throw-str as-idx
+                                   Rt Value I32 Addr RootIx NIL
+                                   TY_ARRAYMAP TY_VOLATILE
+                                   AM_META AM_HASH AM_BASE]]
+            [flint.rt.seqwalk :refer [seq first next]]))
+
+(doc "An ARRAY MAP from a flat sequence of keys and values, in order.")
+(defn ^:pub ^:method ^Value ordered-map [^:mut ^Rt rt ^Value kvs]
+  (let [^RootIx base (mark rt)
+        ^Value s0 (seq rt kvs)
+        ^RootIx si (push rt s0)
+        ^RootIx vals-at (mark rt)]
+    (local ^:mut ^I32 count)
+    (set count 0)
+    (forever
+      (do (if (nil? rt (r rt si))
+            (break))
+          (comment "PUSHED BEFORE THE NEXT STEP, because `next` can collect"
+                   "and a value held anywhere but the shadow stack does not"
+                   "survive that (`0031`).")
+          (let [^Value x (first rt (r rt si))]
+            (push rt x))
+          (set count (+ count 1))
+          (let [^Value nx (next rt (r rt si))]
+            (set-r rt si nx))))
+    (if (!= (rem count 2) 0)
+      (do (pop-to rt base)
+          (return (throw-str rt "IllegalArgumentException"
+                             "array-map needs an even number of forms"))))
+    (let [^I32 n (quot count 2)
+          ^Addr a (alloc rt TY_ARRAYMAP (+ AM_BASE (* 2 n)))]
+      (if (== a 0)
+        (do (pop-to rt base)
+            (return NIL)))
+      (set-at rt a AM_META NIL)
+      (set-at rt a AM_HASH NIL)
+      (local ^:mut ^I32 i)
+      (set i 0)
+      (while (< i (* 2 n))
+        (do (set-at rt a (+ AM_BASE i) (r rt (+ vals-at (as-idx i))))
+            (set i (+ i 1))))
+      (pop-to rt base)
+      (return (heap a)))))
+
+(doc "A VOLATILE box holding `v`."
+     ""
+     "One slot, and the box is what a program holds: `volatile!` exists so a"
+     "single thread can mutate without the atomicity an atom pays for.")
+(defn ^:pub ^:method ^Value new-volatile [^:mut ^Rt rt ^Value v]
+  (let [^RootIx base (mark rt)
+        ^RootIx vi (push rt v)
+        ^Addr a (alloc rt TY_VOLATILE 1)]
+    (if (== a 0)
+      (do (pop-to rt base)
+          (return NIL)))
+    (comment "READ BACK FROM THE ROOT: the allocation may have moved it.")
+    (set-at rt a 0 (r rt vi))
+    (pop-to rt base)
+    (return (heap a))))
