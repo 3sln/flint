@@ -1398,9 +1398,16 @@ quoting; this file keeps recording that a stale count is worse than none):
 | `strs.rs` | 787 | 12 | interning, and functions taking a host `&str` |
 | `map.rs` | 856 | 14 | the CHAMP, incl. the five the closure hole blocks |
 | `coll.rs` | 812 | 19 | the string ops, `conj`, and two that are portable |
-| `vector.rs` | 449 | 5 | predicates and `vec_from_roots` |
-| `set.rs` | 222 | 5 | `set_for_each` and the four it blocks |
-| `eq.rs` | 718 | 7 | not surveyed for this row |
+| `vector.rs` | 449 | 6 | predicates and `vec_from_roots` |
+| `set.rs` | 222 | 6 | `set_for_each` and the four it blocks |
+| `eq.rs` | 286 | 4 | `is_sequential`, `eq_value`, `nil_or` -- and TESTS |
+| `num.rs` | 293 | 13 | the predicates, `add`/`sub`/`mul`, `integer` |
+
+`eq.rs` WAS 718 LINES AND IS 286, of which everything past line 190 is tests.
+`=`, `hash`, the ordered hash and `compare` are generated, and the four
+functions left are two-liners. `num.rs` lost the four operations with an
+overflow edge; what remains agrees across all three and was read to check
+that -- `num_eq`, `num_cmp` and `num_hash` are the same rule three times.
 
 `coll.rs` WAS 1,609 LINES AND IS 812. What went is the whole GENERIC DISPATCH
 layer -- `count`, `pop`, `peek`, `empty`, `get`, `contains?`, `assoc`, `nth`,
@@ -1971,6 +1978,49 @@ decision about what a builtin MEANS and not about where its body lives.
 * **`dissoc` on native only acts on maps** -- `if rt.is_map(m)` and otherwise
   the accumulator is passed through unchanged, so `(dissoc 5 :k)` is `5`.
   Unsurveyed on the ports.
+
+## What generating found, and how
+
+Nine ports and every one of them turned up a disagreement, which is the case
+for doing it: a body written three times is compared exactly once, when someone
+writes it a fourth. What follows is the list, because the SHAPES repeat.
+
+**A cache that was written and never read.** `strHash` on both ports, set
+during interning and read by nothing; a keyword's slot 2 and a symbol's slot 3,
+set to nil rather than to the hash. Native read all three. The ports recomputed
+from bytes on every hash of the two commonest map keys there are.
+
+**Dead code that looked live.** Both ports' `eq` tested for a row ref BELOW the
+category switch, where `category` had already sent it to `map-eq`. It worked
+only because THEIR `map-eq` materialises refs and native's does not -- two
+strategies, one with an unreachable block in front of it.
+
+**A guard on one runtime and not the others.** `(quot MIN -1)` overflows;
+native checked and panicked doing it, the JVM wrapped silently, the CLR raised
+a host exception. Three answers to one question.
+
+**A narrow test where the language has a wide one.** `is_string` is true for a
+rope, and `compare` read `str_bytes` -- which debug-asserts `TY_STR`, so a
+release build compared a rope's SLOTS as UTF-8 and two unequal 1 400-byte
+strings compared as 0. `str->b` asked `as_str`, which cannot materialise a rope
+and answers `None`, and refused a value `string?` accepts. `join_strings`
+carries a comment about this exact trap and was fixed for it years before
+either of these was.
+
+**A constructor that truncates.** Both ports' IMAGE loader decoded a large
+integer literal with `fixnum` where the wire codec used `integer`, so `2^62`
+read back as 0 -- while the same number COMPUTED at runtime was fine. Every
+arithmetic test built its big values rather than writing them down.
+
+**A test whose setup threw.** `test/gas.clj` timed `bytes-to-str` over a nil
+for as long as the case existed, because building its input needed `str->b` on
+a rope. Fixing one bug exposed the other: 48 163 steps past an exhausted
+budget on a path that charged for nothing.
+
+`test/common/lang/edges.cljc` exists because of the last four. It walks the
+tier boundaries -- fixnum at 2^47, inline at 5 bytes, interned at 32, flat at
+1 024, array-map at 8, table chunk at 256 -- and asserts INVARIANTS rather than
+answers, which is what makes it writable without knowing what is broken.
 
 One divergence in that batch WAS closed, and toward native rather than toward
 the ports, which is worth writing down because the ports were the permissive

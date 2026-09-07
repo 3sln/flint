@@ -20,6 +20,7 @@
 ;;     ARRAY-MAP   8 entries     past it a map is a CHAMP
 (ns lang.edges
   (:require [flint.bytes :as b]
+            [flint.table :as ft]
             [flint.check :refer [expect]]))
 
 (defn- rep [n s] (loop [i 0 acc ""] (if (< i n) (recur (inc i) (str acc s)) acc)))
@@ -181,3 +182,40 @@
       (expect = n (b/size (b/of-string s)))
       ;; ... and back again, so the round trip holds at every tier.
       (expect = true (= s (b/to-string (b/of-string s)))))))
+
+(defn ^:flint.check/test tables-cross-the-chunk-boundary []
+  ;; A table stores rows in CHUNKS of 256, so 255/256/257 is where a descent
+  ;; off by one shows. Equality is COLUMNAR and row-by-row, and a ref is `=`
+  ;; to the map it stands for -- both have to hold across the boundary.
+  (let [s (ft/schema [[:id :int]])]
+    (doseq [n [0 1 255 256 257 512]]
+      (let [rows (mapv (fn [i] {:id i}) (range n))
+            t (ft/table s rows)
+            t2 (ft/table s rows)]
+        (expect = n (count t))
+        (expect = true (= t t2))
+        (expect = (hash t) (hash t2))
+        ;; The FIRST and LAST rows, and the two either side of the boundary.
+        (when (pos? n)
+          (expect = 0 (:id (get t 0)))
+          (expect = (dec n) (:id (get t (dec n))))
+          (expect = true (= {:id 0} (get t 0))))
+        (when (> n 256)
+          (expect = 255 (:id (get t 255)))
+          (expect = 256 (:id (get t 256))))
+        ;; Past the end is a MISS, not a nil row.
+        (expect = :none (get t n :none))))))
+
+(defn ^:flint.check/test nesting-composes-across-tiers []
+  ;; Hash and equality COMPOSE. A rope inside a vector inside a set inside a
+  ;; map key has to behave as its content, at every level -- which is what
+  ;; makes `=` and `hash` agree recursively rather than only at the top.
+  (doseq [n [5 33 1025]]
+    (let [lit   (rep n "a")
+          built (str (rep (quot n 2) "a") (rep (- n (quot n 2)) "a"))
+          a {:k [#{lit} {lit lit}]}
+          b {:k [#{built} {built built}]}]
+      (expect = true (= a b))
+      (expect = (hash a) (hash b))
+      (expect = 0 (compare [lit] [built]))
+      (expect = :found (get {a :found} b)))))
