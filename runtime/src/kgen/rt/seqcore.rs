@@ -42,6 +42,50 @@ impl Rt {
     /// reads fine while `cons` is the only caller and is wrong for `seq-count`,
     /// which wants `v`'s own count -- so the `+ 1` moved to `cons`, and this is
     /// named for what it answers.
+    /// How many values a range has, or NIL when it will not say.
+    /// 
+    /// FIXNUMS ONLY, and that is the whole subtlety. `range-empty` next door
+    /// compares its endpoints in f64, which is right for a comparison and
+    /// wrong for a count: two f64s near 1e18 are 128 apart, so the subtraction
+    /// below would answer a size that is off by more than one. A fixnum is
+    /// bounded at 2^47, so the difference cannot overflow an i64 either.
+    /// 
+    /// An UNBOUNDED range declines, and so does one whose size will not fit an
+    /// int -- `count` answers an I32, and a wrong small number is worse than a
+    /// walk that never finishes, which is what Clojure's `(count (range))`
+    /// does too.
+    pub(crate) fn range_count(&self, v: Value) -> Value {
+        let e: Value = self.slot(v, 1);
+        if e.is_nil() {
+            return NIL;
+        }
+        let s0: Value = self.slot(v, 0);
+        let st: Value = self.slot(v, 2);
+        if !(s0.is_fixnum() && (e.is_fixnum() && st.is_fixnum())) {
+            return NIL;
+        }
+        let a: i64 = s0.as_fixnum();
+        let b: i64 = e.as_fixnum();
+        let k: i64 = st.as_fixnum();
+        // A zero step never advances, and `range-empty` calls that
+        // empty rather than infinite.
+        if k == 0 {
+            return Value::fixnum(0 as i64);
+        }
+        let mut n: i64;
+        n = 0;
+        if k > 0 {
+            if a < b {
+                n = ((b + (k - 1)) - a) / k;
+            }
+        } else if a > b {
+            n = ((a + ((0 - k) - 1)) - b) / (0 - k);
+        }
+        if n > 2147483647 {
+            return NIL;
+        }
+        return Value::fixnum(n as i64);
+    }
     pub fn count_hint(&self, v: Value) -> Value {
         if v.is_nil() {
             return Value::fixnum(0 as i64);
@@ -58,6 +102,13 @@ impl Rt {
         }
         if t == TY_VEC {
             return Value::fixnum(self.vec_count(v) as i64);
+        }
+        // A RANGE KNOWS ITS SIZE. Clojure's Range is Counted; this walked
+        // instead, so `(count (range 2000000))` cost 11.92s against a
+        // 1.40s baseline for every other accessor -- two million steps to
+        // answer what start, end and step already say.
+        if t == TY_RANGE {
+            return self.range_count(v);
         }
         return NIL;
     }

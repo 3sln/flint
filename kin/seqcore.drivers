@@ -65,6 +65,11 @@ fn ty(sp: &Vec<u8>, a: Addr) -> u8 { sp[a as usize] }
 impl Rt {
 --rust
 }
+fn mk_range(rt: &mut Rt, s: u64, e: u64, st: u64) -> Value {
+    let a = rt.alloc(TY_RANGE, 4);
+    rt.h[a as usize] = s; rt.h[a as usize + 1] = e; rt.h[a as usize + 2] = st;
+    Value::heap(a)
+}
 fn main() {
     let mut rt = Rt { h: vec![0; 4000], gc: Gc { sp: vec![0u8; 4000] }, lens: vec![0; 4000],
                       bump: 100, roots: Vec::new(), starve: false };
@@ -85,6 +90,19 @@ fn main() {
     o.push_str(&format!("hnil={} hel={} hvec={} hlazy={} ",
         rt.count_hint(NIL).0, rt.count_hint(el).0,
         rt.count_hint(vv).0, rt.count_hint(lz).0));
+
+    // A RANGE COUNTS WITHOUT WALKING. The mock's fixnums are the values below
+    // the heap floor, so these are small on purpose -- and a NEGATIVE step
+    // cannot be spelled here, which is why `lang.seqs` asks the descending
+    // case of the real runtime instead.
+    let r10 = mk_range(&mut rt, 0, 10, 1);
+    let r4 = mk_range(&mut rt, 0, 10, 3);
+    let rempty = mk_range(&mut rt, 5, 5, 1);
+    let rzero = mk_range(&mut rt, 0, 10, 0);
+    let runb = mk_range(&mut rt, 0, NIL.0, 1);
+    o.push_str(&format!("rng={},{},{},{},{} ",
+        rt.count_hint(r10).0, rt.count_hint(r4).0, rt.count_hint(rempty).0,
+        rt.count_hint(rzero).0, rt.count_hint(runb).0));
 
     // cons onto a counted tail keeps counting; onto an uncounted one stops.
     let c1 = rt.cons(Value(11), el);
@@ -181,6 +199,12 @@ fn main() {
     }
     static int ty(int[] sp, long a) { return sp[(int) a]; }
 --java
+    static long mkRange(Rt rt, long st, long en, long step) {
+        long a = rt.alloc(TY_RANGE, 4);
+        rt.h[(int) a] = st; rt.h[(int) a + 1] = en; rt.h[(int) a + 2] = step;
+        return Val.heap(a);
+    }
+
     public static void main(String[] args) {
         Rt rt = new Rt();
         StringBuilder o = new StringBuilder();
@@ -195,6 +219,16 @@ fn main() {
          .append(isSeq(rt, NIL) ? 1 : 0).append(' ');
         o.append("hnil=").append(countHint(rt, NIL)).append(" hel=").append(countHint(rt, el))
          .append(" hvec=").append(countHint(rt, vv)).append(" hlazy=").append(countHint(rt, lz)).append(' ');
+
+        // A RANGE COUNTS WITHOUT WALKING -- see the Rust copy.
+        long r10 = mkRange(rt, 0, 10, 1);
+        long r4 = mkRange(rt, 0, 10, 3);
+        long rempty = mkRange(rt, 5, 5, 1);
+        long rzero = mkRange(rt, 0, 10, 0);
+        long runb = mkRange(rt, 0, NIL, 1);
+        o.append("rng=").append(countHint(rt, r10)).append(',').append(countHint(rt, r4))
+         .append(',').append(countHint(rt, rempty)).append(',').append(countHint(rt, rzero))
+         .append(',').append(countHint(rt, runb)).append(' ');
         long c1 = cons(rt, 11, el), c2 = cons(rt, 12, c1), c3 = cons(rt, 13, c2);
         o.append("counts=").append(rt.slot(c1, C_COUNT)).append(',').append(rt.slot(c2, C_COUNT))
          .append(',').append(rt.slot(c3, C_COUNT)).append(' ');
@@ -305,6 +339,12 @@ namespace Flint.Rt {
         }
     }
 --csharp
+    internal static long MkRange(Rt rt, long st, long en, long step) {
+        long a = rt.Alloc(Obj.TyRange, 4);
+        rt.h[(int) a] = st; rt.h[(int) a + 1] = en; rt.h[(int) a + 2] = step;
+        return Val.Heap(a);
+    }
+
     public static void Main(string[] args) {
         Rt rt = new Rt();
         var o = new System.Text.StringBuilder();
@@ -319,6 +359,16 @@ namespace Flint.Rt {
          .Append(IsSeq(rt, NIL) ? 1 : 0).Append(' ');
         o.Append("hnil=").Append(CountHint(rt, NIL)).Append(" hel=").Append(CountHint(rt, el))
          .Append(" hvec=").Append(CountHint(rt, vv)).Append(" hlazy=").Append(CountHint(rt, lz)).Append(' ');
+
+        // A RANGE COUNTS WITHOUT WALKING -- see the Rust copy.
+        long r10 = MkRange(rt, 0, 10, 1);
+        long r4 = MkRange(rt, 0, 10, 3);
+        long rempty = MkRange(rt, 5, 5, 1);
+        long rzero = MkRange(rt, 0, 10, 0);
+        long runb = MkRange(rt, 0, NIL, 1);
+        o.Append("rng=").Append(CountHint(rt, r10)).Append(',').Append(CountHint(rt, r4))
+         .Append(',').Append(CountHint(rt, rempty)).Append(',').Append(CountHint(rt, rzero))
+         .Append(',').Append(CountHint(rt, runb)).Append(' ');
         long c1 = Cons(rt, 11, el), c2 = Cons(rt, 12, c1), c3 = Cons(rt, 13, c2);
         o.Append("counts=").Append(rt.Slot(c1, C_COUNT)).Append(',').Append(rt.Slot(c2, C_COUNT))
          .Append(',').Append(rt.Slot(c3, C_COUNT)).Append(' ');

@@ -85,6 +85,31 @@ Both carry a `seen`/`prev` across the suspension, so the set is PERSISTENT
 where the eager version used a transient -- a transient belongs to one thread
 of control, and a lazy seq may be forced later, elsewhere, or never.
 
+### `count` on a range walked it
+
+Found by sweeping the accessors the way the seq functions were swept: `count`,
+`get`, `contains?`, `nth`, `peek` and `last` over big collections, looking for
+the one that is not O(1).
+
+    count-range   11.92s
+    everything else   1.32s - 1.75s
+
+Clojure's Range is Counted. Ours walked, so counting two million took two
+million steps to answer what start, end and step already say. Now O(1) in
+`kin/seqcore.kin`, and 1.65s.
+
+FIXNUMS ONLY, and that is the subtlety. `range-empty` beside it compares
+endpoints in f64, which is right for a comparison and wrong for a count: two
+f64s near 1e18 are 128 apart, so the subtraction would answer a size that is
+off by more than one. Anything that is not a fixnum on all three slots
+declines and walks, as does an unbounded range -- `(count (range))` should not
+terminate, and Clojure's does not either.
+
+The kin probe cannot spell a negative fixnum, so the DESCENDING cases are
+asked of the real runtime in `lang.seqs` instead, along with every case
+checked against `(count (vec r))`: the walk is the definition and the
+arithmetic is only a shortcut.
+
 ## Open, in the order I would take them
 
 ### 1. Chunked seqs are declared and never built

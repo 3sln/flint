@@ -21,7 +21,8 @@
                                    Rt Value Addr RootIx I32 Ty Bool NIL
                                    C_FIRST C_REST C_META C_COUNT
                                    TY_CONS TY_EMPTY_LIST TY_LAZYSEQ TY_VECSEQ
-                                   TY_STRSEQ TY_RANGE TY_VEC]]))
+                                   TY_STRSEQ TY_RANGE TY_VEC
+                                   is-fixnum as-fixnum quot I64 and not > < local set]]))
 
 (doc "Is this a SEQ? Six heap tags and nothing else."
      ""
@@ -48,6 +49,44 @@
      "reads fine while `cons` is the only caller and is wrong for `seq-count`,"
      "which wants `v`'s own count -- so the `+ 1` moved to `cons`, and this is"
      "named for what it answers.")
+(doc "How many values a range has, or NIL when it will not say."
+     ""
+     "FIXNUMS ONLY, and that is the whole subtlety. `range-empty` next door"
+     "compares its endpoints in f64, which is right for a comparison and"
+     "wrong for a count: two f64s near 1e18 are 128 apart, so the subtraction"
+     "below would answer a size that is off by more than one. A fixnum is"
+     "bounded at 2^47, so the difference cannot overflow an i64 either."
+     ""
+     "An UNBOUNDED range declines, and so does one whose size will not fit an"
+     "int -- `count` answers an I32, and a wrong small number is worse than a"
+     "walk that never finishes, which is what Clojure's `(count (range))`"
+     "does too.")
+(defn ^:method ^Value range-count [^Rt rt ^Value v]
+  (let [^Value e (slot rt v 1)]
+    (if (nil? rt e)
+      (return NIL))
+    (let [^Value s0 (slot rt v 0)
+          ^Value st (slot rt v 2)]
+      (if (not (and (is-fixnum rt s0) (and (is-fixnum rt e) (is-fixnum rt st))))
+        (return NIL))
+      (let [^I64 a (as-fixnum s0)
+            ^I64 b (as-fixnum e)
+            ^I64 k (as-fixnum st)]
+        (comment "A zero step never advances, and `range-empty` calls that"
+                 "empty rather than infinite.")
+        (if (== k 0)
+          (return (fixnum 0)))
+        (local ^:mut ^I64 n)
+        (set n 0)
+        (if (> k 0)
+          (if (< a b)
+            (set n (quot (- (+ b (- k 1)) a) k)))
+          (if (> a b)
+            (set n (quot (- (+ a (- (- 0 k) 1)) b) (- 0 k)))))
+        (if (> n 2147483647)
+          (return NIL))
+        (return (fixnum n))))))
+
 (defn ^:pub ^:method ^Value count-hint [^Rt rt ^Value v]
   (if (nil? rt v)
     (return (fixnum 0)))
@@ -60,6 +99,12 @@
       (return (slot rt v C_COUNT)))
     (if (== t TY_VEC)
       (return (fixnum (vec-count rt v))))
+    (comment "A RANGE KNOWS ITS SIZE. Clojure's Range is Counted; this walked"
+             "instead, so `(count (range 2000000))` cost 11.92s against a"
+             "1.40s baseline for every other accessor -- two million steps to"
+             "answer what start, end and step already say.")
+    (if (== t TY_RANGE)
+      (return (range-count rt v)))
     (return NIL)))
 
 (doc "`(cons head tail)`: a cell, counted when the tail's count is known."

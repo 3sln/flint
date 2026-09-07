@@ -107,3 +107,26 @@
   ;; a long run of duplicates costs one thunk, not one per element
   (expect = [:a] (vec (distinct (repeat 1000 :a))))
   (expect = [:a] (vec (dedupe (repeat 1000 :a)))))
+
+;; A RANGE KNOWS ITS SIZE. Clojure's Range is Counted; this walked, so
+;; `(count (range 2000000))` cost 11.92s where every other accessor cost 1.40s.
+;;
+;; Each case is checked against `(count (vec r))` as well as against a literal,
+;; because the walk is the definition and the arithmetic is the shortcut. A
+;; shortcut that disagrees with the thing it replaces is the bug this shape
+;; invites.
+(defn ^:flint.check/test a-range-counts-without-walking []
+  (expect = [0 1 10] [(count (range 0)) (count (range 1)) (count (range 10))])
+  ;; a step that does not divide the span evenly
+  (expect = [4 5 3] [(count (range 0 10 3)) (count (range 0 10 2)) (count (range 1 10 4))])
+  ;; DESCENDING, which the kin probe cannot spell -- its mock has no negative
+  ;; fixnums -- so it is asked here instead
+  (expect = [10 4 0] [(count (range 10 0 -1)) (count (range 10 0 -3)) (count (range 0 10 -1))])
+  ;; empty in three ways: equal ends, backwards, and a step pointing away
+  (expect = [0 0 0] [(count (range 5 5)) (count (range 5 3)) (count (range 3 5 -1))])
+  (expect = [10 4 5] [(count (range -5 5)) (count (range -5 -1)) (count (range 5 -5 -2))])
+  ;; and every one of them agrees with walking it
+  (expect = [true true true true true true]
+          (vec (map (fn [r] (= (count r) (count (vec r))))
+                    [(range 10) (range 0 10 3) (range 10 0 -1)
+                     (range -5 5) (range 5 -5 -2) (range 5 5)]))))

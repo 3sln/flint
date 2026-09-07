@@ -38,6 +38,50 @@ public static class Seqcore {
     /// reads fine while `cons` is the only caller and is wrong for `seq-count`,
     /// which wants `v`'s own count -- so the `+ 1` moved to `cons`, and this is
     /// named for what it answers.
+    /// How many values a range has, or NIL when it will not say.
+    /// 
+    /// FIXNUMS ONLY, and that is the whole subtlety. `range-empty` next door
+    /// compares its endpoints in f64, which is right for a comparison and
+    /// wrong for a count: two f64s near 1e18 are 128 apart, so the subtraction
+    /// below would answer a size that is off by more than one. A fixnum is
+    /// bounded at 2^47, so the difference cannot overflow an i64 either.
+    /// 
+    /// An UNBOUNDED range declines, and so does one whose size will not fit an
+    /// int -- `count` answers an I32, and a wrong small number is worse than a
+    /// walk that never finishes, which is what Clojure's `(count (range))`
+    /// does too.
+    internal static long RangeCount(Rt rt, long v) {
+        long e = rt.Slot(v, 1);
+        if (Val.IsNil(e)) {
+            return Val.Nil;
+        }
+        long s0 = rt.Slot(v, 0);
+        long st = rt.Slot(v, 2);
+        if (!(Val.IsFixnum(s0) && (Val.IsFixnum(e) && Val.IsFixnum(st)))) {
+            return Val.Nil;
+        }
+        long a = Val.AsFixnum(s0);
+        long b = Val.AsFixnum(e);
+        long k = Val.AsFixnum(st);
+        // A zero step never advances, and `range-empty` calls that
+        // empty rather than infinite.
+        if (k == 0) {
+            return Val.Fixnum(0 & 0xFFFFFFFFL);
+        }
+        long n;
+        n = 0;
+        if (k > 0) {
+            if (a < b) {
+                n = ((b + (k - 1)) - a) / k;
+            }
+        } else if (a > b) {
+            n = ((a + ((0 - k) - 1)) - b) / (0 - k);
+        }
+        if (n > 2147483647) {
+            return Val.Nil;
+        }
+        return Val.Fixnum(n & 0xFFFFFFFFL);
+    }
     public static long CountHint(Rt rt, long v) {
         if (Val.IsNil(v)) {
             return Val.Fixnum(0 & 0xFFFFFFFFL);
@@ -54,6 +98,13 @@ public static class Seqcore {
         }
         if (t == Obj.TyVec) {
             return Val.Fixnum(Vec.Count(rt, v) & 0xFFFFFFFFL);
+        }
+        // A RANGE KNOWS ITS SIZE. Clojure's Range is Counted; this walked
+        // instead, so `(count (range 2000000))` cost 11.92s against a
+        // 1.40s baseline for every other accessor -- two million steps to
+        // answer what start, end and step already say.
+        if (t == Obj.TyRange) {
+            return RangeCount(rt, v);
         }
         return Val.Nil;
     }
