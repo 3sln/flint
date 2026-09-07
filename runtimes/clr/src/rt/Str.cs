@@ -229,9 +229,14 @@ public static class Str {
     /// deterministic; a memo keyed on collector state is not.
     static int CpBytesAt(Rt rt, long v, int i, byte[] outb) {
         if (i < 0) return -1;
-        if (IsRope(rt, v) && !SAscii(rt, v)) {
+        if (IsRope(rt, v)) {
+            // ASCII INCLUDED, and it used not to be -- see the JVM's
+            // `cpBytesAt` for why and for the measurement. Native has descended
+            // for every rope since `0011`; flattening here turns an O(log n)
+            // descent into an O(n) copy and caches the flat form.
+            //
             // PAST THE END NEEDS NO CHECK HERE -- see the Java and Rust copies.
-            int at2 = RopeByteOfCp(rt, v, i);
+            int at2 = SAscii(rt, v) ? i : RopeByteOfCp(rt, v, i);
             int sk = rt.SinkOpen();
             int w2 = RopeBytesAt(rt, v, at2, sk);
             byte[] got = rt.SinkArray(sk);

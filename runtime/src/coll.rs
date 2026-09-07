@@ -168,15 +168,18 @@ impl Rt {
         // WHICH MECHANISM, AND WHY -- `0011` calls them complementary and this
         // is the line where that has to be acted on.
         //
-        // ASCII: FLATTEN, once, and index by byte. A code-point index IS a byte
-        // index, so after the flatten every index is O(1); descending the tree
-        // instead costs O(depth) EVERY time, and measured 3.05x on
-        // `test/scaling.clj` -- a linear operation made superlinear by using
-        // the more general mechanism where the cheaper one applies.
+        // EVERY ROPE DESCENDS, ASCII included, and this comment used to say the
+        // opposite -- that ASCII flattens once and indexes by byte, with a
+        // 3.05x measurement behind it. That was true of an older shape and the
+        // code below stopped doing it; the comment did not, and BOTH PORTS were
+        // written from the comment. So `(nth s i)` on a large ASCII rope
+        // materialised the tree on the JVM and the CLR and not here, which no
+        // conform diff could see because both answers are right.
         //
-        // NON-ASCII: DESCEND, and never flatten. Here there is no byte index to
-        // have, so a flat run leaves nothing but a scan, and the scan is the
-        // quadratic.
+        // For ASCII a code-point index IS a byte index, so the descent is this
+        // same walk with the lookup skipped -- and flattening would turn an
+        // O(log n) descent into an O(n) copy that also caches the flat form,
+        // undoing the tree for every later read (`doc/decisions/0011`).
         if self.is_rope(s) {
             // ASCII included: for ASCII the code-point index IS the byte index,
             // so the descent is the same walk with the lookup skipped. It used

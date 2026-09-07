@@ -400,11 +400,20 @@ public final class Str {
     /// deterministic; a memo keyed on collector state is not.
     static int cpBytesAt(Rt rt, long v, int i, byte[] out) {
         if (i < 0) return -1;
-        if (isRope(rt, v) && !sAscii(rt, v)) {
+        if (isRope(rt, v)) {
+            // ASCII INCLUDED, and it used not to be. For ASCII a code-point
+            // index IS a byte index, so the descent is this same walk with the
+            // lookup skipped -- while FLATTENING turns an O(log n) descent into
+            // an O(n) copy AND caches the flat form, undoing the tree for every
+            // later read. Native has descended for every rope since `0011`; the
+            // ports kept the older policy, so `(nth s i)` on a large ASCII rope
+            // materialised it here and not there. Measured: RP_FLAT went from
+            // nil to non-nil across one `nth` on a 2,700-character rope.
+            //
             // PAST THE END NEEDS NO CHECK HERE: `ropeByteOfCp` answers the
             // byte length when there is no such code point, and `ropeBytesAt`
             // answers 0 for an offset at or past the end.
-            int at = ropeByteOfCp(rt, v, i);
+            int at = sAscii(rt, v) ? i : ropeByteOfCp(rt, v, i);
             int sk = rt.sinkOpen();
             int w = ropeBytesAt(rt, v, at, sk);
             byte[] got = rt.sinkArray(sk);
