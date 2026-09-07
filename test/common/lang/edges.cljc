@@ -262,3 +262,60 @@
       (expect = :found (get {rope :found} flat))
       (expect = :found (get {flat :found} rope))
       (expect = true (contains? #{rope} flat)))))
+
+(defn ^:flint.check/test rebuilding-a-collection-gives-the-same-value []
+  ;; `(= v (into (empty v) v))` exercises `seq`, `conj`, `empty` and `=` at
+  ;; once, and it compares a value AGAINST ITSELF -- which is the shape that
+  ;; survives a runtime being consistently wrong. A cross-runtime diff cannot
+  ;; see a bug all three share; this can.
+  (doseq [n [0 1 7 8 9 33 100]]
+    (let [v (vec (range n))
+          m (into {} (mapv (fn [i] [i (* i 10)]) (range n)))
+          s (set (range n))]
+      (doseq [c [v m s]]
+        (expect = (count c) (count (seq c)))
+        (expect = c (into (empty c) c))
+        (expect = (hash c) (hash (into (empty c) c)))))))
+
+(defn ^:flint.check/test writing-and-unwriting-returns-the-original []
+  ;; `assoc` then `dissoc`, and `conj` then `pop`, across the representation
+  ;; boundaries -- so a promotion that does not demote cleanly shows as a
+  ;; value that is no longer `=` to what it started as.
+  (doseq [n [0 1 7 8 9 33]]
+    (let [m (into {} (mapv (fn [i] [i i]) (range n)))
+          v (vec (range n))]
+      (expect = m (dissoc (assoc m :extra 1) :extra))
+      (expect = (hash m) (hash (dissoc (assoc m :extra 1) :extra)))
+      (expect = v (pop (conj v :extra)))
+      (expect = (hash v) (hash (pop (conj v :extra))))
+      ;; ... and re-assoc'ing a key it already has changes nothing.
+      (when (pos? n)
+        (expect = m (assoc m 0 0))
+        (expect = (hash m) (hash (assoc m 0 0)))))))
+
+(defn ^:flint.check/test equality-and-comparison-agree []
+  ;; `=` and `compare` are SEPARATE implementations of "the same value", and
+  ;; the rope hash showed what two implementations of one meaning are worth.
+  ;; Within a type they must agree: `(= a b)` exactly when `(compare a b)` is
+  ;; zero. (Across int and float they legitimately do NOT -- `(= 1 1.0)` is
+  ;; false and `(compare 1 1.0)` is 0 -- so this stays within a type.)
+  ;;
+  ;; ANTISYMMETRY is the other half, and it is what catches a sign bug: the
+  ;; boolean arm of `compare` used to subtract two UNSIGNED bits, so `false`
+  ;; against `true` was four billion rather than -1.
+  (let [groups [[false true]
+                [0 1 -1 7 fixnum-max fixnum-min (+ fixnum-max 1)]
+                ["" "a" (rep 6 "a") (rep 33 "a") (rep 1025 "a")
+                 (b/to-string (b/of-string (rep 1025 "a")))]
+                [:a :b :ns/a :ns/b (keyword (rep 33 "a"))]
+                ['a 'b 'ns/a]
+                [[] [1] [1 2] [2] [1 2 3]]]]
+    (doseq [g groups
+            a g
+            b g]
+      (expect = (= a b) (zero? (compare a b)))
+      ;; The sign flips and nothing else: not `(- x)`, because -0 is 0.
+      (let [ab (compare a b) ba (compare b a)]
+        (expect = true (or (and (zero? ab) (zero? ba))
+                           (and (neg? ab) (pos? ba))
+                           (and (pos? ab) (neg? ba))))))))
