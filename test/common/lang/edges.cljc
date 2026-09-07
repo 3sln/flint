@@ -550,7 +550,7 @@
 ;; merge that takes from the RIGHT on a tie loses it while still returning a
 ;; correctly ordered answer, which no ordering check would catch.
 (defn ^:flint.check/test sorting-holds-at-every-run-boundary []
-  (expect = nil (sort []))
+  (expect = '() (sort []))
   (expect = '(1) (sort [1]))
   (expect = '(1 2) (sort [2 1]))
   (expect = '(1 1 2 2 3) (sort [2 1 3 2 1]))

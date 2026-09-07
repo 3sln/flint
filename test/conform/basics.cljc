@@ -106,6 +106,20 @@
 
    (c "seq nil-punning" [(seq []) (seq nil) (seq [1])] [nil nil '(1)])
    (c "first/rest/next on empty" [(first []) (rest []) (next [])] [nil '() nil])
+   ;; WHAT EVERY SEQ FUNCTION ANSWERS FOR AN EMPTY INPUT. Clojure is not
+   ;; uniform here -- `(keys {})` is nil while `(map inc [])` is `()` -- so
+   ;; this cannot be reasoned out, only asked. Several of these were nil in
+   ;; flint until recently because they ended in `(seq acc)`.
+   (c "empty in, seq functions out"
+      [(map inc []) (filter even? []) (remove even? []) (keep identity [])
+       (mapcat vector []) (take 3 []) (drop 3 []) (take-while even? [])
+       (drop-while even? []) (distinct []) (dedupe []) (reverse [])
+       (partition 2 []) (partition-by odd? []) (interpose :x [])
+       (interleave [] []) (map-indexed vector []) (keep-indexed vector [])]
+      ['() '() '() '() '() '() '() '() '() '() '() '() '() '() '() '() '() '()])
+   (c "empty in, the ones Clojure answers nil for"
+      [(keys {}) (vals {}) (seq []) (next [1])] [nil nil nil nil])
+   (c "empty in, sort" (sort []) '())
    (c "map" (map inc [1 2 3]) '(2 3 4))
    (c "map two colls" (map + [1 2] [10 20]) '(11 22))
    (c "filter/remove" [(filter even? [1 2 3 4]) (remove even? [1 2 3 4])] ['(2 4) '(1 3)])

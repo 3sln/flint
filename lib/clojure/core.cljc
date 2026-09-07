@@ -794,16 +794,22 @@
               (let [s (seq coll)]
                 (when s (cons (first s) (take (dec n) (rest s))))))))
 
+;; EMPTY IS `()`, NOT nil. `seq` answers nil when it runs out, and returning
+;; that straight through made `(drop 3 [1 2])` nil where Clojure gives `()`.
+;; `interpose` is built on this one and inherited it.
 (defn drop [n coll]
-  (loop [n n s (seq coll)] (if (and (pos? n) s) (recur (dec n) (next s)) s)))
+  (loop [n n s (seq coll)]
+    (if (and (pos? n) s) (recur (dec n) (next s)) (if s s (list)))))
 
 (defn take-while [pred coll]
   (lazy-seq (let [s (seq coll)]
               (when s (when (pred (first s))
                         (cons (first s) (take-while pred (rest s))))))))
 
+;; EMPTY IS `()` here too -- see `drop`.
 (defn drop-while [pred coll]
-  (loop [s (seq coll)] (if (and s (pred (first s))) (recur (next s)) s)))
+  (loop [s (seq coll)]
+    (if (and s (pred (first s))) (recur (next s)) (if s s (list)))))
 
 (defn range
   ([] (flint.rt/range3 0 nil 1))
@@ -902,8 +908,12 @@
   ([msg data] (flint.rt/ex-info msg data))
   ([msg data cause] (flint.rt/ex-info msg data cause)))
 
-(defn keys [m] (map2 first m))
-(defn vals [m] (map2 second m))
+;; NIL FOR AN EMPTY MAP, and `()` is the wrong answer even though it is what
+;; every other seq function gives. Clojure is not uniform about this and it
+;; cannot be reasoned out -- `(map inc [])` is `()` and `(keys {})` is nil --
+;; so `test/conform/basics.cljc` asks real Clojure and this follows.
+(defn keys [m] (when (seq m) (map2 first m)))
+(defn vals [m] (when (seq m) (map2 second m)))
 (defn key [e] (flint.rt/nth e 0))
 (defn val [e] (flint.rt/nth e 1))
 
@@ -1025,7 +1035,9 @@
 (defn- merge-sort [cmp v0]
   (let [^int n (count v0)]
     (if (< n 2)
-      (seq v0)
+      ;; `()` and not nil for an empty input: `(seq [])` is nil, and Clojure's
+      ;; `sort` answers an empty seq.
+      (if (< n 1) (list) (seq v0))
       (loop [src v0 ^int width 1]
         (if (flint.rt/lt (flint.rt/sub n 1) width)
           (seq src)
