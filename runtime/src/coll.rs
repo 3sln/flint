@@ -36,38 +36,28 @@ impl Rt {
     /// `count` on a string is in **code points**, not UTF-16 code units.
     /// Clojure counts UTF-16, so an astral character counts 2 there and 1 here.
     /// This is a deliberate divergence, recorded in the README.
+    /// DELEGATES. This was a second three-tier code-point count beside
+    /// `s_count` -- rope, ASCII leaf, scan -- and two functions computing one
+    /// meaning is the shape that made a rope and an equal flat string hash
+    /// differently. They agreed; now they cannot stop agreeing.
+    ///
+    /// One implementation PER RUNTIME is unavoidable and is what the port is
+    /// for. Two inside one runtime is the bug shape.
     pub fn char_count(&self, v: Value) -> u32 {
-        if self.is_rope(v) {
-            return self.s_count(v);
-        }
-        if !v.is_inline_str() && str_is_ascii(&self.gc.sp, v.as_heap()) {
-            return len(&self.gc.sp, v.as_heap());
-        }
-        let mut buf = crate::rt::sbuf();
-        let bytes: &[u8] = if v.is_inline_str() {
-            v.inline_bytes(&mut buf)
-        } else {
-            str_bytes(&self.gc.sp, v.as_heap())
-        };
-        bytes.iter().filter(|b| (**b & 0xC0) != 0x80).count() as u32
+        self.s_count(v)
     }
 
     /// True when a code-point index into `s` is also a byte index.
     #[inline]
+    /// DELEGATES to `s_ascii`, which answers the same question for all three
+    /// tiers -- but KEEPS THE GUARD, which is the one thing this had and that
+    /// does not: `s_ascii` reads the header bit of whatever it is given, so a
+    /// heap value that is not a string would be read as one.
     fn str_indexable(&self, s: Value) -> bool {
-        if self.is_rope(s) {
-            // A rope is never indexed directly -- every caller flattens first --
-            // so this answers about the tier it will become.
-            return self.s_ascii(s);
+        if !self.is_string(s) {
+            return false;
         }
-        if s.is_inline_str() {
-            let mut b = crate::rt::sbuf();
-            s.inline_bytes(&mut b).is_ascii()
-        } else {
-            s.is_heap()
-                && ty(&self.gc.sp, s.as_heap()) == TY_STR
-                && str_is_ascii(&self.gc.sp, s.as_heap())
-        }
+        self.s_ascii(s)
     }
 
     // --- conj / assoc / get -------------------------------------------------

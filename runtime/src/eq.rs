@@ -8,7 +8,6 @@
 
 use crate::hash;
 use crate::rt::Rt;
-use crate::strs::INTERN_MAX;
 use crate::value::{Value, FALSE, NIL, TRUE};
 
 pub const CAT_SCALAR: u8 = 0;
