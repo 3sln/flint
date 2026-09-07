@@ -1452,6 +1452,37 @@ allocates nothing, where all three runtimes had been building a host argument
 array once per row. The five `map_for_each` functions remain a real hole; this
 was the census reading its own warning back at it.
 
+THE OBVIOUS WAY OUT OF THE HOLE DOES NOT WORK, and it is worth writing down
+which one, because it looks right. `bytes.rs` already has a CURSOR protocol
+that generated code drives without a closure -- `walk-open`, `walk-next`,
+`walk-done`, `walk-close`, with the state in a host stack the source names by
+an INDEX. `byteeq` and `ropeeq` both use it. The same shape for maps would
+unblock all five.
+
+It cannot be that shape as it stands. `walks` is
+`Vec<Vec<(Value, u32)>>` on the Rust side and the collector DOES NOT SCAN IT
+-- the root scan covers the executor stacks, the shadow stacks and the
+globals, and nothing else. It is safe for `b-eq` and `tree-eq` because neither
+ALLOCATES while walking. Every blocked map function does: `map-eq` calls
+`map-get` and `=`, `hash-map` calls `hash`. The node addresses parked in that
+stack would be stale at the first collection, which is `0031` exactly.
+
+So there are two designs, not one, and the difference is where the walk keeps
+its path:
+
+* **A CALLBACK capability in kin.** Measured in `runtime/src/map.rs`: the
+  buffer alternative costs 1.73x the time and 12 500x the peak roots, so
+  "just materialise the entries" is not the answer either.
+* **A cursor that holds SHADOW-STACK INDICES rather than Values.** The shadow
+  stack is scanned, so a walk that pushes its node path as roots and records
+  the indices survives a collection. It needs no closures in kin and no change
+  to the collector -- only `Vec<(RootIx, u32)>` where `Vec<(Value, u32)>` is
+  today, in three runtimes.
+
+The second is not obviously worse and was not on the table before, because the
+first objection to a cursor -- that it cannot survive allocation -- is only
+true of the one that stores Values.
+
 `Str`'S ROPE HALF IS DONE. Row 8's string share shipped across five sources --
 `ropenode`, `ropecat`, `ropeslice`, `ropeflat`, `ropeeq`, `ropecp`,
 `ropemeas` -- taking `Str` from 2,462 to 1,196 lines across the three runtimes.
