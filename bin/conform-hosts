@@ -458,6 +458,55 @@ for pair in "RtFoundation --rt-foundation" "RtMaps --rt-maps" \
 done
 echo "  ok   four port suites re-run with the stale check on, both hosts"
 
+# THE GENERATIONAL INVARIANT, on both ports, over a real program.
+#
+# Every old object holding a young pointer must be in the remembered set. A
+# missed edge is a young object collected while an old one still points at it:
+# silent, and it surfaces somewhere else entirely. Native has asserted this
+# since `doc/HANDOFF.md`; neither port ever had.
+#
+# THE PROGRAM IS PART OF THE CHECK. Compound keys are what force containers
+# into old space while their contents are still young, and a workload without
+# them produces a heap with NOTHING to check -- a vector built by `conj`
+# measured 1 edge over 110 sweeps, which is a pass that means nothing. This
+# one measures 401 over 15.
+#
+# So the coverage is asserted as hard as the verdict: the run fails if it saw
+# fewer than a hundred old-to-young edges, whatever it concluded about them.
+mkdir -p out/rt-gcaudit
+cat > out/rt-gcaudit/gcaudit.cljc <<'GCAUDIT'
+(ns gcaudit)
+(defn- build-map [n]
+  (loop [i 0 m {}] (if (< i n) (recur (inc i) (assoc m [:sym i (str "name-" i)] i)) m)))
+(defn- build-trans [n]
+  (persistent! (loop [i 0 m (transient {})]
+                 (if (< i n) (recur (inc i) (assoc! m [:sym i (str i)] i)) m))))
+(defn- build-set [n]
+  (loop [i 0 s #{}] (if (< i n) (recur (inc i) (conj s [:sym i (str i)])) s)))
+(defn main [_]
+  (+ (count (build-map 30000)) (count (build-trans 30000)) (count (build-set 30000))))
+GCAUDIT
+./bin/flint :src out/rt-gcaudit :fn gcaudit/main --emit-image \
+  :out out/rt-gcaudit/gc.img >/dev/null 2>&1
+gc_want="$(./target/release/flint run :path out/rt-gcaudit :fn gcaudit/main 2>&1 || true)"
+FLINT_STALE=1 "$JDK/bin/java" -cp runtimes/jvm/classes RtGcAudit \
+  out/rt-gcaudit/gc.img "$gc_want" > /tmp/flint-gca-jvm.out 2>/dev/null \
+  || { cat /tmp/flint-gca-jvm.out; echo "  FAIL the generational invariant [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' /tmp/flint-gca-jvm.out
+if [ -n "$CLR" ]; then
+  FLINT_STALE=1 "$CLR" --rt-gcaudit out/rt-gcaudit/gc.img "$gc_want" \
+    > /tmp/flint-gca-clr.out 2>/dev/null \
+    || { cat /tmp/flint-gca-clr.out; echo "  FAIL the generational invariant [clr]"; exit 1; }
+  sed 's/$/ [clr]/' /tmp/flint-gca-clr.out
+  # The two collectors walking one image should see the SAME heap: the same
+  # edges over the same sweeps. Agreeing on "no violations" while disagreeing
+  # on what they walked would mean they are not the same collector.
+  cmp -s /tmp/flint-gca-jvm.out /tmp/flint-gca-clr.out \
+    && echo "  ok   both collectors walked the same heap and found the same edges" \
+    || { diff /tmp/flint-gca-jvm.out /tmp/flint-gca-clr.out | head; \
+         echo "  FAIL the two ports disagree about their own heaps"; exit 1; }
+fi
+
 # HOST PORTS (`doc/decisions/0006`, `0027`): the half of the port protocol the
 # HOST drives, on all three runtimes at once.
 #

@@ -385,6 +385,7 @@ public final class Gc {
             else setInRemset(sp, a, false);
         }
         sweepOld();
+        if (CHECKS) auditLive();
         notePeak();
         // Clear marks on the live nursery.
         long a = from;
@@ -401,6 +402,71 @@ public final class Gc {
         setMarked(sp, a, true);
         work.add(a);
     }
+
+    /// THE GENERATIONAL INVARIANT, asked where old space is LIVE-ONLY.
+    ///
+    /// Every old object holding a young pointer must carry the remset flag. A
+    /// missed edge is a young object collected while an old one still points
+    /// at it -- `doc/HANDOFF.md` is what that costs, and the ports never asked.
+    ///
+    /// THE PLACEMENT IS THE WHOLE CHECK, and two other placements were tried
+    /// and measured before this one:
+    ///
+    ///   - At the START of a minor, which is where native asks. Old space
+    ///     still holds unswept garbage there, and the collector is RIGHT not
+    ///     to scan it, so its slots keep pre-collection addresses. Running
+    ///     `gcstress` gave 2,085 unremembered edges, every one of them on a
+    ///     dead object. A check that reports two thousand non-bugs is worse
+    ///     than no check.
+    ///   - At the END of a minor, where anything young an old object points at
+    ///     has just been promoted, so the count is structurally zero. That one
+    ///     survived a deliberately broken write barrier in silence.
+    ///
+    /// Here, immediately after the sweep, every object walked has just come
+    /// through a mark. On `gcstress`: 30 sweeps, 1,494,883 objects, 585
+    /// old-to-young edges, none unremembered.
+    void auditLive() {
+        liveSweeps++;
+        for (long[] ch : oldChunks) {
+            long a = ch[0], end = ch[0] + ch[1];
+            while (a < end) {
+                long size = sizeOf(sp, a);
+                if (size == 0) { liveWalkErrors++; break; }
+                int t = ty(sp, a);
+                if (t != TY_FREE && layoutOf(t) == VALS) {
+                    liveWalked++;
+                    int n = len(sp, a);
+                    for (int i = 0; i < n; i++) {
+                        long v = slot(sp, a, i);
+                        if (!Val.isHeap(v)) continue;
+                        long p = Val.asHeap(v);
+                        if (!isYoung(p)) continue;
+                        liveEdges++;
+                        if (!inRemset(sp, a)) {
+                            if (liveViolations == 0)
+                                System.err.println("REMSET violation: live old object " + a
+                                    + " ty=" + t + " slot " + i + " -> young " + p
+                                    + ", and it is not remembered");
+                            liveViolations++;
+                            break;
+                        }
+                    }
+                }
+                a += size;
+            }
+        }
+    }
+
+    /// The same `FLINT_STALE` switch as the stale-push check in `Rt`: one
+    /// switch turns on everything the ports can ask about their own collector,
+    /// and `bin/conform-hosts` sets it.
+    public static final boolean CHECKS = System.getenv("FLINT_STALE") != null;
+
+    /// WHAT THE AUDIT SAW, not just what it concluded. Zero violations over
+    /// zero edges is a weaker test than zero over 585, and only one of those
+    /// is worth printing as a pass.
+    public static int liveSweeps = 0, liveWalked = 0, liveEdges = 0;
+    public static int liveViolations = 0, liveWalkErrors = 0;
 
     void sweepOld() {
         java.util.Arrays.fill(freeLists, 0);

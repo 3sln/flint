@@ -2037,7 +2037,7 @@ stay meaningful. 1 and 8 are done.
   entry measured `HostReader`, which no port would touch, instead of the guest
   `Reader` that a port would.
 
-### The other two GC checks: attempted, unsound, NOT shipped
+### The generational invariant, on the ports at last
 
 The stale-push check is on in both ports now. `doc/HANDOFF.md` names two more
 that native asserts and neither port has: every old-to-young edge is
@@ -2104,6 +2104,45 @@ The instrument caught a real rooting bug on the way: the probe written to
 exercise it read `rt.r(vi)` before `Str.of(...)` allocated, because Java
 evaluates arguments left to right. `0031` in the test rather than the
 runtime, found one step before it mattered.
+
+**RESOLVED, and it took three placements and one invalid comparison.**
+
+The comparison that started this was not a comparison: native ran `gcstress`
+(map, set and transient heavy) while the JVM ran a vector loop written in
+Java. Running the SAME image on both, the picture is entirely different from
+"native finds none where the JVM finds two":
+
+| | objects walked | old-to-young edges | unremembered |
+|---|---|---|---|
+| native, start of minor | 36,773,094 | 24,489 | 0 |
+| JVM, start of minor | 27,511,798 | 32,702 | **2,085** |
+| JVM, after the sweep | 1,494,883 | 585 | **0** |
+
+The third row is the answer. At the start of a minor the ports' old space
+still holds unswept garbage, whose slots the collector is RIGHT not to
+update; all 2,085 are on dead objects. Where old space is LIVE-ONLY --
+immediately after the sweep -- the JVM's generational invariant holds
+perfectly. The port's write barrier is correct, and this is the first time
+anything checked.
+
+Why native has no such garbage at ITS check point is still unexplained. The
+candidates were eliminated: identical major trigger (`old_live * 2 >
+old_capacity` on both), identical drain, both zero bodies on allocation
+rather than on free, and heap size makes no difference (2 unremembered at
+4MB, 16MB, 64MB and 256MB alike). It is a diagnostic difference, not a
+correctness one, and it is where the next person should start.
+
+**The check is shipped**, in both ports, under `FLINT_STALE`, asserted by
+`bin/conform-hosts` over a program written for the purpose. Compound keys are
+the point: they force containers into old space while their contents are
+still young. Without them the heap has nothing to check -- a vector built by
+`conj` gives 1 edge over 110 sweeps, which is why "audit after the sweep is
+nearly vacuous" was the wrong conclusion from the wrong workload. The
+shipped program gives 401 over 15, and the run FAILS below a hundred whatever
+it concluded.
+
+Both ports report the same numbers, so the gate also compares them: two
+collectors walking one image should see the same heap.
 
 ## Known hazards
 

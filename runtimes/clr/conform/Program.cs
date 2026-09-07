@@ -14,6 +14,8 @@ public static class Program {
         if (args.Length >= 1 && args[0] == "--rt-maps") return RtMaps();
         if (args.Length >= 1 && args[0] == "--rt-parallel") return RtParallel();
         if (args.Length >= 1 && args[0] == "--rt-stale") return RtStale();
+        if (args.Length >= 2 && args[0] == "--rt-gcaudit")
+            return RtGcAudit(args[1], args.Length > 2 ? args[2] : null);
         if (args.Length >= 3 && args[0] == "--rt-shelve") return RtShelve(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "--rt-selfhost") return RtSelfHost(args[1], args[2]);
         if (args.Length >= 2 && args[0] == "--rt-aot") return RtAot(args[1]);
@@ -1140,6 +1142,55 @@ public static class Program {
     /// on a value carried across a collection, and does it stay quiet on one
     /// that was rooted properly. A check that fires on everything is worse
     /// than no check.
+    /// THE GENERATIONAL INVARIANT ON THE PORT, over a real program. The JVM's
+    /// `RtGcAudit` is the same test; see it for why the coverage is asserted
+    /// and not just the verdict.
+    private static int RtGcAudit(string imgPath, string want) {
+        if (!Flint.Rt.Gc.Checks) {
+            Console.WriteLine("  FAIL the gc audit is not enabled (set FLINT_STALE)");
+            return 1;
+        }
+        var rt = new Flint.Rt.Rt(1024 * 1024, 64L * 1024 * 1024);
+        var img = Flint.Rt.Img.Load(rt, File.ReadAllBytes(imgPath));
+        if (img == null) { Console.WriteLine("  FAIL not a flint image"); return 1; }
+        foreach (int fn in img.init) {
+            rt.Call(rt.MakeClosure(fn, new long[0]), new long[0]);
+            if (!Flint.Rt.Val.IsNil(rt.thrown)) {
+                Console.WriteLine("  FAIL an initialiser threw"); return 1;
+            }
+        }
+        long v = rt.RunProgram(rt.MakeClosure(img.entry, new long[0]),
+                               new long[]{ Flint.Rt.Val.Nil });
+        if (!Flint.Rt.Val.IsNil(rt.thrown)) { Console.WriteLine("  FAIL main threw"); return 1; }
+        string shown = Flint.Rt.Val.IsFixnum(v)
+                ? Flint.Rt.Val.AsFixnum(v).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : Flint.Rt.Str.IsString(rt, v) ? Flint.Rt.Str.Text(rt, v)
+            : Flint.Rt.Val.IsNil(v) ? "nil"
+            : "#" + v.ToString("x");
+        if (want != null && shown != want) {
+            Console.WriteLine("  FAIL the port answered " + shown + ", native said " + want);
+            return 1;
+        }
+        if (Flint.Rt.Gc.LiveWalkErrors > 0) {
+            Console.WriteLine("  FAIL the audit could not parse a span, so its zero means nothing");
+            return 1;
+        }
+        if (Flint.Rt.Gc.LiveViolations > 0) {
+            Console.WriteLine("  FAIL " + Flint.Rt.Gc.LiveViolations
+                + " live old objects point at young ones without being remembered");
+            return 1;
+        }
+        if (Flint.Rt.Gc.LiveEdges < 100) {
+            Console.WriteLine("  FAIL the audit saw only " + Flint.Rt.Gc.LiveEdges
+                + " old-to-young edges, so it checked almost nothing");
+            return 1;
+        }
+        Console.WriteLine("  ok   the generational invariant holds on every live old object");
+        Console.WriteLine("  ok     " + Flint.Rt.Gc.LiveEdges + " old-to-young edges over "
+            + Flint.Rt.Gc.LiveSweeps + " sweeps, none unremembered");
+        return 0;
+    }
+
     private static int RtStale() {
         if (!Flint.Rt.Rt.StaleCheck) {
             Console.WriteLine("  FAIL the stale check is not enabled (set FLINT_STALE)");
