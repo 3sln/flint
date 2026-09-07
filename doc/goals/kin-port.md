@@ -2073,6 +2073,32 @@ expression two operations later. The NATIVE opcode path had the check the whole
 time. `lang.control/every-throwing-path-unwinds-where-it-happens` now asks it
 of eleven entrances rather than of whichever one someone was reading.
 
+**And a path can be under-tested rather than wrong.** Both ports truncated
+every boxed integer they loaded from an image. That is not a subtle bug -- it
+is `fixnum` where `integer` belongs, on a line either port's author would have
+caught reading it. It survived because of what exercised it: the only REAL
+image any port had ever read was a program that summed 0..999, so the loader
+was tested at `K_INT` small, `K_FN`, and nothing else. Fourteen kinds, one
+sample.
+
+`out/rt-probe/probe.cljc` in `bin/conform-hosts` is now a CORPUS OF LITERALS,
+one of every kind the image can carry at every tier, folded through `hash` --
+which all three runtimes port, so the whole thing collapses to one integer
+they must agree on, reachable without any standard library.
+
+It was checked the only way a new test can be: **reverting the fix turns the
+corpus red and leaves the summing loop green.** A test that has never been
+observed to fail is a claim, not a result.
+
+The literal is worth singling out because it is a FOURTH implementation of
+every tier, beside the three runtimes' constructors: it goes through the image
+writer and then each loader, while the same value built at runtime goes
+through a constructor. That is the two-functions-one-meaning shape again, and
+`lang.edges/every-literal-agrees-with-the-same-value-built` now asks it of
+every kind -- which is how `2^62` written down could read back as 0 while
+`2^62` computed was fine, for as long as every arithmetic test BUILT its big
+values rather than writing them down.
+
 `test/common/lang/edges.cljc` exists because of the last four. It walks the
 tier boundaries -- fixnum at 2^47, inline at 5 bytes, interned at 32, flat at
 1 024, array-map at 8, table chunk at 256 -- and asserts INVARIANTS rather than

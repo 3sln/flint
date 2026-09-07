@@ -334,3 +334,68 @@
     (expect = :threw (try (me 2) (catch Throwable e :threw)))
     (expect = :threw (try (me -1) (catch Throwable e :threw)))
     (expect = :threw (try (me :k) (catch Throwable e :threw)))))
+
+;; A LITERAL and the same value BUILT are two different implementations of one
+;; meaning: the literal comes back through the image writer and a loader, the
+;; built one comes out of a constructor. That is the shape every bug this file
+;; found had, and it is why `2^62` written down read back as 0 on both ports
+;; while `2^62` computed was fine -- every arithmetic test built its big
+;; values rather than writing them down.
+;;
+;; `str` is compared only where order is defined: a set or a map may
+;; legitimately lay itself out differently depending on how it was made.
+(defn- same-value [lit built]
+  (expect = lit built)
+  (expect = (hash lit) (hash built)))
+
+(defn- same [lit built]
+  (same-value lit built)
+  (expect = (str lit) (str built)))
+
+(defn ^:flint.check/test every-literal-agrees-with-the-same-value-built []
+  (same nil (first []))
+  (same true (= 1 1))
+  (same false (= 1 2))
+  ;; INT, both sides of the fixnum boundary and the two integers with no
+  ;; counterpart.
+  (same 7 (+ 3 4))
+  (same 140737488355327 (- (* 70368744177663 2) -1))
+  (same -140737488355328 (* -70368744177664 2))
+  (same 140737488355328 (* 70368744177664 2))
+  (same 4611686018427387904 (* 2305843009213693952 2))
+  (same 9223372036854775807 (- (* 4611686018427387903 2) -1))
+  (same -9223372036854775807 (* -9223372036854775807 1))
+  ;; DOUBLE. The built side is the RUNTIME reader, which is a different path
+  ;; from the compile-time reader that put the literal in the image.
+  (same 0.5 (/ 1.0 2.0))
+  (same -3.25 (- 0.0 3.25))
+  (same 1.0e300 (edn/read-string "1.0e300"))
+  ;; STRING, every tier including past FLAT_MAX -- where the literal must load
+  ;; as a string longer than anything `str` leaves flat, and still equal the
+  ;; ROPE that concatenation produces for the same characters.
+  (same "" (rep 0 "x"))
+  (same "abcde" (str "ab" "cde"))
+  (same "abcdef" (str "abc" "def"))
+  (same "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (rep 32 "a"))
+  (same "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (rep 33 "a"))
+  (same "\u00e9\u4e2d" (str "\u00e9" "\u4e2d"))
+  (same "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" (rep 1100 "q"))
+  ;; NAMED, across the inline boundary.
+  (same :ab (keyword "ab"))
+  (same :xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (keyword (rep 35 "x")))
+  (same 'ab (symbol "ab"))
+  (same 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (symbol (rep 35 "x")))
+  ;; SEQUENTIAL, and a vector past 32.
+  (same [1 2 3] (vec (list 1 2 3)))
+  (same '(1 2 3) (apply list [1 2 3]))
+  (same [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39] (vec (range 40)))
+  ;; UNORDERED, both sides of the array-map boundary.
+  (same-value #{1 2 3} (set [1 2 3]))
+  (same-value {:a 1 :b 2} (into {} [[:a 1] [:b 2]]))
+  (same-value {:k0 0 :k1 1 :k2 2 :k3 3 :k4 4 :k5 5 :k6 6 :k7 7 :k8 8}
+              (into {} (map (fn [i] [(keyword (str "k" i)) i]) (range 9))))
+  ;; One of every tier nested inside a single literal.
+  (same-value [nil true 1 4611686018427387904 0.5 "abcdef" :k 'p [1] #{2} {:m 3}]
+              (vec (list nil true 1 (* 2305843009213693952 2) (/ 1.0 2.0)
+                         (str "abc" "def") (keyword "k") (symbol "p")
+                         (vec [1]) (set [2]) (into {} [[:m 3]])))))
