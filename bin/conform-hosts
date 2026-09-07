@@ -7,8 +7,24 @@
 # compared byte for byte.
 #
 # A port that runs is not a port that is correct. This is what tells them apart.
+#
+# THE NATIVE ANSWER IS REBUILT FIRST, and it was not. This script builds the
+# ports and then compares them against `./target/release/flint` -- which it
+# used three times and never built. A stale binary makes every comparison here
+# a comparison against a stale ANSWER, and it does not look like staleness: it
+# looks like the port disagreeing. That cost four separate investigations in
+# one session, twice inside this script, and once it reported a green run
+# because the port and the stale native were wrong in the same way.
+#
+# A gate compared against a stale reference is the vacuous-gate problem
+# `bin/check-builtins` describes, one level up: not a check that cannot find
+# what it checks, but one that finds the wrong thing and cannot tell.
 set -e
 cd "$(dirname "$0")/.."
+cargo build --release -p flint-cli > /tmp/flint-cli-build.log 2>&1 \
+  || { tail -20 /tmp/flint-cli-build.log; \
+       echo "  FAIL the native runtime does not build, so there is nothing to compare against"; \
+       exit 1; }
 
 # Skipping is for a developer without a JDK installed; it is NOT for CI. A gate
 # that silently passes when it ran nothing is worse than no gate, so CI sets

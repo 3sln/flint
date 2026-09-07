@@ -35,6 +35,16 @@ echo "== rust: green threads, ports, and a parked thread under collection"
 rust_tests flint-conc
 
 echo
+# THE NATIVE CLI IS BUILT BEFORE ANYTHING RUNS IT. Eight steps below use
+# `./target/release/flint`, and nothing here built it -- so a change to the
+# runtime that was never compiled was tested as if it had been. That reads as
+# a PASS, and against `bin/conform-hosts` it reads as the PORT disagreeing.
+echo "== rust: the native CLI, which everything below runs"
+cargo build --release -p flint-cli > /tmp/flint-cli-build.log 2>&1 \
+  || { tail -20 /tmp/flint-cli-build.log; fail "cargo build --release -p flint-cli"; }
+echo "  ok"
+
+echo
 echo "== units: the PRODUCTION build (no diagnostic machinery -- 0016)"
 ./bin/build-units >/dev/null 2>&1 || fail "build-units"
 echo "  ok"
