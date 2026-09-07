@@ -7,7 +7,6 @@
 //! equal to itself.
 
 use crate::hash;
-use crate::obj::*;
 use crate::rt::Rt;
 use crate::strs::INTERN_MAX;
 use crate::value::{Value, FALSE, NIL, TRUE};

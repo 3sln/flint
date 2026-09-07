@@ -5,7 +5,7 @@
 use crate::hash;
 use crate::obj::*;
 use crate::rt::Rt;
-use crate::value::{Value, INLINE_MAX, NIL, NOT_FOUND};
+use crate::value::{Value, INLINE_MAX, NIL};
 
 /// Substring search over bytes. Naive, which is what the gas charge above is
 /// priced for, and enough for the one-character separators that dominate.
