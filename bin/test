@@ -232,12 +232,25 @@ echo
 echo "== collections: transients, and what a seq walk costs in memory"
 ./bin/build-units --diagnostics > /dev/null 2>&1 || fail "build-units --diagnostics"
 ./bin/flint :src bench/progs :fn colls/main :out out/colls-diag.wasm > /dev/null 2>&1 || fail "build colls"
-node bench/colls.mjs 20000 conj conj! assoc assoc! reduce group-by zipmap select-keys \
+node bench/colls.mjs 20000 conj conj! assoc assoc! reduce sort group-by zipmap select-keys \
   > /tmp/flint-test.out 2>&1 || { cat /tmp/flint-test.out; fail "bench/colls.mjs"; }
 grep -E "^  [a-z]" /tmp/flint-test.out | sed 's/^/  /'
 # The claim this section exists to defend: a transient allocates less than the
 # persistent it replaces. If that stops being true, something regressed in the
 # collections and no wall-clock check would notice.
+# SORT, on allocations, for the same reason. `merge-sort` used to split with
+# `subvec` -- which COPIES -- and merge through `first`/`next`, so it allocated
+# 74.7 times per element and collected 57 times to sort 20,000 numbers. Going
+# bottom-up over a transient took that to 1.5 per element and one collection,
+# and roughly halved the clock as a side effect.
+#
+# The bound is on ALLOCATIONS because that is what regressed invisibly: the
+# first wall-clock reading of this change said it was slightly SLOWER, because
+# process startup and building the input swamped the sort.
+awk '/^  sort /{a=$4; n=20000} END{gsub(",","",a);
+  if (a+0 > 10*n) { print "  FAIL sort allocates " a ", over 10 per element"; exit 1 }
+  else print "  ok   sort allocates " a ", under 10 per element" }' /tmp/flint-test.out \
+  || fail "sort started allocating per element again"
 awk '/^  conj  /{p=$4} /^  conj! /{t=$4} END{gsub(",","",p); gsub(",","",t);
   if (t+0 >= p+0) { print "  FAIL conj! allocates " t " against conj " p; exit 1 }
   else print "  ok   conj! allocates " t " where conj allocates " p }' /tmp/flint-test.out || fail "transients stopped helping"

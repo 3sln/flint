@@ -542,3 +542,30 @@
     (expect = (hash a) (hash c))
     (expect = false (= a (assoc b [:k 0] 999)))
     (expect = false (= a (dissoc b [:k 0])))))
+
+;; SORT IS BOTTOM-UP AND STABLE, and the pass boundaries are where a merge
+;; sort goes wrong: runs of 1, 2, 4, 8 and the ragged last run of each pass.
+;;
+;; Stability is not decoration -- `sort-by` is worth nothing without it, and a
+;; merge that takes from the RIGHT on a tie loses it while still returning a
+;; correctly ordered answer, which no ordering check would catch.
+(defn ^:flint.check/test sorting-holds-at-every-run-boundary []
+  (expect = nil (sort []))
+  (expect = '(1) (sort [1]))
+  (expect = '(1 2) (sort [2 1]))
+  (expect = '(1 1 2 2 3) (sort [2 1 3 2 1]))
+  (expect = '(5 4 3 2 1) (sort > [1 2 3 4 5]))
+  (doseq [n [3 4 5 7 8 9 15 16 17 33 100]]
+    (let [xs (vec (map (fn [i] (mod (* i 37) 19)) (range n)))
+          s (vec (sort xs))]
+      (expect = n (count s))
+      (expect = (frequencies xs) (frequencies s))
+      (expect = true (apply <= s))))
+  ;; equal keys keep their input order
+  (let [pairs [[1 :a] [0 :b] [1 :c] [0 :d] [1 :e]]]
+    (expect = [[0 :b] [0 :d] [1 :a] [1 :c] [1 :e]]
+             (vec (sort-by (fn [p] (nth p 0)) pairs))))
+  ;; a comparator that answers with a number rather than a boolean
+  (expect = '(3 2 1) (sort (fn [a b] (- b a)) [1 3 2]))
+  (expect = '(1 2 3) (sort (list 3 1 2)))
+  (expect = '(0 1 2) (sort (range 3))))

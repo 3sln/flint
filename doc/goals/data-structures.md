@@ -83,7 +83,7 @@ worth a special case -- checked so that nobody adds one on principle.
 Note what blocks it: iterating a map or set from inside the runtime is the
 closure hole. This is the same decision, wearing different clothes.
 
-### 3. `subvec` copies where Clojure shares
+### 3. `subvec` copies where Clojure shares -- and `sort` no longer cares
 
 `(subvec v start end)` is `(loop [acc []] (conj acc (nth v i)))` -- O(n).
 Clojure returns an O(1) view. Measured: 200 slices of a 50,000-element vector
@@ -101,12 +101,34 @@ share their interior but `SLICE_MIN` makes a small slice copy, so a short
 `subs` cannot pin a megabyte. Whatever is done for vectors should say the same
 thing.
 
+**Its only caller in the standard library was `merge-sort`, and that is
+fixed.** `sort` split with `subvec` at every level and merged through
+`first`/`next` with a persistent `conj`. Sorting 20,000 numbers:
+
+| | time | allocations | bytes | collections | per element |
+|---|---|---|---|---|---|
+| top-down, `subvec` | 252.6 ms | 1,493,957 | 109.2 MB | 57 | 74.7 |
+| bottom-up, transient | 129.3 ms | 29,749 | 3.1 MB | 1 | 1.5 |
+
+`bin/test` now holds sort under ten allocations per element.
+
+So `subvec` is still O(n) where Clojure is O(1), but nothing in the standard
+library is paying for it any more. That lowers the priority rather than
+closing it: user code calls `subvec` too.
+
 ## Method
 
 Two habits that this audit needed and would have failed without:
 
 **Subtract a build baseline.** The first reduce comparison said a set was
 faster than a vector; it was measuring 200,000 `assoc` calls, not the reduce.
+
+**And when the thing being measured is allocation, do not measure the clock.**
+The first reading of the sort rewrite said it was slightly SLOWER -- 0.54s
+against 0.50s -- because process startup and building the input swamped it. On
+`bench/colls.mjs`, which subtracts its own setup and counts allocations, the
+same change is 50x fewer allocations and roughly twice as fast. `colls.cljc`
+says this in its own header, and I measured the wrong thing anyway.
 
 **Check the assumption the algorithm rests on.** Structural map equality is
 only valid because the CHAMP is canonical, which was verified across

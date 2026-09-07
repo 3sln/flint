@@ -101,6 +101,13 @@
                     (if (flint.rt/lt i n)
                       (recur (flint.rt/add i 1) (flint.rt/b-conj! t (flint.rt/rem i 256)))
                       t)))))
+            ;; SORT, on allocations. `merge-sort` is the only caller of
+            ;; `subvec`, and the interesting number is not the clock -- the
+            ;; top-down version sliced a fresh vector per level and merged
+            ;; through `first`/`next`, so it allocated per element per pass.
+            (flint.rt/= op "sort")
+            (let [v (vec (map (fn [i] (flint.rt/rem (flint.rt/mul i 37) 19)) (range n)))]
+              (if base? (count v) (count (sort v))))
             (flint.rt/= op "reduce") (let [v (ints n)]
                                        (if base? (count v)
                                            (reduce (fn [a x] (flint.rt/add a x)) 0 v)))

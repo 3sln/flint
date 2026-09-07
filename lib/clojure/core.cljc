@@ -985,19 +985,51 @@
   ([coll] (merge-sort compare (vec coll)))
   ([cmp coll] (merge-sort (as-comparator cmp) (vec coll))))
 
-(defn- merge-sort [cmp v]
-  (let [n (count v)]
+;; ONE RUN MERGED INTO `acc`: `src[lo..mid)` against `src[mid..hi)`, both
+;; already sorted, appended in order.
+;;
+;; A TIE TAKES FROM THE LEFT, which is what makes the sort STABLE -- `<= 0`
+;; and not `< 0`. Clojure's sort is stable and `sort-by` is worth nothing
+;; without it.
+(defn- merge-run [cmp src acc lo mid hi]
+  (loop [acc acc ^int i lo ^int j mid]
+    (if (flint.rt/lt i mid)
+      (if (flint.rt/lt j hi)
+        (if (<= (cmp (flint.rt/nth src i) (flint.rt/nth src j)) 0)
+          (recur (conj! acc (flint.rt/nth src i)) (flint.rt/add i 1) j)
+          (recur (conj! acc (flint.rt/nth src j)) i (flint.rt/add j 1)))
+        (recur (conj! acc (flint.rt/nth src i)) (flint.rt/add i 1) j))
+      (if (flint.rt/lt j hi)
+        (recur (conj! acc (flint.rt/nth src j)) i (flint.rt/add j 1))
+        acc))))
+
+;; BOTTOM-UP, so nothing is sliced and nothing is walked as a seq.
+;;
+;; The recursive top-down version split with `subvec`, which COPIES here --
+;; O(n) per level, so O(n log n) element copies before any comparing -- and
+;; then merged through `first`/`next` with a persistent `conj` per element.
+;; `sort` is the only caller and it paid for all three.
+;;
+;; This makes runs of 1, 2, 4, ... and merges pairs of them into a transient,
+;; one fresh vector per pass. Same complexity, and none of the copying.
+(defn- merge-sort [cmp v0]
+  (let [^int n (count v0)]
     (if (< n 2)
-      (seq v)
-      (let [mid (quot n 2)
-            a (merge-sort cmp (subvec2 v 0 mid))
-            b (merge-sort cmp (subvec2 v mid n))]
-        (loop [acc [] a a b b]
-          (cond
-            (nil? (seq a)) (seq (into acc b))
-            (nil? (seq b)) (seq (into acc a))
-            (<= (cmp (first a) (first b)) 0) (recur (conj acc (first a)) (next a) b)
-            :else (recur (conj acc (first b)) a (next b))))))))
+      (seq v0)
+      (loop [src v0 ^int width 1]
+        (if (flint.rt/lt (flint.rt/sub n 1) width)
+          (seq src)
+          (recur
+            (persistent!
+              (loop [acc (transient []) ^int lo 0]
+                (if (flint.rt/lt lo n)
+                  (let [^int mid (if (flint.rt/lt n (flint.rt/add lo width))
+                                   n (flint.rt/add lo width))
+                        ^int hi (if (flint.rt/lt n (flint.rt/add mid width))
+                                  n (flint.rt/add mid width))]
+                    (recur (merge-run cmp src acc lo mid hi) hi))
+                  acc)))
+            (flint.rt/add width width)))))))
 
 (defn subvec2 [v start end]
   (loop [acc [] i start] (if (< i end) (recur (conj acc (nth v i)) (inc i)) acc)))
