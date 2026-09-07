@@ -1781,6 +1781,37 @@ value onto the shadow stack starting at `at` and returns the pair count; the
 caller then loops over `rt.r(at + 2*i)`. Used in `Maps`, `Sets`, `Codec` and
 `Conc`.
 
+**MEASURED ON THE PORTS, and it changes what "do nothing" costs.** The buffer
+is not a cost that generating would introduce. It is a cost two of the three
+runtimes ALREADY PAY, on every map comparison, today:
+
+| map entries | roots the JVM pushes in `entries` |
+|---|---|
+| 8 | 16 |
+| 100 | 200 |
+| 10,000 | 20,000 |
+| 50,000 | 100,000 |
+
+Exactly `2n`. The native measurement that rejected the buffer shape was
+8.089ms and 100,001 peak roots at 50,000 entries against 4.673ms and 8 for
+the callback -- and 100,000 is what both ports spend there right now.
+
+So the three options do not divide into "keep native fast" and "pay for
+generating". They divide by WHO pays:
+
+- **Nothing.** Native holds 8 roots, both ports hold `2n`, forever, and the
+  functions stay hand-written three times.
+- **A callback capability in kin.** Native keeps 8; the ports could DROP from
+  `2n` to 8, which makes this the only option that improves a runtime rather
+  than trading between them.
+- **A cursor of shadow-stack indices.** Everyone lands at O(depth).
+
+The first measurement of this read `roots.stackTop` and reported 0 roots at
+every size. `stackTop` is the OPERAND stack; the shadow stack is
+`shadowTop`. A zero that is identical across four inputs is not a finding,
+and this is the fourth time in this port that an exact zero meant the
+instrument was pointed at the wrong thing.
+
 So the same job is done two ways, and **the ports' way needs no callback at
 all** -- it is a loop and a push. If the convergence goes that way, the five
 functions holding 133 lines stop needing a capability kin does not have, and
