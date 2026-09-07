@@ -428,7 +428,41 @@ public sealed class Rt : System.IDisposable {
     }
 
     public int Mark() { return roots.Mark(); }
-    public int Push(long v) { return roots.Push(v); }
+    /// ROOT `v`, and in a diagnostic build check that it is not already stale.
+    ///
+    /// Native has had this check since rooting bugs were first hunted, and the
+    /// JVM port has had it behind `-Dflint.stale`. This port had NEITHER, which
+    /// is why it is here: the ports do the same `Mark`/`Push`/`R` dance by hand
+    /// in hundreds of places, and `0031` -- a value in a host local does not
+    /// survive an allocation -- binds them exactly as hard.
+    ///
+    /// `doc/HANDOFF.md` is the reason it is worth the branch: a stale address
+    /// still tests young, so the write barrier passes and the generational
+    /// invariant passes, and one document wave in sixty-four went missing while
+    /// the run reported success. Nothing downstream can see it. This fires one
+    /// step before the damage.
+    public static readonly bool StaleCheck =
+        Environment.GetEnvironmentVariable("FLINT_STALE") != null;
+    public static int StaleCount = 0;
+    public static long StaleFirst = 0;
+
+    void CheckPush(long v) {
+        if (!Val.IsHeap(v)) return;
+        long a = Val.AsHeap(v);
+        if (gc.IsYoung(a) && !gc.InLiveHalf(a)) {
+            if (StaleCount == 0) StaleFirst = a;
+            StaleCount++;
+            // The stack trace is the point: it names the frame that read the
+            // value before allocating.
+            Console.Error.WriteLine("STALE PUSH of " + a + " (" + Describe(v) + ")");
+            Console.Error.WriteLine(Environment.StackTrace);
+        }
+    }
+
+    public int Push(long v) {
+        if (StaleCheck) CheckPush(v);
+        return roots.Push(v);
+    }
     public long R(int i) { return roots.R(i); }
     public void SetR(int i, long v) { roots.SetR(i, v); }
     public void PopTo(int n) { roots.PopTo(n); }

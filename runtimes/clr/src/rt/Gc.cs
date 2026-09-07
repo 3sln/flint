@@ -59,6 +59,11 @@ public sealed class Gc : System.IDisposable {
 
     public bool IsYoung(long addr) { return (ulong)(addr - youngBase) < (ulong)(half * 2); }
     bool InFrom(long addr) { return (ulong)(addr - from) < (ulong)half; }
+    /// Is `addr` in the part of the young half that is actually LIVE? An
+    /// address that is young but past the bump pointer is a pre-collection
+    /// address: the object moved and this is where it used to be. See
+    /// `Rt.CheckPush` and the JVM's `inLiveHalf`.
+    public bool InLiveHalf(long addr) { return (ulong)(addr - from) < (ulong)(bump - from); }
     public long YoungUsed() { return bump - from; }
     public long HeapUsed() { return YoungUsed() + oldLive; }
 

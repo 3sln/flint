@@ -561,7 +561,11 @@ public final class Rt {
         return roots.push(v);
     }
 
-    static final boolean STALE_CHECK = System.getProperty("flint.stale") != null;
+    /// ONE SWITCH FOR BOTH PORTS. This was `-Dflint.stale` only, which the CLR
+    /// has no equivalent of, so a gate could not turn the check on in both at
+    /// once -- and nothing ever turned it on in either.
+    public static final boolean STALE_CHECK =
+        System.getProperty("flint.stale") != null || System.getenv("FLINT_STALE") != null;
     /// How many stale pushes have been seen, and the first one's address.
     public static int staleCount = 0;
     public static long staleFirst = 0;

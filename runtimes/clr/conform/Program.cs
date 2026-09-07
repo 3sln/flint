@@ -13,6 +13,7 @@ public static class Program {
         if (args.Length >= 1 && args[0] == "--rt-hash") return RtHash();
         if (args.Length >= 1 && args[0] == "--rt-maps") return RtMaps();
         if (args.Length >= 1 && args[0] == "--rt-parallel") return RtParallel();
+        if (args.Length >= 1 && args[0] == "--rt-stale") return RtStale();
         if (args.Length >= 3 && args[0] == "--rt-shelve") return RtShelve(args[1], args[2]);
         if (args.Length >= 3 && args[0] == "--rt-selfhost") return RtSelfHost(args[1], args[2]);
         if (args.Length >= 2 && args[0] == "--rt-aot") return RtAot(args[1]);
@@ -1129,6 +1130,46 @@ public static class Program {
         s2.Close();
 
         if (parFails > 0) { Console.WriteLine("  " + parFails + " failed"); return 1; }
+        return 0;
+    }
+
+    /// THE STALE-PUSH CHECK, CHECKED. The JVM's `RtStale` says the same thing
+    /// in the same order; see it for why this is worth a mode of its own.
+    ///
+    /// Two questions, because neither is worth much alone: does the check fire
+    /// on a value carried across a collection, and does it stay quiet on one
+    /// that was rooted properly. A check that fires on everything is worse
+    /// than no check.
+    private static int RtStale() {
+        if (!Flint.Rt.Rt.StaleCheck) {
+            Console.WriteLine("  FAIL the stale check is not enabled (set FLINT_STALE)");
+            return 1;
+        }
+        // GOOD: rooted before anything allocates.
+        var rt = new Flint.Rt.Rt(64 * 1024, 1024L * 1024);
+        int bse = rt.Mark();
+        int vi = rt.Push(Flint.Rt.Str.Of(rt, "a value that lives on the heap"));
+        for (int i = 0; i < 20000; i++) Flint.Rt.Str.Of(rt, "filler " + i);
+        rt.Push(rt.R(vi));
+        rt.PopTo(bse);
+        if (Flint.Rt.Rt.StaleCount != 0) {
+            Console.WriteLine("  FAIL a correctly rooted value tripped the stale check");
+            return 1;
+        }
+        Console.WriteLine("  ok   a rooted value survives 20000 allocations quietly");
+
+        // BAD: the same value in a HOST LOCAL across the same allocations.
+        var rt2 = new Flint.Rt.Rt(64 * 1024, 1024L * 1024);
+        int b2 = rt2.Mark();
+        long v = Flint.Rt.Str.Of(rt2, "a value that lives on the heap");
+        for (int i = 0; i < 20000; i++) Flint.Rt.Str.Of(rt2, "filler " + i);
+        rt2.Push(v);
+        rt2.PopTo(b2);
+        if (Flint.Rt.Rt.StaleCount == 0) {
+            Console.WriteLine("  FAIL the stale check did NOT fire on a stale push");
+            return 1;
+        }
+        Console.WriteLine("  ok   a value carried across a collection is caught");
         return 0;
     }
 

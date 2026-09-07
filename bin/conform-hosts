@@ -404,6 +404,60 @@ if [ -n "$CLR" ]; then
   sed 's/$/ [clr]/' /tmp/flint-par-clr.out
 fi
 
+# THE STALE-PUSH CHECK, and whether it can fire at all.
+#
+# `doc/HANDOFF.md`: a value read into a host local before an allocation comes
+# back holding the address the object had BEFORE the collection moved it. That
+# address still tests young, so the write barrier passes and the generational
+# invariant passes -- one document wave in sixty-four went missing while the
+# run reported success. Nothing downstream can see it.
+#
+# Native has asserted this since that hunt. The JVM port had the check behind
+# `-Dflint.stale` and NOTHING EVER SET THE PROPERTY; the CLR port did not have
+# the check at all. Both now read `FLINT_STALE`, so one switch drives both.
+#
+# The mode asks two things, because neither is worth much alone: the check
+# fires on a value carried across a collection, and stays QUIET on one that was
+# rooted properly. A check that fires on everything is worse than no check.
+#
+# stderr is dropped: a stale push prints a stack trace, and the two hosts spell
+# those differently. The verdict lines on stdout are what must match.
+FLINT_STALE=1 "$JDK/bin/java" -cp runtimes/jvm/classes RtStale \
+  > /tmp/flint-stale-jvm.out 2>/dev/null \
+  || { cat /tmp/flint-stale-jvm.out; echo "  FAIL the stale-push check [jvm]"; exit 1; }
+sed 's/$/ [jvm]/' /tmp/flint-stale-jvm.out
+if [ -n "$CLR" ]; then
+  FLINT_STALE=1 "$CLR" --rt-stale > /tmp/flint-stale-clr.out 2>/dev/null \
+    || { cat /tmp/flint-stale-clr.out; echo "  FAIL the stale-push check [clr]"; exit 1; }
+  sed 's/$/ [clr]/' /tmp/flint-stale-clr.out
+  cmp -s /tmp/flint-stale-jvm.out /tmp/flint-stale-clr.out \
+    && echo "  ok   both ports catch a stale push and neither cries wolf" \
+    || { diff /tmp/flint-stale-jvm.out /tmp/flint-stale-clr.out | head; \
+         echo "  FAIL the ports disagree about stale pushes"; exit 1; }
+fi
+
+# THE PORT SUITES AGAIN, WITH THE CHECK ON. The runs above prove the answers;
+# this proves nothing was rooted late to get them. It is a second pass rather
+# than a flag on the first because the first compares transcripts, and a stale
+# push writes a host-shaped stack trace into them.
+for pair in "RtFoundation --rt-foundation" "RtMaps --rt-maps" \
+            "RtSnapshot --rt-snapshot" "RtParallel --rt-parallel"; do
+  set -- $pair
+  FLINT_STALE=1 "$JDK/bin/java" -cp runtimes/jvm/classes "$1" > /tmp/flint-st.out 2>&1 || true
+  if grep -q "STALE PUSH" /tmp/flint-st.out; then
+    grep -A6 "STALE PUSH" /tmp/flint-st.out | head -12
+    echo "  FAIL $1 roots a value AFTER allocating across it [jvm]"; exit 1
+  fi
+  if [ -n "$CLR" ]; then
+    FLINT_STALE=1 "$CLR" "$2" > /tmp/flint-st.out 2>&1 || true
+    if grep -q "STALE PUSH" /tmp/flint-st.out; then
+      grep -A6 "STALE PUSH" /tmp/flint-st.out | head -12
+      echo "  FAIL $1 roots a value AFTER allocating across it [clr]"; exit 1
+    fi
+  fi
+done
+echo "  ok   four port suites re-run with the stale check on, both hosts"
+
 # HOST PORTS (`doc/decisions/0006`, `0027`): the half of the port protocol the
 # HOST drives, on all three runtimes at once.
 #
