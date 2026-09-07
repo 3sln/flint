@@ -68,8 +68,10 @@ else
   fails=$((fails + 1))
 fi
 
+verified=0
 for src in kin/*.kin; do
   name=$(basename "$src" .kin)
+  verified=$((verified + 1))
   if [ ! -f "kin/$name.drivers" ]; then
     echo "  FAIL $name has no drivers file"
     fails=$((fails + 1))
@@ -167,4 +169,16 @@ done < "$work/snap/list"
 restore
 trap 'rm -rf "$work"' EXIT
 [ "$fails" -eq 0 ] || { echo "check-kin: $fails failure(s)"; exit 1; }
-echo "check-kin: all kin sources agree, every generated module matches, and every one is reached"
+# A FLOOR UNDER THE ZERO. `fails -eq 0` is also what an EMPTY `kin/*.kin`
+# reports, and the summary below would say every source agrees while having
+# checked none. The same hole `test/gc_stress.clj` had: a clean answer over a
+# walk that visited nothing.
+#
+# A floor rather than the exact count, so adding a source does not fail the
+# gate that exists to protect the sources.
+[ "$verified" -ge 70 ] || {
+  echo "check-kin: only $verified kin sources were checked, and at least 70 are expected"
+  echo "  A pass over almost nothing looks exactly like a pass over everything."
+  exit 1
+}
+echo "check-kin: $verified kin sources agree, every generated module matches, and every one is reached"

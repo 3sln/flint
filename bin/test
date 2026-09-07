@@ -55,10 +55,19 @@ bb --classpath src test/reader_test.clj > /tmp/flint-test.out 2>&1 || { cat /tmp
 tail -1 /tmp/flint-test.out
 
 echo
-echo "== conformance: 130 Clojure expressions, on flint"
+echo "== conformance: Clojure expressions, on flint"
 ./bin/flint :src test :fn conform.runner/main :out out/conform.wasm >/dev/null
 node host/flint.mjs out/conform.wasm conform.runner/main | tee /tmp/conform.out
-grep -q '^PASS' /tmp/conform.out || fail "conformance"
+# A FLOOR, not the count. The runner prints `PASS <n>`, and this grepped for
+# `^PASS` alone -- so an EMPTY corpus reported success, while the header said
+# 130 and nothing checked that either. The header now says nothing it cannot
+# back up, and the number is read from the run.
+conform_n=$(sed -n 's/^PASS //p' /tmp/conform.out)
+case "$conform_n" in
+  ''|*[!0-9]*) fail "conformance did not report a count" ;;
+esac
+[ "$conform_n" -ge 130 ] || fail "conformance ran only $conform_n expressions"
+echo "    $conform_n expressions, and at least 130 are expected"
 
 echo
 echo "== conformance: the same expressions, under real Clojure"
