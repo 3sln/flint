@@ -2037,7 +2037,7 @@ stay meaningful. 1 and 8 are done.
   entry measured `HostReader`, which no port would touch, instead of the guest
   `Reader` that a port would.
 
-### The generational invariant, on the ports at last
+### The other two GC checks: attempted, unsound, NOT shipped
 
 The stale-push check is on in both ports now. `doc/HANDOFF.md` names two more
 that native asserts and neither port has: every old-to-young edge is
@@ -2105,12 +2105,11 @@ exercise it read `rt.r(vi)` before `Str.of(...)` allocated, because Java
 evaluates arguments left to right. `0031` in the test rather than the
 runtime, found one step before it mattered.
 
-**RESOLVED, and it took three placements and one invalid comparison.**
+### And the reason it cannot be checked at all, which is a real divergence
 
-The comparison that started this was not a comparison: native ran `gcstress`
-(map, set and transient heavy) while the JVM ran a vector loop written in
-Java. Running the SAME image on both, the picture is entirely different from
-"native finds none where the JVM finds two":
+The invariant WAS checked, once, before the check was withdrawn. Running the
+same image on both runtimes -- the first comparison was invalid, native on
+`gcstress` against the JVM on a vector loop written in Java:
 
 | | objects walked | old-to-young edges | unremembered |
 |---|---|---|---|
@@ -2118,71 +2117,24 @@ Java. Running the SAME image on both, the picture is entirely different from
 | JVM, start of minor | 27,511,798 | 32,702 | **2,085** |
 | JVM, after the sweep | 1,494,883 | 585 | **0** |
 
-The third row is the answer. At the start of a minor the ports' old space
-still holds unswept garbage, whose slots the collector is RIGHT not to
-update; all 2,085 are on dead objects. Where old space is LIVE-ONLY --
-immediately after the sweep -- the JVM's generational invariant holds
-perfectly. The port's write barrier is correct, and this is the first time
-anything checked.
+The third row said the port's write barrier is correct: on objects that have
+just come through a mark, nothing is unremembered. The 2,085 are all on dead
+objects the collector is right not to scan.
 
-Why native has no such garbage at ITS check point is still unexplained. The
-candidates were eliminated: identical major trigger (`old_live * 2 >
-old_capacity` on both), identical drain, both zero bodies on allocation
-rather than on free, and heap size makes no difference (2 unremembered at
-4MB, 16MB, 64MB and 256MB alike). It is a diagnostic difference, not a
-correctness one, and it is where the next person should start.
+**Then the tenuring converged, and the third row went to zero edges.** Under
+`PROMOTE_AGE = 2` nothing live still points young by the time a sweep runs,
+so the only sound placement in the ports has nothing to look at. The check
+was removed rather than left as decoration.
 
-**The check is shipped**, in both ports, under `FLINT_STALE`, asserted by
-`bin/conform-hosts` over a program written for the purpose. Compound keys are
-the point: they force containers into old space while their contents are
-still young. Without them the heap has nothing to check -- a vector built by
-`conj` gives 1 edge over 110 sweeps, which is why "audit after the sweep is
-nearly vacuous" was the wrong conclusion from the wrong workload. The
-shipped program gives 401 over 15, and the run FAILS below a hundred whatever
-it concluded.
+What is left is the question worth answering: **native sees 24,489 edges and
+zero on dead objects; the JVM sees 32,702 and 2,085.** Same walk, same point,
+same image. Eliminated: tenuring (giving the JVM native's constants makes it
+WORSE, 27 to 90 on the smaller program), the major trigger (identical), the
+drain (identical), body zeroing (both on allocation, not on free), and heap
+size (2 unremembered at 4, 16, 64 and 256 MB alike).
 
-Both ports report the same numbers, so the gate also compares them: two
-collectors walking one image should see the same heap.
-
-### The tenuring constants diverge, and it is not a free fix
-
-The JVM's `Gc` class comment says the collector is "Identical to the Rust
-because it is the same design over the same flat memory -- which is the point
-of the port". Two lines below it:
-
-| constant | native | JVM | CLR |
-|---|---|---|---|
-| `PROMOTE_AGE` | 2 | 3 | 3 |
-| `LARGE_OBJECT` | 16384 | 8192 | 8192 |
-
-`NCLASS` and `MIN_CHUNK` match. Both ports agree with each other and differ
-from native, and no comment on any side gives a reason. By the standing rule
-this is a convergence, and the ports should take native's pair.
-
-**Except that it deletes the check above.** Measured on the audit program,
-same image, only the constants changed:
-
-| | post-sweep sweeps | old-to-young edges | unremembered |
-|---|---|---|---|
-| ports' 3 / 8192 | 20 | 10,160 | 0 |
-| native's 2 / 16384 | 19 | **0** | 0 |
-
-Under native's tenuring there is nothing live pointing young by the time the
-sweep runs, so the generational audit passes over an empty walk. That is the
-same shape as every other finding in this file, arriving from the other
-direction: the convergence is right, and it would quietly turn a working
-check into one that cannot fail.
-
-Not resolved here, because the two obvious answers both cost something. Taking
-native's constants needs a different place to audit, and the two other places
-were already measured and rejected (start of minor: 21 to 53 false positives
-on dead objects; end of minor: structurally zero). Keeping the ports'
-constants leaves a divergence in a collector whose own comment claims there is
-none.
-
-The gate FAILS rather than skips if the edge count drops below a hundred, so
-whoever changes the tenuring has to answer for the check instead of losing it
-silently.
+The ports hold old-space garbage that native does not. Until someone knows
+why, the ports cannot ask the question native asks.
 
 ## Known hazards
 

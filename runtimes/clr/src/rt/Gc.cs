@@ -15,10 +15,14 @@ using static Flint.Rt.Obj;
 /// have to be argued into agreement rather than being the same thing.
 public sealed class Gc : System.IDisposable {
     /// Objects surviving this many minors are promoted.
-    const int PROMOTE_AGE = 3;
+    /// TWO, NOT THREE, AND IT IS LOAD-BEARING -- see the JVM's `Gc` for the
+    /// measurement. `doc/decisions/0018` bounds the largest single copy at
+    /// 512 KB and `test/pause.clj` asserts it; at three it measures 518.1 KB.
+    const int PROMOTE_AGE = 2;
     /// Bigger than this goes straight to the old space: copying it twice costs
     /// more than the generational hypothesis is worth on one object.
-    const long LARGE_OBJECT = 8192;
+    /// 16 KB, matching the Rust.
+    const long LARGE_OBJECT = 16384;
     /// 0..63 exact (size = i*8), 64 = "big".
     const int NCLASS = 65;
     const long MIN_CHUNK = 1024 * 1024;
@@ -371,7 +375,6 @@ public sealed class Gc : System.IDisposable {
             else SetInRemset(sp, a, false);
         }
         SweepOld();
-        if (Checks) AuditLive();
         NotePeak();
         // Clear marks on the live nursery.
         long y = from;
@@ -387,56 +390,6 @@ public sealed class Gc : System.IDisposable {
         if (Marked(sp, a)) return;
         SetMarked(sp, a, true);
         work.Add(a);
-    }
-
-    /// THE GENERATIONAL INVARIANT, asked where old space is LIVE-ONLY. The
-    /// JVM's `auditLive` says the same thing in the same order; see it for the
-    /// two placements that were tried, measured and rejected first.
-    ///
-    /// The short version: at the START of a minor, old space still holds
-    /// unswept garbage whose slots the collector is RIGHT not to update, and
-    /// `gcstress` reported 2,085 unremembered edges there, every one on a dead
-    /// object. At the END, everything young an old object points at has just
-    /// been promoted, so the count is structurally zero and a deliberately
-    /// broken barrier passed in silence. Here, every object has just come
-    /// through a mark.
-    public static readonly bool Checks =
-        Environment.GetEnvironmentVariable("FLINT_STALE") != null;
-    /// WHAT THE AUDIT SAW, not just what it concluded. Zero violations over
-    /// zero edges is what a broken check reports.
-    public static int LiveSweeps = 0, LiveWalked = 0, LiveEdges = 0;
-    public static int LiveViolations = 0, LiveWalkErrors = 0;
-
-    void AuditLive() {
-        LiveSweeps++;
-        foreach (long[] ch in oldChunks) {
-            long a = ch[0], end = ch[0] + ch[1];
-            while (a < end) {
-                long size = SizeOf(sp, a);
-                if (size == 0) { LiveWalkErrors++; break; }
-                int t = Ty(sp, a);
-                if (t != Obj.TyFree && Obj.LayoutOf(t) == Obj.LVals) {
-                    LiveWalked++;
-                    int n = Len(sp, a);
-                    for (int i = 0; i < n; i++) {
-                        long v = Slot(sp, a, i);
-                        if (!Val.IsHeap(v)) continue;
-                        long p = Val.AsHeap(v);
-                        if (!IsYoung(p)) continue;
-                        LiveEdges++;
-                        if (!Obj.InRemset(sp, a)) {
-                            if (LiveViolations == 0)
-                                Console.Error.WriteLine("REMSET violation: live old object " + a
-                                    + " ty=" + t + " slot " + i + " -> young " + p
-                                    + ", and it is not remembered");
-                            LiveViolations++;
-                            break;
-                        }
-                    }
-                }
-                a += size;
-            }
-        }
     }
 
     void SweepOld() {
