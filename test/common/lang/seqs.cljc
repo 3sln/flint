@@ -83,3 +83,27 @@
   (expect = 0 (count (map-indexed vector [])))
   (expect = 0 (count (keep-indexed vector [])))
   (expect = 0 (count (partition-by odd? []))))
+
+;; `distinct` and `dedupe` were the other two, found by sweeping every
+;; Clojure-lazy function over a two-million-element source and watching which
+;; ones took longer than the rest. `distinct` took 4.4x the baseline because it
+;; built a set of two million entries to answer a question about three.
+;;
+;; The `seen` set is PERSISTENT rather than transient now, and that is not a
+;; detail: a transient belongs to one thread of control, and a lazy seq hands
+;; its state across a suspension that may be forced later, elsewhere, or never.
+(defn ^:flint.check/test distinct-and-dedupe-are-lazy []
+  (expect = [0 1 2 3]
+          (vec (take 4 (distinct (mapcat (fn [x] [x x x]) (iterate inc 0))))))
+  (expect = [0 1 2 3]
+          (vec (take 4 (dedupe (mapcat (fn [x] [x x x]) (iterate inc 0))))))
+  ;; the answers they always gave
+  (expect = [1 2 3 4] (vec (distinct [1 2 1 3 2 4])))
+  (expect = [3 1 2] (vec (distinct [3 1 3 2 1])))
+  (expect = ["a" "b"] (vec (distinct ["a" "b" "a"])))
+  (expect = [1 2 3 1] (vec (dedupe [1 1 2 2 2 3 1 1])))
+  (expect = 0 (count (distinct [])))
+  (expect = 0 (count (dedupe [])))
+  ;; a long run of duplicates costs one thunk, not one per element
+  (expect = [:a] (vec (distinct (repeat 1000 :a))))
+  (expect = [:a] (vec (dedupe (repeat 1000 :a)))))

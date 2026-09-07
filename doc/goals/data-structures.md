@@ -63,6 +63,28 @@ All three are lazy now, and an empty input gives an empty seq rather than nil,
 which is also what Clojure gives. `lang.seqs` asks it of an infinite seq,
 which is the only test that can tell.
 
+**Then the whole set was swept**, because three is a pattern and not a
+coincidence. Every Clojure-lazy function that exists here -- twenty-two of
+them -- was run as `(take 3 (F (range 2000000)))` and timed. A lazy one costs
+the baseline; an eager one forces two million elements and shows up:
+
+| | before | after | baseline |
+|---|---|---|---|
+| `distinct` | 6.22s | 1.62s | 1.40s |
+| `dedupe` | 1.63s | 1.41s | 1.40s |
+
+`distinct` built a set of two million entries to answer a question about
+three. The other twenty were already lazy.
+
+A LARGE FINITE SOURCE RATHER THAN AN INFINITE ONE is what made the sweep
+possible: an infinite seq answers the same question, but an eager function
+hangs the harness instead of reporting, so twenty-two of them cannot be
+checked in one pass.
+
+Both carry a `seen`/`prev` across the suspension, so the set is PERSISTENT
+where the eager version used a transient -- a transient belongs to one thread
+of control, and a lazy seq may be forced later, elsewhere, or never.
+
 ## Open, in the order I would take them
 
 ### 1. Chunked seqs are declared and never built

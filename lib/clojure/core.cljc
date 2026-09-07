@@ -964,14 +964,24 @@
    (reduce (fn [m x] (let [k (f x)] (assoc! m k (conj (get m k []) x))))
            (transient {}) coll)))
 
-(defn distinct [coll]
-  (loop [acc (transient []) seen (transient #{}) s (seq coll)]
-    (if s
-      (let [x (first s)]
-        (if (contains? seen x)
-          (recur acc seen (next s))
-          (recur (conj! acc x) (conj! seen x) (next s))))
-      (seq (persistent! acc)))))
+;; LAZY, like Clojure's, and the `seen` set is PERSISTENT because it is
+;; carried into a thunk that may be forced later, or never. A transient
+;; cannot be: it belongs to one thread of control and this hands it across a
+;; suspension.
+;;
+;; The duplicate skip is a `loop` rather than a recursive call, so a long run
+;; of repeats costs one thunk in total rather than one per element.
+(defn- distinct2 [coll seen]
+  (lazy-seq
+    (loop [s (seq coll)]
+      (if s
+        (let [x (first s)]
+          (if (contains? seen x)
+            (recur (next s))
+            (cons x (distinct2 (rest s) (conj seen x)))))
+        nil))))
+
+(defn distinct [coll] (distinct2 coll #{}))
 
 (defn- as-comparator
   "Clojure lets a predicate stand in for a comparator: (sort > xs) works because
@@ -1148,12 +1158,19 @@
 (defn take-nth [n coll]
   (keep-indexed (fn [i x] (if (zero? (rem i n)) x nil)) coll))
 
-(defn dedupe [coll]
-  (loop [acc (transient []) prev ::none s (seq coll)]
-    (if s
-      (let [x (first s)]
-        (recur (if (= x prev) acc (conj! acc x)) x (next s)))
-      (seq (persistent! acc)))))
+;; LAZY, for the same reason as `distinct` beside it, and the run of repeats
+;; is skipped with a `loop` so it costs one thunk however long it is.
+(defn- dedupe2 [coll prev]
+  (lazy-seq
+    (loop [s (seq coll)]
+      (if s
+        (let [x (first s)]
+          (if (= x prev)
+            (recur (next s))
+            (cons x (dedupe2 (rest s) x))))
+        nil))))
+
+(defn dedupe [coll] (dedupe2 coll ::none))
 
 ;; LAZY, and one run at a time. The eager version walked the whole input
 ;; before returning anything, so an infinite seq never came back.
