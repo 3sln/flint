@@ -2065,6 +2065,26 @@ checked for the same and are clean -- `b-hash` serves both tiers through one
 algebra, which is exactly why they never diverged. Where there are two, check
 them against each other; where there is one, there is nothing to disagree.
 
+**And the pair can be split ACROSS the runtimes rather than inside one.**
+Native's `char_count` was collapsed onto `s_count`; both ports kept a
+hand-written `charLen`/`CharLen` beside the generated `sCount`, and the
+GENERATED callers -- `Seqwalk`, `Collgen` -- reached the hand-written one.
+So one line of kin meant an O(1) slot read on native and a walk of the whole
+rope into a fresh host array on both ports.
+
+Measured before claiming, and the first measurement was wrong: `RP_FLAT`
+stays nil either way, so the walk was not flattening and the "it flattens"
+story did not survive contact. What it was doing is paying an O(n) walk with
+nothing cached, every call. A rope of 180,900 characters counted 20,000
+times: **728ms before, 2ms after, same answer.** No gas moved -- nothing on
+that walk charges -- so this was wall clock and allocation, never
+determinism.
+
+The lesson is where to LOOK for the pair. Inside one runtime it is visible by
+reading the file. Split across runtimes it is invisible from either side:
+each looks like a single implementation, and only the vocabulary table says
+they are the same word.
+
 **And a property asked of EVERY entrance, not the one being looked at.** A
 call-position fault set `thrown` and the interpreter checked only whether it
 had PARKED, on both ports, at all three of CALL, APPLY and TAIL_CALL -- so a

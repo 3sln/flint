@@ -349,24 +349,24 @@ public final class Str {
     }
 
     /// The number of CODE POINTS, which is what `count` on a string means in
-    /// Clojure. For an ASCII string that equals the byte length, which is what
-    /// the header flag is for; otherwise the bytes are walked.
-    public static int charLen(Rt rt, long v) {
-        byte[] b = bytes(rt, v);
-        if (isAscii(rt, v)) return b.length;
-        int n = 0;
-        for (byte x : b) if ((x & 0xC0) != 0x80) n++;   // count non-continuations
-        return n;
-    }
+    /// Clojure.
+    ///
+    /// This used to ask for CONTIGUOUS BYTES and count the non-continuations
+    /// among them, which walks a rope into a fresh host array on every call.
+    /// It did not flatten -- the RP_FLAT slot stayed nil, so nothing was
+    /// cached and the walk was paid again each time. A rope of 180,900
+    /// characters, counted 20,000 times: 728ms before, 2ms after, same
+    /// answer.
+    ///
+    /// The same generated caller reached an O(1) slot read on native the
+    /// whole time, because native's `char_count` is `s_count`. Two functions
+    /// for one meaning, and the ports had the worse one.
+    ///
+    /// No gas moved: nothing on that walk charged, so `count` cost the same
+    /// gas on every runtime and only the wall clock differed.
+    public static int charLen(Rt rt, long v) { return sCount(rt, v); }
 
-    static boolean isAscii(Rt rt, long v) {
-        if (Val.isInlineStr(v)) {
-            for (byte x : Val.inlineBytes(v)) if ((x & 0x80) != 0) return false;
-            return true;
-        }
-        if (isRope(rt, v)) return (Val.asFixnum(rt.slot(v, RP_CPS)) & 1) != 0;
-        return strIsAscii(rt.gc.sp, Val.asHeap(v));
-    }
+    static boolean isAscii(Rt rt, long v) { return sAscii(rt, v); }
 
     /// The code point at index `i`, as a single-character string. NOT a char
     /// type: flint has no char, and `doc/decisions/0010` counts that among the

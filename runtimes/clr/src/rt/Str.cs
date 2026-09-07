@@ -174,24 +174,24 @@ public static class Str {
     }
 
     /// The number of CODE POINTS, which is what `count` on a string means in
-    /// Clojure. For an ASCII string that equals the byte length, which is what
-    /// the header flag is for; otherwise the bytes are walked.
-    public static int CharLen(Rt rt, long v) {
-        byte[] b = Bytes(rt, v);
-        if (IsAscii(rt, v)) return b.Length;
-        int n = 0;
-        foreach (byte x in b) if ((x & 0xC0) != 0x80) n++;   // non-continuations
-        return n;
-    }
+    /// Clojure.
+    ///
+    /// This used to ask for CONTIGUOUS BYTES and count the non-continuations
+    /// among them, which walks a rope into a fresh host array on every call.
+    /// It did not flatten -- the RP_FLAT slot stayed nil, so nothing was
+    /// cached and the walk was paid again each time. A rope of 180,900
+    /// characters, counted 20,000 times: 728ms before, 2ms after, same
+    /// answer.
+    ///
+    /// The same generated caller reached an O(1) slot read on native the
+    /// whole time, because native's `char_count` is `s_count`. Two functions
+    /// for one meaning, and the ports had the worse one.
+    ///
+    /// No gas moved: nothing on that walk charged, so `count` cost the same
+    /// gas on every runtime and only the wall clock differed.
+    public static int CharLen(Rt rt, long v) => SCount(rt, v);
 
-    static bool IsAscii(Rt rt, long v) {
-        if (Val.IsInlineStr(v)) {
-            foreach (byte x in Val.InlineBytes(v)) if ((x & 0x80) != 0) return false;
-            return true;
-        }
-        if (IsRope(rt, v)) return (Val.AsFixnum(rt.Slot(v, RP_CPS)) & 1) != 0;
-        return Obj.StrIsAscii(rt.gc.sp, Val.AsHeap(v));
-    }
+    static bool IsAscii(Rt rt, long v) => SAscii(rt, v);
 
     /// The code point at index `i`, as a single-character string. NOT a char
     /// type: flint has no char, and `doc/decisions/0010` counts that among the
