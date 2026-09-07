@@ -2017,6 +2017,31 @@ for as long as the case existed, because building its input needed `str->b` on
 a rope. Fixing one bug exposed the other: 48 163 steps past an exhausted
 budget on a path that charged for nothing.
 
+## What the invariants found, and why they could
+
+Generating compares three runtimes against each other. That cannot see a bug
+all three SHARE, and two of the worst found here were shared.
+
+**A self-comparing property can.** `(= x (read-string (pr-str x)))` compares a
+value against itself rather than against another runtime, and it found that a
+ROPE and an equal FLAT string hashed differently -- `string-hash` finalises
+through `hash-int` and `rope-hash` did not. All three agreed, so
+`conform-hosts` was silent. The rule it breaks is the only one `0011` states
+about tiers.
+
+**The shape behind it: TWO FUNCTIONS COMPUTING ONE MEANING.** Byte strings were
+checked for the same and are clean -- `b-hash` serves both tiers through one
+algebra, which is exactly why they never diverged. Where there are two, check
+them against each other; where there is one, there is nothing to disagree.
+
+**And a property asked of EVERY entrance, not the one being looked at.** A
+call-position fault set `thrown` and the interpreter checked only whether it
+had PARKED, on both ports, at all three of CALL, APPLY and TAIL_CALL -- so a
+`try` around a bad call saw nothing and the throw aborted an unrelated
+expression two operations later. The NATIVE opcode path had the check the whole
+time. `lang.control/every-throwing-path-unwinds-where-it-happens` now asks it
+of eleven entrances rather than of whichever one someone was reading.
+
 `test/common/lang/edges.cljc` exists because of the last four. It walks the
 tier boundaries -- fixnum at 2^47, inline at 5 bytes, interned at 32, flat at
 1 024, array-map at 8, table chunk at 256 -- and asserts INVARIANTS rather than

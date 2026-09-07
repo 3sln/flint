@@ -62,6 +62,47 @@
     (expect = 3 after)
     (expect = 3 after2)))
 
+(defn- caught? [f]
+  ;; The value is irrelevant; what matters is that the `try` HERE saw it.
+  (try (f) :ESCAPED (catch Throwable e (if (ex-message e) :caught :caught-blank))))
+
+(defn- leaked? []
+  ;; Anything at all. If a previous failure did not unwind, its pending throw
+  ;; lands on whatever runs next -- which is how the call-position fault was
+  ;; found, two operations downstream of the `try` that should have had it.
+  (try (count [1 2 3]) (catch Throwable e :LEAKED)))
+
+(defn ^:flint.check/test every-throwing-path-unwinds-where-it-happens []
+  ;; ONE PROPERTY, over every entrance a fault has: the `try` around it
+  ;; catches it, and nothing downstream is disturbed.
+  ;;
+  ;; `callValue` failed both halves on both ports -- it set `thrown`, the
+  ;; interpreter checked only for a PARK, and the throw surfaced two
+  ;; expressions later inside an unrelated `try`. The NATIVE opcode path had
+  ;; the check the whole time. This asks the question of every path rather
+  ;; than the one that happened to be looked at.
+  (let [not-a-fn (first {:a 1})
+        tail-call (fn [f] (f 0))]
+    (doseq [f [;; CALL of a value that is not a function
+               (fn [] (not-a-fn 0))
+               ;; APPLY of one
+               (fn [] (apply not-a-fn [0]))
+               ;; TAIL position
+               (fn [] (tail-call not-a-fn))
+               ;; a builtin that refuses
+               (fn [] (/ 1 0))
+               (fn [] (quot 1 0))
+               (fn [] (nth [1] 5))
+               (fn [] (assoc 5 :k 1))
+               (fn [] (count 5))
+               (fn [] (compare :k [1]))
+               ;; the arithmetic slow path
+               (fn [] (+ 1 "a"))
+               ;; and a user throw, which is the entrance that always worked
+               (fn [] (throw (ex-info "boom" {})))]]
+      (expect not= :ESCAPED (caught? f))
+      (expect = 3 (leaked?)))))
+
 (defn ^:flint.check/test finally-runs-on-both-paths []
   (let [normal (let [a (atom [])]
                  (try (swap! a conj :body) (finally (swap! a conj :finally)))
