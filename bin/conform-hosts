@@ -473,6 +473,17 @@ echo "  ok   four port suites re-run with the stale check on, both hosts"
 #
 # So the coverage is asserted as hard as the verdict: the run fails if it saw
 # fewer than a hundred old-to-young edges, whatever it concluded about them.
+#
+# THAT FLOOR ENCODES THE PORTS' TENURING CONSTANTS, and deliberately. The ports
+# use PROMOTE_AGE 3 and LARGE_OBJECT 8192; native uses 2 and 16384. Measured on
+# this program with native's pair, the post-sweep walk sees ZERO old-to-young
+# edges -- objects promote soon enough that none are left -- and this check
+# becomes a pass over nothing.
+#
+# So converging those constants, which the port otherwise wants, would silently
+# delete this check. The floor makes it fail loudly instead, which is the right
+# way round: whoever changes the tenuring should have to answer for the check
+# rather than lose it quietly. See `doc/goals/kin-port.md`.
 mkdir -p out/rt-gcaudit
 cat > out/rt-gcaudit/gcaudit.cljc <<'GCAUDIT'
 (ns gcaudit)

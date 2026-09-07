@@ -2144,6 +2144,46 @@ it concluded.
 Both ports report the same numbers, so the gate also compares them: two
 collectors walking one image should see the same heap.
 
+### The tenuring constants diverge, and it is not a free fix
+
+The JVM's `Gc` class comment says the collector is "Identical to the Rust
+because it is the same design over the same flat memory -- which is the point
+of the port". Two lines below it:
+
+| constant | native | JVM | CLR |
+|---|---|---|---|
+| `PROMOTE_AGE` | 2 | 3 | 3 |
+| `LARGE_OBJECT` | 16384 | 8192 | 8192 |
+
+`NCLASS` and `MIN_CHUNK` match. Both ports agree with each other and differ
+from native, and no comment on any side gives a reason. By the standing rule
+this is a convergence, and the ports should take native's pair.
+
+**Except that it deletes the check above.** Measured on the audit program,
+same image, only the constants changed:
+
+| | post-sweep sweeps | old-to-young edges | unremembered |
+|---|---|---|---|
+| ports' 3 / 8192 | 20 | 10,160 | 0 |
+| native's 2 / 16384 | 19 | **0** | 0 |
+
+Under native's tenuring there is nothing live pointing young by the time the
+sweep runs, so the generational audit passes over an empty walk. That is the
+same shape as every other finding in this file, arriving from the other
+direction: the convergence is right, and it would quietly turn a working
+check into one that cannot fail.
+
+Not resolved here, because the two obvious answers both cost something. Taking
+native's constants needs a different place to audit, and the two other places
+were already measured and rejected (start of minor: 21 to 53 false positives
+on dead objects; end of minor: structurally zero). Keeping the ports'
+constants leaves a divergence in a collector whose own comment claims there is
+none.
+
+The gate FAILS rather than skips if the edge count drops below a hundred, so
+whoever changes the tenuring has to answer for the check instead of losing it
+silently.
+
 ## Known hazards
 
 * **Rust carries more rules than the other two.** Hoisting, `mut` inference,
