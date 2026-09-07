@@ -399,3 +399,50 @@
               (vec (list nil true 1 (* 2305843009213693952 2) (/ 1.0 2.0)
                          (str "abc" "def") (keyword "k") (symbol "p")
                          (vec [1]) (set [2]) (into {} [[:m 3]])))))
+
+;; A collection that came back DOWN across a boundary is not the same shape as
+;; one that never went up: eight entries reached by growing to nine and
+;; dissoc-ing stay a CHAMP, while eight entries built directly are an
+;; array-map. Both are the same VALUE, so `=` and `hash` must not be able to
+;; tell -- and the tier they land in depends on the path taken, not on the
+;; contents.
+;;
+;; Everything above this line grows. Nothing shrank, so nothing ever compared
+;; two equal collections that had settled in different tiers, which is the
+;; same blind spot that let a rope and a flat string hash differently.
+(defn- kmap [n] (reduce (fn [m i] (assoc m (keyword (str "k" i)) i)) {} (range n)))
+
+(defn ^:flint.check/test coming-back-down-a-boundary-changes-nothing []
+  ;; MAPS, across ARRAY-MAP/CHAMP.
+  (let [down (dissoc (kmap 9) :k8)
+        flat (kmap 8)]
+    (expect = flat down)
+    (expect = down flat)
+    (expect = (hash flat) (hash down))
+    (expect = (count flat) (count down))
+    (expect = (set (keys flat)) (set (keys down)))
+    (expect = flat (into {} down))
+    ;; and a map with one entry, reached from nine
+    (expect = {:k0 0} (reduce dissoc (kmap 9) [:k1 :k2 :k3 :k4 :k5 :k6 :k7 :k8]))
+    (expect = (hash {:k0 0})
+             (hash (reduce dissoc (kmap 9) [:k1 :k2 :k3 :k4 :k5 :k6 :k7 :k8]))))
+  ;; SETS, which are their backing map and so cross the same boundary.
+  (let [down (disj (set (range 9)) 8)
+        flat (set (range 8))]
+    (expect = flat down)
+    (expect = (hash flat) (hash down))
+    (expect = (count flat) (count down)))
+  ;; VECTORS, across the trie boundary at 32.
+  (let [down (reduce (fn [v _] (pop v)) (vec (range 40)) (range 8))
+        flat (vec (range 32))]
+    (expect = flat down)
+    (expect = (hash flat) (hash down))
+    (expect = (str flat) (str down))
+    (expect = (nth down 31) 31))
+  ;; STRINGS: a rope cut back below FLAT_MAX against one that was never joined.
+  (let [down (subs (str (rep 800 "a") (rep 800 "a")) 0 40)
+        flat (rep 40 "a")]
+    (expect = flat down)
+    (expect = (hash flat) (hash down))
+    (expect = (count flat) (count down))
+    (expect = (compare flat down) 0)))

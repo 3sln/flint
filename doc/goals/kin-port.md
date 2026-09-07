@@ -1806,6 +1806,35 @@ generating". They divide by WHO pays:
   than trading between them.
 - **A cursor of shadow-stack indices.** Everyone lands at O(depth).
 
+**A fourth option was tried and does NOT work, which is worth writing down
+because it looks obviously right.** If the CHAMP were canonical, two equal
+maps would have identical tries and equality would be a STRUCTURAL walk of
+two trees -- no callback, no buffer, O(depth) roots, and generatable with the
+vocabulary that already exists.
+
+The CHAMP *is* canonical. Built ascending and descending, the tries agree
+exactly:
+
+| entries | same shape built either way |
+|---|---|
+| 9 | yes |
+| 100 | yes |
+| 5,000 | yes |
+
+**But the TIER is path-dependent, and that kills it.** Eight entries built
+directly are an ARRAY-MAP. Eight entries reached by growing to nine and
+`dissoc`-ing one stay a CHAMP -- there is no conversion back down. So two
+equal maps can be structurally incomparable while `=` correctly answers true,
+and a structural walk would have to keep the lookup path anyway for the mixed
+case. Keeping both algorithms is not a simplification.
+
+Checked while there: those two maps DO hash alike (473211113 both ways), and
+`=` answers true in both directions. The invariant now has a test --
+`lang.edges/coming-back-down-a-boundary-changes-nothing` -- because
+everything in that file grew, and nothing had ever compared two equal
+collections that settled in different tiers. That is the same blind spot that
+let a rope and a flat string hash differently.
+
 The first measurement of this read `roots.stackTop` and reported 0 roots at
 every size. `stackTop` is the OPERAND stack; the shadow stack is
 `shadowTop`. A zero that is identical across four inputs is not a finding,
