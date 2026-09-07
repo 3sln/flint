@@ -364,7 +364,6 @@ public final class Str {
     ///
     /// No gas moved: nothing on that walk charged, so `count` cost the same
     /// gas on every runtime and only the wall clock differed.
-    public static int charLen(Rt rt, long v) { return sCount(rt, v); }
 
     static boolean isAscii(Rt rt, long v) { return sAscii(rt, v); }
 
@@ -580,5 +579,4 @@ public final class Str {
     static int ropeBytesAt(Rt rt, long v, int at, int s) { return com._3sln.flint.kgen.rt.Ropecp.ropeBytesAt(rt, v, at, s); }
 
     /// Byte length. NOT the code-point count -- see the class comment.
-    public static int byteLen(Rt rt, long v) { return sBytes(rt, v); }
 }

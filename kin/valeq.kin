@@ -23,7 +23,7 @@
                                    nil? mark push r set-r pop-to while break
                                    forever
                                    slot is-double num-f64 is-int i64-of
-                                   is-string s-bytes str-len charge-work
+                                   is-string s-bytes charge-work
                                    vec-count ref-to-map table-ref table-count
                                    set-eq maps-eq val-eq
                                    Rt Value I32 I64 Ty Bool Cat RootIx F64

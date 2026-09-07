@@ -10,6 +10,7 @@ import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Nouns.*;
+import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Seqcore.*;
 import static com._3sln.flint.kgen.rt.Seqs.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
@@ -79,7 +80,7 @@ public final class Seqwalk {
         if (t == TY_STRSEQ) {
             long st = rt.slot(s, 0);
             int i = (int) Val.asFixnum(rt.slot(s, 1));
-            if ((i + 1) >= Str.charLen(rt, st)) {
+            if ((i + 1) >= Str.sCount(rt, st)) {
                 return Val.NIL;
             }
             return strseq(rt, st, i + 1);
@@ -202,7 +203,7 @@ public final class Seqwalk {
         }
         if (Str.isString(rt, v)) {
             // CODE POINTS, matching the index the strseq holds.
-            if (Str.charLen(rt, v) == 0) {
+            if (Str.sCount(rt, v) == 0) {
                 return Val.NIL;
             }
             return strseq(rt, v, 0);

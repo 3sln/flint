@@ -24,7 +24,7 @@
   (:require [flint.impl.rt :refer [defn return if let do comment doc
                                    not and == + >= local set while break set-slot
                                    slot as-fixnum to-i32 nil? as-heap ty
-                                   seq-of vec-nth vec-count char-at char-len
+                                   seq-of vec-nth vec-count char-at s-count
                                    table-ref table-count num-add
                                    empty-list invoke-thunk
                                    mark push r set-r pop-to is-heap
@@ -95,7 +95,7 @@
         (do
           (let [^Value st (slot rt s 0)
                 ^I32 i (to-i32 (as-fixnum (slot rt s 1)))]
-            (if (>= (+ i 1) (char-len rt st))
+            (if (>= (+ i 1) (s-count rt st))
               (return NIL))
             (return (strseq rt st (+ i 1))))))
       (if (== t TY_RANGE)
@@ -211,7 +211,7 @@
   (if (is-string rt v)
     (do
       (comment "CODE POINTS, matching the index the strseq holds.")
-      (if (== (char-len rt v) 0)
+      (if (== (s-count rt v) 0)
         (return NIL))
       (return (strseq rt v 0))))
   (if (not (is-heap v))

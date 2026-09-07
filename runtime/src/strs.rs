@@ -135,7 +135,7 @@ impl Rt {
         if !self.is_string(s) {
             return self.throw_str("ClassCastException", "not a string");
         }
-        let n = self.str_len(s);
+        let n = self.s_bytes(s);
         // CHARGED BEFORE THE WORK, and refused if it cannot be paid for. `n` is
         // known here, so this is a better bound than a per-iteration tick: it
         // never begins work the budget cannot cover, and costs nothing inside
@@ -636,7 +636,7 @@ mod tests {
         for c in ['a', 'é', '日', '\u{1F600}'] {
             let v = Value::char_value(c);
             assert!(rt.is_string(v));
-            assert_eq!(rt.str_len(v), c.len_utf8() as u32);
+            assert_eq!(rt.s_bytes(v), c.len_utf8() as u32);
             let s = rt.as_str(v, &mut b).unwrap();
             assert_eq!(s.chars().next(), Some(c));
             let b2 = sbuf();

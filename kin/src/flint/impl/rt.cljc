@@ -874,14 +874,6 @@
     'empty-set (core/call {:rust "{0}.empty_set()"
                            :java "Sets.empty({0})"
                            :csharp "global::Flint.Rt.Sets.Empty({0})"})
-    ;; `count` ON A STRING IS IN CODE POINTS, not UTF-16 code units. Clojure
-    ;; counts UTF-16, so an astral character counts 2 there and 1 here -- a
-    ;; deliberate divergence, recorded in the README. The body stays host-side:
-    ;; it decodes, and decoding is where each runtime's own string lives.
-    'char-count (core/call {:rust "{0}.char_count({1})"
-                            :java "Str.charLen({0}, {1})"
-                            :csharp "Str.CharLen({0}, {1})"}
-                           {:tag I32})
     'ref-to-map (core/call {:rust "{0}.ref_to_map({1})"
                             :java "Table.refToMap({0}, {1})"
                             :csharp "global::Flint.Rt.Table.refToMap({0}, {1})"})
@@ -995,8 +987,6 @@
                                     :java "Num.notNumber({0}, {1}, {2})"
                                     :csharp "Num.NotNumber({0}, {1}, {2})"}
                                    {:tag Value})
-    'str-len (sibling "str_len" "Str" "byteLen" "ByteLen" 1)
-    'char-len (sibling "char_count" "Str" "charLen" "CharLen" 1)
     'maps-eq (sibling "map_eq" "Maps" "eq" "Eq" 2)
     ;; `set-eq` STAYS HAND-WRITTEN because it walks the set's elements, and
     ;; walking needs a callback -- the closure hole. `map-eq` is here for the
@@ -1184,6 +1174,14 @@
     ;; `s-count` and `s-ascii` are exactly the numbers a rope node caches, so a
     ;; generated `rope-node` asks for them rather than recomputing them.
     's-bytes (sibling "s_bytes" "Str" "sBytes" "SBytes" 1)
+    ;; `count` ON A STRING IS IN CODE POINTS, not UTF-16 code units. Clojure
+    ;; counts UTF-16, so an astral character counts 2 there and 1 here -- a
+    ;; deliberate divergence, recorded in the README.
+    ;;
+    ;; THE ONLY WORD FOR THIS. There were three -- `char-count`, `char-len`
+    ;; and this -- and the first two reached a hand-written function on the
+    ;; ports that walked the whole rope where this reads a slot. An alias is
+    ;; how the implementations got to differ; one word is how they cannot.
     's-count (sibling "s_count" "Str" "sCount" "SCount" 1)
     's-ascii (sibling "s_ascii" "Str" "sAscii" "SAscii" 1)
     's-concat-copy (sibling "copy_concat" "Str" "copyConcat" "CopyConcat" 2)

@@ -15,6 +15,7 @@ using static global::_3sln.Flint.Kgen.Rt.Bytecore;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
 using static global::_3sln.Flint.Kgen.Rt.Maptrans;
 using static global::_3sln.Flint.Kgen.Rt.Nouns;
+using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqcore;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
 using static global::_3sln.Flint.Kgen.Rt.Setcore;
@@ -35,7 +36,7 @@ public static class Collgen {
             return 0;
         }
         if (Str.IsString(rt, v)) {
-            return Str.CharLen(rt, v);
+            return Str.SCount(rt, v);
         }
         if (Val.IsHeap(v)) {
             int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));

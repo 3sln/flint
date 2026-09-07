@@ -2083,7 +2083,7 @@ impl Rt {
                 // `host_deliver` actually CHARGED -- the length of the encoded
                 // message, which is what bounds the host's queue.
                 //
-                // It used to be recomputed from the value, `str_len` on
+                // It used to be recomputed from the value, `s_bytes` on
                 // whatever came out of the ring. That was wrong twice. It
                 // refunded the string's length where the encoded length had
                 // been charged, so the bound drifted every message; and once a

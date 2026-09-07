@@ -33,19 +33,6 @@ impl Rt {
 
     // `count_of` is GENERATED, from `kin/collgen.kin`.
 
-    /// `count` on a string is in **code points**, not UTF-16 code units.
-    /// Clojure counts UTF-16, so an astral character counts 2 there and 1 here.
-    /// This is a deliberate divergence, recorded in the README.
-    /// DELEGATES. This was a second three-tier code-point count beside
-    /// `s_count` -- rope, ASCII leaf, scan -- and two functions computing one
-    /// meaning is the shape that made a rope and an equal flat string hash
-    /// differently. They agreed; now they cannot stop agreeing.
-    ///
-    /// One implementation PER RUNTIME is unavoidable and is what the port is
-    /// for. Two inside one runtime is the bug shape.
-    pub fn char_count(&self, v: Value) -> u32 {
-        self.s_count(v)
-    }
 
     /// True when a code-point index into `s` is also a byte index.
     #[inline]
@@ -337,13 +324,13 @@ impl Rt {
         // n^2 gas for n bytes of copying -- which is the same defect as
         // `str_index_of`'s charge, in the same shape, one function along.
         // `test/scaling.clj` found it on its first run.
-        let n = if self.is_string(s) { self.str_len(s) } else { 0 };
+        let n = if self.is_string(s) { self.s_bytes(s) } else { 0 };
         let took = end
             .map(|e| (e - start).max(0) as u32)
             .unwrap_or_else(|| n.saturating_sub(start.max(0) as u32));
         self.charge_bytes(took.min(n));
         if self.str_indexable(s) {
-            let n = self.str_len(s) as i64;
+            let n = self.s_bytes(s) as i64;
             let e = end.unwrap_or(n);
             if start < 0 || e > n || start > e {
                 return self.throw_str("StringIndexOutOfBoundsException", "bad substring range");
@@ -535,7 +522,7 @@ impl Rt {
         let needle = self.string_arg(needle);
         // A naive search is O(haystack x needle); charging the haystack keeps a
         // long scan from being free.
-        let hn = if self.is_string(haystack) { self.str_len(haystack) } else { 0 };
+        let hn = if self.is_string(haystack) { self.s_bytes(haystack) } else { 0 };
         // BOUNDED before the search and BILLED after it, which are two
         // different jobs. The pre-charge is the worst case and is refunded
         // below, so the count stays the distance actually scanned -- the
@@ -619,7 +606,7 @@ impl Rt {
         // `append_bytes` WALKS a rope; `string_arg` flattens it. Both produce
         // the same bytes and only one of them replaces the tree with a copy
         // that every later read then uses.
-        let n = if self.is_string(s) { self.str_len(s) } else { 0 };
+        let n = if self.is_string(s) { self.s_bytes(s) } else { 0 };
         // Worst of the lot before this: 11 937 109 steps past the limit, because
         // it billed the whole string and then built a vector of every byte.
         if !self.charge_checked(n as u64, "str-bytes") {

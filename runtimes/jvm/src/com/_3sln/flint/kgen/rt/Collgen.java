@@ -13,6 +13,7 @@ import static com._3sln.flint.kgen.rt.Bytecore.*;
 import static com._3sln.flint.kgen.rt.Mapcore.*;
 import static com._3sln.flint.kgen.rt.Maptrans.*;
 import static com._3sln.flint.kgen.rt.Nouns.*;
+import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Seqcore.*;
 import static com._3sln.flint.kgen.rt.Seqwalk.*;
 import static com._3sln.flint.kgen.rt.Setcore.*;
@@ -33,7 +34,7 @@ public final class Collgen {
             return 0;
         }
         if (Str.isString(rt, v)) {
-            return Str.charLen(rt, v);
+            return Str.sCount(rt, v);
         }
         if (Val.isHeap(v)) {
             int t = ty(rt.gc.sp, Val.asHeap(v));

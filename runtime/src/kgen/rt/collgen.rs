@@ -27,7 +27,7 @@ impl Rt {
             return 0;
         }
         if self.is_string(v) {
-            return self.char_count(v);
+            return self.s_count(v);
         }
         if v.is_heap() {
             let t: u8 = ty(&self.gc.sp, v.as_heap());

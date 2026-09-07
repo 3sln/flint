@@ -119,7 +119,7 @@ impl Rt {
     fn code_points(&self, s: Value) -> alloc::vec::Vec<u32> {
         let mut leaves = alloc::vec::Vec::new();
         self.collect_leaves(s, &mut leaves);
-        let mut out = alloc::vec::Vec::with_capacity(self.str_len(s) as usize);
+        let mut out = alloc::vec::Vec::with_capacity(self.s_bytes(s) as usize);
         let mut pending: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
         for l in &leaves {
             let mut buf = [0u8; crate::value::INLINE_MAX];
@@ -411,7 +411,7 @@ impl Rt {
         if !self.is_string(s) {
             return self.throw_str("ClassCastException", "re-find-all wants a string");
         }
-        let n = self.str_len(s);
+        let n = self.s_bytes(s);
         self.charge_bytes(n);
         let blob = self.slot(re, RX_PROG);
         let prog: alloc::vec::Vec<u32> = {
@@ -466,7 +466,7 @@ impl Rt {
         // A match walks the subject once, so it is O(n) in the input and O(m) in
         // the program -- charged for both, which is what makes a pathological
         // pattern hit the budget rather than the wall clock.
-        let n = self.str_len(s);
+        let n = self.s_bytes(s);
         self.charge_bytes(n);
         let blob = self.slot(re, RX_PROG);
         let prog: alloc::vec::Vec<u32> = {

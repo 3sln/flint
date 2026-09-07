@@ -972,22 +972,6 @@ impl Rt {
                 && matches!(ty(&self.gc.sp, v.as_heap()), TY_STR | crate::obj::TY_ROPE))
     }
 
-    /// Byte length of a string value, all three tiers.
-    ///
-    /// A rope's `len` header field is its SLOT COUNT, not its byte length, so
-    /// reading it as one would be silently wrong -- which is why this is the
-    /// only place that knows the difference.
-    /// DELEGATES, as both ports' `byteLen` already did. This was a second
-    /// implementation of `s_bytes` -- same three tiers, same answers -- and
-    /// two functions computing one meaning is the shape that made a ROPE and
-    /// an equal FLAT string hash differently. They agreed here; the point is
-    /// that they can no longer stop agreeing.
-    ///
-    /// It is not identical: this read the type byte of a value that might be
-    /// neither inline nor heap, where `s_bytes` answers 0.
-    pub fn str_len(&self, v: Value) -> u32 {
-        self.s_bytes(v)
-    }
 }
 
 impl Default for Rt {

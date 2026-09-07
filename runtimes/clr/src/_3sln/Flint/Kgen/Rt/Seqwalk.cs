@@ -12,6 +12,7 @@ using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Nouns;
+using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqcore;
 using static global::_3sln.Flint.Kgen.Rt.Seqs;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
@@ -81,7 +82,7 @@ public static class Seqwalk {
         if (t == Obj.TyStrseq) {
             long st = rt.Slot(s, 0);
             int i = (int) Val.AsFixnum(rt.Slot(s, 1));
-            if ((i + 1) >= Str.CharLen(rt, st)) {
+            if ((i + 1) >= Str.SCount(rt, st)) {
                 return Val.Nil;
             }
             return Strseq(rt, st, i + 1);
@@ -204,7 +205,7 @@ public static class Seqwalk {
         }
         if (Str.IsString(rt, v)) {
             // CODE POINTS, matching the index the strseq holds.
-            if (Str.CharLen(rt, v) == 0) {
+            if (Str.SCount(rt, v) == 0) {
                 return Val.Nil;
             }
             return Strseq(rt, v, 0);

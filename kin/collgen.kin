@@ -24,7 +24,7 @@
   (:require [flint.impl.rt :refer [defn return if let do comment doc
                                    == not or nil? is-heap as-heap ty -
                                    slot throw-str str-cat static-text own-text
-                                   is-string char-count
+                                   is-string s-count
                                    vec-count vec-nth vec-pop schema-len
                                    empty-vec empty-map empty-set empty-list
                                    Rt Value I32 Ty Bool Text NIL
@@ -53,7 +53,7 @@
   (if (nil? rt v)
     (return 0))
   (if (is-string rt v)
-    (return (char-count rt v)))
+    (return (s-count rt v)))
   (if (is-heap v)
     (let [^Ty t (ty rt (as-heap v))]
       (if (== t TY_VEC)

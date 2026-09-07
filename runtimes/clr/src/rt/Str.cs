@@ -189,7 +189,6 @@ public static class Str {
     ///
     /// No gas moved: nothing on that walk charged, so `count` cost the same
     /// gas on every runtime and only the wall clock differed.
-    public static int CharLen(Rt rt, long v) => SCount(rt, v);
 
     static bool IsAscii(Rt rt, long v) => SAscii(rt, v);
 
@@ -539,5 +538,4 @@ public static class Str {
     static int RopeBytesAt(Rt rt, long v, int at, int s) { return global::_3sln.Flint.Kgen.Rt.Ropecp.RopeBytesAt(rt, v, at, s); }
 
     /// Byte length. NOT the code-point count -- see the class comment.
-    public static int ByteLen(Rt rt, long v) => SBytes(rt, v);
 }

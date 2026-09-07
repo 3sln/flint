@@ -92,9 +92,9 @@ impl Rt {
     fn vec_nth(&self, v: Value, i: u32, dflt: Value) -> Value {
         if i >= self.vec_count(v) { dflt } else { self.slot(v, i + 1) }
     }
-    fn char_count(&self, v: Value) -> u32 { self.slot(v, 0).0 as u32 }
+    fn s_count(&self, v: Value) -> u32 { self.slot(v, 0).0 as u32 }
     fn char_at(&mut self, v: Value, i: u32, dflt: Value) -> Value {
-        if i >= self.char_count(v) { dflt } else { self.slot(v, i + 1) }
+        if i >= self.s_count(v) { dflt } else { self.slot(v, i + 1) }
     }
     fn table_count(&mut self, t: Value) -> u32 { self.slot(t, 0).0 as u32 }
     fn table_ref(&mut self, t: Value, i: u32) -> Value { Value(0x7000 + i as u64) }
@@ -329,9 +329,9 @@ fn main() {
         static boolean isString(Rt rt, long v) {
             return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR;
         }
-        static int charLen(Rt rt, long v) { return (int) rt.slot(v, 0); }
+        static int sCount(Rt rt, long v) { return (int) rt.slot(v, 0); }
         static long nth(Rt rt, long v, int i, long dflt) {
-            return i >= charLen(rt, v) ? dflt : rt.slot(v, i + 1);
+            return i >= sCount(rt, v) ? dflt : rt.slot(v, i + 1);
         }
     }
     static final class Table {
@@ -563,9 +563,9 @@ namespace Flint.Rt {
         internal static bool IsString(Rt rt, long v) {
             return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr;
         }
-        internal static int CharLen(Rt rt, long v) { return (int) rt.Slot(v, 0); }
+        internal static int SCount(Rt rt, long v) { return (int) rt.Slot(v, 0); }
         internal static long Nth(Rt rt, long v, int i, long dflt) {
-            return i >= CharLen(rt, v) ? dflt : rt.Slot(v, i + 1);
+            return i >= SCount(rt, v) ? dflt : rt.Slot(v, i + 1);
         }
     }
     internal static class Table {

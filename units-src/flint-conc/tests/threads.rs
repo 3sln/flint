@@ -239,7 +239,7 @@ fn park_a_string_and_collect(unhook: bool) -> (u64, bool) {
     let th = rt.vec_nth(ts, 1, flint_rt::value::NIL);
     let saved = rt.thread_saved_stack(th);
     let back = rt.slot(saved, 0);
-    let n = rt.str_len(back);
+    let n = rt.s_bytes(back);
     (copied, n as usize == big.len())
 }
 

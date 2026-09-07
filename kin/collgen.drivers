@@ -42,7 +42,7 @@ impl Rt {
     fn is_seq(&mut self, v: Value) -> bool {
         v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_CONS
     }
-    fn char_count(&mut self, _v: Value) -> u32 { 71 }
+    fn s_count(&mut self, _v: Value) -> u32 { 71 }
     fn vec_count(&mut self, _v: Value) -> u32 { self.vn }
     fn table_count(&mut self, _v: Value) -> u32 { 72 }
     fn ttable_count(&mut self, _v: Value) -> u32 { 73 }
@@ -158,7 +158,7 @@ fn main() {
         static boolean isString(Rt rt, long v) {
             return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR;
         }
-        static int charLen(Rt rt, long v) { return 71; }
+        static int sCount(Rt rt, long v) { return 71; }
     }
     static boolean isSeq(Rt rt, long v) {
         return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_CONS;
@@ -284,7 +284,7 @@ namespace Flint.Rt {
         internal static bool IsString(Rt rt, long v) {
             return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr;
         }
-        internal static int CharLen(Rt rt, long v) { return 71; }
+        internal static int SCount(Rt rt, long v) { return 71; }
     }
     internal static bool IsSeq(Rt rt, long v) {
         return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyCons;

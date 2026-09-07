@@ -79,7 +79,7 @@ impl Rt {
         if t == TY_STRSEQ {
             let st: Value = self.slot(s, 0);
             let i: u32 = self.slot(s, 1).as_fixnum() as u32;
-            if (i + 1) >= self.char_count(st) {
+            if (i + 1) >= self.s_count(st) {
                 return NIL;
             }
             return self.strseq(st, i + 1);
@@ -202,7 +202,7 @@ impl Rt {
         }
         if self.is_string(v) {
             // CODE POINTS, matching the index the strseq holds.
-            if self.char_count(v) == 0 {
+            if self.s_count(v) == 0 {
                 return NIL;
             }
             return self.strseq(v, 0);
