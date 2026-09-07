@@ -217,35 +217,6 @@ impl Rt {
         out
     }
 
-    pub fn map_eq(&mut self, a: Value, b: Value) -> bool {
-        if self.map_count(a) != self.map_count(b) {
-            return false;
-        }
-        let base = self.mark();
-        let ai = self.push(a);
-        let bi = self.push(b);
-        let mut st = (bi, true);
-        let av = self.r(ai);
-        self.map_for_each(av, &mut st, &mut |rt, k, v, st| {
-            if !st.1 {
-                return;
-            }
-            // `map_get` allocates, so the value handed to this callback has to
-            // be rooted before the lookup, not read across it.
-            let m = rt.mark();
-            let ki = rt.push(k);
-            let vi = rt.push(v);
-            let other = rt.map_get(rt.r(st.0), rt.r(ki), NOT_FOUND);
-            let oi = rt.push(other);
-            let same = other != NOT_FOUND && rt.val_eq(rt.r(vi), rt.r(oi));
-            rt.pop_to(m);
-            if !same {
-                st.1 = false;
-            }
-        });
-        self.pop_to(base);
-        st.1
-    }
 
     pub fn hash_map_hash(&mut self, m: Value) -> u32 {
         let slot_idx = if self.is_array_map(m) { AM_HASH } else { HM_HASH };

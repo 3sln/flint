@@ -226,42 +226,15 @@ public final class Maps {
         return out;
     }
 
-    /// Structural equality. Same count, and every key in `a` present in `b`
-    /// with an equal value -- ORDER-INDEPENDENT, which is what a map's `=`
-    /// means and why it cannot just compare slots.
+    /// Map equality, GENERATED -- see `kin/mapeq.kin`.
+    ///
+    /// This used to walk every entry of `a` and do a full `mapGet` descent
+    /// into `b`, which never looked at `b`'s structure at all: two maps
+    /// sharing every node but one still paid for every entry. Measured here at
+    /// 20,000 entries, 840us either way. The CHAMP-aware walk prunes a shared
+    /// subtree on pointer equality and answers the same case in 1.2us.
     public static boolean eq(Rt rt, long a, long b) {
-        // A ROW REF materialises here rather than being read as an array-map:
-        // `category` puts one in `CAT_MAP`, so this is where a map compared
-        // against a row arrives.
-        // BOTH operands are rooted before either is materialised, and the
-        // key and value are rooted before the lookup rather than read across
-        // it. `refToMap`, `get` and `eq` all allocate, and `0031` is that a
-        // value in a host local does not survive an allocation.
-        //
-        // Rust's `map_eq` already did this and carried the reason in a
-        // comment; the ports read `v` across `get` and `b` across
-        // `refToMap(a)`. Measured: 18 miscompares in 4,000 comparisons of
-        // EQUAL values on the JVM while the native runtime scored 0.
-        int base = rt.mark();
-        int ai = rt.push(a), bi = rt.push(b);
-        if (Val.isHeap(rt.r(ai)) && ty(rt.gc.sp, Val.asHeap(rt.r(ai))) == Obj.TY_TABLEREF)
-            rt.setR(ai, Table.refToMap(rt, rt.r(ai)));
-        if (Val.isHeap(rt.r(bi)) && ty(rt.gc.sp, Val.asHeap(rt.r(bi))) == Obj.TY_TABLEREF)
-            rt.setR(bi, Table.refToMap(rt, rt.r(bi)));
-        if (mapCount(rt, rt.r(ai)) != mapCount(rt, rt.r(bi))) { rt.popTo(base); return false; }
-        int at = rt.mark();
-        int n = entries(rt, rt.r(ai));
-        boolean ok = true;
-        for (int i = 0; i < n && ok; i++) {
-            int m = rt.mark();
-            int ki = rt.push(rt.r(at + 2 * i));
-            int vi = rt.push(rt.r(at + 2 * i + 1));
-            int oi = rt.push(mapGet(rt, rt.r(bi), rt.r(ki), Val.NOT_FOUND));
-            ok = rt.r(oi) != Val.NOT_FOUND && com._3sln.flint.kgen.rt.Valeq.valEq(rt, rt.r(vi), rt.r(oi));
-            rt.popTo(m);
-        }
-        rt.popTo(base);
-        return ok;
+        return com._3sln.flint.kgen.rt.Mapeq.mapEq(rt, a, b);
     }
 
     /// UNORDERED, as Clojure hashes maps: the entries are summed, so the hash

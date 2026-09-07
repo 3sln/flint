@@ -53,6 +53,7 @@ pub mod find;
 pub mod hash;
 pub mod interns;
 pub mod mapcore;
+pub mod mapeq;
 pub mod mapmake;
 pub mod mapread;
 pub mod maptrans;

@@ -1,0 +1,362 @@
+--rust-head
+// A MOCK CHAMP, small enough to write down and rich enough to reach every
+// branch: shared subtrees, a distinct-but-equal subtree, a differing value, a
+// differing bitmap, collision nodes in both insertion orders, and the
+// array-map fallback.
+//
+// `visits` counts the nodes `node_eq` actually looked at, because the whole
+// claim is that a SHARED subtree is not looked at. A pass that visits both
+// children of a shared root would be the wrong kind of pass.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const NOT_FOUND: Value = Value(0xFFFE);
+const HM_ROOT: u32 = 2;
+const TY_HASHMAP: u8 = 2;
+const TY_ARRAYMAP: u8 = 3;
+impl Value {
+    fn is_nil(self) -> bool { self.0 == 0xFFFF }
+    // The mock's addresses ARE its values, so this is the identity -- but it
+    // has to exist, because `ty` takes an address and not a value.
+    fn as_heap(self) -> u64 { self.0 }
+}
+struct Sp { h: Vec<u64> }
+struct Gc { sp: Sp }
+struct Rt { gc: Gc, roots: Vec<Value>, visits: u32 }
+fn ty(sp: &Sp, a: u64) -> u8 { sp.h[a as usize] as u8 }
+impl Rt {
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn charge_work(&mut self, _n: u64) { self.visits += 1; }
+    fn slot(&self, v: Value, i: u32) -> Value { Value(self.gc.sp.h[(v.0 + i as u64) as usize]) }
+    fn val_eq(&mut self, a: Value, b: Value) -> bool { a == b }
+    fn map_count(&self, m: Value) -> u32 { self.gc.sp.h[m.0 as usize + 1] as u32 }
+    fn am_key(&self, m: Value, i: u32) -> Value { Value(self.gc.sp.h[m.0 as usize + 2 + 2 * i as usize]) }
+    fn am_val(&self, m: Value, i: u32) -> Value { Value(self.gc.sp.h[m.0 as usize + 3 + 2 * i as usize]) }
+    fn is_bmnode(&self, n: Value) -> bool { self.gc.sp.h[n.0 as usize] == 0 }
+    fn bn_datamap(&self, n: Value) -> u32 { self.gc.sp.h[n.0 as usize + 1] as u32 }
+    fn bn_nodemap(&self, n: Value) -> u32 { self.gc.sp.h[n.0 as usize + 2] as u32 }
+    fn bn_key(&self, n: Value, i: u32) -> Value { Value(self.gc.sp.h[n.0 as usize + 3 + 2 * i as usize]) }
+    fn bn_val(&self, n: Value, i: u32) -> Value { Value(self.gc.sp.h[n.0 as usize + 4 + 2 * i as usize]) }
+    fn bn_node(&self, n: Value, j: u32) -> Value {
+        let nd = self.bn_datamap(n).count_ones();
+        Value(self.gc.sp.h[n.0 as usize + 3 + 2 * nd as usize + j as usize])
+    }
+    fn cn_hash(&self, n: Value) -> u32 { self.gc.sp.h[n.0 as usize + 1] as u32 }
+    fn cn_count(&self, n: Value) -> u32 { self.gc.sp.h[n.0 as usize + 2] as u32 }
+    fn cn_key(&self, n: Value, i: u32) -> Value { Value(self.gc.sp.h[n.0 as usize + 3 + 2 * i as usize]) }
+    fn cn_val(&self, n: Value, i: u32) -> Value { Value(self.gc.sp.h[n.0 as usize + 4 + 2 * i as usize]) }
+    // Enough of a lookup for the fallback: an array-map is a flat scan and a
+    // hash map is its root node's inline entries, which is all the probe holds.
+    fn map_get(&mut self, m: Value, k: Value, dflt: Value) -> Value {
+        if ty(&self.gc.sp, m.as_heap()) == TY_ARRAYMAP {
+            let n = self.map_count(m);
+            for i in 0..n { if self.am_key(m, i) == k { return self.am_val(m, i); } }
+            return dflt;
+        }
+        let root = self.slot(m, HM_ROOT);
+        if root.is_nil() { return dflt; }
+        let nd = self.bn_datamap(root).count_ones();
+        for i in 0..nd { if self.bn_key(root, i) == k { return self.bn_val(root, i); } }
+        dflt
+    }
+}
+impl Rt {
+--rust
+}
+fn fresh() -> Rt {
+    let mut h = vec![0u64; 600];
+    let m = |h: &mut Vec<u64>, at: usize, t: u64, c: u64, root: u64| {
+        h[at] = t; h[at + 1] = c; h[at + 2] = root;
+    };
+    m(&mut h, 10, 2, 3, 100);   // A
+    m(&mut h, 14, 2, 3, 200);   // B: root shares the child at 150
+    m(&mut h, 18, 2, 3, 250);   // G: equal to A, its own copy of the child
+    m(&mut h, 22, 2, 3, 300);   // V: one value differs
+    m(&mut h, 26, 2, 3, 350);   // S: datamap differs
+    m(&mut h, 30, 2, 9, 100);   // N: same root, wrong count
+    m(&mut h, 40, 2, 2, 500);   // HM2: a CHAMP holding what the array-map holds
+    m(&mut h, 44, 2, 0, 0xFFFF); // E1
+    m(&mut h, 48, 2, 0, 0xFFFF); // E2
+    m(&mut h, 52, 2, 2, 400);   // C1
+    m(&mut h, 56, 2, 2, 420);   // C2: the same pairs, inserted the other way
+    m(&mut h, 60, 2, 2, 440);   // C3: one value differs
+    m(&mut h, 64, 2, 2, 460);   // C4: a different hash
+    // The ARRAY-MAP: [ty, count, k0,v0, k1,v1]
+    h[34] = 3; h[35] = 2; h[36] = 7000; h[37] = 7001; h[38] = 7002; h[39] = 7003;
+    // Bitmap nodes: [0, datamap, nodemap, k,v..., child...]
+    h[100] = 0; h[101] = 3; h[102] = 4;
+    h[103] = 1000; h[104] = 1001; h[105] = 1002; h[106] = 1003; h[107] = 150;
+    h[150] = 0; h[151] = 1; h[152] = 0; h[153] = 1004; h[154] = 1005;
+    h[200] = 0; h[201] = 3; h[202] = 4;
+    h[203] = 1000; h[204] = 1001; h[205] = 1002; h[206] = 1003; h[207] = 150;
+    h[250] = 0; h[251] = 3; h[252] = 4;
+    h[253] = 1000; h[254] = 1001; h[255] = 1002; h[256] = 1003; h[257] = 260;
+    h[260] = 0; h[261] = 1; h[262] = 0; h[263] = 1004; h[264] = 1005;
+    h[300] = 0; h[301] = 3; h[302] = 4;
+    h[303] = 1000; h[304] = 1001; h[305] = 1002; h[306] = 9999; h[307] = 150;
+    h[350] = 0; h[351] = 7; h[352] = 4;
+    h[353] = 1000; h[354] = 1001; h[355] = 1002; h[356] = 1003; h[357] = 1006;
+    h[358] = 1007; h[359] = 150;
+    // Collision nodes: [1, hash, count, k,v...]
+    h[400] = 1; h[401] = 0x55; h[402] = 2; h[403] = 7000; h[404] = 7001; h[405] = 7002; h[406] = 7003;
+    h[420] = 1; h[421] = 0x55; h[422] = 2; h[423] = 7002; h[424] = 7003; h[425] = 7000; h[426] = 7001;
+    h[440] = 1; h[441] = 0x55; h[442] = 2; h[443] = 7000; h[444] = 9999; h[445] = 7002; h[446] = 7003;
+    h[460] = 1; h[461] = 0x66; h[462] = 2; h[463] = 7000; h[464] = 7001; h[465] = 7002; h[466] = 7003;
+    h[500] = 0; h[501] = 3; h[502] = 0; h[503] = 7000; h[504] = 7001; h[505] = 7002; h[506] = 7003;
+    Rt { gc: Gc { sp: Sp { h } }, roots: Vec::new(), visits: 0 }
+}
+fn one(rt: &mut Rt, o: &mut String, label: &str, a: u64, b: u64) {
+    rt.visits = 0;
+    let got = rt.map_eq(Value(a), Value(b));
+    o.push_str(&format!("{}={}:{} ", label, got as u32, rt.visits));
+}
+fn main() {
+    let mut rt = fresh();
+    let mut o = String::new();
+    one(&mut rt, &mut o, "self", 10, 10);
+    one(&mut rt, &mut o, "shared", 10, 14);
+    one(&mut rt, &mut o, "copied", 10, 18);
+    one(&mut rt, &mut o, "val", 10, 22);
+    one(&mut rt, &mut o, "shape", 10, 26);
+    one(&mut rt, &mut o, "count", 10, 30);
+    one(&mut rt, &mut o, "small", 34, 40);
+    one(&mut rt, &mut o, "smallrev", 40, 34);
+    one(&mut rt, &mut o, "empty", 44, 48);
+    one(&mut rt, &mut o, "collswap", 52, 56);
+    one(&mut rt, &mut o, "collval", 52, 60);
+    one(&mut rt, &mut o, "collhash", 52, 64);
+    o.push_str(&format!("roots={}", rt.roots.len()));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final long NOT_FOUND = 0xFFFEL;
+    static final int HM_ROOT = 2;
+    static final int TY_HASHMAP = 2;
+    static final int TY_ARRAYMAP = 3;
+    static final class Val {
+        static final long NOT_FOUND = 0xFFFEL;
+        static boolean isNil(long v) { return v == NIL; }
+        static long asHeap(long v) { return v; }
+    }
+    // `ty` is spelled `ty(rt.gc.sp, v)` by the vocabulary, so the mock grows
+    // the same shape rather than the call being special-cased.
+    static int ty(Sp sp, long a) { return (int) sp.h[(int) a]; }
+    static final class Sp { long[] h = new long[600]; }
+    static final class Gc { Sp sp = new Sp(); }
+    static boolean valEq(Rt rt, long a, long b) { return a == b; }
+    static int mapCount(Rt rt, long m) { return (int) rt.h[(int) m + 1]; }
+    static long amKey(Rt rt, long m, int i) { return rt.h[(int) m + 2 + 2 * i]; }
+    static long amVal(Rt rt, long m, int i) { return rt.h[(int) m + 3 + 2 * i]; }
+    static boolean isBmnode(Rt rt, long n) { return rt.h[(int) n] == 0; }
+    static int bnDatamap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    static int bnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 2]; }
+    static long bnKey(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    static long bnVal(Rt rt, long n, int i) { return rt.h[(int) n + 4 + 2 * i]; }
+    static long bnNode(Rt rt, long n, int j) {
+        int nd = Integer.bitCount(bnDatamap(rt, n));
+        return rt.h[(int) n + 3 + 2 * nd + j];
+    }
+    static int cnHash(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    static int cnCount(Rt rt, long n) { return (int) rt.h[(int) n + 2]; }
+    static long cnKey(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    static long cnVal(Rt rt, long n, int i) { return rt.h[(int) n + 4 + 2 * i]; }
+    static long mapGet(Rt rt, long m, long k, long dflt) {
+        if (ty(rt.gc.sp, Val.asHeap(m)) == TY_ARRAYMAP) {
+            int n = mapCount(rt, m);
+            for (int i = 0; i < n; i++) if (amKey(rt, m, i) == k) return amVal(rt, m, i);
+            return dflt;
+        }
+        long root = rt.slot(m, HM_ROOT);
+        if (Val.isNil(root)) return dflt;
+        int nd = Integer.bitCount(bnDatamap(rt, root));
+        for (int i = 0; i < nd; i++) if (bnKey(rt, root, i) == k) return bnVal(rt, root, i);
+        return dflt;
+    }
+    static final class Rt {
+        Gc gc = new Gc();
+        long[] h;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        int visits = 0;
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        void chargeWork(long n) { visits++; }
+        long slot(long v, int i) { return h[(int) v + i]; }
+    }
+--java
+    static void m(Rt rt, int at, long t, long c, long root) {
+        rt.h[at] = t; rt.h[at + 1] = c; rt.h[at + 2] = root;
+    }
+    static Rt fresh() {
+        Rt rt = new Rt();
+        rt.h = rt.gc.sp.h;
+        long[] h = rt.h;
+        m(rt, 10, 2, 3, 100); m(rt, 14, 2, 3, 200); m(rt, 18, 2, 3, 250);
+        m(rt, 22, 2, 3, 300); m(rt, 26, 2, 3, 350); m(rt, 30, 2, 9, 100);
+        m(rt, 40, 2, 2, 500); m(rt, 44, 2, 0, 0xFFFFL); m(rt, 48, 2, 0, 0xFFFFL);
+        m(rt, 52, 2, 2, 400); m(rt, 56, 2, 2, 420); m(rt, 60, 2, 2, 440); m(rt, 64, 2, 2, 460);
+        h[34] = 3; h[35] = 2; h[36] = 7000; h[37] = 7001; h[38] = 7002; h[39] = 7003;
+        h[100] = 0; h[101] = 3; h[102] = 4;
+        h[103] = 1000; h[104] = 1001; h[105] = 1002; h[106] = 1003; h[107] = 150;
+        h[150] = 0; h[151] = 1; h[152] = 0; h[153] = 1004; h[154] = 1005;
+        h[200] = 0; h[201] = 3; h[202] = 4;
+        h[203] = 1000; h[204] = 1001; h[205] = 1002; h[206] = 1003; h[207] = 150;
+        h[250] = 0; h[251] = 3; h[252] = 4;
+        h[253] = 1000; h[254] = 1001; h[255] = 1002; h[256] = 1003; h[257] = 260;
+        h[260] = 0; h[261] = 1; h[262] = 0; h[263] = 1004; h[264] = 1005;
+        h[300] = 0; h[301] = 3; h[302] = 4;
+        h[303] = 1000; h[304] = 1001; h[305] = 1002; h[306] = 9999; h[307] = 150;
+        h[350] = 0; h[351] = 7; h[352] = 4;
+        h[353] = 1000; h[354] = 1001; h[355] = 1002; h[356] = 1003; h[357] = 1006;
+        h[358] = 1007; h[359] = 150;
+        h[400] = 1; h[401] = 0x55; h[402] = 2; h[403] = 7000; h[404] = 7001; h[405] = 7002; h[406] = 7003;
+        h[420] = 1; h[421] = 0x55; h[422] = 2; h[423] = 7002; h[424] = 7003; h[425] = 7000; h[426] = 7001;
+        h[440] = 1; h[441] = 0x55; h[442] = 2; h[443] = 7000; h[444] = 9999; h[445] = 7002; h[446] = 7003;
+        h[460] = 1; h[461] = 0x66; h[462] = 2; h[463] = 7000; h[464] = 7001; h[465] = 7002; h[466] = 7003;
+        h[500] = 0; h[501] = 3; h[502] = 0; h[503] = 7000; h[504] = 7001; h[505] = 7002; h[506] = 7003;
+        return rt;
+    }
+    static void one(Rt rt, StringBuilder o, String label, long a, long b) {
+        rt.visits = 0;
+        boolean got = mapEq(rt, a, b);
+        o.append(label).append("=").append(got ? 1 : 0).append(":").append(rt.visits).append(" ");
+    }
+    public static void main(String[] args) {
+        Rt rt = fresh();
+        StringBuilder o = new StringBuilder();
+        one(rt, o, "self", 10, 10);
+        one(rt, o, "shared", 10, 14);
+        one(rt, o, "copied", 10, 18);
+        one(rt, o, "val", 10, 22);
+        one(rt, o, "shape", 10, 26);
+        one(rt, o, "count", 10, 30);
+        one(rt, o, "small", 34, 40);
+        one(rt, o, "smallrev", 40, 34);
+        one(rt, o, "empty", 44, 48);
+        one(rt, o, "collswap", 52, 56);
+        one(rt, o, "collval", 52, 60);
+        one(rt, o, "collhash", 52, 64);
+        o.append("roots=").append(rt.roots.size());
+        System.out.println(o.toString());
+    }
+--csharp-pre
+
+--csharp-head
+    const long NIL = 0xFFFFL;
+    const long NOT_FOUND = 0xFFFEL;
+    const int HM_ROOT = 2;
+    const int TY_HASHMAP = 2;
+    const int TY_ARRAYMAP = 3;
+    internal static class Val {
+        internal const long NotFound = 0xFFFEL;
+        internal static bool IsNil(long v) { return v == NIL; }
+        internal static long AsHeap(long v) { return v; }
+    }
+    internal static class Obj {
+        internal const int TyHashmap = 2, TyArraymap = 3;
+        internal static int Ty(Sp sp, long a) { return (int) sp.h[(int) a]; }
+    }
+    internal static bool ValEq(Rt rt, long a, long b) { return a == b; }
+    internal static int MapCount(Rt rt, long m) { return (int) rt.h[(int) m + 1]; }
+    internal static long AmKey(Rt rt, long m, int i) { return rt.h[(int) m + 2 + 2 * i]; }
+    internal static long AmVal(Rt rt, long m, int i) { return rt.h[(int) m + 3 + 2 * i]; }
+    internal static bool IsBmnode(Rt rt, long n) { return rt.h[(int) n] == 0; }
+    internal static int BnDatamap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    internal static int BnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 2]; }
+    internal static long BnKey(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    internal static long BnVal(Rt rt, long n, int i) { return rt.h[(int) n + 4 + 2 * i]; }
+    internal static long BnNode(Rt rt, long n, int j) {
+        int nd = System.Numerics.BitOperations.PopCount((uint) BnDatamap(rt, n));
+        return rt.h[(int) n + 3 + 2 * nd + j];
+    }
+    internal static int CnHash(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    internal static int CnCount(Rt rt, long n) { return (int) rt.h[(int) n + 2]; }
+    internal static long CnKey(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    internal static long CnVal(Rt rt, long n, int i) { return rt.h[(int) n + 4 + 2 * i]; }
+    internal static long MapGet(Rt rt, long m, long k, long dflt) {
+        if (Obj.Ty(rt.gc.sp, Val.AsHeap(m)) == TY_ARRAYMAP) {
+            int n = MapCount(rt, m);
+            for (int i = 0; i < n; i++) if (AmKey(rt, m, i) == k) return AmVal(rt, m, i);
+            return dflt;
+        }
+        long root = rt.Slot(m, HM_ROOT);
+        if (Val.IsNil(root)) return dflt;
+        int nd2 = System.Numerics.BitOperations.PopCount((uint) BnDatamap(rt, root));
+        for (int i = 0; i < nd2; i++) if (BnKey(rt, root, i) == k) return BnVal(rt, root, i);
+        return dflt;
+    }
+    internal sealed class Sp { internal long[] h = new long[600]; }
+    internal sealed class Gc { internal Sp sp = new Sp(); }
+    internal sealed class Rt {
+        internal Gc gc = new Gc();
+        internal long[] h;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal int visits = 0;
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { while (roots.Count > n) roots.RemoveAt(roots.Count - 1); }
+        internal void ChargeWork(long n) { visits++; }
+        internal long Slot(long v, int i) { return h[(int) v + i]; }
+    }
+--csharp
+    static void M(Rt rt, int at, long t, long c, long root) {
+        rt.h[at] = t; rt.h[at + 1] = c; rt.h[at + 2] = root;
+    }
+    static Rt Fresh() {
+        Rt rt = new Rt();
+        rt.h = rt.gc.sp.h;
+        long[] h = rt.h;
+        M(rt, 10, 2, 3, 100); M(rt, 14, 2, 3, 200); M(rt, 18, 2, 3, 250);
+        M(rt, 22, 2, 3, 300); M(rt, 26, 2, 3, 350); M(rt, 30, 2, 9, 100);
+        M(rt, 40, 2, 2, 500); M(rt, 44, 2, 0, 0xFFFFL); M(rt, 48, 2, 0, 0xFFFFL);
+        M(rt, 52, 2, 2, 400); M(rt, 56, 2, 2, 420); M(rt, 60, 2, 2, 440); M(rt, 64, 2, 2, 460);
+        h[34] = 3; h[35] = 2; h[36] = 7000; h[37] = 7001; h[38] = 7002; h[39] = 7003;
+        h[100] = 0; h[101] = 3; h[102] = 4;
+        h[103] = 1000; h[104] = 1001; h[105] = 1002; h[106] = 1003; h[107] = 150;
+        h[150] = 0; h[151] = 1; h[152] = 0; h[153] = 1004; h[154] = 1005;
+        h[200] = 0; h[201] = 3; h[202] = 4;
+        h[203] = 1000; h[204] = 1001; h[205] = 1002; h[206] = 1003; h[207] = 150;
+        h[250] = 0; h[251] = 3; h[252] = 4;
+        h[253] = 1000; h[254] = 1001; h[255] = 1002; h[256] = 1003; h[257] = 260;
+        h[260] = 0; h[261] = 1; h[262] = 0; h[263] = 1004; h[264] = 1005;
+        h[300] = 0; h[301] = 3; h[302] = 4;
+        h[303] = 1000; h[304] = 1001; h[305] = 1002; h[306] = 9999; h[307] = 150;
+        h[350] = 0; h[351] = 7; h[352] = 4;
+        h[353] = 1000; h[354] = 1001; h[355] = 1002; h[356] = 1003; h[357] = 1006;
+        h[358] = 1007; h[359] = 150;
+        h[400] = 1; h[401] = 0x55; h[402] = 2; h[403] = 7000; h[404] = 7001; h[405] = 7002; h[406] = 7003;
+        h[420] = 1; h[421] = 0x55; h[422] = 2; h[423] = 7002; h[424] = 7003; h[425] = 7000; h[426] = 7001;
+        h[440] = 1; h[441] = 0x55; h[442] = 2; h[443] = 7000; h[444] = 9999; h[445] = 7002; h[446] = 7003;
+        h[460] = 1; h[461] = 0x66; h[462] = 2; h[463] = 7000; h[464] = 7001; h[465] = 7002; h[466] = 7003;
+        h[500] = 0; h[501] = 3; h[502] = 0; h[503] = 7000; h[504] = 7001; h[505] = 7002; h[506] = 7003;
+        return rt;
+    }
+    static void One(Rt rt, System.Text.StringBuilder o, string label, long a, long b) {
+        rt.visits = 0;
+        bool got = MapEq(rt, a, b);
+        o.Append(label).Append("=").Append(got ? 1 : 0).Append(":").Append(rt.visits).Append(" ");
+    }
+    public static void Main(string[] args) {
+        Rt rt = Fresh();
+        var o = new System.Text.StringBuilder();
+        One(rt, o, "self", 10, 10);
+        One(rt, o, "shared", 10, 14);
+        One(rt, o, "copied", 10, 18);
+        One(rt, o, "val", 10, 22);
+        One(rt, o, "shape", 10, 26);
+        One(rt, o, "count", 10, 30);
+        One(rt, o, "small", 34, 40);
+        One(rt, o, "smallrev", 40, 34);
+        One(rt, o, "empty", 44, 48);
+        One(rt, o, "collswap", 52, 56);
+        One(rt, o, "collval", 52, 60);
+        One(rt, o, "collhash", 52, 64);
+        o.Append("roots=").Append(rt.roots.Count);
+        System.Console.WriteLine(o.ToString());
+    }

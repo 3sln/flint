@@ -217,40 +217,10 @@ public static class Maps {
         return outv;
     }
 
-    /// Structural equality. Same count, and every key in `a` present in `b`
-    /// with an equal value -- ORDER-INDEPENDENT, which is what a map's `=`
-    /// means and why it cannot just compare slots.
+    /// Map equality, GENERATED -- see `kin/mapeq.kin`, and the JVM's `Maps.eq`
+    /// for the measurement that motivated it.
     public static bool Eq(Rt rt, long a, long b) {
-        // A ROW REF materialises here rather than being read as an array-map.
-        // BOTH operands are rooted before either is materialised, and the
-        // key and value are rooted before the lookup rather than read across
-        // it. `refToMap`, `Get` and `Equal` all allocate, and `0031` is that
-        // a value in a host local does not survive an allocation.
-        //
-        // Rust's `map_eq` already did this and carried the reason in a
-        // comment; the ports read `v` across `Get` and `b` across
-        // `refToMap(a)`. Measured: 18 miscompares in 4,000 comparisons of
-        // EQUAL values on the JVM while the native runtime scored 0.
-        int bas = rt.Mark();
-        int ai = rt.Push(a), bi = rt.Push(b);
-        if (Val.IsHeap(rt.R(ai)) && Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(ai))) == Obj.TyTableref)
-            rt.SetR(ai, Table.refToMap(rt, rt.R(ai)));
-        if (Val.IsHeap(rt.R(bi)) && Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(bi))) == Obj.TyTableref)
-            rt.SetR(bi, Table.refToMap(rt, rt.R(bi)));
-        if (MapCount(rt, rt.R(ai)) != MapCount(rt, rt.R(bi))) { rt.PopTo(bas); return false; }
-        int at = rt.Mark();
-        int n = Entries(rt, rt.R(ai));
-        bool ok = true;
-        for (int i = 0; i < n && ok; i++) {
-            int m = rt.Mark();
-            int ki = rt.Push(rt.R(at + 2 * i));
-            int vi = rt.Push(rt.R(at + 2 * i + 1));
-            int oi = rt.Push(MapGet(rt, rt.R(bi), rt.R(ki), Val.NotFound));
-            ok = rt.R(oi) != Val.NotFound && global::_3sln.Flint.Kgen.Rt.Valeq.ValEq(rt, rt.R(vi), rt.R(oi));
-            rt.PopTo(m);
-        }
-        rt.PopTo(bas);
-        return ok;
+        return global::_3sln.Flint.Kgen.Rt.Mapeq.MapEq(rt, a, b);
     }
 
     /// UNORDERED, as Clojure hashes maps: the entries are summed, so the hash

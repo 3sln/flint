@@ -1,0 +1,180 @@
+;; MAP EQUALITY, THE WAY A CHAMP IS MEANT TO BE COMPARED.
+;;
+;; The old shape, in all three runtimes: walk every entry of `a` and do a full
+;; `map-get` descent into `b` -- n lookups, each hashing a key and walking a
+;; trie. It never looked at `b`'s STRUCTURE, so two maps sharing all but one
+;; node paid for every entry. Measured on the JVM at 20,000 entries: 840us to
+;; compare a map against one derived from it by an assoc and a dissoc, which
+;; is the same price as comparing two maps that share nothing.
+;;
+;; A CHAMP is canonical: the same entries always give the same trie, whatever
+;; order they were inserted in. Verified before this was written, across
+;; ascending, descending, dissoc-ed and transient construction at 9, 33, 100,
+;; 1,000 and 5,000 entries -- bitmaps AND data slots.
+;;
+;; So equality is a parallel walk of two trees with three exits:
+;;
+;;   1. THE SAME NODE ON BOTH SIDES prunes the whole subtree, which is the
+;;      property persistent structures exist for. 840us becomes 1.2us.
+;;   2. A datamap or nodemap mismatch rejects in O(1).
+;;   3. Otherwise entries pairwise and children recursively -- no hashing, no
+;;      descent per key. 2x on maps that share nothing at all.
+;;
+;; TWO PLACES WHERE THE CANONICAL FORM DOES NOT HOLD, and both are handled
+;; rather than assumed:
+;;
+;;   COLLISION NODES are not canonical. Keys sharing a hash are stored in
+;;   insertion order, so `{"Aa" 1 "BB" 2}` and the same map built the other way
+;;   round have identical tries except for that one node, where the pairs are
+;;   swapped. They are compared UNORDERED, bounded by the number of keys on one
+;;   hash.
+;;
+;;   THE TIER IS PATH-DEPENDENT. Eight entries reached by `dissoc` from nine
+;;   stay a CHAMP where eight built directly are an ARRAY-MAP, so two equal
+;;   maps can be structurally incomparable. Only two CHAMPs take the walk;
+;;   anything else falls back, and the fallback is bounded by ARRAY_MAP_MAX
+;;   entries where a lookup loop costs nothing.
+(ns flint.rt.mapeq
+  (:require [flint.impl.rt :refer [defn return if let local set do comment doc
+                                   for == != < not or and +
+                                   mark push r pop-to slot ty as-heap nil?
+                                   popcount is-bmnode charge-work
+                                   bn-datamap bn-nodemap bn-key bn-val bn-node
+                                   cn-count cn-hash cn-key cn-val
+                                   val-eq
+                                   Rt Value RootIx I32 Bool Ty
+                                   HM_ROOT TY_HASHMAP TY_ARRAYMAP NOT_FOUND]]
+            [flint.rt.mapcore :refer [map-count am-key am-val]]
+            [flint.rt.mapread :refer [map-get]]))
+
+(doc "One key/value pair from each side."
+     ""
+     "ALL FOUR ARE ROOTED BEFORE ANY COMPARISON, not two and then two."
+     "`val-eq` allocates -- a row ref materialises as a map -- so comparing"
+     "the keys first would leave the two VALUES sitting in host locals across"
+     "that allocation, and `doc/decisions/0031` is that a value in a host"
+     "local does not survive one. The first draft of this did exactly that.")
+(defn ^:method ^Bool pair-eq
+  [^:mut ^Rt rt ^Value ka ^Value kb ^Value va ^Value vb]
+  (let [^RootIx base (mark rt)
+        ^RootIx kai (push rt ka)
+        ^RootIx kbi (push rt kb)
+        ^RootIx vai (push rt va)
+        ^RootIx vbi (push rt vb)]
+    (local ^:mut ^Bool same)
+    (set same (val-eq rt (r rt kai) (r rt kbi)))
+    (if same
+      (set same (val-eq rt (r rt vai) (r rt vbi))))
+    (pop-to rt base)
+    (return same)))
+
+(doc "Two collision nodes, compared WITHOUT regard to order."
+       "Their pairs sit in insertion order, which is the one part of a CHAMP"
+       "that is not canonical. The loop is quadratic in the number of keys"
+       "sharing a single hash, which is two or three.")
+(defn ^:method ^Bool coll-eq
+  [^:mut ^Rt rt ^Value a ^Value b]
+  (let [^I32 n (cn-count rt a)]
+    (if (!= n (cn-count rt b))
+      (return false))
+    (if (!= (cn-hash rt a) (cn-hash rt b))
+      (return false))
+    (for [^I32 i 0 n]
+      (do
+        (local ^:mut ^Bool found)
+        (set found false)
+        (for [^I32 j 0 n]
+          (if (not found)
+            (if (pair-eq rt (cn-key rt a i) (cn-key rt b j)
+                            (cn-val rt a i) (cn-val rt b j))
+              (set found true))))
+        (if (not found)
+          (return false))))
+    (return true)))
+
+(doc "Two trie nodes. The FIRST test is the one that matters: the same node"
+       "on both sides means the same subtree, and there is nothing to read.")
+(defn ^:method ^Bool node-eq
+  [^:mut ^Rt rt ^Value a ^Value b]
+  (if (== a b)
+    (return true))
+  (charge-work rt 1)
+  (let [^Bool ba (is-bmnode rt a)
+        ^Bool bb (is-bmnode rt b)]
+    (if (!= ba bb)
+      (return false))
+    (if (not ba)
+      (return (coll-eq rt a b))))
+  (let [^I32 dm (bn-datamap rt a)
+        ^I32 nm (bn-nodemap rt a)]
+    (if (!= dm (bn-datamap rt b))
+      (return false))
+    (if (!= nm (bn-nodemap rt b))
+      (return false))
+    (let [^I32 nd (popcount dm)
+          ^I32 nn (popcount nm)]
+      (for [^I32 i 0 nd]
+        (if (not (pair-eq rt (bn-key rt a i) (bn-key rt b i)
+                             (bn-val rt a i) (bn-val rt b i)))
+          (return false)))
+      (for [^I32 j 0 nn]
+        (let [^RootIx base (mark rt)
+              ^RootIx cai (push rt (bn-node rt a j))
+              ^RootIx cbi (push rt (bn-node rt b j))
+              ^Bool same (node-eq rt (r rt cai) (r rt cbi))]
+          (pop-to rt base)
+          (if (not same)
+            (return false))))))
+  (return true))
+
+(doc "The mixed and small case: at least one side is an ARRAY-MAP, so both"
+     "hold at most ARRAY_MAP_MAX entries and a lookup loop costs nothing."
+     ""
+     "It iterates the ARRAY-MAP side, whichever that is, because that is the"
+     "one whose entries can be read by index without walking a trie.")
+(defn ^:method ^Bool small-eq [^:mut ^Rt rt ^Value a ^Value b]
+  (local ^:mut ^Value am)
+  (local ^:mut ^Value ot)
+  (if (== (ty rt (as-heap a)) TY_ARRAYMAP)
+    (do (set am a) (set ot b))
+    (do (set am b) (set ot a)))
+  (do
+    (let [^RootIx base (mark rt)
+          ^RootIx ami (push rt am)
+          ^RootIx oti (push rt ot)
+          ^I32 n (map-count rt (r rt ami))]
+      (local ^:mut ^Bool out)
+      (set out true)
+      (for [^I32 i 0 n]
+        (if out
+          (let [^RootIx m (mark rt)
+                ^RootIx ki (push rt (am-key rt (r rt ami) i))
+                ^RootIx vi (push rt (am-val rt (r rt ami) i))
+                ^Value got (map-get rt (r rt oti) (r rt ki) NOT_FOUND)
+                ^RootIx gi (push rt got)]
+            (if (== (r rt gi) NOT_FOUND)
+              (set out false)
+              (set out (val-eq rt (r rt vi) (r rt gi))))
+            (pop-to rt m))))
+      (pop-to rt base)
+      (return out))))
+
+(doc "Equal maps, structurally. See the header for why the two fallbacks"
+       "are not optional.")
+(defn ^:pub ^:method ^Bool map-eq
+  [^:mut ^Rt rt ^Value a ^Value b]
+  (if (== a b)
+    (return true))
+  (if (!= (map-count rt a) (map-count rt b))
+    (return false))
+  (comment "ONLY TWO CHAMPS ARE STRUCTURALLY COMPARABLE. An array-map holds"
+           "its entries in insertion order and a map that came down across the"
+           "boundary stays a CHAMP, so the mixed case is a different shape"
+           "holding the same value. It is at most ARRAY_MAP_MAX entries.")
+  (if (or (!= (ty rt (as-heap a)) TY_HASHMAP) (!= (ty rt (as-heap b)) TY_HASHMAP))
+    (return (small-eq rt a b)))
+  (let [^Value ra (slot rt a HM_ROOT)
+        ^Value rb (slot rt b HM_ROOT)]
+    (if (or (nil? rt ra) (nil? rt rb))
+      (return (and (nil? rt ra) (nil? rt rb))))
+    (return (node-eq rt ra rb))))

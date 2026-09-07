@@ -490,3 +490,55 @@
     (expect = (hash bleft) (hash bright))
     (expect = (b/size bleft) (b/size bright))
     (expect = (b/to-string bleft) (b/to-string bright))))
+
+;; MAP EQUALITY IS A STRUCTURAL WALK NOW (`kin/mapeq.kin`), and these are the
+;; three places where the structure and the value disagree.
+;;
+;; A CHAMP is canonical -- the same entries give the same trie whatever order
+;; they arrived in -- which is what makes a parallel walk valid at all. Two
+;; things are not canonical, and both are handled rather than assumed:
+;;
+;;   COLLISION NODES hold keys that share a hash in INSERTION order, so
+;;   `{"Aa" 1 "BB" 2}` and the same map built the other way round differ in
+;;   exactly one node. "Aa" and "BB" are the classic Java collision and the
+;;   reason they are here.
+;;
+;;   THE TIER is path-dependent, so equal maps can be different shapes --
+;;   covered above by `coming-back-down-a-boundary-changes-nothing`.
+(defn ^:flint.check/test colliding-keys-are-equal-in-any-order []
+  (let [pad (reduce (fn [m i] (assoc m (str "pad" i) i)) {} (range 12))
+        a (assoc (assoc pad "Aa" 1) "BB" 2)
+        b (assoc (assoc pad "BB" 2) "Aa" 1)]
+    (expect = a b)
+    (expect = b a)
+    (expect = (hash a) (hash b))
+    (expect = (count a) (count b))
+    (expect = 1 (get a "Aa"))
+    (expect = 1 (get b "Aa"))
+    (expect = 2 (get a "BB"))
+    (expect = 2 (get b "BB"))
+    ;; and a differing value under a colliding key must still be caught
+    (expect = false (= a (assoc b "Aa" 99)))
+    (expect = false (= (assoc a "BB" 99) b)))
+  ;; the same, as sets, which are their backing map
+  (let [pad (reduce conj #{} (map (fn [i] (str "pad" i)) (range 12)))
+        a (conj (conj pad "Aa") "BB")
+        b (conj (conj pad "BB") "Aa")]
+    (expect = a b)
+    (expect = (hash a) (hash b))
+    (expect = true (contains? a "Aa"))
+    (expect = true (contains? b "Aa"))))
+
+(defn ^:flint.check/test maps-that-share-structure-still-compare []
+  ;; `b` is `a` with one entry added and removed, so it shares every node but
+  ;; the spine. The walk prunes shared subtrees on identity; the answer must
+  ;; not depend on that.
+  (let [a (reduce (fn [m i] (assoc m [:k i] i)) {} (range 300))
+        b (dissoc (assoc a [:k :extra] 1) [:k :extra])
+        c (reduce (fn [m i] (assoc m [:k i] i)) {} (range 300))]
+    (expect = a b)
+    (expect = a c)
+    (expect = (hash a) (hash b))
+    (expect = (hash a) (hash c))
+    (expect = false (= a (assoc b [:k 0] 999)))
+    (expect = false (= a (dissoc b [:k 0])))))
