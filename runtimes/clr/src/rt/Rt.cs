@@ -1024,6 +1024,21 @@ public sealed class Rt : System.IDisposable {
             long dflt2 = argc >= 2 ? roots.Stack[calleeAt + 2] : Val.Nil;
             return Mapread.MapGet(this, callee, roots.Stack[calleeAt + 1], dflt2);
         }
+        // A MAP ENTRY IS A VECTOR here as everywhere else: `vector?` answers
+        // true, `Nth`, `Get`, `conj` and `assoc` all treat it as one, and
+        // `([:x :y] 1)` works -- but CALLING one threw, on all three runtimes.
+        // The bound is checked here rather than left to the slot read, which
+        // has none.
+        if (IsHeapTy(callee, Obj.TyMapentry)) {
+            if (argc < 1) return ThrowStr("ArityException", "a vector takes 1 argument");
+            long k = roots.Stack[calleeAt + 1];
+            if (!Num.IsInt(this, k))
+                return ThrowStr("IllegalArgumentException", "vector index must be an integer");
+            long i = Num.I64Of(this, k);
+            if (i < 0 || i > 1)
+                return ThrowStr("IndexOutOfBoundsException", "index out of range");
+            return Slot(callee, (int) i);
+        }
         if (IsHeapTy(callee, TyVec)) {
             if (argc < 1) return ThrowStr("ArityException", "a vector takes 1 argument");
             long got = Vec.Nth(this, callee, (int) Val.AsFixnum(roots.Stack[calleeAt + 1]), Val.NotFound);

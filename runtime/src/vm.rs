@@ -722,10 +722,28 @@ impl Rt {
                 self.roots.stack_top = callee_at;
                 r
             }
-            TY_VEC => {
+            // A MAP ENTRY IS A VECTOR here as everywhere else. `vector?`
+            // answers true for one, `nth`, `get`, `conj` and `assoc` all treat
+            // it as a vector, and `([:x :y] 1)` works -- but CALLING one threw,
+            // on all three runtimes. Clojure's is callable and flint's own
+            // predicate already says it should be.
+            //
+            // The bound is checked HERE and not delegated to `slot_or_nth`,
+            // which reads the slot without one: it is safe only because its
+            // callers pass 0 and 1, and a call site takes whatever a program
+            // wrote.
+            TY_VEC | TY_MAPENTRY => {
+                let is_entry = ty(&self.gc.sp, callee.as_heap()) == TY_MAPENTRY;
                 let r = if argc == 1 {
                     let k = self.vat(callee_at + 1);
                     match self.as_i64(k) {
+                        Some(i) if i >= 0 && is_entry => {
+                            if i < 2 {
+                                self.slot(callee, i as u32)
+                            } else {
+                                self.throw_str("IndexOutOfBoundsException", "index out of range")
+                            }
+                        }
                         Some(i) if i >= 0 => {
                             // NOT_FOUND as the default, because out of range
                             // has to RAISE here rather than answer nil, and

@@ -319,3 +319,18 @@
         (expect = true (or (and (zero? ab) (zero? ba))
                            (and (neg? ab) (pos? ba))
                            (and (pos? ab) (neg? ba))))))))
+
+(defn ^:flint.check/test a-map-entry-is-callable-like-any-vector []
+  ;; `vector?` is true for a map entry and `nth`, `get`, `conj` and `assoc`
+  ;; all treat it as a vector -- but CALLING one threw, on all three runtimes,
+  ;; while `([:x :y] 1)` worked. One operation out of step with every other.
+  (let [me (first {:a 1})]
+    (expect = true (vector? me))
+    (expect = :a (me 0))
+    (expect = 1 (me 1))
+    (expect = (nth me 0) (me 0))
+    (expect = (get me 1) (me 1))
+    ;; ... and the bound is checked, which the slot read behind `get` is not.
+    (expect = :threw (try (me 2) (catch Throwable e :threw)))
+    (expect = :threw (try (me -1) (catch Throwable e :threw)))
+    (expect = :threw (try (me :k) (catch Throwable e :threw)))))

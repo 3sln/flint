@@ -1180,6 +1180,21 @@ public final class Rt {
             long dflt = argc >= 2 ? roots.stack[calleeAt + 2] : Val.NIL;
             return Mapread.mapGet(this, callee, roots.stack[calleeAt + 1], dflt);
         }
+        // A MAP ENTRY IS A VECTOR here as everywhere else: `vector?` answers
+        // true, `nth`, `get`, `conj` and `assoc` all treat it as one, and
+        // `([:x :y] 1)` works -- but CALLING one threw, on all three runtimes.
+        // The bound is checked here rather than left to the slot read, which
+        // has none.
+        if (isHeapTy(callee, TY_MAPENTRY)) {
+            if (argc < 1) return throwStr("ArityException", "a vector takes 1 argument");
+            long k = roots.stack[calleeAt + 1];
+            if (!Num.isInt(this, k))
+                return throwStr("IllegalArgumentException", "vector index must be an integer");
+            long i = Num.i64Of(this, k);
+            if (i < 0 || i > 1)
+                return throwStr("IndexOutOfBoundsException", "index out of range");
+            return slot(callee, (int) i);
+        }
         if (isHeapTy(callee, TY_VEC)) {
             if (argc < 1) return throwStr("ArityException", "a vector takes 1 argument");
             long got = Vec.nth(this, callee, (int) Val.asFixnum(roots.stack[calleeAt + 1]), Val.NOT_FOUND);

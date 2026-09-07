@@ -53,7 +53,9 @@
   ;;
   ;; Measured before the fix: `caught` was `:no-throw` and a later
   ;; `(count [1 2 3])` raised instead.
-  (let [not-a-fn (first {:a 1})
+  ;; A BOOLEAN, not a map entry: an entry is a vector and IS callable, which
+  ;; is a change this very test caught the moment it was made.
+  (let [not-a-fn (= 1 1)
         caught (try (not-a-fn 0) :no-throw (catch Throwable e (ex-message e)))
         after  (try (+ 1 2) (catch Throwable e :LEAKED))
         after2 (try (count [1 2 3]) (catch Throwable e :LEAKED))]
@@ -81,7 +83,7 @@
   ;; expressions later inside an unrelated `try`. The NATIVE opcode path had
   ;; the check the whole time. This asks the question of every path rather
   ;; than the one that happened to be looked at.
-  (let [not-a-fn (first {:a 1})
+  (let [not-a-fn (= 1 1)
         tail-call (fn [f] (f 0))]
     (doseq [f [;; CALL of a value that is not a function
                (fn [] (not-a-fn 0))
