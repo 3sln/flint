@@ -125,8 +125,20 @@ public final class Valhash {
         // must not rehash every lookup. `RP_HASH` gives the same caching
         // per node and keeps the tree, so the trade is gone rather than
         // chosen (`0011`).
+        // THROUGH `hash-int`, which a FLAT string's hash also goes
+        // through -- `string-hash` is `hash-int(java-string-hash(s))` and
+        // `rope-hash` is the raw 31-walk. Without the finaliser here a
+        // rope and an equal flat string hashed DIFFERENTLY, which breaks
+        // the one rule `0011` states about tiers: two values that are `=`
+        // must hash alike or a map keyed by one is not found by the
+        // other. All three runtimes agreed, so no cross-runtime check
+        // could see it; `(= x (read-string (pr-str x)))` did.
+        // 
+        // The RECURSION keeps the raw accumulator -- `rope-hash` calls
+        // itself, not this -- because a parent combines its children's
+        // with `pow31` and a finalised child cannot be combined.
         if (t == TY_ROPE) {
-            return (int) ((long) ropeHash(rt, v));
+            return hashInt((int) ((long) ropeHash(rt, v)));
         }
         if ((t == TY_BYTES) || (t == TY_BROPE)) {
             return (int) ((long) bHash(rt, v));

@@ -21,6 +21,7 @@
 (ns lang.edges
   (:require [flint.bytes :as b]
             [flint.table :as ft]
+            [clojure.edn :as edn]
             [flint.check :refer [expect]]))
 
 (defn- rep [n s] (loop [i 0 acc ""] (if (< i n) (recur (inc i) (str acc s)) acc)))
@@ -219,3 +220,45 @@
       (expect = (hash a) (hash b))
       (expect = 0 (compare [lit] [built]))
       (expect = :found (get {a :found} b)))))
+
+(defn ^:flint.check/test printing-round-trips-at-every-tier []
+  ;; `(= x (read-string (pr-str x)))` crosses the PRINTER and the READER, both
+  ;; of which are per-runtime code, and it holds for every value edn can
+  ;; carry. A value that prints on one runtime and cannot be read back on
+  ;; another is an interop bug, and nothing was asking.
+  ;;
+  ;; The large integers are here on purpose: the image loader truncated a
+  ;; literal past the fixnum range, and printing is the OTHER path a big
+  ;; number takes through text.
+  (doseq [x [nil true false 0 1 -1 7
+             fixnum-max fixnum-min (+ fixnum-max 1) (- fixnum-min 1)
+             0.0 1.5 -1.5
+             "" "a" (rep 6 "a") (rep 33 "a") (rep 1025 "a")
+             :k :ns/k (keyword (rep 33 "a")) (keyword "ns" (rep 33 "a"))
+             'sym 'ns/sym
+             [] [1 2 3] {} {:a 1} #{} #{1 2 3}
+             {:a [1 #{2}] :b {:c "d"}}
+             [(rep 1025 "a") (keyword (rep 33 "b"))]]]
+    (expect = x (edn/read-string (pr-str x)))
+    ;; ... and what comes back is the SAME KEY, which is the half `=` alone
+    ;; does not cover.
+    (expect = (hash x) (hash (edn/read-string (pr-str x))))))
+
+(defn ^:flint.check/test a-rope-hashes-as-a-flat-string []
+  ;; STRONGER than the round trip above, which only compares whatever tier
+  ;; the reader happens to hand back. Going through BYTES builds a flat
+  ;; string whatever came in, so this pins rope-against-flat directly.
+  ;;
+  ;; `rope-hash` is the raw 31-walk and `string-hash` is that walk through
+  ;; `hash-int`. Without the finaliser the two tiers hashed differently and a
+  ;; map keyed by one did not find the other -- the one rule `0011` states
+  ;; about tiers. All three runtimes agreed, so no cross-runtime check could
+  ;; see it.
+  (doseq [n [10 1024 1025 2000]]
+    (let [rope (rep n "a")
+          flat (b/to-string (b/of-string rope))]
+      (expect = true (= rope flat))
+      (expect = (hash rope) (hash flat))
+      (expect = :found (get {rope :found} flat))
+      (expect = :found (get {flat :found} rope))
+      (expect = true (contains? #{rope} flat)))))
