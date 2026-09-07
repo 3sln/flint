@@ -212,14 +212,20 @@
            ;; number throws instead.
            "  let i = instantiate(module);\n"
            "  i.exports.set_step_limit(0x7ffffff0n);\n"
-           "  i.run('o/main', [k, '0']);\n"
+           ;; THE SETUP'S ANSWER IS KEPT. `sink` maps nil to 0, so a setup that
+           ;; THREW reads as "0" here -- and until this line the harness
+           ;; discarded it, timed an operation over a nil, and reported ok.
+           ;; `bytes-to-str` sat like that: its input needed `str->b` on a
+           ;; rope, which threw, so the case never ran and never said so.
+           "  const setup = i.run('o/main', [k, '0']).out.trim();\n"
            "  const build = Number(i.exports.stat_steps());\n"
            "  const limit = build + 2000;\n"
            "  i = instantiate(module);\n"
            "  i.exports.set_step_limit(BigInt(limit));\n"
            "  const t0 = Date.now();\n"
            "  i.run('o/main', [k, '1']);\n"
-           "  out[k] = { over: Number(i.exports.stat_steps()) - limit, ms: Date.now() - t0 };\n"
+           "  out[k] = { over: Number(i.exports.stat_steps()) - limit, ms: Date.now() - t0,\n"
+           "             setup: setup };\n"
            "}\n"
            "console.log(JSON.stringify(out));\n"))
 (def ov (let [r (sh "node" "out/gas-over-run.mjs")]
@@ -232,6 +238,12 @@
     ;; 20 000 is far above the 54-322 these cost when they tick, and far below
     ;; the hundreds of thousands they cost when they do not. A bound that has to
     ;; be exact would fail on a scheduler slice landing differently.
+    ;; THE SETUP FIRST. Timing an operation over a nil measures nothing and
+    ;; reports ok, which is indistinguishable from a pass -- the same shape
+    ;; `bin/check-builtins` records for a gate that cannot find what it checks.
+    (check-that (str k " builds an input at all")
+                (= "1" (get m "setup"))
+                (format "the setup for %s produced nil, so the case below asks nothing" k))
     (check-that (str k " stops near its limit rather than running past it")
                 (< (get m "over") 20000)
                 (format "ran %d steps past an exhausted budget in %d ms -- a loop is not checking"
