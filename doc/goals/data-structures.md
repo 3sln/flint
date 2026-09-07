@@ -114,6 +114,39 @@ arithmetic is only a shortcut.
 
 ### 1. Chunked seqs are declared and never built
 
+Swept on ALLOCATIONS across the bulk operations, n=20,000, each against a base
+mode that does the same setup and skips the operation:
+
+| operation | allocations | per element | |
+|---|---|---|---|
+| `mapv` | 650 | 0.0 | transient |
+| `filterv` | 328 | 0.0 | transient |
+| `into` a vector | 649 | 0.0 | transient |
+| `reverse` | 20,000 | 1.0 | a cons per element |
+| `frequencies` | 25,436 | 1.3 | transient map |
+| `filter` (lazy) | 70,329 | 3.5 | **seq layer** |
+| `map` (lazy) | 80,651 | 4.0 | **seq layer** |
+| `concat` | 101,298 | 5.1 | **seq layer** |
+| `interleave` | 121,298 | 6.1 | **seq layer** |
+| `partition` | 155,167 | 7.8 | **seq layer** |
+| `keys` | 161,867 | 8.1 | **seq layer + a MapEntry per pair** |
+| `vals` | 181,867 | 9.1 | **seq layer + a MapEntry per pair** |
+
+The split is clean and it is not about the individual functions. Everything
+built through a TRANSIENT costs nothing per element. Everything that goes
+through the lazy seq layer costs between three and nine allocations per
+element, because each step is a thunk, a lazy-seq cell and a cons, plus
+whatever the source seq allocates to advance.
+
+`keys` and `vals` are the worst and are not themselves at fault: they are
+`(map2 first m)` and `(map2 second m)`, so they pay the seq layer twice over
+-- once for the map's own seq, which hands out a MapEntry per pair, and once
+for the `map` on top.
+
+A chunk is 32 elements, so chunking turns four allocations per element into
+roughly four per thirty-two. That is the size of the prize, and it is one
+number rather than twelve.
+
 `TY_CHUNKSEQ` is in the type table and the seq predicates recognise it.
 Nothing constructs one. `map`, `filter`, `keep` and `mapcat` are lazy one
 element at a time -- a thunk and a cons per element -- where Clojure allocates

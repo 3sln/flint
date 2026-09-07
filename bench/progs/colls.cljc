@@ -101,6 +101,42 @@
                     (if (flint.rt/lt i n)
                       (recur (flint.rt/add i 1) (flint.rt/b-conj! t (flint.rt/rem i 256)))
                       t)))))
+            ;; A SWEEP, not a claim about any one of these. `sort` was found
+            ;; at 74.7 allocations per element while its neighbours sat near
+            ;; one, so the useful question is which of the bulk operations is
+            ;; an outlier -- and the answer is only visible with a matching
+            ;; BASE mode subtracting the same setup.
+            (flint.rt/= op "mapv") (let [v (ints n)]
+                                     (if base? (count v) (count (mapv inc v))))
+            (flint.rt/= op "filterv") (let [v (ints n)]
+                                        (if base? (count v)
+                                            (count (filterv even? v))))
+            (flint.rt/= op "into-vec") (let [v (ints n)]
+                                         (if base? (count v) (count (into [] v))))
+            (flint.rt/= op "reverse") (let [v (ints n)]
+                                        (if base? (count v) (count (reverse v))))
+            (flint.rt/= op "concat") (let [v (ints n)]
+                                       (if base? (count v)
+                                           (count (vec (concat v v)))))
+            (flint.rt/= op "interleave") (let [v (ints n)]
+                                           (if base? (count v)
+                                               (count (vec (interleave v v)))))
+            (flint.rt/= op "partition") (let [v (ints n)]
+                                          (if base? (count v)
+                                              (count (vec (partition 4 v)))))
+            (flint.rt/= op "keys") (let [m (into {} (pairs n))]
+                                     (if base? (count m) (count (vec (keys m)))))
+            (flint.rt/= op "vals") (let [m (into {} (pairs n))]
+                                     (if base? (count m) (count (vec (vals m)))))
+            (flint.rt/= op "frequencies") (let [v (ints n)]
+                                            (if base? (count v)
+                                                (count (frequencies v))))
+            (flint.rt/= op "map-lazy") (let [v (ints n)]
+                                         (if base? (count v)
+                                             (count (vec (map inc v)))))
+            (flint.rt/= op "filter-lazy") (let [v (ints n)]
+                                            (if base? (count v)
+                                                (count (vec (filter even? v)))))
             ;; SORT, on allocations. `merge-sort` is the only caller of
             ;; `subvec`, and the interesting number is not the clock -- the
             ;; top-down version sliced a fresh vector per level and merged
