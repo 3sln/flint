@@ -931,8 +931,29 @@
 ;; every other seq function gives. Clojure is not uniform about this and it
 ;; cannot be reasoned out -- `(map inc [])` is `()` and `(keys {})` is nil --
 ;; so `test/conform/basics.cljc` asks real Clojure and this follows.
-(defn keys [m] (when (seq m) (map2 first m)))
-(defn vals [m] (when (seq m) (map2 second m)))
+;;
+;; WALKED BY INDEX, not through `map`. These were `(map2 first m)`, which pays
+;; the lazy layer TWICE: once for the map's own seq, which is a vecseq over the
+;; entry vector, and once for the `map` on top of it. They measured 8.1 and 9.1
+;; allocations per element, the worst of any bulk operation.
+;;
+;; Still lazy, one cell per element, over the vector the map already has.
+(defn- keyvals-from [ev ^int i ^int n which]
+  (lazy-seq
+    (if (flint.rt/lt i n)
+      (cons (flint.rt/nth (flint.rt/nth ev i) which)
+            (keyvals-from ev (flint.rt/add i 1) n which))
+      nil)))
+
+(defn- keyvals [m which]
+  (let [ev (flint.rt/coll-vec m)]
+    (if (nil? ev)
+      (when (seq m) (map2 (if (flint.rt/= which 0) first second) m))
+      (let [^int n (count ev)]
+        (when (flint.rt/lt 0 n) (keyvals-from ev 0 n which))))))
+
+(defn keys [m] (keyvals m 0))
+(defn vals [m] (keyvals m 1))
 (defn key [e] (flint.rt/nth e 0))
 (defn val [e] (flint.rt/nth e 1))
 

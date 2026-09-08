@@ -129,8 +129,8 @@ mode that does the same setup and skips the operation:
 | `concat` | 101,298 | 5.1 | **seq layer** |
 | `interleave` | 121,298 | 6.1 | **seq layer** |
 | `partition` | 155,167 | 7.8 | **seq layer** |
-| `keys` | 161,867 | 8.1 | **seq layer + a MapEntry per pair** |
-| `vals` | 181,867 | 9.1 | **seq layer + a MapEntry per pair** |
+| `keys` | 161,867 | 8.1 | **seq layer twice over -- since fixed** |
+| `vals` | 181,867 | 9.1 | **seq layer twice over -- since fixed** |
 
 The split is clean and it is not about the individual functions. Everything
 built through a TRANSIENT costs nothing per element. Everything that goes
@@ -138,10 +138,17 @@ through the lazy seq layer costs between three and nine allocations per
 element, because each step is a thunk, a lazy-seq cell and a cons, plus
 whatever the source seq allocates to advance.
 
-`keys` and `vals` are the worst and are not themselves at fault: they are
-`(map2 first m)` and `(map2 second m)`, so they pay the seq layer twice over
--- once for the map's own seq, which hands out a MapEntry per pair, and once
-for the `map` on top.
+`keys` and `vals` were the worst because they pay the layer TWICE: they were
+`(map2 first m)` and `(map2 second m)`, so once for the map's own seq -- a
+vecseq over the entry vector -- and once for the `map` above it.
+
+They walk that vector by index now, still lazily, one cell per element.
+Measured like for like, same build but for `core.cljc`: 223,084 allocations to
+141,867 on a 20,000-entry map, 13.0 MB to 8.0 MB, 26.6ms to 22.5ms.
+
+The 8.1 and 9.1 in the table above were measured before `coll-vec` existed and
+under a different setup; the 223,084 is the number to compare against, because
+it was taken in the same run as the 141,867.
 
 A chunk is 32 elements, so chunking turns four allocations per element into
 roughly four per thirty-two. That is the size of the prize, and it is one
