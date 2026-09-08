@@ -124,8 +124,8 @@ mode that does the same setup and skips the operation:
 | `into` a vector | 649 | 0.0 | transient |
 | `reverse` | 20,000 | 1.0 | a cons per element |
 | `frequencies` | 25,436 | 1.3 | transient map |
-| `filter` (lazy) | 70,329 | 3.5 | **seq layer** |
-| `map` (lazy) | 80,651 | 4.0 | **seq layer** |
+| `filter` (lazy) | 70,329 | 3.5 | **seq layer -- now 1.5** |
+| `map` (lazy) | 80,651 | 4.0 | **seq layer -- now 3.0** |
 | `concat` | 101,298 | 5.1 | **seq layer** |
 | `interleave` | 121,298 | 6.1 | **seq layer** |
 | `partition` | 155,167 | 7.8 | **seq layer** |
@@ -153,6 +153,31 @@ it was taken in the same run as the 141,867.
 A chunk is 32 elements, so chunking turns four allocations per element into
 roughly four per thirty-two. That is the size of the prize, and it is one
 number rather than twelve.
+
+**One of those three allocations was avoidable without chunking.** `rest` on a
+vector's seq builds a fresh vecseq cell per element, so `map` and `filter`
+were paying for a cursor over something that answers `nth` directly. They walk
+by index now -- over a vector, or over the entry vector `coll-vec` hands back
+for a map or set:
+
+| | before | after |
+|---|---|---|
+| `map` | 4.0/elem | 3.0/elem |
+| `filter` | 3.5/elem | **1.5/elem** |
+
+`filter` gains more than the one cell because a rejected element now costs
+NOTHING: the skip is a `loop` inside the thunk, so dropping a thousand in a
+row is one thunk rather than a thousand.
+
+What is left is the thunk and the cons, which is what chunking would amortise
+thirty-two ways. The prize is smaller than it was and the same shape.
+
+A TRAP WORTH KNOWING for anything defined near the top of `core.cljc`:
+`map2` is evaluated at COMPILE time by the macros above it, and an `^int`
+annotation on a helper pulls in the type checker, which wants `check-tag`,
+which the compiler cannot resolve. The failure names a builtin in
+`flint.check` and says nothing about annotations. `reduce` can annotate
+because nothing above it calls `reduce`.
 
 `TY_CHUNKSEQ` is in the type table and the seq predicates recognise it.
 Nothing constructs one. `map`, `filter`, `keep` and `mapcat` are lazy one

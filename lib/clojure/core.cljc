@@ -264,12 +264,33 @@
         (nil? (next args)) (seq (first args))
         :else (cons (first args) (spread (next args)))))
 
+;; INDEXABLE INPUT WALKS BY INDEX. `rest` on a vector's seq allocates a fresh
+;; vecseq cell per element, so mapping a vector cost three allocations an
+;; element -- the vecseq, the lazy-seq and the cons -- to walk something that
+;; answers `nth` directly.
+;;
+;; NO `^int` ANNOTATIONS HERE, and that is not an oversight. `map2` is
+;; evaluated at COMPILE time by the macros defined above it, an annotation
+;; pulls in the type checker, and the checker wants `check-tag` -- which the
+;; compiler cannot resolve. `reduce` below can annotate because nothing above
+;; it calls `reduce`.
+(defn- map-over-vec [f v i n]
+  (lazy-seq
+    (if (flint.rt/lt i n)
+      (cons (f (flint.rt/nth v i)) (map-over-vec f v (flint.rt/add i 1) n))
+      nil)))
+
 (defn map2
   "Two-argument map over one collection, defined before `map` so that macros
   above can use it."
   [f coll]
-  (lazy-seq (let [s (seq coll)]
-              (when s (cons (f (first s)) (map2 f (rest s)))))))
+  (if (flint.rt/vector? coll)
+    (map-over-vec f coll 0 (count coll))
+    (let [cv (flint.rt/coll-vec coll)]
+      (if (nil? cv)
+        (lazy-seq (let [s (seq coll)]
+                    (when s (cons (f (first s)) (map2 f (rest s))))))
+        (map-over-vec f cv 0 (count cv))))))
 
 (defn reduce
   ([f coll] (let [s (seq coll)]
@@ -799,12 +820,30 @@
                   (if (nil? v) (keep2 f (rest s)) (cons v (keep2 f (rest s)))))))))
 (defn keep [f coll] (keep2 f coll))
 
+;; INDEXABLE INPUT WALKS BY INDEX, for the reason `map-over-vec` gives -- and
+;; a run of elements that fail the predicate is skipped in a LOOP, so dropping
+;; a thousand in a row costs one thunk and not a thousand.
+(defn- filter-over-vec [pred v i n]
+  (lazy-seq
+    (loop [j i]
+      (if (flint.rt/lt j n)
+        (let [x (flint.rt/nth v j)]
+          (if (pred x)
+            (cons x (filter-over-vec pred v (flint.rt/add j 1) n))
+            (recur (flint.rt/add j 1))))
+        nil))))
+
 (defn filter [pred coll]
-  (lazy-seq (let [s (seq coll)]
-              (when s
-                (if (pred (first s))
-                  (cons (first s) (filter pred (rest s)))
-                  (filter pred (rest s)))))))
+  (if (flint.rt/vector? coll)
+    (filter-over-vec pred coll 0 (count coll))
+    (let [cv (flint.rt/coll-vec coll)]
+      (if (nil? cv)
+        (lazy-seq (let [s (seq coll)]
+                    (when s
+                      (if (pred (first s))
+                        (cons (first s) (filter pred (rest s)))
+                        (filter pred (rest s))))))
+        (filter-over-vec pred cv 0 (count cv))))))
 
 (defn remove [pred coll] (filter (fn [x] (not (pred x))) coll))
 
