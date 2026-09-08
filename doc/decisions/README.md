@@ -608,6 +608,37 @@ what remains, and what each thing is waiting on.
    over. It matters more from here: `defdata` will GENERATE call templates,
    and they would have landed in the blind spot.
 
+0v. **Regex costs different gas on native and the ports, and the gas corpus
+   cannot see it** — OPEN, characterised but not explained. It is why
+   `runtimes/conform/gasmeter.cljc` still has no regex in it: that row
+   compares to the INSTRUCTION, and adding regex work makes it red.
+
+   MEASURED, on the JVM against native:
+
+       subject   matches  slots/match  total slots   gap
+       60 bytes       12            2           24    21
+       60 bytes       48            2           96    56
+       60 bytes       48            4          192   111
+       240 bytes      80            2          160    89
+
+   The first three share ONE subject, so it is not the subject charge —
+   which is `n/8 + 1` and identical on both. Native charges MORE, and the
+   gap tracks TOTAL SLOTS at about 0.58 each, consistently across a change
+   of match count and a change of group count.
+
+   TWO EXPLANATIONS TRIED AND KILLED, recorded so they are not tried again:
+
+   * *per match* — no. Holding the subject and match count fixed and adding
+     one group took the gap from 56 to 111.
+   * *persistent `conj`*, which is how both build the result vector where
+     the gas corpus uses `into` and a transient — no. Two hundred persistent
+     conjs with no regex show a gap of 5, and so do two hundred transient
+     ones. The constant 5 is startup and does not scale.
+
+   So it is inside the regex path, scales with the size of the result, and
+   is not the vector machinery that result is built with. The next step is
+   allocation-level accounting rather than another guess from the shape.
+
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old
    `jvm`-against-`clr` similarity table because BOTH ports share them. Two
