@@ -1452,7 +1452,45 @@ closure. Four walks where two would do.
 
 So the decision now reads: a callback capability would take three functions
 off the list rather than seven, AND let four walks collapse into two. The
-second half was invisible until the first four came off by hand. Both ports had the
+second half was invisible until the first four came off by hand.
+
+### The last three, read -- and none of them needs a closure either
+
+**`conj`** (`coll.rs`), conjing a map onto a map: assoc each entry of one into
+the other. An accumulating walk, exactly like `collvec`. Not blocked.
+
+**`encode_collection`** (`codec.rs`): the callback pushes k and v into a host
+`Vec`, and the very next lines push that Vec onto the shadow stack anyway. A
+walk that pushed roots directly would replace both. It IS blocked -- by the
+nine hand-divergences recorded above, which have to close before generating
+the codec means anything -- and not by this.
+
+**`check_sendable_at`** (`conc.rs`): same shape again, collect into a host
+`Vec` then iterate with an early exit on the first error.
+
+### What that leaves, stated plainly
+
+**The closure hole no longer blocks any collection operation.** Equality,
+hashing, `seq`, elements, and set equality are all generated. What still calls
+`map_for_each` is: its own definition, one test, and three functions that use
+it to COLLECT rather than to iterate -- two of which are blocked by something
+else entirely.
+
+So the capability is no longer a prerequisite for the port. It is an
+optimisation with two measured effects:
+
+  It would collapse four generated walks into two, which is most of the 2 076
+  bytes those two modules cost.
+
+  It would let both ports stop walking maps through `entries`, which is 2n
+  shadow-stack roots. Equality, hashing, `seq` and set elements have already
+  stopped: `Maps.entries` has exactly TWO callers left in the JVM port,
+  `Codec` and `Conc` -- the same two functions that still call
+  `map_for_each` on native. The ports and the reference runtime are down to
+  the same short list, which is the first time that has been true here.
+
+That is a smaller and better-defined thing to decide than "seven functions are
+blocked", which is what this said a day ago. Both ports had the
 answer in three lines the whole time.
 
 `eq.rs` WAS 718 LINES AND IS 286, of which everything past line 190 is tests.
