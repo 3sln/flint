@@ -1,0 +1,102 @@
+--rust-head
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+impl Value { fn is_nil(self) -> bool { self.0 == NIL.0 } }
+struct Rt { cps: Vec<Vec<u32>>, walks: Vec<usize>, leaves: Vec<Vec<u32>> }
+impl Rt {
+    fn cps_open(&mut self) -> u32 { self.cps.push(Vec::new()); (self.cps.len() - 1) as u32 }
+    fn cps_put(&mut self, c: u32, v: u32) { self.cps[c as usize].push(v); }
+    fn cps_len(&self, c: u32) -> u32 { self.cps[c as usize].len() as u32 }
+    fn cps_at(&self, c: u32, i: u32) -> u32 { self.cps[c as usize][i as usize] }
+    fn walk_open(&mut self, _s: Value) -> u32 { self.walks.push(0); (self.walks.len() - 1) as u32 }
+    fn walk_next(&mut self, w: u32) -> Value {
+        let i = self.walks[w as usize];
+        if i >= self.leaves.len() { return NIL; }
+        self.walks[w as usize] = i + 1;
+        Value(i as u64)
+    }
+    fn walk_close(&mut self, w: u32) { self.walks.truncate(w as usize); }
+    fn leaf_len(&self, l: Value) -> u32 { self.leaves[l.0 as usize].len() as u32 }
+    fn leaf_byte(&self, l: Value, i: u32) -> u32 { self.leaves[l.0 as usize][i as usize] }
+--rust
+}
+fn main() {
+    // "ab" + "é" SPLIT ACROSS TWO LEAVES + "A". The straddle is the whole
+    // point: the two-integer state carries across the boundary, so the
+    // character needs no special case.
+    let rt_leaves = vec![vec![0x61u32, 0x62], vec![0xC3], vec![0xA9, 0x41],
+                         vec![0xE2, 0x82], vec![0xAC]];
+    let mut rt = Rt { cps: Vec::new(), walks: Vec::new(), leaves: rt_leaves };
+    let c = rt.code_points(Value(0));
+    let mut o = String::new();
+    o.push_str(&format!("{}:", rt.cps_len(c)));
+    for i in 0..rt.cps_len(c) { o.push_str(&format!(" {}", rt.cps_at(c, i))); }
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFF;
+    static final class Val { static boolean isNil(long v) { return v == NIL; } }
+    static final class Rt {
+        java.util.ArrayList<java.util.ArrayList<Integer>> cps = new java.util.ArrayList<>();
+        java.util.ArrayList<Integer> walks = new java.util.ArrayList<>();
+        int[][] leaves;
+        int cpsOpen() { cps.add(new java.util.ArrayList<>()); return cps.size() - 1; }
+        void cpsPut(int c, int v) { cps.get(c).add(v); }
+        int cpsLen(int c) { return cps.get(c).size(); }
+        int cpsAt(int c, int i) { return cps.get(c).get(i); }
+        int walkOpen(long s) { walks.add(0); return walks.size() - 1; }
+        long walkNext(int w) {
+            int i = walks.get(w);
+            if (i >= leaves.length) return NIL;
+            walks.set(w, i + 1);
+            return i;
+        }
+        void walkClose(int w) { while (walks.size() > w) walks.remove(walks.size() - 1); }
+        int leafLen(long l) { return leaves[(int) l].length; }
+        int leafByte(long l, int i) { return leaves[(int) l][i]; }
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        rt.leaves = new int[][]{{0x61, 0x62}, {0xC3}, {0xA9, 0x41}, {0xE2, 0x82}, {0xAC}};
+        int c = codePoints(rt, 0L);
+        StringBuilder o = new StringBuilder();
+        o.append(rt.cpsLen(c)).append(':');
+        for (int i = 0; i < rt.cpsLen(c); i++) o.append(' ').append(rt.cpsAt(c, i));
+        System.out.println(o);
+    }
+--csharp-head
+    const long NIL = 0xFFFF;
+    static class Val { internal static bool IsNil(long v) { return v == NIL; } }
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<System.Collections.Generic.List<int>> cps =
+            new System.Collections.Generic.List<System.Collections.Generic.List<int>>();
+        internal System.Collections.Generic.List<int> walks = new System.Collections.Generic.List<int>();
+        internal int[][] leaves;
+        internal int CpsOpen() { cps.Add(new System.Collections.Generic.List<int>()); return cps.Count - 1; }
+        internal void CpsPut(int c, int v) { cps[c].Add(v); }
+        internal int CpsLen(int c) { return cps[c].Count; }
+        internal int CpsAt(int c, int i) { return cps[c][i]; }
+        internal int WalkOpen(long s) { walks.Add(0); return walks.Count - 1; }
+        internal long WalkNext(int w) {
+            int i = walks[w];
+            if (i >= leaves.Length) return NIL;
+            walks[w] = i + 1;
+            return i;
+        }
+        internal void WalkClose(int w) { while (walks.Count > w) walks.RemoveAt(walks.Count - 1); }
+        internal int LeafLen(long l) { return leaves[(int) l].Length; }
+        internal int LeafByte(long l, int i) { return leaves[(int) l][i]; }
+    }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        rt.leaves = new int[][]{new int[]{0x61, 0x62}, new int[]{0xC3},
+                                new int[]{0xA9, 0x41}, new int[]{0xE2, 0x82}, new int[]{0xAC}};
+        int c = CodePoints(rt, 0L);
+        var o = new System.Text.StringBuilder();
+        o.Append(rt.CpsLen(c)).Append(':');
+        for (int i = 0; i < rt.CpsLen(c); i++) o.Append(' ').Append(rt.CpsAt(c, i));
+        System.Console.WriteLine(o.ToString());
+    }

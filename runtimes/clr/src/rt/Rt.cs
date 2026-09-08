@@ -30,6 +30,12 @@ public sealed class Rt : System.IDisposable {
     private readonly System.Collections.Generic.List<System.IO.MemoryStream> sinks =
         new System.Collections.Generic.List<System.IO.MemoryStream>();
 
+    /// CODE-POINT BUFFERS -- see the Java copy and `kin/codepoints.kin`.
+    private readonly System.Collections.Generic.List<int[]> cpsBuf =
+        new System.Collections.Generic.List<int[]>();
+    private readonly System.Collections.Generic.List<int> cpsLens =
+        new System.Collections.Generic.List<int>();
+
     // -------------------------------------------------------------- the walk
     //
     // The sink's sibling -- see the Java and Rust copies.
@@ -80,6 +86,42 @@ public sealed class Rt : System.IDisposable {
         }
         return true;
     }
+
+
+    /// Open a code-point buffer and answer its index.
+    public int CpsOpen() {
+        cpsBuf.Add(new int[64]);
+        cpsLens.Add(0);
+        return cpsBuf.Count - 1;
+    }
+
+    /// Release `c` and everything opened after it.
+    public void CpsClose(int c) {
+        while (cpsBuf.Count > c) { cpsBuf.RemoveAt(cpsBuf.Count - 1); cpsLens.RemoveAt(cpsLens.Count - 1); }
+    }
+
+    /// Append one code point, doubling when full.
+    public void CpsPut(int c, int v) {
+        int[] b = cpsBuf[c];
+        int n = cpsLens[c];
+        if (n == b.Length) { System.Array.Resize(ref b, n * 2); cpsBuf[c] = b; }
+        b[n] = v;
+        cpsLens[c] = n + 1;
+    }
+
+    /// How many code points it holds.
+    public int CpsLen(int c) { return cpsLens[c]; }
+
+    /// The buffer's contents, trimmed, and the buffer released -- see the Java.
+    public int[] CpsTake(int c) {
+        int[] taken = new int[cpsLens[c]];
+        System.Array.Copy(cpsBuf[c], taken, cpsLens[c]);
+        CpsClose(c);
+        return taken;
+    }
+
+    /// The code point at `i`, or 0 past the end -- the TOTAL form; see the Rust.
+    public int CpsAt(int c, int i) { return i < cpsLens[c] ? cpsBuf[c][i] : 0; }
 
     public int SinkOpen() {
         sinks.Add(new System.IO.MemoryStream());

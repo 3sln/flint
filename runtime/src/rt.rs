@@ -95,6 +95,13 @@ pub struct Rt {
     /// borrow's, and it is the same shape the shadow stack already uses for
     /// exactly the same reason. `sink_open`/`sink_close` are `mark`/`pop_to`.
     pub(crate) sinks: alloc::vec::Vec<alloc::vec::Vec<u8>>,
+    /// CODE-POINT BUFFERS, the same shape as `sinks` and for the same reason:
+    /// a generated source names one rather than holding it. The regex engine
+    /// wants random access to code points, and the alternative to this was
+    /// materialising the subject into contiguous bytes -- a rope FLATTEN,
+    /// which is what both ports did and `0011` says to count rather than hope
+    /// about.
+    pub(crate) cps: alloc::vec::Vec<alloc::vec::Vec<u32>>,
     /// TREE WALKS IN PROGRESS, owned by the runtime and addressed by index.
     ///
     /// The sink's sibling, and for the same reason: comparing or hashing two
@@ -320,6 +327,7 @@ impl Rt {
             gc,
             roots: Roots::new(shared),
             sinks: alloc::vec::Vec::new(),
+            cps: alloc::vec::Vec::new(),
             walks: alloc::vec::Vec::new(),
             thrown: NIL,
             frames: alloc::vec::Vec::new(),

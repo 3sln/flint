@@ -168,27 +168,6 @@ public static class Pike {
         return best;
     }
 
-    /// The code points of a string, in order.
-    static int[] CodePoints(Rt rt, long s) {
-        byte[] b = Str.Bytes(rt, s);
-        int[] outv = new int[b.Length];
-        int n = 0, i = 0;
-        while (i < b.Length) {
-            int c = b[i] & 0xFF, cp;
-            if (c < 0x80) { cp = c; i += 1; }
-            else if ((c & 0xE0) == 0xC0) { cp = ((c & 0x1F) << 6) | (b[i+1] & 0x3F); i += 2; }
-            else if ((c & 0xF0) == 0xE0) {
-                cp = ((c & 0x0F) << 12) | ((b[i+1] & 0x3F) << 6) | (b[i+2] & 0x3F); i += 3;
-            } else {
-                cp = ((c & 0x07) << 18) | ((b[i+1] & 0x3F) << 12)
-                   | ((b[i+2] & 0x3F) << 6) | (b[i+3] & 0x3F); i += 4;
-            }
-            outv[n++] = cp;
-        }
-        int[] exact = new int[n];
-        System.Array.Copy(outv, 0, exact, 0, n);
-        return exact;
-    }
 
     /// Build a `Obj.TyRegex` from a program the shared cljc compiler emitted.
     ///
@@ -244,7 +223,7 @@ public static class Pike {
         int[] prog = ProgOf(rt, re);
         int ninstrs = prog[0];
         int nslots = (prog[2] + 1) * 2;
-        int[] cps = CodePoints(rt, s);
+        int[] cps = rt.CpsTake(global::_3sln.Flint.Kgen.Rt.Codepoints.CodePoints(rt, s));
         int[] best = RunOver(prog, ninstrs, nslots, cps, (int) System.Math.Max(from, 0), entry, full);
         return best == null ? Val.Nil : SlotsVector(rt, best);
     }
@@ -261,7 +240,7 @@ public static class Pike {
         int[] prog = ProgOf(rt, re);
         int ninstrs = prog[0];
         int nslots = (prog[2] + 1) * 2;
-        int[] cps = CodePoints(rt, s);
+        int[] cps = rt.CpsTake(global::_3sln.Flint.Kgen.Rt.Codepoints.CodePoints(rt, s));
         List<int> found = new List<int>();
         int at = 0;
         long count = 0;

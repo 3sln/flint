@@ -115,6 +115,18 @@
   opened one closes it."
   {:name 'Sink :types {:rust "u32" :java "int" :csharp "int"} :methods {}})
 
+(def Cps
+  "A CODE-POINT BUFFER being filled, named by an index into the runtime's own
+  list -- the same shape as `Sink`, and for the same reason: the buffer is the
+  host's, so a generated source names one rather than holding it.
+
+  It exists because the regex engine wants RANDOM ACCESS to code points, and
+  the alternative was materialising the subject into contiguous bytes first.
+  For a rope that is a FLATTEN, which is what both ports did on every regex
+  call while native walked the leaves -- same answers, different work, and
+  `0011` is explicit that this is the thing to count rather than hope about."
+  {:name 'Cps :types {:rust "u32" :java "int" :csharp "int"} :methods {}})
+
 (def Walk
   "A TREE WALK IN PROGRESS, named by an index into the runtime's own list.
 
@@ -180,7 +192,7 @@
   {:name 'Addr :types {:rust "Addr" :java "long" :csharp "long"} :methods {}})
 
 (def tags {'Rt Rt 'Value Value 'Cat Cat 'Ty Ty 'Bool Bool 'I32 I32 'I64 I64 'Cmp Cmp 'U32 U32 'RootIx RootIx
-               'Text Text 'StaticText StaticText 'Sink Sink 'Walk Walk
+               'Text Text 'StaticText StaticText 'Sink Sink 'Walk Walk 'Cps Cps
                'F64 F64 'Addr Addr 'Idx Idx 'Bits Bits 'U32s U32s 'U64s U64s 'Interns Interns})
 
 (defn- t [ctx] (:target ctx))
@@ -1179,6 +1191,23 @@
     ;; Rust has the same primitive one layer down, so this converges onto the
     ;; spelling all three can say rather than the one only Rust can.
     ;; --- THE WALK, the sink's sibling ---------------------------------
+    ;; THE CODE-POINT BUFFER, read and write. `cps-at` and `cps-len` are the
+    ;; read half that `Sink` still lacks -- a sink can be filled and handed
+    ;; away but not inspected, which is why the text constructors could not be
+    ;; generated. This buffer has both from the start.
+    'cps-open (core/call {:rust "{0}.cps_open()"
+                          :java "{0}.cpsOpen()" :csharp "{0}.CpsOpen()"}
+                         {:tag Cps})
+    'cps-close (core/call {:rust "{0}.cps_close({1})"
+                           :java "{0}.cpsClose({1})" :csharp "{0}.CpsClose({1})"})
+    'cps-put (core/call {:rust "{0}.cps_put({1}, {2})"
+                         :java "{0}.cpsPut({1}, {2})" :csharp "{0}.CpsPut({1}, {2})"})
+    'cps-len (core/call {:rust "{0}.cps_len({1})"
+                         :java "{0}.cpsLen({1})" :csharp "{0}.CpsLen({1})"}
+                        {:tag I32})
+    'cps-at (core/call {:rust "{0}.cps_at({1}, {2})"
+                        :java "{0}.cpsAt({1}, {2})" :csharp "{0}.CpsAt({1}, {2})"}
+                       {:tag I32})
     'walk-open (core/call {:rust "{0}.walk_open({1})"
                            :java "{0}.walkOpen({1})" :csharp "{0}.WalkOpen({1})"}
                           {:tag Walk})

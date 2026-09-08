@@ -164,6 +164,34 @@ impl Rt {
 
     /// Open a buffer and answer its index. `sink_close` releases it and every
     /// buffer opened after it, which is `pop_to`'s discipline exactly.
+    /// Open a code-point buffer and answer its index. See `Rt::cps`.
+    pub fn cps_open(&mut self) -> u32 {
+        self.cps.push(alloc::vec::Vec::new());
+        (self.cps.len() - 1) as u32
+    }
+
+    /// Release `c` and everything opened after it.
+    pub fn cps_close(&mut self, c: u32) {
+        self.cps.truncate(c as usize);
+    }
+
+    /// Append one code point.
+    pub fn cps_put(&mut self, c: u32, v: u32) {
+        self.cps[c as usize].push(v);
+    }
+
+    /// How many code points it holds.
+    pub fn cps_len(&self, c: u32) -> u32 {
+        self.cps[c as usize].len() as u32
+    }
+
+    /// The code point at `i`, or 0 past the end -- the TOTAL form, because
+    /// every caller has checked `cps_len` first and an `Option` here would be
+    /// unwrapped at every one of them.
+    pub fn cps_at(&self, c: u32, i: u32) -> u32 {
+        *self.cps[c as usize].get(i as usize).unwrap_or(&0)
+    }
+
     pub fn sink_open(&mut self) -> u32 {
         self.sinks.push(alloc::vec::Vec::new());
         (self.sinks.len() - 1) as u32

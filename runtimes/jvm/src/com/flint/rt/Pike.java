@@ -169,27 +169,6 @@ public final class Pike {
         return best;
     }
 
-    /// The code points of a string, in order.
-    static int[] codePoints(Rt rt, long s) {
-        byte[] b = Str.bytes(rt, s);
-        int[] out = new int[b.length];
-        int n = 0, i = 0;
-        while (i < b.length) {
-            int c = b[i] & 0xFF, cp;
-            if (c < 0x80) { cp = c; i += 1; }
-            else if ((c & 0xE0) == 0xC0) { cp = ((c & 0x1F) << 6) | (b[i+1] & 0x3F); i += 2; }
-            else if ((c & 0xF0) == 0xE0) {
-                cp = ((c & 0x0F) << 12) | ((b[i+1] & 0x3F) << 6) | (b[i+2] & 0x3F); i += 3;
-            } else {
-                cp = ((c & 0x07) << 18) | ((b[i+1] & 0x3F) << 12)
-                   | ((b[i+2] & 0x3F) << 6) | (b[i+3] & 0x3F); i += 4;
-            }
-            out[n++] = cp;
-        }
-        int[] exact = new int[n];
-        System.arraycopy(out, 0, exact, 0, n);
-        return exact;
-    }
 
     /// Build a `TY_REGEX` from a program the shared cljc compiler emitted.
     ///
@@ -245,7 +224,7 @@ public final class Pike {
         int[] prog = progOf(rt, re);
         int ninstrs = prog[0];
         int nslots = (prog[2] + 1) * 2;
-        int[] cps = codePoints(rt, s);
+        int[] cps = rt.cpsTake(com._3sln.flint.kgen.rt.Codepoints.codePoints(rt, s));
         int[] best = runOver(prog, ninstrs, nslots, cps, (int) Math.max(from, 0), entry, full);
         return best == null ? Val.NIL : slotsVector(rt, best);
     }
@@ -262,7 +241,7 @@ public final class Pike {
         int[] prog = progOf(rt, re);
         int ninstrs = prog[0];
         int nslots = (prog[2] + 1) * 2;
-        int[] cps = codePoints(rt, s);
+        int[] cps = rt.cpsTake(com._3sln.flint.kgen.rt.Codepoints.codePoints(rt, s));
         ArrayList<Integer> found = new ArrayList<>();
         int at = 0;
         long count = 0;

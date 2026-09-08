@@ -1,0 +1,76 @@
+;; THE SUBJECT AS CODE POINTS, without flattening it.
+;;
+;; The regex engine wants random access to code points. Native built them by
+;; WALKING THE LEAVES; both ports built them by materialising the whole subject
+;; into contiguous bytes first -- `Str.bytes`, which for a rope is a FLATTEN --
+;; and then decoding that. Same answers, different work, and `0011` is explicit
+;; that this is the thing to count rather than hope about: a rope that flattens
+;; on every operation passes every correctness test and is slower than the flat
+;; string it replaced.
+;;
+;; It was invisible twice over. `runtimes/conform` diffs ANSWERS, and the
+;; flatten counters are Rust-only and `--diagnostics`-gated, so no gate could
+;; see two runtimes doing it.
+;;
+;; THE DECODE IS A STATE MACHINE, not a buffer. Native carried a `pending`
+;; vector for the case of a character straddling a leaf boundary; carrying the
+;; two integers a UTF-8 decoder actually needs -- how many continuation bytes
+;; are still owed, and the value so far -- makes the straddle case disappear
+;; instead of being handled. That boundary is where the ports' leaf-splitting
+;; bug lived, and this is the second thing to stop writing three times.
+(ns flint.rt.codepoints
+  (:require [flint.impl.rt :refer [defn return if let do local set forever break
+                                   comment doc not == != < >= + - bit-and shl
+                                   bit-or nil? walk-open walk-next walk-close
+                                   leaf-len leaf-byte cps-open cps-put
+                                   Rt Value Walk Cps I32 NIL]]))
+
+(doc "`s` decoded into a fresh code-point buffer, walking its leaves."
+     ""
+     "The caller owns the buffer and must `cps-close` it. It is handed back"
+     "rather than consumed here because the two callers want different things"
+     "from it -- one match, or every match."
+     ""
+     "MALFORMED INPUT IS NOT VALIDATED. Every string that reaches here was"
+     "built by a constructor that validated it, and a decoder that also"
+     "checked would be the second opinion `0011` warns about: two places"
+     "deciding what a string is, drifting apart.")
+(defn ^:pub ^:method ^Cps code-points [^:mut ^Rt rt ^Value s]
+  (let [^Cps out (cps-open rt)
+        ^Walk w (walk-open rt s)]
+    (comment "`need` is how many continuation bytes are still owed and `acc`"
+             "is the value so far. Both survive a leaf boundary, which is the"
+             "whole reason a straddling character needs no special case.")
+    (local ^:mut ^I32 need)
+    (local ^:mut ^I32 acc)
+    (set need 0)
+    (set acc 0)
+    (forever
+      (let [^Value leaf (walk-next rt w)]
+        (if (nil? rt leaf)
+          (break))
+        (let [^I32 n (leaf-len rt leaf)]
+          (local ^:mut ^I32 i)
+          (set i 0)
+          (forever
+            (if (== i n)
+              (break))
+            (let [^I32 b (leaf-byte rt leaf i)]
+              (if (== need 0)
+                (do (comment "A LEAD BYTE, or a bare ASCII one.")
+                    (if (< b 0x80)
+                      (cps-put rt out b)
+                      (if (< b 0xE0)
+                        (do (set acc (bit-and b 0x1F)) (set need 1))
+                        (if (< b 0xF0)
+                          (do (set acc (bit-and b 0x0F)) (set need 2))
+                          (do (set acc (bit-and b 0x07)) (set need 3))))))
+                (do (comment "A CONTINUATION: six more bits, and the point is"
+                             "complete when nothing more is owed.")
+                    (set acc (bit-or (shl acc 6) (bit-and b 0x3F)))
+                    (set need (- need 1))
+                    (if (== need 0)
+                      (cps-put rt out acc)))))
+            (set i (+ i 1))))))
+    (walk-close rt w)
+    (return out)))

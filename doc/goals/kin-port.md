@@ -585,6 +585,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Ropemeas` | `is-string` — nine `.kin` sources asked it, and got three answers |
 | 3 | `Numkind` | `is-int`, `is-number` — and the claim that they were NOT tag families |
 | 3 | `Pikegas` | what regex work COSTS — a policy Rust had and neither port did |
+| 3 | `Codepoints` | the subject as code points, walking leaves instead of materialising it |
 
 The assoc/dissoc block is complete: thirteen functions of `Maps`, one
 definition each. The three analyses had gated the whole block on converging
@@ -640,6 +641,38 @@ NINE `.kin` sources named it through the vocabulary — `collgen`, `collread`,
 generated modules were asking one question and getting whatever each runtime
 had written. It lives in `ropemeas.kin` now, which is the file that already
 answers what a string MEASURES across the same three tiers.
+
+`codepoints` is the first source to need NEW VOCABULARY, and it is worth
+saying why that stopped being a reason not to do it. `Cps` is an opaque handle
+naming a runtime-owned buffer -- the same shape as `Sink` and `Walk`, and it
+lives in `flint/impl/rt.cljc`, which is THIS PROJECT'S vocabulary rather than
+kin's. A primitive that is not useful to every project belongs here.
+
+What it bought: the regex engine wants random access to code points, and both
+ports got them by materialising the whole subject into a contiguous host
+buffer -- `Str.bytes`, which for a rope walks and copies every leaf -- on
+every regex call. Native walked the leaves. Same answers, different work, and
+the kind of difference that only shows in the shape of the work.
+
+THE DECODE BECAME A STATE MACHINE. Native carried a `pending` vector for a
+character straddling a leaf boundary; carrying the two integers a UTF-8
+decoder actually needs -- how many continuation bytes are owed, and the value
+so far -- makes the straddle case DISAPPEAR rather than be handled. The probe
+splits a two-byte and a three-byte character across leaves and all three
+targets answer `5: 97 98 233 65 8364`. That boundary is where the ports'
+leaf-splitting bug lived, and it is now written once.
+
+It deleted four functions from `pike.rs` that rustc then reported dead --
+`collect_leaves`, `leaf_bytes`, `utf8_len`, `decode_utf8` -- which is the
+honest measure of how much of that file was a second decoder.
+
+ONE PREDICTION FAILED, and it is the useful part. I expected this to close the
+150-step gas gap between native and the JVM on regex work, on the reasoning
+that the ports allocated more. It did not move it at all: gas charges FLINT
+HEAP allocation, and a `byte[]` or an `int[]` is a host array that was never
+charged. Removing real work and moving a gas counter are different claims, and
+I had run them together. The gap is still unexplained and the regex row in
+`gasmeter.cljc` still waits on it.
 
 `pikegas` is the first port done under a rule worth stating: **when the
 implementations diverge, port the correct one and delete the others** rather

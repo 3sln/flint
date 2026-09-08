@@ -81,97 +81,6 @@ struct Cursor {
 }
 
 impl Rt {
-    fn collect_leaves(&self, v: Value, out: &mut alloc::vec::Vec<Value>) {
-        if v.is_inline_str() {
-            out.push(v);
-            return;
-        }
-        if !v.is_heap() {
-            return;
-        }
-        match ty(&self.gc.sp, v.as_heap()) {
-            TY_ROPE => {
-                let flat = self.slot(v, RP_FLAT);
-                if !flat.is_nil() {
-                    out.push(flat);
-                    return;
-                }
-                let n = len(&self.gc.sp, v.as_heap()) - RP_KIDS;
-                for i in 0..n {
-                    let k = self.slot(v, RP_KIDS + i);
-                    self.collect_leaves(k, out);
-                }
-            }
-            _ => out.push(v),
-        }
-    }
-
-    pub(crate) fn leaf_bytes<'a>(&'a self, v: Value, buf: &'a mut [u8; crate::value::INLINE_MAX]) -> &'a [u8] {
-        if v.is_inline_str() {
-            v.inline_bytes(buf)
-        } else {
-            str_bytes(&self.gc.sp, v.as_heap())
-        }
-    }
-
-    /// Every code point of `s`, in order. Decoding UTF-8 as it goes, so a
-    /// non-ASCII subject costs the same walk.
-    fn code_points(&self, s: Value) -> alloc::vec::Vec<u32> {
-        let mut leaves = alloc::vec::Vec::new();
-        self.collect_leaves(s, &mut leaves);
-        let mut out = alloc::vec::Vec::with_capacity(self.s_bytes(s) as usize);
-        let mut pending: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
-        for l in &leaves {
-            let mut buf = [0u8; crate::value::INLINE_MAX];
-            let b = self.leaf_bytes(*l, &mut buf);
-            if pending.is_empty() && b.is_ascii() {
-                for c in b {
-                    out.push(*c as u32);
-                }
-                continue;
-            }
-            // A multi-byte character may straddle a leaf boundary, which is
-            // exactly the case a flat-string matcher never has to think about.
-            pending.extend_from_slice(b);
-            let mut i = 0;
-            while i < pending.len() {
-                let need = utf8_len(pending[i]);
-                if i + need > pending.len() {
-                    break;
-                }
-                out.push(decode_utf8(&pending[i..i + need]));
-                i += need;
-            }
-            pending.drain(..i);
-        }
-        out
-    }
-}
-
-fn utf8_len(b: u8) -> usize {
-    if b < 0x80 {
-        1
-    } else if b >> 5 == 0b110 {
-        2
-    } else if b >> 4 == 0b1110 {
-        3
-    } else {
-        4
-    }
-}
-
-fn decode_utf8(b: &[u8]) -> u32 {
-    match b.len() {
-        1 => b[0] as u32,
-        2 => ((b[0] as u32 & 0x1F) << 6) | (b[1] as u32 & 0x3F),
-        3 => ((b[0] as u32 & 0x0F) << 12) | ((b[1] as u32 & 0x3F) << 6) | (b[2] as u32 & 0x3F),
-        _ => {
-            ((b[0] as u32 & 0x07) << 18)
-                | ((b[1] as u32 & 0x3F) << 12)
-                | ((b[2] as u32 & 0x3F) << 6)
-                | (b[3] as u32 & 0x3F)
-        }
-    }
 }
 
 struct Thread {
@@ -266,7 +175,12 @@ impl Rt {
     ) -> Option<alloc::vec::Vec<i32>> {
         let ninstrs = prog[0] as usize;
         let nslots = (prog[2] as usize + 1) * 2;
-        let cps = self.code_points(s);
+        // GENERATED, from `kin/codepoints.kin`, which walks the leaves. Both
+        // ports used to flatten the subject to get here. The buffer is MOVED
+        // out rather than copied, so this costs what it always did.
+        let ci = self.code_points(s);
+        let cps = core::mem::take(&mut self.cps[ci as usize]);
+        self.cps_close(ci);
         run_over(prog, ninstrs, nslots, &cps, from, entry, full)
     }
 }
@@ -419,7 +333,12 @@ impl Rt {
                 .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect()
         };
-        let cps = self.code_points(s);
+        // GENERATED, from `kin/codepoints.kin`, which walks the leaves. Both
+        // ports used to flatten the subject to get here. The buffer is MOVED
+        // out rather than copied, so this costs what it always did.
+        let ci = self.code_points(s);
+        let cps = core::mem::take(&mut self.cps[ci as usize]);
+        self.cps_close(ci);
         let ninstrs = prog[0] as usize;
         let nslots = (prog[2] as usize + 1) * 2;
         let mut found: alloc::vec::Vec<i32> = alloc::vec::Vec::new();

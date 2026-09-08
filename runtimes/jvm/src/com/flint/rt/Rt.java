@@ -44,6 +44,13 @@ public final class Rt {
     private final java.util.ArrayList<java.io.ByteArrayOutputStream> sinks =
         new java.util.ArrayList<>();
 
+    /// CODE-POINT BUFFERS, the same shape as `sinks` and for the same reason:
+    /// a generated source names one rather than holding it. See `Rt::cps` in
+    /// the Rust, and `kin/codepoints.kin` for why the regex engine stopped
+    /// flattening its subject to get these.
+    private final java.util.ArrayList<int[]> cpsBuf = new java.util.ArrayList<>();
+    private final java.util.ArrayList<Integer> cpsLen = new java.util.ArrayList<>();
+
     // -------------------------------------------------------------- the walk
     //
     // The sink's sibling. Comparing or hashing two trees leaf by leaf needs an
@@ -109,6 +116,48 @@ public final class Rt {
             if (gc.sp.readU8(a + i) != gc.sp.readU8(b + i)) return false;
         }
         return true;
+    }
+
+    /// Open a code-point buffer and answer its index.
+    public int cpsOpen() {
+        cpsBuf.add(new int[64]);
+        cpsLen.add(0);
+        return cpsBuf.size() - 1;
+    }
+
+    /// Release `c` and everything opened after it.
+    public void cpsClose(int c) {
+        while (cpsBuf.size() > c) { cpsBuf.remove(cpsBuf.size() - 1); cpsLen.remove(cpsLen.size() - 1); }
+    }
+
+    /// Append one code point, doubling when full.
+    public void cpsPut(int c, int v) {
+        int[] b = cpsBuf.get(c);
+        int n = cpsLen.get(c);
+        if (n == b.length) { b = java.util.Arrays.copyOf(b, n * 2); cpsBuf.set(c, b); }
+        b[n] = v;
+        cpsLen.set(c, n + 1);
+    }
+
+    /// How many code points it holds.
+    public int cpsLen(int c) { return cpsLen.get(c); }
+
+    /// The buffer's contents, trimmed, and the buffer released.
+    ///
+    /// The matcher wants an `int[]` and is hand-written on both ports, so this
+    /// is where the generated decoder hands over. It costs ONE copy of an
+    /// int[]; what it replaces is flattening the whole subject into contiguous
+    /// bytes and then decoding that -- a rope materialisation on every regex
+    /// call, which native never did.
+    public int[] cpsTake(int c) {
+        int[] out = java.util.Arrays.copyOf(cpsBuf.get(c), cpsLen.get(c));
+        cpsClose(c);
+        return out;
+    }
+
+    /// The code point at `i`, or 0 past the end -- the TOTAL form; see the Rust.
+    public int cpsAt(int c, int i) {
+        return i < cpsLen.get(c) ? cpsBuf.get(c)[i] : 0;
     }
 
     /// Open a buffer and answer its index.
