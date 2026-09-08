@@ -13,9 +13,13 @@
   "Namespace -> source file. These are what a flint program can require."
   '{clojure.core      "lib/clojure/core.cljc"
     clojure.string    "lib/clojure/string.cljc"
+    clojure.core.protocols "lib/clojure/core/protocols.cljc"
+    clojure.datafy    "lib/clojure/datafy.cljc"
+    clojure.data      "lib/clojure/data.cljc"
     clojure.set       "lib/clojure/set.cljc"
     clojure.math      "lib/clojure/math.cljc"
     clojure.walk      "lib/clojure/walk.cljc"
+    clojure.zip       "lib/clojure/zip.cljc"
     clojure.edn       "lib/clojure/edn.cljc"
     flint.regex       "lib/flint/regex.cljc"
     flint.thread      "lib/flint/thread.cljc"
@@ -34,7 +38,14 @@
     clojure.set clojure.set
     clojure.math clojure.math
     clojure.walk clojure.walk
-    clojure.edn clojure.edn})
+    clojure.edn clojure.edn
+    clojure.zip clojure.zip})
+
+;; `clojure.data`, `clojure.datafy` and `clojure.core.protocols` are deliberately
+;; NOT in that map. This script runs on babashka, and babashka's versions of
+;; those three are partial reimplementations -- its `clojure.data` publishes two
+;; vars where Clojure's publishes five. Diffing against them would report gaps
+;; in flint that are really gaps in the baseline.
 
 (defn defines
   "Every var a source file defines, with whether it is a macro and private."

@@ -432,6 +432,32 @@ what remains, and what each thing is waiting on.
    `char_width_at` and `char_at_byte` are deleted -- 49 lines, and strseq was
    their only caller.
 
+0p. **`clojure.zip`, `clojure.data` and `clojure.datafy` are SHIPPED** — the
+   three namespaces the Clojars survey named, which is why that half of `0021`
+   is cancelled. All three follow Clojure's own source closely enough that the
+   differences are the interesting part, and there is only one: `datafy`
+   records the original under `:clojure.datafy/obj` as Clojure does, but the
+   second key is `:clojure.datafy/kind` holding a `kind` keyword rather than
+   `:clojure.datafy/class` holding a class name, because flint has no classes.
+
+   `clojure.data` matches Clojure's return SHAPES as well as its values — a
+   seq for a map diff, a vector for a sequential one. A caller comparing with
+   `=` cannot tell those apart; a caller printing them can, so they are worth
+   matching rather than tidying.
+
+   The evidence is `test/conform/basics.cljc`, which went from 158 cases to
+   255. Every expectation is real Clojure's own answer, taken from a run and
+   checked back by `test/conform_vs_clojure.clj` — so this is agreement
+   measured, not agreement asserted. `clojure.zip` is also in `bin/manifest`'s
+   `compared-with` map, which puts its 28 vars against Clojure's own list and
+   reports 0 absent and 0 extra; that is what caught `xml-zip` missing after
+   the other 27 were written and passing. The other two are deliberately NOT
+   compared, because the manifest runs on babashka and babashka's
+   `clojure.data` publishes two vars where Clojure's publishes five — diffing
+   against it would report a gap in the baseline as a gap in flint.
+
+   Writing `datafy` is also what turned up `0q`.
+
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old
    `jvm`-against-`clr` similarity table because BOTH ports share them. Two
@@ -542,22 +568,18 @@ what remains, and what each thing is waiting on.
 5. **The JVM, tier 2** (`0010`) — the route is **decided** and not built.
    Chicory measured 39× V8 at its best, which rules tier 1 out; tier 2 is
    porting the VM. `0018` is what settled it.
-6. **`clojure.zip`, `clojure.data`, `clojure.datafy`** — the Clojars survey
-   said implementing these unblocks more third-party code than maven's
-   transitive resolution would have, which is why that half of `0021` is
-   cancelled.
-7. **The rest of `0021`** — the native binary itself (wasmer `create-exe` or a
+6. **The rest of `0021`** — the native binary itself (wasmer `create-exe` or a
    small Rust host), cross-compilation backends, nREPL, and capability
    injection on the command line.
-8. **Thread pool** (`0019`) — strictly opt-in and free when declined; gas drawn
+7. **Thread pool** (`0019`) — strictly opt-in and free when declined; gas drawn
    in per-thread blocks; snapshots halt the whole app at a safe point.
-9. **Profiler** (`0017`) — deterministic, because instruction counts are.
-10. **Debug runner** (`0014`) — cheap because a breakpoint is a park, and it
-    shares its reader with `0015`, which is now built.
-11. **Tables** (`0026`) — a vector of maps outside, a columnar B-tree inside.
+8. **Profiler** (`0017`) — deterministic, because instruction counts are.
+9. **Debug runner** (`0014`) — cheap because a breakpoint is a park, and it
+   shares its reader with `0015`, which is now built.
+10. **Tables** (`0026`) — a vector of maps outside, a columnar B-tree inside.
     Queued; its codec tag wants adding while `0025`'s format is still open.
 
-12. **A driver** (`0028`) — the host stops advancing a sandbox directly, so a
+11. **A driver** (`0028`) — the host stops advancing a sandbox directly, so a
     pool can, and the destination is K threads over ONE sandbox. Debouncing
     and concurrency live in one seam, `call` becomes asynchronous, and `Rt`
     splits into a shared sandbox and per-executor contexts while that is still

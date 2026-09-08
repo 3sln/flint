@@ -755,6 +755,21 @@
     tag
     volatile?},
   :compared-with clojure.core},
+ clojure.core.protocols
+ {:file "lib/clojure/core/protocols.cljc",
+  :present #{},
+  :macros #{},
+  :count 0},
+ clojure.data
+ {:file "lib/clojure/data.cljc",
+  :present #{diff},
+  :macros #{},
+  :count 1},
+ clojure.datafy
+ {:file "lib/clojure/datafy.cljc",
+  :present #{datafy nav},
+  :macros #{},
+  :count 2},
  clojure.edn
  {:file "lib/clojure/edn.cljc",
   :present #{read-all read-string},
@@ -883,6 +898,42 @@
   :absent #{macroexpand-all postwalk-demo prewalk-demo},
   :extra #{},
   :compared-with clojure.walk},
+ clojure.zip
+ {:file "lib/clojure/zip.cljc",
+  :present
+  #{append-child
+    branch?
+    children
+    down
+    edit
+    end?
+    insert-child
+    insert-left
+    insert-right
+    left
+    leftmost
+    lefts
+    make-node
+    next
+    node
+    path
+    prev
+    remove
+    replace
+    right
+    rightmost
+    rights
+    root
+    seq-zip
+    up
+    vector-zip
+    xml-zip
+    zipper},
+  :macros #{},
+  :count 28,
+  :absent #{},
+  :extra #{},
+  :compared-with clojure.zip},
  flint.data.html
  {:file "lib/flint/data/html.cljc",
   :present

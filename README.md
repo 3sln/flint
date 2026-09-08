@@ -1217,11 +1217,15 @@ claim fails the build.
 | namespace | vars | macros | missing vs Clojure | flint-only |
 |---|---:|---:|---:|---:|
 | `clojure.core` | 356 | 45 | 306 | 38 |
+| `clojure.core.protocols` | 0 | 0 | n/a | n/a |
+| `clojure.data` | 1 | 0 | n/a | n/a |
+| `clojure.datafy` | 2 | 0 | n/a | n/a |
 | `clojure.edn` | 2 | 0 | 1 | 1 |
 | `clojure.math` | 32 | 0 | 14 | 1 |
 | `clojure.set` | 12 | 0 | 0 | 0 |
 | `clojure.string` | 23 | 0 | 0 | 2 |
 | `clojure.walk` | 7 | 0 | 3 | 0 |
+| `clojure.zip` | 28 | 0 | 0 | 0 |
 | `flint.data.html` | 12 | 0 | n/a | n/a |
 | `flint.data.json` | 3 | 0 | n/a | n/a |
 | `flint.data.transit` | 2 | 0 | n/a | n/a |
@@ -1284,6 +1288,8 @@ flint has no stream type. `read-string` is the whole surface, plus `read-all` wh
 `macroexpand-all` needs a compiler at runtime, and a flint module carries none. `postwalk-demo`/`prewalk-demo` print.
 
 *Absent:* `macroexpand-all` `postwalk-demo` `prewalk-demo`
+
+#### `clojure.zip`
 
 <!-- END GENERATED COVERAGE -->
 
