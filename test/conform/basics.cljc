@@ -145,6 +145,40 @@
        (get {false 1} false) (contains? {false 1} false)
        (get #{nil} nil :d) (contains? #{false} false)]
       [nil :d true 1 true 1 true nil true])
+   ;; WHAT KIND OF THING COMES BACK. The empty-input sweep found six wrong
+   ;; answers and every one of them was about the RETURN, not the argument --
+   ;; so this asks the return question directly.
+   (c "what the seq functions return"
+      [(seq? (map inc [1])) (seq? (filter even? [2])) (seq? (range 3))
+       (seq? (rest [1 2])) (seq? (keys {:a 1})) (seq? (sort [2 1]))
+       (vector? (into [] [1])) (vector? (mapv inc [1])) (vector? (subvec [1 2 3] 0 2))
+       (map? (select-keys {:a 1} [:a])) (map? (merge {} {:a 1}))
+       (set? (into #{} [1])) (set? (disj #{1 2} 1))
+       (string? (subs "abc" 1)) (string? (str 1 2))]
+      [true true true true true true true true true true true true true true true])
+   ;; A SEQ IS NOT A LIST AND NOT A VECTOR, and the consequences show up in
+   ;; `conj`, which adds where the collection is cheap to add to.
+   (c "conj follows the collection, not the contents"
+      [(conj [1 2] 3) (conj '(1 2) 3) (conj (map inc [1 2]) 0)
+       (conj #{1} 2) (conj {:a 1} [:b 2]) (conj nil 1)]
+      [[1 2 3] '(3 1 2) '(0 2 3) #{1 2} {:a 1 :b 2} '(1)])
+   ;; EQUALITY ACROSS THE SHAPES: sequential things compare by contents, sets
+   ;; and maps do not compare equal to them.
+   (c "equality across shapes"
+      [(= [1 2] (map inc [0 1])) (= '(1 2) [1 2]) (= [1 2] (seq [1 2]))
+       (= #{1 2} [1 2]) (= {:a 1} [[:a 1]]) (= (range 3) '(0 1 2))]
+      [true true true false false true])
+   ;; EMPTY gives back the same KIND, emptied.
+   (c "empty keeps the kind"
+      [(empty [1 2]) (empty '(1 2)) (empty {:a 1}) (empty #{1})
+       (vector? (empty [1])) (map? (empty {:a 1})) (set? (empty #{1}))]
+      [[] '() {} #{} true true true])
+   ;; METADATA SURVIVES THE OPERATIONS THAT COPY, and is not invented.
+   (c "metadata"
+      [(meta (with-meta [1] {:a 1})) (meta [1])
+       (meta (conj (with-meta [1] {:a 1}) 2))
+       (meta (with-meta '(1) {:a 1}))]
+      [{:a 1} nil {:a 1} {:a 1}])
    ;; BOUNDARY ARITIES: an incomplete last group, a negative or zero count.
    (c "boundary arities"
       [(partition 3 [1 2]) (partition-all 3 [1 2]) (partition 3 3 [1 2 3 4])
