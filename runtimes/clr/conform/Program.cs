@@ -68,7 +68,12 @@ public static class Program {
         for (int i = 0; i < n; i++) {
             int inner = rt.Push(Flint.Rt.Vec.Empty(rt));
             rt.SetR(inner, Flint.Rt.Vec.Conj(rt, rt.R(inner), Flint.Rt.Val.Fixnum(i)));
-            rt.SetR(inner, Flint.Rt.Vec.Conj(rt, rt.R(inner), Flint.Rt.Str.Of(rt, "item-" + i)));
+            // THE STRING IS ROOTED FIRST -- see the JVM's `RtSnapshot`. C#
+            // evaluates arguments left to right too, so reading the vector and
+            // THEN allocating the string loses it under `FLINT_GCSTRESS=1`.
+            int si = rt.Push(Flint.Rt.Str.Of(rt, "item-" + i));
+            rt.SetR(inner, Flint.Rt.Vec.Conj(rt, rt.R(inner), rt.R(si)));
+            rt.PopTo(si);
             rt.SetR(vec, Flint.Rt.Vec.Conj(rt, rt.R(vec), rt.R(inner)));
             rt.PopTo(inner);
         }

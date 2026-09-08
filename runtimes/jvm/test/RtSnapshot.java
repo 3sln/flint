@@ -28,7 +28,15 @@ public class RtSnapshot {
     for (int i = 0; i < n; i++) {
       int inner = rt.push(Vec.empty(rt));
       rt.setR(inner, Vec.conj(rt, rt.r(inner), Val.fixnum(i)));
-      rt.setR(inner, Vec.conj(rt, rt.r(inner), Str.of(rt, "item-" + i)));
+      // THE STRING IS ROOTED FIRST. Java evaluates arguments left to right,
+      // so writing `Vec.conj(rt, rt.r(inner), Str.of(rt, ...))` reads the
+      // vector and THEN allocates the string -- and under
+      // `-Dflint.gcstress=1` that allocation collects and moves the vector
+      // out from under the value already read. `0031`, in the test rather
+      // than the runtime.
+      int si = rt.push(Str.of(rt, "item-" + i));
+      rt.setR(inner, Vec.conj(rt, rt.r(inner), rt.r(si)));
+      rt.popTo(si);
       rt.setR(vec, Vec.conj(rt, rt.r(vec), rt.r(inner)));
       rt.popTo(inner);
     }

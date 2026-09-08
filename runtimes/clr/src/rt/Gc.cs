@@ -62,6 +62,9 @@ public sealed class Gc : System.IDisposable {
     }
 
     public bool IsYoung(long addr) { return (ulong)(addr - youngBase) < (ulong)(half * 2); }
+    /// COLLECT AT EVERY ALLOCATION -- see the use in `Alloc`.
+    public static readonly bool Stress =
+        Environment.GetEnvironmentVariable("FLINT_GCSTRESS") != null;
     bool InFrom(long addr) { return (ulong)(addr - from) < (ulong)half; }
     /// Is `addr` in the part of the young half that is actually LIVE? An
     /// address that is young but past the bump pointer is a pre-collection
@@ -178,6 +181,15 @@ public sealed class Gc : System.IDisposable {
             return big;
         }
         if (stress) Minor(roots);
+        // COLLECT AT EVERY ALLOCATION, the JVM's `-Dflint.gcstress=1`. The
+        // native runtime has had this since rooting bugs were first hunted and
+        // the JVM gained it later; this port had neither the field nor the
+        // switch, so half the port could not be stressed at all.
+        //
+        // It turns a timing-dependent rooting bug into a deterministic one. It
+        // found a `0031` violation in `RtSnapshot`'s own builder the first time
+        // it was pointed at the JVM's suites.
+        if (Stress) Minor(roots);
         if (bump + size > fromEnd) {
             CollectCycle(roots);
             if (bump + size > fromEnd) {

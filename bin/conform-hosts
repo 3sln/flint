@@ -458,6 +458,32 @@ for pair in "RtFoundation --rt-foundation" "RtMaps --rt-maps" \
 done
 echo "  ok   four port suites re-run with the stale check on, both hosts"
 
+# AND UNDER A COLLECTION AT EVERY ALLOCATION. The conform fixtures below
+# already run this way; the port's OWN suites did not, and that is where the
+# rooting bugs live -- `0n` records three found by stress that the stale-push
+# detector could not see, because it fires at `push` and a value that is never
+# pushed never reaches it.
+#
+# Pointing it at these suites found a fourth immediately, in `RtSnapshot`'s own
+# builder: `Vec.conj(rt, rt.r(inner), Str.of(rt, ...))` reads the vector and
+# THEN allocates the string. Both ports had it, on the same line.
+#
+# `RtParallel` is NOT here, and not by oversight. It holds a deliberately
+# growing live set, and collecting at every allocation means the to-space must
+# hold all of it at once: the runtime's own diagnostic says "promotion is not
+# draining the nursery". That is the test's design meeting the switch, not a
+# rooting bug, and running it here would only teach people to ignore a failure.
+for pair in "RtFoundation --rt-foundation" "RtMaps --rt-maps" "RtSnapshot --rt-snapshot"; do
+  set -- $pair
+  "$JDK/bin/java" -Dflint.gcstress=1 -cp runtimes/jvm/classes "$1" > /tmp/flint-gcs.out 2>&1 \
+    || { tail -5 /tmp/flint-gcs.out; echo "  FAIL $1 under a collection at every allocation [jvm]"; exit 1; }
+  if [ -n "$CLR" ]; then
+    FLINT_GCSTRESS=1 "$CLR" "$2" > /tmp/flint-gcs.out 2>&1 \
+      || { tail -5 /tmp/flint-gcs.out; echo "  FAIL $1 under a collection at every allocation [clr]"; exit 1; }
+  fi
+done
+echo "  ok   three port suites re-run collecting at every allocation, both hosts"
+
 # HOST PORTS (`doc/decisions/0006`, `0027`): the half of the port protocol the
 # HOST drives, on all three runtimes at once.
 #
