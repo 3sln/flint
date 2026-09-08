@@ -164,7 +164,8 @@
    "flint/unchecked-sub" flint.rt/unchecked-sub
    "flint/unchecked-mul" flint.rt/unchecked-mul
    "flint/fabs" flint.rt/fabs
-   "flint/copy-sign" flint.rt/copy-sign})
+   "flint/copy-sign" flint.rt/copy-sign
+   "flint/coll-vec" flint.rt/coll-vec})
 
 (defn lookup [name]
   (or (get table name)

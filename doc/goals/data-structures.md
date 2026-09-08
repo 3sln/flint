@@ -157,7 +157,36 @@ Measured over 2M elements: `(reduce + 0 v)` is 0.28s and
 
 The largest measured cost here, and half-built already.
 
-### 2. `reduce` has a fast path only for vectors
+### 2. `reduce` has a fast path only for vectors -- maps and sets now too
+
+**Done for maps and sets.** Their entries are ALREADY a vector: `seq` builds
+one with `map-entry-vector` and wraps it in a vecseq, so going through the seq
+allocated a cell per entry to walk something indexable. `flint/coll-vec` hands
+back the vector `seq` would have wrapped, and `reduce` walks it by index --
+the same loop the vector path uses.
+
+    reduce over a map     4.1 -> 3.1 allocations per element
+    reduce-kv             7.1 -> 6.1
+
+Exactly one per entry, which is the seq cell. Over the 2M entries of the
+timing program that is 2M fewer allocations and several fewer collections:
+2.31s to 1.10s for reduce over a map, 2.62s to 1.10s for `reduce-kv`.
+
+`vec` takes the same route -- `(vec m)` was `(into [] m)`, which walked the
+vecseq and rebuilt through a transient the vector `seq` had just built.
+
+THE BUILTIN DECLINES FOR ANYTHING THAT IS NOT LITERALLY A MAP OR SET, and that
+is not defensive: a row ref answers true to `is_map` and is not a CHAMP, so
+`map_entry_vector` would read its slots as a trie. `seq` materialises one with
+`ref_to_map` first; this returns nil and lets the caller take that path.
+`lang.tables` caught it.
+
+AT COMPILE TIME IT ALWAYS DECLINES. The compiler evaluates stdlib code, and
+answering honestly would hand back Clojure's map order at compile time and
+flint's trie order at run time -- for an expression the compiler may fold into
+a literal. Declining costs a fold; agreeing would cost an order.
+
+### What is still seq-only
 
 Everything else goes through `reduce-seq`, one seq cell per element. Clojure
 has internal reduce (`IReduceInit`) for maps, sets and ranges. Over 2M

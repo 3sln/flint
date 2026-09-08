@@ -144,6 +144,17 @@
             (flint.rt/= op "sort")
             (let [v (vec (map (fn [i] (flint.rt/rem (flint.rt/mul i 37) 19)) (range n)))]
               (if base? (count v) (count (sort v))))
+            ;; REDUCE OVER A MAP. Its entries are already a vector -- `seq`
+            ;; builds one and wraps it in a vecseq -- so this used to allocate
+            ;; a seq cell per entry to walk something indexable.
+            (flint.rt/= op "reduce-map")
+            (let [m (into {} (pairs n))]
+              (if base? (count m)
+                  (reduce (fn [a e] (+ a 1)) 0 m)))
+            (flint.rt/= op "reduce-kv")
+            (let [m (into {} (pairs n))]
+              (if base? (count m)
+                  (reduce-kv (fn [a k v] (+ a 1)) 0 m)))
             (flint.rt/= op "reduce") (let [v (ints n)]
                                        (if base? (count v)
                                            (reduce (fn [a x] (flint.rt/add a x)) 0 v)))

@@ -769,6 +769,29 @@ builtins! {
         }
         rt.table_reduce_column(t, name, f, init)
     };
+    // THE VECTOR A MAP OR SET ALREADY HAS. `seq` builds an entry vector and
+    // wraps it in a vecseq, so `(vec m)` used to build that vector and then
+    // walk the vecseq rebuilding it through a transient -- the same work
+    // twice. `reduce` over a map paid the seq cells for the same reason.
+    //
+    // nil for anything else, so the caller decides what "not a map" means.
+    "flint/coll-vec", flint_b_collvec, b_collvec, |rt, a, n| {
+        let _ = n;
+        let v = arg(rt, a, 0);
+        // THE CONCRETE TYPE, not `is_map`. A row ref answers true to `is_map`
+        // and is not a CHAMP: `map_entry_vector` would read its slots as a
+        // trie. `seq` materialises one with `ref_to_map` before walking it,
+        // and this declines instead so the caller takes the seq path -- which
+        // is where that materialising already lives.
+        if !v.is_heap() {
+            return crate::value::NIL;
+        }
+        match crate::obj::ty(&rt.gc.sp, v.as_heap()) {
+            crate::obj::TY_ARRAYMAP | crate::obj::TY_HASHMAP => rt.map_entry_vector(v),
+            crate::obj::TY_SET => rt.set_element_vector(v),
+            _ => crate::value::NIL,
+        }
+    };
     "flint/table?", flint_b_tablep, b_tablep, |rt, a, n| {
         let _ = n;
         let v = arg(rt, a, 0);

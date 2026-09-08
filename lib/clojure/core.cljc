@@ -287,13 +287,23 @@
    ;; the counter starts at a literal, so both are PROVEN and no check is
    ;; emitted, while the comparison and the increment become inline opcodes.
    (if (vector? coll)
-     (let [^int n (count coll)]
-       (loop [acc init ^int i 0]
-         (if (flint.rt/lt i n)
-           (let [acc' (f acc (flint.rt/nth coll i))]
-             (if (reduced? acc') (nth acc' 0) (recur acc' (flint.rt/add i 1))))
-           acc)))
-     (reduce-seq f init coll))))
+     (reduce-indexed f init coll)
+     ;; A MAP OR SET WALKS BY INDEX TOO. Its entries are already a vector --
+     ;; `seq` builds one and wraps it in a vecseq -- so going through the seq
+     ;; allocated a cell per entry to walk something indexable. `coll-vec`
+     ;; hands back the vector `seq` would have wrapped.
+     (let [cv (flint.rt/coll-vec coll)]
+       (if (nil? cv)
+         (reduce-seq f init coll)
+         (reduce-indexed f init cv)))))) 
+
+(defn- reduce-indexed [f init coll]
+  (let [^int n (count coll)]
+    (loop [acc init ^int i 0]
+      (if (flint.rt/lt i n)
+        (let [acc' (f acc (flint.rt/nth coll i))]
+          (if (reduced? acc') (nth acc' 0) (recur acc' (flint.rt/add i 1))))
+        acc))))
 
 (defn- reduce-seq
   "`reduce` over anything that is not indexed."
@@ -320,7 +330,16 @@
        (persistent! (reduce conj! (transient to) from))
        (reduce conj to from)))))
 
-(defn vec [coll] (if (vector? coll) coll (into [] coll)))
+;; A MAP AND A SET ALREADY HAVE THIS VECTOR. `seq` builds an entry vector and
+;; wraps it in a vecseq, so `(into [] m)` walked that vecseq and rebuilt the
+;; same vector through a transient -- the work twice, and measurably: routing
+;; `reduce` over a map through `(vec m)` was SLOWER than the seq path, which is
+;; what pointed at this.
+(defn vec [coll]
+  (if (vector? coll)
+    coll
+    (let [cv (flint.rt/coll-vec coll)]
+      (if (nil? cv) (into [] coll) cv))))
 (defn set [coll] (if (set? coll) coll (into #{} coll)))
 
 (defn hash-map [& kvs]

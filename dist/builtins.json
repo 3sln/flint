@@ -55,6 +55,7 @@
   "flint/channel",
   "flint/check-tag",
   "flint/code-point-at",
+  "flint/coll-vec",
   "flint/copy-sign",
   "flint/cos",
   "flint/cosh",

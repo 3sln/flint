@@ -109,6 +109,16 @@
 ;; such literal yet.
 (defn schema [pairs] (throw (ex-info "schema is not available at compile time" {})))
 (defn table [s rows] (throw (ex-info "table is not available at compile time" {})))
+;; NIL AT COMPILE TIME, DELIBERATELY. On flint this hands back the entry
+;; vector a map or set already has, so `vec` and `reduce` can walk it by index
+;; instead of through a seq. Here it declines, and both callers take the seq
+;; path they took before -- which is the same VALUES by a slower route.
+;;
+;; Answering honestly would mean handing back Clojure's map order at compile
+;; time and flint's trie order at run time, for an expression the compiler may
+;; fold into a literal. Declining costs a fold; agreeing would cost an order.
+(defn coll-vec [x] nil)
+
 (defn table? [x] false)
 (defn table-schema [x] nil)
 (defn table-migrate [t s defaults] (throw (ex-info "migrate is not available at compile time" {})))

@@ -202,6 +202,17 @@ public final class Builtins {
                     "a table needs a schema; build one with `(schema [[:name :type] ...])`");
             return Table.newTable(rt, s, rt.vat(at + 1));
         });
+        // The vector a map or set already has -- see the Rust copy.
+        def("flint/coll-vec", (rt, at, n) -> {
+            long v = rt.vat(at);
+            // The CONCRETE type, not `map?` -- see the Rust copy: a row ref
+            // answers true to `map?` and is not a CHAMP.
+            if (!Val.isHeap(v)) return Val.NIL;
+            int t = Obj.ty(rt.gc.sp, Val.asHeap(v));
+            if (t == Obj.TY_ARRAYMAP || t == Obj.TY_HASHMAP) return Maps.entryVector(rt, v);
+            if (t == Obj.TY_SET) return Sets.elementVector(rt, v);
+            return Val.NIL;
+        });
         def("flint/table?", (rt, at, n) -> Val.bool(Table.isTable(rt, rt.vat(at))));
         def("flint/table-schema", (rt, at, n) -> {
             long v = rt.vat(at);

@@ -185,6 +185,16 @@ public static class Builtins {
                     "a table needs a schema; build one with `(schema [[:name :type] ...])`");
             return Flint.Rt.Table.newTable(rt, s2, rt.VAt(at + 1));
         });
+        // The vector a map or set already has -- see the Rust copy.
+        Def("flint/coll-vec", (rt, at, n) => {
+            long v = rt.VAt(at);
+            // The CONCRETE type, not `map?` -- see the Rust copy.
+            if (!Val.IsHeap(v)) return Val.Nil;
+            int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+            if (t == Obj.TyArraymap || t == Obj.TyHashmap) return Maps.EntryVector(rt, v);
+            if (t == Obj.TySet) return Sets.ElementVector(rt, v);
+            return Val.Nil;
+        });
         Def("flint/table?", (rt, at, n) => Val.Bool(Flint.Rt.Table.isTable(rt, rt.VAt(at))));
         Def("flint/table-schema", (rt, at, n) => {
             long v = rt.VAt(at);
