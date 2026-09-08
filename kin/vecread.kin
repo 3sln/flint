@@ -22,9 +22,34 @@
                                    bit-and shl ushr
                                    push r pop-to slot as-fixnum to-i32 nil?
                                    vec-count
-                                   Rt Value RootIx I32 Bool NIL
-                                   BITS WIDTH MASK V_SHIFT V_ROOT V_TAIL]]
+                                   is-heap as-heap ty or
+                                   Rt Value RootIx I32 Bool Ty NIL
+                                   BITS WIDTH MASK V_SHIFT V_ROOT V_TAIL
+                                   TY_VEC TY_MAPENTRY]]
             [flint.rt.vecnode :refer [new-node node-len node-get node-set]]))
+
+(doc "`vector?` AS THE GUEST SEES IT, which includes a MAP ENTRY."
+     ""
+     "Clojure's `MapEntry` IS a vector -- `vector?` is true, it prints"
+     "`[:a 1]`, and `conj` appends -- and flint answered false, printed"
+     "`(:a 1)` and consed, on all four runtimes at once."
+     ""
+     "Deliberately NOT the same question as `is-vector`, which guards"
+     "`vec-count` and `vec-nth` and has twenty callers in Rust alone. A map"
+     "entry does not have the vector LAYOUT, so widening the internal"
+     "predicate would hand those functions an object they would read as a"
+     "vector head. The guest question and the layout question are different"
+     "questions that happened to share an answer."
+     ""
+     "The ports had this only as `rt.typeP(8, v)`, a magic number in a"
+     "dispatch switch, until `new-schema` needed it by name -- Rust used the"
+     "stricter `is-vector` there, so a schema whose pairs came from a map's"
+     "`seq` was accepted on the ports and refused natively.")
+(defn ^:pub ^:method ^Bool is-vector-like [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (let [^Ty t (ty rt (as-heap v))]
+    (return (or (== t TY_VEC) (== t TY_MAPENTRY)))))
 
 (doc "Copy `src` into a fresh node of `newlen` slots owned by `edit`, keeping"
      "as many children as both lengths allow."

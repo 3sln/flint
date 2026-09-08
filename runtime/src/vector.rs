@@ -56,21 +56,6 @@ impl Rt {
         v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_VEC
     }
 
-    /// `vector?` as the GUEST sees it, which includes a MAP ENTRY.
-    ///
-    /// Clojure's `MapEntry` IS a vector -- `vector?` is true, it prints
-    /// `[:a 1]`, and `conj` appends -- and flint answered false, printed
-    /// `(:a 1)` and consed, on all four runtimes at once.
-    ///
-    /// Deliberately NOT folded into `is_vector`, which has twenty callers and
-    /// is the guard before `vec_count` and `vec_nth`. A map entry does not
-    /// have the vector layout, so widening the internal predicate would hand
-    /// those functions an object they would read as a vector head. The guest
-    /// question and the layout question are different questions that happened
-    /// to share an answer.
-    pub fn is_vector_like(&self, v: Value) -> bool {
-        v.is_heap() && matches!(ty(&self.gc.sp, v.as_heap()), TY_VEC | TY_MAPENTRY)
-    }
 
     /// A map entry as a real two-element vector, for the operations that
     /// Clojure gives vector semantics: `conj` appends, `assoc` replaces.

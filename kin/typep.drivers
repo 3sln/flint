@@ -82,9 +82,6 @@ fn main() {
         static boolean isString(Rt rt, long v) { return v == 6; }
     }
     static final class Vec {
-        static boolean isVectorLike(Rt rt, long v) {
-            return Val.isHeap(v) && (Val.asHeap(v) == TY_VEC || Val.asHeap(v) == TY_MAPENTRY);
-        }
     }
     static int category(Rt rt, long v) {
         if (!Val.isHeap(v)) return 0;
@@ -100,6 +97,9 @@ fn main() {
     }
     static boolean isSet(Rt rt, long v) { return Val.isHeap(v) && Val.asHeap(v) == TY_SET; }
     static boolean isKeyword(Rt rt, long v) { return v == 7; }
+    static boolean isVectorLike(Rt rt, long v) {
+        return Val.isHeap(v) && (Val.asHeap(v) == TY_VEC || Val.asHeap(v) == TY_MAPENTRY);
+    }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -139,9 +139,6 @@ fn main() {
         internal static bool IsString(Rt rt, long v) { return v == 6; }
     }
     static class Vec {
-        internal static bool IsVectorLike(Rt rt, long v) {
-            return Val.IsHeap(v) && (Val.AsHeap(v) == Obj.TyVec || Val.AsHeap(v) == Obj.TyMapentry);
-        }
     }
     static int Category(Rt rt, long v) {
         if (!Val.IsHeap(v)) return 0;
@@ -157,6 +154,9 @@ fn main() {
     }
     static bool IsSet(Rt rt, long v) { return Val.IsHeap(v) && Val.AsHeap(v) == Obj.TySet; }
     internal static bool IsKeyword(Rt rt, long v) { return v == 7; }
+    internal static bool IsVectorLike(Rt rt, long v) {
+        return Val.IsHeap(v) && (Val.AsHeap(v) == Obj.TyVec || Val.AsHeap(v) == Obj.TyMapentry);
+    }
 --csharp
     static void Main() {
         var rt = new Rt();

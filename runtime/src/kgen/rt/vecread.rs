@@ -17,6 +17,30 @@ use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
 
 impl Rt {
+    /// `vector?` AS THE GUEST SEES IT, which includes a MAP ENTRY.
+    /// 
+    /// Clojure's `MapEntry` IS a vector -- `vector?` is true, it prints
+    /// `[:a 1]`, and `conj` appends -- and flint answered false, printed
+    /// `(:a 1)` and consed, on all four runtimes at once.
+    /// 
+    /// Deliberately NOT the same question as `is-vector`, which guards
+    /// `vec-count` and `vec-nth` and has twenty callers in Rust alone. A map
+    /// entry does not have the vector LAYOUT, so widening the internal
+    /// predicate would hand those functions an object they would read as a
+    /// vector head. The guest question and the layout question are different
+    /// questions that happened to share an answer.
+    /// 
+    /// The ports had this only as `rt.typeP(8, v)`, a magic number in a
+    /// dispatch switch, until `new-schema` needed it by name -- Rust used the
+    /// stricter `is-vector` there, so a schema whose pairs came from a map's
+    /// `seq` was accepted on the ports and refused natively.
+    pub fn is_vector_like(&self, v: Value) -> bool {
+        if !v.is_heap() {
+            return false;
+        }
+        let t: u8 = ty(&self.gc.sp, v.as_heap());
+        return (t == TY_VEC) || (t == TY_MAPENTRY);
+    }
     /// Copy `src` into a fresh node of `newlen` slots owned by `edit`, keeping
     /// as many children as both lengths allow.
     /// 

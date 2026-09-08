@@ -16,6 +16,7 @@ using static global::_3sln.Flint.Kgen.Rt.Mapcore;
 using static global::_3sln.Flint.Kgen.Rt.Names;
 using static global::_3sln.Flint.Kgen.Rt.Seqcore;
 using static global::_3sln.Flint.Kgen.Rt.Setcore;
+using static global::_3sln.Flint.Kgen.Rt.Vecread;
 
 public static class Typep {
     /// Is `v` a function -- a closure, a native, or a multifn?
@@ -75,7 +76,7 @@ public static class Typep {
             // false, printed `(:a 1)` and consed -- agreeing with each other
             // and with nothing else.
             case 8:
-                return Vec.IsVectorLike(rt, v);
+                return IsVectorLike(rt, v);
             // A ROW REF is a map here, and `is-map` is where that is said.
             // Wiring only the other one left `(map? row)` false while
             // `(get row :k)` worked, and the printer -- which dispatches on

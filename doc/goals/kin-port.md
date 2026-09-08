@@ -581,6 +581,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Maps` | the collision-node accessors, and the size predicate |
 | 3 | `Typep` | `type-p`, `is-sequential`, `is-fn` — the tag table the COMPILER emits into |
 | 3 | `Names` | `is-keyword` — the predicate `type-p` delegated to that was still written three times |
+| 3 | `Vecread` | `is-vector-like` — the other one, and the last of `type-p`'s delegates |
 
 The assoc/dissoc block is complete: thirteen functions of `Maps`, one
 definition each. The three analyses had gated the whole block on converging
@@ -628,6 +629,16 @@ the same question about the other kind of name, and it left the vocabulary --
 it was a host call in `flint/impl/rt.cljc`, so every `.kin` that asked it got
 whatever each runtime had written. Four sources asked: `typep`, `tablekind`,
 `tablemake` and `valcmp`.
+
+`is-vector-like` went the same way, into `vecread.kin`, and its comment is
+worth keeping because it explains a distinction that looks like an oversight:
+it is deliberately NOT the same question as `is-vector`, which guards
+`vec-count` and `vec-nth` and has twenty callers in Rust alone. A map entry
+does not have the vector LAYOUT, so widening the internal predicate would hand
+those functions an object they would read as a vector head. The guest question
+and the layout question are different questions that happened to share an
+answer -- and `is-vector` stays hand-written for now because it is the layout
+one, with no second spelling to converge.
 
 The three copies agreed, and the Java one says why it existed at all: "the
 ports had this only as `rt.typeP(5, v)` -- a magic number in a dispatch switch

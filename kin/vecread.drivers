@@ -3,7 +3,7 @@ type Addr = u32;
 #[derive(Clone, Copy, PartialEq)]
 struct Value(u64);
 const NIL: Value = Value(0xFFFF);
-const TY_NODE: u8 = 10;
+const TY_NODE: u8 = 10; const TY_VEC: u8 = 11; const TY_MAPENTRY: u8 = 12;
 const BITS: u32 = 5; const WIDTH: u32 = 32; const MASK: u32 = 31;
 const V_CNT: u32 = 0; const V_SHIFT: u32 = 1; const V_ROOT: u32 = 2; const V_TAIL: u32 = 3;
 impl Value {
@@ -118,11 +118,18 @@ fn main() {
     o.push_str(&format!("n3={} n32={} nover={} ",
         rt.vec_nth(v33, 3, NIL).0, rt.vec_nth(v33, 32, NIL).0,
         rt.vec_nth(v33, 33, Value(0xDEAD)).0));
+    // VECTOR-LIKE: a vector and a MAP ENTRY, and nothing else.
+    let vecobj = Value::heap(rt.alloc(TY_VEC, 1));
+    let entry = Value::heap(rt.alloc(TY_MAPENTRY, 1));
+    let node = Value::heap(rt.alloc(TY_NODE, 1));
+    o.push_str(&format!("veclike={}{}{}{} ",
+        rt.is_vector_like(vecobj) as u32, rt.is_vector_like(entry) as u32,
+        rt.is_vector_like(node) as u32, rt.is_vector_like(Value(1)) as u32));
     println!("{}", o);
 }
 --java-head
     static final long NIL = 0xFFFFL;
-    static final int TY_NODE = 10;
+    static final int TY_NODE = 10, TY_VEC = 11, TY_MAPENTRY = 12;
     static final int BITS = 5, WIDTH = 32, MASK = 31;
     static final int V_CNT = 0, V_SHIFT = 1, V_ROOT = 2, V_TAIL = 3;
     static final class Val {
@@ -220,6 +227,13 @@ fn main() {
         o.append("n3=").append(vecNth(rt, v33, 3, NIL))
          .append(" n32=").append(vecNth(rt, v33, 32, NIL))
          .append(" nover=").append(vecNth(rt, v33, 33, 0xDEAD)).append(' ');
+        // VECTOR-LIKE: a vector and a MAP ENTRY, and nothing else.
+        long vecobj = Val.heap(rt.alloc(TY_VEC, 1));
+        long entry = Val.heap(rt.alloc(TY_MAPENTRY, 1));
+        long node = Val.heap(rt.alloc(TY_NODE, 1));
+        o.append("veclike=").append(isVectorLike(rt, vecobj) ? 1 : 0)
+         .append(isVectorLike(rt, entry) ? 1 : 0).append(isVectorLike(rt, node) ? 1 : 0)
+         .append(isVectorLike(rt, 1L) ? 1 : 0).append(' ');
         System.out.println(o.toString());
     }
 --csharp-head
@@ -227,7 +241,7 @@ fn main() {
     const int BITS = 5, WIDTH = 32, MASK = 31;
     const int V_CNT = 0, V_SHIFT = 1, V_ROOT = 2, V_TAIL = 3;
     static class Obj {
-        internal const int TyNode = 10;
+        internal const int TyNode = 10, TyVec = 11, TyMapentry = 12;
         internal static int Ty(int[] sp, long a) { return sp[(int) a]; }
     }
     static class Val {
@@ -324,5 +338,12 @@ fn main() {
         o.Append("n3=").Append(VecNth(rt, v33, 3, NIL))
          .Append(" n32=").Append(VecNth(rt, v33, 32, NIL))
          .Append(" nover=").Append(VecNth(rt, v33, 33, 0xDEAD)).Append(' ');
+        // VECTOR-LIKE: a vector and a MAP ENTRY, and nothing else.
+        long vecobj = Val.Heap(rt.Alloc(Obj.TyVec, 1));
+        long entry = Val.Heap(rt.Alloc(Obj.TyMapentry, 1));
+        long node = Val.Heap(rt.Alloc(Obj.TyNode, 1));
+        o.Append("veclike=").Append(IsVectorLike(rt, vecobj) ? 1 : 0)
+         .Append(IsVectorLike(rt, entry) ? 1 : 0).Append(IsVectorLike(rt, node) ? 1 : 0)
+         .Append(IsVectorLike(rt, 1L) ? 1 : 0).Append(' ');
         System.Console.WriteLine(o.ToString());
     }

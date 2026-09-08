@@ -941,7 +941,6 @@
     'vec-nth (sibling "vec_nth" "Vec" "nth" 3)
     'vec-conj (sibling "vec_conj" "Vec" "conj" 2)
     'vec-assoc (sibling "vec_assoc" "Vec" "assoc" 3)
-    'is-vector-like (sibling "is_vector_like" "Vec" "isVectorLike" "IsVectorLike" 1)
     'vec-pop (sibling "vec_pop" "Vec" "pop" 1)
     ;; The CHARACTER lookup, with the same `dflt` shape. Rust calls it
     ;; `char_at`; both ports call it `Str.nth`, camel on the JVM and Pascal on

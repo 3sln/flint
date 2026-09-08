@@ -45,7 +45,7 @@ public static class Tablemake {
         for (int i = 0; i < n; i++) {
             long pair = Vec.Nth(rt, rt.R(pi), i, Val.Nil);
             int pj = rt.Push(pair);
-            if (!Vec.IsVectorLike(rt, rt.R(pj))) {
+            if (!IsVectorLike(rt, rt.R(pj))) {
                 rt.PopTo(@base);
                 return rt.ThrowStr("IllegalArgumentException", "a schema is [[name type] ...]; this entry is not a name and a type");
             }

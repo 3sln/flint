@@ -43,7 +43,7 @@ public final class Tablemake {
         for (int i = 0; i < n; i++) {
             long pair = Vec.nth(rt, rt.r(pi), i, Val.NIL);
             int pj = rt.push(pair);
-            if (!Vec.isVectorLike(rt, rt.r(pj))) {
+            if (!isVectorLike(rt, rt.r(pj))) {
                 rt.popTo(base);
                 return rt.throwStr("IllegalArgumentException", "a schema is [[name type] ...]; this entry is not a name and a type");
             }

@@ -6,7 +6,7 @@
 ;; would silently keep only the later one.
 (ns flint.rt.tablemake
   (:require [flint.impl.rt :refer [defn return if let do comment doc
-                                   == != >= not nil?  is-vector-like
+                                   == != >= not nil?  
                                    alloc heap slot set-slot fixnum
                                    vec-count vec-nth vec-conj empty-vec empty-map
                                    mark push r set-r pop-to for
@@ -22,6 +22,7 @@
             [flint.rt.tablesay :refer [kw-name column-list]]
             [flint.rt.mapread :refer [map-get]]
             [flint.rt.mapwrite :refer [map-assoc]]
+            [flint.rt.vecread :refer [is-vector-like]]
             [flint.rt.names :refer [is-keyword]]))
 
 (doc "`[[name type] ...]` -> a schema."

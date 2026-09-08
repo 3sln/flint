@@ -28,12 +28,13 @@
                                    not or ==
                                    is-heap as-heap ty nil? is-int is-bool
                                    is-double is-number is-string 
-                                   is-vector-like
+                                   
                                    Rt Value Ty Bool I32
                                    CAT_SEQUENTIAL
                                    TY_CLOSURE TY_NATIVEFN TY_MULTIFN]]
             [flint.rt.eq :refer [category]]
             [flint.rt.seqcore :refer [is-seq]]
+            [flint.rt.vecread :refer [is-vector-like]]
             [flint.rt.names :refer [is-keyword is-symbol]]
             [flint.rt.mapcore :refer [is-map]]
             [flint.rt.setcore :refer [is-set]]))
