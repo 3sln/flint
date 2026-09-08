@@ -37,8 +37,6 @@ public static class Vec {
     public const int V_HASH = 5;
 
     public static int Count(Rt rt, long v) => (int) Val.AsFixnum(rt.Slot(v, V_CNT));
-    static long Root(Rt rt, long v) => rt.Slot(v, V_ROOT);
-    static long Tail(Rt rt, long v) => rt.Slot(v, V_TAIL);
 
 
 

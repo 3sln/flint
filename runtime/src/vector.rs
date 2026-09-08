@@ -73,13 +73,7 @@ impl Rt {
     }
     #[inline]
     
-    fn vec_root(&self, v: Value) -> Value {
-        slot(&self.gc.sp, v.as_heap(), V_ROOT)
-    }
     #[inline]
-    fn vec_tail(&self, v: Value) -> Value {
-        slot(&self.gc.sp, v.as_heap(), V_TAIL)
-    }
 
 
 

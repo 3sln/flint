@@ -40,8 +40,6 @@ public final class Vec {
     public static final int V_HASH = 5;
 
     public static int count(Rt rt, long v) { return (int) Val.asFixnum(rt.slot(v, V_CNT)); }
-    static long root(Rt rt, long v) { return rt.slot(v, V_ROOT); }
-    static long tail(Rt rt, long v) { return rt.slot(v, V_TAIL); }
 
     /// A NODE carries its OWNERSHIP TOKEN in slot 0 and its elements from 1.
     ///
