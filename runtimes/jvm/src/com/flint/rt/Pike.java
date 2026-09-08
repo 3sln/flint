@@ -200,6 +200,7 @@ public final class Pike {
     public static long compile(Rt rt, long source, long words) {
         int n = Vec.count(rt, words);
         if (n < PROG_HDR) return rt.throwStr("IllegalArgumentException", "regex: malformed program");
+        com._3sln.flint.kgen.rt.Pikegas.chargeCompile(rt, n);
         int[] raw = new int[n];
         for (int k = 0; k < n; k++) raw[k] = (int) Val.asFixnum(Vec.nth(rt, words, k, Val.NOT_FOUND));
         int base = rt.mark();
@@ -240,6 +241,7 @@ public final class Pike {
     public static long run(Rt rt, long re, long s, long from, int entry, boolean full) {
         if (!rt.isHeapTy(re, TY_REGEX)) return rt.throwStr("ClassCastException", "not a compiled pattern");
         if (!Str.isString(rt, s)) return rt.throwStr("ClassCastException", "re-run wants a string");
+        com._3sln.flint.kgen.rt.Pikegas.chargeSubject(rt, s);
         int[] prog = progOf(rt, re);
         int ninstrs = prog[0];
         int nslots = (prog[2] + 1) * 2;
@@ -256,6 +258,7 @@ public final class Pike {
     public static long findAll(Rt rt, long re, long s, long limit) {
         if (!rt.isHeapTy(re, TY_REGEX)) return rt.throwStr("ClassCastException", "not a compiled pattern");
         if (!Str.isString(rt, s)) return rt.throwStr("ClassCastException", "re-find-all wants a string");
+        com._3sln.flint.kgen.rt.Pikegas.chargeSubject(rt, s);
         int[] prog = progOf(rt, re);
         int ninstrs = prog[0];
         int nslots = (prog[2] + 1) * 2;

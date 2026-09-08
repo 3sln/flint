@@ -1,0 +1,45 @@
+;; WHAT REGEX WORK COSTS.
+;;
+;; This was Rust's alone. `pike.rs` charged at three sites -- a compile, and
+;; the subject of a run and of a find-all -- and NEITHER PORT CHARGED ANYTHING,
+;; so a program the native runtime refused on gas ran to completion on the JVM
+;; and the CLR. `0009` says the counter is deterministic and proportional; two
+;; runtimes out of three were neither.
+;;
+;; It is here, rather than fixed in each port, because what diverged is the
+;; POLICY -- what a compile costs, what a subject costs -- and a policy written
+;; three times is a policy that will differ again. The regex functions around
+;; it cannot be generated yet (they want array allocation, hole 2), but the
+;; price they charge can be, and that price is the whole of the divergence.
+;;
+;; SEPARATE FROM `pike.kin` for a reason worth knowing: that file's three
+;; functions take no receiver, and kin wraps a file in `impl Rt` exactly when
+;; it has a method. A file holding both would put the free functions inside
+;; the impl, where `pred-hit`'s call to `word-cp` no longer resolves. One
+;; receiver-ness per source.
+(ns flint.rt.pikegas
+  (:require [flint.impl.rt :refer [defn return doc do let
+                                   charge-work charge-bytes s-bytes
+                                   Rt Value I32]]))
+
+(doc "What COMPILING a regex program costs: one unit per program word."
+     ""
+     "CHARGED ON EVERY COMPILE, hit or miss. `0012`: if a compile charged only"
+     "on a miss, whether it happened would depend on whether a collection had"
+     "run, and the same program would report two different instruction counts"
+     "-- exactly the flakiness `0009`'s counter exists to replace."
+     ""
+     "Answers what it charged, so a test can say so.")
+(defn ^:pub ^:method ^I32 charge-compile [^:mut ^Rt rt ^I32 n]
+  (do (charge-work rt n)
+      (return n)))
+
+(doc "What RUNNING a regex over a subject costs: the subject's BYTES."
+     ""
+     "Bytes, not code points, and charged BEFORE the walk: the budget has to"
+     "bound the work rather than bill for it afterwards, so a pathological"
+     "pattern hits the budget rather than the wall clock.")
+(defn ^:pub ^:method ^I32 charge-subject [^:mut ^Rt rt ^Value s]
+  (let [^I32 n (s-bytes rt s)]
+    (do (charge-bytes rt n)
+        (return n))))

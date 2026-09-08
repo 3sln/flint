@@ -361,7 +361,7 @@ impl Rt {
         if n < PROG_HDR {
             return self.throw_str("IllegalArgumentException", "regex: malformed program");
         }
-        self.charge_work(n as u64);
+        self.charge_compile(n as u32);
         let mut raw: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(n);
         for k in 0..n {
             let v = self.vec_nth(words, k as u32, NIL);
@@ -411,8 +411,7 @@ impl Rt {
         if !self.is_string(s) {
             return self.throw_str("ClassCastException", "re-find-all wants a string");
         }
-        let n = self.s_bytes(s);
-        self.charge_bytes(n);
+        self.charge_subject(s);
         let blob = self.slot(re, RX_PROG);
         let prog: alloc::vec::Vec<u32> = {
             let b = crate::obj::raw_bytes(&self.gc.sp, blob.as_heap());
@@ -466,8 +465,7 @@ impl Rt {
         // A match walks the subject once, so it is O(n) in the input and O(m) in
         // the program -- charged for both, which is what makes a pathological
         // pattern hit the budget rather than the wall clock.
-        let n = self.s_bytes(s);
-        self.charge_bytes(n);
+        self.charge_subject(s);
         let blob = self.slot(re, RX_PROG);
         let prog: alloc::vec::Vec<u32> = {
             let b = crate::obj::raw_bytes(&self.gc.sp, blob.as_heap());

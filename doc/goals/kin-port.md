@@ -584,6 +584,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Vecread` | `is-vector-like` — the other one, and the last of `type-p`'s delegates |
 | 3 | `Ropemeas` | `is-string` — nine `.kin` sources asked it, and got three answers |
 | 3 | `Numkind` | `is-int`, `is-number` — and the claim that they were NOT tag families |
+| 3 | `Pikegas` | what regex work COSTS — a policy Rust had and neither port did |
 
 The assoc/dissoc block is complete: thirteen functions of `Maps`, one
 definition each. The three analyses had gated the whole block on converging
@@ -639,6 +640,32 @@ NINE `.kin` sources named it through the vocabulary — `collgen`, `collread`,
 generated modules were asking one question and getting whatever each runtime
 had written. It lives in `ropemeas.kin` now, which is the file that already
 answers what a string MEASURES across the same three tiers.
+
+`pikegas` is the first port done under a rule worth stating: **when the
+implementations diverge, port the correct one and delete the others** rather
+than fixing each and porting later. Fixing twice pays twice and leaves the
+divergence possible in between.
+
+What diverged was not a function but a PRICE. `pike.rs` charged at three sites
+-- a compile, and the subject of a run and of a find-all -- and neither port
+charged anything, so a program the native runtime refused on gas ran to
+completion on the JVM and the CLR. The regex functions around those sites
+cannot be generated yet (they want array allocation, hole 2), but the price
+they charge can be, and the price was the whole of the divergence.
+
+It is a separate source from `pike.kin` for a reason worth knowing: that
+file's three functions take no receiver, and kin wraps a file in `impl Rt`
+exactly when it has a method. A file holding both puts the free functions
+inside the impl, where `pred-hit`'s call to `word-cp` stops resolving. **One
+receiver-ness per source.**
+
+The gas corpus row that would have caught this is NOT in this commit, and the
+reason is a second finding. `runtimes/conform/gasmeter.cljc` has no regex in
+it -- the gate was measuring the right thing about the wrong workload -- but
+adding one shows native and the JVM still 150 steps apart on regex work with
+the charging converged, and that row demands equality to the instruction.
+Something else in the regex path costs different gas on the two runtimes. The
+row lands with that, not before it.
 
 `is-int` and `is-number` came next, and the reason they are worth their own
 entry is that the commit before them said they were not worth porting: "what

@@ -1,0 +1,56 @@
+--rust-head
+#[derive(Clone, Copy)]
+struct Value(u64);
+struct Rt { steps: u64 }
+impl Rt {
+    fn charge_work(&mut self, n: u64) { self.steps += n; }
+    fn charge_bytes(&mut self, n: u32) { self.charge_work((n as u64 / 8) + 1); }
+    fn s_bytes(&mut self, v: Value) -> u32 { v.0 as u32 }
+--rust
+}
+fn main() {
+    let mut rt = Rt { steps: 0 };
+    // A COMPILE charges per program word; a SUBJECT charges per byte. Both
+    // answer what they charged, and `steps` is the running total.
+    let a = rt.charge_compile(7);
+    let b = rt.charge_subject(Value(64));
+    let c = rt.charge_compile(0);
+    let d = rt.charge_subject(Value(0));
+    println!("{} {} {} {} {}", a, b, c, d, rt.steps);
+}
+--java-head
+    static final class Rt {
+        long steps = 0;
+        void chargeWork(long n) { steps += n; }
+        void chargeBytes(int n) { chargeWork((n / 8) + 1); }
+    }
+    static final class Str {
+        static int sBytes(Rt rt, long v) { return (int) v; }
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        int a = chargeCompile(rt, 7);
+        int b = chargeSubject(rt, 64L);
+        int c = chargeCompile(rt, 0);
+        int d = chargeSubject(rt, 0L);
+        System.out.println(a + " " + b + " " + c + " " + d + " " + rt.steps);
+    }
+--csharp-head
+    internal sealed class Rt {
+        internal long steps = 0;
+        internal void ChargeWork(long n) { steps += n; }
+        internal void ChargeBytes(int n) { ChargeWork((n / 8) + 1); }
+    }
+    static class Str {
+        internal static int SBytes(Rt rt, long v) { return (int) v; }
+    }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        int a = ChargeCompile(rt, 7);
+        int b = ChargeSubject(rt, 64L);
+        int c = ChargeCompile(rt, 0);
+        int d = ChargeSubject(rt, 0L);
+        System.Console.WriteLine(a + " " + b + " " + c + " " + d + " " + rt.steps);
+    }

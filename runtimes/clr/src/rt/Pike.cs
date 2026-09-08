@@ -199,6 +199,7 @@ public static class Pike {
     public static long Compile(Rt rt, long source, long words) {
         int n = Vec.Count(rt, words);
         if (n < PROG_HDR) return rt.ThrowStr("IllegalArgumentException", "regex: malformed program");
+        global::_3sln.Flint.Kgen.Rt.Pikegas.ChargeCompile(rt, n);
         int[] raw = new int[n];
         for (int k = 0; k < n; k++) raw[k] = (int) Val.AsFixnum(Vec.Nth(rt, words, k, Val.NotFound));
         int bas = rt.Mark();
@@ -239,6 +240,7 @@ public static class Pike {
     public static long Run(Rt rt, long re, long s, long from, int entry, bool full) {
         if (!rt.IsHeapTy(re, Obj.TyRegex)) return rt.ThrowStr("ClassCastException", "not a compiled pattern");
         if (!Str.IsString(rt, s)) return rt.ThrowStr("ClassCastException", "re-run wants a string");
+        global::_3sln.Flint.Kgen.Rt.Pikegas.ChargeSubject(rt, s);
         int[] prog = ProgOf(rt, re);
         int ninstrs = prog[0];
         int nslots = (prog[2] + 1) * 2;
@@ -255,6 +257,7 @@ public static class Pike {
     public static long FindAll(Rt rt, long re, long s, long limit) {
         if (!rt.IsHeapTy(re, Obj.TyRegex)) return rt.ThrowStr("ClassCastException", "not a compiled pattern");
         if (!Str.IsString(rt, s)) return rt.ThrowStr("ClassCastException", "re-find-all wants a string");
+        global::_3sln.Flint.Kgen.Rt.Pikegas.ChargeSubject(rt, s);
         int[] prog = ProgOf(rt, re);
         int ninstrs = prog[0];
         int nslots = (prog[2] + 1) * 2;

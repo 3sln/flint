@@ -47,6 +47,7 @@ pub mod dissoc;
 pub mod eq;
 pub mod eqalloc;
 pub mod typep;
+pub mod pikegas;
 pub mod numkind;
 pub mod valeq;
 pub mod valhash;
