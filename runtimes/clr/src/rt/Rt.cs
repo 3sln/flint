@@ -1108,49 +1108,11 @@ public sealed class Rt : System.IDisposable {
         return dflt;   // `get` on a non-collection is nil, as Clojure's is
     }
 
-    /// `flint.types/code`'s canonical table, from `vm.rs`. The numbers are the
-    /// contract between the compiler and every runtime, so they are written out
-    /// rather than derived: a port that renumbered one of these would compile
-    /// and answer wrongly.
+    /// `flint.types/code`'s canonical table, GENERATED from `kin/typep.kin`
+    /// so that the three runtimes cannot drift from each other -- which the
+    /// comments this replaced record happening twice.
     public bool TypeP(int code, long v) {
-        switch (code) {
-            // `IsInt`, NOT `IsFixnum`. A big integer is an integer, and the
-            // library's printer dispatches on this: with `IsFixnum` here the
-            // bits of 1.5 printed as `#<unprintable>` rather than as
-            // 4609434218613702656, because a bigint fell through every arm.
-            case 1: return Num.IsInt(this, v);
-            case 2: return Val.IsDouble(v);
-            case 3: return Num.IsNumber(this, v);
-            case 4: return Str.IsString(this, v);
-            case 5: return Val.IsInlineKw(v) || IsHeapTy(v, TyKw);
-            case 6: return IsHeapTy(v, TySym);
-            case 7: return v == Val.True || v == Val.False;
-            // A MAP ENTRY is a vector, as in Clojure: `vector?` is true, it
-            // prints `[:a 1]`, and `conj` appends. All four runtimes said
-            // false, printed `(:a 1)` and consed, agreeing with each other and
-            // with nothing else.
-            case 8: return IsHeapTy(v, TyVec) || IsHeapTy(v, TyMapentry);
-            // A ROW REF is a map here too: `map?` goes through THIS table and
-            // not through `Maps.IsMap` (`doc/decisions/0026`).
-            case 9: return IsHeapTy(v, TyArraymap) || IsHeapTy(v, TyHashmap)
-                          || IsHeapTy(v, Obj.TyTableref);
-            case 10: return IsHeapTy(v, TySet);
-            case 11: return IsSeq(v);
-            case 12: return IsHeapTy(v, TyClosure) || IsHeapTy(v, TyNativefn);
-            case 13: return Val.IsNil(v);
-            // Calls `IsSequential` rather than restating it. This line USED to
-            // say `IsHeapTy(v, TyVec) || IsSeq(v)`, which is that predicate
-            // minus map entries -- so `(sequential? (first (seq m)))` was
-            // false here while `IsSequential` two methods below said true.
-            // `coll?` is built on it, so that was false too.
-            //
-            // The comment on `case 9` above records the SAME bug being fixed
-            // once already: `map?` goes through this table and not through
-            // `Maps.IsMap`, so wiring only the latter left `(map? row)`
-            // false. A switch that restates predicates defined elsewhere
-            // will keep drifting from them; the fix is to stop restating.
-            default: return IsSequential(v);
-        }
+        return global::_3sln.Flint.Kgen.Rt.Typep.TypeP(this, code, v);
     }
 
     /// What a value IS, for a message. A refusal that says "needs more of the
@@ -1160,8 +1122,10 @@ public sealed class Rt : System.IDisposable {
 
     /// Sequential, which is WIDER than `IsSeq`: a vector and a map entry are
     /// sequential without being seqs. `=` is over this, not over seq-ness.
+    /// GENERATED, from `kin/typep.kin`, and asked of `Category` there rather
+    /// than restated as a tag list.
     public bool IsSequential(long v) =>
-        IsSeq(v) || IsHeapTy(v, TyVec) || IsHeapTy(v, TyMapentry);
+        global::_3sln.Flint.Kgen.Rt.Typep.IsSequential(this, v);
 
     /// Which slot holds this object's metadata, or -1. Metadata is not part
     /// of equality, so `with-meta` copies and the copy is still `=`.

@@ -1,0 +1,99 @@
+;; `type-p` -- the table the COMPILER and every runtime agree on.
+;;
+;; A `^int` or `^string` annotation compiles to `flint/check-tag` with a
+;; NUMBER, and this is where the number is turned back into a question. The
+;; numbers are the contract, so a runtime that renumbered one of these would
+;; compile and answer wrongly, and nothing would say so.
+;;
+;; It was written THREE TIMES, and its own comments record two drifts already
+;; repaired in place: a map entry had to become a vector here as well as in
+;; `vector?`, and a row ref had to become a map here as well as in `map?`. The
+;; CLR's copy carries the moral in a comment -- "a switch that restates
+;; predicates defined elsewhere will keep drifting from them; the fix is to
+;; stop restating" -- and then restates six of them, because at the time
+;; there was nowhere else to put the statement. There is now.
+;;
+;; Two things the three copies did NOT agree on, both found by writing this:
+;;
+;; * `fn?`. Rust answers from `is_fn`, which is closure, nativefn OR MULTIFN.
+;;   The ports' arm 12 is closure or nativefn. Nothing constructs a multifn
+;;   today -- `defmulti` is a macro over a plain closure, and `TY_MULTIFN` is
+;;   declared and unbuilt, like `TY_CHUNKSEQ` -- so this is LATENT and not a
+;;   bug anyone can currently observe. It is converged toward Rust, which is
+;;   also what `kin/tablekind.kin` already says callable means.
+;; * `fn?` the builtin. Rust calls `is_fn`; the ports go through this table.
+;;   One route now.
+(ns flint.rt.typep
+  (:require [flint.impl.rt :refer [defn return if let case comment doc
+                                   not or ==
+                                   is-heap as-heap ty nil? is-int is-bool
+                                   is-double is-number is-string is-keyword
+                                   is-vector-like
+                                   Rt Value Ty Bool I32
+                                   CAT_SEQUENTIAL
+                                   TY_CLOSURE TY_NATIVEFN TY_MULTIFN]]
+            [flint.rt.eq :refer [category]]
+            [flint.rt.seqcore :refer [is-seq]]
+            [flint.rt.names :refer [is-symbol]]
+            [flint.rt.mapcore :refer [is-map]]
+            [flint.rt.setcore :refer [is-set]]))
+
+(doc "Is `v` a function -- a closure, a native, or a multifn?"
+     ""
+     "The ports had no such predicate at all: their `fn?` builtin went through"
+     "the tag table and their tag table restated two of these three tags."
+     "Rust had the predicate and the wider answer, and `tablekind` already"
+     "agreed with Rust, so the ports converge.")
+(defn ^:pub ^:method ^Bool is-fn [^Rt rt ^Value v]
+  (if (not (is-heap v))
+    (return false))
+  (let [^Ty t (ty rt (as-heap v))]
+    (return (or (== t TY_CLOSURE) (== t TY_NATIVEFN) (== t TY_MULTIFN)))))
+
+(doc "Is `v` SEQUENTIAL -- wider than a seq, narrower than seqable?"
+     ""
+     "A vector and a map entry are sequential without being seqs, and `=` is"
+     "over this rather than over seq-ness."
+     ""
+     "Asked of `category` rather than restated as a tag list. The ports each"
+     "carried the list, and the JVM's copy once read `is-vec or is-seq` --"
+     "that same list minus map entries -- so `(sequential? (first (seq m)))`"
+     "was false there while the tag table said true.")
+(defn ^:pub ^:method ^Bool is-sequential [^Rt rt ^Value v]
+  (return (== (category rt v) CAT_SEQUENTIAL)))
+
+(doc "`flint.types/code`'s canonical table: does `v` answer to `code`?"
+     ""
+     "Every arm DELEGATES. The point of the table is to route a number to a"
+     "question that is answered once somewhere else, and each arm that spells"
+     "out a tag comparison instead is a copy waiting to drift from the"
+     "predicate it copies."
+     ""
+     "An unknown code answers `sequential?`, which is what all three did, and"
+     "the caller refuses out-of-range codes before reaching here -- an"
+     "annotation that silently passes everything is worse than one that"
+     "fails.")
+(defn ^:pub ^:method ^Bool type-p [^Rt rt ^I32 code ^Value v]
+  (case code
+    [1] (is-int rt v)
+    [2] (is-double rt v)
+    [3] (is-number rt v)
+    [4] (is-string rt v)
+    [5] (is-keyword rt v)
+    [6] (is-symbol rt v)
+    [7] (is-bool rt v)
+    (comment "A MAP ENTRY is a vector, as in Clojure: `vector?` is true, it"
+             "prints `[:a 1]`, and `conj` appends. All four runtimes said"
+             "false, printed `(:a 1)` and consed -- agreeing with each other"
+             "and with nothing else.")
+    [8] (is-vector-like rt v)
+    (comment "A ROW REF is a map here, and `is-map` is where that is said."
+             "Wiring only the other one left `(map? row)` false while"
+             "`(get row :k)` worked, and the printer -- which dispatches on"
+             "`map?` -- printed a row as `#<unprintable>` (`0026`).")
+    [9] (is-map rt v)
+    [10] (is-set rt v)
+    [11] (is-seq rt v)
+    [12] (is-fn rt v)
+    [13] (nil? rt v)
+    :else (is-sequential rt v)))

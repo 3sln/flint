@@ -1236,52 +1236,11 @@ public final class Rt {
         return dflt;   // `get` on a non-collection is nil, as Clojure's is
     }
 
-    /// `flint.types/code`'s canonical table, from `vm.rs`. The numbers are the
-    /// contract between the compiler and every runtime, so they are written out
-    /// rather than derived: a port that renumbered one of these would compile
-    /// and answer wrongly.
+    /// `flint.types/code`'s canonical table, GENERATED from `kin/typep.kin`
+    /// so that the three runtimes cannot drift from each other -- which the
+    /// comments this replaced record happening twice.
     public boolean typeP(int code, long v) {
-        return switch (code) {
-            // `isInt`, NOT `isFixnum`. A big integer is an integer, and the
-            // library's printer dispatches on this: with `isFixnum` here the
-            // bits of 1.5 printed as `#<unprintable>` rather than as
-            // 4609434218613702656, because a bigint fell through every arm.
-            case 1 -> Num.isInt(this, v);
-            case 2 -> Val.isDouble(v);
-            case 3 -> Num.isNumber(this, v);
-            case 4 -> Str.isString(this, v);
-            case 5 -> Val.isInlineKw(v) || isHeapTy(v, TY_KW);
-            case 6 -> isHeapTy(v, TY_SYM);
-            case 7 -> v == Val.TRUE || v == Val.FALSE;
-            // A MAP ENTRY is a vector, as in Clojure: `vector?` is true, it
-            // prints `[:a 1]`, and `conj` appends. All four runtimes said
-            // false, printed `(:a 1)` and consed, agreeing with each other and
-            // with nothing else.
-            case 8 -> isHeapTy(v, TY_VEC) || isHeapTy(v, TY_MAPENTRY);
-            // A ROW REF is a map here too. `map?` goes through THIS table
-            // and not through `Maps.isMap`, so wiring only the latter left
-            // `(map? row)` false while `(get row :k)` worked -- and the
-            // printer, which dispatches on `map?`, printed a row as
-            // `#<unprintable>` (`doc/decisions/0026`).
-            case 9 -> isHeapTy(v, TY_ARRAYMAP) || isHeapTy(v, TY_HASHMAP)
-                      || isHeapTy(v, Obj.TY_TABLEREF);
-            case 10 -> isHeapTy(v, TY_SET);
-            case 11 -> isSeq(v);
-            case 12 -> isHeapTy(v, TY_CLOSURE) || isHeapTy(v, TY_NATIVEFN);
-            case 13 -> Val.isNil(v);
-            // Calls `isSequential` rather than restating it. This line USED to
-            // say `isHeapTy(v, TY_VEC) || isSeq(v)`, which is that predicate
-            // minus map entries -- so `(sequential? (first (seq m)))` was
-            // false here while `isSequential` two methods below said true.
-            // `coll?` is built on it, so that was false too.
-            //
-            // The comment on `case 9` above records the SAME bug being fixed
-            // once already: `map?` goes through this table and not through
-            // `Maps.isMap`, so wiring only the latter left `(map? row)`
-            // false. A switch that restates predicates defined elsewhere
-            // will keep drifting from them; the fix is to stop restating.
-            default -> isSequential(v);
-        };
+        return com._3sln.flint.kgen.rt.Typep.typeP(this, code, v);
     }
 
     /// What a value IS, for a message. A refusal that says "needs more of the
@@ -1311,9 +1270,12 @@ public final class Rt {
 
     /// Sequential, which is WIDER than `isSeq`: a vector and a map entry are
     /// sequential without being seqs. `=` is over this, not over seq-ness.
+    /// GENERATED, from `kin/typep.kin`, and asked of `category` there rather
+    /// than restated as a tag list.
     public boolean isSequential(long v) {
-        return isSeq(v) || isHeapTy(v, TY_VEC) || isHeapTy(v, TY_MAPENTRY);
+        return com._3sln.flint.kgen.rt.Typep.isSequential(this, v);
     }
+
 
     /// True when a park is in flight. A park is NOT an error: it unwinds the
     /// interpreter the same way, but `settle` reads `parkOn` rather than

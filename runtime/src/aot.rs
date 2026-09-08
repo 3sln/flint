@@ -222,7 +222,7 @@ pub extern "C" fn aot_int_binop(
 pub extern "C" fn aot_type_p(rt: *mut Rt, code: u32, top: u32) -> u64 {
     let rt = unsafe { &mut *rt };
     let v = rt.roots.stack[top as usize - 1];
-    Value::boolean(rt.type_p(code as u8, v)).0
+    Value::boolean(rt.type_p(code, v)).0
 }
 
 /// `RETURN`. Pops the frame and pushes the result where the caller expects it,

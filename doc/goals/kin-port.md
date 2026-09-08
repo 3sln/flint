@@ -561,6 +561,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 2 runtime build | Rust `cargo check --features diagnostics` clean; JVM `javac` clean; CLR built by conform |
 | 3 `bin/test` | exit 0, 0 failures |
 | 4 coverage | **217 of 256 cold, against a 217-of-256 baseline over the same 16 images**, re-measured after EVERY slice including the last -- and the cold SET matches, not merely the count. Run by `bin/opcov-gate` |
+| 4 coverage, at `typep` | **217 of 256 cold over the same 16 images** — `bin/opcov-gate`, unchanged from the baseline. Measured AFTER the port was written and the message drafted, which is the wrong order: the criterion says nothing lands without it. |
 | 5 ships | substituted in-tree between markers, committed, declaration sets diffed against `HEAD` |
 
 | phase | file | what ships |
@@ -578,6 +579,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Maps` | `nodeDissoc` + `collDissoc` -- removal, and the shape invariant |
 | 3 | `Maps` | `nodeFind` + `nodeFindScalar`, and `eqMayAlloc` in `Eq` |
 | 3 | `Maps` | the collision-node accessors, and the size predicate |
+| 3 | `Typep` | `type-p`, `is-sequential`, `is-fn` — the tag table the COMPILER emits into |
 
 The assoc/dissoc block is complete: thirteen functions of `Maps`, one
 definition each. The three analyses had gated the whole block on converging
@@ -588,6 +590,40 @@ already outside the valid range) rather than the capability it was ranked as.
 which makes its driver the first that exercises a real interaction rather
 than a function against stubs -- `nodeDissoc` reaches the generated
 `collDissoc`, not a fixture's stand-in.
+
+### The tag table was the contract, written three times
+
+`type-p` is where a `^int` or `^string` annotation stops being a number and
+becomes a question. The numbers are the contract between the compiler and
+every runtime, which is why all three copies wrote them out rather than
+deriving them -- and why three copies was the wrong number.
+
+Its own comments record two drifts already repaired IN PLACE: a map entry had
+to become a vector here as well as in `vector?`, and a row ref a map here as
+well as in `map?`. The CLR's copy states the moral -- "a switch that restates
+predicates defined elsewhere will keep drifting from them; the fix is to stop
+restating" -- and then restates six of them, because at the time there was
+nowhere else for the statement to live.
+
+Two things the three copies did not agree on, both found by writing the port
+rather than by a test:
+
+* **`fn?`**. Rust answers from `is_fn`, which is closure, nativefn OR
+  MULTIFN; the ports' arm 12 is closure or nativefn. **Nothing constructs a
+  multifn** -- `defmulti` is a macro over a plain closure, and `TY_MULTIFN` is
+  declared and unbuilt, like `TY_CHUNKSEQ` -- so this is LATENT and no program
+  can observe it today. Checked, not assumed: `(fn? a-defmulti)` is `true` on
+  the native runtime and `true` on the JVM, because the value is a closure on
+  both. Converged toward Rust, which is what `kin/tablekind.kin` already says
+  callable means.
+* **the `fn?` builtin's route**. Rust called `is_fn` directly; the ports went
+  through the table. One route now.
+
+`is-sequential` came with it because it is the same mistake one level down:
+Rust asked `category`, and both ports carried the tag list. The JVM's copy
+once read `is-vec or is-seq` -- that list minus map entries -- so
+`(sequential? (first (seq m)))` was false there while the table two methods
+above said true. It asks `category` now, in one place.
 
 ### `nodeAssoc` ADDS forty lines, and that is the honest number
 

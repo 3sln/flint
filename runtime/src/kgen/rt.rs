@@ -46,6 +46,7 @@ pub mod opaque;
 pub mod dissoc;
 pub mod eq;
 pub mod eqalloc;
+pub mod typep;
 pub mod valeq;
 pub mod valhash;
 pub mod valcmp;

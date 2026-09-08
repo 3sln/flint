@@ -384,7 +384,7 @@ builtins! {
             return rt.throw_str("IllegalArgumentException",
                                 "check-tag: unknown type code");
         }
-        let ok = rt.type_p(code as u8, v);
+        let ok = rt.type_p(code as u32, v);
         if ok {
             v
         } else {

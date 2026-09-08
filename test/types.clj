@@ -25,46 +25,53 @@
 
 ;; --- the two tables must agree ---------------------------------------------
 ;;
-;; The codes live twice: `flint.types/code` and the match in `Rt::type_p`
-;; (`runtime/src/vm.rs`). Drift between them would not fail loudly -- it would
-;; check the WRONG type, quietly, at every annotated binding.
+;; The codes live twice: `flint.types/code` and `type-p`. Drift between them
+;; would not fail loudly -- it would check the WRONG type, quietly, at every
+;; annotated binding.
 ;;
-;; It used to scrape `builtins.rs`, which carried a SECOND copy of the same
-;; match for `flint/check-tag`. The copies drifted the moment a map entry
-;; became a vector: the interpreter answered `vector?` one way and `check-tag`
-;; the other, for the same value. `check-tag` now delegates to `type_p`, so
-;; there is one table in the runtime and this reads it.
+;; It used to scrape `builtins.rs`, then `vm.rs`, each of which carried its own
+;; copy of the match. The copies drifted the moment a map entry became a
+;; vector: the interpreter answered `vector?` one way and `check-tag` the
+;; other, for the same value.
+;;
+;; It now reads `kin/typep.kin`, which is the ONE place the runtime's table is
+;; written -- Rust, Java and C# are generated from it, and `bin/check-kin`
+;; fails if any of the three has drifted from the source. So this compares the
+;; compiler's table against the runtime's table, singular, rather than against
+;; whichever copy it could find.
 (let [cljc (slurp "src/flint/types.cljc")
-      rs   (slurp "runtime/src/vm.rs")
+      rs   (slurp "kin/typep.kin")
       from-cljc (into {} (for [[_ k v] (re-seq #":(\w+) (\d+)" (re-find #"\{:int 1[^}]+\}" cljc))]
                            [(keyword k) (parse-long v)]))
-      ;; The `(` is load-bearing. Without it the pattern matched `type_pX`
-      ;; too, so renaming the function still "found" a table and every check
-      ;; below passed over the wrong text -- a scraper that cannot fail to
-      ;; find its subject cannot fail at all.
-      body (re-find #"(?s)pub\(crate\) fn type_p\(.*?\n    \}" rs)
-      ;; `self.is_int(v)` and `v.is_bool()` both appear, so the receiver is
-      ;; skipped and the predicate NAME is what gets compared. `is_vector_like`
-      ;; is matched as `vector` -- the trailing `_like` is deliberate and is
-      ;; about a map entry ALSO being a vector, not about a different type.
+      ;; The `defn` line is load-bearing. Matching the bare name would find the
+      ;; docstring above it too, so renaming the function would still "find" a
+      ;; table and every check below would pass over the wrong text -- a
+      ;; scraper that cannot fail to find its subject cannot fail at all.
+      body (re-find #"(?s)\(defn \^:pub \^:method \^Bool type-p .*?\n\n" (str rs "\n\n"))
+      ;; The predicate NAME is what gets compared. `is-vector-like` is matched
+      ;; as `vector` -- the trailing `-like` is deliberate and is about a map
+      ;; entry ALSO being a vector, not about a different type. `nil?` is the
+      ;; one arm not spelled `is-`.
       ;; `(or body "")`, so a missing table fails as a CHECK rather than as a
       ;; NullPointerException from `re-seq`. A stack trace says the test broke;
       ;; a named failure says the runtime moved.
-      from-rs (into {} (for [[_ n f] (re-seq #"(\d+) => \w+\.is_(\w+?)(?:_like)?\(" (or body ""))]
-                         [(parse-long n) f]))]
+      from-rs (into {} (for [[_ n f] (re-seq #"\[(\d+)\] \((is-[a-z-]+|nil\?) rt v\)" (or body ""))]
+                         [(parse-long n)
+                          (-> f (str/replace #"^is-" "") (str/replace #"-like$" "")
+                              (str/replace #"^nil\?$" "nil"))]))]
   (check-that "the cljc table was found and is not empty" (>= (count from-cljc) 14))
   ;; `type_p`'s last arm is `_ => is_sequential`, not `14 =>`, so 14 is not in
   ;; the scrape. It is asserted by name instead of being silently absent.
   (check-that "the rust table was found and is not empty"
               (and (some? body) (>= (count from-rs) 13)))
-  (check-that "code 14 is sequential, from type_p's default arm"
-              (some? (re-find #"_ => self\.is_sequential\(" (or body ""))))
+  (check-that "code 14 is sequential, from type-p's :else arm"
+              (some? (re-find #":else \(is-sequential rt v\)" (or body ""))))
   (check "the two tables have the same number of codes"
          (inc (count from-rs)) (count from-cljc))
   (check "the code sets are identical"
          (sort (vals from-cljc)) (sort (conj (keys from-rs) 14)))
   ;; And they must be about the same types, not merely the same size.
-  (let [names {:int "int" :float "float" :number "number" :string "string"
+  (let [names {:int "int" :float "double" :number "number" :string "string"
                :keyword "keyword" :symbol "symbol" :boolean "bool" :vector "vector"
                :map "map" :set "set" :seq "seq" :fn "fn" :nil "nil"
                :sequential "sequential"}

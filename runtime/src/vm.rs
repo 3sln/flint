@@ -425,10 +425,6 @@ impl Rt {
         Value::heap(a)
     }
 
-    pub fn is_fn(&self, v: Value) -> bool {
-        v.is_heap() && matches!(ty(&self.gc.sp, v.as_heap()), TY_CLOSURE | TY_NATIVEFN | TY_MULTIFN)
-    }
-
     /// Anything callable in a Clojure call position: fns, but also keywords,
     /// maps, sets and vectors.
     pub fn is_callable(&self, v: Value) -> bool {
@@ -436,47 +432,6 @@ impl Rt {
     }
 
     // --- native dispatch ---------------------------------------------------
-
-    /// Call the native builtin at import index `idx`.
-    ///
-    /// On wasm the import table holds a **table slot**, and this is a
-    /// `call_indirect` through `__indirect_function_table`. That indirection is
-    /// the whole modularity story: it is the only reference to a builtin
-    /// anywhere in the module, so a builtin the program never reaches is not
-    /// exported, and `--gc-sections` deletes it. Nothing may call a builtin
-    /// directly, ever.
-    /// Every type predicate, on the same codes `flint/check-tag` dispatches on
-    /// -- `test/types.clj` asserts that table agrees with the cljc one, and
-    /// this shares it, so a predicate and its annotation can never disagree
-    /// about what a type is.
-    ///
-    /// Allocates nothing, can fail at nothing, and cannot re-enter the VM.
-    /// That is what lets compiled code call it without the bail protocol: the
-    /// value stack cannot move underneath it, so none of the cached bases need
-    /// reloading afterwards.
-    #[inline]
-    /// THE type test. `flint/check-tag` in `builtins.rs` restated this whole
-    /// match, and the two drifted the moment a map entry became a vector: this
-    /// one answered `vector?` and the other one did too, differently. It now
-    /// delegates here, so there is one table.
-    pub(crate) fn type_p(&self, code: u8, v: Value) -> bool {
-        match code {
-            1 => self.is_int(v),
-            2 => self.is_float(v),
-            3 => self.is_number(v),
-            4 => self.is_string(v),
-            5 => self.is_keyword(v),
-            6 => self.is_symbol(v),
-            7 => v.is_bool(),
-            8 => self.is_vector_like(v),
-            9 => self.is_map(v),
-            10 => self.is_set(v),
-            11 => self.is_seq(v),
-            12 => self.is_fn(v),
-            13 => v.is_nil(),
-            _ => self.is_sequential(v),
-        }
-    }
 
     /// The half of a specialised integer operation that is not the common
     /// case: a bigint operand, a result past the fixnum range, an overflow, or
@@ -1392,7 +1347,7 @@ impl Rt {
                     let code = self.u8_at(ip);
                     ip += 1;
                     let v = self.vpop();
-                    let r = self.type_p(code, v);
+                    let r = self.type_p(code as u32, v);
                     self.vpush(Value::boolean(r));
                 }
                 op::NATIVE => {

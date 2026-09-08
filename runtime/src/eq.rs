@@ -17,11 +17,6 @@ pub const CAT_SET: u8 = 3;
 
 impl Rt {
 
-    pub fn is_sequential(&self, v: Value) -> bool {
-        self.category(v) == CAT_SEQUENTIAL
-    }
-
-
     // `eq` and `seq_eq` are GENERATED, from `kin/valeq.kin`, under the names
     // `val_eq` and `seq_eq`. `string_eq` went with them: the byte-length
     // check and the interning shortcut are both in the generated arm now.
