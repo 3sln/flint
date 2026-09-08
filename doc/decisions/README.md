@@ -579,6 +579,35 @@ what remains, and what each thing is waiting on.
    function. A bounded regression — asserting the walk's step rather than its
    termination — would be worth having and is not written.
 
+0u. **`check-names` was checking half the vocabulary** — FIXED, and it found
+   a defect on its first run. The gate asked "does every NAME in the
+   vocabulary appear in the runtime that has to define it", which is one of
+   the two kinds of assertion a vocabulary makes. The other is a `core/call`
+   TEMPLATE, and nothing asked about those at all.
+
+   `heap-ty?` emitted `{0}.is_heap_ty({1}, {2})` for Rust and **no such
+   function existed**. Both ports had it — `isHeapTy`, `IsHeapTy` — so two
+   targets defined it and one did not, and the first `.kin` source to use the
+   form would have failed to compile the whole crate. Rust gains it, which is
+   the two-against-one convergence.
+
+   The numbers say why this was worth doing: 306 call templates against 148
+   names, so the unchecked half was the LARGER half. Over 284 distinct
+   identifiers it flagged three — `is_heap_ty` and two `java.lang` methods
+   that are the host's to define, now an explicit two-entry allowlist.
+
+   The templates are read as TEXT out of the vocabulary source, because
+   `core/call` closes over them and a closure cannot be asked what it would
+   emit. Same weakest question the rest of the gate asks: does this
+   identifier appear anywhere in that target's sources? Not "is it the right
+   type" — the failure being caught is a name that appears NOWHERE.
+
+   This is the fifth instance of the shape the gate's own header lists —
+   `TY_SYMBOL`/`TY_KEYWORD`, `LS_THUNK`, `vec-nth`'s stale arity, and now
+   this — and the first one the gate caught rather than a source stumbling
+   over. It matters more from here: `defdata` will GENERATE call templates,
+   and they would have landed in the blind spot.
+
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old
    `jvm`-against-`clr` similarity table because BOTH ports share them. Two

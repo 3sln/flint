@@ -751,6 +751,20 @@ impl Rt {
     pub fn empty_list(&self) -> Value {
         self.roots.shared.singletons[SING_EMPTY_LIST]
     }
+    /// Is `v` a heap object with tag `t`?
+    ///
+    /// The vocabulary's `heap-ty?` form emitted `is_heap_ty` for Rust and NO
+    /// SUCH FUNCTION EXISTED -- both ports had `isHeapTy`/`IsHeapTy` and this
+    /// runtime had the expression written out at every site. Nothing broke
+    /// because no `.kin` source had used the form yet; the first one to do so
+    /// would have failed to compile the whole crate.
+    ///
+    /// Found by widening `kin/scripts/check-names` to the call templates,
+    /// which had never been checked -- half the vocabulary.
+    pub fn is_heap_ty(&self, v: Value, t: u8) -> bool {
+        v.is_heap() && crate::obj::ty(&self.gc.sp, v.as_heap()) == t
+    }
+
     pub fn empty_vec(&self) -> Value {
         self.roots.shared.singletons[SING_EMPTY_VEC]
     }

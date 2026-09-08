@@ -53,6 +53,36 @@
                        what nm spelling (name target)
                        (str/join ", " (get trees target)) id)))))
 
+;; ---------------------------------------------------------------------------
+;; AND EVERY CALL TEMPLATE, which was HALF THE VOCABULARY going unchecked.
+;;
+;; The names above are one kind of assertion that three runtimes agree about a
+;; spelling; a `core/call` template is the other, and this gate only ever asked
+;; about the first. `heap-ty?` emitted `{0}.is_heap_ty({1}, {2})` for Rust and
+;; NO SUCH FUNCTION EXISTED -- the JVM had `isHeapTy` and the CLR `IsHeapTy`,
+;; so two targets defined it and one did not. Invisible for the same reason as
+;; every entry in the comment at the top of this file: no source had used the
+;; form yet, and an entry nothing uses is an entry nothing checks.
+;;
+;; The templates are read as TEXT out of the vocabulary source, because
+;; `core/call` closes over them and a closure cannot be asked what it would
+;; emit. That is the same weakest question the rest of this file asks, applied
+;; to the other half.
+(def host-library
+  "Identifiers a template calls that belong to the HOST's library rather than
+  to a flint runtime, so no file of ours defines them and none should. Listed
+  rather than pattern-matched: each one is a decision that this call is the
+  host's to answer, and a list of two that has to grow is the right kind of
+  friction."
+  #{"divideUnsigned" "remainderUnsigned"})
+
+(def templates
+  (let [src (slurp "kin/src/flint/impl/rt.cljc")]
+    (for [[_ target tmpl] (re-seq #":(rust|java|csharp)\s+\"((?:[^\"\\\\]|\\\\.)*)\"" src)
+          [_ id] (re-seq #"([A-Za-z_][A-Za-z0-9_]*)\s*\(" tmpl)
+          :when (not (host-library id))]
+      [(keyword target) id tmpl])))
+
 (println "\nkin/check-names: every name, against the runtime that defines it\n")
 
 (doseq [[nm per-target] (sort-by key rt/names)
@@ -62,6 +92,15 @@
   (check "name" nm target spelling))
 
 (println (format "  %d names over %d targets" (count rt/names) (count trees)))
+
+(doseq [[target id tmpl] (distinct templates)
+        :when (contains? trees target)]
+  (when-not (str/includes? (get text target) id)
+    (swap! failures inc)
+    (println (format "  FAIL a template emits `%s` for %s, and no file under %s defines it\n         template: %s"
+                     id (name target) (str/join ", " (get trees target)) tmpl))))
+
+(println (format "  %d call templates over the same targets" (count (distinct templates))))
 (if (zero? @failures)
   (do (println "\ncheck-names: every name is defined by the runtime that has to have it\n")
       (System/exit 0))
