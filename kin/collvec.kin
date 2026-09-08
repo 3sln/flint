@@ -1,0 +1,145 @@
+;; EVERY ENTRY OF A MAP, AND EVERY ELEMENT OF A SET, AS A VECTOR.
+;;
+;; `seq`, `keys`, `vals` and `reduce` over a map all arrive here, and it was
+;; the last pair of functions handing a closure to `map-for-each` for a reason
+;; that survives contact: it accumulates. Equality composes because the CHAMP
+;; is canonical, hashing composes because the sum is associative -- and this
+;; one composes because APPENDING composes, so long as the walk visits in the
+;; same order the callback did.
+;;
+;; THE ORDER IS THE CONTRACT. `map-for-each` visits a bitmap node's inline
+;; entries first, in bitmap-index order, then descends its children in order;
+;; a collision node yields its pairs as stored. `runtimes/conform/maps.cljc`
+;; prints a map's keys and diffs the transcript against the native runtime, so
+;; a walk that visited in a different order would be caught -- but only
+;; because that fixture exists. It is written down here as well.
+;;
+;; GAS. One unit per entry, which is what the callback charged, plus the
+;; up-front `charge-checked` for the vector about to be built. The first
+;; generated walk in this port charged nothing at all and no gate noticed.
+(ns flint.rt.collvec
+  (:require [flint.impl.rt :refer [defn return if let local set do comment doc
+                                   for == != not
+                                   mark push r set-r pop-to slot ty as-heap
+                                   nil? popcount is-bmnode charge-work
+                                   charge-checked empty-vec vec-conj
+                                   bn-datamap bn-nodemap bn-key bn-val bn-node
+                                   cn-count cn-key cn-val
+                                   Rt Value RootIx I32 Ty NIL
+                                   HM_ROOT S_MAP TY_ARRAYMAP]]
+            [flint.rt.mapcore :refer [map-count am-key am-val map-entry]]
+            [flint.rt.setcore :refer [set-count]]))
+
+(doc "Walk one trie node, conj-ing a MapEntry per pair onto the vector held"
+     "at root `ai`."
+     ""
+     "The accumulator lives in a ROOT and not a local because `map-entry` and"
+     "`vec-conj` both allocate: a vector read into a host local before either"
+     "of them does not survive it (`0031`). The node is rooted for the same"
+     "reason -- the walk keeps using it after the allocation.")
+(defn ^:method node-entries-into [^:mut ^Rt rt ^Value n ^RootIx ai]
+  (let [^RootIx base (mark rt)
+        ^RootIx ni (push rt n)]
+    (if (not (is-bmnode rt (r rt ni)))
+      (do
+        (for [^I32 i 0 (cn-count rt (r rt ni))]
+          (do
+            (charge-work rt 1)
+            (let [^Value e (map-entry rt (cn-key rt (r rt ni) i)
+                                         (cn-val rt (r rt ni) i))
+                  ^Value nv (vec-conj rt (r rt ai) e)]
+              (set-r rt ai nv))))
+        (pop-to rt base)
+        (return)))
+    (for [^I32 i 0 (popcount (bn-datamap rt (r rt ni)))]
+      (do
+        (charge-work rt 1)
+        (let [^Value e (map-entry rt (bn-key rt (r rt ni) i)
+                                     (bn-val rt (r rt ni) i))
+              ^Value nv (vec-conj rt (r rt ai) e)]
+          (set-r rt ai nv))))
+    (for [^I32 j 0 (popcount (bn-nodemap rt (r rt ni)))]
+      (node-entries-into rt (bn-node rt (r rt ni) j) ai))
+    (pop-to rt base)
+    (return)))
+
+(doc "The same walk, taking the KEY alone -- a set is a map from each element"
+     "to itself, so its elements are its keys.")
+(defn ^:method node-keys-into [^:mut ^Rt rt ^Value n ^RootIx ai]
+  (let [^RootIx base (mark rt)
+        ^RootIx ni (push rt n)]
+    (if (not (is-bmnode rt (r rt ni)))
+      (do
+        (for [^I32 i 0 (cn-count rt (r rt ni))]
+          (do
+            (charge-work rt 1)
+            (let [^Value nv (vec-conj rt (r rt ai) (cn-key rt (r rt ni) i))]
+              (set-r rt ai nv))))
+        (pop-to rt base)
+        (return)))
+    (for [^I32 i 0 (popcount (bn-datamap rt (r rt ni)))]
+      (do
+        (charge-work rt 1)
+        (let [^Value nv (vec-conj rt (r rt ai) (bn-key rt (r rt ni) i))]
+          (set-r rt ai nv))))
+    (for [^I32 j 0 (popcount (bn-nodemap rt (r rt ni)))]
+      (node-keys-into rt (bn-node rt (r rt ni) j) ai))
+    (pop-to rt base)
+    (return)))
+
+(doc "Every entry of a map, in trie order, as a vector of MapEntry.")
+(defn ^:pub ^:method ^Value map-entry-vector [^:mut ^Rt rt ^Value m]
+  (comment "CHARGED UP FRONT for the vector this is about to build. It used"
+           "to build an entry per key for the price of one builtin dispatch:"
+           "6,499,574 steps past an exhausted budget on 200,000 entries.")
+  (let [^I32 n (map-count rt m)]
+    (if (not (charge-checked rt n "seq of a map"))
+      (return NIL)))
+  (let [^RootIx base (mark rt)
+        ^RootIx mi (push rt m)
+        ^Value ev (empty-vec rt)
+        ^RootIx ai (push rt ev)]
+    (if (== (ty rt (as-heap (r rt mi))) TY_ARRAYMAP)
+      (do
+        (for [^I32 i 0 (map-count rt (r rt mi))]
+          (let [^Value e (map-entry rt (am-key rt (r rt mi) i)
+                                       (am-val rt (r rt mi) i))
+                ^Value nv (vec-conj rt (r rt ai) e)]
+            (set-r rt ai nv)))
+        (let [^Value flat (r rt ai)]
+          (pop-to rt base)
+          (return flat))))
+    (let [^Value root (slot rt (r rt mi) HM_ROOT)]
+      (if (not (nil? rt root))
+        (node-entries-into rt root ai)))
+    (let [^Value res (r rt ai)]
+      (pop-to rt base)
+      (return res))))
+
+(doc "Every element of a set, in the backing map's trie order, as a vector.")
+(defn ^:pub ^:method ^Value set-element-vector [^:mut ^Rt rt ^Value s]
+  (comment "HOISTED: `set-count` and `charge-checked` both take `&mut self`"
+           "on Rust, so nesting them is two mutable borrows at once.")
+  (let [^I32 n (set-count rt s)]
+    (if (not (charge-checked rt n "seq of a set"))
+      (return NIL)))
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt s)
+        ^Value ev (empty-vec rt)
+        ^RootIx ai (push rt ev)
+        ^Value m (slot rt (r rt si) S_MAP)
+        ^RootIx mi (push rt m)]
+    (if (== (ty rt (as-heap (r rt mi))) TY_ARRAYMAP)
+      (do
+        (for [^I32 i 0 (map-count rt (r rt mi))]
+          (let [^Value nv (vec-conj rt (r rt ai) (am-key rt (r rt mi) i))]
+            (set-r rt ai nv)))
+        (let [^Value flat (r rt ai)]
+          (pop-to rt base)
+          (return flat))))
+    (let [^Value root (slot rt (r rt mi) HM_ROOT)]
+      (if (not (nil? rt root))
+        (node-keys-into rt root ai)))
+    (let [^Value res (r rt ai)]
+      (pop-to rt base)
+      (return res))))

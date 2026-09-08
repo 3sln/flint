@@ -1,0 +1,336 @@
+--rust-head
+// The same mock CHAMP as `collhash.drivers`, with a vector that COPIES on
+// conj so the rooting the real one needs is actually exercised.
+//
+// The probe prints the elements IN THE ORDER THEY WERE APPENDED, because the
+// order is the contract here: `seq` over a map has to hand them out the way
+// the callback walk did, or `runtimes/conform/maps.cljc` diffs differently
+// against the native runtime.
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+const HM_ROOT: u32 = 2;
+const S_MAP: u32 = 2;
+const S_HASH: u32 = 3;
+const TY_ARRAYMAP: u8 = 3;
+const TY_HASHMAP: u8 = 2;
+impl Value {
+    fn is_nil(self) -> bool { self.0 == 0xFFFF }
+    fn as_heap(self) -> u64 { self.0 }
+    // `is-fixnum` and `as-fixnum` are Value METHODS in Rust and static calls
+    // on `Val` in both ports, so the mock has to be both shapes.
+}
+// `S_MAP` and `S_HASH` are spelled `crate::set::…` by the vocabulary, unlike
+// the map's slots which are bare, so the mock grows a module of that name.
+mod set { pub const S_MAP: u32 = 2; }
+struct Sp { h: Vec<u64> }
+struct Gc { sp: Sp }
+struct Rt { gc: Gc, roots: Vec<Value>, bump: u64, gas: u64 }
+fn ty(sp: &Sp, a: u64) -> u8 { sp.h[a as usize] as u8 }
+impl Rt {
+    fn charge_work(&mut self, n: u64) { self.gas += n; }
+    fn mark(&self) -> usize { self.roots.len() }
+    fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
+    fn r(&self, i: usize) -> Value { self.roots[i] }
+    fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
+    fn slot(&self, v: Value, i: u32) -> Value { Value(self.gc.sp.h[(v.0 + i as u64) as usize]) }
+    // COUNTED, so a probe can tell a memoised answer from a recomputed one.
+    // A VECTOR is [count, e0, e1, ...] and `vec_conj` COPIES into a fresh
+    // one, so the probe exercises the rooting the real one needs.
+    fn empty_vec(&mut self) -> Value { let a = self.bump; self.bump += 1; self.gc.sp.h[a as usize] = 0; Value(a) }
+    fn vec_conj(&mut self, v: Value, x: Value) -> Value {
+        let n = self.gc.sp.h[v.0 as usize];
+        let a = self.bump; self.bump += n + 2;
+        self.gc.sp.h[a as usize] = n + 1;
+        for i in 0..n { self.gc.sp.h[(a + 1 + i) as usize] = self.gc.sp.h[(v.0 + 1 + i) as usize]; }
+        self.gc.sp.h[(a + 1 + n) as usize] = x.0;
+        Value(a)
+    }
+    fn map_entry(&mut self, k: Value, v: Value) -> Value {
+        let a = self.bump; self.bump += 2;
+        self.gc.sp.h[a as usize] = k.0; self.gc.sp.h[(a + 1) as usize] = v.0;
+        Value(a)
+    }
+    fn set_r(&mut self, i: usize, v: Value) { self.roots[i] = v; }
+    fn charge_checked(&mut self, n: u64, _why: &str) -> bool { self.gas += n; true }
+    fn map_count(&self, m: Value) -> u32 { self.gc.sp.h[m.0 as usize + 1] as u32 }
+    fn set_count(&self, s: Value) -> u32 { self.map_count(self.slot(s, S_MAP)) }
+    fn am_key(&self, m: Value, i: u32) -> Value { Value(self.gc.sp.h[m.0 as usize + 4 + 2 * i as usize]) }
+    fn am_val(&self, m: Value, i: u32) -> Value { Value(self.gc.sp.h[m.0 as usize + 5 + 2 * i as usize]) }
+    fn is_bmnode(&self, n: Value) -> bool { self.gc.sp.h[n.0 as usize] == 0 }
+    fn bn_datamap(&self, n: Value) -> u32 { self.gc.sp.h[n.0 as usize + 1] as u32 }
+    fn bn_nodemap(&self, n: Value) -> u32 { self.gc.sp.h[n.0 as usize + 2] as u32 }
+    fn bn_key(&self, n: Value, i: u32) -> Value { Value(self.gc.sp.h[n.0 as usize + 3 + 2 * i as usize]) }
+    fn bn_val(&self, n: Value, i: u32) -> Value { Value(self.gc.sp.h[n.0 as usize + 4 + 2 * i as usize]) }
+    fn bn_node(&self, n: Value, j: u32) -> Value {
+        let nd = self.bn_datamap(n).count_ones();
+        Value(self.gc.sp.h[n.0 as usize + 3 + 2 * nd as usize + j as usize])
+    }
+    fn cn_count(&self, n: Value) -> u32 { self.gc.sp.h[n.0 as usize + 2] as u32 }
+    fn cn_key(&self, n: Value, i: u32) -> Value { Value(self.gc.sp.h[n.0 as usize + 3 + 2 * i as usize]) }
+    fn cn_val(&self, n: Value, i: u32) -> Value { Value(self.gc.sp.h[n.0 as usize + 4 + 2 * i as usize]) }
+}
+impl Rt {
+--rust
+}
+fn fresh() -> Rt {
+    let mut h = vec![0u64; 900];
+    // A CHAMP map: [ty, count, root, unused]
+    h[10] = 2; h[11] = 3; h[12] = 100;
+    h[100] = 0; h[101] = 3; h[102] = 4;
+    h[103] = 500; h[104] = 501; h[105] = 502; h[106] = 503; h[107] = 150;
+    h[150] = 0; h[151] = 1; h[152] = 0; h[153] = 504; h[154] = 505;
+    // An ARRAY-MAP with the same pairs: [ty, count, unused, unused, k,v...]
+    h[20] = 3; h[21] = 3;
+    h[24] = 500; h[25] = 501; h[26] = 502; h[27] = 503; h[28] = 504; h[29] = 505;
+    // A SET over the CHAMP map, and one over the array-map
+    h[30] = 2; h[31] = 3; h[32] = 10;
+    h[34] = 2; h[35] = 3; h[36] = 20;
+    // A map whose only node is a COLLISION node
+    h[40] = 2; h[41] = 2; h[42] = 400;
+    h[400] = 1; h[401] = 0x55; h[402] = 2; h[403] = 600; h[404] = 601; h[405] = 602; h[406] = 603;
+    Rt { gc: Gc { sp: Sp { h } }, roots: Vec::new(), bump: 700, gas: 0 }
+}
+fn show(rt: &Rt, v: Value, pairs: bool) -> String {
+    let n = rt.gc.sp.h[v.0 as usize];
+    let mut s = String::new();
+    for i in 0..n {
+        let e = rt.gc.sp.h[(v.0 + 1 + i) as usize];
+        if pairs {
+            s.push_str(&format!("{}={},", rt.gc.sp.h[e as usize], rt.gc.sp.h[(e + 1) as usize]));
+        } else {
+            s.push_str(&format!("{},", e));
+        }
+    }
+    s
+}
+fn main() {
+    let mut rt = fresh();
+    let mut o = String::new();
+    let champ = rt.map_entry_vector(Value(10));
+    o.push_str(&format!("champ={} ", show(&rt, champ, true)));
+    let am = rt.map_entry_vector(Value(20));
+    o.push_str(&format!("array={} ", show(&rt, am, true)));
+    let coll = rt.map_entry_vector(Value(40));
+    o.push_str(&format!("coll={} ", show(&rt, coll, true)));
+    let s1 = rt.set_element_vector(Value(30));
+    o.push_str(&format!("set={} ", show(&rt, s1, false)));
+    let s2 = rt.set_element_vector(Value(34));
+    o.push_str(&format!("setam={} ", show(&rt, s2, false)));
+    o.push_str(&format!("gas={} roots={}", rt.gas, rt.roots.len()));
+    println!("{}", o);
+}
+--java-head
+    static final long NIL = 0xFFFFL;
+    static final int HM_ROOT = 2;
+    static final int TY_ARRAYMAP = 3, TY_HASHMAP = 2;
+    // `Sets.S_MAP` is how the vocabulary spells it, unlike the map's slots
+    // which come out bare -- see the Rust copy.
+    static final class Sets { static final int S_MAP = 2; }
+    static final class Val {
+        static final long NIL = 0xFFFFL;
+        static boolean isNil(long v) { return v == NIL; }
+        static long asHeap(long v) { return v; }
+    }
+    static final class Sp { long[] h = new long[900]; }
+    static final class Gc { Sp sp = new Sp(); }
+    static int ty(Sp sp, long a) { return (int) sp.h[(int) a]; }
+    // Everything the vocabulary calls BARE lives out here; only `mark`,
+    // `push`, `r`, `popTo`, `slot` and `setSlot` are reached through `rt`.
+    static long emptyVec(Rt rt) { long a = rt.bump++; rt.h[(int) a] = 0; return a; }
+    static final class Vec {
+        static long conj(Rt rt, long v, long x) { return vecConj(rt, v, x); }
+        static long empty(Rt rt) { return emptyVec(rt); }
+    }
+    static long vecConj(Rt rt, long v, long x) {
+        long n = rt.h[(int) v];
+        long a = rt.bump; rt.bump += n + 2;
+        rt.h[(int) a] = n + 1;
+        for (long i = 0; i < n; i++) rt.h[(int) (a + 1 + i)] = rt.h[(int) (v + 1 + i)];
+        rt.h[(int) (a + 1 + n)] = x;
+        return a;
+    }
+    static long mapEntry(Rt rt, long k, long v) {
+        long a = rt.bump; rt.bump += 2;
+        rt.h[(int) a] = k; rt.h[(int) a + 1] = v;
+        return a;
+    }
+    static int mapCount(Rt rt, long m) { return (int) rt.h[(int) m + 1]; }
+    static int setCount(Rt rt, long s) { return mapCount(rt, rt.slot(s, Sets.S_MAP)); }
+    static long amKey(Rt rt, long m, int i) { return rt.h[(int) m + 4 + 2 * i]; }
+    static long amVal(Rt rt, long m, int i) { return rt.h[(int) m + 5 + 2 * i]; }
+    static boolean isBmnode(Rt rt, long n) { return rt.h[(int) n] == 0; }
+    static int bnDatamap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    static int bnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 2]; }
+    static long bnKey(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    static long bnVal(Rt rt, long n, int i) { return rt.h[(int) n + 4 + 2 * i]; }
+    static long bnNode(Rt rt, long n, int j) {
+        int nd = Integer.bitCount(bnDatamap(rt, n));
+        return rt.h[(int) n + 3 + 2 * nd + j];
+    }
+    static int cnCount(Rt rt, long n) { return (int) rt.h[(int) n + 2]; }
+    static long cnKey(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    static long cnVal(Rt rt, long n, int i) { return rt.h[(int) n + 4 + 2 * i]; }
+    static final class Rt {
+        Gc gc = new Gc();
+        long[] h;
+        java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
+        long bump = 700;
+        long gas = 0;
+        boolean chargeChecked(long n, String why) { gas += n; return true; }
+        void chargeWork(long n) { gas += n; }
+        void setR(int i, long v) { roots.set(i, v); }
+        int mark() { return roots.size(); }
+        int push(long v) { roots.add(v); return roots.size() - 1; }
+        long r(int i) { return roots.get(i); }
+        void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
+        long slot(long v, int i) { return h[(int) v + i]; }
+    }
+--java
+    static Rt fresh() {
+        Rt rt = new Rt();
+        rt.h = rt.gc.sp.h;
+        long[] h = rt.h;
+        h[10] = 2; h[11] = 3; h[12] = 100;
+        h[100] = 0; h[101] = 3; h[102] = 4;
+        h[103] = 500; h[104] = 501; h[105] = 502; h[106] = 503; h[107] = 150;
+        h[150] = 0; h[151] = 1; h[152] = 0; h[153] = 504; h[154] = 505;
+        h[20] = 3; h[21] = 3;
+        h[24] = 500; h[25] = 501; h[26] = 502; h[27] = 503; h[28] = 504; h[29] = 505;
+        h[30] = 2; h[31] = 3; h[32] = 10;
+        h[34] = 2; h[35] = 3; h[36] = 20;
+        h[40] = 2; h[41] = 2; h[42] = 400;
+        h[400] = 1; h[401] = 0x55; h[402] = 2; h[403] = 600; h[404] = 601; h[405] = 602; h[406] = 603;
+        return rt;
+    }
+    static String show(Rt rt, long v, boolean pairs) {
+        long n = rt.h[(int) v];
+        StringBuilder s = new StringBuilder();
+        for (long i = 0; i < n; i++) {
+            long e = rt.h[(int) (v + 1 + i)];
+            if (pairs) s.append(rt.h[(int) e]).append('=').append(rt.h[(int) e + 1]).append(',');
+            else s.append(e).append(',');
+        }
+        return s.toString();
+    }
+    public static void main(String[] args) {
+        Rt rt = fresh();
+        StringBuilder o = new StringBuilder();
+        o.append("champ=").append(show(rt, mapEntryVector(rt, 10), true)).append(' ');
+        o.append("array=").append(show(rt, mapEntryVector(rt, 20), true)).append(' ');
+        o.append("coll=").append(show(rt, mapEntryVector(rt, 40), true)).append(' ');
+        o.append("set=").append(show(rt, setElementVector(rt, 30), false)).append(' ');
+        o.append("setam=").append(show(rt, setElementVector(rt, 34), false)).append(' ');
+        o.append("gas=").append(rt.gas).append(" roots=").append(rt.roots.size());
+        System.out.println(o.toString());
+    }
+--csharp-pre
+namespace Flint.Rt {
+    internal static class Sets {
+        internal const int S_MAP = 2, S_HASH = 3;
+    }
+}
+
+--csharp-head
+    const long NIL = 0xFFFFL;
+    const int HM_ROOT = 2;
+    const int TY_ARRAYMAP = 3, TY_HASHMAP = 2;
+    internal static class Val {
+        internal const long NIL = 0xFFFFL;
+        internal const long Nil = 0xFFFFL;
+        internal static bool IsNil(long v) { return v == NIL; }
+        internal static long AsHeap(long v) { return v; }
+    }
+    internal sealed class Sp { internal long[] h = new long[900]; }
+    internal sealed class Gc { internal Sp sp = new Sp(); }
+    internal static class Obj {
+        internal const int TyArraymap = 3, TyHashmap = 2;
+        internal static int Ty(Sp sp, long a) { return (int) sp.h[(int) a]; }
+    }
+    internal static long EmptyVec(Rt rt) { long a = rt.bump++; rt.h[(int) a] = 0; return a; }
+    internal static class Vec {
+        internal static long Conj(Rt rt, long v, long x) { return VecConj(rt, v, x); }
+        internal static long Empty(Rt rt) { return EmptyVec(rt); }
+    }
+    internal static long VecConj(Rt rt, long v, long x) {
+        long n = rt.h[(int) v];
+        long a = rt.bump; rt.bump += n + 2;
+        rt.h[(int) a] = n + 1;
+        for (long i = 0; i < n; i++) rt.h[(int) (a + 1 + i)] = rt.h[(int) (v + 1 + i)];
+        rt.h[(int) (a + 1 + n)] = x;
+        return a;
+    }
+    internal static long MapEntry(Rt rt, long k, long v) {
+        long a = rt.bump; rt.bump += 2;
+        rt.h[(int) a] = k; rt.h[(int) a + 1] = v;
+        return a;
+    }
+    internal static int MapCount(Rt rt, long m) { return (int) rt.h[(int) m + 1]; }
+    internal static int SetCount(Rt rt, long s) { return MapCount(rt, rt.Slot(s, global::Flint.Rt.Sets.S_MAP)); }
+    internal static long AmKey(Rt rt, long m, int i) { return rt.h[(int) m + 4 + 2 * i]; }
+    internal static long AmVal(Rt rt, long m, int i) { return rt.h[(int) m + 5 + 2 * i]; }
+    internal static bool IsBmnode(Rt rt, long n) { return rt.h[(int) n] == 0; }
+    internal static int BnDatamap(Rt rt, long n) { return (int) rt.h[(int) n + 1]; }
+    internal static int BnNodemap(Rt rt, long n) { return (int) rt.h[(int) n + 2]; }
+    internal static long BnKey(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    internal static long BnVal(Rt rt, long n, int i) { return rt.h[(int) n + 4 + 2 * i]; }
+    internal static long BnNode(Rt rt, long n, int j) {
+        int nd = System.Numerics.BitOperations.PopCount((uint) BnDatamap(rt, n));
+        return rt.h[(int) n + 3 + 2 * nd + j];
+    }
+    internal static int CnCount(Rt rt, long n) { return (int) rt.h[(int) n + 2]; }
+    internal static long CnKey(Rt rt, long n, int i) { return rt.h[(int) n + 3 + 2 * i]; }
+    internal static long CnVal(Rt rt, long n, int i) { return rt.h[(int) n + 4 + 2 * i]; }
+    internal sealed class Rt {
+        internal Gc gc = new Gc();
+        internal long[] h;
+        internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
+        internal long bump = 700;
+        internal long gas = 0;
+        internal bool ChargeChecked(long n, string why) { gas += n; return true; }
+        internal void ChargeWork(long n) { gas += n; }
+        internal void SetR(int i, long v) { roots[i] = v; }
+        internal int Mark() { return roots.Count; }
+        internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
+        internal long R(int i) { return roots[i]; }
+        internal void PopTo(int n) { while (roots.Count > n) roots.RemoveAt(roots.Count - 1); }
+        internal long Slot(long v, int i) { return h[(int) v + i]; }
+    }
+--csharp
+    static Rt Fresh() {
+        Rt rt = new Rt();
+        rt.h = rt.gc.sp.h;
+        long[] h = rt.h;
+        h[10] = 2; h[11] = 3; h[12] = 100;
+        h[100] = 0; h[101] = 3; h[102] = 4;
+        h[103] = 500; h[104] = 501; h[105] = 502; h[106] = 503; h[107] = 150;
+        h[150] = 0; h[151] = 1; h[152] = 0; h[153] = 504; h[154] = 505;
+        h[20] = 3; h[21] = 3;
+        h[24] = 500; h[25] = 501; h[26] = 502; h[27] = 503; h[28] = 504; h[29] = 505;
+        h[30] = 2; h[31] = 3; h[32] = 10;
+        h[34] = 2; h[35] = 3; h[36] = 20;
+        h[40] = 2; h[41] = 2; h[42] = 400;
+        h[400] = 1; h[401] = 0x55; h[402] = 2; h[403] = 600; h[404] = 601; h[405] = 602; h[406] = 603;
+        return rt;
+    }
+    static string Show(Rt rt, long v, bool pairs) {
+        long n = rt.h[(int) v];
+        var s = new System.Text.StringBuilder();
+        for (long i = 0; i < n; i++) {
+            long e = rt.h[(int) (v + 1 + i)];
+            if (pairs) s.Append(rt.h[(int) e]).Append('=').Append(rt.h[(int) e + 1]).Append(',');
+            else s.Append(e).Append(',');
+        }
+        return s.ToString();
+    }
+    public static void Main(string[] args) {
+        Rt rt = Fresh();
+        var o = new System.Text.StringBuilder();
+        o.Append("champ=").Append(Show(rt, MapEntryVector(rt, 10), true)).Append(' ');
+        o.Append("array=").Append(Show(rt, MapEntryVector(rt, 20), true)).Append(' ');
+        o.Append("coll=").Append(Show(rt, MapEntryVector(rt, 40), true)).Append(' ');
+        o.Append("set=").Append(Show(rt, SetElementVector(rt, 30), false)).Append(' ');
+        o.Append("setam=").Append(Show(rt, SetElementVector(rt, 34), false)).Append(' ');
+        o.Append("gas=").Append(rt.gas).Append(" roots=").Append(rt.roots.Count);
+        System.Console.WriteLine(o.ToString());
+    }

@@ -1435,10 +1435,24 @@ What made each safe is a property of the operation, not of the container:
 
 So the question to ask of the remaining ones is not "does it walk a map" but
 "does its combining step compose". `map_entry_vector` and
-`set_element_vector` build a vector of every entry, which composes fine --
-they are a recursive walk conj-ing into a transient, and nothing about them
-needs a callback either. What is genuinely left is `conj`, `encode_collection`
-and `check_sendable_at`, none of which have been read yet. Both ports had the
+`set_element_vector` compose because APPENDING composes, and both are
+generated now -- `kin/collvec.kin`. What is genuinely left is `conj`,
+`encode_collection` and `check_sendable_at`, none of which have been read yet.
+
+**Six users, down from eleven, and the remaining cost is measurable.** The
+shipped module grew 2 076 bytes over `collhash` and `collvec`, and the floors
+in `test/threads.clj` and `test/twobuilds.clj` were raised deliberately with
+that number written beside them.
+
+Most of those bytes are an argument for the capability rather than against
+it. Each module needs a PAIR of near-identical walks -- entry hashes and key
+hashes, entries collected and keys collected -- and they cannot share, because
+the only difference between them is what to do per entry. Passing that IS a
+closure. Four walks where two would do.
+
+So the decision now reads: a callback capability would take three functions
+off the list rather than seven, AND let four walks collapse into two. The
+second half was invisible until the first four came off by hand. Both ports had the
 answer in three lines the whole time.
 
 `eq.rs` WAS 718 LINES AND IS 286, of which everything past line 190 is tests.

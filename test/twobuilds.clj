@@ -108,7 +108,11 @@
 ;; Two places tracking one number is how a number stops meaning anything. The
 ;; budget is duplicated because the two files measure at different moments and
 ;; both need a bound; the REASONS are not, and this is the pointer instead.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 310000))
+;; MOVED WITH THE ONE IN `test/threads.clj`, and for the same reason: map
+;; hashing and `seq` over a map became generated walks and the shipped module
+;; grew 2 076 bytes. Both floors measure the same file, so a budget raised in
+;; one place and not the other is a gate that fails somewhere unrelated.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 312000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

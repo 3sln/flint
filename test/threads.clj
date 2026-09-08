@@ -159,6 +159,22 @@
 ;; free. It was 2 935 for a SINGLE site until `describe` stopped building a
 ;; `String` for each of its forty literals -- that shape change is what made
 ;; this affordable, rather than the budget being generous.
+;; It moved again by 2 076 bytes when map hashing and `seq` over a map became
+;; GENERATED walks (`kin/collhash.kin`, `kin/collvec.kin`), and that number is
+;; the price of a decision rather than drift.
+;;
+;; What it bought: four functions came off the list the closure hole blocks, so
+;; equality, hashing, `seq` and set elements are one source compiled three ways
+;; instead of three hand-written copies -- and both ports stopped walking a map
+;; by pushing every key AND value onto the shadow stack first, which is 2n
+;; roots against O(depth).
+;;
+;; WHY IT COSTS ANYTHING is worth recording, because it is an argument about
+;; the closure hole and not about these two files. Each module needs a PAIR of
+;; near-identical walks -- one summing entry hashes and one summing key
+;; hashes, one collecting entries and one collecting keys -- and they cannot
+;; share, because the only difference is what to do per entry, and passing
+;; that IS a closure. Four walks where two would do is most of the 2 076.
 (check-that "the floor is within the budget 0009, 0011, specialisation, bytes and call chose"
 ;; TABLES (`doc/decisions/0026`) cost 22 857 bytes here when they landed --
 ;; 287 854 shipped against 264 997 -- and then gave 15 832 of it back, which is
@@ -210,7 +226,7 @@
 ;; slice, which is what makes the rooting above expressible in all three at
 ;; once. It is a fixed cost, and the next generated caller of a value pays none
 ;; of it.
-            (< pure-size 310000))
+            (< pure-size 312000))
 
 ;; RE-BASELINED AGAIN, and this one is a decision rather than a drift:
 ;; 300 281 against 280 781, and 18 917 of it is ONE ARM IN THE WIRE CODEC.

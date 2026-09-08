@@ -191,30 +191,9 @@ public static class Maps {
     // directly. The bodies here rooted neither `notFound` nor the inner map
     // across a descent that allocates; the generated one does.
 
-    /// The entries as a VECTOR of map entries, which is what `seq` walks.
-    ///
-    /// Materialised rather than a lazy cursor over the trie: a cursor would
-    /// have to hold a path of node addresses across allocations the consumer
-    /// makes, and every one of those would need rooting.
+    /// GENERATED -- see `kin/collvec.kin` and the JVM copy.
     public static long EntryVector(Rt rt, long m) {
-        // CHARGED UP FRONT: `n` is known, so this refuses rather than ticks.
-        if (!rt.ChargeChecked(MapCount(rt, m), "seq of a map")) return Val.Nil;
-        if (Val.IsHeap(m) && Obj.Ty(rt.gc.sp, Val.AsHeap(m)) == Obj.TyTableref)
-            return EntryVector(rt, Table.refToMap(rt, m));
-        int bas = rt.Mark();
-        int mi = rt.Push(m);
-        int at = rt.Mark();
-        int n = Entries(rt, rt.R(mi));
-        int ai = rt.Push(Vec.Empty(rt));
-        for (int i = 0; i < n; i++) {
-            long e = MapEntry(rt, rt.R(at + 2 * i), rt.R(at + 2 * i + 1));
-            int ei = rt.Push(e);
-            rt.SetR(ai, Vec.Conj(rt, rt.R(ai), rt.R(ei)));
-            rt.PopTo(ei);
-        }
-        long outv = rt.R(ai);
-        rt.PopTo(bas);
-        return outv;
+        return global::_3sln.Flint.Kgen.Rt.Collvec.MapEntryVector(rt, m);
     }
 
     /// Map equality, GENERATED -- see `kin/mapeq.kin`, and the JVM's `Maps.eq`

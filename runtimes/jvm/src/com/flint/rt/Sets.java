@@ -46,19 +46,12 @@ public final class Sets {
         return out;
     }
 
-    /// The elements as a vector, which is what `seq` walks.
+    /// GENERATED -- see `kin/collvec.kin`. This walked the trie with
+    /// `entries`, which pushes every key AND value onto the shadow stack
+    /// before the vector is built; the walk conjes as it goes and holds
+    /// O(depth).
     public static long elementVector(Rt rt, long s) {
-        if (!rt.chargeChecked(count(rt, s), "seq of a set")) return Val.NIL;
-        int base = rt.mark();
-        int si = rt.push(s);
-        int at = rt.mark();
-        int n = Maps.entries(rt, rt.slot(rt.r(si), S_MAP));
-        int ai = rt.push(Vec.empty(rt));
-        // The KEY of each pair; the value is the same object.
-        for (int i = 0; i < n; i++) rt.setR(ai, Vec.conj(rt, rt.r(ai), rt.r(at + 2 * i)));
-        long out = rt.r(ai);
-        rt.popTo(base);
-        return out;
+        return com._3sln.flint.kgen.rt.Collvec.setElementVector(rt, s);
     }
 
     // --- transients ---------------------------------------------------------

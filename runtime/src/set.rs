@@ -46,23 +46,6 @@ impl Rt {
         self.map_for_each(m, state, &mut |rt, k, _v, st| f(rt, k, st));
     }
 
-    pub fn set_element_vector(&mut self, s: Value) -> Value {
-        let n = self.set_count(s);
-        if !self.charge_checked(n as u64, "seq of a set") {
-            return crate::value::NIL;
-        }
-        let base = self.mark();
-        let acc = self.empty_vec();
-        let ai = self.push(acc);
-        let mut st = ai;
-        self.set_for_each(s, &mut st, &mut |rt, k, ai| {
-            let nv = rt.vec_conj(rt.r(*ai), k);
-            rt.set_r(*ai, nv);
-        });
-        let out = self.r(ai);
-        self.pop_to(base);
-        out
-    }
 
     /// A set IS its backing map, so set equality IS map equality -- which is
     /// how both ports have always written it, and this walked the elements

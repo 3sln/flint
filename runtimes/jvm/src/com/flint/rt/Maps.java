@@ -195,35 +195,12 @@ public final class Maps {
     // directly. The bodies here rooted neither `notFound` nor the inner map
     // across a descent that allocates; the generated one does.
 
-    /// The entries as a VECTOR of map entries, which is what `seq` walks.
-    ///
-    /// Materialised rather than a lazy cursor over the trie: a cursor would
-    /// have to hold a path of node addresses across allocations the consumer
-    /// makes, and every one of those would need rooting. The Rust does the same
-    /// and for the same reason.
+    /// GENERATED -- see `kin/collvec.kin`. This walked the trie with
+    /// `entries`, which pushes every key AND value onto the shadow stack
+    /// before the vector is built; the walk conjes as it goes and holds
+    /// O(depth).
     public static long entryVector(Rt rt, long m) {
-        // CHARGED UP FRONT: `n` is known, so this refuses rather than ticks.
-        // `seq`, `keys` and `vals` all come through here and build an entry per
-        // key (`doc/decisions/0009`).
-        if (!rt.chargeChecked(mapCount(rt, m), "seq of a map")) return Val.NIL;
-        // Same choke point as `count`: a ref materialises here rather than
-        // being read as an array-map.
-        if (Val.isHeap(m) && ty(rt.gc.sp, Val.asHeap(m)) == Obj.TY_TABLEREF)
-            return entryVector(rt, Table.refToMap(rt, m));
-        int base = rt.mark();
-        int mi = rt.push(m);
-        int at = rt.mark();
-        int n = entries(rt, rt.r(mi));
-        int ai = rt.push(Vec.empty(rt));
-        for (int i = 0; i < n; i++) {
-            long e = mapEntry(rt, rt.r(at + 2 * i), rt.r(at + 2 * i + 1));
-            int ei = rt.push(e);
-            rt.setR(ai, Vec.conj(rt, rt.r(ai), rt.r(ei)));
-            rt.popTo(ei);
-        }
-        long out = rt.r(ai);
-        rt.popTo(base);
-        return out;
+        return com._3sln.flint.kgen.rt.Collvec.mapEntryVector(rt, m);
     }
 
     /// Map equality, GENERATED -- see `kin/mapeq.kin`.
