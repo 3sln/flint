@@ -1294,6 +1294,29 @@ public static class Program {
             throw new System.Exception($"nested call gave {Flint.Rt.Val.AsFixnum(got2)}");
         Console.WriteLine("  ok     ... and a call and return across frames");
 
+        // THE EMPTY VECTOR AND MAP ARE SHARED SINGLETONS -- see the JVM's
+        // `RtFoundation` for why eleven lines in `Conc` depend on it, and why
+        // Rust cannot write the shape that makes it matter.
+        {
+            var sg = new Flint.Rt.Rt(64 * 1024, 1024L * 1024);
+            if (Flint.Rt.Vec.Empty(sg) != Flint.Rt.Vec.Empty(sg))
+                throw new System.Exception("the empty vector is not a shared object");
+            if (Flint.Rt.Maps.Empty(sg) != Flint.Rt.Maps.Empty(sg))
+                throw new System.Exception("the empty map is not a shared object");
+            // NOT "the address is stable": a moving collector relocates the
+            // singleton and updates the root, so the address SHOULD change.
+            int sgBase = sg.Mark();
+            for (int i = 0; i < 20000; i++)
+                sg.Push(Flint.Rt.Val.Heap(sg.Alloc(Flint.Rt.Obj.TyVec, 4)));
+            sg.gc.Minor(sg.roots);
+            sg.PopTo(sgBase);
+            if (Flint.Rt.Vec.Empty(sg) != Flint.Rt.Vec.Empty(sg))
+                throw new System.Exception("the empty vector stopped being shared after a collection");
+            if (Flint.Rt.Vec.Count(sg, Flint.Rt.Vec.Empty(sg)) != 0)
+                throw new System.Exception("the empty vector is not empty after a collection");
+            Console.WriteLine("  ok   the empty vector and map are shared, and survive a collection");
+        }
+
         // The comparison is EXPLICIT: 0 is truthy in Clojure, so branching on
         // `n` itself would never terminate.
         var c = new Asm();

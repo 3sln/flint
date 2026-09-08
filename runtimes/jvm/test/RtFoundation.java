@@ -162,7 +162,43 @@ public class RtFoundation {
             throw new AssertionError("tail recursion gave " + Val.asFixnum(got3));
         if (rt.frames.size() != before)
             throw new AssertionError("frames leaked: " + before + " -> " + rt.frames.size());
-        System.out.println("  ok     ... and 200,000 tail calls in constant frame space");
+        // THE EMPTY VECTOR AND MAP ARE SHARED SINGLETONS, and eleven lines in
+    // `Conc` depend on it without saying so:
+    //
+    //     rt.setSlot(Val.asHeap(rt.r(si)), SC_EVENTS, Vec.empty(rt));
+    //
+    // That reads a root into a raw ADDRESS and then calls `Vec.empty`. If
+    // `Vec.empty` ever allocated, the address would be stale before it was
+    // used -- eleven `0031` violations appearing at once, in the runtime
+    // rather than in a test.
+    //
+    // Native asserts this (`empty_vector_is_a_shared_singleton`) and RUST
+    // WOULD NOT COMPILE the shape anyway: two `&mut self` calls in one
+    // expression. Java and C# accept it, so the property they lean on is
+    // asserted here instead.
+    {
+        Rt sg = new Rt(64 * 1024, 1024L * 1024);
+        if (Vec.empty(sg) != Vec.empty(sg))
+            throw new AssertionError("the empty vector is not a shared object");
+        if (Maps.empty(sg) != Maps.empty(sg))
+            throw new AssertionError("the empty map is not a shared object");
+        // NOT "the address is stable": a moving collector relocates the
+        // singleton and updates the root that holds it, so the address SHOULD
+        // change. The property is that it stays ONE object and a valid one.
+        // Asserting the address first is how this test failed against a
+        // correct runtime.
+        int base = sg.mark();
+        for (int i = 0; i < 20000; i++) sg.push(Val.heap(sg.alloc(Obj.TY_VEC, 4)));
+        sg.gc.minor(sg.roots);
+        sg.popTo(base);
+        if (Vec.empty(sg) != Vec.empty(sg))
+            throw new AssertionError("the empty vector stopped being shared after a collection");
+        if (Vec.count(sg, Vec.empty(sg)) != 0)
+            throw new AssertionError("the empty vector is not empty after a collection");
+        System.out.println("  ok   the empty vector and map are shared, and survive a collection");
+    }
+
+    System.out.println("  ok     ... and 200,000 tail calls in constant frame space");
     }
 
     /// A tiny assembler, the same shape as the Rust tests'.
