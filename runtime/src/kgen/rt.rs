@@ -52,6 +52,7 @@ pub mod valcmp;
 pub mod find;
 pub mod hash;
 pub mod interns;
+pub mod collhash;
 pub mod mapcore;
 pub mod mapeq;
 pub mod mapmake;

@@ -72,15 +72,8 @@ public static class Sets {
         return Maps.Eq(rt, rt.Slot(a, S_MAP), rt.Slot(b, S_MAP));
     }
 
-    /// UNORDERED, as Clojure hashes sets: the element hashes are summed.
+    /// A set's hash, GENERATED -- see `kin/collhash.kin` and the JVM copy.
     public static int Hash(Rt rt, long s) {
-        int bas = rt.Mark();
-        int si = rt.Push(s);
-        int at = rt.Mark();
-        int n = Maps.Entries(rt, rt.Slot(rt.R(si), S_MAP));
-        int acc = 0;
-        for (int i = 0; i < n; i++) acc = _3sln.Flint.Kgen.Rt.Hash.UnorderedStep(acc, global::_3sln.Flint.Kgen.Rt.Valhash.HashValue(rt, rt.R(at + 2 * i)));
-        rt.PopTo(bas);
-        return _3sln.Flint.Kgen.Rt.Hash.MixCollHash(acc, n);
+        return global::_3sln.Flint.Kgen.Rt.Collhash.HashSet(rt, s);
     }
 }

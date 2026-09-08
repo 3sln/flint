@@ -237,21 +237,13 @@ public final class Maps {
         return com._3sln.flint.kgen.rt.Mapeq.mapEq(rt, a, b);
     }
 
-    /// UNORDERED, as Clojure hashes maps: the entries are summed, so the hash
-    /// does not depend on iteration order. An entry hashes as the vector `[k v]`.
+    /// A map's hash, GENERATED -- see `kin/collhash.kin`.
+    ///
+    /// This walked the map through `entries`, which pushes every key AND value
+    /// onto the shadow stack first. A collection hash is an unordered SUM, and
+    /// a sum is associative, so the trie can be walked recursively instead and
+    /// the roots stay O(depth).
     public static int hash(Rt rt, long m) {
-        int base = rt.mark();
-        int mi = rt.push(m);
-        int at = rt.mark();
-        int n = entries(rt, rt.r(mi));
-        int acc = 0;
-        for (int i = 0; i < n; i++) {
-            int kh = com._3sln.flint.kgen.rt.Valhash.hashValue(rt, rt.r(at + 2 * i));
-            int vh = com._3sln.flint.kgen.rt.Valhash.hashValue(rt, rt.r(at + 2 * i + 1));
-            acc = com._3sln.flint.kgen.rt.Hash.unorderedStep(acc, com._3sln.flint.kgen.rt.Hash.mixCollHash(
-                com._3sln.flint.kgen.rt.Hash.orderedStep(com._3sln.flint.kgen.rt.Hash.orderedStep(1, kh), vh), 2));
-        }
-        rt.popTo(base);
-        return com._3sln.flint.kgen.rt.Hash.mixCollHash(acc, n);
+        return com._3sln.flint.kgen.rt.Collhash.hashMap(rt, m);
     }
 }

@@ -223,21 +223,8 @@ public static class Maps {
         return global::_3sln.Flint.Kgen.Rt.Mapeq.MapEq(rt, a, b);
     }
 
-    /// UNORDERED, as Clojure hashes maps: the entries are summed, so the hash
-    /// does not depend on iteration order. An entry hashes as the vector `[k v]`.
+    /// A map's hash, GENERATED -- see `kin/collhash.kin` and the JVM copy.
     public static int Hash(Rt rt, long m) {
-        int bas = rt.Mark();
-        int mi = rt.Push(m);
-        int at = rt.Mark();
-        int n = Entries(rt, rt.R(mi));
-        int acc = 0;
-        for (int i = 0; i < n; i++) {
-            int kh = global::_3sln.Flint.Kgen.Rt.Valhash.HashValue(rt, rt.R(at + 2 * i));
-            int vh = global::_3sln.Flint.Kgen.Rt.Valhash.HashValue(rt, rt.R(at + 2 * i + 1));
-            acc = _3sln.Flint.Kgen.Rt.Hash.UnorderedStep(acc, _3sln.Flint.Kgen.Rt.Hash.MixCollHash(
-                _3sln.Flint.Kgen.Rt.Hash.OrderedStep(_3sln.Flint.Kgen.Rt.Hash.OrderedStep(1, kh), vh), 2));
-        }
-        rt.PopTo(bas);
-        return _3sln.Flint.Kgen.Rt.Hash.MixCollHash(acc, n);
+        return global::_3sln.Flint.Kgen.Rt.Collhash.HashMap(rt, m);
     }
 }

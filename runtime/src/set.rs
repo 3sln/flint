@@ -83,29 +83,6 @@ impl Rt {
         self.map_eq(am, bm)
     }
 
-    pub fn hash_set(&mut self, s: Value) -> u32 {
-        let cached = self.slot(s, S_HASH);
-        if cached.is_fixnum() {
-            return cached.as_fixnum() as i32 as u32;
-        }
-        let base = self.mark();
-        let si = self.push(s);
-        let mut st = (0u32, 0u32);
-        let sv = self.r(si);
-        self.set_for_each(sv, &mut st, &mut |rt, k, st| {
-            let mk = rt.mark();
-            let ki = rt.push(k);
-            let h = rt.hash_value(rt.r(ki));
-            rt.pop_to(mk);
-            st.0 = hash::unordered_step(st.0, h);
-            st.1 += 1;
-        });
-        let h = hash::mix_coll_hash(st.0, st.1);
-        let sv = self.r(si);
-        self.set(sv, S_HASH, Value::fixnum(h as i32 as i64));
-        self.pop_to(base);
-        h
-    }
 
     pub fn set_from_map(&mut self, m: Value) -> Value {
         self.new_set(m, NIL)

@@ -1,0 +1,165 @@
+;; THE HASH OF A MAP AND OF A SET, as a walk of the trie rather than a callback.
+;;
+;; Both were computed by handing a closure to `map-for-each` / `set-for-each`,
+;; which is one of the two functions the closure hole blocks -- so both were on
+;; the list of things that could not be generated. Neither needed to be.
+;;
+;; A COLLECTION HASH IS AN UNORDERED SUM. `unordered-step` is a wrapping add,
+;; so it is commutative AND associative, which means a subtree's contribution
+;; can be summed on its own and added to its parent's. That is what makes a
+;; recursive walk equivalent to a linear one here, and it is the same property
+;; that let `mapeq` compare two tries structurally.
+;;
+;; The COUNT that `mix-coll-hash` needs is not accumulated: `map-count` and
+;; `set-count` already answer it in O(1). Only the sum has to be walked, and a
+;; single return value is all kin gives a function.
+;;
+;; ROOTING. `hash-value` allocates -- hashing a row ref materialises it as a
+;; map -- so the node being walked is pushed and re-read from the root stack
+;; after every call. A node held in a host local across a hash is `0031` in
+;; the shape that costs a session.
+(ns flint.rt.collhash
+  (:require [flint.impl.rt :refer [defn return if let local set do comment doc
+                                   for == != not or and +
+                                   mark push r pop-to slot set-slot ty as-heap
+                                   nil? is-fixnum as-fixnum fixnum to-i32
+                                   popcount is-bmnode wadd hash-value
+                                   bn-datamap bn-nodemap bn-key bn-val bn-node
+                                   cn-count cn-key cn-val
+                                   Rt Value RootIx I32 U32 Ty NIL
+                                   AM_HASH HM_HASH HM_ROOT S_HASH S_MAP
+                                   TY_ARRAYMAP TY_HASHMAP]]
+            [flint.rt.mapcore :refer [map-count am-key am-val]]
+            [flint.rt.setcore :refer [set-count]]
+            [flint.rt.hash    :refer [ordered-step mix-coll-hash]]))
+
+(doc "One entry's contribution: the ordered hash of the pair [k v], which is"
+     "what a MapEntry hashes to, mixed as a two-element collection.")
+(defn ^:method ^U32 entry-hash [^:mut ^Rt rt ^Value k ^Value v]
+  (let [^RootIx base (mark rt)
+        ^RootIx ki (push rt k)
+        ^RootIx vi (push rt v)]
+    (local ^:mut ^U32 hk)
+    (local ^:mut ^U32 hv)
+    (set hk (hash-value rt (r rt ki)))
+    (set hv (hash-value rt (r rt vi)))
+    (pop-to rt base)
+    (return (mix-coll-hash (ordered-step (ordered-step 1 hk) hv) 2))))
+
+(doc "The sum of the entry hashes under one trie node."
+     ""
+     "The node is ROOTED across the walk. `entry-hash` calls `hash-value`,"
+     "which allocates, and a node read into a host local before that does not"
+     "survive it.")
+(defn ^:method ^U32 node-entry-sum [^:mut ^Rt rt ^Value n]
+  (let [^RootIx base (mark rt)
+        ^RootIx ni (push rt n)]
+    (local ^:mut ^U32 acc)
+    (set acc 0)
+    (if (not (is-bmnode rt (r rt ni)))
+      (do
+        (for [^I32 i 0 (cn-count rt (r rt ni))]
+          (set acc (wadd acc (entry-hash rt (cn-key rt (r rt ni) i)
+                                            (cn-val rt (r rt ni) i)))))
+        (pop-to rt base)
+        (return acc)))
+    (for [^I32 i 0 (popcount (bn-datamap rt (r rt ni)))]
+      (set acc (wadd acc (entry-hash rt (bn-key rt (r rt ni) i)
+                                        (bn-val rt (r rt ni) i)))))
+    (for [^I32 j 0 (popcount (bn-nodemap rt (r rt ni)))]
+      (set acc (wadd acc (node-entry-sum rt (bn-node rt (r rt ni) j)))))
+    (pop-to rt base)
+    (return acc)))
+
+(doc "The sum of the KEY hashes under one trie node -- a set is a map from"
+     "each element to itself, so its hash sums the keys and ignores the"
+     "values that repeat them.")
+(defn ^:method ^U32 node-key-sum [^:mut ^Rt rt ^Value n]
+  (let [^RootIx base (mark rt)
+        ^RootIx ni (push rt n)]
+    (local ^:mut ^U32 acc)
+    (set acc 0)
+    (if (not (is-bmnode rt (r rt ni)))
+      (do
+        (for [^I32 i 0 (cn-count rt (r rt ni))]
+          (set acc (wadd acc (hash-value rt (cn-key rt (r rt ni) i)))))
+        (pop-to rt base)
+        (return acc)))
+    (for [^I32 i 0 (popcount (bn-datamap rt (r rt ni)))]
+      (set acc (wadd acc (hash-value rt (bn-key rt (r rt ni) i)))))
+    (for [^I32 j 0 (popcount (bn-nodemap rt (r rt ni)))]
+      (set acc (wadd acc (node-key-sum rt (bn-node rt (r rt ni) j)))))
+    (pop-to rt base)
+    (return acc)))
+
+(doc "The entry-hash sum of a whole map, either tier.")
+(defn ^:method ^U32 map-entry-sum [^:mut ^Rt rt ^Value m]
+  (let [^RootIx base (mark rt)
+        ^RootIx mi (push rt m)]
+    (local ^:mut ^U32 acc)
+    (set acc 0)
+    (if (== (ty rt (as-heap (r rt mi))) TY_ARRAYMAP)
+      (do
+        (for [^I32 i 0 (map-count rt (r rt mi))]
+          (set acc (wadd acc (entry-hash rt (am-key rt (r rt mi) i)
+                                            (am-val rt (r rt mi) i)))))
+        (pop-to rt base)
+        (return acc)))
+    (let [^Value root (slot rt (r rt mi) HM_ROOT)]
+      (if (nil? rt root)
+        (do (pop-to rt base)
+            (return 0)))
+      (set acc (node-entry-sum rt root)))
+    (pop-to rt base)
+    (return acc)))
+
+(doc "The key-hash sum of a whole map, either tier -- for sets.")
+(defn ^:method ^U32 map-key-sum [^:mut ^Rt rt ^Value m]
+  (let [^RootIx base (mark rt)
+        ^RootIx mi (push rt m)]
+    (local ^:mut ^U32 acc)
+    (set acc 0)
+    (if (== (ty rt (as-heap (r rt mi))) TY_ARRAYMAP)
+      (do
+        (for [^I32 i 0 (map-count rt (r rt mi))]
+          (set acc (wadd acc (hash-value rt (am-key rt (r rt mi) i)))))
+        (pop-to rt base)
+        (return acc)))
+    (let [^Value root (slot rt (r rt mi) HM_ROOT)]
+      (if (nil? rt root)
+        (do (pop-to rt base)
+            (return 0)))
+      (set acc (node-key-sum rt root)))
+    (pop-to rt base)
+    (return acc)))
+
+(doc "A map's hash, memoised in the tier's hash slot.")
+(defn ^:pub ^:method ^U32 hash-map [^:mut ^Rt rt ^Value m]
+  (local ^:mut ^I32 slot-ix)
+  (set slot-ix HM_HASH)
+  (if (== (ty rt (as-heap m)) TY_ARRAYMAP)
+    (set slot-ix AM_HASH))
+  (let [^Value cached (slot rt m slot-ix)]
+    (if (is-fixnum rt cached)
+      (return (to-i32 (as-fixnum cached)))))
+  (let [^RootIx base (mark rt)
+        ^RootIx mi (push rt m)
+        ^U32 sum (map-entry-sum rt (r rt mi))
+        ^U32 h (mix-coll-hash sum (map-count rt (r rt mi)))]
+    (set-slot rt (r rt mi) slot-ix (fixnum h))
+    (pop-to rt base)
+    (return h)))
+
+(doc "A set's hash, memoised in S_HASH. A set IS its backing map, so this"
+     "sums the map's keys.")
+(defn ^:pub ^:method ^U32 hash-set [^:mut ^Rt rt ^Value s]
+  (let [^Value cached (slot rt s S_HASH)]
+    (if (is-fixnum rt cached)
+      (return (to-i32 (as-fixnum cached)))))
+  (let [^RootIx base (mark rt)
+        ^RootIx si (push rt s)
+        ^U32 sum (map-key-sum rt (slot rt (r rt si) S_MAP))
+        ^U32 h (mix-coll-hash sum (set-count rt (r rt si)))]
+    (set-slot rt (r rt si) S_HASH (fixnum h))
+    (pop-to rt base)
+    (return h)))

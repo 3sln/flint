@@ -1399,7 +1399,7 @@ quoting; this file keeps recording that a stale count is worse than none):
 | `map.rs` | 856 | 14 | the CHAMP, incl. the five the closure hole blocks |
 | `coll.rs` | 812 | 19 | the string ops, `conj`, and two that are portable |
 | `vector.rs` | 449 | 6 | predicates and `vec_from_roots` |
-| `set.rs` | 223 | 5 | `set_for_each` and the TWO it still blocks |
+| `set.rs` | 205 | 4 | `set_for_each` and the ONE it still blocks |
 | `eq.rs` | 286 | 4 | `is_sequential`, `eq_value`, `nil_or` -- and TESTS |
 | `num.rs` | 293 | 13 | the predicates, `add`/`sub`/`mul`, `integer` |
 
@@ -1414,7 +1414,31 @@ sum over element hashes genuinely differs from a map's, and
 
 The lesson is not "one down". It is that a function can sit on a blocked list
 because of how it was written, not because of what it does, and the way to
-tell is to look at how the OTHER runtimes wrote it. Both ports had the
+tell is to look at how the OTHER runtimes wrote it.
+
+**Three more came off the same way, and the pattern is now clear enough to
+state.** `map_eq`, `hash_map` and `hash_set` all handed a closure to
+`map_for_each`, and none of them needed to iterate at all -- a CHAMP is a
+TREE, and a recursive walk of a tree is an ordinary function.
+
+What made each safe is a property of the operation, not of the container:
+
+  EQUALITY works structurally because the CHAMP is canonical, so equal maps
+  have identical tries. Verified across four construction paths at five sizes
+  before a line was written.
+
+  HASHING works structurally because a collection hash is an unordered SUM,
+  and `unordered_step` is a wrapping add -- commutative AND associative -- so
+  a subtree's contribution can be summed alone and added to its parent's. The
+  COUNT that `mix-coll-hash` needs is not accumulated at all: `map-count`
+  answers it in O(1).
+
+So the question to ask of the remaining ones is not "does it walk a map" but
+"does its combining step compose". `map_entry_vector` and
+`set_element_vector` build a vector of every entry, which composes fine --
+they are a recursive walk conj-ing into a transient, and nothing about them
+needs a callback either. What is genuinely left is `conj`, `encode_collection`
+and `check_sendable_at`, none of which have been read yet. Both ports had the
 answer in three lines the whole time.
 
 `eq.rs` WAS 718 LINES AND IS 286, of which everything past line 190 is tests.

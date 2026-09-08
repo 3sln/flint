@@ -10,6 +10,7 @@ import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Bytehash.*;
+import static com._3sln.flint.kgen.rt.Collhash.*;
 import static com._3sln.flint.kgen.rt.Hash.*;
 import static com._3sln.flint.kgen.rt.Names.*;
 import static com._3sln.flint.kgen.rt.Ropeflat.*;

@@ -12,6 +12,7 @@ using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Bytehash;
+using static global::_3sln.Flint.Kgen.Rt.Collhash;
 using static global::_3sln.Flint.Kgen.Rt.Hash;
 using static global::_3sln.Flint.Kgen.Rt.Names;
 using static global::_3sln.Flint.Kgen.Rt.Ropeflat;

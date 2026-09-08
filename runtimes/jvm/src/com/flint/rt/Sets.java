@@ -80,15 +80,8 @@ public final class Sets {
         return Maps.eq(rt, rt.slot(a, S_MAP), rt.slot(b, S_MAP));
     }
 
-    /// UNORDERED, as Clojure hashes sets: the element hashes are summed.
+    /// A set's hash, GENERATED -- see `kin/collhash.kin` and `Maps.hash`.
     public static int hash(Rt rt, long s) {
-        int base = rt.mark();
-        int si = rt.push(s);
-        int at = rt.mark();
-        int n = Maps.entries(rt, rt.slot(rt.r(si), S_MAP));
-        int acc = 0;
-        for (int i = 0; i < n; i++) acc = com._3sln.flint.kgen.rt.Hash.unorderedStep(acc, com._3sln.flint.kgen.rt.Valhash.hashValue(rt, rt.r(at + 2 * i)));
-        rt.popTo(base);
-        return com._3sln.flint.kgen.rt.Hash.mixCollHash(acc, n);
+        return com._3sln.flint.kgen.rt.Collhash.hashSet(rt, s);
     }
 }

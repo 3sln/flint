@@ -218,36 +218,6 @@ impl Rt {
     }
 
 
-    pub fn hash_map_hash(&mut self, m: Value) -> u32 {
-        let slot_idx = if self.is_array_map(m) { AM_HASH } else { HM_HASH };
-        let cached = self.slot(m, slot_idx);
-        if cached.is_fixnum() {
-            return cached.as_fixnum() as i32 as u32;
-        }
-        let base = self.mark();
-        let mi = self.push(m);
-        let mut st = (0u32, 0u32);
-        let mv = self.r(mi);
-        self.map_for_each(mv, &mut st, &mut |rt, k, v, st| {
-            let mk = rt.mark();
-            let ki = rt.push(k);
-            let vi = rt.push(v);
-            let hk = rt.hash_value(rt.r(ki));
-            let hv = rt.hash_value(rt.r(vi));
-            rt.pop_to(mk);
-            let e = hash::mix_coll_hash(
-                hash::ordered_step(hash::ordered_step(1, hk), hv),
-                2,
-            );
-            st.0 = hash::unordered_step(st.0, e);
-            st.1 += 1;
-        });
-        let h = hash::mix_coll_hash(st.0, st.1);
-        let mv = self.r(mi);
-        self.set(mv, slot_idx, Value::fixnum(h as i32 as i64));
-        self.pop_to(base);
-        h
-    }
 
     /// Every key and value onto the shadow stack from `at`, returning the
     /// PAIR COUNT. The shape both ports use to walk a map, mirrored here so
@@ -415,9 +385,6 @@ impl Rt {
         wrote
     }
 
-    pub fn hash_map(&mut self, m: Value) -> u32 {
-        self.hash_map_hash(m)
-    }
 
     // --- the trie, exposed for transients ----------------------------------
 
