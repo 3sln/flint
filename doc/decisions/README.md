@@ -490,6 +490,22 @@ what remains, and what each thing is waiting on.
    case where it earns its keep, because the message is the only place the key
    form is stated to a user.
 
+0r. **The coverage table could not see a protocol** — FIXED. `bin/manifest`
+   reads a source file's top-level forms and collects what each `def`, `defn`
+   and `defmacro` names. `defprotocol` names several things and is none of
+   those, so a namespace whose whole surface is a protocol reported ZERO vars,
+   and the README table published that: `clojure.core.protocols` 0,
+   `clojure.data` 1 of its 5.
+
+   Found by reading the table after adding namespaces to it, which is the only
+   reason to generate a table rather than write one. The same pass drops
+   `Name__impls` from the surface: `defprotocol` emits one and `clojure.core`
+   writes one by hand, and it had been sitting in core's "extra vs Clojure"
+   list as a var Clojure lacks — true, and useless.
+
+   `test/manifest.clj` asserts every listed var is really callable from a
+   compiled module, so the counts got stronger rather than just larger.
+
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old
    `jvm`-against-`clr` similarity table because BOTH ports share them. Two

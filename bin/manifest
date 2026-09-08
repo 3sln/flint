@@ -47,22 +47,45 @@
 ;; vars where Clojure's publishes five. Diffing against them would report gaps
 ;; in flint that are really gaps in the baseline.
 
+(defn- defined-by
+  "The names one top-level form defines, each with whether it is a macro and
+  whether it is private.
+
+  `defprotocol` defines SEVERAL -- the protocol itself and one function per
+  method -- and until this handled it, a namespace whose whole surface is a
+  protocol reported zero vars. `clojure.core.protocols` is exactly that, and
+  the README table said so.
+
+  A `Name__impls` atom is the one thing skipped: `defprotocol` emits one, the
+  longhand protocol in `clojure.core` writes one by hand, and neither is
+  something a caller uses. It was appearing in `clojure.core`'s :extra list as
+  a var Clojure lacks, which is true and useless."
+  [f]
+  (let [head (first f)
+        entry (fn [nm macro? private?]
+                (when (and (symbol? nm)
+                           (not (str/ends-with? (name nm) "__impls")))
+                  [[(symbol (name nm)) {:macro macro? :private private?}]]))]
+    (cond
+      (= 'defprotocol head)
+      (concat (entry (second f) false false)
+              (mapcat (fn [sig] (when (seq? sig) (entry (first sig) false false)))
+                      (drop 2 f)))
+
+      (contains? '#{def defn defn- defmacro} head)
+      (entry (second f)
+             (= 'defmacro head)
+             (boolean (or (= 'defn- head) (:private (meta (second f))))))
+
+      :else nil)))
+
 (defn defines
   "Every var a source file defines, with whether it is a macro and private."
   [file]
   (let [src (slurp (io/file root file))
         forms (compiler/flatten-top-level
                (reader/read-all src {:file file :features #{:flint}}))]
-    (into {}
-          (for [f forms
-                :when (seq? f)
-                :let [head (first f)]
-                :when (contains? '#{def defn defn- defmacro} head)
-                :let [nm (second f)]
-                :when (symbol? nm)]
-            [(symbol (name nm))
-             {:macro (= 'defmacro head)
-              :private (boolean (or (= 'defn- head) (:private (meta nm))))}]))))
+    (into {} (mapcat defined-by (filter seq? forms)))))
 
 (defn clojure-publics [ns-sym]
   (try

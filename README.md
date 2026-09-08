@@ -1216,9 +1216,9 @@ claim fails the build.
 <!-- BEGIN GENERATED COVERAGE -->
 | namespace | vars | macros | missing vs Clojure | flint-only |
 |---|---:|---:|---:|---:|
-| `clojure.core` | 356 | 45 | 306 | 38 |
-| `clojure.core.protocols` | 0 | 0 | n/a | n/a |
-| `clojure.data` | 1 | 0 | n/a | n/a |
+| `clojure.core` | 355 | 45 | 306 | 37 |
+| `clojure.core.protocols` | 4 | 0 | n/a | n/a |
+| `clojure.data` | 5 | 0 | n/a | n/a |
 | `clojure.datafy` | 2 | 0 | n/a | n/a |
 | `clojure.edn` | 2 | 0 | 1 | 1 |
 | `clojure.math` | 32 | 0 | 14 | 1 |
@@ -1256,7 +1256,7 @@ hierarchies (`derive`, `isa?`, `parents`, `prefer-method`);
 transducers (`transduce`, `eduction`, `cat`, `completing`, `halt-when`, and the 1-arity transducer forms of `map`/`filter`/`take`/...);
 and sorted collections (`sorted-map`, `sorted-set`, `subseq`, `rsubseq`).
 
-*Added by flint:* `->str-builder` `Printable` `Printable__impls` `apply2` `bigdec?` `bytes->str` `cond-chain` `count-matching` `extend-method` `find-protocol-method` `form` `int-of-char` `interleave-all` `interleave2` `keep2` `kind` `map2` `mapcat2` `methods-of` `nil-or` `opaque` `opaque-label` `opaque?` `print-data` `print-human` `println-str` `protocol-miss` `re-quote-replacement` `repeat-forever` `repeat2` `sb-append!` `sb-str` `spread` `str-bytes` `str-join` `subvec2` `tag` `volatile?`
+*Added by flint:* `->str-builder` `Printable` `apply2` `bigdec?` `bytes->str` `cond-chain` `count-matching` `extend-method` `find-protocol-method` `form` `int-of-char` `interleave-all` `interleave2` `keep2` `kind` `map2` `mapcat2` `methods-of` `nil-or` `opaque` `opaque-label` `opaque?` `print-data` `print-human` `println-str` `protocol-miss` `re-quote-replacement` `repeat-forever` `repeat2` `sb-append!` `sb-str` `spread` `str-bytes` `str-join` `subvec2` `tag` `volatile?`
 
 *Absent:* 306 names -- see `doc/manifest.edn` for all of them.
 

@@ -20,7 +20,6 @@
     >=
     NaN?
     Printable
-    Printable__impls
     abs
     and
     any?
@@ -407,7 +406,7 @@
     when-not
     when-some
     while},
-  :count 356,
+  :count 355,
   :absent
   #{*'
     *1
@@ -718,7 +717,6 @@
   :extra
   #{->str-builder
     Printable
-    Printable__impls
     apply2
     bigdec?
     bytes->str
@@ -757,14 +755,15 @@
   :compared-with clojure.core},
  clojure.core.protocols
  {:file "lib/clojure/core/protocols.cljc",
-  :present #{},
+  :present #{Datafiable Navigable datafy nav},
   :macros #{},
-  :count 0},
+  :count 4},
  clojure.data
  {:file "lib/clojure/data.cljc",
-  :present #{diff},
+  :present
+  #{Diff EqualityPartition diff diff-similar equality-partition},
   :macros #{},
-  :count 1},
+  :count 5},
  clojure.datafy
  {:file "lib/clojure/datafy.cljc",
   :present #{datafy nav},
