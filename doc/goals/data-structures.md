@@ -115,44 +115,38 @@ arithmetic is only a shortcut.
 ### 1. Chunked seqs are declared and never built
 
 Swept on ALLOCATIONS across the bulk operations, n=20,000, each against a base
-mode that does the same setup and skips the operation:
+mode that does the same setup and skips the operation. These are TODAY'S
+numbers, re-measured in one run after the changes below -- the earlier table
+mixed figures taken before and after them, which is how `keys` appeared to
+cost 8.1 when the honest comparison was 11.2 against 7.1.
 
-| operation | allocations | per element | |
-|---|---|---|---|
-| `mapv` | 650 | 0.0 | transient |
-| `filterv` | 328 | 0.0 | transient |
-| `into` a vector | 649 | 0.0 | transient |
-| `reverse` | 20,000 | 1.0 | a cons per element |
-| `frequencies` | 25,436 | 1.3 | transient map |
-| `filter` (lazy) | 70,329 | 3.5 | **seq layer -- now 1.5** |
-| `map` (lazy) | 80,651 | 4.0 | **seq layer -- now 3.0** |
-| `concat` | 101,298 | 5.1 | **seq layer** |
-| `interleave` | 121,298 | 6.1 | **seq layer** |
-| `partition` | 155,167 | 7.8 | **seq layer** |
-| `keys` | 161,867 | 8.1 | **seq layer twice over -- since fixed** |
-| `vals` | 181,867 | 9.1 | **seq layer twice over -- since fixed** |
+| operation | per element | |
+|---|---|---|
+| `mapv` | 0.0 | transient |
+| `filterv` | 0.0 | transient |
+| `into` a vector | 0.0 | transient |
+| `reverse` | 1.0 | a cons per element |
+| `frequencies` | 1.3 | transient map |
+| **`filter` (lazy)** | **1.5** | was 3.5 |
+| **`map` (lazy)** | **3.0** | was 4.0 |
+| **`reduce` over a map** | **3.1** | was 4.1 |
+| `concat` | 5.1 | seq layer, untouched |
+| `interleave` | 6.1 | seq layer, untouched |
+| **`reduce-kv`** | **6.1** | was 7.1 |
+| **`keys`** | **7.1** | was 11.2 |
+| `partition` | 7.8 | seq layer, untouched |
+| **`vals`** | **8.1** | was 12.2 |
 
-The split is clean and it is not about the individual functions. Everything
-built through a TRANSIENT costs nothing per element. Everything that goes
-through the lazy seq layer costs between three and nine allocations per
-element, because each step is a thunk, a lazy-seq cell and a cons, plus
-whatever the source seq allocates to advance.
+The split that made this legible has not changed: everything built through a
+TRANSIENT costs nothing per element, and everything through the lazy seq layer
+costs between one and eight. What changed is that five of those operations
+were paying for a CURSOR over a collection that already had a vector, and they
+no longer do.
 
-`keys` and `vals` were the worst because they pay the layer TWICE: they were
-`(map2 first m)` and `(map2 second m)`, so once for the map's own seq -- a
-vecseq over the entry vector -- and once for the `map` above it.
-
-They walk that vector by index now, still lazily, one cell per element.
-Measured like for like, same build but for `core.cljc`: 223,084 allocations to
-141,867 on a 20,000-entry map, 13.0 MB to 8.0 MB, 26.6ms to 22.5ms.
-
-The 8.1 and 9.1 in the table above were measured before `coll-vec` existed and
-under a different setup; the 223,084 is the number to compare against, because
-it was taken in the same run as the 141,867.
-
-A chunk is 32 elements, so chunking turns four allocations per element into
-roughly four per thirty-two. That is the size of the prize, and it is one
-number rather than twelve.
+`concat`, `interleave` and `partition` are the ones left, and they are lower
+traffic -- `interpose` is used only by the test harness, and `str/join` has
+its own loop rather than going through any of them. They were left alone
+deliberately, not overlooked.
 
 **One of those three allocations was avoidable without chunking.** `rest` on a
 vector's seq builds a fresh vecseq cell per element, so `map` and `filter`
