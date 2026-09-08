@@ -549,6 +549,36 @@ what remains, and what each thing is waiting on.
    rather than by a test — the same method that found `0h`, `0j`, `0k` and
    `0m`.
 
+0t. **`restore` could be hung by its own input, and could not say why it
+   refused** — FIXED, all four toward the ports. `snap.rs` is phase 5 in
+   `doc/goals/kin-port.md` — never generated — so these are hand-converged,
+   and the ports are the reference on every one.
+
+   * **THE HANG.** `count_host_opaques` walks the nursery adding `size_of` to
+     an address. `size_of` answers `len` for a `TY_FREE` header, so a header
+     of zeroes sizes as ZERO and the walk never advances. It runs at the END
+     of `restore`, over a heap just written from input bytes — so the input
+     decides whether it terminates. The guard is not novel: it is what both
+     ports carry on both loops, and what Rust's OWN old-space loop ten lines
+     below already had.
+   * **The refusal reason was the previous call's.** `REFUSED` was reset
+     AFTER the short-buffer check, so a short buffer was refused while the
+     flag still held whatever the last restore had set.
+   * **Two refusals set no reason at all** — a region claiming more bytes
+     than the snapshot holds, and one falling outside memory. Both ports name
+     `REFUSE_LAYOUT` for both.
+
+   The constant exists so a host can be told WHY, and the cases that could
+   not say were exactly the ones malformed input reaches first.
+
+   NO REGRESSION TEST, deliberately, and this is the part worth arguing with.
+   A test for the hang does not FAIL without the fix — it hangs, and the suite
+   reports a timeout rather than a failure. A test whose red state is
+   indistinguishable from a stuck machine is worse than the reading that
+   justifies the guard: two ports and the neighbouring loop in the same
+   function. A bounded regression — asserting the walk's step rather than its
+   termination — would be worth having and is not written.
+
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old
    `jvm`-against-`clr` similarity table because BOTH ports share them. Two

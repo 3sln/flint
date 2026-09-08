@@ -300,8 +300,18 @@ fn count_host_opaques(rt: &mut Rt) -> u32 {
     let (from, bump) = (rt.gc.from, rt.gc.bump);
     let mut a = from;
     while a < bump {
+        // THE SAME GUARD THE OLD-SPACE LOOP TEN LINES BELOW HAS, and that both
+        // ports have on both loops. `size_of` answers `len` for a `TY_FREE`
+        // header, so a length of zero advances `a` by zero and this never
+        // terminates -- and it runs at the END of `restore`, over a heap that
+        // was just written from input bytes. A hang is what an attacker gets
+        // for a header of zeroes.
+        let size = size_of(&rt.gc.sp, a);
+        if size < 8 || a + size > bump {
+            break;
+        }
         clear(&rt.gc.sp, a);
-        a += size_of(&rt.gc.sp, a);
+        a += size;
     }
     let chunks = core::mem::take(&mut rt.gc.old_chunks);
     for ch in &chunks {
@@ -323,11 +333,18 @@ fn count_host_opaques(rt: &mut Rt) -> u32 {
 }
 
 pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
+    // RESET FIRST. This used to sit below the short-buffer check, so a short
+    // buffer was refused while `REFUSED` still held the PREVIOUS call's
+    // reason -- and a host asking why would be told about a restore that had
+    // already finished. Both ports name a reason on every refusal; the
+    // constant exists so the host can be told, and the cases most likely to
+    // fire are exactly the ones that said nothing.
+    unsafe { REFUSED = REFUSE_NONE };
     if bytes.len() < 8 {
+        unsafe { REFUSED = REFUSE_LAYOUT };
         return false;
     }
     let mut r = R { b: bytes, i: 0 };
-    unsafe { REFUSED = REFUSE_NONE };
     if r.u32() != MAGIC || r.u32() != VERSION {
         unsafe { REFUSED = REFUSE_LAYOUT };
         return false;
@@ -451,6 +468,9 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
         let addr = r.addr();
         let len = r.addr();
         if r.i + len as usize > bytes.len() {
+            // NAMED, as both ports name it. A region claiming more bytes than
+            // the snapshot holds is a layout refusal, not a mystery.
+            unsafe { REFUSED = REFUSE_LAYOUT };
             return false;
         }
         plan.push((addr, len, r.i));
@@ -463,6 +483,7 @@ pub fn restore(rt: &mut Rt, bytes: &[u8]) -> bool {
     // allocation path and the extra branch is not free.
     for (addr, len, _) in &plan {
         if (*addr as u64) + (*len as u64) > memory_bytes() {
+            unsafe { REFUSED = REFUSE_LAYOUT };
             return false;
         }
     }
@@ -1010,4 +1031,36 @@ pub fn halt(rt: &mut Rt) {
     rt.park_on = NIL;
     rt.thrown = NIL;
     rt.status = STATUS_SHELVED;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A NURSERY OBJECT OF SIZE ZERO MUST NOT HANG THE WALK.
+    ///
+    /// `size_of` answers `len` for a `TY_FREE` header, so a header of zeroes
+    /// sizes as zero and a walk that adds it advances by nothing. This runs at
+    /// the END of `restore`, over a heap just written from input bytes, so the
+    /// input decides whether it terminates.
+    ///
+    /// WITHOUT THE GUARD THIS TEST DOES NOT FAIL -- IT HANGS, and the suite
+    /// times out rather than reporting. That is the honest shape of the bug and
+    /// the reason the guard is a `break` rather than an assertion: there is no
+    /// good answer to give, only a walk to stop.
+    ///
+    /// Both ports have carried this guard on both loops all along; Rust had it
+    /// on the old-space loop directly below and not on this one.
+    #[test]
+    fn a_zero_sized_nursery_object_does_not_hang_the_opaque_walk() {
+        let mut rt = Rt::new();
+        // A header of zeroes at the start of the nursery: TY_FREE, len 0.
+        let from = rt.gc.from;
+        rt.gc.sp.write_u32(from, 0);
+        rt.gc.sp.write_u32(from + 4, 0);
+        rt.gc.bump = from + 64;
+        // Terminating IS the assertion.
+        let n = count_host_opaques(&mut rt);
+        assert_eq!(n, 0, "a free block holds no opaques");
+    }
 }
