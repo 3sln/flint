@@ -410,7 +410,6 @@ fn main() {
         }
     }
     static final class Str {
-        static boolean isKeyword(Rt rt, long v) { return Val.isKw(v); }
         static boolean isString(Rt rt, long v) { return Val.isName(v); }
         static String text(Rt rt, long v) { return rt.names.get(Val.idx(v)); }
     }
@@ -564,6 +563,7 @@ fn main() {
         return dflt;
     }
 
+    static boolean isKeyword(Rt rt, long v) { return Val.isKw(v); }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -689,7 +689,6 @@ namespace Flint.Rt {
         }
     }
     internal static class Str {
-        internal static bool IsKeyword(Rt rt, long v) { return Val.IsKw(v); }
         internal static bool IsString(Rt rt, long v) { return Val.IsName(v); }
         internal static string Text(Rt rt, long v) { return rt.names[Val.Idx(v)]; }
     }
@@ -834,6 +833,7 @@ namespace Flint.Rt {
         return dflt;
     }
 
+    internal static bool IsKeyword(Rt rt, long v) { return Val.IsKw(v); }
 --csharp
     internal static void Main() {
         Rt rt = new Rt();

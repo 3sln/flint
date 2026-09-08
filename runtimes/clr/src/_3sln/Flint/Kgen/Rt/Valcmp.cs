@@ -125,7 +125,7 @@ public static class Valcmp {
         if (Str.IsString(rt, a) && Str.IsString(rt, b)) {
             return Str.CompareUtf16(rt, a, b);
         }
-        if (Str.IsKeyword(rt, a) && Str.IsKeyword(rt, b)) {
+        if (IsKeyword(rt, a) && IsKeyword(rt, b)) {
             return CmpNamed(rt, a, b);
         }
         if (IsSymbol(rt, a) && IsSymbol(rt, b)) {

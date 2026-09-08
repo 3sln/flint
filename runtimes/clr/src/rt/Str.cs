@@ -294,18 +294,6 @@ public static class Str {
 
     public static string Text(Rt rt, long v) => Encoding.UTF8.GetString(Bytes(rt, v));
 
-    /// A keyword. Inline when it has no namespace and fits in five bytes,
-    /// which is most of them; otherwise `TY_KW` `[ns, name, hash]`.
-    ///
-    /// INTERNED through the weak table, so two spellings of one keyword are the
-    /// same object -- which is what makes `=` a pointer compare and keeps map
-    /// lookups cheap. The rooting in `BuildKeyword` must not be simplified:
-    /// both strings are live across the `Alloc` that can move them.
-    /// Is `v` a keyword, either tier? See the Java copy.
-    public static bool IsKeyword(Rt rt, long v) {
-        return Val.IsInlineKw(v)
-            || (Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyKw);
-    }
 
     public static long Keyword(Rt rt, string ns, string name) {
         byte[] nb = Encoding.UTF8.GetBytes(name);

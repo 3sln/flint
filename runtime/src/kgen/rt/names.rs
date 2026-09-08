@@ -27,6 +27,24 @@ impl Rt {
         }
         return ty(&self.gc.sp, v.as_heap()) == TY_SYM;
     }
+    /// Is `v` a keyword, either tier?
+    /// 
+    /// TWO TIERS, unlike a symbol: a short bare keyword lives in the value word
+    /// itself, so the inline test comes first and costs nothing.
+    /// 
+    /// The ports grew this to serve the generated tree -- they had only
+    /// `typeP(5, v)`, a magic number in a dispatch switch -- and then all three
+    /// carried the same four lines. `type-p` asks it here now, and so do
+    /// `tablekind`, `tablemake` and `valcmp`.
+    pub fn is_keyword(&self, v: Value) -> bool {
+        if v.is_inline_kw() {
+            return true;
+        }
+        if !v.is_heap() {
+            return false;
+        }
+        return ty(&self.gc.sp, v.as_heap()) == TY_KW;
+    }
     /// The `name` part of a string, keyword or symbol, as a string.
     pub fn name_of(&mut self, v: Value) -> Value {
         if v.is_inline_kw() {

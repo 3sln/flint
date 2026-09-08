@@ -585,10 +585,6 @@
     'kw-to-str (core/call {:rust "{1}.kw_to_str()"
                            :java "Val.kwToStr({1})" :csharp "Val.KwToStr({1})"}
                           {:tag Value})
-    'is-keyword (core/call {:rust "{0}.is_keyword({1})"
-                            :java "Str.isKeyword({0}, {1})"
-                            :csharp "Str.IsKeyword({0}, {1})"}
-                           {:tag Bool})
     ;; `is-int` AND NOT `is-fixnum`: a big integer is an integer. The library's
     ;; printer dispatches on this, and with `is-fixnum` the bits of 1.5 printed
     ;; as `#<unprintable>` rather than as 4609434218613702656, because a bigint

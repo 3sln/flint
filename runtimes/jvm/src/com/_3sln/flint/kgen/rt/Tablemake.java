@@ -11,6 +11,7 @@ import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Mapread.*;
 import static com._3sln.flint.kgen.rt.Mapwrite.*;
+import static com._3sln.flint.kgen.rt.Names.*;
 import static com._3sln.flint.kgen.rt.Tablecell.*;
 import static com._3sln.flint.kgen.rt.Tablekind.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
@@ -52,7 +53,7 @@ public final class Tablemake {
             }
             long nm = Vec.nth(rt, rt.r(pj), 0, Val.NIL);
             long tp = Vec.nth(rt, rt.r(pj), 1, Val.NIL);
-            if (!Str.isKeyword(rt, nm)) {
+            if (!isKeyword(rt, nm)) {
                 rt.popTo(base);
                 return rt.throwStr("IllegalArgumentException", "a column name must be a keyword");
             }

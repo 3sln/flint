@@ -63,7 +63,7 @@ public final class Typep {
             case 4:
                 return Str.isString(rt, v);
             case 5:
-                return Str.isKeyword(rt, v);
+                return isKeyword(rt, v);
             case 6:
                 return isSymbol(rt, v);
             case 7:

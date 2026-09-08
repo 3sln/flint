@@ -9,6 +9,7 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Names.*;
 
 public final class Tablekind {
     /// The kind of a value, as the keyword protocol dispatch uses.
@@ -161,7 +162,7 @@ public final class Tablekind {
             return Val.isBool(v);
         }
         if (t == Str.keyword(rt, null, "keyword")) {
-            return Str.isKeyword(rt, v);
+            return isKeyword(rt, v);
         }
         return false;
     }

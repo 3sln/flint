@@ -13,6 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Mapread;
 using static global::_3sln.Flint.Kgen.Rt.Mapwrite;
+using static global::_3sln.Flint.Kgen.Rt.Names;
 using static global::_3sln.Flint.Kgen.Rt.Tablecell;
 using static global::_3sln.Flint.Kgen.Rt.Tablekind;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
@@ -54,7 +55,7 @@ public static class Tablemake {
             }
             long nm = Vec.Nth(rt, rt.R(pj), 0, Val.Nil);
             long tp = Vec.Nth(rt, rt.R(pj), 1, Val.Nil);
-            if (!Str.IsKeyword(rt, nm)) {
+            if (!IsKeyword(rt, nm)) {
                 rt.PopTo(@base);
                 return rt.ThrowStr("IllegalArgumentException", "a column name must be a keyword");
             }

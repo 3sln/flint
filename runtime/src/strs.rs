@@ -426,9 +426,6 @@ impl Rt {
 
     // --- predicates and accessors -----------------------------------------
 
-    pub fn is_keyword(&self, v: Value) -> bool {
-        v.is_inline_kw() || (v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_KW)
-    }
     pub fn keyword_hash(&self, v: Value) -> u32 {
         if v.is_inline_kw() {
             let mut b = [0u8; INLINE_MAX];

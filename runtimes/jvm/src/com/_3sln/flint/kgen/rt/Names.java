@@ -21,6 +21,24 @@ public final class Names {
         }
         return ty(rt.gc.sp, Val.asHeap(v)) == TY_SYM;
     }
+    /// Is `v` a keyword, either tier?
+    /// 
+    /// TWO TIERS, unlike a symbol: a short bare keyword lives in the value word
+    /// itself, so the inline test comes first and costs nothing.
+    /// 
+    /// The ports grew this to serve the generated tree -- they had only
+    /// `typeP(5, v)`, a magic number in a dispatch switch -- and then all three
+    /// carried the same four lines. `type-p` asks it here now, and so do
+    /// `tablekind`, `tablemake` and `valcmp`.
+    public static boolean isKeyword(Rt rt, long v) {
+        if (Val.isInlineKw(v)) {
+            return true;
+        }
+        if (!Val.isHeap(v)) {
+            return false;
+        }
+        return ty(rt.gc.sp, Val.asHeap(v)) == TY_KW;
+    }
     /// The `name` part of a string, keyword or symbol, as a string.
     public static long nameOf(Rt rt, long v) {
         if (Val.isInlineKw(v)) {

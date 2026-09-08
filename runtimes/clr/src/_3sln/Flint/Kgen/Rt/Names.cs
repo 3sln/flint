@@ -23,6 +23,24 @@ public static class Names {
         }
         return Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TySym;
     }
+    /// Is `v` a keyword, either tier?
+    /// 
+    /// TWO TIERS, unlike a symbol: a short bare keyword lives in the value word
+    /// itself, so the inline test comes first and costs nothing.
+    /// 
+    /// The ports grew this to serve the generated tree -- they had only
+    /// `typeP(5, v)`, a magic number in a dispatch switch -- and then all three
+    /// carried the same four lines. `type-p` asks it here now, and so do
+    /// `tablekind`, `tablemake` and `valcmp`.
+    public static bool IsKeyword(Rt rt, long v) {
+        if (Val.IsInlineKw(v)) {
+            return true;
+        }
+        if (!Val.IsHeap(v)) {
+            return false;
+        }
+        return Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyKw;
+    }
     /// The `name` part of a string, keyword or symbol, as a string.
     public static long NameOf(Rt rt, long v) {
         if (Val.IsInlineKw(v)) {

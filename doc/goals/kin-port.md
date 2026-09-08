@@ -580,6 +580,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Maps` | `nodeFind` + `nodeFindScalar`, and `eqMayAlloc` in `Eq` |
 | 3 | `Maps` | the collision-node accessors, and the size predicate |
 | 3 | `Typep` | `type-p`, `is-sequential`, `is-fn` — the tag table the COMPILER emits into |
+| 3 | `Names` | `is-keyword` — the predicate `type-p` delegated to that was still written three times |
 
 The assoc/dissoc block is complete: thirteen functions of `Maps`, one
 definition each. The three analyses had gated the whole block on converging
@@ -618,6 +619,20 @@ rather than by a test:
   callable means.
 * **the `fn?` builtin's route**. Rust called `is_fn` directly; the ports went
   through the table. One route now.
+
+`is-keyword` followed, and the reason is the shape of the port rather than
+anything wrong with the predicate: `type-p` DELEGATES, so a table generated
+once that delegates to a function written three times has moved the drift
+rather than removed it. It lives in `names.kin` beside `is-symbol`, which is
+the same question about the other kind of name, and it left the vocabulary --
+it was a host call in `flint/impl/rt.cljc`, so every `.kin` that asked it got
+whatever each runtime had written. Four sources asked: `typep`, `tablekind`,
+`tablemake` and `valcmp`.
+
+The three copies agreed, and the Java one says why it existed at all: "the
+ports had this only as `rt.typeP(5, v)` -- a magic number in a dispatch switch
+-- where Rust has `is_keyword`. The generated tree needs one name for it." It
+was added for this work and is now finished by it.
 
 `is-sequential` came with it because it is the same mistake one level down:
 Rust asked `category`, and both ports carried the tag list. The JVM's copy

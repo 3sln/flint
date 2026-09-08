@@ -216,24 +216,6 @@ public final class Str {
         return new String(bytes(rt, v), StandardCharsets.UTF_8);
     }
 
-    /// A keyword. Inline when it has no namespace and fits in five bytes,
-    /// which is most of them; otherwise `TY_KW` `[ns, name, hash]`.
-    ///
-    /// INTERNED through the weak table, so two spellings of one keyword are the
-    /// same object -- which is what makes `=` a pointer compare and keeps map
-    /// lookups cheap. The rooting in `buildKeyword` is the part that must not
-    /// be simplified: both strings are live across the `alloc` that can move
-    /// them, and the Rust records that `symbol` and `keyword` had the same four
-    /// lines and the same bug when they were not.
-    /// Is `v` a keyword, either tier?
-    ///
-    /// The ports had this only as `rt.typeP(5, v)` -- a magic number in a
-    /// dispatch switch -- where Rust has `is_keyword`. The generated tree
-    /// needs one name for it.
-    public static boolean isKeyword(Rt rt, long v) {
-        return Val.isInlineKw(v)
-            || (Val.isHeap(v) && Obj.ty(rt.gc.sp, Val.asHeap(v)) == Obj.TY_KW);
-    }
 
     public static long keyword(Rt rt, String ns, String name) {
         byte[] nb = name.getBytes(StandardCharsets.UTF_8);

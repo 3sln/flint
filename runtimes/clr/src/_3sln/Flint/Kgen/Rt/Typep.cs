@@ -65,7 +65,7 @@ public static class Typep {
             case 4:
                 return Str.IsString(rt, v);
             case 5:
-                return Str.IsKeyword(rt, v);
+                return IsKeyword(rt, v);
             case 6:
                 return IsSymbol(rt, v);
             case 7:

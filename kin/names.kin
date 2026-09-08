@@ -22,6 +22,22 @@
     (return false))
   (return (== (ty rt (as-heap v)) TY_SYM)))
 
+(doc "Is `v` a keyword, either tier?"
+     ""
+     "TWO TIERS, unlike a symbol: a short bare keyword lives in the value word"
+     "itself, so the inline test comes first and costs nothing."
+     ""
+     "The ports grew this to serve the generated tree -- they had only"
+     "`typeP(5, v)`, a magic number in a dispatch switch -- and then all three"
+     "carried the same four lines. `type-p` asks it here now, and so do"
+     "`tablekind`, `tablemake` and `valcmp`.")
+(defn ^:pub ^:method ^Bool is-keyword [^Rt rt ^Value v]
+  (if (is-inline-kw rt v)
+    (return true))
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_KW)))
+
 (doc "The `name` part of a string, keyword or symbol, as a string.")
 (defn ^:pub ^:method ^Value name-of [^:mut ^Rt rt ^Value v]
   (if (is-inline-kw rt v)

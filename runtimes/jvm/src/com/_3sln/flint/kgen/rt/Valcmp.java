@@ -123,7 +123,7 @@ public final class Valcmp {
         if (Str.isString(rt, a) && Str.isString(rt, b)) {
             return Str.compareUtf16(rt, a, b);
         }
-        if (Str.isKeyword(rt, a) && Str.isKeyword(rt, b)) {
+        if (isKeyword(rt, a) && isKeyword(rt, b)) {
             return cmpNamed(rt, a, b);
         }
         if (isSymbol(rt, a) && isSymbol(rt, b)) {

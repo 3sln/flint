@@ -80,6 +80,10 @@ fn main() {
     o.push_str(&format!("sym?={}{}{}{} ", rt.is_symbol(sym) as u32,
                         rt.is_symbol(kw) as u32, rt.is_symbol(ik) as u32,
                         rt.is_symbol(n) as u32));
+    // IS-KEYWORD: BOTH tiers, so the inline one counts and the symbol does not.
+    o.push_str(&format!("kw?={}{}{}{}{} ", rt.is_keyword(ik) as u32,
+                        rt.is_keyword(kw) as u32, rt.is_keyword(bare) as u32,
+                        rt.is_keyword(sym) as u32, rt.is_keyword(n) as u32));
     // AND THE CARRIED HASH.
     o.push_str(&format!("hash={}", rt.symbol_hash(sym)));
     println!("{}", o);
@@ -148,6 +152,9 @@ fn main() {
          .append(Val.isNil(nsOf(rt, n)) ? 1 : 0).append(' ');
         o.append("sym?=").append(isSymbol(rt, sym) ? 1 : 0).append(isSymbol(rt, kw) ? 1 : 0)
          .append(isSymbol(rt, ik) ? 1 : 0).append(isSymbol(rt, n) ? 1 : 0).append(' ');
+        o.append("kw?=").append(isKeyword(rt, ik) ? 1 : 0).append(isKeyword(rt, kw) ? 1 : 0)
+         .append(isKeyword(rt, bare) ? 1 : 0).append(isKeyword(rt, sym) ? 1 : 0)
+         .append(isKeyword(rt, n) ? 1 : 0).append(' ');
         o.append("hash=").append(symbolHash(rt, sym));
         System.out.println(o.toString());
     }
@@ -217,6 +224,9 @@ fn main() {
          .Append(Val.IsNil(NsOf(rt, n)) ? 1 : 0).Append(' ');
         o.Append("sym?=").Append(IsSymbol(rt, sym) ? 1 : 0).Append(IsSymbol(rt, kw) ? 1 : 0)
          .Append(IsSymbol(rt, ik) ? 1 : 0).Append(IsSymbol(rt, n) ? 1 : 0).Append(' ');
+        o.Append("kw?=").Append(IsKeyword(rt, ik) ? 1 : 0).Append(IsKeyword(rt, kw) ? 1 : 0)
+         .Append(IsKeyword(rt, bare) ? 1 : 0).Append(IsKeyword(rt, sym) ? 1 : 0)
+         .Append(IsKeyword(rt, n) ? 1 : 0).Append(' ');
         o.Append("hash=").Append(SymbolHash(rt, sym));
         System.Console.WriteLine(o.ToString());
     }

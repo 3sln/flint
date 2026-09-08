@@ -182,7 +182,6 @@ fn main() {
         GcT gc = new GcT();
         long bump = 100;
         java.util.ArrayList<String> kws = new java.util.ArrayList<>();
-        boolean isKeyword(long v) { return Str.isKeyword(this, v); }
         boolean isInt(long v) { return Num.isInt(this, v); }
     }
     static int ty(Space sp, long a) { return Obj.ty(sp, a); }
@@ -198,9 +197,6 @@ fn main() {
             rt.kws.add(name);
             return (0xAL << 60) | (rt.kws.size() - 1);
         }
-        static boolean isKeyword(Rt rt, long v) {
-            return Val.isInlineKw(v) || (Val.isHeap(v) && ty(rt.gc.sp, v) == TY_KW);
-        }
         static boolean isString(Rt rt, long v) {
             return Val.isInlineStr(v)
                 || (Val.isHeap(v) && (ty(rt.gc.sp, v) == TY_STR || ty(rt.gc.sp, v) == TY_ROPE));
@@ -212,6 +208,9 @@ fn main() {
         }
     }
     static String kwText(Rt rt, long v) { return rt.kws.get((int) (v & 0xFFFFL)); }
+    static boolean isKeyword(Rt rt, long v) {
+        return Val.isInlineKw(v) || (Val.isHeap(v) && ty(rt.gc.sp, v) == TY_KW);
+    }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -286,7 +285,6 @@ fn main() {
         internal GcT gc = new GcT();
         internal long bump = 100;
         internal System.Collections.Generic.List<string> kws = new System.Collections.Generic.List<string>();
-        internal bool IsKeyword(long v) { return Str.IsKeyword(this, v); }
         internal bool IsInt(long v) { return Num.IsInt(this, v); }
     }
     internal static long Obj2(Rt rt, int t) {
@@ -301,9 +299,6 @@ fn main() {
             rt.kws.Add(name);
             return (0xAL << 60) | (long) (rt.kws.Count - 1);
         }
-        internal static bool IsKeyword(Rt rt, long v) {
-            return Val.IsInlineKw(v) || (Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyKw);
-        }
         internal static bool IsString(Rt rt, long v) {
             return Val.IsInlineStr(v)
                 || (Val.IsHeap(v) && (Obj.Ty(rt.gc.sp, v) == Obj.TyStr
@@ -316,6 +311,9 @@ fn main() {
         }
     }
     internal static string KwText(Rt rt, long v) { return rt.kws[(int) (v & 0xFFFFL)]; }
+    internal static bool IsKeyword(Rt rt, long v) {
+        return Val.IsInlineKw(v) || (Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyKw);
+    }
 --csharp
     internal static void Main() {
         Rt rt = new Rt();

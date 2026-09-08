@@ -80,7 +80,6 @@ fn main() {
     }
     static final class Str {
         static boolean isString(Rt rt, long v) { return v == 6; }
-        static boolean isKeyword(Rt rt, long v) { return v == 7; }
     }
     static final class Vec {
         static boolean isVectorLike(Rt rt, long v) {
@@ -100,6 +99,7 @@ fn main() {
         return Val.isHeap(v) && Val.asHeap(v) >= TY_ARRAYMAP && Val.asHeap(v) <= TY_TABLEREF;
     }
     static boolean isSet(Rt rt, long v) { return Val.isHeap(v) && Val.asHeap(v) == TY_SET; }
+    static boolean isKeyword(Rt rt, long v) { return v == 7; }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -137,7 +137,6 @@ fn main() {
     }
     static class Str {
         internal static bool IsString(Rt rt, long v) { return v == 6; }
-        internal static bool IsKeyword(Rt rt, long v) { return v == 7; }
     }
     static class Vec {
         internal static bool IsVectorLike(Rt rt, long v) {
@@ -157,6 +156,7 @@ fn main() {
         return Val.IsHeap(v) && Val.AsHeap(v) >= Obj.TyArraymap && Val.AsHeap(v) <= Obj.TyTableref;
     }
     static bool IsSet(Rt rt, long v) { return Val.IsHeap(v) && Val.AsHeap(v) == Obj.TySet; }
+    internal static bool IsKeyword(Rt rt, long v) { return v == 7; }
 --csharp
     static void Main() {
         var rt = new Rt();
