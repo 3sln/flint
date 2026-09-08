@@ -15,6 +15,7 @@ use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
+use crate::kgen::rt::casetable::*;
 
 impl Rt {
     /// `cp` mapped to upper case when `up`, to lower case otherwise.
@@ -26,8 +27,22 @@ impl Rt {
     /// 
     /// A code point with no entry maps to itself, which is most of them.
     pub fn case_map(&self, cp: u32, up: bool) -> u32 {
+        // ONE TABLE, TWO SECTIONS. `base` is where this direction's runs
+        // begin and `n` how many it has -- the uppercase section first, then
+        // the lowercase. An accessor pair carries no selector argument, so
+        // the alternative was two copies of this search.
         let c: i32 = cp as i32;
-        let n: i32 = self.case_n(up);
+        let upper_n: i32 = CASE_UPPER_LEN as i32;
+        // `if` is a STATEMENT here, not an expression, so the section is
+        // chosen with `set` rather than in the binding.
+        let mut base: i32;
+        let mut n: i32;
+        base = 0;
+        n = upper_n;
+        if !up {
+            base = upper_n;
+            n = (382 as i32) - upper_n;
+        }
         // BINARY SEARCH over runs sorted by start. `lo` and `hi` bracket
         // the candidate; the run that can contain `c` is the last one
         // whose start is at or below it.
@@ -40,8 +55,8 @@ impl Rt {
                 break;
             }
             let mid: i32 = lo + ((hi - lo) / 2);
-            let s: i32 = self.case_at(up, mid, 0);
-            let e: i32 = self.case_at(up, mid, 1);
+            let s: i32 = CASE_RANGES[(((base + mid) as u32) * 4 + 0) as usize];
+            let e: i32 = CASE_RANGES[(((base + mid) as u32) * 4 + 1) as usize];
             if c < s {
                 hi = mid - 1;
             } else if c > e {
@@ -51,11 +66,11 @@ impl Rt {
                 // covers every OTHER code point, so a member has to
                 // land on the stride as well. One that does not has
                 // no mapping and is its own answer.
-                let st: i32 = self.case_at(up, mid, 3);
+                let st: i32 = CASE_RANGES[(((base + mid) as u32) * 4 + 3) as usize];
                 if st == 1 {
-                    return (c + self.case_at(up, mid, 2)) as u32;
+                    return (c + CASE_RANGES[(((base + mid) as u32) * 4 + 2) as usize]) as u32;
                 } else if ((c - s) & 1) == 0 {
-                    return (c + self.case_at(up, mid, 2)) as u32;
+                    return (c + CASE_RANGES[(((base + mid) as u32) * 4 + 2) as usize]) as u32;
                 } else {
                     return cp;
                 }
@@ -74,20 +89,29 @@ impl Rt {
         let c: i32 = cp as i32;
         let mut lo: i32;
         let mut hi: i32;
+        let mut base2: i32;
+        base2 = 0;
         lo = 0;
-        hi = self.full_n(up) - 1;
+        hi = (CASE_FULL_UPPER_LEN as i32) - 1;
+        if !up {
+            base2 = CASE_FULL_UPPER_LEN as i32;
+            hi = ((103 as i32) - (CASE_FULL_UPPER_LEN as i32)) - 1;
+        }
         loop {
             if lo > hi {
                 break;
             }
             let mid: i32 = lo + ((hi - lo) / 2);
-            let at: i32 = self.full_at(up, mid, 0);
+            let at: i32 = CASE_FULL[(((base2 + mid) as u32) * 5 + 0) as usize];
             if c < at {
                 hi = mid - 1;
             } else if c > at {
                 lo = mid + 1;
             } else {
-                return mid;
+                // ABSOLUTE, not section-relative. The caller indexes
+                // the whole table with this, and a lowercase hit sits
+                // past the uppercase section.
+                return base2 + mid;
             }
         }
         return -1;

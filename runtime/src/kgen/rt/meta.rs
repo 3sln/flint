@@ -15,6 +15,7 @@ use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
+use crate::kgen::rt::casetable::*;
 
 impl Rt {
     /// Can `v` carry metadata at all?

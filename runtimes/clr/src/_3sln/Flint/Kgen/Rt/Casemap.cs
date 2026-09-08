@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Casetable;
 
 public static class Casemap {
     /// `cp` mapped to upper case when `up`, to lower case otherwise.
@@ -22,8 +23,22 @@ public static class Casemap {
     /// 
     /// A code point with no entry maps to itself, which is most of them.
     public static int CaseMap(Rt rt, int cp, bool up) {
+        // ONE TABLE, TWO SECTIONS. `base` is where this direction's runs
+        // begin and `n` how many it has -- the uppercase section first, then
+        // the lowercase. An accessor pair carries no selector argument, so
+        // the alternative was two copies of this search.
         int c = cp;
-        int n = rt.CaseN(up);
+        int upperN = CaseUpperLen;
+        // `if` is a STATEMENT here, not an expression, so the section is
+        // chosen with `set` rather than in the binding.
+        int @base;
+        int n;
+        @base = 0;
+        n = upperN;
+        if (!up) {
+            @base = upperN;
+            n = 382 - upperN;
+        }
         // BINARY SEARCH over runs sorted by start. `lo` and `hi` bracket
         // the candidate; the run that can contain `c` is the last one
         // whose start is at or below it.
@@ -36,8 +51,8 @@ public static class Casemap {
                 break;
             }
             int mid = lo + ((hi - lo) / 2);
-            int s = rt.CaseAt(up, mid, 0);
-            int e = rt.CaseAt(up, mid, 1);
+            int s = CaseRanges[(@base + mid) * 4 + 0];
+            int e = CaseRanges[(@base + mid) * 4 + 1];
             if (c < s) {
                 hi = mid - 1;
             } else if (c > e) {
@@ -47,11 +62,11 @@ public static class Casemap {
                 // covers every OTHER code point, so a member has to
                 // land on the stride as well. One that does not has
                 // no mapping and is its own answer.
-                int st = rt.CaseAt(up, mid, 3);
+                int st = CaseRanges[(@base + mid) * 4 + 3];
                 if (st == 1) {
-                    return c + rt.CaseAt(up, mid, 2);
+                    return c + CaseRanges[(@base + mid) * 4 + 2];
                 } else if (((c - s) & 1) == 0) {
-                    return c + rt.CaseAt(up, mid, 2);
+                    return c + CaseRanges[(@base + mid) * 4 + 2];
                 } else {
                     return cp;
                 }
@@ -70,20 +85,29 @@ public static class Casemap {
         int c = cp;
         int lo;
         int hi;
+        int base2;
+        base2 = 0;
         lo = 0;
-        hi = rt.FullN(up) - 1;
+        hi = CaseFullUpperLen - 1;
+        if (!up) {
+            base2 = CaseFullUpperLen;
+            hi = (103 - CaseFullUpperLen) - 1;
+        }
         for (;;) {
             if (lo > hi) {
                 break;
             }
             int mid = lo + ((hi - lo) / 2);
-            int at = rt.FullAt(up, mid, 0);
+            int at = CaseFull[(base2 + mid) * 5 + 0];
             if (c < at) {
                 hi = mid - 1;
             } else if (c > at) {
                 lo = mid + 1;
             } else {
-                return mid;
+                // ABSOLUTE, not section-relative. The caller indexes
+                // the whole table with this, and a lowercase hit sits
+                // past the uppercase section.
+                return base2 + mid;
             }
         }
         return -1;

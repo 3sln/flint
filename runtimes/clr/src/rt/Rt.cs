@@ -88,25 +88,9 @@ public sealed class Rt : System.IDisposable {
     }
 
 
-    /// How many full mappings the table has -- see the Java copy.
-    public int FullN(bool u) {
-        return (u ? CaseTable.FullUpper.Length : CaseTable.FullLower.Length) / 5;
-    }
 
-    /// Field `f` of full mapping `i`.
-    public int FullAt(bool u, int i, int f) {
-        return (u ? CaseTable.FullUpper : CaseTable.FullLower)[i * 5 + f];
-    }
 
-    /// How many case-mapping ranges the table has. `u != 0` selects Upper.
-    public int CaseN(bool u) {
-        return (u ? CaseTable.Upper.Length : CaseTable.Lower.Length) / 4;
-    }
 
-    /// Field `f` of range `i`: 0 start, 1 end, 2 delta, 3 stride.
-    public int CaseAt(bool u, int i, int f) {
-        return (u ? CaseTable.Upper : CaseTable.Lower)[i * 4 + f];
-    }
 
     /// Open a code-point buffer and answer its index.
     public int CpsOpen() {

@@ -643,6 +643,38 @@ generated modules were asking one question and getting whatever each runtime
 had written. It lives in `ropemeas.kin` now, which is the file that already
 answers what a string MEASURES across the same three tiers.
 
+The case table moved onto `defdata`, a new kin form, and the migration is
+worth reading for what it deleted: six hand-written accessors across three
+runtimes, seven vocabulary entries, `bin/casetable`'s entire emission half
+and its bespoke `--check`, and this project's `#{'defn 'defconst}` head list.
+`kin/casetable.kin` is one declaration; the tables and their accessors are
+generated into all three targets from it.
+
+THREE BUGS THE FLINT SIDE CAUGHT that kin's own suite could not, because kin
+has no compiler gate -- `verify` is the consumer's, and this is the consumer:
+
+* a module declaring only `defdata`/`defconst` reported NO spoken targets, so
+  anything requiring it generated for nothing. Every kin test paired a
+  `defdata` with a `defn`, which supplies the targets and masks it.
+* an accessor's template named its table without registering the import, so a
+  module referring only an accessor emitted uncompilable Java and C#. One
+  module compiled BY ACCIDENT -- it also referred a `defconst`, and the
+  constant pulled the import in.
+* `defconst` accepted a kebab-case name and emitted `pub const case-upper-len`,
+  which is not an identifier in any of the three.
+
+AND ONE THIS FILE SHOULD OWN. The second bug was flint's, not kin's:
+`defines-symbol` derived Java and C# imports by SCANNING every `.kin` source
+for `#{'defn 'defconst}` heads -- a copy of the vocabulary kept where the
+vocabulary cannot see it, so a declaration form it had never heard of was
+invisible. It asks `kp/declared-names` now, which is better and still wrong:
+kin ships `need!`, `emit-anchor!` and `kin/scoped` precisely so a linker
+registers an import at the reference site and an emitter flushes the header
+into an anchor, and `examples/go` assembles exactly that in ten lines. flint
+predates the mechanism and never picked it up. The scan should not be
+improved; it should be deleted, along with `mentioned-symbols`, `read-forms`
+and the second body walk in `java-emit`.
+
 `casemap`/`casechange` closed the last of the three-way divergences the
 analyses found, and the shape is worth recording because the DATA and the
 ALGORITHM went to different places.

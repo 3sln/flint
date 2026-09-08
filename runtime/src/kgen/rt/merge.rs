@@ -15,6 +15,7 @@ use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
+use crate::kgen::rt::casetable::*;
 
 impl Rt {
     pub(crate) fn merge_two(&mut self, shift: u32, k0: Value, v0: Value, h0: u32, k1: Value, v1: Value, h1: u32, edit: Value) -> Value {

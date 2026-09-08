@@ -15,6 +15,7 @@ use crate::vector::*;
 use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};
 use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
+use crate::kgen::rt::casetable::*;
 
 impl Rt {
     /// Write `cp` to `sk` as UTF-8, and answer how many bytes that took.
@@ -88,10 +89,10 @@ impl Rt {
                 let mut k: i32;
                 k = 0;
                 loop {
-                    if k == self.full_at(up, fx, 1) {
+                    if k == CASE_FULL[((fx as u32) * 5 + 1) as usize] {
                         break;
                     }
-                    let e: u32 = self.full_at(up, fx, k + 2) as u32;
+                    let e: u32 = CASE_FULL[((fx as u32) * 5 + ((k + 2) as u32)) as usize] as u32;
                     self.put_utf8(sk, e);
                     k += 1;
                 }

@@ -10,6 +10,7 @@ import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Casemap.*;
+import static com._3sln.flint.kgen.rt.Casetable.*;
 import static com._3sln.flint.kgen.rt.Codepoints.*;
 import static com._3sln.flint.kgen.rt.Ropemeas.*;
 
@@ -85,10 +86,10 @@ public final class Casechange {
                 int k;
                 k = 0;
                 for (;;) {
-                    if (k == rt.fullAt(up, fx, 1)) {
+                    if (k == CASE_FULL[fx * 5 + 1]) {
                         break;
                     }
-                    int e = rt.fullAt(up, fx, k + 2);
+                    int e = CASE_FULL[fx * 5 + (k + 2)];
                     putUtf8(rt, sk, e);
                     k += 1;
                 }

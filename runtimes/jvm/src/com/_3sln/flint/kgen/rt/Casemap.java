@@ -9,6 +9,7 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Casetable.*;
 
 public final class Casemap {
     /// `cp` mapped to upper case when `up`, to lower case otherwise.
@@ -20,8 +21,22 @@ public final class Casemap {
     /// 
     /// A code point with no entry maps to itself, which is most of them.
     public static int caseMap(Rt rt, int cp, boolean up) {
+        // ONE TABLE, TWO SECTIONS. `base` is where this direction's runs
+        // begin and `n` how many it has -- the uppercase section first, then
+        // the lowercase. An accessor pair carries no selector argument, so
+        // the alternative was two copies of this search.
         int c = cp;
-        int n = rt.caseN(up);
+        int upperN = CASE_UPPER_LEN;
+        // `if` is a STATEMENT here, not an expression, so the section is
+        // chosen with `set` rather than in the binding.
+        int base;
+        int n;
+        base = 0;
+        n = upperN;
+        if (!up) {
+            base = upperN;
+            n = 382 - upperN;
+        }
         // BINARY SEARCH over runs sorted by start. `lo` and `hi` bracket
         // the candidate; the run that can contain `c` is the last one
         // whose start is at or below it.
@@ -34,8 +49,8 @@ public final class Casemap {
                 break;
             }
             int mid = lo + ((hi - lo) / 2);
-            int s = rt.caseAt(up, mid, 0);
-            int e = rt.caseAt(up, mid, 1);
+            int s = CASE_RANGES[(base + mid) * 4 + 0];
+            int e = CASE_RANGES[(base + mid) * 4 + 1];
             if (c < s) {
                 hi = mid - 1;
             } else if (c > e) {
@@ -45,11 +60,11 @@ public final class Casemap {
                 // covers every OTHER code point, so a member has to
                 // land on the stride as well. One that does not has
                 // no mapping and is its own answer.
-                int st = rt.caseAt(up, mid, 3);
+                int st = CASE_RANGES[(base + mid) * 4 + 3];
                 if (st == 1) {
-                    return c + rt.caseAt(up, mid, 2);
+                    return c + CASE_RANGES[(base + mid) * 4 + 2];
                 } else if (((c - s) & 1) == 0) {
-                    return c + rt.caseAt(up, mid, 2);
+                    return c + CASE_RANGES[(base + mid) * 4 + 2];
                 } else {
                     return cp;
                 }
@@ -68,20 +83,29 @@ public final class Casemap {
         int c = cp;
         int lo;
         int hi;
+        int base2;
+        base2 = 0;
         lo = 0;
-        hi = rt.fullN(up) - 1;
+        hi = CASE_FULL_UPPER_LEN - 1;
+        if (!up) {
+            base2 = CASE_FULL_UPPER_LEN;
+            hi = (103 - CASE_FULL_UPPER_LEN) - 1;
+        }
         for (;;) {
             if (lo > hi) {
                 break;
             }
             int mid = lo + ((hi - lo) / 2);
-            int at = rt.fullAt(up, mid, 0);
+            int at = CASE_FULL[(base2 + mid) * 5 + 0];
             if (c < at) {
                 hi = mid - 1;
             } else if (c > at) {
                 lo = mid + 1;
             } else {
-                return mid;
+                // ABSOLUTE, not section-relative. The caller indexes
+                // the whole table with this, and a lowercase hit sits
+                // past the uppercase section.
+                return base2 + mid;
             }
         }
         return -1;

@@ -20,10 +20,12 @@
 (ns flint.rt.casemap
   (:require [flint.impl.rt :refer [defn return if let do local set forever break
                                    comment doc not == != < > <= >= + - quot
-                                   bit-and case-n case-lo case-hi case-delta
-                                   case-stride cp-signed cp-unsigned
-                                   full-n full-at
-                                   Rt Bool I32 Cmp]]))
+                                   bit-and
+                                   cp-signed cp-unsigned
+                                   Rt Bool I32 Cmp]]
+            [flint.rt.casetable :refer [case-ranges-n case-ranges-at
+                                        case-full-n case-full-at
+                                        CASE_UPPER_LEN CASE_FULL_UPPER_LEN]]))
 
 (doc "`cp` mapped to upper case when `up`, to lower case otherwise."
      ""
@@ -34,8 +36,21 @@
      ""
      "A code point with no entry maps to itself, which is most of them.")
 (defn ^:pub ^:method ^I32 case-map [^Rt rt ^I32 cp ^Bool up]
+  (comment "ONE TABLE, TWO SECTIONS. `base` is where this direction's runs"
+           "begin and `n` how many it has -- the uppercase section first, then"
+           "the lowercase. An accessor pair carries no selector argument, so"
+           "the alternative was two copies of this search.")
   (let [^Cmp c (cp-signed rt cp)
-        ^Cmp n (case-n rt up)]
+        ^Cmp upper-n (cp-signed rt CASE_UPPER_LEN)]
+    (comment "`if` is a STATEMENT here, not an expression, so the section is"
+             "chosen with `set` rather than in the binding.")
+    (local ^:mut ^Cmp base)
+    (local ^:mut ^Cmp n)
+    (set base 0)
+    (set n upper-n)
+    (if (not up)
+      (do (set base upper-n)
+          (set n (- (cp-signed rt (case-ranges-n rt)) upper-n))))
     (comment "BINARY SEARCH over runs sorted by start. `lo` and `hi` bracket"
              "the candidate; the run that can contain `c` is the last one"
              "whose start is at or below it.")
@@ -47,8 +62,8 @@
       (if (> lo hi)
         (break))
       (let [^Cmp mid (+ lo (quot (- hi lo) 2))
-            ^Cmp s (case-lo rt up mid)
-            ^Cmp e (case-hi rt up mid)]
+            ^Cmp s (case-ranges-at rt (cp-unsigned rt (+ base mid)) 0)
+            ^Cmp e (case-ranges-at rt (cp-unsigned rt (+ base mid)) 1)]
         (if (< c s)
           (set hi (- mid 1))
           (if (> c e)
@@ -57,11 +72,11 @@
                          "covers every OTHER code point, so a member has to"
                          "land on the stride as well. One that does not has"
                          "no mapping and is its own answer.")
-                (let [^Cmp st (case-stride rt up mid)]
+                (let [^Cmp st (case-ranges-at rt (cp-unsigned rt (+ base mid)) 3)]
                   (if (== st 1)
-                    (return (cp-unsigned rt (+ c (case-delta rt up mid))))
+                    (return (cp-unsigned rt (+ c (case-ranges-at rt (cp-unsigned rt (+ base mid)) 2))))
                     (if (== (bit-and (- c s) 1) 0)
-                      (return (cp-unsigned rt (+ c (case-delta rt up mid))))
+                      (return (cp-unsigned rt (+ c (case-ranges-at rt (cp-unsigned rt (+ base mid)) 2))))
                       (return cp)))))))))
     (return cp)))
 
@@ -76,16 +91,26 @@
   (let [^Cmp c (cp-signed rt cp)]
     (local ^:mut ^Cmp lo)
     (local ^:mut ^Cmp hi)
+    (local ^:mut ^Cmp base2)
+    (set base2 0)
     (set lo 0)
-    (set hi (- (full-n rt up) 1))
+    (set hi (- (cp-signed rt CASE_FULL_UPPER_LEN) 1))
+    (if (not up)
+      (do (set base2 (cp-signed rt CASE_FULL_UPPER_LEN))
+          (set hi (- (- (cp-signed rt (case-full-n rt))
+                        (cp-signed rt CASE_FULL_UPPER_LEN))
+                     1))))
     (forever
       (if (> lo hi)
         (break))
       (let [^Cmp mid (+ lo (quot (- hi lo) 2))
-            ^Cmp at (full-at rt up mid 0)]
+            ^Cmp at (case-full-at rt (cp-unsigned rt (+ base2 mid)) 0)]
         (if (< c at)
           (set hi (- mid 1))
           (if (> c at)
             (set lo (+ mid 1))
-            (return mid)))))
+            (do (comment "ABSOLUTE, not section-relative. The caller indexes"
+                         "the whole table with this, and a lowercase hit sits"
+                         "past the uppercase section.")
+                (return (+ base2 mid)))))))
     (return -1)))

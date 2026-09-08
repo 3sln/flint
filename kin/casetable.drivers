@@ -1,0 +1,37 @@
+--rust-head
+struct Rt;
+--rust
+fn main() {
+    // THE TABLE ITSELF, folded to one number. A `defdata` emits data and no
+    // functions -- `flat-array`'s accessors are inline templates -- so what a
+    // probe can check here is that three targets emitted the SAME data, which
+    // for 1528 integers is exactly the thing a reader cannot check by eye.
+    let mut h: i64 = 0;
+    for v in CASE_RANGES.iter() { h = h.wrapping_mul(31).wrapping_add(*v as i64); }
+    let mut g: i64 = 0;
+    for v in CASE_FULL.iter() { g = g.wrapping_mul(31).wrapping_add(*v as i64); }
+    println!("{} {} {} {} {} {}",
+             CASE_RANGES.len(), h, CASE_FULL.len(), g, CASE_UPPER_LEN, CASE_FULL_UPPER_LEN);
+}
+--java-head
+    static final class Rt {}
+--java
+    public static void main(String[] args) {
+        long h = 0;
+        for (int v : CASE_RANGES) h = h * 31 + v;
+        long g = 0;
+        for (int v : CASE_FULL) g = g * 31 + v;
+        System.out.println(CASE_RANGES.length + " " + h + " " + CASE_FULL.length + " " + g
+                           + " " + CASE_UPPER_LEN + " " + CASE_FULL_UPPER_LEN);
+    }
+--csharp-head
+    internal sealed class Rt {}
+--csharp
+    static void Main() {
+        long h = 0;
+        foreach (int v in CaseRanges) h = unchecked(h * 31 + v);
+        long g = 0;
+        foreach (int v in CaseFull) g = unchecked(g * 31 + v);
+        System.Console.WriteLine(CaseRanges.Length + " " + h + " " + CaseFull.Length + " " + g
+                                 + " " + CaseUpperLen + " " + CaseFullUpperLen);
+    }

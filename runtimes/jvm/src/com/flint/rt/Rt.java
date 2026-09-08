@@ -118,26 +118,9 @@ public final class Rt {
         return true;
     }
 
-    /// How many full mappings the table has. `u` selects the upward one.
-    public int fullN(boolean u) {
-        return (u ? CaseTable.FULL_UPPER.length : CaseTable.FULL_LOWER.length) / 5;
-    }
 
-    /// Field `f` of full mapping `i`: 0 the code point, 1 the count, 2..4 the
-    /// mapping.
-    public int fullAt(boolean u, int i, int f) {
-        return (u ? CaseTable.FULL_UPPER : CaseTable.FULL_LOWER)[i * 5 + f];
-    }
 
-    /// How many case-mapping ranges the table has. `u != 0` selects UPPER.
-    public int caseN(boolean u) {
-        return (u ? CaseTable.UPPER.length : CaseTable.LOWER.length) / 4;
-    }
 
-    /// Field `f` of range `i`: 0 start, 1 end, 2 delta, 3 stride.
-    public int caseAt(boolean u, int i, int f) {
-        return (u ? CaseTable.UPPER : CaseTable.LOWER)[i * 4 + f];
-    }
 
     /// Open a code-point buffer and answer its index.
     public int cpsOpen() {

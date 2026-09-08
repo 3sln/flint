@@ -1,75 +1,59 @@
 --rust-head
-struct Rt { up: Vec<i32>, lo: Vec<i32>, fu: Vec<i32> }
+struct Rt;
+// the tables the generated code indexes. THE SIZE IS NOT FREE TO CHOOSE:
+// `case-ranges-n` is a count accessor and inlines as a LITERAL, so the
+// generated search carries the real table's length and a probe that supplied
+// a shorter array would index past it.
+static CASE_RANGES: [i32; 1528] = [0; 1528];
+static CASE_FULL: [i32; 515] = [0; 515];
+const CASE_UPPER_LEN: u32 = 200;
+const CASE_FULL_UPPER_LEN: u32 = 102;
 impl Rt {
-    fn case_n(&self, u: bool) -> i32 { (if u { self.up.len() } else { self.lo.len() }) as i32 / 4 }
-    fn case_at(&self, u: bool, i: i32, f: i32) -> i32 {
-        let t = if u { &self.up } else { &self.lo };
-        t[(i * 4 + f) as usize]
-    }
-    fn full_n(&self, u: bool) -> i32 { (if u { self.fu.len() } else { 0 }) as i32 / 5 }
-    fn full_at(&self, u: bool, i: i32, f: i32) -> i32 {
-        let _ = u;
-        self.fu[(i * 5 + f) as usize]
-    }
 --rust
 }
 fn main() {
-    // Two runs: 'a'-'z' by -32 at stride 1, and a strided pair-run by -1.
-    // 223 is sharp s: ONE code point out to two, which no delta can say.
-    let rt = Rt { up: vec![97, 122, -32, 1, 257, 303, -1, 2],
-                  lo: vec![65, 90, 32, 1],
-                  fu: vec![223, 2, 83, 83, 0] };
+    // WHAT THIS CHECKS is that three targets generated the SAME SEARCH, over
+    // a table they all read the same way. It does not check the mapping is
+    // right: the table here is zeros, so every answer below is a structural
+    // one. Semantics are checked against real Clojure by the language suite,
+    // which runs the actual table on all four runtimes.
+    let rt = Rt;
     let mut o = String::new();
-    for cp in [97u32, 122, 96, 123, 257, 258, 259, 303, 305, 65, 223] {
-        o.push_str(&format!("{}/{} ", rt.case_map(cp, true), rt.full_index(cp, true)));
+    for cp in [0u32, 1, 97, 65, 223, 1000] {
+        o.push_str(&format!("{}/{} ", rt.case_map(cp, true), rt.case_map(cp, false)));
     }
-    o.push('|');
-    for cp in [65u32, 90, 64, 91, 97] { o.push_str(&format!(" {}", rt.case_map(cp, false))); }
+    for cp in [0u32, 223, 1000] {
+        o.push_str(&format!("{},{} ", rt.full_index(cp, true), rt.full_index(cp, false)));
+    }
     println!("{}", o);
 }
 --java-head
-    static final class Rt {
-        int[] up, lo;
-        int caseN(boolean u) { return (u ? up.length : lo.length) / 4; }
-        int caseAt(boolean u, int i, int f) { return (u ? up : lo)[i * 4 + f]; }
-        int[] fu;
-        int fullN(boolean u) { return (u ? fu.length : 0) / 5; }
-        int fullAt(boolean u, int i, int f) { return fu[i * 5 + f]; }
-    }
+    static final class Rt {}
+    static final int[] CASE_RANGES = new int[1528];
+    static final int[] CASE_FULL = new int[515];
+    static final int CASE_UPPER_LEN = 200, CASE_FULL_UPPER_LEN = 102;
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
-        rt.up = new int[]{97, 122, -32, 1, 257, 303, -1, 2};
-        rt.lo = new int[]{65, 90, 32, 1};
-        rt.fu = new int[]{223, 2, 83, 83, 0};
         StringBuilder o = new StringBuilder();
-        for (int cp : new int[]{97, 122, 96, 123, 257, 258, 259, 303, 305, 65, 223})
-            o.append(caseMap(rt, cp, true)).append('/').append(fullIndex(rt, cp, true)).append(' ');
-        o.append('|');
-        for (int cp : new int[]{65, 90, 64, 91, 97})
-            o.append(' ').append(caseMap(rt, cp, false));
+        for (int cp : new int[]{0, 1, 97, 65, 223, 1000})
+            o.append(caseMap(rt, cp, true)).append('/').append(caseMap(rt, cp, false)).append(' ');
+        for (int cp : new int[]{0, 223, 1000})
+            o.append(fullIndex(rt, cp, true)).append(',').append(fullIndex(rt, cp, false)).append(' ');
         System.out.println(o);
     }
 --csharp-head
-    internal sealed class Rt {
-        internal int[] up, lo;
-        internal int CaseN(bool u) { return (u ? up.Length : lo.Length) / 4; }
-        internal int CaseAt(bool u, int i, int f) { return (u ? up : lo)[i * 4 + f]; }
-        internal int[] fu;
-        internal int FullN(bool u) { return (u ? fu.Length : 0) / 5; }
-        internal int FullAt(bool u, int i, int f) { return fu[i * 5 + f]; }
-    }
+    internal sealed class Rt {}
+    static readonly int[] CaseRanges = new int[1528];
+    static readonly int[] CaseFull = new int[515];
+    const int CaseUpperLen = 200, CaseFullUpperLen = 102;
 --csharp
     static void Main() {
         var rt = new Rt();
-        rt.up = new int[]{97, 122, -32, 1, 257, 303, -1, 2};
-        rt.lo = new int[]{65, 90, 32, 1};
-        rt.fu = new int[]{223, 2, 83, 83, 0};
         var o = new System.Text.StringBuilder();
-        foreach (int cp in new int[]{97, 122, 96, 123, 257, 258, 259, 303, 305, 65, 223})
-            o.Append(CaseMap(rt, cp, true)).Append('/').Append(FullIndex(rt, cp, true)).Append(' ');
-        o.Append('|');
-        foreach (int cp in new int[]{65, 90, 64, 91, 97})
-            o.Append(' ').Append(CaseMap(rt, cp, false));
+        foreach (int cp in new int[]{0, 1, 97, 65, 223, 1000})
+            o.Append(CaseMap(rt, cp, true)).Append('/').Append(CaseMap(rt, cp, false)).Append(' ');
+        foreach (int cp in new int[]{0, 223, 1000})
+            o.Append(FullIndex(rt, cp, true)).Append(',').Append(FullIndex(rt, cp, false)).Append(' ');
         System.Console.WriteLine(o.ToString());
     }

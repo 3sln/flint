@@ -17,7 +17,7 @@
   (delay
     (kp/resolve-exports
      (kp/load-project
-     {:vocabularies '[flint.impl.rt flint.impl.hash flint.impl.host]
+     {:vocabularies targets/vocabularies
       :targets targets/targets
       ;; The order every report lists them in. A map's keys have an accidental
       ;; order and a reader diffing two runs should not be reading a

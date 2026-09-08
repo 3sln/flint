@@ -12,6 +12,7 @@ using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Casemap;
+using static global::_3sln.Flint.Kgen.Rt.Casetable;
 using static global::_3sln.Flint.Kgen.Rt.Codepoints;
 using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 
@@ -87,10 +88,10 @@ public static class Casechange {
                 int k;
                 k = 0;
                 for (;;) {
-                    if (k == rt.FullAt(up, fx, 1)) {
+                    if (k == CaseFull[fx * 5 + 1]) {
                         break;
                     }
-                    int e = rt.FullAt(up, fx, k + 2);
+                    int e = CaseFull[fx * 5 + (k + 2)];
                     PutUtf8(rt, sk, e);
                     k += 1;
                 }

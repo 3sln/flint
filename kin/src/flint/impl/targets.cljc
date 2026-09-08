@@ -28,6 +28,8 @@
   (:require [clojure.string :as str]
             [kin]
             [kin.vfs :as vfs]
+            [kin.lang]
+            [kin.project :as kp]
             [kin.target :as target]))
 
 (defn- pascal [s] (str/join (mapv str/capitalize (str/split (str s) #"-"))))
@@ -130,6 +132,27 @@
       (let [f (read {:eof ::done :read-cond :allow} r)]
         (if (= ::done f) out (recur (conj out f)))))))
 
+(def vocabularies
+  "The vocabularies this project speaks.
+
+  HERE rather than in `flint.impl.project`, which is the natural home, because
+  `defines-symbol` below has to ask kin what a source declares and that needs
+  a project value -- and `project` requires THIS file. Stating the list twice
+  to break the cycle would be two statements of one fact, which is the defect
+  `defines-symbol` had in the first place."
+  '[flint.impl.rt flint.impl.hash flint.impl.host])
+
+(declare targets)
+
+(def ^:private asking-project
+  "A project value good enough to ASK what a source declares, and nothing
+  more. `declared-names` resolves no requires -- that is what makes it
+  answerable from inside the emit of the tree being asked about -- so this
+  needs the vocabularies and a target to pick spellings from, and no sources."
+  (delay (kp/load-project {:vocabularies vocabularies
+                           :targets targets
+                           :target-order [:rust :java :csharp]})))
+
 (def ^:private defines-symbol
   "Which module defines each name, read from the SOURCES.
 
@@ -141,10 +164,24 @@
   `flint.rt.Interns`, and two on-demand static imports offering one name
   make it ambiguous rather than making it resolve.
 
-  So the imports are DERIVED. Each source is read for the names it defines,
+  So the imports are DERIVED. Each source is asked for the names it defines,
   and a module imports exactly the siblings whose names it mentions. That is
   a dependency, computed from the sources, rather than a list anyone
-  maintains."
+  maintains.
+
+  ASKED OF KIN, not matched by head. This used to keep its own set --
+  `#{'defn 'defconst}` -- and read `(second form)` out of anything matching.
+  That is a copy of the vocabulary kept where the vocabulary cannot see it,
+  and `defdata` broke it twice over: the head was not in the set, and the
+  names it defines are its `:accessors` keys rather than `(second form)`. The
+  symptom was a module that referred ONLY an accessor getting no import and
+  failing to compile, while a module that also referred a `defconst` compiled
+  by accident -- the constant pulled the import in.
+
+  `kp/declared-names` runs the declare pass and reports what registered, so a
+  declaration form added tomorrow is covered the day it is written. It
+  resolves no requires, which is what makes it askable from inside the emit
+  of the very tree being asked about."
   (delay
     (into {}
           (for [f (vfs/listing (vfs/disk-vfs "kin") "*.kin")
@@ -152,9 +189,9 @@
                       text (vfs/-read (vfs/disk-vfs "kin") f)]
                 :when (not (contains? ships-nowhere
                                       (symbol (str "flint.rt." module))))
-                form (read-forms text)
-                :when (and (seq? form) (#{'defn 'defconst} (first form)))]
-            [(second form) module]))))
+                :let [d (kp/declared-names @asking-project text f)]
+                sym (concat (:forms d) (:names d))]
+            [sym module]))))
 
 (defn- mentioned-symbols
   "Every symbol appearing anywhere in `forms`."
@@ -270,10 +307,17 @@
           ;; ports. `vecread` is the first generated source to name one.
           "use crate::vector::*;\n"
           "use crate::value::{Value, FALSE, NIL, NOT_FOUND, TRUE};\n"
-          ;; Only the two free-function modules export anything a sibling
-          ;; calls unqualified; the rest are methods, and a method needs no
-          ;; import in Rust at all.
-          (str/join (for [s ["hash" "pike"] :when (not= s self)]
+          ;; The modules whose exports a sibling names UNQUALIFIED. Two are
+          ;; free-function modules; the rest of the generated tree is methods,
+          ;; and a method needs no import in Rust at all.
+          ;;
+          ;; `casetable` is the third and a different kind: a `defdata` emits
+          ;; module-level `static`s and `const`s, which a sibling reaches the
+          ;; same way it reaches a free function. `defn`'s cross-unit rule
+          ;; qualifies for Java and C# and does nothing for Rust -- right for
+          ;; an inherent `impl` method, which is what it was written for, and
+          ;; not a rule about data. An import is what Rust wants instead.
+          (str/join (for [s ["hash" "pike" "casetable"] :when (not= s self)]
                       (str "use crate::" (str/join "::" (:rust generated-root))
                            "::" (str/join "::" (first (ns-tail ns-name)))
                            "::" s "::*;\n"))))
@@ -410,6 +454,15 @@
   {:rust (merge
           target/rust
           {:vfs (vfs/disk-vfs (:rust module-roots))
+           ;; WHICH EMITTER RENDERS A `defdata`, looked up by the qualified
+           ;; symbol its declaration names. An ordinary target key, read back
+           ;; with `(get-in ctx [:targets (:target ctx) :data-emitters])` --
+           ;; the same mechanism as `:indent-unit` and `:local-name`, and the
+           ;; reason `defdata` needed nothing new in kin core.
+           ;;
+           ;; There is deliberately NO default: a fallback cannot know what an
+           ;; accessor MEANS, so a table names the representation it chose.
+           :data-emitters {'kin.lang/flat-array kin.lang/flat-array}
            :emit rust-emit
            ;; `unsigned.kin` SHIPS NOWHERE, and that is not an omission: it
            ;; exists to pin what the unsigned forms mean in three languages,
@@ -422,6 +475,15 @@
    :java (merge
           target/java
           {:vfs (vfs/disk-vfs (:java module-roots))
+           ;; WHICH EMITTER RENDERS A `defdata`, looked up by the qualified
+           ;; symbol its declaration names. An ordinary target key, read back
+           ;; with `(get-in ctx [:targets (:target ctx) :data-emitters])` --
+           ;; the same mechanism as `:indent-unit` and `:local-name`, and the
+           ;; reason `defdata` needed nothing new in kin core.
+           ;;
+           ;; There is deliberately NO default: a fallback cannot know what an
+           ;; accessor MEANS, so a table names the representation it chose.
+           :data-emitters {'kin.lang/flat-array kin.lang/flat-array}
            :emit java-emit
            :path (fn [ns-name]
                    (when-not (contains? ships-nowhere ns-name)
@@ -430,6 +492,15 @@
    :csharp (merge
             target/csharp
             {:vfs (vfs/disk-vfs (:csharp module-roots))
+           ;; WHICH EMITTER RENDERS A `defdata`, looked up by the qualified
+           ;; symbol its declaration names. An ordinary target key, read back
+           ;; with `(get-in ctx [:targets (:target ctx) :data-emitters])` --
+           ;; the same mechanism as `:indent-unit` and `:local-name`, and the
+           ;; reason `defdata` needed nothing new in kin core.
+           ;;
+           ;; There is deliberately NO default: a fallback cannot know what an
+           ;; accessor MEANS, so a table names the representation it chose.
+           :data-emitters {'kin.lang/flat-array kin.lang/flat-array}
              :emit csharp-emit
              :path (fn [ns-name]
                      (when-not (contains? ships-nowhere ns-name)

@@ -9,9 +9,10 @@
                                    comment doc not == < + - bit-and shl ushr
                                    bit-or sink-open sink-put sink-string
                                    sink-close cps-len cps-at cps-close
-                                   charge-checked throw-str full-at cp-unsigned
+                                   charge-checked throw-str cp-unsigned
                                    Rt Bool I32 Cmp Value Sink Cps NIL]]
             [flint.rt.casemap :refer [case-map full-index]]
+            [flint.rt.casetable :refer [case-full-at]]
             [flint.rt.codepoints :refer [code-points]]
             [flint.rt.ropemeas :refer [is-string]]))
 
@@ -78,9 +79,9 @@
                 (local ^:mut ^Cmp k)
                 (set k 0)
                 (forever
-                  (if (== k (full-at rt up fx 1))
+                  (if (== k (case-full-at rt (cp-unsigned rt fx) 1))
                     (break))
-                  (let [^I32 e (cp-unsigned rt (full-at rt up fx (+ k 2)))]
+                  (let [^I32 e (cp-unsigned rt (case-full-at rt (cp-unsigned rt fx) (cp-unsigned rt (+ k 2))))]
                     (put-utf8 rt sk e))
                   (set k (+ k 1))))))
         (set i (+ i 1)))
