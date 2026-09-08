@@ -12,6 +12,7 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Eq.*;
 import static com._3sln.flint.kgen.rt.Mapcore.*;
 import static com._3sln.flint.kgen.rt.Names.*;
+import static com._3sln.flint.kgen.rt.Numkind.*;
 import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Seqcore.*;
 import static com._3sln.flint.kgen.rt.Setcore.*;
@@ -57,11 +58,11 @@ public final class Typep {
     public static boolean typeP(Rt rt, int code, long v) {
         switch (code) {
             case 1:
-                return Num.isInt(rt, v);
+                return isInt(rt, v);
             case 2:
                 return Val.isDouble(v);
             case 3:
-                return Num.isNumber(rt, v);
+                return isNumber(rt, v);
             case 4:
                 return isString(rt, v);
             case 5:

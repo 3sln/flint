@@ -19,7 +19,7 @@
   (:require [flint.impl.rt :refer [defn return if let do comment doc
                                    == != >= < or not nil? is-heap as-heap ty
                                    slot  char-at to-i32 u<
-                                   is-int i64-of bare-kw static-text
+                                    i64-of bare-kw static-text
                                    vec-nth vec-count table-ref ref-get
                                    Rt Value I32 I64 Ty Bool NIL NOT_FOUND
                                    TY_ARRAYMAP TY_HASHMAP TY_SET TY_VEC
@@ -30,7 +30,8 @@
             [flint.rt.byteat :refer [b-at]]
             [flint.rt.vectrans :refer [tvec-nth]]
             [flint.rt.maptrans :refer [tmap-get tset-get]]
-            [flint.rt.ropemeas :refer [is-string]]))
+            [flint.rt.ropemeas :refer [is-string]]
+            [flint.rt.numkind :refer [is-int]]))
 
 (doc "The value `k` maps to, or `dflt`."
      ""

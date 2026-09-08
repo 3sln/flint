@@ -14,6 +14,7 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Byteat;
 using static global::_3sln.Flint.Kgen.Rt.Mapread;
 using static global::_3sln.Flint.Kgen.Rt.Maptrans;
+using static global::_3sln.Flint.Kgen.Rt.Numkind;
 using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Setcore;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;
@@ -28,7 +29,7 @@ public static class Collread {
     /// value: a short one lives INLINE in the value's bits.
     public static long CollGet(Rt rt, long coll, long k, long dflt) {
         if (IsString(rt, coll)) {
-            if (Num.IsInt(rt, k)) {
+            if (IsInt(rt, k)) {
                 long i = Num.I64Of(rt, k);
                 if (i >= 0) {
                     return Str.Nth(rt, coll, (int) i, dflt);
@@ -47,7 +48,7 @@ public static class Collread {
             return SetGet(rt, coll, k, dflt);
         }
         if (t == Obj.TyVec) {
-            if (Num.IsInt(rt, k)) {
+            if (IsInt(rt, k)) {
                 long i = Num.I64Of(rt, k);
                 if (i >= 0) {
                     return Vec.Nth(rt, coll, (int) i, dflt);
@@ -58,7 +59,7 @@ public static class Collread {
         // A MAP ENTRY IS INDEXED 0 AND 1, and nothing else -- it is a
         // pair, not a vector that happens to be two long.
         if (t == Obj.TyMapentry) {
-            if (Num.IsInt(rt, k)) {
+            if (IsInt(rt, k)) {
                 long i = Num.I64Of(rt, k);
                 if (i == 0) {
                     return rt.Slot(coll, 0);
@@ -72,7 +73,7 @@ public static class Collread {
         // A TABLE INDEXES BY ROW and hands back a REF, which materialises
         // nothing (`0026`).
         if (t == Obj.TyTable) {
-            if (Num.IsInt(rt, k)) {
+            if (IsInt(rt, k)) {
                 long i = Num.I64Of(rt, k);
                 if (i >= 0) {
                     long row = Table.tableRef(rt, coll, (int) i);
@@ -100,7 +101,7 @@ public static class Collread {
             return dflt;
         }
         if ((t == Obj.TyBytes) || (t == Obj.TyBrope)) {
-            if (Num.IsInt(rt, k)) {
+            if (IsInt(rt, k)) {
                 long i = Num.I64Of(rt, k);
                 if (i >= 0) {
                     return BAt(rt, coll, (int) i, dflt);
@@ -109,7 +110,7 @@ public static class Collread {
             return dflt;
         }
         if (t == Obj.TyTvec) {
-            if (Num.IsInt(rt, k)) {
+            if (IsInt(rt, k)) {
                 long i = Num.I64Of(rt, k);
                 if (i >= 0) {
                     return TvecNth(rt, coll, (int) i, dflt);
@@ -145,7 +146,7 @@ public static class Collread {
                 return SetContains(rt, coll, k);
             }
             if (t == Obj.TyVec) {
-                if (Num.IsInt(rt, k)) {
+                if (IsInt(rt, k)) {
                     long i = Num.I64Of(rt, k);
                     if (i < 0) {
                         return false;

@@ -13,6 +13,7 @@ import static com._3sln.flint.kgen.rt.Byteat.*;
 import static com._3sln.flint.kgen.rt.Bytecore.*;
 import static com._3sln.flint.kgen.rt.Mapwrite.*;
 import static com._3sln.flint.kgen.rt.Names.*;
+import static com._3sln.flint.kgen.rt.Numkind.*;
 import static com._3sln.flint.kgen.rt.Opaque.*;
 import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Seqwalk.*;
@@ -41,7 +42,7 @@ public final class Collwrite {
         // A VECTOR TAKES AN INDEX, and one PAST THE END appends -- which
         // is why the bound is `<=` and not `<`.
         if (t == TY_VEC) {
-            if (Num.isInt(rt, k)) {
+            if (isInt(rt, k)) {
                 long i = Num.i64Of(rt, k);
                 if (i >= 0) {
                     if (((int) i) <= Vec.count(rt, coll)) {
@@ -109,7 +110,7 @@ public final class Collwrite {
     /// sentinel is the shape all three can say, and it is sound because
     /// `NOT_FOUND` is the one value a collection cannot be holding.
     public static long collNth(Rt rt, long coll, long idx, long dflt) {
-        if (!Num.isInt(rt, idx)) {
+        if (!isInt(rt, idx)) {
             return rt.throwStr("IllegalArgumentException", "nth index must be an integer");
         }
         long i64 = Num.i64Of(rt, idx);

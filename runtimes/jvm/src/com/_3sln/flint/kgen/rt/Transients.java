@@ -11,6 +11,7 @@ import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Maptrans.*;
 import static com._3sln.flint.kgen.rt.Nouns.*;
+import static com._3sln.flint.kgen.rt.Numkind.*;
 import static com._3sln.flint.kgen.rt.Tableref.*;
 import static com._3sln.flint.kgen.rt.Tabletrans.*;
 import static com._3sln.flint.kgen.rt.Vectrans.*;
@@ -149,7 +150,7 @@ public final class Transients {
                 // THE INDEX IS HELD AS A SIGNED 64-BIT VALUE. A program
                 // may hand over -1, and refusing it means being able to
                 // hold it -- `to-i32` of that is not the same number.
-                if (Num.isInt(rt, k)) {
+                if (isInt(rt, k)) {
                     long i = Num.i64Of(rt, k);
                     if (i >= 0) {
                         return tvecAssoc(rt, t, (int) i, v);

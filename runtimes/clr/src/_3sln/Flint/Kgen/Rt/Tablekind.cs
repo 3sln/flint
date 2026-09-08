@@ -12,6 +12,7 @@ using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Names;
+using static global::_3sln.Flint.Kgen.Rt.Numkind;
 using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 
 public static class Tablekind {
@@ -153,7 +154,7 @@ public static class Tablekind {
         // `is-int` and NOT `is-fixnum`: a big integer is an integer, and a
         // column declared `:int` has to take one.
         if (t == Str.Keyword(rt, null, "int")) {
-            return Num.IsInt(rt, v);
+            return IsInt(rt, v);
         }
         if (t == Str.Keyword(rt, null, "double")) {
             return Val.IsDouble(v);

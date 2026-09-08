@@ -13,6 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Maptrans;
 using static global::_3sln.Flint.Kgen.Rt.Nouns;
+using static global::_3sln.Flint.Kgen.Rt.Numkind;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;
 using static global::_3sln.Flint.Kgen.Rt.Tabletrans;
 using static global::_3sln.Flint.Kgen.Rt.Vectrans;
@@ -151,7 +152,7 @@ public static class Transients {
                 // THE INDEX IS HELD AS A SIGNED 64-BIT VALUE. A program
                 // may hand over -1, and refusing it means being able to
                 // hold it -- `to-i32` of that is not the same number.
-                if (Num.IsInt(rt, k)) {
+                if (IsInt(rt, k)) {
                     long i = Num.I64Of(rt, k);
                     if (i >= 0) {
                         return TvecAssoc(rt, t, (int) i, v);

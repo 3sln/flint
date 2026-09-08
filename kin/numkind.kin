@@ -1,0 +1,35 @@
+;; WHAT A NUMBER IS: the two tier questions, asked once.
+;;
+;; `is-int` AND NOT `is-fixnum`, which is the whole subtlety and is why this
+;; is worth a file. A BIG INTEGER is an integer. The library's printer
+;; dispatches on this, and with `is-fixnum` here the bits of 1.5 printed as
+;; `#<unprintable>` rather than as 4609434218613702656, because a bigint fell
+;; through every arm.
+;;
+;; Both were vocabulary entries -- host calls wearing a shared name -- so the
+;; ten `.kin` sources that asked them were each asking one question and taking
+;; whatever the runtime under them had written. `is-float` stays a vocabulary
+;; entry and should: it is `is-double`, a test on the value word with no tag
+;; read and no second tier, so there is nothing for three runtimes to disagree
+;; about.
+(ns flint.rt.numkind
+  (:require [flint.impl.rt :refer [defn return if let comment doc
+                                   not or == is-heap as-heap ty is-fixnum is-double
+                                   Rt Value Ty Bool TY_BIGINT]]))
+
+(doc "Is `v` an INTEGER -- a fixnum or a bigint?"
+     ""
+     "The fixnum test comes first because it is a test on the value word and"
+     "the other needs a tag read, and because almost every integer is one.")
+(defn ^:pub ^:method ^Bool is-int [^Rt rt ^Value v]
+  (if (is-fixnum rt v)
+    (return true))
+  (if (not (is-heap v))
+    (return false))
+  (return (== (ty rt (as-heap v)) TY_BIGINT)))
+
+(doc "Is `v` a NUMBER -- either integer tier, or a double?"
+     ""
+     "The double first, for the same reason: it is the value-word test.")
+(defn ^:pub ^:method ^Bool is-number [^Rt rt ^Value v]
+  (return (or (is-double rt v) (is-int rt v))))

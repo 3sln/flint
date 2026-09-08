@@ -12,6 +12,7 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Eq.*;
 import static com._3sln.flint.kgen.rt.Names.*;
 import static com._3sln.flint.kgen.rt.Nouns.*;
+import static com._3sln.flint.kgen.rt.Numkind.*;
 import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Seqcore.*;
 import static com._3sln.flint.kgen.rt.Seqwalk.*;
@@ -106,7 +107,7 @@ public final class Valcmp {
         if (Val.isNil(b)) {
             return 1;
         }
-        if (Num.isNumber(rt, a) && Num.isNumber(rt, b)) {
+        if (isNumber(rt, a) && isNumber(rt, b)) {
             return Num.cmp(rt, a, b);
         }
         // BRANCHED rather than subtracted. `bool-bit` is UNSIGNED, so

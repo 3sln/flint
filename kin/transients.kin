@@ -19,7 +19,7 @@
                                    == != >= not or mark push r pop-to
                                    slot ty is-heap as-heap to-i32
                                    throw-str str-cat static-text own-text
-                                   slot-or-nth is-int i64-of ref-to-map
+                                   slot-or-nth  i64-of ref-to-map
                                    Rt Value I32 I64 Ty Bool RootIx StaticText Text NIL
                                    TY_VEC TY_ARRAYMAP TY_HASHMAP TY_TABLEREF
                                    TY_SET TY_TABLE TY_MAPENTRY
@@ -33,6 +33,7 @@
                                         tvec-persistent]]
             [flint.rt.tabletrans :refer [table-transient ttable-conj
                                          ttable-persistent]]
+            [flint.rt.numkind :refer [is-int]]
 ))
 
 (doc "Refuse a non-transient, NAMING it."

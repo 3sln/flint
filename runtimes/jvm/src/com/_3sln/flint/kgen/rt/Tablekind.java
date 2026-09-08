@@ -10,6 +10,7 @@ import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Names.*;
+import static com._3sln.flint.kgen.rt.Numkind.*;
 import static com._3sln.flint.kgen.rt.Ropemeas.*;
 
 public final class Tablekind {
@@ -151,7 +152,7 @@ public final class Tablekind {
         // `is-int` and NOT `is-fixnum`: a big integer is an integer, and a
         // column declared `:int` has to take one.
         if (t == Str.keyword(rt, null, "int")) {
-            return Num.isInt(rt, v);
+            return isInt(rt, v);
         }
         if (t == Str.keyword(rt, null, "double")) {
             return Val.isDouble(v);

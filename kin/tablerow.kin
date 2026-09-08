@@ -13,7 +13,7 @@
                                    == != < > >= + - not and or bit-and ushr
                                    alloc heap slot set-slot fixnum to-i32 to-i64
                                    vec-count vec-nth vec-conj vec-assoc empty-vec
-                                   new-obj is-int i64-of kind-of check-row
+                                   new-obj  i64-of kind-of check-row
                                    mark push r set-r pop-to for local set
                                    throw-str str-cat static-text
                                    Rt Value I32 I64 RootIx Text Bool NIL
@@ -24,7 +24,8 @@
             [flint.rt.tablecell :refer [new-chunk collapse]]
             [flint.rt.tablefill :refer [write-row chunk-with-row]]
             [flint.rt.tablesay :refer [kw-name]]
-            [flint.rt.tablebuild :refer [new-table]]))
+            [flint.rt.tablebuild :refer [new-table]]
+            [flint.rt.numkind :refer [is-int]]))
 
 (doc "`(assoc table i row)`. `i` may be `count`, which appends.")
 (defn ^:pub ^:method ^Value table-assoc [^:mut ^Rt rt ^Value t ^Value k ^Value row]

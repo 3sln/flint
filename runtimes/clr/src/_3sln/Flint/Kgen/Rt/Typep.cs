@@ -14,6 +14,7 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Eq;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
 using static global::_3sln.Flint.Kgen.Rt.Names;
+using static global::_3sln.Flint.Kgen.Rt.Numkind;
 using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqcore;
 using static global::_3sln.Flint.Kgen.Rt.Setcore;
@@ -59,11 +60,11 @@ public static class Typep {
     public static bool TypeP(Rt rt, int code, long v) {
         switch (code) {
             case 1:
-                return Num.IsInt(rt, v);
+                return IsInt(rt, v);
             case 2:
                 return Val.IsDouble(v);
             case 3:
-                return Num.IsNumber(rt, v);
+                return IsNumber(rt, v);
             case 4:
                 return IsString(rt, v);
             case 5:

@@ -41,11 +41,15 @@ public static class Num {
         return Val.Heap(a);
     }
 
-    public static bool IsInt(Rt rt, long v) {
-        return Val.IsFixnum(v) || (Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyBigint);
-    }
+    /// Is `v` an integer -- a fixnum or a BIGINT? GENERATED, from
+    /// `kin/numkind.kin`. A delegator rather than a copy -- see the Java one.
+    public static bool IsInt(Rt rt, long v) =>
+        global::_3sln.Flint.Kgen.Rt.Numkind.IsInt(rt, v);
     public static bool IsFloat(long v) { return Val.IsDouble(v); }
-    public static bool IsNumber(Rt rt, long v) { return Val.IsDouble(v) || IsInt(rt, v); }
+    /// Is `v` a number -- either integer tier, or a double? GENERATED, from
+    /// `kin/numkind.kin`.
+    public static bool IsNumber(Rt rt, long v) =>
+        global::_3sln.Flint.Kgen.Rt.Numkind.IsNumber(rt, v);
 
     /// The integer value, or `null` if this is not an integer. Boxed because
     /// "not an integer" and "the integer 0" must be distinguishable, and that

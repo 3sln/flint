@@ -182,7 +182,6 @@ fn main() {
         GcT gc = new GcT();
         long bump = 100;
         java.util.ArrayList<String> kws = new java.util.ArrayList<>();
-        boolean isInt(long v) { return Num.isInt(this, v); }
     }
     static int ty(Space sp, long a) { return Obj.ty(sp, a); }
     static long obj(Rt rt, int t) {
@@ -199,9 +198,6 @@ fn main() {
         }
     }
     static final class Num {
-        static boolean isInt(Rt rt, long v) {
-            return Val.isFixnum(v) || (Val.isHeap(v) && ty(rt.gc.sp, v) == TY_BIGINT);
-        }
     }
     static String kwText(Rt rt, long v) { return rt.kws.get((int) (v & 0xFFFFL)); }
     static boolean isKeyword(Rt rt, long v) {
@@ -210,6 +206,9 @@ fn main() {
     static boolean isString(Rt rt, long v) {
         return Val.isInlineStr(v)
             || (Val.isHeap(v) && (ty(rt.gc.sp, v) == TY_STR || ty(rt.gc.sp, v) == TY_ROPE));
+    }
+    static boolean isInt(Rt rt, long v) {
+        return Val.isFixnum(v) || (Val.isHeap(v) && ty(rt.gc.sp, v) == TY_BIGINT);
     }
 --java
     public static void main(String[] args) {
@@ -285,7 +284,6 @@ fn main() {
         internal GcT gc = new GcT();
         internal long bump = 100;
         internal System.Collections.Generic.List<string> kws = new System.Collections.Generic.List<string>();
-        internal bool IsInt(long v) { return Num.IsInt(this, v); }
     }
     internal static long Obj2(Rt rt, int t) {
         long a = rt.bump; rt.bump += 8;
@@ -301,9 +299,6 @@ fn main() {
         }
     }
     internal static class Num {
-        internal static bool IsInt(Rt rt, long v) {
-            return Val.IsFixnum(v) || (Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyBigint);
-        }
     }
     internal static string KwText(Rt rt, long v) { return rt.kws[(int) (v & 0xFFFFL)]; }
     internal static bool IsKeyword(Rt rt, long v) {
@@ -313,6 +308,9 @@ fn main() {
         return Val.IsInlineStr(v)
             || (Val.IsHeap(v) && (Obj.Ty(rt.gc.sp, v) == Obj.TyStr
                                   || Obj.Ty(rt.gc.sp, v) == Obj.TyRope));
+    }
+    internal static bool IsInt(Rt rt, long v) {
+        return Val.IsFixnum(v) || (Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyBigint);
     }
 --csharp
     internal static void Main() {

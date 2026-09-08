@@ -43,11 +43,19 @@ public final class Num {
         return Val.heap(a);
     }
 
+    /// Is `v` an integer -- a fixnum or a BIGINT? GENERATED, from
+    /// `kin/numkind.kin`. A delegator rather than a copy: hand-written code
+    /// here says `Num.isInt`, the generated tree says `isInt`, and there is
+    /// one body under both.
     public static boolean isInt(Rt rt, long v) {
-        return Val.isFixnum(v) || (Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_BIGINT);
+        return com._3sln.flint.kgen.rt.Numkind.isInt(rt, v);
     }
     public static boolean isFloat(long v) { return Val.isDouble(v); }
-    public static boolean isNumber(Rt rt, long v) { return Val.isDouble(v) || isInt(rt, v); }
+    /// Is `v` a number -- either integer tier, or a double? GENERATED, from
+    /// `kin/numkind.kin`.
+    public static boolean isNumber(Rt rt, long v) {
+        return com._3sln.flint.kgen.rt.Numkind.isNumber(rt, v);
+    }
 
     /// The integer value, or `null` if this is not an integer. Boxed because
     /// "not an integer" and "the integer 0" must be distinguishable, and that

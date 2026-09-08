@@ -14,6 +14,7 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Eq;
 using static global::_3sln.Flint.Kgen.Rt.Names;
 using static global::_3sln.Flint.Kgen.Rt.Nouns;
+using static global::_3sln.Flint.Kgen.Rt.Numkind;
 using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqcore;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
@@ -108,7 +109,7 @@ public static class Valcmp {
         if (Val.IsNil(b)) {
             return 1;
         }
-        if (Num.IsNumber(rt, a) && Num.IsNumber(rt, b)) {
+        if (IsNumber(rt, a) && IsNumber(rt, b)) {
             return Num.Cmp(rt, a, b);
         }
         // BRANCHED rather than subtracted. `bool-bit` is UNSIGNED, so

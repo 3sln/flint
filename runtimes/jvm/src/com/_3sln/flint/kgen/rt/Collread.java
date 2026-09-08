@@ -12,6 +12,7 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Byteat.*;
 import static com._3sln.flint.kgen.rt.Mapread.*;
 import static com._3sln.flint.kgen.rt.Maptrans.*;
+import static com._3sln.flint.kgen.rt.Numkind.*;
 import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Setcore.*;
 import static com._3sln.flint.kgen.rt.Tableref.*;
@@ -26,7 +27,7 @@ public final class Collread {
     /// value: a short one lives INLINE in the value's bits.
     public static long collGet(Rt rt, long coll, long k, long dflt) {
         if (isString(rt, coll)) {
-            if (Num.isInt(rt, k)) {
+            if (isInt(rt, k)) {
                 long i = Num.i64Of(rt, k);
                 if (i >= 0) {
                     return Str.nth(rt, coll, (int) i, dflt);
@@ -45,7 +46,7 @@ public final class Collread {
             return setGet(rt, coll, k, dflt);
         }
         if (t == TY_VEC) {
-            if (Num.isInt(rt, k)) {
+            if (isInt(rt, k)) {
                 long i = Num.i64Of(rt, k);
                 if (i >= 0) {
                     return Vec.nth(rt, coll, (int) i, dflt);
@@ -56,7 +57,7 @@ public final class Collread {
         // A MAP ENTRY IS INDEXED 0 AND 1, and nothing else -- it is a
         // pair, not a vector that happens to be two long.
         if (t == TY_MAPENTRY) {
-            if (Num.isInt(rt, k)) {
+            if (isInt(rt, k)) {
                 long i = Num.i64Of(rt, k);
                 if (i == 0) {
                     return rt.slot(coll, 0);
@@ -70,7 +71,7 @@ public final class Collread {
         // A TABLE INDEXES BY ROW and hands back a REF, which materialises
         // nothing (`0026`).
         if (t == TY_TABLE) {
-            if (Num.isInt(rt, k)) {
+            if (isInt(rt, k)) {
                 long i = Num.i64Of(rt, k);
                 if (i >= 0) {
                     long row = Table.tableRef(rt, coll, (int) i);
@@ -98,7 +99,7 @@ public final class Collread {
             return dflt;
         }
         if ((t == TY_BYTES) || (t == TY_BROPE)) {
-            if (Num.isInt(rt, k)) {
+            if (isInt(rt, k)) {
                 long i = Num.i64Of(rt, k);
                 if (i >= 0) {
                     return bAt(rt, coll, (int) i, dflt);
@@ -107,7 +108,7 @@ public final class Collread {
             return dflt;
         }
         if (t == TY_TVEC) {
-            if (Num.isInt(rt, k)) {
+            if (isInt(rt, k)) {
                 long i = Num.i64Of(rt, k);
                 if (i >= 0) {
                     return tvecNth(rt, coll, (int) i, dflt);
@@ -143,7 +144,7 @@ public final class Collread {
                 return setContains(rt, coll, k);
             }
             if (t == TY_VEC) {
-                if (Num.isInt(rt, k)) {
+                if (isInt(rt, k)) {
                     long i = Num.i64Of(rt, k);
                     if (i < 0) {
                         return false;

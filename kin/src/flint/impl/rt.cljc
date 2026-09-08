@@ -585,10 +585,6 @@
     'kw-to-str (core/call {:rust "{1}.kw_to_str()"
                            :java "Val.kwToStr({1})" :csharp "Val.KwToStr({1})"}
                           {:tag Value})
-    ;; `is-int` AND NOT `is-fixnum`: a big integer is an integer. The library's
-    ;; printer dispatches on this, and with `is-fixnum` the bits of 1.5 printed
-    ;; as `#<unprintable>` rather than as 4609434218613702656, because a bigint
-    ;; fell through every arm.
     ;; THE INTEGER VALUE, given it IS one. `as-i64` answers `Option`/`Long` in
     ;; the three runtimes and the shapes do not converge; this is the total
     ;; form its callers actually want, and it answers 0 for a non-integer
@@ -598,9 +594,6 @@
                        {:tag I64})
     'to-i64 (core/call {:rust "({0} as i64)" :java "((long) {0})" :csharp "((long) {0})"}
                        {:tag I64})
-    'is-int (core/call {:rust "{0}.is_int({1})"
-                        :java "Num.isInt({0}, {1})" :csharp "Num.IsInt({0}, {1})"}
-                       {:tag Bool})
     'is-bool (core/call {:rust "{1}.is_bool()"
                          :java "Val.isBool({1})" :csharp "Val.IsBool({1})"}
                         {:tag Bool})
@@ -1012,10 +1005,6 @@
                          :csharp "Str.CompareUtf16({0}, {1}, {2})"}
                         {:tag Cmp})
     ;; NUMBERS: `is-number` is either tier, and `num-cmp` orders across them.
-    'is-number (core/call {:rust "{0}.is_number({1})"
-                           :java "Num.isNumber({0}, {1})"
-                           :csharp "Num.IsNumber({0}, {1})"}
-                          {:tag Bool})
     'num-cmp (core/call {:rust "{0}.num_cmp({1}, {2})"
                          :java "Num.cmp({0}, {1}, {2})"
                          :csharp "Num.Cmp({0}, {1}, {2})"}

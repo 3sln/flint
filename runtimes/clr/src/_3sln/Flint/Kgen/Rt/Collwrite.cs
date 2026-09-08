@@ -15,6 +15,7 @@ using static global::_3sln.Flint.Kgen.Rt.Byteat;
 using static global::_3sln.Flint.Kgen.Rt.Bytecore;
 using static global::_3sln.Flint.Kgen.Rt.Mapwrite;
 using static global::_3sln.Flint.Kgen.Rt.Names;
+using static global::_3sln.Flint.Kgen.Rt.Numkind;
 using static global::_3sln.Flint.Kgen.Rt.Opaque;
 using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
@@ -43,7 +44,7 @@ public static class Collwrite {
         // A VECTOR TAKES AN INDEX, and one PAST THE END appends -- which
         // is why the bound is `<=` and not `<`.
         if (t == Obj.TyVec) {
-            if (Num.IsInt(rt, k)) {
+            if (IsInt(rt, k)) {
                 long i = Num.I64Of(rt, k);
                 if (i >= 0) {
                     if (((int) i) <= Vec.Count(rt, coll)) {
@@ -111,7 +112,7 @@ public static class Collwrite {
     /// sentinel is the shape all three can say, and it is sound because
     /// `NOT_FOUND` is the one value a collection cannot be holding.
     public static long CollNth(Rt rt, long coll, long idx, long dflt) {
-        if (!Num.IsInt(rt, idx)) {
+        if (!IsInt(rt, idx)) {
             return rt.ThrowStr("IllegalArgumentException", "nth index must be an integer");
         }
         long i64 = Num.I64Of(rt, idx);

@@ -1,0 +1,72 @@
+--rust-head
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+impl Value {
+    fn is_heap(self) -> bool { self.0 >= 0x100 }
+    fn as_heap(self) -> u32 { (self.0 & 0xff) as u32 }
+    fn is_fixnum(self) -> bool { self.0 == 1 }
+    fn is_double(self) -> bool { self.0 == 2 }
+}
+struct Sp;
+struct Gc { sp: Sp }
+struct Rt { gc: Gc }
+fn ty(_sp: &Sp, h: u32) -> u8 { h as u8 }
+const TY_BIGINT: u8 = 5; const TY_STR: u8 = 6;
+impl Rt {
+--rust
+}
+fn main() {
+    let rt = Rt { gc: Gc { sp: Sp } };
+    let mut o = String::new();
+    // fixnum, double, bigint, another heap tag, and an immediate that is none.
+    for v in [Value(1), Value(2), Value(0x100 | 5), Value(0x100 | 6), Value(3)] {
+        o.push_str(&format!("{}{}", rt.is_int(v) as u32, rt.is_number(v) as u32));
+    }
+    println!("{}", o);
+}
+--java-head
+    static final class Val {
+        static boolean isHeap(long v) { return v >= 0x100; }
+        static int asHeap(long v) { return (int)(v & 0xff); }
+        static boolean isFixnum(long v) { return v == 1; }
+        static boolean isDouble(long v) { return v == 2; }
+    }
+    static final class Sp {}
+    static final class Gc { final Sp sp = new Sp(); }
+    static final class Rt { final Gc gc = new Gc(); }
+    static int ty(Sp sp, int h) { return h; }
+    static final int TY_BIGINT = 5, TY_STR = 6;
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        StringBuilder o = new StringBuilder();
+        long[] vs = { 1L, 2L, 0x100 | 5, 0x100 | 6, 3L };
+        for (long v : vs) {
+            o.append(isInt(rt, v) ? 1 : 0).append(isNumber(rt, v) ? 1 : 0);
+        }
+        System.out.println(o);
+    }
+--csharp-head
+    static class Val {
+        internal static bool IsHeap(long v) { return v >= 0x100; }
+        internal static int AsHeap(long v) { return (int)(v & 0xff); }
+        internal static bool IsFixnum(long v) { return v == 1; }
+        internal static bool IsDouble(long v) { return v == 2; }
+    }
+    internal sealed class Sp {}
+    internal sealed class Gc { internal readonly Sp sp = new Sp(); }
+    internal sealed class Rt { internal readonly Gc gc = new Gc(); }
+    static class Obj {
+        internal const int TyBigint = 5, TyStr = 6;
+        internal static int Ty(Sp sp, int h) { return h; }
+    }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        var o = new StringBuilder();
+        long[] vs = { 1L, 2L, 0x100 | 5, 0x100 | 6, 3L };
+        foreach (long v in vs) {
+            o.Append(IsInt(rt, v) ? 1 : 0).Append(IsNumber(rt, v) ? 1 : 0);
+        }
+        System.Console.WriteLine(o.ToString());
+    }

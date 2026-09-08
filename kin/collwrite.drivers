@@ -203,7 +203,6 @@ fn main() {
         static String text(Rt rt, long v) { return "zz"; }
     }
     static final class Num {
-        static boolean isInt(Rt rt, long v) { return (v >>> 40) == 1; }
         static long i64Of(Rt rt, long v) { return (int) (v & 0xFFFFFFFFL); }
     }
     static boolean isBytes(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_BYTES; }
@@ -226,6 +225,7 @@ fn main() {
         static final class Maps { static long empty(Rt rt) { return 0x900L; } }
     } } }
     static boolean isString(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR; }
+    static boolean isInt(Rt rt, long v) { return (v >>> 40) == 1; }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -353,7 +353,6 @@ namespace Flint.Rt {
         internal static string Text(Rt rt, long v) { return "zz"; }
     }
     internal static class Num {
-        internal static bool IsInt(Rt rt, long v) { return (v >> 40) == 1; }
         internal static long I64Of(Rt rt, long v) { return (int) (v & 0xFFFFFFFFL); }
     }
     internal static bool IsBytes(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyBytes; }
@@ -373,6 +372,7 @@ namespace Flint.Rt {
     internal static long TableAssoc(Rt rt, long t, long k, long v) { return 0x903L; }
     internal static long RefAssoc(Rt rt, long r, long k, long v) { return 0x904L; }
     internal static bool IsString(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr; }
+    internal static bool IsInt(Rt rt, long v) { return (v >> 40) == 1; }
 --csharp
     public static void Main() {
         Rt rt = new Rt();

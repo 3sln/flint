@@ -13,6 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Byteeq;
 using static global::_3sln.Flint.Kgen.Rt.Eq;
+using static global::_3sln.Flint.Kgen.Rt.Numkind;
 using static global::_3sln.Flint.Kgen.Rt.Ropeeq;
 using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
@@ -97,8 +98,8 @@ public static class Valeq {
         if (a == b) {
             return true;
         }
-        if (Num.IsInt(rt, a) || Num.IsInt(rt, b)) {
-            return (Num.IsInt(rt, a) && Num.IsInt(rt, b)) && (Num.I64Of(rt, a) == Num.I64Of(rt, b));
+        if (IsInt(rt, a) || IsInt(rt, b)) {
+            return (IsInt(rt, a) && IsInt(rt, b)) && (Num.I64Of(rt, a) == Num.I64Of(rt, b));
         }
         if (!Val.IsHeap(a) || !Val.IsHeap(b)) {
             return false;

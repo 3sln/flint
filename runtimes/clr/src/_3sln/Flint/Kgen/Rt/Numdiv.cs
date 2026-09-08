@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Numkind;
 
 public static class Numdiv {
     /// Both integers? Then the pair is the integer path.
@@ -19,7 +20,7 @@ public static class Numdiv {
     /// real number out of either -- which is the pair that replaced an
     /// `Option<i64>` neither port has.
     internal static bool BothInts(Rt rt, long a, long b) {
-        return Num.IsInt(rt, a) && Num.IsInt(rt, b);
+        return IsInt(rt, a) && IsInt(rt, b);
     }
     /// Does `x / y` overflow? Only for the most negative integer over -1.
     /// 
@@ -52,7 +53,7 @@ public static class Numdiv {
             }
             return Val.OfDouble(((double) x) / ((double) y));
         }
-        if (Num.IsNumber(rt, a) && Num.IsNumber(rt, b)) {
+        if (IsNumber(rt, a) && IsNumber(rt, b)) {
             return Val.OfDouble(Num.F64(rt, a) / Num.F64(rt, b));
         }
         return Num.NotNumber(rt, a, b);
@@ -70,7 +71,7 @@ public static class Numdiv {
             }
             return Num.Integer(rt, x / y);
         }
-        if (Num.IsNumber(rt, a) && Num.IsNumber(rt, b)) {
+        if (IsNumber(rt, a) && IsNumber(rt, b)) {
             double x = Num.F64(rt, a);
             double y = Num.F64(rt, b);
             return Val.OfDouble(Num.Trunc(x / y));
@@ -94,7 +95,7 @@ public static class Numdiv {
             }
             return Num.Integer(rt, x % y);
         }
-        if (Num.IsNumber(rt, a) && Num.IsNumber(rt, b)) {
+        if (IsNumber(rt, a) && IsNumber(rt, b)) {
             double x = Num.F64(rt, a);
             double y = Num.F64(rt, b);
             return Val.OfDouble(x - (Num.Trunc(x / y) * y));
@@ -103,7 +104,7 @@ public static class Numdiv {
     }
     /// Unary minus. The most negative integer has no positive counterpart.
     public static long NumNeg(Rt rt, long a) {
-        if (Num.IsInt(rt, a)) {
+        if (IsInt(rt, a)) {
             long x = Num.I64Of(rt, a);
             if (x == long.MinValue) {
                 return rt.ThrowStr("ArithmeticException", "integer overflow");

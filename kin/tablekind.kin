@@ -11,7 +11,7 @@
 (ns flint.rt.tablekind
   (:require [flint.impl.rt :refer [defn return if let comment doc
                                    == or not is-heap as-heap ty
-                                   nil? is-bool is-double is-int
+                                   nil? is-bool is-double 
                                    is-inline-str is-inline-kw 
                                     is-fixnum
                                    bare-kw static-text
@@ -27,7 +27,8 @@
                                    TY_VOLATILE TY_SCHEMA TY_TABLE
                                    TY_TABLEREF]]
             [flint.rt.names :refer [is-keyword]]
-            [flint.rt.ropemeas :refer [is-string]]))
+            [flint.rt.ropemeas :refer [is-string]]
+            [flint.rt.numkind :refer [is-int]]))
 
 (doc "The kind of a value, as the keyword protocol dispatch uses."
      ""

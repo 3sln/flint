@@ -583,6 +583,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Names` | `is-keyword` — the predicate `type-p` delegated to that was still written three times |
 | 3 | `Vecread` | `is-vector-like` — the other one, and the last of `type-p`'s delegates |
 | 3 | `Ropemeas` | `is-string` — nine `.kin` sources asked it, and got three answers |
+| 3 | `Numkind` | `is-int`, `is-number` — and the claim that they were NOT tag families |
 
 The assoc/dissoc block is complete: thirteen functions of `Maps`, one
 definition each. The three analyses had gated the whole block on converging
@@ -638,6 +639,25 @@ NINE `.kin` sources named it through the vocabulary — `collgen`, `collread`,
 generated modules were asking one question and getting whatever each runtime
 had written. It lives in `ropemeas.kin` now, which is the file that already
 answers what a string MEASURES across the same three tiers.
+
+`is-int` and `is-number` came next, and the reason they are worth their own
+entry is that the commit before them said they were not worth porting: "what
+remains in that table -- `is-int`, `is-number`, `is-bool`, `nil?` -- are
+value-word tests and bigint-tag questions, not tag families with three
+spellings." That was WRONG about half of it, and reading `num.rs` rather than
+recalling it is what showed the difference. `is-int` is `is-fixnum` OR a
+`TY_BIGINT` tag read: a two-tier tag family with three spellings, exactly like
+`is-keyword`. `is-number` is built on it.
+
+`is-float` and `is-bool` and `nil?` really are value-word tests, and they stay
+in the vocabulary: there is no tag read and no second tier, so there is nothing
+for three runtimes to disagree about.
+
+`numkind.kin` is a new file rather than an addition to `numdiv.kin`, whose
+subject is the four integer operations with an overflow edge. It also inherits
+the comment that had been sitting in the VOCABULARY: `is-int` and not
+`is-fixnum`, because a bigint is an integer, and the printer dispatches on it
+-- with `is-fixnum` there, the bits of 1.5 printed as `#<unprintable>`.
 
 `bin/check-ports` came out of this one. Removing a hand-written function that
 the ports still CALL is a compile error, and `is-string` had sixteen callers in

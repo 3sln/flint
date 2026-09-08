@@ -22,7 +22,7 @@
                                    == != <= < + not or and is-heap as-heap ty
                                    nil? mark push r set-r pop-to while break
                                    forever
-                                   slot is-double num-f64 is-int i64-of
+                                   slot is-double num-f64  i64-of
                                     s-bytes charge-work
                                    vec-count ref-to-map table-ref table-count
                                    set-eq maps-eq val-eq
@@ -37,7 +37,8 @@
             [flint.rt.byteeq :refer [b-eq]]
             [flint.rt.ropeeq :refer [tree-eq]]
             [flint.rt.tablemeta :refer [is-table-ref schema-eq]]
-            [flint.rt.ropemeas :refer [is-string]]))
+            [flint.rt.ropemeas :refer [is-string]]
+            [flint.rt.numkind :refer [is-int]]))
 
 (doc "Is `v` a VECTOR, strictly -- not a map entry, which is vector-LIKE."
      ""

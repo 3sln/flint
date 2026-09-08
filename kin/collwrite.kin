@@ -15,7 +15,7 @@
                                    == != >= <= < not or nil? is-heap as-heap ty
                                    mark push r set-r pop-to while break + to-i32
                                    slot  char-at vec-nth vec-assoc
-                                   vec-count is-int i64-of bare-kw name-of
+                                   vec-count  i64-of bare-kw name-of
                                    value-text throw-str str-cat static-text
                                    empty-map map-entry-as-vec
                                    Rt Value I32 I64 Ty Bool RootIx Text
@@ -30,7 +30,8 @@
             [flint.rt.bytecore :refer [is-bytes]]
             [flint.rt.byteat :refer [b-at]]
             [flint.rt.seqwalk :refer [seq first next]]
-            [flint.rt.ropemeas :refer [is-string]]))
+            [flint.rt.ropemeas :refer [is-string]]
+            [flint.rt.numkind :refer [is-int]]))
 
 (doc "`(assoc coll k v)`, whichever associative thing `coll` is."
      ""

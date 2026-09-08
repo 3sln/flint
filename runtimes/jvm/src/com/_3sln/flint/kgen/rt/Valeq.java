@@ -11,6 +11,7 @@ import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Byteeq.*;
 import static com._3sln.flint.kgen.rt.Eq.*;
+import static com._3sln.flint.kgen.rt.Numkind.*;
 import static com._3sln.flint.kgen.rt.Ropeeq.*;
 import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Seqwalk.*;
@@ -95,8 +96,8 @@ public final class Valeq {
         if (a == b) {
             return true;
         }
-        if (Num.isInt(rt, a) || Num.isInt(rt, b)) {
-            return (Num.isInt(rt, a) && Num.isInt(rt, b)) && (Num.i64Of(rt, a) == Num.i64Of(rt, b));
+        if (isInt(rt, a) || isInt(rt, b)) {
+            return (isInt(rt, a) && isInt(rt, b)) && (Num.i64Of(rt, a) == Num.i64Of(rt, b));
         }
         if (!Val.isHeap(a) || !Val.isHeap(b)) {
             return false;

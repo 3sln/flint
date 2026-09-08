@@ -75,8 +75,6 @@ fn main() {
         TY_CLOSURE = 14, TY_NATIVEFN = 15, TY_MULTIFN = 16;
     static final int CAT_SEQUENTIAL = 1;
     static final class Num {
-        static boolean isInt(Rt rt, long v) { return v == 3 || v == 5; }
-        static boolean isNumber(Rt rt, long v) { return v == 3 || v == 4 || v == 5; }
     }
     static final class Str {
     }
@@ -100,6 +98,8 @@ fn main() {
         return Val.isHeap(v) && (Val.asHeap(v) == TY_VEC || Val.asHeap(v) == TY_MAPENTRY);
     }
     static boolean isString(Rt rt, long v) { return v == 6; }
+    static boolean isInt(Rt rt, long v) { return v == 3 || v == 5; }
+    static boolean isNumber(Rt rt, long v) { return v == 3 || v == 4 || v == 5; }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -132,8 +132,6 @@ fn main() {
     }
     const int CAT_SEQUENTIAL = 1;
     static class Num {
-        internal static bool IsInt(Rt rt, long v) { return v == 3 || v == 5; }
-        internal static bool IsNumber(Rt rt, long v) { return v == 3 || v == 4 || v == 5; }
     }
     static class Str {
     }
@@ -157,6 +155,8 @@ fn main() {
         return Val.IsHeap(v) && (Val.AsHeap(v) == Obj.TyVec || Val.AsHeap(v) == Obj.TyMapentry);
     }
     internal static bool IsString(Rt rt, long v) { return v == 6; }
+    internal static bool IsInt(Rt rt, long v) { return v == 3 || v == 5; }
+    internal static bool IsNumber(Rt rt, long v) { return v == 3 || v == 4 || v == 5; }
 --csharp
     static void Main() {
         var rt = new Rt();

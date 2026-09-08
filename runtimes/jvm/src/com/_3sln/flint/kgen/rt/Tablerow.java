@@ -9,6 +9,7 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Numkind.*;
 import static com._3sln.flint.kgen.rt.Seqwalk.*;
 import static com._3sln.flint.kgen.rt.Tablebuild.*;
 import static com._3sln.flint.kgen.rt.Tablecell.*;
@@ -23,7 +24,7 @@ import static com._3sln.flint.kgen.rt.Vecwrite.*;
 public final class Tablerow {
     /// `(assoc table i row)`. `i` may be `count`, which appends.
     public static long tableAssoc(Rt rt, long t, long k, long row) {
-        if (!Num.isInt(rt, k)) {
+        if (!isInt(rt, k)) {
             // NOT A ROW NUMBER AT ALL. The message says what the key WAS and
             // what to write instead, because reaching for a column by name is
             // the mistake this refusal is almost always catching.

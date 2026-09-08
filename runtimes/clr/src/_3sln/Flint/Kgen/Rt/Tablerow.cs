@@ -11,6 +11,7 @@ using static global::Flint.Rt.Eq;
 using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
+using static global::_3sln.Flint.Kgen.Rt.Numkind;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
 using static global::_3sln.Flint.Kgen.Rt.Tablebuild;
 using static global::_3sln.Flint.Kgen.Rt.Tablecell;
@@ -25,7 +26,7 @@ using static global::_3sln.Flint.Kgen.Rt.Vecwrite;
 public static class Tablerow {
     /// `(assoc table i row)`. `i` may be `count`, which appends.
     public static long TableAssoc(Rt rt, long t, long k, long row) {
-        if (!Num.IsInt(rt, k)) {
+        if (!IsInt(rt, k)) {
             // NOT A ROW NUMBER AT ALL. The message says what the key WAS and
             // what to write instead, because reaching for a column by name is
             // the mistake this refusal is almost always catching.

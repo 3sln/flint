@@ -9,6 +9,7 @@ import static com.flint.rt.Maps.*;
 import static com.flint.rt.Eq.*;
 import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
+import static com._3sln.flint.kgen.rt.Numkind.*;
 
 public final class Numdiv {
     /// Both integers? Then the pair is the integer path.
@@ -17,7 +18,7 @@ public final class Numdiv {
     /// real number out of either -- which is the pair that replaced an
     /// `Option<i64>` neither port has.
     public static boolean bothInts(Rt rt, long a, long b) {
-        return Num.isInt(rt, a) && Num.isInt(rt, b);
+        return isInt(rt, a) && isInt(rt, b);
     }
     /// Does `x / y` overflow? Only for the most negative integer over -1.
     /// 
@@ -50,7 +51,7 @@ public final class Numdiv {
             }
             return Val.ofDouble(((double) x) / ((double) y));
         }
-        if (Num.isNumber(rt, a) && Num.isNumber(rt, b)) {
+        if (isNumber(rt, a) && isNumber(rt, b)) {
             return Val.ofDouble(Num.f64(rt, a) / Num.f64(rt, b));
         }
         return Num.notNumber(rt, a, b);
@@ -68,7 +69,7 @@ public final class Numdiv {
             }
             return Num.integer(rt, x / y);
         }
-        if (Num.isNumber(rt, a) && Num.isNumber(rt, b)) {
+        if (isNumber(rt, a) && isNumber(rt, b)) {
             double x = Num.f64(rt, a);
             double y = Num.f64(rt, b);
             return Val.ofDouble(Num.trunc(x / y));
@@ -92,7 +93,7 @@ public final class Numdiv {
             }
             return Num.integer(rt, x % y);
         }
-        if (Num.isNumber(rt, a) && Num.isNumber(rt, b)) {
+        if (isNumber(rt, a) && isNumber(rt, b)) {
             double x = Num.f64(rt, a);
             double y = Num.f64(rt, b);
             return Val.ofDouble(x - (Num.trunc(x / y) * y));
@@ -101,7 +102,7 @@ public final class Numdiv {
     }
     /// Unary minus. The most negative integer has no positive counterpart.
     public static long numNeg(Rt rt, long a) {
-        if (Num.isInt(rt, a)) {
+        if (isInt(rt, a)) {
             long x = Num.i64Of(rt, a);
             if (x == Long.MIN_VALUE) {
                 return rt.throwStr("ArithmeticException", "integer overflow");

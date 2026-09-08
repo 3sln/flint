@@ -32,16 +32,8 @@ impl Rt {
     }
 
     #[inline]
-    pub fn is_int(&self, v: Value) -> bool {
-        v.is_fixnum() || (v.is_heap() && ty(&self.gc.sp, v.as_heap()) == TY_BIGINT)
-    }
-    #[inline]
     pub fn is_float(&self, v: Value) -> bool {
         v.is_double()
-    }
-    #[inline]
-    pub fn is_number(&self, v: Value) -> bool {
-        v.is_double() || self.is_int(v)
     }
 
     #[inline]
