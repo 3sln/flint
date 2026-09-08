@@ -439,6 +439,12 @@ grep -E "^    \^" /tmp/flint-test.out | sed 's/^/  /'
 grep -E "annotation" /tmp/flint-test.out | sed 's/^ */    /' 
 
 echo
+echo "== casetable: the Unicode tables are what the derivation says"
+# DERIVED, not written. Re-derive from the host's own Unicode data and diff --
+# a table nobody reads is still known to be right, and a host whose Unicode
+# version moved says so here rather than in someone's string.
+./bin/casetable --check || fail "bin/casetable --check"
+
 echo "== kin: the sources agree, and the committed regions match them"
 # The generated regions are COMMITTED on purpose -- a runtime build must not
 # need babashka -- and the cost is that source and output can drift. Nothing

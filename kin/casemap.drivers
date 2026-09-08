@@ -1,0 +1,75 @@
+--rust-head
+struct Rt { up: Vec<i32>, lo: Vec<i32>, fu: Vec<i32> }
+impl Rt {
+    fn case_n(&self, u: bool) -> i32 { (if u { self.up.len() } else { self.lo.len() }) as i32 / 4 }
+    fn case_at(&self, u: bool, i: i32, f: i32) -> i32 {
+        let t = if u { &self.up } else { &self.lo };
+        t[(i * 4 + f) as usize]
+    }
+    fn full_n(&self, u: bool) -> i32 { (if u { self.fu.len() } else { 0 }) as i32 / 5 }
+    fn full_at(&self, u: bool, i: i32, f: i32) -> i32 {
+        let _ = u;
+        self.fu[(i * 5 + f) as usize]
+    }
+--rust
+}
+fn main() {
+    // Two runs: 'a'-'z' by -32 at stride 1, and a strided pair-run by -1.
+    // 223 is sharp s: ONE code point out to two, which no delta can say.
+    let rt = Rt { up: vec![97, 122, -32, 1, 257, 303, -1, 2],
+                  lo: vec![65, 90, 32, 1],
+                  fu: vec![223, 2, 83, 83, 0] };
+    let mut o = String::new();
+    for cp in [97u32, 122, 96, 123, 257, 258, 259, 303, 305, 65, 223] {
+        o.push_str(&format!("{}/{} ", rt.case_map(cp, true), rt.full_index(cp, true)));
+    }
+    o.push('|');
+    for cp in [65u32, 90, 64, 91, 97] { o.push_str(&format!(" {}", rt.case_map(cp, false))); }
+    println!("{}", o);
+}
+--java-head
+    static final class Rt {
+        int[] up, lo;
+        int caseN(boolean u) { return (u ? up.length : lo.length) / 4; }
+        int caseAt(boolean u, int i, int f) { return (u ? up : lo)[i * 4 + f]; }
+        int[] fu;
+        int fullN(boolean u) { return (u ? fu.length : 0) / 5; }
+        int fullAt(boolean u, int i, int f) { return fu[i * 5 + f]; }
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        rt.up = new int[]{97, 122, -32, 1, 257, 303, -1, 2};
+        rt.lo = new int[]{65, 90, 32, 1};
+        rt.fu = new int[]{223, 2, 83, 83, 0};
+        StringBuilder o = new StringBuilder();
+        for (int cp : new int[]{97, 122, 96, 123, 257, 258, 259, 303, 305, 65, 223})
+            o.append(caseMap(rt, cp, true)).append('/').append(fullIndex(rt, cp, true)).append(' ');
+        o.append('|');
+        for (int cp : new int[]{65, 90, 64, 91, 97})
+            o.append(' ').append(caseMap(rt, cp, false));
+        System.out.println(o);
+    }
+--csharp-head
+    internal sealed class Rt {
+        internal int[] up, lo;
+        internal int CaseN(bool u) { return (u ? up.Length : lo.Length) / 4; }
+        internal int CaseAt(bool u, int i, int f) { return (u ? up : lo)[i * 4 + f]; }
+        internal int[] fu;
+        internal int FullN(bool u) { return (u ? fu.Length : 0) / 5; }
+        internal int FullAt(bool u, int i, int f) { return fu[i * 5 + f]; }
+    }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        rt.up = new int[]{97, 122, -32, 1, 257, 303, -1, 2};
+        rt.lo = new int[]{65, 90, 32, 1};
+        rt.fu = new int[]{223, 2, 83, 83, 0};
+        var o = new System.Text.StringBuilder();
+        foreach (int cp in new int[]{97, 122, 96, 123, 257, 258, 259, 303, 305, 65, 223})
+            o.Append(CaseMap(rt, cp, true)).Append('/').Append(FullIndex(rt, cp, true)).Append(' ');
+        o.Append('|');
+        foreach (int cp in new int[]{65, 90, 64, 91, 97})
+            o.Append(' ').Append(CaseMap(rt, cp, false));
+        System.Console.WriteLine(o.ToString());
+    }

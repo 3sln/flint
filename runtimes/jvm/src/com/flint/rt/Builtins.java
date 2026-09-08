@@ -674,16 +674,16 @@ public final class Builtins {
             rt.chargeBytes(sb.length());
             return Str.of(rt, sb.toString());
         });
-        def("flint/upper-case", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (!rt.chargeChecked((Str.sBytes(rt, v) / 8) + 1, "case conversion")) return Val.NIL;
-            return Str.of(rt, Str.text(rt, v).toUpperCase());
-        });
-        def("flint/lower-case", (rt, at, n) -> {
-            long v = rt.vat(at);
-            if (!rt.chargeChecked((Str.sBytes(rt, v) / 8) + 1, "case conversion")) return Val.NIL;
-            return Str.of(rt, Str.text(rt, v).toLowerCase());
-        });
+        // GENERATED, from `kin/casemap.kin`. This used to be
+        // `Str.text(...).toUpperCase()`, which is the DEFAULT LOCALE -- so
+        // `(upper-case "i")` answered "\u0130" on a machine set to Turkish. The
+        // gas charge moved into the generated body with the rest of it.
+        def("flint/upper-case", (rt, at, n) -> com._3sln.flint.kgen.rt.Casechange.changeCase(rt, rt.vat(at), true));
+        // GENERATED, from `kin/casemap.kin`. This used to be
+        // `Str.text(...).toLowerCase()`, which is the DEFAULT LOCALE -- so
+        // `(upper-case "i")` answered "\u0130" on a machine set to Turkish. The
+        // gas charge moved into the generated body with the rest of it.
+        def("flint/lower-case", (rt, at, n) -> com._3sln.flint.kgen.rt.Casechange.changeCase(rt, rt.vat(at), false));
         def("flint/code-point-at", (rt, at, n) -> {
             int i = (int) Val.asFixnum(rt.vat(at + 1));
             int c = Str.codePointAt(rt, rt.vat(at), i);

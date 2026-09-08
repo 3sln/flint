@@ -1195,6 +1195,41 @@
     ;; read half that `Sink` still lacks -- a sink can be filled and handed
     ;; away but not inspected, which is why the text constructors could not be
     ;; generated. This buffer has both from the start.
+    ;; THE UNICODE CASE TABLE, read by index. `bin/casetable` derives it into
+    ;; all three runtimes as [start, end, delta, stride] runs; the SEARCH is
+    ;; generated from `kin/casemap.kin`, so the table is data in three places
+    ;; and the algorithm over it is in one.
+    ;;
+    ;; EVERYTHING HERE IS `Cmp`, which is `i32`, and not `I32`, which is `u32`.
+    ;; A delta is negative for most of the table -- `a`-to-`A` is -32 -- so the
+    ;; whole search works in signed arithmetic and converts once at the edge.
+    'case-n (core/call {:rust "{0}.case_n({1})"
+                        :java "{0}.caseN({1})" :csharp "{0}.CaseN({1})"}
+                       {:tag Cmp})
+    'case-lo (core/call {:rust "{0}.case_at({1}, {2}, 0)"
+                         :java "{0}.caseAt({1}, {2}, 0)" :csharp "{0}.CaseAt({1}, {2}, 0)"}
+                        {:tag Cmp})
+    'case-hi (core/call {:rust "{0}.case_at({1}, {2}, 1)"
+                         :java "{0}.caseAt({1}, {2}, 1)" :csharp "{0}.CaseAt({1}, {2}, 1)"}
+                        {:tag Cmp})
+    'case-delta (core/call {:rust "{0}.case_at({1}, {2}, 2)"
+                            :java "{0}.caseAt({1}, {2}, 2)" :csharp "{0}.CaseAt({1}, {2}, 2)"}
+                           {:tag Cmp})
+    'case-stride (core/call {:rust "{0}.case_at({1}, {2}, 3)"
+                             :java "{0}.caseAt({1}, {2}, 3)" :csharp "{0}.CaseAt({1}, {2}, 3)"}
+                            {:tag Cmp})
+    ;; THE FULL MAPPINGS: one code point to as many as three. 102 upward and
+    ;; one downward, so a linear scan would be fine and a binary search is the
+    ;; same code as the range table's -- an entry is [cp n c1 c2 c3].
+    'full-n (core/call {:rust "{0}.full_n({1})"
+                        :java "{0}.fullN({1})" :csharp "{0}.FullN({1})"}
+                       {:tag Cmp})
+    'full-at (core/call {:rust "{0}.full_at({1}, {2}, {3})"
+                         :java "{0}.fullAt({1}, {2}, {3})" :csharp "{0}.FullAt({1}, {2}, {3})"}
+                        {:tag Cmp})
+    ;; The two edges: a code point arrives as `I32` and leaves as one.
+    'cp-signed (core/call {:rust "({1} as i32)" :java "{1}" :csharp "{1}"} {:tag Cmp})
+    'cp-unsigned (core/call {:rust "({1} as u32)" :java "{1}" :csharp "{1}"} {:tag I32})
     'cps-open (core/call {:rust "{0}.cps_open()"
                           :java "{0}.cpsOpen()" :csharp "{0}.CpsOpen()"}
                          {:tag Cps})

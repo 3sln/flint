@@ -5,7 +5,8 @@
   (:require [clojure.zip :as z]
             [clojure.data :as dt]
             [clojure.datafy :as df]
-            [clojure.core.protocols :as cp]))
+            [clojure.core.protocols :as cp]
+            [clojure.string :as cstr]))
 
 (defmacro c
   "One case. The expression is wrapped in a thunk so that a case which throws is
@@ -320,6 +321,25 @@
    (c "constantly" ((constantly 7) 1 2) 7)
    (c "complement" ((complement even?) 2) false)
    (c "juxt" ((juxt inc dec) 5) [6 4])
+
+   ;; --- case mapping ------------------------------------------------------
+   ;; Full Unicode, and the same answer on every runtime. This used to be
+   ;; three functions: Rust answered nil for anything non-ASCII, the JVM used
+   ;; the DEFAULT LOCALE, and the CLR the invariant culture.
+   (c "upper-case ascii" (cstr/upper-case "abc") "ABC")
+   (c "lower-case ascii" (cstr/lower-case "ABC") "abc")
+   (c "upper-case empty" (cstr/upper-case "") "")
+   (c "upper-case accented" (cstr/upper-case "caf\u00e9") "CAF\u00c9")
+   (c "lower-case accented" (cstr/lower-case "CAF\u00c9") "caf\u00e9")
+   (c "upper-case greek" (cstr/upper-case "\u03b1\u03b2\u03b3") "\u0391\u0392\u0393")
+   (c "lower-case greek" (cstr/lower-case "\u0391\u0392\u0393") "\u03b1\u03b2\u03b3")
+   ;; NOT LOCALE-SENSITIVE: under `tr-TR` a JVM answers "\u0130" here.
+   (c "upper-case i is not dotted" (cstr/upper-case "i") "I")
+   ;; A FULL mapping: one code point out to two, which a delta table cannot
+   ;; say. Clojure gives this because Java's `String.toUpperCase` does.
+   (c "upper-case sharp s expands" (cstr/upper-case "stra\u00dfe") "STRASSE")
+   ;; Unmapped scripts are left alone rather than refused.
+   (c "upper-case leaves han alone" (cstr/upper-case "\u65e5\u672c\u8a9e") "\u65e5\u672c\u8a9e")
 
    ;; --- clojure.zip ------------------------------------------------------
    ;; Huet zippers. Every expectation here is real Clojure's answer, taken

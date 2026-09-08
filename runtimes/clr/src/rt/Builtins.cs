@@ -614,16 +614,10 @@ public static class Builtins {
             rt.ChargeBytes(sb.Length);
             return Str.Of(rt, sb.ToString());
         });
-        Def("flint/upper-case", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (!rt.ChargeChecked((Str.SBytes(rt, v) / 8) + 1, "case conversion")) return Val.Nil;
-            return Str.Of(rt, Str.Text(rt, v).ToUpperInvariant());
-        });
-        Def("flint/lower-case", (rt, at, n) => {
-            long v = rt.VAt(at);
-            if (!rt.ChargeChecked((Str.SBytes(rt, v) / 8) + 1, "case conversion")) return Val.Nil;
-            return Str.Of(rt, Str.Text(rt, v).ToLowerInvariant());
-        });
+        // GENERATED, from `kin/casemap.kin` -- see the Java copy.
+        Def("flint/upper-case", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Casechange.ChangeCase(rt, rt.VAt(at), true));
+        // GENERATED, from `kin/casemap.kin` -- see the Java copy.
+        Def("flint/lower-case", (rt, at, n) => global::_3sln.Flint.Kgen.Rt.Casechange.ChangeCase(rt, rt.VAt(at), false));
         Def("flint/code-point-at", (rt, at, n) => {
             int i = (int) Val.AsFixnum(rt.VAt(at + 1));
             int c = Str.CodePointAt(rt, rt.VAt(at), i);

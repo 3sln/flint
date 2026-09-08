@@ -1,0 +1,90 @@
+;; CASE CONVERSION over a whole string: decode, map, re-encode.
+;;
+;; Separate from `casemap.kin` because the subjects are different -- that file
+;; is a lookup in a table and this one is a walk over a string -- and because
+;; the probe for a table lookup is four numbers where the probe for this is a
+;; runtime with sinks, code-point buffers and a heap.
+(ns flint.rt.casechange
+  (:require [flint.impl.rt :refer [defn return if let do local set forever break
+                                   comment doc not == < + - bit-and shl ushr
+                                   bit-or sink-open sink-put sink-string
+                                   sink-close cps-len cps-at cps-close
+                                   charge-checked throw-str full-at cp-unsigned
+                                   Rt Bool I32 Cmp Value Sink Cps NIL]]
+            [flint.rt.casemap :refer [case-map full-index]]
+            [flint.rt.codepoints :refer [code-points]]
+            [flint.rt.ropemeas :refer [is-string]]))
+
+(doc "Write `cp` to `sk` as UTF-8, and answer how many bytes that took."
+     ""
+     "Four widths and no validation: every code point here came out of"
+     "`code-points`, which decoded it from a string a constructor had already"
+     "validated. A second opinion about what a string is would be the drift"
+     "this whole file exists to remove.")
+(defn ^:method ^I32 put-utf8 [^:mut ^Rt rt ^Sink sk ^I32 cp]
+  (if (< cp 0x80)
+    (do (sink-put rt sk cp) (return 1)))
+  (if (< cp 0x800)
+    (do (sink-put rt sk (bit-or 0xC0 (ushr cp 6)))
+        (sink-put rt sk (bit-or 0x80 (bit-and cp 0x3F)))
+        (return 2)))
+  (if (< cp 0x10000)
+    (do (sink-put rt sk (bit-or 0xE0 (ushr cp 12)))
+        (sink-put rt sk (bit-or 0x80 (bit-and (ushr cp 6) 0x3F)))
+        (sink-put rt sk (bit-or 0x80 (bit-and cp 0x3F)))
+        (return 3)))
+  (sink-put rt sk (bit-or 0xF0 (ushr cp 18)))
+  (sink-put rt sk (bit-or 0x80 (bit-and (ushr cp 12) 0x3F)))
+  (sink-put rt sk (bit-or 0x80 (bit-and (ushr cp 6) 0x3F)))
+  (sink-put rt sk (bit-or 0x80 (bit-and cp 0x3F)))
+  (return 4))
+
+(doc "`s` with every code point mapped to upper case, or to lower."
+     ""
+     "CHARGED BEFORE THE WORK and refused if it cannot be paid for. The length"
+     "is known here, so this is a better bound than a per-iteration tick: it"
+     "never begins work the budget cannot cover, and costs nothing inside the"
+     "loop. `charge-bytes` alone billed 48 097 steps past an exhausted budget,"
+     "because billing is not bounding."
+     ""
+     "EVERY TIER, and no ASCII shortcut. The Rust this replaces answered `nil`"
+     "for a string with any byte over 127, which is not a terse answer but a"
+     "wrong one.")
+(defn ^:pub ^:method ^Value change-case [^:mut ^Rt rt ^Value s ^Bool up]
+  (if (not (is-string rt s))
+    (return (throw-str rt "ClassCastException" "not a string")))
+  (let [^Cps c (code-points rt s)
+        ^I32 n (cps-len rt c)]
+    (if (not (charge-checked rt (+ n 1) "case conversion"))
+      (do (cps-close rt c)
+          (return NIL)))
+    (let [^Sink sk (sink-open rt)]
+      (local ^:mut ^I32 i)
+      (set i 0)
+      (forever
+        (if (== i n)
+          (break))
+        (comment "HOISTED, and not style: `put-utf8` takes the runtime"
+                 "mutably while `cps-at` and `case-map` take it shared, so"
+                 "nesting them in the argument list is two borrows at once --"
+                 "the shape `0031` is about.")
+        (let [^I32 cp (cps-at rt c i)
+              ^Cmp fx (full-index rt cp up)]
+          (if (< fx 0)
+            (let [^I32 m (case-map rt cp up)]
+              (put-utf8 rt sk m))
+            (do (comment "A FULL mapping: one code point out to as many as"
+                         "three, so the count comes from the table too.")
+                (local ^:mut ^Cmp k)
+                (set k 0)
+                (forever
+                  (if (== k (full-at rt up fx 1))
+                    (break))
+                  (let [^I32 e (cp-unsigned rt (full-at rt up fx (+ k 2)))]
+                    (put-utf8 rt sk e))
+                  (set k (+ k 1))))))
+        (set i (+ i 1)))
+      (let [^Value out (sink-string rt sk)]
+        (sink-close rt sk)
+        (cps-close rt c)
+        (return out)))))

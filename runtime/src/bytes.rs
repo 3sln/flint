@@ -164,6 +164,29 @@ impl Rt {
 
     /// Open a buffer and answer its index. `sink_close` releases it and every
     /// buffer opened after it, which is `pop_to`'s discipline exactly.
+    /// How many full mappings the table has. `u` selects the upward one.
+    pub fn full_n(&self, u: bool) -> i32 {
+        (if u { crate::casetable::FULL_UPPER.len() } else { crate::casetable::FULL_LOWER.len() }) as i32 / 5
+    }
+
+    /// Field `f` of full mapping `i`: 0 the code point, 1 how many it maps to,
+    /// 2..4 the mapping itself.
+    pub fn full_at(&self, u: bool, i: i32, f: i32) -> i32 {
+        let t: &[i32] = if u { &crate::casetable::FULL_UPPER } else { &crate::casetable::FULL_LOWER };
+        t[(i * 5 + f) as usize]
+    }
+
+    /// How many case-mapping ranges the table has. `u != 0` selects UPPER.
+    pub fn case_n(&self, u: bool) -> i32 {
+        (if u { crate::casetable::UPPER.len() } else { crate::casetable::LOWER.len() }) as i32 / 4
+    }
+
+    /// Field `f` of range `i`: 0 start, 1 end, 2 delta, 3 stride.
+    pub fn case_at(&self, u: bool, i: i32, f: i32) -> i32 {
+        let t: &[i32] = if u { &crate::casetable::UPPER } else { &crate::casetable::LOWER };
+        t[(i * 4 + f) as usize]
+    }
+
     /// Open a code-point buffer and answer its index. See `Rt::cps`.
     pub fn cps_open(&mut self) -> u32 {
         self.cps.push(alloc::vec::Vec::new());

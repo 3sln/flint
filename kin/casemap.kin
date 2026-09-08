@@ -1,0 +1,91 @@
+;; UNICODE SIMPLE CASE MAPPING: one code point to its upper or lower form.
+;;
+;; `upper-case` and `lower-case` were THREE DIFFERENT FUNCTIONS. Rust answered
+;; `nil` for anything that was not ASCII, the JVM used `toUpperCase` under the
+;; DEFAULT LOCALE -- so `(upper-case "i")` was "Ä°" on a machine set to Turkish
+;; -- and the CLR used the invariant culture. Three answers, one of them
+;; depending on where the program ran, which is the thing `0009`'s determinism
+;; exists to rule out.
+;;
+;; THE TABLE IS DATA IN THREE PLACES AND THE SEARCH IS IN ONE. `bin/casetable`
+;; derives [start, end, delta, stride] runs from the host's own Unicode data
+;; into each runtime; this file is the binary search over them. Deriving beats
+;; reviewing: `bin/casetable --check` re-derives and diffs, so a table nobody
+;; reads is still known to be right.
+;;
+;; STRIDE is why the table is small. Latin Extended alternates case in pairs,
+;; so a run of "every other code point maps by -1" would otherwise be one range
+;; per code point: 1352 ranges and 16 KB, against 382 ranges and about 4.6 KB.
+;; No compressor, and so no decompressor.
+(ns flint.rt.casemap
+  (:require [flint.impl.rt :refer [defn return if let do local set forever break
+                                   comment doc not == != < > <= >= + - quot
+                                   bit-and case-n case-lo case-hi case-delta
+                                   case-stride cp-signed cp-unsigned
+                                   full-n full-at
+                                   Rt Bool I32 Cmp]]))
+
+(doc "`cp` mapped to upper case when `up`, to lower case otherwise."
+     ""
+     "SIMPLE mapping only: one code point in, one out. The full mappings --"
+     "German sharp s to SS, and the rest of `SpecialCasing.txt` -- are one to"
+     "MANY and cannot be expressed here; a caller that needs them needs a"
+     "different function, not a wider table."
+     ""
+     "A code point with no entry maps to itself, which is most of them.")
+(defn ^:pub ^:method ^I32 case-map [^Rt rt ^I32 cp ^Bool up]
+  (let [^Cmp c (cp-signed rt cp)
+        ^Cmp n (case-n rt up)]
+    (comment "BINARY SEARCH over runs sorted by start. `lo` and `hi` bracket"
+             "the candidate; the run that can contain `c` is the last one"
+             "whose start is at or below it.")
+    (local ^:mut ^Cmp lo)
+    (local ^:mut ^Cmp hi)
+    (set lo 0)
+    (set hi (- n 1))
+    (forever
+      (if (> lo hi)
+        (break))
+      (let [^Cmp mid (+ lo (quot (- hi lo) 2))
+            ^Cmp s (case-lo rt up mid)
+            ^Cmp e (case-hi rt up mid)]
+        (if (< c s)
+          (set hi (- mid 1))
+          (if (> c e)
+            (set lo (+ mid 1))
+            (do (comment "IN RANGE by start and end -- but a strided run"
+                         "covers every OTHER code point, so a member has to"
+                         "land on the stride as well. One that does not has"
+                         "no mapping and is its own answer.")
+                (let [^Cmp st (case-stride rt up mid)]
+                  (if (== st 1)
+                    (return (cp-unsigned rt (+ c (case-delta rt up mid))))
+                    (if (== (bit-and (- c s) 1) 0)
+                      (return (cp-unsigned rt (+ c (case-delta rt up mid))))
+                      (return cp)))))))))
+    (return cp)))
+
+(doc "The index of `cp`'s FULL mapping, or -1."
+     ""
+     "One code point to as many as three, which a delta cannot say. 102 of"
+     "them upward -- sharp s to SS is the one everybody meets -- and exactly"
+     "one downward. Clojure gives the full mapping because Java's"
+     "`String.toUpperCase` does, so without this `(upper-case \"stra\u00dfe\")`"
+     "would answer STRA\u00dfE here and STRASSE there.")
+(defn ^:pub ^:method ^Cmp full-index [^Rt rt ^I32 cp ^Bool up]
+  (let [^Cmp c (cp-signed rt cp)]
+    (local ^:mut ^Cmp lo)
+    (local ^:mut ^Cmp hi)
+    (set lo 0)
+    (set hi (- (full-n rt up) 1))
+    (forever
+      (if (> lo hi)
+        (break))
+      (let [^Cmp mid (+ lo (quot (- hi lo) 2))
+            ^Cmp at (full-at rt up mid 0)]
+        (if (< c at)
+          (set hi (- mid 1))
+          (if (> c at)
+            (set lo (+ mid 1))
+            (return mid)))))
+    (return -1)))

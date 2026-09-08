@@ -49,6 +49,8 @@ pub mod eqalloc;
 pub mod typep;
 pub mod pikegas;
 pub mod codepoints;
+pub mod casemap;
+pub mod casechange;
 pub mod numkind;
 pub mod valeq;
 pub mod valhash;

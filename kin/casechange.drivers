@@ -1,0 +1,192 @@
+--rust-head
+#[derive(Clone, Copy, PartialEq)]
+struct Value(u64);
+const NIL: Value = Value(0xFFFF);
+struct Rt { cps: Vec<Vec<u32>>, sinks: Vec<Vec<u32>>, subject: Vec<u32>,
+            up: Vec<i32>, lo: Vec<i32>, fu: Vec<i32>, steps: u64 }
+impl Rt {
+    fn cps_open(&mut self) -> u32 { self.cps.push(Vec::new()); (self.cps.len() - 1) as u32 }
+    fn cps_len(&self, c: u32) -> u32 { self.cps[c as usize].len() as u32 }
+    fn cps_at(&self, c: u32, i: u32) -> u32 { self.cps[c as usize][i as usize] }
+    fn cps_close(&mut self, c: u32) { self.cps.truncate(c as usize); }
+    fn code_points(&mut self, _s: Value) -> u32 {
+        let c = self.cps_open();
+        let subj = self.subject.clone();
+        for v in subj { self.cps[c as usize].push(v); }
+        c
+    }
+    fn sink_open(&mut self) -> u32 { self.sinks.push(Vec::new()); (self.sinks.len() - 1) as u32 }
+    fn sink_put(&mut self, s: u32, b: u32) { self.sinks[s as usize].push(b); }
+    fn sink_close(&mut self, s: u32) { self.sinks.truncate(s as usize); }
+    fn sink_string(&mut self, s: u32) -> Value {
+        // The BYTES the walk produced, folded to one number so three targets
+        // can be compared without a string implementation in the probe.
+        let mut h: u64 = 0;
+        for b in &self.sinks[s as usize] { h = h * 31 + (*b as u64); }
+        Value(h)
+    }
+    fn is_string(&self, _v: Value) -> bool { true }
+    fn charge_checked(&mut self, n: u64, _w: &str) -> bool { self.steps += n; true }
+    fn throw_str(&mut self, _k: &str, _m: &str) -> Value { NIL }
+    fn case_n(&self, u: bool) -> i32 { (if u { self.up.len() } else { self.lo.len() }) as i32 / 4 }
+    fn case_at(&self, u: bool, i: i32, f: i32) -> i32 {
+        let t = if u { &self.up } else { &self.lo };
+        t[(i * 4 + f) as usize]
+    }
+    fn full_n(&self, u: bool) -> i32 { (if u { self.fu.len() } else { 0 }) as i32 / 5 }
+    fn full_at(&self, _u: bool, i: i32, f: i32) -> i32 { self.fu[(i * 5 + f) as usize] }
+    fn case_map(&self, cp: u32, up: bool) -> u32 {
+        let c = cp as i32;
+        let n = self.case_n(up);
+        let mut lo = 0; let mut hi = n - 1;
+        while lo <= hi {
+            let mid = lo + (hi - lo) / 2;
+            let s = self.case_at(up, mid, 0); let e = self.case_at(up, mid, 1);
+            if c < s { hi = mid - 1; } else if c > e { lo = mid + 1; }
+            else if self.case_at(up, mid, 3) == 1 { return (c + self.case_at(up, mid, 2)) as u32; }
+            else if (c - s) & 1 == 0 { return (c + self.case_at(up, mid, 2)) as u32; }
+            else { return cp; }
+        }
+        cp
+    }
+    fn full_index(&self, cp: u32, up: bool) -> i32 {
+        let c = cp as i32;
+        let mut lo = 0; let mut hi = self.full_n(up) - 1;
+        while lo <= hi {
+            let mid = lo + (hi - lo) / 2;
+            let at = self.full_at(up, mid, 0);
+            if c < at { hi = mid - 1; } else if c > at { lo = mid + 1; } else { return mid; }
+        }
+        -1
+    }
+--rust
+}
+fn main() {
+    // "aß" upcased: 'a' by delta, sharp s by a FULL mapping to two code points.
+    let mut rt = Rt { cps: Vec::new(), sinks: Vec::new(),
+                      subject: vec![97, 223, 233],
+                      up: vec![97, 122, -32, 1, 224, 246, -32, 1],
+                      lo: vec![65, 90, 32, 1],
+                      fu: vec![223, 2, 83, 83, 0], steps: 0 };
+    let a = rt.change_case(Value(1), true);
+    let b = rt.change_case(Value(1), false);
+    println!("{} {} {}", a.0, b.0, rt.steps);
+}
+--java-head
+    static final long NIL = 0xFFFF;
+    static final class Val { static final long NIL = 0xFFFF; }
+    static final class Rt {
+        java.util.ArrayList<java.util.ArrayList<Integer>> cps = new java.util.ArrayList<>();
+        java.util.ArrayList<java.util.ArrayList<Integer>> sinks = new java.util.ArrayList<>();
+        int[] subject; int[] up, lo, fu; long steps = 0;
+        int cpsOpen() { cps.add(new java.util.ArrayList<>()); return cps.size() - 1; }
+        int cpsLen(int c) { return cps.get(c).size(); }
+        int cpsAt(int c, int i) { return cps.get(c).get(i); }
+        void cpsClose(int c) { while (cps.size() > c) cps.remove(cps.size() - 1); }
+        int sinkOpen() { sinks.add(new java.util.ArrayList<>()); return sinks.size() - 1; }
+        void sinkPut(int s, int b) { sinks.get(s).add(b); }
+        void sinkClose(int s) { while (sinks.size() > s) sinks.remove(sinks.size() - 1); }
+        long sinkString(int s) { long h = 0; for (int b : sinks.get(s)) h = h * 31 + b; return h; }
+        boolean chargeChecked(long n, String w) { steps += n; return true; }
+        long throwStr(String k, String m) { return NIL; }
+        int caseN(boolean u) { return (u ? up.length : lo.length) / 4; }
+        int caseAt(boolean u, int i, int f) { return (u ? up : lo)[i * 4 + f]; }
+        int fullN(boolean u) { return (u ? fu.length : 0) / 5; }
+        int fullAt(boolean u, int i, int f) { return fu[i * 5 + f]; }
+    }
+    static int codePoints(Rt rt, long s) {
+        int c = rt.cpsOpen();
+        for (int v : rt.subject) rt.cps.get(c).add(v);
+        return c;
+    }
+    static boolean isString(Rt rt, long v) { return true; }
+    static int caseMap(Rt rt, int cp, boolean up) {
+        int lo2 = 0, hi = rt.caseN(up) - 1;
+        while (lo2 <= hi) {
+            int mid = lo2 + (hi - lo2) / 2, s = rt.caseAt(up, mid, 0), e = rt.caseAt(up, mid, 1);
+            if (cp < s) hi = mid - 1;
+            else if (cp > e) lo2 = mid + 1;
+            else if (rt.caseAt(up, mid, 3) == 1) return cp + rt.caseAt(up, mid, 2);
+            else if (((cp - s) & 1) == 0) return cp + rt.caseAt(up, mid, 2);
+            else return cp;
+        }
+        return cp;
+    }
+    static int fullIndex(Rt rt, int cp, boolean up) {
+        int lo2 = 0, hi = rt.fullN(up) - 1;
+        while (lo2 <= hi) {
+            int mid = lo2 + (hi - lo2) / 2, at = rt.fullAt(up, mid, 0);
+            if (cp < at) hi = mid - 1; else if (cp > at) lo2 = mid + 1; else return mid;
+        }
+        return -1;
+    }
+--java
+    public static void main(String[] args) {
+        Rt rt = new Rt();
+        rt.subject = new int[]{97, 223, 233};
+        rt.up = new int[]{97, 122, -32, 1, 224, 246, -32, 1};
+        rt.lo = new int[]{65, 90, 32, 1};
+        rt.fu = new int[]{223, 2, 83, 83, 0};
+        long a = changeCase(rt, 1L, true);
+        long b = changeCase(rt, 1L, false);
+        System.out.println(a + " " + b + " " + rt.steps);
+    }
+--csharp-head
+    const long NIL = 0xFFFF;
+    static class Val { internal const long Nil = 0xFFFF; }
+    internal sealed class Rt {
+        internal System.Collections.Generic.List<System.Collections.Generic.List<int>> cps = new();
+        internal System.Collections.Generic.List<System.Collections.Generic.List<int>> sinks = new();
+        internal int[] subject; internal int[] up, lo, fu; internal long steps = 0;
+        internal int CpsOpen() { cps.Add(new System.Collections.Generic.List<int>()); return cps.Count - 1; }
+        internal int CpsLen(int c) { return cps[c].Count; }
+        internal int CpsAt(int c, int i) { return cps[c][i]; }
+        internal void CpsClose(int c) { while (cps.Count > c) cps.RemoveAt(cps.Count - 1); }
+        internal int SinkOpen() { sinks.Add(new System.Collections.Generic.List<int>()); return sinks.Count - 1; }
+        internal void SinkPut(int s, int b) { sinks[s].Add(b); }
+        internal void SinkClose(int s) { while (sinks.Count > s) sinks.RemoveAt(sinks.Count - 1); }
+        internal long SinkString(int s) { long h = 0; foreach (int b in sinks[s]) h = h * 31 + b; return h; }
+        internal bool ChargeChecked(long n, string w) { steps += n; return true; }
+        internal long ThrowStr(string k, string m) { return NIL; }
+        internal int CaseN(bool u) { return (u ? up.Length : lo.Length) / 4; }
+        internal int CaseAt(bool u, int i, int f) { return (u ? up : lo)[i * 4 + f]; }
+        internal int FullN(bool u) { return (u ? fu.Length : 0) / 5; }
+        internal int FullAt(bool u, int i, int f) { return fu[i * 5 + f]; }
+    }
+    static int CodePoints(Rt rt, long s) {
+        int c = rt.CpsOpen();
+        foreach (int v in rt.subject) rt.cps[c].Add(v);
+        return c;
+    }
+    static bool IsString(Rt rt, long v) { return true; }
+    static int CaseMap(Rt rt, int cp, bool up) {
+        int lo2 = 0, hi = rt.CaseN(up) - 1;
+        while (lo2 <= hi) {
+            int mid = lo2 + (hi - lo2) / 2, s = rt.CaseAt(up, mid, 0), e = rt.CaseAt(up, mid, 1);
+            if (cp < s) hi = mid - 1;
+            else if (cp > e) lo2 = mid + 1;
+            else if (rt.CaseAt(up, mid, 3) == 1) return cp + rt.CaseAt(up, mid, 2);
+            else if (((cp - s) & 1) == 0) return cp + rt.CaseAt(up, mid, 2);
+            else return cp;
+        }
+        return cp;
+    }
+    static int FullIndex(Rt rt, int cp, bool up) {
+        int lo2 = 0, hi = rt.FullN(up) - 1;
+        while (lo2 <= hi) {
+            int mid = lo2 + (hi - lo2) / 2, at = rt.FullAt(up, mid, 0);
+            if (cp < at) hi = mid - 1; else if (cp > at) lo2 = mid + 1; else return mid;
+        }
+        return -1;
+    }
+--csharp
+    static void Main() {
+        var rt = new Rt();
+        rt.subject = new int[]{97, 223, 233};
+        rt.up = new int[]{97, 122, -32, 1, 224, 246, -32, 1};
+        rt.lo = new int[]{65, 90, 32, 1};
+        rt.fu = new int[]{223, 2, 83, 83, 0};
+        long a = ChangeCase(rt, 1L, true);
+        long b = ChangeCase(rt, 1L, false);
+        System.Console.WriteLine(a + " " + b + " " + rt.steps);
+    }

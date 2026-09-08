@@ -586,6 +586,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Numkind` | `is-int`, `is-number` — and the claim that they were NOT tag families |
 | 3 | `Pikegas` | what regex work COSTS — a policy Rust had and neither port did |
 | 3 | `Codepoints` | the subject as code points, walking leaves instead of materialising it |
+| 3 | `Casemap` + `Casechange` | full Unicode case mapping, from one shared table |
 
 The assoc/dissoc block is complete: thirteen functions of `Maps`, one
 definition each. The three analyses had gated the whole block on converging
@@ -641,6 +642,38 @@ NINE `.kin` sources named it through the vocabulary — `collgen`, `collread`,
 generated modules were asking one question and getting whatever each runtime
 had written. It lives in `ropemeas.kin` now, which is the file that already
 answers what a string MEASURES across the same three tiers.
+
+`casemap`/`casechange` closed the last of the three-way divergences the
+analyses found, and the shape is worth recording because the DATA and the
+ALGORITHM went to different places.
+
+`upper-case` and `lower-case` were three functions: Rust answered `nil` for
+anything non-ASCII, the JVM used the DEFAULT LOCALE -- `(upper-case "i")` was
+`İ` on a Turkish machine -- and the CLR the invariant culture. All three now
+answer what Clojure answers, checked against it.
+
+**The table is one committed artifact**, `data/casetable.edn`, and the three
+runtimes' tables are EMITTED from it by `bin/casetable`. Deriving it reads the
+host JDK's Unicode data and is a separate, deliberate step: its answer depends
+on which Unicode version that JDK carries, and that is a decision to record in
+a diff rather than to inherit from whoever ran the gate. `--check` never
+derives; it compares the emissions against the file, which is the same
+question on every machine, and that is what `bin/test` runs.
+
+The derivation pins `Locale/ROOT` explicitly. `.toUpperCase()` with no locale
+uses the default one -- the exact defect being removed, and it was in the
+generator until someone asked how `ß` becomes `SS`.
+
+STRIDE keeps it small: Latin Extended alternates case in pairs, so a naive
+encoding is one range per code point -- 1352 ranges, 16 KB -- against 382 and
+about 4.6 KB. A better encoding beat a compressor, and cost no decompressor.
+The 102 full mappings (one code point to as many as three) are the other 2 KB,
+and they are what makes `(upper-case "straße")` answer `STRASSE` here as it
+does in Clojure rather than `STRAßE`.
+
+Two sources, not one, for a reason `pikegas` also hit: a probe for a table
+lookup is four numbers and a probe for a string walk is a runtime with sinks,
+code-point buffers and a heap. One subject per source.
 
 `codepoints` is the first source to need NEW VOCABULARY, and it is worth
 saying why that stopped being a reason not to do it. `Cps` is an opaque handle
