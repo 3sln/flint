@@ -120,6 +120,37 @@
    (c "empty in, the ones Clojure answers nil for"
       [(keys {}) (vals {}) (seq []) (next [1])] [nil nil nil nil])
    (c "empty in, sort" (sort []) '())
+   ;; NIL PUNNING. Clojure treats nil as an empty collection in most seq
+   ;; positions and NOT in others, and the pattern is not derivable -- it is
+   ;; a set of decisions. Asked rather than assumed.
+   (c "nil in, seq functions out"
+      [(map inc nil) (filter even? nil) (remove even? nil) (mapcat vector nil)
+       (take 3 nil) (drop 3 nil) (distinct nil) (dedupe nil)
+       (reverse nil) (partition 2 nil) (interpose :x nil)
+       (map-indexed vector nil) (keep-indexed vector nil) (partition-by odd? nil)]
+      ['() '() '() '() '() '() '() '() '() '() '() '() '() '()])
+   (c "nil in, the scalar answers"
+      [(count nil) (first nil) (rest nil) (next nil) (seq nil) (empty? nil)
+       (keys nil) (vals nil) (sort nil) (last nil)]
+      [0 nil '() nil nil true nil nil '() nil])
+   (c "nil in, the building ones"
+      [(conj nil 1) (into nil [1 2]) (assoc nil :a 1) (get nil :a)
+       (contains? nil :a) (nth nil 0 :d) (merge nil {:a 1}) (concat nil [1])]
+      ['(1) '(2 1) {:a 1} nil false :d {:a 1} '(1)])
+   ;; NIL AND FALSE AS KEYS AND VALUES, which is where `get` with a default
+   ;; and `contains?` stop agreeing with each other.
+   (c "nil and false in maps"
+      [(get {:a nil} :a :d) (get {:a nil} :b :d) (contains? {:a nil} :a)
+       (get {nil 1} nil) (contains? {nil 1} nil)
+       (get {false 1} false) (contains? {false 1} false)
+       (get #{nil} nil :d) (contains? #{false} false)]
+      [nil :d true 1 true 1 true nil true])
+   ;; BOUNDARY ARITIES: an incomplete last group, a negative or zero count.
+   (c "boundary arities"
+      [(partition 3 [1 2]) (partition-all 3 [1 2]) (partition 3 3 [1 2 3 4])
+       (take -1 [1 2]) (take 0 [1 2]) (drop -1 [1 2])
+       (repeat 0 :x) (range 5 0) (nth [] 0 :d)]
+      ['() '((1 2)) '((1 2 3)) '() '() '(1 2) '() '() :d])
    (c "map" (map inc [1 2 3]) '(2 3 4))
    (c "map two colls" (map + [1 2] [10 20]) '(11 22))
    (c "filter/remove" [(filter even? [1 2 3 4]) (remove even? [1 2 3 4])] ['(2 4) '(1 3)])
