@@ -16,6 +16,7 @@ using static global::_3sln.Flint.Kgen.Rt.Bytecore;
 using static global::_3sln.Flint.Kgen.Rt.Mapwrite;
 using static global::_3sln.Flint.Kgen.Rt.Names;
 using static global::_3sln.Flint.Kgen.Rt.Opaque;
+using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqwalk;
 using static global::_3sln.Flint.Kgen.Rt.Tablemake;
 using static global::_3sln.Flint.Kgen.Rt.Tablerow;
@@ -127,7 +128,7 @@ public static class Collwrite {
             }
             return Val.Nil;
         }
-        if (Str.IsString(rt, coll)) {
+        if (IsString(rt, coll)) {
             long c = Str.Nth(rt, coll, i, Val.NotFound);
             if (c != Val.NotFound) {
                 return c;

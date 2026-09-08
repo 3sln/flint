@@ -35,7 +35,7 @@ public static class Collgen {
         if (Val.IsNil(v)) {
             return 0;
         }
-        if (Str.IsString(rt, v)) {
+        if (IsString(rt, v)) {
             return Str.SCount(rt, v);
         }
         if (Val.IsHeap(v)) {

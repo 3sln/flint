@@ -11,6 +11,7 @@ import static com.flint.rt.Seqs.*;
 import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Mapcore.*;
 import static com._3sln.flint.kgen.rt.Names.*;
+import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Tablecell.*;
 import static com._3sln.flint.kgen.rt.Tablekind.*;
 import static com._3sln.flint.kgen.rt.Tablemeta.*;
@@ -31,7 +32,7 @@ public final class Tablesay {
         // ports spell the two the same, so the conversion costs them
         // nothing and costs Rust one literal copy on a path that is
         // already building a message about a failure.
-        if (!Str.isString(rt, n)) {
+        if (!isString(rt, n)) {
             return "?";
         }
         return Str.text(rt, n);

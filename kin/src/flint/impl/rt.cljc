@@ -1119,10 +1119,6 @@
     'name-of (core/call {:rust "{0}.name_of({1})"
                          :java "{0}.nameOf({1})" :csharp "{0}.NameOf({1})"}
                         {:tag Value})
-    'is-string (core/call {:rust "{0}.is_string({1})"
-                           :java "Str.isString({0}, {1})"
-                           :csharp "Str.IsString({0}, {1})"}
-                          {:tag Bool})
     ;; STILL HAND-WRITTEN, and reached as calls until they are not. `kind-of`
     ;; is the closed set of `0005` and `type-ok` the schema's type check; both
     ;; want a keyword built from a literal, which the vocabulary cannot spell

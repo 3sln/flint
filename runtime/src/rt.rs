@@ -966,11 +966,6 @@ impl Rt {
         }
     }
 
-    pub fn is_string(&self, v: Value) -> bool {
-        v.is_inline_str()
-            || (v.is_heap()
-                && matches!(ty(&self.gc.sp, v.as_heap()), TY_STR | crate::obj::TY_ROPE))
-    }
 
 }
 

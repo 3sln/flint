@@ -14,6 +14,7 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Eq;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
 using static global::_3sln.Flint.Kgen.Rt.Names;
+using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Seqcore;
 using static global::_3sln.Flint.Kgen.Rt.Setcore;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;
@@ -64,7 +65,7 @@ public static class Typep {
             case 3:
                 return Num.IsNumber(rt, v);
             case 4:
-                return Str.IsString(rt, v);
+                return IsString(rt, v);
             case 5:
                 return IsKeyword(rt, v);
             case 6:

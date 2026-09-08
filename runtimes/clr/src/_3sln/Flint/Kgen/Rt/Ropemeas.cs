@@ -14,6 +14,25 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Ropecat;
 
 public static class Ropemeas {
+    /// Is `v` a STRING -- any of the three tiers?
+    /// 
+    /// Inline first, because it is a test on the value word and the other two
+    /// need a tag read. Then the two heap tags: a flat string and a ROPE are
+    /// both strings, and every caller that forgot the second one was a bug
+    /// waiting for a string long enough to become a rope.
+    /// 
+    /// This is what `type-p` asks for code 4, and it was written three times
+    /// until it was written here.
+    public static bool IsString(Rt rt, long v) {
+        if (Val.IsInlineStr(v)) {
+            return true;
+        }
+        if (!Val.IsHeap(v)) {
+            return false;
+        }
+        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
+        return (t == Obj.TyStr) || (t == Obj.TyRope);
+    }
     /// How many BYTES the string holds. O(1) on all three tiers.
     public static int SBytes(Rt rt, long v) {
         if (Val.IsInlineStr(v)) {

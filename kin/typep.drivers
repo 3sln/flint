@@ -79,7 +79,6 @@ fn main() {
         static boolean isNumber(Rt rt, long v) { return v == 3 || v == 4 || v == 5; }
     }
     static final class Str {
-        static boolean isString(Rt rt, long v) { return v == 6; }
     }
     static final class Vec {
     }
@@ -100,6 +99,7 @@ fn main() {
     static boolean isVectorLike(Rt rt, long v) {
         return Val.isHeap(v) && (Val.asHeap(v) == TY_VEC || Val.asHeap(v) == TY_MAPENTRY);
     }
+    static boolean isString(Rt rt, long v) { return v == 6; }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -136,7 +136,6 @@ fn main() {
         internal static bool IsNumber(Rt rt, long v) { return v == 3 || v == 4 || v == 5; }
     }
     static class Str {
-        internal static bool IsString(Rt rt, long v) { return v == 6; }
     }
     static class Vec {
     }
@@ -157,6 +156,7 @@ fn main() {
     internal static bool IsVectorLike(Rt rt, long v) {
         return Val.IsHeap(v) && (Val.AsHeap(v) == Obj.TyVec || Val.AsHeap(v) == Obj.TyMapentry);
     }
+    internal static bool IsString(Rt rt, long v) { return v == 6; }
 --csharp
     static void Main() {
         var rt = new Rt();

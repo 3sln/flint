@@ -26,12 +26,6 @@ import static com._3sln.flint.kgen.rt.Interns.*;
 public final class Str {
     private Str() {}
 
-    public static boolean isString(Rt rt, long v) {
-        if (Val.isInlineStr(v)) return true;
-        if (!Val.isHeap(v)) return false;
-        int t = ty(rt.gc.sp, Val.asHeap(v));
-        return t == TY_STR || t == TY_ROPE;
-    }
 
     /// A bare, UNINTERNED heap string. `of` is the canonical constructor.
     ///
@@ -216,6 +210,15 @@ public final class Str {
         return new String(bytes(rt, v), StandardCharsets.UTF_8);
     }
 
+
+    /// Is `v` a string -- any of the three tiers? GENERATED, from
+    /// `kin/ropemeas.kin`, which is also where the tier questions next to it
+    /// are answered. A delegator rather than a copy: sixteen call sites in
+    /// this runtime say `Str.isString`, and the generated tree says
+    /// `isString`, and there is one body under both.
+    public static boolean isString(Rt rt, long v) {
+        return com._3sln.flint.kgen.rt.Ropemeas.isString(rt, v);
+    }
 
     public static long keyword(Rt rt, String ns, String name) {
         byte[] nb = name.getBytes(StandardCharsets.UTF_8);

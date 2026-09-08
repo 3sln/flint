@@ -18,7 +18,7 @@
 (ns flint.rt.collread
   (:require [flint.impl.rt :refer [defn return if let do comment doc
                                    == != >= < or not nil? is-heap as-heap ty
-                                   slot is-string char-at to-i32 u<
+                                   slot  char-at to-i32 u<
                                    is-int i64-of bare-kw static-text
                                    vec-nth vec-count table-ref ref-get
                                    Rt Value I32 I64 Ty Bool NIL NOT_FOUND
@@ -29,7 +29,8 @@
             [flint.rt.setcore :refer [set-get set-contains]]
             [flint.rt.byteat :refer [b-at]]
             [flint.rt.vectrans :refer [tvec-nth]]
-            [flint.rt.maptrans :refer [tmap-get tset-get]]))
+            [flint.rt.maptrans :refer [tmap-get tset-get]]
+            [flint.rt.ropemeas :refer [is-string]]))
 
 (doc "The value `k` maps to, or `dflt`."
      ""

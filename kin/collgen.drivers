@@ -155,9 +155,6 @@ fn main() {
         return "a #" + ty(rt.gc.sp, Val.asHeap(v));
     }
     static final class Str {
-        static boolean isString(Rt rt, long v) {
-            return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR;
-        }
         static int sCount(Rt rt, long v) { return 71; }
     }
     static boolean isSeq(Rt rt, long v) {
@@ -185,6 +182,9 @@ fn main() {
         static final class Seqs { static long emptyList(Rt rt) { return 0x924L; } }
     } } }
     static final class Sets { static long empty(Rt rt) { return 0x923L; } }
+    static boolean isString(Rt rt, long v) {
+        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR;
+    }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -281,9 +281,6 @@ namespace Flint.Rt {
         return "a #" + Obj.Ty(rt.gc.sp, Val.AsHeap(v));
     }
     internal static class Str {
-        internal static bool IsString(Rt rt, long v) {
-            return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr;
-        }
         internal static int SCount(Rt rt, long v) { return 71; }
     }
     internal static bool IsSeq(Rt rt, long v) {
@@ -306,6 +303,9 @@ namespace Flint.Rt {
     internal static int SeqCount(Rt rt, long v) { return 81; }
     internal static long Rest(Rt rt, long v) { return 0x902L; }
     internal static long First(Rt rt, long v) { return 0x903L; }
+    internal static bool IsString(Rt rt, long v) {
+        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr;
+    }
 --csharp
     public static void Main() {
         Rt rt = new Rt();

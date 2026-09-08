@@ -12,6 +12,7 @@ using static global::Flint.Rt.Seqs;
 using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Names;
+using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 
 public static class Tablekind {
     /// The kind of a value, as the keyword protocol dispatch uses.
@@ -158,7 +159,7 @@ public static class Tablekind {
             return Val.IsDouble(v);
         }
         if (t == Str.Keyword(rt, null, "string")) {
-            return Str.IsString(rt, v);
+            return IsString(rt, v);
         }
         if (t == Str.Keyword(rt, null, "bool")) {
             return Val.IsBool(v);

@@ -14,6 +14,7 @@ using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Byteat;
 using static global::_3sln.Flint.Kgen.Rt.Mapread;
 using static global::_3sln.Flint.Kgen.Rt.Maptrans;
+using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Setcore;
 using static global::_3sln.Flint.Kgen.Rt.Tableref;
 using static global::_3sln.Flint.Kgen.Rt.Vecread;
@@ -26,7 +27,7 @@ public static class Collread {
     /// checked before the tag dispatch because a string is not always a heap
     /// value: a short one lives INLINE in the value's bits.
     public static long CollGet(Rt rt, long coll, long k, long dflt) {
-        if (Str.IsString(rt, coll)) {
+        if (IsString(rt, coll)) {
             if (Num.IsInt(rt, k)) {
                 long i = Num.I64Of(rt, k);
                 if (i >= 0) {

@@ -139,9 +139,6 @@ fn main() {
     }
     static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     static final class Str {
-        static boolean isString(Rt rt, long v) {
-            return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR;
-        }
         static long keyword(Rt rt, String ns, String n) { return n.equals("tag") ? 0x8AL : 0x8BL; }
         static long nth(Rt rt, long s, int i, long d) { return 0x910L + i; }
     }
@@ -165,6 +162,9 @@ fn main() {
     static long tsetGet(Rt rt, long t, long k, long d) { return 0x925L; }
     static boolean mapContains(Rt rt, long m, long k) { return true; }
     static boolean setContains(Rt rt, long s, long k) { return true; }
+    static boolean isString(Rt rt, long v) {
+        return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR;
+    }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -255,9 +255,6 @@ namespace Flint.Rt {
         internal long Obj_(int t) { long a = bump; bump += 8; gc.sp.m[(int) a] = (byte) t; return a; }
     }
     internal static class Str {
-        internal static bool IsString(Rt rt, long v) {
-            return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr;
-        }
         internal static long Keyword(Rt rt, string ns, string n) { return n == "tag" ? 0x8AL : 0x8BL; }
         internal static long Nth(Rt rt, long s, int i, long d) { return 0x910L + i; }
     }
@@ -282,6 +279,9 @@ namespace Flint.Rt {
     internal static long TsetGet(Rt rt, long t, long k, long d) { return 0x925L; }
     internal static bool MapContains(Rt rt, long m, long k) { return true; }
     internal static bool SetContains(Rt rt, long s, long k) { return true; }
+    internal static bool IsString(Rt rt, long v) {
+        return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr;
+    }
 --csharp
     public static void Main() {
         Rt rt = new Rt();

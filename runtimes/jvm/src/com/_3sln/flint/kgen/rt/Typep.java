@@ -12,6 +12,7 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Eq.*;
 import static com._3sln.flint.kgen.rt.Mapcore.*;
 import static com._3sln.flint.kgen.rt.Names.*;
+import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Seqcore.*;
 import static com._3sln.flint.kgen.rt.Setcore.*;
 import static com._3sln.flint.kgen.rt.Vecread.*;
@@ -62,7 +63,7 @@ public final class Typep {
             case 3:
                 return Num.isNumber(rt, v);
             case 4:
-                return Str.isString(rt, v);
+                return isString(rt, v);
             case 5:
                 return isKeyword(rt, v);
             case 6:

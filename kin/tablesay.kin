@@ -12,7 +12,7 @@
                                    == != > >= < not nil?
                                    slot vec-nth mark push r set-r pop-to
                                    local set for while
-                                   value-text name-of is-string kind-of type-ok own-text
+                                   value-text name-of  kind-of type-ok own-text
                                    seq-of first-of next-of slot-or-nth
                                    charge-work throw-str str-cat static-text
                                    Rt Value I32 Bool Text RootIx
@@ -21,7 +21,8 @@
                                         is-table-ref]]
             [flint.rt.tableref :refer [schema-id]]
             [flint.rt.tablecell :refer [row-column]]
-            [flint.rt.mapcore :refer [is-map map-count]]))
+            [flint.rt.mapcore :refer [is-map map-count]]
+            [flint.rt.ropemeas :refer [is-string]]))
 
 (doc "A keyword's name as host text, or `?` when it has none."
      ""

@@ -24,7 +24,7 @@
   (:require [flint.impl.rt :refer [defn return if let do comment doc
                                    == not or nil? is-heap as-heap ty -
                                    slot throw-str str-cat static-text own-text
-                                   is-string s-count
+                                    s-count
                                    vec-count vec-nth vec-pop schema-len
                                    empty-vec empty-map empty-set empty-list
                                    Rt Value I32 Ty Bool Text NIL
@@ -42,7 +42,8 @@
             [flint.rt.maptrans :refer [tmap-count tset-count]]
             [flint.rt.seqwalk :refer [seq-count first rest]]
             [flint.rt.tablemeta :refer [table-count]]
-            [flint.rt.tabletrans :refer [ttable-count]]))
+            [flint.rt.tabletrans :refer [ttable-count]]
+            [flint.rt.ropemeas :refer [is-string]]))
 
 (doc "How many things are in it."
      ""

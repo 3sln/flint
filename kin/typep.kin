@@ -27,7 +27,7 @@
   (:require [flint.impl.rt :refer [defn return if let case comment doc
                                    not or ==
                                    is-heap as-heap ty nil? is-int is-bool
-                                   is-double is-number is-string 
+                                   is-double is-number  
                                    
                                    Rt Value Ty Bool I32
                                    CAT_SEQUENTIAL
@@ -37,7 +37,8 @@
             [flint.rt.vecread :refer [is-vector-like]]
             [flint.rt.names :refer [is-keyword is-symbol]]
             [flint.rt.mapcore :refer [is-map]]
-            [flint.rt.setcore :refer [is-set]]))
+            [flint.rt.setcore :refer [is-set]]
+            [flint.rt.ropemeas :refer [is-string]]))
 
 (doc "Is `v` a function -- a closure, a native, or a multifn?"
      ""

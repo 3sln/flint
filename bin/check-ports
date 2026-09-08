@@ -1,0 +1,41 @@
+#!/bin/sh
+# COMPILE the two ported runtimes, and nothing else.
+#
+# `bin/conform-hosts` is the test that would catch a wrong port, and it takes
+# about a quarter of an hour. Most of what breaks a port while it is being
+# changed is not wrongness, it is a call to something that no longer exists --
+# and that is a COMPILE error, reachable in about a minute.
+#
+# So this is the inner loop and `conform-hosts` is the outer one. It asserts
+# nothing about behaviour and must not be mistaken for the gate: a green run
+# here means the ports still build, not that they still agree.
+set -e
+cd "$(dirname "$0")/.."
+JDK="${FLINT_JDK:-${JAVA_HOME:-/opt/homebrew/opt/openjdk}}"
+[ -x "$JDK/bin/javac" ] || JDK=/opt/homebrew/opt/openjdk
+
+if [ -x "$JDK/bin/javac" ]; then
+  rm -rf runtimes/jvm/classes
+  if ! "$JDK/bin/javac" -d runtimes/jvm/classes \
+       runtimes/jvm/src/com/flint/rt/*.java runtimes/jvm/src/com/_3sln/flint/kgen/rt/*.java \
+       runtimes/jvm/test/*.java > /tmp/flint-ports-javac.out 2>&1; then
+    head -20 /tmp/flint-ports-javac.out
+    echo "  FAIL the jvm port does not compile"
+    exit 1
+  fi
+  echo "  ok   the jvm port compiles"
+else
+  echo "  --   no javac at $JDK, skipping the jvm row"
+fi
+
+if command -v dotnet > /dev/null 2>&1; then
+  if ! (cd runtimes/clr/conform && dotnet build -v q --nologo -c Release) \
+       > /tmp/flint-ports-dotnet.out 2>&1; then
+    grep -E "error " /tmp/flint-ports-dotnet.out | head -20
+    echo "  FAIL the clr port does not compile"
+    exit 1
+  fi
+  echo "  ok   the clr port compiles"
+else
+  echo "  --   no dotnet, skipping the clr row"
+fi

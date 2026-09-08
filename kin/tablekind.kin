@@ -12,7 +12,7 @@
   (:require [flint.impl.rt :refer [defn return if let comment doc
                                    == or not is-heap as-heap ty
                                    nil? is-bool is-double is-int
-                                   is-inline-str is-inline-kw is-string
+                                   is-inline-str is-inline-kw 
                                     is-fixnum
                                    bare-kw static-text
                                    Rt Value Bool Ty
@@ -26,7 +26,8 @@
                                    TY_BYTES TY_BROPE TY_TBYTES TY_DELAY
                                    TY_VOLATILE TY_SCHEMA TY_TABLE
                                    TY_TABLEREF]]
-            [flint.rt.names :refer [is-keyword]]))
+            [flint.rt.names :refer [is-keyword]]
+            [flint.rt.ropemeas :refer [is-string]]))
 
 (doc "The kind of a value, as the keyword protocol dispatch uses."
      ""

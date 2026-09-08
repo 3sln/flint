@@ -34,14 +34,15 @@
                                    C_FIRST C_REST
                                    TY_CONS TY_VECSEQ TY_STRSEQ TY_RANGE
                                    TY_MAPENTRY TY_TABLE
-                                   or is-string vec-count ref-to-map
+                                   or  vec-count ref-to-map
                                    map-entry-vector set-element-vector
                                    throw-str str-cat static-text Text
                                    TY_EMPTY_LIST TY_VEC TY_LAZYSEQ
                                    TY_ARRAYMAP TY_HASHMAP TY_SET TY_TABLEREF]]
             [flint.rt.seqs :refer [vecseq strseq range range-empty]]
             [flint.rt.seqcore :refer [count-hint]]
-            [flint.rt.nouns :refer [describe]]))
+            [flint.rt.nouns :refer [describe]]
+            [flint.rt.ropemeas :refer [is-string]]))
 
 (doc "The first element of `v`, or nil when there is none.")
 (defn ^:pub ^:method ^Value first [^:mut ^Rt rt ^Value v]

@@ -19,7 +19,7 @@
                                    == != < not or and nil? is-heap as-heap ty
                                    mark push r set-r pop-to forever break +
                                    charge-work is-double is-bool is-number
-                                   num-cmp is-string str-cmp 
+                                   num-cmp  str-cmp 
                                    name-of throw-str str-cat - val-cmp
                                    static-text to-i32
                                    Rt Value I32 Cmp Ty Cat Bool RootIx Text NIL CAT_SEQUENTIAL
@@ -28,7 +28,8 @@
             [flint.rt.names :refer [is-keyword ns-of is-symbol]]
             [flint.rt.seqcore :refer [is-seq]]
             [flint.rt.seqwalk :refer [seq first next]]
-            [flint.rt.eq :refer [category]]))
+            [flint.rt.eq :refer [category]]
+            [flint.rt.ropemeas :refer [is-string]]))
 
 (doc "Two NAMED things -- keywords or symbols -- by namespace then name."
      ""

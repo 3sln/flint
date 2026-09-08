@@ -14,9 +14,27 @@
                                    == != < > >= not bit-and ushr
                                    + local set for is-inline-str is-heap as-heap
                                    leaf-len leaf-byte slot as-fixnum to-i32
-                                   str-is-ascii
-                                   Rt Value I32 Bool RP_BYTES RP_CPS]]
+                                   str-is-ascii or ty
+                                   Rt Value I32 Bool Ty RP_BYTES RP_CPS
+                                   TY_STR TY_ROPE]]
             [flint.rt.ropecat :refer [is-rope]]))
+
+(doc "Is `v` a STRING -- any of the three tiers?"
+     ""
+     "Inline first, because it is a test on the value word and the other two"
+     "need a tag read. Then the two heap tags: a flat string and a ROPE are"
+     "both strings, and every caller that forgot the second one was a bug"
+     "waiting for a string long enough to become a rope."
+     ""
+     "This is what `type-p` asks for code 4, and it was written three times"
+     "until it was written here.")
+(defn ^:pub ^:method ^Bool is-string [^Rt rt ^Value v]
+  (if (is-inline-str rt v)
+    (return true))
+  (if (not (is-heap v))
+    (return false))
+  (let [^Ty t (ty rt (as-heap v))]
+    (return (or (== t TY_STR) (== t TY_ROPE)))))
 
 (doc "How many BYTES the string holds. O(1) on all three tiers.")
 (defn ^:pub ^:method ^I32 s-bytes [^Rt rt ^Value v]

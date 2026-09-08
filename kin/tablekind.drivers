@@ -197,10 +197,6 @@ fn main() {
             rt.kws.add(name);
             return (0xAL << 60) | (rt.kws.size() - 1);
         }
-        static boolean isString(Rt rt, long v) {
-            return Val.isInlineStr(v)
-                || (Val.isHeap(v) && (ty(rt.gc.sp, v) == TY_STR || ty(rt.gc.sp, v) == TY_ROPE));
-        }
     }
     static final class Num {
         static boolean isInt(Rt rt, long v) {
@@ -210,6 +206,10 @@ fn main() {
     static String kwText(Rt rt, long v) { return rt.kws.get((int) (v & 0xFFFFL)); }
     static boolean isKeyword(Rt rt, long v) {
         return Val.isInlineKw(v) || (Val.isHeap(v) && ty(rt.gc.sp, v) == TY_KW);
+    }
+    static boolean isString(Rt rt, long v) {
+        return Val.isInlineStr(v)
+            || (Val.isHeap(v) && (ty(rt.gc.sp, v) == TY_STR || ty(rt.gc.sp, v) == TY_ROPE));
     }
 --java
     public static void main(String[] args) {
@@ -299,11 +299,6 @@ fn main() {
             rt.kws.Add(name);
             return (0xAL << 60) | (long) (rt.kws.Count - 1);
         }
-        internal static bool IsString(Rt rt, long v) {
-            return Val.IsInlineStr(v)
-                || (Val.IsHeap(v) && (Obj.Ty(rt.gc.sp, v) == Obj.TyStr
-                                      || Obj.Ty(rt.gc.sp, v) == Obj.TyRope));
-        }
     }
     internal static class Num {
         internal static bool IsInt(Rt rt, long v) {
@@ -313,6 +308,11 @@ fn main() {
     internal static string KwText(Rt rt, long v) { return rt.kws[(int) (v & 0xFFFFL)]; }
     internal static bool IsKeyword(Rt rt, long v) {
         return Val.IsInlineKw(v) || (Val.IsHeap(v) && Obj.Ty(rt.gc.sp, v) == Obj.TyKw);
+    }
+    internal static bool IsString(Rt rt, long v) {
+        return Val.IsInlineStr(v)
+            || (Val.IsHeap(v) && (Obj.Ty(rt.gc.sp, v) == Obj.TyStr
+                                  || Obj.Ty(rt.gc.sp, v) == Obj.TyRope));
     }
 --csharp
     internal static void Main() {

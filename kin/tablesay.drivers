@@ -309,7 +309,6 @@ fn main() {
         }
     }
     static final class Str {
-        static boolean isString(Rt rt, long v) { return Val.isName(v); }
         static String text(Rt rt, long v) { return rt.names.get(Val.idx(v)); }
     }
     static final class com { static final class flint { static final class rt {
@@ -349,7 +348,7 @@ fn main() {
         String s = Str.text(rt, rt.nameOf(t));
         if (s.equals("any")) return true;
         if (s.equals("int")) return Val.isFixnum(v);
-        if (s.equals("string")) return Str.isString(rt, v);
+        if (s.equals("string")) return isString(rt, v);
         return false;
     }
     static long emptyMap(Rt rt) { long a = rt.alloc(TY_MAP, 1); rt.lens[(int) a] = 0; return Val.heap(a); }
@@ -413,6 +412,7 @@ fn main() {
         rt.set(s, Table.SC_INDEX, idx);
         return s;
     }
+    static boolean isString(Rt rt, long v) { return Val.isName(v); }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -520,7 +520,6 @@ namespace _3sln.Flint.Kgen.Rt {
         }
     }
     internal static class Str {
-        internal static bool IsString(Rt rt, long v) { return Val.IsName(v); }
         internal static string Text(Rt rt, long v) { return rt.names[Val.Idx(v)]; }
     }
     internal static long Obj2(Rt rt, int t, int n) { return Val.Heap(rt.Alloc(t, n)); }
@@ -546,7 +545,7 @@ namespace _3sln.Flint.Kgen.Rt {
         string s = Str.Text(rt, rt.NameOf(t));
         if (s == "any") return true;
         if (s == "int") return Val.IsFixnum(v);
-        if (s == "string") return Str.IsString(rt, v);
+        if (s == "string") return IsString(rt, v);
         return false;
     }
     internal static long EmptyMap(Rt rt) { long a = rt.Alloc(Obj.TyMap, 1); rt.lens[(int) a] = 0; return Val.Heap(a); }
@@ -610,6 +609,7 @@ namespace _3sln.Flint.Kgen.Rt {
         rt.Set(s, global::Flint.Rt.Table.SC_INDEX, idx);
         return s;
     }
+    internal static bool IsString(Rt rt, long v) { return Val.IsName(v); }
 --csharp
     internal static void Main() {
         Rt rt = new Rt();

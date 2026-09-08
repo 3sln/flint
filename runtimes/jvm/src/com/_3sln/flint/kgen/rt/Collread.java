@@ -12,6 +12,7 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Byteat.*;
 import static com._3sln.flint.kgen.rt.Mapread.*;
 import static com._3sln.flint.kgen.rt.Maptrans.*;
+import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Setcore.*;
 import static com._3sln.flint.kgen.rt.Tableref.*;
 import static com._3sln.flint.kgen.rt.Vecread.*;
@@ -24,7 +25,7 @@ public final class Collread {
     /// checked before the tag dispatch because a string is not always a heap
     /// value: a short one lives INLINE in the value's bits.
     public static long collGet(Rt rt, long coll, long k, long dflt) {
-        if (Str.isString(rt, coll)) {
+        if (isString(rt, coll)) {
             if (Num.isInt(rt, k)) {
                 long i = Num.i64Of(rt, k);
                 if (i >= 0) {

@@ -198,7 +198,6 @@ fn main() {
     }
     static int ty(Space sp, long a) { return sp.m[(int) a] & 0xFF; }
     static final class Str {
-        static boolean isString(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR; }
         static long keyword(Rt rt, String ns, String n) { return n.equals("tag") ? 0x8AL : 0x8BL; }
         static long nth(Rt rt, long s, int i, long d) { return i < rt.strn ? 0x920L + i : d; }
         static String text(Rt rt, long v) { return "zz"; }
@@ -226,6 +225,7 @@ fn main() {
     static final class com { static final class flint { static final class rt {
         static final class Maps { static long empty(Rt rt) { return 0x900L; } }
     } } }
+    static boolean isString(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR; }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -348,7 +348,6 @@ namespace Flint.Rt {
         internal long NameOf(long k) { return 0x8DL; }
     }
     internal static class Str {
-        internal static bool IsString(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr; }
         internal static long Keyword(Rt rt, string ns, string n) { return n == "tag" ? 0x8AL : 0x8BL; }
         internal static long Nth(Rt rt, long s, int i, long d) { return i < rt.strn ? 0x920L + i : d; }
         internal static string Text(Rt rt, long v) { return "zz"; }
@@ -373,6 +372,7 @@ namespace Flint.Rt {
     internal static long BAt(Rt rt, long b, int i, long d) { return i < rt.bytn ? 0x930L + i : d; }
     internal static long TableAssoc(Rt rt, long t, long k, long v) { return 0x903L; }
     internal static long RefAssoc(Rt rt, long r, long k, long v) { return 0x904L; }
+    internal static bool IsString(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr; }
 --csharp
     public static void Main() {
         Rt rt = new Rt();

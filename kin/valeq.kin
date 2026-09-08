@@ -23,7 +23,7 @@
                                    nil? mark push r set-r pop-to while break
                                    forever
                                    slot is-double num-f64 is-int i64-of
-                                   is-string s-bytes charge-work
+                                    s-bytes charge-work
                                    vec-count ref-to-map table-ref table-count
                                    set-eq maps-eq val-eq
                                    Rt Value I32 I64 Ty Bool Cat RootIx F64
@@ -36,7 +36,8 @@
             [flint.rt.seqwalk :refer [seq first next]]
             [flint.rt.byteeq :refer [b-eq]]
             [flint.rt.ropeeq :refer [tree-eq]]
-            [flint.rt.tablemeta :refer [is-table-ref schema-eq]]))
+            [flint.rt.tablemeta :refer [is-table-ref schema-eq]]
+            [flint.rt.ropemeas :refer [is-string]]))
 
 (doc "Is `v` a VECTOR, strictly -- not a map entry, which is vector-LIKE."
      ""

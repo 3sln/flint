@@ -17,6 +17,25 @@ use crate::kgen::rt::hash::*;
 use crate::kgen::rt::pike::*;
 
 impl Rt {
+    /// Is `v` a STRING -- any of the three tiers?
+    /// 
+    /// Inline first, because it is a test on the value word and the other two
+    /// need a tag read. Then the two heap tags: a flat string and a ROPE are
+    /// both strings, and every caller that forgot the second one was a bug
+    /// waiting for a string long enough to become a rope.
+    /// 
+    /// This is what `type-p` asks for code 4, and it was written three times
+    /// until it was written here.
+    pub fn is_string(&self, v: Value) -> bool {
+        if v.is_inline_str() {
+            return true;
+        }
+        if !v.is_heap() {
+            return false;
+        }
+        let t: u8 = ty(&self.gc.sp, v.as_heap());
+        return (t == TY_STR) || (t == TY_ROPE);
+    }
     /// How many BYTES the string holds. O(1) on all three tiers.
     pub fn s_bytes(&self, v: Value) -> u32 {
         if v.is_inline_str() {

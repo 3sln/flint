@@ -13,6 +13,7 @@ using static global::Flint.Rt.Vec;
 using Rt = global::Flint.Rt.Rt;
 using static global::_3sln.Flint.Kgen.Rt.Mapcore;
 using static global::_3sln.Flint.Kgen.Rt.Names;
+using static global::_3sln.Flint.Kgen.Rt.Ropemeas;
 using static global::_3sln.Flint.Kgen.Rt.Tablecell;
 using static global::_3sln.Flint.Kgen.Rt.Tablekind;
 using static global::_3sln.Flint.Kgen.Rt.Tablemeta;
@@ -33,7 +34,7 @@ public static class Tablesay {
         // ports spell the two the same, so the conversion costs them
         // nothing and costs Rust one literal copy on a path that is
         // already building a message about a failure.
-        if (!Str.IsString(rt, n)) {
+        if (!IsString(rt, n)) {
             return "?";
         }
         return Str.Text(rt, n);

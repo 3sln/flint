@@ -12,6 +12,25 @@ import static com.flint.rt.Vec.*;
 import static com._3sln.flint.kgen.rt.Ropecat.*;
 
 public final class Ropemeas {
+    /// Is `v` a STRING -- any of the three tiers?
+    /// 
+    /// Inline first, because it is a test on the value word and the other two
+    /// need a tag read. Then the two heap tags: a flat string and a ROPE are
+    /// both strings, and every caller that forgot the second one was a bug
+    /// waiting for a string long enough to become a rope.
+    /// 
+    /// This is what `type-p` asks for code 4, and it was written three times
+    /// until it was written here.
+    public static boolean isString(Rt rt, long v) {
+        if (Val.isInlineStr(v)) {
+            return true;
+        }
+        if (!Val.isHeap(v)) {
+            return false;
+        }
+        int t = ty(rt.gc.sp, Val.asHeap(v));
+        return (t == TY_STR) || (t == TY_ROPE);
+    }
     /// How many BYTES the string holds. O(1) on all three tiers.
     public static int sBytes(Rt rt, long v) {
         if (Val.isInlineStr(v)) {

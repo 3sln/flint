@@ -14,6 +14,7 @@ import static com._3sln.flint.kgen.rt.Bytecore.*;
 import static com._3sln.flint.kgen.rt.Mapwrite.*;
 import static com._3sln.flint.kgen.rt.Names.*;
 import static com._3sln.flint.kgen.rt.Opaque.*;
+import static com._3sln.flint.kgen.rt.Ropemeas.*;
 import static com._3sln.flint.kgen.rt.Seqwalk.*;
 import static com._3sln.flint.kgen.rt.Tablemake.*;
 import static com._3sln.flint.kgen.rt.Tablerow.*;
@@ -125,7 +126,7 @@ public final class Collwrite {
             }
             return Val.NIL;
         }
-        if (Str.isString(rt, coll)) {
+        if (isString(rt, coll)) {
             long c = Str.nth(rt, coll, i, Val.NOT_FOUND);
             if (c != Val.NOT_FOUND) {
                 return c;

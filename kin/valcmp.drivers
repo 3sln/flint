@@ -216,7 +216,6 @@ fn main() {
         }
     }
     static final class Str {
-        static boolean isString(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR; }
         static int compareUtf16(Rt rt, long a, long b) {
             return sgn((int) rt.slot_(a, 0) - (int) rt.slot_(b, 0));
         }
@@ -237,6 +236,7 @@ fn main() {
     static long first(Rt rt, long s) { return num(s - 0xC000L); }
     static long next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
     static boolean isKeyword(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_KW; }
+    static boolean isString(Rt rt, long v) { return Val.isHeap(v) && ty(rt.gc.sp, Val.asHeap(v)) == TY_STR; }
 --java
     public static void main(String[] args) {
         Rt rt = new Rt();
@@ -358,7 +358,6 @@ namespace Flint.Rt {
         }
     }
     internal static class Str {
-        internal static bool IsString(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr; }
         internal static int CompareUtf16(Rt rt, long a, long b) {
             return Sgn((int) rt.Slot_(a, 0) - (int) rt.Slot_(b, 0));
         }
@@ -379,6 +378,7 @@ namespace Flint.Rt {
     internal static long First(Rt rt, long s) { return Num_(s - 0xC000L); }
     internal static long Next(Rt rt, long s) { return s == 0xC001L ? NIL : s - 1; }
     internal static bool IsKeyword(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyKw; }
+    internal static bool IsString(Rt rt, long v) { return Val.IsHeap(v) && Obj.Ty(rt.gc.sp, Val.AsHeap(v)) == Obj.TyStr; }
 --csharp
     public static void Main() {
         Rt rt = new Rt();

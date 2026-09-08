@@ -136,7 +136,13 @@ fn main() {
     // A FOUR-BYTE CODE POINT is still ONE code point.
     let emoji = rt.flat(&[0xF0, 0x9F, 0x92, 0xA9]);
     let withemoji = rt.node(&[fa, emoji]);
-    o.push_str(&format!("wide4={} node4={}", show(&rt, emoji), show(&rt, withemoji)));
+    o.push_str(&format!("wide4={} node4={} ", show(&rt, emoji), show(&rt, withemoji)));
+    // IS-STRING: all three tiers yes, another heap tag and an immediate no.
+    let notstr = Value::heap(rt.alloc(TY_VEC, 1));
+    o.push_str(&format!("str?={}{}{}{}{}",
+                        rt.is_string(ia) as u32, rt.is_string(fa) as u32,
+                        rt.is_string(deep) as u32, rt.is_string(notstr) as u32,
+                        rt.is_string(Value(1)) as u32));
     println!("{}", o);
 }
 --java-head
@@ -267,7 +273,13 @@ fn main() {
         o.append("deep=").append(meas(rt, node(rt, new long[]{mixed, allascii}))).append(' ');
         long emoji = flat(rt, new int[]{0xF0, 0x9F, 0x92, 0xA9});
         o.append("wide4=").append(meas(rt, emoji))
-         .append(" node4=").append(meas(rt, node(rt, new long[]{fa, emoji})));
+         .append(" node4=").append(meas(rt, node(rt, new long[]{fa, emoji}))).append(' ');
+        // IS-STRING: all three tiers yes, another heap tag and an immediate no.
+        long rope = node(rt, new long[]{fa, ia});
+        long notstr = Val.heap(rt.alloc(TY_VEC, 1));
+        o.append("str?=").append(isString(rt, ia) ? 1 : 0).append(isString(rt, fa) ? 1 : 0)
+         .append(isString(rt, rope) ? 1 : 0).append(isString(rt, notstr) ? 1 : 0)
+         .append(isString(rt, 1L) ? 1 : 0);
         System.out.println(o.toString());
     }
 --csharp-pre
@@ -399,6 +411,12 @@ namespace Flint.Rt {
         o.Append("deep=").Append(Meas(rt, Node(rt, new long[]{mixed, allascii}))).Append(' ');
         long emoji = Flat(rt, new int[]{0xF0, 0x9F, 0x92, 0xA9});
         o.Append("wide4=").Append(Meas(rt, emoji))
-         .Append(" node4=").Append(Meas(rt, Node(rt, new long[]{fa, emoji})));
+         .Append(" node4=").Append(Meas(rt, Node(rt, new long[]{fa, emoji}))).Append(' ');
+        // IS-STRING: all three tiers yes, another heap tag and an immediate no.
+        long rope = Node(rt, new long[]{fa, ia});
+        long notstr = Val.Heap(rt.Alloc(Obj.TyVec, 1));
+        o.Append("str?=").Append(IsString(rt, ia) ? 1 : 0).Append(IsString(rt, fa) ? 1 : 0)
+         .Append(IsString(rt, rope) ? 1 : 0).Append(IsString(rt, notstr) ? 1 : 0)
+         .Append(IsString(rt, 1L) ? 1 : 0);
         System.Console.WriteLine(o.ToString());
     }

@@ -204,7 +204,7 @@ public static class Seqwalk {
         if (Val.IsNil(v)) {
             return Val.Nil;
         }
-        if (Str.IsString(rt, v)) {
+        if (IsString(rt, v)) {
             // CODE POINTS, matching the index the strseq holds.
             if (Str.SCount(rt, v) == 0) {
                 return Val.Nil;

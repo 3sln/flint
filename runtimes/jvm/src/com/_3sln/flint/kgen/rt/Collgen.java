@@ -33,7 +33,7 @@ public final class Collgen {
         if (Val.isNil(v)) {
             return 0;
         }
-        if (Str.isString(rt, v)) {
+        if (isString(rt, v)) {
             return Str.sCount(rt, v);
         }
         if (Val.isHeap(v)) {

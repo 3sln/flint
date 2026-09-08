@@ -582,6 +582,7 @@ Rust, Java and C#. All five criteria, measured rather than asserted:
 | 3 | `Typep` | `type-p`, `is-sequential`, `is-fn` — the tag table the COMPILER emits into |
 | 3 | `Names` | `is-keyword` — the predicate `type-p` delegated to that was still written three times |
 | 3 | `Vecread` | `is-vector-like` — the other one, and the last of `type-p`'s delegates |
+| 3 | `Ropemeas` | `is-string` — nine `.kin` sources asked it, and got three answers |
 
 The assoc/dissoc block is complete: thirteen functions of `Maps`, one
 definition each. The three analyses had gated the whole block on converging
@@ -629,6 +630,35 @@ the same question about the other kind of name, and it left the vocabulary --
 it was a host call in `flint/impl/rt.cljc`, so every `.kin` that asked it got
 whatever each runtime had written. Four sources asked: `typep`, `tablekind`,
 `tablemake` and `valcmp`.
+
+`is-string` was the largest of these and the reason is the count of askers:
+NINE `.kin` sources named it through the vocabulary — `collgen`, `collread`,
+`collwrite`, `seqwalk`, `tablekind`, `tablesay`, `typep`, `valcmp` and
+`valeq`. A vocabulary entry is a host call wearing a shared name, so nine
+generated modules were asking one question and getting whatever each runtime
+had written. It lives in `ropemeas.kin` now, which is the file that already
+answers what a string MEASURES across the same three tiers.
+
+`bin/check-ports` came out of this one. Removing a hand-written function that
+the ports still CALL is a compile error, and `is-string` had sixteen callers in
+each port where `is-keyword` and `is-vector-like` had none — so this was the
+first of these ports to break the build rather than pass first time. Compiling
+the two ports takes two seconds; `conform-hosts`, which is what would catch a
+port being WRONG, takes about a quarter of an hour. Paying the second to learn
+the first is the wrong trade, and the script's own comment says so, so that a
+green run there is never mistaken for the gate.
+
+The sixteen callers are also why `Str.isString` survives as a DELEGATOR rather
+than being deleted: the generated tree reaches `isString` through a static
+import, hand-written code reaches `Str.isString`, and there is one body under
+both. `Rt.typeP` and `Rt.Describe` already had that shape.
+
+The rewrite of nine `ns` forms went wrong in a way worth recording: the script
+that appended the new `:require` took two characters off the end of the
+previous one, so every file lost a bracket and gained it back one line later.
+Nothing subtle happened — all 76 sources stopped generating at once, including
+files nothing had touched, because `gen` reads the whole project. A mistake
+that breaks everything is the cheap kind.
 
 `is-vector-like` went the same way, into `vecread.kin`, and its comment is
 worth keeping because it explains a distinction that looks like an oversight:

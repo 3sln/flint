@@ -202,7 +202,7 @@ public final class Seqwalk {
         if (Val.isNil(v)) {
             return Val.NIL;
         }
-        if (Str.isString(rt, v)) {
+        if (isString(rt, v)) {
             // CODE POINTS, matching the index the strseq holds.
             if (Str.sCount(rt, v) == 0) {
                 return Val.NIL;

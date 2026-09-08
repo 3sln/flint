@@ -20,12 +20,6 @@ using static _3sln.Flint.Kgen.Rt.Interns;
 /// quadratic. Before it existed the word-frequency benchmark took 762 ms
 /// instead of 62.
 public static class Str {
-    public static bool IsString(Rt rt, long v) {
-        if (Val.IsInlineStr(v)) return true;
-        if (!Val.IsHeap(v)) return false;
-        int t = Obj.Ty(rt.gc.sp, Val.AsHeap(v));
-        return t == Obj.TyStr || t == Obj.TyRope;
-    }
 
     /// A bare, UNINTERNED heap string. `Of` is the canonical constructor.
     /// A LONG NON-ASCII STRING ARRIVES AS A TREE. The tier transitions fire on
@@ -294,6 +288,11 @@ public static class Str {
 
     public static string Text(Rt rt, long v) => Encoding.UTF8.GetString(Bytes(rt, v));
 
+
+    /// Is `v` a string -- any of the three tiers? GENERATED, from
+    /// `kin/ropemeas.kin`. A delegator rather than a copy -- see the Java one.
+    public static bool IsString(Rt rt, long v) =>
+        global::_3sln.Flint.Kgen.Rt.Ropemeas.IsString(rt, v);
 
     public static long Keyword(Rt rt, string ns, string name) {
         byte[] nb = Encoding.UTF8.GetBytes(name);
