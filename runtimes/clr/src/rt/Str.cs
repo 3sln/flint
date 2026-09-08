@@ -70,7 +70,10 @@ public static class Str {
             // Split on a CHARACTER boundary at or before the limit: a leaf that
             // ended mid-code-point would make every count downstream wrong.
             int end = System.Math.Min(start + INDEX_LEAF, b.Length);
-            while (end > start && (b[end - 1] & 0xC0) == 0x80) end--;
+            // `b[end]`, NOT `b[end - 1]` -- see the Java copy for the character
+            // this used to split, and for why `count` stayed right while every
+            // indexed read of that character did not.
+            while (end > start && end < b.Length && (b[end] & 0xC0) == 0x80) end--;
             if (end == start) end = System.Math.Min(start + INDEX_LEAF, b.Length);
             var piece = new byte[end - start];
             System.Array.Copy(b, start, piece, 0, end - start);

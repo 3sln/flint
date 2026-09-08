@@ -87,7 +87,18 @@ public final class Str {
             // Split on a CHARACTER boundary at or before the limit: a leaf that
             // ended mid-code-point would make every count downstream wrong.
             int end = Math.min(start + INDEX_LEAF, b.length);
-            while (end > start && (b[end - 1] & 0xC0) == 0x80) end--;
+            // `b[end]`, NOT `b[end - 1]`. The question is whether the leaf ENDS
+            // on a boundary, and that is a fact about the byte that would BEGIN
+            // the next one. Asking about `b[end - 1]` backs up off a boundary
+            // that was already good: a two-byte character at 126-127 left this
+            // cutting at 127, between the lead byte and its continuation, so
+            // every indexed read of that character answered a replacement
+            // character while `count` stayed right -- because an orphan lead
+            // still counts as one code point and its orphan continuations
+            // count as none. The end of the string is a boundary by definition.
+            while (end > start && end < b.length && (b[end] & 0xC0) == 0x80) end--;
+            // Valid UTF-8 backs up at most three bytes, so this can only fire on
+            // malformed input. Taking the whole chunk keeps the loop finite.
             if (end == start) end = Math.min(start + INDEX_LEAF, b.length);
             byte[] piece = java.util.Arrays.copyOfRange(b, start, end);
             boolean pa = true;

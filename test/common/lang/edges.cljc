@@ -72,6 +72,34 @@
       (expect = :found (get {lit :found} built))
       (expect = true (contains? #{built} lit)))))
 
+(def ^:private wide-literal
+  ;; 600 two-byte characters = 1200 bytes: NOT ascii, and past `FLAT_MAX`.
+  "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé")
+
+(defn ^:flint.check/test an-indexed-literal-splits-on-character-boundaries []
+  ;; THE TIER THE WALK ABOVE CANNOT REACH. `rep` CONCATENATES, and a
+  ;; concatenation past `FLAT_MAX` is a rope; a LITERAL past `FLAT_MAX` that is
+  ;; not ascii is built by a different constructor with its own leaf-splitting
+  ;; rule. The walk above crosses 1024 and 2000 with `"a"`, so `ascii` is true
+  ;; and that constructor is never entered -- the right boundary with the wrong
+  ;; character.
+  ;;
+  ;; Both ports cut the leaf one byte late, between a lead byte and its
+  ;; continuation. `count` stayed RIGHT -- an orphan lead counts as one code
+  ;; point and its orphan continuations as none -- so every check here is about
+  ;; reading a character back, which is where it showed.
+  (expect = 600 (count wide-literal))
+  ;; INDEX_LEAF is 128 bytes = 64 of these characters, so 63/64 and 127/128 sit
+  ;; either side of a leaf edge. That is the whole test.
+  (doseq [i [0 62 63 64 65 126 127 128 129 599]]
+    (expect = "é" (nth wide-literal i)))
+  (expect = "ééé" (subs wide-literal 63 66))
+  (expect = "éééé" (subs wide-literal 126 130))
+  ;; And the two constructors must agree, which is the tier-invisibility this
+  ;; file exists to assert.
+  (expect = true (= wide-literal (rep 600 "é")))
+  (expect = (hash (rep 600 "é")) (hash wide-literal)))
+
 (defn ^:flint.check/test strings-order-across-every-tier []
   (doseq [n [1 5 6 32 33 200 1024 1025 2000]]
     (let [lo (rep n "a")

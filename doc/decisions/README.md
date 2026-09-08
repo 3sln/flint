@@ -506,6 +506,49 @@ what remains, and what each thing is waiting on.
    `test/manifest.clj` asserts every listed var is really callable from a
    compiled module, so the counts got stronger rather than just larger.
 
+0s. **Both ports split a UTF-8 character in half, and `count` hid it** —
+   FIXED. `indexed-string` builds the leaves of a long non-ASCII string, and
+   the leaf boundary has to fall between characters. Rust asks
+   `is_char_boundary(end)` — a fact about `b[end]`, the byte that would BEGIN
+   the next leaf. Both ports asked about `b[end - 1]` instead, and so backed
+   up off a boundary that was already good: a two-byte character at bytes
+   126-127 left the cut at 127, between the lead byte and its continuation.
+
+   Reachable from a plain string literal: any non-ASCII string over
+   `FLAT_MAX` (1 024 bytes) takes this constructor, which is every non-Latin
+   document a program loads. Measured, on one 600-character literal:
+
+       (count s)      600 native, 600 on both ports   <- agrees
+       (nth s 63)     "é" native, U+FFFD on both ports
+       (subs s 63 66) "ééé" native, "éé" + U+FFFD on both
+
+   **`count` staying right is why it survived.** An orphan lead byte still
+   counts as one code point and its orphan continuations count as none, so
+   the count is correct and every indexed read of that character is not.
+
+   Three things had to line up for this to be invisible for as long as it
+   was, and each is worth its own note:
+
+   * `runtimes/conform` diffs ANSWERS across runtimes, and its whole corpus
+     holds at most five non-ASCII characters in any file — the tier is never
+     reached, so there is no answer to diff.
+   * `test/common/lang/edges.cljc` exists to walk exactly these boundaries
+     and does cross 1 024 and 2 000 — with `(rep n "a")`. `ascii` is then
+     true and this constructor is never entered. **The right boundary with
+     the wrong character.**
+   * `rep` CONCATENATES, and a concatenation past `FLAT_MAX` is a rope, built
+     by a different constructor with a different splitting rule. Only a
+     LITERAL reaches this one. The first differential written for this bug
+     used `(apply str (repeat 600 "é"))` and passed on both ports.
+
+   The regression case is in `edges.cljc` and is mutation-verified: with
+   either port's line put back, the language suite goes red on that runtime;
+   with the fix, native, JVM and CLR all report 124/124 check for check.
+
+   Found by reading the three copies of one function against each other
+   rather than by a test — the same method that found `0h`, `0j`, `0k` and
+   `0m`.
+
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old
    `jvm`-against-`clr` similarity table because BOTH ports share them. Two
