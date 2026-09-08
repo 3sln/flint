@@ -72,11 +72,24 @@ what remains, and what each thing is waiting on.
    IDENTICALLY and called it agreement, which hid a byte-wide argument count
    and a missing wide `set-local`. All fixed.
 
-   **Still open from it:** `check-builtins` treats all 166 builtins alike. A
-   COMPILER-EMITTED builtin is mandatory on every runtime -- `flint/check-tag`
-   is emitted for every unproven `^int`, and no guest names it, so no feature
-   flag could gate it -- while a GUEST-NAMED one is optional and should be
-   declared. Splitting the two is what stops the next one going missing.
+   **Split, and the emitted set is DERIVED rather than listed.** A
+   compiler-emitted builtin is mandatory on every runtime -- `flint/check-tag`
+   is emitted for every unproven `^int`, no guest names it, so no feature flag
+   could gate it -- while a guest-named one fails at the call rather than
+   everywhere. `bin/check-builtins` now reads the emitted set out of the
+   analyzer, by the two shapes that carry a literal name: an emitted `:op
+   :native` node and the `flint.native` dependency recorded for it.
+
+   There are exactly TWO, `flint/check-tag` and `flint/dyn-get`, and that is a
+   measurement rather than a guess -- the analyzer has five `:op :native`
+   sites and the other three take the name from guest source. `unchecked-add`
+   and its siblings LOOK compiler-ish and are not: they appear only in the
+   compile-time host table, so the stdlib names them like any other builtin.
+
+   Deriving it means a third one added to the compiler is picked up without
+   anybody remembering to, and an extraction that finds NONE fails rather than
+   reporting a comfortable zero -- which is the mistake this whole item is
+   about.
 
 0g. **Visibility is enforced, and `^:internal` is new** — three visibilities,
    two boundaries: `^:private` (or `defn-`) is the defining NAMESPACE,

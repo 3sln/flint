@@ -25,12 +25,51 @@ RUNTIME = re.compile(r'^\s*"([^"]+)",\s*flint_b_\w+', re.M)
 # A string literal WITH escapes, so an embedded quote does not shift the rest.
 STR = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
+# COMPILER-EMITTED builtins, read out of the compiler rather than listed here.
+#
+# The two categories are not the same obligation. A compiler-emitted builtin is
+# one NO GUEST NAMES: `flint/check-tag` is emitted for every unproven `^int`,
+# so no feature flag could gate it and no port may omit it. A guest-named one
+# is reached because source asked for it, and a port that lacks it fails at the
+# call rather than everywhere.
+#
+# Derived, so a third one added to the compiler is picked up here without
+# anybody remembering to. Two shapes carry a literal name: an emitted node, and
+# the dependency recorded for it.
+EMITTED_NODE = re.compile(r':op\s+:native\s+:name\s+"([^"]+)"')
+EMITTED_DEP = re.compile(r'symbol\s+"flint\.native"\s+"([^"]+)"')
+COMPILER_SRC = ["src/flint/analyzer.cljc", "src/flint/emitter.cljc",
+                "src/flint/types.cljc"]
+
+
+def compiler_emitted():
+    out = set()
+    for path in COMPILER_SRC:
+        try:
+            src = open(path).read()
+        except FileNotFoundError:
+            continue
+        out |= set(EMITTED_NODE.findall(src))
+        out |= set(EMITTED_DEP.findall(src))
+    return out
+
 def main():
     names = set(RUNTIME.findall(open("runtime/src/builtins.rs").read()))
     if not names:
         print("no builtins found in runtime/src/builtins.rs -- has the shape changed?")
         return 1
-    print(f"builtins: the native runtime carries {len(names)}")
+    emitted = compiler_emitted()
+    if not emitted:
+        # THE LESSON THIS FILE IS ABOUT. An extraction that finds nothing must
+        # fail: reporting "0 compiler-emitted" would read as good news.
+        print("  FAIL found no compiler-emitted builtins -- has the analyzer's shape changed?")
+        return 1
+    unknown = sorted(emitted - names)
+    if unknown:
+        print(f"  FAIL the compiler emits {' '.join(unknown)}, which the runtime does not define")
+        return 1
+    print(f"builtins: the native runtime carries {len(names)}, "
+          f"{len(emitted)} of them emitted by the compiler ({' '.join(sorted(emitted))})")
     bad = 0
     for host, path in [("jvm", "runtimes/jvm/src/com/flint/rt/Builtins.java"),
                        ("clr", "runtimes/clr/src/rt/Builtins.cs")]:
@@ -49,9 +88,17 @@ def main():
         missing = sorted(names - have)
         if missing:
             bad = 1
-            print(f"  FAIL {host} is missing {len(missing)}: {' '.join(missing)}")
+            gone = sorted(set(missing) & emitted)
+            if gone:
+                print(f"  FAIL {host} is missing {len(gone)} COMPILER-EMITTED builtin(s): "
+                      f"{' '.join(gone)}")
+                print(f"       No guest names these, so no feature flag can gate them and no "
+                      f"program can avoid them.")
+            rest = sorted(set(missing) - emitted)
+            if rest:
+                print(f"  FAIL {host} is missing {len(rest)} guest-named: {' '.join(rest)}")
         else:
-            print(f"  ok   {host} carries all {len(names)}")
+            print(f"  ok   {host} carries all {len(names)}, the {len(emitted)} mandatory included")
     return bad
 
 sys.exit(main())
