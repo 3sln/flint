@@ -45,12 +45,14 @@ public static class Collhash {
         acc = 0;
         if (!IsBmnode(rt, rt.R(ni))) {
             for (int i = 0; i < CnCount(rt, rt.R(ni)); i++) {
+                rt.ChargeWork(1);
                 acc = unchecked(acc + EntryHash(rt, CnKey(rt, rt.R(ni), i), CnVal(rt, rt.R(ni), i)));
             }
             rt.PopTo(@base);
             return acc;
         }
         for (int i = 0; i < System.Numerics.BitOperations.PopCount((uint)(BnDatamap(rt, rt.R(ni)))); i++) {
+            rt.ChargeWork(1);
             acc = unchecked(acc + EntryHash(rt, BnKey(rt, rt.R(ni), i), BnVal(rt, rt.R(ni), i)));
         }
         for (int j = 0; j < System.Numerics.BitOperations.PopCount((uint)(BnNodemap(rt, rt.R(ni)))); j++) {
@@ -69,12 +71,14 @@ public static class Collhash {
         acc = 0;
         if (!IsBmnode(rt, rt.R(ni))) {
             for (int i = 0; i < CnCount(rt, rt.R(ni)); i++) {
+                rt.ChargeWork(1);
                 acc = unchecked(acc + HashValue(rt, CnKey(rt, rt.R(ni), i)));
             }
             rt.PopTo(@base);
             return acc;
         }
         for (int i = 0; i < System.Numerics.BitOperations.PopCount((uint)(BnDatamap(rt, rt.R(ni)))); i++) {
+            rt.ChargeWork(1);
             acc = unchecked(acc + HashValue(rt, BnKey(rt, rt.R(ni), i)));
         }
         for (int j = 0; j < System.Numerics.BitOperations.PopCount((uint)(BnNodemap(rt, rt.R(ni)))); j++) {
@@ -90,6 +94,7 @@ public static class Collhash {
         int acc;
         acc = 0;
         if (Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(mi))) == Obj.TyArraymap) {
+            rt.ChargeWork(MapCount(rt, rt.R(mi)));
             for (int i = 0; i < MapCount(rt, rt.R(mi)); i++) {
                 acc = unchecked(acc + EntryHash(rt, AmKey(rt, rt.R(mi), i), AmVal(rt, rt.R(mi), i)));
             }
@@ -112,6 +117,7 @@ public static class Collhash {
         int acc;
         acc = 0;
         if (Obj.Ty(rt.gc.sp, Val.AsHeap(rt.R(mi))) == Obj.TyArraymap) {
+            rt.ChargeWork(MapCount(rt, rt.R(mi)));
             for (int i = 0; i < MapCount(rt, rt.R(mi)); i++) {
                 acc = unchecked(acc + HashValue(rt, AmKey(rt, rt.R(mi), i)));
             }

@@ -42,12 +42,14 @@ impl Rt {
         acc = 0;
         if !self.is_bmnode(self.r(ni)) {
             for i in 0..self.cn_count(self.r(ni)) {
+                self.charge_work(1 as u64);
                 acc = acc.wrapping_add(self.entry_hash(self.cn_key(self.r(ni), i), self.cn_val(self.r(ni), i)));
             }
             self.pop_to(base);
             return acc;
         }
         for i in 0..self.bn_datamap(self.r(ni)).count_ones() {
+            self.charge_work(1 as u64);
             acc = acc.wrapping_add(self.entry_hash(self.bn_key(self.r(ni), i), self.bn_val(self.r(ni), i)));
         }
         for j in 0..self.bn_nodemap(self.r(ni)).count_ones() {
@@ -66,12 +68,14 @@ impl Rt {
         acc = 0;
         if !self.is_bmnode(self.r(ni)) {
             for i in 0..self.cn_count(self.r(ni)) {
+                self.charge_work(1 as u64);
                 acc = acc.wrapping_add(self.hash_value(self.cn_key(self.r(ni), i)));
             }
             self.pop_to(base);
             return acc;
         }
         for i in 0..self.bn_datamap(self.r(ni)).count_ones() {
+            self.charge_work(1 as u64);
             acc = acc.wrapping_add(self.hash_value(self.bn_key(self.r(ni), i)));
         }
         for j in 0..self.bn_nodemap(self.r(ni)).count_ones() {
@@ -87,6 +91,7 @@ impl Rt {
         let mut acc: u32;
         acc = 0;
         if ty(&self.gc.sp, self.r(mi).as_heap()) == TY_ARRAYMAP {
+            self.charge_work(self.map_count(self.r(mi)) as u64);
             for i in 0..self.map_count(self.r(mi)) {
                 acc = acc.wrapping_add(self.entry_hash(self.am_key(self.r(mi), i), self.am_val(self.r(mi), i)));
             }
@@ -109,6 +114,7 @@ impl Rt {
         let mut acc: u32;
         acc = 0;
         if ty(&self.gc.sp, self.r(mi).as_heap()) == TY_ARRAYMAP {
+            self.charge_work(self.map_count(self.r(mi)) as u64);
             for i in 0..self.map_count(self.r(mi)) {
                 acc = acc.wrapping_add(self.hash_value(self.am_key(self.r(mi), i)));
             }

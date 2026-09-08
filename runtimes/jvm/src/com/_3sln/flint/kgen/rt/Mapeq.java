@@ -55,6 +55,7 @@ public final class Mapeq {
             found = false;
             for (int j = 0; j < n; j++) {
                 if (!found) {
+                    rt.chargeWork(1);
                     if (pairEq(rt, cnKey(rt, a, i), cnKey(rt, b, j), cnVal(rt, a, i), cnVal(rt, b, j))) {
                         found = true;
                     }
@@ -92,6 +93,11 @@ public final class Mapeq {
         int nd = Integer.bitCount(dm);
         int nn = Integer.bitCount(nm);
         for (int i = 0; i < nd; i++) {
+            // ONE UNIT PER ENTRY COMPARED, which is what `map-for-each`
+            // charged when this was a callback. A subtree skipped by
+            // pointer equality costs nothing, and should: no entry in it
+            // was looked at.
+            rt.chargeWork(1);
             if (!pairEq(rt, bnKey(rt, a, i), bnKey(rt, b, i), bnVal(rt, a, i), bnVal(rt, b, i))) {
                 return false;
             }
@@ -131,6 +137,7 @@ public final class Mapeq {
         out = true;
         for (int i = 0; i < n; i++) {
             if (out) {
+                rt.chargeWork(1);
                 int m = rt.mark();
                 int ki = rt.push(amKey(rt, rt.r(ami), i));
                 int vi = rt.push(amVal(rt, rt.r(ami), i));

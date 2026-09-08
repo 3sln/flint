@@ -55,6 +55,7 @@ impl Rt {
             found = false;
             for j in 0..n {
                 if !found {
+                    self.charge_work(1 as u64);
                     if self.pair_eq(self.cn_key(a, i), self.cn_key(b, j), self.cn_val(a, i), self.cn_val(b, j)) {
                         found = true;
                     }
@@ -92,6 +93,11 @@ impl Rt {
         let nd: u32 = dm.count_ones();
         let nn: u32 = nm.count_ones();
         for i in 0..nd {
+            // ONE UNIT PER ENTRY COMPARED, which is what `map-for-each`
+            // charged when this was a callback. A subtree skipped by
+            // pointer equality costs nothing, and should: no entry in it
+            // was looked at.
+            self.charge_work(1 as u64);
             if !self.pair_eq(self.bn_key(a, i), self.bn_key(b, i), self.bn_val(a, i), self.bn_val(b, i)) {
                 return false;
             }
@@ -131,6 +137,7 @@ impl Rt {
         out = true;
         for i in 0..n {
             if out {
+                self.charge_work(1 as u64);
                 let m: usize = self.mark();
                 let ki: usize = self.push(self.am_key(self.r(ami), i));
                 let vi: usize = self.push(self.am_val(self.r(ami), i));

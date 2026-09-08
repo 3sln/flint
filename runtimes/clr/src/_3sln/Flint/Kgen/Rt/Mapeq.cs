@@ -57,6 +57,7 @@ public static class Mapeq {
             found = false;
             for (int j = 0; j < n; j++) {
                 if (!found) {
+                    rt.ChargeWork(1);
                     if (PairEq(rt, CnKey(rt, a, i), CnKey(rt, b, j), CnVal(rt, a, i), CnVal(rt, b, j))) {
                         found = true;
                     }
@@ -94,6 +95,11 @@ public static class Mapeq {
         int nd = System.Numerics.BitOperations.PopCount((uint)(dm));
         int nn = System.Numerics.BitOperations.PopCount((uint)(nm));
         for (int i = 0; i < nd; i++) {
+            // ONE UNIT PER ENTRY COMPARED, which is what `map-for-each`
+            // charged when this was a callback. A subtree skipped by
+            // pointer equality costs nothing, and should: no entry in it
+            // was looked at.
+            rt.ChargeWork(1);
             if (!PairEq(rt, BnKey(rt, a, i), BnKey(rt, b, i), BnVal(rt, a, i), BnVal(rt, b, i))) {
                 return false;
             }
@@ -133,6 +139,7 @@ public static class Mapeq {
         @out = true;
         for (int i = 0; i < n; i++) {
             if (@out) {
+                rt.ChargeWork(1);
                 int m = rt.Mark();
                 int ki = rt.Push(AmKey(rt, rt.R(ami), i));
                 int vi = rt.Push(AmVal(rt, rt.R(ami), i));

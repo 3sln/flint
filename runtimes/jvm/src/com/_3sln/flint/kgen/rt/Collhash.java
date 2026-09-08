@@ -43,12 +43,14 @@ public final class Collhash {
         acc = 0;
         if (!isBmnode(rt, rt.r(ni))) {
             for (int i = 0; i < cnCount(rt, rt.r(ni)); i++) {
+                rt.chargeWork(1);
                 acc = acc + entryHash(rt, cnKey(rt, rt.r(ni), i), cnVal(rt, rt.r(ni), i));
             }
             rt.popTo(base);
             return acc;
         }
         for (int i = 0; i < Integer.bitCount(bnDatamap(rt, rt.r(ni))); i++) {
+            rt.chargeWork(1);
             acc = acc + entryHash(rt, bnKey(rt, rt.r(ni), i), bnVal(rt, rt.r(ni), i));
         }
         for (int j = 0; j < Integer.bitCount(bnNodemap(rt, rt.r(ni))); j++) {
@@ -67,12 +69,14 @@ public final class Collhash {
         acc = 0;
         if (!isBmnode(rt, rt.r(ni))) {
             for (int i = 0; i < cnCount(rt, rt.r(ni)); i++) {
+                rt.chargeWork(1);
                 acc = acc + hashValue(rt, cnKey(rt, rt.r(ni), i));
             }
             rt.popTo(base);
             return acc;
         }
         for (int i = 0; i < Integer.bitCount(bnDatamap(rt, rt.r(ni))); i++) {
+            rt.chargeWork(1);
             acc = acc + hashValue(rt, bnKey(rt, rt.r(ni), i));
         }
         for (int j = 0; j < Integer.bitCount(bnNodemap(rt, rt.r(ni))); j++) {
@@ -88,6 +92,7 @@ public final class Collhash {
         int acc;
         acc = 0;
         if (ty(rt.gc.sp, Val.asHeap(rt.r(mi))) == TY_ARRAYMAP) {
+            rt.chargeWork(mapCount(rt, rt.r(mi)));
             for (int i = 0; i < mapCount(rt, rt.r(mi)); i++) {
                 acc = acc + entryHash(rt, amKey(rt, rt.r(mi), i), amVal(rt, rt.r(mi), i));
             }
@@ -110,6 +115,7 @@ public final class Collhash {
         int acc;
         acc = 0;
         if (ty(rt.gc.sp, Val.asHeap(rt.r(mi))) == TY_ARRAYMAP) {
+            rt.chargeWork(mapCount(rt, rt.r(mi)));
             for (int i = 0; i < mapCount(rt, rt.r(mi)); i++) {
                 acc = acc + hashValue(rt, amKey(rt, rt.r(mi), i));
             }

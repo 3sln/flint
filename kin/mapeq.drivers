@@ -22,14 +22,14 @@ impl Value {
 }
 struct Sp { h: Vec<u64> }
 struct Gc { sp: Sp }
-struct Rt { gc: Gc, roots: Vec<Value>, visits: u32 }
+struct Rt { gc: Gc, roots: Vec<Value>, visits: u32, gas: u64 }
 fn ty(sp: &Sp, a: u64) -> u8 { sp.h[a as usize] as u8 }
 impl Rt {
     fn mark(&self) -> usize { self.roots.len() }
     fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
     fn r(&self, i: usize) -> Value { self.roots[i] }
     fn pop_to(&mut self, n: usize) { self.roots.truncate(n); }
-    fn charge_work(&mut self, _n: u64) { self.visits += 1; }
+    fn charge_work(&mut self, n: u64) { self.visits += 1; self.gas += n; }
     fn slot(&self, v: Value, i: u32) -> Value { Value(self.gc.sp.h[(v.0 + i as u64) as usize]) }
     fn val_eq(&mut self, a: Value, b: Value) -> bool { a == b }
     fn map_count(&self, m: Value) -> u32 { self.gc.sp.h[m.0 as usize + 1] as u32 }
@@ -106,7 +106,7 @@ fn fresh() -> Rt {
     h[440] = 1; h[441] = 0x55; h[442] = 2; h[443] = 7000; h[444] = 9999; h[445] = 7002; h[446] = 7003;
     h[460] = 1; h[461] = 0x66; h[462] = 2; h[463] = 7000; h[464] = 7001; h[465] = 7002; h[466] = 7003;
     h[500] = 0; h[501] = 3; h[502] = 0; h[503] = 7000; h[504] = 7001; h[505] = 7002; h[506] = 7003;
-    Rt { gc: Gc { sp: Sp { h } }, roots: Vec::new(), visits: 0 }
+    Rt { gc: Gc { sp: Sp { h } }, roots: Vec::new(), visits: 0, gas: 0 }
 }
 fn one(rt: &mut Rt, o: &mut String, label: &str, a: u64, b: u64) {
     rt.visits = 0;
@@ -185,7 +185,8 @@ fn main() {
         int push(long v) { roots.add(v); return roots.size() - 1; }
         long r(int i) { return roots.get(i); }
         void popTo(int n) { while (roots.size() > n) roots.remove(roots.size() - 1); }
-        void chargeWork(long n) { visits++; }
+        long gas = 0;
+        void chargeWork(long n) { visits++; gas += n; }
         long slot(long v, int i) { return h[(int) v + i]; }
     }
 --java
@@ -301,7 +302,8 @@ fn main() {
         internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
         internal long R(int i) { return roots[i]; }
         internal void PopTo(int n) { while (roots.Count > n) roots.RemoveAt(roots.Count - 1); }
-        internal void ChargeWork(long n) { visits++; }
+        internal long gas = 0;
+        internal void ChargeWork(long n) { visits++; gas += n; }
         internal long Slot(long v, int i) { return h[(int) v + i]; }
     }
 --csharp

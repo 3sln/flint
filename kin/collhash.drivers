@@ -31,11 +31,12 @@ impl Value {
 mod set { pub const S_MAP: u32 = 2; pub const S_HASH: u32 = 3; }
 struct Sp { h: Vec<u64> }
 struct Gc { sp: Sp }
-struct Rt { gc: Gc, roots: Vec<Value>, hashes: u32 }
+struct Rt { gc: Gc, roots: Vec<Value>, hashes: u32, gas: u64 }
 fn ty(sp: &Sp, a: u64) -> u8 { sp.h[a as usize] as u8 }
 fn ordered_step(acc: u32, h: u32) -> u32 { acc.wrapping_mul(31).wrapping_add(h) }
 fn mix_coll_hash(h: u32, n: u32) -> u32 { h ^ (n.wrapping_mul(0x9e3779b9)) }
 impl Rt {
+    fn charge_work(&mut self, n: u64) { self.gas += n; }
     fn mark(&self) -> usize { self.roots.len() }
     fn push(&mut self, v: Value) -> usize { self.roots.push(v); self.roots.len() - 1 }
     fn r(&self, i: usize) -> Value { self.roots[i] }
@@ -82,7 +83,7 @@ fn fresh() -> Rt {
     h[44] = 2; h[45] = 2; h[46] = 420; h[47] = NIL.0;
     h[400] = 1; h[401] = 0x55; h[402] = 2; h[403] = 600; h[404] = 601; h[405] = 602; h[406] = 603;
     h[420] = 1; h[421] = 0x55; h[422] = 2; h[423] = 602; h[424] = 603; h[425] = 600; h[426] = 601;
-    Rt { gc: Gc { sp: Sp { h } }, roots: Vec::new(), hashes: 0 }
+    Rt { gc: Gc { sp: Sp { h } }, roots: Vec::new(), hashes: 0, gas: 0 }
 }
 fn main() {
     let mut rt = fresh();
@@ -100,7 +101,7 @@ fn main() {
     o.push_str(&format!("set={} ", s as i32));
     let c1 = rt.hash_map(Value(40));
     let c2 = rt.hash_map(Value(44));
-    o.push_str(&format!("coll={} roots={}", (c1 == c2) as u32, rt.roots.len()));
+    o.push_str(&format!("coll={} gas={} roots={}", (c1 == c2) as u32, rt.gas, rt.roots.len()));
     println!("{}", o);
 }
 --java-head
@@ -146,6 +147,8 @@ fn main() {
         long[] h;
         java.util.ArrayList<Long> roots = new java.util.ArrayList<>();
         int hashes = 0;
+        long gas = 0;
+        void chargeWork(long n) { gas += n; }
         int mark() { return roots.size(); }
         int push(long v) { roots.add(v); return roots.size() - 1; }
         long r(int i) { return roots.get(i); }
@@ -184,7 +187,8 @@ fn main() {
          .append(" rehashed=").append(rt.hashes - before).append(' ');
         o.append("set=").append(hashSet(rt, 30)).append(' ');
         int c1 = hashMap(rt, 40), c2 = hashMap(rt, 44);
-        o.append("coll=").append(c1 == c2 ? 1 : 0).append(" roots=").append(rt.roots.size());
+        o.append("coll=").append(c1 == c2 ? 1 : 0).append(" gas=").append(rt.gas)
+         .append(" roots=").append(rt.roots.size());
         System.out.println(o.toString());
     }
 --csharp-pre
@@ -235,6 +239,8 @@ namespace Flint.Rt {
         internal long[] h;
         internal System.Collections.Generic.List<long> roots = new System.Collections.Generic.List<long>();
         internal int hashes = 0;
+        internal long gas = 0;
+        internal void ChargeWork(long n) { gas += n; }
         internal int Mark() { return roots.Count; }
         internal int Push(long v) { roots.Add(v); return roots.Count - 1; }
         internal long R(int i) { return roots[i]; }
@@ -273,6 +279,7 @@ namespace Flint.Rt {
          .Append(" rehashed=").Append(rt.hashes - before).Append(' ');
         o.Append("set=").Append(HashSet(rt, 30)).Append(' ');
         int c1 = HashMap(rt, 40), c2 = HashMap(rt, 44);
-        o.Append("coll=").Append(c1 == c2 ? 1 : 0).Append(" roots=").Append(rt.roots.Count);
+        o.Append("coll=").Append(c1 == c2 ? 1 : 0).Append(" gas=").Append(rt.gas)
+         .Append(" roots=").Append(rt.roots.Count);
         System.Console.WriteLine(o.ToString());
     }

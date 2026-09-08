@@ -85,9 +85,11 @@
         (set found false)
         (for [^I32 j 0 n]
           (if (not found)
-            (if (pair-eq rt (cn-key rt a i) (cn-key rt b j)
-                            (cn-val rt a i) (cn-val rt b j))
-              (set found true))))
+            (do
+              (charge-work rt 1)
+              (if (pair-eq rt (cn-key rt a i) (cn-key rt b j)
+                              (cn-val rt a i) (cn-val rt b j))
+                (set found true)))))
         (if (not found)
           (return false))))
     (return true)))
@@ -114,9 +116,15 @@
     (let [^I32 nd (popcount dm)
           ^I32 nn (popcount nm)]
       (for [^I32 i 0 nd]
-        (if (not (pair-eq rt (bn-key rt a i) (bn-key rt b i)
-                             (bn-val rt a i) (bn-val rt b i)))
-          (return false)))
+        (do
+          (comment "ONE UNIT PER ENTRY COMPARED, which is what `map-for-each`"
+                   "charged when this was a callback. A subtree skipped by"
+                   "pointer equality costs nothing, and should: no entry in it"
+                   "was looked at.")
+          (charge-work rt 1)
+          (if (not (pair-eq rt (bn-key rt a i) (bn-key rt b i)
+                               (bn-val rt a i) (bn-val rt b i)))
+            (return false))))
       (for [^I32 j 0 nn]
         (let [^RootIx base (mark rt)
               ^RootIx cai (push rt (bn-node rt a j))
@@ -147,7 +155,9 @@
       (set out true)
       (for [^I32 i 0 n]
         (if out
-          (let [^RootIx m (mark rt)
+          (do
+           (charge-work rt 1)
+           (let [^RootIx m (mark rt)
                 ^RootIx ki (push rt (am-key rt (r rt ami) i))
                 ^RootIx vi (push rt (am-val rt (r rt ami) i))
                 ^Value got (map-get rt (r rt oti) (r rt ki) NOT_FOUND)
@@ -155,7 +165,7 @@
             (if (== (r rt gi) NOT_FOUND)
               (set out false)
               (set out (val-eq rt (r rt vi) (r rt gi))))
-            (pop-to rt m))))
+            (pop-to rt m)))))
       (pop-to rt base)
       (return out))))
 

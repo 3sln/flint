@@ -43,6 +43,17 @@
    ["two vectors compare"    "[(vec (range n)) (vec (range n))]" "(= (nth v 0) (nth v 1))" true]
    ["a map is built"         "(vec (range n))"              "(into {} (map (fn [i] [i i]) v))" true]
    ["a vector is sorted"     "(vec (reverse (range n)))"    "(sort v)"                   true]
+   ;; MAPS AND SETS, on gas, and they were not here. Hashing and comparing
+   ;; both used to walk through `map-for-each`, which charged a unit per
+   ;; entry; both are generated tree walks now, and the first version of that
+   ;; walk charged NOTHING -- so hashing a 200,000-entry map was free to
+   ;; metered code and nothing in this file could tell. `hash` and `=` were
+   ;; covered for VECTORS only.
+   ["a map is hashed"        "(into {} (map (fn [i] [i i]) (range n)))" "(hash v)"    true]
+   ["two maps compare"       "[(into {} (map (fn [i] [i i]) (range n)))
+                               (into {} (map (fn [i] [i i]) (range n)))]"
+                             "(= (nth v 0) (nth v 1))"                                true]
+   ["a set is hashed"        "(set (range n))"              "(hash v)"                   true]
    ["a table is built"       "(mapv (fn [i] {:id i}) (range n))" "(ft/table S v)"        true]
    ["a table is appended to" "(range n)"
                              "(reduce (fn [t i] (ft/add-row t {:id i})) (ft/table S []) v)" true]

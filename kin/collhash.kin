@@ -14,6 +14,13 @@
 ;; `set-count` already answer it in O(1). Only the sum has to be walked, and a
 ;; single return value is all kin gives a function.
 ;;
+;; GAS. `map-for-each` charged one unit per entry and this charges the same,
+;; because the work is the same work. Getting that wrong is not a slow path,
+;; it is a metering hole: the first version of this walked without charging
+;; at all, which made hashing a two-hundred-thousand-entry map free to
+;; untrusted code. Nothing caught it -- `test/gas.clj` covers `hash` of a
+;; VECTOR and `=` of two vectors, and neither of those comes through here.
+;;
 ;; ROOTING. `hash-value` allocates -- hashing a row ref materialises it as a
 ;; map -- so the node being walked is pushed and re-read from the root stack
 ;; after every call. A node held in a host local across a hash is `0031` in
@@ -23,7 +30,7 @@
                                    for == != not or and +
                                    mark push r pop-to slot set-slot ty as-heap
                                    nil? is-fixnum as-fixnum fixnum to-i32
-                                   popcount is-bmnode wadd hash-value
+                                   popcount is-bmnode wadd hash-value charge-work
                                    bn-datamap bn-nodemap bn-key bn-val bn-node
                                    cn-count cn-key cn-val
                                    Rt Value RootIx I32 U32 Ty NIL
@@ -59,13 +66,15 @@
     (if (not (is-bmnode rt (r rt ni)))
       (do
         (for [^I32 i 0 (cn-count rt (r rt ni))]
-          (set acc (wadd acc (entry-hash rt (cn-key rt (r rt ni) i)
-                                            (cn-val rt (r rt ni) i)))))
+          (do (charge-work rt 1)
+              (set acc (wadd acc (entry-hash rt (cn-key rt (r rt ni) i)
+                                                (cn-val rt (r rt ni) i))))))
         (pop-to rt base)
         (return acc)))
     (for [^I32 i 0 (popcount (bn-datamap rt (r rt ni)))]
-      (set acc (wadd acc (entry-hash rt (bn-key rt (r rt ni) i)
-                                        (bn-val rt (r rt ni) i)))))
+      (do (charge-work rt 1)
+          (set acc (wadd acc (entry-hash rt (bn-key rt (r rt ni) i)
+                                            (bn-val rt (r rt ni) i))))))
     (for [^I32 j 0 (popcount (bn-nodemap rt (r rt ni)))]
       (set acc (wadd acc (node-entry-sum rt (bn-node rt (r rt ni) j)))))
     (pop-to rt base)
@@ -82,11 +91,13 @@
     (if (not (is-bmnode rt (r rt ni)))
       (do
         (for [^I32 i 0 (cn-count rt (r rt ni))]
-          (set acc (wadd acc (hash-value rt (cn-key rt (r rt ni) i)))))
+          (do (charge-work rt 1)
+              (set acc (wadd acc (hash-value rt (cn-key rt (r rt ni) i))))))
         (pop-to rt base)
         (return acc)))
     (for [^I32 i 0 (popcount (bn-datamap rt (r rt ni)))]
-      (set acc (wadd acc (hash-value rt (bn-key rt (r rt ni) i)))))
+      (do (charge-work rt 1)
+          (set acc (wadd acc (hash-value rt (bn-key rt (r rt ni) i))))))
     (for [^I32 j 0 (popcount (bn-nodemap rt (r rt ni)))]
       (set acc (wadd acc (node-key-sum rt (bn-node rt (r rt ni) j)))))
     (pop-to rt base)
@@ -100,6 +111,7 @@
     (set acc 0)
     (if (== (ty rt (as-heap (r rt mi))) TY_ARRAYMAP)
       (do
+        (charge-work rt (map-count rt (r rt mi)))
         (for [^I32 i 0 (map-count rt (r rt mi))]
           (set acc (wadd acc (entry-hash rt (am-key rt (r rt mi) i)
                                             (am-val rt (r rt mi) i)))))
@@ -121,6 +133,7 @@
     (set acc 0)
     (if (== (ty rt (as-heap (r rt mi))) TY_ARRAYMAP)
       (do
+        (charge-work rt (map-count rt (r rt mi)))
         (for [^I32 i 0 (map-count rt (r rt mi))]
           (set acc (wadd acc (hash-value rt (am-key rt (r rt mi) i)))))
         (pop-to rt base)
