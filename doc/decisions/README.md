@@ -355,6 +355,30 @@ what remains, and what each thing is waiting on.
    fires at `push`, and a value that is never pushed never reaches it. Stress
    found all three, so `conform-hosts` runs every suite under it now.
 
+   **A FOURTH, and "every suite" above was not true.** Stress ran on the
+   conform FIXTURES and not on the port's own runtime suites, which are the
+   ones that exercise the collector directly. Pointed at those, it failed
+   `RtSnapshot` on BOTH ports at the same line of the test's own builder:
+
+       rt.setR(inner, Vec.conj(rt, rt.r(inner), Str.of(rt, "item-" + i)));
+
+   The vector is read and THEN the string allocates. `0031` in the harness
+   rather than the runtime, which is the third time that shape has appeared in
+   a test here rather than in a runtime.
+
+   `RtFoundation`, `RtMaps` and `RtSnapshot` run under stress on both ports in
+   `conform-hosts` now. `RtParallel` does NOT, deliberately: it holds a
+   deliberately growing live set, so collecting at every allocation asks the
+   to-space to hold all of it at once — the runtime says "promotion is not
+   draining the nursery". Design meeting the switch, not a bug, and gating on
+   it would teach people to ignore a failure.
+
+   THE CLR HAD NO STRESS SWITCH AT ALL until now: the JVM had the field and
+   the property, the CLR had neither, so half the port could never be
+   stressed. It is `FLINT_GCSTRESS`, and it found the same `RtSnapshot` bug
+   independently on its first run — which is also how we know the switch
+   engages rather than reading a variable and doing nothing.
+
 0o. **`seq` over a ROPE was silently wrong on the NATIVE runtime** — FIXED,
    and found by chasing a divergence that turned out to be pointing the other
    way.
