@@ -608,8 +608,8 @@ what remains, and what each thing is waiting on.
    over. It matters more from here: `defdata` will GENERATE call templates,
    and they would have landed in the blind spot.
 
-0v. **Regex costs different gas on native and the ports, and the gas corpus
-   cannot see it** — OPEN, characterised but not explained. It is why
+0v. **`subs` is free on the ports, and it was hiding behind regex** —
+   EXPLAINED, not yet fixed. It is why
    `runtimes/conform/gasmeter.cljc` still has no regex in it: that row
    compares to the INSTRUCTION, and adding regex work makes it red.
 
@@ -635,9 +635,32 @@ what remains, and what each thing is waiting on.
      conjs with no regex show a gap of 5, and so do two hundred transient
      ones. The constant 5 is startup and does not scale.
 
-   So it is inside the regex path, scales with the size of the result, and
-   is not the vector machinery that result is built with. The next step is
-   allocation-level accounting rather than another guess from the shape.
+   IT IS NOT THE REGEX PATH AT ALL. Two more explanations died first --
+   runtime-internal vector building (`vec` over a range: gap 5, flat) and
+   per-match work -- and then `subs` in a loop, with no regex anywhere:
+
+       20 calls   native 2914   jvm 2889   gap 25
+       50 calls   native 6167   jvm 6112   gap 55
+
+   Exactly ONE STEP PER CALL, plus the constant 5 that every measurement in
+   this entry shows and which is startup. `re-seq` calls `subs` once per
+   match and once per group, which is why the gap tracked slots.
+
+   `coll.rs` charges at seven sites -- `subs` on both its paths,
+   `str-index-of`, `str-bytes`, and two scans -- and the ports charge at
+   NONE of them. `charge_bytes(k)` is `charge_work(k/8 + 1)`, so a short
+   substring costs exactly the 1 that shows up.
+
+   A CORRECTION WORTH KEEPING, because the first reading of this was wrong:
+   the ports are not unmetered. They charge at 39 sites, against Rust's 18 --
+   but nearly all of theirs are in GENERATED code, where the policy is shared
+   by construction and cannot drift. The gap is confined to the HAND-WRITTEN
+   string builtins, which is the same shape as `pikegas`: a price that one
+   runtime states and the others do not.
+
+   The fix is the one `pikegas` established -- the policy is what diverged,
+   so the policy is what gets generated -- and it is not done. Until it is,
+   `gasmeter.cljc` cannot have a regex row, or a `subs` row.
 
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old
