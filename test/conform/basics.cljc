@@ -4,7 +4,8 @@
   reports every failure rather than stopping at the first."
   (:require [clojure.zip :as z]
             [clojure.data :as dt]
-            [clojure.datafy :as df]))
+            [clojure.datafy :as df]
+            [clojure.core.protocols :as cp]))
 
 (defmacro c
   "One case. The expression is wrapped in a thunk so that a case which throws is
@@ -520,4 +521,26 @@
    (c "datafy vector" (df/datafy [1 2]) [1 2])
    (c "nav map" (df/nav {:a 1} :a 1) 1)
    (c "nav vector" (df/nav [1 2] 0 1) 1)
-   (c "nav seq, no key" (df/nav '(1 2) nil 1) 1)]))
+   (c "nav seq, no key" (df/nav '(1 2) nil 1) 1)
+
+   ;; What a value says for ITSELF. The key is the method's fully-qualified
+   ;; SYMBOL, which is what a syntax quote writes and what Clojure's
+   ;; `extend-via-metadata` looks for -- these cases are the whole reason the
+   ;; key is not a keyword.
+   (c "datafy via metadata"
+      (df/datafy (with-meta {:a 1} {`cp/datafy (fn [x] [:datafied (:a x)])}))
+      [:datafied 1])
+   (c "datafy records the original"
+      (:clojure.datafy/obj (meta (df/datafy (with-meta {:a 1} {`cp/datafy (fn [x] [:datafied (:a x)])}))))
+      {:a 1})
+   (c "nav via metadata"
+      (df/nav (with-meta {:a 1} {`cp/nav (fn [_ k v] [:nav k v])}) :a 1)
+      [:nav :a 1])
+   (d "datafy names what the original WAS"
+      (contains? (meta (df/datafy (with-meta {:a 1} {`cp/datafy (fn [x] [:datafied (:a x)])})))
+                 :clojure.datafy/kind)
+      true false)
+   (d "and Clojure names its class, which flint has none of"
+      (contains? (meta (df/datafy (with-meta {:a 1} {`cp/datafy (fn [x] [:datafied (:a x)])})))
+                 :clojure.datafy/class)
+      false true)]))

@@ -55,7 +55,7 @@ explanation travels on the function:
 
 Dispatch asks the value's metadata first and its `kind` second, so a plain
 function works (`:fn` implements `check` as `apply`) and a function *carrying*
-`:flint.check/explain` explains itself. Two consequences fell out of it:
+``flint.check/explain`` explains itself. Two consequences fell out of it:
 
 * **Closures had to be able to carry metadata.** They could not — `with-meta` on
   a closure silently returned it unchanged. `TY_CLOSURE` is now

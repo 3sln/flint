@@ -456,7 +456,39 @@ what remains, and what each thing is waiting on.
    `clojure.data` publishes two vars where Clojure's publishes five — diffing
    against it would report a gap in the baseline as a gap in flint.
 
-   Writing `datafy` is also what turned up `0q`.
+   Writing `datafy` is also what turned up `0q`, which is the more
+   interesting half of this entry.
+
+0q. **A protocol extended by metadata used a key nobody else would write** —
+   FIXED. `core.cljc` said a method attached by metadata is keyed by the
+   method's fully-qualified KEYWORD, "exactly as Clojure's
+   `extend-via-metadata` keys it". Clojure keys it by fully-qualified SYMBOL.
+   Checked on the JVM rather than argued from the docstring:
+
+       symbol key:  [:hit 1]   ← Clojure honours it
+       keyword key: {:a 1}     ← Clojure ignores it
+
+   The comment had been wrong since it was written, and nothing caught it
+   because every use in this repo was flint extending flint — both sides
+   spelling the key the same wrong way agree perfectly. It took porting
+   `clojure.datafy`, whose entire purpose is to be extended by values from
+   OTHER people's libraries, for the difference to have a second side.
+
+   The fix is one key form everywhere: `defprotocol` builds a symbol, the
+   kind table and the metadata map are keyed alike, and a syntax quote writes
+   it — ``(with-meta v {`shapes/area f})``. Five conformance cases cover it,
+   and babashka honours the symbol key too, so the differential test is a
+   real check and not a second copy of the same assumption.
+
+   Cost: 25 sites in `clojure.core` (15 of them predicates carrying their own
+   `explain`), plus `flint.check`, one test and four documents. Small, because
+   the mechanism is used consistently — which is also why the error survived.
+
+   `test/threads.clj` failed on the change and was right to: it asserts the
+   text of the "no implementation" message, including the key it tells you to
+   attach. A test that reads an error message is usually noise; this is the
+   case where it earns its keep, because the message is the only place the key
+   form is stated to a user.
 
 0f. **Nine defects in the JVM and CLR runtimes, found by ranking the port
    against Rust.** None is a port problem; all were invisible to the old

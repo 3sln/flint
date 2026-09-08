@@ -124,49 +124,49 @@
      :note (flint.rt/str-join
             ["got " (flint.rt/name (flint.rt/kind (flint.rt/nth args 0)))])}))
 
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a number")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a number")}
                              :default nil)}
   number? [x] (flint.rt/number? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "an integer")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "an integer")}
                              :default nil)}
   int? [x] (flint.rt/int? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "an integer")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "an integer")}
                              :default nil)}
   integer? [x] (flint.rt/int? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a float")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a float")}
                              :default nil)}
   float? [x] (flint.rt/float? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a float")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a float")}
                              :default nil)}
   double? [x] (flint.rt/float? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a string")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a string")}
                              :default nil)}
   string? [x] (flint.rt/string? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a keyword")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a keyword")}
                              :default nil)}
   keyword? [x] (flint.rt/keyword? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a symbol")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a symbol")}
                              :default nil)}
   symbol? [x] (flint.rt/symbol? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a vector")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a vector")}
                              :default nil)}
   vector? [x] (flint.rt/vector? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a map")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a map")}
                              :default nil)}
   map? [x] (flint.rt/map? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a set")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a set")}
                              :default nil)}
   set? [x] (flint.rt/set? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a seq")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a seq")}
                              :default nil)}
   seq? [x] (flint.rt/seq? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a list")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a list")}
                              :default nil)}
   list? [x] (flint.rt/seq? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "a function")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "a function")}
                              :default nil)}
   fn? [x] (flint.rt/fn? x))
-(defn ^{:flint/value-meta #?(:flint/check {:flint.check/explain (kind-explain "something sequential")}
+(defn ^{:flint/value-meta #?(:flint/check {'flint.check/explain (kind-explain "something sequential")}
                              :default nil)}
   sequential? [x] (flint.rt/sequential? x))
 
@@ -1434,12 +1434,12 @@
 (def Printable
   (hash-map :flint/protocol 'clojure.core/Printable
             :impls Printable__impls
-            :method-keys [:clojure.core/print-data :clojure.core/print-human]))
+            :method-keys '[clojure.core/print-data clojure.core/print-human]))
 
 (defn print-data
   "`x` as DATA: a form meant to be read back. This is what `pr-str` reaches."
   [x]
-  (let [f (find-protocol-method Printable__impls :clojure.core/print-data x)]
+  (let [f (find-protocol-method Printable__impls 'clojure.core/print-data x)]
     (if f (f x) (protocol-miss 'clojure.core/Printable 'clojure.core/print-data x))))
 
 (defn print-human
@@ -1451,8 +1451,8 @@
   human form promoted into `pr-str` would produce something that does not read
   back, which is the one thing `pr-str` promises."
   [x]
-  (let [f (or (find-protocol-method Printable__impls :clojure.core/print-human x)
-              (find-protocol-method Printable__impls :clojure.core/print-data x))]
+  (let [f (or (find-protocol-method Printable__impls 'clojure.core/print-human x)
+              (find-protocol-method Printable__impls 'clojure.core/print-data x))]
     (if f (f x) (protocol-miss 'clojure.core/Printable 'clojure.core/print-human x))))
 
 (defn- pr-str* [x readable?]
@@ -1501,9 +1501,9 @@
     ;; which is `0005`'s primary mechanism -- so one value can carry its own
     ;; printer without its kind having one.
     :else (let [f (if readable?
-                    (find-protocol-method Printable__impls :clojure.core/print-data x)
-                    (or (find-protocol-method Printable__impls :clojure.core/print-human x)
-                        (find-protocol-method Printable__impls :clojure.core/print-data x)))]
+                    (find-protocol-method Printable__impls 'clojure.core/print-data x)
+                    (or (find-protocol-method Printable__impls 'clojure.core/print-human x)
+                        (find-protocol-method Printable__impls 'clojure.core/print-data x)))]
             (if f (f x) "#<unprintable>"))))
 
 (defn pr-str [x] (pr-str* x true))
@@ -1746,9 +1746,16 @@
 ;;   main road**, and it is the one to reach for.
 ;;
 ;; A method attached by metadata is keyed by the method's fully-qualified
-;; keyword, exactly as Clojure's `extend-via-metadata` keys it:
+;; SYMBOL, which is how Clojure's `extend-via-metadata` keys it -- so a syntax
+;; quote writes the key, and code that extends a protocol somebody else defined
+;; looks the same here as it does there:
 ;;
-;;     (with-meta {:w 3 :h 4} {:shapes/area (fn [s] (* (:w s) (:h s)))})
+;;     (with-meta {:w 3 :h 4} {`shapes/area (fn [s] (* (:w s) (:h s)))})
+;;
+;; It was a KEYWORD until `clojure.datafy` was ported and the difference
+;; mattered: `datafy` exists to be extended by values from other libraries, and
+;; those libraries write the symbol. A keyword key was not a smaller spelling
+;; of the same thing, it was a key nobody else would ever write.
 ;;
 ;; Not everything can carry metadata: see `meta`'s note. Inline values -- short
 ;; strings, keywords and chars, which live in the value word itself -- have
@@ -1776,13 +1783,17 @@
                    ["no implementation of " (str mname) " (protocol " (str pname)
                     ") for a value of kind " (str (kind x))
                     ". Extend the protocol to that kind, or attach "
-                    (str (keyword (namespace mname) (name mname)))
+                    (str mname)
                     " as metadata on the value."])
                   {:protocol pname :method mname :kind (kind x) :value x})))
 
 (defn find-protocol-method
-  "The implementation of `mkey` (a fully-qualified keyword) for `x`: metadata
-  first, then the protocol's table for `x`'s kind. `nil` when there is none."
+  "The implementation of `mkey` (a fully-qualified SYMBOL) for `x`: metadata
+  first, then the protocol's table for `x`'s kind. `nil` when there is none.
+
+  A symbol, not a keyword, because that is how Clojure keys
+  `extend-via-metadata` — and a value carrying an implementation is the most
+  likely thing to arrive here from somebody else's library."
   [impls mkey x]
   (or (get (meta x) mkey)
       (get (get (deref impls) (flint.rt/kind x)) mkey)))
@@ -1846,7 +1857,7 @@
                        (let [mname (first sig)
                              arglists (take-while vector? (rest sig))]
                          {:name mname
-                          :key (keyword nsname (name mname))
+                          :key (symbol nsname (name mname))
                           :arglists (if (seq arglists) arglists (list (second sig)))}))
                      sigs)
         impls-sym (symbol (str (name pname) "__impls"))
@@ -1857,14 +1868,14 @@
                  (list 'clojure.core/hash-map
                        :flint/protocol (list 'quote qual)
                        :impls impls-sym
-                       :method-keys (vec (map :key methods))))
+                       :method-keys (list 'quote (vec (map :key methods)))))
            (map (fn [m]
                   (list* 'defn (:name m)
                          (map (fn [args]
                                 (list args
                                       (list 'clojure.core/let
                                             ['f (list 'clojure.core/find-protocol-method
-                                                      impls-sym (:key m) (first args))]
+                                                      impls-sym (list 'quote (:key m)) (first args))]
                                             (list 'if 'f
                                                   (list* 'f args)
                                                   (list 'clojure.core/protocol-miss

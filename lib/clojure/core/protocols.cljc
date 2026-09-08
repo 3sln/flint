@@ -4,7 +4,7 @@
   They live in their own namespace, as they do in Clojure, because the
   metadata key a value attaches an implementation under is qualified by the
   namespace that DEFINED the protocol. Third-party code writes
-  `:clojure.core.protocols/datafy` in a metadata map and expects it to be
+  ``clojure.core.protocols/datafy`` in a metadata map and expects it to be
   found; that only works if the protocol is defined here.
 
   In Clojure these two are `:extend-via-metadata true`, an opt-in. Here
@@ -25,5 +25,5 @@
 ;; on anything.
 (doseq [k [:nil :boolean :number :string :keyword :symbol :vector :map :set
            :list :fn :port :thread :atom :var :regex :exception :other]]
-  (extend Datafiable k {:clojure.core.protocols/datafy (fn [o] o)})
-  (extend Navigable k {:clojure.core.protocols/nav (fn [_ _ v] v)}))
+  (extend Datafiable k {`datafy (fn [o] o)})
+  (extend Navigable k {`nav (fn [_ _ v] v)}))

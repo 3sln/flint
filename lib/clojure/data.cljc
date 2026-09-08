@@ -4,8 +4,9 @@
 
   The shape is Clojure's, down to the two protocols a caller can extend. What
   differs is how an extension attaches: flint has no classes, so a value that
-  wants its own diff carries `:clojure.data/equality-partition` and
-  `:clojure.data/diff-similar` as metadata. That is the main road here rather
+  wants its own diff carries ``clojure.data/equality-partition`` and
+  ``clojure.data/diff-similar`` as metadata -- fully-qualified symbols, which
+  a syntax quote writes. That is the main road here rather
   than the side road it is in Clojure -- see `clojure.core/kind`.
 
   Ported because the Clojars survey named it."
@@ -97,8 +98,8 @@
 ;; here the kinds are a closed set, so it is written out.
 (doseq [k [:boolean :number :string :keyword :symbol :fn :port :thread
            :atom :var :regex :exception :other]]
-  (extend EqualityPartition k {:clojure.data/equality-partition (fn [_] :atom)})
-  (extend Diff k {:clojure.data/diff-similar (fn [a b] (atom-diff a b))}))
+  (extend EqualityPartition k {`equality-partition (fn [_] :atom)})
+  (extend Diff k {`diff-similar (fn [a b] (atom-diff a b))}))
 
 (defn diff
   "What `a` has that `b` does not, what `b` has that `a` does not, and what

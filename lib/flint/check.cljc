@@ -73,7 +73,7 @@
 ;; recognise, so nothing may depend on recognising it.
 ;;
 ;; A function CAN do better than this default, because a closure carries
-;; metadata: attach `:flint.check/explain` and dispatch finds it before it
+;; metadata: attach `'flint.check/explain` and dispatch finds it before it
 ;; falls back to kind. That is why `with-meta` on a function had to start
 ;; working before any of this was worth writing.
 (extend-protocol Predicate
@@ -99,7 +99,7 @@
   expression through. `string?` cannot describe itself, but `(expect string? x)`
   can still say `expected  string?`."
   [p args src]
-  (let [f (find-protocol-method (:impls Predicate) :flint.check/explain p)]
+  (let [f (find-protocol-method (:impls Predicate) 'flint.check/explain p)]
     (or (when f (f p args)) {:expected src})))
 
 (defn- caret

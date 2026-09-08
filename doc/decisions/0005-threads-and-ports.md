@@ -160,7 +160,7 @@ That is a real deviation from Clojure and it belongs in *Where flint differs*,
 stated plainly rather than left for somebody to infer.
 
 **A method key belongs to the protocol, not to the extender.** A protocol's
-methods are keyed by fully-qualified keyword so that two protocols with an
+methods are keyed by fully-qualified symbol so that two protocols with an
 `area` do not collide on a value carrying one. The namespace doing the
 qualifying must be the one that DEFINED the protocol — `extend-protocol` built
 the key from the namespace doing the EXTENDING, which meant extending a protocol

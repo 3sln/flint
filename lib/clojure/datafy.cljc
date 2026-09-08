@@ -3,7 +3,8 @@
 
   `datafy` asks a value to present itself as data; `nav` asks a collection how
   to follow one of its entries. Both are open: a value supplies its own by
-  carrying `:clojure.core.protocols/datafy` or `.../nav` in its metadata.
+  carrying ``clojure.core.protocols/datafy`` or the same for `nav` in its
+  metadata -- the fully-qualified symbol, which is what a syntax quote writes.
 
   One divergence from Clojure, recorded in the README: when `datafy` returns
   something other than what it was given, Clojure records the original under

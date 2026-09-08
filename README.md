@@ -1313,7 +1313,7 @@ dispatch has two roads:
   :number (area [s] (* s s)))
 
 ;; 2. metadata -- for everything a user defines
-(def circle (with-meta {:r 2} {:shapes/area (fn [s] (* 3 (:r s) (:r s)))}))
+(def circle (with-meta {:r 2} {`area (fn [s] (* 3 (:r s) (:r s)))}))
 
 (area [3 4])   ; => 12   by kind
 (area circle)  ; => 12   by metadata
@@ -1328,14 +1328,16 @@ flint value *is*.
 where `extend-via-metadata` is opt-in and slightly out of the way. There is
 nothing else a user-defined abstraction can be, so this is the road to reach for
 rather than the fallback. A method attached by metadata is keyed by the method's
-fully-qualified keyword, exactly as Clojure keys `extend-via-metadata`.
+fully-qualified **symbol**, which is how Clojure keys `extend-via-metadata` — so
+a syntax quote writes the key, and code that extends somebody else's protocol
+reads the same here as it does there.
 
 A value with no implementation fails with a message naming the protocol, the
 kind, and what to do:
 
 ```
 no implementation of shapes/area (protocol shapes/Shape) for a value of kind
-:string. Extend the protocol to that kind, or attach :shapes/area as metadata
+:string. Extend the protocol to that kind, or attach shapes/area as metadata
 on the value.
 ```
 
@@ -1376,6 +1378,7 @@ cannot go stale.
 | `(into {} …)` on ≤8 entries | insertion-ordered array-map | hash map, unordered |
 | `clojure.string/split` | regex only | regex **or** a literal string |
 | protocol dispatch | on type, with `extend-via-metadata` as an opt-in corner | on **kind** or **metadata** — there are no types, so metadata is the main road |
+| `datafy`'s note on a transformed value | `:clojure.datafy/class`, a class name | `:clojure.datafy/kind`, a `kind` keyword — there are no classes |
 | `binding` | per host thread | per **green** thread; a spawn inherits a snapshot |
 | a port | — | not transferable, and cannot be sent through a port |
 

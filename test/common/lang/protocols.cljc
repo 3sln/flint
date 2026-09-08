@@ -82,7 +82,7 @@
   ;; carried one. `protocol-miss` says which keyword it wanted, so a wrong
   ;; guess here is a message rather than a puzzle.
   (let [plain [:a :b]
-        special (with-meta [:a :b] {::greet (fn [_] "hello, specifically")})]
+        special (with-meta [:a :b] {`greet (fn [_] "hello, specifically")})]
     (expect = "hello 2 things" (greet plain))
     (expect = "hello, specifically" (greet special))
     ;; And the metadata does not leak into equality: two values that are `=`
@@ -112,7 +112,7 @@
   (expect true? (satisfies? Greet "s"))
   (expect true? (satisfies? Greet [1]))
   (expect false? (satisfies? Greet :k))
-  (expect true? (satisfies? Greet (with-meta [1] {::greet (fn [_] "x")})))
+  (expect true? (satisfies? Greet (with-meta [1] {`greet (fn [_] "x")})))
   ;; And on a kind with no implementation, metadata is what makes it satisfy --
   ;; the same rule dispatch uses, asked ahead of time.
-  (expect true? (satisfies? Greet (with-meta {} {::greet (fn [_] "x")}))))
+  (expect true? (satisfies? Greet (with-meta {} {`greet (fn [_] "x")}))))

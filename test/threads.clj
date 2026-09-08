@@ -291,7 +291,7 @@
 ;; And what checks cost, as a number rather than as a claim. `0032` says a
 ;; check costs nothing in the build that ships; this is the assertion of it,
 ;; and it caught a real violation the first time it ran -- the fifteen core
-;; predicates carried their `:flint.check/explain` UNCONDITIONALLY, which was
+;; predicates carried their ``flint.check/explain`` UNCONDITIONALLY, which was
 ;; 3 578 bytes in a module that calls none of them -- present in the shipping
 ;; build too, because metadata attached unconditionally is not something
 ;; `:optimize [perf]` can take away. Behind the reader conditional they cost
@@ -513,7 +513,7 @@
            "          (describe [s prefix] (str prefix \"vector \" (area s)))\n"
            "  :number (area [s] (* s s))\n"
            "          (describe [s prefix] (str prefix \"number \" (area s))))\n"
-           "(def circle (with-meta {:r 2} {:proto/area (fn [s] (* 3 (:r s) (:r s)))}))\n"
+           "(def circle (with-meta {:r 2} {`area (fn [s] (* 3 (:r s) (:r s)))}))\n"
            "(defn main [_]\n"
            "  (pr-str [(area [3 4]) (area 5) (area circle)\n"
            "           (describe [3 4] \"a \")\n"
@@ -527,7 +527,7 @@
             (str/includes? proto "(protocol proto/Shape)"))
 (check-that "  ... and the value's kind"
             (str/includes? proto "for a value of kind :string"))
-(check-that "  ... and how to fix it" (str/includes? proto ":proto/area as metadata"))
+(check-that "  ... and how to fix it" (str/includes? proto "proto/area as metadata"))
 
 (if (zero? @fails)
   (println "threads: ok")
