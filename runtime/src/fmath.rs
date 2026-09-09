@@ -38,20 +38,23 @@ f2!(pow => powf, atan2 => atan2, hypot => hypot);
 
 #[inline]
 pub fn rint(x: f64) -> f64 {
-    // Round half to even, as java.lang.Math.rint does.
-    #[cfg(target_arch = "wasm32")]
-    {
-        libm::rint(x)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let r = x.round();
-        if (x - x.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
-            r - x.signum()
-        } else {
-            r
-        }
-    }
+    // Round half to even, as `java.lang.Math.rint` does -- and ONE
+    // implementation for both builds, which is the point.
+    //
+    // The other branch used to be hand-rolled, and it lost the sign of zero:
+    //
+    //     let r = x.round();            // -0.5 -> -1.0
+    //     ... r - x.signum()            // -1.0 - -1.0 == +0.0
+    //
+    // `rint(-0.5)` is -0.0 everywhere it is specified, and this runtime
+    // answered 0.0 -- but only in the NATIVE build, because the wasm build
+    // already called this. Same source, same function, two answers depending
+    // on which way it was compiled, and nothing compared the two.
+    //
+    // Subtracting equal values to negate is the trap `numdiv.kin` and the
+    // reader and the image writer all hit separately: IEEE 754 says the
+    // difference is +0.0, so the sign is gone.
+    libm::rint(x)
 }
 
 #[inline]

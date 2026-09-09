@@ -478,11 +478,21 @@ public static class Builtins {
         Def("flint/floor", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Floor(x)));
         Def("flint/ceil", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Ceiling(x)));
         Def("flint/rint", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Round(x)));
-        Def("flint/signum", (rt, at, n) => MathOne(rt, rt.VAt(at), x => (double) System.Math.Sign(x)));
+        // NOT `System.Math.Sign`, which answers an INT and so cannot return
+        // -0.0 for -0.0 -- it collapses both zeros to 0 -- and which THROWS on
+        // NaN where every other runtime here answers NaN. `Math.signum` on the
+        // JVM returns the argument itself for a zero and for a NaN, which is
+        // what this spells out.
+        Def("flint/signum", (rt, at, n) => MathOne(rt, rt.VAt(at),
+            x => double.IsNaN(x) || x == 0.0 ? x : (x > 0.0 ? 1.0 : -1.0)));
         Def("flint/fabs", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Abs(x)));
         Def("flint/pow", (rt, at, n) => MathTwo(rt, rt.VAt(at), rt.VAt(at + 1), (x, y) => System.Math.Pow(x, y)));
         Def("flint/atan2", (rt, at, n) => MathTwo(rt, rt.VAt(at), rt.VAt(at + 1), (x, y) => System.Math.Atan2(x, y)));
-        Def("flint/hypot", (rt, at, n) => MathTwo(rt, rt.VAt(at), rt.VAt(at + 1), (x, y) => (double) System.Math.Sqrt(x*x + y*y)));
+        // NOT `Sqrt(x*x + y*y)`, which OVERFLOWS before it takes the root:
+        // `hypot(1e300, 1e300)` is 1.4142135623730952E300 and that spelling
+        // answers Infinity, while two subnormal legs underflow to 0.0. Avoiding
+        // the intermediate is the entire reason the function exists.
+        Def("flint/hypot", (rt, at, n) => MathTwo(rt, rt.VAt(at), rt.VAt(at + 1), (x, y) => double.Hypot(x, y)));
         Def("flint/trunc", (rt, at, n) => MathOne(rt, rt.VAt(at), x => System.Math.Truncate(x)));
         Def("flint/copy-sign", (rt, at, n) =>
             MathTwo(rt, rt.VAt(at), rt.VAt(at + 1), (x, y) => System.Math.CopySign(System.Math.Abs(x), y)));
