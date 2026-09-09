@@ -476,7 +476,22 @@
   ([x] (cond
          (nil? x) ""
          (string? x) x
-         (number? x) (flint.rt/num->str x)
+         ;; THE SPECIALS ARE SPELLED TWICE IN CLOJURE, and this is the
+         ;; branch that gets the HOST spelling: `(str ##Inf)` is "Infinity",
+         ;; while `(pr-str ##Inf)` and `(str [##Inf])` are both "##Inf" --
+         ;; inside a collection it is the PRINTER that runs, and the printer
+         ;; keeps the readable name in both of its modes.
+         ;;
+         ;; So the mapping belongs on this branch and not in `num->str`,
+         ;; which the printer shares. Comparing the answer rather than
+         ;; testing the number keeps one source of truth for the three
+         ;; names, and costs a length check for every ordinary number.
+         (number? x) (let [s (flint.rt/num->str x)]
+                       (cond
+                         (= s "##Inf") "Infinity"
+                         (= s "##-Inf") "-Infinity"
+                         (= s "##NaN") "NaN"
+                         :else s))
          (keyword? x) (flint.rt/str2 ":" (kw-or-sym-str x))
          (symbol? x) (kw-or-sym-str x)
          (true? x) "true"

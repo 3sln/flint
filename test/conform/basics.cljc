@@ -72,6 +72,17 @@
    ;; that broke: the constant pool is a map and `(= 0.0 -0.0)` is true, so
    ;; whichever appeared second reused the first one's slot.
    (c "both zeros in one module" (mapv str [0.0 -0.0 0.0]) ["0.0" "-0.0" "0.0"])
+   ;; THE SPECIALS ARE SPELLED TWICE. `str` of a bare one gives the host
+   ;; name; everything that goes through the PRINTER gives the readable one,
+   ;; including `str` of a collection containing it. Built by multiplying
+   ;; rather than dividing by zero, because `(/ 1.0 0.0)` throws in babashka
+   ;; and this file is read by babashka to check it against real Clojure.
+   (c "str of a bare special is the host name"
+      (let [i (* 1e300 1e300)] [(str i) (str (* -1.0 i)) (str (- i i))])
+      ["Infinity" "-Infinity" "NaN"])
+   (c "the printer keeps the readable name"
+      (let [i (* 1e300 1e300)] [(pr-str i) (str [i]) (pr-str (- i i))])
+      ["##Inf" "[##Inf]" "##NaN"])
    (c "quot/rem" [(quot 7 2) (rem 7 2) (quot -7 2) (rem -7 2)] [3 1 -3 -1])
    (c "mod" [(mod 7 3) (mod -7 3) (mod 7 -3)] [1 2 -2])
    (c "compare ops" [(< 1 2 3) (< 1 3 2) (<= 1 1 2) (> 3 2 1) (>= 2 2)] [true false true true true])
