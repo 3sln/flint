@@ -15,6 +15,20 @@ is out and the VM gets ported. This is that port.
 
 ## The collector is gone, and that is the tier rather than a shortcut
 
+> **SUPERSEDED, 2026-08-29 (`9f6f70e`).** This section's conclusion did not
+> survive. Both ports now carry `gc.rs` ported verbatim -- generational,
+> copying in the nursery, mark-and-sweep in the old space -- over a flat
+> `Space` of their own, and a flint value here is a NaN-boxed `long` rather
+> than a Java object. The analysis below is kept because it is why the port
+> was attempted at this tier at all, and it was right about that: the cheap
+> version shipped first and worked.
+>
+> What it was wrong about is what "lean on the host" costs. Two runtimes that
+> merely both work are not the same runtime, and there was nothing to diff:
+> the requirement is that they make the SAME decisions at the same points.
+> `conform-hosts` now compares their collection counts and fails if they part.
+> See `runtimes/jvm/README.md`.
+
 A flint value is a Java object. `nil` is `null`, an integer is a `Long`, a
 vector is a `List`, a keyword is an interned `Kw`. The JVM's collector owns
 lifetime, so the generational copying collector — the single hardest part of

@@ -3,17 +3,22 @@
 An image loader, an interpreter over all 46 opcodes, and the builtins. Built
 with `dotnet build`; run through `bin/conform-hosts`.
 
-## The collector is gone
+## The collector came back
 
-A flint value is a .NET object: `nil` is `null`, an integer is a `long`, a
-vector is a `Vec`, a keyword is an interned `Kw`. The CLR's collector owns
-lifetime, so the generational copying collector — the hardest single piece of
-the wasm runtime — is not here at all.
+This section used to say the collector was gone, and that a flint value was a
+.NET object. That was `0030`'s design and it is no longer how this port works.
 
-Calls use the CLR's own stack for the same reason: it scans it, which is
-exactly what wasm cannot do (`doc/decisions/0001`) and why flint is an
-interpreter there at all. `TAIL_CALL` still loops rather than recursing,
-because the CLR will not do that for us.
+Since `9f6f70e` (2026-08-29) a flint value here is a NaN-boxed `long` over a
+flat `Space`, and `Gc.cs` is `runtime/src/gc.rs` ported verbatim — the same
+design over the same memory as the JVM's, rather than two collectors that
+happen to agree. `conform-hosts` diffs their collection counts and fails if
+they part, which is the check: not that each works, but that both make the
+same decisions at the same points.
+
+Calls still use the CLR's own stack, which it scans — exactly what wasm cannot
+do (`doc/decisions/0001`) and why flint is an interpreter there at all.
+`TAIL_CALL` loops rather than recursing, because the CLR will not do that for
+us.
 
 ## It passed conformance on the first run
 

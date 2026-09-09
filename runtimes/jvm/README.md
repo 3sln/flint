@@ -8,16 +8,28 @@ bin/conform-hosts          # compile once, run on both runtimes, diff
 FLINT_JDK=/path/to/jdk bin/conform-hosts
 ```
 
-## The collector is gone
+## The collector came back
 
-A flint value is a Java object: `nil` is `null`, an integer is a `Long`, a
-vector is a `List`, a keyword is an interned `Kw`. The JVM's collector owns
-lifetime, so the generational copying collector — the hardest single piece of
-the wasm runtime — is not here at all. Nothing roots anything and no value
-moves.
+This section used to say the collector was gone, and that a flint value was a
+Java object — `nil` a `null`, an integer a `Long`, a vector a `List`. That was
+true, it was `0029`'s design, and it is no longer how this port works.
 
-That is the whole reason `doc/decisions/0010` calls this tier "a few thousand
-lines of runtime, not a rebuild".
+Since `9f6f70e` (2026-08-29) a flint value here is a NaN-boxed `long` over a
+flat `Space`, and `Gc.java` is `runtime/src/gc.rs` ported verbatim:
+generational, copying in the nursery, mark-and-sweep in the old space, with a
+write barrier and a remembered set. Values move, and roots are roots.
+
+WHY IT CAME BACK: the two runtimes have to make the SAME decisions at the same
+points, not merely both work. `conform-hosts` diffs their collection counts and
+fails if they part — 105 minor collections, 15 major, 8,000,000 bytes
+reclaimed, the same numbers on both. Two collectors that happened to agree
+would not produce that, and leaning on the host's meant there was nothing to
+compare.
+
+It also found a bug that only a real collector can have: `scanObject` dropped
+the re-enrolment of an old object still pointing young, so the edge was
+forgotten, the young object died while referenced, and its address was reused
+— a list that looped 9,907 objects into a 200,000-element walk.
 
 ## The bytecode is the portable artifact
 

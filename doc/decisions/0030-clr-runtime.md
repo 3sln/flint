@@ -7,6 +7,12 @@
 > the interpreter). **The flint compiler runs on it and emits the same image the
 > native compiler does, byte for byte.**
 
+> **SUPERSEDED IN PART, 2026-08-29 (`9f6f70e`).** "Lean on the host's
+> collector" is no longer true of either port: both carry `gc.rs` ported
+> verbatim over a flat `Space` of their own. The tier judgement stands --
+> porting the VM rather than emitting IL was the right first move -- and
+> only the collector clause is retired. See `runtimes/clr/README.md`.
+
 Tier 2, the same as `0029`: port the VM and lean on the host's collector. A
 flint value is a .NET object, the CLR owns lifetime, and the generational
 copying collector does not exist here.

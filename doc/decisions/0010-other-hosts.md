@@ -54,6 +54,14 @@ And you lean on the host for the two expensive pieces: **its garbage collector**
 disappears) and its core libraries. A few thousand lines of runtime, not a
 rebuild.
 
+> **The collector half of that did not hold** (2026-08-29, `9f6f70e`). Both
+> ports carry `gc.rs` ported verbatim now. Leaning on the host's collector
+> works, and it shipped -- but it leaves the two runtimes with nothing to
+> compare, and the invariant this project rests on is that they AGREE rather
+> than that each works. The core-library half stands. The tier judgement
+> stands; it was cheaper to port the VM and then replace the collector than to
+> start at tier 3.
+
 **Tier 3 — emit JVM bytecode or CLR IL directly.** This is where the speed is,
 and it is worth noting *why it is easier there than here*:
 
