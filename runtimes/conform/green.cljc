@@ -14,6 +14,43 @@
 
 (defn- squares [n] (reduce + 0 (map (fn [i] (* i i)) (range n))))
 
+(def ^:dynamic *where* :root)
+
+(defn- inherited
+  "A SPAWNED THREAD INHERITS A SNAPSHOT of the spawner's dynamic bindings.
+
+  `flint/bindings` and `flint/set-bindings` are how that snapshot is taken and
+  installed, and they were the last two builtins on the unwatched list that a
+  conformance program could reach. Nothing exercised them because nothing here
+  ever spawned a thread from inside a `binding`.
+
+  A SNAPSHOT and not a reference, which is the part with an edge: the child
+  sees what was bound when it was SPAWNED, a rebinding in the spawner
+  afterwards does not reach it, and the child's own `binding` does not escape
+  back. `flint/thread.cljc` promises exactly that, and until now the promise
+  was only in the docstring.
+
+  The rebinding case needs the child to still be running when the spawner
+  rebinds, so it yields first: the scheduler is deterministic (`0005`), so
+  `yield` puts it back in the queue and the spawner reaches the rebinding
+  before the child reads. Reading `:first` there is the snapshot; reading
+  `:second` would mean it had a reference to a binding stack that moved."
+  []
+  (let [outside (t/spawn (fn [] *where*))
+        [inside child]
+        (binding [*where* :spawner]
+          (let [a (t/spawn (fn [] *where*))
+                b (t/spawn (fn [] (binding [*where* :child] *where*)))]
+            [(t/join a) (t/join b)]))
+        parked (binding [*where* :first] (t/spawn (fn [] (t/yield) *where*)))
+        after-rebinding (binding [*where* :second] (t/join parked))]
+    {:outside-sees-root (t/join outside)
+     :child-sees-the-binding inside
+     :childs-own-binding-is-its-own child
+     :rebinding-does-not-reach-it after-rebinding
+     ;; AND THE SPAWNER IS BACK where it started, so nothing leaked outward.
+     :spawner-restored *where*}))
+
 (defn- joined
   "Spawn, then join. The simplest thing that has to work before anything else
   can: a thread runs, finishes, and hands its answer back."
@@ -142,6 +179,7 @@
 
 (defn main [_]
   (pr-str {:joined  (joined)
+           :inherited (inherited)
            :closing (closing)
            :identity (identity-of)
            :channel (through-a-channel)

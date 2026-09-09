@@ -97,8 +97,28 @@ for _n in ["flint/sin", "flint/cos", "flint/tan", "flint/asin", "flint/acos",
 #
 # `flint/request` stays: it needs a HOST that answers requests, so covering it
 # means teaching three separate drivers, not writing a conformance program.
-for _n in ["flint/bindings", "flint/set-bindings", "flint/gc-stats",
-           "flint/request"]:
+# `flint/bindings` and `flint/set-bindings` HAVE NO FLINT-LEVEL NAME. They live
+# in the concurrency unit and carry a green thread's dynamic bindings across a
+# spawn, and `src/flint/hostfns.cljc` has no entry for either -- so no program
+# can write one and no conformance image will ever name one. Permanently
+# unreachable from here, which is a different thing from unwatched.
+#
+# Reached for by writing `green.cljc`'s `inherited` section, which spawns from
+# inside a `binding` and asserts the snapshot semantics `flint/thread.cljc`
+# promises: the child sees what was bound when it was spawned, its own binding
+# does not escape, and a rebinding in the spawner while the child is PARKED
+# does not reach it. That section is worth having and all three runtimes
+# already agreed -- but it goes through `spawn`, not through these two, so it
+# does not move them and nothing else will.
+#
+# `flint/gc-stats` is a DIAGNOSTIC: it reports collector counters, so its
+# answers are numbers a conformance run cannot compare across runtimes with
+# different heaps. `flint/request` needs a HOST that answers requests, so
+# covering it means teaching three separate drivers rather than writing a
+# conformance program. Both are named jobs, not oversights.
+for _n in ["flint/bindings", "flint/set-bindings"]:
+    ACCOUNTED[_n] = "no flint-level name exists; unreachable from a program"
+for _n in ["flint/gc-stats", "flint/request"]:
     ACCOUNTED[_n] = "UNWATCHED -- no conformance program reaches it"
 
 CONST_KINDS_EMPTY = (0, 1, 2)
