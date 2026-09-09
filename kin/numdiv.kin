@@ -108,6 +108,11 @@
       (if (== x I64_MIN)
         (return (throw-str rt "ArithmeticException" "integer overflow")))
       (return (integer rt (- 0 x)))))
+  (comment "MULTIPLY, do not subtract from zero. IEEE 754 says 0.0 - 0.0 is"
+           "+0.0, so negating zero by subtraction LOSES THE SIGN -- `(- 0.0)`"
+           "answered 0.0 where Clojure answers -0.0, on all three runtimes,"
+           "because this is generated. Multiplying by -1.0 is right for zero,"
+           "for NaN and for both infinities.")
   (if (is-double rt a)
-    (return (of-double (- 0.0 (num-f64 rt a)))))
+    (return (of-double (* -1.0 (num-f64 rt a)))))
   (return (throw-not-a-number rt a a)))

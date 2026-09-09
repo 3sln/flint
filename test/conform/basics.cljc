@@ -45,6 +45,15 @@
    (c "arith -" (- 10 3 2) 5)
    (c "arith *" (* 2 3 4) 24)
    (c "arith unary -" (- 5) -5)
+   ;; NEGATIVE ZERO survives unary minus. It did not: `-` was defined as
+   ;; `(sub 0 a)`, and IEEE 754 says 0.0 - 0.0 is +0.0, so the sign was
+   ;; dropped. Every runtime already had a one-argument `sub` that negates
+   ;; properly; nothing reached it. Binary `(- 0.0 0.0)` really is +0.0 --
+   ;; that one is the standard, not a bug, and it is here so a "fix" that
+   ;; negates both cases fails too.
+   (c "unary - keeps negative zero" (str (- 0.0)) "-0.0")
+   (c "binary - drops it, per IEEE 754" (str (- 0.0 0.0)) "0.0")
+   (c "unary - of a whole zero" (str (- 0)) "0")
    (c "quot/rem" [(quot 7 2) (rem 7 2) (quot -7 2) (rem -7 2)] [3 1 -3 -1])
    (c "mod" [(mod 7 3) (mod -7 3) (mod 7 -3)] [1 2 -2])
    (c "compare ops" [(< 1 2 3) (< 1 3 2) (<= 1 1 2) (> 3 2 1) (>= 2 2)] [true false true true true])

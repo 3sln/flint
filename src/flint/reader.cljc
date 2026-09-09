@@ -155,7 +155,12 @@
               (if int?
                 (let [v (parse-int-radix body 10)] (if neg? (- v) v))
                 (let [v (flint.rt/str->num (if neg? (flint.rt/str2 "-" body) body))]
-                  (when (number? v) (+ 0.0 v)))))))))))
+                  ;; `* 1.0` AND NOT `+ 0.0`, which is the same coercion and
+                  ;; loses NEGATIVE ZERO: IEEE 754 says -0.0 + 0.0 is +0.0, so
+                  ;; the literal `-0.0` read back as `0.0` while a COMPUTED
+                  ;; negative zero printed correctly. Multiplying keeps the
+                  ;; sign, and Clojure answers "-0.0" for the literal.
+                  (when (number? v) (* 1.0 v)))))))))))
 
 ;; ------------------------------------------------------------------ strings
 

@@ -115,8 +115,13 @@ impl Rt {
             }
             return self.integer(0 - x);
         }
+        // MULTIPLY, do not subtract from zero. IEEE 754 says 0.0 - 0.0 is
+        // +0.0, so negating zero by subtraction LOSES THE SIGN -- `(- 0.0)`
+        // answered 0.0 where Clojure answers -0.0, on all three runtimes,
+        // because this is generated. Multiplying by -1.0 is right for zero,
+        // for NaN and for both infinities.
         if a.is_double() {
-            return Value::from_f64(0.0 - self.num_f64(a));
+            return Value::from_f64(-1.0 * self.num_f64(a));
         }
         return self.throw_not_a_number(a, a);
     }

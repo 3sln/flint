@@ -109,8 +109,13 @@ public final class Numdiv {
             }
             return Num.integer(rt, 0 - x);
         }
+        // MULTIPLY, do not subtract from zero. IEEE 754 says 0.0 - 0.0 is
+        // +0.0, so negating zero by subtraction LOSES THE SIGN -- `(- 0.0)`
+        // answered 0.0 where Clojure answers -0.0, on all three runtimes,
+        // because this is generated. Multiplying by -1.0 is right for zero,
+        // for NaN and for both infinities.
         if (Val.isDouble(a)) {
-            return Val.ofDouble(0.0 - Num.f64(rt, a));
+            return Val.ofDouble(-1.0 * Num.f64(rt, a));
         }
         return Num.notNumber(rt, a, a);
     }

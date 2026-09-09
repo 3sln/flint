@@ -419,7 +419,12 @@
   ([] 0) ([a] a) ([a b] (flint.rt/add a b))
   ([a b & more] (reduce flint.rt/add (flint.rt/add a b) more)))
 (defn -
-  ([a] (flint.rt/sub 0 a)) ([a b] (flint.rt/sub a b))
+  ;; ONE ARGUMENT, not `(sub 0 a)`. The runtime routes a one-argument `sub`
+  ;; to its negation, and subtracting from zero LOSES NEGATIVE ZERO: IEEE 754
+  ;; says 0.0 - 0.0 is +0.0, so `(- 0.0)` answered 0.0 where Clojure answers
+  ;; -0.0. All three runtimes already had the one-argument path; nothing
+  ;; called it.
+  ([a] (flint.rt/sub a)) ([a b] (flint.rt/sub a b))
   ([a b & more] (reduce flint.rt/sub (flint.rt/sub a b) more)))
 (defn *
   ([] 1) ([a] a) ([a b] (flint.rt/mul a b))
