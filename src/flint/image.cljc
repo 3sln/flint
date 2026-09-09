@@ -53,7 +53,6 @@
 (defn i64->bytes [n]
   (mapv (fn [i] (bit-and (unsigned-bit-shift-right n (* 8 i)) 0xff)) (range 8)))
 
-(defn f64->bytes [d] (i64->bytes (flint.rt/double-bits (+ 0.0 d))))
 
 (defn utf8 [s] (flint.rt/str-bytes s))
 
@@ -83,7 +82,16 @@
     (true? v) (intern-const b [:true])
     (false? v) (intern-const b [:false])
     (integer? v) (intern-const b [:int (long v)])
-    (double? v) (intern-const b [:double v])
+    ;; THE RAW BITS, and not the double, because the pool INDEX is a map and
+    ;; `=` on doubles cannot tell the two zeros apart: `(= 0.0 -0.0)` is true,
+    ;; so whichever of them a module mentioned second silently reused the
+    ;; first one's slot. A file with a `-0.0` literal in it printed `0.0` for
+    ;; an unrelated `(- 0.0)` further down.
+    ;;
+    ;; It fixes NaN in the other direction too. `(= ##NaN ##NaN)` is false, so
+    ;; a NaN constant never matched itself and interned a fresh slot every
+    ;; time it was mentioned.
+    (double? v) (intern-const b [:double (flint.rt/double-bits v)])
     (string? v) (intern-const b [:string v])
     (keyword? v) (let [nsc (if (namespace v) (const b (namespace v)) NO-CONST)
                        nmc (const b (name v))]
@@ -115,7 +123,7 @@
       :true [K-TRUE]
       :false [K-FALSE]
       :int [K-INT (i64->bytes (first args))]
-      :double [K-DOUBLE (f64->bytes (first args))]
+      :double [K-DOUBLE (i64->bytes (first args))]
       :string (let [bs (utf8 (first args))] [K-STRING (u32 (count bs)) bs])
       :keyword [K-KEYWORD (u32 (first args)) (u32 (second args))]
       :symbol [K-SYMBOL (u32 (first args)) (u32 (second args))]

@@ -162,12 +162,8 @@ public static class Builtins {
         // `doc/decisions/0011` exists for: copying makes it quadratic, and the
         // compiler builds its whole output this way.
         Def("flint/str2", (rt, at, n) => Str.Concat(rt, rt.VAt(at), rt.VAt(at + 1)));
-        Def("flint/num->str", (rt, at, n) => {
-            long v = rt.VAt(at);
-            return Str.Of(rt, Num.IsInt(rt, v)
-                ? Num.AsI64(rt, v).Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                : FmtDouble(Val.AsDouble(v)));
-        });
+        Def("flint/num->str", (rt, at, n) =>
+            global::_3sln.Flint.Kgen.Rt.Dblstr.NumToStr(rt, rt.VAt(at)));
 
         /// The CLOSED SET protocol dispatch runs on (`doc/decisions/0005`).
         /// Small on purpose: three string tiers and eight seq representations
@@ -1135,14 +1131,6 @@ public static class Builtins {
     /// everything the conformance set covers, and a divergence here would show
     /// up as a differing STRING rather than a differing number, which is the
     /// easy kind to catch.
-    static string FmtDouble(double d) {
-        var inv = System.Globalization.CultureInfo.InvariantCulture;
-        if (d == System.Math.Floor(d) && !double.IsInfinity(d) && System.Math.Abs(d) < 1e15) {
-            return ((long) d).ToString(inv) + ".0";
-        }
-        return d.ToString("R", inv);
-    }
-
     /// Equality lives in `Eq` now, because maps need it and it needs maps --
     /// a map's `=` compares entries and an entry's key can be a map. One
     /// implementation, not two that drift.

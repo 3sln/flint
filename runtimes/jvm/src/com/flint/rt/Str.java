@@ -583,5 +583,17 @@ public final class Str {
     public static int ropeByteOfCp(Rt rt, long v, int k) { return com._3sln.flint.kgen.rt.Ropecp.ropeByteOfCp(rt, v, k); }
     static int ropeBytesAt(Rt rt, long v, int at, int s) { return com._3sln.flint.kgen.rt.Ropecp.ropeBytesAt(rt, v, at, s); }
 
+    /// The shortest decimal that reads back as `d`, as characters in `c`.
+    ///
+    /// The whole of what this runtime still decides about printing a double.
+    /// Everything above it -- when to use an exponent, how to spell one, what
+    /// to call an infinity -- is generated from `kin/dblstr.kin` and shared
+    /// with the other two runtimes, which is why this port no longer has a
+    /// `fmtDouble` of its own to disagree with them.
+    public static void f64Digits(Rt rt, int c, double d) {
+        String s = Double.toString(d);
+        for (int i = 0; i < s.length(); i++) rt.cpsPut(c, s.charAt(i));
+    }
+
     /// Byte length. NOT the code-point count -- see the class comment.
 }

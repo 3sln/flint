@@ -413,31 +413,24 @@ impl Rt {
 
     // --- numbers to and from text ---------------------------------------------
 
-    /// Clojure-compatible rendering: integers plain, doubles always with a
-    /// fractional part or exponent, and the three special doubles as `##Inf`,
-    /// `##-Inf` and `##NaN`.
-    pub fn number_to_string(&mut self, v: Value) -> Value {
-        if let Some(n) = self.as_i64(v) {
-            let mut buf = [0u8; 24];
-            let s = fmt_i64(n, &mut buf);
-            return self.string(s);
+    /// The shortest decimal that reads back as `d`, as characters in `c`.
+    ///
+    /// THE WHOLE HOLE. Rendering used to live here, and in two more places in
+    /// the ports, and the three of them disagreed with each other and with
+    /// Clojure about when to use an exponent and what to call an infinity.
+    /// `dblstr.kin` decides all of that now for every runtime; what stays here
+    /// is the one thing worth borrowing from a host number library, which is
+    /// the shortest round-tripping digits. `{:e}` rather than `{}` so the
+    /// string is short for every magnitude -- `{}` spells `1e-300` with three
+    /// hundred zeros in it.
+    ///
+    /// Bytes straight into the buffer: the output is ASCII by construction,
+    /// and a flint string here would only have to be decoded back out.
+    pub fn f64_digits(&mut self, c: u32, d: f64) {
+        let s = alloc::format!("{:e}", d);
+        for b in s.bytes() {
+            self.cps_put(c, b as u32);
         }
-        if !v.is_double() {
-            let msg = alloc::format!("not a number: {}", self.describe(v));
-            return self.throw_str("ClassCastException", &msg);
-        }
-        let d = v.as_f64();
-        if d.is_nan() {
-            return self.string("##NaN");
-        }
-        if d.is_infinite() {
-            return self.string(if d > 0.0 { "##Inf" } else { "##-Inf" });
-        }
-        let mut s = alloc::format!("{}", d);
-        if !s.contains('.') && !s.contains('e') && !s.contains('E') {
-            s.push_str(".0");
-        }
-        self.string(&s)
     }
 
     pub fn string_to_number(&mut self, v: Value) -> Value {

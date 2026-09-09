@@ -39,6 +39,7 @@ pub mod collgen;
 pub mod collread;
 pub mod collwrite;
 pub mod copies;
+pub mod dblstr;
 pub mod names;
 pub mod nouns;
 pub mod numdiv;

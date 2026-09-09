@@ -523,7 +523,7 @@ builtins! {
         rt.substring(s, start, end)
     };
     "flint/num->str", flint_b_num2str, b_num2str, |rt, a, n| {
-        let _ = n; let v = arg(rt, a, 0); rt.number_to_string(v)
+        let _ = n; let v = arg(rt, a, 0); rt.num_to_str(v)
     };
     "flint/str->num", flint_b_str2num, b_str2num, |rt, a, n| {
         let _ = n; let v = arg(rt, a, 0); rt.string_to_number(v)

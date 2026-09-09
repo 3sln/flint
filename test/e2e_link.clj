@@ -138,8 +138,12 @@
 (build-named! :arith "out/arith-named.wasm")
 (let [hello (or (fn-names "out/hello-named.wasm") "")
       arith (or (fn-names "out/arith-named.wasm") "")]
-  (check "arith contains num->str" (boolean (str/includes? arith "number_to_string")) true)
-  (check "hello omits num->str" (boolean (str/includes? hello "number_to_string")) false)
+  ;; `num_to_str` and not `number_to_string`: the formatter is GENERATED from
+  ;; `kin/dblstr.kin` now, so the symbol the shake has to reach is the
+  ;; generated one. Still the implementation and not the `b_num2str` wrapper,
+  ;; because what this checks is that the whole call tree comes with it.
+  (check "arith contains num->str" (boolean (str/includes? arith "num_to_str")) true)
+  (check "hello omits num->str" (boolean (str/includes? hello "num_to_str")) false)
   (check "arith contains b_add" (boolean (str/includes? arith "flint_b_add")) true)
   (check "hello omits b_add" (boolean (str/includes? hello "flint_b_add")) false)
   (check "neither contains the map builtin" (boolean (str/includes? hello "flint_b_assoc")) false))

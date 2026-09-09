@@ -1,0 +1,231 @@
+;; A NUMBER AS TEXT, written once, because three runtimes had three formatters
+;; and no two of them agreed with each other or with Clojure. Measured, before
+;; this file, on `(str x)`:
+;;
+;;                  1e14                1e20         (/ 1.0 0.0)
+;;     clojure      "1.0E14"            "1.0E20"     "##Inf"
+;;     native       "100000000000000.0" "100000000000000000000.0" "##Inf"
+;;     JVM          "100000000000000.0" "1.0E20"     "Infinity"
+;;     CLR          "100000000000000.0" "1E+20"      "Infinity"
+;;
+;; Four divergences in one line of output: the notation threshold, the
+;; exponent spelling, the infinities, and native's refusal to use scientific
+;; notation at all. Each host was formatting with its own library and its own
+;; ad-hoc guard, so each was wrong in its own direction.
+;;
+;; THE HOST IS ASKED FOR DIGITS AND NOTHING ELSE. Every one of them can
+;; produce the shortest decimal that reads back as the same double -- that is
+;; the hard part and it is worth borrowing -- but each spells the result its
+;; own way. So `f64-digits` is a copy loop per target with no policy in it --
+;; it pushes whatever characters the host produced into a buffer -- and this
+;; file re-renders them under Clojure's rule. Nothing about the SHAPE of the
+;; answer is decided by a host library any more.
+;;
+;; CLOJURE'S RULE is Java's `Double.toString`: plain decimal when the
+;; magnitude is in [1e-3, 1e7), scientific outside it, always with at least
+;; one digit after the point.
+(ns flint.rt.dblstr
+  (:require [flint.impl.rt :refer [defn return if let do local set forever break
+                                   comment doc not and or == != < <= > >= + - *
+                                   quot rem to-i32 to-i64 sink-open sink-put
+                                   sink-string sink-close cps-open cps-put
+                                   cps-len cps-at cps-close num-f64 i64-of
+                                   is-double f-nan? f-inf? f64-digits
+                                   str-const throw-str
+                                   Rt Bool I32 I64 F64 Value Sink Cps]]
+            [flint.rt.numkind :refer [is-int]]))
+
+(doc "Write `v` to `sk` as a decimal integer, and answer how many bytes."
+     ""
+     "THE DIGITS COME OFF THE NEGATIVE SIDE, which is not a flourish: the most"
+     "negative integer has no positive counterpart, so taking the absolute"
+     "value first overflows at exactly one input and silently wraps on two of"
+     "the three hosts. Working downward is total. This is the same edge"
+     "`numdiv.kin` exists for.")
+(defn ^:method ^I32 put-i64 [^:mut ^Rt rt ^Sink sk ^I64 v]
+  (if (== v 0)
+    (do (sink-put rt sk 48) (return 1)))
+  (local ^:mut ^I64 q)
+  (if (< v 0) (set q v) (set q (- 0 v)))
+  (local ^:mut ^I32 wrote)
+  (set wrote 0)
+  (if (< v 0)
+    (do (sink-put rt sk 45) (set wrote 1)))
+  (let [^Cps b (cps-open rt)]
+    (forever
+      (if (== q 0) (break))
+      (cps-put rt b (to-i32 (- 0 (rem q 10))))
+      (set q (quot q 10)))
+    (local ^:mut ^I32 k)
+    (set k (cps-len rt b))
+    (set wrote (+ wrote k))
+    (forever
+      (if (== k 0) (break))
+      (set k (- k 1))
+      (sink-put rt sk (+ 48 (cps-at rt b k))))
+    (cps-close rt b))
+  (return wrote))
+
+(doc "The shortest decimal for `d`, re-rendered under Clojure's rule."
+     ""
+     "What the host hands over is PARSED RATHER THAN TRUSTED, because the"
+     "three of them spell the same double three ways -- `1e20`, `1.0E20` and"
+     "`1E+20` are the same digits differently dressed. Reading any of them"
+     "into a digit buffer and an exponent makes the difference disappear here"
+     "instead of at the far end of a conformance run."
+     ""
+     "The parse is deliberately lax about which notation arrived: a sign, some"
+     "digits, an optional point, an optional exponent with an optional sign.")
+(defn ^:method ^Value render [^:mut ^Rt rt ^F64 d]
+  (comment "ONE buffer, opened before the host fills it. A `let` would nest"
+           "the whole walk one level deeper for nothing.")
+  (local ^:mut ^Cps c)
+  (set c (cps-open rt))
+  (f64-digits rt c d)
+  (let [^I32 n (cps-len rt c)
+        ^Cps dg (cps-open rt)]
+    (local ^:mut ^I32 i)
+    (set i 0)
+    (comment "ONE counter for every loop below. Declaring it per branch is"
+             "three declarations of one name in one scope, which two of the"
+             "three targets refuse.")
+    (local ^:mut ^I32 k)
+    (set k 0)
+    (local ^:mut ^Bool neg)
+    (set neg false)
+    (if (and (> n 0) (== (cps-at rt c 0) 45))
+      (do (set neg true) (set i 1)))
+    (local ^:mut ^I64 frac)
+    (set frac 0)
+    (local ^:mut ^Bool point)
+    (set point false)
+    (local ^:mut ^I64 ex)
+    (set ex 0)
+    (local ^:mut ^Bool exneg)
+    (set exneg false)
+    (forever
+      (if (== i n) (break))
+      (let [^I32 ch (cps-at rt c i)]
+        (if (== ch 46)
+          (set point true)
+          (if (or (== ch 101) (== ch 69))
+            (do (comment "THE EXPONENT, and then we are done: nothing follows"
+                         "it in any of the three notations.")
+                (set i (+ i 1))
+                (if (and (< i n) (== (cps-at rt c i) 45))
+                  (do (set exneg true) (set i (+ i 1))))
+                (if (and (< i n) (== (cps-at rt c i) 43))
+                  (set i (+ i 1)))
+                (forever
+                  (if (== i n) (break))
+                  (set ex (+ (* ex 10) (to-i64 (- (cps-at rt c i) 48))))
+                  (set i (+ i 1)))
+                (break))
+            (do (cps-put rt dg (- ch 48))
+                (if point (set frac (+ frac 1)))))))
+      (set i (+ i 1)))
+    (if exneg (set ex (- 0 ex)))
+    (comment "LEADING zeros carry no value and TRAILING zeros carry no digits."
+             "Stripping both leaves the significant run, and the exponent is"
+             "computed before the trailing strip so it does not move.")
+    (let [^I32 m (cps-len rt dg)]
+      (local ^:mut ^I32 lo)
+      (set lo 0)
+      (forever
+        (if (== lo m) (break))
+        (if (!= (cps-at rt dg lo) 0) (break))
+        (set lo (+ lo 1)))
+      (local ^:mut ^I32 hi)
+      (set hi m)
+      (forever
+        (if (== hi lo) (break))
+        (if (!= (cps-at rt dg (- hi 1)) 0) (break))
+        (set hi (- hi 1)))
+      (let [^Sink sk (sink-open rt)]
+        (if neg (sink-put rt sk 45))
+        (if (== lo m)
+          (do (comment "EVERY DIGIT WAS A ZERO, so the value is a zero -- and"
+                       "the sign still matters. `-0.0` reads back as a"
+                       "different double than `0.0`.")
+              (sink-put rt sk 48) (sink-put rt sk 46) (sink-put rt sk 48))
+          (let [^I64 exp (- (+ (to-i64 (- (- m 1) lo)) ex) frac)
+                ^I32 ndig (- hi lo)]
+            (if (and (>= exp -3) (<= exp 6))
+              (if (>= exp 0)
+                (do (comment "PLAIN, with the point inside or just past the"
+                             "digits: pad with zeros when the exponent runs"
+                             "off the end of what we have.")
+                    (let [^I32 intlen (to-i32 (+ exp 1))]
+                      (set k 0)
+                      (forever
+                        (if (== k intlen) (break))
+                        (if (< k ndig)
+                          (sink-put rt sk (+ 48 (cps-at rt dg (+ lo k))))
+                          (sink-put rt sk 48))
+                        (set k (+ k 1)))
+                      (sink-put rt sk 46)
+                      (if (> ndig intlen)
+                        (do (set k intlen)
+                            (forever
+                              (if (== k ndig) (break))
+                              (sink-put rt sk (+ 48 (cps-at rt dg (+ lo k))))
+                              (set k (+ k 1))))
+                        (sink-put rt sk 48))))
+                (do (comment "PLAIN AND SMALL: a leading zero, the point, then"
+                             "the zeros the exponent asks for.")
+                    (sink-put rt sk 48)
+                    (sink-put rt sk 46)
+                    (set k 0)
+                    (let [^I32 pad (to-i32 (- (- 0 exp) 1))]
+                      (forever
+                        (if (== k pad) (break))
+                        (sink-put rt sk 48)
+                        (set k (+ k 1))))
+                    (set k 0)
+                    (forever
+                      (if (== k ndig) (break))
+                      (sink-put rt sk (+ 48 (cps-at rt dg (+ lo k))))
+                      (set k (+ k 1)))))
+              (do (comment "SCIENTIFIC: one digit, the point, the rest, and an"
+                           "exponent with no `+` and no padding -- Java's"
+                           "spelling, which is the one Clojure prints.")
+                  (sink-put rt sk (+ 48 (cps-at rt dg lo)))
+                  (sink-put rt sk 46)
+                  (if (> ndig 1)
+                    (do (set k 1)
+                        (forever
+                          (if (== k ndig) (break))
+                          (sink-put rt sk (+ 48 (cps-at rt dg (+ lo k))))
+                          (set k (+ k 1))))
+                    (sink-put rt sk 48))
+                  (sink-put rt sk 69)
+                  (put-i64 rt sk exp)))))
+        (let [^Value out (sink-string rt sk)]
+          (sink-close rt sk)
+          (cps-close rt dg)
+          (cps-close rt c)
+          (return out))))))
+
+(doc "`v` as text, the way Clojure prints it."
+     ""
+     "Integers plain, doubles always with a point or an exponent, and the"
+     "three specials as `##NaN`, `##Inf` and `##-Inf` -- which the ports did"
+     "not do at all: they printed the host's `Infinity` and `NaN`, so a"
+     "program that divided by zero and printed the answer said something"
+     "different on every runtime.")
+(defn ^:pub ^:method ^Value num-to-str [^:mut ^Rt rt ^Value v]
+  (if (is-int rt v)
+    (let [^Sink sk (sink-open rt)]
+      (put-i64 rt sk (i64-of rt v))
+      (let [^Value out (sink-string rt sk)]
+        (sink-close rt sk)
+        (return out))))
+  (if (not (is-double rt v))
+    (return (throw-str rt "ClassCastException" "not a number")))
+  (let [^F64 d (num-f64 rt v)]
+    (if (f-nan? d)
+      (return (str-const rt "##NaN")))
+    (if (f-inf? d)
+      (do (if (< d 0.0) (return (str-const rt "##-Inf")))
+          (return (str-const rt "##Inf"))))
+    (return (render rt d))))

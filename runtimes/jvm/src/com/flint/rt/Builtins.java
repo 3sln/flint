@@ -177,11 +177,8 @@ public final class Builtins {
         // exists for: copying makes it quadratic, and the compiler builds its
         // whole output this way.
         def("flint/str2", (rt, at, n) -> Str.concat(rt, rt.vat(at), rt.vat(at + 1)));
-        def("flint/num->str", (rt, at, n) -> {
-            long v = rt.vat(at);
-            return Str.of(rt, Num.isInt(rt, v) ? Long.toString(Num.asI64(rt, v))
-                                              : fmtDouble(Val.asDouble(v)));
-        });
+        def("flint/num->str", (rt, at, n) ->
+            com._3sln.flint.kgen.rt.Dblstr.numToStr(rt, rt.vat(at)));
 
         /// The CLOSED SET protocol dispatch runs on (`doc/decisions/0005`).
         ///
@@ -1222,13 +1219,6 @@ public final class Builtins {
     /// agree for everything the conformance set covers, and a divergence here
     /// would show up as a differing STRING rather than a differing number,
     /// which is the easy kind to catch.
-    static String fmtDouble(double d) {
-        if (d == Math.floor(d) && !Double.isInfinite(d) && Math.abs(d) < 1e15) {
-            return (long) d + ".0";
-        }
-        return Double.toString(d);
-    }
-
     /// Equality lives in `Eq` now, because maps need it and it needs maps --
     /// a map's `=` compares entries and an entry's key can be a map. One
     /// implementation, not two that drift.

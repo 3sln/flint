@@ -112,7 +112,14 @@
 ;; hashing and `seq` over a map became generated walks and the shipped module
 ;; grew 2 076 bytes. Both floors measure the same file, so a budget raised in
 ;; one place and not the other is a gate that fails somewhere unrelated.
-(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 312000))
+;;
+;; MOVED AGAIN 2026-09-08, to 316 000, for number formatting becoming
+;; generated: 2 901 bytes, decomposed in the comment above the other floor.
+;; And the warning above is not hypothetical -- raising that one and leaving
+;; this one is what the run before this commit did, and it failed here, in a
+;; file about two builds agreeing, for a reason that has nothing to do with
+;; two builds agreeing.
+(check-that "the floor from 0005 still holds" (< (fs/size "out/tb-ship.wasm") 316000))
 
 ;; --- absent, by name -------------------------------------------------------
 (doseq [sym ["flint_snapshot_capture" "flint_snapshot_restore" "flint_snapshot_ptr"

@@ -54,6 +54,24 @@
    (c "unary - keeps negative zero" (str (- 0.0)) "-0.0")
    (c "binary - drops it, per IEEE 754" (str (- 0.0 0.0)) "0.0")
    (c "unary - of a whole zero" (str (- 0)) "0")
+   ;; DOUBLES AS TEXT. Three runtimes had three hand-written formatters and
+   ;; no two agreed: native never used an exponent at all, the JVM switched
+   ;; at 1e15 rather than 1e7, the CLR spelled it `1E+20`, and both ports
+   ;; printed the host's `Infinity` instead of `##Inf`. One generated
+   ;; implementation renders all of it now; these are the values that told
+   ;; the three of them apart.
+   (c "double text: the plain range" (mapv str [1.0 1.5 100.0 1e6 1234567.0 0.001 0.1 123.456])
+      ["1.0" "1.5" "100.0" "1000000.0" "1234567.0" "0.001" "0.1" "123.456"])
+   (c "double text: past the threshold" (mapv str [1e7 12345678.0 1e14 1e15 1e20 1e300])
+      ["1.0E7" "1.2345678E7" "1.0E14" "1.0E15" "1.0E20" "1.0E300"])
+   (c "double text: under the threshold" (mapv str [1e-4 5e-4 1e-300])
+      ["1.0E-4" "5.0E-4" "1.0E-300"])
+   (c "double text: shortest round trip" (mapv str [3.14159265358979 (/ 1.0 3.0)])
+      ["3.14159265358979" "0.3333333333333333"])
+   ;; A `-0.0` LITERAL AND A `0.0` LITERAL IN ONE FORM, which is the case
+   ;; that broke: the constant pool is a map and `(= 0.0 -0.0)` is true, so
+   ;; whichever appeared second reused the first one's slot.
+   (c "both zeros in one module" (mapv str [0.0 -0.0 0.0]) ["0.0" "-0.0" "0.0"])
    (c "quot/rem" [(quot 7 2) (rem 7 2) (quot -7 2) (rem -7 2)] [3 1 -3 -1])
    (c "mod" [(mod 7 3) (mod -7 3) (mod 7 -3)] [1 2 -2])
    (c "compare ops" [(< 1 2 3) (< 1 3 2) (<= 1 1 2) (> 3 2 1) (>= 2 2)] [true false true true true])

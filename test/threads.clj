@@ -200,6 +200,32 @@
 ;; `hash`, `kind`, `get`, `count`, `map_get` and `seq`, which are Rust and do
 ;; not shake. A table remains a candidate for a UNIT (`doc/decisions/0023`); the
 ;; printer is no longer the thing standing in the way.
+;; RAISED 2026-09-08, from 312 000, for NUMBER FORMATTING becoming generated.
+;;
+;; MEASURED by building the units with `kin/dblstr.kin` applied and again at
+;; the previous commit: 314 169 against 311 268, so 2 901 bytes.
+;;
+;; What the bytes buy is the end of a four-way disagreement about what a
+;; double looks like. `(str 1e14)` was "100000000000000.0" on all three
+;; runtimes and "1.0E14" in Clojure; `(str 1e20)` was a different string on
+;; each of the three; and both ports printed the host's "Infinity" where
+;; native printed "##Inf". Three hand-written formatters, three thresholds,
+;; and none of them Clojure's.
+;;
+;; The double path is 6 873 of the module and the integer path GAVE BACK
+;; 3 972, which is the more interesting pair. Decomposed by stubbing each
+;; part and rebuilding:
+;;
+;;     307 296   integers only -- no double formatting linked at all
+;;     310 290   + the host's shortest-decimal digits (Rust `format!`)
+;;     314 169   + the walk that re-renders them under Clojure's rule
+;;
+;; So the generated integer path is 3 972 bytes SMALLER than the hand-written
+;; `number_to_string` it replaced, and what the change actually costs is the
+;; double walk. Handing the digits over in a code-point buffer rather than a
+;; string saves 857 of it by not linking the UTF-8 decoder to read back
+;; characters that are all ASCII by construction.
+;;
 ;; RAISED 2026-09-06, from 307 000, for the ATOM OPERATIONS becoming generated.
 ;;
 ;; MEASURED by building the shipped module with `kin/atoms.kin` applied and
@@ -226,7 +252,7 @@
 ;; slice, which is what makes the rooting above expressible in all three at
 ;; once. It is a fixed cost, and the next generated caller of a value pays none
 ;; of it.
-            (< pure-size 312000))
+            (< pure-size 316000))
 
 ;; RE-BASELINED AGAIN, and this one is a decision rather than a drift:
 ;; 300 281 against 280 781, and 18 917 of it is ONE ARM IN THE WIRE CODEC.

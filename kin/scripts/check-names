@@ -72,9 +72,15 @@
   "Identifiers a template calls that belong to the HOST's library rather than
   to a flint runtime, so no file of ours defines them and none should. Listed
   rather than pattern-matched: each one is a decision that this call is the
-  host's to answer, and a list of two that has to grow is the right kind of
-  friction."
-  #{"divideUnsigned" "remainderUnsigned"})
+  host's to answer, and a list this short having to grow is the right kind of
+  friction.
+
+  The four float predicates are here for the same reason as the two integer
+  ones: whether a double is a NaN or an infinity is a question every host
+  answers already, and a flint spelling of it would be three copies of
+  `d != d` waiting to disagree."
+  #{"divideUnsigned" "remainderUnsigned"
+    "isNaN" "IsNaN" "isInfinite" "IsInfinity"})
 
 (def templates
   (let [src (slurp "kin/src/flint/impl/rt.cljc")]

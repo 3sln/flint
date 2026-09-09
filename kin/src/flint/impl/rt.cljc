@@ -971,6 +971,44 @@
                          :java "Num.trunc({0})"
                          :csharp "Num.Trunc({0})"}
                         {:tag F64})
+    ;; THE THREE SPECIALS, asked of the host because every one of them has
+    ;; the question built in. `(!= d d)` would answer the first and a compare
+    ;; against the largest finite double would answer the others, but both are
+    ;; the kind of clever that reads as a bug.
+    'f-nan? (core/call {:rust "{0}.is_nan()"
+                        :java "Double.isNaN({0})"
+                        :csharp "double.IsNaN({0})"}
+                       {:tag Bool})
+    'f-inf? (core/call {:rust "{0}.is_infinite()"
+                        :java "Double.isInfinite({0})"
+                        :csharp "double.IsInfinity({0})"}
+                       {:tag Bool})
+    ;; THE SHORTEST DECIMAL that reads back as the same double, pushed into a
+    ;; code-point buffer as the characters of whatever notation the host
+    ;; prefers. This is the one part of number formatting worth borrowing from
+    ;; a host library -- getting it right is Ryu-shaped work -- and the
+    ;; notation it arrives in is deliberately NOT trusted: `dblstr.kin` reads
+    ;; the digits back out and re-renders them, because the three hosts spell
+    ;; one double `1e20`, `1.0E20` and `1E+20`.
+    ;;
+    ;; INTO A BUFFER rather than into a string, which is worth 857 bytes in
+    ;; every module that prints a number -- MEASURED, by building the units
+    ;; both ways: 315 026 with the string, 314 169 with this. A string would
+    ;; have to be walked back out with `code-points`, a UTF-8 decoder over
+    ;; three string tiers, and every character here is a digit, a point, an
+    ;; `e` or a sign. Handing over the characters skips both the string and
+    ;; the decoder.
+    'f64-digits (core/call {:rust "{0}.f64_digits({1}, {2})"
+                            :java "Str.f64Digits({0}, {1}, {2})"
+                            :csharp "Str.F64Digits({0}, {1}, {2})"})
+    ;; A STRING FROM A LITERAL. The vocabulary could not spell one, so a
+    ;; constant answer like `##NaN` had to be assembled byte by byte through a
+    ;; sink -- which is part of why each runtime kept its own copy of the
+    ;; special-double names, and why two of them printed `Infinity`.
+    'str-const (core/call {:rust "{0}.string({1})"
+                           :java "Str.of({0}, {1})"
+                           :csharp "Str.Of({0}, {1})"}
+                          {:tag Value})
     ;; A HOST INTEGER AS A DOUBLE, for the arms that promote.
     'to-f64 (core/call {:rust "({0} as f64)" :java "((double) {0})"
                         :csharp "((double) {0})"}

@@ -532,5 +532,17 @@ public static class Str {
     public static int RopeByteOfCp(Rt rt, long v, int k) { return global::_3sln.Flint.Kgen.Rt.Ropecp.RopeByteOfCp(rt, v, k); }
     static int RopeBytesAt(Rt rt, long v, int at, int s) { return global::_3sln.Flint.Kgen.Rt.Ropecp.RopeBytesAt(rt, v, at, s); }
 
+    /// The shortest decimal that reads back as `d`, as characters in `c`.
+    ///
+    /// The whole of what this runtime still decides about printing a double.
+    /// Everything above it -- when to use an exponent, how to spell one, what
+    /// to call an infinity -- is generated from `kin/dblstr.kin` and shared
+    /// with the other two runtimes, which is why this port no longer has a
+    /// `FmtDouble` of its own to disagree with them.
+    internal static void F64Digits(Rt rt, int c, double d) {
+        string s = d.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        for (int i = 0; i < s.Length; i++) rt.CpsPut(c, s[i]);
+    }
+
     /// Byte length. NOT the code-point count -- see the class comment.
 }
