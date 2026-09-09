@@ -79,11 +79,16 @@ for _n in ["flint/sin", "flint/cos", "flint/tan", "flint/asin", "flint/acos",
 # runtime when it was caught, and `opaque?`/`opaque-label` were stubs on both
 # ports answering `false` and `nil` for a value the same file had just minted.
 # The list is shorter by four and the tree is better by three.
+# `flint/self`, `flint/thread?`, `flint/thread-id` and `flint/thread-result`
+# came off this list when `green.cljc` grew an `identity-of` section for them.
+# That one found NOTHING -- all three runtimes already agreed, including about
+# a thread that fails, its state, and the value it threw. Worth saying: the
+# list is a list of unknowns, not a list of suspects, and four of them turning
+# out fine is the same kind of answer as the four that did not.
 for _n in ["flint/bindings", "flint/set-bindings", "flint/gc-stats",
-           "flint/self", "flint/open", "flint/port-bridge?",
+           "flint/open", "flint/port-bridge?",
            "flint/port-close", "flint/port-id", "flint/port-state",
-           "flint/request", "flint/thread-id", "flint/thread-result",
-           "flint/thread?"]:
+           "flint/request"]:
     ACCOUNTED[_n] = "UNWATCHED -- no conformance program reaches it"
 
 CONST_KINDS_EMPTY = (0, 1, 2)

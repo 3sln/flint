@@ -79,8 +79,37 @@
      ;; endpoint and not merely something port-shaped.
      :label (p/label in-a)}))
 
+(defn- identity-of
+  "WHO A THREAD IS, which nothing asked before.
+
+  `self`, `thread?`, `thread-id` and `result` were reached by no conformance
+  program -- `green.cljc` used `spawn`, `join`, `state` and `yield` and
+  stopped there. They are the four accessors a scheduler has to agree about
+  for a thread to be a value rather than a side effect.
+
+  The ids are compared RELATIVELY, never printed: an absolute id is an
+  allocation counter and would pin this file to how many threads the runtime
+  happened to make before it got here. That two threads differ, and that a
+  thread is not its spawner, is the part that has to hold everywhere."
+  []
+  (let [me (t/self)
+        a (t/spawn (fn [] (t/thread-id (t/self))))
+        b (t/spawn (fn [] (throw (ex-info "deliberate" {}))))
+        ida (t/join a)]
+    ;; `b` FAILED, so `join` rethrows and `result` is the value it threw.
+    ;; Both have to be true at once, and a runtime that lost the failure
+    ;; would look fine on either one alone.
+    {:self-is-a-thread [(t/thread? me) (t/thread? a) (t/thread? 1) (t/thread? nil)]
+     :ids-differ [(= ida (t/thread-id a)) (= ida (t/thread-id me))]
+     :done (t/state a)
+     :result-of-done (= ida (t/result a))
+     :failed [(t/state b)
+              (try (t/join b) :no-throw (catch Exception e (ex-message e)))
+              (let [r (t/result b)] (if (nil? r) :nil (ex-message r)))]}))
+
 (defn main [_]
   (pr-str {:joined  (joined)
+           :identity (identity-of)
            :channel (through-a-channel)
            :order   (interleaving)
            :nested  (nested)
