@@ -88,10 +88,57 @@
                (reader/read-all src {:file file :features #{:flint}}))]
     (into {} (mapcat defined-by (filter seq? forms)))))
 
+(def babashka-blind-spot
+  "Vars REAL `clojure.core` publishes that babashka does not.
+
+  THE BASELINE IS NOT CLOJURE. This script runs on babashka, and the comment
+  above already says what that costs -- \"diffing against them would report
+  gaps in flint that are really gaps in the baseline\" -- and then leaves
+  `clojure.core` in the map anyway. It is wrong in BOTH directions there:
+  babashka publishes 624 of real Clojure's 679, so 73 names are invisible.
+
+  Measured, against Clojure 1.12.1:
+
+    :extra   said flint invented 34 names. Three of them -- `volatile?`,
+             `println-str` and `find-protocol-method` -- are real
+             `clojure.core` vars that babashka lacks. The README told
+             readers flint had added them.
+    :absent  said 306. Seventy of the blind spot are names flint lacks too,
+             and the gate could not see them. The true figure is 376.
+
+  MOST OF THE SEVENTY ARE JVM AND FLINT WILL NEVER HAVE THEM -- agents,
+  proxies, classloaders, `->VecNode`. That is a judgement this document should
+  MAKE, in the open, rather than arrive at by accident through a baseline that
+  cannot see the question.
+
+  Regenerate with a real Clojure when the pinned version moves:
+
+      clojure -M -e '(->> (ns-publics (quote clojure.core)) keys (map name) sort)'
+
+  and subtract babashka's answer to the same."
+  '#{
+    *agent* *allow-unresolved-vars* *fn-loader* *repl* *source-path*
+    *suppress-read* *use-context-classloader* *verbose-defrecords*
+    ->ArrayChunk ->Vec ->VecNode ->VecSeq -cache-protocol-fn -reset-methods
+    EMPTY-NODE Inst accessor add-classpath agent-errors await1 bases cast
+    clear-agent-errors compile construct-proxy create-struct definline
+    definterface defstruct ensure extenders find-keyword find-protocol-impl
+    find-protocol-method gen-class gen-interface get-proxy-class import
+    init-proxy inst-ms* io! load load-reader method-sig mix-collection-hash
+    partitionv partitionv-all pcalls primitives-classnames print-ctor
+    print-simple println-str proxy-call-with-super proxy-mappings proxy-name
+    proxy-super pvalues ref-history-count ref-max-history ref-min-history
+    resultset-seq splitv-at stream-into! stream-reduce! stream-seq!
+    stream-transduce! struct struct-map unquote-splicing update-proxy
+    vector-of volatile? with-loading-context})
+
 (defn clojure-publics [ns-sym]
   (try
     (require ns-sym)
-    (set (map (comp symbol name) (keys (ns-publics (find-ns ns-sym)))))
+    (let [theirs (set (map (comp symbol name) (keys (ns-publics (find-ns ns-sym)))))]
+      (if (= ns-sym 'clojure.core)
+        (into theirs babashka-blind-spot)
+        theirs))
     (catch Throwable _ nil)))
 
 (def bootstrap-macros

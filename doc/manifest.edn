@@ -409,6 +409,8 @@
     *1
     *2
     *3
+    *agent*
+    *allow-unresolved-vars*
     *assert*
     *clojure-version*
     *command-line-args*
@@ -421,6 +423,7 @@
     *err*
     *file*
     *flush-on-newline*
+    *fn-loader*
     *in*
     *math-context*
     *ns*
@@ -433,26 +436,42 @@
     *print-readably*
     *read-eval*
     *reader-resolver*
+    *repl*
+    *source-path*
+    *suppress-read*
     *unchecked-math*
+    *use-context-classloader*
+    *verbose-defrecords*
     *warn-on-reflection*
     +'
     -'
+    ->ArrayChunk
     ->Eduction
+    ->Vec
+    ->VecNode
+    ->VecSeq
     -add-loaded-lib
+    -cache-protocol-fn
     -new-dynamic-var
     -new-var
     -reified-methods
+    -reset-methods
     -run-in-transaction
     -with-precision
     ..
+    EMPTY-NODE
+    Inst
     PrintWriter-on
     StackTraceElement->vec
     Throwable->map
+    accessor
     aclone
+    add-classpath
     add-tap
     add-watch
     agent
     agent-error
+    agent-errors
     aget
     alength
     alias
@@ -474,6 +493,8 @@
     aset-short
     await
     await-for
+    await1
+    bases
     bean
     bigdec
     bigint
@@ -488,6 +509,7 @@
     byte
     byte-array
     bytes
+    cast
     cat
     char-array
     char-escape-string
@@ -502,14 +524,21 @@
     chunk-rest
     class
     class?
+    clear-agent-errors
     clojure-version
     commute
     comparator
+    compile
     completing
+    construct-proxy
     create-ns
+    create-struct
     dec'
     default-data-readers
+    definline
+    definterface
     defrecord
+    defstruct
     deftype
     deliver
     denominator
@@ -520,15 +549,19 @@
     double-array
     doubles
     eduction
+    ensure
     enumeration-seq
     error-handler
     error-mode
     eval
     ex-cause
     extend-type
+    extenders
     extends?
     file-seq
+    find-keyword
     find-ns
+    find-protocol-impl
     find-var
     float
     float-array
@@ -540,7 +573,10 @@
     future-cancelled?
     future-done?
     future?
+    gen-class
+    gen-interface
     get-method
+    get-proxy-class
     get-thread-binding-frame-impl
     get-thread-bindings
     get-validator
@@ -548,20 +584,26 @@
     halt-when
     has-root-impl
     hash-combine
+    import
     in-ns
     inc'
+    init-proxy
     inst-ms
+    inst-ms*
     inst?
     instance?
     int-array
     intern
     into-array
     ints
+    io!
     isa?
     iteration
     iterator-seq
     line-seq
+    load
     load-file
+    load-reader
     load-string
     loaded-libs
     locking
@@ -572,7 +614,9 @@
     make-array
     make-hierarchy
     memfn
+    method-sig
     methods
+    mix-collection-hash
     multi-fn-add-method-impl
     multi-fn-impl
     multi-fn?-impl
@@ -594,14 +638,20 @@
     object-array
     parents
     parse-uuid
+    partitionv
+    partitionv-all
+    pcalls
     pmap
     pop-thread-bindings
     pr
     prefer-method
     prefers
+    primitives-classnames
     print
+    print-ctor
     print-dup
     print-method
+    print-simple
     printf
     println
     prn
@@ -609,7 +659,12 @@
     protocol-type-impl
     proxy
     proxy*
+    proxy-call-with-super
+    proxy-mappings
+    proxy-name
+    proxy-super
     push-thread-bindings
+    pvalues
     rand
     rand-int
     rand-nth
@@ -625,6 +680,9 @@
     reader-conditional
     reader-conditional?
     ref
+    ref-history-count
+    ref-max-history
+    ref-min-history
     ref-set
     refer
     refer-clojure
@@ -643,6 +701,7 @@
     reset-thread-binding-frame-impl
     resolve
     restart-agent
+    resultset-seq
     rsubseq
     send
     send-off
@@ -667,6 +726,13 @@
     sorted?
     special-symbol?
     spit
+    splitv-at
+    stream-into!
+    stream-reduce!
+    stream-seq!
+    stream-transduce!
+    struct
+    struct-map
     subseq
     supers
     sync
@@ -695,15 +761,19 @@
     unchecked-subtract-int
     underive
     unquote
+    unquote-splicing
+    update-proxy
     uri?
     use
     uuid?
     var-get
     var-set
     var?
+    vector-of
     with-bindings
     with-bindings*
     with-in-str
+    with-loading-context
     with-local-vars
     with-open
     with-out-str
@@ -719,7 +789,6 @@
     cond-chain
     count-matching
     extend-method
-    find-protocol-method
     form
     int-of-char
     interleave-all
@@ -733,7 +802,6 @@
     opaque
     opaque-label
     opaque?
-    println-str
     protocol-miss
     re-quote-replacement
     repeat-forever
@@ -744,8 +812,7 @@
     str-bytes
     str-join
     subvec2
-    tag
-    volatile?},
+    tag},
   :compared-with clojure.core},
  clojure.core.protocols
  {:file "lib/clojure/core/protocols.cljc",
