@@ -46,12 +46,20 @@
     ;; a failed `enter` instead of unwinding, so even a real exception skipped
     ;; every handler the guest had installed.
     :calls [(boom #((fn [a] a))) (boom #((fn [a] a) 1 2))]
-    ;; CALLING A NON-FUNCTION, message and all. Native named the value and the
-    ;; call path while the ports said "object type inline" -- an implementation
-    ;; detail for the value and nothing for the path. All three walk the frames
-    ;; now and describe the value the same generated way, so the whole message
-    ;; is comparable rather than just the class.
-    :not-callable [(boom #(1 2)) (boom #(nil 1))]
+    ;; CALLING A NON-FUNCTION: the class, the subject and the argument count,
+    ;; and NOT the call path. The path is real and worth having -- native said
+    ;; "object type 13" and the ports "object type inline" until all three grew
+    ;; a frame walk -- but it depends on how the program was ENTERED, not on
+    ;; which runtime is running it. The native CLI wraps a program in `-main`
+    ;; and the wasm host calls `main` directly, so asserting the whole string
+    ;; compares drivers:
+    ;;
+    ;;     native  ... in fn <- boom <- main <- -main
+    ;;     wasm    ... in fn <- boom <- main
+    ;;
+    ;; Everything before " in " is the runtime's answer and is asserted.
+    :not-callable [(first (str/split (boom #(1 2)) #" in "))
+                   (first (str/split (boom #(nil 1)) #" in "))]
     ;; REFERENCE types asked to be something else.
     :refs [(boom #(deref 1)) (boom #(swap! 1 inc)) (boom #(reset! [1] 2))]
     ;; MAPS and keywords.

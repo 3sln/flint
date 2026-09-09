@@ -676,6 +676,31 @@ for prog in bytes churn collections control errors green hosted lazy lazyref map
       tail -5 /tmp/flint-c-build.out
       echo "  FAIL the conform fixture $prog does not compile"; exit 1; }
   want="$(./target/release/flint run :path runtimes/conform :fn "$prog/main" 2>&1 || true)"
+
+  # AND WASM, WHICH WAS NEVER IN THIS COMPARISON. The native binary and the
+  # wasm module are the same Rust compiled two ways, and they are NOT the same
+  # program: there are 35 `cfg(target_arch = "wasm32")` splits across eleven
+  # files, seven of them in `vm.rs` and eight in `mem.rs`.
+  #
+  # One of those splits was already wrong. `fmath::rint` hand-rolled
+  # round-half-to-even for the native build and called `libm` for wasm, and the
+  # hand-rolled one lost the sign of zero -- `rint(-0.5)` was 0.0 native and
+  # -0.0 on wasm. It was found by a probe about MATH, not by anything comparing
+  # these two, because nothing compared these two: this loop diffs native
+  # against the ports, and `bin/test` runs the Clojure differential on wasm.
+  # Two runtimes, both checked against other things, never against each other.
+  ./bin/flint :src runtimes/conform :fn "$prog/main" :out "out/conform/$prog.wasm" \
+    > /tmp/flint-c-wasm-build.out 2>&1 || {
+      tail -5 /tmp/flint-c-wasm-build.out
+      echo "  FAIL the conform fixture $prog does not compile to wasm"; exit 1; }
+  got="$(node host/flint.mjs "out/conform/$prog.wasm" "$prog/main" 2>&1 || true)"
+  if [ "$got" = "$want" ]; then
+    echo "  ok   $prog agrees between the native and wasm builds"
+  else
+    printf 'native: %s\n  wasm:   %s\n' "$want" "$got" | head -4
+    echo "  FAIL $prog differs between the native and wasm builds"; exit 1
+  fi
+
   "$JDK/bin/java" -cp runtimes/jvm/classes RtImage "out/conform/$prog.img" "$want" \
     > /tmp/flint-c-jvm.out 2>&1 \
     || { tail -3 /tmp/flint-c-jvm.out; echo "  FAIL $prog disagrees with native [jvm]"; exit 1; }
