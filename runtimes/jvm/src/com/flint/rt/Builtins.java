@@ -609,6 +609,13 @@ public final class Builtins {
                             "subs " + st + ".." + en + " of " + cps);
                 }
                 boolean ascii = Str.sAscii(rt, v0);
+                // THE SLICE HAS A PRICE, and this port charged nothing for it.
+                // Native bounds the non-ASCII descent before it starts, and a
+                // program that sliced strings therefore billed less here than
+                // there -- 56 steps over the gas meter's two arms, and more
+                // through `re-seq`, which calls `subs` once per match and once
+                // per group. Same formula, same path, same refusal.
+                if (!ascii && !rt.chargeChecked((en - st) / 8 + 1, "subs")) return Val.NIL;
                 // For ASCII a code point IS a byte; otherwise descend for the
                 // byte offsets rather than scanning.
                 int nb = Str.sBytes(rt, v0);
@@ -626,6 +633,12 @@ public final class Builtins {
             int len = s.codePointCount(0, s.length());
             int start = (int) Val.asFixnum(rt.vat(at + 1));
             int end = n > 2 ? (int) Val.asFixnum(rt.vat(at + 2)) : len;
+            // THE SLICE, NOT THE SOURCE, and before the bounds check, which is
+            // where native charges it. Charging the whole string per call makes
+            // the counter quadratic for splitting even when the copying is not.
+            int nbf = Str.sBytes(rt, v0);
+            int took = n > 2 ? Math.max(end - start, 0) : Math.max(nbf - Math.max(start, 0), 0);
+            rt.chargeBytes(Math.min(took, nbf));
             if (start < 0 || end > len || start > end) {
                 return rt.throwStr("IndexOutOfBoundsException",
 "subs " + start + ".." + end + " of " + len);

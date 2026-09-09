@@ -29,7 +29,20 @@
    (count (apply str (mapv str (range (quot n 4)))))
    (count (ft/build S (range n) (fn [i] {:id i :name (str i)})))
    (reduce + 0 (mapv :id (ft/rows (ft/build S (range (quot n 2))
-                                            (fn [i] {:id i :name "x"})))))])
+                                            (fn [i] {:id i :name "x"})))))
+   ;; STRING OPERATIONS, whose PRICE diverged rather than whose answer did.
+   ;; `coll.rs` charges for `subs` on both its paths, for `str-index-of`
+   ;; twice, and for the bytes of a string; the ports charged for none of
+   ;; them, so the identical program billed less on the JVM and the CLR. It
+   ;; surfaced as a regex gap, because `re-seq` calls `subs` once per match
+   ;; and once per group -- and it survived this file because nothing else
+   ;; in `work` calls a string builtin that charges at all.
+   (let [s (apply str (mapv str (range (quot n 4))))
+         half (quot (count s) 2)]
+     (+ (count (subs s 0 half))
+        (count (subs s half))
+        (reduce + 0 (mapv (fn [i] (count (subs s i (+ i 2))))
+                          (range (quot n 8))))))])
 
 ; TWO ENTRY POINTS, compiled and measured separately. The comparison is
 ;; `big - small`, so whatever each runtime spends starting up cancels and what

@@ -554,6 +554,13 @@ public static class Builtins {
                     return rt.ThrowStr("IndexOutOfBoundsException",
                         "subs " + st + ".." + en + " of " + cps);
                 bool ascii = Str.SAscii(rt, v0);
+                // THE SLICE HAS A PRICE, and this port charged nothing for it.
+                // Native bounds the non-ASCII descent before it starts, and a
+                // program that sliced strings therefore billed less here than
+                // there -- 56 steps over the gas meter's two arms, and more
+                // through `re-seq`, which calls `subs` once per match and once
+                // per group. Same formula, same path, same refusal.
+                if (!ascii && !rt.ChargeChecked((en - st) / 8 + 1, "subs")) return Val.Nil;
                 int nb = Str.SBytes(rt, v0);
                 int from = ascii ? st : Str.RopeByteOfCp(rt, v0, st);
                 int to = (en == cps) ? nb : (ascii ? en : Str.RopeByteOfCp(rt, v0, en));
@@ -569,6 +576,13 @@ public static class Builtins {
             int len = CodePointCount(s);
             int start = (int) Val.AsFixnum(rt.VAt(at + 1));
             int end = n > 2 ? (int) Val.AsFixnum(rt.VAt(at + 2)) : len;
+            // THE SLICE, NOT THE SOURCE, and before the bounds check, which is
+            // where native charges it. Charging the whole string per call makes
+            // the counter quadratic for splitting even when the copying is not.
+            int nbf = Str.SBytes(rt, v0);
+            int took = n > 2 ? System.Math.Max(end - start, 0)
+                             : System.Math.Max(nbf - System.Math.Max(start, 0), 0);
+            rt.ChargeBytes(System.Math.Min(took, nbf));
             if (start < 0 || end > len || start > end)
                 return rt.ThrowStr("IndexOutOfBoundsException", "subs " + start + ".." + end + " of " + len);
             // By CODE POINT, not by char: a .NET `string` is UTF-16, so slicing
