@@ -795,7 +795,22 @@ public static class Builtins {
             // decodes UTF-8, both O(n), and charged for neither.
             long v = rt.VAt(at);
             if (!rt.ChargeChecked((Bytes.Count(rt, v) / 8) + 1, "b->str")) return Val.Nil;
-            return Str.Of(rt, System.Text.Encoding.UTF8.GetString(Bytes.ToArray(rt, v)));
+            // STRICT, and this is the whole point of the line. The default
+            // `Encoding.UTF8` is LENIENT: it replaces every byte it cannot
+            // decode with U+FFFD and returns a string. Native refuses those
+            // bytes, so the same byte string became an error on one runtime
+            // and a string full of replacement characters on the other two --
+            // silent data loss, and not round-trippable back through `str->b`.
+            //
+            // A byte string is arbitrary bytes by definition, so this is the
+            // conversion most likely to be handed something that is not text,
+            // and the answer has to mean one thing on all four.
+            try {
+                return Str.Of(rt, new System.Text.UTF8Encoding(false, true)
+                    .GetString(Bytes.ToArray(rt, v)));
+            } catch (System.ArgumentException) {
+                return rt.ThrowStr("IllegalArgumentException", "those bytes are not UTF-8");
+            }
         });
         Def("flint/vec->b", (rt, at, n) => {
             long v = rt.VAt(at);

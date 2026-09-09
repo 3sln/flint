@@ -890,8 +890,25 @@ public final class Builtins {
             // decodes UTF-8, both O(n), and charged for neither.
             long v = rt.vat(at);
             if (!rt.chargeChecked((Bytes.count(rt, v) / 8) + 1, "b->str")) return Val.NIL;
-            return Str.of(rt, new String(Bytes.toArray(rt, v),
-                                         java.nio.charset.StandardCharsets.UTF_8));
+            // STRICT, and this is the whole point of the line. `new String(bs,
+            // UTF_8)` is LENIENT: it replaces every byte it cannot decode with
+            // U+FFFD and returns a string. Native refuses those bytes, so the
+            // same byte string became an error on one runtime and a string
+            // full of replacement characters on the other two -- silent data
+            // loss, and not round-trippable back through `str->b`.
+            //
+            // A byte string is arbitrary bytes by definition, so this is the
+            // conversion most likely to be handed something that is not text,
+            // and the answer has to mean one thing on all four.
+            try {
+                return Str.of(rt, java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                        .decode(java.nio.ByteBuffer.wrap(Bytes.toArray(rt, v)))
+                        .toString());
+            } catch (java.nio.charset.CharacterCodingException e) {
+                return rt.throwStr("IllegalArgumentException", "those bytes are not UTF-8");
+            }
         });
         def("flint/vec->b", (rt, at, n) -> {
             long v = rt.vat(at);
