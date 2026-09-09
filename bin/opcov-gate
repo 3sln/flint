@@ -61,7 +61,27 @@ if grep -q "not a flint image" "$out"; then
   echo "opcov-gate: some images were rejected -- the census is meaningless" >&2
   exit 1
 fi
-cold=$(sed -n 's/^\([0-9]*\) of 256 slots cold$/\1/p' "$out" | tail -1)
-[ -n "$cold" ] || { echo "opcov-gate: no census line in the output" >&2; exit 1; }
+# THE QUESTION THIS FILE EXISTS TO ANSWER, asserted rather than printed: is
+# there a live opcode the cross-runtime suite would not notice a mistake in?
+# The census reported "217 of 256 cold" for a long time and that number was
+# unactionable -- six of those slots are opcodes deliberately removed, one
+# range is reserved for superinstructions nothing emits, and the rest were
+# never allocated. All 39 defined opcodes are in fact covered; nothing said so,
+# and nothing would have said otherwise.
+defined_cold=$(sed -n 's/^\([0-9]*\) of [0-9]* DEFINED opcodes cold$/\1/p' "$out" | tail -1)
+[ -n "$defined_cold" ] || { echo "opcov-gate: no census line in the output" >&2; exit 1; }
+if [ "$defined_cold" -ne 0 ]; then
+  grep '^  cold: ' "$out" >&2
+  echo "opcov-gate: $defined_cold defined opcode(s) reached by no conformance program." >&2
+  echo "  Either exercise them or remove them -- 0x00, 0x10, 0x1D and 0x1F..0x22" >&2
+  echo "  were removed for exactly this reason (doc/decisions/0038)." >&2
+  exit 1
+fi
+
+# AND THE OLD FLOOR, which catches the other failure: a run where nothing
+# executed at all still reports zero DEFINED opcodes cold if the census never
+# populated, so the raw count is the check that the images really ran.
+cold=$(sed -n 's/^(\([0-9]*\) of 256 raw slots cold.*/\1/p' "$out" | tail -1)
+[ -n "$cold" ] || { echo "opcov-gate: no raw slot line in the output" >&2; exit 1; }
 [ "$cold" -lt 250 ] || { echo "opcov-gate: $cold of 256 cold -- nothing ran" >&2; exit 1; }
-echo "opcov-gate: $cold of 256 cold over $built images"
+echo "opcov-gate: every defined opcode covered; $cold of 256 raw slots cold over $built images"
